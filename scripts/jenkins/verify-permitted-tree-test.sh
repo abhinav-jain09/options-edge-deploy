@@ -136,14 +136,31 @@ baddecl "a '~' path"                              '~/target'
 baddecl "a '..' component"                        '../target'
 baddecl "a '.' component"                         './target'
 baddecl "an empty component"                      'a//target'
-# An empty value never reaches the matcher at all: the argument parser refuses it.
+baddecl "an empty declaration"                    ''
+baddecl "a trailing slash"                        'target/'
+baddecl "a space in a name"                       'x y'
+baddecl "a character outside the name set"        'tar@get'
+baddecl "a '~' component deeper in the path"      'a/~/target'
+# A MISSING operand is the same class of fault as an unusable one: exit 2, not the refusal exit.
 fresh
-set +e; out_empty="$(PERMITTED_SHA="$A" bash "$VERIFY" --dir co --allow-ignored '' 2>&1)"; rc_empty=$?; set -e
-if [ "$rc_empty" -ne 0 ] && printf '%s' "$out_empty" | grep -qF -- "--allow-ignored needs a path"; then
-  pass=$((pass+1))
+set +e; out_missing="$(PERMITTED_SHA="$A" bash "$VERIFY" --dir co --allow-ignored 2>&1)"; rc_missing=$?; set -e
+if [ "$rc_missing" -eq 2 ] && printf '%s' "$out_missing" | grep -qF -- "--allow-ignored needs a path"; then
+  pass=$((pass+1)); echo "ok   [a missing --allow-ignored operand exits 2]"
 else
-  fail=$((fail+1)); echo "FAIL [an empty declaration is refused by the argument parser]: rc=$rc_empty"; printf '%s\n' "$out_empty" | sed 's/^/    /'
+  fail=$((fail+1)); echo "FAIL [a missing --allow-ignored operand exits 2]: rc=$rc_missing"; printf '%s\n' "$out_missing" | sed 's/^/    /'
 fi
+
+# --dir must be the checkout ROOT. git prints the ignored inventory relative to the REPOSITORY root, so a
+# subdirectory would measure every declaration from a different anchor than the usage block promises and
+# would refuse the workspace's own declared build output (Codex C, MINOR). It is a usage error now.
+fresh; mkdir -p co/sub/target; printf 'jar\n' > co/sub/target/app.jar
+set +e; out_sub="$(PERMITTED_SHA="$A" bash "$VERIFY" --dir co/sub --allow-ignored target 2>&1)"; rc_sub=$?; set -e
+if [ "$rc_sub" -eq 2 ] && printf '%s' "$out_sub" | grep -qF "is not its root"; then
+  pass=$((pass+1)); echo "ok   [--dir pointing inside a checkout, not at its root, exits 2]"
+else
+  fail=$((fail+1)); echo "FAIL [--dir pointing inside a checkout, not at its root, exits 2]: rc=$rc_sub"; printf '%s\n' "$out_sub" | sed 's/^/    /'
+fi
+check "...and the same workspace from its root, with the path declared, is allowed" 0 "$A" --allow-ignored sub/target
 
 # FAIL-CLOSED: a git query that fails, or partial output then failure, must REFUSE — never be read as a clean/empty
 # inventory. A wrapper `git` on PATH forwards to the real git, except for the ONE invocation whose full argument string
@@ -196,7 +213,7 @@ checkfail "a failed work-tree probe refuses" \
   "-C co rev-parse --is-inside-work-tree" "is not a git checkout"
 
 echo "verify-permitted-tree-test: $pass passed, $fail failed"
-if [ "$fail" -eq 0 ] && [ "$pass" -ge 45 ]; then
+if [ "$fail" -eq 0 ] && [ "$pass" -ge 53 ]; then
   echo "verify-permitted-tree-test: ALL PASS"
   exit 0
 fi

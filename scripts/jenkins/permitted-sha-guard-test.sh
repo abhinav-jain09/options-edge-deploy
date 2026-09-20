@@ -129,7 +129,53 @@ run "--ref refs/heads/feature"               1 "selected source ref is 'refs/hea
 # --- the branch cannot be confirmed: refuse, do not guess ------------------------------------------
 git clone -q "$T/origin.git" "$T/noremote"
 git -C "$T/noremote" remote set-url origin "$T/does-not-exist.git"
-run "origin unreachable"                     1 "could not fetch origin/main"  "$T/noremote" PERMITTED_SHA="$D"
+run "origin unreachable"                     1 "could not fetch refs/heads/main" "$T/noremote" PERMITTED_SHA="$D"
+# --- the ref must be the BRANCH, fully qualified. `git fetch origin main` resolves through git's ref
+#     disambiguation, so a TAG named main answers for a branch that does not exist — and the guard would
+#     then report the tag's commit as "the tip of origin/main". Branch and tag namespaces are separate.
+cp -R "$T/origin.git" "$T/tagorigin.git"
+git -C "$T/tagorigin.git" tag main "$D"
+git -C "$T/tagorigin.git" update-ref -d refs/heads/main
+git clone -q "$T/origin.git" "$T/tagwork"
+git -C "$T/tagwork" checkout -q "$D"
+git -C "$T/tagwork" remote set-url origin "$T/tagorigin.git"
+run "a TAG named main is not the branch"     1 "could not fetch refs/heads/main" "$T/tagwork" PERMITTED_SHA="$D"
+run "...and the permission being right does not rescue it" 1 "verdict=REFUSED" "$T/tagwork" PERMITTED_SHA="$D" -- --ref main
+# --- ONE fetched snapshot answers both predicates. FETCH_HEAD is a mutable file; a concurrent fetch in
+#     the same checkout between the two questions used to make the guard refuse a correct commit as
+#     off-branch while printing that same commit as the tip. The wrapper below reproduces exactly that:
+#     the guard's read of FETCH_HEAD returns the real tip, and FETCH_HEAD is then rewritten to the
+#     off-branch commit C before the containment test runs.
+racebin="$T/racebin"; mkdir -p "$racebin"
+REALGIT="$(command -v git)"
+cat > "$racebin/git" <<EOF
+#!/usr/bin/env bash
+# forward everything; after the guard resolves FETCH_HEAD, rewrite it as a concurrent fetch would
+dir="."
+prev=""
+for a in "\$@"; do
+  [ "\$prev" = "-C" ] && dir="\$a"
+  prev="\$a"
+done
+out=\$("$REALGIT" "\$@"); rc=\$?
+case " \$* " in
+  *" rev-parse "*FETCH_HEAD*)
+    [ \$rc -eq 0 ] && printf '%s\n' "\$OTHER_COMMIT" > "\$dir/.git/FETCH_HEAD"
+    ;;
+esac
+[ -n "\$out" ] && printf '%s\n' "\$out"
+exit \$rc
+EOF
+chmod +x "$racebin/git"
+git -C "$W" checkout -q "$D"
+set +e
+out="$(cd "$W" && PATH="$racebin:$PATH" OTHER_COMMIT="$C" PERMITTED_SHA="$D" bash "$GUARD" 2>&1)"; rc=$?
+set -e
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -qF "verdict=PERMITTED"; then
+  echo "ok   [FETCH_HEAD rewritten between the two predicates: one captured tip answers both]"; pass=$((pass+1))
+else
+  echo "FAIL [FETCH_HEAD rewritten between the two predicates: one captured tip answers both]: rc=$rc"; printf '%s\n' "$out" | sed 's/^/    /'; fail=$((fail+1))
+fi
 # --- not a checkout at all ------------------------------------------------------------------------
 mkdir -p "$T/plain"
 set +e; out="$(cd "$T/plain" && PERMITTED_SHA="$D" bash "$GUARD" 2>&1)"; rc=$?; set -e
@@ -157,5 +203,5 @@ set +e; out="$(cd "$W" && PERMITTED_SHA="$D" bash "$GUARD" --bogus 2>&1)"; rc=$?
 if [ "$rc" -eq 2 ]; then echo "ok   [unknown argument]"; pass=$((pass+1)); else echo "FAIL [unknown argument]: rc=$rc"; fail=$((fail+1)); fi
 
 echo "permitted-sha-guard-test: $pass passed, $fail failed"
-[ "$fail" -eq 0 ] && [ "$pass" -ge 52 ] && echo "permitted-sha-guard-test: ALL PASS"
-[ "$fail" -eq 0 ] && [ "$pass" -ge 52 ]
+[ "$fail" -eq 0 ] && [ "$pass" -ge 57 ] && echo "permitted-sha-guard-test: ALL PASS"
+[ "$fail" -eq 0 ] && [ "$pass" -ge 57 ]

@@ -93,16 +93,26 @@ form; that is deliberate):
      deploy) or a plugin goal that publishes or rewrites (MVN_EFFECT_GOALS / MVN_EFFECT_PLUGIN_RE below);
      `docker build` / `docker buildx build`; `rsync`; `scp`; `helm install|upgrade`; `ansible-playbook` with a
      playbook operand; `ssh` fed local data; or a repository script that (transitively) runs one of those.
-     `mvn compile` and `mvn test` are deliberately NOT on that list: they compile the checkout but produce no
-     artifact that is installed, shipped or published, so the artifact chain has nothing to bind. This is a
-     REAL limit, not an oversight, and it is the reason the claim is "every step that PACKAGES, INSTALLS,
-     PUBLISHES or SHIPS source" and never "every step that builds source" — a compile-only step can still read a
-     file that was replaced after the guard ran. Two things narrow that: the compile happens under the guard
-     (rule 3), and a pipeline that wants the tree proved before it compiles puts the ordinary verify step in
-     front of the compile, exactly as it does before an effect (option-edge-feed-gateway's Test stage does).
-     Deliberate mutation work — a mutation-testing campaign that edits a source, compiles it, and restores it —
-     could not run at all under a literal "every compilation is the permitted tree" policy, so that policy is
-     not claimed here.
+     That is a list of commands which turn THIS CHECKOUT INTO AN ARTIFACT that is packaged, installed,
+     published or shipped. Two things are outside it, both deliberately:
+       * `mvn compile` and `mvn test`. They compile the checkout and run code from it, so they are not
+         side-effect-free — a test writes files, starts processes and can touch a database — but they produce
+         no artifact that is installed, shipped or published, so there is no artifact chain to bind. This is
+         why the claim is "every step that PACKAGES, INSTALLS, PUBLISHES or SHIPS source" and never "every step
+         that builds source". A compile-only step can still read a file replaced after the guard ran; a
+         pipeline that wants the tree proved before it compiles puts the ordinary verify step in front of the
+         compile itself, exactly as it does before an effect (option-edge-feed-gateway's Test stage does).
+         A mutation-testing campaign — which edits a source outside target/, compiles it, and restores it, and
+         which is invoked by its own stage rather than by an ordinary `mvn test` — could not run at all under a
+         literal "every compilation is the permitted tree" policy, so that policy is not claimed. The packaging
+         verification that follows such a campaign is what catches a mutation left behind.
+       * APPLYING a rendered manifest: `kubectl`, `kustomize`, a deploy helper that ends in kubectl. Those are
+         mutation tokens (gated by rule 8/13 and unreachable after a refusal) but they are not source-consuming
+         effects here, so the validator does NOT require a verify step in front of them, and a step such as
+         `sh 'printf changed > k8s/x.yaml; kubectl apply -f k8s/x.yaml'` passes. Where a job wants the stronger
+         property it places the verify itself and its repository's tests assert the adjacency
+         (options-edge-deploy's Jenkinsfile.nifty-gex-service does). Read rule 9b as "every source-consuming
+         effect the grammar above names", never as "every effect".
        (i)  EVERY source-consuming effect is a DEDICATED STEP — a plain `sh '…'` / `sh '''…'''` whose whole body is ONE
             command (backslash continuations allowed; nothing else: no second command, no `; && || | &`, `$( )`, backticks,
             redirections, here-documents, cd/pushd/export, assignment prefixes, comments, globs) — read against a FIXED
@@ -197,19 +207,42 @@ REFLAG = "DEPLOY_WORKSPACE_PERMITTED"
 DOWNSTREAM_FLAG_PREFIX = "GUARDED_DOWNSTREAM_"
 STR = r"(?:\"[^\"]*\"|'[^']*')"
 # An --allow-ignored declaration (verify-permitted-tree.sh): a PATH relative to the verified checkout, never a bare
-# name matched wherever it occurs. A component is a literal name or the single character `*` (exactly one whole
-# component). A declaration containing `*` MUST be double-quoted in the shell text, or the shell would expand it
-# against the workspace before the verifier ever sees it. `**` matches neither component form and is refused here as
-# it is refused by the verifier.
-ALLOW_COMP = r"(?:\*|[A-Za-z0-9._][A-Za-z0-9._-]*)"
+# name matched wherever it occurs. THIS IS THE SAME GRAMMAR the verifier's declaration_is_wellformed() implements,
+# written as a regular expression, and validate-jenkinsfile-guard-test.py drives a shared corpus of declarations
+# through both so they cannot drift:
+#     declaration := component ("/" component)*
+#     component   := "*" | name
+#     name        := one or more of [A-Za-z0-9._-], and not "." or ".."
+# Two grammars that disagree are worse than one that is strict: a declaration CI accepts and the verifier refuses is
+# a job that always fails at deploy time, and a declaration the verifier accepts but CI refuses cannot be written in
+# the canonical step at all. The lookahead is what excludes "." and ".." without excluding ".deps": a name must
+# contain at least one character that is not a dot. A declaration containing `*` MUST be double-quoted in the shell
+# text, or the step's own shell would expand it against the workspace before the verifier ever saw it — so the
+# unquoted alternative is the same grammar minus `*`.
+ALLOW_NAME = r"(?=[A-Za-z0-9._-]*[A-Za-z0-9_-])[A-Za-z0-9._-]+"
+ALLOW_COMP = r"(?:\*|" + ALLOW_NAME + r")"
 ALLOW_PATH = ALLOW_COMP + r"(?:/" + ALLOW_COMP + r")*"
-ALLOW_ARG = r"(?:[A-Za-z0-9._][A-Za-z0-9._/-]*|\"" + ALLOW_PATH + r"\")"
+ALLOW_PATH_LITERAL = ALLOW_NAME + r"(?:/" + ALLOW_NAME + r")*"
+ALLOW_ARG = r"(?:" + ALLOW_PATH_LITERAL + r"|\"" + ALLOW_PATH + r"\")"
 STAGE_RE = re.compile(r"^\s*stage\(\s*'((?:[^'\\]|\\.)*)'")
 BUILD_JOB_RE = re.compile(r"\bbuild\s*\(?\s*job:\s*(env\.JOB_NAME|'([^']+)')")
 ACQUIRE_RE = re.compile(r"\bgit url:|\bgit\s*\(|\bgit\s+(?:branch|credentialsId|changelog|poll)\s*:|\bgit clone\b|\bcheckout\(|\bcheckout scm\b|\bgit pull\b|\bgit checkout\b|\bgit -C \S+ checkout\b")
 GATE_FLAG_ONLY = "when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } } "
+# The guard stage's own `agent { label … }`. Declarative EVALUATES a stage's agent closure BEFORE it runs that
+# stage's steps, so whatever the label expression does, it does BEFORE the guard. The label is therefore restricted
+# to forms that read a value and nothing else:
+#   * a single-quoted literal            agent { label 'local-mac' }
+#   * a bare Groovy identifier           agent { label BUILD_LABEL }
+#   * a double-quoted string whose only interpolations are simple `env.X` / `params.X` property reads
+#     (plus ordinary label characters around them)   agent { label "${env.BUILD_AGENT_LABEL}" }
+# A method call inside the interpolation — `"${build([job: 'x', wait: false])}"`, `"${sh('…')}"` — is NOT one of
+# these forms and the stage is not the canonical guard. An earlier revision of this file allowed any `${…}` with no
+# braces inside, which admitted exactly those two, i.e. a step that runs before the permitted-commit guard does.
+AGENT_LABEL = (r"(?:'[^'\\]*'"
+               r"|[A-Za-z_][A-Za-z0-9_]*"
+               r"|\"(?:[A-Za-z0-9._/@:+=-]|\$\{(?:env|params)\.[A-Za-z_][A-Za-z0-9_]*\})*\")")
 CANON_GUARD = re.compile(
-    r"^stage\('(?P<name>[^']+)'\) \{ (?P<when>when \{ expression \{ env\.PERMITTED_SHA_GUARD == 'PASSED' \} \} )?(?:agent \{ label (?:[^{}]|\$\{[^{}]*\})+ \} )?"
+    r"^stage\('(?P<name>[^']+)'\) \{ (?P<when>when \{ expression \{ env\.PERMITTED_SHA_GUARD == 'PASSED' \} \} )?(?:agent \{ label " + AGENT_LABEL + r" \} )?"
     r"options \{ timeout\(time: (?P<tmo>[0-9]+), unit: 'MINUTES'\) \} steps \{ script \{ "
     r"def rc = sh\(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard\.sh(?P<args>( --ref \"\$\{[A-Z_]+:\?\}\")?)'\) "
     r"if \(rc != 0\) \{ error\(" + STR + r"\) \} "

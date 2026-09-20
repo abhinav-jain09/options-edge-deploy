@@ -103,14 +103,27 @@ fetched (a fetch that fails is a refusal); the
 checked-out `HEAD` is on that freshly fetched tip **and is that tip**; `PERMITTED_SHA` is present and a full
 lowercase 40-character commit id; and finally `HEAD` equals `PERMITTED_SHA` exactly.
 
-Two things follow. All three have to be the same commit — your checkout, the SHA you passed, and `main` as it stands
-when the build fetches it — so if someone merges between your reading the SHA and the guard running, the build
-refuses rather than deploying a commit the branch has already moved past. That refusal reads `commit <sha> is on
-origin/main but is NOT its tip (<tip>)`, and it is a different refusal from `commit <sha> is not on origin/main`,
-which means the commit was never merged: the log always says which of the two actually fired. And these tests are
-three of seven, not the whole guard: a run can still refuse for a guard-version mismatch, a workspace that is not a
-checkout, SCM metadata naming another branch, or a failed fetch. Read the SHA and start the build together, and if
-you lose the race, read the new tip and run again.
+Three things follow.
+
+**All three have to be the same commit** — your checkout, the SHA you passed, and `main` as it stands when the build
+fetches it. If someone merges in between, the build refuses rather than deploying a commit the branch has already
+moved past. *Which* refusal you get depends on what Jenkins checked out: if the job still has your commit, it is
+`commit <sha> is on origin/main but is NOT its tip (<tip>)`; if the job re-checked-out the new tip, the SHA you
+passed no longer matches the checkout and you get the permission mismatch instead. A third refusal,
+`commit <sha> is not on origin/main`, means the commit is not reachable from the branch *right now* — usually
+never merged, but a force-push or a branch rewrite can put a previously merged commit there too. The log always
+names which one fired.
+
+**A long pipeline can lose the race after it has already been admitted.** The guard is not a one-time admission
+ticket: a job that re-guards a second workspace asks the same question again, against whatever `main` is by then.
+`service-deploy` re-guards after its long validation stage, so a merge *during* validation refuses an unchanged,
+already-admitted checkout at the deploy-workspace guard. That is the rule working, not a fault — but plan for it:
+take the SHA and start the build together, and if you lose the race, read the new tip and run again.
+
+**These tests are four of eight, not the whole guard**: a run can still refuse for a guard-version mismatch, a
+workspace that is not a checkout, SCM metadata naming another branch, a selected ref that is not the branch name,
+or a fetch that fails (including one where only a *tag* of that name exists — the guard fetches
+`refs/heads/main`, so a tag named `main` is not the branch).
 
 A few consequences worth knowing:
 

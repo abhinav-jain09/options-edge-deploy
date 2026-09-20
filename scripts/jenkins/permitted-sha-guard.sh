@@ -47,16 +47,32 @@
 # still shows what was checked out and what was permitted. A usage error, a version mismatch or a
 # non-checkout refuses before that and prints only its reason.
 #
-# WHAT THIS STILL CANNOT PROVE — the remaining window. Every check here is made at ONE moment: the
-# moment this script fetched. origin/<branch> is a ref anyone may move, so the tip can advance
-# between this check and the effect the build runs later. What is established is that AT THE MOMENT
-# OF THE CHECK the checkout was the permitted commit and was the branch tip; that the tip did not
-# move afterwards is neither established nor needed — work merged after the permission was given is
-# not what was permitted, and step 4 keeps the effect pinned to the one commit Abhinav named. The
-# window is "the branch moved on while a permitted build was running", which changes nothing about
-# WHAT this build consumes. What the FILES of the checkout are when the effect finally runs is a
-# different question, answered separately and immediately before each effect by
-# scripts/jenkins/verify-permitted-tree.sh.
+# WHAT THIS STILL CANNOT PROVE — two limits, stated as limits.
+#
+# 1. THE SNAPSHOT. Every check here is made at ONE moment: the moment this script fetched. The branch
+#    is a ref anyone may move, so the tip can advance right afterwards. What is established is that AT
+#    THE MOMENT OF THE CHECK the checkout was the permitted commit and was the branch tip. Nothing
+#    here makes a RUNNING PIPELINE immune to a later merge: a job that invokes the guard again in a
+#    second workspace re-asks the same question against a NEWER tip, so an unchanged, already-admitted
+#    checkout can be refused at that later invocation — service-deploy re-guards after its long
+#    validation stage, and a merge during that stage is enough. That is the rule working (the branch
+#    HEAD must BE the permitted commit, and it no longer is), not a defect, but it is a real
+#    operational consequence: take the SHA and start the build together, and expect a long pipeline to
+#    lose the race occasionally.
+#
+# 2. WHAT THE FILES ARE. This script judges a COMMIT ID, never file contents. What the FILES of the
+#    checkout are when work actually runs is a different question, answered by
+#    scripts/jenkins/verify-permitted-tree.sh — and answered only where a pipeline places it. It is
+#    NOT true that every effect in every job is preceded by that verification. What
+#    validate-jenkinsfile-guard.py REQUIRES to be preceded by it is the set of source-consuming
+#    effects its grammar names: commands that turn this checkout into an artifact that is packaged,
+#    installed, published or shipped (mvn at the package phase or later, docker build/buildx build,
+#    rsync, scp, helm install/upgrade, ansible-playbook, and repository scripts that run one of them).
+#    Applying a rendered manifest — kubectl, a deploy helper that ends in kubectl — is NOT in that set,
+#    so the validator does not demand a verification in front of it. Where a job wants one there, it
+#    places it itself and its repository's tests assert the adjacency (Jenkinsfile.nifty-gex-service's
+#    'Deploy (service-scoped)' stage does exactly that). Read the claim as "every source-consuming
+#    effect the validator recognises", never as "every effect".
 #
 # Usage: permitted-sha-guard.sh [--dir <checkout>] [--branch <name>] [--ref <selected-ref>]
 #   --dir     guard a NESTED application checkout (e.g. nifty-gex-src, .deps/options-edge-contracts)
@@ -145,12 +161,27 @@ if [ "$nested" = false ]; then
     echo "permitted-sha-guard: $var = $val (allowed)"
   done
 fi
-# 2c. the branch, fetched NOW (FETCH_HEAD), never a stale remote-tracking ref. A fetch that fails is a
-#     refusal: the branch cannot be confirmed. TWO conditions, judged and reported separately: HEAD is
-#     ON the branch (merged work), and HEAD IS the branch tip (current work).
-git -C "$dir" fetch --quiet origin "$branch" || refuse "could not fetch origin/$branch to confirm the branch — refusing rather than guessing"
-tip="$(git -C "$dir" rev-parse FETCH_HEAD)"
-git -C "$dir" merge-base --is-ancestor "$head_sha" FETCH_HEAD \
+# 2c. the branch, fetched NOW, never a stale remote-tracking ref. A fetch that fails is a refusal: the
+#     branch cannot be confirmed. THREE points, in this order:
+#     * the ref is FULLY QUALIFIED — `refs/heads/$branch`, not `$branch`. `git fetch origin main`
+#       resolves through git's ref-disambiguation rules, so a TAG named `main` satisfies it when the
+#       branch does not exist at all, and the guard would then report the tag's commit as "the tip of
+#       origin/main". Branch and tag namespaces are separate; a tag is not the environment's branch,
+#       and tip equality cannot repair a ref that named the wrong thing to begin with.
+#     * the fetched tip is captured ONCE, into $tip, and BOTH predicates below are judged against that
+#       one commit. FETCH_HEAD is a mutable file: reading it again for the second predicate lets a
+#       concurrent fetch in the same checkout answer the two questions about two different commits,
+#       which is how a correct build gets refused as off-branch while the log prints its own commit as
+#       the tip. One capture, one snapshot, one story in the log.
+#     * TWO conditions, judged and reported separately: HEAD is ON the branch (merged work), and HEAD
+#       IS the branch tip (current work).
+git -C "$dir" fetch --quiet origin "refs/heads/$branch" || refuse "could not fetch refs/heads/$branch from origin to confirm the branch — refusing rather than guessing (a tag or any other ref of that name is not the branch)"
+tip="$(git -C "$dir" rev-parse FETCH_HEAD^{commit} 2>/dev/null)" || tip=""
+case "$tip" in
+  ''|*[!0-9a-f]*) refuse "the fetched refs/heads/$branch did not resolve to a commit id (got '${tip:-<none>}')" ;;
+esac
+[ "${#tip}" -eq 40 ] || refuse "the fetched refs/heads/$branch did not resolve to a full commit id (got '$tip')"
+git -C "$dir" merge-base --is-ancestor "$head_sha" "$tip" \
   || refuse "commit $head_sha is not on origin/$branch (tip is $tip); this job deploys only merged work"
 [ "$head_sha" = "$tip" ] \
   || refuse "commit $head_sha is on origin/$branch but is NOT its tip ($tip) — origin/$branch has moved past it. This job deploys the BRANCH HEAD: an ancestor is work the branch has already left behind, and being merged is not being current. Take the permission for $tip and run again."

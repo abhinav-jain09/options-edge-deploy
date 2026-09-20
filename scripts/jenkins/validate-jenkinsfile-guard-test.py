@@ -193,6 +193,12 @@ def main() -> int:
     ap.add_argument("--validator", default=os.path.join(HERE, "validate-jenkinsfile-guard.py"))
     a = ap.parse_args()
     good = GOOD.replace("__HASH__", STUB_HASH)
+    # the validator's own declaration grammar, taken from the file under test rather than restated here
+    import importlib.util as _ilu0
+    _spec0 = _ilu0.spec_from_file_location("gv0", a.validator)
+    gv0 = _ilu0.module_from_spec(_spec0)
+    _spec0.loader.exec_module(gv0)
+    ALLOW_ARG_RE = gv0.ALLOW_ARG
     VERIFY_APP = "            timeout(time: 10, unit: 'MINUTES') {\n              sh 'PERMITTED_SHA=\"${APP_PERMITTED_SHA:-}\" bash scripts/jenkins/verify-permitted-tree.sh --dir app-src'\n            }\n"
     BUILD = "            sh 'docker build -t app app-src'\n"
     passed = failed = 0
@@ -786,6 +792,54 @@ def main() -> int:
     passed += ok_
     failed += not ok_
 
+    # THE GUARD STAGE'S OWN AGENT (Codex BLOCKER). Declarative evaluates a stage's agent closure BEFORE it runs
+    # that stage's steps, so a label expression that CALLS something calls it before the permitted-commit guard.
+    # An earlier revision of this file allowed any `${…}` without braces inside, which admitted exactly that.
+    for label, expr in [
+        ("a downstream trigger inside the label", "\"${build([job: 'unguarded-deploy', wait: false])}\""),
+        ("a shell call inside the label", "\"${sh('kubectl delete deployment victim')}\""),
+        ("a method call on a property read", "\"${env.LABELS.collect { it }}\""),
+        ("a closure in the label", "\"${ { -> 'x' }() }\""),
+        ("a GString with a nested interpolation", "\"${\"${sh('id')}\"}\""),
+    ]:
+        mut(f"guard-stage agent label running {label} is not the canonical guard",
+            "stage('Permitted commit guard') {\n      agent { label 'deploy-host' }",
+            "stage('Permitted commit guard') {\n      agent { label " + expr + " }",
+            "not the canonical guard")
+    for label, expr in [("a single-quoted literal", "'deploy-host'"),
+                        ("a bare identifier", "BUILD_LABEL"),
+                        ("an env property read", "\"${env.BUILD_AGENT_LABEL}\""),
+                        ("a params property read", "\"${params.AGENT}\""),
+                        ("literal text around a property read", "\"oe-${env.PROFILE}-builder\"")]:
+        mut(f"guard-stage agent label that only reads a value ({label}) stays canonical",
+            "stage('Permitted commit guard') {\n      agent { label 'deploy-host' }",
+            "stage('Permitted commit guard') {\n      agent { label " + expr + " }",
+            "carry the canonical permitted-commit guard", expect_ok=True)
+
+    # ONE declaration grammar. The verifier's declaration_is_wellformed() and this validator's ALLOW_ARG must
+    # answer identically for every declaration, or CI blesses definitions that always refuse at deploy time
+    # (and valid declarations cannot be written in the canonical step). Codex found four disagreements:
+    # `../target` and `a//target` were accepted here and exit 2 there; `"target/"` and `"x y"` the other way.
+    verifier = os.path.join(HERE, "verify-permitted-tree.sh")
+    if os.path.isfile(verifier):
+        corpus = ["target", "*/target", "*/*/target", "*", "a/*/b", ".deps", ".m2", "scripts/__pycache__",
+                  "scripts/ops/archive/market_calendar.py", "target-long", "a.b-c_d",
+                  "../target", "a//target", "target/", "/target", "x y", "..", ".", "~", "~/target",
+                  "**", "**/target", "tar*", "*x", "tar@get", "a/../b", "a/./b", "", "a/", "a b/c"]
+        disagree = []
+        for decl in corpus:
+            here_ok = re.fullmatch(ALLOW_ARG_RE, '"' + decl + '"') is not None
+            r = subprocess.run(["bash", verifier, "--dir", os.path.join(tempfile.gettempdir(), "no-such-checkout"),
+                                "--allow-ignored", decl], capture_output=True, text=True)
+            there_ok = r.returncode != 2
+            if here_ok != there_ok:
+                disagree.append((decl, here_ok, there_ok))
+        ok_ = not disagree
+        print(("ok   " if ok_ else "FAIL ") + f"[declaration grammar parity: {len(corpus)} declarations, validator and verifier agree on every one]"
+              + ("" if ok_ else f"\n{disagree}"))
+        passed += ok_
+        failed += not ok_
+
     # scope DISCOVERY is repository-wide: a Jenkinsfile is a job definition wherever it sits, and one nobody
     # classified is one nobody judged. The root-only search this replaced reported a nested definition as absent.
     case("a Jenkinsfile in a subdirectory must be classified", good, MANIFEST, False,
@@ -834,7 +888,7 @@ def main() -> int:
     case("--only still applies every rule", good.replace("        stage('Deploy') {\n          when { expression { " + G2 + " } }\n", "        stage('Deploy') {\n"), MANIFEST, False, "has no `when` gate", ["--only", "Jenkinsfile.fixture"])
 
     print(f"validate-jenkinsfile-guard-test: {passed} passed, {failed} failed")
-    if failed == 0 and passed >= 270:
+    if failed == 0 and passed >= 280:
         print("validate-jenkinsfile-guard-test: ALL PASS")
         return 0
     return 1

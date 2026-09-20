@@ -468,6 +468,67 @@ class BindRequiredImageTest(unittest.TestCase):
         self.assertIn("no valid digest", r.stderr)
 
 
+class NiftyDeployProvenanceTest(unittest.TestCase):
+    """The service-scoped deploy renders and applies THIS checkout's overlay, so the tree is verified first.
+
+    Codex (Military grade): the guard's header claimed verification happens "immediately before each
+    effect", and Jenkinsfile.nifty-gex-service's deployment stage ran `bash scripts/deploy/service-deploy.sh`
+    -- which renders the checkout's overlay and applies it -- inside a compound shell body with nothing
+    verified in front of it. The validator's effect grammar does not reach manifest application (its
+    LIMITS say so now), so this adjacency is the pipeline's own and is asserted here, on the real file."""
+
+    VERIFY = "sh 'PERMITTED_SHA=\"${PERMITTED_SHA:-}\" bash scripts/jenkins/verify-permitted-tree.sh --dir ."
+    DEPLOY = "sh 'bash scripts/deploy/service-deploy.sh'"
+    TRIPLE = chr(39) * 3
+
+    def setUp(self) -> None:
+        self.text = (ROOT / "Jenkinsfile.nifty-gex-service").read_text()
+
+    def _adjacent(self, text: str) -> bool:
+        """True when the verify's timeout block is the statement immediately before the deploy step.
+
+        Total: any shape that is not "verify, then deploy, with nothing between" is False rather than an
+        exception, so a mutation can never pass by breaking the parse."""
+        try:
+            stage = text[text.index("    stage('Deploy (service-scoped)') {"):]
+        except ValueError:
+            return False
+        if self.DEPLOY not in stage:
+            return False
+        before = stage[:stage.index(self.DEPLOY)]
+        if self.VERIFY not in before:
+            return False
+        nl = before.find("\n", before.rindex(self.VERIFY))
+        close = before.find("}", nl) if nl >= 0 else -1
+        if close < 0:
+            return False
+        return all(not ln.strip() or ln.strip().startswith("//") for ln in before[close + 1:].splitlines())
+
+    def test_the_deploy_helper_runs_immediately_after_the_workspace_verify(self) -> None:
+        self.assertIn(self.DEPLOY, self.text, "the deploy helper must be its own step, not one line of a shell body")
+        self.assertTrue(self._adjacent(self.text))
+
+    def test_the_assertion_fails_for_anything_between_them(self) -> None:
+        for label, stmt in [
+            ("a shell step", "            sh 'printf changed > k8s/overlays/dev/kustomization.yaml'\n"),
+            ("a writeFile step", "            writeFile file: 'k8s/x.yaml', text: 'changed'\n"),
+            ("an unstash step", "            unstash 'other-tree'\n"),
+            ("a dir block", "            dir('k8s') { }\n"),
+            ("a bare method call", "            renderSomethingElse()\n"),
+        ]:
+            mutated = self.text.replace("            " + self.DEPLOY, stmt + "            " + self.DEPLOY, 1)
+            self.assertFalse(self._adjacent(mutated), label)
+
+    def test_the_assertion_fails_without_the_verify(self) -> None:
+        stage = self.text[self.text.index("    stage('Deploy (service-scoped)') {"):]
+        block = stage[stage.index("            timeout(time: 10, unit: 'MINUTES') {"):stage.index("            " + self.DEPLOY)]
+        self.assertFalse(self._adjacent(self.text.replace(block, "", 1)))
+        # ...and for the shape this replaced: the helper as one line of a compound preparation body
+        compound = ("            sh " + self.TRIPLE + "\n              set -eu\n"
+                    "              bash scripts/deploy/service-deploy.sh\n            " + self.TRIPLE + "\n")
+        self.assertFalse(self._adjacent(self.text.replace("            " + self.DEPLOY, compound, 1)))
+
+
 class PermittedShaGuardValidatorTest(unittest.TestCase):
     def test_repository_passes(self) -> None:
         r = subprocess.run(["bash", str(ROOT / "scripts/ci/validate-jenkins-permitted-sha-guard.sh")], capture_output=True, text=True)
