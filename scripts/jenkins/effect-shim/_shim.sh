@@ -166,14 +166,28 @@ fi
 # Elements are compared by their CANONICAL path, not as strings: on macOS a PATH element under /var and
 # this script's own $(pwd -P) under /private/var are the same directory spelled two ways, and a string
 # comparison leaves the shim on PATH -- which resolves $tool back to this file.
+# AN EMPTY ELEMENT IS KEPT HERE TOO. `[ -n "$p" ] || continue` dropped it, so
+# `PATH=<shim>::$REALBIN:...` resolved the real binary from $REALBIN while a tracked `./mvn` sat
+# earlier in the surviving PATH -- the shim silently ran a DIFFERENT binary than the one the job's
+# PATH named. It is dropped only when the current directory IS this shim directory, since keeping
+# it there would resolve $tool straight back to this script.
 stripped=""
-IFS=':' read -r -a parts <<< "${PATH:-}"
-for p in "${parts[@]}"; do
-  [ -n "$p" ] || continue
-  canon="$(cd "$p" 2>/dev/null && pwd -P || printf '%s' "$p")"
-  [ "$canon" = "$here" ] && continue
-  case "$canon" in "$here"/*) continue ;; esac
-  stripped="${stripped:+$stripped:}$p"
+first=1
+rest="${PATH:-}"
+while :; do
+  p="${rest%%:*}"
+  if [ -z "$p" ]; then
+    canon="$(pwd -P)"
+  else
+    canon="$(cd "$p" 2>/dev/null && pwd -P || printf '%s' "$p")"
+  fi
+  keep=1
+  [ "$canon" = "$here" ] && keep=0
+  case "$canon" in "$here"/*) keep=0 ;; esac
+  if [ "$keep" = 1 ]; then
+    if [ "$first" = 1 ]; then stripped="$p"; first=0; else stripped="$stripped:$p"; fi
+  fi
+  case "$rest" in *:*) rest="${rest#*:}" ;; *) break ;; esac
 done
 real="$(PATH="$stripped" command -v "$tool" 2>/dev/null || true)"
 [ -n "$real" ] || refuse "$tool is not on PATH outside this shim directory"

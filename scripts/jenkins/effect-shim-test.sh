@@ -315,16 +315,44 @@ printf '#!/bin/sh\nprintf "mvn %%s\\n" "$*" >> "$RAN_LOG"\nexit 0\n' > "$REALBIN
 chmod +x "$REALBIN/mvn"
 git -C "$W" checkout -q -- file.txt
 
+# --- 11h. AN EMPTY ELEMENT SURVIVES THE REAL-BINARY LOOKUP TOO ----------------------------------
+# The rewrite that hands PATH to the child was fixed for empty elements; the STRIPPING pass that
+# resolves the real binary still dropped them, so `PATH=<shim>::$REALBIN:...` ran $REALBIN/mvn while
+# a tracked ./mvn sat earlier in the surviving PATH. The shim must run the binary the job's PATH
+# names, not a different one.
+# The local binary lives in a cwd OUTSIDE the checkout, so the tree stays clean and the only thing
+# under test is which element the lookup honours.
+mkdir -p "$T/cwdbin"
+printf '#!/bin/sh\nprintf "LOCAL-MVN %%s\\n" "$*" >> "$RAN_LOG"\nexit 0\n' > "$T/cwdbin/mvn"
+chmod +x "$T/cwdbin/mvn"
+: > "$T/ran"
+set +e
+OUT="$(cd "$T/cwdbin" && env PATH="$CO_SHIM::$REALBIN:/usr/bin:/bin" RAN_LOG="$T/ran" \
+      OE_SHIM_DIR="$W" OE_SHIM_SHA="$SHA" OE_SHIM_ALLOW= \
+      mvn -B test 2>&1)"; RC=$?
+set -e
+if grep -q '^LOCAL-MVN' "$T/ran"; then
+  ok_positive "an EMPTY PATH element is preserved when resolving the real binary"
+else
+  bad "an EMPTY PATH element is preserved when resolving the real binary" "rc=$RC ran=$(cat "$T/ran")
+$OUT"
+fi
+rm -f "$T/cwdbin/mvn" 2>/dev/null || true
+
 # --- 11c. A LOGIN SHELL THAT REBUILDS PATH IS A LIMIT, NOT A PROTECTION -------------------------
 # `bash -lc` re-reads the profile, and a profile that ASSIGNS PATH (rather than prepending to it)
-# drops the shim entry entirely. Nothing inside a wrapper can survive its own removal from PATH, so
+# drops the shim entry entirely. The fixture is hermetic: a throwaway HOME whose .bash_profile
+# reassigns PATH, and a REAL login shell -- `bash -c` would not have read a profile at all, so the
+# case would have been named for something it never exercised. Nothing inside a wrapper can survive its own removal from PATH, so
 # this is recorded as a LIMIT with a test rather than described in a sentence. If it ever goes green
 # the shim became stronger than its header claims and the header is what needs changing.
 : > "$T/ran"
 set +e
+mkdir -p "$T/loginhome"
+printf 'PATH="%s:/usr/bin:/bin"\nexport PATH\n' "$REALBIN" > "$T/loginhome/.bash_profile"
 OUT="$(cd "$W" && env PATH="$CO_SHIM:$REALBIN:/usr/bin:/bin" RAN_LOG="$T/ran" \
-      OE_SHIM_DIR=. OE_SHIM_SHA="$SHA" OE_SHIM_ALLOW= \
-      bash -c 'PATH="'"$REALBIN"':/usr/bin:/bin"; kubectl reset-path-effect' 2>&1)"; RC=$?
+      OE_SHIM_DIR=. OE_SHIM_SHA="$SHA" OE_SHIM_ALLOW= HOME="$T/loginhome" \
+      bash -lc 'kubectl reset-path-effect' 2>&1)"; RC=$?
 set -e
 if grep -q '^kubectl' "$T/ran"; then
   ok_limit "DOCUMENTED LIMIT: a shell that REASSIGNS PATH drops the shim and the tool runs unverified"
