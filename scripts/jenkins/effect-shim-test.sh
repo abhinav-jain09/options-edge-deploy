@@ -306,6 +306,36 @@ else
 $OUT"
 fi
 
+# --- 11d. A VERIFIED EFFECT, THEN DRIFT: BOTH FACTS ARE TRUE AT ONCE ----------------------------
+# Review found the Jenkinsfile saying "the effects above ran UNVERIFIED" whenever the END inspection
+# failed. That is false for the ordinary case: a wrapper verifies AT THE MOMENT IT RUNS, and a drift
+# discovered later does not reach back and un-verify it. The two facts coexist, and this case pins
+# both together -- the effect ran verified, AND the end inspection still refuses -- so the wording
+# can never drift back to the stronger claim without a red test.
+: > "$T/ran"
+set +e
+OUT="$(cd "$W" && env PATH="$CO_SHIM:$REALBIN:/usr/bin:/bin" RAN_LOG="$T/ran" \
+      OE_SHIM_DIR=. OE_SHIM_SHA="$SHA" OE_SHIM_ALLOW= kubectl apply -f manifest 2>&1)"; RC=$?
+set -e
+effect_ran=false
+grep -q '^kubectl' "$T/ran" && printf '%s' "$OUT" | grep -q "verified" && effect_ran=true
+# now the drift, AFTER the effect: an entry the digest does not account for
+: > "$CO_SHIM/npm"
+chmod +x "$CO_SHIM/npm"
+set +e
+END_OUT="$(bash "$HERE/effect-shim-integrity.sh" --dir "$W" --when end 2>&1)"; END_RC=$?
+set -e
+rm -f "$CO_SHIM/npm" 2>/dev/null || true
+if $effect_ran && [ "$END_RC" -ne 0 ]; then
+  ok "a VERIFIED effect followed by drift: the effect ran verified AND the end inspection still refuses"
+else
+  bad "a VERIFIED effect followed by drift: the effect ran verified AND the end inspection still refuses" \
+      "effect_ran=$effect_ran rc=$RC end_rc=$END_RC ran=$(cat "$T/ran")
+$OUT
+--- end inspection ---
+$END_OUT"
+fi
+
 # --- 12-14. THE DOCUMENTED LIMITS, PINNED ------------------------------------------------------------
 # These three cases assert what the shim does NOT do. They exist because a limit that is only described
 # is a sentence someone deletes; a limit with a test is a limit. If one of them ever goes red, the shim

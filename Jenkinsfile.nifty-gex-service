@@ -301,7 +301,14 @@ pipeline {
             if (inspectionFailure != null) {
               echo 'effect-shim-integrity(end): THE INSPECTION DID NOT RUN (' + inspectionFailure.toString() + '). This build cannot say whether the shim was intact while the effects above ran.'
             } else if (shimIntegrity != 0) {
-              echo 'effect-shim-integrity(end): the shim was tampered with during this stage; the effects above ran UNVERIFIED'
+              // WHAT THIS DOES NOT SAY. An effect that passed through a wrapper was verified AT THE
+              // MOMENT IT RAN, and a drift discovered afterwards does not reach back and un-verify it.
+              // The honest statement is the weaker one: from here the build cannot attest that the
+              // shim was the declared one for the WHOLE stage, so it cannot say which effects, if
+              // any, ran outside that coverage. Review found the previous wording ("the effects above
+              // ran UNVERIFIED") false for exactly the ordinary case -- a verified kubectl, then an
+              // accidental added entry later in the stage.
+              echo 'effect-shim-integrity(end): the shim changed during this stage; coverage CANNOT BE ATTESTED for all effects above. Effects that passed through a wrapper were verified when they ran; what this build cannot establish is that every effect did.'
             }
             if (deployFailure != null) {
               throw deployFailure
@@ -310,7 +317,7 @@ pipeline {
               error('the end inspection did not run (' + inspectionFailure.toString() + '); this build cannot attest that the shim was intact')
             }
             if (shimIntegrity != 0) {
-              error('effect-shim integrity failed after the deployment: the effects above ran unverified')
+              error('effect-shim integrity failed after the deployment: coverage cannot be attested for all effects in this stage')
             }
           }
         }
