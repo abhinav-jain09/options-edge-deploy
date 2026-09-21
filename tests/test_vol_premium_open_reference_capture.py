@@ -59,12 +59,14 @@ def _fixture(root: Path, *, index_rows=None, es_rows=None) -> None:
     """A session shaped like the real ones: the index silent across the bell, ES present."""
     if index_rows is None:
         index_rows = [_index(-302, 7650.0)] + [
-            _index(300 + i, 7650.0 + i / 10.0) for i in range(orc.MIN_OFFSET_PAIRS + 50)]
+            _index(300 + 60 * i, 7650.0 + i / 10.0)
+            for i in range(orc.MIN_COVERED_MINUTES + 20)]
     if es_rows is None:
         # fresh at the open (the last tick is 1 s before it), and enough post-open pairs to clear
         # the MIN_OFFSET_PAIRS floor
         es_rows = [_es(-20 + i, 7647.0) for i in range(20)] + [
-            _es(300 + i, 7650.0 + i / 10.0 - 3.0) for i in range(orc.MIN_OFFSET_PAIRS + 50)]
+            _es(300 + 60 * i, 7650.0 + i / 10.0 - 3.0)
+            for i in range(orc.MIN_COVERED_MINUTES + 20)]
     _write(root, orc.INDEX, index_rows)
     _write(root, orc.ES, es_rows)
     _write(root, orc.BASIS, [{"level": 69.7, "levelKind": "MEASURED"}])
@@ -92,7 +94,8 @@ class OpenReferenceCaptureTest(unittest.TestCase):
         Without this, `indexTicksInWindow == 0` would also be produced by a reader that never
         looked."""
         rows = [_index(-302, 7650.0), _index(-10, 7651.0)] + [
-            _index(300 + i, 7650.0 + i / 10.0) for i in range(orc.MIN_OFFSET_PAIRS + 50)]
+            _index(300 + 60 * i, 7650.0 + i / 10.0)
+            for i in range(orc.MIN_COVERED_MINUTES + 20)]
         _fixture(self.tmp, index_rows=rows)
         self.assertEqual(orc.capture(str(self.tmp), DAY)["indexTicksInWindow"], 1)
 
@@ -109,17 +112,22 @@ class OpenReferenceCaptureTest(unittest.TestCase):
         Here they sit 20 points away; if the capture scored them the offset would move. This is
         the case that fails if the source filter is ever dropped."""
         rows = [_index(-302, 7650.0)]
-        for i in range(orc.MIN_OFFSET_PAIRS + 50):
-            rows.append(_index(300 + i, 7650.0 + i / 10.0))
+        for i in range(orc.MIN_COVERED_MINUTES + 20):
+            rows.append(_index(300 + 60 * i, 7650.0 + i / 10.0))
             # WITHIN the 2 s staleness limit of the ES row at 300+10i, deliberately: at +5 s the
             # staleness guard excluded them and this case passed with the source filter DELETED -
             # it was named for the filter and satisfied by something else entirely.
-            rows.append(_index(300.5 + i, 7670.0 + i / 10.0,
+            rows.append(_index(300.5 + 60 * i, 7670.0 + i / 10.0,
                                source="IBKR_OPTION_MODEL", field="OPTION_MODEL_UNDERLYING"))
+            # An IBKR_OPTION_MODEL row whose priceField IS "LAST". Without it, deleting only the
+            # `source` predicate changed nothing, because every bad row was also excluded by the
+            # field predicate - the case named two filters and tested one.
+            rows.append(_index(300.6 + 60 * i, 7690.0 + i / 10.0,
+                               source="IBKR_OPTION_MODEL", field="LAST"))
             # An IBKR_INDEX row that is NOT the LAST field. Without this the case could not tell a
             # deleted `priceField == "LAST"` predicate from a kept one: every bad row differed in
             # BOTH attributes, so removing one filter changed nothing.
-            rows.append(_index(300.7 + i, 7610.0 + i / 10.0,
+            rows.append(_index(300.7 + 60 * i, 7610.0 + i / 10.0,
                                source="IBKR_INDEX", field="BID"))
         _fixture(self.tmp, index_rows=rows)
         self.assertAlmostEqual(orc.capture(str(self.tmp), DAY)["offsetPoints"], -3.0, places=3,
@@ -127,8 +135,8 @@ class OpenReferenceCaptureTest(unittest.TestCase):
 
     # --- a session that cannot answer the question is REJECTED, and says why -------------------
     def test_a_session_without_an_es_reference_is_not_accepted(self) -> None:
-        _fixture(self.tmp, es_rows=[_es(300 + i, 7650.0 + i / 10.0 - 3.0)
-                                    for i in range(orc.MIN_OFFSET_PAIRS + 50)])
+        _fixture(self.tmp, es_rows=[_es(300 + 60 * i, 7650.0 + i / 10.0 - 3.0)
+                                    for i in range(orc.MIN_COVERED_MINUTES + 20)])
         got = orc.capture(str(self.tmp), DAY)
         self.assertFalse(got["accepted"])
         self.assertEqual(got["rejectedBecause"], "no ES reference in the window")
@@ -142,20 +150,45 @@ class OpenReferenceCaptureTest(unittest.TestCase):
         self.assertEqual(got["rejectedBecause"], "offset not measurable")
 
     # --- the count the decision rests on cannot be inflated -------------------------------------
-    def test_a_second_run_of_the_same_session_is_not_appended_twice(self) -> None:
+    def test_a_second_run_of_the_same_session_is_not_written_twice(self) -> None:
         _fixture(self.tmp)
-        out = self.tmp / "ledger.jsonl"
+        out = self.tmp / "ledger"
         for _ in range(2):
             subprocess.run([sys.executable, str(SCRIPT), "--session", DAY,
                             "--archive-root", str(self.tmp), "--out", str(out)],
                            capture_output=True, text=True, check=True)
-        self.assertEqual(len(out.read_text().strip().split("\n")), 1,
+        self.assertEqual(sorted(p.name for p in out.iterdir()), [f"{DAY}.json"],
                          "a repeated capture would double the denominator of the >=55 count")
+        # COUNTING FILES CANNOT SEE AN OVERWRITE. Without the exclusive create the second run
+        # rewrites the record and the count is still one, so the file is marked and the marker
+        # must survive: a captured session is written ONCE and never silently replaced.
+        marked = out / f"{DAY}.json"
+        marked.write_text(marked.read_text() + "SENTINEL\n")
+        subprocess.run([sys.executable, str(SCRIPT), "--session", DAY,
+                        "--archive-root", str(self.tmp), "--out", str(out)],
+                       capture_output=True, text=True, check=True)
+        self.assertIn("SENTINEL", marked.read_text(),
+                      "the capture overwrote a session it had already recorded")
 
-    def test_a_different_session_does_append(self) -> None:
-        """The companion: the guard above must refuse a DUPLICATE, not every write."""
+    def test_concurrent_captures_of_one_session_produce_one_record(self) -> None:
+        """The sequential case cannot see a race. Two processes started together both find the
+        session absent under a read-then-check; only an exclusive CREATE decides a winner."""
         _fixture(self.tmp)
-        out = self.tmp / "ledger.jsonl"
+        out = self.tmp / "ledger"
+        procs = [subprocess.Popen([sys.executable, str(SCRIPT), "--session", DAY,
+                                   "--archive-root", str(self.tmp), "--out", str(out)],
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                 for _ in range(6)]
+        for proc in procs:
+            proc.wait()
+        written = sorted(p.name for p in out.iterdir())
+        self.assertEqual(written, [f"{DAY}.json"],
+                         f"six concurrent captures wrote {written}")
+
+    def test_a_different_session_does_write(self) -> None:
+        """The companion: the guard must refuse a DUPLICATE, not every write."""
+        _fixture(self.tmp)
+        out = self.tmp / "ledger"
         subprocess.run([sys.executable, str(SCRIPT), "--session", DAY,
                         "--archive-root", str(self.tmp), "--out", str(out)], check=True,
                        capture_output=True)
@@ -169,7 +202,32 @@ class OpenReferenceCaptureTest(unittest.TestCase):
         subprocess.run([sys.executable, str(SCRIPT), "--session", other,
                         "--archive-root", str(self.tmp), "--out", str(out)], check=True,
                        capture_output=True)
-        self.assertEqual(len(out.read_text().strip().split("\n")), 2)
+        self.assertEqual(len(list(out.iterdir())), 2)
+
+    def test_a_duplicated_archive_row_is_not_counted_twice(self) -> None:
+        """A replayed row describes the same instant twice. Counting it twice clears a floor it
+        should not and weights the median toward whatever was duplicated."""
+        rows = [_index(-302, 7650.0)]
+        for i in range(orc.MIN_COVERED_MINUTES + 20):
+            rows.append(_index(300 + 60 * i, 7650.0 + i / 10.0))
+            rows.append(_index(300 + 60 * i, 7650.0 + i / 10.0))      # the same observation again
+        _fixture(self.tmp, index_rows=rows)
+        got = orc.capture(str(self.tmp), DAY)
+        self.assertEqual(got["offsetDuplicateRowsSkipped"], orc.MIN_COVERED_MINUTES + 20)
+        self.assertEqual(got["offsetPairs"], orc.MIN_COVERED_MINUTES + 20)
+
+    def test_pairs_bunched_into_a_few_minutes_do_not_cover_the_session(self) -> None:
+        """Enough pairs, all inside a short burst: a per-session statistic needs the session."""
+        rows = [_index(-302, 7650.0)]
+        es_rows = [_es(-1, 7647.0)]
+        for i in range(orc.MIN_DISTINCT_PAIRS + 100):
+            rows.append(_index(300 + i, 7650.0 + i / 1000.0))
+            es_rows.append(_es(300 + i, 7650.0 + i / 1000.0 - 3.0))
+        _fixture(self.tmp, index_rows=rows, es_rows=es_rows)
+        got = orc.capture(str(self.tmp), DAY)
+        self.assertGreaterEqual(got["offsetPairs"], orc.MIN_DISTINCT_PAIRS)
+        self.assertFalse(got["accepted"])
+        self.assertIn("distinct minutes", got["rejectedBecause"])
 
     # --- refusals ------------------------------------------------------------------------------
     def test_a_bad_session_date_refuses_with_64(self) -> None:
@@ -191,7 +249,8 @@ class OpenReferenceCaptureTest(unittest.TestCase):
         OPEN. Accepting it would put a 25-second-old price into slot 0 under the name of an
         observation."""
         _fixture(self.tmp, es_rows=[_es(-25, 7647.0)] + [
-            _es(300 + i, 7650.0 + i / 10.0 - 3.0) for i in range(orc.MIN_OFFSET_PAIRS + 50)])
+            _es(300 + 60 * i, 7650.0 + i / 10.0 - 3.0)
+            for i in range(orc.MIN_COVERED_MINUTES + 20)])
         got = orc.capture(str(self.tmp), DAY)
         self.assertFalse(got["accepted"])
         self.assertIn("ms old at the open", got["rejectedBecause"])
@@ -207,7 +266,7 @@ class OpenReferenceCaptureTest(unittest.TestCase):
                  es_rows=[_es(-1, 7647.0), _es(299.5, 7647.0)])
         got = orc.capture(str(self.tmp), DAY)
         self.assertFalse(got["accepted"])
-        self.assertIn("offset pairs", got["rejectedBecause"])
+        self.assertIn("distinct minutes", got["rejectedBecause"])
         self.assertEqual(got["offsetPairs"], 1)
 
     def test_option_model_rows_do_not_count_as_index_ticks_or_shorten_the_freeze(self) -> None:
@@ -217,7 +276,7 @@ class OpenReferenceCaptureTest(unittest.TestCase):
         rows = [_index(-302, 7650.0, source="IBKR_OPTION_MODEL",
                        field="OPTION_MODEL_UNDERLYING"),
                 _index(-5, 7651.0, source="IBKR_OPTION_MODEL", field="OPTION_MODEL_UNDERLYING")]
-        rows += [_index(300 + i, 7650.0 + i / 10.0) for i in range(orc.MIN_OFFSET_PAIRS + 50)]
+        rows += [_index(300 + i, 7650.0 + i / 10.0) for i in range(orc.MIN_DISTINCT_PAIRS + 50)]
         _fixture(self.tmp, index_rows=rows)
         got = orc.capture(str(self.tmp), DAY)
         self.assertEqual(got["indexTicksInWindow"], 0)
@@ -231,7 +290,8 @@ class OpenReferenceCaptureTest(unittest.TestCase):
         foreign = dict(_index(300, 7650.0))
         foreign["eventTime"] = "2026-09-17T13:35:00Z"
         rows = [_index(-302, 7650.0), foreign] + [
-            _index(300 + i, 7650.0 + i / 10.0) for i in range(orc.MIN_OFFSET_PAIRS + 50)]
+            _index(300 + 60 * i, 7650.0 + i / 10.0)
+            for i in range(orc.MIN_COVERED_MINUTES + 20)]
         _fixture(self.tmp, index_rows=rows)
         got = orc.capture(str(self.tmp), DAY)
         self.assertEqual(got["indexForeignDateRecords"], 1)
@@ -250,11 +310,11 @@ class OpenReferenceCaptureTest(unittest.TestCase):
         idx = [{"price": 7650.0, "source": "IBKR_INDEX", "priceField": "LAST", "quality": "LIVE",
                 "eventTime": iso(-302)}]
         idx += [{"price": 7650.0 + i / 10.0, "source": "IBKR_INDEX", "priceField": "LAST",
-                 "quality": "LIVE", "eventTime": iso(300 + i)}
-                for i in range(orc.MIN_OFFSET_PAIRS + 50)]
+                 "quality": "LIVE", "eventTime": iso(300 + 60 * i)}
+                for i in range(orc.MIN_COVERED_MINUTES + 20)]
         es = [{"spxEquivalent": 7647.0, "spxBasisState": "PROJECTED", "eventTime": iso(-1)}]
         es += [{"spxEquivalent": 7650.0 + i / 10.0 - 3.0, "spxBasisState": "PROJECTED",
-                "eventTime": iso(300 + i)} for i in range(orc.MIN_OFFSET_PAIRS + 50)]
+                "eventTime": iso(300 + 60 * i)} for i in range(orc.MIN_COVERED_MINUTES + 20)]
         for topic, rows in ((orc.INDEX, idx), (orc.ES, es), (orc.BASIS, [{"level": 1.0}])):
             folder = self.tmp / topic / f"dt={day}"
             folder.mkdir(parents=True, exist_ok=True)
@@ -271,7 +331,8 @@ class OpenReferenceCaptureTest(unittest.TestCase):
         bad = dict(_index(400, 0.0))
         bad["price"] = "7650.0"
         rows = [_index(-302, 7650.0), bad] + [
-            _index(300 + i, 7650.0 + i / 10.0) for i in range(orc.MIN_OFFSET_PAIRS + 50)]
+            _index(300 + 60 * i, 7650.0 + i / 10.0)
+            for i in range(orc.MIN_COVERED_MINUTES + 20)]
         _fixture(self.tmp, index_rows=rows)
         got = orc.capture(str(self.tmp), DAY)      # must not raise
         self.assertTrue(got["accepted"], got["rejectedBecause"])

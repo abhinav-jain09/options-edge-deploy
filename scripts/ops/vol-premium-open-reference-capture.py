@@ -44,10 +44,19 @@ WINDOW_S = 30
 # The staleness limit an ES value must meet to stand for a moment in time - the same one the offset
 # pairing uses, because a reference and a pair are the same kind of claim.
 PAIR_MAX_AGE_S = 2
-# A session's offset is a per-session STATISTIC. One coincident pair produces a median and two
-# residuals that describe nothing, and admitting it would let a partial archive count toward the
-# >=55. RTH at one pair a second is ~23 000; this floor only excludes the degenerate case.
-MIN_OFFSET_PAIRS = 600
+# A session's offset is a per-session STATISTIC, and two things make one: enough DISTINCT
+# observations, and observations spread across the session rather than bunched. A raw row count is
+# neither - a replayed archive row pairs twice and clears any count floor while describing the same
+# instant - so pairs are keyed by the index observation's own timestamp, and the session must be
+# COVERED.
+#
+# RTH is 390 minutes and the index prints many times a second, so a healthy session yields a pair in
+# essentially every minute. The floors below are set where a session stops being able to answer the
+# question rather than at a statistical threshold nobody can defend: at least half the RTH minutes
+# must contain a pair, and there must be at least one distinct pair per covered minute on average.
+# A clean low-frequency archive spanning the session passes; 600 pairs inside ten minutes does not.
+MIN_COVERED_MINUTES = 195
+MIN_DISTINCT_PAIRS = 195
 
 
 def _records(root: str, topic: str, day: str):
@@ -125,7 +134,12 @@ def capture(root: str, day: str) -> dict:
     option_model = [(t, r) for t, r in index_all if r.get("source") == "IBKR_OPTION_MODEL"]
     # Basis rows carry `valueReferenceMs`, not `eventTime`, so _timed() would silently score them
     # as zero. Counted raw: this field says the series was archived at all, nothing finer.
-    basis = sum(1 for _ in _records(root, BASIS, day))
+    # THE BASIS TOPIC CARRIES NO RECORD-TIME FIELD. `valueReferenceMs` is the timestamp of the
+    # value the level was anchored to, not of the record - on 2026-09-18 every row referenced
+    # 2026-09-17 - so it cannot session-filter anything, and filtering on it would report zero
+    # basis records for a session that had thousands. The count is of rows in the partition, named
+    # so, and it says only that the series was archived at all.
+    basis_rows_in_partition = sum(1 for _ in _records(root, BASIS, day))
 
     # The index, and the freeze itself.
     before = [(t, r) for t, r in index if t < open_et]
@@ -158,6 +172,9 @@ def capture(root: str, day: str) -> dict:
     # scoring against those would measure the wrong thing.
     truth = [(t, r) for t, r in index if t >= open_et + dt.timedelta(minutes=5)]
     errors = []
+    seen_observations = set()
+    covered_minutes = set()
+    duplicate_rows = 0
     cursor = 0
     for stamp, row in truth:
         while cursor + 1 < len(es) and es[cursor + 1][0] <= stamp:
@@ -171,6 +188,14 @@ def capture(root: str, day: str) -> dict:
             continue
         if (stamp - es_stamp).total_seconds() > PAIR_MAX_AGE_S:
             continue
+        # ONE OBSERVATION, ONE PAIR. A duplicated or replayed archive row describes the same
+        # instant twice; counting it twice both clears a floor it should not and weights the
+        # median toward whatever was duplicated.
+        if stamp in seen_observations:
+            duplicate_rows += 1
+            continue
+        seen_observations.add(stamp)
+        covered_minutes.add(stamp.astimezone(ET).replace(second=0, microsecond=0))
         errors.append(equivalent - price)
 
     offset = residual_p50 = residual_p95 = None
@@ -190,8 +215,12 @@ def capture(root: str, day: str) -> dict:
                     f"{PAIR_MAX_AGE_S * 1000} ms limit")
     elif offset is None:
         rejected = "offset not measurable"
-    elif len(errors) < MIN_OFFSET_PAIRS:
-        rejected = f"only {len(errors)} offset pairs, under the {MIN_OFFSET_PAIRS} floor"
+    elif len(covered_minutes) < MIN_COVERED_MINUTES:
+        rejected = (f"the offset is measured over only {len(covered_minutes)} distinct minutes, "
+                    f"under the {MIN_COVERED_MINUTES} the session must cover")
+    elif len(errors) < MIN_DISTINCT_PAIRS:
+        rejected = (f"only {len(errors)} distinct offset pairs, under the {MIN_DISTINCT_PAIRS} "
+                    f"floor")
     else:
         rejected = None
     accepted = rejected is None
@@ -214,13 +243,15 @@ def capture(root: str, day: str) -> dict:
         "esTicksInWindow": len(es_window),
         "esSpxEquivalentAtOpen": es_window[-1][1]["spxEquivalent"] if es_window else None,
         "esBasisStatesInWindow": basis_states,
-        "basisRecords": basis,
+        "basisRowsInPartition": basis_rows_in_partition,
         # --- the offset, which is the whole question ---
         "offsetPoints": round(offset, 4) if offset is not None else None,
         "offsetBps": round(offset / level * 1e4, 4) if offset is not None and level else None,
         "offsetResidualP50": round(residual_p50, 4) if residual_p50 is not None else None,
         "offsetResidualP95": round(residual_p95, 4) if residual_p95 is not None else None,
         "offsetPairs": len(errors),
+        "offsetCoveredMinutes": len(covered_minutes),
+        "offsetDuplicateRowsSkipped": duplicate_rows,
         # A session is ACCEPTED only when it can answer the question: the reference must exist in
         # the window, and the offset must be measurable afterwards. A session that fails either is
         # recorded anyway, with the reason, so the accepted count is never inflated by silence.
@@ -239,7 +270,8 @@ def main(argv=None) -> int:
     parser.add_argument("--session", required=True, help="session date, YYYY-MM-DD")
     parser.add_argument("--archive-root", required=True,
                         help="archive root holding <topic>/dt=<session>/*.jsonl.gz")
-    parser.add_argument("--out", help="append the record to this file (default: stdout only)")
+    parser.add_argument("--out", help="directory of one <session>.json per captured session "
+                                      "(default: stdout only)")
     args = parser.parse_args(argv)
 
     try:
@@ -257,33 +289,31 @@ def main(argv=None) -> int:
     line = json.dumps(record, sort_keys=True)
     print(line)
     if args.out:
-        # ONE LINE PER SESSION, and the check and the write are the SAME critical section. A
-        # read-then-append let a scheduled run and a manual one both find the session absent and
-        # both append it, inflating the denominator the >=55 count is taken over. The lock is held
-        # across both, and it is an exclusive lock on the ledger itself, so it also covers a reader
-        # on another host sharing the file.
-        import fcntl
-
-        with open(args.out, "a+") as handle:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-            try:
-                handle.seek(0)
-                existing = set()
-                for entry in handle:
-                    try:
-                        existing.add(json.loads(entry).get("session"))
-                    except ValueError:
-                        continue
-                if record["session"] in existing:
-                    print(f"vol-premium-open-reference-capture: {record['session']} is already in "
-                          f"{args.out}; not appended", file=sys.stderr)
-                    return 0
-                handle.seek(0, os.SEEK_END)
-                handle.write(line + "\n")
-                handle.flush()
-                os.fsync(handle.fileno())
-            finally:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        # ONE FILE PER SESSION, CREATED WITH O_EXCL. The previous version was a lock around a
+        # read-then-append on one ledger, and review was right that flock proves nothing on a
+        # network filesystem: two hosts can each take a local lock, each see the session absent,
+        # and each append it. An exclusive CREATE is the primitive that does not need a lock -
+        # exactly one creator wins, on any filesystem that implements O_EXCL, and the loser learns
+        # it lost from the error rather than from a race it cannot see. The ledger the >=55 count
+        # is taken over is then the DIRECTORY, assembled by reading it, and it cannot hold a
+        # session twice because a filename cannot exist twice.
+        os.makedirs(args.out, exist_ok=True)
+        target = os.path.join(args.out, f"{record['session']}.json")
+        try:
+            handle = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        except FileExistsError:
+            print(f"vol-premium-open-reference-capture: {record['session']} is already captured at "
+                  f"{target}; not written", file=sys.stderr)
+            return 0
+        # Written to a temporary name and renamed, so a reader never sees half a record and an
+        # interrupted run cannot leave a truncated file standing as a captured session.
+        os.close(handle)
+        staging = target + ".partial"
+        with open(staging, "w") as out:
+            out.write(line + "\n")
+            out.flush()
+            os.fsync(out.fileno())
+        os.replace(staging, target)
     return 0
 
 
