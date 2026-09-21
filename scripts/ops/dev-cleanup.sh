@@ -831,7 +831,9 @@ PY
     # `now` (which WIPES Kafka) or `start` (which scales the whole dev stack up), so the only way
     # to repair a drifted topic was to accept a side effect nobody asked for. On 2026-08-14 that
     # gap cost two dev deploy attempts — `databento-gex` fails closed on
-    # options.databento.oi.anchor-manifest being PURE compact with retention -1, and dev had it as
+    # options.databento.oi.anchor-manifest being PURE compact with retention -1 (still true: the
+    # barrier is Jenkinsfile.service-deploy's 'Verify OI anchor manifest topic' stage, though since
+    # d845a415 (options-edge-processing, 2026-09-02) that service no longer PRODUCES to the topic), and dev had it as
     # `delete` with no retention override because a client auto-created it (dev leaves
     # auto.create.topics.enable at its TRUE default and num.partitions=1, which is exactly the
     # shape that appeared).

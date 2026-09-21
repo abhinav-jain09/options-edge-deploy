@@ -379,10 +379,16 @@ patches:
                   # prod enable. Watch options_edge_databento_gex_smile_fallback_total.
                   - name: GEX_SMILE_IV_FALLBACK
                     value: "true"
-                  # DYNAMIC OPEN INTEREST. GEX stops pricing with the print the exchange published
-                  # this morning and prices with oi-shadow's estimate of where open interest lands at
-                  # the close, wherever that estimate is fresh. gex is LINEAR in open interest, so
-                  # this changes every number on the board.
+                  # ⚠️ HISTORY — NO CODE READS THIS FLAG since d845a415 (options-edge-processing, 2026-09-02),
+                  # which deleted OiEstimateOverlay. What follows describes behaviour that existed
+                  # from 2026-08-04 until then; production prices from Postgres-captured OI now and
+                  # prod oi-shadow is replicas:0 / disabled anyway. Setting this "true" would
+                  # change nothing.
+                  #
+                  # DYNAMIC OPEN INTEREST. GEX stopped pricing with the print the exchange published
+                  # this morning and priced with oi-shadow's estimate of where open interest lands at
+                  # the close, wherever that estimate was fresh. gex is LINEAR in open interest, so
+                  # this changed every number on the board.
                   #
                   # Measured on 25 sessions that post-date the panel the model was chosen on:
                   # chain-wide error 0.242 -> 0.175, better on 24 of 25, DTE 0-1 improving 35%.
@@ -411,7 +417,10 @@ patches:
                   # counters say WHY when it does not.
                   - name: DATABENTO_GEX_DYNAMIC_OI_ENABLED
                     value: "false"
-                  # PROD capture of the daily settled open-interest print (2026-08-03). Writes ONE
+                  # ⚠️ HISTORY — DEAD CONFIG since d845a415 (options-edge-processing, 2026-09-02), which deleted
+                  # this capture. Nothing is written by it any more, however this is set.
+                  #
+                  # PROD capture of the daily settled open-interest print (2026-08-03). Wrote ONE
                   # immutable manifest per session to options.databento.oi.anchor-manifest and to
                   # calibration.oi_anchor_manifest.
                   #
@@ -688,8 +697,13 @@ patches:
   #
   # replicas:0 here so EVERY PRODUCTION render brings it down; the name is also in
   # morning-autostart.sh and oe-boot-bringup.sh KEEP_DOWN (both prod-only) so a prod bring-up does
-  # not scale it back. Re-enabling PRODUCTION = remove this patch AND those entries, and flip
-  # OI_SHADOW_ENABLED / OI_SHADOW_SEED_COEFFICIENTS_ENABLED to "true".
+  # not scale it back. Re-enabling PRODUCTION = remove this patch AND those entries, flip
+  # OI_SHADOW_ENABLED / OI_SHADOW_SEED_COEFFICIENTS_ENABLED to "true", THEN run
+  # scripts/deploy/generate-service-slices.sh and commit the regenerated
+  # k8s/services/oi-shadow/overlays/production/manifest.yaml. That last step is not optional:
+  # Jenkinsfile.service-deploy applies the SLICE, not this monolith, so editing only this file
+  # leaves the deployed manifest at replicas:0 with both flags false while the overlay claims
+  # otherwise -- and validate-services fails on the drift meanwhile.
   #
   # ⚠️ DO NOT flip DATABENTO_GEX_DYNAMIC_OI_ENABLED as part of that, as this comment used to
   # prescribe: since d845a415 (processing, 2026-09-02) NO CODE READS IT. OiEstimateOverlay was

@@ -74,8 +74,12 @@ spec:
             # ever be built.
             - name: DATABENTO_GEX_OI_DEFINITION_FETCH_LIMIT
               value: "200000"
-            # OI anchor manifest. Reconciles the settled open-interest statistics response against
-            # an independent instrument-definition universe and publishes ONE immutable manifest per
+            # ⚠️ HISTORY — DEAD CONFIG since d845a415 (options-edge-processing, 2026-09-02).
+            # Read the next paragraph as a record of what this flag USED to switch on; the code it
+            # names was deleted and this service publishes no manifest whatever the value is.
+            #
+            # OI anchor manifest. Reconciled the settled open-interest statistics response against
+            # an independent instrument-definition universe and published ONE immutable manifest per
             # session to options.databento.oi.anchor-manifest.
             #
             # OFF in base; still set "true" in the dev AND production overlays, where it is now
