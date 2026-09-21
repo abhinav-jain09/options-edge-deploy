@@ -405,16 +405,17 @@ patches:
                   #
                   # Fail-soft by design (processing#555, Codex round-8 APPROVE, 17 overlay tests):
                   # no estimate, stale, future-dated, a leg the model declined to price, a missing
-                  # symbol, an expiry that will not canonicalise, or a dead oi-shadow all leave the
-                  # settled print in place. That is the implementation's contract and its unit
-                  # evidence — it has not yet been OBSERVED on a running environment.
+                  # symbol, an expiry that will not canonicalise, or a dead oi-shadow all LEFT the
+                  # settled print in place. That was the implementation's contract and its unit
+                  # evidence — never OBSERVED on a running environment, and the implementation is
+                  # gone.
                   #
-                  # ROLLBACK: set this to "false" HERE and re-run scripts/deploy/generate-service-slices.sh
-                  # — the generated slice carries its own copy, so editing one without the other
-                  # either drifts or fails validate-services.
-                  #
-                  # Watch ..._dynamic_oi_applied_total climbing during the session; the fallback
-                  # counters say WHY when it does not.
+                  # NO ROLLBACK AND NO METRICS EXIST HERE. This block used to prescribe "ROLLBACK:
+                  # set this to false HERE and re-run generate-service-slices.sh" and to say "watch
+                  # ..._dynamic_oi_applied_total climbing during the session". The value IS false,
+                  # no code reads it, and that counter is not emitted by any running build — so
+                  # there is nothing to flip, nothing to watch, and neither is an operational
+                  # control any more.
                   - name: DATABENTO_GEX_DYNAMIC_OI_ENABLED
                     value: "false"
                   # ⚠️ HISTORY — DEAD CONFIG since d845a415 (options-edge-processing, 2026-09-02), which deleted
@@ -438,14 +439,16 @@ patches:
                   # removing an env var from a running deployment is its own change; it does
                   # nothing. Do not read it as evidence the capture runs.
                   #
-                  # The PUBLISHING work is still isolated: its own daemon thread behind a bounded
-                  # queue, and a full queue drops rather than blocks the caller.
+                  # The PUBLISHING work WAS isolated: its own daemon thread behind a bounded queue,
+                  # and a full queue dropped rather than blocked the caller. None of it runs now.
                   #
-                  # Enabled on prod because the capture must not miss sessions. Dev is brought up by
-                  # hand each morning, so any morning it is late past 09:25 ET leaves a permanent
-                  # hole in the series, and the whole point of the record is the day-over-day
-                  # difference. Verified on dev 07-31 and 08-03: 2534 and 2494 legs, both sound,
-                  # both surviving the nightly wipe.
+                  # It WAS enabled on prod because the capture must not miss sessions: dev is brought
+                  # up by hand each morning, so any morning it was late past 09:25 ET left a
+                  # permanent hole in the series, and the whole point of the record is the
+                  # day-over-day difference. Verified on dev 07-31 and 08-03: 2534 and 2494 legs,
+                  # both sound, both surviving the nightly wipe. That reasoning is why the SERIES
+                  # already captured is worth preserving (see scripts/ops/offhours-clean-slate.sh);
+                  # it is no longer a reason this flag is set, because the flag does nothing.
                   - name: OI_ANCHOR_MANIFEST_ENABLED
                     value: "true"
                   # TICK-AWARE SPREAD FLOOR, PROMOTED shadow -> live (2026-08-18). A quote at most
