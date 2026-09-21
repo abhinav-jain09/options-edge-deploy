@@ -61,7 +61,8 @@ eval "CORPUS_START_DATE=\"\${OE_CAL_CORPUS_START_DATE_${ENV_NAME}:-}\""
 eval "DECLARED_HASH=\"\${OE_CAL_PARAMETER_SET_HASH_${ENV_NAME}:-}\""
 eval "DECLARED_TRACK_FROM=\"\${OE_CAL_TRACK_FROM_PUSH_${ENV_NAME}:-}\""
 eval "DECLARED_STAMP=\"\${OE_CAL_SEMANTIC_STAMP_${ENV_NAME}:-}\""
-export CORPUS_START_DATE DECLARED_HASH DECLARED_TRACK_FROM DECLARED_STAMP
+eval "DECLARED_BOUNDARY_MS=\"\${OE_CAL_STOPPING_BOUNDARY_MS_${ENV_NAME}:-}\""
+export CORPUS_START_DATE DECLARED_HASH DECLARED_TRACK_FROM DECLARED_STAMP DECLARED_BOUNDARY_MS
 
 # A5.6: the manifest is built under a SNAPSHOT LOCK that excludes a concurrent archive run, or a
 # version can straddle a half-written date — the reporter is scheduled at 20:30 and the seal archive
@@ -94,6 +95,7 @@ export OE_CAL_COVERAGE_ALERT_AFTER_SESSIONS="${OE_CAL_COVERAGE_ALERT_AFTER_SESSI
 
 python3 - "$SCRIPT_DIR" "$ROOT" "$OUT_ROOT" "$TODAY" "$STAMP" "$ENV_NAME" "$T_SESSIONS" "$T_COHORT" "$T_CLASS" "$T_CELL" "$REQUIRED_CLASSES" "$REQUIRED_CELLS" "$LEDGER_TOPIC" <<'PY'
 import json, os, sys, hashlib, tempfile
+import datetime as _dt
 
 (script_dir, root, out_root, today, stamp, env, t_sessions, t_cohort, t_class, t_cell,
  req_classes, req_cells, ledger_topic) = sys.argv[1:14]
@@ -264,11 +266,49 @@ quiet_corpus_complete = (bool(quiet_owed) and all(d in quiet_mine for d in quiet
 # OCCURRENCE only: which cells fire, never whether calls were right.
 _cov_after = int(os.environ.get("OE_CAL_COVERAGE_ALERT_AFTER_SESSIONS") or 3)
 _complete_keys = {k for k, v in sessions.items() if v.get("archiveStatus") == "COMPLETE"}
+# …and only INSIDE the preregistered window (Codex r3): the cohort is [max(corpusStart, TRACK_FROM_PUSH),
+# stopping boundary]. A cell that never fired before the boundary and fires the day after has not been
+# observed by this cohort, and letting it count presents a corpus that stopped short as covered.
+_cov_lo = max(str(corpus_start)[:10], str(declared_track)[:10]) if (declared_track and declared_track != "UNFROZEN") \
+    else str(corpus_start)[:10]
+_cov_hi = None
+_bnd = os.environ.get("DECLARED_BOUNDARY_MS") or ""
+if _bnd and _bnd != "UNFROZEN":
+    try:
+        _cov_hi = _dt.datetime.fromtimestamp(int(_bnd) / 1000.0, _dt.timezone.utc).date().isoformat()
+    except Exception:
+        read_errors.append("STOPPING_BOUNDARY_MS is not an instant this reporter can turn into a date")
+
+
+_cov_hi_ms = None
+if _bnd and _bnd != "UNFROZEN":
+    try:
+        _cov_hi_ms = int(_bnd)
+    except Exception:
+        pass
+
+
+def _in_window(day):
+    day = str(day)[:10]
+    return bool(day) and day >= _cov_lo and (_cov_hi is None or day <= _cov_hi)
+
+
+def _call_in_window(c):
+    # refT, not the session date: the boundary is a UTC INSTANT and the window is closed at both ends,
+    # exactly as the evaluator reads it. A call after the boundary belongs to no cohort.
+    if not _in_window(c.get("sessionDate")):
+        return False
+    t = c.get("refT")
+    if _cov_hi_ms is not None and isinstance(t, (int, float)) and t > _cov_hi_ms:
+        return False
+    return True
+
+
 _cov = {cell: 0 for cell in REQUIRED_CELLS}
 # The sessions counted are the cohort's COMPLETE sessions, whether or not they produced a call (Codex r2
 # MAJOR): counting only sessions that HAD a call meant three complete sessions with zero calls — the exact
 # shape of "the engine is graded but never calls" — left sessionsObserved at 0 and the alert silent.
-_cov_sessions = set(cohort_days(declared_hash, declared_track))
+_cov_sessions = {d for d in cohort_days(declared_hash, declared_track) if _in_window(d)}
 for c in calls:
     if "%s|%s|%s" % (c.get("sessionDate"), c.get("parameterSetHash"), c.get("sessionLineageId")) not in _complete_keys:
         continue
@@ -281,6 +321,8 @@ for c in calls:
     if _st and _st != "UNFROZEN" and c.get("semanticStamp") != _st:
         continue
     if declared_track and declared_track != "UNFROZEN" and c.get("trackFromPush") != declared_track:
+        continue
+    if not _call_in_window(c):
         continue
     _k = R.cell_key(c)
     if _k in _cov:

@@ -89,7 +89,10 @@ for pair in "RESULT_LCB_FLOOR:$RESULT_LCB_FLOOR" "HIT_RATE_LCB_FLOOR:$HIT_RATE_L
   name="${pair%%:*}"; val="${pair#*:}"
   [ -n "$val" ] || { log "FATAL: $name is not declared for env=$ENV_NAME in $TARGETS"; exit 1; }
   [ "$val" != "UNFROZEN" ] || { log "REFUSING: $name is still UNFROZEN for env=$ENV_NAME. The acceptance numbers are frozen in one commit with the parameter set and the boundary, before this data is looked at; until then the corpus may fill but no artifact can be produced."; exit 2; }
-  case "$val" in ''|*[!0-9.-]*) log "REFUSING: $name='"'"'$val'"'"' is not a number"; exit 2;; esac
+  # A STRICT number, not merely numeric-looking (Codex r3): "--", "." and "1.2.3" all pass a character
+  # class and then die inside float() with a traceback, which is the crash this guard exists to prevent.
+  printf '%s' "$val" | grep -Eq '^-?([0-9]+(\.[0-9]+)?|\.[0-9]+)$' \
+    || { log "REFUSING: $name='"'"'$val'"'"' is not a number"; exit 2; }
 done
 
 # The corpus this artifact claims must be one a PROGRESS RUN ALREADY PUBLISHED (r6 #5). A version

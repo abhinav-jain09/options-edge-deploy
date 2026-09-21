@@ -379,8 +379,18 @@ esac
 env ENV=prod ARCHIVE_DIR="$WORK" REPORT_DATE=2026-08-13 CALENDAR_DIR="$CAL_DIR" CORPUS_VERSION="$(published_version)" \
     bash "$HERE/oe-push-validation-artifact.sh" >/dev/null 2>&1; RC=$?
 [ "$RC" = 2 ] && ok "…with the frozen-declaration exit code (2)" || bad "unexpected exit code $RC"
-sed -i'' -e 's/^OE_CAL_HIT_RATE_LCB_FLOOR=.*/OE_CAL_HIT_RATE_LCB_FLOOR=not-a-number/' "$HERE/calibration-targets.env"
-case "$(evaluate 2>&1)" in *"is not a number"*) ok "a non-numeric threshold is refused the same way";; *) bad "a non-numeric threshold was accepted";; esac
+for _bad in not-a-number -- . 1.2.3 1e5 " " 0x10; do
+  sed -i'' -e "s/^OE_CAL_HIT_RATE_LCB_FLOOR=.*/OE_CAL_HIT_RATE_LCB_FLOOR=$_bad/" "$HERE/calibration-targets.env"
+  OUT="$(evaluate 2>&1)"
+  case "$OUT" in
+    *"is not a number"*|*"is not declared"*) ok "a threshold of '$_bad' is refused, not parsed";;
+    *ValueError*|*Traceback*) bad "'$_bad' reached float() and crashed";;
+    *) bad "'$_bad' was accepted as a threshold: $OUT";;
+  esac
+done
+# …and a real number still runs
+sed -i'' -e 's/^OE_CAL_HIT_RATE_LCB_FLOOR=.*/OE_CAL_HIT_RATE_LCB_FLOOR=.4/' "$HERE/calibration-targets.env"
+case "$(evaluate 2>&1)" in *"is not a number"*) bad "a legitimate '.4' was refused";; *) ok "a legitimate threshold ('.4') is still accepted";; esac
 targets FROZEN "$SB"
 
 echo "15. the SHIPPED preregistration is the conservative one"
@@ -1563,6 +1573,36 @@ CHECK_DATE="$DAY" ENV=prod ARCHIVE_DIR="$WORK" CALENDAR_DIR="$CAL_DIR" \
 grep -q "can NEVER complete" "$WORK/watch67.log" \
   && bad "a fully covered corpus raised the coverage alert: $(grep COVERAGE "$WORK/watch67.log")" \
   || ok "a covered corpus with frozen literals raises no coverage alert"
+
+echo "67b. coverage is bounded by the PREREGISTERED window (Codex r3): a session after the boundary never colours a cell"
+# A cell that never fired before the stopping boundary has not been observed by this cohort. Counting a session that
+# happened afterwards presents a corpus that stopped short as covered, and silences the alert that says it cannot fill.
+rm -rf "$WORK/calibration-runs"
+build 3 20
+DAY="$(ls -d "$ROOT"/dt=* | sed -n '3p' | sed 's|.*dt=||')"
+cov_of() {   # cov_of <boundary-ms> -> sessionsObserved, over the report written for the LAST day
+  targets FROZEN "$1"
+  sed -i'' -e 's/^OE_CAL_COVERAGE_ALERT_AFTER_SESSIONS=.*//' "$HERE/calibration-targets.env"
+  printf 'OE_CAL_COVERAGE_ALERT_AFTER_SESSIONS=1\n' >> "$HERE/calibration-targets.env"
+  env ENV=prod ARCHIVE_DIR="$WORK" REPORT_DATE="$DAY" CALENDAR_DIR="$CAL_DIR" \
+      bash "$HERE/oe-calibration-progress.sh" >"$WORK/cov_of.log" 2>&1 \
+    || bad "the reporter failed inside case 67b: $(tail -2 "$WORK/cov_of.log")"
+  WORKDIR="$WORK" python3 -c "
+import json, glob, os
+f = sorted(glob.glob(os.environ['WORKDIR'] + '/calibration-runs/prod/*/*/progress/dt=*.json'), key=os.path.getmtime)[-1]
+d = json.load(open(f))
+c = d.get('requiredCellCoverage') or {}
+print('%s %s' % (c.get('sessionsObserved'), sum((c.get('observed') or {}).values())))"
+}
+ALL="$(cov_of "$SB")"
+EARLY2="$(python3 -c "import datetime;print(int(datetime.datetime.fromisoformat('2026-07-02T20:00:00+00:00').timestamp()*1000))")"
+CUT="$(cov_of "$EARLY2")"
+[ "${ALL% *}" -gt 0 ] && ok "inside the window the cohort's sessions count ($ALL)" || bad "case 67b measures nothing: $ALL"
+[ "${CUT% *}" -lt "${ALL% *}" ] \
+  && ok "sessions after the stopping boundary are excluded from coverage ($CUT vs $ALL)" \
+  || bad "post-boundary sessions still count toward coverage: $CUT vs $ALL"
+[ "${CUT#* }" -lt "${ALL#* }" ] \
+  && ok "…and so are their calls" || bad "post-boundary calls still colour required cells: $CUT vs $ALL"
 
 echo "68. BZ 366: the reader's digest matches the ENGINE's on a real call carrying a trailing-zero decimal"
 # PRODUCTION BYTES, captured from context-tape.direction.ledger on 2026-09-16 — not a synthetic record. Parsing
