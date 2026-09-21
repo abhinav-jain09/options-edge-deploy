@@ -46,6 +46,7 @@ BS="${BS:-localhost:9092}"
 KBIN="${KBIN:-/opt/kafka/current/bin}"
 LOG="${LOG:-/var/log/oe-pipeline-selfheal.log}"
 STATEDIR="${STATEDIR:-/var/lib/oe-selfheal}"
+STALE_TX_MINUTES="${STALE_TX_MINUTES:-15}"  # an open transaction idle this long is abandoned, not in flight
 STORAGE="${STORAGE:-/home/options-edge/data/k3s/storage}"
 
 SAMPLE_SECONDS="${SAMPLE_SECONDS:-90}"   # gap between the two offset samples
@@ -58,6 +59,22 @@ CONFIRM_CYCLES="${CONFIRM_CYCLES:-2}"    # consecutive stuck observations requir
 DRY_RUN="${DRY_RUN:-false}"
 
 mkdir -p "$STATEDIR"
+
+# oe-boot-bringup calls this script DIRECTLY while the timer may also be firing it, and systemd's
+# one-instance-per-unit rule does not cover that path. Two concurrent runs would sample each
+# other's restarts and double-count strikes, so the second one waits rather than racing.
+# flock is util-linux, i.e. absent on macOS and on minimal images. It must not fail CLOSED (a
+# missing tool would then look exactly like "another run is active" and this would never run at
+# all) nor fail SILENTLY -- so the one case where the protection is not in force says so.
+if command -v flock >/dev/null 2>&1; then
+  exec 9>"$STATEDIR/.lock"
+  if ! flock -w "${LOCK_WAIT_SECONDS:-900}" 9; then
+    echo "another self-heal run still holds the lock — skipping this cycle"; exit 0
+  fi
+else
+  echo "WARN: flock is not installed — concurrent runs are NOT prevented on this host"
+fi
+
 # A dry run that WRITES is not a dry run. On 2026-09-21 two DRY_RUN passes silently advanced two
 # groups to strike 2, so the first real run opened at strike 3 and declared healthy services defective.
 remember() { [ "${DRY_RUN:-false}" = true ] || printf '%s\n' "$2" > "$1"; }
@@ -96,6 +113,50 @@ if [ -n "$hanging" ]; then
 else
   log "hanging transactions: none"
 fi
+
+# ---------- phase 1b: the open transactions find-hanging does NOT report ----------
+# find-hanging returned NOTHING on 2026-09-21, including over a 48-hour window, while three
+# abandoned transactions sat on __consumer_offsets and held the whole pipeline down. A Streams
+# client fetching its committed offsets under read_committed cannot see past an open transaction
+# on its group's coordinator partition: it retries forever inside
+# ConsumerCoordinator.fetchCommittedOffsets, the group stays "Stable", the pod stays READY, and
+# nothing is consumed. That is what databento-volume-aggregator -- the sole producer of
+# options.databento.normalized, and so the trunk of the whole downstream -- was doing for hours.
+#
+# So the group's own coordinator partition is inspected directly. Only ONE partition per stuck
+# group is read (50 describe-producers calls take minutes), and only a transaction whose producer
+# has been silent for STALE_TX_MINUTES is aborted -- an in-flight commit is never touched, and a
+# Streams EOS producer commits every few seconds, so the margin is large.
+coordinator_partition() {
+  python3 -c '
+import sys
+h = 0
+for ch in sys.argv[1]:
+    h = (31 * h + ord(ch)) & 0xFFFFFFFF
+if h >= 2**31: h -= 2**32
+print(abs(h) % 50)' "$1"
+}
+
+ABORTED_MARKER="$(mktemp)"; trap 'rm -f "$ABORTED_MARKER"' EXIT
+unblock_group_offsets() {   # $1 = group; records each abort it performs in $ABORTED_MARKER
+  local g="$1" part rows now_ms
+  part=$(coordinator_partition "$g" 2>/dev/null) || return 0
+  [ -n "$part" ] || return 0
+  now_ms=$(( $(date +%s) * 1000 ))
+  : > "$ABORTED_MARKER"
+  rows=$(timeout 120 "$KBIN/kafka-transactions.sh" --bootstrap-server "$BS" describe-producers \
+           --topic __consumer_offsets --partition "$part" 2>/dev/null \
+         | awk -v now="$now_ms" -v stale="$STALE_TX_MINUTES" \
+               'NR>1 && NF>=6 && $6!="None" && (now-$5) > stale*60000 {print $1, $5, $6}')
+  [ -z "$rows" ] && return 0
+  echo "$rows" | while read -r pid last start; do
+    echo "$pid" >> "$ABORTED_MARKER"
+    log "  $g: ABANDONED transaction on __consumer_offsets-$part (producerId=$pid, idle $(( (now_ms-last)/60000 ))m) blocks its committed-offset fetch — aborting"
+    run timeout 120 "$KBIN/kafka-transactions.sh" --bootstrap-server "$BS" abort \
+        --topic __consumer_offsets --partition "$part" --start-offset "$start" 2>&1 | tee -a "$LOG"
+  done
+  return 0
+}
 
 # ---------- phase 2: which groups actually MOVED ----------
 # The pod's own opinion of its health is what failed on 2026-09-21, so it is not consulted here.
@@ -212,6 +273,15 @@ while read -r g lag delta; do
   if [ -n "$alive" ]; then
     log "  $g -> $dep: NOT stuck — $alive. Left alone."
     forget "$STATEDIR/${g}.strikes"; forget "$STATEDIR/${g}.observed"
+    continue
+  fi
+
+  # ---- clear the blocker before reaching for a restart ----
+  # Aborting the transaction that is holding this group fixes it WITHOUT bouncing the service, so
+  # it is always tried first; the strike is skipped for a cycle to let the group prove it recovered.
+  unblock_group_offsets "$g"
+  if [ -s "$ABORTED_MARKER" ]; then
+    log "  $g -> $dep: transaction cleared; not restarting this cycle — next check decides"
     continue
   fi
 

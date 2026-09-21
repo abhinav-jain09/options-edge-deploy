@@ -18,7 +18,8 @@ GROUP = "options-edge-strike-liquidity-heatmap-prod"
 
 
 def _sandbox(tmp_path, *, replicas="1", pod_age="4h18m", restoring=False,
-             lag=1_900_000, advance=0, grow_state=False, state_dir=True):
+             lag=1_900_000, advance=0, grow_state=False, state_dir=True,
+             open_tx_age_minutes=None):
     """A fake estate: one consumer group with lag, one deployment, one pod."""
     bin_dir = tmp_path / "bin"; bin_dir.mkdir()
     kbin = tmp_path / "kbin"; kbin.mkdir()
@@ -51,8 +52,25 @@ def _sandbox(tmp_path, *, replicas="1", pod_age="4h18m", restoring=False,
         """))
 
     (kbin / "kafka-broker-api-versions.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
-    (kbin / "kafka-transactions.sh").write_text(
-        "#!/usr/bin/env bash\necho 'Topic\tPartition\tProducerId'\nexit 0\n")
+    aborts = tmp_path / "aborts.log"
+    if open_tx_age_minutes is None:
+        producers = "echo 'ProducerId ProducerEpoch LatestCoordinatorEpoch LastSequence LastTimestamp CurrentTransactionStartOffset'\n echo '50123 288 126 -1 0 None'"
+    else:
+        producers = (
+            "echo 'ProducerId ProducerEpoch LatestCoordinatorEpoch LastSequence LastTimestamp CurrentTransactionStartOffset'\n"
+            f"  echo \"50123 288 126 30 $(( $(date +%s)*1000 - {open_tx_age_minutes}*60000 )) 151600145\"")
+    (kbin / "kafka-transactions.sh").write_text(textwrap.dedent(f"""\
+        #!/usr/bin/env bash
+        for a in "$@"; do
+          case "$a" in
+            find-hanging)       echo "Topic Partition ProducerId"; exit 0 ;;
+            describe-producers) {producers}
+                                exit 0 ;;
+            abort)              echo "$*" >> "{aborts}"; exit 0 ;;
+          esac
+        done
+        exit 0
+        """))
     grow = (f'printf "y%.0s" $(seq 1 5000) >> "{storage}/pvc-deadbeef_options-edge_'
             f'{DEPLOY}-streams-state/rocksdb"') if grow_state else "true"
     (kbin / "kafka-consumer-groups.sh").write_text(textwrap.dedent(f"""\
@@ -73,6 +91,7 @@ def _sandbox(tmp_path, *, replicas="1", pod_age="4h18m", restoring=False,
         LOG=str(tmp_path / "selfheal.log"), STATEDIR=str(tmp_path / "state"),
         SAMPLE_SECONDS="1", LAG_FLOOR="2000", LOAD_CEILING="9999",
     )
+    env["_ABORTS"] = str(aborts)
     return env, actions
 
 
@@ -185,3 +204,32 @@ def test_it_stays_quiet_when_kafka_is_not_answering_yet(tmp_path):
     out = _run(env)
     assert "not answering" in out
     assert _acted(actions) == ""
+
+
+# --------------------------------------------------------------------------------------
+# The failure that actually took prod down: an abandoned transaction on the group's
+# __consumer_offsets partition, which `find-hanging` does not report at all.
+# --------------------------------------------------------------------------------------
+def test_abandoned_offset_transaction_is_aborted_instead_of_restarting_the_service(tmp_path):
+    env, actions = _sandbox(tmp_path, open_tx_age_minutes=145)
+    out = _run(env)
+    assert "ABANDONED transaction on __consumer_offsets" in out
+    assert "not restarting this cycle" in out
+    aborts = Path(env["_ABORTS"])
+    assert aborts.exists() and "--start-offset 151600145" in aborts.read_text()
+    assert _acted(actions) == "", "bounced the service instead of clearing the blocker"
+
+
+def test_an_in_flight_transaction_is_never_aborted(tmp_path):
+    """A live EOS producer commits every few seconds; only a long-silent one is abandoned."""
+    env, actions = _sandbox(tmp_path, open_tx_age_minutes=1)
+    _run(env)
+    aborts = Path(env["_ABORTS"])
+    assert not aborts.exists(), "aborted a transaction that was still in flight"
+
+
+def test_mutation_lowering_the_staleness_bar_aborts_the_in_flight_one(tmp_path):
+    """Proves the test above is held by STALE_TX_MINUTES and not by something incidental."""
+    env, _ = _sandbox(tmp_path, open_tx_age_minutes=1)
+    _run(env, STALE_TX_MINUTES="0")
+    assert Path(env["_ABORTS"]).exists()
