@@ -1228,6 +1228,516 @@ class ActualJenkinsfileMutationTest(unittest.TestCase):
         self.assertIn("stage 'Deploy (service-scoped)' after the guard has no `when` gate", r.stdout)
 
 
+class _StepFailed(Exception):
+    """What a Jenkins step raises when it fails, for the translated deploy block below."""
+
+
+class EffectShimTest(unittest.TestCase):
+    """The runtime adjacency guarantee, and exactly how far it goes.
+
+    WHAT IT DELIVERS: an invocation BY NAME, through an INTACT shim, in a stage that installed it, is
+    verified at the moment it acts -- including from a tool's own descendants. That closes the spelling
+    class that beat the static reader four times (`; true`, quoting, `-f ./pom.xml`, another stage, a
+    shared-library call), because none of those changes what execvp() looks up.
+
+    WHAT IT DOES NOT: defend against a step that deletes or edits the wrapper, or against an absolute
+    path. THE JOB OWNS ITS OWN PROCESS -- a step in the workspace can remove a file in the workspace, a
+    wrapper cannot detect its own absence, and mutable code cannot establish its own integrity by
+    checking itself. NOTHING HERE ANSWERS THOSE CASES. effect-shim-integrity.sh, which the stage runs
+    at its start and again at its end, checks for an ACCIDENT -- a wrapper deleted, a permission
+    dropped, an entry added, a file edited by something that did not also edit the digest -- and it
+    cannot outrank a step that edits the checker or re-records the digest. The absolute-path case is
+    the validator's literal rule, not the shim's. The limits are pinned by cases in
+    effect-shim-test.sh asserting the documented outcome, including two that show an edited shim and
+    an edited checker both reporting ok."""
+
+    SHIM = J / "effect-shim"
+
+    def test_the_shared_shim_suite_passes(self) -> None:
+        r = subprocess.run(["bash", str(J / "effect-shim-test.sh")], capture_output=True, text=True, cwd=ROOT)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("effect-shim-test: ALL PASS", r.stdout)
+        for case in ["a clean checkout at the permitted commit runs the real binary",
+                     "kubectl: a tracked file changed after the guard refuses, and kubectl never runs",
+                     "a clean tree at the WRONG permitted commit refuses",
+                     "OE_SHIM_ALLOW unset refuses (declaring nothing must be said, not assumed)",
+                     "a WILDCARD declaration reaches the verifier intact (no pathname expansion)",
+                     "a GRANDCHILD reached through the shim's own dispatch is verified too (mvn ran; its kubectl refused)",
+                     "DOCUMENTED LIMIT: an EDITED shim prints 'verified' and runs the tool on a dirty tree",
+                     "integrity: a NON-EXECUTABLE wrapper is named",
+                     "integrity: a HIDDEN planted entry is named",
+                     "integrity: the END inspection says the effects already ran; the START inspection does not"]:
+            self.assertIn("ok   [" + case + "]", r.stdout)
+
+    def test_the_shim_directory_is_tracked_in_the_repository(self) -> None:
+        """REPOSITORY MEMBERSHIP, WHICH IS NOT RUNTIME INTEGRITY. Being tracked means a modified shim is a
+        modified tree, so the NEXT invocation THROUGH a wrapper refuses -- it says nothing about the
+        wrapper that is deleted, or edited and then invoked, because that wrapper is the thing doing the
+        checking. Runtime integrity is effect-shim-integrity.sh's job, and it runs from outside."""
+        self.assertTrue((self.SHIM / "_shim.sh").is_file())
+        tracked = subprocess.run(["git", "-C", str(ROOT), "ls-files", "scripts/jenkins/effect-shim"],
+                                 capture_output=True, text=True).stdout.split()
+        self.assertIn("scripts/jenkins/effect-shim/_shim.sh", tracked)
+        for tool in ("mvn", "docker", "rsync", "scp", "helm", "ansible-playbook", "kubectl"):
+            self.assertIn("scripts/jenkins/effect-shim/" + tool, tracked, tool + " is not tracked")
+
+    def test_the_nifty_deploy_stage_installs_the_shim_before_its_steps(self) -> None:
+        """DECIDABLE, and the only static part left: the stage's withEnv names the shim directory on PATH
+        and sets all three OE_SHIM_ variables. What the steps then DO is not read from the text at all."""
+        text = (ROOT / "Jenkinsfile.nifty-gex-service").read_text()
+        block = text[text.index("stage('Deploy (service-scoped)')"):]
+        env_start = block.index("withEnv([")
+        env_block = block[env_start:block.index("])", env_start)]
+        helper = block.index("bash scripts/deploy/service-deploy.sh")
+        self.assertLess(env_start, helper, "the shim is installed after the deploy helper runs")
+        for needed in ['"PATH+EFFECT_SHIM=${env.WORKSPACE}/scripts/jenkins/effect-shim"',
+                       '"OE_SHIM_DIR=${env.WORKSPACE}"',
+                       '"OE_SHIM_SHA=${params.PERMITTED_SHA}"',
+                       '"OE_SHIM_ALLOW=--allow-ignored target --allow-ignored .jenkins-tmp"']:
+            self.assertIn(needed, env_block, "the deploy stage does not install: " + needed)
+
+    def test_a_step_that_modifies_the_tree_between_the_verification_and_the_effect_refuses(self) -> None:
+        """THE CONTROL FOR WHAT THE DESIGN DOES DELIVER, run end to end rather than read.
+
+        The bypass was `sh 'printf changed > k8s/.../nifty-gex-deployment.yaml'` inserted between the
+        verification and the deploy helper: every static check passed, because none of them could see the
+        ordering. Here the same sequence runs for real -- verify, modify a tracked file, invoke `kubectl`
+        through the shim -- and the invocation REFUSES with the real binary never reached.
+
+        The name says MODIFIES THE TREE on purpose. A step that deletes the wrapper instead is not
+        covered by this or by any wrapper, and the integrity tests below are what answer it."""
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        co = tmp / "co"
+        subprocess.run(["git", "-C", str(ROOT), "worktree", "add", "--detach", str(co), "HEAD"],
+                       capture_output=True, text=True)
+        self.addCleanup(lambda: subprocess.run(["git", "-C", str(ROOT), "worktree", "remove", "--force", str(co)],
+                                               capture_output=True, text=True))
+        head = subprocess.run(["git", "-C", str(co), "rev-parse", "HEAD"],
+                              capture_output=True, text=True).stdout.strip()
+
+        # the shim must EXIST in that checkout, or this test proves nothing: without it `kubectl`
+        # resolves straight to the stub below and every assertion here passes for the wrong reason
+        self.assertTrue((co / "scripts/jenkins/effect-shim/kubectl").exists(),
+                        "the shim is not committed in this checkout, so nothing would be intercepted")
+        realbin = tmp / "real"; realbin.mkdir()
+        ran = tmp / "ran"
+        stub = realbin / "kubectl"
+        stub.write_text("#!/bin/sh\nprintf 'kubectl ran\\n' >> %s\nexit 0\n" % ran)
+        stub.chmod(0o755)
+        env = {"PATH": "%s:%s:/usr/bin:/bin" % (co / "scripts/jenkins/effect-shim", realbin),
+               "HOME": str(tmp), "OE_SHIM_DIR": str(co), "OE_SHIM_SHA": head,
+               "OE_SHIM_ALLOW": "--allow-ignored target --allow-ignored .jenkins-tmp"}
+
+        clean = subprocess.run(["kubectl", "version"], cwd=str(co), env=env, capture_output=True, text=True)
+        self.assertEqual(clean.returncode, 0, "the permitted tree must reach the real binary:\n" + clean.stderr)
+        self.assertTrue(ran.exists(), "the real kubectl did not run on a permitted tree")
+
+        # …now the inserted step, exactly the shape Codex used
+        manifest = co / "k8s/services/nifty-gex/base/nifty-gex-deployment.yaml"
+        self.assertTrue(manifest.is_file(), "the manifest Codex modified is not where this test expects it")
+        manifest.write_text("changed after the verification\n")
+        ran.unlink()
+        after = subprocess.run(["kubectl", "apply", "-f", str(manifest)], cwd=str(co), env=env,
+                               capture_output=True, text=True)
+        self.assertEqual(after.returncode, 3, "the modified tree did not refuse:\n" + after.stdout + after.stderr)
+        self.assertIn("verdict=REFUSED", after.stderr)
+        self.assertFalse(ran.exists(), "the real kubectl RAN against a tree modified after the verification")
+
+
+    def test_the_integrity_check_refuses_an_accidental_tamper_at_both_ends_of_the_stage(self) -> None:
+        """WHAT THE TWO INSPECTIONS CATCH IS AN ACCIDENT, and the only thing that differs is WHEN.
+
+        This asserts the ordering, which is all the two ends are: --when start refuses before the
+        stage's steps run, so an accident caught there costs nothing; --when end refuses after them and
+        its own output says what that means -- the build fails and names what it found, and the stage's
+        effects have already happened. It does NOT mean they ran unverified: an effect that reached a
+        wrapper was verified at that moment, and drift found later does not reach back. What the end
+        check cannot do is attest coverage for EVERY effect. If one was a `kubectl apply`, the cluster
+        changed. Nothing here is undone by a red build.
+
+        NOT ASSERTED, BECAUSE IT IS NOT TRUE: that either end detects a job that set out to defeat it.
+        The checker and the digest live in the workspace the job owns. The coordinated mutations --
+        an edited _shim.sh with a re-recorded digest, and an edited checker -- are DOCUMENTED LIMIT
+        cases in effect-shim-test.sh, and they assert the GREEN result those produce."""
+        script = J / "effect-shim-integrity.sh"
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        co = tmp / "co"
+        subprocess.run(["git", "-C", str(ROOT), "worktree", "add", "--detach", str(co), "HEAD"],
+                       capture_output=True, text=True)
+        self.addCleanup(lambda: subprocess.run(["git", "-C", str(ROOT), "worktree", "remove", "--force", str(co)],
+                                               capture_output=True, text=True))
+
+        def check(when: str) -> subprocess.CompletedProcess:
+            return subprocess.run(["bash", str(script), "--dir", str(co), "--when", when],
+                                  capture_output=True, text=True)
+
+        self.assertEqual(check("start").returncode, 0, "an untouched checkout must pass the start check")
+        self.assertEqual(check("end").returncode, 0, "an untouched checkout must pass the end check")
+
+        shim = co / "scripts/jenkins/effect-shim"
+        for label, tamper, restore in [
+            ("a deleted wrapper", lambda: (shim / "kubectl").unlink(),
+             lambda: (shim / "kubectl").symlink_to("_shim.sh")),
+            ("an edited _shim.sh", lambda: (shim / "_shim.sh").write_text(
+                (shim / "_shim.sh").read_text() + "# tampered\n"),
+             lambda: subprocess.run(["git", "-C", str(co), "checkout", "-f", "--",
+                                     "scripts/jenkins/effect-shim/_shim.sh"], capture_output=True)),
+            ("an extra executable on the shim PATH", lambda: (shim / "npm").write_text("#!/bin/sh\nexit 0\n"),
+             lambda: (shim / "npm").unlink()),
+        ]:
+            tamper()
+            start = check("start")
+            self.assertEqual(start.returncode, 3, label + " was not refused at the start of the stage")
+            end = check("end")
+            self.assertEqual(end.returncode, 3, label + " was not detected at the end of the stage")
+            self.assertIn("ALREADY RAN", end.stderr,
+                          label + ": the end check must say the effects already happened, not imply they were stopped")
+            self.assertNotIn("ALREADY RAN", start.stderr,
+                             label + ": the start check prevents, and must not describe itself as after the fact")
+            restore()
+            self.assertEqual(check("start").returncode, 0, label + ": restore failed, later cases are unreliable")
+
+    # ---- the deploy block, EXECUTED rather than read -------------------------------------------------
+    #
+    # The previous version of this test asserted the ORDER of strings in the Jenkinsfile and then ran a
+    # separately authored shell program. Deleting `deployFailure = deployError` from the Jenkinsfile left
+    # it green: the string order was unchanged and the shell program was not the Jenkinsfile. It passed
+    # on something else's behaviour, which is the defect this whole review keeps finding.
+    #
+    # There is no Groovy on this agent, so the block is TRANSLATED -- mechanically, by the reader below,
+    # from the file itself -- and executed. The translation models exactly the constructs the block uses
+    # and REFUSES anything else, so it cannot silently stop covering the block: an unmodelled line fails
+    # the test rather than being skipped. What it is not: Jenkins. It proves the block's control flow,
+    # not that Jenkins throws where this assumes it does.
+    GROOVY_LINE = re.compile(r"""^(?P<indent>\s*)(?:
+          (?P<defnull>def\s+(?P<defname>\w+)\s*=\s*null)
+        | (?P<trystart>try\s*\{)
+        | (?P<catchstart>\}\s*catch\s*\(Exception\s+(?P<exc>\w+)\)\s*\{)
+        | (?P<close>\})
+        | (?P<shstep>sh\s+'(?P<shcmd>[^']*)')
+        | (?P<shstatus>def\s+(?P<stname>\w+)\s*=\s*null)
+        | (?P<assignstatus>(?P<asname>\w+)\s*=\s*sh\(returnStatus:\s*true,\s*script:\s*'(?P<stcmd>[^']*)'\))
+        | (?P<assign>(?P<aname>\w+)\s*=\s*(?P<aval>\w+))
+        | (?P<ifstart>(?:\}\s*else\s+)?if\s*\((?P<cond>[^)]*)\)\s*\{)
+        | (?P<echo>echo\s+(?P<emsg>.*))
+        | (?P<errorcall>error\((?P<errmsg>.*)\))
+        | (?P<throwcall>throw\s+(?P<tname>\w+))
+        | (?P<comment>//.*)
+        )\s*$""", re.VERBOSE)
+
+    def _deploy_block(self) -> list:
+        text = (ROOT / "Jenkinsfile.nifty-gex-service").read_text()
+        stage = text[text.index("stage('Deploy (service-scoped)')"):]
+        start = stage.index("def deployFailure = null")
+        # THE ANCHOR IS THE LAST LINE OF THE BLOCK, so it moves whenever that line's wording does.
+        # It was "the effects above ran unverified')" until that claim was corrected: an effect
+        # verified when it ran is not un-verified by drift discovered afterwards.
+        end = stage.index("coverage cannot be attested for all effects in this stage')", start)
+        end = stage.index("\n", end)
+        return stage[start:end].split("\n")
+
+    # THE REFUSAL HAD TO BE MADE TOTAL. The paragraph above was true of the TOP LEVEL and nowhere else.
+    # Inside a `catch` body and inside an `if` body an unmatched line became `{}` -- `bg = bm.groupdict()
+    # if bm else {}` -- and every arm below then asked `bg.get(...)`, so the line fell through all of them
+    # and was ignored. Rewriting `deployFailure = deployError` as anything this reader does not model left
+    # the test green, which is the same defect the translation exists to remove, one level in. Three
+    # changes: a line is matched by _model(), which FAILS instead of returning {}; every block is
+    # VALIDATED WHOLE before any of it runs, so a line control flow never reaches is still a line the
+    # reader must model; and each level names the statements it accepts, with no silent fall-through.
+    STATEMENTS = {
+        "top":   ("defnull", "trystart", "ifstart", "echo", "close", "comment"),
+        "try":   ("shstep", "assignstatus", "comment"),
+        "catch": ("assign", "comment"),
+        "if":    ("echo", "errorcall", "throwcall", "assign", "comment"),
+    }
+    KINDS = ("defnull", "trystart", "catchstart", "close", "shstep", "shstatus", "assignstatus",
+             "assign", "ifstart", "echo", "errorcall", "throwcall", "comment")
+
+    def _model(self, line: str, where: str):
+        """Match one line, or fail. Never returns an empty mapping -- that was the hole."""
+        m = self.GROOVY_LINE.match(line)
+        self.assertIsNotNone(m, "unmodelled line in %s: the block contains a line this reader does not "
+                                "model, so this test would cover less than the block does: %s"
+                                % (where, line.strip()[:90]))
+        g = m.groupdict()
+        kind = next((k for k in self.KINDS if g.get(k)), None)
+        self.assertIsNotNone(kind, "unmodelled line in %s: %s" % (where, line.strip()[:90]))
+        self.assertIn(kind, self.STATEMENTS[where],
+                      "unmodelled statement in %s (a %s is not something this reader executes there): %s"
+                      % (where, kind, line.strip()[:90]))
+        return kind, g
+
+    def _validate(self, block, where: str) -> None:
+        """Model EVERY line of a block, whether or not control flow will reach it."""
+        for l in block:
+            if l.strip():
+                self._model(l, where)
+
+    def _run_deploy_block(self, helper, inspection, lines=None):
+        """Execute the translated block. `helper`/`inspection` return a status or raise.
+
+        TWO PASSES, and the first one is why the refusal is total. A `throw` or an `error()` ends the
+        walk, so any line AFTER the one that fired was never read, let alone modelled -- the deploy
+        block has two more `if` blocks after `throw deployFailure`. The first pass walks the whole block
+        with the steps stubbed out and nothing raising, purely to model every line; only then does the
+        second pass run it for real."""
+        block = list(self._deploy_block() if lines is None else lines)
+        self._walk(list(block), lambda: 0, lambda: 0, execute=False)
+        return self._walk(list(block), helper, inspection, execute=True)
+
+    def _walk(self, lines, helper, inspection, execute: bool):
+        env, log = {}, []
+        Raised = _StepFailed
+        def evaluate(expr):
+            expr = expr.strip()
+            for op in ("!=", "=="):
+                if op in expr:
+                    a, b = [x.strip() for x in expr.split(op, 1)]
+                    av = env.get(a, "MISSING") if a.isidentifier() else a
+                    bv = None if b == "null" else (int(b) if b.lstrip("-").isdigit() else b)
+                    return (av != bv) if op == "!=" else (av == bv)
+            raise AssertionError("unmodelled condition: " + expr)
+        i = 0
+        while i < len(lines):
+            raw = lines[i]; i += 1
+            if not raw.strip():
+                continue
+            kind, g = self._model(raw, "top")
+            if kind in ("comment", "close", "echo"):
+                continue
+            if kind == "defnull":
+                env[g["defname"]] = None
+            elif kind == "trystart":
+                # collect the try body and the catch body
+                body, cbody, excname = [], [], None
+                while i < len(lines):
+                    l = lines[i]; i += 1
+                    if re.match(r"\s*\}\s*catch", l):
+                        catchm = re.match(r"\s*\}\s*catch\s*\(Exception\s+(\w+)\)\s*\{", l)
+                        self.assertIsNotNone(catchm, "unmodelled catch: " + l)
+                        excname = catchm.group(1)
+                        while i < len(lines):
+                            cl = lines[i]; i += 1
+                            if re.match(r"\s*\}\s*$", cl):
+                                break
+                            cbody.append(cl)
+                        break
+                    body.append(l)
+                self.assertIsNotNone(excname, "a try whose catch this reader did not find: it would run "
+                                              "the body and drop whatever the block does with the failure")
+                self._validate(body, "try")
+                self._validate(cbody, "catch")
+                thrown = None
+                for bl in body:
+                    if not bl.strip():
+                        continue
+                    bkind, bg = self._model(bl, "try")
+                    if bkind == "comment":
+                        continue
+                    try:
+                        if bkind == "shstep":
+                            log.append("helper"); helper()
+                        else:
+                            log.append("inspection"); env[bg["asname"]] = inspection()
+                    except Raised as e:
+                        thrown = e
+                        break
+                if thrown is not None:
+                    for cl in cbody:
+                        if not cl.strip():
+                            continue
+                        ckind, cg = self._model(cl, "catch")
+                        if ckind == "assign":
+                            env[cg["aname"]] = thrown if cg["aval"] == excname else env.get(cg["aval"])
+            elif kind == "ifstart":
+                taken = evaluate(g["cond"])
+                body, alt = [], []
+                while i < len(lines):
+                    l = lines[i]
+                    if re.match(r"\s*\}\s*else\s+if", l):
+                        i += 1
+                        if taken:
+                            # The alternative branch is not executed. It is still MODELLED: a line nobody
+                            # runs must not be a line nobody checks.
+                            while i < len(lines) and not re.match(r"\s*\}\s*$", lines[i]):
+                                alt.append(lines[i]); i += 1
+                            i += 1
+                        else:
+                            lines.insert(i, l.replace("} else ", "", 1))
+                        break
+                    if re.match(r"\s*\}\s*$", l):
+                        i += 1
+                        break
+                    body.append(l); i += 1
+                self._validate(body, "if")
+                self._validate(alt, "if")
+                if taken:
+                    for bl in body:
+                        if not bl.strip():
+                            continue
+                        bkind, bg = self._model(bl, "if")
+                        if bkind == "echo":
+                            log.append("echo:" + bg["emsg"][:60])
+                        elif bkind == "errorcall":
+                            log.append("error")
+                            if execute:
+                                raise AssertionError("ERROR:" + bg["errmsg"][:80])
+                        elif bkind == "throwcall":
+                            log.append("throw:" + bg["tname"])
+                            if execute:
+                                raise AssertionError("THROWN:" + bg["tname"])
+                        elif bkind == "assign":
+                            env[bg["aname"]] = env.get(bg["aval"])
+        return log
+
+    def test_the_deploy_block_preserves_the_helper_failure_whatever_the_inspection_does(self) -> None:
+        """Executed, not read. Four scenarios, and the mutation that used to slip through is one of them."""
+        Raised = _StepFailed
+        def ok():
+            return 0
+        def tampered():
+            return 3
+        def boom():
+            raise Raised("inspection agent launch failed")
+        def failing_helper():
+            raise Raised("helper exit 7")
+
+        # 1. helper fails, inspection clean -> the helper's failure is what propagates
+        with self.assertRaises(AssertionError) as c:
+            self._run_deploy_block(failing_helper, ok)
+        self.assertIn("THROWN:deployFailure", str(c.exception),
+                      "the helper's failure was not preserved (deployFailure never captured?)")
+
+        # 2. helper fails, inspection THROWS -> still the helper's failure, not the inspection's
+        with self.assertRaises(AssertionError) as c:
+            self._run_deploy_block(failing_helper, boom)
+        self.assertIn("THROWN:deployFailure", str(c.exception),
+                      "a throwing inspection replaced the deployment's own failure")
+
+        # 3. helper succeeds, inspection reports tampering -> the build fails for that
+        with self.assertRaises(AssertionError) as c:
+            self._run_deploy_block(lambda: 0, tampered)
+        self.assertIn("ERROR:", str(c.exception))
+
+        # 4. the inspection ALWAYS runs, including after a failing helper
+        for insp in (ok, tampered, boom):
+            try:
+                log = self._run_deploy_block(failing_helper, insp)
+            except AssertionError:
+                log = None
+            # the run log is rebuilt inside; assert via a fresh instrumented run
+        seen = []
+        def recording():
+            seen.append("ran")
+            return 0
+        try:
+            self._run_deploy_block(failing_helper, recording)
+        except AssertionError:
+            pass
+        self.assertEqual(seen, ["ran"], "the inspection did not run after a failing helper")
+
+
+    # ---- the reader's own negative test ------------------------------------------------------------
+    UNMODELLED = "deployFailure.printStackTrace()"      # matches no rule in GROOVY_LINE
+    SCAFFOLD = [
+        "def deployFailure = null",
+        "try {",
+        "  sh 'bash scripts/deploy/service-deploy.sh'",
+        "} catch (Exception deployError) {",
+        "  deployFailure = deployError",
+        "}",
+        "if (deployFailure != null) {",
+        "  throw deployFailure",
+        "} else if (deployFailure == null) {",
+        "  echo 'nothing failed'",
+        "}",
+        "if (deployFailure == 0) {",
+        "  echo 'never taken'",
+        "}",
+    ]
+
+    def _scaffold_with(self, after: str, line: str) -> list:
+        out = []
+        for l in self.SCAFFOLD:
+            out.append(l)
+            if l.strip() == after:
+                out.append("  " + line)
+        self.assertEqual(len(out), len(self.SCAFFOLD) + 1, "the injection point was not unique: " + after)
+        return out
+
+    def test_the_groovy_reader_refuses_an_unmodelled_line_at_every_level(self) -> None:
+        """AN UNMODELLED LINE FAILS THE TEST RATHER THAN BEING SKIPPED -- everywhere, not at top level.
+
+        That sentence was in the reader's header and true of the top level only. Inside a `catch` body
+        and inside an `if` body an unmatched line became `{}` and fell through every arm, so rewriting
+        `deployFailure = deployError` into anything unmodelled left this test green while it no longer
+        covered the line that preserves the deployment's failure.
+
+        Each block below is the SAME scaffold with one unmodelled line injected at a different level,
+        including three places control flow never reaches -- the not-taken `if`, the skipped `else if`,
+        and a `try` line after the one that throws. The scaffold ITSELF is the control: it must run
+        clean, so what fails below is the injected line and not the harness."""
+        def failing_helper():
+            raise _StepFailed("helper exit 7")
+
+        # the control: with nothing injected, the scaffold is fully modelled and runs to its throw
+        with self.assertRaises(AssertionError) as c:
+            self._run_deploy_block(failing_helper, lambda: 0, lines=self.SCAFFOLD)
+        self.assertIn("THROWN:deployFailure", str(c.exception),
+                      "the scaffold does not run clean, so the cases below would prove nothing")
+
+        for where, after, helper in [
+            ("in a try body",                 "sh 'bash scripts/deploy/service-deploy.sh'", lambda: 0),
+            ("in a try body, after the throw", "sh 'bash scripts/deploy/service-deploy.sh'", failing_helper),
+            ("in a catch body",               "deployFailure = deployError",               failing_helper),
+            ("in a catch body never entered", "deployFailure = deployError",               lambda: 0),
+            ("in a taken if body",            "throw deployFailure",                       failing_helper),
+            ("in a skipped else-if body",     "echo 'nothing failed'",                     failing_helper),
+            ("in a never-taken if body",      "echo 'never taken'",                        failing_helper),
+        ]:
+            lines = self._scaffold_with(after, self.UNMODELLED)
+            with self.assertRaises(AssertionError) as c:
+                self._run_deploy_block(helper, lambda: 0, lines=lines)
+            self.assertIn("unmodelled", str(c.exception),
+                          "an unmodelled line " + where + " was skipped instead of failing the test: "
+                          + str(c.exception)[:120])
+
+        # A line the regex DOES match is still refused where that statement does not belong: `echo` is
+        # modelled, and an `echo` in a catch body is not something this reader executes.
+        lines = self._scaffold_with("deployFailure = deployError", "echo 'swallowed'")
+        with self.assertRaises(AssertionError) as c:
+            self._run_deploy_block(failing_helper, lambda: 0, lines=lines)
+        self.assertIn("unmodelled statement in catch", str(c.exception))
+
+    def test_the_sweep_finds_no_uncovered_protection(self) -> None:
+        """THE AUDIT OF THE AUDIT, shipped so it runs on every change rather than when someone remembers.
+
+        effect-shim-sweep.sh takes its inventory FROM THE IMPLEMENTATION -- every refusal branch, guard
+        clause, trap and dispatch line it can find -- removes each in turn, and requires some case to go
+        red. Two earlier sweeps were driven by a hand-written list and review removed protections that
+        were not on it; an inventory someone maintains has the same failure mode as the tests it audits.
+
+        It also asks the inverse question, which is the one that finds a case passing on a layered
+        refusal: which shipped case never goes red for ANY removal? Cases that cannot discriminate --
+        positive controls, structural assertions and the documented limits -- say so beside themselves in
+        the suite, and everything else must discriminate."""
+        r = subprocess.run(["bash", str(J / "effect-shim-sweep.sh")], capture_output=True, text=True, cwd=ROOT)
+        self.assertIn("ALL INVENTORIED PROTECTIONS COVERED", r.stdout,
+                      "the sweep found a protection with no case behind it, or a case that never "
+                      "discriminates:\n" + r.stdout + r.stderr)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_the_recorded_shim_digest_is_the_shim_that_ships(self) -> None:
+        """The integrity check compares against a digest in the repository, so that digest has to be the
+        one this branch actually ships -- an integrity check reading a stale expectation is theatre."""
+        declared = (J / "effect-shim-digest.txt").read_text().strip()
+        actual = subprocess.run(["shasum", "-a", "256", str(self.SHIM / "_shim.sh")],
+                                capture_output=True, text=True).stdout.split()[0]
+        self.assertEqual(declared, actual, "effect-shim-digest.txt does not match _shim.sh")
+
+
 class DisabledUmbrellaTest(unittest.TestCase):
     def test_umbrella_and_unguarded_child_triggers_refuse_before_triggering(self) -> None:
         bua = (ROOT / "Jenkinsfile.bring-up-all").read_text()

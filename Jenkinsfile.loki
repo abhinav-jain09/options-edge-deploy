@@ -1,5 +1,5 @@
 // Deploy Loki + Promtail to a cluster via the Ansible playbook (ansible/loki-stack.yml).
-// Production changes go through THIS job (Jenkins + Ansible), never kubectl/helm by hand.
+// Production changes go through THIS job (Jenkins + Ansible), never by hand with kubectl or helm.
 //
 // CONFIRM_DEPLOY=false  -> validate + render + helm-template only (a dry plan, applies nothing)
 // CONFIRM_DEPLOY=true   -> helm upgrade --install into the target cluster
