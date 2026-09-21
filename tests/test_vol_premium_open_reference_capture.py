@@ -384,21 +384,39 @@ class OpenReferenceCaptureTest(unittest.TestCase):
         self.assertLessEqual(got["offsetCoveredMinutes"], got["scoreableMinutes"])
 
 
-    def test_a_claim_without_a_record_is_completed_by_the_next_run(self) -> None:
+    def test_a_claim_without_a_record_publishes_THE_CLAIM_not_a_recomputation(self) -> None:
         """Killed between the per-session claim and the verdict link, the session had a marker and
-        no record - and every retry reported success, so it could never enter the >=55 set although
-        it was usable. A retry must COMPLETE it from the claim."""
+        no record, and every retry reported success - it could never enter the >=55 set although
+        it was usable.
+
+        The repair must publish the record that was ALREADY DECIDED. Seeding a claim and rerunning
+        against the same archive proves nothing: an implementation that ignored the claim and
+        recomputed would pass identically. So the archive is changed between the crash and the
+        retry - ES loses its reference, which recomputes as REJECTED - and the published record
+        must still be the accepted claim, byte for byte."""
         _fixture(self.tmp)
         out = self.tmp / "ledger"
         (out / ".published").mkdir(parents=True)
-        # the exact state a crash leaves: a claim holding the decided record, no verdict file
-        record = orc.capture(str(self.tmp), DAY)
-        (out / ".published" / f"{DAY}.json").write_text(json.dumps(record) + "\n")
+        decided = orc.capture(str(self.tmp), DAY)
+        self.assertTrue(decided["accepted"])
+        seeded = json.dumps(decided, sort_keys=True)
+        (out / ".published" / f"{DAY}.json").write_text(seeded + "\n")
+
+        # the archive as the retry finds it: no ES reference in the window any more
+        _fixture(self.tmp, es_rows=[_es(300 + 60 * i, 7650.0 + i / 10.0 - 3.0)
+                                    for i in range(MINUTES)])
+        self.assertFalse(orc.capture(str(self.tmp), DAY)["accepted"],
+                         "the retry must recompute differently, or this case proves nothing")
+
         r = subprocess.run([sys.executable, str(SCRIPT), "--session", DAY,
                             "--archive-root", str(self.tmp), "--out", str(out)],
                            capture_output=True, text=True, check=True)
         self.assertIn("claimed but never published", r.stderr)
-        self.assertEqual([p.name for p in (out / "accepted").iterdir()], [f"{DAY}.json"])
+        self.assertEqual([p.name for p in (out / "accepted").iterdir()], [f"{DAY}.json"],
+                         "the repair published a recomputation, not the claim")
+        self.assertFalse((out / "rejected").exists() and list((out / "rejected").iterdir()))
+        published = (out / "accepted" / f"{DAY}.json").read_text().strip()
+        self.assertEqual(json.loads(published), json.loads(seeded))
 
     def test_a_completed_session_is_left_alone(self) -> None:
         """The companion: the repair must fire only for a claim with NO record, never re-link one
