@@ -269,9 +269,10 @@ def capture(root: str, day: str, close_et_hhmm: str = "16:00") -> dict:
     # AND IT COMES FROM INSIDE THE SESSION. Taken from any post-open row, a session whose RTH
     # prints were all corrupt could borrow a positive after-hours print as its denominator and
     # report a bps figure that measures nothing about the session.
-    level = next((_number(r.get("price")) for t, r in after
-                  if t < close_et and r.get("quality") == "LIVE"
-                  and (_number(r.get("price")) or 0) > 0), None)
+    denominator = next(((t, _number(r.get("price"))) for t, r in after
+                        if t < close_et and r.get("quality") == "LIVE"
+                        and (_number(r.get("price")) or 0) > 0), (None, None))
+    denominator_et, level = denominator
 
     if not es_window:
         rejected = "no ES reference in the window"
@@ -306,7 +307,14 @@ def capture(root: str, day: str, close_et_hhmm: str = "16:00") -> dict:
         "indexFirstAfterOpenEt": after[0][0].astimezone(ET).isoformat() if after else None,
         "freezeSeconds": round((after[0][0] - before[-1][0]).total_seconds(), 3)
         if before and after else None,
-        "indexFirstAfterOpen": level,
+        # TWO DIFFERENT OBSERVATIONS, TWO DIFFERENT FIELDS. One field held the first index row's
+        # TIMESTAMP and another the first USABLE price, which is a different row whenever the
+        # first print is delayed or zero - so the record paired a 09:30:01 timestamp with a 09:35
+        # price and read as though the index had opened there. This ledger is forward-only, so a
+        # field that is internally false cannot be repaired by a backfill later.
+        "indexFirstAfterOpenPrice": next((_number(r.get("price")) for _, r in after), None),
+        "bpsDenominatorIndexLevel": level,
+        "bpsDenominatorEt": denominator_et.astimezone(ET).isoformat() if denominator_et else None,
         "anySourceLastBeforeOpenEt": before_any[-1][0].astimezone(ET).isoformat()
         if before_any else None,
         "anySourceLastBeforeOpenSource": before_any[-1][1].get("source") if before_any else None,

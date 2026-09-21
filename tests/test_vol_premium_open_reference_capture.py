@@ -564,6 +564,20 @@ class OpenReferenceCaptureTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual([p.name for p in (out / "accepted").iterdir()], [f"{DAY}.json"])
 
+
+    def test_the_first_print_and_the_bps_denominator_are_separate_observations(self) -> None:
+        """A delayed print at 09:30:01 followed by a usable one at 09:35 used to record the
+        09:30:01 TIMESTAMP against the 09:35 PRICE - one field describing two different rows, in a
+        forward-only ledger that cannot be repaired by backfill."""
+        rows = [_index(-302, 7650.0), _index(1, 7600.0, quality="DELAYED")] + [
+            _index(300 + 60 * i, 7650.0 + i / 10.0) for i in range(MINUTES)]
+        _fixture(self.tmp, index_rows=rows)
+        got = orc.capture(str(self.tmp), DAY)
+        self.assertEqual(got["indexFirstAfterOpenPrice"], 7600.0)
+        self.assertEqual(got["bpsDenominatorIndexLevel"], 7650.0)
+        self.assertNotEqual(got["indexFirstAfterOpenEt"], got["bpsDenominatorEt"])
+        self.assertTrue(got["accepted"], got["rejectedBecause"])
+
     # --- refusals ------------------------------------------------------------------------------
     def test_a_bad_session_date_refuses_with_64(self) -> None:
         r = subprocess.run([sys.executable, str(SCRIPT), "--session", "18-09-2026",
