@@ -61,10 +61,13 @@ CALENDAR_DIR="${CALENDAR_DIR:-$(cd "$SCRIPT_DIR/../jenkins" 2>/dev/null && pwd |
 #   builder: raw-to-display-databento-service is a SEPARATE deployment and must stay at 1.
 #   databento-maxpain-service REMOVED from KEEP_DOWN 2026-08-01 (USER: "turn on prod
 #   only") — prod overlay patches replicas:1; dev stays down via dev-cleanup DISABLED_DEV.
-#   oi-shadow-service (2026-08-10 USER hold: retired until further notice). It scores only
-#   END-OF-DAY 1DTE open interest and the desk trades 0DTE, where no next-day settled
-#   print exists to score it. Also replicas:0 in both overlays. See
-#   docs/oi-nowcast-retirement.md.
+#   oi-shadow-service (2026-08-10 USER hold). It scores only END-OF-DAY 1DTE open interest
+#   and the desk trades 0DTE, where no next-day settled print exists to score it. The hold
+#   still binds PRODUCTION, which is replicas:0 in its overlay; it was LIFTED ON DEV
+#   2026-09-21 (USER: "bring up on dev"), so dev renders replicas:1 with both arms on and
+#   the entry below no longer describes every environment. This list is prod-only
+#   (EXPECTED_ENV=prod, and Jenkinsfile.morning-autostart offers ENVIRONMENT=['prod']), so
+#   the dev bring-up neither needed nor got a change here. See docs/oi-nowcast-retirement.md.
 #   prod-pgadmin ADDED 2026-09-15 so this set equals scripts/ops/oe-boot-bringup.sh KEEP_DOWN
 #   (tests/test_keep_down_lists_agree.py — change BOTH or neither). It carries no part-of label, so
 #   $SELECTOR never matches it and the entry changes nothing here; the boot bring-up, which scales

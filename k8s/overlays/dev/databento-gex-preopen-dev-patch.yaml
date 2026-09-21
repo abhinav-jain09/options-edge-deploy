@@ -133,8 +133,16 @@ spec:
             # ..._incomplete_attempts_total counts unsound responses, which are never published at all.
             #
             # Fail-soft: the work runs on its own daemon thread behind a bounded queue, so it cannot make
-            # the live gamma surface wait on it. oi-shadow-service now consumes this manifest, and
-            # GEX consumes what oi-shadow publishes, so the chain is anchor -> oi-shadow -> GEX.
+            # the live gamma surface wait on it.
+            #
+            # ⚠️ DEAD CONFIG since d845a415 (processing, 2026-09-02). This used to say
+            # "oi-shadow-service now consumes this manifest, and GEX consumes what oi-shadow
+            # publishes, so the chain is anchor -> oi-shadow -> GEX". That commit deleted the
+            # capture code this flag enables, so no manifest is published on dev however this is
+            # set, and it deleted OiEstimateOverlay, so GEX consumes no nowcast. Nothing here
+            # runs, nothing here reaches the board, and no counter named above will move. Dev
+            # oi-shadow was brought back up 2026-09-21 and emits no output records for exactly
+            # this reason.
             - { name: OI_ANCHOR_MANIFEST_ENABLED, value: "true" }
             # DYNAMIC OPEN INTEREST. GEX stops pricing with the print the exchange
             # published this morning and starts pricing with oi-shadow's estimate of where open
@@ -152,9 +160,11 @@ spec:
             # cumulative volume. A number read at 15:55 is near the thing that was measured; one
             # read at 11:00 carries that assumption.
             #
-            # ON IN PRODUCTION TOO, enabled in the same change. This is the one switch for the
-            # whole system -- no consumer sees the ESTIMATED quality unless the producer emits it --
-            # so turning it off returns that environment to exactly today's behaviour.
+            # HISTORY: it was ON IN PRODUCTION TOO, enabled in the same change. Both are "false"
+            # now and, since d845a415, NO CODE READS THIS FLAG AT ALL -- what survives on processing
+            # main is prose (an Avro doc string for oiQuality=ESTIMATED, a FreshnessGate comment,
+            # and a stale comment in that repo's Jenkinsfile). It is no longer "the one switch for
+            # the whole system"; there is no system behind it until the deleted code returns.
             #
             # Watch: ..._dynamic_oi_applied_total should climb during the session, and the fallback
             # counters say WHY when it does not (no estimate / stale / future / not estimated).

@@ -1,9 +1,20 @@
-# OI nowcast — retired 2026-08-10
+# OI nowcast — retired 2026-08-10, and RUNNING ON DEV AGAIN since 2026-09-21
 
-Turned off on dev and production. Not deleted: the code, the harness, the
-coefficients and the evidence are all in git, and the anchor it depends on is
-exact. This note exists so a future revival starts from what was measured rather
-than repeating it.
+Turned off on production and experiment. **DEV IS ENABLED AGAIN** (USER 2026-09-21:
+"bring up on dev, build the latest image and deploy again") — dev renders
+`replicas: 1` with `OI_SHADOW_ENABLED` and `OI_SHADOW_SEED_COEFFICIENTS_ENABLED`
+both `"true"`. Nothing below is withdrawn: the measurement that retired it still
+stands and is still why production stays off. Do not read a running dev pod as
+evidence against it.
+
+**The dev pod emits no output records.** Since `d845a415` (options-edge-processing,
+2026-09-02) nothing produces the anchor manifest it requires, and
+`OiShadowTopology` publishes nothing for a session without a COMPLETE one — so a
+revival needs the code below, not the dev deployment.
+
+Not deleted: the code, the harness, the coefficients and the evidence are all in
+git, and the anchor it depends on is exact. This note exists so a future revival
+starts from what was measured rather than repeating it.
 
 ## What it did
 
