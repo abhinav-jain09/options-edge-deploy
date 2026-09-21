@@ -564,7 +564,7 @@ integ_case "a deleted wrapper is named"        "the wrapper 'kubectl' is missing
            'rm -f "$CO_SHIM/kubectl"'          'ln -sf _shim.sh "$CO_SHIM/kubectl"'
 integ_case "a NON-EXECUTABLE wrapper is named" "is not executable" \
            'chmod 644 "$CO_SHIM/_shim.sh"'     'chmod 755 "$CO_SHIM/_shim.sh"'
-integ_case "an edited _shim.sh is named"       "THIS CHECKOUT'S wrapper is not the reviewed one" \
+integ_case "an edited _shim.sh is named"       "its bytes differ from the digest recorded beside it" \
            'printf "# tampered\n" >> "$CO_SHIM/_shim.sh"' 'cp "$HERE/effect-shim/_shim.sh" "$CO_SHIM/_shim.sh"'
 integ_case "a planted executable is named"     "unexpected entry 'npm'" \
            'printf "#!/bin/sh\nexit 0\n" > "$CO_SHIM/npm"; chmod +x "$CO_SHIM/npm"' 'rm -f "$CO_SHIM/npm"'
@@ -857,9 +857,9 @@ out="$(bash "$INTEG" --dir "$W" --when start 2>&1)"; rc=$?
 set -e
 mv "$T/shim-moved" "$CO_SHIM"
 if [ "$rc" -eq 3 ] && printf '%s' "$out" | grep -q "the shim directory is missing"; then
-  ok "integrity: a MISSING shim directory refuses (nothing was intercepting anything)"
+  ok "integrity: a MISSING shim directory refuses (coverage by this checkout's shim cannot be attested)"
 else
-  bad "integrity: a MISSING shim directory refuses (nothing was intercepting anything)" "rc=$rc
+  bad "integrity: a MISSING shim directory refuses (coverage by this checkout's shim cannot be attested)" "rc=$rc
 $out"
 fi
 

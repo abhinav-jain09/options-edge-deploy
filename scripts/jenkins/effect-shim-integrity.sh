@@ -86,7 +86,7 @@ for f in "$shim"/*; do
   [ "$b" = ".." ] && continue
   [ "$b" = "_shim.sh" ] && continue
   case " $TOOLS " in *" $b "*) continue ;; esac
-  refuse "unexpected entry '$b' in the shim directory — this directory is first on PATH for the whole stage"
+  refuse "unexpected entry '$b' in the shim directory — this directory is on PATH when this check runs (a later shell can reassign PATH, which this check cannot observe)"
 done
 shopt -u nullglob dotglob
 
@@ -98,7 +98,7 @@ fi
 want_file="$here/effect-shim-digest.txt"
 [ -f "$want_file" ] || refuse "the expected digest file is missing at $want_file"
 want="$(tr -d ' \n' < "$want_file")"
-[ "$got" = "$want" ] || refuse "_shim.sh is $got but this repository declares $want — THIS CHECKOUT'S wrapper is not the reviewed one, so coverage by it cannot be attested. Which wrapper a given invocation actually ran is not observable from here"
+[ "$got" = "$want" ] || refuse "_shim.sh is $got but this repository declares $want — its bytes differ from the digest recorded beside it. Both files live in the workspace this job owns, so this says they DISAGREE and nothing about which of the two changed, whether either matches what was reviewed, or which wrapper a given invocation ran"
 
 # The success line says what it checked, not that the shim was intact: this script and the digest it
 # compares against are both editable by the job, so "ok" means nothing here disagreed -- not that

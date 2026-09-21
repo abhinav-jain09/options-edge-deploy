@@ -1724,7 +1724,7 @@ class EffectShimTest(unittest.TestCase):
         positive controls, structural assertions and the documented limits -- say so beside themselves in
         the suite, and everything else must discriminate."""
         r = subprocess.run(["bash", str(J / "effect-shim-sweep.sh")], capture_output=True, text=True, cwd=ROOT)
-        self.assertIn("ALL PROTECTIONS COVERED", r.stdout,
+        self.assertIn("ALL INVENTORIED PROTECTIONS COVERED", r.stdout,
                       "the sweep found a protection with no case behind it, or a case that never "
                       "discriminates:\n" + r.stdout + r.stderr)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
