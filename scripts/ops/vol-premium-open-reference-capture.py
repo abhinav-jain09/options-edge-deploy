@@ -414,13 +414,30 @@ def main(argv=None) -> int:
         # `.staging` for a symlink in between and the write lands outside --out anyway. Opening
         # each component with O_NOFOLLOW relative to the directory above it makes the check and
         # the use the same operation, so there is no interval to exploit.
+        # THE LEDGER DIRECTORY ITSELF IS OPENED WITHOUT FOLLOWING A LINK, by opening its parent
+        # first and then its own name relative to that. Refusing every symlinked component of the
+        # path was tried and is wrong on a normal machine: macOS resolves /var to /private/var, so
+        # every temporary directory would be refused. The line drawn here is that the ancestors
+        # are the operator's own path, written by whoever passed --out, while the ledger directory
+        # is the thing this script publishes into and must not be something redirecting elsewhere.
+        parent = os.path.dirname(os.path.abspath(args.out)) or "."
+        leaf = os.path.basename(os.path.abspath(args.out))
         try:
             os.makedirs(args.out, exist_ok=True)
-            root_fd = os.open(args.out, os.O_RDONLY | os.O_DIRECTORY)
+            parent_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
         except OSError as err:
-            print(f"vol-premium-open-reference-capture: cannot open {args.out}: {err}",
+            print(f"vol-premium-open-reference-capture: cannot open {parent}: {err}",
                   file=sys.stderr)
             return 73
+        try:
+            root_fd = os.open(leaf, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                              dir_fd=parent_fd)
+        except OSError as err:
+            print(f"vol-premium-open-reference-capture: {args.out} is a symlink or not a usable "
+                  f"directory: {err}", file=sys.stderr)
+            return 73
+        finally:
+            os.close(parent_fd)
 
         def child_dir(parent_fd, name):
             """Create if absent and open WITHOUT following a link, relative to parent_fd."""

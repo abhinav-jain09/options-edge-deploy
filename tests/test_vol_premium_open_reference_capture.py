@@ -537,6 +537,33 @@ class OpenReferenceCaptureTest(unittest.TestCase):
         self.assertEqual(r.returncode, 73)
         self.assertEqual(list(elsewhere.iterdir()), [], "it wrote through the link")
 
+
+    def test_an_out_root_that_is_itself_a_symlink_is_refused(self) -> None:
+        """--out pointing at a link means the ledger this script publishes into is somewhere else.
+        Ancestors are the operator's own path - macOS resolves /var to /private/var, so refusing
+        every symlinked component would reject every temporary directory - but the ledger
+        directory itself must be a real directory."""
+        real = self.tmp / "real-ledger"
+        real.mkdir(parents=True)
+        link = self.tmp / "ledger-link"
+        link.symlink_to(real)
+        _fixture(self.tmp)
+        r = subprocess.run([sys.executable, str(SCRIPT), "--session", DAY,
+                            "--archive-root", str(self.tmp), "--out", str(link)],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 73)
+        self.assertEqual(list(real.iterdir()), [], "it published through the link")
+
+    def test_an_ordinary_out_root_is_accepted(self) -> None:
+        """The companion: the rule must refuse a LINK, not every root."""
+        _fixture(self.tmp)
+        out = self.tmp / "plain-ledger"
+        r = subprocess.run([sys.executable, str(SCRIPT), "--session", DAY,
+                            "--archive-root", str(self.tmp), "--out", str(out)],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual([p.name for p in (out / "accepted").iterdir()], [f"{DAY}.json"])
+
     # --- refusals ------------------------------------------------------------------------------
     def test_a_bad_session_date_refuses_with_64(self) -> None:
         r = subprocess.run([sys.executable, str(SCRIPT), "--session", "18-09-2026",
