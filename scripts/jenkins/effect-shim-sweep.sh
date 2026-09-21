@@ -42,7 +42,8 @@
 # effect-shim-digest.txt and _shim.sh all live in the workspace the job owns, so the integrity checks
 # catch an ACCIDENT -- a wrapper deleted, a permission dropped, an entry added, a file edited by
 # something that did not also edit the digest -- and nothing more. Two LIMIT cases assert the green
-# result a coordinated edit produces. 31 of 31 covered is a statement about coverage of the protections
+# result a coordinated edit produces. The count this script prints (32 of 32 at the time of writing,
+# and whatever the inventory finds when you run it) is a statement about coverage of the protections
 # in these two files; it is not a statement that the shim was intact.
 #
 # Usage: effect-shim-sweep.sh [--verbose]

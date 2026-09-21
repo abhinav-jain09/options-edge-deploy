@@ -356,6 +356,25 @@ else
 $WORD_OUT"
 fi
 
+# --- 11f. A MISSING WRAPPER CANNOT SAY WHAT AN INVOCATION RESOLVED TO ---------------------------
+# The refusal for an absent wrapper used to say "every invocation of $t in this stage resolved to the
+# real binary unverified". It cannot know that: PATH may have held another copy of the shim ahead of
+# this directory, and that copy may have verified the call. Claiming otherwise is a claim about
+# wrapper absence and external copies, which is exactly the scope this mechanism disclaims.
+mv "$CO_SHIM/kubectl" "$T/kubectl.parked"
+set +e
+MISS_OUT="$(bash "$HERE/effect-shim-integrity.sh" --dir "$W" --when end 2>&1)"; MISS_RC=$?
+set -e
+mv "$T/kubectl.parked" "$CO_SHIM/kubectl"
+if [ "$MISS_RC" -ne 0 ] \
+   && printf '%s' "$MISS_OUT" | grep -q "cannot be attested" \
+   && ! printf '%s' "$MISS_OUT" | grep -qE "resolved to the real binary unverified|every invocation"; then
+  ok "a MISSING wrapper refuses without claiming what any invocation resolved to"
+else
+  bad "a MISSING wrapper refuses without claiming what any invocation resolved to" "rc=$MISS_RC
+$MISS_OUT"
+fi
+
 # --- 12-14. THE DOCUMENTED LIMITS, PINNED ------------------------------------------------------------
 # These three cases assert what the shim does NOT do. They exist because a limit that is only described
 # is a sentence someone deletes; a limit with a test is a limit. If one of them ever goes red, the shim

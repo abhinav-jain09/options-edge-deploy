@@ -64,13 +64,13 @@ refuse() {
 [ -d "$shim" ] || refuse "the shim directory is missing at $shim — nothing was intercepting anything"
 
 for t in $TOOLS; do
-  [ -e "$shim/$t" ] || refuse "the wrapper '$t' is missing: a wrapper cannot detect its own absence, so every invocation of $t in this stage resolved to the real binary unverified"
+  [ -e "$shim/$t" ] || refuse "the wrapper '$t' is missing, so coverage BY THIS CHECKOUT'S SHIM cannot be attested for $t in this stage. This does not say an invocation was unverified: a wrapper cannot detect its own absence, and PATH may have held another shim copy ahead of this directory"
   link="$(readlink "$shim/$t" 2>/dev/null || true)"
   [ "$link" = "_shim.sh" ] || refuse "the wrapper '$t' is not the expected symlink to _shim.sh (found: '${link:-a regular file}')"
   # EXECUTABILITY IS PART OF EXISTING. `chmod 644 _shim.sh` leaves the bytes, the symlinks and the digest
   # untouched and every other check in this file green, while execvp() skips the wrapper and runs the
   # real binary unverified. A file the kernel will not execute is not a wrapper.
-  [ -x "$shim/$t" ] || refuse "the wrapper '$t' is not executable: execvp() skips it and resolves $t to the real binary, unverified"
+  [ -x "$shim/$t" ] || refuse "the wrapper '$t' is not executable, so execvp() skips it and coverage BY THIS CHECKOUT'S SHIM cannot be attested for $t. A file the kernel will not execute is not a wrapper; what a given invocation actually resolved to is not observable from here"
 done
 # (There is no separate `-x` check for _shim.sh: each wrapper IS a symlink to it, and `[ -x ]` follows the
 # link, so the loop above already tests that inode seven times. A second check of the same thing cannot
