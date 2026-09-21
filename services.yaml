@@ -174,8 +174,9 @@ services:
   # DEV-FIRST/on-demand: prod overlay holds it at replicas:0 until the nightly OI-index builder exists.
   - { name: stock-gex,                    managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-stock-gex,                    deployments: [stock-gex-service], buildJob: options-edge-stock-gex-deploy }
   # SPXW session-close open-interest nowcast. ENABLED ON DEV since 2026-09-21 (replicas:1, both
-  # arms on); PRODUCTION AND EXPERIMENT SHIP DISABLED (replicas:0, OI_SHADOW_ENABLED=false) under
-  # the 2026-08-10 retirement. Deployed and enabled still does not mean producing: its input topic
+  # arms on). PRODUCTION is held at replicas:0 with OI_SHADOW_ENABLED=false under the 2026-08-10
+  # retirement; EXPERIMENT renders replicas:1 but OI_SHADOW_ENABLED=false, so it schedules an
+  # idling pod rather than none. Deployed and enabled still does not mean producing: its input topic
   # options.databento.oi.anchor-manifest has had no producer since d845a415 (processing, 2026-09-02)
   # and OiShadowTopology publishes nothing for a session without a COMPLETE manifest. Its output
   # topic has no consumer either. See docs/oi-nowcast-retirement.md and the notes in

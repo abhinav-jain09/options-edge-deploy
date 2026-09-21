@@ -378,10 +378,10 @@ patches:
   # anchor-manifest") removed BOTH ends of its chain from options-edge-processing main: nothing
   # produces its input options.databento.oi.anchor-manifest (the OiAnchorManifest* subsystem is
   # gone; OI is now captured straight to Postgres options_flow.databento_option_raw_snapshot), and
-  # nothing consumes options.databento.oi.nowcast.by-strike (OiEstimateOverlay is gone — on main
-  # the only surviving mentions of DATABENTO_GEX_DYNAMIC_OI_ENABLED are Avro doc strings for
-  # oiQuality=ESTIMATED and one comment in strike-intelligence's FreshnessGate, not code). So the
-  # pod comes up READY on an empty input topic. Making it produce again is a CODE change (an
+  # nothing consumes options.databento.oi.nowcast.by-strike (OiEstimateOverlay is gone; no code on
+  # that repo's main reads DATABENTO_GEX_DYNAMIC_OI_ENABLED — see the header block above for what
+  # survives there and why one of those survivors is itself stale). So an enabled pod sits on an
+  # empty input topic and emits no output records. Making it produce again is a CODE change (an
   # anchor-manifest producer fed from Postgres, plus a GEX consumer), not an overlay change.
   # DATABENTO_GEX_DYNAMIC_OI_ENABLED is deliberately left "false": flipping a flag no code reads
   # would only misdescribe what dev is doing. See docs/oi-nowcast-retirement.md.
