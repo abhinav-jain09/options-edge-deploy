@@ -188,19 +188,25 @@ real="$(PATH="$stripped" command -v "$tool" 2>/dev/null || true)"
 # then runs `kubectl` looks up `/tmp/scripts/jenkins/effect-shim/kubectl`, does not find it, and
 # reaches the real binary unverified. Review reproduced exactly that. Rewriting the element to the
 # absolute directory this script is in makes the interception survive any cwd the child chooses.
+# THE SPLIT IS MANUAL BECAUSE AN EMPTY ELEMENT IS A REAL ONE. `PATH=:/usr/bin` means the current
+# directory first, and `for _e in $PATH` with IFS=: silently drops it -- so the rewrite lost that
+# element, a descendant that had changed directory no longer looked in the shim, and the real binary
+# ran unverified. Same defect as a relative entry, in another valid spelling; case 11g pins it.
 abs_path=""
-_oldifs="${IFS-}"
-IFS=:
-for _e in $PATH; do
+_first=1
+_p="$PATH"
+while :; do
+    _e="${_p%%:*}"
     case "$_e" in
-        /*|"") _keep="$_e" ;;
-        *)     _c="$(cd "$_e" 2>/dev/null && pwd -P || true)"
-               if [ -n "$_c" ] && [ "$_c" = "$here" ]; then _keep="$here"; else _keep="$_e"; fi ;;
+        "") _c="$(pwd -P)" ;;                                  # empty element == current directory
+        /*) _c="" ;;                                           # already absolute; nothing to resolve
+        *)  _c="$(cd "$_e" 2>/dev/null && pwd -P || true)" ;;
     esac
-    abs_path="${abs_path:+$abs_path:}$_keep"
+    if [ -n "$_c" ] && [ "$_c" = "$here" ]; then _keep="$here"; else _keep="$_e"; fi
+    if [ "$_first" = 1 ]; then abs_path="$_keep"; _first=0; else abs_path="$abs_path:$_keep"; fi
+    case "$_p" in *:*) _p="${_p#*:}" ;; *) break ;; esac
 done
-IFS="$_oldifs"
-[ -n "$abs_path" ] && PATH="$abs_path" && export PATH
+[ "$_first" = 0 ] && PATH="$abs_path" && export PATH
 
 # THE CHILD INHERITS THE ORIGINAL PATH, shim first. Stripping is needed only to RESOLVE the real binary;
 # handing the stripped PATH to the child removed interception from everything the tool then starts, and

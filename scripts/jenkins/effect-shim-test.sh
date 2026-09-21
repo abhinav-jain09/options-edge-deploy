@@ -288,6 +288,33 @@ printf '#!/bin/sh\nprintf "mvn %%s\\n" "$*" >> "$RAN_LOG"\nexit 0\n' > "$REALBIN
 chmod +x "$REALBIN/mvn"
 git -C "$W" checkout -q -- file.txt
 
+# --- 11g. AN EMPTY PATH ELEMENT IS THE CURRENT DIRECTORY, AND IT IS A REAL ELEMENT ---------------
+# `PATH=:$REALBIN:/usr/bin` puts the current directory first. Splitting on ":" with word splitting
+# drops that element, so the rewrite lost it and a descendant that changed directory resolved the
+# real binary unverified -- review reproduced exactly that, rc=0 with both mvn and kubectl recorded.
+cat > "$REALBIN/mvn" <<PEOF
+#!/bin/sh
+printf 'mvn %s\n' "\$*" >> "\$RAN_LOG"
+echo 'changed by the running build' >> "$W/file.txt"
+exec "$REALBIN/middle-cd"
+PEOF
+chmod +x "$REALBIN/mvn"
+git -C "$W" checkout -q -- file.txt
+: > "$T/ran"
+set +e
+OUT="$(cd "$CO_SHIM" && env PATH=":$REALBIN:/usr/bin:/bin" RAN_LOG="$T/ran" \
+      OE_SHIM_DIR="$W" OE_SHIM_SHA="$SHA" OE_SHIM_ALLOW= mvn -B test 2>&1)"; RC=$?
+set -e
+if grep -q '^mvn ' "$T/ran" && ! grep -q '^kubectl' "$T/ran" && printf '%s' "$OUT" | grep -q "verdict=REFUSED"; then
+  ok "an EMPTY PATH element still intercepts a grandchild that changed directory"
+else
+  bad "an EMPTY PATH element still intercepts a grandchild that changed directory" "rc=$RC ran=$(cat "$T/ran")
+$OUT"
+fi
+printf '#!/bin/sh\nprintf "mvn %%s\\n" "$*" >> "$RAN_LOG"\nexit 0\n' > "$REALBIN/mvn"
+chmod +x "$REALBIN/mvn"
+git -C "$W" checkout -q -- file.txt
+
 # --- 11c. A LOGIN SHELL THAT REBUILDS PATH IS A LIMIT, NOT A PROTECTION -------------------------
 # `bash -lc` re-reads the profile, and a profile that ASSIGNS PATH (rather than prepending to it)
 # drops the shim entry entirely. Nothing inside a wrapper can survive its own removal from PATH, so
