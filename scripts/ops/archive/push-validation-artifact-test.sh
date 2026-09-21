@@ -976,8 +976,7 @@ python3 - "$MUT/oe-push-validation-artifact.sh" <<'PYCASE'
 import re, sys
 p = sys.argv[1]
 s = open(p).read()
-s2 = re.sub(r'shared_defects = R\.corpus_defects\(read, sessions, seals,\n[^\n]*\n[^\n]*\n',
-            'shared_defects = []\n', s)
+s2 = re.sub(r'shared_defects = R\.corpus_defects\([^)]*\)\n', 'shared_defects = []\n', s)
 sys.exit(0 if s2 != s and open(p, "w").write(s2) is not None else 1)
 PYCASE
 # Earlier cases deliberately corrupt manifests and rewrite published versions in this shared tree, and
@@ -1603,6 +1602,80 @@ CUT="$(cov_of "$EARLY2")"
   || bad "post-boundary sessions still count toward coverage: $CUT vs $ALL"
 [ "${CUT#* }" -lt "${ALL#* }" ] \
   && ok "…and so are their calls" || bad "post-boundary calls still colour required cells: $CUT vs $ALL"
+
+echo "67c. post-boundary calls can never make the REPORTER say ready (Codex r4)"
+# The reporter and the evaluator must agree about whether a cohort filled. Calls that arrive after the
+# stopping boundary belong to no cohort: the evaluator drops them, so the reporter must drop them too.
+rm -rf "$WORK/calibration-runs"
+build 3 20
+DAY="$(ls -d "$ROOT"/dt=* | sed -n '3p' | sed 's|.*dt=||')"
+EARLY3="$(python3 -c "import datetime;print(int(datetime.datetime.fromisoformat('2026-07-02T20:00:00+00:00').timestamp()*1000))")"
+report_for() {   # report_for <boundary-ms> -> "<cohortCalls> <readyForEvaluation>"
+  targets FROZEN "$1"
+  env ENV=prod ARCHIVE_DIR="$WORK" REPORT_DATE="$DAY" CALENDAR_DIR="$CAL_DIR" \
+      bash "$HERE/oe-calibration-progress.sh" >/dev/null 2>&1 \
+    || bad "the reporter failed inside case 67c"
+  WORKDIR="$WORK" python3 -c "
+import json, glob, os
+f = sorted(glob.glob(os.environ['WORKDIR'] + '/calibration-runs/prod/*/*/progress/dt=*.json'), key=os.path.getmtime)[-1]
+d = json.load(open(f))
+rs = d.get('cohorts') or []
+print('%s %s' % (sum((r.get('cohort') or {}).get('have', 0) for r in rs), any(r.get('readyForEvaluation') for r in rs)))"
+}
+ALLR="$(report_for "$SB")"; CUTR="$(report_for "$EARLY3")"
+[ "${ALLR% *}" -gt "${CUTR% *}" ] \
+  && ok "the reporter's cohort counters stop at the boundary ($CUTR vs $ALLR)" \
+  || bad "post-boundary calls still count toward the reporter's cohort: $CUTR vs $ALLR"
+
+echo "67d. a call with no usable refT is counted by NEITHER half (Codex r4)"
+# The evaluator requires tf <= refT <= boundary. A call with refT absent or non-numeric is one it drops,
+# so a reporter that counts it would show cells covered that the evaluator cannot see at all.
+rm -rf "$WORK/calibration-runs"
+build 3 20
+targets FROZEN "$SB"
+python3 - "$ROOT" <<'PYREF'
+import glob, gzip, json, os, sys
+root = sys.argv[1]
+n = 0
+for f in sorted(glob.glob(os.path.join(root, "dt=*", "*.jsonl.gz"))):
+    out = []
+    changed = False
+    with gzip.open(f, "rt") as fh:
+        for line in fh:
+            i = line.find("{")
+            head, body = line[:i], json.loads(line[i:])
+            if body.get("kind") == "call" and "refT" in body:
+                body["refT"] = "not-a-number"
+                changed = True
+                n += 1
+            out.append(head + json.dumps(body, separators=(",", ":")) + "\n")
+    if changed:
+        with gzip.open(f, "wt") as fh:
+            fh.writelines(out)
+print("rewrote %d calls" % n)
+PYREF
+env ENV=prod ARCHIVE_DIR="$WORK" REPORT_DATE="$DAY" CALENDAR_DIR="$CAL_DIR" \
+    bash "$HERE/oe-calibration-progress.sh" >/dev/null 2>&1
+COV="$(WORKDIR="$WORK" python3 -c "
+import json, glob, os
+f = sorted(glob.glob(os.environ['WORKDIR'] + '/calibration-runs/prod/*/*/progress/dt=*.json'), key=os.path.getmtime)[-1]
+d = json.load(open(f))
+c = d.get('requiredCellCoverage') or {}
+print(sum((c.get('observed') or {}).values()))")"
+[ "$COV" = 0 ] && ok "a call the evaluator would drop colours no cell here either" \
+  || bad "calls with an unusable refT still coloured $COV cells"
+
+echo "67e. a malformed stopping boundary is REFUSED, not crashed on (Codex r4)"
+rm -rf "$WORK/calibration-runs"
+build 3 20
+targets FROZEN "$SB"; publish
+sed -i'' -e 's/^OE_CAL_STOPPING_BOUNDARY_MS_prod=.*/OE_CAL_STOPPING_BOUNDARY_MS_prod=abc/' "$HERE/calibration-targets.env"
+case "$(evaluate 2>&1)" in
+  *"is not an epoch-millisecond instant"*) ok "a malformed boundary is refused with a reason";;
+  *ValueError*|*Traceback*) bad "a malformed boundary crashed the evaluator";;
+  *) bad "a malformed boundary was accepted";;
+esac
+targets FROZEN "$SB"
 
 echo "68. BZ 366: the reader's digest matches the ENGINE's on a real call carrying a trailing-zero decimal"
 # PRODUCTION BYTES, captured from context-tape.direction.ledger on 2026-09-16 — not a synthetic record. Parsing

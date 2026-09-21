@@ -78,6 +78,10 @@ for pair in "PARAMETER_SET_HASH:$PARAMETER_SET_HASH" "TRACK_FROM_PUSH:$TRACK_FRO
   [ -n "$val" ] || { log "FATAL: $name is not declared for env=$ENV_NAME in $TARGETS"; exit 1; }
   [ "$val" != "UNFROZEN" ] || { log "REFUSING: $name is still UNFROZEN for env=$ENV_NAME. The boundary and the parameter set are frozen together, in one commit, before any of this data is looked at."; exit 2; }
 done
+# The boundary is an epoch-millisecond INSTANT. "abc" used to reach python and die in int() with a
+# traceback, which is the same uncontrolled failure the acceptance numbers had (Codex r4 MINOR).
+printf '%s' "$STOPPING_BOUNDARY_MS" | grep -Eq '^-?[0-9]+$' \
+  || { log "REFUSING: STOPPING_BOUNDARY_MS='$STOPPING_BOUNDARY_MS' is not an epoch-millisecond instant"; exit 2; }
 
 # The ACCEPTANCE NUMBERS are frozen the same way and refused the same way (Codex r2 BLOCKER). They are
 # PROVISIONAL_PENDING_MEASUREMENT by design until the owner commits to them, and the evaluator used to
@@ -397,9 +401,15 @@ missing_horizon = sorted("|".join(str(x) for x in c) for c in cohort_ids
 # THE shared predicate — the same call the reporter makes, over the same reader (r12 #1). It is the ONLY
 # source of the per-session judgements below: a copy standing beside it meant deleting the call changed
 # no verdict at all, which is a call that is decorative rather than load-bearing (r13).
-shared_defects = R.corpus_defects(read, sessions, seals,
-                                  cohort_days={v["sessionDate"] for k, v in sessions.items()
-                                               if k in window_sessions} | set(missing_days))
+# Every COMPLETE day of this cohort inside the preregistered window, not only the days that produced a
+# call (Codex r4): a matching zero-call session satisfied have_days, never entered window_sessions, and
+# so was never examined for defects — while the reporter did examine it. The two must not be able to
+# disagree about a day.
+_defect_days = ({v["sessionDate"] for k, v in sessions.items() if k in window_sessions}
+                | {d for d in have_days if (not boundary_date or str(d)[:10] <= boundary_date)
+                   and str(d)[:10] >= str(corpus_start)[:10]}
+                | set(missing_days))
+shared_defects = R.corpus_defects(read, sessions, seals, cohort_days=_defect_days)
 
 # ---- the statistics: A4.9's reducers over the cohort at the primary horizon ----------------------
 prim = [o for o in window_outcomes if o.get("horizon") == PRIMARY]
