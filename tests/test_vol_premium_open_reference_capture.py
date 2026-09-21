@@ -578,6 +578,36 @@ class OpenReferenceCaptureTest(unittest.TestCase):
         self.assertNotEqual(got["indexFirstAfterOpenEt"], got["bpsDenominatorEt"])
         self.assertTrue(got["accepted"], got["rejectedBecause"])
 
+
+    def test_stdout_is_what_was_published_not_what_was_recomputed(self) -> None:
+        """During a repair the claim is published and the recomputation discarded. Printing the
+        recomputation would hand a caller a REJECTED record for a session the ledger holds as
+        accepted - two answers to one question, from one run."""
+        _fixture(self.tmp)
+        out = self.tmp / "ledger"
+        (out / ".published").mkdir(parents=True)
+        decided = orc.capture(str(self.tmp), DAY)
+        self.assertTrue(decided["accepted"])
+        seeded = json.dumps(decided, sort_keys=True)
+        (out / ".published" / f"{DAY}.json").write_text(seeded + "\n")
+        _fixture(self.tmp, es_rows=[_es(300 + 60 * i, 7650.0 + i / 10.0 - 3.0)
+                                    for i in range(MINUTES)])          # recomputes as rejected
+        r = subprocess.run([sys.executable, str(SCRIPT), "--session", DAY,
+                            "--archive-root", str(self.tmp), "--out", str(out)],
+                           capture_output=True, text=True, check=True)
+        self.assertEqual(json.loads(r.stdout.strip()), json.loads(seeded))
+        self.assertTrue(json.loads(r.stdout.strip())["accepted"])
+
+    def test_without_out_stdout_is_the_computed_record(self) -> None:
+        """The companion: the rule is that stdout follows the LEDGER; with no ledger it is simply
+        this run's record."""
+        _fixture(self.tmp)
+        r = subprocess.run([sys.executable, str(SCRIPT), "--session", DAY,
+                            "--archive-root", str(self.tmp)], capture_output=True, text=True,
+                           check=True)
+        self.assertEqual(json.loads(r.stdout.strip())["session"], DAY)
+        self.assertTrue(json.loads(r.stdout.strip())["accepted"])
+
     # --- refusals ------------------------------------------------------------------------------
     def test_a_bad_session_date_refuses_with_64(self) -> None:
         r = subprocess.run([sys.executable, str(SCRIPT), "--session", "18-09-2026",

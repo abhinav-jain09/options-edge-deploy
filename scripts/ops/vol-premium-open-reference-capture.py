@@ -384,7 +384,10 @@ def main(argv=None) -> int:
         return 64
     record = capture(args.archive_root, args.session, args.close_et)
     line = json.dumps(record, sort_keys=True)
-    print(line)
+    # STDOUT IS WHAT WAS PUBLISHED, not what this run computed. During a repair the two differ -
+    # the claim is published and the recomputation is discarded - and printing the recomputation
+    # would hand a caller a rejected record for a session the ledger holds as accepted.
+    emitted = line
     if args.out:
         # PUBLICATION IS A LINK, NOT A RESERVATION. The previous version created the destination
         # empty with O_EXCL and filled it afterwards, which review was right to reject: a reader
@@ -499,6 +502,9 @@ def main(argv=None) -> int:
                     os.stat(name, dir_fd=probe, follow_symlinks=False)
                     print(f"vol-premium-open-reference-capture: {record['session']} is already "
                           f"published; not republished", file=sys.stderr)
+                    with os.fdopen(os.open(name, os.O_RDONLY | os.O_NOFOLLOW,
+                                           dir_fd=probe)) as already:
+                        print(already.readline().rstrip("\n"))
                     return 0
                 except FileNotFoundError:
                     pass
@@ -507,13 +513,15 @@ def main(argv=None) -> int:
             print(f"vol-premium-open-reference-capture: {record['session']} was claimed but never "
                   f"published; completing it from the claim", file=sys.stderr)
             with os.fdopen(os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=claims_fd)) as handle:
-                claimed = json.loads(handle.readline())
+                emitted = handle.readline().rstrip("\n")
+            claimed = json.loads(emitted)
             target_fd = child_dir(root_fd, "accepted" if claimed.get("accepted") else "rejected")
 
         try:
             os.link(name, name, src_dir_fd=claims_fd, dst_dir_fd=target_fd)
         except FileExistsError:
             pass
+    print(emitted)
     return 0
 
 
