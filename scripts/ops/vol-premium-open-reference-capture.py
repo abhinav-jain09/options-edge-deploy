@@ -61,6 +61,12 @@ PAIR_MAX_AGE_S = 2
 # lunch describes the morning, not the session.
 MIN_COVERED_FRACTION = 0.5
 MIN_SPAN_FRACTION = 0.8
+# A SPAN IS NOT A DISTRIBUTION. First-to-last is satisfied by one late outlier: a session covered
+# 09:35-12:55 with a single pair at 15:58 spans 100% and can still clear the coverage floor while
+# three hours are missing. So the scoreable window is cut into quarters and each must be covered
+# in its own right; a hole the size of an afternoon cannot hide inside an aggregate.
+QUARTERS = 4
+MIN_QUARTER_COVERED_FRACTION = 0.25
 # The offset is scored from five minutes after the open, so the index has resumed and the first
 # prints are not the auction settling.
 SCORE_WARMUP_MINUTES = 5
@@ -235,6 +241,16 @@ def capture(root: str, day: str, close_et_hhmm: str = "16:00") -> dict:
         errors.append(equivalent - price)
 
     covered_fraction = len(covered_minutes) / scoreable_minutes if errors else 0.0
+    # WHOLE MINUTES PER QUARTER. A fractional boundary (385/4 = 96.25) let a quarter report 100.8%
+    # covered, which is not a fraction of anything.
+    bounds = [(scoreable_minutes * q) // QUARTERS for q in range(QUARTERS + 1)]
+    quarter_cover = []
+    for q in range(QUARTERS):
+        lo = score_from + dt.timedelta(minutes=bounds[q])
+        hi = score_from + dt.timedelta(minutes=bounds[q + 1])
+        width = bounds[q + 1] - bounds[q]
+        inside = sum(1 for m in covered_minutes if lo <= m < hi)
+        quarter_cover.append(round(inside / width, 4) if width else 0.0)
     span_fraction = 0.0
     if seen_observations:
         stamps = sorted(stamp for stamp, _ in seen_observations)
@@ -265,6 +281,10 @@ def capture(root: str, day: str, close_et_hhmm: str = "16:00") -> dict:
     elif covered_fraction < MIN_COVERED_FRACTION:
         rejected = (f"the offset covers {len(covered_minutes)} of {scoreable_minutes} scoreable "
                     f"minutes ({covered_fraction:.0%}), under {MIN_COVERED_FRACTION:.0%}")
+    elif min(quarter_cover) < MIN_QUARTER_COVERED_FRACTION:
+        worst = quarter_cover.index(min(quarter_cover)) + 1
+        rejected = (f"quarter {worst} of the session is {min(quarter_cover):.0%} covered, under "
+                    f"{MIN_QUARTER_COVERED_FRACTION:.0%}: the offset has a hole in it")
     elif span_fraction < MIN_SPAN_FRACTION:
         rejected = (f"the offset spans {span_fraction:.0%} of the session, under "
                     f"{MIN_SPAN_FRACTION:.0%}: it describes part of the day, not the session")
@@ -302,6 +322,7 @@ def capture(root: str, day: str, close_et_hhmm: str = "16:00") -> dict:
         "offsetCoveredMinutes": len(covered_minutes),
         "offsetCoveredFraction": round(covered_fraction, 4),
         "offsetSpanFraction": round(span_fraction, 4),
+        "offsetQuarterCoverage": quarter_cover,
         "offsetDuplicateRowsSkipped": duplicate_rows,
         # A session is ACCEPTED only when it can answer the question: the reference must exist in
         # the window, and the offset must be measurable afterwards. A session that fails either is

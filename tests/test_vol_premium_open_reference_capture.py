@@ -287,7 +287,8 @@ class OpenReferenceCaptureTest(unittest.TestCase):
         _fixture(self.tmp, index_rows=rows, es_rows=es_rows)
         got = orc.capture(str(self.tmp), DAY)
         self.assertFalse(got["accepted"])
-        self.assertIn("spans", got["rejectedBecause"])
+        # the quarter rule catches this first, and names the hole rather than the span
+        self.assertIn("hole in it", got["rejectedBecause"])
 
     def test_rows_after_the_close_are_not_scored(self) -> None:
         """A topic that keeps publishing after the bell must not extend the session."""
@@ -488,6 +489,31 @@ class OpenReferenceCaptureTest(unittest.TestCase):
         got = orc.capture(str(self.tmp), DAY)
         self.assertIsNotNone(got["offsetBps"],
                              "accepted with no bps denominator" if got["accepted"] else None)
+
+
+    def test_one_late_outlier_does_not_make_a_session(self) -> None:
+        """Span is first-to-last, so a morning block plus a single pair at 15:58 spans 100% and
+        can clear the coverage floor while three hours are missing. Each quarter must stand on its
+        own."""
+        rows = [_index(-302, 7650.0)] + [
+            _index(300 + 60 * i, 7650.0 + i / 10.0) for i in range(200)]
+        rows.append(_index(383 * 60, 7700.0))
+        es_rows = [_es(-1, 7647.0)] + [
+            _es(300 + 60 * i, 7650.0 + i / 10.0 - 3.0) for i in range(200)]
+        es_rows.append(_es(383 * 60, 7700.0 - 3.0))
+        _fixture(self.tmp, index_rows=rows, es_rows=es_rows)
+        got = orc.capture(str(self.tmp), DAY)
+        self.assertGreaterEqual(got["offsetSpanFraction"], orc.MIN_SPAN_FRACTION,
+                                "the outlier must satisfy the span, or this proves nothing")
+        self.assertFalse(got["accepted"])
+        self.assertIn("hole in it", got["rejectedBecause"])
+
+    def test_a_session_covered_throughout_passes_the_quarter_rule(self) -> None:
+        _fixture(self.tmp)
+        got = orc.capture(str(self.tmp), DAY)
+        self.assertTrue(got["accepted"], got["rejectedBecause"])
+        self.assertTrue(all(q >= orc.MIN_QUARTER_COVERED_FRACTION
+                            for q in got["offsetQuarterCoverage"]), got["offsetQuarterCoverage"])
 
     # --- refusals ------------------------------------------------------------------------------
     def test_a_bad_session_date_refuses_with_64(self) -> None:
