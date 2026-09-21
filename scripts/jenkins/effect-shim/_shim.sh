@@ -73,7 +73,9 @@
 #   `kubectl apply` runs while both inspections print ok. THE SHIM'S OWN INTEGRITY IS A LIMIT. Where the
 #   two inspections differ is WHEN they run, which is about ordering and not about strength: the end one
 #   runs unconditionally, including when the effect itself failed, and when it does refuse the build
-#   fails and names what it found while whatever the unverified step did has already happened.
+#   fails and names what it found while the stage's effects have already happened. It does NOT mean an
+#   effect ran unverified -- one that reached a wrapper was verified at that moment -- only that
+#   coverage cannot be attested for every effect in the stage.
 #   * AN ABSOLUTE PATH performs no PATH lookup, so nothing reaches this script. validate-jenkinsfile-guard
 #     rule 14 refuses a LITERAL `/<tool>` in a guarded definition; an absolute path ASSEMBLED FROM QUOTED
 #     FRAGMENTS (`sh '"/usr/bin/"kubectl version'`) contains no such literal and is outside both. Chasing

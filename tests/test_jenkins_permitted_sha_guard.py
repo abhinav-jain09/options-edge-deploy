@@ -1350,9 +1350,11 @@ class EffectShimTest(unittest.TestCase):
 
         This asserts the ordering, which is all the two ends are: --when start refuses before the
         stage's steps run, so an accident caught there costs nothing; --when end refuses after them and
-        its own output says what that means -- the build fails and names what it found, and whatever the
-        unverified step did has already happened. If it was a `kubectl apply`, the cluster changed.
-        Nothing here is undone by a red build.
+        its own output says what that means -- the build fails and names what it found, and the stage's
+        effects have already happened. It does NOT mean they ran unverified: an effect that reached a
+        wrapper was verified at that moment, and drift found later does not reach back. What the end
+        check cannot do is attest coverage for EVERY effect. If one was a `kubectl apply`, the cluster
+        changed. Nothing here is undone by a red build.
 
         NOT ASSERTED, BECAUSE IT IS NOT TRUE: that either end detects a job that set out to defeat it.
         The checker and the digest live in the workspace the job owns. The coordinated mutations --

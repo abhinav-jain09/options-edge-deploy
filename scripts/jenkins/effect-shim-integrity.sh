@@ -19,8 +19,11 @@
 # WHAT THE TWO INSPECTIONS DO DIFFER IN is WHEN they run, and that is about ordering, not about strength:
 # the one at the START of a guarded stage refuses before the stage's steps run, so an accident caught
 # there costs nothing; the one at the END refuses after them, and says so -- THE BUILD FAILS AND NAMES
-# WHAT IT FOUND, AND WHATEVER THE UNVERIFIED STEP DID HAS ALREADY HAPPENED. If that step was a
-# `kubectl apply`, something in the cluster changed. Neither ordering makes the effect safe.
+# WHAT IT FOUND, AND THE STAGE'S EFFECTS HAVE ALREADY HAPPENED. What it does NOT say is that those
+# effects were unverified: an effect that passed through a wrapper was verified AT THE MOMENT IT RAN,
+# and drift found afterwards does not reach back. What the end check cannot do is attest that EVERY
+# effect in the stage was covered. If one was a `kubectl apply`, something in the cluster changed
+# either way. Neither ordering makes an effect safe, and neither un-verifies one.
 #
 # What it checks: every expected wrapper name is present and is the symlink it should be, _shim.sh
 # matches the digest recorded in this file's sibling manifest, and the directory holds nothing else.
@@ -49,8 +52,10 @@ refuse() {
   echo "effect-shim-integrity($when): REFUSED — $*" >&2
   if [ "$when" = end ]; then
     echo "effect-shim-integrity(end): the stage's effects ALREADY RAN. This build is failing to tell you" >&2
-    echo "effect-shim-integrity(end): they were not covered — not to undo them. If one was a deployment," >&2
-    echo "effect-shim-integrity(end): the cluster changed. Check what this build applied before re-running." >&2
+    echo "effect-shim-integrity(end): it cannot attest COVERAGE FOR ALL of them — not that any one was" >&2
+    echo "effect-shim-integrity(end): unverified, and not to undo them. An effect that went through a" >&2
+    echo "effect-shim-integrity(end): wrapper was verified when it ran. If one was a deployment, the" >&2
+    echo "effect-shim-integrity(end): cluster changed. Check what this build applied before re-running." >&2
   fi
   echo "effect-shim-integrity($when): verdict=REFUSED" >&2
   exit 3

@@ -336,6 +336,26 @@ $OUT
 $END_OUT"
 fi
 
+# --- 11e. THE END REFUSAL'S WORDING IS PART OF THE CONTRACT --------------------------------------
+# Twice now the temporal overclaim came back through TEXT rather than through logic: first in the
+# Jenkinsfile, then in this shared payload after the Jenkinsfile was fixed. Behaviour was correct
+# both times; the sentence was wrong. So the sentence is asserted. The end refusal must NOT say an
+# effect was unverified, and must say what it can actually establish.
+: > "$CO_SHIM/npm"; chmod +x "$CO_SHIM/npm"
+set +e
+WORD_OUT="$(bash "$HERE/effect-shim-integrity.sh" --dir "$W" --when end 2>&1)"; WORD_RC=$?
+set -e
+rm -f "$CO_SHIM/npm" 2>/dev/null || true
+if [ "$WORD_RC" -ne 0 ] \
+   && printf '%s' "$WORD_OUT" | grep -q "cannot attest COVERAGE FOR ALL" \
+   && ! printf '%s' "$WORD_OUT" | grep -qE "they were not covered|the (effects|steps) above ran UNVERIFIED|unverified step"; then
+  ok "the end refusal claims only what it can establish, and never that a verified effect was unverified"
+else
+  bad "the end refusal claims only what it can establish, and never that a verified effect was unverified" \
+      "rc=$WORD_RC
+$WORD_OUT"
+fi
+
 # --- 12-14. THE DOCUMENTED LIMITS, PINNED ------------------------------------------------------------
 # These three cases assert what the shim does NOT do. They exist because a limit that is only described
 # is a sentence someone deletes; a limit with a test is a limit. If one of them ever goes red, the shim
