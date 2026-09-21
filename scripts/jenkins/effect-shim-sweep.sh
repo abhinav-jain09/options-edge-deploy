@@ -259,7 +259,21 @@ if [ -n "$mismatch" ]; then
   never=$((never+1))
 fi
 
-printf 'effect-shim-sweep: %d protections in the implementation, %d with an isolating case, %d without; %d unclassified; %d shipped cases never red\n' \
+# WHAT THIS COUNT IS NOT. The inventory is the set of protections the SITE patterns above can NAME:
+# refusals, the dispatch, the signal traps, the refusal status, globbing and hidden entries, and the
+# PATH element rewrite. It is not every line that matters. Two decisions are deliberately OUTSIDE it:
+#
+#   * the CANONICAL stripping that removes this directory before the real binary is resolved, and
+#   * the empty-element handling in that same pass (an empty element is the current directory).
+#
+# Neutralising either produces an exec loop -- the lookup finds this script again and execs it -- or
+# silently resolves a DIFFERENT binary, and a harness cannot tell a hung mutant from a protected one.
+# They are covered BEHAVIOURALLY instead, by cases 11b, 11g and 11h in effect-shim-test.sh, which
+# assert what a descendant and a real-binary lookup resolve to under a relative entry, an empty
+# entry, and an empty entry that must survive. This script says so rather than counting them, because
+# a coverage number that quietly excludes two decisions is the defect this script exists to find.
+printf 'effect-shim-sweep: NOT INVENTORIED (covered behaviourally by cases 11b, 11g, 11h): the canonical PATH stripping and its empty-element handling\n'
+printf 'effect-shim-sweep: %d inventoried protections, %d with an isolating case, %d without; %d unclassified; %d shipped cases never red\n' \
   "$total" "$((total-uncovered))" "$uncovered" "$unclassified" "$never"
 [ "$uncovered" -eq 0 ] && [ "$never" -eq 0 ] && [ "$unclassified" -eq 0 ] \
-  && echo "effect-shim-sweep: ALL PROTECTIONS COVERED" || exit 1
+  && echo "effect-shim-sweep: ALL INVENTORIED PROTECTIONS COVERED" || exit 1
