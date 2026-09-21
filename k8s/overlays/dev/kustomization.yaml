@@ -97,18 +97,17 @@ patches:
         value:
           name: REVERSAL_HUNT_SWING_ENABLED
           value: "true"
-  # oi-shadow: ENABLED on DEV, with the SEEDED arm on. The service reads the anchor manifest and
-  # the raw chain and writes one record per strike to options.databento.oi.nowcast.by-strike; that
-  # topic is now CONSUMED BY GEX (DATABENTO_GEX_DYNAMIC_OI_ENABLED), so what this service
-  # publishes reaches the live gamma surface. It was consumer-free when this was first enabled;
-  # that is no longer true and nothing here should be read as if it were.
+  # oi-shadow: ENABLED on DEV (2026-09-21), with the SEEDED arm on. It reads the anchor manifest
+  # and the raw chain and writes one record per strike to options.databento.oi.nowcast.by-strike.
   #
-  # The seed is switched on rather than left at its default-off, because the point is to see the
-  # estimator produce numbers against a live chain. Production runs the seeded arm too, enabled the
-  # same day -- the environments are NOT split between arms, so dev is not a control for prod.
-  # Seed evidence: fitted over 277 sessions on this service's own
-  # cell definitions and measured on 25 sessions that post-date that panel — chain-wide error
-  # 0.242 -> 0.175, better on 24 of 25. It does NOT improve which strike leads (92.0% -> 88.0%).
+  # ⚠️ THAT TOPIC IS CONSUMER-FREE AGAIN, and its input is producer-free. This block used to say
+  # "CONSUMED BY GEX (DATABENTO_GEX_DYNAMIC_OI_ENABLED), so what this service publishes reaches the
+  # live gamma surface". That was true from 2026-08-04 until d845a415 (2026-09-02) deleted
+  # OiEstimateOverlay together with the whole anchor-manifest subsystem; on processing main the only
+  # surviving mentions of that env var are Avro doc strings for oiQuality=ESTIMATED and a comment in
+  # strike-intelligence's FreshnessGate. GEX prices from Postgres-captured OI now. So enabling this
+  # service does NOT reach the board and does NOT publish: read the note on the removed replicas
+  # patch below before treating a running pod as a working nowcast.
   # MUST MIRROR the standalone slice k8s/services/oi-shadow/overlays/dev (validate-services).
   - target:
       kind: Deployment
@@ -125,25 +124,31 @@ patches:
             containers:
               - name: oi-shadow
                 env:
-                  # RETIRED 2026-08-10. Not broken -- measured, and the measurement did not justify
-                  # the surface. What it can validate is END-OF-DAY 1DTE OI against the next
-                  # morning's print: 29% error against frozen OI's 47%, over 178 walk-forward
-                  # sessions. What it cannot validate is anything the desk actually trades on:
-                  # the intraday path is an assumption (OI accrues with volume) and there is no
-                  # intraday OI anywhere to check it against -- OPRA publishes once, 06:30 ET, one
-                  # print per contract, verified. And 0DTE has no next-day print at all, so on the
-                  # expiring chain the model can never be scored.
+                  # ON since 2026-09-21 (USER: "bring up on dev ... and deploy again"), which
+                  # lifts the 2026-08-10 retirement ON DEV ONLY. The retirement's finding is
+                  # unchanged and still the reason production stays off: what this model can be
+                  # scored on is END-OF-DAY 1DTE OI against the next morning's print (29% error
+                  # against frozen OI's 47%, 178 walk-forward sessions), and the desk trades 0DTE,
+                  # where there is no next-day settled print to score against at all. Its intraday
+                  # path stays an assumption -- OPRA publishes open interest ONCE, 06:30 ET, one
+                  # print per contract -- so nothing here has become measurable.
+                  # See docs/oi-nowcast-retirement.md.
                   #
-                  # Archived rather than deleted: the anchor is exact (2534/2534) and the harness,
-                  # coefficients and evidence are all in git. See docs/oi-nowcast-retirement.md.
+                  # ⚠️ ENABLED does NOT mean producing. OiShadowTopology publishes nothing for a
+                  # session without a COMPLETE anchor manifest, by design (without one, "the
+                  # exchange published zero" and "we never saw this leg" are indistinguishable),
+                  # and since d845a415 nothing produces that manifest. See the note on the removed
+                  # replicas patch below.
                   - name: OI_SHADOW_ENABLED
-                    value: "false"
-                  # Re-enabled 2026-08-10 after the quarantine's cause was removed: the cells the
-                  # service assigns now ARE the cells the panel fitted (signed band, DTE {0,1}/{2,3}
-                  # /{4-7}), and the nine coefficients were refitted on them over the full
-                  # 251-session panel -- 190+ independent sessions per cell.
+                    value: "true"
+                  # The SEEDED arm, restoring dev's pre-retirement state (on 2026-08-04 alongside
+                  # the anchor arm). The cells the service assigns ARE the cells the panel fitted
+                  # (signed band, DTE {0,1}/{2,3}/{4-7}) and the nine coefficients were refitted on
+                  # them over the full 251-session panel -- 190+ independent sessions per cell.
+                  # Seed evidence: chain-wide error 0.242 -> 0.175, better on 24 of 25 post-panel
+                  # sessions; it does NOT improve which strike leads (92.0% -> 88.0%).
                   - name: OI_SHADOW_SEED_COEFFICIENTS_ENABLED
-                    value: "false"
+                    value: "true"
   # greek-move-authenticity: ENABLED on DEV (the SPX proving ground — advisory-only, in-session
   # baseline bootstrap). Strategic-merge on env name (namespace required for the dev overlay).
   # MUST MIRROR the standalone slice k8s/services/greek-move-authenticity/overlays/dev (validate-services).
@@ -351,23 +356,26 @@ patches:
   # whose node is labelled node-role.kubernetes.io/control-plane="" (empty, not
   # "true"), so that selector leaves the web pod unschedulable (Pending). Remove
   # the selector for dev — there is only one node to schedule on anyway.
-  # oi-shadow-service is HELD DOWN in every environment (USER 2026-08-10: "bring down this service
-  # ... until further notice"). Retired rather than deleted: it validates only END-OF-DAY 1DTE OI
-  # (29% error against frozen OI's 47%) while the desk trades 0DTE, where no next-day settled print
-  # exists to score against, and its intraday path is an assumption that OPRA's once-daily 06:30 OI
-  # publication can never confirm. See docs/oi-nowcast-retirement.md.
+  # oi-shadow-service: the 2026-08-10 hold is LIFTED ON DEV ONLY (USER 2026-09-21: "bring up on
+  # dev, build the latest image and deploy again"). No replicas patch here any more, so the base
+  # replicas:1 applies and dev runs it. PRODUCTION STAYS DOWN by its own replicas:0 patch in
+  # k8s/overlays/production/kustomization.yaml, and oi-shadow-service stays in the KEEP_DOWN lists
+  # of scripts/ops/morning-autostart.sh (EXPECTED_ENV=prod) and scripts/ops/oe-boot-bringup.sh
+  # (post-reboot prod bring-up) — both prod-only, so neither is touched by this dev change.
+  # dev-cleanup.sh DISABLED_DEV does not list it, so dev's own start path may scale it too.
   #
-  # replicas:0 here so EVERY render brings it down; the name is also in morning-autostart.sh
-  # KEEP_DOWN so an environment bring-up does not scale it back. Re-enable = remove this patch AND
-  # that entry, and flip OI_SHADOW_ENABLED / OI_SHADOW_SEED_COEFFICIENTS_ENABLED /
-  # DATABENTO_GEX_DYNAMIC_OI_ENABLED back to "true".
-  - target:
-      kind: Deployment
-      name: oi-shadow-service
-    patch: |-
-      - op: replace
-        path: /spec/replicas
-        value: 0
+  # ⚠️ IT WILL RUN AND PUBLISH NOTHING, and that is not a misconfiguration of this overlay.
+  # d845a415 (2026-09-02, "gex OI: PG-only (live-captured), delete all Databento historical fetch +
+  # anchor-manifest") removed BOTH ends of its chain from options-edge-processing main: nothing
+  # produces its input options.databento.oi.anchor-manifest (the OiAnchorManifest* subsystem is
+  # gone; OI is now captured straight to Postgres options_flow.databento_option_raw_snapshot), and
+  # nothing consumes options.databento.oi.nowcast.by-strike (OiEstimateOverlay is gone — on main
+  # the only surviving mentions of DATABENTO_GEX_DYNAMIC_OI_ENABLED are Avro doc strings for
+  # oiQuality=ESTIMATED and one comment in strike-intelligence's FreshnessGate, not code). So the
+  # pod comes up READY on an empty input topic. Making it produce again is a CODE change (an
+  # anchor-manifest producer fed from Postgres, plus a GEX consumer), not an overlay change.
+  # DATABENTO_GEX_DYNAMIC_OI_ENABLED is deliberately left "false": flipping a flag no code reads
+  # would only misdescribe what dev is doing. See docs/oi-nowcast-retirement.md.
   - target:
       kind: Deployment
       name: options-edge-web
