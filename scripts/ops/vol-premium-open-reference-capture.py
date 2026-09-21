@@ -246,8 +246,12 @@ def capture(root: str, day: str, close_et_hhmm: str = "16:00") -> dict:
         residual_p50 = residuals[len(residuals) // 2]
         residual_p95 = residuals[max(0, int(0.95 * len(residuals)) - 1)]
 
+    # THE LEVEL IS THE BPS DENOMINATOR, so it must be a usable price and not merely a number: a
+    # first post-open print of 0 or a negative corrupt value produced offsetBps = null (or
+    # nonsense) on a session that was otherwise accepted, leaving the >=55 ledger holding a
+    # session whose offset cannot be read in the units the decision is taken in.
     level = next((_number(r.get("price")) for _, r in after
-                  if r.get("quality") == "LIVE" and _number(r.get("price")) is not None), None)
+                  if r.get("quality") == "LIVE" and (_number(r.get("price")) or 0) > 0), None)
 
     if not es_window:
         rejected = "no ES reference in the window"
@@ -256,6 +260,8 @@ def capture(root: str, day: str, close_et_hhmm: str = "16:00") -> dict:
                     f"{PAIR_MAX_AGE_S * 1000} ms limit")
     elif offset is None:
         rejected = "offset not measurable"
+    elif level is None:
+        rejected = ("no usable post-open index level, so the offset cannot be expressed in bps")
     elif covered_fraction < MIN_COVERED_FRACTION:
         rejected = (f"the offset covers {len(covered_minutes)} of {scoreable_minutes} scoreable "
                     f"minutes ({covered_fraction:.0%}), under {MIN_COVERED_FRACTION:.0%}")

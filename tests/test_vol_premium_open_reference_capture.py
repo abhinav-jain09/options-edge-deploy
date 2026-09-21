@@ -469,6 +469,25 @@ class OpenReferenceCaptureTest(unittest.TestCase):
         got = orc.capture(str(self.tmp), DAY)
         self.assertTrue(got["accepted"], got["rejectedBecause"])
         self.assertAlmostEqual(got["offsetPoints"], -3.0, places=3)
+        # THE COUNT IS WHAT PROVES EXCLUSION. Without it, deleting the quality bar makes the stale
+        # row a 386th pair while the median stays -3.0 and the session stays accepted, so every
+        # other assertion here still passes - the case was named for exclusion and satisfied by a
+        # robust statistic.
+        self.assertEqual(got["offsetPairs"], MINUTES, "the stale row was scored")
+
+
+    def test_a_zero_post_open_level_is_not_a_bps_denominator(self) -> None:
+        """A first LIVE post-open print of 0 produced offsetBps = null on an otherwise accepted
+        session, leaving the ledger holding a session whose offset cannot be read in the units the
+        decision is taken in."""
+        rows = [_index(-302, 7650.0), _index(300, 0.0)] + [
+            _index(360 + 60 * i, 7650.0 + i / 10.0) for i in range(MINUTES - 1)]
+        es_rows = [_es(-1, 7647.0)] + [
+            _es(360 + 60 * i, 7650.0 + i / 10.0 - 3.0) for i in range(MINUTES - 1)]
+        _fixture(self.tmp, index_rows=rows, es_rows=es_rows)
+        got = orc.capture(str(self.tmp), DAY)
+        self.assertIsNotNone(got["offsetBps"],
+                             "accepted with no bps denominator" if got["accepted"] else None)
 
     # --- refusals ------------------------------------------------------------------------------
     def test_a_bad_session_date_refuses_with_64(self) -> None:
