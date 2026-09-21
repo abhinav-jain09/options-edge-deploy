@@ -2,6 +2,11 @@
 # ensure-oi-anchor-topic.sh — the anchor manifest topic must EXIST, with the right shape, before
 # databento-gex-service is allowed to produce to it.
 #
+# ⚠️ AS OF d845a415 (options-edge-processing, 2026-09-02), databento-gex-service PRODUCES NOTHING to this
+# topic: that commit deleted the OiAnchorManifest* capture. This check therefore guards a shape no
+# running code writes. Kept because the topic still holds the pre-2026-09-02 series and a revival
+# would need exactly this shape; the rationale below is unchanged for that case.
+#
 # Why this is a deploy barrier and not a note in a runbook. The topic is created by apply-topics,
 # which lives in a DIFFERENT Jenkins job from the standalone service-deploy path. Two manually
 # sequenced jobs are not an ordering guarantee: skip one, run it against the wrong environment, or

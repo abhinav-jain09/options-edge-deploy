@@ -173,9 +173,14 @@ services:
   # options-edge-databento-feed repo (Dockerfile.stockgex), like databento-sr3-feed — hence buildJob.
   # DEV-FIRST/on-demand: prod overlay holds it at replicas:0 until the nightly OI-index builder exists.
   - { name: stock-gex,                    managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-stock-gex,                    deployments: [stock-gex-service], buildJob: options-edge-stock-gex-deploy }
-  # SPXW session-close open-interest shadow experiment. Ships DISABLED (OI_SHADOW_ENABLED=false):
-  # the requirement's observation calendar starts at a NAMED session, so being deployed must not
-  # be the same thing as having started. No consumers by design.
+  # SPXW session-close open-interest nowcast. ENABLED ON DEV since 2026-09-21 (replicas:1, both
+  # arms on). PRODUCTION is held at replicas:0 with OI_SHADOW_ENABLED=false under the 2026-08-10
+  # retirement; EXPERIMENT renders replicas:1 but OI_SHADOW_ENABLED=false, so it schedules an
+  # idling pod rather than none. Deployed and enabled still does not mean producing: its input topic
+  # options.databento.oi.anchor-manifest has had no producer since d845a415 (processing, 2026-09-02)
+  # and OiShadowTopology publishes nothing for a session without a COMPLETE manifest. Its output
+  # topic has no consumer either. See docs/oi-nowcast-retirement.md and the notes in
+  # k8s/overlays/dev/kustomization.yaml.
   - { name: oi-shadow,                    managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-oi-shadow,                    deployments: [oi-shadow-service] }
   - { name: vix-option-inteligence,        managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-vix-option-inteligence,        deployments: [vix-option-inteligence-service] }
   - { name: greek-move-authenticity,       managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-greek-move-authenticity,       deployments: [greek-move-authenticity-service] }

@@ -447,6 +447,15 @@ PYEOF
       }
     }
     stage('Verify OI anchor manifest topic') {
+      // ⚠️ THE PRODUCER THIS GUARDS NO LONGER EXISTS. d845a415 (options-edge-processing, 2026-09-02) deleted
+      // the OiAnchorManifest* capture from databento-gex, so today this stage gates a gex deploy on
+      // the shape of a topic nothing can write to. It is LEFT IN PLACE deliberately: the topic still
+      // holds the pre-2026-09-02 series, its shape is still what a revival would need, and removing
+      // a fail-closed barrier is a decision of its own rather than a side effect of a dev bring-up
+      // (see the 2026-09-21 oi-shadow dev bring-up). If the barrier ever BLOCKS a gex deploy, that
+      // is now a topic-shape problem to fix, not evidence the capture is broken.
+      //
+      // The original reasoning, still the reason the shape matters:
       // BEFORE the rollout, not after: the point is to stop a producer reaching a topic that does
       // not exist yet. apply-topics lives in a different job, and two manually sequenced jobs are
       // not an ordering guarantee -- skip it, run it against the wrong environment, or have it

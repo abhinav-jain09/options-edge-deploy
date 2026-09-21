@@ -166,18 +166,27 @@ ES_ENV = {
         # restart-durable using the same DB path SPX uses, without the GLBX symbology adapter.
         {"name": "DATABENTO_GEX_OI_BASELINE_BACKFILL_ENABLED", "value": "true"},
         {"name": "DATABENTO_GEX_OI_PERSIST_LIVE_ENABLED", "value": "true"},
-        # The OI nowcast has no place on es4, and this pin is what keeps it out. The prod chain is
-        # anchor-manifest -> oi-shadow-service -> GEX (this flag): with it ON, gex consumes
-        # oi-shadow's options.databento.oi.nowcast.by-strike. es4 has NO oi-shadow-service (it is
-        # absent from SERVICES) and no es.options.databento.oi.nowcast.* topic, so ON here is the
+        # The OI nowcast has no place on es4, and this pin is what keeps it out. KEEP THE PIN; the
+        # chain it guards against is currently absent, not merely off.
+        #
+        # The chain USED to be anchor-manifest -> oi-shadow-service -> GEX (this flag): with it ON,
+        # gex consumed oi-shadow's options.databento.oi.nowcast.by-strike. d845a415 (processing,
+        # 2026-09-02) deleted OiEstimateOverlay and the anchor subsystem, so today NO CODE READS
+        # THIS FLAG and there is no consumer to arm — the pin is defence against the code coming
+        # back, not against present behaviour. It stays because the reasons it was wrong for es4 are
+        # permanent: es4 has NO oi-shadow-service (absent from SERVICES) and no
+        # es.options.databento.oi.nowcast.* topic, so a revived consumer here would be the
         # DATABENTO_GEX_DYNAMIC_CARRY_ENABLED failure shape again — a GlobalKTable over a
-        # producer-less topic. It is also wrong on the merits twice over: ES OI rides LIVE in the
+        # producer-less topic — and it is wrong on the merits twice over: ES OI rides LIVE in the
         # feed (GLBX statistics stat_type=9) rather than arriving as one 06:30 OPRA print to
-        # extrapolate from, and the nowcast's coefficients are SPX-fitted. Retired on dev+prod
-        # 2026-08-10 (#783, docs/oi-nowcast-retirement.md) — but prod's kustomization documents the
-        # revival path as "flip DATABENTO_GEX_DYNAMIC_OI_ENABLED back to true", so WITHOUT this pin
-        # that revival silently re-arms a producer-less consumer on the live es4 box at the next
-        # unrelated re-render. es4 was carrying 'true' from exactly that inheritance until 2026-08-13.
+        # extrapolate from, and the nowcast's coefficients are SPX-fitted.
+        #
+        # Retired on dev+prod 2026-08-10 (#783, docs/oi-nowcast-retirement.md); DEV was brought back
+        # up 2026-09-21 at replicas:1, prod stays down. Prod's kustomization USED to document the
+        # revival path as "flip DATABENTO_GEX_DYNAMIC_OI_ENABLED back to true" — the inheritance
+        # that left es4 carrying 'true' until 2026-08-13. That prescription has now been removed
+        # there (flipping a flag no code reads restores nothing), but this pin is what makes es4
+        # independent of whatever prod documents next.
         {"name": "DATABENTO_GEX_DYNAMIC_OI_ENABLED", "value": "false", "_override": True},
         # DATABENTO_GEX_FLOW_TOP_N: es4 now INHERITS the production slice's value (40 as of
         # 2026-08-03). The former es4 pin of 3 (proc #466/#467 rollout) starved strike-intelligence

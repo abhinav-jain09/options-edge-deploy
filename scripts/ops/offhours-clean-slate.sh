@@ -190,7 +190,10 @@ SYSTEM_TOPICS="__consumer_offsets __transaction_state _schemas"
 # What is in there and why it cannot be rebuilt:
 #   spx.basis.state                      the ES->SPX basis engine's STATE_CURRENT restart authority
 #   options.spx.gamma-migration.scoring  the falsification record, accumulated across sessions
-#   options.databento.oi.anchor-manifest the settled OI print; re-fetching returns a LATER one
+#   options.databento.oi.anchor-manifest the settled OI print. Now UNREBUILDABLE outright, not just
+#                                        inconvenient: d845a415 (options-edge-processing, 2026-09-02)
+#                                        deleted the fetcher, so what the topic holds is the
+#                                        pre-2026-09-02 series and nothing can re-derive it
 #   underlying.vix.price                 (production only)
 #
 # The helper fails closed on an unreadable or partial declaration, and this runs before any

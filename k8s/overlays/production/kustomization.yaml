@@ -379,10 +379,16 @@ patches:
                   # prod enable. Watch options_edge_databento_gex_smile_fallback_total.
                   - name: GEX_SMILE_IV_FALLBACK
                     value: "true"
-                  # DYNAMIC OPEN INTEREST. GEX stops pricing with the print the exchange published
-                  # this morning and prices with oi-shadow's estimate of where open interest lands at
-                  # the close, wherever that estimate is fresh. gex is LINEAR in open interest, so
-                  # this changes every number on the board.
+                  # ⚠️ HISTORY — NO CODE READS THIS FLAG since d845a415 (options-edge-processing, 2026-09-02),
+                  # which deleted OiEstimateOverlay. What follows describes behaviour that existed
+                  # from 2026-08-04 until then; production prices from Postgres-captured OI now and
+                  # prod oi-shadow is replicas:0 / disabled anyway. Setting this "true" would
+                  # change nothing.
+                  #
+                  # DYNAMIC OPEN INTEREST. GEX stopped pricing with the print the exchange published
+                  # this morning and priced with oi-shadow's estimate of where open interest lands at
+                  # the close, wherever that estimate was fresh. gex is LINEAR in open interest, so
+                  # this changed every number on the board.
                   #
                   # Measured on 25 sessions that post-date the panel the model was chosen on:
                   # chain-wide error 0.242 -> 0.175, better on 24 of 25, DTE 0-1 improving 35%.
@@ -411,15 +417,26 @@ patches:
                   # counters say WHY when it does not.
                   - name: DATABENTO_GEX_DYNAMIC_OI_ENABLED
                     value: "false"
-                  # PROD capture of the daily settled open-interest print (2026-08-03). Writes ONE
+                  # ⚠️ HISTORY — DEAD CONFIG since d845a415 (options-edge-processing, 2026-09-02), which deleted
+                  # this capture. Nothing is written by it any more, however this is set.
+                  #
+                  # PROD capture of the daily settled open-interest print (2026-08-03). Wrote ONE
                   # immutable manifest per session to options.databento.oi.anchor-manifest and to
                   # calibration.oi_anchor_manifest.
                   #
-                  # It is no longer read by nothing. oi-shadow-service runs on production at one
-                  # replica and consumes this manifest, and with DATABENTO_GEX_DYNAMIC_OI_ENABLED
-                  # above, GEX consumes what oi-shadow publishes. The chain is
-                  # anchor -> oi-shadow -> GEX, so this capture is now on the path to the live board
-                  # rather than beside it.
+                  # ⚠️ THIS FLAG IS DEAD CONFIG, and the chain it describes no longer exists.
+                  # This block used to say "oi-shadow-service runs on production at one replica and
+                  # consumes this manifest, and with DATABENTO_GEX_DYNAMIC_OI_ENABLED above, GEX
+                  # consumes what oi-shadow publishes ... anchor -> oi-shadow -> GEX". Every link
+                  # in that sentence is now false: d845a415 (processing, 2026-09-02) deleted the
+                  # OiAnchorManifest* capture this flag switched on AND OiEstimateOverlay, so
+                  # nothing writes options.databento.oi.anchor-manifest and nothing reads the
+                  # nowcast; prod oi-shadow has been replicas:0 / disabled since the 2026-08-10
+                  # hold; and DATABENTO_GEX_DYNAMIC_OI_ENABLED above is "false" and unread by any
+                  # code. Production OI is captured straight to Postgres
+                  # options_flow.databento_option_raw_snapshot. Left set to "true" only because
+                  # removing an env var from a running deployment is its own change; it does
+                  # nothing. Do not read it as evidence the capture runs.
                   #
                   # The PUBLISHING work is still isolated: its own daemon thread behind a bounded
                   # queue, and a full queue drops rather than blocks the caller.
@@ -476,12 +493,15 @@ patches:
                   # accounting and is NOT the ordinary rollback target.
                   - name: GEX_TICK_SPREAD_FLOOR_MODE
                     value: live
-  # oi-shadow: ENABLED on PRODUCTION with the SEEDED arm, 2026-08-04. It reads the anchor manifest
-  # and the raw chain and writes one record per strike to options.databento.oi.nowcast.by-strike.
-  # That topic is now CONSUMED BY GEX (DATABENTO_GEX_DYNAMIC_OI_ENABLED above), so what this
-  # service publishes reaches the live gamma surface. It was consumer-free when this was first
-  # enabled; it is not any more, and the isolation argument that justified enabling it no longer
-  # applies -- the justification now rests on the measured accuracy in processing#555.
+  # oi-shadow on PRODUCTION: HISTORY, NOT CURRENT STATE. It was enabled with the SEEDED arm on
+  # 2026-08-04 and held down on 2026-08-10; production renders replicas:0 with both flags "false"
+  # (see the hold patch further down) and the dev-only 2026-09-21 bring-up did not change that.
+  # This block used to assert that its output "is now CONSUMED BY GEX
+  # (DATABENTO_GEX_DYNAMIC_OI_ENABLED above), so what this service publishes reaches the live gamma
+  # surface". That held from 2026-08-04 until d845a415 (processing, 2026-09-02) deleted
+  # OiEstimateOverlay and the whole anchor subsystem. The topic is consumer-free again, its input is
+  # producer-free, and no code reads that flag -- so the isolation argument is back and the
+  # measured-accuracy justification in processing#555 is moot for prod while it is down.
   #
   # It also adds a
   # continuous consumer of the 32-partition raw topic on the single production broker. Headroom
@@ -667,16 +687,29 @@ patches:
   # spx-mission-control is kept OFF (replicas:0) in prod (USER 2026-07-09). MUST MIRROR the standalone
   # slice k8s/services/spx-mission-control/overlays/production (validate-services: mono==slice). Re-enable
   # by removing this patch AND setting the slice back to replicas:1.
-  # oi-shadow-service is HELD DOWN in every environment (USER 2026-08-10: "bring down this service
-  # ... until further notice"). Retired rather than deleted: it validates only END-OF-DAY 1DTE OI
-  # (29% error against frozen OI's 47%) while the desk trades 0DTE, where no next-day settled print
-  # exists to score against, and its intraday path is an assumption that OPRA's once-daily 06:30 OI
-  # publication can never confirm. See docs/oi-nowcast-retirement.md.
+  # oi-shadow-service is HELD DOWN ON PRODUCTION (USER 2026-08-10: "bring down this service ...
+  # until further notice"). This used to say "in every environment"; the hold was LIFTED ON DEV
+  # 2026-09-21 (USER: "bring up on dev"), so dev renders replicas:1 with both arms on. Production's
+  # reason is unchanged: it validates only END-OF-DAY 1DTE OI (29% error against frozen OI's 47%)
+  # while the desk trades 0DTE, where no next-day settled print exists to score against, and its
+  # intraday path is an assumption that OPRA's once-daily 06:30 OI publication can never confirm.
+  # See docs/oi-nowcast-retirement.md.
   #
-  # replicas:0 here so EVERY render brings it down; the name is also in morning-autostart.sh
-  # KEEP_DOWN so an environment bring-up does not scale it back. Re-enable = remove this patch AND
-  # that entry, and flip OI_SHADOW_ENABLED / OI_SHADOW_SEED_COEFFICIENTS_ENABLED /
-  # DATABENTO_GEX_DYNAMIC_OI_ENABLED back to "true".
+  # replicas:0 here so EVERY PRODUCTION render brings it down; the name is also in
+  # morning-autostart.sh and oe-boot-bringup.sh KEEP_DOWN (both prod-only) so a prod bring-up does
+  # not scale it back. Re-enabling PRODUCTION = remove this patch AND those entries, flip
+  # OI_SHADOW_ENABLED / OI_SHADOW_SEED_COEFFICIENTS_ENABLED to "true", THEN run
+  # scripts/deploy/generate-service-slices.sh and commit the regenerated
+  # k8s/services/oi-shadow/overlays/production/manifest.yaml. That last step is not optional:
+  # Jenkinsfile.service-deploy applies the SLICE, not this monolith, so editing only this file
+  # leaves the deployed manifest at replicas:0 with both flags false while the overlay claims
+  # otherwise -- and validate-services fails on the drift meanwhile.
+  #
+  # ⚠️ DO NOT flip DATABENTO_GEX_DYNAMIC_OI_ENABLED as part of that, as this comment used to
+  # prescribe: since d845a415 (processing, 2026-09-02) NO CODE READS IT. OiEstimateOverlay was
+  # deleted with the rest of the anchor subsystem, so the flag cannot restore the
+  # anchor -> oi-shadow -> GEX chain; only re-adding that code can. Setting it would just
+  # misdescribe the deployment.
   - target:
       kind: Deployment
       name: oi-shadow-service

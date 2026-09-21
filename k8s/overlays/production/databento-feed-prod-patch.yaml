@@ -41,7 +41,12 @@ spec:
             # EXTRA_INSTRUMENTS='[{"symbol":"VIX","trading_class":"VIX","min_strike":12,"max_strike":45,"strike_step":0.5,"expiry_mode":"AUTO_VIX_MONTHLY"}]'
             # and DATABENTO_VIX_PRICE_ENABLED="true", then redeploy databento-feed.
             - name: DATABENTO_EXTRA_INSTRUMENTS
-              # The 1DTE track. Empty here meant prod resolved only the 0DTE slice (396 contracts
+              # The 1DTE track. The evidence below is HISTORICAL (2026-08-10, while the OI nowcast
+              # was live on prod); the nowcast has been retired on production since then and its
+              # chain was deleted by d845a415 (options-edge-processing, 2026-09-02). The 1DTE track itself is
+              # still wanted for its own sake -- the reasoning is kept because it is what measured
+              # the difference the extra instruments make.
+              # Empty here meant prod resolved only the 0DTE slice (396 contracts
               # against dev's 792), and the OI nowcast buckets by DTE_1/DTE_2/DTE_3_7 -- 0DTE maps
               # to no bucket at all. Measured on prod 2026-08-10: 388,633 snapshots seen, 388,633
               # skipped for no band, ZERO nowcast records, while dev with the same manifest

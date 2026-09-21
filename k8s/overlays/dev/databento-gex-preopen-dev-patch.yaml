@@ -116,9 +116,14 @@ spec:
             # (the rollout was dev-first and prod has carried the same 40 since 2026-08-03 -- it is
             # NOT ungated). Watch gex CPU + the 0DTE repartition lag after this.
             - { name: DATABENTO_GEX_FLOW_TOP_N, value: "40" }
+            # ⚠️ HISTORY — DEAD CONFIG since d845a415 (options-edge-processing, 2026-09-02), which deleted the
+            # capture code below. Nothing in this block happens any more: no manifest is published on
+            # dev however this is set, and none of the counters named further down can move. It is kept
+            # as the record of what was built and watched, not as behaviour.
+            #
             # DEV-FIRST: turn the OI anchor manifest on where it can be watched (OI-SHADOW-EXECUTION-PLAN
-            # step 2). It reconciles the morning settled open-interest response against an independent
-            # instrument-definition universe and publishes ONE immutable manifest per session.
+            # step 2). It reconciled the morning settled open-interest response against an independent
+            # instrument-definition universe and published ONE immutable manifest per session.
             #
             # Publication is NOT on the first sound response: the manifest is immutable and once-only, so
             # the first one accepted holds the session's only slot all day, and early fetches are routinely
@@ -133,13 +138,26 @@ spec:
             # ..._incomplete_attempts_total counts unsound responses, which are never published at all.
             #
             # Fail-soft: the work runs on its own daemon thread behind a bounded queue, so it cannot make
-            # the live gamma surface wait on it. oi-shadow-service now consumes this manifest, and
-            # GEX consumes what oi-shadow publishes, so the chain is anchor -> oi-shadow -> GEX.
+            # the live gamma surface wait on it.
+            #
+            # ⚠️ DEAD CONFIG since d845a415 (processing, 2026-09-02). This used to say
+            # "oi-shadow-service now consumes this manifest, and GEX consumes what oi-shadow
+            # publishes, so the chain is anchor -> oi-shadow -> GEX". That commit deleted the
+            # capture code this flag enables, so no manifest is published on dev however this is
+            # set, and it deleted OiEstimateOverlay, so GEX consumes no nowcast. Nothing here
+            # runs, nothing here reaches the board, and no counter named above will move. Dev
+            # oi-shadow was brought back up 2026-09-21 and emits no output records for exactly
+            # this reason.
             - { name: OI_ANCHOR_MANIFEST_ENABLED, value: "true" }
-            # DYNAMIC OPEN INTEREST. GEX stops pricing with the print the exchange
-            # published this morning and starts pricing with oi-shadow's estimate of where open
-            # interest lands at the close, wherever that estimate is fresh. gex is LINEAR in open
-            # interest, so this changes every number on the board.
+            # ⚠️ HISTORY — NO CODE READS THIS FLAG since d845a415 (options-edge-processing, 2026-09-02), which
+            # deleted OiEstimateOverlay. Everything below describes behaviour that existed from
+            # 2026-08-04 until then. GEX prices from Postgres-captured OI now, the value here is
+            # "false", and setting it "true" would change nothing at all.
+            #
+            # DYNAMIC OPEN INTEREST. GEX stopped pricing with the print the exchange
+            # published this morning and priced with oi-shadow's estimate of where open
+            # interest lands at the close, wherever that estimate was fresh. gex is LINEAR in open
+            # interest, so this changed every number on the board.
             #
             # Measured on 25 sessions that post-date the panel the model was chosen on: chain-wide
             # error 0.242 -> 0.175, better on 24 of 25, DTE 0-1 improving 35%. It does NOT improve
@@ -152,9 +170,11 @@ spec:
             # cumulative volume. A number read at 15:55 is near the thing that was measured; one
             # read at 11:00 carries that assumption.
             #
-            # ON IN PRODUCTION TOO, enabled in the same change. This is the one switch for the
-            # whole system -- no consumer sees the ESTIMATED quality unless the producer emits it --
-            # so turning it off returns that environment to exactly today's behaviour.
+            # HISTORY: it was ON IN PRODUCTION TOO, enabled in the same change. Both are "false"
+            # now and, since d845a415, NO CODE READS THIS FLAG AT ALL -- what survives on processing
+            # main is prose (an Avro doc string for oiQuality=ESTIMATED, a FreshnessGate comment,
+            # and a stale comment in that repo's Jenkinsfile). It is no longer "the one switch for
+            # the whole system"; there is no system behind it until the deleted code returns.
             #
             # Watch: ..._dynamic_oi_applied_total should climb during the session, and the fallback
             # counters say WHY when it does not (no estimate / stale / future / not estimated).
