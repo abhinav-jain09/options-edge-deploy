@@ -78,6 +78,26 @@ for pair in "PARAMETER_SET_HASH:$PARAMETER_SET_HASH" "TRACK_FROM_PUSH:$TRACK_FRO
   [ -n "$val" ] || { log "FATAL: $name is not declared for env=$ENV_NAME in $TARGETS"; exit 1; }
   [ "$val" != "UNFROZEN" ] || { log "REFUSING: $name is still UNFROZEN for env=$ENV_NAME. The boundary and the parameter set are frozen together, in one commit, before any of this data is looked at."; exit 2; }
 done
+# The boundary is an epoch-millisecond INSTANT. "abc" used to reach python and die in int() with a
+# traceback, which is the same uncontrolled failure the acceptance numbers had (Codex r4 MINOR).
+printf '%s' "$STOPPING_BOUNDARY_MS" | grep -Eq '^-?[0-9]+$' \
+  || { log "REFUSING: STOPPING_BOUNDARY_MS='$STOPPING_BOUNDARY_MS' is not an epoch-millisecond instant"; exit 2; }
+
+# The ACCEPTANCE NUMBERS are frozen the same way and refused the same way (Codex r2 BLOCKER). They are
+# PROVISIONAL_PENDING_MEASUREMENT by design until the owner commits to them, and the evaluator used to
+# hand them straight to float(): a complete, perfectly filled corpus died on ValueError("UNFROZEN")
+# instead of saying why no artifact can exist yet.
+for pair in "RESULT_LCB_FLOOR:$RESULT_LCB_FLOOR" "HIT_RATE_LCB_FLOOR:$HIT_RATE_LCB_FLOOR" \
+            "MEDIAN_MAE_CEIL:$MEDIAN_MAE_CEIL" "P90_MAE_CEIL:$P90_MAE_CEIL" \
+            "COVERAGE_FLOOR:$COVERAGE_FLOOR" "ATTRITION_CEIL:$ATTRITION_CEIL"; do
+  name="${pair%%:*}"; val="${pair#*:}"
+  [ -n "$val" ] || { log "FATAL: $name is not declared for env=$ENV_NAME in $TARGETS"; exit 1; }
+  [ "$val" != "UNFROZEN" ] || { log "REFUSING: $name is still UNFROZEN for env=$ENV_NAME. The acceptance numbers are frozen in one commit with the parameter set and the boundary, before this data is looked at; until then the corpus may fill but no artifact can be produced."; exit 2; }
+  # A STRICT number, not merely numeric-looking (Codex r3): "--", "." and "1.2.3" all pass a character
+  # class and then die inside float() with a traceback, which is the crash this guard exists to prevent.
+  printf '%s' "$val" | grep -Eq '^-?([0-9]+(\.[0-9]+)?|\.[0-9]+)$' \
+    || { log "REFUSING: $name='"'"'$val'"'"' is not a number"; exit 2; }
+done
 
 # The corpus this artifact claims must be one a PROGRESS RUN ALREADY PUBLISHED (r6 #5). A version
 # recomputed from the archive as it stands today would match again after records or whole days
@@ -381,9 +401,15 @@ missing_horizon = sorted("|".join(str(x) for x in c) for c in cohort_ids
 # THE shared predicate — the same call the reporter makes, over the same reader (r12 #1). It is the ONLY
 # source of the per-session judgements below: a copy standing beside it meant deleting the call changed
 # no verdict at all, which is a call that is decorative rather than load-bearing (r13).
-shared_defects = R.corpus_defects(read, sessions, seals,
-                                  cohort_days={v["sessionDate"] for k, v in sessions.items()
-                                               if k in window_sessions} | set(missing_days))
+# Every COMPLETE day of this cohort inside the preregistered window, not only the days that produced a
+# call (Codex r4): a matching zero-call session satisfied have_days, never entered window_sessions, and
+# so was never examined for defects — while the reporter did examine it. The two must not be able to
+# disagree about a day.
+_defect_days = ({v["sessionDate"] for k, v in sessions.items() if k in window_sessions}
+                | {d for d in have_days if (not boundary_date or str(d)[:10] <= boundary_date)
+                   and str(d)[:10] >= str(corpus_start)[:10]}
+                | set(missing_days))
+shared_defects = R.corpus_defects(read, sessions, seals, cohort_days=_defect_days)
 
 # ---- the statistics: A4.9's reducers over the cohort at the primary horizon ----------------------
 prim = [o for o in window_outcomes if o.get("horizon") == PRIMARY]

@@ -61,7 +61,8 @@ eval "CORPUS_START_DATE=\"\${OE_CAL_CORPUS_START_DATE_${ENV_NAME}:-}\""
 eval "DECLARED_HASH=\"\${OE_CAL_PARAMETER_SET_HASH_${ENV_NAME}:-}\""
 eval "DECLARED_TRACK_FROM=\"\${OE_CAL_TRACK_FROM_PUSH_${ENV_NAME}:-}\""
 eval "DECLARED_STAMP=\"\${OE_CAL_SEMANTIC_STAMP_${ENV_NAME}:-}\""
-export CORPUS_START_DATE DECLARED_HASH DECLARED_TRACK_FROM DECLARED_STAMP
+eval "DECLARED_BOUNDARY_MS=\"\${OE_CAL_STOPPING_BOUNDARY_MS_${ENV_NAME}:-}\""
+export CORPUS_START_DATE DECLARED_HASH DECLARED_TRACK_FROM DECLARED_STAMP DECLARED_BOUNDARY_MS
 
 # A5.6: the manifest is built under a SNAPSHOT LOCK that excludes a concurrent archive run, or a
 # version can straddle a half-written date — the reporter is scheduled at 20:30 and the seal archive
@@ -94,6 +95,7 @@ export OE_CAL_COVERAGE_ALERT_AFTER_SESSIONS="${OE_CAL_COVERAGE_ALERT_AFTER_SESSI
 
 python3 - "$SCRIPT_DIR" "$ROOT" "$OUT_ROOT" "$TODAY" "$STAMP" "$ENV_NAME" "$T_SESSIONS" "$T_COHORT" "$T_CLASS" "$T_CELL" "$REQUIRED_CLASSES" "$REQUIRED_CELLS" "$LEDGER_TOPIC" <<'PY'
 import json, os, sys, hashlib, tempfile
+import datetime as _dt
 
 (script_dir, root, out_root, today, stamp, env, t_sessions, t_cohort, t_class, t_cell,
  req_classes, req_cells, ledger_topic) = sys.argv[1:14]
@@ -107,6 +109,52 @@ REQUIRED_CELLS = req_cells.split()
 read_errors = []
 declared_hash = os.environ.get("DECLARED_HASH") or ""
 declared_track = os.environ.get("DECLARED_TRACK_FROM") or ""
+# ---- THE PREREGISTERED WINDOW, closed at both ends ------------------------------------------------
+# Everything counted below — cohort calls, owed days, required-cell coverage — is scoped to
+# [TRACK_FROM_PUSH, STOPPING_BOUNDARY], by refT for calls and by date for sessions, exactly as the
+# evaluator scopes them (Codex r4). Without it this reporter could call a cohort ready on calls that
+# arrived after the boundary while the evaluator rejected the same corpus on COHORT_SIZE.
+_declared_stamp = os.environ.get("DECLARED_STAMP") or ""
+_bnd = os.environ.get("DECLARED_BOUNDARY_MS") or ""
+_bnd_ms = None
+_bnd_day = None
+if _bnd and _bnd != "UNFROZEN":
+    try:
+        _bnd_ms = int(_bnd)
+        _bnd_day = _dt.datetime.fromtimestamp(_bnd_ms / 1000.0, _dt.timezone.utc).date().isoformat()
+    except Exception:
+        read_errors.append("STOPPING_BOUNDARY_MS is not an instant this reporter can turn into a date")
+_tf_ms = None
+if declared_track and declared_track != "UNFROZEN" and not str(declared_track).startswith("2099"):
+    try:
+        _t = str(declared_track)
+        _t = _t if "T" in _t else _t + "T00:00:00"
+        _t = _t if (_t.endswith("Z") or "+" in _t) else _t + "+00:00"
+        _tf_ms = int(_dt.datetime.fromisoformat(_t.replace("Z", "+00:00")).timestamp() * 1000)
+    except Exception:
+        read_errors.append("TRACK_FROM_PUSH is not an instant this reporter can parse: %s" % declared_track)
+
+
+def _day_in_window(day, lo):
+    day = str(day)[:10]
+    return bool(day) and day >= str(lo)[:10] and (_bnd_day is None or day <= _bnd_day)
+
+
+def _call_in_window(c):
+    """A call belongs to the window only with a NUMERIC refT inside it (Codex r4): a call with no refT,
+    or a string one, is a call the evaluator drops, so counting it here manufactures a disagreement."""
+    if _tf_ms is None and _bnd_ms is None:
+        return True
+    t = c.get("refT")
+    if isinstance(t, bool) or not isinstance(t, (int, float)):
+        return False
+    if _tf_ms is not None and t < _tf_ms:
+        return False
+    if _bnd_ms is not None and t > _bnd_ms:
+        return False
+    return True
+
+
 read = R.read_logical(root)
 sidecar = R.read_sidecar(root, read_errors)
 sessions, seals, calls, outcomes = R.classify_sessions(read, sidecar, today)
@@ -127,9 +175,11 @@ for c in calls:
         continue                                   # the validation clock has not started for it
     # A5.7: the exact SEMANTIC STAMP as well as the hash. The hash deliberately excludes the stamp, so
     # two parameter sets whose literals differ would otherwise pool into one cohort.
-    declared_stamp = os.environ.get("DECLARED_STAMP") or ""
-    if declared_stamp and c.get("semanticStamp") != declared_stamp:
+    declared_stamp = _declared_stamp
+    if declared_stamp and declared_stamp != "UNFROZEN" and c.get("semanticStamp") != declared_stamp:
         continue
+    if not _call_in_window(c):
+        continue                                   # outside the preregistered window: not this cohort's
     tf = c.get("trackFromPush")
     k = (ph, tf)
     b = by_cohort.setdefault(k, {"sessions": set(), "calls": 0, "classes": {}, "cells": {}})
@@ -181,8 +231,11 @@ def cohort_days(ph, tf):
     # The SEMANTIC STAMP as well (r16 #1): a session sealed under other literals is not this cohort's,
     # and letting it satisfy an owed day is the same hole the cohort filter already closes.
     stamp = os.environ.get("DECLARED_STAMP") or ""
+    if stamp == "UNFROZEN":
+        stamp = ""
     return {v["sessionDate"] for v in sessions.values()
             if v["archiveStatus"] == "COMPLETE"
+            and (_bnd_day is None or str(v["sessionDate"])[:10] <= _bnd_day)
             and (ph in (None, "", "UNFROZEN") or v.get("parameterSetHash") == ph)
             and (tf in (None, "", "UNFROZEN") or v.get("trackFromPush") == tf)
             and (not stamp or v.get("semanticStamp") == stamp)}
@@ -262,14 +315,31 @@ quiet_corpus_complete = (bool(quiet_owed) and all(d in quiet_mine for d in quiet
 # OCCURRENCE only: which cells fire, never whether calls were right.
 _cov_after = int(os.environ.get("OE_CAL_COVERAGE_ALERT_AFTER_SESSIONS") or 3)
 _complete_keys = {k for k, v in sessions.items() if v.get("archiveStatus") == "COMPLETE"}
+# …and only INSIDE the preregistered window: the shared helpers defined above decide it (Codex r3/r4).
+_cov_lo = max(str(corpus_start)[:10], str(declared_track)[:10]) if (declared_track and declared_track != "UNFROZEN") \
+    else str(corpus_start)[:10]
+
+
 _cov = {cell: 0 for cell in REQUIRED_CELLS}
-_cov_sessions = set()
+# The sessions counted are the cohort's COMPLETE sessions, whether or not they produced a call (Codex r2
+# MAJOR): counting only sessions that HAD a call meant three complete sessions with zero calls — the exact
+# shape of "the engine is graded but never calls" — left sessionsObserved at 0 and the alert silent.
+_cov_sessions = {d for d in cohort_days(declared_hash, declared_track) if _day_in_window(d, _cov_lo)}
 for c in calls:
     if "%s|%s|%s" % (c.get("sessionDate"), c.get("parameterSetHash"), c.get("sessionLineageId")) not in _complete_keys:
         continue
     if declared_hash and declared_hash != "UNFROZEN" and c.get("parameterSetHash") != declared_hash:
         continue
-    _cov_sessions.add(c.get("sessionDate"))
+    # …and by the stamp and the clock, exactly as the cohort counters do (Codex r1 MINOR): a call that
+    # shares a hash but was graded under other literals or another clock is not this cohort's evidence,
+    # and letting it colour a required cell makes the coverage display say OK for a cell nobody observed.
+    _st = os.environ.get("DECLARED_STAMP") or ""
+    if _st and _st != "UNFROZEN" and c.get("semanticStamp") != _st:
+        continue
+    if declared_track and declared_track != "UNFROZEN" and c.get("trackFromPush") != declared_track:
+        continue
+    if not _day_in_window(c.get("sessionDate"), _cov_lo) or not _call_in_window(c):
+        continue
     _k = R.cell_key(c)
     if _k in _cov:
         _cov[_k] += 1
@@ -310,7 +380,9 @@ else:
         # Scoped to THIS cohort in BOTH directions: sessions before TRACK_FROM are not its business, and
         # neither are sessions belonging to another parameter set (r8 #4). Every owed day in the window
         # must be present AS THIS COHORT'S, or the corpus is not complete for it.
-        owed_here = [d for d in R.owed(max(corpus_start, str(tf)[:10]) if tf else corpus_start, today, _cal)]
+        _lo_here = max(corpus_start, str(tf)[:10]) if tf else corpus_start
+        _hi_here = min(today, _bnd_day) if _bnd_day else today
+        owed_here = [d for d in R.owed(_lo_here, _hi_here, _cal)] if _lo_here <= _hi_here else []
         mine = cohort_days(ph, tf)
         # A conflict is counted in the record but was not allowed to affect corpusComplete, so the
         # reporter could call a corpus complete on the same day the evaluator called it NOT_EVALUABLE.
