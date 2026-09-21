@@ -277,10 +277,39 @@ sigbin="$T/sigbin"; mkdir -p "$sigbin"
 # chain by process NAME does not fix it either: a command-substitution subshell reports the same command
 # line as the shell it forked from, so the walk stops at the subshell. An aborted Jenkins step signals the
 # script's own process, which is what the recorded pid names.
+# THE LAUNCHER OWNS THE SIGNAL DISPOSITION. A signal IGNORED or BLOCKED at exec() is INHERITED
+# THROUGH exec, and bash then CANNOT trap it: `trap 'on_signal HUP' HUP` returns 0 and installs
+# nothing, and a blocked signal is never delivered at all. Either way the guard runs to completion
+# and the case is decided by the PERMISSION instead of by the signal -- six cases here reported
+# failure on a reviewer's machine for exactly that reason, and passed here, because this shell had
+# HUP at its default. SIGHUP is the one that arrives ignored in real life: nohup, launchd and
+# agents that start their shells detached all ignore it.
+#
+# So the launcher RESETS the four signals to SIG_DFL and UNBLOCKS them immediately before exec, and
+# records what it inherited so a failure names the cause instead of reading as a broken guard. This
+# is the same launcher effect-shim-test.sh uses, for the same reason.
+cat > "$T/launch-guard.py" <<'LEOF'
+import os, signal, sys
+SIGS = (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGQUIT)
+blocked, inherited = signal.pthread_sigmask(signal.SIG_BLOCK, []), []
+for s in SIGS:
+    state = [w for w, yes in (("blocked", s in blocked),
+                              ("ignored", signal.getsignal(s) is signal.SIG_IGN)) if yes]
+    if state:
+        inherited.append(signal.Signals(s).name + ":" + "+".join(state))
+    signal.signal(s, signal.SIG_DFL)
+signal.pthread_sigmask(signal.SIG_UNBLOCK, SIGS)
+open(os.environ["GUARD_INHERITED"], "w").write(",".join(inherited) if inherited else "none")
+open(os.environ["GUARD_PIDFILE"], "w").write(str(os.getpid()))
+os.execv(os.environ["GUARD_BASH"], [os.environ["GUARD_BASH"], sys.argv[1]])
+LEOF
 cat > "$T/launch-guard.sh" <<'LEOF'
 #!/usr/bin/env bash
-printf '%s' "$$" > "$GUARD_PIDFILE"
-exec bash "$1"
+# the pid recorded is the process that then EXECs the guard, so what the fake git signals is the
+# guard's own shell and never a command-substitution subshell standing in for it.
+GUARD_INHERITED="${GUARD_INHERITED:-$(dirname "$GUARD_PIDFILE")/guard-inherited}" \
+GUARD_BASH="$(command -v bash)" \
+exec python3 "$(dirname "$0")/launch-guard.py" "$1"
 LEOF
 chmod +x "$T/launch-guard.sh"
 cat > "$sigbin/git" <<EOF
