@@ -55,8 +55,15 @@ PAIR_MAX_AGE_S = 2
 # question rather than at a statistical threshold nobody can defend: at least half the RTH minutes
 # must contain a pair, and there must be at least one distinct pair per covered minute on average.
 # A clean low-frequency archive spanning the session passes; 600 pairs inside ten minutes does not.
-MIN_COVERED_MINUTES = 195
-MIN_DISTINCT_PAIRS = 195
+# Both floors are FRACTIONS of the session actually being scored, not fixed minute counts: a half
+# day is 210 minutes, and a fixed 195 would reject a sound sample of one while accepting the first
+# 195 consecutive minutes of a normal day. Coverage must also be SPREAD - a sample that stops at
+# lunch describes the morning, not the session.
+MIN_COVERED_FRACTION = 0.5
+MIN_SPAN_FRACTION = 0.8
+# The offset is scored from five minutes after the open, so the index has resumed and the first
+# prints are not the auction settling.
+SCORE_WARMUP_MINUTES = 5
 
 
 def _records(root: str, topic: str, day: str):
@@ -117,9 +124,13 @@ def _timed(root: str, topic: str, day: str, session: dt.date):
     return out, foreign
 
 
-def capture(root: str, day: str) -> dict:
+def capture(root: str, day: str, close_et_hhmm: str = "16:00") -> dict:
     session = dt.date.fromisoformat(day)
     open_et = dt.datetime.combine(session, dt.time(9, 30), ET)
+    close_hh, close_mm = (int(part) for part in close_et_hhmm.split(":"))
+    close_et = dt.datetime.combine(session, dt.time(close_hh, close_mm), ET)
+    score_from = open_et + dt.timedelta(minutes=SCORE_WARMUP_MINUTES)
+    scoreable_minutes = max(1, int((close_et - score_from).total_seconds() // 60))
     window_start = open_et - dt.timedelta(seconds=WINDOW_S)
 
     index_all, index_foreign = _timed(root, INDEX, day, session)
@@ -170,7 +181,10 @@ def capture(root: str, day: str) -> dict:
     # THE OFFSET, measured after the fact. Scored only against genuine IBKR_INDEX/LAST prints: the
     # same topic also carries IBKR_OPTION_MODEL rows, which are a different quantity (bug 368), and
     # scoring against those would measure the wrong thing.
-    truth = [(t, r) for t, r in index if t >= open_et + dt.timedelta(minutes=5)]
+    # BOUNDED AT BOTH ENDS. Without a close bound a topic that keeps publishing after the bell -
+    # or an archive holding only the morning - produced a "session" offset measured over something
+    # that is not the session.
+    truth = [(t, r) for t, r in index if score_from <= t <= close_et]
     errors = []
     seen_observations = set()
     covered_minutes = set()
@@ -191,13 +205,23 @@ def capture(root: str, day: str) -> dict:
         # ONE OBSERVATION, ONE PAIR. A duplicated or replayed archive row describes the same
         # instant twice; counting it twice both clears a floor it should not and weights the
         # median toward whatever was duplicated.
-        if stamp in seen_observations:
+        # IDENTITY IS THE OBSERVATION, not its clock. Two legitimate updates can share a
+        # timestamp with different prices; discarding the second as a duplicate would deflate the
+        # pair count and bias the median. Only a row that repeats an observation exactly is a
+        # duplicate.
+        observation = (stamp, price)
+        if observation in seen_observations:
             duplicate_rows += 1
             continue
-        seen_observations.add(stamp)
+        seen_observations.add(observation)
         covered_minutes.add(stamp.astimezone(ET).replace(second=0, microsecond=0))
         errors.append(equivalent - price)
 
+    covered_fraction = len(covered_minutes) / scoreable_minutes if errors else 0.0
+    span_fraction = 0.0
+    if seen_observations:
+        stamps = sorted(stamp for stamp, _ in seen_observations)
+        span_fraction = ((stamps[-1] - stamps[0]).total_seconds() / 60.0) / scoreable_minutes
     offset = residual_p50 = residual_p95 = None
     if errors:
         offset = statistics.median(errors)
@@ -215,12 +239,12 @@ def capture(root: str, day: str) -> dict:
                     f"{PAIR_MAX_AGE_S * 1000} ms limit")
     elif offset is None:
         rejected = "offset not measurable"
-    elif len(covered_minutes) < MIN_COVERED_MINUTES:
-        rejected = (f"the offset is measured over only {len(covered_minutes)} distinct minutes, "
-                    f"under the {MIN_COVERED_MINUTES} the session must cover")
-    elif len(errors) < MIN_DISTINCT_PAIRS:
-        rejected = (f"only {len(errors)} distinct offset pairs, under the {MIN_DISTINCT_PAIRS} "
-                    f"floor")
+    elif covered_fraction < MIN_COVERED_FRACTION:
+        rejected = (f"the offset covers {len(covered_minutes)} of {scoreable_minutes} scoreable "
+                    f"minutes ({covered_fraction:.0%}), under {MIN_COVERED_FRACTION:.0%}")
+    elif span_fraction < MIN_SPAN_FRACTION:
+        rejected = (f"the offset spans {span_fraction:.0%} of the session, under "
+                    f"{MIN_SPAN_FRACTION:.0%}: it describes part of the day, not the session")
     else:
         rejected = None
     accepted = rejected is None
@@ -250,7 +274,11 @@ def capture(root: str, day: str) -> dict:
         "offsetResidualP50": round(residual_p50, 4) if residual_p50 is not None else None,
         "offsetResidualP95": round(residual_p95, 4) if residual_p95 is not None else None,
         "offsetPairs": len(errors),
+        "sessionCloseEt": close_et.isoformat(),
+        "scoreableMinutes": scoreable_minutes,
         "offsetCoveredMinutes": len(covered_minutes),
+        "offsetCoveredFraction": round(covered_fraction, 4),
+        "offsetSpanFraction": round(span_fraction, 4),
         "offsetDuplicateRowsSkipped": duplicate_rows,
         # A session is ACCEPTED only when it can answer the question: the reference must exist in
         # the window, and the offset must be measurable afterwards. A session that fails either is
@@ -270,8 +298,12 @@ def main(argv=None) -> int:
     parser.add_argument("--session", required=True, help="session date, YYYY-MM-DD")
     parser.add_argument("--archive-root", required=True,
                         help="archive root holding <topic>/dt=<session>/*.jsonl.gz")
-    parser.add_argument("--out", help="directory of one <session>.json per captured session "
-                                      "(default: stdout only)")
+    parser.add_argument("--out", help="ledger directory: accepted/<session>.json holds the "
+                                      "sessions the >=55 count is taken over, rejected/ holds the "
+                                      "rest with their reason (default: stdout only)")
+    parser.add_argument("--close-et", default="16:00",
+                        help="session close in New York, HH:MM — 13:00 on a half day (default "
+                             "16:00). The coverage rules are fractions of THIS session.")
     args = parser.parse_args(argv)
 
     try:
@@ -285,35 +317,52 @@ def main(argv=None) -> int:
               file=sys.stderr)
         return 66
 
-    record = capture(args.archive_root, args.session)
+    try:
+        hh, mm = (int(part) for part in args.close_et.split(":"))
+        dt.time(hh, mm)
+    except (ValueError, TypeError):
+        print(f"vol-premium-open-reference-capture: not a close time: {args.close_et}",
+              file=sys.stderr)
+        return 64
+    record = capture(args.archive_root, args.session, args.close_et)
     line = json.dumps(record, sort_keys=True)
     print(line)
     if args.out:
-        # ONE FILE PER SESSION, CREATED WITH O_EXCL. The previous version was a lock around a
-        # read-then-append on one ledger, and review was right that flock proves nothing on a
-        # network filesystem: two hosts can each take a local lock, each see the session absent,
-        # and each append it. An exclusive CREATE is the primitive that does not need a lock -
-        # exactly one creator wins, on any filesystem that implements O_EXCL, and the loser learns
-        # it lost from the error rather than from a race it cannot see. The ledger the >=55 count
-        # is taken over is then the DIRECTORY, assembled by reading it, and it cannot hold a
-        # session twice because a filename cannot exist twice.
-        os.makedirs(args.out, exist_ok=True)
-        target = os.path.join(args.out, f"{record['session']}.json")
-        try:
-            handle = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
-        except FileExistsError:
-            print(f"vol-premium-open-reference-capture: {record['session']} is already captured at "
-                  f"{target}; not written", file=sys.stderr)
-            return 0
-        # Written to a temporary name and renamed, so a reader never sees half a record and an
-        # interrupted run cannot leave a truncated file standing as a captured session.
-        os.close(handle)
-        staging = target + ".partial"
+        # PUBLICATION IS A LINK, NOT A RESERVATION. The previous version created the destination
+        # empty with O_EXCL and filled it afterwards, which review was right to reject: a reader
+        # could count an empty file as a captured session, and a crash between the create and the
+        # write reserved that session forever - retries refused to repair what they had broken.
+        #
+        # The record is written COMPLETE to a staging file first, and published with os.link(),
+        # which is atomic and fails if the destination exists. A reader therefore sees either
+        # nothing or the whole record, a crash leaves only a staging file that the next run
+        # replaces, and exactly one of any number of concurrent captures wins - on any filesystem
+        # that implements link(), without depending on lock semantics.
+        #
+        # ACCEPTED AND REJECTED ARE SEPARATE DIRECTORIES. A session that cannot answer the
+        # question is still recorded - silence would make the >=55 count look better than the data
+        # - but it must not be counted by anything that counts files, so it is not in the same
+        # place as the sessions the analysis is taken over.
+        verdict = "accepted" if record["accepted"] else "rejected"
+        published = os.path.join(args.out, verdict)
+        staging_dir = os.path.join(args.out, ".staging")
+        os.makedirs(published, exist_ok=True)
+        os.makedirs(staging_dir, exist_ok=True)
+        target = os.path.join(published, f"{record['session']}.json")
+        # The staging name carries the pid, so concurrent captures never write the same one. It is
+        # left in place rather than removed: this script deletes nothing, and a staging file beside
+        # a published one is an audit trail, not litter.
+        staging = os.path.join(staging_dir, f"{record['session']}.{os.getpid()}.json")
         with open(staging, "w") as out:
             out.write(line + "\n")
             out.flush()
             os.fsync(out.fileno())
-        os.replace(staging, target)
+        try:
+            os.link(staging, target)
+        except FileExistsError:
+            print(f"vol-premium-open-reference-capture: {record['session']} is already published "
+                  f"at {target}; not republished", file=sys.stderr)
+            return 0
     return 0
 
 
