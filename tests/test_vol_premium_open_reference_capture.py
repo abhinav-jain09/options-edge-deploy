@@ -383,6 +383,53 @@ class OpenReferenceCaptureTest(unittest.TestCase):
         self.assertEqual(got["offsetCoveredMinutes"], MINUTES)
         self.assertLessEqual(got["offsetCoveredMinutes"], got["scoreableMinutes"])
 
+
+    def test_a_claim_without_a_record_is_completed_by_the_next_run(self) -> None:
+        """Killed between the per-session claim and the verdict link, the session had a marker and
+        no record - and every retry reported success, so it could never enter the >=55 set although
+        it was usable. A retry must COMPLETE it from the claim."""
+        _fixture(self.tmp)
+        out = self.tmp / "ledger"
+        (out / ".published").mkdir(parents=True)
+        # the exact state a crash leaves: a claim holding the decided record, no verdict file
+        record = orc.capture(str(self.tmp), DAY)
+        (out / ".published" / f"{DAY}.json").write_text(json.dumps(record) + "\n")
+        r = subprocess.run([sys.executable, str(SCRIPT), "--session", DAY,
+                            "--archive-root", str(self.tmp), "--out", str(out)],
+                           capture_output=True, text=True, check=True)
+        self.assertIn("claimed but never published", r.stderr)
+        self.assertEqual([p.name for p in (out / "accepted").iterdir()], [f"{DAY}.json"])
+
+    def test_a_completed_session_is_left_alone(self) -> None:
+        """The companion: the repair must fire only for a claim with NO record, never re-link one
+        that is already published."""
+        _fixture(self.tmp)
+        out = self.tmp / "ledger"
+        subprocess.run([sys.executable, str(SCRIPT), "--session", DAY, "--archive-root",
+                        str(self.tmp), "--out", str(out)], capture_output=True, check=True)
+        marked = out / "accepted" / f"{DAY}.json"
+        marked.write_text(marked.read_text() + "SENTINEL\n")
+        r = subprocess.run([sys.executable, str(SCRIPT), "--session", DAY, "--archive-root",
+                            str(self.tmp), "--out", str(out)], capture_output=True, text=True,
+                           check=True)
+        self.assertIn("already published", r.stderr)
+        self.assertIn("SENTINEL", marked.read_text())
+
+    def test_a_ledger_subdirectory_that_is_a_symlink_INSIDE_out_is_still_refused(self) -> None:
+        """The earlier case pointed .staging outside --out, so the containment check alone caught
+        it and the case passed with the symlink check deleted. This one points INSIDE, where only
+        the symlink check can refuse it: a directory this script creates must not be a link."""
+        out = self.tmp / "ledger"
+        (out / "real").mkdir(parents=True)
+        (out / ".staging").symlink_to(out / "real")
+        _fixture(self.tmp)
+        r = subprocess.run([sys.executable, str(SCRIPT), "--session", DAY,
+                            "--archive-root", str(self.tmp), "--out", str(out)],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 73)
+        self.assertIn("symlink", r.stderr)
+        self.assertEqual(list((out / "real").iterdir()), [])
+
     # --- refusals ------------------------------------------------------------------------------
     def test_a_bad_session_date_refuses_with_64(self) -> None:
         r = subprocess.run([sys.executable, str(SCRIPT), "--session", "18-09-2026",

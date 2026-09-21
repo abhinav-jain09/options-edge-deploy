@@ -367,10 +367,24 @@ def main(argv=None) -> int:
         published = os.path.join(args.out, verdict)
         staging_dir = os.path.join(args.out, ".staging")
         claims_dir = os.path.join(args.out, ".published")
-        for path in (args.out, published, staging_dir, claims_dir):
-            # A SYMLINK IS NOT A DIRECTORY THIS SCRIPT OWNS. `.staging -> /shared/other-ledger`
-            # would redirect the write outside --out entirely, so any component that already
-            # exists as a link is a refusal rather than something to follow.
+        # A SYMLINK IS NOT A DIRECTORY THIS SCRIPT OWNS. `.staging -> /shared/other-ledger` would
+        # redirect the write outside --out - and so would an ANCESTOR link, which checking only
+        # --out and its three children missed entirely: `--out /safe/redirect/ledger` with
+        # /safe/redirect -> /other leaves every checked path a real directory while makedirs
+        # writes under /other. Comparing the resolved path with the literal one catches a link at
+        # ANY component, including one whose target is inside --out, which is still not a
+        # directory this script created.
+        # THE ROOT IS RESOLVED ONCE, AND EVERYTHING IS WRITTEN UNDER THE RESOLVED PATH. Refusing
+        # any symlinked component of --out outright is wrong on a normal machine: macOS resolves
+        # /var to /private/var, so every temporary directory would be refused. What the guarantee
+        # actually needs is that nothing is written OUTSIDE the directory --out names, and that
+        # the ledger's own subdirectories - which this script creates - are not links redirecting
+        # a write elsewhere.
+        args.out = os.path.realpath(args.out)
+        published = os.path.join(args.out, verdict)
+        staging_dir = os.path.join(args.out, ".staging")
+        claims_dir = os.path.join(args.out, ".published")
+        for path in (published, staging_dir, claims_dir):
             if os.path.islink(path):
                 print(f"vol-premium-open-reference-capture: {path} is a symlink; refusing to "
                       f"write through it", file=sys.stderr)
@@ -391,13 +405,35 @@ def main(argv=None) -> int:
             out.flush()
             os.fsync(out.fileno())
         claim = os.path.join(claims_dir, f"{record['session']}.json")
+        final = os.path.join(published, f"{record['session']}.json")
+        claimed_now = True
         try:
             os.link(staging, claim)
         except FileExistsError:
-            print(f"vol-premium-open-reference-capture: {record['session']} is already published; "
-                  f"not republished", file=sys.stderr)
-            return 0
-        os.link(claim, os.path.join(published, f"{record['session']}.json"))
+            claimed_now = False
+        # A CLAIM WITHOUT A RECORD IS A REPAIRABLE STATE, NOT A VERDICT. Killed between the claim
+        # and the verdict link, the session had a marker and no record, and every retry reported
+        # success - the session could never enter the >=55 set although it was usable. A retry now
+        # completes the publication from the EXISTING claim, which is the record that was already
+        # decided; only a claim that is already linked into a verdict directory is left alone.
+        if not claimed_now:
+            for folder in ("accepted", "rejected"):
+                if os.path.exists(os.path.join(args.out, folder, f"{record['session']}.json")):
+                    print(f"vol-premium-open-reference-capture: {record['session']} is already "
+                          f"published; not republished", file=sys.stderr)
+                    return 0
+            print(f"vol-premium-open-reference-capture: {record['session']} was claimed but never "
+                  f"published; completing it from the claim", file=sys.stderr)
+            with open(claim) as handle:
+                claimed = json.loads(handle.readline())
+            final = os.path.join(args.out,
+                                 "accepted" if claimed.get("accepted") else "rejected",
+                                 f"{record['session']}.json")
+            os.makedirs(os.path.dirname(final), exist_ok=True)
+        try:
+            os.link(claim, final)
+        except FileExistsError:
+            pass
     return 0
     return 0
 
