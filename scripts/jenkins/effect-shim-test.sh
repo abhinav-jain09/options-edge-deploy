@@ -564,7 +564,7 @@ integ_case "a deleted wrapper is named"        "the wrapper 'kubectl' is missing
            'rm -f "$CO_SHIM/kubectl"'          'ln -sf _shim.sh "$CO_SHIM/kubectl"'
 integ_case "a NON-EXECUTABLE wrapper is named" "is not executable" \
            'chmod 644 "$CO_SHIM/_shim.sh"'     'chmod 755 "$CO_SHIM/_shim.sh"'
-integ_case "an edited _shim.sh is named"       "the wrapper that ran was not the reviewed one" \
+integ_case "an edited _shim.sh is named"       "THIS CHECKOUT'S wrapper is not the reviewed one" \
            'printf "# tampered\n" >> "$CO_SHIM/_shim.sh"' 'cp "$HERE/effect-shim/_shim.sh" "$CO_SHIM/_shim.sh"'
 integ_case "a planted executable is named"     "unexpected entry 'npm'" \
            'printf "#!/bin/sh\nexit 0\n" > "$CO_SHIM/npm"; chmod +x "$CO_SHIM/npm"' 'rm -f "$CO_SHIM/npm"'

@@ -61,7 +61,7 @@ refuse() {
   exit 3
 }
 
-[ -d "$shim" ] || refuse "the shim directory is missing at $shim — nothing was intercepting anything"
+[ -d "$shim" ] || refuse "the shim directory is missing at $shim, so coverage BY THIS CHECKOUT'S SHIM cannot be attested for any tool in this stage. It does not establish that nothing intercepted: PATH may have held another shim copy, and what a given invocation resolved to is not observable from here"
 
 for t in $TOOLS; do
   [ -e "$shim/$t" ] || refuse "the wrapper '$t' is missing, so coverage BY THIS CHECKOUT'S SHIM cannot be attested for $t in this stage. This does not say an invocation was unverified: a wrapper cannot detect its own absence, and PATH may have held another shim copy ahead of this directory"
@@ -98,7 +98,7 @@ fi
 want_file="$here/effect-shim-digest.txt"
 [ -f "$want_file" ] || refuse "the expected digest file is missing at $want_file"
 want="$(tr -d ' \n' < "$want_file")"
-[ "$got" = "$want" ] || refuse "_shim.sh is $got but this repository declares $want — the wrapper that ran was not the reviewed one"
+[ "$got" = "$want" ] || refuse "_shim.sh is $got but this repository declares $want — THIS CHECKOUT'S wrapper is not the reviewed one, so coverage by it cannot be attested. Which wrapper a given invocation actually ran is not observable from here"
 
 # The success line says what it checked, not that the shim was intact: this script and the digest it
 # compares against are both editable by the job, so "ok" means nothing here disagreed -- not that

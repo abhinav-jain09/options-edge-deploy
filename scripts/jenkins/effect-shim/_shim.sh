@@ -49,7 +49,7 @@
 # WHAT IT DOES DELIVER, exactly: AN INVOCATION BY NAME, THROUGH AN INTACT SHIM, IN A STAGE THAT INSTALLED
 # IT, IS VERIFIED AT THE MOMENT IT ACTS. That covers `mvn -B test`, `"mvn -B test"`, `mvn -f ./pom.xml
 # test`, a trailing `; true`, a second stage, a variable holding the command and a shared-library call,
-# because none of them changes what execvp() looks up. Descendants are covered too: the real binary
+# because none of them changes what execvp() looks up. Descendants that look a tool up ON PATH are covered too (a direct execve of an absolute path is not, and neither is a shell that reassigns PATH; both are documented limits): the real binary
 # inherits the shim on PATH, so a Maven plugin that runs `kubectl` is verified again (removing the shim
 # from the CHILD's PATH was a bug, not a trade -- stripping is only needed to RESOLVE the real binary).
 #
