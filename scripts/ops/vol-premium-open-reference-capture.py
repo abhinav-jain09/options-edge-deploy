@@ -197,7 +197,11 @@ def capture(root: str, day: str, close_et_hhmm: str = "16:00") -> dict:
     # HALF-OPEN AT THE CLOSE. A tick exactly at 16:00 bucketed into a 386th minute while
     # scoreableMinutes said 385, which could push a borderline session over the coverage floor
     # against a universe the record itself denied.
-    truth = [(t, r) for t, r in index if score_from <= t < close_et]
+    # LIVE ONLY, the same bar the window applies. The window demanded quality == "LIVE" while the
+    # offset scored every IBKR_INDEX/LAST row, so a session of nothing but stale index prints was
+    # accepted into the >=55 ledger with an offset measured against prices that were not live.
+    truth = [(t, r) for t, r in index
+             if score_from <= t < close_et and r.get("quality") == "LIVE"]
     errors = []
     seen_observations = set()
     covered_minutes = set()
@@ -243,7 +247,7 @@ def capture(root: str, day: str, close_et_hhmm: str = "16:00") -> dict:
         residual_p95 = residuals[max(0, int(0.95 * len(residuals)) - 1)]
 
     level = next((_number(r.get("price")) for _, r in after
-                  if _number(r.get("price")) is not None), None)
+                  if r.get("quality") == "LIVE" and _number(r.get("price")) is not None), None)
 
     if not es_window:
         rejected = "no ES reference in the window"

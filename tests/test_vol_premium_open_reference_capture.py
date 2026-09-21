@@ -448,6 +448,28 @@ class OpenReferenceCaptureTest(unittest.TestCase):
         self.assertIn("symlink", r.stderr)
         self.assertEqual(list((out / "real").iterdir()), [])
 
+
+    def test_a_session_of_stale_index_prints_is_not_accepted(self) -> None:
+        """The window demanded quality == "LIVE" while the offset scored every IBKR_INDEX/LAST
+        row, so a session of nothing but stale prints was accepted with an offset measured against
+        prices that were not live."""
+        rows = [_index(-302, 7650.0)] + [
+            _index(300 + 60 * i, 7650.0 + i / 10.0, quality="DELAYED") for i in range(MINUTES)]
+        _fixture(self.tmp, index_rows=rows)
+        got = orc.capture(str(self.tmp), DAY)
+        self.assertFalse(got["accepted"])
+        self.assertEqual(got["offsetPairs"], 0)
+
+    def test_a_single_stale_print_does_not_contaminate_a_live_session(self) -> None:
+        """The companion: the quality bar must drop the stale ROW, not the session."""
+        stale = _index(400, 9999.0, quality="DELAYED")
+        rows = [_index(-302, 7650.0), stale] + [
+            _index(300 + 60 * i, 7650.0 + i / 10.0) for i in range(MINUTES)]
+        _fixture(self.tmp, index_rows=rows)
+        got = orc.capture(str(self.tmp), DAY)
+        self.assertTrue(got["accepted"], got["rejectedBecause"])
+        self.assertAlmostEqual(got["offsetPoints"], -3.0, places=3)
+
     # --- refusals ------------------------------------------------------------------------------
     def test_a_bad_session_date_refuses_with_64(self) -> None:
         r = subprocess.run([sys.executable, str(SCRIPT), "--session", "18-09-2026",
