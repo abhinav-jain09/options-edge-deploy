@@ -266,8 +266,12 @@ def capture(root: str, day: str, close_et_hhmm: str = "16:00") -> dict:
     # first post-open print of 0 or a negative corrupt value produced offsetBps = null (or
     # nonsense) on a session that was otherwise accepted, leaving the >=55 ledger holding a
     # session whose offset cannot be read in the units the decision is taken in.
-    level = next((_number(r.get("price")) for _, r in after
-                  if r.get("quality") == "LIVE" and (_number(r.get("price")) or 0) > 0), None)
+    # AND IT COMES FROM INSIDE THE SESSION. Taken from any post-open row, a session whose RTH
+    # prints were all corrupt could borrow a positive after-hours print as its denominator and
+    # report a bps figure that measures nothing about the session.
+    level = next((_number(r.get("price")) for t, r in after
+                  if t < close_et and r.get("quality") == "LIVE"
+                  and (_number(r.get("price")) or 0) > 0), None)
 
     if not es_window:
         rejected = "no ES reference in the window"
@@ -405,67 +409,86 @@ def main(argv=None) -> int:
         # writes under /other. Comparing the resolved path with the literal one catches a link at
         # ANY component, including one whose target is inside --out, which is still not a
         # directory this script created.
-        # THE ROOT IS RESOLVED ONCE, AND EVERYTHING IS WRITTEN UNDER THE RESOLVED PATH. Refusing
-        # any symlinked component of --out outright is wrong on a normal machine: macOS resolves
-        # /var to /private/var, so every temporary directory would be refused. What the guarantee
-        # actually needs is that nothing is written OUTSIDE the directory --out names, and that
-        # the ledger's own subdirectories - which this script creates - are not links redirecting
-        # a write elsewhere.
-        args.out = os.path.realpath(args.out)
-        published = os.path.join(args.out, verdict)
-        staging_dir = os.path.join(args.out, ".staging")
-        claims_dir = os.path.join(args.out, ".published")
-        for path in (published, staging_dir, claims_dir):
-            if os.path.islink(path):
-                print(f"vol-premium-open-reference-capture: {path} is a symlink; refusing to "
-                      f"write through it", file=sys.stderr)
-                return 73
-        os.makedirs(published, exist_ok=True)
-        os.makedirs(staging_dir, exist_ok=True)
-        os.makedirs(claims_dir, exist_ok=True)
-        root_real = os.path.realpath(args.out)
-        for path in (published, staging_dir, claims_dir):
-            if os.path.commonpath([root_real, os.path.realpath(path)]) != root_real:
-                print(f"vol-premium-open-reference-capture: {path} resolves outside {args.out}; "
-                      f"refusing", file=sys.stderr)
-                return 73
+        # EVERY PATH STEP IS DESCRIPTOR-RELATIVE AND REFUSES TO FOLLOW A LINK. Checking islink()
+        # and then opening by name is a time-of-check/time-of-use race: another process can swap
+        # `.staging` for a symlink in between and the write lands outside --out anyway. Opening
+        # each component with O_NOFOLLOW relative to the directory above it makes the check and
+        # the use the same operation, so there is no interval to exploit.
+        try:
+            os.makedirs(args.out, exist_ok=True)
+            root_fd = os.open(args.out, os.O_RDONLY | os.O_DIRECTORY)
+        except OSError as err:
+            print(f"vol-premium-open-reference-capture: cannot open {args.out}: {err}",
+                  file=sys.stderr)
+            return 73
 
-        staging = os.path.join(staging_dir, f"{record['session']}.{os.getpid()}.json")
-        with open(staging, "w") as out:
+        def child_dir(parent_fd, name):
+            """Create if absent and open WITHOUT following a link, relative to parent_fd."""
+            try:
+                os.mkdir(name, 0o755, dir_fd=parent_fd)
+            except FileExistsError:
+                pass
+            return os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
+
+        verdict = "accepted" if record["accepted"] else "rejected"
+        try:
+            staging_fd = child_dir(root_fd, ".staging")
+            claims_fd = child_dir(root_fd, ".published")
+            verdict_fd = child_dir(root_fd, verdict)
+        except OSError as err:
+            print(f"vol-premium-open-reference-capture: refusing to write through a symlinked or "
+                  f"unusable component of {args.out}: {err}", file=sys.stderr)
+            return 73
+
+        name = f"{record['session']}.json"
+        staging_name = f"{record['session']}.{os.getpid()}.json"
+        fd = os.open(staging_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644,
+                     dir_fd=staging_fd)
+        with os.fdopen(fd, "w") as out:
             out.write(line + "\n")
             out.flush()
             os.fsync(out.fileno())
-        claim = os.path.join(claims_dir, f"{record['session']}.json")
-        final = os.path.join(published, f"{record['session']}.json")
+
+        # THE CLAIM IS PER SESSION, NOT PER VERDICT. A link into accepted/ says nothing about
+        # rejected/, so a partial archive could publish a rejection and a later, fuller one an
+        # acceptance - two records for one denominator candidate, disagreeing.
         claimed_now = True
         try:
-            os.link(staging, claim)
+            os.link(staging_name, name, src_dir_fd=staging_fd, dst_dir_fd=claims_fd)
         except FileExistsError:
             claimed_now = False
+
         # A CLAIM WITHOUT A RECORD IS A REPAIRABLE STATE, NOT A VERDICT. Killed between the claim
-        # and the verdict link, the session had a marker and no record, and every retry reported
-        # success - the session could never enter the >=55 set although it was usable. A retry now
-        # completes the publication from the EXISTING claim, which is the record that was already
-        # decided; only a claim that is already linked into a verdict directory is left alone.
+        # and the verdict link, a usable session had a marker and no record and every retry
+        # reported success. A retry completes the publication from the EXISTING claim - the record
+        # that was already decided - rather than from a recomputation the archive may no longer
+        # support.
+        target_fd = verdict_fd
         if not claimed_now:
             for folder in ("accepted", "rejected"):
-                if os.path.exists(os.path.join(args.out, folder, f"{record['session']}.json")):
+                try:
+                    probe = child_dir(root_fd, folder)
+                except OSError:
+                    continue
+                try:
+                    os.stat(name, dir_fd=probe, follow_symlinks=False)
                     print(f"vol-premium-open-reference-capture: {record['session']} is already "
                           f"published; not republished", file=sys.stderr)
                     return 0
+                except FileNotFoundError:
+                    pass
+                finally:
+                    os.close(probe)
             print(f"vol-premium-open-reference-capture: {record['session']} was claimed but never "
                   f"published; completing it from the claim", file=sys.stderr)
-            with open(claim) as handle:
+            with os.fdopen(os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=claims_fd)) as handle:
                 claimed = json.loads(handle.readline())
-            final = os.path.join(args.out,
-                                 "accepted" if claimed.get("accepted") else "rejected",
-                                 f"{record['session']}.json")
-            os.makedirs(os.path.dirname(final), exist_ok=True)
+            target_fd = child_dir(root_fd, "accepted" if claimed.get("accepted") else "rejected")
+
         try:
-            os.link(claim, final)
+            os.link(name, name, src_dir_fd=claims_fd, dst_dir_fd=target_fd)
         except FileExistsError:
             pass
-    return 0
     return 0
 
 

@@ -477,18 +477,22 @@ class OpenReferenceCaptureTest(unittest.TestCase):
         self.assertEqual(got["offsetPairs"], MINUTES, "the stale row was scored")
 
 
-    def test_a_zero_post_open_level_is_not_a_bps_denominator(self) -> None:
-        """A first LIVE post-open print of 0 produced offsetBps = null on an otherwise accepted
-        session, leaving the ledger holding a session whose offset cannot be read in the units the
-        decision is taken in."""
-        rows = [_index(-302, 7650.0), _index(300, 0.0)] + [
-            _index(360 + 60 * i, 7650.0 + i / 10.0) for i in range(MINUTES - 1)]
+    def test_a_session_with_no_usable_level_inside_it_is_rejected(self) -> None:
+        """The bps denominator must be a positive LIVE price from INSIDE the session. The first
+        version of this case had a zero first print and 384 good ones after it, so removing the
+        rejection left offsetBps non-null and the case green - it was named for the rejection and
+        satisfied by the rest of the session. Here every scored price is corrupt and the only
+        positive LIVE print is after the close, which must not be borrowed."""
+        rows = [_index(-302, 7650.0)] + [
+            _index(300 + 60 * i, 0.0) for i in range(MINUTES)]
+        rows.append(_index(400 * 60, 7700.0))                    # after the close
         es_rows = [_es(-1, 7647.0)] + [
-            _es(360 + 60 * i, 7650.0 + i / 10.0 - 3.0) for i in range(MINUTES - 1)]
+            _es(300 + 60 * i, 7647.0) for i in range(MINUTES)]
         _fixture(self.tmp, index_rows=rows, es_rows=es_rows)
         got = orc.capture(str(self.tmp), DAY)
-        self.assertIsNotNone(got["offsetBps"],
-                             "accepted with no bps denominator" if got["accepted"] else None)
+        self.assertFalse(got["accepted"])
+        self.assertIsNone(got["offsetBps"])
+        self.assertIn("bps", got["rejectedBecause"])
 
 
     def test_one_late_outlier_does_not_make_a_session(self) -> None:
@@ -514,6 +518,24 @@ class OpenReferenceCaptureTest(unittest.TestCase):
         self.assertTrue(got["accepted"], got["rejectedBecause"])
         self.assertTrue(all(q >= orc.MIN_QUARTER_COVERED_FRACTION
                             for q in got["offsetQuarterCoverage"]), got["offsetQuarterCoverage"])
+
+
+    def test_the_publication_never_follows_a_swapped_symlink(self) -> None:
+        """Checking islink() and then opening by name is a time-of-check/time-of-use race: another
+        process can swap the directory for a symlink in between. Every step is descriptor-relative
+        with O_NOFOLLOW, so a link put in place beforehand - the strongest version of that race
+        this test can stage - is refused rather than followed."""
+        out = self.tmp / "ledger"
+        elsewhere = self.tmp / "elsewhere"
+        elsewhere.mkdir(parents=True)
+        out.mkdir(parents=True)
+        (out / ".published").symlink_to(elsewhere)
+        _fixture(self.tmp)
+        r = subprocess.run([sys.executable, str(SCRIPT), "--session", DAY,
+                            "--archive-root", str(self.tmp), "--out", str(out)],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 73)
+        self.assertEqual(list(elsewhere.iterdir()), [], "it wrote through the link")
 
     # --- refusals ------------------------------------------------------------------------------
     def test_a_bad_session_date_refuses_with_64(self) -> None:
