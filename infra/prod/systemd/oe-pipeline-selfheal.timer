@@ -1,0 +1,14 @@
+[Unit]
+Description=Run the OptionsEdge pipeline self-heal every 10 minutes
+Documentation=file:/usr/local/sbin/oe-pipeline-selfheal.sh
+
+[Timer]
+# 4 min after boot: oe-boot-bringup calls the script itself once the waves are up, so this first
+# firing is the safety net for the case where the bring-up ITSELF failed or never ran.
+OnBootSec=4min
+OnUnitInactiveSec=10min
+AccuracySec=30s
+Unit=oe-pipeline-selfheal.service
+
+[Install]
+WantedBy=timers.target

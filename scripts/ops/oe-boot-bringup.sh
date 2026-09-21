@@ -123,4 +123,19 @@ if [ -r "$DOCTOR" ]; then
 else
   log "WARN: $DOCTOR not installed — Streams apps rejecting an internal topic's partition count will stay NOT READY"
 fi
+# ---------- pipeline self-heal ----------
+# Every unit above can come back perfectly and the pipeline still produce nothing, because the damage
+# an unclean stop leaves is INSIDE Kafka: hanging transactions that keep producers in an epoch fight,
+# and Streams state that no longer matches its changelog. Neither is visible to systemd or to a
+# readiness probe (measured 2026-09-21: two services reported READY for hours while consuming zero).
+# The self-heal script is the check for that; it also runs every 10 min from its own timer, so this
+# call is only about closing the gap immediately after a boot instead of up to 10 minutes later.
+SELFHEAL="${SELFHEAL:-/usr/local/sbin/oe-pipeline-selfheal.sh}"
+if [ -x "$SELFHEAL" ]; then
+  log "pipeline self-heal: checking that committed offsets actually advance"
+  "$SELFHEAL" 2>&1 | tee -a "$LOG" || log "WARN: self-heal exit $? — see /var/log/oe-pipeline-selfheal.log"
+else
+  log "WARN: $SELFHEAL not installed — a hanging transaction or wedged Streams state after this boot will NOT be repaired automatically"
+fi
+
 log "=== boot bring-up done ==="
