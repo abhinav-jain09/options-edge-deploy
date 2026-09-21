@@ -101,6 +101,37 @@ clean_journal() {
   echo "purge  journald  ${before:-?} -> $(journalctl --disk-usage 2>/dev/null | grep -oE '[0-9.]+[KMG]' | tail -1)"
 }
 
+# The image builds' staging directories. Production image builds rsync the whole workspace to
+# $HOME/ci/remote-builds/<job>-<build>.XXXXXXXX on this host and build there. They used to clear their
+# own directory over ssh; that delete was removed (options-edge-processing: a caller-supplied path and a
+# same-account rename race made it unsafe from the build side), so the directories now accumulate here —
+# full workspaces, on a host that ran out of disk on 2026-09-16. This is the host-owned half of that
+# decision: a fixed root, no caller input, age-based, and it never follows a symlink out of the root.
+BUILD_STAGING="$HOME/ci/remote-builds"
+BUILD_STAGING_KEEP_DAYS=3
+clean_build_staging() {
+  root="$BUILD_STAGING"
+  [ -d "$root" ] || return 0
+  if [ -L "$root" ]; then echo "WARN    build staging $root is a symlink — not pruning"; return 0; fi
+  root_p=$(cd "$root" 2>/dev/null && pwd -P) || return 0
+  case "$root_p" in
+    "$(cd "$HOME" && pwd -P)"/ci/remote-builds) : ;;
+    *) echo "WARN    build staging resolves to $root_p, outside \$HOME — not pruning"; return 0 ;;
+  esac
+  before=$(du -sh "$root_p" 2>/dev/null | cut -f1)
+  n=0
+  while IFS= read -r d; do
+    [ -n "$d" ] || continue
+    [ -L "$d" ] && continue                      # never follow a symlink out of the root
+    case "$d" in "$root_p"/?*) : ;; *) continue ;; esac
+    case "${d#"$root_p"/}" in */*) continue ;; esac   # exactly one level down
+    OE_ALLOW_RECURSIVE_RM=1 rm -rf -- "$d" && n=$((n+1))
+  done <<EOF
+$(find "$root_p" -mindepth 1 -maxdepth 1 -type d -mtime +$BUILD_STAGING_KEEP_DAYS 2>/dev/null)
+EOF
+  echo "purge  build-staging  ${before:-?} -> $(du -sh "$root_p" 2>/dev/null | cut -f1) (${n} dir(s) older than ${BUILD_STAGING_KEEP_DAYS}d)"
+}
+
 # ---- disk REPORTING (no cleanup below this line) -------------------------------------------------
 # usage_of PATH -> "used/size pct%" of the filesystem PATH lives on. -P keeps df on one line even
 # when the device name is long (the bare `df -h` wraps and NR==2 would then print garbage).
@@ -145,6 +176,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
   for d in $LOGDIRS; do clean_dir "$d"; done
   clean_pkgcache
   clean_journal
+  clean_build_staging
   warn_kafka
   report_disks AFTER
 } > "$OUT" 2>&1

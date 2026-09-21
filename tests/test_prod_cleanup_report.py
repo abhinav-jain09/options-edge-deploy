@@ -9,6 +9,7 @@ import re
 import stat
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -138,3 +139,76 @@ class ProdCleanupReportTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BuildStagingPruneTest(unittest.TestCase):
+    """The image builds' staging directories are the HOST's to prune, and only ever inside its own root.
+
+    Production image builds rsync the whole workspace to $HOME/ci/remote-builds/<name> and no longer
+    delete it themselves: from the build side the path is caller-influenced and can be raced by another
+    process on the shared host. The host half is here — fixed root, age-based, never following a symlink
+    out — and these tests run it against a real temporary HOME with real directories and symlinks.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        self.home = self.dir / "home"
+        (self.home / "ci" / "remote-builds").mkdir(parents=True)
+        self.remote = self.dir / "remote.sh"
+        self.remote.write_text(remote_script_body())
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def prune(self, keep_days="3"):
+        env = dict(os.environ)
+        env["HOME"] = str(self.home)
+        script = (f'source "{self.remote}"; BUILD_STAGING="$HOME/ci/remote-builds"; '
+                  f'BUILD_STAGING_KEEP_DAYS={keep_days}; clean_build_staging')
+        return subprocess.check_output(["bash", "-c", script], env=env, text=True)
+
+    def _staging(self, name, age_days):
+        d = self.home / "ci" / "remote-builds" / name
+        d.mkdir()
+        (d / "workspace-file").write_text("x")
+        when = time.time() - age_days * 86400
+        os.utime(d, (when, when))
+        return d
+
+    def test_old_directories_go_and_fresh_ones_stay(self):
+        old = self._staging("options-edge-processing-1.aaaaaaaa", 10)
+        fresh = self._staging("options-edge-processing-2.bbbbbbbb", 0)
+        out = self.prune()
+        self.assertFalse(old.exists(), out)
+        self.assertTrue(fresh.exists(), out)
+        self.assertIn("purge  build-staging", out)
+        self.assertIn("1 dir(s) older than 3d", out)
+
+    def test_a_symlink_inside_the_root_is_never_followed(self):
+        outside = self.dir / "outside"
+        outside.mkdir()
+        (outside / "keep").write_text("x")
+        link = self.home / "ci" / "remote-builds" / "options-edge-processing-3.cccccccc"
+        link.symlink_to(outside)
+        when = time.time() - 10 * 86400
+        os.utime(link, (when, when), follow_symlinks=False)
+        self.prune()
+        self.assertTrue((outside / "keep").exists(), "a symlinked staging entry was followed out of the root")
+
+    def test_a_staging_root_that_is_a_symlink_is_not_pruned(self):
+        elsewhere = self.dir / "elsewhere"
+        elsewhere.mkdir()
+        (elsewhere / "keep").write_text("x")
+        root = self.home / "ci" / "remote-builds"
+        for child in root.iterdir():
+            child.unlink()
+        root.rmdir()
+        root.symlink_to(elsewhere)
+        out = self.prune()
+        self.assertIn("is a symlink", out)
+        self.assertTrue((elsewhere / "keep").exists())
+
+    def test_nothing_to_prune_is_quiet_and_harmless(self):
+        out = self.prune()
+        self.assertIn("0 dir(s)", out)
