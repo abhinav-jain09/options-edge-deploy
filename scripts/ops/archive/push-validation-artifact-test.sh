@@ -365,6 +365,24 @@ else
   bad "the artifact does not carry its non-authorizing labels"
 fi
 
+echo "14b. an UNFROZEN acceptance number is REFUSED, not crashed on (Codex r2 BLOCKER)"
+build 32 20
+targets FROZEN "$SB"; publish
+sed -i'' -e 's/^OE_CAL_HIT_RATE_LCB_FLOOR=.*/OE_CAL_HIT_RATE_LCB_FLOOR=UNFROZEN/' "$HERE/calibration-targets.env"
+OUT="$(evaluate 2>&1)"
+case "$OUT" in
+  *"REFUSING: HIT_RATE_LCB_FLOOR is still UNFROZEN"*) ok "the evaluator says why no artifact can exist yet";;
+  *ValueError*|*Traceback*) bad "the evaluator crashed on an unfrozen threshold: $OUT";;
+  *) bad "no refusal for an unfrozen threshold: $OUT";;
+esac
+# …and it is a REFUSAL, not a run: the evaluator exits 2 and writes no artifact
+env ENV=prod ARCHIVE_DIR="$WORK" REPORT_DATE=2026-08-13 CALENDAR_DIR="$CAL_DIR" CORPUS_VERSION="$(published_version)" \
+    bash "$HERE/oe-push-validation-artifact.sh" >/dev/null 2>&1; RC=$?
+[ "$RC" = 2 ] && ok "…with the frozen-declaration exit code (2)" || bad "unexpected exit code $RC"
+sed -i'' -e 's/^OE_CAL_HIT_RATE_LCB_FLOOR=.*/OE_CAL_HIT_RATE_LCB_FLOOR=not-a-number/' "$HERE/calibration-targets.env"
+case "$(evaluate 2>&1)" in *"is not a number"*) ok "a non-numeric threshold is refused the same way";; *) bad "a non-numeric threshold was accepted";; esac
+targets FROZEN "$SB"
+
 echo "15. the SHIPPED preregistration is the conservative one"
 grep -q '^OE_CAL_THRESHOLDS_STATE=PROVISIONAL_PENDING_MEASUREMENT' "$SRC/calibration-targets.env" \
   && ok "the shipped thresholds are PROVISIONAL, so no artifact can ACCEPT yet" \

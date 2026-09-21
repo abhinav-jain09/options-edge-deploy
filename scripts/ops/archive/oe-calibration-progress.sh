@@ -265,7 +265,10 @@ quiet_corpus_complete = (bool(quiet_owed) and all(d in quiet_mine for d in quiet
 _cov_after = int(os.environ.get("OE_CAL_COVERAGE_ALERT_AFTER_SESSIONS") or 3)
 _complete_keys = {k for k, v in sessions.items() if v.get("archiveStatus") == "COMPLETE"}
 _cov = {cell: 0 for cell in REQUIRED_CELLS}
-_cov_sessions = set()
+# The sessions counted are the cohort's COMPLETE sessions, whether or not they produced a call (Codex r2
+# MAJOR): counting only sessions that HAD a call meant three complete sessions with zero calls — the exact
+# shape of "the engine is graded but never calls" — left sessionsObserved at 0 and the alert silent.
+_cov_sessions = set(cohort_days(declared_hash, declared_track))
 for c in calls:
     if "%s|%s|%s" % (c.get("sessionDate"), c.get("parameterSetHash"), c.get("sessionLineageId")) not in _complete_keys:
         continue
@@ -279,7 +282,6 @@ for c in calls:
         continue
     if declared_track and declared_track != "UNFROZEN" and c.get("trackFromPush") != declared_track:
         continue
-    _cov_sessions.add(c.get("sessionDate"))
     _k = R.cell_key(c)
     if _k in _cov:
         _cov[_k] += 1

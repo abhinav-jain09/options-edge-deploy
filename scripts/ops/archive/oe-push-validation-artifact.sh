@@ -79,6 +79,19 @@ for pair in "PARAMETER_SET_HASH:$PARAMETER_SET_HASH" "TRACK_FROM_PUSH:$TRACK_FRO
   [ "$val" != "UNFROZEN" ] || { log "REFUSING: $name is still UNFROZEN for env=$ENV_NAME. The boundary and the parameter set are frozen together, in one commit, before any of this data is looked at."; exit 2; }
 done
 
+# The ACCEPTANCE NUMBERS are frozen the same way and refused the same way (Codex r2 BLOCKER). They are
+# PROVISIONAL_PENDING_MEASUREMENT by design until the owner commits to them, and the evaluator used to
+# hand them straight to float(): a complete, perfectly filled corpus died on ValueError("UNFROZEN")
+# instead of saying why no artifact can exist yet.
+for pair in "RESULT_LCB_FLOOR:$RESULT_LCB_FLOOR" "HIT_RATE_LCB_FLOOR:$HIT_RATE_LCB_FLOOR" \
+            "MEDIAN_MAE_CEIL:$MEDIAN_MAE_CEIL" "P90_MAE_CEIL:$P90_MAE_CEIL" \
+            "COVERAGE_FLOOR:$COVERAGE_FLOOR" "ATTRITION_CEIL:$ATTRITION_CEIL"; do
+  name="${pair%%:*}"; val="${pair#*:}"
+  [ -n "$val" ] || { log "FATAL: $name is not declared for env=$ENV_NAME in $TARGETS"; exit 1; }
+  [ "$val" != "UNFROZEN" ] || { log "REFUSING: $name is still UNFROZEN for env=$ENV_NAME. The acceptance numbers are frozen in one commit with the parameter set and the boundary, before this data is looked at; until then the corpus may fill but no artifact can be produced."; exit 2; }
+  case "$val" in ''|*[!0-9.-]*) log "REFUSING: $name='"'"'$val'"'"' is not a number"; exit 2;; esac
+done
+
 # The corpus this artifact claims must be one a PROGRESS RUN ALREADY PUBLISHED (r6 #5). A version
 # recomputed from the archive as it stands today would match again after records or whole days
 # disappeared, so a pin that is merely "what is on disk" pins nothing.
