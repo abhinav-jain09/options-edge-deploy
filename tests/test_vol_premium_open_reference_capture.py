@@ -320,6 +320,20 @@ class OpenReferenceCaptureTest(unittest.TestCase):
                          "a revision at the same instant is not a duplicate")
         self.assertEqual(got["offsetPairs"], 2 * MINUTES)
 
+
+    def test_a_timestamp_without_an_offset_is_not_an_instant(self) -> None:
+        """`2026-09-18T13:35:00` with no Z and no +HH:MM would be read in the HOST's timezone, so
+        the same archive would land in different New York sessions depending on which machine ran
+        the capture. It is rejected and counted, not guessed at."""
+        naive = dict(_index(400, 7651.0))
+        naive["eventTime"] = "2026-09-18T13:35:00"
+        rows = [_index(-302, 7650.0), naive] + [
+            _index(300 + 60 * i, 7650.0 + i / 10.0) for i in range(MINUTES)]
+        _fixture(self.tmp, index_rows=rows)
+        got = orc.capture(str(self.tmp), DAY)
+        self.assertEqual(got["indexUndatedRecords"], 1)
+        self.assertEqual(got["offsetPairs"], MINUTES, "the undated row was scored")
+
     # --- refusals ------------------------------------------------------------------------------
     def test_a_bad_session_date_refuses_with_64(self) -> None:
         r = subprocess.run([sys.executable, str(SCRIPT), "--session", "18-09-2026",

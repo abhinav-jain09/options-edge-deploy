@@ -89,9 +89,16 @@ def _event_time(record: dict):
     if not isinstance(raw, str):
         return None
     try:
-        return dt.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        stamp = dt.datetime.fromisoformat(raw.replace("Z", "+00:00"))
     except ValueError:
         return None
+    # AN INSTANT WITHOUT AN OFFSET IS NOT AN INSTANT. `2026-09-18T13:35:00` with no Z and no
+    # +HH:MM would be read in the HOST's timezone by astimezone(), so the same archive would land
+    # in different New York sessions depending on which machine ran the capture - and this ledger
+    # is meant to be durable evidence for the >=55 decision, not a function of where it ran.
+    if stamp.tzinfo is None or stamp.tzinfo.utcoffset(stamp) is None:
+        return None
+    return stamp
 
 
 def _number(value):
@@ -111,17 +118,20 @@ def _timed(root: str, topic: str, day: str, session: dt.date):
     York. The partition name is a storage decision; it is not evidence about when the record
     happened, and a late or mispartitioned row scored against the wrong 09:30 would fabricate a
     session."""
-    out, foreign = [], 0
+    out, foreign, undated = [], 0, 0
     for record in _records(root, topic, day):
         stamp = _event_time(record)
         if stamp is None:
+            # Counted, not silently dropped: a row whose time cannot be established is evidence
+            # about the archive, and a session made of them must not look clean.
+            undated += 1
             continue
         if stamp.astimezone(ET).date() != session:
             foreign += 1
             continue
         out.append((stamp, record))
     out.sort(key=lambda pair: pair[0])
-    return out, foreign
+    return out, foreign, undated
 
 
 def capture(root: str, day: str, close_et_hhmm: str = "16:00") -> dict:
@@ -133,8 +143,8 @@ def capture(root: str, day: str, close_et_hhmm: str = "16:00") -> dict:
     scoreable_minutes = max(1, int((close_et - score_from).total_seconds() // 60))
     window_start = open_et - dt.timedelta(seconds=WINDOW_S)
 
-    index_all, index_foreign = _timed(root, INDEX, day, session)
-    es, es_foreign = _timed(root, ES, day, session)
+    index_all, index_foreign, index_undated = _timed(root, INDEX, day, session)
+    es, es_foreign, es_undated = _timed(root, ES, day, session)
 
     # THE INDEX SERIES IS THE IBKR_INDEX/LAST ONE, everywhere - not only in the offset. The topic
     # also carries IBKR_OPTION_MODEL rows, a different quantity (bug 368), and counting those as
@@ -286,6 +296,8 @@ def capture(root: str, day: str, close_et_hhmm: str = "16:00") -> dict:
         "esReferenceAgeMsAtOpen": reference_age_ms,
         "indexForeignDateRecords": index_foreign,
         "esForeignDateRecords": es_foreign,
+        "indexUndatedRecords": index_undated,
+        "esUndatedRecords": es_undated,
         "optionModelTicksInWindow": len(option_model_in_window),
         "accepted": accepted,
         "rejectedBecause": rejected,
