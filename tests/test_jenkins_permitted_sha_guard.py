@@ -1429,7 +1429,10 @@ class EffectShimTest(unittest.TestCase):
         text = (ROOT / "Jenkinsfile.nifty-gex-service").read_text()
         stage = text[text.index("stage('Deploy (service-scoped)')"):]
         start = stage.index("def deployFailure = null")
-        end = stage.index("the effects above ran unverified')", start)
+        # THE ANCHOR IS THE LAST LINE OF THE BLOCK, so it moves whenever that line's wording does.
+        # It was "the effects above ran unverified')" until that claim was corrected: an effect
+        # verified when it ran is not un-verified by drift discovered afterwards.
+        end = stage.index("coverage cannot be attested for all effects in this stage')", start)
         end = stage.index("\n", end)
         return stage[start:end].split("\n")
 
