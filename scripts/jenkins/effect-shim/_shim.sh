@@ -106,8 +106,18 @@ refuse() {
   exit 3
 }
 
-# A signal is a refusal, for the same reason it is in the guard: an interrupted run must not look like a
-# verification that passed. These are installed before anything else can be interrupted by them.
+# A signal DELIVERED during the verification is a refusal, for the same reason it is in the guard: an
+# interrupted run must not look like a verification that passed. These are installed before anything
+# else can be interrupted by them.
+#
+# DOCUMENTED LIMIT, because a trap cannot outrank a disposition it inherited. A signal that was
+# IGNORED or BLOCKED at exec() stays that way through exec: `trap 'on_signal HUP' HUP` returns 0 and
+# installs nothing, and a blocked signal is never delivered at all. In either case this shim is never
+# interrupted, it verifies, and the tool runs. That is not hypothetical - `nohup`, launchd and agents
+# that start their shells detached all ignore SIGHUP, so a Jenkins step launched that way has no
+# SIGHUP refusal. Nothing inside a bash script can restore a disposition its own exec inherited, so
+# the claim is scoped rather than dressed up: a signal that ARRIVES refuses; one that cannot arrive
+# is not refused, and effect-shim-test.sh pins that outcome as a limit rather than describing it.
 on_signal() {
   say "REFUSED — interrupted by SIG$1 before the checkout was proven; the command was NOT run"
   say "verdict=REFUSED (the command was NOT run)"

@@ -817,6 +817,32 @@ else
 $OUT"
 fi
 
+# --- 11i. A SIGNAL THAT CANNOT ARRIVE IS NOT REFUSED -------------------------------------------
+# The four signal cases above use a launcher that RESETS dispositions, which is what proves the
+# traps work. This one is the opposite and it is a LIMIT: a signal IGNORED at exec() stays ignored
+# through exec, bash cannot trap it, the shim is never interrupted, and the tool runs. nohup,
+# launchd and detached agents all start shells with SIGHUP ignored, so a step launched that way has
+# no SIGHUP refusal. The header says so; this asserts it, so the claim and the behaviour cannot
+# drift apart.
+cat > "$T/launch-ignored.py" <<'IEOF'
+import os, signal, sys
+signal.signal(signal.SIGHUP, signal.SIG_IGN)          # inherited through the exec below
+open(os.environ["SHIM_PIDFILE"], "w").write(str(os.getpid()))
+os.execv(sys.argv[1], sys.argv[1:])
+IEOF
+: > "$T/ran"
+set +e
+OUT="$(cd "$W" && env PATH="$sigbin:$CO_SHIM:$REALBIN:/usr/bin:/bin" RAN_LOG="$T/ran" \
+      SHIM_PIDFILE="$T/shimpid.ign" SHIM_SIGNAL=HUP OE_SHIM_DIR=. OE_SHIM_SHA="$SHA" OE_SHIM_ALLOW= \
+      python3 "$T/launch-ignored.py" "$CO_SHIM/mvn" -B test 2>&1)"; RC=$?
+set -e
+if [ "$RC" -eq 0 ] && ran; then
+  ok_limit "DOCUMENTED LIMIT: SIGHUP inherited as IGNORED is never delivered, so the shim is not interrupted and the tool runs"
+else
+  bad "DOCUMENTED LIMIT: SIGHUP inherited as IGNORED is never delivered, so the shim is not interrupted and the tool runs" "rc=$RC ran=$(cat "$T/ran")
+$OUT"
+fi
+
 # An EMPTY OE_SHIM_DIR must be refused BY THE SHIM, naming its own clause -- the verifier would refuse it
 # too, for its own reason, and a status-only case cannot tell those apart.
 run_shim mvn OE_SHIM_DIR= OE_SHIM_SHA="$SHA" OE_SHIM_ALLOW=
