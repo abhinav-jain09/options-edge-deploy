@@ -842,6 +842,30 @@ else
   bad "DOCUMENTED LIMIT: SIGHUP inherited as IGNORED is never delivered, so the shim is not interrupted and the tool runs" "rc=$RC ran=$(cat "$T/ran")
 $OUT"
 fi
+# --- 11j. THE SAME LIMIT VIA A BLOCKED SIGNAL ---------------------------------------------------
+# IGNORED is one way a disposition survives exec; BLOCKED is the other, and it fails differently:
+# the trap IS installed, and the signal is simply never delivered while the mask holds. Both end in
+# the tool running, so both are asserted - a suite that covered only one would let the other regress
+# while its evidence line still read "inherited dispositions are covered".
+cat > "$T/launch-blocked.py" <<'BEOF'
+import os, signal, sys
+signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGHUP})   # inherited through the exec below
+open(os.environ["SHIM_PIDFILE"], "w").write(str(os.getpid()))
+os.execv(sys.argv[1], sys.argv[1:])
+BEOF
+: > "$T/ran"
+set +e
+OUT="$(cd "$W" && env PATH="$sigbin:$CO_SHIM:$REALBIN:/usr/bin:/bin" RAN_LOG="$T/ran" \
+      SHIM_PIDFILE="$T/shimpid.blk" SHIM_SIGNAL=HUP OE_SHIM_DIR=. OE_SHIM_SHA="$SHA" OE_SHIM_ALLOW= \
+      python3 "$T/launch-blocked.py" "$CO_SHIM/mvn" -B test 2>&1)"; RC=$?
+set -e
+if [ "$RC" -eq 0 ] && ran; then
+  ok_limit "DOCUMENTED LIMIT: SIGHUP inherited as BLOCKED is never delivered either, so the tool runs"
+else
+  bad "DOCUMENTED LIMIT: SIGHUP inherited as BLOCKED is never delivered either, so the tool runs" "rc=$RC ran=$(cat "$T/ran")
+$OUT"
+fi
+
 
 # An EMPTY OE_SHIM_DIR must be refused BY THE SHIM, naming its own clause -- the verifier would refuse it
 # too, for its own reason, and a status-only case cannot tell those apart.
