@@ -194,7 +194,10 @@ def capture(root: str, day: str, close_et_hhmm: str = "16:00") -> dict:
     # BOUNDED AT BOTH ENDS. Without a close bound a topic that keeps publishing after the bell -
     # or an archive holding only the morning - produced a "session" offset measured over something
     # that is not the session.
-    truth = [(t, r) for t, r in index if score_from <= t <= close_et]
+    # HALF-OPEN AT THE CLOSE. A tick exactly at 16:00 bucketed into a 386th minute while
+    # scoreableMinutes said 385, which could push a borderline session over the coverage floor
+    # against a universe the record itself denied.
+    truth = [(t, r) for t, r in index if score_from <= t < close_et]
     errors = []
     seen_observations = set()
     covered_minutes = set()
@@ -356,25 +359,46 @@ def main(argv=None) -> int:
         # - but it must not be counted by anything that counts files, so it is not in the same
         # place as the sessions the analysis is taken over.
         verdict = "accepted" if record["accepted"] else "rejected"
+        # THE CLAIM IS PER SESSION, NOT PER VERDICT. os.link into accepted/ says nothing about
+        # rejected/, so a partial archive could publish a rejection and a later, fuller one an
+        # acceptance - two records for one session, both in the ledger, disagreeing. A marker
+        # under .published/ is claimed FIRST, so the session is taken exactly once whatever the
+        # verdict, and a re-run with better data is refused and says where the record already is.
         published = os.path.join(args.out, verdict)
         staging_dir = os.path.join(args.out, ".staging")
+        claims_dir = os.path.join(args.out, ".published")
+        for path in (args.out, published, staging_dir, claims_dir):
+            # A SYMLINK IS NOT A DIRECTORY THIS SCRIPT OWNS. `.staging -> /shared/other-ledger`
+            # would redirect the write outside --out entirely, so any component that already
+            # exists as a link is a refusal rather than something to follow.
+            if os.path.islink(path):
+                print(f"vol-premium-open-reference-capture: {path} is a symlink; refusing to "
+                      f"write through it", file=sys.stderr)
+                return 73
         os.makedirs(published, exist_ok=True)
         os.makedirs(staging_dir, exist_ok=True)
-        target = os.path.join(published, f"{record['session']}.json")
-        # The staging name carries the pid, so concurrent captures never write the same one. It is
-        # left in place rather than removed: this script deletes nothing, and a staging file beside
-        # a published one is an audit trail, not litter.
+        os.makedirs(claims_dir, exist_ok=True)
+        root_real = os.path.realpath(args.out)
+        for path in (published, staging_dir, claims_dir):
+            if os.path.commonpath([root_real, os.path.realpath(path)]) != root_real:
+                print(f"vol-premium-open-reference-capture: {path} resolves outside {args.out}; "
+                      f"refusing", file=sys.stderr)
+                return 73
+
         staging = os.path.join(staging_dir, f"{record['session']}.{os.getpid()}.json")
         with open(staging, "w") as out:
             out.write(line + "\n")
             out.flush()
             os.fsync(out.fileno())
+        claim = os.path.join(claims_dir, f"{record['session']}.json")
         try:
-            os.link(staging, target)
+            os.link(staging, claim)
         except FileExistsError:
-            print(f"vol-premium-open-reference-capture: {record['session']} is already published "
-                  f"at {target}; not republished", file=sys.stderr)
+            print(f"vol-premium-open-reference-capture: {record['session']} is already published; "
+                  f"not republished", file=sys.stderr)
             return 0
+        os.link(claim, os.path.join(published, f"{record['session']}.json"))
+    return 0
     return 0
 
 

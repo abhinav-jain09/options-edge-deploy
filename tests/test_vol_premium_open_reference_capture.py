@@ -334,6 +334,55 @@ class OpenReferenceCaptureTest(unittest.TestCase):
         self.assertEqual(got["indexUndatedRecords"], 1)
         self.assertEqual(got["offsetPairs"], MINUTES, "the undated row was scored")
 
+
+    def test_a_session_cannot_be_published_under_two_verdicts(self) -> None:
+        """A partial archive rejects; a fuller one would accept. os.link into accepted/ says
+        nothing about rejected/, so without a per-SESSION claim the ledger would hold two
+        disagreeing records for one denominator candidate."""
+        out = self.tmp / "ledger"
+        _fixture(self.tmp, es_rows=[_es(300 + 60 * i, 7650.0 + i / 10.0 - 3.0)
+                                    for i in range(MINUTES)])          # no reference -> rejected
+        subprocess.run([sys.executable, str(SCRIPT), "--session", DAY,
+                        "--archive-root", str(self.tmp), "--out", str(out)],
+                       capture_output=True, check=True)
+        self.assertEqual([p.name for p in (out / "rejected").iterdir()], [f"{DAY}.json"])
+        _fixture(self.tmp)                                              # now it would be accepted
+        subprocess.run([sys.executable, str(SCRIPT), "--session", DAY,
+                        "--archive-root", str(self.tmp), "--out", str(out)],
+                       capture_output=True, check=True)
+        accepted = list((out / "accepted").iterdir()) if (out / "accepted").exists() else []
+        self.assertEqual(accepted, [], "the session was published a second time, under the other "
+                                       "verdict")
+
+    def test_a_symlinked_output_component_is_refused(self) -> None:
+        """`.staging -> /elsewhere` would redirect the write outside --out entirely."""
+        out = self.tmp / "ledger"
+        elsewhere = self.tmp / "elsewhere"
+        elsewhere.mkdir(parents=True)
+        out.mkdir(parents=True)
+        (out / ".staging").symlink_to(elsewhere)
+        _fixture(self.tmp)
+        r = subprocess.run([sys.executable, str(SCRIPT), "--session", DAY,
+                            "--archive-root", str(self.tmp), "--out", str(out)],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 73)
+        self.assertIn("symlink", r.stderr)
+        self.assertEqual(list(elsewhere.iterdir()), [], "it wrote through the link")
+
+    def test_a_tick_exactly_at_the_close_is_outside_the_session(self) -> None:
+        """The scoreable universe is 385 minutes; a 16:00 tick bucketed as a 386th contradicted
+        the record's own scoreableMinutes and could push a borderline session over the floor."""
+        rows = [_index(-302, 7650.0)] + [
+            _index(300 + 60 * i, 7650.0 + i / 10.0) for i in range(MINUTES)]
+        rows.append(_index(390 * 60, 8000.0))                            # exactly 16:00
+        es_rows = [_es(-1, 7647.0)] + [
+            _es(300 + 60 * i, 7650.0 + i / 10.0 - 3.0) for i in range(MINUTES)]
+        es_rows.append(_es(390 * 60, 8000.0 - 3.0))
+        _fixture(self.tmp, index_rows=rows, es_rows=es_rows)
+        got = orc.capture(str(self.tmp), DAY)
+        self.assertEqual(got["offsetCoveredMinutes"], MINUTES)
+        self.assertLessEqual(got["offsetCoveredMinutes"], got["scoreableMinutes"])
+
     # --- refusals ------------------------------------------------------------------------------
     def test_a_bad_session_date_refuses_with_64(self) -> None:
         r = subprocess.run([sys.executable, str(SCRIPT), "--session", "18-09-2026",
