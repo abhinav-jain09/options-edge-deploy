@@ -390,7 +390,8 @@ unblock_group_offsets() {   # $1 = group; appends a line to $ABORTED_MARKER for 
   fi
   nparts=$(offsets_partitions); [ -n "$nparts" ] || { log "  $g: could not read the __consumer_offsets partition count — no abort attempted"; return 0; }
   part=$(coordinator_partition "$nparts" "$g" 2>/dev/null); [ -n "$part" ] || return 0
-  listing=$(timeout "$CLI_TIMEOUT" "$KBIN/kafka-transactions.sh" --bootstrap-server "$BS" list 2>/dev/null)
+  listing=$(timeout "$CLI_TIMEOUT" "$KBIN/kafka-transactions.sh" --bootstrap-server "$BS" list 2>/dev/null); rc=$?
+  [ "$rc" -eq 0 ] || { log "  $g: transaction listing FAILED (rc=$rc) — output of a failed command is not a listing; no abort attempted"; return 0; }
   listing=$(columns "$listing" TransactionalId ProducerId); rc=$?
   [ "$rc" -eq 3 ] && { log "  $g: transaction listing carried no recognisable header — REFUSING to parse it; no abort attempted"; return 0; }
   # exact grammar of a Streams producer id: "<application.id>-<processUUID>-<threadIndex>", nothing
@@ -400,7 +401,8 @@ unblock_group_offsets() {   # $1 = group; appends a line to $ABORTED_MARKER for 
   live=$(live_processes "$g") || { log "  $g: the members table could not be read — a failed read is not a member list; no abort attempted"; return 0; }
   if [ -z "$live" ]; then log "  $g: a Stable group whose members table names no member is inconsistent — no abort attempted"; return 0; fi
   now_ms=$(( $(now_s) * 1000 ))
-  rows=$(timeout "$CLI_TIMEOUT" "$KBIN/kafka-transactions.sh" --bootstrap-server "$BS" describe-producers --topic __consumer_offsets --partition "$part" 2>/dev/null)
+  rows=$(timeout "$CLI_TIMEOUT" "$KBIN/kafka-transactions.sh" --bootstrap-server "$BS" describe-producers --topic __consumer_offsets --partition "$part" 2>/dev/null); rc=$?
+  [ "$rc" -eq 0 ] || { log "  $g: describe-producers FAILED (rc=$rc) — output of a failed command is not a table; no abort attempted"; return 0; }
   rows=$(columns "$rows" ProducerId LastTimestamp CurrentTransactionStartOffset); rc=$?
   [ "$rc" -eq 3 ] && { log "  $g: describe-producers output carried no recognisable header — REFUSING to parse it; no abort attempted"; return 0; }
   rows=$(printf '%s\n' "$rows" | awk -v now="$now_ms" -v stale="$STALE_TX_MINUTES" -v owned="$owned" -v u="$UUID_RE" '
@@ -540,7 +542,10 @@ resolve() {
 }
 desired() { $KUBECTL get deploy "$1" -o jsonpath='{.spec.replicas}' 2>/dev/null; }
 canon()   { python3 -c 'import os,sys; p=os.path.realpath(sys.argv[1]); sys.exit(1) if not os.path.isdir(p) else print(p)' "$1" 2>/dev/null; }
-hpa_on()  { $KUBECTL get hpa -o jsonpath='{range .items[*]}{.spec.scaleTargetRef.name}{"\n"}{end}' 2>/dev/null | grep -qx "$1"; }
+hpa_on()  {   # 0 = an HPA targets it, 1 = none does, 2 = could not read (the caller withholds)
+  local l; l=$($KUBECTL get hpa -o jsonpath='{range .items[*]}{.spec.scaleTargetRef.name}{"\n"}{end}' 2>/dev/null) || return 2
+  printf '%s\n' "$l" | grep -qx "$1"
+}
 # Anything ELSE that mounts, or is templated to mount, the same claim: a ReadWriteOnce local volume
 # is node-scoped, so on this single node a second pod can hold it while the target's pods are gone.
 claim_of()  { $KUBECTL get deploy "$1" -o jsonpath='{range .spec.template.spec.volumes[*]}{.persistentVolumeClaim.claimName}{"\n"}{end}' 2>/dev/null | grep -- '-streams-state$' | head -1; }
@@ -559,14 +564,15 @@ other_users_of_claim() {   # $1 = claim, $2 = the deployment allowed to own it; 
 }
 # A claim mounted with a subPath means the pod sees a SUBDIRECTORY of the volume: the PV root is
 # then not the state directory, and swapping it would take sibling data with it. Fail closed.
-mounted_with_subpath() {   # $1 = deployment, $2 = claim
-  local vol
-  vol=$($KUBECTL get deploy "$1" -o jsonpath='{range .spec.template.spec.volumes[*]}{.name}{" "}{.persistentVolumeClaim.claimName}{"\n"}{end}' 2>/dev/null | awk -v c="$2" '$2==c{print $1; exit}')
-  [ -n "$vol" ] || return 1
-  { $KUBECTL get deploy "$1" -o jsonpath='{range .spec.template.spec.containers[*].volumeMounts[*]}{.name}{" "}{.subPath}{"\n"}{end}' 2>/dev/null
-    $KUBECTL get deploy "$1" -o jsonpath='{range .spec.template.spec.initContainers[*].volumeMounts[*]}{.name}{" "}{.subPath}{"\n"}{end}' 2>/dev/null
-    $KUBECTL get deploy "$1" -o jsonpath='{range .spec.template.spec.ephemeralContainers[*].volumeMounts[*]}{.name}{" "}{.subPath}{"\n"}{end}' 2>/dev/null
-  } | awk -v v="$vol" '$1==v && NF>=2 {f=1} END{exit !f}'
+mounted_with_subpath() {   # $1 = deployment, $2 = claim: 0 = subPath in use, 1 = none, 2 = could not read
+  local vl vol m1 m2 m3
+  vl=$($KUBECTL get deploy "$1" -o jsonpath='{range .spec.template.spec.volumes[*]}{.name}{" "}{.persistentVolumeClaim.claimName}{"\n"}{end}' 2>/dev/null) || return 2
+  vol=$(printf '%s\n' "$vl" | awk -v c="$2" '$2==c{print $1; exit}')
+  [ -n "$vol" ] || return 2
+  m1=$($KUBECTL get deploy "$1" -o jsonpath='{range .spec.template.spec.containers[*].volumeMounts[*]}{.name}{" "}{.subPath}{"\n"}{end}' 2>/dev/null) || return 2
+  m2=$($KUBECTL get deploy "$1" -o jsonpath='{range .spec.template.spec.initContainers[*].volumeMounts[*]}{.name}{" "}{.subPath}{"\n"}{end}' 2>/dev/null) || return 2
+  m3=$($KUBECTL get deploy "$1" -o jsonpath='{range .spec.template.spec.ephemeralContainers[*].volumeMounts[*]}{.name}{" "}{.subPath}{"\n"}{end}' 2>/dev/null) || return 2
+  printf '%s\n%s\n%s\n' "$m1" "$m2" "$m3" | awk -v v="$vol" '$1==v && NF>=2 {f=1} END{exit !f}'
 }
 # The volume must hold NOTHING but Kafka Streams state. The suffix "-streams-state" is a naming
 # convention; the proof is the layout: at the root only "<application.id>/" (and lost+found), and
@@ -748,19 +754,27 @@ while read -r g lag delta srcdelta; do
     log "  $g -> $dep: confirmed park ($wedge) with no abandoned transaction to abort — nothing is restarted by this script; this needs a human: $KUBECTL logs $(running_pod "$dep")"
     continue
   fi
-  # the reset is tried ONCE per incident: a corruption signature that comes back after a reset is a
-  # defect to investigate, not a reason to reset again
+  # Two escalations, both on NEW evidence: the first confirmed corruption episode is REPORTED and
+  # the group is left alone; only a second confirmed episode (fresh lines again, later cycles)
+  # resets — once. A third is a defect to investigate, not a reason to reset again.
   f="$STATEDIR/${g}.resets"; resets=$(cat "$f" 2>/dev/null || echo 0); resets=$((resets+1))
-  remember "$f" "$resets"
+  remember "$f" "$resets"; forget "$STATEDIR/${g}.corrupt"   # the next episode must confirm from scratch
   case "$resets" in
     1)
-      if hpa_on "$dep"; then log "  $g -> $dep RESET withheld: an HPA targets this deployment — a state reset cannot be made safe beside an autoscaler"; continue; fi
+      log "  $g -> $dep: corruption CONFIRMED ($corruption) — first episode is reported only; a second confirmed episode on later cycles will reset the state directory. Nothing touched."
+      continue ;;
+    2)
+      hpa_on "$dep"; hrc=$?
+      if [ "$hrc" -eq 0 ]; then log "  $g -> $dep RESET withheld: an HPA targets this deployment — a state reset cannot be made safe beside an autoscaler"; continue; fi
+      if [ "$hrc" -eq 2 ]; then log "  $g -> $dep RESET withheld: the HPA listing could not be read — a failed read is not 'no HPA'; NOT resetting"; continue; fi
       dir=$(state_dir_of "$dep" 2>/dev/null || true)
       if [ -z "$dir" ]; then log "  $g -> $dep RESET: no single streams-state volume resolves through its PVC under $STORAGE — NOT resetting anything"; continue; fi
       others=$(other_users_of_claim "$(claim_of "$dep")" "$dep") || { log "  $g -> $dep RESET withheld: a pod or workload listing FAILED — exclusivity cannot be established; NOT resetting"; continue; }
       others=$(printf '%s\n' "$others" | awk 'NF' | sort -u | tr '\n' ' ')
       if [ -n "$others" ]; then log "  $g -> $dep RESET withheld: the claim is also mounted or templated by $others — the volume is not this deployment's alone; NOT resetting"; continue; fi
-      if mounted_with_subpath "$dep" "$(claim_of "$dep")"; then log "  $g -> $dep RESET withheld: the claim is mounted with a subPath — the volume root is not the state directory; NOT resetting"; continue; fi
+      mounted_with_subpath "$dep" "$(claim_of "$dep")"; src=$?
+      if [ "$src" -eq 0 ]; then log "  $g -> $dep RESET withheld: the claim is mounted with a subPath — the volume root is not the state directory; NOT resetting"; continue; fi
+      if [ "$src" -eq 2 ]; then log "  $g -> $dep RESET withheld: the deployment's mounts could not be read — a failed read is not 'no subPath'; NOT resetting"; continue; fi
       why=$(streams_only_dir "$dir" "$g") || { log "  $g -> $dep RESET withheld: $dir holds something other than Kafka Streams state for $g (${why}) — the volume is not state-only; NOT resetting"; continue; }
       if ! same_filesystem "$dir"; then log "  $g -> $dep RESET withheld: $dir is a mount point of its own — NOT resetting a mounted filesystem"; continue; fi
       log "  $g -> $dep RESET: confirmed state-corruption signature ($corruption) — scaling $reps->0, swapping $dir for an empty directory, scaling back to $reps"
