@@ -66,7 +66,7 @@ def _sandbox(tmp_path, *, group=GROUP, replicas="1", pod_age=258, restoring=Fals
              rx_kib=0, shared_claim_pod=False, shared_claim_workload=False, hanging_row=False,
              shared_claim_cronjob=False, late_holder=False, sub_path=False, tx_layout="tabs",
              init_sub_path=False, shared_claim_rs=False, foreign_file=False,
-             sidecar=False, sidecar_corrupt=False, old_pod_first=False, kafka_down=False):
+             sidecar=False, sidecar_corrupt=False, old_pod_first=False, kafka_down=False, sidecar_mounts=False):
     """A fake estate: one consumer group with lag, one deployment (plus an optional look-alike),
     pods owned through ReplicaSets, one PV. Every stub is a list of bash lines."""
     bin_dir = tmp_path / "bin"; bin_dir.mkdir()
@@ -109,26 +109,30 @@ def _sandbox(tmp_path, *, group=GROUP, replicas="1", pod_age=258, restoring=Fals
          f'  "get pvc {CLAIM} -o jsonpath={{.spec.volumeName}}") printf "{PV}" ;;',
          f'  "get pv {PV} -o jsonpath="*) printf "%s" \'{reported_pv}\' ;;',
          f'  "get hpa -o jsonpath="*) [ "{int(hpa)}" = 1 ] && echo "{DEPLOY}"; true ;;',
-         f'  "get rs -o jsonpath="*) echo "{RS} Deployment/{DEPLOY}"; ' + (f'echo "{DECOY_RS} Deployment/{DECOY_DEPLOY}"; ' if decoy else '') + 'true ;;',
+         f'  "get rs -o jsonpath="*".kind"*) echo "{RS} Deployment/{DEPLOY}"; ' + (f'echo "{DECOY_RS} Deployment/{DECOY_DEPLOY}"; ' if decoy else '') + 'true ;;',
+         f'  "get rs -o jsonpath="*) echo "{RS} {DEPLOY}"; ' + (f'echo "{DECOY_RS} {DECOY_DEPLOY}"; ' if decoy else '') + 'true ;;',
          '  "get pods --no-headers")',
          f'      if [ "$reps" != 0 ] || [ "{int(pods_linger)}" = 1 ]; then echo "{POD}   1/1   Running   0   4h"; fi ;;',
          '  "get pods -o jsonpath="*".spec.volumes"*)',
          f'      [ "{int(shared_claim_pod)}" = 1 ] && echo "some-other-job-abc {CLAIM} "',
          f'      [ "{int(late_holder)}" = 1 ] && [ -f "{tmp_path}/swapped" ] && echo "cron-late-xyz {CLAIM} "',
          f'      [ "$reps" != 0 ] && echo "{POD} {CLAIM} "; true ;;',
-         f'  "get cronjobs -o jsonpath="*) [ "{int(shared_claim_cronjob)}" = 1 ] && echo "CronJob/nightly-compact {CLAIM} "; true ;;',
-         '  "get pods -o jsonpath="*)',
-         # the decoy pod is listed FIRST so any prefix-based selection would pick it
+         # the deployment's pods (owner kind + creation time); the decoy pod is listed FIRST so any prefix-based selection would pick it
+         '  "get pods -o jsonpath="*".kind"*)',
          (f'      echo "{DECOY_POD} ReplicaSet/{DECOY_RS} Running {created}"' if decoy else '      true'),
          f'      if [ -f "{tmp_path}/swapped" ] && [ "{int(intruder)}" = 1 ] && [ ! -f "{tmp_path}/intruder-deleted" ]; then echo "{POD}-intruder ReplicaSet/{RS} Running {created}"; fi',
          f'      touch "{tmp_path}/pods_checked"',
          (f'      echo "{POD}-old ReplicaSet/{RS} Running {(datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=300)).strftime("%Y-%m-%dT%H:%M:%SZ")}"' if old_pod_first else '      true'),
          f'      if [ "$reps" != 0 ] || [ "{int(pods_linger)}" = 1 ]; then echo "{POD} ReplicaSet/{RS} Running {created}"; fi ;;',
+         # the RX sampler's form: owner NAME only, no kind
+         '  "get pods -o jsonpath="*"status.phase"*)',
+         f'      if [ "$reps" != 0 ] || [ "{int(pods_linger)}" = 1 ]; then echo "{POD} {RS} Running"; fi; true ;;',
+         f'  "get cronjobs -o jsonpath="*) [ "{int(shared_claim_cronjob)}" = 1 ] && echo "CronJob/nightly-compact {CLAIM} "; true ;;',
          '  "get deploy,sts,ds,jobs,rs,rc -o jsonpath="*)',
          f'      echo "Deployment/{DEPLOY} {CLAIM} "; echo "ReplicaSet/{RS} {CLAIM} "',
          f'      [ "{int(shared_claim_workload)}" = 1 ] && echo "StatefulSet/{DEPLOY}-twin {CLAIM} "',
          f'      [ "{int(shared_claim_rs)}" = 1 ] && echo "ReplicaSet/orphan-rs-7f9 {CLAIM} "; true ;;',
-         f'  "get pod "*" -o jsonpath="*"volumeMounts"*) echo "app state"; [ "{int(sidecar)}" = 1 ] && echo "log-shipper"; true ;;',
+         f'  "get pod "*" -o jsonpath="*"volumeMounts"*) [ "{int(sidecar)}" = 1 ] && echo "log-shipper{" state" if sidecar_mounts else ""}"; echo "app state" ;;',
          f'  "get pod "*" -o jsonpath="*".spec.volumes"*) echo "state {CLAIM}" ;;',
          f'  "get pod "*" -o jsonpath="*"containers"*) [ "{int(sidecar)}" = 1 ] && echo "log-shipper"; echo "app" ;;',
          f'  "exec {POD} --container app -- kill -3 1") touch "{dumped}" ;;',
@@ -139,13 +143,13 @@ def _sandbox(tmp_path, *, group=GROUP, replicas="1", pod_age=258, restoring=Fals
          '      echo "Inter-|   Receive"; echo " face |bytes"',
          '      echo "    lo: 999999 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0"',
          f'      echo "  eth0: $(( 1000000 + c * {rx_kib} * 1024 )) 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0" ;;',
-         f'  "logs {POD} --container app --since=1m") [ -f "{dumped}" ] && cat "{tmp_path}/dump.txt"; true ;;',
-         f'  "logs {DECOY_POD} --container app --since=1m") [ -f "{dumped}-decoy" ] && cat "{tmp_path}/decoy-dump.txt"; true ;;',
+         f'  "logs {POD} --container app --since=1m") echo app >> "{tmp_path}/logs-read"; [ -f "{dumped}" ] && cat "{tmp_path}/dump.txt"; true ;;',
+         f'  "logs {DECOY_POD} --container app --since=1m") echo app >> "{tmp_path}/logs-read"; [ -f "{dumped}-decoy" ] && cat "{tmp_path}/decoy-dump.txt"; true ;;',
          f'  "logs {POD} --container app --since=10m")',
          f'      echo "{logline}"; echo "{hist_line}"; ' + " ".join(f'echo "{RETRY_LOG}";' for _ in range(retry_lines)) + f' [ "{int(corrupt)}" = 1 ] && echo "{CORRUPT_LOG}"; true ;;',
-         f'  "logs {DECOY_POD} --container app --since=10m") echo "{CORRUPT_LOG}" ;;',
-         f'  "logs "*" --container app --since=3m") echo "{logline}" ;;',
-         f'  "logs "*" --container log-shipper "*) [ "{int(sidecar_corrupt)}" = 1 ] && echo "{CORRUPT_LOG}"; true ;;',
+         f'  "logs {DECOY_POD} --container app --since=10m") echo app >> "{tmp_path}/logs-read"; echo "{CORRUPT_LOG}" ;;',
+         f'  "logs "*" --container app --since=3m") echo app >> "{tmp_path}/logs-read"; echo "{logline}" ;;',
+         f'  "logs "*" --container log-shipper "*) echo log-shipper >> "{tmp_path}/logs-read"; [ "{int(sidecar_corrupt)}" = 1 ] && echo "{CORRUPT_LOG}"; true ;;',
          '  "logs "*) echo "container-less logs refused" >&2; exit 2 ;;',
          f'  "scale deploy/{DEPLOY} --replicas="*)',
          f'      want=${{all##*--replicas=}}; echo "$all" >> "{actions}"',
@@ -222,7 +226,7 @@ def _sandbox(tmp_path, *, group=GROUP, replicas="1", pod_age=258, restoring=Fals
     env.update(
         PATH=f"{bin_dir}:{env['PATH']}",
         KUBECTL="k3s kubectl -n options-edge", SA="--as=system:serviceaccount:options-edge:jenkins-deployer",
-        KBIN=str(kbin), STORAGE=str(storage), GROUP_MAP=str(tmp_path / "groups.map"),
+        KBIN=str(kbin), STORAGE=str(storage), GROUP_MAP=str(tmp_path / "groups.map"), CONTAINER_MAP=str(tmp_path / "containers.map"),
         LOG=str(tmp_path / "selfheal.log"), STATEDIR=str(tmp_path / "state"),
         SAMPLE_SECONDS="1", LAG_FLOOR="2000", LOAD_CEILING="9999", CONFIRM_CYCLES="2",
         EVIDENCE_MIN_SECONDS="0", DUMP_SETTLE_SECONDS="0", POD_GONE_WAIT_SECONDS="5", WEDGE_CYCLES="2",
@@ -593,6 +597,18 @@ def test_a_second_instance_leaves_while_the_first_is_alive(tmp_path):
         holder.kill()
 
 
+def test_five_simultaneous_starts_over_a_stale_lock_admit_exactly_one(tmp_path):
+    """The takeover of a dead owner's lock is itself guarded: contenders that lose the token leave."""
+    env, _ = _sandbox(tmp_path)
+    sd = Path(env["STATEDIR"]); sd.mkdir(); os.symlink("999999", sd / ".lock")
+    procs = [subprocess.Popen(["bash", str(SCRIPT)], env={**env, "SAMPLE_SECONDS": "4"},
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True) for _ in range(5)]
+    outs = [p.communicate(timeout=120)[0] for p in procs]
+    started = sum(o.count("self-heal start") for o in outs)
+    assert started == 1, outs
+    assert not (sd / ".lock.takeover").exists()
+
+
 def test_a_stale_lock_from_a_dead_process_is_taken_over(tmp_path):
     env, _ = _sandbox(tmp_path)
     sd = Path(env["STATEDIR"]); sd.mkdir()
@@ -653,12 +669,32 @@ def test_the_youngest_pod_decides_the_grace_during_a_rolling_update(tmp_path):
 
 
 def test_corruption_logged_by_a_sidecar_is_not_the_apps(tmp_path):
+    """The sidecar is listed first (the pod's default); only the app mounts the state volume."""
     env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP, sidecar=True, sidecar_corrupt=True, corrupt=False)
     _seed(env, strikes=1, corrupt=CORRUPT_SIG)
     out = _run(env)
-    # the sidecar's line is not the app's: there is no corruption evidence at all, so nothing happens
+    reads = (tmp_path / "logs-read").read_text().split()
+    assert "app" in reads and "log-shipper" not in reads, reads   # the app's logs WERE read, the sidecar's never
     assert "container log is clean" in out and "NOT touched" in out
     assert Path(env["_MARKER"]).exists() and "--replicas=0" not in _acted(actions)
+
+
+def test_two_containers_mounting_the_state_volume_yield_no_evidence(tmp_path):
+    """A debug sidecar also mounts the volume and logs the corruption: ambiguous → nothing."""
+    env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP, sidecar=True, sidecar_mounts=True, sidecar_corrupt=True, corrupt=True)
+    _seed(env, strikes=1, corrupt=CORRUPT_SIG)
+    out = _run(env)
+    assert "cannot be named unambiguously" in Path(env["LOG"]).read_text() and not (tmp_path / "logs-read").exists()
+    assert Path(env["_MARKER"]).exists() and _acted(actions) == ""
+
+
+def test_mutation_naming_the_app_container_resolves_the_ambiguity(tmp_path):
+    env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP, sidecar=True, sidecar_mounts=True, sidecar_corrupt=True, corrupt=True)
+    Path(env["CONTAINER_MAP"]).write_text(f"{DEPLOY} app\n")
+    _seed(env, strikes=1, corrupt=CORRUPT_SIG)
+    out = _run(env)
+    reads = (tmp_path / "logs-read").read_text().split()
+    assert "log-shipper" not in reads and "old tree removed" in out
 
 
 def test_mutation_the_same_corruption_in_the_app_container_resets(tmp_path):

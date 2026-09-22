@@ -75,6 +75,7 @@ LOG="${LOG:-/var/log/oe-pipeline-selfheal.log}"
 STATEDIR="${STATEDIR:-/var/lib/oe-selfheal}"
 STORAGE="${STORAGE:-/home/options-edge/data/k3s/storage}"
 GROUP_MAP="${GROUP_MAP:-/etc/oe-selfheal/groups.map}"   # optional "group deployment" lines
+CONTAINER_MAP="${CONTAINER_MAP:-/etc/oe-selfheal/containers.map}"   # optional "deployment container" lines
 
 SAMPLE_SECONDS="${SAMPLE_SECONDS:-90}"   # gap between the two offset samples
 LAG_FLOOR="${LAG_FLOOR:-2000}"           # below this, a still group is just a quiet topic
@@ -111,6 +112,7 @@ CORRUPT_RE='Invalid state during store open|TaskCorruptedException|ProcessorStat
 
 mkdir -p "$STATEDIR"
 log() { printf '[%s] %s\n' "$(date '+%F %T %Z')" "$*" | tee -a "$LOG"; }
+logq() { printf '[%s] %s\n' "$(date '+%F %T %Z')" "$*" | tee -a "$LOG" >&2; }   # for functions whose stdout is captured
 run() { if [ "$DRY_RUN" = true ]; then log "DRY: $*"; return 0; fi; "$@"; }
 # A dry run that WRITES is not a dry run. On 2026-09-21 two DRY_RUN passes silently advanced two
 # groups to strike 2, so the first real run opened at strike 3 and declared healthy services defective.
@@ -127,15 +129,28 @@ now_s()    { date +%s; }
 # rename is atomic too, so only one contender can succeed and go on to claim the lock.
 LOCK="$STATEDIR/.lock"
 take_lock() {
-  local owner attempt
-  for attempt in 1 2 3; do
-    ln -s "$$" "$LOCK" 2>/dev/null && return 0
-    owner=$(readlink "$LOCK" 2>/dev/null || echo "")
-    if [ -n "$owner" ] && kill -0 "$owner" 2>/dev/null; then return 1; fi
+  local owner
+  ln -s "$$" "$LOCK" 2>/dev/null && return 0
+  owner=$(readlink "$LOCK" 2>/dev/null || echo "")
+  if [ -n "$owner" ] && kill -0 "$owner" 2>/dev/null; then return 1; fi
+  # A stale lock is taken over by exactly ONE contender: the takeover itself is guarded by an atomic
+  # mkdir token, and under that token the lock is re-read — it must still point at the same dead pid,
+  # or another contender has already replaced it and this one leaves. A token left behind by a
+  # contender that died mid-takeover expires after ten minutes; until then everyone leaves, which
+  # costs a cycle and never a second run.
+  if ! mkdir "$LOCK.takeover" 2>/dev/null; then
+    if [ -n "$(find "$LOCK.takeover" -maxdepth 0 -mmin +10 2>/dev/null)" ]; then rm -f "$LOCK.takeover/pid"; rmdir "$LOCK.takeover" 2>/dev/null; fi
+    return 1
+  fi
+  echo $$ > "$LOCK.takeover/pid"
+  if [ "$(readlink "$LOCK" 2>/dev/null || echo "")" = "$owner" ]; then
     echo "stale lock from pid ${owner:-?} — taking over"
-    mv "$LOCK" "$LOCK.stale.$$" 2>/dev/null && rm -f "$LOCK.stale.$$"
-  done
-  return 1
+    rm -f "$LOCK"; ln -s "$$" "$LOCK" 2>/dev/null; rc=$?
+  else
+    rc=1
+  fi
+  rm -f "$LOCK.takeover/pid"; rmdir "$LOCK.takeover" 2>/dev/null
+  return "$rc"
 }
 take_lock || { echo "another self-heal run is active (pid $(readlink "$LOCK" 2>/dev/null)) — leaving"; exit 0; }
 release_lock() { [ "$(readlink "$LOCK" 2>/dev/null)" = "$$" ] && rm -f "$LOCK"; return 0; }
@@ -225,20 +240,28 @@ deployment_pods() {
 }
 running_pod() { deployment_pods "$1" | awk '$2=="Running" {print $1; exit}'; }
 # Evidence must come from the Streams container, never from a sidecar that happens to be the
-# pod's default: the container is the one whose volumeMounts include the streams-state volume; a
-# single-container pod needs no proof; anything else resolves to nothing (no evidence, no action).
-app_container() {   # $1 = pod -> container name, or nothing
-  local pod="$1" names vol
+# pod's default — or one that happens to mount the same volume. A single-container pod needs no
+# proof. Otherwise the container is the ONE regular container whose volumeMounts include the
+# streams-state volume; two mounters is ambiguous and resolves to nothing (no evidence, no action)
+# unless CONTAINER_MAP names the application container for that deployment explicitly.
+app_container() {   # $1 = pod, $2 = deployment -> container name, or nothing
+  local pod="$1" dep="${2:-}" names vol mapped mounters
   names=$($KUBECTL get pod "$pod" -o jsonpath='{range .spec.containers[*]}{.name}{"\n"}{end}' 2>/dev/null | awk 'NF')
   if [ "$(printf '%s\n' "$names" | awk 'NF' | wc -l | tr -d ' ')" = 1 ]; then printf '%s\n' "$names"; return 0; fi
+  if [ -n "$dep" ] && [ -r "$CONTAINER_MAP" ]; then
+    mapped=$(awk -v d="$dep" '$1==d && NF>=2 {print $2; exit}' "$CONTAINER_MAP")
+    if [ -n "$mapped" ]; then printf '%s\n' "$names" | grep -qx "$mapped" && printf '%s\n' "$mapped"; return 0; fi
+  fi
   vol=$($KUBECTL get pod "$pod" -o jsonpath='{range .spec.volumes[*]}{.name}{" "}{.persistentVolumeClaim.claimName}{"\n"}{end}' 2>/dev/null | awk '$2 ~ /-streams-state$/ {print $1; exit}')
   [ -n "$vol" ] || return 0
-  $KUBECTL get pod "$pod" -o jsonpath='{range .spec.containers[*]}{.name}{" "}{range .volumeMounts[*]}{.name}{" "}{end}{"\n"}{end}' 2>/dev/null \
-    | awk -v v="$vol" '{ for (i = 2; i <= NF; i++) if ($i == v) { print $1; exit } }'
+  mounters=$($KUBECTL get pod "$pod" -o jsonpath='{range .spec.containers[*]}{.name}{" "}{range .volumeMounts[*]}{.name}{" "}{end}{"\n"}{end}' 2>/dev/null \
+    | awk -v v="$vol" '{ for (i = 2; i <= NF; i++) if ($i == v) { print $1; break } }')
+  [ "$(printf '%s\n' "$mounters" | awk 'NF' | wc -l | tr -d ' ')" = 1 ] && printf '%s\n' "$mounters"
+  return 0
 }
 # kubectl verbs against the Streams container of a pod (nothing runs if it cannot be named)
-kc_logs() { local c; c=$(app_container "$1"); [ -n "$c" ] || return 1; shift; $KUBECTL logs "$1" --container "$c" "${@:2}" 2>/dev/null; }
-kc_exec() { local c; c=$(app_container "$1"); [ -n "$c" ] || return 1; shift; $KUBECTL exec "$1" --container "$c" -- "${@:2}" 2>/dev/null; }
+kc_logs() { local pod="$1" dep="$2" c; shift 2; c=$(app_container "$pod" "$dep"); [ -n "$c" ] || return 1; $KUBECTL logs "$pod" --container "$c" "$@" 2>/dev/null; }
+kc_exec() { local pod="$1" dep="$2" c; shift 2; c=$(app_container "$pod" "$dep"); [ -n "$c" ] || return 1; $KUBECTL exec "$pod" --container "$c" -- "$@" 2>/dev/null; }
 pods_of()     { deployment_pods "$1" | awk '{print $1}'; }
 age_minutes() {   # $1 = RFC3339 creationTimestamp
   python3 -c 'import sys,datetime; t=datetime.datetime.fromisoformat(sys.argv[1].replace("Z","+00:00")); print(int((datetime.datetime.now(datetime.timezone.utc)-t).total_seconds()//60))' "$1" 2>/dev/null || echo 999
@@ -287,9 +310,9 @@ live_processes() {   # process UUIDs of the group's members (a Streams member id
 wedge_frames() {
   local dep="$1" pod parked retries
   pod=$(running_pod "$dep"); [ -n "$pod" ] || return 0
-  kc_exec "$pod" "$pod" kill -3 1 >/dev/null 2>&1 || return 0
+  kc_exec "$pod" "$dep" kill -3 1 >/dev/null 2>&1 || { logq "  $dep: the Streams container of $pod cannot be named unambiguously (name it in $CONTAINER_MAP) — no evidence read"; return 0; }
   sleep "$DUMP_SETTLE_SECONDS"
-  parked=$(kc_logs "$pod" "$pod" --since=1m | awk -v sleep_re="$SLEEP_RE" '
+  parked=$(kc_logs "$pod" "$dep" --since=1m | awk -v sleep_re="$SLEEP_RE" '
     function flush() { if (name != "" && name ~ /StreamThread/) {
         if (fetch && slept) print "fetchCommittedOffsets"
         if (init) print "initTransactions" }
@@ -300,7 +323,7 @@ wedge_frames() {
                    if ($0 ~ sleep_re) slept = 1 }
     END { flush() }' | sort -u)
   if printf '%s\n' "$parked" | grep -qx initTransactions; then
-    retries=$(kc_logs "$pod" "$pod" --since=10m | grep -cE "$RETRY_RE")
+    retries=$(kc_logs "$pod" "$dep" --since=10m | grep -cE "$RETRY_RE")
     [ "${retries:-0}" -ge "$RETRY_LINES_MIN" ] || parked=$(printf '%s\n' "$parked" | grep -vx initTransactions)
   fi
   printf '%s\n' "$parked" | awk 'NF' | tr '\n' ',' | sed 's/,$//'
@@ -308,7 +331,7 @@ wedge_frames() {
 corruption_lines() {   # in THIS container's log (no --previous), recent
   local dep="$1" pod
   pod=$(running_pod "$dep"); [ -n "$pod" ] || return 0
-  kc_logs "$pod" "$pod" --since=10m | grep -oE "$CORRUPT_RE" | sort -u | tr '\n' ',' | sed 's/,$//'
+  kc_logs "$pod" "$dep" --since=10m | grep -oE "$CORRUPT_RE" | sort -u | tr '\n' ',' | sed 's/,$//'
 }
 # PERSISTENT evidence: "<what>" observed for <key> now extends a run only if the SAME <what> was
 # recorded for <key> on an earlier cycle between EVIDENCE_MIN and EVIDENCE_MAX seconds ago; the
@@ -409,9 +432,13 @@ statesizes() { du -sk "$STORAGE"/*_options-edge_*-streams-state 2>/dev/null | aw
 # fetching a moving source pulls megabytes per minute; one parked in a retry loop only heartbeats.
 # Sampled for every Running pod at t0 and t1 ("<pod> <bytes>" per line).
 rxsizes() {
-  $KUBECTL get pods --no-headers 2>/dev/null | awk '$3=="Running"{print $1}' | while read -r pod; do
-    printf '%s %s\n' "$pod" "$(kc_exec "$pod" "$pod" cat /proc/net/dev | awk -F'[: ]+' 'NR>2 && $2!="lo" {s+=$3} END{print s+0}')"
-  done
+  local rsown
+  rsown=$($KUBECTL get rs -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.metadata.ownerReferences[0].name}{"\n"}{end}' 2>/dev/null)
+  $KUBECTL get pods -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.metadata.ownerReferences[0].name}{" "}{.status.phase}{"\n"}{end}' 2>/dev/null \
+    | awk -v rs="$rsown" 'BEGIN { n = split(rs, r, "\n"); for (i = 1; i <= n; i++) { split(r[i], f, " "); own[f[1]] = f[2] } } $3=="Running" && ($2 in own) { print $1, own[$2] }' \
+    | while read -r pod dep; do
+        printf '%s %s\n' "$pod" "$(kc_exec "$pod" "$dep" cat /proc/net/dev | awk -F'[: ]+' 'NR>2 && $2!="lo" {s+=$3} END{print s+0}')"
+      done
 }
 
 # A group that commits rarely can commit BETWEEN two cycles and look flat inside each one. So the
@@ -596,7 +623,7 @@ while read -r g lag delta srcdelta; do
   fi
   if [ -z "$alive" ]; then
     pod=$(running_pod "$dep")
-    [ -n "$pod" ] && kc_logs "$pod" "$pod" --since=3m | grep -qiE "restor(ing|ed|ation)" && alive="logged changelog restoration within the last 3 minutes"
+    [ -n "$pod" ] && kc_logs "$pod" "$dep" --since=3m | grep -qiE "restor(ing|ed|ation)" && alive="logged changelog restoration within the last 3 minutes"
   fi
   if [ -z "$alive" ] && [ -n "${pod:-}" ]; then
     x0=$(echo "$r0" | awk -v k="$pod" '$1==k{print $2}'); x1=$(echo "$r1" | awk -v k="$pod" '$1==k{print $2}')
