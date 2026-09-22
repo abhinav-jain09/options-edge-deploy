@@ -278,6 +278,11 @@ patches:
   # gateway relays its status stream. Turns the legacy PREOPEN publisher OFF (mutually
   # exclusive by construction). Prod untouched — base flags stay false.
   - path: ibkr-preopen-gate-dev-patch.yaml
+  # DEV-ONLY: Task C, the estimated pre-open GEX scheduler (options-edge-processing PR #886).
+  # Independent of the R-PREOPEN selection above — see the patch header for why. Prod stays dark
+  # (code default PREOPEN_ESTIMATED_GEX_ENABLED=false); prod is meant to receive this via a topic
+  # mirror from dev, not its own scheduler.
+  - path: estimated-preopen-gex-dev-patch.yaml
   # GAMMA (user-visible) — enabled now that its ONE stated precondition is met: the conforming
   # UI is deployed on dev (web #439: the option-chain pre-open handler, the IBKR palette, the
   # two-plane number-visibility rules and truthful provenance), so an IBKR value can no longer
