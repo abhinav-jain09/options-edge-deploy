@@ -131,7 +131,7 @@ fi
 # READY for hours while consuming zero). The self-heal unit is the check for that; it also runs every
 # 10 min from its own timer. It is started here ASYNCHRONOUSLY: its evidence gathering (thread dumps,
 # coordinator reads, a possible state reset) is bounded per cycle but must never hold this unit's
-# TimeoutStartSec hostage, and a second concurrent run leaves at once (flock -n) — so this start is
+# TimeoutStartSec hostage, and a second concurrent run leaves at once (pid lock) — so this start is
 # only about closing the gap right after boot instead of up to 10 minutes later.
 if systemctl cat oe-pipeline-selfheal.service >/dev/null 2>&1; then
   log "pipeline self-heal: started asynchronously (oe-pipeline-selfheal.service; log /var/log/oe-pipeline-selfheal.log)"

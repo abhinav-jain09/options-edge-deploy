@@ -2,13 +2,14 @@
 
 The script exists because on 2026-09-21 prod came back from a power cut with every systemd unit
 healthy and no data moving. What makes it dangerous is the same thing that makes it useful: it
-restarts production services and empties their state on its own. Its rule is that NOTHING happens
+restarts production services and resets their state on its own. Its rule is that NOTHING happens
 on the absence of progress, and nothing happens on a single observation — every action needs
 positive, attributed, persistent evidence of the fault it fixes. So the tests here are about the
 cases where it must NOT act, the destructive path's every failure mode, and each "must not act"
 case is paired with a mutation showing the guard under test is what held it back. An assertion
 that passes with the guard removed is not an assertion.
 """
+import datetime
 import os
 import subprocess
 import textwrap
@@ -21,25 +22,37 @@ DEPLOY = "strike-liquidity-heatmap-service"
 GROUP = "options-edge-strike-liquidity-heatmap-prod"
 CLAIM = f"{DEPLOY}-streams-state"
 PV = "pvc-deadbeef"
+RS = f"{DEPLOY}-685f9ffd4c"
+POD = f"{RS}-tt69c"
+DECOY_DEPLOY = f"{DEPLOY}-canary"
+DECOY_RS = f"{DECOY_DEPLOY}-1a2b3c4d"
+DECOY_POD = f"{DECOY_RS}-zz999"
 DEAD_PROC = "76f02087-3c02-42ad-8266-247d8888bab4"    # process UUID of the producer that died
 LIVE_PROC = "90aa94b7-00a8-4d95-b1a9-8550d8770f8a"    # process UUID of the pod that is running now
-FRAME = "\tat org.apache.kafka.clients.consumer.internals.ConsumerCoordinator.fetchCommittedOffsets(ConsumerCoordinator.java:996)\n"
-WEDGE_DUMP = f'"{GROUP}-{LIVE_PROC}-StreamThread-1" #55 prio=5 waiting on condition\n{FRAME}'
-OTHER_THREAD_DUMP = f'"kafka-admin-client-thread | {GROUP}-admin" #50 daemon prio=5 runnable\n{FRAME}'
-HEALTHY_DUMP = (f'"{GROUP}-{LIVE_PROC}-StreamThread-1" #55 prio=5 runnable\n'
-                '\tat org.apache.kafka.clients.consumer.internals.ClassicKafkaConsumer.pollForFetches(ClassicKafkaConsumer.java:731)\n')
+FETCH = "\tat org.apache.kafka.clients.consumer.internals.ConsumerCoordinator.fetchCommittedOffsets(ConsumerCoordinator.java:996)\n"
+SLEEP = "\tat java.lang.Thread.sleep0(java.base@21.0.12/Native Method)\n\tat org.apache.kafka.common.utils.Timer.sleep(Timer.java:212)\n"
+INIT = "\tat org.apache.kafka.clients.producer.KafkaProducer.initTransactions(KafkaProducer.java:659)\n"
+PARK = "\tat jdk.internal.misc.Unsafe.park(java.base@21.0.12/Native Method)\n"
+HEAD = f'"{GROUP}-{LIVE_PROC}-StreamThread-1" #55 prio=5 waiting on condition\n'
+WEDGE_DUMP = HEAD + SLEEP + FETCH                      # the coordinator retry loop: a real park
+FETCH_LIVE_DUMP = HEAD + FETCH                          # inside the call, not sleeping: in flight
+INIT_DUMP = HEAD + PARK + INIT                          # initTransactions in flight
+OTHER_THREAD_DUMP = f'"kafka-admin-client-thread | {GROUP}-admin" #50 daemon prio=5 runnable\n' + SLEEP + FETCH
+HEALTHY_DUMP = HEAD + "\tat org.apache.kafka.clients.consumer.internals.ClassicKafkaConsumer.pollForFetches(ClassicKafkaConsumer.java:731)\n"
 CORRUPT_LOG = "ERROR ... ProcessorStateException: Invalid state during store open"
 CORRUPT_SIG = "Invalid state during store open,ProcessorStateException"
+RETRY_LOG = "WARN StreamsProducer - Timeout exception caught trying to initialize transactions. Reattempting initialization"
 
 
-def _sandbox(tmp_path, *, replicas="1", pod_age="4h18m", restoring=False, lag=1_900_000,
+def _sandbox(tmp_path, *, group=GROUP, replicas="1", pod_age=258, restoring=False, lag=1_900_000,
              advance=0, source_advance=50_000, grow_state=False, wedge=WEDGE_DUMP, corrupt=False,
-             hist_line="", open_tx_age_minutes=None, tx_id=None, tx_proc=DEAD_PROC,
-             members=(LIVE_PROC,), group_state="Stable", no_header_for="", abort_fail=False,
-             hanging_fail=False, scale_fail_to="", pods_linger=False, find_fail=False,
-             stale_twin=False, pv_path_override=None, extra_claim=False, rescale_between=False,
-             intruder=False, hpa=False, deployments=(DEPLOY,)):
-    """A fake estate: one consumer group with lag, one deployment, one pod, one PV."""
+             hist_line="", retry_lines=0, decoy=False, open_tx_age_minutes=None, tx_id=None,
+             tx_proc=DEAD_PROC, members=(LIVE_PROC,), group_state="Stable", no_header_for="",
+             abort_fail=False, hanging_fail=False, scale_fail_to="", pods_linger=False,
+             find_fail=False, stale_twin=False, pv_path_override=None, extra_claim=False,
+             rescale_between=False, intruder=False, hpa=False, deployments=(DEPLOY,)):
+    """A fake estate: one consumer group with lag, one deployment (plus an optional look-alike),
+    pods owned through ReplicaSets, one PV."""
     bin_dir = tmp_path / "bin"; bin_dir.mkdir()
     kbin = tmp_path / "kbin"; kbin.mkdir()
     storage = tmp_path / "storage"; storage.mkdir()
@@ -49,10 +62,10 @@ def _sandbox(tmp_path, *, replicas="1", pod_age="4h18m", restoring=False, lag=1_
     dumped = tmp_path / "dumped"
     pv_path = storage / f"{PV}_options-edge_{CLAIM}"
     pv_path.mkdir(); (pv_path / "rocksdb").write_bytes(b"x" * 1000)
-    if find_fail:   # the wipe itself fails (EIO, a vanished mount): only the wipe call, nothing else
+    if find_fail:   # removing the parked old tree fails: only that call, nothing else
         (bin_dir / "find").write_text(textwrap.dedent("""\
             #!/usr/bin/env bash
-            case "$*" in *"-mindepth 1 -delete"*) echo "find: cannot delete: Input/output error" >&2; exit 1 ;; esac
+            case "$*" in *".reset-"*"-mindepth 1 -delete"*) echo "find: cannot delete: Input/output error" >&2; exit 1 ;; esac
             exec /usr/bin/find "$@"
             """))
     if stale_twin:   # a lexically-earlier directory with the same claim name, NOT bound to the PVC
@@ -60,13 +73,18 @@ def _sandbox(tmp_path, *, replicas="1", pod_age="4h18m", restoring=False, lag=1_
         (twin / "rocksdb").write_bytes(b"s" * 1000)
     reported_pv = pv_path_override if pv_path_override is not None else str(pv_path)
     (tmp_path / "dump.txt").write_text(wedge or "")
+    (tmp_path / "decoy-dump.txt").write_text(WEDGE_DUMP)
 
-    pod = f"{DEPLOY}-685f9ffd4c-tt69c"
+    created = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=pod_age)).strftime("%Y-%m-%dT%H:%M:%SZ")
     logline = ("StateUpdater-1 INFO StoreChangelogReader - Finished restoring changelog"
                if restoring else "ConsumerCoordinator - Request joining group")
     scaled_file = tmp_path / "scaled"
     claims = f"{CLAIM}\\n" + (f"second-{CLAIM}\\n" if extra_claim else "")
     deploy_rows = "".join(f'echo "{d}   $reps/$reps   $reps   $reps   4h"; ' for d in deployments)
+    rs_rows = f'echo "{RS} Deployment/{DEPLOY}"; ' + (f'echo "{DECOY_RS} Deployment/{DECOY_DEPLOY}"; ' if decoy else "")
+    # the decoy pod is listed FIRST so any prefix-based selection would pick it
+    decoy_pod_row = f'echo "{DECOY_POD} ReplicaSet/{DECOY_RS} Running {created}"; ' if decoy else ""
+    retry_rows = "".join(f'echo "{RETRY_LOG}"; ' for _ in range(retry_lines))
 
     (bin_dir / "k3s").write_text(textwrap.dedent(f"""\
         #!/usr/bin/env bash
@@ -81,37 +99,40 @@ def _sandbox(tmp_path, *, replicas="1", pod_age="4h18m", restoring=False, lag=1_
           "get pvc {CLAIM} -o jsonpath={{.spec.volumeName}}")  printf '{PV}' ;;
           "get pv {PV} -o jsonpath="*)           printf '%s' '{reported_pv}' ;;
           "get hpa -o jsonpath="*)               [ "{int(hpa)}" = 1 ] && echo "{DEPLOY}"; true ;;
-          "get pods --no-headers")
-              if [ "$reps" != 0 ] || [ "{int(pods_linger)}" = 1 ]; then echo "{pod}   1/1   Running   2 (71m ago)   {pod_age}"; fi ;;
+          "get rs -o jsonpath="*)                {rs_rows} ;;
           "get pods -o jsonpath="*)
-              if [ -f "{tmp_path}/wiped" ] && [ "{int(intruder)}" = 1 ]; then echo "{pod}-intruder"; fi
+              {decoy_pod_row}
+              if [ -f "{tmp_path}/swapped" ] && [ "{int(intruder)}" = 1 ] && [ ! -f "{tmp_path}/intruder-deleted" ]; then echo "{POD}-intruder ReplicaSet/{RS} Running {created}"; fi
               touch "{tmp_path}/pods_checked"
-              if [ "$reps" != 0 ] || [ "{int(pods_linger)}" = 1 ]; then echo "{pod}"; fi ;;
-          "exec {pod} -- kill -3 1")             touch "{dumped}" ;;
-          "logs {pod} --since=1m")               [ -f "{dumped}" ] && cat "{tmp_path}/dump.txt"; true ;;
-          "logs {pod} --since=10m")
-              echo "{logline}"; echo "{hist_line}"; [ "{int(corrupt)}" = 1 ] && echo "{CORRUPT_LOG}"; true ;;
+              if [ "$reps" != 0 ] || [ "{int(pods_linger)}" = 1 ]; then echo "{POD} ReplicaSet/{RS} Running {created}"; fi ;;
+          "exec {POD} -- kill -3 1")             touch "{dumped}" ;;
+          "exec {DECOY_POD} -- kill -3 1")       touch "{dumped}-decoy" ;;
+          "logs {POD} --since=1m")               [ -f "{dumped}" ] && cat "{tmp_path}/dump.txt"; true ;;
+          "logs {DECOY_POD} --since=1m")         [ -f "{dumped}-decoy" ] && cat "{tmp_path}/decoy-dump.txt"; true ;;
+          "logs {POD} --since=10m")
+              echo "{logline}"; echo "{hist_line}"; {retry_rows} [ "{int(corrupt)}" = 1 ] && echo "{CORRUPT_LOG}"; true ;;
+          "logs {DECOY_POD} --since=10m")        echo "{CORRUPT_LOG}" ;;
           "logs "*)                              echo "{logline}" ;;
           "scale deploy/{DEPLOY} --replicas="*)
               want=${{all##*--replicas=}}; echo "$all" >> "{actions}"
               if [ "$want" = "{scale_fail_to}" ]; then echo "Error from server (Forbidden)"; exit 1; fi
               echo "$want" > "{scaled_file}" ;;
+          "delete pod {POD}-intruder "*)         echo "$all" >> "{actions}"; touch "{tmp_path}/intruder-deleted" ;;
           "rollout restart deploy/"*|"delete pod "*) echo "$all" >> "{actions}" ;;
           *) echo "unexpected kubectl call: $all" >&2; exit 2 ;;
         esac
         exit 0
         """))
-    # the wipe is observed through the storage dir: a marker lets the pod stub grow an intruder afterwards
-    (bin_dir / "find").exists() or (bin_dir / "find").write_text(textwrap.dedent(f"""\
+    # the swap is observed through mv: afterwards the pod stub may show an intruder
+    (bin_dir / "mv").write_text(textwrap.dedent(f"""\
         #!/usr/bin/env bash
-        case "$*" in *"-mindepth 1 -delete"*) touch "{tmp_path}/wiped" ;; esac
-        exec /usr/bin/find "$@"
+        /bin/mv "$@" && touch "{tmp_path}/swapped"
         """))
 
     (kbin / "kafka-broker-api-versions.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
     (kbin / "kafka-topics.sh").write_text(
         "#!/usr/bin/env bash\necho 'Topic: __consumer_offsets\tTopicId: x\tPartitionCount: 50\tReplicationFactor: 1'\n")
-    tx_id = tx_id if tx_id is not None else f"{GROUP}-{tx_proc}-11"
+    tx_id = tx_id if tx_id is not None else f"{group}-{tx_proc}-11"
     hdr = lambda name, text: "" if name in no_header_for else text
     hdr_p = hdr("describe", "echo 'ProducerId\tProducerEpoch\tLatestCoordinatorEpoch\tLastSequence\tLastTimestamp\tCurrentTransactionStartOffset'\n")
     if open_tx_age_minutes is None:
@@ -138,18 +159,18 @@ def _sandbox(tmp_path, *, replicas="1", pod_age="4h18m", restoring=False, lag=1_
         exit 0
         """))
     grow = (f'printf "y%.0s" $(seq 1 5000) >> "{pv_path}/rocksdb"') if grow_state else "true"
-    member_rows = "".join(f"echo '{GROUP} {GROUP}-{m}-StreamThread-1-consumer-{m} /10.0.0.1 {GROUP}-{m}-StreamThread-1-consumer 3'\n" for m in members)
+    member_rows = "".join(f"echo '{group} {group}-{m}-StreamThread-1-consumer-{m} /10.0.0.1 {group}-{m}-StreamThread-1-consumer 3'\n" for m in members)
     (kbin / "kafka-consumer-groups.sh").write_text(textwrap.dedent(f"""\
         #!/usr/bin/env bash
         case "$*" in
           *--members*) echo "GROUP CONSUMER-ID HOST CLIENT-ID #PARTITIONS"; {member_rows.strip() or 'true'}; exit 0 ;;
-          *--state*)   echo; echo "GROUP COORDINATOR (ID) ASSIGNMENT-STRATEGY STATE #MEMBERS"; echo "{GROUP} 192.168.100.252:9092 (1) stream {group_state} 1"; exit 0 ;;
+          *--state*)   echo; echo "GROUP COORDINATOR (ID) ASSIGNMENT-STRATEGY STATE #MEMBERS"; echo "{group} 192.168.100.252:9092 (1) stream {group_state} 1"; exit 0 ;;
         esac
         n=0; [ -f "{calls}" ] && n=$(cat "{calls}"); n=$((n+1)); echo "$n" > "{calls}"
         if [ "$n" -ge 2 ]; then {grow}; fi
         cur=$((1000 + (n-1)*{advance})); end=$((1000 + {lag} + (n-1)*{source_advance}))
         echo "GROUP TOPIC PARTITION CURRENT-OFFSET LOG-END-OFFSET LAG CONSUMER-ID HOST CLIENT-ID"
-        echo "{GROUP} t 0 $cur $end $((end-cur)) c h cl"
+        echo "{group} t 0 $cur $end $((end-cur)) c h cl"
         """))
     for f in list(bin_dir.iterdir()) + list(kbin.iterdir()):
         f.chmod(0o755)
@@ -162,7 +183,7 @@ def _sandbox(tmp_path, *, replicas="1", pod_age="4h18m", restoring=False, lag=1_
         LOG=str(tmp_path / "selfheal.log"), STATEDIR=str(tmp_path / "state"),
         SAMPLE_SECONDS="1", LAG_FLOOR="2000", LOAD_CEILING="9999", CONFIRM_CYCLES="2",
         EVIDENCE_MIN_SECONDS="0", DUMP_SETTLE_SECONDS="0", POD_GONE_WAIT_SECONDS="5",
-        _ABORTS=str(aborts), _PV=str(pv_path), _STORAGE=str(storage), _DUMPED=str(dumped),
+        _ABORTS=str(aborts), _PV=str(pv_path), _STORAGE=str(storage), _DUMPED=str(dumped), _GROUP=group,
     )
     return env, actions
 
@@ -182,6 +203,7 @@ def _escalate(env, times, **over):
     out = ""
     for _ in range(times):
         Path(env["_DUMPED"]).unlink(missing_ok=True)   # every cycle takes its own dump
+        Path(env["_DUMPED"] + "-decoy").unlink(missing_ok=True)
         out += _run(env, **over)
     return out
 
@@ -189,53 +211,98 @@ def _escalate(env, times, **over):
 def _seed(env, *, observed=5, strikes=0, wedge=None, corrupt=None):
     """Put the group past confirmation with evidence already recorded one cycle ago."""
     sd = Path(env["STATEDIR"]); sd.mkdir(exist_ok=True)
-    (sd / f"{GROUP}.observed").write_text(f"{observed}\n")
-    (sd / f"{GROUP}.strikes").write_text(f"{strikes}\n")
+    g = env["_GROUP"]
+    (sd / f"{g}.observed").write_text(f"{observed}\n")
+    (sd / f"{g}.strikes").write_text(f"{strikes}\n")
     ago = int(time.time()) - 600
-    if wedge: (sd / f"{GROUP}.wedge").write_text(f"{ago} {wedge}\n")
-    if corrupt: (sd / f"{GROUP}.corrupt").write_text(f"{ago} {corrupt}\n")
+    if wedge: (sd / f"{g}.wedge").write_text(f"{ago} {wedge}\n")
+    if corrupt: (sd / f"{g}.corrupt").write_text(f"{ago} {corrupt}\n")
+
+
+def _aside_dirs(env):
+    return [p for p in Path(env["_STORAGE"]).iterdir() if ".reset-" in p.name]
 
 
 # --------------------------------------------------------------------------------------
-# Evidence must be attributed (a StreamThread's own stack frame) and persistent (two cycles).
+# Evidence must be a PARK (retry), attributed to a StreamThread of the deployment's own pod,
+# and persistent across two cycles.
 # --------------------------------------------------------------------------------------
 def test_a_stalled_group_with_a_healthy_stack_is_never_touched(tmp_path):
     env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP)
     out = _escalate(env, 5)
-    assert "no StreamThread is parked in a wedge frame" in out and "NOT touched" in out
+    assert "no StreamThread is parked in a retry" in out and "NOT touched" in out
     assert _acted(actions) == "", "restarted a slow-but-healthy service"
 
 
-def test_a_historical_log_line_mentioning_the_wedge_word_is_not_evidence(tmp_path):
-    env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP,
-                            hist_line="WARN ConsumerCoordinator - fetchCommittedOffsets timed out (retrying)")
+def test_a_live_fetch_without_a_sleep_frame_is_not_a_park(tmp_path):
+    """Inside fetchCommittedOffsets but not sleeping between retries: an in-flight call."""
+    env, actions = _sandbox(tmp_path, wedge=FETCH_LIVE_DUMP)
     _escalate(env, 5)
     assert _acted(actions) == ""
 
 
-def test_a_wedge_frame_in_a_non_stream_thread_is_not_evidence(tmp_path):
+def test_mutation_the_same_fetch_with_the_retry_sleep_is_a_park(tmp_path):
+    env, actions = _sandbox(tmp_path, wedge=WEDGE_DUMP)
+    _escalate(env, 3)
+    assert f"rollout restart deploy/{DEPLOY}" in _acted(actions)
+
+
+def test_a_live_transaction_initialisation_is_not_a_wedge(tmp_path):
+    """A slow EOS producer caught inside initTransactions twice, with no retry log lines."""
+    env, actions = _sandbox(tmp_path, wedge=INIT_DUMP, retry_lines=0)
+    _escalate(env, 5)
+    assert _acted(actions) == "", "restarted a healthy transactional producer"
+
+
+def test_mutation_the_same_initialisation_with_repeated_timeouts_is_a_wedge(tmp_path):
+    env, actions = _sandbox(tmp_path, wedge=INIT_DUMP, retry_lines=3)
+    _escalate(env, 3)
+    assert f"rollout restart deploy/{DEPLOY}" in _acted(actions)
+
+
+def test_a_historical_log_line_mentioning_the_wedge_word_is_not_evidence(tmp_path):
+    env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP,
+                            hist_line="WARN ConsumerCoordinator - fetchCommittedOffsets timed out (retrying) Thread.sleep")
+    _escalate(env, 5)
+    assert _acted(actions) == ""
+
+
+def test_a_park_in_a_non_stream_thread_is_not_evidence(tmp_path):
     env, actions = _sandbox(tmp_path, wedge=OTHER_THREAD_DUMP)
     _escalate(env, 5)
     assert _acted(actions) == ""
 
 
-def test_a_wedge_frame_seen_once_is_not_acted_on(tmp_path):
+def test_evidence_from_a_look_alike_deployments_pod_is_never_attributed(tmp_path):
+    """foo-canary's pod is listed first and is genuinely wedged; foo's own pod is healthy."""
+    env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP, decoy=True, deployments=(DEPLOY, DECOY_DEPLOY))
+    _escalate(env, 5)
+    assert _acted(actions) == "", "acted on evidence read from another deployment's pod"
+    assert not Path(env["_DUMPED"] + "-decoy").exists(), "dumped a pod this deployment does not own"
+
+
+def test_mutation_the_same_estate_with_the_own_pod_wedged_is_acted_on(tmp_path):
+    env, actions = _sandbox(tmp_path, wedge=WEDGE_DUMP, decoy=True, deployments=(DEPLOY, DECOY_DEPLOY))
+    _escalate(env, 3)
+    assert f"rollout restart deploy/{DEPLOY}" in _acted(actions) and "canary" not in _acted(actions)
+
+
+def test_a_wedge_seen_once_is_not_acted_on(tmp_path):
     env, actions = _sandbox(tmp_path)
-    out = _escalate(env, 2)   # cycle 2 is the first dump
+    out = _escalate(env, 2)
     assert "one snapshot is not a wedge" in out and _acted(actions) == ""
 
 
-def test_the_same_frame_on_two_consecutive_cycles_is_acted_on(tmp_path):
+def test_the_same_wedge_on_two_consecutive_cycles_is_acted_on(tmp_path):
     env, actions = _sandbox(tmp_path)
     out = _escalate(env, 3)
-    assert "CONFIRMED evidence on two cycles" in out and "STRIKE 1" in out
-    assert f"rollout restart deploy/{DEPLOY}" in _acted(actions)
+    assert "CONFIRMED evidence on two cycles" in out and f"rollout restart deploy/{DEPLOY}" in _acted(actions)
 
 
-def test_a_frame_that_does_not_persist_is_not_acted_on(tmp_path):
+def test_a_wedge_that_does_not_persist_is_not_acted_on(tmp_path):
     env, actions = _sandbox(tmp_path)
-    _escalate(env, 2)                                   # frame seen once
-    (tmp_path / "dump.txt").write_text(HEALTHY_DUMP)    # gone next cycle
+    _escalate(env, 2)
+    (tmp_path / "dump.txt").write_text(HEALTHY_DUMP)
     _escalate(env, 2)
     assert _acted(actions) == ""
 
@@ -249,10 +316,9 @@ def test_stale_evidence_from_long_ago_does_not_confirm(tmp_path):
 
 
 def test_one_stalled_sample_is_confirmed_before_evidence_is_gathered(tmp_path):
-    env, actions = _sandbox(tmp_path)
+    env, _ = _sandbox(tmp_path)
     out = _run(env)
-    assert "stalled on 1 of 2 consecutive checks" in out
-    assert not Path(env["_DUMPED"]).exists(), "took a thread dump on a single observation"
+    assert "stalled on 1 of 2 consecutive checks" in out and not Path(env["_DUMPED"]).exists()
 
 
 def test_mutation_confirm_gate_removed_gathers_evidence_immediately(tmp_path):
@@ -265,15 +331,17 @@ def test_mutation_confirm_gate_removed_gathers_evidence_immediately(tmp_path):
 # Group -> deployment: exact transformation or explicit mapping; never a resemblance.
 # --------------------------------------------------------------------------------------
 def test_a_group_that_only_resembles_a_deployment_is_never_touched(tmp_path):
-    env, actions = _sandbox(tmp_path, deployments=("strike-liquidity-heatmap-canary",))
+    env, actions = _sandbox(tmp_path, deployments=(DECOY_DEPLOY,))
     out = _escalate(env, 3)
-    assert "resolves to no deployment by exact transformation" in out
-    assert _acted(actions) == ""
+    assert "resolves to no deployment by exact transformation" in out and _acted(actions) == ""
 
 
-def test_mutation_an_explicit_mapping_makes_the_same_group_resolve(tmp_path):
-    env, actions = _sandbox(tmp_path, deployments=(DEPLOY, "strike-liquidity-heatmap-canary"))
-    Path(env["GROUP_MAP"]).write_text(f"{GROUP} {DEPLOY}\n")
+def test_a_nonconforming_group_resolves_only_through_an_explicit_mapping(tmp_path):
+    env, actions = _sandbox(tmp_path, group="legacy-heatmap-consumer")
+    out = _escalate(env, 3)
+    assert "resolves to no deployment" in out and _acted(actions) == ""
+    Path(env["GROUP_MAP"]).write_text(f"legacy-heatmap-consumer {DEPLOY}\n")
+    # same estate, mapping now present: the group is judged and acted on
     _escalate(env, 3)
     assert f"rollout restart deploy/{DEPLOY}" in _acted(actions)
 
@@ -286,7 +354,7 @@ def test_a_mapping_to_a_deployment_that_does_not_exist_resolves_to_nothing(tmp_p
 
 
 # --------------------------------------------------------------------------------------
-# A consumer whose SOURCE is not moving is not even a candidate; exemptions; signs of life.
+# Candidates, exemptions, signs of life — each with its mutation.
 # --------------------------------------------------------------------------------------
 def test_flat_committed_offsets_on_a_quiet_source_are_not_a_candidate(tmp_path):
     env, actions = _sandbox(tmp_path, source_advance=0)
@@ -335,13 +403,13 @@ def test_mutation_same_app_with_static_state_is_acted_on(tmp_path):
 
 
 def test_young_pod_is_given_its_grace_period(tmp_path):
-    env, actions = _sandbox(tmp_path, pod_age="3m")
+    env, actions = _sandbox(tmp_path, pod_age=3)
     out = _escalate(env, 3)
     assert "pod is only 3m old" in out and _acted(actions) == ""
 
 
 def test_mutation_with_no_grace_the_young_pod_is_acted_on(tmp_path):
-    env, actions = _sandbox(tmp_path, pod_age="3m")
+    env, actions = _sandbox(tmp_path, pod_age=3)
     _escalate(env, 3, GRACE_MINUTES="0")
     assert f"rollout restart deploy/{DEPLOY}" in _acted(actions)
 
@@ -415,8 +483,9 @@ def test_a_stale_lock_from_a_dead_process_is_taken_over(tmp_path):
 # --------------------------------------------------------------------------------------
 def test_abandoned_transaction_of_a_dead_process_is_aborted_instead_of_restarting(tmp_path):
     env, actions = _sandbox(tmp_path, open_tx_age_minutes=145, tx_proc=DEAD_PROC, members=(LIVE_PROC,))
-    out = _escalate(env, 4)   # 2 stall, 3 first dead sighting, 4 confirmed
+    out = _escalate(env, 4)   # 2 stall, 3 first dead sighting (restart held), 4 confirmed
     assert "ABANDONED transaction" in out and "absent from a Stable group on two consecutive cycles" in out
+    assert "holding the restart for one cycle" in out
     assert "--start-offset 151600145" in Path(env["_ABORTS"]).read_text()
     assert _acted(actions) == "", "bounced the service instead of clearing the blocker"
 
@@ -494,7 +563,7 @@ def test_headerless_find_hanging_output_is_refused(tmp_path):
 
 
 # --------------------------------------------------------------------------------------
-# Strike 2 is destructive: it needs a confirmed corruption signature, and every step is checked.
+# Strike 2 is destructive: confirmed corruption only, an atomic swap, every step checked.
 # --------------------------------------------------------------------------------------
 def test_strike_two_is_withheld_without_a_confirmed_corruption_signature(tmp_path):
     env, actions = _sandbox(tmp_path, corrupt=False)
@@ -504,28 +573,30 @@ def test_strike_two_is_withheld_without_a_confirmed_corruption_signature(tmp_pat
     assert "--replicas=0" not in _acted(actions)
 
 
-def test_corruption_seen_once_does_not_wipe(tmp_path):
-    env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True)
+def test_corruption_seen_once_does_not_reset(tmp_path):
+    env, _ = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True)
     _seed(env, strikes=1)
     out = _run(env)
     assert "must repeat next cycle" in out and (Path(env["_PV"]) / "rocksdb").exists()
 
 
-def test_strike_two_wipes_only_the_pvc_bound_volume_and_restores_the_desired_replicas(tmp_path):
+def test_strike_two_swaps_only_the_pvc_bound_volume_and_restores_the_desired_replicas(tmp_path):
     env, actions = _sandbox(tmp_path, replicas="2", wedge=HEALTHY_DUMP, corrupt=True, stale_twin=True)
     _seed(env, strikes=1, corrupt=CORRUPT_SIG)
     out = _run(env)
-    assert "STRIKE 2" in out and "state dir emptied" in out and "scaled back to 2" in out
-    assert not (Path(env["_PV"]) / "rocksdb").exists()
+    assert "STRIKE 2" in out and "is now empty" in out and "old tree removed" in out and "scaled back to 2" in out
+    pv = Path(env["_PV"])
+    assert pv.is_dir() and list(pv.iterdir()) == [], "the live directory is not an empty directory"
+    assert _aside_dirs(env) == [], "the parked old tree was not removed"
     twin = Path(env["_STORAGE"]) / f"pvc-0000stale_options-edge_{CLAIM}"
-    assert (twin / "rocksdb").exists(), "wiped a stale same-name directory that the PVC is not bound to"
+    assert (twin / "rocksdb").exists(), "touched a stale same-name directory the PVC is not bound to"
     acts = _acted(actions)
     assert "--replicas=0" in acts and "--replicas=2" in acts and "--replicas=1" not in acts
     assert not (Path(env["STATEDIR"]) / f"{DEPLOY}.down").exists()
 
 
 def test_strike_two_is_withheld_when_an_autoscaler_targets_the_deployment(tmp_path):
-    env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, hpa=True)
+    env, _ = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, hpa=True)
     _seed(env, strikes=1, corrupt=CORRUPT_SIG)
     out = _run(env)
     assert "an HPA targets this deployment" in out and (Path(env["_PV"]) / "rocksdb").exists()
@@ -536,7 +607,7 @@ def test_strike_two_refuses_a_pv_path_that_escapes_the_storage_root(tmp_path):
     env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, pv_path_override=f"{tmp_path}/storage/../outside")
     _seed(env, strikes=1, corrupt=CORRUPT_SIG)
     out = _run(env)
-    assert "NOT wiping anything" in out and (outside / "victim").exists()
+    assert "NOT resetting anything" in out and (outside / "victim").exists()
     assert "--replicas=0" not in _acted(actions)
 
 
@@ -544,17 +615,17 @@ def test_strike_two_refuses_when_two_streams_state_claims_are_attached(tmp_path)
     env, _ = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, extra_claim=True)
     _seed(env, strikes=1, corrupt=CORRUPT_SIG)
     out = _run(env)
-    assert "NOT wiping anything" in out and (Path(env["_PV"]) / "rocksdb").exists()
+    assert "NOT resetting anything" in out and (Path(env["_PV"]) / "rocksdb").exists()
 
 
-def test_strike_two_does_not_wipe_when_the_scale_down_fails(tmp_path):
+def test_strike_two_does_not_reset_when_the_scale_down_fails(tmp_path):
     env, _ = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, scale_fail_to="0")
     _seed(env, strikes=1, corrupt=CORRUPT_SIG)
     out = _run(env)
-    assert "scale to 0 FAILED" in out and "nothing wiped" in out and (Path(env["_PV"]) / "rocksdb").exists()
+    assert "scale to 0 FAILED" in out and "nothing reset" in out and (Path(env["_PV"]) / "rocksdb").exists()
 
 
-def test_strike_two_does_not_wipe_under_a_lingering_pod(tmp_path):
+def test_strike_two_does_not_reset_under_a_lingering_pod(tmp_path):
     env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, pods_linger=True)
     _seed(env, strikes=1, corrupt=CORRUPT_SIG)
     out = _run(env)
@@ -562,27 +633,31 @@ def test_strike_two_does_not_wipe_under_a_lingering_pod(tmp_path):
     assert "--replicas=1" in _acted(actions), "left the deployment at zero"
 
 
-def test_strike_two_does_not_wipe_if_something_rescaled_the_deployment_meanwhile(tmp_path):
+def test_strike_two_does_not_reset_if_something_rescaled_the_deployment_meanwhile(tmp_path):
     env, _ = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, rescale_between=True)
     _seed(env, strikes=1, corrupt=CORRUPT_SIG)
     out = _run(env)
-    assert "scaled the deployment back up between the check and the wipe" in out
+    assert "scaled the deployment back up between the check and the reset" in out
     assert (Path(env["_PV"]) / "rocksdb").exists()
 
 
-def test_a_pod_that_appears_during_the_wipe_is_deleted_and_shouted(tmp_path):
+def test_a_pod_that_appears_during_the_swap_is_stopped_before_the_old_tree_is_removed(tmp_path):
     env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, intruder=True)
     _seed(env, strikes=1, corrupt=CORRUPT_SIG)
     out = _run(env)
-    assert "CRITICAL" in out and "appeared DURING the wipe" in out
-    assert f"delete pod {DEPLOY}-685f9ffd4c-tt69c-intruder" in _acted(actions)
+    assert "CRITICAL" in out and "appeared DURING the reset" in out
+    acts = _acted(actions)
+    assert f"delete pod {POD}-intruder --wait=true" in acts
+    assert acts.index("delete pod") < acts.index("--replicas=1"), "scaled back before the intruder was stopped"
+    assert "old tree removed" in out and _aside_dirs(env) == []
 
 
-def test_strike_two_reports_a_partial_wipe_failure_and_still_scales_back(tmp_path):
+def test_a_failed_old_tree_removal_leaves_the_live_directory_empty_and_scales_back(tmp_path):
     env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, find_fail=True)
     _seed(env, strikes=1, corrupt=CORRUPT_SIG)
     out = _run(env)
-    assert "emptying" in out and "FAILED" in out and "--replicas=1" in _acted(actions)
+    assert "removing the old tree" in out and "FAILED" in out and "--replicas=1" in _acted(actions)
+    assert list(Path(env["_PV"]).iterdir()) == [] and len(_aside_dirs(env)) == 1
 
 
 def test_strike_two_scale_back_failure_is_shouted_and_retried_by_the_next_run(tmp_path):
