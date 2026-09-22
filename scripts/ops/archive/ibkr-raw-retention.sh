@@ -113,6 +113,23 @@ done
 # conclusive staleness, on top of the age-based check. Heartbeat is a SEPARATE timestamp from the
 # acquire time, touched every batch in run_tier, so a genuinely long catch-up is never confused
 # with a wedged one (Codex r3 MINOR: age-since-acquire alone misdiagnoses exactly that).
+#
+# Reclaiming a stale lock is NOT a plain "rm -rf then mkdir": that pair is not atomic, and two
+# contenders that both observe the same dead lock could both remove it and both believe they now
+# hold it (Codex r4 BLOCKER). Reclaim instead RENAMEs the directory to a name unique to this PID
+# before touching it — rename() is atomic, so it can never remove a path that has changed identity
+# since it was inspected — then deletes that private, uniquely-named copy, which nothing else can
+# reference. A rename that fails means someone else already changed what is at that path; this
+# process then just tries an ordinary acquire against whatever is there now, rather than assuming
+# anything about why the rename failed. A narrow race still exists if two contenders attempt this
+# within the same instant (rename() only protects the object's identity, not against a third mkdir
+# landing between one contender's rename and its own re-acquire) — accepted, because the SQL this
+# lock protects is itself concurrency-safe (two DELETEs against overlapping rows contend for a row
+# lock, they do not corrupt anything), so the failure mode of losing this narrow race is wasted
+# work, not wrong data. GRACE_SECONDS separately protects a freshly-mkdir'd lock whose pid/heartbeat
+# have not been written yet: without it, a contender that lost the mkdir race by milliseconds would
+# read empty metadata and try to steal the winner's brand-new lock.
+readonly GRACE_SECONDS=10
 LOCK_HEARTBEAT="$LOCK_FILE/heartbeat"
 acquire_lock() {
   mkdir "$LOCK_FILE" 2>/dev/null || return 1
@@ -122,36 +139,61 @@ acquire_lock() {
 }
 release_lock() { [ "${LOCK_OWNED:-0}" = 1 ] && rm -rf "$LOCK_FILE" 2>/dev/null; }
 trap release_lock EXIT
+steal_lock() {   # $1 = reason, for the log; steals whatever is CURRENTLY at $LOCK_FILE, atomically
+  local quarantine="$LOCK_FILE.stale.$$"
+  if mv "$LOCK_FILE" "$quarantine" 2>/dev/null; then
+    rm -rf "$quarantine" 2>/dev/null
+  fi
+  # Whether the rename succeeded (we quarantined what we inspected) or failed (something else
+  # already changed it), the only safe next step is an ordinary acquire attempt against whatever
+  # is at the canonical path right now.
+  acquire_lock
+}
 
 if acquire_lock; then
   LOCK_OWNED=1
 else
+  dir_age=$(( START_TS - $(stat -c %Y "$LOCK_FILE" 2>/dev/null || stat -f %m "$LOCK_FILE" 2>/dev/null || echo "$START_TS") ))
   holder_pid="$(cat "$LOCK_FILE/pid" 2>/dev/null || echo '')"
-  beat="$(cat "$LOCK_HEARTBEAT" 2>/dev/null || echo 0)"
-  case "$beat" in (''|*[!0-9]*) beat=0;; esac
-  held_for=$(( START_TS - beat ))
-  pid_dead=1
-  [ -n "$holder_pid" ] && kill -0 "$holder_pid" 2>/dev/null && pid_dead=0
+  beat="$(cat "$LOCK_HEARTBEAT" 2>/dev/null || echo '')"
+  case "$beat" in (''|*[!0-9]*) beat='';; esac
 
-  if [ "$pid_dead" -eq 1 ]; then
-    # The holder is not running. flock would have released this on its own; a directory lock does
-    # not, so an unclean exit (crash, kill -9, OOM) would otherwise wedge every future run forever.
-    log "WARN: reclaiming $LOCK_FILE — holder pid '$holder_pid' is not running (last heartbeat ${held_for}s ago)"
-    rm -rf "$LOCK_FILE" 2>/dev/null
-    if acquire_lock; then
+  if [ -z "$holder_pid" ] || [ -z "$beat" ]; then
+    if [ "$dir_age" -lt "$GRACE_SECONDS" ]; then
+      log "another retention run is still initializing $LOCK_FILE (${dir_age}s old, no metadata yet) — skipping this firing"
+      exit 75
+    fi
+    log "WARN: $LOCK_FILE has no pid/heartbeat after ${dir_age}s — treating as a crashed acquire, reclaiming"
+    if steal_lock "incomplete metadata"; then
       LOCK_OWNED=1
     else
       log "lost the race to reclaim $LOCK_FILE — another run got there first, skipping"
       exit 75
     fi
-  elif [ "$held_for" -gt "$STALE_LOCK_SECONDS" ]; then
-    die "$LOCK_FILE has been held by pid $holder_pid with no heartbeat for ${held_for}s — the holder is wedged and nothing has been deleted since. The table is growing unbounded." 3
   else
-    # Deliberately NONZERO. A skip is not success: the previous run is still working, so this hour's
-    # policy has not been enforced by anything, and a scheduler that only sees exit 0 would call that
-    # healthy for as long as it kept happening. (Codex r3 BLOCKER)
-    log "another retention run (pid $holder_pid) holds $LOCK_FILE (heartbeat ${held_for}s ago) — skipping this firing"
-    exit 75
+    held_for=$(( START_TS - beat ))
+    pid_dead=1
+    kill -0 "$holder_pid" 2>/dev/null && pid_dead=0
+
+    if [ "$pid_dead" -eq 1 ]; then
+      # The holder is not running. flock would have released this on its own; a directory lock does
+      # not, so an unclean exit (crash, kill -9, OOM) would otherwise wedge every future run forever.
+      log "WARN: reclaiming $LOCK_FILE — holder pid '$holder_pid' is not running (last heartbeat ${held_for}s ago)"
+      if steal_lock "dead holder"; then
+        LOCK_OWNED=1
+      else
+        log "lost the race to reclaim $LOCK_FILE — another run got there first, skipping"
+        exit 75
+      fi
+    elif [ "$held_for" -gt "$STALE_LOCK_SECONDS" ]; then
+      die "$LOCK_FILE has been held by pid $holder_pid with no heartbeat for ${held_for}s — the holder is wedged and nothing has been deleted since. The table is growing unbounded." 3
+    else
+      # Deliberately NONZERO. A skip is not success: the previous run is still working, so this
+      # hour's policy has not been enforced by anything, and a scheduler that only sees exit 0
+      # would call that healthy for as long as it kept happening. (Codex r3 BLOCKER)
+      log "another retention run (pid $holder_pid) holds $LOCK_FILE (heartbeat ${held_for}s ago) — skipping this firing"
+      exit 75
+    fi
   fi
 fi
 
@@ -189,8 +231,10 @@ psql_at() {   # $1 = statement_timeout seconds, rest = -c args
 }
 
 run_tier() {
-  local label="$1" predicate="$2" total=0 batches=0 lo hi n rc t
+  local label="$1" predicate="$2" total=0 batches=0 lo hi n rc t width empty_streak
   local min_id max_id bound_budget
+  width="$ID_CHUNK"
+  empty_streak=0
   # MIN(id)/MAX(id) over a bigserial PK is an index scan that walks from the end until it finds the
   # first LIVE row — so after a large deletion at the low end of the id space (exactly retention's
   # own job) it is NOT the O(1) lookup it looks like: it has to skip every dead entry first. Measured
@@ -209,7 +253,7 @@ run_tier() {
     t="$(remaining)"
     [ "$t" -gt 0 ] || die "tier [$label] hit the ${RUN_BUDGET_SECONDS}s run budget at id $lo after $total rows — the table is STILL over policy and the next run must continue from the start of the id space. If this repeats, retention is not keeping up with ingest." 2
     [ "$t" -gt 300 ] && t=300
-    hi=$(( lo + ID_CHUNK ))
+    hi=$(( lo + width ))
     n="$(psql_at "$t" -c "WITH del AS (
                             DELETE FROM $RAW_TABLE
                              WHERE id >= $lo AND id < $hi AND ($predicate)
@@ -223,20 +267,51 @@ run_tier() {
     total=$(( total + n ))
     lo="$hi"
     batches=$(( batches + 1 ))
+    # A long stretch where nothing matches this tier's predicate — most commonly rows that belong
+    # only to the OTHER tier sitting at low ids — still costs a full index range scan per chunk.
+    # Widen geometrically (capped) so that stretch is skipped in a handful of queries instead of
+    # thousands (Codex r4: an OI tier stuck behind a huge no-OI prefix could burn its whole budget
+    # walking rows it will never delete). This is safe with NO memory across runs: a row that does
+    # not match today — including one that GAINS open interest later via gex's own upsert onto an
+    # existing row (on conflict ... do update, confirmed in DatabentoOiBaselineProvider) — is
+    # re-examined in full next invocation, because that invocation starts over from the real
+    # min(id), not from anything this run leaves behind.
+    if [ "$n" -eq 0 ]; then
+      empty_streak=$(( empty_streak + 1 ))
+      if [ "$empty_streak" -ge 3 ]; then
+        width=$(( width * 4 ))
+        [ "$width" -gt $(( ID_CHUNK * 200 )) ] && width=$(( ID_CHUNK * 200 ))
+      fi
+    else
+      width="$ID_CHUNK"
+      empty_streak=0
+    fi
     date +%s > "$LOCK_HEARTBEAT" 2>/dev/null || true   # the stale-lock check reads this
     # A multi-hour recovery that logs only on completion is indistinguishable from a wedged one.
     [ $(( batches % PROGRESS_EVERY )) -eq 0 ] && \
-      log "$label: $total rows, id $lo/$max_id, $(( $(date +%s) - START_TS ))s elapsed"
+      log "$label: $total rows, id $lo/$max_id, width=$width, $(( $(date +%s) - START_TS ))s elapsed"
   done
   log "$label: $total rows deleted in $batches id ranges"
 }
 
 HAS_OI="coalesce(call_open_interest,0) > 0 OR coalesce(put_open_interest,0) > 0"
 
+# Cutoffs are snapshotted ONCE, not re-evaluated by every batch's own now(). A pass over the whole
+# id space takes real wall-clock time; without this, a run crossing NY midnight would judge early
+# id ranges against yesterday's calendar cutoff and later ranges against today's, an internally
+# inconsistent single pass (Codex r4 MINOR). Fetched from Postgres, not computed in bash, so the
+# server's own clock and tz database — not this host's — are authoritative.
+bound_budget="$(remaining)"; [ "$bound_budget" -gt 60 ] && bound_budget=60
+[ "$bound_budget" -gt 0 ] || die "no run budget left to snapshot retention cutoffs"
+OI_CUTOFF_DATE="$(psql_at "$bound_budget" -c "SELECT ((now() AT TIME ZONE '$EXCHANGE_TZ')::date - $OI_RETENTION_DAYS)" 2>>"$LOG")"
+RETENTION_CUTOFF="$(psql_at "$bound_budget" -c "SELECT (now() - interval '$RETENTION')" 2>>"$LOG")"
+[ -n "$OI_CUTOFF_DATE" ] || die "could not compute the OI calendar cutoff — retention did NOT run"
+[ -n "$RETENTION_CUTOFF" ] || die "could not compute the no-OI retention cutoff — retention did NOT run"
+
 run_tier "oi before $OI_RETENTION_DAYS calendar days ($EXCHANGE_TZ)" \
-  "($HAS_OI) AND (session_date IS NULL OR session_date < ((now() AT TIME ZONE '$EXCHANGE_TZ')::date - $OI_RETENTION_DAYS))"
+  "($HAS_OI) AND (session_date IS NULL OR session_date < '$OI_CUTOFF_DATE'::date)"
 run_tier "no-oi older than $RETENTION" \
-  "NOT ($HAS_OI) AND captured_at < now() - interval '$RETENTION'"
+  "NOT ($HAS_OI) AND captured_at < '$RETENTION_CUTOFF'::timestamptz"
 
 # Deleting tens of millions of rows leaves the planner with statistics describing a table that no
 # longer exists. ANALYZE is cheap and is what matters for the correctness of later plans. Space is
