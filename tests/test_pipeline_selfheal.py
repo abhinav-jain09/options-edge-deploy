@@ -63,7 +63,8 @@ def _sandbox(tmp_path, *, group=GROUP, replicas="1", pod_age=258, restoring=Fals
              find_fail=False, stale_twin=False, pv_path_override=None, extra_claim=False,
              rescale_between=False, intruder=False, hpa=False, deployments=(DEPLOY,),
              mkdir_fail=False, coordinator_silent=False, group_col=True, commit_between=0,
-             rx_kib=0, shared_claim_pod=False, shared_claim_workload=False, hanging_row=False):
+             rx_kib=0, shared_claim_pod=False, shared_claim_workload=False, hanging_row=False,
+             shared_claim_cronjob=False, late_holder=False, sub_path=False, tx_layout="tabs"):
     """A fake estate: one consumer group with lag, one deployment (plus an optional look-alike),
     pods owned through ReplicaSets, one PV. Every stub is a list of bash lines."""
     bin_dir = tmp_path / "bin"; bin_dir.mkdir()
@@ -94,6 +95,8 @@ def _sandbox(tmp_path, *, group=GROUP, replicas="1", pod_age=258, restoring=Fals
          '  "get deploy --no-headers") ' + " ".join(f'echo "{d}   $reps/$reps   $reps   $reps   4h";' for d in deployments) + ' ;;',
          f'  "get deploy {DEPLOY} -o jsonpath={{.spec.replicas}}")',
          f'      if [ "{int(rescale_between)}" = 1 ] && [ -f "{tmp_path}/pods_checked" ]; then printf 1; else printf "%s" "$reps"; fi ;;',
+         f'  "get deploy {DEPLOY} -o jsonpath="*"volumeMounts"*) [ "{int(sub_path)}" = 1 ] && echo "state rocksdb" || echo "state" ;;',
+         f'  "get deploy {DEPLOY} -o jsonpath="*"{{.name}}"*) echo "state {CLAIM}" ;;',
          f'  "get deploy {DEPLOY} -o jsonpath="*claimName*) ' + " ".join(f'echo "{c}";' for c in claims) + ' ;;',
          f'  "get pvc {CLAIM} -o jsonpath={{.spec.volumeName}}") printf "{PV}" ;;',
          f'  "get pv {PV} -o jsonpath="*) printf "%s" \'{reported_pv}\' ;;',
@@ -103,14 +106,16 @@ def _sandbox(tmp_path, *, group=GROUP, replicas="1", pod_age=258, restoring=Fals
          f'      if [ "$reps" != 0 ] || [ "{int(pods_linger)}" = 1 ]; then echo "{POD}   1/1   Running   0   4h"; fi ;;',
          '  "get pods -o jsonpath="*".spec.volumes"*)',
          f'      [ "{int(shared_claim_pod)}" = 1 ] && echo "some-other-job-abc {CLAIM} "',
+         f'      [ "{int(late_holder)}" = 1 ] && [ -f "{tmp_path}/swapped" ] && echo "cron-late-xyz {CLAIM} "',
          f'      [ "$reps" != 0 ] && echo "{POD} {CLAIM} "; true ;;',
+         f'  "get cronjobs -o jsonpath="*) [ "{int(shared_claim_cronjob)}" = 1 ] && echo "CronJob/nightly-compact {CLAIM} "; true ;;',
          '  "get pods -o jsonpath="*)',
          # the decoy pod is listed FIRST so any prefix-based selection would pick it
          (f'      echo "{DECOY_POD} ReplicaSet/{DECOY_RS} Running {created}"' if decoy else '      true'),
          f'      if [ -f "{tmp_path}/swapped" ] && [ "{int(intruder)}" = 1 ] && [ ! -f "{tmp_path}/intruder-deleted" ]; then echo "{POD}-intruder ReplicaSet/{RS} Running {created}"; fi',
          f'      touch "{tmp_path}/pods_checked"',
          f'      if [ "$reps" != 0 ] || [ "{int(pods_linger)}" = 1 ]; then echo "{POD} ReplicaSet/{RS} Running {created}"; fi ;;',
-         '  "get deploy,sts -o jsonpath="*)',
+         '  "get deploy,sts,ds,jobs -o jsonpath="*)',
          f'      echo "Deployment/{DEPLOY} {CLAIM} "; [ "{int(shared_claim_workload)}" = 1 ] && echo "StatefulSet/{DEPLOY}-twin {CLAIM} "; true ;;',
          f'  "exec {POD} -- kill -3 1") touch "{dumped}" ;;',
          f'  "exec {DECOY_POD} -- kill -3 1") touch "{dumped}-decoy" ;;',
@@ -151,20 +156,25 @@ def _sandbox(tmp_path, *, group=GROUP, replicas="1", pod_age=258, restoring=Fals
     _script(kbin / "kafka-broker-api-versions.sh", ["exit 0"])
     _script(kbin / "kafka-topics.sh", ["echo $'Topic: __consumer_offsets\\tTopicId: x\\tPartitionCount: 50\\tReplicationFactor: 1'"])
     tx_id = tx_id if tx_id is not None else f"{group}-{tx_proc}-11"
-    hdr = lambda name, line: [line] if name not in no_header_for else []
+    def hdr(name, line):
+        if name in no_header_for: return []
+        return [line if tx_layout == "tabs" else "echo '" + "  ".join(line.split("$'")[1].rstrip("'").split("\\t")) + "'"]
+    def row(cells):   # a data row in the chosen layout
+        return "echo $'" + "\\t".join(cells) + "'" if tx_layout == "tabs" else "echo '" + "  ".join(cells) + "'"
     tx = ['for a in "$@"; do', '  case "$a" in']
     if hanging_fail:
         tx += ['    find-hanging) echo "Error: broker unreachable"; exit 1 ;;']
     else:
         tx += ['    find-hanging)'] + ["      " + l for l in hdr("hanging", "echo $'Topic\\tPartition\\tProducerId\\tProducerEpoch\\tCoordinatorEpoch\\tStartOffset\\tLastTimestamp\\tDuration(min)'")] \
-            + (["      echo $'options.databento.normalized\\t0\\t50123\\t288\\t126\\t777\\t0\\t61'"] if hanging_row else []) + ['      exit 0 ;;']
+            + (["      " + row(["options.databento.normalized","0","50123","288","126","777","0","61"])] if hanging_row else []) + ['      exit 0 ;;']
     tx += ['    list)'] + ["      " + l for l in hdr("list", "echo $'TransactionalId\\tCoordinator\\tProducerId\\tTransactionState'")] \
-        + [f"      echo $'{tx_id}\\t1\\t50123\\tOngoing'", '      exit 0 ;;']
+        + ["      " + row([tx_id,"1","50123","Ongoing"]), '      exit 0 ;;']
     tx += ['    describe-producers)'] + ["      " + l for l in hdr("describe", "echo $'ProducerId\\tProducerEpoch\\tLatestCoordinatorEpoch\\tLastSequence\\tLastTimestamp\\tCurrentTransactionStartOffset'")]
     if open_tx_age_minutes is None:
-        tx += ["      echo $'50123\\t288\\t126\\t-1\\t0\\tNone'"]
+        tx += ["      " + row(["50123","288","126","-1","0","None"])]
     else:
-        tx += [f"      echo \"50123\t288\t126\t30\t$(( $(date +%s)*1000 - {open_tx_age_minutes}*60000 ))\t151600145\""]
+        ts = f"$(( $(date +%s)*1000 - {open_tx_age_minutes}*60000 ))"
+        tx += ["      " + (f"echo \"50123\t288\t126\t30\t{ts}\t151600145\"" if tx_layout == "tabs" else f"echo \"50123  288  126  30  {ts}  151600145\"")]
     tx += ['      exit 0 ;;', f'    abort) echo "$*" >> "{aborts}"',
            f'      if [ "{int(abort_fail)}" = 1 ]; then echo "Error: coordinator not available"; exit 1; fi', '      exit 0 ;;',
            '  esac', 'done', 'exit 0']
@@ -199,6 +209,7 @@ def _sandbox(tmp_path, *, group=GROUP, replicas="1", pod_age=258, restoring=Fals
         LOG=str(tmp_path / "selfheal.log"), STATEDIR=str(tmp_path / "state"),
         SAMPLE_SECONDS="1", LAG_FLOOR="2000", LOAD_CEILING="9999", CONFIRM_CYCLES="2",
         EVIDENCE_MIN_SECONDS="0", DUMP_SETTLE_SECONDS="0", POD_GONE_WAIT_SECONDS="5", WEDGE_CYCLES="2",
+        RESTART_ON_PARK="true",
         _ABORTS=str(aborts), _PV=str(pv_path), _STORAGE=str(storage), _DUMPED=str(dumped), _GROUP=group,
     )
     return env, actions
@@ -348,6 +359,18 @@ def test_at_the_default_three_parks_are_needed_before_a_restart(tmp_path):
     out = _escalate(env, 3, WEDGE_CYCLES="3")          # stall, park 1, park 2
     assert "seen 2 of 3" in out and _acted(actions) == ""
     _escalate(env, 1, WEDGE_CYCLES="3")                # park 3
+    assert f"rollout restart deploy/{DEPLOY}" in _acted(actions)
+
+
+def test_by_default_a_confirmed_park_with_nothing_to_abort_is_reported_not_restarted(tmp_path):
+    env, actions = _sandbox(tmp_path)
+    out = _escalate(env, 5, RESTART_ON_PARK="false")
+    assert "a restart is NOT taken (RESTART_ON_PARK=false)" in out and _acted(actions) == ""
+
+
+def test_mutation_opting_the_restart_in_makes_the_same_park_restart(tmp_path):
+    env, actions = _sandbox(tmp_path)
+    _escalate(env, 3, RESTART_ON_PARK="true")
     assert f"rollout restart deploy/{DEPLOY}" in _acted(actions)
 
 
@@ -641,6 +664,18 @@ def test_a_failed_abort_does_not_count_and_the_restart_path_stays_open(tmp_path)
     assert f"rollout restart deploy/{DEPLOY}" in _acted(actions)
 
 
+def test_space_aligned_transaction_tables_are_read_the_same(tmp_path):
+    env, actions = _sandbox(tmp_path, tx_layout="aligned", open_tx_age_minutes=145, tx_proc=DEAD_PROC, members=(LIVE_PROC,))
+    out = _escalate(env, 4)
+    assert "ABANDONED transaction" in out and "--start-offset 151600145" in Path(env["_ABORTS"]).read_text()
+
+
+def test_space_aligned_tables_still_spare_a_live_owner(tmp_path):
+    env, _ = _sandbox(tmp_path, tx_layout="aligned", open_tx_age_minutes=145, tx_proc=LIVE_PROC, members=(LIVE_PROC,))
+    out = _escalate(env, 5)
+    assert "owned by LIVE member process" in out and not Path(env["_ABORTS"]).exists()
+
+
 def test_headerless_describe_producers_output_is_refused(tmp_path):
     env, _ = _sandbox(tmp_path, open_tx_age_minutes=145, no_header_for="describe")
     out = _escalate(env, 4)
@@ -728,6 +763,31 @@ def test_mutation_with_the_claim_unshared_the_reset_proceeds(tmp_path):
     out = _run(env)
     assert "old tree removed" in out
     assert "-xdev" in (tmp_path / "find-args").read_text(), "the parked tree deletion may cross a mount boundary"
+
+
+def test_strike_two_is_withheld_when_a_cronjob_is_templated_on_the_claim(tmp_path):
+    env, _ = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, shared_claim_cronjob=True)
+    _seed(env, strikes=1, corrupt=CORRUPT_SIG)
+    out = _run(env)
+    assert "CronJob/nightly-compact" in out and (Path(env["_PV"]) / "rocksdb").exists()
+
+
+def test_a_holder_that_appears_after_the_swap_keeps_the_old_tree_parked(tmp_path):
+    """A workload with no pod during the checks launches in the window: it can only have bound the
+    whole old tree or the new empty one — and the old tree is never deleted while anything holds it."""
+    env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, late_holder=True)
+    _seed(env, strikes=1, corrupt=CORRUPT_SIG)
+    out = _run(env)
+    assert "stays parked" in out and "cron-late-xyz" in out
+    assert len(_aside_dirs(env)) == 1 and (_aside_dirs(env)[0] / "rocksdb").exists(), "deleted a tree something still holds"
+    assert list(Path(env["_PV"]).iterdir()) == [] and "--replicas=1" in _acted(actions)
+
+
+def test_strike_two_is_withheld_when_the_claim_is_mounted_with_a_subpath(tmp_path):
+    env, _ = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, sub_path=True)
+    _seed(env, strikes=1, corrupt=CORRUPT_SIG)
+    out = _run(env)
+    assert "mounted with a subPath" in out and (Path(env["_PV"]) / "rocksdb").exists()
 
 
 def test_strike_two_is_withheld_when_an_autoscaler_targets_the_deployment(tmp_path):

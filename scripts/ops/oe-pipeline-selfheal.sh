@@ -48,12 +48,14 @@
 #   otherwise   the stall is logged loudly and NOTHING is touched. A fault this script cannot name
 #               is a human's call, not a restart.
 #
-# The residual, stated so it is a decision and not a surprise: a service that commits nothing for
-# CONFIRM_CYCLES+WEDGE_CYCLES cycles (an hour at the defaults) against a moving source, parked in the
-# same coordinator retry loop on WEDGE_CYCLES consecutive dumps, while that coordinator answers a
-# state query normally, is restarted. A latency incident long and one-sided enough to look like that
-# is not distinguishable from a wedge by any signal this host can read, and the restart is the
-# mildest action taken here.
+# By default NOTHING is restarted: the abort (which fixed the 2026-09-21 incident outright, where two
+# restarts had fixed nothing) and the corruption reset (which needs a crash signature in the
+# container's own log) are the only actions. A confirmed park with nothing to abort is reported for
+# a human. RESTART_ON_PARK=true opts strike 1 in, with this stated residual: a service that commits
+# nothing for CONFIRM_CYCLES+WEDGE_CYCLES cycles (an hour) against a moving source, receives no fetch
+# traffic, and is parked in the same coordinator retry loop on WEDGE_CYCLES consecutive dumps while
+# that coordinator answers, is restarted — indistinguishable from a wedge by any signal this host
+# can read.
 #
 # Group → deployment is an exact transformation or an explicit mapping, never a fuzzy match; pods
 # are the deployment's own, through ReplicaSet ownerReferences, never by name prefix.
@@ -90,6 +92,10 @@ WEDGE_CYCLES="${WEDGE_CYCLES:-3}"        # consecutive cycles the SAME park must
                                          # with CONFIRM_CYCLES this is an hour of zero commits against a
                                          # moving source while parked in the same retry loop
 RETRY_LINES_MIN="${RETRY_LINES_MIN:-2}"  # initTransactions counts as a wedge only with this many retry lines in 10 min
+RESTART_ON_PARK="${RESTART_ON_PARK:-false}"  # strike 1 (rollout restart on a confirmed park) is OPT-IN: on
+                                         # 2026-09-21 the abort fixed the incident and two restarts fixed
+                                         # nothing; a restart of a healthy slow consumer can never be ruled
+                                         # out from the outside, so it is a decision, not a default
 RX_ALIVE_KIB="${RX_ALIVE_KIB:-512}"      # bytes a pod must RECEIVE across the sample window to count as fetching:
                                          # measured 2026-09-22, a live consumer of a small topic pulls ~1.3 MiB
                                          # per 30 s and a busy one ~14 MiB; a parked one only heartbeats
@@ -165,9 +171,12 @@ restore_down_markers
 # `tail -n +2` / NR>1 would silently drop a real row whenever the header is absent, and silently read
 # the wrong column whenever it moves. The header is located by the names it must carry, the columns
 # are resolved from it, and output without that header is REFUSED (exit 3 → caller logs, no rows).
+# Kafka 4.3.0 on prod separates these tables with TABs (sampled with cat -A on the host); a printer
+# that pads with spaces only is read by runs of two or more spaces. The header decides which.
 columns() {
-  local text="$1"; shift
-  printf '%s\n' "$text" | awk -F'\t' -v want="$*" '
+  local text="$1" sep; shift
+  if printf '%s' "$text" | head -3 | grep -q "$(printf '\t')"; then sep='\t'; else sep=' {2,}'; fi
+  printf '%s\n' "$text" | awk -F"$sep" -v want="$*" '
     BEGIN { n = split(want, w, " ") }
     !hdr { for (i = 1; i <= NF; i++) { gsub(/^ +| +$/, "", $i); col[$i] = i }
            ok = 1; for (k = 1; k <= n; k++) if (!(w[k] in col)) ok = 0
@@ -470,8 +479,18 @@ other_users_of_claim() {   # $1 = claim, $2 = the deployment allowed to own it
   own=$(pods_of "$dep" | tr '\n' ' ')
   $KUBECTL get pods -o jsonpath='{range .items[*]}{.metadata.name}{" "}{range .spec.volumes[*]}{.persistentVolumeClaim.claimName}{" "}{end}{"\n"}{end}' 2>/dev/null \
     | awk -v c="$claim" -v own=" $own " '{ for (i = 2; i <= NF; i++) if ($i == c && index(own, " " $1 " ") == 0) print "pod/" $1 }'
-  $KUBECTL get deploy,sts -o jsonpath='{range .items[*]}{.kind}{"/"}{.metadata.name}{" "}{range .spec.template.spec.volumes[*]}{.persistentVolumeClaim.claimName}{" "}{end}{"\n"}{end}' 2>/dev/null \
+  $KUBECTL get deploy,sts,ds,jobs -o jsonpath='{range .items[*]}{.kind}{"/"}{.metadata.name}{" "}{range .spec.template.spec.volumes[*]}{.persistentVolumeClaim.claimName}{" "}{end}{"\n"}{end}' 2>/dev/null \
     | awk -v c="$claim" -v d="Deployment/$dep" '{ for (i = 2; i <= NF; i++) if ($i == c && $1 != d) print $1 }'
+  $KUBECTL get cronjobs -o jsonpath='{range .items[*]}{"CronJob/"}{.metadata.name}{" "}{range .spec.jobTemplate.spec.template.spec.volumes[*]}{.persistentVolumeClaim.claimName}{" "}{end}{"\n"}{end}' 2>/dev/null \
+    | awk -v c="$claim" '{ for (i = 2; i <= NF; i++) if ($i == c) print $1 }'
+}
+# A claim mounted with a subPath means the pod sees a SUBDIRECTORY of the volume: the PV root is
+# then not the state directory, and swapping it would take sibling data with it. Fail closed.
+mounted_with_subpath() {   # $1 = deployment, $2 = claim
+  local vol
+  vol=$($KUBECTL get deploy "$1" -o jsonpath='{range .spec.template.spec.volumes[*]}{.name}{" "}{.persistentVolumeClaim.claimName}{"\n"}{end}' 2>/dev/null | awk -v c="$2" '$2==c{print $1; exit}')
+  [ -n "$vol" ] || return 1
+  $KUBECTL get deploy "$1" -o jsonpath='{range .spec.template.spec.containers[*].volumeMounts[*]}{.name}{" "}{.subPath}{"\n"}{end}' 2>/dev/null | awk -v v="$vol" '$1==v && NF>=2 {f=1} END{exit !f}'
 }
 same_filesystem() { python3 -c 'import os,sys; sys.exit(0 if os.stat(sys.argv[1]).st_dev == os.stat(os.path.dirname(sys.argv[1].rstrip("/"))).st_dev else 1)' "$1" 2>/dev/null; }
 # deployment -> claim -> bound PV -> host path, CANONICALISED and required to live under the
@@ -606,6 +625,10 @@ while read -r g lag delta srcdelta; do
   remember "$f" "$strikes"
   case "$strikes" in
     1)
+      if [ "$RESTART_ON_PARK" != true ]; then
+        log "  $g -> $dep: confirmed park ($wedge) with no abandoned transaction to abort — a restart is NOT taken (RESTART_ON_PARK=false): this needs a human: $KUBECTL logs $(running_pod "$dep")"
+        remember "$f" 0; continue
+      fi
       log "  $g -> $dep STRIKE 1: rollout restart (new producer epoch; clears an epoch fight or a wedged rebalance) — evidence: $wedge"
       run $KUBECTL $SA rollout restart "deploy/$dep" 2>&1 | tee -a "$LOG"; forget "$STATEDIR/${g}.wedge" ;;
     2)
@@ -618,6 +641,7 @@ while read -r g lag delta srcdelta; do
       if [ -z "$dir" ]; then log "  $g -> $dep STRIKE 2: no single streams-state volume resolves through its PVC under $STORAGE — NOT resetting anything"; continue; fi
       others=$(other_users_of_claim "$(claim_of "$dep")" "$dep" | sort -u | tr '\n' ' ')
       if [ -n "$others" ]; then log "  $g -> $dep STRIKE 2 withheld: the claim is also mounted or templated by $others — the volume is not this deployment's alone; NOT resetting"; continue; fi
+      if mounted_with_subpath "$dep" "$(claim_of "$dep")"; then log "  $g -> $dep STRIKE 2 withheld: the claim is mounted with a subPath — the volume root is not the state directory; NOT resetting"; continue; fi
       if ! same_filesystem "$dir"; then log "  $g -> $dep STRIKE 2 withheld: $dir is a mount point of its own — NOT resetting a mounted filesystem"; continue; fi
       log "  $g -> $dep STRIKE 2: confirmed state-corruption signature ($corruption) — scaling $reps->0, swapping $dir for an empty directory, scaling back to $reps"
       remember "$STATEDIR/${dep}.down" "$reps"
@@ -651,8 +675,9 @@ while read -r g lag delta srcdelta; do
             log "  $g -> $dep: CRITICAL — pod(s) $(echo $intruder | tr '\n' ' ') appeared DURING the reset: something other than this script scales this deployment. Stopping them before the old tree is removed."
             for p in $intruder; do run $KUBECTL $SA delete pod "$p" --wait=true --timeout=120s >>"$LOG" 2>&1; done
           fi
-          if [ -n "$(pods_of "$dep")" ]; then
-            log "  $g -> $dep: a pod is STILL present — the old tree stays parked at $aside for a human; not deleting under it"
+          holders=$(other_users_of_claim "$(claim_of "$dep")" "$dep" | grep '^pod/' | tr '\n' ' ')
+          if [ -n "$(pods_of "$dep")" ] || [ -n "$holders" ]; then
+            log "  $g -> $dep: something still holds the claim after the swap (${holders:-own pod}) — the old tree stays parked at $aside for a human; not deleting under it"
           elif find "$aside" -xdev -mindepth 1 -delete && rmdir "$aside"; then
             log "  $g -> $dep: old tree removed"
           else
