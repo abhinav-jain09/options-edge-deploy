@@ -123,4 +123,21 @@ if [ -r "$DOCTOR" ]; then
 else
   log "WARN: $DOCTOR not installed — Streams apps rejecting an internal topic's partition count will stay NOT READY"
 fi
+# ---------- pipeline self-heal ----------
+# Every unit above can come back perfectly and the pipeline still produce nothing, because the damage
+# an unclean stop leaves is INSIDE Kafka: abandoned offset-commit transactions that keep a Streams
+# client parked in fetchCommittedOffsets, and Streams state that no longer matches its changelog.
+# Neither is visible to systemd or to a readiness probe (measured 2026-09-21: two services reported
+# READY for hours while consuming zero). The self-heal unit is the check for that; it also runs every
+# 10 min from its own timer. It is started here ASYNCHRONOUSLY: its evidence gathering (thread dumps,
+# coordinator reads, a possible state reset) is bounded per cycle but must never hold this unit's
+# TimeoutStartSec hostage, and a second concurrent run leaves at once (pid lock) — so this start is
+# only about closing the gap right after boot instead of up to 10 minutes later.
+if systemctl cat oe-pipeline-selfheal.service >/dev/null 2>&1; then
+  log "pipeline self-heal: started asynchronously (oe-pipeline-selfheal.service; log /var/log/oe-pipeline-selfheal.log)"
+  systemctl start --no-block oe-pipeline-selfheal.service 2>&1 | tee -a "$LOG"
+else
+  log "WARN: oe-pipeline-selfheal.service is not installed (scripts/ops/install-pipeline-selfheal.sh ships it) — an abandoned transaction or wedged Streams state after this boot will NOT be repaired automatically"
+fi
+
 log "=== boot bring-up done ==="
