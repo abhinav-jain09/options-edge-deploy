@@ -12,7 +12,6 @@ that passes with the guard removed is not an assertion.
 import datetime
 import os
 import subprocess
-import textwrap
 import time
 from pathlib import Path
 
@@ -44,6 +43,18 @@ CORRUPT_SIG = "Invalid state during store open,ProcessorStateException"
 RETRY_LOG = "WARN StreamsProducer - Timeout exception caught trying to initialize transactions. Reattempting initialization"
 
 
+def _script(path, lines):
+    """A stub executable: one bash line per list entry, no dedent games — the shebang is always line 1."""
+    path.write_text("#!/usr/bin/env bash\n" + "\n".join(lines) + "\n")
+    path.chmod(0o755)
+
+
+def _table(headers, rows):
+    """Render rows the way Kafka's printer does: each column as wide as its widest cell."""
+    widths = [max(len(str(c)) for c in col) for col in zip(headers, *rows)]
+    return [" ".join(f"{str(c):<{w}}" for c, w in zip(r, widths)).rstrip() for r in [headers, *rows]]
+
+
 def _sandbox(tmp_path, *, group=GROUP, replicas="1", pod_age=258, restoring=False, lag=1_900_000,
              advance=0, source_advance=50_000, grow_state=False, wedge=WEDGE_DUMP, corrupt=False,
              hist_line="", retry_lines=0, decoy=False, open_tx_age_minutes=None, tx_id=None,
@@ -51,9 +62,10 @@ def _sandbox(tmp_path, *, group=GROUP, replicas="1", pod_age=258, restoring=Fals
              abort_fail=False, hanging_fail=False, scale_fail_to="", pods_linger=False,
              find_fail=False, stale_twin=False, pv_path_override=None, extra_claim=False,
              rescale_between=False, intruder=False, hpa=False, deployments=(DEPLOY,),
-             mkdir_fail=False, coordinator_silent=False, group_col=True, commit_between=0):
+             mkdir_fail=False, coordinator_silent=False, group_col=True, commit_between=0,
+             rx_kib=0, shared_claim_pod=False, shared_claim_workload=False, hanging_row=False):
     """A fake estate: one consumer group with lag, one deployment (plus an optional look-alike),
-    pods owned through ReplicaSets, one PV."""
+    pods owned through ReplicaSets, one PV. Every stub is a list of bash lines."""
     bin_dir = tmp_path / "bin"; bin_dir.mkdir()
     kbin = tmp_path / "kbin"; kbin.mkdir()
     storage = tmp_path / "storage"; storage.mkdir()
@@ -63,138 +75,121 @@ def _sandbox(tmp_path, *, group=GROUP, replicas="1", pod_age=258, restoring=Fals
     dumped = tmp_path / "dumped"
     pv_path = storage / f"{PV}_options-edge_{CLAIM}"
     pv_path.mkdir(); (pv_path / "rocksdb").write_bytes(b"x" * 1000)
-    if find_fail:   # removing the parked old tree fails: only that call, nothing else
-        (bin_dir / "find").write_text(textwrap.dedent("""\
-            #!/usr/bin/env bash
-            case "$*" in *".reset-"*"-mindepth 1 -delete"*) echo "find: cannot delete: Input/output error" >&2; exit 1 ;; esac
-            exec /usr/bin/find "$@"
-            """))
     if stale_twin:   # a lexically-earlier directory with the same claim name, NOT bound to the PVC
         twin = storage / f"pvc-0000stale_options-edge_{CLAIM}"; twin.mkdir()
         (twin / "rocksdb").write_bytes(b"s" * 1000)
     reported_pv = pv_path_override if pv_path_override is not None else str(pv_path)
     (tmp_path / "dump.txt").write_text(wedge or "")
     (tmp_path / "decoy-dump.txt").write_text(WEDGE_DUMP)
-
     created = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=pod_age)).strftime("%Y-%m-%dT%H:%M:%SZ")
     logline = ("StateUpdater-1 INFO StoreChangelogReader - Finished restoring changelog"
                if restoring else "ConsumerCoordinator - Request joining group")
     scaled_file = tmp_path / "scaled"
-    claims = f"{CLAIM}\\n" + (f"second-{CLAIM}\\n" if extra_claim else "")
-    deploy_rows = "".join(f'echo "{d}   $reps/$reps   $reps   $reps   4h"; ' for d in deployments)
-    rs_rows = f'echo "{RS} Deployment/{DEPLOY}"; ' + (f'echo "{DECOY_RS} Deployment/{DECOY_DEPLOY}"; ' if decoy else "")
-    # the decoy pod is listed FIRST so any prefix-based selection would pick it
-    decoy_pod_row = f'echo "{DECOY_POD} ReplicaSet/{DECOY_RS} Running {created}"; ' if decoy else ""
-    retry_rows = "".join(f'echo "{RETRY_LOG}"; ' for _ in range(retry_lines))
+    claims = [CLAIM] + ([f"second-{CLAIM}"] if extra_claim else [])
 
-    (bin_dir / "k3s").write_text(textwrap.dedent(f"""\
-        #!/usr/bin/env bash
-        shift 3; [[ "${{1:-}}" == --as=* ]] && shift
-        all="$*"
-        reps={replicas}; [ -f "{scaled_file}" ] && reps=$(cat "{scaled_file}")
-        case "$all" in
-          "get deploy --no-headers")             {deploy_rows} ;;
-          "get deploy {DEPLOY} -o jsonpath={{.spec.replicas}}")
-              if [ "{int(rescale_between)}" = 1 ] && [ -f "{tmp_path}/pods_checked" ]; then printf '1'; else printf '%s' "$reps"; fi ;;
-          "get deploy {DEPLOY} -o jsonpath="*claimName*)        printf '{claims}' ;;
-          "get pvc {CLAIM} -o jsonpath={{.spec.volumeName}}")  printf '{PV}' ;;
-          "get pv {PV} -o jsonpath="*)           printf '%s' '{reported_pv}' ;;
-          "get hpa -o jsonpath="*)               [ "{int(hpa)}" = 1 ] && echo "{DEPLOY}"; true ;;
-          "get rs -o jsonpath="*)                {rs_rows} ;;
-          "get pods -o jsonpath="*)
-              {decoy_pod_row}
-              if [ -f "{tmp_path}/swapped" ] && [ "{int(intruder)}" = 1 ] && [ ! -f "{tmp_path}/intruder-deleted" ]; then echo "{POD}-intruder ReplicaSet/{RS} Running {created}"; fi
-              touch "{tmp_path}/pods_checked"
-              if [ "$reps" != 0 ] || [ "{int(pods_linger)}" = 1 ]; then echo "{POD} ReplicaSet/{RS} Running {created}"; fi ;;
-          "exec {POD} -- kill -3 1")             touch "{dumped}" ;;
-          "exec {DECOY_POD} -- kill -3 1")       touch "{dumped}-decoy" ;;
-          "logs {POD} --since=1m")               [ -f "{dumped}" ] && cat "{tmp_path}/dump.txt"; true ;;
-          "logs {DECOY_POD} --since=1m")         [ -f "{dumped}-decoy" ] && cat "{tmp_path}/decoy-dump.txt"; true ;;
-          "logs {POD} --since=10m")
-              echo "{logline}"; echo "{hist_line}"; {retry_rows} [ "{int(corrupt)}" = 1 ] && echo "{CORRUPT_LOG}"; true ;;
-          "logs {DECOY_POD} --since=10m")        echo "{CORRUPT_LOG}" ;;
-          "logs "*)                              echo "{logline}" ;;
-          "scale deploy/{DEPLOY} --replicas="*)
-              want=${{all##*--replicas=}}; echo "$all" >> "{actions}"
-              if [ "$want" = "{scale_fail_to}" ]; then echo "Error from server (Forbidden)"; exit 1; fi
-              echo "$want" > "{scaled_file}" ;;
-          "delete pod {POD}-intruder "*)         echo "$all" >> "{actions}"; touch "{tmp_path}/intruder-deleted" ;;
-          "rollout restart deploy/"*|"delete pod "*) echo "$all" >> "{actions}" ;;
-          *) echo "unexpected kubectl call: $all" >&2; exit 2 ;;
-        esac
-        exit 0
-        """))
-    if mkdir_fail:   # the empty replacement directory cannot be created (inodes, quota, permissions)
-        (bin_dir / "mkdir").write_text(textwrap.dedent(f"""\
-            #!/usr/bin/env bash
-            case "$*" in "{pv_path}") echo "mkdir: cannot create directory: No space left on device" >&2; exit 1 ;; esac
-            exec /bin/mkdir "$@"
-            """))
-    # the swap is observed through mv: afterwards the pod stub may show an intruder
-    (bin_dir / "mv").write_text(textwrap.dedent(f"""\
-        #!/usr/bin/env bash
-        /bin/mv "$@" && touch "{tmp_path}/swapped"
-        """))
+    # ---- kubectl ----
+    k = ['shift 3; [[ "${1:-}" == --as=* ]] && shift', 'all="$*"',
+         f'reps={replicas}; [ -f "{scaled_file}" ] && reps=$(cat "{scaled_file}")',
+         'case "$all" in',
+         '  "get deploy --no-headers") ' + " ".join(f'echo "{d}   $reps/$reps   $reps   $reps   4h";' for d in deployments) + ' ;;',
+         f'  "get deploy {DEPLOY} -o jsonpath={{.spec.replicas}}")',
+         f'      if [ "{int(rescale_between)}" = 1 ] && [ -f "{tmp_path}/pods_checked" ]; then printf 1; else printf "%s" "$reps"; fi ;;',
+         f'  "get deploy {DEPLOY} -o jsonpath="*claimName*) ' + " ".join(f'echo "{c}";' for c in claims) + ' ;;',
+         f'  "get pvc {CLAIM} -o jsonpath={{.spec.volumeName}}") printf "{PV}" ;;',
+         f'  "get pv {PV} -o jsonpath="*) printf "%s" \'{reported_pv}\' ;;',
+         f'  "get hpa -o jsonpath="*) [ "{int(hpa)}" = 1 ] && echo "{DEPLOY}"; true ;;',
+         f'  "get rs -o jsonpath="*) echo "{RS} Deployment/{DEPLOY}"; ' + (f'echo "{DECOY_RS} Deployment/{DECOY_DEPLOY}"; ' if decoy else '') + 'true ;;',
+         '  "get pods --no-headers")',
+         f'      if [ "$reps" != 0 ] || [ "{int(pods_linger)}" = 1 ]; then echo "{POD}   1/1   Running   0   4h"; fi ;;',
+         '  "get pods -o jsonpath="*".spec.volumes"*)',
+         f'      [ "{int(shared_claim_pod)}" = 1 ] && echo "some-other-job-abc {CLAIM} "',
+         f'      [ "$reps" != 0 ] && echo "{POD} {CLAIM} "; true ;;',
+         '  "get pods -o jsonpath="*)',
+         # the decoy pod is listed FIRST so any prefix-based selection would pick it
+         (f'      echo "{DECOY_POD} ReplicaSet/{DECOY_RS} Running {created}"' if decoy else '      true'),
+         f'      if [ -f "{tmp_path}/swapped" ] && [ "{int(intruder)}" = 1 ] && [ ! -f "{tmp_path}/intruder-deleted" ]; then echo "{POD}-intruder ReplicaSet/{RS} Running {created}"; fi',
+         f'      touch "{tmp_path}/pods_checked"',
+         f'      if [ "$reps" != 0 ] || [ "{int(pods_linger)}" = 1 ]; then echo "{POD} ReplicaSet/{RS} Running {created}"; fi ;;',
+         '  "get deploy,sts -o jsonpath="*)',
+         f'      echo "Deployment/{DEPLOY} {CLAIM} "; [ "{int(shared_claim_workload)}" = 1 ] && echo "StatefulSet/{DEPLOY}-twin {CLAIM} "; true ;;',
+         f'  "exec {POD} -- kill -3 1") touch "{dumped}" ;;',
+         f'  "exec {DECOY_POD} -- kill -3 1") touch "{dumped}-decoy" ;;',
+         '  "exec "*" -- cat /proc/net/dev")',
+         f'      c=0; [ -f "{tmp_path}/rxcalls" ] && c=$(cat "{tmp_path}/rxcalls"); c=$((c+1)); echo "$c" > "{tmp_path}/rxcalls"',
+         '      echo "Inter-|   Receive"; echo " face |bytes"',
+         '      echo "    lo: 999999 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0"',
+         f'      echo "  eth0: $(( 1000000 + c * {rx_kib} * 1024 )) 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0" ;;',
+         f'  "logs {POD} --since=1m") [ -f "{dumped}" ] && cat "{tmp_path}/dump.txt"; true ;;',
+         f'  "logs {DECOY_POD} --since=1m") [ -f "{dumped}-decoy" ] && cat "{tmp_path}/decoy-dump.txt"; true ;;',
+         f'  "logs {POD} --since=10m")',
+         f'      echo "{logline}"; echo "{hist_line}"; ' + " ".join(f'echo "{RETRY_LOG}";' for _ in range(retry_lines)) + f' [ "{int(corrupt)}" = 1 ] && echo "{CORRUPT_LOG}"; true ;;',
+         f'  "logs {DECOY_POD} --since=10m") echo "{CORRUPT_LOG}" ;;',
+         f'  "logs "*) echo "{logline}" ;;',
+         f'  "scale deploy/{DEPLOY} --replicas="*)',
+         f'      want=${{all##*--replicas=}}; echo "$all" >> "{actions}"',
+         f'      if [ "$want" = "{scale_fail_to}" ]; then echo "Error from server (Forbidden)"; exit 1; fi',
+         f'      echo "$want" > "{scaled_file}" ;;',
+         f'  "delete pod {POD}-intruder "*) echo "$all" >> "{actions}"; touch "{tmp_path}/intruder-deleted" ;;',
+         f'  "rollout restart deploy/"*|"delete pod "*) echo "$all" >> "{actions}" ;;',
+         '  *) echo "unexpected kubectl call: $all" >&2; exit 2 ;;',
+         'esac', 'exit 0']
+    _script(bin_dir / "k3s", k)
 
-    (kbin / "kafka-broker-api-versions.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
-    (kbin / "kafka-topics.sh").write_text(
-        "#!/usr/bin/env bash\necho 'Topic: __consumer_offsets\tTopicId: x\tPartitionCount: 50\tReplicationFactor: 1'\n")
+    # ---- host tools the reset uses ----
+    _script(bin_dir / "mv", [f'/bin/mv "$@" && touch "{tmp_path}/swapped"'])
+    if find_fail:   # removing the parked old tree fails: only that call, nothing else
+        _script(bin_dir / "find", ['case "$*" in *".reset-"*"-mindepth 1 -delete"*) echo "find: cannot delete: Input/output error" >&2; exit 1 ;; esac',
+                                   'exec /usr/bin/find "$@"'])
+    else:           # every deletion of a parked tree is recorded with its arguments (the mount-boundary policy is asserted on)
+        _script(bin_dir / "find", [f'case "$*" in *"-mindepth 1 -delete"*) echo "$*" >> "{tmp_path}/find-args" ;; esac',
+                                   'exec /usr/bin/find "$@"'])
+    if mkdir_fail:  # the empty replacement directory cannot be created (inodes, quota, permissions)
+        _script(bin_dir / "mkdir", [f'case "$*" in "{pv_path}") echo "mkdir: cannot create directory: No space left on device" >&2; exit 1 ;; esac',
+                                    'exec /bin/mkdir "$@"'])
+
+    # ---- kafka ----
+    _script(kbin / "kafka-broker-api-versions.sh", ["exit 0"])
+    _script(kbin / "kafka-topics.sh", ["echo $'Topic: __consumer_offsets\\tTopicId: x\\tPartitionCount: 50\\tReplicationFactor: 1'"])
     tx_id = tx_id if tx_id is not None else f"{group}-{tx_proc}-11"
-    hdr = lambda name, text: "" if name in no_header_for else text
-    hdr_p = hdr("describe", "echo 'ProducerId\tProducerEpoch\tLatestCoordinatorEpoch\tLastSequence\tLastTimestamp\tCurrentTransactionStartOffset'\n")
-    if open_tx_age_minutes is None:
-        producers = hdr_p + "echo $'50123\\t288\\t126\\t-1\\t0\\tNone'"
+    hdr = lambda name, line: [line] if name not in no_header_for else []
+    tx = ['for a in "$@"; do', '  case "$a" in']
+    if hanging_fail:
+        tx += ['    find-hanging) echo "Error: broker unreachable"; exit 1 ;;']
     else:
-        producers = hdr_p + f"echo \"50123\t288\t126\t30\t$(( $(date +%s)*1000 - {open_tx_age_minutes}*60000 ))\t151600145\""
-    listing = hdr("list", "echo 'TransactionalId\tCoordinator\tProducerId\tTransactionState'\n") + f"echo $'{tx_id}\\t1\\t50123\\tOngoing'"
-    hanging = ("echo 'Error: broker unreachable'; exit 1" if hanging_fail else
-               hdr("hanging", "echo 'Topic\tPartition\tProducerId\tProducerEpoch\tCoordinatorEpoch\tStartOffset\tLastTimestamp\tDuration(min)'\n").strip() or "true")
-    (kbin / "kafka-transactions.sh").write_text(textwrap.dedent(f"""\
-        #!/usr/bin/env bash
-        for a in "$@"; do
-          case "$a" in
-            find-hanging)       {hanging}; exit 0 ;;
-            list)               {listing}
-                                exit 0 ;;
-            describe-producers) {producers}
-                                exit 0 ;;
-            abort)              echo "$*" >> "{aborts}"
-                                if [ "{int(abort_fail)}" = 1 ]; then echo "Error: coordinator not available"; exit 1; fi
-                                exit 0 ;;
-          esac
-        done
-        exit 0
-        """))
-    grow = (f'printf "y%.0s" $(seq 1 5000) >> "{pv_path}/rocksdb"') if grow_state else "true"
+        tx += ['    find-hanging)'] + ["      " + l for l in hdr("hanging", "echo $'Topic\\tPartition\\tProducerId\\tProducerEpoch\\tCoordinatorEpoch\\tStartOffset\\tLastTimestamp\\tDuration(min)'")] \
+            + (["      echo $'options.databento.normalized\\t0\\t50123\\t288\\t126\\t777\\t0\\t61'"] if hanging_row else []) + ['      exit 0 ;;']
+    tx += ['    list)'] + ["      " + l for l in hdr("list", "echo $'TransactionalId\\tCoordinator\\tProducerId\\tTransactionState'")] \
+        + [f"      echo $'{tx_id}\\t1\\t50123\\tOngoing'", '      exit 0 ;;']
+    tx += ['    describe-producers)'] + ["      " + l for l in hdr("describe", "echo $'ProducerId\\tProducerEpoch\\tLatestCoordinatorEpoch\\tLastSequence\\tLastTimestamp\\tCurrentTransactionStartOffset'")]
+    if open_tx_age_minutes is None:
+        tx += ["      echo $'50123\\t288\\t126\\t-1\\t0\\tNone'"]
+    else:
+        tx += [f"      echo \"50123\t288\t126\t30\t$(( $(date +%s)*1000 - {open_tx_age_minutes}*60000 ))\t151600145\""]
+    tx += ['      exit 0 ;;', f'    abort) echo "$*" >> "{aborts}"',
+           f'      if [ "{int(abort_fail)}" = 1 ]; then echo "Error: coordinator not available"; exit 1; fi', '      exit 0 ;;',
+           '  esac', 'done', 'exit 0']
+    _script(kbin / "kafka-transactions.sh", tx)
+
     # Kafka 4.3.0 on prod prints a leading GROUP column in both single-group tables; older/newer
-    # printers may not. Both layouts are exercised, rendered the way Kafka's printer renders them:
-    # every column as wide as its widest cell, one space between columns.
-    def table(headers, rows):
-        widths = [max(len(str(c)) for c in col) for col in zip(headers, *rows)]
-        return [" ".join(f"{str(c):<{w}}" for c, w in zip(r, widths)).rstrip() for r in [headers, *rows]]
+    # printers may not. Both layouts are exercised, rendered the way Kafka's printer renders them.
     gc = lambda cells: (cells if group_col else cells[1:])
-    state_lines = table(gc(["GROUP", "COORDINATOR (ID)", "ASSIGNMENT-STRATEGY", "STATE", "#MEMBERS"]),
-                        [gc([group, "192.168.100.252:9092  (1)", "stream", group_state, "1"])])
-    member_lines = table(gc(["GROUP", "CONSUMER-ID", "HOST", "CLIENT-ID", "#PARTITIONS"]),
-                         [gc([group, f"{group}-{m}-StreamThread-1-consumer-{m}", "/10.0.0.1", f"{group}-{m}-StreamThread-1-consumer", "3"]) for m in members])
-    state_echo = "; ".join(f"echo '{l}'" for l in state_lines)
-    member_echo = "; ".join(f"echo '{l}'" for l in member_lines)
-    (kbin / "kafka-consumer-groups.sh").write_text(textwrap.dedent(f"""\
-        #!/usr/bin/env bash
-        case "$*" in
-          *--members*) echo; {member_echo}; exit 0 ;;
-          *--state*)   [ "{int(coordinator_silent)}" = 1 ] && exit 0
-                       echo; {state_echo}; exit 0 ;;
-        esac
-        n=0; [ -f "{calls}" ] && n=$(cat "{calls}"); n=$((n+1)); echo "$n" > "{calls}"
-        if [ "$n" -ge 2 ]; then {grow}; fi
-        # commit_between: the consumer commits once between every pair of cycles (after t1, before the next t0)
-        cycle=$(( (n-1)/2 )); cur=$((1000 + (n-1)*{advance} + cycle*{commit_between})); end=$((1000 + {lag} + (n-1)*{source_advance}))
-        echo "GROUP TOPIC PARTITION CURRENT-OFFSET LOG-END-OFFSET LAG CONSUMER-ID HOST CLIENT-ID"
-        echo "{group} t 0 $cur $end $((end-cur)) c h cl"
-        """))
-    for f in list(bin_dir.iterdir()) + list(kbin.iterdir()):
-        f.chmod(0o755)
+    state_lines = _table(gc(["GROUP", "COORDINATOR (ID)", "ASSIGNMENT-STRATEGY", "STATE", "#MEMBERS"]),
+                         [gc([group, "192.168.100.252:9092  (1)", "stream", group_state, "1"])])
+    member_lines = _table(gc(["GROUP", "CONSUMER-ID", "HOST", "CLIENT-ID", "#PARTITIONS"]),
+                          [gc([group, f"{group}-{m}-StreamThread-1-consumer-{m}", "/10.0.0.1", f"{group}-{m}-StreamThread-1-consumer", "3"]) for m in members])
+    grow = (f'printf "y%.0s" $(seq 1 5000) >> "{pv_path}/rocksdb"') if grow_state else "true"
+    cg = ['case "$*" in',
+          '  *--members*) echo; ' + " ".join(f"echo '{l}';" for l in member_lines) + ' exit 0 ;;',
+          f'  *--state*) [ "{int(coordinator_silent)}" = 1 ] && exit 0',
+          '      echo; ' + " ".join(f"echo '{l}';" for l in state_lines) + ' exit 0 ;;',
+          'esac',
+          f'n=0; [ -f "{calls}" ] && n=$(cat "{calls}"); n=$((n+1)); echo "$n" > "{calls}"',
+          f'if [ "$n" -ge 2 ]; then {grow}; fi',
+          # commit_between: the consumer commits once between every pair of cycles (after t1, before the next t0)
+          f'cycle=$(( (n-1)/2 )); cur=$((1000 + (n-1)*{advance} + cycle*{commit_between})); end=$((1000 + {lag} + (n-1)*{source_advance}))',
+          'echo "GROUP TOPIC PARTITION CURRENT-OFFSET LOG-END-OFFSET LAG CONSUMER-ID HOST CLIENT-ID"',
+          f'echo "{group} t 0 $cur $end $((end-cur)) c h cl"']
+    _script(kbin / "kafka-consumer-groups.sh", cg)
 
     env = dict(os.environ)
     env.update(
@@ -468,6 +463,20 @@ def test_mutation_same_app_with_static_state_is_acted_on(tmp_path):
     assert f"rollout restart deploy/{DEPLOY}" in _acted(actions)
 
 
+def test_a_pod_that_is_receiving_data_is_fetching_not_parked(tmp_path):
+    """Everything else says wedged (park on every dump, no commit) but the pod pulls megabytes:
+    it is consuming a moving source, and a parked consumer only heartbeats."""
+    env, actions = _sandbox(tmp_path, rx_kib=2048)
+    out = _escalate(env, 5)
+    assert "fetching; a parked consumer only heartbeats" in out and _acted(actions) == ""
+
+
+def test_mutation_the_same_pod_receiving_only_heartbeats_is_acted_on(tmp_path):
+    env, actions = _sandbox(tmp_path, rx_kib=8)
+    _escalate(env, 3)
+    assert f"rollout restart deploy/{DEPLOY}" in _acted(actions)
+
+
 def test_young_pod_is_given_its_grace_period(tmp_path):
     env, actions = _sandbox(tmp_path, pod_age=3)
     out = _escalate(env, 3)
@@ -644,6 +653,22 @@ def test_headerless_transaction_listing_is_refused(tmp_path):
     assert "transaction listing carried no recognisable header" in out and not Path(env["_ABORTS"]).exists()
 
 
+def test_a_transaction_listed_by_find_hanging_is_never_aborted_on_the_listing_alone(tmp_path):
+    """A healthy producer with a long transaction.timeout.ms, busy for a few minutes, is "hanging"
+    by find-hanging's threshold. Its owner is a live member: nothing may be aborted."""
+    env, _ = _sandbox(tmp_path, hanging_row=True, open_tx_age_minutes=145, tx_proc=LIVE_PROC, members=(LIVE_PROC,))
+    out = _escalate(env, 5)
+    assert "reported only" in out and not Path(env["_ABORTS"]).exists()
+
+
+def test_mutation_the_same_listed_transaction_of_a_proven_dead_owner_is_aborted(tmp_path):
+    env, _ = _sandbox(tmp_path, hanging_row=True, open_tx_age_minutes=145, tx_proc=DEAD_PROC, members=(LIVE_PROC,))
+    out = _escalate(env, 4)
+    aborts = Path(env["_ABORTS"]).read_text()
+    assert "also holds an open transaction on options.databento.normalized-0" in out
+    assert "--topic options.databento.normalized --partition 0 --start-offset 777" in aborts
+
+
 def test_headerless_find_hanging_output_is_refused(tmp_path):
     env, _ = _sandbox(tmp_path, no_header_for="hanging")
     assert "find-hanging output carried no recognisable header" in _run(env)
@@ -680,6 +705,29 @@ def test_strike_two_swaps_only_the_pvc_bound_volume_and_restores_the_desired_rep
     acts = _acted(actions)
     assert "--replicas=0" in acts and "--replicas=2" in acts and "--replicas=1" not in acts
     assert not (Path(env["STATEDIR"]) / f"{DEPLOY}.down").exists()
+
+
+def test_strike_two_is_withheld_when_another_pod_mounts_the_same_claim(tmp_path):
+    env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, shared_claim_pod=True)
+    _seed(env, strikes=1, corrupt=CORRUPT_SIG)
+    out = _run(env)
+    assert "also mounted or templated by pod/some-other-job-abc" in out
+    assert (Path(env["_PV"]) / "rocksdb").exists() and "--replicas=0" not in _acted(actions)
+
+
+def test_strike_two_is_withheld_when_another_workload_is_templated_on_the_claim(tmp_path):
+    env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, shared_claim_workload=True)
+    _seed(env, strikes=1, corrupt=CORRUPT_SIG)
+    out = _run(env)
+    assert f"StatefulSet/{DEPLOY}-twin" in out and (Path(env["_PV"]) / "rocksdb").exists()
+
+
+def test_mutation_with_the_claim_unshared_the_reset_proceeds(tmp_path):
+    env, _ = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True)
+    _seed(env, strikes=1, corrupt=CORRUPT_SIG)
+    out = _run(env)
+    assert "old tree removed" in out
+    assert "-xdev" in (tmp_path / "find-args").read_text(), "the parked tree deletion may cross a mount boundary"
 
 
 def test_strike_two_is_withheld_when_an_autoscaler_targets_the_deployment(tmp_path):

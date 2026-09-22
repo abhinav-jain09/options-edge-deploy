@@ -137,7 +137,7 @@ if systemctl cat oe-pipeline-selfheal.service >/dev/null 2>&1; then
   log "pipeline self-heal: started asynchronously (oe-pipeline-selfheal.service; log /var/log/oe-pipeline-selfheal.log)"
   systemctl start --no-block oe-pipeline-selfheal.service 2>&1 | tee -a "$LOG"
 else
-  log "WARN: oe-pipeline-selfheal.service is not installed — an abandoned transaction or wedged Streams state after this boot will NOT be repaired automatically"
+  log "WARN: oe-pipeline-selfheal.service is not installed (scripts/ops/install-pipeline-selfheal.sh ships it) — an abandoned transaction or wedged Streams state after this boot will NOT be repaired automatically"
 fi
 
 log "=== boot bring-up done ==="
