@@ -65,7 +65,7 @@ def _sandbox(tmp_path, *, group=GROUP, replicas="1", pod_age=258, restoring=Fals
              mkdir_fail=False, coordinator_silent=False, group_col=True, commit_between=0,
              rx_kib=0, shared_claim_pod=False, shared_claim_workload=False, hanging_row=False,
              shared_claim_cronjob=False, late_holder=False, sub_path=False, tx_layout="tabs",
-             init_sub_path=False, shared_claim_rs=False, foreign_file=False,
+             init_sub_path=False, shared_claim_rs=False, foreign_file=False, nested_foreign=False,
              sidecar=False, sidecar_corrupt=False, old_pod_first=False, kafka_down=False, sidecar_mounts=False):
     """A fake estate: one consumer group with lag, one deployment (plus an optional look-alike),
     pods owned through ReplicaSets, one PV. Every stub is a list of bash lines."""
@@ -77,14 +77,21 @@ def _sandbox(tmp_path, *, group=GROUP, replicas="1", pod_age=258, restoring=Fals
     aborts = tmp_path / "aborts.log"
     dumped = tmp_path / "dumped"
     pv_path = storage / f"{PV}_options-edge_{CLAIM}"
-    marker = pv_path / group / "0_1" / "rocksdb"
-    marker.parent.mkdir(parents=True); marker.write_bytes(b"x" * 1000)
+    # the complete tree Kafka Streams writes, as measured on prod: <app>/<task>/rocksdb/<store>/<RocksDB files>
+    store = pv_path / group / "0_1" / "rocksdb" / "heatmap-state"; store.mkdir(parents=True)
+    marker = store / "000012.sst"; marker.write_bytes(b"x" * 1000)
+    for f, body in [("CURRENT", "MANIFAST-000004"), ("IDENTITY", "id"), ("LOCK", ""), ("LOG", ""), ("MANIFEST-000004", "m"), ("OPTIONS-000007", "o"), ("000011.log", "")]:
+        (store / f).write_text(body)
+    (pv_path / group / "0_1" / ".checkpoint").write_text("0")
     (pv_path / group / "kafka-streams-process-metadata").write_text("{}")
+    (pv_path / group / ".lock").write_text("")
     if foreign_file:   # something that is NOT Kafka Streams state lives on the same volume
         (pv_path / "audit").mkdir(); (pv_path / "audit" / "retained-events").write_text("keep me")
+    if nested_foreign:   # foreign data hidden INSIDE an accepted task directory
+        (pv_path / group / "0_1" / "audit").mkdir(); (pv_path / group / "0_1" / "audit" / "retained-events").write_text("keep me")
     if stale_twin:   # a lexically-earlier directory with the same claim name, NOT bound to the PVC
         twin = storage / f"pvc-0000stale_options-edge_{CLAIM}"; (twin / group / "0_1").mkdir(parents=True)
-        (twin / group / "0_1" / "rocksdb").write_bytes(b"s" * 1000)
+        (twin / group / "0_1" / "rocksdb").write_bytes(b"s" * 1000)   # a stale twin need not be well-formed
     reported_pv = pv_path_override if pv_path_override is not None else str(pv_path)
     (tmp_path / "dump.txt").write_text(wedge or "")
     (tmp_path / "decoy-dump.txt").write_text(WEDGE_DUMP)
@@ -260,7 +267,7 @@ def _seed(env, *, observed=5, strikes=0, wedge=None, corrupt=None):
     """Put the group past confirmation with evidence already recorded one cycle ago."""
     sd = Path(env["STATEDIR"]); sd.mkdir(exist_ok=True)
     g = env["_GROUP"]
-    (sd / f"{g}.observed").write_text(f"{observed}\n")
+    (sd / f"{g}.observed").write_text(f"{int(time.time())} {observed}\n")
     (sd / f"{g}.strikes").write_text(f"{strikes}\n")
     ago = int(time.time()) - 600
     if wedge: (sd / f"{g}.wedge").write_text(f"{ago} 1 {wedge}\n")
@@ -295,6 +302,24 @@ def test_mutation_the_same_fetch_with_the_retry_sleep_is_a_park(tmp_path):
     assert f"rollout restart deploy/{DEPLOY}" in _acted(actions)
 
 
+def test_a_mixed_park_with_any_init_transactions_component_is_never_restarted(tmp_path):
+    """Two StreamThreads in one dump: one in the fetch retry sleep, one in initTransactions with
+    retry lines — the initTransactions component alone rules the restart out."""
+    mixed = WEDGE_DUMP + f'"{GROUP}-{LIVE_PROC}-StreamThread-2" #56 prio=5 waiting on condition\n' + PARK + INIT
+    env, actions = _sandbox(tmp_path, wedge=mixed, retry_lines=3)
+    out = _escalate(env, 4, RESTART_ON_PARK="true")
+    assert "confirmed park includes initTransactions (fetchCommittedOffsets,initTransactions)" in out
+    assert _acted(actions) == ""
+
+
+def test_a_stalled_observation_from_long_ago_does_not_count_as_consecutive(tmp_path):
+    env, actions = _sandbox(tmp_path)
+    sd = Path(env["STATEDIR"]); sd.mkdir()
+    (sd / f"{GROUP}.observed").write_text(f"{int(time.time()) - 7200} 5\n")   # two hours ago
+    out = _run(env)
+    assert "stalled on 1 of 2 consecutive checks" in out and not Path(env["_DUMPED"]).exists()
+
+
 def test_a_live_transaction_initialisation_is_not_a_wedge(tmp_path):
     """A slow EOS producer caught inside initTransactions twice, with no retry log lines."""
     env, actions = _sandbox(tmp_path, wedge=INIT_DUMP, retry_lines=0)
@@ -307,7 +332,7 @@ def test_mutation_the_same_initialisation_with_repeated_timeouts_is_a_confirmed_
     not: the transaction coordinator's health cannot be judged from this host."""
     env, actions = _sandbox(tmp_path, wedge=INIT_DUMP, retry_lines=3)
     out = _escalate(env, 4, RESTART_ON_PARK="true")
-    assert "confirmed initTransactions park" in out and "NOT restarted" in out
+    assert "confirmed park includes initTransactions" in out and "NOT restarted" in out
     assert _acted(actions) == ""
 
 
@@ -893,6 +918,15 @@ def test_strike_two_is_withheld_when_the_volume_holds_anything_but_streams_state
     out = _run(env)
     assert "holds something other than Kafka Streams state" in out
     assert Path(env["_MARKER"]).exists() and (Path(env["_PV"]) / "audit" / "retained-events").exists()
+    assert "--replicas=0" not in _acted(actions)
+
+
+def test_strike_two_is_withheld_when_foreign_data_hides_inside_a_task_directory(tmp_path):
+    env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, nested_foreign=True)
+    _seed(env, strikes=1, corrupt=CORRUPT_SIG)
+    out = _run(env)
+    assert "holds something other than Kafka Streams state" in out and "unexpected entry in a task directory" in out
+    assert Path(env["_MARKER"]).exists() and (Path(env["_PV"]) / GROUP / "0_1" / "audit" / "retained-events").exists()
     assert "--replicas=0" not in _acted(actions)
 
 

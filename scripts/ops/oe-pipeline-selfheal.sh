@@ -548,16 +548,36 @@ mounted_with_subpath() {   # $1 = deployment, $2 = claim
 # inside it only what Streams writes — task directories "<n>_<m>", "global", ".lock",
 # "kafka-streams-process-metadata", ".checkpoint". Anything else means the volume also carries data
 # this script knows nothing about, and the reset is withheld.
-streams_only_dir() {   # $1 = dir, $2 = group (application.id) -> 0 if the layout is Streams-only
+streams_only_dir() {   # $1 = dir, $2 = group (application.id) -> 0 if the COMPLETE tree is Streams-only
   python3 - "$1" "$2" <<'PYEOF'
 import os, re, sys
 root, app = sys.argv[1], sys.argv[2]
+TASK = re.compile(r"^\d+_\d+$")
+ROCKS = re.compile(r"^(CURRENT|IDENTITY|LOCK|LOG|LOG\.old\.\d+|MANIFEST-\d+|OPTIONS-\d+|\d+\.sst|\d+\.log)$")
+def fail(why): print(why); sys.exit(1)
+def store(d):                       # a RocksDB store directory: files of known shape, no subdirectories
+    for e in os.listdir(d):
+        if os.path.isdir(os.path.join(d, e)): fail(f"directory inside a store: {os.path.join(d, e)}")
+        if not ROCKS.match(e): fail(f"not a RocksDB file: {os.path.join(d, e)}")
+def rocksdb(d):                     # <task>/rocksdb: only store directories
+    for e in os.listdir(d):
+        q = os.path.join(d, e)
+        if not os.path.isdir(q): fail(f"file where a store directory is expected: {q}")
+        store(q)
+def task(d):                        # <n>_<m> or global: rocksdb/, .checkpoint, .lock — nothing else
+    for e in os.listdir(d):
+        q = os.path.join(d, e)
+        if e == "rocksdb" and os.path.isdir(q): rocksdb(q)
+        elif e in (".checkpoint", ".lock") and os.path.isfile(q): pass
+        else: fail(f"unexpected entry in a task directory: {q}")
 top = [e for e in os.listdir(root) if e != "lost+found"]
-if top and top != [app]: sys.exit(1)
 if not top: sys.exit(0)
-ok = re.compile(r"^(\d+_\d+|global|\.lock|kafka-streams-process-metadata|\.checkpoint|rocksdb)$")
+if top != [app]: fail(f"root holds more than {app}/: {top}")
 for e in os.listdir(os.path.join(root, app)):
-    if not ok.match(e): sys.exit(1)
+    q = os.path.join(root, app, e)
+    if (TASK.match(e) or e == "global") and os.path.isdir(q): task(q)
+    elif e in (".lock", "kafka-streams-process-metadata", ".checkpoint") and os.path.isfile(q): pass
+    else: fail(f"unexpected entry in the application directory: {q}")
 sys.exit(0)
 PYEOF
 }
@@ -640,8 +660,11 @@ while read -r g lag delta srcdelta; do
   fi
 
   # ---- a stall must repeat before any evidence is even gathered ----
-  o="$STATEDIR/${g}.observed"; seen=$(cat "$o" 2>/dev/null || echo 0); seen=$((seen+1))
-  remember "$o" "$seen"
+  # "consecutive" means in time as well as in count: an observation older than EVIDENCE_MAX_SECONDS
+  # (an outage, days without runs) does not carry into a new stall
+  o="$STATEDIR/${g}.observed"; read -r ot seen < <(cat "$o" 2>/dev/null || echo "0 0")
+  [ $(( $(now_s) - ${ot:-0} )) -le "$EVIDENCE_MAX_SECONDS" ] || seen=0
+  seen=$((seen+1)); remember "$o" "$(now_s) $seen"
   if [ "$seen" -lt "$CONFIRM_CYCLES" ]; then
     log "  $g -> $dep: stalled on $seen of $CONFIRM_CYCLES consecutive checks — confirming before looking closer"
     continue
@@ -705,10 +728,8 @@ while read -r g lag delta srcdelta; do
       # coordinator partition may be the thing that is unavailable, and that is not observable from
       # this host — the group coordinator answering says nothing about it. Reported for a human.
       case ",$wedge," in *,initTransactions,*)
-        if [ "$wedge" = "initTransactions" ]; then
-          log "  $g -> $dep: confirmed initTransactions park — the transaction coordinator's health cannot be judged from here, so this is NOT restarted; it needs a human: $KUBECTL logs $(running_pod "$dep")"
-          remember "$f" 0; continue
-        fi ;;
+        log "  $g -> $dep: confirmed park includes initTransactions ($wedge) — the transaction coordinator's health cannot be judged from here, so this is NOT restarted; it needs a human: $KUBECTL logs $(running_pod "$dep")"
+        remember "$f" 0; continue ;;
       esac
       if [ "$RESTART_ON_PARK" != true ]; then
         log "  $g -> $dep: confirmed park ($wedge) with no abandoned transaction to abort — a restart is NOT taken (RESTART_ON_PARK=false): this needs a human: $KUBECTL logs $(running_pod "$dep")"
@@ -727,7 +748,7 @@ while read -r g lag delta srcdelta; do
       others=$(other_users_of_claim "$(claim_of "$dep")" "$dep" | sort -u | tr '\n' ' ')
       if [ -n "$others" ]; then log "  $g -> $dep STRIKE 2 withheld: the claim is also mounted or templated by $others — the volume is not this deployment's alone; NOT resetting"; continue; fi
       if mounted_with_subpath "$dep" "$(claim_of "$dep")"; then log "  $g -> $dep STRIKE 2 withheld: the claim is mounted with a subPath — the volume root is not the state directory; NOT resetting"; continue; fi
-      if ! streams_only_dir "$dir" "$g"; then log "  $g -> $dep STRIKE 2 withheld: $dir holds something other than Kafka Streams state for $g — the volume is not state-only; NOT resetting"; continue; fi
+      why=$(streams_only_dir "$dir" "$g") || { log "  $g -> $dep STRIKE 2 withheld: $dir holds something other than Kafka Streams state for $g (${why}) — the volume is not state-only; NOT resetting"; continue; }
       if ! same_filesystem "$dir"; then log "  $g -> $dep STRIKE 2 withheld: $dir is a mount point of its own — NOT resetting a mounted filesystem"; continue; fi
       log "  $g -> $dep STRIKE 2: confirmed state-corruption signature ($corruption) — scaling $reps->0, swapping $dir for an empty directory, scaling back to $reps"
       remember "$STATEDIR/${dep}.down" "$reps"
