@@ -158,14 +158,15 @@ trap 'restore_down_markers; release_lock' EXIT
 
 log "=== self-heal start (load $(awk '{print $1}' /proc/loadavg 2>/dev/null || echo '?'), uptime $(uptime -p 2>/dev/null || true)) ==="
 
-# ---------- gate: Kafka must ANSWER and the k3s API must be up ----------
-if ! timeout 30 "$KBIN/kafka-broker-api-versions.sh" --bootstrap-server "$BS" >/dev/null 2>&1; then
-  log "Kafka is not answering on $BS yet — nothing to diagnose; will retry next cycle"; exit 0
-fi
+# ---------- gates: the k3s API first (a deployment left at 0 is restored the moment k3s answers,
+# whether or not Kafka is back), then Kafka must ANSWER before anything is judged ----------
 if ! timeout 30 $KUBECTL get deploy --no-headers >/dev/null 2>&1; then
   log "k3s API is not answering yet — nothing to diagnose; will retry next cycle"; exit 0
 fi
 restore_down_markers
+if ! timeout 30 "$KBIN/kafka-broker-api-versions.sh" --bootstrap-server "$BS" >/dev/null 2>&1; then
+  log "Kafka is not answering on $BS yet — nothing to diagnose; will retry next cycle"; exit 0
+fi
 
 # ---------- CLI output is parsed by COLUMN NAME, never by position ----------
 # `tail -n +2` / NR>1 would silently drop a real row whenever the header is absent, and silently read
@@ -223,6 +224,21 @@ deployment_pods() {
     | awk -v rss="$rss" 'BEGIN { n = split(rss, r, "\n"); for (i = 1; i <= n; i++) own["ReplicaSet/" r[i]] = 1 } ($2 in own) { print $1, $3, $4 }'
 }
 running_pod() { deployment_pods "$1" | awk '$2=="Running" {print $1; exit}'; }
+# Evidence must come from the Streams container, never from a sidecar that happens to be the
+# pod's default: the container is the one whose volumeMounts include the streams-state volume; a
+# single-container pod needs no proof; anything else resolves to nothing (no evidence, no action).
+app_container() {   # $1 = pod -> container name, or nothing
+  local pod="$1" names vol
+  names=$($KUBECTL get pod "$pod" -o jsonpath='{range .spec.containers[*]}{.name}{"\n"}{end}' 2>/dev/null | awk 'NF')
+  if [ "$(printf '%s\n' "$names" | awk 'NF' | wc -l | tr -d ' ')" = 1 ]; then printf '%s\n' "$names"; return 0; fi
+  vol=$($KUBECTL get pod "$pod" -o jsonpath='{range .spec.volumes[*]}{.name}{" "}{.persistentVolumeClaim.claimName}{"\n"}{end}' 2>/dev/null | awk '$2 ~ /-streams-state$/ {print $1; exit}')
+  [ -n "$vol" ] || return 0
+  $KUBECTL get pod "$pod" -o jsonpath='{range .spec.containers[*]}{.name}{" "}{range .volumeMounts[*]}{.name}{" "}{end}{"\n"}{end}' 2>/dev/null \
+    | awk -v v="$vol" '{ for (i = 2; i <= NF; i++) if ($i == v) { print $1; exit } }'
+}
+# kubectl verbs against the Streams container of a pod (nothing runs if it cannot be named)
+kc_logs() { local c; c=$(app_container "$1"); [ -n "$c" ] || return 1; shift; $KUBECTL logs "$1" --container "$c" "${@:2}" 2>/dev/null; }
+kc_exec() { local c; c=$(app_container "$1"); [ -n "$c" ] || return 1; shift; $KUBECTL exec "$1" --container "$c" -- "${@:2}" 2>/dev/null; }
 pods_of()     { deployment_pods "$1" | awk '{print $1}'; }
 age_minutes() {   # $1 = RFC3339 creationTimestamp
   python3 -c 'import sys,datetime; t=datetime.datetime.fromisoformat(sys.argv[1].replace("Z","+00:00")); print(int((datetime.datetime.now(datetime.timezone.utc)-t).total_seconds()//60))' "$1" 2>/dev/null || echo 999
@@ -271,9 +287,9 @@ live_processes() {   # process UUIDs of the group's members (a Streams member id
 wedge_frames() {
   local dep="$1" pod parked retries
   pod=$(running_pod "$dep"); [ -n "$pod" ] || return 0
-  $KUBECTL exec "$pod" -- kill -3 1 >/dev/null 2>&1 || true
+  kc_exec "$pod" "$pod" kill -3 1 >/dev/null 2>&1 || return 0
   sleep "$DUMP_SETTLE_SECONDS"
-  parked=$($KUBECTL logs "$pod" --since=1m 2>/dev/null | awk -v sleep_re="$SLEEP_RE" '
+  parked=$(kc_logs "$pod" "$pod" --since=1m | awk -v sleep_re="$SLEEP_RE" '
     function flush() { if (name != "" && name ~ /StreamThread/) {
         if (fetch && slept) print "fetchCommittedOffsets"
         if (init) print "initTransactions" }
@@ -284,7 +300,7 @@ wedge_frames() {
                    if ($0 ~ sleep_re) slept = 1 }
     END { flush() }' | sort -u)
   if printf '%s\n' "$parked" | grep -qx initTransactions; then
-    retries=$($KUBECTL logs "$pod" --since=10m 2>/dev/null | grep -cE "$RETRY_RE")
+    retries=$(kc_logs "$pod" "$pod" --since=10m | grep -cE "$RETRY_RE")
     [ "${retries:-0}" -ge "$RETRY_LINES_MIN" ] || parked=$(printf '%s\n' "$parked" | grep -vx initTransactions)
   fi
   printf '%s\n' "$parked" | awk 'NF' | tr '\n' ',' | sed 's/,$//'
@@ -292,7 +308,7 @@ wedge_frames() {
 corruption_lines() {   # in THIS container's log (no --previous), recent
   local dep="$1" pod
   pod=$(running_pod "$dep"); [ -n "$pod" ] || return 0
-  $KUBECTL logs "$pod" --since=10m 2>/dev/null | grep -oE "$CORRUPT_RE" | sort -u | tr '\n' ',' | sed 's/,$//'
+  kc_logs "$pod" "$pod" --since=10m | grep -oE "$CORRUPT_RE" | sort -u | tr '\n' ',' | sed 's/,$//'
 }
 # PERSISTENT evidence: "<what>" observed for <key> now extends a run only if the SAME <what> was
 # recorded for <key> on an earlier cycle between EVIDENCE_MIN and EVIDENCE_MAX seconds ago; the
@@ -311,7 +327,7 @@ persist() {   # $1 = file, $2 = what, $3 = cycles needed -> prints "confirmed" o
 # coordinator latency incident every consumer backs off and retries, and restarting one of them
 # fixes nothing. If this group's coordinator does not answer a state query within CLI_TIMEOUT, the
 # incident is broker-side and nothing is acted on.
-coordinator_answers() { [ -n "$(group_state "$1")" ]; }
+# (group_state is read once per candidate, below: empty = coordinator silent; anything but Stable = not judged)
 
 # ---------- the abort: only THIS group's transaction, only from a DEAD process, only when Stable ----------
 ABORTED_MARKER="$(mktemp)"; trap 'rm -f "$ABORTED_MARKER"; restore_down_markers; release_lock' EXIT
@@ -320,8 +336,8 @@ unblock_group_offsets() {   # $1 = group; appends a line to $ABORTED_MARKER for 
   local g="$1" nparts part rows listing owned live now_ms out rc state verdict
   : > "$ABORTED_MARKER"; PENDING_DEAD=0
   state=$(group_state "$g")
-  if [ "$state" != "Stable" ] && [ "$state" != "Empty" ]; then
-    log "  $g: group is '$state', not Stable — a rebalance hides live members, so ownership cannot be judged; no abort attempted"; return 0
+  if [ "$state" != "Stable" ]; then
+    log "  $g: group is '$state', not Stable — only a Stable group's member list proves who is alive (Empty proves nothing: the producer may simply be between sessions); no abort attempted"; return 0
   fi
   nparts=$(offsets_partitions); [ -n "$nparts" ] || { log "  $g: could not read the __consumer_offsets partition count — no abort attempted"; return 0; }
   part=$(coordinator_partition "$nparts" "$g" 2>/dev/null); [ -n "$part" ] || return 0
@@ -394,7 +410,7 @@ statesizes() { du -sk "$STORAGE"/*_options-edge_*-streams-state 2>/dev/null | aw
 # Sampled for every Running pod at t0 and t1 ("<pod> <bytes>" per line).
 rxsizes() {
   $KUBECTL get pods --no-headers 2>/dev/null | awk '$3=="Running"{print $1}' | while read -r pod; do
-    printf '%s %s\n' "$pod" "$($KUBECTL exec "$pod" -- cat /proc/net/dev 2>/dev/null | awk -F'[: ]+' 'NR>2 && $2!="lo" {s+=$3} END{print s+0}')"
+    printf '%s %s\n' "$pod" "$(kc_exec "$pod" "$pod" cat /proc/net/dev | awk -F'[: ]+' 'NR>2 && $2!="lo" {s+=$3} END{print s+0}')"
   done
 }
 
@@ -566,9 +582,9 @@ while read -r g lag delta srcdelta; do
 
   # ---- signs of life: any ONE means "working, just not committing yet" ----
   alive=""
-  created=$(deployment_pods "$dep" | awk '{print $3; exit}')
-  if [ -n "$created" ]; then
-    agemin=$(age_minutes "$created")
+  # the YOUNGEST pod decides: during a rolling update the old pod is listed first
+  agemin=$(deployment_pods "$dep" | awk '{print $3}' | while read -r ts; do age_minutes "$ts"; done | sort -n | head -1)
+  if [ -n "$agemin" ]; then
     [ "${agemin:-999}" -lt "$GRACE_MINUTES" ] && alive="pod is only ${agemin}m old (grace ${GRACE_MINUTES}m)"
   fi
   if [ -z "$alive" ]; then
@@ -580,7 +596,7 @@ while read -r g lag delta srcdelta; do
   fi
   if [ -z "$alive" ]; then
     pod=$(running_pod "$dep")
-    [ -n "$pod" ] && $KUBECTL logs "$pod" --since=3m 2>/dev/null | grep -qiE "restor(ing|ed|ation)" && alive="logged changelog restoration within the last 3 minutes"
+    [ -n "$pod" ] && kc_logs "$pod" "$pod" --since=3m | grep -qiE "restor(ing|ed|ation)" && alive="logged changelog restoration within the last 3 minutes"
   fi
   if [ -z "$alive" ] && [ -n "${pod:-}" ]; then
     x0=$(echo "$r0" | awk -v k="$pod" '$1==k{print $2}'); x1=$(echo "$r1" | awk -v k="$pod" '$1==k{print $2}')
@@ -623,8 +639,15 @@ while read -r g lag delta srcdelta; do
     [ -z "$frames" ] && [ -z "$corrupt" ] && log "  $g -> $dep: stalled $seen checks but no StreamThread is parked in a retry and the container log is clean — slow or paused, not wedged. NOT touched. If this is a real fault it needs a human: $KUBECTL logs $(running_pod "$dep")"
     continue
   fi
-  if [ -n "$wedge" ] && ! coordinator_answers "$g"; then
+  gstate=$(group_state "$g")
+  if [ -n "$wedge" ] && [ -z "$gstate" ]; then
     log "  $g -> $dep: parked in $wedge but the group's COORDINATOR is not answering — a broker-side incident, not a wedge in this service. NOT touched."
+    continue
+  fi
+  # a group that is rebalancing is doing exactly what a park looks like from outside; nothing is
+  # judged — not the abort, not a strike — until it reports Stable
+  if [ "$gstate" != "Stable" ]; then
+    log "  $g -> $dep: group state is '$gstate', not Stable — a rebalance in progress is not a wedge and not a corruption verdict. NOT touched."
     continue
   fi
   log "  $g -> $dep: CONFIRMED evidence —${wedge:+ wedge: $wedge (${WEDGE_CYCLES} consecutive cycles)}${corruption:+ corruption: $corruption (2 cycles)}"

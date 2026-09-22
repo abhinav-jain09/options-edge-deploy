@@ -65,7 +65,8 @@ def _sandbox(tmp_path, *, group=GROUP, replicas="1", pod_age=258, restoring=Fals
              mkdir_fail=False, coordinator_silent=False, group_col=True, commit_between=0,
              rx_kib=0, shared_claim_pod=False, shared_claim_workload=False, hanging_row=False,
              shared_claim_cronjob=False, late_holder=False, sub_path=False, tx_layout="tabs",
-             init_sub_path=False, shared_claim_rs=False, foreign_file=False):
+             init_sub_path=False, shared_claim_rs=False, foreign_file=False,
+             sidecar=False, sidecar_corrupt=False, old_pod_first=False, kafka_down=False):
     """A fake estate: one consumer group with lag, one deployment (plus an optional look-alike),
     pods owned through ReplicaSets, one PV. Every stub is a list of bash lines."""
     bin_dir = tmp_path / "bin"; bin_dir.mkdir()
@@ -121,24 +122,31 @@ def _sandbox(tmp_path, *, group=GROUP, replicas="1", pod_age=258, restoring=Fals
          (f'      echo "{DECOY_POD} ReplicaSet/{DECOY_RS} Running {created}"' if decoy else '      true'),
          f'      if [ -f "{tmp_path}/swapped" ] && [ "{int(intruder)}" = 1 ] && [ ! -f "{tmp_path}/intruder-deleted" ]; then echo "{POD}-intruder ReplicaSet/{RS} Running {created}"; fi',
          f'      touch "{tmp_path}/pods_checked"',
+         (f'      echo "{POD}-old ReplicaSet/{RS} Running {(datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=300)).strftime("%Y-%m-%dT%H:%M:%SZ")}"' if old_pod_first else '      true'),
          f'      if [ "$reps" != 0 ] || [ "{int(pods_linger)}" = 1 ]; then echo "{POD} ReplicaSet/{RS} Running {created}"; fi ;;',
          '  "get deploy,sts,ds,jobs,rs,rc -o jsonpath="*)',
          f'      echo "Deployment/{DEPLOY} {CLAIM} "; echo "ReplicaSet/{RS} {CLAIM} "',
          f'      [ "{int(shared_claim_workload)}" = 1 ] && echo "StatefulSet/{DEPLOY}-twin {CLAIM} "',
          f'      [ "{int(shared_claim_rs)}" = 1 ] && echo "ReplicaSet/orphan-rs-7f9 {CLAIM} "; true ;;',
-         f'  "exec {POD} -- kill -3 1") touch "{dumped}" ;;',
-         f'  "exec {DECOY_POD} -- kill -3 1") touch "{dumped}-decoy" ;;',
-         '  "exec "*" -- cat /proc/net/dev")',
+         f'  "get pod "*" -o jsonpath="*"volumeMounts"*) echo "app state"; [ "{int(sidecar)}" = 1 ] && echo "log-shipper"; true ;;',
+         f'  "get pod "*" -o jsonpath="*".spec.volumes"*) echo "state {CLAIM}" ;;',
+         f'  "get pod "*" -o jsonpath="*"containers"*) [ "{int(sidecar)}" = 1 ] && echo "log-shipper"; echo "app" ;;',
+         f'  "exec {POD} --container app -- kill -3 1") touch "{dumped}" ;;',
+         f'  "exec {DECOY_POD} --container app -- kill -3 1") touch "{dumped}-decoy" ;;',
+         '  "exec "*" -- kill -3 1") echo "container-less exec refused" >&2; exit 2 ;;',
+         '  "exec "*" --container app -- cat /proc/net/dev")',
          f'      c=0; [ -f "{tmp_path}/rxcalls" ] && c=$(cat "{tmp_path}/rxcalls"); c=$((c+1)); echo "$c" > "{tmp_path}/rxcalls"',
          '      echo "Inter-|   Receive"; echo " face |bytes"',
          '      echo "    lo: 999999 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0"',
          f'      echo "  eth0: $(( 1000000 + c * {rx_kib} * 1024 )) 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0" ;;',
-         f'  "logs {POD} --since=1m") [ -f "{dumped}" ] && cat "{tmp_path}/dump.txt"; true ;;',
-         f'  "logs {DECOY_POD} --since=1m") [ -f "{dumped}-decoy" ] && cat "{tmp_path}/decoy-dump.txt"; true ;;',
-         f'  "logs {POD} --since=10m")',
+         f'  "logs {POD} --container app --since=1m") [ -f "{dumped}" ] && cat "{tmp_path}/dump.txt"; true ;;',
+         f'  "logs {DECOY_POD} --container app --since=1m") [ -f "{dumped}-decoy" ] && cat "{tmp_path}/decoy-dump.txt"; true ;;',
+         f'  "logs {POD} --container app --since=10m")',
          f'      echo "{logline}"; echo "{hist_line}"; ' + " ".join(f'echo "{RETRY_LOG}";' for _ in range(retry_lines)) + f' [ "{int(corrupt)}" = 1 ] && echo "{CORRUPT_LOG}"; true ;;',
-         f'  "logs {DECOY_POD} --since=10m") echo "{CORRUPT_LOG}" ;;',
-         f'  "logs "*) echo "{logline}" ;;',
+         f'  "logs {DECOY_POD} --container app --since=10m") echo "{CORRUPT_LOG}" ;;',
+         f'  "logs "*" --container app --since=3m") echo "{logline}" ;;',
+         f'  "logs "*" --container log-shipper "*) [ "{int(sidecar_corrupt)}" = 1 ] && echo "{CORRUPT_LOG}"; true ;;',
+         '  "logs "*) echo "container-less logs refused" >&2; exit 2 ;;',
          f'  "scale deploy/{DEPLOY} --replicas="*)',
          f'      want=${{all##*--replicas=}}; echo "$all" >> "{actions}"',
          f'      if [ "$want" = "{scale_fail_to}" ]; then echo "Error from server (Forbidden)"; exit 1; fi',
@@ -162,7 +170,7 @@ def _sandbox(tmp_path, *, group=GROUP, replicas="1", pod_age=258, restoring=Fals
                                     'exec /bin/mkdir "$@"'])
 
     # ---- kafka ----
-    _script(kbin / "kafka-broker-api-versions.sh", ["exit 0"])
+    _script(kbin / "kafka-broker-api-versions.sh", [f"exit {int(kafka_down)}"])
     _script(kbin / "kafka-topics.sh", ["echo $'Topic: __consumer_offsets\\tTopicId: x\\tPartitionCount: 50\\tReplicationFactor: 1'"])
     tx_id = tx_id if tx_id is not None else f"{group}-{tx_proc}-11"
     def hdr(name, line):
@@ -624,10 +632,48 @@ def test_a_process_absent_on_only_one_cycle_is_not_declared_dead(tmp_path):
     assert "must still be absent next cycle" in out and not Path(env["_ABORTS"]).exists()
 
 
-def test_a_rebalancing_group_is_never_judged_for_ownership(tmp_path):
-    env, _ = _sandbox(tmp_path, open_tx_age_minutes=145, tx_proc=DEAD_PROC, members=(), group_state="PreparingRebalance")
+def test_a_rebalancing_group_is_never_judged_for_ownership_nor_restarted(tmp_path):
+    env, actions = _sandbox(tmp_path, open_tx_age_minutes=145, tx_proc=DEAD_PROC, members=(), group_state="PreparingRebalance")
     out = _escalate(env, 5)
-    assert "a rebalance hides live members" in out and not Path(env["_ABORTS"]).exists()
+    assert "not Stable" in out and "NOT touched" in out
+    assert not Path(env["_ABORTS"]).exists() and _acted(actions) == "", "acted on a rebalancing group"
+
+
+def test_an_empty_group_never_proves_a_producer_dead(tmp_path):
+    """No registered members: the producer may simply be between sessions."""
+    env, actions = _sandbox(tmp_path, open_tx_age_minutes=145, tx_proc=DEAD_PROC, members=(), group_state="Empty")
+    out = _escalate(env, 5)
+    assert not Path(env["_ABORTS"]).exists() and _acted(actions) == ""
+
+
+def test_the_youngest_pod_decides_the_grace_during_a_rolling_update(tmp_path):
+    env, actions = _sandbox(tmp_path, pod_age=2, old_pod_first=True)
+    out = _escalate(env, 3)
+    assert "pod is only 2m old" in out and _acted(actions) == ""
+
+
+def test_corruption_logged_by_a_sidecar_is_not_the_apps(tmp_path):
+    env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP, sidecar=True, sidecar_corrupt=True, corrupt=False)
+    _seed(env, strikes=1, corrupt=CORRUPT_SIG)
+    out = _run(env)
+    # the sidecar's line is not the app's: there is no corruption evidence at all, so nothing happens
+    assert "container log is clean" in out and "NOT touched" in out
+    assert Path(env["_MARKER"]).exists() and "--replicas=0" not in _acted(actions)
+
+
+def test_mutation_the_same_corruption_in_the_app_container_resets(tmp_path):
+    env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP, sidecar=True, sidecar_corrupt=False, corrupt=True)
+    _seed(env, strikes=1, corrupt=CORRUPT_SIG)
+    out = _run(env)
+    assert "old tree removed" in out
+
+
+def test_a_deployment_left_at_zero_is_restored_even_while_kafka_is_still_down(tmp_path):
+    env, actions = _sandbox(tmp_path, kafka_down=True)
+    sd = Path(env["STATEDIR"]); sd.mkdir(); (sd / f"{DEPLOY}.down").write_text("2\n")
+    out = _run(env)
+    assert "RESTORE:" in out and "--replicas=2" in _acted(actions) and "Kafka is not answering" in out
+    assert not (sd / f"{DEPLOY}.down").exists()
 
 
 def test_mutation_the_same_group_once_stable_is_judged(tmp_path):
