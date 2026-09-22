@@ -844,16 +844,54 @@ cat > "$RSTUB/kubectl" <<'STUB'
 #!/usr/bin/env bash
 printf 'cGFzcw=='
 STUB
+# The DELETE is not the script's only psql call: it also reads min(id)/max(id) per tier and
+# snapshots both retention cutoffs BEFORE ever reaching a DELETE. A stub that fails every call (as
+# this case used to have) trips on the first of those instead — "could not compute the OI calendar
+# cutoff" satisfies the same nonzero-exit assertion below without ever exercising a DELETE failure.
+# This stub answers every other query and fails only the DELETE itself.
 cat > "$RSTUB/psql" <<'STUB'
 #!/usr/bin/env bash
-echo "ERROR:  relation "databento_option_raw_snapshot" does not exist" >&2
-exit 1
+q="${@: -1}"
+case "$q" in
+  *"DELETE FROM"*)
+    echo "ERROR:  relation \"databento_option_raw_snapshot\" does not exist" >&2
+    exit 1
+    ;;
+  *"min(id)"*) echo 0 ;;
+  *"max(id)"*) echo 99 ;;
+  *)           echo "2026-09-01" ;;   # the two cutoff snapshots; only non-emptiness is checked
+esac
 STUB
 chmod +x "$RSTUB/psql" "$RSTUB/kubectl"
 rlog="$WORK/retention.log"
-PATH="$RSTUB:$PATH" env LOG="$rlog" bash "$SRC/ibkr-raw-retention.sh" >/dev/null 2>&1; rrc=$?
-[ "$rrc" -ne 0 ] && ok "a failing DELETE exits nonzero (rc=$rrc) instead of echoing success" || bad "the retention job reported success on a failed DELETE"
-grep -q "retention DELETE failed" "$rlog" && ok "and the log says so" || bad "the log does not name the failure: $(tail -2 "$rlog")"
+# LOCK_FILE, test-scoped (Codex-class finding): the script's default is $HOME/oe-ops/…, and on a
+# shared agent $HOME is real and can carry a stale lock left by an EARLIER run of this very case (or
+# any real invocation) — this test then observes "another run is still initializing" instead of the
+# DELETE failure it means to exercise, and never proves what it claims to. Every other stateful path
+# in this suite is $WORK-scoped; this one was not.
+#
+# PSQL_BIN/KUBECTL_BIN, not a PATH prefix: the script hardens its OWN PATH against exactly the cron
+# incident this repo just recovered from (2026-09-09, PR #1091) by unconditionally overwriting PATH
+# near its top — so on any host with a real psql/kubectl at one of those hardcoded locations, a
+# PATH="$RSTUB:$PATH" prefix is silently clobbered and this case exercised the REAL binaries, not the
+# stub, without ever failing loudly about it (confirmed on this machine with a real Homebrew psql
+# installed: rc=0, "retention run done", 0 rows deleted — the stub never ran). The script now
+# consults these two overrides before that PATH takes effect, so naming the stub by absolute path
+# here reaches it regardless of what else is installed.
+#
+# DISCORD_WEBHOOK_URL is pinned to an unroutable loopback address: the hardened script alerts on
+# every FATAL, and alert() falls back to reading a real webhook URL from oe-ops.env off disk when
+# this is unset — on a host that has that file (prod, and possibly the Jenkins agent), this case
+# would otherwise fire a real Discord alert on every test run.
+OUT="$(env DISCORD_WEBHOOK_URL="http://127.0.0.1:1/unused" PSQL_BIN="$RSTUB/psql" KUBECTL_BIN="$RSTUB/kubectl" \
+       LOG="$rlog" LOCK_FILE="$WORK/retention.lock.d" bash "$SRC/ibkr-raw-retention.sh" 2>&1)"; rrc=$?
+[ "$rrc" -ne 0 ] && ok "a failing DELETE exits nonzero (rc=$rrc) instead of echoing success" || bad "the retention job reported success on a failed DELETE: $OUT"
+grep -q "DELETE failed" "$rlog" && ok "and the log says so" || bad "the log does not name the failure: $(tail -4 "$rlog")"
+if grep -qE "could not read (min|max)\(id\)|could not compute the (OI calendar|no-OI retention) cutoff|another retention run|has been held by pid|no run budget left" "$rlog"; then
+  bad "the failure was NOT the DELETE — a confounded lock, cutoff or id-range-read path fired instead: $(tail -4 "$rlog")"
+else
+  ok "the failure is the DELETE itself, not a confounded lock or id-range read"
+fi
 # the same run must not have written a credential anywhere
 ! grep -rqi "pgpassword=" "$rlog" && ok "no credential reached the log" || bad "a credential was logged"
 
