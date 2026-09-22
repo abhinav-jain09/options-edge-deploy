@@ -479,8 +479,11 @@ other_users_of_claim() {   # $1 = claim, $2 = the deployment allowed to own it
   own=$(pods_of "$dep" | tr '\n' ' ')
   $KUBECTL get pods -o jsonpath='{range .items[*]}{.metadata.name}{" "}{range .spec.volumes[*]}{.persistentVolumeClaim.claimName}{" "}{end}{"\n"}{end}' 2>/dev/null \
     | awk -v c="$claim" -v own=" $own " '{ for (i = 2; i <= NF; i++) if ($i == c && index(own, " " $1 " ") == 0) print "pod/" $1 }'
-  $KUBECTL get deploy,sts,ds,jobs -o jsonpath='{range .items[*]}{.kind}{"/"}{.metadata.name}{" "}{range .spec.template.spec.volumes[*]}{.persistentVolumeClaim.claimName}{" "}{end}{"\n"}{end}' 2>/dev/null \
-    | awk -v c="$claim" -v d="Deployment/$dep" '{ for (i = 2; i <= NF; i++) if ($i == c && $1 != d) print $1 }'
+  local ownrs
+  ownrs=$($KUBECTL get rs -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.metadata.ownerReferences[0].kind}{"/"}{.metadata.ownerReferences[0].name}{"\n"}{end}' 2>/dev/null \
+          | awk -v d="Deployment/$dep" '$2==d {printf " ReplicaSet/%s", $1}')
+  $KUBECTL get deploy,sts,ds,jobs,rs,rc -o jsonpath='{range .items[*]}{.kind}{"/"}{.metadata.name}{" "}{range .spec.template.spec.volumes[*]}{.persistentVolumeClaim.claimName}{" "}{end}{"\n"}{end}' 2>/dev/null \
+    | awk -v c="$claim" -v d="Deployment/$dep" -v own="$ownrs " '{ for (i = 2; i <= NF; i++) if ($i == c && $1 != d && index(own, " " $1 " ") == 0) print $1 }'
   $KUBECTL get cronjobs -o jsonpath='{range .items[*]}{"CronJob/"}{.metadata.name}{" "}{range .spec.jobTemplate.spec.template.spec.volumes[*]}{.persistentVolumeClaim.claimName}{" "}{end}{"\n"}{end}' 2>/dev/null \
     | awk -v c="$claim" '{ for (i = 2; i <= NF; i++) if ($i == c) print $1 }'
 }
@@ -490,7 +493,28 @@ mounted_with_subpath() {   # $1 = deployment, $2 = claim
   local vol
   vol=$($KUBECTL get deploy "$1" -o jsonpath='{range .spec.template.spec.volumes[*]}{.name}{" "}{.persistentVolumeClaim.claimName}{"\n"}{end}' 2>/dev/null | awk -v c="$2" '$2==c{print $1; exit}')
   [ -n "$vol" ] || return 1
-  $KUBECTL get deploy "$1" -o jsonpath='{range .spec.template.spec.containers[*].volumeMounts[*]}{.name}{" "}{.subPath}{"\n"}{end}' 2>/dev/null | awk -v v="$vol" '$1==v && NF>=2 {f=1} END{exit !f}'
+  { $KUBECTL get deploy "$1" -o jsonpath='{range .spec.template.spec.containers[*].volumeMounts[*]}{.name}{" "}{.subPath}{"\n"}{end}' 2>/dev/null
+    $KUBECTL get deploy "$1" -o jsonpath='{range .spec.template.spec.initContainers[*].volumeMounts[*]}{.name}{" "}{.subPath}{"\n"}{end}' 2>/dev/null
+    $KUBECTL get deploy "$1" -o jsonpath='{range .spec.template.spec.ephemeralContainers[*].volumeMounts[*]}{.name}{" "}{.subPath}{"\n"}{end}' 2>/dev/null
+  } | awk -v v="$vol" '$1==v && NF>=2 {f=1} END{exit !f}'
+}
+# The volume must hold NOTHING but Kafka Streams state. The suffix "-streams-state" is a naming
+# convention; the proof is the layout: at the root only "<application.id>/" (and lost+found), and
+# inside it only what Streams writes — task directories "<n>_<m>", "global", ".lock",
+# "kafka-streams-process-metadata", ".checkpoint". Anything else means the volume also carries data
+# this script knows nothing about, and the reset is withheld.
+streams_only_dir() {   # $1 = dir, $2 = group (application.id) -> 0 if the layout is Streams-only
+  python3 - "$1" "$2" <<'PYEOF'
+import os, re, sys
+root, app = sys.argv[1], sys.argv[2]
+top = [e for e in os.listdir(root) if e != "lost+found"]
+if top and top != [app]: sys.exit(1)
+if not top: sys.exit(0)
+ok = re.compile(r"^(\d+_\d+|global|\.lock|kafka-streams-process-metadata|\.checkpoint|rocksdb)$")
+for e in os.listdir(os.path.join(root, app)):
+    if not ok.match(e): sys.exit(1)
+sys.exit(0)
+PYEOF
 }
 same_filesystem() { python3 -c 'import os,sys; sys.exit(0 if os.stat(sys.argv[1]).st_dev == os.stat(os.path.dirname(sys.argv[1].rstrip("/"))).st_dev else 1)' "$1" 2>/dev/null; }
 # deployment -> claim -> bound PV -> host path, CANONICALISED and required to live under the
@@ -642,6 +666,7 @@ while read -r g lag delta srcdelta; do
       others=$(other_users_of_claim "$(claim_of "$dep")" "$dep" | sort -u | tr '\n' ' ')
       if [ -n "$others" ]; then log "  $g -> $dep STRIKE 2 withheld: the claim is also mounted or templated by $others — the volume is not this deployment's alone; NOT resetting"; continue; fi
       if mounted_with_subpath "$dep" "$(claim_of "$dep")"; then log "  $g -> $dep STRIKE 2 withheld: the claim is mounted with a subPath — the volume root is not the state directory; NOT resetting"; continue; fi
+      if ! streams_only_dir "$dir" "$g"; then log "  $g -> $dep STRIKE 2 withheld: $dir holds something other than Kafka Streams state for $g — the volume is not state-only; NOT resetting"; continue; fi
       if ! same_filesystem "$dir"; then log "  $g -> $dep STRIKE 2 withheld: $dir is a mount point of its own — NOT resetting a mounted filesystem"; continue; fi
       log "  $g -> $dep STRIKE 2: confirmed state-corruption signature ($corruption) — scaling $reps->0, swapping $dir for an empty directory, scaling back to $reps"
       remember "$STATEDIR/${dep}.down" "$reps"

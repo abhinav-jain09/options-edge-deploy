@@ -64,7 +64,8 @@ def _sandbox(tmp_path, *, group=GROUP, replicas="1", pod_age=258, restoring=Fals
              rescale_between=False, intruder=False, hpa=False, deployments=(DEPLOY,),
              mkdir_fail=False, coordinator_silent=False, group_col=True, commit_between=0,
              rx_kib=0, shared_claim_pod=False, shared_claim_workload=False, hanging_row=False,
-             shared_claim_cronjob=False, late_holder=False, sub_path=False, tx_layout="tabs"):
+             shared_claim_cronjob=False, late_holder=False, sub_path=False, tx_layout="tabs",
+             init_sub_path=False, shared_claim_rs=False, foreign_file=False):
     """A fake estate: one consumer group with lag, one deployment (plus an optional look-alike),
     pods owned through ReplicaSets, one PV. Every stub is a list of bash lines."""
     bin_dir = tmp_path / "bin"; bin_dir.mkdir()
@@ -75,10 +76,14 @@ def _sandbox(tmp_path, *, group=GROUP, replicas="1", pod_age=258, restoring=Fals
     aborts = tmp_path / "aborts.log"
     dumped = tmp_path / "dumped"
     pv_path = storage / f"{PV}_options-edge_{CLAIM}"
-    pv_path.mkdir(); (pv_path / "rocksdb").write_bytes(b"x" * 1000)
+    marker = pv_path / group / "0_1" / "rocksdb"
+    marker.parent.mkdir(parents=True); marker.write_bytes(b"x" * 1000)
+    (pv_path / group / "kafka-streams-process-metadata").write_text("{}")
+    if foreign_file:   # something that is NOT Kafka Streams state lives on the same volume
+        (pv_path / "audit").mkdir(); (pv_path / "audit" / "retained-events").write_text("keep me")
     if stale_twin:   # a lexically-earlier directory with the same claim name, NOT bound to the PVC
-        twin = storage / f"pvc-0000stale_options-edge_{CLAIM}"; twin.mkdir()
-        (twin / "rocksdb").write_bytes(b"s" * 1000)
+        twin = storage / f"pvc-0000stale_options-edge_{CLAIM}"; (twin / group / "0_1").mkdir(parents=True)
+        (twin / group / "0_1" / "rocksdb").write_bytes(b"s" * 1000)
     reported_pv = pv_path_override if pv_path_override is not None else str(pv_path)
     (tmp_path / "dump.txt").write_text(wedge or "")
     (tmp_path / "decoy-dump.txt").write_text(WEDGE_DUMP)
@@ -95,6 +100,8 @@ def _sandbox(tmp_path, *, group=GROUP, replicas="1", pod_age=258, restoring=Fals
          '  "get deploy --no-headers") ' + " ".join(f'echo "{d}   $reps/$reps   $reps   $reps   4h";' for d in deployments) + ' ;;',
          f'  "get deploy {DEPLOY} -o jsonpath={{.spec.replicas}}")',
          f'      if [ "{int(rescale_between)}" = 1 ] && [ -f "{tmp_path}/pods_checked" ]; then printf 1; else printf "%s" "$reps"; fi ;;',
+         f'  "get deploy {DEPLOY} -o jsonpath="*"initContainers"*"volumeMounts"*) [ "{int(init_sub_path)}" = 1 ] && echo "state bootstrap-cache" || true ;;',
+         f'  "get deploy {DEPLOY} -o jsonpath="*"ephemeralContainers"*"volumeMounts"*) true ;;',
          f'  "get deploy {DEPLOY} -o jsonpath="*"volumeMounts"*) [ "{int(sub_path)}" = 1 ] && echo "state rocksdb" || echo "state" ;;',
          f'  "get deploy {DEPLOY} -o jsonpath="*"{{.name}}"*) echo "state {CLAIM}" ;;',
          f'  "get deploy {DEPLOY} -o jsonpath="*claimName*) ' + " ".join(f'echo "{c}";' for c in claims) + ' ;;',
@@ -115,8 +122,10 @@ def _sandbox(tmp_path, *, group=GROUP, replicas="1", pod_age=258, restoring=Fals
          f'      if [ -f "{tmp_path}/swapped" ] && [ "{int(intruder)}" = 1 ] && [ ! -f "{tmp_path}/intruder-deleted" ]; then echo "{POD}-intruder ReplicaSet/{RS} Running {created}"; fi',
          f'      touch "{tmp_path}/pods_checked"',
          f'      if [ "$reps" != 0 ] || [ "{int(pods_linger)}" = 1 ]; then echo "{POD} ReplicaSet/{RS} Running {created}"; fi ;;',
-         '  "get deploy,sts,ds,jobs -o jsonpath="*)',
-         f'      echo "Deployment/{DEPLOY} {CLAIM} "; [ "{int(shared_claim_workload)}" = 1 ] && echo "StatefulSet/{DEPLOY}-twin {CLAIM} "; true ;;',
+         '  "get deploy,sts,ds,jobs,rs,rc -o jsonpath="*)',
+         f'      echo "Deployment/{DEPLOY} {CLAIM} "; echo "ReplicaSet/{RS} {CLAIM} "',
+         f'      [ "{int(shared_claim_workload)}" = 1 ] && echo "StatefulSet/{DEPLOY}-twin {CLAIM} "',
+         f'      [ "{int(shared_claim_rs)}" = 1 ] && echo "ReplicaSet/orphan-rs-7f9 {CLAIM} "; true ;;',
          f'  "exec {POD} -- kill -3 1") touch "{dumped}" ;;',
          f'  "exec {DECOY_POD} -- kill -3 1") touch "{dumped}-decoy" ;;',
          '  "exec "*" -- cat /proc/net/dev")',
@@ -187,7 +196,7 @@ def _sandbox(tmp_path, *, group=GROUP, replicas="1", pod_age=258, restoring=Fals
                          [gc([group, "192.168.100.252:9092  (1)", "stream", group_state, "1"])])
     member_lines = _table(gc(["GROUP", "CONSUMER-ID", "HOST", "CLIENT-ID", "#PARTITIONS"]),
                           [gc([group, f"{group}-{m}-StreamThread-1-consumer-{m}", "/10.0.0.1", f"{group}-{m}-StreamThread-1-consumer", "3"]) for m in members])
-    grow = (f'printf "y%.0s" $(seq 1 5000) >> "{pv_path}/rocksdb"') if grow_state else "true"
+    grow = (f'printf "y%.0s" $(seq 1 5000) >> "{marker}"') if grow_state else "true"
     cg = ['case "$*" in',
           '  *--members*) echo; ' + " ".join(f"echo '{l}';" for l in member_lines) + ' exit 0 ;;',
           f'  *--state*) [ "{int(coordinator_silent)}" = 1 ] && exit 0',
@@ -210,7 +219,7 @@ def _sandbox(tmp_path, *, group=GROUP, replicas="1", pod_age=258, restoring=Fals
         SAMPLE_SECONDS="1", LAG_FLOOR="2000", LOAD_CEILING="9999", CONFIRM_CYCLES="2",
         EVIDENCE_MIN_SECONDS="0", DUMP_SETTLE_SECONDS="0", POD_GONE_WAIT_SECONDS="5", WEDGE_CYCLES="2",
         RESTART_ON_PARK="true",
-        _ABORTS=str(aborts), _PV=str(pv_path), _STORAGE=str(storage), _DUMPED=str(dumped), _GROUP=group,
+        _ABORTS=str(aborts), _PV=str(pv_path), _MARKER=str(marker), _STORAGE=str(storage), _DUMPED=str(dumped), _GROUP=group,
     )
     return env, actions
 
@@ -716,7 +725,7 @@ def test_strike_two_is_withheld_without_a_confirmed_corruption_signature(tmp_pat
     env, actions = _sandbox(tmp_path, corrupt=False)
     _seed(env, strikes=1, wedge="fetchCommittedOffsets")
     out = _run(env)
-    assert "STRIKE 2 withheld" in out and (Path(env["_PV"]) / "rocksdb").exists()
+    assert "STRIKE 2 withheld" in out and Path(env["_MARKER"]).exists()
     assert "--replicas=0" not in _acted(actions)
 
 
@@ -724,7 +733,7 @@ def test_corruption_seen_once_does_not_reset(tmp_path):
     env, _ = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True)
     _seed(env, strikes=1)
     out = _run(env)
-    assert "must repeat next cycle" in out and (Path(env["_PV"]) / "rocksdb").exists()
+    assert "must repeat next cycle" in out and Path(env["_MARKER"]).exists()
 
 
 def test_strike_two_swaps_only_the_pvc_bound_volume_and_restores_the_desired_replicas(tmp_path):
@@ -736,7 +745,7 @@ def test_strike_two_swaps_only_the_pvc_bound_volume_and_restores_the_desired_rep
     assert pv.is_dir() and list(pv.iterdir()) == [], "the live directory is not an empty directory"
     assert _aside_dirs(env) == [], "the parked old tree was not removed"
     twin = Path(env["_STORAGE"]) / f"pvc-0000stale_options-edge_{CLAIM}"
-    assert (twin / "rocksdb").exists(), "touched a stale same-name directory the PVC is not bound to"
+    assert (twin / GROUP / "0_1" / "rocksdb").exists(), "touched a stale same-name directory the PVC is not bound to"
     acts = _acted(actions)
     assert "--replicas=0" in acts and "--replicas=2" in acts and "--replicas=1" not in acts
     assert not (Path(env["STATEDIR"]) / f"{DEPLOY}.down").exists()
@@ -747,14 +756,14 @@ def test_strike_two_is_withheld_when_another_pod_mounts_the_same_claim(tmp_path)
     _seed(env, strikes=1, corrupt=CORRUPT_SIG)
     out = _run(env)
     assert "also mounted or templated by pod/some-other-job-abc" in out
-    assert (Path(env["_PV"]) / "rocksdb").exists() and "--replicas=0" not in _acted(actions)
+    assert Path(env["_MARKER"]).exists() and "--replicas=0" not in _acted(actions)
 
 
 def test_strike_two_is_withheld_when_another_workload_is_templated_on_the_claim(tmp_path):
     env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, shared_claim_workload=True)
     _seed(env, strikes=1, corrupt=CORRUPT_SIG)
     out = _run(env)
-    assert f"StatefulSet/{DEPLOY}-twin" in out and (Path(env["_PV"]) / "rocksdb").exists()
+    assert f"StatefulSet/{DEPLOY}-twin" in out and Path(env["_MARKER"]).exists()
 
 
 def test_mutation_with_the_claim_unshared_the_reset_proceeds(tmp_path):
@@ -769,7 +778,7 @@ def test_strike_two_is_withheld_when_a_cronjob_is_templated_on_the_claim(tmp_pat
     env, _ = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, shared_claim_cronjob=True)
     _seed(env, strikes=1, corrupt=CORRUPT_SIG)
     out = _run(env)
-    assert "CronJob/nightly-compact" in out and (Path(env["_PV"]) / "rocksdb").exists()
+    assert "CronJob/nightly-compact" in out and Path(env["_MARKER"]).exists()
 
 
 def test_a_holder_that_appears_after_the_swap_keeps_the_old_tree_parked(tmp_path):
@@ -779,22 +788,47 @@ def test_a_holder_that_appears_after_the_swap_keeps_the_old_tree_parked(tmp_path
     _seed(env, strikes=1, corrupt=CORRUPT_SIG)
     out = _run(env)
     assert "stays parked" in out and "cron-late-xyz" in out
-    assert len(_aside_dirs(env)) == 1 and (_aside_dirs(env)[0] / "rocksdb").exists(), "deleted a tree something still holds"
+    assert len(_aside_dirs(env)) == 1 and (_aside_dirs(env)[0] / GROUP / "0_1" / "rocksdb").exists(), "deleted a tree something still holds"
     assert list(Path(env["_PV"]).iterdir()) == [] and "--replicas=1" in _acted(actions)
+
+
+def test_strike_two_is_withheld_when_an_init_container_mounts_the_claim_with_a_subpath(tmp_path):
+    env, _ = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, init_sub_path=True)
+    _seed(env, strikes=1, corrupt=CORRUPT_SIG)
+    out = _run(env)
+    assert "mounted with a subPath" in out and Path(env["_MARKER"]).exists()
+
+
+def test_strike_two_is_withheld_when_the_volume_holds_anything_but_streams_state(tmp_path):
+    """The claim's name says streams-state; the volume also carries audit/retained-events."""
+    env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, foreign_file=True)
+    _seed(env, strikes=1, corrupt=CORRUPT_SIG)
+    out = _run(env)
+    assert "holds something other than Kafka Streams state" in out
+    assert Path(env["_MARKER"]).exists() and (Path(env["_PV"]) / "audit" / "retained-events").exists()
+    assert "--replicas=0" not in _acted(actions)
+
+
+def test_strike_two_is_withheld_when_an_independent_replicaset_is_templated_on_the_claim(tmp_path):
+    """The deployment's OWN ReplicaSets are always templated on the claim and must not count."""
+    env, _ = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, shared_claim_rs=True)
+    _seed(env, strikes=1, corrupt=CORRUPT_SIG)
+    out = _run(env)
+    assert "ReplicaSet/orphan-rs-7f9" in out and f"ReplicaSet/{RS}" not in out and Path(env["_MARKER"]).exists()
 
 
 def test_strike_two_is_withheld_when_the_claim_is_mounted_with_a_subpath(tmp_path):
     env, _ = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, sub_path=True)
     _seed(env, strikes=1, corrupt=CORRUPT_SIG)
     out = _run(env)
-    assert "mounted with a subPath" in out and (Path(env["_PV"]) / "rocksdb").exists()
+    assert "mounted with a subPath" in out and Path(env["_MARKER"]).exists()
 
 
 def test_strike_two_is_withheld_when_an_autoscaler_targets_the_deployment(tmp_path):
     env, _ = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, hpa=True)
     _seed(env, strikes=1, corrupt=CORRUPT_SIG)
     out = _run(env)
-    assert "an HPA targets this deployment" in out and (Path(env["_PV"]) / "rocksdb").exists()
+    assert "an HPA targets this deployment" in out and Path(env["_MARKER"]).exists()
 
 
 def test_strike_two_refuses_a_pv_path_that_escapes_the_storage_root(tmp_path):
@@ -810,21 +844,21 @@ def test_strike_two_refuses_when_two_streams_state_claims_are_attached(tmp_path)
     env, _ = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, extra_claim=True)
     _seed(env, strikes=1, corrupt=CORRUPT_SIG)
     out = _run(env)
-    assert "NOT resetting anything" in out and (Path(env["_PV"]) / "rocksdb").exists()
+    assert "NOT resetting anything" in out and Path(env["_MARKER"]).exists()
 
 
 def test_strike_two_does_not_reset_when_the_scale_down_fails(tmp_path):
     env, _ = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, scale_fail_to="0")
     _seed(env, strikes=1, corrupt=CORRUPT_SIG)
     out = _run(env)
-    assert "scale to 0 FAILED" in out and "nothing reset" in out and (Path(env["_PV"]) / "rocksdb").exists()
+    assert "scale to 0 FAILED" in out and "nothing reset" in out and Path(env["_MARKER"]).exists()
 
 
 def test_strike_two_does_not_reset_under_a_lingering_pod(tmp_path):
     env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, pods_linger=True)
     _seed(env, strikes=1, corrupt=CORRUPT_SIG)
     out = _run(env)
-    assert "still present" in out and (Path(env["_PV"]) / "rocksdb").exists()
+    assert "still present" in out and Path(env["_MARKER"]).exists()
     assert "--replicas=1" in _acted(actions), "left the deployment at zero"
 
 
@@ -833,7 +867,7 @@ def test_strike_two_does_not_reset_if_something_rescaled_the_deployment_meanwhil
     _seed(env, strikes=1, corrupt=CORRUPT_SIG)
     out = _run(env)
     assert "scaled the deployment back up between the check and the reset" in out
-    assert (Path(env["_PV"]) / "rocksdb").exists()
+    assert Path(env["_MARKER"]).exists()
 
 
 def test_a_failed_replacement_directory_rolls_the_swap_back(tmp_path):
@@ -842,7 +876,7 @@ def test_a_failed_replacement_directory_rolls_the_swap_back(tmp_path):
     _seed(env, strikes=1, corrupt=CORRUPT_SIG)
     out = _run(env)
     assert "rolled back" in out and "nothing changed on disk" not in out
-    assert (Path(env["_PV"]) / "rocksdb").exists() and _aside_dirs(env) == []
+    assert Path(env["_MARKER"]).exists() and _aside_dirs(env) == []
     assert "--replicas=1" in _acted(actions)
 
 
