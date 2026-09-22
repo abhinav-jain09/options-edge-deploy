@@ -67,7 +67,9 @@
 # Fails LOUD and does nothing silently: every decision is logged with the evidence behind it.
 set -uo pipefail
 
-KUBECTL="${KUBECTL:-k3s kubectl -n options-edge}"
+# Every kubectl call is bounded: an exec into a pod that is terminating, or an API server that is
+# busy, must cost a skipped read, never a run that sits until TimeoutStartSec kills it.
+KUBECTL="${KUBECTL:-timeout 45 k3s kubectl -n options-edge}"
 SA="${SA:---as=system:serviceaccount:options-edge:jenkins-deployer}"
 BS="${BS:-localhost:9092}"
 KBIN="${KBIN:-/opt/kafka/current/bin}"
@@ -246,7 +248,14 @@ running_pod() { deployment_pods "$1" | awk '$2=="Running" {print $1; exit}'; }
 # proof. Otherwise the container is the ONE regular container whose volumeMounts include the
 # streams-state volume; two mounters is ambiguous and resolves to nothing (no evidence, no action)
 # unless CONTAINER_MAP names the application container for that deployment explicitly.
-app_container() {   # $1 = pod, $2 = deployment -> container name, or nothing
+CONTAINER_CACHE="$(mktemp -d)"
+app_container() {   # $1 = pod, $2 = deployment -> container name, or nothing (cached per run)
+  local pod="$1" dep="${2:-}" names vol mapped mounters cache="$CONTAINER_CACHE/$1"
+  if [ -e "$cache" ]; then cat "$cache"; return 0; fi
+  { _app_container "$pod" "$dep"; } | tee "$cache"
+  return 0
+}
+_app_container() {
   local pod="$1" dep="${2:-}" names vol mapped mounters
   names=$($KUBECTL get pod "$pod" -o jsonpath='{range .spec.containers[*]}{.name}{"\n"}{end}' 2>/dev/null | awk 'NF')
   if [ "$(printf '%s\n' "$names" | awk 'NF' | wc -l | tr -d ' ')" = 1 ]; then printf '%s\n' "$names"; return 0; fi
@@ -330,10 +339,25 @@ wedge_frames() {
   fi
   printf '%s\n' "$parked" | awk 'NF' | tr '\n' ',' | sed 's/,$//'
 }
-corruption_lines() {   # in THIS container's log (no --previous), recent
-  local dep="$1" pod
+# Corruption lines in THIS container's log (no --previous) that are NEWER than $2 (epoch seconds):
+# a rolling ten-minute window shows the same historical line to two consecutive reads, and a
+# service that threw twice at 12:00 and recovered must not be reset at 12:08 on those lines. The
+# log is read with --timestamps and only lines after the previous observation count.
+corruption_lines() {   # $1 = deployment, $2 = only lines after this epoch
+  local dep="$1" after="${2:-0}" pod
   pod=$(running_pod "$dep"); [ -n "$pod" ] || return 0
-  kc_logs "$pod" "$dep" --since=10m | grep -oE "$CORRUPT_RE" | sort -u | tr '\n' ',' | sed 's/,$//'
+  # kubectl prints RFC 3339 with the node's offset and nanoseconds (2026-09-22T06:38:01.531150935+02:00
+  # on prod): parsed as a real instant — a lexicographic compare against a UTC string would be wrong
+  kc_logs "$pod" "$dep" --since=10m --timestamps | python3 -c '
+import sys, re, datetime
+after = int(sys.argv[1])
+for line in sys.stdin:
+    ts = line.split(" ", 1)[0]
+    ts = re.sub(r"(\.\d{6})\d+", r"\1", ts).replace("Z", "+00:00")
+    try:
+        if datetime.datetime.fromisoformat(ts).timestamp() > after: sys.stdout.write(line)
+    except ValueError:
+        pass' "$after" | grep -oE "$CORRUPT_RE" | sort -u | tr '\n' ',' | sed 's/,$//'
 }
 # PERSISTENT evidence: "<what>" observed for <key> now extends a run only if the SAME <what> was
 # recorded for <key> on an earlier cycle between EVIDENCE_MIN and EVIDENCE_MAX seconds ago; the
@@ -355,7 +379,7 @@ persist() {   # $1 = file, $2 = what, $3 = cycles needed -> prints "confirmed" o
 # (group_state is read once per candidate, below: empty = coordinator silent; anything but Stable = not judged)
 
 # ---------- the abort: only THIS group's transaction, only from a DEAD process, only when Stable ----------
-ABORTED_MARKER="$(mktemp)"; trap 'rm -f "$ABORTED_MARKER"; restore_down_markers; release_lock' EXIT
+ABORTED_MARKER="$(mktemp)"; trap 'rm -f "$ABORTED_MARKER"; rm -f "$CONTAINER_CACHE"/* 2>/dev/null; rmdir "$CONTAINER_CACHE" 2>/dev/null; restore_down_markers; release_lock' EXIT
 PENDING_DEAD=0
 unblock_group_offsets() {   # $1 = group; appends a line to $ABORTED_MARKER for each VERIFIED abort
   local g="$1" nparts part rows listing owned live now_ms out rc state verdict
@@ -552,29 +576,33 @@ streams_only_dir() {   # $1 = dir, $2 = group (application.id) -> 0 if the COMPL
   python3 - "$1" "$2" <<'PYEOF'
 import os, re, sys
 root, app = sys.argv[1], sys.argv[2]
+DEV = os.stat(root).st_dev
+def entries(d):                     # every entry must be on the PV's own filesystem and not a symlink
+    for e in os.listdir(d):
+        q = os.path.join(d, e)
+        if os.path.islink(q): fail(f"symlink inside the volume: {q}")
+        if os.lstat(q).st_dev != DEV: fail(f"a different filesystem is mounted inside the volume: {q}")
+        yield e, q
 TASK = re.compile(r"^\d+_\d+$")
 ROCKS = re.compile(r"^(CURRENT|IDENTITY|LOCK|LOG|LOG\.old\.\d+|MANIFEST-\d+|OPTIONS-\d+|\d+\.sst|\d+\.log)$")
 def fail(why): print(why); sys.exit(1)
 def store(d):                       # a RocksDB store directory: files of known shape, no subdirectories
-    for e in os.listdir(d):
-        if os.path.isdir(os.path.join(d, e)): fail(f"directory inside a store: {os.path.join(d, e)}")
-        if not ROCKS.match(e): fail(f"not a RocksDB file: {os.path.join(d, e)}")
+    for e, q in entries(d):
+        if os.path.isdir(q): fail(f"directory inside a store: {q}")
+        if not ROCKS.match(e): fail(f"not a RocksDB file: {q}")
 def rocksdb(d):                     # <task>/rocksdb: only store directories
-    for e in os.listdir(d):
-        q = os.path.join(d, e)
+    for e, q in entries(d):
         if not os.path.isdir(q): fail(f"file where a store directory is expected: {q}")
         store(q)
 def task(d):                        # <n>_<m> or global: rocksdb/, .checkpoint, .lock — nothing else
-    for e in os.listdir(d):
-        q = os.path.join(d, e)
+    for e, q in entries(d):
         if e == "rocksdb" and os.path.isdir(q): rocksdb(q)
         elif e in (".checkpoint", ".lock") and os.path.isfile(q): pass
         else: fail(f"unexpected entry in a task directory: {q}")
-top = [e for e in os.listdir(root) if e != "lost+found"]
+top = [e for e, _ in entries(root) if e != "lost+found"]
 if not top: sys.exit(0)
 if top != [app]: fail(f"root holds more than {app}/: {top}")
-for e in os.listdir(os.path.join(root, app)):
-    q = os.path.join(root, app, e)
+for e, q in entries(os.path.join(root, app)):
     if (TASK.match(e) or e == "global") and os.path.isdir(q): task(q)
     elif e in (".lock", "kafka-streams-process-metadata", ".checkpoint") and os.path.isfile(q): pass
     else: fail(f"unexpected entry in the application directory: {q}")
@@ -672,7 +700,9 @@ while read -r g lag delta srcdelta; do
 
   # ---- POSITIVE, ATTRIBUTED, PERSISTENT evidence — or nothing happens ----
   acted=$((acted+1))   # the evidence gathering below costs a thread dump and CLI calls; MAX_ACTIONS bounds it
-  frames=$(wedge_frames "$dep"); corrupt=$(corruption_lines "$dep")
+  frames=$(wedge_frames "$dep")
+  read -r prev_ct _ < <(cat "$STATEDIR/${g}.corrupt" 2>/dev/null || echo "0 0")
+  corrupt=$(corruption_lines "$dep" "${prev_ct:-0}")
   wedge=""; corruption=""
   if [ -n "$frames" ]; then
     verdict=$(persist "$STATEDIR/${g}.wedge" "$frames" "$WEDGE_CYCLES")

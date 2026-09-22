@@ -66,6 +66,7 @@ def _sandbox(tmp_path, *, group=GROUP, replicas="1", pod_age=258, restoring=Fals
              rx_kib=0, shared_claim_pod=False, shared_claim_workload=False, hanging_row=False,
              shared_claim_cronjob=False, late_holder=False, sub_path=False, tx_layout="tabs",
              init_sub_path=False, shared_claim_rs=False, foreign_file=False, nested_foreign=False,
+             corrupt_stale=False, symlink_inside=False,
              sidecar=False, sidecar_corrupt=False, old_pod_first=False, kafka_down=False, sidecar_mounts=False):
     """A fake estate: one consumer group with lag, one deployment (plus an optional look-alike),
     pods owned through ReplicaSets, one PV. Every stub is a list of bash lines."""
@@ -87,6 +88,8 @@ def _sandbox(tmp_path, *, group=GROUP, replicas="1", pod_age=258, restoring=Fals
     (pv_path / group / ".lock").write_text("")
     if foreign_file:   # something that is NOT Kafka Streams state lives on the same volume
         (pv_path / "audit").mkdir(); (pv_path / "audit" / "retained-events").write_text("keep me")
+    if symlink_inside:   # a symlink where a store file is expected
+        os.symlink("/etc/hostname", store / "000099.sst")
     if nested_foreign:   # foreign data hidden INSIDE an accepted task directory
         (pv_path / group / "0_1" / "audit").mkdir(); (pv_path / group / "0_1" / "audit" / "retained-events").write_text("keep me")
     if stale_twin:   # a lexically-earlier directory with the same claim name, NOT bound to the PVC
@@ -152,11 +155,15 @@ def _sandbox(tmp_path, *, group=GROUP, replicas="1", pod_age=258, restoring=Fals
          f'      echo "  eth0: $(( 1000000 + c * {rx_kib} * 1024 )) 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0" ;;',
          f'  "logs {POD} --container app --since=1m") echo app >> "{tmp_path}/logs-read"; [ -f "{dumped}" ] && cat "{tmp_path}/dump.txt"; true ;;',
          f'  "logs {DECOY_POD} --container app --since=1m") echo app >> "{tmp_path}/logs-read"; [ -f "{dumped}-decoy" ] && cat "{tmp_path}/decoy-dump.txt"; true ;;',
+         f'  "logs {POD} --container app --since=10m --timestamps")',
+         # prod-shaped: local offset, nanoseconds (kubectl --timestamps on the host prints +02:00 and 9 digits)
+         f'      ts=$(date +%Y-%m-%dT%H:%M:%S).123456789$(date +%z | sed -E "s/([+-][0-9]{{2}})([0-9]{{2}})/\\1:\\2/"); [ "{int(corrupt_stale)}" = 1 ] && ts="2000-01-01T12:00:00.000000000+02:00"',
+         f'      echo "$ts {logline}"; echo "$ts {hist_line}"; ' + " ".join(f'echo "$ts {RETRY_LOG}";' for _ in range(retry_lines)) + f' [ "{int(corrupt)}" = 1 ] && echo "$ts {CORRUPT_LOG}"; echo app >> "{tmp_path}/logs-read"; true ;;',
          f'  "logs {POD} --container app --since=10m")',
          f'      echo "{logline}"; echo "{hist_line}"; ' + " ".join(f'echo "{RETRY_LOG}";' for _ in range(retry_lines)) + f' [ "{int(corrupt)}" = 1 ] && echo "{CORRUPT_LOG}"; true ;;',
-         f'  "logs {DECOY_POD} --container app --since=10m") echo app >> "{tmp_path}/logs-read"; echo "{CORRUPT_LOG}" ;;',
+         f'  "logs {DECOY_POD} --container app --since=10m"*) echo app >> "{tmp_path}/logs-read"; echo "$(date -u +%Y-%m-%dT%H:%M:%S.000000Z) {CORRUPT_LOG}" ;;',
          f'  "logs "*" --container app --since=3m") echo app >> "{tmp_path}/logs-read"; echo "{logline}" ;;',
-         f'  "logs "*" --container log-shipper "*) echo log-shipper >> "{tmp_path}/logs-read"; [ "{int(sidecar_corrupt)}" = 1 ] && echo "{CORRUPT_LOG}"; true ;;',
+         f'  "logs "*" --container log-shipper "*) echo log-shipper >> "{tmp_path}/logs-read"; [ "{int(sidecar_corrupt)}" = 1 ] && echo "$(date -u +%Y-%m-%dT%H:%M:%S.000000Z) {CORRUPT_LOG}"; true ;;',
          '  "logs "*) echo "container-less logs refused" >&2; exit 2 ;;',
          f'  "scale deploy/{DEPLOY} --replicas="*)',
          f'      want=${{all##*--replicas=}}; echo "$all" >> "{actions}"',
@@ -839,6 +846,29 @@ def test_strike_two_is_withheld_without_a_confirmed_corruption_signature(tmp_pat
     out = _run(env)
     assert "STRIKE 2 withheld" in out and Path(env["_MARKER"]).exists()
     assert "--replicas=0" not in _acted(actions)
+
+
+def test_a_repeated_historical_corruption_line_never_resets_a_recovered_service(tmp_path):
+    """The same two-hour-old ProcessorStateException lines sit in every ten-minute read."""
+    env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, corrupt_stale=True)
+    _seed(env, strikes=1)
+    out = _escalate(env, 3)
+    assert "must repeat next cycle" not in out or "old tree removed" not in out
+    assert Path(env["_MARKER"]).exists() and "--replicas=0" not in _acted(actions)
+
+
+def test_mutation_fresh_corruption_lines_on_two_cycles_do_reset(tmp_path):
+    env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, corrupt_stale=False)
+    _seed(env, strikes=1)
+    out = _escalate(env, 2)
+    assert "old tree removed" in out
+
+
+def test_strike_two_is_withheld_when_a_symlink_hides_in_the_tree(tmp_path):
+    env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, symlink_inside=True)
+    _seed(env, strikes=1, corrupt=CORRUPT_SIG)
+    out = _run(env)
+    assert "symlink inside the volume" in out and Path(env["_MARKER"]).exists() and "--replicas=0" not in _acted(actions)
 
 
 def test_corruption_seen_once_does_not_reset(tmp_path):
