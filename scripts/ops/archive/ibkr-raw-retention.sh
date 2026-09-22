@@ -176,16 +176,33 @@ remaining() { local r=$(( DEADLINE - $(date +%s) )); [ "$r" -lt 0 ] && r=0; prin
 
 psql_at() {   # $1 = statement_timeout seconds, rest = -c args
   local t="$1"; shift
-  psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDB" -At -v ON_ERROR_STOP=1 \
-       -c "SET statement_timeout = '${t}s'" "$@"
+  # statement_timeout goes through PGOPTIONS (a startup-packet GUC), NOT a separate "-c 'SET ...'"
+  # psql meta-command. Two -c flags each print their own output; when the caller's query times out
+  # and returns no row, the SET command's own status line becomes the last line of output, and a
+  # caller reading "the last line" reads the literal text "SET" as if it were the query's result.
+  # That is not hypothetical — it is exactly what happened running this against prod: min(id) timed
+  # out, and the id-range read tried to parse "SET" as a number. PGOPTIONS means there is exactly
+  # one -c, so there is exactly one possible output, and a timeout now produces NO output rather
+  # than a deceptive one. (found running this script, not by inspection)
+  PGOPTIONS="-c statement_timeout=${t}s" \
+  psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDB" -At -v ON_ERROR_STOP=1 "$@"
 }
 
 run_tier() {
   local label="$1" predicate="$2" total=0 batches=0 lo hi n rc t
-  local min_id max_id
-  min_id="$(psql_at 60 -c "SELECT coalesce(min(id), 0) FROM $RAW_TABLE" 2>>"$LOG" | tail -1)"
-  max_id="$(psql_at 60 -c "SELECT coalesce(max(id), -1) FROM $RAW_TABLE" 2>>"$LOG" | tail -1)"
-  case "$min_id$max_id" in (*[!0-9-]*|'') die "tier [$label] could not read the id range (got '$min_id'..'$max_id')";; esac
+  local min_id max_id bound_budget
+  # MIN(id)/MAX(id) over a bigserial PK is an index scan that walks from the end until it finds the
+  # first LIVE row — so after a large deletion at the low end of the id space (exactly retention's
+  # own job) it is NOT the O(1) lookup it looks like: it has to skip every dead entry first. Measured
+  # on prod after a 25M-row deletion: several minutes, not milliseconds. These reads get real budget,
+  # not an arbitrary short constant, and a timeout here is a genuine FATAL — it means the table needs
+  # a VACUUM before retention can make progress, which is worth alerting on, not masking.
+  bound_budget="$(remaining)"; [ "$bound_budget" -gt 600 ] && bound_budget=600
+  [ "$bound_budget" -gt 0 ] || die "tier [$label] had no run budget left to even read the id range"
+  min_id="$(psql_at "$bound_budget" -c "SELECT coalesce(min(id), 0) FROM $RAW_TABLE" 2>>"$LOG")"
+  max_id="$(psql_at "$bound_budget" -c "SELECT coalesce(max(id), -1) FROM $RAW_TABLE" 2>>"$LOG")"
+  case "$min_id" in (''|*[!0-9]*) die "tier [$label] could not read min(id) within ${bound_budget}s (got '$min_id') — the table likely needs a VACUUM before retention can make progress";; esac
+  case "$max_id" in ('-1') ;; (''|*[!0-9]*) die "tier [$label] could not read max(id) within ${bound_budget}s (got '$max_id')";; esac
 
   lo="$min_id"
   while [ "$lo" -le "$max_id" ]; do
@@ -197,7 +214,7 @@ run_tier() {
                             DELETE FROM $RAW_TABLE
                              WHERE id >= $lo AND id < $hi AND ($predicate)
                              RETURNING 1)
-                          SELECT count(*) FROM del" 2>>"$LOG" | tail -1)"
+                          SELECT count(*) FROM del" 2>>"$LOG")"
     rc=$?
     [ "$rc" -eq 0 ] || die "tier [$label] DELETE failed (rc=$rc) at id $lo after $total rows — the table is NOT bounded this hour" "$rc"
     # The count comes from RETURNING, never psql's command tag: -q suppresses the tag and an empty
