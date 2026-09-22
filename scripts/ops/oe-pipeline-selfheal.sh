@@ -88,7 +88,7 @@ EXEMPT_GROUPS="${EXEMPT_GROUPS:-}"       # space-separated group ids this script
 STALE_TX_MINUTES="${STALE_TX_MINUTES:-15}"  # extra guard on top of "owner process is dead"
 EVIDENCE_MIN_SECONDS="${EVIDENCE_MIN_SECONDS:-300}"    # two pieces of evidence closer than this are one observation
 EVIDENCE_MAX_SECONDS="${EVIDENCE_MAX_SECONDS:-3600}"   # older than this, the earlier evidence is stale
-WEDGE_CYCLES="${WEDGE_CYCLES:-3}"        # consecutive cycles the SAME park must be seen on before a restart:
+WEDGE_CYCLES="${WEDGE_CYCLES:-3}"        # consecutive cycles the SAME park must be seen on before an abort:
                                          # with CONFIRM_CYCLES this is an hour of zero commits against a
                                          # moving source while parked in the same retry loop
 RETRY_LINES_MIN="${RETRY_LINES_MIN:-2}"  # initTransactions counts as a wedge only with this many retry lines in 10 min
@@ -223,7 +223,7 @@ fi
 
 # ---------- the deployment's OWN pods, through ownerReferences ----------
 # A pod belongs to a deployment only through a ReplicaSet the deployment owns. A name prefix does
-# not: "foo-canary-<hash>-<id>" starts with "foo-", and evidence read from it would restart "foo".
+# not: "foo-canary-<hash>-<id>" starts with "foo-", and evidence read from it would be charged to "foo".
 # Output per pod: "<name> <phase> <creationTimestamp>".
 deployment_pods() {
   local dep="$1" rss
@@ -364,7 +364,7 @@ persist() {   # $1 = file, $2 = what, $3 = cycles needed -> prints "confirmed" o
   if [ "$n" -ge "$need" ]; then echo confirmed; else echo "seen $n"; fi
 }
 # A retry loop is only a WEDGE if the coordinator is answering everyone else: during a broker or
-# coordinator latency incident every consumer backs off and retries, and restarting one of them
+# coordinator latency incident every consumer backs off and retries, and acting on one of them
 # fixes nothing. If this group's coordinator does not answer a state query within CLI_TIMEOUT, the
 # incident is broker-side and nothing is acted on.
 # (group_state is read once per candidate, below: empty = coordinator silent; anything but Stable = not judged)
@@ -729,9 +729,8 @@ while read -r g lag delta srcdelta; do
   PENDING_DEAD=0
   case ",$wedge," in *fetchCommittedOffsets*)
     unblock_group_offsets "$g"
-    if [ -s "$ABORTED_MARKER" ]; then log "  $g -> $dep: transaction aborted; not restarting this cycle — next check decides"; forget "$STATEDIR/${g}.wedge"; continue; fi
-    # a restart now would replace the very process whose absence is being confirmed, and reset the
-    # wedge evidence with it; the abort is the gentler fix, so it gets its confirming cycle first
+    if [ -s "$ABORTED_MARKER" ]; then log "  $g -> $dep: transaction aborted; nothing more this cycle — next check decides"; forget "$STATEDIR/${g}.wedge"; continue; fi
+    # the owner's absence is being confirmed across cycles; nothing else happens meanwhile
     if [ "$PENDING_DEAD" = 1 ]; then log "  $g -> $dep: an abandoned-transaction verdict is pending — next cycle decides"; continue; fi ;;
   esac
 

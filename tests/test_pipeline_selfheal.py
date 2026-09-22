@@ -2,9 +2,9 @@
 
 The script exists because on 2026-09-21 prod came back from a power cut with every systemd unit
 healthy and no data moving. What makes it dangerous is the same thing that makes it useful: it
-restarts production services and resets their state on its own. Its rule is that NOTHING happens
-on the absence of progress, and nothing happens on a single observation — every action needs
-positive, attributed, persistent evidence of the fault it fixes. So the tests here are about the
+aborts Kafka transactions and resets Streams state on its own (it never restarts anything). Its
+rule is that NOTHING happens on the absence of progress, and nothing happens on a single
+observation — every action needs positive, attributed, persistent evidence of the fault it fixes. So the tests here are about the
 cases where it must NOT act, the destructive path's every failure mode, and each "must not act"
 case is paired with a mutation showing the guard under test is what held it back. An assertion
 that passes with the guard removed is not an assertion.
@@ -669,7 +669,7 @@ def test_five_simultaneous_starts_admit_exactly_one(tmp_path):
 # --------------------------------------------------------------------------------------
 def test_abandoned_transaction_of_a_dead_process_is_aborted_instead_of_restarting(tmp_path):
     env, actions = _sandbox(tmp_path, open_tx_age_minutes=145, tx_proc=DEAD_PROC, members=(LIVE_PROC,))
-    out = _escalate(env, 4)   # 2 stall, 3 first dead sighting (restart held), 4 confirmed
+    out = _escalate(env, 4)   # 2 stall, 3 first dead sighting (verdict pending), 4 confirmed
     assert "ABANDONED transaction" in out and "absent from a Stable group on two consecutive cycles" in out
     assert "verdict is pending — next cycle decides" in out
     assert "--start-offset 151600145" in Path(env["_ABORTS"]).read_text()
@@ -782,11 +782,21 @@ def test_another_groups_transaction_on_the_shared_partition_is_never_aborted(tmp
     assert not Path(env["_ABORTS"]).exists()
 
 
-def test_a_failed_abort_does_not_count_and_the_restart_path_stays_open(tmp_path):
-    env, actions = _sandbox(tmp_path, open_tx_age_minutes=145, abort_fail=True)
+def test_a_failed_abort_keeps_the_dead_owner_evidence_and_is_retried_next_run(tmp_path):
+    """The coordinator refuses the abort once: the two-cycle 'owner is dead' verdict must survive,
+    and the very next run must try the same abort again rather than starting over."""
+    env, actions = _sandbox(tmp_path, abort_fail=True)
     out = _escalate(env, 4)
-    assert "abort did NOT succeed" in out and "not restarting this cycle" not in out
-    assert Path(env["_ABORTS"]).exists(), "the abort — the one automated action on a park — did not happen"
+    assert "abort did NOT succeed" in out and _acted(actions) == ""
+    dead = Path(env["STATEDIR"]) / f"{GROUP}.dead-{DEAD_PROC}"
+    assert dead.exists(), "the dead-owner evidence was dropped after a failed abort"
+    attempts = Path(env["_ABORTS"]).read_text().count("--start-offset 151600145")
+    # the fault clears: the same sandbox, abort now succeeding
+    stub = Path(env["KBIN"]) / "kafka-transactions.sh"
+    stub.write_text(stub.read_text().replace('if [ "1" = 1 ]; then echo "Error: coordinator not available"; exit 1; fi', 'true'))
+    _escalate(env, 1)
+    assert Path(env["_ABORTS"]).read_text().count("--start-offset 151600145") == attempts + 1
+    assert not dead.exists(), "a successful abort must clear the evidence"
 
 
 def test_space_aligned_transaction_tables_are_read_the_same(tmp_path):
