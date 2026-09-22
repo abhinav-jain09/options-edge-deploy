@@ -50,7 +50,8 @@ def _sandbox(tmp_path, *, group=GROUP, replicas="1", pod_age=258, restoring=Fals
              tx_proc=DEAD_PROC, members=(LIVE_PROC,), group_state="Stable", no_header_for="",
              abort_fail=False, hanging_fail=False, scale_fail_to="", pods_linger=False,
              find_fail=False, stale_twin=False, pv_path_override=None, extra_claim=False,
-             rescale_between=False, intruder=False, hpa=False, deployments=(DEPLOY,)):
+             rescale_between=False, intruder=False, hpa=False, deployments=(DEPLOY,),
+             mkdir_fail=False, coordinator_silent=False):
     """A fake estate: one consumer group with lag, one deployment (plus an optional look-alike),
     pods owned through ReplicaSets, one PV."""
     bin_dir = tmp_path / "bin"; bin_dir.mkdir()
@@ -123,6 +124,12 @@ def _sandbox(tmp_path, *, group=GROUP, replicas="1", pod_age=258, restoring=Fals
         esac
         exit 0
         """))
+    if mkdir_fail:   # the empty replacement directory cannot be created (inodes, quota, permissions)
+        (bin_dir / "mkdir").write_text(textwrap.dedent(f"""\
+            #!/usr/bin/env bash
+            case "$*" in "{pv_path}") echo "mkdir: cannot create directory: No space left on device" >&2; exit 1 ;; esac
+            exec /bin/mkdir "$@"
+            """))
     # the swap is observed through mv: afterwards the pod stub may show an intruder
     (bin_dir / "mv").write_text(textwrap.dedent(f"""\
         #!/usr/bin/env bash
@@ -164,7 +171,8 @@ def _sandbox(tmp_path, *, group=GROUP, replicas="1", pod_age=258, restoring=Fals
         #!/usr/bin/env bash
         case "$*" in
           *--members*) echo "GROUP CONSUMER-ID HOST CLIENT-ID #PARTITIONS"; {member_rows.strip() or 'true'}; exit 0 ;;
-          *--state*)   echo; echo "GROUP COORDINATOR (ID) ASSIGNMENT-STRATEGY STATE #MEMBERS"; echo "{group} 192.168.100.252:9092 (1) stream {group_state} 1"; exit 0 ;;
+          *--state*)   [ "{int(coordinator_silent)}" = 1 ] && exit 0
+                       echo; echo "GROUP COORDINATOR (ID) ASSIGNMENT-STRATEGY STATE #MEMBERS"; echo "{group} 192.168.100.252:9092 (1) stream {group_state} 1"; exit 0 ;;
         esac
         n=0; [ -f "{calls}" ] && n=$(cat "{calls}"); n=$((n+1)); echo "$n" > "{calls}"
         if [ "$n" -ge 2 ]; then {grow}; fi
@@ -182,7 +190,7 @@ def _sandbox(tmp_path, *, group=GROUP, replicas="1", pod_age=258, restoring=Fals
         KBIN=str(kbin), STORAGE=str(storage), GROUP_MAP=str(tmp_path / "groups.map"),
         LOG=str(tmp_path / "selfheal.log"), STATEDIR=str(tmp_path / "state"),
         SAMPLE_SECONDS="1", LAG_FLOOR="2000", LOAD_CEILING="9999", CONFIRM_CYCLES="2",
-        EVIDENCE_MIN_SECONDS="0", DUMP_SETTLE_SECONDS="0", POD_GONE_WAIT_SECONDS="5",
+        EVIDENCE_MIN_SECONDS="0", DUMP_SETTLE_SECONDS="0", POD_GONE_WAIT_SECONDS="5", WEDGE_CYCLES="2",
         _ABORTS=str(aborts), _PV=str(pv_path), _STORAGE=str(storage), _DUMPED=str(dumped), _GROUP=group,
     )
     return env, actions
@@ -215,8 +223,8 @@ def _seed(env, *, observed=5, strikes=0, wedge=None, corrupt=None):
     (sd / f"{g}.observed").write_text(f"{observed}\n")
     (sd / f"{g}.strikes").write_text(f"{strikes}\n")
     ago = int(time.time()) - 600
-    if wedge: (sd / f"{g}.wedge").write_text(f"{ago} {wedge}\n")
-    if corrupt: (sd / f"{g}.corrupt").write_text(f"{ago} {corrupt}\n")
+    if wedge: (sd / f"{g}.wedge").write_text(f"{ago} 1 {wedge}\n")
+    if corrupt: (sd / f"{g}.corrupt").write_text(f"{ago} 1 {corrupt}\n")
 
 
 def _aside_dirs(env):
@@ -290,13 +298,13 @@ def test_mutation_the_same_estate_with_the_own_pod_wedged_is_acted_on(tmp_path):
 def test_a_wedge_seen_once_is_not_acted_on(tmp_path):
     env, actions = _sandbox(tmp_path)
     out = _escalate(env, 2)
-    assert "one snapshot is not a wedge" in out and _acted(actions) == ""
+    assert "seen 1 of 2" in out and "must show the same next cycle" in out and _acted(actions) == ""
 
 
 def test_the_same_wedge_on_two_consecutive_cycles_is_acted_on(tmp_path):
     env, actions = _sandbox(tmp_path)
     out = _escalate(env, 3)
-    assert "CONFIRMED evidence on two cycles" in out and f"rollout restart deploy/{DEPLOY}" in _acted(actions)
+    assert "CONFIRMED evidence" in out and f"rollout restart deploy/{DEPLOY}" in _acted(actions)
 
 
 def test_a_wedge_that_does_not_persist_is_not_acted_on(tmp_path):
@@ -310,9 +318,29 @@ def test_a_wedge_that_does_not_persist_is_not_acted_on(tmp_path):
 def test_stale_evidence_from_long_ago_does_not_confirm(tmp_path):
     env, actions = _sandbox(tmp_path)
     _seed(env, wedge="fetchCommittedOffsets")
-    (Path(env["STATEDIR"]) / f"{GROUP}.wedge").write_text(f"{int(time.time()) - 7200} fetchCommittedOffsets\n")
+    (Path(env["STATEDIR"]) / f"{GROUP}.wedge").write_text(f"{int(time.time()) - 7200} 1 fetchCommittedOffsets\n")
     _escalate(env, 1)
     assert _acted(actions) == ""
+
+
+def test_a_park_while_the_coordinator_is_not_answering_is_a_broker_incident_not_a_wedge(tmp_path):
+    env, actions = _sandbox(tmp_path, coordinator_silent=True)
+    out = _escalate(env, 5)
+    assert "COORDINATOR is not answering" in out and _acted(actions) == ""
+
+
+def test_mutation_the_same_park_with_an_answering_coordinator_is_acted_on(tmp_path):
+    env, actions = _sandbox(tmp_path, coordinator_silent=False)
+    _escalate(env, 3)
+    assert f"rollout restart deploy/{DEPLOY}" in _acted(actions)
+
+
+def test_at_the_default_three_parks_are_needed_before_a_restart(tmp_path):
+    env, actions = _sandbox(tmp_path)
+    out = _escalate(env, 3, WEDGE_CYCLES="3")          # stall, park 1, park 2
+    assert "seen 2 of 3" in out and _acted(actions) == ""
+    _escalate(env, 1, WEDGE_CYCLES="3")                # park 3
+    assert f"rollout restart deploy/{DEPLOY}" in _acted(actions)
 
 
 def test_one_stalled_sample_is_confirmed_before_evidence_is_gathered(tmp_path):
@@ -459,10 +487,10 @@ def test_a_failed_find_hanging_is_reported_not_read_as_none(tmp_path):
 
 def test_a_second_instance_leaves_while_the_first_is_alive(tmp_path):
     env, _ = _sandbox(tmp_path)
-    sd = Path(env["STATEDIR"]); sd.mkdir(); (sd / ".lock.d").mkdir()
+    sd = Path(env["STATEDIR"]); sd.mkdir()
     holder = subprocess.Popen(["sleep", "30"])
     try:
-        (sd / ".lock.d" / "pid").write_text(str(holder.pid))
+        os.symlink(str(holder.pid), sd / ".lock")
         out = _run(env)
         assert "another self-heal run is active" in out and "self-heal start" not in out
     finally:
@@ -471,11 +499,23 @@ def test_a_second_instance_leaves_while_the_first_is_alive(tmp_path):
 
 def test_a_stale_lock_from_a_dead_process_is_taken_over(tmp_path):
     env, _ = _sandbox(tmp_path)
-    sd = Path(env["STATEDIR"]); sd.mkdir(); (sd / ".lock.d").mkdir()
-    (sd / ".lock.d" / "pid").write_text("999999")
+    sd = Path(env["STATEDIR"]); sd.mkdir()
+    os.symlink("999999", sd / ".lock")
     out = _run(env)
     assert "taking over" in out and "self-heal start" in out
-    assert not (sd / ".lock.d").exists(), "lock not released on exit"
+    assert not (sd / ".lock").exists() and not (sd / ".lock").is_symlink(), "lock not released on exit"
+
+
+def test_five_simultaneous_starts_admit_exactly_one(tmp_path):
+    """The acquisition itself is one atomic symlink: there is no gap in which a lock exists
+    without its owner, so contenders arriving at the same instant cannot both proceed."""
+    env, _ = _sandbox(tmp_path)
+    procs = [subprocess.Popen(["bash", str(SCRIPT)], env={**env, "SAMPLE_SECONDS": "4"},
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True) for _ in range(5)]
+    outs = [p.communicate(timeout=120)[0] for p in procs]
+    started = sum(o.count("self-heal start") for o in outs)
+    left = sum("another self-heal run is active" in o for o in outs)
+    assert started == 1 and left == 4, outs
 
 
 # --------------------------------------------------------------------------------------
@@ -641,7 +681,20 @@ def test_strike_two_does_not_reset_if_something_rescaled_the_deployment_meanwhil
     assert (Path(env["_PV"]) / "rocksdb").exists()
 
 
-def test_a_pod_that_appears_during_the_swap_is_stopped_before_the_old_tree_is_removed(tmp_path):
+def test_a_failed_replacement_directory_rolls_the_swap_back(tmp_path):
+    """mv succeeded, mkdir failed: the old tree must be back at the live path, never absent."""
+    env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, mkdir_fail=True)
+    _seed(env, strikes=1, corrupt=CORRUPT_SIG)
+    out = _run(env)
+    assert "rolled back" in out and "nothing changed on disk" not in out
+    assert (Path(env["_PV"]) / "rocksdb").exists() and _aside_dirs(env) == []
+    assert "--replicas=1" in _acted(actions)
+
+
+def test_a_pod_present_after_the_swap_is_stopped_before_the_old_tree_is_removed(tmp_path):
+    """Covers the cleanup branch: a pod seen after the swap (however it got there) is stopped and
+    waited for before the parked tree goes. It does not exercise a pod starting concurrently with
+    the rename itself — the rename is atomic, so such a pod binds a whole tree either way."""
     env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, intruder=True)
     _seed(env, strikes=1, corrupt=CORRUPT_SIG)
     out = _run(env)

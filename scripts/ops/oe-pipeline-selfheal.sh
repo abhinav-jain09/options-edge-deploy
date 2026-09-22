@@ -48,6 +48,13 @@
 #   otherwise   the stall is logged loudly and NOTHING is touched. A fault this script cannot name
 #               is a human's call, not a restart.
 #
+# The residual, stated so it is a decision and not a surprise: a service that commits nothing for
+# CONFIRM_CYCLES+WEDGE_CYCLES cycles (an hour at the defaults) against a moving source, parked in the
+# same coordinator retry loop on WEDGE_CYCLES consecutive dumps, while that coordinator answers a
+# state query normally, is restarted. A latency incident long and one-sided enough to look like that
+# is not distinguishable from a wedge by any signal this host can read, and the restart is the
+# mildest action taken here.
+#
 # Group → deployment is an exact transformation or an explicit mapping, never a fuzzy match; pods
 # are the deployment's own, through ReplicaSet ownerReferences, never by name prefix.
 #
@@ -79,6 +86,9 @@ EXEMPT_GROUPS="${EXEMPT_GROUPS:-}"       # space-separated group ids this script
 STALE_TX_MINUTES="${STALE_TX_MINUTES:-15}"  # extra guard on top of "owner process is dead"
 EVIDENCE_MIN_SECONDS="${EVIDENCE_MIN_SECONDS:-300}"    # two pieces of evidence closer than this are one observation
 EVIDENCE_MAX_SECONDS="${EVIDENCE_MAX_SECONDS:-3600}"   # older than this, the earlier evidence is stale
+WEDGE_CYCLES="${WEDGE_CYCLES:-3}"        # consecutive cycles the SAME park must be seen on before a restart:
+                                         # with CONFIRM_CYCLES this is an hour of zero commits against a
+                                         # moving source while parked in the same retry loop
 RETRY_LINES_MIN="${RETRY_LINES_MIN:-2}"  # initTransactions counts as a wedge only with this many retry lines in 10 min
 POD_GONE_WAIT_SECONDS="${POD_GONE_WAIT_SECONDS:-300}"  # strike 2: how long to wait for the old pod to leave
 DUMP_SETTLE_SECONDS="${DUMP_SETTLE_SECONDS:-3}"        # kill -3 to stdout latency
@@ -101,21 +111,25 @@ now_s()    { date +%s; }
 
 # ---------- exactly one instance, without util-linux ----------
 # A destructive remediator must not run twice at once, and must not depend on flock being installed
-# to guarantee that: the lock is an atomic mkdir holding the owner's pid. A lock whose owner is no
-# longer alive is stale and taken over; a live owner means this arrival leaves at once (a queued run
-# under TimeoutStartSec would be killed mid-way).
-LOCKDIR="$STATEDIR/.lock.d"
+# to guarantee that. The lock is a SYMLINK whose target is the owner's pid: `ln -s` is one atomic
+# system call, so there is no instant at which a lock exists without its owner recorded (a mkdir
+# followed by a pid write had exactly that gap, and a second run could take over in it). A lock
+# whose owner is no longer alive is stale; contenders do not delete it — they RENAME it away, and
+# rename is atomic too, so only one contender can succeed and go on to claim the lock.
+LOCK="$STATEDIR/.lock"
 take_lock() {
-  local owner
-  if mkdir "$LOCKDIR" 2>/dev/null; then echo $$ > "$LOCKDIR/pid"; return 0; fi
-  owner=$(cat "$LOCKDIR/pid" 2>/dev/null || echo "")
-  if [ -n "$owner" ] && kill -0 "$owner" 2>/dev/null; then return 1; fi
-  echo "stale lock from pid ${owner:-?} — taking over"
-  rm -f "$LOCKDIR/pid" 2>/dev/null; rmdir "$LOCKDIR" 2>/dev/null || true   # one pid file, nothing else; never rm -rf
-  mkdir "$LOCKDIR" 2>/dev/null && echo $$ > "$LOCKDIR/pid"
+  local owner attempt
+  for attempt in 1 2 3; do
+    ln -s "$$" "$LOCK" 2>/dev/null && return 0
+    owner=$(readlink "$LOCK" 2>/dev/null || echo "")
+    if [ -n "$owner" ] && kill -0 "$owner" 2>/dev/null; then return 1; fi
+    echo "stale lock from pid ${owner:-?} — taking over"
+    mv "$LOCK" "$LOCK.stale.$$" 2>/dev/null && rm -f "$LOCK.stale.$$"
+  done
+  return 1
 }
-take_lock || { echo "another self-heal run is active (pid $(cat "$LOCKDIR/pid" 2>/dev/null)) — leaving"; exit 0; }
-release_lock() { [ "$(cat "$LOCKDIR/pid" 2>/dev/null)" = "$$" ] && { rm -f "$LOCKDIR/pid"; rmdir "$LOCKDIR" 2>/dev/null; }; return 0; }
+take_lock || { echo "another self-heal run is active (pid $(readlink "$LOCK" 2>/dev/null)) — leaving"; exit 0; }
+release_lock() { [ "$(readlink "$LOCK" 2>/dev/null)" = "$$" ] && rm -f "$LOCK"; return 0; }
 
 # Strike 2 scales a deployment to 0 for the reset. If this process dies in between (timeout, SIGTERM,
 # a crash), the deployment must not stay at 0: the intended replica count is written to a .down
@@ -255,15 +269,24 @@ corruption_lines() {   # in THIS container's log (no --previous), recent
   pod=$(running_pod "$dep"); [ -n "$pod" ] || return 0
   $KUBECTL logs "$pod" --since=10m 2>/dev/null | grep -oE "$CORRUPT_RE" | sort -u | tr '\n' ',' | sed 's/,$//'
 }
-# PERSISTENT evidence: "<what>" observed for <key> now is confirmed only if the SAME <what> was
-# recorded for <key> on an earlier cycle between EVIDENCE_MIN and EVIDENCE_MAX seconds ago.
-persist() {   # $1 = file, $2 = what  -> prints "confirmed" or "first"
-  local f="$1" what="$2" prev_t prev_w age
-  read -r prev_t prev_w < <(cat "$f" 2>/dev/null || echo "0 -")
-  remember "$f" "$(now_s) $what"
+# PERSISTENT evidence: "<what>" observed for <key> now extends a run only if the SAME <what> was
+# recorded for <key> on an earlier cycle between EVIDENCE_MIN and EVIDENCE_MAX seconds ago; the
+# run is "confirmed" once it is $3 observations long (default 2). Anything else starts a new run.
+persist() {   # $1 = file, $2 = what, $3 = cycles needed -> prints "confirmed" or "seen <n>"
+  # file format: "<epoch> <count> <what...>" — the text is LAST because it may contain spaces and
+  # `read` hands the remainder of the line to its final variable
+  local f="$1" what="$2" need="${3:-2}" prev_t prev_w prev_n age n
+  read -r prev_t prev_n prev_w < <(cat "$f" 2>/dev/null || echo "0 0 -")
   age=$(( $(now_s) - ${prev_t:-0} ))
-  if [ "$prev_w" = "$what" ] && [ "$age" -ge "$EVIDENCE_MIN_SECONDS" ] && [ "$age" -le "$EVIDENCE_MAX_SECONDS" ]; then echo confirmed; else echo first; fi
+  if [ "$prev_w" = "$what" ] && [ "$age" -ge "$EVIDENCE_MIN_SECONDS" ] && [ "$age" -le "$EVIDENCE_MAX_SECONDS" ]; then n=$(( ${prev_n:-1} + 1 )); else n=1; fi
+  remember "$f" "$(now_s) $n $what"
+  if [ "$n" -ge "$need" ]; then echo confirmed; else echo "seen $n"; fi
 }
+# A retry loop is only a WEDGE if the coordinator is answering everyone else: during a broker or
+# coordinator latency incident every consumer backs off and retries, and restarting one of them
+# fixes nothing. If this group's coordinator does not answer a state query within CLI_TIMEOUT, the
+# incident is broker-side and nothing is acted on.
+coordinator_answers() { [ -n "$(group_state "$1")" ]; }
 
 # ---------- the abort: only THIS group's transaction, only from a DEAD process, only when Stable ----------
 ABORTED_MARKER="$(mktemp)"; trap 'rm -f "$ABORTED_MARKER"; restore_down_markers; release_lock' EXIT
@@ -301,7 +324,7 @@ unblock_group_offsets() {   # $1 = group; appends a line to $ABORTED_MARKER for 
     fi
     # absent once may be a member mid-rejoin; absent on two cycles, ten minutes apart, with the
     # group Stable both times, is a process that is gone
-    verdict=$(persist "$STATEDIR/${g}.dead-$proc" "absent")
+    verdict=$(persist "$STATEDIR/${g}.dead-$proc" "absent" 2)
     if [ "$verdict" != confirmed ]; then
       log "  $g: producer $pid's process $proc is not a member right now — must still be absent next cycle before it counts as dead; NOT aborted yet"
       PENDING_DEAD=1; continue
@@ -406,10 +429,15 @@ state_dir_of() {
 # half-deleted tree. A pod that starts during this window binds either the old tree (whole, and the
 # corrupt one it already had) or the new empty one; never a partial. The old tree is deleted only
 # afterwards, and only once every pod that could have bound it is gone. (rm -rf is forbidden here.)
-swap_state_dir() {   # $1 = dir -> prints the aside path
+swap_state_dir() {   # $1 = dir -> prints the aside path; on failure the live path is restored
   local dir="$1" aside="$1.reset-$(now_s)"
   mv "$dir" "$aside" || return 1
-  mkdir "$dir" || return 1
+  if ! mkdir "$dir"; then
+    # the live path must never be left ABSENT: put the old tree back where it was
+    if mv "$aside" "$dir"; then log "  swap of $dir rolled back: the empty directory could not be created; the old tree is back in place"
+    else log "  CRITICAL: $dir is ABSENT — the old tree is at $aside and could not be moved back; restore it by hand: mv $aside $dir"; fi
+    return 1
+  fi
   python3 -c 'import os,sys; s=os.stat(sys.argv[1]); os.chmod(sys.argv[2], s.st_mode & 0o7777); os.chown(sys.argv[2], s.st_uid, s.st_gid)' "$aside" "$dir" 2>/dev/null || true
   printf '%s\n' "$aside"
 }
@@ -460,13 +488,14 @@ while read -r g lag delta srcdelta; do
   frames=$(wedge_frames "$dep"); corrupt=$(corruption_lines "$dep")
   wedge=""; corruption=""
   if [ -n "$frames" ]; then
-    case "$(persist "$STATEDIR/${g}.wedge" "$frames")" in
+    verdict=$(persist "$STATEDIR/${g}.wedge" "$frames" "$WEDGE_CYCLES")
+    case "$verdict" in
       confirmed) wedge="$frames" ;;
-      *) log "  $g -> $dep: a StreamThread is parked in a $frames retry RIGHT NOW — one snapshot is not a wedge; must show the same next cycle" ;;
+      *) log "  $g -> $dep: a StreamThread is parked in a $frames retry RIGHT NOW ($verdict of $WEDGE_CYCLES) — a retry loop is only a wedge if it outlasts every backoff; must show the same next cycle" ;;
     esac
   else forget "$STATEDIR/${g}.wedge"; fi
   if [ -n "$corrupt" ]; then
-    case "$(persist "$STATEDIR/${g}.corrupt" "$corrupt")" in
+    case "$(persist "$STATEDIR/${g}.corrupt" "$corrupt" 2)" in
       confirmed) corruption="$corrupt" ;;
       *) log "  $g -> $dep: container log shows $corrupt — must repeat next cycle before it counts" ;;
     esac
@@ -475,7 +504,11 @@ while read -r g lag delta srcdelta; do
     [ -z "$frames" ] && [ -z "$corrupt" ] && log "  $g -> $dep: stalled $seen checks but no StreamThread is parked in a retry and the container log is clean — slow or paused, not wedged. NOT touched. If this is a real fault it needs a human: $KUBECTL logs $(running_pod "$dep")"
     continue
   fi
-  log "  $g -> $dep: CONFIRMED evidence on two cycles —${wedge:+ wedge: $wedge}${corruption:+ corruption: $corruption}"
+  if [ -n "$wedge" ] && ! coordinator_answers "$g"; then
+    log "  $g -> $dep: parked in $wedge but the group's COORDINATOR is not answering — a broker-side incident, not a wedge in this service. NOT touched."
+    continue
+  fi
+  log "  $g -> $dep: CONFIRMED evidence —${wedge:+ wedge: $wedge (${WEDGE_CYCLES} consecutive cycles)}${corruption:+ corruption: $corruption (2 cycles)}"
 
   # ---- the abort comes first: it fixes the offset wedge WITHOUT bouncing the service ----
   PENDING_DEAD=0
@@ -527,7 +560,7 @@ while read -r g lag delta srcdelta; do
       else
         aside=$(swap_state_dir "$dir")
         if [ -z "$aside" ]; then
-          log "  $g -> $dep: swapping $dir aside FAILED — nothing changed on disk; scaling back"
+          log "  $g -> $dep: swapping $dir aside FAILED — see the line above for what is on disk; scaling back"
         else
           log "  $g -> $dep: $dir is now empty; old tree parked at $aside"
           # anything that bound the OLD tree during the swap window is stopped, and waited for,
