@@ -226,13 +226,23 @@ offsets_partitions() {
   timeout "$CLI_TIMEOUT" "$KBIN/kafka-topics.sh" --bootstrap-server "$BS" --describe --topic __consumer_offsets 2>/dev/null \
     | grep -oE 'PartitionCount:[[:space:]]*[0-9]+' | grep -oE '[0-9]+' | head -1
 }
+# The consumer-group tables are whitespace-ALIGNED, not delimited, and whether they carry a leading
+# GROUP column depends on the Kafka version. So a column is read by the character span its header
+# occupies — from the header word's start to the next header word's start — never by position.
+under_header() {   # $1 = text, $2 = header word  -> the value under that header for each data row
+  printf '%s\n' "$1" | awk -v h="$2" '
+    !found && index($0, h) > 0 {
+      found = 1; start = index($0, h); rest = substr($0, start + length(h))
+      if (match(rest, /[^ ]/)) { end = start + length(h) + RSTART - 1 } else { end = 0 }
+      next }
+    found && NF { v = (end ? substr($0, start, end - start) : substr($0, start)); gsub(/^ +| +$/, "", v); if (v != "") print v }'
+}
 group_state() {
-  timeout "$CLI_TIMEOUT" "$KBIN/kafka-consumer-groups.sh" --bootstrap-server "$BS" --describe --group "$1" --state 2>/dev/null \
-    | awk 'NF>=5 && $1!="GROUP" {print $5; exit}'
+  under_header "$(timeout "$CLI_TIMEOUT" "$KBIN/kafka-consumer-groups.sh" --bootstrap-server "$BS" --describe --group "$1" --state 2>/dev/null)" STATE | head -1
 }
 live_processes() {   # process UUIDs of the group's members (a Streams member id carries its process UUID)
-  timeout "$CLI_TIMEOUT" "$KBIN/kafka-consumer-groups.sh" --bootstrap-server "$BS" --describe --group "$1" --members 2>/dev/null \
-    | awk 'NF>=4 && $1!="GROUP" {print $2}' | grep -oE "$UUID_RE" | sort -u
+  under_header "$(timeout "$CLI_TIMEOUT" "$KBIN/kafka-consumer-groups.sh" --bootstrap-server "$BS" --describe --group "$1" --members 2>/dev/null)" CONSUMER-ID \
+    | grep -oE "$UUID_RE" | sort -u
 }
 # ATTRIBUTED evidence of a PARK, not merely of a call: a thread dump is triggered now and read back
 # from the last minute of the pod's stdout only. Per thread block whose NAME contains StreamThread,
@@ -350,16 +360,29 @@ sample() {
 }
 statesizes() { du -sk "$STORAGE"/*_options-edge_*-streams-state 2>/dev/null | awk '{print $2" "$1}'; }
 
+# A group that commits rarely can commit BETWEEN two cycles and look flat inside each one. So the
+# committed sum at the end of every cycle is remembered, and a group whose committed sum moved since
+# the previous cycle is progress, whatever the two samples inside this cycle say.
+OFFSETS_MEMO="$STATEDIR/committed.last"
 log "sampling committed offsets (t0)"; s0=$(sample); d0=$(statesizes)
 [ -z "$s0" ] && { log "no consumer groups reported offsets — nothing to judge"; exit 0; }
 sleep "$SAMPLE_SECONDS"
 log "sampling committed offsets (t1, +${SAMPLE_SECONDS}s)"; s1=$(sample); d1=$(statesizes)
 
-stuck=$(awk -v floor="$LAG_FLOOR" -v exempt=" $EXEMPT_GROUPS " '
+memo=$(cat "$OFFSETS_MEMO" 2>/dev/null || true)
+stuck=$(awk -v floor="$LAG_FLOOR" -v exempt=" $EXEMPT_GROUPS " -v memo="$memo" '
+  BEGIN { n = split(memo, m, "\n"); for (i = 1; i <= n; i++) { split(m[i], f, " "); if (f[1] != "") last[f[1]] = f[2] } }
   NR==FNR {c0[$1]=$2; e0[$1]=$3; next}
-  ($1 in c0) && index(exempt, " " $1 " ") == 0 && $4 >= floor && $2 <= c0[$1] && $3 > e0[$1] {
+  ($1 in c0) && index(exempt, " " $1 " ") == 0 && $4 >= floor && $2 <= c0[$1] && $3 > e0[$1] && !(($1 in last) && $2 > last[$1]) {
     printf "%s %d %d %d\n", $1, $4, $2-c0[$1], $3-e0[$1] }
 ' <(echo "$s0") <(echo "$s1"))
+between=$(awk -v memo="$memo" '
+  BEGIN { n = split(memo, m, "\n"); for (i = 1; i <= n; i++) { split(m[i], f, " "); if (f[1] != "") last[f[1]] = f[2] } }
+  NR==FNR {c0[$1]=$2; next}
+  ($1 in c0) && $2 <= c0[$1] && ($1 in last) && $2 > last[$1] { print $1 }
+' <(echo "$s0") <(echo "$s1"))
+[ -n "$between" ] && log "committed BETWEEN cycles (flat inside this one, but ahead of last cycle — a slow committer, not a stuck one): $(echo $between | tr '\n' ' ')"
+[ "$DRY_RUN" = true ] || printf '%s\n' "$s1" | awk '{print $1, $2}' > "$OFFSETS_MEMO"
 quiet=$(awk -v floor="$LAG_FLOOR" '
   NR==FNR {c0[$1]=$2; e0[$1]=$3; next}
   ($1 in c0) && $4 >= floor && $2 <= c0[$1] && $3 <= e0[$1] { print $1 }
@@ -438,7 +461,13 @@ swap_state_dir() {   # $1 = dir -> prints the aside path; on failure the live pa
     else log "  CRITICAL: $dir is ABSENT — the old tree is at $aside and could not be moved back; restore it by hand: mv $aside $dir"; fi
     return 1
   fi
-  python3 -c 'import os,sys; s=os.stat(sys.argv[1]); os.chmod(sys.argv[2], s.st_mode & 0o7777); os.chown(sys.argv[2], s.st_uid, s.st_gid)' "$aside" "$dir" 2>/dev/null || true
+  if ! python3 -c 'import os,sys; s=os.stat(sys.argv[1]); os.chmod(sys.argv[2], s.st_mode & 0o7777); os.chown(sys.argv[2], s.st_uid, s.st_gid)' "$aside" "$dir" 2>/dev/null; then
+    # the app must not come back to a directory it cannot write: undo the swap
+    rmdir "$dir" 2>/dev/null
+    if mv "$aside" "$dir"; then log "  swap of $dir rolled back: the empty directory could not be given the old mode/owner; the old tree is back in place"
+    else log "  CRITICAL: $dir is ABSENT — the old tree is at $aside and could not be moved back; restore it by hand: mv $aside $dir"; fi
+    return 1
+  fi
   printf '%s\n' "$aside"
 }
 

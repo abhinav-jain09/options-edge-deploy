@@ -51,7 +51,7 @@ def _sandbox(tmp_path, *, group=GROUP, replicas="1", pod_age=258, restoring=Fals
              abort_fail=False, hanging_fail=False, scale_fail_to="", pods_linger=False,
              find_fail=False, stale_twin=False, pv_path_override=None, extra_claim=False,
              rescale_between=False, intruder=False, hpa=False, deployments=(DEPLOY,),
-             mkdir_fail=False, coordinator_silent=False):
+             mkdir_fail=False, coordinator_silent=False, group_col=True, commit_between=0):
     """A fake estate: one consumer group with lag, one deployment (plus an optional look-alike),
     pods owned through ReplicaSets, one PV."""
     bin_dir = tmp_path / "bin"; bin_dir.mkdir()
@@ -166,17 +166,30 @@ def _sandbox(tmp_path, *, group=GROUP, replicas="1", pod_age=258, restoring=Fals
         exit 0
         """))
     grow = (f'printf "y%.0s" $(seq 1 5000) >> "{pv_path}/rocksdb"') if grow_state else "true"
-    member_rows = "".join(f"echo '{group} {group}-{m}-StreamThread-1-consumer-{m} /10.0.0.1 {group}-{m}-StreamThread-1-consumer 3'\n" for m in members)
+    # Kafka 4.3.0 on prod prints a leading GROUP column in both single-group tables; older/newer
+    # printers may not. Both layouts are exercised, rendered the way Kafka's printer renders them:
+    # every column as wide as its widest cell, one space between columns.
+    def table(headers, rows):
+        widths = [max(len(str(c)) for c in col) for col in zip(headers, *rows)]
+        return [" ".join(f"{str(c):<{w}}" for c, w in zip(r, widths)).rstrip() for r in [headers, *rows]]
+    gc = lambda cells: (cells if group_col else cells[1:])
+    state_lines = table(gc(["GROUP", "COORDINATOR (ID)", "ASSIGNMENT-STRATEGY", "STATE", "#MEMBERS"]),
+                        [gc([group, "192.168.100.252:9092  (1)", "stream", group_state, "1"])])
+    member_lines = table(gc(["GROUP", "CONSUMER-ID", "HOST", "CLIENT-ID", "#PARTITIONS"]),
+                         [gc([group, f"{group}-{m}-StreamThread-1-consumer-{m}", "/10.0.0.1", f"{group}-{m}-StreamThread-1-consumer", "3"]) for m in members])
+    state_echo = "; ".join(f"echo '{l}'" for l in state_lines)
+    member_echo = "; ".join(f"echo '{l}'" for l in member_lines)
     (kbin / "kafka-consumer-groups.sh").write_text(textwrap.dedent(f"""\
         #!/usr/bin/env bash
         case "$*" in
-          *--members*) echo "GROUP CONSUMER-ID HOST CLIENT-ID #PARTITIONS"; {member_rows.strip() or 'true'}; exit 0 ;;
+          *--members*) echo; {member_echo}; exit 0 ;;
           *--state*)   [ "{int(coordinator_silent)}" = 1 ] && exit 0
-                       echo; echo "GROUP COORDINATOR (ID) ASSIGNMENT-STRATEGY STATE #MEMBERS"; echo "{group} 192.168.100.252:9092 (1) stream {group_state} 1"; exit 0 ;;
+                       echo; {state_echo}; exit 0 ;;
         esac
         n=0; [ -f "{calls}" ] && n=$(cat "{calls}"); n=$((n+1)); echo "$n" > "{calls}"
         if [ "$n" -ge 2 ]; then {grow}; fi
-        cur=$((1000 + (n-1)*{advance})); end=$((1000 + {lag} + (n-1)*{source_advance}))
+        # commit_between: the consumer commits once between every pair of cycles (after t1, before the next t0)
+        cycle=$(( (n-1)/2 )); cur=$((1000 + (n-1)*{advance} + cycle*{commit_between})); end=$((1000 + {lag} + (n-1)*{source_advance}))
         echo "GROUP TOPIC PARTITION CURRENT-OFFSET LOG-END-OFFSET LAG CONSUMER-ID HOST CLIENT-ID"
         echo "{group} t 0 $cur $end $((end-cur)) c h cl"
         """))
@@ -395,6 +408,31 @@ def test_mutation_the_same_flat_consumer_becomes_a_candidate_once_its_source_mov
     assert "STALLED" in _run(env)
 
 
+def test_a_commit_that_lands_between_cycles_is_progress(tmp_path):
+    """Flat inside every 90-second window, yet ahead of the previous cycle: a slow committer."""
+    env, actions = _sandbox(tmp_path, commit_between=500)
+    out = _escalate(env, 5)
+    assert "committed BETWEEN cycles" in out and _acted(actions) == ""
+
+
+def test_mutation_the_same_consumer_with_no_commit_between_cycles_is_a_candidate(tmp_path):
+    env, actions = _sandbox(tmp_path, commit_between=0)
+    _escalate(env, 3)
+    assert f"rollout restart deploy/{DEPLOY}" in _acted(actions)
+
+
+def test_group_tables_without_a_leading_group_column_are_read_by_header(tmp_path):
+    env, _ = _sandbox(tmp_path, group_col=False, open_tx_age_minutes=145, tx_proc=DEAD_PROC, members=(LIVE_PROC,))
+    out = _escalate(env, 4)
+    assert "ABANDONED transaction" in out and Path(env["_ABORTS"]).exists()
+
+
+def test_group_tables_without_a_leading_group_column_still_see_a_live_owner(tmp_path):
+    env, _ = _sandbox(tmp_path, group_col=False, open_tx_age_minutes=145, tx_proc=LIVE_PROC, members=(LIVE_PROC,))
+    out = _escalate(env, 5)
+    assert "owned by LIVE member process" in out and not Path(env["_ABORTS"]).exists()
+
+
 def test_an_exempted_group_is_never_judged(tmp_path):
     env, actions = _sandbox(tmp_path)
     out = _escalate(env, 3, EXEMPT_GROUPS=f"other-group {GROUP}")
@@ -446,9 +484,18 @@ def test_mutation_with_no_grace_the_young_pod_is_acted_on(tmp_path):
 # Deliberately-down services, dry runs, recovery, a broker that is not up yet, the lock.
 # --------------------------------------------------------------------------------------
 def test_a_deployment_held_at_zero_replicas_is_never_started(tmp_path):
-    env, actions = _sandbox(tmp_path, replicas="0")
-    out = _escalate(env, 3)
+    """A lingering, genuinely wedged pod of a deployment the owner scaled to 0: without the guard
+    the evidence would be complete and it would be restarted."""
+    env, actions = _sandbox(tmp_path, replicas="0", pods_linger=True)
+    out = _escalate(env, 4)
     assert "held down by decision" in out and _acted(actions) == ""
+    assert not Path(env["_DUMPED"]).exists(), "gathered evidence on a held-down deployment"
+
+
+def test_mutation_the_same_wedged_pod_at_one_replica_is_acted_on(tmp_path):
+    env, actions = _sandbox(tmp_path, replicas="1", pods_linger=True)
+    _escalate(env, 3)
+    assert f"rollout restart deploy/{DEPLOY}" in _acted(actions)
 
 
 def test_dry_run_changes_nothing_at_all(tmp_path):

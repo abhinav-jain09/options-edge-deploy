@@ -1,7 +1,10 @@
 [Unit]
 Description=OptionsEdge pipeline self-heal (hanging transactions, wedged Streams state)
 Documentation=file:/usr/local/sbin/oe-pipeline-selfheal.sh
-After=k3s.service kafka.service
+# After the bring-up as well: when both are queued at boot, the bring-up's waves must be up before
+# this judges anything, or every still-starting service is a "stall" (the grace veto covers most of
+# that window; the ordering makes it certain).
+After=k3s.service kafka.service oe-boot-bringup.service
 Wants=k3s.service kafka.service
 
 [Service]
