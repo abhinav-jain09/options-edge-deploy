@@ -296,9 +296,18 @@ under_header() {   # $1 = text, $2 = header word  -> the value under that header
 group_state() {
   under_header "$(timeout "$CLI_TIMEOUT" "$KBIN/kafka-consumer-groups.sh" --bootstrap-server "$BS" --describe --group "$1" --state 2>/dev/null)" STATE | head -1
 }
-live_processes() {   # process UUIDs of the group's members (a Streams member id carries its process UUID)
-  under_header "$(timeout "$CLI_TIMEOUT" "$KBIN/kafka-consumer-groups.sh" --bootstrap-server "$BS" --describe --group "$1" --members 2>/dev/null)" CONSUMER-ID \
-    | grep -oE "$UUID_RE" | sort -u
+# process UUIDs of the group's members (a Streams member id carries its process UUID). This read
+# FAILS CLOSED: a CLI error, a timeout, or a table without the CONSUMER-ID header returns 1 and the
+# caller aborts nothing — an empty list from a failed read must never be mistaken for "everyone is
+# dead". A Stable group with members and a table that parses to no member is refused the same way.
+live_processes() {   # $1 = group -> prints UUIDs; returns 1 when the members table could not be read
+  local out rc rows
+  out=$(timeout "$CLI_TIMEOUT" "$KBIN/kafka-consumer-groups.sh" --bootstrap-server "$BS" --describe --group "$1" --members 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || return 1
+  printf '%s\n' "$out" | grep -q "CONSUMER-ID" || return 1
+  rows=$(under_header "$out" CONSUMER-ID)
+  printf '%s\n' "$rows" | grep -oE "$UUID_RE" | sort -u
+  return 0
 }
 # ATTRIBUTED evidence of a PARK, not merely of a call: a thread dump is triggered now and read back
 # from the last minute of the pod's stdout only. Per thread block whose NAME contains StreamThread,
@@ -388,7 +397,8 @@ unblock_group_offsets() {   # $1 = group; appends a line to $ABORTED_MARKER for 
   # more — "<group>-canary-<uuid>-<n>" belongs to another application and must not match
   owned=$(printf '%s\n' "$listing" | awk -v g="$g" -v u="$UUID_RE" '$1 ~ ("^" g "-" u "-[0-9]+$") { print $2, $1 }')
   [ -n "$owned" ] || { log "  $g: no transactional producer named for this group — no abort attempted"; return 0; }
-  live=$(live_processes "$g")
+  live=$(live_processes "$g") || { log "  $g: the members table could not be read — a failed read is not a member list; no abort attempted"; return 0; }
+  if [ -z "$live" ]; then log "  $g: a Stable group whose members table names no member is inconsistent — no abort attempted"; return 0; fi
   now_ms=$(( $(now_s) * 1000 ))
   rows=$(timeout "$CLI_TIMEOUT" "$KBIN/kafka-transactions.sh" --bootstrap-server "$BS" describe-producers --topic __consumer_offsets --partition "$part" 2>/dev/null)
   rows=$(columns "$rows" ProducerId LastTimestamp CurrentTransactionStartOffset); rc=$?
@@ -489,14 +499,14 @@ quiet=$(awk -v floor="$LAG_FLOOR" '
 
 if [ -z "$stuck" ]; then
   log "every group with lag on a moving source advanced — pipeline is moving"
-  [ "$DRY_RUN" = true ] || find "$STATEDIR" -maxdepth 1 \( -name '*.strikes' -o -name '*.observed' -o -name '*.wedge' -o -name '*.corrupt' -o -name '*.dead-*' \) -delete 2>/dev/null
+  [ "$DRY_RUN" = true ] || find "$STATEDIR" -maxdepth 1 \( -name '*.resets' -o -name '*.observed' -o -name '*.wedge' -o -name '*.corrupt' -o -name '*.dead-*' \) -delete 2>/dev/null
   log "=== self-heal done: nothing to do ==="
   exit 0
 fi
 if [ "$DRY_RUN" != true ]; then
-  for sf in "$STATEDIR"/*.strikes "$STATEDIR"/*.observed "$STATEDIR"/*.wedge "$STATEDIR"/*.corrupt "$STATEDIR"/*.dead-*; do
+  for sf in "$STATEDIR"/*.resets "$STATEDIR"/*.observed "$STATEDIR"/*.wedge "$STATEDIR"/*.corrupt "$STATEDIR"/*.dead-*; do
     [ -e "$sf" ] || continue
-    gname=$(basename "$sf"); gname=${gname%%.strikes}; gname=${gname%%.observed}; gname=${gname%%.wedge}; gname=${gname%%.corrupt}; gname=${gname%%.dead-*}
+    gname=$(basename "$sf"); gname=${gname%%.resets}; gname=${gname%%.observed}; gname=${gname%%.wedge}; gname=${gname%%.corrupt}; gname=${gname%%.dead-*}
     echo "$stuck" | awk -v g="$gname" '$1==g{f=1} END{exit !f}' || { log "  $gname recovered — clearing its history"; rm -f "$sf"; }
   done
 fi
@@ -534,18 +544,18 @@ hpa_on()  { $KUBECTL get hpa -o jsonpath='{range .items[*]}{.spec.scaleTargetRef
 # Anything ELSE that mounts, or is templated to mount, the same claim: a ReadWriteOnce local volume
 # is node-scoped, so on this single node a second pod can hold it while the target's pods are gone.
 claim_of()  { $KUBECTL get deploy "$1" -o jsonpath='{range .spec.template.spec.volumes[*]}{.persistentVolumeClaim.claimName}{"\n"}{end}' 2>/dev/null | grep -- '-streams-state$' | head -1; }
-other_users_of_claim() {   # $1 = claim, $2 = the deployment allowed to own it
-  local claim="$1" dep="$2" own
-  own=$(pods_of "$dep" | tr '\n' ' ')
-  $KUBECTL get pods -o jsonpath='{range .items[*]}{.metadata.name}{" "}{range .spec.volumes[*]}{.persistentVolumeClaim.claimName}{" "}{end}{"\n"}{end}' 2>/dev/null \
-    | awk -v c="$claim" -v own=" $own " '{ for (i = 2; i <= NF; i++) if ($i == c && index(own, " " $1 " ") == 0) print "pod/" $1 }'
-  local ownrs
-  ownrs=$($KUBECTL get rs -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.metadata.ownerReferences[0].kind}{"/"}{.metadata.ownerReferences[0].name}{"\n"}{end}' 2>/dev/null \
-          | awk -v d="Deployment/$dep" '$2==d {printf " ReplicaSet/%s", $1}')
-  $KUBECTL get deploy,sts,ds,jobs,rs,rc -o jsonpath='{range .items[*]}{.kind}{"/"}{.metadata.name}{" "}{range .spec.template.spec.volumes[*]}{.persistentVolumeClaim.claimName}{" "}{end}{"\n"}{end}' 2>/dev/null \
-    | awk -v c="$claim" -v d="Deployment/$dep" -v own="$ownrs " '{ for (i = 2; i <= NF; i++) if ($i == c && $1 != d && index(own, " " $1 " ") == 0) print $1 }'
-  $KUBECTL get cronjobs -o jsonpath='{range .items[*]}{"CronJob/"}{.metadata.name}{" "}{range .spec.jobTemplate.spec.template.spec.volumes[*]}{.persistentVolumeClaim.claimName}{" "}{end}{"\n"}{end}' 2>/dev/null \
-    | awk -v c="$claim" '{ for (i = 2; i <= NF; i++) if ($i == c) print $1 }'
+other_users_of_claim() {   # $1 = claim, $2 = the deployment allowed to own it; returns 1 if any listing failed
+  local claim="$1" dep="$2" own pl rsl ownrs wl cl
+  own=$(pods_of "$dep" | tr '\n' ' ') || return 1
+  pl=$($KUBECTL get pods -o jsonpath='{range .items[*]}{.metadata.name}{" "}{range .spec.volumes[*]}{.persistentVolumeClaim.claimName}{" "}{end}{"\n"}{end}' 2>/dev/null) || return 1
+  printf '%s\n' "$pl" | awk -v c="$claim" -v own=" $own " '{ for (i = 2; i <= NF; i++) if ($i == c && index(own, " " $1 " ") == 0) print "pod/" $1 }'
+  rsl=$($KUBECTL get rs -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.metadata.ownerReferences[0].kind}{"/"}{.metadata.ownerReferences[0].name}{"\n"}{end}' 2>/dev/null) || return 1
+  ownrs=$(printf '%s\n' "$rsl" | awk -v d="Deployment/$dep" '$2==d {printf " ReplicaSet/%s", $1}')
+  wl=$($KUBECTL get deploy,sts,ds,jobs,rs,rc -o jsonpath='{range .items[*]}{.kind}{"/"}{.metadata.name}{" "}{range .spec.template.spec.volumes[*]}{.persistentVolumeClaim.claimName}{" "}{end}{"\n"}{end}' 2>/dev/null) || return 1
+  printf '%s\n' "$wl" | awk -v c="$claim" -v d="Deployment/$dep" -v own="$ownrs " '{ for (i = 2; i <= NF; i++) if ($i == c && $1 != d && index(own, " " $1 " ") == 0) print $1 }'
+  cl=$($KUBECTL get cronjobs -o jsonpath='{range .items[*]}{"CronJob/"}{.metadata.name}{" "}{range .spec.jobTemplate.spec.template.spec.volumes[*]}{.persistentVolumeClaim.claimName}{" "}{end}{"\n"}{end}' 2>/dev/null) || return 1
+  printf '%s\n' "$cl" | awk -v c="$claim" '{ for (i = 2; i <= NF; i++) if ($i == c) print $1 }'
+  return 0
 }
 # A claim mounted with a subPath means the pod sees a SUBDIRECTORY of the volume: the PV root is
 # then not the state directory, and swapping it would take sibling data with it. Fail closed.
@@ -674,7 +684,7 @@ while read -r g lag delta srcdelta; do
   fi
   if [ -n "$alive" ]; then
     log "  $g -> $dep: NOT stuck — $alive. Left alone."
-    forget "$STATEDIR/${g}.strikes"; forget "$STATEDIR/${g}.observed"; forget "$STATEDIR/${g}.wedge"; forget "$STATEDIR/${g}.corrupt"
+    forget "$STATEDIR/${g}.resets"; forget "$STATEDIR/${g}.observed"; forget "$STATEDIR/${g}.wedge"; forget "$STATEDIR/${g}.corrupt"
     continue
   fi
 
@@ -738,14 +748,17 @@ while read -r g lag delta srcdelta; do
     log "  $g -> $dep: confirmed park ($wedge) with no abandoned transaction to abort — nothing is restarted by this script; this needs a human: $KUBECTL logs $(running_pod "$dep")"
     continue
   fi
-  f="$STATEDIR/${g}.strikes"; strikes=$(cat "$f" 2>/dev/null || echo 0); strikes=$((strikes+1))
-  remember "$f" "$strikes"
-  case "$strikes" in
+  # the reset is tried ONCE per incident: a corruption signature that comes back after a reset is a
+  # defect to investigate, not a reason to reset again
+  f="$STATEDIR/${g}.resets"; resets=$(cat "$f" 2>/dev/null || echo 0); resets=$((resets+1))
+  remember "$f" "$resets"
+  case "$resets" in
     1)
       if hpa_on "$dep"; then log "  $g -> $dep RESET withheld: an HPA targets this deployment — a state reset cannot be made safe beside an autoscaler"; continue; fi
       dir=$(state_dir_of "$dep" 2>/dev/null || true)
       if [ -z "$dir" ]; then log "  $g -> $dep RESET: no single streams-state volume resolves through its PVC under $STORAGE — NOT resetting anything"; continue; fi
-      others=$(other_users_of_claim "$(claim_of "$dep")" "$dep" | sort -u | tr '\n' ' ')
+      others=$(other_users_of_claim "$(claim_of "$dep")" "$dep") || { log "  $g -> $dep RESET withheld: a pod or workload listing FAILED — exclusivity cannot be established; NOT resetting"; continue; }
+      others=$(printf '%s\n' "$others" | awk 'NF' | sort -u | tr '\n' ' ')
       if [ -n "$others" ]; then log "  $g -> $dep RESET withheld: the claim is also mounted or templated by $others — the volume is not this deployment's alone; NOT resetting"; continue; fi
       if mounted_with_subpath "$dep" "$(claim_of "$dep")"; then log "  $g -> $dep RESET withheld: the claim is mounted with a subPath — the volume root is not the state directory; NOT resetting"; continue; fi
       why=$(streams_only_dir "$dir" "$g") || { log "  $g -> $dep RESET withheld: $dir holds something other than Kafka Streams state for $g (${why}) — the volume is not state-only; NOT resetting"; continue; }
@@ -755,18 +768,19 @@ while read -r g lag delta srcdelta; do
       if ! run $KUBECTL $SA scale "deploy/$dep" --replicas=0 >>"$LOG" 2>&1; then
         log "  $g -> $dep: scale to 0 FAILED — nothing reset; strike stands"; forget "$STATEDIR/${dep}.down"; continue
       fi
-      gone=false; waited=0
+      # "no pods" must be an ANSWER, not a failed question: a listing that fails is not "gone"
+      gone=false; listing=ok; waited=0
       while [ "$waited" -le "$POD_GONE_WAIT_SECONDS" ]; do
-        [ -z "$(pods_of "$dep")" ] && { gone=true; break; }
+        if pl=$(pods_of "$dep"); then [ -z "$pl" ] && { gone=true; break; }; else listing=failed; fi
         [ "$DRY_RUN" = true ] && { gone=true; break; }
         sleep 5; waited=$((waited+5))
       done
       if [ "$gone" != true ]; then
-        log "  $g -> $dep: a pod is still present after ${POD_GONE_WAIT_SECONDS}s — NOT resetting the state dir under a live pod"
-      elif [ "$DRY_RUN" != true ] && { [ "$(desired "$dep")" != 0 ] || [ -n "$(pods_of "$dep")" ]; }; then
-        log "  $g -> $dep: something scaled the deployment back up between the check and the reset — NOT resetting"
-      elif [ "$DRY_RUN" != true ] && [ -n "$(other_users_of_claim "$(claim_of "$dep")" "$dep")" ]; then
-        log "  $g -> $dep: another workload took the claim during the wait — NOT resetting"
+        log "  $g -> $dep: after ${POD_GONE_WAIT_SECONDS}s a pod is still present or the listing failed (${listing}) — NOT resetting the state dir under a possibly live pod"
+      elif [ "$DRY_RUN" != true ] && { [ "$(desired "$dep")" != 0 ] || ! pl=$(pods_of "$dep") || [ -n "$pl" ]; }; then
+        log "  $g -> $dep: something scaled the deployment back up (or the listing failed) between the check and the reset — NOT resetting"
+      elif [ "$DRY_RUN" != true ] && { ! ou=$(other_users_of_claim "$(claim_of "$dep")" "$dep") || [ -n "$ou" ]; }; then
+        log "  $g -> $dep: another workload took the claim during the wait (or the listing failed) — NOT resetting"
       elif [ "$DRY_RUN" = true ]; then
         log "DRY: swap $dir aside and recreate it empty"
       else
@@ -777,13 +791,14 @@ while read -r g lag delta srcdelta; do
           log "  $g -> $dep: $dir is now empty; old tree parked at $aside"
           # anything that bound the OLD tree during the swap window is stopped, and waited for,
           # before that tree is deleted — the deletion never runs under a live process
-          intruder=$(pods_of "$dep")
+          intruder=$(pods_of "$dep") || intruder=""
           if [ -n "$intruder" ]; then
             log "  $g -> $dep: CRITICAL — pod(s) $(echo $intruder | tr '\n' ' ') appeared DURING the reset: something other than this script scales this deployment. Stopping them before the old tree is removed."
             for p in $intruder; do run $KUBECTL $SA delete pod "$p" --wait=true --timeout=120s >>"$LOG" 2>&1; done
           fi
-          holders=$(other_users_of_claim "$(claim_of "$dep")" "$dep" | grep '^pod/' | tr '\n' ' ')
-          if [ -n "$(pods_of "$dep")" ] || [ -n "$holders" ]; then
+          holders=$(other_users_of_claim "$(claim_of "$dep")" "$dep") || holders="(listing failed)"
+          holders=$(printf '%s\n' "$holders" | grep -E '^pod/|listing failed' | tr '\n' ' ')
+          if ! pl=$(pods_of "$dep") || [ -n "$pl" ] || [ -n "$holders" ]; then
             log "  $g -> $dep: something still holds the claim after the swap (${holders:-own pod}) — the old tree stays parked at $aside for a human; not deleting under it"
           elif find "$aside" -xdev -mindepth 1 -delete && rmdir "$aside"; then
             log "  $g -> $dep: old tree removed"
