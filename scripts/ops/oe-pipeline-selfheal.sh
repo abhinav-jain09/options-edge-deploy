@@ -362,7 +362,8 @@ for line in sys.stdin:
 # A corrupt store does not merely log — it stops the app: the container crash-loops or the pod is
 # not Ready. A StateUpdater that restores silently, reusing files so du never grows, may log the same
 # exception text while it is in fact recovering; so a corruption episode counts only when the Streams
-# container's restartCount grew since the previous observation, or the pod is not Ready. Prints
+# container's restartCount GREW since the previous observation — readiness alone attributes nothing,
+# a probe can fail for an unrelated dependency. Prints
 # "<restartCount> <ready>" for the deployment's Running pod; nothing if it cannot be read.
 crash_state() {   # $1 = deployment
   local pod c
@@ -462,9 +463,13 @@ abort_dead_data_transactions() {   # $1 = group, $2 = producerId proven dead
 }
 
 # ---------- phase 2: candidates — groups that did not commit while their source moved ----------
-sample() {
-  timeout 300 "$KBIN/kafka-consumer-groups.sh" --bootstrap-server "$BS" --describe --all-groups 2>/dev/null \
-  | awk 'NF>=6 && $1!="GROUP" && $4 ~ /^[0-9]+$/ && $5 ~ /^[0-9]+$/ && $6 ~ /^[0-9]+$/ {cur[$1]+=$4; end[$1]+=$5; lag[$1]+=$6}
+# A sample is only a sample if the command that produced it succeeded: a describe that fails
+# half-way can still print parseable, stale rows, and a stale row looks exactly like a stall.
+sample() {   # returns 1 when the describe failed; the caller judges nothing this cycle
+  local out rc
+  out=$(timeout 300 "$KBIN/kafka-consumer-groups.sh" --bootstrap-server "$BS" --describe --all-groups 2>/dev/null); rc=$?
+  [ "$rc" -eq 0 ] || return 1
+  printf '%s\n' "$out" | awk 'NF>=6 && $1!="GROUP" && $4 ~ /^[0-9]+$/ && $5 ~ /^[0-9]+$/ && $6 ~ /^[0-9]+$/ {cur[$1]+=$4; end[$1]+=$5; lag[$1]+=$6}
          END{for (g in cur) printf "%s %d %d %d\n", g, cur[g], end[g], lag[g]}'
 }
 statesizes() { du -sk "$STORAGE"/*_options-edge_*-streams-state 2>/dev/null | awk '{print $2" "$1}'; }
@@ -485,10 +490,10 @@ rxsizes() {
 # committed sum at the end of every cycle is remembered, and a group whose committed sum moved since
 # the previous cycle is progress, whatever the two samples inside this cycle say.
 OFFSETS_MEMO="$STATEDIR/committed.last"
-log "sampling committed offsets (t0)"; s0=$(sample); d0=$(statesizes); r0=$(rxsizes)
+log "sampling committed offsets (t0)"; s0=$(sample) || { log "the consumer-group describe FAILED at t0 — a failed sample is not a sample; nothing judged this cycle"; exit 0; }; d0=$(statesizes); r0=$(rxsizes)
 [ -z "$s0" ] && { log "no consumer groups reported offsets — nothing to judge"; exit 0; }
 sleep "$SAMPLE_SECONDS"
-log "sampling committed offsets (t1, +${SAMPLE_SECONDS}s)"; s1=$(sample); d1=$(statesizes); r1=$(rxsizes)
+log "sampling committed offsets (t1, +${SAMPLE_SECONDS}s)"; s1=$(sample) || { log "the consumer-group describe FAILED at t1 — a failed sample is not a sample; nothing judged this cycle"; exit 0; }; d1=$(statesizes); r1=$(rxsizes)
 
 memo=$(cat "$OFFSETS_MEMO" 2>/dev/null || true)
 stuck=$(awk -v floor="$LAG_FLOOR" -v exempt=" $EXEMPT_GROUPS " -v memo="$memo" '
@@ -735,8 +740,10 @@ while read -r g lag delta srcdelta; do
     remember "$STATEDIR/${g}.crash" "$(now_s) 1 ${rc_now:-?}"
     if [ -z "${rc_now:-}" ]; then
       log "  $g -> $dep: container log shows $corrupt but the container's restart count could not be read — not counted"
-    elif [ "$ready_now" = "True" ] && { [ "$rc_prev" = "-" ] || [ "$rc_now" = "$rc_prev" ]; }; then
-      log "  $g -> $dep: container log shows $corrupt but the pod is Ready and its restart count is unchanged ($rc_now) — a running app is not a corrupt store; not counted"
+    elif [ "$rc_prev" = "-" ] || [ "${rc_now:-0}" -le "${rc_prev:-0}" ] 2>/dev/null; then
+      # readiness alone attributes nothing — a probe can fail for an unrelated dependency; only a
+      # container that has RESTARTED since the previous observation shows the store stopped it
+      log "  $g -> $dep: container log shows $corrupt but the container has not restarted since the previous observation (restarts $rc_prev -> $rc_now, ready=$ready_now) — a store that stops the app restarts it; not counted"
       forget "$STATEDIR/${g}.corrupt"
     else
       case "$(persist "$STATEDIR/${g}.corrupt" "$corrupt" 2)" in

@@ -69,7 +69,7 @@ def _sandbox(tmp_path, *, group=GROUP, replicas="1", pod_age=258, restoring=Fals
              init_sub_path=False, shared_claim_rs=False, foreign_file=False, nested_foreign=False,
              corrupt_stale=False, symlink_inside=False, members_fail=False, pods_fail_after_scale=False, workload_fail=False,
              hpa_fail=False, init_query_fail=False, list_fail_with_header=False, describe_fail_with_header=False,
-             crashlooping=False,
+             crashlooping=False, not_ready=False, allgroups_fail=False,
              sidecar=False, sidecar_corrupt=False, old_pod_first=False, kafka_down=False, sidecar_mounts=False):
     """A fake estate: one consumer group with lag, one deployment (plus an optional look-alike),
     pods owned through ReplicaSets, one PV. Every stub is a list of bash lines."""
@@ -152,7 +152,7 @@ def _sandbox(tmp_path, *, group=GROUP, replicas="1", pod_age=258, restoring=Fals
          f'  "get pod "*" -o jsonpath="*"containers"*) [ "{int(sidecar)}" = 1 ] && echo "log-shipper"; echo "app" ;;',
          '  "get pod "*" -o jsonpath="*"restartCount"*)',
          f'      n=0; [ -f "{tmp_path}/crashreads" ] && n=$(cat "{tmp_path}/crashreads"); n=$((n+1)); echo "$n" > "{tmp_path}/crashreads"',
-         f'      if [ "{int(crashlooping)}" = 1 ]; then printf "%s False" "$((10 + n))"; else printf "3 True"; fi ;;',
+         f'      if [ "{int(crashlooping)}" = 1 ]; then printf "%s False" "$((10 + n))"; elif [ "{int(not_ready)}" = 1 ]; then printf "3 False"; else printf "3 True"; fi ;;',
          f'  "exec {POD} --container app -- kill -3 1") touch "{dumped}" ;;',
          f'  "exec {DECOY_POD} --container app -- kill -3 1") touch "{dumped}-decoy" ;;',
          '  "exec "*" -- kill -3 1") echo "container-less exec refused" >&2; exit 2 ;;',
@@ -242,7 +242,8 @@ def _sandbox(tmp_path, *, group=GROUP, replicas="1", pod_age=258, restoring=Fals
           # commit_between: the consumer commits once between every pair of cycles (after t1, before the next t0)
           f'cycle=$(( (n-1)/2 )); cur=$((1000 + (n-1)*{advance} + cycle*{commit_between})); end=$((1000 + {lag} + (n-1)*{source_advance}))',
           'echo "GROUP TOPIC PARTITION CURRENT-OFFSET LOG-END-OFFSET LAG CONSUMER-ID HOST CLIENT-ID"',
-          f'echo "{group} t 0 $cur $end $((end-cur)) c h cl"']
+          f'echo "{group} t 0 $cur $end $((end-cur)) c h cl"',
+          f'[ "{int(allgroups_fail)}" = 1 ] && {{ echo "Error: coordinator not available" >&2; exit 1; }}; true']
     _script(kbin / "kafka-consumer-groups.sh", cg)
 
     env = dict(os.environ)
@@ -927,8 +928,25 @@ def test_a_silently_restoring_ready_app_that_logs_the_exception_is_never_counted
     env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, crashlooping=False)
     _seed(env, resets=1, corrupt=CORRUPT_SIG)
     out = _escalate(env, 4)
-    assert "a running app is not a corrupt store; not counted" in out
+    assert "has not restarted since the previous observation" in out and "not counted" in out
     assert Path(env["_MARKER"]).exists() and "--replicas=0" not in _acted(actions)
+
+
+def test_a_not_ready_pod_with_an_unchanged_restart_count_is_never_counted_as_corrupt(tmp_path):
+    """The readiness probe fails for an unrelated dependency while the app logs the exception and
+    keeps recovering: readiness alone attributes nothing to the store."""
+    env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, not_ready=True)
+    _seed(env, resets=1, corrupt=CORRUPT_SIG)
+    out = _escalate(env, 4)
+    assert "has not restarted since the previous observation" in out
+    assert Path(env["_MARKER"]).exists() and "--replicas=0" not in _acted(actions)
+
+
+def test_a_failed_all_groups_sample_with_parseable_rows_judges_nothing(tmp_path):
+    env, actions = _sandbox(tmp_path, allgroups_fail=True)
+    out = _escalate(env, 5)
+    assert "a failed sample is not a sample" in out and "STALLED" not in out
+    assert _no_abort(env) and _acted(actions) == ""
 
 
 def test_mutation_the_same_lines_from_a_crash_looping_pod_are_counted(tmp_path):
