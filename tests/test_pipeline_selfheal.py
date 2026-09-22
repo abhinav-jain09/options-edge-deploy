@@ -302,10 +302,13 @@ def test_a_live_transaction_initialisation_is_not_a_wedge(tmp_path):
     assert _acted(actions) == "", "restarted a healthy transactional producer"
 
 
-def test_mutation_the_same_initialisation_with_repeated_timeouts_is_a_wedge(tmp_path):
+def test_mutation_the_same_initialisation_with_repeated_timeouts_is_a_confirmed_park_but_never_restarted(tmp_path):
+    """With retry lines it IS a park (unlike the live case above) — and still no restart, opt-in or
+    not: the transaction coordinator's health cannot be judged from this host."""
     env, actions = _sandbox(tmp_path, wedge=INIT_DUMP, retry_lines=3)
-    _escalate(env, 3)
-    assert f"rollout restart deploy/{DEPLOY}" in _acted(actions)
+    out = _escalate(env, 4, RESTART_ON_PARK="true")
+    assert "confirmed initTransactions park" in out and "NOT restarted" in out
+    assert _acted(actions) == ""
 
 
 def test_a_historical_log_line_mentioning_the_wedge_word_is_not_evidence(tmp_path):
@@ -580,9 +583,11 @@ def test_it_stays_quiet_when_kafka_is_not_answering_yet(tmp_path):
 
 
 def test_a_failed_find_hanging_is_reported_not_read_as_none(tmp_path):
-    env, _ = _sandbox(tmp_path, hanging_fail=True)
-    out = _run(env)
-    assert "find-hanging FAILED" in out and "hanging transactions: none" not in out
+    env, actions = _sandbox(tmp_path, hanging_fail=True, open_tx_age_minutes=145, tx_proc=DEAD_PROC, members=(LIVE_PROC,))
+    out = _escalate(env, 4)
+    assert "find-hanging FAILED" in out and "find-hanging: nothing listed" not in out
+    assert "options.databento.normalized" not in (Path(env["_ABORTS"]).read_text() if Path(env["_ABORTS"]).exists() else "")
+    assert _acted(actions) == ""
 
 
 def test_a_second_instance_leaves_while_the_first_is_alive(tmp_path):

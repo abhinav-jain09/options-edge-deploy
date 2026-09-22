@@ -93,7 +93,9 @@ WEDGE_CYCLES="${WEDGE_CYCLES:-3}"        # consecutive cycles the SAME park must
                                          # with CONFIRM_CYCLES this is an hour of zero commits against a
                                          # moving source while parked in the same retry loop
 RETRY_LINES_MIN="${RETRY_LINES_MIN:-2}"  # initTransactions counts as a wedge only with this many retry lines in 10 min
-RESTART_ON_PARK="${RESTART_ON_PARK:-false}"  # strike 1 (rollout restart on a confirmed park) is OPT-IN: on
+RESTART_ON_PARK="${RESTART_ON_PARK:-false}"  # strike 1 (rollout restart on a confirmed fetchCommittedOffsets park
+                                         # whose group coordinator answers Stable) is OPT-IN; an
+                                         # initTransactions park is never restarted automatically. On
                                          # 2026-09-21 the abort fixed the incident and two restarts fixed
                                          # nothing; a restart of a healthy slow consumer can never be ruled
                                          # out from the outside, so it is a decision, not a default
@@ -699,6 +701,15 @@ while read -r g lag delta srcdelta; do
   remember "$f" "$strikes"
   case "$strikes" in
     1)
+      # an initTransactions park is never restarted, opt-in or not: the producer's TRANSACTION
+      # coordinator partition may be the thing that is unavailable, and that is not observable from
+      # this host — the group coordinator answering says nothing about it. Reported for a human.
+      case ",$wedge," in *,initTransactions,*)
+        if [ "$wedge" = "initTransactions" ]; then
+          log "  $g -> $dep: confirmed initTransactions park — the transaction coordinator's health cannot be judged from here, so this is NOT restarted; it needs a human: $KUBECTL logs $(running_pod "$dep")"
+          remember "$f" 0; continue
+        fi ;;
+      esac
       if [ "$RESTART_ON_PARK" != true ]; then
         log "  $g -> $dep: confirmed park ($wedge) with no abandoned transaction to abort — a restart is NOT taken (RESTART_ON_PARK=false): this needs a human: $KUBECTL logs $(running_pod "$dep")"
         remember "$f" 0; continue
