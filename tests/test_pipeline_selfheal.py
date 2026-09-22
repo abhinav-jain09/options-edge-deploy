@@ -161,7 +161,7 @@ def _sandbox(tmp_path, *, group=GROUP, replicas="1", pod_age=258, restoring=Fals
          '      echo "Inter-|   Receive"; echo " face |bytes"',
          '      echo "    lo: 999999 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0"',
          f'      echo "  eth0: $(( 1000000 + c * {rx_kib} * 1024 )) 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0" ;;',
-         f'  "logs {POD} --container app --since=1m") echo app >> "{tmp_path}/logs-read"; [ -f "{dumped}" ] && cat "{tmp_path}/dump.txt"; true ;;',
+         f'  "logs {POD} --container app --since=1m") echo app >> "{tmp_path}/logs-read"; echo "{hist_line}"; [ -f "{dumped}" ] && cat "{tmp_path}/dump.txt"; true ;;',
          f'  "logs {DECOY_POD} --container app --since=1m") echo app >> "{tmp_path}/logs-read"; [ -f "{dumped}-decoy" ] && cat "{tmp_path}/decoy-dump.txt"; true ;;',
          f'  "logs {POD} --container app --since=10m --timestamps")',
          # prod-shaped: local offset, nanoseconds (kubectl --timestamps on the host prints +02:00 and 9 digits)
@@ -363,6 +363,8 @@ def test_mutation_the_same_initialisation_with_repeated_timeouts_is_a_confirmed_
 
 
 def test_a_historical_log_line_mentioning_the_wedge_word_is_not_evidence(tmp_path):
+    """The line sits in the very window the detector reads (--since=1m), carrying both the frame
+    word and a sleep word — and it is a log line, not a stack frame under a StreamThread."""
     env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP,
                             hist_line="WARN ConsumerCoordinator - fetchCommittedOffsets timed out (retrying) Thread.sleep")
     _escalate(env, 5)
