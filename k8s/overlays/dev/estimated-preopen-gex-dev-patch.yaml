@@ -1,0 +1,46 @@
+# DEV-ONLY: Task C, the estimated pre-open GEX scheduler (options-edge-processing PR #886).
+# Publishes MODELED GEX for the window before oiPollStart (06:30 ET) using the validated 1DTE
+# next-publication OI estimator (gex-backtest/oi-study-harness/daily_next_oi.py — median error
+# 0.1447 vs 0.5214 for a naive carry-forward, confirmed 30/30 sessions), which writes to
+# options_flow_dev.options_flow.oi_next_publication. That table currently exists ONLY on dev — this
+# is deliberately dev-only; prod is meant to receive the estimate's output FROM dev (a topic mirror,
+# not its own scheduler/estimator), which is a separate piece of work, not this patch.
+#
+# Fully independent of the R-PREOPEN one-live-publisher selection above (databento-gex-preopen-dev-
+# patch.yaml / ibkr-preopen-gate-dev-patch.yaml): Task C owns its own NBBO capture (a distinct ledger
+# task, TASK_ESTIMATE_CAPTURE) rather than depending on Task A's, specifically BECAUSE
+# PREOPEN_GEX_ENABLED renders false on dev today (verified via kubectl 2026-09-21) — Task A's own
+# capture never fires here, so a design depending on it would be silently starved. Task C also
+# publishes to its OWN topic (never gexTopic()/IBKR's LIVE_TOPIC/SHADOW_TOPIC — refused at startup
+# if misconfigured to collide), so it cannot interact with the R-PREOPEN invariant at all.
+#
+# Fail-soft like every other pre-open scheduler here: PREOPEN_ESTIMATED_GEX_ENABLED defaults false
+# in code, so a missing/misconfigured value never crashes the live GEX service.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: databento-gex-service
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: databento-gex
+          env:
+            - { name: PREOPEN_ESTIMATED_GEX_ENABLED, value: "true" }
+            # Left at code defaults deliberately: WINDOW_START=20:00, HARD_STOP=06:30 (the immutable
+            # ceiling — code refuses a later value), WAKE_AT=21:00, TOPIC=options.ibkr.gex.strike.estimate.
+            #
+            # The one value that MUST be set explicitly: the estimator's table lives in a SEPARATE
+            # Postgres database (options_flow_dev) from this service's own connection, and
+            # EstimatedOiBoardReader defaults to a BLANK URL on purpose (stays off until pointed
+            # somewhere explicitly — a careless default here was Codex round-1 HIGH on PR #886).
+            # host.docker.internal is the same address the dev configmap already uses for the Mac's
+            # local Postgres (see k8s/infra/overlays/dev/configmap-dev-local-patch.yaml).
+            - { name: PREOPEN_ESTIMATED_OI_JDBC_URL, value: "jdbc:postgresql://host.docker.internal:5432/options_flow_dev" }
+            - { name: PREOPEN_ESTIMATED_OI_USER, value: "options_flow" }
+            - name: PREOPEN_ESTIMATED_OI_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: options-edge-runtime-secrets
+                  key: POSTGRES_PASSWORD
