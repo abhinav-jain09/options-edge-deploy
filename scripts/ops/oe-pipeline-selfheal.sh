@@ -39,23 +39,20 @@
 #              group reports Stable (a rebalance hides live members, so a rebalancing group is never
 #              judged), plus the wedge above, plus STALE_TX_MINUTES of silence.
 #
-#   the abort   fixes the offset wedge without touching the service
-#   strike 1    rollout restart      — needs the wedge
-#   strike 2    reset the state dir  — needs the corruption signature; PVC kept, the directory is
+#   the abort   fixes the offset wedge without touching the service — the only action on a park
+#   the reset    empties the state dir on a confirmed corruption signature; PVC kept, the directory
 #               SWAPPED for an empty one atomically (rename aside, recreate) so no process can ever
-#               observe a half-deleted tree, and the old tree is deleted only after every pod that
-#               could have bound it is gone
-#   otherwise   the stall is logged loudly and NOTHING is touched. A fault this script cannot name
-#               is a human's call, not a restart.
+#               observe a half-deleted tree, and the old tree deleted only after every pod that
+#               could have bound it is gone; tried once per incident
+#   otherwise   the stall is logged loudly and NOTHING is touched. A confirmed park with nothing to
+#               abort, a corruption that a reset did not clear, a fault this script cannot name —
+#               each is a human's call, not an automated restart.
 #
-# By default NOTHING is restarted: the abort (which fixed the 2026-09-21 incident outright, where two
-# restarts had fixed nothing) and the corruption reset (which needs a crash signature in the
-# container's own log) are the only actions. A confirmed park with nothing to abort is reported for
-# a human. RESTART_ON_PARK=true opts strike 1 in, with this stated residual: a service that commits
-# nothing for CONFIRM_CYCLES+WEDGE_CYCLES cycles (an hour) against a moving source, receives no fetch
-# traffic, and is parked in the same coordinator retry loop on WEDGE_CYCLES consecutive dumps while
-# that coordinator answers, is restarted — indistinguishable from a wedge by any signal this host
-# can read.
+# NOTHING IS EVER RESTARTED BY THIS SCRIPT. On 2026-09-21 two rollout restarts fixed nothing and
+# restarted restorations; the abort fixed the incident outright. A restart of a healthy service —
+# a slow committer, a partially progressing multi-thread app, a broker-side coordinator incident —
+# can never be ruled out from outside the process, so restart remediation is manual, on the
+# evidence this script writes to its log.
 #
 # Group → deployment is an exact transformation or an explicit mapping, never a fuzzy match; pods
 # are the deployment's own, through ReplicaSet ownerReferences, never by name prefix.
@@ -95,12 +92,6 @@ WEDGE_CYCLES="${WEDGE_CYCLES:-3}"        # consecutive cycles the SAME park must
                                          # with CONFIRM_CYCLES this is an hour of zero commits against a
                                          # moving source while parked in the same retry loop
 RETRY_LINES_MIN="${RETRY_LINES_MIN:-2}"  # initTransactions counts as a wedge only with this many retry lines in 10 min
-RESTART_ON_PARK="${RESTART_ON_PARK:-false}"  # strike 1 (rollout restart on a confirmed fetchCommittedOffsets park
-                                         # whose group coordinator answers Stable) is OPT-IN; an
-                                         # initTransactions park is never restarted automatically. On
-                                         # 2026-09-21 the abort fixed the incident and two restarts fixed
-                                         # nothing; a restart of a healthy slow consumer can never be ruled
-                                         # out from the outside, so it is a decision, not a default
 RX_ALIVE_KIB="${RX_ALIVE_KIB:-512}"      # bytes a pod must RECEIVE across the sample window to count as fetching:
                                          # measured 2026-09-22, a live consumer of a small topic pulls ~1.3 MiB
                                          # per 30 s and a busy one ~14 MiB; a parked one only heartbeats
@@ -741,46 +732,26 @@ while read -r g lag delta srcdelta; do
     if [ -s "$ABORTED_MARKER" ]; then log "  $g -> $dep: transaction aborted; not restarting this cycle — next check decides"; forget "$STATEDIR/${g}.wedge"; continue; fi
     # a restart now would replace the very process whose absence is being confirmed, and reset the
     # wedge evidence with it; the abort is the gentler fix, so it gets its confirming cycle first
-    if [ "$PENDING_DEAD" = 1 ]; then log "  $g -> $dep: an abandoned-transaction verdict is pending — holding the restart for one cycle"; continue; fi ;;
+    if [ "$PENDING_DEAD" = 1 ]; then log "  $g -> $dep: an abandoned-transaction verdict is pending — next cycle decides"; continue; fi ;;
   esac
 
-  f="$STATEDIR/${g}.strikes"; strikes=$(cat "$f" 2>/dev/null || echo 0); strikes=$((strikes+1))
-  # corruption without a wedge does not call for a restart: the restart is skipped and the evidence
-  # goes straight to the state check
-  if [ "$strikes" = 1 ] && [ -z "$wedge" ]; then
-    log "  $g -> $dep STRIKE 1 skipped: corruption without a wedge — a restart is not what the evidence calls for; state check instead"
-    strikes=2
+  if [ -z "$corruption" ]; then
+    log "  $g -> $dep: confirmed park ($wedge) with no abandoned transaction to abort — nothing is restarted by this script; this needs a human: $KUBECTL logs $(running_pod "$dep")"
+    continue
   fi
+  f="$STATEDIR/${g}.strikes"; strikes=$(cat "$f" 2>/dev/null || echo 0); strikes=$((strikes+1))
   remember "$f" "$strikes"
   case "$strikes" in
     1)
-      # an initTransactions park is never restarted, opt-in or not: the producer's TRANSACTION
-      # coordinator partition may be the thing that is unavailable, and that is not observable from
-      # this host — the group coordinator answering says nothing about it. Reported for a human.
-      case ",$wedge," in *,initTransactions,*)
-        log "  $g -> $dep: confirmed park includes initTransactions ($wedge) — the transaction coordinator's health cannot be judged from here, so this is NOT restarted; it needs a human: $KUBECTL logs $(running_pod "$dep")"
-        remember "$f" 0; continue ;;
-      esac
-      if [ "$RESTART_ON_PARK" != true ]; then
-        log "  $g -> $dep: confirmed park ($wedge) with no abandoned transaction to abort — a restart is NOT taken (RESTART_ON_PARK=false): this needs a human: $KUBECTL logs $(running_pod "$dep")"
-        remember "$f" 0; continue
-      fi
-      log "  $g -> $dep STRIKE 1: rollout restart (new producer epoch; clears an epoch fight or a wedged rebalance) — evidence: $wedge"
-      run $KUBECTL $SA rollout restart "deploy/$dep" 2>&1 | tee -a "$LOG"; forget "$STATEDIR/${g}.wedge" ;;
-    2)
-      if [ -z "$corruption" ]; then
-        log "  $g -> $dep STRIKE 2 withheld: a restart did not help and there is NO confirmed state-corruption signature — a state reset would not be justified by evidence. Not touched again; investigate $dep."
-        continue
-      fi
-      if hpa_on "$dep"; then log "  $g -> $dep STRIKE 2 withheld: an HPA targets this deployment — a state reset cannot be made safe beside an autoscaler"; continue; fi
+      if hpa_on "$dep"; then log "  $g -> $dep RESET withheld: an HPA targets this deployment — a state reset cannot be made safe beside an autoscaler"; continue; fi
       dir=$(state_dir_of "$dep" 2>/dev/null || true)
-      if [ -z "$dir" ]; then log "  $g -> $dep STRIKE 2: no single streams-state volume resolves through its PVC under $STORAGE — NOT resetting anything"; continue; fi
+      if [ -z "$dir" ]; then log "  $g -> $dep RESET: no single streams-state volume resolves through its PVC under $STORAGE — NOT resetting anything"; continue; fi
       others=$(other_users_of_claim "$(claim_of "$dep")" "$dep" | sort -u | tr '\n' ' ')
-      if [ -n "$others" ]; then log "  $g -> $dep STRIKE 2 withheld: the claim is also mounted or templated by $others — the volume is not this deployment's alone; NOT resetting"; continue; fi
-      if mounted_with_subpath "$dep" "$(claim_of "$dep")"; then log "  $g -> $dep STRIKE 2 withheld: the claim is mounted with a subPath — the volume root is not the state directory; NOT resetting"; continue; fi
-      why=$(streams_only_dir "$dir" "$g") || { log "  $g -> $dep STRIKE 2 withheld: $dir holds something other than Kafka Streams state for $g (${why}) — the volume is not state-only; NOT resetting"; continue; }
-      if ! same_filesystem "$dir"; then log "  $g -> $dep STRIKE 2 withheld: $dir is a mount point of its own — NOT resetting a mounted filesystem"; continue; fi
-      log "  $g -> $dep STRIKE 2: confirmed state-corruption signature ($corruption) — scaling $reps->0, swapping $dir for an empty directory, scaling back to $reps"
+      if [ -n "$others" ]; then log "  $g -> $dep RESET withheld: the claim is also mounted or templated by $others — the volume is not this deployment's alone; NOT resetting"; continue; fi
+      if mounted_with_subpath "$dep" "$(claim_of "$dep")"; then log "  $g -> $dep RESET withheld: the claim is mounted with a subPath — the volume root is not the state directory; NOT resetting"; continue; fi
+      why=$(streams_only_dir "$dir" "$g") || { log "  $g -> $dep RESET withheld: $dir holds something other than Kafka Streams state for $g (${why}) — the volume is not state-only; NOT resetting"; continue; }
+      if ! same_filesystem "$dir"; then log "  $g -> $dep RESET withheld: $dir is a mount point of its own — NOT resetting a mounted filesystem"; continue; fi
+      log "  $g -> $dep RESET: confirmed state-corruption signature ($corruption) — scaling $reps->0, swapping $dir for an empty directory, scaling back to $reps"
       remember "$STATEDIR/${dep}.down" "$reps"
       if ! run $KUBECTL $SA scale "deploy/$dep" --replicas=0 >>"$LOG" 2>&1; then
         log "  $g -> $dep: scale to 0 FAILED — nothing reset; strike stands"; forget "$STATEDIR/${dep}.down"; continue
@@ -829,7 +800,7 @@ while read -r g lag delta srcdelta; do
       if [ "$restored" = true ]; then forget "$STATEDIR/${dep}.down"; forget "$STATEDIR/${g}.corrupt"; log "  $g -> $dep: scaled back to $reps"
       else log "  $g -> $dep: SCALE BACK TO $reps FAILED THREE TIMES — deployment is at 0; marker kept, every later run retries until it succeeds. Scale it by hand: $KUBECTL $SA scale deploy/$dep --replicas=$reps"; fi ;;
     *)
-      log "  $g -> $dep STRIKE $strikes: a restart AND a state reset both failed — this is a DEFECT, not a transient. Not touching it again; investigate $dep." ;;
+      log "  $g -> $dep: the corruption signature is back after a state reset — this is a DEFECT, not a transient. Not touching it again; investigate $dep." ;;
   esac
 done <<<"$stuck"
 

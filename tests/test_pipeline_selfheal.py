@@ -57,7 +57,7 @@ def _table(headers, rows):
 
 def _sandbox(tmp_path, *, group=GROUP, replicas="1", pod_age=258, restoring=False, lag=1_900_000,
              advance=0, source_advance=50_000, grow_state=False, wedge=WEDGE_DUMP, corrupt=False,
-             hist_line="", retry_lines=0, decoy=False, open_tx_age_minutes=None, tx_id=None,
+             hist_line="", retry_lines=0, decoy=False, open_tx_age_minutes=145, tx_id=None,
              tx_proc=DEAD_PROC, members=(LIVE_PROC,), group_state="Stable", no_header_for="",
              abort_fail=False, hanging_fail=False, scale_fail_to="", pods_linger=False,
              find_fail=False, stale_twin=False, pv_path_override=None, extra_claim=False,
@@ -244,7 +244,6 @@ def _sandbox(tmp_path, *, group=GROUP, replicas="1", pod_age=258, restoring=Fals
         LOG=str(tmp_path / "selfheal.log"), STATEDIR=str(tmp_path / "state"),
         SAMPLE_SECONDS="1", LAG_FLOOR="2000", LOAD_CEILING="9999", CONFIRM_CYCLES="2",
         EVIDENCE_MIN_SECONDS="0", DUMP_SETTLE_SECONDS="0", POD_GONE_WAIT_SECONDS="5", WEDGE_CYCLES="2",
-        RESTART_ON_PARK="true",
         _ABORTS=str(aborts), _PV=str(pv_path), _MARKER=str(marker), _STORAGE=str(storage), _DUMPED=str(dumped), _GROUP=group,
     )
     return env, actions
@@ -305,18 +304,19 @@ def test_a_live_fetch_without_a_sleep_frame_is_not_a_park(tmp_path):
 
 def test_mutation_the_same_fetch_with_the_retry_sleep_is_a_park(tmp_path):
     env, actions = _sandbox(tmp_path, wedge=WEDGE_DUMP)
-    _escalate(env, 3)
-    assert f"rollout restart deploy/{DEPLOY}" in _acted(actions)
+    _escalate(env, 4)
+    assert Path(env["_ABORTS"]).exists(), "the abort — the one automated action on a park — did not happen"
 
 
 def test_a_mixed_park_with_any_init_transactions_component_is_never_restarted(tmp_path):
     """Two StreamThreads in one dump: one in the fetch retry sleep, one in initTransactions with
     retry lines — the initTransactions component alone rules the restart out."""
     mixed = WEDGE_DUMP + f'"{GROUP}-{LIVE_PROC}-StreamThread-2" #56 prio=5 waiting on condition\n' + PARK + INIT
-    env, actions = _sandbox(tmp_path, wedge=mixed, retry_lines=3)
-    out = _escalate(env, 4, RESTART_ON_PARK="true")
-    assert "confirmed park includes initTransactions (fetchCommittedOffsets,initTransactions)" in out
-    assert _acted(actions) == ""
+    env, actions = _sandbox(tmp_path, wedge=mixed, retry_lines=3, open_tx_age_minutes=None)
+    out = _escalate(env, 5)
+    assert "confirmed park (fetchCommittedOffsets,initTransactions) with no abandoned transaction to abort" in out
+    assert "nothing is restarted by this script" in out
+    assert _acted(actions) == "" and not Path(env["_ABORTS"]).exists()
 
 
 def test_a_stalled_observation_from_long_ago_does_not_count_as_consecutive(tmp_path):
@@ -337,10 +337,10 @@ def test_a_live_transaction_initialisation_is_not_a_wedge(tmp_path):
 def test_mutation_the_same_initialisation_with_repeated_timeouts_is_a_confirmed_park_but_never_restarted(tmp_path):
     """With retry lines it IS a park (unlike the live case above) — and still no restart, opt-in or
     not: the transaction coordinator's health cannot be judged from this host."""
-    env, actions = _sandbox(tmp_path, wedge=INIT_DUMP, retry_lines=3)
-    out = _escalate(env, 4, RESTART_ON_PARK="true")
-    assert "confirmed park includes initTransactions" in out and "NOT restarted" in out
-    assert _acted(actions) == ""
+    env, actions = _sandbox(tmp_path, wedge=INIT_DUMP, retry_lines=3, open_tx_age_minutes=None)
+    out = _escalate(env, 5)
+    assert "confirmed park (initTransactions) with no abandoned transaction to abort" in out
+    assert _acted(actions) == "" and not Path(env["_ABORTS"]).exists()
 
 
 def test_a_historical_log_line_mentioning_the_wedge_word_is_not_evidence(tmp_path):
@@ -366,8 +366,8 @@ def test_evidence_from_a_look_alike_deployments_pod_is_never_attributed(tmp_path
 
 def test_mutation_the_same_estate_with_the_own_pod_wedged_is_acted_on(tmp_path):
     env, actions = _sandbox(tmp_path, wedge=WEDGE_DUMP, decoy=True, deployments=(DEPLOY, DECOY_DEPLOY))
-    _escalate(env, 3)
-    assert f"rollout restart deploy/{DEPLOY}" in _acted(actions) and "canary" not in _acted(actions)
+    _escalate(env, 4)
+    assert Path(env["_ABORTS"]).exists(), "the abort — the one automated action on a park — did not happen"
 
 
 def test_a_wedge_seen_once_is_not_acted_on(tmp_path):
@@ -377,9 +377,11 @@ def test_a_wedge_seen_once_is_not_acted_on(tmp_path):
 
 
 def test_the_same_wedge_on_two_consecutive_cycles_is_acted_on(tmp_path):
+    """Stall, park seen once, park confirmed (owner absent once), owner absent twice → abort."""
     env, actions = _sandbox(tmp_path)
-    out = _escalate(env, 3)
-    assert "CONFIRMED evidence" in out and f"rollout restart deploy/{DEPLOY}" in _acted(actions)
+    out = _escalate(env, 4)
+    assert "CONFIRMED evidence" in out and Path(env["_ABORTS"]).exists()
+    assert _acted(actions) == "", "something other than the abort happened"
 
 
 def test_a_wedge_that_does_not_persist_is_not_acted_on(tmp_path):
@@ -406,28 +408,23 @@ def test_a_park_while_the_coordinator_is_not_answering_is_a_broker_incident_not_
 
 def test_mutation_the_same_park_with_an_answering_coordinator_is_acted_on(tmp_path):
     env, actions = _sandbox(tmp_path, coordinator_silent=False)
-    _escalate(env, 3)
-    assert f"rollout restart deploy/{DEPLOY}" in _acted(actions)
+    _escalate(env, 4)
+    assert Path(env["_ABORTS"]).exists(), "the abort — the one automated action on a park — did not happen"
 
 
-def test_at_the_default_three_parks_are_needed_before_a_restart(tmp_path):
+def test_at_the_default_three_parks_are_needed_before_anything_is_aborted(tmp_path):
     env, actions = _sandbox(tmp_path)
     out = _escalate(env, 3, WEDGE_CYCLES="3")          # stall, park 1, park 2
-    assert "seen 2 of 3" in out and _acted(actions) == ""
-    _escalate(env, 1, WEDGE_CYCLES="3")                # park 3
-    assert f"rollout restart deploy/{DEPLOY}" in _acted(actions)
+    assert "seen 2 of 3" in out and not Path(env["_ABORTS"]).exists()
+    _escalate(env, 2, WEDGE_CYCLES="3")                # park 3 (owner absent once), then absent twice → abort
+    assert Path(env["_ABORTS"]).exists(), "the abort — the one automated action on a park — did not happen"
 
 
-def test_by_default_a_confirmed_park_with_nothing_to_abort_is_reported_not_restarted(tmp_path):
-    env, actions = _sandbox(tmp_path)
-    out = _escalate(env, 5, RESTART_ON_PARK="false")
-    assert "a restart is NOT taken (RESTART_ON_PARK=false)" in out and _acted(actions) == ""
-
-
-def test_mutation_opting_the_restart_in_makes_the_same_park_restart(tmp_path):
-    env, actions = _sandbox(tmp_path)
-    _escalate(env, 3, RESTART_ON_PARK="true")
-    assert f"rollout restart deploy/{DEPLOY}" in _acted(actions)
+def test_a_confirmed_park_with_nothing_to_abort_is_reported_and_nothing_is_restarted(tmp_path):
+    env, actions = _sandbox(tmp_path, open_tx_age_minutes=None)
+    out = _escalate(env, 5)
+    assert "nothing is restarted by this script" in out
+    assert _acted(actions) == "" and not Path(env["_ABORTS"]).exists()
 
 
 def test_one_stalled_sample_is_confirmed_before_evidence_is_gathered(tmp_path):
@@ -453,12 +450,12 @@ def test_a_group_that_only_resembles_a_deployment_is_never_touched(tmp_path):
 
 def test_a_nonconforming_group_resolves_only_through_an_explicit_mapping(tmp_path):
     env, actions = _sandbox(tmp_path, group="legacy-heatmap-consumer")
-    out = _escalate(env, 3)
+    out = _escalate(env, 4)
     assert "resolves to no deployment" in out and _acted(actions) == ""
     Path(env["GROUP_MAP"]).write_text(f"legacy-heatmap-consumer {DEPLOY}\n")
     # same estate, mapping now present: the group is judged and acted on
-    _escalate(env, 3)
-    assert f"rollout restart deploy/{DEPLOY}" in _acted(actions)
+    _escalate(env, 4)
+    assert Path(env["_ABORTS"]).exists(), "the abort — the one automated action on a park — did not happen"
 
 
 def test_a_mapping_to_a_deployment_that_does_not_exist_resolves_to_nothing(tmp_path):
@@ -491,8 +488,8 @@ def test_a_commit_that_lands_between_cycles_is_progress(tmp_path):
 
 def test_mutation_the_same_consumer_with_no_commit_between_cycles_is_a_candidate(tmp_path):
     env, actions = _sandbox(tmp_path, commit_between=0)
-    _escalate(env, 3)
-    assert f"rollout restart deploy/{DEPLOY}" in _acted(actions)
+    _escalate(env, 4)
+    assert Path(env["_ABORTS"]).exists(), "the abort — the one automated action on a park — did not happen"
 
 
 def test_group_tables_without_a_leading_group_column_are_read_by_header(tmp_path):
@@ -526,8 +523,8 @@ def test_restoring_app_is_never_restarted_however_long_it_stalls(tmp_path):
 
 def test_mutation_same_app_without_the_restoration_log_is_acted_on(tmp_path):
     env, actions = _sandbox(tmp_path, restoring=False)
-    _escalate(env, 3)
-    assert f"rollout restart deploy/{DEPLOY}" in _acted(actions)
+    _escalate(env, 4)
+    assert Path(env["_ABORTS"]).exists(), "the abort — the one automated action on a park — did not happen"
 
 
 def test_growing_local_state_vetoes_for_an_app_that_logs_nothing(tmp_path):
@@ -538,8 +535,8 @@ def test_growing_local_state_vetoes_for_an_app_that_logs_nothing(tmp_path):
 
 def test_mutation_same_app_with_static_state_is_acted_on(tmp_path):
     env, actions = _sandbox(tmp_path, grow_state=False)
-    _escalate(env, 3)
-    assert f"rollout restart deploy/{DEPLOY}" in _acted(actions)
+    _escalate(env, 4)
+    assert Path(env["_ABORTS"]).exists(), "the abort — the one automated action on a park — did not happen"
 
 
 def test_a_pod_that_is_receiving_data_is_fetching_not_parked(tmp_path):
@@ -552,8 +549,8 @@ def test_a_pod_that_is_receiving_data_is_fetching_not_parked(tmp_path):
 
 def test_mutation_the_same_pod_receiving_only_heartbeats_is_acted_on(tmp_path):
     env, actions = _sandbox(tmp_path, rx_kib=8)
-    _escalate(env, 3)
-    assert f"rollout restart deploy/{DEPLOY}" in _acted(actions)
+    _escalate(env, 4)
+    assert Path(env["_ABORTS"]).exists(), "the abort — the one automated action on a park — did not happen"
 
 
 def test_young_pod_is_given_its_grace_period(tmp_path):
@@ -564,8 +561,8 @@ def test_young_pod_is_given_its_grace_period(tmp_path):
 
 def test_mutation_with_no_grace_the_young_pod_is_acted_on(tmp_path):
     env, actions = _sandbox(tmp_path, pod_age=3)
-    _escalate(env, 3, GRACE_MINUTES="0")
-    assert f"rollout restart deploy/{DEPLOY}" in _acted(actions)
+    _escalate(env, 4, GRACE_MINUTES="0")
+    assert Path(env["_ABORTS"]).exists(), "the abort — the one automated action on a park — did not happen"
 
 
 # --------------------------------------------------------------------------------------
@@ -582,8 +579,8 @@ def test_a_deployment_held_at_zero_replicas_is_never_started(tmp_path):
 
 def test_mutation_the_same_wedged_pod_at_one_replica_is_acted_on(tmp_path):
     env, actions = _sandbox(tmp_path, replicas="1", pods_linger=True)
-    _escalate(env, 3)
-    assert f"rollout restart deploy/{DEPLOY}" in _acted(actions)
+    _escalate(env, 4)
+    assert Path(env["_ABORTS"]).exists(), "the abort — the one automated action on a park — did not happen"
 
 
 def test_dry_run_changes_nothing_at_all(tmp_path):
@@ -674,7 +671,7 @@ def test_abandoned_transaction_of_a_dead_process_is_aborted_instead_of_restartin
     env, actions = _sandbox(tmp_path, open_tx_age_minutes=145, tx_proc=DEAD_PROC, members=(LIVE_PROC,))
     out = _escalate(env, 4)   # 2 stall, 3 first dead sighting (restart held), 4 confirmed
     assert "ABANDONED transaction" in out and "absent from a Stable group on two consecutive cycles" in out
-    assert "holding the restart for one cycle" in out
+    assert "verdict is pending — next cycle decides" in out
     assert "--start-offset 151600145" in Path(env["_ABORTS"]).read_text()
     assert _acted(actions) == "", "bounced the service instead of clearing the blocker"
 
@@ -708,7 +705,7 @@ def test_the_youngest_pod_decides_the_grace_during_a_rolling_update(tmp_path):
 def test_corruption_logged_by_a_sidecar_is_not_the_apps(tmp_path):
     """The sidecar is listed first (the pod's default); only the app mounts the state volume."""
     env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP, sidecar=True, sidecar_corrupt=True, corrupt=False)
-    _seed(env, strikes=1, corrupt=CORRUPT_SIG)
+    _seed(env, strikes=0, corrupt=CORRUPT_SIG)
     out = _run(env)
     reads = (tmp_path / "logs-read").read_text().split()
     assert "app" in reads and "log-shipper" not in reads, reads   # the app's logs WERE read, the sidecar's never
@@ -719,7 +716,7 @@ def test_corruption_logged_by_a_sidecar_is_not_the_apps(tmp_path):
 def test_two_containers_mounting_the_state_volume_yield_no_evidence(tmp_path):
     """A debug sidecar also mounts the volume and logs the corruption: ambiguous → nothing."""
     env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP, sidecar=True, sidecar_mounts=True, sidecar_corrupt=True, corrupt=True)
-    _seed(env, strikes=1, corrupt=CORRUPT_SIG)
+    _seed(env, strikes=0, corrupt=CORRUPT_SIG)
     out = _run(env)
     assert "cannot be named unambiguously" in Path(env["LOG"]).read_text() and not (tmp_path / "logs-read").exists()
     assert Path(env["_MARKER"]).exists() and _acted(actions) == ""
@@ -728,7 +725,7 @@ def test_two_containers_mounting_the_state_volume_yield_no_evidence(tmp_path):
 def test_mutation_naming_the_app_container_resolves_the_ambiguity(tmp_path):
     env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP, sidecar=True, sidecar_mounts=True, sidecar_corrupt=True, corrupt=True)
     Path(env["CONTAINER_MAP"]).write_text(f"{DEPLOY} app\n")
-    _seed(env, strikes=1, corrupt=CORRUPT_SIG)
+    _seed(env, strikes=0, corrupt=CORRUPT_SIG)
     out = _run(env)
     reads = (tmp_path / "logs-read").read_text().split()
     assert "log-shipper" not in reads and "old tree removed" in out
@@ -736,7 +733,7 @@ def test_mutation_naming_the_app_container_resolves_the_ambiguity(tmp_path):
 
 def test_mutation_the_same_corruption_in_the_app_container_resets(tmp_path):
     env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP, sidecar=True, sidecar_corrupt=False, corrupt=True)
-    _seed(env, strikes=1, corrupt=CORRUPT_SIG)
+    _seed(env, strikes=0, corrupt=CORRUPT_SIG)
     out = _run(env)
     assert "old tree removed" in out
 
@@ -789,7 +786,7 @@ def test_a_failed_abort_does_not_count_and_the_restart_path_stays_open(tmp_path)
     env, actions = _sandbox(tmp_path, open_tx_age_minutes=145, abort_fail=True)
     out = _escalate(env, 4)
     assert "abort did NOT succeed" in out and "not restarting this cycle" not in out
-    assert f"rollout restart deploy/{DEPLOY}" in _acted(actions)
+    assert Path(env["_ABORTS"]).exists(), "the abort — the one automated action on a park — did not happen"
 
 
 def test_space_aligned_transaction_tables_are_read_the_same(tmp_path):
@@ -840,18 +837,18 @@ def test_headerless_find_hanging_output_is_refused(tmp_path):
 # --------------------------------------------------------------------------------------
 # Strike 2 is destructive: confirmed corruption only, an atomic swap, every step checked.
 # --------------------------------------------------------------------------------------
-def test_strike_two_is_withheld_without_a_confirmed_corruption_signature(tmp_path):
-    env, actions = _sandbox(tmp_path, corrupt=False)
-    _seed(env, strikes=1, wedge="fetchCommittedOffsets")
+def test_no_reset_without_a_confirmed_corruption_signature(tmp_path):
+    env, actions = _sandbox(tmp_path, corrupt=False, open_tx_age_minutes=None)
+    _seed(env, strikes=0, wedge="fetchCommittedOffsets")
     out = _run(env)
-    assert "STRIKE 2 withheld" in out and Path(env["_MARKER"]).exists()
+    assert "no abandoned transaction to abort" in out and Path(env["_MARKER"]).exists()
     assert "--replicas=0" not in _acted(actions)
 
 
 def test_a_repeated_historical_corruption_line_never_resets_a_recovered_service(tmp_path):
     """The same two-hour-old ProcessorStateException lines sit in every ten-minute read."""
     env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, corrupt_stale=True)
-    _seed(env, strikes=1)
+    _seed(env, strikes=0)
     out = _escalate(env, 3)
     assert "must repeat next cycle" not in out or "old tree removed" not in out
     assert Path(env["_MARKER"]).exists() and "--replicas=0" not in _acted(actions)
@@ -859,30 +856,30 @@ def test_a_repeated_historical_corruption_line_never_resets_a_recovered_service(
 
 def test_mutation_fresh_corruption_lines_on_two_cycles_do_reset(tmp_path):
     env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, corrupt_stale=False)
-    _seed(env, strikes=1)
+    _seed(env, strikes=0)
     out = _escalate(env, 2)
     assert "old tree removed" in out
 
 
 def test_strike_two_is_withheld_when_a_symlink_hides_in_the_tree(tmp_path):
     env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, symlink_inside=True)
-    _seed(env, strikes=1, corrupt=CORRUPT_SIG)
+    _seed(env, strikes=0, corrupt=CORRUPT_SIG)
     out = _run(env)
     assert "symlink inside the volume" in out and Path(env["_MARKER"]).exists() and "--replicas=0" not in _acted(actions)
 
 
 def test_corruption_seen_once_does_not_reset(tmp_path):
     env, _ = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True)
-    _seed(env, strikes=1)
+    _seed(env, strikes=0)
     out = _run(env)
     assert "must repeat next cycle" in out and Path(env["_MARKER"]).exists()
 
 
 def test_strike_two_swaps_only_the_pvc_bound_volume_and_restores_the_desired_replicas(tmp_path):
     env, actions = _sandbox(tmp_path, replicas="2", wedge=HEALTHY_DUMP, corrupt=True, stale_twin=True)
-    _seed(env, strikes=1, corrupt=CORRUPT_SIG)
+    _seed(env, strikes=0, corrupt=CORRUPT_SIG)
     out = _run(env)
-    assert "STRIKE 2" in out and "is now empty" in out and "old tree removed" in out and "scaled back to 2" in out
+    assert "RESET:" in out and "is now empty" in out and "old tree removed" in out and "scaled back to 2" in out
     pv = Path(env["_PV"])
     assert pv.is_dir() and list(pv.iterdir()) == [], "the live directory is not an empty directory"
     assert _aside_dirs(env) == [], "the parked old tree was not removed"
@@ -895,7 +892,7 @@ def test_strike_two_swaps_only_the_pvc_bound_volume_and_restores_the_desired_rep
 
 def test_strike_two_is_withheld_when_another_pod_mounts_the_same_claim(tmp_path):
     env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, shared_claim_pod=True)
-    _seed(env, strikes=1, corrupt=CORRUPT_SIG)
+    _seed(env, strikes=0, corrupt=CORRUPT_SIG)
     out = _run(env)
     assert "also mounted or templated by pod/some-other-job-abc" in out
     assert Path(env["_MARKER"]).exists() and "--replicas=0" not in _acted(actions)
@@ -903,14 +900,14 @@ def test_strike_two_is_withheld_when_another_pod_mounts_the_same_claim(tmp_path)
 
 def test_strike_two_is_withheld_when_another_workload_is_templated_on_the_claim(tmp_path):
     env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, shared_claim_workload=True)
-    _seed(env, strikes=1, corrupt=CORRUPT_SIG)
+    _seed(env, strikes=0, corrupt=CORRUPT_SIG)
     out = _run(env)
     assert f"StatefulSet/{DEPLOY}-twin" in out and Path(env["_MARKER"]).exists()
 
 
 def test_mutation_with_the_claim_unshared_the_reset_proceeds(tmp_path):
     env, _ = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True)
-    _seed(env, strikes=1, corrupt=CORRUPT_SIG)
+    _seed(env, strikes=0, corrupt=CORRUPT_SIG)
     out = _run(env)
     assert "old tree removed" in out
     assert "-xdev" in (tmp_path / "find-args").read_text(), "the parked tree deletion may cross a mount boundary"
@@ -918,7 +915,7 @@ def test_mutation_with_the_claim_unshared_the_reset_proceeds(tmp_path):
 
 def test_strike_two_is_withheld_when_a_cronjob_is_templated_on_the_claim(tmp_path):
     env, _ = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, shared_claim_cronjob=True)
-    _seed(env, strikes=1, corrupt=CORRUPT_SIG)
+    _seed(env, strikes=0, corrupt=CORRUPT_SIG)
     out = _run(env)
     assert "CronJob/nightly-compact" in out and Path(env["_MARKER"]).exists()
 
@@ -927,7 +924,7 @@ def test_a_holder_that_appears_after_the_swap_keeps_the_old_tree_parked(tmp_path
     """A workload with no pod during the checks launches in the window: it can only have bound the
     whole old tree or the new empty one — and the old tree is never deleted while anything holds it."""
     env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, late_holder=True)
-    _seed(env, strikes=1, corrupt=CORRUPT_SIG)
+    _seed(env, strikes=0, corrupt=CORRUPT_SIG)
     out = _run(env)
     assert "stays parked" in out and "cron-late-xyz" in out
     assert len(_aside_dirs(env)) == 1 and (_aside_dirs(env)[0] / GROUP / "0_1" / "rocksdb").exists(), "deleted a tree something still holds"
@@ -936,7 +933,7 @@ def test_a_holder_that_appears_after_the_swap_keeps_the_old_tree_parked(tmp_path
 
 def test_strike_two_is_withheld_when_an_init_container_mounts_the_claim_with_a_subpath(tmp_path):
     env, _ = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, init_sub_path=True)
-    _seed(env, strikes=1, corrupt=CORRUPT_SIG)
+    _seed(env, strikes=0, corrupt=CORRUPT_SIG)
     out = _run(env)
     assert "mounted with a subPath" in out and Path(env["_MARKER"]).exists()
 
@@ -944,7 +941,7 @@ def test_strike_two_is_withheld_when_an_init_container_mounts_the_claim_with_a_s
 def test_strike_two_is_withheld_when_the_volume_holds_anything_but_streams_state(tmp_path):
     """The claim's name says streams-state; the volume also carries audit/retained-events."""
     env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, foreign_file=True)
-    _seed(env, strikes=1, corrupt=CORRUPT_SIG)
+    _seed(env, strikes=0, corrupt=CORRUPT_SIG)
     out = _run(env)
     assert "holds something other than Kafka Streams state" in out
     assert Path(env["_MARKER"]).exists() and (Path(env["_PV"]) / "audit" / "retained-events").exists()
@@ -953,7 +950,7 @@ def test_strike_two_is_withheld_when_the_volume_holds_anything_but_streams_state
 
 def test_strike_two_is_withheld_when_foreign_data_hides_inside_a_task_directory(tmp_path):
     env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, nested_foreign=True)
-    _seed(env, strikes=1, corrupt=CORRUPT_SIG)
+    _seed(env, strikes=0, corrupt=CORRUPT_SIG)
     out = _run(env)
     assert "holds something other than Kafka Streams state" in out and "unexpected entry in a task directory" in out
     assert Path(env["_MARKER"]).exists() and (Path(env["_PV"]) / GROUP / "0_1" / "audit" / "retained-events").exists()
@@ -963,21 +960,21 @@ def test_strike_two_is_withheld_when_foreign_data_hides_inside_a_task_directory(
 def test_strike_two_is_withheld_when_an_independent_replicaset_is_templated_on_the_claim(tmp_path):
     """The deployment's OWN ReplicaSets are always templated on the claim and must not count."""
     env, _ = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, shared_claim_rs=True)
-    _seed(env, strikes=1, corrupt=CORRUPT_SIG)
+    _seed(env, strikes=0, corrupt=CORRUPT_SIG)
     out = _run(env)
     assert "ReplicaSet/orphan-rs-7f9" in out and f"ReplicaSet/{RS}" not in out and Path(env["_MARKER"]).exists()
 
 
 def test_strike_two_is_withheld_when_the_claim_is_mounted_with_a_subpath(tmp_path):
     env, _ = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, sub_path=True)
-    _seed(env, strikes=1, corrupt=CORRUPT_SIG)
+    _seed(env, strikes=0, corrupt=CORRUPT_SIG)
     out = _run(env)
     assert "mounted with a subPath" in out and Path(env["_MARKER"]).exists()
 
 
 def test_strike_two_is_withheld_when_an_autoscaler_targets_the_deployment(tmp_path):
     env, _ = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, hpa=True)
-    _seed(env, strikes=1, corrupt=CORRUPT_SIG)
+    _seed(env, strikes=0, corrupt=CORRUPT_SIG)
     out = _run(env)
     assert "an HPA targets this deployment" in out and Path(env["_MARKER"]).exists()
 
@@ -985,7 +982,7 @@ def test_strike_two_is_withheld_when_an_autoscaler_targets_the_deployment(tmp_pa
 def test_strike_two_refuses_a_pv_path_that_escapes_the_storage_root(tmp_path):
     outside = tmp_path / "outside"; outside.mkdir(); (outside / "victim").write_text("x")
     env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, pv_path_override=f"{tmp_path}/storage/../outside")
-    _seed(env, strikes=1, corrupt=CORRUPT_SIG)
+    _seed(env, strikes=0, corrupt=CORRUPT_SIG)
     out = _run(env)
     assert "NOT resetting anything" in out and (outside / "victim").exists()
     assert "--replicas=0" not in _acted(actions)
@@ -993,21 +990,21 @@ def test_strike_two_refuses_a_pv_path_that_escapes_the_storage_root(tmp_path):
 
 def test_strike_two_refuses_when_two_streams_state_claims_are_attached(tmp_path):
     env, _ = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, extra_claim=True)
-    _seed(env, strikes=1, corrupt=CORRUPT_SIG)
+    _seed(env, strikes=0, corrupt=CORRUPT_SIG)
     out = _run(env)
     assert "NOT resetting anything" in out and Path(env["_MARKER"]).exists()
 
 
 def test_strike_two_does_not_reset_when_the_scale_down_fails(tmp_path):
     env, _ = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, scale_fail_to="0")
-    _seed(env, strikes=1, corrupt=CORRUPT_SIG)
+    _seed(env, strikes=0, corrupt=CORRUPT_SIG)
     out = _run(env)
     assert "scale to 0 FAILED" in out and "nothing reset" in out and Path(env["_MARKER"]).exists()
 
 
 def test_strike_two_does_not_reset_under_a_lingering_pod(tmp_path):
     env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, pods_linger=True)
-    _seed(env, strikes=1, corrupt=CORRUPT_SIG)
+    _seed(env, strikes=0, corrupt=CORRUPT_SIG)
     out = _run(env)
     assert "still present" in out and Path(env["_MARKER"]).exists()
     assert "--replicas=1" in _acted(actions), "left the deployment at zero"
@@ -1015,7 +1012,7 @@ def test_strike_two_does_not_reset_under_a_lingering_pod(tmp_path):
 
 def test_strike_two_does_not_reset_if_something_rescaled_the_deployment_meanwhile(tmp_path):
     env, _ = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, rescale_between=True)
-    _seed(env, strikes=1, corrupt=CORRUPT_SIG)
+    _seed(env, strikes=0, corrupt=CORRUPT_SIG)
     out = _run(env)
     assert "scaled the deployment back up between the check and the reset" in out
     assert Path(env["_MARKER"]).exists()
@@ -1024,7 +1021,7 @@ def test_strike_two_does_not_reset_if_something_rescaled_the_deployment_meanwhil
 def test_a_failed_replacement_directory_rolls_the_swap_back(tmp_path):
     """mv succeeded, mkdir failed: the old tree must be back at the live path, never absent."""
     env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, mkdir_fail=True)
-    _seed(env, strikes=1, corrupt=CORRUPT_SIG)
+    _seed(env, strikes=0, corrupt=CORRUPT_SIG)
     out = _run(env)
     assert "rolled back" in out and "nothing changed on disk" not in out
     assert Path(env["_MARKER"]).exists() and _aside_dirs(env) == []
@@ -1036,7 +1033,7 @@ def test_a_pod_present_after_the_swap_is_stopped_before_the_old_tree_is_removed(
     waited for before the parked tree goes. It does not exercise a pod starting concurrently with
     the rename itself — the rename is atomic, so such a pod binds a whole tree either way."""
     env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, intruder=True)
-    _seed(env, strikes=1, corrupt=CORRUPT_SIG)
+    _seed(env, strikes=0, corrupt=CORRUPT_SIG)
     out = _run(env)
     assert "CRITICAL" in out and "appeared DURING the reset" in out
     acts = _acted(actions)
@@ -1047,7 +1044,7 @@ def test_a_pod_present_after_the_swap_is_stopped_before_the_old_tree_is_removed(
 
 def test_a_failed_old_tree_removal_leaves_the_live_directory_empty_and_scales_back(tmp_path):
     env, actions = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, find_fail=True)
-    _seed(env, strikes=1, corrupt=CORRUPT_SIG)
+    _seed(env, strikes=0, corrupt=CORRUPT_SIG)
     out = _run(env)
     assert "removing the old tree" in out and "FAILED" in out and "--replicas=1" in _acted(actions)
     assert list(Path(env["_PV"]).iterdir()) == [] and len(_aside_dirs(env)) == 1
@@ -1055,7 +1052,7 @@ def test_a_failed_old_tree_removal_leaves_the_live_directory_empty_and_scales_ba
 
 def test_strike_two_scale_back_failure_is_shouted_and_retried_by_the_next_run(tmp_path):
     env, _ = _sandbox(tmp_path, wedge=HEALTHY_DUMP, corrupt=True, scale_fail_to="1")
-    _seed(env, strikes=1, corrupt=CORRUPT_SIG)
+    _seed(env, strikes=0, corrupt=CORRUPT_SIG)
     out = _run(env)
     assert "SCALE BACK TO 1 FAILED THREE TIMES" in out
     marker = Path(env["STATEDIR"]) / f"{DEPLOY}.down"
