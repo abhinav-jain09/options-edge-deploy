@@ -56,6 +56,17 @@ spec:
     spec:
       containers:
         - env:
+            - name: PREOPEN_ESTIMATED_GEX_ENABLED
+              value: "true"
+            - name: PREOPEN_ESTIMATED_OI_JDBC_URL
+              value: jdbc:postgresql://host.docker.internal:5432/options_flow_dev
+            - name: PREOPEN_ESTIMATED_OI_USER
+              value: options_flow
+            - name: PREOPEN_ESTIMATED_OI_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  key: POSTGRES_PASSWORD
+                  name: options-edge-runtime-secrets
             - name: PREOPEN_GEX_ENABLED
               value: "false"
             - name: IBKR_GEX_CONSUME_ENABLED
