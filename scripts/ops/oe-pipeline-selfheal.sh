@@ -359,6 +359,17 @@ for line in sys.stdin:
     except ValueError:
         pass' "$after" | grep -oE "$CORRUPT_RE" | sort -u | tr '\n' ',' | sed 's/,$//'
 }
+# A corrupt store does not merely log — it stops the app: the container crash-loops or the pod is
+# not Ready. A StateUpdater that restores silently, reusing files so du never grows, may log the same
+# exception text while it is in fact recovering; so a corruption episode counts only when the Streams
+# container's restartCount grew since the previous observation, or the pod is not Ready. Prints
+# "<restartCount> <ready>" for the deployment's Running pod; nothing if it cannot be read.
+crash_state() {   # $1 = deployment
+  local pod c
+  pod=$(running_pod "$1"); [ -n "$pod" ] || return 1
+  c=$(app_container "$pod" "$1"); [ -n "$c" ] || return 1
+  $KUBECTL get pod "$pod" -o jsonpath="{.status.containerStatuses[?(@.name=='$c')].restartCount}{' '}{.status.conditions[?(@.type=='Ready')].status}" 2>/dev/null
+}
 # PERSISTENT evidence: "<what>" observed for <key> now extends a run only if the SAME <what> was
 # recorded for <key> on an earlier cycle between EVIDENCE_MIN and EVIDENCE_MAX seconds ago; the
 # run is "confirmed" once it is $3 observations long (default 2). Anything else starts a new run.
@@ -501,14 +512,14 @@ quiet=$(awk -v floor="$LAG_FLOOR" '
 
 if [ -z "$stuck" ]; then
   log "every group with lag on a moving source advanced — pipeline is moving"
-  [ "$DRY_RUN" = true ] || find "$STATEDIR" -maxdepth 1 \( -name '*.resets' -o -name '*.observed' -o -name '*.wedge' -o -name '*.corrupt' -o -name '*.dead-*' \) -delete 2>/dev/null
+  [ "$DRY_RUN" = true ] || find "$STATEDIR" -maxdepth 1 \( -name '*.resets' -o -name '*.observed' -o -name '*.wedge' -o -name '*.corrupt' -o -name '*.crash' -o -name '*.dead-*' \) -delete 2>/dev/null
   log "=== self-heal done: nothing to do ==="
   exit 0
 fi
 if [ "$DRY_RUN" != true ]; then
-  for sf in "$STATEDIR"/*.resets "$STATEDIR"/*.observed "$STATEDIR"/*.wedge "$STATEDIR"/*.corrupt "$STATEDIR"/*.dead-*; do
+  for sf in "$STATEDIR"/*.resets "$STATEDIR"/*.observed "$STATEDIR"/*.wedge "$STATEDIR"/*.corrupt "$STATEDIR"/*.crash "$STATEDIR"/*.dead-*; do
     [ -e "$sf" ] || continue
-    gname=$(basename "$sf"); gname=${gname%%.resets}; gname=${gname%%.observed}; gname=${gname%%.wedge}; gname=${gname%%.corrupt}; gname=${gname%%.dead-*}
+    gname=$(basename "$sf"); gname=${gname%%.resets}; gname=${gname%%.observed}; gname=${gname%%.wedge}; gname=${gname%%.corrupt}; gname=${gname%%.crash}; gname=${gname%%.dead-*}
     echo "$stuck" | awk -v g="$gname" '$1==g{f=1} END{exit !f}' || { log "  $gname recovered — clearing its history"; rm -f "$sf"; }
   done
 fi
@@ -719,10 +730,20 @@ while read -r g lag delta srcdelta; do
     esac
   else forget "$STATEDIR/${g}.wedge"; fi
   if [ -n "$corrupt" ]; then
-    case "$(persist "$STATEDIR/${g}.corrupt" "$corrupt" 2)" in
-      confirmed) corruption="$corrupt" ;;
-      *) log "  $g -> $dep: container log shows $corrupt — must repeat next cycle before it counts" ;;
-    esac
+    read -r rc_now ready_now < <(crash_state "$dep" 2>/dev/null || echo "")
+    read -r _ _ rc_prev < <(cat "$STATEDIR/${g}.crash" 2>/dev/null || echo "0 0 -")
+    remember "$STATEDIR/${g}.crash" "$(now_s) 1 ${rc_now:-?}"
+    if [ -z "${rc_now:-}" ]; then
+      log "  $g -> $dep: container log shows $corrupt but the container's restart count could not be read — not counted"
+    elif [ "$ready_now" = "True" ] && { [ "$rc_prev" = "-" ] || [ "$rc_now" = "$rc_prev" ]; }; then
+      log "  $g -> $dep: container log shows $corrupt but the pod is Ready and its restart count is unchanged ($rc_now) — a running app is not a corrupt store; not counted"
+      forget "$STATEDIR/${g}.corrupt"
+    else
+      case "$(persist "$STATEDIR/${g}.corrupt" "$corrupt" 2)" in
+        confirmed) corruption="$corrupt" ;;
+        *) log "  $g -> $dep: container log shows $corrupt (restarts $rc_prev -> $rc_now, ready=$ready_now) — must repeat next cycle before it counts" ;;
+      esac
+    fi
   else forget "$STATEDIR/${g}.corrupt"; fi
   if [ -z "$wedge" ] && [ -z "$corruption" ]; then
     [ -z "$frames" ] && [ -z "$corrupt" ] && log "  $g -> $dep: stalled $seen checks but no StreamThread is parked in a retry and the container log is clean — slow or paused, not wedged. NOT touched. If this is a real fault it needs a human: $KUBECTL logs $(running_pod "$dep")"
@@ -758,9 +779,10 @@ while read -r g lag delta srcdelta; do
   # the group is left alone; only a second confirmed episode (fresh lines again, later cycles)
   # resets — once. A third is a defect to investigate, not a reason to reset again.
   f="$STATEDIR/${g}.resets"; resets=$(cat "$f" 2>/dev/null || echo 0); resets=$((resets+1))
-  remember "$f" "$resets"; forget "$STATEDIR/${g}.corrupt"   # the next episode must confirm from scratch
+  forget "$STATEDIR/${g}.corrupt"   # the next episode must confirm from scratch
   case "$resets" in
     1)
+      remember "$f" 1
       log "  $g -> $dep: corruption CONFIRMED ($corruption) — first episode is reported only; a second confirmed episode on later cycles will reset the state directory. Nothing touched."
       continue ;;
     2)
@@ -778,6 +800,8 @@ while read -r g lag delta srcdelta; do
       why=$(streams_only_dir "$dir" "$g") || { log "  $g -> $dep RESET withheld: $dir holds something other than Kafka Streams state for $g (${why}) — the volume is not state-only; NOT resetting"; continue; }
       if ! same_filesystem "$dir"; then log "  $g -> $dep RESET withheld: $dir is a mount point of its own — NOT resetting a mounted filesystem"; continue; fi
       log "  $g -> $dep RESET: confirmed state-corruption signature ($corruption) — scaling $reps->0, swapping $dir for an empty directory, scaling back to $reps"
+      # only now — every precondition passed — is the attempt counted; a withheld attempt is not one
+      remember "$f" "$resets"
       remember "$STATEDIR/${dep}.down" "$reps"
       if ! run $KUBECTL $SA scale "deploy/$dep" --replicas=0 >>"$LOG" 2>&1; then
         log "  $g -> $dep: scale to 0 FAILED — nothing reset; strike stands"; forget "$STATEDIR/${dep}.down"; continue
