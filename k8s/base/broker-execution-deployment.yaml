@@ -11,7 +11,10 @@ spec:
   # Deployed INERT. BROKER_EXECUTION_MODE=SHADOW places nothing and connects to no broker; ENABLED=false
   # refuses every intent. Turning this into something that trades is three values below, set by the account
   # owner — not by this manifest landing.
-  replicas: 1
+  # replicas 0 until the image EXISTS. These images are built from options-edge-processing main, which has
+  # not merged yet, so a running replica would sit in ImagePullBackOff and tell nobody anything. Scale to 1
+  # after the first successful dev image build.
+  replicas: 0
   strategy:
     type: Recreate
   selector:
@@ -32,6 +35,9 @@ spec:
             - configMapRef:
                 name: options-edge-config
           env:
+            # NOTE: no HTTP health server is implemented yet, so this port is declared and unused and there
+            # are deliberately no readiness/liveness probes — a probe against a port nothing listens on
+            # would fail the pod rather than describe it.
             - name: HEALTH_PORT
               value: "8131"
             # --- what it reads and writes ---
