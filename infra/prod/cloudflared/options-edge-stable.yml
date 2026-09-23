@@ -37,6 +37,12 @@ ingress:
   # operator decision): that domain is being reused for unrelated applications, so it must NOT
   # route here at all. Re-adding any of those hostnames would hijack traffic from whatever now
   # owns the domain. See docs/domain-migration-bleadingoptions.md.
+  # Public development UI. The proxy on the dev machine strips /dev before
+  # forwarding, and rewrites its root-relative browser assets to remain under /dev.
+  # This rule MUST remain before the apex catch-all.
+  - hostname: bleadingoptions.com
+    path: ^/dev(?:/.*)?$
+    service: http://192.168.100.102:8098
   - hostname: bleadingoptions.com
     path: /ws/events
     service: http://192.168.100.252:30097     # feed-gateway-service NodePort — NOT the 8091 ServiceLB
