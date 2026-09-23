@@ -54,6 +54,13 @@
 # be aged is not a row worth keeping. captured_at is NOT NULL in the schema (verified on prod), so
 # the short tier does not test for it.
 set -uo pipefail
+# Bare command names, resolved against the hardened PATH below exactly as before — this changes
+# nothing about which binary prod runs. It exists so a caller that needs a SPECIFIC binary (a test
+# stub) can name one by absolute path instead of fighting the hardening with a PATH prefix, which
+# the hardening below is written to always win: an override here is consulted at every call site,
+# the hardcoded PATH is not touched.
+PSQL_BIN="${PSQL_BIN:-psql}"
+KUBECTL_BIN="${KUBECTL_BIN:-kubectl}"
 # /usr/local/bin covers Linux/prod (kubectl lives there) and Intel Homebrew; /opt/homebrew/bin
 # covers Apple Silicon Homebrew (dev, where psql lives there and NOT under /usr/local/bin — this
 # script also runs on dev via launchd, and a PATH copied from the prod convention alone silently
@@ -201,7 +208,7 @@ case "$SECRET_SOURCE" in
   k8s)
     # --request-timeout because this runs AFTER the lock is acquired: a kubectl that hangs holds the
     # lock forever, and every later firing then skips on it.
-    PGPASSWORD="${PGPASSWORD:-$(kubectl --request-timeout=15s -n options-edge get secret options-edge-runtime-secrets \
+    PGPASSWORD="${PGPASSWORD:-$("$KUBECTL_BIN" --request-timeout=15s -n options-edge get secret options-edge-runtime-secrets \
       -o jsonpath='{.data.POSTGRES_PASSWORD}' 2>/dev/null | base64 -d)}"
     [ -n "$PGPASSWORD" ] || die "could not read POSTGRES_PASSWORD from the k8s secret — retention did NOT run. $RAW_TABLE is UNBOUNDED until this is fixed (this is how it reached 110 GB in 2026-09)."
     export PGPASSWORD
@@ -227,7 +234,7 @@ psql_at() {   # $1 = statement_timeout seconds, rest = -c args
   # one -c, so there is exactly one possible output, and a timeout now produces NO output rather
   # than a deceptive one. (found running this script, not by inspection)
   PGOPTIONS="-c statement_timeout=${t}s" \
-  psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDB" -At -v ON_ERROR_STOP=1 "$@"
+  "$PSQL_BIN" -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDB" -At -v ON_ERROR_STOP=1 "$@"
 }
 
 run_tier() {
