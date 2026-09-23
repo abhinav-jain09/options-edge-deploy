@@ -528,6 +528,24 @@ patches:
             value: "false"
           - name: POSTGRES_ENABLED
             value: "false"
+  # ThetaData overnight (GTH) feed — DEV-ONLY (Gate-1 v12 §10.2/§10.3, 2026-09-19 owner
+  # decision): dev is the data source for prod (dual-target, same pattern as ibkr-feed
+  # above), overnight visible by default. THETADATA_BASE_URL/KAFKA_TARGETS default
+  # sensibly in ThetaDataFeedConfig.fromEnvironment() (the Terminal on 127.0.0.1:25503 is
+  # reached via host.docker.internal on the dev Mac's normal pod network, same story as
+  # IB_HOST above) — the replica count and the Terminal base URL need a patch here.
+  - target:
+      kind: Deployment
+      name: thetadata-feed-service
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+      - op: add
+        path: /spec/template/spec/containers/0/env
+        value:
+          - name: THETADATA_BASE_URL
+            value: http://host.docker.internal:25503
   # G2 DEV SOAK (§11, 2026-07-19): signal-follower-spx flags TRUE on dev (LEDGER mode).
   # MUST MIRROR the standalone slice k8s/services/signal-follower/overlays/dev
   # (validate-services: mono==slice).

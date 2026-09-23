@@ -123,6 +123,11 @@ services:
   # the pod but the slice stays declared + mirror-validated; a production service-deploy is a
   # harmless 0-replica apply). Image builds in the options-edge-ibkr-feed job.
   - { name: ibkr-feed,                    managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-ibkr-feed,                    deployments: [ibkr-feed-service], buildJob: options-edge-ibkr-feed }
+  # Same image/build job as ibkr-feed (com.optionsedge.ibkrfeed.thetadata is a second main
+  # class in the same shaded jar — see options-edge-ibkr-feed's Dockerfile.thetadata); the
+  # ThetaData overnight (GTH) feed is its own Deployment with a command override. Dev-only
+  # (base replicas:0, dev overlay patches to 1), same as ibkr-feed's own dev-only story.
+  - { name: thetadata-feed,               managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-ibkr-feed,                    deployments: [thetadata-feed-service], buildJob: options-edge-ibkr-feed }
   - { name: feed-gateway,                 managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-feed-gateway,                 deployments: [feed-gateway-service], buildJob: feed-gateway-deploy }
   - { name: raw-to-display,               managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-raw-to-display,               deployments: [raw-to-display-service, raw-to-display-databento-service] }
   - { name: databento-volume-aggregator,  managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-databento-volume-aggregator,  deployments: [databento-volume-aggregator] }
