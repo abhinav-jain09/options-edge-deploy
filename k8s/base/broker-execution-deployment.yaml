@@ -1,0 +1,83 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: broker-execution-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: broker-execution-service
+    app.kubernetes.io/component: broker-execution-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  # Deployed INERT. BROKER_EXECUTION_MODE=SHADOW places nothing and connects to no broker; ENABLED=false
+  # refuses every intent. Turning this into something that trades is three values below, set by the account
+  # owner — not by this manifest landing.
+  # replicas 0 until the image EXISTS — and the hold that MATTERS is the entry in morning-autostart.sh's
+  # KEEP_DOWN and dev-cleanup.sh's DISABLED_DEV: both scale every part-of=options-edge Deployment to 1
+  # otherwise, so a replica count in a manifest is not a hold by itself (review, BLOCKER). These images are built from options-edge-processing main, which has
+  # not merged yet, so a running replica would sit in ImagePullBackOff and tell nobody anything. Scale to 1
+  # after the first successful dev image build.
+  replicas: 0
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: broker-execution-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: broker-execution-service
+        app.kubernetes.io/component: broker-execution-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      containers:
+        - name: broker-execution
+          image: 192.168.100.252:5000/options-edge-broker-execution:dev
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+          env:
+            # NOTE: no HTTP health server is implemented yet, so this port is declared and unused and there
+            # are deliberately no readiness/liveness probes — a probe against a port nothing listens on
+            # would fail the pod rather than describe it.
+            - name: HEALTH_PORT
+              value: "8131"
+            # --- what it reads and writes ---
+            - name: BROKER_EXECUTION_INTENT_TOPIC
+              value: trading.order.intent
+            - name: BROKER_EXECUTION_STATUS_TOPIC
+              value: trading.order.status
+            - name: BROKER_EXECUTION_CONSUMER_GROUP
+              value: broker-execution-service
+            # --- the three values that decide whether anything is placed (OWNER SETS THESE) ---
+            - name: BROKER_EXECUTION_MODE
+              value: "SHADOW"          # SHADOW records tickets; PAPER connects to the paper gateway
+            - name: BROKER_EXECUTION_ENABLED
+              value: "false"           # false refuses every intent
+            - name: BROKER_EXECUTION_TRANSMIT
+              value: "false"           # false stages the order for a human to transmit
+            # --- IB GATEWAY PAPER. 4002 is paper; 4001 (in the configmap as IB_PORT) is LIVE. The adapter
+            #     also asserts the gateway's managed-account list is exactly the DU account below. ---
+            - name: BROKER_EXECUTION_IBKR_HOST
+              value: "127.0.0.1"
+            - name: BROKER_EXECUTION_IBKR_PORT
+              value: "4002"
+            - name: BROKER_EXECUTION_IBKR_CLIENT_ID
+              value: "21"
+            - name: BROKER_EXECUTION_PAPER_ACCOUNT
+              value: "DUQ287805"
+            # --- bounds ---
+            - name: BROKER_EXECUTION_MAX_QUANTITY
+              value: "1"
+            - name: BROKER_EXECUTION_REPRICE_MS
+              value: "3000"
+            - name: BROKER_EXECUTION_CHASE_MS
+              value: "300000"
+            - name: BROKER_EXECUTION_MAX_CHASE_GIVEUP_FRACTION
+              value: "0.25"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+            limits:
+              memory: 512Mi

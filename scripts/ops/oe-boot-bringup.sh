@@ -37,7 +37,7 @@ WAVE1='options-edge-databento-feed feed-gateway-service options-edge-web'
 # 2026-09-15: it had drifted again — oi-shadow-service and raw-to-display-service (both USER holds
 # since 2026-08-10) were held down only by morning-autostart.sh. tests/test_keep_down_lists_agree.py
 # now fails CI whenever the two sets differ.
-KEEP_DOWN='directional-pressure-databento-service|hpsf-stage-a-service|hpsf-stage-b-service|volume-sandwich-service|volume-sandwich-databento-service|volume-pace-service|volume-pace-databento-service|strike-flow-classifier-ibkr|options-edge-integration-test|spx-mission-control-service|short-premium-agent-service|spread-skew-service|spread-skew-postgres-writer|databento-mission-sandwich-service|directional-pressure-service|option-truth-engine-service|ibkr-feed-service|prod-pgadmin|dealer-ledger-service|dealer-ledger-calibration-scorer|dealer-ledger-calibration-accumulator|vix-option-inteligence-service|oi-shadow-service|raw-to-display-service'
+KEEP_DOWN='broker-execution-service|amt-order-bridge|directional-pressure-databento-service|hpsf-stage-a-service|hpsf-stage-b-service|volume-sandwich-service|volume-sandwich-databento-service|volume-pace-service|volume-pace-databento-service|strike-flow-classifier-ibkr|options-edge-integration-test|spx-mission-control-service|short-premium-agent-service|spread-skew-service|spread-skew-postgres-writer|databento-mission-sandwich-service|directional-pressure-service|option-truth-engine-service|ibkr-feed-service|prod-pgadmin|dealer-ledger-service|dealer-ledger-calibration-scorer|dealer-ledger-calibration-accumulator|vix-option-inteligence-service|oi-shadow-service|raw-to-display-service'
 
 log() { printf '[%s] %s\n' "$(date '+%F %T %Z')" "$*" | tee -a "$LOG"; }
 die() { log "FAIL: $*"; exit 1; }
