@@ -848,7 +848,10 @@ STUB
 # snapshots both retention cutoffs BEFORE ever reaching a DELETE. A stub that fails every call (as
 # this case used to have) trips on the first of those instead — "could not compute the OI calendar
 # cutoff" satisfies the same nonzero-exit assertion below without ever exercising a DELETE failure.
-# This stub answers every other query and fails only the DELETE itself.
+# This stub answers every other query by NAME and fails only the DELETE itself. The catch-all is
+# fail-closed, not a generic "any other query is fine": a SQL text this stub does not recognize
+# (e.g. the script rewording a cutoff query) must break this case LOUDLY, not have the stub wave it
+# through and let case 37 keep silently claiming to test the DELETE (Codex r1 MINOR).
 cat > "$RSTUB/psql" <<'STUB'
 #!/usr/bin/env bash
 q="${@: -1}"
@@ -857,9 +860,14 @@ case "$q" in
     echo "ERROR:  relation \"databento_option_raw_snapshot\" does not exist" >&2
     exit 1
     ;;
-  *"min(id)"*) echo 0 ;;
-  *"max(id)"*) echo 99 ;;
-  *)           echo "2026-09-01" ;;   # the two cutoff snapshots; only non-emptiness is checked
+  *"min(id)"*)       echo 0 ;;
+  *"max(id)"*)       echo 99 ;;
+  *"AT TIME ZONE"*)  echo "2026-09-01" ;;              # the OI calendar cutoff
+  *"now() - interval"*) echo "2026-09-08 00:00:00+00" ;;   # the no-OI retention cutoff
+  *)
+    echo "retention test stub: unrecognized query, refusing to guess: $q" >&2
+    exit 1
+    ;;
 esac
 STUB
 chmod +x "$RSTUB/psql" "$RSTUB/kubectl"
@@ -879,11 +887,17 @@ rlog="$WORK/retention.log"
 # consults these two overrides before that PATH takes effect, so naming the stub by absolute path
 # here reaches it regardless of what else is installed.
 #
-# DISCORD_WEBHOOK_URL is pinned to an unroutable loopback address: the hardened script alerts on
-# every FATAL, and alert() falls back to reading a real webhook URL from oe-ops.env off disk when
-# this is unset — on a host that has that file (prod, and possibly the Jenkins agent), this case
-# would otherwise fire a real Discord alert on every test run.
-OUT="$(env DISCORD_WEBHOOK_URL="http://127.0.0.1:1/unused" PSQL_BIN="$RSTUB/psql" KUBECTL_BIN="$RSTUB/kubectl" \
+# DISCORD_WEBHOOK_URL is a URL curl refuses to even PARSE (a bad IPv6 literal — verified: curl exits
+# 3, "bad range specification", with no socket ever opened), not merely an unroutable address: a
+# closed loopback port is a fact about THIS host and this moment, not a guarantee (Codex r1 MINOR).
+# The hardened script alerts on every FATAL, and alert() falls back to reading a real webhook URL
+# from oe-ops.env off disk when this is unset — on a host that has that file (prod, and possibly the
+# Jenkins agent), this case would otherwise fire a real Discord alert on every test run.
+#
+# PGPASSWORD='' forces the secret read through KUBECTL_BIN every time: "${PGPASSWORD:-$(kubectl…)}"
+# skips kubectl entirely if PGPASSWORD is already non-empty in the environment, which would leave
+# the stub unexercised on a shell that happens to have a real PGPASSWORD exported (Codex r1 MINOR).
+OUT="$(env DISCORD_WEBHOOK_URL="http://[::1" PGPASSWORD='' PSQL_BIN="$RSTUB/psql" KUBECTL_BIN="$RSTUB/kubectl" \
        LOG="$rlog" LOCK_FILE="$WORK/retention.lock.d" bash "$SRC/ibkr-raw-retention.sh" 2>&1)"; rrc=$?
 [ "$rrc" -ne 0 ] && ok "a failing DELETE exits nonzero (rc=$rrc) instead of echoing success" || bad "the retention job reported success on a failed DELETE: $OUT"
 grep -q "DELETE failed" "$rlog" && ok "and the log says so" || bad "the log does not name the failure: $(tail -4 "$rlog")"
