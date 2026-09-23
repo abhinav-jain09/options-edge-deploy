@@ -11,7 +11,9 @@ spec:
   # Deployed INERT. BROKER_EXECUTION_MODE=SHADOW places nothing and connects to no broker; ENABLED=false
   # refuses every intent. Turning this into something that trades is three values below, set by the account
   # owner — not by this manifest landing.
-  # replicas 0 until the image EXISTS. These images are built from options-edge-processing main, which has
+  # replicas 0 until the image EXISTS — and the hold that MATTERS is the entry in morning-autostart.sh's
+  # KEEP_DOWN and dev-cleanup.sh's DISABLED_DEV: both scale every part-of=options-edge Deployment to 1
+  # otherwise, so a replica count in a manifest is not a hold by itself (review, BLOCKER). These images are built from options-edge-processing main, which has
   # not merged yet, so a running replica would sit in ImagePullBackOff and tell nobody anything. Scale to 1
   # after the first successful dev image build.
   replicas: 0
