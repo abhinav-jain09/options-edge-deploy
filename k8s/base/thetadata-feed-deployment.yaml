@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: thetadata-feed-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: thetadata-feed-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  # DEV-ONLY, same story as ibkr-feed-service: the ThetaData Terminal runs on the dev Mac
+  # (~/thetadata, port 25503) and this ONE pod dual-produces to BOTH clusters via its own
+  # THETADATA_KAFKA_TARGETS dispatcher (options-edge-ibkr-feed's
+  # ThetaDataFeedApplication/ThetaDataFeedConfig — same dual-target pattern as the plain IBKR
+  # feed's chain fan-out). Base stays 0 as a fail-closed default; the dev overlay patches
+  # replicas to 1 explicitly. Owner decision 2026-09-19 (§10.2/§10.3): dev is the data source
+  # for prod, overnight visible by default.
+  replicas: 0
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: thetadata-feed-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: thetadata-feed-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      containers:
+        - name: thetadata-feed
+          image: 192.168.100.252:5000/options-edge-ibkr-feed:dev
+          imagePullPolicy: Always
+          # Same shaded jar as the plain IBKR feed (com.optionsedge.ibkrfeed.thetadata is a
+          # second main class in the same artifact, see Dockerfile.thetadata) — no separate
+          # image build needed, just a different entrypoint.
+          command: ["java", "-cp", "/app/app.jar", "com.optionsedge.ibkrfeed.thetadata.ThetaDataFeedApplication"]
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
+          ports:
+            - name: health
+              containerPort: 8080
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 45
+            periodSeconds: 15
+            failureThreshold: 4
+          readinessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 45
+            periodSeconds: 15
+            failureThreshold: 8
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              memory: 2Gi
