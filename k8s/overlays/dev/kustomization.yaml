@@ -533,7 +533,7 @@ patches:
   # above), overnight visible by default. THETADATA_BASE_URL/KAFKA_TARGETS default
   # sensibly in ThetaDataFeedConfig.fromEnvironment() (the Terminal on 127.0.0.1:25503 is
   # reached via host.docker.internal on the dev Mac's normal pod network, same story as
-  # IB_HOST above) — only the replica count needs a patch here.
+  # IB_HOST above) — the replica count and the Terminal base URL need a patch here.
   - target:
       kind: Deployment
       name: thetadata-feed-service
