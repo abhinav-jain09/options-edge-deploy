@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: amt-order-bridge
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: amt-order-bridge
+    app.kubernetes.io/component: amt-order-bridge
+    app.kubernetes.io/part-of: options-edge
+spec:
+  # Deployed INERT: AMT_BRIDGE_ENABLED=false reads the desk and publishes nothing, logging only what it
+  # WOULD ask for. The bridge holds no broker connection in any case.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: amt-order-bridge
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: amt-order-bridge
+        app.kubernetes.io/component: amt-order-bridge
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      containers:
+        - name: amt-order-bridge
+          image: 192.168.100.252:5000/options-edge-amt-order-bridge:dev
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+          env:
+            - name: HEALTH_PORT
+              value: "8132"
+            - name: AMT_BRIDGE_AUCTION_TOPIC
+              value: es.futures.auction
+            - name: AMT_BRIDGE_INTENT_TOPIC
+              value: trading.order.intent
+            - name: AMT_BRIDGE_CONSUMER_GROUP
+              value: amt-order-bridge
+            - name: AMT_BRIDGE_ENABLED
+              value: "false"          # OWNER SETS THIS: false publishes no intents
+            - name: AMT_BRIDGE_INTENT_VALID_MS
+              value: "600000"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
