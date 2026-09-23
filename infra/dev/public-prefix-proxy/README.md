@@ -1,9 +1,10 @@
 # Public `/dev` prefix proxy
 
-This Nginx proxy runs on the dev host and exposes only `/dev/` on port `8098`.
-It strips the prefix before forwarding to the existing dev web service on port
-`8090`, and rewrites root-relative browser resources into the prefix. The
-production Cloudflare tunnel routes the matching public path to this port.
+This Nginx proxy runs on the dev host and exposes the dev web app at the host root on port `8098`.
+It forwards to the existing dev web service on port `8090`, forwards WebSockets to
+the dev gateway on port `8091`, and rewrites the dev Keycloak URL to
+`https://dev-auth.bleadingoptions.com`. The named dev-Mac Cloudflare tunnel
+routes both public hostnames directly to this Mac.
 
 Run it as a persistent Docker container:
 
