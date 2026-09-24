@@ -340,7 +340,6 @@ if bad:
 print("service selectability: %d registered slice(s); %d selectable, %d exempt by declaration (%s)"
       % (len(registered), len(registered & choices), len(exempt), ", ".join(sorted(exempt))))
 PYCHK
-[ "$fail" -eq 0 ] || { echo "validate-services: FAILED" >&2; exit 1; }
 
 echo "=== 10) image refs resolve in the env they are rendered for ==="
 # WHY THIS EXISTS. broker-execution-service and amt-order-bridge were registered, given overlays, and
@@ -467,5 +466,12 @@ if [ "${_prodcount:-0}" -lt 20 ]; then
 elif [ "$fail" -eq 0 ]; then
   echo "10b: $_prodcount production-declaring slice(s); each resolves to a $PROD_REGISTRY mutable tag via the same selector service-deploy.sh uses"
 fi
+
+# THE GATE. Sections 9 and 10 sit after the mid-script `if [ "$fail" -ne 0 ]` that covers sections
+# 1-4, so their `fail=1` reached nothing: the script printed every FAIL line and then "OK" and exited
+# 0, and the Jenkins Validate stage passed (review, P1). My own mutation harness could not see it — it
+# sourced each section and printed the section's `fail`, which is the PREDICATE. The effect is the
+# script's exit status, and that is what the six mutations are now re-run against.
+[ "$fail" -eq 0 ] || { echo "validate-services: FAILED (see FAIL lines above)" >&2; exit 1; }
 
 echo "=== validate-services: OK ==="
