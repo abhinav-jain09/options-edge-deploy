@@ -214,11 +214,13 @@ services:
   - { name: spx-mission-control,          managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-spx-mission-control,          deployments: [spx-mission-control-service] }
   # amt-order-bridge / broker-execution-service: DEPLOYED INERT (both AMT_BRIDGE_ENABLED and
   # BROKER_EXECUTION_ENABLED are "false", replicas:0 in k8s/base — see the Deployment headers).
-  # No buildJob, for the same reason as every other options-edge-processing service in this list:
-  # Jenkinsfile.service-deploy resolves the `image` field below into BUILD_TARGET and triggers
-  # options-edge-processing (`mvn -pl <module> -am`). An earlier revision of this comment claimed
-  # the missing buildJob was because the code had not merged yet — that was never the reason, and
-  # the code merged on 2026-09-24 (options-edge-processing #888, 7b71452e).
+  # Neither carries a buildJob because neither needs one: Jenkinsfile.service-deploy:334-359 reads
+  # the `image` field below, hands it to options-edge-processing as BUILD_TARGET, and lets that job
+  # build the module (`mvn -pl <module> -am`). This says nothing about the other entries here — some
+  # DO carry a buildJob, because they are built by their own repo's job rather than by the
+  # options-edge-processing reactor. An earlier revision of this comment instead blamed the absent
+  # buildJob on the code "not yet merged": that was never the reason, and the code merged on
+  # 2026-09-24 (options-edge-processing #888, 7b71452e).
   # Registered on BOTH envs because both overlays include k8s/base as-is with no per-env patch.
   - { name: amt-order-bridge,             managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-amt-order-bridge,             deployments: [amt-order-bridge] }
   - { name: broker-execution-service,     managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-broker-execution,             deployments: [broker-execution-service] }

@@ -11,11 +11,17 @@ spec:
   # Deployed INERT. BROKER_EXECUTION_MODE=SHADOW places nothing and connects to no broker; ENABLED=false
   # refuses every intent. Turning this into something that trades is three values below, set by the account
   # owner — not by this manifest landing.
-  # replicas 0 — but the hold that MATTERS is the entry in oe-boot-bringup.sh's KEEP_DOWN,
-  # morning-autostart.sh's KEEP_DOWN and dev-cleanup.sh's DISABLED_DEV: each of those scales every
-  # part-of=options-edge Deployment to 1 otherwise, so a replica count in a manifest is not a hold by
-  # itself (review, BLOCKER). All three list this service — verified 2026-09-24, and all three must keep
-  # it: they are separate lists that have drifted apart before.
+  # replicas 0 — but the hold that MATTERS is the entry in the three ops lists, because a replica count
+  # in a manifest is not a hold by itself (review, BLOCKER). All three list this service, verified
+  # 2026-09-24, and each reaches it by its own route — do not assume one shape covers all three:
+  #   oe-boot-bringup.sh:40,90  KEEP_DOWN, applied to every Deployment in the namespace that is
+  #                             currently at 0 — no part-of selector, and `grep -vE` is a SUBSTRING
+  #                             match, not an exact one
+  #   morning-autostart.sh:29,75  KEEP_DOWN, applied to the part-of=options-edge Deployments, compared
+  #                             as exact names
+  #   dev-cleanup.sh:46,587     DISABLED_DEV, compared as exact names (`grep -qxE`)
+  # tests/test_keep_down_lists_agree.py fails CI when the two KEEP_DOWN lists disagree. DISABLED_DEV is
+  # dev-only and is NOT covered by that test, so it has to be kept in step by hand.
   # The code merged to options-edge-processing main on 2026-09-24 (#888, 7b71452e), so the image exists
   # once service-deploy has run for this service with BUILD_IMAGES=true; until that first build a running
   # replica would sit in ImagePullBackOff and tell nobody anything. Scale to 1 after that build — and only
