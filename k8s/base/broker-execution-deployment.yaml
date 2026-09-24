@@ -30,13 +30,18 @@ spec:
   # REQUIRED_IMAGE (:97) deploys an already-pushed digest with no build at all. So a RED service-deploy
   # can sit on top of a pushed image — the child can succeed and the parent then fail fetching its image
   # lock (:374) — and a green parent is not the only way one arrives.
-  # Do not infer it from a build result. LOOK: the image exists exactly when the registry has it.
-  #   dev   curl -s http://localhost:5001/v2/options-edge-broker-execution/tags/list
-  #   prod  curl -s http://192.168.100.252:5000/v2/options-edge-broker-execution/tags/list
-  # (the cluster dials the dev one as host.docker.internal:5001; from a shell on the Mac it is
-  # localhost:5001. NAME_UNKNOWN means no image has ever been pushed for this service.)
-  # Until that answers with the tag, a running replica sits in ImagePullBackOff and tells nobody
-  # anything. Scale to 1 once it does — and only when the account owner wants the values above set.
+  # Do not infer it from a build result. Resolve it the way the deploy itself does — a tag listing is
+  # not enough, since a tag can dangle or carry no manifest for the deploy platform:
+  #   . scripts/deploy/pin-image.sh
+  #   DEPLOY_PLATFORM=linux/arm64 resolve_repo_digest localhost:5001           options-edge-broker-execution dev
+  #   DEPLOY_PLATFORM=linux/amd64 resolve_repo_digest 192.168.100.252:5000     options-edge-broker-execution prod
+  # It fails closed unless the named tag has exactly one manifest for that platform, and prints the
+  # digest that will be pinned. The two registries are NOT two names for one thing: :5001 (the Mac's
+  # local registry, host.docker.internal:5001 from inside the cluster) holds the dev tags and
+  # .252:5000 holds the prod ones — checked 2026-09-24, and image-tags/dev.yaml's comment claiming
+  # they are the same registry is wrong.
+  # Until that resolves, a running replica sits in ImagePullBackOff and tells nobody anything. Scale
+  # to 1 once it does — and only when the account owner wants the values above set.
   replicas: 0
   strategy:
     type: Recreate
