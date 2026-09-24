@@ -56,6 +56,8 @@ spec:
     spec:
       containers:
         - env:
+            - name: KAFKA_STREAMS_STATE_DIR
+              value: /var/lib/options-edge/kafka-streams/recovery-20260910
             - name: HEALTH_PORT
               value: "8108"
             - name: KAFKA_UNIFIED_SR_GEX_TOPIC
@@ -74,8 +76,6 @@ spec:
               value: "1000"
             - name: KAFKA_UNIFIED_SR_STREAMS_NUM_THREADS
               value: "8"
-            - name: KAFKA_STREAMS_STATE_DIR
-              value: /var/lib/options-edge/kafka-streams
             - name: JAVA_TOOL_OPTIONS
               value: -Xms512m -Xmx2g
           envFrom:

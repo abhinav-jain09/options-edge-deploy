@@ -1,0 +1,10 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: option-price-behavior-service
+spec:
+  # Both pods would otherwise open the same Kafka Streams state on one PVC.
+  # Stop the previous process before the replacement acquires its state lock.
+  strategy:
+    type: Recreate
+    rollingUpdate: null
