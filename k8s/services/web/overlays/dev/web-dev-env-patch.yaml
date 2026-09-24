@@ -42,12 +42,21 @@ spec:
           env:
             - name: APP_PROFILE
               value: "dev"
-            # Auth ON in dev (mirrors prod). The Mac is now STATIC at 192.168.100.102 so the
-            # Keycloak issuer below is reachable from BOTH the pod (jwtDecoder validation) and the
-            # browser (login), and matches Keycloak's discovery/token issuer. If the Mac IP ever
-            # drifts again, re-add VITE_AUTH_ENABLED=false + AUTH_ALLOW_DISABLED=true here to boot public.
+            # Auth ON in dev (mirrors prod). Keycloak's OWN configured hostname is dev-auth.bleadingoptions.com
+            # (its discovery doc self-reports this issuer regardless of which address you query it on --
+            # confirmed by hitting both http://192.168.100.102:8089/... and https://dev-auth.bleadingoptions.com/...
+            # discovery endpoints directly), so every token it mints carries THAT iss claim. The old
+            # 192.168.100.102:8089 value below was reachable but WRONG: SecurityConfig.java's
+            # JwtIssuerValidator matches this value against the token's iss claim byte-for-byte, so it
+            # rejected every token with a bare 401 (no body) -- the root cause of the 2026-09-24
+            # "signing in forever" loop AND every /api/* 401 once signed in (the frontend's generic
+            # on-401 handler re-triggers login(), which re-loops). Reachable from BOTH the pod
+            # (jwtDecoder validation, verified via a throwaway pod curl) and the browser (already the
+            # actual login redirect target). If the Mac IP or hostname ever drifts again, re-add
+            # VITE_AUTH_ENABLED=false + AUTH_ALLOW_DISABLED=true here to boot public. MUST MIRROR the
+            # top-level k8s/overlays/dev/web-dev-env-patch.yaml (validate-services render equivalence).
             - name: VITE_AUTH_ISSUER
-              value: "http://192.168.100.102:8089/realms/optionsedge"
+              value: "https://dev-auth.bleadingoptions.com/realms/optionsedge"
             # The browser's live WS talks to the dev feed-gateway at localhost:8093 — the gateway that
             # is actually serving live snapshots and accepts the localhost browser origin. The web SERVES
             # this URL to the browser as config.feedGatewayWsUrl, so it MUST be browser-reachable.
