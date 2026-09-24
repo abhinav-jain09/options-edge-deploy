@@ -23,11 +23,33 @@ trap 'rm -rf "$TMP"' EXIT
 
 ENVS=(dev production experiment)
 
+# SCOPED MODE (service-deploy fast path): validate ONLY the service being deployed, in the ONE env
+# it is being deployed to — the per-deploy stage does not need to re-prove the whole fleet every
+# time (that full sweep renders ~all overlays × 3 envs and is the "hell lot of time"). CI and manual
+# full runs leave both unset and get the complete fleet + global-invariant sweep unchanged.
+#   VALIDATE_ONLY_SERVICE=<services.yaml name>   restrict the slice/mirror checks to that service
+#   VALIDATE_ONLY_ENV=<dev|production|experiment> render + check only that env (skips e.g. experiment)
+ONLY_SERVICE="${VALIDATE_ONLY_SERVICE:-}"
+ONLY_ENV="${VALIDATE_ONLY_ENV:-}"
+if [ -n "$ONLY_ENV" ]; then ENVS=("$ONLY_ENV"); fi
+if [ -n "$ONLY_SERVICE" ]; then
+  # Fail closed, never pass having validated nothing (Codex): the scope MUST resolve to exactly one
+  # registered standalone service. A typo or a non-standalone/​unregistered SERVICE would otherwise
+  # yield an empty loop and a green "OK".
+  _match="$(yq -r ".services[] | select(.managedBy == \"standalone\" and .name == \"$ONLY_SERVICE\") | .name" services.yaml)"
+  if [ "$(printf '%s\n' "$_match" | grep -c .)" != "1" ]; then
+    echo "FATAL: VALIDATE_ONLY_SERVICE='$ONLY_SERVICE' is not exactly one registered standalone service in services.yaml — refusing to report OK without validating it" >&2
+    exit 1
+  fi
+  echo "=== SCOPED validation: service='$ONLY_SERVICE' env='${ONLY_ENV:-<all declared>}' (fleet + global sweeps skipped) ==="
+fi
+
 echo "=== render monolithic overlays ==="
 for e in "${ENVS[@]}"; do
   kubectl kustomize "k8s/overlays/$e" >"$TMP/mono-$e.yaml" || { echo "FATAL: k8s/overlays/$e does not render" >&2; exit 1; }
 done
 
+if [ -z "$ONLY_SERVICE" ]; then
 echo "=== 1) completeness: every rendered Deployment is registered ==="
 yq -r '.services[].deployments[]' services.yaml | sort -u >"$TMP/registered.txt"
 for e in "${ENVS[@]}"; do
@@ -46,11 +68,16 @@ if [ -n "$unregistered" ]; then
 else
   echo "ok: all $(wc -l <"$TMP/rendered.txt" | tr -d ' ') rendered Deployments are registered"
 fi
+fi  # end completeness (full-fleet only)
 
 echo "=== 2+3+4) standalone slices: structure, blast radius, mirror rule, image name ==="
 while IFS= read -r name; do
   img="$(yq -r ".services[] | select(.name == \"$name\") | .image" services.yaml)"
-  for e in $(yq -r ".services[] | select(.name == \"$name\") | .envs[]" services.yaml); do
+  # Scoped mode drives the env off VALIDATE_ONLY_ENV directly (not the declared envs[]) so a slice
+  # that is deployed but under-declared (e.g. databento-vix-feed has a dev overlay yet envs:[production])
+  # is still validated, and a truly missing overlay FAILs below instead of silently reporting OK (Codex).
+  if [ -n "$ONLY_ENV" ]; then _svc_envs="$ONLY_ENV"; else _svc_envs="$(yq -r ".services[] | select(.name == \"$name\") | .envs[]" services.yaml)"; fi
+  for e in $_svc_envs; do
     overlay="k8s/services/$name/overlays/$e"
     if [ ! -d "$overlay" ]; then
       echo "FAIL: $name declares env '$e' but $overlay does not exist" >&2
@@ -123,11 +150,27 @@ while IFS= read -r name; do
     fi
     echo "ok: $name/$e (blast radius, image, mirror)"
   done
-done < <(yq -r '.services[] | select(.managedBy == "standalone") | .name' services.yaml)
+done < <(
+  if [ -n "$ONLY_SERVICE" ]; then
+    # Scoped: only the service being deployed (and only if it is a standalone slice service).
+    yq -r ".services[] | select(.managedBy == \"standalone\" and .name == \"$ONLY_SERVICE\") | .name" services.yaml
+  else
+    yq -r '.services[] | select(.managedBy == "standalone") | .name' services.yaml
+  fi
+)
 
 if [ "$fail" -ne 0 ]; then
   echo "=== validate-services: FAILED ===" >&2
   exit 1
+fi
+
+# Scoped fast path stops here: sections 5-8 below are FLEET/GLOBAL invariants (VIX & pre-open single
+# publisher, durable-topic preservation, topic-contract self-tests, auto-hunt flags, CVD timing) that
+# are not about the single service being deployed. They run in full-fleet mode (CI, manual, and the
+# monolith deploy's own validate-platform.sh), not on every per-service fast deploy.
+if [ -n "$ONLY_SERVICE" ]; then
+  echo "=== validate-services: OK (scoped to $ONLY_SERVICE/${ONLY_ENV:-all-declared-envs}) ==="
+  exit 0
 fi
 
 echo "=== 5) at-most-one VIX publisher (VIX feed separation design §7) ==="

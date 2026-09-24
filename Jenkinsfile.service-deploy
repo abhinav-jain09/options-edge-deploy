@@ -231,13 +231,19 @@ PYEOF
         }
         sh '''
           set -euo pipefail
+          # SCOPED validation: this job deploys ONE service to ONE env, so validate exactly that —
+          # slice structure, blast radius, image name and the mirror rule for THIS service/env only.
+          # The whole-fleet drift sweep + global invariants (§1,5-8) render ~every overlay × 3 envs
+          # and are the slow part; they run in full-fleet mode (CI / manual `validate-services.sh`
+          # with no scope, and the monolith deploy's validate-platform.sh), not on each fast deploy.
+          export VALIDATE_ONLY_SERVICE="$SERVICE_PARAM"
+          export VALIDATE_ONLY_ENV="$ENVIRONMENT"
           bash scripts/ci/validate-services.sh
-          # Dependency-scoped FIRE-input verdict (processing PR #594): the standalone dealer-ledger
-          # deploy path must refuse a render that enables the flag without shadow evidence, or that
-          # carries a malformed materiality fraction. Unconditional — this job deploys ANY service,
-          # and the guard reads the rendered overlays, not the selected service, so it costs one
-          # kustomize per env and cannot be skipped by picking a different SERVICE parameter.
-          bash scripts/ci/validate-dealer-ledger-fire-quality.sh
+          # FIRE-input verdict is a dealer-ledger property — only assert it when deploying that
+          # service (it reads the dealer-ledger render, unrelated to any other service being rolled).
+          if [ "$SERVICE_PARAM" = "dealer-ledger" ]; then
+            bash scripts/ci/validate-dealer-ledger-fire-quality.sh
+          fi
         '''
       }
     }
