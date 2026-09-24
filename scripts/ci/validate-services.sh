@@ -335,4 +335,67 @@ print("service selectability: %d registered slice(s); %d selectable, %d exempt b
 PYCHK
 [ "$fail" -eq 0 ] || { echo "validate-services: FAILED" >&2; exit 1; }
 
+echo "=== 10) image refs resolve in the env they are rendered for ==="
+# WHY THIS EXISTS. broker-execution-service and amt-order-bridge were registered, given overlays, and
+# were the only 2 of 65 dev slices still rendering the .252 PRODUCTION registry, because neither was
+# in k8s/overlays/dev/kustomization.yaml's images: remap. A dev deploy would have tried to pin
+# .252:5000/options-edge-broker-execution:dev -- a dev tag in the prod registry, which cannot exist --
+# and died in pin-image.sh looking exactly like an image nobody had built. They were ALSO the only 2
+# missing from image-tags/production.yaml, which for production is not a warning but a hard stop
+# (service-deploy.sh: "no entry in image-tags/production.yaml ... fail closed").
+#
+# Two directions, because service-deploy.sh treats the envs differently and each has its own failure:
+#   dev        the RENDER ref is authoritative (the mapping only WARNs), so the render must not name
+#              the production registry.
+#   production the MAPPING is authoritative, so a production-declaring service must have one.
+DEV_REGISTRY='host.docker.internal:5001'
+PROD_REGISTRY='192.168.100.252:5000'
+
+# 10a -- no dev slice may reference the production registry.
+dev_slices=(k8s/services/*/overlays/dev/manifest.yaml)
+if [ "${#dev_slices[@]}" -eq 0 ] || [ ! -e "${dev_slices[0]}" ]; then
+  echo "FAIL: no dev slices found — the glob and the repo layout have diverged, so 10a checked nothing" >&2
+  fail=1
+else
+  offenders="$(grep -l "$PROD_REGISTRY" "${dev_slices[@]}" 2>/dev/null || true)"
+  if [ -n "$offenders" ]; then
+    echo "FAIL: dev slice(s) reference the PRODUCTION registry $PROD_REGISTRY. A dev deploy pins the" >&2
+    echo "      render ref, and a :dev tag does not exist there, so this fails in pin-image.sh looking" >&2
+    echo "      like an unbuilt image. Add an images: remap to k8s/overlays/dev/kustomization.yaml:" >&2
+    printf '        %s\n' $offenders >&2
+    fail=1
+  else
+    echo "10a: all ${#dev_slices[@]} dev slices reference $DEV_REGISTRY"
+  fi
+fi
+
+# 10b -- every production-declaring service has a matching image-tags/production.yaml entry.
+# Matched the way service-deploy.sh matches it: a VALUE containing /<image basename>: (NOT the key,
+# which is a label -- several deployments share one mapping through the value).
+python3 - <<'PYIMG' || fail=1
+import sys, yaml
+tags = yaml.safe_load(open('image-tags/production.yaml')) or {}
+values = list((tags.get('images') or {}).values())
+if not values:
+    sys.exit("FAIL: image-tags/production.yaml has no images: entries — this check would pass vacuously.")
+reg = yaml.safe_load(open('services.yaml'))
+def services(o):
+    if isinstance(o, dict):
+        for v in o.values(): yield from services(v)
+    elif isinstance(o, list):
+        for v in o:
+            if isinstance(v, dict) and 'name' in v: yield v
+            else: yield from services(v)
+want = [s for s in services(reg)
+        if s.get('sliceGenerated') and 'production' in (s.get('envs') or []) and s.get('image')]
+if not want:
+    sys.exit("FAIL: no production-declaring slices found in services.yaml — reader and registry have diverged.")
+missing = sorted(s['name'] for s in want if not any('/%s:' % s['image'] in v for v in values))
+if missing:
+    sys.exit("FAIL: declared for production but NO image-tags/production.yaml entry — service-deploy.sh\n"
+             "      fails closed for these, so the production fast path does not exist for them:\n"
+             + "".join("        %s\n" % n for n in missing))
+print("10b: %d production-declaring slice(s), all mapped in image-tags/production.yaml" % len(want))
+PYIMG
+
 echo "=== validate-services: OK ==="

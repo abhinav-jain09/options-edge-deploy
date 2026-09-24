@@ -678,6 +678,15 @@ images:
   # the image built + pushed for dev?)" when the image was pushed, to the other registry.
   - name: 192.168.100.252:5000/options-edge-approach-monitor
     newName: host.docker.internal:5001/options-edge-approach-monitor
+  # broker-execution / amt-order-bridge: missing here until 2026-09-24, so their dev slices were the
+  # only two of 65 still rendering the .252 PRODUCTION registry. A dev deploy would then try to pin
+  # .252:5000/options-edge-broker-execution:dev — a dev tag in the prod registry, which cannot exist —
+  # and die in pin-image.sh looking like an unbuilt image. Section 10 of validate-services.sh now
+  # fails when any dev slice references the production registry.
+  - name: 192.168.100.252:5000/options-edge-broker-execution
+    newName: host.docker.internal:5001/options-edge-broker-execution
+  - name: 192.168.100.252:5000/options-edge-amt-order-bridge
+    newName: host.docker.internal:5001/options-edge-amt-order-bridge
   - name: 192.168.100.252:5000/options-edge-approach-position-publisher
     newName: host.docker.internal:5001/options-edge-approach-position-publisher
   # The dev cluster is docker-desktop on this Mac and pulls from the LOCAL registry; the .252
