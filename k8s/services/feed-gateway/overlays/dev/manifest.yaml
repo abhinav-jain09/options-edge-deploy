@@ -66,9 +66,9 @@ spec:
             - name: WS_ALLOWED_ORIGINS
               value: http://localhost:8090
             - name: WS_AUTH_ISSUER_URI
-              value: http://192.168.100.102:8089/realms/optionsedge
+              value: https://dev-auth.bleadingoptions.com/realms/optionsedge
             - name: GATEWAY_KEYCLOAK_ISSUER
-              value: http://192.168.100.102:8089/realms/optionsedge
+              value: https://dev-auth.bleadingoptions.com/realms/optionsedge
             - name: GATEWAY_KEYCLOAK_CLIENT_ID
               value: options-edge-web
             - name: GATEWAY_REPLAY_ORCHESTRATOR_URL
