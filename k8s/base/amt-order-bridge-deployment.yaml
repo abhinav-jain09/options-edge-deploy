@@ -21,10 +21,12 @@ spec:
   #   dev-cleanup.sh:46,587     DISABLED_DEV, compared as exact names (`grep -qxE`)
   # tests/test_keep_down_lists_agree.py fails CI when the two KEEP_DOWN lists disagree. DISABLED_DEV is
   # dev-only and is NOT covered by that test, so it has to be kept in step by hand.
-  # The code merged to options-edge-processing main on 2026-09-24 (#888, 7b71452e), so the image exists
-  # once service-deploy has run for this service with BUILD_IMAGES=true; until that first build a running
-  # replica would sit in ImagePullBackOff and tell nobody anything. Scale to 1 after that build — and only
-  # when the account owner wants the values above set.
+  # The code merged to options-edge-processing main on 2026-09-24 (#888, 7b71452e), but a merge does not
+  # produce an image. The image exists only after a SUCCESSFUL service-deploy run for this service with
+  # BUILD_IMAGES=true AND DEPLOY_DRY_RUN=false — Jenkinsfile.service-deploy:276 gates the build stage on
+  # exactly that pair, so a dry run, a refused run and a failed run each build nothing. Until that first
+  # successful build a running replica would sit in ImagePullBackOff and tell nobody anything. Scale to 1
+  # after it — and only when the account owner wants the values above set.
   replicas: 0
   strategy:
     type: Recreate
