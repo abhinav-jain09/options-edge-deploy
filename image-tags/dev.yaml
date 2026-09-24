@@ -14,9 +14,14 @@ images:
   strike-flow-classifier-service: 192.168.100.252:5000/options-edge-strike-flow-classifier:dev
   delta-flow-service: 192.168.100.252:5000/options-edge-delta-flow:dev
   oi-shadow-service: host.docker.internal:5001/options-edge-oi-shadow:dev
-  # host.docker.internal:5001 and 192.168.100.252:5000 are the same local registry by two names;
-  # the dev image build pushes to the FORMER, and a deployment whose entry is missing here falls
-  # back to the base manifest's ref (the .252 spelling) and then cannot resolve a digest.
+  # host.docker.internal:5001 (localhost:5001 from a shell on the Mac) and 192.168.100.252:5000 are
+  # NOT the same registry by two names — that is what this comment said until 2026-09-24, and it made
+  # the failure below look harmless. Measured 2026-09-24: :5001 holds the dev tags
+  # (options-edge-indicator-service -> ["…","dev"]) and .252:5000 holds only prod-* tags. The dev
+  # image build pushes to :5001. Outside production this file is INFORMATIONAL — service-deploy.sh
+  # keeps the env-correct RENDER ref and only WARNs when an entry is missing — so what actually
+  # matters for dev is the images: remap in k8s/overlays/dev/kustomization.yaml. A service missing
+  # from THAT renders the .252 ref and then cannot resolve a digest.
   gamma-migration-service: host.docker.internal:5001/options-edge-gamma-migration:dev
   gamma-leadership-service: host.docker.internal:5001/options-edge-gamma-leadership:dev
   corridor-gauge-service: host.docker.internal:5001/options-edge-corridor-gauge:dev
@@ -63,3 +68,9 @@ images:
   spread-skew-postgres-writer: 192.168.100.252:5000/options-edge-spread-skew-postgres-writer:dev
   signal-follower: 192.168.100.252:5000/options-edge-signal-follower:dev
   nifty-gex-service: host.docker.internal:5001/options-edge-nifty-gex:dev
+  # broker-execution / amt-order-bridge: added 2026-09-24 with their production mappings. For dev this
+  # file is informational (the render ref wins), but the §2 symmetry check requires an image mapped in
+  # ANY env to be mapped in EVERY env it deploys to — a partial mapping is how the production fast path
+  # comes to fail closed. Both carry the :5001 spelling, which is where the dev build actually pushes.
+  broker-execution-service: host.docker.internal:5001/options-edge-broker-execution:dev
+  amt-order-bridge: host.docker.internal:5001/options-edge-amt-order-bridge:dev

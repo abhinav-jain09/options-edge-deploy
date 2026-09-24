@@ -53,7 +53,7 @@ spec:
           envFrom:
             - configMapRef:
                 name: options-edge-config
-          image: 192.168.100.252:5000/options-edge-amt-order-bridge:dev
+          image: host.docker.internal:5001/options-edge-amt-order-bridge:dev
           imagePullPolicy: Always
           name: amt-order-bridge
           resources:

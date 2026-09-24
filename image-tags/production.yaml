@@ -70,3 +70,9 @@ images:
   signal-follower: 192.168.100.252:5000/options-edge-signal-follower:prod
   # nifty-gex Pressure boards — built from the options-edge-nifty-gex repo on .252 (amd64).
   nifty-gex-service: 192.168.100.252:5000/options-edge-nifty-gex:prod
+  # broker-execution / amt-order-bridge: absent until 2026-09-24, and for production that is not a
+  # warning but a hard stop — service-deploy.sh fails closed ("no entry in image-tags/production.yaml")
+  # because the render carries the base dev ref and deploying it would be the dev-image-in-production
+  # bug. Section 10 of validate-services.sh now fails when a production-declaring service has no entry.
+  broker-execution-service: 192.168.100.252:5000/options-edge-broker-execution:prod
+  amt-order-bridge: 192.168.100.252:5000/options-edge-amt-order-bridge:prod
