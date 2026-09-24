@@ -37,8 +37,8 @@ spec:
   # It fails closed unless the named tag has exactly one manifest for that platform, and prints the
   # digest that will be pinned. The two registries are NOT two names for one thing: :5001 (the Mac's
   # local registry, host.docker.internal:5001 from inside the cluster) holds the dev tags and
-  # .252:5000 holds the prod ones — checked 2026-09-24, and image-tags/dev.yaml's comment claiming
-  # they are the same registry is wrong.
+  # .252:5000 holds the prod ones — checked 2026-09-24. image-tags/dev.yaml used to assert they were
+  # one registry under two names, in two separate comments; both are corrected.
   # Until that resolves, a running replica sits in ImagePullBackOff and tells nobody anything. Scale
   # to 1 once it does — and only when the account owner wants the values above set.
   replicas: 0
