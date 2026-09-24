@@ -213,10 +213,20 @@ services:
   - { name: pressure-postgres-writer,     managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-pressure-postgres-writer,     deployments: [pressure-postgres-writer] }
   - { name: spx-mission-control,          managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-spx-mission-control,          deployments: [spx-mission-control-service] }
   # amt-order-bridge / broker-execution-service: DEPLOYED INERT (both AMT_BRIDGE_ENABLED and
-  # BROKER_EXECUTION_ENABLED are "false", replicas:0 in k8s/base until the image exists — see the
-  # Deployment headers). Images build from options-edge-processing main, not yet merged, so there
-  # is no buildJob here to wire up. Registered on BOTH envs because both overlays include
-  # k8s/base as-is with no per-env patch.
+  # BROKER_EXECUTION_ENABLED are "false", replicas:0 in k8s/base — see the Deployment headers).
+  # Neither carries a buildJob because neither needs one: Jenkinsfile.service-deploy's
+  # 'Build image (this service only)' stage reads the `image` field below, hands it to
+  # options-edge-processing as BUILD_TARGET, and lets that job build the module (`mvn -pl <module> -am`).
+  # That is not a statement about the other entries here — some DO carry a buildJob, because their own
+  # repo's job builds them rather than the options-edge-processing reactor. The code these two deploy
+  # merged to options-edge-processing main as #888 / 7b71452e on 2026-09-24 — a cross-repo reference,
+  # checkable there and not here; nothing in this file depends on it being true.
+  # Registered on BOTH envs because neither has a per-service env patch: the only per-env differences
+  # in the rendered Deployment are the ones the overlays apply to EVERY service — the image (dev's
+  # images: transformer remaps it to the local dev registry; production takes its ref from
+  # image-tags/production.yaml at deploy time) and imagePullPolicy (dev Always, production
+  # IfNotPresent). The replica count and every *_ENABLED value come from k8s/base in both, which is
+  # why the inertness lives there and not here. Verified by diffing the two rendered slices.
   - { name: amt-order-bridge,             managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-amt-order-bridge,             deployments: [amt-order-bridge] }
   - { name: broker-execution-service,     managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-broker-execution,             deployments: [broker-execution-service] }
   - { name: redis,                        managedBy: monolith, image: redis,                                     deployments: [options-edge-redis] }

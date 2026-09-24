@@ -10,11 +10,38 @@ metadata:
 spec:
   # Deployed INERT: AMT_BRIDGE_ENABLED=false reads the desk and publishes nothing, logging only what it
   # WOULD ask for. The bridge holds no broker connection in any case.
-  # replicas 0 until the image EXISTS — and the hold that MATTERS is the entry in morning-autostart.sh's
-  # KEEP_DOWN and dev-cleanup.sh's DISABLED_DEV: both scale every part-of=options-edge Deployment to 1
-  # otherwise, so a replica count in a manifest is not a hold by itself (review, BLOCKER). These images are built from options-edge-processing main, which has
-  # not merged yet, so a running replica would sit in ImagePullBackOff and tell nobody anything. Scale to 1
-  # after the first successful dev image build.
+  # replicas 0 — but the hold that MATTERS is the entry in the three ops lists, because a replica count
+  # in a manifest is not a hold by itself. All three list this service, and each reaches it by its own
+  # route — do not assume one shape covers all three:
+  #   scripts/ops/oe-boot-bringup.sh      KEEP_DOWN, applied to every Deployment in the namespace that
+  #                                       is currently at 0. No part-of selector, and `grep -vE` is a
+  #                                       SUBSTRING match, not an exact one.
+  #   scripts/ops/morning-autostart.sh    KEEP_DOWN, applied to the part-of=options-edge Deployments,
+  #                                       compared as exact names.
+  #   scripts/ops/dev-cleanup.sh          DISABLED_DEV, compared as exact names (`grep -qxE`).
+  # tests/test_keep_down_lists_agree.py fails CI when the two KEEP_DOWN lists disagree. DISABLED_DEV is
+  # dev-only and is NOT covered by that test, so it has to be kept in step by hand.
+  #
+  # The image is built by options-edge-processing, NOT by service-deploy, so no service-deploy outcome
+  # tells you whether one exists. service-deploy's 'Build image (this service only)' stage triggers
+  # that job when BUILD_IMAGES=true and DEPLOY_DRY_RUN=false (and both permitted-commit guards pass);
+  # the job can also be run on its own; and the REQUIRED_IMAGE parameter deploys an already-pushed
+  # digest with no build at all. The child can succeed and the parent then fail while fetching its
+  # image lock (fetch-permitted-image-lock.sh), so a RED service-deploy can sit on top of a pushed
+  # image. Do not infer. Resolve it the way the deploy does — a tag listing is not enough, since a tag
+  # can dangle or carry no manifest for the deploy platform:
+  #   . scripts/deploy/pin-image.sh
+  #   DEPLOY_PLATFORM=linux/arm64 resolve_repo_digest localhost:5001       options-edge-amt-order-bridge dev
+  #   DEPLOY_PLATFORM=linux/amd64 resolve_repo_digest 192.168.100.252:5000 options-edge-amt-order-bridge prod
+  # (those are the per-env platforms service-deploy.sh defaults to.) It fails closed unless the named
+  # tag has exactly one manifest for that platform, and prints the digest that will be pinned.
+  # The two registries are NOT one registry under two names: :5001 is the Mac's local registry
+  # (host.docker.internal:5001 from inside the cluster) and .252:5000 is a different machine's. Which
+  # tags each holds is an OBSERVATION this repo cannot prove — on 2026-09-24, :5001 answered with a dev
+  # tag for options-edge-indicator-service and .252:5000 with only prod-* ones. The two commands above
+  # re-check it for THIS service, which is the point: ask the registry, do not trust this sentence.
+  # Until that resolves, a running replica sits in ImagePullBackOff and tells nobody anything. Scale
+  # to 1 once it does — and only when the account owner wants the values above set.
   replicas: 0
   strategy:
     type: Recreate

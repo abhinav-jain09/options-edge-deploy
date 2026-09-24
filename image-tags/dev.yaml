@@ -16,9 +16,14 @@ images:
   oi-shadow-service: host.docker.internal:5001/options-edge-oi-shadow:dev
   # host.docker.internal:5001 (localhost:5001 from a shell on the Mac) and 192.168.100.252:5000 are
   # NOT the same registry by two names — that is what this comment said until 2026-09-24, and it made
-  # the failure below look harmless. Measured 2026-09-24: :5001 holds the dev tags
-  # (options-edge-indicator-service -> ["…","dev"]) and .252:5000 holds only prod-* tags. The dev
-  # image build pushes to :5001. Outside production this file is INFORMATIONAL — service-deploy.sh
+  # the failure below look harmless. That correction rests on an OBSERVATION, not on anything this repo
+  # can prove, so here is the observation and how to repeat it. On 2026-09-24
+  #   curl -s http://localhost:5001/v2/options-edge-indicator-service/tags/list
+  # returned a dev tag and
+  #   curl -s http://192.168.100.252:5000/v2/options-edge-indicator-service/tags/list
+  # returned only prod-* tags. Registry contents change; re-run those two if the distinction ever looks
+  # wrong. What does NOT depend on the observation is the mechanism below.
+  # Outside production this file is INFORMATIONAL — service-deploy.sh
   # keeps the env-correct RENDER ref and only WARNs when an entry is missing — so what actually
   # matters for dev is the images: remap in k8s/overlays/dev/kustomization.yaml. A service missing
   # from THAT renders the .252 ref and then cannot resolve a digest.
@@ -52,7 +57,8 @@ images:
   vol-premium-service: host.docker.internal:5001/options-edge-vol-premium:dev
   indicator-service: 192.168.100.252:5000/options-edge-indicator-service:dev
   # stock-gex builds in the options-edge-databento-feed repo and pushes to the local dev
-  # registry (host.docker.internal:5001 — the same registry as .252:5000, by its other name).
+  # registry, host.docker.internal:5001. (This said ".252:5000 by its other name" until 2026-09-24 —
+  # the same false claim the header above corrects. They are different registries.)
   stock-gex-service: host.docker.internal:5001/options-edge-stock-gex:dev
   vix-option-inteligence-service: 192.168.100.252:5000/options-edge-vix-option-inteligence:dev
   greek-move-authenticity-service: 192.168.100.252:5000/options-edge-greek-move-authenticity:dev
