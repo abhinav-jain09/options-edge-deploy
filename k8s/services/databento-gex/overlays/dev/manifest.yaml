@@ -149,6 +149,8 @@ spec:
               value: -Xms1g -Xmx4g
             - name: PREOPEN_GEX_SYMBOL
               value: SPX
+            - name: OVERNIGHT_GEX_ENABLED
+              value: "true"
           envFrom:
             - configMapRef:
                 name: options-edge-config

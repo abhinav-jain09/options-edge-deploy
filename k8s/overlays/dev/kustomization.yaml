@@ -650,6 +650,20 @@ patches:
       - op: replace
         path: /spec/replicas
         value: 0
+  # Overnight (GTH) GEX scheduler -- DEV-ONLY, gated in-code by OVERNIGHT_GEX_ENABLED AND
+  # APP_PROFILE=dev (DatabentoGexBridge.startOvernightGexScheduler, processing #890/#891).
+  # APP_PROFILE already defaults to dev (RuntimeProfileConfig) with no override anywhere in
+  # this overlay, so this one flag is the only thing standing between the code shipping in
+  # #891 and the scheduler actually running tonight's GTH window (20:15 ET).
+  - target:
+      kind: Deployment
+      name: databento-gex-service
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: OVERNIGHT_GEX_ENABLED
+          value: "true"
   # unified-sr + strike-flow-avro-adapter are now promoted to main and built for every env, so they
   # render and deploy in dev too (exclusions removed). Their dev image remaps are in the images: block.
 images:
