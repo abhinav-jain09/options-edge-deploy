@@ -22,16 +22,20 @@ spec:
   # tests/test_keep_down_lists_agree.py fails CI when the two KEEP_DOWN lists disagree. DISABLED_DEV is
   # dev-only and is NOT covered by that test, so it has to be kept in step by hand.
   # The code merged to options-edge-processing main on 2026-09-24 (#888, 7b71452e), but a merge does not
-  # produce an image. The image exists only after a SUCCESSFUL service-deploy run for this service with
-  # BUILD_IMAGES=true AND DEPLOY_DRY_RUN=false. Those two are necessary, not sufficient:
-  # Jenkinsfile.service-deploy:276 gates the build stage on BOTH of them AND on
-  # PERMITTED_SHA_GUARD=='PASSED' AND DEPLOY_WORKSPACE_PERMITTED=='PASSED'. So a dry run, and a run
-  # refused or failed BEFORE OR DURING that stage, build nothing while still being a run. The converse
-  # also holds and is easy to get backwards: a run that failed LATER — in the deploy, the rollout or the
-  # health gate — may well have pushed an image already, so a red build is not evidence that no image
-  # exists. Read the build stage's own result, not the run's. Until a successful build a running replica
-  # would sit in ImagePullBackOff and tell nobody anything. Scale to 1 after one — and only when the
-  # account owner wants the values above set.
+  # produce an image — and neither does any particular service-deploy OUTCOME. Five review rounds were
+  # spent trying to write a run-outcome rule here and every version was wrong, because the image is not
+  # produced by THIS job: options-edge-processing builds and pushes it. service-deploy triggers that job
+  # when BUILD_IMAGES=true (Jenkinsfile.service-deploy:276,351), it can be run on its own, and
+  # REQUIRED_IMAGE (:97) deploys an already-pushed digest with no build at all. So a RED service-deploy
+  # can sit on top of a pushed image — the child can succeed and the parent then fail fetching its image
+  # lock (:374) — and a green parent is not the only way one arrives.
+  # Do not infer it from a build result. LOOK: the image exists exactly when the registry has it.
+  #   dev   curl -s http://localhost:5001/v2/options-edge-amt-order-bridge/tags/list
+  #   prod  curl -s http://192.168.100.252:5000/v2/options-edge-amt-order-bridge/tags/list
+  # (the cluster dials the dev one as host.docker.internal:5001; from a shell on the Mac it is
+  # localhost:5001. NAME_UNKNOWN means no image has ever been pushed for this service.)
+  # Until that answers with the tag, a running replica sits in ImagePullBackOff and tells nobody
+  # anything. Scale to 1 once it does — and only when the account owner wants the values above set.
   replicas: 0
   strategy:
     type: Recreate
