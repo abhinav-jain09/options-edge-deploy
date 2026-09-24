@@ -12,34 +12,33 @@ spec:
   # refuses every intent. Turning this into something that trades is three values below, set by the account
   # owner — not by this manifest landing.
   # replicas 0 — but the hold that MATTERS is the entry in the three ops lists, because a replica count
-  # in a manifest is not a hold by itself (review, BLOCKER). All three list this service, verified
-  # 2026-09-24, and each reaches it by its own route — do not assume one shape covers all three:
-  #   oe-boot-bringup.sh:40,90  KEEP_DOWN, applied to every Deployment in the namespace that is
-  #                             currently at 0 — no part-of selector, and `grep -vE` is a SUBSTRING
-  #                             match, not an exact one
-  #   morning-autostart.sh:29,75  KEEP_DOWN, applied to the part-of=options-edge Deployments, compared
-  #                             as exact names
-  #   dev-cleanup.sh:46,587     DISABLED_DEV, compared as exact names (`grep -qxE`)
+  # in a manifest is not a hold by itself. All three list this service, and each reaches it by its own
+  # route — do not assume one shape covers all three:
+  #   scripts/ops/oe-boot-bringup.sh      KEEP_DOWN, applied to every Deployment in the namespace that
+  #                                       is currently at 0. No part-of selector, and `grep -vE` is a
+  #                                       SUBSTRING match, not an exact one.
+  #   scripts/ops/morning-autostart.sh    KEEP_DOWN, applied to the part-of=options-edge Deployments,
+  #                                       compared as exact names.
+  #   scripts/ops/dev-cleanup.sh          DISABLED_DEV, compared as exact names (`grep -qxE`).
   # tests/test_keep_down_lists_agree.py fails CI when the two KEEP_DOWN lists disagree. DISABLED_DEV is
   # dev-only and is NOT covered by that test, so it has to be kept in step by hand.
-  # The code merged to options-edge-processing main on 2026-09-24 (#888, 7b71452e), but a merge does not
-  # produce an image — and neither does any particular service-deploy OUTCOME. Five review rounds were
-  # spent trying to write a run-outcome rule here and every version was wrong, because the image is not
-  # produced by THIS job: options-edge-processing builds and pushes it. service-deploy triggers that job
-  # when BUILD_IMAGES=true (Jenkinsfile.service-deploy:276,351), it can be run on its own, and
-  # REQUIRED_IMAGE (:97) deploys an already-pushed digest with no build at all. So a RED service-deploy
-  # can sit on top of a pushed image — the child can succeed and the parent then fail fetching its image
-  # lock (:374) — and a green parent is not the only way one arrives.
-  # Do not infer it from a build result. Resolve it the way the deploy itself does — a tag listing is
-  # not enough, since a tag can dangle or carry no manifest for the deploy platform:
+  #
+  # The image is built by options-edge-processing, NOT by service-deploy, so no service-deploy outcome
+  # tells you whether one exists. service-deploy's 'Build image (this service only)' stage triggers
+  # that job when BUILD_IMAGES=true and DEPLOY_DRY_RUN=false (and both permitted-commit guards pass);
+  # the job can also be run on its own; and the REQUIRED_IMAGE parameter deploys an already-pushed
+  # digest with no build at all. The child can succeed and the parent then fail while fetching its
+  # image lock (fetch-permitted-image-lock.sh), so a RED service-deploy can sit on top of a pushed
+  # image. Do not infer. Resolve it the way the deploy does — a tag listing is not enough, since a tag
+  # can dangle or carry no manifest for the deploy platform:
   #   . scripts/deploy/pin-image.sh
-  #   DEPLOY_PLATFORM=linux/arm64 resolve_repo_digest localhost:5001           options-edge-broker-execution dev
-  #   DEPLOY_PLATFORM=linux/amd64 resolve_repo_digest 192.168.100.252:5000     options-edge-broker-execution prod
-  # It fails closed unless the named tag has exactly one manifest for that platform, and prints the
-  # digest that will be pinned. The two registries are NOT two names for one thing: :5001 (the Mac's
-  # local registry, host.docker.internal:5001 from inside the cluster) holds the dev tags and
-  # .252:5000 holds the prod ones — checked 2026-09-24. image-tags/dev.yaml used to assert they were
-  # one registry under two names, in two separate comments; both are corrected.
+  #   DEPLOY_PLATFORM=linux/arm64 resolve_repo_digest localhost:5001       options-edge-broker-execution dev
+  #   DEPLOY_PLATFORM=linux/amd64 resolve_repo_digest 192.168.100.252:5000 options-edge-broker-execution prod
+  # (those are the per-env platforms service-deploy.sh defaults to.) It fails closed unless the named
+  # tag has exactly one manifest for that platform, and prints the digest that will be pinned.
+  # The two registries are NOT one registry under two names: :5001 is the Mac's local registry
+  # (host.docker.internal:5001 from inside the cluster) and holds the dev tags; .252:5000 holds the
+  # prod ones. Checked 2026-09-24.
   # Until that resolves, a running replica sits in ImagePullBackOff and tells nobody anything. Scale
   # to 1 once it does — and only when the account owner wants the values above set.
   replicas: 0

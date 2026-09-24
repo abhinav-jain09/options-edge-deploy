@@ -214,13 +214,12 @@ services:
   - { name: spx-mission-control,          managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-spx-mission-control,          deployments: [spx-mission-control-service] }
   # amt-order-bridge / broker-execution-service: DEPLOYED INERT (both AMT_BRIDGE_ENABLED and
   # BROKER_EXECUTION_ENABLED are "false", replicas:0 in k8s/base — see the Deployment headers).
-  # Neither carries a buildJob because neither needs one: Jenkinsfile.service-deploy:334-359 reads
-  # the `image` field below, hands it to options-edge-processing as BUILD_TARGET, and lets that job
-  # build the module (`mvn -pl <module> -am`). This says nothing about the other entries here — some
-  # DO carry a buildJob, because they are built by their own repo's job rather than by the
-  # options-edge-processing reactor. An earlier revision of this comment instead blamed the absent
-  # buildJob on the code "not yet merged": that was never the reason, and the code merged on
-  # 2026-09-24 (options-edge-processing #888, 7b71452e).
+  # Neither carries a buildJob because neither needs one: Jenkinsfile.service-deploy's
+  # 'Build image (this service only)' stage reads the `image` field below, hands it to
+  # options-edge-processing as BUILD_TARGET, and lets that job build the module (`mvn -pl <module> -am`).
+  # That is not a statement about the other entries here — some DO carry a buildJob, because their own
+  # repo's job builds them rather than the options-edge-processing reactor. The code these two deploy
+  # merged to options-edge-processing main on 2026-09-24 (#888, 7b71452e).
   # Registered on BOTH envs because both overlays include k8s/base as-is with no per-env patch.
   - { name: amt-order-bridge,             managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-amt-order-bridge,             deployments: [amt-order-bridge] }
   - { name: broker-execution-service,     managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-broker-execution,             deployments: [broker-execution-service] }
