@@ -82,10 +82,14 @@ spec:
             # Postgres servers is the real fix and is tracked separately.
             - name: OE_WATCH_ALLOW_PLAINTEXT
               value: "true"
-            # Mirror of ~/oe-ops/freshness-topics.conf: the EXPECTED topic universe. A registered topic
-            # with no ledger evidence renders NO_EVIDENCE — it can never silently vanish from the page.
+            # Mirror of ~/oe-ops/freshness-topics.conf (dev rows): the EXPECTED topic universe. A
+            # registered topic with no ledger evidence renders NO_EVIDENCE — it can never silently
+            # vanish from the page. 2026-08-02: the three option-price-behavior rows were added to
+            # the watcher registry on 2026-07-30 but never mirrored here; re-synced so "mirror" is
+            # true again. No underlying.vix.price row here — the dev VIX publisher has never been
+            # proven to flow, so dev has no production contract for that topic to be measured against.
             - name: OE_SYSTEM_STATUS_TOPICS
-              value: "underlying.spx.price,options.databento.raw,options.databento.gex.strike,options.databento.gex.magnet,options.databento.gex.flow.by-strike,delta-flow-by-strike,strike-liquidity-heatmap-dashboard"
+              value: "underlying.spx.price,options.databento.raw,options.databento.gex.strike,options.databento.gex.magnet,options.databento.gex.flow.by-strike,delta-flow-by-strike,strike-liquidity-heatmap-dashboard,option-price-behavior-session,option-price-behavior-by-option,option-price-behavior-by-strike"
             # service:consumer-group:input-topics — lag is computed ONLY for allowlisted services.
             - name: OE_SYSTEM_STATUS_LAG_REGISTRY
               value: "databento-gex-service:databento-gex-service:options.databento.raw;strike-intelligence-service:strike-intelligence-service:options.databento.gex.strike;delta-flow-service:delta-flow-service:options.opra.tcbbo"
