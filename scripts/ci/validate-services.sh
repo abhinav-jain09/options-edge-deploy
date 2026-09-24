@@ -291,10 +291,13 @@ m = re.search(r"choice\(name: 'SERVICE', choices: \[(.*?)\]\s*,", text, re.S)
 if not m:
     sys.exit("FAIL: could not find the SERVICE choice block in %s -- this check cannot run, and a\n"
              "      check that cannot run must not pass. Fix the parser together with the parameter." % jf)
-# Comments inside the block are NOT choices. Harvesting quoted tokens from the raw text would
-# count `// removed 'broker-execution-service'` as selectable — a check that reports a service is
-# reachable because its name appears in a note saying it is not (review, P2).
-body = re.sub(r"//[^\n]*", "", m.group(1))
+# Comments inside the block are NOT choices. Harvesting quoted tokens from the raw text would count
+# `// removed 'broker-execution-service'` as selectable — a check reporting a service reachable
+# because its name appears in a note saying it is not (review, P2). BOTH Groovy comment forms have to
+# go: stripping only `//` left `/* removed 'x' */`, including across lines, still counting (review,
+# P2 again). Block comments first, since a `//` inside one must not terminate the strip early.
+body = re.sub(r"/\*.*?\*/", "", m.group(1), flags=re.S)
+body = re.sub(r"//[^\n]*", "", body)
 choices = set(re.findall(r"'([a-z0-9-]+)'", body))
 if len(choices) < 20:
     sys.exit("FAIL: parsed only %d SERVICE choices from %s; the block matched but the names did not.\n"
@@ -349,39 +352,56 @@ echo "=== 10) image refs resolve in the env they are rendered for ==="
 # (service-deploy.sh: "no entry in image-tags/production.yaml ... fail closed").
 #
 # Two directions, because service-deploy.sh treats the envs differently and each has its own failure:
-#   dev        the RENDER ref is authoritative (the mapping only WARNs), so the render must not name
-#              the production registry.
+#   dev        the RENDER ref is authoritative (the mapping only WARNs), so every options-edge image
+#              in it must name the DEV registry.
 #   production the MAPPING is authoritative, so the value the deploy would SELECT must be a
 #              production-registry ref -- not merely present.
+#
+# Each check REQUIRES the right registry rather than rejecting the wrong one. Rejecting only .252
+# meant a render pointing at docker.io or host.docker.internal:5002 passed both dev checks while the
+# success line claimed every image used the dev registry — the check asserting less than it printed
+# (review, P1). Scope: repositories named options-edge-*, the images this repo builds. Third-party
+# images (redis:7-alpine) legitimately carry no registry host and are not ours to place.
 DEV_REGISTRY='host.docker.internal:5001'
 PROD_REGISTRY='192.168.100.252:5000'
 
-# 10a-mono -- the SOURCE of the remap: k8s/overlays/dev/kustomization.yaml's images: transformer.
-# Checking only the committed slice renders missed a removed remap entry, because a slice is generated
+# Every options-edge image in $1 whose registry is not $2, as "image" lines. An image with no '/' at
+# all (redis:7-alpine) has no registry component and is skipped by the options-edge- test.
+wrong_registry_images() { # render-file expected-registry
+  yq -r 'select(.kind=="Deployment") | .spec.template.spec.containers[]?.image' "$1" \
+    | grep -v '^---$' | grep -v '^null$' | sort -u \
+    | awk -v want="$2" '
+        { ref=$0; n=split(ref, seg, "/"); repo=seg[n]; sub(/[:@].*$/, "", repo)
+          if (repo !~ /^options-edge-/) next
+          reg = (n > 1 ? seg[1] : "")
+          if (reg != want) print ref }'
+}
+
+# 10a-mono -- the SOURCE of the dev remap: k8s/overlays/dev/kustomization.yaml's images: transformer.
+# Checking only the committed slice renders missed a REMOVED remap entry, because a slice is generated
 # from the monolith and committed — the slice keeps the old, correct ref until someone re-runs
-# generate-service-slices.sh, so the mutation "delete the dev images: entry" PASSED 10a. Section 3's
-# mirror rule would eventually catch that drift, but the monolith render is where the mistake is made,
-# so judge it directly and immediately.
+# generate-service-slices.sh, so that mutation PASSED. Section 3's mirror rule would eventually catch
+# the drift, but the monolith render is where the mistake is made, so judge it directly.
 if [ ! -s "$TMP/mono-dev.yaml" ]; then
   echo "FAIL: $TMP/mono-dev.yaml missing — cannot judge the dev overlay's image remap" >&2
   fail=1
 else
-  _monobad="$(yq -r 'select(.kind=="Deployment") | .spec.template.spec.containers[]? | select(.image | test("'"$PROD_REGISTRY"'")) | .image' "$TMP/mono-dev.yaml" | sort -u)"
+  _monobad="$(wrong_registry_images "$TMP/mono-dev.yaml" "$DEV_REGISTRY")"
   if [ -n "$_monobad" ]; then
-    echo "FAIL: the MONOLITHIC dev render still references the production registry $PROD_REGISTRY:" >&2
+    echo "FAIL: the MONOLITHIC dev render has options-edge image(s) NOT on $DEV_REGISTRY:" >&2
     printf '        %s\n' $_monobad >&2
-    echo "      add an images: entry to k8s/overlays/dev/kustomization.yaml remapping each to" >&2
-    echo "      $DEV_REGISTRY, then re-run scripts/deploy/generate-service-slices.sh." >&2
+    echo "      add or correct an images: entry in k8s/overlays/dev/kustomization.yaml, then re-run" >&2
+    echo "      scripts/deploy/generate-service-slices.sh." >&2
     fail=1
   else
-    echo "10a-mono: the dev overlay render references no $PROD_REGISTRY image"
+    echo "10a-mono: every options-edge image in the dev overlay render is on $DEV_REGISTRY"
   fi
 fi
 
-# 10a -- read the KUSTOMIZED RENDER section 2 already produced ($TMP/svc-<name>-dev.yaml), which is
-# what service-deploy.sh consumes. Reading k8s/services/*/overlays/dev/manifest.yaml instead passed
-# only because those kustomizations are currently `resources: manifest.yaml`; a per-service images:
-# transform could then turn a correct source ref into the production registry unnoticed (review, P2).
+# 10a -- the KUSTOMIZED RENDERS section 2 produced ($TMP/svc-<name>-dev.yaml), which is what
+# service-deploy.sh consumes. Reading k8s/services/*/overlays/dev/manifest.yaml instead passed only
+# because those kustomizations are currently `resources: manifest.yaml`; a per-service images:
+# transform could then turn a correct source ref into another registry unnoticed (review, P2).
 _dev_renders=("$TMP"/svc-*-dev.yaml)
 if [ ! -e "${_dev_renders[0]}" ]; then
   echo "FAIL: no dev slice RENDERS in $TMP — section 2 did not produce them, so 10a checked nothing" >&2
@@ -389,45 +409,53 @@ if [ ! -e "${_dev_renders[0]}" ]; then
 else
   _offenders=""
   for _r in "${_dev_renders[@]}"; do
-    if yq -r 'select(.kind=="Deployment") | .spec.template.spec.containers[]?.image' "$_r" \
-         | grep "$PROD_REGISTRY" >/dev/null; then
+    if [ -n "$(wrong_registry_images "$_r" "$DEV_REGISTRY")" ]; then
       _offenders="$_offenders $(basename "$_r" .yaml)"
     fi
   done
   if [ -n "$_offenders" ]; then
-    echo "FAIL: dev slice RENDER(S) reference the PRODUCTION registry $PROD_REGISTRY. A dev deploy pins" >&2
-    echo "      the render ref, and a :dev tag does not exist there, so this fails in pin-image.sh" >&2
-    echo "      looking like an unbuilt image. Add an images: remap to k8s/overlays/dev/kustomization.yaml:" >&2
+    echo "FAIL: dev slice RENDER(S) have options-edge image(s) NOT on $DEV_REGISTRY. A dev deploy pins" >&2
+    echo "      the render ref, so a wrong registry is pinned or fails to resolve in pin-image.sh:" >&2
     printf '        %s\n' $_offenders >&2
     fail=1
   else
-    echo "10a: all ${#_dev_renders[@]} dev slice renders reference $DEV_REGISTRY"
+    echo "10a: every options-edge image in all ${#_dev_renders[@]} dev slice renders is on $DEV_REGISTRY"
   fi
 fi
 
 # 10b -- for each production-declaring service, resolve the mapping THE WAY service-deploy.sh DOES
-# (scripts/deploy/service-deploy.sh:140 — first value matching /<basename>:, by yq `test` regex, then
-# `awk NR==1`) and judge THAT value. Checking only that SOME value contains the basename accepted a
-# mapping the deploy would never pick, and worse, accepted a DEV-REGISTRY value in production.yaml —
-# which would pass CI and then be deployed to production, the exact failure the fail-closed path
-# exists to prevent (review, P1).
+# (service-deploy.sh:140 — first value matching /<basename>:, by yq `test` regex, then `awk NR==1`)
+# and judge THAT value. Checking only that SOME value contained the basename accepted a mapping the
+# deploy would never pick, and accepted a DEV-REGISTRY value in production.yaml, which would pass CI
+# and then be deployed to production — the failure the fail-closed path exists to prevent (review, P1).
 while IFS=$'\t' read -r _name _img; do
   [ -n "$_img" ] && [ "$_img" != "null" ] || {
     echo "FAIL: service '$_name' declares production but registers no image in services.yaml" >&2; fail=1; continue; }
   _sel="$(yq -r ".images | to_entries[] | select(.value | test(\"/${_img}:\")) | .value" \
             image-tags/production.yaml | awk 'NR==1')"
+  # Tag extraction has to drop any digest FIRST and then read only the LAST path segment: on
+  # `.252:5000/repo:dev@sha256:<hex>` a bare ${_sel##*:} returns the hex, so the ':dev' test passed a
+  # dev-tagged production mapping (review, P3). A production mapping is a MUTABLE tag by contract —
+  # the deploy pins it itself — so a tag+digest value is refused outright rather than interpreted.
+  _nodigest="${_sel%%@*}"
+  _lastseg="${_nodigest##*/}"
+  case "$_lastseg" in *:*) _tag="${_lastseg##*:}" ;; *) _tag="" ;; esac
   if [ -z "$_sel" ]; then
     echo "FAIL: '$_img' (service $_name) declares production but image-tags/production.yaml has no" >&2
     echo "      entry the deploy would select — service-deploy.sh fails closed, so the production" >&2
     echo "      fast path does not exist for it." >&2
+    fail=1
+  elif [ "$_sel" != "$_nodigest" ]; then
+    echo "FAIL: '$_img' (service $_name) maps to '$_sel', a tag+digest value. A production mapping is" >&2
+    echo "      a mutable tag by contract (the deploy digest-pins it); refusing rather than guessing." >&2
     fail=1
   elif [ "${_sel%%/*}" != "$PROD_REGISTRY" ]; then
     echo "FAIL: '$_img' (service $_name) would resolve to '$_sel' in production — registry" >&2
     echo "      '${_sel%%/*}' is not $PROD_REGISTRY. A non-production registry here is deployed AS IS" >&2
     echo "      (the mapping is authoritative for production), which is the dev-image-in-production bug." >&2
     fail=1
-  elif [ "${_sel##*:}" = "dev" ]; then
-    echo "FAIL: '$_img' (service $_name) would resolve to '$_sel' in production — a ':dev' tag." >&2
+  elif [ "$_tag" = "dev" ] || [ -z "$_tag" ]; then
+    echo "FAIL: '$_img' (service $_name) would resolve to '$_sel' in production — tag '${_tag:-<none>}'." >&2
     fail=1
   fi
 done < <(yq -r '.services[] | select(.sliceGenerated == true) | select(.envs[]? == "production") | [.name, .image] | @tsv' services.yaml)
@@ -437,7 +465,7 @@ if [ "${_prodcount:-0}" -lt 20 ]; then
   echo "      the registry have diverged, and 10b would pass having judged almost nothing." >&2
   fail=1
 elif [ "$fail" -eq 0 ]; then
-  echo "10b: $_prodcount production-declaring slice(s); each resolves to a $PROD_REGISTRY ref via the same selector service-deploy.sh uses"
+  echo "10b: $_prodcount production-declaring slice(s); each resolves to a $PROD_REGISTRY mutable tag via the same selector service-deploy.sh uses"
 fi
 
 echo "=== validate-services: OK ==="
