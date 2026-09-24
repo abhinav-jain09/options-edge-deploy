@@ -37,8 +37,10 @@ spec:
   # (those are the per-env platforms service-deploy.sh defaults to.) It fails closed unless the named
   # tag has exactly one manifest for that platform, and prints the digest that will be pinned.
   # The two registries are NOT one registry under two names: :5001 is the Mac's local registry
-  # (host.docker.internal:5001 from inside the cluster) and holds the dev tags; .252:5000 holds the
-  # prod ones. Checked 2026-09-24.
+  # (host.docker.internal:5001 from inside the cluster) and .252:5000 is a different machine's. Which
+  # tags each holds is an OBSERVATION this repo cannot prove — on 2026-09-24, :5001 answered with a dev
+  # tag for options-edge-indicator-service and .252:5000 with only prod-* ones. The two commands above
+  # re-check it for THIS service, which is the point: ask the registry, do not trust this sentence.
   # Until that resolves, a running replica sits in ImagePullBackOff and tells nobody anything. Scale
   # to 1 once it does — and only when the account owner wants the values above set.
   replicas: 0
