@@ -49,6 +49,12 @@ pipeline {
       'option-truth-engine', 'market-carry', 'pin-postgres-writer', 'pressure-postgres-writer', 'raw-postgres-writer', 'raw-to-display',
       'invasion-postgres-writer', 'reversal-confirmation', 'drop-classifier', 'reversal-postgres-writer', 'short-premium-agent', 'es-spx-align', 'spx-mission-control', 'strike-flow-avro-adapter', 'strike-flow-classifier', 'strike-intelligence', 'strike-invasion', 'strike-liquidity-heatmap',
       'oi-shadow', 'unified-sr', 'volume-pace', 'signal-follower', 'web', 'ibkr-feed', 'thetadata-feed', 'stock-gex', 'context-tape', 'multileg-structure',
+      // broker-execution-service / amt-order-bridge: registered in services.yaml with overlays since
+      // 2026-09-22 but MISSING from this list until 2026-09-24, so the deploy they were registered for
+      // could not be selected at all. Both deploy INERT (replicas:0 in k8s/base, *_ENABLED=false);
+      // selecting one here builds and pins an image, it does not arm anything. Section 9 of
+      // scripts/ci/validate-services.sh now fails when a registered service is missing from this list.
+      'broker-execution-service', 'amt-order-bridge',
       // es-aggressor-flow: PRODUCTION only. On prod it publishes just the Kyle-style
       // signed-flow response slope; the legacy absorption label is disabled there.
       'es-aggressor-flow',

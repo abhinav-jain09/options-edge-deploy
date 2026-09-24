@@ -260,4 +260,79 @@ cvd_only_on "$TMP/mono-production.yaml" CVD_LEVELS_UI_STALE_MS options-edge-web
 [ "$UI_STALE" -gt "$((ALIGN_HB + 7000))" ] || { echo "FAIL: CVD_LEVELS_UI_STALE_MS ($UI_STALE) must exceed CVD_LEVELS_ALIGN_HEARTBEAT_MS ($ALIGN_HB) + 7000 (5s skew + 2s margin)"; exit 1; }
 echo "cvd-levels timing: SOURCE_STALE=$SRC_STALE > HB=$HB+2000; UI_STALE=$UI_STALE > ALIGN_HB=$ALIGN_HB+7000 (structural, owner-scoped)"
 
+echo "=== 9) every registered service is SELECTABLE in service-deploy's SERVICE choice list ==="
+# WHY THIS EXISTS. broker-execution-service and amt-order-bridge were registered in services.yaml
+# with a full set of overlays, passed every check above, and still could not be deployed: neither
+# appeared in Jenkinsfile.service-deploy's SERVICE choice parameter, so there was no way to select
+# them. Sections 1-4 ask "is every rendered Deployment registered?" -- the opposite question, "is
+# every registered service reachable by the job that deploys it?", was asked by nothing.
+#
+# An omission must therefore FAIL, and a deliberate hold must be DECLARED here rather than expressed
+# by absence -- otherwise the two are indistinguishable, which is how the above happened. The
+# exemption list is checked in BOTH directions: an exemption that is now selectable, or that names
+# something that is not a registered slice, fails too, so it cannot quietly rot.
+SERVICE_CHOICES_EXEMPT=(
+  # 2026-07-26 operator hold: deliberately not deployable from this job. Also stated in the SERVICE
+  # parameter's own description in Jenkinsfile.service-deploy.
+  spread-skew
+  spread-skew-postgres-writer
+)
+python3 - "${SERVICE_CHOICES_EXEMPT[@]}" <<'PYCHK' || fail=1
+import re, sys, yaml
+
+exempt = set(sys.argv[1:])
+jf = 'Jenkinsfile.service-deploy'
+text = open(jf).read()
+
+# A parse miss must be FATAL, not an empty set. An empty set would make every service look missing
+# (loud), but a block that matches while the NAMES do not would make a real omission look present
+# (silent) -- so both the block and a plausible number of names are required.
+m = re.search(r"choice\(name: 'SERVICE', choices: \[(.*?)\]\s*,", text, re.S)
+if not m:
+    sys.exit("FAIL: could not find the SERVICE choice block in %s -- this check cannot run, and a\n"
+             "      check that cannot run must not pass. Fix the parser together with the parameter." % jf)
+choices = set(re.findall(r"'([a-z0-9-]+)'", m.group(1)))
+if len(choices) < 20:
+    sys.exit("FAIL: parsed only %d SERVICE choices from %s; the block matched but the names did not.\n"
+             "      Refusing to validate against a set this small." % (len(choices), jf))
+
+reg = yaml.safe_load(open('services.yaml'))
+def services(o):
+    if isinstance(o, dict):
+        for v in o.values():
+            yield from services(v)
+    elif isinstance(o, list):
+        for v in o:
+            if isinstance(v, dict) and 'name' in v:
+                yield v
+            else:
+                yield from services(v)
+registered = {s['name'] for s in services(reg) if s.get('sliceGenerated')}
+if not registered:
+    sys.exit("FAIL: no sliceGenerated services found in services.yaml -- the reader and the registry\n"
+             "      have diverged; this check would otherwise pass vacuously.")
+
+bad = []
+missing = sorted(registered - choices - exempt)
+if missing:
+    bad.append("FAIL: registered in services.yaml but NOT selectable in service-deploy's SERVICE list:\n"
+               + "".join("        %s\n" % n for n in missing)
+               + "      Add each to the choice list, or to SERVICE_CHOICES_EXEMPT with the reason.")
+stale = sorted(exempt & choices)
+if stale:
+    bad.append("FAIL: SERVICE_CHOICES_EXEMPT names service(s) that ARE selectable -- the hold was\n"
+               "      lifted in the Jenkinsfile but not here:\n"
+               + "".join("        %s\n" % n for n in stale))
+unknown = sorted(exempt - registered)
+if unknown:
+    bad.append("FAIL: SERVICE_CHOICES_EXEMPT names service(s) that are not registered slices at all:\n"
+               + "".join("        %s\n" % n for n in unknown))
+if bad:
+    sys.exit("\n".join(bad))
+
+print("service selectability: %d registered slice(s); %d selectable, %d exempt by declaration (%s)"
+      % (len(registered), len(registered & choices), len(exempt), ", ".join(sorted(exempt))))
+PYCHK
+[ "$fail" -eq 0 ] || { echo "validate-services: FAILED" >&2; exit 1; }
+
 echo "=== validate-services: OK ==="
