@@ -14,6 +14,12 @@ resources:
   # so the production/experiment monolith overlays never render it. services.yaml declares
   # envs: [dev] to match; the dev image remap below applies to it.
   - ../../services/short-premium-agent/base
+  # vol-state is DEV-ONLY and a SHADOW, and carries NO Service object: referenced here (NOT in
+  # k8s/base/kustomization.yaml) so the
+  # production/experiment monolith overlays never render it. It publishes a three-state volatility
+  # label to a topic nothing reads; no state reaches a consumer until its release evaluation passes
+  # at >= 96 production-lineage sessions. services.yaml declares envs: [dev] to match.
+  - ../../services/vol-state/base
   # NOTE: the databento timewarp replay Job + snapshot-replay Deployment used to live
   # here. They moved to k8s/replay/dev and now deploy on-demand via the dedicated
   # `replay-deploy` job (Jenkinsfile.replay) — OUT of the dev/prod bring-up path. A Job's
@@ -712,6 +718,8 @@ images:
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-gamma-ladder-path
     newName: host.docker.internal:5001/options-edge-gamma-ladder-path
+  - name: 192.168.100.252:5000/options-edge-vol-state
+    newName: host.docker.internal:5001/options-edge-vol-state
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-gamma-leadership
     newName: host.docker.internal:5001/options-edge-gamma-leadership
