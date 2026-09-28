@@ -333,16 +333,31 @@ echo "=== apply (service-scoped) ==="
 # bad manifest), where blindly replacing would make a partially-successful apply worse and could
 # churn a Service's ClusterIP (Codex review, PR #1105 BLOCKER: the first draft replaced the WHOLE
 # multi-doc render on ANY apply failure). The common/no-drift path is completely unchanged.
-APPLY_LOG="$(mktemp)"
+APPLY_LOG="$WORK_DIR/${SERVICE}-${ENVIRONMENT}-apply.log"
 if ! kubectl apply -f "$RENDER" 2>&1 | tee "$APPLY_LOG"; then
   if grep -q 'may not be specified when `value` is not empty' "$APPLY_LOG"; then
-    echo "=== apply failed with the known unmergeable env-schema drift -- replacing ONLY the rendered Deployment doc(s) ==="
-    DEPLOY_ONLY="$(mktemp)"
-    yq eval-all 'select(.kind == "Deployment")' "$RENDER" > "$DEPLOY_ONLY"
+    # This script explicitly supports a service with MULTIPLE Deployments in one render, and
+    # `kubectl apply` can partially succeed — replacing every Deployment doc in $RENDER would
+    # delete/recreate otherwise-healthy deployments that never hit this error (Codex review, PR
+    # #1105 round-2 MAJOR). Scope the replace to ONLY the Deployment name(s) the API server itself
+    # named as invalid ('The Deployment "NAME" is invalid: ...').
+    FAILED_DEPLOYMENTS="$(grep -o 'The Deployment "[^"]*" is invalid' "$APPLY_LOG" \
+        | sed -E 's/The Deployment "([^"]*)" is invalid/\1/' | sort -u)"
+    if [ -z "$FAILED_DEPLOYMENTS" ]; then
+      echo "FATAL: apply failed with the known drift signature but no '\"NAME\" is invalid' Deployment could be parsed from the error" >&2
+      exit 1
+    fi
+    DEPLOY_ONLY="$WORK_DIR/${SERVICE}-${ENVIRONMENT}-replace.yaml"
+    : >"$DEPLOY_ONLY"
+    while IFS= read -r name; do
+      [ -n "$name" ] || continue
+      echo "=== apply failed with the known unmergeable env-schema drift on Deployment/$name -- replacing ONLY that document ==="
+      yq eval-all "select(.kind == \"Deployment\" and .metadata.name == \"$name\")" "$RENDER" >> "$DEPLOY_ONLY"
+    done <<<"$FAILED_DEPLOYMENTS"
     if [ -s "$DEPLOY_ONLY" ]; then
       kubectl replace --force -f "$DEPLOY_ONLY"
     else
-      echo "FATAL: apply failed with the known drift signature but no Deployment doc was found in the render" >&2
+      echo "FATAL: apply failed with the known drift signature but no matching Deployment doc was found in the render" >&2
       exit 1
     fi
   else
