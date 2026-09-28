@@ -58,8 +58,11 @@ ensure() { # <topic>
     echo "FAIL: could not read the config of '$topic':"; printf '%s\n' "$cfg"; return 1
   fi
   policy=$(extract 'cleanup\.policy' "$cfg")
-  if [ "${policy:-delete}" != "delete" ]; then
-    echo "FAIL: '$topic' has cleanup.policy='${policy:-<unset>}', expected 'delete' (plain, not compacted)."
+  # ${policy:-} (empty default), NOT ${policy:-delete}: an unparsable/absent extraction must FAIL
+  # this check, not be treated as "delete" by default (that would let this claim "verified
+  # delete" without actually verifying it — Codex round-2 review finding).
+  if [ "${policy:-}" != "delete" ]; then
+    echo "FAIL: '$topic' has cleanup.policy='${policy:-<unset/unparsable>}', expected 'delete' (plain, not compacted)."
     return 1
   fi
   echo "ok: '$topic' — partitions=1 cleanup.policy=delete"
