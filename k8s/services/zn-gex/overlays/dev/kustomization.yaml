@@ -1,0 +1,23 @@
+# STANDALONE zn-gex overlay — dev. Used ONLY by Jenkinsfile.zn-gex-service.
+# The monolithic dev deploy renders this same service via k8s/overlays/dev
+# (resource include only, no patches — see the comment there).
+#
+# ⚠ MIRROR RULE: validate-services enforces render equality against the monolithic
+# k8s/overlays/dev render of this same Deployment. The monolithic dev overlay applies
+# a fleet-wide patch (imagePullPolicy: Always + progressDeadlineSeconds: 1200) to every
+# Deployment — mirrored here explicitly, same as k8s/services/nifty-gex/overlays/dev.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+patches:
+  - target:
+      kind: Deployment
+      name: zn-gex-service
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: Always
+      - op: add
+        path: /spec/progressDeadlineSeconds
+        value: 1200

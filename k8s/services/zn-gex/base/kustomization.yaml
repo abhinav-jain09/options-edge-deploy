@@ -1,0 +1,15 @@
+# SERVICE SLICE — zn-gex (standalone-service-deployment design).
+# Owns ONLY this service's workload: Deployment + Service. The
+# options-edge-databento-feed-env Secret (DATABENTO_API_KEY) and the shared
+# options-edge-config ConfigMap are common infra (k8s/infra), applied by
+# Jenkinsfile.common-infra (§13.5 blast-radius rule).
+#
+# Included by the monolithic dev overlay (k8s/overlays/dev — this service is
+# envs: [dev] ONLY in services.yaml, so it is never referenced from k8s/base or
+# from the production/experiment overlays) AND by ../overlays/dev for the
+# standalone fast path (Jenkinsfile.zn-gex-service).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - zn-gex-deployment.yaml
+  - zn-gex-service.yaml

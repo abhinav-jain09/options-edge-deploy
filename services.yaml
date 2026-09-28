@@ -138,6 +138,10 @@ services:
   - { name: vol-state,                    managedBy: standalone, sliceGenerated: true, envs: [dev], image: options-edge-vol-state,                    deployments: [vol-state-service] }
   - { name: gamma-leadership,            managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-gamma-leadership,            deployments: [gamma-leadership-service] }
   - { name: nifty-gex,                    managedBy: standalone, envs: [dev, production], image: options-edge-nifty-gex,                    deployments: [nifty-gex-service], container: nifty-gex, sourceRepo: options-edge-nifty-gex }
+  # zn-gex: CME ZN (10Y T-Note futures) options -> yield-equivalent GEX (Databento GLBX.MDP3,
+  # Black-76 + versioned DV01 map). NEW, dev-only until the ingestion path + DV01 mapping have
+  # a live proof — add `production` here only after that soak, mirroring the vol-state pattern.
+  - { name: zn-gex,                       managedBy: standalone, envs: [dev], image: options-edge-zn-gex,                       deployments: [zn-gex-service], container: zn-gex, sourceRepo: options-edge-zn-gex }
   - { name: corridor-gauge,               managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-corridor-gauge,               deployments: [corridor-gauge-service] }
   - { name: databento-mission-sandwich,   managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-databento-mission-sandwich,   deployments: [databento-mission-sandwich-service] }
   - { name: delta-flow,                   managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-delta-flow,                   deployments: [delta-flow-service] }
