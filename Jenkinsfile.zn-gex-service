@@ -181,6 +181,24 @@ pipeline {
         }
       }
     }
+    stage('Verify zn-gex Kafka topics') {
+      // BEFORE the rollout, same barrier as Jenkinsfile.service-deploy's "Verify gamma-ladder-path
+      // output topics" stage: apply-topics.sh lives in the MONOLITHIC deploy job, not this
+      // per-service fast path, so on a FIRST deploy neither topic exists and the broker either
+      // auto-creates them with cluster defaults (dev's broker runs num.partitions=32, not the
+      // declared 1) or, with auto-create off, the idempotent raw-snapshot producer fails at
+      // startup and the pod crash-loops. Skipped on DEPLOY_DRY_RUN (nothing should be created by
+      // a dry run) — same condition Jenkinsfile.service-deploy uses for its per-service topic gates.
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (!params.DEPLOY_DRY_RUN) } }
+      steps {
+        sh '''
+          set -euo pipefail
+          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
+          . scripts/kafka/load-kafka-settings.sh
+          scripts/kafka/ensure-zn-gex-topics.sh
+        '''
+      }
+    }
     stage('Deploy (service-scoped)') {
       when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
       steps {
