@@ -339,23 +339,27 @@ if ! kubectl apply -f "$RENDER" 2>&1 | tee "$APPLY_LOG"; then
     # kubectl apply -f processes every document in $RENDER and can report SEVERAL independent
     # failures in one run — a rendered Service/HPA error or an RBAC/authorization failure
     # alongside the known env-schema error must never be masked by this fallback succeeding on
-    # the Deployment alone (Codex review, PR #1105 round-5 BLOCKER: the prior check only proved
-    # the known error was PRESENT, not that it was the ONLY error).
+    # the Deployment alone (Codex review, PR #1105 round-5 BLOCKER). K8s also AGGREGATES multiple
+    # causes for ONE object into a single bracketed line ('is invalid: [cause1, cause2]') — a
+    # naive substring match on the known text would strip that whole line and miss the second
+    # cause (round-6 BLOCKER), so this anchors the ENTIRE line: it must be a SINGLE, non-aggregated
+    # cause (no '[' immediately after "is invalid: " — the field path's OWN array-index brackets
+    # like ".env[27]" appear later in the line and are fine) ending in exactly the known suffix.
+    KNOWN_LINE_RE='^The Deployment "[^"]+" is invalid: [^[].*: Invalid value: "": may not be specified when `value` is not empty$'
     OTHER_ERRORS="$(grep -iE 'error|invalid|forbidden|denied|unauthorized' "$APPLY_LOG" \
-        | grep -v 'may not be specified when `value` is not empty' \
-        | grep -vE '^The Deployment "[^"]*" is invalid:' || true)"
+        | grep -vE "$KNOWN_LINE_RE" || true)"
     if [ -n "$OTHER_ERRORS" ]; then
-      echo "FATAL: apply failed with the known drift signature AND at least one other error — refusing to replace:" >&2
+      echo "FATAL: apply failed with the known drift signature AND at least one other error (or an aggregated multi-cause failure) — refusing to replace:" >&2
       echo "$OTHER_ERRORS" >&2
       exit 1
     fi
     # This script explicitly supports a service with MULTIPLE Deployments in one render, and
     # `kubectl apply` can partially succeed — replacing every Deployment doc in $RENDER would
     # delete/recreate otherwise-healthy deployments that never hit this error (Codex review, PR
-    # #1105 round-2 MAJOR). Scope the replace to ONLY the Deployment name(s) the API server itself
-    # named as invalid ('The Deployment "NAME" is invalid: ...').
-    FAILED_DEPLOYMENTS="$(grep -o 'The Deployment "[^"]*" is invalid' "$APPLY_LOG" \
-        | sed -E 's/The Deployment "([^"]*)" is invalid/\1/' | sort -u)"
+    # #1105 round-2 MAJOR). Scope the replace to ONLY the Deployment name(s) that produced an
+    # exact single-cause known-error line.
+    FAILED_DEPLOYMENTS="$(grep -E "$KNOWN_LINE_RE" "$APPLY_LOG" \
+        | grep -o 'The Deployment "[^"]*"' | sed -E 's/The Deployment "([^"]*)"/\1/' | sort -u)"
     if [ -z "$FAILED_DEPLOYMENTS" ]; then
       echo "FATAL: apply failed with the known drift signature but no '\"NAME\" is invalid' Deployment could be parsed from the error" >&2
       exit 1
