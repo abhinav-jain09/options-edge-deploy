@@ -321,17 +321,34 @@ if [ "$DEPLOY_DRY_RUN" = "true" ]; then
 fi
 
 echo "=== apply (service-scoped) ==="
-# 2026-09-28 incident: databento-gex-service's live object had drifted out of band (an env var
+# 2026-09-28 incident: databento-gex-service's live Deployment had drifted out of band (an env var
 # that was `value: SPXW` live vs `valueFrom: configMapKeyRef` in the tracked manifest, plus 5
 # untracked extra env vars) -- confirmed BOTH client-side (kubectl apply) and server-side apply
 # (--server-side --force-conflicts) reject the merge identically ("valueFrom: Invalid value: "":
 # may not be specified when `value` is not empty"), so this is not a field-ownership/3-way-merge
-# problem force-conflicts can resolve -- the drifted object genuinely cannot be reconciled by a
-# merge. Falls back to `kubectl replace --force` (delete+recreate, not a merge) ONLY when apply
-# itself fails, so the common/no-drift path is completely unchanged.
-if ! kubectl apply -f "$RENDER"; then
-  echo "=== apply failed -- falling back to replace --force (drift the API server would not merge) ==="
-  kubectl replace --force -f "$RENDER"
+# problem force-conflicts can resolve -- the drifted object genuinely cannot be reconciled by any
+# merge. Falls back to `kubectl replace --force` (delete+recreate) ONLY for THIS EXACT known error
+# signature, and ONLY the render's Deployment document(s) -- never Service/HPA/Ingress/anything
+# else in a multi-doc render, and never for an unrelated apply failure (RBAC, network, a genuinely
+# bad manifest), where blindly replacing would make a partially-successful apply worse and could
+# churn a Service's ClusterIP (Codex review, PR #1105 BLOCKER: the first draft replaced the WHOLE
+# multi-doc render on ANY apply failure). The common/no-drift path is completely unchanged.
+APPLY_LOG="$(mktemp)"
+if ! kubectl apply -f "$RENDER" 2>&1 | tee "$APPLY_LOG"; then
+  if grep -q 'may not be specified when `value` is not empty' "$APPLY_LOG"; then
+    echo "=== apply failed with the known unmergeable env-schema drift -- replacing ONLY the rendered Deployment doc(s) ==="
+    DEPLOY_ONLY="$(mktemp)"
+    yq eval-all 'select(.kind == "Deployment")' "$RENDER" > "$DEPLOY_ONLY"
+    if [ -s "$DEPLOY_ONLY" ]; then
+      kubectl replace --force -f "$DEPLOY_ONLY"
+    else
+      echo "FATAL: apply failed with the known drift signature but no Deployment doc was found in the render" >&2
+      exit 1
+    fi
+  else
+    echo "FATAL: apply failed for a reason other than the known unmergeable env-schema drift -- refusing to replace" >&2
+    exit 1
+  fi
 fi
 
 # --- FORCE_RESTART: roll pods whose SPEC did not change --------------------------------
