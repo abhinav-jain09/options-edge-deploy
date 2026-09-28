@@ -65,7 +65,15 @@ ensure() { # <topic>
     echo "FAIL: '$topic' has cleanup.policy='${policy:-<unset/unparsable>}', expected 'delete' (plain, not compacted)."
     return 1
   fi
-  echo "ok: '$topic' — partitions=1 cleanup.policy=delete"
+  # Codex round-3 NASA-grade finding: RETENTION_MS was declared and used at CREATE time but never
+  # checked for an EXISTING topic — a pre-existing topic with the wrong retention (e.g. from a
+  # manual fix, or a future topics.env change) passed this "verify" step unnoticed.
+  retention=$(extract 'retention\.ms' "$cfg")
+  if [ "${retention:-}" != "$RETENTION_MS" ]; then
+    echo "FAIL: '$topic' has retention.ms='${retention:-<unset/unparsable>}', expected '$RETENTION_MS'."
+    return 1
+  fi
+  echo "ok: '$topic' — partitions=1 cleanup.policy=delete retention.ms=$RETENTION_MS"
 }
 
 rc=0
