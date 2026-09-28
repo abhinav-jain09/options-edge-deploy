@@ -354,12 +354,22 @@ if ! kubectl apply -f "$RENDER" 2>&1 | tee "$APPLY_LOG"; then
       echo "=== apply failed with the known unmergeable env-schema drift on Deployment/$name -- replacing ONLY that document ==="
       yq eval-all "select(.kind == \"Deployment\" and .metadata.name == \"$name\")" "$RENDER" >> "$DEPLOY_ONLY"
     done <<<"$FAILED_DEPLOYMENTS"
-    if [ -s "$DEPLOY_ONLY" ]; then
-      kubectl replace --force -f "$DEPLOY_ONLY"
-    else
+    if [ ! -s "$DEPLOY_ONLY" ]; then
       echo "FATAL: apply failed with the known drift signature but no matching Deployment doc was found in the render" >&2
       exit 1
     fi
+    # The error signature alone does NOT prove this is live-state drift — a RENDERED manifest that
+    # itself sets both value and valueFrom for the same env entry (a bad kustomize patch, say)
+    # produces the IDENTICAL API error, and `replace --force` deletes before it recreates: doing
+    # that against a genuinely broken manifest would delete a healthy live Deployment and then fail
+    # to bring it back (Codex review, PR #1105 round-3 BLOCKER). Statically check the CANDIDATE
+    # doc, no live cluster involved, before ever deleting anything.
+    BAD_ENV_NAMES="$(yq eval '.spec.template.spec.containers[].env[] | select(has("value") and has("valueFrom")) | .name' "$DEPLOY_ONLY")"
+    if [ -n "$BAD_ENV_NAMES" ]; then
+      echo "FATAL: the rendered Deployment itself sets both value and valueFrom for env var(s): $BAD_ENV_NAMES — this is a manifest bug, not live-state drift; refusing to replace (would delete a live Deployment and fail to recreate it)" >&2
+      exit 1
+    fi
+    kubectl replace --force -f "$DEPLOY_ONLY"
   else
     echo "FATAL: apply failed for a reason other than the known unmergeable env-schema drift -- refusing to replace" >&2
     exit 1
