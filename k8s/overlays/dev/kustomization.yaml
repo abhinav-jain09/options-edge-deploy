@@ -476,7 +476,17 @@ patches:
           - name: KAFKA_IBKR_SPX_PRICE_TOPIC
             value: underlying.spx.index.price
           - name: IBKR_SPX_KAFKA_TARGETS
-            value: prod=192.168.100.252:9092,dev=host.docker.internal:19092
+            # 2026-09-28: prod (.252) unreachable at the LAN/host level ("Host is down"), and
+            # DispatchingRawSnapshotPublisher.openGeneration() blocks on the FIRST-listed target
+            # (rev13 R-WIRE.3/R-TOPO) — with prod listed first, its 60s ACK timeout was failing
+            # the WHOLE generation-open and forcing a full retry (fresh generation) roughly every
+            # 90s, so dev's own already-successful ACK was discarded before databento-gex-service
+            # could ever see a stable generation across all 32 partitions. Reordered dev first
+            # (blocking/authoritative) so dev's own readiness no longer depends on prod's host
+            # being up; prod remains a best-effort mirror and gets nothing worse than it already
+            # gets while its host is down. Revisit reverting to prod-first once prod connectivity
+            # is confirmed restored — this order was a deliberate original choice, not a default.
+            value: dev=host.docker.internal:19092,prod=192.168.100.252:9092
           # Pre-open option-chain raw fan-out (OVERNIGHT-IBKR-GEX rev13 R-CHAIN.1): DARK —
           # read only when IBKR_CHAIN_ENABLED=true. Explicit rather than relying on the
           # IBKR_SPX_KAFKA_TARGETS fallback so the chain contract is visible here.
@@ -509,7 +519,9 @@ patches:
             # that Deployment to 0. The Databento display builder is a SEPARATE Deployment
             # (raw-to-display-databento-service) and is untouched, so the production board is
             # unaffected. Do not re-enable the fan-out without that hold in place.
-            value: prod=192.168.100.252:9092|http://192.168.100.252:8082,dev=host.docker.internal:19092|http://host.docker.internal:8082
+            # 2026-09-28: reordered dev first (blocking) — same prod-host-down rationale as
+            # IBKR_SPX_KAFKA_TARGETS above; see that comment.
+            value: dev=host.docker.internal:19092|http://host.docker.internal:8082,prod=192.168.100.252:9092|http://192.168.100.252:8082
           # The chain window opens at the PINNED 06:15 (R-OPS/D13) — never the feed's own
           # 06:00 default. The 06:15 cleanup/autostart schedule is a convenience, not a
           # safety fence: a manifest applied between 06:00 and 06:15 must not arm early.
@@ -523,7 +535,9 @@ patches:
           - name: KAFKA_IBKR_VIX_PRICE_TOPIC
             value: underlying.vix.index.price
           - name: IBKR_VIX_KAFKA_TARGETS
-            value: prod=192.168.100.252:9092,dev=host.docker.internal:19092
+            # 2026-09-28: reordered dev first (blocking) — same prod-host-down rationale as
+            # IBKR_SPX_KAFKA_TARGETS above; see that comment.
+            value: dev=host.docker.internal:19092,prod=192.168.100.252:9092
           - name: MARKET_DATA_SELECTION_ENABLED
             value: "false"
           - name: POSTGRES_ENABLED

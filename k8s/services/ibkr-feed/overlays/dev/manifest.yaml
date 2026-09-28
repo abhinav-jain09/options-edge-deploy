@@ -67,13 +67,13 @@ spec:
             - name: KAFKA_IBKR_SPX_PRICE_TOPIC
               value: underlying.spx.index.price
             - name: IBKR_SPX_KAFKA_TARGETS
-              value: prod=192.168.100.252:9092,dev=host.docker.internal:19092
+              value: dev=host.docker.internal:19092,prod=192.168.100.252:9092
             - name: IBKR_CHAIN_ENABLED
               value: "true"
             - name: IB_OPTION_EXCHANGE
               value: CBOE
             - name: IBKR_CHAIN_KAFKA_TARGETS
-              value: prod=192.168.100.252:9092|http://192.168.100.252:8082,dev=host.docker.internal:19092|http://host.docker.internal:8082
+              value: dev=host.docker.internal:19092|http://host.docker.internal:8082,prod=192.168.100.252:9092|http://192.168.100.252:8082
             - name: IB_CHAIN_WINDOW_START
               value: "06:15"
             - name: IBKR_VIX_PRICE_ENABLED
@@ -81,7 +81,7 @@ spec:
             - name: KAFKA_IBKR_VIX_PRICE_TOPIC
               value: underlying.vix.index.price
             - name: IBKR_VIX_KAFKA_TARGETS
-              value: prod=192.168.100.252:9092,dev=host.docker.internal:19092
+              value: dev=host.docker.internal:19092,prod=192.168.100.252:9092
             - name: MARKET_DATA_SELECTION_ENABLED
               value: "false"
             - name: POSTGRES_ENABLED
