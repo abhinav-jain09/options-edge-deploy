@@ -364,7 +364,16 @@ if ! kubectl apply -f "$RENDER" 2>&1 | tee "$APPLY_LOG"; then
     # that against a genuinely broken manifest would delete a healthy live Deployment and then fail
     # to bring it back (Codex review, PR #1105 round-3 BLOCKER). Statically check the CANDIDATE
     # doc, no live cluster involved, before ever deleting anything.
-    BAD_ENV_NAMES="$(yq eval '.spec.template.spec.containers[].env[] | select(has("value") and has("valueFrom")) | .name' "$DEPLOY_ONLY")"
+    # Checks ALL pod spec container lists (Codex review, PR #1105 round-4 BLOCKER: an initContainer
+    # or ephemeralContainer env entry with the same value+valueFrom contradiction produces the
+    # identical API error and would have slipped past a containers[]-only check).
+    BAD_ENV_NAMES="$(yq eval '
+        .spec.template.spec
+        | (.containers[]?, .initContainers[]?, .ephemeralContainers[]?)
+        | .env[]?
+        | select(has("value") and has("valueFrom"))
+        | .name
+    ' "$DEPLOY_ONLY")"
     if [ -n "$BAD_ENV_NAMES" ]; then
       echo "FATAL: the rendered Deployment itself sets both value and valueFrom for env var(s): $BAD_ENV_NAMES — this is a manifest bug, not live-state drift; refusing to replace (would delete a live Deployment and fail to recreate it)" >&2
       exit 1
