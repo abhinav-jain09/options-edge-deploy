@@ -321,7 +321,18 @@ if [ "$DEPLOY_DRY_RUN" = "true" ]; then
 fi
 
 echo "=== apply (service-scoped) ==="
-kubectl apply -f "$RENDER"
+# 2026-09-28 incident: databento-gex-service's live object had drifted out of band (an env var
+# that was `value: SPXW` live vs `valueFrom: configMapKeyRef` in the tracked manifest, plus 5
+# untracked extra env vars) -- confirmed BOTH client-side (kubectl apply) and server-side apply
+# (--server-side --force-conflicts) reject the merge identically ("valueFrom: Invalid value: "":
+# may not be specified when `value` is not empty"), so this is not a field-ownership/3-way-merge
+# problem force-conflicts can resolve -- the drifted object genuinely cannot be reconciled by a
+# merge. Falls back to `kubectl replace --force` (delete+recreate, not a merge) ONLY when apply
+# itself fails, so the common/no-drift path is completely unchanged.
+if ! kubectl apply -f "$RENDER"; then
+  echo "=== apply failed -- falling back to replace --force (drift the API server would not merge) ==="
+  kubectl replace --force -f "$RENDER"
+fi
 
 # --- FORCE_RESTART: roll pods whose SPEC did not change --------------------------------
 # Applying an unchanged manifest is a no-op to Kubernetes: same digest, same pod template, so no
