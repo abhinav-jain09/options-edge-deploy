@@ -1,0 +1,73 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vol-state-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: vol-state-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vol-state-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vol-state-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      containers:
+        - name: vol-state
+          image: 192.168.100.252:5000/options-edge-vol-state:dev
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            # SHADOW ONLY (requirement VS rev 10 / amendment A1). Publishes a three-state volatility
+            # label — COMPRESSED | NORMAL | EXPANDED from the prior ten minutes' range — to a topic
+            # NOTHING reads. No state and no number reaches any consumer until the release evaluation
+            # passes at >= 96 production-lineage sessions. Direction is not computed at all: it was
+            # tested seven ways on this data and is dead.
+            - name: KAFKA_VOL_STATE_SPOT_TOPIC
+              value: underlying.spx.index.price
+            - name: KAFKA_VOL_STATE_STATE_TOPIC
+              value: options.spx.vol-state.shadow
+            - name: VOL_STATE_SYMBOL
+              value: SPX
+            # ONE voice only, and the service ENFORCES it (VolStateRunner.parse): the spot topic
+            # carries more than one publisher, and admitting a second would change the minute closes
+            # and therefore the labels away from the definition that was evaluated.
+            - name: VOL_STATE_SPOT_SOURCE_FILTER
+              value: IBKR_INDEX
+            - name: VOL_STATE_SPOT_FIELD_FILTER
+              value: LAST
+            - name: VOL_STATE_CONSUMER_GROUP
+              value: vol-state-service
+            # The 4.25 / 7.75 pt thresholds are FROZEN CODE CONSTANTS, deliberately absent here: a
+            # config knob would let the live states drift from the evaluated ones without a code
+            # change, which is exactly how the withdrawn reach table went wrong.
+          ports:
+            - name: health
+              containerPort: 8080
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 192Mi
+            limits:
+              memory: 512Mi
