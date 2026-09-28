@@ -1,0 +1,94 @@
+# CME ZN (10-Year T-Note futures) options GEX service (source repo:
+# options-edge-zn-gex). Publishes a YIELD-EQUIVALENT gamma-exposure signal derived
+# from ZN futures-options Black-76 greeks and a versioned per-contract DV01 map —
+# this is NOT direct TNX/cash-10Y-yield GEX (see the source repo README for the
+# CTD/DV01-mapping caveat). DEV-ONLY for now (services.yaml envs: [dev]) while the
+# Databento ingestion path and DV01 mapping get a first live proof; add `production`
+# to services.yaml + a production overlay only after that soak.
+#
+# Two internal stages in one process: a bounded one-shot Databento historical poll
+# for ZN_GEX_TRADE_DATE (flips /health/ready after its first successful join), then
+# a Kafka Streams processor computing yield-equivalent GEX. Kafka Streams local
+# state uses an emptyDir (dev-only; a PVC-backed mount is a production follow-up,
+# same as databento-gex-service's `kafka-streams-state` claim).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zn-gex-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: zn-gex-service
+    app.kubernetes.io/component: rates-gex
+    app.kubernetes.io/part-of: options-edge
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: zn-gex-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: zn-gex-service
+        app.kubernetes.io/component: rates-gex
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      containers:
+        - name: zn-gex
+          image: host.docker.internal:5001/options-edge-zn-gex:dev
+          ports:
+            - containerPort: 8101
+              name: health
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
+            - secretRef:
+                name: options-edge-databento-feed-env
+                optional: true
+          env:
+            - name: HEALTH_PORT
+              value: "8101"
+            - name: KAFKA_ZN_RAW_TOPIC
+              value: rates.databento.zn.options.raw.v1
+            - name: KAFKA_ZN_GEX_TOPIC
+              value: rates.databento.zn.options.gex.strike.v1
+            - name: KAFKA_APPLICATION_ID
+              value: zn-gex-v1
+            - name: ZN_GEX_DV01_MAP_PATH
+              value: /config/dv01-map/dv01-map-seed.json
+            - name: ZN_GEX_MAX_SYMBOLS
+              value: "500"
+          volumeMounts:
+            - mountPath: /var/lib/options-edge/kafka-streams
+              name: kafka-streams-state
+            - mountPath: /config/dv01-map
+              name: dv01-map
+              readOnly: true
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              memory: 2Gi
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 15
+            periodSeconds: 30
+      volumes:
+        - name: kafka-streams-state
+          emptyDir: {}
+        - name: dv01-map
+          configMap:
+            name: zn-gex-dv01-map
+            optional: true
