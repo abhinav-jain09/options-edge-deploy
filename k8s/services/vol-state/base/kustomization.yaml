@@ -1,0 +1,4 @@
+# No Service object on purpose: kubelet probes reach the pod directly, and a ClusterIP Service would
+# make /metrics reachable in-cluster. Nothing may read this service's output during the shadow phase.
+resources:
+  - vol-state-deployment.yaml
