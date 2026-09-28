@@ -369,7 +369,11 @@ if ! kubectl apply -f "$RENDER" 2>&1 | tee "$APPLY_LOG"; then
     while IFS= read -r name; do
       [ -n "$name" ] || continue
       echo "=== apply failed with the known unmergeable env-schema drift on Deployment/$name -- replacing ONLY that document ==="
-      yq eval-all "select(.kind == \"Deployment\" and .metadata.name == \"$name\")" "$RENDER" >> "$DEPLOY_ONLY"
+      # Scoped by namespace too (Codex review, PR #1105 round-8): the API error names only the
+      # Deployment, and K8s permits the same name in different namespaces, so name alone could
+      # over-select in a render spanning namespaces. This script is single-namespace per
+      # invocation ($NAMESPACE), but the select costs nothing and removes the ambiguity outright.
+      yq eval-all "select(.kind == \"Deployment\" and .metadata.name == \"$name\" and (.metadata.namespace // \"$NAMESPACE\") == \"$NAMESPACE\")" "$RENDER" >> "$DEPLOY_ONLY"
     done <<<"$FAILED_DEPLOYMENTS"
     if [ ! -s "$DEPLOY_ONLY" ]; then
       echo "FATAL: apply failed with the known drift signature but no matching Deployment doc was found in the render" >&2
