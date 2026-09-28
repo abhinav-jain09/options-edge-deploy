@@ -321,7 +321,90 @@ if [ "$DEPLOY_DRY_RUN" = "true" ]; then
 fi
 
 echo "=== apply (service-scoped) ==="
-kubectl apply -f "$RENDER"
+# 2026-09-28 incident: databento-gex-service's live Deployment had drifted out of band (an env var
+# that was `value: SPXW` live vs `valueFrom: configMapKeyRef` in the tracked manifest, plus 5
+# untracked extra env vars) -- confirmed BOTH client-side (kubectl apply) and server-side apply
+# (--server-side --force-conflicts) reject the merge identically ("valueFrom: Invalid value: "":
+# may not be specified when `value` is not empty"), so this is not a field-ownership/3-way-merge
+# problem force-conflicts can resolve -- the drifted object genuinely cannot be reconciled by any
+# merge. Falls back to `kubectl replace --force` (delete+recreate) ONLY for THIS EXACT known error
+# signature, and ONLY the render's Deployment document(s) -- never Service/HPA/Ingress/anything
+# else in a multi-doc render, and never for an unrelated apply failure (RBAC, network, a genuinely
+# bad manifest), where blindly replacing would make a partially-successful apply worse and could
+# churn a Service's ClusterIP (Codex review, PR #1105 BLOCKER: the first draft replaced the WHOLE
+# multi-doc render on ANY apply failure). The common/no-drift path is completely unchanged.
+APPLY_LOG="$WORK_DIR/${SERVICE}-${ENVIRONMENT}-apply.log"
+if ! kubectl apply -f "$RENDER" 2>&1 | tee "$APPLY_LOG"; then
+  if grep -q 'may not be specified when `value` is not empty' "$APPLY_LOG"; then
+    # kubectl apply -f processes every document in $RENDER and can report SEVERAL independent
+    # failures in one run — a rendered Service/HPA error or an RBAC/authorization failure
+    # alongside the known env-schema error must never be masked by this fallback succeeding on
+    # the Deployment alone (Codex review, PR #1105 round-5 BLOCKER). K8s also AGGREGATES multiple
+    # causes for ONE object into a single bracketed line ('is invalid: [cause1, cause2]') — a
+    # naive substring match on the known text would strip that whole line and miss the second
+    # cause (round-6 BLOCKER), so this anchors the ENTIRE line: it must be a SINGLE, non-aggregated
+    # cause (no '[' immediately after "is invalid: " — the field path's OWN array-index brackets
+    # like ".env[27]" appear later in the line and are fine) ending in exactly the known suffix.
+    KNOWN_LINE_RE='^The Deployment "[^"]+" is invalid: [^[].*: Invalid value: "": may not be specified when `value` is not empty$'
+    OTHER_ERRORS="$(grep -iE 'error|invalid|forbidden|denied|unauthorized' "$APPLY_LOG" \
+        | grep -vE "$KNOWN_LINE_RE" || true)"
+    if [ -n "$OTHER_ERRORS" ]; then
+      echo "FATAL: apply failed with the known drift signature AND at least one other error (or an aggregated multi-cause failure) — refusing to replace:" >&2
+      echo "$OTHER_ERRORS" >&2
+      exit 1
+    fi
+    # This script explicitly supports a service with MULTIPLE Deployments in one render, and
+    # `kubectl apply` can partially succeed — replacing every Deployment doc in $RENDER would
+    # delete/recreate otherwise-healthy deployments that never hit this error (Codex review, PR
+    # #1105 round-2 MAJOR). Scope the replace to ONLY the Deployment name(s) that produced an
+    # exact single-cause known-error line.
+    FAILED_DEPLOYMENTS="$(grep -E "$KNOWN_LINE_RE" "$APPLY_LOG" \
+        | grep -o 'The Deployment "[^"]*"' | sed -E 's/The Deployment "([^"]*)"/\1/' | sort -u)"
+    if [ -z "$FAILED_DEPLOYMENTS" ]; then
+      echo "FATAL: apply failed with the known drift signature but no '\"NAME\" is invalid' Deployment could be parsed from the error" >&2
+      exit 1
+    fi
+    DEPLOY_ONLY="$WORK_DIR/${SERVICE}-${ENVIRONMENT}-replace.yaml"
+    : >"$DEPLOY_ONLY"
+    while IFS= read -r name; do
+      [ -n "$name" ] || continue
+      echo "=== apply failed with the known unmergeable env-schema drift on Deployment/$name -- replacing ONLY that document ==="
+      # Scoped by namespace too (Codex review, PR #1105 round-8): the API error names only the
+      # Deployment, and K8s permits the same name in different namespaces, so name alone could
+      # over-select in a render spanning namespaces. This script is single-namespace per
+      # invocation ($NAMESPACE), but the select costs nothing and removes the ambiguity outright.
+      yq eval-all "select(.kind == \"Deployment\" and .metadata.name == \"$name\" and (.metadata.namespace // \"$NAMESPACE\") == \"$NAMESPACE\")" "$RENDER" >> "$DEPLOY_ONLY"
+    done <<<"$FAILED_DEPLOYMENTS"
+    if [ ! -s "$DEPLOY_ONLY" ]; then
+      echo "FATAL: apply failed with the known drift signature but no matching Deployment doc was found in the render" >&2
+      exit 1
+    fi
+    # The error signature alone does NOT prove this is live-state drift — a RENDERED manifest that
+    # itself sets both value and valueFrom for the same env entry (a bad kustomize patch, say)
+    # produces the IDENTICAL API error, and `replace --force` deletes before it recreates: doing
+    # that against a genuinely broken manifest would delete a healthy live Deployment and then fail
+    # to bring it back (Codex review, PR #1105 round-3 BLOCKER). Statically check the CANDIDATE
+    # doc, no live cluster involved, before ever deleting anything.
+    # Checks ALL pod spec container lists (Codex review, PR #1105 round-4 BLOCKER: an initContainer
+    # or ephemeralContainer env entry with the same value+valueFrom contradiction produces the
+    # identical API error and would have slipped past a containers[]-only check).
+    BAD_ENV_NAMES="$(yq eval '
+        .spec.template.spec
+        | (.containers[]?, .initContainers[]?, .ephemeralContainers[]?)
+        | .env[]?
+        | select(has("value") and has("valueFrom"))
+        | .name
+    ' "$DEPLOY_ONLY")"
+    if [ -n "$BAD_ENV_NAMES" ]; then
+      echo "FATAL: the rendered Deployment itself sets both value and valueFrom for env var(s): $BAD_ENV_NAMES — this is a manifest bug, not live-state drift; refusing to replace (would delete a live Deployment and fail to recreate it)" >&2
+      exit 1
+    fi
+    kubectl replace --force -f "$DEPLOY_ONLY"
+  else
+    echo "FATAL: apply failed for a reason other than the known unmergeable env-schema drift -- refusing to replace" >&2
+    exit 1
+  fi
+fi
 
 # --- FORCE_RESTART: roll pods whose SPEC did not change --------------------------------
 # Applying an unchanged manifest is a no-op to Kubernetes: same digest, same pod template, so no
