@@ -105,24 +105,6 @@ spec:
             # own replay window, so it works even though the dev main loop runs use_live_replay=false.
             - name: DATABENTO_PREMARKET_LIVE_OI_ENABLED
               value: "true"
-            # 2026-09-30 TEMPORARY RECOVERY: the kind cluster's sandbox churned around 11:00 ET
-            # (multiple pods restarted simultaneously), and this feed pod then crash-looped on its
-            # liveness probe (503, exit 137, repeated kills) straight through the 06:30-09:25 ET
-            # premarket-live-OI window. maybe_capture_premarket_live_oi() is gated on
-            # !market_is_open() (premarket_oi_capture_due, service.rs) -- once the market opens
-            # that path is permanently closed for the day, restart or not. Result: EVERY row in
-            # databento_option_raw_snapshot for 2026-09-30 has call/put_open_interest = 0 (verified
-            # via psql), so OiArrivalWatchdog's fail-closed gate correctly held all GEX output back
-            # all morning -- that gate did its job; the feed just never fed it anything to gate.
-            # bootstrap_open_interest() (the historical-statistics fallback, oi_historical_
-            # bootstrap_enabled, default false) is the OTHER designed path in and is NOT time-gated
-            # -- pulling today's already-published OI from Databento's historical statistics API
-            # instead of the live premarket replay. Turning it on for this one redeploy so today's
-            # session gets real OI without waiting for tomorrow's premarket window.
-            # ROLL BACK by removing this block once today's GEX is confirmed flowing again -- it
-            # does not need to stay on for tomorrow's normal premarket-capture path to work.
-            - name: DATABENTO_OI_HISTORICAL_BOOTSTRAP_ENABLED
-              value: "true"
             # ---- ES->SPX basis engine on DEV, mirrored from prod (2026-07-27) --------------
             # Dev's feed has BOTH engine legs in-process (base DATABENTO_HPSF_ES_TRADES_ENABLED
             # =true native ES + the SPX leg), so the engine already ran here — but with samples
