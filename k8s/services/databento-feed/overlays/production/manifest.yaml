@@ -66,6 +66,12 @@ spec:
               value: "false"
             - name: DATABENTO_PREMARKET_LIVE_OI_ENABLED
               value: "true"
+            - name: DATABENTO_OI_HISTORICAL_BOOTSTRAP_ENABLED
+              value: "true"
+            - name: DATABENTO_OI_HISTORICAL_BOOTSTRAP_LOOKBACK_DAYS
+              value: "4"
+            - name: DATABENTO_OI_HISTORICAL_BOOTSTRAP_TIMEOUT_SECONDS
+              value: "45"
             - name: ES_SPX_BASIS_CLOSE_PRINCIPALS
               value: abhinav
             - name: ES_SPX_BASIS_ACK_PRINCIPALS
