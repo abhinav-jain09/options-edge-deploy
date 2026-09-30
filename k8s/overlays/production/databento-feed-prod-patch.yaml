@@ -68,6 +68,21 @@ spec:
             # 08:20" mornings on prod. Paired with the raw-postgres-writer KAFKA_RAW_TOPIC repoint.
             - name: DATABENTO_PREMARKET_LIVE_OI_ENABLED
               value: "true"
+            # 2026-09-30 TEMPORARY RECOVERY (same incident, same fix as dev PR #1113): prod's feed
+            # crash-looped through the premarket-live-OI window (liveness probe failures around the
+            # same kind-cluster-adjacent restart wave dev saw ~11:00 ET; prod restarted 6x, most
+            # recently at ~11:37 ET). maybe_capture_premarket_live_oi() is gated on !market_is_open()
+            # (premarket_oi_capture_due) -- permanently closed for the day once the market opens.
+            # Verified via direct psql against 192.168.100.252: every row in
+            # databento_option_raw_snapshot for 2026-09-30 has call/put_open_interest = 0 across all
+            # 201 today-expiry strikes, so OiArrivalWatchdog is correctly fail-closed (5 checks,
+            # OI_MISSING). This turns on the OTHER designed OI path (oi_historical_bootstrap_enabled,
+            # off by default), which pulls today's already-published OI from Databento's historical
+            # statistics API on startup, not gated on time-of-day.
+            # ROLL BACK by removing this block once today's prod GEX is confirmed flowing again --
+            # tomorrow's normal premarket capture does not need it.
+            - name: DATABENTO_OI_HISTORICAL_BOOTSTRAP_ENABLED
+              value: "true"
             # ES->SPX basis engine (ES-SPX-TRANSLATION-ENGINE.md, Codex-approved).
             # ONE engine, no version knob (feed #79): it runs structurally on the
             # instance publishing both legs. Samples stay OFF until the A1
