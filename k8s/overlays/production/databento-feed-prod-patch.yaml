@@ -79,10 +79,23 @@ spec:
             # OI_MISSING). This turns on the OTHER designed OI path (oi_historical_bootstrap_enabled,
             # off by default), which pulls today's already-published OI from Databento's historical
             # statistics API on startup, not gated on time-of-day.
-            # ROLL BACK by removing this block once today's prod GEX is confirmed flowing again --
+            #
+            # COST/CHURN BOUND (Codex review, PR #1114 round 1): bootstrap_open_interest() decides
+            # "uncovered" from in-memory book_state, not from Postgres, so it does NOT know a prior
+            # restart already seeded OI -- every restart while this is enabled re-issues the
+            # historical fetch and re-bills it. Explicitly pinning lookback/timeout (matching es4's
+            # proven values, k8s/es4/es4-feed-config.yaml) instead of relying on code defaults, AND
+            # this is being kept on for the SHORTEST window that proves recovery: enable, deploy,
+            # confirm databento_option_raw_snapshot gets real OI, then revert in a same-day follow-up
+            # PR -- not left on indefinitely the way DATABENTO_PREMARKET_LIVE_OI_ENABLED above is.
+            # ROLL BACK by removing this whole block once today's prod GEX is confirmed flowing --
             # tomorrow's normal premarket capture does not need it.
             - name: DATABENTO_OI_HISTORICAL_BOOTSTRAP_ENABLED
               value: "true"
+            - name: DATABENTO_OI_HISTORICAL_BOOTSTRAP_LOOKBACK_DAYS
+              value: "4"
+            - name: DATABENTO_OI_HISTORICAL_BOOTSTRAP_TIMEOUT_SECONDS
+              value: "45"
             # ES->SPX basis engine (ES-SPX-TRANSLATION-ENGINE.md, Codex-approved).
             # ONE engine, no version knob (feed #79): it runs structurally on the
             # instance publishing both legs. Samples stay OFF until the A1
