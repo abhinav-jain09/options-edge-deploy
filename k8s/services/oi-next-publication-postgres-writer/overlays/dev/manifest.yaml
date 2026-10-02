@@ -16,58 +16,71 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   labels:
-    app.kubernetes.io/component: oi-next-publication-service
-    app.kubernetes.io/name: oi-next-publication-service
+    app.kubernetes.io/component: oi-next-publication-postgres-writer
+    app.kubernetes.io/name: oi-next-publication-postgres-writer
     app.kubernetes.io/part-of: options-edge
-  name: oi-next-publication-service
+  name: oi-next-publication-postgres-writer
   namespace: options-edge
 spec:
   progressDeadlineSeconds: 1200
   replicas: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: oi-next-publication-service
+      app.kubernetes.io/name: oi-next-publication-postgres-writer
   strategy:
     type: Recreate
   template:
     metadata:
       labels:
-        app.kubernetes.io/component: oi-next-publication-service
-        app.kubernetes.io/name: oi-next-publication-service
+        app.kubernetes.io/component: oi-next-publication-postgres-writer
+        app.kubernetes.io/name: oi-next-publication-postgres-writer
         app.kubernetes.io/part-of: options-edge
     spec:
       containers:
         - env:
             - name: HEALTH_PORT
-              value: "8160"
-            - name: OI_NEXTPUB_ENABLED
+              value: "8161"
+            - name: OI_NEXTPUB_WRITER_ENABLED
               value: "true"
-            - name: OI_NEXTPUB_SYMBOL
-              value: SPX
-            - name: OI_NEXTPUB_APP_ID
-              value: oi-next-publication
-            - name: KAFKA_SNAPSHOT_TOPIC
-              value: options.databento.normalized
             - name: KAFKA_OI_NEXTPUB_TOPIC
               value: options.spx.oi.next-publication
-            - name: OI_NEXTPUB_SPOT_CLOSE
-              value: "16:00"
-            - name: OI_NEXTPUB_SESSION_END
-              value: "17:00"
-            - name: OI_NEXTPUB_EVALUATE_GRACE_MINUTES
+            - name: OI_NEXTPUB_SYMBOL
+              value: SPX
+            - name: OI_NEXTPUB_WRITER_PG_URL
+              valueFrom:
+                configMapKeyRef:
+                  key: POSTGRES_JDBC_URL
+                  name: options-edge-config
+            - name: OI_NEXTPUB_WRITER_PG_USER
+              valueFrom:
+                configMapKeyRef:
+                  key: POSTGRES_USER
+                  name: options-edge-config
+            - name: OI_NEXTPUB_WRITER_PG_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  key: POSTGRES_PASSWORD
+                  name: options-edge-runtime-secrets
+            - name: OI_NEXTPUB_WRITER_SCORE_SNAPSHOT_TABLE
+              value: options_flow.databento_option_raw_snapshot
+            - name: OI_NEXTPUB_WRITER_SCORE_SNAPSHOT_SOURCE
+              value: DATABENTO
+            - name: DATABENTO_GEX_OI_AVAILABLE_LOCAL_TIME
+              value: "09:00"
+            - name: DATABENTO_GEX_OI_AVAILABLE_TZ
+              value: America/New_York
+            - name: OI_NEXTPUB_WRITER_SCORE_INTERVAL_MINUTES
               value: "15"
-            - name: OI_NEXTPUB_MODEL_PATH
-              value: /app/model/model_db_v1.json.gz
-            - name: OI_NEXTPUB_ACCEPTED_FIT_SOURCES
-              value: THETA_TAPE_DB_COMPAT
+            - name: OI_NEXTPUB_WRITER_SCORE_LOOKBACK_DAYS
+              value: "10"
             - name: JAVA_TOOL_OPTIONS
-              value: -Xms128m -Xmx512m
+              value: -Xms64m -Xmx256m
           envFrom:
             - configMapRef:
                 name: options-edge-config
             - secretRef:
                 name: options-edge-runtime-secrets
-          image: host.docker.internal:5001/options-edge-oi-next-publication:dev
+          image: host.docker.internal:5001/options-edge-oi-next-publication-postgres-writer:dev
           imagePullPolicy: Always
           livenessProbe:
             httpGet:
@@ -75,19 +88,19 @@ spec:
               port: health
             initialDelaySeconds: 20
             periodSeconds: 15
-          name: oi-next-publication
+          name: oi-next-publication-postgres-writer
           ports:
-            - containerPort: 8160
+            - containerPort: 8161
               name: health
           readinessProbe:
             httpGet:
               path: /health/ready
               port: health
-            initialDelaySeconds: 30
+            initialDelaySeconds: 20
             periodSeconds: 10
           resources:
             limits:
-              memory: 1Gi
+              memory: 512Mi
             requests:
-              cpu: 100m
-              memory: 256Mi
+              cpu: 50m
+              memory: 128Mi

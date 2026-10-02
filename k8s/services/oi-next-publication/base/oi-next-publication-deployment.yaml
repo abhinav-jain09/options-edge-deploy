@@ -76,15 +76,19 @@ spec:
               value: "17:00"
             - name: OI_NEXTPUB_EVALUATE_GRACE_MINUTES
               value: "15"
-            # EMPTY = DARK. The service assembles every session's feature vectors and logs a
-            # summary, and PUBLISHES NOTHING: there is no model in the image and no fallback
-            # estimate. This is the first-deploy state on purpose — it proves the ledger,
-            # the session boundaries and the refusals on the live feed before any number is
-            # emitted. The interim producer (~/oe-ops/next_oi_service.py on the Mac) keeps
-            # options_flow.oi_next_publication fed for GEX until a model path is set here
-            # AND a writer from this topic to that table exists.
+            # PRODUCING (USER 2026-10-02: "throw away python job and make this service produce
+            # oi"). The image ships its model at this path (processing PR #911, model/README.md);
+            # the first deploy ran DARK (empty path) for the live-feed soak and the Python
+            # producer is now retired, so this service + its postgres-writer are the ONLY source
+            # of options_flow.oi_next_publication.
             - name: OI_NEXTPUB_MODEL_PATH
-              value: ""
+              value: /app/model/model_db_v1.json.gz
+            # The shipped model is fitted on the ThetaData tape (fitSource THETA_TAPE_DB_COMPAT);
+            # the service refuses any fit source not listed here. Listing it is the owner's
+            # decision: it is the same model the retired Python producer used, and its accuracy
+            # on the feed is measured by the writer's oi_actual scoring from here on.
+            - name: OI_NEXTPUB_ACCEPTED_FIT_SOURCES
+              value: THETA_TAPE_DB_COMPAT
             - name: JAVA_TOOL_OPTIONS
               value: "-Xms128m -Xmx512m"
           ports:

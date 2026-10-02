@@ -79,6 +79,7 @@ IMAGE_MAP = {
     # dev-only (services.yaml envs: [dev]); the deployment is absent on production/experiment and
     # absent deployments are skipped, so the var is only ever consulted on dev.
     ("oi-next-publication-service", "oi-next-publication"): "OI_NEXT_PUBLICATION_IMAGE",
+    ("oi-next-publication-postgres-writer", "oi-next-publication-postgres-writer"): "OI_NEXT_PUBLICATION_POSTGRES_WRITER_IMAGE",
     ("reversal-postgres-writer", "reversal-postgres-writer"): "REVERSAL_POSTGRES_WRITER_IMAGE",
 }
 
