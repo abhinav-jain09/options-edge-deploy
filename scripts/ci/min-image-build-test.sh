@@ -84,6 +84,8 @@ LABELS='{"options-edge.jenkins-build":"http://j:8085/job/options-edge-processing
 render "$GOOD" "$GOOD" >/dev/null; expect_render refuse "an old image in the render refused"
 LABELS='{"options-edge.jenkins-build":"http://j:8085/job/options-edge-processing/1678/"}'
 render "reg:5000/options-edge-x:dev" - >/dev/null; expect_render refuse "a non-digest image in the render refused"
+printf 'apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: svc-service\nspec:\n  template:\n    spec:\n      initContainers:\n        - name: init\n          image: reg:5000/options-edge-x:dev\n      containers:\n        - name: a\n          image: %s\n' "$GOOD" > "$TMP/render.yaml"
+expect_render refuse "a non-digest INIT container image in the render refused"
 rm k8s/services/svc/MIN_IMAGE_BUILD k8s/services/other/MIN_IMAGE_BUILD
 render "reg:5000/options-edge-x:dev" "reg:5000/options-edge-x:dev" >/dev/null; expect_render allow "no declaring services: render path is a no-op"
 echo "$MIN" > k8s/services/svc/MIN_IMAGE_BUILD

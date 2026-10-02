@@ -114,7 +114,8 @@ require_min_image_builds_in_render() {
     deployments="$(yq -r ".services[] | select(.name == \"$svc\") | .deployments[]" services.yaml)"
     [ -n "$deployments" ] || { echo "min-image-build: $svc declares a minimum but is not in services.yaml — refusing" >&2; return 1; }
     for dep in $deployments; do
-      images="$(yq -r "select(.kind == \"Deployment\" and .metadata.name == \"$dep\") | .spec.template.spec.containers[].image" "$render" | grep -v '^---$' || true)"
+      # containers AND initContainers, exactly the set the digest gate examines.
+      images="$(yq -r "select(.kind == \"Deployment\" and .metadata.name == \"$dep\") | (.spec.template.spec.containers[].image), (.spec.template.spec.initContainers[]?.image)" "$render" | grep -v '^---$' || true)"
       if [ -z "$images" ]; then
         echo "min-image-build: $svc/$dep does not render in this environment — nothing to gate"
         continue
