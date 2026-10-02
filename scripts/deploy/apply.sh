@@ -177,10 +177,10 @@
           # (standalone services that run on prod too), but NOT experiment. Pin it for dev+production so both
           # `DEPLOY_TARGET=all` renders pass the digest gate below; experiment never renders it and this
           # block is skipped there (so pin_ref is never asked to resolve a non-existent experiment image).
-          # approach-monitor and approach-position-publisher render in dev ONLY, so they are
-          # pinned there and nowhere else.
+          # approach-monitor, approach-position-publisher and oi-next-publication render in dev
+          # ONLY, so they are pinned there and nowhere else.
           if [ "${ENVIRONMENT}" = "dev" ]; then
-            for _img_var in APPROACH_MONITOR_IMAGE APPROACH_POSITION_PUBLISHER_IMAGE; do
+            for _img_var in APPROACH_MONITOR_IMAGE APPROACH_POSITION_PUBLISHER_IMAGE OI_NEXT_PUBLICATION_IMAGE; do
               _pinned="$(pin_ref "${!_img_var}")" || {
                 echo "FATAL: cannot resolve registry digest for ${_img_var}=${!_img_var}; aborting before any kubectl mutation." >&2
                 exit 1

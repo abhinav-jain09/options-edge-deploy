@@ -14,6 +14,7 @@ images:
   strike-flow-classifier-service: 192.168.100.252:5000/options-edge-strike-flow-classifier:dev
   delta-flow-service: 192.168.100.252:5000/options-edge-delta-flow:dev
   oi-shadow-service: host.docker.internal:5001/options-edge-oi-shadow:dev
+  oi-next-publication-service: host.docker.internal:5001/options-edge-oi-next-publication:dev
   # host.docker.internal:5001 (localhost:5001 from a shell on the Mac) and 192.168.100.252:5000 are
   # NOT the same registry by two names — that is what this comment said until 2026-09-24, and it made
   # the failure below look harmless. That correction rests on an OBSERVATION, not on anything this repo

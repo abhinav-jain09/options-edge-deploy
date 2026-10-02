@@ -76,6 +76,9 @@ IMAGE_MAP = {
     ("context-tape-service", "context-tape"): "CONTEXT_TAPE_IMAGE",
     ("multileg-structure-service", "multileg"): "MULTILEG_STRUCTURE_IMAGE",
     ("oi-shadow-service", "oi-shadow"): "OI_SHADOW_IMAGE",
+    # dev-only (services.yaml envs: [dev]); the deployment is absent on production/experiment and
+    # absent deployments are skipped, so the var is only ever consulted on dev.
+    ("oi-next-publication-service", "oi-next-publication"): "OI_NEXT_PUBLICATION_IMAGE",
     ("reversal-postgres-writer", "reversal-postgres-writer"): "REVERSAL_POSTGRES_WRITER_IMAGE",
 }
 
