@@ -72,8 +72,9 @@ reject_text "$bootstrap_script" 'admin_kubeconfig="${KUBECONFIG_ADMIN_FILE:-/hom
 reject_text "$bootstrap_script" 'jenkins_kubeconfig="${KUBECONFIG_FILE:-/home/options-edge/config/jenkins-deployer.kubeconfig}"' \
   "do not point the local Jenkins bootstrap guard at the remote server kubeconfig path."
 
-# --- Stage order (must include 'Resolve profile' as the first stage) -------------
+# --- Stage order (must include the permission guard before profile resolution) ---
 expected_stages=$(cat <<'EOF'
+Permitted commit guard
 Resolve profile
 Validate
 Resolve Databento Expiry
@@ -86,6 +87,7 @@ Image Preflight
 Pause Runtime For Kafka Cleanup
 Kafka Cleanup
 Kafka Topics
+Declared retention overrides are set on the topics
 Kafka Internal Topics
 Deploy
 Resume Remote Apps
