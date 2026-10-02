@@ -198,12 +198,21 @@ for topic in $(declared); do
     # the same line that repeats broker-level values, and `head -1` over every match made output
     # order decide the answer — able to invent drift or hide it. Take the value before `sensitive=`,
     # which is the topic's own, and refuse the topic outright if more than one such line appears.
+    describe_rc=0
     describe=$(timeout 30 kafka-configs --bootstrap-server "$BOOTSTRAP" --entity-type topics \
-                  --entity-name "$topic" --describe 2>&1) || {
+                  --entity-name "$topic" --describe 2>&1) || describe_rc=$?
+    if [ "$describe_rc" -ne 0 ]; then
+        printf 'RETRY: %s — kafka-configs --describe failed once (%s)\n' \
+            "$topic" "$(printf '%s' "$describe" | head -1)" >&2
+        describe_rc=0
+        describe=$(timeout 30 kafka-configs --bootstrap-server "$BOOTSTRAP" --entity-type topics \
+                      --entity-name "$topic" --describe 2>&1) || describe_rc=$?
+    fi
+    if [ "$describe_rc" -ne 0 ]; then
         printf 'CANNOT READ: %s — kafka-configs --describe failed (%s)\n' "$topic" "$(printf '%s' "$describe" | head -1)" >&2
         failed=1
         continue
-    }
+    fi
     matches=$(printf '%s\n' "$describe" | grep -cE '^[[:space:]]*retention\.ms=-?[0-9]+ sensitive=' || true)
     if [ "${matches:-0}" -gt 1 ]; then
         printf 'AMBIGUOUS: %s reports %s topic-level retention.ms lines; this guard will not guess\n' "$topic" "$matches" >&2
