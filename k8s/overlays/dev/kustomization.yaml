@@ -484,19 +484,19 @@ patches:
         value:
           - name: IB_HOST
             value: host.docker.internal
-          # 2026-07-29: IB Gateway on the dev Mac ran ONLY the PAPER profile (4002 listening,
-          # 4001 closed), so this was pinned to 4002. 2026-10-02: the dev Mac now ALSO runs a
-          # LIVE Gateway instance on 4001 (verified listening), and the paper account's 4002
-          # session has no live SPX/VIX index or option market-data entitlement at all (IBKR
-          # error 354 "Requested market data is not subscribed" on every index/chain request,
-          # persistent across repeated reconnects -- not transient) -- premarket GEX cannot
-          # work at all against 4002 as a result. Moved to the LIVE port.
+          # 2026-07-29: pinned to the PAPER profile (4002). 2026-10-02: briefly moved to the LIVE
+          # port (4001) chasing IBKR error 354 "Requested market data is not subscribed" on every
+          # SPX/VIX index and option request -- but 4001 ALSO hit 354 on every option strike/right
+          # pair once connected, so the missing piece was never the port, it was the account's
+          # OPRA (US Options Exchanges) market-data subscription. That is being added now; market
+          # data subscriptions are account-level and paper (4002) inherits them from the same
+          # account, and 4002's own Gateway session has been the more reliably-connected one of
+          # the two all along (4001 hit its own "Connectivity ... broken" cycling). Back to 4002.
           - name: IB_PORT
-            value: "4001"
+            value: "4002"
           # A distinct client id, NOT the shared configmap default (IB_CLIENT_ID=212, also used
-          # by the option-chain page's own direct Gateway connection) -- two sockets opening the
-          # SAME client id against the SAME Gateway instance collide (IBKR disconnects one), and
-          # this service and that UI panel would now both be reaching port 4001.
+          # by the option-chain page's own direct Gateway connection) -- harmless on 4002 too,
+          # and avoids any collision if that UI panel is ever pointed at the same port/account.
           - name: IB_CLIENT_ID
             value: "913"
           - name: IB_USE_DELAYED_DATA
