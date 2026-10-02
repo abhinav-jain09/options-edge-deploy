@@ -274,6 +274,14 @@ PINNED_IMAGE="$(bind_required_image)" || {
   exit 1
 }
 [ -z "${REQUIRED_IMAGE:-}" ] || echo "permitted build's image bound: $PINNED_IMAGE"
+# --- Minimum image build: a service may declare k8s/services/<svc>/MIN_IMAGE_BUILD and the digest
+# about to be applied must prove (via its options-edge.jenkins-build OCI label, read from the
+# registry) that it is at least that build of that job. Fails closed. See min-image-build.sh.
+. scripts/deploy/min-image-build.sh
+require_min_image_build || {
+  echo "FATAL: the image about to be deployed is older than this service's declared minimum build (see above). Nothing was applied." >&2
+  exit 1
+}
 # Pin EVERY container that carries the shared service image (RENDER_IMAGE0), not just
 # containers[0] — a single-container Deployment is unchanged, while a multi-container pod
 # (agent-a + agent-b) gets its sidecar pinned too instead of failing the digest-pin gate below.

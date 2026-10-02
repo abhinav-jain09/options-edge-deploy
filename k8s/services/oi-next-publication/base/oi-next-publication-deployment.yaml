@@ -60,7 +60,9 @@ spec:
               value: options.databento.normalized
             # Stamped by the service itself at startup as 1 partition / delete / 90-day retention
             # (processing #910) — the environment's KAFKA_TOPIC_PARTITIONS_DEFAULT=32 is NOT
-            # consulted. Requires an image built from processing main at or after #910.
+            # consulted. An image from before #910 would create it 32-wide and compacted, which
+            # Kafka cannot undo, so ../MIN_IMAGE_BUILD (options-edge-processing 1678) makes
+            # service-deploy REFUSE any older image by its options-edge.jenkins-build label.
             - name: KAFKA_OI_NEXTPUB_TOPIC
               value: options.spx.oi.next-publication
             # Two closes, deliberately different (a review BLOCKER when they were one):

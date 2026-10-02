@@ -201,7 +201,8 @@ for t in scripts/kafka/ensure-oi-anchor-topic-parse-test.sh scripts/kafka/ensure
          scripts/kafka/reset-preserved-topics-test.sh \
          scripts/ci/validate-durable-topic-preservation-mutation-test.sh \
          scripts/ci/es-cvd-mirror-shape-test.sh \
-         scripts/ci/es-auction-mirror-shape-test.sh; do
+         scripts/ci/es-auction-mirror-shape-test.sh \
+         scripts/ci/min-image-build-test.sh; do
   if [ ! -x "$t" ]; then
     echo "FAIL: $t missing or not executable"
     exit 1
@@ -212,7 +213,7 @@ for t in scripts/kafka/ensure-oi-anchor-topic-parse-test.sh scripts/kafka/ensure
     exit 1
   fi
 done
-echo "topic contracts: oi-anchor barrier, pure-compact verification, and the durable-preservation mutation suite passed"
+echo "topic contracts: oi-anchor barrier, pure-compact verification, the durable-preservation mutation suite, and the min-image-build gate suite passed"
 
 # --- continuous auto-hunt production acceptance (auto-arm req §3.1) ---
 # Both flags must be EFFECTIVELY true in BOTH prod mirrors: asserted on the
