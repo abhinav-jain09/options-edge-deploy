@@ -59,7 +59,7 @@ spec:
             - name: IB_HOST
               value: host.docker.internal
             - name: IB_PORT
-              value: "4001"
+              value: "4002"
             - name: IB_CLIENT_ID
               value: "913"
             - name: IB_USE_DELAYED_DATA
