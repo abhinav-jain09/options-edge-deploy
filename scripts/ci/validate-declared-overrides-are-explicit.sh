@@ -176,11 +176,19 @@ for topic in $(declared); do
     # "absent" would skip a real retention failure and then report that nothing existed. Ask the
     # broker to LIST instead: an empty list for a name that the cluster has is unambiguous, while a
     # CLI failure is reported and fails the guard.
-    listing=$(timeout 30 kafka-topics --bootstrap-server "$BOOTSTRAP" --list --topic "$topic" 2>&1) || {
+    listing_rc=0
+    listing=$(timeout 30 kafka-topics --bootstrap-server "$BOOTSTRAP" --list --topic "$topic" 2>&1) || listing_rc=$?
+    if [ "$listing_rc" -ne 0 ]; then
+        printf 'RETRY: %s — kafka-topics --list failed once (%s)\n' \
+            "$topic" "$(printf '%s' "$listing" | head -1)" >&2
+        listing_rc=0
+        listing=$(timeout 30 kafka-topics --bootstrap-server "$BOOTSTRAP" --list --topic "$topic" 2>&1) || listing_rc=$?
+    fi
+    if [ "$listing_rc" -ne 0 ]; then
         printf 'CANNOT READ: %s — kafka-topics --list failed (%s)\n' "$topic" "$(printf '%s' "$listing" | head -1)" >&2
         failed=1
         continue
-    }
+    fi
     if ! printf '%s\n' "$listing" | grep -qx "$topic"; then
         if would_be_created "$topic"; then
             printf 'DECLARED BUT ABSENT: %s does not exist on %s, and apply-topics.sh declares it here — that stage did not run, and a producer will auto-create it on the broker default (declaration says %s)\n' \
