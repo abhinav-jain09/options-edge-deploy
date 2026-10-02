@@ -484,12 +484,21 @@ patches:
         value:
           - name: IB_HOST
             value: host.docker.internal
-          # IB Gateway on the dev Mac runs the PAPER profile, whose API listener is 4002
-          # (verified 2026-07-29: only *:4002 LISTEN; 4001 closed → the pod crash-looped
-          # "Couldn't connect to TWS"). The shared configmap's IB_PORT=4001 is the LIVE
-          # port and stays for prod; dev overrides it here.
+          # 2026-07-29: IB Gateway on the dev Mac ran ONLY the PAPER profile (4002 listening,
+          # 4001 closed), so this was pinned to 4002. 2026-10-02: the dev Mac now ALSO runs a
+          # LIVE Gateway instance on 4001 (verified listening), and the paper account's 4002
+          # session has no live SPX/VIX index or option market-data entitlement at all (IBKR
+          # error 354 "Requested market data is not subscribed" on every index/chain request,
+          # persistent across repeated reconnects -- not transient) -- premarket GEX cannot
+          # work at all against 4002 as a result. Moved to the LIVE port.
           - name: IB_PORT
-            value: "4002"
+            value: "4001"
+          # A distinct client id, NOT the shared configmap default (IB_CLIENT_ID=212, also used
+          # by the option-chain page's own direct Gateway connection) -- two sockets opening the
+          # SAME client id against the SAME Gateway instance collide (IBKR disconnects one), and
+          # this service and that UI panel would now both be reaching port 4001.
+          - name: IB_CLIENT_ID
+            value: "913"
           - name: IB_USE_DELAYED_DATA
             value: "false"
           - name: IBKR_SPX_PRICE_ENABLED
