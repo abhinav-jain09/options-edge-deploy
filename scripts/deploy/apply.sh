@@ -237,6 +237,18 @@
             echo "aborting before any kubectl mutation." >&2
             exit 1
           fi
+          # Minimum image build (scripts/deploy/min-image-build.sh): any service that declares
+          # k8s/services/<svc>/MIN_IMAGE_BUILD must prove, via the OCI label on the digest about to be
+          # applied, that it is at least that build of that job on this Jenkins. Checked on the SAME
+          # render that just passed the digest gate, before any kubectl mutation; runs in dry-run too.
+          . scripts/deploy/min-image-build.sh
+          _min_render="$(mktemp)"
+          kubectl kustomize "k8s/overlays/${ENVIRONMENT}" >"$_min_render"
+          require_min_image_builds_in_render "$_min_render" || {
+            echo "FATAL: a rendered image is older than its service's declared minimum build (see above); aborting before any kubectl mutation." >&2
+            exit 1
+          }
+          rm -f "$_min_render"
           if [ "${DEPLOY_DRY_RUN:-false}" = "true" ]; then
             echo "DEPLOY_DRY_RUN=true: validating Kubernetes apply without changing runtime resources."
             kubectl apply --dry-run=server -k "k8s/overlays/${ENVIRONMENT}"
