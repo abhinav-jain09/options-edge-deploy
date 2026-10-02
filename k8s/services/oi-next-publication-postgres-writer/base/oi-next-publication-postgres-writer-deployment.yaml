@@ -1,0 +1,110 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oi-next-publication-postgres-writer
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: oi-next-publication-postgres-writer
+    app.kubernetes.io/component: oi-next-publication-postgres-writer
+    app.kubernetes.io/part-of: options-edge
+spec:
+  # One replica, Recreate: a single-partition topic has one consumer; the upsert is idempotent so a
+  # second instance would be harmless but pointless, and a RollingUpdate would briefly run two.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: oi-next-publication-postgres-writer
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: oi-next-publication-postgres-writer
+        app.kubernetes.io/component: oi-next-publication-postgres-writer
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      containers:
+        - name: oi-next-publication-postgres-writer
+          image: 192.168.100.252:5000/options-edge-oi-next-publication-postgres-writer:dev
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            - name: HEALTH_PORT
+              value: "8161"
+            - name: OI_NEXTPUB_WRITER_ENABLED
+              value: "true"
+            - name: KAFKA_OI_NEXTPUB_TOPIC
+              value: options.spx.oi.next-publication
+            - name: OI_NEXTPUB_SYMBOL
+              value: "SPX"
+            # The table GEX reads lives in the Mac's options_flow_dev — the SAME database the dev
+            # configmap's POSTGRES_JDBC_URL names (k8s/infra/overlays/dev/configmap-dev-local-patch.yaml)
+            # and the one databento-gex's PREOPEN_ESTIMATED_OI_JDBC_URL points at. Taken from the
+            # configmap rather than typed again so the three cannot drift apart. The writer REFUSES
+            # TO START on a blank URL.
+            - name: OI_NEXTPUB_WRITER_PG_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: options-edge-config
+                  key: POSTGRES_JDBC_URL
+            - name: OI_NEXTPUB_WRITER_PG_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: options-edge-config
+                  key: POSTGRES_USER
+            - name: OI_NEXTPUB_WRITER_PG_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: options-edge-runtime-secrets
+                  key: POSTGRES_PASSWORD
+            # The writer's own staging table (options_flow.oi_next_publication_staging) is created
+            # by the writer if absent — the options_flow role was granted CREATE on the schema on dev
+            # (2026-10-02) for exactly this; the read table itself is never created or altered.
+            #
+            # Scoring: oi_actual is taken from the feed's own raw snapshot table (raw-postgres-writer
+            # fills it from the same feed) with THE SAME trust rule the GEX service applies to the
+            # day's actual OI: source DATABENTO, the target session, snapshots captured at or after
+            # the OI-available boundary — the GEX service's own keys, and the SAME VALUE the dev GEX
+            # deployment sets (k8s/overlays/dev/databento-gex-preopen-dev-patch.yaml: 09:00 ET,
+            # because OPRA's definitions for the session only land around then on this feed; the
+            # code default is 08:00 and would score an hour before GEX trusts the print) — OI > 0
+            # only. Every 15 minutes, over the last 10 target days, NULL rows only.
+            - name: OI_NEXTPUB_WRITER_SCORE_SNAPSHOT_TABLE
+              value: options_flow.databento_option_raw_snapshot
+            - name: OI_NEXTPUB_WRITER_SCORE_SNAPSHOT_SOURCE
+              value: DATABENTO
+            - name: DATABENTO_GEX_OI_AVAILABLE_LOCAL_TIME
+              value: "09:00"
+            - name: DATABENTO_GEX_OI_AVAILABLE_TZ
+              value: America/New_York
+            - name: OI_NEXTPUB_WRITER_SCORE_INTERVAL_MINUTES
+              value: "15"
+            - name: OI_NEXTPUB_WRITER_SCORE_LOOKBACK_DAYS
+              value: "10"
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xms64m -Xmx256m"
+          ports:
+            - name: health
+              containerPort: 8161
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 512Mi

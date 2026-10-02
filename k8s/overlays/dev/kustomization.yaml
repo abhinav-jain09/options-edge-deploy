@@ -25,10 +25,14 @@ resources:
   # production/experiment monolith overlays never render it. A Kafka Streams service over
   # options.databento.normalized that, at each session's Curb close, publishes the open
   # interest the exchange will print NEXT morning, per leg, to options.spx.oi.next-publication.
-  # It is deployed DARK (OI_NEXTPUB_MODEL_PATH empty): it accumulates and evaluates sessions
-  # and publishes nothing until a model artifact is given to it. services.yaml declares
-  # envs: [dev] to match; the dev image remap below applies to it.
+  # PRODUCING since 2026-10-02 (first deployed DARK for a live-feed soak): the image ships its
+  # model and the base Deployment admits it. services.yaml declares envs: [dev] to match; the
+  # dev image remap below applies to it.
   - ../../services/oi-next-publication/base
+  # ...and its Postgres writer: options.spx.oi.next-publication -> options_flow.oi_next_publication
+  # (the table databento-gex's EstimatedOiBoardReader reads), plus oi_actual scoring. DEV-ONLY
+  # with the service; same no-Service-object shape.
+  - ../../services/oi-next-publication-postgres-writer/base
   # zn-gex is DEV-ONLY for now (services.yaml envs: [dev]): CME ZN futures-options
   # yield-equivalent GEX, standalone source repo options-edge-zn-gex. Referenced here
   # (NOT in k8s/base) so production/experiment never render it until the Databento
@@ -746,6 +750,8 @@ images:
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-oi-next-publication
     newName: host.docker.internal:5001/options-edge-oi-next-publication
+  - name: 192.168.100.252:5000/options-edge-oi-next-publication-postgres-writer
+    newName: host.docker.internal:5001/options-edge-oi-next-publication-postgres-writer
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-gamma-leadership
     newName: host.docker.internal:5001/options-edge-gamma-leadership

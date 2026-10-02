@@ -1,0 +1,4 @@
+# No Service object on purpose, as for the service it follows: kubelet probes reach the pod
+# directly, and nothing in-cluster calls it — it consumes a topic and writes Postgres.
+resources:
+  - oi-next-publication-postgres-writer-deployment.yaml

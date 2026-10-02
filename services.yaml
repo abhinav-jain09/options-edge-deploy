@@ -138,8 +138,10 @@ services:
   - { name: vol-state,                    managedBy: standalone, sliceGenerated: true, envs: [dev], image: options-edge-vol-state,                    deployments: [vol-state-service] }
   # oi-next-publication: DEV-ONLY by owner decision ("this service is only dev", 2026-09-23). A
   # Streams service that publishes per-leg NEXT-morning open interest at each session's Curb close
-  # (options.spx.oi.next-publication). Deployed DARK until a model artifact is supplied.
+  # (options.spx.oi.next-publication). PRODUCING since 2026-10-02 (the image ships its model, the
+  # Deployment admits it); its postgres-writer below lands it in the table GEX reads.
   - { name: oi-next-publication,          managedBy: standalone, sliceGenerated: true, envs: [dev], image: options-edge-oi-next-publication,          deployments: [oi-next-publication-service] }
+  - { name: oi-next-publication-postgres-writer, managedBy: standalone, sliceGenerated: true, envs: [dev], image: options-edge-oi-next-publication-postgres-writer, deployments: [oi-next-publication-postgres-writer] }
   - { name: gamma-leadership,            managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-gamma-leadership,            deployments: [gamma-leadership-service] }
   - { name: nifty-gex,                    managedBy: standalone, envs: [dev, production], image: options-edge-nifty-gex,                    deployments: [nifty-gex-service], container: nifty-gex, sourceRepo: options-edge-nifty-gex }
   # zn-gex: CME ZN (10Y T-Note futures) options -> yield-equivalent GEX (Databento GLBX.MDP3,

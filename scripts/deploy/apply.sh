@@ -198,7 +198,7 @@
           # approach-monitor, approach-position-publisher and oi-next-publication render in dev
           # ONLY, so they are pinned there and nowhere else.
           if [ "${ENVIRONMENT}" = "dev" ]; then
-            for _img_var in APPROACH_MONITOR_IMAGE APPROACH_POSITION_PUBLISHER_IMAGE OI_NEXT_PUBLICATION_IMAGE; do
+            for _img_var in APPROACH_MONITOR_IMAGE APPROACH_POSITION_PUBLISHER_IMAGE OI_NEXT_PUBLICATION_IMAGE OI_NEXT_PUBLICATION_POSTGRES_WRITER_IMAGE; do
               _pinned="$(pin_ref "${!_img_var}")" || {
                 echo "FATAL: cannot resolve registry digest for ${_img_var}=${!_img_var}; aborting before any kubectl mutation." >&2
                 exit 1
