@@ -1,0 +1,4 @@
+# No Service object on purpose, as for vol-state: kubelet probes reach the pod directly, and
+# nothing in-cluster needs to reach this service — its only output is a Kafka topic.
+resources:
+  - oi-next-publication-deployment.yaml

@@ -74,6 +74,7 @@ EOF
               cat >>"$JENKINS_WORK_DIR/options-edge-images.env" <<EOF
 APPROACH_MONITOR_IMAGE=$registry/options-edge-approach-monitor:$image_tag
 APPROACH_POSITION_PUBLISHER_IMAGE=$registry/options-edge-approach-position-publisher:$image_tag
+OI_NEXT_PUBLICATION_IMAGE=$registry/options-edge-oi-next-publication:$image_tag
 EOF
             fi
             # short-premium-agent renders in dev+production (a standalone service that runs on prod too),
@@ -149,6 +150,7 @@ EOF
               cat >>"$JENKINS_WORK_DIR/options-edge-images.env" <<EOF
 APPROACH_MONITOR_IMAGE=${APPROACH_MONITOR_IMAGE:-$registry/options-edge-approach-monitor:dev}
 APPROACH_POSITION_PUBLISHER_IMAGE=${APPROACH_POSITION_PUBLISHER_IMAGE:-$registry/options-edge-approach-position-publisher:dev}
+OI_NEXT_PUBLICATION_IMAGE=${OI_NEXT_PUBLICATION_IMAGE:-$registry/options-edge-oi-next-publication:dev}
 EOF
             fi
             # short-premium-agent renders in dev+production; on the promoted/branch-2 path (prod) its

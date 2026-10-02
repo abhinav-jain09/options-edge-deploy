@@ -20,6 +20,15 @@ resources:
   # label to a topic nothing reads; no state reaches a consumer until its release evaluation passes
   # at >= 96 production-lineage sessions. services.yaml declares envs: [dev] to match.
   - ../../services/vol-state/base
+  # oi-next-publication is DEV-ONLY (USER 2026-09-23: "this service is only dev") and carries NO
+  # Service object: referenced here (NOT in k8s/base/kustomization.yaml) so the
+  # production/experiment monolith overlays never render it. A Kafka Streams service over
+  # options.databento.normalized that, at each session's Curb close, publishes the open
+  # interest the exchange will print NEXT morning, per leg, to options.spx.oi.next-publication.
+  # It is deployed DARK (OI_NEXTPUB_MODEL_PATH empty): it accumulates and evaluates sessions
+  # and publishes nothing until a model artifact is given to it. services.yaml declares
+  # envs: [dev] to match; the dev image remap below applies to it.
+  - ../../services/oi-next-publication/base
   # zn-gex is DEV-ONLY for now (services.yaml envs: [dev]): CME ZN futures-options
   # yield-equivalent GEX, standalone source repo options-edge-zn-gex. Referenced here
   # (NOT in k8s/base) so production/experiment never render it until the Databento
@@ -725,6 +734,9 @@ images:
     newName: host.docker.internal:5001/options-edge-gamma-ladder-path
   - name: 192.168.100.252:5000/options-edge-vol-state
     newName: host.docker.internal:5001/options-edge-vol-state
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-oi-next-publication
+    newName: host.docker.internal:5001/options-edge-oi-next-publication
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-gamma-leadership
     newName: host.docker.internal:5001/options-edge-gamma-leadership
