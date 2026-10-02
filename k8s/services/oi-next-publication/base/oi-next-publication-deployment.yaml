@@ -1,0 +1,105 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oi-next-publication-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: oi-next-publication-service
+    app.kubernetes.io/component: oi-next-publication-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  # Exactly one replica, Recreate: the service funnels the whole SPX chain through a
+  # single-partition repartition topic, so a second instance would have no partition to own
+  # and a RollingUpdate would briefly run two against the same Streams application id.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: oi-next-publication-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: oi-next-publication-service
+        app.kubernetes.io/component: oi-next-publication-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      containers:
+        - name: oi-next-publication
+          image: 192.168.100.252:5000/options-edge-oi-next-publication:dev
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            - name: HEALTH_PORT
+              value: "8160"
+            # ON: the service accumulates every session of options.databento.normalized into
+            # its changelog-backed ledger and evaluates each at Curb close (17:00 ET + grace).
+            # Whether it PUBLISHES is decided by OI_NEXTPUB_MODEL_PATH below, not by this flag.
+            - name: OI_NEXTPUB_ENABLED
+              value: "true"
+            - name: OI_NEXTPUB_SYMBOL
+              value: "SPX"
+            # DECLARED so the Kafka cleanup Job can SEE it: that job scans workload env for
+            # names ending in APP_ID and purges Streams-internal topics belonging to no active
+            # app. This service HAS a persistent store (its session ledger) whose changelog
+            # topic, and a single-partition repartition topic, are named from this id — an
+            # id computed inside the process would be invisible to that scan and its changelog
+            # could be purged while the service is running. KafkaSettings appends the
+            # environment suffix as for every other Streams app.
+            - name: OI_NEXTPUB_APP_ID
+              value: oi-next-publication
+            # The aggregator's republished snapshot (session-accumulated volume flagged
+            # AGGREGATE), the same input oi-shadow reads. DECLARED, not defaulted, for the
+            # reason oi-shadow learned: a defaulted raw topic that holds zero records on dev
+            # comes up healthy and reads nothing forever.
+            - name: KAFKA_SNAPSHOT_TOPIC
+              value: options.databento.normalized
+            - name: KAFKA_OI_NEXTPUB_TOPIC
+              value: options.spx.oi.next-publication
+            # Two closes, deliberately different (a review BLOCKER when they were one):
+            #   SPOT_CLOSE  16:00 — the index close; the close spot is the last acceptable
+            #                       canonicalSpot at or before it.
+            #   SESSION_END 17:00 — the end of SPX Curb (16:15-17:00); the research volume is
+            #                       RTH + Curb, so the session is scored only after this.
+            - name: OI_NEXTPUB_SPOT_CLOSE
+              value: "16:00"
+            - name: OI_NEXTPUB_SESSION_END
+              value: "17:00"
+            - name: OI_NEXTPUB_EVALUATE_GRACE_MINUTES
+              value: "15"
+            # EMPTY = DARK. The service assembles every session's feature vectors and logs a
+            # summary, and PUBLISHES NOTHING: there is no model in the image and no fallback
+            # estimate. This is the first-deploy state on purpose — it proves the ledger,
+            # the session boundaries and the refusals on the live feed before any number is
+            # emitted. The interim producer (~/oe-ops/next_oi_service.py on the Mac) keeps
+            # options_flow.oi_next_publication fed for GEX until a model path is set here
+            # AND a writer from this topic to that table exists.
+            - name: OI_NEXTPUB_MODEL_PATH
+              value: ""
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xms128m -Xmx512m"
+          ports:
+            - name: health
+              containerPort: 8160
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
