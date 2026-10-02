@@ -20,6 +20,12 @@
           command -v yq >/dev/null 2>&1 || { echo "FATAL: yq is required to digest-pin the kustomize overlay; aborting before any kubectl mutation." >&2; exit 1; }
           . scripts/deploy/pin-image.sh
           . scripts/deploy/image-lock.sh
+          # Minimum image build (scripts/deploy/min-image-build.sh): a service that declares
+          # k8s/services/<svc>/MIN_IMAGE_BUILD must prove, via the OCI label on the digest about to
+          # be applied, that it is at least that build of that job on this Jenkins. Every render
+          # this script applies — the targeted ones below and the full overlay — is gated right
+          # after its digest check, before any kubectl mutation, dry-run included.
+          . scripts/deploy/min-image-build.sh
           case "${DEPLOY_TARGET:-all}" in
             all)
               ;;
@@ -50,6 +56,10 @@
                 echo "aborting before any kubectl mutation." >&2
                 exit 1
               fi
+              require_min_image_builds_in_render "$_target_render" || {
+                echo "FATAL: a rendered image is older than its service's declared minimum build (see above); aborting before any kubectl mutation." >&2
+                exit 1
+              }
               if [ "${DEPLOY_DRY_RUN:-false}" = "true" ]; then
                 echo "DEPLOY_DRY_RUN=true: validating Delta Flow targeted apply without changing runtime resources."
                 kubectl apply --dry-run=server -f "$_target_render"
@@ -87,6 +97,10 @@
                 echo "aborting before any kubectl mutation." >&2
                 exit 1
               fi
+              require_min_image_builds_in_render "$_target_render" || {
+                echo "FATAL: a rendered image is older than its service's declared minimum build (see above); aborting before any kubectl mutation." >&2
+                exit 1
+              }
               if [ "${DEPLOY_DRY_RUN:-false}" = "true" ]; then
                 echo "DEPLOY_DRY_RUN=true: validating Dealer Ledger targeted apply without changing runtime resources."
                 kubectl apply --dry-run=server -f "$_target_render"
@@ -125,6 +139,10 @@
                 echo "aborting before any kubectl mutation." >&2
                 exit 1
               fi
+              require_min_image_builds_in_render "$_target_render" || {
+                echo "FATAL: a rendered image is older than its service's declared minimum build (see above); aborting before any kubectl mutation." >&2
+                exit 1
+              }
               if [ "${DEPLOY_DRY_RUN:-false}" = "true" ]; then
                 echo "DEPLOY_DRY_RUN=true: validating Strike Liquidity Heatmap targeted apply without changing runtime resources."
                 kubectl apply --dry-run=server -f "$_target_render"
@@ -237,11 +255,8 @@
             echo "aborting before any kubectl mutation." >&2
             exit 1
           fi
-          # Minimum image build (scripts/deploy/min-image-build.sh): any service that declares
-          # k8s/services/<svc>/MIN_IMAGE_BUILD must prove, via the OCI label on the digest about to be
-          # applied, that it is at least that build of that job on this Jenkins. Checked on the SAME
-          # render that just passed the digest gate, before any kubectl mutation; runs in dry-run too.
-          . scripts/deploy/min-image-build.sh
+          # Minimum image build on the full overlay: checked on a fresh render of the SAME overlay
+          # that just passed the digest gate, before any kubectl mutation; runs in dry-run too.
           _min_render="$(mktemp)"
           kubectl kustomize "k8s/overlays/${ENVIRONMENT}" >"$_min_render"
           require_min_image_builds_in_render "$_min_render" || {
