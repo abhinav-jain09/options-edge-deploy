@@ -2392,6 +2392,17 @@ CAL
 # later would not have been covered. A function takes a topic if it has a parameter CALLED topic,
 # which is a fact about the reader; the position comes from the same signature. The derivation is
 # itself asserted, because one that silently found nothing would make every call site pass.
+#
+# AND THE ARCHIVE IS GLOBBED IN ONLY TWO PLACES, which is the structural half of this. Following
+# functions that take a topic cannot see a NEW reader that takes none — `def _read_nq(root, day)`
+# globbing a fourth topic directly would pass every rule below (review round 13). So the set of
+# functions that call glob.glob is pinned: _records, which is the checked reader, and input_digest,
+# which only stats what _records will read. A new reader then has to go through _records, and
+# _records takes a topic.
+#
+# WHAT THIS STILL DOES NOT COVER, said rather than implied: a reader that builds a path without
+# globbing. That is not reachable by accident — it means writing a different kind of reader than
+# either of the two here — and it is named instead of being claimed away.
 want "18y every topic entering the reader is one the gate reads off it" "ok _records:1 _timed:1" \
      "$(python3 - <<'CALLSITES' 2>&1
 import ast, pathlib
@@ -2465,6 +2476,20 @@ for node in ast.walk(tree):
         continue
     shown = repr(argument.value) if isinstance(argument, ast.Constant) else ast.dump(argument)
     problems.append(f"{node.func.id} is passed {shown}, which the gate does not read")
+
+# WHERE THE ARCHIVE IS GLOBBED, pinned by name, so a new reader cannot appear beside _records
+# without this saying so.
+globbed_in = set()
+for node in ast.walk(tree):
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        for inner in ast.walk(node):
+            if isinstance(inner, ast.Call) and isinstance(inner.func, ast.Attribute) \
+                    and inner.func.attr == "glob" \
+                    and isinstance(inner.func.value, ast.Name) and inner.func.value.id == "glob":
+                globbed_in.add(node.name)
+if globbed_in != {"_records", "input_digest"}:
+    problems.append(f"the archive is globbed in {sorted(globbed_in)}, not just in _records (the "
+                    f"checked reader) and input_digest (which only stats what it will read)")
 
 # The derivation, printed so that a map which found nothing cannot read as a clean result.
 found = " ".join(f"{name}:{where}" for name, where in sorted(takes_a_topic.items()))
@@ -2889,7 +2914,11 @@ vp_gz "$unrecorded/underlying.spx.index.price.p0.50-60.dt20260814.20260814T21000
 out=$(vp_run 2026-08-14 "$root")
 want "18m2 a member with no manifest line does not spend the session" "" "$(cat "$vp_tmp/calls")"
 has  "  and is named as one the archiver has not recorded yet" "has not recorded it yet" "$out"
-want "  and it is a WAIT: the archiver finishes writing within minutes" 0 "$(vp_rc 2026-08-14 "$root")"
+# A WAIT, and deliberately NOT because it is bound to resolve: most often the archiver is still
+# writing the member, and it can also have published it and died before appending the line, in which
+# case the file sits there until someone looks. Waiting is right for both because neither is
+# corruption and waiting spends nothing — which is a different argument from "it will fix itself".
+want "  and it is a WAIT, since neither cause is corruption and waiting spends nothing" 0 "$(vp_rc 2026-08-14 "$root")"
 # ...and once it IS recorded, the same session is captured — so 18m2 is the missing line and not the
 # extra member.
 : > "$vp_tmp/calls"

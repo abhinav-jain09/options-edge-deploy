@@ -230,8 +230,10 @@ if len(set(topics)) != len(topics):
     answer("fault", f"the capture declares the same topic twice: {topics!r}")
 # WHAT THIS DOES NOT ESTABLISH, stated because the gate must not be read as more than it is: that
 # the capture READS only these three. This parses three names; it does not trace the reader. The
-# suite is what binds the two together — 18y refuses any topic-shaped literal in the capture beyond
-# these, so an ungated input fails the build rather than slipping past this gate.
+# suite is what binds the two together: 18y requires every call that takes a topic to pass one of
+# these three, and pins the archive's globbing to _records and input_digest so a new reader cannot
+# appear beside them unnoticed. A reader that built a path without globbing would still be outside
+# it — that is said here rather than left to be assumed.
 
 
 def files(topic):
