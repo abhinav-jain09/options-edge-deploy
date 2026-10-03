@@ -79,6 +79,8 @@ spec:
               value: "true"
             - name: GATEWAY_ALLOW_INSECURE_KAFKA
               value: "true"
+            - name: GAMMA_NAVIGATION_ENABLED
+              value: "true"
             - name: GATEWAY_MARKET_HOLIDAYS
               value: 2026-01-01,2026-01-19,2026-02-16,2026-04-03,2026-05-25,2026-06-19,2026-07-03,2026-09-07,2026-11-26,2026-12-25
             - name: GATEWAY_MARKET_EARLY_CLOSES
@@ -161,8 +163,6 @@ spec:
               value: options-edge-web
             - name: GATEWAY_VOL_PREMIUM_LOG_DIR
               value: /var/lib/vol-premium-log
-            - name: GAMMA_NAVIGATION_ENABLED
-              value: "true"
           envFrom:
             - configMapRef:
                 name: options-edge-config

@@ -39,6 +39,10 @@ spec:
               value: "true"
             - name: GATEWAY_ALLOW_INSECURE_KAFKA
               value: "true"
+            # Dev-only live evaluation of the reviewed gamma-navigation decision surface.
+            # Production remains default-off because its overlay does not set this flag.
+            - name: GAMMA_NAVIGATION_ENABLED
+              value: "true"
             - name: GATEWAY_MARKET_HOLIDAYS
               value: "2026-01-01,2026-01-19,2026-02-16,2026-04-03,2026-05-25,2026-06-19,2026-07-03,2026-09-07,2026-11-26,2026-12-25"
             - name: GATEWAY_MARKET_EARLY_CLOSES
