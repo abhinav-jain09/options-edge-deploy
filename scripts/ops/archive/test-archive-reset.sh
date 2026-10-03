@@ -2241,10 +2241,21 @@ if out:
 print(json.dumps({"session": args.get("--session"), "accepted": True}, sort_keys=True))
 STUB
 # The archive shape the readiness gate reads: the file name carries the archive run's own UTC stamp.
+# The readiness gate reads every byte of every file the capture will read, so a fixture file has to
+# be a REAL gzip member — an empty file passes gzip.open() and fails the first read, which is the
+# torn case, not the ready one.
+vp_gz() { printf 'CreateTime:0\tPartition:0\tSPX\t{"a":1}\n' | gzip -c > "$1"; }
 vp_archive() { # $1=session $2=stamp (YYYYMMDDTHHMMSSZ) ; no $2 = no files at all
-  local root="$vp_tmp/archive/$1"
-  rm -rf "$root"; mkdir -p "$root/underlying.spx.index.price/dt=$1"
-  [ -n "${2:-}" ] && : > "$root/underlying.spx.index.price/dt=$1/underlying.spx.index.price.p0.0-1.dt$(echo "$1" | tr -d -).$2.jsonl.gz"
+  local root="$vp_tmp/archive/$1" d
+  rm -rf "$root"
+  for t in underlying.spx.index.price underlying.es.price spx.basis.state; do
+    mkdir -p "$root/$t/dt=$1"
+  done
+  if [ -n "${2:-}" ]; then
+    d=$(echo "$1" | tr -d -)
+    vp_gz "$root/underlying.spx.index.price/dt=$1/underlying.spx.index.price.p0.0-1.dt$d.$2.jsonl.gz"
+    vp_gz "$root/underlying.es.price/dt=$1/underlying.es.price.p0.0-1.dt$d.$2.jsonl.gz"
+  fi
   echo "$root"
 }
 vp_run() { # $1=session $2=archive root ; prints the log
@@ -2308,6 +2319,36 @@ out=$(VP_CALLS="$vp_tmp/calls" CAPTURE="$vp_tmp/does-not-exist.py" ARCHIVE_ROOT=
 rc=$?
 want "18h an uninstalled capture fails loudly (rc)" 2 "$rc"
 has  "  and alerts, because a cron that quietly does nothing is how bucket 0 stayed empty" "ALERT:" "$out"
+
+# ---- 18i. A FILE STILL BEING WRITTEN does not spend the session. The spot topics are archived every
+# ten minutes, so the capture runs while the archiver may be mid-write, and its reader raises PARTWAY
+# THROUGH a torn member — which its open-time guard does not catch. Half a real gzip, not an empty
+# file: an empty one fails at the first read too and would prove nothing about reading to the END.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-09-25 20260925T201500Z)
+whole="$root/underlying.spx.index.price/dt=2026-09-25/underlying.spx.index.price.p0.0-1.dt20260925.20260925T201500Z.jsonl.gz"
+for i in $(seq 1 200); do printf 'CreateTime:0\tPartition:0\tSPX\t{"n":%s}\n' "$i"; done | gzip -c > "$whole"
+dd if="$whole" of="$whole.cut" bs=1 count=$(( $(wc -c < "$whole") / 2 )) 2>/dev/null
+mv "$whole.cut" "$whole"
+out=$(vp_run 2026-09-25 "$root")
+want "18i a torn index file does not spend the session" "" "$(cat "$vp_tmp/calls")"
+has  "  and it is reported as torn, not as a missing stamp" "does not decompress to its end" "$out"
+
+# ---- 18j. the torn test covers EVERY topic the capture reads, not just the index: a torn ES file
+# fails the capture's run exactly as an index one does.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-09-23 20260923T201500Z)
+es="$root/underlying.es.price/dt=2026-09-23/underlying.es.price.p0.0-1.dt20260923.20260923T201500Z.jsonl.gz"
+for i in $(seq 1 200); do printf 'CreateTime:0\tPartition:0\tES\t{"n":%s}\n' "$i"; done | gzip -c > "$es"
+dd if="$es" of="$es.cut" bs=1 count=$(( $(wc -c < "$es") / 2 )) 2>/dev/null
+mv "$es.cut" "$es"
+want "18j a torn ES file does not spend the session either" "" "$(vp_run 2026-09-23 "$root" >/dev/null; cat "$vp_tmp/calls")"
+
+# ---- 18k. and the torn test is not a blanket refusal: the SAME archive, whole, is ready. Without
+# this, 18i and 18j would also be produced by a gate that never says ready.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-09-22 20260922T201500Z)
+want "18k an intact archive past the close is ready" "called session=2026-09-22 close=16:00" "$(vp_run 2026-09-22 "$root" >/dev/null; cat "$vp_tmp/calls")"
 
 echo
 [ "$FAILED" -eq 0 ] && { echo "test-archive-reset: ALL PASS"; exit 0; }

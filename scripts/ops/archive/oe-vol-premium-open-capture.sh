@@ -80,40 +80,88 @@ case "$CLOSE_ET" in
   *) log "WARNING: no close time for $SESSION from the calendar; using 16:00"; CLOSE_ET=16:00 ;;
 esac
 
-# THE ARCHIVE MUST BE COMPLETE BEFORE THE RECORD IS CLAIMED, because the claim is PERMANENT: the
+# THE SESSION MUST BE OVER BEFORE THE RECORD IS CLAIMED, because the claim is PERMANENT: the
 # capture marks a session under .published/ and refuses to republish it, so a run against a
-# half-written archive does not merely report a bad number — it takes the session out of the study
+# still-growing archive does not merely report a bad number — it takes the session out of the study
 # for good. The spot topics are archived every 10 minutes, so the test is whether a capture run
-# stamped after the close has landed. The archive file name carries that stamp:
+# stamped after the close has landed.
+#
+# THIS IS A TIMING GATE, NOT A COMPLETENESS ONE, and the distinction is the honest reading of it: a
+# late stamp says the archiver reached past the close for this topic, not that every record of the
+# session is on disk. SUFFICIENCY is the capture's own business and it already judges it — the
+# coverage, span and per-quarter floors are what reject a session whose archive has a hole, and
+# 2026-09-22 is rejected by exactly that. What this gate prevents is the narrower and worse case:
+# spending the permanent claim on a session the archiver had not finished writing.
+# oe-archive-verify.sh grades the day's completeness separately and alerts on it.
+#
+# The archive file name carries the stamp:
 #   underlying.spx.index.price.p0.31493-31672.dt20260924.20260924T103001Z.jsonl.gz
 # Exit 0, not an error: a session that is not ready yet is a session for the retry run, and a
 # non-zero exit from cron here would alert every day at 17:30 for a condition that resolves itself.
 READY="$(ARCHIVE_ROOT="$ARCHIVE_ROOT" INDEX_TOPIC="$INDEX_TOPIC" OE_DAY="$SESSION" \
-         CLOSE_ET="$CLOSE_ET" READY_AFTER_MIN="$READY_AFTER_MIN" python3 - <<'PY' 2>/dev/null
-import datetime as dt, glob, os, re
+         CLOSE_ET="$CLOSE_ET" READY_AFTER_MIN="$READY_AFTER_MIN" python3 - <<'GATE' 2>/dev/null
+import datetime as dt, glob, gzip, os, re
 from zoneinfo import ZoneInfo
 ET = ZoneInfo("America/New_York")
 day = dt.date.fromisoformat(os.environ["OE_DAY"])
-hh, mm = (int(p) for p in os.environ["CLOSE_ET"].split(":"))
+hh, mm = (int(part) for part in os.environ["CLOSE_ET"].split(":"))
 deadline = (dt.datetime.combine(day, dt.time(hh, mm), ET)
             + dt.timedelta(minutes=int(os.environ["READY_AFTER_MIN"]))).astimezone(dt.timezone.utc)
-pattern = os.path.join(os.environ["ARCHIVE_ROOT"], os.environ["INDEX_TOPIC"],
-                       f"dt={day.isoformat()}", "*.jsonl.gz")
+root = os.environ["ARCHIVE_ROOT"]
+index_topic = os.environ["INDEX_TOPIC"]
+
+
+def files(topic):
+    return glob.glob(os.path.join(root, topic, "dt=" + day.isoformat(), "*.jsonl.gz"))
+
+
 stamps = []
-for path in glob.glob(pattern):
+for path in files(index_topic):
     found = re.search(r"\.(\d{8}T\d{6})Z\.jsonl\.gz$", os.path.basename(path))
     if found:
         stamps.append(dt.datetime.strptime(found.group(1), "%Y%m%dT%H%M%S")
                       .replace(tzinfo=dt.timezone.utc))
 # NO FILES AT ALL IS NOT READY, and is a different thing from "files, but none late enough". Both
 # wait; only the first is worth a word in the log, which the caller prints.
-print("ready" if stamps and max(stamps) >= deadline else "waiting")
-PY
+if not stamps or max(stamps) < deadline:
+    print("waiting")
+    raise SystemExit
+
+# AND EVERY FILE THE CAPTURE WILL READ MUST DECOMPRESS TO ITS END. The spot topics are archived
+# every ten minutes, so this runs while the archiver may be writing one; the capture's reader opens
+# a .jsonl.gz and iterates it, and a file still being written raises PARTWAY THROUGH, which its
+# open-time OSError guard does not catch. That costs a failed run, an alert and a day of delay for
+# a condition that resolves itself in minutes.
+#
+# Reading every byte is the only test of this that is not a guess: a size, an mtime or a successful
+# open all pass on a half-written member. It costs one pass over about fifty small files, once a
+# day. This is NOT the stamp test above and not a substitute for it - one says the archiver reached
+# past the close, the other says what is on disk can be read - and neither is a completeness
+# check; the capture's own coverage floors are that, and oe-archive-verify.sh grades the day.
+#
+# All three topics, because the capture reads all three and a torn ES or basis file fails the run
+# just as an index one does.
+for topic in (index_topic, "underlying.es.price", "spx.basis.state"):
+    for path in files(topic):
+        try:
+            with gzip.open(path, "rb") as handle:
+                while handle.read(1 << 20):
+                    pass
+        except Exception:
+            print("torn")
+            raise SystemExit
+print("ready")
+GATE
 )"
-if [ "$READY" != "ready" ]; then
-  log "$SESSION: the archive under $ARCHIVE_ROOT/$INDEX_TOPIC holds nothing stamped later than the close + ${READY_AFTER_MIN}m — leaving the session unclaimed for the retry run"
-  exit 0
-fi
+case "$READY" in
+  ready) : ;;
+  torn)
+    log "$SESSION: an archive file for this session does not decompress to its end — the archiver is most likely still writing it; leaving the session unclaimed for the retry run"
+    exit 0 ;;
+  *)
+    log "$SESSION: the archive under $ARCHIVE_ROOT/$INDEX_TOPIC holds nothing stamped later than the close + ${READY_AFTER_MIN}m — leaving the session unclaimed for the retry run"
+    exit 0 ;;
+esac
 
 mkdir -p "$LEDGER" || {
   log "FATAL: cannot create the ledger at $LEDGER"
