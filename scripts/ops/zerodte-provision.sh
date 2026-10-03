@@ -81,25 +81,52 @@ SUCCESS=false
 
 fatal() { echo "FATAL: $*" >&2; exit 1; }
 
+# job_observe → TERMINAL | ABSENT | ACTIVE | UNKNOWN (the Job's state as the API reports it now; UNKNOWN = the API could not be read)
+job_observe() {
+  local snap err
+  err="$(mktemp)"
+  if snap="$(kubectl -n "$NAMESPACE" get "job/$JOB_NAME" -o json 2>"$err")"; then
+    rm -f "$err"
+    printf '%s' "$snap" | jq -r 'if ((.status.succeeded // 0) >= 1) or (([(.status.conditions // [])[] | select((.type == "Complete" or .type == "Failed") and .status == "True")] | length) >= 1) then "TERMINAL" else "ACTIVE" end' 2>/dev/null || echo UNKNOWN
+  else
+    if grep -q "NotFound" "$err"; then echo ABSENT; else echo UNKNOWN; fi
+    rm -f "$err"
+  fi
+}
+
 cleanup() {
-  local rc=$? terminal
+  local rc=$? observed release=false
   rm -f "${RENDER:-}" "${CM_RENDER:-}" "${LOGS:-}" "${ERRLOG:-}"
-  # the lock is released by its OWNER only, after the Job is terminal (or never ran): a lock held by a run that is still waiting stays
+  # The LOCK's lifetime: released by its OWNER only, and only once no Job of this run can still be running — no Job was created, or the Job
+  # was observed TERMINAL (kept for post-mortem) or ABSENT, or a still-active Job was deleted AND its absence/terminal state re-observed.
+  # Anything else (an unreadable API, a failed or timed-out delete) RETAINS the lock and says so loudly: the next run refuses until an
+  # operator has read this run's log and removed the lock by hand.
+  if [ "$JOB_OWNED" != "true" ] || [ -z "$JOB_NAME" ]; then
+    release=true
+  elif [ "$SUCCESS" = "true" ]; then
+    release=true   # the main path observed the Job succeeded
+  else
+    observed="$(job_observe)"
+    case "$observed" in
+      TERMINAL) echo "cleanup: Job $JOB_NAME is terminal — keeping it for post-mortem (script rc=$rc)" >&2; release=true ;;
+      ABSENT)   echo "cleanup: Job $JOB_NAME does not exist (script rc=$rc)" >&2; release=true ;;
+      *)
+        echo "cleanup: deleting Job $JOB_NAME (observed $observed; script exiting rc=$rc without a successful finish)" >&2
+        if kubectl -n "$NAMESPACE" delete "job/$JOB_NAME" --cascade=foreground --wait=true --timeout=180s --ignore-not-found >&2; then
+          observed="$(job_observe)"
+          case "$observed" in ABSENT|TERMINAL) release=true ;; *) echo "cleanup: Job $JOB_NAME still $observed after the delete" >&2 ;; esac
+        else
+          echo "cleanup: the delete of Job $JOB_NAME failed or timed out" >&2
+        fi ;;
+    esac
+  fi
   if [ "$LOCK_OWNED" = "true" ]; then
-    if kubectl -n "$NAMESPACE" delete "configmap/$LOCK_NAME" --ignore-not-found --wait=true --timeout=60s >/dev/null 2>&1; then
+    if [ "$release" != "true" ]; then
+      echo "cleanup: lock $LOCK_NAME RETAINED — Job $JOB_NAME may still be running. Read this run's log, confirm the Job is gone or terminal, then \`kubectl -n $NAMESPACE delete configmap $LOCK_NAME\` by hand. The next provisioning refuses until then." >&2
+    elif kubectl -n "$NAMESPACE" delete "configmap/$LOCK_NAME" --ignore-not-found --wait=true --timeout=60s >/dev/null 2>&1; then
       echo "lock $LOCK_NAME released" >&2
     else
-      echo "cleanup: could not release lock $LOCK_NAME (held by $JOB_NAME) — remove it by hand after reading this run's log" >&2
-    fi
-  fi
-  if [ "$SUCCESS" != "true" ] && [ "$JOB_OWNED" = "true" ] && [ -n "$JOB_NAME" ]; then
-    terminal="$(kubectl -n "$NAMESPACE" get "job/$JOB_NAME" -o json 2>/dev/null \
-      | jq -r '[(.status.conditions // [])[] | select((.type == "Complete" or .type == "Failed") and .status == "True") | .type] | join(",")' 2>/dev/null || echo '')"
-    if [ -n "$terminal" ]; then
-      echo "cleanup: Job $JOB_NAME is terminal ($terminal) — keeping it for post-mortem (script rc=$rc)" >&2
-    else
-      echo "cleanup: deleting still-active Job $JOB_NAME (script exiting rc=$rc without a successful finish)" >&2
-      kubectl -n "$NAMESPACE" delete "job/$JOB_NAME" --cascade=foreground --wait=true --timeout=180s --ignore-not-found >&2 || true
+      echo "cleanup: could not release lock $LOCK_NAME (held by this run) — remove it by hand after reading this run's log" >&2
     fi
   fi
 }
@@ -162,6 +189,12 @@ WHOAMI="$(kubectl auth whoami -o jsonpath='{.status.userInfo.username}' 2>/dev/n
 echo "kubectl identity: ${WHOAMI:-<unknown>}"
 [ "$WHOAMI" = "$DEPLOYER" ] || fatal "kubeconfig identity is '${WHOAMI:-<unknown>}', expected '$DEPLOYER'. Job and ConfigMap creation is denied for every other principal by the options-edge-jenkins-only-workloads admission policy."
 API_SERVER="$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null || echo '')"
+# The pin binds the TLS trust anchor: it is worth nothing if kubectl does not VERIFY the peer against it. insecure-skip-tls-verify is refused
+# outright, and a CA given as a FILE PATH is refused by name (only inline certificate-authority-data is read; a path could point anywhere).
+SKIP_TLS="$(kubectl config view --minify --raw -o jsonpath='{.clusters[0].cluster.insecure-skip-tls-verify}' 2>/dev/null || echo '')"
+CA_FILE="$(kubectl config view --minify --raw -o jsonpath='{.clusters[0].cluster.certificate-authority}' 2>/dev/null || echo '')"
+[ "$SKIP_TLS" != "true" ] || fatal "the kubeconfig sets insecure-skip-tls-verify: true — kubectl would accept ANY API server regardless of the pinned CA; refusing"
+[ -z "$CA_FILE" ] || fatal "the kubeconfig names its CA by file path ($CA_FILE); only inline certificate-authority-data is pinned — refusing"
 CA_FINGERPRINT="$(kubectl config view --minify --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' 2>/dev/null | base64 -d 2>/dev/null | openssl x509 -noout -fingerprint -sha256 2>/dev/null | sed 's/^.*=//; s/://g' || echo '')"
 PIN_CA="$(yq -r ".clusters.\"${ENVIRONMENT}\".caSha256" "$CLUSTERS" 2>/dev/null || echo '')"
 PIN_SERVER="$(yq -r ".clusters.\"${ENVIRONMENT}\".apiServer" "$CLUSTERS" 2>/dev/null || echo '')"
@@ -298,6 +331,17 @@ hex() { # hex <value> <bits/4> <what>
   case "$1" in *[!0-9a-f]*|'') fatal "receipt $3 is not lowercase hex: '$1'" ;; esac
   [ "${#1}" -eq "$2" ] || fatal "receipt $3 has ${#1} characters, not $2: '$1'"
 }
+roles_ok() { # wouldCreate is NONE or a non-empty, duplicate-free, ORDERED subset of FRAMES,HEAD,CURRENT,PULSE,DEPLOYMENTS — exactly what the provisioner prints
+  [ "$1" = NONE ] && return 0
+  local rest="$1" role rank=0 r
+  while [ -n "$rest" ]; do
+    case "$rest" in *,*) role="${rest%%,*}"; rest="${rest#*,}"; [ -n "$rest" ] || return 1 ;; *) role="$rest"; rest="" ;; esac
+    case "$role" in FRAMES) r=1 ;; HEAD) r=2 ;; CURRENT) r=3 ;; PULSE) r=4 ;; DEPLOYMENTS) r=5 ;; *) return 1 ;; esac
+    [ "$r" -gt "$rank" ] || return 1
+    rank=$r
+  done
+  [ "$rank" -gt 0 ]
+}
 exit_agrees() { # the container's exit code must be the one the outcome asserts
   [ "${EXIT_CODE:-}" = "$1" ] || fatal "the receipt says $OUTCOME, which exits $1, but the container exited '${EXIT_CODE:-<unknown>}' — the receipt and the process disagree; refused"
 }
@@ -305,6 +349,7 @@ case "$OUTCOME" in
   ATTESTATION_REQUIRED)
     exact_fields generation ledgerTopicId clusterId; exit_agrees 67
     R_GEN="$(field generation)"; R_LEDGER="$(field ledgerTopicId)"; R_CLUSTER="$(field clusterId)"; hex "$R_LEDGER" 32 ledgerTopicId
+    case "$R_CLUSTER" in *[!A-Za-z0-9._-]*) fatal "receipt clusterId is not [A-Za-z0-9._-]+: '$R_CLUSTER'" ;; esac
     [ "$R_GEN" = "$GENERATION" ] || fatal "the receipt names generation '$R_GEN', this run declared $GENERATION: whatever the provisioner did, it was not this provisioning"
     [ "$CONFIRM" = true ] || fatal "ATTESTATION_REQUIRED is a CONFIRM outcome; a dry run reports wouldAttest=YES instead — the provisioner and this wrapper disagree"
     echo "$RECEIPT"
@@ -357,7 +402,7 @@ if [ "$OUTCOME" = PROVISIONABLE ]; then
   [ "$(field lineage)" = "$LINEAGE" ] || MISMATCH="$MISMATCH lineage"
   hex "$(field planDigest)" 64 planDigest; hex "$(field wouldAssert)" 64 wouldAssert
   case "$(field topicIds)" in RESOLVED) hex "$(field provisionedDigest)" 64 provisionedDigest ;; PENDING) [ "$(field provisionedDigest)" = PENDING ] || MISMATCH="$MISMATCH provisionedDigest-not-PENDING" ;; *) MISMATCH="$MISMATCH topicIds" ;; esac
-  case "$(field wouldCreate)" in NONE) : ;; *) for role in $(printf '%s' "$(field wouldCreate)" | tr ',' ' '); do case "$role" in FRAMES|HEAD|CURRENT|PULSE|DEPLOYMENTS) : ;; *) MISMATCH="$MISMATCH wouldCreate($role)" ;; esac; done ;; esac
+  roles_ok "$(field wouldCreate)" || MISMATCH="$MISMATCH wouldCreate('$(field wouldCreate)')"
   case "$(field wouldAttest)" in YES|NO) : ;; *) MISMATCH="$MISMATCH wouldAttest" ;; esac
   case "$(field wouldInsertEra)" in YES|VERIFY) : ;; *) MISMATCH="$MISMATCH wouldInsertEra" ;; esac
   [ "$(field wouldAppend)" = PROVISIONED ] || MISMATCH="$MISMATCH wouldAppend"
