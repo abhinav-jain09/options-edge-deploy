@@ -165,5 +165,91 @@ class StagingCheckTest(unittest.TestCase):
         self.assertNotIn("'", program)
 
 
+class StagedContentTest(unittest.TestCase):
+    """scripts/ci/verify-archive-unit-staged.sh is the CONTROL the text guard defers to: it asserts
+    the files the containerised suite will read are byte-identical to their committed sources. It is
+    what a text rule cannot be — Jenkins reuses workspaces, both staged copies are gitignored inside
+    the mounted directory, and a copy an earlier build left behind makes an absent staging step look
+    like a present one."""
+
+    VERIFIER = "scripts/ci/verify-archive-unit-staged.sh"
+
+    def _run(self, stage=None) -> subprocess.CompletedProcess:
+        work = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, work, True)
+        shutil.copytree(ROOT / "scripts", work / "scripts", symlinks=True)
+        target = work / "scripts" / "ops" / "archive"
+        for name, source in STAGED.items():
+            copy = target / name
+            if copy.exists():
+                copy.unlink()                    # start from an unstaged workspace, every time
+        if stage is not None:
+            stage(work, target)
+        return subprocess.run(["bash", self.VERIFIER], cwd=work, capture_output=True, text=True)
+
+    @staticmethod
+    def _stage_both(work: Path, target: Path) -> None:
+        for name, source in STAGED.items():
+            shutil.copy2(work / source, target / name)
+
+    def test_a_correctly_staged_workspace_passes(self) -> None:
+        r = self._run(self._stage_both)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("verify-archive-unit-staged: OK", r.stdout)
+
+    def test_an_unstaged_workspace_fails(self) -> None:
+        """The case a text rule cannot see: the job's copy never ran and nothing was left behind."""
+        r = self._run()
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        for name in STAGED:
+            self.assertIn(name, r.stderr)
+        self.assertIn("NOT STAGED", r.stderr)
+
+    def test_a_copy_left_by_an_earlier_build_fails_when_it_differs(self) -> None:
+        """The reused-workspace case. A stale copy EQUAL to its source is harmless — the suite reads
+        the right bytes — so the thing that must fail is one that differs."""
+        name = "vol-premium-open-reference-capture.py"
+
+        def stale(work: Path, target: Path) -> None:
+            self._stage_both(work, target)
+            with (target / name).open("a") as handle:
+                handle.write("# left by an earlier build\n")
+
+        r = self._run(stale)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("STALE STAGED COPY", r.stderr)
+        self.assertIn(name, r.stderr)
+
+    def test_a_stale_copy_identical_to_its_source_is_accepted(self) -> None:
+        """Stated as its own case so the one above is not read as a provenance claim: this verifier
+        does not know which build wrote the file, and does not need to."""
+        def stale_but_identical(work: Path, target: Path) -> None:
+            self._stage_both(work, target)
+            os.utime(target / "market_calendar.py", (0, 0))
+
+        r = self._run(stale_but_identical)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_a_missing_source_is_named_as_such(self) -> None:
+        def no_source(work: Path, target: Path) -> None:
+            self._stage_both(work, target)
+            (work / STAGED["market_calendar.py"]).unlink()
+
+        r = self._run(no_source)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("MISSING SOURCE", r.stderr)
+
+    def test_the_deploy_job_runs_it_before_the_container(self) -> None:
+        """A control the job does not invoke is not a control. The ORDER matters too: after the
+        container has started, the suite is already reading whatever is there."""
+        text = (ROOT / JF).read_text()
+        call = text.index("bash scripts/ci/verify-archive-unit-staged.sh")
+        mount = text.index(MOUNT)
+        self.assertLess(call, mount, "the verifier runs after the suite container starts")
+        for name, source in STAGED.items():
+            self.assertLess(text.index(f"cp {source}"), call,
+                            f"{name} is staged after it is verified")
+
+
 if __name__ == "__main__":
     unittest.main()

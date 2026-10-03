@@ -56,9 +56,19 @@ EXEMPT="oe-ops.env calibration-progress-watch.sh install-dev-mac-watchdog.sh ins
 
 # An exemption that no other guard picks up is a hole with a comment on it. Assert the successor
 # exists, here, where the excuse is made.
-for _guard in scripts/ci/validate-dev-mac-watchdog.sh; do
+for _guard in scripts/ci/validate-dev-mac-watchdog.sh scripts/ci/verify-archive-unit-staged.sh; do
   [ -f "$_guard" ] || { echo "MISSING GUARD: $_guard — calibration-progress-watch.sh is exempted here on the promise that $_guard checks it" >&2; exit 1; }
 done
+
+# AN EXEMPTION THAT NO OTHER GUARD PICKS UP IS A HOLE WITH A COMMENT ON IT, and the same applies to
+# a delegation: the staging check above defers the real work to verify-archive-unit-staged.sh, so the
+# job must actually run it. Without this, removing that line from the job would leave the staging
+# unchecked by anything while both files still looked accounted for.
+case "$(tr '\n' ' ' < "$JF")" in
+  *"bash scripts/ci/verify-archive-unit-staged.sh"*) : ;;
+  *) echo "NOT RUN BY THE DEPLOY JOB: scripts/ci/verify-archive-unit-staged.sh — the staging check here defers to it, so without it in $JF nothing checks that the staged copies are the committed sources" >&2
+     fails=$((fails+1)) ;;
+esac
 
 for f in $wanted $sourced; do
   case " $EXEMPT " in *" $f "*) continue ;; esac
@@ -116,12 +126,22 @@ for f in $wanted $sourced; do
     # `something && cp <src> <dst>`, which the job does not use — and if it ever does, this says so
     # and someone updates it, which is the direction to fail in.
     #
-    # WHAT THIS CANNOT DO, said plainly because the reviewer was right to press on it: prove the
-    # copy EXECUTES. `if false; then cp <src> <dst>; fi` satisfies any text rule. The effect check
-    # is in the suite itself — test-archive-reset.sh section 18 asserts that the capture and the
-    # calendar are installed beside the unit and usable, so a dependency the job fails to stage
-    # turns the suite red in the same build. This guard exists to catch the ordinary mistake early,
-    # with a message that names the file.
+    # WHAT THIS CANNOT DO, said plainly because the reviewer was right to press on it twice: prove
+    # the copy EXECUTES. `if false; then cp <src> <dst>; fi` satisfies any text rule, a `cp` inside
+    # a multiline Groovy string or a heredoc body reads as a statement to the normaliser above, and
+    # a workspace reused between builds can hold a copy an earlier build left behind — so even an
+    # absent staging step can look like a present one.
+    #
+    # THE CONTROL IS scripts/ci/verify-archive-unit-staged.sh, which the job runs on the agent after
+    # staging and before the container: it asserts each file the suite will read exists and is
+    # byte-identical to its committed source. That is the property that matters — a stale copy equal
+    # to its source is harmless, and one that differs or is absent fails there — and it is checked
+    # by effect in tests/test_archive_unit_completeness_validator.py. This guard is the fast,
+    # naming check: it says WHICH file a new dependency forgot, before the build gets that far.
+    #
+    # The one thing this guard adds that the verifier cannot: the verifier knows the two
+    # dependencies it was written for, while this notices a THIRD arriving in the crontab or a unit
+    # script, and refuses until the job stages it and the verifier covers it.
     staged=$(awk -v src="$home/$f" -v dst="$DIR/$f" -v mount="$DIR:/w:ro" '
       # Strip Groovy and shell comments, but only where the line STARTS with one: a trailing # inside
       # a quoted string is not a comment, and cutting there would corrupt real commands.

@@ -2291,11 +2291,18 @@ vp_run() { # $1=session $2=archive root ; the rest are extra env assignments
 vp_rc() { vp_run "$@" >/dev/null 2>&1; echo $?; }
 : > "$vp_tmp/calls"
 
-# ---- 18z. THE EFFECT CHECK FOR THE DEPLOY JOB'S STAGING. scripts/ci/validate-archive-unit-
-# completeness.sh can only read the job definition as text, and no text rule can prove a `cp`
-# executes — `if false; then cp …; fi` satisfies every one of them. This runs INSIDE the container
-# the job mounts the unit directory into, so it is the staging's effect: if the job fails to stage
-# the capture or the calendar, these are the assertions that go red, in the same build.
+# ---- 18z. THE DEPENDENCIES THE SUITE ITSELF READS ARE PRESENT AND USABLE, asserted from inside the
+# container the job mounts the unit directory into. An absent staging step reddens these, and 18a
+# with them, because the close can no longer be resolved.
+#
+# WHAT THIS IS NOT, since the claim was once written too strongly: a check that THIS BUILD staged
+# them. Jenkins reuses workspaces and both copies are gitignored here, so a copy an earlier build
+# left behind satisfies these assertions. Byte-identity with the committed source is the property
+# that actually matters, and it is scripts/ci/verify-archive-unit-staged.sh that asserts it, on the
+# agent, after staging and before this container starts — tested by effect in
+# tests/test_archive_unit_completeness_validator.py. What is tested HERE is usability: the capture
+# parses and declares its topics, and the calendar answers for a half day, which is the question the
+# close gate puts to it.
 want "18z the capture is installed beside the unit" yes "$([ -r vol-premium-open-reference-capture.py ] && echo yes || echo no)"
 want "  and declares the three topics the gate reads off it" "underlying.spx.index.price underlying.es.price spx.basis.state" \
      "$(python3 - <<'TOPICS' 2>/dev/null
@@ -2323,28 +2330,53 @@ CAL
 )"
 
 # ---- 18y. NO TOPIC MAY ENTER THE READER UNGATED. The gate reads INDEX, ES and BASIS off the
-# capture, and the reviewer was right that this alone does not cover a FOURTH input: a new constant,
-# or a topic name written inline at a call site, would be read by the capture and checked by
-# nothing. So the capture must contain NO topic-shaped string literal other than those three. A
-# reader that grows an input is then REFUSED rather than silently under-gated — which is the
-# property the wrapper may claim, and is weaker than "a fourth topic is automatically gated".
-want "18y the capture holds no topic-shaped literal beyond the three it declares" "" \
-     "$(python3 - <<'EXTRA' 2>/dev/null
-import ast, pathlib, re
-SHAPE = re.compile(r"^[a-z][a-z0-9]*(\.[a-z0-9][a-z0-9-]*){2,}$")
+# capture, and reading three names cannot discover a fourth input: a new constant, or a topic
+# written inline at a call site, would be read by the capture and checked by nothing.
+#
+# A SHAPE TEST WAS THE WRONG INSTRUMENT. The first version of this case matched string literals
+# against a guess at what a topic name looks like, and the reviewer broke it twice over: Kafka
+# permits `_` and upper case, so `underlying.spx_index.price` slipped through, while ordinary
+# dotted strings like a hostname were caught as topics. The test is now about CALL SITES, which is
+# where a topic actually enters the reader, and needs no guess at all. Exactly two functions in the
+# capture take a topic — _records(root, topic, day) and _timed(root, topic, day, session) — so
+# every call to either must pass one of the three declared names, or forward a parameter of the
+# function it sits in (which is how _timed hands its own topic to _records).
+want "18y every topic entering the reader is one the gate reads off it" "" \
+     "$(python3 - <<'CALLSITES' 2>&1
+import ast, pathlib
 source = pathlib.Path("vol-premium-open-reference-capture.py").read_text()
 tree = ast.parse(source)
-declared = set()
-for node in tree.body:
-    if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant):
-        for target in node.targets:
-            if isinstance(target, ast.Name) and target.id in ("INDEX", "ES", "BASIS"):
-                declared.add(node.value.value)
-extra = sorted({node.value for node in ast.walk(tree)
-                if isinstance(node, ast.Constant) and isinstance(node.value, str)
-                and SHAPE.match(node.value) and node.value not in declared})
-print(" ".join(extra))
-EXTRA
+declared = {target.id for node in tree.body
+            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant)
+            for target in node.targets
+            if isinstance(target, ast.Name) and target.id in ("INDEX", "ES", "BASIS")}
+TAKES_A_TOPIC = {"_records": 1, "_timed": 1}
+problems = []
+
+
+def check(node, parameters):
+    for inner in ast.walk(node):
+        if not isinstance(inner, ast.Call) or not isinstance(inner.func, ast.Name):
+            continue
+        where = TAKES_A_TOPIC.get(inner.func.id)
+        if where is None:
+            continue
+        if len(inner.args) <= where:
+            problems.append(f"{inner.func.id} called with no topic argument")
+            continue
+        argument = inner.args[where]
+        if isinstance(argument, ast.Name) and argument.id in declared | parameters:
+            continue
+        shown = ast.dump(argument) if not isinstance(argument, ast.Constant) else repr(argument.value)
+        problems.append(f"{inner.func.id} is passed {shown}, which the gate does not read")
+
+
+for node in ast.walk(tree):
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        names = {a.arg for a in node.args.args} | {a.arg for a in node.args.kwonlyargs}
+        check(node, names)
+print("; ".join(sorted(set(problems))))
+CALLSITES
 )"
 
 # ---- 18a. a graded session whose every topic reaches past the close: captured ------------------------------

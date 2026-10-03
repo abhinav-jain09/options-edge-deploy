@@ -138,6 +138,14 @@ pipeline {
           # ENTRYPOINT that ignores its arguments and exits 0 would otherwise turn this gate into a
           # rubber stamp. :ro on the mount: the container must not be able to edit the very files
           # this job goes on to install. The suite writes only under mktemp, never into /w.
+          # THE STAGING'S EFFECT, checked before the container starts. The two copies above are
+          # gitignored inside the mounted directory and this workspace is reused, so a copy left by
+          # an earlier build would make a staging step that never ran look like one that did. This
+          # asserts the files the suite is about to read exist and are byte-identical to the
+          # committed sources — which is the property that matters, and the one a text check of this
+          # file cannot establish.
+          bash scripts/ci/verify-archive-unit-staged.sh
+
           docker run --rm --entrypoint bash \
             -v "$WORKSPACE/scripts/ops/archive:/w:ro" -w /w "$TEST_IMAGE" \
             -c 'apt-get -qq update >/dev/null && apt-get -qq install -y curl >/dev/null && ./test-archive-reset.sh' \
