@@ -108,6 +108,8 @@ pipeline {
           bash scripts/ci/validate-zerodte-attestation.sh
           bash scripts/ci/validate-zerodte-attestation-test.sh
           bash scripts/ci/zerodte-provision-receipt-test.sh
+          # the coordinated release: the Job's copy of the YAML corpus (options-edge-processing at main) must pin the SAME version as ours
+          bash scripts/ci/validate-zerodte-corpus-peer.sh
         '''
       }
     }

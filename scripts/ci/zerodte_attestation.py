@@ -36,7 +36,10 @@ TEXT = re.compile(r"^[\x20-\x7e]{1,128}$")
 # written in its ASCII form): words of letters joined by single spaces, a word may carry an inner . ' or - between letters and a
 # trailing . for an initial; 2..128 characters. The SAME grammar is VirginAttestation.APPROVER in the Job.
 APPROVER = re.compile(r"^(?=.{2,128}$)[A-Za-z]+(?:[.'-][A-Za-z]+)*\.?(?: [A-Za-z]+(?:[.'-][A-Za-z]+)*\.?)*$")
-MAX_CODE_POINTS = 1 << 20   # the Job's LoaderOptions.setCodePointLimit; a longer file is refused by BOTH readers
+MAX_CODE_POINTS = 1 << 16   # the subset's size cap, counted over the RAW text (a CR counts); the Job checks the same number before SnakeYAML sees the text
+# SnakeYAML's printable code points (YAML 1.1 c-printable): TAB, LF, CR, 0x20–0x7E, NEL, 0xA0–0xD7FF, 0xE000–0xFFFD, 0x10000–0x10FFFF.
+# Anything else — a C0 control, DEL — is refused ANYWHERE in the text, a comment included, as the Job refuses it.
+_PRINTABLE = re.compile("^[\t\n\r\x20-\x7e\x85\xa0-\ud7ff\ue000-\ufffd\U00010000-\U0010ffff]*$")
 UNAPPROVED = "UNAPPROVED"
 OPERATOR = re.compile(r"^[\x20-\x7e]{1,64}$")
 SYMBOL = re.compile(r"^[A-Z0-9]{1,16}$")
@@ -129,6 +132,8 @@ def load(text):
         raise Refused("a byte-order mark is not accepted")
     if len(text) > MAX_CODE_POINTS:
         raise Refused("the file exceeds %d code points" % MAX_CODE_POINTS)
+    if not _PRINTABLE.match(text):
+        raise Refused("a non-printable character is not accepted anywhere in the text (a comment included)")
     lines = []
     for raw in text.split("\n"):
         if raw.startswith("---") or raw.startswith("...") or raw.startswith("%"):
@@ -257,7 +262,7 @@ def corpus_cases(d):
 # ONE canonical corpus (Codex 7b r3): corpus.sha256 is regenerated from the fixtures, so by itself it only proves a copy is self-consistent.
 # CORPUS_DIGEST — the sha256 of corpus.sha256 — is a LITERAL pinned here AND in the Job's YamlSubsetCorpusTest: a change to the corpus must
 # change the literal in BOTH repositories (printed by --corpus-manifest), so a copy that drifted from the pinned version fails its runner.
-CORPUS_DIGEST = "daadd762c6aeac6b966d6df8e1eca904bdfe7cd6a3aa33668532cb8bb115c173"
+CORPUS_DIGEST = "55b5bd59864f8c5502fcd1914299990d1bef3bbff275ff74c6d8bcd677f52181"
 
 
 def corpus_manifest(d, cases):
@@ -509,7 +514,7 @@ def parse_provisioning(text):
 # ------------------------------------------------------------------------------------------------ commands
 
 def _read(path):
-    with open(path, encoding="utf-8") as f:
+    with open(path, encoding="utf-8", newline="") as f:   # newline="": the RAW line endings reach the reader — a CR is a code point the cap counts
         return f.read()
 
 
@@ -518,16 +523,16 @@ def _base_text(base, path):
     if base is None:
         return None
     try:
-        with open(base, encoding="utf-8") as f:
-            return f.read()
+        return _read(base)
     except OSError:
         pass
-    r = subprocess.run(["git", "show", "%s:%s" % (base, path)], capture_output=True, text=True)
+    r = subprocess.run(["git", "show", "%s:%s" % (base, path)], capture_output=True)   # bytes: the base's RAW line endings, like _read
     if r.returncode != 0:
-        if "does not exist" in r.stderr or "exists on disk, but not in" in r.stderr:
+        err = r.stderr.decode("utf-8", "replace")
+        if "does not exist" in err or "exists on disk, but not in" in err:
             return None
-        raise Refused("the base version could not be read from git (%s): %s" % (base, r.stderr.strip()))
-    return r.stdout
+        raise Refused("the base version could not be read from git (%s): %s" % (base, err.strip()))
+    return r.stdout.decode("utf-8")
 
 
 def main(argv):
