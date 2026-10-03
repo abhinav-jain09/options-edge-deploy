@@ -37,18 +37,26 @@ import re, sys
 sys.path.insert(0, "scripts/ci")
 import zerodte_attestation as z
 root = z.load(open(sys.argv[1], encoding="utf-8").read())
-keys = ["environment", "symbol", "generation", "eraId", "ledgerTopicId", "clusterId", "provisionedDigest", "ledgerOffset"]
+keys = ["environment", "symbol", "environmentLineageId", "bootstrapKind", "generation", "eraId", "ledgerTopicId", "clusterId", "provisionedDigest", "ledgerOffset"]
 z._exact_keys(root, keys, "the receipt")
-assert z._text(root["environment"], "environment") == sys.argv[2], "environment names the file"
-z._text(root["symbol"], "symbol", z.SYMBOL)
+env = sys.argv[2]
+assert z._text(root["environment"], "environment") == env, "environment names the file"
 for k in ("generation", "eraId", "ledgerOffset"):
     v = root[k]
     assert isinstance(v, z.Scalar) and not v.quoted and re.match(r"^[0-9]+$", v.text), k + " is a non-negative integer"
 z._text(root["ledgerTopicId"], "ledgerTopicId", z.HEX32, quoted=True)
 z._text(root["clusterId"], "clusterId", z.TEXT, quoted=True)
 z._text(root["provisionedDigest"], "provisionedDigest", z.HEX64, quoted=True)
+# BOUND to the declaration of the same environment: the static identity the Job echoed must be the declaration's
+d = z.parse_provisioning(open("deploy/zerodte/provisioning/%s.yaml" % env, encoding="utf-8").read())
+for key, want in (("symbol", d["symbol"]), ("environmentLineageId", d["environmentLineageId"]), ("bootstrapKind", d["bootstrapKind"])):
+    got = z._text(root[key], key)
+    assert got == want, "%s is '%s' in the receipt, '%s' in the declaration" % (key, got, want)
+for key, want in (("generation", d["generation"]), ("eraId", d["eraId"])):
+    got = int(root[key].text)
+    assert got == want, "%s is %d in the receipt, %d in the declaration" % (key, got, want)
 PY
-  then echo "ok   $r"; else echo "FAIL: $r is not a confirmed receipt of the documented shape"; fail=1; fi
+  then echo "ok   $r (bound to deploy/zerodte/provisioning/$env.yaml)"; else echo "FAIL: $r is not a confirmed receipt of the documented shape bound to its declaration"; fail=1; fi
 done
 [ "$fail" -eq 0 ] && { echo "=== validate-zerodte-provisioning: OK ==="; exit 0; }
 echo "=== validate-zerodte-provisioning: FAILED ==="; exit 1

@@ -83,9 +83,20 @@ sed 's/^symbol: SPX$/symbol: spx/' "$P" > "$T/p.yaml";                          
 sed 's/^operator: abhinav.jain$/operator: abhinav.jain\nextra: 1/' "$P" > "$T/p.yaml"; expect "unknown key"                1 "unknown key: extra" -- $Z provisioning "$T/p.yaml"
 sed 's/^generation: 1$/generation: "1"/' "$P" > "$T/p.yaml";                         expect "a quoted integer"             1 "generation is an integer" -- $Z provisioning "$T/p.yaml"
 sed 's/    dependencyMode: EMBEDDED/    dependencyMode: COMPACTED/' "$P" > "$T/p.yaml"; expect "unknown dependency mode"  1 "dependencyMode is one of" -- $Z provisioning "$T/p.yaml"
+echo "--- a base this checkout does not hold is a REFUSAL, never a shape-only pass ---"
+expect "missing base ref"                          1 "is not a known ref in this checkout" -- bash scripts/ci/validate-zerodte-attestation.sh --base refs/no/such/base
 echo "--- the shipped files through the repository validators ---"
-expect "validate-zerodte-provisioning"             0 "validate-zerodte-provisioning: OK" -- bash scripts/ci/validate-zerodte-provisioning.sh
-expect "validate-zerodte-attestation (file alone)" 0 "validate-zerodte-attestation: OK" -- bash scripts/ci/validate-zerodte-attestation.sh --base HEAD
+# The shipped attestation carries the UNAPPROVED marker until the OWNER writes their name (the owner's edit alone). Until then BOTH validators
+# refuse it on EXACTLY that marker (a refusal for any other reason is a defect); after the owner's edit both pass. The case states which.
+if grep -q '^    approvedBy: UNAPPROVED$' deploy/zerodte/virgin-attestation.yaml; then
+  expect "validate-zerodte-provisioning (shipped, UNAPPROVED: refused on the marker only)" 1 "carries the UNAPPROVED marker" -- bash scripts/ci/validate-zerodte-provisioning.sh
+  expect "validate-zerodte-attestation (shipped, UNAPPROVED: refused on the marker only)"  1 "carries the UNAPPROVED marker" -- bash scripts/ci/validate-zerodte-attestation.sh --base HEAD
+  sed 's/^    approvedBy: UNAPPROVED$/    approvedBy: Test Owner/' deploy/zerodte/virgin-attestation.yaml > "$T/approved.yaml"
+  expect "the shipped attestation, approved, verifies" 0 "chain intact" -- $Z verify "$T/approved.yaml"
+else
+  expect "validate-zerodte-provisioning (shipped, approved)" 0 "validate-zerodte-provisioning: OK" -- bash scripts/ci/validate-zerodte-provisioning.sh
+  expect "validate-zerodte-attestation (shipped, approved)"  0 "validate-zerodte-attestation: OK" -- bash scripts/ci/validate-zerodte-attestation.sh --base HEAD
+fi
 echo "zerodte attestation/provisioning validators: $pass ok, $fail failed"
 [ "$fail" -eq 0 ] && { echo "=== validate-zerodte-attestation-test: OK ==="; exit 0; }
 echo "=== validate-zerodte-attestation-test: FAILED ==="; exit 1
