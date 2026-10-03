@@ -31,6 +31,8 @@ case "$args" in
     case "${FAKE_SECRET:-present}" in
       present)  printf '{"data":{"ZERO_DTE_LEDGER_KEY":"%s","POSTGRES_PASSWORD":"eA=="}}' "$(printf '%s' "${FAKE_EXISTING_KEY:-}" | base64 | tr -d '\n')" ;;
       nokey)    printf '{"data":{"POSTGRES_PASSWORD":"eA=="}}' ;;
+      emptykey) printf '{"data":{"ZERO_DTE_LEDGER_KEY":"","POSTGRES_PASSWORD":"eA=="}}' ;;
+      nodata)   printf '{"metadata":{"name":"options-edge-runtime-secrets"}}' ;;
       garbage)  printf '{"data":{"ZERO_DTE_LEDGER_KEY":"%%%%not-base64%%%%"}}' ;;
       absent)   echo 'Error from server (NotFound): secrets "options-edge-runtime-secrets" not found' >&2; exit 1 ;;
       error)    echo 'Unable to connect to the server: EOF' >&2; exit 1 ;;
@@ -58,6 +60,8 @@ run() { # run <name> <want_rc> <want substring> <want applied: none|<key value>>
 run "no credential, existing key kept byte for byte"  0 "the existing value is kept (present)" "$GOOD" FAKE_EXISTING_KEY="$GOOD"
 run "no credential, Secret without the key"           0 "the existing value is kept (empty)" "" FAKE_SECRET=nokey
 run "no credential, no Secret yet (NotFound)"         0 "no Secret yet — written empty" "" FAKE_SECRET=absent
+run "no credential, existing key PRESENT BUT EMPTY: no apply" 1 "is present but EMPTY" none FAKE_SECRET=emptykey
+run "no credential, Secret without .data"             0 "the existing value is kept (empty)" "" FAKE_SECRET=nodata
 run "no credential, Secret UNREADABLE: no apply"      1 "the existing Secret could not be read" none FAKE_SECRET=error
 run "no credential, existing key undecodable: no apply" 1 "could not be decoded" none FAKE_SECRET=garbage
 run "credential bound, not hex: no apply"             1 "is not hex; refusing to sync" none ZERO_DTE_LEDGER_KEY="zz$GOOD"

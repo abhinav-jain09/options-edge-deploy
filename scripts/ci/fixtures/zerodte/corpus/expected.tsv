@@ -25,7 +25,9 @@ att-instant-fraction-accept	attestation	accept
 att-instant-without-zone-reject	attestation	reject
 att-literal-indicator-reject	attestation	reject
 att-merge-key-reject	attestation	reject
+att-multiline-single-quoted-approver-reject	attestation	reject
 att-nested-duplicate-key-reject	attestation	reject
+att-no-space-list-map-separator-reject	attestation	reject
 att-not-a-map-reject	attestation	reject
 att-one-entry-accept	attestation	accept
 att-second-document-reject	attestation	reject
@@ -44,6 +46,7 @@ prov-anchor-reject	provisioning	reject
 prov-bool-capital-reject	provisioning	reject
 prov-dev-accept	provisioning	accept
 prov-duplicate-key-reject	provisioning	reject
+prov-empty-flow-list-whitespace-reject	provisioning	reject
 prov-escape-in-quotes-reject	provisioning	reject
 prov-explicit-end-reject	provisioning	reject
 prov-flow-nonempty-reject	provisioning	reject
@@ -51,13 +54,19 @@ prov-folded-scalar-reject	provisioning	reject
 prov-hex-int-reject	provisioning	reject
 prov-leading-zero-int-accept	provisioning	accept
 prov-list-item-colon-space-reject	provisioning	reject
+prov-multiline-double-quoted-scalar-reject	provisioning	reject
+prov-multiline-plain-scalar-reject	provisioning	reject
 prov-multiline-scalar-reject	provisioning	reject
+prov-multiline-single-quoted-scalar-reject	provisioning	reject
+prov-no-space-map-separator-reject	provisioning	reject
 prov-nonbmp-prefix-escaped-quote-reject	provisioning	reject
 prov-plain-colon-space-reject	provisioning	reject
 prov-plus-int-accept	provisioning	accept
 prov-quoted-int-reject	provisioning	reject
 prov-quoted-key-reject	provisioning	reject
 prov-tag-reject	provisioning	reject
+prov-unclosed-double-quote-reject	provisioning	reject
+prov-unclosed-single-quote-reject	provisioning	reject
 prov-underscore-int-reject	provisioning	reject
 prov-unknown-key-reject	provisioning	reject
 prov-yaml11-bool-reject	provisioning	reject
