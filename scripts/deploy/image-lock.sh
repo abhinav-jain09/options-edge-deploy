@@ -67,16 +67,21 @@ ES_TRADE_LINEARIZER_IMAGE
 SIGNAL_FOLLOWER_IMAGE
 CONTEXT_TAPE_IMAGE
 MULTILEG_STRUCTURE_IMAGE
+AMT_ORDER_BRIDGE_IMAGE
+BROKER_EXECUTION_IMAGE
 EOF
   fi
-  # approach-monitor is DEV-ONLY (services.yaml envs: [dev]); production and experiment delete it,
-  # so requiring its lock entry there would fail on an image that is never rendered.
+  # approach-monitor, oi-next-publication, vol-state and zn-gex are DEV-ONLY (services.yaml envs:
+  # [dev]); production and experiment never render them, so requiring their lock entries there
+  # would fail on an image that is never rendered.
   if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
     cat <<'EOF'
 APPROACH_MONITOR_IMAGE
 APPROACH_POSITION_PUBLISHER_IMAGE
 OI_NEXT_PUBLICATION_IMAGE
 OI_NEXT_PUBLICATION_POSTGRES_WRITER_IMAGE
+VOL_STATE_IMAGE
+ZN_GEX_IMAGE
 EOF
   fi
 }

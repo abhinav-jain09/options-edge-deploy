@@ -78,6 +78,8 @@ pipeline {
     string(name: 'SIGNAL_FOLLOWER_IMAGE', defaultValue: '', description: 'signal-follower image (dev+prod)')
     string(name: 'CONTEXT_TAPE_IMAGE', defaultValue: '', description: 'context-tape service image (dev+prod)')
     string(name: 'MULTILEG_STRUCTURE_IMAGE', defaultValue: '', description: 'multileg-structure service image (dev+prod)')
+    string(name: 'AMT_ORDER_BRIDGE_IMAGE', defaultValue: '', description: 'amt-order-bridge image (dev+prod)')
+    string(name: 'BROKER_EXECUTION_IMAGE', defaultValue: '', description: 'broker-execution-service image (dev+prod)')
     string(name: 'DATABENTO_API_KEY_CREDENTIAL_ID', defaultValue: 'options-edge-databento-api-key', description: 'Jenkins secret-text credential containing the Databento API key')
     string(name: 'ANTHROPIC_API_KEY_CREDENTIAL_ID', defaultValue: 'options-edge-anthropic-api-key', description: 'Jenkins secret-text credential containing the Anthropic API key (short-premium-agent SP_BACKEND=sdk)')
     string(name: 'OE_WATCH_READER_PASSWORD_CREDENTIAL_ID', defaultValue: '', description: 'Jenkins secret-text credential holding the oe_watch_reader password (System Status page ledger read). BLANK resolves per environment: oe-watch-reader-password-dev for dev, oe-watch-reader-password for production — each env has its own role on its own Postgres. Missing credential => the key is written EMPTY and the page reports LEDGER UNAVAILABLE.')
@@ -475,6 +477,9 @@ pipeline {
             'CONTEXT_TAPE_IMAGE': 'context-tape',
             // multileg-structure: same dev+prod standalone pattern.
             'MULTILEG_STRUCTURE_IMAGE': 'multileg-structure',
+            // amt-order-bridge + broker-execution-service: same dev+prod standalone pattern.
+            'AMT_ORDER_BRIDGE_IMAGE': 'amt-order-bridge',
+            'BROKER_EXECUTION_IMAGE': 'broker-execution',
           ].collect { _v, _svc -> "export ${_v}=${params[_v] ?: oeProfile.image(_svc, 'production', 'prod')}" }.join('\n')
           writeFile file: 'image-defaults.env', text: _defaults + '\n'
         }
@@ -846,7 +851,7 @@ void promoteToProduction() {
       'INVASION_POSTGRES_WRITER_IMAGE', 'SPREAD_SKEW_IMAGE', 'SPREAD_SKEW_POSTGRES_WRITER_IMAGE', 'REVERSAL_CONFIRMATION_IMAGE', 'CORRIDOR_GAUGE_IMAGE', 'GAMMA_LADDER_PATH_IMAGE',
       'ES_OPEN_DIRECTION_IMAGE', 'ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE', 'CLOSE_DIRECTION_IMAGE', 'SPOT_VOL_REGIME_IMAGE', 'GAMMA_LEADERSHIP_IMAGE', 'VOL_PREMIUM_IMAGE', 'OI_SHADOW_IMAGE', 'REVERSAL_POSTGRES_WRITER_IMAGE', 'STRIKE_FLOW_AVRO_ADAPTER_IMAGE',
       'GEX_DELTA_REDIS_WRITER_IMAGE', 'IBKR_FEED_IMAGE', 'SHORT_PREMIUM_AGENT_IMAGE', 'ES_AGGRESSOR_FLOW_IMAGE', 'ES_TRADE_LINEARIZER_IMAGE', 'SIGNAL_FOLLOWER_IMAGE',
-      'CONTEXT_TAPE_IMAGE', 'MULTILEG_STRUCTURE_IMAGE',
+      'CONTEXT_TAPE_IMAGE', 'MULTILEG_STRUCTURE_IMAGE', 'AMT_ORDER_BRIDGE_IMAGE', 'BROKER_EXECUTION_IMAGE',
     ].collect { _n -> string(name: _n, value: params[_n]) } + [
       string(name: 'DATABENTO_API_KEY_CREDENTIAL_ID', value: params.DATABENTO_API_KEY_CREDENTIAL_ID),
       string(name: 'KEYCLOAK_DB_PASSWORD_CREDENTIAL_ID', value: params.KEYCLOAK_DB_PASSWORD_CREDENTIAL_ID),

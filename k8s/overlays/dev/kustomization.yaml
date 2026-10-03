@@ -37,7 +37,8 @@ resources:
   # yield-equivalent GEX, standalone source repo options-edge-zn-gex. Referenced here
   # (NOT in k8s/base) so production/experiment never render it until the Databento
   # ingestion path + DV01 mapping have a live dev proof. No patches here or in the
-  # standalone overlay (k8s/services/zn-gex/overlays/dev) — mirror rule holds trivially.
+  # standalone overlay (k8s/services/zn-gex/overlays/dev) — mirror rule holds trivially;
+  # the dev image remap below (mirrored in that slice) is what the mirror rule compares.
   - ../../services/zn-gex/base
   # NOTE: the databento timewarp replay Job + snapshot-replay Deployment used to live
   # here. They moved to k8s/replay/dev and now deploy on-demand via the dedicated
@@ -747,6 +748,9 @@ images:
     newName: host.docker.internal:5001/options-edge-gamma-ladder-path
   - name: 192.168.100.252:5000/options-edge-vol-state
     newName: host.docker.internal:5001/options-edge-vol-state
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-zn-gex
+    newName: host.docker.internal:5001/options-edge-zn-gex
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-oi-next-publication
     newName: host.docker.internal:5001/options-edge-oi-next-publication
