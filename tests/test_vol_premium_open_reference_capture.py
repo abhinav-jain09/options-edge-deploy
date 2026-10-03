@@ -806,8 +806,9 @@ class PublicationAuthorityTest(unittest.TestCase):
             python3 …capture.py --session 2026-09-18 --archive-root /tmp/input --out /tmp/ledger
 
         A marker holding only a session date authorised whatever the directory happened to contain.
-        It now has to agree with the input, so a caller would have to produce a consistent
-        fingerprint of their own files — which is replicating the gate, not typing a date."""
+        It now has to agree with the input. Producing a matching fingerprint is not hard —
+        `input_digest` is importable — and difficulty is not the point: nothing becomes publishable
+        by accident, and a bypass leaves a file saying what was claimed."""
         _fixture(self.tmp)
         (self.tmp / orc.GATE_MARKER).write_text(DAY + "\n")      # the date alone, as before
         r, out = self._run()

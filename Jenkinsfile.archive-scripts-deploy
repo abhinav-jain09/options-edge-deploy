@@ -192,8 +192,11 @@ pipeline {
           # says. Each is then HARDLINKED into a pinned set and the decompression check is run on the PIN;
           # a cross-device pin is a fault rather than a copy, a pinned name resolving to a different file is
           # a fault, a leftover from a run that died is a fault, and a retry may reuse only its own pin.
-          # Only once all of that passes does the gate write the marker that AUTHORISES publication, which
-          # the capture requires for --out — so no directory outside this wrapper can claim a session. The
+          # Only once all of that passes does the gate write the marker the capture requires for --out: the
+          # session and a digest of the input, which the capture recomputes. It is not an authorisation
+          # boundary and the source says so — anyone who can write the marker can write the ledger directly
+          # — but it means no directory becomes publishable by ACCIDENT, and every way round it is a
+          # deliberate, visible act. The
           # reader is given the pinned set, so a member arriving while the capture runs cannot reach the
           # record. The pins accumulate by design, add directory entries and no file data, and their total
           # is logged with an alert that repeats while it is over the threshold. The gated topic set is read

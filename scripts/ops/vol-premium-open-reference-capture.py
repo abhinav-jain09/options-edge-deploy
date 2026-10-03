@@ -59,8 +59,10 @@ def input_digest(root: str, session: str) -> str:
     nothing else, so it authorised ANY content: `printf '2026-09-18\n' > .../.vp-…-gate-ok` turned
     an arbitrary directory into a publishable one, and review was right to refuse that as evidence.
     The marker now has to agree with the input, so a caller cannot authorise a directory by typing a
-    date into it — they would have to make a consistent fingerprint of their own files, which is
-    replicating the gate rather than bypassing it.
+    date into it. Making a matching fingerprint is not hard — this function is importable and will
+    do it for anyone who calls it — and the point is not difficulty: it is that nothing becomes
+    publishable by accident, and that doing it anyway is a deliberate act leaving a file that says
+    what was claimed.
 
     WHAT IT CANNOT BE, said plainly: a security boundary. Anyone who can write this marker can also
     write the ledger directly, delete it, or edit this file; on a host where the operator owns the
