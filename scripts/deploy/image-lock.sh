@@ -72,8 +72,8 @@ BROKER_EXECUTION_IMAGE
 EOF
   fi
   # approach-monitor, oi-next-publication, vol-state and zn-gex are DEV-ONLY (services.yaml envs:
-  # [dev]); production and experiment delete them, so requiring their lock entries there would fail
-  # on an image that is never rendered.
+  # [dev]); production and experiment never render them, so requiring their lock entries there
+  # would fail on an image that is never rendered.
   if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
     cat <<'EOF'
 APPROACH_MONITOR_IMAGE

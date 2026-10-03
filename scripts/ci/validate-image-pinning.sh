@@ -16,6 +16,13 @@
 #        `set -u` — fails here instead).
 #   (B)  the var must also be in apply.sh (pin loop) + image-lock.sh (all_image_vars) +
 #        image-preflight.sh, so the digest-pin + preflight gates cover it.
+#   (C)  the REWRITE must reach the image: apply.sh rebuilds the overlay's kustomize `images:` block
+#        keyed on `<base registry>/<image>` (base registry = the first Deployment image of
+#        `kubectl kustomize k8s/base`) and then refuses to apply while ANY rendered options-edge
+#        image is still unpinned. A base manifest whose image sits on a different registry passes
+#        every list check above yet is never matched by the rewrite (zn-gex, 2026-10-04: its base
+#        named host.docker.internal:5001 directly). Reproduce the rewrite on a scratch copy of k8s/
+#        and assert apply.sh's gate for dev and production.
 # A token in a comment or the dev-only section does NOT satisfy any of these.
 #
 # VAR convention: options-edge-<name> -> <NAME upper, - to _>_IMAGE. Experiment is out of scope
@@ -147,6 +154,33 @@ for pair in dev:dev production:prod; do
   done
   echo "ok: $e branch-1 ($n images resolved + pinned + preflighted)"
 done
+
+# --- (C) post-rewrite render: apply.sh's images: rewrite must pin EVERY rendered image ---------
+_base_images="$(kubectl kustomize k8s/base 2>/dev/null | yq -r 'select(.kind=="Deployment") | .spec.template.spec.containers[].image')"
+_base_registry="${_base_images%%$'\n'*}"; _base_registry="${_base_registry%%/*}"
+if [ -z "$_base_registry" ]; then
+  echo "FAIL[rewrite]: could not derive the base image registry from k8s/base (apply.sh derives it the same way)" >&2; fail=1
+else
+  cp -R k8s "$PROBE/k8s"
+  _zero_digest="sha256:$(printf '0%.0s' $(seq 1 64))"
+  for e in dev production; do
+    k="$PROBE/k8s/overlays/$e/kustomization.yaml"
+    yq -i '.images = []' "$k"
+    for img in $(rendered_images "$e"); do
+      _pname="$_base_registry/$img" _pnewname="$REG/$img" _pdigest="$_zero_digest" \
+        yq -i '.images += [{"name": strenv(_pname), "newName": strenv(_pnewname), "digest": strenv(_pdigest)}]' "$k"
+    done
+    unpinned="$(kubectl kustomize "$PROBE/k8s/overlays/$e" 2>/dev/null \
+      | yq -r 'select(.kind=="Deployment") | (.spec.template.spec.containers[].image), (.spec.template.spec.initContainers[]?.image)' \
+      | { grep '/options-edge-' || true; } | { grep -v '@sha256:' || true; })"
+    if [ -n "$unpinned" ]; then
+      echo "FAIL[$e/rewrite]: after apply.sh's images: rewrite (keyed on $_base_registry/<image>) these rendered images are STILL unpinned — their base manifest image is not on the base registry, so the real deploy aborts at its digest gate:" >&2
+      printf '  %s\n' $unpinned >&2; fail=1
+    else
+      echo "ok: $e post-rewrite render fully digest-pinned (apply.sh gate reproduced on $(printf '%s\n' $(rendered_images "$e") | wc -l | tr -d ' ') images)"
+    fi
+  done
+fi
 
 # --- (A2) branch-2 resolution: the PROMOTED prod path (IMAGE_TAG unset, vars seeded) --------
 wd="$PROBE/b2-prod"; mkdir -p "$wd"; ef="$wd/options-edge-images.env"

@@ -67,7 +67,8 @@ OI_SHADOW_IMAGE=$registry/options-edge-oi-shadow:$image_tag
 REVERSAL_POSTGRES_WRITER_IMAGE=$registry/options-edge-reversal-postgres-writer:$image_tag
 EOF
             # approach-monitor, oi-next-publication, vol-state and zn-gex are DEV-ONLY (services.yaml
-            # envs: [dev]); the production and experiment overlays delete them. Emitting their vars
+            # envs: [dev]); the production and experiment overlays never render them (approach-monitor
+            # is deleted there; the others are referenced only from the dev overlay). Emitting their vars
             # for dev and never for production is also what marks them dev-only to
             # validate-image-pinning.sh, which derives that status from this script's own
             # behaviour rather than from parsing manifests.

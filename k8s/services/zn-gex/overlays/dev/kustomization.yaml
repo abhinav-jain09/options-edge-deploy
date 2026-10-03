@@ -21,3 +21,9 @@ patches:
       - op: add
         path: /spec/progressDeadlineSeconds
         value: 1200
+# Dev image remap — mirror of the monolith dev overlay's `images:` entry for this service
+# (same shape as k8s/services/nifty-gex/overlays/dev). The base names the base registry.
+images:
+  - name: 192.168.100.252:5000/options-edge-zn-gex
+    newName: host.docker.internal:5001/options-edge-zn-gex
+    newTag: dev

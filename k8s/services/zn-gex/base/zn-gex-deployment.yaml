@@ -36,7 +36,12 @@ spec:
     spec:
       containers:
         - name: zn-gex
-          image: host.docker.internal:5001/options-edge-zn-gex:dev
+          # Base-registry name, like every other base manifest: the dev overlays (monolith AND the
+          # standalone slice) remap it to host.docker.internal:5001 via `images:`, and apply.sh's
+          # digest-pin loop keys its rewrite on exactly this `<base registry>/<image>` name. A base
+          # that names the dev registry directly is never matched by that rewrite and the monolith
+          # deploy aborts at its unpinned-render gate (what this manifest did until 2026-10-04).
+          image: 192.168.100.252:5000/options-edge-zn-gex:dev
           ports:
             - containerPort: 8101
               name: health
