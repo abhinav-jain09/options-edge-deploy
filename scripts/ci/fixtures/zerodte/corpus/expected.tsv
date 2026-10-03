@@ -86,6 +86,7 @@ prov-leading-zero-int-accept	provisioning	accept
 prov-list-item-colon-space-reject	provisioning	reject
 prov-long-era-accept	provisioning	accept
 prov-long-generation-accept	provisioning	accept
+prov-long-previous-generation-accept	provisioning	accept
 prov-long-retention-accept	provisioning	accept
 prov-multiline-double-quoted-scalar-reject	provisioning	reject
 prov-multiline-nel-scalar-reject	provisioning	reject
