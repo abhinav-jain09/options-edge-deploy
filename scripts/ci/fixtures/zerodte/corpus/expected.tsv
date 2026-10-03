@@ -14,6 +14,7 @@ att-comment-lines-accept	attestation	accept
 att-cr-line-break-reject	attestation	reject
 att-crlf-accept	attestation	accept
 att-crlf-codepoint-limit-reject	attestation	reject
+att-dash-alone-list-map-reject	attestation	reject
 att-double-space-after-colon-accept	attestation	accept
 att-duplicate-key-reject	attestation	reject
 att-empty-accept	attestation	accept
@@ -25,6 +26,7 @@ att-explicit-start-reject	attestation	reject
 att-extended-year-instant-reject	attestation	reject
 att-flow-map-reject	attestation	reject
 att-flow-nonempty-reject	attestation	reject
+att-indented-empty-flow-list-reject	attestation	reject
 att-instant-fraction-accept	attestation	accept
 att-instant-without-zone-reject	attestation	reject
 att-invalid-utf8-reject	attestation	reject
@@ -33,6 +35,7 @@ att-literal-indicator-reject	attestation	reject
 att-ls-line-break-reject	attestation	reject
 att-merge-key-reject	attestation	reject
 att-multiline-single-quoted-approver-reject	attestation	reject
+att-nbsp-before-name-reject	attestation	reject
 att-nel-line-break-reject	attestation	reject
 att-nested-duplicate-key-reject	attestation	reject
 att-no-space-list-map-separator-reject	attestation	reject
@@ -40,10 +43,12 @@ att-nonprintable-comment-reject	attestation	reject
 att-not-a-map-reject	attestation	reject
 att-offset-instant-reject	attestation	reject
 att-one-entry-accept	attestation	accept
+att-ps-line-break-reject	attestation	reject
 att-second-document-reject	attestation	reject
 att-single-quoted-apostrophe-accept	attestation	accept
 att-single-quotes-accept	attestation	accept
 att-space-before-map-separator-reject	attestation	reject
+att-space-tab-after-colon-reject	attestation	reject
 att-space-tab-indent-reject	attestation	reject
 att-tab-indent-reject	attestation	reject
 att-tab-map-separator-reject	attestation	reject
@@ -68,6 +73,7 @@ prov-explicit-end-reject	provisioning	reject
 prov-flow-nonempty-reject	provisioning	reject
 prov-folded-scalar-reject	provisioning	reject
 prov-hex-int-reject	provisioning	reject
+prov-indented-plain-scalar-reject	provisioning	reject
 prov-leading-zero-int-accept	provisioning	accept
 prov-list-item-colon-space-reject	provisioning	reject
 prov-multiline-double-quoted-scalar-reject	provisioning	reject

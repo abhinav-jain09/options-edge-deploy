@@ -36,6 +36,7 @@ git -C "$T/repo" config uploadpack.allowReachableSHA1InWant true   # GitHub serv
 expect "git: the exact commit (by SHA) pinning the same literal" 0 "OK (both repositories pin $OURS)" ZERODTE_PEER_REPO="file://$T/repo" ZERODTE_PEER_REF="$SAME_SHA" ZERODTE_PEER_REQUIRE_SHA=true
 expect "git: the exact commit (by SHA) of the drift"   1 "pin DIFFERENT corpus versions" ZERODTE_PEER_REPO="file://$T/repo" ZERODTE_PEER_REF="$DRIFT_SHA" ZERODTE_PEER_REQUIRE_SHA=true
 expect "git: a branch name when a SHA is required"     1 "must be the 40-hex processing COMMIT" ZERODTE_PEER_REPO="file://$T/repo" ZERODTE_PEER_REF=main ZERODTE_PEER_REQUIRE_SHA=true
+expect "a local checkout when a SHA is required"       1 "a local checkout (ZERODTE_PEER_SOURCE) is not an immutable commit" ZERODTE_PEER_SOURCE="$T/same" ZERODTE_PEER_REQUIRE_SHA=true ZERODTE_PEER_REF="$SAME_SHA"
 expect "git: a SHA that does not exist"                1 "the peer repository could not be read" ZERODTE_PEER_REPO="file://$T/repo" ZERODTE_PEER_REF="$(printf '0%.0s' $(seq 40))" ZERODTE_PEER_REQUIRE_SHA=true
 echo "zerodte corpus peer gate: $pass ok, $fail failed"
 [ "$fail" -eq 0 ] && { echo "=== validate-zerodte-corpus-peer-test: OK ==="; exit 0; }

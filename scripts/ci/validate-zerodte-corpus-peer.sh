@@ -27,6 +27,8 @@ literal() { # literal <text> <what> → the ONE CORPUS_DIGEST = "<64 hex>" liter
 }
 OURS="$(literal "$(cat "$OURS_FILE")" "$OURS_FILE")" || exit 1
 if [ -n "${ZERODTE_PEER_SOURCE:-}" ]; then
+  # a local checkout is a developer's or a test's source: when the release requires an immutable commit, no override is honoured
+  [ "${ZERODTE_PEER_REQUIRE_SHA:-false}" != true ] || { echo "FAIL: ZERODTE_PEER_REQUIRE_SHA=true — a local checkout (ZERODTE_PEER_SOURCE) is not an immutable commit of the peer repository; the release reads the peer at its 40-hex SHA only"; exit 1; }
   [ -f "$ZERODTE_PEER_SOURCE/$PEER_FILE" ] || { echo "FAIL: the peer checkout $ZERODTE_PEER_SOURCE has no $PEER_FILE"; exit 1; }
   PEER_TEXT="$(cat "$ZERODTE_PEER_SOURCE/$PEER_FILE")"
   WHERE="$ZERODTE_PEER_SOURCE/$PEER_FILE"

@@ -115,6 +115,16 @@ printf '%s\n' "${BASE0/name: dev/name: \"123\"}" > "$T/q.yaml"; expect "a QUOTED
 pr "a lone CR as a line break"         "${BASE0/name: dev/name: dev$'\r'parent: null}" "a line break other than LF / CRLF"
 pr "NEL as a line break"               "${BASE0/name: dev/name: dev$'\xc2\x85'parent: null}" "a line break other than LF / CRLF"
 pr "LINE SEPARATOR as a line break"    "${BASE0/name: dev/name: dev$'\xe2\x80\xa8'parent: null}" "a line break other than LF / CRLF"
+pr "PARAGRAPH SEPARATOR as a line break" "${BASE0/name: dev/name: dev$'\xe2\x80\xa9'parent: null}" "a line break other than LF / CRLF"
+pr "a TAB after the separator's space"   "${BASE0/name: dev/name: $'\t'dev}" "lineages[].name is not in its domain"
+pr "a NO-BREAK SPACE before the value"   "${BASE0/name: dev/name: $'\xc2\xa0'dev}" "lineages[].name is not in its domain"
+pr "a bare dash list item"               "${BASE0/  - id: /  -$NL    id: }" "not a map entry"
+pr "an empty flow list on its own line"  "${BASE0/entries: []/entries:$NL  []}" "not a map entry"
+pr "a scalar on its own line"            "${BASE0/name: dev/name:$NL      dev}" "unexpected indentation"
+# the BASE version read through git show: a base that is not valid UTF-8 is a refusal, never a traceback
+G="$T/baserepo"; mkdir -p "$G/deploy/zerodte" && git -C "$G" init -q -b main && printf '# not UTF-8: \377\376\n' > "$G/deploy/zerodte/virgin-attestation.yaml" && cat "$T/base0.yaml" >> "$G/deploy/zerodte/virgin-attestation.yaml" && git -C "$G" add -A && git -C "$G" -c user.name=t -c user.email=t@t commit -q -m bad
+cp "$T/base0.yaml" "$G/deploy/zerodte/virgin-attestation.yaml"   # the WORKING copy is lawful; the committed BASE (HEAD) is not valid UTF-8
+expect "a base version that is not valid UTF-8"   1 "is not valid UTF-8" -- env -C "$G" python3 "$PWD/scripts/ci/zerodte_attestation.py" verify deploy/zerodte/virgin-attestation.yaml --base HEAD
 printf '# not UTF-8: \377\376\n%s\n' "$BASE0" > "$T/bad-utf8.yaml"
 expect "a file that is not valid UTF-8" 1 "is not valid UTF-8" -- $Z verify "$T/bad-utf8.yaml"
 # the cap's edge: a lawful document padded to EXACTLY 2^16 code points passes; one more is refused
