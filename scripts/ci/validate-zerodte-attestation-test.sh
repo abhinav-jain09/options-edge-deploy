@@ -83,6 +83,14 @@ sed 's/^symbol: SPX$/symbol: spx/' "$P" > "$T/p.yaml";                          
 sed 's/^operator: abhinav.jain$/operator: abhinav.jain\nextra: 1/' "$P" > "$T/p.yaml"; expect "unknown key"                1 "unknown key: extra" -- $Z provisioning "$T/p.yaml"
 sed 's/^generation: 1$/generation: "1"/' "$P" > "$T/p.yaml";                         expect "a quoted integer"             1 "generation is an integer" -- $Z provisioning "$T/p.yaml"
 sed 's/    dependencyMode: EMBEDDED/    dependencyMode: COMPACTED/' "$P" > "$T/p.yaml"; expect "unknown dependency mode"  1 "dependencyMode is one of" -- $Z provisioning "$T/p.yaml"
+echo "--- eraStartSession (inc 9 consult Q6): the attestation's lexical date domain, a real calendar date, a string in any one-line style ---"
+expect "the shipped dev declaration states its era's start session" 0 '"eraStartSession": "2026-10-05"' -- $Z provisioning "$P"
+grep -v '^eraStartSession: ' "$P" > "$T/p.yaml";                                   expect "eraStartSession missing"      1 "lacks the key: eraStartSession" -- $Z provisioning "$T/p.yaml"
+sed 's/^eraStartSession: "2026-10-05"$/eraStartSession: "2026-13-05"/' "$P" > "$T/p.yaml"; expect "eraStartSession month 13"  1 "eraStartSession is not in its domain" -- $Z provisioning "$T/p.yaml"
+sed 's/^eraStartSession: "2026-10-05"$/eraStartSession: "2026-02-30"/' "$P" > "$T/p.yaml"; expect "eraStartSession Feb 30"    1 "not a real calendar date" -- $Z provisioning "$T/p.yaml"
+sed 's/^eraStartSession: "2026-10-05"$/eraStartSession: "2026-10-05T00:00:00Z"/' "$P" > "$T/p.yaml"; expect "eraStartSession an instant" 1 "eraStartSession is not in its domain" -- $Z provisioning "$T/p.yaml"
+sed 's/^eraStartSession: "2026-10-05"$/eraStartSession: 20261005/' "$P" > "$T/p.yaml"; expect "eraStartSession an integer"   1 "eraStartSession is a string" -- $Z provisioning "$T/p.yaml"
+sed 's/^eraStartSession: "2026-10-05"$/eraStartSession: 2026-10-05/' "$P" > "$T/p.yaml"; expect "eraStartSession plain (a string in this subset)" 0 '"eraStartSession": "2026-10-05"' -- $Z provisioning "$T/p.yaml"
 echo "--- the provisioning domains the Job judges the same way: the reserved topic names, the long bounds ---"
 PROV="$(cat deploy/zerodte/provisioning/dev.yaml)"; NL0=$'\n'
 pp() { printf '%s\n' "$2" > "$T/pp.yaml"; expect "$1" "$3" "$4" -- $Z provisioning "$T/pp.yaml"; }

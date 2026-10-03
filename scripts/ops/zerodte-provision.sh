@@ -156,17 +156,18 @@ echo "=== validating $FILE and $ATTESTATION ==="
 bash scripts/ci/validate-zerodte-provisioning.sh || fatal "the declarations do not pass scripts/ci/validate-zerodte-provisioning.sh — nothing is provisioned"
 bash scripts/ci/validate-zerodte-attestation.sh || fatal "$ATTESTATION does not pass scripts/ci/validate-zerodte-attestation.sh — nothing is provisioned"
 IDENTITY="$(python3 scripts/ci/zerodte_attestation.py provisioning "$FILE")" || fatal "could not read the declaration's identity"
-read -r SYMBOL LINEAGE GENERATION ERA_ID BOOTSTRAP_KIND <<EOF2
-$(printf '%s' "$IDENTITY" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["symbol"], d["environmentLineageId"], d["generation"], d["eraId"], d["bootstrapKind"])')
+read -r SYMBOL LINEAGE GENERATION ERA_ID ERA_START BOOTSTRAP_KIND <<EOF2
+$(printf '%s' "$IDENTITY" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["symbol"], d["environmentLineageId"], d["generation"], d["eraId"], d["eraStartSession"], d["bootstrapKind"])')
 EOF2
-[ -n "${SYMBOL:-}" ] && [ -n "${LINEAGE:-}" ] && [ -n "${GENERATION:-}" ] && [ -n "${ERA_ID:-}" ] && [ -n "${BOOTSTRAP_KIND:-}" ] || fatal "could not read symbol / lineage / generation / eraId / bootstrapKind from $FILE"
+[ -n "${SYMBOL:-}" ] && [ -n "${LINEAGE:-}" ] && [ -n "${GENERATION:-}" ] && [ -n "${ERA_ID:-}" ] && [ -n "${ERA_START:-}" ] && [ -n "${BOOTSTRAP_KIND:-}" ] || fatal "could not read symbol / lineage / generation / eraId / eraStartSession / bootstrapKind from $FILE"
+case "$ERA_START" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) : ;; *) fatal "eraStartSession '$ERA_START' is not yyyy-MM-dd" ;; esac
 TAIL_HASH="$(python3 scripts/ci/zerodte_attestation.py tail "$ATTESTATION")" || fatal "could not compute the attestation's chain tail"
 FILE_SHA256="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$FILE")"
 ATTESTATION_SHA256="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$ATTESTATION")"
-echo "declaration: env=$ENVIRONMENT symbol=$SYMBOL lineage=$LINEAGE generation=$GENERATION eraId=$ERA_ID file_sha256=$FILE_SHA256 attestation_sha256=$ATTESTATION_SHA256 attestation_tail=$TAIL_HASH"
+echo "declaration: env=$ENVIRONMENT symbol=$SYMBOL lineage=$LINEAGE generation=$GENERATION eraId=$ERA_ID eraStartSession=$ERA_START file_sha256=$FILE_SHA256 attestation_sha256=$ATTESTATION_SHA256 attestation_tail=$TAIL_HASH"
 echo "mode: $([ "$CONFIRM" = true ] && echo 'CONFIRM=true — the provisioner WRITES (topics, era, PROVISIONED)' || echo 'CONFIRM=false — DRY RUN, the provisioner writes nothing')"
 HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || echo '')"
-RECEIPT_LINE="build=${BUILD_NUMBER} env=${ENVIRONMENT} symbol=${SYMBOL} generation=${GENERATION} eraId=${ERA_ID} file_sha256=${FILE_SHA256} attestation_sha256=${ATTESTATION_SHA256} head=${HEAD_SHA}"
+RECEIPT_LINE="build=${BUILD_NUMBER} env=${ENVIRONMENT} symbol=${SYMBOL} generation=${GENERATION} eraId=${ERA_ID} eraStartSession=${ERA_START} file_sha256=${FILE_SHA256} attestation_sha256=${ATTESTATION_SHA256} head=${HEAD_SHA}"
 if [ "$CONFIRM" = true ]; then
   case "$PERMITTED_SHA" in ''|*[!0-9a-f]*) fatal "CONFIRM=true needs PERMITTED_SHA, the full 40-character lowercase commit id this write is permitted for (got '${PERMITTED_SHA:-<empty>}')" ;; esac
   [ "${#PERMITTED_SHA}" -eq 40 ] || fatal "PERMITTED_SHA '$PERMITTED_SHA' has ${#PERMITTED_SHA} characters, not 40"
@@ -376,7 +377,7 @@ EOF3
     case "$EXIT_TOKEN" in
       64) fatal "the provisioner refused its INVOCATION or the declaration ($REASON) — the CLI contract and this wrapper disagree, or the file is malformed; see the log. Nothing was written." ;;
       65) fatal "the provisioner refused the ATTESTATION or the declared generation contract ($REASON) — see the log. Nothing was written." ;;
-      68) fatal "a PRECONDITION failed ($REASON: the research schema is not v7, a topic's policy, a missing input, the era binding, the ledger's integrity) — see the log. Nothing was written past the verified prerequisites." ;;
+      68) fatal "a PRECONDITION failed ($REASON: the research schema is not v7, a topic's policy, a missing input, the era binding, a STALE eraStartSession — the declaration names a session the run is no longer in: edit it to the run's session and re-run — the ledger's integrity) — see the log. Nothing was written past the verified prerequisites." ;;
       69) fatal "Kafka or the research database was UNAVAILABLE ($REASON) — see the log. Re-run once reachable; the provisioner is create-or-verify." ;;
       70) fatal "a MUTATION failed or stayed uncertain after the read-back ($REASON) — READ THE LEDGER AND THE TOPICS before trying again (the log names what was created). The provisioner is create-or-verify: a re-run verifies what exists." ;;
       *)  fatal "the provisioner refused ($REASON, exit $EXIT_TOKEN) — see the log." ;;
@@ -389,14 +390,15 @@ esac
 [ "$state" = "succeeded" ] || fatal "$JOB_NAME printed '$OUTCOME' but did not succeed (state=$state, exit ${EXIT_CODE:-unknown}) — see the log above."
 exit_agrees 0
 if [ "$OUTCOME" = PROVISIONABLE ]; then
-  exact_fields symbol lineage generation eraId planDigest provisionedDigest topicIds wouldCreate wouldAssert wouldAttest wouldInsertEra wouldAppend
+  exact_fields symbol lineage generation eraId eraStartSession planDigest provisionedDigest topicIds wouldCreate wouldAssert wouldAttest wouldInsertEra wouldAppend
 else
-  exact_fields generation eraId ledgerOffset provisionedDigest ledgerTopicId clusterId
+  exact_fields generation eraId eraStartSession ledgerOffset provisionedDigest ledgerTopicId clusterId
 fi
-R_GEN="$(field generation)"; R_ERA="$(field eraId)"
+R_GEN="$(field generation)"; R_ERA="$(field eraId)"; R_ERA_START="$(field eraStartSession)"
 MISMATCH=""
 [ "$R_GEN" = "$GENERATION" ] || MISMATCH="$MISMATCH generation='$R_GEN'!='$GENERATION'"
 [ "$R_ERA" = "$ERA_ID" ]     || MISMATCH="$MISMATCH eraId='$R_ERA'!='$ERA_ID'"
+[ "$R_ERA_START" = "$ERA_START" ] || MISMATCH="$MISMATCH eraStartSession='$R_ERA_START'!='$ERA_START'"   # the era the Job stated / verified is the declaration's (inc 9 consult Q6)
 if [ "$OUTCOME" = PROVISIONABLE ]; then
   [ "$(field symbol)" = "$SYMBOL" ]   || MISMATCH="$MISMATCH symbol"
   [ "$(field lineage)" = "$LINEAGE" ] || MISMATCH="$MISMATCH lineage"
@@ -414,7 +416,7 @@ else
 fi
 [ -z "$MISMATCH" ] || fatal "the receipt does not describe the declaration this run provisioned:$MISMATCH
        receipt: '$RECEIPT'
-       declared: symbol=$SYMBOL lineage=$LINEAGE generation=$GENERATION eraId=$ERA_ID
+       declared: symbol=$SYMBOL lineage=$LINEAGE generation=$GENERATION eraId=$ERA_ID eraStartSession=$ERA_START
        Whatever the provisioner did, it was not this provisioning. Refusing to report success."
 echo "$RECEIPT"
 if [ "$OUTCOME" = PROVISIONABLE ]; then
@@ -436,6 +438,7 @@ environmentLineageId: $LINEAGE
 bootstrapKind: $BOOTSTRAP_KIND
 generation: $R_GEN
 eraId: $R_ERA
+eraStartSession: "$R_ERA_START"
 ledgerTopicId: "$R_LEDGER"
 clusterId: "$R_CLUSTER"
 provisionedDigest: "$R_DIGEST"
