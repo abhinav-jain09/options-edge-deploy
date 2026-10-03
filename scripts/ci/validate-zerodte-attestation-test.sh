@@ -83,6 +83,14 @@ sed 's/^symbol: SPX$/symbol: spx/' "$P" > "$T/p.yaml";                          
 sed 's/^operator: abhinav.jain$/operator: abhinav.jain\nextra: 1/' "$P" > "$T/p.yaml"; expect "unknown key"                1 "unknown key: extra" -- $Z provisioning "$T/p.yaml"
 sed 's/^generation: 1$/generation: "1"/' "$P" > "$T/p.yaml";                         expect "a quoted integer"             1 "generation is an integer" -- $Z provisioning "$T/p.yaml"
 sed 's/    dependencyMode: EMBEDDED/    dependencyMode: COMPACTED/' "$P" > "$T/p.yaml"; expect "unknown dependency mode"  1 "dependencyMode is one of" -- $Z provisioning "$T/p.yaml"
+echo "--- the provisioning domains the Job judges the same way: the reserved topic names, the long bounds ---"
+PROV="$(cat deploy/zerodte/provisioning/dev.yaml)"
+pp() { printf '%s\n' "$2" > "$T/pp.yaml"; expect "$1" "$3" "$4" -- $Z provisioning "$T/pp.yaml"; }
+pp "the topic name ." "${PROV/  - topic: underlying.vix.price/  - topic: .}" 1 "'.' and '..' are reserved"
+pp "the topic name .." "${PROV/  - topic: underlying.vix.price/  - topic: ..}" 1 "'.' and '..' are reserved"
+pp "a generation at Long.MAX_VALUE" "${PROV/generation: 1/generation: 9223372036854775807}" 0 "\"generation\": 9223372036854775807"
+pp "a generation over Long.MAX_VALUE" "${PROV/generation: 1/generation: 9223372036854775808}" 1 "an integer out of range"
+pp "an eraId at Long.MAX_VALUE" "${PROV/eraId: 1/eraId: 9223372036854775807}" 0 "\"eraId\": 9223372036854775807"
 echo "--- the port's parser refusals, each by its own reason (the subset both readers share) ---"
 BASE0="$(cat "$T/base0.yaml")"; NL=$'\n'; SQ="'"
 pr() { printf '%s\n' "$2" > "$T/p.yaml"; expect "$1" 1 "$3" -- $Z verify "$T/p.yaml"; }
@@ -111,6 +119,7 @@ pr "a TAB after the list dash"         "${BASE0/  - id: /  -$'\t'id: }" "a TAB i
 TB=$'\t'
 pr "a TAB in a comment"                "# a${TB}tab$NL$BASE0" "a TAB is not accepted anywhere"
 pr "a TAB in a quoted scalar"          "${BASE0/name: dev/name: \"de$'\t'v\"}" "a TAB is not accepted anywhere"
+pr "a bare dash, a TAB and a comment"  "${BASE0/  - id: /  -${TB}# c$NL    id: }" "a TAB is not accepted anywhere"
 pr "a space before the colon"          "${BASE0/name: dev/name : dev}" "not a map entry"
 pr "a year-zero date (lexically)"      "${BASE0/date: \"2026-10-03\"/date: \"0000-01-01\"}" "lineages[].date is not in its domain"
 pr "a month-13 date (lexically)"       "${BASE0/date: \"2026-10-03\"/date: \"2026-13-03\"}" "lineages[].date is not in its domain"
