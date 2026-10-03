@@ -352,6 +352,8 @@ jobs:
         run: bash scripts/ci/validate-zerodte-attestation-test.sh
       - name: secrets-sync never degrades the 0DTE ledger key (the stage's exact shell block against a fake kubectl)
         run: bash scripts/ci/secrets-sync-ledger-key-test.sh
+      - name: zerodte corpus peer gate refuses every drift (the gate itself runs in the provisioning pipeline, where the peer is reachable)
+        run: bash scripts/ci/validate-zerodte-corpus-peer-test.sh
       - name: zerodte provision guard refuses every forbidden ref and SHA
         run: bash scripts/ci/zerodte-provision-guard-test.sh
       # The wrapper's receipt contract, driven against a fake kubectl through every outcome the provisioner can print.
