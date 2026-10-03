@@ -94,12 +94,16 @@ def _strip_comment(line):
 
 def _scalar(text):
     text = text.strip()
-    if text.startswith('"') and text.endswith('"') and len(text) >= 2:
+    if text.startswith('"'):   # a scalar that OPENS a quote must be a complete, valid scalar of that style (SnakeYAML refuses the rest)
+        if not (text.endswith('"') and len(text) >= 2):
+            raise Refused("an unterminated double-quoted scalar: %s" % text)
         body = text[1:-1]
         if "\\" in body or '"' in body:
             raise Refused("an escape inside a double-quoted scalar is not accepted: %s" % text)
         return Scalar(body, True)
-    if text.startswith("'") and text.endswith("'") and len(text) >= 2:
+    if text.startswith("'"):
+        if not (text.endswith("'") and len(text) >= 2):
+            raise Refused("an unterminated single-quoted scalar: %s" % text)
         body = text[1:-1].replace("''", "\x00")   # YAML's one single-quoted escape: '' is one apostrophe (SnakeYAML decodes it too)
         if "'" in body:
             raise Refused("a lone quote inside a single-quoted scalar is not accepted: %s" % text)
@@ -113,6 +117,11 @@ def _scalar(text):
     if ": " in text or text.endswith(":"):
         raise Refused("a plain scalar cannot contain ': ' (YAML reads a mapping there): %s" % text)
     return Scalar(text, False)
+
+
+def _separated(rest):
+    """A colon is a mapping indicator only when YAML separation follows it: a space, or the end of the line (`key:1` is a plain scalar)."""
+    return rest == "" or rest.startswith(" ")
 
 
 def load(text):
@@ -155,8 +164,8 @@ def load(text):
             if content.startswith("- "):
                 raise Refused("a list item where a map entry was expected: %s" % content)
             key, sep, rest = content.partition(":")
-            if not sep or not key or key != key.strip():
-                raise Refused("not a map entry: %s" % content)
+            if not sep or not key or key != key.strip() or not _separated(rest):
+                raise Refused("not a map entry (the separator is ': ' or a colon ending the line): %s" % content)
             if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
                 raise Refused("a key is a plain identifier (never quoted): %s" % key)
             if key in m:
@@ -182,7 +191,7 @@ def load(text):
             if ind != indent:
                 raise Refused("unexpected list indentation at: %s" % content)
             first = content[2:].strip()
-            if ":" in first and not (first.startswith('"') or first.startswith("'")):
+            if ":" in first and not (first.startswith('"') or first.startswith("'")) and _separated(first.partition(":")[2]):
                 key, _, rest = first.partition(":")
                 pos[0] += 1
                 item = {}
@@ -192,8 +201,8 @@ def load(text):
                 child = indent + 2
                 while pos[0] < len(lines) and lines[pos[0]][0] == child and not lines[pos[0]][1].startswith("- "):
                     k, sep, r = lines[pos[0]][1].partition(":")
-                    if not sep or not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", k):
-                        raise Refused("not a map entry: %s" % lines[pos[0]][1])
+                    if not sep or not _separated(r) or not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", k):
+                        raise Refused("not a map entry (the separator is ': ' or a colon ending the line): %s" % lines[pos[0]][1])
                     if k in item:
                         raise Refused("duplicate key %s" % k)
                     pos[0] += 1
@@ -243,6 +252,12 @@ def corpus_cases(d):
     if files != names:
         raise Refused("the corpus and expected.tsv disagree: only in the directory %s; only in the manifest %s" % (sorted(files - names), sorted(names - files)))
     return cases
+
+
+# ONE canonical corpus (Codex 7b r3): corpus.sha256 is regenerated from the fixtures, so by itself it only proves a copy is self-consistent.
+# CORPUS_DIGEST — the sha256 of corpus.sha256 — is a LITERAL pinned here AND in the Job's YamlSubsetCorpusTest: a change to the corpus must
+# change the literal in BOTH repositories (printed by --corpus-manifest), so a copy that drifted from the pinned version fails its runner.
+CORPUS_DIGEST = "daadd762c6aeac6b966d6df8e1eca904bdfe7cd6a3aa33668532cb8bb115c173"
 
 
 def corpus_manifest(d, cases):
@@ -542,14 +557,18 @@ def main(argv):
             d = argv[1] if len(argv) > 1 else "scripts/ci/fixtures/zerodte/corpus"
             cases = corpus_cases(d)
             if cmd == "--corpus-manifest":
+                manifest = corpus_manifest(d, cases)
                 with open(os.path.join(d, "corpus.sha256"), "w", encoding="utf-8") as f:
-                    f.write(corpus_manifest(d, cases))
-                print("wrote %s/corpus.sha256 (%d files)" % (d, len(cases) + 1))
+                    f.write(manifest)
+                print("wrote %s/corpus.sha256 (%d files); CORPUS_DIGEST = %s — pin this literal in zerodte_attestation.py AND in the Job's YamlSubsetCorpusTest, and copy the corpus verbatim" % (d, len(cases) + 1, hashlib.sha256(manifest.encode("utf-8")).hexdigest()))
                 return 0
             want = _read(os.path.join(d, "corpus.sha256"))
             got = corpus_manifest(d, cases)
             if want != got:
                 raise Refused("corpus.sha256 does not describe the corpus (a file changed, was added or removed without regenerating the manifest with --corpus-manifest; the Java copy verifies the SAME manifest)")
+            digest = hashlib.sha256(want.encode("utf-8")).hexdigest()
+            if digest != CORPUS_DIGEST:
+                raise Refused("the corpus is not the pinned canonical version: corpus.sha256 hashes to %s, CORPUS_DIGEST pins %s (a corpus change must update the literal in BOTH repositories)" % (digest, CORPUS_DIGEST))
             n = 0
             for name, kind, verdict in cases:
                 text = _read(os.path.join(d, name + ".yaml"))
