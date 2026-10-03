@@ -229,16 +229,22 @@ class StagingCheckTest(unittest.TestCase):
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn("STAGED BUT NOT DECLARED", r.stderr)
 
-    def test_a_properly_quoted_argument_is_accepted(self) -> None:
-        """The companion, in both quote characters: without it the case above would also be produced
-        by a check that refuses every quoted argument, and the job is free to quote its paths."""
+    def test_a_double_quoted_argument_is_accepted(self) -> None:
+        """The companion, without which the case above would also be produced by a check that
+        refuses every quoted argument.
+
+        DOUBLE QUOTES ONLY, and that is not a preference: the step is `sh '…'`, so a SINGLE-quoted
+        argument cannot appear inside it at all — an earlier version of this case inserted one and
+        was therefore exercising invalid Groovy rather than a form the job could use. The
+        double-quoted form is one this repository already uses elsewhere
+        (`--allow-ignored "*/target"` in another job)."""
         name = "vol-premium-open-reference-capture.py"
-        plain = f" --allow-ignored scripts/ops/archive/{name}"
-        for quote in ('"', "'"):
-            with self.subTest(quote=quote):
-                r = self._run(lambda t, q=quote: t.replace(
-                    plain, f" --allow-ignored {q}scripts/ops/archive/{name}{q}"))
-                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        r = self._run(lambda t: t.replace(
+            f" --allow-ignored scripts/ops/archive/{name}",
+            f' --allow-ignored "scripts/ops/archive/{name}"'))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("sh 'PERMITTED_SHA=", (ROOT / JF).read_text(),
+                      "the step is no longer a single-quoted sh, so the reasoning above has moved")
 
     def test_a_job_with_no_tree_verifier_says_so(self) -> None:
         """A guard that defers to a gate must notice the gate going away, rather than passing on a

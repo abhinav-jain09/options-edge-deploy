@@ -229,7 +229,10 @@ for f in $wanted $sourced; do
           # The sh step\047s own wrapping quote is removed first, since it is glued to the last
           # argument — `… <path>\047` — and is not part of it. Whatever quoting remains inside an
           # argument is the author\047s, so a value counts only if it IS the path, or the path
-          # wrapped in a matched pair.
+          # wrapped in a matched pair. In practice that means the unquoted form the job uses or a
+          # DOUBLE-quoted one, since the step is `sh \047…\047` and a single-quoted argument cannot
+          # appear inside it; the single-quote case is tolerated here for a step written with
+          # triple quotes, and is not something the suite can construct.
           kept = statement[i]
           sub(/^[[:space:]]*/, "", kept)
           if (kept ~ /^sh[[:space:]]+[\047"]/) {
