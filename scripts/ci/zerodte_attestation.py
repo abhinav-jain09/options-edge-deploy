@@ -99,11 +99,16 @@ def _strip_comment(line):
         else:
             out.append(c)
         i += 1
-    return "".join(out).rstrip()
+    return "".join(out).rstrip(" \r")
+
+
+def _ascii_strip(text):
+    """Only ASCII SPACES are lexical whitespace here (never Python's Unicode notion: a TAB or a NO-BREAK SPACE stays in the text and meets its domain)."""
+    return text.strip(" ")
 
 
 def _scalar(text):
-    text = text.strip()
+    text = _ascii_strip(text)
     if text.startswith('"'):   # a scalar that OPENS a quote must be a complete, valid scalar of that style (SnakeYAML refuses the rest)
         if not (text.endswith('"') and len(text) >= 2):
             raise Refused("an unterminated double-quoted scalar: %s" % text)
@@ -161,13 +166,13 @@ def load(text):
         if raw.startswith("---") or raw.startswith("...") or raw.startswith("%"):
             raise Refused("document markers (--- ...) and directives (%) are not accepted")
         s = _strip_comment(raw)
-        if s.strip() == "":
+        if _ascii_strip(s) == "":
             continue
         leading = re.match(r"^[ \t]*", s).group(0)
         if "\t" in leading:
             raise Refused("tabs in indentation")
         indent = len(leading)
-        lines.append((indent, s.strip()))
+        lines.append((indent, _ascii_strip(s)))
     pos = [0]
 
     def parse_block(indent):
@@ -191,14 +196,14 @@ def load(text):
             if content.startswith("- "):
                 raise Refused("a list item where a map entry was expected: %s" % content)
             key, sep, rest = content.partition(":")
-            if not sep or not key or key != key.strip() or not _separated(rest):
+            if not sep or not key or key != _ascii_strip(key) or not _separated(rest):
                 raise Refused("not a map entry (the separator is ': ' or a colon ending the line): %s" % content)
             if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
                 raise Refused("a key is a plain identifier (never quoted): %s" % key)
             if key in m:
                 raise Refused("duplicate key %s" % key)
             pos[0] += 1
-            if rest.strip() == "":
+            if _ascii_strip(rest) == "":
                 if pos[0] < len(lines) and lines[pos[0]][0] > indent:
                     m[key] = parse_block(lines[pos[0]][0])
                 elif pos[0] < len(lines) and lines[pos[0]][0] == indent and lines[pos[0]][1].startswith("- "):
@@ -217,14 +222,14 @@ def load(text):
                 break
             if ind != indent:
                 raise Refused("unexpected list indentation at: %s" % content)
-            first = content[2:].strip()
+            first = _ascii_strip(content[2:])
             if ":" in first and not (first.startswith('"') or first.startswith("'")) and _separated(first.partition(":")[2]):
                 key, _, rest = first.partition(":")
                 pos[0] += 1
                 item = {}
                 if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
                     raise Refused("a key is a plain identifier: %s" % key)
-                item[key] = _scalar(rest) if rest.strip() != "" else None
+                item[key] = _scalar(rest) if _ascii_strip(rest) != "" else None
                 child = indent + 2
                 while pos[0] < len(lines) and lines[pos[0]][0] == child and not lines[pos[0]][1].startswith("- "):
                     k, sep, r = lines[pos[0]][1].partition(":")
@@ -233,7 +238,7 @@ def load(text):
                     if k in item:
                         raise Refused("duplicate key %s" % k)
                     pos[0] += 1
-                    item[k] = _scalar(r) if r.strip() != "" else None
+                    item[k] = _scalar(r) if _ascii_strip(r) != "" else None
                 items.append(item)
             else:
                 pos[0] += 1
@@ -284,7 +289,7 @@ def corpus_cases(d):
 # ONE canonical corpus (Codex 7b r3): corpus.sha256 is regenerated from the fixtures, so by itself it only proves a copy is self-consistent.
 # CORPUS_DIGEST — the sha256 of corpus.sha256 — is a LITERAL pinned here AND in the Job's YamlSubsetCorpusTest: a change to the corpus must
 # change the literal in BOTH repositories (printed by --corpus-manifest), so a copy that drifted from the pinned version fails its runner.
-CORPUS_DIGEST = "ff34ffbb5fa776784446ceaefdd258976f773942af6e20c7887861b20d64c4f1"
+CORPUS_DIGEST = "461721b24958d6d844ea515584f4c33a0386313384006cc03e08fa074a8708d8"
 
 
 def corpus_manifest(d, cases):
@@ -557,7 +562,10 @@ def _base_text(base, path):
         if "does not exist" in err or "exists on disk, but not in" in err:
             return None
         raise Refused("the base version could not be read from git (%s): %s" % (base, err.strip()))
-    return r.stdout.decode("utf-8")
+    try:
+        return r.stdout.decode("utf-8")
+    except UnicodeDecodeError:
+        raise Refused("the base version (%s:%s) is not valid UTF-8" % (base, path))
 
 
 def main(argv):
