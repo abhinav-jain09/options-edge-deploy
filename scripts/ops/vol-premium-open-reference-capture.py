@@ -29,10 +29,13 @@ import argparse
 import datetime as dt
 import glob
 import gzip
+import hashlib
 import json
 import os
+import re
 import statistics
 import sys
+import zlib
 from zoneinfo import ZoneInfo
 
 ET = ZoneInfo("America/New_York")
@@ -41,6 +44,48 @@ ES = "underlying.es.price"
 BASIS = "spx.basis.state"
 # The admissibility window slot 0 is scored over, and the engine's own MAX_TICK_AGE_MS.
 WINDOW_S = 30
+# The file an input must carry before anything may be PUBLISHED from it. The wrapper writes it into
+# the pinned set once the archive verdict, the per-topic grades, the on-disk check, the
+# decompression check and the membership check have all passed. Line 1 is the session; line 2 is a
+# digest OVER THE INPUT ITSELF, which this script recomputes and compares. Computing a record never
+# needs it.
+GATE_MARKER = ".vp-open-reference-gate-ok"
+
+
+def input_digest(root: str, session: str) -> str:
+    """A fingerprint of exactly the files a capture of `session` from `root` will read.
+
+    WHY IT IS A DIGEST AND NOT A FLAG. The first version of this marker held a session date and
+    nothing else, so it authorised ANY content: `printf '2026-09-18\n' > .../.vp-…-gate-ok` turned
+    an arbitrary directory into a publishable one, and review was right to refuse that as evidence.
+    The marker now has to agree with the input, so a caller cannot authorise a directory by typing a
+    date into it. Making a matching fingerprint is not hard — this function is importable and will
+    do it for anyone who calls it — and the point is not difficulty: it is that nothing becomes
+    publishable by accident, and that doing it anyway is a deliberate act leaving a file that says
+    what was claimed.
+
+    WHAT IT CANNOT BE, said plainly: a security boundary. Anyone who can write this marker can also
+    write the ledger directly, delete it, or edit this file; on a host where the operator owns the
+    archive there is no artifact a script can produce that the operator cannot. What this does is
+    make the verified path the only EASY path and every way round it a deliberate, visible act. That
+    is the whole claim, and the earlier phrasing — "publication is bound to verified evidence" —
+    said more than any file-based check can.
+
+    Name, size and inode, over the three topics, sorted. Inode because the gate pins by hardlink, so
+    a pinned member is the archive's own inode and a retry re-pins the same one; size and name
+    because they are what a reader resolves. Not content: the gate has already read every byte, and
+    hashing it again here would double the work of the one step that is not free.
+    """
+    lines = []
+    for topic in (INDEX, ES, BASIS):
+        folder = os.path.join(root, topic, f"dt={session}")
+        for path in sorted(glob.glob(os.path.join(folder, "*.jsonl.gz"))):
+            try:
+                stat = os.stat(path)
+            except OSError:
+                continue
+            lines.append(f"{topic}/{os.path.basename(path)} {stat.st_size} {stat.st_ino}")
+    return hashlib.sha256("\n".join(lines).encode()).hexdigest()
 # The staleness limit an ES value must meet to stand for a moment in time - the same one the offset
 # pairing uses, because a reference and a pair are the same kind of claim.
 PAIR_MAX_AGE_S = 2
@@ -72,22 +117,143 @@ MIN_QUARTER_COVERED_FRACTION = 0.25
 SCORE_WARMUP_MINUTES = 5
 
 
+class TornMember(Exception):
+    """An archived member that stops decompressing partway through.
+
+    The usual cause is a member the archiver is still writing. The other is a truncation after it
+    finished — which, for a member the archiver has RECORDED, UnverifiedMember catches first, since
+    altered bytes fail the hash before anything tries to decompress them. So what reaches here is
+    the repairable case, and waiting is the right answer to it.
+
+    Letting it propagate as a traceback was safe — it happens before anything is published, so no
+    session is spent — but it told a reader nothing. Swallowing it would be worse: a torn file would
+    read as an empty one, and a session made of empty files would be recorded as a session the
+    market could not answer for. Named, raised, and turned into a message and an exit code by
+    main().
+    """
+
+
 def _records(root: str, topic: str, day: str):
+    """Every record of a topic for a session, from the archive.
+
+    READ IN ONE CALL, HASHED, THEN DECOMPRESSED FROM THE SAME BYTES. Streaming the file leaves an
+    interval between checking it and using it; this way the bytes that produce the record are the
+    bytes that were checked, with nothing in between. A member is a few hundred kilobytes.
+    """
     pattern = os.path.join(root, topic, f"dt={day}", "*.jsonl.gz")
     for path in sorted(glob.glob(pattern)):
+        name = os.path.basename(path)
         try:
-            handle = gzip.open(path, "rt", errors="replace")
+            with open(path, "rb") as handle:
+                blob = handle.read()
         except OSError:
             continue
-        with handle:
-            for line in handle:
-                brace = line.find("{")
-                if brace < 0:
-                    continue
-                try:
-                    yield json.loads(line[brace:])
-                except ValueError:
-                    continue
+        if _EXPECTED_SHA is not None:
+            recorded = _EXPECTED_SHA.get((topic, name))
+            if recorded is None:
+                raise UnverifiedMember(
+                    f"{name} is not in {topic}'s _manifest.jsonl for {day}, so there is nothing to "
+                    f"check its bytes against")
+            actual = hashlib.sha256(blob).hexdigest()
+            if actual != recorded:
+                raise UnverifiedMember(
+                    f"{name} does not match the sha256 the archiver recorded for it "
+                    f"({actual[:12]} vs {recorded[:12]})")
+        try:
+            text = gzip.decompress(blob).decode("utf-8", errors="replace")
+        except Exception as err:
+            raise TornMember(f"{name}: {err}") from err
+        for line in text.splitlines():
+            brace = line.find("{")
+            if brace < 0:
+                continue
+            try:
+                yield json.loads(line[brace:])
+            except ValueError:
+                continue
+
+
+# The fractional seconds of an ISO-8601 instant, and nothing else that can carry a dot: the
+# lookbehind pins the match to the seconds field, so a timezone offset or a date is never touched.
+_FRACTIONAL_SECONDS = re.compile(r"(?<=:\d\d)\.(\d+)")
+
+
+def _to_microseconds(raw: str) -> str:
+    """ISO-8601 allows more precision than `datetime` can hold, and less than it used to demand.
+
+    THIS IS THE BUG THAT MADE THE WHOLE LEDGER EMPTY. `underlying.spx.index.price` stamps
+    NANOSECONDS - `2026-09-24T10:24:38.933927550Z`, nine fractional digits - and
+    `datetime.fromisoformat` accepted only three or six of them before Python 3.11. The prod host
+    runs 3.9.16, so on 2026-09-24 it read 130 of 36,402 index rows and counted the other 36,272 as
+    "undated"; on 2026-10-02, 83 of 30,617. The index series is the one the offset is scored
+    against, so every session failed the coverage floor - 2026-10-02 was rejected for covering
+    "59 of 385 scoreable minutes (15%)" with a complete archive sitting on disk. Nothing was wrong
+    with the data and nothing was wrong with the floors.
+
+    THE SUITE COULD NOT SEE IT. The tests run on the Jenkins agent, which is Python 3.14, where
+    `fromisoformat` takes nanoseconds without complaint. A test that only asks whether a
+    nanosecond stamp parses is vacuous there - it passes with this function deleted. So the
+    contract under test is this STRING: the fraction handed to `fromisoformat` is exactly six
+    digits on every interpreter, which is falsifiable on all of them.
+
+    TRUNCATED, NEVER ROUNDED. Truncation moves an instant to or before the one recorded, so a tick
+    outside a window boundary can never be rounded across it; rounding `09:29:59.9999996` up would
+    manufacture an admissible open-window observation out of one that was not.
+
+    SHORT FRACTIONS ARE PADDED for the same reason the long ones are cut: 3.9 refused `.1` and
+    `.1234` as well, and padding with zeros is exact - `.1` and `.100000` are the same instant.
+    """
+    return _FRACTIONAL_SECONDS.sub(lambda m: "." + m.group(1)[:6].ljust(6, "0"), raw, count=1)
+
+
+class UnverifiedMember(Exception):
+    """A member whose bytes are not the ones the archiver recorded for it.
+
+    THIS IS WHY THE HASH IS HERE AND NOT IN THE GATE ALONE. The gate hashes each member as it pins
+    it, but a hardlink shares the ARCHIVE'S INODE: an in-place rewrite — a mistaken restore, a sync,
+    bit-rot — changes what the pin sees too, and it can land after the gate has finished. Name, size
+    and inode all survive such a rewrite, so the marker digest cannot see it either (review round
+    12).
+
+    The only statement about this with no interval in it is the one _records() makes: the bytes
+    PARSED are the bytes HASHED, read once, in one call, and checked against _manifest.jsonl before
+    they are parsed. Whatever happens to the file before or after, what produced the record was
+    checked.
+    """
+
+
+# The sha256 the archiver recorded for each member, as {(topic, basename): sha256}, or None for a
+# run that is not publishing. Module state rather than a parameter on every reader: the check has to
+# happen inside the one function that reads bytes, and threading it through _timed() and capture()
+# would put the decision — and the chance of forgetting it — at every call site instead of one.
+_EXPECTED_SHA = None
+
+
+def _manifest_shas(root: str, day: str):
+    """What the archiver wrote next to the members: one JSON line per published file, carrying its
+    sha256 over the gzip stream as committed."""
+    recorded = {}
+    for topic in (INDEX, ES, BASIS):
+        path = os.path.join(root, topic, f"dt={day}", "_manifest.jsonl")
+        try:
+            with open(path) as handle:
+                lines = handle.readlines()
+        except OSError:
+            return None, topic
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                # A partial last line is a run that died mid-append. It is not evidence either way,
+                # and a member it would have named is then simply unrecorded.
+                continue
+            name, digest = entry.get("file"), entry.get("sha256")
+            if isinstance(name, str) and isinstance(digest, str):
+                recorded[(topic, os.path.basename(name))] = digest
+    return recorded, None
 
 
 def _event_time(record: dict):
@@ -95,7 +261,7 @@ def _event_time(record: dict):
     if not isinstance(raw, str):
         return None
     try:
-        stamp = dt.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        stamp = dt.datetime.fromisoformat(_to_microseconds(raw).replace("Z", "+00:00"))
     except ValueError:
         return None
     # AN INSTANT WITHOUT AN OFFSET IS NOT AN INSTANT. `2026-09-18T13:35:00` with no Z and no
@@ -382,7 +548,102 @@ def main(argv=None) -> int:
         print(f"vol-premium-open-reference-capture: not a close time: {args.close_et}",
               file=sys.stderr)
         return 64
-    record = capture(args.archive_root, args.session, args.close_et)
+    # PUBLISHING MEANS EVERY BYTE READ IS CHECKED. _records() hashes each member against the
+    # archiver's own _manifest.jsonl in the same read that parses it, so the manifests have to be
+    # loaded BEFORE the first read — and the first read is the emptiness test just below, not the
+    # capture. A run that only computes a record reads the archive as it finds it, which is what the
+    # evidence script does and which claims nothing.
+    if args.out:
+        global _EXPECTED_SHA
+        _EXPECTED_SHA, missing_for = _manifest_shas(args.archive_root, args.session)
+        if _EXPECTED_SHA is None:
+            print(f"vol-premium-open-reference-capture: refusing to publish {args.session} — "
+                  f"{missing_for} has no _manifest.jsonl under {args.archive_root}, so the bytes "
+                  f"read cannot be checked against what the archiver recorded", file=sys.stderr)
+            return 66
+
+    def failed(kind: str, err: Exception) -> int:
+        print(f"vol-premium-open-reference-capture: {args.session} was NOT captured — {err}. "
+              f"{kind} Nothing was published.", file=sys.stderr)
+        # 75 for a member that no longer matches what the archiver recorded, which will not come
+        # back on its own; 66 for one that does not decompress, which most likely will.
+        return 75 if isinstance(err, UnverifiedMember) else 66
+
+    # NOTHING IS PUBLISHED FROM AN INPUT THAT HOLDS NO RECORDS. A ledger entry is permanent — the
+    # marker under .published/ refuses republication — so a record computed over an empty directory
+    # would spend the session on no evidence at all, and it looks exactly like a session the market
+    # genuinely could not answer for. That is not a hypothetical shape: the wrapper hands this a
+    # pinned directory, and anything that removes it between the gate and this run (a prune of the
+    # pinned sets, most obviously) leaves precisely an empty root.
+    #
+    # The test is RECORDS, not files. Written out rather than looped because
+    # test-archive-reset.sh 18y requires every call that takes a topic to pass one of the three
+    # DECLARED names, and a loop variable could hold anything.
+    def has_records(root: str, session: str) -> bool:
+        for _ in _records(root, INDEX, session):
+            return True
+        for _ in _records(root, ES, session):
+            return True
+        for _ in _records(root, BASIS, session):
+            return True
+        return False
+
+    try:
+        nothing_to_read = args.out and not has_records(args.archive_root, args.session)
+        record = capture(args.archive_root, args.session, args.close_et)
+    except UnverifiedMember as err:
+        return failed("The member on disk is not the one the archive verdict graded.", err)
+    except TornMember as err:
+        return failed("A member does not decompress to its end; the session stays claimable.", err)
+
+    if nothing_to_read:
+        print(json.dumps(record, sort_keys=True))
+        print(f"vol-premium-open-reference-capture: {args.session} was NOT published — "
+              f"{args.archive_root} holds no readable records for it, so there is nothing to "
+              f"claim a session on", file=sys.stderr)
+        return 65
+
+    # AND PUBLICATION IS BOUND TO AN INPUT THE GATE PREPARED. `--out` writes the permanent claim,
+    # and until now any directory that happened to satisfy the floors below could be published from
+    # — by hand, against the raw archive, with none of the wrapper's checks having run: no archive
+    # verdict, no per-topic grade, no decompression, no membership, no trading-day or close test.
+    # Convention is not a control (review round 8).
+    #
+    # So an input that may be published from must carry GATE_MARKER, which
+    # oe-vol-premium-open-capture.sh writes into the pinned set it has just verified, naming the
+    # session. Computing a record needs nothing; only claiming one does. A marker can of course be
+    # written by hand — that is then a deliberate, visible act with a file to point at, which is the
+    # difference between a mistake and a decision.
+    if args.out:
+        marker = os.path.join(args.archive_root, GATE_MARKER)
+        try:
+            with open(marker) as handle:
+                claimed_for = handle.readline().strip()
+                claimed_digest = handle.readline().strip()
+        except OSError:
+            print(f"vol-premium-open-reference-capture: refusing to publish {args.session} — "
+                  f"{args.archive_root} carries no {GATE_MARKER}, so it is not an input any gate "
+                  f"has verified. Run it through oe-vol-premium-open-capture.sh, which checks the "
+                  f"archive verdict and pins what it checked. Without --out this run would have "
+                  f"computed the record and published nothing.", file=sys.stderr)
+            return 77
+        if claimed_for != args.session:
+            print(f"vol-premium-open-reference-capture: refusing to publish {args.session} — the "
+                  f"{GATE_MARKER} in {args.archive_root} was written for {claimed_for!r}",
+                  file=sys.stderr)
+            return 77
+        # THE MARKER MUST AGREE WITH THE INPUT. Without this it authorised a session name and not a
+        # set of files, so the same marker stood for whatever happened to be in the directory — and
+        # a member added or removed after the gate ran would have been published from regardless.
+        actual_digest = input_digest(args.archive_root, args.session)
+        if claimed_digest != actual_digest:
+            print(f"vol-premium-open-reference-capture: refusing to publish {args.session} — the "
+                  f"{GATE_MARKER} in {args.archive_root} fingerprints a different set of files "
+                  f"than the directory now holds ({claimed_digest[:12] or 'none'} vs "
+                  f"{actual_digest[:12]}). Either the input changed after it was verified, or this "
+                  f"marker was not written for it.", file=sys.stderr)
+            return 77
+
     line = json.dumps(record, sort_keys=True)
     # STDOUT IS WHAT WAS PUBLISHED, not what this run computed. During a repair the two differ -
     # the claim is published and the recomputation is discarded - and printing the recomputation

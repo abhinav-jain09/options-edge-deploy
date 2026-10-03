@@ -60,7 +60,7 @@ pipeline {
     // StrikeArchiveReader.java is run by oe-archive-kafka.sh through the JDK source launcher (no build
     // step) for OE_COMMITTED_READ_TOPICS; it is data to the unit exactly like oe-topics.env, so it ships
     // and swaps with the archiver or not at all.
-    UNIT        = "oe-archive-kafka.sh StrikeArchiveReader.java oe-alert.sh oe-topics.env test-archive-reset.sh oe-archive.crontab oe-archive.crontab.predecessor oe-calibration-progress.sh oe_corpus_reader.py oe-push-validation-artifact.sh push-validation-artifact-test.sh calibration-targets.env market_calendar.py oe-archive-verify.sh oe-trading-day.sh oe-archive-daily.sh oe-archive-dev.sh ibkr-raw-retention.sh oe-archive-postgres.sh"
+    UNIT        = "oe-archive-kafka.sh StrikeArchiveReader.java oe-alert.sh oe-topics.env test-archive-reset.sh oe-archive.crontab oe-archive.crontab.predecessor oe-calibration-progress.sh oe_corpus_reader.py oe-push-validation-artifact.sh push-validation-artifact-test.sh calibration-targets.env market_calendar.py oe-archive-verify.sh oe-trading-day.sh oe-archive-daily.sh oe-archive-dev.sh ibkr-raw-retention.sh oe-archive-postgres.sh oe-vol-premium-open-capture.sh vol-premium-open-reference-capture.py"
     // Both of these are read by the shell in sh ''' blocks, which Groovy does NOT
     // interpolate — without them here the scripts would see an unset variable under `set -u`.
     TEST_IMAGE       = "${params.TEST_IMAGE}"
@@ -124,6 +124,12 @@ pipeline {
           mkdir -p "$WORKSPACE/.jenkins-tmp"
           rm -f "$WORKSPACE/.suite.out" "$WORKSPACE/.evaluator.out"
           cp scripts/jenkins/market_calendar.py scripts/ops/archive/market_calendar.py
+          # The open-reference capture lives in scripts/ops/ with the rest of the ops tooling and
+          # is tested by tests/test_vol_premium_open_reference_capture.py from there; the archive
+          # unit RUNS it, so it is staged beside the unit exactly as the calendar is. A crontab
+          # entry for a script the deploy does not install is a job that fails every evening.
+          cp scripts/ops/vol-premium-open-reference-capture.py \
+             scripts/ops/archive/vol-premium-open-reference-capture.py
           # In a container, NOT on the production host: rule.md forbids executing test steps there,
           # and the suite needs flock, which this Mac agent does not provide. The suite is
           # self-contained — a Kafka CLI shim and throwaway directories — so it reaches no broker,
@@ -132,6 +138,14 @@ pipeline {
           # ENTRYPOINT that ignores its arguments and exits 0 would otherwise turn this gate into a
           # rubber stamp. :ro on the mount: the container must not be able to edit the very files
           # this job goes on to install. The suite writes only under mktemp, never into /w.
+          # THE STAGING'S EFFECT, checked before the container starts. The two copies above are
+          # gitignored inside the mounted directory and this workspace is reused, so a copy left by
+          # an earlier build would make a staging step that never ran look like one that did. This
+          # asserts the files the suite is about to read exist and are byte-identical to the
+          # committed sources — which is the property that matters, and the one a text check of this
+          # file cannot establish.
+          bash scripts/ci/verify-archive-unit-staged.sh
+
           docker run --rm --entrypoint bash \
             -v "$WORKSPACE/scripts/ops/archive:/w:ro" -w /w "$TEST_IMAGE" \
             -c 'apt-get -qq update >/dev/null && apt-get -qq install -y curl >/dev/null && ./test-archive-reset.sh' \
@@ -168,7 +182,32 @@ pipeline {
           # lowered with it, so every archive deploy from 09-13 on was refused and nothing merged since reached .252.
           # Proof, run as this job runs it (docker python:3-slim, archive dir :ro): b8a08906 = 567 PASS, and main at
           # 819d98c9 = 566 PASS, ALL PASS, differing by that single line and no other.
-          [ "$ran" -ge 566 ] || { echo "only $ran assertions ran — the suite did not execute fully" >&2; exit 1; }
+          # 679, raised from 566 with section 18 and the four new section-15 assertions. Section 18 covers
+          # the vol-premium open-reference capture's wrapper, whose every gate protects an IRREVERSIBLE act
+          # (the capture claims a session under .published/ and refuses to republish it): oe-archive-verify
+          # must have GRADED the day — there is no other way in — and that verdict must be about THIS day
+          # and THIS environment, grade no topic twice, and grade every topic the capture reads with a
+          # status on the allow-list (OK or PARTIAL; CORRUPT is a fault, and MISSING/LEGACY/EMPTY/anything
+          # unrecognised waits) reaching past the close. Every file must be on disk NOW whatever the verdict
+          # says, and each is HARDLINKED into a pinned set — along with the archiver's own _manifest.jsonl
+          # — and checked AS PINNED against the sha256 that manifest records, because a verdict describes a
+          # moment that has passed. The READER checks it again, in the same read that parses it, which is
+          # the only statement with no interval in it: a hardlink shares the archive's inode, so an in-place
+          # rewrite reaches the pin too and keeps its name, size and inode. A member with no manifest line
+          # WAITS; one whose bytes do not match the line it has is refused; an absent manifest is a fault,
+          # and the reader will not publish without one. A cross-device pin is a fault rather than a copy, a
+          # pinned name resolving to a different file is a fault, a leftover from a run that died is a
+          # fault, and a retry may reuse only its own pin. Only then does the gate write the marker the
+          # capture requires for --out, carrying the session and a digest of the input that the capture
+          # recomputes. The pins accumulate by design, adding directory entries and no file data, with the
+          # total logged and an alert that repeats while it is over the threshold. The gated topic set is
+          # read off the READER: 18y derives every topic-taking function from its signature, refuses a call
+          # passing something the gate does not read, refuses an aliased reference, and refuses dynamic
+          # invocation. A non-trading day, a future date, an unreadable calendar and an uninstalled capture
+          # are all refused. 18z asserts the dependencies this container can see are usable; their
+          # byte-identity with the committed sources is scripts/ci/verify-archive-unit-staged.sh, which runs
+          # on the agent before this. Each gate is falsified by a mutation of the thing it names.
+          [ "$ran" -ge 679 ] || { echo "only $ran assertions ran — the suite did not execute fully" >&2; exit 1; }
 
           # The A5.8 evaluator's own suite. It builds its corpus, so it reaches no NAS and no broker.
           # Installing an evaluator whose acceptance predicate is untested would ship the one thing
@@ -270,7 +309,7 @@ EOSSH
         timeout(time: 10, unit: 'MINUTES') {
           sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp --allow-ignored scripts/ops/archive/market_calendar.py'
         }
-        sh 'scp -o BatchMode=yes scripts/ops/archive/oe-archive-kafka.sh scripts/ops/archive/StrikeArchiveReader.java scripts/ops/archive/oe-alert.sh scripts/ops/archive/oe-topics.env scripts/ops/archive/test-archive-reset.sh scripts/ops/archive/oe-archive.crontab scripts/ops/archive/oe-archive.crontab.predecessor scripts/ops/archive/oe-calibration-progress.sh scripts/ops/archive/oe_corpus_reader.py scripts/ops/archive/oe-push-validation-artifact.sh scripts/ops/archive/push-validation-artifact-test.sh scripts/ops/archive/calibration-targets.env scripts/jenkins/market_calendar.py scripts/ops/archive/oe-archive-verify.sh scripts/ops/archive/oe-trading-day.sh scripts/ops/archive/oe-archive-daily.sh scripts/ops/archive/oe-archive-dev.sh scripts/ops/archive/ibkr-raw-retention.sh scripts/ops/archive/oe-archive-postgres.sh "${PROD_HOST}:${STAGE_DIR}/"'
+        sh 'scp -o BatchMode=yes scripts/ops/archive/oe-archive-kafka.sh scripts/ops/archive/StrikeArchiveReader.java scripts/ops/archive/oe-alert.sh scripts/ops/archive/oe-topics.env scripts/ops/archive/test-archive-reset.sh scripts/ops/archive/oe-archive.crontab scripts/ops/archive/oe-archive.crontab.predecessor scripts/ops/archive/oe-calibration-progress.sh scripts/ops/archive/oe_corpus_reader.py scripts/ops/archive/oe-push-validation-artifact.sh scripts/ops/archive/push-validation-artifact-test.sh scripts/ops/archive/calibration-targets.env scripts/jenkins/market_calendar.py scripts/ops/archive/oe-archive-verify.sh scripts/ops/archive/oe-trading-day.sh scripts/ops/archive/oe-archive-daily.sh scripts/ops/archive/oe-archive-dev.sh scripts/ops/archive/ibkr-raw-retention.sh scripts/ops/archive/oe-archive-postgres.sh scripts/ops/archive/oe-vol-premium-open-capture.sh scripts/ops/vol-premium-open-reference-capture.py "${PROD_HOST}:${STAGE_DIR}/"'
         sh '''
           set -euo pipefail
 

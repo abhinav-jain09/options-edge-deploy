@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import datetime as dt
 import gzip
+import hashlib
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -40,12 +42,25 @@ def _iso(offset_s: float) -> str:
         "+00:00", "Z")
 
 
-def _write(root: Path, topic: str, rows: list) -> None:
-    folder = root / topic / f"dt={DAY}"
+def _write(root: Path, topic: str, rows: list, day: str = DAY) -> None:
+    folder = root / topic / f"dt={day}"
     folder.mkdir(parents=True, exist_ok=True)
-    with gzip.open(folder / f"{topic}.p0.0-1.jsonl.gz", "wt") as handle:
+    member = folder / f"{topic}.p0.0-1.jsonl.gz"
+    with gzip.open(member, "wt") as handle:
         for row in rows:
             handle.write(f"CreateTime:0\tPartition:0\tKEY\t{json.dumps(row)}\n")
+    _record_in_manifest(folder, member)
+
+
+def _record_in_manifest(folder: Path, member: Path) -> None:
+    """The archiver's own per-file line, carrying the sha256 over the gzip stream as committed. The
+    capture hashes every member it reads against this before parsing it, so a fixture without the
+    line is a member the archiver never published."""
+    raw = member.read_bytes()
+    with (folder / "_manifest.jsonl").open("a") as handle:
+        handle.write(json.dumps({"file": member.name,
+                                 "sha256": hashlib.sha256(raw).hexdigest(),
+                                 "bytes": len(raw)}) + "\n")
 
 
 def _index(offset_s: float, price: float, source="IBKR_INDEX", field="LAST", quality="LIVE"):
@@ -56,6 +71,16 @@ def _index(offset_s: float, price: float, source="IBKR_INDEX", field="LAST", qua
 def _es(offset_s: float, equivalent: float, state="PROJECTED"):
     return {"symbol": "ES", "spxEquivalent": equivalent, "spxBasisState": state,
             "eventTime": _iso(offset_s)}
+
+
+def _gate_marker(root: Path, session: str = DAY) -> None:
+    """What oe-vol-premium-open-capture.sh writes into the pinned set once the archive verdict, the
+    per-topic grades, the on-disk check, the decompression check and the membership check have
+    passed: the session, and a digest OF THE INPUT. The digest is what makes the marker evidence
+    about these files rather than a flag that authorises whatever the directory happens to hold —
+    writing a date into a directory used to be enough to publish from it."""
+    (root / orc.GATE_MARKER).write_text(
+        session + "\n" + orc.input_digest(str(root), session) + "\n")
 
 
 def _fixture(root: Path, *, index_rows=None, es_rows=None) -> None:
@@ -73,6 +98,9 @@ def _fixture(root: Path, *, index_rows=None, es_rows=None) -> None:
     _write(root, orc.INDEX, index_rows)
     _write(root, orc.ES, es_rows)
     _write(root, orc.BASIS, [{"level": 69.7, "levelKind": "MEASURED"}])
+    # A fixture is an input the gate has approved unless a case says otherwise: the cases about the
+    # marker write or withhold it themselves.
+    _gate_marker(root)
 
 
 class OpenReferenceCaptureTest(unittest.TestCase):
@@ -229,9 +257,12 @@ class OpenReferenceCaptureTest(unittest.TestCase):
         for topic, rows in ((orc.INDEX, idx), (orc.ES, es), (orc.BASIS, [{"level": 1.0}])):
             folder = self.tmp / topic / f"dt={other}"
             folder.mkdir(parents=True, exist_ok=True)
-            with gzip.open(folder / "x.jsonl.gz", "wt") as handle:
+            member = folder / "x.jsonl.gz"
+            with gzip.open(member, "wt") as handle:
                 for row in rows:
                     handle.write(f"CreateTime:0\tPartition:0\tK\t{json.dumps(row)}\n")
+            _record_in_manifest(folder, member)
+        _gate_marker(self.tmp, other)
         subprocess.run([sys.executable, str(SCRIPT), "--session", other,
                         "--archive-root", str(self.tmp), "--out", str(out)],
                        capture_output=True, check=True)
@@ -719,6 +750,319 @@ class OpenReferenceCaptureTest(unittest.TestCase):
     def test_the_record_carries_no_absolute_archive_path(self) -> None:
         _fixture(self.tmp)
         self.assertNotIn("archiveRoot", orc.capture(str(self.tmp), DAY))
+
+
+def _strict_pre_311_fraction(raw: str) -> bool:
+    """Would `datetime.fromisoformat` on the PRODUCTION HOST accept this string's fraction?
+
+    Before Python 3.11 it accepted a fractional-seconds field of exactly three or six digits and
+    raised ValueError on every other length. The prod host (192.168.100.252) runs 3.9.16 and the
+    Jenkins agent that runs this suite runs 3.14, where the rule is gone - so asserting the
+    property through `fromisoformat` itself proves nothing here. This mirrors the host's rule
+    explicitly, so the assertion is the same on every interpreter.
+    """
+    head, dot, rest = raw.partition(".")
+    if not dot:
+        return True
+    digits = ""
+    for char in rest:
+        if not char.isdigit():
+            break
+        digits += char
+    return len(digits) in (3, 6)
+
+
+class PublicationAuthorityTest(unittest.TestCase):
+    """`--out` writes a PERMANENT claim: the marker under .published/ refuses republication. So the
+    two questions here are what may be published from, and what may not be published at all."""
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp())
+
+    def _run(self, *extra, session: str = DAY):
+        out = self.tmp / "ledger"
+        return subprocess.run([sys.executable, str(SCRIPT), "--session", session,
+                               "--archive-root", str(self.tmp), "--out", str(out), *extra],
+                              capture_output=True, text=True), out
+
+    def test_an_input_no_gate_has_verified_cannot_claim_a_session(self) -> None:
+        """Until this existed, any directory satisfying the floors could be published from by hand,
+        against the raw archive, with NONE of the wrapper's checks having run — no archive verdict,
+        no per-topic grade, no decompression, no membership, no trading-day or close test.
+        Convention is not a control."""
+        _fixture(self.tmp)
+        (self.tmp / orc.GATE_MARKER).unlink()
+        r, out = self._run()
+        self.assertEqual(r.returncode, 77, r.stdout + r.stderr)
+        self.assertIn("not an input any gate has verified", r.stderr)
+        self.assertFalse((out / "accepted").exists(), "a record was published anyway")
+
+    def test_the_same_input_with_the_marker_does_publish(self) -> None:
+        """The companion: without it the case above would also be produced by a run that refuses
+        everything."""
+        _fixture(self.tmp)
+        r, out = self._run()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertTrue((out / "accepted" / f"{DAY}.json").is_file())
+
+    def test_a_marker_for_another_session_does_not_authorise_this_one(self) -> None:
+        """One pin, one session. A marker left from a different session is not evidence about this
+        one, and the pinned set the wrapper builds is per session."""
+        _fixture(self.tmp)
+        (self.tmp / orc.GATE_MARKER).write_text("2026-01-05\n")
+        r, out = self._run()
+        self.assertEqual(r.returncode, 77, r.stdout + r.stderr)
+        self.assertIn("was written for '2026-01-05'", r.stderr)
+        self.assertFalse((out / "accepted").exists())
+
+    def test_typing_a_session_into_a_directory_does_not_authorise_it(self) -> None:
+        """THE REVIEWER'S BYPASS, which the first version of this marker allowed in full:
+
+            printf '2026-09-18\\n' > /tmp/input/.vp-open-reference-gate-ok
+            python3 …capture.py --session 2026-09-18 --archive-root /tmp/input --out /tmp/ledger
+
+        A marker holding only a session date authorised whatever the directory happened to contain.
+        It now has to agree with the input. Producing a matching fingerprint is not hard —
+        `input_digest` is importable — and difficulty is not the point: nothing becomes publishable
+        by accident, and a bypass leaves a file saying what was claimed."""
+        _fixture(self.tmp)
+        (self.tmp / orc.GATE_MARKER).write_text(DAY + "\n")      # the date alone, as before
+        r, out = self._run()
+        self.assertEqual(r.returncode, 77, r.stdout + r.stderr)
+        self.assertIn("fingerprints a different set of files", r.stderr)
+        self.assertFalse((out / "accepted").exists())
+
+    def test_an_input_that_changed_after_it_was_verified_cannot_be_published(self) -> None:
+        """The same check, doing the work it exists for. A marker that authorised a session name and
+        not a set of files stood for whatever arrived afterwards — a member added to the pinned set
+        between the gate and the reader would have been published from without complaint."""
+        _fixture(self.tmp)
+        extra = self.tmp / orc.INDEX / f"dt={DAY}"
+        with gzip.open(extra / "late-arrival.jsonl.gz", "wt") as handle:
+            handle.write(f"CreateTime:0\tPartition:0\tK\t{json.dumps(_index(400, 7651.0))}\n")
+        r, out = self._run()
+        # Caught by the manifest rather than the digest, because a member that arrived after the
+        # archiver finished has no line to check its bytes against — earlier, and more specific.
+        self.assertEqual(r.returncode, 75, r.stdout + r.stderr)
+        self.assertIn("nothing to check its bytes against", r.stderr)
+        self.assertFalse((out / "accepted").exists())
+
+    def test_a_member_removed_after_verification_cannot_be_published_either(self) -> None:
+        """And the other direction, which is the prune race seen through the digest rather than
+        through the empty-input refusal: a pinned set that lost a member is not the set that was
+        verified."""
+        _fixture(self.tmp)
+        for path in (self.tmp / orc.ES / f"dt={DAY}").glob("*.jsonl.gz"):
+            path.unlink()      # the manifest line stays; only the member goes
+        r, out = self._run()
+        self.assertEqual(r.returncode, 77, r.stdout + r.stderr)
+        self.assertIn("fingerprints a different set of files", r.stderr)
+
+    def test_the_digest_is_over_the_input_and_not_a_constant(self) -> None:
+        """Without this, every case above would also pass against a digest that is the same string
+        for every directory."""
+        _fixture(self.tmp)
+        mine = orc.input_digest(str(self.tmp), DAY)
+        other = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, other, True)
+        _fixture(other)
+        self.assertNotEqual(mine, orc.input_digest(str(other), DAY),
+                            "two different inputs fingerprint the same")
+        self.assertEqual(mine, orc.input_digest(str(self.tmp), DAY), "it is not stable")
+
+    def test_a_record_is_still_computed_without_the_marker(self) -> None:
+        """Computing is not claiming. Reading the archive and printing what it says must stay free —
+        that is what the evidence script does — and only publication is bound."""
+        _fixture(self.tmp)
+        (self.tmp / orc.GATE_MARKER).unlink()
+        r = subprocess.run([sys.executable, str(SCRIPT), "--session", DAY,
+                            "--archive-root", str(self.tmp)], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertTrue(json.loads(r.stdout)["accepted"])
+
+    def test_an_empty_input_publishes_nothing(self) -> None:
+        """THE PRUNE RACE. The wrapper hands this a pinned directory it has just verified, and
+        anything that removes it in between — a prune of the pinned sets, which the wrapper's own
+        advice invites — leaves exactly an empty root. A record computed over one is
+        indistinguishable from a session the market could not answer for, and publishing it would
+        spend the session on no evidence at all."""
+        _fixture(self.tmp)
+        _gate_marker(self.tmp)
+        for topic in (orc.INDEX, orc.ES, orc.BASIS):
+            shutil.rmtree(self.tmp / topic)
+        r, out = self._run()
+        # Refused at the manifest load, which is earlier and says more than the emptiness test: a
+        # root with no manifests has nothing to check any byte against.
+        self.assertEqual(r.returncode, 66, r.stdout + r.stderr)
+        self.assertIn("has no _manifest.jsonl", r.stderr)
+        self.assertFalse((out / "accepted").exists())
+        self.assertFalse((out / "rejected").exists(), "an empty input was published as a rejection")
+
+    def test_a_root_with_manifests_but_no_members_publishes_nothing(self) -> None:
+        """The emptiness test in its own right, reached when the manifests are there and the members
+        are not — which is what a prune of the pinned set leaves if it takes only the members."""
+        _fixture(self.tmp)
+        _gate_marker(self.tmp)
+        for topic in (orc.INDEX, orc.ES, orc.BASIS):
+            for path in (self.tmp / topic / f"dt={DAY}").glob("*.jsonl.gz"):
+                path.unlink()
+        r, out = self._run()
+        self.assertIn(r.returncode, (65, 77), r.stdout + r.stderr)
+        self.assertFalse((out / "accepted").exists())
+        self.assertFalse((out / "rejected").exists())
+
+    def test_a_member_rewritten_after_the_archiver_recorded_it_is_refused(self) -> None:
+        """THE RACE THE PIN CANNOT CLOSE. A hardlink shares the archive's inode, so an in-place
+        rewrite — a mistaken restore, a sync, bit-rot — changes what the pin sees, and name, size and
+        inode all survive it, so the marker digest is blind to it too. The only statement with no
+        interval in it is the one `_records` makes: the bytes PARSED are the bytes HASHED, in one
+        read, checked against what the archiver recorded before they are parsed."""
+        _fixture(self.tmp)
+        _gate_marker(self.tmp)
+        for topic in (orc.INDEX, orc.ES, orc.BASIS):
+            for path in (self.tmp / topic / f"dt={DAY}").glob("*.jsonl.gz"):
+                path.write_bytes(b"not a gzip at all")
+        r, out = self._run()
+        self.assertEqual(r.returncode, 75, r.stdout + r.stderr)
+        self.assertIn("does not match the sha256 the archiver recorded", r.stderr)
+        self.assertFalse((out / "accepted").exists())
+        self.assertFalse((out / "rejected").exists(),
+                         "altered bytes were recorded as a session the market could not answer for")
+
+    def test_a_valid_but_different_member_is_refused_too(self) -> None:
+        """The same case without the convenience of a corrupt file: a VALID gzip of different
+        content, so nothing but the checksum can tell. This is what a restore from the wrong day
+        looks like."""
+        _fixture(self.tmp)
+        _gate_marker(self.tmp)
+        member = next((self.tmp / orc.INDEX / f"dt={DAY}").glob("*.jsonl.gz"))
+        with gzip.open(member, "wt") as handle:
+            handle.write(f"CreateTime:0\tPartition:0\tK\t{json.dumps(_index(400, 1.0))}\n")
+        r, out = self._run()
+        self.assertEqual(r.returncode, 75, r.stdout + r.stderr)
+        self.assertIn("does not match the sha256 the archiver recorded", r.stderr)
+
+    def test_a_member_the_archiver_never_recorded_is_refused(self) -> None:
+        """And the other half: a member with no manifest line has nothing to check its bytes
+        against. The archiver appends the line after publishing, so this is a file it has not
+        finished with — or one that arrived from somewhere else entirely."""
+        _fixture(self.tmp)
+        _gate_marker(self.tmp)
+        folder = self.tmp / orc.INDEX / f"dt={DAY}"
+        with gzip.open(folder / "unrecorded.jsonl.gz", "wt") as handle:
+            handle.write(f"CreateTime:0\tPartition:0\tK\t{json.dumps(_index(400, 7651.0))}\n")
+        r, out = self._run()
+        self.assertEqual(r.returncode, 75, r.stdout + r.stderr)
+        self.assertIn("nothing to check its bytes against", r.stderr)
+        self.assertFalse((out / "accepted").exists())
+
+    def test_a_session_that_genuinely_fails_is_still_published_as_rejected(self) -> None:
+        """The companion that stops the two cases above being satisfied by a reader that never
+        publishes a rejection: a session with real records and no ES reference IS recorded, because
+        silence would make the >=55 count look better than the data."""
+        rows = [_es(-400, 7647.0)] + [_es(300 + 60 * i, 7647.0) for i in range(MINUTES)]
+        _fixture(self.tmp, es_rows=rows)
+        r, out = self._run()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertTrue((out / "rejected" / f"{DAY}.json").is_file(), r.stdout + r.stderr)
+
+
+class NanosecondTimestampTest(unittest.TestCase):
+    """`underlying.spx.index.price` stamps NANOSECONDS, and that emptied the entire ledger.
+
+    Measured on the prod archive before the fix: of 36,402 index rows on 2026-09-24, 130 parsed
+    and 36,272 were counted "undated"; 83 of 30,617 on 2026-10-02. The offset is scored against
+    the index, so every session failed the coverage floor - 2026-10-02 was rejected for covering
+    "59 of 385 scoreable minutes (15%)" against a complete archive. After the fix the same eight
+    archived sessions go from 0 accepted to 6, with 23,586-30,027 pairs instead of 42-103.
+    """
+
+    def test_the_fraction_handed_to_the_parser_is_always_six_digits(self) -> None:
+        """THE LOAD-BEARING CASE, and the only one of these that can fail on this interpreter.
+
+        Nine digits is what the index feed actually sends; one and four are lengths 3.9 also
+        refused; three is what ES sends and must survive unchanged in VALUE. Deleting
+        `_to_microseconds` makes every row of this table red on 3.9 and on 3.14 alike.
+        """
+        for raw, expected in [
+                ("2026-09-24T10:24:38.933927550Z", "2026-09-24T10:24:38.933927Z"),
+                ("2026-09-24T22:19:30.118Z", "2026-09-24T22:19:30.118000Z"),
+                ("2026-09-24T10:24:38.1Z", "2026-09-24T10:24:38.100000Z"),
+                ("2026-09-24T10:24:38.1234Z", "2026-09-24T10:24:38.123400Z"),
+                ("2026-09-24T10:24:38Z", "2026-09-24T10:24:38Z"),
+        ]:
+            with self.subTest(raw=raw):
+                got = orc._to_microseconds(raw)
+                self.assertEqual(got, expected)
+                self.assertTrue(_strict_pre_311_fraction(got),
+                                f"the prod host's 3.9 would refuse {got!r}")
+
+    def test_the_prod_rows_as_archived_are_what_fails_without_the_fix(self) -> None:
+        """Not an invented shape: both strings are copied from
+        /mnt/nas/optionsedge/kafka/prod/<topic>/dt=2026-09-24/. The index row is the one 3.9
+        refuses; the ES row is the one it accepts, which is why ES looked healthy and the index
+        looked absent."""
+        index_row = "2026-09-24T10:24:38.933927550Z"
+        es_row = "2026-09-24T22:19:30.118Z"
+        self.assertFalse(_strict_pre_311_fraction(index_row),
+                         "if the host could parse this, there was never a bug to fix")
+        self.assertTrue(_strict_pre_311_fraction(es_row))
+        self.assertTrue(_strict_pre_311_fraction(orc._to_microseconds(index_row)))
+
+    def test_a_long_fraction_is_truncated_and_never_rounded(self) -> None:
+        """Rounding would manufacture an observation. `09:29:59.9999996` is OUTSIDE a window that
+        ends at 09:30:00.000000 by six tenths of a microsecond... and rounding it up would land it
+        exactly ON the boundary, which the capture accepts as an admissible open-window tick. The
+        instant must only ever move earlier."""
+        got = orc._to_microseconds("2026-09-24T09:29:59.9999996Z")
+        self.assertEqual(got, "2026-09-24T09:29:59.999999Z")
+        self.assertLess(orc._event_time({"eventTime": "2026-09-24T09:29:59.9999996Z"}),
+                        dt.datetime(2026, 9, 24, 9, 30, tzinfo=dt.timezone.utc))
+
+    def test_a_timezone_offset_is_not_eaten_by_the_normaliser(self) -> None:
+        """The falsifier here is the OBVIOUS fix: `raw[:26] + "Z"`, slicing the string to 26
+        characters. It passes every case above and silently relabels this instant as UTC, moving
+        it five and a half hours and into the previous New York session."""
+        self.assertEqual(orc._to_microseconds("2026-09-24T10:24:38.933927550+05:30"),
+                         "2026-09-24T10:24:38.933927+05:30")
+        stamp = orc._event_time({"eventTime": "2026-09-24T10:24:38.933927550+05:30"})
+        self.assertEqual(stamp.utcoffset(), dt.timedelta(hours=5, minutes=30))
+        self.assertEqual(stamp.astimezone(ET).date(), dt.date(2026, 9, 24))
+
+    def test_an_unparseable_stamp_is_still_refused(self) -> None:
+        """The normaliser must not have widened what counts as a time. A naive sub that then let
+        anything through would make `undated` unreachable, and a row whose time cannot be
+        established is evidence about the archive."""
+        for raw in ["not a time", "2026-09-24", "2026-09-24T10:24:38.933927550",
+                    "2026-13-45T99:99:99.123Z", ""]:
+            with self.subTest(raw=raw):
+                self.assertIsNone(orc._event_time({"eventTime": raw}))
+
+    def test_a_nanosecond_index_session_is_captured_end_to_end(self) -> None:
+        """The regression guard. VACUOUS ON THIS AGENT and stated as such: Python 3.11+ parses
+        nanoseconds natively, so this passes with `_to_microseconds` deleted here, and only bites
+        on the host's 3.9. It is kept because it is the shape production actually archives - the
+        index at nine digits, ES at three - and because the string cases above cannot show that
+        the whole pipeline agrees.
+        """
+        def nanos(offset_s: float) -> str:
+            """The archived shape: six digits of microseconds plus three more. `_iso` omits the
+            fraction entirely on a whole second, so the digits are built here rather than
+            appended to whatever it happened to produce."""
+            stamp = (OPEN + dt.timedelta(seconds=offset_s)).astimezone(dt.timezone.utc)
+            return f"{stamp.strftime('%Y-%m-%dT%H:%M:%S')}.{stamp.microsecond:06d}550Z"
+
+        index_rows = [dict(_index(-302, 7650.0), eventTime=nanos(-302))] + [
+            dict(_index(300 + 60 * i, 7650.0 + i / 10.0), eventTime=nanos(300 + 60 * i))
+            for i in range(MINUTES)]
+        _fixture(self.tmp, index_rows=index_rows)
+        got = orc.capture(str(self.tmp), DAY)
+        self.assertEqual(got["indexUndatedRecords"], 0)
+        self.assertTrue(got["accepted"], got["rejectedBecause"])
+        self.assertEqual(got["offsetCoveredMinutes"], MINUTES)
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp())
 
 
 if __name__ == "__main__":

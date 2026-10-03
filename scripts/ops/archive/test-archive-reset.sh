@@ -954,10 +954,20 @@ want "  and it is America/New_York" "America/New_York" "$(grep '^CRON_TZ=' "$cro
 above=$(awk -v tz="$tz_at" 'NR < tz && $1 ~ /^[0-9,]+$/ && $2 ~ /^[0-9,]+$/' "$crontab_file")
 want "  no fixed-time entry sits ABOVE it (it would run at Madrid time)" "" "$above"
 n_below=$(awk -v tz="$tz_at" 'NR > tz && $1 ~ /^[0-9,]+$/ && $2 ~ /^[0-9,]+$/' "$crontab_file" | grep -c .)
-want "  every active fixed-time entry (daily 17:10, es4 17:01, verify x2, progress x3) is below it" 7 "$n_below"
+want "  every active fixed-time entry (daily 17:10, es4 17:01, verify x2, progress x3, vol-premium open-reference x2) is below it" 9 "$n_below"
 es4v_at=$(grep -n '^5 20 \* \* 1-5 ENV=es4 ' "$crontab_file" | cut -d: -f1)
 want "  the new es4 verification entry in particular" yes "$([ -n "$es4v_at" ] && [ "$es4v_at" -gt "$tz_at" ] && echo yes || echo no)"
 has  "  the header names the host's cron, which is what makes CRON_TZ work" "cronie" "$(head -n "$tz_at" "$crontab_file")"
+# The vol-premium open-reference entries in particular. BOTH of them: the capture claims a session
+# permanently under .published/, so the 17:30 run must have a retry behind it for the evenings the
+# archive is not complete yet — one entry alone silently drops those sessions from the >=55 count.
+vp_at=$(grep -n '/home/abhinav/oe-ops/oe-vol-premium-open-capture.sh' "$crontab_file" | cut -d: -f1)
+vp_n=$(printf '%s\n' "$vp_at" | grep -c .)
+want "  the open-reference capture is scheduled TWICE (17:30 and its retry)" 2 "$vp_n"
+vp_below=yes
+for _l in $vp_at; do [ "$_l" -gt "$tz_at" ] || vp_below=no; done
+want "  and both sit below CRON_TZ, so 17:30 is New York and not Madrid" yes "$vp_below"
+has  "  the first run is after the 17:10 daily archive, not before it" "30 17 * * 1-5" "$(cat "$crontab_file")"
 
 # ================= 16. re-review round 3: source IDENTITY (P1) and VALIDATED discovery (P2) ===============
 # P1: an offset names a position in ONE log. The reviewer ran round 2's checkpoint-selection and idle branches: a
@@ -2208,6 +2218,767 @@ for vt in options.spx.vol-premium.ivrv options.spx.vol-premium.events options.sp
   want "17f $vt: read by the committed reader, never by the console consumer" "1 0" \
        "$(grep -c "^reader $vt p0 from=0 " "$CALLS") $(grep -c "^console $vt " "$CALLS")"
 done
+
+# ================= 18. the vol-premium open-reference capture's own gates ================================
+# The capture CLAIMS a session permanently (a marker under .published/, and a republish is refused), so
+# every gate below protects a session from being spent on an archive that could not answer for it, and
+# every one of them FAILS CLOSED. Two kinds of condition exit 0 without capturing, and they are
+# different: one positively established as RETRYABLE (the day is not graded yet, a member is still
+# being written), where the retry run is expected to succeed; and one positively established as NOT A
+# SESSION AT ALL (a weekend, a holiday), where there is nothing to retry and nothing to lose. Every
+# other outcome is a fault with an alert and a non-zero exit. The capture's own logic is tested in
+# tests/test_vol_premium_open_reference_capture.py; what is tested here is the WRAPPER the crontab
+# invokes, which that suite never sees.
+VPC="$PWD/oe-vol-premium-open-capture.sh"
+vp_tmp="$T/vp"; mkdir -p "$vp_tmp"
+# A capture stub, so these cases are about the WRAPPER's decisions and not about the archive reader:
+# it records that it was called, with what, and publishes a minimal record.
+cat > "$vp_tmp/stub-capture.py" <<'STUB'
+import json, os, sys
+
+# The gate reads the topic set off the READER by parsing these three assignments, so the stub
+# declares them exactly as the real capture does.
+INDEX = "underlying.spx.index.price"
+ES = "underlying.es.price"
+BASIS = "spx.basis.state"
+
+
+def input_digest(root, session):
+    """The gate fingerprints the pinned set with the READER's own function — one definition at both
+    ends — so the stub offers one. Its value does not matter: the stub does not validate it."""
+    return "stub-digest"
+
+
+def main():
+    args = dict(zip(sys.argv[1::2], sys.argv[2::2]))
+    with open(os.environ["VP_CALLS"], "a") as handle:
+        handle.write(f"called session={args.get('--session')} close={args.get('--close-et')}\n")
+    # The ROOT the wrapper hands the reader is the claim's evidence, so the stub records what it was
+    # pointed at and what was there — in a file of its own, because every other case reads the call
+    # log back whole and a second line there changes what they see.
+    root = args.get("--archive-root") or ""
+    seen = []
+    for base, _dirs, names in os.walk(root):
+        # Members only: the gate marker sits at the root of the pinned set and is authority, not input.
+        seen += [name for name in sorted(names) if name.endswith(".jsonl.gz")]
+    with open(os.environ["VP_CALLS"] + ".roots", "a") as handle:
+        handle.write(f"root={root} files={len(seen)}\n")
+    out = args.get("--out")
+    if out:
+        os.makedirs(os.path.join(out, "accepted"), exist_ok=True)
+        with open(os.path.join(out, "accepted", args["--session"] + ".json"), "w") as handle:
+            handle.write(json.dumps({"session": args["--session"], "accepted": True}) + "\n")
+    print(json.dumps({"session": args.get("--session"), "accepted": True}, sort_keys=True))
+
+
+# IMPORTED FOR input_digest, RUN FOR EVERYTHING ELSE. Without this guard the gate's import of the
+# reader would record a call and write a record, which is how the first attempt at reading the topic
+# set off the reader turned forty assertions red.
+if __name__ == "__main__":
+    main()
+STUB
+# The readiness gate reads every byte of every file the capture will read, so a fixture file has to be
+# a REAL gzip member — an empty file passes gzip.open() and fails the first read, which is the torn
+# case, not the ready one.
+vp_gz() { printf 'CreateTime:0\tPartition:0\tSPX\t{"a":1}\n' | gzip -c > "$1"; }
+# One manifest line per member, carrying the sha256 the archiver would have recorded when it
+# published that file. $1=the dt= folder, $2=the member's name. Appended, as the archiver appends.
+vp_manifest() {
+  printf '{"file":"%s","sha256":"%s","bytes":%s,"topic":"x","dt":"y"}\n' \
+         "$2" "$(sha256sum "$1/$2" | cut -d' ' -f1)" "$(wc -c < "$1/$2" | tr -d ' ')" \
+         >> "$1/_manifest.jsonl"
+}
+VP_TOPICS="underlying.spx.index.price underlying.es.price spx.basis.state"
+# $1=session  $2=archive-run stamp (YYYYMMDDTHHMMSSZ), empty for no files at all
+vp_archive() {
+  local root="$vp_tmp/archive/$1" d t
+  rm -rf "$root" "$vp_tmp/ledger-$1/.pinned/$1"
+  d=$(echo "$1" | tr -d -)
+  for t in $VP_TOPICS; do
+    mkdir -p "$root/$t/dt=$1"
+    # The archiver's own per-file record, which the gate hashes each pinned member against. A
+    # fixture without it is a member the archiver never published, and the gate waits for it.
+    [ -n "${2:-}" ] && { vp_gz "$root/$t/dt=$1/$t.p0.0-1.dt$d.$2.jsonl.gz"; vp_manifest "$root/$t/dt=$1" "$t.p0.0-1.dt$d.$2.jsonl.gz"; }
+  done
+  mkdir -p "$root/_manifest/completeness"
+  echo "$root"
+}
+# oe-archive-verify.sh's own per-session verdict, which is the authoritative "the archiver is done
+# with this day". $2 = max_event_time for every topic; $3 = status (default OK).
+vp_verdict() { # $1=session $2=max_event_time $3=status
+  local root="$vp_tmp/archive/$1" t first=1
+  { printf '{"dt":"%s","env":"prod","topics":[' "$1"
+    for t in $VP_TOPICS; do
+      [ "$first" = 1 ] || printf ','
+      first=0
+      printf '{"topic":"%s","status":"%s","records":1000,"max_event_time":"%s","reasons":["offset discontinuity (1)"]}' \
+             "$t" "${3:-OK}" "$2"
+    done
+    printf ']}\n'
+  } > "$root/_manifest/completeness/$1.json"
+}
+# An arbitrary verdict body, for the cases about the verdict's own integrity rather than about the
+# grades inside it. $1=session, $2=the complete JSON.
+vp_verdict_raw() { printf '%s\n' "$2" > "$vp_tmp/archive/$1/_manifest/completeness/$1.json"; }
+vp_entry() { printf '{"topic":"%s","status":"%s","records":1000,"max_event_time":"%s"}' "$1" "$2" "$3"; }
+vp_run() { # $1=session $2=archive root ; the rest are extra env assignments
+  local session="$1" root="$2"; shift 2
+  env VP_CALLS="$vp_tmp/calls" CAPTURE="$vp_tmp/stub-capture.py" ARCHIVE_ROOT="$root" \
+      COMPLETENESS_DIR="$root/_manifest/completeness" \
+      LEDGER="$vp_tmp/ledger-$session" LOG="$vp_tmp/log-$session" "$@" bash "$VPC" "$session" 2>&1
+}
+vp_rc() { vp_run "$@" >/dev/null 2>&1; echo $?; }
+: > "$vp_tmp/calls"
+
+# ---- 18z. THE DEPENDENCIES THE SUITE ITSELF READS ARE PRESENT AND USABLE, asserted from inside the
+# container the job mounts the unit directory into. An absent staging step reddens these, and 18a
+# with them, because the close can no longer be resolved.
+#
+# WHAT THIS IS NOT, since the claim was once written too strongly: a check that THIS BUILD staged
+# them. Jenkins reuses workspaces and both copies are gitignored here, so a copy an earlier build
+# left behind satisfies these assertions. Byte-identity with the committed source is the property
+# that actually matters, and it is scripts/ci/verify-archive-unit-staged.sh that asserts it, on the
+# agent, after staging and before this container starts — tested by effect in
+# tests/test_archive_unit_completeness_validator.py. What is tested HERE is usability: the capture
+# parses and declares its topics, and the calendar answers for a half day, which is the question the
+# close gate puts to it.
+want "18z the capture is installed beside the unit" yes "$([ -r vol-premium-open-reference-capture.py ] && echo yes || echo no)"
+want "  and declares the three topics the gate reads off it" "underlying.spx.index.price underlying.es.price spx.basis.state" \
+     "$(python3 - <<'TOPICS' 2>/dev/null
+import ast, pathlib
+tree = ast.parse(pathlib.Path("vol-premium-open-reference-capture.py").read_text())
+found = {}
+for node in tree.body:
+    if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant):
+        for target in node.targets:
+            if isinstance(target, ast.Name) and target.id in ("INDEX", "ES", "BASIS"):
+                found[target.id] = node.value.value
+print(" ".join(found.get(name, "?") for name in ("INDEX", "ES", "BASIS")))
+TOPICS
+)"
+want "  the calendar is installed beside the unit" yes "$([ -r market_calendar.py ] && echo yes || echo no)"
+want "  and answers for a half day, which is what the close gate asks it" 13:00 \
+     "$(CALENDAR_DIR=. python3 - <<'CAL' 2>/dev/null
+import os, sys
+from datetime import date
+sys.path = [entry for entry in sys.path if entry not in ("", ".", os.getcwd())]
+sys.path.insert(0, ".")
+from market_calendar import MarketCalendar
+print(MarketCalendar().close_time(date(2026, 7, 2)).strftime("%H:%M"))
+CAL
+)"
+
+# ---- 18y. NO TOPIC MAY ENTER THE READER UNGATED. The gate reads INDEX, ES and BASIS off the
+# capture, and reading three names cannot discover a fourth input: a new constant, or a topic
+# written inline at a call site, would be read by the capture and checked by nothing.
+#
+# A SHAPE TEST WAS THE WRONG INSTRUMENT. The first version matched string literals against a guess
+# at what a topic name looks like, and review broke it both ways: Kafka permits `_` and upper case,
+# so `underlying.spx_index.price` passed through as an ungated input, while an ordinary dotted
+# string such as a hostname was caught as a topic. A topic enters the reader at a CALL SITE, so
+# that is what this examines, and it needs no guess.
+#
+# AND IT MUST BE A DIRECT, STATIC CALL. `reader = _records` then `reader(root, FOURTH, day)` is an
+# alias whose callee name is different, so nothing below would look at it; and
+# `getattr(module, "_records")(root, FOURTH, day)` has no callee name at all. Any mention of a
+# topic-taking function that is not a callee is refused rather than read as absent, the capture may
+# not call getattr/eval/exec/__import__/globals/locals/vars, and it may not hold a reader's name as
+# a string. Each of those is an indirection this cannot see through, and the answer to one of those
+# is a refusal, never silence.
+#
+# AND THE SET OF TOPIC-TAKING FUNCTIONS IS DERIVED, NOT LISTED. It was a literal map from name to
+# argument position, which review was right to refuse twice over: deleting an entry left the
+# assertion green, so the test was not falsified by removing the thing it names, and a helper added
+# later would not have been covered. A function takes a topic if it has a parameter CALLED topic,
+# which is a fact about the reader; the position comes from the same signature. The derivation is
+# itself asserted, because one that silently found nothing would make every call site pass.
+#
+# AND THE ARCHIVE IS GLOBBED IN ONLY TWO PLACES, which is the structural half of this. Following
+# functions that take a topic cannot see a NEW reader that takes none — `def _read_nq(root, day)`
+# globbing a fourth topic directly would pass every rule below (review round 13). So the set of
+# functions that call glob.glob is pinned: _records, which is the checked reader, and input_digest,
+# which only stats what _records will read. A new reader then has to go through _records, and
+# _records takes a topic.
+#
+# WHAT THIS STILL DOES NOT COVER, said rather than implied: a reader that builds a path without
+# globbing. That is not reachable by accident — it means writing a different kind of reader than
+# either of the two here — and it is named instead of being claimed away.
+want "18y every topic entering the reader is one the gate reads off it" "ok _records:1 _timed:1" \
+     "$(python3 - <<'CALLSITES' 2>&1
+import ast, pathlib
+
+tree = ast.parse(pathlib.Path("vol-premium-open-reference-capture.py").read_text())
+declared = {target.id for node in tree.body
+            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant)
+            for target in node.targets
+            if isinstance(target, ast.Name) and target.id in ("INDEX", "ES", "BASIS")}
+
+# Every function whose signature says it takes a topic, and where in the call that argument sits.
+takes_a_topic = {}
+for node in ast.walk(tree):
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        names = [a.arg for a in node.args.args]
+        if "topic" in names:
+            takes_a_topic[node.name] = names.index("topic")
+
+# Which function each call sits in, so a forwarded parameter can be told from a smuggled name.
+# Module-scope calls get an empty parameter set, which is the stricter reading and was missing
+# before: the earlier version only walked function bodies.
+enclosing = {}
+for node in ast.walk(tree):
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        parameters = {a.arg for a in node.args.args} | {a.arg for a in node.args.kwonlyargs}
+        for inner in ast.walk(node):
+            enclosing.setdefault(id(inner), parameters)
+
+problems = []
+
+# NOTHING MAY REACH A READER BY NAME AT RUNTIME. `getattr(module, "_records")(root, FOURTH, day)`
+# contains no Name node used as a callee, so every rule below skips it and the fourth topic arrives
+# ungated (review round 7). A reader this cannot read statically is one it must refuse, so the
+# capture may not call getattr, eval, exec or __import__ at all, and may not hold a string equal to
+# the name of a function that takes a topic.
+NO_DYNAMIC_CALLS = ("getattr", "eval", "exec", "__import__", "globals", "locals", "vars")
+for node in ast.walk(tree):
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) \
+            and node.func.id in NO_DYNAMIC_CALLS:
+        problems.append(f"{node.func.id}() is called, so a reader could be reached by name at "
+                        f"runtime and no static rule here would see it")
+    if isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value in takes_a_topic:
+        problems.append(f"the name {node.value!r} appears as a string, which is how a reader is "
+                        f"reached without being called")
+
+# A TOPIC-TAKING FUNCTION MAY ONLY BE CALLED DIRECTLY. `reader = _records` followed by
+# `reader(root, FOURTH, day)` passed everything below — the alias is a different callee name, so no
+# call site was examined and a fourth input reached the record unchecked (review round 6). Any
+# mention of one of these names that is not the callee of a call is an indirection this cannot see
+# through, so it is refused instead of being read as absent.
+for node in ast.walk(tree):
+    if isinstance(node, ast.Name) and node.id in takes_a_topic:
+        parent_calls_it = any(
+            isinstance(other, ast.Call) and other.func is node for other in ast.walk(tree))
+        if not parent_calls_it:
+            problems.append(f"{node.id} is referred to without being called, so where its topic "
+                            f"comes from cannot be read here")
+
+for node in ast.walk(tree):
+    if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+        continue
+    where = takes_a_topic.get(node.func.id)
+    if where is None:
+        continue
+    parameters = enclosing.get(id(node), set())
+    if len(node.args) <= where:
+        problems.append(f"{node.func.id} called with no topic argument")
+        continue
+    argument = node.args[where]
+    if isinstance(argument, ast.Name) and argument.id in declared | parameters:
+        continue
+    shown = repr(argument.value) if isinstance(argument, ast.Constant) else ast.dump(argument)
+    problems.append(f"{node.func.id} is passed {shown}, which the gate does not read")
+
+# WHERE THE ARCHIVE IS GLOBBED, pinned by name, so a new reader cannot appear beside _records
+# without this saying so.
+globbed_in = set()
+for node in ast.walk(tree):
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        for inner in ast.walk(node):
+            if isinstance(inner, ast.Call) and isinstance(inner.func, ast.Attribute) \
+                    and inner.func.attr == "glob" \
+                    and isinstance(inner.func.value, ast.Name) and inner.func.value.id == "glob":
+                globbed_in.add(node.name)
+if globbed_in != {"_records", "input_digest"}:
+    problems.append(f"the archive is globbed in {sorted(globbed_in)}, not just in _records (the "
+                    f"checked reader) and input_digest (which only stats what it will read)")
+
+# The derivation, printed so that a map which found nothing cannot read as a clean result.
+found = " ".join(f"{name}:{where}" for name, where in sorted(takes_a_topic.items()))
+print(("ok " + found) if not problems else "; ".join(sorted(set(problems))))
+CALLSITES
+)"
+
+# ---- 18a. a graded session whose every topic reaches past the close: captured ------------------------------
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-10-02 20261002T201500Z); vp_verdict 2026-10-02 2026-10-02T20:03:25Z
+out=$(vp_run 2026-10-02 "$root")
+want "18a a graded session past the close is captured" "called session=2026-10-02 close=16:00" "$(cat "$vp_tmp/calls")"
+has  "  the log names each topic's grade, so a PARTIAL acceptance is never silent" "underlying.spx.index.price=OK/1000" "$out"
+has  "  and reports the ledger count, which is the >=55 bar" "the bar is 55 accepted" "$out"
+
+# ---- 18b. PARTIAL is deliberately ACCEPTED. 2026-10-02 is graded PARTIAL on an offset discontinuity in a
+# topic bucket 0 does not read, and it is a sound session (385 of 385 minutes, an ES reference 2 ms old at
+# the open). Requiring OK would refuse good sessions permanently — the same loss by the opposite mistake.
+# Sufficiency is the capture's own coverage, span and per-quarter floors.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-09-30 20260930T201500Z); vp_verdict 2026-09-30 2026-09-30T20:03:25Z PARTIAL
+out=$(vp_run 2026-09-30 "$root")
+want "18b a PARTIAL grade does not refuse the session" "called session=2026-09-30 close=16:00" "$(cat "$vp_tmp/calls")"
+has  "  and its REASON reaches the log, which is the whole content of a PARTIAL" "[offset discontinuity (1)]" "$out"
+
+# ---- 18c. EMPTY is not. A graded-but-empty topic is an archive fact, and a record saying "no ES reference"
+# about the ARCHIVE rather than about the session would be permanent.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-09-29 20260929T201500Z); vp_verdict 2026-09-29 2026-09-29T20:03:25Z EMPTY
+out=$(vp_run 2026-09-29 "$root")
+want "18c an EMPTY topic does not spend the session" "" "$(cat "$vp_tmp/calls")"
+has  "  and says which grade stopped it" "is graded EMPTY" "$out"
+
+# ---- 18d. a topic that reaches only to lunch has not been archived past the bell ---------------------------
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-09-28 20260928T201500Z); vp_verdict 2026-09-28 2026-09-28T16:00:00Z
+out=$(vp_run 2026-09-28 "$root")
+want "18d a verdict reaching only to 12:00 ET does not spend the session" "" "$(cat "$vp_tmp/calls")"
+has  "  and names the time it reached" "reaches only 2026-09-28T16:00:00Z" "$out"
+
+# ---- 18e. NO VERDICT: the cron waits, and waiting costs nothing because an unclaimed session stays
+# claimable. This is the case filename recency used to pass — the reviewer was right to refuse it.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-09-25 20260925T201500Z)   # files, stamped late, but the day was never graded
+out=$(vp_run 2026-09-25 "$root")
+want "18e an ungraded day is not captured by the cron" "" "$(cat "$vp_tmp/calls")"
+has  "  and the reason is the missing verdict, not a missing file" "verdict for this session has not been written" "$out"
+has  "  and names the repair, which is to produce the verdict" "run oe-archive-verify.sh for this date" "$out"
+want "  it is a WAIT, not a failure: the retry must be able to run" 0 "$(vp_rc 2026-09-25 "$root")"
+# THERE IS NO WAY PAST THIS. An earlier version took ALLOW_UNGRADED=true and fell back to the timing
+# of archive file names; review refused it, because the claim it spends is permanent and so an
+# exceptional path publishing on weaker evidence makes the authoritative verdict unusable for that
+# session forever. The variable is gone, and setting it must change nothing.
+want "  and no environment variable gets past it" "" "$(vp_run 2026-09-25 "$root" ALLOW_UNGRADED=true >/dev/null; cat "$vp_tmp/calls")"
+# ...the SAME session, once graded, IS captured — so the refusal above is the missing verdict and
+# not the fixture.
+: > "$vp_tmp/calls"
+vp_verdict 2026-09-25 2026-09-25T20:15:00Z
+want "  and once the verdict exists the same session is captured" "called session=2026-09-25 close=16:00" "$(vp_run 2026-09-25 "$root" >/dev/null; cat "$vp_tmp/calls")"
+
+# ---- 18g. AN UNREADABLE VERDICT IS A FAULT, NOT A WAIT. It will not fix itself, and "try again this
+# evening" forever is a gate that has become a delay nobody notices.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-09-22 20260922T201500Z)
+printf 'not json at all' > "$root/_manifest/completeness/2026-09-22.json"
+out=$(vp_run 2026-09-22 "$root")
+want "18g a corrupt verdict does not spend the session" "" "$(cat "$vp_tmp/calls")"
+want "  and exits non-zero, so it cannot be read as 'wait'" 2 "$(vp_rc 2026-09-22 "$root")"
+has  "  and alerts" "ALERT:" "$out"
+
+# ---- 18h. a non-trading day is never captured, whatever the archive holds --------------------------------
+: > "$vp_tmp/calls"
+# Labor Day 2026, a PAST weekday holiday, with an archive graded past its close. Both details are
+# deliberate and both were got wrong once: a stamp before close + 10m let the readiness gate refuse
+# the case so the calendar was never consulted, and a FUTURE holiday let the future-date refusal do
+# the same. A case that passes for the wrong reason is not a case.
+root=$(vp_archive 2026-09-07 20260907T201500Z); vp_verdict 2026-09-07 2026-09-07T20:15:00Z
+out=$(vp_run 2026-09-07 "$root")
+want "18h a holiday is not a session" "" "$(cat "$vp_tmp/calls")"
+has  "  and the gate is the archiver's own calendar" "is not a New York trading day" "$out"
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-10-03 20261003T211500Z); vp_verdict 2026-10-03 2026-10-03T21:15:00Z
+want "18i a weekend is not a session either" "" "$(vp_run 2026-10-03 "$root" >/dev/null; cat "$vp_tmp/calls")"
+
+# ---- 18j. A HALF DAY IS JUDGED AGAINST ITS OWN CLOSE. The coverage floors are fractions of the session
+# the capture is told about: 210 minutes scored against a 385-minute universe is 55%, and one thin
+# quarter sinks it — so a sound half-day sample would be rejected, permanently, by a wrong close.
+: > "$vp_tmp/calls"
+# 2026-07-02, the early close before Independence Day, and the only one that has already happened —
+# a future half day would be refused by the future-date gate instead and prove nothing here.
+root=$(vp_archive 2026-07-02 20260702T171500Z); vp_verdict 2026-07-02 2026-07-02T17:15:00Z
+want "18j the early close before Independence Day closes at 13:00 and is scored against it" "called session=2026-07-02 close=13:00" "$(vp_run 2026-07-02 "$root" >/dev/null; cat "$vp_tmp/calls")"
+# ...and the close drives the readiness deadline too: 17:15Z is 13:15 ET, three hours short of 16:00.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-07-01 20260701T171500Z); vp_verdict 2026-07-01 2026-07-01T17:15:00Z
+want "  the same stamp on a FULL session is not past its close" "" "$(vp_run 2026-07-01 "$root" >/dev/null; cat "$vp_tmp/calls")"
+
+# ---- 18k. AN UNREADABLE CALENDAR FAILS CLOSED. An earlier version substituted 16:00 and called that
+# recoverable; publication is permanent, so a half day scored against a guessed 16:00 is a sound
+# session rejected forever.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-07-02 20260702T201500Z); vp_verdict 2026-07-02 2026-07-02T20:15:00Z
+out=$(vp_run 2026-07-02 "$root" CALENDAR_DIR="$vp_tmp/no-calendar-here")
+want "18k an unreadable calendar does not spend the session" "" "$(cat "$vp_tmp/calls")"
+want "  and exits non-zero rather than guessing a close" 2 "$(vp_rc 2026-07-02 "$root" CALENDAR_DIR="$vp_tmp/no-calendar-here")"
+# ...and the stamp is past the FULL-session close as well, so a 16:00 fallback would have CAPTURED
+# this session rather than waiting: the refusal above is the calendar gate and nothing else.
+: > "$vp_tmp/calls"
+want "  with the calendar readable, the same fixture IS captured at 13:00" "called session=2026-07-02 close=13:00" "$(vp_run 2026-07-02 "$root" >/dev/null; cat "$vp_tmp/calls")"
+has  "  and alerts" "ALERT:" "$out"
+
+# ---- 18l. A FUTURE SESSION IS REFUSED. The shape of a date does not say it has happened, and an
+# operator's keystroke must not be able to claim a session that has not occurred.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2027-01-04 20270104T211500Z); vp_verdict 2027-01-04 2027-01-04T21:15:00Z
+out=$(vp_run 2027-01-04 "$root")
+want "18l a future weekday is not captured even with a complete-looking archive" "" "$(cat "$vp_tmp/calls")"
+want "  and is a refusal, not a wait" 2 "$(vp_rc 2027-01-04 "$root")"
+has  "  naming today in New York" "is in the future" "$out"
+
+# ---- 18m. A FILE STILL BEING WRITTEN does not spend the session. The verdict is written once and the
+# spot topics keep being archived every ten minutes, so a member can be torn AFTER the day was graded.
+# Half a real gzip, not an empty file: an empty one fails at the first read too and would prove nothing
+# about reading to the END.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-09-21 20260921T201500Z); vp_verdict 2026-09-21 2026-09-21T20:03:25Z
+whole="$root/underlying.spx.index.price/dt=2026-09-21/underlying.spx.index.price.p0.0-1.dt20260921.20260921T201500Z.jsonl.gz"
+for i in $(seq 1 200); do printf 'CreateTime:0\tPartition:0\tSPX\t{"n":%s}\n' "$i"; done | gzip -c > "$whole"
+dd if="$whole" of="$whole.cut" bs=1 count=$(( $(wc -c < "$whole") / 2 )) 2>/dev/null
+mv "$whole.cut" "$whole"
+out=$(vp_run 2026-09-21 "$root")
+want "18m a truncated index member does not spend the session, though the day is graded" "" "$(cat "$vp_tmp/calls")"
+has  "  and is reported against the archiver's OWN sha256, not as a grade or a stamp" "does not match the sha256 the archiver recorded" "$out"
+want "  and it is a FAULT: the archiver published this member and recorded its bytes, so a member that no longer matches them is corruption rather than a write in progress" 2 "$(vp_rc 2026-09-21 "$root")"
+
+# ---- 18n. and the torn test covers every topic the capture reads, not just the index ---------------------
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-09-18 20260918T201500Z); vp_verdict 2026-09-18 2026-09-18T20:03:25Z
+es="$root/underlying.es.price/dt=2026-09-18/underlying.es.price.p0.0-1.dt20260918.20260918T201500Z.jsonl.gz"
+for i in $(seq 1 200); do printf 'CreateTime:0\tPartition:0\tES\t{"n":%s}\n' "$i"; done | gzip -c > "$es"
+dd if="$es" of="$es.cut" bs=1 count=$(( $(wc -c < "$es") / 2 )) 2>/dev/null
+mv "$es.cut" "$es"
+want "18n a truncated ES member does not spend the session either" "" "$(vp_run 2026-09-18 "$root" >/dev/null; cat "$vp_tmp/calls")"
+
+# ---- 18p. A GRADE THIS GATE DOES NOT RECOGNISE IS NOT A PASS. The first version refused only
+# EMPTY, so CORRUPT — a checksum mismatch, which nothing downstream re-checks — would have been
+# accepted as long as the topic reached past the close, and so would any status added later.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-09-16 20260916T201500Z); vp_verdict 2026-09-16 2026-09-16T20:15:00Z CORRUPT
+out=$(vp_run 2026-09-16 "$root")
+want "18p a CORRUPT grade does not spend the session" "" "$(cat "$vp_tmp/calls")"
+want "  and it is a FAULT, not a wait: a checksum mismatch does not fix itself" 2 "$(vp_rc 2026-09-16 "$root")"
+has  "  and says the bytes do not match the manifest" "graded CORRUPT" "$out"
+for bad_status in MISSING LEGACY SOMETHING_NEW; do
+  : > "$vp_tmp/calls"
+  root=$(vp_archive 2026-09-15 20260915T201500Z); vp_verdict 2026-09-15 2026-09-15T20:15:00Z "$bad_status"
+  want "  $bad_status is not on the allow-list either" "" "$(vp_run 2026-09-15 "$root" >/dev/null; cat "$vp_tmp/calls")"
+done
+# ...and the allow-list is not a blanket refusal: OK and PARTIAL are 18a and 18b.
+
+# ---- 18q. THE VERDICT MUST BE ABOUT THIS SESSION, IN THIS ENVIRONMENT. A file is named by whoever
+# put it there, so a cached, copied or wrong-day verdict under the right name would otherwise be
+# read as evidence about a day it says nothing about.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-09-14 20260914T201500Z)
+vp_verdict_raw 2026-09-14 "{\"dt\":\"2026-09-11\",\"env\":\"prod\",\"topics\":[$(vp_entry underlying.spx.index.price OK 2026-09-14T20:15:00Z),$(vp_entry underlying.es.price OK 2026-09-14T20:15:00Z),$(vp_entry spx.basis.state OK 2026-09-14T20:15:00Z)]}"
+out=$(vp_run 2026-09-14 "$root")
+want "18q a verdict for another day does not spend the session" "" "$(cat "$vp_tmp/calls")"
+want "  and is a fault, because a misplaced verdict will not become the right one" 2 "$(vp_rc 2026-09-14 "$root")"
+has  "  naming the day it is actually about" "is for dt='2026-09-11'" "$out"
+: > "$vp_tmp/calls"
+vp_verdict_raw 2026-09-14 "{\"dt\":\"2026-09-14\",\"env\":\"dev\",\"topics\":[$(vp_entry underlying.spx.index.price OK 2026-09-14T20:15:00Z),$(vp_entry underlying.es.price OK 2026-09-14T20:15:00Z),$(vp_entry spx.basis.state OK 2026-09-14T20:15:00Z)]}"
+out=$(vp_run 2026-09-14 "$root")
+want "  nor does a verdict for another environment" "" "$(cat "$vp_tmp/calls")"
+has  "  naming the environment it is about" "is for env='dev'" "$out"
+# ...and the SAME fixture with the right dt and env IS captured, so neither case above is satisfied
+# by something else refusing it.
+: > "$vp_tmp/calls"
+vp_verdict 2026-09-14 2026-09-14T20:15:00Z
+want "  with the right dt and env it is captured" "called session=2026-09-14 close=16:00" "$(vp_run 2026-09-14 "$root" >/dev/null; cat "$vp_tmp/calls")"
+
+# ---- 18r. A TOPIC GRADED TWICE IS NOT GRADED. Building a dict keeps the last row silently, so two
+# disagreeing rows resolve to whichever came second — which is a coin toss, not evidence.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-09-11 20260911T201500Z)
+vp_verdict_raw 2026-09-11 "{\"dt\":\"2026-09-11\",\"env\":\"prod\",\"topics\":[$(vp_entry underlying.spx.index.price EMPTY 2026-09-11T20:15:00Z),$(vp_entry underlying.spx.index.price OK 2026-09-11T20:15:00Z),$(vp_entry underlying.es.price OK 2026-09-11T20:15:00Z),$(vp_entry spx.basis.state OK 2026-09-11T20:15:00Z)]}"
+out=$(vp_run 2026-09-11 "$root")
+want "18r a topic graded twice does not spend the session" "" "$(cat "$vp_tmp/calls")"
+has  "  and names the topic" "grades underlying.spx.index.price more than once" "$out"
+
+# ---- 18s. THE FILES MUST BE ON DISK NOW, not only in the verdict. A verdict is a statement about a
+# moment that has passed; the archive is a mount. With the NAS unmounted a cached verdict reads as
+# evidence while every glob returns nothing, and the capture would publish a permanent record saying
+# the session had no ES reference — about the mount, not about the session.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-09-10)          # directories, no files
+vp_verdict 2026-09-10 2026-09-10T20:15:00Z
+out=$(vp_run 2026-09-10 "$root")
+want "18s a graded session with no files on disk does not spend the session" "" "$(cat "$vp_tmp/calls")"
+has  "  and asks whether the archive is mounted" "is $root mounted?" "$out"
+want "  it is a WAIT: a mount comes back" 0 "$(vp_rc 2026-09-10 "$root")"
+
+# ---- 18t. THE GATED TOPIC SET COMES FROM THE READER. It used to be an environment variable with a
+# three-topic default, so a caller could shrink what was checked while the capture went on reading
+# all three from its own constants. Here the stub reader declares a FOURTH topic, and the gate must
+# wait for it rather than ignore it.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-09-09 20260909T201500Z); vp_verdict 2026-09-09 2026-09-09T20:15:00Z
+sed 's|^BASIS = .*|BASIS = "spx.basis.state.v2"|' "$vp_tmp/stub-capture.py" > "$vp_tmp/fourth-topic-capture.py"
+out=$(vp_run 2026-09-09 "$root" CAPTURE="$vp_tmp/fourth-topic-capture.py")
+want "18t a reader naming a different topic changes what is gated" "" "$(cat "$vp_tmp/calls")"
+has  "  and the gate names the reader's topic, not its own list" "spx.basis.state.v2 is not in the archive verdict" "$out"
+# ...and a reader whose topic set cannot be read at all is a fault, not a silent three-topic default
+: > "$vp_tmp/calls"
+printf 'INDEX = 1\nES = 2\nBASIS = 3\n' > "$vp_tmp/bad-topics-capture.py"
+want "  a reader whose topic set is not three names is a fault" 2 "$(vp_rc 2026-09-09 "$root" CAPTURE="$vp_tmp/bad-topics-capture.py")"
+
+# ---- 18u. A PARTIAL'S REASONS ARE DATA, NOT CONTROL. They come from the verifier and go into the
+# gate's own message, and for a while the wrapper decided which log line to write by searching that
+# message for a keyword — so a reason containing it would have changed what the run said about
+# itself. The reason in this fixture is chosen to say exactly that.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-09-08 20260908T201500Z)
+vp_verdict_raw 2026-09-08 "{\"dt\":\"2026-09-08\",\"env\":\"prod\",\"topics\":[{\"topic\":\"underlying.spx.index.price\",\"status\":\"PARTIAL\",\"records\":1,\"max_event_time\":\"2026-09-08T20:15:00Z\",\"reasons\":[\"an UNGRADED-looking reason\"]},$(vp_entry underlying.es.price OK 2026-09-08T20:15:00Z),$(vp_entry spx.basis.state OK 2026-09-08T20:15:00Z)]}"
+out=$(vp_run 2026-09-08 "$root")
+want "18u a session whose PARTIAL reason contains the word is still captured" "called session=2026-09-08 close=16:00" "$(cat "$vp_tmp/calls")"
+has  "  and is reported as graded, whatever the reason happens to say" "the archive is graded and every topic reaches past the close" "$out"
+has  "  with the reason still logged" "an UNGRADED-looking reason" "$out"
+
+# ---- 18v. A NAME ASSIGNED TWICE IS NOT DECLARED, for the same reason a topic graded twice is not
+# graded: keeping the last silently resolves a disagreement by file order.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-09-03 20260903T201500Z); vp_verdict 2026-09-03 2026-09-03T20:15:00Z
+# Built FROM the recording stub, so the only difference from the passing case below is the second
+# assignment. A hand-written three-line reader fails too, but for the wrong reason: it records no
+# call because it is not the stub, so its companion could never pass.
+{ cat "$vp_tmp/stub-capture.py"; echo 'BASIS = "spx.basis.state.v2"'; } > "$vp_tmp/twice-capture.py"
+out=$(vp_run 2026-09-03 "$root" CAPTURE="$vp_tmp/twice-capture.py")
+want "18v a reader assigning a topic name twice is a fault" 2 "$(vp_rc 2026-09-03 "$root" CAPTURE="$vp_tmp/twice-capture.py")"
+has  "  naming the name it cannot resolve" "assigns BASIS more than once" "$out"
+want "  and nothing was captured" "" "$(cat "$vp_tmp/calls")"
+# the SAME file without that second assignment is accepted on the SAME fixture, so 18v is not
+# satisfied by a gate that refuses every reader or by a fixture something else rejects
+: > "$vp_tmp/calls"
+want "  without the second assignment the same fixture is captured" "called session=2026-09-03 close=16:00" "$(vp_run 2026-09-03 "$root" >/dev/null; cat "$vp_tmp/calls")"
+# ...and two names resolving to the SAME topic is a fault too: the gate would check one series
+# while reporting three.
+: > "$vp_tmp/calls"
+sed 's|^ES = .*|ES = "underlying.spx.index.price"|' "$vp_tmp/stub-capture.py" > "$vp_tmp/dup-capture.py"
+want "  two names for one topic is a fault" 2 "$(vp_rc 2026-09-03 "$root" CAPTURE="$vp_tmp/dup-capture.py")"
+want "  and nothing was captured for it" "" "$(cat "$vp_tmp/calls")"
+
+# ---- 18w. THE READER IS POINTED AT THE VERIFIED SET, NOT THE LIVE ARCHIVE. The gate used to check
+# one snapshot of the directory and the capture re-globbed it moments later, so a member arriving or
+# changing in between reached the permanent record unchecked — and the 21:00 retry runs at the same
+# minute as the archiver. Each verified file is now hardlinked into a pinned directory as it is
+# checked, and the reader is given that.
+: > "$vp_tmp/calls"
+: > "$vp_tmp/calls.roots"
+root=$(vp_archive 2026-09-02 20260902T201500Z); vp_verdict 2026-09-02 2026-09-02T20:15:00Z
+out=$(vp_run 2026-09-02 "$root")
+want "18w the reader is given the pinned set, not the archive root" "yes" \
+     "$(grep -q "root=$vp_tmp/ledger-2026-09-02/.pinned/2026-09-02 " "$vp_tmp/calls.roots" && echo yes || echo "no: $(cat "$vp_tmp/calls.roots")")"
+want "  and the pinned set holds the three archived members the fixture wrote, one per topic" "files=3" "$(grep -o 'files=[0-9]*' "$vp_tmp/calls.roots")"
+has  "  and the run says how many it pinned and checked" "3 files pinned and checked" "$out"
+
+# ---- 18x. A MEMBER THAT ARRIVES AFTER THE GATE CANNOT REACH THE RECORD, which is the property the
+# pinning exists for and the one a re-glob could not give. The stub reports what was in the root it
+# was handed; a file added to the ARCHIVE after the pin must not be in it.
+: > "$vp_tmp/calls"
+: > "$vp_tmp/calls.roots"
+root=$(vp_archive 2026-09-01 20260901T201500Z); vp_verdict 2026-09-01 2026-09-01T20:15:00Z
+# The capture stub is what runs while the archiver is imagined to be writing, so the new member is
+# dropped into the archive by the stub itself — the same instant the old code would have re-globbed.
+cat > "$vp_tmp/racing-capture.py" <<'RACE'
+import json, os, sys
+
+INDEX = "underlying.spx.index.price"
+ES = "underlying.es.price"
+BASIS = "spx.basis.state"
+
+
+def input_digest(root, session):
+    return "stub-digest"
+
+
+def main():
+    args = dict(zip(sys.argv[1::2], sys.argv[2::2]))
+    # Written at the instant the old code would have re-globbed the archive.
+    late = os.path.join(os.environ["VP_RACE_ARCHIVE"], INDEX, "dt=" + args["--session"],
+                        INDEX + ".p0.9-9.dt20260901.20260901T211500Z.jsonl.gz")
+    open(late, "wb").write(b"not a gzip at all")
+    root = args.get("--archive-root") or ""
+    seen = []
+    for base, _dirs, names in os.walk(root):
+        seen += [name for name in names if name.endswith(".jsonl.gz")]
+    with open(os.environ["VP_CALLS"], "a") as handle:
+        handle.write(f"called session={args.get('--session')} close={args.get('--close-et')}\n")
+    with open(os.environ["VP_CALLS"] + ".roots", "a") as handle:
+        handle.write(f"root={root} files={len(seen)}\n")
+    out = args.get("--out")
+    if out:
+        os.makedirs(os.path.join(out, "accepted"), exist_ok=True)
+        with open(os.path.join(out, "accepted", args["--session"] + ".json"), "w") as handle:
+            handle.write(json.dumps({"session": args["--session"], "accepted": True}) + "\n")
+    print(json.dumps({"session": args.get("--session"), "accepted": True}, sort_keys=True))
+
+
+# Guarded for the same reason the plain stub is: the gate IMPORTS the reader to fingerprint the pin
+# with its own input_digest, and an unguarded body would write the late member before the glob.
+if __name__ == "__main__":
+    main()
+RACE
+vp_run 2026-09-01 "$root" CAPTURE="$vp_tmp/racing-capture.py" VP_RACE_ARCHIVE="$root" >/dev/null
+want "18x a member written during the capture is NOT in what the reader sees" "files=3" "$(grep -o 'files=[0-9]*' "$vp_tmp/calls.roots")"
+want "  and it did reach the archive, so the case is not vacuous" 2 "$(ls "$root/underlying.spx.index.price/dt=2026-09-01/" | grep -c '\.jsonl\.gz$')"
+
+# ---- 18x2. A MEMBER THAT IS NOT A READABLE GZIP IS REFUSED, and that is ALL this case shows. It
+# was described as testing that the check reads the PIN rather than the archive path, and review was
+# right that it cannot: the fixture corrupts the member before the run, so both names are the same
+# corrupt inode and swapping `target` for `path` in the check leaves this green. The pin-versus-path
+# distinction only appears when the archive name is replaced in the interval between the link and
+# the read, which no fixture can stage — the wrapper says so where the check is, rather than
+# claiming a test exists for it.
+: > "$vp_tmp/calls"
+: > "$vp_tmp/calls.roots"
+root=$(vp_archive 2026-08-31 20260831T201500Z); vp_verdict 2026-08-31 2026-08-31T20:15:00Z
+member="$root/underlying.spx.index.price/dt=2026-08-31/underlying.spx.index.price.p0.0-1.dt20260831.20260831T201500Z.jsonl.gz"
+printf 'not a gzip at all' > "$member"
+out=$(vp_run 2026-08-31 "$root")
+want "18x2 a member that is not a readable gzip is refused" "" "$(cat "$vp_tmp/calls")"
+has  "  by the checksum, which sees it before the decompression does" "does not match the sha256" "$out"
+
+# ---- 18x3. A PIN LEFT BY A RUN THAT DIED PARTWAY THROUGH IS NOT AN INPUT. The capture globs the
+# pinned directory, so a leftover member sitting there is read — and a later run validates only what
+# the live archive currently holds, so a leftover that has since left the archive would reach the
+# record unverified by that run. Every file under the pin must be one this run pinned and checked.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-08-28 20260828T201500Z); vp_verdict 2026-08-28 2026-08-28T20:15:00Z
+leftover="$vp_tmp/ledger-2026-08-28/.pinned/2026-08-28/underlying.spx.index.price/dt=2026-08-28"
+mkdir -p "$leftover"
+vp_gz "$leftover/underlying.spx.index.price.p0.77-99.dt20260828.20260828T190000Z.jsonl.gz"
+out=$(vp_run 2026-08-28 "$root")
+want "18x3 a leftover pinned member stops the session" "" "$(cat "$vp_tmp/calls")"
+has  "  and names it as a leftover to look at" "this run did not pin and check" "$out"
+want "  and it is a fault, not a wait: a leftover does not clear itself" 2 "$(vp_rc 2026-08-28 "$root")"
+
+# ---- 18x3b. A PIN UNDER THE RIGHT NAME BUT HOLDING A DIFFERENT FILE is the case the membership
+# check above cannot see: the name is expected, so it is not an extra. Only comparing the inode
+# catches it, and what it means is that the pinned set and the archive have diverged — a pin is the
+# record of the bytes a claim was made from, so a name that is no longer those bytes stops the run.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-08-20 20260820T201500Z); vp_verdict 2026-08-20 2026-08-20T20:15:00Z
+same_name="$vp_tmp/ledger-2026-08-20/.pinned/2026-08-20/underlying.spx.index.price/dt=2026-08-20"
+mkdir -p "$same_name"
+vp_gz "$same_name/underlying.spx.index.price.p0.0-1.dt20260820.20260820T201500Z.jsonl.gz"
+out=$(vp_run 2026-08-20 "$root")
+want "18x3b a pin under the right name holding a different file stops the session" "" "$(cat "$vp_tmp/calls")"
+has  "  and says the pinned set and the archive have diverged" "pinned to a different file" "$out"
+want "  and it is a fault" 2 "$(vp_rc 2026-08-20 "$root")"
+
+# ---- 18x4. ...and the pin IS reusable by a retry, which is the companion that stops 18x3 being
+# satisfied by a gate that refuses every existing pin. The same session run twice captures twice
+# (the second is the capture's own already-published refusal, not this gate's).
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-08-27 20260827T201500Z); vp_verdict 2026-08-27 2026-08-27T20:15:00Z
+vp_run 2026-08-27 "$root" >/dev/null
+want "18x4 a retry reuses its own pin rather than refusing it" 2 "$(vp_run 2026-08-27 "$root" >/dev/null; grep -c '^called ' "$vp_tmp/calls")"
+
+# ---- 18x5. THE PINS ACCUMULATE BY DESIGN, so their cost is reported every run and crossing a
+# threshold says so — growth whose first symptom is a capture that cannot pin is growth nobody
+# noticed. They are hardlinks: the file data and the inodes are the archive's, and what this script
+# adds is directory entries and link counts.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-08-26 20260826T201500Z); vp_verdict 2026-08-26 2026-08-26T20:15:00Z
+out=$(vp_run 2026-08-26 "$root")
+has  "18x5 every run reports what the pinned sets cost" "pinned sets: 1 sessions, 3 hardlinks" "$out"
+has  "  and says they can be pruned without touching the archive or the ledger" "prune freely" "$out"
+root=$(vp_archive 2026-08-25 20260825T201500Z); vp_verdict 2026-08-25 2026-08-25T20:15:00Z
+out=$(vp_run 2026-08-25 "$root" PIN_LINK_WARN=1)
+has  "  and crossing the threshold alerts" "pinned sets hold" "$out"
+has  "  as an ALERT, not just a log line" "ALERT:" "$out"
+# ...and it is a WARNING, not a refusal: the session is still captured.
+want "  the session is still captured" "called session=2026-08-25 close=16:00" "$(grep 'session=2026-08-25' "$vp_tmp/calls")"
+
+# ---- 18x6. A PIN THAT CANNOT BE MADE IS A FAULT, not a capture from the live archive. This is the
+# exhaustion case: whatever the reason the pin cannot be written, nothing is claimed.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-08-24 20260824T201500Z); vp_verdict 2026-08-24 2026-08-24T20:15:00Z
+blocked="$vp_tmp/blocked-pin-root"
+rm -rf "$blocked"; : > "$blocked"          # a FILE where the pin root must be a directory
+out=$(vp_run 2026-08-24 "$root" SNAPSHOT_ROOT="$blocked")
+want "18x6 a pin that cannot be made does not spend the session" "" "$(cat "$vp_tmp/calls")"
+want "  and is a fault" 2 "$(vp_rc 2026-08-24 "$root" SNAPSHOT_ROOT="$blocked")"
+has  "  naming the pin as what failed" "cannot pin the archive" "$out"
+
+# ---- 18x7. THE GATE WRITES THE MARKER THAT AUTHORISES PUBLICATION, into the pin and only once
+# every check has passed. The capture refuses `--out` without it, so a directory nobody verified
+# cannot claim a session — which is what running the capture by hand against the raw archive could
+# do. The real capture's own suite covers the refusal; what is asserted here is that this wrapper
+# produces the thing it needs, for the right session.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-08-19 20260819T201500Z); vp_verdict 2026-08-19 2026-08-19T20:15:00Z
+out=$(vp_run 2026-08-19 "$root")
+marker="$vp_tmp/ledger-2026-08-19/.pinned/2026-08-19/.vp-open-reference-gate-ok"
+want "18x7 the gate marker is written into the pinned set" 2026-08-19 "$(head -1 "$marker" 2>/dev/null)"
+# ...and it is written only after the checks: a session the gate refuses gets no marker, so a later
+# hand-run against that pin cannot publish from it either.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-08-18 20260818T201500Z); vp_verdict 2026-08-18 2026-08-18T20:15:00Z EMPTY
+vp_run 2026-08-18 "$root" >/dev/null
+want "  and a refused session gets none" "" "$(cat "$vp_tmp/ledger-2026-08-18/.pinned/2026-08-18/.vp-open-reference-gate-ok" 2>/dev/null)"
+
+# ---- 18m2. A MEMBER THE ARCHIVER HAS NOT RECORDED YET IS A WAIT, not a fault. The archiver appends
+# its manifest line after publishing a file, so a member with no line is one it is still writing —
+# the condition that resolves itself in minutes, and the one the checksum check must NOT turn into a
+# corruption alert. The two directions are the whole reason both exist.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-08-14 20260814T201500Z); vp_verdict 2026-08-14 2026-08-14T20:15:00Z
+unrecorded="$root/underlying.spx.index.price/dt=2026-08-14"
+vp_gz "$unrecorded/underlying.spx.index.price.p0.50-60.dt20260814.20260814T210000Z.jsonl.gz"
+out=$(vp_run 2026-08-14 "$root")
+want "18m2 a member with no manifest line does not spend the session" "" "$(cat "$vp_tmp/calls")"
+has  "  and is named as one the archiver has not recorded yet" "has not recorded it yet" "$out"
+# A WAIT, and deliberately NOT because it is bound to resolve: most often the archiver is still
+# writing the member, and it can also have published it and died before appending the line, in which
+# case the file sits there until someone looks. Waiting is right for both because neither is
+# corruption and waiting spends nothing — which is a different argument from "it will fix itself".
+want "  and it is a WAIT, since neither cause is corruption and waiting spends nothing" 0 "$(vp_rc 2026-08-14 "$root")"
+# ...and once it IS recorded, the same session is captured — so 18m2 is the missing line and not the
+# extra member.
+: > "$vp_tmp/calls"
+vp_manifest "$unrecorded" underlying.spx.index.price.p0.50-60.dt20260814.20260814T210000Z.jsonl.gz
+want "  once the archiver records it, the same session is captured" "called session=2026-08-14 close=16:00" "$(vp_run 2026-08-14 "$root" >/dev/null; cat "$vp_tmp/calls")"
+
+# ---- 18m3. AN ABSENT MANIFEST IS A FAULT, not bytes checked against nothing. A pre-2026-08-12 date
+# has data and no manifest; the allow-list already refuses it as LEGACY, and this says so where the
+# hashing happens rather than relying on that.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-08-13 20260813T201500Z); vp_verdict 2026-08-13 2026-08-13T20:15:00Z
+rm -f "$root/underlying.es.price/dt=2026-08-13/_manifest.jsonl"
+out=$(vp_run 2026-08-13 "$root")
+want "18m3 a topic with no _manifest.jsonl does not spend the session" "" "$(cat "$vp_tmp/calls")"
+has  "  and says the bytes cannot be checked against what the archiver recorded" "cannot be checked against what the archiver recorded" "$out"
+want "  and it is a fault" 2 "$(vp_rc 2026-08-13 "$root")"
+
+# ---- 18m4. THE REVIEWER'S CASE, and the one the fingerprint cannot see: a DIFFERENT BUT VALID
+# member substituted under the same name after oe-archive-verify.sh graded the day. It decompresses
+# cleanly, so the completeness read passes it; its name is expected, so the membership check passes
+# it; and the marker digest is name, size and inode, all of which an in-place rewrite can preserve.
+# Only the archiver's own sha256 catches it. A mistaken restore or a sync does exactly this.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-08-12 20260812T201500Z); vp_verdict 2026-08-12 2026-08-12T20:15:00Z
+member="$root/underlying.spx.index.price/dt=2026-08-12/underlying.spx.index.price.p0.0-1.dt20260812.20260812T201500Z.jsonl.gz"
+was=$(wc -c < "$member" | tr -d ' ')
+# A valid gzip of DIFFERENT content, written in place so the inode is unchanged.
+printf 'CreateTime:0\tPartition:0\tSPX\t{"a":2}\n' | gzip -c > "$vp_tmp/substitute.gz"
+cat "$vp_tmp/substitute.gz" > "$member"
+want "18m4 setup: the substitute is a valid gzip" ok "$(gzip -t "$member" 2>/dev/null && echo ok || echo no)"
+want "  and the same size, so name/size/inode are all unchanged" "$was" "$(wc -c < "$member" | tr -d ' ')"
+out=$(vp_run 2026-08-12 "$root")
+want "18m4 a substituted member does not spend the session" "" "$(cat "$vp_tmp/calls")"
+has  "  caught by the archiver's sha256 and nothing else" "does not match the sha256 the archiver recorded" "$out"
+want "  and it is a fault, because a substitution does not resolve itself" 2 "$(vp_rc 2026-08-12 "$root")"
+
+# ---- 18m5. THE ARCHIVER'S PER-FILE MANIFEST IS PINNED WITH THE MEMBERS. The reader checks every
+# byte it reads against it and is given the pinned set, not the archive, so without this it would
+# have nothing to check against and would refuse to publish — the gate's own checking would be
+# complete and the capture would still decline.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-08-11 20260811T201500Z); vp_verdict 2026-08-11 2026-08-11T20:15:00Z
+vp_run 2026-08-11 "$root" >/dev/null
+for t in $VP_TOPICS; do
+  want "18m5 $t's _manifest.jsonl is pinned beside its members" yes \
+       "$([ -f "$vp_tmp/ledger-2026-08-11/.pinned/2026-08-11/$t/dt=2026-08-11/_manifest.jsonl" ] && echo yes || echo no)"
+done
+want "  and it is the SAME file as the archive's, not a copy" yes \
+     "$([ "$(stat -c %i "$root/underlying.es.price/dt=2026-08-11/_manifest.jsonl" 2>/dev/null || stat -f %i "$root/underlying.es.price/dt=2026-08-11/_manifest.jsonl")" = "$(stat -c %i "$vp_tmp/ledger-2026-08-11/.pinned/2026-08-11/underlying.es.price/dt=2026-08-11/_manifest.jsonl" 2>/dev/null || stat -f %i "$vp_tmp/ledger-2026-08-11/.pinned/2026-08-11/underlying.es.price/dt=2026-08-11/_manifest.jsonl")" ] && echo yes || echo no)"
+
+# ---- 18o. an uninstalled capture is an ALERT, not a silent no-op: that is exactly how this study spent
+# twelve days and eight archived sessions producing nothing.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-09-17 20260917T201500Z); vp_verdict 2026-09-17 2026-09-17T20:03:25Z
+out=$(VP_CALLS="$vp_tmp/calls" CAPTURE="$vp_tmp/does-not-exist.py" ARCHIVE_ROOT="$root" \
+      COMPLETENESS_DIR="$root/_manifest/completeness" LEDGER="$vp_tmp/ledger-x" \
+      LOG="$vp_tmp/log-x" bash "$VPC" 2026-09-17 2>&1)
+rc=$?
+want "18o an uninstalled capture fails loudly (rc)" 2 "$rc"
+has  "  and alerts, because a cron that quietly does nothing is how bucket 0 stayed empty" "ALERT:" "$out"
 
 echo
 [ "$FAILED" -eq 0 ] && { echo "test-archive-reset: ALL PASS"; exit 0; }

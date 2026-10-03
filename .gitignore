@@ -24,7 +24,11 @@ scripts/jenkins/.helper-venv/
 
 # local git worktrees live inside the checkout; never commit them as gitlinks
 .dwt-*
+# staged into the archive unit by Jenkinsfile.archive-scripts-deploy, which runs the suite with
+# that directory mounted; the sources live in scripts/jenkins/ and scripts/ops/ and a second
+# committed copy is how two calendars end up disagreeing about a holiday
 scripts/ops/archive/market_calendar.py
+scripts/ops/archive/vol-premium-open-reference-capture.py
 
 # binaries fetched by running CI steps locally
 /kubectl
