@@ -161,6 +161,8 @@ spec:
               value: options-edge-web
             - name: GATEWAY_VOL_PREMIUM_LOG_DIR
               value: /var/lib/vol-premium-log
+            - name: GAMMA_NAVIGATION_ENABLED
+              value: "true"
           envFrom:
             - configMapRef:
                 name: options-edge-config
