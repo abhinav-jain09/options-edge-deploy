@@ -35,14 +35,23 @@ DECLARED="$(sed -n "s/.*string(name: 'PERMITTED_SHA_GUARD_VERSION', defaultValue
 [ "$DECLARED" = "$(bash scripts/jenkins/permitted-sha-guard-version.sh)" ] \
   || { echo "FAIL: $JF declares guard version [$DECLARED], but $GUARD hashes to $(bash scripts/jenkins/permitted-sha-guard-version.sh)"; exit 1; }
 
-# The receipt-clearing stage's shell: the FIRST sh ''' block of the Jenkinsfile. Extracted verbatim.
-BLOCK="$(awk "
-  /sh[[:space:]]*'''\$/ && !inblock && !done { inblock = 1; next }
-  inblock && /^[[:space:]]*'''[[:space:]]*\$/ { inblock = 0; done = 1; next }
-  inblock { print }
-" "$JF")"
+# The receipt-clearing stage's shell: the ONE sh ''' block INSIDE stage('Clear previous dry-run receipt') — bounded by that stage's
+# name and the next stage( line, so a block of another stage can never stand in for it (Codex 7b r1). Extracted verbatim.
+BLOCK="$(python3 - "$JF" <<'PY'
+import re, sys
+t = open(sys.argv[1]).read()
+start = t.find("stage('Clear previous dry-run receipt')")
+if start < 0: sys.exit("FAIL: no stage('Clear previous dry-run receipt')")
+nxt = re.search(r"\n\s*stage\('", t[start + 1:])
+body = t[start: start + 1 + nxt.start()] if nxt else t[start:]
+blocks = re.findall(r"sh\s*'''\n(.*?)\n\s*'''", body, re.S)
+if len(blocks) != 1: sys.exit("FAIL: stage('Clear previous dry-run receipt') must hold exactly one sh ''' block, found %d" % len(blocks))
+if "env.PERMITTED_SHA_GUARD == 'PASSED'" not in body: sys.exit("FAIL: stage('Clear previous dry-run receipt') is not gated on the guard's flag")
+print(blocks[0])
+PY
+)" || { echo "$BLOCK"; exit 1; }
 printf '%s\n' "$BLOCK" | grep -q 'rm -f "${WORKSPACE}/zerodte-provision-dry-run.receipt"' \
-  || { echo "FAIL: the first sh block of $JF must remove the previous build's dry-run receipt"; exit 1; }
+  || { echo "FAIL: the receipt-clearing stage of $JF must remove the previous build's dry-run receipt"; exit 1; }
 grep -qE '"\*/\$branch"' "$GUARD" \
   || { echo "FAIL: $GUARD must match the literal \"*/\$branch\" — unquoted it is a wildcard that admits feature/main"; exit 1; }
 

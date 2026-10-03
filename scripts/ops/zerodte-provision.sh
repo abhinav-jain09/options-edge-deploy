@@ -49,9 +49,10 @@
 #   JOB_TIMEOUT_S    client-side wait, default 900 (> the Job's own 600s activeDeadlineSeconds)
 #   KEEP_JOBS        terminal Jobs to retain, default 5
 #   NAMESPACE        default options-edge
-#   EXPECTED_API_SERVER   production only: default https://192.168.100.252:6443
-#   EXPECTED_CLUSTER_NAME dev only: the kubeconfig's cluster name, default docker-desktop (Jenkins runs inside it; the deployer kubeconfig
-#                         names that cluster, whose API server address differs per host)
+# The CLUSTER is pinned by deploy/zerodte/clusters.yaml (the CA's sha256 fingerprint per environment, production's API server too) — not by
+# an environment variable and not by a kubeconfig's cluster NAME, which anyone can relabel. The LOCK: one invocation at a time, cluster-wide,
+# through an ATOMIC ConfigMap create (zerodte-provision-lock) held until this invocation observed its Job terminal; a lock left by a crashed
+# run is refused with its holder and must be removed by hand after reading that run's log.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
@@ -63,8 +64,8 @@ BUILD_NUMBER="${BUILD_NUMBER:-}"
 JOB_TIMEOUT_S="${JOB_TIMEOUT_S:-900}"
 KEEP_JOBS="${KEEP_JOBS:-5}"
 NAMESPACE="${NAMESPACE:-options-edge}"
-EXPECTED_API_SERVER="${EXPECTED_API_SERVER:-https://192.168.100.252:6443}"
-EXPECTED_CLUSTER_NAME="${EXPECTED_CLUSTER_NAME:-docker-desktop}"
+CLUSTERS="deploy/zerodte/clusters.yaml"
+LOCK_NAME="zerodte-provision-lock"
 
 TEMPLATE="k8s/jobs/zerodte-provision-job.yaml"
 ATTESTATION="deploy/zerodte/virgin-attestation.yaml"
@@ -75,6 +76,7 @@ CM_LABEL="app.kubernetes.io/name=zerodte-provision-files"
 DEPLOYER="system:serviceaccount:options-edge:jenkins-deployer"
 JOB_NAME=""
 JOB_OWNED=false
+LOCK_OWNED=false
 SUCCESS=false
 
 fatal() { echo "FATAL: $*" >&2; exit 1; }
@@ -82,6 +84,14 @@ fatal() { echo "FATAL: $*" >&2; exit 1; }
 cleanup() {
   local rc=$? terminal
   rm -f "${RENDER:-}" "${CM_RENDER:-}" "${LOGS:-}" "${ERRLOG:-}"
+  # the lock is released by its OWNER only, after the Job is terminal (or never ran): a lock held by a run that is still waiting stays
+  if [ "$LOCK_OWNED" = "true" ]; then
+    if kubectl -n "$NAMESPACE" delete "configmap/$LOCK_NAME" --ignore-not-found --wait=true --timeout=60s >/dev/null 2>&1; then
+      echo "lock $LOCK_NAME released" >&2
+    else
+      echo "cleanup: could not release lock $LOCK_NAME (held by $JOB_NAME) — remove it by hand after reading this run's log" >&2
+    fi
+  fi
   if [ "$SUCCESS" != "true" ] && [ "$JOB_OWNED" = "true" ] && [ -n "$JOB_NAME" ]; then
     terminal="$(kubectl -n "$NAMESPACE" get "job/$JOB_NAME" -o json 2>/dev/null \
       | jq -r '[(.status.conditions // [])[] | select((.type == "Complete" or .type == "Failed") and .status == "True") | .type] | join(",")' 2>/dev/null || echo '')"
@@ -108,6 +118,7 @@ FILE="deploy/zerodte/provisioning/${ENVIRONMENT}.yaml"
 [ -f "$FILE" ] || fatal "no declaration for $ENVIRONMENT at $FILE"
 [ -f "$ATTESTATION" ] || fatal "no attestation at $ATTESTATION"
 [ -f "$TEMPLATE" ] || fatal "missing Job template $TEMPLATE"
+[ -f "$CLUSTERS" ] || fatal "missing the cluster pins $CLUSTERS"
 command -v yq >/dev/null 2>&1 || fatal "yq is required"
 command -v jq >/dev/null 2>&1 || fatal "jq is required"
 command -v python3 >/dev/null 2>&1 || fatal "python3 is required"
@@ -118,10 +129,10 @@ echo "=== validating $FILE and $ATTESTATION ==="
 bash scripts/ci/validate-zerodte-provisioning.sh || fatal "the declarations do not pass scripts/ci/validate-zerodte-provisioning.sh — nothing is provisioned"
 bash scripts/ci/validate-zerodte-attestation.sh || fatal "$ATTESTATION does not pass scripts/ci/validate-zerodte-attestation.sh — nothing is provisioned"
 IDENTITY="$(python3 scripts/ci/zerodte_attestation.py provisioning "$FILE")" || fatal "could not read the declaration's identity"
-read -r SYMBOL LINEAGE GENERATION ERA_ID <<EOF2
-$(printf '%s' "$IDENTITY" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["symbol"], d["environmentLineageId"], d["generation"], d["eraId"])')
+read -r SYMBOL LINEAGE GENERATION ERA_ID BOOTSTRAP_KIND <<EOF2
+$(printf '%s' "$IDENTITY" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["symbol"], d["environmentLineageId"], d["generation"], d["eraId"], d["bootstrapKind"])')
 EOF2
-[ -n "${SYMBOL:-}" ] && [ -n "${LINEAGE:-}" ] && [ -n "${GENERATION:-}" ] && [ -n "${ERA_ID:-}" ] || fatal "could not read symbol / lineage / generation / eraId from $FILE"
+[ -n "${SYMBOL:-}" ] && [ -n "${LINEAGE:-}" ] && [ -n "${GENERATION:-}" ] && [ -n "${ERA_ID:-}" ] && [ -n "${BOOTSTRAP_KIND:-}" ] || fatal "could not read symbol / lineage / generation / eraId / bootstrapKind from $FILE"
 TAIL_HASH="$(python3 scripts/ci/zerodte_attestation.py tail "$ATTESTATION")" || fatal "could not compute the attestation's chain tail"
 FILE_SHA256="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$FILE")"
 ATTESTATION_SHA256="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$ATTESTATION")"
@@ -151,12 +162,17 @@ WHOAMI="$(kubectl auth whoami -o jsonpath='{.status.userInfo.username}' 2>/dev/n
 echo "kubectl identity: ${WHOAMI:-<unknown>}"
 [ "$WHOAMI" = "$DEPLOYER" ] || fatal "kubeconfig identity is '${WHOAMI:-<unknown>}', expected '$DEPLOYER'. Job and ConfigMap creation is denied for every other principal by the options-edge-jenkins-only-workloads admission policy."
 API_SERVER="$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null || echo '')"
-CLUSTER_NAME="$(kubectl config view --minify -o jsonpath='{.clusters[0].name}' 2>/dev/null || echo '')"
-echo "api server: ${API_SERVER:-<unknown>} (cluster ${CLUSTER_NAME:-<unknown>})"
-case "$ENVIRONMENT" in
-  production) [ "$API_SERVER" = "$EXPECTED_API_SERVER" ] || fatal "kubeconfig points at '${API_SERVER:-<unknown>}', expected '$EXPECTED_API_SERVER' for production. The deployer service-account name alone does not identify a cluster." ;;
-  dev)        [ "$CLUSTER_NAME" = "$EXPECTED_CLUSTER_NAME" ] || fatal "kubeconfig names cluster '${CLUSTER_NAME:-<unknown>}', expected '$EXPECTED_CLUSTER_NAME' for dev. The deployer service-account name alone does not identify a cluster." ;;
-esac
+CA_FINGERPRINT="$(kubectl config view --minify --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' 2>/dev/null | base64 -d 2>/dev/null | openssl x509 -noout -fingerprint -sha256 2>/dev/null | sed 's/^.*=//; s/://g' || echo '')"
+PIN_CA="$(yq -r ".clusters.\"${ENVIRONMENT}\".caSha256" "$CLUSTERS" 2>/dev/null || echo '')"
+PIN_SERVER="$(yq -r ".clusters.\"${ENVIRONMENT}\".apiServer" "$CLUSTERS" 2>/dev/null || echo '')"
+case "$PIN_CA" in ''|null) fatal "$CLUSTERS pins no CA for $ENVIRONMENT" ;; *[!0-9A-F]*) fatal "$CLUSTERS caSha256 for $ENVIRONMENT is not upper-case hex" ;; esac
+[ "${#PIN_CA}" -eq 64 ] || fatal "$CLUSTERS caSha256 for $ENVIRONMENT is not 64 hex characters"
+echo "api server: ${API_SERVER:-<unknown>}; kubeconfig CA sha256: ${CA_FINGERPRINT:-<none>}"
+[ -n "$CA_FINGERPRINT" ] || fatal "the kubeconfig carries no certificate-authority-data to pin the cluster by — refusing (a cluster is identified by its CA, not by a name)"
+[ "$CA_FINGERPRINT" = "$PIN_CA" ] || fatal "the kubeconfig's CA fingerprint $CA_FINGERPRINT is not the pinned $ENVIRONMENT cluster's ($PIN_CA in $CLUSTERS). The deployer service-account name and a cluster NAME do not identify a cluster; its CA does."
+if [ -n "$PIN_SERVER" ] && [ "$PIN_SERVER" != "null" ]; then
+  [ "$API_SERVER" = "$PIN_SERVER" ] || fatal "kubeconfig points at '${API_SERVER:-<unknown>}', the pinned $ENVIRONMENT API server is '$PIN_SERVER' ($CLUSTERS)"
+fi
 
 # --- 3. resolve + digest-pin the SERVICE image ------------------------------------------------
 MUTABLE_IMAGE="$(yq -er ".images.\"${IMAGE_KEY}\"" "image-tags/${ENVIRONMENT}.yaml" 2>/dev/null || true)"
@@ -171,7 +187,34 @@ echo "image: $MUTABLE_IMAGE -> $PINNED_IMAGE"
 # STATED, NOT ENFORCED: the tag must carry a build with ZeroDteProvisioner (options-edge-processing ≥ #920). If not, the container fails on
 # "Could not find or load main class" and step 5 names that.
 
-# --- 4. refuse to start alongside another provisioning Job --------------------------------
+RENDER="$(mktemp)"; CM_RENDER="$(mktemp)"; LOGS="$(mktemp)"; ERRLOG="$(mktemp)"
+
+# --- 4. the LOCK, then the inventory --------------------------------------------------------------------------------------------
+# An atomic create: two invocations cannot both pass (a plain "list, then create" has a window in which both see an empty list). The holder is
+# recorded on the lock; a lock a crashed run left behind is REFUSED with its holder — read that run's log, then remove the lock by hand.
+LOCK_HOLDER="$(cat <<EOF2
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: $LOCK_NAME
+  namespace: $NAMESPACE
+  labels:
+    app.kubernetes.io/name: zerodte-provision-lock
+    app.kubernetes.io/part-of: options-edge
+  annotations:
+    options-edge.io/holder: "build-${BUILD_NUMBER:-manual}-$(date -u +%Y%m%dT%H%M%SZ)"
+    options-edge.io/environment: "$ENVIRONMENT"
+data:
+  held: "true"
+EOF2
+)"
+if printf '%s\n' "$LOCK_HOLDER" | kubectl -n "$NAMESPACE" create -f - >/dev/null 2>"$ERRLOG"; then
+  LOCK_OWNED=true
+  echo "lock $LOCK_NAME acquired"
+else
+  HELD_BY="$(kubectl -n "$NAMESPACE" get "configmap/$LOCK_NAME" -o jsonpath='{.metadata.annotations.options-edge\.io/holder}' 2>/dev/null || echo '<unreadable>')"
+  fatal "could not acquire lock $LOCK_NAME (held by ${HELD_BY:-<unknown>}): another provisioning is running, or a crashed one left its lock. Read that run's log, then \`kubectl -n $NAMESPACE delete configmap $LOCK_NAME\` by hand. ($(tr '\n' ' ' < "$ERRLOG"))"
+fi
 JOBS_JSON="$(kubectl -n "$NAMESPACE" get jobs -l "$JOB_LABEL" -o json)" || fatal "cannot list zerodte-provision Jobs in $NAMESPACE — refusing to provision beside an inventory that could not be read"
 ACTIVE="$(printf '%s' "$JOBS_JSON" | jq -r '[.items[] | select(((.status.succeeded // 0) >= 1 or ([(.status.conditions // [])[] | select((.type == "Failed" or .type == "Complete") and .status == "True")] | length) >= 1) | not) | .metadata.name] | join(" ")')" \
   || fatal "cannot parse the zerodte-provision Job list — refusing to provision beside an inventory that could not be read"
@@ -180,7 +223,6 @@ ACTIVE="$(printf '%s' "$JOBS_JSON" | jq -r '[.items[] | select(((.status.succeed
 # --- 5. render + create ---------------------------------------------------------------------
 CM_NAME="zerodte-provision-${ENVIRONMENT}-${FILE_SHA256:0:8}-${ATTESTATION_SHA256:0:8}"
 JOB_NAME="zerodte-provision-$(date -u +%Y%m%d-%H%M%S)-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
-RENDER="$(mktemp)"; CM_RENDER="$(mktemp)"; LOGS="$(mktemp)"; ERRLOG="$(mktemp)"
 kubectl -n "$NAMESPACE" create configmap "$CM_NAME" --from-file="${FILE_BASENAME}=${FILE}" --from-file="virgin-attestation.yaml=${ATTESTATION}" --dry-run=client -o yaml > "$CM_RENDER"
 yq -i ".metadata.labels.\"app.kubernetes.io/name\" = \"zerodte-provision-files\" | .metadata.labels.\"app.kubernetes.io/part-of\" = \"options-edge\" | .metadata.labels.\"options-edge.io/zerodte-environment\" = \"${ENVIRONMENT}\"" "$CM_RENDER"
 [ "$(yq -r '.data | keys | length' "$CM_RENDER")" = 2 ] || fatal "the rendered ConfigMap does not carry exactly two keys"
@@ -237,15 +279,32 @@ fi
 [ "${N_OUTCOMES:-0}" = 1 ] || fatal "$JOB_NAME printed ${N_OUTCOMES:-0} receipt line(s) — expected exactly one (state=$state, exit ${EXIT_CODE:-unknown}). Refusing to guess which, if any, describes this run. Read the log."
 RECEIPT="$OUTCOMES"
 OUTCOME="${RECEIPT%% *}"
-field() { # field <name> → the value of the ONE token name=value; counts occurrences separately from the value
+field() { # field <name> → the value of the ONE token name=value; counts occurrences separately from the value; never empty
   local name="$1" n=0 v="" tok
   for tok in $RECEIPT; do case "$tok" in "$name="*) n=$((n + 1)); v="${tok#"$name"=}" ;; esac; done
   [ "$n" = 1 ] || fatal "receipt must carry $name= exactly once; got it $n times in '$RECEIPT' — ambiguous, refused"
+  [ -n "$v" ] || fatal "receipt field $name= is empty in '$RECEIPT' — refused"
   printf '%s' "$v"
+}
+exact_fields() { # exact_fields <name...>: every token after the outcome is name=value with a name in this list, each name present exactly once, no extras
+  local allowed=" $* " tok name
+  for tok in ${RECEIPT#* }; do
+    case "$tok" in *=*) name="${tok%%=*}" ;; *) fatal "receipt token '$tok' is not name=value in '$RECEIPT' — refused" ;; esac
+    case "$allowed" in *" $name "*) : ;; *) fatal "receipt carries a field this outcome does not have: $name= in '$RECEIPT' — refused" ;; esac
+  done
+  for name in "$@"; do field "$name" >/dev/null; done
+}
+hex() { # hex <value> <bits/4> <what>
+  case "$1" in *[!0-9a-f]*|'') fatal "receipt $3 is not lowercase hex: '$1'" ;; esac
+  [ "${#1}" -eq "$2" ] || fatal "receipt $3 has ${#1} characters, not $2: '$1'"
+}
+exit_agrees() { # the container's exit code must be the one the outcome asserts
+  [ "${EXIT_CODE:-}" = "$1" ] || fatal "the receipt says $OUTCOME, which exits $1, but the container exited '${EXIT_CODE:-<unknown>}' — the receipt and the process disagree; refused"
 }
 case "$OUTCOME" in
   ATTESTATION_REQUIRED)
-    R_GEN="$(field generation)"; R_LEDGER="$(field ledgerTopicId)"; R_CLUSTER="$(field clusterId)"
+    exact_fields generation ledgerTopicId clusterId; exit_agrees 67
+    R_GEN="$(field generation)"; R_LEDGER="$(field ledgerTopicId)"; R_CLUSTER="$(field clusterId)"; hex "$R_LEDGER" 32 ledgerTopicId
     [ "$R_GEN" = "$GENERATION" ] || fatal "the receipt names generation '$R_GEN', this run declared $GENERATION: whatever the provisioner did, it was not this provisioning"
     [ "$CONFIRM" = true ] || fatal "ATTESTATION_REQUIRED is a CONFIRM outcome; a dry run reports wouldAttest=YES instead — the provisioner and this wrapper disagree"
     echo "$RECEIPT"
@@ -262,9 +321,13 @@ $ATTESTATION through the reviewed, append-only change (prevEntryHash is the curr
 EOF3
     exit 67 ;;
   CONFLICTING_PROVISIONED)
+    exact_fields generation; exit_agrees 66
     fatal "CONFLICTING_PROVISIONED: the ledger already holds generation $(field generation) with a DIFFERENT declaration. A generation is immutable once provisioned — declare the next generation as a migration, or find out which declaration is the one that should have been provisioned. Nothing was written. ($RECEIPT)" ;;
   REFUSED)
+    exact_fields reason exit
     REASON="$(field reason)"; EXIT_TOKEN="$(field exit)"
+    case "$EXIT_TOKEN" in 64|65|68|69|70) : ;; *) fatal "the receipt names exit=$EXIT_TOKEN, which is not a provisioner refusal code ('$RECEIPT')" ;; esac
+    exit_agrees "$EXIT_TOKEN"
     case "$EXIT_TOKEN" in
       64) fatal "the provisioner refused its INVOCATION or the declaration ($REASON) — the CLI contract and this wrapper disagree, or the file is malformed; see the log. Nothing was written." ;;
       65) fatal "the provisioner refused the ATTESTATION or the declared generation contract ($REASON) — see the log. Nothing was written." ;;
@@ -279,6 +342,12 @@ case "$CONFIRM:$OUTCOME" in
   *) fatal "receipt outcome '$OUTCOME' is not one a CONFIRM=$CONFIRM run may report ('$RECEIPT') — a dry-run line is not a provisioning, and a PROVISIONED line on a dry run means the provisioner wrote when told not to" ;;
 esac
 [ "$state" = "succeeded" ] || fatal "$JOB_NAME printed '$OUTCOME' but did not succeed (state=$state, exit ${EXIT_CODE:-unknown}) — see the log above."
+exit_agrees 0
+if [ "$OUTCOME" = PROVISIONABLE ]; then
+  exact_fields symbol lineage generation eraId planDigest provisionedDigest topicIds wouldCreate wouldAssert wouldAttest wouldInsertEra wouldAppend
+else
+  exact_fields generation eraId ledgerOffset provisionedDigest ledgerTopicId clusterId
+fi
 R_GEN="$(field generation)"; R_ERA="$(field eraId)"
 MISMATCH=""
 [ "$R_GEN" = "$GENERATION" ] || MISMATCH="$MISMATCH generation='$R_GEN'!='$GENERATION'"
@@ -286,15 +355,17 @@ MISMATCH=""
 if [ "$OUTCOME" = PROVISIONABLE ]; then
   [ "$(field symbol)" = "$SYMBOL" ]   || MISMATCH="$MISMATCH symbol"
   [ "$(field lineage)" = "$LINEAGE" ] || MISMATCH="$MISMATCH lineage"
-  field planDigest >/dev/null; field topicIds >/dev/null; field wouldAttest >/dev/null; field wouldInsertEra >/dev/null
+  hex "$(field planDigest)" 64 planDigest; hex "$(field wouldAssert)" 64 wouldAssert
+  case "$(field topicIds)" in RESOLVED) hex "$(field provisionedDigest)" 64 provisionedDigest ;; PENDING) [ "$(field provisionedDigest)" = PENDING ] || MISMATCH="$MISMATCH provisionedDigest-not-PENDING" ;; *) MISMATCH="$MISMATCH topicIds" ;; esac
+  case "$(field wouldCreate)" in NONE) : ;; *) for role in $(printf '%s' "$(field wouldCreate)" | tr ',' ' '); do case "$role" in FRAMES|HEAD|CURRENT|PULSE|DEPLOYMENTS) : ;; *) MISMATCH="$MISMATCH wouldCreate($role)" ;; esac; done ;; esac
+  case "$(field wouldAttest)" in YES|NO) : ;; *) MISMATCH="$MISMATCH wouldAttest" ;; esac
+  case "$(field wouldInsertEra)" in YES|VERIFY) : ;; *) MISMATCH="$MISMATCH wouldInsertEra" ;; esac
   [ "$(field wouldAppend)" = PROVISIONED ] || MISMATCH="$MISMATCH wouldAppend"
 else
   R_LEDGER="$(field ledgerTopicId)"; R_CLUSTER="$(field clusterId)"; R_DIGEST="$(field provisionedDigest)"; R_OFFSET="$(field ledgerOffset)"
-  case "$R_LEDGER" in *[!0-9a-f]*|'') MISMATCH="$MISMATCH ledgerTopicId" ;; esac
-  [ "${#R_LEDGER}" -eq 32 ] || MISMATCH="$MISMATCH ledgerTopicId-length"
-  case "$R_DIGEST" in *[!0-9a-f]*|'') MISMATCH="$MISMATCH provisionedDigest" ;; esac
-  [ "${#R_DIGEST}" -eq 64 ] || MISMATCH="$MISMATCH provisionedDigest-length"
+  hex "$R_LEDGER" 32 ledgerTopicId; hex "$R_DIGEST" 64 provisionedDigest
   case "$R_OFFSET" in ''|*[!0-9]*) MISMATCH="$MISMATCH ledgerOffset" ;; esac
+  case "$R_CLUSTER" in *[!A-Za-z0-9._-]*|'') MISMATCH="$MISMATCH clusterId" ;; esac
 fi
 [ -z "$MISMATCH" ] || fatal "the receipt does not describe the declaration this run provisioned:$MISMATCH
        receipt: '$RECEIPT'
@@ -316,6 +387,8 @@ else
 Commit this as deploy/zerodte/provisioned/${ENVIRONMENT}.yaml (increment 8's runtime render reads ZERO_DTE_PROVISIONING_GENERATION and ZERO_DTE_LEDGER_TOPIC_ID_EXPECTED from it):
 environment: $ENVIRONMENT
 symbol: $SYMBOL
+environmentLineageId: $LINEAGE
+bootstrapKind: $BOOTSTRAP_KIND
 generation: $R_GEN
 eraId: $R_ERA
 ledgerTopicId: "$R_LEDGER"

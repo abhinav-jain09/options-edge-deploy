@@ -15,10 +15,13 @@ Usage:
   zerodte_attestation.py entry-hash <symbol> <lineage> <ledgerTopicId> <clusterId> <createdAt> <operator> <prevEntryHash>
   zerodte_attestation.py provisioning <provisioning.yaml>                      the declaration's rules
   zerodte_attestation.py --vectors                                             the golden vectors
+  zerodte_attestation.py --corpus [dir]                                        the shared YAML-subset corpus (accept/reject verdicts)
 Every refusal prints `REFUSED: <reason>` and exits 1.
 """
+import datetime
 import hashlib
 import json
+import os
 import re
 import struct
 import subprocess
@@ -28,6 +31,8 @@ UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 HEX32 = re.compile(r"^[0-9a-f]{32}$")
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 TEXT = re.compile(r"^[\x20-\x7e]{1,128}$")
+APPROVER = re.compile(r"^[A-Za-z][A-Za-z .'-]{1,127}$")
+UNAPPROVED = "UNAPPROVED"
 OPERATOR = re.compile(r"^[\x20-\x7e]{1,64}$")
 SYMBOL = re.compile(r"^[A-Z0-9]{1,16}$")
 TOPIC = re.compile(r"^[a-zA-Z0-9._-]{1,249}$")
@@ -218,6 +223,24 @@ def entry_hash(e):
     return hashlib.sha256(tlv_map({k: e[k] for k in ENTRY_KEYS})).hexdigest()
 
 
+def _date(v, what):
+    t = _text(v, what, ISO_DATE)
+    try:
+        datetime.date.fromisoformat(t)
+    except ValueError:
+        raise Refused("%s is not a real calendar date: %s" % (what, t))
+    return t
+
+
+def _instant(v, what):
+    t = _text(v, what, ISO_INSTANT)
+    try:
+        datetime.datetime.strptime(t[:19], "%Y-%m-%dT%H:%M:%S")
+    except ValueError:
+        raise Refused("%s is not a real instant: %s" % (what, t))
+    return t
+
+
 def _text(v, what, pattern=None, quoted=None):
     if not isinstance(v, Scalar):
         raise Refused("%s is a string" % what)
@@ -252,9 +275,11 @@ def parse_attestation(text):
             "id": _text(l["id"], "lineages[].id", UUID),
             "name": _text(l["name"], "lineages[].name", TEXT),
             "parent": None if l["parent"] is None else _text(l["parent"], "lineages[].parent", UUID),
-            "approvedBy": _text(l["approvedBy"], "lineages[].approvedBy", TEXT),
-            "date": _text(l["date"], "lineages[].date", ISO_DATE),
+            "approvedBy": _text(l["approvedBy"], "lineages[].approvedBy", APPROVER),
+            "date": _date(l["date"], "lineages[].date"),
         }
+        if row["approvedBy"].upper() == UNAPPROVED:
+            raise Refused("lineage %s carries the %s marker: a lineage is usable only with the OWNER's recorded approval (approvedBy = the owner's name)" % (row["id"], UNAPPROVED))
         if row["id"] in ids:
             raise Refused("a lineage id occurs once: %s" % row["id"])
         ids.add(row["id"])
@@ -273,7 +298,7 @@ def parse_attestation(text):
             "environmentLineageId": _text(e["environmentLineageId"], "entries[].environmentLineageId", UUID),
             "ledgerTopicId": _text(e["ledgerTopicId"], "entries[].ledgerTopicId", HEX32, quoted=True),
             "clusterId": _text(e["clusterId"], "entries[].clusterId", TEXT, quoted=True),
-            "createdAt": _text(e["createdAt"], "entries[].createdAt", ISO_INSTANT),
+            "createdAt": _instant(e["createdAt"], "entries[].createdAt"),
             "operator": _text(e["operator"], "entries[].operator", OPERATOR),
             "prevEntryHash": _text(e["prevEntryHash"], "entries[].prevEntryHash", HEX64, quoted=True),
         }
@@ -463,6 +488,26 @@ def main(argv):
             if n < 2:
                 raise Refused("fewer than two golden vectors")
             print("OK: %d golden vectors agree with VirginAttestation.Entry.hash()" % n)
+            return 0
+        if cmd == "--corpus":
+            d = argv[1] if len(argv) > 1 else "scripts/ci/fixtures/zerodte/corpus"
+            n = 0
+            for line in _read(os.path.join(d, "expected.tsv")).splitlines():
+                if not line or line.startswith("#"):
+                    continue
+                name, kind, verdict = line.split("\t")
+                text = _read(os.path.join(d, name + ".yaml"))
+                try:
+                    (parse_attestation if kind == "attestation" else parse_provisioning)(text)
+                    got = "accept"
+                except Refused:
+                    got = "reject"
+                if got != verdict:
+                    raise Refused("corpus %s: this port says %s, the corpus expects %s" % (name, got, verdict))
+                n += 1
+            if n < 30:
+                raise Refused("the corpus has only %d cases" % n)
+            print("OK: %d corpus cases give the expected verdict" % n)
             return 0
         if cmd == "verify":
             path = argv[1]

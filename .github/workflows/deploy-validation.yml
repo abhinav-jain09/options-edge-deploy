@@ -342,8 +342,12 @@ jobs:
       # violation they claim to (fixtures), and the port of the chain hash agrees with the Java implementation on golden vectors.
       - name: zerodte provisioning declarations pass the Job's rules
         run: bash scripts/ci/validate-zerodte-provisioning.sh
-      - name: zerodte VIRGIN attestation is chained and append-only
-        run: bash scripts/ci/validate-zerodte-attestation.sh --base "origin/${{ github.base_ref || 'main' }}"
+      - name: zerodte VIRGIN attestation is chained and append-only (the base is fetched EXPLICITLY — a missing base is a refusal)
+        run: |
+          git fetch --no-tags --depth=1 origin "${{ github.base_ref || 'main' }}"
+          bash scripts/ci/validate-zerodte-attestation.sh --base "origin/${{ github.base_ref || 'main' }}"
+      - name: zerodte YAML subset — the CI port and the Job's loader agree on the shared corpus
+        run: python3 scripts/ci/zerodte_attestation.py --corpus
       - name: zerodte attestation/provisioning validators refuse every violation
         run: bash scripts/ci/validate-zerodte-attestation-test.sh
       - name: zerodte provision guard refuses every forbidden ref and SHA
