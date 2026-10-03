@@ -213,6 +213,33 @@ class StagingCheckTest(unittest.TestCase):
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn("STAGED BUT NOT DECLARED", r.stderr)
 
+    def test_a_quoted_argument_containing_a_space_is_not_the_path(self) -> None:
+        """Removing quotes before splitting made
+
+            --allow-ignored "scripts/ops/archive/<path> harmless"
+
+        look like the flag followed by the path, while the shell passes ONE argument with a space in
+        it that the real verifier rejects — a green preflight followed by a refused install, which
+        is the outcome this guard exists to prevent. The argument list is read with the quotes left
+        in, so that splits into two tokens and neither is the path."""
+        name = "vol-premium-open-reference-capture.py"
+        r = self._run(lambda t: t.replace(
+            f" --allow-ignored scripts/ops/archive/{name}",
+            f' --allow-ignored "scripts/ops/archive/{name} harmless"'))
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("STAGED BUT NOT DECLARED", r.stderr)
+
+    def test_a_properly_quoted_argument_is_accepted(self) -> None:
+        """The companion, in both quote characters: without it the case above would also be produced
+        by a check that refuses every quoted argument, and the job is free to quote its paths."""
+        name = "vol-premium-open-reference-capture.py"
+        plain = f" --allow-ignored scripts/ops/archive/{name}"
+        for quote in ('"', "'"):
+            with self.subTest(quote=quote):
+                r = self._run(lambda t, q=quote: t.replace(
+                    plain, f" --allow-ignored {q}scripts/ops/archive/{name}{q}"))
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
     def test_a_job_with_no_tree_verifier_says_so(self) -> None:
         """A guard that defers to a gate must notice the gate going away, rather than passing on a
         premise that no longer holds."""

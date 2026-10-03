@@ -132,6 +132,13 @@ for f in $wanted $sourced; do
     # a workspace reused between builds can hold a copy an earlier build left behind — so even an
     # absent staging step can look like a present one.
     #
+    # WHAT THIS CHECK IS, in proportion: a PREFLIGHT. The authoritative gate is
+    # verify-permitted-tree.sh at install time, which cannot be talked round by any of this — it
+    # looks at the tree, not at the job definition. This exists so that a missing declaration is
+    # named here, by file, instead of appearing as a refused install; four review rounds went into
+    # making it refuse text that is not an argument to that verifier, and the cost of a remaining
+    # false negative is exactly what happened before it existed — the install refuses and says why.
+    #
     # THE CONTROL IS scripts/ci/verify-archive-unit-staged.sh, which the job runs on the agent after
     # staging and before the container: it asserts each file the suite will read exists and is
     # byte-identical to its committed source. That is the property that matters — a stale copy equal
@@ -211,11 +218,42 @@ for f in $wanted $sourced; do
           #
           # And the flag and its value must be ADJACENT TOKENS rather than a substring of the line.
           # That is what "an argument to the verifier" means.
+          # THE ARGUMENT LIST IS READ WITH THE QUOTES LEFT IN. Removing them is right for finding the
+          # command word — it keeps `PERMITTED_SHA="${PERMITTED_SHA:-}"` in one piece — and WRONG
+          # here, because it makes
+          #   --allow-ignored "scripts/ops/archive/<path> harmless"
+          # look like the flag followed by the path, when the shell passes ONE argument containing a
+          # space that the real verifier then rejects (review round 4 of #1128). With the quotes
+          # kept, that splits into two tokens and neither is the path.
+          #
+          # The sh step\047s own wrapping quote is removed first, since it is glued to the last
+          # argument — `… <path>\047` — and is not part of it. Whatever quoting remains inside an
+          # argument is the author\047s, so a value counts only if it IS the path, or the path
+          # wrapped in a matched pair.
+          kept = statement[i]
+          sub(/^[[:space:]]*/, "", kept)
+          if (kept ~ /^sh[[:space:]]+[\047"]/) {
+            sub(/^sh[[:space:]]+[\047"]/, "", kept)
+            sub(/[\047"][[:space:]]*$/, "", kept)
+          }
+          gsub(/[[:space:]]+/, " ", kept)
+          sub(/^ /, "", kept)
+          qwords = split(kept, qword, " ")
+          qat = 0
+          for (j = 1; j <= qwords; j++) {
+            scrubbed = qword[j]
+            gsub(/[\047"]/, "", scrubbed)
+            if (scrubbed ~ /(^|\/)verify-permitted-tree\.sh$/) { qat = j; break }
+          }
           declared = 0
-          for (j = at + 1; j <= words; j++) {
-            if (word[j] == "&&" || word[j] == "||" || word[j] == "#" ||
-                word[j] ~ /^\|/ || word[j] ~ /^[0-9]*>>?/ || word[j] ~ /^</) { break }
-            if (word[j] == "--allow-ignored" && j < words && word[j + 1] == dst) { declared = 1 }
+          for (j = qat + 1; qat > 0 && j <= qwords; j++) {
+            if (qword[j] == "&&" || qword[j] == "||" || qword[j] == "#" ||
+                qword[j] ~ /^\|/ || qword[j] ~ /^[0-9]*>>?/ || qword[j] ~ /^</) { break }
+            if (qword[j] != "--allow-ignored" || j >= qwords) { continue }
+            value = qword[j + 1]
+            if (value == dst) { declared = 1 }
+            if (value == "\"" dst "\"") { declared = 1 }
+            if (value == "\047" dst "\047") { declared = 1 }
           }
           if (declared) { print "ok"; exit }
         }
