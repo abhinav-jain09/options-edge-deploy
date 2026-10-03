@@ -46,16 +46,20 @@ COMPLETENESS_DIR="${COMPLETENESS_DIR:-$ARCHIVE_ROOT/_manifest/completeness}"
 # inline at a call site. What holds instead is a REFUSAL: test-archive-reset.sh section 18y fails if
 # the capture contains any topic-shaped string literal beyond these three, so a reader that grows an
 # input cannot reach production silently — it has to be gated here first.
-# OPERATOR-ONLY, AND NEVER IN THE CRONTAB. A session whose verdict was never written cannot be
-# gated on one, and that is not hypothetical: the verifier did not run the night of 2026-10-01, so
-# 2026-10-02 is graded and 2026-10-01 is not, while both are sound sessions by the capture's own
-# floors. Waiting costs nothing — an unclaimed session stays claimable forever — so the cron waits,
-# and a human backfilling a day the verifier missed sets this, which falls back to the file-stamp
-# timing test and says loudly in the log that it did.
-ALLOW_UNGRADED="${ALLOW_UNGRADED:-false}"
-# How far past the close a file must be stamped for the FALLBACK timing test. Only consulted under
-# ALLOW_UNGRADED; the graded path uses each topic's own max_event_time, which is better evidence.
-READY_AFTER_MIN="${READY_AFTER_MIN:-10}"
+# THERE IS NO WAY TO CAPTURE A SESSION THE VERIFIER HAS NOT GRADED, and that is deliberate. An
+# earlier version had ALLOW_UNGRADED, which fell back to the timing of archive FILE NAMES for a day
+# the verifier missed — the night of 2026-10-01 is a real example — and review was right to refuse
+# it: the claim it spends is permanent, so an exceptional path that publishes on weaker evidence
+# makes the authoritative verdict unusable for that session FOREVER, and an environment variable is
+# not an authorisation boundary.
+#
+# The repair for a missing verdict is to produce the verdict, which costs nothing and is the same
+# evidence every other session is judged on:
+#
+#   ENV=prod ARCHIVE_DIR=/mnt/nas/optionsedge /home/abhinav/oe-ops/oe-archive-verify.sh 2026-10-01
+#
+# then let the retry run, or invoke this script with that date. Waiting is free: an unclaimed
+# session stays claimable, so there is nothing to trade away here.
 
 log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*" | tee -a "$LOG"; }
 
@@ -145,9 +149,8 @@ esac
 # The exit codes are distinct on purpose: 0 = positively established as not-ready-yet, so the retry
 # run should try again; anything else is a fault and must not be read as "wait".
 GATE="$(COMPLETENESS_DIR="$COMPLETENESS_DIR" ARCHIVE_ROOT="$ARCHIVE_ROOT" OE_DAY="$SESSION" \
-        CLOSE_ET="$CLOSE_ET" CAPTURE="$CAPTURE" OE_ENV="$ENV_NAME" ALLOW_UNGRADED="$ALLOW_UNGRADED" \
-        READY_AFTER_MIN="$READY_AFTER_MIN" python3 - <<'GATE'
-import ast, datetime as dt, glob, gzip, json, os, pathlib, re
+        CLOSE_ET="$CLOSE_ET" CAPTURE="$CAPTURE" OE_ENV="$ENV_NAME" python3 - <<'GATE'
+import ast, datetime as dt, glob, gzip, json, os, pathlib
 from zoneinfo import ZoneInfo
 
 ET = ZoneInfo("America/New_York")
@@ -156,7 +159,6 @@ hh, mm = (int(part) for part in os.environ["CLOSE_ET"].split(":"))
 close = dt.datetime.combine(day, dt.time(hh, mm), ET).astimezone(dt.timezone.utc)
 root = os.environ["ARCHIVE_ROOT"]
 env_name = os.environ["OE_ENV"]
-allow_ungraded = os.environ.get("ALLOW_UNGRADED") == "true"
 verdict_path = os.path.join(os.environ["COMPLETENESS_DIR"], day.isoformat() + ".json")
 
 # A GRADE THIS SCRIPT DOES NOT RECOGNISE IS NOT A PASS. oe-archive-verify.sh emits OK, PARTIAL,
@@ -281,35 +283,10 @@ def from_the_verdict():
     return told
 
 
-def from_the_file_stamps():
-    """THE FALLBACK, weaker on purpose: an archive file name carries the archive RUN's stamp, which
-    says one file for one topic arrived late — not that the series is there. Enough for a human
-    backfilling a day the verifier missed, not enough for a cron."""
-    deadline = close + dt.timedelta(minutes=int(os.environ["READY_AFTER_MIN"]))
-    told = []
-    for topic in topics:
-        stamps = []
-        for path in files(topic):
-            found = re.search(r"\.(\d{8}T\d{6})Z\.jsonl\.gz$", os.path.basename(path))
-            if found:
-                stamps.append(dt.datetime.strptime(found.group(1), "%Y%m%dT%H%M%S")
-                              .replace(tzinfo=dt.timezone.utc))
-        if not stamps:
-            answer("waiting", f"{topic} has no archived file for {day}")
-        if max(stamps) < deadline:
-            answer("waiting", f"{topic}'s latest archive run is "
-                              f"{max(stamps).strftime('%Y-%m-%dT%H:%M:%SZ')}, before the close + "
-                              f"{os.environ['READY_AFTER_MIN']}m")
-        told.append(f"{topic}=UNGRADED")
-    return told
-
-
-if os.path.isfile(verdict_path):
-    mode, summary = "graded", from_the_verdict()
-elif allow_ungraded:
-    mode, summary = "ungraded", from_the_file_stamps()
-else:
-    answer("waiting", "the archive verdict for this session has not been written yet")
+if not os.path.isfile(verdict_path):
+    answer("waiting", "the archive verdict for this session has not been written yet — run "
+                      "oe-archive-verify.sh for this date to produce it")
+summary = from_the_verdict()
 
 # THE FILES MUST BE THERE NOW, not only in the verdict. A verdict is a statement about a moment
 # that has passed; the archive is a mount. With the NAS unmounted, a cached or stale verdict reads
@@ -336,7 +313,7 @@ for topic in topics:
             answer("waiting", f"{os.path.basename(path)} does not decompress to its end — "
                               f"the archiver is most likely still writing it")
 
-print("ready " + mode + " " + " ".join(summary))
+print("ready " + " ".join(summary))
 GATE
 )"
 GATE_RC=$?
@@ -349,21 +326,7 @@ GATE_STATE="${GATE%% *}"
 GATE_WHY="${GATE#* }"
 case "$GATE_STATE" in
   ready)
-    # The gate's second word is the MODE and nothing else; the summary follows it. Deciding this by
-    # searching the whole message for "UNGRADED" meant a PARTIAL whose verifier reason happened to
-    # contain that word would have made a graded run describe itself as ungraded.
-    GATE_MODE="${GATE_WHY%% *}"
-    GATE_SUMMARY="${GATE_WHY#* }"
-    case "$GATE_MODE" in
-      graded)
-        log "$SESSION: the archive is graded and every topic reaches past the close ($GATE_SUMMARY)" ;;
-      ungraded)
-        log "$SESSION: NO ARCHIVE VERDICT EXISTS and ALLOW_UNGRADED=true, so this session is claimed on the weaker file-stamp test alone ($GATE_SUMMARY)" ;;
-      *)
-        log "FATAL: the readiness gate said ready in a mode this script does not know ('$GATE_MODE') — the session is NOT claimed"
-        alert "🚨 vol-premium open-reference readiness gate returned an unknown mode '$GATE_MODE' on $(hostname) for $SESSION. The session is NOT claimed."
-        exit 2 ;;
-    esac ;;
+    log "$SESSION: the archive is graded and every topic reaches past the close ($GATE_WHY)" ;;
   waiting)
     log "$SESSION: not ready — $GATE_WHY; leaving the session unclaimed for the retry run"
     exit 0 ;;

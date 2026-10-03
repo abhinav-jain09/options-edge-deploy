@@ -239,6 +239,48 @@ class StagedContentTest(unittest.TestCase):
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn("MISSING SOURCE", r.stderr)
 
+    def test_a_symlinked_staged_copy_is_refused(self) -> None:
+        """`[ -f ]` and `cmp` both FOLLOW links, so a staged symlink made the comparison true of a
+        file somewhere else — and the bytes the container reads could then be changed after this ran
+        by swapping the target. Comparing them proved nothing about what the suite sees."""
+        name = "market_calendar.py"
+
+        def link_it(work: Path, target: Path) -> None:
+            self._stage_both(work, target)
+            (target / name).unlink()
+            (target / name).symlink_to((work / STAGED[name]).resolve())
+
+        r = self._run(link_it)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("STAGED COPY IS A SYMLINK", r.stderr)
+
+    def test_a_symlinked_source_is_refused(self) -> None:
+        """The matching reason: what is committed must be the bytes, not a pointer to them, or the
+        comparison is about whatever the pointer currently resolves to."""
+        name = "vol-premium-open-reference-capture.py"
+
+        def link_the_source(work: Path, target: Path) -> None:
+            self._stage_both(work, target)
+            source = work / STAGED[name]
+            elsewhere = work / "elsewhere.py"
+            shutil.move(source, elsewhere)
+            source.symlink_to(elsewhere)
+
+        r = self._run(link_the_source)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("SOURCE IS A SYMLINK", r.stderr)
+
+    def test_a_directory_in_place_of_a_staged_file_is_refused(self) -> None:
+        def make_it_a_directory(work: Path, target: Path) -> None:
+            self._stage_both(work, target)
+            name = "market_calendar.py"
+            (target / name).unlink()
+            (target / name).mkdir()
+
+        r = self._run(make_it_a_directory)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("NOT STAGED", r.stderr)
+
     def test_the_deploy_job_runs_it_before_the_container(self) -> None:
         """A control the job does not invoke is not a control. The ORDER matters too: after the
         container has started, the suite is already reading whatever is there."""

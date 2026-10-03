@@ -17,6 +17,12 @@
 # that differs, or an absent one, fails here. Run it on the agent after staging and before the
 # container starts.
 #
+# WHAT IT DOES NOT CLOSE, said rather than implied: the interval between this check and the
+# container starting. Nothing stands between them in the job but the docker invocation itself, and
+# refusing symlinks removes the easy way to change the bytes in that interval, but a concurrent
+# writer with access to the workspace could still replace a regular file. The workspace is the
+# agent's own and the job holds it for the build; this is the boundary, not a proof.
+#
 # It compares and reports. It creates nothing and removes nothing.
 set -uo pipefail
 cd "$(dirname "$0")/../.." || exit 2
@@ -26,15 +32,34 @@ fails=0
 
 # Each dependency, and where it is committed. Keep this list in step with the job's staging
 # commands; validate-archive-unit-completeness.sh is what notices when one is missing from the job.
+# NEITHER PATH MAY BE A SYMLINK, and `[ -f ]` and `cmp` would both have followed one. A staged
+# symlink makes the comparison true of a file somewhere else, and the bytes the container reads can
+# change after this ran by swapping the target — so comparing them proves nothing about what the
+# suite sees. A symlinked SOURCE is refused for the matching reason: what is committed is then a
+# pointer, and the comparison is about whatever it currently points at. The job stages with a plain
+# `cp`, which produces a regular file, so refusing links costs nothing and closes the indirection.
+#
+# `[ -L ]` is tested BEFORE `[ -f ]` because `[ -f ]` is true of a symlink to a regular file; a
+# directory fails `[ -f ]` and is reported as the absent or unstageable thing it is.
 check() { # $1=committed source  $2=staged name
   local source="$1" staged="$DIR/$2"
+  if [ -L "$source" ]; then
+    echo "SOURCE IS A SYMLINK: $source — what is committed must be the bytes, not a pointer to them" >&2
+    fails=$((fails + 1))
+    return
+  fi
   if [ ! -f "$source" ]; then
-    echo "MISSING SOURCE: $source — nothing to stage from" >&2
+    echo "MISSING SOURCE: $source — nothing to stage from (or it is not a regular file)" >&2
+    fails=$((fails + 1))
+    return
+  fi
+  if [ -L "$staged" ]; then
+    echo "STAGED COPY IS A SYMLINK: $DIR/$2 — the suite would read whatever it points at, which can change after this check; the job stages with cp and must produce a regular file" >&2
     fails=$((fails + 1))
     return
   fi
   if [ ! -f "$staged" ]; then
-    echo "NOT STAGED: $staged does not exist, so the suite would run without it — the job's copy of $source did not happen" >&2
+    echo "NOT STAGED: $staged does not exist as a regular file, so the suite would run without it — the job's copy of $source did not happen" >&2
     fails=$((fails + 1))
     return
   fi

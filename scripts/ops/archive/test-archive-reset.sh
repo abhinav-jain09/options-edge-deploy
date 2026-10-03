@@ -2333,49 +2333,66 @@ CAL
 # capture, and reading three names cannot discover a fourth input: a new constant, or a topic
 # written inline at a call site, would be read by the capture and checked by nothing.
 #
-# A SHAPE TEST WAS THE WRONG INSTRUMENT. The first version of this case matched string literals
-# against a guess at what a topic name looks like, and the reviewer broke it twice over: Kafka
-# permits `_` and upper case, so `underlying.spx_index.price` slipped through, while ordinary
-# dotted strings like a hostname were caught as topics. The test is now about CALL SITES, which is
-# where a topic actually enters the reader, and needs no guess at all. Exactly two functions in the
-# capture take a topic — _records(root, topic, day) and _timed(root, topic, day, session) — so
-# every call to either must pass one of the three declared names, or forward a parameter of the
-# function it sits in (which is how _timed hands its own topic to _records).
-want "18y every topic entering the reader is one the gate reads off it" "" \
+# A SHAPE TEST WAS THE WRONG INSTRUMENT. The first version matched string literals against a guess
+# at what a topic name looks like, and review broke it both ways: Kafka permits `_` and upper case,
+# so `underlying.spx_index.price` passed through as an ungated input, while an ordinary dotted
+# string such as a hostname was caught as a topic. A topic enters the reader at a CALL SITE, so
+# that is what this examines, and it needs no guess.
+#
+# AND THE SET OF TOPIC-TAKING FUNCTIONS IS DERIVED, NOT LISTED. It was a literal map from name to
+# argument position, which review was right to refuse twice over: deleting an entry left the
+# assertion green, so the test was not falsified by removing the thing it names, and a helper added
+# later would not have been covered. A function takes a topic if it has a parameter CALLED topic,
+# which is a fact about the reader; the position comes from the same signature. The derivation is
+# itself asserted, because one that silently found nothing would make every call site pass.
+want "18y every topic entering the reader is one the gate reads off it" "ok _records:1 _timed:1" \
      "$(python3 - <<'CALLSITES' 2>&1
 import ast, pathlib
-source = pathlib.Path("vol-premium-open-reference-capture.py").read_text()
-tree = ast.parse(source)
+
+tree = ast.parse(pathlib.Path("vol-premium-open-reference-capture.py").read_text())
 declared = {target.id for node in tree.body
             if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant)
             for target in node.targets
             if isinstance(target, ast.Name) and target.id in ("INDEX", "ES", "BASIS")}
-TAKES_A_TOPIC = {"_records": 1, "_timed": 1}
-problems = []
 
-
-def check(node, parameters):
-    for inner in ast.walk(node):
-        if not isinstance(inner, ast.Call) or not isinstance(inner.func, ast.Name):
-            continue
-        where = TAKES_A_TOPIC.get(inner.func.id)
-        if where is None:
-            continue
-        if len(inner.args) <= where:
-            problems.append(f"{inner.func.id} called with no topic argument")
-            continue
-        argument = inner.args[where]
-        if isinstance(argument, ast.Name) and argument.id in declared | parameters:
-            continue
-        shown = ast.dump(argument) if not isinstance(argument, ast.Constant) else repr(argument.value)
-        problems.append(f"{inner.func.id} is passed {shown}, which the gate does not read")
-
-
+# Every function whose signature says it takes a topic, and where in the call that argument sits.
+takes_a_topic = {}
 for node in ast.walk(tree):
     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-        names = {a.arg for a in node.args.args} | {a.arg for a in node.args.kwonlyargs}
-        check(node, names)
-print("; ".join(sorted(set(problems))))
+        names = [a.arg for a in node.args.args]
+        if "topic" in names:
+            takes_a_topic[node.name] = names.index("topic")
+
+# Which function each call sits in, so a forwarded parameter can be told from a smuggled name.
+# Module-scope calls get an empty parameter set, which is the stricter reading and was missing
+# before: the earlier version only walked function bodies.
+enclosing = {}
+for node in ast.walk(tree):
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        parameters = {a.arg for a in node.args.args} | {a.arg for a in node.args.kwonlyargs}
+        for inner in ast.walk(node):
+            enclosing.setdefault(id(inner), parameters)
+
+problems = []
+for node in ast.walk(tree):
+    if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+        continue
+    where = takes_a_topic.get(node.func.id)
+    if where is None:
+        continue
+    parameters = enclosing.get(id(node), set())
+    if len(node.args) <= where:
+        problems.append(f"{node.func.id} called with no topic argument")
+        continue
+    argument = node.args[where]
+    if isinstance(argument, ast.Name) and argument.id in declared | parameters:
+        continue
+    shown = repr(argument.value) if isinstance(argument, ast.Constant) else ast.dump(argument)
+    problems.append(f"{node.func.id} is passed {shown}, which the gate does not read")
+
+# The derivation, printed so that a map which found nothing cannot read as a clean result.
+found = " ".join(f"{name}:{where}" for name, where in sorted(takes_a_topic.items()))
+print(("ok " + found) if not problems else "; ".join(sorted(set(problems))))
 CALLSITES
 )"
 
@@ -2419,22 +2436,18 @@ root=$(vp_archive 2026-09-25 20260925T201500Z)   # files, stamped late, but the 
 out=$(vp_run 2026-09-25 "$root")
 want "18e an ungraded day is not captured by the cron" "" "$(cat "$vp_tmp/calls")"
 has  "  and the reason is the missing verdict, not a missing file" "verdict for this session has not been written" "$out"
+has  "  and names the repair, which is to produce the verdict" "run oe-archive-verify.sh for this date" "$out"
 want "  it is a WAIT, not a failure: the retry must be able to run" 0 "$(vp_rc 2026-09-25 "$root")"
-
-# ---- 18f. ...and ALLOW_UNGRADED is the operator's way in, for a day the verifier missed (2026-10-01 is
-# one). It falls back to the weaker file-stamp test and must SAY so: a log line claiming a grade it does
-# not have is the same defect as a comment claiming more than the code supports.
+# THERE IS NO WAY PAST THIS. An earlier version took ALLOW_UNGRADED=true and fell back to the timing
+# of archive file names; review refused it, because the claim it spends is permanent and so an
+# exceptional path publishing on weaker evidence makes the authoritative verdict unusable for that
+# session forever. The variable is gone, and setting it must change nothing.
+want "  and no environment variable gets past it" "" "$(vp_run 2026-09-25 "$root" ALLOW_UNGRADED=true >/dev/null; cat "$vp_tmp/calls")"
+# ...the SAME session, once graded, IS captured — so the refusal above is the missing verdict and
+# not the fixture.
 : > "$vp_tmp/calls"
-out=$(vp_run 2026-09-25 "$root" ALLOW_UNGRADED=true)
-want "18f ALLOW_UNGRADED captures the ungraded day" "called session=2026-09-25 close=16:00" "$(cat "$vp_tmp/calls")"
-has  "  and the log does not claim a verdict it does not have" "NO ARCHIVE VERDICT EXISTS" "$out"
-# and the fallback is still a gate, not a bypass: no file late enough, no capture
-: > "$vp_tmp/calls"
-root=$(vp_archive 2026-09-24 20260924T195500Z)   # 15:55 ET, before close + 10m
-want "  the fallback still refuses a session whose files predate the close" "" "$(vp_run 2026-09-24 "$root" ALLOW_UNGRADED=true >/dev/null; cat "$vp_tmp/calls")"
-: > "$vp_tmp/calls"
-root=$(vp_archive 2026-09-23)                     # no files at all
-want "  and one with no archived file at all" "" "$(vp_run 2026-09-23 "$root" ALLOW_UNGRADED=true >/dev/null; cat "$vp_tmp/calls")"
+vp_verdict 2026-09-25 2026-09-25T20:15:00Z
+want "  and once the verdict exists the same session is captured" "called session=2026-09-25 close=16:00" "$(vp_run 2026-09-25 "$root" >/dev/null; cat "$vp_tmp/calls")"
 
 # ---- 18g. AN UNREADABLE VERDICT IS A FAULT, NOT A WAIT. It will not fix itself, and "try again this
 # evening" forever is a gate that has become a delay nobody notices.
@@ -2593,23 +2606,17 @@ has  "  and the gate names the reader's topic, not its own list" "spx.basis.stat
 printf 'INDEX = 1\nES = 2\nBASIS = 3\n' > "$vp_tmp/bad-topics-capture.py"
 want "  a reader whose topic set is not three names is a fault" 2 "$(vp_rc 2026-09-09 "$root" CAPTURE="$vp_tmp/bad-topics-capture.py")"
 
-# ---- 18u. THE MODE IS A TOKEN, NOT A WORD FOUND IN THE SUMMARY. The graded and ungraded log lines
-# used to be chosen by searching the whole gate message for "UNGRADED", and a PARTIAL's verifier
-# reasons go into that message — so a reason containing the word would have made a graded run
-# describe itself as claimed on the weaker test. The reason here says exactly that.
+# ---- 18u. A PARTIAL'S REASONS ARE DATA, NOT CONTROL. They come from the verifier and go into the
+# gate's own message, and for a while the wrapper decided which log line to write by searching that
+# message for a keyword — so a reason containing it would have changed what the run said about
+# itself. The reason in this fixture is chosen to say exactly that.
 : > "$vp_tmp/calls"
 root=$(vp_archive 2026-09-08 20260908T201500Z)
 vp_verdict_raw 2026-09-08 "{\"dt\":\"2026-09-08\",\"env\":\"prod\",\"topics\":[{\"topic\":\"underlying.spx.index.price\",\"status\":\"PARTIAL\",\"records\":1,\"max_event_time\":\"2026-09-08T20:15:00Z\",\"reasons\":[\"an UNGRADED-looking reason\"]},$(vp_entry underlying.es.price OK 2026-09-08T20:15:00Z),$(vp_entry spx.basis.state OK 2026-09-08T20:15:00Z)]}"
 out=$(vp_run 2026-09-08 "$root")
 want "18u a session whose PARTIAL reason contains the word is still captured" "called session=2026-09-08 close=16:00" "$(cat "$vp_tmp/calls")"
-has  "  and is reported as GRADED, from the gate's own mode token" "the archive is graded and every topic reaches past the close" "$out"
+has  "  and is reported as graded, whatever the reason happens to say" "the archive is graded and every topic reaches past the close" "$out"
 has  "  with the reason still logged" "an UNGRADED-looking reason" "$out"
-# ...and the ungraded path still reports itself as ungraded, so the case above is not satisfied by a
-# wrapper that simply never says it took the weaker test.
-: > "$vp_tmp/calls"
-root=$(vp_archive 2026-09-04 20260904T201500Z)
-out=$(vp_run 2026-09-04 "$root" ALLOW_UNGRADED=true)
-has  "  the ungraded path still says so" "NO ARCHIVE VERDICT EXISTS" "$out"
 
 # ---- 18v. A NAME ASSIGNED TWICE IS NOT DECLARED, for the same reason a topic graded twice is not
 # graded: keeping the last silently resolves a disagreement by file order.
