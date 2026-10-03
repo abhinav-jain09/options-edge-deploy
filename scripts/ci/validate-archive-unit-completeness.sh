@@ -182,16 +182,27 @@ for f in $wanted $sourced; do
         # right to refuse it: `echo --allow-ignored <path>` satisfied it while the real invocation
         # went without, so the guard could pass and the install still stop. The statement list built
         # above is reused, so the same normalisation applies — comments gone, continuations joined.
+        # THE VERIFIER MUST BE THE COMMAND WORD, not a filename appearing somewhere in a statement:
+        # `echo scripts/jenkins/verify-permitted-tree.sh --allow-ignored <path>` contains both the
+        # name and the declaration and runs no verifier, and that satisfied the previous version
+        # (review round 2 of #1128). So each statement is tokenised, a leading `sh`, any
+        # VAR=VALUE assignments and a `bash` are stepped over, and what follows has to BE the
+        # verifier. Quotes become spaces first, so the Groovy wrapper and the shell assignment
+        # quoting do not hide the command word.
         verifier_at = 0
         for (i = 1; i <= n; i++) {
-          line = statement[i]
-          gsub(/[[:space:]]+/, " ", line)
-          if (index(line, "verify-permitted-tree.sh") > 0) {
-            verifier_at = i
-            bounded = line " "
-            gsub(/[\047"]/, " ", bounded)
-            if (index(bounded, "--allow-ignored " dst " ") > 0) { print "ok"; exit }
-          }
+          bounded = statement[i] " "
+          gsub(/[\047"]/, "", bounded)
+          gsub(/[[:space:]]+/, " ", bounded)
+          sub(/^ /, "", bounded)
+          words = split(bounded, word, " ")
+          at = 1
+          if (words >= 1 && word[at] == "sh") { at++ }
+          while (at <= words && word[at] ~ /^[A-Za-z_][A-Za-z0-9_]*=/) { at++ }
+          if (at <= words && word[at] == "bash") { at++ }
+          if (at > words || word[at] !~ /(^|\/)verify-permitted-tree\.sh$/) { continue }
+          verifier_at = i
+          if (index(bounded " ", "--allow-ignored " dst " ") > 0) { print "ok"; exit }
         }
         if (verifier_at == 0) { print "no-verifier"; exit }
         print "ok-but-undeclared"

@@ -155,6 +155,36 @@ class StagingCheckTest(unittest.TestCase):
         r = self._run(lambda t: t.replace(f"{first} {second}", f"{second} {first}"))
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
+    def test_an_echo_of_the_verifier_itself_does_not_count(self) -> None:
+        """THE DECOY THAT BEAT THE PREVIOUS VERSION. `echo <path>/verify-permitted-tree.sh … \
+        --allow-ignored <staged path>` puts the verifier's NAME and the declaration in one
+        statement and runs no verifier at all, which satisfied a check that only looked for both
+        strings together. The verifier has to be the COMMAND WORD — after a leading `sh`, any
+        VAR=VALUE assignments and a `bash` — so an echo of it is not an invocation of it."""
+        def echo_the_whole_thing(text: str) -> str:
+            lines = text.split("\n")
+            at = next(i for i, l in enumerate(lines) if self.VERIFIER in l)
+            declarations = " ".join(
+                f"--allow-ignored scripts/ops/archive/{name}" for name in STAGED)
+            lines[at] = (f"          sh 'echo scripts/jenkins/{self.VERIFIER} --dir . "
+                         f"--allow-ignored target --allow-ignored .jenkins-tmp {declarations}'")
+            return "\n".join(lines)
+
+        r = self._run(echo_the_whole_thing)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("CANNOT CHECK THE DECLARATION", r.stderr)
+
+    def test_the_real_invocation_is_recognised_through_its_env_assignment(self) -> None:
+        """The companion, and it caught a real mistake: the job runs the verifier as
+        `sh 'PERMITTED_SHA="..." bash scripts/jenkins/verify-permitted-tree.sh …'`, and an earlier
+        attempt at the command-word check turned quotes into spaces, which split the assignment in
+        two and made the guard refuse the committed job. Quotes are removed instead."""
+        r = self._run()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        job = (ROOT / JF).read_text()
+        self.assertIn('PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/' + self.VERIFIER,
+                      job, "the shape this case is about is no longer the one the job uses")
+
     def test_a_job_with_no_tree_verifier_says_so(self) -> None:
         """A guard that defers to a gate must notice the gate going away, rather than passing on a
         premise that no longer holds."""
