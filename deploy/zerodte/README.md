@@ -46,6 +46,28 @@ What lives here is REVIEWED INPUT to the provisioning Job (`Jenkinsfile.zerodte-
 * The committed receipt block carries `environmentLineageId` and `bootstrapKind` as well; `validate-zerodte-provisioning.sh` binds a
   committed `provisioned/<env>.yaml` to `provisioning/<env>.yaml` (symbol, lineage, bootstrapKind, generation, eraId must agree).
 
+## The research-store migration (increment 9c — `Jenkinsfile.zerodte-research-migrate`)
+
+Before any provisioning can complete, the research store must be at schema v7 (the provisioner refuses otherwise, `SCHEMA_VERSION`). The
+migration is the service image's own `ZeroDteResearchMigrator` (increment 9a) run as a Job (`k8s/jobs/zerodte-research-migrate-job.yaml`)
+by `scripts/ops/zerodte-research-migrate.sh` under the REVIEWED declaration `research-migration/<env>.yaml` (fromVersion 6, toVersion 7,
+the shipped calendar's version digest the image must carry, how far ahead the calendar must reach; validated by
+`scripts/ci/validate-zerodte-research-migration.sh`). ONE transaction — the typed v6 archive, the v7 DDL and views, the calendar, the
+migration record — EXECUTED AND ROLLED BACK on the dry run (its `MIGRATABLE` receipt carries the real dispositions), committed and
+verified on CONFIRM (`MIGRATED`); a rerun at v7 verifies the recorded calendar version, every calendar row and the catalog digest
+(`ALREADY_MIGRATED`) and never re-applies.
+
+The wrapper repeats every guarantee of the provisioning wrapper (the CA-pinned cluster, the atomic lock `zerodte-research-migrate-lock`,
+the exact receipt grammar with exit agreement, the same-build dry-run receipt, HEAD == PERMITTED_SHA re-checked) and adds THE QUIESCENCE
+PROOF: the migrator cannot tell from PostgreSQL whether a legacy (v6) in-process writer still runs, so the wrapper verifies on the live
+cluster that every `vix-option-inteligence-service` pod runs the SAME digest-pinned image this Job runs (the V1 compatibility image whose
+writer refuses v7) AND carries no `ZERODTE_RESEARCH_ENABLED=true`; a pod on another image, a pod with the flag on, an unreadable pod list
+— each is a refusal — and only then renders `--legacy-writers-quiesced` into the Job (the migrator refuses without it).
+
+ORDER ON EVERY ENVIRONMENT (consult Q12): roll the V1 compatibility image with `ZERODTE_RESEARCH_ENABLED` off to every pod → this job
+(dry run, then CONFIRM) → the provisioning job → the dedicated v7 writer (9e) → increment 8. `scripts/ci/zerodte-research-migrate-receipt-test.sh`
+drives the wrapper through 52 cases against a fake kubectl; `zerodte-research-migrate-guard-test.sh` the guard stage through 29.
+
 ## Owner-only items (stated once)
 
 * The ledger key `ZERO_DTE_LEDGER_KEY` (≥ 64 hex): a Jenkins secret-text credential (`zerodte-ledger-key` / `zerodte-ledger-key-dev`)
