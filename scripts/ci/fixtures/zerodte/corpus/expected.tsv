@@ -11,8 +11,10 @@ att-blank-approver-reject	attestation	reject
 att-bom-reject	attestation	reject
 att-capital-null-accept	attestation	accept
 att-comment-lines-accept	attestation	accept
+att-cr-line-break-reject	attestation	reject
 att-crlf-accept	attestation	accept
 att-crlf-codepoint-limit-reject	attestation	reject
+att-double-space-after-colon-accept	attestation	accept
 att-duplicate-key-reject	attestation	reject
 att-empty-accept	attestation	accept
 att-empty-flow-map-reject	attestation	reject
@@ -25,10 +27,13 @@ att-flow-map-reject	attestation	reject
 att-flow-nonempty-reject	attestation	reject
 att-instant-fraction-accept	attestation	accept
 att-instant-without-zone-reject	attestation	reject
+att-invalid-utf8-reject	attestation	reject
 att-leap-second-instant-reject	attestation	reject
 att-literal-indicator-reject	attestation	reject
+att-ls-line-break-reject	attestation	reject
 att-merge-key-reject	attestation	reject
 att-multiline-single-quoted-approver-reject	attestation	reject
+att-nel-line-break-reject	attestation	reject
 att-nested-duplicate-key-reject	attestation	reject
 att-no-space-list-map-separator-reject	attestation	reject
 att-nonprintable-comment-reject	attestation	reject
@@ -47,7 +52,9 @@ att-tilde-null-accept	attestation	accept
 att-unapproved-lineage-reject	attestation	reject
 att-unknown-key-reject	attestation	reject
 att-unquoted-alpha-hex-reject	attestation	reject
+att-unquoted-boolean-name-reject	attestation	reject
 att-unquoted-hash-reject	attestation	reject
+att-unquoted-numeric-name-reject	attestation	reject
 att-yaml-directive-reject	attestation	reject
 att-year-zero-date-reject	attestation	reject
 att-year-zero-instant-reject	attestation	reject
@@ -64,6 +71,7 @@ prov-hex-int-reject	provisioning	reject
 prov-leading-zero-int-accept	provisioning	accept
 prov-list-item-colon-space-reject	provisioning	reject
 prov-multiline-double-quoted-scalar-reject	provisioning	reject
+prov-multiline-nel-scalar-reject	provisioning	reject
 prov-multiline-plain-scalar-reject	provisioning	reject
 prov-multiline-scalar-reject	provisioning	reject
 prov-multiline-single-quoted-scalar-reject	provisioning	reject
@@ -78,4 +86,5 @@ prov-unclosed-double-quote-reject	provisioning	reject
 prov-unclosed-single-quote-reject	provisioning	reject
 prov-underscore-int-reject	provisioning	reject
 prov-unknown-key-reject	provisioning	reject
+prov-unquoted-numeric-operator-reject	provisioning	reject
 prov-yaml11-bool-reject	provisioning	reject

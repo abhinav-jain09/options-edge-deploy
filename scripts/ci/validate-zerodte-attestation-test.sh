@@ -106,7 +106,33 @@ expect "CRLF counted RAW toward the cap" 1 "exceeds 65536 code points" -- $Z ver
 pr "a DEL in a comment"                "$(printf '# a DEL \177 in a comment')$NL$BASE0" "a non-printable character is not accepted"
 pr "a tab as the map separator"        "${BASE0/name: dev/name:	dev}" "the separator is ': ' or a colon ending the line"
 pr "a space before the colon"          "${BASE0/name: dev/name : dev}" "not a map entry"
-pr "a year-zero date"                  "${BASE0/date: \"2026-10-03\"/date: \"0000-01-01\"}" "is not a real calendar date"
+pr "a year-zero date (lexically)"      "${BASE0/date: \"2026-10-03\"/date: \"0000-01-01\"}" "lineages[].date is not in its domain"
+pr "a month-13 date (lexically)"       "${BASE0/date: \"2026-10-03\"/date: \"2026-13-03\"}" "lineages[].date is not in its domain"
+pr "a non-real date (Feb 30)"          "${BASE0/date: \"2026-10-03\"/date: \"2026-02-30\"}" "is not a real calendar date"
+pr "an unquoted integer as a name"     "${BASE0/name: dev/name: 123}" "lineages[].name is a string"
+pr "an unquoted boolean as a name"     "${BASE0/name: dev/name: true}" "lineages[].name is a string"
+printf '%s\n' "${BASE0/name: dev/name: \"123\"}" > "$T/q.yaml"; expect "a QUOTED integer as a name is a string" 0 "chain intact" -- $Z verify "$T/q.yaml"
+pr "a lone CR as a line break"         "${BASE0/name: dev/name: dev$'\r'parent: null}" "a line break other than LF / CRLF"
+pr "NEL as a line break"               "${BASE0/name: dev/name: dev$'\xc2\x85'parent: null}" "a line break other than LF / CRLF"
+pr "LINE SEPARATOR as a line break"    "${BASE0/name: dev/name: dev$'\xe2\x80\xa8'parent: null}" "a line break other than LF / CRLF"
+printf '# not UTF-8: \377\376\n%s\n' "$BASE0" > "$T/bad-utf8.yaml"
+expect "a file that is not valid UTF-8" 1 "is not valid UTF-8" -- $Z verify "$T/bad-utf8.yaml"
+# the cap's edge: a lawful document padded to EXACTLY 2^16 code points passes; one more is refused
+python3 - "$T/base0.yaml" "$T/at-cap.yaml" "$T/over-cap.yaml" <<'PY'
+import sys
+base = open(sys.argv[1], encoding="utf-8", newline="").read()
+pad = (1 << 16) - len(base) - 3
+at = base + "# " + "x" * pad + "\n"; assert len(at) == (1 << 16)
+open(sys.argv[2], "w", encoding="utf-8", newline="").write(at)
+open(sys.argv[3], "w", encoding="utf-8", newline="").write(at[:-1] + "x\n")
+PY
+expect "exactly 2^16 code points passes" 0 "chain intact" -- $Z verify "$T/at-cap.yaml"
+expect "2^16 + 1 code points is refused" 1 "exceeds 65536 code points" -- $Z verify "$T/over-cap.yaml"
+ENTRY1="$(cat "$T/base1.yaml")"
+for bad in "0000-01-01T00:00:00Z" "+12026-10-03T12:00:00Z" "2026-10-03T12:00:00+00:00" "2016-12-31T23:59:60Z" "2026-10-03T12:00:00" "2026-10-03t12:00:00Z" "2026-10-03T12:00:00.Z"; do
+  pr "a non-instant, lexically: $bad"   "${ENTRY1/createdAt: \"2026-10-03T12:00:00Z\"/createdAt: \"$bad\"}" "entries[].createdAt is not in its domain"
+done
+pr "a non-real instant (Feb 30)"       "${ENTRY1/createdAt: \"2026-10-03T12:00:00Z\"/createdAt: \"2026-02-30T12:00:00Z\"}" "is not a real instant"
 printf '%s\n' "${BASE0/approvedBy: Abhinav Jain/approvedBy: ${SQ}Mary O${SQ}${SQ}Brien${SQ}}" > "$T/ob.yaml"
 expect "'' in single quotes is one apostrophe" 0 "chain intact" -- $Z verify "$T/ob.yaml"
 echo "--- the shared corpus: manifest discipline, each refusal by its reason, in a temporary copy ---"

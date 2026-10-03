@@ -73,8 +73,12 @@ What lives here is REVIEWED INPUT to the provisioning Job (`Jenkinsfile.zerodte-
   pipeline's validation stage before any cluster is touched. The subset both readers share is listed in the design
   ("Increment 7b — AS BUILT" item 2): no BOM, no document markers or directives, plain identifier keys, `key: value` with a space, one line per
   scalar in every style, `[]` written exactly, no flow maps, lower-case booleans, `''` as one apostrophe in single quotes, no escapes in
-  double quotes, no tabs in indentation, `key: value` with exactly one space (no tab, no space before the colon), only printable characters
-  anywhere (a DEL in a comment is refused), ≤ 2^16 code points counted over the RAW text (a CR counts), dates `yyyy-MM-dd` and instants
-  `yyyy-MM-ddTHH:mm:ss[.fraction]Z` with year 0001–9999, seconds 00–59, `Z` only.
+  double quotes, no tabs in indentation, `key: value` with at least one space after the colon (never a tab, never a space before the colon),
+  only printable characters anywhere (a DEL in a comment is refused), line breaks LF or CRLF only (a lone CR, NEL, LINE / PARAGRAPH SEPARATOR
+  are refused anywhere), valid UTF-8 (an undecodable file is a refusal, never a crash), ≤ 2^16 code points counted over the RAW text (a CR
+  counts; exactly 2^16 passes), plain scalars resolve to null / `true` / `false` / a signed decimal integer within a Java long BEFORE any domain
+  is judged (an unquoted `123` in a string field is "… is a string" in both; a quoted `"123"` is a string), dates `yyyy-MM-dd` and instants
+  `yyyy-MM-ddTHH:mm:ss[.fraction]Z` judged LEXICALLY in both (year 0001–9999, month 01–12, seconds 00–59, `Z` only) and then as real calendar
+  values.
 * Branch protection of this repository (signed commits, a second reviewer, the append-only check as a required check) — design §5.1.
 * Each run's `PERMITTED_SHA` (Deployment Permission Rule).

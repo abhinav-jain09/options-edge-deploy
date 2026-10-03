@@ -43,7 +43,7 @@ env = sys.argv[2]
 assert z._text(root["environment"], "environment") == env, "environment names the file"
 for k in ("generation", "eraId", "ledgerOffset"):
     v = root[k]
-    assert isinstance(v, z.Scalar) and not v.quoted and re.match(r"^[0-9]+$", v.text), k + " is a non-negative integer"
+    assert isinstance(v, int) and not isinstance(v, bool) and v >= 0, k + " is a non-negative integer (an unquoted plain integer)"
 z._text(root["ledgerTopicId"], "ledgerTopicId", z.HEX32, quoted=True)
 z._text(root["clusterId"], "clusterId", z.TEXT, quoted=True)
 z._text(root["provisionedDigest"], "provisionedDigest", z.HEX64, quoted=True)
@@ -53,7 +53,7 @@ for key, want in (("symbol", d["symbol"]), ("environmentLineageId", d["environme
     got = z._text(root[key], key)
     assert got == want, "%s is '%s' in the receipt, '%s' in the declaration" % (key, got, want)
 for key, want in (("generation", d["generation"]), ("eraId", d["eraId"])):
-    got = int(root[key].text)
+    got = root[key]
     assert got == want, "%s is %d in the receipt, %d in the declaration" % (key, got, want)
 PY
   then echo "ok   $r (bound to deploy/zerodte/provisioning/$env.yaml)"; else echo "FAIL: $r is not a confirmed receipt of the documented shape bound to its declaration"; fail=1; fi
