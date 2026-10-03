@@ -173,12 +173,19 @@ for f in $wanted $sourced; do
         if (cp_at == 0)       { print "absent"; exit }
         if (mount_at == 0)    { print "no-suite-mount"; exit }
         if (cp_at > mount_at) { print "too-late"; exit }
+        # A staged copy is gitignored where it lands, and verify-permitted-tree.sh refuses any
+        # ignored path it was not told to expect. Staging a file without declaring it stops the
+        # first REAL install — never a tests-only run, which skips that stage.
+        if (index(joined, "--allow-ignored " dst) == 0) { print "ok-but-undeclared"; exit }
         print "ok"
       }' "$JF")
     case "$staged" in
       ok) : ;;
       too-late)
         echo "STAGED TOO LATE: $f lives in $home/ and $JF copies it only AFTER the docker run that mounts $DIR into the suite container — the suite would run without it" >&2
+        fails=$((fails+1)) ;;
+      ok-but-undeclared)
+        echo "STAGED BUT NOT DECLARED: $f is copied into $DIR by $JF, where it is gitignored, but no '--allow-ignored $DIR/$f' is passed to verify-permitted-tree.sh — that verifier refuses any ignored path it was not told to expect, so the first real install would stop at it (and a tests-only run would not, because it skips that stage)" >&2
         fails=$((fails+1)) ;;
       no-suite-mount)
         echo "CANNOT CHECK STAGING: $JF has no docker run mounting $DIR:/w:ro, so the ordering this guard relies on no longer exists — update the guard with the job" >&2

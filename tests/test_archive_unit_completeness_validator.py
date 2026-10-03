@@ -101,6 +101,20 @@ class StagingCheckTest(unittest.TestCase):
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn("STAGED TOO LATE", r.stderr)
 
+    def test_a_staged_copy_that_is_not_declared_to_the_tree_verifier_is_caught(self) -> None:
+        """THE BUG THE FIRST REAL INSTALL FOUND. Both staged copies are gitignored where they land,
+        and verify-permitted-tree.sh refuses ANY ignored path it was not told to expect. #1125 added
+        the second copy and not the declaration, so the install stopped at that gate — and a
+        tests-only run never sees it, because it skips the stage. Every file this guard requires a
+        staging `cp` for must therefore also be declared."""
+        for name in STAGED:
+            with self.subTest(name=name):
+                r = self._run(lambda t, n=name: t.replace(
+                    f" --allow-ignored scripts/ops/archive/{n}", ""))
+                self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+                self.assertIn("STAGED BUT NOT DECLARED", r.stderr)
+                self.assertIn(name, r.stderr)
+
     def test_the_ordering_the_guard_relies_on_is_asserted_not_assumed(self) -> None:
         """If the job stops mounting the unit directory into a container, the ordering test is
         meaningless — and a guard that silently keeps passing on a premise that has gone is worse
