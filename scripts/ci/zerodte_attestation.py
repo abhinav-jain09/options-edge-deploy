@@ -37,9 +37,11 @@ TEXT = re.compile(r"^[\x20-\x7e]{1,128}$")
 # trailing . for an initial; 2..128 characters. The SAME grammar is VirginAttestation.APPROVER in the Job.
 APPROVER = re.compile(r"^(?=.{2,128}$)[A-Za-z]+(?:[.'-][A-Za-z]+)*\.?(?: [A-Za-z]+(?:[.'-][A-Za-z]+)*\.?)*$")
 MAX_CODE_POINTS = 1 << 16   # the subset's size cap, counted over the RAW text (a CR counts); the Job checks the same number before SnakeYAML sees the text
-# SnakeYAML's printable code points (YAML 1.1 c-printable): TAB, LF, CR, 0x20–0x7E, NEL, 0xA0–0xD7FF, 0xE000–0xFFFD, 0x10000–0x10FFFF.
-# Anything else — a C0 control, DEL — is refused ANYWHERE in the text, a comment included, as the Job refuses it.
-_PRINTABLE = re.compile("^[\t\n\r\x20-\x7e\x85\xa0-\ud7ff\ue000-\ufffd\U00010000-\U0010ffff]*$")
+# SnakeYAML's printable code points (YAML 1.1 c-printable) MINUS TAB: LF, CR, 0x20–0x7E, NEL, 0xA0–0xD7FF, 0xE000–0xFFFD, 0x10000–0x10FFFF.
+# Anything else — a C0 control, DEL — is refused ANYWHERE in the text, a comment included, as the Job refuses it. A TAB is refused anywhere
+# too (Codex 7b r7 / #921 r6): SnakeYAML treats a TAB as separation in some positions (after a list dash, before a comment, trailing a plain
+# scalar) and as an error in others, and no hand parser can mirror that cheaply — so the subset has NO tabs, in quotes and comments included.
+_PRINTABLE = re.compile("^[\n\r\x20-\x7e\x85\xa0-\ud7ff\ue000-\ufffd\U00010000-\U0010ffff]*$")
 UNAPPROVED = "UNAPPROVED"
 OPERATOR = re.compile(r"^[\x20-\x7e]{1,64}$")
 SYMBOL = re.compile(r"^[A-Z0-9]{1,16}$")
@@ -155,6 +157,8 @@ def load(text):
         raise Refused("a byte-order mark is not accepted")
     if len(text) > MAX_CODE_POINTS:
         raise Refused("the file exceeds %d code points" % MAX_CODE_POINTS)
+    if "\t" in text:
+        raise Refused("a TAB is not accepted anywhere in the text (a comment or a quoted scalar included)")
     if not _PRINTABLE.match(text):
         raise Refused("a non-printable character is not accepted anywhere in the text (a comment included)")
     # the subset's line breaks are LF and CRLF only: a lone CR, NEL, LINE SEPARATOR and PARAGRAPH SEPARATOR — YAML breaks SnakeYAML would honour —
@@ -289,7 +293,7 @@ def corpus_cases(d):
 # ONE canonical corpus (Codex 7b r3): corpus.sha256 is regenerated from the fixtures, so by itself it only proves a copy is self-consistent.
 # CORPUS_DIGEST — the sha256 of corpus.sha256 — is a LITERAL pinned here AND in the Job's YamlSubsetCorpusTest: a change to the corpus must
 # change the literal in BOTH repositories (printed by --corpus-manifest), so a copy that drifted from the pinned version fails its runner.
-CORPUS_DIGEST = "461721b24958d6d844ea515584f4c33a0386313384006cc03e08fa074a8708d8"
+CORPUS_DIGEST = "f96e636db4234042a734852316923067adc470a130bba7d28b509786ac31cb2a"
 
 
 def corpus_manifest(d, cases):
