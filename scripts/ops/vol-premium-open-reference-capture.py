@@ -34,6 +34,7 @@ import os
 import re
 import statistics
 import sys
+import zlib
 from zoneinfo import ZoneInfo
 
 ET = ZoneInfo("America/New_York")
@@ -42,6 +43,11 @@ ES = "underlying.es.price"
 BASIS = "spx.basis.state"
 # The admissibility window slot 0 is scored over, and the engine's own MAX_TICK_AGE_MS.
 WINDOW_S = 30
+# The file an input must carry before anything may be PUBLISHED from it. The wrapper writes it into
+# the pinned set once the archive verdict, the per-topic grades, the on-disk check, the
+# decompression check and the membership check have all passed; its first line is the session the
+# pin was built for. Computing a record never needs it.
+GATE_MARKER = ".vp-open-reference-gate-ok"
 # The staleness limit an ES value must meet to stand for a moment in time - the same one the offset
 # pairing uses, because a reference and a pair are the same kind of claim.
 PAIR_MAX_AGE_S = 2
@@ -73,6 +79,18 @@ MIN_QUARTER_COVERED_FRACTION = 0.25
 SCORE_WARMUP_MINUTES = 5
 
 
+class TornMember(Exception):
+    """An archived member that stops decompressing partway through.
+
+    The open-time OSError below does not catch this: gzip raises while the file is being ITERATED,
+    which is what a member still being written looks like. Letting that propagate as a traceback
+    was safe — it happens before anything is published, so no session is spent — but it told a
+    reader nothing. Swallowing it would be worse: a torn file would read as an empty one, and a
+    session made of empty files would be recorded as a session the market could not answer for.
+    Named, raised, and turned into a message and an exit code by main().
+    """
+
+
 def _records(root: str, topic: str, day: str):
     pattern = os.path.join(root, topic, f"dt={day}", "*.jsonl.gz")
     for path in sorted(glob.glob(pattern)):
@@ -81,7 +99,7 @@ def _records(root: str, topic: str, day: str):
         except OSError:
             continue
         with handle:
-            for line in handle:
+            for line in _lines(handle, path):
                 brace = line.find("{")
                 if brace < 0:
                     continue
@@ -122,6 +140,18 @@ def _to_microseconds(raw: str) -> str:
     `.1234` as well, and padding with zeros is exact - `.1` and `.100000` are the same instant.
     """
     return _FRACTIONAL_SECONDS.sub(lambda m: "." + m.group(1)[:6].ljust(6, "0"), raw, count=1)
+
+
+def _lines(handle, path):
+    """The iteration itself, so a member that stops decompressing is named rather than traced."""
+    while True:
+        try:
+            line = handle.readline()
+        except (OSError, EOFError, gzip.BadGzipFile, zlib.error) as err:
+            raise TornMember(f"{os.path.basename(path)}: {err}") from err
+        if not line:
+            return
+        yield line
 
 
 def _event_time(record: dict):
@@ -416,7 +446,71 @@ def main(argv=None) -> int:
         print(f"vol-premium-open-reference-capture: not a close time: {args.close_et}",
               file=sys.stderr)
         return 64
-    record = capture(args.archive_root, args.session, args.close_et)
+    try:
+        record = capture(args.archive_root, args.session, args.close_et)
+    except TornMember as err:
+        # Not published, and not silently treated as an empty session either: a member that stops
+        # decompressing is the archiver still writing it, which resolves itself in minutes.
+        print(f"vol-premium-open-reference-capture: {args.session} was NOT captured — a member "
+              f"does not decompress to its end ({err}). Nothing was published; the session stays "
+              f"claimable.", file=sys.stderr)
+        return 66
+
+    # NOTHING IS PUBLISHED FROM AN INPUT THAT HOLDS NO RECORDS. A ledger entry is permanent — the
+    # marker under .published/ refuses republication — so a record computed over an empty directory
+    # would spend the session on no evidence at all, and it looks exactly like a session the market
+    # genuinely could not answer for. That is not a hypothetical shape: the wrapper hands this a
+    # pinned directory, and anything that removes it between the gate and this run (a prune of the
+    # pinned sets, most obviously) leaves precisely an empty root.
+    #
+    # The test is RECORDS, not files: a directory of unreadable members is as empty as no directory.
+    # Printing the record and refusing to publish it is deliberate — the caller still sees what was
+    # computed, and the session stays claimable.
+    def _has_records(root: str, session: str) -> bool:
+        for _ in _records(root, INDEX, session):
+            return True
+        for _ in _records(root, ES, session):
+            return True
+        for _ in _records(root, BASIS, session):
+            return True
+        return False
+
+    if args.out and not _has_records(args.archive_root, args.session):
+        print(json.dumps(record, sort_keys=True))
+        print(f"vol-premium-open-reference-capture: {args.session} was NOT published — "
+              f"{args.archive_root} holds no readable records for it, so there is nothing to "
+              f"claim a session on", file=sys.stderr)
+        return 65
+
+    # AND PUBLICATION IS BOUND TO AN INPUT THE GATE PREPARED. `--out` writes the permanent claim,
+    # and until now any directory that happened to satisfy the floors below could be published from
+    # — by hand, against the raw archive, with none of the wrapper's checks having run: no archive
+    # verdict, no per-topic grade, no decompression, no membership, no trading-day or close test.
+    # Convention is not a control (review round 8).
+    #
+    # So an input that may be published from must carry GATE_MARKER, which
+    # oe-vol-premium-open-capture.sh writes into the pinned set it has just verified, naming the
+    # session. Computing a record needs nothing; only claiming one does. A marker can of course be
+    # written by hand — that is then a deliberate, visible act with a file to point at, which is the
+    # difference between a mistake and a decision.
+    if args.out:
+        marker = os.path.join(args.archive_root, GATE_MARKER)
+        try:
+            with open(marker) as handle:
+                claimed_for = handle.readline().strip()
+        except OSError:
+            print(f"vol-premium-open-reference-capture: refusing to publish {args.session} — "
+                  f"{args.archive_root} carries no {GATE_MARKER}, so it is not an input any gate "
+                  f"has verified. Run it through oe-vol-premium-open-capture.sh, which checks the "
+                  f"archive verdict and pins what it checked. Without --out this run would have "
+                  f"computed the record and published nothing.", file=sys.stderr)
+            return 77
+        if claimed_for != args.session:
+            print(f"vol-premium-open-reference-capture: refusing to publish {args.session} — the "
+                  f"{GATE_MARKER} in {args.archive_root} was written for {claimed_for!r}",
+                  file=sys.stderr)
+            return 77
+
     line = json.dumps(record, sort_keys=True)
     # STDOUT IS WHAT WAS PUBLISHED, not what this run computed. During a repair the two differ -
     # the claim is published and the recomputation is discarded - and printing the recomputation

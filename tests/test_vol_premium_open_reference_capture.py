@@ -13,6 +13,7 @@ import gzip
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -58,6 +59,14 @@ def _es(offset_s: float, equivalent: float, state="PROJECTED"):
             "eventTime": _iso(offset_s)}
 
 
+def _gate_marker(root: Path, session: str = DAY) -> None:
+    """What oe-vol-premium-open-capture.sh writes into the pinned set once the archive verdict, the
+    per-topic grades, the on-disk check, the decompression check and the membership check have
+    passed. Publication is bound to it: an input nothing has verified cannot claim a session, which
+    is what `--out` against a raw archive directory used to be able to do."""
+    (root / orc.GATE_MARKER).write_text(session + "\n")
+
+
 def _fixture(root: Path, *, index_rows=None, es_rows=None) -> None:
     """A session shaped like the real ones: the index silent across the bell, ES present."""
     if index_rows is None:
@@ -73,6 +82,9 @@ def _fixture(root: Path, *, index_rows=None, es_rows=None) -> None:
     _write(root, orc.INDEX, index_rows)
     _write(root, orc.ES, es_rows)
     _write(root, orc.BASIS, [{"level": 69.7, "levelKind": "MEASURED"}])
+    # A fixture is an input the gate has approved unless a case says otherwise: the cases about the
+    # marker write or withhold it themselves.
+    _gate_marker(root)
 
 
 class OpenReferenceCaptureTest(unittest.TestCase):
@@ -232,6 +244,7 @@ class OpenReferenceCaptureTest(unittest.TestCase):
             with gzip.open(folder / "x.jsonl.gz", "wt") as handle:
                 for row in rows:
                     handle.write(f"CreateTime:0\tPartition:0\tK\t{json.dumps(row)}\n")
+        _gate_marker(self.tmp, other)
         subprocess.run([sys.executable, str(SCRIPT), "--session", other,
                         "--archive-root", str(self.tmp), "--out", str(out)],
                        capture_output=True, check=True)
@@ -739,6 +752,104 @@ def _strict_pre_311_fraction(raw: str) -> bool:
             break
         digits += char
     return len(digits) in (3, 6)
+
+
+class PublicationAuthorityTest(unittest.TestCase):
+    """`--out` writes a PERMANENT claim: the marker under .published/ refuses republication. So the
+    two questions here are what may be published from, and what may not be published at all."""
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp())
+
+    def _run(self, *extra, session: str = DAY):
+        out = self.tmp / "ledger"
+        return subprocess.run([sys.executable, str(SCRIPT), "--session", session,
+                               "--archive-root", str(self.tmp), "--out", str(out), *extra],
+                              capture_output=True, text=True), out
+
+    def test_an_input_no_gate_has_verified_cannot_claim_a_session(self) -> None:
+        """Until this existed, any directory satisfying the floors could be published from by hand,
+        against the raw archive, with NONE of the wrapper's checks having run — no archive verdict,
+        no per-topic grade, no decompression, no membership, no trading-day or close test.
+        Convention is not a control."""
+        _fixture(self.tmp)
+        (self.tmp / orc.GATE_MARKER).unlink()
+        r, out = self._run()
+        self.assertEqual(r.returncode, 77, r.stdout + r.stderr)
+        self.assertIn("not an input any gate has verified", r.stderr)
+        self.assertFalse((out / "accepted").exists(), "a record was published anyway")
+
+    def test_the_same_input_with_the_marker_does_publish(self) -> None:
+        """The companion: without it the case above would also be produced by a run that refuses
+        everything."""
+        _fixture(self.tmp)
+        r, out = self._run()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertTrue((out / "accepted" / f"{DAY}.json").is_file())
+
+    def test_a_marker_for_another_session_does_not_authorise_this_one(self) -> None:
+        """One pin, one session. A marker left from a different session is not evidence about this
+        one, and the pinned set the wrapper builds is per session."""
+        _fixture(self.tmp)
+        (self.tmp / orc.GATE_MARKER).write_text("2026-01-05\n")
+        r, out = self._run()
+        self.assertEqual(r.returncode, 77, r.stdout + r.stderr)
+        self.assertIn("was written for '2026-01-05'", r.stderr)
+        self.assertFalse((out / "accepted").exists())
+
+    def test_a_record_is_still_computed_without_the_marker(self) -> None:
+        """Computing is not claiming. Reading the archive and printing what it says must stay free —
+        that is what the evidence script does — and only publication is bound."""
+        _fixture(self.tmp)
+        (self.tmp / orc.GATE_MARKER).unlink()
+        r = subprocess.run([sys.executable, str(SCRIPT), "--session", DAY,
+                            "--archive-root", str(self.tmp)], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertTrue(json.loads(r.stdout)["accepted"])
+
+    def test_an_empty_input_publishes_nothing(self) -> None:
+        """THE PRUNE RACE. The wrapper hands this a pinned directory it has just verified, and
+        anything that removes it in between — a prune of the pinned sets, which the wrapper's own
+        advice invites — leaves exactly an empty root. A record computed over one is
+        indistinguishable from a session the market could not answer for, and publishing it would
+        spend the session on no evidence at all."""
+        _fixture(self.tmp)
+        _gate_marker(self.tmp)
+        for topic in (orc.INDEX, orc.ES, orc.BASIS):
+            shutil.rmtree(self.tmp / topic)
+        r, out = self._run()
+        self.assertEqual(r.returncode, 65, r.stdout + r.stderr)
+        self.assertIn("holds no readable records", r.stderr)
+        self.assertFalse((out / "accepted").exists())
+        self.assertFalse((out / "rejected").exists(), "an empty input was published as a rejection")
+
+    def test_an_input_of_unreadable_members_is_NAMED_not_treated_as_empty(self) -> None:
+        """A torn member is a THIRD thing, and the distinction is the point. It is not an empty
+        session — recording it as one would say the market could not answer when the archiver was
+        simply still writing — and it is not publishable either. gzip raises while the file is being
+        ITERATED, which the open-time guard does not catch; that used to surface as a traceback,
+        which was safe (nothing is published before it) and told a reader nothing."""
+        _fixture(self.tmp)
+        _gate_marker(self.tmp)
+        for topic in (orc.INDEX, orc.ES, orc.BASIS):
+            for path in (self.tmp / topic / f"dt={DAY}").iterdir():
+                path.write_bytes(b"not a gzip at all")
+        r, out = self._run()
+        self.assertEqual(r.returncode, 66, r.stdout + r.stderr)
+        self.assertIn("does not decompress to its end", r.stderr)
+        self.assertFalse((out / "accepted").exists())
+        self.assertFalse((out / "rejected").exists(),
+                         "a torn member was recorded as a session the market could not answer for")
+
+    def test_a_session_that_genuinely_fails_is_still_published_as_rejected(self) -> None:
+        """The companion that stops the two cases above being satisfied by a reader that never
+        publishes a rejection: a session with real records and no ES reference IS recorded, because
+        silence would make the >=55 count look better than the data."""
+        rows = [_es(-400, 7647.0)] + [_es(300 + 60 * i, 7647.0) for i in range(MINUTES)]
+        _fixture(self.tmp, es_rows=rows)
+        r, out = self._run()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertTrue((out / "rejected" / f"{DAY}.json").is_file(), r.stdout + r.stderr)
 
 
 class NanosecondTimestampTest(unittest.TestCase):

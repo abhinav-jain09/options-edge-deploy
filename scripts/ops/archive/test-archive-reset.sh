@@ -2249,7 +2249,8 @@ with open(os.environ["VP_CALLS"], "a") as handle:
 root = args.get("--archive-root") or ""
 seen = []
 for base, _dirs, names in os.walk(root):
-    seen += [os.path.join(os.path.relpath(base, root), name) for name in sorted(names)]
+    # Members only: the gate marker sits at the root of the pinned set and is authority, not input.
+    seen += [name for name in sorted(names) if name.endswith(".jsonl.gz")]
 with open(os.environ["VP_CALLS"] + ".roots", "a") as handle:
     handle.write(f"root={root} files={len(seen)}\n")
 out = args.get("--out")
@@ -2724,7 +2725,7 @@ open(late, "wb").write(b"not a gzip at all")
 root = args.get("--archive-root") or ""
 seen = []
 for base, _dirs, names in os.walk(root):
-    seen += names
+    seen += [name for name in names if name.endswith(".jsonl.gz")]
 with open(os.environ["VP_CALLS"], "a") as handle:
     handle.write(f"called session={args.get('--session')} close={args.get('--close-et')}\n")
 with open(os.environ["VP_CALLS"] + ".roots", "a") as handle:
@@ -2740,22 +2741,20 @@ vp_run 2026-09-01 "$root" CAPTURE="$vp_tmp/racing-capture.py" VP_RACE_ARCHIVE="$
 want "18x a member written during the capture is NOT in what the reader sees" "files=3" "$(grep -o 'files=[0-9]*' "$vp_tmp/calls.roots")"
 want "  and it did reach the archive, so the case is not vacuous" 2 "$(ls "$root/underlying.spx.index.price/dt=2026-09-01/" | grep -c .)"
 
-# ---- 18x2. THE DECOMPRESSION CHECK IS ON THE PIN, NOT ON THE ARCHIVE PATH. Reading the source and
-# linking it afterwards left an interval in which the source could be replaced, so the pinned set
-# would hold bytes nothing checked. Here the archive member is REPLACED between the glob and the
-# check — which is what that interval allowed — and it must not be captured. The replacement is a
-# torn gzip, so a check on the pin catches it and a check on a since-replaced source would not.
-#
-# The swap is driven by making the ORIGINAL unreadable as a gzip after the glob: a hardlink taken
-# first holds the original inode, so the only way this fixture can fail is if the check reads the
-# name rather than the pin.
+# ---- 18x2. A MEMBER THAT IS NOT A READABLE GZIP IS REFUSED, and that is ALL this case shows. It
+# was described as testing that the check reads the PIN rather than the archive path, and review was
+# right that it cannot: the fixture corrupts the member before the run, so both names are the same
+# corrupt inode and swapping `target` for `path` in the check leaves this green. The pin-versus-path
+# distinction only appears when the archive name is replaced in the interval between the link and
+# the read, which no fixture can stage — the wrapper says so where the check is, rather than
+# claiming a test exists for it.
 : > "$vp_tmp/calls"
 : > "$vp_tmp/calls.roots"
 root=$(vp_archive 2026-08-31 20260831T201500Z); vp_verdict 2026-08-31 2026-08-31T20:15:00Z
 member="$root/underlying.spx.index.price/dt=2026-08-31/underlying.spx.index.price.p0.0-1.dt20260831.20260831T201500Z.jsonl.gz"
 printf 'not a gzip at all' > "$member"
 out=$(vp_run 2026-08-31 "$root")
-want "18x2 a member that is not a readable gzip is caught on the pin" "" "$(cat "$vp_tmp/calls")"
+want "18x2 a member that is not a readable gzip is refused" "" "$(cat "$vp_tmp/calls")"
 has  "  and reported as torn" "does not decompress to its end" "$out"
 
 # ---- 18x3. A PIN LEFT BY A RUN THAT DIED PARTWAY THROUGH IS NOT AN INPUT. The capture globs the
@@ -2803,7 +2802,7 @@ out=$(vp_run 2026-08-26 "$root")
 has  "18x5 every run reports what the pinned sets cost" "pinned sets: 1 sessions, 3 hardlinks" "$out"
 has  "  and says they can be pruned without touching the archive or the ledger" "prune freely" "$out"
 root=$(vp_archive 2026-08-25 20260825T201500Z); vp_verdict 2026-08-25 2026-08-25T20:15:00Z
-out=$(vp_run 2026-08-25 "$root" PIN_INODE_WARN=1)
+out=$(vp_run 2026-08-25 "$root" PIN_LINK_WARN=1)
 has  "  and crossing the threshold alerts" "pinned sets hold" "$out"
 has  "  as an ALERT, not just a log line" "ALERT:" "$out"
 # ...and it is a WARNING, not a refusal: the session is still captured.
@@ -2819,6 +2818,23 @@ out=$(vp_run 2026-08-24 "$root" SNAPSHOT_ROOT="$blocked")
 want "18x6 a pin that cannot be made does not spend the session" "" "$(cat "$vp_tmp/calls")"
 want "  and is a fault" 2 "$(vp_rc 2026-08-24 "$root" SNAPSHOT_ROOT="$blocked")"
 has  "  naming the pin as what failed" "cannot pin the archive" "$out"
+
+# ---- 18x7. THE GATE WRITES THE MARKER THAT AUTHORISES PUBLICATION, into the pin and only once
+# every check has passed. The capture refuses `--out` without it, so a directory nobody verified
+# cannot claim a session — which is what running the capture by hand against the raw archive could
+# do. The real capture's own suite covers the refusal; what is asserted here is that this wrapper
+# produces the thing it needs, for the right session.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-08-19 20260819T201500Z); vp_verdict 2026-08-19 2026-08-19T20:15:00Z
+out=$(vp_run 2026-08-19 "$root")
+marker="$vp_tmp/ledger-2026-08-19/.pinned/2026-08-19/.vp-open-reference-gate-ok"
+want "18x7 the gate marker is written into the pinned set" 2026-08-19 "$(head -1 "$marker" 2>/dev/null)"
+# ...and it is written only after the checks: a session the gate refuses gets no marker, so a later
+# hand-run against that pin cannot publish from it either.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-08-18 20260818T201500Z); vp_verdict 2026-08-18 2026-08-18T20:15:00Z EMPTY
+vp_run 2026-08-18 "$root" >/dev/null
+want "  and a refused session gets none" "" "$(cat "$vp_tmp/ledger-2026-08-18/.pinned/2026-08-18/.vp-open-reference-gate-ok" 2>/dev/null)"
 
 # ---- 18o. an uninstalled capture is an ALERT, not a silent no-op: that is exactly how this study spent
 # twelve days and eight archived sessions producing nothing.

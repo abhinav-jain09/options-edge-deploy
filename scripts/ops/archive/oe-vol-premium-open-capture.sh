@@ -35,11 +35,13 @@ LOG="${LOG:-/home/abhinav/oe-ops/vol-premium-open-capture.log}"
 # timestamp is not.
 COMPLETENESS_DIR="${COMPLETENESS_DIR:-$ARCHIVE_ROOT/_manifest/completeness}"
 # Where the verified file set is pinned, and what the capture is then pointed at. It holds HARDLINKS
-# to archive members and nothing else, so a session's pin costs one inode per archived member — on
-# the order of a hundred a day — and no data at all. Nothing in the pipeline reads it afterwards; it
-# is kept because it is the record of exactly which files each claim was made from, and an operator
-# can prune old sessions from it freely without touching the archive or the ledger. The count is
-# logged on every run so growth is visible rather than inferred.
+# to archive members, so a pinned member is another DIRECTORY ENTRY pointing at the archive's own
+# inode — it allocates no inode and no file data of its own, which an earlier version of this
+# comment got wrong. What a session's pin costs is directory entries and the link count on those
+# inodes, on the order of a hundred entries a day. Nothing in the pipeline reads the pins
+# afterwards; they are kept because they are the record of exactly which files each claim was made
+# from, and an operator can prune old sessions from them without touching the archive or the ledger.
+# The count is logged on every run so growth is visible rather than inferred.
 SNAPSHOT_ROOT="${SNAPSHOT_ROOT:-$LEDGER/.pinned}"
 # THE TOPICS ARE NOT CONFIGURABLE HERE, and that is the point. They used to come from an
 # environment variable with a three-topic default, which let the gate validate FEWER topics than
@@ -393,6 +395,19 @@ if unexpected:
                     f"leftover from a run that died partway through. Look at "
                     f"{snapshot} before this session is claimed")
 
+# THE MARKER IS WRITTEN LAST, AND IT IS WHAT AUTHORISES PUBLICATION. The capture refuses `--out`
+# for an input that does not carry it, so a directory nobody verified cannot claim a session — which
+# is what running the capture by hand against the raw archive used to be able to do (review round
+# 8). It is written here, into the pin, only once the verdict, the grades, the on-disk check, the
+# decompression check and the membership check have all passed, and it names the session the pin was
+# built for.
+marker = os.path.join(snapshot, ".vp-open-reference-gate-ok")
+try:
+    with open(marker, "w") as handle:
+        handle.write(day.isoformat() + "\n")
+except OSError as err:
+    answer("fault", f"cannot write the gate marker into the pinned set for {day}: {err}")
+
 print(f"ready {len(expected)} files pinned and checked; " + " ".join(summary))
 GATE
 )"
@@ -422,7 +437,26 @@ esac
 # bytes that produce the permanent record are the bytes the gate verified, and no member that
 # arrives afterwards can reach it.
 PINNED="$SNAPSHOT_ROOT/$SESSION"
-log "$SESSION: capturing (close $CLOSE_ET ET, pinned set $PINNED, ledger $LEDGER)"
+
+# AND THE PIN IS RE-CHECKED IMMEDIATELY BEFORE THE READER RUNS. The gate verified it and then
+# returned; anything that removed the pinned set in between — a prune of the pinned sets, which the
+# advice below invites — would leave the reader an empty directory, and a record computed over one
+# looks exactly like a session the market could not answer for (review round 8). The capture refuses
+# to publish from an input with no records, so the claim cannot be spent either way; this is here so
+# the failure says what happened rather than arriving as a mysterious rejection.
+#
+# NO TEST STAGES THIS, and a case that pretended to was removed rather than left in: the window is
+# inside one process and cannot be reached from a fixture. What IS tested is the control that makes
+# the window harmless — tests/test_vol_premium_open_reference_capture.py asserts the capture refuses
+# to publish from an input holding no records, with or without this check.
+PIN_FILES="$(find "$PINNED" -type f -name '*.jsonl.gz' 2>/dev/null | grep -c . || true)"
+if [ ! -f "$PINNED/.vp-open-reference-gate-ok" ] || [ "${PIN_FILES:-0}" -eq 0 ]; then
+  log "FATAL: the pinned set for $SESSION is gone or incomplete at $PINNED (${PIN_FILES:-0} members, marker $([ -f "$PINNED/.vp-open-reference-gate-ok" ] && echo present || echo absent)) — the session is NOT claimed"
+  alert "🚨 vol-premium open-reference pinned set for $SESSION vanished between the gate and the capture on $(hostname). The session is NOT claimed. Something is removing $SNAPSHOT_ROOT while a capture is running."
+  exit 2
+fi
+
+log "$SESSION: capturing (close $CLOSE_ET ET, pinned set $PINNED with ${PIN_FILES} members, ledger $LEDGER)"
 RECORD="$(python3 "$CAPTURE" --session "$SESSION" --archive-root "$PINNED" \
           --close-et "$CLOSE_ET" --out "$LEDGER" 2>&1)"
 RC=$?
@@ -440,19 +474,24 @@ REJECTED="$(find "$LEDGER/rejected" -maxdepth 1 -name '*.json' 2>/dev/null | gre
 log "ledger now holds ${ACCEPTED:-0} accepted and ${REJECTED:-0} rejected sessions (the bar is 55 accepted)"
 
 # AND SO IS THE COST OF THE PINS, which accumulate by design and were reported as a number per run
-# and nothing else — growth nobody would notice until a filesystem ran out of inodes (review round
-# 7). They are hardlinks, so the data is the archive's and only the inodes are this script's: about
-# a hundred a session, a few tens of thousands a year, against millions on a normal filesystem. The
-# total is logged every run, and crossing PIN_INODE_WARN says so once rather than leaving the first
-# symptom to be a capture that cannot pin. It is a warning, not a refusal: the pins are evidence,
-# and deciding which sessions no longer need theirs is the operator's call, not this script's —
-# removing a pinned directory touches neither the archive nor the ledger.
-PIN_INODE_WARN="${PIN_INODE_WARN:-200000}"
-PINS="$(find "$SNAPSHOT_ROOT" -type f 2>/dev/null | grep -c . || true)"
+# and nothing else — growth nobody would notice until a directory got slow or a filesystem ran out
+# of entries. They are hardlinks: the file data and the inodes are the archive's, and what this
+# script adds is directory entries, on the order of a hundred a session.
+#
+# The total is logged every run, and WHILE it is over PIN_LINK_WARN every successful run alerts —
+# not once. That is the honest description: there is no state here that remembers having warned, and
+# inventing one would mean a marker file that could itself go missing. A repeating alert for a
+# condition that only an operator can clear is the right direction for it to fail in.
+#
+# It is a warning, not a refusal: the pins are evidence, and deciding which sessions no longer need
+# theirs is the operator's call, not this script's — removing a pinned directory touches neither the
+# archive nor the ledger.
+PIN_LINK_WARN="${PIN_LINK_WARN:-200000}"
+PINS="$(find "$SNAPSHOT_ROOT" -type f -name '*.jsonl.gz' 2>/dev/null | grep -c . || true)"
 PIN_SESSIONS="$(find "$SNAPSHOT_ROOT" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | grep -c . || true)"
-log "pinned sets: ${PIN_SESSIONS:-0} sessions, ${PINS:-0} hardlinks under $SNAPSHOT_ROOT (no file data; prune freely)"
-if [ "${PINS:-0}" -ge "$PIN_INODE_WARN" ]; then
-  log "WARNING: the pinned sets hold ${PINS} hardlinks, at or over the ${PIN_INODE_WARN} mark"
-  alert "⚠️ vol-premium open-reference pinned sets hold ${PINS} hardlinks on $(hostname) (${PIN_SESSIONS} sessions, threshold ${PIN_INODE_WARN}). They are hardlinks — no file data — and old sessions under $SNAPSHOT_ROOT can be pruned without touching the archive or the ledger."
+log "pinned sets: ${PIN_SESSIONS:-0} sessions, ${PINS:-0} hardlinks under $SNAPSHOT_ROOT (no file data of their own; prune freely)"
+if [ "${PINS:-0}" -ge "$PIN_LINK_WARN" ]; then
+  log "WARNING: the pinned sets hold ${PINS} hardlinks, at or over the ${PIN_LINK_WARN} mark — this repeats every run until they are pruned"
+  alert "⚠️ vol-premium open-reference pinned sets hold ${PINS} hardlinks on $(hostname) (${PIN_SESSIONS} sessions, threshold ${PIN_LINK_WARN}). They are hardlinks — no file data of their own — and old sessions under $SNAPSHOT_ROOT can be pruned without touching the archive or the ledger. This alert repeats every run until they are."
 fi
 exit 0
