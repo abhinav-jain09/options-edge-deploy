@@ -1,0 +1,156 @@
+@Library('oe') _
+
+// PROVISION THE 0DTE STAGE-B TOPOLOGY OF ONE ENVIRONMENT — dry run first, write only on CONFIRM.
+//
+// Design: options-edge-processing vix-option-inteligence-service/docs/STAGE-B-FRAMES-DESIGN.md §5.1 / §5.3 / §5.4 and "BUILD decisions for
+// increment 7". The provisioner is the service image's own ZeroDteProvisioner (increment 7a, #920), run as a Kubernetes Job under the
+// deployer identity (k8s/jobs/zerodte-provision-job.yaml) over the REVIEWED files of this repository: deploy/zerodte/provisioning/<env>.yaml
+// (the declaration) and deploy/zerodte/virgin-attestation.yaml (the one-shot attestation). It creates the absent output topics with the
+// registered policy, verifies the inputs, reads the live ids, inserts the era row and appends PROVISIONED to the deployment ledger —
+// create-or-verify at every step, ONE receipt line, exit codes 0/64–70 (the wrapper maps each).
+//
+// WHAT RUNS: scripts/ops/zerodte-provision.sh, which validates both files with the PR validators (scripts/ci/validate-zerodte-*.sh),
+// creates the Job, waits, prints the pod log and holds the receipt to the letter (every field counted and matched to the declaration).
+//
+// THREE STAGES, IN ORDER, EVERY BUILD:
+//   1. VALIDATE — the declaration and the attestation, the Job's own rules + append-only against origin/main.
+//   2. DRY RUN — ALWAYS runs. The provisioner reads and verifies everything, prints PROVISIONABLE (or ALREADY_PROVISIONED) and writes
+//      NOTHING. A build with CONFIRM=false ends here, green, having changed nothing.
+//   3. PROVISION — runs ONLY when CONFIRM=true, and only after stage 2 passed in the same build. The FIRST VIRGIN confirm of a lineage
+//      creates the topics and stops with ATTESTATION_REQUIRED (exit 67; the build is red with the exact entry to append printed): commit
+//      that entry through review, then run again — the next confirm inserts the era and appends PROVISIONED. A rerun is
+//      ALREADY_PROVISIONED (a no-op); a different declaration under a provisioned generation is CONFLICTING_PROVISIONED (exit 66).
+//   The build log carries the receipt — and the deploy/zerodte/provisioned/<env>.yaml block to commit after a PROVISIONED outcome.
+//
+// LIVE PROVISIONING CANNOT COMPLETE BEFORE INCREMENT 9: the provisioner refuses unless the research schema is exactly v7 (SCHEMA_VERSION,
+// exit 68). Until then every run of this job is a dry run that stops at that check — by design (consult Q2).
+//
+// PERMITTED COMMIT (Deployment Permission Rule): every run needs PERMITTED_SHA, the full 40-character commit id of the checkout the
+// provisioning must come from; the first stage fails closed unless the checked-out HEAD equals it exactly AND is on origin/main. The guard
+// is the shared scripts/jenkins/permitted-sha-guard.sh in its canonical stage, and every later stage is gated on its flag
+// (scripts/jenkins/validate-jenkinsfile-guard.py judges this file; scripts/ci/jenkins-permitted-sha-scope.txt). The wrapper re-checks
+// HEAD == PERMITTED_SHA right before the write and requires the dry-run receipt THIS build wrote.
+//
+// BEFORE THE FIRST RUN: a Pipeline-from-SCM item (docs/deploy-single-service.md):
+//     scripts/jenkins/create-service-job.sh zerodte-provision git@github.com:abhinav-jain09/options-edge-deploy.git Jenkinsfile.zerodte-provision vol-premium-ledger-publish
+//   then one plain /build so Jenkins parses the parameters. The secret ZERO_DTE_LEDGER_KEY must be present in options-edge-runtime-secrets
+//   of the target environment (Jenkinsfile.secrets-sync, credential zerodte-ledger-key / zerodte-ledger-key-dev — the owner's) and the
+//   image-tags/<env>.yaml vix-option-inteligence-service tag must carry a build with the provisioner (#920 or later).
+pipeline {
+  agent { label 'hpsf-replay-mac' }
+  parameters {
+    choice(name: 'ENVIRONMENT', choices: ['dev', 'production'],
+      description: 'Target environment — selects the declaration deploy/zerodte/provisioning/<env>.yaml, the deployer kubeconfig (oeProfile) and the image registry.')
+    booleanParam(name: 'CONFIRM', defaultValue: false,
+      description: 'false (DEFAULT) = dry run only: the provisioner reads and verifies everything, prints PROVISIONABLE and writes nothing. true = after that same dry run passes, run the provisioner again with --confirm: create the absent output topics, insert the era row, append PROVISIONED. Create-or-verify: a rerun is a no-op.')
+    string(name: 'PERMITTED_SHA', defaultValue: '', trim: true,
+      description: 'REQUIRED. The full 40-character lowercase commit id of the options-edge-deploy commit this run is permitted for. The build fails closed unless the checked-out HEAD equals it exactly and it is on origin/main.')
+    string(name: 'PERMITTED_SHA_GUARD_VERSION', defaultValue: '2f6fc2ab7aa51eb8a9e8aa350f2d774cd2fb7a253de2591e43645a19a9886b24',
+      description: 'DO NOT EDIT BY HAND — the sha256 of scripts/jenkins/permitted-sha-guard.sh this definition runs (Deployment Permission Rule). The guard refuses to run under any other value. It is a DECLARATION, not proof that this job enforces the guard: a caller that triggers this job judges its SCM definition and its Jenkinsfile at the forwarded commit (scripts/jenkins/require-guarded-downstream.sh). Regenerate with scripts/jenkins/permitted-sha-guard-version.sh when the guard changes.')
+    string(name: 'KUBECONFIG_FILE', defaultValue: '',
+      description: 'Deployer kubeconfig on the Jenkins agent. Empty = oeProfile(ENVIRONMENT).kubeconfigDeployer.')
+    string(name: 'KEEP_JOBS', defaultValue: '5',
+      description: 'How many most-recent TERMINAL provisioning Jobs to retain (nothing else prunes them). 1..100.')
+  }
+  // NO TRIGGERS: provisioning is a person's decision, once per generation.
+  options {
+    disableConcurrentBuilds()
+    // "Restart from Stage" would resume at 'Provision (--confirm)' with the guard, the validation and the dry run SKIPPED. Disabled
+    // outright; and the wrapper additionally refuses a CONFIRM run without the dry-run receipt this build wrote and without
+    // HEAD == PERMITTED_SHA re-checked.
+    disableRestartFromStage()
+    timeout(time: 40, unit: 'MINUTES')
+    buildDiscarder(logRotator(numToKeepStr: '50'))
+  }
+  environment {
+    KUBECONFIG    = "${params.KUBECONFIG_FILE ?: oeProfile(params.ENVIRONMENT).kubeconfigDeployer}"
+    ENVIRONMENT   = "${params.ENVIRONMENT}"
+    KEEP_JOBS     = "${params.KEEP_JOBS}"
+    // PERMITTED_SHA is NOT mirrored here: Jenkins already exposes the (trimmed) parameter as that environment variable,
+    // and a permission variable may be defined only by parameters{} (validator: permission variables are read-only).
+  }
+  stages {
+    // ---- Deployment Permission Rule (options-edge rule.md): Jenkins enforces the permitted commit ----
+    // The shared scripts/jenkins/permitted-sha-guard.sh, in the canonical stage every guarded job carries, in the workspace the effect
+    // will come from. error(), never catchError. scripts/ci/zerodte-provision-guard-test.sh runs the exact command of this stage through
+    // the cases the rule names.
+    stage('Permitted commit guard') {
+      options { timeout(time: 10, unit: 'MINUTES') }
+      steps {
+        script {
+          def rc = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')
+          if (rc != 0) {
+            error("Permitted commit guard REFUSED this build (rc=${rc}) — see its output above. Nothing was validated, dry-run or provisioned.")
+          }
+          env.PERMITTED_SHA_GUARD = 'PASSED'
+        }
+      }
+    }
+    stage('Clear previous dry-run receipt') {
+      // The dry-run receipt of a PREVIOUS build is removed right after the guard passed and before anything else, so the confirm stage
+      // can only ever see one made in THIS build (the wrapper also checks the receipt's build number and HEAD).
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
+      steps {
+        sh '''
+          set -euo pipefail
+          rm -f "${WORKSPACE}/zerodte-provision-dry-run.receipt"
+        '''
+      }
+    }
+    stage('Validate declaration and attestation') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
+      // The Job's own rules over both files, and the attestation's append-only property against origin/main — before a cluster is touched.
+      // The same validators gate every PR (deploy-validation.yml).
+      steps {
+        sh '''
+          set -euo pipefail
+          bash scripts/ci/validate-zerodte-provisioning.sh
+          bash scripts/ci/validate-zerodte-attestation.sh
+          bash scripts/ci/validate-zerodte-attestation-test.sh
+          bash scripts/ci/zerodte-provision-receipt-test.sh
+        '''
+      }
+    }
+    stage('Dry run: PROVISIONABLE?') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
+      // ALWAYS (once the guard passed). Writes nothing; ends the build green when CONFIRM=false.
+      steps {
+        sh '''
+          set -euo pipefail
+          chmod +x scripts/ops/zerodte-provision.sh
+          DRY_RUN_RECEIPT="${WORKSPACE}/zerodte-provision-dry-run.receipt" CONFIRM=false scripts/ops/zerodte-provision.sh
+        '''
+      }
+    }
+    stage('Provision (--confirm)') {
+      when {
+        beforeAgent true
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.CONFIRM) }
+      }
+      // The wrapper re-establishes BOTH prerequisites before the effect: HEAD == PERMITTED_SHA (again), and a dry-run receipt written by
+      // THIS build (BUILD_NUMBER) for THIS environment, declaration, attestation and HEAD.
+      steps {
+        sh '''
+          set -euo pipefail
+          DRY_RUN_RECEIPT="${WORKSPACE}/zerodte-provision-dry-run.receipt" CONFIRM=true scripts/ops/zerodte-provision.sh
+        '''
+      }
+    }
+  }
+  post {
+    success {
+      script {
+        echo params.CONFIRM ? "PROVISIONED (or already provisioned) ${params.ENVIRONMENT} — see the 'Provision (--confirm)' log for the receipt and the deploy/zerodte/provisioned/${params.ENVIRONMENT}.yaml block to commit" :
+                              "DRY RUN ONLY — nothing was written. Re-run with CONFIRM=true to provision ${params.ENVIRONMENT}."
+      }
+    }
+    unsuccessful {
+      script {
+        echo "zerodte provisioning ${currentBuild.currentResult} (build ${env.BUILD_NUMBER}, env ${params.ENVIRONMENT}, confirm ${params.CONFIRM}). " +
+             "Read the Job log above: ATTESTATION_REQUIRED (exit 67) means the topics were created and the printed attestation entry must be committed through review before the next run; " +
+             "68 is a precondition (the research schema must be v7 — increment 9; a topic policy; the era binding); 70 means read the ledger and the topics before trying again. " +
+             "The provisioner is create-or-verify: a re-run never repeats an effect."
+      }
+    }
+  }
+}
