@@ -81,8 +81,15 @@ for f in $wanted $sourced; do
   # (test_the_archive_ship_is_exactly_the_unit) asserts that list is exactly UNIT.
   # The job stages with a literal `cp <source> scripts/ops/archive/<name>`, so that is what is
   # required to exist, per file, by name.
+  # THE COMMITTED LOCATIONS ARE CONSULTED FIRST, and the unit directory LAST. The deploy job stages
+  # market_calendar.py and vol-premium-open-reference-capture.py INTO $DIR, and both staged copies
+  # are gitignored there — so on a reused CI workspace, or on any machine where the job or the
+  # suite has been run once, $DIR holds a copy. Looking there first attributed the file to $DIR,
+  # concluded it was a unit file, and skipped the staging requirement entirely: the check was
+  # absent exactly where a previous build had left evidence. Found by this guard's own tests, which
+  # copy the repository and could not make a removed staging command fail.
   home=""
-  for _where in "$DIR" scripts/jenkins scripts/ops; do
+  for _where in scripts/jenkins scripts/ops "$DIR"; do
     [ -f "$_where/$f" ] && { home="$_where"; break; }
   done
   if [ -z "$home" ]; then
@@ -91,14 +98,40 @@ for f in $wanted $sourced; do
     continue
   fi
   if [ "$home" != "$DIR" ]; then
-    # The cp may be wrapped across lines for width, so the whole file is matched as one string with
-    # its newlines and continuations squeezed out. A `cp` that names the right source and the right
-    # destination is the claim; anything else is not staging this file.
-    flat="$(tr '\n' ' ' < "$JF" | sed 's/\\ */ /g; s/  */ /g')"
-    case "$flat" in
-      *"cp $home/$f $DIR/$f"*) : ;;
-      *) echo "NOT STAGED FOR THE SUITE: $f lives in $home/ and $JF has no 'cp $home/$f $DIR/$f' — the containerised suite mounts only $DIR, so every case that needs $f would be skipped or green for the wrong reason" >&2
-         fails=$((fails+1)) ;;
+    # THE COPY MUST BE A COMMAND, AND IT MUST RUN BEFORE THE SUITE. Matching the flattened file for
+    # the text `cp <source> <dest>` was syntactic and the reviewer was right to refuse it: the same
+    # characters in a comment, in a string, or in a stage that runs afterwards would have satisfied
+    # it (review round 2). So comment lines are removed first, continuations are joined, and the cp
+    # is required to appear BEFORE the docker run that mounts the unit directory into the suite
+    # container — which is the ordering the staging exists for. A cp after it stages nothing the
+    # suite can see.
+    staged=$(awk -v src="$home/$f" -v dst="$DIR/$f" -v mount="$DIR:/w:ro" '
+      # strip Groovy and shell comments, but only when the line STARTS with one: a trailing # inside
+      # a quoted string is not a comment, and cutting there would corrupt real commands.
+      { line = $0 }
+      line ~ /^[[:space:]]*(\/\/|#)/ { next }
+      # join a backslash continuation onto the next line before matching
+      { gsub(/\\[[:space:]]*$/, "", line); joined = joined " " line }
+      END {
+        gsub(/[[:space:]]+/, " ", joined)
+        cp_at = index(joined, "cp " src " " dst)
+        mount_at = index(joined, mount)
+        if (cp_at == 0)            { print "absent"; exit }
+        if (mount_at == 0)         { print "no-suite-mount"; exit }
+        if (cp_at > mount_at)      { print "too-late"; exit }
+        print "ok"
+      }' "$JF")
+    case "$staged" in
+      ok) : ;;
+      too-late)
+        echo "STAGED TOO LATE: $f lives in $home/ and $JF copies it only AFTER the docker run that mounts $DIR into the suite container — the suite would run without it" >&2
+        fails=$((fails+1)) ;;
+      no-suite-mount)
+        echo "CANNOT CHECK STAGING: $JF has no docker run mounting $DIR:/w:ro, so the ordering this guard relies on no longer exists — update the guard with the job" >&2
+        fails=$((fails+1)) ;;
+      *)
+        echo "NOT STAGED FOR THE SUITE: $f lives in $home/ and $JF has no 'cp $home/$f $DIR/$f' as a command — the containerised suite mounts only $DIR, so every case that needs $f would be skipped or green for the wrong reason" >&2
+        fails=$((fails+1)) ;;
     esac
   fi
   # The first entry is preceded by a quote, not a space, so a bare substring test misses it — strip the

@@ -2232,6 +2232,11 @@ vp_tmp="$T/vp"; mkdir -p "$vp_tmp"
 # it records that it was called, with what, and publishes a minimal record.
 cat > "$vp_tmp/stub-capture.py" <<'STUB'
 import json, os, sys
+# The gate reads the topic set off the READER, by parsing these three assignments — so the stub
+# declares them exactly as the real capture does.
+INDEX = "underlying.spx.index.price"
+ES = "underlying.es.price"
+BASIS = "spx.basis.state"
 args = dict(zip(sys.argv[1::2], sys.argv[2::2]))
 with open(os.environ["VP_CALLS"], "a") as handle:
     handle.write(f"called session={args.get('--session')} close={args.get('--close-et')}\n")
@@ -2267,17 +2272,21 @@ vp_verdict() { # $1=session $2=max_event_time $3=status
     for t in $VP_TOPICS; do
       [ "$first" = 1 ] || printf ','
       first=0
-      printf '{"topic":"%s","status":"%s","records":1000,"max_event_time":"%s"}' \
+      printf '{"topic":"%s","status":"%s","records":1000,"max_event_time":"%s","reasons":["offset discontinuity (1)"]}' \
              "$t" "${3:-OK}" "$2"
     done
     printf ']}\n'
   } > "$root/_manifest/completeness/$1.json"
 }
+# An arbitrary verdict body, for the cases about the verdict's own integrity rather than about the
+# grades inside it. $1=session, $2=the complete JSON.
+vp_verdict_raw() { printf '%s\n' "$2" > "$vp_tmp/archive/$1/_manifest/completeness/$1.json"; }
+vp_entry() { printf '{"topic":"%s","status":"%s","records":1000,"max_event_time":"%s"}' "$1" "$2" "$3"; }
 vp_run() { # $1=session $2=archive root ; the rest are extra env assignments
   local session="$1" root="$2"; shift 2
-  env "$@" VP_CALLS="$vp_tmp/calls" CAPTURE="$vp_tmp/stub-capture.py" ARCHIVE_ROOT="$root" \
+  env VP_CALLS="$vp_tmp/calls" CAPTURE="$vp_tmp/stub-capture.py" ARCHIVE_ROOT="$root" \
       COMPLETENESS_DIR="$root/_manifest/completeness" \
-      LEDGER="$vp_tmp/ledger-$session" LOG="$vp_tmp/log-$session" bash "$VPC" "$session" 2>&1
+      LEDGER="$vp_tmp/ledger-$session" LOG="$vp_tmp/log-$session" "$@" bash "$VPC" "$session" 2>&1
 }
 vp_rc() { vp_run "$@" >/dev/null 2>&1; echo $?; }
 : > "$vp_tmp/calls"
@@ -2296,7 +2305,9 @@ has  "  and reports the ledger count, which is the >=55 bar" "the bar is 55 acce
 # Sufficiency is the capture's own coverage, span and per-quarter floors.
 : > "$vp_tmp/calls"
 root=$(vp_archive 2026-09-30 20260930T201500Z); vp_verdict 2026-09-30 2026-09-30T20:03:25Z PARTIAL
-want "18b a PARTIAL grade does not refuse the session" "called session=2026-09-30 close=16:00" "$(vp_run 2026-09-30 "$root" >/dev/null; cat "$vp_tmp/calls")"
+out=$(vp_run 2026-09-30 "$root")
+want "18b a PARTIAL grade does not refuse the session" "called session=2026-09-30 close=16:00" "$(cat "$vp_tmp/calls")"
+has  "  and its REASON reaches the log, which is the whole content of a PARTIAL" "[offset discontinuity (1)]" "$out"
 
 # ---- 18c. EMPTY is not. A graded-but-empty topic is an archive fact, and a record saying "no ES reference"
 # about the ARCHIVE rather than about the session would be permanent.
@@ -2420,6 +2431,79 @@ for i in $(seq 1 200); do printf 'CreateTime:0\tPartition:0\tES\t{"n":%s}\n' "$i
 dd if="$es" of="$es.cut" bs=1 count=$(( $(wc -c < "$es") / 2 )) 2>/dev/null
 mv "$es.cut" "$es"
 want "18n a torn ES file does not spend the session either" "" "$(vp_run 2026-09-18 "$root" >/dev/null; cat "$vp_tmp/calls")"
+
+# ---- 18p. A GRADE THIS GATE DOES NOT RECOGNISE IS NOT A PASS. The first version refused only
+# EMPTY, so CORRUPT — a checksum mismatch, which nothing downstream re-checks — would have been
+# accepted as long as the topic reached past the close, and so would any status added later.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-09-16 20260916T201500Z); vp_verdict 2026-09-16 2026-09-16T20:15:00Z CORRUPT
+out=$(vp_run 2026-09-16 "$root")
+want "18p a CORRUPT grade does not spend the session" "" "$(cat "$vp_tmp/calls")"
+want "  and it is a FAULT, not a wait: a checksum mismatch does not fix itself" 2 "$(vp_rc 2026-09-16 "$root")"
+has  "  and says the bytes do not match the manifest" "graded CORRUPT" "$out"
+for bad_status in MISSING LEGACY SOMETHING_NEW; do
+  : > "$vp_tmp/calls"
+  root=$(vp_archive 2026-09-15 20260915T201500Z); vp_verdict 2026-09-15 2026-09-15T20:15:00Z "$bad_status"
+  want "  $bad_status is not on the allow-list either" "" "$(vp_run 2026-09-15 "$root" >/dev/null; cat "$vp_tmp/calls")"
+done
+# ...and the allow-list is not a blanket refusal: OK and PARTIAL are 18a and 18b.
+
+# ---- 18q. THE VERDICT MUST BE ABOUT THIS SESSION, IN THIS ENVIRONMENT. A file is named by whoever
+# put it there, so a cached, copied or wrong-day verdict under the right name would otherwise be
+# read as evidence about a day it says nothing about.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-09-14 20260914T201500Z)
+vp_verdict_raw 2026-09-14 "{\"dt\":\"2026-09-11\",\"env\":\"prod\",\"topics\":[$(vp_entry underlying.spx.index.price OK 2026-09-14T20:15:00Z),$(vp_entry underlying.es.price OK 2026-09-14T20:15:00Z),$(vp_entry spx.basis.state OK 2026-09-14T20:15:00Z)]}"
+out=$(vp_run 2026-09-14 "$root")
+want "18q a verdict for another day does not spend the session" "" "$(cat "$vp_tmp/calls")"
+want "  and is a fault, because a misplaced verdict will not become the right one" 2 "$(vp_rc 2026-09-14 "$root")"
+has  "  naming the day it is actually about" "is for dt='2026-09-11'" "$out"
+: > "$vp_tmp/calls"
+vp_verdict_raw 2026-09-14 "{\"dt\":\"2026-09-14\",\"env\":\"dev\",\"topics\":[$(vp_entry underlying.spx.index.price OK 2026-09-14T20:15:00Z),$(vp_entry underlying.es.price OK 2026-09-14T20:15:00Z),$(vp_entry spx.basis.state OK 2026-09-14T20:15:00Z)]}"
+out=$(vp_run 2026-09-14 "$root")
+want "  nor does a verdict for another environment" "" "$(cat "$vp_tmp/calls")"
+has  "  naming the environment it is about" "is for env='dev'" "$out"
+# ...and the SAME fixture with the right dt and env IS captured, so neither case above is satisfied
+# by something else refusing it.
+: > "$vp_tmp/calls"
+vp_verdict 2026-09-14 2026-09-14T20:15:00Z
+want "  with the right dt and env it is captured" "called session=2026-09-14 close=16:00" "$(vp_run 2026-09-14 "$root" >/dev/null; cat "$vp_tmp/calls")"
+
+# ---- 18r. A TOPIC GRADED TWICE IS NOT GRADED. Building a dict keeps the last row silently, so two
+# disagreeing rows resolve to whichever came second — which is a coin toss, not evidence.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-09-11 20260911T201500Z)
+vp_verdict_raw 2026-09-11 "{\"dt\":\"2026-09-11\",\"env\":\"prod\",\"topics\":[$(vp_entry underlying.spx.index.price EMPTY 2026-09-11T20:15:00Z),$(vp_entry underlying.spx.index.price OK 2026-09-11T20:15:00Z),$(vp_entry underlying.es.price OK 2026-09-11T20:15:00Z),$(vp_entry spx.basis.state OK 2026-09-11T20:15:00Z)]}"
+out=$(vp_run 2026-09-11 "$root")
+want "18r a topic graded twice does not spend the session" "" "$(cat "$vp_tmp/calls")"
+has  "  and names the topic" "grades underlying.spx.index.price more than once" "$out"
+
+# ---- 18s. THE FILES MUST BE ON DISK NOW, not only in the verdict. A verdict is a statement about a
+# moment that has passed; the archive is a mount. With the NAS unmounted a cached verdict reads as
+# evidence while every glob returns nothing, and the capture would publish a permanent record saying
+# the session had no ES reference — about the mount, not about the session.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-09-10)          # directories, no files
+vp_verdict 2026-09-10 2026-09-10T20:15:00Z
+out=$(vp_run 2026-09-10 "$root")
+want "18s a graded session with no files on disk does not spend the session" "" "$(cat "$vp_tmp/calls")"
+has  "  and asks whether the archive is mounted" "is $root mounted?" "$out"
+want "  it is a WAIT: a mount comes back" 0 "$(vp_rc 2026-09-10 "$root")"
+
+# ---- 18t. THE GATED TOPIC SET COMES FROM THE READER. It used to be an environment variable with a
+# three-topic default, so a caller could shrink what was checked while the capture went on reading
+# all three from its own constants. Here the stub reader declares a FOURTH topic, and the gate must
+# wait for it rather than ignore it.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-09-09 20260909T201500Z); vp_verdict 2026-09-09 2026-09-09T20:15:00Z
+sed 's|^BASIS = .*|BASIS = "spx.basis.state.v2"|' "$vp_tmp/stub-capture.py" > "$vp_tmp/fourth-topic-capture.py"
+out=$(vp_run 2026-09-09 "$root" CAPTURE="$vp_tmp/fourth-topic-capture.py")
+want "18t a reader naming a different topic changes what is gated" "" "$(cat "$vp_tmp/calls")"
+has  "  and the gate names the reader's topic, not its own list" "spx.basis.state.v2 is not in the archive verdict" "$out"
+# ...and a reader whose topic set cannot be read at all is a fault, not a silent three-topic default
+: > "$vp_tmp/calls"
+printf 'INDEX = 1\nES = 2\nBASIS = 3\n' > "$vp_tmp/bad-topics-capture.py"
+want "  a reader whose topic set is not three names is a fault" 2 "$(vp_rc 2026-09-09 "$root" CAPTURE="$vp_tmp/bad-topics-capture.py")"
 
 # ---- 18o. an uninstalled capture is an ALERT, not a silent no-op: that is exactly how this study spent
 # twelve days and eight archived sessions producing nothing.

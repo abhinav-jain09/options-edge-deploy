@@ -34,10 +34,13 @@ LOG="${LOG:-/home/abhinav/oe-ops/vol-premium-open-capture.log}"
 # is the authoritative statement that the archiver is DONE with the session — a filename's
 # timestamp is not.
 COMPLETENESS_DIR="${COMPLETENESS_DIR:-$ARCHIVE_ROOT/_manifest/completeness}"
-# The topics the capture reads. All three are gated, because a complete index with an absent ES
-# series produces a record that says "no ES reference in the window" about the ARCHIVE rather than
-# about the session, and that record is permanent.
-CAPTURE_TOPICS="${CAPTURE_TOPICS:-underlying.spx.index.price underlying.es.price spx.basis.state}"
+# THE TOPICS ARE NOT CONFIGURABLE HERE, and that is the point. They used to come from an
+# environment variable with a three-topic default, which let the gate validate FEWER topics than
+# the capture reads while the capture went on reading all three from its own constants — an
+# override that could shrink the check and still spend the claim (review round 2). The gate now
+# reads INDEX, ES and BASIS out of the capture module itself, so the set cannot drift from the
+# reader by construction, and a capture that grows a fourth topic gates it without anyone
+# remembering to. The names are reported in the log.
 # OPERATOR-ONLY, AND NEVER IN THE CRONTAB. A session whose verdict was never written cannot be
 # gated on one, and that is not hypothetical: the verifier did not run the night of 2026-10-01, so
 # 2026-10-02 is graded and 2026-10-01 is not, while both are sound sessions by the capture's own
@@ -137,9 +140,9 @@ esac
 # The exit codes are distinct on purpose: 0 = positively established as not-ready-yet, so the retry
 # run should try again; anything else is a fault and must not be read as "wait".
 GATE="$(COMPLETENESS_DIR="$COMPLETENESS_DIR" ARCHIVE_ROOT="$ARCHIVE_ROOT" OE_DAY="$SESSION" \
-        CLOSE_ET="$CLOSE_ET" CAPTURE_TOPICS="$CAPTURE_TOPICS" ALLOW_UNGRADED="$ALLOW_UNGRADED" \
+        CLOSE_ET="$CLOSE_ET" CAPTURE="$CAPTURE" OE_ENV="$ENV_NAME" ALLOW_UNGRADED="$ALLOW_UNGRADED" \
         READY_AFTER_MIN="$READY_AFTER_MIN" python3 - <<'GATE'
-import datetime as dt, glob, gzip, json, os, re
+import ast, datetime as dt, glob, gzip, json, os, pathlib, re
 from zoneinfo import ZoneInfo
 
 ET = ZoneInfo("America/New_York")
@@ -147,13 +150,28 @@ day = dt.date.fromisoformat(os.environ["OE_DAY"])
 hh, mm = (int(part) for part in os.environ["CLOSE_ET"].split(":"))
 close = dt.datetime.combine(day, dt.time(hh, mm), ET).astimezone(dt.timezone.utc)
 root = os.environ["ARCHIVE_ROOT"]
-topics = os.environ["CAPTURE_TOPICS"].split()
+env_name = os.environ["OE_ENV"]
 allow_ungraded = os.environ.get("ALLOW_UNGRADED") == "true"
 verdict_path = os.path.join(os.environ["COMPLETENESS_DIR"], day.isoformat() + ".json")
 
-
-def files(topic):
-    return glob.glob(os.path.join(root, topic, "dt=" + day.isoformat(), "*.jsonl.gz"))
+# A GRADE THIS SCRIPT DOES NOT RECOGNISE IS NOT A PASS. oe-archive-verify.sh emits OK, PARTIAL,
+# CORRUPT, MISSING, LEGACY and EMPTY, and the first version of this gate refused only EMPTY — so
+# CORRUPT (a checksum mismatch, a manifest member absent from disk, an unparseable manifest line)
+# would have been accepted as long as the topic reached past the close, and so would any status
+# added later. This is an ALLOW-list, which is the difference between a check and a habit.
+#
+#   OK       — complete as far as the verifier can tell
+#   PARTIAL  — the verifier has a reason but not a checksum one; the reasons are LOGGED, and
+#              sufficiency is the capture's own business: its coverage, span and per-quarter floors
+#              are fractions of the session, so a gap in a topic it reads shows up as missing
+#              minutes and is what rejects 2026-09-22. Refusing PARTIAL outright would refuse
+#              2026-10-02, whose ES topic is graded PARTIAL on one offset discontinuity and which
+#              is a sound session (385 of 385 minutes, four full quarters, an ES reference 2 ms old
+#              at the open) — the same permanent loss by the opposite mistake.
+#   CORRUPT  — the bytes are wrong. Nothing downstream re-checks a checksum, so this is a FAULT.
+#   MISSING / LEGACY / EMPTY / anything else — the series is absent or its completeness cannot be
+#              proven. A wait: it may be repairable, and waiting spends nothing.
+MAY_PROCEED = ("OK", "PARTIAL")
 
 
 def answer(state, why):
@@ -161,22 +179,71 @@ def answer(state, why):
     raise SystemExit(0)
 
 
+# THE TOPIC SET COMES FROM THE READER, not from this script and not from the environment — and it
+# is read WITHOUT RUNNING IT. Importing the capture to reach its constants executes the module, and
+# a gate that runs the thing it is about to gate has a side effect nobody asked for: the first
+# version of this did exactly that and its own test fixture wrote a spurious "called" line. The
+# three names are module-level string assignments, so the source is parsed and they are read off
+# the tree.
+try:
+    tree = ast.parse(pathlib.Path(os.environ["CAPTURE"]).read_text())
+except (OSError, SyntaxError, ValueError) as err:
+    answer("fault", f"the capture at {os.environ['CAPTURE']} cannot be parsed for its topic set: {err}")
+declared = {}
+for node in tree.body:
+    if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant):
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                declared[target.id] = node.value.value
+topics = [declared.get(name) for name in ("INDEX", "ES", "BASIS")]
+if not all(isinstance(topic, str) and topic for topic in topics):
+    answer("fault", f"the capture does not declare INDEX, ES and BASIS as topic names: {topics!r}")
+
+
+def files(topic):
+    return glob.glob(os.path.join(root, topic, "dt=" + day.isoformat(), "*.jsonl.gz"))
+
+
 def from_the_verdict():
-    """Each topic's own max_event_time, from oe-archive-verify.sh's grading of the day."""
+    """Each topic's own grade and max_event_time, from oe-archive-verify.sh's grading of the day."""
     try:
         with open(verdict_path) as handle:
-            graded = {entry["topic"]: entry for entry in json.load(handle)["topics"]}
+            verdict = json.load(handle)
+        entries = verdict["topics"]
     except (OSError, ValueError, KeyError, TypeError) as err:
         # A verdict that cannot be read is a FAULT, not a wait: it will not fix itself, and
         # treating it as "try again this evening" is how a gate becomes a delay nobody notices.
         answer("fault", f"the archive verdict at {verdict_path} cannot be read: {err}")
+
+    # THE VERDICT MUST BE ABOUT THIS SESSION, IN THIS ENVIRONMENT. A file is named by whoever put
+    # it there: a cached, copied or wrong-day verdict under the right name would otherwise be read
+    # as evidence about a day it says nothing about (review round 2).
+    if verdict.get("dt") != day.isoformat():
+        answer("fault", f"the verdict at {verdict_path} is for dt={verdict.get('dt')!r}, not {day}")
+    if verdict.get("env") != env_name:
+        answer("fault", f"the verdict at {verdict_path} is for env={verdict.get('env')!r}, "
+                        f"not {env_name!r}")
+
+    # A TOPIC GRADED TWICE IS NOT GRADED. Building a dict keeps the last entry silently, so two
+    # disagreeing rows would resolve to whichever came second.
+    graded = {}
+    for entry in entries:
+        if not isinstance(entry, dict) or "topic" not in entry:
+            answer("fault", f"the verdict at {verdict_path} holds a row that is not a topic entry")
+        if entry["topic"] in graded:
+            answer("fault", f"the verdict at {verdict_path} grades {entry['topic']} more than once")
+        graded[entry["topic"]] = entry
+
     told = []
     for topic in topics:
         entry = graded.get(topic)
         if entry is None:
             answer("waiting", f"{topic} is not in the archive verdict for {day}")
         status = entry.get("status")
-        if not status or status == "EMPTY":
+        if status == "CORRUPT":
+            answer("fault", f"{topic} is graded CORRUPT for {day} — the bytes on disk do not match "
+                            f"the manifest, and nothing downstream re-checks that")
+        if status not in MAY_PROCEED:
             answer("waiting", f"{topic} is graded {status or 'ungraded'} in the archive verdict")
         raw = entry.get("max_event_time")
         try:
@@ -188,7 +255,13 @@ def from_the_verdict():
         if latest < close:
             answer("waiting", f"{topic} reaches only {raw}, before the "
                               f"{os.environ['CLOSE_ET']} ET close")
-        told.append(f"{topic}={status}/{entry.get('records')}")
+        detail = f"{topic}={status}/{entry.get('records')}"
+        if status == "PARTIAL":
+            # The reason is the whole content of a PARTIAL. Logging the word alone would hide
+            # whether the verifier saw one offset discontinuity or half a session.
+            reasons = entry.get("reasons") or []
+            detail += "[" + "; ".join(str(reason) for reason in reasons) + "]"
+        told.append(detail)
     return told
 
 
@@ -222,12 +295,21 @@ elif allow_ungraded:
 else:
     answer("waiting", "the archive verdict for this session has not been written yet")
 
+# THE FILES MUST BE THERE NOW, not only in the verdict. A verdict is a statement about a moment
+# that has passed; the archive is a mount. With the NAS unmounted, a cached or stale verdict reads
+# as evidence while every glob returns nothing, and the capture would publish a permanent record
+# saying the session had no ES reference — about the mount, not about the session (review round 2).
+for topic in topics:
+    if not files(topic):
+        answer("waiting", f"{topic} has no archived file on disk for {day}, whatever the verdict "
+                          f"says — is {root} mounted?")
+
 # AND EVERY FILE THE CAPTURE WILL READ MUST DECOMPRESS TO ITS END. The verdict is written once and
-# the spot topics keep being archived every ten minutes, so a member can be mid-write AFTER the day
-# was graded. The capture's reader catches OSError at OPEN and then iterates, and a torn member
-# raises partway through — a failed run, an alert, and a day of delay for a condition that resolves
-# itself in minutes. Reading every byte is the only test of this that is not a guess: a size, an
-# mtime and a successful open all pass on a half-written member.
+# the spot topics keep being archived every ten minutes, so a member can be torn AFTER the day was
+# graded. The capture's reader catches OSError at OPEN and then iterates, and a torn member raises
+# partway through — a failed run, an alert, and a day of delay for a condition that resolves itself
+# in minutes. Reading every byte is the only test of this that is not a guess: a size, an mtime and
+# a successful open all pass on a half-written member.
 for topic in topics:
     for path in files(topic):
         try:
