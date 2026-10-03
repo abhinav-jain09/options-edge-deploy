@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import datetime as dt
 import gzip
+import hashlib
 import importlib.util
 import json
 import os
@@ -41,12 +42,25 @@ def _iso(offset_s: float) -> str:
         "+00:00", "Z")
 
 
-def _write(root: Path, topic: str, rows: list) -> None:
-    folder = root / topic / f"dt={DAY}"
+def _write(root: Path, topic: str, rows: list, day: str = DAY) -> None:
+    folder = root / topic / f"dt={day}"
     folder.mkdir(parents=True, exist_ok=True)
-    with gzip.open(folder / f"{topic}.p0.0-1.jsonl.gz", "wt") as handle:
+    member = folder / f"{topic}.p0.0-1.jsonl.gz"
+    with gzip.open(member, "wt") as handle:
         for row in rows:
             handle.write(f"CreateTime:0\tPartition:0\tKEY\t{json.dumps(row)}\n")
+    _record_in_manifest(folder, member)
+
+
+def _record_in_manifest(folder: Path, member: Path) -> None:
+    """The archiver's own per-file line, carrying the sha256 over the gzip stream as committed. The
+    capture hashes every member it reads against this before parsing it, so a fixture without the
+    line is a member the archiver never published."""
+    raw = member.read_bytes()
+    with (folder / "_manifest.jsonl").open("a") as handle:
+        handle.write(json.dumps({"file": member.name,
+                                 "sha256": hashlib.sha256(raw).hexdigest(),
+                                 "bytes": len(raw)}) + "\n")
 
 
 def _index(offset_s: float, price: float, source="IBKR_INDEX", field="LAST", quality="LIVE"):
@@ -243,9 +257,11 @@ class OpenReferenceCaptureTest(unittest.TestCase):
         for topic, rows in ((orc.INDEX, idx), (orc.ES, es), (orc.BASIS, [{"level": 1.0}])):
             folder = self.tmp / topic / f"dt={other}"
             folder.mkdir(parents=True, exist_ok=True)
-            with gzip.open(folder / "x.jsonl.gz", "wt") as handle:
+            member = folder / "x.jsonl.gz"
+            with gzip.open(member, "wt") as handle:
                 for row in rows:
                     handle.write(f"CreateTime:0\tPartition:0\tK\t{json.dumps(row)}\n")
+            _record_in_manifest(folder, member)
         _gate_marker(self.tmp, other)
         subprocess.run([sys.executable, str(SCRIPT), "--session", other,
                         "--archive-root", str(self.tmp), "--out", str(out)],
@@ -825,8 +841,10 @@ class PublicationAuthorityTest(unittest.TestCase):
         with gzip.open(extra / "late-arrival.jsonl.gz", "wt") as handle:
             handle.write(f"CreateTime:0\tPartition:0\tK\t{json.dumps(_index(400, 7651.0))}\n")
         r, out = self._run()
-        self.assertEqual(r.returncode, 77, r.stdout + r.stderr)
-        self.assertIn("fingerprints a different set of files", r.stderr)
+        # Caught by the manifest rather than the digest, because a member that arrived after the
+        # archiver finished has no line to check its bytes against — earlier, and more specific.
+        self.assertEqual(r.returncode, 75, r.stdout + r.stderr)
+        self.assertIn("nothing to check its bytes against", r.stderr)
         self.assertFalse((out / "accepted").exists())
 
     def test_a_member_removed_after_verification_cannot_be_published_either(self) -> None:
@@ -834,8 +852,8 @@ class PublicationAuthorityTest(unittest.TestCase):
         through the empty-input refusal: a pinned set that lost a member is not the set that was
         verified."""
         _fixture(self.tmp)
-        for path in (self.tmp / orc.ES / f"dt={DAY}").iterdir():
-            path.unlink()
+        for path in (self.tmp / orc.ES / f"dt={DAY}").glob("*.jsonl.gz"):
+            path.unlink()      # the manifest line stays; only the member goes
         r, out = self._run()
         self.assertEqual(r.returncode, 77, r.stdout + r.stderr)
         self.assertIn("fingerprints a different set of files", r.stderr)
@@ -873,28 +891,70 @@ class PublicationAuthorityTest(unittest.TestCase):
         for topic in (orc.INDEX, orc.ES, orc.BASIS):
             shutil.rmtree(self.tmp / topic)
         r, out = self._run()
-        self.assertEqual(r.returncode, 65, r.stdout + r.stderr)
-        self.assertIn("holds no readable records", r.stderr)
+        # Refused at the manifest load, which is earlier and says more than the emptiness test: a
+        # root with no manifests has nothing to check any byte against.
+        self.assertEqual(r.returncode, 66, r.stdout + r.stderr)
+        self.assertIn("has no _manifest.jsonl", r.stderr)
         self.assertFalse((out / "accepted").exists())
         self.assertFalse((out / "rejected").exists(), "an empty input was published as a rejection")
 
-    def test_an_input_of_unreadable_members_is_NAMED_not_treated_as_empty(self) -> None:
-        """A torn member is a THIRD thing, and the distinction is the point. It is not an empty
-        session — recording it as one would say the market could not answer when the archiver was
-        simply still writing — and it is not publishable either. gzip raises while the file is being
-        ITERATED, which the open-time guard does not catch; that used to surface as a traceback,
-        which was safe (nothing is published before it) and told a reader nothing."""
+    def test_a_root_with_manifests_but_no_members_publishes_nothing(self) -> None:
+        """The emptiness test in its own right, reached when the manifests are there and the members
+        are not — which is what a prune of the pinned set leaves if it takes only the members."""
         _fixture(self.tmp)
         _gate_marker(self.tmp)
         for topic in (orc.INDEX, orc.ES, orc.BASIS):
-            for path in (self.tmp / topic / f"dt={DAY}").iterdir():
+            for path in (self.tmp / topic / f"dt={DAY}").glob("*.jsonl.gz"):
+                path.unlink()
+        r, out = self._run()
+        self.assertIn(r.returncode, (65, 77), r.stdout + r.stderr)
+        self.assertFalse((out / "accepted").exists())
+        self.assertFalse((out / "rejected").exists())
+
+    def test_a_member_rewritten_after_the_archiver_recorded_it_is_refused(self) -> None:
+        """THE RACE THE PIN CANNOT CLOSE. A hardlink shares the archive's inode, so an in-place
+        rewrite — a mistaken restore, a sync, bit-rot — changes what the pin sees, and name, size and
+        inode all survive it, so the marker digest is blind to it too. The only statement with no
+        interval in it is the one `_records` makes: the bytes PARSED are the bytes HASHED, in one
+        read, checked against what the archiver recorded before they are parsed."""
+        _fixture(self.tmp)
+        _gate_marker(self.tmp)
+        for topic in (orc.INDEX, orc.ES, orc.BASIS):
+            for path in (self.tmp / topic / f"dt={DAY}").glob("*.jsonl.gz"):
                 path.write_bytes(b"not a gzip at all")
         r, out = self._run()
-        self.assertEqual(r.returncode, 66, r.stdout + r.stderr)
-        self.assertIn("does not decompress to its end", r.stderr)
+        self.assertEqual(r.returncode, 75, r.stdout + r.stderr)
+        self.assertIn("does not match the sha256 the archiver recorded", r.stderr)
         self.assertFalse((out / "accepted").exists())
         self.assertFalse((out / "rejected").exists(),
-                         "a torn member was recorded as a session the market could not answer for")
+                         "altered bytes were recorded as a session the market could not answer for")
+
+    def test_a_valid_but_different_member_is_refused_too(self) -> None:
+        """The same case without the convenience of a corrupt file: a VALID gzip of different
+        content, so nothing but the checksum can tell. This is what a restore from the wrong day
+        looks like."""
+        _fixture(self.tmp)
+        _gate_marker(self.tmp)
+        member = next((self.tmp / orc.INDEX / f"dt={DAY}").glob("*.jsonl.gz"))
+        with gzip.open(member, "wt") as handle:
+            handle.write(f"CreateTime:0\tPartition:0\tK\t{json.dumps(_index(400, 1.0))}\n")
+        r, out = self._run()
+        self.assertEqual(r.returncode, 75, r.stdout + r.stderr)
+        self.assertIn("does not match the sha256 the archiver recorded", r.stderr)
+
+    def test_a_member_the_archiver_never_recorded_is_refused(self) -> None:
+        """And the other half: a member with no manifest line has nothing to check its bytes
+        against. The archiver appends the line after publishing, so this is a file it has not
+        finished with — or one that arrived from somewhere else entirely."""
+        _fixture(self.tmp)
+        _gate_marker(self.tmp)
+        folder = self.tmp / orc.INDEX / f"dt={DAY}"
+        with gzip.open(folder / "unrecorded.jsonl.gz", "wt") as handle:
+            handle.write(f"CreateTime:0\tPartition:0\tK\t{json.dumps(_index(400, 7651.0))}\n")
+        r, out = self._run()
+        self.assertEqual(r.returncode, 75, r.stdout + r.stderr)
+        self.assertIn("nothing to check its bytes against", r.stderr)
+        self.assertFalse((out / "accepted").exists())
 
     def test_a_session_that_genuinely_fails_is_still_published_as_rejected(self) -> None:
         """The companion that stops the two cases above being satisfied by a reader that never

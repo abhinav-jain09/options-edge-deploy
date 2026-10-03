@@ -2926,6 +2926,20 @@ want "18m4 a substituted member does not spend the session" "" "$(cat "$vp_tmp/c
 has  "  caught by the archiver's sha256 and nothing else" "does not match the sha256 the archiver recorded" "$out"
 want "  and it is a fault, because a substitution does not resolve itself" 2 "$(vp_rc 2026-08-12 "$root")"
 
+# ---- 18m5. THE ARCHIVER'S PER-FILE MANIFEST IS PINNED WITH THE MEMBERS. The reader checks every
+# byte it reads against it and is given the pinned set, not the archive, so without this it would
+# have nothing to check against and would refuse to publish — the gate's own checking would be
+# complete and the capture would still decline.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-08-11 20260811T201500Z); vp_verdict 2026-08-11 2026-08-11T20:15:00Z
+vp_run 2026-08-11 "$root" >/dev/null
+for t in $VP_TOPICS; do
+  want "18m5 $t's _manifest.jsonl is pinned beside its members" yes \
+       "$([ -f "$vp_tmp/ledger-2026-08-11/.pinned/2026-08-11/$t/dt=2026-08-11/_manifest.jsonl" ] && echo yes || echo no)"
+done
+want "  and it is the SAME file as the archive's, not a copy" yes \
+     "$([ "$(stat -c %i "$root/underlying.es.price/dt=2026-08-11/_manifest.jsonl" 2>/dev/null || stat -f %i "$root/underlying.es.price/dt=2026-08-11/_manifest.jsonl")" = "$(stat -c %i "$vp_tmp/ledger-2026-08-11/.pinned/2026-08-11/underlying.es.price/dt=2026-08-11/_manifest.jsonl" 2>/dev/null || stat -f %i "$vp_tmp/ledger-2026-08-11/.pinned/2026-08-11/underlying.es.price/dt=2026-08-11/_manifest.jsonl")" ] && echo yes || echo no)"
+
 # ---- 18o. an uninstalled capture is an ALERT, not a silent no-op: that is exactly how this study spent
 # twelve days and eight archived sessions producing nothing.
 : > "$vp_tmp/calls"

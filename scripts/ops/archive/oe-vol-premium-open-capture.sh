@@ -340,10 +340,11 @@ for topic in topics:
 # in-place change keeps all three.
 #
 # So every member is hashed AS PINNED and compared with the manifest line the archiver wrote when it
-# published that file. The two failures are different and are reported differently: a member with NO
-# manifest line is one the archiver has not recorded yet, which is what a file still being written
-# looks like, so it WAITS; a member whose bytes do not match the line it has will not fix itself, so
-# it is a FAULT.
+# published that file. The two failures are different and are reported differently. A member with NO
+# manifest line is one the archiver has not recorded: most often a file it is still writing, and
+# sometimes one it published before dying between the rename and the manifest append — an interval
+# the archiver's own verifier knows about. Either way it is repairable and is not corruption, so it
+# WAITS. A member whose bytes do not match the line it HAS will not fix itself, so it is a FAULT.
 def manifest_for(topic):
     path = os.path.join(root, topic, "dt=" + day.isoformat(), "_manifest.jsonl")
     recorded = {}
@@ -377,6 +378,7 @@ def sha256_of(path):
 
 snapshot = os.path.join(os.environ["SNAPSHOT_ROOT"], day.isoformat())
 expected = set()
+members = 0
 for topic in topics:
     recorded = manifest_for(topic)
     if recorded is None:
@@ -393,6 +395,7 @@ for topic in topics:
     for path in files(topic):
         target = os.path.join(folder, os.path.basename(path))
         expected.add(target)
+        members += 1
         try:
             os.link(path, target)
         except FileExistsError:
@@ -440,6 +443,25 @@ for topic in topics:
         except Exception:
             answer("waiting", f"{os.path.basename(path)} does not decompress to its end — "
                               f"the archiver is most likely still writing it")
+
+# AND THE ARCHIVER'S PER-FILE MANIFEST IS PINNED WITH THE MEMBERS, because the reader checks every
+# byte it reads against it and is given the pinned set, not the archive. Hardlinked like the
+# members: the same file, so what the reader checks against is what this gate checked against.
+for topic in topics:
+    source = os.path.join(root, topic, "dt=" + day.isoformat(), "_manifest.jsonl")
+    target = os.path.join(snapshot, topic, "dt=" + day.isoformat(), "_manifest.jsonl")
+    expected.add(target)
+    try:
+        os.link(source, target)
+    except FileExistsError:
+        try:
+            if not os.path.samefile(source, target):
+                answer("fault", f"the pinned _manifest.jsonl for {topic} on {day} is not the one "
+                                f"the archive now holds — the pinned set must be looked at")
+        except OSError as err:
+            answer("fault", f"cannot compare the pinned manifest for {topic} on {day}: {err}")
+    except OSError as err:
+        answer("fault", f"cannot pin {topic}'s _manifest.jsonl for {day}: {err}")
 
 if not expected:
     # Unreachable while the on-disk check above stands, and asserted rather than assumed: pointing
@@ -492,7 +514,7 @@ try:
 except OSError as err:
     answer("fault", f"cannot write the gate marker into the pinned set for {day}: {err}")
 
-print(f"ready {len(expected)} files pinned and checked; " + " ".join(summary))
+print(f"ready {members} files pinned and checked; " + " ".join(summary))
 GATE
 )"
 GATE_RC=$?

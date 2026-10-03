@@ -130,21 +130,43 @@ class TornMember(Exception):
 
 
 def _records(root: str, topic: str, day: str):
+    """Every record of a topic for a session, from the archive.
+
+    READ IN ONE CALL, HASHED, THEN DECOMPRESSED FROM THE SAME BYTES. Streaming the file leaves an
+    interval between checking it and using it; this way the bytes that produce the record are the
+    bytes that were checked, with nothing in between. A member is a few hundred kilobytes.
+    """
     pattern = os.path.join(root, topic, f"dt={day}", "*.jsonl.gz")
     for path in sorted(glob.glob(pattern)):
+        name = os.path.basename(path)
         try:
-            handle = gzip.open(path, "rt", errors="replace")
+            with open(path, "rb") as handle:
+                blob = handle.read()
         except OSError:
             continue
-        with handle:
-            for line in _lines(handle, path):
-                brace = line.find("{")
-                if brace < 0:
-                    continue
-                try:
-                    yield json.loads(line[brace:])
-                except ValueError:
-                    continue
+        if _EXPECTED_SHA is not None:
+            recorded = _EXPECTED_SHA.get((topic, name))
+            if recorded is None:
+                raise UnverifiedMember(
+                    f"{name} is not in {topic}'s _manifest.jsonl for {day}, so there is nothing to "
+                    f"check its bytes against")
+            actual = hashlib.sha256(blob).hexdigest()
+            if actual != recorded:
+                raise UnverifiedMember(
+                    f"{name} does not match the sha256 the archiver recorded for it "
+                    f"({actual[:12]} vs {recorded[:12]})")
+        try:
+            text = gzip.decompress(blob).decode("utf-8", errors="replace")
+        except Exception as err:
+            raise TornMember(f"{name}: {err}") from err
+        for line in text.splitlines():
+            brace = line.find("{")
+            if brace < 0:
+                continue
+            try:
+                yield json.loads(line[brace:])
+            except ValueError:
+                continue
 
 
 # The fractional seconds of an ISO-8601 instant, and nothing else that can carry a dot: the
@@ -180,16 +202,54 @@ def _to_microseconds(raw: str) -> str:
     return _FRACTIONAL_SECONDS.sub(lambda m: "." + m.group(1)[:6].ljust(6, "0"), raw, count=1)
 
 
-def _lines(handle, path):
-    """The iteration itself, so a member that stops decompressing is named rather than traced."""
-    while True:
+class UnverifiedMember(Exception):
+    """A member whose bytes are not the ones the archiver recorded for it.
+
+    THIS IS WHY THE HASH IS HERE AND NOT IN THE GATE ALONE. The gate hashes each member as it pins
+    it, but a hardlink shares the ARCHIVE'S INODE: an in-place rewrite — a mistaken restore, a sync,
+    bit-rot — changes what the pin sees too, and it can land after the gate has finished. Name, size
+    and inode all survive such a rewrite, so the marker digest cannot see it either (review round
+    12).
+
+    The only statement about this with no interval in it is the one _records() makes: the bytes
+    PARSED are the bytes HASHED, read once, in one call, and checked against _manifest.jsonl before
+    they are parsed. Whatever happens to the file before or after, what produced the record was
+    checked.
+    """
+
+
+# The sha256 the archiver recorded for each member, as {(topic, basename): sha256}, or None for a
+# run that is not publishing. Module state rather than a parameter on every reader: the check has to
+# happen inside the one function that reads bytes, and threading it through _timed() and capture()
+# would put the decision — and the chance of forgetting it — at every call site instead of one.
+_EXPECTED_SHA = None
+
+
+def _manifest_shas(root: str, day: str):
+    """What the archiver wrote next to the members: one JSON line per published file, carrying its
+    sha256 over the gzip stream as committed."""
+    recorded = {}
+    for topic in (INDEX, ES, BASIS):
+        path = os.path.join(root, topic, f"dt={day}", "_manifest.jsonl")
         try:
-            line = handle.readline()
-        except (OSError, EOFError, gzip.BadGzipFile, zlib.error) as err:
-            raise TornMember(f"{os.path.basename(path)}: {err}") from err
-        if not line:
-            return
-        yield line
+            with open(path) as handle:
+                lines = handle.readlines()
+        except OSError:
+            return None, topic
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                # A partial last line is a run that died mid-append. It is not evidence either way,
+                # and a member it would have named is then simply unrecorded.
+                continue
+            name, digest = entry.get("file"), entry.get("sha256")
+            if isinstance(name, str) and isinstance(digest, str):
+                recorded[(topic, os.path.basename(name))] = digest
+    return recorded, None
 
 
 def _event_time(record: dict):
@@ -484,15 +544,26 @@ def main(argv=None) -> int:
         print(f"vol-premium-open-reference-capture: not a close time: {args.close_et}",
               file=sys.stderr)
         return 64
-    try:
-        record = capture(args.archive_root, args.session, args.close_et)
-    except TornMember as err:
-        # Not published, and not silently treated as an empty session either: a member that stops
-        # decompressing is the archiver still writing it, which resolves itself in minutes.
-        print(f"vol-premium-open-reference-capture: {args.session} was NOT captured — a member "
-              f"does not decompress to its end ({err}). Nothing was published; the session stays "
-              f"claimable.", file=sys.stderr)
-        return 66
+    # PUBLISHING MEANS EVERY BYTE READ IS CHECKED. _records() hashes each member against the
+    # archiver's own _manifest.jsonl in the same read that parses it, so the manifests have to be
+    # loaded BEFORE the first read — and the first read is the emptiness test just below, not the
+    # capture. A run that only computes a record reads the archive as it finds it, which is what the
+    # evidence script does and which claims nothing.
+    if args.out:
+        global _EXPECTED_SHA
+        _EXPECTED_SHA, missing_for = _manifest_shas(args.archive_root, args.session)
+        if _EXPECTED_SHA is None:
+            print(f"vol-premium-open-reference-capture: refusing to publish {args.session} — "
+                  f"{missing_for} has no _manifest.jsonl under {args.archive_root}, so the bytes "
+                  f"read cannot be checked against what the archiver recorded", file=sys.stderr)
+            return 66
+
+    def failed(kind: str, err: Exception) -> int:
+        print(f"vol-premium-open-reference-capture: {args.session} was NOT captured — {err}. "
+              f"{kind} Nothing was published.", file=sys.stderr)
+        # 75 for a member that no longer matches what the archiver recorded, which will not come
+        # back on its own; 66 for one that does not decompress, which most likely will.
+        return 75 if isinstance(err, UnverifiedMember) else 66
 
     # NOTHING IS PUBLISHED FROM AN INPUT THAT HOLDS NO RECORDS. A ledger entry is permanent — the
     # marker under .published/ refuses republication — so a record computed over an empty directory
@@ -501,10 +572,10 @@ def main(argv=None) -> int:
     # pinned directory, and anything that removes it between the gate and this run (a prune of the
     # pinned sets, most obviously) leaves precisely an empty root.
     #
-    # The test is RECORDS, not files: a directory of unreadable members is as empty as no directory.
-    # Printing the record and refusing to publish it is deliberate — the caller still sees what was
-    # computed, and the session stays claimable.
-    def _has_records(root: str, session: str) -> bool:
+    # The test is RECORDS, not files. Written out rather than looped because
+    # test-archive-reset.sh 18y requires every call that takes a topic to pass one of the three
+    # DECLARED names, and a loop variable could hold anything.
+    def has_records(root: str, session: str) -> bool:
         for _ in _records(root, INDEX, session):
             return True
         for _ in _records(root, ES, session):
@@ -513,7 +584,15 @@ def main(argv=None) -> int:
             return True
         return False
 
-    if args.out and not _has_records(args.archive_root, args.session):
+    try:
+        nothing_to_read = args.out and not has_records(args.archive_root, args.session)
+        record = capture(args.archive_root, args.session, args.close_et)
+    except UnverifiedMember as err:
+        return failed("The member on disk is not the one the archive verdict graded.", err)
+    except TornMember as err:
+        return failed("A member does not decompress to its end; the session stays claimable.", err)
+
+    if nothing_to_read:
         print(json.dumps(record, sort_keys=True))
         print(f"vol-premium-open-reference-capture: {args.session} was NOT published — "
               f"{args.archive_root} holds no readable records for it, so there is nothing to "
