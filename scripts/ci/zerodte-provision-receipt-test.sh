@@ -41,7 +41,9 @@ case "$args" in
   "auth whoami -o jsonpath={.status.userInfo.username}") printf '%s' "${FAKE_WHOAMI:-system:serviceaccount:options-edge:jenkins-deployer}" ;;
   *"config view --minify -o jsonpath={.clusters[0].cluster.server}") printf '%s' "${FAKE_SERVER:-https://127.0.0.1:1}" ;;
   *"config view --minify --raw -o jsonpath={.clusters[0].cluster.certificate-authority-data}")
-    case "${FAKE_CA:-dev}" in none) printf '' ;; *) base64 < "${FAKE_CA_DIR:?}/${FAKE_CA:-dev}.pem" | tr -d '\n' ;; esac ;;
+    case "${FAKE_CA:-dev}" in none|file) printf '' ;; *) base64 < "${FAKE_CA_DIR:?}/${FAKE_CA:-dev}.pem" | tr -d '\n' ;; esac ;;
+  *"config view --minify --raw -o jsonpath={.clusters[0].cluster.insecure-skip-tls-verify}") printf '%s' "${FAKE_SKIP_TLS:-}" ;;
+  *"config view --minify --raw -o jsonpath={.clusters[0].cluster.certificate-authority}") [ "${FAKE_CA:-dev}" = file ] && printf '/etc/kube/ca.crt' || printf '' ;;
   *"get configmap/zerodte-provision-lock"*) printf 'build-3-20261003T120000Z' ;;
   *"create -f -")
     body="$(cat)"
@@ -52,8 +54,19 @@ case "$args" in
   *"create configmap"*"--dry-run=client -o yaml")
     printf 'apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm\n  namespace: options-edge\ndata:\n'
     for a in "$@"; do case "$a" in --from-file=*) k="${a#--from-file=}"; printf '  %s: |\n    x\n' "${k%%=*}" ;; esac; done ;;
-  *"apply --dry-run=server"*|*"create --dry-run=server"*|*"apply -f"*|*"create -f"*|*"delete"*) : ;;
+  *"create -f "*)   # the Job
+    if [ "${FAKE_CREATE_JOB_FAILS:-0}" = 1 ]; then echo "Error from server: admission webhook denied the Job" >&2; exit 1; fi ;;
+  *"delete job/"*)
+    if [ "${FAKE_DELETE_JOB_FAILS:-0}" = 1 ]; then echo "error: timed out waiting for the condition" >&2; exit 1; fi ;;
+  *"apply --dry-run=server"*|*"create --dry-run=server"*|*"apply -f"*|*"delete"*) : ;;
   *"get job/"*"-o json")
+    # FAKE_JOB_GET: normal (default) | absent (NotFound) | error (unreadable) | active; after a successful delete the Job is ABSENT
+    if grep -q "delete job/" "$FAKE_JOURNAL" && [ "${FAKE_DELETE_JOB_FAILS:-0}" != 1 ]; then echo 'Error from server (NotFound): jobs.batch "x" not found' >&2; exit 1; fi
+    case "${FAKE_JOB_GET:-normal}" in
+      absent) echo 'Error from server (NotFound): jobs.batch "x" not found' >&2; exit 1 ;;
+      error)  echo 'Unable to connect to the server: EOF' >&2; exit 1 ;;
+      active) printf '{"status":{"active":1,"succeeded":0,"conditions":[]}}' ;;
+    esac
     # a Job whose container exited non-zero is FAILED (backoffLimit 0): the fake reports that condition unless a case says otherwise
     if [ "${FAKE_SUCCEEDED:-1}" = 1 ]; then printf '{"status":{"succeeded":1,"conditions":[]}}'; else cond="${FAKE_CONDITIONS:-}"; [ -n "$cond" ] || cond='{"type":"Failed","status":"True"}'; printf '{"status":{"succeeded":0,"conditions":[%s]}}' "$cond"; fi ;;
   *"logs job/"*) printf '%b' "${FAKE_LOG:-}" ;;
@@ -107,6 +120,7 @@ printf '%s' "$LAST_OUT" | grep -q "ledgerTopicId: \"$LT\"" && printf '%s' "$LAST
 run "confirm: ALREADY_PROVISIONED"                   0 "already holds generation 1" true "$DIAG$ALREADY\n" PERMITTED_SHA="$HEAD"
 run "confirm: ATTESTATION_REQUIRED"                  67 "ATTESTATION REQUIRED (exit 67" true "$DIAG$REQUIRED\n" PERMITTED_SHA="$HEAD" FAKE_SUCCEEDED=0 FAKE_EXIT=67
 printf '%s' "$LAST_OUT" | grep -q "ledgerTopicId: \"$LT\"" && printf '%s' "$LAST_OUT" | grep -q "prevEntryHash: \"$(printf '0%.0s' $(seq 64))\"" && { pass=$((pass+1)); echo "  ok   the exact attestation entry to append is printed, chained on the current tail"; } || { fail=$((fail+1)); echo "  FAIL the attestation entry is not printed as required"; }
+run "confirm: ATTESTATION_REQUIRED, odd clusterId"   1 "clusterId is not [A-Za-z0-9._-]+" true "${DIAG}ATTESTATION_REQUIRED generation=1 ledgerTopicId=$LT clusterId=a/b\n" PERMITTED_SHA="$HEAD" FAKE_SUCCEEDED=0 FAKE_EXIT=67
 run "confirm: PROVISIONABLE is a dry-run line"       1 "a dry-run line is not a provisioning" true "$DIAG$RESOLVED\n" PERMITTED_SHA="$HEAD"
 run "confirm: CONFLICTING_PROVISIONED"               1 "CONFLICTING_PROVISIONED: the ledger already holds generation 1" true "${DIAG}CONFLICTING_PROVISIONED generation=1\n" PERMITTED_SHA="$HEAD" FAKE_SUCCEEDED=0 FAKE_EXIT=66
 run "confirm: REFUSED precondition (schema v6)"      1 "a PRECONDITION failed (SCHEMA_VERSION" true "${DIAG}REFUSED reason=SCHEMA_VERSION exit=68\n" PERMITTED_SHA="$HEAD" FAKE_SUCCEEDED=0 FAKE_EXIT=68
@@ -136,7 +150,11 @@ run "dry run: a short planDigest"                    1 "planDigest has 3 charact
 run "dry run: an upper-case wouldAssert"             1 "wouldAssert is not lowercase hex" false "${DIAG}PROVISIONABLE symbol=SPX lineage=$L generation=1 eraId=1 planDigest=$PD provisionedDigest=PENDING topicIds=PENDING wouldCreate=NONE wouldAssert=$(printf 'B%.0s' $(seq 64)) wouldAttest=YES wouldInsertEra=YES wouldAppend=PROVISIONED\n"
 run "dry run: RESOLVED with PENDING digest"          1 "provisionedDigest is not lowercase hex" false "${DIAG}PROVISIONABLE symbol=SPX lineage=$L generation=1 eraId=1 planDigest=$PD provisionedDigest=PENDING topicIds=RESOLVED wouldCreate=NONE wouldAssert=$PD wouldAttest=NO wouldInsertEra=YES wouldAppend=PROVISIONED\n"
 run "dry run: PENDING with a real digest"            1 "provisionedDigest-not-PENDING" false "${DIAG}PROVISIONABLE symbol=SPX lineage=$L generation=1 eraId=1 planDigest=$PD provisionedDigest=$PD topicIds=PENDING wouldCreate=NONE wouldAssert=$PD wouldAttest=YES wouldInsertEra=YES wouldAppend=PROVISIONED\n"
-run "dry run: an unknown wouldCreate role"           1 "wouldCreate(LEDGER)" false "${DIAG}PROVISIONABLE symbol=SPX lineage=$L generation=1 eraId=1 planDigest=$PD provisionedDigest=PENDING topicIds=PENDING wouldCreate=FRAMES,LEDGER wouldAssert=$PD wouldAttest=YES wouldInsertEra=YES wouldAppend=PROVISIONED\n"
+run "dry run: an unknown wouldCreate role"           1 "wouldCreate('FRAMES,LEDGER')" false "${DIAG}PROVISIONABLE symbol=SPX lineage=$L generation=1 eraId=1 planDigest=$PD provisionedDigest=PENDING topicIds=PENDING wouldCreate=FRAMES,LEDGER wouldAssert=$PD wouldAttest=YES wouldInsertEra=YES wouldAppend=PROVISIONED\n"
+run "dry run: wouldCreate duplicate role"            1 "wouldCreate('FRAMES,FRAMES')" false "${DIAG}PROVISIONABLE symbol=SPX lineage=$L generation=1 eraId=1 planDigest=$PD provisionedDigest=PENDING topicIds=PENDING wouldCreate=FRAMES,FRAMES wouldAssert=$PD wouldAttest=YES wouldInsertEra=YES wouldAppend=PROVISIONED\n"
+run "dry run: wouldCreate trailing comma"            1 "wouldCreate('FRAMES,')" false "${DIAG}PROVISIONABLE symbol=SPX lineage=$L generation=1 eraId=1 planDigest=$PD provisionedDigest=PENDING topicIds=PENDING wouldCreate=FRAMES, wouldAssert=$PD wouldAttest=YES wouldInsertEra=YES wouldAppend=PROVISIONED\n"
+run "dry run: wouldCreate out of order"              1 "wouldCreate('HEAD,FRAMES')" false "${DIAG}PROVISIONABLE symbol=SPX lineage=$L generation=1 eraId=1 planDigest=$PD provisionedDigest=PENDING topicIds=PENDING wouldCreate=HEAD,FRAMES wouldAssert=$PD wouldAttest=YES wouldInsertEra=YES wouldAppend=PROVISIONED\n"
+run "dry run: wouldCreate a subset in order"         0 "topicIds=PENDING" false "${DIAG}PROVISIONABLE symbol=SPX lineage=$L generation=1 eraId=1 planDigest=$PD provisionedDigest=PENDING topicIds=PENDING wouldCreate=HEAD,PULSE wouldAssert=$PD wouldAttest=YES wouldInsertEra=YES wouldAppend=PROVISIONED\n"
 run "dry run: wouldAttest=MAYBE"                     1 "wouldAttest" false "${DIAG}PROVISIONABLE symbol=SPX lineage=$L generation=1 eraId=1 planDigest=$PD provisionedDigest=PENDING topicIds=PENDING wouldCreate=NONE wouldAssert=$PD wouldAttest=MAYBE wouldInsertEra=YES wouldAppend=PROVISIONED\n"
 run "dry run: another lineage"                       1 "lineage" false "${DIAG}PROVISIONABLE symbol=SPX lineage=9e4f1d6b-7a2c-4c35-8d0e-5b1a3f8c2e77 generation=1 eraId=1 planDigest=$PD provisionedDigest=PENDING topicIds=PENDING wouldCreate=NONE wouldAssert=$PD wouldAttest=YES wouldInsertEra=YES wouldAppend=PROVISIONED\n"
 run "dry run: a missing dry-run field"               1 "wouldAppend= exactly once; got it 0 times" false "${DIAG}PROVISIONABLE symbol=SPX lineage=$L generation=1 eraId=1 planDigest=$PD provisionedDigest=PENDING topicIds=PENDING wouldCreate=NONE wouldAssert=$PD wouldAttest=YES wouldInsertEra=YES\n"
@@ -149,6 +167,8 @@ echo "--- the cluster is its CA, not a name ---"
 run "another cluster's CA on dev"                    1 "is not the pinned dev cluster's" false "$DIAG$PENDING\n" FAKE_CA=other
 run "production's CA on dev"                         1 "is not the pinned dev cluster's" false "$DIAG$PENDING\n" FAKE_CA=prod
 run "a kubeconfig without CA data"                   1 "carries no certificate-authority-data" false "$DIAG$PENDING\n" FAKE_CA=none
+run "the pinned CA but insecure-skip-tls-verify"     1 "insecure-skip-tls-verify: true" false "$DIAG$PENDING\n" FAKE_SKIP_TLS=true
+run "the CA given as a file path"                    1 "names its CA by file path (/etc/kube/ca.crt)" false "$DIAG$PENDING\n" FAKE_CA=file
 grep -q "create -f -" "$LAST_JOURNAL" && { fail=$((fail+1)); echo "  FAIL a refused cluster still took the lock"; } || { pass=$((pass+1)); echo "  ok   a refused cluster never reaches the lock"; }
 (cd "$W" && sed -i.bak 's/^    caSha256: "\([0-9A-F]*\)"$/    caSha256: "\1"/; 3s/caSha256: "[0-9A-F]*"/caSha256: "0000"/' deploy/zerodte/clusters.yaml && rm -f deploy/zerodte/clusters.yaml.bak)
 run "a malformed pin"                                1 "caSha256 for dev is not 64 hex characters" false "$DIAG$PENDING\n"
@@ -167,6 +187,17 @@ grep -q "create -f -" "$LAST_JOURNAL" && ! grep -q "get jobs" "$LAST_JOURNAL" &&
   && { pass=$((pass+1)); echo "  ok   a held lock stops before the inventory and is NOT released by the loser"; } || { fail=$((fail+1)); echo "  FAIL the loser touched the inventory or the lock"; }
 run "an active Job already"                          1 "another zerodte-provision Job is not terminal" false "$DIAG$PENDING\n" FAKE_JOBS='{"items":[{"metadata":{"name":"zerodte-provision-x"},"status":{"active":1}}]}'
 grep -q "delete configmap/zerodte-provision-lock" "$LAST_JOURNAL" && { pass=$((pass+1)); echo "  ok   the lock is released on a refusal too"; } || { fail=$((fail+1)); echo "  FAIL the lock leaked on a refusal"; }
+echo "--- the lock's lifetime: released only when no Job of this run can still be running ---"
+lock_released() { grep -q "delete configmap/zerodte-provision-lock" "$LAST_JOURNAL"; }
+run "Job create refused, then absent"                1 "admission webhook denied the Job" false "$DIAG$PENDING\n" FAKE_CREATE_JOB_FAILS=1 FAKE_JOB_GET=absent
+lock_released && ! grep -q "delete job/" "$LAST_JOURNAL" && { pass=$((pass+1)); echo "  ok   an absent Job releases the lock without a delete"; } || { fail=$((fail+1)); echo "  FAIL absent Job: lock/delete"; }
+run "Job create refused, API unreadable, delete fails" 1 "lock zerodte-provision-lock RETAINED" false "$DIAG$PENDING\n" FAKE_CREATE_JOB_FAILS=1 FAKE_JOB_GET=error FAKE_DELETE_JOB_FAILS=1
+! lock_released && grep -q "delete job/" "$LAST_JOURNAL" && { pass=$((pass+1)); echo "  ok   a failed delete RETAINS the lock"; } || { fail=$((fail+1)); echo "  FAIL failed delete: the lock was released"; }
+run "Job create refused, API unreadable, delete succeeds, then absent" 1 "admission webhook denied the Job" false "$DIAG$PENDING\n" FAKE_CREATE_JOB_FAILS=1 FAKE_JOB_GET=error
+lock_released && grep -q "delete job/" "$LAST_JOURNAL" && { pass=$((pass+1)); echo "  ok   a delete re-observed as absent releases the lock"; } || { fail=$((fail+1)); echo "  FAIL delete+absent: lock"; }
+run "a dry run for this build's receipt"             0 "topicIds=PENDING" false "$DIAG$PENDING\n"
+run "a failed Job is kept and the lock released"     1 "did not succeed (state=failed" true "$DIAG$DONE\n" PERMITTED_SHA="$HEAD" FAKE_SUCCEEDED=0
+lock_released && ! grep -q "delete job/" "$LAST_JOURNAL" && grep -q "keeping it for post-mortem" <<<"$LAST_OUT" && { pass=$((pass+1)); echo "  ok   a terminal Job is kept, the lock released"; } || { fail=$((fail+1)); echo "  FAIL terminal Job: kept/lock"; }
 printf 'build=6 env=dev symbol=SPX generation=1 eraId=1 file_sha256=x attestation_sha256=y head=%s\n' "$HEAD" > "$T/receipt"
 run "confirm with another build's receipt"           1 "does not describe this write" true "$DIAG$DONE\n" PERMITTED_SHA="$HEAD"
 rm -f "$T/receipt"

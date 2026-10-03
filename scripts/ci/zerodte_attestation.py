@@ -15,7 +15,8 @@ Usage:
   zerodte_attestation.py entry-hash <symbol> <lineage> <ledgerTopicId> <clusterId> <createdAt> <operator> <prevEntryHash>
   zerodte_attestation.py provisioning <provisioning.yaml>                      the declaration's rules
   zerodte_attestation.py --vectors                                             the golden vectors
-  zerodte_attestation.py --corpus [dir]                                        the shared YAML-subset corpus (accept/reject verdicts)
+  zerodte_attestation.py --corpus [dir]                                        the shared YAML-subset corpus (accept/reject verdicts + corpus.sha256)
+  zerodte_attestation.py --corpus-manifest [dir]                               regenerate the corpus's corpus.sha256 (after any corpus change)
 Every refusal prints `REFUSED: <reason>` and exits 1.
 """
 import datetime
@@ -31,7 +32,11 @@ UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 HEX32 = re.compile(r"^[0-9a-f]{32}$")
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 TEXT = re.compile(r"^[\x20-\x7e]{1,128}$")
-APPROVER = re.compile(r"^[A-Za-z][A-Za-z .'-]{1,127}$")
+# A person's name as the review records it, ASCII by POLICY (reviewer identities in this repository are ASCII; an accented name is
+# written in its ASCII form): words of letters joined by single spaces, a word may carry an inner . ' or - between letters and a
+# trailing . for an initial; 2..128 characters. The SAME grammar is VirginAttestation.APPROVER in the Job.
+APPROVER = re.compile(r"^(?=.{2,128}$)[A-Za-z]+(?:[.'-][A-Za-z]+)*\.?(?: [A-Za-z]+(?:[.'-][A-Za-z]+)*\.?)*$")
+MAX_CODE_POINTS = 1 << 20   # the Job's LoaderOptions.setCodePointLimit; a longer file is refused by BOTH readers
 UNAPPROVED = "UNAPPROVED"
 OPERATOR = re.compile(r"^[\x20-\x7e]{1,64}$")
 SYMBOL = re.compile(r"^[A-Z0-9]{1,16}$")
@@ -95,30 +100,37 @@ def _scalar(text):
             raise Refused("an escape inside a double-quoted scalar is not accepted: %s" % text)
         return Scalar(body, True)
     if text.startswith("'") and text.endswith("'") and len(text) >= 2:
-        body = text[1:-1]
+        body = text[1:-1].replace("''", "\x00")   # YAML's one single-quoted escape: '' is one apostrophe (SnakeYAML decodes it too)
         if "'" in body:
-            raise Refused("a quote inside a single-quoted scalar is not accepted: %s" % text)
-        return Scalar(body, True)
+            raise Refused("a lone quote inside a single-quoted scalar is not accepted: %s" % text)
+        return Scalar(body.replace("\x00", "'"), True)
     if text == "[]":
         return []
     if text.startswith("[") or text.startswith("{") or text.startswith("&") or text.startswith("*") or text.startswith("!") or text.startswith("|") or text.startswith(">"):
         raise Refused("flow collections, anchors, aliases, tags and block scalars are not accepted: %s" % text)
     if text in ("", "~", "null", "Null", "NULL"):
         return None
+    if ": " in text or text.endswith(":"):
+        raise Refused("a plain scalar cannot contain ': ' (YAML reads a mapping there): %s" % text)
     return Scalar(text, False)
 
 
 def load(text):
+    if text.startswith("\ufeff"):
+        raise Refused("a byte-order mark is not accepted")
+    if len(text) > MAX_CODE_POINTS:
+        raise Refused("the file exceeds %d code points" % MAX_CODE_POINTS)
     lines = []
     for raw in text.split("\n"):
-        if raw.startswith("---") or raw.startswith("%"):
-            raise Refused("document markers and directives are not accepted")
+        if raw.startswith("---") or raw.startswith("...") or raw.startswith("%"):
+            raise Refused("document markers (--- ...) and directives (%) are not accepted")
         s = _strip_comment(raw)
         if s.strip() == "":
             continue
-        indent = len(s) - len(s.lstrip(" "))
-        if "\t" in s[:indent]:
+        leading = re.match(r"^[ \t]*", s).group(0)
+        if "\t" in leading:
             raise Refused("tabs in indentation")
+        indent = len(leading)
         lines.append((indent, s.strip()))
     pos = [0]
 
@@ -145,10 +157,8 @@ def load(text):
             key, sep, rest = content.partition(":")
             if not sep or not key or key != key.strip():
                 raise Refused("not a map entry: %s" % content)
-            if key.startswith('"') or key.startswith("'"):
-                key = key.strip('"\'')
             if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
-                raise Refused("a key is a plain identifier: %s" % key)
+                raise Refused("a key is a plain identifier (never quoted): %s" % key)
             if key in m:
                 raise Refused("duplicate key %s" % key)
             pos[0] += 1
@@ -203,6 +213,45 @@ def load(text):
 
 
 # ------------------------------------------------------------------------------------------------ TLV and the chain
+
+# ------------------------------------------------------------------------------------------------ the shared corpus
+# MANIFEST DISCIPLINE (Codex 7b r2): expected.tsv has exactly three columns (name, kind in {attestation, provisioning}, verdict in
+# {accept, reject}), no duplicate name, and names EXACTLY the *.yaml files beside it — one to one. corpus.sha256 holds the sha256 of
+# expected.tsv and of every fixture; both runners (this port and the Job's YamlSubsetCorpusTest) refuse a corpus the manifest does not
+# describe, so the two copies cannot drift silently. Regenerate with `zerodte_attestation.py --corpus-manifest`.
+
+def corpus_cases(d):
+    cases, names = [], set()
+    for line in _read(os.path.join(d, "expected.tsv")).splitlines():
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split("\t")
+        if len(parts) != 3:
+            raise Refused("expected.tsv: a case has three tab-separated columns: %r" % line)
+        name, kind, verdict = parts
+        if not re.match(r"^[a-z0-9-]+$", name):
+            raise Refused("expected.tsv: a case name is lowercase-kebab: %r" % name)
+        if kind not in ("attestation", "provisioning"):
+            raise Refused("expected.tsv: kind is attestation or provisioning: %r" % line)
+        if verdict not in ("accept", "reject"):
+            raise Refused("expected.tsv: verdict is accept or reject: %r" % line)
+        if name in names:
+            raise Refused("expected.tsv: duplicate case %s" % name)
+        names.add(name)
+        cases.append((name, kind, verdict))
+    files = {f[:-5] for f in os.listdir(d) if f.endswith(".yaml")}
+    if files != names:
+        raise Refused("the corpus and expected.tsv disagree: only in the directory %s; only in the manifest %s" % (sorted(files - names), sorted(names - files)))
+    return cases
+
+
+def corpus_manifest(d, cases):
+    out = []
+    for f in ["expected.tsv"] + sorted(name + ".yaml" for name, _, _ in cases):
+        with open(os.path.join(d, f), "rb") as fh:
+            out.append("%s  %s\n" % (hashlib.sha256(fh.read()).hexdigest(), f))
+    return "".join(out)
+
 
 def _frame(tag, payload):
     return bytes([tag]) + struct.pack(">q", len(payload)) + payload
@@ -489,25 +538,32 @@ def main(argv):
                 raise Refused("fewer than two golden vectors")
             print("OK: %d golden vectors agree with VirginAttestation.Entry.hash()" % n)
             return 0
-        if cmd == "--corpus":
+        if cmd in ("--corpus", "--corpus-manifest"):
             d = argv[1] if len(argv) > 1 else "scripts/ci/fixtures/zerodte/corpus"
+            cases = corpus_cases(d)
+            if cmd == "--corpus-manifest":
+                with open(os.path.join(d, "corpus.sha256"), "w", encoding="utf-8") as f:
+                    f.write(corpus_manifest(d, cases))
+                print("wrote %s/corpus.sha256 (%d files)" % (d, len(cases) + 1))
+                return 0
+            want = _read(os.path.join(d, "corpus.sha256"))
+            got = corpus_manifest(d, cases)
+            if want != got:
+                raise Refused("corpus.sha256 does not describe the corpus (a file changed, was added or removed without regenerating the manifest with --corpus-manifest; the Java copy verifies the SAME manifest)")
             n = 0
-            for line in _read(os.path.join(d, "expected.tsv")).splitlines():
-                if not line or line.startswith("#"):
-                    continue
-                name, kind, verdict = line.split("\t")
+            for name, kind, verdict in cases:
                 text = _read(os.path.join(d, name + ".yaml"))
                 try:
                     (parse_attestation if kind == "attestation" else parse_provisioning)(text)
-                    got = "accept"
+                    verdict_got = "accept"
                 except Refused:
-                    got = "reject"
-                if got != verdict:
-                    raise Refused("corpus %s: this port says %s, the corpus expects %s" % (name, got, verdict))
+                    verdict_got = "reject"
+                if verdict_got != verdict:
+                    raise Refused("corpus %s: this port says %s, the corpus expects %s" % (name, verdict_got, verdict))
                 n += 1
             if n < 30:
                 raise Refused("the corpus has only %d cases" % n)
-            print("OK: %d corpus cases give the expected verdict" % n)
+            print("OK: %d corpus cases give the expected verdict; corpus.sha256 agrees" % n)
             return 0
         if cmd == "verify":
             path = argv[1]

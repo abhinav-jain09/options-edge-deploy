@@ -350,6 +350,8 @@ jobs:
         run: python3 scripts/ci/zerodte_attestation.py --corpus
       - name: zerodte attestation/provisioning validators refuse every violation
         run: bash scripts/ci/validate-zerodte-attestation-test.sh
+      - name: secrets-sync never degrades the 0DTE ledger key (the stage's exact shell block against a fake kubectl)
+        run: bash scripts/ci/secrets-sync-ledger-key-test.sh
       - name: zerodte provision guard refuses every forbidden ref and SHA
         run: bash scripts/ci/zerodte-provision-guard-test.sh
       # The wrapper's receipt contract, driven against a fake kubectl through every outcome the provisioner can print.

@@ -32,8 +32,13 @@ What lives here is REVIEWED INPUT to the provisioning Job (`Jenkinsfile.zerodte-
 ## The wrapper's guarantees (`scripts/ops/zerodte-provision.sh`)
 
 * ONE run at a time, cluster-wide: an ATOMIC `create` of the ConfigMap `zerodte-provision-lock` (its holder recorded on it) before the
-  inventory and the Job; held until this invocation observed its Job terminal; released by its owner only. A lock a crashed run left behind
-  is refused with its holder: read that run's log, then `kubectl -n options-edge delete configmap zerodte-provision-lock` by hand.
+  inventory and the Job; released by its owner only, and only once no Job of this run can still be running — no Job was created, the Job
+  was observed terminal (kept for post-mortem) or absent, or a still-active Job was deleted and its absence re-observed. An unreadable API
+  or a failed delete RETAINS the lock and says so. A lock a crashed run left behind is refused with its holder: read that run's log, confirm
+  the Job is gone or terminal, then `kubectl -n options-edge delete configmap zerodte-provision-lock` by hand. (The deployer can delete the
+  lock: it is a cooperative lock, not an adversarial one — that is the break-glass path, taken only after reading the log.)
+* The receipt: `wouldCreate` is `NONE` or a non-empty, duplicate-free, ORDERED subset of `FRAMES,HEAD,CURRENT,PULSE,DEPLOYMENTS`;
+  `clusterId` is `[A-Za-z0-9._-]+` on every outcome that carries it.
 * The receipt to the letter: every outcome has an EXACT field set (no extra token, no missing field, no empty value, every field counted once
   and checked by its domain — hex lengths, the role names, YES/NO/VERIFY, RESOLVED/PENDING vs the digest), the static identity matched to the
   declaration, and the container's exit code must AGREE with the outcome (PROVISIONABLE/PROVISIONED/ALREADY 0, CONFLICTING 66,
@@ -53,6 +58,11 @@ What lives here is REVIEWED INPUT to the provisioning Job (`Jenkinsfile.zerodte-
   the approval must be in the founding row). `validate-zerodte-attestation-test.sh` asserts that refusal while the marker is there, and the pass after.
 * The cluster pins, `clusters.yaml`: each environment's cluster is identified by the sha256 fingerprint of the CA its deployer kubeconfig
   carries (production by its API server address too) — not by a kubeconfig's cluster NAME, which anyone can relabel, and not by an
-  environment variable. A pin changes only through review. Certificates are public; nothing in that file is a secret.
+  environment variable. A pin changes only through review. Certificates are public; nothing in that file is a secret. The pin binds the TLS
+  trust anchor, so a kubeconfig with `insecure-skip-tls-verify` or a CA given as a file path is refused; dev (no server pin) rests on its CA
+  being unique to that cluster.
+* The ledger key in `Jenkinsfile.secrets-sync`: no credential bound ⇒ the Secret's current value is KEPT (read and decoded; an unreadable
+  or undecodable Secret stops the sync before any apply; only a Secret that does not exist yet is written empty); a bound credential must be
+  64+ hex. `scripts/ci/secrets-sync-ledger-key-test.sh` drives the stage's exact shell block through every case.
 * Branch protection of this repository (signed commits, a second reviewer, the append-only check as a required check) — design §5.1.
 * Each run's `PERMITTED_SHA` (Deployment Permission Rule).
