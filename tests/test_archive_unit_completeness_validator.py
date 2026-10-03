@@ -185,6 +185,34 @@ class StagingCheckTest(unittest.TestCase):
         self.assertIn('PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/' + self.VERIFIER,
                       job, "the shape this case is about is no longer the one the job uses")
 
+    def test_text_after_a_shell_operator_is_not_an_argument(self) -> None:
+        """THE LAST WAY ROUND THIS. Only `;` and the newline separate statements, so
+        `… verify-permitted-tree.sh --dir . && echo --allow-ignored <path>` leaves the verifier
+        undeclared with the text sitting in the same statement — and an inline `#` comment does the
+        same. The argument list ends at the first shell operator."""
+        name = "vol-premium-open-reference-capture.py"
+        declaration = f" --allow-ignored scripts/ops/archive/{name}"
+        for label, replacement in [
+                ("&& echo", f" && echo{declaration}"),
+                ("inline comment", f" #{declaration}"),
+                ("piped to cat", f" | cat{declaration}"),
+                ("redirected", f" >/dev/null{declaration}"),
+        ]:
+            with self.subTest(form=label):
+                r = self._run(lambda t, rep=replacement: t.replace(declaration, rep))
+                self.assertEqual(r.returncode, 1, label + r.stdout + r.stderr)
+                self.assertIn("STAGED BUT NOT DECLARED", r.stderr, label)
+
+    def test_the_flag_and_its_value_must_be_adjacent_arguments(self) -> None:
+        """A substring of the line is not an argument: `--allow-ignored=<path>` is one token, and a
+        check matching text rather than adjacent tokens would take it."""
+        name = "vol-premium-open-reference-capture.py"
+        r = self._run(lambda t: t.replace(
+            f"--allow-ignored scripts/ops/archive/{name}",
+            f"--allow-ignored=scripts/ops/archive/{name}"))
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("STAGED BUT NOT DECLARED", r.stderr)
+
     def test_a_job_with_no_tree_verifier_says_so(self) -> None:
         """A guard that defers to a gate must notice the gate going away, rather than passing on a
         premise that no longer holds."""

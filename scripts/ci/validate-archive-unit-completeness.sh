@@ -111,7 +111,7 @@ for f in $wanted $sourced; do
     # THE COPY MUST BE A COMMAND, AND IT MUST RUN BEFORE THE SUITE. Matching the flattened file for
     # the text `cp <source> <dest>` was syntactic and the reviewer was right to refuse it: the same
     # characters in a comment, in a string, or in a stage that runs afterwards would have satisfied
-    # it (review round 2). So comment lines are removed first, continuations are joined, and the cp
+    # it (review round 2). So lines that BEGIN with a comment marker are removed, continuations are joined, and the cp
     # is required to appear BEFORE the docker run that mounts the unit directory into the suite
     # container — which is the ordering the staging exists for. A cp after it stages nothing the
     # suite can see.
@@ -187,8 +187,9 @@ for f in $wanted $sourced; do
         # name and the declaration and runs no verifier, and that satisfied the previous version
         # (review round 2 of #1128). So each statement is tokenised, a leading `sh`, any
         # VAR=VALUE assignments and a `bash` are stepped over, and what follows has to BE the
-        # verifier. Quotes become spaces first, so the Groovy wrapper and the shell assignment
-        # quoting do not hide the command word.
+        # verifier. Quotes are REMOVED first — not turned into spaces, which split
+        # `PERMITTED_SHA="${PERMITTED_SHA:-}"` in two and made this refuse the committed job — so
+        # neither the Groovy wrapper nor the assignment quoting hides the command word.
         verifier_at = 0
         for (i = 1; i <= n; i++) {
           bounded = statement[i] " "
@@ -202,7 +203,21 @@ for f in $wanted $sourced; do
           if (at <= words && word[at] == "bash") { at++ }
           if (at > words || word[at] !~ /(^|\/)verify-permitted-tree\.sh$/) { continue }
           verifier_at = i
-          if (index(bounded " ", "--allow-ignored " dst " ") > 0) { print "ok"; exit }
+          # THE ARGUMENT LIST ENDS AT THE FIRST SHELL OPERATOR, and searching past it was the last
+          # way round this: `… verify-permitted-tree.sh --dir . && echo --allow-ignored <path>`
+          # leaves the verifier undeclared while the text sits in the same statement, and an inline
+          # `#` comment does the same (review round 3 of #1128). Only `;` and the newline separate
+          # statements above, so the rest is handled here.
+          #
+          # And the flag and its value must be ADJACENT TOKENS rather than a substring of the line.
+          # That is what "an argument to the verifier" means.
+          declared = 0
+          for (j = at + 1; j <= words; j++) {
+            if (word[j] == "&&" || word[j] == "||" || word[j] == "#" ||
+                word[j] ~ /^\|/ || word[j] ~ /^[0-9]*>>?/ || word[j] ~ /^</) { break }
+            if (word[j] == "--allow-ignored" && j < words && word[j + 1] == dst) { declared = 1 }
+          }
+          if (declared) { print "ok"; exit }
         }
         if (verifier_at == 0) { print "no-verifier"; exit }
         print "ok-but-undeclared"
