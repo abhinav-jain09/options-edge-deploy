@@ -62,9 +62,11 @@ def _es(offset_s: float, equivalent: float, state="PROJECTED"):
 def _gate_marker(root: Path, session: str = DAY) -> None:
     """What oe-vol-premium-open-capture.sh writes into the pinned set once the archive verdict, the
     per-topic grades, the on-disk check, the decompression check and the membership check have
-    passed. Publication is bound to it: an input nothing has verified cannot claim a session, which
-    is what `--out` against a raw archive directory used to be able to do."""
-    (root / orc.GATE_MARKER).write_text(session + "\n")
+    passed: the session, and a digest OF THE INPUT. The digest is what makes the marker evidence
+    about these files rather than a flag that authorises whatever the directory happens to hold —
+    writing a date into a directory used to be enough to publish from it."""
+    (root / orc.GATE_MARKER).write_text(
+        session + "\n" + orc.input_digest(str(root), session) + "\n")
 
 
 def _fixture(root: Path, *, index_rows=None, es_rows=None) -> None:
@@ -796,6 +798,58 @@ class PublicationAuthorityTest(unittest.TestCase):
         self.assertEqual(r.returncode, 77, r.stdout + r.stderr)
         self.assertIn("was written for '2026-01-05'", r.stderr)
         self.assertFalse((out / "accepted").exists())
+
+    def test_typing_a_session_into_a_directory_does_not_authorise_it(self) -> None:
+        """THE REVIEWER'S BYPASS, which the first version of this marker allowed in full:
+
+            printf '2026-09-18\\n' > /tmp/input/.vp-open-reference-gate-ok
+            python3 …capture.py --session 2026-09-18 --archive-root /tmp/input --out /tmp/ledger
+
+        A marker holding only a session date authorised whatever the directory happened to contain.
+        It now has to agree with the input, so a caller would have to produce a consistent
+        fingerprint of their own files — which is replicating the gate, not typing a date."""
+        _fixture(self.tmp)
+        (self.tmp / orc.GATE_MARKER).write_text(DAY + "\n")      # the date alone, as before
+        r, out = self._run()
+        self.assertEqual(r.returncode, 77, r.stdout + r.stderr)
+        self.assertIn("fingerprints a different set of files", r.stderr)
+        self.assertFalse((out / "accepted").exists())
+
+    def test_an_input_that_changed_after_it_was_verified_cannot_be_published(self) -> None:
+        """The same check, doing the work it exists for. A marker that authorised a session name and
+        not a set of files stood for whatever arrived afterwards — a member added to the pinned set
+        between the gate and the reader would have been published from without complaint."""
+        _fixture(self.tmp)
+        extra = self.tmp / orc.INDEX / f"dt={DAY}"
+        with gzip.open(extra / "late-arrival.jsonl.gz", "wt") as handle:
+            handle.write(f"CreateTime:0\tPartition:0\tK\t{json.dumps(_index(400, 7651.0))}\n")
+        r, out = self._run()
+        self.assertEqual(r.returncode, 77, r.stdout + r.stderr)
+        self.assertIn("fingerprints a different set of files", r.stderr)
+        self.assertFalse((out / "accepted").exists())
+
+    def test_a_member_removed_after_verification_cannot_be_published_either(self) -> None:
+        """And the other direction, which is the prune race seen through the digest rather than
+        through the empty-input refusal: a pinned set that lost a member is not the set that was
+        verified."""
+        _fixture(self.tmp)
+        for path in (self.tmp / orc.ES / f"dt={DAY}").iterdir():
+            path.unlink()
+        r, out = self._run()
+        self.assertEqual(r.returncode, 77, r.stdout + r.stderr)
+        self.assertIn("fingerprints a different set of files", r.stderr)
+
+    def test_the_digest_is_over_the_input_and_not_a_constant(self) -> None:
+        """Without this, every case above would also pass against a digest that is the same string
+        for every directory."""
+        _fixture(self.tmp)
+        mine = orc.input_digest(str(self.tmp), DAY)
+        other = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, other, True)
+        _fixture(other)
+        self.assertNotEqual(mine, orc.input_digest(str(other), DAY),
+                            "two different inputs fingerprint the same")
+        self.assertEqual(mine, orc.input_digest(str(self.tmp), DAY), "it is not stable")
 
     def test_a_record_is_still_computed_without_the_marker(self) -> None:
         """Computing is not claiming. Reading the archive and printing what it says must stay free —

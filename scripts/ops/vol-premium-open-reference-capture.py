@@ -29,6 +29,7 @@ import argparse
 import datetime as dt
 import glob
 import gzip
+import hashlib
 import json
 import os
 import re
@@ -45,9 +46,44 @@ BASIS = "spx.basis.state"
 WINDOW_S = 30
 # The file an input must carry before anything may be PUBLISHED from it. The wrapper writes it into
 # the pinned set once the archive verdict, the per-topic grades, the on-disk check, the
-# decompression check and the membership check have all passed; its first line is the session the
-# pin was built for. Computing a record never needs it.
+# decompression check and the membership check have all passed. Line 1 is the session; line 2 is a
+# digest OVER THE INPUT ITSELF, which this script recomputes and compares. Computing a record never
+# needs it.
 GATE_MARKER = ".vp-open-reference-gate-ok"
+
+
+def input_digest(root: str, session: str) -> str:
+    """A fingerprint of exactly the files a capture of `session` from `root` will read.
+
+    WHY IT IS A DIGEST AND NOT A FLAG. The first version of this marker held a session date and
+    nothing else, so it authorised ANY content: `printf '2026-09-18\n' > .../.vp-…-gate-ok` turned
+    an arbitrary directory into a publishable one, and review was right to refuse that as evidence.
+    The marker now has to agree with the input, so a caller cannot authorise a directory by typing a
+    date into it — they would have to make a consistent fingerprint of their own files, which is
+    replicating the gate rather than bypassing it.
+
+    WHAT IT CANNOT BE, said plainly: a security boundary. Anyone who can write this marker can also
+    write the ledger directly, delete it, or edit this file; on a host where the operator owns the
+    archive there is no artifact a script can produce that the operator cannot. What this does is
+    make the verified path the only EASY path and every way round it a deliberate, visible act. That
+    is the whole claim, and the earlier phrasing — "publication is bound to verified evidence" —
+    said more than any file-based check can.
+
+    Name, size and inode, over the three topics, sorted. Inode because the gate pins by hardlink, so
+    a pinned member is the archive's own inode and a retry re-pins the same one; size and name
+    because they are what a reader resolves. Not content: the gate has already read every byte, and
+    hashing it again here would double the work of the one step that is not free.
+    """
+    lines = []
+    for topic in (INDEX, ES, BASIS):
+        folder = os.path.join(root, topic, f"dt={session}")
+        for path in sorted(glob.glob(os.path.join(folder, "*.jsonl.gz"))):
+            try:
+                stat = os.stat(path)
+            except OSError:
+                continue
+            lines.append(f"{topic}/{os.path.basename(path)} {stat.st_size} {stat.st_ino}")
+    return hashlib.sha256("\n".join(lines).encode()).hexdigest()
 # The staleness limit an ES value must meet to stand for a moment in time - the same one the offset
 # pairing uses, because a reference and a pair are the same kind of claim.
 PAIR_MAX_AGE_S = 2
@@ -498,6 +534,7 @@ def main(argv=None) -> int:
         try:
             with open(marker) as handle:
                 claimed_for = handle.readline().strip()
+                claimed_digest = handle.readline().strip()
         except OSError:
             print(f"vol-premium-open-reference-capture: refusing to publish {args.session} — "
                   f"{args.archive_root} carries no {GATE_MARKER}, so it is not an input any gate "
@@ -509,6 +546,17 @@ def main(argv=None) -> int:
             print(f"vol-premium-open-reference-capture: refusing to publish {args.session} — the "
                   f"{GATE_MARKER} in {args.archive_root} was written for {claimed_for!r}",
                   file=sys.stderr)
+            return 77
+        # THE MARKER MUST AGREE WITH THE INPUT. Without this it authorised a session name and not a
+        # set of files, so the same marker stood for whatever happened to be in the directory — and
+        # a member added or removed after the gate ran would have been published from regardless.
+        actual_digest = input_digest(args.archive_root, args.session)
+        if claimed_digest != actual_digest:
+            print(f"vol-premium-open-reference-capture: refusing to publish {args.session} — the "
+                  f"{GATE_MARKER} in {args.archive_root} fingerprints a different set of files "
+                  f"than the directory now holds ({claimed_digest[:12] or 'none'} vs "
+                  f"{actual_digest[:12]}). Either the input changed after it was verified, or this "
+                  f"marker was not written for it.", file=sys.stderr)
             return 77
 
     line = json.dumps(record, sort_keys=True)

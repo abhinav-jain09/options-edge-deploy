@@ -2235,30 +2235,47 @@ vp_tmp="$T/vp"; mkdir -p "$vp_tmp"
 # it records that it was called, with what, and publishes a minimal record.
 cat > "$vp_tmp/stub-capture.py" <<'STUB'
 import json, os, sys
-# The gate reads the topic set off the READER, by parsing these three assignments — so the stub
+
+# The gate reads the topic set off the READER by parsing these three assignments, so the stub
 # declares them exactly as the real capture does.
 INDEX = "underlying.spx.index.price"
 ES = "underlying.es.price"
 BASIS = "spx.basis.state"
-args = dict(zip(sys.argv[1::2], sys.argv[2::2]))
-with open(os.environ["VP_CALLS"], "a") as handle:
-    handle.write(f"called session={args.get('--session')} close={args.get('--close-et')}\n")
-# The ROOT the wrapper hands the reader is the claim's evidence, so the stub records what it was
-# pointed at and what was there — in a file of its own, because every other case reads the call log
-# back whole and a second line there changes what they see.
-root = args.get("--archive-root") or ""
-seen = []
-for base, _dirs, names in os.walk(root):
-    # Members only: the gate marker sits at the root of the pinned set and is authority, not input.
-    seen += [name for name in sorted(names) if name.endswith(".jsonl.gz")]
-with open(os.environ["VP_CALLS"] + ".roots", "a") as handle:
-    handle.write(f"root={root} files={len(seen)}\n")
-out = args.get("--out")
-if out:
-    os.makedirs(os.path.join(out, "accepted"), exist_ok=True)
-    with open(os.path.join(out, "accepted", args["--session"] + ".json"), "w") as handle:
-        handle.write(json.dumps({"session": args["--session"], "accepted": True}) + "\n")
-print(json.dumps({"session": args.get("--session"), "accepted": True}, sort_keys=True))
+
+
+def input_digest(root, session):
+    """The gate fingerprints the pinned set with the READER's own function — one definition at both
+    ends — so the stub offers one. Its value does not matter: the stub does not validate it."""
+    return "stub-digest"
+
+
+def main():
+    args = dict(zip(sys.argv[1::2], sys.argv[2::2]))
+    with open(os.environ["VP_CALLS"], "a") as handle:
+        handle.write(f"called session={args.get('--session')} close={args.get('--close-et')}\n")
+    # The ROOT the wrapper hands the reader is the claim's evidence, so the stub records what it was
+    # pointed at and what was there — in a file of its own, because every other case reads the call
+    # log back whole and a second line there changes what they see.
+    root = args.get("--archive-root") or ""
+    seen = []
+    for base, _dirs, names in os.walk(root):
+        # Members only: the gate marker sits at the root of the pinned set and is authority, not input.
+        seen += [name for name in sorted(names) if name.endswith(".jsonl.gz")]
+    with open(os.environ["VP_CALLS"] + ".roots", "a") as handle:
+        handle.write(f"root={root} files={len(seen)}\n")
+    out = args.get("--out")
+    if out:
+        os.makedirs(os.path.join(out, "accepted"), exist_ok=True)
+        with open(os.path.join(out, "accepted", args["--session"] + ".json"), "w") as handle:
+            handle.write(json.dumps({"session": args["--session"], "accepted": True}) + "\n")
+    print(json.dumps({"session": args.get("--session"), "accepted": True}, sort_keys=True))
+
+
+# IMPORTED FOR input_digest, RUN FOR EVERYTHING ELSE. Without this guard the gate's import of the
+# reader would record a call and write a record, which is how the first attempt at reading the topic
+# set off the reader turned forty assertions red.
+if __name__ == "__main__":
+    main()
 STUB
 # The readiness gate reads every byte of every file the capture will read, so a fixture file has to be
 # a REAL gzip member — an empty file passes gzip.open() and fails the first read, which is the torn
@@ -2715,27 +2732,42 @@ root=$(vp_archive 2026-09-01 20260901T201500Z); vp_verdict 2026-09-01 2026-09-01
 # dropped into the archive by the stub itself — the same instant the old code would have re-globbed.
 cat > "$vp_tmp/racing-capture.py" <<'RACE'
 import json, os, sys
+
 INDEX = "underlying.spx.index.price"
 ES = "underlying.es.price"
 BASIS = "spx.basis.state"
-args = dict(zip(sys.argv[1::2], sys.argv[2::2]))
-late = os.path.join(os.environ["VP_RACE_ARCHIVE"], INDEX, "dt=" + args["--session"],
-                    INDEX + ".p0.9-9.dt20260901.20260901T211500Z.jsonl.gz")
-open(late, "wb").write(b"not a gzip at all")
-root = args.get("--archive-root") or ""
-seen = []
-for base, _dirs, names in os.walk(root):
-    seen += [name for name in names if name.endswith(".jsonl.gz")]
-with open(os.environ["VP_CALLS"], "a") as handle:
-    handle.write(f"called session={args.get('--session')} close={args.get('--close-et')}\n")
-with open(os.environ["VP_CALLS"] + ".roots", "a") as handle:
-    handle.write(f"root={root} files={len(seen)}\n")
-out = args.get("--out")
-if out:
-    os.makedirs(os.path.join(out, "accepted"), exist_ok=True)
-    with open(os.path.join(out, "accepted", args["--session"] + ".json"), "w") as handle:
-        handle.write(json.dumps({"session": args["--session"], "accepted": True}) + "\n")
-print(json.dumps({"session": args.get("--session"), "accepted": True}, sort_keys=True))
+
+
+def input_digest(root, session):
+    return "stub-digest"
+
+
+def main():
+    args = dict(zip(sys.argv[1::2], sys.argv[2::2]))
+    # Written at the instant the old code would have re-globbed the archive.
+    late = os.path.join(os.environ["VP_RACE_ARCHIVE"], INDEX, "dt=" + args["--session"],
+                        INDEX + ".p0.9-9.dt20260901.20260901T211500Z.jsonl.gz")
+    open(late, "wb").write(b"not a gzip at all")
+    root = args.get("--archive-root") or ""
+    seen = []
+    for base, _dirs, names in os.walk(root):
+        seen += [name for name in names if name.endswith(".jsonl.gz")]
+    with open(os.environ["VP_CALLS"], "a") as handle:
+        handle.write(f"called session={args.get('--session')} close={args.get('--close-et')}\n")
+    with open(os.environ["VP_CALLS"] + ".roots", "a") as handle:
+        handle.write(f"root={root} files={len(seen)}\n")
+    out = args.get("--out")
+    if out:
+        os.makedirs(os.path.join(out, "accepted"), exist_ok=True)
+        with open(os.path.join(out, "accepted", args["--session"] + ".json"), "w") as handle:
+            handle.write(json.dumps({"session": args["--session"], "accepted": True}) + "\n")
+    print(json.dumps({"session": args.get("--session"), "accepted": True}, sort_keys=True))
+
+
+# Guarded for the same reason the plain stub is: the gate IMPORTS the reader to fingerprint the pin
+# with its own input_digest, and an unguarded body would write the late member before the glob.
+if __name__ == "__main__":
+    main()
 RACE
 vp_run 2026-09-01 "$root" CAPTURE="$vp_tmp/racing-capture.py" VP_RACE_ARCHIVE="$root" >/dev/null
 want "18x a member written during the capture is NOT in what the reader sees" "files=3" "$(grep -o 'files=[0-9]*' "$vp_tmp/calls.roots")"

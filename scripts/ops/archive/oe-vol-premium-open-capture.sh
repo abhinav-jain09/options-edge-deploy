@@ -166,7 +166,7 @@ mkdir -p "$LEDGER" || {
 GATE="$(COMPLETENESS_DIR="$COMPLETENESS_DIR" ARCHIVE_ROOT="$ARCHIVE_ROOT" OE_DAY="$SESSION" \
         CLOSE_ET="$CLOSE_ET" CAPTURE="$CAPTURE" OE_ENV="$ENV_NAME" \
         SNAPSHOT_ROOT="$SNAPSHOT_ROOT" python3 - <<'GATE'
-import ast, datetime as dt, glob, gzip, json, os, pathlib
+import ast, datetime as dt, glob, gzip, importlib.util, json, os, pathlib
 from zoneinfo import ZoneInfo
 
 ET = ZoneInfo("America/New_York")
@@ -395,16 +395,34 @@ if unexpected:
                     f"leftover from a run that died partway through. Look at "
                     f"{snapshot} before this session is claimed")
 
-# THE MARKER IS WRITTEN LAST, AND IT IS WHAT AUTHORISES PUBLICATION. The capture refuses `--out`
-# for an input that does not carry it, so a directory nobody verified cannot claim a session — which
-# is what running the capture by hand against the raw archive used to be able to do (review round
-# 8). It is written here, into the pin, only once the verdict, the grades, the on-disk check, the
-# decompression check and the membership check have all passed, and it names the session the pin was
-# built for.
+# THE MARKER IS WRITTEN LAST, AND IT IS WHAT THE CAPTURE REQUIRES BEFORE IT WILL PUBLISH. Running
+# the capture by hand against the raw archive used to claim a session with none of these checks
+# having run (review round 8). It is written here, into the pin, only once the verdict, the grades,
+# the on-disk check, the decompression check and the membership check have all passed.
+#
+# IT NAMES THE SESSION AND FINGERPRINTS THE INPUT. A marker holding only the session date
+# authorised whatever the directory happened to contain, so typing a date into any directory made
+# it publishable, and a member added after the gate ran would have been read without complaint
+# (review round 9). The digest is the capture's own input_digest() over the files a capture of this
+# session will read, and the capture recomputes and compares it.
+#
+# WHAT IT IS NOT: a security boundary. Anyone who can write this marker can write the ledger
+# directly, or edit the capture; on a host where the operator owns the archive no artifact a script
+# writes can be beyond them. What it does is make this path the only easy one and every way round it
+# a deliberate act — which is the claim, and is less than "publication is bound to verified
+# evidence" said.
 marker = os.path.join(snapshot, ".vp-open-reference-gate-ok")
 try:
+    spec = importlib.util.spec_from_file_location("orc_for_digest", os.environ["CAPTURE"])
+    reader = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(reader)
+    digest = reader.input_digest(snapshot, day.isoformat())
+except Exception as err:
+    answer("fault", f"cannot fingerprint the pinned set for {day} with the capture's own "
+                    f"input_digest(): {err}")
+try:
     with open(marker, "w") as handle:
-        handle.write(day.isoformat() + "\n")
+        handle.write(day.isoformat() + "\n" + digest + "\n")
 except OSError as err:
     answer("fault", f"cannot write the gate marker into the pinned set for {day}: {err}")
 
