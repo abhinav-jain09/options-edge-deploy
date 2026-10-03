@@ -954,10 +954,20 @@ want "  and it is America/New_York" "America/New_York" "$(grep '^CRON_TZ=' "$cro
 above=$(awk -v tz="$tz_at" 'NR < tz && $1 ~ /^[0-9,]+$/ && $2 ~ /^[0-9,]+$/' "$crontab_file")
 want "  no fixed-time entry sits ABOVE it (it would run at Madrid time)" "" "$above"
 n_below=$(awk -v tz="$tz_at" 'NR > tz && $1 ~ /^[0-9,]+$/ && $2 ~ /^[0-9,]+$/' "$crontab_file" | grep -c .)
-want "  every active fixed-time entry (daily 17:10, es4 17:01, verify x2, progress x3) is below it" 7 "$n_below"
+want "  every active fixed-time entry (daily 17:10, es4 17:01, verify x2, progress x3, vol-premium open-reference x2) is below it" 9 "$n_below"
 es4v_at=$(grep -n '^5 20 \* \* 1-5 ENV=es4 ' "$crontab_file" | cut -d: -f1)
 want "  the new es4 verification entry in particular" yes "$([ -n "$es4v_at" ] && [ "$es4v_at" -gt "$tz_at" ] && echo yes || echo no)"
 has  "  the header names the host's cron, which is what makes CRON_TZ work" "cronie" "$(head -n "$tz_at" "$crontab_file")"
+# The vol-premium open-reference entries in particular. BOTH of them: the capture claims a session
+# permanently under .published/, so the 17:30 run must have a retry behind it for the evenings the
+# archive is not complete yet — one entry alone silently drops those sessions from the >=55 count.
+vp_at=$(grep -n '/home/abhinav/oe-ops/oe-vol-premium-open-capture.sh' "$crontab_file" | cut -d: -f1)
+vp_n=$(printf '%s\n' "$vp_at" | grep -c .)
+want "  the open-reference capture is scheduled TWICE (17:30 and its retry)" 2 "$vp_n"
+vp_below=yes
+for _l in $vp_at; do [ "$_l" -gt "$tz_at" ] || vp_below=no; done
+want "  and both sit below CRON_TZ, so 17:30 is New York and not Madrid" yes "$vp_below"
+has  "  the first run is after the 17:10 daily archive, not before it" "30 17 * * 1-5" "$(cat "$crontab_file")"
 
 # ================= 16. re-review round 3: source IDENTITY (P1) and VALIDATED discovery (P2) ===============
 # P1: an offset names a position in ONE log. The reviewer ran round 2's checkpoint-selection and idle branches: a
@@ -2208,6 +2218,96 @@ for vt in options.spx.vol-premium.ivrv options.spx.vol-premium.events options.sp
   want "17f $vt: read by the committed reader, never by the console consumer" "1 0" \
        "$(grep -c "^reader $vt p0 from=0 " "$CALLS") $(grep -c "^console $vt " "$CALLS")"
 done
+
+# ================= 18. the vol-premium open-reference capture's own gates ================================
+# The capture CLAIMS a session permanently (a marker under .published/, and a republish is refused), so
+# every gate below protects a session from being spent on an archive that could not answer for it. The
+# capture's own logic is tested in tests/test_vol_premium_open_reference_capture.py; what is tested here
+# is the WRAPPER the crontab actually invokes, which that suite never sees.
+VPC="$PWD/oe-vol-premium-open-capture.sh"
+vp_tmp="$T/vp"; mkdir -p "$vp_tmp"
+# A capture stub, so these cases are about the WRAPPER's decisions and not about the archive reader:
+# it records that it was called, with what, and publishes a minimal record.
+cat > "$vp_tmp/stub-capture.py" <<'STUB'
+import json, os, sys
+args = dict(zip(sys.argv[1::2], sys.argv[2::2]))
+with open(os.environ["VP_CALLS"], "a") as handle:
+    handle.write(f"called session={args.get('--session')} close={args.get('--close-et')}\n")
+out = args.get("--out")
+if out:
+    os.makedirs(os.path.join(out, "accepted"), exist_ok=True)
+    with open(os.path.join(out, "accepted", args["--session"] + ".json"), "w") as handle:
+        handle.write(json.dumps({"session": args["--session"], "accepted": True}) + "\n")
+print(json.dumps({"session": args.get("--session"), "accepted": True}, sort_keys=True))
+STUB
+# The archive shape the readiness gate reads: the file name carries the archive run's own UTC stamp.
+vp_archive() { # $1=session $2=stamp (YYYYMMDDTHHMMSSZ) ; no $2 = no files at all
+  local root="$vp_tmp/archive/$1"
+  rm -rf "$root"; mkdir -p "$root/underlying.spx.index.price/dt=$1"
+  [ -n "${2:-}" ] && : > "$root/underlying.spx.index.price/dt=$1/underlying.spx.index.price.p0.0-1.dt$(echo "$1" | tr -d -).$2.jsonl.gz"
+  echo "$root"
+}
+vp_run() { # $1=session $2=archive root ; prints the log
+  VP_CALLS="$vp_tmp/calls" CAPTURE="$vp_tmp/stub-capture.py" ARCHIVE_ROOT="$2" \
+    LEDGER="$vp_tmp/ledger-$1" LOG="$vp_tmp/log-$1" bash "$VPC" "$1" 2>&1
+}
+: > "$vp_tmp/calls"
+
+# ---- 18a. a trading day whose archive is stamped after the close: captured, with the right close -----------
+root=$(vp_archive 2026-10-02 20260102T210000Z)   # any stamp at/after 16:00 ET + 10m = 20:10Z
+root=$(vp_archive 2026-10-02 20261002T201500Z)
+out=$(vp_run 2026-10-02 "$root")
+want "18a a complete session is captured" "called session=2026-10-02 close=16:00" "$(grep -F 'session=2026-10-02' "$vp_tmp/calls")"
+has  "  and the run reports the ledger count, which is the >=55 bar" "the bar is 55 accepted" "$out"
+
+# ---- 18b. THE CLAIM IS PERMANENT: an archive not yet stamped past the close is left for the retry ---------
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-10-01 20261001T195500Z)   # 15:55 ET — before the close, let alone close+10m
+out=$(vp_run 2026-10-01 "$root")
+want "18b an archive stamped before the close does not spend the session" "" "$(cat "$vp_tmp/calls")"
+has  "  and says so rather than failing the cron" "leaving the session unclaimed for the retry run" "$out"
+
+# ---- 18c. no files at all is also not ready (a different condition, the same answer) ----------------------
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-09-30)
+want "18c an empty archive partition does not spend the session" "" "$(vp_run 2026-09-30 "$root" >/dev/null; cat "$vp_tmp/calls")"
+
+# ---- 18d. the readiness gate is not vacuous: one minute past the deadline IS ready ------------------------
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-09-28 20260928T201100Z)   # 16:11 ET = close + 11m
+want "18d close + 11m is ready, so 18b/18c are the gate and not an absent reader" "called session=2026-09-28 close=16:00" "$(vp_run 2026-09-28 "$root" >/dev/null; cat "$vp_tmp/calls")"
+
+# ---- 18e. a non-trading day is never captured, whatever the archive holds --------------------------------
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-11-26 20261126T211500Z)   # Thanksgiving. 21:15Z = 16:15 EST, PAST
+# close + 10m on purpose: at 21:00Z the readiness gate refused this case and the calendar was
+# never consulted, so deleting the trading-day gate left the assertion green. A case that passes
+# for the wrong reason is not a case.
+out=$(vp_run 2026-11-26 "$root")
+want "18e a holiday is not a session" "" "$(cat "$vp_tmp/calls")"
+has  "  and the gate is the archiver's own calendar" "is not a New York trading day" "$out"
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-10-03 20261003T210000Z)   # a Saturday
+want "18f a weekend is not a session either" "" "$(vp_run 2026-10-03 "$root" >/dev/null; cat "$vp_tmp/calls")"
+
+# ---- 18g. A HALF DAY IS JUDGED AGAINST ITS OWN CLOSE. The coverage floors are fractions of the session
+# the capture is told about: 210 minutes scored against a 385-minute universe is 55%, and one thin
+# quarter sinks it — so a sound half-day sample would be rejected, forever, by a wrong close.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-11-27 20261127T181500Z)   # 13:15 ET = the half-day close + 15m
+want "18g the day after Thanksgiving closes at 13:00 and is scored against it" "called session=2026-11-27 close=13:00" "$(vp_run 2026-11-27 "$root" >/dev/null; cat "$vp_tmp/calls")"
+# ...and the readiness deadline moves with it: 13:15 ET would be three hours short of a 16:00 close.
+want "  the readiness deadline follows the same close (18g would be 'waiting' against 16:00)" 1 "$(grep -c 'session=2026-11-27' "$vp_tmp/calls")"
+
+# ---- 18h. a missing capture is an ALERT, not a silent no-op: that is exactly how this study spent
+# twelve days and eight archived sessions producing nothing.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-10-02 20261002T201500Z)
+out=$(VP_CALLS="$vp_tmp/calls" CAPTURE="$vp_tmp/does-not-exist.py" ARCHIVE_ROOT="$root" \
+      LEDGER="$vp_tmp/ledger-missing" LOG="$vp_tmp/log-missing" bash "$VPC" 2026-10-02 2>&1)
+rc=$?
+want "18h an uninstalled capture fails loudly (rc)" 2 "$rc"
+has  "  and alerts, because a cron that quietly does nothing is how bucket 0 stayed empty" "ALERT:" "$out"
 
 echo
 [ "$FAILED" -eq 0 ] && { echo "test-archive-reset: ALL PASS"; exit 0; }

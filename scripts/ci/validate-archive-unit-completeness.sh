@@ -25,8 +25,12 @@ wanted="$(grep -oE '/home/abhinav/oe-ops/[A-Za-z0-9._-]+\.sh' "$DIR/oe-archive.c
 # — was silently excluded, and the guard passed with it missing from UNIT. A guard that quietly drops the
 # thing it is guarding is worse than none. .env files are named too: oe-topics.env and
 # calibration-targets.env are read by the unit and must be installed with it.
+# `vol-premium` is in the list because of a hole this guard had: oe-vol-premium-open-capture.sh RUNS
+# vol-premium-open-reference-capture.py, and that name matched none of the prefixes, so the guard
+# reported OK while never considering the one file the new cron entry cannot work without. A guard
+# whose subject depends on the spelling of a filename is a guard with a gap per naming convention.
 sourced="$(grep -hoE '[A-Za-z0-9._-]+\.(sh|py|env)' "$DIR"/*.sh 2>/dev/null \
-           | sed 's|.*/||' | grep -E '^(oe[-_]|calibration|market_|push-validation|test-archive)' | sort -u)"
+           | sed 's|.*/||' | grep -E '^(oe[-_]|calibration|market_|push-validation|test-archive|vol-premium)' | sort -u)"
 # 3. every Java source the unit runs through the JDK source launcher (StrikeArchiveReader.java, run by
 #    oe-archive-kafka.sh for OE_COMMITTED_READ_TOPICS) — named by a unit script, or simply living in the
 #    unit's directory. There is no build step to notice a missing one: the archiver would find no file on
@@ -58,7 +62,13 @@ done
 
 for f in $wanted $sourced; do
   case " $EXEMPT " in *" $f "*) continue ;; esac
-  if [ ! -f "$DIR/$f" ] && [ ! -f "scripts/jenkins/$f" ]; then
+  # THREE PLACES A UNIT DEPENDENCY MAY LIVE, each because something else owns it there: $DIR for the
+  # unit's own files, scripts/jenkins for market_calendar.py (the close-chain jobs own the calendar,
+  # and a second committed copy is how two calendars disagree about a holiday), and scripts/ops for
+  # vol-premium-open-reference-capture.py (ops tooling, tested from there by
+  # tests/test_vol_premium_open_reference_capture.py). The deploy job stages the latter two into
+  # $DIR, which is why they are installed despite not living there.
+  if [ ! -f "$DIR/$f" ] && [ ! -f "scripts/jenkins/$f" ] && [ ! -f "scripts/ops/$f" ]; then
     echo "MISSING FROM THE REPO: $f — the crontab or a unit script names it and nothing tracks it" >&2
     fails=$((fails+1))
     continue

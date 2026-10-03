@@ -106,3 +106,18 @@ CRON_TZ=America/New_York
 # preregistration exists to forbid. It is run by hand, once, when the boundary is reached:
 #   PARAMETER_SET_HASH=... TRACK_FROM_PUSH=... STOPPING_BOUNDARY_MS=... CORPUS_VERSION=... \
 #   ENV=prod ARCHIVE_DIR=/mnt/nas/optionsedge /home/abhinav/oe-ops/oe-push-validation-artifact.sh
+#
+# --- vol-premium bucket 0: the open-reference ledger -----------------------------------------
+# WHY THERE ARE TWO ENTRIES. The capture CLAIMS a session permanently — it marks it under
+# .published/ and refuses to republish — so it must never run against a half-written archive. The
+# 17:30 run is after the 17:10 daily archive and the 17:20 spot run, which is when the session is
+# normally complete; the 21:00 run exists for the evenings it is not, and is a no-op once the
+# session is published (the capture prints the existing record and exits 0). Both are idempotent,
+# so a retry can only ever add the session that the earlier run left unclaimed.
+#
+# Why this is not folded into oe-archive-daily.sh: that job's failure costs a day of raw data and
+# must not be delayed or failed by a research capture, and this one must run AFTER it.
+#
+# The >=55 bar is counted over <ledger>/accepted/. The script logs the count on every run.
+30 17 * * 1-5 ENV=prod ARCHIVE_DIR=/mnt/nas/optionsedge /home/abhinav/oe-ops/oe-vol-premium-open-capture.sh >> /home/abhinav/oe-ops/vol-premium-open-capture.cron.log 2>&1
+0 21 * * 1-5 ENV=prod ARCHIVE_DIR=/mnt/nas/optionsedge /home/abhinav/oe-ops/oe-vol-premium-open-capture.sh >> /home/abhinav/oe-ops/vol-premium-open-capture.cron.log 2>&1

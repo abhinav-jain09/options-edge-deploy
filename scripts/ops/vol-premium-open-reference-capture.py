@@ -31,6 +31,7 @@ import glob
 import gzip
 import json
 import os
+import re
 import statistics
 import sys
 from zoneinfo import ZoneInfo
@@ -90,12 +91,45 @@ def _records(root: str, topic: str, day: str):
                     continue
 
 
+# The fractional seconds of an ISO-8601 instant, and nothing else that can carry a dot: the
+# lookbehind pins the match to the seconds field, so a timezone offset or a date is never touched.
+_FRACTIONAL_SECONDS = re.compile(r"(?<=:\d\d)\.(\d+)")
+
+
+def _to_microseconds(raw: str) -> str:
+    """ISO-8601 allows more precision than `datetime` can hold, and less than it used to demand.
+
+    THIS IS THE BUG THAT MADE THE WHOLE LEDGER EMPTY. `underlying.spx.index.price` stamps
+    NANOSECONDS - `2026-09-24T10:24:38.933927550Z`, nine fractional digits - and
+    `datetime.fromisoformat` accepted only three or six of them before Python 3.11. The prod host
+    runs 3.9.16, so on 2026-09-24 it read 130 of 36,402 index rows and counted the other 36,272 as
+    "undated"; on 2026-10-02, 83 of 30,617. The index series is the one the offset is scored
+    against, so every session failed the coverage floor - 2026-10-02 was rejected for covering
+    "59 of 385 scoreable minutes (15%)" with a complete archive sitting on disk. Nothing was wrong
+    with the data and nothing was wrong with the floors.
+
+    THE SUITE COULD NOT SEE IT. The tests run on the Jenkins agent, which is Python 3.14, where
+    `fromisoformat` takes nanoseconds without complaint. A test that only asks whether a
+    nanosecond stamp parses is vacuous there - it passes with this function deleted. So the
+    contract under test is this STRING: the fraction handed to `fromisoformat` is exactly six
+    digits on every interpreter, which is falsifiable on all of them.
+
+    TRUNCATED, NEVER ROUNDED. Truncation moves an instant to or before the one recorded, so a tick
+    outside a window boundary can never be rounded across it; rounding `09:29:59.9999996` up would
+    manufacture an admissible open-window observation out of one that was not.
+
+    SHORT FRACTIONS ARE PADDED for the same reason the long ones are cut: 3.9 refused `.1` and
+    `.1234` as well, and padding with zeros is exact - `.1` and `.100000` are the same instant.
+    """
+    return _FRACTIONAL_SECONDS.sub(lambda m: "." + m.group(1)[:6].ljust(6, "0"), raw, count=1)
+
+
 def _event_time(record: dict):
     raw = record.get("eventTime")
     if not isinstance(raw, str):
         return None
     try:
-        stamp = dt.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        stamp = dt.datetime.fromisoformat(_to_microseconds(raw).replace("Z", "+00:00"))
     except ValueError:
         return None
     # AN INSTANT WITHOUT AN OFFSET IS NOT AN INSTANT. `2026-09-18T13:35:00` with no Z and no

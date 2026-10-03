@@ -721,5 +721,123 @@ class OpenReferenceCaptureTest(unittest.TestCase):
         self.assertNotIn("archiveRoot", orc.capture(str(self.tmp), DAY))
 
 
+def _strict_pre_311_fraction(raw: str) -> bool:
+    """Would `datetime.fromisoformat` on the PRODUCTION HOST accept this string's fraction?
+
+    Before Python 3.11 it accepted a fractional-seconds field of exactly three or six digits and
+    raised ValueError on every other length. The prod host (192.168.100.252) runs 3.9.16 and the
+    Jenkins agent that runs this suite runs 3.14, where the rule is gone - so asserting the
+    property through `fromisoformat` itself proves nothing here. This mirrors the host's rule
+    explicitly, so the assertion is the same on every interpreter.
+    """
+    head, dot, rest = raw.partition(".")
+    if not dot:
+        return True
+    digits = ""
+    for char in rest:
+        if not char.isdigit():
+            break
+        digits += char
+    return len(digits) in (3, 6)
+
+
+class NanosecondTimestampTest(unittest.TestCase):
+    """`underlying.spx.index.price` stamps NANOSECONDS, and that emptied the entire ledger.
+
+    Measured on the prod archive before the fix: of 36,402 index rows on 2026-09-24, 130 parsed
+    and 36,272 were counted "undated"; 83 of 30,617 on 2026-10-02. The offset is scored against
+    the index, so every session failed the coverage floor - 2026-10-02 was rejected for covering
+    "59 of 385 scoreable minutes (15%)" against a complete archive. After the fix the same eight
+    archived sessions go from 0 accepted to 6, with 23,586-30,027 pairs instead of 42-103.
+    """
+
+    def test_the_fraction_handed_to_the_parser_is_always_six_digits(self) -> None:
+        """THE LOAD-BEARING CASE, and the only one of these that can fail on this interpreter.
+
+        Nine digits is what the index feed actually sends; one and four are lengths 3.9 also
+        refused; three is what ES sends and must survive unchanged in VALUE. Deleting
+        `_to_microseconds` makes every row of this table red on 3.9 and on 3.14 alike.
+        """
+        for raw, expected in [
+                ("2026-09-24T10:24:38.933927550Z", "2026-09-24T10:24:38.933927Z"),
+                ("2026-09-24T22:19:30.118Z", "2026-09-24T22:19:30.118000Z"),
+                ("2026-09-24T10:24:38.1Z", "2026-09-24T10:24:38.100000Z"),
+                ("2026-09-24T10:24:38.1234Z", "2026-09-24T10:24:38.123400Z"),
+                ("2026-09-24T10:24:38Z", "2026-09-24T10:24:38Z"),
+        ]:
+            with self.subTest(raw=raw):
+                got = orc._to_microseconds(raw)
+                self.assertEqual(got, expected)
+                self.assertTrue(_strict_pre_311_fraction(got),
+                                f"the prod host's 3.9 would refuse {got!r}")
+
+    def test_the_prod_rows_as_archived_are_what_fails_without_the_fix(self) -> None:
+        """Not an invented shape: both strings are copied from
+        /mnt/nas/optionsedge/kafka/prod/<topic>/dt=2026-09-24/. The index row is the one 3.9
+        refuses; the ES row is the one it accepts, which is why ES looked healthy and the index
+        looked absent."""
+        index_row = "2026-09-24T10:24:38.933927550Z"
+        es_row = "2026-09-24T22:19:30.118Z"
+        self.assertFalse(_strict_pre_311_fraction(index_row),
+                         "if the host could parse this, there was never a bug to fix")
+        self.assertTrue(_strict_pre_311_fraction(es_row))
+        self.assertTrue(_strict_pre_311_fraction(orc._to_microseconds(index_row)))
+
+    def test_a_long_fraction_is_truncated_and_never_rounded(self) -> None:
+        """Rounding would manufacture an observation. `09:29:59.9999996` is OUTSIDE a window that
+        ends at 09:30:00.000000 by six tenths of a microsecond... and rounding it up would land it
+        exactly ON the boundary, which the capture accepts as an admissible open-window tick. The
+        instant must only ever move earlier."""
+        got = orc._to_microseconds("2026-09-24T09:29:59.9999996Z")
+        self.assertEqual(got, "2026-09-24T09:29:59.999999Z")
+        self.assertLess(orc._event_time({"eventTime": "2026-09-24T09:29:59.9999996Z"}),
+                        dt.datetime(2026, 9, 24, 9, 30, tzinfo=dt.timezone.utc))
+
+    def test_a_timezone_offset_is_not_eaten_by_the_normaliser(self) -> None:
+        """The falsifier here is the OBVIOUS fix: `raw[:26] + "Z"`, slicing the string to 26
+        characters. It passes every case above and silently relabels this instant as UTC, moving
+        it five and a half hours and into the previous New York session."""
+        self.assertEqual(orc._to_microseconds("2026-09-24T10:24:38.933927550+05:30"),
+                         "2026-09-24T10:24:38.933927+05:30")
+        stamp = orc._event_time({"eventTime": "2026-09-24T10:24:38.933927550+05:30"})
+        self.assertEqual(stamp.utcoffset(), dt.timedelta(hours=5, minutes=30))
+        self.assertEqual(stamp.astimezone(ET).date(), dt.date(2026, 9, 24))
+
+    def test_an_unparseable_stamp_is_still_refused(self) -> None:
+        """The normaliser must not have widened what counts as a time. A naive sub that then let
+        anything through would make `undated` unreachable, and a row whose time cannot be
+        established is evidence about the archive."""
+        for raw in ["not a time", "2026-09-24", "2026-09-24T10:24:38.933927550",
+                    "2026-13-45T99:99:99.123Z", ""]:
+            with self.subTest(raw=raw):
+                self.assertIsNone(orc._event_time({"eventTime": raw}))
+
+    def test_a_nanosecond_index_session_is_captured_end_to_end(self) -> None:
+        """The regression guard. VACUOUS ON THIS AGENT and stated as such: Python 3.11+ parses
+        nanoseconds natively, so this passes with `_to_microseconds` deleted here, and only bites
+        on the host's 3.9. It is kept because it is the shape production actually archives - the
+        index at nine digits, ES at three - and because the string cases above cannot show that
+        the whole pipeline agrees.
+        """
+        def nanos(offset_s: float) -> str:
+            """The archived shape: six digits of microseconds plus three more. `_iso` omits the
+            fraction entirely on a whole second, so the digits are built here rather than
+            appended to whatever it happened to produce."""
+            stamp = (OPEN + dt.timedelta(seconds=offset_s)).astimezone(dt.timezone.utc)
+            return f"{stamp.strftime('%Y-%m-%dT%H:%M:%S')}.{stamp.microsecond:06d}550Z"
+
+        index_rows = [dict(_index(-302, 7650.0), eventTime=nanos(-302))] + [
+            dict(_index(300 + 60 * i, 7650.0 + i / 10.0), eventTime=nanos(300 + 60 * i))
+            for i in range(MINUTES)]
+        _fixture(self.tmp, index_rows=index_rows)
+        got = orc.capture(str(self.tmp), DAY)
+        self.assertEqual(got["indexUndatedRecords"], 0)
+        self.assertTrue(got["accepted"], got["rejectedBecause"])
+        self.assertEqual(got["offsetCoveredMinutes"], MINUTES)
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp())
+
+
 if __name__ == "__main__":
     unittest.main()
