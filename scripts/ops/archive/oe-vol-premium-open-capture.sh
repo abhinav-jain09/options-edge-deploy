@@ -166,7 +166,7 @@ mkdir -p "$LEDGER" || {
 GATE="$(COMPLETENESS_DIR="$COMPLETENESS_DIR" ARCHIVE_ROOT="$ARCHIVE_ROOT" OE_DAY="$SESSION" \
         CLOSE_ET="$CLOSE_ET" CAPTURE="$CAPTURE" OE_ENV="$ENV_NAME" \
         SNAPSHOT_ROOT="$SNAPSHOT_ROOT" python3 - <<'GATE'
-import ast, datetime as dt, glob, gzip, importlib.util, json, os, pathlib
+import ast, datetime as dt, glob, gzip, hashlib, importlib.util, json, os, pathlib
 from zoneinfo import ZoneInfo
 
 ET = ZoneInfo("America/New_York")
@@ -332,9 +332,59 @@ for topic in topics:
 # through — a failed run, an alert and a day of delay for a condition that resolves itself in
 # minutes. Reading every byte is the only test of that which is not a guess: a size, an mtime and a
 # successful open all pass on a half-written member.
+# THE ARCHIVER'S OWN SHA-256, PER FILE, FROM <topic>/dt=<day>/_manifest.jsonl. The verdict is a
+# statement about a moment that has passed: a member replaced under the same name AFTER
+# oe-archive-verify.sh graded the day was only decompressed here, never re-hashed, so a mistaken
+# restore or sync — or bit-rot — would be pinned, fingerprinted and published as verified bytes
+# (review round 11). The fingerprint cannot see it either, since it is name, size and inode, and an
+# in-place change keeps all three.
+#
+# So every member is hashed AS PINNED and compared with the manifest line the archiver wrote when it
+# published that file. The two failures are different and are reported differently: a member with NO
+# manifest line is one the archiver has not recorded yet, which is what a file still being written
+# looks like, so it WAITS; a member whose bytes do not match the line it has will not fix itself, so
+# it is a FAULT.
+def manifest_for(topic):
+    path = os.path.join(root, topic, "dt=" + day.isoformat(), "_manifest.jsonl")
+    recorded = {}
+    try:
+        with open(path) as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except ValueError:
+                    # A partial last line is a run that died mid-append; the archiver's own verifier
+                    # grades that CORRUPT, and a line this cannot read is not evidence either way.
+                    continue
+                name, digest = entry.get("file"), entry.get("sha256")
+                if isinstance(name, str) and isinstance(digest, str):
+                    recorded[os.path.basename(name)] = digest
+    except OSError:
+        return None
+    return recorded
+
+
+def sha256_of(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 snapshot = os.path.join(os.environ["SNAPSHOT_ROOT"], day.isoformat())
 expected = set()
 for topic in topics:
+    recorded = manifest_for(topic)
+    if recorded is None:
+        # No manifest at all is a pre-2026-08-12 date, which oe-archive-verify.sh grades LEGACY and
+        # the allow-list already refuses — asserted here rather than assumed, because reaching this
+        # with no manifest would mean hashing against nothing and calling it verified.
+        answer("fault", f"{topic} has no _manifest.jsonl for {day}, so the bytes on disk cannot be "
+                        f"checked against what the archiver recorded")
     folder = os.path.join(snapshot, topic, "dt=" + day.isoformat())
     try:
         os.makedirs(folder, exist_ok=True)
@@ -361,6 +411,22 @@ for topic in topics:
                             f"{day}: {err}. This script does not fall back to copying — a copy can "
                             f"change while it is made, which is the interval pinning exists to "
                             f"remove")
+        # THE ARCHIVER'S CHECKSUM, AGAINST THE PINNED BYTES.
+        name = os.path.basename(path)
+        if name not in recorded:
+            answer("waiting", f"{name} is not in {topic}'s _manifest.jsonl for {day} — the "
+                              f"archiver has not recorded it yet, which is what a file still being "
+                              f"written looks like")
+        try:
+            actual = sha256_of(target)
+        except OSError as err:
+            answer("fault", f"cannot read the pinned {name} to check it against the manifest: {err}")
+        if actual != recorded[name]:
+            answer("fault", f"{name} does not match the sha256 the archiver recorded for it "
+                            f"({actual[:12]} vs {recorded[name][:12]}) — the member on disk is not "
+                            f"the one the archive verdict graded, so this session must be looked at "
+                            f"before it is claimed")
+
         # THE CHECK IS ON THE PIN, not on the archive path. Once the link is taken the two names
         # are the same inode, so in any state a fixture can set up they read alike — this is about
         # the one state a fixture CANNOT stage, the archive name being replaced in the interval

@@ -2281,6 +2281,13 @@ STUB
 # a REAL gzip member — an empty file passes gzip.open() and fails the first read, which is the torn
 # case, not the ready one.
 vp_gz() { printf 'CreateTime:0\tPartition:0\tSPX\t{"a":1}\n' | gzip -c > "$1"; }
+# One manifest line per member, carrying the sha256 the archiver would have recorded when it
+# published that file. $1=the dt= folder, $2=the member's name. Appended, as the archiver appends.
+vp_manifest() {
+  printf '{"file":"%s","sha256":"%s","bytes":%s,"topic":"x","dt":"y"}\n' \
+         "$2" "$(sha256sum "$1/$2" | cut -d' ' -f1)" "$(wc -c < "$1/$2" | tr -d ' ')" \
+         >> "$1/_manifest.jsonl"
+}
 VP_TOPICS="underlying.spx.index.price underlying.es.price spx.basis.state"
 # $1=session  $2=archive-run stamp (YYYYMMDDTHHMMSSZ), empty for no files at all
 vp_archive() {
@@ -2289,7 +2296,9 @@ vp_archive() {
   d=$(echo "$1" | tr -d -)
   for t in $VP_TOPICS; do
     mkdir -p "$root/$t/dt=$1"
-    [ -n "${2:-}" ] && vp_gz "$root/$t/dt=$1/$t.p0.0-1.dt$d.$2.jsonl.gz"
+    # The archiver's own per-file record, which the gate hashes each pinned member against. A
+    # fixture without it is a member the archiver never published, and the gate waits for it.
+    [ -n "${2:-}" ] && { vp_gz "$root/$t/dt=$1/$t.p0.0-1.dt$d.$2.jsonl.gz"; vp_manifest "$root/$t/dt=$1" "$t.p0.0-1.dt$d.$2.jsonl.gz"; }
   done
   mkdir -p "$root/_manifest/completeness"
   echo "$root"
@@ -2587,9 +2596,9 @@ for i in $(seq 1 200); do printf 'CreateTime:0\tPartition:0\tSPX\t{"n":%s}\n' "$
 dd if="$whole" of="$whole.cut" bs=1 count=$(( $(wc -c < "$whole") / 2 )) 2>/dev/null
 mv "$whole.cut" "$whole"
 out=$(vp_run 2026-09-21 "$root")
-want "18m a torn index file does not spend the session, though the day is graded" "" "$(cat "$vp_tmp/calls")"
-has  "  and it is reported as torn, not as a grade or a stamp" "does not decompress to its end" "$out"
-want "  it is a WAIT: the archiver finishes writing within minutes" 0 "$(vp_rc 2026-09-21 "$root")"
+want "18m a truncated index member does not spend the session, though the day is graded" "" "$(cat "$vp_tmp/calls")"
+has  "  and is reported against the archiver's OWN sha256, not as a grade or a stamp" "does not match the sha256 the archiver recorded" "$out"
+want "  and it is a FAULT: the archiver published this member and recorded its bytes, so a member that no longer matches them is corruption rather than a write in progress" 2 "$(vp_rc 2026-09-21 "$root")"
 
 # ---- 18n. and the torn test covers every topic the capture reads, not just the index ---------------------
 : > "$vp_tmp/calls"
@@ -2598,7 +2607,7 @@ es="$root/underlying.es.price/dt=2026-09-18/underlying.es.price.p0.0-1.dt2026091
 for i in $(seq 1 200); do printf 'CreateTime:0\tPartition:0\tES\t{"n":%s}\n' "$i"; done | gzip -c > "$es"
 dd if="$es" of="$es.cut" bs=1 count=$(( $(wc -c < "$es") / 2 )) 2>/dev/null
 mv "$es.cut" "$es"
-want "18n a torn ES file does not spend the session either" "" "$(vp_run 2026-09-18 "$root" >/dev/null; cat "$vp_tmp/calls")"
+want "18n a truncated ES member does not spend the session either" "" "$(vp_run 2026-09-18 "$root" >/dev/null; cat "$vp_tmp/calls")"
 
 # ---- 18p. A GRADE THIS GATE DOES NOT RECOGNISE IS NOT A PASS. The first version refused only
 # EMPTY, so CORRUPT — a checksum mismatch, which nothing downstream re-checks — would have been
@@ -2771,7 +2780,7 @@ if __name__ == "__main__":
 RACE
 vp_run 2026-09-01 "$root" CAPTURE="$vp_tmp/racing-capture.py" VP_RACE_ARCHIVE="$root" >/dev/null
 want "18x a member written during the capture is NOT in what the reader sees" "files=3" "$(grep -o 'files=[0-9]*' "$vp_tmp/calls.roots")"
-want "  and it did reach the archive, so the case is not vacuous" 2 "$(ls "$root/underlying.spx.index.price/dt=2026-09-01/" | grep -c .)"
+want "  and it did reach the archive, so the case is not vacuous" 2 "$(ls "$root/underlying.spx.index.price/dt=2026-09-01/" | grep -c '\.jsonl\.gz$')"
 
 # ---- 18x2. A MEMBER THAT IS NOT A READABLE GZIP IS REFUSED, and that is ALL this case shows. It
 # was described as testing that the check reads the PIN rather than the archive path, and review was
@@ -2787,7 +2796,7 @@ member="$root/underlying.spx.index.price/dt=2026-08-31/underlying.spx.index.pric
 printf 'not a gzip at all' > "$member"
 out=$(vp_run 2026-08-31 "$root")
 want "18x2 a member that is not a readable gzip is refused" "" "$(cat "$vp_tmp/calls")"
-has  "  and reported as torn" "does not decompress to its end" "$out"
+has  "  by the checksum, which sees it before the decompression does" "does not match the sha256" "$out"
 
 # ---- 18x3. A PIN LEFT BY A RUN THAT DIED PARTWAY THROUGH IS NOT AN INPUT. The capture globs the
 # pinned directory, so a leftover member sitting there is read — and a later run validates only what
@@ -2827,7 +2836,8 @@ want "18x4 a retry reuses its own pin rather than refusing it" 2 "$(vp_run 2026-
 
 # ---- 18x5. THE PINS ACCUMULATE BY DESIGN, so their cost is reported every run and crossing a
 # threshold says so — growth whose first symptom is a capture that cannot pin is growth nobody
-# noticed. They are hardlinks: the data belongs to the archive, only the inodes are this script's.
+# noticed. They are hardlinks: the file data and the inodes are the archive's, and what this script
+# adds is directory entries and link counts.
 : > "$vp_tmp/calls"
 root=$(vp_archive 2026-08-26 20260826T201500Z); vp_verdict 2026-08-26 2026-08-26T20:15:00Z
 out=$(vp_run 2026-08-26 "$root")
@@ -2867,6 +2877,54 @@ want "18x7 the gate marker is written into the pinned set" 2026-08-19 "$(head -1
 root=$(vp_archive 2026-08-18 20260818T201500Z); vp_verdict 2026-08-18 2026-08-18T20:15:00Z EMPTY
 vp_run 2026-08-18 "$root" >/dev/null
 want "  and a refused session gets none" "" "$(cat "$vp_tmp/ledger-2026-08-18/.pinned/2026-08-18/.vp-open-reference-gate-ok" 2>/dev/null)"
+
+# ---- 18m2. A MEMBER THE ARCHIVER HAS NOT RECORDED YET IS A WAIT, not a fault. The archiver appends
+# its manifest line after publishing a file, so a member with no line is one it is still writing —
+# the condition that resolves itself in minutes, and the one the checksum check must NOT turn into a
+# corruption alert. The two directions are the whole reason both exist.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-08-14 20260814T201500Z); vp_verdict 2026-08-14 2026-08-14T20:15:00Z
+unrecorded="$root/underlying.spx.index.price/dt=2026-08-14"
+vp_gz "$unrecorded/underlying.spx.index.price.p0.50-60.dt20260814.20260814T210000Z.jsonl.gz"
+out=$(vp_run 2026-08-14 "$root")
+want "18m2 a member with no manifest line does not spend the session" "" "$(cat "$vp_tmp/calls")"
+has  "  and is named as one the archiver has not recorded yet" "has not recorded it yet" "$out"
+want "  and it is a WAIT: the archiver finishes writing within minutes" 0 "$(vp_rc 2026-08-14 "$root")"
+# ...and once it IS recorded, the same session is captured — so 18m2 is the missing line and not the
+# extra member.
+: > "$vp_tmp/calls"
+vp_manifest "$unrecorded" underlying.spx.index.price.p0.50-60.dt20260814.20260814T210000Z.jsonl.gz
+want "  once the archiver records it, the same session is captured" "called session=2026-08-14 close=16:00" "$(vp_run 2026-08-14 "$root" >/dev/null; cat "$vp_tmp/calls")"
+
+# ---- 18m3. AN ABSENT MANIFEST IS A FAULT, not bytes checked against nothing. A pre-2026-08-12 date
+# has data and no manifest; the allow-list already refuses it as LEGACY, and this says so where the
+# hashing happens rather than relying on that.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-08-13 20260813T201500Z); vp_verdict 2026-08-13 2026-08-13T20:15:00Z
+rm -f "$root/underlying.es.price/dt=2026-08-13/_manifest.jsonl"
+out=$(vp_run 2026-08-13 "$root")
+want "18m3 a topic with no _manifest.jsonl does not spend the session" "" "$(cat "$vp_tmp/calls")"
+has  "  and says the bytes cannot be checked against what the archiver recorded" "cannot be checked against what the archiver recorded" "$out"
+want "  and it is a fault" 2 "$(vp_rc 2026-08-13 "$root")"
+
+# ---- 18m4. THE REVIEWER'S CASE, and the one the fingerprint cannot see: a DIFFERENT BUT VALID
+# member substituted under the same name after oe-archive-verify.sh graded the day. It decompresses
+# cleanly, so the completeness read passes it; its name is expected, so the membership check passes
+# it; and the marker digest is name, size and inode, all of which an in-place rewrite can preserve.
+# Only the archiver's own sha256 catches it. A mistaken restore or a sync does exactly this.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-08-12 20260812T201500Z); vp_verdict 2026-08-12 2026-08-12T20:15:00Z
+member="$root/underlying.spx.index.price/dt=2026-08-12/underlying.spx.index.price.p0.0-1.dt20260812.20260812T201500Z.jsonl.gz"
+was=$(wc -c < "$member" | tr -d ' ')
+# A valid gzip of DIFFERENT content, written in place so the inode is unchanged.
+printf 'CreateTime:0\tPartition:0\tSPX\t{"a":2}\n' | gzip -c > "$vp_tmp/substitute.gz"
+cat "$vp_tmp/substitute.gz" > "$member"
+want "18m4 setup: the substitute is a valid gzip" ok "$(gzip -t "$member" 2>/dev/null && echo ok || echo no)"
+want "  and the same size, so name/size/inode are all unchanged" "$was" "$(wc -c < "$member" | tr -d ' ')"
+out=$(vp_run 2026-08-12 "$root")
+want "18m4 a substituted member does not spend the session" "" "$(cat "$vp_tmp/calls")"
+has  "  caught by the archiver's sha256 and nothing else" "does not match the sha256 the archiver recorded" "$out"
+want "  and it is a fault, because a substitution does not resolve itself" 2 "$(vp_rc 2026-08-12 "$root")"
 
 # ---- 18o. an uninstalled capture is an ALERT, not a silent no-op: that is exactly how this study spent
 # twelve days and eight archived sessions producing nothing.

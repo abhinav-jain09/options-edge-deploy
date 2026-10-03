@@ -182,31 +182,32 @@ pipeline {
           # lowered with it, so every archive deploy from 09-13 on was refused and nothing merged since reached .252.
           # Proof, run as this job runs it (docker python:3-slim, archive dir :ro): b8a08906 = 567 PASS, and main at
           # 819d98c9 = 566 PASS, ALL PASS, differing by that single line and no other.
-          # 663, raised from 566 with section 18 and the four new section-15 assertions. Section 18 covers
+          # 675, raised from 566 with section 18 and the four new section-15 assertions. Section 18 covers
           # the vol-premium open-reference capture's wrapper, whose every gate protects an IRREVERSIBLE act
           # (the capture claims a session under .published/ and refuses to republish it): oe-archive-verify
           # must have GRADED the day — there is no other way in — and that verdict must be about THIS day
           # and THIS environment, grade no topic twice, and grade every topic the capture reads with a
           # status on the allow-list (OK or PARTIAL; CORRUPT is a fault, and MISSING/LEGACY/EMPTY/anything
           # unrecognised waits) reaching past the close. Every file must be on disk NOW whatever the verdict
-          # says. Each is then HARDLINKED into a pinned set and the decompression check is run on the PIN;
-          # a cross-device pin is a fault rather than a copy, a pinned name resolving to a different file is
-          # a fault, a leftover from a run that died is a fault, and a retry may reuse only its own pin.
-          # Only once all of that passes does the gate write the marker the capture requires for --out: the
-          # session and a digest of the input, which the capture recomputes. It is not an authorisation
-          # boundary and the source says so — anyone who can write the marker can write the ledger directly
-          # — but it means no directory becomes publishable by ACCIDENT, and every way round it is a
-          # deliberate, visible act. The
-          # reader is given the pinned set, so a member arriving while the capture runs cannot reach the
-          # record. The pins accumulate by design, add directory entries and no file data, and their total
-          # is logged with an alert that repeats while it is over the threshold. The gated topic set is read
-          # off the READER: 18y derives every topic-taking function from its signature, refuses a call
-          # passing something the gate does not read, refuses an aliased reference, and refuses dynamic
-          # invocation. A non-trading day, a future date, an unreadable calendar and an uninstalled capture
-          # are all refused. 18z asserts the dependencies this container can see are usable; their
-          # byte-identity with the committed sources is scripts/ci/verify-archive-unit-staged.sh, which runs
-          # on the agent before this. Each gate is falsified by a mutation of the thing it names.
-          [ "$ran" -ge 663 ] || { echo "only $ran assertions ran — the suite did not execute fully" >&2; exit 1; }
+          # says, and each is HARDLINKED into a pinned set and then checked AS PINNED against the sha256
+          # the archiver recorded for it in _manifest.jsonl — because a verdict describes a moment that has
+          # passed, and a member substituted under the same name afterwards decompresses cleanly and keeps
+          # its name, size and inode. A member with no manifest line is one the archiver is still writing
+          # and WAITS; one whose bytes do not match the line it has is a FAULT; an absent manifest is a
+          # fault. A cross-device pin is a fault rather than a copy, a pinned name resolving to a different
+          # file is a fault, a leftover from a run that died is a fault, and a retry may reuse only its own
+          # pin. Only then does the gate write the marker the capture requires for --out, carrying the
+          # session and a digest of the input that the capture recomputes. The reader is given the pinned
+          # set, so a member arriving while the capture runs cannot reach the record. The pins accumulate by
+          # design, adding directory entries and no file data, and their total is logged with an alert that
+          # repeats while it is over the threshold. The gated topic set is read off the READER: 18y derives
+          # every topic-taking function from its signature, refuses a call passing something the gate does
+          # not read, refuses an aliased reference, and refuses dynamic invocation. A non-trading day, a
+          # future date, an unreadable calendar and an uninstalled capture are all refused. 18z asserts the
+          # dependencies this container can see are usable; their byte-identity with the committed sources
+          # is scripts/ci/verify-archive-unit-staged.sh, which runs on the agent before this. Each gate is
+          # falsified by a mutation of the thing it names.
+          [ "$ran" -ge 675 ] || { echo "only $ran assertions ran — the suite did not execute fully" >&2; exit 1; }
 
           # The A5.8 evaluator's own suite. It builds its corpus, so it reaches no NAS and no broker.
           # Installing an evaluator whose acceptance predicate is untested would ship the one thing
