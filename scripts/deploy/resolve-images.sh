@@ -66,16 +66,19 @@ STOCK_GEX_IMAGE=$registry/options-edge-stock-gex:$image_tag
 OI_SHADOW_IMAGE=$registry/options-edge-oi-shadow:$image_tag
 REVERSAL_POSTGRES_WRITER_IMAGE=$registry/options-edge-reversal-postgres-writer:$image_tag
 EOF
-            # approach-monitor is DEV-ONLY (services.yaml envs: [dev]); the production and
-            # experiment overlays delete it. Emitting its var for dev and never for production is
-            # also what marks it dev-only to validate-image-pinning.sh, which derives that status
-            # from this script's own behaviour rather than from parsing manifests.
+            # approach-monitor, oi-next-publication, vol-state and zn-gex are DEV-ONLY (services.yaml
+            # envs: [dev]); the production and experiment overlays delete them. Emitting their vars
+            # for dev and never for production is also what marks them dev-only to
+            # validate-image-pinning.sh, which derives that status from this script's own
+            # behaviour rather than from parsing manifests.
             if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
               cat >>"$JENKINS_WORK_DIR/options-edge-images.env" <<EOF
 APPROACH_MONITOR_IMAGE=$registry/options-edge-approach-monitor:$image_tag
 APPROACH_POSITION_PUBLISHER_IMAGE=$registry/options-edge-approach-position-publisher:$image_tag
 OI_NEXT_PUBLICATION_IMAGE=$registry/options-edge-oi-next-publication:$image_tag
 OI_NEXT_PUBLICATION_POSTGRES_WRITER_IMAGE=$registry/options-edge-oi-next-publication-postgres-writer:$image_tag
+VOL_STATE_IMAGE=$registry/options-edge-vol-state:$image_tag
+ZN_GEX_IMAGE=$registry/options-edge-zn-gex:$image_tag
 EOF
             fi
             # short-premium-agent renders in dev+production (a standalone service that runs on prod too),
@@ -89,6 +92,8 @@ ES_TRADE_LINEARIZER_IMAGE=$registry/options-edge-es-trade-linearizer:$image_tag
 SIGNAL_FOLLOWER_IMAGE=$registry/options-edge-signal-follower:$image_tag
 CONTEXT_TAPE_IMAGE=$registry/options-edge-context-tape:$image_tag
 MULTILEG_STRUCTURE_IMAGE=$registry/options-edge-multileg-structure:$image_tag
+AMT_ORDER_BRIDGE_IMAGE=$registry/options-edge-amt-order-bridge:$image_tag
+BROKER_EXECUTION_IMAGE=$registry/options-edge-broker-execution:$image_tag
 EOF
             fi
           else
@@ -146,13 +151,16 @@ DROP_CLASSIFIER_IMAGE=$DROP_CLASSIFIER_IMAGE
 OI_SHADOW_IMAGE=$OI_SHADOW_IMAGE
 REVERSAL_POSTGRES_WRITER_IMAGE=$REVERSAL_POSTGRES_WRITER_IMAGE
 EOF
-            # approach-monitor is dev-only; on the promoted path emit it for dev alone.
+            # approach-monitor, oi-next-publication, vol-state and zn-gex are dev-only; on the
+            # promoted path emit them for dev alone.
             if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
               cat >>"$JENKINS_WORK_DIR/options-edge-images.env" <<EOF
 APPROACH_MONITOR_IMAGE=${APPROACH_MONITOR_IMAGE:-$registry/options-edge-approach-monitor:dev}
 APPROACH_POSITION_PUBLISHER_IMAGE=${APPROACH_POSITION_PUBLISHER_IMAGE:-$registry/options-edge-approach-position-publisher:dev}
 OI_NEXT_PUBLICATION_IMAGE=${OI_NEXT_PUBLICATION_IMAGE:-$registry/options-edge-oi-next-publication:dev}
 OI_NEXT_PUBLICATION_POSTGRES_WRITER_IMAGE=${OI_NEXT_PUBLICATION_POSTGRES_WRITER_IMAGE:-$registry/options-edge-oi-next-publication-postgres-writer:dev}
+VOL_STATE_IMAGE=${VOL_STATE_IMAGE:-$registry/options-edge-vol-state:dev}
+ZN_GEX_IMAGE=${ZN_GEX_IMAGE:-$registry/options-edge-zn-gex:dev}
 EOF
             fi
             # short-premium-agent renders in dev+production; on the promoted/branch-2 path (prod) its
@@ -167,6 +175,8 @@ ES_TRADE_LINEARIZER_IMAGE=$ES_TRADE_LINEARIZER_IMAGE
 SIGNAL_FOLLOWER_IMAGE=$SIGNAL_FOLLOWER_IMAGE
 CONTEXT_TAPE_IMAGE=$CONTEXT_TAPE_IMAGE
 MULTILEG_STRUCTURE_IMAGE=$MULTILEG_STRUCTURE_IMAGE
+AMT_ORDER_BRIDGE_IMAGE=$AMT_ORDER_BRIDGE_IMAGE
+BROKER_EXECUTION_IMAGE=$BROKER_EXECUTION_IMAGE
 EOF
             fi
           fi
