@@ -58,15 +58,55 @@ verified on CONFIRM (`MIGRATED`); a rerun at v7 verifies the recorded calendar v
 (`ALREADY_MIGRATED`) and never re-applies.
 
 The wrapper repeats every guarantee of the provisioning wrapper (the CA-pinned cluster, the atomic lock `zerodte-research-migrate-lock`,
-the exact receipt grammar with exit agreement, the same-build dry-run receipt, HEAD == PERMITTED_SHA re-checked) and adds THE QUIESCENCE
-PROOF: the migrator cannot tell from PostgreSQL whether a legacy (v6) in-process writer still runs, so the wrapper verifies on the live
-cluster that every `vix-option-inteligence-service` pod runs the SAME digest-pinned image this Job runs (the V1 compatibility image whose
-writer refuses v7) AND carries no `ZERODTE_RESEARCH_ENABLED=true`; a pod on another image, a pod with the flag on, an unreadable pod list
-— each is a refusal — and only then renders `--legacy-writers-quiesced` into the Job (the migrator refuses without it).
+the same-build dry-run receipt, HEAD == PERMITTED_SHA re-checked) and holds the receipt to its CANONICAL GRAMMAR: one regular expression
+per outcome — the tokens in the exact order `ZeroDteResearchMigrator` prints them, each in its domain, single spaces, nothing else — then
+every `(reason, exit)` pair of a `REFUSED` line must be one the migrator emits, the container's exit code must agree, and
+`calendarVersion` / `fromVersion` / `toVersion` are bound to the reviewed declaration.
 
-ORDER ON EVERY ENVIRONMENT (consult Q12): roll the V1 compatibility image with `ZERODTE_RESEARCH_ENABLED` off to every pod → this job
-(dry run, then CONFIRM) → the provisioning job → the dedicated v7 writer (9e) → increment 8. `scripts/ci/zerodte-research-migrate-receipt-test.sh`
-drives the wrapper through 52 cases against a fake kubectl; `zerodte-research-migrate-guard-test.sh` the guard stage through 29.
+THE QUIESCENCE PROOF (consult Q3). The migrator cannot tell from PostgreSQL whether a legacy (v6) in-process writer still runs, so the
+wrapper proves it on the live cluster, UNDER ITS LOCK, from a CLOSED WORLD — `research-migration/legacy-writers.yaml` (the image
+repository, the declared writer Deployments, the maintenance Jobs that run the same image and never write) — through
+`scripts/ops/zerodte-quiescence.py`:
+
+* every pod of the namespace that runs the service image (judged by spec image AND status `imageID`; app, init and ephemeral containers
+  alike; exempt only when a Job owns it and it carries a declared maintenance label) must be Running on the digest-pinned image this Job
+  runs, with `ZERODTE_RESEARCH_ENABLED` resolved OFF from its EFFECTIVE environment — a literal, a `configMapKeyRef` (the ConfigMap is
+  read), `envFrom` sources in kubelet order (a later source overrides an earlier one, a direct `env` entry overrides every `envFrom`,
+  prefixes honoured); a flag from a Secret (`secretKeyRef`, or an `envFrom` Secret whose KEY NAMES — never values — include it), a
+  `fieldRef`, a `$(…)` expansion, a duplicated env name, an unreadable or missing non-optional source: each a refusal, because the value
+  cannot be known to be off;
+* a TERMINATING pod (still running through its grace period) or a Pending pod is waited for (`QUIESCE_WAIT_S`, default 120 s) and then
+  refused;
+* every Deployment / StatefulSet / DaemonSet / ReplicaSet / Job / CronJob whose pod template runs the image must be a declared writer
+  Deployment (template pinned to the digest, flag off, rollout SETTLED: observed generation current, updated == available == desired,
+  nothing unavailable), a ReplicaSet it owns, or an exempt maintenance Job — anything else is a refusal (a CronJob could create a writer
+  pod at any moment);
+* an unreadable API is never an empty one; the pod set is digested and RE-LISTED immediately before the Job is created — any change since
+  the proof refuses the creation;
+* the lock is also the DEPLOYMENT BARRIER: `scripts/deploy/service-deploy.sh` sources `scripts/deploy/zerodte-migrate-barrier.sh` and
+  refuses to roll `vix-option-inteligence` while the lock exists (an unreadable lock state refuses too).
+
+Only then is `--legacy-writers-quiesced` rendered into the Job; the migrator refuses without it.
+
+ORDER ON EVERY ENVIRONMENT (consult Q12): roll the V1 compatibility image with `ZERODTE_RESEARCH_ENABLED` off to the declared Deployment
+and let it settle → this job (dry run, then CONFIRM) → the provisioning job → the dedicated v7 writer (9e) → increment 8.
+`scripts/ci/zerodte-research-migrate-receipt-test.sh` drives the wrapper through 144 cases against a fake kubectl, a fake clock and the
+Kubernetes fixtures of `zerodte-research-migrate-fixtures.py` — every outcome and grammar violation, every quiescence refusal, the race,
+the timeout, the unreadable log — and CAPTURES the Job manifest the wrapper creates, executing its container's shell block against a fake
+`java` to prove the attestation and the mode reach the migrator's argv; `zerodte-migrate-barrier-test.sh` the barrier; 
+`zerodte-research-migrate-guard-test.sh` the guard stage through 29.
+
+### Release evidence (capacity) — recorded before the first CONFIRM of each environment
+
+The Job's `activeDeadlineSeconds` is 900 under 896 Mi / 1 Gi (`-Xmx768m`). That ceiling is not assumed: the wrapper prints the Job's wall
+time (`job wall time: Ns`) after every run, and the DRY RUN that precedes every CONFIRM in the same build executes the whole migration
+against the REAL store and rolls it back. Record each environment's dry-run wall time here, from the build log, before its first CONFIRM:
+
+| store | date | build | v6 feature families | dry-run wall time | notes |
+|---|---|---|---|---|---|
+| local reference (laptop, PostgreSQL 16, synthetic v6 store) | see below | — | see below | see below | the rate bound; not an environment |
+| dev | — | — | — | — | fill from the dev dry run |
+| production | — | — | — | — | fill from the production dry run; CONFIRM only after it is under the ceiling with margin |
 
 ## Owner-only items (stated once)
 

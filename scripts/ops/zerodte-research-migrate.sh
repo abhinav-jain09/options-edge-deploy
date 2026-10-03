@@ -20,21 +20,28 @@
 # reviewed declaration this run migrates under (read by the same validator that gated the PR). The outcome must be one the mode allows
 # (dry run: MIGRATABLE or ALREADY_MIGRATED; confirm: MIGRATED or ALREADY_MIGRATED). Anything else is a refusal, never a success.
 #
-# THE QUIESCENCE ATTESTATION (inc 9 consult Q3): the legacy (v6) in-process research writer must be GONE before the migration — the V1
-# compatibility image (increment 9a) rolled to every vix-option-inteligence pod with ZERODTE_RESEARCH_ENABLED != true. This script verifies
-# it on the live cluster: every pod of that service must run the digest-pinned image this Job runs AND carry no ZERODTE_RESEARCH_ENABLED=true
-# in its container env; a pod of another image, a pod with the flag on, an unreadable pod list — each is a refusal. Only then does it render
-# --legacy-writers-quiesced into the Job (the migrator refuses without it).
+# THE QUIESCENCE PROOF (inc 9 consult Q3; Codex 9c r1): the legacy (v6) in-process research writer must be GONE before the migration — the
+# V1 compatibility image (increment 9a) rolled to every writer pod with ZERODTE_RESEARCH_ENABLED off. This script proves it on the live
+# cluster UNDER ITS LOCK (the lock is the deployment / migration barrier: scripts/deploy/zerodte-migrate-barrier.sh refuses to roll the
+# service while it is held) through scripts/ops/zerodte-quiescence.py over a CLOSED WORLD (deploy/zerodte/research-migration/legacy-writers.yaml):
+# every pod of the namespace that runs the service image (judged by spec image AND status imageID, app / init / ephemeral containers alike)
+# must be Running on the digest-pinned image this Job runs with the flag resolved OFF from its EFFECTIVE environment (literals, ConfigMap keys,
+# envFrom sources in kubelet order; a Secret-sourced, expanded, duplicated or unreadable flag is a refusal); a TERMINATING or Pending pod is
+# waited for (bounded) and then refused; every controller template that runs the image must be a declared writer Deployment (pinned, flag
+# off, rollout SETTLED) or an exempt maintenance Job — a CronJob, an undeclared Deployment / StatefulSet / DaemonSet / ReplicaSet / Job is a
+# refusal; an unreadable API is never an empty one. The pod set is digested and RE-LISTED immediately before the Job is created: any change
+# since the proof is a refusal. Only then does the Job carry --legacy-writers-quiesced (the migrator refuses without it).
 #
 # WHAT IT DOES, fail-closed at every step:
 #   0. validates every parameter;
 #   1. validates the declaration with scripts/ci/validate-zerodte-research-migration.sh and reads its identity;
 #   2. asserts the kubectl identity IS the deployer SA AND the kubeconfig's CA is THIS environment's pinned cluster (deploy/zerodte/clusters.yaml);
 #   3. resolves the env's vix-option-inteligence SERVICE image by EXACT key (image-tags/<env>.yaml) and digest-pins it;
-#   4. verifies the legacy writers are quiesced (every service pod on the pinned image, the flag off);
-#   5. takes the lock (zerodte-research-migrate-lock, atomic create), refuses to start while another migration Job is active;
-#   6. renders the ConfigMap (the declaration, named by its sha256) and the Job, validates both server-side, creates them, waits, prints the
-#      whole pod log, maps the container's exit code, and requires the receipt;
+#   4. takes the lock (zerodte-research-migrate-lock, atomic create — the barrier), refuses to start while another migration Job is active;
+#   5. proves the legacy writers quiescent under the lock (above), waiting a bounded time for terminating / pending pods;
+#   6. renders the ConfigMap (the declaration, named by its sha256) and the Job, validates both server-side, RE-LISTS the writer pods and
+#      requires the identical set, creates them, waits, prints the whole pod log and the Job's wall time, maps the container's exit code,
+#      and requires the receipt in its CANONICAL grammar (token order exact, every (reason, exit) pair one the migrator emits);
 #   7. prunes old terminal Jobs and the ConfigMaps no remaining Job references (best-effort).
 #
 # Env:
@@ -44,6 +51,7 @@
 #   DRY_RUN_RECEIPT  path of the same-build dry-run receipt: written on CONFIRM=false, REQUIRED on CONFIRM=true
 #   BUILD_NUMBER     the Jenkins build number recorded in / required of that receipt
 #   JOB_TIMEOUT_S    client-side wait, default 1200 (> the Job's own 900s activeDeadlineSeconds); 960..3600
+#   QUIESCE_WAIT_S   how long to wait for terminating / pending writer pods to settle before refusing, default 120; 0..900
 #   KEEP_JOBS        terminal Jobs to retain, default 5
 #   NAMESPACE        default options-edge
 set -euo pipefail
@@ -55,6 +63,7 @@ PERMITTED_SHA="${PERMITTED_SHA:-}"
 DRY_RUN_RECEIPT="${DRY_RUN_RECEIPT:-}"
 BUILD_NUMBER="${BUILD_NUMBER:-}"
 JOB_TIMEOUT_S="${JOB_TIMEOUT_S:-1200}"
+QUIESCE_WAIT_S="${QUIESCE_WAIT_S:-120}"
 KEEP_JOBS="${KEEP_JOBS:-5}"
 NAMESPACE="${NAMESPACE:-options-edge}"
 CLUSTERS="deploy/zerodte/clusters.yaml"
@@ -63,7 +72,8 @@ LOCK_NAME="zerodte-research-migrate-lock"
 TEMPLATE="k8s/jobs/zerodte-research-migrate-job.yaml"
 IMAGE_KEY="vix-option-inteligence-service"
 IMAGE_REPO_SUFFIX="/options-edge-vix-option-inteligence"
-SERVICE_POD_LABEL="app.kubernetes.io/name=vix-option-inteligence-service"
+WRITERS_FILE="deploy/zerodte/research-migration/legacy-writers.yaml"
+QUIESCENCE="scripts/ops/zerodte-quiescence.py"
 JOB_LABEL="app.kubernetes.io/name=zerodte-research-migrate"
 CM_LABEL="app.kubernetes.io/name=zerodte-research-migrate-files"
 DEPLOYER="system:serviceaccount:options-edge:jenkins-deployer"
@@ -129,12 +139,16 @@ case "$ENVIRONMENT" in dev|production) : ;; *) fatal "ENVIRONMENT must be dev or
 case "$CONFIRM" in true|false) : ;; *) fatal "CONFIRM must be true or false, got '$CONFIRM'" ;; esac
 case "$JOB_TIMEOUT_S" in ''|*[!0-9]*) fatal "JOB_TIMEOUT_S must be digits, got '$JOB_TIMEOUT_S'" ;; esac
 case "$KEEP_JOBS" in ''|*[!0-9]*) fatal "KEEP_JOBS must be digits, got '$KEEP_JOBS'" ;; esac
+case "$QUIESCE_WAIT_S" in ''|*[!0-9]*) fatal "QUIESCE_WAIT_S must be digits, got '$QUIESCE_WAIT_S'" ;; esac
+[ "$QUIESCE_WAIT_S" -le 900 ] || fatal "QUIESCE_WAIT_S must be within 0..900, got $QUIESCE_WAIT_S"
 [ "$JOB_TIMEOUT_S" -ge 960 ] && [ "$JOB_TIMEOUT_S" -le 3600 ] || fatal "JOB_TIMEOUT_S must be within 960..3600 (the Job's own deadline is 900s), got $JOB_TIMEOUT_S"
 [ "$KEEP_JOBS" -ge 1 ] && [ "$KEEP_JOBS" -le 100 ] || fatal "KEEP_JOBS must be within 1..100, got $KEEP_JOBS"
 FILE="deploy/zerodte/research-migration/${ENVIRONMENT}.yaml"
 [ -f "$FILE" ] || fatal "no migration declaration for $ENVIRONMENT at $FILE"
 [ -f "$TEMPLATE" ] || fatal "missing Job template $TEMPLATE"
 [ -f "$CLUSTERS" ] || fatal "missing the cluster pins $CLUSTERS"
+[ -f "$WRITERS_FILE" ] || fatal "missing the legacy-writer declaration $WRITERS_FILE"
+[ -f "$QUIESCENCE" ] || fatal "missing the quiescence helper $QUIESCENCE"
 command -v yq >/dev/null 2>&1 || fatal "yq is required"
 command -v jq >/dev/null 2>&1 || fatal "jq is required"
 command -v python3 >/dev/null 2>&1 || fatal "python3 is required"
@@ -205,28 +219,26 @@ echo "image: $MUTABLE_IMAGE -> $PINNED_IMAGE"
 # STATED, NOT ENFORCED: the tag must carry a build with ZeroDteResearchMigrator (options-edge-processing increment 9a). If not, the
 # container fails on "Could not find or load main class" and step 6 names that.
 
-# --- 4. the legacy writers are QUIESCED: every service pod on the pinned image, the research flag off --------------------------
-# The compatibility image carries the legacy writer retired at v7; what must be TRUE before the migration is that no pod can still be
-# writing v6: every vix-option-inteligence pod runs the SAME digest this Job runs (the image whose ResearchWriter refuses v7) and carries
-# ZERODTE_RESEARCH_ENABLED != true. A pod list that cannot be read is not an empty one.
-PODS_JSON="$(kubectl -n "$NAMESPACE" get pods -l "$SERVICE_POD_LABEL" -o json)" || fatal "cannot list the vix-option-inteligence pods in $NAMESPACE — the legacy writers' quiescence cannot be judged; refusing"
-POD_COUNT="$(printf '%s' "$PODS_JSON" | jq -r '.items | length')" || fatal "cannot parse the pod list"
-# a pod is judged by its container STATUS image id (the digest the kubelet actually runs), not by its spec's tag
-NOT_QUIESCED="$(printf '%s' "$PODS_JSON" | jq -r --arg digest "$PINNED_DIGEST" '
-  [ .items[] | select(.metadata.deletionTimestamp == null) | . as $p
-    | ( [ (.status.containerStatuses // [])[] | .imageID ] | map(test("@" + $digest + "$")) | (length > 0 and all) ) as $onImage
-    | ( [ (.spec.containers[].env // [])[] | select(.name == "ZERODTE_RESEARCH_ENABLED") | .value ] | any(. == "true") ) as $flagOn
-    | select(($onImage | not) or $flagOn)
-    | $p.metadata.name + "(" + (if $onImage then "image ok" else "another image" end) + "," + (if $flagOn then "ZERODTE_RESEARCH_ENABLED=true" else "flag off" end) + ")" ]
-  | join(" ")')" || fatal "cannot judge the pods"
-echo "vix-option-inteligence pods: $POD_COUNT; pinned digest $PINNED_DIGEST"
-[ -z "$NOT_QUIESCED" ] || fatal "the legacy research writers are NOT quiesced: $NOT_QUIESCED. Roll the V1 compatibility image (increment 9a) with ZERODTE_RESEARCH_ENABLED unset or false to every pod first; the migration refuses until no pod can still write v6."
-echo "legacy writers quiesced: every running pod is on the pinned image with the research flag off — the Job will carry --legacy-writers-quiesced"
-QUIESCED=true
+# --- the legacy-writer declaration: the closed world the quiescence proof judges (read before the lock; judged under it) ----------------
+WRITER_REPO="$(yq -r '.imageRepository // ""' "$WRITERS_FILE")"
+WRITER_DEPLOYMENTS="$(yq -r '(.writerDeployments // []) | join(",")' "$WRITERS_FILE")"
+EXEMPT_JOB_LABELS="$(yq -r '(.exemptJobLabels // []) | join(",")' "$WRITERS_FILE")"
+[ "$WRITER_REPO" = "${IMAGE_REPO_SUFFIX#/}" ] || fatal "$WRITERS_FILE declares imageRepository '$WRITER_REPO', the migration Job runs '${IMAGE_REPO_SUFFIX#/}' — the proof would judge the wrong image"
+case "$WRITER_DEPLOYMENTS" in ''|null) fatal "$WRITERS_FILE declares no writerDeployments" ;; *[!a-z0-9,-]*) fatal "$WRITERS_FILE writerDeployments must be lower-case DNS names" ;; esac
+case "$EXEMPT_JOB_LABELS" in *[!a-z0-9,-]*) fatal "$WRITERS_FILE exemptJobLabels must be lower-case DNS names" ;; esac
+[ "$EXEMPT_JOB_LABELS" != null ] || EXEMPT_JOB_LABELS=""
+echo "legacy writers (closed world): repository $WRITER_REPO; writer Deployments $WRITER_DEPLOYMENTS; exempt maintenance Jobs ${EXEMPT_JOB_LABELS:-<none>}"
+quiesce() { # quiesce [expect-set] → the helper's one verdict line on stdout; its exit code: 0 QUIESCENT, 3 NOT_QUIESCENT, 4 UNREADABLE, 5 TRANSIENT
+  if [ -n "${1:-}" ]; then
+    python3 "$QUIESCENCE" --namespace "$NAMESPACE" --digest "$PINNED_DIGEST" --repository "$WRITER_REPO" --writer-deployments "$WRITER_DEPLOYMENTS" --exempt-job-labels "$EXEMPT_JOB_LABELS" --expect-set "$1"
+  else
+    python3 "$QUIESCENCE" --namespace "$NAMESPACE" --digest "$PINNED_DIGEST" --repository "$WRITER_REPO" --writer-deployments "$WRITER_DEPLOYMENTS" --exempt-job-labels "$EXEMPT_JOB_LABELS"
+  fi
+}
 
 RENDER="$(mktemp)"; CM_RENDER="$(mktemp)"; LOGS="$(mktemp)"; ERRLOG="$(mktemp)"
 
-# --- 5. the LOCK, then the inventory --------------------------------------------------------------------------------------------
+# --- 4. the LOCK (the deployment / migration barrier), then the inventory --------------------------------------------------------------------------------------------
 LOCK_HOLDER="$(cat <<EOF2
 apiVersion: v1
 kind: ConfigMap
@@ -255,6 +267,28 @@ ACTIVE="$(printf '%s' "$JOBS_JSON" | jq -r '[.items[] | select(((.status.succeed
   || fatal "cannot parse the zerodte-research-migrate Job list — refusing to migrate beside an inventory that could not be read"
 [ -z "$ACTIVE" ] || fatal "another zerodte-research-migrate Job is not terminal ($ACTIVE). Wait for it, or delete it if it is a leftover."
 
+# --- 5. the legacy writers are QUIESCED — proven UNDER THE LOCK from the closed world, waiting (bounded) only for pods that are leaving ----
+QUIESCE_DEADLINE=$(( $(date +%s) + QUIESCE_WAIT_S ))
+while :; do
+  VERDICT="$(quiesce)" && qrc=0 || qrc=$?
+  echo "quiescence: ${VERDICT:-<no verdict>} (rc=$qrc)"
+  case "$qrc" in
+    0) break ;;
+    5) if [ "$(date +%s)" -ge "$QUIESCE_DEADLINE" ]; then
+         fatal "the legacy writers are not provably quiescent after ${QUIESCE_WAIT_S}s: $VERDICT. A pod that is terminating or pending can still be (or become) a writer; wait for the service to settle, then re-run."
+       fi
+       sleep 5 ;;
+    3) fatal "the legacy research writers are NOT quiesced: $VERDICT. Roll the V1 compatibility image (increment 9a) with ZERODTE_RESEARCH_ENABLED off to every writer Deployment, remove any undeclared workload that runs the service image, let the rollout settle, then re-run; the migration refuses until the proof holds." ;;
+    4) fatal "the legacy writers' quiescence cannot be judged: $VERDICT — refusing (an unreadable API is not an empty one)" ;;
+    *) fatal "the quiescence helper did not run (rc=$qrc): ${VERDICT:-<no output>}" ;;
+  esac
+done
+case "$VERDICT" in "QUIESCENT "*" set="[0-9a-f]*) : ;; *) fatal "the quiescence helper's verdict is not in its grammar: '$VERDICT'" ;; esac
+POD_SET="${VERDICT##* set=}"
+[ "${#POD_SET}" -eq 64 ] || fatal "the quiescence helper's pod-set digest is not 64 hex: '$POD_SET'"
+echo "legacy writers quiesced: every writer-capable pod and controller judged from the closed world (pod set $POD_SET) — the Job will carry --legacy-writers-quiesced"
+QUIESCED=true
+
 # --- 6. render + create ---------------------------------------------------------------------
 CM_NAME="zerodte-research-migrate-${ENVIRONMENT}-${FILE_SHA256:0:12}"
 JOB_NAME="zerodte-research-migrate-$(date -u +%Y%m%d-%H%M%S)-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
@@ -276,6 +310,10 @@ kubectl -n "$NAMESPACE" create --dry-run=server -f "$RENDER" >/dev/null
 
 echo "=== creating ConfigMap $CM_NAME and Job $JOB_NAME (env=$ENVIRONMENT from=$FROM_VERSION to=$TO_VERSION confirm=$CONFIRM) ==="
 kubectl -n "$NAMESPACE" apply -f "$CM_RENDER"
+# the writer pods are LISTED AGAIN right here: the proof above must still hold, on the identical pod set, at the moment the Job is created
+VERDICT2="$(quiesce "$POD_SET")" && qrc=0 || qrc=$?
+echo "quiescence re-listed before the Job: ${VERDICT2:-<no verdict>} (rc=$qrc)"
+[ "$qrc" = 0 ] || fatal "the legacy writers' quiescence no longer holds at Job creation: ${VERDICT2:-<no verdict>} — nothing was created; re-run (the proof starts over)"
 JOB_OWNED=true
 kubectl -n "$NAMESPACE" create -f "$RENDER"
 
@@ -294,10 +332,21 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
 done
 case "$state" in succeeded|failed) : ;; *) state="$(job_state || echo 'unreadable')" ;; esac
 echo "job state: $state"
+case "$state" in
+  succeeded|failed) : ;;
+  active) fatal "$JOB_NAME is still active after ${JOB_TIMEOUT_S}s (the Job's own deadline is 900s) — the client stopped waiting; the lock is retained until the Job is gone or terminal (see cleanup below). Read the Job's log before anything else." ;;
+  *) fatal "the state of $JOB_NAME could not be read after the wait — refusing to judge a run whose Job cannot be observed; the lock is retained while the Job may still run" ;;
+esac
+# the Job's wall time (its status times; capacity evidence for the production run — the dry run before every CONFIRM measures the real store)
+JOB_SNAPSHOT="$(kubectl -n "$NAMESPACE" get "job/$JOB_NAME" -o json 2>/dev/null || echo '{}')"
+WALL_S="$(printf '%s' "$JOB_SNAPSHOT" | jq -r '(.status.startTime // empty) as $s | (.status.completionTime // empty) as $c | if ($s != "" and $c != "") then (($c | fromdateiso8601) - ($s | fromdateiso8601)) else empty end' 2>/dev/null || echo '')"
+echo "job wall time: ${WALL_S:-<not reported by the Job status>}s (activeDeadlineSeconds 900)"
+LOGS_READ=false
 for _try in 1 2 3 4 5; do
-  if kubectl -n "$NAMESPACE" logs "job/$JOB_NAME" --tail=-1 >"$LOGS" 2>/dev/null; then break; fi
+  if kubectl -n "$NAMESPACE" logs "job/$JOB_NAME" --tail=-1 >"$LOGS" 2>/dev/null; then LOGS_READ=true; break; fi
   echo "logs for $JOB_NAME not available yet (attempt $_try) ..."; : >"$LOGS"; sleep 6
 done
+[ "$LOGS_READ" = true ] || fatal "the log of $JOB_NAME could not be read in 5 attempts (state=$state) — without the log there is no receipt; refusing to guess. Read it with kubectl logs job/$JOB_NAME once the API answers."
 echo "===== $JOB_NAME log ====="; cat "$LOGS"; echo "===== end log ====="
 EXIT_CODE="$(kubectl -n "$NAMESPACE" get pods -l "job-name=$JOB_NAME" -o json 2>/dev/null \
   | jq -r '[.items[] | (.status.containerStatuses // [])[] | select(.name == "migrator") | .state.terminated.exitCode // empty] | first // ""' 2>/dev/null || echo '')"
@@ -334,11 +383,26 @@ hex() { # hex <value> <length> <what>
 digits() { case "$1" in ''|*[!0-9]*) fatal "receipt $2 is not a non-negative integer: '$1'" ;; esac; }
 exit_agrees() { [ "${EXIT_CODE:-}" = "$1" ] || fatal "the receipt says $OUTCOME, which exits $1, but the container exited '${EXIT_CODE:-<unknown>}' — the receipt and the process disagree; refused"; }
 COUNTS="archiveFeatureFamilies nullQualityFlags nullSurfaceStatus nullSurfaceActionable scheduledBoundaries lateStartBoundaries calibratedShadowRows"
+# THE CANONICAL GRAMMAR FIRST (Codex 9c r1): one regular expression per outcome — the tokens in the EXACT order ZeroDteResearchMigrator
+# prints them, each in its domain, single spaces, nothing else. A reordered, repeated, missing or extra token is refused HERE; the field
+# functions below then read values the grammar already admitted.
+HEX64='[0-9a-f]{64}'; NUM='(0|[1-9][0-9]*)'
+COUNT_GRAMMAR=""; for n in $COUNTS; do COUNT_GRAMMAR="$COUNT_GRAMMAR $n=$NUM"; done
+case "$OUTCOME" in
+  MIGRATABLE)       GRAMMAR="^MIGRATABLE fromVersion=$NUM toVersion=$NUM calendarVersion=$HEX64 expectedSessions=$NUM$COUNT_GRAMMAR planDigest=$HEX64\$" ;;
+  MIGRATED)         GRAMMAR="^MIGRATED fromVersion=$NUM toVersion=$NUM calendarVersion=$HEX64 expectedSessions=$NUM$COUNT_GRAMMAR schemaDigest=$HEX64\$" ;;
+  ALREADY_MIGRATED) GRAMMAR="^ALREADY_MIGRATED version=$NUM calendarVersion=$HEX64 expectedSessions=$NUM schemaDigest=$HEX64\$" ;;
+  REFUSED)          GRAMMAR="^REFUSED reason=[A-Z_]+ exit=(64|65|68|69|70)\$" ;;
+  *)                fatal "receipt outcome '$OUTCOME' has no grammar ('$RECEIPT')" ;;
+esac
+printf '%s\n' "$RECEIPT" | grep -Eq -- "$GRAMMAR" || fatal "receipt '$RECEIPT' is not the canonical $OUTCOME grammar (the tokens in their exact order, each in its domain, nothing else; expected $GRAMMAR) — refused"
+# every (reason, exit) pair the migrator emits — ZeroDteResearchMigrator / ZeroDteProvisioner.Exit; any other pair is not a receipt of this migrator
+REFUSAL_PAIRS=" USAGE=64 JDBC_PASSWORD=64 CALENDAR_RESOURCE=65 LEGACY_WRITERS_NOT_QUIESCED=68 CALENDAR_COVERAGE=68 SCHEMA_VERSION=68 MIGRATION_RECORD_MISSING=68 CALENDAR_VERSION_MISMATCH=68 SCHEMA_DIGEST_MISMATCH=68 CALENDAR_ROWS_MISMATCH=68 DB_UNAVAILABLE=69 LOCK_TIMEOUT=69 CLIENT_CONSTRUCTION=69 MIGRATION_FAILED=70 COMMIT_UNCERTAIN=70 MIGRATION_UNVERIFIED=70 UNEXPECTED=70 "
 case "$OUTCOME" in
   REFUSED)
     exact_fields reason exit
     REASON="$(field reason)"; EXIT_TOKEN="$(field exit)"
-    case "$EXIT_TOKEN" in 64|65|68|69|70) : ;; *) fatal "the receipt names exit=$EXIT_TOKEN, which is not a migrator refusal code ('$RECEIPT')" ;; esac
+    case "$REFUSAL_PAIRS" in *" $REASON=$EXIT_TOKEN "*) : ;; *) fatal "the receipt names reason=$REASON exit=$EXIT_TOKEN, which is not a (reason, exit) pair ZeroDteResearchMigrator emits ('$RECEIPT') — refused" ;; esac
     exit_agrees "$EXIT_TOKEN"
     case "$EXIT_TOKEN" in
       64) fatal "the migrator refused its INVOCATION ($REASON) — the Job template and the migrator's CLI disagree; see the log. Nothing was written." ;;
@@ -382,7 +446,7 @@ digits "$(field expectedSessions)" expectedSessions
        The image's calendar is not the reviewed one, or the migrator ran another migration. Refusing to report success."
 echo "$RECEIPT"
 case "$OUTCOME" in
-  MIGRATABLE)       echo "OK: DRY RUN — the migration was executed and ROLLED BACK on $ENVIRONMENT; the counts above are the real rows' (archiveFeatureFamilies=$(field archiveFeatureFamilies), expectedSessions=$(field expectedSessions)). Re-run with CONFIRM=true to migrate." ;;
+  MIGRATABLE)       echo "OK: DRY RUN — the migration was executed and ROLLED BACK on $ENVIRONMENT in ${WALL_S:-?}s of Job wall time; the counts above are the real rows' (archiveFeatureFamilies=$(field archiveFeatureFamilies), expectedSessions=$(field expectedSessions)). Re-run with CONFIRM=true to migrate." ;;
   MIGRATED)         echo "OK: MIGRATED $ENVIRONMENT research store $FROM_VERSION -> $TO_VERSION — calendarVersion=$(field calendarVersion) schemaDigest=$(field schemaDigest) (verified on a fresh connection). The provisioning Job (zerodte-provision) may now run." ;;
   ALREADY_MIGRATED) echo "OK: the $ENVIRONMENT research store is already at version $(field version) with this image's calendar ($(field calendarVersion)) and an unchanged catalog ($(field schemaDigest)) — nothing to do." ;;
 esac

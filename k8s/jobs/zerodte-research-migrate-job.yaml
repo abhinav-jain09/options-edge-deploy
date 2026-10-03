@@ -12,9 +12,12 @@
 # rerun at v7 verifies and prints ALREADY_MIGRATED; nothing is ever re-applied.
 #
 # THE QUIESCENCE ATTESTATION. The migrator cannot tell from PostgreSQL whether a legacy (v6) research writer still runs; it REQUIRES
-# --legacy-writers-quiesced, which the WRAPPER passes only after it verified that every running vix-option-inteligence pod runs the
-# digest-pinned image this Job runs AND carries ZERODTE_RESEARCH_ENABLED != true (the V1 compatibility image with the legacy writer
-# disabled, rolled out BEFORE the migration — inc 9 consult Q3). The flag is rendered into __QUIESCED__ by the wrapper, never by hand.
+# --legacy-writers-quiesced, which the WRAPPER passes only after scripts/ops/zerodte-quiescence.py proved, under the migration lock and
+# from the closed world of deploy/zerodte/research-migration/legacy-writers.yaml, that every pod and every controller template running
+# the service image is on the digest-pinned image this Job runs with ZERODTE_RESEARCH_ENABLED resolved OFF from its effective environment,
+# nothing terminating or pending, the declared Deployment's rollout settled (the V1 compatibility image with the legacy writer disabled,
+# rolled out BEFORE the migration — inc 9 consult Q3), and re-listed the pods immediately before creating this Job. The flag is rendered
+# into __QUIESCED__ by the wrapper, never by hand; the receipt test executes this very shell block to prove it reaches the argv.
 #
 # WHAT THE CONTAINER PROVES BEFORE IT RUNS: the mounted declaration's sha256 equals __FILE_SHA256__, which the wrapper computed from the
 # checked-out repository file AFTER scripts/ci/validate-zerodte-research-migration.sh passed on it; the calendar the image ships must be
@@ -40,8 +43,11 @@ spec:
   # NO k8s-level retry: a migration that stopped must be READ (its one receipt line is the evidence) before anything is tried again; the
   # migrator is one transaction, rolled back on any failure, and a rerun at v7 verifies instead of re-applying.
   backoffLimit: 0
-  # The archive copy of a few hundred thousand v6 rows, the DDL, 2 261 calendar rows and the catalog digest: a minute or two on the
-  # production store. Fifteen minutes is the generous ceiling; the wrapper waits longer than this on purpose.
+  # The archive copy of the v6 rows, the DDL, 2 261 calendar rows and the catalog digest. Fifteen minutes is the ceiling; the wrapper waits
+  # longer than this on purpose. CAPACITY EVIDENCE is measured, not assumed: the wrapper prints the Job's wall time after every run, and the
+  # DRY RUN that precedes every CONFIRM in the same build executes the whole migration against the REAL store (and rolls it back) — its wall
+  # time under this limit and this memory shape is the release evidence for that environment, recorded in deploy/zerodte/README.md
+  # ("Release evidence") before the first confirmed run. The local reference point there (a synthetic v6 store on a laptop) bounds the rate.
   activeDeadlineSeconds: 900
   template:
     metadata:

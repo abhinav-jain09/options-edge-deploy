@@ -426,8 +426,10 @@ jobs:
         run: bash scripts/ci/validate-zerodte-research-migration.sh
       - name: zerodte research-migrate guard refuses every forbidden ref and SHA
         run: bash scripts/ci/zerodte-research-migrate-guard-test.sh
-      - name: zerodte research-migrate wrapper holds the receipt to the letter and verifies the legacy writers' quiescence
+      - name: zerodte research-migrate wrapper holds the receipt to its canonical grammar and proves the legacy writers' quiescence from a closed world
         run: bash scripts/ci/zerodte-research-migrate-receipt-test.sh
+      - name: zerodte research-migrate barrier refuses to roll the service while the migration holds its lock
+        run: bash scripts/ci/zerodte-migrate-barrier-test.sh
 
       # es4's clean-reset deletes the whole Kafka data dir; it must refuse while the strike archive
       # marker is short of the log end (fail closed on unreadable state, explicit opt-out only).

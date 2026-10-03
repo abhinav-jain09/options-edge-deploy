@@ -10,12 +10,15 @@
 // (ALREADY_MIGRATED) and never re-applies. ONE receipt line, exit codes 0/64/65/68/69/70 (the wrapper maps each).
 //
 // WHAT RUNS: scripts/ops/zerodte-research-migrate.sh, which validates the declaration with the PR validator, pins the cluster by its CA and
-// the service image by its digest, VERIFIES THE LEGACY WRITERS ARE QUIESCED (every vix-option-inteligence pod on that digest with
-// ZERODTE_RESEARCH_ENABLED off — the V1 compatibility image rolled out first, consult Q3), creates the Job, waits, prints the pod log and
-// holds the receipt to the letter.
+// the service image by its digest, takes the migration lock (the deployment / migration barrier — scripts/deploy/zerodte-migrate-barrier.sh
+// refuses to roll the service while it is held), PROVES THE LEGACY WRITERS QUIESCENT under it from a closed world
+// (scripts/ops/zerodte-quiescence.py over deploy/zerodte/research-migration/legacy-writers.yaml: every pod and controller template that
+// runs the service image — pinned digest, flag resolved OFF from the effective environment, rollout settled, nothing terminating or
+// pending, no undeclared workload; consult Q3), re-lists the pods immediately before creating the Job, waits, prints the pod log and the
+// Job's wall time, and holds the receipt to its canonical grammar.
 //
 // THREE STAGES, IN ORDER, EVERY BUILD:
-//   1. VALIDATE — the declaration (the Job's own rules), the receipt and guard tests of this pipeline.
+//   1. VALIDATE — the declarations (the Job's own rules, the legacy-writer closed world), the receipt + quiescence test and the barrier test.
 //   2. DRY RUN — ALWAYS runs. The migrator executes the migration and ROLLS BACK, printing MIGRATABLE with the real dispositions. A build
 //      with CONFIRM=false ends here, green, having changed nothing.
 //   3. MIGRATE — runs ONLY when CONFIRM=true, and only after stage 2 passed in the same build: the migrator commits and verifies (MIGRATED).
@@ -102,6 +105,7 @@ pipeline {
           set -euo pipefail
           bash scripts/ci/validate-zerodte-research-migration.sh
           bash scripts/ci/zerodte-research-migrate-receipt-test.sh
+          bash scripts/ci/zerodte-migrate-barrier-test.sh
         '''
       }
     }
@@ -141,7 +145,7 @@ pipeline {
     unsuccessful {
       script {
         echo "zerodte research migration ${currentBuild.currentResult} (build ${env.BUILD_NUMBER}, env ${params.ENVIRONMENT}, confirm ${params.CONFIRM}). " +
-             "Read the Job log above: a quiescence refusal means a vix-option-inteligence pod still runs another image or ZERODTE_RESEARCH_ENABLED=true — roll the V1 compatibility image first; " +
+             "Read the Job log above: a quiescence refusal names the pod, container, env source or controller that could still write (another build, the flag resolved on, a terminating / pending pod, an undeclared workload, a rollout in flight) — roll the V1 compatibility image to the declared Deployment with the flag off and let it settle first; " +
              "68 is a precondition (the recorded version, the calendar's coverage or version, a drifted catalog); 70 means the migration rolled back or its commit could not be verified — read zerodte_schema_version and zerodte_research_migration before trying again."
       }
     }

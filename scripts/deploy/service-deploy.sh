@@ -328,6 +328,11 @@ if [ "$DEPLOY_DRY_RUN" = "true" ]; then
   exit 0
 fi
 
+# --- the 0DTE research-migration barrier (increment 9c): never roll vix-option-inteligence while the migration holds its lock --------
+# scripts/deploy/zerodte-migrate-barrier.sh — fail-closed (an unreadable lock state refuses as a held lock does); a no-op for every other service.
+. "$(dirname "$0")/zerodte-migrate-barrier.sh"
+zerodte_migrate_barrier "$NAMESPACE" "$SERVICE" || exit 1
+
 echo "=== apply (service-scoped) ==="
 # 2026-09-28 incident: databento-gex-service's live Deployment had drifted out of band (an env var
 # that was `value: SPXW` live vs `valueFrom: configMapKeyRef` in the tracked manifest, plus 5
