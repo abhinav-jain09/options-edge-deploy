@@ -7,6 +7,7 @@ att-approver-one-char-reject	attestation	reject
 att-approver-punctuation-reject	attestation	reject
 att-bad-date-reject	attestation	reject
 att-bad-instant-reject	attestation	reject
+att-bare-dash-tab-comment-reject	attestation	reject
 att-blank-approver-reject	attestation	reject
 att-bom-reject	attestation	reject
 att-capital-null-accept	attestation	accept
@@ -50,10 +51,15 @@ att-single-quotes-accept	attestation	accept
 att-space-before-map-separator-reject	attestation	reject
 att-space-tab-after-colon-reject	attestation	reject
 att-space-tab-indent-reject	attestation	reject
+att-tab-after-list-dash-reject	attestation	reject
+att-tab-before-comment-reject	attestation	reject
+att-tab-in-comment-reject	attestation	reject
+att-tab-in-quoted-scalar-reject	attestation	reject
 att-tab-indent-reject	attestation	reject
 att-tab-map-separator-reject	attestation	reject
 att-tag-reject	attestation	reject
 att-tilde-null-accept	attestation	accept
+att-trailing-tab-after-scalar-reject	attestation	reject
 att-unapproved-lineage-reject	attestation	reject
 att-unknown-key-reject	attestation	reject
 att-unquoted-alpha-hex-reject	attestation	reject

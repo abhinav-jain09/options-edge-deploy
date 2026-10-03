@@ -73,7 +73,9 @@ What lives here is REVIEWED INPUT to the provisioning Job (`Jenkinsfile.zerodte-
   pipeline's validation stage before any cluster is touched. The subset both readers share is listed in the design
   ("Increment 7b — AS BUILT" item 2): no BOM, no document markers or directives, plain identifier keys, `key: value` with a space, one line per
   scalar in every style, `[]` written exactly, no flow maps, lower-case booleans, `''` as one apostrophe in single quotes, no escapes in
-  double quotes, no tabs in indentation, `key: value` with at least one space after the colon (never a tab, never a space before the colon),
+  double quotes, NO TAB ANYWHERE (not in indentation, not after a separator or a list dash, not trailing, not in a comment, not in a quoted
+  scalar — SnakeYAML treats a tab as separation in some positions and as an error in others, and no hand parser mirrors that), `key: value`
+  with at least one space after the colon (never a space before the colon),
   only printable characters anywhere (a DEL in a comment is refused), line breaks LF or CRLF only (a lone CR, NEL, LINE / PARAGRAPH SEPARATOR
   are refused anywhere), valid UTF-8 (an undecodable file is a refusal, never a crash), ≤ 2^16 code points counted over the RAW text (a CR
   counts; exactly 2^16 passes), plain scalars resolve to null / `true` / `false` / a signed decimal integer within a Java long BEFORE any domain
