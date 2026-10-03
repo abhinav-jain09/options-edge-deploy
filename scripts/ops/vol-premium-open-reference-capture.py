@@ -120,12 +120,16 @@ SCORE_WARMUP_MINUTES = 5
 class TornMember(Exception):
     """An archived member that stops decompressing partway through.
 
-    The open-time OSError below does not catch this: gzip raises while the file is being ITERATED,
-    which is what a member still being written looks like. Letting that propagate as a traceback
-    was safe — it happens before anything is published, so no session is spent — but it told a
-    reader nothing. Swallowing it would be worse: a torn file would read as an empty one, and a
-    session made of empty files would be recorded as a session the market could not answer for.
-    Named, raised, and turned into a message and an exit code by main().
+    The usual cause is a member the archiver is still writing. The other is a truncation after it
+    finished — which, for a member the archiver has RECORDED, UnverifiedMember catches first, since
+    altered bytes fail the hash before anything tries to decompress them. So what reaches here is
+    the repairable case, and waiting is the right answer to it.
+
+    Letting it propagate as a traceback was safe — it happens before anything is published, so no
+    session is spent — but it told a reader nothing. Swallowing it would be worse: a torn file would
+    read as an empty one, and a session made of empty files would be recorded as a session the
+    market could not answer for. Named, raised, and turned into a message and an exit code by
+    main().
     """
 
 
