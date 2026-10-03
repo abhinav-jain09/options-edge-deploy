@@ -46,6 +46,14 @@ UNAPPROVED = "UNAPPROVED"
 OPERATOR = re.compile(r"^[\x20-\x7e]{1,64}$")
 SYMBOL = re.compile(r"^[A-Z0-9]{1,16}$")
 TOPIC = re.compile(r"^[a-zA-Z0-9._-]{1,249}$")
+
+
+def _topic(v, what):
+    """A Kafka topic NAME as the Job judges it (ProvisioningFile.topic): 1–249 of [a-zA-Z0-9._-], never the reserved names . and .. — ONE validator for every topic field."""
+    t = _text(v, what, TOPIC)
+    if t in (".", ".."):
+        raise Refused("%s is a Kafka topic name (1–249 of [a-zA-Z0-9._-]); '.' and '..' are reserved" % what)
+    return t
 # The lexical timestamp domains, the SAME as the Job's (VirginAttestation.ISO_DATE / ISO_INSTANT): ASCII digits, year 0001–9999, month
 # 01–12, day 01–31, hour 00–23, minute/second 00–59, 1–9 fraction digits, Z only — judged BEFORE datetime, which then judges the real calendar.
 ISO_DATE = re.compile(r"^(?!0000)[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$")
@@ -105,7 +113,7 @@ def _strip_comment(line):
 
 
 def _ascii_strip(text):
-    """Only ASCII SPACES are lexical whitespace here (never Python's Unicode notion: a TAB or a NO-BREAK SPACE stays in the text and meets its domain)."""
+    """Only ASCII SPACES are lexical whitespace here (never Python's Unicode notion: a NO-BREAK SPACE stays in the text and meets its domain; a TAB never gets this far — load() refuses it anywhere before any lexical step)."""
     return text.strip(" ")
 
 
@@ -172,10 +180,7 @@ def load(text):
         s = _strip_comment(raw)
         if _ascii_strip(s) == "":
             continue
-        leading = re.match(r"^[ \t]*", s).group(0)
-        if "\t" in leading:
-            raise Refused("tabs in indentation")
-        indent = len(leading)
+        indent = len(re.match(r"^ *", s).group(0))   # only spaces can be here: a TAB anywhere was refused above
         lines.append((indent, _ascii_strip(s)))
     pos = [0]
 
@@ -293,7 +298,7 @@ def corpus_cases(d):
 # ONE canonical corpus (Codex 7b r3): corpus.sha256 is regenerated from the fixtures, so by itself it only proves a copy is self-consistent.
 # CORPUS_DIGEST — the sha256 of corpus.sha256 — is a LITERAL pinned here AND in the Job's YamlSubsetCorpusTest: a change to the corpus must
 # change the literal in BOTH repositories (printed by --corpus-manifest), so a copy that drifted from the pinned version fails its runner.
-CORPUS_DIGEST = "f96e636db4234042a734852316923067adc470a130bba7d28b509786ac31cb2a"
+CORPUS_DIGEST = "53728f765ba0ce743084301655a478f7f59436bf22006cdc5c4458232bde35f6"
 
 
 def corpus_manifest(d, cases):
@@ -457,22 +462,22 @@ def parse_provisioning(text):
         raise Refused("schemaVersion is 1")
     symbol = _text(root["symbol"], "symbol", SYMBOL)
     lineage = _text(root["environmentLineageId"], "environmentLineageId", UUID)
-    generation = integer(root["generation"], "generation", 1, 1 << 62)
+    generation = integer(root["generation"], "generation", 1, LONG_MAX)
     kind = enum(root["bootstrapKind"], "bootstrapKind", {"VIRGIN", "RECOVERY"})
     migration = boolean(root["migration"], "migration")
-    previous = integer(root["previousGeneration"], "previousGeneration", 1, 1 << 62) if "previousGeneration" in root else None
+    previous = integer(root["previousGeneration"], "previousGeneration", 1, LONG_MAX) if "previousGeneration" in root else None
     if migration != (previous is not None):
         raise Refused("previousGeneration is present exactly when migration is true")
     if migration and previous != generation - 1:
         raise Refused("a migration names its predecessor: previousGeneration = generation - 1")
-    era = integer(root["eraId"], "eraId", 1, 1 << 62)
+    era = integer(root["eraId"], "eraId", 1, LONG_MAX)
     inputs = root["inputs"]
     if not isinstance(inputs, list) or not 1 <= len(inputs) <= INPUT_TOPICS_MAX:
         raise Refused("inputs names 1-%d topics" % INPUT_TOPICS_MAX)
     names, mode_of = set(), {}
     for i in inputs:
         _exact_keys(i, ["topic", "dependencyMode"], "inputs[]")
-        t = _text(i["topic"], "inputs[].topic", TOPIC)
+        t = _topic(i["topic"], "inputs[].topic")
         if t in names:
             raise Refused("a topic name occurs once: %s" % t)
         names.add(t)
@@ -483,12 +488,12 @@ def parse_provisioning(text):
     for r in ROLES:
         o = outputs[r]
         _exact_keys(o, ["topic", "cleanupPolicy", "partitions", "retentionMs"], "outputs.%s" % r)
-        t = _text(o["topic"], "outputs.%s.topic" % r, TOPIC)
+        t = _topic(o["topic"], "outputs.%s.topic" % r)
         if t in names:
             raise Refused("a topic name occurs once: %s" % t)
         names.add(t)
         out[r] = {"topic": t, "cleanupPolicy": enum(o["cleanupPolicy"], "outputs.%s.cleanupPolicy" % r, POLICIES),
-                  "partitions": integer(o["partitions"], "outputs.%s.partitions" % r, 1, 100), "retentionMs": integer(o["retentionMs"], "outputs.%s.retentionMs" % r, -1, 1 << 62)}
+                  "partitions": integer(o["partitions"], "outputs.%s.partitions" % r, 1, 100), "retentionMs": integer(o["retentionMs"], "outputs.%s.retentionMs" % r, -1, LONG_MAX)}
     # the output CONTRACT (CheckpointRecord.requireOutputContract): one partition for FRAMES/HEAD/DEPLOYMENTS; the pinned policies
     for r in ("FRAMES", "HEAD", "DEPLOYMENTS"):
         if out[r]["partitions"] != 1:
@@ -507,7 +512,7 @@ def parse_provisioning(text):
         raise Refused("recreatedTopics is a list")
     rec = set()
     for t in recreated:
-        n = _text(t, "recreatedTopics[]", TOPIC)
+        n = _topic(t, "recreatedTopics[]")
         if n not in names:
             raise Refused("a recreated topic is a topic of THIS generation: %s" % n)
         if n in rec:
@@ -519,7 +524,7 @@ def parse_provisioning(text):
     changed = set()
     for c in changes:
         _exact_keys(c, ["topic", "from", "to"], "modeChange[]")
-        t = _text(c["topic"], "modeChange[].topic", TOPIC)
+        t = _topic(c["topic"], "modeChange[].topic")
         f, to = enum(c["from"], "modeChange[].from", MODES), enum(c["to"], "modeChange[].to", MODES)
         if f == to:
             raise Refused("modeChange[] names two DIFFERENT modes (from, to)")

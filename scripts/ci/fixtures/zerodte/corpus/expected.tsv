@@ -72,6 +72,8 @@ att-year-zero-instant-reject	attestation	reject
 prov-anchor-reject	provisioning	reject
 prov-bool-capital-reject	provisioning	reject
 prov-dev-accept	provisioning	accept
+prov-dot-topic-reject	provisioning	reject
+prov-dotdot-topic-reject	provisioning	reject
 prov-duplicate-key-reject	provisioning	reject
 prov-empty-flow-list-whitespace-reject	provisioning	reject
 prov-escape-in-quotes-reject	provisioning	reject
@@ -82,6 +84,9 @@ prov-hex-int-reject	provisioning	reject
 prov-indented-plain-scalar-reject	provisioning	reject
 prov-leading-zero-int-accept	provisioning	accept
 prov-list-item-colon-space-reject	provisioning	reject
+prov-long-era-accept	provisioning	accept
+prov-long-generation-accept	provisioning	accept
+prov-long-retention-accept	provisioning	accept
 prov-multiline-double-quoted-scalar-reject	provisioning	reject
 prov-multiline-nel-scalar-reject	provisioning	reject
 prov-multiline-plain-scalar-reject	provisioning	reject
@@ -89,6 +94,7 @@ prov-multiline-scalar-reject	provisioning	reject
 prov-multiline-single-quoted-scalar-reject	provisioning	reject
 prov-no-space-map-separator-reject	provisioning	reject
 prov-nonbmp-prefix-escaped-quote-reject	provisioning	reject
+prov-over-long-generation-reject	provisioning	reject
 prov-plain-colon-space-reject	provisioning	reject
 prov-plus-int-accept	provisioning	accept
 prov-quoted-int-reject	provisioning	reject
