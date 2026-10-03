@@ -43,6 +43,19 @@ apply_changelog_config() {
 # (options-edge-processing PR #825: option-price-behavior by-strike store, Codex r5).
 DURABLE_CHANGELOG_PATTERNS=(
   "*-opb-by-strike-aggregate-inc-changelog"
+  # oi-next-publication's session ledger: the WHOLE day's per-leg state, evaluated once at Curb
+  # close (17:15 ET). The one-day compact+delete policy below emptied it after dev was brought
+  # down 16:27 ET on Fri 2026-10-02 (48 min before the 17:15 evaluation) — by Saturday the changelog had earliest == latest offset,
+  # the restore had nothing to replay, and the session (and Monday's OI) was unrecoverable.
+  # Compact-only keeps the last LIVE value per key; the key space is bounded by the service, not
+  # by retention: SessionLedger.roll() tombstones every prior|* key, copies the session's legs to
+  # prior|*, then tombstones every leg|* key (options-edge-processing, verified in the Codex review
+  # of PR #912), so steady state is meta + current legs + prior legs — never one key per
+  # historical expiry. Scoped to this service's application id (oi-next-publication-<env>), not
+  # to any app that happens to name a store the same way. The service itself declares the same
+  # policy at topic creation (processing #912); Streams 3.1+ REFUSES to start on an existing
+  # changelog whose policy contains delete, so this list and that declaration must agree.
+  "oi-next-publication-*-oi-nextpub-ledger-changelog"
 )
 
 is_durable_changelog() {
