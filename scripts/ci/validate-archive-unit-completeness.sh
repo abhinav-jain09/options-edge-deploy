@@ -66,12 +66,40 @@ for f in $wanted $sourced; do
   # unit's own files, scripts/jenkins for market_calendar.py (the close-chain jobs own the calendar,
   # and a second committed copy is how two calendars disagree about a holiday), and scripts/ops for
   # vol-premium-open-reference-capture.py (ops tooling, tested from there by
-  # tests/test_vol_premium_open_reference_capture.py). The deploy job stages the latter two into
-  # $DIR, which is why they are installed despite not living there.
-  if [ ! -f "$DIR/$f" ] && [ ! -f "scripts/jenkins/$f" ] && [ ! -f "scripts/ops/$f" ]; then
+  # tests/test_vol_premium_open_reference_capture.py).
+  #
+  # A FILE OUTSIDE $DIR MUST BE STAGED INTO IT BY THE DEPLOY JOB, AND THAT IS CHECKED HERE.
+  # Allowing another directory without asserting the staging was a real weakening of this guard
+  # (review of PR #1125): a future scripts/ops/foo.py named by a unit script would satisfy both the
+  # repo test and the UNIT test while the job copied nothing.
+  #
+  # WHAT THE STAGING IS FOR, precisely, because the guard must not claim more than it checks: the
+  # job runs test-archive-reset.sh in a container with ONLY scripts/ops/archive mounted, so a
+  # dependency that is not staged there is absent from the suite that is supposed to exercise it —
+  # the suite would pass by never running the case. The SHIP is a separate matter and a separate
+  # check: the scp sends the committed source paths, and tests/test_jenkins_permitted_sha_guard.py
+  # (test_the_archive_ship_is_exactly_the_unit) asserts that list is exactly UNIT.
+  # The job stages with a literal `cp <source> scripts/ops/archive/<name>`, so that is what is
+  # required to exist, per file, by name.
+  home=""
+  for _where in "$DIR" scripts/jenkins scripts/ops; do
+    [ -f "$_where/$f" ] && { home="$_where"; break; }
+  done
+  if [ -z "$home" ]; then
     echo "MISSING FROM THE REPO: $f — the crontab or a unit script names it and nothing tracks it" >&2
     fails=$((fails+1))
     continue
+  fi
+  if [ "$home" != "$DIR" ]; then
+    # The cp may be wrapped across lines for width, so the whole file is matched as one string with
+    # its newlines and continuations squeezed out. A `cp` that names the right source and the right
+    # destination is the claim; anything else is not staging this file.
+    flat="$(tr '\n' ' ' < "$JF" | sed 's/\\ */ /g; s/  */ /g')"
+    case "$flat" in
+      *"cp $home/$f $DIR/$f"*) : ;;
+      *) echo "NOT STAGED FOR THE SUITE: $f lives in $home/ and $JF has no 'cp $home/$f $DIR/$f' — the containerised suite mounts only $DIR, so every case that needs $f would be skipped or green for the wrong reason" >&2
+         fails=$((fails+1)) ;;
+    esac
   fi
   # The first entry is preceded by a quote, not a space, so a bare substring test misses it — strip the
   # quotes and pad both sides before matching, or the very first unit member reads as absent.

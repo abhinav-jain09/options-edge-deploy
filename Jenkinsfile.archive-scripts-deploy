@@ -174,13 +174,16 @@ pipeline {
           # lowered with it, so every archive deploy from 09-13 on was refused and nothing merged since reached .252.
           # Proof, run as this job runs it (docker python:3-slim, archive dir :ro): b8a08906 = 567 PASS, and main at
           # 819d98c9 = 566 PASS, ALL PASS, differing by that single line and no other.
-          # 586, raised from 566 with section 18 and the three new section-15 assertions: the vol-premium
-          # open-reference capture's wrapper gates (the readiness test that stops a permanent .published/
-          # claim being spent on a session the archiver had not finished writing — both halves of it, the
-          # stamp past the close and the read-to-the-end that catches a torn member — the trading-day
-          # gate, the half-day close, and the alert on an uninstalled capture) and the two crontab
-          # entries that run it.
-          [ "$ran" -ge 586 ] || { echo "only $ran assertions ran — the suite did not execute fully" >&2; exit 1; }
+          # 605, raised from 566 with section 18 and the four new section-15 assertions. Section 18 covers
+          # the vol-premium open-reference capture's wrapper, whose every gate protects an IRREVERSIBLE act
+          # (the capture claims a session under .published/ and refuses to republish it): the archive
+          # verdict must exist and every topic it reads must be graded non-EMPTY and reach past the close;
+          # PARTIAL is accepted and EMPTY is not; a corrupt verdict is a FAULT and not a wait; an ungraded
+          # day waits for the retry, and ALLOW_UNGRADED is the operator's way in and says in the log that
+          # it took the weaker test; a torn gzip member waits; a non-trading day, a future date and an
+          # unreadable calendar are all refused; and an uninstalled capture alerts. Each is falsified by a
+          # mutation of the gate it names.
+          [ "$ran" -ge 605 ] || { echo "only $ran assertions ran — the suite did not execute fully" >&2; exit 1; }
 
           # The A5.8 evaluator's own suite. It builds its corpus, so it reaches no NAS and no broker.
           # Installing an evaluator whose acceptance predicate is untested would ship the one thing
@@ -282,7 +285,7 @@ EOSSH
         timeout(time: 10, unit: 'MINUTES') {
           sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp --allow-ignored scripts/ops/archive/market_calendar.py'
         }
-        sh 'scp -o BatchMode=yes scripts/ops/archive/oe-archive-kafka.sh scripts/ops/archive/StrikeArchiveReader.java scripts/ops/archive/oe-alert.sh scripts/ops/archive/oe-topics.env scripts/ops/archive/test-archive-reset.sh scripts/ops/archive/oe-archive.crontab scripts/ops/archive/oe-archive.crontab.predecessor scripts/ops/archive/oe-calibration-progress.sh scripts/ops/archive/oe_corpus_reader.py scripts/ops/archive/oe-push-validation-artifact.sh scripts/ops/archive/push-validation-artifact-test.sh scripts/ops/archive/calibration-targets.env scripts/jenkins/market_calendar.py scripts/ops/archive/oe-archive-verify.sh scripts/ops/archive/oe-trading-day.sh scripts/ops/archive/oe-archive-daily.sh scripts/ops/archive/oe-archive-dev.sh scripts/ops/archive/ibkr-raw-retention.sh scripts/ops/archive/oe-archive-postgres.sh "${PROD_HOST}:${STAGE_DIR}/"'
+        sh 'scp -o BatchMode=yes scripts/ops/archive/oe-archive-kafka.sh scripts/ops/archive/StrikeArchiveReader.java scripts/ops/archive/oe-alert.sh scripts/ops/archive/oe-topics.env scripts/ops/archive/test-archive-reset.sh scripts/ops/archive/oe-archive.crontab scripts/ops/archive/oe-archive.crontab.predecessor scripts/ops/archive/oe-calibration-progress.sh scripts/ops/archive/oe_corpus_reader.py scripts/ops/archive/oe-push-validation-artifact.sh scripts/ops/archive/push-validation-artifact-test.sh scripts/ops/archive/calibration-targets.env scripts/jenkins/market_calendar.py scripts/ops/archive/oe-archive-verify.sh scripts/ops/archive/oe-trading-day.sh scripts/ops/archive/oe-archive-daily.sh scripts/ops/archive/oe-archive-dev.sh scripts/ops/archive/ibkr-raw-retention.sh scripts/ops/archive/oe-archive-postgres.sh scripts/ops/archive/oe-vol-premium-open-capture.sh scripts/ops/vol-premium-open-reference-capture.py "${PROD_HOST}:${STAGE_DIR}/"'
         sh '''
           set -euo pipefail
 

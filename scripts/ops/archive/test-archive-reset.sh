@@ -2221,9 +2221,11 @@ done
 
 # ================= 18. the vol-premium open-reference capture's own gates ================================
 # The capture CLAIMS a session permanently (a marker under .published/, and a republish is refused), so
-# every gate below protects a session from being spent on an archive that could not answer for it. The
-# capture's own logic is tested in tests/test_vol_premium_open_reference_capture.py; what is tested here
-# is the WRAPPER the crontab actually invokes, which that suite never sees.
+# every gate below protects a session from being spent on an archive that could not answer for it, and
+# every one of them FAILS CLOSED: the only condition that exits 0 without capturing is one positively
+# established as retryable. The capture's own logic is tested in
+# tests/test_vol_premium_open_reference_capture.py; what is tested here is the WRAPPER the crontab
+# invokes, which that suite never sees.
 VPC="$PWD/oe-vol-premium-open-capture.sh"
 vp_tmp="$T/vp"; mkdir -p "$vp_tmp"
 # A capture stub, so these cases are about the WRAPPER's decisions and not about the archive reader:
@@ -2240,115 +2242,195 @@ if out:
         handle.write(json.dumps({"session": args["--session"], "accepted": True}) + "\n")
 print(json.dumps({"session": args.get("--session"), "accepted": True}, sort_keys=True))
 STUB
-# The archive shape the readiness gate reads: the file name carries the archive run's own UTC stamp.
-# The readiness gate reads every byte of every file the capture will read, so a fixture file has to
-# be a REAL gzip member — an empty file passes gzip.open() and fails the first read, which is the
-# torn case, not the ready one.
+# The readiness gate reads every byte of every file the capture will read, so a fixture file has to be
+# a REAL gzip member — an empty file passes gzip.open() and fails the first read, which is the torn
+# case, not the ready one.
 vp_gz() { printf 'CreateTime:0\tPartition:0\tSPX\t{"a":1}\n' | gzip -c > "$1"; }
-vp_archive() { # $1=session $2=stamp (YYYYMMDDTHHMMSSZ) ; no $2 = no files at all
-  local root="$vp_tmp/archive/$1" d
+VP_TOPICS="underlying.spx.index.price underlying.es.price spx.basis.state"
+# $1=session  $2=archive-run stamp (YYYYMMDDTHHMMSSZ), empty for no files at all
+vp_archive() {
+  local root="$vp_tmp/archive/$1" d t
   rm -rf "$root"
-  for t in underlying.spx.index.price underlying.es.price spx.basis.state; do
+  d=$(echo "$1" | tr -d -)
+  for t in $VP_TOPICS; do
     mkdir -p "$root/$t/dt=$1"
+    [ -n "${2:-}" ] && vp_gz "$root/$t/dt=$1/$t.p0.0-1.dt$d.$2.jsonl.gz"
   done
-  if [ -n "${2:-}" ]; then
-    d=$(echo "$1" | tr -d -)
-    vp_gz "$root/underlying.spx.index.price/dt=$1/underlying.spx.index.price.p0.0-1.dt$d.$2.jsonl.gz"
-    vp_gz "$root/underlying.es.price/dt=$1/underlying.es.price.p0.0-1.dt$d.$2.jsonl.gz"
-  fi
+  mkdir -p "$root/_manifest/completeness"
   echo "$root"
 }
-vp_run() { # $1=session $2=archive root ; prints the log
-  VP_CALLS="$vp_tmp/calls" CAPTURE="$vp_tmp/stub-capture.py" ARCHIVE_ROOT="$2" \
-    LEDGER="$vp_tmp/ledger-$1" LOG="$vp_tmp/log-$1" bash "$VPC" "$1" 2>&1
+# oe-archive-verify.sh's own per-session verdict, which is the authoritative "the archiver is done
+# with this day". $2 = max_event_time for every topic; $3 = status (default OK).
+vp_verdict() { # $1=session $2=max_event_time $3=status
+  local root="$vp_tmp/archive/$1" t first=1
+  { printf '{"dt":"%s","env":"prod","topics":[' "$1"
+    for t in $VP_TOPICS; do
+      [ "$first" = 1 ] || printf ','
+      first=0
+      printf '{"topic":"%s","status":"%s","records":1000,"max_event_time":"%s"}' \
+             "$t" "${3:-OK}" "$2"
+    done
+    printf ']}\n'
+  } > "$root/_manifest/completeness/$1.json"
 }
+vp_run() { # $1=session $2=archive root ; the rest are extra env assignments
+  local session="$1" root="$2"; shift 2
+  env "$@" VP_CALLS="$vp_tmp/calls" CAPTURE="$vp_tmp/stub-capture.py" ARCHIVE_ROOT="$root" \
+      COMPLETENESS_DIR="$root/_manifest/completeness" \
+      LEDGER="$vp_tmp/ledger-$session" LOG="$vp_tmp/log-$session" bash "$VPC" "$session" 2>&1
+}
+vp_rc() { vp_run "$@" >/dev/null 2>&1; echo $?; }
 : > "$vp_tmp/calls"
 
-# ---- 18a. a trading day whose archive is stamped after the close: captured, with the right close -----------
-root=$(vp_archive 2026-10-02 20260102T210000Z)   # any stamp at/after 16:00 ET + 10m = 20:10Z
-root=$(vp_archive 2026-10-02 20261002T201500Z)
+# ---- 18a. a graded session whose every topic reaches past the close: captured ------------------------------
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-10-02 20261002T201500Z); vp_verdict 2026-10-02 2026-10-02T20:03:25Z
 out=$(vp_run 2026-10-02 "$root")
-want "18a a complete session is captured" "called session=2026-10-02 close=16:00" "$(grep -F 'session=2026-10-02' "$vp_tmp/calls")"
-has  "  and the run reports the ledger count, which is the >=55 bar" "the bar is 55 accepted" "$out"
+want "18a a graded session past the close is captured" "called session=2026-10-02 close=16:00" "$(cat "$vp_tmp/calls")"
+has  "  the log names each topic's grade, so a PARTIAL acceptance is never silent" "underlying.spx.index.price=OK/1000" "$out"
+has  "  and reports the ledger count, which is the >=55 bar" "the bar is 55 accepted" "$out"
 
-# ---- 18b. THE CLAIM IS PERMANENT: an archive not yet stamped past the close is left for the retry ---------
+# ---- 18b. PARTIAL is deliberately ACCEPTED. 2026-10-02 is graded PARTIAL on an offset discontinuity in a
+# topic bucket 0 does not read, and it is a sound session (385 of 385 minutes, an ES reference 2 ms old at
+# the open). Requiring OK would refuse good sessions permanently — the same loss by the opposite mistake.
+# Sufficiency is the capture's own coverage, span and per-quarter floors.
 : > "$vp_tmp/calls"
-root=$(vp_archive 2026-10-01 20261001T195500Z)   # 15:55 ET — before the close, let alone close+10m
-out=$(vp_run 2026-10-01 "$root")
-want "18b an archive stamped before the close does not spend the session" "" "$(cat "$vp_tmp/calls")"
-has  "  and says so rather than failing the cron" "leaving the session unclaimed for the retry run" "$out"
+root=$(vp_archive 2026-09-30 20260930T201500Z); vp_verdict 2026-09-30 2026-09-30T20:03:25Z PARTIAL
+want "18b a PARTIAL grade does not refuse the session" "called session=2026-09-30 close=16:00" "$(vp_run 2026-09-30 "$root" >/dev/null; cat "$vp_tmp/calls")"
 
-# ---- 18c. no files at all is also not ready (a different condition, the same answer) ----------------------
+# ---- 18c. EMPTY is not. A graded-but-empty topic is an archive fact, and a record saying "no ES reference"
+# about the ARCHIVE rather than about the session would be permanent.
 : > "$vp_tmp/calls"
-root=$(vp_archive 2026-09-30)
-want "18c an empty archive partition does not spend the session" "" "$(vp_run 2026-09-30 "$root" >/dev/null; cat "$vp_tmp/calls")"
+root=$(vp_archive 2026-09-29 20260929T201500Z); vp_verdict 2026-09-29 2026-09-29T20:03:25Z EMPTY
+out=$(vp_run 2026-09-29 "$root")
+want "18c an EMPTY topic does not spend the session" "" "$(cat "$vp_tmp/calls")"
+has  "  and says which grade stopped it" "is graded EMPTY" "$out"
 
-# ---- 18d. the readiness gate is not vacuous: one minute past the deadline IS ready ------------------------
+# ---- 18d. a topic that reaches only to lunch has not been archived past the bell ---------------------------
 : > "$vp_tmp/calls"
-root=$(vp_archive 2026-09-28 20260928T201100Z)   # 16:11 ET = close + 11m
-want "18d close + 11m is ready, so 18b/18c are the gate and not an absent reader" "called session=2026-09-28 close=16:00" "$(vp_run 2026-09-28 "$root" >/dev/null; cat "$vp_tmp/calls")"
+root=$(vp_archive 2026-09-28 20260928T201500Z); vp_verdict 2026-09-28 2026-09-28T16:00:00Z
+out=$(vp_run 2026-09-28 "$root")
+want "18d a verdict reaching only to 12:00 ET does not spend the session" "" "$(cat "$vp_tmp/calls")"
+has  "  and names the time it reached" "reaches only 2026-09-28T16:00:00Z" "$out"
 
-# ---- 18e. a non-trading day is never captured, whatever the archive holds --------------------------------
+# ---- 18e. NO VERDICT: the cron waits, and waiting costs nothing because an unclaimed session stays
+# claimable. This is the case filename recency used to pass — the reviewer was right to refuse it.
 : > "$vp_tmp/calls"
-root=$(vp_archive 2026-11-26 20261126T211500Z)   # Thanksgiving. 21:15Z = 16:15 EST, PAST
-# close + 10m on purpose: at 21:00Z the readiness gate refused this case and the calendar was
-# never consulted, so deleting the trading-day gate left the assertion green. A case that passes
-# for the wrong reason is not a case.
-out=$(vp_run 2026-11-26 "$root")
-want "18e a holiday is not a session" "" "$(cat "$vp_tmp/calls")"
+root=$(vp_archive 2026-09-25 20260925T201500Z)   # files, stamped late, but the day was never graded
+out=$(vp_run 2026-09-25 "$root")
+want "18e an ungraded day is not captured by the cron" "" "$(cat "$vp_tmp/calls")"
+has  "  and the reason is the missing verdict, not a missing file" "verdict for this session has not been written" "$out"
+want "  it is a WAIT, not a failure: the retry must be able to run" 0 "$(vp_rc 2026-09-25 "$root")"
+
+# ---- 18f. ...and ALLOW_UNGRADED is the operator's way in, for a day the verifier missed (2026-10-01 is
+# one). It falls back to the weaker file-stamp test and must SAY so: a log line claiming a grade it does
+# not have is the same defect as a comment claiming more than the code supports.
+: > "$vp_tmp/calls"
+out=$(vp_run 2026-09-25 "$root" ALLOW_UNGRADED=true)
+want "18f ALLOW_UNGRADED captures the ungraded day" "called session=2026-09-25 close=16:00" "$(cat "$vp_tmp/calls")"
+has  "  and the log does not claim a verdict it does not have" "NO ARCHIVE VERDICT EXISTS" "$out"
+# and the fallback is still a gate, not a bypass: no file late enough, no capture
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-09-24 20260924T195500Z)   # 15:55 ET, before close + 10m
+want "  the fallback still refuses a session whose files predate the close" "" "$(vp_run 2026-09-24 "$root" ALLOW_UNGRADED=true >/dev/null; cat "$vp_tmp/calls")"
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-09-23)                     # no files at all
+want "  and one with no archived file at all" "" "$(vp_run 2026-09-23 "$root" ALLOW_UNGRADED=true >/dev/null; cat "$vp_tmp/calls")"
+
+# ---- 18g. AN UNREADABLE VERDICT IS A FAULT, NOT A WAIT. It will not fix itself, and "try again this
+# evening" forever is a gate that has become a delay nobody notices.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-09-22 20260922T201500Z)
+printf 'not json at all' > "$root/_manifest/completeness/2026-09-22.json"
+out=$(vp_run 2026-09-22 "$root")
+want "18g a corrupt verdict does not spend the session" "" "$(cat "$vp_tmp/calls")"
+want "  and exits non-zero, so it cannot be read as 'wait'" 2 "$(vp_rc 2026-09-22 "$root")"
+has  "  and alerts" "ALERT:" "$out"
+
+# ---- 18h. a non-trading day is never captured, whatever the archive holds --------------------------------
+: > "$vp_tmp/calls"
+# Labor Day 2026, a PAST weekday holiday, with an archive graded past its close. Both details are
+# deliberate and both were got wrong once: a stamp before close + 10m let the readiness gate refuse
+# the case so the calendar was never consulted, and a FUTURE holiday let the future-date refusal do
+# the same. A case that passes for the wrong reason is not a case.
+root=$(vp_archive 2026-09-07 20260907T201500Z); vp_verdict 2026-09-07 2026-09-07T20:15:00Z
+out=$(vp_run 2026-09-07 "$root")
+want "18h a holiday is not a session" "" "$(cat "$vp_tmp/calls")"
 has  "  and the gate is the archiver's own calendar" "is not a New York trading day" "$out"
 : > "$vp_tmp/calls"
-root=$(vp_archive 2026-10-03 20261003T210000Z)   # a Saturday
-want "18f a weekend is not a session either" "" "$(vp_run 2026-10-03 "$root" >/dev/null; cat "$vp_tmp/calls")"
+root=$(vp_archive 2026-10-03 20261003T211500Z); vp_verdict 2026-10-03 2026-10-03T21:15:00Z
+want "18i a weekend is not a session either" "" "$(vp_run 2026-10-03 "$root" >/dev/null; cat "$vp_tmp/calls")"
 
-# ---- 18g. A HALF DAY IS JUDGED AGAINST ITS OWN CLOSE. The coverage floors are fractions of the session
+# ---- 18j. A HALF DAY IS JUDGED AGAINST ITS OWN CLOSE. The coverage floors are fractions of the session
 # the capture is told about: 210 minutes scored against a 385-minute universe is 55%, and one thin
-# quarter sinks it — so a sound half-day sample would be rejected, forever, by a wrong close.
+# quarter sinks it — so a sound half-day sample would be rejected, permanently, by a wrong close.
 : > "$vp_tmp/calls"
-root=$(vp_archive 2026-11-27 20261127T181500Z)   # 13:15 ET = the half-day close + 15m
-want "18g the day after Thanksgiving closes at 13:00 and is scored against it" "called session=2026-11-27 close=13:00" "$(vp_run 2026-11-27 "$root" >/dev/null; cat "$vp_tmp/calls")"
-# ...and the readiness deadline moves with it: 13:15 ET would be three hours short of a 16:00 close.
-want "  the readiness deadline follows the same close (18g would be 'waiting' against 16:00)" 1 "$(grep -c 'session=2026-11-27' "$vp_tmp/calls")"
+# 2026-07-02, the early close before Independence Day, and the only one that has already happened —
+# a future half day would be refused by the future-date gate instead and prove nothing here.
+root=$(vp_archive 2026-07-02 20260702T171500Z); vp_verdict 2026-07-02 2026-07-02T17:15:00Z
+want "18j the early close before Independence Day closes at 13:00 and is scored against it" "called session=2026-07-02 close=13:00" "$(vp_run 2026-07-02 "$root" >/dev/null; cat "$vp_tmp/calls")"
+# ...and the close drives the readiness deadline too: 17:15Z is 13:15 ET, three hours short of 16:00.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-07-01 20260701T171500Z); vp_verdict 2026-07-01 2026-07-01T17:15:00Z
+want "  the same stamp on a FULL session is not past its close" "" "$(vp_run 2026-07-01 "$root" >/dev/null; cat "$vp_tmp/calls")"
 
-# ---- 18h. a missing capture is an ALERT, not a silent no-op: that is exactly how this study spent
-# twelve days and eight archived sessions producing nothing.
+# ---- 18k. AN UNREADABLE CALENDAR FAILS CLOSED. An earlier version substituted 16:00 and called that
+# recoverable; publication is permanent, so a half day scored against a guessed 16:00 is a sound
+# session rejected forever.
 : > "$vp_tmp/calls"
-root=$(vp_archive 2026-10-02 20261002T201500Z)
-out=$(VP_CALLS="$vp_tmp/calls" CAPTURE="$vp_tmp/does-not-exist.py" ARCHIVE_ROOT="$root" \
-      LEDGER="$vp_tmp/ledger-missing" LOG="$vp_tmp/log-missing" bash "$VPC" 2026-10-02 2>&1)
-rc=$?
-want "18h an uninstalled capture fails loudly (rc)" 2 "$rc"
-has  "  and alerts, because a cron that quietly does nothing is how bucket 0 stayed empty" "ALERT:" "$out"
+root=$(vp_archive 2026-07-02 20260702T201500Z); vp_verdict 2026-07-02 2026-07-02T20:15:00Z
+out=$(vp_run 2026-07-02 "$root" CALENDAR_DIR="$vp_tmp/no-calendar-here")
+want "18k an unreadable calendar does not spend the session" "" "$(cat "$vp_tmp/calls")"
+want "  and exits non-zero rather than guessing a close" 2 "$(vp_rc 2026-07-02 "$root" CALENDAR_DIR="$vp_tmp/no-calendar-here")"
+# ...and the stamp is past the FULL-session close as well, so a 16:00 fallback would have CAPTURED
+# this session rather than waiting: the refusal above is the calendar gate and nothing else.
+: > "$vp_tmp/calls"
+want "  with the calendar readable, the same fixture IS captured at 13:00" "called session=2026-07-02 close=13:00" "$(vp_run 2026-07-02 "$root" >/dev/null; cat "$vp_tmp/calls")"
+has  "  and alerts" "ALERT:" "$out"
 
-# ---- 18i. A FILE STILL BEING WRITTEN does not spend the session. The spot topics are archived every
-# ten minutes, so the capture runs while the archiver may be mid-write, and its reader raises PARTWAY
-# THROUGH a torn member — which its open-time guard does not catch. Half a real gzip, not an empty
-# file: an empty one fails at the first read too and would prove nothing about reading to the END.
+# ---- 18l. A FUTURE SESSION IS REFUSED. The shape of a date does not say it has happened, and an
+# operator's keystroke must not be able to claim a session that has not occurred.
 : > "$vp_tmp/calls"
-root=$(vp_archive 2026-09-25 20260925T201500Z)
-whole="$root/underlying.spx.index.price/dt=2026-09-25/underlying.spx.index.price.p0.0-1.dt20260925.20260925T201500Z.jsonl.gz"
+root=$(vp_archive 2027-01-04 20270104T211500Z); vp_verdict 2027-01-04 2027-01-04T21:15:00Z
+out=$(vp_run 2027-01-04 "$root")
+want "18l a future weekday is not captured even with a complete-looking archive" "" "$(cat "$vp_tmp/calls")"
+want "  and is a refusal, not a wait" 2 "$(vp_rc 2027-01-04 "$root")"
+has  "  naming today in New York" "is in the future" "$out"
+
+# ---- 18m. A FILE STILL BEING WRITTEN does not spend the session. The verdict is written once and the
+# spot topics keep being archived every ten minutes, so a member can be torn AFTER the day was graded.
+# Half a real gzip, not an empty file: an empty one fails at the first read too and would prove nothing
+# about reading to the END.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-09-21 20260921T201500Z); vp_verdict 2026-09-21 2026-09-21T20:03:25Z
+whole="$root/underlying.spx.index.price/dt=2026-09-21/underlying.spx.index.price.p0.0-1.dt20260921.20260921T201500Z.jsonl.gz"
 for i in $(seq 1 200); do printf 'CreateTime:0\tPartition:0\tSPX\t{"n":%s}\n' "$i"; done | gzip -c > "$whole"
 dd if="$whole" of="$whole.cut" bs=1 count=$(( $(wc -c < "$whole") / 2 )) 2>/dev/null
 mv "$whole.cut" "$whole"
-out=$(vp_run 2026-09-25 "$root")
-want "18i a torn index file does not spend the session" "" "$(cat "$vp_tmp/calls")"
-has  "  and it is reported as torn, not as a missing stamp" "does not decompress to its end" "$out"
+out=$(vp_run 2026-09-21 "$root")
+want "18m a torn index file does not spend the session, though the day is graded" "" "$(cat "$vp_tmp/calls")"
+has  "  and it is reported as torn, not as a grade or a stamp" "does not decompress to its end" "$out"
+want "  it is a WAIT: the archiver finishes writing within minutes" 0 "$(vp_rc 2026-09-21 "$root")"
 
-# ---- 18j. the torn test covers EVERY topic the capture reads, not just the index: a torn ES file
-# fails the capture's run exactly as an index one does.
+# ---- 18n. and the torn test covers every topic the capture reads, not just the index ---------------------
 : > "$vp_tmp/calls"
-root=$(vp_archive 2026-09-23 20260923T201500Z)
-es="$root/underlying.es.price/dt=2026-09-23/underlying.es.price.p0.0-1.dt20260923.20260923T201500Z.jsonl.gz"
+root=$(vp_archive 2026-09-18 20260918T201500Z); vp_verdict 2026-09-18 2026-09-18T20:03:25Z
+es="$root/underlying.es.price/dt=2026-09-18/underlying.es.price.p0.0-1.dt20260918.20260918T201500Z.jsonl.gz"
 for i in $(seq 1 200); do printf 'CreateTime:0\tPartition:0\tES\t{"n":%s}\n' "$i"; done | gzip -c > "$es"
 dd if="$es" of="$es.cut" bs=1 count=$(( $(wc -c < "$es") / 2 )) 2>/dev/null
 mv "$es.cut" "$es"
-want "18j a torn ES file does not spend the session either" "" "$(vp_run 2026-09-23 "$root" >/dev/null; cat "$vp_tmp/calls")"
+want "18n a torn ES file does not spend the session either" "" "$(vp_run 2026-09-18 "$root" >/dev/null; cat "$vp_tmp/calls")"
 
-# ---- 18k. and the torn test is not a blanket refusal: the SAME archive, whole, is ready. Without
-# this, 18i and 18j would also be produced by a gate that never says ready.
+# ---- 18o. an uninstalled capture is an ALERT, not a silent no-op: that is exactly how this study spent
+# twelve days and eight archived sessions producing nothing.
 : > "$vp_tmp/calls"
-root=$(vp_archive 2026-09-22 20260922T201500Z)
-want "18k an intact archive past the close is ready" "called session=2026-09-22 close=16:00" "$(vp_run 2026-09-22 "$root" >/dev/null; cat "$vp_tmp/calls")"
+root=$(vp_archive 2026-09-17 20260917T201500Z); vp_verdict 2026-09-17 2026-09-17T20:03:25Z
+out=$(VP_CALLS="$vp_tmp/calls" CAPTURE="$vp_tmp/does-not-exist.py" ARCHIVE_ROOT="$root" \
+      COMPLETENESS_DIR="$root/_manifest/completeness" LEDGER="$vp_tmp/ledger-x" \
+      LOG="$vp_tmp/log-x" bash "$VPC" 2026-09-17 2>&1)
+rc=$?
+want "18o an uninstalled capture fails loudly (rc)" 2 "$rc"
+has  "  and alerts, because a cron that quietly does nothing is how bucket 0 stayed empty" "ALERT:" "$out"
 
 echo
 [ "$FAILED" -eq 0 ] && { echo "test-archive-reset: ALL PASS"; exit 0; }
