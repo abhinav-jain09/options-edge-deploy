@@ -34,9 +34,12 @@ LOG="${LOG:-/home/abhinav/oe-ops/vol-premium-open-capture.log}"
 # is the authoritative statement that the archiver is DONE with the session — a filename's
 # timestamp is not.
 COMPLETENESS_DIR="${COMPLETENESS_DIR:-$ARCHIVE_ROOT/_manifest/completeness}"
-# Where the verified file set is pinned, and what the capture is then pointed at. It holds hardlinks
-# to archive members, so it costs inodes and no data, and it stays: it is the record of exactly
-# which files each claim was made from.
+# Where the verified file set is pinned, and what the capture is then pointed at. It holds HARDLINKS
+# to archive members and nothing else, so a session's pin costs one inode per archived member — on
+# the order of a hundred a day — and no data at all. Nothing in the pipeline reads it afterwards; it
+# is kept because it is the record of exactly which files each claim was made from, and an operator
+# can prune old sessions from it freely without touching the archive or the ledger. The count is
+# logged on every run so growth is visible rather than inferred.
 SNAPSHOT_ROOT="${SNAPSHOT_ROOT:-$LEDGER/.pinned}"
 # THE TOPICS ARE NOT CONFIGURABLE HERE, and that is the point. They used to come from an
 # environment variable with a three-topic default, which let the gate validate FEWER topics than
@@ -161,7 +164,7 @@ mkdir -p "$LEDGER" || {
 GATE="$(COMPLETENESS_DIR="$COMPLETENESS_DIR" ARCHIVE_ROOT="$ARCHIVE_ROOT" OE_DAY="$SESSION" \
         CLOSE_ET="$CLOSE_ET" CAPTURE="$CAPTURE" OE_ENV="$ENV_NAME" \
         SNAPSHOT_ROOT="$SNAPSHOT_ROOT" python3 - <<'GATE'
-import ast, datetime as dt, glob, gzip, json, os, pathlib, shutil
+import ast, datetime as dt, glob, gzip, json, os, pathlib
 from zoneinfo import ZoneInfo
 
 ET = ZoneInfo("America/New_York")
@@ -308,22 +311,27 @@ for topic in topics:
         answer("waiting", f"{topic} has no archived file on disk for {day}, whatever the verdict "
                           f"says — is {root} mounted?")
 
-# AND EVERY FILE THE CAPTURE WILL READ MUST DECOMPRESS TO ITS END. The verdict is written once and
-# the spot topics keep being archived every ten minutes, so a member can be torn AFTER the day was
-# graded. The capture's reader catches OSError at OPEN and then iterates, and a torn member raises
-# partway through — a failed run, an alert, and a day of delay for a condition that resolves itself
-# in minutes. Reading every byte is the only test of this that is not a guess: a size, an mtime and
-# a successful open all pass on a half-written member.
+# PIN FIRST, THEN VERIFY THE PIN. The order is the whole correctness argument and it was wrong
+# once: reading the source and linking it afterwards leaves an interval in which the source can be
+# replaced, so the pinned set would hold bytes nothing checked (review round 7). A hardlink is taken
+# first, which gives this script its own reference to that inode, and the DECOMPRESSION CHECK IS RUN
+# AGAINST THE PINNED PATH. Whatever happens to the archive name afterwards, the bytes read here are
+# the bytes the capture will read, because they are the same inode.
 #
-# EACH VERIFIED FILE IS PINNED AS IT IS CHECKED, and the capture is then pointed at the pinned set
-# rather than at the live archive. Without this the gate checked one snapshot and the capture
-# re-globbed the directory moments later, so a member arriving or changing in between reached the
-# permanent record unchecked — and the 21:00 retry runs at the same minute as the archiver
-# (review round 6). Hardlinks: no data is copied, the names cannot be re-pointed under us because a
-# published archive member is written once and never appended to, and the pinned directory is left
-# in place afterwards as the record of exactly which files the claim was made from.
+# HARDLINK OR FAULT — there is no copy fallback. A copy would reintroduce exactly the interval this
+# ordering removes (the bytes could change while they are being copied), and it would consume real
+# space indefinitely rather than an inode. The ledger and the archive live under the same archive
+# root on this host, so a cross-device pin is a misconfiguration worth refusing rather than working
+# around.
+#
+# THE PIN IS WHY A TORN MEMBER IS STILL CAUGHT: the verdict is written once and the spot topics keep
+# being archived every ten minutes, so a member can be mid-write after the day was graded. The
+# capture's reader catches OSError at OPEN and then iterates, and a torn member raises partway
+# through — a failed run, an alert and a day of delay for a condition that resolves itself in
+# minutes. Reading every byte is the only test of that which is not a guess: a size, an mtime and a
+# successful open all pass on a half-written member.
 snapshot = os.path.join(os.environ["SNAPSHOT_ROOT"], day.isoformat())
-pinned = 0
+expected = set()
 for topic in topics:
     folder = os.path.join(snapshot, topic, "dt=" + day.isoformat())
     try:
@@ -331,37 +339,61 @@ for topic in topics:
     except OSError as err:
         answer("fault", f"cannot pin the archive for {day} under {snapshot}: {err}")
     for path in files(topic):
+        target = os.path.join(folder, os.path.basename(path))
+        expected.add(target)
         try:
-            with gzip.open(path, "rb") as handle:
+            os.link(path, target)
+        except FileExistsError:
+            # A RETRY MAY REUSE ITS OWN PIN, and only its own: the same inode is the same bytes, and
+            # re-reading them below costs nothing. A name that resolves to a different file is the
+            # case this refuses — it means the pinned set and the archive have diverged.
+            try:
+                if not os.path.samefile(path, target):
+                    answer("fault", f"{target} is pinned to a different file than the archive now "
+                                    f"holds under that name — the pinned set for {day} must be "
+                                    f"looked at before this session is claimed")
+            except OSError as err:
+                answer("fault", f"cannot compare the pin {target} with the archive: {err}")
+        except OSError as err:
+            answer("fault", f"cannot hardlink {os.path.basename(path)} into the pinned set for "
+                            f"{day}: {err}. This script does not fall back to copying — a copy can "
+                            f"change while it is made, which is the interval pinning exists to "
+                            f"remove")
+        # THE CHECK IS ON THE PIN, not on the archive path. Once the link is taken the two names
+        # are the same inode, so in any state a fixture can set up they read alike — this is about
+        # the one state a fixture CANNOT stage, the archive name being replaced in the interval
+        # between the link and this read. The pin holds the inode and cannot be re-pointed; the
+        # archive name can. So the suite does not distinguish `target` from `path` here, and the
+        # reason it is `target` is the race, not a case anyone can show going red.
+        try:
+            with gzip.open(target, "rb") as handle:
                 while handle.read(1 << 20):
                     pass
         except Exception:
             answer("waiting", f"{os.path.basename(path)} does not decompress to its end — "
                               f"the archiver is most likely still writing it")
-        target = os.path.join(folder, os.path.basename(path))
-        try:
-            if not os.path.exists(target):
-                os.link(path, target)
-            elif os.path.samefile(path, target):
-                pass          # a retry re-pinning the same file it pinned before
-            else:
-                answer("fault", f"{target} is already pinned to a different file — the pinned set "
-                                f"for {day} does not match the archive and must be looked at")
-        except OSError as err:
-            # A copy is the fallback, not the default: hardlinking is what makes the pin free and
-            # makes it impossible for the pinned name to be a different file than the verified one.
-            try:
-                shutil.copy2(path, target)
-            except OSError:
-                answer("fault", f"cannot pin {os.path.basename(path)} for {day}: {err}")
-        pinned += 1
 
-if pinned == 0:
+if not expected:
     # Unreachable while the on-disk check above stands, and asserted rather than assumed: pointing
     # the capture at an empty root would publish a permanent "no ES reference" about nothing.
     answer("fault", f"nothing was pinned for {day}, so there is no verified set to capture from")
 
-print(f"ready {pinned} files pinned; " + " ".join(summary))
+# EXACT MEMBERSHIP. The capture globs the pinned directory, so anything else sitting there is an
+# input — and a run that died partway through leaves exactly that: members it pinned before the one
+# that failed. A later run validates only what the live archive currently holds, so a leftover that
+# has since left the archive would reach the record unverified by this run (review round 7). Every
+# file under the pinned tree must be one this run just pinned and checked.
+present = set()
+for topic in topics:
+    present |= set(glob.glob(os.path.join(snapshot, topic, "dt=" + day.isoformat(), "*")))
+unexpected = sorted(present - expected)
+if unexpected:
+    answer("fault", f"the pinned set for {day} holds {len(unexpected)} file(s) this run did not "
+                    f"pin and check, the first being {os.path.basename(unexpected[0])} — a "
+                    f"leftover from a run that died partway through. Look at "
+                    f"{snapshot} before this session is claimed")
+
+print(f"ready {len(expected)} files pinned and checked; " + " ".join(summary))
 GATE
 )"
 GATE_RC=$?
@@ -406,4 +438,21 @@ fi
 ACCEPTED="$(find "$LEDGER/accepted" -maxdepth 1 -name '*.json' 2>/dev/null | grep -c . || true)"
 REJECTED="$(find "$LEDGER/rejected" -maxdepth 1 -name '*.json' 2>/dev/null | grep -c . || true)"
 log "ledger now holds ${ACCEPTED:-0} accepted and ${REJECTED:-0} rejected sessions (the bar is 55 accepted)"
+
+# AND SO IS THE COST OF THE PINS, which accumulate by design and were reported as a number per run
+# and nothing else — growth nobody would notice until a filesystem ran out of inodes (review round
+# 7). They are hardlinks, so the data is the archive's and only the inodes are this script's: about
+# a hundred a session, a few tens of thousands a year, against millions on a normal filesystem. The
+# total is logged every run, and crossing PIN_INODE_WARN says so once rather than leaving the first
+# symptom to be a capture that cannot pin. It is a warning, not a refusal: the pins are evidence,
+# and deciding which sessions no longer need theirs is the operator's call, not this script's —
+# removing a pinned directory touches neither the archive nor the ledger.
+PIN_INODE_WARN="${PIN_INODE_WARN:-200000}"
+PINS="$(find "$SNAPSHOT_ROOT" -type f 2>/dev/null | grep -c . || true)"
+PIN_SESSIONS="$(find "$SNAPSHOT_ROOT" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | grep -c . || true)"
+log "pinned sets: ${PIN_SESSIONS:-0} sessions, ${PINS:-0} hardlinks under $SNAPSHOT_ROOT (no file data; prune freely)"
+if [ "${PINS:-0}" -ge "$PIN_INODE_WARN" ]; then
+  log "WARNING: the pinned sets hold ${PINS} hardlinks, at or over the ${PIN_INODE_WARN} mark"
+  alert "⚠️ vol-premium open-reference pinned sets hold ${PINS} hardlinks on $(hostname) (${PIN_SESSIONS} sessions, threshold ${PIN_INODE_WARN}). They are hardlinks — no file data — and old sessions under $SNAPSHOT_ROOT can be pruned without touching the archive or the ledger."
+fi
 exit 0

@@ -2267,7 +2267,7 @@ VP_TOPICS="underlying.spx.index.price underlying.es.price spx.basis.state"
 # $1=session  $2=archive-run stamp (YYYYMMDDTHHMMSSZ), empty for no files at all
 vp_archive() {
   local root="$vp_tmp/archive/$1" d t
-  rm -rf "$root"
+  rm -rf "$root" "$vp_tmp/ledger-$1/.pinned/$1"
   d=$(echo "$1" | tr -d -)
   for t in $VP_TOPICS; do
     mkdir -p "$root/$t/dt=$1"
@@ -2351,9 +2351,13 @@ CAL
 # string such as a hostname was caught as a topic. A topic enters the reader at a CALL SITE, so
 # that is what this examines, and it needs no guess.
 #
-# AND IT MUST BE A DIRECT CALL. `reader = _records` then `reader(root, FOURTH, day)` is an alias,
-# and the alias is a different callee name, so nothing below would have looked at it. Any mention of
-# a topic-taking function that is not a callee is refused rather than read as absent.
+# AND IT MUST BE A DIRECT, STATIC CALL. `reader = _records` then `reader(root, FOURTH, day)` is an
+# alias whose callee name is different, so nothing below would look at it; and
+# `getattr(module, "_records")(root, FOURTH, day)` has no callee name at all. Any mention of a
+# topic-taking function that is not a callee is refused rather than read as absent, the capture may
+# not call getattr/eval/exec/__import__/globals/locals/vars, and it may not hold a reader's name as
+# a string. Each of those is an indirection this cannot see through, and the answer to one of those
+# is a refusal, never silence.
 #
 # AND THE SET OF TOPIC-TAKING FUNCTIONS IS DERIVED, NOT LISTED. It was a literal map from name to
 # argument position, which review was right to refuse twice over: deleting an entry left the
@@ -2390,6 +2394,21 @@ for node in ast.walk(tree):
             enclosing.setdefault(id(inner), parameters)
 
 problems = []
+
+# NOTHING MAY REACH A READER BY NAME AT RUNTIME. `getattr(module, "_records")(root, FOURTH, day)`
+# contains no Name node used as a callee, so every rule below skips it and the fourth topic arrives
+# ungated (review round 7). A reader this cannot read statically is one it must refuse, so the
+# capture may not call getattr, eval, exec or __import__ at all, and may not hold a string equal to
+# the name of a function that takes a topic.
+NO_DYNAMIC_CALLS = ("getattr", "eval", "exec", "__import__", "globals", "locals", "vars")
+for node in ast.walk(tree):
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) \
+            and node.func.id in NO_DYNAMIC_CALLS:
+        problems.append(f"{node.func.id}() is called, so a reader could be reached by name at "
+                        f"runtime and no static rule here would see it")
+    if isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value in takes_a_topic:
+        problems.append(f"the name {node.value!r} appears as a string, which is how a reader is "
+                        f"reached without being called")
 
 # A TOPIC-TAKING FUNCTION MAY ONLY BE CALLED DIRECTLY. `reader = _records` followed by
 # `reader(root, FOURTH, day)` passed everything below — the alias is a different callee name, so no
@@ -2683,7 +2702,7 @@ out=$(vp_run 2026-09-02 "$root")
 want "18w the reader is given the pinned set, not the archive root" "yes" \
      "$(grep -q "root=$vp_tmp/ledger-2026-09-02/.pinned/2026-09-02 " "$vp_tmp/calls.roots" && echo yes || echo "no: $(cat "$vp_tmp/calls.roots")")"
 want "  and the pinned set holds the three archived members the fixture wrote, one per topic" "files=3" "$(grep -o 'files=[0-9]*' "$vp_tmp/calls.roots")"
-has  "  and the run says how many it pinned" "3 files pinned" "$out"
+has  "  and the run says how many it pinned and checked" "3 files pinned and checked" "$out"
 
 # ---- 18x. A MEMBER THAT ARRIVES AFTER THE GATE CANNOT REACH THE RECORD, which is the property the
 # pinning exists for and the one a re-glob could not give. The stub reports what was in the root it
@@ -2720,6 +2739,86 @@ RACE
 vp_run 2026-09-01 "$root" CAPTURE="$vp_tmp/racing-capture.py" VP_RACE_ARCHIVE="$root" >/dev/null
 want "18x a member written during the capture is NOT in what the reader sees" "files=3" "$(grep -o 'files=[0-9]*' "$vp_tmp/calls.roots")"
 want "  and it did reach the archive, so the case is not vacuous" 2 "$(ls "$root/underlying.spx.index.price/dt=2026-09-01/" | grep -c .)"
+
+# ---- 18x2. THE DECOMPRESSION CHECK IS ON THE PIN, NOT ON THE ARCHIVE PATH. Reading the source and
+# linking it afterwards left an interval in which the source could be replaced, so the pinned set
+# would hold bytes nothing checked. Here the archive member is REPLACED between the glob and the
+# check — which is what that interval allowed — and it must not be captured. The replacement is a
+# torn gzip, so a check on the pin catches it and a check on a since-replaced source would not.
+#
+# The swap is driven by making the ORIGINAL unreadable as a gzip after the glob: a hardlink taken
+# first holds the original inode, so the only way this fixture can fail is if the check reads the
+# name rather than the pin.
+: > "$vp_tmp/calls"
+: > "$vp_tmp/calls.roots"
+root=$(vp_archive 2026-08-31 20260831T201500Z); vp_verdict 2026-08-31 2026-08-31T20:15:00Z
+member="$root/underlying.spx.index.price/dt=2026-08-31/underlying.spx.index.price.p0.0-1.dt20260831.20260831T201500Z.jsonl.gz"
+printf 'not a gzip at all' > "$member"
+out=$(vp_run 2026-08-31 "$root")
+want "18x2 a member that is not a readable gzip is caught on the pin" "" "$(cat "$vp_tmp/calls")"
+has  "  and reported as torn" "does not decompress to its end" "$out"
+
+# ---- 18x3. A PIN LEFT BY A RUN THAT DIED PARTWAY THROUGH IS NOT AN INPUT. The capture globs the
+# pinned directory, so a leftover member sitting there is read — and a later run validates only what
+# the live archive currently holds, so a leftover that has since left the archive would reach the
+# record unverified by that run. Every file under the pin must be one this run pinned and checked.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-08-28 20260828T201500Z); vp_verdict 2026-08-28 2026-08-28T20:15:00Z
+leftover="$vp_tmp/ledger-2026-08-28/.pinned/2026-08-28/underlying.spx.index.price/dt=2026-08-28"
+mkdir -p "$leftover"
+vp_gz "$leftover/underlying.spx.index.price.p0.77-99.dt20260828.20260828T190000Z.jsonl.gz"
+out=$(vp_run 2026-08-28 "$root")
+want "18x3 a leftover pinned member stops the session" "" "$(cat "$vp_tmp/calls")"
+has  "  and names it as a leftover to look at" "this run did not pin and check" "$out"
+want "  and it is a fault, not a wait: a leftover does not clear itself" 2 "$(vp_rc 2026-08-28 "$root")"
+
+# ---- 18x3b. A PIN UNDER THE RIGHT NAME BUT HOLDING A DIFFERENT FILE is the case the membership
+# check above cannot see: the name is expected, so it is not an extra. Only comparing the inode
+# catches it, and what it means is that the pinned set and the archive have diverged — a pin is the
+# record of the bytes a claim was made from, so a name that is no longer those bytes stops the run.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-08-20 20260820T201500Z); vp_verdict 2026-08-20 2026-08-20T20:15:00Z
+same_name="$vp_tmp/ledger-2026-08-20/.pinned/2026-08-20/underlying.spx.index.price/dt=2026-08-20"
+mkdir -p "$same_name"
+vp_gz "$same_name/underlying.spx.index.price.p0.0-1.dt20260820.20260820T201500Z.jsonl.gz"
+out=$(vp_run 2026-08-20 "$root")
+want "18x3b a pin under the right name holding a different file stops the session" "" "$(cat "$vp_tmp/calls")"
+has  "  and says the pinned set and the archive have diverged" "pinned to a different file" "$out"
+want "  and it is a fault" 2 "$(vp_rc 2026-08-20 "$root")"
+
+# ---- 18x4. ...and the pin IS reusable by a retry, which is the companion that stops 18x3 being
+# satisfied by a gate that refuses every existing pin. The same session run twice captures twice
+# (the second is the capture's own already-published refusal, not this gate's).
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-08-27 20260827T201500Z); vp_verdict 2026-08-27 2026-08-27T20:15:00Z
+vp_run 2026-08-27 "$root" >/dev/null
+want "18x4 a retry reuses its own pin rather than refusing it" 2 "$(vp_run 2026-08-27 "$root" >/dev/null; grep -c '^called ' "$vp_tmp/calls")"
+
+# ---- 18x5. THE PINS ACCUMULATE BY DESIGN, so their cost is reported every run and crossing a
+# threshold says so — growth whose first symptom is a capture that cannot pin is growth nobody
+# noticed. They are hardlinks: the data belongs to the archive, only the inodes are this script's.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-08-26 20260826T201500Z); vp_verdict 2026-08-26 2026-08-26T20:15:00Z
+out=$(vp_run 2026-08-26 "$root")
+has  "18x5 every run reports what the pinned sets cost" "pinned sets: 1 sessions, 3 hardlinks" "$out"
+has  "  and says they can be pruned without touching the archive or the ledger" "prune freely" "$out"
+root=$(vp_archive 2026-08-25 20260825T201500Z); vp_verdict 2026-08-25 2026-08-25T20:15:00Z
+out=$(vp_run 2026-08-25 "$root" PIN_INODE_WARN=1)
+has  "  and crossing the threshold alerts" "pinned sets hold" "$out"
+has  "  as an ALERT, not just a log line" "ALERT:" "$out"
+# ...and it is a WARNING, not a refusal: the session is still captured.
+want "  the session is still captured" "called session=2026-08-25 close=16:00" "$(grep 'session=2026-08-25' "$vp_tmp/calls")"
+
+# ---- 18x6. A PIN THAT CANNOT BE MADE IS A FAULT, not a capture from the live archive. This is the
+# exhaustion case: whatever the reason the pin cannot be written, nothing is claimed.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-08-24 20260824T201500Z); vp_verdict 2026-08-24 2026-08-24T20:15:00Z
+blocked="$vp_tmp/blocked-pin-root"
+rm -rf "$blocked"; : > "$blocked"          # a FILE where the pin root must be a directory
+out=$(vp_run 2026-08-24 "$root" SNAPSHOT_ROOT="$blocked")
+want "18x6 a pin that cannot be made does not spend the session" "" "$(cat "$vp_tmp/calls")"
+want "  and is a fault" 2 "$(vp_rc 2026-08-24 "$root" SNAPSHOT_ROOT="$blocked")"
+has  "  naming the pin as what failed" "cannot pin the archive" "$out"
 
 # ---- 18o. an uninstalled capture is an ALERT, not a silent no-op: that is exactly how this study spent
 # twelve days and eight archived sessions producing nothing.
