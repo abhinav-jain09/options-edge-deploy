@@ -105,20 +105,54 @@ for f in $wanted $sourced; do
     # is required to appear BEFORE the docker run that mounts the unit directory into the suite
     # container — which is the ordering the staging exists for. A cp after it stages nothing the
     # suite can see.
+    # THE COPY MUST BE THE WHOLE STATEMENT, not text that contains it. Matching `cp <src> <dst>`
+    # anywhere on a non-comment line passed for `echo "cp scripts/jenkins/market_calendar.py …"` —
+    # the reviewer demonstrated it — and for a Groovy string holding the same words. So the file is
+    # normalised to one statement per record, split on newlines and `;` only, and a record must BE
+    # the copy.
+    #
+    # `&&`, `||` and `|` are deliberately NOT separators here, so `false && cp <src> <dst>` is one
+    # statement that does not start with cp and is refused. That also refuses a legitimate
+    # `something && cp <src> <dst>`, which the job does not use — and if it ever does, this says so
+    # and someone updates it, which is the direction to fail in.
+    #
+    # WHAT THIS CANNOT DO, said plainly because the reviewer was right to press on it: prove the
+    # copy EXECUTES. `if false; then cp <src> <dst>; fi` satisfies any text rule. The effect check
+    # is in the suite itself — test-archive-reset.sh section 18 asserts that the capture and the
+    # calendar are installed beside the unit and usable, so a dependency the job fails to stage
+    # turns the suite red in the same build. This guard exists to catch the ordinary mistake early,
+    # with a message that names the file.
     staged=$(awk -v src="$home/$f" -v dst="$DIR/$f" -v mount="$DIR:/w:ro" '
-      # strip Groovy and shell comments, but only when the line STARTS with one: a trailing # inside
+      # Strip Groovy and shell comments, but only where the line STARTS with one: a trailing # inside
       # a quoted string is not a comment, and cutting there would corrupt real commands.
       { line = $0 }
       line ~ /^[[:space:]]*(\/\/|#)/ { next }
-      # join a backslash continuation onto the next line before matching
-      { gsub(/\\[[:space:]]*$/, "", line); joined = joined " " line }
+      # A backslash continuation belongs to the SAME statement as the line it continues; everything
+      # else starts a new one. Appending a newline for both split the two-line cp of the capture
+      # into two statements, neither of which was the copy.
+      # Keep this program free of apostrophes: it is single-quoted, so one ends it mid-comment.
+      {
+        continued = (line ~ /\\[[:space:]]*$/)
+        gsub(/\\[[:space:]]*$/, "", line)
+        joined = joined (carry ? " " : "\n") line
+        carry = continued
+      }
       END {
-        gsub(/[[:space:]]+/, " ", joined)
-        cp_at = index(joined, "cp " src " " dst)
-        mount_at = index(joined, mount)
-        if (cp_at == 0)            { print "absent"; exit }
-        if (mount_at == 0)         { print "no-suite-mount"; exit }
-        if (cp_at > mount_at)      { print "too-late"; exit }
+        # One statement per record. Only `;` joins the newlines already there.
+        gsub(/;/, "\n", joined)
+        n = split(joined, statement, "\n")
+        want = "cp " src " " dst
+        cp_at = 0
+        for (i = 1; i <= n; i++) {
+          line = statement[i]
+          gsub(/[[:space:]]+/, " ", line)
+          sub(/^ /, "", line); sub(/ $/, "", line)
+          if (line == want && cp_at == 0) { cp_at = i }
+          if (index(line, mount) > 0 && mount_at == 0) { mount_at = i }
+        }
+        if (cp_at == 0)       { print "absent"; exit }
+        if (mount_at == 0)    { print "no-suite-mount"; exit }
+        if (cp_at > mount_at) { print "too-late"; exit }
         print "ok"
       }' "$JF")
     case "$staged" in

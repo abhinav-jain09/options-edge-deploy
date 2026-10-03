@@ -2291,6 +2291,62 @@ vp_run() { # $1=session $2=archive root ; the rest are extra env assignments
 vp_rc() { vp_run "$@" >/dev/null 2>&1; echo $?; }
 : > "$vp_tmp/calls"
 
+# ---- 18z. THE EFFECT CHECK FOR THE DEPLOY JOB'S STAGING. scripts/ci/validate-archive-unit-
+# completeness.sh can only read the job definition as text, and no text rule can prove a `cp`
+# executes — `if false; then cp …; fi` satisfies every one of them. This runs INSIDE the container
+# the job mounts the unit directory into, so it is the staging's effect: if the job fails to stage
+# the capture or the calendar, these are the assertions that go red, in the same build.
+want "18z the capture is installed beside the unit" yes "$([ -r vol-premium-open-reference-capture.py ] && echo yes || echo no)"
+want "  and declares the three topics the gate reads off it" "underlying.spx.index.price underlying.es.price spx.basis.state" \
+     "$(python3 - <<'TOPICS' 2>/dev/null
+import ast, pathlib
+tree = ast.parse(pathlib.Path("vol-premium-open-reference-capture.py").read_text())
+found = {}
+for node in tree.body:
+    if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant):
+        for target in node.targets:
+            if isinstance(target, ast.Name) and target.id in ("INDEX", "ES", "BASIS"):
+                found[target.id] = node.value.value
+print(" ".join(found.get(name, "?") for name in ("INDEX", "ES", "BASIS")))
+TOPICS
+)"
+want "  the calendar is installed beside the unit" yes "$([ -r market_calendar.py ] && echo yes || echo no)"
+want "  and answers for a half day, which is what the close gate asks it" 13:00 \
+     "$(CALENDAR_DIR=. python3 - <<'CAL' 2>/dev/null
+import os, sys
+from datetime import date
+sys.path = [entry for entry in sys.path if entry not in ("", ".", os.getcwd())]
+sys.path.insert(0, ".")
+from market_calendar import MarketCalendar
+print(MarketCalendar().close_time(date(2026, 7, 2)).strftime("%H:%M"))
+CAL
+)"
+
+# ---- 18y. NO TOPIC MAY ENTER THE READER UNGATED. The gate reads INDEX, ES and BASIS off the
+# capture, and the reviewer was right that this alone does not cover a FOURTH input: a new constant,
+# or a topic name written inline at a call site, would be read by the capture and checked by
+# nothing. So the capture must contain NO topic-shaped string literal other than those three. A
+# reader that grows an input is then REFUSED rather than silently under-gated — which is the
+# property the wrapper may claim, and is weaker than "a fourth topic is automatically gated".
+want "18y the capture holds no topic-shaped literal beyond the three it declares" "" \
+     "$(python3 - <<'EXTRA' 2>/dev/null
+import ast, pathlib, re
+SHAPE = re.compile(r"^[a-z][a-z0-9]*(\.[a-z0-9][a-z0-9-]*){2,}$")
+source = pathlib.Path("vol-premium-open-reference-capture.py").read_text()
+tree = ast.parse(source)
+declared = set()
+for node in tree.body:
+    if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant):
+        for target in node.targets:
+            if isinstance(target, ast.Name) and target.id in ("INDEX", "ES", "BASIS"):
+                declared.add(node.value.value)
+extra = sorted({node.value for node in ast.walk(tree)
+                if isinstance(node, ast.Constant) and isinstance(node.value, str)
+                and SHAPE.match(node.value) and node.value not in declared})
+print(" ".join(extra))
+EXTRA
+)"
+
 # ---- 18a. a graded session whose every topic reaches past the close: captured ------------------------------
 : > "$vp_tmp/calls"
 root=$(vp_archive 2026-10-02 20261002T201500Z); vp_verdict 2026-10-02 2026-10-02T20:03:25Z
@@ -2504,6 +2560,47 @@ has  "  and the gate names the reader's topic, not its own list" "spx.basis.stat
 : > "$vp_tmp/calls"
 printf 'INDEX = 1\nES = 2\nBASIS = 3\n' > "$vp_tmp/bad-topics-capture.py"
 want "  a reader whose topic set is not three names is a fault" 2 "$(vp_rc 2026-09-09 "$root" CAPTURE="$vp_tmp/bad-topics-capture.py")"
+
+# ---- 18u. THE MODE IS A TOKEN, NOT A WORD FOUND IN THE SUMMARY. The graded and ungraded log lines
+# used to be chosen by searching the whole gate message for "UNGRADED", and a PARTIAL's verifier
+# reasons go into that message — so a reason containing the word would have made a graded run
+# describe itself as claimed on the weaker test. The reason here says exactly that.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-09-08 20260908T201500Z)
+vp_verdict_raw 2026-09-08 "{\"dt\":\"2026-09-08\",\"env\":\"prod\",\"topics\":[{\"topic\":\"underlying.spx.index.price\",\"status\":\"PARTIAL\",\"records\":1,\"max_event_time\":\"2026-09-08T20:15:00Z\",\"reasons\":[\"an UNGRADED-looking reason\"]},$(vp_entry underlying.es.price OK 2026-09-08T20:15:00Z),$(vp_entry spx.basis.state OK 2026-09-08T20:15:00Z)]}"
+out=$(vp_run 2026-09-08 "$root")
+want "18u a session whose PARTIAL reason contains the word is still captured" "called session=2026-09-08 close=16:00" "$(cat "$vp_tmp/calls")"
+has  "  and is reported as GRADED, from the gate's own mode token" "the archive is graded and every topic reaches past the close" "$out"
+has  "  with the reason still logged" "an UNGRADED-looking reason" "$out"
+# ...and the ungraded path still reports itself as ungraded, so the case above is not satisfied by a
+# wrapper that simply never says it took the weaker test.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-09-04 20260904T201500Z)
+out=$(vp_run 2026-09-04 "$root" ALLOW_UNGRADED=true)
+has  "  the ungraded path still says so" "NO ARCHIVE VERDICT EXISTS" "$out"
+
+# ---- 18v. A NAME ASSIGNED TWICE IS NOT DECLARED, for the same reason a topic graded twice is not
+# graded: keeping the last silently resolves a disagreement by file order.
+: > "$vp_tmp/calls"
+root=$(vp_archive 2026-09-03 20260903T201500Z); vp_verdict 2026-09-03 2026-09-03T20:15:00Z
+# Built FROM the recording stub, so the only difference from the passing case below is the second
+# assignment. A hand-written three-line reader fails too, but for the wrong reason: it records no
+# call because it is not the stub, so its companion could never pass.
+{ cat "$vp_tmp/stub-capture.py"; echo 'BASIS = "spx.basis.state.v2"'; } > "$vp_tmp/twice-capture.py"
+out=$(vp_run 2026-09-03 "$root" CAPTURE="$vp_tmp/twice-capture.py")
+want "18v a reader assigning a topic name twice is a fault" 2 "$(vp_rc 2026-09-03 "$root" CAPTURE="$vp_tmp/twice-capture.py")"
+has  "  naming the name it cannot resolve" "assigns BASIS more than once" "$out"
+want "  and nothing was captured" "" "$(cat "$vp_tmp/calls")"
+# the SAME file without that second assignment is accepted on the SAME fixture, so 18v is not
+# satisfied by a gate that refuses every reader or by a fixture something else rejects
+: > "$vp_tmp/calls"
+want "  without the second assignment the same fixture is captured" "called session=2026-09-03 close=16:00" "$(vp_run 2026-09-03 "$root" >/dev/null; cat "$vp_tmp/calls")"
+# ...and two names resolving to the SAME topic is a fault too: the gate would check one series
+# while reporting three.
+: > "$vp_tmp/calls"
+sed 's|^ES = .*|ES = "underlying.spx.index.price"|' "$vp_tmp/stub-capture.py" > "$vp_tmp/dup-capture.py"
+want "  two names for one topic is a fault" 2 "$(vp_rc 2026-09-03 "$root" CAPTURE="$vp_tmp/dup-capture.py")"
+want "  and nothing was captured for it" "" "$(cat "$vp_tmp/calls")"
 
 # ---- 18o. an uninstalled capture is an ALERT, not a silent no-op: that is exactly how this study spent
 # twelve days and eight archived sessions producing nothing.

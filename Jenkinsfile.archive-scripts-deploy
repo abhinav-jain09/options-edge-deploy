@@ -174,18 +174,21 @@ pipeline {
           # lowered with it, so every archive deploy from 09-13 on was refused and nothing merged since reached .252.
           # Proof, run as this job runs it (docker python:3-slim, archive dir :ro): b8a08906 = 567 PASS, and main at
           # 819d98c9 = 566 PASS, ALL PASS, differing by that single line and no other.
-          # 626, raised from 566 with section 18 and the four new section-15 assertions. Section 18 covers
+          # 641, raised from 566 with section 18 and the four new section-15 assertions. Section 18 covers
           # the vol-premium open-reference capture's wrapper, whose every gate protects an IRREVERSIBLE act
           # (the capture claims a session under .published/ and refuses to republish it): the archive
           # verdict must exist, be about THIS day and THIS environment, grade no topic twice, and grade
           # every topic the capture reads with a status on the allow-list (OK or PARTIAL — CORRUPT is a
           # fault, and MISSING/LEGACY/EMPTY/anything unrecognised waits) that reaches past the close; the
           # files must be on disk NOW whatever the verdict says, and decompress to their end; the gated
-          # topic set is read off the READER so it cannot be shrunk from outside; and a non-trading day, a
-          # future date, an unreadable calendar and an uninstalled capture are all refused. ALLOW_UNGRADED
-          # is the operator's way in for a day the verifier missed and says in the log that it took the
-          # weaker test. Each is falsified by a mutation of the gate it names.
-          [ "$ran" -ge 626 ] || { echo "only $ran assertions ran — the suite did not execute fully" >&2; exit 1; }
+          # topic set is read off the READER, with 18y refusing any topic-shaped literal in it beyond the
+          # three so an ungated input cannot ship; and a non-trading day, a future date, an unreadable
+          # calendar and an uninstalled capture are all refused. 18z is the EFFECT check for this job's
+          # own staging, which no text rule can make: it runs inside this container and fails if the
+          # capture or the calendar was not staged into the mounted directory. ALLOW_UNGRADED is the
+          # operator's way in for a day the verifier missed and says in the log that it took the weaker
+          # test. Each is falsified by a mutation of the gate it names.
+          [ "$ran" -ge 641 ] || { echo "only $ran assertions ran — the suite did not execute fully" >&2; exit 1; }
 
           # The A5.8 evaluator's own suite. It builds its corpus, so it reaches no NAS and no broker.
           # Installing an evaluator whose acceptance predicate is untested would ship the one thing

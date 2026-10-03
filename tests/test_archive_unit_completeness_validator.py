@@ -88,9 +88,15 @@ class StagingCheckTest(unittest.TestCase):
         def move_it_later(text: str) -> str:
             command = _cp("vol-premium-open-reference-capture.py")
             text = text.replace(command, "")
-            # put it after the docker run that mounts the unit directory
-            anchor = next(l for l in text.split("\n") if MOUNT in l)
-            return text.replace(anchor, anchor + "\n" + command.rstrip("\n"))
+            lines = text.split("\n")
+            at = next(i for i, l in enumerate(lines) if MOUNT in l)
+            # The mount sits inside a continued `docker run …` statement, so the copy must go after
+            # that statement ENDS — otherwise it becomes part of it and the guard reports it absent,
+            # which is true but is not the ordering this case is about.
+            while lines[at].rstrip().endswith("\\"):
+                at += 1
+            lines.insert(at + 1, command.rstrip("\n"))
+            return "\n".join(lines)
         r = self._run(move_it_later)
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn("STAGED TOO LATE", r.stderr)
@@ -123,6 +129,40 @@ class StagingCheckTest(unittest.TestCase):
         r = self._run(lambda t: t.replace(" vol-premium-open-reference-capture.py\"", "\"", 1))
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn("NOT IN UNIT", r.stderr)
+
+
+    def test_inert_text_does_not_satisfy_the_staging_check(self) -> None:
+        """THE REVIEWER'S DECOY, and two of its relatives. Each leaves the exact characters
+        `cp <source> <dest>` in the job definition on a line that is not a comment, and in each the
+        copy does not happen. The guard requires the STATEMENT to be the copy."""
+        name = "market_calendar.py"
+        command = _cp(name)
+        body = command.strip()
+        for label, replacement in [
+                ("echoed", f'          echo "{body}"\n'),
+                ("a Groovy string", f'          def unused = "{body}"\n'),
+                ("guarded by false", f"          false && {body}\n"),
+                ("a different destination", command.replace(
+                    f"scripts/ops/archive/{name}", f"scripts/ops/archive/{name}.bak")),
+        ]:
+            with self.subTest(decoy=label):
+                r = self._run(lambda t, rep=replacement: t.replace(command, rep))
+                self.assertEqual(r.returncode, 1, label + r.stdout + r.stderr)
+                self.assertIn("NOT STAGED FOR THE SUITE", r.stderr, label)
+
+    def test_the_awk_program_contains_no_apostrophe(self) -> None:
+        """The staging check is an awk program delimited by single quotes, so ONE apostrophe inside
+        it — in a comment, in the word "jobs" — closes the program early and hands the remainder to
+        the shell. That happened while this guard was being written: bash reported an unmatched
+        backtick and the guard produced nothing while appearing to run. The program is taken from
+        its opening quote to the `' "$JF"` that closes it, and must hold no quote of its own."""
+        guard = (ROOT / GUARD).read_text()
+        opening = guard.index("staged=$(awk ")
+        opening = guard.index("'", opening) + 1
+        closing = guard.index("' \"$JF\"", opening)
+        program = guard[opening:closing]
+        self.assertIn("cp ", program, "the awk program was not located")
+        self.assertNotIn("'", program)
 
 
 if __name__ == "__main__":

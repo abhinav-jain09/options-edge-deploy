@@ -50,21 +50,34 @@ echo "python3: $(python3 -V 2>&1)   archive: $ARCHIVE_ROOT"
 echo
 printf '%-12s  %-9s %7s %7s %6s   %-9s %7s %7s %6s\n' \
        '' 'BEFORE' 'undated' 'pairs' 'cov%' 'AFTER' 'undated' 'pairs' 'cov%'
+# A RUN THAT DID NOT HAPPEN IS NOT A MEASUREMENT. An earlier version printed "?" for a reader that
+# failed and exited 0 anyway, so a table of question marks could be read as evidence. Every failure
+# is counted, each reader's stderr is kept, and the script exits non-zero at the end if anything
+# failed — the table still prints, because which session failed is the useful part.
+failures=0
 for session in "$@"; do
   row=""
   for reader in "$BEFORE" "$CAPTURE"; do
-    record="$(python3 "$reader" --session "$session" --archive-root "$ARCHIVE_ROOT" 2>/dev/null)"
-    row="$row$(printf '%s' "$record" | python3 -c '
+    record="$(python3 "$reader" --session "$session" --archive-root "$ARCHIVE_ROOT" \
+              2>>"$WORK/reader-errors.txt")"
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+      failures=$((failures + 1))
+      row="$row$(printf '   %-9s %7s %7s %6s' "rc=$rc" '-' '-' '-')"
+      continue
+    fi
+    cell="$(printf '%s' "$record" | python3 -c '
 import json, sys
-try:
-    r = json.load(sys.stdin)
-except ValueError:
-    print("   %-9s %7s %7s %6s" % ("?", "?", "?", "?"), end="")
-    raise SystemExit
+r = json.load(sys.stdin)
 print("   %-9s %7d %7d %5.0f%%" % ("ACCEPTED" if r["accepted"] else "rejected",
                                    r["indexUndatedRecords"], r["offsetPairs"],
                                    100 * r["offsetCoveredFraction"]), end="")
-' 2>/dev/null)"
+' 2>>"$WORK/reader-errors.txt")"
+    if [ -z "$cell" ]; then
+      failures=$((failures + 1))
+      cell="$(printf '   %-9s %7s %7s %6s' 'unreadable' '-' '-' '-')"
+    fi
+    row="$row$cell"
   done
   printf '%-12s%s\n' "$session" "$row"
 done
@@ -76,3 +89,9 @@ echo "because fromisoformat accepts nanoseconds there — which is exactly why t
 echo "suite could not see this bug, and is itself worth seeing."
 echo
 echo "Neither reader was given --out, so nothing was claimed. Scratch: $WORK"
+if [ "$failures" -ne 0 ]; then
+  echo
+  echo "$failures reader run(s) FAILED — the table above is not a complete measurement." >&2
+  [ -s "$WORK/reader-errors.txt" ] && sed 's/^/  | /' "$WORK/reader-errors.txt" >&2
+  exit 4
+fi

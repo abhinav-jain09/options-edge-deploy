@@ -37,10 +37,15 @@ COMPLETENESS_DIR="${COMPLETENESS_DIR:-$ARCHIVE_ROOT/_manifest/completeness}"
 # THE TOPICS ARE NOT CONFIGURABLE HERE, and that is the point. They used to come from an
 # environment variable with a three-topic default, which let the gate validate FEWER topics than
 # the capture reads while the capture went on reading all three from its own constants — an
-# override that could shrink the check and still spend the claim (review round 2). The gate now
-# reads INDEX, ES and BASIS out of the capture module itself, so the set cannot drift from the
-# reader by construction, and a capture that grows a fourth topic gates it without anyone
-# remembering to. The names are reported in the log.
+# override that could shrink the check and still spend the claim (review round 2). The gate reads
+# INDEX, ES and BASIS out of the capture itself, so the gated set cannot drift from the declared
+# one, and the names are reported in the log.
+#
+# IT DOES NOT FOLLOW THAT A FOURTH INPUT WOULD BE GATED — this comment said so once and it was not
+# true. Reading three names cannot discover a fourth, whether a new constant or a topic written
+# inline at a call site. What holds instead is a REFUSAL: test-archive-reset.sh section 18y fails if
+# the capture contains any topic-shaped string literal beyond these three, so a reader that grows an
+# input cannot reach production silently — it has to be gated here first.
 # OPERATOR-ONLY, AND NEVER IN THE CRONTAB. A session whose verdict was never written cannot be
 # gated on one, and that is not hypothetical: the verifier did not run the night of 2026-10-01, so
 # 2026-10-02 is graded and 2026-10-01 is not, while both are sound sessions by the capture's own
@@ -193,11 +198,22 @@ declared = {}
 for node in tree.body:
     if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant):
         for target in node.targets:
-            if isinstance(target, ast.Name):
+            if isinstance(target, ast.Name) and target.id in ("INDEX", "ES", "BASIS"):
+                # ASSIGNED TWICE IS NOT DECLARED, for the same reason a topic graded twice is not
+                # graded: keeping the last silently resolves a disagreement by file order.
+                if target.id in declared:
+                    answer("fault", f"the capture assigns {target.id} more than once at module "
+                                    f"level, so which topic it reads is not stated")
                 declared[target.id] = node.value.value
 topics = [declared.get(name) for name in ("INDEX", "ES", "BASIS")]
 if not all(isinstance(topic, str) and topic for topic in topics):
     answer("fault", f"the capture does not declare INDEX, ES and BASIS as topic names: {topics!r}")
+if len(set(topics)) != len(topics):
+    answer("fault", f"the capture declares the same topic twice: {topics!r}")
+# WHAT THIS DOES NOT ESTABLISH, stated because the gate must not be read as more than it is: that
+# the capture READS only these three. This parses three names; it does not trace the reader. The
+# suite is what binds the two together — 18y refuses any topic-shaped literal in the capture beyond
+# these, so an ungated input fails the build rather than slipping past this gate.
 
 
 def files(topic):
@@ -289,9 +305,9 @@ def from_the_file_stamps():
 
 
 if os.path.isfile(verdict_path):
-    summary = from_the_verdict()
+    mode, summary = "graded", from_the_verdict()
 elif allow_ungraded:
-    summary = from_the_file_stamps()
+    mode, summary = "ungraded", from_the_file_stamps()
 else:
     answer("waiting", "the archive verdict for this session has not been written yet")
 
@@ -320,7 +336,7 @@ for topic in topics:
             answer("waiting", f"{os.path.basename(path)} does not decompress to its end — "
                               f"the archiver is most likely still writing it")
 
-print("ready " + " ".join(summary))
+print("ready " + mode + " " + " ".join(summary))
 GATE
 )"
 GATE_RC=$?
@@ -333,11 +349,20 @@ GATE_STATE="${GATE%% *}"
 GATE_WHY="${GATE#* }"
 case "$GATE_STATE" in
   ready)
-    case "$GATE_WHY" in
-      *UNGRADED*)
-        log "$SESSION: NO ARCHIVE VERDICT EXISTS and ALLOW_UNGRADED=true, so this session is claimed on the weaker file-stamp test alone ($GATE_WHY)" ;;
+    # The gate's second word is the MODE and nothing else; the summary follows it. Deciding this by
+    # searching the whole message for "UNGRADED" meant a PARTIAL whose verifier reason happened to
+    # contain that word would have made a graded run describe itself as ungraded.
+    GATE_MODE="${GATE_WHY%% *}"
+    GATE_SUMMARY="${GATE_WHY#* }"
+    case "$GATE_MODE" in
+      graded)
+        log "$SESSION: the archive is graded and every topic reaches past the close ($GATE_SUMMARY)" ;;
+      ungraded)
+        log "$SESSION: NO ARCHIVE VERDICT EXISTS and ALLOW_UNGRADED=true, so this session is claimed on the weaker file-stamp test alone ($GATE_SUMMARY)" ;;
       *)
-        log "$SESSION: the archive is graded and every topic reaches past the close ($GATE_WHY)" ;;
+        log "FATAL: the readiness gate said ready in a mode this script does not know ('$GATE_MODE') — the session is NOT claimed"
+        alert "🚨 vol-premium open-reference readiness gate returned an unknown mode '$GATE_MODE' on $(hostname) for $SESSION. The session is NOT claimed."
+        exit 2 ;;
     esac ;;
   waiting)
     log "$SESSION: not ready — $GATE_WHY; leaving the session unclaimed for the retry run"
