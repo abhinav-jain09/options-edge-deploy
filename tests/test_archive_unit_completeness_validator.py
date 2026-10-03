@@ -101,6 +101,8 @@ class StagingCheckTest(unittest.TestCase):
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn("STAGED TOO LATE", r.stderr)
 
+    VERIFIER = "verify-permitted-tree.sh"
+
     def test_a_staged_copy_that_is_not_declared_to_the_tree_verifier_is_caught(self) -> None:
         """THE BUG THE FIRST REAL INSTALL FOUND. Both staged copies are gitignored where they land,
         and verify-permitted-tree.sh refuses ANY ignored path it was not told to expect. #1125 added
@@ -114,6 +116,52 @@ class StagingCheckTest(unittest.TestCase):
                 self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
                 self.assertIn("STAGED BUT NOT DECLARED", r.stderr)
                 self.assertIn(name, r.stderr)
+
+    def test_the_declaration_must_be_the_verifiers_own_argument(self) -> None:
+        """A SUBSTRING IS NOT A DECLARATION, which was the first version of this check: the literal
+        anywhere in the job satisfied it, so `echo --allow-ignored <path>` passed the guard while the
+        real invocation went without and the install still stopped."""
+        name = "vol-premium-open-reference-capture.py"
+        declaration = f" --allow-ignored scripts/ops/archive/{name}"
+
+        def echo_it_instead(text: str) -> str:
+            text = text.replace(declaration, "")
+            lines = text.split("\n")
+            at = next(i for i, l in enumerate(lines) if self.VERIFIER in l)
+            lines.insert(at, f"          sh 'echo{declaration}'")
+            return "\n".join(lines)
+
+        r = self._run(echo_it_instead)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("STAGED BUT NOT DECLARED", r.stderr)
+
+    def test_a_declaration_for_a_neighbouring_path_does_not_count(self) -> None:
+        """`--allow-ignored <path>.bak` contains `--allow-ignored <path>`, so declaring the wrong
+        file satisfied the check until the whole token had to match. The token ends at a space or at
+        the quote closing the sh step, since the real declaration is the last argument on its
+        line."""
+        name = "vol-premium-open-reference-capture.py"
+        r = self._run(lambda t: t.replace(
+            f"--allow-ignored scripts/ops/archive/{name}",
+            f"--allow-ignored scripts/ops/archive/{name}.bak"))
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("STAGED BUT NOT DECLARED", r.stderr)
+
+    def test_the_declarations_may_be_in_any_order(self) -> None:
+        """The companion: without it, the two cases above would also be produced by a check that
+        only ever accepts one exact spelling of the whole argument list."""
+        first = "--allow-ignored scripts/ops/archive/market_calendar.py"
+        second = "--allow-ignored scripts/ops/archive/vol-premium-open-reference-capture.py"
+        r = self._run(lambda t: t.replace(f"{first} {second}", f"{second} {first}"))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_a_job_with_no_tree_verifier_says_so(self) -> None:
+        """A guard that defers to a gate must notice the gate going away, rather than passing on a
+        premise that no longer holds."""
+        r = self._run(lambda t: "\n".join(
+            l for l in t.split("\n") if self.VERIFIER not in l))
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("CANNOT CHECK THE DECLARATION", r.stderr)
 
     def test_the_ordering_the_guard_relies_on_is_asserted_not_assumed(self) -> None:
         """If the job stops mounting the unit directory into a container, the ordering test is

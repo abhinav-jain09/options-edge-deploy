@@ -176,8 +176,25 @@ for f in $wanted $sourced; do
         # A staged copy is gitignored where it lands, and verify-permitted-tree.sh refuses any
         # ignored path it was not told to expect. Staging a file without declaring it stops the
         # first REAL install — never a tests-only run, which skips that stage.
-        if (index(joined, "--allow-ignored " dst) == 0) { print "ok-but-undeclared"; exit }
-        print "ok"
+        #
+        # THE DECLARATION MUST BE AN ARGUMENT TO THAT VERIFIER, in the same statement that runs it.
+        # Looking for the text anywhere in the file was the first version of this and review was
+        # right to refuse it: `echo --allow-ignored <path>` satisfied it while the real invocation
+        # went without, so the guard could pass and the install still stop. The statement list built
+        # above is reused, so the same normalisation applies — comments gone, continuations joined.
+        verifier_at = 0
+        for (i = 1; i <= n; i++) {
+          line = statement[i]
+          gsub(/[[:space:]]+/, " ", line)
+          if (index(line, "verify-permitted-tree.sh") > 0) {
+            verifier_at = i
+            bounded = line " "
+            gsub(/[\047"]/, " ", bounded)
+            if (index(bounded, "--allow-ignored " dst " ") > 0) { print "ok"; exit }
+          }
+        }
+        if (verifier_at == 0) { print "no-verifier"; exit }
+        print "ok-but-undeclared"
       }' "$JF")
     case "$staged" in
       ok) : ;;
@@ -186,6 +203,9 @@ for f in $wanted $sourced; do
         fails=$((fails+1)) ;;
       ok-but-undeclared)
         echo "STAGED BUT NOT DECLARED: $f is copied into $DIR by $JF, where it is gitignored, but no '--allow-ignored $DIR/$f' is passed to verify-permitted-tree.sh — that verifier refuses any ignored path it was not told to expect, so the first real install would stop at it (and a tests-only run would not, because it skips that stage)" >&2
+        fails=$((fails+1)) ;;
+      no-verifier)
+        echo "CANNOT CHECK THE DECLARATION: $JF has no statement running verify-permitted-tree.sh, so the gate this guard defers to no longer exists — update the guard with the job" >&2
         fails=$((fails+1)) ;;
       no-suite-mount)
         echo "CANNOT CHECK STAGING: $JF has no docker run mounting $DIR:/w:ro, so the ordering this guard relies on no longer exists — update the guard with the job" >&2
