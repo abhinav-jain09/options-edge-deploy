@@ -2222,8 +2222,11 @@ done
 # ================= 18. the vol-premium open-reference capture's own gates ================================
 # The capture CLAIMS a session permanently (a marker under .published/, and a republish is refused), so
 # every gate below protects a session from being spent on an archive that could not answer for it, and
-# every one of them FAILS CLOSED: the only condition that exits 0 without capturing is one positively
-# established as retryable. The capture's own logic is tested in
+# every one of them FAILS CLOSED. Two kinds of condition exit 0 without capturing, and they are
+# different: one positively established as RETRYABLE (the day is not graded yet, a member is still
+# being written), where the retry run is expected to succeed; and one positively established as NOT A
+# SESSION AT ALL (a weekend, a holiday), where there is nothing to retry and nothing to lose. Every
+# other outcome is a fault with an alert and a non-zero exit. The capture's own logic is tested in
 # tests/test_vol_premium_open_reference_capture.py; what is tested here is the WRAPPER the crontab
 # invokes, which that suite never sees.
 VPC="$PWD/oe-vol-premium-open-capture.sh"
@@ -2240,6 +2243,15 @@ BASIS = "spx.basis.state"
 args = dict(zip(sys.argv[1::2], sys.argv[2::2]))
 with open(os.environ["VP_CALLS"], "a") as handle:
     handle.write(f"called session={args.get('--session')} close={args.get('--close-et')}\n")
+# The ROOT the wrapper hands the reader is the claim's evidence, so the stub records what it was
+# pointed at and what was there — in a file of its own, because every other case reads the call log
+# back whole and a second line there changes what they see.
+root = args.get("--archive-root") or ""
+seen = []
+for base, _dirs, names in os.walk(root):
+    seen += [os.path.join(os.path.relpath(base, root), name) for name in sorted(names)]
+with open(os.environ["VP_CALLS"] + ".roots", "a") as handle:
+    handle.write(f"root={root} files={len(seen)}\n")
 out = args.get("--out")
 if out:
     os.makedirs(os.path.join(out, "accepted"), exist_ok=True)
@@ -2339,6 +2351,10 @@ CAL
 # string such as a hostname was caught as a topic. A topic enters the reader at a CALL SITE, so
 # that is what this examines, and it needs no guess.
 #
+# AND IT MUST BE A DIRECT CALL. `reader = _records` then `reader(root, FOURTH, day)` is an alias,
+# and the alias is a different callee name, so nothing below would have looked at it. Any mention of
+# a topic-taking function that is not a callee is refused rather than read as absent.
+#
 # AND THE SET OF TOPIC-TAKING FUNCTIONS IS DERIVED, NOT LISTED. It was a literal map from name to
 # argument position, which review was right to refuse twice over: deleting an entry left the
 # assertion green, so the test was not falsified by removing the thing it names, and a helper added
@@ -2374,6 +2390,20 @@ for node in ast.walk(tree):
             enclosing.setdefault(id(inner), parameters)
 
 problems = []
+
+# A TOPIC-TAKING FUNCTION MAY ONLY BE CALLED DIRECTLY. `reader = _records` followed by
+# `reader(root, FOURTH, day)` passed everything below — the alias is a different callee name, so no
+# call site was examined and a fourth input reached the record unchecked (review round 6). Any
+# mention of one of these names that is not the callee of a call is an indirection this cannot see
+# through, so it is refused instead of being read as absent.
+for node in ast.walk(tree):
+    if isinstance(node, ast.Name) and node.id in takes_a_topic:
+        parent_calls_it = any(
+            isinstance(other, ast.Call) and other.func is node for other in ast.walk(tree))
+        if not parent_calls_it:
+            problems.append(f"{node.id} is referred to without being called, so where its topic "
+                            f"comes from cannot be read here")
+
 for node in ast.walk(tree):
     if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
         continue
@@ -2640,6 +2670,56 @@ want "  without the second assignment the same fixture is captured" "called sess
 sed 's|^ES = .*|ES = "underlying.spx.index.price"|' "$vp_tmp/stub-capture.py" > "$vp_tmp/dup-capture.py"
 want "  two names for one topic is a fault" 2 "$(vp_rc 2026-09-03 "$root" CAPTURE="$vp_tmp/dup-capture.py")"
 want "  and nothing was captured for it" "" "$(cat "$vp_tmp/calls")"
+
+# ---- 18w. THE READER IS POINTED AT THE VERIFIED SET, NOT THE LIVE ARCHIVE. The gate used to check
+# one snapshot of the directory and the capture re-globbed it moments later, so a member arriving or
+# changing in between reached the permanent record unchecked — and the 21:00 retry runs at the same
+# minute as the archiver. Each verified file is now hardlinked into a pinned directory as it is
+# checked, and the reader is given that.
+: > "$vp_tmp/calls"
+: > "$vp_tmp/calls.roots"
+root=$(vp_archive 2026-09-02 20260902T201500Z); vp_verdict 2026-09-02 2026-09-02T20:15:00Z
+out=$(vp_run 2026-09-02 "$root")
+want "18w the reader is given the pinned set, not the archive root" "yes" \
+     "$(grep -q "root=$vp_tmp/ledger-2026-09-02/.pinned/2026-09-02 " "$vp_tmp/calls.roots" && echo yes || echo "no: $(cat "$vp_tmp/calls.roots")")"
+want "  and the pinned set holds the three archived members the fixture wrote, one per topic" "files=3" "$(grep -o 'files=[0-9]*' "$vp_tmp/calls.roots")"
+has  "  and the run says how many it pinned" "3 files pinned" "$out"
+
+# ---- 18x. A MEMBER THAT ARRIVES AFTER THE GATE CANNOT REACH THE RECORD, which is the property the
+# pinning exists for and the one a re-glob could not give. The stub reports what was in the root it
+# was handed; a file added to the ARCHIVE after the pin must not be in it.
+: > "$vp_tmp/calls"
+: > "$vp_tmp/calls.roots"
+root=$(vp_archive 2026-09-01 20260901T201500Z); vp_verdict 2026-09-01 2026-09-01T20:15:00Z
+# The capture stub is what runs while the archiver is imagined to be writing, so the new member is
+# dropped into the archive by the stub itself — the same instant the old code would have re-globbed.
+cat > "$vp_tmp/racing-capture.py" <<'RACE'
+import json, os, sys
+INDEX = "underlying.spx.index.price"
+ES = "underlying.es.price"
+BASIS = "spx.basis.state"
+args = dict(zip(sys.argv[1::2], sys.argv[2::2]))
+late = os.path.join(os.environ["VP_RACE_ARCHIVE"], INDEX, "dt=" + args["--session"],
+                    INDEX + ".p0.9-9.dt20260901.20260901T211500Z.jsonl.gz")
+open(late, "wb").write(b"not a gzip at all")
+root = args.get("--archive-root") or ""
+seen = []
+for base, _dirs, names in os.walk(root):
+    seen += names
+with open(os.environ["VP_CALLS"], "a") as handle:
+    handle.write(f"called session={args.get('--session')} close={args.get('--close-et')}\n")
+with open(os.environ["VP_CALLS"] + ".roots", "a") as handle:
+    handle.write(f"root={root} files={len(seen)}\n")
+out = args.get("--out")
+if out:
+    os.makedirs(os.path.join(out, "accepted"), exist_ok=True)
+    with open(os.path.join(out, "accepted", args["--session"] + ".json"), "w") as handle:
+        handle.write(json.dumps({"session": args["--session"], "accepted": True}) + "\n")
+print(json.dumps({"session": args.get("--session"), "accepted": True}, sort_keys=True))
+RACE
+vp_run 2026-09-01 "$root" CAPTURE="$vp_tmp/racing-capture.py" VP_RACE_ARCHIVE="$root" >/dev/null
+want "18x a member written during the capture is NOT in what the reader sees" "files=3" "$(grep -o 'files=[0-9]*' "$vp_tmp/calls.roots")"
+want "  and it did reach the archive, so the case is not vacuous" 2 "$(ls "$root/underlying.spx.index.price/dt=2026-09-01/" | grep -c .)"
 
 # ---- 18o. an uninstalled capture is an ALERT, not a silent no-op: that is exactly how this study spent
 # twelve days and eight archived sessions producing nothing.

@@ -34,6 +34,10 @@ LOG="${LOG:-/home/abhinav/oe-ops/vol-premium-open-capture.log}"
 # is the authoritative statement that the archiver is DONE with the session — a filename's
 # timestamp is not.
 COMPLETENESS_DIR="${COMPLETENESS_DIR:-$ARCHIVE_ROOT/_manifest/completeness}"
+# Where the verified file set is pinned, and what the capture is then pointed at. It holds hardlinks
+# to archive members, so it costs inodes and no data, and it stays: it is the record of exactly
+# which files each claim was made from.
+SNAPSHOT_ROOT="${SNAPSHOT_ROOT:-$LEDGER/.pinned}"
 # THE TOPICS ARE NOT CONFIGURABLE HERE, and that is the point. They used to come from an
 # environment variable with a three-topic default, which let the gate validate FEWER topics than
 # the capture reads while the capture went on reading all three from its own constants — an
@@ -148,9 +152,16 @@ esac
 #
 # The exit codes are distinct on purpose: 0 = positively established as not-ready-yet, so the retry
 # run should try again; anything else is a fault and must not be read as "wait".
+mkdir -p "$LEDGER" || {
+  log "FATAL: cannot create the ledger at $LEDGER"
+  alert "🚨 vol-premium open-reference ledger unwritable on $(hostname): $LEDGER. Bucket 0 is accruing NO sessions."
+  exit 2
+}
+
 GATE="$(COMPLETENESS_DIR="$COMPLETENESS_DIR" ARCHIVE_ROOT="$ARCHIVE_ROOT" OE_DAY="$SESSION" \
-        CLOSE_ET="$CLOSE_ET" CAPTURE="$CAPTURE" OE_ENV="$ENV_NAME" python3 - <<'GATE'
-import ast, datetime as dt, glob, gzip, json, os, pathlib
+        CLOSE_ET="$CLOSE_ET" CAPTURE="$CAPTURE" OE_ENV="$ENV_NAME" \
+        SNAPSHOT_ROOT="$SNAPSHOT_ROOT" python3 - <<'GATE'
+import ast, datetime as dt, glob, gzip, json, os, pathlib, shutil
 from zoneinfo import ZoneInfo
 
 ET = ZoneInfo("America/New_York")
@@ -303,7 +314,22 @@ for topic in topics:
 # partway through — a failed run, an alert, and a day of delay for a condition that resolves itself
 # in minutes. Reading every byte is the only test of this that is not a guess: a size, an mtime and
 # a successful open all pass on a half-written member.
+#
+# EACH VERIFIED FILE IS PINNED AS IT IS CHECKED, and the capture is then pointed at the pinned set
+# rather than at the live archive. Without this the gate checked one snapshot and the capture
+# re-globbed the directory moments later, so a member arriving or changing in between reached the
+# permanent record unchecked — and the 21:00 retry runs at the same minute as the archiver
+# (review round 6). Hardlinks: no data is copied, the names cannot be re-pointed under us because a
+# published archive member is written once and never appended to, and the pinned directory is left
+# in place afterwards as the record of exactly which files the claim was made from.
+snapshot = os.path.join(os.environ["SNAPSHOT_ROOT"], day.isoformat())
+pinned = 0
 for topic in topics:
+    folder = os.path.join(snapshot, topic, "dt=" + day.isoformat())
+    try:
+        os.makedirs(folder, exist_ok=True)
+    except OSError as err:
+        answer("fault", f"cannot pin the archive for {day} under {snapshot}: {err}")
     for path in files(topic):
         try:
             with gzip.open(path, "rb") as handle:
@@ -312,8 +338,30 @@ for topic in topics:
         except Exception:
             answer("waiting", f"{os.path.basename(path)} does not decompress to its end — "
                               f"the archiver is most likely still writing it")
+        target = os.path.join(folder, os.path.basename(path))
+        try:
+            if not os.path.exists(target):
+                os.link(path, target)
+            elif os.path.samefile(path, target):
+                pass          # a retry re-pinning the same file it pinned before
+            else:
+                answer("fault", f"{target} is already pinned to a different file — the pinned set "
+                                f"for {day} does not match the archive and must be looked at")
+        except OSError as err:
+            # A copy is the fallback, not the default: hardlinking is what makes the pin free and
+            # makes it impossible for the pinned name to be a different file than the verified one.
+            try:
+                shutil.copy2(path, target)
+            except OSError:
+                answer("fault", f"cannot pin {os.path.basename(path)} for {day}: {err}")
+        pinned += 1
 
-print("ready " + " ".join(summary))
+if pinned == 0:
+    # Unreachable while the on-disk check above stands, and asserted rather than assumed: pointing
+    # the capture at an empty root would publish a permanent "no ES reference" about nothing.
+    answer("fault", f"nothing was pinned for {day}, so there is no verified set to capture from")
+
+print(f"ready {pinned} files pinned; " + " ".join(summary))
 GATE
 )"
 GATE_RC=$?
@@ -338,14 +386,12 @@ case "$GATE_STATE" in
     exit 2 ;;
 esac
 
-mkdir -p "$LEDGER" || {
-  log "FATAL: cannot create the ledger at $LEDGER"
-  alert "🚨 vol-premium open-reference ledger unwritable on $(hostname): $LEDGER. Bucket 0 is accruing NO sessions."
-  exit 2
-}
-
-log "$SESSION: capturing (close $CLOSE_ET ET, archive $ARCHIVE_ROOT, ledger $LEDGER)"
-RECORD="$(python3 "$CAPTURE" --session "$SESSION" --archive-root "$ARCHIVE_ROOT" \
+# THE CAPTURE READS THE PINNED SET, NOT THE LIVE ARCHIVE. That is the whole point of pinning: the
+# bytes that produce the permanent record are the bytes the gate verified, and no member that
+# arrives afterwards can reach it.
+PINNED="$SNAPSHOT_ROOT/$SESSION"
+log "$SESSION: capturing (close $CLOSE_ET ET, pinned set $PINNED, ledger $LEDGER)"
+RECORD="$(python3 "$CAPTURE" --session "$SESSION" --archive-root "$PINNED" \
           --close-et "$CLOSE_ET" --out "$LEDGER" 2>&1)"
 RC=$?
 log "$SESSION: $RECORD"
