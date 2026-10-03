@@ -104,7 +104,7 @@ against the REAL store and rolls it back. Record each environment's dry-run wall
 
 | store | date | build | v6 feature families | dry-run wall time | notes |
 |---|---|---|---|---|---|
-| local reference (laptop, PostgreSQL 16, synthetic v6 store) | see below | — | see below | see below | the rate bound; not an environment |
+| local reference (Apple-silicon laptop, Homebrew PostgreSQL 16, synthetic v6 store: 50 001 feature families, 200 004 predictions, 50 000 outcomes, 13 MB feature table) | 2026-10-04 | — (the migrator CLI from the 9a build, `-Xmx768m`) | 50 001 | 17.7 s wall, JVM max RSS 120 MiB | the rate bound (~2 800 families/s on this machine); not an environment |
 | dev | — | — | — | — | fill from the dev dry run |
 | production | — | — | — | — | fill from the production dry run; CONFIRM only after it is under the ceiling with margin |
 
