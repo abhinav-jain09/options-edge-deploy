@@ -298,7 +298,7 @@ def corpus_cases(d):
 # ONE canonical corpus (Codex 7b r3): corpus.sha256 is regenerated from the fixtures, so by itself it only proves a copy is self-consistent.
 # CORPUS_DIGEST — the sha256 of corpus.sha256 — is a LITERAL pinned here AND in the Job's YamlSubsetCorpusTest: a change to the corpus must
 # change the literal in BOTH repositories (printed by --corpus-manifest), so a copy that drifted from the pinned version fails its runner.
-CORPUS_DIGEST = "53728f765ba0ce743084301655a478f7f59436bf22006cdc5c4458232bde35f6"
+CORPUS_DIGEST = "e48dbd54def37d649a8036dd9c3ecbe1fab6a31e5d2eb35baf28baeee44b7370"
 
 
 def corpus_manifest(d, cases):
