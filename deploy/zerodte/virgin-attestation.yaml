@@ -1,0 +1,21 @@
+# The ONE-SHOT external VIRGIN attestation (design §5.1; increment 7 Q5). APPEND-ONLY: scripts/ci/validate-zerodte-attestation.sh refuses
+# a change that removes or alters an existing lineage or entry, or breaks the prevEntryHash chain. The provisioning Job VERIFIES this file;
+# it never writes it. An entry is added only through a reviewed change, with the exact values the Job's ATTESTATION_REQUIRED receipt printed.
+#
+# A lineage is an ENVIRONMENT'S IDENTITY: a UUID minted once; a renamed environment keeps its id; a CLONE is a new lineage that names its
+# parent and needs the owner's recorded approval. approvedBy is the OWNER's name, written by the owner — the rows below carry the marker
+# UNAPPROVED until then (the Job does not read approvedBy; the review does).
+#
+# ledgerTopicId, clusterId and prevEntryHash are QUOTED strings: YAML reads an all-digit scalar as a number.
+lineages:
+  - id: 6b2c7c1a-5d3e-4a8f-9b41-2f0d7e9c4a10
+    name: dev
+    parent: null
+    approvedBy: UNAPPROVED
+    date: "2026-10-03"
+  - id: 9e4f1d6b-7a2c-4c35-8d0e-5b1a3f8c2e77
+    name: production
+    parent: null
+    approvedBy: UNAPPROVED
+    date: "2026-10-03"
+entries: []

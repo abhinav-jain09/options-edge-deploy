@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+# The wrapper's RECEIPT contract (scripts/ops/zerodte-provision.sh): the provisioner's ONE outcome line is the only evidence this identity
+# has, so the wrapper is driven here through every outcome — against a FAKE kubectl that answers each call the wrapper makes (identity,
+# cluster, inventory, render, create, wait, log, exit code) and a stub image pinner — from a throwaway copy of the repository (a git
+# checkout, so HEAD exists). Each case asserts the exit status AND the verdict text, so a refusal for the wrong reason is a failure too.
+set -euo pipefail
+cd "$(dirname "$0")/../.."
+T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
+W="$T/repo"
+mkdir -p "$W/scripts/ops" "$W/scripts/ci" "$W/scripts/deploy" "$W/k8s/jobs" "$W/deploy/zerodte/provisioning" "$W/image-tags" "$W/bin"
+cp scripts/ops/zerodte-provision.sh "$W/scripts/ops/"
+cp scripts/ci/zerodte_attestation.py scripts/ci/validate-zerodte-provisioning.sh scripts/ci/validate-zerodte-attestation.sh "$W/scripts/ci/"
+mkdir -p "$W/scripts/ci/fixtures/zerodte" && cp scripts/ci/fixtures/zerodte/golden.tsv "$W/scripts/ci/fixtures/zerodte/"
+cp k8s/jobs/zerodte-provision-job.yaml "$W/k8s/jobs/"
+cp deploy/zerodte/provisioning/dev.yaml "$W/deploy/zerodte/provisioning/"
+cp deploy/zerodte/virgin-attestation.yaml "$W/deploy/zerodte/"
+printf 'images:\n  vix-option-inteligence-service: 192.168.100.252:5000/options-edge-vix-option-inteligence:dev\n' > "$W/image-tags/dev.yaml"
+# the image pinner stub: a digest-pinned ref, no registry
+printf 'pin_ref() { printf "%%s@sha256:%s\\n" "${1%%:*}"; }\n' "$(printf 'a%.0s' $(seq 64))" > "$W/scripts/deploy/pin-image.sh"
+export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+git -C "$W" init -q -b main && git -C "$W" add -A && git -C "$W" commit -q -m seed
+HEAD="$(git -C "$W" rev-parse HEAD)"
+# the fake kubectl: every call the wrapper makes, answered from FAKE_* variables; mutations are journaled
+cat > "$W/bin/kubectl" <<'FAKE'
+#!/usr/bin/env bash
+args="$*"
+echo "kubectl $args" >> "${FAKE_JOURNAL:?}"
+case "$args" in
+  "auth whoami -o jsonpath={.status.userInfo.username}") printf '%s' "${FAKE_WHOAMI:-system:serviceaccount:options-edge:jenkins-deployer}" ;;
+  *"config view --minify -o jsonpath={.clusters[0].cluster.server}") printf '%s' "${FAKE_SERVER:-https://127.0.0.1:1}" ;;
+  *"config view --minify -o jsonpath={.clusters[0].name}") printf '%s' "${FAKE_CLUSTER:-docker-desktop}" ;;
+  *"get jobs -l app.kubernetes.io/name=zerodte-provision -o json") jobs="${FAKE_JOBS:-}"; [ -n "$jobs" ] || jobs='{"items":[]}'; printf '%s' "$jobs" ;;
+  *"create configmap"*"--dry-run=client -o yaml")
+    printf 'apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm\n  namespace: options-edge\ndata:\n'
+    for a in "$@"; do case "$a" in --from-file=*) k="${a#--from-file=}"; printf '  %s: |\n    x\n' "${k%%=*}" ;; esac; done ;;
+  *"apply --dry-run=server"*|*"create --dry-run=server"*|*"apply -f"*|*"create -f"*|*"delete"*) : ;;
+  *"get job/"*"-o json")
+    # a Job whose container exited non-zero is FAILED (backoffLimit 0): the fake reports that condition unless a case says otherwise
+    if [ "${FAKE_SUCCEEDED:-1}" = 1 ]; then printf '{"status":{"succeeded":1,"conditions":[]}}'; else cond="${FAKE_CONDITIONS:-}"; [ -n "$cond" ] || cond='{"type":"Failed","status":"True"}'; printf '{"status":{"succeeded":0,"conditions":[%s]}}' "$cond"; fi ;;
+  *"logs job/"*) printf '%b' "${FAKE_LOG:-}" ;;
+  *"get pods -l job-name="*) printf '{"items":[{"status":{"containerStatuses":[{"name":"provisioner","state":{"terminated":{"exitCode":%s}}}]}}]}' "${FAKE_EXIT:-0}" ;;
+  *"get configmaps"*) printf '' ;;
+  *) echo "fake kubectl: unexpected call: $args" >&2; exit 99 ;;
+esac
+FAKE
+chmod +x "$W/bin/kubectl"
+pass=0; fail=0
+run() { # run <name> <want_rc> <want substring> <CONFIRM> <FAKE_LOG> [VAR=value ...]
+  local name="$1" want_rc="$2" want="$3" confirm="$4" log="$5"; shift 5
+  local out rc journal="$T/journal.$RANDOM"
+  : > "$journal"
+  out="$(cd "$W" && env PATH="$W/bin:$PATH" FAKE_JOURNAL="$journal" FAKE_LOG="$log" ENVIRONMENT=dev CONFIRM="$confirm" BUILD_NUMBER=7 DRY_RUN_RECEIPT="$T/receipt" JOB_TIMEOUT_S=660 "$@" bash scripts/ops/zerodte-provision.sh 2>&1)" && rc=0 || rc=$?
+  if [ "$rc" = "$want_rc" ] && printf '%s' "$out" | grep -qF -- "$want"; then pass=$((pass+1)); echo "  ok   $name (rc=$rc)"; else fail=$((fail+1)); echo "  FAIL $name: rc=$rc want $want_rc; want [$want]"; printf '%s\n' "$out" | tail -6 | sed 's/^/       | /'; fi
+  LAST_OUT="$out"; LAST_JOURNAL="$journal"
+}
+L=6b2c7c1a-5d3e-4a8f-9b41-2f0d7e9c4a10
+PD="$(printf 'b%.0s' $(seq 64))"; LT="$(printf 'c%.0s' $(seq 32))"
+PENDING="PROVISIONABLE symbol=SPX lineage=$L generation=1 eraId=1 planDigest=$PD provisionedDigest=PENDING topicIds=PENDING wouldCreate=FRAMES,HEAD,CURRENT,PULSE,DEPLOYMENTS wouldAssert=$PD wouldAttest=YES wouldInsertEra=YES wouldAppend=PROVISIONED"
+RESOLVED="PROVISIONABLE symbol=SPX lineage=$L generation=1 eraId=1 planDigest=$PD provisionedDigest=$PD topicIds=RESOLVED wouldCreate=NONE wouldAssert=$PD wouldAttest=NO wouldInsertEra=YES wouldAppend=PROVISIONED"
+DONE="PROVISIONED generation=1 eraId=1 ledgerOffset=0 provisionedDigest=$PD ledgerTopicId=$LT clusterId=cluster-dev-A"
+ALREADY="ALREADY_PROVISIONED generation=1 eraId=1 ledgerOffset=0 provisionedDigest=$PD ledgerTopicId=$LT clusterId=cluster-dev-A"
+REQUIRED="ATTESTATION_REQUIRED generation=1 ledgerTopicId=$LT clusterId=cluster-dev-A"
+DIAG="ACL_UNENFORCED authorizer=UNVERIFIABLE\nmode=DRY_RUN symbol=SPX generation=1 bootstrapKind=VIRGIN\n"
+echo "--- dry runs ---"
+rm -f "$T/receipt"
+run "dry run, topics pending"                        0 "topicIds=PENDING" false "$DIAG$PENDING\n"
+[ -f "$T/receipt" ] && grep -q "build=7 env=dev symbol=SPX generation=1 eraId=1 file_sha256=" "$T/receipt" && { pass=$((pass+1)); echo "  ok   the dry run wrote this build's receipt"; } || { fail=$((fail+1)); echo "  FAIL no dry-run receipt written"; }
+grep -q "create -f" "$LAST_JOURNAL" && { pass=$((pass+1)); echo "  ok   the Job was created"; } || { fail=$((fail+1)); echo "  FAIL the Job was not created"; }
+run "dry run, fully resolved"                        0 "fully resolved against the live cluster" false "$DIAG$RESOLVED\n"
+run "dry run on a provisioned ledger"                0 "already holds generation 1" false "$DIAG$ALREADY\n"
+run "dry run: PROVISIONED is a write when told not to" 1 "wrote when told not to" false "$DIAG$DONE\n"
+run "dry run: ATTESTATION_REQUIRED is a confirm outcome" 1 "is a CONFIRM outcome" false "$DIAG$REQUIRED\n" FAKE_SUCCEEDED=0 FAKE_EXIT=67
+echo "--- confirm ---"
+rm -f "$T/receipt"; run "seed the receipt" 0 "topicIds=PENDING" false "$DIAG$PENDING\n"
+run "confirm without PERMITTED_SHA"                  1 "needs PERMITTED_SHA" true "$DIAG$DONE\n"
+run "confirm with another commit permitted"          1 "is not the permitted commit" true "$DIAG$DONE\n" PERMITTED_SHA="$(printf '1%.0s' $(seq 40))"
+run "confirm: PROVISIONED"                           0 "OK: PROVISIONED generation 1 of SPX on dev" true "$DIAG$DONE\n" PERMITTED_SHA="$HEAD"
+printf '%s' "$LAST_OUT" | grep -q "ledgerTopicId: \"$LT\"" && printf '%s' "$LAST_OUT" | grep -q "Commit this as deploy/zerodte/provisioned/dev.yaml" && { pass=$((pass+1)); echo "  ok   the provisioned/<env>.yaml block is printed with the live ledger topic id"; } || { fail=$((fail+1)); echo "  FAIL the provisioned block is missing"; }
+run "confirm: ALREADY_PROVISIONED"                   0 "already holds generation 1" true "$DIAG$ALREADY\n" PERMITTED_SHA="$HEAD"
+run "confirm: ATTESTATION_REQUIRED"                  67 "ATTESTATION REQUIRED (exit 67" true "$DIAG$REQUIRED\n" PERMITTED_SHA="$HEAD" FAKE_SUCCEEDED=0 FAKE_EXIT=67
+printf '%s' "$LAST_OUT" | grep -q "ledgerTopicId: \"$LT\"" && printf '%s' "$LAST_OUT" | grep -q "prevEntryHash: \"$(printf '0%.0s' $(seq 64))\"" && { pass=$((pass+1)); echo "  ok   the exact attestation entry to append is printed, chained on the current tail"; } || { fail=$((fail+1)); echo "  FAIL the attestation entry is not printed as required"; }
+run "confirm: PROVISIONABLE is a dry-run line"       1 "a dry-run line is not a provisioning" true "$DIAG$RESOLVED\n" PERMITTED_SHA="$HEAD"
+run "confirm: CONFLICTING_PROVISIONED"               1 "CONFLICTING_PROVISIONED: the ledger already holds generation 1" true "${DIAG}CONFLICTING_PROVISIONED generation=1\n" PERMITTED_SHA="$HEAD" FAKE_SUCCEEDED=0 FAKE_EXIT=66
+run "confirm: REFUSED precondition (schema v6)"      1 "a PRECONDITION failed (SCHEMA_VERSION" true "${DIAG}REFUSED reason=SCHEMA_VERSION exit=68\n" PERMITTED_SHA="$HEAD" FAKE_SUCCEEDED=0 FAKE_EXIT=68
+run "confirm: REFUSED unavailable"                   1 "UNAVAILABLE (LEDGER_READ)" true "${DIAG}REFUSED reason=LEDGER_READ exit=69\n" PERMITTED_SHA="$HEAD" FAKE_SUCCEEDED=0 FAKE_EXIT=69
+run "confirm: REFUSED mutation"                      1 "READ THE LEDGER AND THE TOPICS" true "${DIAG}REFUSED reason=READBACK exit=70\n" PERMITTED_SHA="$HEAD" FAKE_SUCCEEDED=0 FAKE_EXIT=70
+run "confirm: REFUSED usage"                         1 "refused its INVOCATION" true "${DIAG}REFUSED reason=USAGE exit=64\n" PERMITTED_SHA="$HEAD" FAKE_SUCCEEDED=0 FAKE_EXIT=64
+echo "--- the receipt held to the letter ---"
+run "no receipt line"                                1 "printed 0 receipt line(s)" true "$DIAG" PERMITTED_SHA="$HEAD" FAKE_SUCCEEDED=0 FAKE_EXIT=1
+run "two receipt lines"                              1 "printed 2 receipt line(s)" true "$DIAG$DONE\n$DONE\n" PERMITTED_SHA="$HEAD"
+run "another generation in the receipt"              1 "generation='2'!='1'" true "${DIAG}PROVISIONED generation=2 eraId=1 ledgerOffset=0 provisionedDigest=$PD ledgerTopicId=$LT clusterId=c\n" PERMITTED_SHA="$HEAD"
+run "another era in the receipt"                     1 "eraId='9'!='1'" true "${DIAG}PROVISIONED generation=1 eraId=9 ledgerOffset=0 provisionedDigest=$PD ledgerTopicId=$LT clusterId=c\n" PERMITTED_SHA="$HEAD"
+run "a field twice"                                  1 "generation= exactly once; got it 2 times" true "${DIAG}PROVISIONED generation=1 generation=1 eraId=1 ledgerOffset=0 provisionedDigest=$PD ledgerTopicId=$LT clusterId=c\n" PERMITTED_SHA="$HEAD"
+run "a short ledger topic id"                        1 "ledgerTopicId" true "${DIAG}PROVISIONED generation=1 eraId=1 ledgerOffset=0 provisionedDigest=$PD ledgerTopicId=abc clusterId=c\n" PERMITTED_SHA="$HEAD"
+run "a successful line from a failed Job"            1 "did not succeed (state=failed" true "$DIAG$DONE\n" PERMITTED_SHA="$HEAD" FAKE_SUCCEEDED=0 FAKE_CONDITIONS='{"type":"Failed","status":"True"}'
+run "an image without the provisioner"               1 "does not carry ZeroDteProvisioner" true "Error: Could not find or load main class com.optionsedge.processing.zerodte.provisioning.ZeroDteProvisioner\n" PERMITTED_SHA="$HEAD" FAKE_SUCCEEDED=0 FAKE_EXIT=1
+echo "--- identity, cluster, inventory, receipt binding ---"
+run "another kubectl identity"                       1 "kubeconfig identity is" false "$DIAG$PENDING\n" FAKE_WHOAMI=system:admin
+run "another dev cluster"                            1 "names cluster 'minikube', expected 'docker-desktop'" false "$DIAG$PENDING\n" FAKE_CLUSTER=minikube
+run "an active Job already"                          1 "another zerodte-provision Job is not terminal" false "$DIAG$PENDING\n" FAKE_JOBS='{"items":[{"metadata":{"name":"zerodte-provision-x"},"status":{"active":1}}]}'
+printf 'build=6 env=dev symbol=SPX generation=1 eraId=1 file_sha256=x attestation_sha256=y head=%s\n' "$HEAD" > "$T/receipt"
+run "confirm with another build's receipt"           1 "does not describe this write" true "$DIAG$DONE\n" PERMITTED_SHA="$HEAD"
+rm -f "$T/receipt"
+run "confirm without a receipt"                      1 "no dry-run receipt at" true "$DIAG$DONE\n" PERMITTED_SHA="$HEAD"
+run "ENVIRONMENT unset"                              1 "ENVIRONMENT must be dev or production" false "$DIAG$PENDING\n" ENVIRONMENT=
+echo "zerodte-provision receipt contract: $pass ok, $fail failed"
+[ "$fail" -eq 0 ] && { echo "=== zerodte-provision-receipt-test: OK ==="; exit 0; }
+echo "=== zerodte-provision-receipt-test: FAILED ==="; exit 1
