@@ -111,7 +111,7 @@ for f in $wanted $sourced; do
     # THE COPY MUST BE A COMMAND, AND IT MUST RUN BEFORE THE SUITE. Matching the flattened file for
     # the text `cp <source> <dest>` was syntactic and the reviewer was right to refuse it: the same
     # characters in a comment, in a string, or in a stage that runs afterwards would have satisfied
-    # it (review round 2). So comment lines are removed first, continuations are joined, and the cp
+    # it (review round 2). So lines that BEGIN with a comment marker are removed, continuations are joined, and the cp
     # is required to appear BEFORE the docker run that mounts the unit directory into the suite
     # container — which is the ordering the staging exists for. A cp after it stages nothing the
     # suite can see.
@@ -131,6 +131,13 @@ for f in $wanted $sourced; do
     # a multiline Groovy string or a heredoc body reads as a statement to the normaliser above, and
     # a workspace reused between builds can hold a copy an earlier build left behind — so even an
     # absent staging step can look like a present one.
+    #
+    # WHAT THIS CHECK IS, in proportion: a PREFLIGHT. The authoritative gate is
+    # verify-permitted-tree.sh at install time, which cannot be talked round by any of this — it
+    # looks at the tree, not at the job definition. This exists so that a missing declaration is
+    # named here, by file, instead of appearing as a refused install; four review rounds went into
+    # making it refuse text that is not an argument to that verifier, and the cost of a remaining
+    # false negative is exactly what happened before it existed — the install refuses and says why.
     #
     # THE CONTROL IS scripts/ci/verify-archive-unit-staged.sh, which the job runs on the agent after
     # staging and before the container: it asserts each file the suite will read exists and is
@@ -173,12 +180,96 @@ for f in $wanted $sourced; do
         if (cp_at == 0)       { print "absent"; exit }
         if (mount_at == 0)    { print "no-suite-mount"; exit }
         if (cp_at > mount_at) { print "too-late"; exit }
-        print "ok"
+        # A staged copy is gitignored where it lands, and verify-permitted-tree.sh refuses any
+        # ignored path it was not told to expect. Staging a file without declaring it stops the
+        # first REAL install — never a tests-only run, which skips that stage.
+        #
+        # THE DECLARATION MUST BE AN ARGUMENT TO THAT VERIFIER, in the same statement that runs it.
+        # Looking for the text anywhere in the file was the first version of this and review was
+        # right to refuse it: `echo --allow-ignored <path>` satisfied it while the real invocation
+        # went without, so the guard could pass and the install still stop. The statement list built
+        # above is reused, so the same normalisation applies — comments gone, continuations joined.
+        # THE VERIFIER MUST BE THE COMMAND WORD, not a filename appearing somewhere in a statement:
+        # `echo scripts/jenkins/verify-permitted-tree.sh --allow-ignored <path>` contains both the
+        # name and the declaration and runs no verifier, and that satisfied the previous version
+        # (review round 2 of #1128). So each statement is tokenised, a leading `sh`, any
+        # VAR=VALUE assignments and a `bash` are stepped over, and what follows has to BE the
+        # verifier. Quotes are REMOVED first — not turned into spaces, which split
+        # `PERMITTED_SHA="${PERMITTED_SHA:-}"` in two and made this refuse the committed job — so
+        # neither the Groovy wrapper nor the assignment quoting hides the command word.
+        verifier_at = 0
+        for (i = 1; i <= n; i++) {
+          bounded = statement[i] " "
+          gsub(/[\047"]/, "", bounded)
+          gsub(/[[:space:]]+/, " ", bounded)
+          sub(/^ /, "", bounded)
+          words = split(bounded, word, " ")
+          at = 1
+          if (words >= 1 && word[at] == "sh") { at++ }
+          while (at <= words && word[at] ~ /^[A-Za-z_][A-Za-z0-9_]*=/) { at++ }
+          if (at <= words && word[at] == "bash") { at++ }
+          if (at > words || word[at] !~ /(^|\/)verify-permitted-tree\.sh$/) { continue }
+          verifier_at = i
+          # THE ARGUMENT LIST ENDS AT THE FIRST SHELL OPERATOR, and searching past it was the last
+          # way round this: `… verify-permitted-tree.sh --dir . && echo --allow-ignored <path>`
+          # leaves the verifier undeclared while the text sits in the same statement, and an inline
+          # `#` comment does the same (review round 3 of #1128). Only `;` and the newline separate
+          # statements above, so the rest is handled here.
+          #
+          # And the flag and its value must be ADJACENT TOKENS rather than a substring of the line.
+          # That is what "an argument to the verifier" means.
+          # THE ARGUMENT LIST IS READ WITH THE QUOTES LEFT IN. Removing them is right for finding the
+          # command word — it keeps `PERMITTED_SHA="${PERMITTED_SHA:-}"` in one piece — and WRONG
+          # here, because it makes
+          #   --allow-ignored "scripts/ops/archive/<path> harmless"
+          # look like the flag followed by the path, when the shell passes ONE argument containing a
+          # space that the real verifier then rejects (review round 4 of #1128). With the quotes
+          # kept, that splits into two tokens and neither is the path.
+          #
+          # The sh step\047s own wrapping quote is removed first, since it is glued to the last
+          # argument — `… <path>\047` — and is not part of it. Whatever quoting remains inside an
+          # argument is the author\047s, so a value counts only if it IS the path, or the path
+          # wrapped in a matched pair.
+          kept = statement[i]
+          sub(/^[[:space:]]*/, "", kept)
+          if (kept ~ /^sh[[:space:]]+[\047"]/) {
+            sub(/^sh[[:space:]]+[\047"]/, "", kept)
+            sub(/[\047"][[:space:]]*$/, "", kept)
+          }
+          gsub(/[[:space:]]+/, " ", kept)
+          sub(/^ /, "", kept)
+          qwords = split(kept, qword, " ")
+          qat = 0
+          for (j = 1; j <= qwords; j++) {
+            scrubbed = qword[j]
+            gsub(/[\047"]/, "", scrubbed)
+            if (scrubbed ~ /(^|\/)verify-permitted-tree\.sh$/) { qat = j; break }
+          }
+          declared = 0
+          for (j = qat + 1; qat > 0 && j <= qwords; j++) {
+            if (qword[j] == "&&" || qword[j] == "||" || qword[j] == "#" ||
+                qword[j] ~ /^\|/ || qword[j] ~ /^[0-9]*>>?/ || qword[j] ~ /^</) { break }
+            if (qword[j] != "--allow-ignored" || j >= qwords) { continue }
+            value = qword[j + 1]
+            if (value == dst) { declared = 1 }
+            if (value == "\"" dst "\"") { declared = 1 }
+            if (value == "\047" dst "\047") { declared = 1 }
+          }
+          if (declared) { print "ok"; exit }
+        }
+        if (verifier_at == 0) { print "no-verifier"; exit }
+        print "ok-but-undeclared"
       }' "$JF")
     case "$staged" in
       ok) : ;;
       too-late)
         echo "STAGED TOO LATE: $f lives in $home/ and $JF copies it only AFTER the docker run that mounts $DIR into the suite container — the suite would run without it" >&2
+        fails=$((fails+1)) ;;
+      ok-but-undeclared)
+        echo "STAGED BUT NOT DECLARED: $f is copied into $DIR by $JF, where it is gitignored, but no '--allow-ignored $DIR/$f' is passed to verify-permitted-tree.sh — that verifier refuses any ignored path it was not told to expect, so the first real install would stop at it (and a tests-only run would not, because it skips that stage)" >&2
+        fails=$((fails+1)) ;;
+      no-verifier)
+        echo "CANNOT CHECK THE DECLARATION: $JF has no statement running verify-permitted-tree.sh, so the gate this guard defers to no longer exists — update the guard with the job" >&2
         fails=$((fails+1)) ;;
       no-suite-mount)
         echo "CANNOT CHECK STAGING: $JF has no docker run mounting $DIR:/w:ro, so the ordering this guard relies on no longer exists — update the guard with the job" >&2
