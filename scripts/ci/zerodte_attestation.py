@@ -44,8 +44,10 @@ UNAPPROVED = "UNAPPROVED"
 OPERATOR = re.compile(r"^[\x20-\x7e]{1,64}$")
 SYMBOL = re.compile(r"^[A-Z0-9]{1,16}$")
 TOPIC = re.compile(r"^[a-zA-Z0-9._-]{1,249}$")
-ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-ISO_INSTANT = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?Z$")
+# The lexical timestamp domains, the SAME as the Job's (VirginAttestation.ISO_DATE / ISO_INSTANT): ASCII digits, year 0001–9999, month
+# 01–12, day 01–31, hour 00–23, minute/second 00–59, 1–9 fraction digits, Z only — judged BEFORE datetime, which then judges the real calendar.
+ISO_DATE = re.compile(r"^(?!0000)[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$")
+ISO_INSTANT = re.compile(r"^(?!0000)[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\.[0-9]{1,9})?Z$")
 FIRST_PREV = "0" * 64
 ENTRY_KEYS = ["symbol", "environmentLineageId", "ledgerTopicId", "clusterId", "createdAt", "operator", "prevEntryHash"]
 LINEAGE_KEYS = ["id", "name", "parent", "approvedBy", "date"]
@@ -66,6 +68,7 @@ class Refused(Exception):
 # duplicate keys. A scalar keeps whether it was QUOTED (the Job demands quoting for the hex identities).
 
 class Scalar:
+    """A STRING scalar (quoted, or a plain scalar that is not null, a boolean or an integer — those resolve to None / bool / int, as in the Job)."""
     __slots__ = ("text", "quoted")
 
     def __init__(self, text, quoted):
@@ -73,6 +76,10 @@ class Scalar:
 
     def __repr__(self):
         return ("'%s'" if self.quoted else "%s") % self.text
+
+
+LONG_MIN, LONG_MAX = -(1 << 63), (1 << 63) - 1
+PLAIN_INT = re.compile(r"^[-+]?[0-9]+$")
 
 
 def _strip_comment(line):
@@ -119,6 +126,17 @@ def _scalar(text):
         return None
     if ": " in text or text.endswith(":"):
         raise Refused("a plain scalar cannot contain ': ' (YAML reads a mapping there): %s" % text)
+    # the subset's plain resolution, as the Job's StrictYaml.plain: true/false (lower case only) and a signed decimal integer within a Java
+    # long are TYPED values, never strings — so an unquoted 123 in a string field is refused by BOTH readers ("… is a string")
+    if text == "true":
+        return True
+    if text == "false":
+        return False
+    if PLAIN_INT.match(text):
+        n = int(text)
+        if n < LONG_MIN or n > LONG_MAX:
+            raise Refused("an integer out of range: %s" % text)
+        return n
     return Scalar(text, False)
 
 
@@ -134,6 +152,10 @@ def load(text):
         raise Refused("the file exceeds %d code points" % MAX_CODE_POINTS)
     if not _PRINTABLE.match(text):
         raise Refused("a non-printable character is not accepted anywhere in the text (a comment included)")
+    # the subset's line breaks are LF and CRLF only: a lone CR, NEL, LINE SEPARATOR and PARAGRAPH SEPARATOR — YAML breaks SnakeYAML would honour —
+    # are refused anywhere in the text, so the two readers tokenise the same lines
+    if re.search("\r(?!\n)|[\x85\u2028\u2029]", text):
+        raise Refused("a line break other than LF / CRLF (a lone CR, NEL, LINE SEPARATOR, PARAGRAPH SEPARATOR) is not accepted anywhere in the text")
     lines = []
     for raw in text.split("\n"):
         if raw.startswith("---") or raw.startswith("...") or raw.startswith("%"):
@@ -262,7 +284,7 @@ def corpus_cases(d):
 # ONE canonical corpus (Codex 7b r3): corpus.sha256 is regenerated from the fixtures, so by itself it only proves a copy is self-consistent.
 # CORPUS_DIGEST — the sha256 of corpus.sha256 — is a LITERAL pinned here AND in the Job's YamlSubsetCorpusTest: a change to the corpus must
 # change the literal in BOTH repositories (printed by --corpus-manifest), so a copy that drifted from the pinned version fails its runner.
-CORPUS_DIGEST = "55b5bd59864f8c5502fcd1914299990d1bef3bbff275ff74c6d8bcd677f52181"
+CORPUS_DIGEST = "ff34ffbb5fa776784446ceaefdd258976f773942af6e20c7887861b20d64c4f1"
 
 
 def corpus_manifest(d, cases):
@@ -311,10 +333,10 @@ def _instant(v, what):
 
 
 def _text(v, what, pattern=None, quoted=None):
+    if quoted and (not isinstance(v, Scalar) or not v.quoted):   # as the Job's quotedText: a typed value or a plain string is "a QUOTED string"
+        raise Refused("%s is a QUOTED string (YAML reads digits as a number)" % what)
     if not isinstance(v, Scalar):
         raise Refused("%s is a string" % what)
-    if quoted and not v.quoted:
-        raise Refused("%s is a QUOTED string (YAML reads digits as a number)" % what)
     if pattern and not pattern.match(v.text):
         raise Refused("%s is not in its domain: %s" % (what, v.text))
     return v.text
@@ -405,17 +427,16 @@ def parse_provisioning(text):
             raise Refused("the provisioning file lacks the key: %s" % k)
 
     def integer(v, what, lo, hi):
-        if not isinstance(v, Scalar) or v.quoted or not re.match(r"^[-+]?[0-9]+$", v.text):
+        if not isinstance(v, int) or isinstance(v, bool):
             raise Refused("%s is an integer" % what)
-        n = int(v.text)
-        if n < lo or n > hi:
+        if v < lo or v > hi:
             raise Refused("%s is in [%d, %d]" % (what, lo, hi))
-        return n
+        return v
 
     def boolean(v, what):
-        if not isinstance(v, Scalar) or v.quoted or v.text not in ("true", "false"):
+        if not isinstance(v, bool):
             raise Refused("%s is true or false" % what)
-        return v.text == "true"
+        return v
 
     def enum(v, what, domain):
         t = _text(v, what)
@@ -514,8 +535,12 @@ def parse_provisioning(text):
 # ------------------------------------------------------------------------------------------------ commands
 
 def _read(path):
-    with open(path, encoding="utf-8", newline="") as f:   # newline="": the RAW line endings reach the reader — a CR is a code point the cap counts
-        return f.read()
+    with open(path, "rb") as f:
+        raw = f.read()
+    try:
+        return raw.decode("utf-8")   # the RAW bytes, strictly decoded: the line endings reach the reader as they are (a CR is a code point the cap counts)
+    except UnicodeDecodeError:
+        raise Refused("%s is not valid UTF-8" % path)
 
 
 def _base_text(base, path):
@@ -576,8 +601,8 @@ def main(argv):
                 raise Refused("the corpus is not the pinned canonical version: corpus.sha256 hashes to %s, CORPUS_DIGEST pins %s (a corpus change must update the literal in BOTH repositories)" % (digest, CORPUS_DIGEST))
             n = 0
             for name, kind, verdict in cases:
-                text = _read(os.path.join(d, name + ".yaml"))
                 try:
+                    text = _read(os.path.join(d, name + ".yaml"))   # a file that is not valid UTF-8 is a refusal, counted as a reject
                     (parse_attestation if kind == "attestation" else parse_provisioning)(text)
                     verdict_got = "accept"
                 except Refused:

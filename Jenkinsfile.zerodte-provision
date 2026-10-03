@@ -47,6 +47,8 @@ pipeline {
       description: 'REQUIRED. The full 40-character lowercase commit id of the options-edge-deploy commit this run is permitted for. The build fails closed unless the checked-out HEAD equals it exactly and it is on origin/main.')
     string(name: 'PERMITTED_SHA_GUARD_VERSION', defaultValue: '2f6fc2ab7aa51eb8a9e8aa350f2d774cd2fb7a253de2591e43645a19a9886b24',
       description: 'DO NOT EDIT BY HAND — the sha256 of scripts/jenkins/permitted-sha-guard.sh this definition runs (Deployment Permission Rule). The guard refuses to run under any other value. It is a DECLARATION, not proof that this job enforces the guard: a caller that triggers this job judges its SCM definition and its Jenkinsfile at the forwarded commit (scripts/jenkins/require-guarded-downstream.sh). Regenerate with scripts/jenkins/permitted-sha-guard-version.sh when the guard changes.')
+    string(name: 'PROCESSING_PEER_SHA', defaultValue: '', trim: true,
+      description: 'The 40-hex options-edge-processing COMMIT whose copy of the YAML corpus is held to ours (the coordinated release: the commit the service image was built from). A branch name is refused.'),
     string(name: 'KUBECONFIG_FILE', defaultValue: '',
       description: 'Deployer kubeconfig on the Jenkins agent. Empty = oeProfile(ENVIRONMENT).kubeconfigDeployer.')
     string(name: 'KEEP_JOBS', defaultValue: '5',
@@ -108,8 +110,10 @@ pipeline {
           bash scripts/ci/validate-zerodte-attestation.sh
           bash scripts/ci/validate-zerodte-attestation-test.sh
           bash scripts/ci/zerodte-provision-receipt-test.sh
-          # the coordinated release: the Job's copy of the YAML corpus (options-edge-processing at main) must pin the SAME version as ours
-          bash scripts/ci/validate-zerodte-corpus-peer.sh
+          # the coordinated release: the Job's copy of the YAML corpus at the EXACT processing commit this release names (PROCESSING_PEER_SHA,
+          # recorded in this log) must pin the SAME version as ours — a branch name is refused
+          echo "processing peer commit: ${PROCESSING_PEER_SHA}"
+          ZERODTE_PEER_REF="${PROCESSING_PEER_SHA}" ZERODTE_PEER_REQUIRE_SHA=true bash scripts/ci/validate-zerodte-corpus-peer.sh
         '''
       }
     }
