@@ -265,9 +265,9 @@ def runs_dedicated_writer(container):
 
 
 def job_terminal(job):
+    """TERMINAL means the Job's own terminal CONDITION — Complete=True or Failed=True — never "a pod succeeded": a multi-completion Job with one
+    success and another pod still pending can create a writer pod at any moment (Codex 9e r3)."""
     status = job.get("status") or {}
-    if (status.get("succeeded") or 0) >= 1:
-        return True
     return any(c.get("type") in ("Complete", "Failed") and c.get("status") == "True" for c in status.get("conditions") or [])
 
 

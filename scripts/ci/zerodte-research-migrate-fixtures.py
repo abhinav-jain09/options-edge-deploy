@@ -184,9 +184,13 @@ def main(argv):
     elif kind == "deployments":
         items = [deployment(s) for s in specs]
     elif kind == "replicasets":
-        for s in specs:
-            name, owner = s.split(":")
-            rs = {"metadata": {"name": name, "uid": "uid-" + name}, "spec": {"template": template()}}
+        for s in specs:                                                  # "name:owner[:writer][:foreign][:zero]" — owner "none" or a Deployment uid
+            parts = s.split(":")
+            name, owner, o = parts[0], parts[1], set(parts[2:])
+            rs = {"metadata": {"name": name, "uid": "uid-" + name}, "spec": {"template": template(spec_image("foreign") if "foreign" in o else None, "writer" in o)}}
+            if "writer" in o:
+                rs["spec"]["replicas"] = 0 if "zero" in o else 1
+                rs["status"] = {"replicas": 0 if "zero" in o else 1}
             if owner != "none":
                 rs["metadata"]["ownerReferences"] = [{"kind": "Deployment", "name": "vix-option-inteligence-service", "uid": owner}]
             items.append(rs)
@@ -198,8 +202,11 @@ def main(argv):
             j = {"metadata": {"name": name, "uid": uid, "labels": {}}, "spec": {"template": template(spec_image("foreign") if "foreign" in o else None, "writer" in o)}}
             if label != "none":
                 j["metadata"]["labels"]["app.kubernetes.io/name"] = label
-            if "terminal" in o:
+            if "terminal" in o:                                          # the Job's own terminal condition
                 j["status"] = {"succeeded": 1, "conditions": [{"type": "Complete", "status": "True"}]}
+            elif "partial" in o:                                         # a multi-completion Job: one pod succeeded, another still to run — NOT terminal
+                j["spec"]["completions"] = 2
+                j["status"] = {"succeeded": 1, "active": 1, "conditions": []}
             items.append(j)
     elif kind == "cronjobs":
         for s in specs:

@@ -66,7 +66,8 @@ job_observe() {
   err="$(mktemp)"
   if snap="$(kubectl -n "$NAMESPACE" get "job/$JOB_NAME" -o json 2>"$err")"; then
     rm -f "$err"
-    printf '%s' "$snap" | jq -r 'if ((.status.succeeded // 0) >= 1) or (([(.status.conditions // [])[] | select((.type == "Complete" or .type == "Failed") and .status == "True")] | length) >= 1) then "TERMINAL" else "ACTIVE" end' 2>/dev/null || echo UNKNOWN
+    # TERMINAL is the Job's own terminal CONDITION (Complete=True or Failed=True) — never "a pod succeeded" (Codex 9e r3); one predicate here, in the inventory, the verdict and the pruning
+    printf '%s' "$snap" | jq -r 'if (([(.status.conditions // [])[] | select((.type == "Complete" or .type == "Failed") and .status == "True")] | length) >= 1) then "TERMINAL" else "ACTIVE" end' 2>/dev/null || echo UNKNOWN
   else
     if grep -q "NotFound" "$err"; then echo ABSENT; else echo UNKNOWN; fi
     rm -f "$err"
@@ -240,7 +241,7 @@ RENDER="$(mktemp)"; CM_RENDER="$(mktemp)"; LOGS="$(mktemp)"; ERRLOG="$(mktemp)"
 # --- 4. the LOCK (the deployment / migration / activation exclusion), then the inventory ---------------------------------------
 zerodte_migrate_barrier_acquire "$NAMESPACE" "$DEPLOYMENT" "writer-activate-${ACTION}-${ENVIRONMENT}-build-${BUILD_NUMBER:-manual}-$(date -u +%Y%m%dT%H%M%SZ)" writer-activate || fatal "the exclusion lock could not be taken — a research migration, a service rollout or another activation holds it; wait for it, or read its log before removing a stale lock by hand"
 JOBS_JSON="$(kubectl -n "$NAMESPACE" get jobs -l "$JOB_LABEL" -o json)" || fatal "cannot list zerodte-writer-check Jobs in $NAMESPACE — refusing beside an inventory that could not be read"
-ACTIVE="$(printf '%s' "$JOBS_JSON" | jq -r '[.items[] | select(((.status.succeeded // 0) >= 1 or ([(.status.conditions // [])[] | select((.type == "Failed" or .type == "Complete") and .status == "True")] | length) >= 1) | not) | .metadata.name] | join(",")' 2>/dev/null)" \
+ACTIVE="$(printf '%s' "$JOBS_JSON" | jq -r '[.items[] | select((([(.status.conditions // [])[] | select((.type == "Failed" or .type == "Complete") and .status == "True")] | length) >= 1) | not) | .metadata.name] | join(",")' 2>/dev/null)" \
   || fatal "cannot parse the zerodte-writer-check Job list"
 [ -z "$ACTIVE" ] || fatal "another zerodte-writer-check Job is not terminal ($ACTIVE). Wait for it, or delete it if it is a leftover."
 
@@ -297,7 +298,7 @@ run_check_job() { # the CHECK Job: render, validate, create, wait, log, the rece
   done
   [ "$state" = TERMINAL ] || { [ "$state" = ACTIVE ] && fatal "$JOB_NAME is still active after ${JOB_TIMEOUT_S}s — the client stopped waiting; the lock is retained until the Job is gone or terminal"; fatal "the state of $JOB_NAME could not be read ($state) — refusing to judge a run whose Job cannot be observed"; }
   local succeeded
-  succeeded="$(kubectl -n "$NAMESPACE" get "job/$JOB_NAME" -o json 2>/dev/null | jq -r 'if ((.status.succeeded // 0) >= 1) then "succeeded" else "failed" end' 2>/dev/null || echo unreadable)"
+  succeeded="$(kubectl -n "$NAMESPACE" get "job/$JOB_NAME" -o json 2>/dev/null | jq -r 'if (([(.status.conditions // [])[] | select(.type == "Complete" and .status == "True")] | length) >= 1) then "succeeded" elif (([(.status.conditions // [])[] | select(.type == "Failed" and .status == "True")] | length) >= 1) then "failed" else "not-terminal" end' 2>/dev/null || echo unreadable)"
   echo "job state: $succeeded"
   local read_ok=false try
   for try in 1 2 3 4 5; do
@@ -388,7 +389,7 @@ SUCCESS=true
 
 # --- 6. prune old TERMINAL check Jobs (best-effort) -----------------------------------------------------------------------------
 if JOBS_JSON="$(kubectl -n "$NAMESPACE" get jobs -l "$JOB_LABEL" -o json 2>/dev/null)"; then
-  TERMINAL="$(printf '%s' "$JOBS_JSON" | jq -r '[.items[] | select(((.status.succeeded // 0) >= 1) or ([(.status.conditions // [])[] | select(.type == "Failed" and .status == "True")] | length) >= 1)] | sort_by(.metadata.creationTimestamp) | .[].metadata.name' 2>/dev/null)"
+  TERMINAL="$(printf '%s' "$JOBS_JSON" | jq -r '[.items[] | select(([(.status.conditions // [])[] | select((.type == "Complete" or .type == "Failed") and .status == "True")] | length) >= 1)] | sort_by(.metadata.creationTimestamp) | .[].metadata.name' 2>/dev/null)"
   COUNT="$(printf '%s\n' "$TERMINAL" | grep -c . || true)"
   if [ "${COUNT:-0}" -gt "$KEEP_JOBS" ]; then
     DROP=$(( COUNT - KEEP_JOBS )); i=0
