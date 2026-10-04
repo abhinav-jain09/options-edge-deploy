@@ -72,6 +72,14 @@ class ZeroDteCompressionDeployTest(unittest.TestCase):
         env = {item["name"]: str(item.get("value", "")) for item in container["env"]}
         self.assertEqual("true", env["VITE_ZERO_DTE_COMPRESSION_ENABLED"])
 
+    def test_context_tape_standalone_deploy_provisions_shadow_topics_before_rollout(self) -> None:
+        pipeline = (ROOT / "Jenkinsfile.service-deploy").read_text()
+        barrier = "stage('Verify zero-DTE compression shadow topics')"
+        rollout = "stage('Deploy (service-scoped)')"
+        self.assertIn(barrier, pipeline)
+        self.assertIn("scripts/kafka/ensure-zero-dte-compression-topics.sh", pipeline)
+        self.assertLess(pipeline.index(barrier), pipeline.index(rollout))
+
     def test_output_and_recovery_topics_are_durable_and_classified(self) -> None:
         topics = (ROOT / "scripts" / "kafka" / "topics.env").read_text()
         for topic in TOPICS:
