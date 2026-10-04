@@ -15,14 +15,16 @@ ROOT = Path(__file__).resolve().parents[1]
 # survived five weeks). This guard runs on EVERY change, over EVERY manifest, so the next one is caught
 # at the change that introduces it. It is wired into deploy-validation.yml; a red result blocks merge.
 
-# Env keys whose VALUE is, or COMPOSES, a runtime identity (Streams application.id / consumer group).
+# Env keys whose VALUE is, or COMPOSES, a runtime identity (Streams application.id, consumer group,
+# Kafka transactional id, or explicit client id).
 # The trailing _SUFFIX form matters as much as the id itself: KAFKA_APPLICATION_ID_SUFFIX is appended
 # to EVERY Streams application id in an environment (-prod, -dev, -es4 today), so setting it to "-v2"
 # would version every identity in that environment at runtime while each id literal stayed clean. That
 # is the same shape as the runtime-concatenated "…-r2" that once survived a sweep reporting clean: an
 # identity is what the process ends up with, not what any single manifest line says.
 IDENTITY_KEY = re.compile(
-    r"^[A-Z0-9_]*(?:APP_ID|APPLICATION_ID|GROUP_ID|CONSUMER_GROUP)(?:_SUFFIX|_PREFIX)?$")
+    r"^[A-Z0-9_]*(?:APP_ID|APPLICATION_ID|GROUP_ID|CONSUMER_GROUP|TRANSACTIONAL_ID|CLIENT_ID)"
+    r"(?:_SUFFIX|_PREFIX)?$")
 
 # Deliberately the widest net the rulebook prescribes for identities: a "v" or "r" followed by a digit,
 # anywhere, in any case. It catches every form a real migration leaves behind — separator-prefixed
@@ -240,6 +242,10 @@ class ServiceIdentityUnversionedTest(unittest.TestCase):
             ),
             "yml-extension.yml": (
                 "apiVersion: v1\nkind: ConfigMap\ndata:\n  Y_CONSUMER_GROUP: svc-v2r4\n"
+            ),
+            "transactional-id.yaml": (
+                "apiVersion: v1\nkind: ConfigMap\ndata:\n"
+                "  ZERO_DTE_TRANSACTIONAL_ID: context-tape-compression-v1\n"
             ),
         }
         with tempfile.TemporaryDirectory() as tmp:

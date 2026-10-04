@@ -517,6 +517,20 @@ if [ -n "${HEALTH_URL:-}" ]; then
   fi
 fi
 
+# Context Tape carries the independently fail-closed ZDCE shadow runtime. Its health is not a
+# Kubernetes readiness dependency (off-hours legitimately has no current-session row), so the
+# generic rollout gate cannot prove it was enabled or loaded the frozen artifact. Exercise its
+# fail-closed deployment contract here for dev + production: disabled must be
+# explicitly disabled; once enabled, the runtime must advance to BACKFILL/LIVE.
+if [ "$SERVICE" = "context-tape" ] && [ "$ENVIRONMENT" != "experiment" ]; then
+  echo "=== zero-dte compression shadow gate ==="
+  if ! NAMESPACE="$NAMESPACE" WORK_DIR="$WORK_DIR" \
+      bash scripts/smoke/check-zero-dte-compression.sh; then
+    echo "  compression: FAIL — dedicated shadow smoke did not pass" >&2
+    gate_fail=1
+  fi
+fi
+
 # --- §13.2 rollback instructions (always printed) --------------------------------------
 echo "=== rollback (no rebuild needed — re-points to the recorded digests) ==="
 while IFS=$'\t' read -r dep ctr prev; do
