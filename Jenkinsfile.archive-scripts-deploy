@@ -307,7 +307,20 @@ EOSSH
         // nothing can run between the verification and the copy. tests/test_jenkins_permitted_sha_guard.py holds this
         // list equal to UNIT.
         timeout(time: 10, unit: 'MINUTES') {
-          sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp --allow-ignored scripts/ops/archive/market_calendar.py'
+          // BOTH staged copies are declared. The suite container mounts only scripts/ops/archive, so the
+          // job copies market_calendar.py and vol-premium-open-reference-capture.py into it; both are
+          // gitignored there, and this verifier refuses ANY ignored path it was not told to expect.
+          // #1125 added the second copy and not the declaration, so the very first real install refused
+          // at this gate — the tests-only run skips this stage, which is why nothing before the deploy
+          // saw it. scripts/ci/validate-archive-unit-completeness.sh now requires the declaration for
+          // every file it already requires a staging `cp` for — as an argument to what it can read as a
+          // statement running this verifier, with the verifier as the command word and the whole token
+          // matching. It is a TEXT check and says so where it is: it cannot decide whether a line
+          // executes, and the gate that can is this verifier itself, at install time, on the tree. So
+          // neither the literal in an echo, nor an echo of the verifier itself carrying the
+          // declarations, nor text after a shell operator, nor a declaration for a neighbouring path
+          // satisfies it. The path may be given unquoted, as here, or double-quoted.
+          sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp --allow-ignored scripts/ops/archive/market_calendar.py --allow-ignored scripts/ops/archive/vol-premium-open-reference-capture.py'
         }
         sh 'scp -o BatchMode=yes scripts/ops/archive/oe-archive-kafka.sh scripts/ops/archive/StrikeArchiveReader.java scripts/ops/archive/oe-alert.sh scripts/ops/archive/oe-topics.env scripts/ops/archive/test-archive-reset.sh scripts/ops/archive/oe-archive.crontab scripts/ops/archive/oe-archive.crontab.predecessor scripts/ops/archive/oe-calibration-progress.sh scripts/ops/archive/oe_corpus_reader.py scripts/ops/archive/oe-push-validation-artifact.sh scripts/ops/archive/push-validation-artifact-test.sh scripts/ops/archive/calibration-targets.env scripts/jenkins/market_calendar.py scripts/ops/archive/oe-archive-verify.sh scripts/ops/archive/oe-trading-day.sh scripts/ops/archive/oe-archive-daily.sh scripts/ops/archive/oe-archive-dev.sh scripts/ops/archive/ibkr-raw-retention.sh scripts/ops/archive/oe-archive-postgres.sh scripts/ops/archive/oe-vol-premium-open-capture.sh scripts/ops/vol-premium-open-reference-capture.py "${PROD_HOST}:${STAGE_DIR}/"'
         sh '''
