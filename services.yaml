@@ -204,6 +204,8 @@ services:
   # k8s/overlays/dev/kustomization.yaml.
   - { name: oi-shadow,                    managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-oi-shadow,                    deployments: [oi-shadow-service] }
   - { name: vix-option-inteligence,        managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-vix-option-inteligence,        deployments: [vix-option-inteligence-service] }
+  # the dedicated v7 research writer (increment 9e): the SAME image, its own Deployment at replicas 0; activated only by Jenkinsfile.zerodte-writer-activate
+  - { name: zerodte-research-writer,       managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-vix-option-inteligence,        deployments: [zerodte-research-writer] }
   - { name: greek-move-authenticity,       managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-greek-move-authenticity,       deployments: [greek-move-authenticity-service] }
   - { name: es-open-direction-postgres-writer, managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-es-open-direction-postgres-writer, deployments: [es-open-direction-postgres-writer] }
   - { name: reversal-postgres-writer,     managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-reversal-postgres-writer,     deployments: [reversal-postgres-writer] }

@@ -1,0 +1,129 @@
+# THE DEDICATED v7 RESEARCH WRITER (increment 9e; design §5.3 / §14 / §16; inc 9 consult Q7 / Q9) — its own single-replica Deployment of the
+# vix-option-inteligence SERVICE image, main class ZeroDteResearchWriterMain (increment 9d): it consumes the frames topic (read_committed, ONE
+# partition, NEVER a Kafka offset commit) and persists each frame's research bundle into the v7 store under the database cursor.
+#
+# SHIPS AT replicas: 0. It is ACTIVATED to one replica only by Jenkinsfile.zerodte-writer-activate (scripts/ops/zerodte-writer-activate.sh)
+# after an exact committed deploy/zerodte/provisioned/<env>.yaml, a writer CHECK Job that proved the live era, the schema, the topic and the
+# cursor recovery (`--check`), and under the deployment / migration exclusion lock. The morning autostart and the boot bring-up keep it at 0.
+#
+# NO envFrom — DELIBERATELY. The research migration's quiescence proof (scripts/ops/zerodte-quiescence.py) judges every pod that runs this
+# image: a running pod's ZERODTE_RESEARCH_ENABLED must be known OFF from its own spec, and an envFrom ConfigMap that COULD carry that key is
+# unknowable at the container's start. So every variable is named here; the two ConfigMap-backed ones are read by key (a configMapKeyRef on
+# another name is lawful), the password by secretKeyRef. This Deployment is declared in deploy/zerodte/research-migration/legacy-writers.yaml
+# (it runs the image, so it must be pinned, flag-off and settled when a migration runs).
+#
+# IDENTITY: ZERO_DTE_ERA_ID and ZERO_DTE_PROVISIONING_GENERATION come from the ConfigMap zerodte-writer-identity, which the activation wrapper
+# renders from the COMMITTED provisioning receipt and applies before scaling — never hand-entered. The writer refuses (RESEARCH_ERA_MISSING)
+# when the live frames topic's era is not the one the receipt names.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zerodte-research-writer
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: zerodte-research-writer
+    app.kubernetes.io/component: zerodte-research-writer
+    app.kubernetes.io/part-of: options-edge
+spec:
+  replicas: 0
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: zerodte-research-writer
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: zerodte-research-writer
+        app.kubernetes.io/component: zerodte-research-writer
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: zerodte-research-writer
+          image: 192.168.100.252:5000/options-edge-vix-option-inteligence:dev
+          imagePullPolicy: Always
+          command: ["java", "-cp", "/app/app.jar", "com.optionsedge.processing.zerodte.research.ZeroDteResearchWriterMain"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: HEALTH_PORT
+              value: "8080"
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              valueFrom:
+                configMapKeyRef:
+                  name: options-edge-config
+                  key: KAFKA_BOOTSTRAP_SERVERS
+            - name: POSTGRES_JDBC_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: options-edge-config
+                  key: POSTGRES_JDBC_URL
+            - name: POSTGRES_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: options-edge-config
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: options-edge-runtime-secrets
+                  key: POSTGRES_PASSWORD
+            - name: ZERO_DTE_RESEARCH_JDBC_PASSWORD_ENV
+              value: POSTGRES_PASSWORD
+            - name: ZERO_DTE_SYMBOL
+              value: SPX
+            # the frames topic and the group: the provisioning declaration's FRAMES topic (deploy/zerodte/provisioning/<env>.yaml); the group
+            # names this writer to the broker and is never committed to (§16)
+            - name: ZERO_DTE_FRAMES_TOPIC
+              value: vix-option-inteligence.spx.frames
+            - name: ZERO_DTE_RESEARCH_GROUP
+              value: zerodte-research-writer-spx
+            - name: ZERO_DTE_ERA_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: zerodte-writer-identity
+                  key: eraId
+            - name: ZERO_DTE_PROVISIONING_GENERATION
+              valueFrom:
+                configMapKeyRef:
+                  name: zerodte-writer-identity
+                  key: provisioningGeneration
+            - name: ZERO_DTE_RESEARCH_LAG_ALERT_MS
+              value: "120000"
+            - name: ZERO_DTE_EXPECTED_SESSIONS_AHEAD
+              value: "60"
+            - name: ZERO_DTE_RESEARCH_RETRY_BACKOFF_MS
+              value: "5000"
+            - name: JAVA_TOOL_OPTIONS
+              value: -Xms64m -Xmx384m
+          ports:
+            - name: health
+              containerPort: 8080
+          livenessProbe:
+            httpGet: { path: /health/live, port: health }
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          readinessProbe:
+            httpGet: { path: /health/ready, port: health }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 512Mi }
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi

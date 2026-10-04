@@ -125,6 +125,56 @@ unmeasurable wall time refuses too). Record each environment's dry-run wall time
 | dev | — | — | — | — | fill from the dev dry run |
 | production | — | — | — | — | fill from the production dry run; CONFIRM only after it is under the ceiling with margin |
 
+## The dedicated v7 research writer (increment 9e — `Jenkinsfile.zerodte-writer-activate`)
+
+The writer that fills the v7 research store from the frames log is a SEPARATE service, `zerodte-research-writer`
+(`k8s/base/zerodte-research-writer-deployment.yaml`, generated slices under `k8s/services/zerodte-research-writer/`, `services.yaml`,
+`KEEP_DOWN` in both bring-up scripts): the vix-option-inteligence service image, digest-pinned by the ordinary service deploy, running
+`ZeroDteResearchWriterMain` (increment 9d) with `replicas: 0` AS SHIPPED. No deploy, no bring-up and no morning autostart ever gives it a
+replica; THIS pipeline is the only path to one, and the gate it enforces is inc 9 consult Q9 verbatim: "an exact committed
+`provisioned/<env>.yaml`, verified era, and a successful writer dry/readiness check".
+
+Its identity is NOT in the Deployment: `ZERO_DTE_ERA_ID` and `ZERO_DTE_PROVISIONING_GENERATION` are read by key from the ConfigMap
+`zerodte-writer-identity`, which only `scripts/ops/zerodte-writer-activate.sh` renders — from the committed receipt, never by hand — so a
+writer with a replica and no activated identity cannot start, and no `envFrom` exists on the container (every variable is named; the
+password by `secretKeyRef`). The writer's environment is the one `vix-option-inteligence-service/docs/STAGE-B-FRAMES-DESIGN.md` §16 lists.
+
+`ACTION=check` (ALWAYS runs): the committed receipt `provisioned/<env>.yaml` must pass `validate-zerodte-provisioning.sh` BOUND to its
+declaration; its `eraId`, `generation`, `environmentLineageId`, `clusterId`, `ledgerTopicId` and the declaration's `FRAMES` topic are read
+through `zerodte_attestation.py` (the one strict subset); the live Deployment must ALREADY run the digest this run pins from
+`image-tags/<env>.yaml` (the slice is deployed first; another digest or no Deployment refuses before any lock or Job); then, under
+`zerodte-research-migrate-lock` (holder kind `writer-activate` — a migration, a service rollout and an activation exclude each other), the
+CHECK Job `k8s/jobs/zerodte-writer-check-job.yaml` runs `ZeroDteResearchWriterMain --check` on that digest with the receipt's identity as
+LITERALS and prints ONE line, held to its canonical grammar and BOUND to the receipt:
+
+* `WRITER_CHECK READY eraId=<n> generation=<n> clusterId=<id> framesTopicId=<hex32> position=<n> cursorOffset=<n|none>` (exit 0) — schema v7,
+  one frames partition, the era the receipt names bound to the LIVE cluster and topic, the calendar's reach, the cursor recovered;
+  `eraId` / `generation` / `clusterId` must equal the receipt's;
+* `WRITER_CHECK REFUSED code=<Code> exit=68` — each code mapped to its remedy (`RESEARCH_SCHEMA_VERSION` → the migration job;
+  `RESEARCH_ERA_MISSING` → the provisioning job and ITS receipt; `RESEARCH_TOPIC_INVALID`; `RESEARCH_CALENDAR_COVERAGE`;
+  `RESEARCH_OFFSET_LOST` → read the store, nothing is invented); `WRITER_CHECK UNAVAILABLE exit=69`; `WRITER_CHECK USAGE exit=64`.
+  The container's exit code must agree with the line; a reordered, extra or missing token, two lines or none, a log that cannot be read,
+  an image without the writer, a Job still active at the client timeout: each a refusal.
+
+Nothing is consumed and nothing is written by a check; it writes the check receipt (`build= env= generation= eraId= receipt_sha256= head=`)
+for the activate stage of the SAME build (the Jenkinsfile clears the previous build's receipt right after the guard).
+
+`ACTION=activate` (`CONFIRM=true`): HEAD == `PERMITTED_SHA` re-checked; this build's check receipt required to the letter; the CHECK Job run
+AGAIN under the lock right before the effect (the live world may have moved); then the identity ConfigMap applied FROM THE RECEIPT, the
+Deployment scaled to ONE replica, the rollout awaited, and exactly one pod required Running and Ready on the pinned digest — any other
+count, readiness or digest fails the build (the replica stays as the API left it; read the log). `ACTION=deactivate` (`CONFIRM=true`): scale
+to zero under the lock and await the pods gone.
+
+ORDER ON EVERY ENVIRONMENT (consult Q12): the compatibility image with the legacy writer off → the migration job (dry run, CONFIRM) → the
+provisioning job (dry run, CONFIRM, ITS receipt committed through review) → the writer slice deployed at zero → THIS job (`check`, then
+`activate` with `CONFIRM`) → increment 8. `scripts/ci/zerodte-writer-activate-receipt-test.sh` drives the wrapper through 70+ cases
+(printed by the test) against a fake kubectl, a fake clock and a throwaway checkout carrying an APPROVED fixture attestation: every
+receipt outcome and grammar violation, the receipt binding, the refusals before the lock, the lock held by a migration / a rollout, the
+Job races, the activation ORDER (check Job → ConfigMap → scale → rollout → pods → lock released last), every pod-gate failure, the
+deactivation, the parameters and the cluster pins; it CAPTURES the Job and the ConfigMap the wrapper creates and asserts the identity
+literals, the absence of `envFrom` and the password by name. `zerodte-writer-activate-guard-test.sh` runs the guard stage through 29;
+`zerodte-compat-flag-test.sh` renders the writer slice and asserts `replicas: 0`, no `envFrom`, the identity by key.
+
 ## Owner-only items (stated once)
 
 * The ledger key `ZERO_DTE_LEDGER_KEY` (≥ 64 hex): a Jenkins secret-text credential (`zerodte-ledger-key` / `zerodte-ledger-key-dev`)

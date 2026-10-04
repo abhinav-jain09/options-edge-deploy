@@ -28,6 +28,25 @@ for env in dev production experiment; do
   check "the $env monolith render (the slice's source)" "$T/mono-$env.yaml"
 done
 check "the base Deployment" k8s/base/vix-option-inteligence-deployment.yaml
+# the DEDICATED v7 writer (increment 9e) runs the same image: its pod must carry NO envFrom (an envFrom ConfigMap could carry the flag, unknowable at
+# the container's start) and NO ZERODTE_RESEARCH_ENABLED entry at all (absent = off, as the service reads it), in every render and in the base
+writer() { # writer <what> <render file>
+  local envfrom entries cmd
+  envfrom="$(yq -r 'select(.kind == "Deployment" and .metadata.name == "zerodte-research-writer") | .spec.template.spec.containers[] | (.envFrom // []) | length' "$2" | grep -v '^---$' | grep -v '^$' | tr '\n' ',')"
+  entries="$(yq -r 'select(.kind == "Deployment" and .metadata.name == "zerodte-research-writer") | .spec.template.spec.containers[] | [.env[] | select(.name == "ZERODTE_RESEARCH_ENABLED")] | length' "$2" | grep -v '^---$' | grep -v '^$' | tr '\n' ',')"
+  cmd="$(yq -r 'select(.kind == "Deployment" and .metadata.name == "zerodte-research-writer") | .spec.template.spec.containers[0].command | join(" ")' "$2" | grep -v '^---$' | grep -v '^$' | head -1)"
+  # the identity (era, generation) is read BY KEY from the ConfigMap zerodte-writer-identity that only the activation renders — never a literal in the render
+  era="$(yq -r 'select(.kind == "Deployment" and .metadata.name == "zerodte-research-writer") | .spec.template.spec.containers[0].env[] | select(.name == "ZERO_DTE_ERA_ID") | .valueFrom.configMapKeyRef | .name + "/" + .key' "$2" | grep -v '^---$' | grep -v '^$' | head -1)"
+  gen="$(yq -r 'select(.kind == "Deployment" and .metadata.name == "zerodte-research-writer") | .spec.template.spec.containers[0].env[] | select(.name == "ZERO_DTE_PROVISIONING_GENERATION") | .valueFrom.configMapKeyRef | .name + "/" + .key' "$2" | grep -v '^---$' | grep -v '^$' | head -1)"
+  if [ "$era" = "zerodte-writer-identity/eraId" ] && [ "$gen" = "zerodte-writer-identity/provisioningGeneration" ]; then pass=$((pass+1)); echo "  ok   $1: the identity is read by key from zerodte-writer-identity"; else fail=$((fail+1)); echo "  FAIL $1: identity sources era '$era' generation '$gen'"; fi
+  if [ "$envfrom" = "0," ] && [ "$entries" = "0," ] && [ "$cmd" = "java -cp /app/app.jar com.optionsedge.processing.zerodte.research.ZeroDteResearchWriterMain" ]; then pass=$((pass+1)); echo "  ok   $1: the writer has no envFrom, no ZERODTE_RESEARCH_ENABLED entry, and runs the writer main"; else fail=$((fail+1)); echo "  FAIL $1: writer envFrom counts '$envfrom', flag entries '$entries', command '$cmd'"; fi
+}
+for env in dev production experiment; do
+  kubectl kustomize "k8s/services/zerodte-research-writer/overlays/$env" > "$T/writer-$env.yaml" 2>/dev/null || { fail=$((fail+1)); echo "  FAIL the $env writer slice does not render"; continue; }
+  writer "the generated $env writer slice" "$T/writer-$env.yaml"
+  [ "$(yq -r 'select(.kind == "Deployment" and .metadata.name == "zerodte-research-writer") | .spec.replicas' "$T/writer-$env.yaml" | grep -v '^---$' | head -1)" = 0 ] && { pass=$((pass+1)); echo "  ok   the $env writer slice ships at replicas 0"; } || { fail=$((fail+1)); echo "  FAIL the $env writer slice does not ship at replicas 0"; }
+done
+writer "the base writer Deployment" k8s/base/zerodte-research-writer-deployment.yaml
 # A SEPARATE policy, stated EXACTLY: nowhere under k8s/ may a map carrying both a `name` equal to the flag and a `valueFrom` key exist —
 # a SOURCE-HYGIENE rule on the repository's YAML (it flags such a map wherever it sits, a CRD or a comment-like object included, and it is
 # NOT a kubelet-equivalence proof: an envFrom importing a ConfigMap that carries the key is the quiescence helper's business at runtime,

@@ -1,0 +1,142 @@
+@Library('oe') _
+
+// ACTIVATE (or CHECK, or DEACTIVATE) THE DEDICATED v7 RESEARCH WRITER of one environment — increment 9e (design §5.3 / §14 / §16; inc 9
+// consult Q7 / Q9: "Activation to one replica requires an exact committed provisioned/<env>.yaml, verified era, and a successful writer
+// dry/readiness check"). The writer (increment 9d, ZeroDteResearchWriterMain in the service image) ships as the Deployment
+// zerodte-research-writer at replicas 0 (k8s/base/zerodte-research-writer-deployment.yaml, deployed like any service slice by
+// Jenkinsfile.service-deploy, kept at 0 by the morning autostart and the boot bring-up). THIS pipeline is the only path to one replica.
+//
+// WHAT RUNS: scripts/ops/zerodte-writer-activate.sh — the committed receipt deploy/zerodte/provisioned/<env>.yaml validated and BOUND to its
+// declaration (the PR validator), the cluster pinned by its CA, the service image digest-pinned and REQUIRED to be what the live Deployment
+// already runs, the deployment / migration / activation exclusion lock held through the effect, a CHECK Job (ZeroDteResearchWriterMain
+// --check: schema v7, one partition, the era the receipt names on the live topic, the calendar's reach, the cursor recovered — nothing
+// consumed, nothing written) whose ONE receipt line is held to its canonical grammar and bound to the receipt; on CONFIRM the identity
+// ConfigMap zerodte-writer-identity applied from the receipt and the Deployment scaled to one replica, the one pod required Ready on the
+// pinned digest; or scaled to zero (deactivate).
+//
+// THREE STAGES, IN ORDER, EVERY BUILD:
+//   1. VALIDATE — the provisioning files (declaration, attestation, the committed receipt bound to the declaration), the writer render
+//      (no envFrom, the flag absent), this pipeline's receipt and guard tests.
+//   2. CHECK — ALWAYS runs (ACTION check or activate): the CHECK Job; a build with CONFIRM=false ends here, green, having changed nothing.
+//   3. ACTIVATE / DEACTIVATE — runs ONLY when CONFIRM=true and ACTION != check, and (activate) only after stage 2 passed in the same build:
+//      the check Job runs AGAIN right before the effect, then the scale.
+//
+// ORDER ON EVERY ENVIRONMENT (consult Q12): the V1 compatibility image → the research migration (Jenkinsfile.zerodte-research-migrate) →
+// the provisioning (Jenkinsfile.zerodte-provision, its receipt committed) → the writer slice deployed at 0 → THIS job (check, then
+// activate; empty-topic readiness is lawful) → increment 8.
+//
+// PERMITTED COMMIT (Deployment Permission Rule): every run needs PERMITTED_SHA; the first stage fails closed unless HEAD equals it exactly
+// AND is on origin/main (scripts/jenkins/permitted-sha-guard.sh in its canonical stage; every later stage gated on its flag). The wrapper
+// re-checks HEAD == PERMITTED_SHA right before the effect and requires the check receipt THIS build wrote.
+//
+// BEFORE THE FIRST RUN: a Pipeline-from-SCM item (docs/deploy-single-service.md):
+//     scripts/jenkins/create-service-job.sh zerodte-writer-activate git@github.com:abhinav-jain09/options-edge-deploy.git Jenkinsfile.zerodte-writer-activate zerodte-provision
+//   then one plain /build so Jenkins parses the parameters.
+pipeline {
+  agent { label 'hpsf-replay-mac' }
+  parameters {
+    choice(name: 'ENVIRONMENT', choices: ['dev', 'production'],
+      description: 'Target environment — selects deploy/zerodte/provisioned/<env>.yaml (the committed provisioning receipt), the deployer kubeconfig (oeProfile) and the image registry.')
+    choice(name: 'ACTION', choices: ['check', 'activate', 'deactivate'],
+      description: 'check (DEFAULT) = the CHECK Job only, nothing changed. activate = after that same check passes, apply the identity ConfigMap from the receipt and scale zerodte-research-writer to ONE replica (needs CONFIRM=true). deactivate = scale it to zero (needs CONFIRM=true).')
+    booleanParam(name: 'CONFIRM', defaultValue: false,
+      description: 'false (DEFAULT) = no effect: the check runs and the build ends green. true = perform ACTION (activate / deactivate) after the check of this build passed.')
+    string(name: 'PERMITTED_SHA', defaultValue: '', trim: true,
+      description: 'REQUIRED. The full 40-character lowercase commit id of the options-edge-deploy commit this run is permitted for. The build fails closed unless the checked-out HEAD equals it exactly and it is on origin/main.')
+    string(name: 'PERMITTED_SHA_GUARD_VERSION', defaultValue: '2f6fc2ab7aa51eb8a9e8aa350f2d774cd2fb7a253de2591e43645a19a9886b24',
+      description: 'DO NOT EDIT BY HAND — the sha256 of scripts/jenkins/permitted-sha-guard.sh this definition runs (Deployment Permission Rule). The guard refuses to run under any other value. It is a DECLARATION, not proof that this job enforces the guard: a caller that triggers this job judges its SCM definition and its Jenkinsfile at the forwarded commit (scripts/jenkins/require-guarded-downstream.sh). Regenerate with scripts/jenkins/permitted-sha-guard-version.sh when the guard changes.')
+    string(name: 'KUBECONFIG_FILE', defaultValue: '',
+      description: 'Deployer kubeconfig on the Jenkins agent. Empty = oeProfile(ENVIRONMENT).kubeconfigDeployer.')
+    string(name: 'KEEP_JOBS', defaultValue: '5',
+      description: 'How many most-recent TERMINAL check Jobs to retain (nothing else prunes them). 1..100.')
+  }
+  // NO TRIGGERS: activating the research writer is a person's decision.
+  options {
+    disableConcurrentBuilds()
+    disableRestartFromStage()
+    timeout(time: 45, unit: 'MINUTES')
+    buildDiscarder(logRotator(numToKeepStr: '50'))
+  }
+  environment {
+    KUBECONFIG    = "${params.KUBECONFIG_FILE ?: oeProfile(params.ENVIRONMENT).kubeconfigDeployer}"
+    ENVIRONMENT   = "${params.ENVIRONMENT}"
+    KEEP_JOBS     = "${params.KEEP_JOBS}"
+    // PERMITTED_SHA is NOT mirrored here: Jenkins already exposes the (trimmed) parameter as that environment variable,
+    // and a permission variable may be defined only by parameters{} (validator: permission variables are read-only).
+  }
+  stages {
+    // ---- Deployment Permission Rule (options-edge rule.md): Jenkins enforces the permitted commit ----
+    stage('Permitted commit guard') {
+      options { timeout(time: 10, unit: 'MINUTES') }
+      steps {
+        script {
+          def rc = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')
+          if (rc != 0) {
+            error("Permitted commit guard REFUSED this build (rc=${rc}) — see its output above. Nothing was validated, checked or activated.")
+          }
+          env.PERMITTED_SHA_GUARD = 'PASSED'
+        }
+      }
+    }
+    stage('Clear previous check receipt') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
+      steps {
+        sh '''
+          set -euo pipefail
+          rm -f "${WORKSPACE}/zerodte-writer-check.receipt"
+        '''
+      }
+    }
+    stage('Validate receipt and render') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
+      steps {
+        sh '''
+          set -euo pipefail
+          bash scripts/ci/validate-zerodte-provisioning.sh
+          bash scripts/ci/zerodte-compat-flag-test.sh
+          bash scripts/ci/zerodte-writer-activate-receipt-test.sh
+        '''
+      }
+    }
+    stage('Check: WRITER_CHECK READY?') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.ACTION == 'check' || params.ACTION == 'activate') } }
+      // ALWAYS for check and activate (once the guard passed). Nothing changed; ends the build green when CONFIRM=false.
+      steps {
+        sh '''
+          set -euo pipefail
+          chmod +x scripts/ops/zerodte-writer-activate.sh
+          CHECK_RECEIPT="${WORKSPACE}/zerodte-writer-check.receipt" ACTION=check CONFIRM=false scripts/ops/zerodte-writer-activate.sh
+        '''
+      }
+    }
+    stage('Activate / deactivate (--confirm)') {
+      when {
+        beforeAgent true
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.CONFIRM && (params.ACTION == 'activate' || params.ACTION == 'deactivate')) }
+      }
+      // The wrapper re-establishes the prerequisites before the effect: HEAD == PERMITTED_SHA (again), and (activate) the check receipt
+      // written by THIS build (BUILD_NUMBER) for THIS environment, receipt and HEAD — then runs the check Job again and scales.
+      steps {
+        sh '''
+          set -euo pipefail
+          CHECK_RECEIPT="${WORKSPACE}/zerodte-writer-check.receipt" ACTION="${ACTION}" CONFIRM=true scripts/ops/zerodte-writer-activate.sh
+        '''
+      }
+    }
+  }
+  post {
+    success {
+      script {
+        echo params.CONFIRM && params.ACTION != 'check' ? "${params.ACTION.toUpperCase()}D the dedicated v7 research writer on ${params.ENVIRONMENT} — see the stage log for the writer's receipt" :
+                                                           "CHECK ONLY — the writer's boot was proven against the live cluster and store; nothing changed. Re-run with ACTION=activate and CONFIRM=true to scale it to one replica on ${params.ENVIRONMENT}."
+      }
+    }
+    unsuccessful {
+      script {
+        echo "zerodte writer ${params.ACTION} ${currentBuild.currentResult} (build ${env.BUILD_NUMBER}, env ${params.ENVIRONMENT}, confirm ${params.CONFIRM}). " +
+             "Read the stage log: a WRITER_CHECK REFUSED names its code (RESEARCH_SCHEMA_VERSION = migrate first; RESEARCH_ERA_MISSING = provision and commit the receipt first; RESEARCH_OFFSET_LOST = an inconsistent store and log); " +
+             "a lock refusal names its holder (a migration, a rollout or another activation); a missing or unbound committed receipt is refused before anything runs."
+      }
+    }
+  }
+}
