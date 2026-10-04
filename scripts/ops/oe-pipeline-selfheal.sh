@@ -472,7 +472,21 @@ sample() {   # returns 1 when the describe failed; the caller judges nothing thi
   printf '%s\n' "$out" | awk 'NF>=6 && $1!="GROUP" && $4 ~ /^[0-9]+$/ && $5 ~ /^[0-9]+$/ && $6 ~ /^[0-9]+$/ {cur[$1]+=$4; end[$1]+=$5; lag[$1]+=$6}
          END{for (g in cur) printf "%s %d %d %d\n", g, cur[g], end[g], lag[g]}'
 }
-statesizes() { du -sk "$STORAGE"/*_options-edge_*-streams-state 2>/dev/null | awk '{print $2" "$1}'; }
+# Realpath of an existing directory, or failure. Defined here because statesizes runs at the top
+# level below, before the per-group functions further down are defined.
+canon()   { python3 -c 'import os,sys; p=os.path.realpath(sys.argv[1]); sys.exit(1) if not os.path.isdir(p) else print(p)' "$1" 2>/dev/null; }
+# Keyed by the CANONICAL directory, because that is what state_dir_of resolves to and the growth
+# check looks the sample up by it. du prints the path it was given, so a STORAGE or PV path reached
+# through a symlink (/var is /private/var on macOS) would otherwise never match and a restoring
+# app's growing state would be invisible.
+statesizes() {
+  local root d p
+  root=$(canon "$STORAGE") || return 0
+  for d in "$root"/*_options-edge_*-streams-state; do
+    p=$(canon "$d") || continue
+    du -sk "$p" 2>/dev/null | awk -v k="$p" 'NF{print k" "$1}'
+  done
+}
 # Bytes RECEIVED by a pod, all interfaces but lo, from its own /proc/net/dev. A consumer that is
 # fetching a moving source pulls megabytes per minute; one parked in a retry loop only heartbeats.
 # Sampled for every Running pod at t0 and t1 ("<pod> <bytes>" per line).
@@ -557,7 +571,6 @@ resolve() {
   echo ""
 }
 desired() { $KUBECTL get deploy "$1" -o jsonpath='{.spec.replicas}' 2>/dev/null; }
-canon()   { python3 -c 'import os,sys; p=os.path.realpath(sys.argv[1]); sys.exit(1) if not os.path.isdir(p) else print(p)' "$1" 2>/dev/null; }
 hpa_on()  {   # 0 = an HPA targets it, 1 = none does, 2 = could not read (the caller withholds)
   local l; l=$($KUBECTL get hpa -o jsonpath='{range .items[*]}{.spec.scaleTargetRef.name}{"\n"}{end}' 2>/dev/null) || return 2
   printf '%s\n' "$l" | grep -qx "$1"

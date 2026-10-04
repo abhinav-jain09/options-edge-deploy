@@ -624,6 +624,28 @@ class PipelineSelfhealTest(unittest.TestCase):
         assert Path(env["_ABORTS"]).exists(), "the abort — the one automated action on a park — did not happen"
 
 
+    def test_growing_local_state_is_seen_when_storage_is_reached_through_a_symlink(self):
+        """STORAGE and the PV's host path are both given through a symlink (as /var is /private/var).
+        state_dir_of canonicalises the directory it resolves; the size sample must key by the same
+        canonical path, or a restoring app's growing state is invisible and it is acted on."""
+        tmp_path = self.tmp_path
+        link = tmp_path / "storage-link"; link.symlink_to(tmp_path / "storage", target_is_directory=True)
+        env, actions = _sandbox(tmp_path, grow_state=True, pv_path_override=f"{link}/{PV}_options-edge_{CLAIM}")
+        env["STORAGE"] = str(link)
+        out = _escalate(env, 3)
+        assert "local state grew" in out and _acted(actions) == ""
+        assert _no_abort(env), "an abort happened in a must-not-act case"
+
+
+    def test_mutation_the_same_symlinked_storage_with_static_state_is_acted_on(self):
+        tmp_path = self.tmp_path
+        link = tmp_path / "storage-link"; link.symlink_to(tmp_path / "storage", target_is_directory=True)
+        env, actions = _sandbox(tmp_path, grow_state=False, pv_path_override=f"{link}/{PV}_options-edge_{CLAIM}")
+        env["STORAGE"] = str(link)
+        _escalate(env, 4)
+        assert Path(env["_ABORTS"]).exists(), "the abort — the one automated action on a park — did not happen"
+
+
     def test_a_pod_that_is_receiving_data_is_fetching_not_parked(self):
         """Everything else says wedged (park on every dump, no commit) but the pod pulls megabytes:
         it is consuming a moving source, and a parked consumer only heartbeats."""
