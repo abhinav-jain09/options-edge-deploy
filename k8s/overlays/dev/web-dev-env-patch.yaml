@@ -42,6 +42,8 @@ spec:
           env:
             - name: APP_PROFILE
               value: "dev"
+            - name: VITE_ZERO_DTE_ES_CHALLENGER_ENABLED
+              value: "true"
             # Auth ON in dev (mirrors prod). Keycloak's OWN configured hostname is dev-auth.bleadingoptions.com
             # (its discovery doc self-reports this issuer regardless of which address you query it on --
             # confirmed by hitting both http://192.168.100.102:8089/... and https://dev-auth.bleadingoptions.com/...

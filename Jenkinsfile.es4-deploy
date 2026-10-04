@@ -33,7 +33,7 @@ pipeline {
       description: 'REQUIRED — Deployment Permission Rule (options-edge rule.md). The full 40-character commit id of THIS repository that Abhinav permitted for this run. The Permitted commit guard stage refuses the build before any effect unless the checked-out HEAD is exactly this commit AND on origin/main; empty, short or mismatched values are refused and nothing is substituted. A manual click needs it too: copy it from `git rev-parse origin/main`.')
     string(name: 'PERMITTED_SHA_GUARD_VERSION', defaultValue: '2f6fc2ab7aa51eb8a9e8aa350f2d774cd2fb7a253de2591e43645a19a9886b24',
       description: 'DO NOT EDIT BY HAND — the sha256 of scripts/jenkins/permitted-sha-guard.sh this definition runs (Deployment Permission Rule). The guard refuses to run under any other value. It is a DECLARATION, not proof that this job enforces the guard: a caller that triggers this job judges its SCM definition and its Jenkinsfile at the forwarded commit (scripts/jenkins/require-guarded-downstream.sh). Regenerate with scripts/jenkins/permitted-sha-guard-version.sh when the guard changes.')
-    choice(name: 'ACTION', choices: ['deploy-service', 'deploy-all', 'infra-sync', 'create-topics', 'clean-reset', 'activate-es-feed', 'deactivate-es-feed'],
+    choice(name: 'ACTION', choices: ['deploy-service', 'deploy-all', 'infra-sync', 'create-topics', 'clean-reset', 'activate-es-feed', 'deactivate-es-feed', 'activate-zero-dte-es-challenger', 'deactivate-zero-dte-es-challenger'],
       description: 'What to do (see header).')
     choice(name: 'SERVICE', choices: [
       'close-direction',
@@ -42,7 +42,7 @@ pipeline {
       'directional-pressure', 'gex-delta-redis-writer', 'option-price-behavior', 'option-truth-engine', 'pin-postgres-writer',
       'pressure-postgres-writer', 'raw-to-display', 'strike-flow-avro-adapter', 'strike-flow-classifier',
       'strike-liquidity-heatmap', 'volume-pace',
-      'strike-intelligence', 'vix-option-inteligence', 'greek-move-authenticity', 'gamma-migration', 'gamma-ladder-path', 'indicator-service', 'context-tape', 'tape-zones', 'es-aggressor-flow', 'es-cvd', 'es-footprint-strike', 'es-amt', 'es-feed-gateway', 'es-web',
+      'strike-intelligence', 'vix-option-inteligence', 'greek-move-authenticity', 'gamma-migration', 'gamma-ladder-path', 'indicator-service', 'context-tape', 'zero-dte-es-challenger', 'tape-zones', 'es-aggressor-flow', 'es-cvd', 'es-footprint-strike', 'es-amt', 'es-feed-gateway', 'es-web',
       'es-feed',
       // The held spread-skew stack is deploy-service-only ON PURPOSE: deploy-all excludes it, so the
       // ONLY sanctioned way to reconcile the ES4_KEEP_DOWN replicas:0 hold onto live pods (or to ever
@@ -298,6 +298,9 @@ pipeline {
           if [ "$ACTION" = "deploy-service" ] && [ "$SERVICE" = "es-feed" ]; then
             echo "es-feed manifest applied at replicas 0. To start it: ACTION=activate-es-feed"
           fi
+          if [ "$ACTION" = "deploy-service" ] && [ "$SERVICE" = "zero-dte-es-challenger" ]; then
+            echo "zero-dte-es-challenger manifest applied at replicas 0. NAS evidence must pass before ACTION=activate-zero-dte-es-challenger can start it"
+          fi
           [ -n "$DRY" ] || kubectl -n options-edge get pods -o wide
         '''
       }
@@ -378,6 +381,55 @@ pipeline {
             [ "${n:-0}" = "0" ] || { echo "DEACTIVATE FAILED: $loc still has $n es-feed pod(s) after 5m" >&2; exit 1; }
             echo "$loc: es-feed scaled to 0, pods gone"
           done
+        '''
+      }
+    }
+    stage('Activate ES zero-DTE challenger (NAS evidence required)') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.ACTION == 'activate-zero-dte-es-challenger') } }
+      steps {
+        sh '''
+          set -euo pipefail
+          bash scripts/es4/assert-cluster-identity.sh "$ES4_KUBECONFIG" es4 "$ES4_NS_UID"
+          # Read the digest-pinned image from the object that will actually be scaled. A source tag,
+          # build number, or expected digest is not deployment identity and cannot authorize start.
+          image_ref=$(KUBECONFIG="$ES4_KUBECONFIG" kubectl -n options-edge get \
+            deploy/zero-dte-es-challenger-service \
+            -o jsonpath='{.spec.template.spec.containers[?(@.name=="zero-dte-es-challenger")].image}')
+          actual_image_digest=${image_ref##*@}
+          [[ "$image_ref" == *@sha256:* && "$actual_image_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+            echo "REFUSING TO ACTIVATE: deployed challenger image is not digest-pinned: $image_ref" >&2
+            exit 1
+          }
+          image_labels=$(DEPLOY_PLATFORM=linux/amd64 \
+            bash scripts/es4/read-pinned-image-labels.sh "$image_ref")
+          image_revision=$(jq -er '."org.opencontainers.image.revision"' <<<"$image_labels")
+          image_jar_sha=$(jq -er '."options-edge.runtime-jar-sha256"' <<<"$image_labels")
+          # Fail closed unless the approval lock binds the NAS corpus, calibrated artifact, exact
+          # Java runtime/JAR replay, robustness/load proofs, and this deployed image digest.
+          ZERO_DTE_ES_CHALLENGER_ACTUAL_IMAGE_DIGEST="$actual_image_digest" \
+          ZERO_DTE_ES_CHALLENGER_IMAGE_REVISION="$image_revision" \
+          ZERO_DTE_ES_CHALLENGER_IMAGE_JAR_SHA256="$image_jar_sha" \
+            bash scripts/es4/verify-zero-dte-es-evidence.sh
+          if [ "${DEPLOY_DRY_RUN:-false}" = "true" ]; then
+            echo "DRY: bound NAS/runtime/image evidence passed; would scale zero-dte-es-challenger-service to 1"
+            exit 0
+          fi
+          KUBECONFIG="$ES4_KUBECONFIG" kubectl -n options-edge scale deploy/zero-dte-es-challenger-service --replicas=1
+          KUBECONFIG="$ES4_KUBECONFIG" kubectl -n options-edge rollout status deploy/zero-dte-es-challenger-service --timeout=600s
+        '''
+      }
+    }
+    stage('Deactivate ES zero-DTE challenger') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.ACTION == 'deactivate-zero-dte-es-challenger') } }
+      steps {
+        sh '''
+          set -euo pipefail
+          bash scripts/es4/assert-cluster-identity.sh "$ES4_KUBECONFIG" es4 "$ES4_NS_UID"
+          if [ "${DEPLOY_DRY_RUN:-false}" = "true" ]; then
+            echo "DRY: would scale zero-dte-es-challenger-service to 0"
+            exit 0
+          fi
+          KUBECONFIG="$ES4_KUBECONFIG" kubectl -n options-edge scale deploy/zero-dte-es-challenger-service --replicas=0
         '''
       }
     }

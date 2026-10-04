@@ -8,9 +8,9 @@
 // ES-keyed records only) to dev and prod so all three envs share one uniform ES view. NO local
 // ES fallback on the targets — a broken mirror means ES goes STALE there, never different.
 //
-// The allow-list below is EIGHT topics: three CVD (bars, the live snapshot, the levels attestation),
-// four ES Footprint (ES-FOOTPRINT-DESIGN.md F-R14: bars, outcomes, and the two live snapshots) and the
-// ES Footprint strike-interaction log (ES-FOOTPRINT-STRIKE-INTERACTION.md R13).
+// The allow-list below is ELEVEN topics: three CVD (bars, the live snapshot, the levels attestation),
+// five ES Footprint topics (bars, outcomes, live snapshot, strike interaction, evidence), and the
+// three ES-machine zero-DTE challenger outputs (current, history, checkpoint).
 // Each is a separate run of this job, so the count only ever grows through the frozen contract arms
 // further down — a topic with no arm is refused, and validate-mirrored-topic-contracts.sh reconciles
 // every arm against topics.env on BOTH clusters before this file can merge.
@@ -43,7 +43,8 @@ pipeline {
     string(name: 'TARGET_SPX_CLUSTER_IP',defaultValue: '127.0.0.1',     description: 'Target env broker IP (dev = 127.0.0.1, prod = 192.168.100.252).')
     string(name: 'TARGET_PORT',          defaultValue: '19092',         description: 'Target Kafka port (dev = 19092, prod = 9092).')
     choice(name: 'TOPIC', choices: ['es.futures.cvd.bars', 'es.futures.cvd', 'es.futures.cvd.levels',
-      'es.futures.footprint.bars', 'es.futures.footprint.outcomes', 'es.futures.footprint', 'es.futures.footprint.strike', 'es.futures.footprint.evidence'], description: 'CVD topic to mirror (frozen allow-list — the shape contract below is per-topic).')
+      'es.futures.footprint.bars', 'es.futures.footprint.outcomes', 'es.futures.footprint', 'es.futures.footprint.strike', 'es.futures.footprint.evidence',
+      'es.context-tape.es-compression.current', 'es.context-tape.es-compression.history', 'es.context-tape.es-compression.checkpoint'], description: 'ES-owned topic to mirror (frozen allow-list — the shape contract below is per-topic).')
     choice(name: 'ACTION', choices: ['install', 'teardown'], description: 'install = create+run the mirror; teardown = stop+remove it.')
   }
   options { disableRestartFromStage(); disableConcurrentBuilds(); timeout(time: 15, unit: 'MINUTES') }
@@ -197,6 +198,11 @@ pipeline {
             # one partition — and folds on restart (R6). The dev/prod copies feed the feed-gateway's fifth
             # footprint stream (R3); a finite retention would cut the cross-session history R18 relies on.
             es.futures.footprint.strike)   PARTS=1; POLICY=delete; RET=-1; BYTES=-1 ;;
+            # ES-primary compression/expansion challenger. Current/checkpoint are compacted latest
+            # state; history is the immutable per-minute causal decision ledger.
+            es.context-tape.es-compression.current)    PARTS=1; POLICY=compact; RET=-1; BYTES=-1 ;;
+            es.context-tape.es-compression.history)    PARTS=1; POLICY=delete;  RET=-1; BYTES=-1 ;;
+            es.context-tape.es-compression.checkpoint) PARTS=1; POLICY=compact; RET=-1; BYTES=-1 ;;
             *) echo "FAIL: topic $TOPIC not in the cvd-mirror allow-list"; exit 1 ;;
           esac
 

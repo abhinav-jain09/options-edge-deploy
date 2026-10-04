@@ -52,8 +52,8 @@ SERVICES = [
     "indicator-service",
     "context-tape",
     # es4-ONLY (no dev/prod deployment): its slice is hand-authored as the render source —
-    # see the header of k8s/services/tape-zones/overlays/production/manifest.yaml.
-    "tape-zones",
+    # see the headers of their k8s/services/*/overlays/production/manifest.yaml sources.
+    "tape-zones", "zero-dte-es-challenger",
 ]
 
 ES_ENV = {
@@ -407,6 +407,9 @@ ES4_KEEP_DOWN = {
     # running it. Listing it here is the load-bearing part: a hand-set replicas:0 on the box is
     # undone by the next re-render, and es4 has no morning-autostart to hold it down.
     "option-truth-engine-service",
+    # ZDCE-128 activation is a separate Jenkins action. A normal es4 render/deploy must never
+    # start the challenger before the committed NAS Java-replay evidence passes its guard.
+    "zero-dte-es-challenger-service",
 }
 
 HEADER = """\

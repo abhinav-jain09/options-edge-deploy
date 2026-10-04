@@ -1,0 +1,46 @@
+{
+  "schemaVersion": "zdce.es-calibration-attestation.1",
+  "status": "PASS",
+  "authority": "SHADOW_NOT_FOR_TRADING",
+  "capability": "PRICE_VOLUME_ONLY",
+  "modelVersion": "zdce-es-challenger-v1",
+  "artifactSha256": "805813c6aa321d379207fcd2d758bfac9c8b73b3397b539753450ca8107804fd",
+  "corpusSha256": "c28a01c36e9c63d3ccba4f35a07d6fe301748e9c4973b3b6e0d9f260c8fd4e5c",
+  "evaluationSha256": "2bc4b3683a2a282da6b55aa0b487f3db835e6a76fdb81d4f60ec7687e7e77736",
+  "sourceRepository": "options-edge",
+  "sourcePath": "research/zero_dte/reports/zdce-es-challenger-evaluation.json",
+  "quality": {
+    "trainEligibleSessions": 149,
+    "validationEligibleSessions": 50,
+    "historicalReevaluationEligibleSessions": 50
+  },
+  "validation": {
+    "confirmedCompressionCount": 100,
+    "falseCompressionRate": 0.03,
+    "compressionWithoutReleaseWithin30mRate": 0.17,
+    "releaseCount": 86,
+    "falseReleaseRate": 0.5116279069767442,
+    "labelledExpansionOnsetCount": 456,
+    "matchedExpansionOnsetCount": 49,
+    "missedExpansionOnsetCount": 407,
+    "onsetRecallWithin3Before5After": 0.1074561403508772,
+    "medianOnsetDelayMinutes": 6.0,
+    "medianMovementConsumed": 1.0,
+    "latencyAndConsumptionIncludeMisses": true
+  },
+  "historicalReevaluation": {
+    "confirmedCompressionCount": 52,
+    "falseCompressionRate": 0.019230769230769232,
+    "compressionWithoutReleaseWithin30mRate": 0.15384615384615385,
+    "releaseCount": 66,
+    "falseReleaseRate": 0.42424242424242425,
+    "labelledExpansionOnsetCount": 416,
+    "matchedExpansionOnsetCount": 44,
+    "missedExpansionOnsetCount": 372,
+    "onsetRecallWithin3Before5After": 0.10576923076923077,
+    "medianOnsetDelayMinutes": 6.0,
+    "medianMovementConsumed": 1.0,
+    "latencyAndConsumptionIncludeMisses": true
+  },
+  "interpretation": "Reproducible historical shadow behavior only. False compression means an independent realized expansion began while the classifier still said compression; compression-without-release is a separate classifier lifecycle measure. Recall is about 11% and the miss-penalized median consumes 100% of the move, so this is not usefulness, trading, promotion, or untouched-forward approval."
+}
