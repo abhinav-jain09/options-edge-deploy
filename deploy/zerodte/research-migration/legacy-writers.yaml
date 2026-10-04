@@ -9,12 +9,14 @@
 #   writerDeployments   the Deployments that may run the image — each must be on the digest the migration Job runs, have the flag
 #                       resolved OFF in its template, and have a SETTLED rollout. The dedicated v7 writer (increment 9e) runs the same
 #                       image with the flag absent and is declared here so that its Deployment is a KNOWN workload; on top of the
-#                       declaration the helper judges it by what it RUNS — any container whose command names ZeroDteResearchWriterMain
-#                       (a pod, or a Deployment template) must be at ZERO during a migration, whatever its flag: a v7 writer under a
-#                       changing schema is refused (Jenkinsfile.zerodte-writer-activate ACTION=deactivate first)
+#                       declaration the helper judges it by what it RUNS — FIRST, over every pod and every controller template of the
+#                       namespace, before this file's image filter and before the Job exemption: any container whose command or args
+#                       name ZeroDteResearchWriterMain must be at ZERO during a migration, whatever its image, flag, label or owner
+#                       (Jenkinsfile.zerodte-writer-activate ACTION=deactivate first)
 #   exemptJobLabels     app.kubernetes.io/name values of the maintenance Jobs that run the same image and never write research rows
-#                       (the provisioner refuses below v7 and writes only the era; the migrator is this Job itself); a pod is exempt
-#                       only when a Job owns it AND it carries one of these labels
+#                       (the provisioner refuses below v7 and writes only the era; the migrator is this Job itself; the writer's --check
+#                       boots and exits); a pod is exempt only when a Job owns it AND it carries one of these labels — and the exemption
+#                       never reaches the main-class rule above: a pod running ZeroDteResearchWriterMain refuses whoever owns it
 imageRepository: options-edge-vix-option-inteligence
 writerDeployments:
   - vix-option-inteligence-service
@@ -22,3 +24,5 @@ writerDeployments:
 exemptJobLabels:
   - zerodte-research-migrate
   - zerodte-provision
+  - zerodte-writer-check          # the activation's CHECK Job (9e): the writer's --check on the service image — boot only, never a write;
+                                 # its kept (terminal) Jobs must not block a later migration; an ACTIVE one is refused by the main-class rule

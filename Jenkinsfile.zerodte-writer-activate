@@ -98,7 +98,7 @@ pipeline {
         '''
         // NOT here: scripts/ci/zerodte-writer-activate-guard-test.sh (this pipeline's own guard test) RUNS THE GUARD'S COMMAND, so the guard
         // validator classifies it as a source-consuming effect that would need its own verify-permitted-tree step; it runs in CI
-        // (.github/workflows/deploy-validation.yml) on every push, as the 9c pipeline's guard test does.
+        // (.github/workflows/deploy-validation.yml) on pull requests to, and pushes to, main — as the 9c pipeline's guard test does.
       }
     }
     stage('Check: WRITER_CHECK READY?') {

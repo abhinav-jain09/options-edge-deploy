@@ -264,6 +264,47 @@ def runs_dedicated_writer(container):
     return any(isinstance(w, str) and WRITER_MAIN in w for w in words)
 
 
+def job_terminal(job):
+    status = job.get("status") or {}
+    if (status.get("succeeded") or 0) >= 1:
+        return True
+    return any(c.get("type") in ("Complete", "Failed") and c.get("status") == "True" for c in status.get("conditions") or [])
+
+
+def judge_dedicated_writer(api, pods):
+    """THE DEDICATED v7 WRITER (9d / 9e) writes v7 rows while the schema would change under it: during a migration NOTHING may run its main
+    class — judged by what a container RUNS (its command / args name ZeroDteResearchWriterMain), over EVERY pod and EVERY controller template of
+    the namespace, BEFORE any image-repository filter and BEFORE any maintenance-Job exemption (a copied image, an exempt Job, an init or an
+    ephemeral container escape nothing — Codex 9e r2). A Deployment / StatefulSet / ReplicaSet naming it must be at ZERO (desired and reported);
+    a DaemonSet or a CronJob naming it refuses outright (it could create a writer pod at any moment); a Job naming it refuses unless terminal
+    (the activation's own --check Jobs are kept terminal for post-mortem and never write)."""
+    for p in pods:
+        meta, spec, status = p.get("metadata") or {}, p.get("spec") or {}, p.get("status") or {}
+        if status.get("phase") in ("Succeeded", "Failed"):
+            continue
+        for kind, c in pod_containers(spec):
+            if runs_dedicated_writer(c):
+                raise Refusal("pod %s %s %s runs the dedicated v7 writer (%s) — it must be at zero during a migration, whatever its image, label or owner (Jenkinsfile.zerodte-writer-activate ACTION=deactivate first)"
+                              % (meta.get("name", "?"), kind[:-1], c.get("name"), WRITER_MAIN))
+    for kind in ("deployments", "statefulsets", "replicasets", "daemonsets"):
+        for obj in api.list(kind):
+            meta, spec, status = obj.get("metadata") or {}, obj.get("spec") or {}, obj.get("status") or {}
+            if not any(runs_dedicated_writer(c) for _, c in pod_containers((template_of(kind, obj)).get("spec") or {})):
+                continue
+            if kind == "daemonsets":
+                raise Refusal("DaemonSet %s runs the dedicated v7 writer (%s) — it cannot be at zero; remove it before a migration" % (meta.get("name"), WRITER_MAIN))
+            desired = spec.get("replicas", 1)
+            if desired != 0 or status.get("replicas", 0) != 0:
+                raise Refusal("%s %s runs the dedicated v7 writer (%s) and is not at zero (desired %s, replicas %s) — deactivate it before a migration"
+                              % (kind[:-1].capitalize() if kind != "replicasets" else "ReplicaSet", meta.get("name"), WRITER_MAIN, desired, status.get("replicas", 0)))
+    for job in api.list("jobs"):
+        if any(runs_dedicated_writer(c) for _, c in pod_containers((template_of("jobs", job)).get("spec") or {})) and not job_terminal(job):
+            raise Refusal("Job %s runs the dedicated v7 writer (%s) and is not terminal — wait for it or delete it before a migration" % ((job.get("metadata") or {}).get("name"), WRITER_MAIN))
+    for cj in api.list("cronjobs"):
+        if any(runs_dedicated_writer(c) for _, c in pod_containers((template_of("cronjobs", cj)).get("spec") or {})):
+            raise Refusal("CronJob %s runs the dedicated v7 writer (%s) — it could create a writer pod at any moment" % ((cj.get("metadata") or {}).get("name"), WRITER_MAIN))
+
+
 def judge_pod(pod, repo, digest):
     meta, spec, status = pod.get("metadata") or {}, pod.get("spec") or {}, pod.get("status") or {}
     name = meta.get("name", "?")
@@ -272,11 +313,6 @@ def judge_pod(pod, repo, digest):
         raise Refusal("pod %s is terminating (it may still be writing until it is gone)" % name, transient=True)
     if phase in ("Succeeded", "Failed"):
         return
-    # the DEDICATED v7 writer (9d / 9e) writes v7 rows while the schema would change under it: it must be at ZERO during a migration — any
-    # pod running its main class refuses, whatever its flag or label (Codex 9e r1 D11)
-    for _, c in pod_containers(spec):
-        if runs_dedicated_writer(c):
-            raise Refusal("pod %s container %s runs the dedicated v7 writer (%s) — it must be at zero during a migration (Jenkinsfile.zerodte-writer-activate ACTION=deactivate first)" % (name, c.get("name"), WRITER_MAIN))
     if phase != "Running":
         raise Refusal("pod %s is %s — its containers are not yet verifiable" % (name, phase or "of unknown phase"), transient=True)
     statuses = {(k.replace("Statuses", "s"), s.get("name")): s for k, s in pod_statuses(status)}
@@ -365,7 +401,7 @@ def judge_declared_deployment(d, repo, digest, api):
             raise Refusal("%s has %s=true — the next pod would write" % (where, FLAG))
     desired = spec.get("replicas", 1)
     if any(runs_dedicated_writer(c) for _, c in pod_containers((template_of("deployments", d)).get("spec") or {})):
-        # the dedicated v7 writer's Deployment: ZERO desired and zero reported, whatever its flag — a migration never runs under a live v7 writer
+        # (already judged by judge_dedicated_writer over every template; kept as the declared Deployment's own statement of the same rule)
         if desired != 0 or status.get("replicas", 0) != 0:
             raise Refusal("Deployment %s runs the dedicated v7 writer (%s) and is not at zero (desired %s, replicas %s) — deactivate it before a migration" % (name, WRITER_MAIN, desired, status.get("replicas", 0)))
     if status.get("observedGeneration") != meta.get("generation"):
@@ -400,6 +436,7 @@ def main(argv):
     try:
         pods = api.list("pods")
         jobs_by_uid = {(j.get("metadata") or {}).get("uid"): j for j in api.list("jobs")}
+        judge_dedicated_writer(api, pods)                                        # FIRST: over every pod and every template, before any filter
         writer_pods = [p for p in pods if runs_repo(p, a.repository) and not exempt(p, exempt_labels, jobs_by_uid)]
         for p in writer_pods:
             judge_pod(p, a.repository, a.digest)

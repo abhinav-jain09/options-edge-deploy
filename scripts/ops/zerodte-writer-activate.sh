@@ -76,7 +76,10 @@ job_observe() {
 cleanup() {
   local rc=$? observed release=false
   rm -f "${RENDER:-}" "${CM_RENDER:-}" "${LOGS:-}" "${ERRLOG:-}"
-  [ -z "${COMMITTED:-}" ] || rm -f "$COMMITTED/${RECEIPT_FILE:-x}" "$COMMITTED/${DECLARATION:-x}" 2>/dev/null || true
+  if [ -n "${COMMITTED:-}" ] && [ -d "$COMMITTED" ]; then                             # the scratch copy of HEAD's bytes: its two files, then its known directories (never a recursive delete)
+    rm -f "$COMMITTED/${RECEIPT_FILE:-x}" "$COMMITTED/${DECLARATION:-x}" 2>/dev/null || true
+    rmdir "$COMMITTED/deploy/zerodte/provisioned" "$COMMITTED/deploy/zerodte/provisioning" "$COMMITTED/deploy/zerodte" "$COMMITTED/deploy" "$COMMITTED" 2>/dev/null || true
+  fi
   if [ "$JOB_OWNED" != "true" ] || [ -z "$JOB_NAME" ]; then
     release=true
   elif [ "$SUCCESS" = "true" ]; then

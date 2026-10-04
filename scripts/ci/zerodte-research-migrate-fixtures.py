@@ -125,8 +125,13 @@ def pod(spec):
         elif o.startswith("uid="):
             p["metadata"]["uid"] = o[4:]
         elif o == "writer":                                             # the DEDICATED v7 writer's main class (9d / 9e): must be at zero during a migration
-            container["command"] = ["java", "-cp", "/app/app.jar", "com.optionsedge.processing.zerodte.research.ZeroDteResearchWriterMain"]
-            p["metadata"]["labels"]["app.kubernetes.io/name"] = "zerodte-research-writer"
+            container["command"] = list(WRITER_COMMAND)
+            if "job=" not in ":".join(opts):
+                p["metadata"]["labels"]["app.kubernetes.io/name"] = "zerodte-research-writer"
+        elif o.startswith("initwriter="):                               # an INIT container naming the writer main (image kind given)
+            p["spec"]["initContainers"] = [{"name": "init", "image": spec_image(o[11:]), "command": list(WRITER_COMMAND)}]
+        elif o.startswith("ephemeralwriter="):                          # an EPHEMERAL container naming the writer main
+            p["spec"]["ephemeralContainers"] = [{"name": "debug", "image": spec_image(o[16:]), "args": ["java", "com.optionsedge.processing.zerodte.research.ZeroDteResearchWriterMain"]}]
         else:
             raise SystemExit("unknown pod option " + o)
     return p
@@ -136,7 +141,7 @@ def deployment(spec):
     parts = spec.split(":")
     name, img, flag, replicas, opts = parts[0], parts[1], parts[2], int(parts[3]), parts[4:]
     env, env_from = flag_env(flag)
-    image = {"ok": REG + "@" + DIGEST, "other": REG + "@" + OTHER, "tag": REG + ":dev"}[img]
+    image = {"ok": REG + "@" + DIGEST, "other": REG + "@" + OTHER, "tag": REG + ":dev", "foreign": "192.168.100.252:5000/options-edge-other@" + DIGEST}[img]
     d = {"metadata": {"name": name, "uid": DEP_UID if name == "vix-option-inteligence-service" else "uid-" + name, "generation": 7},
          "spec": {"replicas": replicas, "template": {"spec": {"containers": [{"name": "vix", "image": image, "env": env, "envFrom": env_from}]}}},
          "status": {"observedGeneration": 7, "replicas": replicas, "updatedReplicas": replicas, "availableReplicas": replicas, "readyReplicas": replicas}}
@@ -149,14 +154,26 @@ def deployment(spec):
         elif o == "zero-still-running":
             d["status"]["replicas"] = 1
         elif o == "writer":
-            d["spec"]["template"]["spec"]["containers"][0]["command"] = ["java", "-cp", "/app/app.jar", "com.optionsedge.processing.zerodte.research.ZeroDteResearchWriterMain"]
+            d["spec"]["template"]["spec"]["containers"][0]["command"] = list(WRITER_COMMAND)
         else:
             raise SystemExit("unknown deployment option " + o)
     return d
 
 
-def template(image=None):
-    return {"spec": {"containers": [{"name": "vix", "image": image or (REG + "@" + DIGEST)}]}}
+WRITER_COMMAND = ["java", "-cp", "/app/app.jar", "com.optionsedge.processing.zerodte.research.ZeroDteResearchWriterMain"]
+
+
+def template(image=None, writer=False):
+    c = {"name": "vix", "image": image or (REG + "@" + DIGEST)}
+    if writer:
+        c["command"] = list(WRITER_COMMAND)
+    return {"spec": {"containers": [c]}}
+
+
+def opts_of(spec):
+    """'name[:opt...]' → (name, {opt}); opts: writer (the template names the writer main), foreign (another repository's image), terminal (a Job that ended)."""
+    parts = spec.split(":")
+    return parts[0], set(parts[1:])
 
 
 def main(argv):
@@ -175,16 +192,27 @@ def main(argv):
             items.append(rs)
     elif kind == "jobs":
         for s in specs:
-            name, label = s.split(":")
+            parts = s.split(":")
+            name, label, o = parts[0], parts[1], set(parts[2:])
             uid = ("job-uid-" + name[4:]) if name.startswith("job-") else ("uid-" + name)       # "job-<pod>" is the Job that owns pod <pod>
-            j = {"metadata": {"name": name, "uid": uid, "labels": {}}, "spec": {"template": template()}}
+            j = {"metadata": {"name": name, "uid": uid, "labels": {}}, "spec": {"template": template(spec_image("foreign") if "foreign" in o else None, "writer" in o)}}
             if label != "none":
                 j["metadata"]["labels"]["app.kubernetes.io/name"] = label
+            if "terminal" in o:
+                j["status"] = {"succeeded": 1, "conditions": [{"type": "Complete", "status": "True"}]}
             items.append(j)
     elif kind == "cronjobs":
-        items = [{"metadata": {"name": s, "uid": "uid-" + s}, "spec": {"jobTemplate": {"spec": {"template": template()}}}} for s in specs]
+        for s in specs:
+            name, o = opts_of(s)
+            items.append({"metadata": {"name": name, "uid": "uid-" + name}, "spec": {"jobTemplate": {"spec": {"template": template(spec_image("foreign") if "foreign" in o else None, "writer" in o)}}}})
     elif kind in ("statefulsets", "daemonsets"):
-        items = [{"metadata": {"name": s, "uid": "uid-" + s}, "spec": {"template": template()}} for s in specs]
+        for s in specs:
+            name, o = opts_of(s)
+            obj = {"metadata": {"name": name, "uid": "uid-" + name}, "spec": {"template": template(spec_image("foreign") if "foreign" in o else None, "writer" in o)}}
+            if kind == "statefulsets":
+                obj["spec"]["replicas"] = 0 if "zero" in o else 1
+                obj["status"] = {"replicas": 0 if "zero" in o else 1}
+            items.append(obj)
     elif kind == "cm":
         print(json.dumps({"metadata": {"name": "cm"}, "data": dict(s.split("=", 1) for s in specs)}))
         return

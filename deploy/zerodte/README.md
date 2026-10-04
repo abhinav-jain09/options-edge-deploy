@@ -176,9 +176,11 @@ filter; deleting ones excluded): exactly one must exist, Running and Ready, its 
 read the pods, then deactivate or investigate). `ACTION=deactivate` (`CONFIRM=true`): scale to zero under the lock and await the pods gone
 (a listing that cannot be read is a refusal, never "drained").
 
-A LATER MIGRATION (a v8) needs the dedicated writer at zero: the quiescence helper judges it by what it RUNS — any pod or Deployment
-template whose command names `ZeroDteResearchWriterMain` must be at zero (desired and reported) during a migration, whatever its flag —
-`ACTION=deactivate` first.
+A LATER MIGRATION (a v8) needs the dedicated writer at zero: the quiescence helper judges it by what it RUNS, FIRST and over EVERYTHING —
+before the image-repository filter and before the maintenance-Job exemption — every pod (init, app and ephemeral containers alike, whatever
+its image, label or owner) and every controller template whose command or args name `ZeroDteResearchWriterMain`: a pod refuses unless
+Succeeded / Failed; a Deployment / StatefulSet / ReplicaSet must be at zero (desired and reported); a DaemonSet or a CronJob refuses
+outright; a Job refuses unless terminal (the activation's own kept check Jobs). `ACTION=deactivate` first.
 
 ORDER ON EVERY ENVIRONMENT (consult Q12): the compatibility image with the legacy writer off → the migration job (dry run, CONFIRM) → the
 provisioning job (dry run, CONFIRM, ITS receipt committed through review) → the writer slice deployed at zero → THIS job (`check`, then
