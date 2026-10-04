@@ -69,12 +69,10 @@ repository, the declared writer Deployments, the maintenance Jobs that run the s
 `scripts/ops/zerodte-quiescence.py`:
 
 * every pod of the namespace that runs the service image (judged by spec image AND status `imageID`; app, init and ephemeral containers
-  alike; exempt only when a Job owns it and it carries a declared maintenance label) must be Running on the digest-pinned image this Job
-  runs, with `ZERODTE_RESEARCH_ENABLED` resolved OFF from its EFFECTIVE environment — a literal, a `configMapKeyRef` (the ConfigMap is
-  read), `envFrom` sources in kubelet order (a later source overrides an earlier one, a direct `env` entry overrides every `envFrom`,
-  prefixes honoured); a flag from a Secret (`secretKeyRef`, or an `envFrom` Secret whose KEY NAMES — never values — include it), a
-  `fieldRef`, a `$(…)` expansion, a duplicated env name, an unreadable or missing non-optional source: each a refusal, because the value
-  cannot be known to be off;
+  alike; exempt only when a LISTED Job — name and uid — owns it and that Job carries a declared maintenance label) must be Running on the
+  digest-pinned image this Job runs, with `ZERODTE_RESEARCH_ENABLED` known OFF: for a RUNNING pod only a LITERAL in its own spec is
+  evidence (see below — a ConfigMap, a Secret, a `fieldRef`, an expansion, a duplicate, an `envFrom` source that could carry the key:
+  each a refusal); a literal governs over every `envFrom` (kubelet precedence); no entry and no source that could carry the key = OFF;
 * a TERMINATING pod (still running through its grace period) or a Pending pod is waited for (`QUIESCE_WAIT_S`, default 120 s) and then
   refused;
 * every Deployment / StatefulSet / DaemonSet / ReplicaSet / Job / CronJob whose pod template runs the image must be a declared writer
@@ -97,11 +95,14 @@ For a RUNNING pod only a LITERAL `ZERODTE_RESEARCH_ENABLED` in its own spec is e
 starts; a ConfigMap or Secret read now says nothing about what it read then), so the V1 compatibility rollout MUST set the flag as a
 literal `"false"` (the base Deployment does); a ConfigMap-sourced flag on a live pod is a refusal. Controller TEMPLATES are judged by what
 the kubelet will resolve for the next pod (a ConfigMap key is read; a Secret source refuses). A pod is exempt only when a LISTED Job owns it
-(name and uid) and that Job carries a declared maintenance label.
+(name and uid) and that Job carries a declared maintenance label. THE RENDER SOURCES SAY SO: the dev overlay patch
+(`k8s/overlays/dev/vix-option-inteligence-dev-patch.yaml`), the generated dev slice and the production / experiment slices all carry
+`ZERODTE_RESEARCH_ENABLED: "false"` as a literal (`scripts/ci/zerodte-compat-flag-test.sh` renders every overlay and asserts it) — the
+compatibility rollout is the sanctioned deploy of exactly that render.
 
 ORDER ON EVERY ENVIRONMENT (consult Q12): roll the V1 compatibility image with `ZERODTE_RESEARCH_ENABLED` off to the declared Deployment
 and let it settle → this job (dry run, then CONFIRM) → the provisioning job → the dedicated v7 writer (9e) → increment 8.
-`scripts/ci/zerodte-research-migrate-receipt-test.sh` drives the wrapper through 144 cases against a fake kubectl, a fake clock and the
+`scripts/ci/zerodte-research-migrate-receipt-test.sh` drives the wrapper through 200+ cases (the count is printed by the test) against a fake kubectl, a fake clock and the
 Kubernetes fixtures of `zerodte-research-migrate-fixtures.py` — every outcome and grammar violation, every quiescence refusal, the race,
 the timeout, the unreadable log — and CAPTURES the Job manifest the wrapper creates, executing its container's shell block against a fake
 `java` to prove the attestation and the mode reach the migrator's argv; `zerodte-migrate-barrier-test.sh` the barrier; 

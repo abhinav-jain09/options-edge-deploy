@@ -56,7 +56,7 @@ spec:
       containers:
         - env:
             - name: ZERODTE_RESEARCH_ENABLED
-              value: "true"
+              value: "false"
             - name: ZERODTE_RESEARCH_JDBC_URL
               value: jdbc:postgresql://host.docker.internal:5432/options_flow_dev
             - name: ZERODTE_SHADOW_MODEL_ENABLED

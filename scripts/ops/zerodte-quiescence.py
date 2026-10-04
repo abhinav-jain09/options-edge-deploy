@@ -75,10 +75,11 @@ class Api:
         if out is None:
             raise Unreadable("the %s list could not be read" % kind)
         try:
-            items = json.loads(out).get("items")
+            doc = json.loads(out)
         except ValueError:
             raise Unreadable("the %s list is not JSON" % kind)
-        if not isinstance(items, list):
+        items = doc.get("items") if isinstance(doc, dict) else None
+        if not isinstance(items, list) or any(not isinstance(i, dict) for i in items):
             raise Unreadable("the %s list carries no items" % kind)
         return items
 
@@ -86,7 +87,16 @@ class Api:
         key = ("configmap", name)
         if key not in self.cache:
             out = self._run(["get", "configmap", name, "-o", "json"], "ConfigMap %s" % name)
-            self.cache[key] = None if out is None else json.loads(out)
+            if out is None:
+                self.cache[key] = None
+            else:
+                try:
+                    doc = json.loads(out)
+                except ValueError:
+                    raise Unreadable("ConfigMap %s is not JSON" % name)
+                if not isinstance(doc, dict) or not isinstance(doc.get("data", {}), dict) or not isinstance(doc.get("binaryData", {}), dict) or any(not isinstance(v, str) for v in (doc.get("data") or {}).values()):
+                    raise Unreadable("ConfigMap %s is not a ConfigMap object with string data" % name)
+                self.cache[key] = doc
         return self.cache[key]
 
     def secret_keys(self, name):

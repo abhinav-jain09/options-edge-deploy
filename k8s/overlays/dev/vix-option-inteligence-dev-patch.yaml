@@ -23,8 +23,13 @@ spec:
       containers:
         - name: vix-option-inteligence
           env:
+            # THE V1 COMPATIBILITY RELEASE (increment 9a / 9c, inc 9 consult Q3): the LEGACY in-process research writer is OFF — as a LITERAL,
+            # because a running pod's flag is knowable only from its own spec (scripts/ops/zerodte-quiescence.py). The migration to schema v7
+            # refuses while any pod of this service could still write v6; after the migration the legacy writer refuses v7 anyway
+            # (LEGACY_RESEARCH_WRITER_RETIRED_V7) and the DEDICATED v7 writer (increment 9d / 9e) takes over. The JDBC URL, the shadow model
+            # and the environment stay declared here for the dedicated writer's render and the fail-fast pair.
             - name: ZERODTE_RESEARCH_ENABLED
-              value: "true"
+              value: "false"
             - name: ZERODTE_RESEARCH_JDBC_URL
               value: jdbc:postgresql://host.docker.internal:5432/options_flow_dev
             # Shadow model (REQ rev 7 §6a): predictions go to the shadow columns only; predicted_state

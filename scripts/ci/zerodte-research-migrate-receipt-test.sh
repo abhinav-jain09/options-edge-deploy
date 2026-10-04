@@ -52,7 +52,7 @@ K="${FAKE_K8S:?}"
 listing() { # listing <kind>: the fixture file, or an empty list; pods may switch to pods-2.json from the SECOND listing on; FAKE_UNREADABLE / FAKE_MALFORMED name kinds
   local f="$K/$1.json"
   case ",${FAKE_UNREADABLE:-}," in *",$1,"*) echo "Unable to connect to the server: dial tcp: i/o timeout" >&2; exit 1 ;; esac
-  case ",${FAKE_MALFORMED:-}," in *",$1,"*) printf '{"items": 5}'; return ;; esac
+  case ",${FAKE_MALFORMED:-}," in *",$1,"*) printf '{"items": 5}'; return ;; *",$1-top,"*) printf '[]'; return ;; *",$1-item,"*) printf '{"items": [7]}'; return ;; esac
   if [ "$1" = pods ] && [ -f "$K/pods-2.json" ] && [ "$(grep -c 'get pods -o json' "$FAKE_JOURNAL")" -ge 2 ]; then f="$K/pods-2.json"; fi
   if [ -f "$f" ]; then cat "$f"; else printf '{"items":[]}'; fi
 }
@@ -91,7 +91,7 @@ case "$args" in
   *"get jobs -l app.kubernetes.io/name=zerodte-research-migrate -o json") jobs="${FAKE_JOBS:-}"; [ -n "$jobs" ] || jobs='{"items":[]}'; printf '%s' "$jobs" ;;
   *"get configmap/zerodte-research-migrate-lock"*) [ -f "$K/lock" ] && cat "$K/lock" || { echo 'Error from server (NotFound): configmaps "zerodte-research-migrate-lock" not found' >&2; exit 1; } ;;
   *"delete configmap/zerodte-research-migrate-lock"*) rm -f "$K/lock" ;;
-  *"get configmap "*" -o json") case ",${FAKE_UNREADABLE:-}," in *",configmap,"*) echo "Unable to connect" >&2; exit 1 ;; esac; n="${args#*get configmap }"; n="${n%% *}"; if [ -f "$K/cm-$n.json" ]; then cat "$K/cm-$n.json"; else echo "Error from server (NotFound): configmaps \"$n\" not found" >&2; exit 1; fi ;;
+  *"get configmap "*" -o json") case ",${FAKE_UNREADABLE:-}," in *",configmap,"*) echo "Unable to connect" >&2; exit 1 ;; esac; case ",${FAKE_MALFORMED:-}," in *",configmap,"*) printf 'not json {'; exit 0 ;; *",configmap-list,"*) printf '[1, 2]'; exit 0 ;; *",configmap-data,"*) printf '{"metadata":{"name":"x"},"data":{"ZERODTE_RESEARCH_ENABLED":5}}'; exit 0 ;; esac; n="${args#*get configmap }"; n="${n%% *}"; if [ -f "$K/cm-$n.json" ]; then cat "$K/cm-$n.json"; else echo "Error from server (NotFound): configmaps \"$n\" not found" >&2; exit 1; fi ;;
   *"get secret "*" -o go-template="*) case ",${FAKE_UNREADABLE:-}," in *",secret,"*) echo "Unable to connect" >&2; exit 1 ;; esac; n="${args#*get secret }"; n="${n%% *}"; if [ -f "$K/secret-$n.keys" ]; then cat "$K/secret-$n.keys"; else echo "Error from server (NotFound): secrets \"$n\" not found" >&2; exit 1; fi ;;
   *"create configmap"*"--dry-run=client -o yaml")
     printf 'apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm\n  namespace: options-edge\ndata:\n'
@@ -226,6 +226,7 @@ echo "--- the receipt held to the letter: the canonical grammar, then the (reaso
 run "REFUSED with an exit that is not a refusal"     1 "$GRAMMAR_WANT REFUSED grammar" true "${DIAG}REFUSED reason=X exit=66\n" PERMITTED_SHA="$HEAD" FAKE_SUCCEEDED=0 FAKE_EXIT=66
 run "REFUSED with a reason the migrator never emits" 1 "reason=X exit=68, which is not a (reason, exit) pair ZeroDteResearchMigrator emits" true "${DIAG}REFUSED reason=X exit=68\n" PERMITTED_SHA="$HEAD" FAKE_SUCCEEDED=0 FAKE_EXIT=68
 run "REFUSED with a real reason under the wrong exit" 1 "reason=SCHEMA_VERSION exit=69, which is not a (reason, exit) pair" true "${DIAG}REFUSED reason=SCHEMA_VERSION exit=69\n" PERMITTED_SHA="$HEAD" FAKE_SUCCEEDED=0 FAKE_EXIT=69
+run "confirm: REFUSED indeterminate (a rollback that failed)" 1 "could not roll back (INDETERMINATE" true "${DIAG}REFUSED reason=MIGRATION_INDETERMINATE exit=70\n" PERMITTED_SHA="$HEAD" FAKE_SUCCEEDED=0 FAKE_EXIT=70
 run "REFUSED with a lower-case reason"               1 "$GRAMMAR_WANT REFUSED grammar" true "${DIAG}REFUSED reason=schema_version exit=68\n" PERMITTED_SHA="$HEAD" FAKE_SUCCEEDED=0 FAKE_EXIT=68
 run "REFUSED with its tokens reordered"              1 "$GRAMMAR_WANT REFUSED grammar" true "${DIAG}REFUSED exit=68 reason=SCHEMA_VERSION\n" PERMITTED_SHA="$HEAD" FAKE_SUCCEEDED=0 FAKE_EXIT=68
 run "MIGRATED with its tokens reordered"             1 "$GRAMMAR_WANT MIGRATED grammar" true "${DIAG}MIGRATED toVersion=7 fromVersion=6 calendarVersion=$CAL expectedSessions=2261 $COUNTS schemaDigest=$H64\n" PERMITTED_SHA="$HEAD"
@@ -359,6 +360,12 @@ qt "template: a literal overrides every envFrom source" 0 "OK: DRY RUN" "lit-and
 echo "--- the API: every list and every object read fails CLOSED (unreadable is never empty; malformed is unreadable) ---"
 for kind in deployments statefulsets daemonsets replicasets jobs cronjobs; do k8s_reset; run "the $kind list cannot be read" 1 "cannot be judged: UNREADABLE: the $kind list could not be read" false "$DIAG$MIGRATABLE\n" FAKE_UNREADABLE=$kind; done
 k8s_reset; run "the pod list is malformed"           1 "UNREADABLE: the pods list carries no items" false "$DIAG$MIGRATABLE\n" FAKE_MALFORMED=pods
+k8s_reset; run "the pod list is a top-level array"   1 "UNREADABLE: the pods list carries no items" false "$DIAG$MIGRATABLE\n" FAKE_MALFORMED=pods-top
+k8s_reset; run "the deployment list has a non-object item" 1 "UNREADABLE: the deployments list carries no items" false "$DIAG$MIGRATABLE\n" FAKE_MALFORMED=deployments-item
+k8s_reset; $FX deployments "vix-option-inteligence-service:ok:from-cm=on:1" > "$T/k8s/deployments.json"
+run "a template's ConfigMap is not JSON"             1 "UNREADABLE: ConfigMap on is not JSON" false "$DIAG$MIGRATABLE\n" FAKE_MALFORMED=configmap
+run "a template's ConfigMap is a JSON array"         1 "UNREADABLE: ConfigMap on is not a ConfigMap object with string data" false "$DIAG$MIGRATABLE\n" FAKE_MALFORMED=configmap-list
+run "a template's ConfigMap carries a non-string datum" 1 "UNREADABLE: ConfigMap on is not a ConfigMap object with string data" false "$DIAG$MIGRATABLE\n" FAKE_MALFORMED=configmap-data
 k8s_reset; $FX deployments "vix-option-inteligence-service:ok:from-cm=on:1" > "$T/k8s/deployments.json"; install_sources on
 run "a template's ConfigMap cannot be read"          1 "UNREADABLE: ConfigMap on could not be read" false "$DIAG$MIGRATABLE\n" FAKE_UNREADABLE=configmap
 k8s_reset; $FX deployments "vix-option-inteligence-service:ok:from-sec=runtime:1" > "$T/k8s/deployments.json"; install_sources "secret:runtime=X"

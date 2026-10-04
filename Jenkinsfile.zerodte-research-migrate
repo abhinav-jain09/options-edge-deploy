@@ -106,6 +106,7 @@ pipeline {
           bash scripts/ci/validate-zerodte-research-migration.sh
           bash scripts/ci/zerodte-research-migrate-receipt-test.sh
           bash scripts/ci/zerodte-migrate-barrier-test.sh
+          bash scripts/ci/zerodte-compat-flag-test.sh
         '''
       }
     }

@@ -408,7 +408,7 @@ case "$OUTCOME" in
 esac
 printf '%s\n' "$RECEIPT" | grep -Eq -- "$GRAMMAR" || fatal "receipt '$RECEIPT' is not the canonical $OUTCOME grammar (the tokens in their exact order, each in its domain, nothing else; expected $GRAMMAR) — refused"
 # every (reason, exit) pair the migrator emits — ZeroDteResearchMigrator / ZeroDteProvisioner.Exit; any other pair is not a receipt of this migrator
-REFUSAL_PAIRS=" USAGE=64 JDBC_PASSWORD=64 CALENDAR_RESOURCE=65 LEGACY_WRITERS_NOT_QUIESCED=68 CALENDAR_COVERAGE=68 SCHEMA_VERSION=68 MIGRATION_RECORD_MISSING=68 CALENDAR_VERSION_MISMATCH=68 SCHEMA_DIGEST_MISMATCH=68 CALENDAR_ROWS_MISMATCH=68 DB_UNAVAILABLE=69 LOCK_TIMEOUT=69 CLIENT_CONSTRUCTION=69 MIGRATION_FAILED=70 COMMIT_UNCERTAIN=70 MIGRATION_UNVERIFIED=70 UNEXPECTED=70 "
+REFUSAL_PAIRS=" USAGE=64 JDBC_PASSWORD=64 CALENDAR_RESOURCE=65 LEGACY_WRITERS_NOT_QUIESCED=68 CALENDAR_COVERAGE=68 SCHEMA_VERSION=68 MIGRATION_RECORD_MISSING=68 CALENDAR_VERSION_MISMATCH=68 SCHEMA_DIGEST_MISMATCH=68 CALENDAR_ROWS_MISMATCH=68 DB_UNAVAILABLE=69 LOCK_TIMEOUT=69 CLIENT_CONSTRUCTION=69 MIGRATION_FAILED=70 MIGRATION_INDETERMINATE=70 COMMIT_UNCERTAIN=70 MIGRATION_UNVERIFIED=70 UNEXPECTED=70 "
 case "$OUTCOME" in
   REFUSED)
     exact_fields reason exit
@@ -420,7 +420,7 @@ case "$OUTCOME" in
       65) fatal "the migrator refused the SHIPPED CALENDAR ($REASON: the resource is not the SessionCalendar rules) — the image is wrong; see the log. Nothing was written." ;;
       68) fatal "a PRECONDITION failed ($REASON: the recorded version is not 6 or 7, the calendar does not cover the required years or differs from the recorded one, the catalog drifted after a migration, the legacy writers were not attested quiesced) — see the log. Nothing was written." ;;
       69) fatal "the research database was UNAVAILABLE or the migration lock was not acquired ($REASON) — see the log. Re-run once reachable; a dry run never writes." ;;
-      70) fatal "the MIGRATION FAILED or stayed uncertain ($REASON) — the migrator rolled back or could not verify its commit: READ zerodte_schema_version and zerodte_research_migration before trying again (the server log holds the statement)." ;;
+      70) fatal "the MIGRATION FAILED or stayed uncertain ($REASON) — the migrator rolled back, could not roll back (INDETERMINATE: the transaction's fate is unknown) or could not verify its commit: READ zerodte_schema_version and zerodte_research_migration before trying again (the server log holds the statement)." ;;
     esac ;;
 esac
 case "$CONFIRM:$OUTCOME" in

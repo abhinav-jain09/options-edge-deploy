@@ -66,6 +66,54 @@ check "service-deploy.sh sources the barrier" test -n "$line_src"
 check "service-deploy.sh acquires (line $line_acq) before its apply (line $line_apply) and traps the release (line $line_trap) right after acquiring" bash -c "[ -n '$line_acq' ] && [ -n '$line_trap' ] && [ -n '$line_apply' ] && [ '$line_acq' -lt '$line_apply' ] && [ '$line_trap' -eq \$(( $line_acq + 1 )) ]"
 check "the release is on EXIT, i.e. after the rollout and the health gate (line $line_gate), not before them" bash -c "[ -n '$line_gate' ] && [ '$line_acq' -lt '$line_gate' ] && ! sed -n '$line_acq,\$p' scripts/deploy/service-deploy.sh | grep -q '^zerodte_migrate_barrier_release'"
 check "the acquire's failure exits the deploy (|| exit 1)" bash -c "sed -n '${line_acq}p' scripts/deploy/service-deploy.sh | grep -q '|| exit 1$'"
+# ---- service-deploy.sh RUN against a bounded fake (Codex 9c r3): the real render (kubectl kustomize passes through), stubbed image pinning,
+#      a stateful lock, the Deployment reported at replicas 0 (the early "scaled to 0" exit — the acquire / apply / rollout / release path is complete)
+W="$T/repo"; mkdir -p "$W/scripts/deploy" "$W/scripts/ci" "$W/bin"
+cp services.yaml "$W/"; cp -R k8s "$W/k8s"
+cp scripts/deploy/service-deploy.sh scripts/deploy/zerodte-migrate-barrier.sh "$W/scripts/deploy/"
+printf 'pin_ref() { printf "%%s@sha256:%s\n" "${1%%%%:*}"; }\nresolve_repo_digest() { printf "%%s\n" "$3"; }\n' "$(printf 'd%.0s' $(seq 64))" > "$W/scripts/deploy/pin-image.sh"
+printf 'bind_required_image() { printf "%%s\n" "$PINNED_IMAGE"; }\n' > "$W/scripts/deploy/bind-required-image.sh"
+printf 'require_min_image_build() { return 0; }\n' > "$W/scripts/deploy/min-image-build.sh"
+printf 'images:\n  vix-option-inteligence-service: 192.168.100.252:5000/options-edge-vix-option-inteligence:dev\n' > "$W/image-tags-dev.yaml"; mkdir -p "$W/image-tags"; mv "$W/image-tags-dev.yaml" "$W/image-tags/dev.yaml"
+REAL_KUBECTL="$(command -v kubectl)"
+cat > "$W/bin/kubectl" <<FAKE
+#!/usr/bin/env bash
+K="\${FAKE_K8S:?}"
+echo "kubectl \$*" >> "\${FAKE_JOURNAL:?}"
+case "\$*" in
+  kustomize*) exec "$REAL_KUBECTL" "\$@" ;;
+  *"create -f -")
+    body="\$(cat)"
+    if printf '%s' "\$body" | grep -q "name: zerodte-research-migrate-lock"; then
+      [ -f "\$K/lock" ] && { echo 'Error from server (AlreadyExists): configmaps "zerodte-research-migrate-lock" already exists' >&2; exit 1; }
+      printf '%s' "\$body" | sed -n 's/^ *options-edge.io\/holder: "\(.*\)"\$/\1/p' | head -1 > "\$K/lock"
+    fi ;;
+  *"get configmap/zerodte-research-migrate-lock -o jsonpath="*holder*) [ -f "\$K/lock" ] && cat "\$K/lock" || { echo 'Error from server (NotFound)' >&2; exit 1; } ;;
+  *"delete configmap/zerodte-research-migrate-lock"*) rm -f "\$K/lock" ;;
+  *"apply -f "*) [ -f "\$K/lock" ] && echo "apply-while-lock-held=\$(cat "\$K/lock")" >> "\$FAKE_JOURNAL" || echo "apply-while-lock-held=NONE" >> "\$FAKE_JOURNAL" ;;
+  *"rollout status"*) [ -f "\$K/lock" ] && echo "rollout-while-lock-held=\$(cat "\$K/lock")" >> "\$FAKE_JOURNAL" || echo "rollout-while-lock-held=NONE" >> "\$FAKE_JOURNAL" ;;
+  *"get deployment "*"-o jsonpath={.spec.replicas}") printf '0' ;;
+  *"get deployment "*"-o jsonpath={.spec.template.spec.containers[0].image}") printf '' ;;
+  *"get pvc"*|*"get namespace"*|*"apply --dry-run=server"*|*"patch "*|*"delete deployment"*|*"delete service"*) : ;;
+  *) echo "fake kubectl: unexpected call: \$*" >&2; exit 99 ;;
+esac
+FAKE
+chmod +x "$W/bin/kubectl"
+deploy() { # deploy <journal> → rc
+  : > "$1"
+  (cd "$W" && env PATH="$W/bin:$PATH" FAKE_K8S="$T/k8s" FAKE_JOURNAL="$1" SERVICE=vix-option-inteligence ENVIRONMENT=dev BUILD_NUMBER=21 WORK_DIR="$T/work" DEPLOY_PLATFORM=linux/amd64 REGISTRY_SCHEME=http bash scripts/deploy/service-deploy.sh > "$1.out" 2>&1); echo $?
+}
+rm -f "$T/k8s/lock"; mkdir -p "$T/work"
+rc="$(deploy "$T/deploy.journal")"
+check "service-deploy.sh runs to its end against the bounded fake (rc=$rc)" test "$rc" = 0
+check "the lock was CREATED before the apply, and the apply ran while it was held by this deploy" bash -c "grep -q 'apply-while-lock-held=service-deploy-vix-option-inteligence-dev-build-21-' '$T/deploy.journal'"
+check "the rollout ran while the lock was still held" bash -c "grep -q 'rollout-while-lock-held=service-deploy-vix-option-inteligence-dev-build-21-' '$T/deploy.journal'"
+check "the lock was released on exit — the LAST kubectl call, and the lock is gone" bash -c "tail -1 '$T/deploy.journal' | grep -q 'delete configmap/zerodte-research-migrate-lock' && ! [ -f '$T/k8s/lock' ]"
+printf '%s' "research-migrate-build-9-20261004T100000Z" > "$T/k8s/lock"
+rc="$(deploy "$T/deploy2.journal")"
+check "a deploy while the migration holds the lock is refused (rc=$rc) before any apply" bash -c "[ '$rc' != 0 ] && ! grep -q 'apply -f' '$T/deploy2.journal' && grep -q 'is held by research-migrate-build-9-' '$T/deploy2.journal.out'"
+check "… and the migration's lock is untouched" bash -c "[ \"\$(cat '$T/k8s/lock')\" = research-migrate-build-9-20261004T100000Z ]"
+rm -f "$T/k8s/lock"
 echo "zerodte migrate barrier (mutual exclusion): $pass ok, $fail failed"
 [ "$fail" -eq 0 ] && { echo "=== zerodte-migrate-barrier-test: OK ==="; exit 0; }
 echo "=== zerodte-migrate-barrier-test: FAILED ==="; exit 1
