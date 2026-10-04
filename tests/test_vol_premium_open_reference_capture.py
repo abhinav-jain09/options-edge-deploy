@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import datetime as dt
 import gzip
+import time
+import errno
 import hashlib
 import importlib.util
 import json
@@ -965,6 +967,60 @@ class PublicationAuthorityTest(unittest.TestCase):
         r, out = self._run()
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertTrue((out / "rejected" / f"{DAY}.json").is_file(), r.stdout + r.stderr)
+
+
+class FreshlyLinkedFileTest(unittest.TestCase):
+    """The gate links each member and each `_manifest.jsonl` into the pinned set and the reader opens
+    them immediately. On the prod CIFS mount that first open fails EINVAL and the next succeeds —
+    found on the first live backfill, where 191 members pinned cleanly and every manifest read then
+    failed while `head` on the same path worked."""
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp())
+        self.target = self.tmp / "freshly-linked"
+        self.target.write_text("the bytes\n")
+
+    def test_a_transient_einval_is_retried(self) -> None:
+        attempts = []
+        real_open = orc.open if hasattr(orc, "open") else open
+
+        def flaky(path, mode="r", *rest, **kw):
+            attempts.append(path)
+            if len(attempts) == 1:
+                raise OSError(errno.EINVAL, "Invalid argument")
+            return real_open(path, mode, *rest, **kw)
+
+        orc.open = flaky
+        self.addCleanup(lambda: delattr(orc, "open") if hasattr(orc, "open") else None)
+        with orc._open_freshly_linked(str(self.target)) as handle:
+            self.assertEqual(handle.read(), "the bytes\n")
+        self.assertEqual(len(attempts), 2, "it did not retry exactly once here")
+
+    def test_a_persistent_einval_is_raised_not_swallowed(self) -> None:
+        """A wait and a retry, not a swallow: a file that genuinely cannot be read must stop the run
+        rather than read as absent — which for a manifest would mean publishing without checking any
+        byte against it."""
+        def always_einval(path, mode="r", *rest, **kw):
+            raise OSError(errno.EINVAL, "Invalid argument")
+
+        orc.open = always_einval
+        self.addCleanup(lambda: delattr(orc, "open") if hasattr(orc, "open") else None)
+        with self.assertRaises(OSError) as caught:
+            orc._open_freshly_linked(str(self.target))
+        self.assertEqual(caught.exception.errno, errno.EINVAL)
+
+    def test_any_other_error_is_raised_at_once(self) -> None:
+        """Only EINVAL is the CIFS artifact. A missing file or a permission error must not be sat on
+        for two and a half seconds and then reported as the same thing."""
+        def not_found(path, mode="r", *rest, **kw):
+            raise FileNotFoundError(errno.ENOENT, "No such file or directory")
+
+        orc.open = not_found
+        self.addCleanup(lambda: delattr(orc, "open") if hasattr(orc, "open") else None)
+        started = time.monotonic()
+        with self.assertRaises(FileNotFoundError):
+            orc._open_freshly_linked(str(self.target))
+        self.assertLess(time.monotonic() - started, 0.4, "it retried something that is not EINVAL")
 
 
 class NanosecondTimestampTest(unittest.TestCase):

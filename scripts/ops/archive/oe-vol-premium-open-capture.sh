@@ -35,10 +35,11 @@ LOG="${LOG:-/home/abhinav/oe-ops/vol-premium-open-capture.log}"
 # timestamp is not.
 COMPLETENESS_DIR="${COMPLETENESS_DIR:-$ARCHIVE_ROOT/_manifest/completeness}"
 # Where the verified file set is pinned, and what the capture is then pointed at. It holds HARDLINKS
-# to archive members, so a pinned member is another DIRECTORY ENTRY pointing at the archive's own
-# inode — it allocates no inode and no file data of its own, which an earlier version of this
-# comment got wrong. What a session's pin costs is directory entries and the link count on those
-# inodes, on the order of a hundred entries a day. Nothing in the pipeline reads the pins
+# to archive members, so a pinned member is another NAME for bytes the archive already holds: no file
+# data of its own, on the order of a hundred names a day. (On the prod CIFS mount `st_nlink` reads 1
+# for both names, so it does not present them as a shared inode the way a local filesystem would —
+# what the pin gives is a copy-free second name, which is what matters here, and not a visibly
+# shared inode.) Nothing in the pipeline reads the pins
 # afterwards; they are kept because they are the record of exactly which files each claim was made
 # from, and an operator can prune old sessions from them without touching the archive or the ledger.
 # The count is logged on every run so growth is visible rather than inferred.

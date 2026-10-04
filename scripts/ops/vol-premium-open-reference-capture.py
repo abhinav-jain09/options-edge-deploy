@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import errno
 import glob
 import gzip
 import hashlib
@@ -35,6 +36,7 @@ import os
 import re
 import statistics
 import sys
+import time
 import zlib
 from zoneinfo import ZoneInfo
 
@@ -144,7 +146,7 @@ def _records(root: str, topic: str, day: str):
     for path in sorted(glob.glob(pattern)):
         name = os.path.basename(path)
         try:
-            with open(path, "rb") as handle:
+            with _open_freshly_linked(path, "rb") as handle:
                 blob = handle.read()
         except OSError:
             continue
@@ -229,6 +231,33 @@ class UnverifiedMember(Exception):
 _EXPECTED_SHA = None
 
 
+def _open_freshly_linked(path: str, mode: str = "r"):
+    """Open a file the gate has just linked into the pinned set, retrying a transient EINVAL.
+
+    THE ARCHIVE AND THE PINNED SET LIVE ON A CIFS MOUNT, and on this one a file that was linked a
+    moment ago is briefly unopenable: `OSError(22, 'Invalid argument')` on the first attempt and
+    fine on the next. Measured on the prod host during the first live backfill — the gate pinned
+    191 members and wrote the marker, and every `_manifest.jsonl` read then failed EINVAL while the
+    same open from another shell a second later succeeded, and `head` on the same path worked.
+    (`st_nlink` reads 1 on this mount too, so it does not present these as hardlinks; what the pin
+    gives is a copy-free second name, not a visibly shared inode.)
+    
+    It is a WAIT AND RETRY, not a swallow: after the attempts the error is raised, so a file that
+    genuinely cannot be read still stops the run rather than reading as absent.
+    """
+    last = None
+    for attempt in range(5):
+        try:
+            return open(path, mode)
+        except OSError as err:
+            if err.errno != errno.EINVAL:
+                raise
+            last = err
+            if attempt < 4:
+                time.sleep(0.5 * (attempt + 1))
+    raise last
+
+
 def _manifest_shas(root: str, day: str):
     """What the archiver wrote next to the members: one JSON line per published file, carrying its
     sha256 over the gzip stream as committed."""
@@ -236,7 +265,7 @@ def _manifest_shas(root: str, day: str):
     for topic in (INDEX, ES, BASIS):
         path = os.path.join(root, topic, f"dt={day}", "_manifest.jsonl")
         try:
-            with open(path) as handle:
+            with _open_freshly_linked(path) as handle:
                 lines = handle.readlines()
         except OSError:
             return None, topic
