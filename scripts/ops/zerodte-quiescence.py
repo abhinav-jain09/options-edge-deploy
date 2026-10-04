@@ -94,7 +94,7 @@ class Api:
                     doc = json.loads(out)
                 except ValueError:
                     raise Unreadable("ConfigMap %s is not JSON" % name)
-                if not isinstance(doc, dict) or not isinstance(doc.get("data", {}), dict) or not isinstance(doc.get("binaryData", {}), dict) or any(not isinstance(v, str) for v in (doc.get("data") or {}).values()):
+                if not isinstance(doc, dict) or not isinstance(doc.get("data", {}), dict) or not isinstance(doc.get("binaryData", {}), dict) or any(not isinstance(v, str) for v in list((doc.get("data") or {}).values()) + list((doc.get("binaryData") or {}).values())):
                     raise Unreadable("ConfigMap %s is not a ConfigMap object with string data" % name)
                 self.cache[key] = doc
         return self.cache[key]

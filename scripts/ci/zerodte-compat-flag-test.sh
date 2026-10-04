@@ -20,7 +20,16 @@ for env in dev production experiment; do
 done
 check "the base Deployment" k8s/base/vix-option-inteligence-deployment.yaml
 # the flag is never sourced from a ConfigMap or a Secret anywhere in the tree (a live pod's flag must be a literal)
-if grep -rn "ZERODTE_RESEARCH_ENABLED" k8s --include=*.yaml | grep -v "value:" | grep -q "valueFrom\|configMapKeyRef"; then fail=$((fail+1)); echo "  FAIL a render source takes ZERODTE_RESEARCH_ENABLED from a reference"; else pass=$((pass+1)); echo "  ok   no render source takes ZERODTE_RESEARCH_ENABLED from a reference"; fi
+# (judged STRUCTURALLY with yq — an env entry named ZERODTE_RESEARCH_ENABLED that carries valueFrom, in any document of any render source — not by
+# a line grep, which cannot see the valueFrom that YAML places on the lines after the name; Codex 9c r4)
+refs=0
+for f in $(grep -rl "ZERODTE_RESEARCH_ENABLED" k8s --include=*.yaml); do
+  n="$(yq ea '[.. | select(tag == "!!map" and .name == "ZERODTE_RESEARCH_ENABLED" and has("valueFrom"))] | length' "$f")" || { fail=$((fail+1)); echo "  FAIL $f could not be judged by yq"; continue; }
+  [ "$n" = 0 ] || { refs=$((refs+1)); echo "  FAIL $f takes ZERODTE_RESEARCH_ENABLED from a reference ($n entries with valueFrom)"; }
+done
+if [ "$refs" = 0 ]; then pass=$((pass+1)); echo "  ok   no render source takes ZERODTE_RESEARCH_ENABLED from a reference (judged structurally)"; else fail=$((fail+refs)); fi
+printf 'kind: Deployment\nspec:\n  template:\n    spec:\n      containers:\n        - name: x\n          env:\n            - name: ZERODTE_RESEARCH_ENABLED\n              valueFrom:\n                configMapKeyRef:\n                  name: c\n                  key: k\n' > "$T/ref-probe.yaml"
+[ "$(yq ea '[.. | select(tag == "!!map" and .name == "ZERODTE_RESEARCH_ENABLED" and has("valueFrom"))] | length' "$T/ref-probe.yaml")" = 1 ] && { pass=$((pass+1)); echo "  ok   the structural judge SEES a configMapKeyRef on the flag (positive control)"; } || { fail=$((fail+1)); echo "  FAIL the structural judge does not see a configMapKeyRef on the flag"; }
 echo "zerodte compatibility flag: $pass ok, $fail failed"
 [ "$fail" -eq 0 ] && { echo "=== zerodte-compat-flag-test: OK ==="; exit 0; }
 echo "=== zerodte-compat-flag-test: FAILED ==="; exit 1
