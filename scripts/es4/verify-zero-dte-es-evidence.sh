@@ -5,10 +5,12 @@ ROOT=$(git rev-parse --show-toplevel)
 CALIBRATION=${1:-"$ROOT/evidence/zero-dte-es-challenger/calibration-summary.json"}
 REPLAY=${2:-"$ROOT/evidence/zero-dte-es-challenger/nas-runtime-replay.json"}
 LOCK=${3:-"$ROOT/evidence/zero-dte-es-challenger/activation-lock.json"}
-ARTIFACT_SHA=9b59499f2db8651262992cea9107d3333eeede3af46e5920c4e6e283a9a6e3f3
+ARTIFACT_SHA=805813c6aa321d379207fcd2d758bfac9c8b73b3397b539753450ca8107804fd
 CORPUS_SHA=c28a01c36e9c63d3ccba4f35a07d6fe301748e9c4973b3b6e0d9f260c8fd4e5c
-EVALUATION_SHA=0ae27038e58e28e184a833edabd9061b5ffe4be779753b64efb24d107a342df0
+EVALUATION_SHA=2bc4b3683a2a282da6b55aa0b487f3db835e6a76fdb81d4f60ec7687e7e77736
 ACTUAL_IMAGE_DIGEST=${ZERO_DTE_ES_CHALLENGER_ACTUAL_IMAGE_DIGEST:-}
+IMAGE_REVISION=${ZERO_DTE_ES_CHALLENGER_IMAGE_REVISION:-}
+IMAGE_JAR_SHA=${ZERO_DTE_ES_CHALLENGER_IMAGE_JAR_SHA256:-}
 
 if [[ $# -gt 3 ]]; then
   echo "REFUSING: expected zero arguments, or calibration, NAS replay, and activation-lock paths" >&2
@@ -25,6 +27,14 @@ if [[ ! "$ACTUAL_IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
   echo "REFUSING: ZERO_DTE_ES_CHALLENGER_ACTUAL_IMAGE_DIGEST must be the deployed sha256 digest" >&2
   exit 1
 fi
+if [[ ! "$IMAGE_REVISION" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "REFUSING: ZERO_DTE_ES_CHALLENGER_IMAGE_REVISION must be the image's 40-hex OCI revision" >&2
+  exit 1
+fi
+if [[ ! "$IMAGE_JAR_SHA" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "REFUSING: ZERO_DTE_ES_CHALLENGER_IMAGE_JAR_SHA256 must be the image's runtime JAR label" >&2
+  exit 1
+fi
 
 jq -e --arg artifact "$ARTIFACT_SHA" --arg corpus "$CORPUS_SHA" \
   --arg evaluation "$EVALUATION_SHA" '
@@ -39,19 +49,23 @@ jq -e --arg artifact "$ARTIFACT_SHA" --arg corpus "$CORPUS_SHA" \
     .quality.trainEligibleSessions == 149 and
     .quality.validationEligibleSessions == 50 and
     .quality.historicalReevaluationEligibleSessions == 50 and
-    .validation.confirmedCompressionCount == 98 and
-    .validation.releaseCount == 82 and
+    .validation.confirmedCompressionCount == 100 and
+    .validation.falseCompressionRate == 0.03 and
+    .validation.compressionWithoutReleaseWithin30mRate == 0.17 and
+    .validation.releaseCount == 86 and
     .validation.labelledExpansionOnsetCount == 456 and
-    .validation.matchedExpansionOnsetCount == 46 and
-    .validation.missedExpansionOnsetCount == 410 and
+    .validation.matchedExpansionOnsetCount == 49 and
+    .validation.missedExpansionOnsetCount == 407 and
     .validation.latencyAndConsumptionIncludeMisses == true and
     .validation.medianOnsetDelayMinutes == 6 and
     .validation.medianMovementConsumed == 1 and
-    .historicalReevaluation.confirmedCompressionCount == 53 and
-    .historicalReevaluation.releaseCount == 63 and
+    .historicalReevaluation.confirmedCompressionCount == 52 and
+    .historicalReevaluation.falseCompressionRate == 0.019230769230769232 and
+    .historicalReevaluation.compressionWithoutReleaseWithin30mRate == 0.15384615384615385 and
+    .historicalReevaluation.releaseCount == 66 and
     .historicalReevaluation.labelledExpansionOnsetCount == 416 and
-    .historicalReevaluation.matchedExpansionOnsetCount == 39 and
-    .historicalReevaluation.missedExpansionOnsetCount == 377 and
+    .historicalReevaluation.matchedExpansionOnsetCount == 44 and
+    .historicalReevaluation.missedExpansionOnsetCount == 372 and
     .historicalReevaluation.latencyAndConsumptionIncludeMisses == true and
     .historicalReevaluation.medianOnsetDelayMinutes == 6 and
     .historicalReevaluation.medianMovementConsumed == 1
@@ -60,7 +74,8 @@ jq -e --arg artifact "$ARTIFACT_SHA" --arg corpus "$CORPUS_SHA" \
     exit 1
   }
 
-jq -e --arg artifact "$ARTIFACT_SHA" --arg corpus "$CORPUS_SHA" '
+jq -e --arg artifact "$ARTIFACT_SHA" --arg corpus "$CORPUS_SHA" \
+  --arg imageRevision "$IMAGE_REVISION" --arg imageJar "$IMAGE_JAR_SHA" '
     .schemaVersion == "zdce.es-nas-runtime-replay.1" and
     .status == "PASS" and
     .authority == "SHADOW_NOT_FOR_TRADING" and
@@ -69,8 +84,9 @@ jq -e --arg artifact "$ARTIFACT_SHA" --arg corpus "$CORPUS_SHA" '
     .artifactSha256 == $artifact and
     .corpusSha256 == $corpus and
     .corpusPath == "/Volumes/database/optionsedge/corpus/incoming/ladder-1yr" and
-    (.runtime.gitSha | test("^[0-9a-f]{40}$")) and
-    (.runtime.jarSha256 | test("^[0-9a-f]{64}$")) and
+    .runtime.gitSha == $imageRevision and
+    .runtime.jarSha256 == $imageJar and
+    .runtime.jarDigestComputedFromRunningCodeSource == true and
     .runtime.engineClass == "com.optionsedge.processing.contexttape.regime.EsZeroDteEngine" and
     .replay.engineClass == "com.optionsedge.processing.contexttape.regime.EsZeroDteEngine" and
     .replay.replayedSessionCount == 100 and
@@ -94,20 +110,27 @@ jq -e --arg artifact "$ARTIFACT_SHA" --arg corpus "$CORPUS_SHA" '
       .pointCount == 390 and .checkpointParity == true and .unmappedPointCount == 390 and
       (.sha256 | test("^[0-9a-f]{64}$"))) and
     .robustness.outOfOrderParity == true and
-    .robustness.sourceAblationMonotonic == true and
+    .robustness.mappingAblationInvariant == true and
     .robustness.missingMinuteUnknown == true and
     .robustness.sessionRollReadyFailClosed == true and
+    .sourceEquivalence.liveSchemaParserExercised == true and
+    .sourceEquivalence.minuteBucketConstructionExercised == true and
+    .sourceEquivalence.contractSelectionEquivalence == true and
+    .sourceEquivalence.status == "PASS" and
     .performance.loadTestPassed == true and
     .performance.inputRecordCount == 250000 and
+    .performance.queuedEventCount == 250000 and
+    .performance.runtimeBucketCount == 390 and
+    .performance.runtimePath == "EsTradeParser->EventQueue->Bar->MinuteInput->EsZeroDteEngine" and
     .performance.queueRecordLimit == 250000 and
     .performance.queueByteLimit == 67108864 and
-    .performance.encodedInputBytes > 0 and
-    .performance.encodedInputBytes <= .performance.queueByteLimit and
+    .performance.estimatedQueueBytes > 0 and
+    .performance.estimatedQueueBytes <= .performance.queueByteLimit and
     .performance.configuredMaxHeapBytes == 671088640 and
     .performance.maxHeapBytes > 0 and
     .performance.maxHeapBytes <= .performance.configuredMaxHeapBytes and
-    .performance.p99ProcessingLatencyMs >= 0 and
-    .performance.p99ProcessingLatencyMs <= 50 and
+    .performance.p99BucketToPointLatencyMs >= 0 and
+    .performance.p99BucketToPointLatencyMs <= 50 and
     .performance.throughputRecordsPerSecond > 0
   ' "$REPLAY" >/dev/null || {
     echo "REFUSING: Java NAS replay, recovery, robustness, or bounded-load evidence is invalid" >&2
