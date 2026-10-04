@@ -7,8 +7,11 @@
 #
 #   imageRepository     the repository name (the last path segment of the image reference, without registry, tag or digest)
 #   writerDeployments   the Deployments that may run the image — each must be on the digest the migration Job runs, have the flag
-#                       resolved OFF in its template, and have a SETTLED rollout (the dedicated v7 writer, increment 9e, runs the same
-#                       image with the flag absent — it is a declared writer Deployment so a migration judges it like the service)
+#                       resolved OFF in its template, and have a SETTLED rollout. The dedicated v7 writer (increment 9e) runs the same
+#                       image with the flag absent and is declared here so that its Deployment is a KNOWN workload; on top of the
+#                       declaration the helper judges it by what it RUNS — any container whose command names ZeroDteResearchWriterMain
+#                       (a pod, or a Deployment template) must be at ZERO during a migration, whatever its flag: a v7 writer under a
+#                       changing schema is refused (Jenkinsfile.zerodte-writer-activate ACTION=deactivate first)
 #   exemptJobLabels     app.kubernetes.io/name values of the maintenance Jobs that run the same image and never write research rows
 #                       (the provisioner refuses below v7 and writes only the era; the migrator is this Job itself); a pod is exempt
 #                       only when a Job owns it AND it carries one of these labels

@@ -76,6 +76,7 @@ job_observe() {
 cleanup() {
   local rc=$? observed release=false
   rm -f "${RENDER:-}" "${CM_RENDER:-}" "${LOGS:-}" "${ERRLOG:-}"
+  [ -z "${COMMITTED:-}" ] || rm -f "$COMMITTED/${RECEIPT_FILE:-x}" "$COMMITTED/${DECLARATION:-x}" 2>/dev/null || true
   if [ "$JOB_OWNED" != "true" ] || [ -z "$JOB_NAME" ]; then
     release=true
   elif [ "$SUCCESS" = "true" ]; then
@@ -127,11 +128,25 @@ DECLARATION="deploy/zerodte/provisioning/${ENVIRONMENT}.yaml"
 command -v yq >/dev/null 2>&1 || fatal "yq is required"
 command -v jq >/dev/null 2>&1 || fatal "jq is required"
 command -v python3 >/dev/null 2>&1 || fatal "python3 is required"
+command -v git >/dev/null 2>&1 || fatal "git is required"
+
+# --- 0b. COMMITTED means committed: every input is tracked and byte-identical to HEAD, and the receipt / declaration are read from HEAD's
+#         bytes (a dirty-but-valid receipt in the worktree is not a committed receipt — Codex 9e r1) -----------------------------------
+ATTESTATION="deploy/zerodte/virgin-attestation.yaml"
+for f in "$RECEIPT_FILE" "$DECLARATION" "$ATTESTATION" "$CLUSTERS" "$TEMPLATE"; do
+  git ls-files --error-unmatch -- "$f" >/dev/null 2>&1 || fatal "$f is not tracked by git — only COMMITTED bytes are acted on"
+  git diff --quiet HEAD -- "$f" 2>/dev/null || fatal "$f differs from HEAD — only the COMMITTED receipt / declaration / attestation / pins / template are acted on (a worktree edit is not a committed receipt); commit it through review or discard it"
+done
+COMMITTED="$(mktemp -d)"
+mkdir -p "$COMMITTED/$(dirname "$RECEIPT_FILE")" "$COMMITTED/$(dirname "$DECLARATION")"
+git show "HEAD:$RECEIPT_FILE" > "$COMMITTED/$RECEIPT_FILE" 2>/dev/null || fatal "cannot read HEAD:$RECEIPT_FILE"
+git show "HEAD:$DECLARATION" > "$COMMITTED/$DECLARATION" 2>/dev/null || fatal "cannot read HEAD:$DECLARATION"
+cmp -s "$COMMITTED/$RECEIPT_FILE" "$RECEIPT_FILE" && cmp -s "$COMMITTED/$DECLARATION" "$DECLARATION" || fatal "the worktree receipt / declaration are not HEAD's bytes"
 
 # --- 1. the committed receipt: validated and BOUND to its declaration the way the PR validates it, then its identity read ----------------
 echo "=== validating $RECEIPT_FILE against $DECLARATION ==="
 bash scripts/ci/validate-zerodte-provisioning.sh || fatal "the provisioning files do not pass scripts/ci/validate-zerodte-provisioning.sh — nothing is activated"
-IDENTITY="$(python3 - "$RECEIPT_FILE" "$DECLARATION" <<'PY'
+IDENTITY="$(python3 - "$COMMITTED/$RECEIPT_FILE" "$COMMITTED/$DECLARATION" <<'PY'
 import json, sys
 sys.path.insert(0, "scripts/ci")
 import zerodte_attestation as z
@@ -147,7 +162,7 @@ $(printf '%s' "$IDENTITY" | python3 -c 'import json,sys; d=json.load(sys.stdin);
 EOF2
 [ -n "${SYMBOL:-}" ] && [ -n "${GENERATION:-}" ] && [ -n "${ERA_ID:-}" ] && [ -n "${CLUSTER_ID:-}" ] && [ -n "${FRAMES_TOPIC:-}" ] || fatal "could not read symbol / generation / eraId / clusterId / the FRAMES topic from the receipt and the declaration"
 case "$FRAMES_TOPIC" in *[!a-zA-Z0-9._-]*|'') fatal "the declaration's FRAMES topic '$FRAMES_TOPIC' is not a topic name" ;; esac
-RECEIPT_SHA256="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$RECEIPT_FILE")"
+RECEIPT_SHA256="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$COMMITTED/$RECEIPT_FILE")"
 echo "receipt: env=$ENVIRONMENT symbol=$SYMBOL lineage=$LINEAGE generation=$GENERATION eraId=$ERA_ID clusterId=$CLUSTER_ID framesTopic=$FRAMES_TOPIC receipt_sha256=$RECEIPT_SHA256"
 echo "mode: ACTION=$ACTION CONFIRM=$CONFIRM"
 HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || echo '')"
@@ -203,10 +218,19 @@ PINNED_IMAGE="$(pin_ref "$MUTABLE_IMAGE")" || fatal "cannot resolve registry dig
 case "$PINNED_IMAGE" in *@sha256:*) : ;; *) fatal "refusing to run on an unpinned image ref: $PINNED_IMAGE" ;; esac
 PINNED_DIGEST="${PINNED_IMAGE##*@}"
 echo "image: $MUTABLE_IMAGE -> $PINNED_IMAGE"
-LIVE_IMAGE="$(kubectl -n "$NAMESPACE" get "deployment/$DEPLOYMENT" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null)" || fatal "the Deployment $DEPLOYMENT does not exist in $NAMESPACE — deploy the zerodte-research-writer service slice first (Jenkinsfile.service-deploy); it ships at replicas 0"
+live_writer_image() { # the image of the NAMED writer container of the live Deployment (never containers[0]: a sidecar could be first)
+  kubectl -n "$NAMESPACE" get "deployment/$DEPLOYMENT" -o jsonpath="{.spec.template.spec.containers[?(@.name==\"$DEPLOYMENT\")].image}" 2>/dev/null
+}
+LIVE_IMAGE="$(live_writer_image)" || fatal "the Deployment $DEPLOYMENT does not exist in $NAMESPACE — deploy the zerodte-research-writer service slice first (Jenkinsfile.service-deploy); it ships at replicas 0"
+[ -n "$LIVE_IMAGE" ] || fatal "the live Deployment $DEPLOYMENT has no container named $DEPLOYMENT — not the writer slice this pipeline activates"
 case "$LIVE_IMAGE" in *"@${PINNED_DIGEST}") : ;; *) fatal "the live Deployment $DEPLOYMENT runs '$LIVE_IMAGE', not the pinned digest $PINNED_DIGEST this run would check and activate — deploy the slice at this image first" ;; esac
 LIVE_REPLICAS="$(kubectl -n "$NAMESPACE" get "deployment/$DEPLOYMENT" -o jsonpath='{.spec.replicas}' 2>/dev/null || echo '')"
 echo "live Deployment $DEPLOYMENT: image $LIVE_IMAGE, replicas ${LIVE_REPLICAS:-<unknown>}"
+if [ "$ACTION" = activate ]; then
+  # an activation starts from ZERO: a replica that exists outside this pipeline (a kubectl scale by hand, an unsanctioned path) is refused,
+  # never adopted — deactivate first, or investigate who scaled it (the pipeline is the only SANCTIONED path; it is not the only possible one)
+  [ "$LIVE_REPLICAS" = 0 ] || fatal "the live Deployment $DEPLOYMENT is at ${LIVE_REPLICAS:-<unknown>} replica(s) — an activation starts from zero; a replica from outside this pipeline is refused (ACTION=deactivate first, or find who scaled it)"
+fi
 
 RENDER="$(mktemp)"; CM_RENDER="$(mktemp)"; LOGS="$(mktemp)"; ERRLOG="$(mktemp)"
 
@@ -243,6 +267,12 @@ EOF2
 kubectl -n "$NAMESPACE" apply --dry-run=server -f "$CM_RENDER" >/dev/null || fatal "the identity ConfigMap render does not validate server-side"
 
 run_check_job() { # the CHECK Job: render, validate, create, wait, log, the receipt held to the letter and BOUND to the committed receipt
+  # UNDER THE LOCK, right before the Job: the live Deployment re-read — a service rollout could have replaced it between the pre-lock read and
+  # the lock (the lock now excludes it); the check must be of the bytes the activation will scale (Codex 9e r1)
+  local live_now
+  live_now="$(live_writer_image)" || fatal "under the lock the Deployment $DEPLOYMENT could not be read — refusing to check what cannot be seen"
+  case "$live_now" in *"@${PINNED_DIGEST}") : ;; *) fatal "under the lock the live Deployment $DEPLOYMENT runs '$live_now', not the pinned digest $PINNED_DIGEST — a rollout replaced it since the pre-lock read; refused" ;; esac
+  echo "under the lock: $DEPLOYMENT still runs $live_now"
   JOB_NAME="zerodte-writer-check-$(date -u +%Y%m%d-%H%M%S)-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
   sed -e "s|__IMAGE__|${PINNED_IMAGE}|g" -e "s|__JOB_NAME__|${JOB_NAME}|g" -e "s|__ENVIRONMENT__|${ENVIRONMENT}|g" -e "s|__SYMBOL__|${SYMBOL}|g" -e "s|__FRAMES_TOPIC__|${FRAMES_TOPIC}|g" \
       -e "s|__ERA_ID__|${ERA_ID}|g" -e "s|__GENERATION__|${GENERATION}|g" "$TEMPLATE" >"$RENDER"
@@ -250,7 +280,7 @@ run_check_job() { # the CHECK Job: render, validate, create, wait, log, the rece
   [ "$(yq -r '.metadata.namespace' "$RENDER")" = "$NAMESPACE" ] || fatal "template namespace != NAMESPACE '$NAMESPACE'"
   grep -q "POSTGRES_PASSWORD" "$RENDER" && ! grep -qE "POSTGRES_PASSWORD[[:space:]]*[:=][[:space:]]*[^[:space:]]" "$RENDER" || fatal "the render must reference POSTGRES_PASSWORD by secretKeyRef only"
   echo "=== server-side validate (Job $JOB_NAME) ==="
-  kubectl -n "$NAMESPACE" create --dry-run=server -f "$RENDER" >/dev/null
+  kubectl -n "$NAMESPACE" create --dry-run=server -f "$RENDER" >/dev/null || fatal "the check Job render does not validate server-side — nothing created"
   echo "=== creating check Job $JOB_NAME (env=$ENVIRONMENT eraId=$ERA_ID generation=$GENERATION) ==="
   JOB_OWNED=true
   kubectl -n "$NAMESPACE" create -f "$RENDER"
@@ -284,14 +314,21 @@ run_check_job() { # the CHECK Job: render, validate, create, wait, log, the rece
   [ "${n:-0}" = 1 ] || fatal "$JOB_NAME printed ${n:-0} receipt line(s) — expected exactly one (state=$succeeded, exit ${EXIT_CODE:-unknown}). Read the log."
   CHECK_LINE="$outcomes"
   local HEX32='[0-9a-f]{32}' NUM='(0|[1-9][0-9]*)'
-  if printf '%s\n' "$CHECK_LINE" | grep -Eq -- "^WRITER_CHECK READY eraId=$NUM generation=$NUM clusterId=[A-Za-z0-9._-]+ framesTopicId=$HEX32 position=$NUM cursorOffset=($NUM|none)\$"; then
+  if printf '%s\n' "$CHECK_LINE" | grep -Eq -- "^WRITER_CHECK READY eraId=$NUM generation=$NUM clusterId=[A-Za-z0-9._-]+ framesTopicId=$HEX32 position=$NUM cursorOffset=($NUM|none) logBeginning=$NUM logEnd=$NUM\$"; then
     [ "${EXIT_CODE:-}" = 0 ] && [ "$succeeded" = succeeded ] || fatal "the receipt says READY but the container exited '${EXIT_CODE:-<unknown>}' (state=$succeeded) — the receipt and the process disagree; refused"
     local r_era r_gen r_cluster
     r_era="$(printf '%s' "$CHECK_LINE" | sed -E 's/.* eraId=([0-9]+) .*/\1/')"; r_gen="$(printf '%s' "$CHECK_LINE" | sed -E 's/.* generation=([0-9]+) .*/\1/')"; r_cluster="$(printf '%s' "$CHECK_LINE" | sed -E 's/.* clusterId=([A-Za-z0-9._-]+) .*/\1/')"
     [ "$r_era" = "$ERA_ID" ] && [ "$r_gen" = "$GENERATION" ] || fatal "the writer verified era $r_era of generation $r_gen, the committed receipt names era $ERA_ID of generation $GENERATION — whatever the writer checked, it was not this receipt's era ('$CHECK_LINE')"
     [ "$r_cluster" = "$CLUSTER_ID" ] || fatal "the writer runs against cluster '$r_cluster', the committed receipt names '$CLUSTER_ID' — not the provisioned cluster ('$CHECK_LINE')"
+    # a BOOTSTRAP (no cursor, no anchor: cursorOffset=none) is lawful only on an EMPTY log — the first activation happens before increment 8
+    # produces frames; frames that nobody persisted and nothing anchors are an operator's question, never adopted silently (Codex 9d r2)
+    local r_cursor r_begin r_end
+    r_cursor="$(printf '%s' "$CHECK_LINE" | sed -E 's/.* cursorOffset=([0-9]+|none) .*/\1/')"; r_begin="$(printf '%s' "$CHECK_LINE" | sed -E 's/.* logBeginning=([0-9]+) .*/\1/')"; r_end="$(printf '%s' "$CHECK_LINE" | sed -E 's/.* logEnd=([0-9]+)$/\1/')"
+    if [ "$r_cursor" = none ] && [ "$r_begin" != "$r_end" ]; then
+      fatal "the writer would BOOTSTRAP (no cursor, no feature row of this log) on a log that is not empty [$r_begin, $r_end) — frames exist that nothing persisted; read them before activating (a bootstrap is lawful only on an empty log) ('$CHECK_LINE')"
+    fi
     echo "$CHECK_LINE"
-    echo "OK: WRITER_CHECK READY — schema v7, one frames partition, era $ERA_ID of generation $GENERATION verified on cluster $CLUSTER_ID, the calendar's reach, the cursor recovered (position $(printf '%s' "$CHECK_LINE" | sed -E 's/.* position=([0-9]+) .*/\1/'), cursor $(printf '%s' "$CHECK_LINE" | sed -E 's/.* cursorOffset=([0-9]+|none)$/\1/')); nothing consumed, nothing written."
+    echo "OK: WRITER_CHECK READY — schema v7, one frames partition, era $ERA_ID of generation $GENERATION verified on cluster $CLUSTER_ID, the calendar's reach, the cursor recovered (position $(printf '%s' "$CHECK_LINE" | sed -E 's/.* position=([0-9]+) .*/\1/'), cursor $r_cursor, the log [$r_begin, $r_end)); nothing consumed, nothing written."
     return 0
   fi
   if printf '%s\n' "$CHECK_LINE" | grep -Eq -- '^WRITER_CHECK REFUSED code=[A-Z_]+ exit=68$'; then
@@ -324,20 +361,23 @@ case "$ACTION" in
     kubectl -n "$NAMESPACE" apply -f "$CM_RENDER"
     kubectl -n "$NAMESPACE" scale "deployment/$DEPLOYMENT" --replicas=1
     kubectl -n "$NAMESPACE" rollout status "deployment/$DEPLOYMENT" --timeout="${ROLLOUT_TIMEOUT_S}s" || fatal "the rollout of $DEPLOYMENT did not complete within ${ROLLOUT_TIMEOUT_S}s — the writer's readiness probe is failing (read its /health/ready and /metrics); the Deployment stays at 1 replica NOT READY for the operator to inspect, or scale it to 0 with ACTION=deactivate"
-    PODS="$(kubectl -n "$NAMESPACE" get pods -l "app.kubernetes.io/name=$DEPLOYMENT" --field-selector=status.phase=Running -o json 2>/dev/null)" || fatal "cannot list the writer's pods after the rollout"
-    READY_ON_DIGEST="$(printf '%s' "$PODS" | jq -r --arg d "$PINNED_DIGEST" '[.items[] | select(.metadata.deletionTimestamp == null) | select(([(.status.conditions // [])[] | select(.type == "Ready" and .status == "True")] | length) >= 1) | select(([(.status.containerStatuses // [])[] | .imageID] | map(test("@" + $d + "$")) | (length > 0 and all)))] | length')"
+    # EVERY pod of the writer (no phase filter: a Pending or Failed second pod is a second pod), the deleting ones excluded; exactly one must
+    # exist, Running, Ready, its writer container's imageID carrying the pinned digest in either canonical form (repo@sha256:… or bare sha256:…)
+    PODS="$(kubectl -n "$NAMESPACE" get pods -l "app.kubernetes.io/name=$DEPLOYMENT" -o json 2>/dev/null)" || fatal "cannot list the writer's pods after the rollout"
+    READY_ON_DIGEST="$(printf '%s' "$PODS" | jq -r --arg d "$PINNED_DIGEST" --arg c "$DEPLOYMENT" '[.items[] | select(.metadata.deletionTimestamp == null) | select(.status.phase == "Running") | select(([(.status.conditions // [])[] | select(.type == "Ready" and .status == "True")] | length) >= 1) | select(([(.status.containerStatuses // [])[] | select(.name == $c) | select((.imageID | endswith("@" + $d)) or (.imageID == $d))] | length) >= 1)] | length')"
     TOTAL="$(printf '%s' "$PODS" | jq -r '[.items[] | select(.metadata.deletionTimestamp == null)] | length')"
-    [ "$READY_ON_DIGEST" = 1 ] && [ "$TOTAL" = 1 ] || fatal "after the rollout $DEPLOYMENT has $TOTAL running pod(s) of which $READY_ON_DIGEST ready on the pinned digest — expected exactly one"
+    [ "$READY_ON_DIGEST" = 1 ] && [ "$TOTAL" = 1 ] || fatal "after the rollout $DEPLOYMENT has $TOTAL pod(s) (every phase, deleting ones excluded) of which $READY_ON_DIGEST Running and Ready on the pinned digest — expected exactly one; the replica is left as the API left it: read the pods, then ACTION=deactivate or investigate"
     echo "OK: ACTIVATED the dedicated v7 research writer on $ENVIRONMENT — one replica Running and Ready on $PINNED_DIGEST, era $ERA_ID of generation $GENERATION (identity ConfigMap $IDENTITY_CM, receipt sha256 $RECEIPT_SHA256). Its lag, cursor and primary-code metrics are on :8080/metrics." ;;
   deactivate)
     echo "=== scaling $DEPLOYMENT to 0 ==="
     kubectl -n "$NAMESPACE" scale "deployment/$DEPLOYMENT" --replicas=0
     deadline=$(( $(date +%s) + ROLLOUT_TIMEOUT_S ))
     while [ "$(date +%s)" -lt "$deadline" ]; do
-      left="$(kubectl -n "$NAMESPACE" get pods -l "app.kubernetes.io/name=$DEPLOYMENT" -o json 2>/dev/null | jq -r '.items | length' 2>/dev/null || echo unknown)"
+      if listing="$(kubectl -n "$NAMESPACE" get pods -l "app.kubernetes.io/name=$DEPLOYMENT" -o json 2>/dev/null)"; then left="$(printf '%s' "$listing" | jq -r '.items | length' 2>/dev/null || echo unknown)"; else left=unknown; fi
       [ "$left" = 0 ] && break
       sleep 5
     done
+    [ "${left:-unknown}" != unknown ] || fatal "the pods of $DEPLOYMENT could not be listed — the Deployment is at 0 but the drain cannot be declared; list them by hand"
     [ "${left:-unknown}" = 0 ] || fatal "pods of $DEPLOYMENT are still present after ${ROLLOUT_TIMEOUT_S}s (${left:-unknown}) — the Deployment is at 0; wait for them to go, then inspect"
     echo "OK: DEACTIVATED the dedicated v7 research writer on $ENVIRONMENT — the Deployment is at 0 replicas and its pods are gone." ;;
 esac

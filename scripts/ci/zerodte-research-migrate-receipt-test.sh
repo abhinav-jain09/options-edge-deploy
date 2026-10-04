@@ -133,6 +133,7 @@ FAKE
 chmod +x "$W/bin/kubectl" "$W/bin/date" "$W/bin/sleep"
 pass=0; fail=0
 # the default cluster: one quiescent writer pod on the pinned digest with the flag off; the declared Deployment settled, pinned, flag off; its ReplicaSet
+check_no_job() { if ! [ -f "$LAST_JOURNAL.job.yaml" ] && ! grep -q "create -f /" "$LAST_JOURNAL"; then pass=$((pass+1)); echo "  ok   $1"; else fail=$((fail+1)); echo "  FAIL $1"; fi; }
 k8s_reset() {
   rm -rf "$T/k8s"; mkdir -p "$T/k8s"
   $FX pods "vix-a:ok:lit=false" > "$T/k8s/pods.json"
@@ -390,6 +391,18 @@ run "… and with only an exempt maintenance pod (its Job listed)" 0 "pods=1 wri
 qc "the declared Deployment scaled to zero but still reporting a replica" 1 "is scaled to zero but still reports 1 replicas" deployments "vix-option-inteligence-service:ok:lit=false:0:zero-still-running"
 k8s_reset; rm -f "$T/k8s/deployments.json" "$T/k8s/replicasets.json" "$T/k8s/pods.json"
 run "no declared Deployment at all (never deployed here)" 0 "declaredAbsent=vix-option-inteligence-service" false "$DIAG$MIGRATABLE\n"
+echo "--- the DEDICATED v7 writer (9d / 9e): judged by what it RUNS — at zero it is a known workload, anything running its main class refuses ---"
+k8s_reset; $FX deployments "vix-option-inteligence-service:ok:lit=false:1" "zerodte-research-writer:ok:none:0:writer" > "$T/k8s/deployments.json"
+run "the writer Deployment declared, at ZERO, settled" 0 "MIGRATABLE" false "$DIAG$MIGRATABLE\n"
+k8s_reset; $FX deployments "vix-option-inteligence-service:ok:lit=false:1" "zerodte-research-writer:ok:none:1:writer" > "$T/k8s/deployments.json"; $FX pods "vix-a:ok:lit=false" "w-1:ok:none:writer" > "$T/k8s/pods.json"
+run "the writer ACTIVE (its Deployment at 1, settled, flag absent) and its pod" 1 "runs the dedicated v7 writer (ZeroDteResearchWriterMain)" false "$DIAG$MIGRATABLE\n"
+check_no_job "… no Job created"
+k8s_reset; $FX deployments "vix-option-inteligence-service:ok:lit=false:1" "zerodte-research-writer:ok:none:1:writer" > "$T/k8s/deployments.json"
+run "the writer Deployment at 1 with no pod yet"      1 "is not at zero (desired 1, replicas 1) — deactivate it before a migration" false "$DIAG$MIGRATABLE\n"
+k8s_reset; $FX deployments "vix-option-inteligence-service:ok:lit=false:1" "zerodte-research-writer:ok:none:0:writer:zero-still-running" > "$T/k8s/deployments.json"
+run "the writer Deployment at 0 but still reporting a replica" 1 "is not at zero (desired 0, replicas 1)" false "$DIAG$MIGRATABLE\n"
+k8s_reset; $FX pods "vix-a:ok:lit=false" "w-stray:ok:none:writer" > "$T/k8s/pods.json"
+run "a stray pod running the writer main (no Deployment)" 1 "pod w-stray container vix runs the dedicated v7 writer" false "$DIAG$MIGRATABLE\n"
 qc "a StatefulSet running the image"                 1 "statefulset stateful-vix runs the service image — not a declared workload" statefulsets "stateful-vix"
 qc "a DaemonSet running the image"                   1 "daemonset ds-vix runs the service image — not a declared workload" daemonsets "ds-vix"
 qc "a ReplicaSet not owned by the declared Deployment" 1 "ReplicaSet orphan-rs runs the service image and is not owned by a declared Deployment" replicasets "vix-rs:dep-uid-0001" "orphan-rs:none"

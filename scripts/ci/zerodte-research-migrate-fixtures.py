@@ -124,6 +124,9 @@ def pod(spec):
             p["metadata"]["labels"]["app.kubernetes.io/name"] = o[6:]
         elif o.startswith("uid="):
             p["metadata"]["uid"] = o[4:]
+        elif o == "writer":                                             # the DEDICATED v7 writer's main class (9d / 9e): must be at zero during a migration
+            container["command"] = ["java", "-cp", "/app/app.jar", "com.optionsedge.processing.zerodte.research.ZeroDteResearchWriterMain"]
+            p["metadata"]["labels"]["app.kubernetes.io/name"] = "zerodte-research-writer"
         else:
             raise SystemExit("unknown pod option " + o)
     return p
@@ -145,6 +148,8 @@ def deployment(spec):
             d["status"]["observedGeneration"] = 6
         elif o == "zero-still-running":
             d["status"]["replicas"] = 1
+        elif o == "writer":
+            d["spec"]["template"]["spec"]["containers"][0]["command"] = ["java", "-cp", "/app/app.jar", "com.optionsedge.processing.zerodte.research.ZeroDteResearchWriterMain"]
         else:
             raise SystemExit("unknown deployment option " + o)
     return d

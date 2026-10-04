@@ -16,7 +16,7 @@
 //
 // THREE STAGES, IN ORDER, EVERY BUILD:
 //   1. VALIDATE — the provisioning files (declaration, attestation, the committed receipt bound to the declaration), the writer render
-//      (no envFrom, the flag absent), this pipeline's receipt and guard tests.
+//      (no envFrom, the flag absent), this pipeline's receipt test (its guard test runs in CI — see the stage).
 //   2. CHECK — ALWAYS runs (ACTION check or activate): the CHECK Job; a build with CONFIRM=false ends here, green, having changed nothing.
 //   3. ACTIVATE / DEACTIVATE — runs ONLY when CONFIRM=true and ACTION != check, and (activate) only after stage 2 passed in the same build:
 //      the check Job runs AGAIN right before the effect, then the scale.
@@ -96,6 +96,9 @@ pipeline {
           bash scripts/ci/zerodte-compat-flag-test.sh
           bash scripts/ci/zerodte-writer-activate-receipt-test.sh
         '''
+        // NOT here: scripts/ci/zerodte-writer-activate-guard-test.sh (this pipeline's own guard test) RUNS THE GUARD'S COMMAND, so the guard
+        // validator classifies it as a source-consuming effect that would need its own verify-permitted-tree step; it runs in CI
+        // (.github/workflows/deploy-validation.yml) on every push, as the 9c pipeline's guard test does.
       }
     }
     stage('Check: WRITER_CHECK READY?') {
@@ -127,8 +130,13 @@ pipeline {
   post {
     success {
       script {
-        echo params.CONFIRM && params.ACTION != 'check' ? "${params.ACTION.toUpperCase()}D the dedicated v7 research writer on ${params.ENVIRONMENT} — see the stage log for the writer's receipt" :
-                                                           "CHECK ONLY — the writer's boot was proven against the live cluster and store; nothing changed. Re-run with ACTION=activate and CONFIRM=true to scale it to one replica on ${params.ENVIRONMENT}."
+        if (params.CONFIRM && params.ACTION != 'check') {
+          echo "${params.ACTION.toUpperCase()}D the dedicated v7 research writer on ${params.ENVIRONMENT} — see the stage log for the writer's receipt"
+        } else if (params.ACTION == 'deactivate') {
+          echo "NO EFFECT — ACTION=deactivate without CONFIRM: the validation ran, no check Job ran, nothing changed. Re-run with CONFIRM=true to scale the writer to zero on ${params.ENVIRONMENT}."
+        } else {
+          echo "CHECK ONLY — the writer's boot was proven against the live cluster and store; nothing changed. Re-run with ACTION=activate and CONFIRM=true to scale it to one replica on ${params.ENVIRONMENT}."
+        }
       }
     }
     unsuccessful {
