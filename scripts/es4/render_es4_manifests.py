@@ -370,6 +370,10 @@ DROP_WORKLOADS = {"raw-to-display-service", "directional-pressure-service"}
 # and publish quietly. es4 has no IBKR fan-out and never will — this is the ES pipeline.
 DROP_ENV_PREFIXES = {
     "databento-gex": ("IBKR_GEX_",),
+    # ZDCE-113/114 is calibrated and wired only for the SPX dev/prod source identities. The es4
+    # renderer inherits the production Context Tape slice, but prefixing these Kafka topics would
+    # silently create an unvalidated ES detector with the SPX artifact and the prod transaction id.
+    "context-tape": ("ZERO_DTE_",),
 }
 
 # Rendered at replicas:0 on es4 ONLY — still defined, still deployable, just not running.

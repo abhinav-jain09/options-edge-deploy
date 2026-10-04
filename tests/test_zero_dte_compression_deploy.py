@@ -81,6 +81,11 @@ class ZeroDteCompressionDeployTest(unittest.TestCase):
         self.assertIn(SHA, smoke)
         self.assertIn("SHADOW_NOT_FOR_TRADING", smoke)
 
+        renderer = (ROOT / "scripts" / "es4" / "render_es4_manifests.py").read_text()
+        self.assertIn('"context-tape": ("ZERO_DTE_",)', renderer)
+        es4 = (ROOT / "k8s" / "es4" / "services" / "context-tape.yaml").read_text()
+        self.assertNotIn("ZERO_DTE_", es4)
+
 
 if __name__ == "__main__":
     unittest.main()
