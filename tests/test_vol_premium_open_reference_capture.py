@@ -972,8 +972,8 @@ class PublicationAuthorityTest(unittest.TestCase):
 class FreshlyLinkedFileTest(unittest.TestCase):
     """The gate links each member and each `_manifest.jsonl` into the pinned set and the reader opens
     them immediately. On the prod CIFS mount that first open fails EINVAL and the next succeeds —
-    found on the first live backfill, where 191 members pinned cleanly and every manifest read then
-    failed while `head` on the same path worked."""
+    found on the first live backfill, where the members pinned cleanly and every manifest read inside
+    the run then failed while the same open a second later worked."""
 
     def setUp(self) -> None:
         self.tmp = Path(tempfile.mkdtemp())
@@ -999,15 +999,35 @@ class FreshlyLinkedFileTest(unittest.TestCase):
     def test_a_persistent_einval_is_raised_not_swallowed(self) -> None:
         """A wait and a retry, not a swallow: a file that genuinely cannot be read must stop the run
         rather than read as absent — which for a manifest would mean publishing without checking any
-        byte against it."""
+        byte against it.
+
+        AND THE SCHEDULE IS PINNED HERE, because asserting only that an EINVAL eventually escapes is
+        satisfied by removing the retry loop altogether. Five opens, four sleeps of 0.5, 1, 1.5 and
+        2 seconds, none after the last attempt, and the LAST error raised rather than the first.
+        `time.sleep` is replaced so the case costs nothing to run."""
+        attempts, slept = [], []
+        errors = []
+
         def always_einval(path, mode="r", *rest, **kw):
-            raise OSError(errno.EINVAL, "Invalid argument")
+            err = OSError(errno.EINVAL, "Invalid argument")
+            attempts.append(path)
+            errors.append(err)
+            raise err
 
         orc.open = always_einval
+        real_sleep = orc.time.sleep
+        orc.time.sleep = slept.append
+        self.addCleanup(lambda: setattr(orc.time, "sleep", real_sleep))
         self.addCleanup(lambda: delattr(orc, "open") if hasattr(orc, "open") else None)
+
         with self.assertRaises(OSError) as caught:
             orc._open_freshly_linked(str(self.target))
         self.assertEqual(caught.exception.errno, errno.EINVAL)
+        self.assertEqual(len(attempts), 5, "it did not make five attempts")
+        self.assertEqual(slept, [0.5, 1.0, 1.5, 2.0],
+                         "the delays, and no sleep after the last attempt")
+        self.assertIs(caught.exception, errors[-1],
+                      "the FIRST error was raised, not the final observed state")
 
     def test_an_unreadable_member_stops_a_PUBLISHING_run(self) -> None:
         """THE EFFECT, which the helper's own cases cannot show. `_records` caught every OSError and
