@@ -10,9 +10,9 @@
 # only after the dry run passed in the same build.
 #
 # THE RECEIPT. The provisioner prints exactly ONE outcome line on stdout (its diagnostics go to stderr; secrets appear in neither):
-#   PROVISIONABLE symbol= lineage= generation= eraId= planDigest= provisionedDigest= topicIds=RESOLVED|PENDING wouldCreate= wouldAssert= wouldAttest= wouldInsertEra= wouldAppend=PROVISIONED
-#   PROVISIONED generation= eraId= ledgerOffset= provisionedDigest= ledgerTopicId= clusterId=
-#   ALREADY_PROVISIONED generation= eraId= ledgerOffset= provisionedDigest= ledgerTopicId= clusterId=
+#   PROVISIONABLE symbol= lineage= generation= eraId= eraStartSession= planDigest= provisionedDigest= topicIds=RESOLVED|PENDING wouldCreate= wouldAssert= wouldAttest= wouldInsertEra= wouldAppend=PROVISIONED
+#   PROVISIONED generation= eraId= eraStartSession= ledgerOffset= provisionedDigest= ledgerTopicId= clusterId=
+#   ALREADY_PROVISIONED generation= eraId= eraStartSession= ledgerOffset= provisionedDigest= ledgerTopicId= clusterId=
 #   ATTESTATION_REQUIRED generation= ledgerTopicId= clusterId=               (exit 67: the topics exist; add the printed entry through review, run again)
 #   CONFLICTING_PROVISIONED generation=                                        (exit 66)
 #   REFUSED reason=<TOKEN> exit=<n>                                            (64 file/usage, 65 attestation/contract, 68 precondition, 69 unavailable, 70 mutation)

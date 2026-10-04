@@ -113,6 +113,13 @@ run "confirm: PROVISIONED"                           0 "OK: PROVISIONED generati
 printf '%s\n' "$LAST_OUT" | sed -n '/^environment: dev$/,/^ledgerOffset: /p' > "$W/deploy/zerodte/provisioned/dev.yaml"
 grep -q "^environmentLineageId: $L$" "$W/deploy/zerodte/provisioned/dev.yaml" && grep -q "^bootstrapKind: VIRGIN$" "$W/deploy/zerodte/provisioned/dev.yaml" && grep -q '^eraStartSession: "2026-10-05"$' "$W/deploy/zerodte/provisioned/dev.yaml" && [ "$(cd "$W" && bash scripts/ci/validate-zerodte-provisioning.sh 2>&1 | grep -c "ok   deploy/zerodte/provisioned/dev.yaml (bound to")" = 1 ] \
   && { pass=$((pass+1)); echo "  ok   the printed receipt block validates as deploy/zerodte/provisioned/dev.yaml bound to its declaration"; } || { fail=$((fail+1)); echo "  FAIL the printed receipt block does not validate"; cat "$W/deploy/zerodte/provisioned/dev.yaml"; }
+cp "$W/deploy/zerodte/provisioned/dev.yaml" "$T/receipt-block.yaml"
+sed -i.bak 's/^eraStartSession: "2026-10-05"$/eraStartSession: "2026-10-06"/' "$W/deploy/zerodte/provisioned/dev.yaml" && rm -f "$W/deploy/zerodte/provisioned/dev.yaml.bak"
+(cd "$W" && bash scripts/ci/validate-zerodte-provisioning.sh >/dev/null 2>&1) && { fail=$((fail+1)); echo "  FAIL the validator accepted a receipt dated another session"; } || { pass=$((pass+1)); echo "  ok   a committed receipt whose eraStartSession is not the declaration's is refused by the validator"; }
+cp "$T/receipt-block.yaml" "$W/deploy/zerodte/provisioned/dev.yaml"
+sed -i.bak 's/^eraStartSession: "2026-10-05"$/eraStartSession: 2026-10-05/' "$W/deploy/zerodte/provisioned/dev.yaml" && rm -f "$W/deploy/zerodte/provisioned/dev.yaml.bak"
+(cd "$W" && bash scripts/ci/validate-zerodte-provisioning.sh >/dev/null 2>&1) && { fail=$((fail+1)); echo "  FAIL the validator accepted an unquoted receipt date"; } || { pass=$((pass+1)); echo "  ok   a committed receipt with an unquoted eraStartSession is refused (the receipt's dates are quoted)"; }
+cp "$T/receipt-block.yaml" "$W/deploy/zerodte/provisioned/dev.yaml"
 sed -i.bak 's/^generation: 1$/generation: 2/' "$W/deploy/zerodte/provisioned/dev.yaml" && rm -f "$W/deploy/zerodte/provisioned/dev.yaml.bak"
 (cd "$W" && bash scripts/ci/validate-zerodte-provisioning.sh >/dev/null 2>&1) && { fail=$((fail+1)); echo "  FAIL a receipt of another generation passed the validator"; } || { pass=$((pass+1)); echo "  ok   a receipt of another generation is refused by the validator"; }
 rm -f "$W/deploy/zerodte/provisioned/dev.yaml"
