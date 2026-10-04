@@ -4,8 +4,9 @@
   pods  <spec>...        → {"items":[...]}   spec = name:imageID:flag[:opt...]
       imageID   ok (the pinned digest) | ok-pullable (docker-pullable://… form) | ok-bare (a bare sha256:… imageID) | other (another digest)
                 | none (no container status yet) | foreign (an image of another repository)
-      flag      lit=<v> | none | cmkey=<cm>/<key>[/opt] | seckey=<sec>/<key> | fieldref | dup | expand
-                | from-cm=<cm>[/<prefix>] | from-sec=<sec>[/<prefix>] | from-cm-opt=<cm> | lit-and-from-cm=<v>/<cm>
+      flag      lit=<v> | none | cmkey=<cm>/<key>[/opt] | seckey=<sec>/<key> | fieldref | resfieldref | dup | expand | envfrom-empty
+                | from-cm=<cm>[/<prefix>] | from-sec=<sec>[/<prefix>] | from-cm-opt=<cm> | from-cms=<cm1>,<cm2> | from-cm-and-sec=<cm>/<sec>
+                | lit-and-from-cm=<v>/<cm>
       opt       terminating | phase=<Pending|Succeeded|Failed> | init=<imageID> | sidecar=<imageID> | job=<label> (owned by a Job, labelled)
                 | label=<label> (labelled, NOT owned by a Job) | uid=<uid>
   deployments <spec>...  → spec = name:image(ok|other|tag):flag(lit=…|none|from-cm=…):replicas[:rolling|genlag|zero-still-running]
@@ -71,6 +72,16 @@ def flag_env(flag):
         if len(parts) > 1:
             src["prefix"] = parts[1]
         env_from.append(src)
+    elif flag.startswith("from-cms="):                                   # ordered ConfigMap sources: a later one overrides an earlier one
+        for name in flag[9:].split(","):
+            env_from.append({"configMapRef": {"name": name}})
+    elif flag.startswith("from-cm-and-sec="):                            # ONE envFrom entry naming both a ConfigMap and a Secret
+        cm, sec = flag[16:].split("/")
+        env_from.append({"configMapRef": {"name": cm}, "secretRef": {"name": sec}})
+    elif flag == "resfieldref":
+        env.append({"name": "ZERODTE_RESEARCH_ENABLED", "valueFrom": {"resourceFieldRef": {"resource": "limits.cpu"}}})
+    elif flag == "envfrom-empty":                                          # an envFrom entry naming nothing
+        env_from.append({"prefix": ""})
     elif flag.startswith("lit-and-from-cm="):
         v, cm = flag[16:].split("/")
         env.append({"name": "ZERODTE_RESEARCH_ENABLED", "value": v})
@@ -102,9 +113,13 @@ def pod(spec):
             p["spec"]["containers"].append({"name": "side", "image": spec_image(o[8:])})
             if image_id(o[8:]) is not None:
                 p["status"]["containerStatuses"].append({"name": "side", "imageID": image_id(o[8:])})
-        elif o.startswith("job="):
+        elif o.startswith("job="):                                      # owned by Job "job-<pod>" (uid job-uid-<pod>): the lawful case needs that Job LISTED (jobs fixture "job-<pod>:<label>")
             p["metadata"]["labels"]["app.kubernetes.io/name"] = o[4:]
             p["metadata"]["ownerReferences"] = [{"kind": "Job", "name": "job-" + name, "uid": "job-uid-" + name}]
+        elif o.startswith("jobuid="):                                   # the owner reference's uid, when it must differ from the listed Job's
+            p["metadata"]["ownerReferences"][0]["uid"] = o[7:]
+        elif o.startswith("jobname="):
+            p["metadata"]["ownerReferences"][0]["name"] = o[8:]
         elif o.startswith("label="):
             p["metadata"]["labels"]["app.kubernetes.io/name"] = o[6:]
         elif o.startswith("uid="):
@@ -156,7 +171,8 @@ def main(argv):
     elif kind == "jobs":
         for s in specs:
             name, label = s.split(":")
-            j = {"metadata": {"name": name, "uid": "uid-" + name, "labels": {}}, "spec": {"template": template()}}
+            uid = ("job-uid-" + name[4:]) if name.startswith("job-") else ("uid-" + name)       # "job-<pod>" is the Job that owns pod <pod>
+            j = {"metadata": {"name": name, "uid": uid, "labels": {}}, "spec": {"template": template()}}
             if label != "none":
                 j["metadata"]["labels"]["app.kubernetes.io/name"] = label
             items.append(j)

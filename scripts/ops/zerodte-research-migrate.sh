@@ -52,6 +52,8 @@
 #   BUILD_NUMBER     the Jenkins build number recorded in / required of that receipt
 #   JOB_TIMEOUT_S    client-side wait, default 1200 (> the Job's own 900s activeDeadlineSeconds); 960..3600
 #   QUIESCE_WAIT_S   how long to wait for terminating / pending writer pods to settle before refusing, default 120; 0..900
+#   CONFIRM_MAX_DRY_RUN_WALL_S  CONFIRM=true only: the same-build dry run's Job wall time must be at most this (default 600 = two thirds of
+#                    the Job's 900 s deadline) — the CAPACITY EVIDENCE a confirm requires (Codex 9c r2); 1..900
 #   KEEP_JOBS        terminal Jobs to retain, default 5
 #   NAMESPACE        default options-edge
 set -euo pipefail
@@ -64,6 +66,7 @@ DRY_RUN_RECEIPT="${DRY_RUN_RECEIPT:-}"
 BUILD_NUMBER="${BUILD_NUMBER:-}"
 JOB_TIMEOUT_S="${JOB_TIMEOUT_S:-1200}"
 QUIESCE_WAIT_S="${QUIESCE_WAIT_S:-120}"
+CONFIRM_MAX_DRY_RUN_WALL_S="${CONFIRM_MAX_DRY_RUN_WALL_S:-600}"
 KEEP_JOBS="${KEEP_JOBS:-5}"
 NAMESPACE="${NAMESPACE:-options-edge}"
 CLUSTERS="deploy/zerodte/clusters.yaml"
@@ -141,6 +144,8 @@ case "$JOB_TIMEOUT_S" in ''|*[!0-9]*) fatal "JOB_TIMEOUT_S must be digits, got '
 case "$KEEP_JOBS" in ''|*[!0-9]*) fatal "KEEP_JOBS must be digits, got '$KEEP_JOBS'" ;; esac
 case "$QUIESCE_WAIT_S" in ''|*[!0-9]*) fatal "QUIESCE_WAIT_S must be digits, got '$QUIESCE_WAIT_S'" ;; esac
 [ "$QUIESCE_WAIT_S" -le 900 ] || fatal "QUIESCE_WAIT_S must be within 0..900, got $QUIESCE_WAIT_S"
+case "$CONFIRM_MAX_DRY_RUN_WALL_S" in ''|*[!0-9]*) fatal "CONFIRM_MAX_DRY_RUN_WALL_S must be digits, got '$CONFIRM_MAX_DRY_RUN_WALL_S'" ;; esac
+[ "$CONFIRM_MAX_DRY_RUN_WALL_S" -ge 1 ] && [ "$CONFIRM_MAX_DRY_RUN_WALL_S" -le 900 ] || fatal "CONFIRM_MAX_DRY_RUN_WALL_S must be within 1..900 (the Job's deadline), got $CONFIRM_MAX_DRY_RUN_WALL_S"
 [ "$JOB_TIMEOUT_S" -ge 960 ] && [ "$JOB_TIMEOUT_S" -le 3600 ] || fatal "JOB_TIMEOUT_S must be within 960..3600 (the Job's own deadline is 900s), got $JOB_TIMEOUT_S"
 [ "$KEEP_JOBS" -ge 1 ] && [ "$KEEP_JOBS" -le 100 ] || fatal "KEEP_JOBS must be within 1..100, got $KEEP_JOBS"
 FILE="deploy/zerodte/research-migration/${ENVIRONMENT}.yaml"
@@ -177,11 +182,16 @@ if [ "$CONFIRM" = true ]; then
   [ -f "$DRY_RUN_RECEIPT" ] || fatal "no dry-run receipt at $DRY_RUN_RECEIPT — the dry run of THIS build has not passed, so nothing may be written"
   case "$BUILD_NUMBER" in ''|*[!0-9]*) fatal "CONFIRM=true needs BUILD_NUMBER (digits) to bind the receipt to this build, got '${BUILD_NUMBER:-<empty>}'" ;; esac
   GOT_RECEIPT="$(head -1 "$DRY_RUN_RECEIPT")"
-  [ "$GOT_RECEIPT" = "$RECEIPT_LINE" ] || fatal "the dry-run receipt does not describe this write.
+  GOT_WALL="${GOT_RECEIPT##* wall=}"
+  [ "${GOT_RECEIPT% wall=*}" = "$RECEIPT_LINE" ] && [ "$GOT_WALL" != "$GOT_RECEIPT" ] || fatal "the dry-run receipt does not describe this write.
        receipt: $GOT_RECEIPT
-       write:   $RECEIPT_LINE
-       The dry run that passed was for another build, environment, declaration or commit. Re-run the whole build."
-  echo "dry-run receipt of this build accepted: $GOT_RECEIPT"
+       write:   $RECEIPT_LINE wall=<the dry run's Job wall time>
+       The dry run that passed was for another build, environment, declaration or commit, or recorded no wall time. Re-run the whole build."
+  # THE CAPACITY EVIDENCE (Codex 9c r2): the same-build dry run executed the whole migration against THIS store and rolled it back; its Job
+  # wall time must leave a margin under the Job's 900 s deadline before the confirm is allowed to commit the same work
+  case "$GOT_WALL" in ''|*[!0-9]*) fatal "the dry-run receipt records no measurable Job wall time (wall='$GOT_WALL') — without the capacity evidence of this build's dry run no CONFIRM is allowed; read the dry-run log (the Job status carried no start/completion time)" ;; esac
+  [ "$GOT_WALL" -le "$CONFIRM_MAX_DRY_RUN_WALL_S" ] || fatal "this build's dry run took ${GOT_WALL}s of Job wall time; a CONFIRM needs at most ${CONFIRM_MAX_DRY_RUN_WALL_S}s (the Job's deadline is 900s) — the store is larger than this Job's budget: raise the deadline and the memory shape by review before migrating"
+  echo "dry-run receipt of this build accepted: $GOT_RECEIPT (capacity: ${GOT_WALL}s <= ${CONFIRM_MAX_DRY_RUN_WALL_S}s)"
 fi
 
 # --- 2. identity AND cluster (the cluster is its CA — deploy/zerodte/clusters.yaml; as zerodte-provision.sh) ------------
@@ -249,7 +259,8 @@ metadata:
     app.kubernetes.io/name: zerodte-research-migrate-lock
     app.kubernetes.io/part-of: options-edge
   annotations:
-    options-edge.io/holder: "build-${BUILD_NUMBER:-manual}-$(date -u +%Y%m%dT%H%M%SZ)"
+    options-edge.io/holder: "research-migrate-build-${BUILD_NUMBER:-manual}-$(date -u +%Y%m%dT%H%M%SZ)"
+    options-edge.io/holder-kind: "research-migrate"
     options-edge.io/environment: "$ENVIRONMENT"
 data:
   held: "true"
@@ -260,7 +271,7 @@ if printf '%s\n' "$LOCK_HOLDER" | kubectl -n "$NAMESPACE" create -f - >/dev/null
   echo "lock $LOCK_NAME acquired"
 else
   HELD_BY="$(kubectl -n "$NAMESPACE" get "configmap/$LOCK_NAME" -o jsonpath='{.metadata.annotations.options-edge\.io/holder}' 2>/dev/null || echo '<unreadable>')"
-  fatal "could not acquire lock $LOCK_NAME (held by ${HELD_BY:-<unknown>}): another migration is running, or a crashed one left its lock. Read that run's log, then \`kubectl -n $NAMESPACE delete configmap $LOCK_NAME\` by hand. ($(tr '\n' ' ' < "$ERRLOG"))"
+  fatal "could not acquire lock $LOCK_NAME (held by ${HELD_BY:-<unknown>}): a rollout of the service (scripts/deploy/zerodte-migrate-barrier.sh holds this same lock from its apply to its health gate), another migration, or a crashed run of either left its lock. Wait for it to finish, or read that run's log, then \`kubectl -n $NAMESPACE delete configmap $LOCK_NAME\` by hand. ($(tr '\n' ' ' < "$ERRLOG"))"
 fi
 JOBS_JSON="$(kubectl -n "$NAMESPACE" get jobs -l "$JOB_LABEL" -o json)" || fatal "cannot list zerodte-research-migrate Jobs in $NAMESPACE — refusing to migrate beside an inventory that could not be read"
 ACTIVE="$(printf '%s' "$JOBS_JSON" | jq -r '[.items[] | select(((.status.succeeded // 0) >= 1 or ([(.status.conditions // [])[] | select((.type == "Failed" or .type == "Complete") and .status == "True")] | length) >= 1) | not) | .metadata.name] | join(" ")')" \
@@ -451,8 +462,9 @@ case "$OUTCOME" in
   ALREADY_MIGRATED) echo "OK: the $ENVIRONMENT research store is already at version $(field version) with this image's calendar ($(field calendarVersion)) and an unchanged catalog ($(field schemaDigest)) — nothing to do." ;;
 esac
 if [ "$CONFIRM" = false ] && [ -n "$DRY_RUN_RECEIPT" ]; then
-  printf '%s\n' "$RECEIPT_LINE" > "$DRY_RUN_RECEIPT" || fatal "could not write the dry-run receipt to $DRY_RUN_RECEIPT"
-  echo "dry-run receipt written: $RECEIPT_LINE"
+  # the wall time travels with the receipt: the confirm of the same build requires it under its margin (a missing one refuses the confirm)
+  printf '%s wall=%s\n' "$RECEIPT_LINE" "${WALL_S:-unknown}" > "$DRY_RUN_RECEIPT" || fatal "could not write the dry-run receipt to $DRY_RUN_RECEIPT"
+  echo "dry-run receipt written: $RECEIPT_LINE wall=${WALL_S:-unknown}"
 fi
 SUCCESS=true
 

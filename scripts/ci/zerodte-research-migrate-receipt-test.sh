@@ -14,6 +14,7 @@ T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 W="$T/repo"
 mkdir -p "$W/scripts/ops" "$W/scripts/ci" "$W/scripts/deploy" "$W/k8s/jobs" "$W/deploy/zerodte/research-migration" "$W/image-tags" "$W/bin" "$T/ca" "$T/k8s"
 cp scripts/ops/zerodte-research-migrate.sh scripts/ops/zerodte-quiescence.py "$W/scripts/ops/"
+cp scripts/deploy/zerodte-migrate-barrier.sh "$W/scripts/deploy/"
 cp scripts/ci/zerodte_attestation.py scripts/ci/validate-zerodte-research-migration.sh "$W/scripts/ci/"
 mkdir -p "$W/scripts/ci/fixtures/zerodte/corpus" && cp scripts/ci/fixtures/zerodte/golden.tsv "$W/scripts/ci/fixtures/zerodte/" && cp scripts/ci/fixtures/zerodte/corpus/* "$W/scripts/ci/fixtures/zerodte/corpus/"
 cp k8s/jobs/zerodte-research-migrate-job.yaml "$W/k8s/jobs/"
@@ -48,10 +49,30 @@ cat > "$W/bin/kubectl" <<'FAKE'
 args="$*"
 echo "kubectl $args" >> "${FAKE_JOURNAL:?}"
 K="${FAKE_K8S:?}"
-listing() { # listing <kind>: the fixture file, or an empty list; pods may switch to pods-2.json from the SECOND listing on
+listing() { # listing <kind>: the fixture file, or an empty list; pods may switch to pods-2.json from the SECOND listing on; FAKE_UNREADABLE / FAKE_MALFORMED name kinds
   local f="$K/$1.json"
+  case ",${FAKE_UNREADABLE:-}," in *",$1,"*) echo "Unable to connect to the server: dial tcp: i/o timeout" >&2; exit 1 ;; esac
+  case ",${FAKE_MALFORMED:-}," in *",$1,"*) printf '{"items": 5}'; return ;; esac
   if [ "$1" = pods ] && [ -f "$K/pods-2.json" ] && [ "$(grep -c 'get pods -o json' "$FAKE_JOURNAL")" -ge 2 ]; then f="$K/pods-2.json"; fi
   if [ -f "$f" ]; then cat "$f"; else printf '{"items":[]}'; fi
+}
+validate_job() { # the server-side shape of the Job the wrapper renders (what a real API server would refuse: a wrong kind / namespace, an unpinned image, an unsubstituted placeholder, a missing run variable)
+  local f="$1"
+  [ "$(yq -r '.kind' "$f")" = Job ] || { echo "admission: not a Job" >&2; return 1; }
+  [ "$(yq -r '.metadata.namespace' "$f")" = options-edge ] || { echo "admission: wrong namespace" >&2; return 1; }
+  grep -q '__[A-Z_]*__' "$f" && { echo "admission: an unsubstituted placeholder" >&2; return 1; }
+  case "$(yq -r '.spec.template.spec.containers[0].image' "$f")" in *@sha256:*) : ;; *) echo "admission: the image is not digest-pinned" >&2; return 1 ;; esac
+  local v; for v in MIGRATE_FILE MIGRATE_FILE_SHA256 MIGRATE_SESSIONS_AHEAD MIGRATE_QUIESCED MIGRATE_CONFIRM; do
+    [ "$(yq -r ".spec.template.spec.containers[0].env[] | select(.name == \"$v\") | .value" "$f")" != "" ] || { echo "admission: $v is not set" >&2; return 1; }
+  done
+  [ "$(yq -r '.spec.template.spec.containers[0].env[] | select(.name == "POSTGRES_PASSWORD") | .valueFrom.secretKeyRef.name' "$f")" = options-edge-runtime-secrets ] || { echo "admission: the password is not a secretKeyRef" >&2; return 1; }
+  return 0
+}
+validate_cm() { # the ConfigMap the wrapper applies: one data key, the declaration's basename
+  local f="$1"
+  [ "$(yq -r '.kind' "$f")" = ConfigMap ] || { echo "admission: not a ConfigMap" >&2; return 1; }
+  [ "$(yq -r '.data | keys | length' "$f")" = 1 ] || { echo "admission: not exactly one data key" >&2; return 1; }
+  return 0
 }
 case "$args" in
   "auth whoami -o jsonpath={.status.userInfo.username}") printf '%s' "${FAKE_WHOAMI:-system:serviceaccount:options-edge:jenkins-deployer}" ;;
@@ -68,20 +89,32 @@ case "$args" in
   *"get cronjobs -o json") listing cronjobs ;;
   *"get jobs -o json") listing jobs ;;
   *"get jobs -l app.kubernetes.io/name=zerodte-research-migrate -o json") jobs="${FAKE_JOBS:-}"; [ -n "$jobs" ] || jobs='{"items":[]}'; printf '%s' "$jobs" ;;
-  *"get configmap "*" -o json") n="${args#*get configmap }"; n="${n%% *}"; if [ -f "$K/cm-$n.json" ]; then cat "$K/cm-$n.json"; else echo "Error from server (NotFound): configmaps \"$n\" not found" >&2; exit 1; fi ;;
-  *"get secret "*" -o go-template="*) n="${args#*get secret }"; n="${n%% *}"; if [ -f "$K/secret-$n.keys" ]; then cat "$K/secret-$n.keys"; else echo "Error from server (NotFound): secrets \"$n\" not found" >&2; exit 1; fi ;;
+  *"get configmap/zerodte-research-migrate-lock"*) [ -f "$K/lock" ] && cat "$K/lock" || { echo 'Error from server (NotFound): configmaps "zerodte-research-migrate-lock" not found' >&2; exit 1; } ;;
+  *"delete configmap/zerodte-research-migrate-lock"*) rm -f "$K/lock" ;;
+  *"get configmap "*" -o json") case ",${FAKE_UNREADABLE:-}," in *",configmap,"*) echo "Unable to connect" >&2; exit 1 ;; esac; n="${args#*get configmap }"; n="${n%% *}"; if [ -f "$K/cm-$n.json" ]; then cat "$K/cm-$n.json"; else echo "Error from server (NotFound): configmaps \"$n\" not found" >&2; exit 1; fi ;;
+  *"get secret "*" -o go-template="*) case ",${FAKE_UNREADABLE:-}," in *",secret,"*) echo "Unable to connect" >&2; exit 1 ;; esac; n="${args#*get secret }"; n="${n%% *}"; if [ -f "$K/secret-$n.keys" ]; then cat "$K/secret-$n.keys"; else echo "Error from server (NotFound): secrets \"$n\" not found" >&2; exit 1; fi ;;
   *"create configmap"*"--dry-run=client -o yaml")
     printf 'apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm\n  namespace: options-edge\ndata:\n'
     for a in "$@"; do case "$a" in --from-file=*) k="${a#--from-file=}"; printf '  %s: |\n    x\n' "${k%%=*}" ;; esac; done ;;
-  *"get configmap/zerodte-research-migrate-lock"*) printf 'build-3-20261003T120000Z' ;;
   *"create -f -")
     body="$(cat)"
-    if [ "${FAKE_LOCK_HELD:-0}" = 1 ] && printf '%s' "$body" | grep -q "name: zerodte-research-migrate-lock"; then
-      echo 'Error from server (AlreadyExists): configmaps "zerodte-research-migrate-lock" already exists' >&2; exit 1
+    if printf '%s' "$body" | grep -q "name: zerodte-research-migrate-lock"; then
+      # the ATOMIC lock: one ConfigMap name; a second create fails AlreadyExists whoever holds it (a migration, a service deploy)
+      if [ -f "$K/lock" ]; then echo 'Error from server (AlreadyExists): configmaps "zerodte-research-migrate-lock" already exists' >&2; exit 1; fi
+      printf '%s' "$body" | sed -n 's/^ *options-edge.io\/holder: "\(.*\)"$/\1/p' | head -1 > "$K/lock"
     fi ;;
-  *"create -f "*) f="${args##*create -f }"; cp "$f" "$FAKE_JOURNAL.job.yaml"; if [ "${FAKE_CREATE_JOB_FAILS:-0}" = 1 ]; then echo "Error from server: admission webhook denied the Job" >&2; exit 1; fi ;;
+  *"create -f "*)
+    f="${args##*create -f }"; cp "$f" "$FAKE_JOURNAL.job.yaml"
+    if [ "${FAKE_DEPLOY_DURING_JOB:-0}" = 1 ]; then
+      # a service deploy admitted at this very moment must be EXCLUDED by the held lock: run the real barrier against this same fake
+      bash "$FAKE_REPO/scripts/deploy/zerodte-migrate-barrier.sh" acquire options-edge vix-option-inteligence deploy-at-job-create > "$FAKE_JOURNAL.deploy" 2>&1 && echo "deploy-acquire rc=0" >> "$FAKE_JOURNAL.deploy" || echo "deploy-acquire rc=$?" >> "$FAKE_JOURNAL.deploy"
+    fi
+    if [ "${FAKE_CREATE_JOB_FAILS:-0}" = 1 ]; then echo "Error from server: admission webhook denied the Job" >&2; exit 1; fi ;;
   *"delete job/"*) if [ "${FAKE_DELETE_JOB_FAILS:-0}" = 1 ]; then echo "error: timed out waiting for the condition" >&2; exit 1; fi ;;
-  *"apply --dry-run=server"*|*"create --dry-run=server"*|*"apply -f"*|*"delete"*) : ;;
+  *"create --dry-run=server -f "*) validate_job "${args##*-f }" || exit 1 ;;
+  *"apply --dry-run=server -f "*) validate_cm "${args##*-f }" || exit 1 ;;
+  *"apply -f "*) validate_cm "${args##*-f }" || exit 1 ;;
+  *"delete"*) : ;;
   *"get job/"*"-o json")
     if grep -q "delete job/" "$FAKE_JOURNAL" && [ "${FAKE_DELETE_JOB_FAILS:-0}" != 1 ]; then echo 'Error from server (NotFound): jobs.batch "x" not found' >&2; exit 1; fi
     case "${FAKE_JOB_GET:-normal}" in
@@ -111,7 +144,8 @@ run() { # run <name> <want_rc> <want substring> <CONFIRM> <FAKE_LOG> [VAR=value 
   local name="$1" want_rc="$2" want="$3" confirm="$4" log="$5"; shift 5
   local out rc journal="$T/journal.$RANDOM$RANDOM"
   : > "$journal"; echo 1700000000 > "$journal.clock"
-  out="$(cd "$W" && env PATH="$W/bin:$PATH" FAKE_JOURNAL="$journal" FAKE_CLOCK="$journal.clock" FAKE_K8S="$T/k8s" FAKE_LOG="$log" FAKE_CA_DIR="$T/ca" FAKE_PINNED_DIGEST="$DIGEST" ENVIRONMENT=dev CONFIRM="$confirm" BUILD_NUMBER=7 DRY_RUN_RECEIPT="$T/receipt" JOB_TIMEOUT_S=960 "$@" bash scripts/ops/zerodte-research-migrate.sh 2>&1)" && rc=0 || rc=$?
+  rm -f "$T/k8s/lock"; local a; for a in "$@"; do case "$a" in FAKE_LOCK_HELD_BY=*) printf '%s' "${a#*=}" > "$T/k8s/lock" ;; esac; done   # a lock someone else holds before this run
+  out="$(cd "$W" && env PATH="$W/bin:$PATH" FAKE_JOURNAL="$journal" FAKE_CLOCK="$journal.clock" FAKE_K8S="$T/k8s" FAKE_REPO="$W" FAKE_LOG="$log" FAKE_CA_DIR="$T/ca" FAKE_PINNED_DIGEST="$DIGEST" ENVIRONMENT=dev CONFIRM="$confirm" BUILD_NUMBER=7 DRY_RUN_RECEIPT="$T/receipt" JOB_TIMEOUT_S=960 "$@" bash scripts/ops/zerodte-research-migrate.sh 2>&1)" && rc=0 || rc=$?
   if [ "$rc" = "$want_rc" ] && printf '%s' "$out" | grep -qF -- "$want"; then pass=$((pass+1)); echo "  ok   $name (rc=$rc)"; else fail=$((fail+1)); echo "  FAIL $name: rc=$rc want $want_rc; want [$want]"; printf '%s\n' "$out" | tail -8 | sed 's/^/       | /'; fi
   LAST_OUT="$out"; LAST_JOURNAL="$journal"
 }
@@ -132,7 +166,7 @@ GRAMMAR_WANT="is not the canonical"
 echo "--- dry runs ---"
 rm -f "$T/receipt"
 run "dry run: MIGRATABLE"                            0 "OK: DRY RUN — the migration was executed and ROLLED BACK on dev in 42s of Job wall time" false "$DIAG$MIGRATABLE\n"
-check "the dry run wrote this build's receipt" grep -q "build=7 env=dev from=6 to=7 calendarVersion=$CAL file_sha256=" "$T/receipt"
+check "the dry run wrote this build's receipt with the Job's wall time" bash -c "grep -q 'build=7 env=dev from=6 to=7 calendarVersion=$CAL file_sha256=.* wall=42\$' '$T/receipt'"
 check "the Job was created" test -f "$LAST_JOURNAL.job.yaml"
 check "the lock was released after the run" lock_released
 # the ORDER: the lock (create -f -) is taken BEFORE the first pod listing; the LAST pod listing comes AFTER the server-side validation and BEFORE the Job create
@@ -148,7 +182,7 @@ check "the Job runs the digest-pinned image" test "$(yq -r '.spec.template.spec.
 # … and the container's shell block, EXECUTED against a fake java, puts them on the migrator's argv
 run_block() { # run_block <job manifest> → the argv the block hands to java (one token per line), or the block's error
   local m="$1" blk="$T/block.sh" bin="$T/jbin" envf
-  mkdir -p "$bin" "$T/zerodte"; printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" > "%s"\n' "$T/java-argv" > "$bin/java"; chmod +x "$bin/java"
+  mkdir -p "$bin" "$T/zerodte"; printf '#!/usr/bin/env bash\necho "--- invocation" >> "%s"; printf "%%s\\n" "$@" >> "%s"\n' "$T/java-argv" "$T/java-argv" > "$bin/java"; chmod +x "$bin/java"
   yq -r '.spec.template.spec.containers[0].args[0]' "$m" > "$blk"
   cp deploy/zerodte/research-migration/dev.yaml "$T/zerodte/dev.yaml"
   # the container's environment, exactly as rendered (literal values only; the password arrives by secretKeyRef, modelled here by name)
@@ -156,18 +190,28 @@ run_block() { # run_block <job manifest> → the argv the block hands to java (o
   while IFS= read -r kv; do [ -n "$kv" ] && envv+=("$kv"); done < <(yq -r '.spec.template.spec.containers[0].env[] | select(.value != null) | .name + "=" + .value' "$m" | sed "s|^MIGRATE_FILE=/zerodte/|MIGRATE_FILE=$T/zerodte/|")
   printf '#!/usr/bin/env bash\nexec shasum -a 256 "$@"\n' > "$bin/sha256sum"; chmod +x "$bin/sha256sum"      # the image has coreutils; this Mac has shasum
   : > "$T/java-argv"
-  (cd "$T" && env -i "${envv[@]}" sh -c "$(cat "$blk")" 2>&1) || true
-  cat "$T/java-argv"
+  local rc=0
+  (cd "$T" && env -i "${envv[@]}" sh -c "$(cat "$blk")" > "$T/block.out" 2>&1) || rc=$?
+  # the block must END by exec-ing java exactly once and exit 0 through it: a block that fails after invoking java, or invokes it twice, proves nothing
+  [ "$rc" = 0 ] || { echo "BLOCK-FAILED rc=$rc: $(tr '\n' ' ' < "$T/block.out")"; return 0; }
+  [ "$(grep -c '^--- invocation$' "$T/java-argv")" = 1 ] || { echo "BLOCK-INVOKED-JAVA-$(grep -c '^--- invocation$' "$T/java-argv")-TIMES"; return 0; }
+  grep -v '^--- invocation$' "$T/java-argv"
 }
 ARGV="$(run_block "$LAST_JOURNAL.job.yaml")"
 check "the block hands --legacy-writers-quiesced to the migrator" bash -c "printf '%s\n' \"\$1\" | grep -qx -- '--legacy-writers-quiesced'" _ "$ARGV"
 check "the block hands --expected-sessions-ahead 60 and the password BY NAME" bash -c "printf '%s\n' \"\$1\" | grep -qx -- '--jdbc-password-env' && printf '%s\n' \"\$1\" | grep -qx -- 'POSTGRES_PASSWORD' && printf '%s\n' \"\$1\" | grep -qx -- '60' && ! printf '%s\n' \"\$1\" | grep -q never-printed" _ "$ARGV"
 check "the block does not hand --confirm on a dry run" bash -c "! printf '%s\n' \"\$1\" | grep -qx -- '--confirm'" _ "$ARGV"
 check "the block names the migrator class" bash -c "printf '%s\n' \"\$1\" | grep -qx -- 'com.optionsedge.processing.zerodte.research.ZeroDteResearchMigrator'" _ "$ARGV"
+check "the block exited 0 through exactly one java invocation" bash -c "! printf '%s\n' \"\$1\" | grep -q '^BLOCK-'" _ "$ARGV"
+# the block's own refusals, exercised: a mounted declaration whose bytes differ from the reviewed sha refuses before java; so does a missing run variable
+BROKEN="$(yq '(.spec.template.spec.containers[0].env[] | select(.name == "MIGRATE_FILE_SHA256") | .value) = "0000000000000000000000000000000000000000000000000000000000000000"' "$LAST_JOURNAL.job.yaml")"
+printf '%s\n' "$BROKEN" > "$T/broken.yaml"; ARGV2="$(run_block "$T/broken.yaml")"
+check "the block refuses a declaration whose sha256 is not the reviewed one, before java" bash -c "printf '%s\n' \"\$1\" | grep -q '^BLOCK-FAILED rc=1: .*refusing to migrate under bytes nobody reviewed'" _ "$ARGV2"
 run "dry run on a migrated store"                    0 "already at version 7" false "$DIAG$ALREADY\n"
 run "dry run: MIGRATED is a commit when told not to" 1 "committed when told not to" false "$DIAG$MIGRATED\n"
 echo "--- confirm ---"
 run "confirm: MIGRATED"                              0 "OK: MIGRATED dev research store 6 -> 7" true "$DIAG$MIGRATED\n" PERMITTED_SHA="$HEAD"
+check "the confirm accepted the capacity evidence of this build's dry run" bash -c "printf '%s' \"\$1\" | grep -q 'capacity: 42s <= 600s'" _ "$LAST_OUT"
 check "the Job carries MIGRATE_CONFIRM=true on a confirm" test "$(yq -r '.spec.template.spec.containers[0].env[] | select(.name == "MIGRATE_CONFIRM") | .value' "$LAST_JOURNAL.job.yaml")" = "true"
 ARGV="$(run_block "$LAST_JOURNAL.job.yaml")"
 check "the block hands --confirm AND --legacy-writers-quiesced on a confirm" bash -c "printf '%s\n' \"\$1\" | grep -qx -- '--confirm' && printf '%s\n' \"\$1\" | grep -qx -- '--legacy-writers-quiesced'" _ "$ARGV"
@@ -241,38 +285,84 @@ q "an init container on another build"              1 "pod vix-a container init 
 q "an init container on the pinned build"            0 "OK: DRY RUN" "vix-a:ok:lit=false:init=ok"
 q "a sidecar on another build of the image"          1 "pod vix-a container side runs another build" "vix-a:ok:lit=false:sidecar=other"
 q "a sidecar of another repository is ignored"       0 "OK: DRY RUN" "vix-a:ok:lit=false:sidecar=foreign"
-q "a pod owned by an exempt maintenance Job (the provisioner) on another build" 0 "writerPods=0" "prov-1:other:none:job=zerodte-provision"
-q "a pod owned by an exempt Job (this migration's own)" 0 "writerPods=0" "mig-1:ok:none:job=zerodte-research-migrate"
-q "a pod with an exempt label but NOT owned by a Job is judged" 1 "runs another build" "imp-1:other:none:label=zerodte-provision"
-q "a pod owned by a Job with a label that is not exempt" 1 "runs another build" "x-1:other:none:job=nightly-thing"
-echo "--- the legacy writers must be quiesced: the EFFECTIVE flag ---"
-$FX cm ZERODTE_RESEARCH_ENABLED=true OTHER=x > "$T/cm-on.json"; $FX cm ZERODTE_RESEARCH_ENABLED=false > "$T/cm-off.json"; $FX cm RESEARCH_ENABLED=true > "$T/cm-suffix.json"; $FX cm UNRELATED=1 > "$T/cm-none.json"
-qcm() { # qcm <name> <want_rc> <want> <pod spec> [cm files to install (basename without cm-/.json) ...] [secret:<name>=<keys,>]
+echo "--- exemption: a LISTED Job (name and uid) carrying a declared maintenance label — nothing else exempts a pod ---"
+qj() { # qj <name> <want_rc> <want> <pod spec> [jobs spec...]
   local name="$1" want_rc="$2" want="$3" spec="$4"; shift 4
-  k8s_reset; $FX pods "$spec" > "$T/k8s/pods.json"
-  local x; for x in "$@"; do case "$x" in secret:*) x="${x#secret:}"; printf '%s\n' "${x#*=}" | tr ',' '\n' > "$T/k8s/secret-${x%%=*}.keys" ;; *) cp "$T/cm-$x.json" "$T/k8s/cm-$x.json" ;; esac; done
+  k8s_reset; $FX pods "$spec" > "$T/k8s/pods.json"; [ "$#" -eq 0 ] || $FX jobs "$@" > "$T/k8s/jobs.json"
   run "$name" "$want_rc" "$want" false "$DIAG$MIGRATABLE\n"
 }
-qcm "envFrom a ConfigMap carrying the flag true"     1 "pod vix-a container vix has ZERODTE_RESEARCH_ENABLED=true" "vix-a:ok:from-cm=on" on
-qcm "envFrom a ConfigMap carrying the flag false"    0 "OK: DRY RUN" "vix-a:ok:from-cm=off" off
-qcm "envFrom a ConfigMap without the key"            0 "OK: DRY RUN" "vix-a:ok:from-cm=none" none
-qcm "envFrom a ConfigMap that does not exist"        1 "imports env from ConfigMap missing, which does not exist" "vix-a:ok:from-cm=missing"
-qcm "envFrom an OPTIONAL ConfigMap that does not exist" 0 "OK: DRY RUN" "vix-a:ok:from-cm-opt=missing"
-qcm "envFrom with a prefix that completes the flag name" 1 "has ZERODTE_RESEARCH_ENABLED=true" "vix-a:ok:from-cm=suffix/ZERODTE_" suffix
+qj "a pod owned by a LISTED exempt Job (the provisioner) on another build" 0 "writerPods=0" "prov-1:other:none:job=zerodte-provision" "job-prov-1:zerodte-provision"
+qj "a pod owned by this migration's own (listed) Job" 0 "writerPods=0" "mig-1:ok:none:job=zerodte-research-migrate" "job-mig-1:zerodte-research-migrate"
+qj "a pod whose owner Job is NOT listed (a dangling reference): judged" 1 "pod prov-1 container vix runs another build" "prov-1:other:none:job=zerodte-provision"
+qj "a pod whose owner uid differs from the listed Job's: judged" 1 "pod prov-1 container vix runs another build" "prov-1:other:none:job=zerodte-provision:jobuid=spoofed" "job-prov-1:zerodte-provision"
+qj "a pod whose owner name differs from the listed Job's: judged" 1 "pod prov-1 container vix runs another build" "prov-1:other:none:job=zerodte-provision:jobname=job-other" "job-prov-1:zerodte-provision"
+qj "a pod owned by a listed Job whose label is NOT exempt: judged" 1 "pod prov-1 container vix runs another build" "prov-1:other:none:job=zerodte-provision" "job-prov-1:nightly-thing"
+qj "a pod with an exempt label but NOT owned by a Job is judged" 1 "runs another build" "imp-1:other:none:label=zerodte-provision"
+echo "--- a RUNNING pod's flag: its environment was captured at its start, so only a LITERAL in its spec is evidence (Codex 9c r2) ---"
+$FX cm ZERODTE_RESEARCH_ENABLED=true OTHER=x > "$T/cm-on.json"; $FX cm ZERODTE_RESEARCH_ENABLED=false > "$T/cm-off.json"; $FX cm RESEARCH_ENABLED=true > "$T/cm-suffix.json"; $FX cm UNRELATED=1 > "$T/cm-none.json"
+install_sources() { local x; for x in "$@"; do case "$x" in secret:*) x="${x#secret:}"; printf '%s\n' "${x#*=}" | tr ',' '\n' > "$T/k8s/secret-${x%%=*}.keys" ;; *) cp "$T/cm-$x.json" "$T/k8s/cm-$x.json" ;; esac; done; }
+qcm() { # qcm <name> <want_rc> <want> <pod spec> [cm files (basename without cm-/.json) | secret:<name>=<keys,> ...]
+  local name="$1" want_rc="$2" want="$3" spec="$4"; shift 4
+  k8s_reset; $FX pods "$spec" > "$T/k8s/pods.json"; install_sources "$@"
+  run "$name" "$want_rc" "$want" false "$DIAG$MIGRATABLE\n"
+}
+UNKNOWABLE="could have supplied ZERODTE_RESEARCH_ENABLED when the container started — unknowable now"
+qcm "envFrom a ConfigMap carrying the flag true"     1 "pod vix-a container vix imports env from configMapRef on, which $UNKNOWABLE" "vix-a:ok:from-cm=on" on
+check "no ConfigMap was read to judge a live pod (a read now would say nothing about the start)" bash -c "! grep -q 'get configmap on -o json' '$LAST_JOURNAL'"
+qcm "envFrom a ConfigMap carrying the flag false NOW: unknowable then, refused" 1 "$UNKNOWABLE" "vix-a:ok:from-cm=off" off
+qcm "envFrom a ConfigMap that does not exist now: refused" 1 "$UNKNOWABLE" "vix-a:ok:from-cm=missing"
+qcm "envFrom an OPTIONAL ConfigMap: refused too"     1 "$UNKNOWABLE" "vix-a:ok:from-cm-opt=missing"
 qcm "envFrom with a prefix that cannot produce the flag name" 0 "OK: DRY RUN" "vix-a:ok:from-cm=on/X_" on
-qcm "a literal env entry overrides an envFrom source (kubelet order)" 0 "OK: DRY RUN" "vix-a:ok:lit-and-from-cm=false/on" on
-qcm "valueFrom a ConfigMap key that is true"         1 "has ZERODTE_RESEARCH_ENABLED=true" "vix-a:ok:cmkey=on/ZERODTE_RESEARCH_ENABLED" on
-qcm "valueFrom a ConfigMap key that is false"        0 "OK: DRY RUN" "vix-a:ok:cmkey=off/ZERODTE_RESEARCH_ENABLED" off
-qcm "valueFrom a ConfigMap key that is absent"       1 "key NOPE, which is absent" "vix-a:ok:cmkey=on/NOPE" on
-qcm "valueFrom an absent OPTIONAL ConfigMap key"     0 "OK: DRY RUN" "vix-a:ok:cmkey=on/NOPE/opt" on
-qcm "valueFrom a Secret key: unknowable, refused"    1 "reads ZERODTE_RESEARCH_ENABLED from a secretKeyRef — the flag must be a literal or a ConfigMap key" "vix-a:ok:seckey=runtime/ZERODTE_RESEARCH_ENABLED"
-qcm "valueFrom a fieldRef: refused"                  1 "from a fieldRef" "vix-a:ok:fieldref"
-qcm "envFrom a Secret carrying the flag key: refused" 1 "would take ZERODTE_RESEARCH_ENABLED from Secret runtime — a flag that lives in a Secret cannot be judged" "vix-a:ok:from-sec=runtime" "secret:runtime=POSTGRES_PASSWORD,ZERODTE_RESEARCH_ENABLED"
-qcm "envFrom a Secret without the flag key"          0 "OK: DRY RUN" "vix-a:ok:from-sec=runtime" "secret:runtime=POSTGRES_PASSWORD,KAFKA_KEY"
-check "the Secret was read as KEY NAMES only (a go-template), never as JSON" bash -c "grep -q 'get secret runtime -o go-template=' '$LAST_JOURNAL' && ! grep -q 'get secret runtime -o json' '$LAST_JOURNAL'"
-qcm "envFrom a Secret that does not exist"           1 "imports env from Secret gone, which does not exist" "vix-a:ok:from-sec=gone"
+qcm "a literal env entry governs over every envFrom source (kubelet precedence)" 0 "OK: DRY RUN" "vix-a:ok:lit-and-from-cm=false/on" on
+qcm "valueFrom a ConfigMap key on a live pod: refused" 1 "reads ZERODTE_RESEARCH_ENABLED from configMapKeyRef — a running container's environment was captured at its start; only a literal in the pod spec is evidence" "vix-a:ok:cmkey=off/ZERODTE_RESEARCH_ENABLED" off
+qcm "valueFrom a Secret key: refused"                1 "from secretKeyRef — a running container's environment" "vix-a:ok:seckey=runtime/ZERODTE_RESEARCH_ENABLED"
+qcm "valueFrom a fieldRef: refused"                  1 "from fieldRef — a running container's environment" "vix-a:ok:fieldref"
+qcm "valueFrom a resourceFieldRef: refused"          1 "from resourceFieldRef — a running container's environment" "vix-a:ok:resfieldref"
+qcm "envFrom a Secret: refused (it could have supplied the key)" 1 "imports env from secretRef runtime, which $UNKNOWABLE" "vix-a:ok:from-sec=runtime" "secret:runtime=POSTGRES_PASSWORD"
+check "no Secret was read to judge a live pod" bash -c "! grep -q 'get secret' '$LAST_JOURNAL'"
+qcm "envFrom naming both a ConfigMap and a Secret: refused" 1 "imports env from configMapRef and secretRef off, runtime, which $UNKNOWABLE" "vix-a:ok:from-cm-and-sec=off/runtime" off "secret:runtime=X"
+qcm "an envFrom entry naming nothing: refused"       1 "neither a ConfigMap nor a Secret" "vix-a:ok:envfrom-empty"
 qcm "the flag named twice in env: ambiguous"         1 "names ZERODTE_RESEARCH_ENABLED more than once in env — ambiguous" "vix-a:ok:dup"
 qcm "the flag set to an expansion"                   1 "sets ZERODTE_RESEARCH_ENABLED to an expansion" "vix-a:ok:expand"
+echo "--- a controller TEMPLATE's flag: what the kubelet WILL resolve for the next pod (a ConfigMap key is read; a Secret source refuses) ---"
+qt() { # qt <name> <want_rc> <want> <deployment flag spec> [sources...]
+  local name="$1" want_rc="$2" want="$3" flag="$4"; shift 4
+  k8s_reset; $FX deployments "vix-option-inteligence-service:ok:$flag:1" > "$T/k8s/deployments.json"; install_sources "$@"
+  run "$name" "$want_rc" "$want" false "$DIAG$MIGRATABLE\n"
+}
+WOULD_WRITE="template container vix has ZERODTE_RESEARCH_ENABLED=true — the next pod would write"
+qt "template envFrom a ConfigMap carrying true"      1 "$WOULD_WRITE" "from-cm=on" on
+qt "template envFrom a ConfigMap carrying false"     0 "OK: DRY RUN" "from-cm=off" off
+qt "template envFrom two ConfigMaps, off then on: the later overrides" 1 "$WOULD_WRITE" "from-cms=off,on" off on
+qt "template envFrom two ConfigMaps, on then off: the later overrides" 0 "OK: DRY RUN" "from-cms=on,off" on off
+qt "template envFrom a ConfigMap without the key"    0 "OK: DRY RUN" "from-cm=none" none
+qt "template envFrom a missing ConfigMap"            1 "imports env from ConfigMap missing, which does not exist" "from-cm=missing"
+qt "template envFrom an OPTIONAL missing ConfigMap"  0 "OK: DRY RUN" "from-cm-opt=missing"
+qt "template envFrom with a prefix completing the flag name" 1 "$WOULD_WRITE" "from-cm=suffix/ZERODTE_" suffix
+qt "template envFrom with a prefix that cannot produce it" 0 "OK: DRY RUN" "from-cm=on/X_" on
+qt "template valueFrom a ConfigMap key that is true" 1 "$WOULD_WRITE" "cmkey=on/ZERODTE_RESEARCH_ENABLED" on
+qt "template valueFrom a ConfigMap key that is false" 0 "OK: DRY RUN" "cmkey=off/ZERODTE_RESEARCH_ENABLED" off
+qt "template valueFrom an absent key"                1 "key NOPE, which is absent" "cmkey=on/NOPE" on
+qt "template valueFrom an absent OPTIONAL key"       0 "OK: DRY RUN" "cmkey=on/NOPE/opt" on
+qt "template valueFrom a Secret key: refused"        1 "reads ZERODTE_RESEARCH_ENABLED from a secretKeyRef — the flag must be a literal or a ConfigMap key" "seckey=runtime/ZERODTE_RESEARCH_ENABLED"
+qt "template valueFrom a fieldRef: refused"          1 "from a fieldRef" "fieldref"
+qt "template valueFrom a resourceFieldRef: refused"  1 "from a resourceFieldRef" "resfieldref"
+qt "template envFrom a Secret carrying the key: refused" 1 "would take ZERODTE_RESEARCH_ENABLED from Secret runtime — a flag that lives in a Secret cannot be judged" "from-sec=runtime" "secret:runtime=POSTGRES_PASSWORD,ZERODTE_RESEARCH_ENABLED"
+check "the Secret was read as KEY NAMES only (a go-template), never as JSON" bash -c "grep -q 'get secret runtime -o go-template=' '$LAST_JOURNAL' && ! grep -q 'get secret runtime -o json' '$LAST_JOURNAL'"
+qt "template envFrom a Secret without the key"       0 "OK: DRY RUN" "from-sec=runtime" "secret:runtime=POSTGRES_PASSWORD,KAFKA_KEY"
+qt "template envFrom a Secret that does not exist"   1 "imports env from Secret gone, which does not exist" "from-sec=gone"
+qt "template envFrom naming both a ConfigMap and a Secret: refused" 1 "has an envFrom entry naming both ConfigMap off and Secret runtime" "from-cm-and-sec=off/runtime" off "secret:runtime=X"
+qt "template envFrom naming nothing: refused"        1 "neither a ConfigMap nor a Secret" "envfrom-empty"
+qt "template with the flag twice: ambiguous"         1 "more than once in env — ambiguous" "dup"
+qt "template with an expansion"                      1 "to an expansion" "expand"
+qt "template: a literal overrides every envFrom source" 0 "OK: DRY RUN" "lit-and-from-cm=false/on" on
+echo "--- the API: every list and every object read fails CLOSED (unreadable is never empty; malformed is unreadable) ---"
+for kind in deployments statefulsets daemonsets replicasets jobs cronjobs; do k8s_reset; run "the $kind list cannot be read" 1 "cannot be judged: UNREADABLE: the $kind list could not be read" false "$DIAG$MIGRATABLE\n" FAKE_UNREADABLE=$kind; done
+k8s_reset; run "the pod list is malformed"           1 "UNREADABLE: the pods list carries no items" false "$DIAG$MIGRATABLE\n" FAKE_MALFORMED=pods
+k8s_reset; $FX deployments "vix-option-inteligence-service:ok:from-cm=on:1" > "$T/k8s/deployments.json"; install_sources on
+run "a template's ConfigMap cannot be read"          1 "UNREADABLE: ConfigMap on could not be read" false "$DIAG$MIGRATABLE\n" FAKE_UNREADABLE=configmap
+k8s_reset; $FX deployments "vix-option-inteligence-service:ok:from-sec=runtime:1" > "$T/k8s/deployments.json"; install_sources "secret:runtime=X"
+run "a template's Secret key names cannot be read"   1 "UNREADABLE: Secret runtime could not be read" false "$DIAG$MIGRATABLE\n" FAKE_UNREADABLE=secret
 echo "--- the legacy writers must be quiesced: the controllers (the closed world) ---"
 qc() { # qc <name> <want_rc> <want> <kind> <spec...>  (default pods; the named controller fixture replaced)
   local name="$1" want_rc="$2" want="$3" kind="$4"; shift 4
@@ -287,8 +377,8 @@ qc "the declared Deployment mid-rollout"             1 "rollout is not settled (
 qc "the declared Deployment with an unobserved generation" 1 "has not observed its latest generation — a rollout is in flight" deployments "vix-option-inteligence-service:ok:lit=false:1:genlag"
 k8s_reset; $FX deployments "vix-option-inteligence-service:ok:lit=false:0" > "$T/k8s/deployments.json"; rm -f "$T/k8s/pods.json"
 run "the declared Deployment scaled to zero (KEEP_DOWN), no pod at all" 0 "pods=0 writerPods=0" false "$DIAG$MIGRATABLE\n"
-$FX pods "prov-1:other:none:job=zerodte-provision" > "$T/k8s/pods.json"
-run "… and with only an exempt maintenance pod"      0 "pods=1 writerPods=0" false "$DIAG$MIGRATABLE\n"
+$FX pods "prov-1:other:none:job=zerodte-provision" > "$T/k8s/pods.json"; $FX jobs "job-prov-1:zerodte-provision" > "$T/k8s/jobs.json"
+run "… and with only an exempt maintenance pod (its Job listed)" 0 "pods=1 writerPods=0" false "$DIAG$MIGRATABLE\n"
 qc "the declared Deployment scaled to zero but still reporting a replica" 1 "is scaled to zero but still reports 1 replicas" deployments "vix-option-inteligence-service:ok:lit=false:0:zero-still-running"
 k8s_reset; rm -f "$T/k8s/deployments.json" "$T/k8s/replicasets.json" "$T/k8s/pods.json"
 run "no declared Deployment at all (never deployed here)" 0 "declaredAbsent=vix-option-inteligence-service" false "$DIAG$MIGRATABLE\n"
@@ -326,13 +416,34 @@ run "another cluster's CA"                           1 "is not the pinned dev cl
 run "insecure-skip-tls-verify"                       1 "insecure-skip-tls-verify: true" false "$DIAG$MIGRATABLE\n" FAKE_SKIP_TLS=true
 run "production: the pinned cluster"                 0 "OK: DRY RUN" false "$DIAG$MIGRATABLE\n" ENVIRONMENT=production FAKE_CA=prod FAKE_SERVER=https://192.168.100.252:6443
 run "production: another API server"                 1 "the pinned production API server is" false "$DIAG$MIGRATABLE\n" ENVIRONMENT=production FAKE_CA=prod FAKE_SERVER=https://10.0.0.9:6443
-run "the lock is held"                               1 "could not acquire lock zerodte-research-migrate-lock (held by build-3-20261003T120000Z)" false "$DIAG$MIGRATABLE\n" FAKE_LOCK_HELD=1
+run "the lock is held by another migration"          1 "could not acquire lock zerodte-research-migrate-lock (held by research-migrate-build-3-20261003T120000Z)" false "$DIAG$MIGRATABLE\n" FAKE_LOCK_HELD_BY=research-migrate-build-3-20261003T120000Z
+run "the lock is held by a service deploy (the mutual exclusion)" 1 "held by service-deploy-vix-option-inteligence-dev-build-12-20261004T120000Z): a rollout of the service" false "$DIAG$MIGRATABLE\n" FAKE_LOCK_HELD_BY=service-deploy-vix-option-inteligence-dev-build-12-20261004T120000Z
 check "a held lock: the pods were never judged (nothing happens outside the barrier)" bash -c "! grep -q 'get pods -o json' '$LAST_JOURNAL'"
+echo "--- the INTERLEAVING: a service deploy admitted while the migration holds the lock is excluded; the migration's lock is held through its Job ---"
+k8s_reset
+run "a deploy arrives at the moment the Job is created" 0 "OK: DRY RUN" false "$DIAG$MIGRATABLE\n" FAKE_DEPLOY_DURING_JOB=1
+check "the deploy was REFUSED by the held lock (acquire rc=1, naming the migration as holder)" bash -c "grep -q 'deploy-acquire rc=1' '$LAST_JOURNAL.deploy' && grep -q 'is held by research-migrate-build-7-' '$LAST_JOURNAL.deploy'"
+check "… and the migration still owned the lock afterwards (released by itself at the end)" bash -c "grep -c 'delete configmap/zerodte-research-migrate-lock' '$LAST_JOURNAL' | grep -qx 1"
+: > "$T/k8s/lock-journal"; printf '%s' "deploy-held" > "$T/k8s/lock"
+out="$(cd "$W" && env PATH="$W/bin:$PATH" FAKE_JOURNAL="$T/k8s/lock-journal" FAKE_K8S="$T/k8s" bash scripts/deploy/zerodte-migrate-barrier.sh release options-edge 2>&1)"; rm -f "$T/k8s/lock"
+check "the barrier's release removes the lock it holds" bash -c "printf '%s' \"\$1\" | grep -q 'released' && ! [ -f '$T/k8s/lock' ]" _ "$out"
 run "an active Job already"                          1 "another zerodte-research-migrate Job is not terminal" false "$DIAG$MIGRATABLE\n" FAKE_JOBS='{"items":[{"metadata":{"name":"zerodte-research-migrate-x"},"status":{"active":1}}]}'
-printf 'build=6 env=dev from=6 to=7 calendarVersion=%s file_sha256=x head=%s\n' "$CAL" "$HEAD" > "$T/receipt"
+printf 'build=6 env=dev from=6 to=7 calendarVersion=%s file_sha256=x head=%s wall=42\n' "$CAL" "$HEAD" > "$T/receipt"
 run "confirm with another build's receipt"           1 "does not describe this write" true "$DIAG$MIGRATED\n" PERMITTED_SHA="$HEAD"
 rm -f "$T/receipt"
 run "confirm without a receipt"                      1 "no dry-run receipt at" true "$DIAG$MIGRATED\n" PERMITTED_SHA="$HEAD"
+echo "--- the capacity evidence a CONFIRM requires: this build's dry-run wall time under the margin ---"
+rm -f "$T/receipt"; run "dry run (the receipt for the confirms below)" 0 "OK: DRY RUN" false "$DIAG$MIGRATABLE\n"
+sed -i.bak 's/ wall=42$/ wall=700/' "$T/receipt" && rm -f "$T/receipt.bak"
+run "confirm: the dry run took longer than the margin" 1 "this build's dry run took 700s of Job wall time; a CONFIRM needs at most 600s" true "$DIAG$MIGRATED\n" PERMITTED_SHA="$HEAD"
+check "… no Job was created" no_job_created
+sed -i.bak 's/ wall=700$/ wall=unknown/' "$T/receipt" && rm -f "$T/receipt.bak"
+run "confirm: the dry run recorded no measurable wall time" 1 "records no measurable Job wall time" true "$DIAG$MIGRATED\n" PERMITTED_SHA="$HEAD"
+sed -i.bak 's/ wall=unknown$//' "$T/receipt" && rm -f "$T/receipt.bak"
+run "confirm: a receipt without the wall time (an older wrapper's)" 1 "does not describe this write" true "$DIAG$MIGRATED\n" PERMITTED_SHA="$HEAD"
+rm -f "$T/receipt"; run "dry run (again)" 0 "OK: DRY RUN" false "$DIAG$MIGRATABLE\n"
+run "confirm: a tighter margin refuses the same dry run" 1 "took 42s of Job wall time; a CONFIRM needs at most 30s" true "$DIAG$MIGRATED\n" PERMITTED_SHA="$HEAD" CONFIRM_MAX_DRY_RUN_WALL_S=30
+run "CONFIRM_MAX_DRY_RUN_WALL_S out of range"        1 "CONFIRM_MAX_DRY_RUN_WALL_S must be within 1..900" true "$DIAG$MIGRATED\n" PERMITTED_SHA="$HEAD" CONFIRM_MAX_DRY_RUN_WALL_S=901
 run "confirm with another HEAD"                      1 "is not the permitted commit" true "$DIAG$MIGRATED\n" PERMITTED_SHA="$(printf '0%.0s' $(seq 40))"
 run "ENVIRONMENT unset"                              1 "ENVIRONMENT must be dev or production" false "$DIAG$MIGRATABLE\n" ENVIRONMENT=
 run "JOB_TIMEOUT_S below the Job's deadline"         1 "JOB_TIMEOUT_S must be within 960..3600" false "$DIAG$MIGRATABLE\n" JOB_TIMEOUT_S=600

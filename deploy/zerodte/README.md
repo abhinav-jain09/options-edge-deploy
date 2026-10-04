@@ -88,6 +88,17 @@ repository, the declared writer Deployments, the maintenance Jobs that run the s
 
 Only then is `--legacy-writers-quiesced` rendered into the Job; the migrator refuses without it.
 
+THE BOUNDARY OF THIS PROOF, stated plainly: it covers the `options-edge` NAMESPACE of the pinned cluster. A writer in another namespace,
+another cluster or a laptop holding the database credential is outside it — that is a credential / RBAC boundary (the research database's
+role and password are a Jenkins-synced Secret of this namespace), not something this proof establishes. "Quiescent" means: no writer-capable
+workload of this namespace can be running or be created by a controller of this namespace.
+
+For a RUNNING pod only a LITERAL `ZERODTE_RESEARCH_ENABLED` in its own spec is evidence (a container's environment is captured when it
+starts; a ConfigMap or Secret read now says nothing about what it read then), so the V1 compatibility rollout MUST set the flag as a
+literal `"false"` (the base Deployment does); a ConfigMap-sourced flag on a live pod is a refusal. Controller TEMPLATES are judged by what
+the kubelet will resolve for the next pod (a ConfigMap key is read; a Secret source refuses). A pod is exempt only when a LISTED Job owns it
+(name and uid) and that Job carries a declared maintenance label.
+
 ORDER ON EVERY ENVIRONMENT (consult Q12): roll the V1 compatibility image with `ZERODTE_RESEARCH_ENABLED` off to the declared Deployment
 and let it settle → this job (dry run, then CONFIRM) → the provisioning job → the dedicated v7 writer (9e) → increment 8.
 `scripts/ci/zerodte-research-migrate-receipt-test.sh` drives the wrapper through 144 cases against a fake kubectl, a fake clock and the
@@ -100,7 +111,9 @@ the timeout, the unreadable log — and CAPTURES the Job manifest the wrapper cr
 
 The Job's `activeDeadlineSeconds` is 900 under 896 Mi / 1 Gi (`-Xmx768m`). That ceiling is not assumed: the wrapper prints the Job's wall
 time (`job wall time: Ns`) after every run, and the DRY RUN that precedes every CONFIRM in the same build executes the whole migration
-against the REAL store and rolls it back. Record each environment's dry-run wall time here, from the build log, before its first CONFIRM:
+against the REAL store and rolls it back. ENFORCED, not only recorded: the dry-run receipt carries `wall=<s>` and the CONFIRM stage of the
+same build refuses unless that wall time is at most `CONFIRM_MAX_DRY_RUN_WALL_S` (default 600 s, two thirds of the deadline; a missing or
+unmeasurable wall time refuses too). Record each environment's dry-run wall time here as well, from the build log, before its first CONFIRM:
 
 | store | date | build | v6 feature families | dry-run wall time | notes |
 |---|---|---|---|---|---|

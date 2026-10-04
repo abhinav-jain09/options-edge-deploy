@@ -6,16 +6,20 @@ The legacy writer lives inside the vix-option-inteligence SERVICE image and runs
 — ResearchWriterSettings.fromEnvironment judges the variable exactly so. What is proven here, from the live API and a CLOSED WORLD of workloads:
 
   1. EVERY pod of the namespace whose container (app, init or ephemeral) runs that image — judged by its spec image AND by the kubelet's status
-     imageID, never by a label alone — is a writer-capable pod. A pod is exempt only when it belongs to a Job (ownerReference) whose
-     app.kubernetes.io/name is one of the declared maintenance Jobs that run the same image and never write research rows.
+     imageID, never by a label alone — is a writer-capable pod. A pod is exempt only when a Job OWNS it — the ownerReference's name AND uid
+     match a Job LISTED in the namespace — and THAT Job carries one of the declared maintenance labels (the provisioner, this migration);
+     the pod's own label and a dangling or spoofed owner reference exempt nothing.
   2. A writer-capable pod that is TERMINATING (deletionTimestamp set) still runs through its grace period: NOT quiescent (transient — the
      wrapper waits for it to be gone, bounded). A pod that is Pending has unverified containers: transient too.
   3. Every container of such a pod that runs the image must be on the PINNED digest (status imageID ends with "@<digest>"; a bare
      "sha256:…" imageID equals the digest) — an init container or a sidecar on another build is a refusal, whatever its state.
-  4. The EFFECTIVE flag of every such container must resolve OFF: a literal env value; a configMapKeyRef resolved by reading that ConfigMap;
-     envFrom sources resolved in order (a later source overrides an earlier one, a direct env entry overrides every envFrom, as the kubelet
-     does); a secretKeyRef, a fieldRef / resourceFieldRef, a "$(…)" expansion, a duplicated env name, a key found in an envFrom secret, an
-     unreadable or missing non-optional source — each is a REFUSAL (the value cannot be known here, so it is not known to be off).
+  4. The flag of every such container must be KNOWN OFF. A RUNNING container's environment was captured when it started: a ConfigMap read
+     now says nothing about what the container read then, so for a live pod only a LITERAL env entry in the pod's own (immutable) spec is
+     evidence — a literal "true" is a refusal, a configMapKeyRef / an envFrom ConfigMap that could supply the key / a Secret source / a
+     fieldRef / resourceFieldRef / a "$(…)" expansion / a duplicated env name / an envFrom entry naming both a ConfigMap and a Secret — each
+     a REFUSAL (the value cannot be known, so it is not known to be off); no entry at all with no envFrom that could carry the key = OFF.
+     A controller TEMPLATE (the next pod) is judged by what the kubelet WILL resolve: a literal; a configMapKeyRef read now; envFrom sources
+     in order (a later source overrides an earlier one, a direct env entry overrides every envFrom); the same refusals for the unknowable.
   5. The CONTROLLERS: every Deployment, StatefulSet, DaemonSet, ReplicaSet, Job and CronJob of the namespace whose pod template runs the
      image must be a DECLARED writer Deployment (or a ReplicaSet it owns), or an exempt maintenance Job; anything else — a CronJob, an
      undeclared Deployment — is a refusal (it could create a writer pod at any moment). A declared Deployment's template must run the pinned
@@ -115,8 +119,33 @@ def digest_of(image_id):
 
 
 # ----------------------------------------------------------------------------------------------- the effective flag
+def live_flag(container, where):
+    """The value ZERODTE_RESEARCH_ENABLED has inside a RUNNING container (None = unset): only a literal in the pod's immutable spec is evidence —
+    the environment was captured at the container's start, so no object read now (ConfigMap, Secret) can say what it was; a Refusal otherwise."""
+    entries = [e for e in container.get("env") or [] if e.get("name") == FLAG]
+    if len(entries) > 1:
+        raise Refusal("%s names %s more than once in env — ambiguous" % (where, FLAG))
+    if entries:
+        e = entries[0]
+        if e.get("valueFrom"):
+            raise Refusal("%s reads %s from %s — a running container's environment was captured at its start; only a literal in the pod spec is evidence" % (where, FLAG, ", ".join(sorted(e["valueFrom"].keys()))))
+        value = e.get("value", "")
+        if "$(" in value:
+            raise Refusal("%s sets %s to an expansion (%r) — not judged" % (where, FLAG, value))
+        return value
+    for src in container.get("envFrom") or []:
+        prefix = src.get("prefix") or ""
+        if not FLAG.startswith(prefix):
+            continue
+        refs = [k for k in ("configMapRef", "secretRef") if src.get(k)]
+        if refs:
+            raise Refusal("%s imports env from %s %s, which could have supplied %s when the container started — unknowable now; the compatibility rollout must set the flag as a literal" % (where, " and ".join(refs), ", ".join((src.get(k) or {}).get("name", "?") for k in refs), FLAG))
+        raise Refusal("%s has an envFrom source that is neither a ConfigMap nor a Secret" % where)
+    return None
+
+
 def effective_flag(container, api, where):
-    """The value ZERODTE_RESEARCH_ENABLED has inside this container (None = unset), resolved as the kubelet resolves it; a Refusal when it cannot be known."""
+    """The value ZERODTE_RESEARCH_ENABLED WILL have inside a container the kubelet creates from this TEMPLATE (None = unset), resolved as the kubelet resolves it; a Refusal when it cannot be known."""
     entries = [e for e in container.get("env") or [] if e.get("name") == FLAG]
     if len(entries) > 1:
         raise Refusal("%s names %s more than once in env — ambiguous" % (where, FLAG))
@@ -151,6 +180,8 @@ def effective_flag(container, api, where):
             continue
         key = FLAG[len(prefix):]
         cm_ref, sec_ref = src.get("configMapRef"), src.get("secretRef")
+        if cm_ref and sec_ref:
+            raise Refusal("%s has an envFrom entry naming both ConfigMap %s and Secret %s — the kubelet reads both; not judged" % (where, cm_ref.get("name"), sec_ref.get("name")))
         if cm_ref:
             cm = api.configmap(cm_ref["name"])
             if cm is None:
@@ -199,13 +230,22 @@ def runs_repo(pod, repo):
     return any(repository_of(s.get("imageID", "")) == repo for _, s in pod_statuses(status))
 
 
-def exempt(pod, exempt_labels):
-    label = ((pod.get("metadata") or {}).get("labels") or {}).get("app.kubernetes.io/name")
-    owners = (pod.get("metadata") or {}).get("ownerReferences") or []
-    return label in exempt_labels and any(o.get("kind") == "Job" for o in owners)
+def exempt(pod, exempt_labels, jobs_by_uid):
+    """Exempt only when a LISTED Job owns the pod (name and uid both match the owner reference) and that Job carries a declared maintenance label."""
+    for o in (pod.get("metadata") or {}).get("ownerReferences") or []:
+        if o.get("kind") != "Job":
+            continue
+        job = jobs_by_uid.get(o.get("uid"))
+        if job is None:
+            return False
+        meta = job.get("metadata") or {}
+        if meta.get("name") != o.get("name"):
+            return False
+        return (meta.get("labels") or {}).get("app.kubernetes.io/name") in exempt_labels
+    return False
 
 
-def judge_pod(pod, repo, digest, api):
+def judge_pod(pod, repo, digest):
     meta, spec, status = pod.get("metadata") or {}, pod.get("spec") or {}, pod.get("status") or {}
     name = meta.get("name", "?")
     phase = status.get("phase")
@@ -227,7 +267,7 @@ def judge_pod(pod, repo, digest, api):
             raise Refusal("%s runs the service image but reports no imageID yet" % where, transient=True)
         if digest_of(st["imageID"]) != digest:
             raise Refusal("%s runs another build of the service image (%s)" % (where, st["imageID"]))
-        if flag_on(effective_flag(c, api, where)):
+        if flag_on(live_flag(c, where)):
             raise Refusal("%s has %s=true" % (where, FLAG))
     # a status entry for a container the spec does not list (impossible by the API, judged anyway: fail closed)
     for kind, s in pod_statuses(status):
@@ -331,9 +371,10 @@ def main(argv):
     api = Api(a.namespace)
     try:
         pods = api.list("pods")
-        writer_pods = [p for p in pods if runs_repo(p, a.repository) and not exempt(p, exempt_labels)]
+        jobs_by_uid = {(j.get("metadata") or {}).get("uid"): j for j in api.list("jobs")}
+        writer_pods = [p for p in pods if runs_repo(p, a.repository) and not exempt(p, exempt_labels, jobs_by_uid)]
         for p in writer_pods:
-            judge_pod(p, a.repository, a.digest, api)
+            judge_pod(p, a.repository, a.digest)
         absent = judge_controllers(api, a.repository, a.digest, writers, exempt_labels)
         pod_set = pod_set_digest(writer_pods)
         if a.expect_set and a.expect_set != pod_set:
