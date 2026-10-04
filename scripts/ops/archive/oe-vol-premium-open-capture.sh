@@ -35,10 +35,11 @@ LOG="${LOG:-/home/abhinav/oe-ops/vol-premium-open-capture.log}"
 # timestamp is not.
 COMPLETENESS_DIR="${COMPLETENESS_DIR:-$ARCHIVE_ROOT/_manifest/completeness}"
 # Where the verified file set is pinned, and what the capture is then pointed at. It holds HARDLINKS
-# to archive members, so a pinned member is another DIRECTORY ENTRY pointing at the archive's own
-# inode — it allocates no inode and no file data of its own, which an earlier version of this
-# comment got wrong. What a session's pin costs is directory entries and the link count on those
-# inodes, on the order of a hundred entries a day. Nothing in the pipeline reads the pins
+# to archive members, so a pinned member is another NAME for bytes the archive already holds: no file
+# data of its own, on the order of a hundred names a day. (On the prod CIFS mount `st_nlink` reads 1
+# for both names, so it does not present them as a shared inode the way a local filesystem would —
+# what the pin gives is a copy-free second name, which is what matters here, and not a visibly
+# shared inode.) Nothing in the pipeline reads the pins
 # afterwards; they are kept because they are the record of exactly which files each claim was made
 # from, and an operator can prune old sessions from them without touching the archive or the ledger.
 # The count is logged on every run so growth is visible rather than inferred.
@@ -318,9 +319,14 @@ for topic in topics:
 # PIN FIRST, THEN VERIFY THE PIN. The order is the whole correctness argument and it was wrong
 # once: reading the source and linking it afterwards leaves an interval in which the source can be
 # replaced, so the pinned set would hold bytes nothing checked (review round 7). A hardlink is taken
-# first, which gives this script its own reference to that inode, and the DECOMPRESSION CHECK IS RUN
-# AGAINST THE PINNED PATH. Whatever happens to the archive name afterwards, the bytes read here are
-# the bytes the capture will read, because they are the same inode.
+# first, which gives this script a second NAME for those bytes, and the DECOMPRESSION CHECK IS RUN
+# AGAINST THE PINNED PATH. Whatever happens to the archive NAME afterwards, the bytes read here are
+# the bytes the capture will read, because both names refer to the same file.
+#
+# On a local filesystem that is a shared inode; on the prod CIFS mount `st_nlink` reads 1 for both
+# names, so the mount does not present it as one. What the pinning relies on is the weaker and
+# sufficient fact that the second name is not a copy — and what it does NOT give, either way, is
+# protection from an in-place rewrite, which is why the reader hashes every member it parses.
 #
 # HARDLINK OR FAULT — there is no copy fallback. A copy would reintroduce exactly the interval this
 # ordering removes (the bytes could change while they are being copied), and it would consume real
@@ -401,9 +407,10 @@ for topic in topics:
         try:
             os.link(path, target)
         except FileExistsError:
-            # A RETRY MAY REUSE ITS OWN PIN, and only its own: the same inode is the same bytes, and
-            # re-reading them below costs nothing. A name that resolves to a different file is the
-            # case this refuses — it means the pinned set and the archive have diverged.
+            # A RETRY MAY REUSE ITS OWN PIN, and only its own: os.path.samefile() says the two
+            # names are the same file, so re-reading them below costs nothing. A name that resolves
+            # to a DIFFERENT file is the case this refuses — the pinned set and the archive have
+            # diverged.
             try:
                 if not os.path.samefile(path, target):
                     answer("fault", f"{target} is pinned to a different file than the archive now "
@@ -433,7 +440,7 @@ for topic in topics:
                             f"before it is claimed")
 
         # THE CHECK IS ON THE PIN, not on the archive path. Once the link is taken the two names
-        # are the same inode, so in any state a fixture can set up they read alike — this is about
+        # are the same file, so in any state a fixture can set up they read alike — this is about
         # the one state a fixture CANNOT stage, the archive name being replaced in the interval
         # between the link and this read. The pin holds the inode and cannot be re-pointed; the
         # archive name can. So the suite does not distinguish `target` from `path` here, and the

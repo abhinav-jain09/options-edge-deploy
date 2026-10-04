@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import datetime as dt
 import gzip
+import time
+import errno
 import hashlib
 import importlib.util
 import json
@@ -965,6 +967,123 @@ class PublicationAuthorityTest(unittest.TestCase):
         r, out = self._run()
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertTrue((out / "rejected" / f"{DAY}.json").is_file(), r.stdout + r.stderr)
+
+
+class FreshlyLinkedFileTest(unittest.TestCase):
+    """The gate links each member and each `_manifest.jsonl` into the pinned set and the reader opens
+    them immediately. On the prod CIFS mount that first open fails EINVAL and the next succeeds —
+    found on the first live backfill, where the members pinned cleanly and every manifest read inside
+    the run then failed while the same open a second later worked."""
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp())
+        self.target = self.tmp / "freshly-linked"
+        self.target.write_text("the bytes\n")
+
+    def test_a_transient_einval_is_retried(self) -> None:
+        attempts = []
+        real_open = orc.open if hasattr(orc, "open") else open
+
+        def flaky(path, mode="r", *rest, **kw):
+            attempts.append(path)
+            if len(attempts) == 1:
+                raise OSError(errno.EINVAL, "Invalid argument")
+            return real_open(path, mode, *rest, **kw)
+
+        orc.open = flaky
+        self.addCleanup(lambda: delattr(orc, "open") if hasattr(orc, "open") else None)
+        with orc._open_freshly_linked(str(self.target)) as handle:
+            self.assertEqual(handle.read(), "the bytes\n")
+        self.assertEqual(len(attempts), 2, "it did not retry exactly once here")
+
+    def test_a_persistent_einval_is_raised_not_swallowed(self) -> None:
+        """A wait and a retry, not a swallow: a file that genuinely cannot be read must stop the run
+        rather than read as absent — which for a manifest would mean publishing without checking any
+        byte against it.
+
+        AND THE SCHEDULE IS PINNED HERE, because asserting only that an EINVAL eventually escapes is
+        satisfied by removing the retry loop altogether. Five opens, four sleeps of 0.5, 1, 1.5 and
+        2 seconds, none after the last attempt, and the LAST error raised rather than the first.
+        `time.sleep` is replaced so the case costs nothing to run."""
+        attempts, slept = [], []
+        errors = []
+
+        def always_einval(path, mode="r", *rest, **kw):
+            err = OSError(errno.EINVAL, "Invalid argument")
+            attempts.append(path)
+            errors.append(err)
+            raise err
+
+        orc.open = always_einval
+        real_sleep = orc.time.sleep
+        orc.time.sleep = slept.append
+        self.addCleanup(lambda: setattr(orc.time, "sleep", real_sleep))
+        self.addCleanup(lambda: delattr(orc, "open") if hasattr(orc, "open") else None)
+
+        with self.assertRaises(OSError) as caught:
+            orc._open_freshly_linked(str(self.target))
+        self.assertEqual(caught.exception.errno, errno.EINVAL)
+        self.assertEqual(len(attempts), 5, "it did not make five attempts")
+        self.assertEqual(slept, [0.5, 1.0, 1.5, 2.0],
+                         "the delays, and no sleep after the last attempt")
+        self.assertIs(caught.exception, errors[-1],
+                      "the FIRST error was raised, not the final observed state")
+
+    def test_an_unreadable_member_stops_a_PUBLISHING_run(self) -> None:
+        """THE EFFECT, which the helper's own cases cannot show. `_records` caught every OSError and
+        carried on — right for a read-only run over whatever the archive holds, and wrong for the
+        reader of a PINNED set the gate verified, where every member is evidence and one quietly
+        dropped publishes a permanent record from less than was checked."""
+        _fixture(self.tmp)
+        _gate_marker(self.tmp)
+        member = next((self.tmp / orc.INDEX / f"dt={DAY}").glob("*.jsonl.gz"))
+        member.chmod(0o000)
+        self.addCleanup(member.chmod, 0o644)
+        out = self.tmp / "ledger"
+        r = subprocess.run([sys.executable, str(SCRIPT), "--session", DAY,
+                            "--archive-root", str(self.tmp), "--out", str(out)],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 75, r.stdout + r.stderr)
+        self.assertIn("could not be read", r.stderr)
+        self.assertFalse((out / "accepted").exists(), "a record was published anyway")
+        self.assertFalse((out / "rejected").exists(), "it was published as a rejection instead")
+
+    def test_an_unreadable_member_does_not_stop_a_READ_ONLY_run(self) -> None:
+        """The companion, and the reason the distinction exists: a run that claims nothing reads what
+        it can and says what it found. That is what the evidence script does."""
+        _fixture(self.tmp)
+        member = next((self.tmp / orc.INDEX / f"dt={DAY}").glob("*.jsonl.gz"))
+        member.chmod(0o000)
+        self.addCleanup(member.chmod, 0o644)
+        r = subprocess.run([sys.executable, str(SCRIPT), "--session", DAY,
+                            "--archive-root", str(self.tmp)], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("session", json.loads(r.stdout))
+
+    def test_the_readers_use_the_retrying_open(self) -> None:
+        """Without this, the helper could be perfect and unused. Both readers are named, and the
+        check is on the SOURCE rather than on behaviour because the retry's trigger — a CIFS mount
+        answering EINVAL to a fresh link — cannot be staged in a fixture."""
+        source = SCRIPT.read_text()
+        self.assertEqual(source.count("_open_freshly_linked("), 3,
+                         "the helper is defined once and called by both readers; that count moved")
+        for reader in ("def _records(", "def _manifest_shas("):
+            body = source[source.index(reader):]
+            body = body[:body.index("\ndef ") if "\ndef " in body else len(body)]
+            self.assertIn("_open_freshly_linked(", body, reader + " does not use it")
+
+    def test_any_other_error_is_raised_at_once(self) -> None:
+        """Only EINVAL is the CIFS artifact. A missing file or a permission error must not be sat on
+        for two and a half seconds and then reported as the same thing."""
+        def not_found(path, mode="r", *rest, **kw):
+            raise FileNotFoundError(errno.ENOENT, "No such file or directory")
+
+        orc.open = not_found
+        self.addCleanup(lambda: delattr(orc, "open") if hasattr(orc, "open") else None)
+        started = time.monotonic()
+        with self.assertRaises(FileNotFoundError):
+            orc._open_freshly_linked(str(self.target))
+        self.assertLess(time.monotonic() - started, 0.4, "it retried something that is not EINVAL")
 
 
 class NanosecondTimestampTest(unittest.TestCase):
