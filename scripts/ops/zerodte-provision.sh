@@ -17,7 +17,7 @@
 #   CONFLICTING_PROVISIONED generation=                                        (exit 66)
 #   REFUSED reason=<TOKEN> exit=<n>                                            (64 file/usage, 65 attestation/contract, 68 precondition, 69 unavailable, 70 mutation)
 # This script requires exactly one such line, PARSES its fields as whole tokens, counts each field's occurrences, and compares symbol,
-# lineage, generation and eraId EXACTLY to the declaration this run provisions (read by the same validator that gated the PR); the outcome
+# lineage, generation, eraId and eraStartSession EXACTLY to the declaration this run provisions (read by the same validator that gated the PR); the outcome
 # must be one the mode allows (dry run: PROVISIONABLE or ALREADY_PROVISIONED; confirm: PROVISIONED or ALREADY_PROVISIONED). Anything else
 # is a refusal, never a success: this identity cannot read the ledger back, so the receipt is the only evidence and is held to the letter.
 # On PROVISIONED / ALREADY_PROVISIONED it prints the deploy/zerodte/provisioned/<ENVIRONMENT>.yaml block the operator commits (increment
@@ -32,7 +32,7 @@
 # WHAT IT DOES, fail-closed at every step:
 #   0. validates every parameter;
 #   1. validates the declaration and the attestation with scripts/ci/validate-zerodte-provisioning.sh / validate-zerodte-attestation.sh
-#      (the Job's own rules; append-only against origin/main) and reads the declaration's identity (symbol, lineage, generation, eraId);
+#      (the Job's own rules; append-only against origin/main) and reads the declaration's identity (symbol, lineage, generation, eraId / eraStartSession);
 #   2. asserts the kubectl identity IS the deployer SA AND the kubeconfig points at THIS environment's cluster;
 #   3. resolves the env's vix-option-inteligence SERVICE image by EXACT key (image-tags/<env>.yaml) and digest-pins it;
 #   4. refuses to start while another zerodte-provision Job is active — or while the Job list cannot be read;
