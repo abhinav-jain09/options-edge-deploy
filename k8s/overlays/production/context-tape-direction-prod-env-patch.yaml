@@ -31,6 +31,22 @@ spec:
             - { name: CONTEXT_TAPE_DIRECTION_ALERT_TOPIC, value: "context-tape.direction.alert" }
             - { name: CONTEXT_TAPE_DIRECTION_SCORECARD_TOPIC, value: "context-tape.direction.scorecard" }
             - { name: CONTEXT_TAPE_DIRECTION_API_PORT, value: "8136" }
+            # ZDCE-113/114 runs in monitored SHADOW_ONLY mode. ZDCE-114 has not passed its
+            # untouched promotion gate; these records are observational and never actionable.
+            # Rollback = set ZERO_DTE_COMPRESSION_ENABLED=false and redeploy through Jenkins.
+            - { name: ZERO_DTE_COMPRESSION_ENABLED, value: "true" }
+            - { name: ZERO_DTE_SPOT_TOPIC, value: "underlying.spx.price" }
+            - { name: ZERO_DTE_ES_TOPIC, value: "underlying.es.trades" }
+            - { name: ZERO_DTE_ES_SYMBOL, value: "ES.v.0" }
+            - { name: ZERO_DTE_OPTION_TOPIC, value: "options.databento.gex.strike" }
+            - { name: ZERO_DTE_CURRENT_TOPIC, value: "context-tape.compression.current" }
+            - { name: ZERO_DTE_HISTORY_TOPIC, value: "context-tape.compression.history" }
+            - { name: ZERO_DTE_CHECKPOINT_TOPIC, value: "context-tape.compression.checkpoint" }
+            - { name: ZERO_DTE_TRANSACTIONAL_ID, value: "context-tape-compression-prod-v1" }
+            - { name: ZERO_DTE_ARTIFACT_SHA256, value: "d774ed59ca3148e6f9b36accfc0a4744d43fc1f6bf36cdaa30d4ae899f419d82" }
+            - { name: ZERO_DTE_ALLOWED_LATENESS_MS, value: "5000" }
+            - { name: ZERO_DTE_OPTION_MAX_AGE_MS, value: "120000" }
+            - { name: ZERO_DTE_SESSION_MINUTES, value: "390" }
           ports:
             - name: direction
               containerPort: 8136

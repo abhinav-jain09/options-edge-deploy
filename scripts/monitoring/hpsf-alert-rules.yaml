@@ -368,3 +368,58 @@ groups:
         annotations:
           summary: "Liquidity heatmap emitting NO frames while quotes flow on {{ $labels.instance }} (heatmap dark)"
           description: "options.databento quotes are reaching the strike-liquidity-heatmap service but frame_emitted has not advanced for 5m. The option-chain heatmap layer is dark despite live input — the streams topology is stuck (rekey/join, store, or serialization), not the feed. Check the heatmap pod logs and process_errors/rejected_total before the next open."
+
+  - name: zero-dte-compression-shadow
+    interval: 30s
+    rules:
+      # Input-flow gating avoids a permanent off-hours alert: the detector is intentionally
+      # not required by the host pod's readiness, but must become LIVE when RTH spot flows.
+      - alert: ZeroDteCompressionNotReadyWhileSpotFlows
+        expr: |
+          zero_dte_compression_enabled == 1
+          and zero_dte_compression_ready == 0
+          and increase(zero_dte_compression_spot_records_total[10m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+          service: context-tape
+          subsystem: zero-dte-compression
+          shadow_only: "true"
+        annotations:
+          summary: "0DTE compression detector is not LIVE while SPX spot is flowing"
+          description: "The shadow runtime is receiving synthetic SPX records but has not completed recovery/backfill. Check its Kafka lag, checkpoint, schema registry, and runtime phase before trusting the Context Tape overlay."
+      - alert: ZeroDteCompressionOutputStalled
+        expr: |
+          increase(zero_dte_compression_spot_records_total[10m]) > 0
+          and increase(zero_dte_compression_outputs_total[10m]) == 0
+        for: 5m
+        labels:
+          severity: critical
+          service: context-tape
+          subsystem: zero-dte-compression
+          shadow_only: "true"
+        annotations:
+          summary: "0DTE compression output is stalled while SPX spot is flowing"
+          description: "Input is advancing but no transactional history/current/checkpoint output has committed for ten minutes."
+      - alert: ZeroDteCompressionRuntimeFailures
+        expr: increase(zero_dte_compression_loop_failures_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+          service: context-tape
+          subsystem: zero-dte-compression
+          shadow_only: "true"
+        annotations:
+          summary: "0DTE compression runtime entered retry recovery"
+          description: "At least one runtime loop failed in five minutes. Inspect the service log and checkpoint/replay metrics."
+      - alert: ZeroDteCompressionRejectedInputBurst
+        expr: increase(zero_dte_compression_rejected_records_total[10m]) > 25
+        for: 5m
+        labels:
+          severity: warning
+          service: context-tape
+          subsystem: zero-dte-compression
+          shadow_only: "true"
+        annotations:
+          summary: "0DTE compression rejected an unusual burst of input records"
+          description: "More than 25 input records failed the strict production-source contract in ten minutes. Check source schema, provenance, and symbol identity."
