@@ -1009,6 +1009,49 @@ class FreshlyLinkedFileTest(unittest.TestCase):
             orc._open_freshly_linked(str(self.target))
         self.assertEqual(caught.exception.errno, errno.EINVAL)
 
+    def test_an_unreadable_member_stops_a_PUBLISHING_run(self) -> None:
+        """THE EFFECT, which the helper's own cases cannot show. `_records` caught every OSError and
+        carried on — right for a read-only run over whatever the archive holds, and wrong for the
+        reader of a PINNED set the gate verified, where every member is evidence and one quietly
+        dropped publishes a permanent record from less than was checked."""
+        _fixture(self.tmp)
+        _gate_marker(self.tmp)
+        member = next((self.tmp / orc.INDEX / f"dt={DAY}").glob("*.jsonl.gz"))
+        member.chmod(0o000)
+        self.addCleanup(member.chmod, 0o644)
+        out = self.tmp / "ledger"
+        r = subprocess.run([sys.executable, str(SCRIPT), "--session", DAY,
+                            "--archive-root", str(self.tmp), "--out", str(out)],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 75, r.stdout + r.stderr)
+        self.assertIn("could not be read", r.stderr)
+        self.assertFalse((out / "accepted").exists(), "a record was published anyway")
+        self.assertFalse((out / "rejected").exists(), "it was published as a rejection instead")
+
+    def test_an_unreadable_member_does_not_stop_a_READ_ONLY_run(self) -> None:
+        """The companion, and the reason the distinction exists: a run that claims nothing reads what
+        it can and says what it found. That is what the evidence script does."""
+        _fixture(self.tmp)
+        member = next((self.tmp / orc.INDEX / f"dt={DAY}").glob("*.jsonl.gz"))
+        member.chmod(0o000)
+        self.addCleanup(member.chmod, 0o644)
+        r = subprocess.run([sys.executable, str(SCRIPT), "--session", DAY,
+                            "--archive-root", str(self.tmp)], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("session", json.loads(r.stdout))
+
+    def test_the_readers_use_the_retrying_open(self) -> None:
+        """Without this, the helper could be perfect and unused. Both readers are named, and the
+        check is on the SOURCE rather than on behaviour because the retry's trigger — a CIFS mount
+        answering EINVAL to a fresh link — cannot be staged in a fixture."""
+        source = SCRIPT.read_text()
+        self.assertEqual(source.count("_open_freshly_linked("), 3,
+                         "the helper is defined once and called by both readers; that count moved")
+        for reader in ("def _records(", "def _manifest_shas("):
+            body = source[source.index(reader):]
+            body = body[:body.index("\ndef ") if "\ndef " in body else len(body)]
+            self.assertIn("_open_freshly_linked(", body, reader + " does not use it")
+
     def test_any_other_error_is_raised_at_once(self) -> None:
         """Only EINVAL is the CIFS artifact. A missing file or a permission error must not be sat on
         for two and a half seconds and then reported as the same thing."""

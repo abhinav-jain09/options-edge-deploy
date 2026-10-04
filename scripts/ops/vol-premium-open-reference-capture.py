@@ -148,8 +148,18 @@ def _records(root: str, topic: str, day: str):
         try:
             with _open_freshly_linked(path, "rb") as handle:
                 blob = handle.read()
-        except OSError:
-            continue
+        except OSError as err:
+            # SKIPPING AN UNREADABLE MEMBER IS ONLY SAFE WHEN NOTHING IS BEING CLAIMED. This caught
+            # an OSError and carried on, which is right for a read-only run over whatever the
+            # archive happens to hold — and wrong when _EXPECTED_SHA is set, because then this is
+            # the reader of a PINNED set that the gate verified, every member of it is evidence, and
+            # one quietly dropped would publish a permanent record from less than was checked
+            # (review of #1132). Publishing is the case where it raises.
+            if _EXPECTED_SHA is None:
+                continue
+            raise UnverifiedMember(
+                f"{name} is in the pinned set and could not be read ({err}), so the record would "
+                f"be made from less evidence than the gate checked") from err
         if _EXPECTED_SHA is not None:
             recorded = _EXPECTED_SHA.get((topic, name))
             if recorded is None:
@@ -234,16 +244,20 @@ _EXPECTED_SHA = None
 def _open_freshly_linked(path: str, mode: str = "r"):
     """Open a file the gate has just linked into the pinned set, retrying a transient EINVAL.
 
-    THE ARCHIVE AND THE PINNED SET LIVE ON A CIFS MOUNT, and on this one a file that was linked a
-    moment ago is briefly unopenable: `OSError(22, 'Invalid argument')` on the first attempt and
-    fine on the next. Measured on the prod host during the first live backfill — the gate pinned
-    191 members and wrote the marker, and every `_manifest.jsonl` read then failed EINVAL while the
-    same open from another shell a second later succeeded, and `head` on the same path worked.
-    (`st_nlink` reads 1 on this mount too, so it does not present these as hardlinks; what the pin
-    gives is a copy-free second name, not a visibly shared inode.)
-    
-    It is a WAIT AND RETRY, not a swallow: after the attempts the error is raised, so a file that
-    genuinely cannot be read still stops the run rather than reading as absent.
+    THE ARCHIVE AND THE PINNED SET LIVE ON A CIFS MOUNT, and on that mount a file linked a moment
+    ago is briefly unopenable: `OSError(22, 'Invalid argument')` on the first attempt and fine on the
+    next. Observed on the prod host during the first live backfill, where every `_manifest.jsonl`
+    read inside the run failed EINVAL while the same open a second later succeeded. `st_nlink` reads
+    1 for both names there, so the mount does not present them as a shared inode; what the pin gives
+    is a copy-free second name.
+
+    FIVE ATTEMPTS, SLEEPING 0.5 s, 1 s, 1.5 s AND 2 s BETWEEN THEM — five seconds in all before it
+    gives up, and no sleep after the last attempt. The numbers are spelled out because a wrong one
+    in a comment is the kind of thing nobody checks.
+
+    It is a WAIT AND RETRY, not a swallow: the error is raised after the attempts, so a file that
+    genuinely cannot be read stops the run rather than reading as absent. The LAST error is raised
+    rather than the first, since it is the final observed state.
     """
     last = None
     for attempt in range(5):
