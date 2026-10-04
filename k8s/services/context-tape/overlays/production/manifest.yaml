@@ -87,7 +87,7 @@ spec:
             - name: CONTEXT_TAPE_DIRECTION_API_PORT
               value: "8136"
             - name: ZERO_DTE_COMPRESSION_ENABLED
-              value: "false"
+              value: "true"
             - name: ZERO_DTE_SPOT_TOPIC
               value: underlying.spx.price
             - name: ZERO_DTE_ES_TOPIC

@@ -31,9 +31,9 @@ spec:
             - { name: CONTEXT_TAPE_DIRECTION_ALERT_TOPIC, value: "context-tape.direction.alert" }
             - { name: CONTEXT_TAPE_DIRECTION_SCORECARD_TOPIC, value: "context-tape.direction.scorecard" }
             - { name: CONTEXT_TAPE_DIRECTION_API_PORT, value: "8136" }
-            # ZDCE-113/114 remains OFF: the artifact is explicitly non-production-eligible and the
-            # authoritative-calendar plus untouched-forward gates have not passed.
-            - { name: ZERO_DTE_COMPRESSION_ENABLED, value: "false" }
+            # Explicitly authorized production SHADOW rollout: observable only, never actionable.
+            # Roll back by setting this flag false and redeploying the same reviewed manifests.
+            - { name: ZERO_DTE_COMPRESSION_ENABLED, value: "true" }
             - { name: ZERO_DTE_SPOT_TOPIC, value: "underlying.spx.price" }
             - { name: ZERO_DTE_ES_TOPIC, value: "underlying.es.trades" }
             - { name: ZERO_DTE_ES_SYMBOL, value: "ES.v.0" }

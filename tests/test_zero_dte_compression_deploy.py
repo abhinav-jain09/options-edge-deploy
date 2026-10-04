@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import subprocess
 import unittest
 import yaml
 
@@ -16,7 +17,7 @@ TOPICS = (
 
 
 class ZeroDteCompressionDeployTest(unittest.TestCase):
-    def test_dev_and_production_stage_same_hash_pinned_but_disabled_contract(self) -> None:
+    def test_dev_stays_disabled_and_production_enables_the_hash_pinned_shadow(self) -> None:
         for environment in ("dev", "production"):
             patch = (
                 ROOT
@@ -46,7 +47,8 @@ class ZeroDteCompressionDeployTest(unittest.TestCase):
             container = next(item for item in deployment["spec"]["template"]["spec"]["containers"]
                              if item["name"] == "context-tape")
             env = {item["name"]: str(item.get("value", "")) for item in container["env"]}
-            self.assertEqual("false", env["ZERO_DTE_COMPRESSION_ENABLED"])
+            expected_enabled = "false" if environment == "dev" else "true"
+            self.assertEqual(expected_enabled, env["ZERO_DTE_COMPRESSION_ENABLED"])
             self.assertEqual(
                 f"context-tape-compression-{'dev' if environment == 'dev' else 'prod'}",
                 env["ZERO_DTE_TRANSACTIONAL_ID"],
@@ -54,6 +56,21 @@ class ZeroDteCompressionDeployTest(unittest.TestCase):
             self.assertEqual(SHA, env["ZERO_DTE_ARTIFACT_SHA256"])
             self.assertEqual("390", env["ZERO_DTE_SESSION_MINUTES"])
             self.assertIn("2026-11-27", env["ZERO_DTE_UNSUPPORTED_SESSION_DATES"])
+
+    def test_production_web_explicitly_exposes_the_shadow_feature_flag(self) -> None:
+        rendered = subprocess.run(
+            ["kubectl", "kustomize", str(ROOT / "k8s" / "services" / "web"
+                                          / "overlays" / "production")],
+            check=True, capture_output=True, text=True,
+        ).stdout
+        documents = list(yaml.safe_load_all(rendered))
+        deployment = next(doc for doc in documents
+                          if doc and doc.get("kind") == "Deployment"
+                          and doc["metadata"]["name"] == "options-edge-web")
+        container = next(item for item in deployment["spec"]["template"]["spec"]["containers"]
+                         if item["name"] == "web")
+        env = {item["name"]: str(item.get("value", "")) for item in container["env"]}
+        self.assertEqual("true", env["VITE_ZERO_DTE_COMPRESSION_ENABLED"])
 
     def test_output_and_recovery_topics_are_durable_and_classified(self) -> None:
         topics = (ROOT / "scripts" / "kafka" / "topics.env").read_text()
