@@ -245,8 +245,9 @@ class StagingCheckTest(unittest.TestCase):
             f" --allow-ignored scripts/ops/archive/{name}",
             f' --allow-ignored "scripts/ops/archive/{name}"'))
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertIn("sh 'PERMITTED_SHA=", (ROOT / JF).read_text(),
-                      "the step is no longer a single-quoted sh, so the reasoning above has moved")
+        self.assertRegex((ROOT / JF).read_text(), r"script: 'PERMITTED_SHA=|sh 'PERMITTED_SHA=",
+                         "the shell command is no longer wrapped in single quotes, so the reason "
+                         "this case is double-quote-only has moved")
 
     def test_a_heredoc_body_is_not_an_invocation(self) -> None:
         """`cat <<"EOF"` with the whole verifier command in the body prints that text and runs
@@ -272,6 +273,30 @@ class StagingCheckTest(unittest.TestCase):
         r = self._run(bury_it_in_a_heredoc)
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn("CANNOT CHECK THE DECLARATION", r.stderr)
+
+    def test_the_repository_wide_guard_refuses_a_short_circuited_verify(self) -> None:
+        """WHAT BOUNDS A FALSE NEGATIVE IN THIS PREFLIGHT, asserted rather than asserted-about.
+
+        `sh 'exit 0; <the verifier>'` never runs the verifier, succeeds, and the ship proceeds — the
+        gate SKIPPED rather than refused, which is the one direction that matters and the one no
+        text check here can see. scripts/jenkins/validate-jenkinsfile-guard.py refuses it, because
+        the step must be a DEDICATED verify immediately before the effect and must be the verify
+        command and nothing else. This runs that validator against the real job, mutated."""
+        work = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, work, True)
+        shutil.copytree(ROOT / "scripts", work / "scripts",
+                        ignore=shutil.ignore_patterns("__pycache__", ".helper-venv"))
+        text = (ROOT / JF).read_text()
+        marker = "sh 'PERMITTED_SHA="
+        self.assertEqual(text.count(marker), 1, "the verify step is no longer the shape this pins")
+        (work / JF).write_text(text.replace(marker, "sh 'exit 0; PERMITTED_SHA=", 1))
+        r = subprocess.run(
+            ["python3", str(ROOT / "scripts/jenkins/validate-jenkinsfile-guard.py"),
+             "--root", str(work),
+             "--manifest", str(work / "scripts/ci/jenkins-permitted-sha-scope.txt"),
+             "--only", JF], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("no dedicated verify-permitted-tree step immediately precedes it", r.stdout)
 
     def test_a_job_with_no_tree_verifier_says_so(self) -> None:
         """A guard that defers to a gate must notice the gate going away, rather than passing on a

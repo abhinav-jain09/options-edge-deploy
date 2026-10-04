@@ -140,12 +140,24 @@ for f in $wanted $sourced; do
     # still be read as the step. Only a Groovy-and-shell parser could settle that, and shipping one
     # as a preflight is out of proportion to what its false negative costs.
     #
-    # WHAT THIS CHECK IS, in proportion: a PREFLIGHT. The authoritative gate is
-    # verify-permitted-tree.sh at install time, which cannot be talked round by any of this — it
-    # looks at the tree, not at the job definition. This exists so that a missing declaration is
-    # named here, by file, instead of appearing as a refused install; four review rounds went into
-    # making it refuse text that is not an argument to that verifier, and the cost of a remaining
-    # false negative is exactly what happened before it existed — the install refuses and says why.
+    # WHAT THIS CHECK IS, in proportion: a PREFLIGHT, and it is the THIRD guard on this step rather
+    # than the only one. It exists so a missing declaration is named here, by file, instead of
+    # appearing as a refused install.
+    #
+    # The other two are what make the step itself trustworthy, and they are worth naming because a
+    # false negative here is bounded by them rather than by anything in this file:
+    #   * scripts/jenkins/validate-jenkinsfile-guard.py — the repository-wide rule that a
+    #     source-consuming effect must be immediately preceded by a DEDICATED verify step with
+    #     nothing between, and that the step is the verify command and nothing else. It refuses
+    #     `sh \047exit 0; <the verifier>\047` — review raised exactly that, where the verifier never
+    #     runs, the stage succeeds and the ship proceeds, which would be the gate SKIPPED rather
+    #     than refused. tests/test_archive_unit_completeness_validator.py asserts that refusal
+    #     against the real job, so the claim here rests on an effect rather than on this comment.
+    #   * verify-permitted-tree.sh itself, at install time, on the TREE — which no reading of the
+    #     job definition can talk round.
+    #
+    # So what a false negative in THIS file costs is a declaration that goes unnamed until the
+    # install refuses and says why.
     #
     # THE CONTROL IS scripts/ci/verify-archive-unit-staged.sh, which the job runs on the agent after
     # staging and before the container: it asserts each file the suite will read exists and is
