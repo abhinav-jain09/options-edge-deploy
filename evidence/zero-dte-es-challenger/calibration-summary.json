@@ -4,9 +4,9 @@
   "authority": "SHADOW_NOT_FOR_TRADING",
   "capability": "PRICE_VOLUME_ONLY",
   "modelVersion": "zdce-es-challenger-v1",
-  "artifactSha256": "ede3998e7ef41804bfc627d61e211d62491f2fca7ecd6582a4d2ff8953bc8ba5",
+  "artifactSha256": "9b59499f2db8651262992cea9107d3333eeede3af46e5920c4e6e283a9a6e3f3",
   "corpusSha256": "c28a01c36e9c63d3ccba4f35a07d6fe301748e9c4973b3b6e0d9f260c8fd4e5c",
-  "evaluationSha256": "5c581a7c75fbff736f87f26f506914ecef436b170458fa3cc2d140a143b52d9f",
+  "evaluationSha256": "0ae27038e58e28e184a833edabd9061b5ffe4be779753b64efb24d107a342df0",
   "sourceRepository": "options-edge",
   "sourcePath": "research/zero_dte/reports/zdce-es-challenger-evaluation.json",
   "quality": {
@@ -15,18 +15,30 @@
     "historicalReevaluationEligibleSessions": 50
   },
   "validation": {
-    "confirmedCompressionCount": 67,
-    "falseCompressionRate": 0.07462686567164178,
-    "releaseCount": 60,
-    "falseReleaseRate": 0.2833333333333333,
-    "onsetRecallWithin3Before5After": 0.11793611793611794
+    "confirmedCompressionCount": 98,
+    "falseCompressionRate": 0.29591836734693877,
+    "releaseCount": 82,
+    "falseReleaseRate": 0.5121951219512195,
+    "labelledExpansionOnsetCount": 456,
+    "matchedExpansionOnsetCount": 46,
+    "missedExpansionOnsetCount": 410,
+    "onsetRecallWithin3Before5After": 0.10087719298245613,
+    "medianOnsetDelayMinutes": 6.0,
+    "medianMovementConsumed": 1.0,
+    "latencyAndConsumptionIncludeMisses": true
   },
   "historicalReevaluation": {
-    "confirmedCompressionCount": 47,
-    "falseCompressionRate": 0.1702127659574468,
-    "releaseCount": 54,
-    "falseReleaseRate": 0.25925925925925924,
-    "onsetRecallWithin3Before5After": 0.09411764705882353
+    "confirmedCompressionCount": 53,
+    "falseCompressionRate": 0.33962264150943394,
+    "releaseCount": 63,
+    "falseReleaseRate": 0.4603174603174603,
+    "labelledExpansionOnsetCount": 416,
+    "matchedExpansionOnsetCount": 39,
+    "missedExpansionOnsetCount": 377,
+    "onsetRecallWithin3Before5After": 0.09375,
+    "medianOnsetDelayMinutes": 6.0,
+    "medianMovementConsumed": 1.0,
+    "latencyAndConsumptionIncludeMisses": true
   },
-  "interpretation": "Reproducible historical shadow evidence only; not trading or untouched-forward approval."
+  "interpretation": "Reproducible historical shadow behavior only. Recall is about 10% and the miss-penalized median consumes 100% of the move, so this is not usefulness, trading, promotion, or untouched-forward approval."
 }

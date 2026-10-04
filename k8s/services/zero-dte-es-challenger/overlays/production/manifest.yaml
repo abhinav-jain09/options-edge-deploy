@@ -24,9 +24,6 @@ spec:
   selector:
     app.kubernetes.io/name: zero-dte-es-challenger-service
   ports:
-    - name: api
-      port: 8144
-      targetPort: api
     - name: health
       port: 8145
       targetPort: health
@@ -43,7 +40,7 @@ metadata:
     options-edge/dark-deployed: "true"
     options-edge/authority: SHADOW_NOT_FOR_TRADING
     options-edge/capability: PRICE_VOLUME_ONLY
-    options-edge/artifact-sha256: ede3998e7ef41804bfc627d61e211d62491f2fca7ecd6582a4d2ff8953bc8ba5
+    options-edge/artifact-sha256: 9b59499f2db8651262992cea9107d3333eeede3af46e5920c4e6e283a9a6e3f3
 spec:
   replicas: 0
   strategy:
@@ -81,24 +78,20 @@ spec:
             - name: ZERO_DTE_ES_CHALLENGER_CHECKPOINT_TOPIC
               value: context-tape.es-compression.checkpoint
             - name: ZERO_DTE_ES_CHALLENGER_APPLICATION_ID
-              value: options-edge-zero-dte-es-challenger-es4
+              value: options-edge-zero-dte-es-challenger
             - name: ZERO_DTE_ES_CHALLENGER_TRANSACTIONAL_ID
-              value: zero-dte-es-challenger-es4
+              value: zero-dte-es-challenger
             - name: ZERO_DTE_ES_CHALLENGER_ARTIFACT_SHA256
-              value: ede3998e7ef41804bfc627d61e211d62491f2fca7ecd6582a4d2ff8953bc8ba5
+              value: 9b59499f2db8651262992cea9107d3333eeede3af46e5920c4e6e283a9a6e3f3
             - name: ZERO_DTE_ES_CHALLENGER_ALLOWED_LATENESS_MS
               value: "5000"
             - name: ZERO_DTE_ES_CHALLENGER_UNSUPPORTED_SESSION_DATES
               value: 2026-07-02,2026-11-27,2026-12-24
-            - name: ZERO_DTE_ES_CHALLENGER_API_PORT
-              value: "8144"
             - name: ZERO_DTE_ES_CHALLENGER_HEALTH_PORT
               value: "8145"
             - name: JAVA_TOOL_OPTIONS
               value: -Xms128m -Xmx640m
           ports:
-            - name: api
-              containerPort: 8144
             - name: health
               containerPort: 8145
           livenessProbe:

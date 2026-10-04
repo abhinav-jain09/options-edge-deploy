@@ -1,0 +1,684 @@
+{
+  "schemaVersion" : "zdce.es-nas-runtime-replay.1",
+  "status" : "PASS",
+  "authority" : "SHADOW_NOT_FOR_TRADING",
+  "capability" : "PRICE_VOLUME_ONLY",
+  "modelVersion" : "zdce-es-challenger-v1",
+  "artifactSha256" : "9b59499f2db8651262992cea9107d3333eeede3af46e5920c4e6e283a9a6e3f3",
+  "corpusSha256" : "c28a01c36e9c63d3ccba4f35a07d6fe301748e9c4973b3b6e0d9f260c8fd4e5c",
+  "corpusPath" : "/Volumes/database/optionsedge/corpus/incoming/ladder-1yr",
+  "generatedAt" : "2026-10-04T21:13:45.682016Z",
+  "runtime" : {
+    "gitSha" : "cb9bd46aad8dae2b56a65783021f4d0144335367",
+    "jarSha256" : "ed9a625e9b5d8797780531acceecb4ff34018b78a78081268286db1c7e0e6718",
+    "engineClass" : "com.optionsedge.processing.contexttape.regime.EsZeroDteEngine"
+  },
+  "splits" : {
+    "train" : {
+      "sessionCount" : 151,
+      "eligibleSessionCount" : 149,
+      "excludedSessionCount" : 2,
+      "excludedSessions" : [ {
+        "invalidRowCount" : 0,
+        "duplicateMinuteCount" : 0,
+        "reason" : "NON_CONTIGUOUS_OR_DUPLICATE_RTH_MINUTES",
+        "missingMinuteCount" : 165,
+        "session" : "20251128",
+        "selectedSymbol" : "ES_294973"
+      }, {
+        "invalidRowCount" : 0,
+        "duplicateMinuteCount" : 0,
+        "reason" : "NON_CONTIGUOUS_OR_DUPLICATE_RTH_MINUTES",
+        "missingMinuteCount" : 165,
+        "session" : "20251224",
+        "selectedSymbol" : "ES_42140878"
+      } ],
+      "first" : "20250801",
+      "last" : "20260309"
+    },
+    "validation" : {
+      "sessionCount" : 50,
+      "eligibleSessionCount" : 50,
+      "excludedSessionCount" : 0,
+      "excludedSessions" : [ ],
+      "first" : "20260310",
+      "last" : "20260519",
+      "runtimeReplays" : [ {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "b5221e6d504402b82e96ecaf9a53a88d6008cc0be252e86054cf18d87a0435a8",
+        "session" : "20260310",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "331b6e4e7afae8724d3380ed08668b1d956643cc22031fdebdde9cb86503cf11",
+        "session" : "20260311",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "1b0ff372295ca67a3909903973e56e9f187dcd127469835f66c82190b8643f84",
+        "session" : "20260312",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "64a4388c32cc9fde2a6047e5a44162ad226a26c48faadf64311826ca1264f2a0",
+        "session" : "20260313",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "ca8cbc732ce5f23a63df47771f41432a9d70c7303db9b8a1ef06aabd40145b0c",
+        "session" : "20260316",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "3a3ae160ef4e77daf448b8370cc4da3c5bdaae445df592ec7c063324824fb2af",
+        "session" : "20260317",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "ae7722a7fc78fd2b57fa49ae4d465abf8aaf357f05523ee657627c87b7c98696",
+        "session" : "20260318",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "10c1f4132aecfff9ce53ba3097a207f4a092dfed492dde612c7e6615895dde0d",
+        "session" : "20260319",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "927b90d6a94c576576f4d8a4b92ee066b00d46d961d72bae4b7430e5bd7ee5c1",
+        "session" : "20260320",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "4dfd38a8767952c22c1d20f54e60af3a50132b8e9efc8f459e5105c2e892810c",
+        "session" : "20260323",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "92103d654e6fc13b23ccc6acce4df9d216e6078fa265e4a71f1c563fdecf2738",
+        "session" : "20260324",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "eea3b190eb3b240129dd3eb48da0ccd4525ee31b52fe4b10afb11d546a7e3910",
+        "session" : "20260325",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "cc3a83f16c0579071878f67914ad86e8e78f99e889eae900dcaf9df4345f3fdb",
+        "session" : "20260326",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "268d8cfabc9c90810a5e5e9de3b375cf1f7837aa2e15dfb5733bf7da8c337dfc",
+        "session" : "20260327",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "2a962f2ec8e2972d9e9b7ddec2e71487f301f9e3a6a91c1484f98fbee4de8102",
+        "session" : "20260330",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "23810f703177b7dd6c4346df7e3990ee2ec75c6a6476bd91d94ffe355ccbc1db",
+        "session" : "20260331",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "8f2fbf8c7b2a37ade02cabf496723a5b1450f73525f0f95879e18e9799f7b211",
+        "session" : "20260401",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "5a6dc237f3cc1c373e45df625faa30156a83d545ac8b349d349e386d651a289d",
+        "session" : "20260402",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "45eeaf915f7248d110eeee4e30ee32d52cb1e596b04ffe1effcf85b7dec87097",
+        "session" : "20260406",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "0f3f8f897f375ae6cb2e688f800546f681e3f53eeadde7a0f01bdd2c3bbbb02b",
+        "session" : "20260407",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "52e070e000b57180f9f35d46e79bf2d0263d9244b79cd1255f0705ae92a8baa4",
+        "session" : "20260408",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "23a132ad4b6c759476a88aae4d06a4e0e1e09c7aef00fc8626bbcd5f95f9062e",
+        "session" : "20260409",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "686822f29ec964547b5ac228fe6fa9e3c6b3d70e5d2a78188e4c8552097af460",
+        "session" : "20260410",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "249d79e85ea0a78fc4c57a0e6e703823daaa1932f5fbf4e17c9349f0e83ef519",
+        "session" : "20260413",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "df136e4f14a6abe0416df7b34e803ac20d2af5402388ad3b99e79f58516d4955",
+        "session" : "20260414",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "2d77b41e15359f572b77d2dc74625bc8b1cd3eb97969cfcc7006888f2a333b94",
+        "session" : "20260415",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "f03f65788cd79f875cb860a767122f7997a9524e021833e699aed7ccc870124e",
+        "session" : "20260416",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "7d61c98275741f374086fbd46862b3ce39177b6733aa2a2fef286d1cb32dcc3e",
+        "session" : "20260417",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "a44c35b8f48160a401593eb0aae61aa59780ae48ab3d620fb0c6cf492eed176a",
+        "session" : "20260420",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "f61c6a4f7bcc34c7f6e035b1f7f655196d6e76909f0e66399fe0bbcc989ee58c",
+        "session" : "20260421",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "3df7fc1fb9b03380c2bc34a501d279a504f30b22a6f95649c22e606df46066ee",
+        "session" : "20260422",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "ae446f250b253640b78449d4f3c56ee3eab9f5d1781923ddd52effdbb4469d07",
+        "session" : "20260423",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "9e51c68212bf716a625272447390bb4aecdefb9c5bde3d3f177988e797574dae",
+        "session" : "20260424",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "a1966a6c16668db9e9725f9fc3346a470161fc6f1593f1b8aba491e471309b7f",
+        "session" : "20260427",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "7047fdf9c4651a6e27671373513f707fcded089d0354d086067eb46d876c71e4",
+        "session" : "20260428",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "7870f69da3f300041008abab74fe0526b310705fc0d829b5524dbf0d20af4646",
+        "session" : "20260429",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "c116ab12b7d2912686ac5385615f9f823c924905cf004da158ed55cb5df9c5c0",
+        "session" : "20260430",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "90d847e6380fd5681c53e390f608f156413ba3b06943152958c9c8f3d202d8e3",
+        "session" : "20260501",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "0988f18e6a786f4f198c6a70e8b8af46ce9869fbc7d46c3ebfc206f9c63d5db3",
+        "session" : "20260504",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "5e106a8c8f6f83a46c92df00cbec7309580bf57581e8294a4e561aa370b09fbe",
+        "session" : "20260505",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "b1e85f4faf10871d8b8e3064d0f56b4ae95cc2c983a4083e5dda09e7ce3d11f4",
+        "session" : "20260506",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "0f28851cc51fdf29e4958216ad5f65fd229973ba6ed2a6ed2ce40abcccaba65c",
+        "session" : "20260507",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "c59798095ff01a75a09956edbd5c28b80eb7317e73c0d64969ce5682c7d56321",
+        "session" : "20260508",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "bbecb3bf70aedf61f63bdc26a2b706030e89b62f02ea682868119cd768d51d04",
+        "session" : "20260511",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "1b9163e8332df7557a3f9b76e2a95fdcb3d49c6b57faed96717bd2408ae1fce6",
+        "session" : "20260512",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "c5902c69de897d3720676aebb45d577d803ff23883b6e57bea695e5e298198f0",
+        "session" : "20260513",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "924407ca0567122c89215c7dbf84829c3b9fad6334db17d4317edfca84579e97",
+        "session" : "20260514",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "06229d6e261e0fe8ee64143e93e1375d235838dffc30d15e0a7d6b577e4bebc4",
+        "session" : "20260515",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "a8493784c4c969e36839ddb7f66a5fcf7ad1dc690c8eca72ca4231ab07b1d6d1",
+        "session" : "20260518",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "1fab3331b29687bddd9028d5c1c70b752f0498c24ecd2bca397953a947625915",
+        "session" : "20260519",
+        "checkpointParity" : true
+      } ]
+    },
+    "historicalReevaluation" : {
+      "sessionCount" : 50,
+      "eligibleSessionCount" : 50,
+      "excludedSessionCount" : 0,
+      "excludedSessions" : [ ],
+      "first" : "20260520",
+      "last" : "20260731",
+      "runtimeReplays" : [ {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "81973293829e07b5f134cc47b91fc7637672578c87bc9b53c508133d6e0cc712",
+        "session" : "20260520",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "70fcd421cfb2b5ed0d66437ed6dfc8f0e8f886947bf204a12452199faddcb652",
+        "session" : "20260521",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "f2e370c7aee8c9e9bc370b1580027b994a9c8e4ba7734bbcb2e3452e6266bc0c",
+        "session" : "20260522",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "db5f4aca5bc12bbb4951a5a58b29b226d50060106e436567ae2dff1cbb0e10c6",
+        "session" : "20260526",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "d902ade09e8421f4a6550819a576b62299dc78e60286398e23a438e6ec3487b6",
+        "session" : "20260527",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "a76c2ad92cbed99223de9e554a35070b79cf93dd1710961f89dac7c6b88cbd59",
+        "session" : "20260528",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "bb54bc77201e5db2d525974f4efa00b88e575578ac2615bfb2ef52c04e580f7d",
+        "session" : "20260529",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "c508d60c241fd50375d5b88c8cdb5bd47dadc30322973c89475fbcb3e38374be",
+        "session" : "20260601",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "ca6936f2fc8681a3f32c852e9af6c495d913c30beb5214d8db875d78f22bdc81",
+        "session" : "20260602",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "edbe755f1368fe1534f5ea7fae32291c46d7c4d87826f67b2a835055e28e4e22",
+        "session" : "20260603",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "9d3948642485c51524798064195f5f812e0b8c207b6ce38d3decdee8eaabf8dd",
+        "session" : "20260604",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "b0b8db9553717b75bee8e05208dcf333d56602ec27952490502175cb68a70fdc",
+        "session" : "20260605",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "de6bb16b44f8fc9fc4f4e09be74f51f6fe3522d419377440f7054eaf6615cff0",
+        "session" : "20260608",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "7c27429f73b26330144f357377128ba7669f8ae729d511eef4358a0f27dc4d79",
+        "session" : "20260609",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "2b8fa34bb88100a67e297d77ff867f6e50f102931d4639a467107c6b3533f7c1",
+        "session" : "20260610",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "23a90f49797c16d9db96b22238021b754555af2a5a602945828370720cddd32f",
+        "session" : "20260611",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "037c580c6186c6f9134ee047fe0a537e97ff0eab64144e6848183d4b8e6378cc",
+        "session" : "20260612",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "a165a52f9f1d0fdf9f0bcc9b8e184e117c09aebc30bb30f1b69615fa6c390e90",
+        "session" : "20260615",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "118595edc4b749ba3c0360c6815c1089aa0d6acfbe71f44c13061b0ca9ee39f5",
+        "session" : "20260616",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "d02419df75104d29e4b37a3a0e7d711695f52b112aff15d530d1270e23730d25",
+        "session" : "20260617",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "7a4ccb8d45875bc5ec4595f3045e72512f49644d905ddb1584f8da6d68aac34b",
+        "session" : "20260618",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "338bcfbad444d79c34dde9aa2521aa2f8c282cb82b0acb68fbab380a3539f826",
+        "session" : "20260622",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "f5a0c711a63e583a2005c919d4bfc2e621c49e1432e04ec95c0f3aab078cf2c2",
+        "session" : "20260623",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "c69182946105e12c70e60380ac2ae0eec5b1a72af34cd6feb1f4008f9ef78dbd",
+        "session" : "20260624",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "2e55212b6fd3114371f5b5024260794789dbf7f6a142cb82b0a5061e33ce5350",
+        "session" : "20260625",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "3312e5507f717778c4f55e71f8ceb64c02700c0c3f153623b86e50ede550d165",
+        "session" : "20260626",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "2c63645b4770c49b5fde866996f5f468971664a6d20f8d3adc851f36507f6685",
+        "session" : "20260629",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "f402522a4cf26c8dc712afacb5a1642ce1e322af8ef826c5c34fa4df4da2d156",
+        "session" : "20260630",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "0134c24836f0a540c168a8ea195a931d4a51bd8bbb227e718d631035e355e3a3",
+        "session" : "20260701",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "78a6936e5538607eb47b68bc954a2a87981196deae61cb8f97f41899438a08ea",
+        "session" : "20260702",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "c9af6cb4e9bb0c2dec760c60ef60cef01a430835bdd862866a5469122214382e",
+        "session" : "20260706",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "fd8978b647d006ba9b6099ab9a166e1efb4a89f47516f591005c005fad5fcdb1",
+        "session" : "20260707",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "1cd91aba37cec89f31482ba2b332182ba994dbaac8bbaeca6aabf7b92578d712",
+        "session" : "20260708",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "9f9f6181aa5f47357dfdc71273a12204c6d900bf7589eaf0ddcdc42866896a99",
+        "session" : "20260709",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "a937b31269b34ae42e15b105a91e3d98a5962045e080b63c319f6cc6055ddb6e",
+        "session" : "20260710",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "00157e5dc22a854536a9f21d595083dd4839c175a841a4eca0a338d669526046",
+        "session" : "20260713",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "ade2974fcbbf6853571702feec86d8b3916ff2fc13057def36b4764e98fe1b63",
+        "session" : "20260714",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "8a842b32e36011d521d425878e05e61b13d343702315e4dc4e01f9b96dc798cc",
+        "session" : "20260715",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "c8ca60b5aa0646475bf418fe0989ac49d8539b3a89333af8c0b80db2da620feb",
+        "session" : "20260716",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "93da15d0a26037b6209496dd7fcba5a5b02b31a542a10a2e9f7306727f94cd47",
+        "session" : "20260717",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "22684dcd93372614634a3f06ba243368b27f380916aec5ddaecf113b74817d02",
+        "session" : "20260720",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "2dc7e7f6ad08212c81768cdd58c6b529b30ae33d6c07b21948d93e27ad797962",
+        "session" : "20260721",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "8e68a21a24acf7fb86611f3593f7315781a3c946efa6fadd0e617a99aeb27663",
+        "session" : "20260722",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "eae479314d16c27f8ac2395f021ad777269602ce805499a4daf18857b2548978",
+        "session" : "20260723",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "0c30e3d66747e14f52309f922cd15b6c7c3b347b04ccfeb5f78dce7fa70ea89a",
+        "session" : "20260724",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "1714f4991094413e24daa30351ce57b13e4ee53d962e3ac8426cf63b4704291a",
+        "session" : "20260727",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "61dc9ca25dad4afb9c5db7c882d9989d22befece4e429b553e5797385c9ca398",
+        "session" : "20260728",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "4677fca2060f79e6403960154a7b640418ee3fc88dbff239d2824570a39040fd",
+        "session" : "20260729",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "730f772bcd4acefc5e48286ba00c1c868c32a80acb51bc88c165c0ccd5fffd64",
+        "session" : "20260730",
+        "checkpointParity" : true
+      }, {
+        "unmappedPointCount" : 390,
+        "pointCount" : 390,
+        "sha256" : "22b150fe41765b2bf37c6ea0d4d996ee448e45aeb867dac1b9893b95876edbe5",
+        "session" : "20260731",
+        "checkpointParity" : true
+      } ]
+    }
+  },
+  "replay" : {
+    "engineClass" : "com.optionsedge.processing.contexttape.regime.EsZeroDteEngine",
+    "replayedSessionCount" : 100,
+    "pointCount" : 39000,
+    "checkpointParitySessionCount" : 100,
+    "checkpointParity" : true,
+    "mappingUnavailablePointCount" : 39000,
+    "combinedSha256" : "5cc1a41d88226b1f2a1da1e6fea0381d51b88bb941b6bc799ef328fe372fb449"
+  },
+  "robustness" : {
+    "sourceAblationMonotonic" : true,
+    "outOfOrderParity" : true,
+    "missingMinuteUnknown" : true,
+    "sessionRollReadyFailClosed" : true
+  },
+  "performance" : {
+    "loadTestPassed" : true,
+    "inputRecordCount" : 250000,
+    "encodedInputBytes" : 58116667,
+    "queueRecordLimit" : 250000,
+    "queueByteLimit" : 67108864,
+    "configuredMaxHeapBytes" : 671088640,
+    "p99ProcessingLatencyMs" : 0.00525,
+    "maxHeapBytes" : 87128752,
+    "throughputRecordsPerSecond" : 290517.7196355911
+  }
+}

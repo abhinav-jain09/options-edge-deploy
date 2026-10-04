@@ -73,6 +73,9 @@ jobs:
       - name: es4 manifests are regenerated and fully accounted for (no drift)
         run: bash scripts/ci/validate-es4-render.sh
 
+      - name: ES zero-DTE activation evidence binds runtime and deployed image
+        run: bash scripts/es4/verify-zero-dte-es-evidence-test.sh
+
       - name: Validate service registry (completeness + mirror + image name)
         run: scripts/ci/validate-services.sh
 

@@ -390,14 +390,24 @@ pipeline {
         sh '''
           set -euo pipefail
           bash scripts/es4/assert-cluster-identity.sh "$ES4_KUBECONFIG" es4 "$ES4_NS_UID"
-          # Fail closed unless the committed evidence binds the NAS corpus, calibrated artifact,
-          # Java runtime parity replay, and recovery tests to this exact implementation.
-          bash scripts/es4/verify-zero-dte-es-evidence.sh
+          # Read the digest-pinned image from the object that will actually be scaled. A source tag,
+          # build number, or expected digest is not deployment identity and cannot authorize start.
+          image_ref=$(KUBECONFIG="$ES4_KUBECONFIG" kubectl -n options-edge get \
+            deploy/zero-dte-es-challenger-service \
+            -o jsonpath='{.spec.template.spec.containers[?(@.name=="zero-dte-es-challenger")].image}')
+          actual_image_digest=${image_ref##*@}
+          [[ "$image_ref" == *@sha256:* && "$actual_image_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+            echo "REFUSING TO ACTIVATE: deployed challenger image is not digest-pinned: $image_ref" >&2
+            exit 1
+          }
+          # Fail closed unless the approval lock binds the NAS corpus, calibrated artifact, exact
+          # Java runtime/JAR replay, robustness/load proofs, and this deployed image digest.
+          ZERO_DTE_ES_CHALLENGER_ACTUAL_IMAGE_DIGEST="$actual_image_digest" \
+            bash scripts/es4/verify-zero-dte-es-evidence.sh
           if [ "${DEPLOY_DRY_RUN:-false}" = "true" ]; then
-            echo "DRY: NAS evidence passed; would scale zero-dte-es-challenger-service to 1"
+            echo "DRY: bound NAS/runtime/image evidence passed; would scale zero-dte-es-challenger-service to 1"
             exit 0
           fi
-          KUBECONFIG="$ES4_KUBECONFIG" kubectl -n options-edge get deploy/zero-dte-es-challenger-service >/dev/null
           KUBECONFIG="$ES4_KUBECONFIG" kubectl -n options-edge scale deploy/zero-dte-es-challenger-service --replicas=1
           KUBECONFIG="$ES4_KUBECONFIG" kubectl -n options-edge rollout status deploy/zero-dte-es-challenger-service --timeout=600s
         '''
