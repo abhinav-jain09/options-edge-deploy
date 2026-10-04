@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "zdce.es-calibration-attestation.1",
+  "status": "PASS",
+  "authority": "SHADOW_NOT_FOR_TRADING",
+  "capability": "PRICE_VOLUME_ONLY",
+  "modelVersion": "zdce-es-challenger-v1",
+  "artifactSha256": "ede3998e7ef41804bfc627d61e211d62491f2fca7ecd6582a4d2ff8953bc8ba5",
+  "corpusSha256": "c28a01c36e9c63d3ccba4f35a07d6fe301748e9c4973b3b6e0d9f260c8fd4e5c",
+  "evaluationSha256": "5c581a7c75fbff736f87f26f506914ecef436b170458fa3cc2d140a143b52d9f",
+  "sourceRepository": "options-edge",
+  "sourcePath": "research/zero_dte/reports/zdce-es-challenger-evaluation.json",
+  "quality": {
+    "trainEligibleSessions": 149,
+    "validationEligibleSessions": 50,
+    "historicalReevaluationEligibleSessions": 50
+  },
+  "validation": {
+    "confirmedCompressionCount": 67,
+    "falseCompressionRate": 0.07462686567164178,
+    "releaseCount": 60,
+    "falseReleaseRate": 0.2833333333333333,
+    "onsetRecallWithin3Before5After": 0.11793611793611794
+  },
+  "historicalReevaluation": {
+    "confirmedCompressionCount": 47,
+    "falseCompressionRate": 0.1702127659574468,
+    "releaseCount": 54,
+    "falseReleaseRate": 0.25925925925925924,
+    "onsetRecallWithin3Before5After": 0.09411764705882353
+  },
+  "interpretation": "Reproducible historical shadow evidence only; not trading or untouched-forward approval."
+}

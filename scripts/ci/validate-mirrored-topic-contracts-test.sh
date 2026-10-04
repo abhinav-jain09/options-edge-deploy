@@ -227,7 +227,7 @@ expect_fail "$R" "TOPIC downgraded to a free-text parameter" "free-text string p
 # and a list left open must fail closed rather than read as far as it can.
 R="$(mkfixture)"; edit "$R" "$TENV_REL" '/^OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES=/s/ es\.futures\.footprint\.outcomes=-1/ es.futures.footprint.outcomes=43200000/'
 expect_fail "$R" "topic on the WRAPPED choices line is checked" "asserts retention.ms=-1"
-R="$(mkfixture)"; edit "$R" Jenkinsfile.es-cvd-mirror "s/'es\.futures\.footprint\.evidence'\], description:/'es.futures.footprint.evidence', description:/"
+R="$(mkfixture)"; edit "$R" Jenkinsfile.es-cvd-mirror "s/'es\.context-tape\.es-compression\.checkpoint'\], description:/'es.context-tape.es-compression.checkpoint', description:/"
 expect_fail "$R" "TOPIC choices list left unterminated" "never closed"
 R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/^OPTIONS_EDGE_ES4_TOPICS="[^"]*"$/OPTIONS_EDGE_ES4_TOPICS=""/'
 expect_fail "$R" "a parsed declaration emptied" "parsed an EMPTY"

@@ -1,0 +1,122 @@
+# HAND-AUTHORED render source for the es4-ONLY ES-primary 0DTE challenger.
+#
+# This file is not included by a dev or production kustomization. It exists only as the input to
+# scripts/es4/render_es4_manifests.py, which generates the deployable es4 manifest. The workload
+# starts at zero replicas; only Jenkinsfile.es4-deploy may activate it after the frozen NAS
+# calibration and exact Java-runtime replay evidence pass the fail-closed evidence guard.
+#
+# DEPLOYMENT SAFETY — NEVER kubectl-apply this manifest directly. The image below is a mutable tag.
+# The es4 Jenkins path digest-pins it before apply.
+apiVersion: v1
+kind: Service
+metadata:
+  name: zero-dte-es-challenger-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: zero-dte-es-challenger-service
+    app.kubernetes.io/part-of: options-edge
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/path: /metrics
+    prometheus.io/port: "8145"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: zero-dte-es-challenger-service
+  ports:
+    - name: api
+      port: 8144
+      targetPort: api
+    - name: health
+      port: 8145
+      targetPort: health
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zero-dte-es-challenger-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: zero-dte-es-challenger-service
+    app.kubernetes.io/part-of: options-edge
+  annotations:
+    options-edge/dark-deployed: "true"
+    options-edge/authority: SHADOW_NOT_FOR_TRADING
+    options-edge/capability: PRICE_VOLUME_ONLY
+    options-edge/artifact-sha256: ede3998e7ef41804bfc627d61e211d62491f2fca7ecd6582a4d2ff8953bc8ba5
+spec:
+  replicas: 0
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: zero-dte-es-challenger-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: zero-dte-es-challenger-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      containers:
+        - name: zero-dte-es-challenger
+          image: 192.168.100.252:5000/options-edge-context-tape:dev
+          command: ["java"]
+          args: ["-cp", "/app/app.jar", "com.optionsedge.processing.contexttape.regime.EsZeroDteServiceMain"]
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            - name: ZERO_DTE_ES_CHALLENGER_ENABLED
+              value: "true"
+            - name: ZERO_DTE_ES_CHALLENGER_INPUT_TOPIC
+              value: underlying.es.trades
+            - name: ZERO_DTE_ES_CHALLENGER_SYMBOL
+              value: ES.v.0
+            - name: ZERO_DTE_ES_CHALLENGER_CURRENT_TOPIC
+              value: context-tape.es-compression.current
+            - name: ZERO_DTE_ES_CHALLENGER_HISTORY_TOPIC
+              value: context-tape.es-compression.history
+            - name: ZERO_DTE_ES_CHALLENGER_CHECKPOINT_TOPIC
+              value: context-tape.es-compression.checkpoint
+            - name: ZERO_DTE_ES_CHALLENGER_APPLICATION_ID
+              value: options-edge-zero-dte-es-challenger-es4
+            - name: ZERO_DTE_ES_CHALLENGER_TRANSACTIONAL_ID
+              value: zero-dte-es-challenger-es4
+            - name: ZERO_DTE_ES_CHALLENGER_ARTIFACT_SHA256
+              value: ede3998e7ef41804bfc627d61e211d62491f2fca7ecd6582a4d2ff8953bc8ba5
+            - name: ZERO_DTE_ES_CHALLENGER_ALLOWED_LATENESS_MS
+              value: "5000"
+            - name: ZERO_DTE_ES_CHALLENGER_UNSUPPORTED_SESSION_DATES
+              value: 2026-07-02,2026-11-27,2026-12-24
+            - name: ZERO_DTE_ES_CHALLENGER_API_PORT
+              value: "8144"
+            - name: ZERO_DTE_ES_CHALLENGER_HEALTH_PORT
+              value: "8145"
+            - name: JAVA_TOOL_OPTIONS
+              value: -Xms128m -Xmx640m
+          ports:
+            - name: api
+              containerPort: 8144
+            - name: health
+              containerPort: 8145
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 30
+          resources:
+            requests:
+              cpu: 150m
+              memory: 384Mi
+            limits:
+              memory: 1Gi

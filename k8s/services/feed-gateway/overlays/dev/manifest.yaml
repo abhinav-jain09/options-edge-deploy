@@ -111,6 +111,12 @@ spec:
               value: databento-gex-service:databento-gex-service:options.databento.raw;strike-intelligence-service:strike-intelligence-service:options.databento.gex.strike;delta-flow-service:delta-flow-service:options.opra.tcbbo
             - name: APP_WEB_PORT
               value: "18091"
+            - name: ZERO_DTE_ES_CHALLENGER_MIRROR_ENABLED
+              value: "true"
+            - name: ZERO_DTE_ES_CHALLENGER_MIRROR_TOPIC
+              value: es.context-tape.es-compression.current
+            - name: ZERO_DTE_ES_CHALLENGER_MIRROR_MAX_AGE_MS
+              value: "180000"
             - name: GATEWAY_ES_GEX_ENABLED
               value: "true"
             - name: GATEWAY_ES_STRIKE_INTEL_ENABLED

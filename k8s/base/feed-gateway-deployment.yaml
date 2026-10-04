@@ -32,6 +32,14 @@ spec:
           env:
             - name: APP_WEB_PORT
               value: "18091"
+            # Read-only ES challenger result mirrored from es4. This gateway never consumes raw ES
+            # for compression classification and never runs the challenger model locally.
+            - name: ZERO_DTE_ES_CHALLENGER_MIRROR_ENABLED
+              value: "true"
+            - name: ZERO_DTE_ES_CHALLENGER_MIRROR_TOPIC
+              value: es.context-tape.es-compression.current
+            - name: ZERO_DTE_ES_CHALLENGER_MIRROR_MAX_AGE_MS
+              value: "180000"
             # ES-GEX-on-SPX (es-spx-align service): consume the align service's options.es-gex-spx-aligned book + emit the es-gex event.
             - name: GATEWAY_ES_GEX_ENABLED
               value: "true"
