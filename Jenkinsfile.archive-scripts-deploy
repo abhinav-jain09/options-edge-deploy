@@ -313,8 +313,10 @@ EOSSH
           // #1125 added the second copy and not the declaration, so the very first real install refused
           // at this gate — the tests-only run skips this stage, which is why nothing before the deploy
           // saw it. scripts/ci/validate-archive-unit-completeness.sh now requires the declaration for
-          // every file it already requires a staging `cp` for — as an argument to a statement that RUNS
-          // this verifier, with the verifier as the command word and the whole token matching. So
+          // every file it already requires a staging `cp` for — as an argument to what it can read as a
+          // statement running this verifier, with the verifier as the command word and the whole token
+          // matching. It is a TEXT check and says so where it is: it cannot decide whether a line
+          // executes, and the gate that can is this verifier itself, at install time, on the tree. So
           // neither the literal in an echo, nor an echo of the verifier itself carrying the
           // declarations, nor text after a shell operator, nor a declaration for a neighbouring path
           // satisfies it. The path may be given unquoted, as here, or double-quoted.

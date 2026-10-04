@@ -29,6 +29,8 @@ STAGED = {
     "vol-premium-open-reference-capture.py": "scripts/ops/vol-premium-open-reference-capture.py",
 }
 MOUNT = 'scripts/ops/archive:/w:ro'
+# Groovy's triple-quoted sh block, built rather than written so this file stays readable.
+TRIPLE = chr(39) * 3
 
 
 def _cp(name: str) -> str:
@@ -245,6 +247,31 @@ class StagingCheckTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("sh 'PERMITTED_SHA=", (ROOT / JF).read_text(),
                       "the step is no longer a single-quoted sh, so the reasoning above has moved")
+
+    def test_a_heredoc_body_is_not_an_invocation(self) -> None:
+        """`cat <<"EOF"` with the whole verifier command in the body prints that text and runs
+        nothing, and this read it as the step. A heredoc opener names its terminator, so the body is
+        skipped — which is as far as a text check can sensibly go, and the limit is stated where the
+        parsing happens."""
+        def bury_it_in_a_heredoc(text: str) -> str:
+            lines = text.split("\n")
+            at = next(i for i, l in enumerate(lines) if self.VERIFIER in l)
+            indent = " " * (len(lines[at]) - len(lines[at].lstrip()))
+            declarations = " ".join(
+                "--allow-ignored scripts/ops/archive/" + name for name in STAGED)
+            lines[at:at + 1] = [
+                indent + "sh " + TRIPLE,
+                indent + '  cat <<"EOF"',
+                indent + "  bash scripts/jenkins/" + self.VERIFIER + " --dir . "
+                + "--allow-ignored target --allow-ignored .jenkins-tmp " + declarations,
+                indent + "  EOF",
+                indent + TRIPLE,
+            ]
+            return "\n".join(lines)
+
+        r = self._run(bury_it_in_a_heredoc)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("CANNOT CHECK THE DECLARATION", r.stderr)
 
     def test_a_job_with_no_tree_verifier_says_so(self) -> None:
         """A guard that defers to a gate must notice the gate going away, rather than passing on a

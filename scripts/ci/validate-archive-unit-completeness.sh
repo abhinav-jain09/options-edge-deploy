@@ -132,6 +132,14 @@ for f in $wanted $sourced; do
     # a workspace reused between builds can hold a copy an earlier build left behind — so even an
     # absent staging step can look like a present one.
     #
+    # WHAT A TEXT CHECK CANNOT DO, now that six review rounds have each found another way to write
+    # something that looks like the step and is not it: decide whether a line EXECUTES. Line-leading
+    # comments, shell operators, redirections, an echo of the verifier, an argument quoted around a
+    # space and a heredoc body are each handled, and each was a different form rather than a better
+    # version of the same one. A line of identical text in a construct nothing here models would
+    # still be read as the step. Only a Groovy-and-shell parser could settle that, and shipping one
+    # as a preflight is out of proportion to what its false negative costs.
+    #
     # WHAT THIS CHECK IS, in proportion: a PREFLIGHT. The authoritative gate is
     # verify-permitted-tree.sh at install time, which cannot be talked round by any of this — it
     # looks at the tree, not at the job definition. This exists so that a missing declaration is
@@ -153,6 +161,20 @@ for f in $wanted $sourced; do
       # Strip Groovy and shell comments, but only where the line STARTS with one: a trailing # inside
       # a quoted string is not a comment, and cutting there would corrupt real commands.
       { line = $0 }
+      # HEREDOC BODIES ARE NOT CODE. A `cat <<"EOF"` whose body holds the whole verifier command
+      # printed the text and ran nothing, and this read it as the step (review round 6 of #1128).
+      # The opener names its terminator; everything up to that line is skipped.
+      heredoc != "" {
+        if (line ~ "^[[:space:]]*" heredoc "[[:space:]]*$") { heredoc = "" }
+        next
+      }
+      line ~ /<<-?[[:space:]]*[\047"]?[A-Za-z_][A-Za-z0-9_]*[\047"]?/ {
+        tag = line
+        sub(/^.*<<-?[[:space:]]*/, "", tag)
+        gsub(/[\047"]/, "", tag)
+        sub(/[^A-Za-z0-9_].*$/, "", tag)
+        if (tag != "") { heredoc = tag }
+      }
       line ~ /^[[:space:]]*(\/\/|#)/ { next }
       # A backslash continuation belongs to the SAME statement as the line it continues; everything
       # else starts a new one. Appending a newline for both split the two-line cp of the capture
