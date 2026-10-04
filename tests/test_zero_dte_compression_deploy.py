@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import pathlib
 import unittest
+import yaml
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -15,7 +16,7 @@ TOPICS = (
 
 
 class ZeroDteCompressionDeployTest(unittest.TestCase):
-    def test_dev_and_production_enable_same_hash_pinned_shadow_contract(self) -> None:
+    def test_dev_and_production_stage_same_hash_pinned_but_disabled_contract(self) -> None:
         for environment in ("dev", "production"):
             patch = (
                 ROOT
@@ -40,7 +41,19 @@ class ZeroDteCompressionDeployTest(unittest.TestCase):
                 self.assertIn("ZERO_DTE_CHECKPOINT_TOPIC", text)
                 self.assertIn("ZERO_DTE_ARTIFACT_SHA256", text)
                 self.assertIn(SHA, text)
-            self.assertIn(f"context-tape-compression-{'dev' if environment == 'dev' else 'prod'}-v1", patch)
+            documents = list(yaml.safe_load_all(rendered))
+            deployment = next(doc for doc in documents if doc and doc.get("kind") == "Deployment")
+            container = next(item for item in deployment["spec"]["template"]["spec"]["containers"]
+                             if item["name"] == "context-tape")
+            env = {item["name"]: str(item.get("value", "")) for item in container["env"]}
+            self.assertEqual("false", env["ZERO_DTE_COMPRESSION_ENABLED"])
+            self.assertEqual(
+                f"context-tape-compression-{'dev' if environment == 'dev' else 'prod'}",
+                env["ZERO_DTE_TRANSACTIONAL_ID"],
+            )
+            self.assertEqual(SHA, env["ZERO_DTE_ARTIFACT_SHA256"])
+            self.assertEqual("390", env["ZERO_DTE_SESSION_MINUTES"])
+            self.assertIn("2026-11-27", env["ZERO_DTE_UNSUPPORTED_SESSION_DATES"])
 
     def test_output_and_recovery_topics_are_durable_and_classified(self) -> None:
         topics = (ROOT / "scripts" / "kafka" / "topics.env").read_text()
@@ -80,6 +93,8 @@ class ZeroDteCompressionDeployTest(unittest.TestCase):
         self.assertIn("/api/context-tape/compression", smoke)
         self.assertIn(SHA, smoke)
         self.assertIn("SHADOW_NOT_FOR_TRADING", smoke)
+        self.assertIn("EXPECTED_ENABLED", smoke)
+        self.assertNotIn("STARTING|RESTORING|BACKFILL|RETRYING", smoke)
 
         renderer = (ROOT / "scripts" / "es4" / "render_es4_manifests.py").read_text()
         self.assertIn('"context-tape": ("ZERO_DTE_",)', renderer)

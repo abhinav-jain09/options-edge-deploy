@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Post-rollout smoke for the hash-pinned ZDCE shadow runtime. This deliberately accepts
-# BACKFILL outside RTH, but never accepts a disabled endpoint, a dead runtime, or a LIVE
-# response that violates the frozen public contract.
+# Post-rollout smoke for the hash-pinned ZDCE shadow runtime. The deployed manifest is the
+# authority for enabled/disabled state: disabled must fail closed; enabled must reach BACKFILL
+# (after topic/schema/transaction initialization) or LIVE and satisfy the frozen contract.
 set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-options-edge}"
@@ -11,6 +11,16 @@ KUBECTL=(kubectl -n "$NAMESPACE")
 if [[ -n "${KUBECONFIG:-}" ]]; then
   KUBECTL=(kubectl --kubeconfig "$KUBECONFIG" -n "$NAMESPACE")
 fi
+
+deployed_enabled="$("${KUBECTL[@]}" get deployment context-tape-service \
+  -o jsonpath='{range .spec.template.spec.containers[?(@.name=="context-tape")].env[*]}{.name}={.value}{"\n"}{end}' \
+  | awk -F= '$1 == "ZERO_DTE_COMPRESSION_ENABLED" { print $2 }')"
+EXPECTED_ENABLED="${EXPECTED_ENABLED:-$deployed_enabled}"
+case "$EXPECTED_ENABLED" in
+  true|1) EXPECTED_ENABLED=1 ;;
+  false|0) EXPECTED_ENABLED=0 ;;
+  *) echo "FATAL: cannot resolve deployed ZERO_DTE_COMPRESSION_ENABLED" >&2; exit 1 ;;
+esac
 
 choose_port() {
   python3 - <<'PY'
@@ -51,10 +61,21 @@ for attempt in $(seq 1 30); do
   sleep 1
 done
 
-grep -qx 'zero_dte_compression_enabled 1' <<<"$metrics" || {
-  echo "FATAL: deployed context-tape does not expose an enabled ZDCE runtime" >&2
+grep -qx "zero_dte_compression_enabled $EXPECTED_ENABLED" <<<"$metrics" || {
+  echo "FATAL: runtime enabled metric disagrees with the deployed manifest" >&2
   exit 1
 }
+if [[ "$EXPECTED_ENABLED" -eq 0 ]]; then
+  health_body="$(mktemp)"
+  health_code="$(curl -sS --max-time 10 -o "$health_body" -w '%{http_code}' \
+    "http://127.0.0.1:$health_port/health/compression")"
+  [[ "$health_code" == "404" ]] && grep -qx 'DISABLED' "$health_body" || {
+    echo "FATAL: disabled compression runtime did not fail closed: HTTP $health_code $(cat "$health_body")" >&2
+    exit 1
+  }
+  echo "  compression: disabled by reviewed deployment gate ✓"
+  exit 0
+fi
 failures="$(awk '$1 == "zero_dte_compression_loop_failures_total" { print $2 }' <<<"$metrics")"
 [[ "${failures:-}" =~ ^[0-9]+$ ]] && [[ "$failures" -eq 0 ]] || {
   echo "FATAL: ZDCE runtime reports loop failures: ${failures:-missing}" >&2
@@ -62,8 +83,18 @@ failures="$(awk '$1 == "zero_dte_compression_loop_failures_total" { print $2 }' 
 }
 
 health_body="$(mktemp)"
-health_code="$(curl -sS --max-time 10 -o "$health_body" -w '%{http_code}' \
-  "http://127.0.0.1:$health_port/health/compression")"
+health_code=""
+for attempt in $(seq 1 30); do
+  health_code="$(curl -sS --max-time 10 -o "$health_body" -w '%{http_code}' \
+    "http://127.0.0.1:$health_port/health/compression")"
+  if [[ "$health_code" == "200" ]] || grep -qx 'NOT_READY:BACKFILL' "$health_body"; then
+    break
+  fi
+  if grep -Eq '^NOT_READY:(RETRYING|FAILED|STOPPED)$' "$health_body"; then
+    break
+  fi
+  sleep 1
+done
 case "$health_code" in
   200)
     grep -qx 'READY:LIVE' "$health_body" || {
@@ -96,7 +127,7 @@ PY
     echo "  compression: LIVE contract + artifact digest verified ✓"
     ;;
   503)
-    if ! grep -Eq '^NOT_READY:(STARTING|RESTORING|BACKFILL|RETRYING)$' "$health_body"; then
+    if ! grep -qx 'NOT_READY:BACKFILL' "$health_body"; then
       echo "FATAL: compression endpoint is unavailable in an unexpected state: $(cat "$health_body")" >&2
       exit 1
     fi
