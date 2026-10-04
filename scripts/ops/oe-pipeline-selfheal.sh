@@ -475,17 +475,21 @@ sample() {   # returns 1 when the describe failed; the caller judges nothing thi
 # Realpath of an existing directory, or failure. Defined here because statesizes runs at the top
 # level below, before the per-group functions further down are defined.
 canon()   { python3 -c 'import os,sys; p=os.path.realpath(sys.argv[1]); sys.exit(1) if not os.path.isdir(p) else print(p)' "$1" 2>/dev/null; }
-# Keyed by the CANONICAL directory, because that is what state_dir_of resolves to and the growth
-# check looks the sample up by it. du prints the path it was given, so a STORAGE or PV path reached
-# through a symlink (/var is /private/var on macOS) would otherwise never match and a restoring
-# app's growing state would be invisible.
+# One "<KiB> <canonical dir>" line per state directory. Keyed by the CANONICAL directory, because
+# that is what state_dir_of resolves to and the growth check looks the sample up by it: du prints
+# the path it was given, so a STORAGE or PV path reached through a symlink (/var is /private/var
+# on macOS) would otherwise never match and a restoring app's growing state would be invisible.
+# The size comes first so the path, which may contain spaces, is the rest of the line (statesize_of).
 statesizes() {
   local root d p
   root=$(canon "$STORAGE") || return 0
   for d in "$root"/*_options-edge_*-streams-state; do
     p=$(canon "$d") || continue
-    du -sk "$p" 2>/dev/null | awk -v k="$p" 'NF{print k" "$1}'
+    du -sk "$p" 2>/dev/null | awk -v k="$p" 'NF{print $1" "k}'
   done
+}
+statesize_of() {   # $1 = a statesizes sample, $2 = canonical dir -> its KiB, or nothing
+  printf '%s\n' "$1" | awk -v k="$2" 'substr($0, length($1)+2)==k {print $1}'
 }
 # Bytes RECEIVED by a pod, all interfaces but lo, from its own /proc/net/dev. A consumer that is
 # fetching a moving source pulls megabytes per minute; one parked in a retry loop only heartbeats.
@@ -703,7 +707,7 @@ while read -r g lag delta srcdelta; do
   if [ -z "$alive" ]; then
     dir=$(state_dir_of "$dep" 2>/dev/null || true)
     if [ -n "$dir" ]; then
-      b0=$(echo "$d0" | awk -v k="$dir" '$1==k{print $2}'); b1=$(echo "$d1" | awk -v k="$dir" '$1==k{print $2}')
+      b0=$(statesize_of "$d0" "$dir"); b1=$(statesize_of "$d1" "$dir")
       [ -n "${b0:-}" ] && [ -n "${b1:-}" ] && [ "$b1" -gt "$b0" ] && alive="local state grew $((b1-b0)) KiB in ${SAMPLE_SECONDS}s (restoring)"
     fi
   fi

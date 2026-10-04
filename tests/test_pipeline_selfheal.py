@@ -646,6 +646,25 @@ class PipelineSelfhealTest(unittest.TestCase):
         assert Path(env["_ABORTS"]).exists(), "the abort — the one automated action on a park — did not happen"
 
 
+    def test_growing_local_state_is_seen_when_the_storage_path_contains_a_space(self):
+        """The sample is one line per directory with the path as the REST of the line: a path with a
+        space must still be looked up whole, not truncated at its first word."""
+        tmp_path = self.tmp_path
+        base = tmp_path / "state root"; base.mkdir()
+        env, actions = _sandbox(base, grow_state=True)
+        out = _escalate(env, 3)
+        assert "local state grew" in out and _acted(actions) == ""
+        assert _no_abort(env), "an abort happened in a must-not-act case"
+
+
+    def test_mutation_the_same_spaced_storage_path_with_static_state_is_acted_on(self):
+        tmp_path = self.tmp_path
+        base = tmp_path / "state root"; base.mkdir()
+        env, actions = _sandbox(base, grow_state=False)
+        _escalate(env, 4)
+        assert Path(env["_ABORTS"]).exists(), "the abort — the one automated action on a park — did not happen"
+
+
     def test_a_pod_that_is_receiving_data_is_fetching_not_parked(self):
         """Everything else says wedged (park on every dump, no commit) but the pod pulls megabytes:
         it is consuming a moving source, and a parked consumer only heartbeats."""
