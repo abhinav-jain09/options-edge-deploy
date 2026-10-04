@@ -198,6 +198,7 @@ bash scripts/ci/validate-durable-topic-preservation.sh
 for t in scripts/kafka/ensure-oi-anchor-topic-parse-test.sh scripts/kafka/ensure-oi-anchor-topic-e2e-test.sh \
          scripts/kafka/verify-topics-pure-compact-test.sh \
          scripts/kafka/ensure-gamma-ladder-path-topics-test.sh \
+         scripts/kafka/ensure-zero-dte-compression-topics-test.sh \
          scripts/kafka/reset-preserved-topics-test.sh \
          scripts/ci/validate-durable-topic-preservation-mutation-test.sh \
          scripts/ci/es-cvd-mirror-shape-test.sh \

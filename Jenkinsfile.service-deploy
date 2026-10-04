@@ -557,6 +557,22 @@ PYEOF
         '''
       }
     }
+    stage('Verify zero-DTE compression shadow topics') {
+      // The standalone Context Tape deploy does not run the monolithic topic reconciler. Establish
+      // all three shadow topics before the pod starts so a first rollout cannot loop forever on a
+      // missing checkpoint topic or auto-create state/history with lossy broker defaults.
+      when {
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'context-tape' && !params.DEPLOY_DRY_RUN) }
+      }
+      steps {
+        sh '''
+          set -euo pipefail
+          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
+          . scripts/kafka/load-kafka-settings.sh
+          scripts/kafka/ensure-zero-dte-compression-topics.sh
+        '''
+      }
+    }
     stage('Verify gamma-tilt evidence ledger') {
       // GMT Stage-1 (Codex code-review c1-6): the shadow evidence ledger must exist with the
       // right shape (1 partition, delete, retention.ms=-1) BEFORE strike-intelligence rolls out.
