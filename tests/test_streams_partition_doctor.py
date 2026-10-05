@@ -26,7 +26,17 @@ FAKE = textwrap.dedent(
     state = sys.argv[1]; args = sys.argv[2:]
     S = os.path.join(state, "state.json")
     st = json.load(open(S))
-    def save(): json.dump(st, open(S, "w"))
+    def save():
+        # ATOMIC, because one test READS this file while the doctor is still running and writing it
+        # (test_interrupted_through_a_pipe_still_restores_replicas polls for the scale-down). A plain
+        # open(S, "w") truncates first, so a read landing in that window got an empty file and the test
+        # died on JSONDecodeError instead of on anything it was about. os.replace is atomic on POSIX.
+        tmp = S + ".tmp." + str(os.getpid())
+        with open(tmp, "w") as f:
+            json.dump(st, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, S)
     def rejection(dep):
         for t, e, a in dep["bad"]:
             if t in st["topics"] and st["topics"][t] != e:
@@ -136,7 +146,10 @@ class StreamsPartitionDoctorTest(unittest.TestCase):
         self.save(st)
 
     def save(self, st):
-        (self.dir / "state.json").write_text(json.dumps(st))
+        # atomic for the same reason as the fake's save(): a reader must never see a truncated file
+        tmp = self.dir / "state.json.tmp"
+        tmp.write_text(json.dumps(st))
+        os.replace(tmp, self.dir / "state.json")
 
     def fake(self, *args):
         subprocess.run(["python3", str(self.dir / "fake.py"), str(self.dir), *args], check=True, capture_output=True)
@@ -327,6 +340,39 @@ class StreamsPartitionDoctorTest(unittest.TestCase):
         n = len([c for c in st["calls"][:i_del] if c[:3] == ["kubectl", "get", "pods"]])
         self.assertIn([ "svc", "API-ERROR"], st["pods_listed"][:n])
         self.assertEqual(st["pods_listed"][n - 1][1], [])
+
+    def test_the_state_file_is_never_observed_half_written(self):
+        # THE POSITIVE CONTROL for the atomic save. test_interrupted_through_a_pipe_still_restores_replicas
+        # reads state.json while the doctor is still writing it, and a truncating write made that read fail
+        # with JSONDecodeError -- a failure about the harness, reported as a failure of the doctor. This
+        # drives the same collision on purpose: with a truncating save it fails within a few iterations.
+        import threading
+        self.cluster({"svc": {"replicas": 2}}, {})
+        st = self.state()
+        stop = threading.Event()
+        errors = []
+
+        def writer():
+            while not stop.is_set():
+                try:
+                    self.save(st)
+                except Exception as e:                                   # noqa: BLE001 - the reader's verdict is what matters
+                    errors.append(("write", repr(e)))
+                    return
+
+        t = threading.Thread(target=writer, daemon=True)
+        t.start()
+        try:
+            for _ in range(3000):
+                try:
+                    self.assertEqual(self.state()["deploys"]["svc"]["replicas"], 2)
+                except Exception as e:                                   # noqa: BLE001
+                    errors.append(("read", repr(e)))
+                    break
+        finally:
+            stop.set()
+            t.join(timeout=10)
+        self.assertEqual([], errors, "a concurrent reader observed a half-written state file")
 
     def test_interrupted_through_a_pipe_still_restores_replicas(self):
         # dev-cleanup pipes the doctor through sed, oe-boot-bringup through tee: a SIGTERM kills the
