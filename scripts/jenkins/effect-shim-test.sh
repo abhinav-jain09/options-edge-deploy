@@ -161,17 +161,21 @@ fi
 MINBIN="$T/minbin"; mkdir -p "$MINBIN"
 for c in bash env git head printf tr; do
   w="$(command -v "$c" 2>/dev/null || true)"
-  [ -n "$w" ] || { bad "the no-exec-loop case cannot be set up" "the verification needs '$c' and it is not on PATH"; }
+  # a harness that cannot be built is not a failed CASE: it is a dead suite, and it says so and stops.
+  [ -n "$w" ] || { echo "effect-shim-test: FATAL — the verification needs '$c' and it is not on PATH; the no-exec-loop case cannot be built" >&2; exit 2; }
   ln -sf "$w" "$MINBIN/$c"
 done
 leaked=""
 for t in mvn docker rsync scp helm ansible-playbook kubectl; do
   PATH="$MINBIN" command -v "$t" >/dev/null 2>&1 && leaked="$leaked $t"
 done
+# STRUCTURAL: this asserts the next case's own FIXTURE, not a protection in the shim, so no removal from the
+# shim can turn it red and the sweep must not expect one. Declaring it here is the point -- it is what makes
+# the next case's non-vacuity a checked property instead of a property of whatever the host keeps in /usr/bin.
 if [ -n "$leaked" ]; then
-  bad "the no-exec-loop case's PATH carries no real tool" "it resolves:$leaked — the case would test the exec path, not the refusal"
+  bad "the no-exec-loop case's PATH carries no real tool (the case is not vacuous on this host)" "it resolves:$leaked — the case would test the exec path, not the refusal"
 else
-  ok "the no-exec-loop case's PATH carries no real tool (the case is not vacuous on this host)"
+  ok_structural "the no-exec-loop case's PATH carries no real tool (the case is not vacuous on this host)"
 fi
 : > "$T/ran"
 set +e
