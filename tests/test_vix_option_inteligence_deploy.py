@@ -6,6 +6,90 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
+# The §10 closed set of DEPLOYMENT ENVIRONMENT names, as PayloadV2.FrameContext.ENVIRONMENTS declares it.
+# A frame records the environment that produced it, so this set is part of the data contract, not a label.
+ZERODTE_ENVIRONMENTS = ("dev", "production", "es4")
+
+
+class VixOptionInteligenceStageBEnvironmentTest(unittest.TestCase):
+    """The operand Stage-B's frames engine REQUIRES, and the v1 research writer already reads.
+
+    Stage-B reads ZERODTE_RESEARCH_ENVIRONMENT -- not a new ZERO_DTE_ENVIRONMENT beside it -- because two
+    names for one fact let a deployment set them differently, and the frames and the research would then
+    disagree about which environment produced the evidence. The name travels into every frame's payload, so a
+    wrong value mislabels evidence that is otherwise correct; StageBSettings therefore requires it and holds
+    it to the closed set, and a STAGE_B boot without it is refused at configuration parsing.
+
+    It is INERT for the running v1 runtime (the research writer only requires it with the shadow model on),
+    which is why setting it is safe ahead of any switchover and why nothing here depends on the mode.
+    """
+
+    def overlay(self, env):
+        return (ROOT / f"k8s/services/vix-option-inteligence/overlays/{env}/manifest.yaml").read_text()
+
+    def env_value(self, text, name):
+        """The value of an env entry in a rendered manifest, or None."""
+        lines = [l.strip() for l in text.split("\n")]
+        for i, line in enumerate(lines):
+            if line == f"- name: {name}":
+                for nxt in lines[i + 1:]:
+                    if nxt.startswith("value:"):
+                        return nxt.split("value:", 1)[1].strip().strip('"').strip("'")
+                    if nxt.startswith("- name:"):
+                        return None
+                return None
+        return None
+
+    def test_every_registered_environment_overlay_sets_its_own_name(self):
+        overlays = sorted(p.name for p in (ROOT / "k8s/services/vix-option-inteligence/overlays").iterdir() if p.is_dir())
+        self.assertTrue(overlays, "the service has no overlays, so this test would prove nothing")
+        checked = []
+        for env in overlays:
+            if env not in ZERODTE_ENVIRONMENTS:
+                # NOT silently skipped: an overlay whose name is outside the closed set cannot carry a lawful
+                # value, so Stage-B can never be enabled there. Said out loud rather than passed over.
+                self.assertIsNone(
+                    self.env_value(self.overlay(env), "ZERODTE_RESEARCH_ENVIRONMENT"),
+                    f"overlay '{env}' is not one of {ZERODTE_ENVIRONMENTS}, so it must not claim a Stage-B environment",
+                )
+                continue
+            value = self.env_value(self.overlay(env), "ZERODTE_RESEARCH_ENVIRONMENT")
+            self.assertEqual(
+                env, value,
+                f"overlay '{env}' must set ZERODTE_RESEARCH_ENVIRONMENT to '{env}' (it is {value!r}); "
+                "Stage-B requires it and a wrong value mislabels every frame it produces",
+            )
+            checked.append(env)
+        self.assertEqual(["dev", "production"], checked, "both live environments are covered")
+
+    def test_the_value_is_never_overridden_a_second_time_in_the_same_overlay(self):
+        # One authoritative value per overlay: a second entry would make the effective one depend on
+        # ordering, and Kubernetes takes the LAST, so a stale first entry would read as correct.
+        for env in ("dev", "production"):
+            text = self.overlay(env)
+            self.assertEqual(
+                1, text.count("- name: ZERODTE_RESEARCH_ENVIRONMENT"),
+                f"overlay '{env}' declares ZERODTE_RESEARCH_ENVIRONMENT more than once",
+            )
+
+    def test_no_second_name_is_invented_for_the_same_fact(self):
+        for env in ("dev", "production"):
+            self.assertNotIn(
+                "ZERO_DTE_ENVIRONMENT\n", self.overlay(env),
+                f"overlay '{env}' invents a second name for the environment; Stage-B reads ZERODTE_RESEARCH_ENVIRONMENT",
+            )
+
+    def test_the_mode_operand_is_absent_so_the_image_rolls_dark(self):
+        # §14's dark cutover: V1 is the DEFAULT, so an overlay that does not mention the mode runs v1 and
+        # rolling the image is not a cutover. An overlay that sets STAGE_B has made a decision, and this test
+        # is where that decision becomes visible rather than arriving with an image.
+        for env in ("dev", "production"):
+            self.assertIsNone(
+                self.env_value(self.overlay(env), "ZERO_DTE_RUNTIME_MODE"),
+                f"overlay '{env}' selects a Stage-B runtime mode; that is a switchover, not a deploy",
+            )
+
+
 class VixOptionInteligenceDeployTest(unittest.TestCase):
     def test_live_service_is_registered_for_dev_and_prod(self):
         registry = (ROOT / "services.yaml").read_text()
