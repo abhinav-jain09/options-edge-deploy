@@ -636,6 +636,17 @@ patches:
       - op: add
         path: /spec/progressDeadlineSeconds
         value: 1200
+  # DEV-ONLY: databento-feed is pinned to an immutable digest before Jenkins applies it.
+  # Keep that already-cached digest restartable when Docker Desktop's node-to-host registry
+  # route is temporarily unavailable. `Always` turned an ordinary container restart into an
+  # ErrImagePull outage even though containerd already held the exact permitted digest.
+  - target:
+      kind: Deployment
+      name: options-edge-databento-feed
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: IfNotPresent
   # DEV-ONLY: option-price-behavior uses Kafka Streams/RocksDB state. Four stream threads
   # restoring 32 partitions repeatedly exceeded the 4Gi limit (exit 137). Match the stable
   # production 8Gi envelope so the 3Gi heap and native/off-heap state have headroom.
