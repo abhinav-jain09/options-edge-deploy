@@ -1,0 +1,14 @@
+lineages:
+  - id: 6b2c7c1a-5d3e-4a8f-9b41-2f0d7e9c4a10
+    name: dev
+    parent: null
+    approvedBy: Owner Name
+    date: "2026-10-03"
+entries:
+  - symbol: SPX
+    environmentLineageId: 6b2c7c1a-5d3e-4a8f-9b41-2f0d7e9c4a10
+    ledgerTopicId: "a1b2c3d4e5f60718293a4b5c6d7e8f90"
+    clusterId: "cluster-dev-A"
+    createdAt: "+12026-10-03T12:00:00Z"
+    operator: abhinav.jain
+    prevEntryHash: "0000000000000000000000000000000000000000000000000000000000000000"

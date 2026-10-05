@@ -1,0 +1,141 @@
+# PROVISION THE 0DTE STAGE-B TOPOLOGY FOR ONE ENVIRONMENT — the Job that runs the service image's own provisioner
+# (ZeroDteProvisioner, options-edge-processing increment 7a) over the REVIEWED declaration and attestation of this repository
+# (deploy/zerodte/, mounted from a ConfigMap the wrapper renders from those files per run).
+#
+# WHY A JOB TEMPLATE IN GIT, RENDERED PER RUN BY JENKINS — the same reason as every file in this directory (read
+# vol-premium-ledger-publish-job.yaml's header): the options-edge-jenkins-only-workloads admission policy permits batch/jobs CREATE only
+# to the jenkins-deployer identity; a Job carries a deadline and a backoff limit and the wrapper can find and prune it by label.
+#
+# TWO STAGES, ONE TEMPLATE. The wrapper (scripts/ops/zerodte-provision.sh) renders this first with PROVISION_CONFIRM=false — the
+# provisioner performs every read and verification, prints PROVISIONABLE (or ALREADY_PROVISIONED) and WRITES NOTHING — and only when the
+# operator ticked CONFIRM, with PROVISION_CONFIRM=true, which creates the absent output topics, inserts the era row and appends PROVISIONED
+# (create-or-verify at every step; a rerun is ALREADY_PROVISIONED). A first VIRGIN confirm stops with ATTESTATION_REQUIRED after creating the
+# topics: the operator appends the printed entry to deploy/zerodte/virgin-attestation.yaml through review and runs again.
+#
+# WHAT THE CONTAINER PROVES BEFORE IT RUNS: the mounted files' sha256 equal __FILE_SHA256__ / __ATTESTATION_SHA256__, which the wrapper
+# computed from the checked-out repository files AFTER scripts/ci/validate-zerodte-provisioning.sh and validate-zerodte-attestation.sh
+# passed on them. So the bytes the provisioner reads are the bytes that were reviewed.
+#
+# SECRETS NEVER APPEAR IN A MANIFEST OR A LOG: POSTGRES_PASSWORD and ZERO_DTE_LEDGER_KEY arrive by secretKeyRef from
+# options-edge-runtime-secrets; the provisioner reads them only through the NAMED environment variables and prints neither — its receipt and
+# its diagnostics carry stable categories, never a backend's text (increment 7a rounds 2–3). The Kafka bootstrap and the JDBC URL/user come
+# from options-edge-config, the way every service reads them.
+#
+# NOT NODE-PINNED: the provisioner talks to Kafka and Postgres over the network and touches no node-local path.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: __JOB_NAME__
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: zerodte-provision
+    app.kubernetes.io/part-of: options-edge
+    app.kubernetes.io/component: maintenance
+    options-edge.io/zerodte-environment: __ENVIRONMENT__
+spec:
+  # NO k8s-level retry: a provisioning that stopped must be READ (its one receipt line is the evidence) before anything is tried again; the
+  # provisioner is create-or-verify, so a human re-run costs nothing and never repeats an effect.
+  backoffLimit: 0
+  # Topic creation with bounded describe retries, a ledger read, an era insert, a transactional append and its read-back: well under a
+  # minute. Ten minutes is the generous ceiling; the wrapper waits longer than this on purpose.
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: zerodte-provision
+    spec:
+      restartPolicy: Never
+      # This Job never talks to the k8s API — the token would be an unnecessary credential in a pod that holds the ledger key.
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: provisioner
+          # The vix-option-inteligence SERVICE image, digest-pinned by the wrapper from image-tags/<env>.yaml. The provisioner is a main
+          # class inside the service jar, so the records it writes are the ones the runtime that reads them was compiled against.
+          image: __IMAGE__
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: options-edge-runtime-secrets
+                  key: POSTGRES_PASSWORD
+            - name: ZERO_DTE_LEDGER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: options-edge-runtime-secrets
+                  key: ZERO_DTE_LEDGER_KEY
+            # --- the run itself, every value substituted by the wrapper from the Jenkins parameters ---
+            - name: PROVISION_FILE
+              value: "/zerodte/__FILE_BASENAME__"
+            - name: PROVISION_FILE_SHA256
+              value: "__FILE_SHA256__"
+            - name: PROVISION_ATTESTATION
+              value: "/zerodte/virgin-attestation.yaml"
+            - name: PROVISION_ATTESTATION_SHA256
+              value: "__ATTESTATION_SHA256__"
+            - name: PROVISION_CONFIRM
+              value: "__CONFIRM__"
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xms64m -Xmx512m"
+          command: ["sh", "-c"]
+          args:
+            - |
+              set -eu
+              for f in "${PROVISION_FILE}" "${PROVISION_ATTESTATION}"; do
+                test -f "${f}" || { echo "FATAL: ${f} is not mounted" >&2; exit 1; }
+              done
+              actual="$(sha256sum "${PROVISION_FILE}" | cut -d' ' -f1)"
+              if [ "${actual}" != "${PROVISION_FILE_SHA256}" ]; then
+                echo "FATAL: mounted ${PROVISION_FILE} has sha256 ${actual}, the reviewed file has ${PROVISION_FILE_SHA256} — refusing to provision from bytes nobody reviewed" >&2
+                exit 1
+              fi
+              actual="$(sha256sum "${PROVISION_ATTESTATION}" | cut -d' ' -f1)"
+              if [ "${actual}" != "${PROVISION_ATTESTATION_SHA256}" ]; then
+                echo "FATAL: mounted ${PROVISION_ATTESTATION} has sha256 ${actual}, the reviewed file has ${PROVISION_ATTESTATION_SHA256} — refusing to judge an attestation nobody reviewed" >&2
+                exit 1
+              fi
+              for v in KAFKA_BOOTSTRAP_SERVERS POSTGRES_JDBC_URL POSTGRES_USER; do
+                eval "val=\${$v:-}"
+                [ -n "${val}" ] || { echo "FATAL: ${v} is not set by options-edge-config" >&2; exit 1; }
+              done
+              echo "declaration ${PROVISION_FILE} sha256 ${PROVISION_FILE_SHA256}; attestation ${PROVISION_ATTESTATION} sha256 ${PROVISION_ATTESTATION_SHA256} (verified against the reviewed files)"
+              set -- --file "${PROVISION_FILE}" --attestation "${PROVISION_ATTESTATION}" --bootstrap "${KAFKA_BOOTSTRAP_SERVERS}" \
+                     --jdbc-url "${POSTGRES_JDBC_URL}" --jdbc-user "${POSTGRES_USER}" --jdbc-password-env POSTGRES_PASSWORD --ledger-key-env ZERO_DTE_LEDGER_KEY
+              if [ "${PROVISION_CONFIRM}" = "true" ]; then
+                set -- "$@" --confirm
+              fi
+              echo "running ZeroDteProvisioner (secrets by name only)"
+              exec java -cp /app/app.jar com.optionsedge.processing.zerodte.provisioning.ZeroDteProvisioner "$@"
+          volumeMounts:
+            - name: zerodte-files
+              mountPath: /zerodte
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 250m
+              memory: 640Mi
+            limits:
+              memory: 768Mi
+      volumes:
+        - name: zerodte-files
+          configMap:
+            name: __CONFIGMAP__
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi

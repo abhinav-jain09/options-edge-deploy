@@ -1,0 +1,13 @@
+# The clusters a provisioning may touch — PINNED by the CA the deployer kubeconfig carries (its sha256 fingerprint), not by a name a
+# kubeconfig can relabel (Codex 7b r1). TLS verifies the API server against that CA, so a kubeconfig pointing elsewhere cannot present it.
+# production is additionally pinned by its API server address; dev's address differs per host (docker-desktop), so only its CA is pinned —
+# dev's identity therefore RESTS on its CA being unique to that cluster (docker-desktop mints one per installation; never share or copy it).
+# The wrapper also refuses a kubeconfig with insecure-skip-tls-verify (the pin would bind nothing) or a CA given as a file path.
+# Read by scripts/ops/zerodte-provision.sh; a value here is changed only through review. Certificates are public: nothing here is a secret.
+clusters:
+  dev:
+    caSha256: "4DEC923275CB4F30BFEDCF4AD007633D9D290552D508E73D44A8F3DB46658D9C"
+    apiServer: ""
+  production:
+    caSha256: "5D10F04D8AACF3107BFD0C3A21A6767392EFA7F86239C1DB178843A1592A2FE8"
+    apiServer: "https://192.168.100.252:6443"

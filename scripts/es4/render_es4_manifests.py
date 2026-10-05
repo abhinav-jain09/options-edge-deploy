@@ -342,6 +342,12 @@ ES_ENV = {
         # On es4 the same deterministic engine analyzes the ES 0DTE option tape. TOPIC_PREFIX
         # still isolates all input/output topics on the .4 broker.
         {"name": "ZERO_DTE_SYMBOL", "value": "ES", "_override": True},
+        # The environment this deployment IS, and it must OVERRIDE, because this renderer derives
+        # from the PRODUCTION overlay -- which now declares ZERODTE_RESEARCH_ENVIRONMENT=production.
+        # Inherited unchanged like every other prod env, es4 would stamp "production" into the
+        # frames and the research rows it produces: not a boot failure, which is why nothing else
+        # would catch it, but every row mislabelled as having come from prod.
+        {"name": "ZERODTE_RESEARCH_ENVIRONMENT", "value": "es4", "_override": True},
     ],
 }
 

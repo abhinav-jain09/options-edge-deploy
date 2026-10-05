@@ -42,6 +42,12 @@ resources:
 # cached image (no pull, no throttle). Dev keeps Always so it always picks up a
 # freshly-built :dev image.
 patches:
+  # PROD-ONLY: the deployment environment name Stage-B requires and the research writer already reads.
+  # MIRRORS k8s/services/vix-option-inteligence/overlays/production — the slice generator renders it from here.
+  - path: vix-option-inteligence-prod-env-patch.yaml
+    target:
+      kind: Deployment
+      name: vix-option-inteligence-service
   # PROD-ONLY: gamma-migration R11 other-board sidecar (cross-cluster, points at es4).
   # MIRRORS k8s/services/gamma-migration/overlays/production — validate-services enforces it.
   - path: gamma-migration-prod-env-patch.yaml

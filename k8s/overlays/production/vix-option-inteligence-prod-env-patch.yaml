@@ -1,0 +1,26 @@
+# PROD-ONLY: the DEPLOYMENT ENVIRONMENT NAME for vix-option-inteligence.
+#
+# The v1 research writer reads ZERODTE_RESEARCH_ENVIRONMENT (and only REQUIRES it when the shadow model is on,
+# which is false in production), and Stage-B's frames engine REQUIRES it: the name travels into every frame's
+# payload, so a wrong one mislabels evidence that is otherwise correct. StageBSettings holds it to the closed
+# set {dev, production, es4} and refuses a STAGE_B boot without it.
+#
+# ONE NAME FOR THE FACT. Stage-B deliberately does not invent a ZERO_DTE_ENVIRONMENT beside this: two names let
+# a deployment set them differently, and the frames and the research would then disagree about which
+# environment produced the evidence.
+#
+# It is INERT for the running v1 runtime here, which is why it is safe ahead of any switchover. It lives in the
+# overlay rather than the base because each environment must carry ITS OWN name; the dev overlay sets `dev` in
+# vix-option-inteligence-dev-patch.yaml.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vix-option-inteligence-service
+spec:
+  template:
+    spec:
+      containers:
+        - name: vix-option-inteligence
+          env:
+            - name: ZERODTE_RESEARCH_ENVIRONMENT
+              value: production
