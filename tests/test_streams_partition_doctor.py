@@ -342,23 +342,37 @@ class StreamsPartitionDoctorTest(unittest.TestCase):
         self.assertEqual(st["pods_listed"][n - 1][1], [])
 
     def _half_written_control(self, writer_name, write_once):
-        """Race one writer against 3 000 reads and assert no read ever sees a half-written file."""
+        """Race one writer against reads, and assert BOTH that no read saw a half-written file AND that writes
+        actually completed while the reads were running.
+
+        The second half is not decoration: without it the control can pass because the writer never overlapped
+        the reader at all, which is a green test proving nothing (Codex MINOR). The loop therefore runs until a
+        minimum number of writes have COMPLETED, with a hard cap so a stalled writer fails instead of hanging.
+        """
         import threading
+        import time
+
         stop = threading.Event()
         errors = []
+        writes = [0]
+        MIN_WRITES = 20
 
         def writer():
             while not stop.is_set():
                 try:
                     write_once()
+                    writes[0] += 1
                 except Exception as e:                                   # noqa: BLE001 - the reader's verdict is what matters
                     errors.append((writer_name, "write", repr(e)))
                     return
 
         t = threading.Thread(target=writer, daemon=True)
         t.start()
+        reads = 0
+        deadline = time.monotonic() + 60
         try:
-            for _ in range(3000):
+            while (reads < 3000 or writes[0] < MIN_WRITES) and time.monotonic() < deadline:
+                reads += 1
                 try:
                     self.assertEqual(self.state()["deploys"]["svc"]["replicas"], 2)
                 except Exception as e:                                   # noqa: BLE001
@@ -368,6 +382,13 @@ class StreamsPartitionDoctorTest(unittest.TestCase):
             stop.set()
             t.join(timeout=30)
         self.assertEqual([], errors, f"a concurrent reader observed a half-written state file ({writer_name})")
+        # NON-VACUITY: writes and reads really did overlap, so a green result means something
+        self.assertGreaterEqual(
+            writes[0], MIN_WRITES,
+            f"only {writes[0]} write(s) completed during {reads} reads ({writer_name}): the control did not "
+            "overlap the writer, so it proves nothing about atomicity",
+        )
+        self.assertGreaterEqual(reads, 1000, f"only {reads} reads ran ({writer_name})")
 
     # THE POSITIVE CONTROLS for the atomic save, one per WRITER. There are two writers and they are different
     # programs: this test class's own save(), and the external fake's save() inside fake.py. The reported

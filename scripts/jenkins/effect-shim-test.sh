@@ -159,18 +159,26 @@ fi
 # then ASSERTED to resolve none of the seven tool names. The assertion is the point -- it is what stops
 # this case from quietly going vacuous again on the next host, whatever that host ships in /usr/bin.
 MINBIN="$T/minbin"; mkdir -p "$MINBIN"
-# Only EXTERNAL commands can be symlinked. `command -v printf` returns the BUILTIN name `printf`, not a path,
-# so symlinking its answer would have made a self-referential link -- harmless, because a builtin needs no
-# PATH entry at all, but the comment that said "symlinks to exactly the commands" was not literal. A builtin
-# is now skipped by name rather than linked to itself.
+# Only EXTERNAL commands can be symlinked, and BUILTIN-ness is asked directly. `command -v printf` returns the
+# builtin NAME `printf`, not a path, so symlinking its answer made a self-referential link (harmless, since a
+# builtin needs no PATH entry, but the comment claiming "symlinks to exactly the commands" was not literal).
+# Testing for a non-absolute answer is not the same question, though: an executable found through a RELATIVE
+# PATH element answers relatively too, and skipping THAT would drop a binary the verification needs (Codex
+# NIT). So `type -t` decides what is a builtin, and a relative external path is made absolute.
 for c in bash env git head printf tr; do
+  kind="$(type -t "$c" 2>/dev/null || true)"
+  if [ "$kind" = "builtin" ] || [ "$kind" = "keyword" ]; then
+    continue                                   # available to the shim's bash without any PATH entry
+  fi
   w="$(command -v "$c" 2>/dev/null || true)"
   # a harness that cannot be built is not a failed CASE: it is a dead suite, and it says so and stops.
-  [ -n "$w" ] || { echo "effect-shim-test: FATAL — the verification needs '$c' and it is not available; the no-exec-loop case cannot be built" >&2; exit 2; }
+  [ -n "$w" ] || { echo "effect-shim-test: FATAL — the verification needs '$c' and it is neither a builtin nor on PATH; the no-exec-loop case cannot be built" >&2; exit 2; }
   case "$w" in
-    /*) ln -sf "$w" "$MINBIN/$c" ;;
-    *)  : ;;                                  # a shell builtin: available without a PATH entry
+    /*) : ;;
+    *)  w="$(cd "$(dirname "$w")" && pwd -P)/$(basename "$w")" ;;   # a relative PATH element answers relatively
   esac
+  [ -x "$w" ] || { echo "effect-shim-test: FATAL — '$c' resolved to '$w', which is not executable" >&2; exit 2; }
+  ln -sf "$w" "$MINBIN/$c"
 done
 leaked=""
 for t in mvn docker rsync scp helm ansible-playbook kubectl; do
