@@ -146,11 +146,36 @@ $OUT"
 fi
 
 # --- 7. no exec loop: the shim never resolves itself as the real binary -------------------------------
+# The PATH must carry what the VERIFICATION needs and NOT the real tool, or the case never reaches binary
+# resolution and tests something else -- which is what it used to do.
+#
+# IT USED TO NAME `/usr/bin:/bin` FOR THAT, WHICH IS A STATEMENT ABOUT THE HOST, NOT ABOUT THE SHIM. On
+# this project's Macs Maven lives under Homebrew, so `/usr/bin/mvn` does not exist and the case tested
+# what it claimed; on the CI runner Maven IS `/usr/bin/mvn`, so the PATH carried the real tool, the shim
+# correctly exec'd it, and the case failed -- having silently tested nothing on every green Mac run
+# before that. The same would have been true, unnoticed, of `docker` and `rsync`.
+#
+# So the PATH is BUILT: a directory holding symlinks to exactly the commands the verification needs, and
+# then ASSERTED to resolve none of the seven tool names. The assertion is the point -- it is what stops
+# this case from quietly going vacuous again on the next host, whatever that host ships in /usr/bin.
+MINBIN="$T/minbin"; mkdir -p "$MINBIN"
+for c in bash env git head printf tr; do
+  w="$(command -v "$c" 2>/dev/null || true)"
+  [ -n "$w" ] || { bad "the no-exec-loop case cannot be set up" "the verification needs '$c' and it is not on PATH"; }
+  ln -sf "$w" "$MINBIN/$c"
+done
+leaked=""
+for t in mvn docker rsync scp helm ansible-playbook kubectl; do
+  PATH="$MINBIN" command -v "$t" >/dev/null 2>&1 && leaked="$leaked $t"
+done
+if [ -n "$leaked" ]; then
+  bad "the no-exec-loop case's PATH carries no real tool" "it resolves:$leaked — the case would test the exec path, not the refusal"
+else
+  ok "the no-exec-loop case's PATH carries no real tool (the case is not vacuous on this host)"
+fi
 : > "$T/ran"
 set +e
-# The PATH must carry what the VERIFICATION needs (bash, git) and NOT the real tool, or the case never
-# reaches binary resolution and tests something else -- which is what it used to do.
-OUT="$(cd "$W" && env PATH="$CO_SHIM:/usr/bin:/bin" RAN_LOG="$T/ran" OE_SHIM_DIR=. OE_SHIM_SHA="$SHA" \
+OUT="$(cd "$W" && env PATH="$CO_SHIM:$MINBIN" RAN_LOG="$T/ran" OE_SHIM_DIR=. OE_SHIM_SHA="$SHA" \
       OE_SHIM_ALLOW= "$CO_SHIM/mvn" --version 2>&1)"; RC=$?
 set -e
 if [ "$RC" -eq 3 ] && ! ran && printf '%s' "$OUT" | grep -q "not on PATH outside this shim directory"; then
