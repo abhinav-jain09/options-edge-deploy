@@ -86,7 +86,7 @@ spec:
             - secretRef:
                 name: options-edge-databento-feed-env
           image: host.docker.internal:5001/options-edge-databento-feed:dev
-          imagePullPolicy: Always
+          imagePullPolicy: IfNotPresent
           livenessProbe:
             failureThreshold: 2
             httpGet:
