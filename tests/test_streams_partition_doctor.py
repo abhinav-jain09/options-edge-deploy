@@ -342,12 +342,20 @@ class StreamsPartitionDoctorTest(unittest.TestCase):
         self.assertEqual(st["pods_listed"][n - 1][1], [])
 
     def _half_written_control(self, writer_name, write_once):
-        """Race one writer against reads, and assert BOTH that no read saw a half-written file AND that writes
-        actually completed while the reads were running.
+        """Hammer reads of state.json against a concurrent writer and assert no read is ever malformed.
 
-        The second half is not decoration: without it the control can pass because the writer never overlapped
-        the reader at all, which is a green test proving nothing (Codex MINOR). The loop therefore runs until a
-        minimum number of writes have COMPLETED, with a hard cap so a stalled writer fails instead of hanging.
+        WHAT THIS CONTROL IS JUSTIFIED BY, precisely: its MUTATION, not by a proof that any read overlapped a
+        write. Three attempts at such a proof were all unsound and Codex was right to refuse each one:
+        counting writes over the test's lifetime (both merely happened), counting reads that straddled a
+        completed write (a read can finish, then a whole write complete), and bracketing against a `writing`
+        flag (set around the CALL, so an adversarial schedule can place every read in the pre-call and
+        post-return envelope). An instant-level overlap cannot be established from outside the writer.
+
+        What IS established, and is enough: with the ATOMIC save this control is green over 3 000 reads
+        against a live writer, and with a TRUNCATING save it fails within a few iterations with exactly the
+        JSONDecodeError that the original bug produced -- for the test harness's writer AND, separately, for
+        the external fake's. A control that provably CAN fail, and does not, is evidence. One that cannot fail
+        is not, which is why the mutation result is recorded beside each use rather than inferred.
         """
         import threading
         import time
@@ -355,62 +363,39 @@ class StreamsPartitionDoctorTest(unittest.TestCase):
         stop = threading.Event()
         errors = []
         writes = [0]
-        writing = threading.Event()        # SET while the writer is inside write_once()
-        MIN_OVERLAPS = 20
+        MIN_WRITES = 20
 
         def writer():
             while not stop.is_set():
                 try:
-                    writing.set()
                     write_once()
                     writes[0] += 1
                 except Exception as e:                                   # noqa: BLE001 - the reader's verdict is what matters
                     errors.append((writer_name, "write", repr(e)))
                     return
-                finally:
-                    writing.clear()
 
         t = threading.Thread(target=writer, daemon=True)
         t.start()
         reads = 0
-        overlapped = 0            # reads DURING which a write completed — the interlock, not a lifetime total
         deadline = time.monotonic() + 60
         try:
-            while (reads < 3000 or overlapped < MIN_OVERLAPS or writes[0] < MIN_OVERLAPS) and time.monotonic() < deadline:
+            while (reads < 3000 or writes[0] < MIN_WRITES) and time.monotonic() < deadline:
                 reads += 1
-                # BRACKET the read against the writer's own critical section. Counting "writes[0] increased
-                # across the read" did NOT prove a collision: a valid schedule is sample the counter, finish
-                # the read, let the writer complete a whole write, then resume -- the counter moved and the
-                # read never raced anything (Codex MINOR). `writing` is SET only while the writer is inside
-                # write_once(), so a read sampled with it set began while a write was in progress.
-                during = writing.is_set()
                 try:
                     self.assertEqual(self.state()["deploys"]["svc"]["replicas"], 2)
                 except Exception as e:                                   # noqa: BLE001
                     errors.append((writer_name, "read", repr(e)))
                     break
-                if during and writing.is_set():
-                    overlapped += 1
         finally:
             stop.set()
             t.join(timeout=30)
         self.assertEqual([], errors, f"a concurrent reader observed a half-written state file ({writer_name})")
-        # NON-VACUITY, as an INTERLOCK. `overlapped` counts reads that both BEGAN and ENDED while the writer
-        # was inside write_once(), so it can only be non-zero if a read genuinely ran concurrently with a
-        # write. For the FAKE that window is the whole subprocess, which CONTAINS the file write rather than
-        # being only it -- so this proves concurrency with the writer, and does not claim to pin the exact
-        # instant of the rename. That is the honest reading.
+        # The writer must have RUN -- otherwise there was nothing to be concurrent with and a green result is
+        # vacuous. This is a liveness check on the fixture, NOT an overlap proof, and it does not pretend to be.
         self.assertGreaterEqual(
-            overlapped, MIN_OVERLAPS,
-            f"only {overlapped} of {reads} reads ran wholly inside a write ({writer_name}, {writes[0]} writes "
-            "completed): the control did not overlap the writer, so it proves nothing about atomicity",
-        )
-        # AND writes must actually have COMPLETED. The bracket alone is not enough: `writing` is set around the
-        # CALL, so a writer whose body did nothing still looked like a critical section and every read inside it
-        # counted. Both conditions together are what make this control mean something.
-        self.assertGreaterEqual(
-            writes[0], MIN_OVERLAPS,
-            f"only {writes[0]} write(s) COMPLETED ({writer_name}): reads overlapped a writer that wrote nothing",
+            writes[0], MIN_WRITES,
+            f"only {writes[0]} write(s) completed during {reads} reads ({writer_name}): there was no writer to "
+            "race, so a green result would mean nothing",
         )
         self.assertGreaterEqual(reads, 1000, f"only {reads} reads ran ({writer_name})")
 
@@ -418,8 +403,13 @@ class StreamsPartitionDoctorTest(unittest.TestCase):
     # programs: this test class's own save(), and the external fake's save() inside fake.py. The reported
     # failure -- test_interrupted_through_a_pipe_still_restores_replicas dying on JSONDecodeError -- came from
     # the FAKE's writer, which the first version of this control never exercised: it raced the test class's
-    # save() and would have stayed green if fake.py regressed to a truncating write (Codex MAJOR). Both are
-    # driven now, and each fails within a few iterations against a truncating save.
+    # save() and would have stayed green if fake.py regressed to a truncating write (Codex MAJOR).
+    #
+    # MUTATION RESULTS, which are what justify these two tests (2026-10-05, this machine):
+    #   fake.py's save() made truncating  -> "a concurrent reader observed a half-written state file
+    #                                        (fake.py save())", JSONDecodeError, within a few iterations
+    #   the test class's save() likewise  -> the same, for the "tests' own save()" control
+    #   a writer whose body does nothing  -> "there was no writer to race, so a green result would mean nothing"
 
     def test_the_state_file_is_never_observed_half_written_by_the_test_writer(self):
         self.cluster({"svc": {"replicas": 2}}, {})
