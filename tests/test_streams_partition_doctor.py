@@ -341,23 +341,18 @@ class StreamsPartitionDoctorTest(unittest.TestCase):
         self.assertIn([ "svc", "API-ERROR"], st["pods_listed"][:n])
         self.assertEqual(st["pods_listed"][n - 1][1], [])
 
-    def test_the_state_file_is_never_observed_half_written(self):
-        # THE POSITIVE CONTROL for the atomic save. test_interrupted_through_a_pipe_still_restores_replicas
-        # reads state.json while the doctor is still writing it, and a truncating write made that read fail
-        # with JSONDecodeError -- a failure about the harness, reported as a failure of the doctor. This
-        # drives the same collision on purpose: with a truncating save it fails within a few iterations.
+    def _half_written_control(self, writer_name, write_once):
+        """Race one writer against 3 000 reads and assert no read ever sees a half-written file."""
         import threading
-        self.cluster({"svc": {"replicas": 2}}, {})
-        st = self.state()
         stop = threading.Event()
         errors = []
 
         def writer():
             while not stop.is_set():
                 try:
-                    self.save(st)
+                    write_once()
                 except Exception as e:                                   # noqa: BLE001 - the reader's verdict is what matters
-                    errors.append(("write", repr(e)))
+                    errors.append((writer_name, "write", repr(e)))
                     return
 
         t = threading.Thread(target=writer, daemon=True)
@@ -367,12 +362,30 @@ class StreamsPartitionDoctorTest(unittest.TestCase):
                 try:
                     self.assertEqual(self.state()["deploys"]["svc"]["replicas"], 2)
                 except Exception as e:                                   # noqa: BLE001
-                    errors.append(("read", repr(e)))
+                    errors.append((writer_name, "read", repr(e)))
                     break
         finally:
             stop.set()
-            t.join(timeout=10)
-        self.assertEqual([], errors, "a concurrent reader observed a half-written state file")
+            t.join(timeout=30)
+        self.assertEqual([], errors, f"a concurrent reader observed a half-written state file ({writer_name})")
+
+    # THE POSITIVE CONTROLS for the atomic save, one per WRITER. There are two writers and they are different
+    # programs: this test class's own save(), and the external fake's save() inside fake.py. The reported
+    # failure -- test_interrupted_through_a_pipe_still_restores_replicas dying on JSONDecodeError -- came from
+    # the FAKE's writer, which the first version of this control never exercised: it raced the test class's
+    # save() and would have stayed green if fake.py regressed to a truncating write (Codex MAJOR). Both are
+    # driven now, and each fails within a few iterations against a truncating save.
+
+    def test_the_state_file_is_never_observed_half_written_by_the_test_writer(self):
+        self.cluster({"svc": {"replicas": 2}}, {})
+        st = self.state()
+        self._half_written_control("tests' own save()", lambda: self.save(st))
+
+    def test_the_state_file_is_never_observed_half_written_by_the_fake(self):
+        # the FAKE is a SEPARATE PROCESS; `get deploy -o name` is a benign command that rewrites state.json
+        # through the fake's own save() and exits 0, so this races the writer the reported failure came from
+        self.cluster({"svc": {"replicas": 2}}, {})
+        self._half_written_control("fake.py save()", lambda: self.fake("get", "deploy", "-o", "name"))
 
     def test_interrupted_through_a_pipe_still_restores_replicas(self):
         # dev-cleanup pipes the doctor through sed, oe-boot-bringup through tee: a SIGTERM kills the

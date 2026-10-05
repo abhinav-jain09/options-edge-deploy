@@ -159,11 +159,18 @@ fi
 # then ASSERTED to resolve none of the seven tool names. The assertion is the point -- it is what stops
 # this case from quietly going vacuous again on the next host, whatever that host ships in /usr/bin.
 MINBIN="$T/minbin"; mkdir -p "$MINBIN"
+# Only EXTERNAL commands can be symlinked. `command -v printf` returns the BUILTIN name `printf`, not a path,
+# so symlinking its answer would have made a self-referential link -- harmless, because a builtin needs no
+# PATH entry at all, but the comment that said "symlinks to exactly the commands" was not literal. A builtin
+# is now skipped by name rather than linked to itself.
 for c in bash env git head printf tr; do
   w="$(command -v "$c" 2>/dev/null || true)"
   # a harness that cannot be built is not a failed CASE: it is a dead suite, and it says so and stops.
-  [ -n "$w" ] || { echo "effect-shim-test: FATAL — the verification needs '$c' and it is not on PATH; the no-exec-loop case cannot be built" >&2; exit 2; }
-  ln -sf "$w" "$MINBIN/$c"
+  [ -n "$w" ] || { echo "effect-shim-test: FATAL — the verification needs '$c' and it is not available; the no-exec-loop case cannot be built" >&2; exit 2; }
+  case "$w" in
+    /*) ln -sf "$w" "$MINBIN/$c" ;;
+    *)  : ;;                                  # a shell builtin: available without a PATH entry
+  esac
 done
 leaked=""
 for t in mvn docker rsync scp helm ansible-playbook kubectl; do

@@ -113,6 +113,32 @@ else
   bad "NEVER_RECREATE names topics that are NOT in the exported value — an assignment dropped them:$nr_missing"
 fi
 
+# AND THE SET ITSELF IS PINNED. The two rules above preserve the SHAPE of the declaration, not its MEMBERSHIP:
+# delete context-tape.compression.checkpoint from topics.env and there is still one base assignment, every
+# remaining declared token still exports, and the suite stayed green (Codex MAJOR) -- so a durable topic could
+# silently lose its protection and a later exact-partition repair would delete and recreate it.
+#
+# A never-recreate declaration is a DURABILITY PROMISE, so its membership is reviewed, not inferred. This list
+# is that review. A removal fails here, and so does an ADDITION -- which is correct: adding a topic to this set
+# is a promise someone should make deliberately, in a diff, rather than by editing one line of topics.env.
+NEVER_RECREATE_EXPECTED="context-tape.compression.checkpoint
+context-tape.compression.history
+context-tape.direction.ledger
+es.futures.footprint.strike
+options.spx.vol-premium.baseline
+options.spx.vol-premium.events
+options.spx.vol-premium.ivrv
+options.spx.vol-premium.warnings
+underlying.vix.price"
+nr_actual="$(printf '%s\n' ${OPTIONS_EDGE_NEVER_RECREATE_TOPICS:-} | tr ' ' '\n' | grep -v '^$' | sort -u)"
+if [ "$nr_actual" = "$NEVER_RECREATE_EXPECTED" ]; then
+  ok "the NEVER_RECREATE set is EXACTLY the reviewed $(printf '%s\n' "$NEVER_RECREATE_EXPECTED" | wc -l | tr -d ' ') topics"
+else
+  bad "the NEVER_RECREATE set is not the reviewed one — a durable topic gained or lost its protection" "$(
+    printf 'only in topics.env (an addition nobody reviewed):\n'; comm -23 <(printf '%s\n' "$nr_actual") <(printf '%s\n' "$NEVER_RECREATE_EXPECTED") | sed 's/^/  /'
+    printf 'only in the reviewed list (a protection that was REMOVED):\n'; comm -13 <(printf '%s\n' "$nr_actual") <(printf '%s\n' "$NEVER_RECREATE_EXPECTED") | sed 's/^/  /')"
+fi
+
 echo "2. at the declared shape nothing destructive happens, and the strike contract is still reconciled"
 for combo in "production:" "dev:" "production:es4"; do
   env_name="${combo%%:*}"; topic_set="${combo#*:}"
