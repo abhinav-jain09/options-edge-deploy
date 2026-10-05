@@ -355,7 +355,7 @@ class StreamsPartitionDoctorTest(unittest.TestCase):
         stop = threading.Event()
         errors = []
         writes = [0]
-        MIN_WRITES = 20
+        MIN_OVERLAPS = 20
 
         def writer():
             while not stop.is_set():
@@ -369,24 +369,31 @@ class StreamsPartitionDoctorTest(unittest.TestCase):
         t = threading.Thread(target=writer, daemon=True)
         t.start()
         reads = 0
+        overlapped = 0            # reads DURING which a write completed — the interlock, not a lifetime total
         deadline = time.monotonic() + 60
         try:
-            while (reads < 3000 or writes[0] < MIN_WRITES) and time.monotonic() < deadline:
+            while (reads < 3000 or overlapped < MIN_OVERLAPS) and time.monotonic() < deadline:
                 reads += 1
+                before = writes[0]
                 try:
                     self.assertEqual(self.state()["deploys"]["svc"]["replicas"], 2)
                 except Exception as e:                                   # noqa: BLE001
                     errors.append((writer_name, "read", repr(e)))
                     break
+                if writes[0] > before:
+                    overlapped += 1
         finally:
             stop.set()
             t.join(timeout=30)
         self.assertEqual([], errors, f"a concurrent reader observed a half-written state file ({writer_name})")
-        # NON-VACUITY: writes and reads really did overlap, so a green result means something
+        # NON-VACUITY, as an INTERLOCK. Counting writes and reads over the test's LIFETIME proves only that
+        # both happened; an adversarial schedule could finish every write before the first read (Codex MINOR).
+        # `overlapped` counts reads that STRADDLED a completed write, which is the collision this control is
+        # about: it can only be non-zero if the two were running at the same time.
         self.assertGreaterEqual(
-            writes[0], MIN_WRITES,
-            f"only {writes[0]} write(s) completed during {reads} reads ({writer_name}): the control did not "
-            "overlap the writer, so it proves nothing about atomicity",
+            overlapped, MIN_OVERLAPS,
+            f"only {overlapped} of {reads} reads straddled a completed write ({writer_name}, {writes[0]} writes "
+            "total): the control did not overlap the writer, so it proves nothing about atomicity",
         )
         self.assertGreaterEqual(reads, 1000, f"only {reads} reads ran ({writer_name})")
 

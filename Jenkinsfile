@@ -623,6 +623,24 @@ pipeline {
         '''
       }
     }
+    stage('zn-gex identity preflight (the v1 rename abandons nothing)') {
+      // THE MONOLITHIC PATH APPLIES zn-gex TOO. Its dev overlay includes k8s/services/zn-gex/base and
+      // apply.sh rolls it, so guarding only Jenkinsfile.zn-gex-service left the main deploy path unguarded
+      // and "every rollout" untrue (Codex r3 BLOCKER). The same script runs here, before apply.sh.
+      //
+      // Dev only, because services.yaml declares zn-gex as a dev-only service: on any other environment the
+      // overlay does not include it and there is nothing to guard. It runs on a DRY RUN as well, since a dry
+      // run is exactly when an operator wants to discover this.
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.ENVIRONMENT == 'dev') } }
+      steps {
+        sh '''
+          set -euo pipefail
+          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
+          . scripts/kafka/load-kafka-settings.sh
+          scripts/kafka/zn-gex-identity-preflight.sh
+        '''
+      }
+    }
     stage('Deploy') {
       when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
       steps {

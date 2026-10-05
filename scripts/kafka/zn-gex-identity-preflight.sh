@@ -24,13 +24,26 @@ command -v kafka-topics >/dev/null 2>&1 || { echo "zn-gex-preflight: kafka-topic
 
 echo "zn-gex-preflight: the application id is '$CURRENT_ID'; refusing if '$LEGACY_ID' still exists on $BOOTSTRAP"
 
+# BOTH LISTINGS FAIL CLOSED (Codex r3 BLOCKER). The first version wrote `2>/dev/null || true`, which turned an
+# unreachable broker, an authorization failure or a CLI error into EMPTY OUTPUT — and empty output reads as
+# "no legacy identity", so a guard whose whole purpose is to refuse would have waved the rollout through on
+# exactly the inputs it cannot interpret. A listing that did not succeed is not an answer.
+#
 # (1) the consumer GROUP. A Streams application's group id IS its application id.
-groups="$(kafka-consumer-groups --bootstrap-server "$BOOTSTRAP" --list 2>/dev/null || true)"
+if ! groups="$(kafka-consumer-groups --bootstrap-server "$BOOTSTRAP" --list 2>&1)"; then
+  echo "zn-gex-preflight: REFUSED — could not list consumer groups on $BOOTSTRAP, so the old identity cannot be ruled out:" >&2
+  printf '%s\n' "$groups" | sed 's/^/    /' >&2
+  exit 2
+fi
 legacy_group="$(printf '%s\n' "$groups" | grep -Fx -- "$LEGACY_ID" || true)"
 
 # (2) the INTERNAL topics. Streams prefixes every changelog and repartition topic with the application id, so
 #     these outlive the group and are the durable half of the state.
-topics="$(kafka-topics --bootstrap-server "$BOOTSTRAP" --list 2>/dev/null || true)"
+if ! topics="$(kafka-topics --bootstrap-server "$BOOTSTRAP" --list 2>&1)"; then
+  echo "zn-gex-preflight: REFUSED — could not list topics on $BOOTSTRAP, so the old identity cannot be ruled out:" >&2
+  printf '%s\n' "$topics" | sed 's/^/    /' >&2
+  exit 2
+fi
 legacy_topics="$(printf '%s\n' "$topics" | grep -E "^${LEGACY_ID}-" || true)"
 
 if [ -z "$legacy_group" ] && [ -z "$legacy_topics" ]; then

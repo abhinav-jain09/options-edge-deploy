@@ -165,17 +165,30 @@ MINBIN="$T/minbin"; mkdir -p "$MINBIN"
 # Testing for a non-absolute answer is not the same question, though: an executable found through a RELATIVE
 # PATH element answers relatively too, and skipping THAT would drop a binary the verification needs (Codex
 # NIT). So `type -t` decides what is a builtin, and a relative external path is made absolute.
+# ONLY `file` IS SYMLINKED, and every other kind is named rather than guessed at (Codex NIT). A builtin or a
+# keyword needs no PATH entry and is skipped; a FUNCTION or an ALIAS shadowing one of these would have been
+# treated as a relative executable and the fixture would have fatal-errored on a confusing message, so those
+# are refused by name with the reason. A relative external path is made absolute, because an executable found
+# through a relative PATH element answers relatively and would otherwise resolve against the wrong directory.
 for c in bash env git head printf tr; do
   kind="$(type -t "$c" 2>/dev/null || true)"
-  if [ "$kind" = "builtin" ] || [ "$kind" = "keyword" ]; then
-    continue                                   # available to the shim's bash without any PATH entry
-  fi
+  case "$kind" in
+    builtin|keyword)
+      continue ;;                              # available to the shim's bash without any PATH entry
+    file)
+      : ;;                                     # the only kind that can be, and needs to be, symlinked
+    function|alias)
+      echo "effect-shim-test: FATAL — '$c' is a shell $kind here, not a command; the no-exec-loop fixture needs the real binary" >&2
+      exit 2 ;;
+    *)
+      echo "effect-shim-test: FATAL — the verification needs '$c' and \`type -t\` calls it '${kind:-nothing}'; the no-exec-loop case cannot be built" >&2
+      exit 2 ;;
+  esac
   w="$(command -v "$c" 2>/dev/null || true)"
-  # a harness that cannot be built is not a failed CASE: it is a dead suite, and it says so and stops.
-  [ -n "$w" ] || { echo "effect-shim-test: FATAL — the verification needs '$c' and it is neither a builtin nor on PATH; the no-exec-loop case cannot be built" >&2; exit 2; }
+  [ -n "$w" ] || { echo "effect-shim-test: FATAL — '$c' is a file per \`type -t\` but \`command -v\` found nothing" >&2; exit 2; }
   case "$w" in
     /*) : ;;
-    *)  w="$(cd "$(dirname "$w")" && pwd -P)/$(basename "$w")" ;;   # a relative PATH element answers relatively
+    *)  w="$(cd "$(dirname "$w")" && pwd -P)/$(basename "$w")" ;;
   esac
   [ -x "$w" ] || { echo "effect-shim-test: FATAL — '$c' resolved to '$w', which is not executable" >&2; exit 2; }
   ln -sf "$w" "$MINBIN/$c"
