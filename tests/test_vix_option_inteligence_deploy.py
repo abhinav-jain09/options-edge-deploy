@@ -24,8 +24,23 @@ class VixOptionInteligenceStageBEnvironmentTest(unittest.TestCase):
     which is why setting it is safe ahead of any switchover and why nothing here depends on the mode.
     """
 
+    # WHERE EACH ENVIRONMENT IS DECLARED. dev and production are generated slices of the monolithic
+    # overlays; es4 is a DIRECT deployment, applied by deploy-all and deploy-service and held in
+    # validate-es4-render.sh's KNOWN_STALE, so the renderer never overwrites it and that file is where
+    # an es4 operand has to be declared. Codex r11 MAJOR: this test covered only the two overlays and
+    # claimed "both live environments are covered" while es4 -- a third live deployment of the same
+    # image -- had no ZERODTE_RESEARCH_ENVIRONMENT at all, inline or via its envFrom ConfigMaps.
+    DECLARATIONS = {
+        "dev": "k8s/services/vix-option-inteligence/overlays/dev/manifest.yaml",
+        "production": "k8s/services/vix-option-inteligence/overlays/production/manifest.yaml",
+        "es4": "k8s/es4/services/vix-option-inteligence.yaml",
+    }
+
     def overlay(self, env):
         return (ROOT / f"k8s/services/vix-option-inteligence/overlays/{env}/manifest.yaml").read_text()
+
+    def declaration(self, env):
+        return (ROOT / self.DECLARATIONS[env]).read_text()
 
     def env_value(self, text, name):
         """The value of an env entry in a rendered manifest, or None."""
@@ -60,33 +75,67 @@ class VixOptionInteligenceStageBEnvironmentTest(unittest.TestCase):
                 "Stage-B requires it and a wrong value mislabels every frame it produces",
             )
             checked.append(env)
-        self.assertEqual(["dev", "production"], checked, "both live environments are covered")
+        self.assertEqual(["dev", "production"], checked, "both overlay environments are covered")
+
+    def test_every_name_in_the_closed_set_has_a_manifest_that_declares_it(self):
+        # The set is the DATA CONTRACT (PayloadV2.FrameContext.ENVIRONMENTS). A name in it with no
+        # declaring manifest is a deployment that cannot boot Stage-B, and es4 was exactly that.
+        self.assertEqual(
+            sorted(ZERODTE_ENVIRONMENTS), sorted(self.DECLARATIONS),
+            "every environment in the closed set needs a manifest that declares its own name here",
+        )
+        for env in ZERODTE_ENVIRONMENTS:
+            path = ROOT / self.DECLARATIONS[env]
+            self.assertTrue(path.is_file(), f"{path} is missing, so '{env}' declares nothing")
+            value = self.env_value(self.declaration(env), "ZERODTE_RESEARCH_ENVIRONMENT")
+            self.assertEqual(
+                env, value,
+                f"{self.DECLARATIONS[env]} must set ZERODTE_RESEARCH_ENVIRONMENT to '{env}' (it is {value!r}); "
+                "Stage-B requires it, refuses a value outside the closed set, and a wrong value mislabels "
+                "every frame and research row that deployment produces",
+            )
+
+    def test_es4_is_declared_in_the_renderer_too_so_the_hold_can_be_lifted_safely(self):
+        # The es4 renderer DERIVES from the production overlay, which declares 'production'. Inherited
+        # unchanged, a future re-render (whenever KNOWN_STALE is emptied) would stamp 'production' into
+        # es4 -- not a boot failure, so nothing else would catch it. The _override is what makes the
+        # held manifest and the renderer agree, and this is what keeps the two in step.
+        renderer = (ROOT / "scripts/es4/render_es4_manifests.py").read_text()
+        block = renderer.split('"vix-option-inteligence": [', 1)
+        self.assertEqual(2, len(block), "the renderer no longer has a vix-option-inteligence ES_ENV block")
+        block = block[1].split("],", 1)[0]
+        self.assertIn(
+            '{"name": "ZERODTE_RESEARCH_ENVIRONMENT", "value": "es4", "_override": True}', block,
+            "the es4 renderer must OVERRIDE the environment it derives from production, or a re-render "
+            "silently relabels es4 evidence as production",
+        )
 
     def test_the_value_is_never_overridden_a_second_time_in_the_same_overlay(self):
         # One authoritative value per overlay: a second entry would make the effective one depend on
         # ordering, and Kubernetes takes the LAST, so a stale first entry would read as correct.
-        for env in ("dev", "production"):
-            text = self.overlay(env)
+        for env in ZERODTE_ENVIRONMENTS:
+            text = self.declaration(env)
             self.assertEqual(
                 1, text.count("- name: ZERODTE_RESEARCH_ENVIRONMENT"),
-                f"overlay '{env}' declares ZERODTE_RESEARCH_ENVIRONMENT more than once",
+                f"{self.DECLARATIONS[env]} declares ZERODTE_RESEARCH_ENVIRONMENT more than once",
             )
 
     def test_no_second_name_is_invented_for_the_same_fact(self):
-        for env in ("dev", "production"):
+        for env in ZERODTE_ENVIRONMENTS:
             self.assertNotIn(
-                "ZERO_DTE_ENVIRONMENT\n", self.overlay(env),
-                f"overlay '{env}' invents a second name for the environment; Stage-B reads ZERODTE_RESEARCH_ENVIRONMENT",
+                "ZERO_DTE_ENVIRONMENT\n", self.declaration(env),
+                f"{self.DECLARATIONS[env]} invents a second name for the environment; "
+                "Stage-B reads ZERODTE_RESEARCH_ENVIRONMENT",
             )
 
     def test_the_mode_operand_is_absent_so_the_image_rolls_dark(self):
         # §14's dark cutover: V1 is the DEFAULT, so an overlay that does not mention the mode runs v1 and
         # rolling the image is not a cutover. An overlay that sets STAGE_B has made a decision, and this test
         # is where that decision becomes visible rather than arriving with an image.
-        for env in ("dev", "production"):
+        for env in ZERODTE_ENVIRONMENTS:
             self.assertIsNone(
-                self.env_value(self.overlay(env), "ZERO_DTE_RUNTIME_MODE"),
-                f"overlay '{env}' selects a Stage-B runtime mode; that is a switchover, not a deploy",
+                self.env_value(self.declaration(env), "ZERO_DTE_RUNTIME_MODE"),
+                f"{self.DECLARATIONS[env]} selects a Stage-B runtime mode; that is a switchover, not a deploy",
             )
 
 
