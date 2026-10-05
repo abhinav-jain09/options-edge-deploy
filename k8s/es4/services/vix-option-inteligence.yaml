@@ -1,11 +1,16 @@
 # DERIVED from scripts/es4/render_es4_manifests.py + k8s/services/vix-option-inteligence/overlays/production/manifest.yaml,
-# but HELD: this name is in validate-es4-render.sh's KNOWN_STALE, so the renderer does NOT overwrite it and this file is
-# the source of authority for es4 until that list is emptied. It said "DO NOT EDIT BY HAND" while being, in fact, the only
-# place an es4 operand can be declared — which is how the Stage-B environment operand came to be missing here.
+# but HELD, so this file is HAND-MAINTAINED and is the source of authority for es4. Two things hold it, and lifting the hold
+# means doing BOTH: this name is absent from the renderer's SERVICES list (it fell out in c12e87c, and the renderer iterates
+# that list only, so it does not produce this file) AND it is quarantined in validate-es4-render.sh's KNOWN_STALE. Dropping it
+# from KNOWN_STALE alone does NOT make the renderer take over — it only makes this file unaccounted-for.
+# It said "DO NOT EDIT BY HAND" while being, in fact, the only place an es4 operand can be declared — which is how the Stage-B
+# environment operand came to be missing here entirely.
 # WHY IT IS HELD: re-rendering would also take the production CPU request (100m -> 500m) on a box whose capacity pressure is
 # why ES4_KEEP_DOWN exists. That is an OWNER capacity decision, not a drive-by change, so the hold stands and the operand is
-# declared BOTH here (es4 as it runs today) and as an _override in the renderer (es4 whenever the hold is lifted). Keep the two
-# in step: tests/test_vix_option_inteligence_deploy.py requires this file to declare es4, exactly once, with no second name.
+# declared BOTH here (es4 as it runs today) and as an _override in the renderer (inert today; it is what stops a future
+# re-render inheriting ZERODTE_RESEARCH_ENVIRONMENT=production from the overlay it derives from). Keep the two in step:
+# tests/test_vix_option_inteligence_deploy.py requires this file to declare es4, exactly once, with no second name, and
+# requires the hold to be consistent rather than half-lifted.
 # es4 environment: env-level knobs come from es4-common-env / es4-runtime-secrets;
 # every topic gets the es. prefix at runtime via TOPIC_PREFIX (incl. env-supplied values).
 # Deploy ONLY via Jenkinsfile.es4-deploy (digest-pins the :prod tag before apply).

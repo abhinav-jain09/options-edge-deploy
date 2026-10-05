@@ -95,19 +95,51 @@ class VixOptionInteligenceStageBEnvironmentTest(unittest.TestCase):
                 "every frame and research row that deployment produces",
             )
 
-    def test_es4_is_declared_in_the_renderer_too_so_the_hold_can_be_lifted_safely(self):
-        # The es4 renderer DERIVES from the production overlay, which declares 'production'. Inherited
-        # unchanged, a future re-render (whenever KNOWN_STALE is emptied) would stamp 'production' into
-        # es4 -- not a boot failure, so nothing else would catch it. The _override is what makes the
-        # held manifest and the renderer agree, and this is what keeps the two in step.
+    def test_lifting_the_es4_hold_is_a_TWO_part_change_and_es4_is_declared_for_both_states(self):
+        """es4 has two states, and the operand must be declared for each.
+
+        HELD (today): "vix-option-inteligence" is absent from the renderer's SERVICES list -- it fell out in
+        c12e87c -- and the name is quarantined in validate-es4-render.sh's KNOWN_STALE. The renderer iterates
+        SERVICES only, so it does not produce this manifest, and k8s/es4/services/vix-option-inteligence.yaml
+        is es4's source of authority; the closed-set test above is what holds that file to 'es4'.
+
+        RENDERED: whoever lifts the hold must do BOTH halves -- add the name to SERVICES and drop it from
+        KNOWN_STALE. Codex r12 MAJOR: this test and the manifest header previously said emptying KNOWN_STALE
+        made the renderer take over, which is false; dropping it from KNOWN_STALE alone only makes the
+        committed file unaccounted-for. validate-es4-render.sh refuses each half on its own, so the two-part
+        change is enforced there. What is enforced NOWHERE else is that es4 keeps its own environment name
+        through the transition, which is what this test is for: the ES_ENV _override is INERT TODAY, and it
+        exists so a future re-render cannot inherit ZERODTE_RESEARCH_ENVIRONMENT=production from the overlay
+        it derives from -- a relabelling of every es4 frame and research row, not a boot failure, so nothing
+        else would catch it.
+        """
         renderer = (ROOT / "scripts/es4/render_es4_manifests.py").read_text()
+        validator = (ROOT / "scripts/ci/validate-es4-render.sh").read_text()
+
+        services = renderer.split("SERVICES = [", 1)[1].split("\n]", 1)[0]
+        in_services = '"vix-option-inteligence"' in services
+        known_stale = validator.split("KNOWN_STALE = {", 1)[1].split("}", 1)[0]
+        in_known_stale = '"vix-option-inteligence"' in known_stale
+
+        # The hold is CONSISTENT: held means absent from SERVICES and quarantined. Half a transition is a
+        # state in which nobody can say which file is the authority.
+        self.assertEqual(
+            not in_services, in_known_stale,
+            "es4's vix-option-inteligence hold is half-lifted: it is "
+            + ("in" if in_services else "absent from") + " the renderer's SERVICES and "
+            + ("in" if in_known_stale else "not in") + " KNOWN_STALE. Lifting the hold is BOTH edits -- add it "
+            "to SERVICES and drop it from KNOWN_STALE -- and then reconcile the capacity divergence that is "
+            "why the hold exists (the production CPU request, 100m -> 500m)",
+        )
+
         block = renderer.split('"vix-option-inteligence": [', 1)
         self.assertEqual(2, len(block), "the renderer no longer has a vix-option-inteligence ES_ENV block")
         block = block[1].split("],", 1)[0]
         self.assertIn(
             '{"name": "ZERODTE_RESEARCH_ENVIRONMENT", "value": "es4", "_override": True}', block,
-            "the es4 renderer must OVERRIDE the environment it derives from production, or a re-render "
-            "silently relabels es4 evidence as production",
+            "the es4 ES_ENV must OVERRIDE the environment it derives from production. It is inert while the "
+            "name is out of SERVICES; it is here so that whoever lifts the hold cannot silently relabel every "
+            "es4 frame and research row as having come from production",
         )
 
     def test_the_value_is_never_overridden_a_second_time_in_the_same_overlay(self):
