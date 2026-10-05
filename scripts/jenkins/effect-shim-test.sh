@@ -146,11 +146,68 @@ $OUT"
 fi
 
 # --- 7. no exec loop: the shim never resolves itself as the real binary -------------------------------
+# The PATH must carry what the VERIFICATION needs and NOT the real tool, or the case never reaches binary
+# resolution and tests something else -- which is what it used to do.
+#
+# IT USED TO NAME `/usr/bin:/bin` FOR THAT, WHICH IS A STATEMENT ABOUT THE HOST, NOT ABOUT THE SHIM. On
+# this project's Macs Maven lives under Homebrew, so `/usr/bin/mvn` does not exist and the case tested
+# what it claimed; on the CI runner Maven IS `/usr/bin/mvn`, so the PATH carried the real tool, the shim
+# correctly exec'd it, and the case failed -- having silently tested nothing on every green Mac run
+# before that. The same would have been true, unnoticed, of `docker` and `rsync`.
+#
+# So the PATH is BUILT: a directory holding symlinks to exactly the commands the verification needs, and
+# then ASSERTED to resolve none of the seven tool names. The assertion is the point -- it is what stops
+# this case from quietly going vacuous again on the next host, whatever that host ships in /usr/bin.
+MINBIN="$T/minbin"; mkdir -p "$MINBIN"
+# Only EXTERNAL commands can be symlinked, and BUILTIN-ness is asked directly. `command -v printf` returns the
+# builtin NAME `printf`, not a path, so symlinking its answer made a self-referential link (harmless, since a
+# builtin needs no PATH entry, but the comment claiming "symlinks to exactly the commands" was not literal).
+# Testing for a non-absolute answer is not the same question, though: an executable found through a RELATIVE
+# PATH element answers relatively too, and skipping THAT would drop a binary the verification needs (Codex
+# NIT). So `type -t` decides what is a builtin, and a relative external path is made absolute.
+# ONLY `file` IS SYMLINKED, and every other kind is named rather than guessed at (Codex NIT). A builtin or a
+# keyword needs no PATH entry and is skipped; a FUNCTION or an ALIAS shadowing one of these would have been
+# treated as a relative executable and the fixture would have fatal-errored on a confusing message, so those
+# are refused by name with the reason. A relative external path is made absolute, because an executable found
+# through a relative PATH element answers relatively and would otherwise resolve against the wrong directory.
+for c in bash env git head printf tr; do
+  kind="$(type -t "$c" 2>/dev/null || true)"
+  case "$kind" in
+    builtin|keyword)
+      continue ;;                              # available to the shim's bash without any PATH entry
+    file)
+      : ;;                                     # the only kind that can be, and needs to be, symlinked
+    function|alias)
+      echo "effect-shim-test: FATAL — '$c' is a shell $kind here, not a command; the no-exec-loop fixture needs the real binary" >&2
+      exit 2 ;;
+    *)
+      echo "effect-shim-test: FATAL — the verification needs '$c' and \`type -t\` calls it '${kind:-nothing}'; the no-exec-loop case cannot be built" >&2
+      exit 2 ;;
+  esac
+  w="$(command -v "$c" 2>/dev/null || true)"
+  [ -n "$w" ] || { echo "effect-shim-test: FATAL — '$c' is a file per \`type -t\` but \`command -v\` found nothing" >&2; exit 2; }
+  case "$w" in
+    /*) : ;;
+    *)  w="$(cd "$(dirname "$w")" && pwd -P)/$(basename "$w")" ;;
+  esac
+  [ -x "$w" ] || { echo "effect-shim-test: FATAL — '$c' resolved to '$w', which is not executable" >&2; exit 2; }
+  ln -sf "$w" "$MINBIN/$c"
+done
+leaked=""
+for t in mvn docker rsync scp helm ansible-playbook kubectl; do
+  PATH="$MINBIN" command -v "$t" >/dev/null 2>&1 && leaked="$leaked $t"
+done
+# STRUCTURAL: this asserts the next case's own FIXTURE, not a protection in the shim, so no removal from the
+# shim can turn it red and the sweep must not expect one. Declaring it here is the point -- it is what makes
+# the next case's non-vacuity a checked property instead of a property of whatever the host keeps in /usr/bin.
+if [ -n "$leaked" ]; then
+  bad "the no-exec-loop case's PATH carries no real tool (the case is not vacuous on this host)" "it resolves:$leaked — the case would test the exec path, not the refusal"
+else
+  ok_structural "the no-exec-loop case's PATH carries no real tool (the case is not vacuous on this host)"
+fi
 : > "$T/ran"
 set +e
-# The PATH must carry what the VERIFICATION needs (bash, git) and NOT the real tool, or the case never
-# reaches binary resolution and tests something else -- which is what it used to do.
-OUT="$(cd "$W" && env PATH="$CO_SHIM:/usr/bin:/bin" RAN_LOG="$T/ran" OE_SHIM_DIR=. OE_SHIM_SHA="$SHA" \
+OUT="$(cd "$W" && env PATH="$CO_SHIM:$MINBIN" RAN_LOG="$T/ran" OE_SHIM_DIR=. OE_SHIM_SHA="$SHA" \
       OE_SHIM_ALLOW= "$CO_SHIM/mvn" --version 2>&1)"; RC=$?
 set -e
 if [ "$RC" -eq 3 ] && ! ran && printf '%s' "$OUT" | grep -q "not on PATH outside this shim directory"; then

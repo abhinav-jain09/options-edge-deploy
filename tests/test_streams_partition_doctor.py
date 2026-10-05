@@ -26,7 +26,17 @@ FAKE = textwrap.dedent(
     state = sys.argv[1]; args = sys.argv[2:]
     S = os.path.join(state, "state.json")
     st = json.load(open(S))
-    def save(): json.dump(st, open(S, "w"))
+    def save():
+        # ATOMIC, because one test READS this file while the doctor is still running and writing it
+        # (test_interrupted_through_a_pipe_still_restores_replicas polls for the scale-down). A plain
+        # open(S, "w") truncates first, so a read landing in that window got an empty file and the test
+        # died on JSONDecodeError instead of on anything it was about. os.replace is atomic on POSIX.
+        tmp = S + ".tmp." + str(os.getpid())
+        with open(tmp, "w") as f:
+            json.dump(st, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, S)
     def rejection(dep):
         for t, e, a in dep["bad"]:
             if t in st["topics"] and st["topics"][t] != e:
@@ -136,7 +146,10 @@ class StreamsPartitionDoctorTest(unittest.TestCase):
         self.save(st)
 
     def save(self, st):
-        (self.dir / "state.json").write_text(json.dumps(st))
+        # atomic for the same reason as the fake's save(): a reader must never see a truncated file
+        tmp = self.dir / "state.json.tmp"
+        tmp.write_text(json.dumps(st))
+        os.replace(tmp, self.dir / "state.json")
 
     def fake(self, *args):
         subprocess.run(["python3", str(self.dir / "fake.py"), str(self.dir), *args], check=True, capture_output=True)
@@ -327,6 +340,87 @@ class StreamsPartitionDoctorTest(unittest.TestCase):
         n = len([c for c in st["calls"][:i_del] if c[:3] == ["kubectl", "get", "pods"]])
         self.assertIn([ "svc", "API-ERROR"], st["pods_listed"][:n])
         self.assertEqual(st["pods_listed"][n - 1][1], [])
+
+    def _half_written_control(self, writer_name, write_once):
+        """Hammer reads of state.json against a concurrent writer and assert no read is ever malformed.
+
+        WHAT THIS CONTROL IS JUSTIFIED BY, precisely: its MUTATION, not by a proof that any read overlapped a
+        write. Three attempts at such a proof were all unsound and Codex was right to refuse each one:
+        counting writes over the test's lifetime (both merely happened), counting reads that straddled a
+        completed write (a read can finish, then a whole write complete), and bracketing against a `writing`
+        flag (set around the CALL, so an adversarial schedule can place every read in the pre-call and
+        post-return envelope). An instant-level overlap cannot be established from outside the writer.
+
+        What IS established, and is enough: with the ATOMIC save this control is green over 3 000 reads
+        against a live writer, and with a TRUNCATING save it fails within a few iterations with exactly the
+        JSONDecodeError that the original bug produced -- for the test harness's writer AND, separately, for
+        the external fake's. A control that provably CAN fail, and does not, is evidence. One that cannot fail
+        is not, which is why the mutation result is recorded beside each use rather than inferred.
+        """
+        import threading
+        import time
+
+        stop = threading.Event()
+        errors = []
+        writes = [0]
+        MIN_WRITES = 20
+
+        def writer():
+            while not stop.is_set():
+                try:
+                    write_once()
+                    writes[0] += 1
+                except Exception as e:                                   # noqa: BLE001 - the reader's verdict is what matters
+                    errors.append((writer_name, "write", repr(e)))
+                    return
+
+        t = threading.Thread(target=writer, daemon=True)
+        t.start()
+        reads = 0
+        deadline = time.monotonic() + 60
+        try:
+            while (reads < 3000 or writes[0] < MIN_WRITES) and time.monotonic() < deadline:
+                reads += 1
+                try:
+                    self.assertEqual(self.state()["deploys"]["svc"]["replicas"], 2)
+                except Exception as e:                                   # noqa: BLE001
+                    errors.append((writer_name, "read", repr(e)))
+                    break
+        finally:
+            stop.set()
+            t.join(timeout=30)
+        self.assertEqual([], errors, f"a concurrent reader observed a half-written state file ({writer_name})")
+        # The writer must have RUN -- otherwise there was nothing to be concurrent with and a green result is
+        # vacuous. This is a liveness check on the fixture, NOT an overlap proof, and it does not pretend to be.
+        self.assertGreaterEqual(
+            writes[0], MIN_WRITES,
+            f"only {writes[0]} write(s) completed during {reads} reads ({writer_name}): there was no writer to "
+            "race, so a green result would mean nothing",
+        )
+        self.assertGreaterEqual(reads, 1000, f"only {reads} reads ran ({writer_name})")
+
+    # THE POSITIVE CONTROLS for the atomic save, one per WRITER. There are two writers and they are different
+    # programs: this test class's own save(), and the external fake's save() inside fake.py. The reported
+    # failure -- test_interrupted_through_a_pipe_still_restores_replicas dying on JSONDecodeError -- came from
+    # the FAKE's writer, which the first version of this control never exercised: it raced the test class's
+    # save() and would have stayed green if fake.py regressed to a truncating write (Codex MAJOR).
+    #
+    # MUTATION RESULTS, which are what justify these two tests (2026-10-05, this machine):
+    #   fake.py's save() made truncating  -> "a concurrent reader observed a half-written state file
+    #                                        (fake.py save())", JSONDecodeError, within a few iterations
+    #   the test class's save() likewise  -> the same, for the "tests' own save()" control
+    #   a writer whose body does nothing  -> "there was no writer to race, so a green result would mean nothing"
+
+    def test_the_state_file_is_never_observed_half_written_by_the_test_writer(self):
+        self.cluster({"svc": {"replicas": 2}}, {})
+        st = self.state()
+        self._half_written_control("tests' own save()", lambda: self.save(st))
+
+    def test_the_state_file_is_never_observed_half_written_by_the_fake(self):
+        # the FAKE is a SEPARATE PROCESS; `get deploy -o name` is a benign command that rewrites state.json
+        # through the fake's own save() and exits 0, so this races the writer the reported failure came from
+        self.cluster({"svc": {"replicas": 2}}, {})
+        self._half_written_control("fake.py save()", lambda: self.fake("get", "deploy", "-o", "name"))
 
     def test_interrupted_through_a_pipe_still_restores_replicas(self):
         # dev-cleanup pipes the doctor through sed, oe-boot-bringup through tee: a SIGTERM kills the

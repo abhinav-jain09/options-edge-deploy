@@ -77,9 +77,67 @@ done
 for set_name in OPTIONS_EDGE_EXACT_PARTITION_TOPICS OPTIONS_EDGE_ES4_EXACT_PARTITION_TOPICS OPTIONS_EDGE_NEVER_RECREATE_TOPICS; do
   printf '%s\n' ${!set_name:-} | grep -qx "$STRIKE" && ok "$STRIKE is in $set_name" || bad "$STRIKE missing from $set_name"
 done
-[ "$(grep -c '^OPTIONS_EDGE_NEVER_RECREATE_TOPICS=' "$HERE/topics.env")" = 1 ] \
-  && ok "there is exactly ONE NEVER_RECREATE assignment (so it cannot be re-pointed per set)" \
-  || bad "NEVER_RECREATE is assigned more than once in topics.env"
+# WHAT THIS GUARDS, exactly: the declaration must never be RE-POINTED, because a second assignment that
+# discards the first silently drops every topic the first one protected. Counting the assignments was the
+# wrong way to say that: an APPEND -- OPTIONS_EDGE_NEVER_RECREATE_TOPICS="$OPTIONS_EDGE_NEVER_RECREATE_TOPICS
+# more.topics" -- is a second assignment that protects MORE, and topics.env has one (the context-tape
+# compression topics, line 944). The count refused a safe append and called it a re-point, which is a
+# different claim from the one in the message; the assertion accepted less than it named.
+#
+# The rule is therefore about SELF-REFERENCE, not arithmetic: exactly one assignment may be a BASE (one that
+# does not mention the variable on its right-hand side), and every other assignment must EXTEND it.
+nr_assignments="$(grep -c '^OPTIONS_EDGE_NEVER_RECREATE_TOPICS=' "$HERE/topics.env")"
+# `\$\{\?` so the BRACED form counts as a reference too: ${VAR} and ${VAR#prefix} extend the value just as
+# $VAR does, and treating them as base assignments would REFUSE a legitimate append (a false refusal).
+nr_base="$(grep '^OPTIONS_EDGE_NEVER_RECREATE_TOPICS=' "$HERE/topics.env" | grep -Evc '\$\{?OPTIONS_EDGE_NEVER_RECREATE_TOPICS' || true)"
+nr_extend=$((nr_assignments - nr_base))
+if [ "$nr_base" = 1 ]; then
+  ok "NEVER_RECREATE has exactly ONE base assignment and $nr_extend append(s), so it is never re-pointed"
+else
+  bad "NEVER_RECREATE has $nr_base base assignments in topics.env (expected 1): a second one that does not extend the first DISCARDS everything the first protected"
+fi
+
+# AND THE EFFECT, not only the spelling: whatever the appends do, every topic named in any assignment must be
+# present in the value the script actually exported. A re-point passes the spelling rule nowhere, but an
+# append with a typo in the variable name would -- and this catches that.
+nr_declared="$(grep '^OPTIONS_EDGE_NEVER_RECREATE_TOPICS=' "$HERE/topics.env" \
+  | sed 's/^OPTIONS_EDGE_NEVER_RECREATE_TOPICS=//; s/^"//; s/"$//; s/\${OPTIONS_EDGE_NEVER_RECREATE_TOPICS[^}]*}//g; s/\$OPTIONS_EDGE_NEVER_RECREATE_TOPICS//g' \
+  | tr ' ' '\n' | grep -v '^$' | sort -u)"
+nr_missing=""
+for t in $nr_declared; do
+  printf '%s\n' ${OPTIONS_EDGE_NEVER_RECREATE_TOPICS:-} | tr ' ' '\n' | grep -qx "$t" || nr_missing="$nr_missing $t"
+done
+if [ -z "$nr_missing" ]; then
+  ok "every topic any NEVER_RECREATE assignment names survives into the exported value ($(printf '%s\n' $nr_declared | wc -l | tr -d ' ') topic(s))"
+else
+  bad "NEVER_RECREATE names topics that are NOT in the exported value — an assignment dropped them:$nr_missing"
+fi
+
+# AND THE SET ITSELF IS PINNED. The two rules above preserve the SHAPE of the declaration, not its MEMBERSHIP:
+# delete context-tape.compression.checkpoint from topics.env and there is still one base assignment, every
+# remaining declared token still exports, and the suite stayed green (Codex MAJOR) -- so a durable topic could
+# silently lose its protection and a later exact-partition repair would delete and recreate it.
+#
+# A never-recreate declaration is a DURABILITY PROMISE, so its membership is reviewed, not inferred. This list
+# is that review. A removal fails here, and so does an ADDITION -- which is correct: adding a topic to this set
+# is a promise someone should make deliberately, in a diff, rather than by editing one line of topics.env.
+NEVER_RECREATE_EXPECTED="context-tape.compression.checkpoint
+context-tape.compression.history
+context-tape.direction.ledger
+es.futures.footprint.strike
+options.spx.vol-premium.baseline
+options.spx.vol-premium.events
+options.spx.vol-premium.ivrv
+options.spx.vol-premium.warnings
+underlying.vix.price"
+nr_actual="$(printf '%s\n' ${OPTIONS_EDGE_NEVER_RECREATE_TOPICS:-} | tr ' ' '\n' | grep -v '^$' | sort -u)"
+if [ "$nr_actual" = "$NEVER_RECREATE_EXPECTED" ]; then
+  ok "the NEVER_RECREATE set is EXACTLY the reviewed $(printf '%s\n' "$NEVER_RECREATE_EXPECTED" | wc -l | tr -d ' ') topics"
+else
+  bad "the NEVER_RECREATE set is not the reviewed one — a durable topic gained or lost its protection" "$(
+    printf 'only in topics.env (an addition nobody reviewed):\n'; comm -23 <(printf '%s\n' "$nr_actual") <(printf '%s\n' "$NEVER_RECREATE_EXPECTED") | sed 's/^/  /'
+    printf 'only in the reviewed list (a protection that was REMOVED):\n'; comm -13 <(printf '%s\n' "$nr_actual") <(printf '%s\n' "$NEVER_RECREATE_EXPECTED") | sed 's/^/  /')"
+fi
 
 echo "2. at the declared shape nothing destructive happens, and the strike contract is still reconciled"
 for combo in "production:" "dev:" "production:es4"; do

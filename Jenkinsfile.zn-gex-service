@@ -181,6 +181,22 @@ pipeline {
         }
       }
     }
+    stage('Identity preflight (the v1 rename abandons nothing)') {
+      // zn-gex's KAFKA_APPLICATION_ID was renamed zn-gex-v1 -> zn-gex. Renaming a Streams application id
+      // abandons its consumer group AND the internal topics holding its state stores, so the rename was only
+      // safe because zn-gex had never been built. That was an OBSERVATION; this is the ENFORCEMENT (Codex):
+      // every rollout refuses if the broker still carries the old identity, and it runs on a DRY RUN too,
+      // because a dry run is exactly when an operator wants to find this out.
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
+      steps {
+        sh '''
+          set -euo pipefail
+          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
+          . scripts/kafka/load-kafka-settings.sh
+          scripts/kafka/zn-gex-identity-preflight.sh
+        '''
+      }
+    }
     stage('Verify zn-gex Kafka topics') {
       // BEFORE the rollout, same barrier as Jenkinsfile.service-deploy's "Verify gamma-ladder-path
       // output topics" stage: apply-topics.sh lives in the MONOLITHIC deploy job, not this
