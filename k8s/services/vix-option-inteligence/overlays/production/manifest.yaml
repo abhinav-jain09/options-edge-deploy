@@ -55,19 +55,14 @@ spec:
     spec:
       containers:
         - env:
+            - name: ZERODTE_RESEARCH_ENVIRONMENT
+              value: production
             - name: HEALTH_PORT
               value: "8080"
             - name: ZERO_DTE_INTELLIGENCE_ENABLED
               value: "true"
             - name: ZERODTE_RESEARCH_ENABLED
               value: "false"
-            # The DEPLOYMENT ENVIRONMENT NAME. The v1 research writer reads it (and only requires it when the
-            # shadow model is on, which is off here), and Stage-B's frames engine REQUIRES it: the name travels
-            # into every frame's payload, so a wrong one mislabels evidence that is otherwise correct. ONE name
-            # for the fact, so the frames and the research can never disagree about which environment produced
-            # the evidence. Inert for the running v1 runtime; without it a STAGE_B boot is refused.
-            - name: ZERODTE_RESEARCH_ENVIRONMENT
-              value: production
             - name: ZERO_DTE_SYMBOL
               value: SPX
             - name: ZERO_DTE_OPTION_EVENTS_TOPIC
