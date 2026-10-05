@@ -355,16 +355,20 @@ class StreamsPartitionDoctorTest(unittest.TestCase):
         stop = threading.Event()
         errors = []
         writes = [0]
+        writing = threading.Event()        # SET while the writer is inside write_once()
         MIN_OVERLAPS = 20
 
         def writer():
             while not stop.is_set():
                 try:
+                    writing.set()
                     write_once()
                     writes[0] += 1
                 except Exception as e:                                   # noqa: BLE001 - the reader's verdict is what matters
                     errors.append((writer_name, "write", repr(e)))
                     return
+                finally:
+                    writing.clear()
 
         t = threading.Thread(target=writer, daemon=True)
         t.start()
@@ -372,28 +376,41 @@ class StreamsPartitionDoctorTest(unittest.TestCase):
         overlapped = 0            # reads DURING which a write completed — the interlock, not a lifetime total
         deadline = time.monotonic() + 60
         try:
-            while (reads < 3000 or overlapped < MIN_OVERLAPS) and time.monotonic() < deadline:
+            while (reads < 3000 or overlapped < MIN_OVERLAPS or writes[0] < MIN_OVERLAPS) and time.monotonic() < deadline:
                 reads += 1
-                before = writes[0]
+                # BRACKET the read against the writer's own critical section. Counting "writes[0] increased
+                # across the read" did NOT prove a collision: a valid schedule is sample the counter, finish
+                # the read, let the writer complete a whole write, then resume -- the counter moved and the
+                # read never raced anything (Codex MINOR). `writing` is SET only while the writer is inside
+                # write_once(), so a read sampled with it set began while a write was in progress.
+                during = writing.is_set()
                 try:
                     self.assertEqual(self.state()["deploys"]["svc"]["replicas"], 2)
                 except Exception as e:                                   # noqa: BLE001
                     errors.append((writer_name, "read", repr(e)))
                     break
-                if writes[0] > before:
+                if during and writing.is_set():
                     overlapped += 1
         finally:
             stop.set()
             t.join(timeout=30)
         self.assertEqual([], errors, f"a concurrent reader observed a half-written state file ({writer_name})")
-        # NON-VACUITY, as an INTERLOCK. Counting writes and reads over the test's LIFETIME proves only that
-        # both happened; an adversarial schedule could finish every write before the first read (Codex MINOR).
-        # `overlapped` counts reads that STRADDLED a completed write, which is the collision this control is
-        # about: it can only be non-zero if the two were running at the same time.
+        # NON-VACUITY, as an INTERLOCK. `overlapped` counts reads that both BEGAN and ENDED while the writer
+        # was inside write_once(), so it can only be non-zero if a read genuinely ran concurrently with a
+        # write. For the FAKE that window is the whole subprocess, which CONTAINS the file write rather than
+        # being only it -- so this proves concurrency with the writer, and does not claim to pin the exact
+        # instant of the rename. That is the honest reading.
         self.assertGreaterEqual(
             overlapped, MIN_OVERLAPS,
-            f"only {overlapped} of {reads} reads straddled a completed write ({writer_name}, {writes[0]} writes "
-            "total): the control did not overlap the writer, so it proves nothing about atomicity",
+            f"only {overlapped} of {reads} reads ran wholly inside a write ({writer_name}, {writes[0]} writes "
+            "completed): the control did not overlap the writer, so it proves nothing about atomicity",
+        )
+        # AND writes must actually have COMPLETED. The bracket alone is not enough: `writing` is set around the
+        # CALL, so a writer whose body did nothing still looked like a critical section and every read inside it
+        # counted. Both conditions together are what make this control mean something.
+        self.assertGreaterEqual(
+            writes[0], MIN_OVERLAPS,
+            f"only {writes[0]} write(s) COMPLETED ({writer_name}): reads overlapped a writer that wrote nothing",
         )
         self.assertGreaterEqual(reads, 1000, f"only {reads} reads ran ({writer_name})")
 
