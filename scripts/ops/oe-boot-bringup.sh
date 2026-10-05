@@ -90,6 +90,23 @@ wait_for_load
 REST=$($KUBECTL get deploy --no-headers 2>/dev/null | awk '{split($2,a,"/"); if (a[2]==0) print $1}' | grep -vE "$KEEP_DOWN")
 scale_up "$REST"
 
+# ---------- wave 2 reconcile: catch any deploy the single snapshot above raced past ----------
+# Under heavy boot load (2026-10-05: load 64) the one-shot `get deploy` for REST can return before a
+# deployment is listed, so it is never scaled and — with no daily autostart and selfheal only reviving
+# wedged pods, not 0/0 deploys — it stays dark until a manual deploy (strike-flow-classifier-databento
+# sat at 0/0 for weeks this way). Re-scan: anything STILL at 0/0 (a[2]==0) was genuinely missed; anything
+# scaled just above is now 0/1 (a[2]==1) and is correctly skipped. Resurrecting a 0/0 that is not in
+# KEEP_DOWN is the same invariant wave 2 already enforces, deliberately. Gate on load first (same as
+# between waves) so a missed read can't dump the fleet onto a saturated box, and treat a FAILED list
+# loudly rather than as "nothing missed" — an empty result from a broken API must not look like success.
+wait_for_load
+if RECON=$($KUBECTL get deploy --no-headers 2>/dev/null) && [ -n "$RECON" ]; then
+  MISSED=$(printf '%s\n' "$RECON" | awk '{split($2,a,"/"); if (a[2]==0) print $1}' | grep -vE "$KEEP_DOWN")
+  [ -n "$MISSED" ] && { log "reconcile: wave 2 missed $(echo $MISSED | tr '\n' ' ')— re-upping"; scale_up "$MISSED"; }
+else
+  log "WARN: reconcile skipped — 'kubectl get deploy' returned nothing (API busy?); NOT treating as 'all up'"
+fi
+
 sleep 120
 TOTAL=$($KUBECTL get deploy --no-headers 2>/dev/null | wc -l)
 READY=$($KUBECTL get deploy --no-headers 2>/dev/null | awk '{split($2,a,"/"); if (a[1]==a[2] && a[2]>0) r++} END{print r+0}')
