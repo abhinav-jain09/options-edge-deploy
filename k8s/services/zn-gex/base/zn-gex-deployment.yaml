@@ -61,7 +61,7 @@ spec:
             - name: KAFKA_ZN_GEX_TOPIC
               value: rates.databento.zn.options.gex.strike.v1
             - name: KAFKA_APPLICATION_ID
-              value: zn-gex-v1
+              value: zn-gex
             - name: ZN_GEX_DV01_MAP_PATH
               value: /config/dv01-map/dv01-map-seed.json
             - name: ZN_GEX_MAX_SYMBOLS
