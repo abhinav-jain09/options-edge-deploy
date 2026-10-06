@@ -31,8 +31,11 @@ MIRRORS=(
 # The limit, stated rather than papered over: a write that never names the file (a glob, a
 # `for f in "$MDIR"/*`) is invisible to a text check. This test does not claim to catch that.
 OPENER='^[[:space:]]*cat > "\$MDIR/producer\.properties" <<P$'
-# MM1 reading the config it was handed: the whole line is the option, its path, and a line-continuation
-READ='^[[:space:]]*--producer\.config[[:space:]]+"?[^"[:space:]]*producer\.properties"?[[:space:]]*(\\)*$'
+# MM1 reading the config it was handed. The path is a LITERAL grammar, not a character class: a class
+# permissive enough to hold "$MDIR/producer.properties" also held `x>/mirror/producer.properties`,
+# which the shell reads as a redirection that WRITES the file. Only the two paths these pipelines
+# actually pass are accepted; a new read form has to be added here deliberately.
+READ='^[[:space:]]*--producer\.config[[:space:]]+("\$MDIR/producer\.properties"|/mirror/producer\.properties)[[:space:]]*(\\)*$'
 # the opra runner shipping the unit's files to es4: one scp/rsync, no metacharacters, and the path
 # must be a SOURCE — the destination is the last argument, so the path must not be there
 SHIP='^[[:space:]]*(scp|rsync)([[:space:]]+[^;|&<>`$(){}]*(\$[A-Za-z_][A-Za-z0-9_]*|\$\{[A-Za-z_][A-Za-z0-9_]*\}|[^;|&<>`$(){}])*)+[[:space:]]*(\\)*$'
@@ -56,10 +59,10 @@ for f in "${MIRRORS[@]}"; do
     if printf '%s\n' "$line" | grep -qE "$OPENER"; then continue; fi
     if printf '%s\n' "$line" | grep -qE "$READ"; then continue; fi
     if printf '%s\n' "$line" | grep -qE "$SHIP"; then
-      # last argument, with the line-continuation backslashes and trailing blanks removed
-      last=${line%%[[:space:]]*\\}
-      last=${last%"${last##*[![:space:]]}"}
-      last=${last##* }
+      # The last argument, with the line-continuation backslash and trailing blanks removed. Done
+      # with sed anchored at the END: a ${line%%...} glob matched from the leading indentation and
+      # left `last` EMPTY, so an scp whose destination was producer.properties passed.
+      last=$(printf '%s' "$line" | sed -E 's/[[:space:]]*\\*[[:space:]]*$//; s/.*[[:space:]]//')
       case "$last" in
         *producer.properties*) ;;   # the path is the DESTINATION: that is a write
         *) continue ;;
