@@ -6,7 +6,12 @@
 # checks "a pid exists and is bound to the right config" reports success there while the mirror keeps
 # publishing the pre-change settings.
 #
-# So drive it against stub launchctl/ps binaries, once per way it can be lied to.
+# So drive them against stub launchctl/ps binaries, once per way those two can be lied to: unload
+# failing, the registration gone while the process lives, `launchctl list` unreadable, `ps`
+# unreadable, load failing, no pid, the SAME pid, a pid that is not the publisher, a publisher that is
+# not this unit, and two publishers at once — plus the clean paths (a replacement and a first
+# install). What it does NOT cover, because no stub can: launchd's own timing, a unit that dies after
+# the settle, and anything the real `ps` reports that this stub's two forms do not.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 STOP_TPL=ansible/templates/mirror-stop.sh.j2
@@ -32,8 +37,10 @@ mkdir -p "$WORK/bin"
 cat > "$WORK/bin/launchctl" <<'L'
 #!/usr/bin/env bash
 W="$(dirname "$0")/.."
+# an unreadable job table: every subcommand fails, which is what a broken launchctl looks like
+[ -e "$W/launchctl_fails" ] && exit 1
 case "${1:-}" in
-  list)   cat "$W/pid.$(cat "$W/phase")" 2>/dev/null; exit 0 ;;
+  list)   [ -e "$W/list_fails" ] && exit 1; cat "$W/pid.$(cat "$W/phase")" 2>/dev/null; exit 0 ;;
   unload) echo loaded > "$W/phase"; [ -e "$W/unload_fails" ] || echo unloaded > "$W/phase"; exit "$([ -e "$W/unload_fails" ] && echo 1 || echo 0)" ;;
   load)   [ -e "$W/load_fails" ] && exit 1; echo running > "$W/phase"; exit 0 ;;
 esac
@@ -67,7 +74,7 @@ scenario() { # phase(stop|start|both)  name  expect(pass|fail)  [want=<substring
   local phase="$1" name="$2" expect="$3"; shift 3
   local want=""
   case "${1:-}" in want=*) want="${1#want=}"; shift ;; esac
-  rm -f "$WORK"/unload_fails "$WORK"/load_fails "$WORK"/ps_fails "$WORK"/pid.* "$WORK"/procs.* "$WORK"/phase
+  rm -f "$WORK"/unload_fails "$WORK"/load_fails "$WORK"/ps_fails "$WORK"/launchctl_fails "$WORK"/list_fails "$WORK"/pid.* "$WORK"/procs.* "$WORK"/phase
   "$@"
   set +e
   case "$phase" in
@@ -125,6 +132,11 @@ scenario stop "registration gone but the OLD process is alive" fail want="still 
 setup_ps_fails() { setup_replaced; : > "$WORK/ps_fails"; }
 scenario stop "ps fails (the process table is unreadable)" fail want="cannot enumerate processes" setup_ps_fails
 
+# an unreadable JOB table is not an unloaded unit: concluding "absent" there would write files under a
+# still-registered KeepAlive job
+setup_launchctl_fails() { setup_replaced; : > "$WORK/launchctl_fails"; }
+scenario stop "launchctl list fails" fail want="cannot read launchctl list" setup_launchctl_fails
+
 scenario stop "a unit that was not running stops cleanly" pass want="stopped: was pid none" setup_first_install
 
 # ---- PHASE 2 (start): the unit must come up on the new files, alone ----
@@ -151,5 +163,10 @@ scenario start "TWO processes publishing after the load" fail want="duplicate ev
 setup_start_ps_fails() { setup_replaced; echo unloaded > "$WORK/phase"; : > "$WORK/ps_fails"; }
 scenario start "ps fails while proving it is the only one" fail want="cannot enumerate processes" setup_start_ps_fails
 
+# the load succeeds but the job table then cannot be read: without pid_of checking launchctl's
+# status this returned empty, and an empty pid is not the same question as an unreadable table
+setup_start_list_fails() { setup_replaced; echo unloaded > "$WORK/phase"; : > "$WORK/list_fails"; }
+scenario start "launchctl list fails after a successful load" fail want="cannot read launchctl list" setup_start_list_fails
+
 [ "$fail" = 0 ] || { echo "mirror reload guard: FAILED"; exit 1; }
-echo "mirror stop/start guards: 13 scenarios behave as specified"
+echo "mirror stop/start guards: 15 scenarios behave as specified"

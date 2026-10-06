@@ -36,14 +36,29 @@ grep -qE 'PERMITTED_SHA_GUARD_VERSION="\$\(' "$PB" \
 # ---- 2. the task's own conditions ----
 block=$(awk '/name: Enforce the permitted commit before any PRODUCTION effect/{f=1} f{print} f&&/failed_when: oe_guard.rc != 0/{exit}' "$PB")
 [ -n "$block" ] || { echo "FAIL: $PB has no permitted-commit task ending in a fatal failed_when"; fail=1; }
-printf '%s\n' "$block" | grep -q 'when: oe_confirm and (oe_target == oe_prod_target)' \
-  || { echo "FAIL: the permitted-commit task must run for a production INSTALL (oe_confirm and the prod target)"; fail=1; }
+printf '%s\n' "$block" | grep -qF "when: oe_confirm and (oe_target == '192.168.100.252:9092')" \
+  || { echo "FAIL: the permitted-commit task must run for a production INSTALL, decided against the literal broker"; fail=1; }
 printf '%s\n' "$block" | grep -q 'bash scripts/jenkins/permitted-sha-guard.sh' \
   || { echo "FAIL: the permitted-commit task must run the repository's own guard script"; fail=1; }
 
+# ---- 2b. the production decision is taken against LITERALS ----
+# An Ansible extra var outranks every var, fact and register in a play, so a decision taken through a
+# NAME can be redefined on the command line: with `-e oe_prod_target=127.0.0.1:19092` the real
+# production broker would pass the allow-list, skip the guard and set the permission true. The three
+# decisions are therefore written against the literal broker, and that is asserted here — and then
+# behaviourally, by running with exactly that override.
+while IFS= read -r pat; do
+  [ -n "$pat" ] || continue
+  grep -qF -- "$pat" "$PB" || { echo "FAIL: $PB must take the production decision against the literal broker, not a redefinable name (missing: $pat)"; fail=1; }
+done <<PATS
+oe_target in ['127.0.0.1:19092', '192.168.100.252:9092']
+when: oe_confirm and (oe_target == '192.168.100.252:9092')
+oe_prod_permitted: "{{ (oe_target != '192.168.100.252:9092')
+PATS
+
 # ---- 3. every mutating task re-checks the guard's verdict ----
-grep -q 'oe_prod_permitted: "{{ (oe_target != oe_prod_target) or ((oe_guard.rc | default(1)) == 0) }}"' "$PB" \
-  || { echo "FAIL: $PB must publish oe_prod_permitted from the guard's verdict"; fail=1; }
+grep -qF "oe_prod_permitted: \"{{ (oe_target != '192.168.100.252:9092') or ((oe_guard.rc | default(1)) == 0) }}\"" "$PB" \
+  || { echo "FAIL: $PB must publish oe_prod_permitted from the guard's verdict, against the literal broker"; fail=1; }
 for t in "STOP the unit before anything is written" "install the rendered files" "START the unit on the installed files"; do
   blk=$(awk -v n="$t" 'index($0, n){f=1} f{print} f&&/ansible\.builtin\.(command|shell|copy|template)/{exit}' ansible/tasks/es-mirror-unit.yml)
   printf '%s\n' "$blk" | grep -q 'oe_prod_permitted' \
@@ -78,10 +93,20 @@ if command -v ansible-playbook >/dev/null; then
     || { echo "FAIL: the refusal did not come from the guard — see $log"; sed -n '1,25p' "$log"; fail=1; }
   grep -qE 'STOP the unit|install the rendered files|START the unit' "$log" \
     && { echo "FAIL: a refused production run still reached a unit task"; fail=1; }
-  rm -f "$log" "$OUT_DUMP"
+  # the same run with the classification RENAMED: the literals must make this change nothing
+  log2=$(mktemp); set +e
+  ansible-playbook "$PB" -e mirror_target_ip=192.168.100.252 -e mirror_target_port=9092 \
+    -e confirm_mirror_install=true -e permitted_sha=0000000000000000000000000000000000000000 \
+    -e oe_prod_target=127.0.0.1:19092 -e oe_dev_target=192.168.100.252:9092 \
+    -e "dump_rows=$OUT_DUMP" >"$log2" 2>&1
+  rc2=$?; set -e
+  [ "$rc2" != 0 ] || { echo "FAIL: a production install survived -e oe_prod_target/-e oe_dev_target — the decision is being taken through a redefinable name"; fail=1; }
+  grep -q 'permitted-sha-guard: REFUSED' "$log2" \
+    || { echo "FAIL: with the classification renamed, the refusal no longer comes from the guard — see $log2"; fail=1; }
+  rm -f "$log" "$log2" "$OUT_DUMP"
 else
   echo "FAIL: ansible-playbook is required to test the production permission path"; fail=1
 fi
 
 [ "$fail" = 0 ] || { echo "=== validate-ansible-prod-permission: FAILED ==="; exit 1; }
-echo "=== validate-ansible-prod-permission: OK === the declared guard version matches all six mirror pipelines, the task is production+install only and fatal, and a production install from this checkout is refused by the guard before any unit task"
+echo "=== validate-ansible-prod-permission: OK === the declared guard version matches all six mirror pipelines; the decision is taken against the literal production broker and survives -e renaming it; the task is production+install only and fatal; every mutating task re-checks the verdict; the order is stop, install, start; and a production install from this checkout is refused by the guard before any unit task"

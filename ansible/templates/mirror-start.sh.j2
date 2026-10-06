@@ -9,7 +9,15 @@ set -uo pipefail
 PL="{{ item.plist }}"; LBL="{{ item.label }}"; MDIR="{{ item.mdir }}"
 OLD="${OE_OLD_PID:-}"; SETTLE="${OE_RELOAD_SETTLE:-8}"
 
-pid_of() { launchctl list | awk -v l="$LBL" '$3==l{print $1}'; }
+# launchctl's own status matters: an unreadable list is not an unloaded unit. Returning empty there
+# would let the stop phase conclude the unit is gone and write files under a still-registered,
+# KeepAlive job — so this RETURNS non-zero and every call site checks it.
+pid_of() {
+  local out
+  out=$(launchctl list) || { echo "FAIL: cannot read launchctl list — refusing, because an unreadable job table is indistinguishable from an unloaded unit" >&2; return 1; }
+  printf '%s\n' "$out" | awk -v l="$LBL" '$3==l{print $1}'
+  return 0
+}
 procs_of() {
   local all
   all=$(ps -axo pid=,command=) || { echo "FAIL: cannot enumerate processes (ps failed) — cannot prove this unit is the only mirror for its topic" >&2; return 1; }
@@ -24,7 +32,7 @@ if ! launchctl load "$PL"; then
   exit 1
 fi
 sleep "$SETTLE"
-NEW=$(pid_of)
+NEW=$(pid_of) || exit 1
 case "$NEW" in
   (*[!0-9]*|"") echo "FAIL: $LBL is loaded but not running (launchctl pid='$NEW') — it did not start on the new configuration"; exit 1 ;;
 esac

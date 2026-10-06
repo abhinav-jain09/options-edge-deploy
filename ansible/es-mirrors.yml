@@ -25,6 +25,14 @@
 #   # one topic
 #   ansible-playbook ansible/es-mirrors.yml -e only_topics=es.futures.footprint.bars -e confirm_mirror_install=true
 #
+# WHAT THE PRODUCTION LOCK IS, AND IS NOT. A production install runs the repository's own
+# permitted-commit guard, and every task that stops, writes or starts a unit re-checks both its
+# verdict and the literal production broker. That makes an ACCIDENT impossible — a wrong target, a
+# forgotten SHA, an unmerged branch, a copy-pasted command — and it makes a deliberate bypass
+# something you have to spell out, because in Ansible an extra var (-e) outranks every var, fact and
+# register, so a run that passes -e naming this playbook's internals can always defeat it. The
+# ENFORCED path for production remains the Jenkins job, where the guard is not the operator's to pass.
+#
 # A unit is reloaded ONLY when something that matters differs: an EFFECTIVE property of
 # consumer/producer.properties (compared key-and-value with comments and key order ignored — not the
 # full java.util.Properties grammar; see ansible/templates/mirror-diff.sh.j2, which falls back to a
@@ -53,6 +61,10 @@
     oe_only: "{{ (only_topics | default('')) | trim }}"
     oe_source: "{{ oe_source_ip }}:{{ oe_source_port }}"
     oe_target: "{{ oe_target_ip }}:{{ oe_target_port }}"
+    # Named for messages ONLY. Every DECISION below compares against the literal, because an Ansible
+    # extra var (-e) outranks every var, fact and register in the play: with the decision taken
+    # through these names, `-e oe_prod_target=127.0.0.1:19092` would make the real production broker
+    # pass the allow-list, skip the permitted-commit guard and set the permission true.
     oe_prod_target: "192.168.100.252:9092"
     oe_dev_target: "127.0.0.1:19092"
     oe_rendered_dir: "{{ playbook_dir }}/.ansible-rendered/es-mirrors"
@@ -79,7 +91,7 @@
       ansible.builtin.assert:
         that:
           - oe_source == '192.168.100.4:9092'
-          - oe_target in [oe_dev_target, oe_prod_target]
+          - oe_target in ['127.0.0.1:19092', '192.168.100.252:9092']
         fail_msg: >-
           source must be es4 (192.168.100.4:9092) and target must be dev ({{ oe_dev_target }})
           or prod ({{ oe_prod_target }}); got source={{ oe_source }} target={{ oe_target }}.
@@ -89,7 +101,7 @@
       # PERMITTED_SHA (nothing is substituted for it), and a HEAD that is not exactly that commit.
       # Only a production INSTALL goes through it — a plan reads brokers and writes nothing, and dev
       # is not production.
-      when: oe_confirm and (oe_target == oe_prod_target)
+      when: oe_confirm and (oe_target == '192.168.100.252:9092')
       ansible.builtin.shell:
         cmd: |
           set -uo pipefail
@@ -108,7 +120,7 @@
       # One fatal assertion was the only thing standing between a refusal and a production change, so
       # now every task that stops, writes or starts a unit re-checks this fact as well.
       ansible.builtin.set_fact:
-        oe_prod_permitted: "{{ (oe_target != oe_prod_target) or ((oe_guard.rc | default(1)) == 0) }}"
+        oe_prod_permitted: "{{ (oe_target != '192.168.100.252:9092') or ((oe_guard.rc | default(1)) == 0) }}"
 
     - name: Check the Kafka CLI is where this playbook expects it
       # Not in dump mode: that path stops before any broker or unit access, and the identity gate runs
@@ -171,8 +183,8 @@
       # es.futures.cvd.levels is PRODUCTION-ONLY (ES-CVD-SPX-LEVELS-DESIGN.md CL-R6 L1/M1): the dev
       # resource must stay ABSENT. Skipped here, not failed, so a dev run of the whole table works.
       ansible.builtin.set_fact:
-        oe_held: "{{ oe_selected | selectattr('prod_only') | map(attribute='topic') | list if not (oe_target == oe_prod_target) else [] }}"
-        oe_plan: "{{ oe_selected | rejectattr('prod_only') | list if not (oe_target == oe_prod_target) else oe_selected }}"
+        oe_held: "{{ oe_selected | selectattr('prod_only') | map(attribute='topic') | list if (oe_target != '192.168.100.252:9092') else [] }}"
+        oe_plan: "{{ oe_selected | rejectattr('prod_only') | list if (oe_target != '192.168.100.252:9092') else oe_selected }}"
 
     - name: Report the plan
       ansible.builtin.debug:
