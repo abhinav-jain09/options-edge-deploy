@@ -356,10 +356,14 @@ patches:
                   # node sits at 42Gi (68%) requested and this pod still schedules.
                   #
                   # ⚠ WHAT THIS DOES AND DOES NOT BUY (Codex r2 DEFECT — the first wording of this
-                  # comment claimed more). A request is an ADMISSION control: it stops the scheduler
-                  # placing OTHER pods into memory this one will actually take, and it makes THIS pod
-                  # Pending-and-visible rather than silently squeezed if it is ever rescheduled onto a
-                  # node without the room. It does NOT prevent a kernel OOM kill. The pod stays
+                  # comment claimed more, and r3 that the correction still did). A request is an
+                  # ADMISSION control and nothing else: it reserves 6Gi of the node's requested-memory
+                  # budget, so the scheduler has 6Gi less to place OTHER pods into, and it makes THIS
+                  # pod Pending-and-visible rather than silently squeezed if it is ever rescheduled
+                  # onto a node without that much room. 6Gi is the reservation, NOT a bound on what
+                  # this pod consumes — it is Burstable and may take up to its 8Gi limit, so 2Gi of its
+                  # possible footprint stays unaccounted for in that budget by construction. Nothing
+                  # here prevents a kernel OOM kill. The pod stays
                   # Burstable (request 6Gi < limit 8Gi, cpu request with no cpu limit) and can still
                   # grow to 8Gi, and node memory LIMITS stay heavily overcommitted at ~210% with this
                   # running. The 2026-09-10 13:11 ET kill took this pod at 6.1GB RSS and nothing here
