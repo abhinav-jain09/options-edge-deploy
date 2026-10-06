@@ -129,7 +129,7 @@ spec:
             - name: CONTEXT_TAPE_MAX_SNAPSHOT_BYTES
               value: "1048576"
             - name: JAVA_TOOL_OPTIONS
-              value: -Xms256m -Xmx768m
+              value: -Xms256m -Xmx1536m
           envFrom:
             - configMapRef:
                 name: options-edge-config
@@ -160,7 +160,7 @@ spec:
             periodSeconds: 10
           resources:
             limits:
-              memory: 1Gi
+              memory: 2Gi
             requests:
               cpu: 250m
-              memory: 512Mi
+              memory: 768Mi
