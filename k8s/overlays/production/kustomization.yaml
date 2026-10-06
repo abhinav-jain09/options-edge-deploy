@@ -347,38 +347,37 @@ patches:
                 resources:
                   limits:
                     memory: 8Gi
-                  # RAISED 2Gi -> 6Gi (2026-10-06, with the prod replicas lift below). The pod's real
-                  # footprint is the 6GB heap plus RocksDB off-heap; a 2Gi request told the scheduler
-                  # to account for a third of that, which is how an 8Gi-limit pod lands on a node that
-                  # is already 197% committed on limits. Measured on .252 2026-10-06: allocatable
-                  # 62.2Gi / 24 CPU, pod requests 36.1Gi (56%), pod LIMITS 126.1Gi (197%) with this
-                  # deployment at replicas 0; `free` 40Gi used / 21Gi available. At a 6Gi request the
-                  # node sits at 42Gi (68%) requested and this pod still schedules.
+                  # RAISED 2Gi -> 6Gi (2026-10-06, with the prod replicas lift below), so the
+                  # request matches the heap this container is configured with instead of a third of
+                  # it.
                   #
-                  # ⚠ WHAT THIS DOES AND DOES NOT BUY (Codex r2 DEFECT — the first wording of this
-                  # comment claimed more; r3 that the first correction still did; r4 that the second
-                  # misnamed the mechanism). A memory request does exactly two things, and the second
-                  # one is not about scheduling at all:
-                  #   1. SCHEDULING. It reserves 6Gi of the node's requested-memory budget, so the
-                  #      scheduler has 6Gi less to place OTHER pods into, and it makes THIS pod
-                  #      Pending-and-visible rather than silently squeezed if it is ever rescheduled
-                  #      onto a node without that much room. It is a placement reservation — not
-                  #      Kubernetes admission control, which an earlier wording of this comment called
-                  #      it, and not a cgroup floor.
-                  #   2. NODE-PRESSURE EVICTION RANKING. Under kubelet memory pressure a Burstable pod
-                  #      using LESS than its request is ranked after one exceeding its request, so a
-                  #      6Gi request also makes this pod a later eviction candidate than a 2Gi request
-                  #      did. (Where MemoryQoS is enabled it additionally sets memory.min; it is not
-                  #      enabled here.)
-                  # 6Gi is the reservation, NOT a bound on what this pod consumes — it is Burstable
-                  # (request 6Gi < limit 8Gi, cpu request with no cpu limit) and may take up to its 8Gi
-                  # limit, so 2Gi of its possible footprint stays outside that budget by construction.
-                  # Node memory LIMITS stay overcommitted at ~210% with this running, and NOTHING here
-                  # prevents a kernel OOM kill: the 2026-09-10 13:11 ET kill took this pod at 6.1GB RSS
-                  # and a repeat is not made impossible, only less likely on the two axes above.
-                  # The heap is NOT being lowered to avoid it, because -Xmx1024m is the documented
-                  # in-JVM OOM above. Abort action if the node comes under pressure with this running:
-                  # `kubectl -n options-edge scale deploy/dealer-ledger-service --replicas=0`.
+                  # THE RECORD, not a prediction. Two sizings of this container have failed in
+                  # production, in opposite directions:
+                  #   -Xmx1024m  -> in-JVM OutOfMemoryError on day's-backlog catch-up; StreamThread
+                  #                 died, readiness 503, rollout-wait timeout. That is why the heap is
+                  #                 6144m and is NOT being lowered here.
+                  #   -Xmx6144m  -> 2026-09-10 13:11 ET, the kernel killed this pod at 6.1GB RSS and
+                  #                 the whole family went on the hold list (#1034).
+                  # So the heap stays where it is and the only number changed is the one that was
+                  # describing the container wrongly: requests.memory was 2Gi against a 6144m heap
+                  # under an 8Gi limit.
+                  #
+                  # MEASURED on .252 2026-10-06 with this deployment at replicas 0: allocatable 62.2Gi
+                  # / 24 CPU; pod requests 36.1Gi (56%); pod LIMITS 126.1Gi (197%); `free` 40Gi used /
+                  # 21Gi available. With this pod at a 6Gi request the node is at 42Gi (68%) requested
+                  # and ~210% on limits, and it schedules.
+                  #
+                  # ⚠ NO SAFETY CLAIM IS MADE FOR THIS NUMBER. Five Codex rounds were spent on earlier
+                  # wordings here, each one finding that a sentence about what a memory request
+                  # guarantees was wrong in a further detail (it was called admission control; it was
+                  # said to do "nothing else" and then "exactly two things"; the limit was implied to
+                  # bound consumption). The lesson is that this comment should not characterise kernel
+                  # or kubelet behaviour at all. What is true is only the above: the configured values,
+                  # the measured node, and the two recorded failures. A repeat of the 09-10 kill is not
+                  # excluded by anything in this file.
+                  #
+                  # ABORT if the node comes under pressure with this running:
+                  #   kubectl -n options-edge scale deploy/dealer-ledger-service --replicas=0
                   requests:
                     memory: 6Gi
   # PROD REPLICAS LIFT (USER 2026-10-06: "start the dealer ledger on prod so it produces a verdict").
