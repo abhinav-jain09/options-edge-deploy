@@ -11,6 +11,25 @@
 # near-spot producer either) — mirrors k8s/services/strike-flow-classifier/overlays/production,
 # validate-services enforces the render equality; MUST re-run generate-service-slices.sh after
 # any change here.
+#
+# CAUSAL_SKEW_TOLERANCE_MS raised 250ms -> 3000ms (2026-10-06, first live observation after
+# enabling the producer above). The 250ms seed assumed causal skew was sub-second JITTER between
+# near-synchronized feeds; live production data shows that's the wrong model. Measured directly
+# against options.opra.tcbbo and underlying.spx.price on prod: for 160 trades sampled against the
+# spot tick immediately preceding each one (the exact quantity the SPOT_STALE check compares),
+# the gap had a MEDIAN of ~570ms and a max of ~1725ms -- the great majority of live trades were
+# already refused at 250ms. This produced a ~100% SPOT_FUTURE_RELATIVE_TO_TRADE / SPOT_STALE /
+# DELTA_STALE refusal rate with zero accepted records in the minutes after rollout.
+# This is NOT the drift the design doc's own "+50ms step, capped at 3 steps (150ms total)"
+# recalibration procedure is for -- that procedure assumes the seed was roughly right and is
+# drifting; max 400ms (250+150) cannot cover an observed ~1.7s tail. This is a wrong INITIAL seed
+# (sub-second jitter was the wrong model for OPRA trade dissemination latency vs. a near-
+# continuous SPX index tick stream), corrected once with real production evidence -- the exact
+# "calibrated in a follow-up phase against replay data" the seed's own doc comment anticipated.
+# 3000ms gives ~1.3s of margin over the observed max for the spot leg; the delta leg (GEX, Redis)
+# was not independently measured (no redis-cli available at calibration time) but is expected to
+# be comparable-or-worse since it is a heavier computed value -- both legs share this one
+# constant. Revisit via CausalLagGovernance once enough live volume accumulates to evaluate it.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -23,3 +42,4 @@ spec:
         - name: strike-flow-classifier
           env:
             - {name: STRIKE_FLOW_NEAR_SPOT_ENABLED, value: "true"}
+            - {name: STRIKE_FLOW_NEAR_SPOT_CAUSAL_SKEW_TOLERANCE_MS, value: "3000"}
