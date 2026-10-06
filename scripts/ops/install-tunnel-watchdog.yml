@@ -2,7 +2,7 @@
 - name: Install production Cloudflare tunnel watchdog
   hosts: all
   gather_facts: false
-  become_method: sudo
+  become_method: su
   vars:
     watchdog_path: /usr/local/sbin/oe-tunnel-watchdog.sh
     record_path: /usr/local/sbin/.oe-tunnel-watchdog.sha256
