@@ -153,7 +153,11 @@ reassign_topic_replication_factor() {
 
   if (( ${#brokers[@]} < REPLICATION_FACTOR )); then
     echo "Cannot assign replication factor $REPLICATION_FACTOR with only ${#brokers[@]} brokers" >&2
-    exit 1
+    # Returns to the caller rather than exiting the whole script (Codex review, 2026-10-06): this
+    # is a per-topic repair step inside the main loop, and an insufficient-broker-count condition
+    # on ONE topic's RF repair must not abandon every topic still waiting after it — the same
+    # defect this changeset exists to close.
+    return 1
   fi
 
   tmp="$(mktemp)"
@@ -396,7 +400,10 @@ for entry in $OPTIONS_EDGE_TOPICS; do
           --partitions "$partitions"
       fi
       if [[ "$current_replication_factor" != "$REPLICATION_FACTOR" ]]; then
-        reassign_topic_replication_factor "$topic" "$desired_partitions"
+        if ! reassign_topic_replication_factor "$topic" "$desired_partitions"; then
+          SKIPPED_TOPICS+=("$topic (replication-factor reassignment failed, see log above)")
+          continue
+        fi
       fi
       wait_for_topic_shape "$topic" "$desired_partitions" "$REPLICATION_FACTOR"
     else
