@@ -65,7 +65,7 @@
       ansible.builtin.assert:
         that:
           - oe_instance | length > 0
-          - oe_instance is match('^[a-z0-9][a-z0-9-]*$')
+          - oe_instance is match('^[a-z0-9][a-z0-9-]*\Z')
           - oe_source | length > 0
           - oe_target | length > 0
           - oe_source != oe_target
@@ -74,22 +74,25 @@
           # Kafka's own legal topic charset is [a-zA-Z0-9._-]; anything else (a quote, a newline, a
           # semicolon) would break out of the single-quoted --whitelist argument in run-mirror.sh and
           # execute on the target. Same for the endpoints, which must be host:port and nothing else.
-          - oe_topics_list | select('match', '^[A-Za-z0-9._-]+$') | list | length == oe_topics_list | length
-          - oe_source is match('^[A-Za-z0-9.-]+:[0-9]{1,5}$')
-          - oe_target is match('^[A-Za-z0-9.-]+:[0-9]{1,5}$')
-          - oe_group_id is match('^[A-Za-z0-9._-]+$')
+          # \Z, NOT $. Python's `$` also matches immediately BEFORE a trailing newline, so
+          # "1.2.3.4:9092\n" satisfied every `...$` pattern here and the newline then reached a
+          # rendered config or a shell comment (Codex r3). \Z is the true end of string.
+          - oe_topics_list | select('match', '^[A-Za-z0-9._-]+\Z') | list | length == oe_topics_list | length
+          - oe_source is match('^[A-Za-z0-9.-]+:[0-9]{1,5}\Z')
+          - oe_target is match('^[A-Za-z0-9.-]+:[0-9]{1,5}\Z')
+          - oe_group_id is match('^[A-Za-z0-9._-]+\Z')
           - oe_auto_offset_reset in ['latest', 'earliest']
           - oe_state in ['present', 'absent']
           # `| int >= 1` is NOT a validation: Jinja's int filter parses the leading digits and
           # discards the rest, so "1; id" passes it and then renders unquoted into run-mirror.sh.
           # Require the WHOLE value to be decimal.
           - oe_num_streams is string or oe_num_streams is number
-          - (oe_num_streams | string) is match('^[1-9][0-9]{0,2}$')
+          - (oe_num_streams | string) is match('^[1-9][0-9]{0,2}\Z')
           # Rendered verbatim into producer.properties; constrain to the codecs Kafka accepts.
           - oe_compression in ['none', 'gzip', 'snappy', 'lz4', 'zstd']
           # Reaches `stat` and a tar argument vector on the CONTROLLER. Absolute, no traversal,
           # no whitespace or option-looking prefix.
-          - oe_tools_src is match('^/[A-Za-z0-9._/-]+$')
+          - oe_tools_src is match('^/[A-Za-z0-9._/-]+\Z')
           - "'..' not in oe_tools_src"
           # A digit-count regex accepts :0 and :99999. Bound the actual range.
           - oe_source.split(':')[1] | int >= 1
@@ -97,11 +100,13 @@
           - oe_target.split(':')[1] | int >= 1
           - oe_target.split(':')[1] | int <= 65535
           # oe_home controls every path this play writes and CAN be overridden through extra vars.
-          - oe_home is match('^/[A-Za-z0-9._/-]+$')
+          - oe_home is match('^/[A-Za-z0-9._/-]+\Z')
           - "'..' not in oe_home"
           # `hosts:` is resolved before any task, so this cannot gate host selection — it is a
           # tripwire for a direct playbook invocation against something the lane does not own.
           - inventory_hostname in ['mac74']
+          # Reaches wait_for.timeout; an absurd value turns the safety probe into the outage.
+          - (oe_probe_timeout | string) is match('^[1-9][0-9]{0,2}\Z')
         fail_msg: >-
           mirror_instance must be a lowercase slug; source and target must be host:port with a port
           in 1..65535 and must differ; every topic and the group id must match Kafka's legal charset
@@ -230,6 +235,24 @@
         remote_src: false
         creates: "{{ oe_kafka_tools }}/bin/kafka-mirror-maker"
       when: not oe_tools.stat.exists
+
+    - name: Verify the TARGET now has every piece the launcher execs at runtime
+      ansible.builtin.stat:
+        path: "{{ oe_kafka_tools }}/{{ item }}"
+      register: oe_tgt_tools
+      loop:
+        - bin/kafka-mirror-maker
+        - bin/kafka-run-class
+        - share/java/kafka
+
+    - name: Fail when the shipped tooling is incomplete on the target
+      ansible.builtin.assert:
+        that: oe_tgt_tools.results | map(attribute='stat.exists') | select | list | length == 3
+        fail_msg: >-
+          {{ oe_kafka_tools }} on {{ inventory_hostname }} is missing one of
+          bin/kafka-mirror-maker, bin/kafka-run-class or share/java/kafka after the unpack. The
+          controller preflight only proves the SOURCE was complete; a truncated transfer or a
+          partially-extracted archive would otherwise surface as a crash-looping agent (Codex r3).
 
     - name: Make the Kafka tooling executable
       ansible.builtin.file:

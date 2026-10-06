@@ -3,7 +3,7 @@
 # the next Jenkinsfile.dealer-ledger-mirror run overwrites it.
 #
 #   {{ oe_source }}  ->  {{ oe_target }}
-#   topics: {{ oe_topics }}
+#   topics: {{ oe_topics_list | join(', ') }}
 #
 # The human rationale for this leg is in README.txt beside this file, NOT here: free text rendered
 # into a shell comment is executable shell one newline later, and oe_rationale is unconstrained

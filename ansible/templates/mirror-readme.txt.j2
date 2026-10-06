@@ -2,7 +2,7 @@
 free-text rationale below cannot become shell the way it could in run-mirror.sh.
 
 route   : {{ oe_source }} -> {{ oe_target }}
-topics  : {{ oe_topics }}
+topics  : {{ oe_topics_list | join(", ") }}
 group   : {{ oe_group_id }} (auto.offset.reset={{ oe_auto_offset_reset }})
 agent   : {{ oe_label }}
 
