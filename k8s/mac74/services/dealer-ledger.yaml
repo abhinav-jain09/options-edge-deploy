@@ -1,0 +1,83 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dealer-ledger-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: dealer-ledger-service
+    app.kubernetes.io/part-of: options-edge
+    oe.host: mac74
+    oe.lane: prod
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app.kubernetes.io/name: dealer-ledger-service }
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: dealer-ledger-service
+        oe.host: mac74
+        oe.lane: prod
+    spec:
+      containers:
+        - name: dealer-ledger
+          # Imported straight into the node's containerd (k8s.io namespace) with ctr, because
+          # Docker Desktop proxies every pull through registry-mirror:1273, which 500s on a
+          # plain-HTTP registry, and its storage driver is overlay2 rather than the containerd
+          # snapshotter, so the daemon's own images are not visible to the kubelet either.
+          image: options-edge-dealer-ledger:mac74
+          imagePullPolicy: Never
+          env:
+            # A pod's localhost is its own netns; oe-kafka is a HOST container.
+            - { name: KAFKA_BOOTSTRAP_SERVERS, value: "host.docker.internal:9092" }
+            # PROD's registry: mirrored Avro carries prod's schema IDs, which .74's own
+            # registry does not know and would silently fail to deserialise.
+            - { name: SCHEMA_REGISTRY_URL, value: "http://192.168.100.252:8082" }
+            - { name: KAFKA_SCHEMA_REGISTRY_URL, value: "http://192.168.100.252:8082" }
+            # Defaults to "dev." — unset it or the service subscribes to dev.* and sits in
+            # UNKNOWN_TOPIC_OR_PARTITION while looking healthy. MM1 cannot rename topics, so
+            # names here must match prod exactly.
+            - { name: TOPIC_PREFIX, value: "" }
+            - { name: APP_MARKET_DATA_SOURCE, value: "DATABENTO" }
+            - { name: HEALTH_PORT, value: "8113" }
+            - { name: DEALER_LEDGER_INPUT_STRIKE_FLOW_TOPIC, value: "options.databento.strike-flow" }
+            - { name: DEALER_LEDGER_INPUT_GREEKS_TOPIC, value: "options.databento.gex.strike" }
+            - { name: DEALER_LEDGER_INPUT_SNAPSHOT_TOPIC, value: "options.databento.raw" }
+            - { name: DEALER_LEDGER_INPUT_HEATMAP_TOPIC, value: "strike-liquidity-heatmap-dashboard" }
+            - { name: DEALER_LEDGER_INPUT_DELTA_FLOW_TOPIC, value: "delta-flow-session" }
+            - { name: DEALER_LEDGER_OUTPUT_PROFILE_TOPIC, value: "dealer-ledger-profile" }
+            - { name: DEALER_LEDGER_OUTPUT_STATE_TOPIC, value: "dealer-ledger-state" }
+            # Same app id the container used, so it resumes that consumer group rather than
+            # re-reading from latest and leaving a hole.
+            - { name: DEALER_LEDGER_STREAMS_APP_ID, value: "oe-dealer-ledger-mac74" }
+            - { name: DEALER_LEDGER_STREAMS_COMMIT_INTERVAL_MS, value: "3000" }
+            - { name: DEALER_LEDGER_STREAMS_AUTO_OFFSET_RESET, value: "latest" }
+            - { name: DEALER_LEDGER_STREAMS_NUM_THREADS, value: "4" }
+            - { name: DEALER_LEDGER_EOS_ENABLED, value: "true" }
+            - { name: KAFKA_STREAMS_STATE_DIR, value: "/var/lib/options-edge/kafka-streams" }
+            - { name: DEALER_LEDGER_ENABLED, value: "true" }
+            # Uncalibrated signal is never advisory, in any environment.
+            - { name: DEALER_LEDGER_ADVISORY_ENABLED, value: "false" }
+            - { name: DEALER_LEDGER_UI_VISIBLE, value: "true" }
+            - { name: DEALER_LEDGER_CALIBRATION_QUALITY, value: "SHADOW" }
+            - { name: DEALER_LEDGER_QUOTE_STALE_MS, value: "600000" }
+            - { name: DEALER_LEDGER_FIRE_QUALITY_DEPENDENCY_SCOPED, value: "false" }
+            - { name: DEALER_LEDGER_FIRE_OFFSPAN_MATERIALITY_FRAC, value: "0.01" }
+            - { name: JAVA_TOOL_OPTIONS, value: "-Xms384m -Xmx1024m" }
+          ports:
+            - { name: health, containerPort: 8113 }
+          livenessProbe:
+            httpGet: { path: /health/live, port: health }
+            initialDelaySeconds: 40
+            periodSeconds: 15
+          # .74 hosts the least-tested code on the platform, so one runaway experiment must not
+          # take the others down with it.
+          resources:
+            requests: { cpu: "500m", memory: 1Gi }
+            limits: { cpu: "3", memory: 3Gi }
+          volumeMounts:
+            - { name: state, mountPath: /var/lib/options-edge/kafka-streams }
+      volumes:
+        - name: state
+          emptyDir: {}
