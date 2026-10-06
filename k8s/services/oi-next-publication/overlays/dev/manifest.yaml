@@ -53,9 +53,9 @@ spec:
             - name: OI_NEXTPUB_SPOT_CLOSE
               value: "16:00"
             - name: OI_NEXTPUB_SESSION_END
-              value: "17:00"
+              value: "16:15"
             - name: OI_NEXTPUB_EVALUATE_GRACE_MINUTES
-              value: "15"
+              value: "5"
             - name: OI_NEXTPUB_MODEL_PATH
               value: /app/model/model_db_v1.json.gz
             - name: OI_NEXTPUB_ACCEPTED_FIT_SOURCES

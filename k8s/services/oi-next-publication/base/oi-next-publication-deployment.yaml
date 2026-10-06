@@ -68,14 +68,27 @@ spec:
             # Two closes, deliberately different (a review BLOCKER when they were one):
             #   SPOT_CLOSE  16:00 — the index close; the close spot is the last acceptable
             #                       canonicalSpot at or before it.
-            #   SESSION_END 17:00 — the end of SPX Curb (16:15-17:00); the research volume is
-            #                       RTH + Curb, so the session is scored only after this.
+            #   SESSION_END 16:15 — the end of SPX RTH options trading. The research volume is
+            #                       RTH + Curb (to 17:00), and the code default is 17:00 + 15 min
+            #                       grace. ON DEV THAT IS TOO LATE: dev's nightly clean (dev-cleanup
+            #                       do_clean, CLEAN slot = close+30 = 16:30 ET; it ran 16:26 ET on
+            #                       both 2026-10-02 and 2026-10-05) scales every deployment to 0 and
+            #                       deletes every non-system Kafka topic, ledger included — both
+            #                       sessions were lost 47-48 min before a 17:15 evaluation. So on dev
+            #                       the session is scored at 16:15 + 5 min = 16:20 ET, before the
+            #                       clean, and the ~0.4% of day volume that Curb adds (tape status
+            #                       2026-10-01: curb 15,760 vs rth 4,280,083) is forgone. A session is
+            #                       still evaluated exactly once; a late Curb print after 16:20 for
+            #                       an already-evaluated session is ignored by design.
+            #                       EARLY-CLOSE DAYS (13:00 close): the clean fires 13:30 and these
+            #                       fixed times are not calendar-aware — that day's OI is lost until
+            #                       the service learns the calendar's close (follow-up).
             - name: OI_NEXTPUB_SPOT_CLOSE
               value: "16:00"
             - name: OI_NEXTPUB_SESSION_END
-              value: "17:00"
+              value: "16:15"
             - name: OI_NEXTPUB_EVALUATE_GRACE_MINUTES
-              value: "15"
+              value: "5"
             # PRODUCING (USER 2026-10-02: "throw away python job and make this service produce
             # oi"). The image ships its model at this path (processing PR #911, model/README.md);
             # the first deploy ran DARK (empty path) for the live-feed soak and the Python
