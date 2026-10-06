@@ -57,7 +57,10 @@ pipeline {
     choice(name: 'ACTION', choices: ['install', 'teardown', 'status'], description: 'install = create+run the mirror; teardown = stop+remove it; status = read-only report.')
     booleanParam(name: 'ALLOW_EMPTY_SOURCE', defaultValue: false, description: 'FRESH ROLLOUT ONLY: install against a source topic that has no records yet (created by apply-topics, es-amt-service idle outside RTH). The end-to-end payload proof is DEFERRED - re-run this job with ACTION=install (idempotent) after the next RTH session, with this OFF, to actually prove the mirror.')
   }
-  options { disableRestartFromStage(); disableConcurrentBuilds(); timeout(time: 15, unit: 'MINUTES') }
+  // 45 minutes, not 15: every shape assertion is a kafka-topics/kafka-configs round trip, and on the
+  // PRODUCTION broker (318 topics on 2026-10-06) one such call takes ~16 s, so a single install can
+  // spend ten minutes in metadata alone — 15 minutes aborted three real installs mid-flight.
+  options { disableRestartFromStage(); disableConcurrentBuilds(); timeout(time: 45, unit: 'MINUTES') }
   environment {
     KBIN  = '/Users/abhinav/development/confluent-7.3.1/bin'
     // Per-(TARGET,TOPIC) identity. See the IDENTITY note in the header: the topic MUST be part of
@@ -329,7 +332,18 @@ C
 bootstrap.servers=$TGT
 key.serializer=org.apache.kafka.common.serialization.ByteArraySerializer
 value.serializer=org.apache.kafka.common.serialization.ByteArraySerializer
-acks=1
+# acks=all + explicit idempotence. On these RF=1 targets this buys NO extra durability over
+# acks=1: both wait for the one in-sync replica (the leader) to write its own log, and NEITHER
+# survives losing that sole broker — a power cut can still take records the leader had written
+# but not fsynced. Only RF>=2 with min.insync.replicas>=2 would. It is set because it is the
+# right setting the day a target has replicas, and because acks=all is what the idempotent
+# producer requires; idempotence is pinned rather than left to the client default so a client
+# upgrade cannot silently turn it off. What it covers is NARROW: duplicates and reordering a
+# producer's OWN retries would cause inside one request stream. It does nothing about MM1's
+# flush-then-commit: a crash after the flush and before the source offset is committed resends
+# those records as a new producer, so this mirror is at-least-once and CAN write a duplicate.
+acks=all
+enable.idempotence=true
 P
           cat > "$MDIR/log4j.properties" <<L
 log4j.rootLogger=INFO, stdout
