@@ -186,6 +186,20 @@
       # this trap exists to undo was exactly what it left behind.
       set -Eeuo pipefail
       R="{{ oe_rendered_dir }}/{{ item.label }}"; M="{{ item.mdir }}"; PL="{{ item.plist }}"
+      TGT="{{ item.target }}"; REPO="{{ playbook_dir }}/.."
+      # THE PRODUCTION LOCK, repeated here because a variable cannot carry it. An Ansible extra var
+      # outranks every var, fact and register, so `-e oe_stop='{"rc":0}'` (or oe_diff, or
+      # oe_prod_permitted) can make this task's conditions true however the previous phase ended. Each
+      # path that stops, WRITES or starts a unit therefore re-runs the repository's own permitted-commit
+      # guard itself for the production target, with the version hash written out literally.
+      if [ "$TGT" = "192.168.100.252:9092" ]; then
+        if ! ( cd "$REPO" && PERMITTED_SHA="${PERMITTED_SHA:-}" \
+               PERMITTED_SHA_GUARD_VERSION="2f6fc2ab7aa51eb8a9e8aa350f2d774cd2fb7a253de2591e43645a19a9886b24" \
+               bash scripts/jenkins/permitted-sha-guard.sh ); then
+          echo "FAIL: the permitted-commit guard REFUSED this PRODUCTION unit — nothing has been written"
+          exit 1
+        fi
+      fi
       # Order matters: the backup directory and the ERR trap come FIRST, and only then is the unit
       # directory created — with the mkdir ahead of the trap, a mktemp that failed exited under -e
       # with a new empty directory left behind. HAD_DIR is read before the mkdir for the same reason
@@ -248,6 +262,9 @@
       rm -rf "$BK"
       echo "installed 5 file(s) into $M"
     executable: /bin/bash
+  environment:
+    # the in-script production lock reads this; see the guard block at the top of the body
+    PERMITTED_SHA: "{{ oe_permitted_sha }}"
   register: oe_install
   failed_when: false
 
@@ -265,6 +282,7 @@
   ansible.builtin.command:
     cmd: "bash {{ oe_rendered_dir }}/{{ item.label }}/start.sh"
   environment:
+    PERMITTED_SHA: "{{ oe_permitted_sha }}"
     OE_OLD_PID: "{{ (oe_stop.stdout | default('')) | regex_search('was pid ([0-9]+)', '\\1') | first | default('', true) }}"
   register: oe_start
   failed_when: false

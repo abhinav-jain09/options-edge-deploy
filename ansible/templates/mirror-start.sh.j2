@@ -13,6 +13,22 @@
 set -uo pipefail
 PL="{{ item.plist }}"; LBL="{{ item.label }}"; MDIR="{{ item.mdir }}"
 TGT="{{ item.target }}"; RE="{{ item.topic | regex_replace('\.', '\\.') }}"
+REPO="{{ playbook_dir }}/.."
+
+# THE PRODUCTION LOCK, repeated here because a variable cannot carry it. An Ansible extra var
+# outranks every var, fact and register, so `-e oe_stop='{"rc":0}'` (or oe_diff, or
+# oe_prod_permitted) can make this task's conditions true however the previous phase ended. Each
+# path that stops, WRITES or starts a unit therefore re-runs the repository's own permitted-commit
+# guard itself for the production target, with the version hash written out literally.
+if [ "$TGT" = "192.168.100.252:9092" ]; then
+  if ! ( cd "$REPO" && PERMITTED_SHA="${PERMITTED_SHA:-}" \
+         PERMITTED_SHA_GUARD_VERSION="2f6fc2ab7aa51eb8a9e8aa350f2d774cd2fb7a253de2591e43645a19a9886b24" \
+         bash scripts/jenkins/permitted-sha-guard.sh ); then
+    echo "FAIL: the permitted-commit guard REFUSED this PRODUCTION unit — nothing has been loaded"
+    exit 1
+  fi
+fi
+
 OLD="${OE_OLD_PID:-}"; SETTLE="${OE_RELOAD_SETTLE:-8}"
 
 # launchctl's own status matters: an unreadable list is not an unloaded unit. Returning empty there

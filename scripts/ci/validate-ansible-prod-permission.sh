@@ -74,14 +74,22 @@ oe_prod_permitted: "{{ ((oe_target_ip ~ ':' ~ oe_target_port) != '192.168.100.25
 target: "{{ oe_target_ip }}:{{ oe_target_port }}"
 PATS
 
-# ---- 2c. the BINDING lock is in the stop script, not in a variable ----
+# ---- 2c. the BINDING lock is in EVERY path that touches a unit, not in a variable ----
 # An extra var outranks every var, fact and register, so the play-level conditions are advisory:
 # `-e oe_prod_permitted=true` defeated them. The lock that cannot be waved through is the one inside
 # the first script that touches a unit.
-grep -qF 'if [ "$TGT" = "192.168.100.252:9092" ]; then' "$STOP_TPL" \
-  || { echo "FAIL: $STOP_TPL must gate on the literal production target"; fail=1; }
-grep -qF 'bash scripts/jenkins/permitted-sha-guard.sh' "$STOP_TPL" \
-  || { echo "FAIL: $STOP_TPL must re-run the repository's own permitted-commit guard for a production unit"; fail=1; }
+# stop, WRITE and start: an extra var outranks every var, fact and register, so spoofing oe_stop.rc
+# made the write path's conditions true however the stop ended — each path re-runs the guard itself
+for f in "$STOP_TPL" ansible/templates/mirror-start.sh.j2 ansible/tasks/es-mirror-unit.yml; do
+  grep -qF 'if [ "$TGT" = "192.168.100.252:9092" ]; then' "$f" \
+    || { echo "FAIL: $f must gate on the literal production target"; fail=1; }
+  grep -qF 'bash scripts/jenkins/permitted-sha-guard.sh' "$f" \
+    || { echo "FAIL: $f must re-run the repository's own permitted-commit guard for a production unit"; fail=1; }
+  grep -qE 'PERMITTED_SHA_GUARD_VERSION="[0-9a-f]{64}"' "$f" \
+    || { echo "FAIL: $f must pass the guard version as a literal"; fail=1; }
+  grep -qF 'PERMITTED_SHA="${PERMITTED_SHA:-}"' "$f" \
+    || { echo "FAIL: $f must take PERMITTED_SHA from the ENVIRONMENT, never interpolated into the command text"; fail=1; }
+done
 awk '/THE PRODUCTION LOCK LIVES HERE/{f=1} f&&/launchctl unload/{print "LATE"; exit} f&&/permitted-sha-guard.sh/{print "EARLY"; exit}' "$STOP_TPL" | grep -q EARLY \
   || { echo "FAIL: $STOP_TPL must run the guard BEFORE it unloads anything"; fail=1; }
 

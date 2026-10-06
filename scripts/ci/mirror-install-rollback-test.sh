@@ -11,7 +11,7 @@ cd "$(dirname "$0")/../.."
 command -v python3 >/dev/null || { echo "FAIL: python3 is required to extract the task body"; exit 1; }
 
 WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
-render() { # out-dir  [break]
+render() { # out-dir  [break]  [target]
   python3 - "$1" "${2:-}" <<'PY'
 import sys, pathlib, yaml
 T, brk = sys.argv[1], sys.argv[2]
@@ -20,9 +20,12 @@ body = [t for t in tasks if "install the rendered files" in t["name"]]
 if not body:
     print("NO_TASK"); raise SystemExit(0)
 cmd = body[0]["ansible.builtin.shell"]["cmd"]
+import os
 cmd = (cmd.replace("{{ oe_rendered_dir }}/{{ item.label }}", T + "/rendered")
           .replace("{{ item.mdir }}", T + "/unit")
-          .replace("{{ item.plist }}", T + "/u.plist"))
+          .replace("{{ item.plist }}", T + "/u.plist")
+          .replace("{{ item.target }}", os.environ.get("OE_TEST_TARGET", "127.0.0.1:19092"))
+          .replace("{{ playbook_dir }}", os.getcwd() + "/ansible"))
 if brk == "break":
     old = 'put run-mirror.sh       "$M/run-mirror.sh"       0755'
     if old not in cmd:
@@ -138,6 +141,20 @@ if [ "$rc" != 0 ] && [ "$dir_left" = 0 ]; then
   printf '  ok   %-44s rc=%s dir=%s\n' "a failure right after the mkdir" "$rc" "$dir_left"
 else
   printf '  FAIL %-44s rc=%s dir=%s out=%s\n' "a failure right after the mkdir" "$rc" "$dir_left" "$out"; fail=1
+fi
+
+# ---- the WRITE path carries the production lock itself ----
+# The task's conditions are Ansible variables, and an extra var outranks every var, fact and register:
+# `-e oe_stop='{"rc":0}'` makes them true however the stop ended. So the body re-runs the
+# permitted-commit guard for a production target — from this checkout it must refuse, writing nothing.
+D="$WORK/prodlock"; seed "$D"
+r=$(OE_TEST_TARGET=192.168.100.252:9092 render "$D"); [ "$r" = OK ] || { echo "FAIL: cannot extract the install task body ($r)"; exit 1; }
+set +e; out=$(bash "$D/install.sh" 2>&1); rc=$?; set -e
+g=$(generation "$D")
+if [ "$rc" != 0 ] && [ "$g" = OLD ] && printf '%s' "$out" | grep -q 'REFUSED this PRODUCTION unit'; then
+  printf '  ok   %-44s rc=%s generation=%s\n' "the write path refuses an unpermitted prod" "$rc" "$g"
+else
+  printf '  FAIL %-44s rc=%s generation=%s out=%s\n' "the write path refuses an unpermitted prod" "$rc" "$g" "$out"; fail=1
 fi
 
 [ "$fail" = 0 ] || { echo "mirror install rollback: FAILED"; exit 1; }
