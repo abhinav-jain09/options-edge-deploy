@@ -52,14 +52,20 @@ done
 if [ ! -e "$PL" ]; then WHY="$WHY plist=absent"
 elif ! diff -q "$R/plist.xml" "$PL" >/dev/null 2>&1; then WHY="$WHY plist=bytes-differ"
 fi
+# BSD first, GNU second: the unit runs on this Mac, but this script is also driven by
+# scripts/ci/mirror-diff-guard-test.sh on a Linux runner, where `stat -f %m` fails and silently
+# produced 0 — which made every process look NEWER than its files, so the staleness case could
+# not fail there however broken this script was.
+mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
+epoch_of() { date -j -f '%a %b %e %T %Y' "$1" +%s 2>/dev/null || date -d "$1" +%s 2>/dev/null || echo 0; }
 PID=$(launchctl list | awk -v l="{{ item.label }}" '$3==l{print $1}')
 case "$PID" in
   (*[!0-9]*|"") WHY="$WHY process=absent" ;;
   (*) PS=$(ps -p "$PID" -o lstart= 2>/dev/null)
-      PE=$(date -j -f '%a %b %e %T %Y' "$PS" +%s 2>/dev/null || echo 0)
+      PE=$(epoch_of "$PS")
       FE=0
       for f in "$M/producer.properties" "$M/consumer.properties" "$M/log4j.properties" "$M/run-mirror.sh" "$PL"; do
-        MT=$(stat -f %m "$f" 2>/dev/null || echo 0)
+        MT=$(mtime "$f")
         [ "$MT" -gt "$FE" ] && FE=$MT
       done
       [ "$PE" -ge "$FE" ] || WHY="$WHY process=older-than-its-config(pid $PID)" ;;

@@ -152,12 +152,17 @@
       # only after all five land; a failed install leaves the OLD generation complete and the unit
       # down, which is a state phase 2 can be run against and the next plan can read.
       BK=$(mktemp -d)
+      # Restoring means putting the unit back EXACTLY as it was, which on a FIRST install means
+      # removing what was just written: moving back only the files that existed would have left a
+      # partial new generation behind, down and half-written, with nothing naming it.
       restore() {
-        for f in consumer.properties producer.properties log4j.properties run-mirror.sh; do
-          [ -e "$BK/$f" ] && mv -f "$BK/$f" "$M/$f"
+        for pair in "consumer.properties:$M/consumer.properties" "producer.properties:$M/producer.properties" \
+                    "log4j.properties:$M/log4j.properties" "run-mirror.sh:$M/run-mirror.sh" "plist.xml:$PL"; do
+          b=${pair%%:*}; d=${pair#*:}
+          if [ -e "$BK/$b" ]; then mv -f "$BK/$b" "$d"; else rm -f "$d"; fi
+          rm -f "$d.ansible-new"
         done
-        [ -e "$BK/plist.xml" ] && mv -f "$BK/plist.xml" "$PL"
-        echo "FAIL: an install step failed; the previous generation has been restored and the unit left stopped" >&2
+        echo "FAIL: an install step failed; the unit has been put back exactly as it was (files that did not exist before are removed) and left stopped" >&2
       }
       trap 'restore; rm -rf "$BK"; exit 1' ERR
       for f in consumer.properties producer.properties log4j.properties run-mirror.sh; do

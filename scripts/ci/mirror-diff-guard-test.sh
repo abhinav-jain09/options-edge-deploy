@@ -32,6 +32,18 @@ cat > "$WORK/bin/date" <<D
 # only the guard's form: date -j -f <fmt> <stamp> +%s
 cat "$WORK/pid_epoch"
 D
+# a GNU-only stat: `stat -f %m` fails, `stat -c %Y` works. The units run on this Mac, but this test
+# runs on a Linux runner too, and a silently-failing BSD form made every process look NEWER than its
+# files — the staleness case could not fail there however broken the script was.
+cat > "$WORK/bin/stat" <<T
+#!/usr/bin/env bash
+[ -e "$WORK/gnu_stat" ] || exec /usr/bin/stat "\$@"
+case "\$1" in
+  -f) exit 1 ;;
+  -c) exec /usr/bin/stat -f "%m" "\$3" ;;
+esac
+exit 1
+T
 chmod +x "$WORK/bin"/*
 export PATH="$WORK/bin:$PATH"
 
@@ -50,7 +62,7 @@ seed() { # write a healthy, identical pair
 fail=0
 case_is() { # name  expected-substring  setup...
   local name="$1" want="$2"; shift 2
-  seed; "$@"
+  seed; rm -f "$WORK/gnu_stat"; "$@"
   set +e; out=$(bash "$WORK/diff.sh" 2>&1); rc=$?; set -e
   if [ "$rc" = 0 ] && printf '%s' "$out" | grep -q -- "$want"; then
     printf '  ok   %-50s %s\n' "$name" "$(printf '%s' "$out" | cut -c1-74)"
@@ -88,5 +100,9 @@ case_is "no process at all" "process=absent" touch "$WORK/no_process"
 case_is "the process is OLDER than its config" "process=older-than-its-config" \
   bash -c "echo 1 > '$WORK/pid_epoch'"
 
+# the same case where only the GNU stat form works, which is what CI has
+case_is "older than its config, with a GNU-only stat" "process=older-than-its-config" \
+  bash -c "echo 1 > '$WORK/pid_epoch'; : > '$WORK/gnu_stat'"
+
 [ "$fail" = 0 ] || { echo "mirror diff guard: FAILED"; exit 1; }
-echo "mirror diff guard: 14 cases behave as specified"
+echo "mirror diff guard: 15 cases behave as specified"

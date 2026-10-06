@@ -33,6 +33,9 @@ procs_of() {
 }
 
 OLD=$(pid_of) || exit 1
+# launchctl prints '-' for a job that is registered but not running: that is not a pid, and reporting
+# it as one would have phase 2 compare its new pid against a dash
+case "$OLD" in (*[!0-9]*) OLD="" ;; esac
 launchctl unload "$PL" 2>/dev/null || true
 STILL=$(pid_of) || exit 1
 if [ -n "$STILL" ]; then

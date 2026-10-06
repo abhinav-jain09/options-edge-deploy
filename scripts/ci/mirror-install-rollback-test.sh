@@ -63,11 +63,25 @@ D="$WORK/broken"; seed "$D"
 r=$(render "$D" break); [ "$r" = OK ] || { echo "FAIL: cannot extract/patch the install task body ($r)"; exit 1; }
 set +e; out=$(bash "$D/install.sh" 2>&1); rc=$?; set -e
 g=$(generation "$D"); strays=$(ls -1 "$D/unit" | grep -c 'ansible-new' || true)
-if [ "$rc" != 0 ] && [ "$g" = OLD ] && [ "$strays" = 0 ] && printf '%s' "$out" | grep -q 'previous generation has been restored'; then
+if [ "$rc" != 0 ] && [ "$g" = OLD ] && [ "$strays" = 0 ] && printf '%s' "$out" | grep -q 'put back exactly as it was'; then
   printf '  ok   %-44s rc=%s generation=%s strays=%s\n' "a failed move rolls back" "$rc" "$g" "$strays"
 else
   printf '  FAIL %-44s rc=%s generation=%s strays=%s out=%s\n' "a failed move rolls back" "$rc" "$g" "$strays" "$out"; fail=1
 fi
 
+# ---- a FIRST install that fails must leave NOTHING behind ----
+# Restoring by moving back only the files that EXISTED would leave the ones just written: a partial
+# new generation, on a unit that is down, with nothing naming it.
+D="$WORK/first"; seed "$D"
+rm -f "$D/unit"/* "$D/u.plist"            # nothing installed yet
+r=$(render "$D" break); [ "$r" = OK ] || { echo "FAIL: cannot extract/patch the install task body ($r)"; exit 1; }
+set +e; out=$(bash "$D/install.sh" 2>&1); rc=$?; set -e
+left=$(ls -1 "$D/unit" 2>/dev/null | wc -l | tr -d ' '); plist_left=$([ -e "$D/u.plist" ] && echo 1 || echo 0)
+if [ "$rc" != 0 ] && [ "$left" = 0 ] && [ "$plist_left" = 0 ]; then
+  printf '  ok   %-44s rc=%s files-left=%s plist-left=%s\n' "a failed FIRST install leaves nothing" "$rc" "$left" "$plist_left"
+else
+  printf '  FAIL %-44s rc=%s files-left=%s plist-left=%s out=%s\n' "a failed FIRST install leaves nothing" "$rc" "$left" "$plist_left" "$out"; fail=1
+fi
+
 [ "$fail" = 0 ] || { echo "mirror install rollback: FAILED"; exit 1; }
-echo "mirror install rollback: a clean install lands the new generation, and a failed move restores the previous one whole"
+echo "mirror install rollback: a clean install lands the new generation, a failed move restores the previous one whole, and a failed FIRST install leaves nothing behind"
