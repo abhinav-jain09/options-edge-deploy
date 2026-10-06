@@ -89,9 +89,17 @@ for f in "${MIRRORS[@]}"; do
     if [ -z "$e_line" ]; then echo "FAIL $f: run-mirror script heredoc opened at line $s_line is never terminated"; fail=1; continue; fi
     runners=$((runners+1))
     blk=$(sed -n "$((s_line+1)),$((e_line-1))p" "$f")
-    printf '%s\n' "$blk" | grep -q 'kafka-mirror-maker' || { echo "FAIL $f: the run-mirror script at line $s_line does not invoke kafka-mirror-maker — nothing would read producer.properties"; fail=1; }
+    mm=$(printf '%s\n' "$blk" | grep -c 'kafka-mirror-maker' || true)
+    [ "$mm" = "1" ] || { echo "FAIL $f: the run-mirror script at line $s_line must invoke kafka-mirror-maker exactly once (found $mm) — nothing else would read producer.properties"; fail=1; }
     pc=$(printf '%s\n' "$blk" | grep -cE "$READ" || true)
     [ "$pc" = "1" ] || { echo "FAIL $f: the run-mirror script at line $s_line must pass --producer.config exactly once (found $pc)"; fail=1; }
+    # ...and it must belong to THAT command, not merely sit somewhere in the script: the logical
+    # command is the invocation line plus every line it continues onto with a trailing backslash. A
+    # valid-looking read parked in a dead branch while the real exec passes another config was green.
+    cmd=$(printf '%s\n' "$blk" | awk '/kafka-mirror-maker/{inc=1} inc{print; if ($0 !~ /\\[[:space:]]*$/) exit}')
+    cmd_pc=$(printf '%s\n' "$cmd" | grep -cE -- '--producer\.config' || true)
+    cmd_ok=$(printf '%s\n' "$cmd" | grep -cE "$READ" || true)
+    [ "$cmd_pc" = "1" ] && [ "$cmd_ok" = "1" ] || { echo "FAIL $f: the kafka-mirror-maker command in the runner at line $s_line must carry exactly one --producer.config, and it must be the generated file (found $cmd_pc --producer.config, $cmd_ok of them the generated path)"; fail=1; }
   done < <(grep -nE '^[[:space:]]*cat > "\$MDIR/run-mirror[^"]*\.sh" <<S$' "$f" | cut -d: -f1)
   [ "$runners" = "$want_runners" ] || { echo "FAIL $f: expected $want_runners generated run-mirror script(s), found $runners"; fail=1; }
   reads=$(grep -cE "$READ" "$f" || true)
@@ -110,11 +118,31 @@ for f in "${MIRRORS[@]}"; do
   # A LAST-WINS property file makes "contains the right line" the wrong question: a second
   # enable.idempotence=false below the pinned one would pass that and silently win. Every setting
   # here is therefore counted as a TOTAL for its key, then read.
-  acks=$(printf '%s\n' "$block" | grep -c '^acks=' || true)
-  acks_all=$(printf '%s\n' "$block" | grep -c '^acks=all$' || true)
-  idem_any=$(printf '%s\n' "$block" | grep -c '^enable\.idempotence=' || true)
-  idem_true=$(printf '%s\n' "$block" | grep -c '^enable\.idempotence=true$' || true)
-  bootstrap=$(printf '%s\n' "$block" | grep -c '^bootstrap\.servers=' || true)
+  # And the keys are read the way java.util.Properties reads them, not as exact strings: `acks = 1`,
+  # `acks:1` and a leading-blank `  acks=1` are all the SAME key to Kafka, and an exact-string grep
+  # passed every one of them while the appended line silently won. normalize_props below splits on the
+  # first of = : or whitespace and trims, which is faithful for a stanza with no escapes — and a
+  # stanza containing a backslash (a continuation, \=, \uXXXX) is REFUSED rather than parsed
+  # approximately, because that is where a faithful shell parse ends.
+  if printf '%s\n' "$block" | grep -q '\\'; then
+    echo "FAIL $f: the producer stanza contains a backslash — a line continuation or an escaped key cannot be read faithfully here, so it is refused rather than parsed approximately"
+    fail=1
+  fi
+  props=$(printf '%s\n' "$block" | awk '
+    { line=$0
+      sub(/^[[:space:]]+/, "", line)
+      if (line == "" || line ~ /^[#!]/) next
+      n = match(line, /[[:space:]]*[=:][[:space:]]*|[[:space:]]+/)
+      if (n == 0) { key = line; val = "" } else { key = substr(line, 1, n-1); val = substr(line, n+RLENGTH) }
+      sub(/[[:space:]]+$/, "", key)
+      sub(/[[:space:]]+$/, "", val)
+      print key "=" val
+    }')
+  acks=$(printf '%s\n' "$props" | grep -c '^acks=' || true)
+  acks_all=$(printf '%s\n' "$props" | grep -c '^acks=all$' || true)
+  idem_any=$(printf '%s\n' "$props" | grep -c '^enable\.idempotence=' || true)
+  idem_true=$(printf '%s\n' "$props" | grep -c '^enable\.idempotence=true$' || true)
+  bootstrap=$(printf '%s\n' "$props" | grep -c '^bootstrap\.servers=' || true)
 
   [ "$acks" = "1" ] && [ "$acks_all" = "1" ] || { echo "FAIL $f: producer must set exactly one acks= line, reading acks=all (found $acks acks lines, $acks_all of them acks=all)"; fail=1; }
   [ "$idem_any" = "1" ] && [ "$idem_true" = "1" ] || { echo "FAIL $f: producer must set exactly one enable.idempotence= line, reading true (found $idem_any lines, $idem_true of them true)"; fail=1; }
