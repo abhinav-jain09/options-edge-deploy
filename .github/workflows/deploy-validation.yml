@@ -227,6 +227,21 @@ jobs:
       - name: Validate the mirror producer contract (acks=all, pinned idempotence)
         run: bash scripts/ci/mirror-producer-contract-test.sh
 
+      # ansible/ is a SECOND generator for the same unit files, used when no Jenkins console is being
+      # watched. This fails the build when the table and the pipelines stop agreeing on the producer
+      # stanza, the consumer group formula, the offset reset, the isolation level, the topic
+      # allow-list or the unit naming. (The per-end shape assertions it cannot read are named in its
+      # header, not implied away.)
+      - name: Validate the Ansible mirror table against the pipelines
+        run: bash scripts/ci/validate-ansible-mirror-parity.sh
+
+      # Catches a playbook that cannot even be loaded — a YAML or module-name error in ansible/ is
+      # otherwise found only by the operator running it, mid-install.
+      - name: Ansible syntax check (mirror playbook)
+        run: |
+          python3 -m pip install --quiet --disable-pip-version-check ansible-core
+          ansible-playbook --syntax-check ansible/es-mirrors.yml
+
       # bash -n cannot see this: a backslash escape Groovy rejects inside a '''...''' sh block fails the
       # whole pipeline at COMPILE time ("unexpected char: '\\'"). #1027 merged one and broke every
       # action of the enumeration mirror job until the Jenkins linter was run by hand.

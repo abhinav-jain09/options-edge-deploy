@@ -1,0 +1,12 @@
+bootstrap.servers={{ item.source }}
+# group.id IS the install's identity: the committed offsets live under it on the SOURCE broker. A
+# changed group is a new mirror that re-reads from auto.offset.reset — see ansible/vars/es-mirrors.yml.
+group.id={{ item.group_id }}
+auto.offset.reset={{ item.offset_reset }}
+{% if item.isolation_level | length > 0 %}
+# read_committed: this pipeline's topics are written inside Kafka TRANSACTIONS, and the consumer
+# default read_uncommitted would republish ABORTED records non-transactionally on the target.
+isolation.level={{ item.isolation_level }}
+{% endif %}
+key.deserializer=org.apache.kafka.common.serialization.ByteArrayDeserializer
+value.deserializer=org.apache.kafka.common.serialization.ByteArrayDeserializer

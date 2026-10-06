@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# Rendered per mirror unit by ansible/tasks/es-mirror-unit.yml. READ-ONLY: it asserts the topic shape
+# the owning Jenkins pipeline asserts, at the ends that pipeline asserts, and never creates or alters
+# anything. The rendered copy under ansible/.ansible-rendered/ is the exact script that ran.
+set -uo pipefail
+KBIN="{{ oe_kbin }}"
+SRC="{{ item.source }}"; TGT="{{ item.target }}"; T="{{ item.topic }}"
+eff() {
+  local out
+  out=$("$KBIN/kafka-configs" --bootstrap-server "$1" --entity-type topics \
+        --entity-name "$2" --describe 2>/dev/null \
+        | grep -oE "(^|[ ])$3=[^ ]+" | head -1 | sed 's/^ *//' | cut -d= -f2)
+  [ -n "$out" ] || { echo "FAIL: $3 for $2 on $1 is not set (only a broker default) — the owning pipeline is what declares it" >&2; return 1; }
+  printf '%s' "$out"
+}
+SD=$("$KBIN/kafka-topics" --bootstrap-server "$SRC" --describe --topic "$T" 2>/dev/null)
+TD=$("$KBIN/kafka-topics" --bootstrap-server "$TGT" --describe --topic "$T" 2>/dev/null)
+SP=$(printf '%s\n' "$SD" | awk -F'PartitionCount:' 'NR==1{split($2,a," "); print a[1]}')
+TP=$(printf '%s\n' "$TD" | awk -F'PartitionCount:' 'NR==1{split($2,a," "); print a[1]}')
+[ -n "$SP" ] || { echo "FAIL: $T is absent on the source $SRC"; exit 1; }
+[ -n "$TP" ] || { echo "FAIL: $T is absent on the target $TGT — the mirror pipeline creates topics, this playbook never does"; exit 1; }
+CHECKED=""
+{% set a = item.assert_source %}
+{% if a.parts is defined %}
+[ "$SP" = "{{ a.parts }}" ] || { echo "FAIL: source $T PartitionCount=$SP, the pipeline's frozen contract says {{ a.parts }}"; exit 1; }
+CHECKED="$CHECKED source-parts={{ a.parts }}"
+{% endif %}
+{% if a.policy is defined %}
+SPOL=$(eff "$SRC" "$T" cleanup.policy) || exit 1
+[ "$SPOL" = "{{ a.policy }}" ] || { echo "FAIL: source $T cleanup.policy=$SPOL, the pipeline's frozen contract says {{ a.policy }}"; exit 1; }
+CHECKED="$CHECKED source-policy={{ a.policy }}"
+{% endif %}
+{% if a.retention is defined %}
+SRET=$(eff "$SRC" "$T" retention.ms) || exit 1
+[ "$SRET" = "{{ a.retention }}" ] || { echo "FAIL: source $T retention.ms=$SRET, the pipeline's frozen contract says {{ a.retention }}"; exit 1; }
+CHECKED="$CHECKED source-retention={{ a.retention }}"
+{% endif %}
+{% set b = item.assert_target %}
+{% if b.parts is defined and b.parts == 'source' %}
+[ "$TP" = "$SP" ] || { echo "FAIL: target $T PartitionCount=$TP but the source has $SP (this topic's count is mirrored from the source)"; exit 1; }
+CHECKED="$CHECKED target-parts=source($SP)"
+{% elif b.parts is defined %}
+[ "$TP" = "{{ b.parts }}" ] || { echo "FAIL: target $T PartitionCount=$TP, the pipeline's frozen contract says {{ b.parts }}"; exit 1; }
+CHECKED="$CHECKED target-parts={{ b.parts }}"
+{% endif %}
+{% if b.policy is defined %}
+TPOL=$(eff "$TGT" "$T" cleanup.policy) || exit 1
+[ "$TPOL" = "{{ b.policy }}" ] || { echo "FAIL: target $T cleanup.policy=$TPOL, the pipeline's frozen contract says {{ b.policy }}"; exit 1; }
+CHECKED="$CHECKED target-policy={{ b.policy }}"
+{% endif %}
+{% if b.retention is defined %}
+TRET=$(eff "$TGT" "$T" retention.ms) || exit 1
+[ "$TRET" = "{{ b.retention }}" ] || { echo "FAIL: target $T retention.ms=$TRET, the pipeline's frozen contract says {{ b.retention }}"; exit 1; }
+CHECKED="$CHECKED target-retention={{ b.retention }}"
+{% endif %}
+{% if b.policy_contains is defined %}
+printf '%s\n' "$TD" | head -1 | grep -q "cleanup.policy={{ b.policy_contains }}" \
+  || { echo "FAIL: target $T is not {{ b.policy_contains }} — the pipeline asserts that shape on an existing target"; exit 1; }
+CHECKED="$CHECKED target-policy~{{ b.policy_contains }}"
+{% endif %}
+{% if b.not_compacted is defined and b.not_compacted %}
+if printf '%s\n' "$TD" | head -1 | grep -q "cleanup.policy=compact"; then
+  echo "FAIL: target $T is unexpectedly compacted — the pipeline's arm for this topic is delete"; exit 1
+fi
+CHECKED="$CHECKED target-not-compacted"
+{% endif %}
+{% if b.policy is not defined and b.policy_contains is not defined and b.not_compacted is not defined %}
+NOTE=$("$KBIN/kafka-configs" --bootstrap-server "$TGT" --entity-type topics --entity-name "$T" --describe 2>/dev/null \
+       | grep -oE '(^|[ ])cleanup\.policy=[^ ]+' | head -1 | sed 's/^ *//')
+echo "note: the owning pipeline reconciles this target's config rather than asserting it; target has ${NOTE:-no explicit cleanup.policy}"
+{% endif %}
+echo "shape ok: $T$CHECKED"

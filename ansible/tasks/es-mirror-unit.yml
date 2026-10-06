@@ -1,0 +1,149 @@
+---
+# One mirror unit: assert the topic shape at BOTH ends, assert the consumer group already exists,
+# render the unit files, and reload the launchd unit ONLY when something actually changed.
+- name: "{{ item.label }} | scratch directory for everything this run renders"
+  ansible.builtin.file:
+    path: "{{ oe_rendered_dir }}/{{ item.label }}"
+    state: directory
+    mode: "0755"
+  changed_when: false
+
+- name: "{{ item.label }} | render the shape check"
+  ansible.builtin.template:
+    src: mirror-shape-check.sh.j2
+    dest: "{{ oe_rendered_dir }}/{{ item.label }}/shape-check.sh"
+    mode: "0755"
+  changed_when: false
+
+- name: "{{ item.label }} | topic shape, exactly what the owning pipeline asserts"
+  # Read-only, and no weaker or stronger than the pipeline that owns the topic: see the rendered
+  # script and ansible/vars/es-mirrors.yml. A skew is reported, not fatal — the other units are still
+  # installable and the play exits non-zero at the end; aborting here would let one skew hide the rest.
+  ansible.builtin.command:
+    cmd: "bash {{ oe_rendered_dir }}/{{ item.label }}/shape-check.sh"
+  register: oe_shape
+  changed_when: false
+  failed_when: false
+
+- name: "{{ item.label }} | the consumer group must already exist on the source"
+  # The group carries the committed offsets. A group that does not exist yet means THIS install is
+  # the first one — and with auto.offset.reset={{ item.offset_reset }} a first install copies from
+  # there, which on an `earliest` unit is the whole retained history. That is a decision, not a
+  # side effect, so it needs -e allow_new_consumer_group=true.
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      G="{{ item.group_id }}"
+      if "{{ oe_kbin }}/kafka-consumer-groups" --bootstrap-server "{{ item.source }}" --list 2>/dev/null | grep -Fxq "$G"; then
+        echo "group exists: $G"
+      elif [ "{{ oe_allow_new_group | lower }}" = "true" ]; then
+        echo "group ABSENT, creating a FIRST install under $G (allow_new_consumer_group=true, auto.offset.reset={{ item.offset_reset }})"
+      else
+        echo "FAIL: consumer group $G does not exist on {{ item.source }}."
+        echo "      A first install re-reads from auto.offset.reset={{ item.offset_reset }}; pass -e allow_new_consumer_group=true to accept that."
+        exit 1
+      fi
+    executable: /bin/bash
+  register: oe_group
+  changed_when: false
+  failed_when: false
+  when: oe_shape.rc == 0
+
+- name: "{{ item.label }} | this unit is installable"
+  ansible.builtin.set_fact:
+    oe_ok: "{{ (oe_shape.rc == 0) and ((oe_group.rc | default(1)) == 0) }}"
+
+- name: "{{ item.label }} | unit directory"
+  when: oe_ok
+  ansible.builtin.file:
+    path: "{{ oe_confirm | ternary(item.mdir, oe_rendered_dir ~ '/' ~ item.label) }}"
+    state: directory
+    mode: "0755"
+
+- name: "{{ item.label }} | render the unit files"
+  when: oe_ok
+  ansible.builtin.template:
+    src: "{{ tpl.src }}"
+    dest: "{{ (oe_confirm | ternary(item.mdir, oe_rendered_dir ~ '/' ~ item.label)) ~ '/' ~ tpl.dest }}"
+    mode: "{{ tpl.mode }}"
+  loop:
+    - { src: mirror-consumer.properties.j2, dest: consumer.properties, mode: "0644" }
+    - { src: mirror-producer.properties.j2, dest: producer.properties, mode: "0644" }
+    - { src: mirror-log4j.properties.j2,    dest: log4j.properties,    mode: "0644" }
+    - { src: run-mirror.sh.j2,              dest: run-mirror.sh,       mode: "0755" }
+  loop_control:
+    loop_var: tpl
+    label: "{{ tpl.dest }}"
+  register: oe_files
+
+- name: "{{ item.label }} | render the launchd plist"
+  when: oe_ok
+  ansible.builtin.template:
+    src: mirror.plist.j2
+    dest: "{{ oe_confirm | ternary(item.plist, oe_rendered_dir ~ '/' ~ item.label ~ '/plist.xml') }}"
+    mode: "0644"
+  register: oe_plist
+
+- name: "{{ item.label }} | is the running process older than its config?"
+  when: oe_ok
+  # MirrorMaker reads producer.properties/consumer.properties ONCE, at startup. A unit whose files
+  # were just rewritten but whose process predates them is still publishing with the OLD settings,
+  # so a stale process is a reason to reload even when nothing changed in this run.
+  ansible.builtin.shell:
+    cmd: |
+      set -uo pipefail
+      PID=$(launchctl list | awk -v l="{{ item.label }}" '$3==l{print $1}')
+      case "$PID" in (*[!0-9]*|"") echo "absent"; exit 0;; esac
+      PS=$(ps -p "$PID" -o lstart= 2>/dev/null)
+      PE=$(date -j -f '%a %b %e %T %Y' "$PS" +%s 2>/dev/null || echo 0)
+      FE=$(stat -f %m "{{ item.mdir }}/producer.properties" 2>/dev/null || echo 0)
+      CE=$(stat -f %m "{{ item.mdir }}/consumer.properties" 2>/dev/null || echo 0)
+      [ "$FE" -gt "$CE" ] || FE=$CE
+      if [ "$PE" -ge "$FE" ]; then echo "fresh $PID"; else echo "stale $PID"; fi
+    executable: /bin/bash
+  register: oe_proc
+  changed_when: false
+
+- name: "{{ item.label }} | reload the launchd unit (only when its config changed or its process is stale)"
+  ansible.builtin.shell:
+    cmd: |
+      set -uo pipefail
+      launchctl unload "{{ item.plist }}" 2>/dev/null || true
+      launchctl load "{{ item.plist }}"
+      sleep 8
+      PID=$(launchctl list | awk -v l="{{ item.label }}" '$3==l{print $1}')
+      case "$PID" in (*[!0-9]*|"") echo "FAIL: {{ item.label }} is loaded but not running (launchctl pid='$PID')"; exit 1;; esac
+      # the process must be bound to THIS unit's config, not a sibling's
+      ps -p "$PID" -o command= | grep -q -- "--producer.config {{ item.mdir }}/producer.properties" \
+        || { echo "FAIL: pid $PID is not reading {{ item.mdir }}/producer.properties"; exit 1; }
+      echo "running pid=$PID bound to {{ item.mdir }}"
+    executable: /bin/bash
+  when:
+    - oe_ok
+    - oe_confirm
+    - (oe_files is changed) or (oe_plist is changed) or ('fresh' not in (oe_proc.stdout | default('')))
+  register: oe_reload
+
+- name: "{{ item.label }} | replication lag on the source"
+  ansible.builtin.shell:
+    cmd: |
+      set -uo pipefail
+      "{{ oe_kbin }}/kafka-consumer-groups" --bootstrap-server "{{ item.source }}" --describe \
+        --group "{{ item.group_id }}" 2>/dev/null \
+        | awk -v t="{{ item.topic }}" '$2==t{printf "partition %s lag %s\n", $3, $6}'
+    executable: /bin/bash
+  register: oe_lag
+  changed_when: false
+  when: oe_ok and oe_confirm
+
+- name: "{{ item.label }} | record"
+  ansible.builtin.set_fact:
+    oe_report: >-
+      {{ (oe_report | default([])) + [
+           item.label ~ ' | ' ~ ('OK' if oe_ok else 'NOT INSTALLED')
+           ~ ' | ' ~ (((oe_shape.stdout | default('')) ~ (oe_shape.stderr | default(''))) | trim)
+           ~ ' | ' ~ (((oe_group.stdout | default('')) ~ (oe_group.stderr | default(''))) | trim)
+           ~ ' | ' ~ ((oe_reload.stdout | default('not reloaded: config unchanged and process fresh')) | trim)
+           ~ ' | ' ~ ((oe_lag.stdout | default('lag not read')) | trim)
+         ] }}
+    oe_failed: "{{ (oe_failed | default([])) + ([] if oe_ok else [item.label]) }}"

@@ -1,0 +1,148 @@
+---
+# Install EVERY es4 -> environment MirrorMaker-1 unit in one pass.
+#
+# Why this exists: the mirror Jenkins pipelines install ONE (target, topic) per build and each build
+# spends ~5-20 minutes on kafka-topics/kafka-configs round trips, so bringing all 14 units onto a new
+# producer contract is a 2-3 hour serial crawl. This playbook renders the same unit files and reloads
+# the same launchd units for all of them.
+#
+# What it deliberately does NOT do: create, alter or delete a topic, and prove a payload end to end.
+# Topic lifecycle and the payload proof stay in the pipelines, where the permitted-commit guard, the
+# pollution baseline and the drain proof live. Here a topic whose shape does not already match the
+# frozen contract at BOTH ends is a FAILURE, never something to fix in passing.
+#
+#   # plan only — renders every unit and diffs it against what is live, changes nothing
+#   ansible-playbook ansible/es-mirrors.yml
+#   # dev
+#   ansible-playbook ansible/es-mirrors.yml -e confirm_mirror_install=true
+#   # prod
+#   ansible-playbook ansible/es-mirrors.yml -e mirror_target_ip=192.168.100.252 -e mirror_target_port=9092 \
+#       -e confirm_mirror_install=true
+#   # one topic
+#   ansible-playbook ansible/es-mirrors.yml -e only_topics=es.futures.footprint.bars -e confirm_mirror_install=true
+#
+# A unit is reloaded ONLY when its rendered files changed or its process is absent or older than
+# those files: MirrorMaker reads its config once, at startup, so a rewritten file with an older
+# process is still running the OLD settings — and an unnecessary reload is a gap in a live mirror.
+- name: Install the es4 -> environment MirrorMaker-1 units
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - vars/es-mirrors.yml
+
+  vars:
+    oe_source_ip: "{{ mirror_source_ip | default('192.168.100.4') }}"
+    oe_source_port: "{{ mirror_source_port | default('9092') }}"
+    oe_target_ip: "{{ mirror_target_ip | default('127.0.0.1') }}"
+    oe_target_port: "{{ mirror_target_port | default('19092') }}"
+    oe_kbin: "{{ kafka_bin | default('/Users/abhinav/development/confluent-7.3.1/bin') }}"
+    oe_ops: "{{ ops_dir | default(lookup('env', 'HOME') ~ '/oe-ops') }}"
+    oe_agents: "{{ launch_agents_dir | default(lookup('env', 'HOME') ~ '/Library/LaunchAgents') }}"
+    oe_confirm: "{{ confirm_mirror_install | default(false) | bool }}"
+    oe_allow_new_group: "{{ allow_new_consumer_group | default(false) | bool }}"
+    oe_only: "{{ (only_topics | default('')) | trim }}"
+    oe_source: "{{ oe_source_ip }}:{{ oe_source_port }}"
+    oe_target: "{{ oe_target_ip }}:{{ oe_target_port }}"
+    oe_prod_target: "192.168.100.252:9092"
+    oe_dev_target: "127.0.0.1:19092"
+    oe_rendered_dir: "{{ playbook_dir }}/.ansible-rendered/es-mirrors"
+
+  tasks:
+    - name: Validate the broker pair, fail-closed
+      # The target is an ALLOW-LIST, not a free string: these units are per (target, topic) and a
+      # typo'd broker would install a unit nothing reads, under a group nothing commits.
+      ansible.builtin.assert:
+        that:
+          - oe_source == '192.168.100.4:9092'
+          - oe_target in [oe_dev_target, oe_prod_target]
+        fail_msg: >-
+          source must be es4 (192.168.100.4:9092) and target must be dev ({{ oe_dev_target }})
+          or prod ({{ oe_prod_target }}); got source={{ oe_source }} target={{ oe_target }}.
+
+    - name: Check the Kafka CLI is where this playbook expects it
+      ansible.builtin.stat:
+        path: "{{ oe_kbin }}/kafka-mirror-maker"
+      register: oe_mm_bin
+
+    - name: Refuse without the CLI the units exec
+      ansible.builtin.assert:
+        that: [oe_mm_bin.stat.exists]
+        fail_msg: "{{ oe_kbin }}/kafka-mirror-maker not found — pass -e kafka_bin=<confluent>/bin."
+
+    - name: Flatten the unit table into one row per launchd unit
+      ansible.builtin.set_fact:
+        oe_units: "{{ (oe_units | default([])) + [row] }}"
+      loop: "{{ mirror_units | subelements('topics') }}"
+      loop_control:
+        label: "{{ item.0.pipeline }}/{{ item.1.name }}"
+      vars:
+        slug: >-
+          {{ (oe_target_ip ~ '-' ~ oe_target_port ~ (('-' ~ item.1.name) if item.0.slug_with_topic else ''))
+             | regex_replace('[^A-Za-z0-9-]', '-') }}
+        row:
+          pipeline: "{{ item.0.pipeline }}"
+          topic: "{{ item.1.name }}"
+          # the group.id the pipeline writes, from the RAW ip/port/topic (dots kept) — never the slug
+          group_id: >-
+            {{ item.0.pipeline ~ '-' ~ (item.0.group_parts
+               | map('extract', {'ip': oe_target_ip, 'port': oe_target_port, 'topic': item.1.name})
+               | join('-')) }}
+          offset_reset: "{{ item.0.offset_reset }}"
+          isolation_level: "{{ item.0.isolation_level }}"
+          assert_source: "{{ item.1.assert.source | default({}) }}"
+          assert_target: "{{ item.1.assert.target | default({}) }}"
+          prod_only: "{{ item.1.prod_only | default(false) | bool }}"
+          mdir: "{{ oe_ops }}/{{ item.0.pipeline }}-{{ slug }}"
+          label: "com.optionsedge.{{ item.0.pipeline }}-{{ slug }}"
+          plist: "{{ oe_agents }}/com.optionsedge.{{ item.0.pipeline }}-{{ slug }}.plist"
+          source: "{{ oe_source }}"
+          target: "{{ oe_target }}"
+
+    - name: Select the units this run covers
+      ansible.builtin.set_fact:
+        oe_selected: >-
+          {{ oe_units
+             | selectattr('topic', 'in', (oe_only | split(',') | map('trim') | select | list))
+             | list
+             if (oe_only | length > 0) else oe_units }}
+
+    - name: Refuse an only_topics value that matches nothing
+      ansible.builtin.assert:
+        that: [oe_selected | length > 0]
+        fail_msg: "only_topics={{ oe_only }} selected no unit — see ansible/vars/es-mirrors.yml for the topics."
+
+    - name: Hold back the production-only units when the target is not production
+      # es.futures.cvd.levels is PRODUCTION-ONLY (ES-CVD-SPX-LEVELS-DESIGN.md CL-R6 L1/M1): the dev
+      # resource must stay ABSENT. Skipped here, not failed, so a dev run of the whole table works.
+      ansible.builtin.set_fact:
+        oe_held: "{{ oe_selected | selectattr('prod_only') | map(attribute='topic') | list if not (oe_target == oe_prod_target) else [] }}"
+        oe_plan: "{{ oe_selected | rejectattr('prod_only') | list if not (oe_target == oe_prod_target) else oe_selected }}"
+
+    - name: Report the plan
+      ansible.builtin.debug:
+        msg: >-
+          {{ oe_source }} -> {{ oe_target }} | {{ oe_plan | length }} unit(s)
+          {{ '(PLAN ONLY — pass -e confirm_mirror_install=true to install)' if not oe_confirm else '(INSTALLING)' }}
+          {{ ('| held back as production-only: ' ~ (oe_held | join(', '))) if (oe_held | length > 0) else '' }}
+
+    - name: Install each unit
+      ansible.builtin.include_tasks: tasks/es-mirror-unit.yml
+      loop: "{{ oe_plan }}"
+      loop_control:
+        loop_var: item
+        label: "{{ item.label }}"
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg: "{{ oe_report | default([]) }}"
+
+    - name: Fail when any unit was not installable
+      # Reported per unit above, and fatal here: a run that could not install part of the table has
+      # not done what it was asked, and a green exit would say it had.
+      ansible.builtin.assert:
+        that:
+          - (oe_failed | default([])) | length == 0
+        fail_msg: "not installable: {{ (oe_failed | default([])) | join(', ') }} — see the Summary above for each reason."
+        success_msg: "{{ oe_plan | length }} unit(s) accounted for{{ ' (plan only)' if not oe_confirm else '' }}."
