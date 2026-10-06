@@ -11,7 +11,8 @@
 # pollution baseline and the drain proof live. Here a topic whose shape does not already match the
 # frozen contract at BOTH ends is a FAILURE, never something to fix in passing.
 #
-#   # plan only — renders every unit and diffs it against what is live, changes nothing
+#   # plan only — renders every unit under ansible/.ansible-rendered/ and reports, per file,
+#   # whether installing would change the live copy. It reads brokers and never writes a unit.
 #   ansible-playbook ansible/es-mirrors.yml
 #   # dev
 #   ansible-playbook ansible/es-mirrors.yml -e confirm_mirror_install=true
@@ -21,9 +22,11 @@
 #   # one topic
 #   ansible-playbook ansible/es-mirrors.yml -e only_topics=es.futures.footprint.bars -e confirm_mirror_install=true
 #
-# A unit is reloaded ONLY when its rendered files changed or its process is absent or older than
-# those files: MirrorMaker reads its config once, at startup, so a rewritten file with an older
-# process is still running the OLD settings — and an unnecessary reload is a gap in a live mirror.
+# A unit is reloaded ONLY when something that matters differs: an EFFECTIVE property of
+# consumer/producer.properties (compared as java.util.Properties sees them, so a comment is not a
+# reason to open a gap in a live mirror), the bytes of log4j.properties/run-mirror.sh/the plist, an
+# absent file, an absent process, or a process OLDER than any of those files — MirrorMaker reads its
+# config once, at startup, so a rewritten file under an older process still runs the old settings.
 - name: Install the es4 -> environment MirrorMaker-1 units
   hosts: localhost
   connection: local
@@ -90,6 +93,7 @@
                | map('extract', {'ip': oe_target_ip, 'port': oe_target_port, 'topic': item.1.name})
                | join('-')) }}
           offset_reset: "{{ item.0.offset_reset }}"
+          commit_interval: "{{ item.0.commit_interval_ms | default('') }}"
           isolation_level: "{{ item.0.isolation_level }}"
           assert_source: "{{ item.1.assert.source | default({}) }}"
           assert_target: "{{ item.1.assert.target | default({}) }}"

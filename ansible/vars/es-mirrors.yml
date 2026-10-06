@@ -40,8 +40,11 @@ mirror_units:
         assert: { source: {parts: 1, policy: delete, retention: "43200000"},    target: {parts: 1, policy: delete, retention: "43200000"} }
       - name: es.futures.footprint.evidence
         assert: { source: {parts: 1, policy: delete, retention: "43200000"},    target: {parts: 1, policy: delete, retention: "43200000"} }
+      # retention.bytes is asserted at BOTH ends for this one, and only this one: the pipeline's
+      # BYTES arm is set here (retention.ms=-1 does not stop byte-based deletion, and a finite
+      # inherited cap on either end deletes the history the cross-session read needs).
       - name: es.futures.footprint.strike
-        assert: { source: {parts: 1, policy: delete, retention: "-1"},          target: {parts: 1, policy: delete, retention: "-1"} }
+        assert: { source: {parts: 1, policy: delete, retention: "-1", bytes: "-1"}, target: {parts: 1, policy: delete, retention: "-1", bytes: "-1"} }
 
   - pipeline: es-indicator-mirror
     slug_with_topic: true
@@ -62,6 +65,10 @@ mirror_units:
     group_parts: [ip, port, topic]
     offset_reset: earliest
     isolation_level: ""
+    # --offset.commit.interval.ms is a MIRRORMAKER CLI option, not a consumer property, and its
+    # default is 60000. This pipeline passes 5000 because the committed offset is its per-install
+    # proof that THIS process consumed the reference record; at the default it lags by up to a minute.
+    commit_interval_ms: 5000
     # Jenkinsfile.es-auction-mirror asserts the SOURCE arm strictly, then asserts only the TARGET's
     # partition count and RECONCILES its cleanup.policy/retention with kafka-configs --alter. This
     # playbook does not alter topics, so the target's config is reported, not asserted — a target
@@ -75,6 +82,7 @@ mirror_units:
     group_parts: [ip, port, topic]
     offset_reset: earliest
     isolation_level: ""
+    commit_interval_ms: 5000
     # Jenkinsfile.es-tape-zones-mirror asserts the source's config as an EXACT string, so a source at
     # compact,delete fails there exactly as it fails here.
     topics:
@@ -98,12 +106,15 @@ mirror_units:
     group_parts: [ip]
     offset_reset: latest
     isolation_level: ""
-    # Jenkinsfile.es-strike-intel-mirror asserts NO shape: it reads the source's partition count and
-    # creates the target to match. Only "both topics exist" and "the target matches the source's
-    # partition count" are checkable without inventing a contract the pipeline does not have.
+    # Jenkinsfile.es-strike-intel-mirror asserts NO shape at all: it reads the source's partition
+    # count and runs --create --if-not-exists, and never checks an EXISTING target's count. So nothing
+    # is asserted here either — an earlier revision required target==source, which was stricter than
+    # the pipeline and would have refused an install the pipeline performs.
+    # (Both topics must EXIST: that is a precondition of a playbook which never creates a topic, not
+    # an assertion this pipeline makes.)
     topics:
       - name: es.strike-intelligence-by-strike
-        assert: { target: {parts: source} }
+        assert: {}
 
 # opra-definition-enumeration-mirror is deliberately ABSENT: it is not an es4 -> env unit. It ships a
 # container runner to es4 over scp and mirrors in the other direction, and its install has its own

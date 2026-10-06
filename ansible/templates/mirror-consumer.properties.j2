@@ -3,7 +3,7 @@ bootstrap.servers={{ item.source }}
 # changed group is a new mirror that re-reads from auto.offset.reset — see ansible/vars/es-mirrors.yml.
 group.id={{ item.group_id }}
 auto.offset.reset={{ item.offset_reset }}
-{% if item.isolation_level | length > 0 %}
+{% if item.isolation_level | string | length > 0 %}
 # read_committed: this pipeline's topics are written inside Kafka TRANSACTIONS, and the consumer
 # default read_uncommitted would republish ABORTED records non-transactionally on the target.
 isolation.level={{ item.isolation_level }}

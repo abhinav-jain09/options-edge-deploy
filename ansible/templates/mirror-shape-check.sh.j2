@@ -8,9 +8,13 @@ SRC="{{ item.source }}"; TGT="{{ item.target }}"; T="{{ item.topic }}"
 eff() {
   local out
   out=$("$KBIN/kafka-configs" --bootstrap-server "$1" --entity-type topics \
-        --entity-name "$2" --describe 2>/dev/null \
-        | grep -oE "(^|[ ])$3=[^ ]+" | head -1 | sed 's/^ *//' | cut -d= -f2)
-  [ -n "$out" ] || { echo "FAIL: $3 for $2 on $1 is not set (only a broker default) — the owning pipeline is what declares it" >&2; return 1; }
+  --entity-name "$2" --describe 2>/dev/null \
+  | grep -oE "(^|[ ])$3=[^ ]+" | head -1 | sed 's/^ *//' | cut -d= -f2)
+  # Empty output is a REFUSAL, never an implicit pass — exactly as the pipelines treat it. It means
+  # the value was not read: no dynamic config for that key (the broker default is not a declaration),
+  # an unreachable broker, an absent topic, or a kafka-configs failure. This cannot tell them apart
+  # and does not try; every one of them is a reason not to install.
+  [ -n "$out" ] || { echo "FAIL: cannot read $3 for $2 on $1 (not declared on the topic, or the query failed)" >&2; return 1; }
   printf '%s' "$out"
 }
 SD=$("$KBIN/kafka-topics" --bootstrap-server "$SRC" --describe --topic "$T" 2>/dev/null)
@@ -35,6 +39,11 @@ SRET=$(eff "$SRC" "$T" retention.ms) || exit 1
 [ "$SRET" = "{{ a.retention }}" ] || { echo "FAIL: source $T retention.ms=$SRET, the pipeline's frozen contract says {{ a.retention }}"; exit 1; }
 CHECKED="$CHECKED source-retention={{ a.retention }}"
 {% endif %}
+{% if a.bytes is defined %}
+SBY=$(eff "$SRC" "$T" retention.bytes) || exit 1
+[ "$SBY" = "{{ a.bytes }}" ] || { echo "FAIL: source $T retention.bytes=$SBY, the pipeline's frozen contract says {{ a.bytes }}"; exit 1; }
+CHECKED="$CHECKED source-bytes={{ a.bytes }}"
+{% endif %}
 {% set b = item.assert_target %}
 {% if b.parts is defined and b.parts == 'source' %}
 [ "$TP" = "$SP" ] || { echo "FAIL: target $T PartitionCount=$TP but the source has $SP (this topic's count is mirrored from the source)"; exit 1; }
@@ -53,6 +62,11 @@ TRET=$(eff "$TGT" "$T" retention.ms) || exit 1
 [ "$TRET" = "{{ b.retention }}" ] || { echo "FAIL: target $T retention.ms=$TRET, the pipeline's frozen contract says {{ b.retention }}"; exit 1; }
 CHECKED="$CHECKED target-retention={{ b.retention }}"
 {% endif %}
+{% if b.bytes is defined %}
+TBY=$(eff "$TGT" "$T" retention.bytes) || exit 1
+[ "$TBY" = "{{ b.bytes }}" ] || { echo "FAIL: target $T retention.bytes=$TBY, the pipeline's frozen contract says {{ b.bytes }}"; exit 1; }
+CHECKED="$CHECKED target-bytes={{ b.bytes }}"
+{% endif %}
 {% if b.policy_contains is defined %}
 printf '%s\n' "$TD" | head -1 | grep -q "cleanup.policy={{ b.policy_contains }}" \
   || { echo "FAIL: target $T is not {{ b.policy_contains }} — the pipeline asserts that shape on an existing target"; exit 1; }
@@ -66,7 +80,7 @@ CHECKED="$CHECKED target-not-compacted"
 {% endif %}
 {% if b.policy is not defined and b.policy_contains is not defined and b.not_compacted is not defined %}
 NOTE=$("$KBIN/kafka-configs" --bootstrap-server "$TGT" --entity-type topics --entity-name "$T" --describe 2>/dev/null \
-       | grep -oE '(^|[ ])cleanup\.policy=[^ ]+' | head -1 | sed 's/^ *//')
+ | grep -oE '(^|[ ])cleanup\.policy=[^ ]+' | head -1 | sed 's/^ *//')
 echo "note: the owning pipeline reconciles this target's config rather than asserting it; target has ${NOTE:-no explicit cleanup.policy}"
 {% endif %}
 echo "shape ok: $T$CHECKED"

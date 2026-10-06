@@ -1,6 +1,9 @@
 ---
-# One mirror unit: assert the topic shape at BOTH ends, assert the consumer group already exists,
-# render the unit files, and reload the launchd unit ONLY when something actually changed.
+# One mirror unit, in one order for both plan and install: assert the topic shape the owning pipeline
+# asserts, assert the consumer group already exists, RENDER into a scratch directory, compare with
+# what is installed, and only then — and only when something that matters differs — copy into place
+# and reload. Plan mode is the same path with the copy and the reload left out, so what a plan reports
+# is what an install would do.
 - name: "{{ item.label }} | scratch directory for everything this run renders"
   ansible.builtin.file:
     path: "{{ oe_rendered_dir }}/{{ item.label }}"
@@ -26,10 +29,10 @@
   failed_when: false
 
 - name: "{{ item.label }} | the consumer group must already exist on the source"
-  # The group carries the committed offsets. A group that does not exist yet means THIS install is
-  # the first one — and with auto.offset.reset={{ item.offset_reset }} a first install copies from
-  # there, which on an `earliest` unit is the whole retained history. That is a decision, not a
-  # side effect, so it needs -e allow_new_consumer_group=true.
+  # The group carries the committed offsets. A group that does not exist yet means THIS install is the
+  # first one — and a first install copies from auto.offset.reset={{ item.offset_reset }}, which on an
+  # `earliest` unit is the whole retained history. That is a decision, not a side effect, so it needs
+  # -e allow_new_consumer_group=true.
   ansible.builtin.shell:
     cmd: |
       set -euo pipefail
@@ -53,58 +56,107 @@
   ansible.builtin.set_fact:
     oe_ok: "{{ (oe_shape.rc == 0) and ((oe_group.rc | default(1)) == 0) }}"
 
-- name: "{{ item.label }} | unit directory"
-  when: oe_ok
-  ansible.builtin.file:
-    path: "{{ oe_confirm | ternary(item.mdir, oe_rendered_dir ~ '/' ~ item.label) }}"
-    state: directory
-    mode: "0755"
-
-- name: "{{ item.label }} | render the unit files"
+- name: "{{ item.label }} | render the unit files into the scratch directory"
+  # Rendered here even on an install, never straight over the live files: the comparison below needs
+  # both copies, and a half-written unit directory is not a state to leave a mirror in.
   when: oe_ok
   ansible.builtin.template:
     src: "{{ tpl.src }}"
-    dest: "{{ (oe_confirm | ternary(item.mdir, oe_rendered_dir ~ '/' ~ item.label)) ~ '/' ~ tpl.dest }}"
+    dest: "{{ oe_rendered_dir }}/{{ item.label }}/{{ tpl.dest }}"
     mode: "{{ tpl.mode }}"
   loop:
     - { src: mirror-consumer.properties.j2, dest: consumer.properties, mode: "0644" }
     - { src: mirror-producer.properties.j2, dest: producer.properties, mode: "0644" }
     - { src: mirror-log4j.properties.j2,    dest: log4j.properties,    mode: "0644" }
     - { src: run-mirror.sh.j2,              dest: run-mirror.sh,       mode: "0755" }
+    - { src: mirror.plist.j2,               dest: plist.xml,           mode: "0644" }
   loop_control:
     loop_var: tpl
     label: "{{ tpl.dest }}"
-  register: oe_files
+  changed_when: false
 
-- name: "{{ item.label }} | render the launchd plist"
+- name: "{{ item.label }} | compare the rendered unit with the installed one"
+  # What counts as a difference is NOT byte equality for the two property files: a reload is a gap in
+  # a live mirror, and a comment is not a reason to open one. consumer/producer are compared as
+  # java.util.Properties sees them — key and value, with comments, blank lines and key order out of
+  # it. log4j.properties, run-mirror.sh and the plist are not property files read by this playbook's
+  # own contract, so for those byte equality IS the question.
+  # A process older than any of those files is also a difference: MirrorMaker reads its config once,
+  # at startup, so a rewritten file under an older process is still running the old settings.
   when: oe_ok
-  ansible.builtin.template:
-    src: mirror.plist.j2
-    dest: "{{ oe_confirm | ternary(item.plist, oe_rendered_dir ~ '/' ~ item.label ~ '/plist.xml') }}"
-    mode: "0644"
-  register: oe_plist
-
-- name: "{{ item.label }} | is the running process older than its config?"
-  when: oe_ok
-  # MirrorMaker reads producer.properties/consumer.properties ONCE, at startup. A unit whose files
-  # were just rewritten but whose process predates them is still publishing with the OLD settings,
-  # so a stale process is a reason to reload even when nothing changed in this run.
   ansible.builtin.shell:
     cmd: |
       set -uo pipefail
+      R="{{ oe_rendered_dir }}/{{ item.label }}"; M="{{ item.mdir }}"; PL="{{ item.plist }}"
+      props() {
+        [ -r "$1" ] || return 1
+        awk '{ l=$0
+               sub(/^[[:space:]]+/, "", l)
+               if (l == "" || l ~ /^[#!]/) next
+               n = match(l, /[[:space:]]*[=:][[:space:]]*|[[:space:]]+/)
+               if (n == 0) { k = l; v = "" } else { k = substr(l, 1, n-1); v = substr(l, n+RLENGTH) }
+               sub(/[[:space:]]+$/, "", k); sub(/[[:space:]]+$/, "", v)
+               print k "=" v }' "$1" | sort
+      }
+      WHY=""
+      for f in consumer.properties producer.properties; do
+        if [ ! -e "$M/$f" ]; then WHY="$WHY $f=absent"
+        elif ! diff -q <(props "$R/$f") <(props "$M/$f") >/dev/null 2>&1; then WHY="$WHY $f=properties-differ"
+        fi
+      done
+      for f in log4j.properties run-mirror.sh; do
+        if [ ! -e "$M/$f" ]; then WHY="$WHY $f=absent"
+        elif ! diff -q "$R/$f" "$M/$f" >/dev/null 2>&1; then WHY="$WHY $f=bytes-differ"
+        fi
+      done
+      if [ ! -e "$PL" ]; then WHY="$WHY plist=absent"
+      elif ! diff -q "$R/plist.xml" "$PL" >/dev/null 2>&1; then WHY="$WHY plist=bytes-differ"
+      fi
       PID=$(launchctl list | awk -v l="{{ item.label }}" '$3==l{print $1}')
-      case "$PID" in (*[!0-9]*|"") echo "absent"; exit 0;; esac
-      PS=$(ps -p "$PID" -o lstart= 2>/dev/null)
-      PE=$(date -j -f '%a %b %e %T %Y' "$PS" +%s 2>/dev/null || echo 0)
-      FE=$(stat -f %m "{{ item.mdir }}/producer.properties" 2>/dev/null || echo 0)
-      CE=$(stat -f %m "{{ item.mdir }}/consumer.properties" 2>/dev/null || echo 0)
-      [ "$FE" -gt "$CE" ] || FE=$CE
-      if [ "$PE" -ge "$FE" ]; then echo "fresh $PID"; else echo "stale $PID"; fi
+      case "$PID" in
+        (*[!0-9]*|"") WHY="$WHY process=absent" ;;
+        (*) PS=$(ps -p "$PID" -o lstart= 2>/dev/null)
+            PE=$(date -j -f '%a %b %e %T %Y' "$PS" +%s 2>/dev/null || echo 0)
+            FE=0
+            for f in "$M/producer.properties" "$M/consumer.properties" "$M/log4j.properties" "$M/run-mirror.sh" "$PL"; do
+              MT=$(stat -f %m "$f" 2>/dev/null || echo 0)
+              [ "$MT" -gt "$FE" ] && FE=$MT
+            done
+            [ "$PE" -ge "$FE" ] || WHY="$WHY process=older-than-its-config(pid $PID)" ;;
+      esac
+      if [ -n "$WHY" ]; then echo "would install:$WHY"; else echo "in sync: installed files match and the process is newer than all of them"; fi
     executable: /bin/bash
-  register: oe_proc
+  register: oe_diff
   changed_when: false
 
-- name: "{{ item.label }} | reload the launchd unit (only when its config changed or its process is stale)"
+- name: "{{ item.label }} | unit directory"
+  when: oe_ok and oe_confirm and (oe_diff.stdout is search('would install'))
+  ansible.builtin.file:
+    path: "{{ item.mdir }}"
+    state: directory
+    mode: "0755"
+
+- name: "{{ item.label }} | install the rendered files"
+  when: oe_ok and oe_confirm and (oe_diff.stdout is search('would install'))
+  ansible.builtin.copy:
+    src: "{{ oe_rendered_dir }}/{{ item.label }}/{{ cp.src }}"
+    dest: "{{ cp.dest }}"
+    mode: "{{ cp.mode }}"
+    remote_src: true
+  loop:
+    - { src: consumer.properties, dest: "{{ item.mdir }}/consumer.properties", mode: "0644" }
+    - { src: producer.properties, dest: "{{ item.mdir }}/producer.properties", mode: "0644" }
+    - { src: log4j.properties,    dest: "{{ item.mdir }}/log4j.properties",    mode: "0644" }
+    - { src: run-mirror.sh,       dest: "{{ item.mdir }}/run-mirror.sh",       mode: "0755" }
+    - { src: plist.xml,           dest: "{{ item.plist }}",                    mode: "0644" }
+  loop_control:
+    loop_var: cp
+    label: "{{ cp.dest }}"
+
+- name: "{{ item.label }} | reload the launchd unit"
+  # Only reached when something that matters differed. A reload is a gap in a live mirror, so the
+  # condition above is the point of this whole task file.
+  when: oe_ok and oe_confirm and (oe_diff.stdout is search('would install'))
   ansible.builtin.shell:
     cmd: |
       set -uo pipefail
@@ -113,18 +165,15 @@
       sleep 8
       PID=$(launchctl list | awk -v l="{{ item.label }}" '$3==l{print $1}')
       case "$PID" in (*[!0-9]*|"") echo "FAIL: {{ item.label }} is loaded but not running (launchctl pid='$PID')"; exit 1;; esac
-      # the process must be bound to THIS unit's config, not a sibling's
+      # bound to THIS unit's config, not a sibling's
       ps -p "$PID" -o command= | grep -q -- "--producer.config {{ item.mdir }}/producer.properties" \
         || { echo "FAIL: pid $PID is not reading {{ item.mdir }}/producer.properties"; exit 1; }
-      echo "running pid=$PID bound to {{ item.mdir }}"
+      echo "reloaded: running pid=$PID bound to {{ item.mdir }}"
     executable: /bin/bash
-  when:
-    - oe_ok
-    - oe_confirm
-    - (oe_files is changed) or (oe_plist is changed) or ('fresh' not in (oe_proc.stdout | default('')))
   register: oe_reload
 
 - name: "{{ item.label }} | replication lag on the source"
+  when: oe_ok and oe_confirm
   ansible.builtin.shell:
     cmd: |
       set -uo pipefail
@@ -134,7 +183,6 @@
     executable: /bin/bash
   register: oe_lag
   changed_when: false
-  when: oe_ok and oe_confirm
 
 - name: "{{ item.label }} | record"
   ansible.builtin.set_fact:
@@ -143,7 +191,8 @@
            item.label ~ ' | ' ~ ('OK' if oe_ok else 'NOT INSTALLED')
            ~ ' | ' ~ (((oe_shape.stdout | default('')) ~ (oe_shape.stderr | default(''))) | trim)
            ~ ' | ' ~ (((oe_group.stdout | default('')) ~ (oe_group.stderr | default(''))) | trim)
-           ~ ' | ' ~ ((oe_reload.stdout | default('not reloaded: config unchanged and process fresh')) | trim)
+           ~ ' | ' ~ ((oe_diff.stdout | default('not compared')) | trim)
+           ~ ' | ' ~ ((oe_reload.stdout | default('no reload')) | trim)
            ~ ' | ' ~ ((oe_lag.stdout | default('lag not read')) | trim)
          ] }}
     oe_failed: "{{ (oe_failed | default([])) + ([] if oe_ok else [item.label]) }}"

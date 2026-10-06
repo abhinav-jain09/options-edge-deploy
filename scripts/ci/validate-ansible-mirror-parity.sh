@@ -5,10 +5,15 @@
 # stop agreeing on the mechanical facts:
 #
 #   1. the producer stanza, BYTE for byte (the template is the pipelines' stanza with only the
-#      bootstrap line templated)
+#      bootstrap line templated) — and that line's DIRECTION: the producer must publish to the
+#      target and the consumer must read the source, a swap a line-dropping comparison cannot see
 #   2. per pipeline: the consumer group.id formula, auto.offset.reset, and isolation.level
 #   3. per pipeline: the topic allow-list
 #   4. per pipeline: whether the unit name carries the topic
+#   5. the generated run-mirror.sh: the mirror-maker flag SEQUENCE and the --offset.commit.interval.ms
+#      the pipeline passes (auction and tape-zones pass 5000; the others pass none, and MM1's default
+#      is 60000 — a missing flag is a silently slower commit, not a visible error)
+#   6. the launchd plist, byte for byte after substituting $LABEL and $MDIR
 #
 # What it does NOT check, stated rather than implied: the per-end SHAPE assertions. Those live in each
 # pipeline as shell, each written differently (an exact-string compare here, an effective-value read
@@ -23,6 +28,23 @@ import re, sys, pathlib
 fail = []
 tbl = pathlib.Path("ansible/vars/es-mirrors.yml").read_text()
 tpl = pathlib.Path("ansible/templates/mirror-producer.properties.j2").read_text()
+cons_tpl = pathlib.Path("ansible/templates/mirror-consumer.properties.j2").read_text()
+run_tpl = pathlib.Path("ansible/templates/run-mirror.sh.j2").read_text()
+plist_tpl = pathlib.Path("ansible/templates/mirror.plist.j2").read_text()
+
+# ---- 1b. the DIRECTION of both bootstrap lines ----
+if tpl.split("\n")[0] != "bootstrap.servers={{ item.target }}":
+    fail.append("ansible/templates/mirror-producer.properties.j2: line 1 must be "
+                "'bootstrap.servers={{ item.target }}' — the producer PUBLISHES to the target; "
+                f"found {tpl.split(chr(10))[0]!r}")
+if cons_tpl.split("\n")[0] != "bootstrap.servers={{ item.source }}":
+    fail.append("ansible/templates/mirror-consumer.properties.j2: line 1 must be "
+                "'bootstrap.servers={{ item.source }}' — the consumer READS the source; "
+                f"found {cons_tpl.split(chr(10))[0]!r}")
+for want in ("group.id={{ item.group_id }}", "auto.offset.reset={{ item.offset_reset }}",
+             "isolation.level={{ item.isolation_level }}"):
+    if want not in cons_tpl:
+        fail.append(f"ansible/templates/mirror-consumer.properties.j2 does not carry {want!r}")
 
 PIPELINES = {
     "es-cvd-mirror": "Jenkinsfile.es-cvd-mirror",
@@ -110,6 +132,55 @@ for blk in blocks:
         if sorted(want_topics) != sorted(topics):
             fail.append(f"{jf}: TOPIC choices {sorted(want_topics)} != table topics {sorted(topics)}")
 
+    # ---- 5. the generated run-mirror.sh: flag sequence and commit interval ----
+    runner = stanza(j, "run-mirror.sh", "S")
+    if runner is None:
+        fail.append(f"{jf}: no run-mirror.sh heredoc — this gate cannot compare the runner")
+    else:
+        # the pipeline's heredoc is UNQUOTED, so the shell removes each backslash-newline: the file it
+        # writes is one physical line, which is what the template renders
+        joined = "\n".join(runner).replace("\\\\\n", "")
+        want_flags = re.findall(r'(--[a-z.]+)', joined)
+        commit = field("commit_interval_ms")
+        # the template carries --offset.commit.interval.ms inside a {% if item.commit_interval %}
+        # block, so it is compared against the arm the pipeline actually uses: with the flag for a
+        # pipeline that passes one, without it for a pipeline that does not
+        tpl_with = re.sub(r'{%[^%]*%}', '', run_tpl)
+        tpl_without = re.sub(r'{% if item\.commit_interval.*?{% endif %}', '', run_tpl, flags=re.S)
+        if tpl_with == tpl_without:
+            fail.append("ansible/templates/run-mirror.sh.j2: --offset.commit.interval.ms must stay "
+                        "inside an {% if item.commit_interval %} block — hardcoding it would pass it "
+                        "to pipelines that do not, and dropping it would lose it where they do")
+        tpl_flags = re.findall(r'(--[a-z.]+)', tpl_with if commit is not None else tpl_without)
+        if "--offset.commit.interval.ms" in want_flags:
+            m2 = re.search(r'--offset\.commit\.interval\.ms (\d+)', joined)
+            want_commit = m2.group(1) if m2 else None
+            if commit != want_commit:
+                fail.append(f"{jf}: passes --offset.commit.interval.ms {want_commit} but the table says "
+                            f"commit_interval_ms={commit!r} — MM1's default is 60000, so a missing value "
+                            f"installs a silently slower commit")
+        elif commit is not None:
+            fail.append(f"{jf}: passes no --offset.commit.interval.ms but the table says "
+                        f"commit_interval_ms={commit!r}")
+        if want_flags != tpl_flags:
+            fail.append(f"{jf}: runner flags {want_flags} != ansible/templates/run-mirror.sh.j2 {tpl_flags}")
+
+    # ---- 6. the plist, byte for byte after token substitution ----
+    pl = stanza(j, "", "PL")
+    if pl is None:
+        m3 = re.search(r'cat > "\$PLIST" <<PL\n(.*?)\nPL\n', j, re.S)
+        pl = m3.group(1).split("\n") if m3 else None
+    if pl is None:
+        fail.append(f"{jf}: no plist heredoc — this gate cannot compare it")
+    else:
+        want_pl = "\n".join(pl).replace("$LABEL", "{{ item.label }}").replace("$MDIR", "{{ item.mdir }}")
+        if want_pl.strip() != plist_tpl.strip():
+            fail.append(f"{jf}: the plist differs from ansible/templates/mirror.plist.j2")
+            for i, (x, y) in enumerate(zip(want_pl.split("\n"), plist_tpl.split("\n"))):
+                if x != y:
+                    fail.append(f"    first difference at line {i+1}: jenkinsfile={x!r} template={y!r}")
+                    break
+
     # ---- 4. does the unit name carry the topic? ----
     m = re.search(r'^\s+MDIR\s+=\s+"(.*)"\s*$', j, re.M)
     if not m:
@@ -127,5 +198,6 @@ if fail:
         print(f)
     sys.exit(1)
 print(f"=== validate-ansible-mirror-parity: OK === {len(PIPELINES)} pipelines agree with ansible/vars/es-mirrors.yml "
-      "on the producer stanza, group.id, offset reset, isolation level, topic allow-list and unit naming")
+      "on the producer stanza and its direction, the consumer bootstrap/group/offset/isolation, the topic "
+      "allow-list, unit naming, the runner's flag sequence and commit interval, and the plist")
 PY
