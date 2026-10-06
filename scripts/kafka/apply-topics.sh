@@ -110,10 +110,18 @@ broker_ids() {
 
 # Preflight for the main loop (Codex review, 2026-10-06): reassign_topic_replication_factor's own
 # insufficient-broker check runs AFTER a partition count has already been widened (the caller does
-# partition-alter, THEN RF-reassign). Checking here, before touching the topic at all, means a
-# topic this run cannot fully repair is skipped intact rather than left half-migrated — new
-# partition count, still-wrong replication factor.
+# partition-alter, THEN RF-reassign). Checking here first catches the common case — broker count
+# already insufficient before this topic is touched at all — without widening its partitions.
+# NOT a full guarantee: Kafka cannot shrink a partition count back down, so a broker that drops
+# between this check and the actual reassignment call (or any OTHER reassignment failure — a
+# network blip, a timeout) still leaves the topic widened with its old replication factor. That
+# narrow window is a pre-existing property of this being two non-transactional admin calls with no
+# undo for the first one; it is no worse than the original script, which hit the exact same partial
+# state on any post-widen failure and simply never reported it because it exited immediately after.
+# What this changeset guarantees, unconditionally: the run no longer abandons every OTHER topic
+# over this one's outcome either way.
 enough_brokers_for_rf() {
+  local -a _brokers
   mapfile -t _brokers < <(broker_ids)
   (( ${#_brokers[@]} >= REPLICATION_FACTOR ))
 }
