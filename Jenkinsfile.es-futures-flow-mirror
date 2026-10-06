@@ -41,7 +41,10 @@ pipeline {
     choice(name: 'TOPIC', choices: ['es.futures.aggressor-flow'], description: 'Topic to mirror (frozen allow-list — the shape this job creates the target with is per-topic).')
     choice(name: 'ACTION', choices: ['install', 'teardown'], description: 'install = create+run the mirror; teardown = stop+remove it.')
   }
-  options { disableRestartFromStage(); disableConcurrentBuilds(); timeout(time: 15, unit: 'MINUTES') }
+  // 45 minutes, not 15: every shape assertion is a kafka-topics/kafka-configs round trip, and on the
+  // PRODUCTION broker (318 topics on 2026-10-06) one such call takes ~16 s, so a single install can
+  // spend ten minutes in metadata alone — 15 minutes aborted three real installs mid-flight.
+  options { disableRestartFromStage(); disableConcurrentBuilds(); timeout(time: 45, unit: 'MINUTES') }
   environment {
     KBIN  = '/Users/abhinav/development/confluent-7.3.1/bin'
     // Per-TARGET identity so multiple env mirrors (dev 127.0.0.1, prod 192.168.100.252, ...) coexist as
@@ -178,7 +181,11 @@ C
 bootstrap.servers=$TGT
 key.serializer=org.apache.kafka.common.serialization.ByteArraySerializer
 value.serializer=org.apache.kafka.common.serialization.ByteArraySerializer
-acks=1
+# acks=all, not 1: with acks=1 the mirror treats a record as delivered once the leader has
+# RECEIVED it, so a broker that dies before that write reaches its log drops it silently and the
+# mirror's committed offset has already moved past it — that is how a footprint bar was lost on
+# the 2026-09 production power cut. The target topics are RF=1, so this costs one log write.
+acks=all
 P
           cat > "$MDIR/log4j.properties" <<L
 log4j.rootLogger=INFO, stdout
