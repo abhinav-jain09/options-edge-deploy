@@ -1,4 +1,18 @@
-# THE CLOSING-BOARD SCHEDULE, AS A WORKLOAD — replacing the Jenkins cron that used to drive it.
+# THE NIGHTLY SCHEDULE, AS A WORKLOAD — replacing the Jenkins crons that used to drive it.
+#
+# TWO DUTIES NOW, both in this one pod: the closing-board freeze (16:10 ET, healed at 17:40 and
+# 07:45) and the open-interest index snapshot (20:30 ET, healed at 07:50). The index job existed
+# in this image from 2026-08-28 and nothing ever launched it — its python equivalent ran from a
+# Jenkins timer outside the cluster, stopped producing an index on 2026-10-02, and had no retry
+# but the next night's firing into the same wall, so the published index froze at tradeDate
+# 2026-10-01 and the public site froze with it for four sessions. It is on the batch's own queue
+# and lease now, which is what makes a failure at 20:30 a retry at 20:45.
+#
+# A CronJob COULD NOT HAVE FIXED THAT, and not only for the reasons below: the cluster enforces
+# a ValidatingAdmissionPolicy (options-edge-jenkins-only-workloads, failurePolicy: Fail) that
+# DENIES batch/jobs and batch/cronjobs CREATE to every principal except the Jenkins deployer, and
+# a CronJob's Jobs are created by the controller's identity. A native firing is rejected every
+# night.
 #
 # The owner's instruction, 2026-09-01: "I don't want anything Jenkins-based, it should run based
 # on Spring Batch configuration." That is what this is. The batch decides which session it owns,
@@ -68,6 +82,17 @@ spec:
               value: "postgresql://bleedingoptions:fAE80oxjlQ75edJe5nmfTLoIDJerlkddoFRm@bo-app-postgres-db.bleedingoptions.svc.cluster.local:5432/bleedingoptions"
             - name: CLOSE_SNAPSHOT_ROOT
               value: "/oi-index/close/.batch-fetch-csv"
+            # THE OPEN-INTEREST JOB'S CHUNKS, under a root of their own. Both jobs name their
+            # staging directories after a date, so one shared root would put their days in one
+            # namespace and the board's retention pass would be free to delete the chunks an OI
+            # execution could still restart onto. Each job prunes the root it writes.
+            - name: CLOSE_OI_SNAPSHOT_ROOT
+              value: "/oi-index/oi-snapshots"
+            # BOTH A READ AND A WRITE NOW. The board reads this path; the index job INSTALLS it
+            # here, which is the whole reason the index job has a schedule — stock-gex-service
+            # resolves STOCK_GEX_OI_INDEX at exactly this name and serves every stock GEX board
+            # from it. The mount below is read-write and the written file is mode 0644, because
+            # the service pod runs as a different uid (10001) than this job (1000).
             - name: CLOSE_INDEX_PATH
               value: "/oi-index/stock-gex-oi-index.json.gz"
             - name: CLOSE_KEEP_SESSIONS
@@ -85,10 +110,18 @@ spec:
               mountPath: /tmp
           resources:
             requests:
-              cpu: 100m          # idle almost all day; the run itself is bursty, not reserved
+              cpu: 100m          # idle almost all day; the runs themselves are bursty
               memory: 2Gi
             limits:
-              memory: 3Gi
+              # 4Gi, raised from 3Gi when the OI index job gained a schedule. This pod launches
+              # its jobs IN PROCESS, and the index is the largest single thing either of them
+              # holds. MEASURED, not estimated: the real 2026-10-05 production index — 507 roots,
+              # 574,004 contracts — loads through this build's validator in 2.9 s, canonicalises
+              # to 69,991,490 characters, and the whole read-verify-canonicalise path completed
+              # inside a 2 GB heap. 4Gi at MaxRAMPercentage=75 gives 3 GB, which leaves room for
+              # the build path, which also holds the definitions and the statistics. The request
+              # is unchanged at 2Gi.
+              memory: 4Gi
       volumes:
         - name: oi-index
           hostPath:
