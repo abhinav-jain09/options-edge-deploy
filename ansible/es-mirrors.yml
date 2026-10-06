@@ -112,10 +112,14 @@
         cmd: |
           set -uo pipefail
           cd "{{ playbook_dir }}/.."
-          PERMITTED_SHA="{{ oe_permitted_sha }}" \
+          PERMITTED_SHA="${OE_PERMITTED_SHA:-}" \
           PERMITTED_SHA_GUARD_VERSION="2f6fc2ab7aa51eb8a9e8aa350f2d774cd2fb7a253de2591e43645a19a9886b24" \
           bash scripts/jenkins/permitted-sha-guard.sh
         executable: /bin/bash
+      environment:
+        # in the environment, not interpolated into the command text: an extra var is operator data,
+        # and `-e permitted_sha='...; function bash(){ return 0; }; ...'` would otherwise run
+        OE_PERMITTED_SHA: "{{ oe_permitted_sha }}"
       register: oe_guard
       changed_when: false
       failed_when: oe_guard.rc != 0

@@ -28,6 +28,13 @@ if brk == "break":
     if old not in cmd:
         print("NO_PUT"); raise SystemExit(0)
     cmd = cmd.replace(old, 'put run-mirror.sh       "/nonexistent-dir/run-mirror.sh" 0755')
+elif brk == "break-backup":
+    # a failure DURING the backup phase, before anything has been written: restore must not delete the
+    # intact old generation just because those files have no backup yet
+    old = 'backup "$PL" plist.xml'
+    if old not in cmd:
+        print("NO_BACKUP_CALL"); raise SystemExit(0)
+    cmd = cmd.replace(old, 'cp /nonexistent-dir/x "$BK/plist.xml.part"')
 elif brk == "break-mktemp":
     # the exact window the ORDER exists for: if the mkdir ran before the backup directory and the
     # trap, a mktemp failure exited with a new empty unit directory left behind and no trap to undo it
@@ -103,6 +110,14 @@ else
   printf '  FAIL %-44s rc=%s files=%s plist=%s dir=%s out=%s\n' "a failed FIRST install leaves nothing" "$rc" "$left" "$plist_left" "$dir_left" "$out"; fail=1
 fi
 
+# ---- a failure during the BACKUP phase must not cost the old generation ----
+D="$WORK/backup"; seed "$D"
+r=$(render "$D" break-backup); [ "$r" = OK ] || { echo "FAIL: cannot extract/patch the install task body ($r)"; exit 1; }
+set +e; out=$(bash "$D/install.sh" 2>&1); rc=$?; set -e
+g=$(generation "$D")
+if [ "$rc" != 0 ] && [ "$g" = OLD ]; then printf '  ok   %-44s rc=%s generation=%s\n' "a backup-phase failure keeps the old files" "$rc" "$g"
+else printf '  FAIL %-44s rc=%s generation=%s out=%s\n' "a backup-phase failure keeps the old files" "$rc" "$g" "$out"; fail=1; fi
+
 # ---- a mktemp failure must not leave a unit directory behind ----
 D="$WORK/mktemp"; seed "$D"; rm -rf "$D/unit" "$D/u.plist"
 r=$(render "$D" break-mktemp); [ "$r" = OK ] || { echo "FAIL: cannot extract/patch the install task body ($r)"; exit 1; }
@@ -126,4 +141,4 @@ else
 fi
 
 [ "$fail" = 0 ] || { echo "mirror install rollback: FAILED"; exit 1; }
-echo "mirror install rollback: a clean install lands the new generation, a failed move restores the previous one whole, a failed FIRST install leaves nothing behind, and so does a failure in the window right after the mkdir"
+echo "mirror install rollback: a clean install lands the new generation, a failed move restores the previous one whole, a failed FIRST install leaves nothing behind, a backup-phase failure keeps the old generation, and so does a failure in the window right after the mkdir"

@@ -58,7 +58,10 @@ fi
 # not fail there however broken this script was.
 mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
 epoch_of() { date -j -f '%a %b %e %T %Y' "$1" +%s 2>/dev/null || date -d "$1" +%s 2>/dev/null || echo 0; }
-PID=$(launchctl list | awk -v l="{{ item.label }}" '$3==l{print $1}')
+# An unreadable job table is not an absent process: reporting it as absent said something false and
+# would have driven a stop/start on a unit whose state was never read. It fails closed instead.
+LST=$(launchctl list) || { echo "FAIL: cannot read launchctl list — this unit's state cannot be compared, so nothing about it is reported as in sync"; exit 1; }
+PID=$(printf '%s\n' "$LST" | awk -v l="{{ item.label }}" '$3==l{print $1}')
 case "$PID" in
   (*[!0-9]*|"") WHY="$WHY process=absent" ;;
   (*) PS=$(ps -p "$PID" -o lstart= 2>/dev/null)

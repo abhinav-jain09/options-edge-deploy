@@ -162,6 +162,9 @@
     - oe_diff.stdout is search('would install')
   ansible.builtin.command:
     cmd: "bash {{ oe_rendered_dir }}/{{ item.label }}/stop.sh"
+  environment:
+    # the production lock inside the script reads this from the environment; see mirror-stop.sh.j2
+    PERMITTED_SHA: "{{ oe_permitted_sha }}"
   register: oe_stop
   failed_when: false
 
@@ -195,6 +198,9 @@
       # down, which is a state phase 2 can be run against and the next plan can read.
       BK=$(mktemp -d)
       HAD_DIR=yes; [ -d "$M" ] || HAD_DIR=no
+      # declared BEFORE the trap that reads it: under set -u a failure during the backup phase made
+      # restore() itself die on an unbound variable, so nothing was restored and nothing said so
+      WROTE=""
       # Restoring means putting the unit back EXACTLY as it was, which on a FIRST install means
       # removing what was just written: moving back only the files that existed would have left a
       # partial new generation behind, down and half-written, with nothing naming it.
@@ -202,7 +208,10 @@
         for pair in "consumer.properties:$M/consumer.properties" "producer.properties:$M/producer.properties" \
                     "log4j.properties:$M/log4j.properties" "run-mirror.sh:$M/run-mirror.sh" "plist.xml:$PL"; do
           b=${pair%%:*}; d=${pair#*:}
-          if [ -e "$BK/$b" ]; then mv -f "$BK/$b" "$d"; else rm -f "$d"; fi
+          if [ -e "$BK/$b" ]; then mv -f "$BK/$b" "$d"
+          else
+            case " $WROTE " in (*" $d "*) rm -f "$d" ;; esac
+          fi
           rm -f "$d.ansible-new"
         done
         [ "$HAD_DIR" = yes ] || rmdir "$M" 2>/dev/null || true
@@ -221,10 +230,14 @@
         backup "$M/$f" "$f"
       done
       backup "$PL" plist.xml
+      # WROTE (declared above) records every destination this run has actually written, so the restore
+      # can tell "we put this here" from "this was already here": deleting an unbacked destination
+      # unconditionally destroyed an intact OLD file when the failure came during the BACKUP phase.
       put() { # rendered-name  destination  mode
         cp "$R/$1" "$2.ansible-new"
         chmod "$3" "$2.ansible-new"
         mv -f "$2.ansible-new" "$2"
+        WROTE="$WROTE $2"
       }
       put consumer.properties "$M/consumer.properties" 0644
       put producer.properties "$M/producer.properties" 0644

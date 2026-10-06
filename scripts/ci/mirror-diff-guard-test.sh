@@ -20,6 +20,7 @@ grep -q '{{' "$WORK/diff.sh" && { echo "FAIL: the rendered comparison still has 
 # stubs: a live pid whose start time is controlled by $WORK/pid_epoch
 cat > "$WORK/bin/launchctl" <<L
 #!/usr/bin/env bash
+[ -e "$WORK/launchctl_fails" ] && exit 1
 [ -e "$WORK/no_process" ] && exit 0
 echo "4242 0 $LBL"
 L
@@ -63,7 +64,7 @@ seed() { # write a healthy, identical pair
 fail=0
 case_is() { # name  expected-substring  setup...
   local name="$1" want="$2"; shift 2
-  seed; rm -f "$WORK/gnu_stat"; "$@"
+  seed; rm -f "$WORK/gnu_stat" "$WORK/launchctl_fails"; "$@"
   set +e; out=$(bash "$WORK/diff.sh" 2>&1); rc=$?; set -e
   if [ "$rc" = 0 ] && printf '%s' "$out" | grep -q -- "$want"; then
     printf '  ok   %-50s %s\n' "$name" "$(printf '%s' "$out" | cut -c1-74)"
@@ -98,6 +99,21 @@ case_is "the plist differs" "plist=bytes-differ" \
   bash -c "printf '<plist>other</plist>\n' > '$PL'"
 case_is "a missing live file" "consumer.properties=absent" rm -f "$M/consumer.properties"
 case_is "no process at all" "process=absent" touch "$WORK/no_process"
+
+# an unreadable JOB TABLE is a different answer from "no process", and acting on it would be acting on
+# a state never read — the comparison fails closed, so the unit is reported and not touched
+case_fails() { # name  expected-substring  setup...
+  local name="$1" want="$2"; shift 2
+  seed; rm -f "$WORK/gnu_stat" "$WORK/launchctl_fails"; "$@"
+  set +e; out=$(bash "$WORK/diff.sh" 2>&1); rc=$?; set -e
+  if [ "$rc" != 0 ] && printf '%s' "$out" | grep -q -- "$want"; then
+    printf '  ok   %-50s rc=%s %s\n' "$name" "$rc" "$(printf '%s' "$out" | tail -1 | cut -c1-62)"
+  else
+    printf '  FAIL %-50s rc=%s want=%s got=%s\n' "$name" "$rc" "$want" "$out"; fail=1
+  fi
+}
+case_fails "an unreadable job table fails the comparison" "cannot read launchctl list" \
+  bash -c ": > '$WORK/launchctl_fails'"
 case_is "the process is OLDER than its config" "process=older-than-its-config" \
   bash -c "echo 1 > '$WORK/pid_epoch'"
 
@@ -106,4 +122,4 @@ case_is "older than its config, with a GNU-only stat" "process=older-than-its-co
   bash -c "echo 1 > '$WORK/pid_epoch'; : > '$WORK/gnu_stat'"
 
 [ "$fail" = 0 ] || { echo "mirror diff guard: FAILED"; exit 1; }
-echo "mirror diff guard: 15 cases behave as specified"
+echo "mirror diff guard: 16 cases behave as specified"

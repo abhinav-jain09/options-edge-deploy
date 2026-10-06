@@ -70,7 +70,9 @@ case "\$*" in
     # whitelist too, so the start guard can look for another unit mirroring the SAME topic.
     while read -r pid path; do
       [ -n "\$pid" ] || continue
-      echo "\$pid java kafka.tools.MirrorMaker --producer.config \$path --whitelist 'es\\.test\\.topic' --num.streams 1"
+      # UNQUOTED, as a real ps prints argv: the shell strips run-mirror.sh's quotes, and a stub that
+      # kept them certified a check that matched nothing on a real machine
+      echo "\$pid java kafka.tools.MirrorMaker --producer.config \$path --whitelist es\\.test\\.topic --num.streams 1"
     done < "\$W/procs.\$(cat "\$W/phase")" 2>/dev/null
     ;;
   *)
@@ -237,8 +239,8 @@ exit 0
 L
   cat > "$D/bin/ps" <<P
 #!/usr/bin/env bash
-echo "200 java kafka.tools.MirrorMaker --producer.config $D/unit/producer.properties --whitelist 'es\\.test\\.topic' --num.streams 1"
-[ -e "$D/with_other" ] && echo "300 java kafka.tools.MirrorMaker --producer.config $D/other/producer.properties --whitelist 'es\\.test\\.topic' --num.streams 1"
+echo "200 java kafka.tools.MirrorMaker --producer.config $D/unit/producer.properties --whitelist es\\.test\\.topic --num.streams 1"
+[ -e "$D/with_other" ] && echo "300 java kafka.tools.MirrorMaker --producer.config $D/other/producer.properties --whitelist es\\.test\\.topic --num.streams 1"
 exit 0
 P
   chmod +x "$D/bin"/*
