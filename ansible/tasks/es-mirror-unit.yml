@@ -178,24 +178,24 @@
       echo "installed 5 file(s) into $M"
     executable: /bin/bash
 
-- name: "{{ item.label }} | reload the launchd unit"
-  # Only reached when something that matters differed. A reload is a gap in a live mirror, so the
-  # condition above is the point of this whole task file.
+- name: "{{ item.label }} | render the reload guard"
   when: oe_ok and oe_confirm and (oe_diff.stdout is search('would install'))
-  ansible.builtin.shell:
-    cmd: |
-      set -uo pipefail
-      launchctl unload "{{ item.plist }}" 2>/dev/null || true
-      launchctl load "{{ item.plist }}"
-      sleep 8
-      PID=$(launchctl list | awk -v l="{{ item.label }}" '$3==l{print $1}')
-      case "$PID" in (*[!0-9]*|"") echo "FAIL: {{ item.label }} is loaded but not running (launchctl pid='$PID')"; exit 1;; esac
-      # bound to THIS unit's config, not a sibling's
-      ps -p "$PID" -o command= | grep -q -- "--producer.config {{ item.mdir }}/producer.properties" \
-        || { echo "FAIL: pid $PID is not reading {{ item.mdir }}/producer.properties"; exit 1; }
-      echo "reloaded: running pid=$PID bound to {{ item.mdir }}"
-    executable: /bin/bash
+  ansible.builtin.template:
+    src: mirror-reload.sh.j2
+    dest: "{{ oe_rendered_dir }}/{{ item.label }}/reload.sh"
+    mode: "0755"
+  changed_when: false
+
+- name: "{{ item.label }} | reload the launchd unit"
+  # Only reached when something that matters differed — a reload is a gap in a live mirror, so the
+  # condition is the point of this whole task file. The script proves the replacement; see its header.
+  # A failed reload is RECORDED, not fatal here, so the remaining units still get installed, and the
+  # play's final assertion names it and exits non-zero.
+  when: oe_ok and oe_confirm and (oe_diff.stdout is search('would install'))
+  ansible.builtin.command:
+    cmd: "bash {{ oe_rendered_dir }}/{{ item.label }}/reload.sh"
   register: oe_reload
+  failed_when: false
 
 - name: "{{ item.label }} | replication lag on the source"
   when: oe_ok and oe_confirm
@@ -217,7 +217,9 @@
            ~ ' | ' ~ (((oe_shape.stdout | default('')) ~ (oe_shape.stderr | default(''))) | trim)
            ~ ' | ' ~ (((oe_group.stdout | default('')) ~ (oe_group.stderr | default(''))) | trim)
            ~ ' | ' ~ ((oe_diff.stdout | default('not compared')) | trim)
-           ~ ' | ' ~ ((oe_reload.stdout | default('no reload')) | trim)
+           ~ ' | ' ~ (((oe_reload.stdout | default('no reload')) ~ (oe_reload.stderr | default(''))) | trim)
            ~ ' | ' ~ ((oe_lag.stdout | default('lag not read')) | trim)
          ] }}
     oe_failed: "{{ (oe_failed | default([])) + ([] if oe_ok else [item.label]) }}"
+    oe_reload_failed: >-
+      {{ (oe_reload_failed | default([])) + ([item.label] if ((oe_reload.rc | default(0)) != 0) else []) }}

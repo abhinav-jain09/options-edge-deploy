@@ -142,11 +142,17 @@
       ansible.builtin.debug:
         msg: "{{ oe_report | default([]) }}"
 
-    - name: Fail when any unit was not installable
-      # Reported per unit above, and fatal here: a run that could not install part of the table has
-      # not done what it was asked, and a green exit would say it had.
+    - name: Fail when any unit was not installable or did not reload
+      # Reported per unit above, and fatal here: a run that could not install part of the table, or
+      # whose reload did not prove a replacement, has not done what it was asked, and a green exit
+      # would say it had. A failed RELOAD is the more serious of the two — that unit's files are new
+      # on disk while its process may still be the old one.
       ansible.builtin.assert:
         that:
           - (oe_failed | default([])) | length == 0
-        fail_msg: "not installable: {{ (oe_failed | default([])) | join(', ') }} — see the Summary above for each reason."
+          - (oe_reload_failed | default([])) | length == 0
+        fail_msg: >-
+          {{ ('not installable: ' ~ (oe_failed | default([]) | join(', '))) if (oe_failed | default([]) | length > 0) else '' }}
+          {{ ('reload did not prove a replacement: ' ~ (oe_reload_failed | default([]) | join(', '))) if (oe_reload_failed | default([]) | length > 0) else '' }}
+          — see the Summary above for each reason.
         success_msg: "{{ oe_plan | length }} unit(s) accounted for{{ ' (plan only)' if not oe_confirm else '' }}."

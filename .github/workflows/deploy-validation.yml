@@ -235,6 +235,13 @@ jobs:
       - name: Validate the Ansible mirror table against the pipelines
         run: bash scripts/ci/validate-ansible-mirror-parity.sh
 
+      # The reload guard is the only part of the Ansible mirror path that stops and starts a LIVE
+      # mirror, and the case it exists for is quiet: a failed `launchctl load` leaves the OLD process
+      # running, whose command line still names this unit's config. Driven against stub
+      # launchctl/ps, once per way it can be lied to.
+      - name: Validate the mirror reload guard (stubbed launchctl scenarios)
+        run: bash scripts/ci/mirror-reload-guard-test.sh
+
       # Catches a playbook that cannot even be loaded — a YAML or module-name error in ansible/ is
       # otherwise found only by the operator running it, mid-install.
       - name: Ansible syntax check (mirror playbook)

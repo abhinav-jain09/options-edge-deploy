@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Rendered per mirror unit by ansible/tasks/es-mirror-unit.yml, and the only thing in this playbook
+# that stops and starts a live mirror. It must PROVE the replacement happened, not infer it:
+# `launchctl unload` of a unit that is not loaded is a no-op (so its status cannot be trusted), and a
+# `launchctl load` that FAILS leaves the OLD process running — whose command line still names this
+# unit's producer.properties, so a bound-to-the-right-config check alone reports success while the
+# mirror keeps publishing with the pre-change settings. So: the old pid is captured FIRST, the unit
+# must be gone after the unload, the load's status is fatal, and the new pid must be numeric and
+# DIFFERENT from the old one.
+# OE_RELOAD_SETTLE lets the guard test drive this with no wait; the default is the 8s a real unit
+# needs before launchctl reports a pid.
+set -uo pipefail
+PL="{{ item.plist }}"; LBL="{{ item.label }}"; MDIR="{{ item.mdir }}"
+SETTLE="${OE_RELOAD_SETTLE:-8}"
+
+pid_of() { launchctl list | awk -v l="$LBL" '$3==l{print $1}'; }
+
+OLD=$(pid_of)
+launchctl unload "$PL" 2>/dev/null || true
+# Redundant with the two checks below under any real launchctl — if nothing restarted, the pid cannot
+# change — and kept because it names the cause exactly, which an "unchanged pid" message does not.
+# scripts/ci/mirror-reload-guard-test.sh records it as such: removing it leaves every scenario caught.
+STILL=$(pid_of)
+if [ -n "$STILL" ]; then
+  echo "FAIL: $LBL is still loaded after unload (pid='$STILL') — a load onto a loaded unit is a no-op, so the new config would NOT be picked up"
+  exit 1
+fi
+# Also redundant with the numeric-pid check (a unit that failed to load has no pid), and also kept for
+# the diagnosis: "the unit is now DOWN" is what the operator needs to read, not "no pid".
+if ! launchctl load "$PL"; then
+  echo "FAIL: launchctl load $PL failed — the unit is now DOWN and its config was not applied"
+  exit 1
+fi
+sleep "$SETTLE"
+NEW=$(pid_of)
+case "$NEW" in
+  (*[!0-9]*|"") echo "FAIL: $LBL is loaded but not running (launchctl pid='$NEW')"; exit 1 ;;
+esac
+if [ -n "$OLD" ] && [ "$NEW" = "$OLD" ]; then
+  echo "FAIL: $LBL still runs pid $NEW, the same process as before the reload — nothing restarted, so the rewritten config is not in effect"
+  exit 1
+fi
+# and it must be reading THIS unit's config, not a sibling's
+if ! ps -p "$NEW" -o command= | grep -q -- "--producer.config $MDIR/producer.properties"; then
+  echo "FAIL: pid $NEW is not reading $MDIR/producer.properties"
+  exit 1
+fi
+echo "reloaded: pid ${OLD:-none} -> $NEW, bound to $MDIR"
