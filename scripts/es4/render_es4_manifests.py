@@ -262,6 +262,18 @@ ES_ENV = {
         # production "SPX" rejected 100% of es4 input once the allow-list went live (2026-07-27 outage:
         # rejected_symbol_total 1073+, processed 0) — this override is the durable fix.
         {"name": "STRIKE_FLOW_SYMBOL", "value": "ES", "_override": True},
+        # The near-spot 0DTE SPXW semantic signal's producer (#1155) is PROD-ONLY, same scoping as
+        # dev: its only consumer, es-compression-expansion-service (#1149), has no es4 overlay
+        # (k8s/services/es-compression-expansion has base + production only), and es4's own
+        # hand-maintained topic declaration (OPTIONS_EDGE_ES4_TOPICS in scripts/kafka/topics.env)
+        # does not list options.databento.near-spot-semantic — unlike the shared OPTIONS_EDGE_TOPICS
+        # set dev/prod apply from, es4 topics are NOT inherited automatically, so the topic does not
+        # exist on the es4 broker. Enabling the producer without it declared hits exactly the
+        # broker-auto-create wedge topics.env warns about elsewhere (num.partitions=1 default, a
+        # later Streams reader sized from that wrong count wedges). Without this override the
+        # non-override merge would silently inherit prod's "true" the next render — _override pins
+        # it explicitly so a future prod change can't flip es4 too.
+        {"name": "STRIKE_FLOW_NEAR_SPOT_ENABLED", "value": "false", "_override": True},
     ],
     # ES trades ~23h on CME Globex (Sun 18:00 ET - Fri 17:00 ET, daily 17:00-18:00 halt); the default
     # spx-rth calendar wrongly forced the pace board + spot model to SESSION_IDLE outside 09:30-16:15 ET.
