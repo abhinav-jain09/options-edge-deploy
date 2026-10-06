@@ -24,27 +24,37 @@
 # FUTURE-direction skew was separately measured. The observed effect was a ~100%
 # SPOT_FUTURE_RELATIVE_TO_TRADE / SPOT_STALE / DELTA_STALE refusal rate with zero accepted
 # records in the minutes after rollout.
-# DELTA leg: 2 independent GET samples of live gexdelta:SPX|<today>|<strike> entries (full-chain
-# batch updates -- one updatedAtMs shared across many strikes at once) showed updatedAtMs within
-# ~1-2s of wall-clock "now" at fetch time, consistent with the spot leg's magnitude -- not the
-# "comparable-or-worse, untested" assumption this comment originally carried. Still a small sample
-# (n=2 batch updates, via a temporary debug pod -- no redis-cli reachable from outside the
-# cluster), not as rigorous as the spot-leg measurement; both legs share this one constant.
+# DELTA leg -- EVIDENCE IS WEAKER, NOT independently rigorous (code review finding, left honest
+# rather than overclaimed): 2 GET samples of live gexdelta:SPX|<today>|<strike> entries measured
+# updatedAtMs against WALL-CLOCK "now" at fetch time, not against a near-simultaneous trade's own
+# eventTimeMs -- i.e. surface freshness at an arbitrary fetch moment, NOT the actual join-time
+# quantity (trade.eventTimeMs - latest admissible delta.updatedAtMs) the causal join computes, and
+# batch updates (one updatedAtMs shared across many strikes) can make this understate true
+# join-time staleness. This does NOT independently justify 3000ms for the delta leg. The code has
+# ONE shared causalSkewToleranceMs constant for both legs (no split exists today -- splitting it is
+# a strike-flow-classifier-service code change, out of scope for this deploy-only fix), so 3000ms
+# necessarily applies to delta too; its primary justification is the spot-leg measurement above,
+# the delta leg rides along on a SINGLE shared constant with weaker direct evidence, and this is an
+# explicit, acknowledged gap this comment does not try to paper over.
 # This is NOT the drift the design doc's own "+50ms step, capped at 3 steps (150ms total)"
 # recalibration procedure is for -- that procedure assumes the seed was roughly right and is
 # drifting; max 400ms (250+150) cannot cover an observed ~1.7s tail. This is a wrong INITIAL seed
 # (sub-second jitter was the wrong model for OPRA trade dissemination latency vs. a near-
 # continuous SPX index tick stream), corrected once with real production evidence -- the exact
 # "calibrated in a follow-up phase against replay data" the seed's own doc comment anticipated.
-# OWNER SIGN-OFF: the owner directly requested this fix in-session after reviewing the ~100%
-# refusal rate and the measurement above (equivalent to the design doc's on-call sign-off for a
-# tolerance-change deployment; this correction is a one-time wrong-seed fix, not a step in the
-# repeated "+50ms, re-monitor" drift procedure, so it is not itself bound by the 3-step cap).
-# ROLLBACK/MONITORING: watch CausalLagGovernance's /metrics (causal-lag P99, refusal-rate trigger)
-# and the accepted-vs-refused ratio on options.databento.near-spot-semantic for the remainder of
-# this session and the next full trading session; if the refusal rate stays near-100% or the
-# governance trigger fires, revert this env var (git revert + redeploy) rather than stepping
-# further, and escalate to design-doc review before any further change to this constant.
+# AUTHORIZATION: applied directly on explicit owner instruction in this session ("fix the issue"),
+# after the owner was shown the ~100% refusal rate and the spot-leg measurement above. This is NOT
+# claimed as equivalent to the design doc's own formal on-call/governance sign-off process (no
+# separate approval record exists beyond this commit/PR) -- it is the owner's direct, in-session
+# authorization to deviate from the documented small-step drift procedure for a wrong-INITIAL-seed
+# correction, made transparently rather than silently, with the design doc's own procedure left
+# unamended for any future (non-wrong-seed) drift adjustment to this constant.
+# ROLLBACK TRIGGER (concrete, checkable): after this redeploy, once >=50 trades have reached the
+# causal-join check (causalJoinChecksTotal delta >= 50) in any trailing 30-minute window, if the
+# fraction of options.databento.near-spot-semantic records with semanticState != UNKNOWN is below
+# 50% over that same window, OR CausalLagGovernance's triggerFiring metric is true at that check,
+# revert this env var (git revert + redeploy) rather than applying a further step, and escalate to
+# design-doc review before any FURTHER change to this constant.
 # 3000ms gives ~1.3s of margin over the observed spot-leg max.
 apiVersion: apps/v1
 kind: Deployment
