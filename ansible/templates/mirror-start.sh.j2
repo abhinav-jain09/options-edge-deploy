@@ -33,49 +33,67 @@ procs_of() {
   return 0
 }
 
+# PREFLIGHT, before the load: no OTHER mirror may already be carrying this (topic, target) from a
+# different unit directory. Two such processes duplicate every record — and detecting it AFTER the
+# load left the new, KeepAlive-managed process running, which is the opposite of what the check is
+# for. The target is read from each candidate's own producer config, because the same source topic IS
+# legitimately mirrored to dev and to production at once.
+foreign_dupes() {
+  local all out=""
+  all=$(ps -axo pid=,command=) || { echo "FAIL: cannot enumerate processes (ps failed) — cannot prove this is the only mirror for this topic and target" >&2; return 1; }
+  while read -r pid cfg; do
+    [ -n "${cfg:-}" ] || continue
+    [ "$cfg" = "$MDIR/producer.properties" ] && continue
+    if grep -qx "bootstrap.servers=$TGT" "$cfg" 2>/dev/null; then out="$out $pid"; fi
+  done <<EOFD
+$(printf '%s\n' "$all" | grep -F -- "--whitelist '$RE'" | grep -v grep \
+   | sed -E 's/^[[:space:]]*([0-9]+).*--producer\.config[[:space:]]+"?([^"[:space:]]+)"?.*/\1 \2/')
+EOFD
+  printf '%s' "$out"
+  return 0
+}
+PRE=$(foreign_dupes) || exit 1
+if [ -n "$PRE" ]; then
+  echo "FAIL: another mirror is already publishing $RE to $TGT from a different unit directory (pid(s):$PRE) — nothing has been loaded; two mirrors on one topic duplicate every record"
+  exit 1
+fi
+
 if ! launchctl load "$PL"; then
   echo "FAIL: launchctl load $PL failed — the unit is DOWN and its new configuration is not running"
   exit 1
 fi
+# From here on the unit is LOADED, so every refusal below must put that back: launchd would keep a
+# KeepAlive job alive otherwise, which on a failed proof is a process nobody has verified.
+# The cause is printed LAST, after the undo note, so a reader (and the guard test) sees the refusal
+# that ended the run on the final line rather than a side effect of cleaning up.
+fail_loaded() { undo_load; echo "FAIL: $*"; exit 1; }
+undo_load() {
+  launchctl unload "$PL" 2>/dev/null || true
+  sleep 1
+  local still; still=$(launchctl list 2>/dev/null | awk -v l="$LBL" '$3==l{print $1}')
+  if [ -n "$still" ]; then
+    echo "      AND the unit could not be unloaded again (pid='$still') — it is running UNVERIFIED; stop it by hand" >&2
+  else
+    echo "      the unit has been unloaded again, so nothing unverified is left running" >&2
+  fi
+}
 sleep "$SETTLE"
-NEW=$(pid_of) || exit 1
+NEW=$(pid_of) || fail_loaded "cannot read launchctl list after the load — refusing, because an unreadable job table is indistinguishable from an unloaded unit"
 case "$NEW" in
-  (*[!0-9]*|"") echo "FAIL: $LBL is loaded but not running (launchctl pid='$NEW') — it did not start on the new configuration"; exit 1 ;;
+  (*[!0-9]*|"") fail_loaded "$LBL is loaded but not running (launchctl pid='$NEW') — it did not start on the new configuration" ;;
 esac
 if [ -n "$OLD" ] && [ "$NEW" = "$OLD" ]; then
-  echo "FAIL: $LBL still runs pid $NEW, the same process PHASE 1 was supposed to have stopped — the new configuration is not in effect"
-  exit 1
+  fail_loaded "$LBL still runs pid $NEW, the same process PHASE 1 was supposed to have stopped — the new configuration is not in effect"
 fi
 # Binding and uniqueness from ONE enumeration: exactly one process may be publishing this unit's
 # config, and it must be the pid launchd just reported. Asking `ps -p $NEW` separately needed a second
 # ps form and answered a narrower question — it could not see a SECOND mirror on the same topic.
-RUNNING=$(procs_of) || exit 1
+RUNNING=$(procs_of) || fail_loaded "cannot enumerate processes (ps failed) — cannot prove this unit is the only mirror for its topic"
 N=$(printf '%s\n' "$RUNNING" | grep -c .)
 if [ "$N" != "1" ]; then
-  echo "FAIL: $N process(es) are publishing this unit's config ($(printf '%s' "$RUNNING" | tr '\n' ' ')) — one mirror per topic: none means it is not running on this config, two duplicate every record into the target"
-  exit 1
+  fail_loaded "$N process(es) are publishing this unit's config ($(printf '%s' "$RUNNING" | tr '\n' ' ')) — one mirror per topic: none means it is not running on this config, two duplicate every record into the target"
 fi
 if [ "$(printf '%s\n' "$RUNNING" | head -1)" != "$NEW" ]; then
-  echo "FAIL: launchd reports pid $NEW for $LBL but the process publishing this config is $(printf '%s\n' "$RUNNING" | head -1)"
-  exit 1
-fi
-# ...and no OTHER mirror is already carrying this (topic, target) from a different directory. The
-# count above is per CONFIG PATH, which cannot see a second unit installed elsewhere that mirrors the
-# same topic to the same broker — two such processes duplicate every record, and nothing about this
-# unit's own files would reveal it. The target is read from each candidate's own producer config,
-# because the same source topic IS legitimately mirrored to dev and to production at once.
-ALL=$(ps -axo pid=,command=) || { echo "FAIL: cannot enumerate processes (ps failed) — cannot prove this is the only mirror for this topic and target"; exit 1; }
-DUPES=""
-while read -r pid cfg; do
-  [ -n "${cfg:-}" ] || continue
-  [ "$cfg" = "$MDIR/producer.properties" ] && continue
-  if grep -qx "bootstrap.servers=$TGT" "$cfg" 2>/dev/null; then DUPES="$DUPES $pid"; fi
-done <<EOFD
-$(printf '%s\n' "$ALL" | grep -F -- "--whitelist '$RE'" | grep -v grep \
-   | sed -E 's/^[[:space:]]*([0-9]+).*--producer\.config[[:space:]]+"?([^"[:space:]]+)"?.*/\1 \2/')
-EOFD
-if [ -n "$DUPES" ]; then
-  echo "FAIL: another mirror is publishing $RE to $TGT from a different unit directory (pid(s):$DUPES) — two mirrors on one topic duplicate every record"
-  exit 1
+  fail_loaded "launchd reports pid $NEW for $LBL but the process publishing this config is $(printf '%s\n' "$RUNNING" | head -1)"
 fi
 echo "started: pid ${OLD:-none} -> $NEW, bound to $MDIR, the only mirror for this topic and target"

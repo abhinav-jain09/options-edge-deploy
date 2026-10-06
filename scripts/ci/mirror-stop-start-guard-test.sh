@@ -51,7 +51,7 @@ W="$(dirname "$0")/.."
 [ -e "$W/launchctl_fails" ] && exit 1
 case "${1:-}" in
   list)   [ -e "$W/list_fails" ] && exit 1; cat "$W/pid.$(cat "$W/phase")" 2>/dev/null; exit 0 ;;
-  unload) echo loaded > "$W/phase"; [ -e "$W/unload_fails" ] || echo unloaded > "$W/phase"; exit "$([ -e "$W/unload_fails" ] && echo 1 || echo 0)" ;;
+  unload) echo unload >> "$W/unloads"; echo loaded > "$W/phase"; [ -e "$W/unload_fails" ] || echo unloaded > "$W/phase"; exit "$([ -e "$W/unload_fails" ] && echo 1 || echo 0)" ;;
   load)   [ -e "$W/load_fails" ] && exit 1; echo running > "$W/phase"; exit 0 ;;
 esac
 exit 0
@@ -87,7 +87,7 @@ scenario() { # phase(stop|start|both)  name  expect(pass|fail)  [want=<substring
   local phase="$1" name="$2" expect="$3"; shift 3
   local want=""
   case "${1:-}" in want=*) want="${1#want=}"; shift ;; esac
-  rm -f "$WORK"/unload_fails "$WORK"/load_fails "$WORK"/ps_fails "$WORK"/launchctl_fails "$WORK"/list_fails "$WORK"/pid.* "$WORK"/procs.* "$WORK"/phase
+  rm -f "$WORK"/unload_fails "$WORK"/load_fails "$WORK"/ps_fails "$WORK"/launchctl_fails "$WORK"/list_fails "$WORK"/unloads "$WORK"/pid.* "$WORK"/procs.* "$WORK"/phase
   "$@"
   set +e
   case "$phase" in
@@ -189,6 +189,16 @@ scenario start "ps fails while proving it is the only one" fail want="cannot enu
 setup_start_list_fails() { setup_replaced; echo unloaded > "$WORK/phase"; : > "$WORK/list_fails"; }
 scenario start "launchctl list fails after a successful load" fail want="cannot read launchctl list" setup_start_list_fails
 
+# ---- a post-load refusal must put the load BACK ----
+# Every refusal after the load leaves a KeepAlive job running otherwise: a process nobody verified.
+setup_two_running_cleanup() { setup_two_running; }
+scenario start "a post-load refusal unloads what it loaded" fail want="duplicate every record" setup_two_running_cleanup
+if [ -e "$WORK/unloads" ]; then
+  printf '  ok   %-54s %s\n' "...and the unload really happened" "$(wc -l < "$WORK/unloads" | tr -d ' ') unload call(s)"
+else
+  printf '  FAIL %-54s %s\n' "...and the unload really happened" "the guard never called launchctl unload"; fail=1
+fi
+
 # ---- ANOTHER unit mirroring the same topic to the same target ----
 # The count above is per CONFIG PATH, so it cannot see a second unit installed elsewhere that mirrors
 # the same topic to the same broker — two such processes duplicate every record. Driven on its own
@@ -230,4 +240,4 @@ P
 dup_check
 
 [ "$fail" = 0 ] || { echo "mirror stop/start guards: FAILED"; exit 1; }
-echo "mirror stop/start guards: 16 scenarios and the duplicate-mirror check behave as specified"
+echo "mirror stop/start guards: 17 scenarios, the post-load cleanup and the duplicate-mirror check behave as specified"

@@ -1,16 +1,23 @@
 #!/usr/bin/env bash
 # The Deployment Permission Rule (options-edge rule.md) is enforced per Jenkins job. ansible/es-mirrors.yml
 # can reload a PRODUCTION unit from any checkout, so it has to enforce the same rule itself — and
-# "it has a task that runs the guard" is not the same as "the rule holds". FIVE things are asserted:
+# "it has a task that runs the guard" is not the same as "the rule holds". What is asserted, in the
+# order the checks appear below (the numbering is the code's, not a count of claims):
 #
-#   1. the guard version the playbook DECLARES is the one every mirror Jenkinsfile declares.  [1 of 5] It must be
-#      a literal: computing it from the checkout would let a locally edited guard self-approve, which
-#      is exactly what the guard's version check exists to stop.
+#   1. the guard version is a LITERAL at every invocation — in the playbook's task and in the stop
+#      script — and the same one every mirror Jenkinsfile declares. As a variable, `-e
+#      oe_guard_version=<hash of an edited guard>` would self-approve a modified guard.
 #   2. the task runs only for the production target and only for an install, and its failure is fatal.
 #   3. every task that stops, writes or starts a unit ALSO re-checks that the guard passed. One fatal
 #      assertion is not enough: while testing this gate I made the guard task non-fatal as a mutation
 #      and the run installed and STARTED three production units. The fact is the second lock.
-#   4. behaviourally: a production install from THIS checkout is REFUSED, and refused BY THE GUARD.
+#   4. the BINDING lock is inside ansible/templates/mirror-stop.sh.j2 — the first thing that touches
+#      a unit — gating on the literal production broker and running the guard BEFORE it unloads
+#      anything. The play-level checks are advisory: an extra var outranks every var, fact and
+#      register, so `-e oe_prod_permitted=true` defeated them.
+#   5. the unit tasks run in the order stop, install, start: a copy ahead of the stop would replace
+#      files under a LIVE process.
+#   6. behaviourally: a production install from THIS checkout is REFUSED, and refused BY THE GUARD.
 #      On a PR branch (CI) the refusal is "not on origin/main"; on main with a wrong permitted_sha it
 #      is the SHA mismatch. The run is driven in DUMP mode, which ends the play before any unit task,
 #      so this gate cannot itself touch a unit even if every other assertion here were wrong.
