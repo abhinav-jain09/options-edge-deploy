@@ -33,7 +33,14 @@ for f in "${MIRRORS[@]}"; do
   # A LAST-WINS property file makes "contains the right line" the wrong question: a second
   # enable.idempotence=false below the pinned one would pass that and silently win. Every setting
   # here is therefore counted as a TOTAL for its key, then read.
+  # Every WRITE to the generated file, not just an identical opener: an `echo acks=1 >>` or a
+  # `sed -i` further down would land after the checked stanza and win, and a differently-spelled
+  # `cat >` heredoc would not be counted by matching the opener alone. Reads (--producer.config,
+  # the scp that ships the file to a remote runner) are not writes and are left alone.
   opens=$(grep -c 'cat > "\$MDIR/producer\.properties" <<P$' "$f" || true)
+  writes=$(grep -cE '[^>]>[[:space:]]*"?[^"[:space:]]*producer\.properties' "$f" || true)
+  appends=$(grep -cE '>>[[:space:]]*"?[^"[:space:]]*producer\.properties' "$f" || true)
+  edits=$(grep -cE '(sed[[:space:]]+-i|tee)[^|]*producer\.properties' "$f" || true)
   acks=$(printf '%s\n' "$block" | grep -c '^acks=' || true)
   acks_all=$(printf '%s\n' "$block" | grep -c '^acks=all$' || true)
   idem_any=$(printf '%s\n' "$block" | grep -c '^enable\.idempotence=' || true)
@@ -41,6 +48,9 @@ for f in "${MIRRORS[@]}"; do
   bootstrap=$(printf '%s\n' "$block" | grep -c '^bootstrap\.servers=' || true)
 
   [ "$opens" = "1" ] || { echo "FAIL $f: expected exactly one producer.properties heredoc, found $opens — only the first is checked, so a second could carry anything"; fail=1; }
+  [ "$writes" = "1" ] || { echo "FAIL $f: producer.properties must be written exactly once (the heredoc), found $writes writes"; fail=1; }
+  [ "$appends" = "0" ] || { echo "FAIL $f: nothing may append to producer.properties after the heredoc (found $appends)"; fail=1; }
+  [ "$edits" = "0" ] || { echo "FAIL $f: nothing may rewrite producer.properties in place (found $edits sed -i/tee)"; fail=1; }
   [ "$acks" = "1" ] && [ "$acks_all" = "1" ] || { echo "FAIL $f: producer must set exactly one acks= line, reading acks=all (found $acks acks lines, $acks_all of them acks=all)"; fail=1; }
   [ "$idem_any" = "1" ] && [ "$idem_true" = "1" ] || { echo "FAIL $f: producer must set exactly one enable.idempotence= line, reading true (found $idem_any lines, $idem_true of them true)"; fail=1; }
   [ "$bootstrap" = "1" ] || { echo "FAIL $f: producer must set exactly one bootstrap.servers (found $bootstrap)"; fail=1; }
