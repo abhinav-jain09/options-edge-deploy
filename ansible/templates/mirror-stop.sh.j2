@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# PHASE 1 of replacing a unit: stop it, and prove it is stopped, BEFORE any file is written.
+# Why the order matters: the five unit files cannot be replaced as one transaction, and the plist
+# carries KeepAlive — so a process alive during the copy, or restarted by launchd mid-copy, can come
+# up on a MIXED generation (a new producer.properties with an old run-mirror.sh, say). Stopping first
+# makes that window empty: the files change while nothing is running, and PHASE 2 starts the unit on
+# the complete new set. If this phase fails, nothing is copied and the unit keeps running the old,
+# COHERENT configuration — the safe state to leave behind.
+# It prints `stopped: was pid <n|none>`; the caller passes that pid to PHASE 2 as OE_OLD_PID.
+set -uo pipefail
+PL="{{ item.plist }}"; LBL="{{ item.label }}"; MDIR="{{ item.mdir }}"
+
+pid_of() { launchctl list | awk -v l="$LBL" '$3==l{print $1}'; }
+# The launchd REGISTRATION is not the process: an unload can deregister the unit while the old java
+# keeps running and keeps publishing. It RETURNS non-zero on an enumeration failure and the call site
+# checks it — `X=$(procs_of)` runs in a SUBSHELL, where an exit would end only the subshell and this
+# script would carry on with an empty list, which is the lie the check exists to refuse.
+procs_of() {
+  local all
+  all=$(ps -axo pid=,command=) || { echo "FAIL: cannot enumerate processes (ps failed) — refusing to touch this unit, because an unreadable process table is indistinguishable from an empty one" >&2; return 1; }
+  # an EMPTY result is the healthy case, not a failure: grep exiting 1 on no match must not become
+  # this function's status, or a unit with nothing running would read as unreadable
+  printf '%s\n' "$all" | grep -- "--producer.config $MDIR/producer.properties" | grep -v grep | awk '{print $1}'
+  return 0
+}
+
+OLD=$(pid_of)
+launchctl unload "$PL" 2>/dev/null || true
+STILL=$(pid_of)
+if [ -n "$STILL" ]; then
+  echo "FAIL: $LBL is still LOADED after unload (pid='$STILL') — nothing has been written, and the unit keeps its old configuration"
+  exit 1
+fi
+LINGER=$(procs_of) || exit 1
+if [ -n "$LINGER" ]; then
+  echo "FAIL: process(es) still publishing this unit's config after the unload ($(printf '%s' "$LINGER" | tr '\n' ' ')) — nothing has been written; stop them and re-run, or the install would replace the files under a live process"
+  exit 1
+fi
+echo "stopped: was pid ${OLD:-none}"

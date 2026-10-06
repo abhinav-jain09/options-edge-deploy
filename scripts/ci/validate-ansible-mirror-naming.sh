@@ -13,8 +13,13 @@ cd "$(dirname "$0")/../.."
 command -v ansible-playbook >/dev/null || { echo "FAIL: ansible-playbook is required to test the playbook's own logic"; exit 1; }
 OUT=$(mktemp -d); trap 'rm -rf "$OUT"' EXIT
 
+# ops_dir and launch_agents_dir are passed EXPLICITLY: the playbook derives them from $HOME, and this
+# gate is about the identity the playbook COMPOSES, not about whose home directory CI runs under. On a
+# runner they would be /home/runner/... and every assertion below would be about the wrong thing.
 run() { # target-ip target-port out-file
   ansible-playbook ansible/es-mirrors.yml \
+    -e ops_dir=/Users/abhinav/oe-ops \
+    -e launch_agents_dir=/Users/abhinav/Library/LaunchAgents \
     -e "mirror_target_ip=$1" -e "mirror_target_port=$2" -e "dump_rows=$3" >"$OUT/log" 2>&1 \
     || { echo "FAIL: the dump run for $1:$2 failed"; sed 's/^/    /' "$OUT/log" | tail -20; exit 1; }
 }

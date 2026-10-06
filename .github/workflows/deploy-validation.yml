@@ -235,12 +235,12 @@ jobs:
       - name: Validate the Ansible mirror table against the pipelines
         run: bash scripts/ci/validate-ansible-mirror-parity.sh
 
-      # The reload guard is the only part of the Ansible mirror path that stops and starts a LIVE
-      # mirror, and the case it exists for is quiet: a failed `launchctl load` leaves the OLD process
-      # running, whose command line still names this unit's config. Driven against stub
-      # launchctl/ps, once per way it can be lied to.
-      - name: Validate the mirror reload guard (stubbed launchctl scenarios)
-        run: bash scripts/ci/mirror-reload-guard-test.sh
+      # The stop and start guards are the only part of the Ansible mirror path that touches a LIVE
+      # mirror, and the cases they exist for are quiet ones: a failed `launchctl load` leaves the OLD
+      # process running, and deregistering a unit can leave it running while a load starts a SECOND
+      # mirror on the same topic. Driven against stub launchctl/ps, once per way they can be lied to.
+      - name: Validate the mirror stop/start guards (stubbed launchctl scenarios)
+        run: bash scripts/ci/mirror-stop-start-guard-test.sh
 
       # The comparison decides whether a LIVE mirror is reloaded, and both wrong answers cost: "in
       # sync" when a property changed leaves the old settings running, "would install" for a comment
@@ -248,6 +248,14 @@ jobs:
       # inside its awk program once made every unit read "unparseable".
       - name: Validate the mirror comparison guard
         run: bash scripts/ci/mirror-diff-guard-test.sh
+
+      # A production reload from this playbook must enforce the Deployment Permission Rule itself,
+      # with the same guard script and the DECLARED version hash Jenkins passes — a computed hash
+      # would let a locally edited guard self-approve. Asserted statically and behaviourally.
+      - name: Validate the Ansible production permission path
+        run: |
+          python3 -m pip install --quiet --disable-pip-version-check ansible-core
+          bash scripts/ci/validate-ansible-prod-permission.sh
 
       # Catches a playbook that cannot even be loaded — a YAML or module-name error in ansible/ is
       # otherwise found only by the operator running it, mid-install — and then runs the playbook's

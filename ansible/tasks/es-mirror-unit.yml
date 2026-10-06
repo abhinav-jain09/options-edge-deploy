@@ -103,24 +103,45 @@
   register: oe_diff
   changed_when: false
 
-- name: "{{ item.label }} | unit directory"
+- name: "{{ item.label }} | render the stop and start guards"
   when: oe_ok and oe_confirm and (oe_diff.stdout is search('would install'))
-  ansible.builtin.file:
-    path: "{{ item.mdir }}"
-    state: directory
+  ansible.builtin.template:
+    src: "{{ g }}.j2"
+    dest: "{{ oe_rendered_dir }}/{{ item.label }}/{{ g | replace('mirror-', '') }}"
     mode: "0755"
+  loop: [mirror-stop.sh, mirror-start.sh]
+  loop_control:
+    loop_var: g
+  changed_when: false
+
+- name: "{{ item.label }} | STOP the unit before anything is written"
+  # Phase 1. Files are replaced only after this proves the unit is stopped and nothing lingers: the
+  # five files are not one transaction and the plist carries KeepAlive, so a process alive during the
+  # copy can come up on a MIXED generation. If this fails, nothing is copied and the unit keeps its
+  # old, coherent configuration.
+  when:
+    - oe_prod_permitted | default(false)
+    - oe_ok and oe_confirm
+    - oe_diff.stdout is search('would install')
+  ansible.builtin.command:
+    cmd: "bash {{ oe_rendered_dir }}/{{ item.label }}/stop.sh"
+  register: oe_stop
+  failed_when: false
 
 - name: "{{ item.label }} | install the rendered files"
-  # Each file is copied beside its target and MOVED into place, so no reader ever sees a torn file,
-  # and the five moves happen before the reload — the live process keeps running its old config until
-  # then. The five together are NOT one transaction: an interruption between them leaves a unit whose
-  # files are part new, with the OLD process still serving. That state is detected by the comparison
-  # above on the next run and finished; it is not silently carried, and nothing is reloaded onto it.
-  when: oe_ok and oe_confirm and (oe_diff.stdout is search('would install'))
+  # Each file is copied beside its target and MOVED into place, so no reader ever sees a torn file.
+  # Nothing is running at this point — phase 1 proved it — so there is no window in which a mixed set
+  # could be read.
+  when:
+    - oe_prod_permitted | default(false)
+    - oe_ok and oe_confirm
+    - oe_diff.stdout is search('would install')
+    - (oe_stop.rc | default(1)) == 0
   ansible.builtin.shell:
     cmd: |
       set -euo pipefail
       R="{{ oe_rendered_dir }}/{{ item.label }}"; M="{{ item.mdir }}"
+      mkdir -p "$M"
       put() { # rendered-name  destination  mode
         cp "$R/$1" "$2.ansible-new"
         chmod "$3" "$2.ansible-new"
@@ -133,24 +154,23 @@
       put plist.xml           "{{ item.plist }}"       0644
       echo "installed 5 file(s) into $M"
     executable: /bin/bash
+  register: oe_install
+  failed_when: false
 
-- name: "{{ item.label }} | render the reload guard"
-  when: oe_ok and oe_confirm and (oe_diff.stdout is search('would install'))
-  ansible.builtin.template:
-    src: mirror-reload.sh.j2
-    dest: "{{ oe_rendered_dir }}/{{ item.label }}/reload.sh"
-    mode: "0755"
-  changed_when: false
-
-- name: "{{ item.label }} | reload the launchd unit"
-  # Only reached when something that matters differed — a reload is a gap in a live mirror, so the
-  # condition is the point of this whole task file. The script proves the replacement; see its header.
-  # A failed reload is RECORDED, not fatal here, so the remaining units still get installed, and the
-  # play's final assertion names it and exits non-zero.
-  when: oe_ok and oe_confirm and (oe_diff.stdout is search('would install'))
+- name: "{{ item.label }} | START the unit on the installed files"
+  # Phase 2, and it proves the replacement: a numeric pid, different from the one phase 1 stopped,
+  # reading THIS unit's config, and the only process doing so.
+  when:
+    - oe_prod_permitted | default(false)
+    - oe_ok and oe_confirm
+    - oe_diff.stdout is search('would install')
+    - (oe_stop.rc | default(1)) == 0
+    - (oe_install.rc | default(1)) == 0
   ansible.builtin.command:
-    cmd: "bash {{ oe_rendered_dir }}/{{ item.label }}/reload.sh"
-  register: oe_reload
+    cmd: "bash {{ oe_rendered_dir }}/{{ item.label }}/start.sh"
+  environment:
+    OE_OLD_PID: "{{ (oe_stop.stdout | default('')) | regex_search('was pid ([0-9]+)', '\\1') | first | default('', true) }}"
+  register: oe_start
   failed_when: false
 
 - name: "{{ item.label }} | replication lag on the source"
@@ -173,9 +193,16 @@
            ~ ' | ' ~ (((oe_shape.stdout | default('')) ~ (oe_shape.stderr | default(''))) | trim)
            ~ ' | ' ~ (((oe_group.stdout | default('')) ~ (oe_group.stderr | default(''))) | trim)
            ~ ' | ' ~ ((oe_diff.stdout | default('not compared')) | trim)
-           ~ ' | ' ~ (((oe_reload.stdout | default('no reload')) ~ (oe_reload.stderr | default(''))) | trim)
+           ~ ' | ' ~ ([ (oe_stop.stdout | default('')), (oe_stop.stderr | default('')),
+                         (oe_install.stdout | default('')), (oe_install.stderr | default('')),
+                         (oe_start.stdout | default('')), (oe_start.stderr | default('')) ]
+                       | select | join(' ') | trim | default('no change applied', true))
            ~ ' | ' ~ ((oe_lag.stdout | default('lag not read')) | trim)
          ] }}
     oe_failed: "{{ (oe_failed | default([])) + ([] if oe_ok else [item.label]) }}"
+    # a unit whose stop, install or start did not succeed: its files may be new while its process is
+    # not, which the play's final assertion names separately from a unit it never tried to install
     oe_reload_failed: >-
-      {{ (oe_reload_failed | default([])) + ([item.label] if ((oe_reload.rc | default(0)) != 0) else []) }}
+      {{ (oe_reload_failed | default([])) +
+         ([item.label] if (((oe_stop.rc | default(0)) != 0) or ((oe_install.rc | default(0)) != 0)
+                            or ((oe_start.rc | default(0)) != 0)) else []) }}

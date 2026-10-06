@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# PHASE 2 of replacing a unit: start it on the files just installed, and PROVE the replacement.
+# `launchctl load` of a unit that is already loaded is a no-op, and a load that FAILS leaves whatever
+# was running — whose command line still names this unit's producer.properties, so a
+# "bound to the right config" check alone would report success for a mirror that never restarted.
+# OE_OLD_PID is the pid PHASE 1 stopped (empty for a first install); OE_RELOAD_SETTLE lets the guard
+# test drive this with no wait, and defaults to the 8s a real unit needs before launchctl reports one.
+set -uo pipefail
+PL="{{ item.plist }}"; LBL="{{ item.label }}"; MDIR="{{ item.mdir }}"
+OLD="${OE_OLD_PID:-}"; SETTLE="${OE_RELOAD_SETTLE:-8}"
+
+pid_of() { launchctl list | awk -v l="$LBL" '$3==l{print $1}'; }
+procs_of() {
+  local all
+  all=$(ps -axo pid=,command=) || { echo "FAIL: cannot enumerate processes (ps failed) — cannot prove this unit is the only mirror for its topic" >&2; return 1; }
+  # an EMPTY result is the healthy case, not a failure: grep exiting 1 on no match must not become
+  # this function's status, or a unit with nothing running would read as unreadable
+  printf '%s\n' "$all" | grep -- "--producer.config $MDIR/producer.properties" | grep -v grep | awk '{print $1}'
+  return 0
+}
+
+if ! launchctl load "$PL"; then
+  echo "FAIL: launchctl load $PL failed — the unit is DOWN and its new configuration is not running"
+  exit 1
+fi
+sleep "$SETTLE"
+NEW=$(pid_of)
+case "$NEW" in
+  (*[!0-9]*|"") echo "FAIL: $LBL is loaded but not running (launchctl pid='$NEW') — it did not start on the new configuration"; exit 1 ;;
+esac
+if [ -n "$OLD" ] && [ "$NEW" = "$OLD" ]; then
+  echo "FAIL: $LBL still runs pid $NEW, the same process PHASE 1 was supposed to have stopped — the new configuration is not in effect"
+  exit 1
+fi
+# Binding and uniqueness from ONE enumeration: exactly one process may be publishing this unit's
+# config, and it must be the pid launchd just reported. Asking `ps -p $NEW` separately needed a second
+# ps form and answered a narrower question — it could not see a SECOND mirror on the same topic.
+RUNNING=$(procs_of) || exit 1
+N=$(printf '%s\n' "$RUNNING" | grep -c .)
+if [ "$N" != "1" ]; then
+  echo "FAIL: $N process(es) are publishing this unit's config ($(printf '%s' "$RUNNING" | tr '\n' ' ')) — one mirror per topic: none means it is not running on this config, two duplicate every record into the target"
+  exit 1
+fi
+if [ "$(printf '%s\n' "$RUNNING" | head -1)" != "$NEW" ]; then
+  echo "FAIL: launchd reports pid $NEW for $LBL but the process publishing this config is $(printf '%s\n' "$RUNNING" | head -1)"
+  exit 1
+fi
+echo "started: pid ${OLD:-none} -> $NEW, bound to $MDIR"

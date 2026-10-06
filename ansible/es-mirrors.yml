@@ -9,7 +9,9 @@
 # What it deliberately does NOT do: create, alter or delete a topic, and prove a payload end to end.
 # Topic lifecycle and the payload proof stay in the pipelines, where the permitted-commit guard, the
 # pollution baseline and the drain proof live. Here a topic whose shape does not already match the
-# frozen contract at BOTH ends is a FAILURE, never something to fix in passing.
+# shape its own pipeline asserts — at the ends THAT pipeline asserts, which is both ends for the cvd
+# and auction/tape-zones rows, the target only for indicator, and nothing at all for strike-intel
+# (ansible/vars/es-mirrors.yml records each one) — is a FAILURE here, never something to fix in passing.
 #
 #   # plan only — renders every unit under ansible/.ansible-rendered/ and reports, per file,
 #   # whether installing would change the live copy. It reads brokers and never writes a unit.
@@ -64,6 +66,11 @@
     # it per job; this playbook can reload a production unit from a laptop, so it enforces the same
     # rule with the SAME script Jenkins runs — no local re-implementation to drift from it.
     oe_permitted_sha: "{{ permitted_sha | default('') }}"
+    # DECLARED, not computed. Jenkins passes this hash as a job PARAMETER, so a guard script edited in
+    # the checkout fails its own version check; computing it here from the same checkout would let a
+    # modified guard self-approve. scripts/ci/validate-ansible-prod-permission.sh asserts this literal
+    # equals what every mirror Jenkinsfile declares.
+    oe_guard_version: "2f6fc2ab7aa51eb8a9e8aa350f2d774cd2fb7a253de2591e43645a19a9886b24"
 
   tasks:
     - name: Validate the broker pair, fail-closed
@@ -88,12 +95,20 @@
           set -uo pipefail
           cd "{{ playbook_dir }}/.."
           PERMITTED_SHA="{{ oe_permitted_sha }}" \
-          PERMITTED_SHA_GUARD_VERSION="$(bash scripts/jenkins/permitted-sha-guard-version.sh)" \
+          PERMITTED_SHA_GUARD_VERSION="{{ oe_guard_version }}" \
           bash scripts/jenkins/permitted-sha-guard.sh
         executable: /bin/bash
       register: oe_guard
       changed_when: false
       failed_when: oe_guard.rc != 0
+
+    - name: Production permission, as a fact every mutating task re-checks
+      # Defence in depth, and not hypothetical: while testing this very gate I made the task above
+      # non-fatal as a mutation, and the run went on to install and START three production units.
+      # One fatal assertion was the only thing standing between a refusal and a production change, so
+      # now every task that stops, writes or starts a unit re-checks this fact as well.
+      ansible.builtin.set_fact:
+        oe_prod_permitted: "{{ (oe_target != oe_prod_target) or ((oe_guard.rc | default(1)) == 0) }}"
 
     - name: Check the Kafka CLI is where this playbook expects it
       # Not in dump mode: that path stops before any broker or unit access, and the identity gate runs
