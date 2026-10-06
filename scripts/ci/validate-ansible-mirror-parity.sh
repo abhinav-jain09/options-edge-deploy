@@ -10,12 +10,17 @@
 #   2. per pipeline: the consumer group.id formula, auto.offset.reset, and isolation.level
 #   3. per pipeline: the topic allow-list
 #   4. per pipeline: whether the unit name carries the topic
-#   5. the generated run-mirror.sh: the mirror-maker flag SEQUENCE and the --offset.commit.interval.ms
-#      the pipeline passes (auction and tape-zones pass 5000; the others pass none, and MM1's default
-#      is 60000 — a missing flag is a silently slower commit, not a visible error)
-#   6. the launchd plist, byte for byte after substituting $LABEL and $MDIR
+#   5. the generated run-mirror.sh, BYTE for byte after substituting $MDIR/$KBIN/'$RE' — arguments,
+#      not just flag names, because --num.streams 2 or a broadened --whitelist keeps the sequence
+#      while changing what is replicated — including the --offset.commit.interval.ms each pipeline
+#      passes (auction and tape-zones pass 5000, the others none, and MM1's default is 60000)
+#   6. log4j.properties, byte for byte
+#   7. the whole generated consumer.properties as a key/value MAP, so a key added or dropped on
+#      either side fails — not only the three somebody thought to check
+#   8. the launchd plist, byte for byte after substituting $LABEL and $MDIR
 #
-# What it does NOT check, stated rather than implied: the per-end SHAPE assertions. Those live in each
+# What it does NOT check, stated rather than implied, and this is the whole list: the per-end SHAPE
+# assertions. Those live in each
 # pipeline as shell, each written differently (an exact-string compare here, an effective-value read
 # there, a reconcile somewhere else), and the table records them per end with a comment naming the
 # pipeline's own behaviour. A reviewer changing a pipeline's shape assertion must update the table by
@@ -30,6 +35,7 @@ tbl = pathlib.Path("ansible/vars/es-mirrors.yml").read_text()
 tpl = pathlib.Path("ansible/templates/mirror-producer.properties.j2").read_text()
 cons_tpl = pathlib.Path("ansible/templates/mirror-consumer.properties.j2").read_text()
 run_tpl = pathlib.Path("ansible/templates/run-mirror.sh.j2").read_text()
+log4j_tpl = pathlib.Path("ansible/templates/mirror-log4j.properties.j2").read_text()
 plist_tpl = pathlib.Path("ansible/templates/mirror.plist.j2").read_text()
 
 # ---- 1b. the DIRECTION of both bootstrap lines ----
@@ -130,10 +136,28 @@ for blk in blocks:
         fail.append(f"{jf}: group.id is {cmap.get('group.id')!r} but the table's group_parts {parts} "
                     f"compose {want_gid!r} — a wrong group is a NEW mirror that re-reads from "
                     f"auto.offset.reset")
-    if cmap.get("auto.offset.reset") != offset:
-        fail.append(f"{jf}: auto.offset.reset={cmap.get('auto.offset.reset')!r}, table says {offset!r}")
-    if cmap.get("isolation.level", "") != iso:
-        fail.append(f"{jf}: isolation.level={cmap.get('isolation.level', '')!r}, table says {iso!r}")
+    # the WHOLE consumer map, not three spot checks: the template's expressions are resolved
+    # symbolically to what the pipeline writes, and then the two maps must be equal — so a key added
+    # or dropped on either side fails, not just the three somebody thought to check
+    resolved_cons = (cons_tpl
+                     .replace("{{ item.source }}", "$SRC")
+                     .replace("{{ item.group_id }}", want_gid)
+                     .replace("{{ item.offset_reset }}", offset or "")
+                     .replace("{{ item.isolation_level }}", iso))
+    tmap = {}
+    for line in resolved_cons.split("\n"):
+        line = line.strip()
+        if not line or line.startswith("#") or line.startswith("{%") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        tmap[k.strip()] = v.strip()
+    if iso == "":
+        tmap.pop("isolation.level", None)
+    if tmap != cmap:
+        only_j = {k: v for k, v in cmap.items() if tmap.get(k) != v}
+        only_t = {k: v for k, v in tmap.items() if cmap.get(k) != v}
+        fail.append(f"{jf}: the generated consumer.properties does not match the template: "
+                    f"jenkinsfile-only/differing={only_j} template-only/differing={only_t}")
 
     # ---- 3. the topic allow-list ----
     m = re.search(r"choice\(name: 'TOPIC', choices: \[(.*?)\]", j, re.S)
@@ -144,38 +168,66 @@ for blk in blocks:
         if sorted(want_topics) != sorted(topics):
             fail.append(f"{jf}: TOPIC choices {sorted(want_topics)} != table topics {sorted(topics)}")
 
-    # ---- 5. the generated run-mirror.sh: flag sequence and commit interval ----
+    # ---- 5. the generated run-mirror.sh, byte for byte after token substitution ----
+    # Flag NAMES are not the contract: --num.streams 2 or a broadened --whitelist keeps the same
+    # sequence while changing what gets replicated. So the pipeline's generated line is reconstructed
+    # (its heredoc is UNQUOTED, so the shell removes each backslash-newline and writes ONE physical
+    # line), its $MDIR/$KBIN are replaced by the template's expressions and its '$RE' by the
+    # template's whitelist expression, and the whole text is compared.
     runner = stanza(j, "run-mirror.sh", "S")
     if runner is None:
         fail.append(f"{jf}: no run-mirror.sh heredoc — this gate cannot compare the runner")
     else:
-        # the pipeline's heredoc is UNQUOTED, so the shell removes each backslash-newline: the file it
-        # writes is one physical line, which is what the template renders
         joined = "\n".join(runner).replace("\\\\\n", "")
-        want_flags = re.findall(r'(--[a-z.]+)', joined)
         commit = field("commit_interval_ms")
-        # the template carries --offset.commit.interval.ms inside a {% if item.commit_interval %}
-        # block, so it is compared against the arm the pipeline actually uses: with the flag for a
-        # pipeline that passes one, without it for a pipeline that does not
+        m2 = re.search(r'--offset\.commit\.interval\.ms (\d+)', joined)
+        want_commit = m2.group(1) if m2 else None
+        if (commit or None) != want_commit:
+            fail.append(f"{jf}: passes --offset.commit.interval.ms {want_commit!r} but the table says "
+                        f"commit_interval_ms={commit!r} — MM1's default is 60000, so a dropped value "
+                        f"installs a silently slower commit and a wrong one changes the install proof")
+        # the template, with its conditional arm resolved the way this pipeline uses it
         tpl_with = re.sub(r'{%[^%]*%}', '', run_tpl)
         tpl_without = re.sub(r'{% if item\.commit_interval.*?{% endif %}', '', run_tpl, flags=re.S)
         if tpl_with == tpl_without:
             fail.append("ansible/templates/run-mirror.sh.j2: --offset.commit.interval.ms must stay "
-                        "inside an {% if item.commit_interval %} block — hardcoding it would pass it "
-                        "to pipelines that do not, and dropping it would lose it where they do")
-        tpl_flags = re.findall(r'(--[a-z.]+)', tpl_with if commit is not None else tpl_without)
-        if "--offset.commit.interval.ms" in want_flags:
-            m2 = re.search(r'--offset\.commit\.interval\.ms (\d+)', joined)
-            want_commit = m2.group(1) if m2 else None
-            if commit != want_commit:
-                fail.append(f"{jf}: passes --offset.commit.interval.ms {want_commit} but the table says "
-                            f"commit_interval_ms={commit!r} — MM1's default is 60000, so a missing value "
-                            f"installs a silently slower commit")
-        elif commit is not None:
-            fail.append(f"{jf}: passes no --offset.commit.interval.ms but the table says "
-                        f"commit_interval_ms={commit!r}")
-        if want_flags != tpl_flags:
-            fail.append(f"{jf}: runner flags {want_flags} != ansible/templates/run-mirror.sh.j2 {tpl_flags}")
+                        "inside an {% if item.commit_interval %} block — hardcoded it reaches "
+                        "pipelines that pass none, deleted it is lost where they do")
+        resolved = (tpl_with if want_commit else tpl_without)
+        if want_commit:
+            resolved = resolved.replace("{{ item.commit_interval }}", want_commit)
+        # The whitelist is PINNED, not substituted away. The comparison below replaces the
+        # pipeline's '$RE' with the template's token so the rest of the line can be compared — which
+        # by construction makes any template whitelist match, so broadening it to 'es\.futures\..*'
+        # (every topic on the source into this one target) passed. The token must therefore equal the
+        # single-topic escape exactly, and that is asserted here, separately.
+        EXPECT_WL = "'{{ item.topic | regex_replace('\\.', '\\\\.') }}'"
+        wl = re.search(r"--whitelist (.*?) --num\.streams", resolved, re.S)
+        if not wl or wl.group(1) != EXPECT_WL:
+            fail.append("ansible/templates/run-mirror.sh.j2: --whitelist must be exactly "
+                        f"{EXPECT_WL} — one topic, dots escaped. A broader pattern mirrors topics "
+                        f"this unit was never installed for. Found {(wl.group(1) if wl else None)!r}")
+        want = (joined
+                .replace("$MDIR", "{{ item.mdir }}")
+                .replace("$KBIN", "{{ oe_kbin }}"))
+        if wl:
+            want = re.sub(r"--whitelist '\$RE'", "--whitelist " + wl.group(1).replace("\\", "\\\\"), want)
+        else:
+            fail.append("ansible/templates/run-mirror.sh.j2: no --whitelist ... --num.streams in the runner")
+        if want.strip() != resolved.strip():
+            fail.append(f"{jf}: the generated run-mirror.sh differs from "
+                        f"ansible/templates/run-mirror.sh.j2 (arguments, not just flag names)")
+            for i, (x, y) in enumerate(zip(want.strip().split("\n"), resolved.strip().split("\n"))):
+                if x != y:
+                    fail.append(f"    first difference at line {i+1}:\n      jenkinsfile={x!r}\n      template={y!r}")
+                    break
+
+    # ---- 5b. log4j.properties, byte for byte ----
+    l4 = stanza(j, "log4j.properties", "L")
+    if l4 is None:
+        fail.append(f"{jf}: no log4j.properties heredoc — this gate cannot compare it")
+    elif "\n".join(l4).strip() != log4j_tpl.strip():
+        fail.append(f"{jf}: log4j.properties differs from ansible/templates/mirror-log4j.properties.j2")
 
     # ---- 6. the plist, byte for byte after token substitution ----
     pl = stanza(j, "", "PL")
@@ -210,7 +262,6 @@ if fail:
         print(f)
     sys.exit(1)
 print(f"=== validate-ansible-mirror-parity: OK === {len(PIPELINES)} pipelines agree with ansible/vars/es-mirrors.yml "
-      "on both bootstrap DIRECTIONS at both ends, the producer stanza byte for byte, the consumer "
-      "group/offset/isolation, the topic allow-list, unit naming, the runner's flag sequence and "
-      "commit interval, and the plist")
+      "on both bootstrap DIRECTIONS at both ends, all four generated files (producer, consumer, log4j "
+      "and the runner, with its arguments), the plist, the topic allow-list and unit naming")
 PY

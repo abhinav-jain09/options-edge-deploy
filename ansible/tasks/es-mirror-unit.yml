@@ -95,7 +95,7 @@
       props() {
         [ -r "$1" ] || return 1
         # refuse the parse where it would be unfaithful; the caller then byte-compares
-        grep -q '\\\\' "$1" && return 2
+        grep -qF '\' "$1" && return 2
         awk '{ l=$0
                sub(/^[[:space:]]+/, "", l)
                if (l == "" || l ~ /^[#!]/) next
@@ -123,6 +123,10 @@
         elif ! diff -q "$R/$f" "$M/$f" >/dev/null 2>&1; then WHY="$WHY $f=bytes-differ"
         fi
       done
+      # the MODE too, for the one file launchd execs: a run-mirror.sh that lost +x is byte-identical
+      # and the live java process keeps running, so the unit reads "in sync" right up to the next
+      # restart, which then fails. Mode is part of the artifact, not a property of it.
+      [ -x "$M/run-mirror.sh" ] || WHY="$WHY run-mirror.sh=not-executable"
       if [ ! -e "$PL" ]; then WHY="$WHY plist=absent"
       elif ! diff -q "$R/plist.xml" "$PL" >/dev/null 2>&1; then WHY="$WHY plist=bytes-differ"
       fi
