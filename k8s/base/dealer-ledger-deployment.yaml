@@ -8,7 +8,12 @@ metadata:
     app.kubernetes.io/component: dealer-ledger-service
     app.kubernetes.io/part-of: options-edge
 spec:
-  # DISABLED until further notice (USER 2026-09-10, after the prod OOM at 13:09/13:11 ET)
+  # HELD AT 0 IN THE BASE (USER 2026-09-10, after the prod OOM at 13:09/13:11 ET — #1034).
+  # PRODUCTION ONLY was lifted on 2026-10-06 (USER: "start the dealer ledger on prod so it produces a
+  # verdict") by a replicas patch in k8s/overlays/production/kustomization.yaml, which carries the
+  # reasoning and the abort action. This base value is what still holds DEV and EXPERIMENT down, so
+  # raising it here would re-enable a 6GB-heap JVM on the dev Mac as well — change the prod overlay,
+  # not this line. es4 is held separately (ES4_KEEP_DOWN since 2026-08-18).
   replicas: 0
   strategy:
     type: Recreate
