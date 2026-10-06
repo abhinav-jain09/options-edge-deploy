@@ -72,6 +72,31 @@ for f in "${MIRRORS[@]}"; do
     fail=1
   done < <(grep 'producer\.properties' "$f")
 
+  # POSITIVE BINDING: the stanza's bytes are worth nothing if nothing RUNS them. Everything above is
+  # closure over writes; this requires the use. Each generated run-mirror*.sh must invoke
+  # kafka-mirror-maker and pass this file to it EXACTLY once, and the file must carry exactly as many
+  # such scripts as the pipeline really has (two for opra: the es4-docker runner reads the container
+  # path /mirror/producer.properties, the host runner reads "$MDIR/producer.properties"). Deleting the
+  # --producer.config line, or pointing it at another file, left every other assertion here green.
+  case "$f" in
+    Jenkinsfile.opra-definition-enumeration-mirror) want_runners=2 ;;
+    *) want_runners=1 ;;
+  esac
+  runners=0
+  while read -r s_line; do
+    [ -n "$s_line" ] || continue
+    e_line=$(awk -v s="$s_line" 'NR>s && /^S$/{print NR; exit}' "$f")
+    if [ -z "$e_line" ]; then echo "FAIL $f: run-mirror script heredoc opened at line $s_line is never terminated"; fail=1; continue; fi
+    runners=$((runners+1))
+    blk=$(sed -n "$((s_line+1)),$((e_line-1))p" "$f")
+    printf '%s\n' "$blk" | grep -q 'kafka-mirror-maker' || { echo "FAIL $f: the run-mirror script at line $s_line does not invoke kafka-mirror-maker — nothing would read producer.properties"; fail=1; }
+    pc=$(printf '%s\n' "$blk" | grep -cE "$READ" || true)
+    [ "$pc" = "1" ] || { echo "FAIL $f: the run-mirror script at line $s_line must pass --producer.config exactly once (found $pc)"; fail=1; }
+  done < <(grep -nE '^[[:space:]]*cat > "\$MDIR/run-mirror[^"]*\.sh" <<S$' "$f" | cut -d: -f1)
+  [ "$runners" = "$want_runners" ] || { echo "FAIL $f: expected $want_runners generated run-mirror script(s), found $runners"; fail=1; }
+  reads=$(grep -cE "$READ" "$f" || true)
+  [ "$reads" = "$want_runners" ] || { echo "FAIL $f: expected $want_runners --producer.config read(s), found $reads — a read outside a generated runner proves nothing"; fail=1; }
+
   # Byte-identical across the seven: the pipelines are copies of one another, and a setting that
   # drifts in ONE of them (a client.id here, a linger.ms there) is how they stop being one contract.
   h=$(printf '%s\n' "$block" | shasum -a 256 | cut -d' ' -f1)
