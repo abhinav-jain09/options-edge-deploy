@@ -75,8 +75,14 @@ CRON_TZ=America/New_York
 # every one of them. Re-reading the archive cannot discover a seal that is still sitting in Kafka —
 # only another archive pass can. Without this the corpus would carry sessions that are permanently
 # PENDING_SEAL, which the reader must treat as incomplete.
-# DISABLED 2026-09-17 (owner: only ibkr + spot + databento raw are backed up) — seal pass (context-tape.direction.ledger)
-#45 20 * * 1-5 ENV=prod ARCHIVE_DIR=/mnt/nas/optionsedge ARCHIVE_JOB=seal ON_LOCK_BUSY=fail TOPICS=context-tape.direction.ledger JAVA_HOME=$(ls -d /usr/lib/jvm/*jre-17* 2>/dev/null|head -1) /home/abhinav/oe-ops/oe-archive-kafka.sh >> /home/abhinav/oe-ops/archive-seal.cron.log 2>&1
+# RE-ENABLED 2026-10-05 (BZ 363 #2): the 09-17 raw-only scope decision disabled this without
+# reconciling it against A5 (the Candle Direction calibration corpus, context-tape.direction.ledger)
+# — which has exactly one data source, this archive pass. Nothing it measures can accumulate without
+# it: oe-calibration-progress.sh has logged "FATAL: no corpus ... the ledger has never been archived
+# for env=prod" on every weekday run since 2026-09-18, through the 09-22 engine fix that this whole
+# corpus exists to evaluate. The topic's retention is -1 (infinite, verified 2026-10-05, offset 8300
+# and rising) — nothing is lost, and this pass backfills the entire gap the moment it runs.
+45 20 * * 1-5 ENV=prod ARCHIVE_DIR=/mnt/nas/optionsedge ARCHIVE_JOB=seal ON_LOCK_BUSY=fail TOPICS=context-tape.direction.ledger JAVA_HOME=$(ls -d /usr/lib/jvm/*jre-17* 2>/dev/null|head -1) /home/abhinav/oe-ops/oe-archive-kafka.sh >> /home/abhinav/oe-ops/archive-seal.cron.log 2>&1
 
 # Calibration progress, 21:00 ET — AFTER the second archive pass, so it reads a corpus that can
 # actually contain today's seal. It answers one question and writes it where a human can read it:
