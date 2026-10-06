@@ -37,7 +37,18 @@
     cmd: |
       set -euo pipefail
       G="{{ item.group_id }}"
-      if "{{ oe_kbin }}/kafka-consumer-groups" --bootstrap-server "{{ item.source }}" --list 2>/dev/null | grep -Fxq "$G"; then
+      # The LISTING must have succeeded before its silence means anything: a broker that refused the
+      # query, or a kafka-consumer-groups that failed, prints nothing — which read as "the group does
+      # not exist" and, with allow_new_consumer_group=true, installed a mirror that then re-read the
+      # whole retention window. A failed or empty listing is now a refusal whatever the flag says.
+      LIST=$("{{ oe_kbin }}/kafka-consumer-groups" --bootstrap-server "{{ item.source }}" --list 2>&1); rc=$?
+      if [ "$rc" != 0 ] || [ -z "$(printf '%s' "$LIST" | tr -d '[:space:]')" ]; then
+        echo "FAIL: cannot list consumer groups on {{ item.source }} (rc=$rc) — refusing, because an"
+        echo "      unreadable listing is indistinguishable from an absent group:"
+        printf '%s\n' "$LIST" | sed 's/^/      /' | head -5
+        exit 1
+      fi
+      if printf '%s\n' "$LIST" | grep -Fxq "$G"; then
         echo "group exists: $G"
       elif [ "{{ oe_allow_new_group | lower }}" = "true" ]; then
         echo "group ABSENT, creating a FIRST install under $G (allow_new_consumer_group=true, auto.offset.reset={{ item.offset_reset }})"
@@ -75,75 +86,20 @@
     label: "{{ tpl.dest }}"
   changed_when: false
 
-- name: "{{ item.label }} | compare the rendered unit with the installed one"
-  # What counts as a difference is NOT byte equality for the two property files: a reload is a gap in
-  # a live mirror, and a differing COMMENT is not a reason to open one. So consumer/producer are
-  # compared key-and-value, ignoring comments, blank lines and key order.
-  # That parse is NOT java.util.Properties and does not pretend to be: it has no escapes, no line
-  # continuations, no \uXXXX, and sorting loses last-key-wins. So it is used only where it is
-  # faithful — a file containing a BACKSLASH, or a duplicate key, falls back to a BYTE comparison,
-  # which can only ever over-report a difference (an extra reload), never miss one.
-  # log4j.properties, run-mirror.sh and the plist are not property files, so for those byte equality
-  # IS the question.
-  # A process older than any of those files is also a difference: MirrorMaker reads its config once,
-  # at startup, so a rewritten file under an older process is still running the old settings.
+- name: "{{ item.label }} | render the comparison"
   when: oe_ok
-  ansible.builtin.shell:
-    cmd: |
-      set -uo pipefail
-      R="{{ oe_rendered_dir }}/{{ item.label }}"; M="{{ item.mdir }}"; PL="{{ item.plist }}"
-      props() {
-        [ -r "$1" ] || return 1
-        # refuse the parse where it would be unfaithful; the caller then byte-compares
-        grep -qF '\' "$1" && return 2
-        awk '{ l=$0
-               sub(/^[[:space:]]+/, "", l)
-               if (l == "" || l ~ /^[#!]/) next
-               n = match(l, /[[:space:]]*[=:][[:space:]]*|[[:space:]]+/)
-               if (n == 0) { k = l; v = "" } else { k = substr(l, 1, n-1); v = substr(l, n+RLENGTH) }
-               sub(/[[:space:]]+$/, "", k); sub(/[[:space:]]+$/, "", v)
-               print k "=" v }' "$1" | sort
-      }
-      WHY=""
-      for f in consumer.properties producer.properties; do
-        if [ ! -e "$M/$f" ]; then WHY="$WHY $f=absent"; continue; fi
-        PR=$(props "$R/$f"); r1=$?
-        PM=$(props "$M/$f"); r2=$?
-        DUP=0
-        for P in "$PR" "$PM"; do
-          [ "$(printf '%s\n' "$P" | cut -d= -f1 | sort | uniq -d | wc -l | tr -d ' ')" = "0" ] || DUP=1
-        done
-        if [ "$r1" != "0" ] || [ "$r2" != "0" ] || [ "$DUP" = "1" ]; then
-          diff -q "$R/$f" "$M/$f" >/dev/null 2>&1 || WHY="$WHY $f=bytes-differ(unparseable-as-properties)"
-        elif [ "$PR" != "$PM" ]; then WHY="$WHY $f=properties-differ"
-        fi
-      done
-      for f in log4j.properties run-mirror.sh; do
-        if [ ! -e "$M/$f" ]; then WHY="$WHY $f=absent"
-        elif ! diff -q "$R/$f" "$M/$f" >/dev/null 2>&1; then WHY="$WHY $f=bytes-differ"
-        fi
-      done
-      # the MODE too, for the one file launchd execs: a run-mirror.sh that lost +x is byte-identical
-      # and the live java process keeps running, so the unit reads "in sync" right up to the next
-      # restart, which then fails. Mode is part of the artifact, not a property of it.
-      [ -x "$M/run-mirror.sh" ] || WHY="$WHY run-mirror.sh=not-executable"
-      if [ ! -e "$PL" ]; then WHY="$WHY plist=absent"
-      elif ! diff -q "$R/plist.xml" "$PL" >/dev/null 2>&1; then WHY="$WHY plist=bytes-differ"
-      fi
-      PID=$(launchctl list | awk -v l="{{ item.label }}" '$3==l{print $1}')
-      case "$PID" in
-        (*[!0-9]*|"") WHY="$WHY process=absent" ;;
-        (*) PS=$(ps -p "$PID" -o lstart= 2>/dev/null)
-            PE=$(date -j -f '%a %b %e %T %Y' "$PS" +%s 2>/dev/null || echo 0)
-            FE=0
-            for f in "$M/producer.properties" "$M/consumer.properties" "$M/log4j.properties" "$M/run-mirror.sh" "$PL"; do
-              MT=$(stat -f %m "$f" 2>/dev/null || echo 0)
-              [ "$MT" -gt "$FE" ] && FE=$MT
-            done
-            [ "$PE" -ge "$FE" ] || WHY="$WHY process=older-than-its-config(pid $PID)" ;;
-      esac
-      if [ -n "$WHY" ]; then echo "would install:$WHY"; else echo "in sync: installed files match and the process is newer than all of them"; fi
-    executable: /bin/bash
+  ansible.builtin.template:
+    src: mirror-diff.sh.j2
+    dest: "{{ oe_rendered_dir }}/{{ item.label }}/diff.sh"
+    mode: "0755"
+  changed_when: false
+
+- name: "{{ item.label }} | compare the rendered unit with the installed one"
+  # What counts as a difference, and why, is in the rendered script's own header and in
+  # ansible/templates/mirror-diff.sh.j2. It is read-only.
+  when: oe_ok
+  ansible.builtin.command:
+    cmd: "bash {{ oe_rendered_dir }}/{{ item.label }}/diff.sh"
   register: oe_diff
   changed_when: false
 

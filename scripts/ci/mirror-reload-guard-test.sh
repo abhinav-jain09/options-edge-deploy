@@ -38,9 +38,21 @@ L
 chmod +x "$WORK/bin/launchctl"
 cat > "$WORK/bin/ps" <<P
 #!/usr/bin/env bash
-# only the form the guard uses: ps -p <pid> -o command=
-if [ -e "$WORK/wrong_binding" ]; then echo "java kafka.tools.MirrorMaker --producer.config /some/other/unit/producer.properties"
-else echo "java kafka.tools.MirrorMaker --producer.config $MDIR/producer.properties"; fi
+# the two forms the guard uses: 'ps -p <pid> -o command=' and 'ps -axo pid=,command='
+W="$WORK"; MDIR="$MDIR"
+case "\$*" in
+  *-axo*)
+    # every process currently publishing SOME unit's config, per phase
+    while read -r pid path; do
+      [ -n "\$pid" ] || continue
+      echo "\$pid java kafka.tools.MirrorMaker --producer.config \$path"
+    done < "\$W/procs.\$(cat "\$W/phase")" 2>/dev/null
+    ;;
+  *)
+    if [ -e "\$W/wrong_binding" ]; then echo "java kafka.tools.MirrorMaker --producer.config /some/other/unit/producer.properties"
+    else echo "java kafka.tools.MirrorMaker --producer.config \$MDIR/producer.properties"; fi
+    ;;
+esac
 P
 chmod +x "$WORK/bin/ps"
 export PATH="$WORK/bin:$PATH" OE_RELOAD_SETTLE=0
@@ -60,7 +72,12 @@ scenario() { # name  expect(pass|fail)  setup...
 }
 
 # the happy path: a unit running as pid 100 is replaced by pid 200
-setup_replaced() { echo "100 0 $LBL" > "$WORK/pid.loaded"; : > "$WORK/pid.unloaded"; echo "200 0 $LBL" > "$WORK/pid.running"; echo loaded > "$WORK/phase"; }
+setup_replaced() {
+  echo "100 0 $LBL" > "$WORK/pid.loaded"; : > "$WORK/pid.unloaded"; echo "200 0 $LBL" > "$WORK/pid.running"
+  echo "100 $MDIR/producer.properties" > "$WORK/procs.loaded"; : > "$WORK/procs.unloaded"
+  echo "200 $MDIR/producer.properties" > "$WORK/procs.running"
+  echo loaded > "$WORK/phase"
+}
 scenario "a running unit is replaced by a NEW pid" pass setup_replaced
 
 # the scenario this guard exists for: unload fails, the old process survives, load fails
@@ -85,12 +102,26 @@ scenario "the new pid reads ANOTHER unit's producer.config" fail setup_wrong_bin
 
 # unload REPORTS success but the old process lingers, and the load then fails: the shape where a
 # "load failed" diagnosis and an "unchanged pid" diagnosis are the same refusal
-setup_lingering() { setup_replaced; echo "100 0 $LBL" > "$WORK/pid.unloaded"; echo "100 0 $LBL" > "$WORK/pid.running"; : > "$WORK/load_fails"; }
+setup_lingering() { setup_replaced; echo "100 0 $LBL" > "$WORK/pid.unloaded"; echo "100 0 $LBL" > "$WORK/pid.running"
+  echo "100 $MDIR/producer.properties" > "$WORK/procs.unloaded"; : > "$WORK/load_fails"; }
 scenario "unload returns 0, the old pid lingers, load fails" fail setup_lingering
 
+# the launchd REGISTRATION is gone but the old java process is alive: loading now would give the topic
+# a SECOND mirror, and a check that only reads `launchctl list` cannot see it
+setup_deregistered_but_alive() { setup_replaced; : > "$WORK/pid.unloaded"; echo "100 $MDIR/producer.properties" > "$WORK/procs.unloaded"; }
+scenario "registration gone, OLD process still publishing" fail setup_deregistered_but_alive
+
+# the load succeeded and the new process is bound, but the old one never died: two mirrors, one topic
+setup_two_running() { setup_replaced; printf '100 %s\n200 %s\n' "$MDIR/producer.properties" "$MDIR/producer.properties" > "$WORK/procs.running"; }
+scenario "TWO processes publishing after the load" fail setup_two_running
+
 # a first install: nothing was running, and a new pid is a success
-setup_first_install() { : > "$WORK/pid.loaded"; : > "$WORK/pid.unloaded"; echo "300 0 $LBL" > "$WORK/pid.running"; echo loaded > "$WORK/phase"; }
+setup_first_install() {
+  : > "$WORK/pid.loaded"; : > "$WORK/pid.unloaded"; echo "300 0 $LBL" > "$WORK/pid.running"
+  : > "$WORK/procs.loaded"; : > "$WORK/procs.unloaded"; echo "300 $MDIR/producer.properties" > "$WORK/procs.running"
+  echo loaded > "$WORK/phase"
+}
 scenario "a FIRST install (no old process) starts a pid" pass setup_first_install
 
 [ "$fail" = 0 ] || { echo "mirror reload guard: FAILED"; exit 1; }
-echo "mirror reload guard: 8 scenarios behave as specified"
+echo "mirror reload guard: 10 scenarios behave as specified"

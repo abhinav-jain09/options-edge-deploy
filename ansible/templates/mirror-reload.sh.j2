@@ -5,8 +5,10 @@
 # `launchctl load` that FAILS leaves the OLD process running — whose command line still names this
 # unit's producer.properties, so a bound-to-the-right-config check alone reports success while the
 # mirror keeps publishing with the pre-change settings. So: the old pid is captured FIRST, the unit
-# must be gone after the unload, the load's status is fatal, and the new pid must be numeric and
-# DIFFERENT from the old one.
+# must be gone after the unload, no process may still be publishing this unit's config (the launchd
+# registration is not the process — deregistering it can leave the old java running, and loading then
+# gives the topic TWO mirrors duplicating every record), the load's status is fatal, and the new pid
+# must be numeric, DIFFERENT from the old one, bound to this unit, and the ONLY such process.
 # OE_RELOAD_SETTLE lets the guard test drive this with no wait; the default is the 8s a real unit
 # needs before launchctl reports a pid.
 set -uo pipefail
@@ -14,10 +16,22 @@ PL="{{ item.plist }}"; LBL="{{ item.label }}"; MDIR="{{ item.mdir }}"
 SETTLE="${OE_RELOAD_SETTLE:-8}"
 
 pid_of() { launchctl list | awk -v l="$LBL" '$3==l{print $1}'; }
+# The launchd REGISTRATION is not the process: an unload can deregister the unit while the old java
+# process keeps running and keeps publishing. Loading then starts a SECOND one, and a check that only
+# reads `launchctl list` sees one healthy pid and reports success while two mirrors write the same
+# records to the target. So the processes are counted directly, by the config path only this unit's
+# command line carries.
+procs_of() { ps -axo pid=,command= | grep -- "--producer.config $MDIR/producer.properties" | grep -v grep | awk '{print $1}'; }
 
 OLD=$(pid_of)
 launchctl unload "$PL" 2>/dev/null || true
-# Redundant with the two checks below under any real launchctl — if nothing restarted, the pid cannot
+LINGER=$(procs_of)
+if [ -n "$LINGER" ]; then
+  echo "FAIL: the unload left process(es) still publishing this unit's config: $(printf '%s' "$LINGER" | tr '\n' ' ')"
+  echo "      Loading now would run a SECOND mirror for the same topic. Stop them and re-run."
+  exit 1
+fi
+# Redundant with the pid checks below under any real launchctl — if nothing restarted, the pid cannot
 # change — and kept because it names the cause exactly, which an "unchanged pid" message does not.
 # scripts/ci/mirror-reload-guard-test.sh records it as such: removing it leaves every scenario caught.
 STILL=$(pid_of)
@@ -43,6 +57,13 @@ fi
 # and it must be reading THIS unit's config, not a sibling's
 if ! ps -p "$NEW" -o command= | grep -q -- "--producer.config $MDIR/producer.properties"; then
   echo "FAIL: pid $NEW is not reading $MDIR/producer.properties"
+  exit 1
+fi
+# ...and it must be the ONLY one doing so
+RUNNING=$(procs_of)
+if [ "$(printf '%s\n' "$RUNNING" | grep -c .)" != "1" ]; then
+  echo "FAIL: $(printf '%s\n' "$RUNNING" | grep -c .) processes are publishing this unit's config: $(printf '%s' "$RUNNING" | tr '\n' ' ')"
+  echo "      Two mirrors on one topic duplicate every record into the target."
   exit 1
 fi
 echo "reloaded: pid ${OLD:-none} -> $NEW, bound to $MDIR"

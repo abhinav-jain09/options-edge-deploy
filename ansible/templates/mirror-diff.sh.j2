@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# Rendered per mirror unit by ansible/tasks/es-mirror-unit.yml: it decides whether installing this
+# unit would CHANGE anything, which is what decides whether a live mirror gets reloaded. A wrong
+# answer in either direction is expensive — "in sync" when a property changed leaves the old settings
+# running, and "would install" for a comment opens a gap in a healthy mirror — so it is a script with
+# its own test (scripts/ci/mirror-diff-guard-test.sh) rather than a block of shell nobody can run.
+set -uo pipefail
+R="{{ oe_rendered_dir }}/{{ item.label }}"; M="{{ item.mdir }}"; PL="{{ item.plist }}"
+# the PROPERTY lines only: a backslash in a comment is prose (these files carry paragraphs of
+# it), and refusing the parse for that put every unit on a byte comparison, which differs by
+# those same comments — i.e. it would have reloaded all 14 live mirrors to change nothing.
+body() { grep -vE '^[[:space:]]*([#!]|$)' "$1"; }
+# Trailing blanks: a key's are separator and go, a value's are DATA that java.util.Properties
+# keeps — `acks=all ` is not `acks=all` — so only the key is stripped. (And no apostrophes
+# inside the awk program below: a single quote there closes the quoted program, which is how
+# this comparison was broken for one round.)
+props() {
+  [ -r "$1" ] || return 1
+  # refuse the parse where it would be unfaithful; the caller then byte-compares
+  body "$1" | grep -qF '\' && return 2
+  awk '{ l=$0
+         sub(/^[[:space:]]+/, "", l)
+         if (l == "" || l ~ /^[#!]/) next
+         n = match(l, /[[:space:]]*[=:][[:space:]]*|[[:space:]]+/)
+         if (n == 0) { k = l; v = "" } else { k = substr(l, 1, n-1); v = substr(l, n+RLENGTH) }
+         sub(/[[:space:]]+$/, "", k)
+         print k "=" v }' "$1" | sort
+}
+WHY=""
+for f in consumer.properties producer.properties; do
+  if [ ! -e "$M/$f" ]; then WHY="$WHY $f=absent"; continue; fi
+  PR=$(props "$R/$f"); r1=$?
+  PM=$(props "$M/$f"); r2=$?
+  DUP=0
+  for P in "$PR" "$PM"; do
+    [ "$(printf '%s\n' "$P" | cut -d= -f1 | sort | uniq -d | wc -l | tr -d ' ')" = "0" ] || DUP=1
+  done
+  if [ "$r1" != "0" ] || [ "$r2" != "0" ] || [ "$DUP" = "1" ]; then
+    diff -q "$R/$f" "$M/$f" >/dev/null 2>&1 || WHY="$WHY $f=bytes-differ(unparseable-as-properties)"
+  elif [ "$PR" != "$PM" ]; then WHY="$WHY $f=properties-differ"
+  fi
+done
+for f in log4j.properties run-mirror.sh; do
+  if [ ! -e "$M/$f" ]; then WHY="$WHY $f=absent"
+  elif ! diff -q "$R/$f" "$M/$f" >/dev/null 2>&1; then WHY="$WHY $f=bytes-differ"
+  fi
+done
+# the MODE too, for the one file launchd execs: a run-mirror.sh that lost +x is byte-identical
+# and the live java process keeps running, so the unit reads "in sync" right up to the next
+# restart, which then fails. Mode is part of the artifact, not a property of it.
+[ -x "$M/run-mirror.sh" ] || WHY="$WHY run-mirror.sh=not-executable"
+if [ ! -e "$PL" ]; then WHY="$WHY plist=absent"
+elif ! diff -q "$R/plist.xml" "$PL" >/dev/null 2>&1; then WHY="$WHY plist=bytes-differ"
+fi
+PID=$(launchctl list | awk -v l="{{ item.label }}" '$3==l{print $1}')
+case "$PID" in
+  (*[!0-9]*|"") WHY="$WHY process=absent" ;;
+  (*) PS=$(ps -p "$PID" -o lstart= 2>/dev/null)
+      PE=$(date -j -f '%a %b %e %T %Y' "$PS" +%s 2>/dev/null || echo 0)
+      FE=0
+      for f in "$M/producer.properties" "$M/consumer.properties" "$M/log4j.properties" "$M/run-mirror.sh" "$PL"; do
+        MT=$(stat -f %m "$f" 2>/dev/null || echo 0)
+        [ "$MT" -gt "$FE" ] && FE=$MT
+      done
+      [ "$PE" -ge "$FE" ] || WHY="$WHY process=older-than-its-config(pid $PID)" ;;
+esac
+if [ -n "$WHY" ]; then echo "would install:$WHY"; else echo "in sync: installed files match and the process is newer than all of them"; fi

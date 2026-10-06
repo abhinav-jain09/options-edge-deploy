@@ -51,6 +51,11 @@
     oe_prod_target: "192.168.100.252:9092"
     oe_dev_target: "127.0.0.1:19092"
     oe_rendered_dir: "{{ playbook_dir }}/.ansible-rendered/es-mirrors"
+    # -e dump_rows=<path> writes the rows this run WOULD act on and stops before touching a broker.
+    # It exists so scripts/ci/validate-ansible-mirror-naming.sh can test the group.id and unit-name
+    # generation in this file — the parity gate reads the table and the templates, and could not see
+    # a change to the Jinja that composes them.
+    oe_dump: "{{ dump_rows | default('') }}"
 
   tasks:
     - name: Validate the broker pair, fail-closed
@@ -130,6 +135,17 @@
           {{ oe_source }} -> {{ oe_target }} | {{ oe_plan | length }} unit(s)
           {{ '(PLAN ONLY — pass -e confirm_mirror_install=true to install)' if not oe_confirm else '(INSTALLING)' }}
           {{ ('| held back as production-only: ' ~ (oe_held | join(', '))) if (oe_held | length > 0) else '' }}
+
+    - name: Dump the rows and stop, when asked
+      when: oe_dump | length > 0
+      ansible.builtin.copy:
+        content: "{{ oe_plan | to_nice_json }}\n"
+        dest: "{{ oe_dump }}"
+        mode: "0644"
+
+    - name: End the play after a dump
+      when: oe_dump | length > 0
+      ansible.builtin.meta: end_play
 
     - name: Install each unit
       ansible.builtin.include_tasks: tasks/es-mirror-unit.yml
