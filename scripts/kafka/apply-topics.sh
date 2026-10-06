@@ -108,6 +108,16 @@ broker_ids() {
     | uniq
 }
 
+# Preflight for the main loop (Codex review, 2026-10-06): reassign_topic_replication_factor's own
+# insufficient-broker check runs AFTER a partition count has already been widened (the caller does
+# partition-alter, THEN RF-reassign). Checking here, before touching the topic at all, means a
+# topic this run cannot fully repair is skipped intact rather than left half-migrated — new
+# partition count, still-wrong replication factor.
+enough_brokers_for_rf() {
+  mapfile -t _brokers < <(broker_ids)
+  (( ${#_brokers[@]} >= REPLICATION_FACTOR ))
+}
+
 wait_for_topic_absent() {
   local topic="$1"
   local attempts="${KAFKA_TOPIC_DELETE_WAIT_SECONDS:-90}"
@@ -182,7 +192,14 @@ reassign_topic_replication_factor() {
   kafka-reassign-partitions --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" \
     --reassignment-json-file "$tmp" \
     --execute
+  # Codex review, 2026-10-06: `rm -f` was the LAST command in this function, so its (near-always 0)
+  # exit status silently became the function's own return value — a genuine --execute failure was
+  # masked as success, and the caller would then call wait_for_topic_shape on a reassignment that
+  # never happened. Capture --execute's status explicitly, clean up unconditionally, return the
+  # CAPTURED status.
+  local rc=$?
   rm -f "$tmp"
+  return "$rc"
 }
 
 create_topic() {
@@ -388,6 +405,13 @@ for entry in $OPTIONS_EDGE_TOPICS; do
         echo "Topic $topic exists with partitions=$current_partitions replicationFactor=$current_replication_factor; expected at least replicationFactor=$REPLICATION_FACTOR" >&2
         echo "Set KAFKA_RECREATE_MISMATCHED_TOPICS=true only for approved destructive cleanup deployments." >&2
         SKIPPED_TOPICS+=("$topic (replicationFactor=$current_replication_factor below required $REPLICATION_FACTOR)")
+        continue
+      fi
+
+      if [[ "$current_replication_factor" != "$REPLICATION_FACTOR" ]] && ! enough_brokers_for_rf; then
+        echo "Topic $topic needs replicationFactor=$REPLICATION_FACTOR but the cluster does not have enough brokers right now." >&2
+        echo "Skipping BEFORE any change (partition widen included) so this topic is not left half-migrated." >&2
+        SKIPPED_TOPICS+=("$topic (insufficient brokers for replicationFactor=$REPLICATION_FACTOR)")
         continue
       fi
 
