@@ -44,6 +44,13 @@ resources:
 # cached image (no pull, no throttle). Dev keeps Always so it always picks up a
 # freshly-built :dev image.
 patches:
+  # PROD-ONLY: turns on the near-spot 0DTE SPXW semantic signal's live producer — ES
+  # compression-expansion's forward read (#1149) has been reading an empty topic since it merged.
+  # MIRRORS k8s/services/strike-flow-classifier/overlays/production — validate-services enforces it.
+  - path: strike-flow-classifier-near-spot-prod-patch.yaml
+    target:
+      kind: Deployment
+      name: strike-flow-classifier-databento
   # PROD-ONLY: the deployment environment name Stage-B requires and the research writer already reads.
   # MIRRORS k8s/services/vix-option-inteligence/overlays/production — the slice generator renders it from here.
   - path: vix-option-inteligence-prod-env-patch.yaml
