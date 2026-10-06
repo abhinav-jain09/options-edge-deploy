@@ -93,7 +93,10 @@ scenario() { # phase(stop|start|both)  name  expect(pass|fail)  [want=<substring
   case "$phase" in
     stop)  out=$(bash "$WORK/stop.sh" 2>&1); rc=$? ;;
     stop-prod) out=$(bash "$WORK/stop-prod.sh" 2>&1); rc=$? ;;
-    start) out=$(OE_OLD_PID="${OE_OLD_PID_FOR_TEST:-}" bash "$WORK/start.sh" 2>&1); rc=$? ;;
+    start) out=$(OE_OLD_PID="${OE_OLD_PID_FOR_TEST:-}" bash "$WORK/start.sh" 2>&1); rc=$?
+           # one stream, so the order is preserved and the CAUSE stays last; kept on disk as well so
+           # a scenario can assert what the undo reported
+           printf '%s\n' "$out" > "$WORK/last_err" ;;
     both)  out=$(bash "$WORK/stop.sh" 2>&1); rc=$?
            if [ "$rc" = 0 ]; then
              old=$(printf '%s' "$out" | sed -n 's/.*was pid \([0-9]*\).*/\1/p')
@@ -199,6 +202,21 @@ else
   printf '  FAIL %-54s %s\n' "...and the unload really happened" "the guard never called launchctl unload"; fail=1
 fi
 
+# the undo itself has to be VERIFIED: a deregistered-but-alive process keeps publishing, and an
+# unreadable table afterwards is not a clean undo either
+setup_undo_leaves_process() {
+  setup_two_running; echo unloaded > "$WORK/phase"
+  # after the unload the job is gone from launchctl, but a process is still publishing this config
+  printf '100 %s\n' "$MDIR/producer.properties" > "$WORK/procs.unloaded"
+  printf '100 %s\n200 %s\n' "$MDIR/producer.properties" "$MDIR/producer.properties" > "$WORK/procs.running"
+}
+scenario start "the undo leaves a process publishing" fail want="duplicate every record" setup_undo_leaves_process
+if grep -q 'STILL there after the unload' "$WORK/last_err" 2>/dev/null; then
+  printf '  ok   %-54s %s\n' "...and the undo reports it as unverified" "named in the diagnosis"
+else
+  printf '  FAIL %-54s %s\n' "...and the undo reports it as unverified" "the undo claimed a clean result"; fail=1
+fi
+
 # ---- ANOTHER unit mirroring the same topic to the same target ----
 # The count above is per CONFIG PATH, so it cannot see a second unit installed elsewhere that mirrors
 # the same topic to the same broker — two such processes duplicate every record. Driven on its own
@@ -240,4 +258,4 @@ P
 dup_check
 
 [ "$fail" = 0 ] || { echo "mirror stop/start guards: FAILED"; exit 1; }
-echo "mirror stop/start guards: 17 scenarios, the post-load cleanup and the duplicate-mirror check behave as specified"
+echo "mirror stop/start guards: 18 scenarios, the post-load cleanup (verified both ways) and the duplicate-mirror check behave as specified"

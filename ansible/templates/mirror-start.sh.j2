@@ -70,11 +70,23 @@ fail_loaded() { undo_load; echo "FAIL: $*"; exit 1; }
 undo_load() {
   launchctl unload "$PL" 2>/dev/null || true
   sleep 1
-  local still; still=$(launchctl list 2>/dev/null | awk -v l="$LBL" '$3==l{print $1}')
-  if [ -n "$still" ]; then
-    echo "      AND the unit could not be unloaded again (pid='$still') — it is running UNVERIFIED; stop it by hand" >&2
+  # The REGISTRATION is not the process — the same lesson as phase 1 — so the undo is verified both
+  # ways, and an unreadable answer is reported as unverified rather than as success.
+  local still procs lst
+  if lst=$(launchctl list 2>/dev/null); then
+    still=$(printf '%s\n' "$lst" | awk -v l="$LBL" '$3==l{print $1}')
   else
-    echo "      the unit has been unloaded again, so nothing unverified is left running" >&2
+    echo "      AND the job table could not be read afterwards, so whether the unit is still loaded is UNKNOWN — check it by hand" >&2
+    return
+  fi
+  if ! procs=$(procs_of); then
+    echo "      AND the process table could not be read afterwards, so whether anything is still publishing this config is UNKNOWN — check it by hand" >&2
+    return
+  fi
+  if [ -n "$still" ] || [ -n "$procs" ]; then
+    echo "      AND it is STILL there after the unload (launchctl pid='$still', publishing pid(s):$procs) — it is running UNVERIFIED; stop it by hand" >&2
+  else
+    echo "      the unit was unloaded again and nothing is publishing this config, so nothing unverified is left running" >&2
   fi
 }
 sleep "$SETTLE"
