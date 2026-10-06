@@ -77,10 +77,14 @@
 
 - name: "{{ item.label }} | compare the rendered unit with the installed one"
   # What counts as a difference is NOT byte equality for the two property files: a reload is a gap in
-  # a live mirror, and a comment is not a reason to open one. consumer/producer are compared as
-  # java.util.Properties sees them — key and value, with comments, blank lines and key order out of
-  # it. log4j.properties, run-mirror.sh and the plist are not property files read by this playbook's
-  # own contract, so for those byte equality IS the question.
+  # a live mirror, and a differing COMMENT is not a reason to open one. So consumer/producer are
+  # compared key-and-value, ignoring comments, blank lines and key order.
+  # That parse is NOT java.util.Properties and does not pretend to be: it has no escapes, no line
+  # continuations, no \uXXXX, and sorting loses last-key-wins. So it is used only where it is
+  # faithful — a file containing a BACKSLASH, or a duplicate key, falls back to a BYTE comparison,
+  # which can only ever over-report a difference (an extra reload), never miss one.
+  # log4j.properties, run-mirror.sh and the plist are not property files, so for those byte equality
+  # IS the question.
   # A process older than any of those files is also a difference: MirrorMaker reads its config once,
   # at startup, so a rewritten file under an older process is still running the old settings.
   when: oe_ok
@@ -90,6 +94,8 @@
       R="{{ oe_rendered_dir }}/{{ item.label }}"; M="{{ item.mdir }}"; PL="{{ item.plist }}"
       props() {
         [ -r "$1" ] || return 1
+        # refuse the parse where it would be unfaithful; the caller then byte-compares
+        grep -q '\\\\' "$1" && return 2
         awk '{ l=$0
                sub(/^[[:space:]]+/, "", l)
                if (l == "" || l ~ /^[#!]/) next
@@ -100,8 +106,16 @@
       }
       WHY=""
       for f in consumer.properties producer.properties; do
-        if [ ! -e "$M/$f" ]; then WHY="$WHY $f=absent"
-        elif ! diff -q <(props "$R/$f") <(props "$M/$f") >/dev/null 2>&1; then WHY="$WHY $f=properties-differ"
+        if [ ! -e "$M/$f" ]; then WHY="$WHY $f=absent"; continue; fi
+        PR=$(props "$R/$f"); r1=$?
+        PM=$(props "$M/$f"); r2=$?
+        DUP=0
+        for P in "$PR" "$PM"; do
+          [ "$(printf '%s\n' "$P" | cut -d= -f1 | sort | uniq -d | wc -l | tr -d ' ')" = "0" ] || DUP=1
+        done
+        if [ "$r1" != "0" ] || [ "$r2" != "0" ] || [ "$DUP" = "1" ]; then
+          diff -q "$R/$f" "$M/$f" >/dev/null 2>&1 || WHY="$WHY $f=bytes-differ(unparseable-as-properties)"
+        elif [ "$PR" != "$PM" ]; then WHY="$WHY $f=properties-differ"
         fi
       done
       for f in log4j.properties run-mirror.sh; do
@@ -137,21 +151,28 @@
     mode: "0755"
 
 - name: "{{ item.label }} | install the rendered files"
+  # Each file is copied beside its target and MOVED into place, so no reader ever sees a torn file,
+  # and the five moves happen before the reload — the live process keeps running its old config until
+  # then. The five together are NOT one transaction: an interruption between them leaves a unit whose
+  # files are part new, with the OLD process still serving. That state is detected by the comparison
+  # above on the next run and finished; it is not silently carried, and nothing is reloaded onto it.
   when: oe_ok and oe_confirm and (oe_diff.stdout is search('would install'))
-  ansible.builtin.copy:
-    src: "{{ oe_rendered_dir }}/{{ item.label }}/{{ cp.src }}"
-    dest: "{{ cp.dest }}"
-    mode: "{{ cp.mode }}"
-    remote_src: true
-  loop:
-    - { src: consumer.properties, dest: "{{ item.mdir }}/consumer.properties", mode: "0644" }
-    - { src: producer.properties, dest: "{{ item.mdir }}/producer.properties", mode: "0644" }
-    - { src: log4j.properties,    dest: "{{ item.mdir }}/log4j.properties",    mode: "0644" }
-    - { src: run-mirror.sh,       dest: "{{ item.mdir }}/run-mirror.sh",       mode: "0755" }
-    - { src: plist.xml,           dest: "{{ item.plist }}",                    mode: "0644" }
-  loop_control:
-    loop_var: cp
-    label: "{{ cp.dest }}"
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      R="{{ oe_rendered_dir }}/{{ item.label }}"; M="{{ item.mdir }}"
+      put() { # rendered-name  destination  mode
+        cp "$R/$1" "$2.ansible-new"
+        chmod "$3" "$2.ansible-new"
+        mv -f "$2.ansible-new" "$2"
+      }
+      put consumer.properties "$M/consumer.properties" 0644
+      put producer.properties "$M/producer.properties" 0644
+      put log4j.properties    "$M/log4j.properties"    0644
+      put run-mirror.sh       "$M/run-mirror.sh"       0755
+      put plist.xml           "{{ item.plist }}"       0644
+      echo "installed 5 file(s) into $M"
+    executable: /bin/bash
 
 - name: "{{ item.label }} | reload the launchd unit"
   # Only reached when something that matters differed. A reload is a gap in a live mirror, so the

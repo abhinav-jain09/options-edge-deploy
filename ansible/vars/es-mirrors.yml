@@ -69,13 +69,15 @@ mirror_units:
     # default is 60000. This pipeline passes 5000 because the committed offset is its per-install
     # proof that THIS process consumed the reference record; at the default it lags by up to a minute.
     commit_interval_ms: 5000
-    # Jenkinsfile.es-auction-mirror asserts the SOURCE arm strictly, then asserts only the TARGET's
-    # partition count and RECONCILES its cleanup.policy/retention with kafka-configs --alter. This
-    # playbook does not alter topics, so the target's config is reported, not asserted — a target
-    # whose policy is only a broker default needs that pipeline, not this playbook.
+    # Jenkinsfile.es-auction-mirror asserts the SOURCE arm strictly, then RECONCILES the target with
+    # kafka-configs --alter and ASSERTS the result ("the reconcile did not take"). So the end state it
+    # requires of the target is the same frozen arm, and that is what is asserted here. The difference
+    # is who fixes a target that is off it: that pipeline alters the topic, this playbook refuses —
+    # which is why prod's es.futures.auction, whose cleanup.policy is only a broker default, reads as
+    # NOT INSTALLED here and needs the pipeline once.
     topics:
       - name: es.futures.auction
-        assert: { source: {parts: 1, policy: delete, retention: "604800000"}, target: {parts: 1} }
+        assert: { source: {parts: 1, policy: delete, retention: "604800000"}, target: {parts: 1, policy: delete, retention: "604800000"} }
 
   - pipeline: es-tape-zones-mirror
     slug_with_topic: true
@@ -83,11 +85,12 @@ mirror_units:
     offset_reset: earliest
     isolation_level: ""
     commit_interval_ms: 5000
-    # Jenkinsfile.es-tape-zones-mirror asserts the source's config as an EXACT string, so a source at
-    # compact,delete fails there exactly as it fails here.
+    # Jenkinsfile.es-tape-zones-mirror asserts the source's config as an EXACT string (so a source at
+    # compact,delete fails there exactly as it fails here), and — like the auction mirror — reconciles
+    # the target and then asserts the same arm on it.
     topics:
       - name: es.tape-zones.board
-        assert: { source: {parts: 1, policy: delete, retention: "-1"}, target: {parts: 1} }
+        assert: { source: {parts: 1, policy: delete, retention: "-1"}, target: {parts: 1, policy: delete, retention: "-1"} }
 
   - pipeline: es-futures-flow-mirror
     slug_with_topic: false

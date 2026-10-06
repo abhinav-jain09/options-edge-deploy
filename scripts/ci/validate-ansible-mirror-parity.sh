@@ -112,6 +112,18 @@ for blk in blocks:
         k, v = line.split("=", 1)
         cmap[k.strip()] = v.strip()
 
+    # the DIRECTION on the Jenkins side too: asserting only the template's fixed first line left a
+    # pipeline free to publish into its own source, which the template could not contradict
+    prod = stanza(j, "producer.properties", "P")
+    if prod is None or prod[0] != "bootstrap.servers=$TGT":
+        fail.append(f"{jf}: the producer stanza's first line must be 'bootstrap.servers=$TGT' — a "
+                    f"producer pointed at the SOURCE mirrors a topic into itself; found "
+                    f"{(prod[0] if prod else None)!r}")
+    if cmap.get("bootstrap.servers") != "$SRC":
+        fail.append(f"{jf}: the consumer's bootstrap.servers must be '$SRC' — a consumer pointed at "
+                    f"the TARGET mirrors the target back onto itself; found "
+                    f"{cmap.get('bootstrap.servers')!r}")
+
     tokens = {"ip": "${TARGET_SPX_CLUSTER_IP}", "port": "${TARGET_PORT}", "topic": "${TOPIC}"}
     want_gid = pipe + "-" + "-".join(tokens[t] for t in re.findall(r'\w+', parts or ""))
     if cmap.get("group.id") != want_gid:
@@ -198,6 +210,7 @@ if fail:
         print(f)
     sys.exit(1)
 print(f"=== validate-ansible-mirror-parity: OK === {len(PIPELINES)} pipelines agree with ansible/vars/es-mirrors.yml "
-      "on the producer stanza and its direction, the consumer bootstrap/group/offset/isolation, the topic "
-      "allow-list, unit naming, the runner's flag sequence and commit interval, and the plist")
+      "on both bootstrap DIRECTIONS at both ends, the producer stanza byte for byte, the consumer "
+      "group/offset/isolation, the topic allow-list, unit naming, the runner's flag sequence and "
+      "commit interval, and the plist")
 PY
