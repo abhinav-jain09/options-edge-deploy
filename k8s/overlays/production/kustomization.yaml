@@ -364,8 +364,11 @@ patches:
                   #
                   # MEASURED on .252 2026-10-06 with this deployment at replicas 0: allocatable 62.2Gi
                   # / 24 CPU; pod requests 36.1Gi (56%); pod LIMITS 126.1Gi (197%); `free` 40Gi used /
-                  # 21Gi available. With this pod at a 6Gi request the node is at 42Gi (68%) requested
-                  # and ~210% on limits, and it schedules.
+                  # 21Gi available. Adding a 6Gi request and an 8Gi limit to those sums gives 42.1Gi
+                  # (68%) requested and 134.1Gi (~210%) on limits. That is arithmetic on the measured
+                  # totals, not an observation: this deployment was at replicas 0 when they were taken,
+                  # so whether the pod schedules at a 6Gi request is a fact to read off the first
+                  # deploy, not a claim made here.
                   #
                   # ⚠ NO SAFETY CLAIM IS MADE FOR THIS NUMBER. Five Codex rounds were spent on earlier
                   # wordings here, each one finding that a sentence about what a memory request
