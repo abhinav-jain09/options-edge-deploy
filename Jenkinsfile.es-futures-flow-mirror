@@ -187,9 +187,10 @@ value.serializer=org.apache.kafka.common.serialization.ByteArraySerializer
 # but not fsynced. Only RF>=2 with min.insync.replicas>=2 would. It is set because it is the
 # right setting the day a target has replicas, and because acks=all is what the idempotent
 # producer requires; idempotence is pinned rather than left to the client default so a client
-# upgrade cannot silently turn duplicate/order protection off. MM1 flushes before committing
-# the source offset, so a crash between flush and commit REPLAYS records — idempotence keeps a
-# replay from writing a second copy within a producer session, it is not exactly-once.
+# upgrade cannot silently turn it off. What it covers is NARROW: duplicates and reordering a
+# producer's OWN retries would cause inside one request stream. It does nothing about MM1's
+# flush-then-commit: a crash after the flush and before the source offset is committed resends
+# those records as a new producer, so this mirror is at-least-once and CAN write a duplicate.
 acks=all
 enable.idempotence=true
 P
