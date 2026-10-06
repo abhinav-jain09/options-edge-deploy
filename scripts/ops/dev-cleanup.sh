@@ -5,12 +5,13 @@
 #
 # MODES:
 #   dev-cleanup           # AUTO — what launchd calls every ~15 min. CALENDAR-aware ET slots (2026-07-11):
-#                         #   close+30 ET (16:30 normal / 13:30 early-close) -> full clean (WIPE topics) THEN
+#                         #   17:20 ET FIXED (early closes too; after the 17:15 OI evaluation) -> full clean (WIPE topics) THEN
 #                         #                immediately bring up ONLY the overnight ES-tracking set ($OVERNIGHT_SET)
 #                         #   ~09:17 ET (window 09:15-09:29, weekdays) -> ESDOWN: scale the overnight ES services
 #                         #                ($ES_DOWN_SET) to 0 before the 09:30 SPX open (feed-gateway + web stay up)
 #                         #   06:15-06:44 ET weekdays -> full start (bring the rest of the pipeline up before the pre-open window)
-#   dev-cleanup now       # run the full clean right now (logs + data + topic WIPE), ignoring the time gate
+#   dev-cleanup now       # run the full clean right now (logs + data + topic WIPE); on a trading day the
+#                         # clean guard REFUSES 09:30-17:19 ET unless FORCE_CLEAN=1 (see clean_guard)
 #   dev-cleanup start     # bring the FULL dev pipeline up now
 #   dev-cleanup overnight # bring up ONLY the overnight ES-tracking set now
 #   dev-cleanup logs      # clean logs only (manual)
@@ -44,7 +45,7 @@ KEEP='keycloak'                                          # deployments to leave 
 # and it pulls straight from Databento (billed) rather than from Kafka — a dev copy spends
 # money serving a page dev does not host, and it was sitting at 0/1 on dev anyway.
 DISABLED_DEV='hpsf-stage-a-service|hpsf-stage-b-service|volume-pace-service|volume-pace-databento-service|volume-sandwich-service|volume-sandwich-databento-service|databento-timewarp-snapshot-replay|strike-flow-classifier-ibkr|options-edge-integration-test|databento-mission-pressure-service|databento-mission-pace-service|spx-mission-control-service|short-premium-agent-service|spread-skew-service|spread-skew-postgres-writer|directional-pressure-databento-service|databento-maxpain-service|databento-mission-sandwich-service|directional-pressure-service|option-truth-engine-service|stock-gex-service|dealer-ledger-service|dealer-ledger-calibration-scorer|dealer-ledger-calibration-accumulator|vix-option-inteligence-service|broker-execution-service|amt-order-bridge'
-# OVERNIGHT ES-tracking set — the ONLY services brought up right after the (calendar-aware, close+30) clean,
+# OVERNIGHT ES-tracking set — the ONLY services brought up right after the (17:20 ET, trading days) clean,
 # so ES futures are tracked overnight. Everything else stays at 0 until the 06:15 ET full start. (2026-08-03: was 07:30)
 # databento-feed + databento-gex-service are kept alive overnight so the pre-market LIVE OI path runs before
 # the 09:30 open: while OPRA is closed the feed drains the OI-aware statistics replay and publishes the day's
@@ -76,7 +77,7 @@ TOPICS_ENV_REF="${TOPICS_ENV_REF:-origin/main:scripts/kafka/topics.env}"
 # exclusion below keep the Schema Registry safe.) Set WIPE_KAFKA=false for a no-wipe run.
 WIPE_KAFKA="${WIPE_KAFKA:-true}"
 # Market calendar (close time, early-close, holidays) — shared with the prod scripts (scripts/jenkins/
-# market_calendar.py). Used to fire the CLEAN at close+30 ET on trading days (normal 16:00 -> 16:30;
+# market_calendar.py). Used to fire the CLEAN at a FIXED 17:20 ET on trading days (since 2026-10-06; was close+30;
 # early-close 13:00 -> 13:30).
 CALENDAR_DIR="${CALENDAR_DIR:-$DEPLOY_REPO/scripts/jenkins}"
 LOG=/Users/abhinav/oe-ops/dev-cleanup.log
@@ -201,8 +202,25 @@ clean_logs() {
       fi
     done
   fi
-  local LOGDIR2=/Users/abhinav/development/kafka-options-edge/current/logs
-  [ -d "$LOGDIR2" ] && find "$LOGDIR2" -name '*.log.20*' -type f -mtime +1 -delete 2>/dev/null
+  # ROTATED log4j files. Two defects until 2026-10-05, which together meant NOTHING ever
+  # pruned them: (1) this pointed at .../kafka-options-edge/current/logs, a path that does
+  # not exist (the real dir is the LOGDIR above), so the find never ran; (2) the trim loop
+  # above globs "*.log", which does not match a rotated name like
+  # server.log.2026-09-21-12, so that loop never touched them either. Measured when found:
+  # 913 rotated files / 1.5 GB, oldest 2026-09-21, on a Mac whose data volume was at 99%.
+  # Broker log4j output is NOT required for Kafka to run (only data/ is) but it IS what a
+  # post-incident diagnosis reads, so keep a short forensic window instead of wiping:
+  # 2 days of hourly rotations. The ACTIVE files are deliberately left to the truncate loop
+  # above -- the broker holds them open, and on macOS deleting an open file frees nothing
+  # until the process restarts, so they must be truncated in place, never unlinked.
+  # kafkaServer-gc.log.N is deliberately NOT pruned: the JVM rotates it itself with a fixed
+  # filecount=10/filesize=100M, so it is already bounded and the JVM reuses those fds.
+  if [ -d "$LOGDIR" ]; then
+    local nrot
+    nrot=$(find "$LOGDIR" -name '*.log.20*' -type f -mtime +2 2>/dev/null | wc -l | tr -d ' ')
+    find "$LOGDIR" -name '*.log.20*' -type f -mtime +2 -delete 2>/dev/null
+    echo "  rotated log4j files pruned (>2 days): ${nrot}; remaining: $(find "$LOGDIR" -name '*.log.20*' -type f 2>/dev/null | wc -l | tr -d ' ')"
+  fi
 }
 
 # topic_desired NAME -> sets DPOL/DPARTS/DRET/DDR from the eval'd topics.env lists. Globals, not an
@@ -563,7 +581,7 @@ do_es_down() {
       echo "  (absent, skipped): $d"
     fi
   done
-  # Clean the transient ES Kafka topics (services are down -> nothing recreates them until close+30).
+  # Clean the transient ES Kafka topics (services are down -> nothing recreates them until the 17:20 clean).
   # Postgres es_* training/ledger tables are NOT touched.
   echo "ES-down: cleaning transient ES topics ($ES_CLEAN_TOPICS) ..."
   local t
@@ -610,6 +628,49 @@ do_start() {
   done
   echo "  self-heal restarted $healed straggler(s)"
 
+  # indicator-service epoch self-heal: after a topic wipe it has no epoch recovery copy to read, and
+  # its EpochMachine refuses to bootstrap a fresh one unless INDICATOR_EPOCH_GENESIS=true is explicitly
+  # set (rev 14 §3.1) — a plain restart (the straggler pass above) just repeats the same
+  # EpochFatalException forever, since the guard is deliberate, not transient. Detect that exact
+  # signature, toggle the flag on long enough for ONE fresh genesis write, then flip it back off so a
+  # later restart can never re-run genesis over live state. 2026-09-24: this used to be a manual step
+  # ("set INDICATOR_EPOCH_GENESIS=true, wait for 1/1, set it back to false") that a wipe silently
+  # needed every time and nothing enforced — folded in here so it can't be forgotten again.
+  if ! echo "$DISABLED_DEV" | grep -qx "indicator-service" 2>/dev/null; then
+    # 2026-09-24 (2nd occurrence): checking immediately after the straggler restart above caught the
+    # pod BEFORE it had reprocessed far enough to hit the exception again — a false negative, not a
+    # fixed bug. Poll for up to ~30s for EITHER outcome (ready, or the fatal signature) before deciding.
+    epoch_fatal=0
+    for i in $(seq 1 6); do
+      rr=$($KK get deploy indicator-service -o jsonpath='{.status.readyReplicas}' 2>/dev/null)
+      [ "${rr:-0}" -ge 1 ] && break
+      epoch_fatal=$($KK logs deploy/indicator-service --tail=200 2>/dev/null | grep -c "INDICATOR_EPOCH_GENESIS is not authorized" || true)
+      [ "${epoch_fatal:-0}" -gt 0 ] && break
+      sleep 5
+    done
+    if [ "${epoch_fatal:-0}" -gt 0 ]; then
+      echo "  ⚠ indicator-service: no epoch recovery copy — running one-time GENESIS bootstrap"
+      $K set env deploy/indicator-service INDICATOR_EPOCH_GENESIS=true >/dev/null 2>&1
+      genesis_ok=0
+      for i in $(seq 1 24); do
+        rr=$($KK get deploy indicator-service -o jsonpath='{.status.readyReplicas}' 2>/dev/null)
+        [ "${rr:-0}" -ge 1 ] && { genesis_ok=1; break; }
+        sleep 5
+      done
+      $K set env deploy/indicator-service INDICATOR_EPOCH_GENESIS=false >/dev/null 2>&1
+      for i in $(seq 1 24); do
+        rr=$($KK get deploy indicator-service -o jsonpath='{.status.readyReplicas}' 2>/dev/null)
+        [ "${rr:-0}" -ge 1 ] && break
+        sleep 5
+      done
+      if [ "$genesis_ok" = 1 ]; then
+        echo "  indicator-service epoch self-heal done (genesis written, flag reset to false)"
+      else
+        echo "  ⚠ indicator-service did not reach 1/1 during GENESIS bootstrap — needs manual attention"
+      fi
+    fi
+  fi
+
   # Schema self-heal: all Schema-Registry schemas live in the compacted _schemas topic; if it gets
   # wiped (the known dev SR-wipe → gateway-wedge, dev-schema-registry-wipe-gateway-wedge), producers
   # emit records with dead CACHED schema IDs and the gateway can't deserialize them (Schema N not
@@ -647,7 +708,63 @@ do_start() {
 }
 
 # ---------- FULL CLEAN: LOGS + DATA, leave dev down ----------
+# ---------- CLEAN GUARD: never wipe dev before the day's next-publication OI evaluation ----------
+# oi-next-publication-service scores the session at 17:00 ET (Curb close) + 15 min grace = 17:15 and
+# its writer lands the result seconds later. do_clean scales every deployment to 0 and DELETES every
+# non-system topic, the service's ledger included, so a clean that runs earlier than that on a
+# trading day destroys the day's OI with no way back — it did, at 16:26 ET on 2026-10-02 and
+# 2026-10-05, 47-48 min before the evaluation, and Monday/Tuesday had no estimate.
+# Rule: on a trading day do_clean REFUSES to run between 09:30 ET and 17:20 ET unless FORCE_CLEAN=1.
+# The bound is FIXED, not close-relative: the service's evaluation is a fixed 17:00 + 15 min local
+# time, early-close days included (its session end is not calendar-aware), so an early-close day is
+# guarded exactly like a normal one. The auto CLEAN slot is [17:20 .. 17:49] for the same reason
+# (it was close+30); a tick after 17:40 does nothing automatically (see the auto case: the 18:00
+# ET CME reopen). market_calendar.py decides whether the day is a trading day.
+clean_guard() {
+  local verdict
+  verdict=$(CALENDAR_DIR="$CALENDAR_DIR" NOW_ET="${NOW_ET:-}" NOW_DATE="${NOW_DATE:-}" python3 - <<'PY'
+import os, sys
+from datetime import datetime, timedelta, time, date
+from zoneinfo import ZoneInfo
+sys.path.insert(0, os.environ.get("CALENDAR_DIR", ""))
+try:
+    from market_calendar import MarketCalendar
+except Exception:
+    print("REFUSE calendar-import-failed: cannot prove it is safe to wipe"); sys.exit(0)
+tz = ZoneInfo("America/New_York")
+rn = datetime.now(tz); d = rn.date()
+if os.environ.get("NOW_DATE"):
+    s = os.environ["NOW_DATE"]; d = date(int(s[0:4]), int(s[4:6]), int(s[6:8]))
+if os.environ.get("NOW_ET"):
+    hm = os.environ["NOW_ET"].zfill(4); now = datetime.combine(d, time(int(hm[0:2]), int(hm[2:4])), tz)
+else:
+    now = datetime.combine(d, rn.time(), tz)
+cal = MarketCalendar()
+if not cal.is_trading_day(d):
+    print("OK not-a-trading-day"); sys.exit(0)
+lo = datetime.combine(d, time(9, 30), tz)
+hi = datetime.combine(d, time(17, 20), tz)   # oi-next-publication evaluates at a FIXED 17:15 ET, early closes included
+if lo <= now < hi:
+    print(f"REFUSE trading-day {now.strftime('%H:%M')} ET is before 17:20 ET: the day's OI evaluation (17:15) has not happened")
+else:
+    print(f"OK {now.strftime('%H:%M')} ET outside [09:30, 17:20)")
+PY
+)
+  case "$verdict" in
+    OK*) echo "clean guard: $verdict"; return 0 ;;
+    *)
+      if [ "${FORCE_CLEAN:-0}" = 1 ]; then
+        echo "clean guard: $verdict — OVERRIDDEN by FORCE_CLEAN=1 (the day's next-publication OI is forfeited)"
+        return 0
+      fi
+      echo "clean guard: $verdict"
+      echo "clean guard: REFUSING do_clean. Re-run after the evaluation, or FORCE_CLEAN=1 to accept losing today's OI."
+      return 1 ;;
+  esac
+}
+
 do_clean() {
+  clean_guard || return 1
   echo "=== dev FULL clean (logs + data)  $(date) ==="
   clean_logs
   local BEFORE AFTER APPS LIST NEWMAN d i up
@@ -758,11 +875,15 @@ case "$MODE" in
   start)     do_start ;;
   overnight) do_start_overnight ;;
   es-down)   do_es_down ;;
-  now|clean) do_clean ;;
+  now|clean) if [ "${DKC_DRYRUN:-0}" = 1 ]; then clean_guard && echo "DRYRUN: would do_clean (WIPE)"; else do_clean; fi ;;
   auto)
-    # Calendar-aware slots (ET), 2026-07-11. market_calendar.py gives the real close time so the CLEAN
-    # fires at close+30 on BOTH normal (16:00->16:30) and early-close (13:00->13:30) days:
-    #   CLEAN slot [close+30 .. close+59] on a trading day -> do_clean (WIPE) THEN overnight ES-tracking start.
+    # Calendar-aware slots (ET), 2026-07-11. market_calendar.py says whether the day trades; the CLEAN
+    # slot is a FIXED 17:20 on every trading day (early closes included) since 2026-10-06:
+    #   CLEAN slot [17:20 .. 17:49] ET on a trading day -> do_clean (WIPE) THEN overnight ES-tracking start;
+    #   a tick after 17:40 (CLEAN_LATE: the 17:20-17:35 tick was missed) does nothing and says so.
+    #   (was close+30 until 2026-10-06: that wiped the oi-next-publication ledger before its 17:15 ET
+    #   evaluation two sessions running. FIXED, not close-relative, because the service's evaluation is
+    #   a fixed 17:15 even on a 13:00 early close.)
     #   FULL  slot [06:15 .. 06:44]       on a trading day -> do_start (2026-08-03: 07:30 -> 06:15 per
     #   USER D13/D15 in OVERNIGHT-IBKR-GEX-GATE1-REQUIREMENT.md — the dev Mac hosts the IBKR feed
     #   whose pre-open window opens at 06:15 ET, and prod's chain data hops FROM dev).
@@ -792,19 +913,26 @@ if not cal.is_trading_day(d):
     print(f"SLOT=OFF TD={td} CLOSE=0000"); sys.exit(0)
 close = cal.close_time(d)
 close_dt = datetime.combine(d, close, tz)
-clean_lo = close_dt + timedelta(minutes=30); clean_hi = clean_lo + timedelta(minutes=29)
+# FIXED 17:20..17:49 ET on every trading day (early closes included): after the oi-next-publication
+# evaluation at a fixed 17:15 (see clean_guard). 30 minutes wide so an every-15-min launchd tick of
+# ANY phase lands at least once — and in [17:20, 17:35), i.e. before the wipe deadline below. A tick
+# after 17:40 (CLEAN_LATE, only reachable if that tick was missed) does NOTHING automatically: the
+# wipe's own duration is not bounded by this script (measured 5-10 min on 2026-07-15..20) and the
+# overnight ES set must be up for the 18:00 ET CME reopen, but starting it un-wiped is unsafe.
+clean_lo = datetime.combine(d, time(17, 20), tz); clean_hi = clean_lo + timedelta(minutes=29)
+wipe_by = datetime.combine(d, time(17, 40), tz)
 full_lo = datetime.combine(d, time(6, 15), tz); full_hi = full_lo + timedelta(minutes=29)
 # ESDOWN: ~09:17 ET, before the 09:30 open. 15-min window [09:15..09:29] so the every-15-min launchd
 # reliably lands a tick before the open; ends 09:29 so it never fires after the bell.
 esdown_lo = datetime.combine(d, time(9, 15), tz); esdown_hi = datetime.combine(d, time(9, 29), tz)
-if clean_lo <= now <= clean_hi: slot = "CLEAN"
+if clean_lo <= now <= clean_hi: slot = "CLEAN" if now <= wipe_by else "CLEAN_LATE"
 elif full_lo <= now <= full_hi: slot = "FULL"
 elif esdown_lo <= now <= esdown_hi: slot = "ESDOWN"
 else: slot = "OFF"
 print(f"SLOT={slot} TD={td} CLOSE={close.strftime('%H%M')}")
 PY
 )
-    SLOT=$(printf '%s' "$SLOTINFO" | grep -oE 'SLOT=[A-Z]+' | cut -d= -f2)
+    SLOT=$(printf '%s' "$SLOTINFO" | grep -oE 'SLOT=[A-Z_]+' | cut -d= -f2)
     TD=$(printf '%s' "$SLOTINFO" | grep -oE 'TD=[0-9]+' | cut -d= -f2)
     CLEAN_MARK=/tmp/.dev-cleanup-clean-$TD                     # idempotent, keyed by trading-date
     START_MARK=/tmp/.dev-cleanup-start-$TD
@@ -813,7 +941,25 @@ PY
       CLEAN)
         if [ -f "$CLEAN_MARK" ]; then :
         elif [ "${DKC_DRYRUN:-0}" = 1 ]; then echo "DRYRUN: CLEAN slot ($SLOTINFO) -> do_clean (WIPE) + overnight ES start"
-        else : > "$CLEAN_MARK"; { do_clean; echo "--- overnight ES-tracking start ---"; do_start_overnight; } >> "$LOG" 2>&1; fi ;;
+        else
+          : > "$CLEAN_MARK"
+          { if do_clean; then echo "clean: OK"; else echo "clean: FAILED (rc=$?) — the overnight ES start proceeds on the UN-WIPED state; re-run 'dev-cleanup now' by hand after 17:20 ET if a wipe is needed"; fi
+            echo "--- overnight ES-tracking start ---"; do_start_overnight; } >> "$LOG" 2>&1
+        fi ;;
+      CLEAN_LATE)
+        # Past the wipe deadline (17:40 ET): too late to start a 5-10 min wipe and still have the
+        # overnight ES set up for the 18:00 ET CME reopen — and starting that set WITHOUT the wipe
+        # is not safe either (daytime deployments still up, stale ES topics/offsets/Streams state).
+        # So nothing runs automatically: say so loudly, once, and leave it to an operator
+        # ('dev-cleanup now' then 'dev-cleanup overnight'). With an every-15-min launchd tick this
+        # path is reached only when the 17:20-17:35 tick itself was missed (Mac asleep, launchd
+        # backlog) — not on a normal day.
+        if [ -f "$CLEAN_MARK" ]; then :
+        elif [ "${DKC_DRYRUN:-0}" = 1 ]; then echo "DRYRUN: CLEAN_LATE ($SLOTINFO) -> NOTHING runs: wipe skipped (after 17:40 ET) and overnight ES start skipped (unsafe un-wiped)"
+        else
+          : > "$CLEAN_MARK"
+          echo "=== CLEAN_LATE $(date): the 17:20-17:40 ET tick was missed. NO wipe (too close to the 18:00 ET CME reopen) and NO overnight ES start (unsafe on an un-wiped environment). Operator: 'dev-cleanup now' then 'dev-cleanup overnight'. ===" >> "$LOG" 2>&1
+        fi ;;
       FULL)
         if [ -f "$START_MARK" ]; then :
         elif [ "${DKC_DRYRUN:-0}" = 1 ]; then echo "DRYRUN: FULL slot ($SLOTINFO) -> do_start (full pipeline)"
