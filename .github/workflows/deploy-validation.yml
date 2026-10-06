@@ -249,6 +249,13 @@ jobs:
       - name: Validate the mirror comparison guard
         run: bash scripts/ci/mirror-diff-guard-test.sh
 
+      # The install replaces five files for a unit the stop phase has already brought DOWN, so a
+      # failed move must restore the previous generation whole — which depends on `set -E`, without
+      # which the ERR trap is not inherited by the function doing the moves and the mixed generation
+      # the trap exists to undo is exactly what is left behind.
+      - name: Validate the mirror install rollback
+        run: bash scripts/ci/mirror-install-rollback-test.sh
+
       # A production reload from this playbook must enforce the Deployment Permission Rule itself,
       # with the same guard script and the DECLARED version hash Jenkins passes — a computed hash
       # would let a locally edited guard self-approve. Asserted statically and behaviourally.

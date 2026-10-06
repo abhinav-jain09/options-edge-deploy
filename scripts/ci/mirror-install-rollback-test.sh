@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# The install step replaces five files for a unit the stop phase has already brought DOWN. If a move
+# fails halfway, the unit is both down and mixed on disk — so the step keeps the previous generation
+# and restores it. That restore depends on one easily-lost detail: the ERR trap must be inherited by
+# the put() function, which needs `set -E`. Without it the script exited and left exactly the mixed
+# generation the trap exists to undo, and nothing failed loudly.
+#
+# So drive the real task body: a clean install, and a failure at the fourth of five moves.
+set -euo pipefail
+cd "$(dirname "$0")/../.."
+command -v python3 >/dev/null || { echo "FAIL: python3 is required to extract the task body"; exit 1; }
+
+WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
+render() { # out-dir  [break]
+  python3 - "$1" "${2:-}" <<'PY'
+import sys, pathlib, yaml
+T, brk = sys.argv[1], sys.argv[2]
+tasks = yaml.safe_load(open("ansible/tasks/es-mirror-unit.yml"))
+body = [t for t in tasks if "install the rendered files" in t["name"]]
+if not body:
+    print("NO_TASK"); raise SystemExit(0)
+cmd = body[0]["ansible.builtin.shell"]["cmd"]
+cmd = (cmd.replace("{{ oe_rendered_dir }}/{{ item.label }}", T + "/rendered")
+          .replace("{{ item.mdir }}", T + "/unit")
+          .replace("{{ item.plist }}", T + "/u.plist"))
+if brk == "break":
+    old = 'put run-mirror.sh       "$M/run-mirror.sh"       0755'
+    if old not in cmd:
+        print("NO_PUT"); raise SystemExit(0)
+    cmd = cmd.replace(old, 'put run-mirror.sh       "/nonexistent-dir/run-mirror.sh" 0755')
+pathlib.Path(T + "/install.sh").write_text(cmd)
+print("OK")
+PY
+}
+seed() { # dir
+  rm -rf "$1"; mkdir -p "$1/unit" "$1/rendered"
+  for f in consumer.properties producer.properties log4j.properties run-mirror.sh; do
+    echo "OLD $f" > "$1/unit/$f"; echo "NEW $f" > "$1/rendered/$f"
+  done
+  chmod +x "$1/unit/run-mirror.sh"
+  echo "OLD plist" > "$1/u.plist"; echo "NEW plist" > "$1/rendered/plist.xml"
+}
+generation() { # dir -> OLD | NEW | MIXED
+  local seen="" g
+  for f in unit/consumer.properties unit/producer.properties unit/log4j.properties unit/run-mirror.sh u.plist; do
+    g=$(cut -d' ' -f1 "$1/$f" 2>/dev/null || echo MISSING)
+    case "$seen" in "") seen="$g" ;; *) [ "$seen" = "$g" ] || seen=MIXED ;; esac
+  done
+  echo "$seen"
+}
+
+fail=0
+# ---- a clean install lands the new generation ----
+D="$WORK/ok"; seed "$D"
+r=$(render "$D"); [ "$r" = OK ] || { echo "FAIL: cannot extract the install task body ($r)"; exit 1; }
+set +e; out=$(bash "$D/install.sh" 2>&1); rc=$?; set -e
+g=$(generation "$D")
+if [ "$rc" = 0 ] && [ "$g" = NEW ]; then printf '  ok   %-44s rc=%s generation=%s\n' "a clean install" "$rc" "$g"
+else printf '  FAIL %-44s rc=%s generation=%s %s\n' "a clean install" "$rc" "$g" "$out"; fail=1; fi
+
+# ---- a failure at the FOURTH move restores the previous generation, whole ----
+D="$WORK/broken"; seed "$D"
+r=$(render "$D" break); [ "$r" = OK ] || { echo "FAIL: cannot extract/patch the install task body ($r)"; exit 1; }
+set +e; out=$(bash "$D/install.sh" 2>&1); rc=$?; set -e
+g=$(generation "$D"); strays=$(ls -1 "$D/unit" | grep -c 'ansible-new' || true)
+if [ "$rc" != 0 ] && [ "$g" = OLD ] && [ "$strays" = 0 ] && printf '%s' "$out" | grep -q 'previous generation has been restored'; then
+  printf '  ok   %-44s rc=%s generation=%s strays=%s\n' "a failed move rolls back" "$rc" "$g" "$strays"
+else
+  printf '  FAIL %-44s rc=%s generation=%s strays=%s out=%s\n' "a failed move rolls back" "$rc" "$g" "$strays" "$out"; fail=1
+fi
+
+[ "$fail" = 0 ] || { echo "mirror install rollback: FAILED"; exit 1; }
+echo "mirror install rollback: a clean install lands the new generation, and a failed move restores the previous one whole"

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # The Deployment Permission Rule (options-edge rule.md) is enforced per Jenkins job. ansible/es-mirrors.yml
 # can reload a PRODUCTION unit from any checkout, so it has to enforce the same rule itself — and
-# "it has a task that runs the guard" is not the same as "the rule holds". Three things are asserted:
+# "it has a task that runs the guard" is not the same as "the rule holds". FIVE things are asserted:
 #
-#   1. the guard version the playbook DECLARES is the one every mirror Jenkinsfile declares. It must be
+#   1. the guard version the playbook DECLARES is the one every mirror Jenkinsfile declares.  [1 of 5] It must be
 #      a literal: computing it from the checkout would let a locally edited guard self-approve, which
 #      is exactly what the guard's version check exists to stop.
 #   2. the task runs only for the production target and only for an install, and its failure is fatal.
@@ -36,7 +36,7 @@ grep -qE 'PERMITTED_SHA_GUARD_VERSION="\$\(' "$PB" \
 # ---- 2. the task's own conditions ----
 block=$(awk '/name: Enforce the permitted commit before any PRODUCTION effect/{f=1} f{print} f&&/failed_when: oe_guard.rc != 0/{exit}' "$PB")
 [ -n "$block" ] || { echo "FAIL: $PB has no permitted-commit task ending in a fatal failed_when"; fail=1; }
-printf '%s\n' "$block" | grep -qF "when: oe_confirm and (oe_target == '192.168.100.252:9092')" \
+printf '%s\n' "$block" | grep -qF "when: oe_confirm and (oe_target_ip == '192.168.100.252') and (oe_target_port == '9092')" \
   || { echo "FAIL: the permitted-commit task must run for a production INSTALL, decided against the literal broker"; fail=1; }
 printf '%s\n' "$block" | grep -q 'bash scripts/jenkins/permitted-sha-guard.sh' \
   || { echo "FAIL: the permitted-commit task must run the repository's own guard script"; fail=1; }
@@ -47,17 +47,21 @@ printf '%s\n' "$block" | grep -q 'bash scripts/jenkins/permitted-sha-guard.sh' \
 # production broker would pass the allow-list, skip the guard and set the permission true. The three
 # decisions are therefore written against the literal broker, and that is asserted here — and then
 # behaviourally, by running with exactly that override.
+# and the decisions must read the INPUT variables the unit paths and group ids are built from, not a
+# derived one: `-e oe_target=127.0.0.1:19092` would otherwise skip the guard while every path and
+# group stayed production. Overriding oe_target_ip/oe_target_port changes the target consistently.
 while IFS= read -r pat; do
   [ -n "$pat" ] || continue
   grep -qF -- "$pat" "$PB" || { echo "FAIL: $PB must take the production decision against the literal broker, not a redefinable name (missing: $pat)"; fail=1; }
 done <<PATS
-oe_target in ['127.0.0.1:19092', '192.168.100.252:9092']
-when: oe_confirm and (oe_target == '192.168.100.252:9092')
-oe_prod_permitted: "{{ (oe_target != '192.168.100.252:9092')
+(oe_target_ip ~ ':' ~ oe_target_port) in ['127.0.0.1:19092', '192.168.100.252:9092']
+when: oe_confirm and (oe_target_ip == '192.168.100.252') and (oe_target_port == '9092')
+oe_prod_permitted: "{{ ((oe_target_ip ~ ':' ~ oe_target_port) != '192.168.100.252:9092')
+target: "{{ oe_target_ip }}:{{ oe_target_port }}"
 PATS
 
 # ---- 3. every mutating task re-checks the guard's verdict ----
-grep -qF "oe_prod_permitted: \"{{ (oe_target != '192.168.100.252:9092') or ((oe_guard.rc | default(1)) == 0) }}\"" "$PB" \
+grep -qF "oe_prod_permitted: \"{{ ((oe_target_ip ~ ':' ~ oe_target_port) != '192.168.100.252:9092') or ((oe_guard.rc | default(1)) == 0) }}\"" "$PB" \
   || { echo "FAIL: $PB must publish oe_prod_permitted from the guard's verdict, against the literal broker"; fail=1; }
 for t in "STOP the unit before anything is written" "install the rendered files" "START the unit on the installed files"; do
   blk=$(awk -v n="$t" 'index($0, n){f=1} f{print} f&&/ansible\.builtin\.(command|shell|copy|template)/{exit}' ansible/tasks/es-mirror-unit.yml)
@@ -98,9 +102,10 @@ if command -v ansible-playbook >/dev/null; then
   ansible-playbook "$PB" -e mirror_target_ip=192.168.100.252 -e mirror_target_port=9092 \
     -e confirm_mirror_install=true -e permitted_sha=0000000000000000000000000000000000000000 \
     -e oe_prod_target=127.0.0.1:19092 -e oe_dev_target=192.168.100.252:9092 \
+    -e oe_target=127.0.0.1:19092 \
     -e "dump_rows=$OUT_DUMP" >"$log2" 2>&1
   rc2=$?; set -e
-  [ "$rc2" != 0 ] || { echo "FAIL: a production install survived -e oe_prod_target/-e oe_dev_target — the decision is being taken through a redefinable name"; fail=1; }
+  [ "$rc2" != 0 ] || { echo "FAIL: a production install survived -e oe_prod_target/-e oe_dev_target/-e oe_target — a decision is being taken through a derived name"; fail=1; }
   grep -q 'permitted-sha-guard: REFUSED' "$log2" \
     || { echo "FAIL: with the classification renamed, the refusal no longer comes from the guard — see $log2"; fail=1; }
   rm -f "$log" "$log2" "$OUT_DUMP"

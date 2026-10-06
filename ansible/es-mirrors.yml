@@ -59,6 +59,10 @@
     oe_confirm: "{{ confirm_mirror_install | default(false) | bool }}"
     oe_allow_new_group: "{{ allow_new_consumer_group | default(false) | bool }}"
     oe_only: "{{ (only_topics | default('')) | trim }}"
+    # For MESSAGES only. Never a decision and never a row's field: it is derived, so `-e
+    # oe_target=127.0.0.1:19092` would have skipped the production guard while every unit path and
+    # group id — which come from oe_target_ip/oe_target_port — stayed production. Decisions and rows
+    # read those two inputs directly, so overriding them changes the target CONSISTENTLY.
     oe_source: "{{ oe_source_ip }}:{{ oe_source_port }}"
     oe_target: "{{ oe_target_ip }}:{{ oe_target_port }}"
     # Named for messages ONLY. Every DECISION below compares against the literal, because an Ansible
@@ -90,8 +94,9 @@
       # typo'd broker would install a unit nothing reads, under a group nothing commits.
       ansible.builtin.assert:
         that:
-          - oe_source == '192.168.100.4:9092'
-          - oe_target in ['127.0.0.1:19092', '192.168.100.252:9092']
+          - oe_source_ip == '192.168.100.4'
+          - oe_source_port == '9092'
+          - (oe_target_ip ~ ':' ~ oe_target_port) in ['127.0.0.1:19092', '192.168.100.252:9092']
         fail_msg: >-
           source must be es4 (192.168.100.4:9092) and target must be dev ({{ oe_dev_target }})
           or prod ({{ oe_prod_target }}); got source={{ oe_source }} target={{ oe_target }}.
@@ -101,7 +106,7 @@
       # PERMITTED_SHA (nothing is substituted for it), and a HEAD that is not exactly that commit.
       # Only a production INSTALL goes through it — a plan reads brokers and writes nothing, and dev
       # is not production.
-      when: oe_confirm and (oe_target == '192.168.100.252:9092')
+      when: oe_confirm and (oe_target_ip == '192.168.100.252') and (oe_target_port == '9092')
       ansible.builtin.shell:
         cmd: |
           set -uo pipefail
@@ -120,7 +125,7 @@
       # One fatal assertion was the only thing standing between a refusal and a production change, so
       # now every task that stops, writes or starts a unit re-checks this fact as well.
       ansible.builtin.set_fact:
-        oe_prod_permitted: "{{ (oe_target != '192.168.100.252:9092') or ((oe_guard.rc | default(1)) == 0) }}"
+        oe_prod_permitted: "{{ ((oe_target_ip ~ ':' ~ oe_target_port) != '192.168.100.252:9092') or ((oe_guard.rc | default(1)) == 0) }}"
 
     - name: Check the Kafka CLI is where this playbook expects it
       # Not in dump mode: that path stops before any broker or unit access, and the identity gate runs
@@ -163,8 +168,8 @@
           mdir: "{{ oe_ops }}/{{ item.0.pipeline }}-{{ slug }}"
           label: "com.optionsedge.{{ item.0.pipeline }}-{{ slug }}"
           plist: "{{ oe_agents }}/com.optionsedge.{{ item.0.pipeline }}-{{ slug }}.plist"
-          source: "{{ oe_source }}"
-          target: "{{ oe_target }}"
+          source: "{{ oe_source_ip }}:{{ oe_source_port }}"
+          target: "{{ oe_target_ip }}:{{ oe_target_port }}"
 
     - name: Select the units this run covers
       ansible.builtin.set_fact:
@@ -183,8 +188,8 @@
       # es.futures.cvd.levels is PRODUCTION-ONLY (ES-CVD-SPX-LEVELS-DESIGN.md CL-R6 L1/M1): the dev
       # resource must stay ABSENT. Skipped here, not failed, so a dev run of the whole table works.
       ansible.builtin.set_fact:
-        oe_held: "{{ oe_selected | selectattr('prod_only') | map(attribute='topic') | list if (oe_target != '192.168.100.252:9092') else [] }}"
-        oe_plan: "{{ oe_selected | rejectattr('prod_only') | list if (oe_target != '192.168.100.252:9092') else oe_selected }}"
+        oe_held: "{{ oe_selected | selectattr('prod_only') | map(attribute='topic') | list if ((oe_target_ip ~ ':' ~ oe_target_port) != '192.168.100.252:9092') else [] }}"
+        oe_plan: "{{ oe_selected | rejectattr('prod_only') | list if ((oe_target_ip ~ ':' ~ oe_target_port) != '192.168.100.252:9092') else oe_selected }}"
 
     - name: Report the plan
       ansible.builtin.debug:

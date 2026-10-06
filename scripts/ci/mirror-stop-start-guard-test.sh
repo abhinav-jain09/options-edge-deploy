@@ -50,7 +50,9 @@ chmod +x "$WORK/bin/launchctl"
 cat > "$WORK/bin/ps" <<P
 #!/usr/bin/env bash
 [ -e "$WORK/ps_fails" ] && exit 1
-# the two forms the guard uses: 'ps -p <pid> -o command=' and 'ps -axo pid=,command='
+# the ONE form the guards use: 'ps -axo pid=,command='. They used to ask 'ps -p <pid> -o command='
+# as well, which answered a narrower question — it could not see a SECOND mirror on the same topic —
+# so any other form reaching this stub is a mistake and is reported rather than answered.
 W="$WORK"; MDIR="$MDIR"
 case "\$*" in
   *-axo*)

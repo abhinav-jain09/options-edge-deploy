@@ -139,9 +139,31 @@
     - (oe_stop.rc | default(1)) == 0
   ansible.builtin.shell:
     cmd: |
-      set -euo pipefail
-      R="{{ oe_rendered_dir }}/{{ item.label }}"; M="{{ item.mdir }}"
+      # -E, not just -e: without errtrace the ERR trap is NOT inherited by a function, so a cp that
+      # failed inside put() exited the script with the restore never running — the mixed generation
+      # this trap exists to undo was exactly what it left behind.
+      set -Eeuo pipefail
+      R="{{ oe_rendered_dir }}/{{ item.label }}"; M="{{ item.mdir }}"; PL="{{ item.plist }}"
       mkdir -p "$M"
+      # Each file is written beside its target and MOVED into place, so no reader sees a torn file —
+      # and the five together are made ATOMIC ENOUGH by keeping the previous generation and restoring
+      # it if any move fails. Without that, a failure after the second move left a unit that is both
+      # DOWN (phase 1 stopped it) and mixed on disk, with nothing to go back to. The unit is restarted
+      # only after all five land; a failed install leaves the OLD generation complete and the unit
+      # down, which is a state phase 2 can be run against and the next plan can read.
+      BK=$(mktemp -d)
+      restore() {
+        for f in consumer.properties producer.properties log4j.properties run-mirror.sh; do
+          [ -e "$BK/$f" ] && mv -f "$BK/$f" "$M/$f"
+        done
+        [ -e "$BK/plist.xml" ] && mv -f "$BK/plist.xml" "$PL"
+        echo "FAIL: an install step failed; the previous generation has been restored and the unit left stopped" >&2
+      }
+      trap 'restore; rm -rf "$BK"; exit 1' ERR
+      for f in consumer.properties producer.properties log4j.properties run-mirror.sh; do
+        [ -e "$M/$f" ] && cp -p "$M/$f" "$BK/$f"
+      done
+      [ -e "$PL" ] && cp -p "$PL" "$BK/plist.xml"
       put() { # rendered-name  destination  mode
         cp "$R/$1" "$2.ansible-new"
         chmod "$3" "$2.ansible-new"
@@ -151,7 +173,9 @@
       put producer.properties "$M/producer.properties" 0644
       put log4j.properties    "$M/log4j.properties"    0644
       put run-mirror.sh       "$M/run-mirror.sh"       0755
-      put plist.xml           "{{ item.plist }}"       0644
+      put plist.xml           "$PL"                    0644
+      trap - ERR
+      rm -rf "$BK"
       echo "installed 5 file(s) into $M"
     executable: /bin/bash
   register: oe_install
@@ -184,6 +208,9 @@
     executable: /bin/bash
   register: oe_lag
   changed_when: false
+  # reporting, not a gate: a lag that cannot be read must not abort the play before this unit is
+  # recorded and the remaining units run
+  failed_when: false
 
 - name: "{{ item.label }} | record"
   ansible.builtin.set_fact:

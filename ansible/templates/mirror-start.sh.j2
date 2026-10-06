@@ -3,6 +3,11 @@
 # `launchctl load` of a unit that is already loaded is a no-op, and a load that FAILS leaves whatever
 # was running — whose command line still names this unit's producer.properties, so a
 # "bound to the right config" check alone would report success for a mirror that never restarted.
+# WHAT THIS PROVES, AND FOR HOW LONG: a snapshot, taken OE_RELOAD_SETTLE seconds after the load —
+# that one process is publishing this unit's config, that it is the pid launchd reports, and that it
+# is not the pid phase 1 stopped. It says nothing about the minutes after that: a unit that dies
+# later is KeepAlive's business and the next plan's (a process younger than its files reads as a
+# difference). Continued health is not something a one-shot install can assert.
 # OE_OLD_PID is the pid PHASE 1 stopped (empty for a first install); OE_RELOAD_SETTLE lets the guard
 # test drive this with no wait, and defaults to the 8s a real unit needs before launchctl reports one.
 set -uo pipefail
