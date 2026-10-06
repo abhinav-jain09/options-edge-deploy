@@ -283,7 +283,7 @@ patches:
         value: 7200
   # PROD dealer-ledger heap: -Xmx6144m (6GB, dev/prod parity — -Xmx1024m OOM'd on dev's day's-backlog
   # catch-up; prod runs the same SPX data). Container 8Gi leaves ~2Gi for RocksDB off-heap + JVM overhead.
-  # .252 has 62Gi total / ~30Gi free, so 8Gi fits. DEALER_LEDGER_ADVISORY_ENABLED=true is SHADOW-mode
+  # DEALER_LEDGER_ADVISORY_ENABLED=true is SHADOW-mode
   # enable (observe-only). NAME-KEYED strategic merge (NOT env/N json6902): the prior index patch targeted
   # env/19 for JAVA_TOOL_OPTIONS, but PR#364 inserted DEALER_LEDGER_QUOTE_STALE_MS ahead of it, shifting the
   # index so the heap string landed on QUOTE_STALE_MS (=> parsed as 0 -> 30s default) and JAVA_TOOL_OPTIONS
@@ -347,8 +347,51 @@ patches:
                 resources:
                   limits:
                     memory: 8Gi
+                  # RAISED 2Gi -> 6Gi (2026-10-06, with the prod replicas lift below). The pod's real
+                  # footprint is the 6GB heap plus RocksDB off-heap; a 2Gi request told the scheduler
+                  # to account for a third of that, which is how an 8Gi-limit pod lands on a node that
+                  # is already 197% committed on limits. Measured on .252 2026-10-06: allocatable
+                  # 62.2Gi / 24 CPU, pod requests 36.1Gi (56%), pod LIMITS 126.1Gi (197%) with this
+                  # deployment at replicas 0; `free` 40Gi used / 21Gi available. At a 6Gi request the
+                  # node sits at 42Gi (68%) requested and the pod still schedules; if that headroom
+                  # ever disappears the pod goes Pending — visible — instead of the node overcommitting
+                  # into another kernel OOM kill. The 2026-09-10 13:11 ET kill took this pod at 6.1GB
+                  # RSS; the heap is NOT being lowered to avoid it, because -Xmx1024m is the documented
+                  # in-JVM OOM above. Abort action if the node comes under pressure with this running:
+                  # `kubectl -n options-edge scale deploy/dealer-ledger-service --replicas=0`.
                   requests:
-                    memory: 2Gi
+                    memory: 6Gi
+  # PROD REPLICAS LIFT (USER 2026-10-06: "start the dealer ledger on prod so it produces a verdict").
+  # This lifts the 2026-09-10 "until further notice" hold (#1034) on PRODUCTION ONLY. The base stays
+  # replicas:0, so dev and experiment stay held and this Mac never starts a 6GB-heap JVM; es4 is
+  # unaffected (the family has been in ES4_KEEP_DOWN since 2026-08-18).
+  #
+  # WHY IT IS NEEDED. close-direction-service's prod verdict is NO_VERDICT_DATA_FAILURE with
+  # failureReasons [PROFILE_ABSENT, SPOT_MISSING, CHARM_UNSTABLE] and direction UNKNOWN. Those three
+  # are ONE cause: `dealer-ledger-profile` is close-direction's only profile input, onProfile is the
+  # only writer of the engine's spotTicks, and charmQuality(null) is UNSTABLE by construction. The
+  # topic is empty because this deployment has not been Available since 2026-09-10. Every other link
+  # in the chain already starts automatically.
+  #
+  # WHY IT TAKES THIS PATCH AND NOT ONLY THE KEEP_DOWN LISTS. #1034 closed four paths; a hand-scale or
+  # a KEEP_DOWN edit alone reaches two of them. `kubectl apply -k` re-applies base replicas on every
+  # deploy, which is what silently returned this pod to 0/0 after it was hand-scaled to 1/1 on
+  # 2026-10-05. This patch is the declarative half; scripts/ops/{oe-boot-bringup,morning-autostart}.sh
+  # KEEP_DOWN removal is the scheduler half. dev-cleanup.sh DISABLED_DEV is deliberately NOT touched.
+  #
+  # WHAT THIS DOES NOT CLAIM. close-direction reports calibration=UNCALIBRATED, and this repo's own
+  # studies found the ledger's DIRECTION dead across four designs and concluded it cannot be
+  # calibrated as built. This makes a verdict appear where there was none; it does not make it
+  # trustworthy. Verification to take at the next RTH open, not asserted here: `dealer-ledger-profile`
+  # advances, pod RSS against the 6Gi request, and node `free` through 13:00-13:30 ET (the window of
+  # the 09-10 kill).
+  - target:
+      kind: Deployment
+      name: dealer-ledger-service
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
   # PROD enable of the top-N gate (proc PR #466/#467, requirement 2026-07-22; dev-verified first per
   # rollout decision): fade (gamma-flow) + lifecycle (EMERGING/STICKY/FADING) compute ONLY the top-3
   # |netGex| strikes per chain — the rest are gated BEFORE those calculations. Stage-1 per-strike netGex
