@@ -57,6 +57,7 @@
     oe_tools_src: "{{ kafka_tools_src | default('/Users/abhinav/development/confluent-7.3.1') }}"
     oe_topics_list: "{{ oe_topics.split() }}"
     oe_tools_tar: /tmp/oe-kafka-tools-confluent-7.3.1.tgz
+    oe_probe_timeout: "{{ mirror_probe_timeout | default(10) }}"
     oe_topics_regex: "{{ oe_topics_list | map('regex_replace', '\\.', '\\\\.') | join('|') }}"
 
   tasks:
@@ -69,26 +70,39 @@
           - oe_target | length > 0
           - oe_source != oe_target
           - oe_topics_list | length > 0
+          # STRICT, because these values are rendered into a shell script and into broker configs.
+          # Kafka's own legal topic charset is [a-zA-Z0-9._-]; anything else (a quote, a newline, a
+          # semicolon) would break out of the single-quoted --whitelist argument in run-mirror.sh and
+          # execute on the target. Same for the endpoints, which must be host:port and nothing else.
+          - oe_topics_list | select('match', '^[A-Za-z0-9._-]+$') | list | length == oe_topics_list | length
+          - oe_source is match('^[A-Za-z0-9.-]+:[0-9]{1,5}$')
+          - oe_target is match('^[A-Za-z0-9.-]+:[0-9]{1,5}$')
+          - oe_group_id is match('^[A-Za-z0-9._-]+$')
           - oe_auto_offset_reset in ['latest', 'earliest']
           - oe_state in ['present', 'absent']
           - oe_num_streams | int >= 1
         fail_msg: >-
-          mirror_instance must be a lowercase slug; source and target must both be set and differ;
-          at least one topic; auto_offset_reset latest|earliest; state present|absent.
+          mirror_instance must be a lowercase slug; source and target must be host:port and differ;
+          every topic must match Kafka's legal charset [A-Za-z0-9._-]; group id likewise;
+          auto_offset_reset latest|earliest; state present|absent.
 
     # A mirror whose source or target is unreachable FROM THE HOST IT RUNS ON installs cleanly, goes
-    # into a connect-retry loop, and reports nothing. Prove both hops from the managed node before
-    # laying anything down. bash 3.2 /dev/tcp — this host has no coreutils `timeout` and no nc.
-    - name: Prove the source broker is reachable from this host
-      ansible.builtin.shell: 'exec 3<>/dev/tcp/{{ oe_source.split(":")[0] }}/{{ oe_source.split(":")[1] }}'
-      args: { executable: /bin/bash }
-      changed_when: false
-      when: oe_state == 'present'
-
-    - name: Prove the target broker is reachable from this host
-      ansible.builtin.shell: 'exec 3<>/dev/tcp/{{ oe_target.split(":")[0] }}/{{ oe_target.split(":")[1] }}'
-      args: { executable: /bin/bash }
-      changed_when: false
+    # into a connect-retry loop, and reports nothing — that is how seven prod-targeted legs sat dead.
+    # Prove both hops from the managed node before laying anything down.
+    #
+    # wait_for, not `exec 3<>/dev/tcp/...` in a shell: it takes a real timeout (this host has no
+    # coreutils `timeout` and no nc, so a shell probe against a blackholed port blocks until the OS
+    # TCP timeout, minutes later), and it passes host and port as MODULE ARGUMENTS rather than
+    # interpolating them into a shell command line.
+    - name: Prove both brokers are reachable from this host
+      ansible.builtin.wait_for:
+        host: "{{ item.split(':')[0] }}"
+        port: "{{ item.split(':')[1] | int }}"
+        timeout: "{{ oe_probe_timeout | int }}"
+        state: started
+      loop:
+        - "{{ oe_source }}"
+        - "{{ oe_target }}"
       when: oe_state == 'present'
 
     - name: Report the plan
@@ -106,12 +120,17 @@
       ansible.builtin.meta: end_play
       when: not oe_confirm
 
-    # ---------------- teardown ----------------
+    # ---------------- teardown (state=absent ONLY) ----------------
+    # ⚠ `when: oe_state == 'absent'` on the BOOTOUT as well as the removal. Without it this task ran
+    # on every confirmed apply, so a `present` run stopped the live mirror FIRST and any later
+    # failure — absent tooling, a bad render, a failed lint — left the agent unloaded and the leg
+    # dark. A re-apply must never take the mirror down before it has something working to put back.
     - name: Unload the launchd agent
       ansible.builtin.command: 'launchctl bootout gui/{{ ansible_user_uid }}/{{ oe_label }}'
       register: oe_bootout
       changed_when: oe_bootout.rc == 0
       failed_when: false
+      when: oe_state == 'absent'
 
     - name: Remove the agent plist and instance directory
       ansible.builtin.file:
@@ -127,16 +146,45 @@
       when: oe_state == 'absent'
 
     # ---------------- Kafka tooling ----------------
+    # Preflight on the CONTROLLER first. delegate_to: localhost is the real Jenkins `local-mac`
+    # executor, not this reviewer's laptop, so an absent source tree must fail HERE — before any
+    # target-side work — rather than halfway through.
+    - name: Preflight the controller-side Kafka tooling source
+      ansible.builtin.stat:
+        path: "{{ oe_tools_src }}/bin/kafka-mirror-maker"
+      delegate_to: localhost
+      register: oe_src_stat
+
+    - name: Fail early when the controller has no Kafka tooling to ship
+      ansible.builtin.assert:
+        that: oe_src_stat.stat.exists
+        fail_msg: >-
+          {{ oe_tools_src }}/bin/kafka-mirror-maker is absent on the Ansible controller
+          ({{ inventory_hostname }} is the target; the controller is the Jenkins agent). Pass
+          kafka_tools_src=<path to a confluent-7.3.1 tree>. It must be 7.3.x: kafka.tools.MirrorMaker
+          was removed in Kafka 4.x.
+
     - name: Check whether the Kafka tooling is already present
       ansible.builtin.stat:
         path: "{{ oe_kafka_tools }}/bin/kafka-mirror-maker"
       register: oe_tools
 
+    # NO `creates:`. With it, a truncated or wrong-version tarball left in /tmp by an interrupted
+    # run is reused forever and nothing ever notices. This task only runs when the TARGET lacks the
+    # tooling, i.e. once per host, so re-packing costs seconds and is always the tree just verified.
     - name: Pack the minimal Kafka tooling on the controller
       ansible.builtin.command:
         cmd: 'tar -czf {{ oe_tools_tar }} -C {{ oe_tools_src }} bin share/java/kafka'
-        creates: "{{ oe_tools_tar }}"
       delegate_to: localhost
+      changed_when: true
+      when: not oe_tools.stat.exists
+
+    # unarchive does NOT create its destination; without this the FIRST apply on a host fails.
+    - name: Create the Kafka tooling directory
+      ansible.builtin.file:
+        path: "{{ oe_kafka_tools }}"
+        state: directory
+        mode: '0755'
       when: not oe_tools.stat.exists
 
     - name: Ship and unpack the Kafka tooling
@@ -191,17 +239,40 @@
       ansible.builtin.command: 'bash -n {{ oe_instance_dir }}/run-mirror.sh'
       changed_when: false
 
-    # bootout then bootstrap, so a config change is actually picked up: launchctl does not re-read a
-    # plist for an already-loaded label, and a mirror running the previous route would otherwise
-    # survive a "successful" apply.
+    - name: Check whether launchd already holds the label
+      ansible.builtin.shell: 'launchctl list | grep -F "{{ oe_label }}"'
+      args: { executable: /bin/bash }
+      register: oe_already
+      changed_when: false
+      failed_when: false
+
+    # RESTART ONLY WHEN SOMETHING CHANGED, or when the agent is not loaded at all. Every restart of a
+    # MirrorMaker v1 leg is an at-least-once boundary: records produced before the source offset was
+    # committed are re-delivered, so a no-op re-apply that bounced the mirror would duplicate records
+    # into the target for nothing. The configs and the plist are rendered and VALIDATED above, before
+    # this point, so by the time the agent goes down a working replacement already exists on disk.
+    - name: Decide whether the agent must be (re)loaded
+      ansible.builtin.set_fact:
+        oe_reload: "{{ (oe_rendered is changed) or (oe_agent is changed) or (oe_already.rc != 0) }}"
+
+    - name: Report the reload decision
+      ansible.builtin.debug:
+        msg: >-
+          reload={{ oe_reload }} (configs changed={{ oe_rendered is changed }},
+          plist changed={{ oe_agent is changed }}, already loaded={{ oe_already.rc == 0 }})
+
+    # bootout then bootstrap: launchctl does not re-read a plist for a label it already holds, so a
+    # route change would otherwise survive a green apply with the OLD route still running.
     - name: Unload any previous instance of the agent
       ansible.builtin.command: 'launchctl bootout gui/{{ ansible_user_uid }}/{{ oe_label }}'
       register: oe_pre_bootout
       changed_when: oe_pre_bootout.rc == 0
       failed_when: false
+      when: oe_reload | bool
 
     - name: Load the agent
       ansible.builtin.command: 'launchctl bootstrap gui/{{ ansible_user_uid }} {{ oe_plist }}'
+      when: oe_reload | bool
 
     - name: Confirm launchd actually holds the label
       ansible.builtin.shell: 'launchctl list | grep -F "{{ oe_label }}"'

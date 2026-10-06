@@ -92,6 +92,11 @@ pipeline {
   }
   post {
     success { echo "mirror leg ${params.MIRROR_INSTANCE}: ${params.CONFIRM_DEPLOY ? "state=${params.MIRROR_STATE} applied" : 'validated (plan only)'} on ${params.MIRROR_HOST}." }
-    failure { echo "mirror leg ${params.MIRROR_INSTANCE} failed on ${params.MIRROR_HOST} — see the Ansible output above. Nothing is half-installed: the playbook proves broker reachability before it writes anything." }
+    // NOT "nothing is half-installed" — that was false and Codex r1 called it. A failed apply CAN
+    // leave shipped tooling or rendered configs behind. What the ordering does guarantee is that the
+    // RUNNING mirror is not taken down first: reachability is proved, tooling shipped, configs
+    // rendered and linted, and only then is the agent bounced, and only if something changed. So a
+    // failure leaves the previous leg still running, not a dark one.
+    failure { echo "mirror leg ${params.MIRROR_INSTANCE} failed on ${params.MIRROR_HOST} — see the Ansible output above. Files may be partially written; the previously running agent was NOT unloaded unless the log shows the bootout/bootstrap pair. Re-run this job: the playbook is idempotent and will re-render and reload." }
   }
 }
