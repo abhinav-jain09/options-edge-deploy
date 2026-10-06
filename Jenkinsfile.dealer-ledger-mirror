@@ -1,0 +1,97 @@
+// Provision a Kafka mirror-maker leg of the dealer-ledger OFFLOAD lane via Ansible
+// (ansible/dealer-ledger-mirror.yml). Mirror legs go through THIS job, never laid down by hand:
+// the 31 legs that already exist were hand-built, and on 2026-10-06 seven of the sixteen
+// prod-targeted ones were found silently NOT LOADED, with es4 holding 247,650 records that prod's
+// copy did not have. Hand-built infrastructure is infrastructure nobody can re-create.
+//
+// CONFIRM_DEPLOY=false -> validate inputs, prove BOTH brokers are reachable from the host the leg
+//                         runs on, print the plan, change nothing.
+// CONFIRM_DEPLOY=true  -> ship the Kafka tooling if absent, render the configs, install and
+//                         (re)bootstrap the launchd agent, and confirm launchd holds the label.
+//
+// THE LANE (offload requirement 3.2):
+//   dev(.102) --[leg 1, on .102]--> .74 --> ledger + scorer (k8s) --[leg 2, on .74]--> PROD(.252)
+//                                                                 --[leg 3, on .102]--> DEV(.102)
+// Legs touching dev run on .102 because dev's broker advertises host.docker.internal:19092, which
+// resolves only there. Leg 2 runs on .74 because prod advertises a routable address .74 can reach.
+pipeline {
+  agent { label 'local-mac' }
+  options { disableRestartFromStage(); disableConcurrentBuilds(); skipDefaultCheckout(false) }
+
+  parameters {
+    string(name: 'PERMITTED_SHA', defaultValue: '', trim: true,
+      description: 'REQUIRED — Deployment Permission Rule (options-edge rule.md). The full 40-character commit id of THIS repository that Abhinav permitted for this run. The Permitted commit guard stage refuses the build before any effect unless the checked-out HEAD is exactly this commit AND on origin/main; empty, short or mismatched values are refused and nothing is substituted. A manual click needs it too: copy it from `git rev-parse origin/main`.')
+    string(name: 'PERMITTED_SHA_GUARD_VERSION', defaultValue: '2f6fc2ab7aa51eb8a9e8aa350f2d774cd2fb7a253de2591e43645a19a9886b24',
+      description: 'DO NOT EDIT BY HAND — the sha256 of scripts/jenkins/permitted-sha-guard.sh this definition runs (Deployment Permission Rule). The guard refuses to run under any other value. It is a DECLARATION, not proof that this job enforces the guard: a caller that triggers this job judges its SCM definition and its Jenkinsfile at the forwarded commit (scripts/jenkins/require-guarded-downstream.sh). Regenerate with scripts/jenkins/permitted-sha-guard-version.sh when the guard changes.')
+    choice(name: 'MIRROR_HOST', choices: ['mac74'],
+      description: 'Inventory host the leg RUNS ON (ansible/inventory/oe-offload.yml). Only .74 today: the legs that touch dev must run on .102, where they are managed by launchd directly.')
+    string(name: 'MIRROR_INSTANCE', defaultValue: 'dl-mirror-mac74-to-prod', trim: true,
+      description: 'Instance slug. Becomes ~/oe-ops/<slug> on the target and the launchd label com.optionsedge.<slug>. Lowercase letters, digits and hyphens.')
+    string(name: 'MIRROR_SOURCE', defaultValue: '127.0.0.1:9092', trim: true,
+      description: 'Source bootstrap, AS ADDRESSED FROM MIRROR_HOST. For leg 2 the source is .74 own broker, so localhost.')
+    string(name: 'MIRROR_TARGET', defaultValue: '192.168.100.252:9092', trim: true,
+      description: 'Target bootstrap, as addressed from MIRROR_HOST.')
+    string(name: 'MIRROR_TOPICS', defaultValue: 'dealer-ledger-profile dealer-ledger-state dealer-ledger-signal-fired dealer-ledger-outcome-scored', trim: true,
+      description: 'Space-separated topic names. The playbook escapes the dots and joins them into the mirror-maker whitelist regex — do not pass a regex.')
+    string(name: 'MIRROR_GROUP_ID', defaultValue: 'oe-prod-mirror-from-mac74', trim: true,
+      description: 'Consumer group at the SOURCE. Changing it re-reads from MIRROR_AUTO_OFFSET_RESET rather than resuming.')
+    choice(name: 'MIRROR_AUTO_OFFSET_RESET', choices: ['latest', 'earliest'],
+      description: 'latest (default) starts at the live tail. earliest REPLAYS the whole retained lineage into the target — .74 held 371,168 profile records on 2026-10-06, so pick it deliberately.')
+    choice(name: 'MIRROR_STATE', choices: ['present', 'absent'],
+      description: 'absent unloads the agent and removes the plist and instance directory. It does NOT delete topics or reset offsets.')
+    booleanParam(name: 'CONFIRM_DEPLOY', defaultValue: false,
+      description: 'OFF = validate + reachability + plan only. ON = actually install and load the agent.')
+  }
+
+  stages {
+    // ---- Deployment Permission Rule (options-edge rule.md): Jenkins enforces the permitted commit ----
+    // PERMITTED_SHA is REQUIRED. scripts/jenkins/permitted-sha-guard.sh refuses, in this order: a checkout
+    // that is not on origin/main; a missing, empty, short or malformed PERMITTED_SHA (nothing is
+    // substituted); a checked-out HEAD that is not exactly PERMITTED_SHA. It runs FIRST, in the workspace
+    // every later stage uses, so nothing below can ship a file, render a config, install a launchd agent
+    // or load one under an unpermitted commit. error(), never catchError: a refusal is a stop.
+    stage('Permitted commit guard') {
+      options { timeout(time: 10, unit: 'MINUTES') }
+      steps {
+        script {
+          def rc = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')
+          if (rc != 0) {
+            error("Permitted commit guard REFUSED this build (rc=${rc}) — see its output above. No provisioning effect has run.")
+          }
+          env.PERMITTED_SHA_GUARD = 'PASSED'
+        }
+      }
+    }
+    stage('Validate tooling') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
+      steps {
+        sh '''
+          set -euo pipefail
+          ansible-playbook --version | head -1
+          ansible-inventory -i ansible/inventory/oe-offload.yml --list >/dev/null
+          echo "inventory parses"
+        '''
+      }
+    }
+    stage('Provision mirror leg (Ansible)') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
+      steps {
+        script {
+          // Every value reaches the playbook from the build's parameters (Jenkins exposes each one, defaults
+          // included, as an environment variable). The playbook run is a DEDICATED step — its whole body is
+          // the one command — right after the verify of the tree it reads (Deployment Permission Rule,
+          // validator rule 9b): nothing can run between the verification and the consumption.
+          echo "leg ${params.MIRROR_INSTANCE} on ${params.MIRROR_HOST}: ${params.MIRROR_SOURCE} -> ${params.MIRROR_TARGET} state=${params.MIRROR_STATE} confirm=${params.CONFIRM_DEPLOY}"
+          timeout(time: 10, unit: 'MINUTES') {
+            sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp'
+          }
+          sh 'ansible-playbook -i ansible/inventory/oe-offload.yml ansible/dealer-ledger-mirror.yml -e "mirror_host=${MIRROR_HOST}" -e "mirror_instance=${MIRROR_INSTANCE}" -e "mirror_source=${MIRROR_SOURCE}" -e "mirror_target=${MIRROR_TARGET}" -e "mirror_topics=${MIRROR_TOPICS}" -e "mirror_group_id=${MIRROR_GROUP_ID}" -e "mirror_auto_offset_reset=${MIRROR_AUTO_OFFSET_RESET}" -e "mirror_state=${MIRROR_STATE}" -e "confirm_mirror_deploy=${CONFIRM_DEPLOY}"'
+        }
+      }
+    }
+  }
+  post {
+    success { echo "mirror leg ${params.MIRROR_INSTANCE}: ${params.CONFIRM_DEPLOY ? "state=${params.MIRROR_STATE} applied" : 'validated (plan only)'} on ${params.MIRROR_HOST}." }
+    failure { echo "mirror leg ${params.MIRROR_INSTANCE} failed on ${params.MIRROR_HOST} — see the Ansible output above. Nothing is half-installed: the playbook proves broker reachability before it writes anything." }
+  }
+}

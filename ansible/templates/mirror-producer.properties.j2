@@ -1,0 +1,8 @@
+# MANAGED BY ANSIBLE — ansible/dealer-ledger-mirror.yml
+bootstrap.servers={{ oe_target }}
+compression.type={{ oe_compression }}
+# acks=all, not the default 1. A mirror that loses an acknowledged batch loses it silently and
+# forever: there is no replay, because the consumer offset is already committed. This repository has
+# a recorded incident where acks=1 lost a footprint bar on an unclean broker stop.
+acks=all
+enable.idempotence=true

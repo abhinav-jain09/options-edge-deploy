@@ -1,0 +1,21 @@
+---
+# Inventory for the dealer-ledger OFFLOAD lane (.74) and the hosts its mirrors bridge.
+#
+# WHY AN INVENTORY AT ALL. ansible/loki-stack.yml runs hosts=localhost/connection=local because it
+# drives kubectl and helm against a cluster. The mirror lane is different: it must lay FILES and a
+# launchd agent down on another machine, so the target is a real managed node and the connection
+# details belong in version control rather than in whoever's ~/.ssh/config happens to be on the agent.
+all:
+  children:
+    offload:
+      hosts:
+        mac74:
+          ansible_host: 192.168.100.74
+          ansible_user: rajuljain
+          # MUST be pinned. .74's /usr/bin/python3 and /usr/local/bin/python3 are BOTH 3.7.4, which
+          # ansible-core 2.21 refuses as a managed-node interpreter. The uv-managed 3.12 installed
+          # for earlier offload work is the only usable one; discovery would find 3.7.4 and fail.
+          ansible_python_interpreter: /Users/rajuljain/.local/share/uv/python/cpython-3.12.14-macos-aarch64-none/bin/python3
+          # .74 has no Homebrew, so no coreutils: no `timeout`, no `gtar`. Anything templated onto
+          # this host must assume BSD userland and bash 3.2.57.
+          oe_home: /Users/rajuljain

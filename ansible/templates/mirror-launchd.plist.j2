@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- MANAGED BY ANSIBLE — ansible/dealer-ledger-mirror.yml -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>{{ oe_label }}</string>
+  <key>ProgramArguments</key>
+  <array><string>{{ oe_instance_dir }}/run-mirror.sh</string></array>
+  <key>EnvironmentVariables</key>
+  <dict><key>PATH</key><string>/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>30</integer>
+  <key>StandardOutPath</key><string>{{ oe_instance_dir }}/mirror.out.log</string>
+  <key>StandardErrorPath</key><string>{{ oe_instance_dir }}/mirror.err.log</string>
+</dict>
+</plist>

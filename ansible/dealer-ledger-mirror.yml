@@ -1,0 +1,217 @@
+---
+# Provision a Kafka mirror-maker leg of the dealer-ledger OFFLOAD lane, on the host that leg runs on.
+# Intended to run from Jenkins (Jenkinsfile.dealer-ledger-mirror) — NEVER laid down by hand.
+#
+#   ansible-playbook -i ansible/inventory/oe-offload.yml ansible/dealer-ledger-mirror.yml   # plan only
+#   ansible-playbook -i ansible/inventory/oe-offload.yml ansible/dealer-ledger-mirror.yml \
+#       -e confirm_mirror_deploy=true                                                       # apply
+#
+# THE LANE (offload requirement 3.2). The dealer ledger is memory-hungry and unproven, so it runs on
+# .74 rather than on dev or prod:
+#
+#   dev(.102) --[leg 1: 6 input topics, mirror ON .102]--> .74 --> ledger + calibration scorer (k8s)
+#                                                           |
+#                        [leg 2: mirror ON .74] <-----------+-----------> [leg 3: mirror ON .102]
+#                                 v                                                v
+#                            PROD(.252)                                       DEV(.102)
+#
+# WHY EACH LEG SITS WHERE IT DOES, and why leg 2 cannot simply run on .102 with the others: dev's
+# broker advertises host.docker.internal:19092, which is host-relative and resolvable ONLY on .102,
+# so any leg touching dev must run there. Prod advertises a routable 192.168.100.252:9092, which .74
+# can reach (verified from .74: /dev/tcp to 192.168.100.252:9092 succeeds), so leg 2 runs on .74 and
+# keeps prod's feed off .102's already-loaded mirror host.
+#
+# Inputs arrive via -e and are normalized into oe_* vars below — never `x: "{{ x | default(...) }}"`,
+# which ansible-core 2.21 rejects as a recursive self-reference (same rule as loki-stack.yml).
+- name: Provision a dealer-ledger mirror leg
+  hosts: "{{ mirror_host | default('mac74') }}"
+  gather_facts: true
+
+  vars:
+    oe_instance: "{{ mirror_instance | default('dl-mirror-mac74-to-prod') }}"
+    oe_source: "{{ mirror_source | default('127.0.0.1:9092') }}"
+    oe_target: "{{ mirror_target | default('192.168.100.252:9092') }}"
+    oe_topics: "{{ mirror_topics | default('dealer-ledger-profile dealer-ledger-state dealer-ledger-signal-fired dealer-ledger-outcome-scored') }}"
+    oe_group_id: "{{ mirror_group_id | default('oe-prod-mirror-from-mac74') }}"
+    # latest, deliberately. The ledger on .74 holds the whole lineage since it was built (371k profile
+    # records on 2026-10-06); 'earliest' would replay all of it into prod on first start. Prod wants
+    # the live tail, and close-direction evaluates on fresh frames only.
+    oe_auto_offset_reset: "{{ mirror_auto_offset_reset | default('latest') }}"
+    oe_compression: "{{ mirror_compression | default('lz4') }}"
+    oe_num_streams: "{{ mirror_num_streams | default(1) }}"
+    oe_state: "{{ mirror_state | default('present') }}"
+    oe_confirm: "{{ confirm_mirror_deploy | default(false) | bool }}"
+    oe_rationale: "{{ mirror_rationale | default('leg 2 of the offload lane: ledger outputs from .74 to prod. Runs ON .74 because prod advertises a routable address .74 can reach, keeping prod independent of .102 mirror load.') }}"
+
+    # ansible_facts['env'], not ansible_env: INJECT_FACTS_AS_VARS defaults to True today but is
+    # deprecated and goes away in ansible-core 2.24, at which point the top-level alias disappears.
+    oe_home: "{{ hostvars[inventory_hostname].oe_home | default(ansible_facts['env']['HOME']) }}"
+    oe_root: "{{ oe_home }}/oe-ops"
+    oe_instance_dir: "{{ oe_root }}/{{ oe_instance }}"
+    oe_label: "com.optionsedge.{{ oe_instance }}"
+    oe_plist: "{{ oe_home }}/Library/LaunchAgents/{{ oe_label }}.plist"
+    # The mirror needs a Kafka distribution that still SHIPS kafka.tools.MirrorMaker. It was removed
+    # in Kafka 4.x — prod itself runs 4.3.0 — so every mirror in this estate runs the confluent-7.3.1
+    # (Kafka 3.3-era) tooling. Only bin/ and share/java/kafka/ are needed (~183 MB of a 6.5 GB tree).
+    oe_kafka_tools: "{{ oe_home }}/oe-kafka-tools/confluent-7.3.1"
+    oe_tools_src: "{{ kafka_tools_src | default('/Users/abhinav/development/confluent-7.3.1') }}"
+    oe_topics_list: "{{ oe_topics.split() }}"
+    oe_tools_tar: /tmp/oe-kafka-tools-confluent-7.3.1.tgz
+    oe_topics_regex: "{{ oe_topics_list | map('regex_replace', '\\.', '\\\\.') | join('|') }}"
+
+  tasks:
+    - name: Validate inputs
+      ansible.builtin.assert:
+        that:
+          - oe_instance | length > 0
+          - oe_instance is match('^[a-z0-9][a-z0-9-]*$')
+          - oe_source | length > 0
+          - oe_target | length > 0
+          - oe_source != oe_target
+          - oe_topics_list | length > 0
+          - oe_auto_offset_reset in ['latest', 'earliest']
+          - oe_state in ['present', 'absent']
+          - oe_num_streams | int >= 1
+        fail_msg: >-
+          mirror_instance must be a lowercase slug; source and target must both be set and differ;
+          at least one topic; auto_offset_reset latest|earliest; state present|absent.
+
+    # A mirror whose source or target is unreachable FROM THE HOST IT RUNS ON installs cleanly, goes
+    # into a connect-retry loop, and reports nothing. Prove both hops from the managed node before
+    # laying anything down. bash 3.2 /dev/tcp — this host has no coreutils `timeout` and no nc.
+    - name: Prove the source broker is reachable from this host
+      ansible.builtin.shell: 'exec 3<>/dev/tcp/{{ oe_source.split(":")[0] }}/{{ oe_source.split(":")[1] }}'
+      args: { executable: /bin/bash }
+      changed_when: false
+      when: oe_state == 'present'
+
+    - name: Prove the target broker is reachable from this host
+      ansible.builtin.shell: 'exec 3<>/dev/tcp/{{ oe_target.split(":")[0] }}/{{ oe_target.split(":")[1] }}'
+      args: { executable: /bin/bash }
+      changed_when: false
+      when: oe_state == 'present'
+
+    - name: Report the plan
+      ansible.builtin.debug:
+        msg:
+          - "instance : {{ oe_instance }}   state={{ oe_state }}  confirm={{ oe_confirm }}"
+          - "route    : {{ oe_source }}  ->  {{ oe_target }}"
+          - "topics   : {{ oe_topics_list | join(', ') }}"
+          - "regex    : {{ oe_topics_regex }}"
+          - "group    : {{ oe_group_id }}  auto.offset.reset={{ oe_auto_offset_reset }}"
+          - "dir      : {{ oe_instance_dir }}"
+          - "agent    : {{ oe_label }}"
+
+    - name: Stop here when not confirmed (plan only)
+      ansible.builtin.meta: end_play
+      when: not oe_confirm
+
+    # ---------------- teardown ----------------
+    - name: Unload the launchd agent
+      ansible.builtin.command: 'launchctl bootout gui/{{ ansible_user_uid }}/{{ oe_label }}'
+      register: oe_bootout
+      changed_when: oe_bootout.rc == 0
+      failed_when: false
+
+    - name: Remove the agent plist and instance directory
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ oe_plist }}"
+        - "{{ oe_instance_dir }}"
+      when: oe_state == 'absent'
+
+    - name: Stop here when tearing down
+      ansible.builtin.meta: end_play
+      when: oe_state == 'absent'
+
+    # ---------------- Kafka tooling ----------------
+    - name: Check whether the Kafka tooling is already present
+      ansible.builtin.stat:
+        path: "{{ oe_kafka_tools }}/bin/kafka-mirror-maker"
+      register: oe_tools
+
+    - name: Pack the minimal Kafka tooling on the controller
+      ansible.builtin.command:
+        cmd: 'tar -czf {{ oe_tools_tar }} -C {{ oe_tools_src }} bin share/java/kafka'
+        creates: "{{ oe_tools_tar }}"
+      delegate_to: localhost
+      when: not oe_tools.stat.exists
+
+    - name: Ship and unpack the Kafka tooling
+      ansible.builtin.unarchive:
+        src: "{{ oe_tools_tar }}"
+        dest: "{{ oe_kafka_tools }}"
+        remote_src: false
+        creates: "{{ oe_kafka_tools }}/bin/kafka-mirror-maker"
+      when: not oe_tools.stat.exists
+
+    - name: Make the Kafka tooling executable
+      ansible.builtin.file:
+        path: "{{ oe_kafka_tools }}/bin"
+        mode: '0755'
+        recurse: true
+      when: not oe_tools.stat.exists
+
+    # ---------------- the mirror instance ----------------
+    - name: Create the instance and LaunchAgents directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ oe_instance_dir }}"
+        - "{{ oe_home }}/Library/LaunchAgents"
+
+    - name: Render the mirror configuration
+      ansible.builtin.template:
+        src: "{{ item.src }}"
+        dest: "{{ oe_instance_dir }}/{{ item.dest }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - { src: mirror-run.sh.j2,                dest: run-mirror.sh,         mode: '0755' }
+        - { src: mirror-consumer.properties.j2,   dest: consumer.properties,   mode: '0644' }
+        - { src: mirror-producer.properties.j2,   dest: producer.properties,   mode: '0644' }
+        - { src: mirror-log4j.properties.j2,      dest: log4j.properties,      mode: '0644' }
+      register: oe_rendered
+
+    - name: Install the launchd agent
+      ansible.builtin.template:
+        src: mirror-launchd.plist.j2
+        dest: "{{ oe_plist }}"
+        mode: '0644'
+      register: oe_agent
+
+    - name: Validate the rendered agent plist
+      ansible.builtin.command: 'plutil -lint {{ oe_plist }}'
+      changed_when: false
+
+    - name: Validate the rendered launcher syntax
+      ansible.builtin.command: 'bash -n {{ oe_instance_dir }}/run-mirror.sh'
+      changed_when: false
+
+    # bootout then bootstrap, so a config change is actually picked up: launchctl does not re-read a
+    # plist for an already-loaded label, and a mirror running the previous route would otherwise
+    # survive a "successful" apply.
+    - name: Unload any previous instance of the agent
+      ansible.builtin.command: 'launchctl bootout gui/{{ ansible_user_uid }}/{{ oe_label }}'
+      register: oe_pre_bootout
+      changed_when: oe_pre_bootout.rc == 0
+      failed_when: false
+
+    - name: Load the agent
+      ansible.builtin.command: 'launchctl bootstrap gui/{{ ansible_user_uid }} {{ oe_plist }}'
+
+    - name: Confirm launchd actually holds the label
+      ansible.builtin.shell: 'launchctl list | grep -F "{{ oe_label }}"'
+      args: { executable: /bin/bash }
+      register: oe_loaded
+      changed_when: false
+      retries: 6
+      delay: 5
+      until: oe_loaded.rc == 0
+
+    - name: Report what launchd holds
+      ansible.builtin.debug:
+        msg: "{{ oe_label }} -> {{ oe_loaded.stdout }}"

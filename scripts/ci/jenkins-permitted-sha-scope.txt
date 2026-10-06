@@ -33,6 +33,7 @@ Jenkinsfile.es4-deploy                    | in  |                               
 Jenkinsfile.fullfunding-deploy            | in  |                                 | applies the fullfunding tenant slice to production
 Jenkinsfile.kafka-cleanup                 | in  |                                 | manual-only (cron retired): creates a changelog-cleanup Job on the cluster and deletes orphaned Streams topics; its post{} Job prune is gated on the guard flag
 Jenkinsfile.kafka-reset                   | in  |                                 | manual-only (cron retired): copies and runs the Streams-state reset on the prod host over ssh
+Jenkinsfile.dealer-ledger-mirror          | in  |                                 | Ansible-provisions a dealer-ledger offload mirror leg (ships Kafka tooling, renders configs, loads a launchd agent) on .74 (CONFIRM_DEPLOY)
 Jenkinsfile.loki                          | in  |                                 | helm upgrade --install of Loki/Promtail into a cluster via Ansible (CONFIRM_DEPLOY)
 Jenkinsfile.nifty-gex-service             | in  |                                 | clones the nifty-gex app repo, docker builds+pushes it (bound separately by NIFTY_PERMITTED_SHA) and rolls the workload
 Jenkinsfile.replay                        | in  |                                 | (re)creates the timewarp replay Job on the dev cluster
