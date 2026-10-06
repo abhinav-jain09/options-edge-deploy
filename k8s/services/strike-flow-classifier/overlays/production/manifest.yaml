@@ -60,6 +60,8 @@ spec:
     spec:
       containers:
         - env:
+            - name: STRIKE_FLOW_NEAR_SPOT_ENABLED
+              value: "true"
             - name: APP_MARKET_DATA_SOURCE
               value: DATABENTO
             - name: STRIKE_FLOW_SOURCE

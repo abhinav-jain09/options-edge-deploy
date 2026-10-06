@@ -1,0 +1,25 @@
+# PROD-ONLY: turns on the near-spot 0DTE SPXW semantic signal's live producer
+# (strike-flow-classifier-service, Milestones 1+2, options-edge-processing #952/#955).
+# options.databento.near-spot-semantic was declared (scripts/kafka/topics.env) but had NO
+# producer anywhere — the code default is STRIKE_FLOW_NEAR_SPOT_ENABLED=false, and nothing
+# in base or any overlay had ever set it true, on any environment. es-compression-expansion
+# (PROD-ONLY SHADOW, #1149) already reads this topic as KAFKA_ESCX_NEAR_SPOT_TOPIC — its own
+# comment calls the options-side inputs (near-spot included) the ONLY signal that can still
+# separate holds from failures at a compression breach, and says they "exist only live". That
+# forward read has been running against an empty topic since #1149 merged.
+# PROD-ONLY, matching ESCX's own prod-only-shadow scope (dev has no ESCX, so dev gets no
+# near-spot producer either) — mirrors k8s/services/strike-flow-classifier/overlays/production,
+# validate-services enforces the render equality; MUST re-run generate-service-slices.sh after
+# any change here.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: strike-flow-classifier-databento
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: strike-flow-classifier
+          env:
+            - {name: STRIKE_FLOW_NEAR_SPOT_ENABLED, value: "true"}
