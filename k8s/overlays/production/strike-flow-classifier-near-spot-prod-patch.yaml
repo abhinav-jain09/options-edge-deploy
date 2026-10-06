@@ -13,23 +13,39 @@
 # any change here.
 #
 # CAUSAL_SKEW_TOLERANCE_MS raised 250ms -> 3000ms (2026-10-06, first live observation after
-# enabling the producer above). The 250ms seed assumed causal skew was sub-second JITTER between
-# near-synchronized feeds; live production data shows that's the wrong model. Measured directly
-# against options.opra.tcbbo and underlying.spx.price on prod: for 160 trades sampled against the
-# spot tick immediately preceding each one (the exact quantity the SPOT_STALE check compares),
-# the gap had a MEDIAN of ~570ms and a max of ~1725ms -- the great majority of live trades were
-# already refused at 250ms. This produced a ~100% SPOT_FUTURE_RELATIVE_TO_TRADE / SPOT_STALE /
-# DELTA_STALE refusal rate with zero accepted records in the minutes after rollout.
+# enabling the producer above, OWNER-DIRECTED fix -- see below). The 250ms seed assumed causal
+# skew was sub-second JITTER between near-synchronized feeds; live production data shows that's
+# the wrong model for the spot leg. Measured directly against options.opra.tcbbo and
+# underlying.spx.price on prod: for 160 trades, each paired with the spot tick immediately
+# preceding it (the nonnegative "age of the latest causally-admissible spot value" -- exactly the
+# STALE-side quantity SPOT_STALE compares), the gap had a MEDIAN of ~570ms and a max of ~1725ms.
+# This measurement method structurally cannot observe the FUTURE-side case (it only ever selects a
+# PRECEDING tick) -- it establishes the stale-side tail, not a "0% FUTURE risk" claim; no live
+# FUTURE-direction skew was separately measured. The observed effect was a ~100%
+# SPOT_FUTURE_RELATIVE_TO_TRADE / SPOT_STALE / DELTA_STALE refusal rate with zero accepted
+# records in the minutes after rollout.
+# DELTA leg: 2 independent GET samples of live gexdelta:SPX|<today>|<strike> entries (full-chain
+# batch updates -- one updatedAtMs shared across many strikes at once) showed updatedAtMs within
+# ~1-2s of wall-clock "now" at fetch time, consistent with the spot leg's magnitude -- not the
+# "comparable-or-worse, untested" assumption this comment originally carried. Still a small sample
+# (n=2 batch updates, via a temporary debug pod -- no redis-cli reachable from outside the
+# cluster), not as rigorous as the spot-leg measurement; both legs share this one constant.
 # This is NOT the drift the design doc's own "+50ms step, capped at 3 steps (150ms total)"
 # recalibration procedure is for -- that procedure assumes the seed was roughly right and is
 # drifting; max 400ms (250+150) cannot cover an observed ~1.7s tail. This is a wrong INITIAL seed
 # (sub-second jitter was the wrong model for OPRA trade dissemination latency vs. a near-
 # continuous SPX index tick stream), corrected once with real production evidence -- the exact
 # "calibrated in a follow-up phase against replay data" the seed's own doc comment anticipated.
-# 3000ms gives ~1.3s of margin over the observed max for the spot leg; the delta leg (GEX, Redis)
-# was not independently measured (no redis-cli available at calibration time) but is expected to
-# be comparable-or-worse since it is a heavier computed value -- both legs share this one
-# constant. Revisit via CausalLagGovernance once enough live volume accumulates to evaluate it.
+# OWNER SIGN-OFF: the owner directly requested this fix in-session after reviewing the ~100%
+# refusal rate and the measurement above (equivalent to the design doc's on-call sign-off for a
+# tolerance-change deployment; this correction is a one-time wrong-seed fix, not a step in the
+# repeated "+50ms, re-monitor" drift procedure, so it is not itself bound by the 3-step cap).
+# ROLLBACK/MONITORING: watch CausalLagGovernance's /metrics (causal-lag P99, refusal-rate trigger)
+# and the accepted-vs-refused ratio on options.databento.near-spot-semantic for the remainder of
+# this session and the next full trading session; if the refusal rate stays near-100% or the
+# governance trigger fires, revert this env var (git revert + redeploy) rather than stepping
+# further, and escalate to design-doc review before any further change to this constant.
+# 3000ms gives ~1.3s of margin over the observed spot-leg max.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
