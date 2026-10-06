@@ -38,6 +38,7 @@ L
 chmod +x "$WORK/bin/launchctl"
 cat > "$WORK/bin/ps" <<P
 #!/usr/bin/env bash
+[ -e "$WORK/ps_fails" ] && exit 1
 # the two forms the guard uses: 'ps -p <pid> -o command=' and 'ps -axo pid=,command='
 W="$WORK"; MDIR="$MDIR"
 case "\$*" in
@@ -58,12 +59,22 @@ chmod +x "$WORK/bin/ps"
 export PATH="$WORK/bin:$PATH" OE_RELOAD_SETTLE=0
 
 fail=0
-scenario() { # name  expect(pass|fail)  setup...
+scenario() { # name  expect(pass|fail)  [want=<substring>]  setup...
   local name="$1" expect="$2"; shift 2
-  rm -f "$WORK"/unload_fails "$WORK"/load_fails "$WORK"/wrong_binding "$WORK"/pid.* "$WORK"/phase
+  local want=""
+  case "${1:-}" in want=*) want="${1#want=}"; shift ;; esac
+  rm -f "$WORK"/unload_fails "$WORK"/load_fails "$WORK"/wrong_binding "$WORK"/ps_fails "$WORK"/pid.* "$WORK"/procs.* "$WORK"/phase
   "$@"
   set +e; out=$(bash "$WORK/reload.sh" 2>&1); rc=$?; set -e
   if { [ "$expect" = pass ] && [ "$rc" = 0 ]; } || { [ "$expect" = fail ] && [ "$rc" != 0 ]; }; then
+    # the LAST line only: a message printed from a subshell before it exited is still in $out, so
+    # matching anywhere let a scenario pass on another check's diagnosis — the refusal that ENDED the
+    # script is the last line
+    if [ -n "$want" ] && ! printf '%s' "$out" | tail -1 | grep -q -- "$want"; then
+      printf '  FAIL %-54s rc=%s refused for the WRONG reason (wanted %s): %s\n' "$name" "$rc" "$want" "$(printf '%s' "$out" | tail -1)"
+      fail=1
+      return
+    fi
     printf '  ok   %-54s rc=%s %s\n' "$name" "$rc" "$(printf '%s' "$out" | tail -1 | cut -c1-70)"
   else
     printf '  FAIL %-54s rc=%s (expected %s) %s\n' "$name" "$rc" "$expect" "$(printf '%s' "$out" | tail -1)"
@@ -94,7 +105,7 @@ scenario "loaded but no numeric pid (crashed on start)" fail setup_crashed
 
 # the same process as before: nothing actually restarted, so the new config is not in effect
 setup_same_pid() { setup_replaced; echo "100 0 $LBL" > "$WORK/pid.running"; }
-scenario "the pid is unchanged after the reload" fail setup_same_pid
+scenario "the pid is unchanged after the reload" fail want="the same process as before" setup_same_pid
 
 # a pid that belongs to another unit's config
 setup_wrong_binding() { setup_replaced; : > "$WORK/wrong_binding"; }
@@ -109,11 +120,16 @@ scenario "unload returns 0, the old pid lingers, load fails" fail setup_lingerin
 # the launchd REGISTRATION is gone but the old java process is alive: loading now would give the topic
 # a SECOND mirror, and a check that only reads `launchctl list` cannot see it
 setup_deregistered_but_alive() { setup_replaced; : > "$WORK/pid.unloaded"; echo "100 $MDIR/producer.properties" > "$WORK/procs.unloaded"; }
-scenario "registration gone, OLD process still publishing" fail setup_deregistered_but_alive
+scenario "registration gone, OLD process still publishing" fail want="would run a SECOND mirror" setup_deregistered_but_alive
 
 # the load succeeded and the new process is bound, but the old one never died: two mirrors, one topic
 setup_two_running() { setup_replaced; printf '100 %s\n200 %s\n' "$MDIR/producer.properties" "$MDIR/producer.properties" > "$WORK/procs.running"; }
-scenario "TWO processes publishing after the load" fail setup_two_running
+scenario "TWO processes publishing after the load" fail want="duplicate every record" setup_two_running
+
+# the process table cannot be read: empty output would say "nothing is running", and loading would
+# then start a SECOND mirror — an unreadable table is not an empty one
+setup_ps_fails() { setup_replaced; : > "$WORK/ps_fails"; }
+scenario "ps fails (the process table is unreadable)" fail want="cannot enumerate processes" setup_ps_fails
 
 # a first install: nothing was running, and a new pid is a success
 setup_first_install() {
@@ -124,4 +140,4 @@ setup_first_install() {
 scenario "a FIRST install (no old process) starts a pid" pass setup_first_install
 
 [ "$fail" = 0 ] || { echo "mirror reload guard: FAILED"; exit 1; }
-echo "mirror reload guard: 10 scenarios behave as specified"
+echo "mirror reload guard: 11 scenarios behave as specified"

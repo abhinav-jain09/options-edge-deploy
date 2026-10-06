@@ -16,16 +16,19 @@
 #   ansible-playbook ansible/es-mirrors.yml
 #   # dev
 #   ansible-playbook ansible/es-mirrors.yml -e confirm_mirror_install=true
-#   # prod
+#   # prod — needs the permitted commit, the same rule Jenkins enforces: this checkout must be on
+#   # origin/main and HEAD must be exactly that commit
 #   ansible-playbook ansible/es-mirrors.yml -e mirror_target_ip=192.168.100.252 -e mirror_target_port=9092 \
-#       -e confirm_mirror_install=true
+#       -e confirm_mirror_install=true -e permitted_sha=$(git rev-parse origin/main)
 #   # one topic
 #   ansible-playbook ansible/es-mirrors.yml -e only_topics=es.futures.footprint.bars -e confirm_mirror_install=true
 #
 # A unit is reloaded ONLY when something that matters differs: an EFFECTIVE property of
-# consumer/producer.properties (compared as java.util.Properties sees them, so a comment is not a
-# reason to open a gap in a live mirror), the bytes of log4j.properties/run-mirror.sh/the plist, an
-# absent file, an absent process, or a process OLDER than any of those files — MirrorMaker reads its
+# consumer/producer.properties (compared key-and-value with comments and key order ignored — not the
+# full java.util.Properties grammar; see ansible/templates/mirror-diff.sh.j2, which falls back to a
+# byte comparison wherever that parse would be unfaithful — so a comment is not a reason to open a gap
+# in a live mirror), the bytes of log4j.properties/run-mirror.sh/the plist, that the runner is still
+# executable, an absent file, an absent process, or a process OLDER than any of those files — MirrorMaker reads its
 # config once, at startup, so a rewritten file under an older process still runs the old settings.
 - name: Install the es4 -> environment MirrorMaker-1 units
   hosts: localhost
@@ -56,6 +59,11 @@
     # generation in this file — the parity gate reads the table and the templates, and could not see
     # a change to the Jinja that composes them.
     oe_dump: "{{ dump_rows | default('') }}"
+    # Deployment Permission Rule (options-edge rule.md): a PRODUCTION effect runs only under a commit
+    # Abhinav permitted, on main, proven inside the checkout the effect comes from. Jenkins enforces
+    # it per job; this playbook can reload a production unit from a laptop, so it enforces the same
+    # rule with the SAME script Jenkins runs — no local re-implementation to drift from it.
+    oe_permitted_sha: "{{ permitted_sha | default('') }}"
 
   tasks:
     - name: Validate the broker pair, fail-closed
@@ -69,12 +77,34 @@
           source must be es4 (192.168.100.4:9092) and target must be dev ({{ oe_dev_target }})
           or prod ({{ oe_prod_target }}); got source={{ oe_source }} target={{ oe_target }}.
 
+    - name: Enforce the permitted commit before any PRODUCTION effect
+      # The guard refuses: a checkout that is not on origin/main, a missing/short/malformed
+      # PERMITTED_SHA (nothing is substituted for it), and a HEAD that is not exactly that commit.
+      # Only a production INSTALL goes through it — a plan reads brokers and writes nothing, and dev
+      # is not production.
+      when: oe_confirm and (oe_target == oe_prod_target)
+      ansible.builtin.shell:
+        cmd: |
+          set -uo pipefail
+          cd "{{ playbook_dir }}/.."
+          PERMITTED_SHA="{{ oe_permitted_sha }}" \
+          PERMITTED_SHA_GUARD_VERSION="$(bash scripts/jenkins/permitted-sha-guard-version.sh)" \
+          bash scripts/jenkins/permitted-sha-guard.sh
+        executable: /bin/bash
+      register: oe_guard
+      changed_when: false
+      failed_when: oe_guard.rc != 0
+
     - name: Check the Kafka CLI is where this playbook expects it
+      # Not in dump mode: that path stops before any broker or unit access, and the identity gate runs
+      # it on a CI runner that has no confluent install.
+      when: oe_dump | length == 0
       ansible.builtin.stat:
         path: "{{ oe_kbin }}/kafka-mirror-maker"
       register: oe_mm_bin
 
     - name: Refuse without the CLI the units exec
+      when: oe_dump | length == 0
       ansible.builtin.assert:
         that: [oe_mm_bin.stat.exists]
         fail_msg: "{{ oe_kbin }}/kafka-mirror-maker not found — pass -e kafka_bin=<confluent>/bin."

@@ -21,11 +21,22 @@ pid_of() { launchctl list | awk -v l="$LBL" '$3==l{print $1}'; }
 # reads `launchctl list` sees one healthy pid and reports success while two mirrors write the same
 # records to the target. So the processes are counted directly, by the config path only this unit's
 # command line carries.
-procs_of() { ps -axo pid=,command= | grep -- "--producer.config $MDIR/producer.properties" | grep -v grep | awk '{print $1}'; }
+# An ENUMERATION FAILURE must not read as "nothing is running": empty output from a broken ps would
+# say no process lingers, and the load would then start a second mirror — the exact state this
+# function exists to prevent. So ps's status is checked and a failure exits the script.
+# It RETURNS non-zero on an enumeration failure and every call site checks it: `X=$(procs_of)` runs
+# the function in a SUBSHELL, so an `exit` inside it would end only that subshell and the script would
+# carry on with an empty list — which is the very lie this function exists to refuse.
+procs_of() {
+  local all
+  all=$(ps -axo pid=,command=) || { echo "FAIL: cannot enumerate processes (ps failed) — refusing to touch this unit, because an unreadable process table is indistinguishable from an empty one" >&2; return 1; }
+  printf '%s\n' "$all" | grep -- "--producer.config $MDIR/producer.properties" | grep -v grep | awk '{print $1}'
+  return 0
+}
 
 OLD=$(pid_of)
 launchctl unload "$PL" 2>/dev/null || true
-LINGER=$(procs_of)
+LINGER=$(procs_of) || exit 1
 if [ -n "$LINGER" ]; then
   echo "FAIL: the unload left process(es) still publishing this unit's config: $(printf '%s' "$LINGER" | tr '\n' ' ')"
   echo "      Loading now would run a SECOND mirror for the same topic. Stop them and re-run."
@@ -60,7 +71,7 @@ if ! ps -p "$NEW" -o command= | grep -q -- "--producer.config $MDIR/producer.pro
   exit 1
 fi
 # ...and it must be the ONLY one doing so
-RUNNING=$(procs_of)
+RUNNING=$(procs_of) || exit 1
 if [ "$(printf '%s\n' "$RUNNING" | grep -c .)" != "1" ]; then
   echo "FAIL: $(printf '%s\n' "$RUNNING" | grep -c .) processes are publishing this unit's config: $(printf '%s' "$RUNNING" | tr '\n' ' ')"
   echo "      Two mirrors on one topic duplicate every record into the target."

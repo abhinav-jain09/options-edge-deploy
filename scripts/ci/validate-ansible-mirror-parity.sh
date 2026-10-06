@@ -38,6 +38,22 @@ run_tpl = pathlib.Path("ansible/templates/run-mirror.sh.j2").read_text()
 log4j_tpl = pathlib.Path("ansible/templates/mirror-log4j.properties.j2").read_text()
 plist_tpl = pathlib.Path("ansible/templates/mirror.plist.j2").read_text()
 
+# ---- 1a. the two CONDITIONS, literally ----
+# The checks below strip Jinja tags symbolically rather than rendering them, so a weakened condition
+# — {% if item.isolation_level and false %}, or the same trick on the commit interval — would pass
+# every comparison while the rendered unit silently LOSES that setting. Both conditions are therefore
+# pinned as exact text; changing one has to be a deliberate edit here too.
+EXPECT_COND = {
+    "ansible/templates/mirror-consumer.properties.j2": "{% if item.isolation_level | string | length > 0 %}",
+    "ansible/templates/run-mirror.sh.j2": "{% if item.commit_interval | string | length > 0 %}",
+}
+for path, cond in EXPECT_COND.items():
+    text = pathlib.Path(path).read_text()
+    found = re.findall(r'\{%\s*if[^%]*%\}', text)
+    if found != [cond]:
+        fail.append(f"{path}: expected exactly one condition, {cond!r} — a weakened or extra "
+                    f"condition drops a live setting while every other check still passes. Found {found!r}")
+
 # ---- 1b. the DIRECTION of both bootstrap lines ----
 if tpl.split("\n")[0] != "bootstrap.servers={{ item.target }}":
     fail.append("ansible/templates/mirror-producer.properties.j2: line 1 must be "
