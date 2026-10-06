@@ -20,16 +20,23 @@ fail=0
 PB=ansible/es-mirrors.yml
 
 # ---- 1. the declared guard version ----
-declared=$(grep -oE 'oe_guard_version: "[0-9a-f]{64}"' "$PB" | head -1 | grep -oE '[0-9a-f]{64}' || true)
-[ -n "$declared" ] || { echo "FAIL: $PB does not declare oe_guard_version as a 64-hex literal"; fail=1; }
+# the hash must be a LITERAL at every invocation, in the playbook and in the binding script: as a
+# variable, `-e oe_guard_version=<hash of an edited guard>` would self-approve a modified guard
+STOP_TPL=ansible/templates/mirror-stop.sh.j2
+declared=""
+for f in "$PB" "$STOP_TPL"; do
+  h=$(grep -oE 'PERMITTED_SHA_GUARD_VERSION="[0-9a-f]{64}"' "$f" | head -1 | grep -oE '[0-9a-f]{64}' || true)
+  [ -n "$h" ] || { echo "FAIL: $f must pass PERMITTED_SHA_GUARD_VERSION as a 64-hex LITERAL, not a variable"; fail=1; continue; }
+  grep -qE 'PERMITTED_SHA_GUARD_VERSION="\{\{|PERMITTED_SHA_GUARD_VERSION="\$' "$f" \
+    && { echo "FAIL: $f still takes the guard version from a variable or a command"; fail=1; }
+  case "$declared" in "") declared="$h" ;; *) [ "$h" = "$declared" ] || { echo "FAIL: $f declares guard version $h, $PB declares $declared"; fail=1; } ;; esac
+done
 for jf in Jenkinsfile.es-cvd-mirror Jenkinsfile.es-indicator-mirror Jenkinsfile.es-auction-mirror \
           Jenkinsfile.es-futures-flow-mirror Jenkinsfile.es-strike-intel-mirror Jenkinsfile.es-tape-zones-mirror; do
   j=$(grep -A1 "name: 'PERMITTED_SHA_GUARD_VERSION'" "$jf" | grep -oE "defaultValue: '[0-9a-f]{64}'" | grep -oE '[0-9a-f]{64}' | head -1 || true)
   [ -n "$j" ] || { echo "FAIL: $jf does not declare a PERMITTED_SHA_GUARD_VERSION default"; fail=1; continue; }
   [ "$j" = "$declared" ] || { echo "FAIL: $jf declares guard version $j but $PB declares $declared"; fail=1; }
 done
-grep -q 'PERMITTED_SHA_GUARD_VERSION="{{ oe_guard_version }}"' "$PB" \
-  || { echo "FAIL: $PB must pass the DECLARED version to the guard — a computed one lets an edited guard self-approve"; fail=1; }
 grep -qE 'PERMITTED_SHA_GUARD_VERSION="\$\(' "$PB" \
   && { echo "FAIL: $PB computes the guard version from the checkout"; fail=1; }
 
@@ -64,13 +71,10 @@ PATS
 # An extra var outranks every var, fact and register, so the play-level conditions are advisory:
 # `-e oe_prod_permitted=true` defeated them. The lock that cannot be waved through is the one inside
 # the first script that touches a unit.
-STOP_TPL=ansible/templates/mirror-stop.sh.j2
 grep -qF 'if [ "$TGT" = "192.168.100.252:9092" ]; then' "$STOP_TPL" \
   || { echo "FAIL: $STOP_TPL must gate on the literal production target"; fail=1; }
 grep -qF 'bash scripts/jenkins/permitted-sha-guard.sh' "$STOP_TPL" \
   || { echo "FAIL: $STOP_TPL must re-run the repository's own permitted-commit guard for a production unit"; fail=1; }
-grep -qF 'PERMITTED_SHA_GUARD_VERSION="{{ oe_guard_version }}"' "$STOP_TPL" \
-  || { echo "FAIL: $STOP_TPL must pass the DECLARED guard version"; fail=1; }
 awk '/THE PRODUCTION LOCK LIVES HERE/{f=1} f&&/launchctl unload/{print "LATE"; exit} f&&/permitted-sha-guard.sh/{print "EARLY"; exit}' "$STOP_TPL" | grep -q EARLY \
   || { echo "FAIL: $STOP_TPL must run the guard BEFORE it unloads anything"; fail=1; }
 

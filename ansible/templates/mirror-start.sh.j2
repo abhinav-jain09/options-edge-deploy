@@ -12,6 +12,7 @@
 # test drive this with no wait, and defaults to the 8s a real unit needs before launchctl reports one.
 set -uo pipefail
 PL="{{ item.plist }}"; LBL="{{ item.label }}"; MDIR="{{ item.mdir }}"
+TGT="{{ item.target }}"; RE="{{ item.topic | regex_replace('\.', '\\.') }}"
 OLD="${OE_OLD_PID:-}"; SETTLE="${OE_RELOAD_SETTLE:-8}"
 
 # launchctl's own status matters: an unreadable list is not an unloaded unit. Returning empty there
@@ -58,4 +59,23 @@ if [ "$(printf '%s\n' "$RUNNING" | head -1)" != "$NEW" ]; then
   echo "FAIL: launchd reports pid $NEW for $LBL but the process publishing this config is $(printf '%s\n' "$RUNNING" | head -1)"
   exit 1
 fi
-echo "started: pid ${OLD:-none} -> $NEW, bound to $MDIR"
+# ...and no OTHER mirror is already carrying this (topic, target) from a different directory. The
+# count above is per CONFIG PATH, which cannot see a second unit installed elsewhere that mirrors the
+# same topic to the same broker — two such processes duplicate every record, and nothing about this
+# unit's own files would reveal it. The target is read from each candidate's own producer config,
+# because the same source topic IS legitimately mirrored to dev and to production at once.
+ALL=$(ps -axo pid=,command=) || { echo "FAIL: cannot enumerate processes (ps failed) — cannot prove this is the only mirror for this topic and target"; exit 1; }
+DUPES=""
+while read -r pid cfg; do
+  [ -n "${cfg:-}" ] || continue
+  [ "$cfg" = "$MDIR/producer.properties" ] && continue
+  if grep -qx "bootstrap.servers=$TGT" "$cfg" 2>/dev/null; then DUPES="$DUPES $pid"; fi
+done <<EOFD
+$(printf '%s\n' "$ALL" | grep -F -- "--whitelist '$RE'" | grep -v grep \
+   | sed -E 's/^[[:space:]]*([0-9]+).*--producer\.config[[:space:]]+"?([^"[:space:]]+)"?.*/\1 \2/')
+EOFD
+if [ -n "$DUPES" ]; then
+  echo "FAIL: another mirror is publishing $RE to $TGT from a different unit directory (pid(s):$DUPES) — two mirrors on one topic duplicate every record"
+  exit 1
+fi
+echo "started: pid ${OLD:-none} -> $NEW, bound to $MDIR, the only mirror for this topic and target"

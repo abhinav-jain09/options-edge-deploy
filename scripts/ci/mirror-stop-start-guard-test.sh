@@ -31,11 +31,13 @@ for pair in "stop:$STOP_TPL" "start:$START_TPL"; do
   n=${pair%%:*}; t=${pair#*:}
   sed -e "s|{{ item.plist }}|$PL|g" -e "s|{{ item.label }}|$LBL|g" -e "s|{{ item.mdir }}|$MDIR|g" \
       -e "s|{{ item.target }}|127.0.0.1:19092|g" -e "s|{{ playbook_dir }}|$PWD/ansible|g" \
+      -E -e "s#\{\{ item\.topic[^}]*\}\}#es\\.test\\.topic#g" \
       -e "s|{{ oe_permitted_sha }}||g" -e "s|{{ oe_guard_version }}|deadbeef|g" "$t" > "$WORK/$n.sh"
   chmod +x "$WORK/$n.sh"
   grep -q '{{' "$WORK/$n.sh" && { echo "FAIL: the rendered $n guard still has unresolved expressions — this test's substitution list is stale"; exit 1; }
   sed -e "s|{{ item.plist }}|$PL|g" -e "s|{{ item.label }}|$LBL|g" -e "s|{{ item.mdir }}|$MDIR|g" \
       -e "s|{{ item.target }}|192.168.100.252:9092|g" -e "s|{{ playbook_dir }}|$PWD/ansible|g" \
+      -E -e "s#\{\{ item\.topic[^}]*\}\}#es\\.test\\.topic#g" \
       -e "s|{{ oe_permitted_sha }}||g" -e "s|{{ oe_guard_version }}|deadbeef|g" "$t" > "$WORK/$n-prod.sh"
   chmod +x "$WORK/$n-prod.sh"
 done
@@ -64,10 +66,11 @@ cat > "$WORK/bin/ps" <<P
 W="$WORK"; MDIR="$MDIR"
 case "\$*" in
   *-axo*)
-    # every process currently publishing SOME unit's config, per phase
+    # every process currently publishing SOME unit's config, per phase. The command line carries the
+    # whitelist too, so the start guard can look for another unit mirroring the SAME topic.
     while read -r pid path; do
       [ -n "\$pid" ] || continue
-      echo "\$pid java kafka.tools.MirrorMaker --producer.config \$path"
+      echo "\$pid java kafka.tools.MirrorMaker --producer.config \$path --whitelist 'es\\.test\\.topic' --num.streams 1"
     done < "\$W/procs.\$(cat "\$W/phase")" 2>/dev/null
     ;;
   *)
@@ -186,5 +189,45 @@ scenario start "ps fails while proving it is the only one" fail want="cannot enu
 setup_start_list_fails() { setup_replaced; echo unloaded > "$WORK/phase"; : > "$WORK/list_fails"; }
 scenario start "launchctl list fails after a successful load" fail want="cannot read launchctl list" setup_start_list_fails
 
-[ "$fail" = 0 ] || { echo "mirror reload guard: FAILED"; exit 1; }
-echo "mirror stop/start guards: 16 scenarios behave as specified"
+# ---- ANOTHER unit mirroring the same topic to the same target ----
+# The count above is per CONFIG PATH, so it cannot see a second unit installed elsewhere that mirrors
+# the same topic to the same broker — two such processes duplicate every record. Driven on its own
+# fixture: this one needs the whitelist and a second unit's producer config, not the phase machinery
+# the scenarios above share.
+dup_check() {
+  local D; D=$(mktemp -d)
+  mkdir -p "$D/bin" "$D/unit" "$D/other"; : > "$D/u.plist"
+  printf 'bootstrap.servers=127.0.0.1:19092\n' > "$D/other/producer.properties"
+  sed -E -e "s|{{ item.plist }}|$D/u.plist|g" -e "s|{{ item.label }}|L|g" -e "s|{{ item.mdir }}|$D/unit|g" \
+         -e "s|{{ item.target }}|127.0.0.1:19092|g" -e "s|{{ playbook_dir }}|$PWD/ansible|g" \
+         -e "s#\{\{ item\.topic[^}]*\}\}#es\\\\.test\\\\.topic#g" "$START_TPL" > "$D/start.sh"
+  if grep -q '{{' "$D/start.sh"; then echo "  FAIL duplicate-mirror check: unresolved expressions in the rendering"; fail=1; rm -rf "$D"; return; fi
+  cat > "$D/bin/launchctl" <<L
+#!/usr/bin/env bash
+[ "\$1" = list ] && echo "200 0 L"
+exit 0
+L
+  cat > "$D/bin/ps" <<P
+#!/usr/bin/env bash
+echo "200 java kafka.tools.MirrorMaker --producer.config $D/unit/producer.properties --whitelist 'es\\.test\\.topic' --num.streams 1"
+[ -e "$D/with_other" ] && echo "300 java kafka.tools.MirrorMaker --producer.config $D/other/producer.properties --whitelist 'es\\.test\\.topic' --num.streams 1"
+exit 0
+P
+  chmod +x "$D/bin"/*
+  local out rc
+  set +e; out=$(PATH="$D/bin:$PATH" OE_RELOAD_SETTLE=0 bash "$D/start.sh" 2>&1); rc=$?; set -e
+  if [ "$rc" = 0 ]; then printf '  ok   %-54s rc=%s\n' "this unit alone is accepted" "$rc"
+  else printf '  FAIL %-54s rc=%s %s\n' "this unit alone is accepted" "$rc" "$out"; fail=1; fi
+  : > "$D/with_other"
+  set +e; out=$(PATH="$D/bin:$PATH" OE_RELOAD_SETTLE=0 bash "$D/start.sh" 2>&1); rc=$?; set -e
+  if [ "$rc" != 0 ] && printf '%s' "$out" | tail -1 | grep -q 'from a different unit directory'; then
+    printf '  ok   %-54s rc=%s\n' "ANOTHER unit on this topic and target is refused" "$rc"
+  else
+    printf '  FAIL %-54s rc=%s %s\n' "ANOTHER unit on this topic and target is refused" "$rc" "$out"; fail=1
+  fi
+  rm -rf "$D"
+}
+dup_check
+
+[ "$fail" = 0 ] || { echo "mirror stop/start guards: FAILED"; exit 1; }
+echo "mirror stop/start guards: 16 scenarios and the duplicate-mirror check behave as specified"

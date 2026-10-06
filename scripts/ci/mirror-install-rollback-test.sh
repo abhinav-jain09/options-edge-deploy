@@ -28,6 +28,20 @@ if brk == "break":
     if old not in cmd:
         print("NO_PUT"); raise SystemExit(0)
     cmd = cmd.replace(old, 'put run-mirror.sh       "/nonexistent-dir/run-mirror.sh" 0755')
+elif brk == "break-mktemp":
+    # the exact window the ORDER exists for: if the mkdir ran before the backup directory and the
+    # trap, a mktemp failure exited with a new empty unit directory left behind and no trap to undo it
+    old = 'BK=$(mktemp -d)'
+    if old not in cmd:
+        print("NO_MKTEMP"); raise SystemExit(0)
+    cmd = cmd.replace(old, 'BK=$(false)')
+elif brk == "break-early":
+    # the window between the mkdir and the first move: with the trap set after the mkdir, a failure
+    # here left a new empty unit directory behind
+    old = 'backup "$M/$f" "$f"'
+    if old not in cmd:
+        print("NO_BACKUP"); raise SystemExit(0)
+    cmd = cmd.replace(old, 'backup "$M/$f" "$f"; false')
 pathlib.Path(T + "/install.sh").write_text(cmd)
 print("OK")
 PY
@@ -89,5 +103,27 @@ else
   printf '  FAIL %-44s rc=%s files=%s plist=%s dir=%s out=%s\n' "a failed FIRST install leaves nothing" "$rc" "$left" "$plist_left" "$dir_left" "$out"; fail=1
 fi
 
+# ---- a mktemp failure must not leave a unit directory behind ----
+D="$WORK/mktemp"; seed "$D"; rm -rf "$D/unit" "$D/u.plist"
+r=$(render "$D" break-mktemp); [ "$r" = OK ] || { echo "FAIL: cannot extract/patch the install task body ($r)"; exit 1; }
+set +e; out=$(bash "$D/install.sh" 2>&1); rc=$?; set -e
+dir_left=$([ -d "$D/unit" ] && echo 1 || echo 0)
+if [ "$rc" != 0 ] && [ "$dir_left" = 0 ]; then
+  printf '  ok   %-44s rc=%s dir=%s\n' "a mktemp failure leaves no directory" "$rc" "$dir_left"
+else
+  printf '  FAIL %-44s rc=%s dir=%s out=%s\n' "a mktemp failure leaves no directory" "$rc" "$dir_left" "$out"; fail=1
+fi
+
+# ---- a failure in the window right after the mkdir also leaves nothing ----
+D="$WORK/early"; seed "$D"; rm -rf "$D/unit" "$D/u.plist"
+r=$(render "$D" break-early); [ "$r" = OK ] || { echo "FAIL: cannot extract/patch the install task body ($r)"; exit 1; }
+set +e; out=$(bash "$D/install.sh" 2>&1); rc=$?; set -e
+dir_left=$([ -d "$D/unit" ] && echo 1 || echo 0)
+if [ "$rc" != 0 ] && [ "$dir_left" = 0 ]; then
+  printf '  ok   %-44s rc=%s dir=%s\n' "a failure right after the mkdir" "$rc" "$dir_left"
+else
+  printf '  FAIL %-44s rc=%s dir=%s out=%s\n' "a failure right after the mkdir" "$rc" "$dir_left" "$out"; fail=1
+fi
+
 [ "$fail" = 0 ] || { echo "mirror install rollback: FAILED"; exit 1; }
-echo "mirror install rollback: a clean install lands the new generation, a failed move restores the previous one whole, and a failed FIRST install leaves nothing behind"
+echo "mirror install rollback: a clean install lands the new generation, a failed move restores the previous one whole, a failed FIRST install leaves nothing behind, and so does a failure in the window right after the mkdir"

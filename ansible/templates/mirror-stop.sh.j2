@@ -17,10 +17,13 @@ TGT="{{ item.target }}"; REPO="{{ playbook_dir }}/.."
 # be waved through from the command line: for a PRODUCTION target this re-runs the repository's own
 # permitted-commit guard, which passes only when this checkout is on origin/main AND its HEAD is
 # exactly the permitted commit. A forged PERMITTED_SHA does not help: the guard compares it with the
-# real HEAD and the real origin/main.
+# real HEAD and the real origin/main. The version hash is written out LITERALLY here, not taken from
+# a playbook variable: `-e oe_guard_version=<hash of an edited guard>` would otherwise let a locally
+# modified guard self-approve. scripts/ci/validate-ansible-prod-permission.sh asserts this literal
+# equals the one every mirror Jenkinsfile declares.
 if [ "$TGT" = "192.168.100.252:9092" ]; then
   if ! ( cd "$REPO" && PERMITTED_SHA="{{ oe_permitted_sha }}" \
-         PERMITTED_SHA_GUARD_VERSION="{{ oe_guard_version }}" \
+         PERMITTED_SHA_GUARD_VERSION="2f6fc2ab7aa51eb8a9e8aa350f2d774cd2fb7a253de2591e43645a19a9886b24" \
          bash scripts/jenkins/permitted-sha-guard.sh ); then
     echo "FAIL: the permitted-commit guard REFUSED this PRODUCTION unit — nothing has been stopped or written"
     exit 1

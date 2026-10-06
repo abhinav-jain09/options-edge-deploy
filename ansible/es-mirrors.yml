@@ -84,11 +84,10 @@
     # it per job; this playbook can reload a production unit from a laptop, so it enforces the same
     # rule with the SAME script Jenkins runs — no local re-implementation to drift from it.
     oe_permitted_sha: "{{ permitted_sha | default('') }}"
-    # DECLARED, not computed. Jenkins passes this hash as a job PARAMETER, so a guard script edited in
-    # the checkout fails its own version check; computing it here from the same checkout would let a
-    # modified guard self-approve. scripts/ci/validate-ansible-prod-permission.sh asserts this literal
-    # equals what every mirror Jenkinsfile declares.
-    oe_guard_version: "2f6fc2ab7aa51eb8a9e8aa350f2d774cd2fb7a253de2591e43645a19a9886b24"
+    # The guard's version hash is NOT a variable: it is written out literally wherever the guard is
+    # invoked (here and in ansible/templates/mirror-stop.sh.j2), because an extra var would let
+    # `-e oe_guard_version=<hash of an edited guard>` self-approve a modified guard.
+    # scripts/ci/validate-ansible-prod-permission.sh asserts both literals against the Jenkinsfiles.
 
   tasks:
     - name: Validate the broker pair, fail-closed
@@ -114,7 +113,7 @@
           set -uo pipefail
           cd "{{ playbook_dir }}/.."
           PERMITTED_SHA="{{ oe_permitted_sha }}" \
-          PERMITTED_SHA_GUARD_VERSION="{{ oe_guard_version }}" \
+          PERMITTED_SHA_GUARD_VERSION="2f6fc2ab7aa51eb8a9e8aa350f2d774cd2fb7a253de2591e43645a19a9886b24" \
           bash scripts/jenkins/permitted-sha-guard.sh
         executable: /bin/bash
       register: oe_guard
