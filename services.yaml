@@ -181,6 +181,9 @@ services:
   # underlying.es.trades in one durable total order onto a single-partition tape so the slope
   # above can run at all. PUBLISHES under the APPEND late policy — ES_LINEARIZER_OUTPUT_ENABLED=true in the manifest.
   - { name: es-trade-linearizer,          managedBy: standalone, sliceGenerated: true, envs: [production],      image: options-edge-es-trade-linearizer,          deployments: [es-trade-linearizer-service] }
+  # es-compression-expansion: PRODUCTION ONLY SHADOW — reads the linearizer's tape plus the SPX-side evidence
+  # topics that exist only on prod. No Service object; nothing reads its output (see the deployment yaml).
+  - { name: es-compression-expansion,     managedBy: standalone, sliceGenerated: true, envs: [production],      image: options-edge-es-compression-expansion,     deployments: [es-compression-expansion-service] }
   # multileg-structure: DESCRIPTIVE co-print observation surface (options.opra.tcbbo -> ranked
   # observations + per-window status). It claims no ownership, direction or dealer attribution —
   # OPRA carries no multi-leg marker (measured 2026-08-18) — so it is a screening surface only.

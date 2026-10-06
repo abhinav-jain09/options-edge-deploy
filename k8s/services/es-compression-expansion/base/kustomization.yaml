@@ -1,0 +1,12 @@
+# SERVICE SLICE — es-compression-expansion on PROD. Owns ONLY this service's Deployment.
+#
+# PROD-ONLY: referenced from k8s/overlays/production (NOT k8s/base) — it reads the linearizer's
+# single-partition ES tape, which exists only on prod (dev has no ES feed; es4 has its own tape and
+# none of the SPX-side inputs).
+#
+# No Service object on purpose (the vol-state shadow pattern): kubelet probes reach the pod directly,
+# and a ClusterIP would make /metrics reachable in-cluster. Nothing reads this service's output.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - es-compression-expansion-deployment.yaml

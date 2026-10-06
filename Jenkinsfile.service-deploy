@@ -60,6 +60,8 @@ pipeline {
       'es-aggressor-flow',
       // es-trade-linearizer: PRODUCTION only; publishes the one-partition ES tape es-aggressor-flow reads.
       'es-trade-linearizer',
+      // es-compression-expansion: PRODUCTION only SHADOW; consumes the linearized ES tape plus the SPX-side evidence topics.
+      'es-compression-expansion',
       // stock-gex-close-scheduler: PRODUCTION only — the closing-board SCHEDULE, which now lives
       // inside the batch itself (USER 2026-09-01: "I don't want anything Jenkins-based, it should
       // run based on Spring Batch configuration"). This job DEPLOYS it; nothing here decides when
