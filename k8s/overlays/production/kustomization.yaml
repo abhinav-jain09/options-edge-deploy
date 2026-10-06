@@ -353,10 +353,18 @@ patches:
                   # is already 197% committed on limits. Measured on .252 2026-10-06: allocatable
                   # 62.2Gi / 24 CPU, pod requests 36.1Gi (56%), pod LIMITS 126.1Gi (197%) with this
                   # deployment at replicas 0; `free` 40Gi used / 21Gi available. At a 6Gi request the
-                  # node sits at 42Gi (68%) requested and the pod still schedules; if that headroom
-                  # ever disappears the pod goes Pending — visible — instead of the node overcommitting
-                  # into another kernel OOM kill. The 2026-09-10 13:11 ET kill took this pod at 6.1GB
-                  # RSS; the heap is NOT being lowered to avoid it, because -Xmx1024m is the documented
+                  # node sits at 42Gi (68%) requested and this pod still schedules.
+                  #
+                  # ⚠ WHAT THIS DOES AND DOES NOT BUY (Codex r2 DEFECT — the first wording of this
+                  # comment claimed more). A request is an ADMISSION control: it stops the scheduler
+                  # placing OTHER pods into memory this one will actually take, and it makes THIS pod
+                  # Pending-and-visible rather than silently squeezed if it is ever rescheduled onto a
+                  # node without the room. It does NOT prevent a kernel OOM kill. The pod stays
+                  # Burstable (request 6Gi < limit 8Gi, cpu request with no cpu limit) and can still
+                  # grow to 8Gi, and node memory LIMITS stay heavily overcommitted at ~210% with this
+                  # running. The 2026-09-10 13:11 ET kill took this pod at 6.1GB RSS and nothing here
+                  # makes a repeat impossible — it only stops the scheduler from making it likelier.
+                  # The heap is NOT being lowered to avoid it, because -Xmx1024m is the documented
                   # in-JVM OOM above. Abort action if the node comes under pressure with this running:
                   # `kubectl -n options-edge scale deploy/dealer-ledger-service --replicas=0`.
                   requests:
