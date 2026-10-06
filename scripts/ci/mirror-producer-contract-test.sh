@@ -24,7 +24,10 @@ fail=0
 for f in "${MIRRORS[@]}"; do
   [ -r "$f" ] || { echo "FAIL $f: not readable — the mirror set in this test is stale"; fail=1; continue; }
   # the generated file: everything between the producer heredoc opener and its terminator
-  block=$(awk '/cat > "\$MDIR\/producer\.properties" <<P$/{inb=1; next} inb && /^P$/{inb=0} inb' "$f")
+  # FIRST stanza only, and it really is: capture starts at the opener and the script EXITS at that
+  # stanza's terminator, so a second one cannot be concatenated into the block silently (the
+  # one-heredoc assertion below is what refuses that file outright).
+  block=$(awk '/cat > "\$MDIR\/producer\.properties" <<P$/{inb=1; next} inb && /^P$/{exit} inb' "$f")
   [ -n "$block" ] || { echo "FAIL $f: no producer.properties heredoc found"; fail=1; continue; }
 
   # A LAST-WINS property file makes "contains the right line" the wrong question: a second
@@ -37,7 +40,7 @@ for f in "${MIRRORS[@]}"; do
   idem_true=$(printf '%s\n' "$block" | grep -c '^enable\.idempotence=true$' || true)
   bootstrap=$(printf '%s\n' "$block" | grep -c '^bootstrap\.servers=' || true)
 
-  [ "$opens" = "1" ] || { echo "FAIL $f: expected exactly one producer.properties heredoc, found $opens — this test reads the first one only"; fail=1; }
+  [ "$opens" = "1" ] || { echo "FAIL $f: expected exactly one producer.properties heredoc, found $opens — only the first is checked, so a second could carry anything"; fail=1; }
   [ "$acks" = "1" ] && [ "$acks_all" = "1" ] || { echo "FAIL $f: producer must set exactly one acks= line, reading acks=all (found $acks acks lines, $acks_all of them acks=all)"; fail=1; }
   [ "$idem_any" = "1" ] && [ "$idem_true" = "1" ] || { echo "FAIL $f: producer must set exactly one enable.idempotence= line, reading true (found $idem_any lines, $idem_true of them true)"; fail=1; }
   [ "$bootstrap" = "1" ] || { echo "FAIL $f: producer must set exactly one bootstrap.servers (found $bootstrap)"; fail=1; }
