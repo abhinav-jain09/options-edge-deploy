@@ -1,0 +1,103 @@
+---
+- name: Install production Cloudflare tunnel watchdog
+  hosts: all
+  gather_facts: false
+  become_method: sudo
+  vars:
+    watchdog_path: /usr/local/sbin/oe-tunnel-watchdog.sh
+    record_path: /usr/local/sbin/.oe-tunnel-watchdog.sha256
+    watchdog_owner: root
+    watchdog_group: root
+    # First adoption preserves the uncommitted WebSocket gate already active on the host.
+    first_adoption_sha: 93a71fce468043f0040a0ea0a37d25a48bf18e58359af80d12eb4b05c6754eda
+    source_sha: "{{ lookup('file', playbook_dir + '/oe-tunnel-watchdog.sh', rstrip=false) | hash('sha256') }}"
+  tasks:
+    - name: Read live script metadata
+      ansible.builtin.stat:
+        path: "{{ watchdog_path }}"
+        checksum_algorithm: sha256
+      register: live_script
+
+    - name: Read deployment record metadata
+      ansible.builtin.stat:
+        path: "{{ record_path }}"
+      register: record_stat
+
+    - name: Read existing deployment record
+      ansible.builtin.slurp:
+        src: "{{ record_path }}"
+      when: record_stat.stat.exists
+      register: record_bytes
+
+    - name: Refuse unknown live changes before any write
+      ansible.builtin.assert:
+        that:
+          - live_script.stat.exists
+          - live_script.stat.checksum == ((record_bytes.content | b64decode | trim) if record_stat.stat.exists else first_adoption_sha)
+        fail_msg: "Watchdog host drift: live script does not match the last Jenkins install or first-adoption checksum. Nothing changed."
+
+    - name: Capture previous live script for rollback
+      ansible.builtin.slurp:
+        src: "{{ watchdog_path }}"
+      register: previous_script
+
+    - name: Recheck the bytes captured for rollback before replacing them
+      ansible.builtin.assert:
+        that: (previous_script.content | b64decode | hash('sha256')) == live_script.stat.checksum
+        fail_msg: "Live watchdog changed during preflight. Nothing changed."
+
+    - name: Install verified source and record
+      block:
+        - name: Install watchdog script
+          ansible.builtin.copy:
+            src: oe-tunnel-watchdog.sh
+            dest: "{{ watchdog_path }}"
+            owner: "{{ watchdog_owner }}"
+            group: "{{ watchdog_group }}"
+            mode: '0755'
+            backup: true
+
+        - name: Record installed checksum
+          ansible.builtin.copy:
+            content: "{{ source_sha }}\n"
+            dest: "{{ record_path }}"
+            owner: "{{ watchdog_owner }}"
+            group: "{{ watchdog_group }}"
+            mode: '0644'
+
+        - name: Verify installed script metadata
+          ansible.builtin.stat:
+            path: "{{ watchdog_path }}"
+            checksum_algorithm: sha256
+          register: installed_script
+
+        - name: Assert deployed bytes match the tested source
+          ansible.builtin.assert:
+            that: installed_script.stat.checksum == source_sha
+      rescue:
+        - name: Restore previous watchdog script
+          ansible.builtin.copy:
+            content: "{{ previous_script.content | b64decode }}"
+            dest: "{{ watchdog_path }}"
+            owner: "{{ watchdog_owner }}"
+            group: "{{ watchdog_group }}"
+            mode: '0755'
+
+        - name: Restore previous deployment record when present
+          ansible.builtin.copy:
+            content: "{{ record_bytes.content | b64decode }}"
+            dest: "{{ record_path }}"
+            owner: "{{ watchdog_owner }}"
+            group: "{{ watchdog_group }}"
+            mode: '0644'
+          when: record_stat.stat.exists
+
+        - name: Remove deployment record when first adoption failed
+          ansible.builtin.file:
+            path: "{{ record_path }}"
+            state: absent
+          when: not record_stat.stat.exists
+
+        - name: Fail after rollback
+          ansible.builtin.fail:
+            msg: "Watchdog install failed; previous script and record restored."

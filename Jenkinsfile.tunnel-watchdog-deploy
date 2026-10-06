@@ -1,0 +1,66 @@
+// The only deployment path for the production Cloudflare tunnel watchdog.
+// The production timer reads the installed script on each run; no service restart is needed.
+pipeline {
+  agent { label 'hpsf-replay-mac' }
+  parameters {
+    string(name: 'PERMITTED_SHA', defaultValue: '', trim: true,
+      description: 'Required full options-edge-deploy origin/main tip approved for this production install.')
+    string(name: 'PERMITTED_SHA_GUARD_VERSION', defaultValue: '2f6fc2ab7aa51eb8a9e8aa350f2d774cd2fb7a253de2591e43645a19a9886b24',
+      description: 'Pinned sha256 of scripts/jenkins/permitted-sha-guard.sh.')
+    booleanParam(name: 'RUN_TESTS_ONLY', defaultValue: true,
+      description: 'Default: test and verify without touching the production host. Uncheck only with explicit deployment approval.')
+  }
+  options { disableRestartFromStage(); disableConcurrentBuilds(); timeout(time: 15, unit: 'MINUTES') }
+  environment {
+    ANSIBLE_BECOME_PASSWORD_FILE = 'scripts/ops/jenkins-become-password.sh'
+    ANSIBLE_HOST_KEY_CHECKING = 'True'
+  }
+  stages {
+    stage('Permitted commit guard') {
+      options { timeout(time: 10, unit: 'MINUTES') }
+      steps {
+        script {
+          def rc = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')
+          if (rc != 0) {
+            error("Permitted commit guard REFUSED this build (rc=${rc}) — see its output above. No deployment effect has run.")
+          }
+          env.PERMITTED_SHA_GUARD = 'PASSED'
+        }
+      }
+    }
+    stage('Test on CI agent') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
+      steps {
+        sh '''
+          set -euo pipefail
+          bash -n scripts/ops/oe-tunnel-watchdog.sh scripts/ops/oe-tunnel-watchdog-test.sh scripts/ops/install-tunnel-watchdog-test.sh scripts/ops/jenkins-become-password.sh
+          bash scripts/ops/oe-tunnel-watchdog-test.sh
+          command -v ansible-playbook >/dev/null
+        '''
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir .'
+        }
+        sh 'bash scripts/ops/install-tunnel-watchdog-test.sh'
+      }
+    }
+    stage('Install on production host') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.RUN_TESTS_ONLY == false) } }
+      steps {
+        withCredentials([string(credentialsId: 'options-edge-remote-become-password', variable: 'BECOME_PASSWORD')]) {
+          timeout(time: 10, unit: 'MINUTES') {
+            sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir .'
+          }
+          sh 'ansible-playbook -i scripts/ops/tunnel-watchdog-prod.ini -u abhinav -b scripts/ops/install-tunnel-watchdog.yml'
+        }
+        sh '''
+          set -euo pipefail
+          want="$(sha256sum scripts/ops/oe-tunnel-watchdog.sh | awk '{print $1}')"
+          have="$(ssh -o BatchMode=yes -o StrictHostKeyChecking=yes abhinav@192.168.100.252 \
+            'sha256sum /usr/local/sbin/oe-tunnel-watchdog.sh' | awk '{print $1}')"
+          [ "$want" = "$have" ] || { echo "installed checksum mismatch: want=$want have=$have" >&2; exit 1; }
+          echo "production watchdog installed sha256=$have"
+        '''
+      }
+    }
+  }
+}
