@@ -356,18 +356,26 @@ patches:
                   # node sits at 42Gi (68%) requested and this pod still schedules.
                   #
                   # ⚠ WHAT THIS DOES AND DOES NOT BUY (Codex r2 DEFECT — the first wording of this
-                  # comment claimed more, and r3 that the correction still did). A request is an
-                  # ADMISSION control and nothing else: it reserves 6Gi of the node's requested-memory
-                  # budget, so the scheduler has 6Gi less to place OTHER pods into, and it makes THIS
-                  # pod Pending-and-visible rather than silently squeezed if it is ever rescheduled
-                  # onto a node without that much room. 6Gi is the reservation, NOT a bound on what
-                  # this pod consumes — it is Burstable and may take up to its 8Gi limit, so 2Gi of its
-                  # possible footprint stays unaccounted for in that budget by construction. Nothing
-                  # here prevents a kernel OOM kill. The pod stays
-                  # Burstable (request 6Gi < limit 8Gi, cpu request with no cpu limit) and can still
-                  # grow to 8Gi, and node memory LIMITS stay heavily overcommitted at ~210% with this
-                  # running. The 2026-09-10 13:11 ET kill took this pod at 6.1GB RSS and nothing here
-                  # makes a repeat impossible — it only stops the scheduler from making it likelier.
+                  # comment claimed more; r3 that the first correction still did; r4 that the second
+                  # misnamed the mechanism). A memory request does exactly two things, and the second
+                  # one is not about scheduling at all:
+                  #   1. SCHEDULING. It reserves 6Gi of the node's requested-memory budget, so the
+                  #      scheduler has 6Gi less to place OTHER pods into, and it makes THIS pod
+                  #      Pending-and-visible rather than silently squeezed if it is ever rescheduled
+                  #      onto a node without that much room. It is a placement reservation — not
+                  #      Kubernetes admission control, which an earlier wording of this comment called
+                  #      it, and not a cgroup floor.
+                  #   2. NODE-PRESSURE EVICTION RANKING. Under kubelet memory pressure a Burstable pod
+                  #      using LESS than its request is ranked after one exceeding its request, so a
+                  #      6Gi request also makes this pod a later eviction candidate than a 2Gi request
+                  #      did. (Where MemoryQoS is enabled it additionally sets memory.min; it is not
+                  #      enabled here.)
+                  # 6Gi is the reservation, NOT a bound on what this pod consumes — it is Burstable
+                  # (request 6Gi < limit 8Gi, cpu request with no cpu limit) and may take up to its 8Gi
+                  # limit, so 2Gi of its possible footprint stays outside that budget by construction.
+                  # Node memory LIMITS stay overcommitted at ~210% with this running, and NOTHING here
+                  # prevents a kernel OOM kill: the 2026-09-10 13:11 ET kill took this pod at 6.1GB RSS
+                  # and a repeat is not made impossible, only less likely on the two axes above.
                   # The heap is NOT being lowered to avoid it, because -Xmx1024m is the documented
                   # in-JVM OOM above. Abort action if the node comes under pressure with this running:
                   # `kubectl -n options-edge scale deploy/dealer-ledger-service --replicas=0`.
