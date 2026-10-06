@@ -4,9 +4,10 @@
 # exists to catch: the settings live inside a heredoc that no other check reads (the shape tests
 # extract only the block after BEGIN SHAPE ASSERTIONS), so nothing else would notice.
 #
-# It asserts the BYTES of the generated producer.properties, not a comment: for each pipeline, the
-# producer heredoc must contain exactly one acks= line reading acks=all, and exactly one
-# enable.idempotence= line reading true.
+# It asserts the BYTES of the generated producer.properties, not a comment: the seven stanzas must be
+# byte-identical to one another, that one stanza must contain exactly one acks= line reading acks=all
+# and exactly one enable.idempotence= line reading true, and nothing else in the pipeline may write
+# the file after the heredoc.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
@@ -20,7 +21,25 @@ MIRRORS=(
   Jenkinsfile.es-tape-zones-mirror
 )
 
+# WRITE-CLOSURE, by inversion, and by ANCHORED patterns. Enumerating writers (>, >>, sed -i, tee, cp,
+# mv, install, dd of=, a python/perl one-liner, ...) is a losing game — review found four forms one
+# regex missed, then a fifth that rode along on a substring match. So: every line that NAMES
+# producer.properties must match one of the three WHOLE-LINE forms below, and anything else fails
+# whatever command it uses, because a writer has to name its target. Each pattern is anchored ^...$
+# and the ship-out form admits no shell metacharacter, so a second command cannot ride on an allowed
+# line (`printf acks=1 > "$MDIR/producer.properties"; : --producer.config` is rejected).
+# The limit, stated rather than papered over: a write that never names the file (a glob, a
+# `for f in "$MDIR"/*`) is invisible to a text check. This test does not claim to catch that.
+OPENER='^[[:space:]]*cat > "\$MDIR/producer\.properties" <<P$'
+# MM1 reading the config it was handed: the whole line is the option, its path, and a line-continuation
+READ='^[[:space:]]*--producer\.config[[:space:]]+"?[^"[:space:]]*producer\.properties"?[[:space:]]*(\\)*$'
+# the opra runner shipping the unit's files to es4: one scp/rsync, no metacharacters, and the path
+# must be a SOURCE — the destination is the last argument, so the path must not be there
+SHIP='^[[:space:]]*(scp|rsync)([[:space:]]+[^;|&<>`$(){}]*(\$[A-Za-z_][A-Za-z0-9_]*|\$\{[A-Za-z_][A-Za-z0-9_]*\}|[^;|&<>`$(){}])*)+[[:space:]]*(\\)*$'
+
 fail=0
+ref_hash=''
+ref_file=''
 for f in "${MIRRORS[@]}"; do
   [ -r "$f" ] || { echo "FAIL $f: not readable — the mirror set in this test is stale"; fail=1; continue; }
   # the generated file: everything between the producer heredoc opener and its terminator
@@ -30,49 +49,49 @@ for f in "${MIRRORS[@]}"; do
   block=$(awk '/cat > "\$MDIR\/producer\.properties" <<P$/{inb=1; next} inb && /^P$/{exit} inb' "$f")
   [ -n "$block" ] || { echo "FAIL $f: no producer.properties heredoc found"; fail=1; continue; }
 
-  # A LAST-WINS property file makes "contains the right line" the wrong question: a second
-  # enable.idempotence=false below the pinned one would pass that and silently win. Every setting
-  # here is therefore counted as a TOTAL for its key, then read.
-  # WRITE-CLOSURE, by inversion. Enumerating writers (>, >>, sed -i, tee, cp, mv, install, dd of=,
-  # a python/perl one-liner, ...) is a losing game — round 5 of review found four forms the previous
-  # regex missed. So the rule is turned around: EVERY line that NAMES producer.properties must be
-  # either the one heredoc that creates it or a recognised READ, and anything else fails whatever
-  # command it uses. That is closure over the file's name: a writer has to name its target.
-  # The limit, stated rather than papered over: a write that never names the file (a glob or a
-  # `for f in "$MDIR"/*`) is invisible to a text check. This test does not claim to catch that.
-  # Recognised reads, which are the only non-heredoc mentions these seven pipelines have:
-  #   * MM1 consuming the config:  --producer.config <path>
-  #   * the opra runner shipping the file out: an scp/rsync where the path is a SOURCE, i.e. not the
-  #     last argument (the destination). `cp bad "$MDIR/producer.properties"` puts it last, and fails.
-  opens=$(grep -c 'cat > "\$MDIR/producer\.properties" <<P$' "$f" || true)
+  opens=$(grep -cE "$OPENER" "$f" || true)
+  [ "$opens" = "1" ] || { echo "FAIL $f: expected exactly one producer.properties heredoc, found $opens — only the first is checked, so a second could carry anything"; fail=1; }
+
   while IFS= read -r line; do
-    case "$line" in
-      *'cat > "$MDIR/producer.properties" <<P') continue ;;
-      *--producer.config*) continue ;;
-    esac
-    stripped=${line%"\\"}
-    stripped=${stripped%"${stripped##*[![:space:]]}"}
-    case "$line" in
-      *scp\ *|*rsync\ *)
-        case "${stripped##* }" in
-          *producer.properties*) ;;
-          *) continue ;;
-        esac ;;
-    esac
+    if printf '%s\n' "$line" | grep -qE "$OPENER"; then continue; fi
+    if printf '%s\n' "$line" | grep -qE "$READ"; then continue; fi
+    if printf '%s\n' "$line" | grep -qE "$SHIP"; then
+      # last argument, with the line-continuation backslashes and trailing blanks removed
+      last=${line%%[[:space:]]*\\}
+      last=${last%"${last##*[![:space:]]}"}
+      last=${last##* }
+      case "$last" in
+        *producer.properties*) ;;   # the path is the DESTINATION: that is a write
+        *) continue ;;
+      esac
+    fi
     echo "FAIL $f: only the heredoc may write producer.properties — this line names it another way: ${line#"${line%%[![:space:]]*}"}"
     fail=1
   done < <(grep 'producer\.properties' "$f")
+
+  # Byte-identical across the seven: the pipelines are copies of one another, and a setting that
+  # drifts in ONE of them (a client.id here, a linger.ms there) is how they stop being one contract.
+  h=$(printf '%s\n' "$block" | shasum -a 256 | cut -d' ' -f1)
+  if [ -z "$ref_hash" ]; then ref_hash=$h; ref_file=$f
+  elif [ "$h" != "$ref_hash" ]; then
+    echo "FAIL $f: producer stanza differs from $ref_file — the seven must be byte-identical"
+    diff <(awk '/cat > "\$MDIR\/producer\.properties" <<P$/{inb=1; next} inb && /^P$/{exit} inb' "$ref_file") <(printf '%s\n' "$block") || true
+    fail=1
+  fi
+
+  # A LAST-WINS property file makes "contains the right line" the wrong question: a second
+  # enable.idempotence=false below the pinned one would pass that and silently win. Every setting
+  # here is therefore counted as a TOTAL for its key, then read.
   acks=$(printf '%s\n' "$block" | grep -c '^acks=' || true)
   acks_all=$(printf '%s\n' "$block" | grep -c '^acks=all$' || true)
   idem_any=$(printf '%s\n' "$block" | grep -c '^enable\.idempotence=' || true)
   idem_true=$(printf '%s\n' "$block" | grep -c '^enable\.idempotence=true$' || true)
   bootstrap=$(printf '%s\n' "$block" | grep -c '^bootstrap\.servers=' || true)
 
-  [ "$opens" = "1" ] || { echo "FAIL $f: expected exactly one producer.properties heredoc, found $opens — only the first is checked, so a second could carry anything"; fail=1; }
   [ "$acks" = "1" ] && [ "$acks_all" = "1" ] || { echo "FAIL $f: producer must set exactly one acks= line, reading acks=all (found $acks acks lines, $acks_all of them acks=all)"; fail=1; }
   [ "$idem_any" = "1" ] && [ "$idem_true" = "1" ] || { echo "FAIL $f: producer must set exactly one enable.idempotence= line, reading true (found $idem_any lines, $idem_true of them true)"; fail=1; }
   [ "$bootstrap" = "1" ] || { echo "FAIL $f: producer must set exactly one bootstrap.servers (found $bootstrap)"; fail=1; }
 done
 
 [ "$fail" = "0" ] || { echo "mirror producer contract: FAILED"; exit 1; }
-echo "mirror producer contract: ${#MIRRORS[@]} pipelines publish with acks=all and pinned idempotence"
+echo "mirror producer contract: ${#MIRRORS[@]} pipelines publish one byte-identical stanza with acks=all and pinned idempotence"
