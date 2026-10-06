@@ -312,6 +312,18 @@ alter_topic_config() {
   return 1
 }
 
+# SKIPPED_TOPICS accumulates every topic this run could not reconcile, instead of the OLD
+# behaviour of `exit 1` on the FIRST one and silently abandoning every topic after it in
+# $OPTIONS_EDGE_TOPICS. On 2026-10-06 a single pre-existing drifted topic
+# (options.spx.strike-invasion.current, 1 partition vs. a declared 32) aborted this script partway
+# through a 148-topic list; the 27 topics after it — including es.futures.cvd.levels,
+# underlying.es.trades.linearized, spx.drop.nowcast — were never created, and that surfaced an hour
+# later as four UNRELATED-LOOKING service crash-loops on prod with no single error pointing back
+# here. The safety property this script exists to enforce (never silently destroy a mismatched
+# topic's data) is preserved: every skip below is still reported, and the script still exits 1 at
+# the end if anything was skipped. What changes is that skipping topic N no longer skips N+1..last.
+SKIPPED_TOPICS=()
+
 for entry in $OPTIONS_EDGE_TOPICS; do
   topic="${entry%%:*}"
   partitions="${entry##*:}"
@@ -324,7 +336,8 @@ for entry in $OPTIONS_EDGE_TOPICS; do
     if [[ -z "$current_partitions" || -z "$current_replication_factor" ]]; then
       echo "Cannot parse current topic shape for $topic" >&2
       echo "$description" >&2
-      exit 1
+      SKIPPED_TOPICS+=("$topic (unparseable shape)")
+      continue
     fi
 
     exact_partition_mismatch=false
@@ -337,20 +350,23 @@ for entry in $OPTIONS_EDGE_TOPICS; do
       # (KAFKA_CLEANUP_TOPICS -> KAFKA_RECREATE_MISMATCHED_TOPICS) must NOT be able to
       # delete+recreate these topics — that would destroy the compacted price history.
       # Hard error EVEN IF KAFKA_RECREATE_MISMATCHED_TOPICS=true; repairing a listed
-      # topic requires an explicit, human-run migration, never this script.
+      # topic requires an explicit, human-run migration, never this script. It does NOT,
+      # however, require abandoning every OTHER topic still waiting in this loop.
       if topic_never_recreate "$topic"; then
         echo "HARD ERROR: topic $topic has partitions=$current_partitions but requires EXACTLY $partitions," >&2
         echo "and it is listed in OPTIONS_EDGE_NEVER_RECREATE_TOPICS: the destructive delete+recreate repair" >&2
         echo "is FORBIDDEN for this topic even with KAFKA_RECREATE_MISMATCHED_TOPICS=true (its compacted" >&2
         echo "records must never be destroyed by a global operator flag). Fix this topic manually." >&2
-        exit 1
+        SKIPPED_TOPICS+=("$topic (NEVER-RECREATE, manual migration required)")
+        continue
       fi
       if [[ "$RECREATE_MISMATCHED" != "true" ]]; then
         echo "Topic $topic exists with partitions=$current_partitions but requires EXACTLY $partitions (exact-partition contract: fixed assign() reads or fixed key->partition mapping)." >&2
         echo "Kafka cannot shrink partitions: this needs a destructive delete+recreate." >&2
         echo "Set KAFKA_RECREATE_MISMATCHED_TOPICS=true only for approved destructive cleanup deployments." >&2
         echo "NOTE: recreating $topic DISCARDS its records — any bootstrap state it held must be re-seeded afterwards." >&2
-        exit 1
+        SKIPPED_TOPICS+=("$topic (exact-partition mismatch: $current_partitions vs $partitions, needs destructive recreate)")
+        continue
       fi
       echo "Repairing EXACT-partition topic $topic: partitions=$current_partitions -> $partitions (destructive delete+recreate; records discarded)"
       kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --delete --topic "$topic"
@@ -362,11 +378,13 @@ for entry in $OPTIONS_EDGE_TOPICS; do
         if (( current_partitions < partitions )); then
           echo "Topic $topic exists with partitions=$current_partitions replicationFactor=$current_replication_factor; expected at least partitions=$partitions replicationFactor=$REPLICATION_FACTOR" >&2
           echo "Set KAFKA_RECREATE_MISMATCHED_TOPICS=true only for approved destructive cleanup deployments." >&2
-          exit 1
+          SKIPPED_TOPICS+=("$topic (partitions=$current_partitions below declared minimum $partitions)")
+          continue
         fi
         echo "Topic $topic exists with partitions=$current_partitions replicationFactor=$current_replication_factor; expected at least replicationFactor=$REPLICATION_FACTOR" >&2
         echo "Set KAFKA_RECREATE_MISMATCHED_TOPICS=true only for approved destructive cleanup deployments." >&2
-        exit 1
+        SKIPPED_TOPICS+=("$topic (replicationFactor=$current_replication_factor below required $REPLICATION_FACTOR)")
+        continue
       fi
 
       echo "Repairing mismatched topic $topic: partitions=$current_partitions replicationFactor=$current_replication_factor -> partitions=$partitions replicationFactor=$REPLICATION_FACTOR"
@@ -391,3 +409,12 @@ for entry in $OPTIONS_EDGE_TOPICS; do
 
   alter_topic_config "$topic" "$cleanup_policy"
 done
+
+if (( ${#SKIPPED_TOPICS[@]} > 0 )); then
+  echo "" >&2
+  echo "apply-topics.sh: ${#SKIPPED_TOPICS[@]} topic(s) could NOT be reconciled (every OTHER declared" >&2
+  echo "topic above this line WAS still created/updated — this run does not abandon the rest of the" >&2
+  echo "list over one drifted topic):" >&2
+  for t in "${SKIPPED_TOPICS[@]}"; do echo "  - $t" >&2; done
+  exit 1
+fi
