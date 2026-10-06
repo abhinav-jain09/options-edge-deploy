@@ -4,6 +4,13 @@
 # what is installed, and only then — and only when something that matters differs — copy into place
 # and reload. Plan mode is the same path with the copy and the reload left out, so what a plan reports
 # is what an install would do.
+- name: "{{ item.label }} | this unit has not failed to render (yet)"
+  # A render failure is a UNIT failure, not the play's — and `failed_when: false` on a template task
+  # SUPPRESSES it, after which the unit is compared against a STALE rendering and reported fine. Each
+  # render is therefore wrapped in a block whose rescue records it here.
+  ansible.builtin.set_fact:
+    oe_render_failed: false
+
 - name: "{{ item.label }} | scratch directory for everything this run renders"
   ansible.builtin.file:
     path: "{{ oe_rendered_dir }}/{{ item.label }}"
@@ -11,12 +18,18 @@
     mode: "0755"
   changed_when: false
 
-- name: "{{ item.label }} | render the shape check"
-  ansible.builtin.template:
-    src: mirror-shape-check.sh.j2
-    dest: "{{ oe_rendered_dir }}/{{ item.label }}/shape-check.sh"
-    mode: "0755"
-  changed_when: false
+- name: "{{ item.label }} | render the shape check (recorded, not fatal)"
+  block:
+    - name: "{{ item.label }} | render the shape check"
+      ansible.builtin.template:
+        src: mirror-shape-check.sh.j2
+        dest: "{{ oe_rendered_dir }}/{{ item.label }}/shape-check.sh"
+        mode: "0755"
+      changed_when: false
+  rescue:
+    - name: "{{ item.label }} | the shape check could not be rendered"
+      ansible.builtin.set_fact:
+        oe_render_failed: true
 
 - name: "{{ item.label }} | topic shape, exactly what the owning pipeline asserts"
   # Read-only, and no weaker or stronger than the pipeline that owns the topic: see the rendered
@@ -67,52 +80,74 @@
   ansible.builtin.set_fact:
     oe_ok: "{{ (oe_shape.rc == 0) and ((oe_group.rc | default(1)) == 0) }}"
 
-- name: "{{ item.label }} | render the unit files into the scratch directory"
-  # Rendered here even on an install, never straight over the live files: the comparison below needs
-  # both copies, and a half-written unit directory is not a state to leave a mirror in.
-  when: oe_ok
-  ansible.builtin.template:
-    src: "{{ tpl.src }}"
-    dest: "{{ oe_rendered_dir }}/{{ item.label }}/{{ tpl.dest }}"
-    mode: "{{ tpl.mode }}"
-  loop:
-    - { src: mirror-consumer.properties.j2, dest: consumer.properties, mode: "0644" }
-    - { src: mirror-producer.properties.j2, dest: producer.properties, mode: "0644" }
-    - { src: mirror-log4j.properties.j2,    dest: log4j.properties,    mode: "0644" }
-    - { src: run-mirror.sh.j2,              dest: run-mirror.sh,       mode: "0755" }
-    - { src: mirror.plist.j2,               dest: plist.xml,           mode: "0644" }
-  loop_control:
-    loop_var: tpl
-    label: "{{ tpl.dest }}"
-  changed_when: false
+- name: "{{ item.label }} | render the unit files (recorded, not fatal)"
+  when: oe_ok and not oe_render_failed
+  block:
+    - name: "{{ item.label }} | render the unit files into the scratch directory"
+      # Rendered here even on an install, never straight over the live files: the comparison below
+      # needs both copies, and a half-written unit directory is not a state to leave a mirror in.
+      ansible.builtin.template:
+        src: "{{ tpl.src }}"
+        dest: "{{ oe_rendered_dir }}/{{ item.label }}/{{ tpl.dest }}"
+        mode: "{{ tpl.mode }}"
+      loop:
+        - { src: mirror-consumer.properties.j2, dest: consumer.properties, mode: "0644" }
+        - { src: mirror-producer.properties.j2, dest: producer.properties, mode: "0644" }
+        - { src: mirror-log4j.properties.j2,    dest: log4j.properties,    mode: "0644" }
+        - { src: run-mirror.sh.j2,              dest: run-mirror.sh,       mode: "0755" }
+        - { src: mirror.plist.j2,               dest: plist.xml,           mode: "0644" }
+      loop_control:
+        loop_var: tpl
+        label: "{{ tpl.dest }}"
+      changed_when: false
+  rescue:
+    - name: "{{ item.label }} | a unit file could not be rendered"
+      ansible.builtin.set_fact:
+        oe_render_failed: true
 
-- name: "{{ item.label }} | render the comparison"
-  when: oe_ok
-  ansible.builtin.template:
-    src: mirror-diff.sh.j2
-    dest: "{{ oe_rendered_dir }}/{{ item.label }}/diff.sh"
-    mode: "0755"
-  changed_when: false
+- name: "{{ item.label }} | render the comparison (recorded, not fatal)"
+  when: oe_ok and not oe_render_failed
+  block:
+    - name: "{{ item.label }} | render the comparison"
+      ansible.builtin.template:
+        src: mirror-diff.sh.j2
+        dest: "{{ oe_rendered_dir }}/{{ item.label }}/diff.sh"
+        mode: "0755"
+      changed_when: false
+  rescue:
+    - name: "{{ item.label }} | the comparison could not be rendered"
+      ansible.builtin.set_fact:
+        oe_render_failed: true
 
 - name: "{{ item.label }} | compare the rendered unit with the installed one"
   # What counts as a difference, and why, is in the rendered script's own header and in
   # ansible/templates/mirror-diff.sh.j2. It is read-only.
-  when: oe_ok
+  when: oe_ok and not oe_render_failed
   ansible.builtin.command:
     cmd: "bash {{ oe_rendered_dir }}/{{ item.label }}/diff.sh"
   register: oe_diff
   changed_when: false
+  # collected like the rest: a comparison that cannot run is this unit's failure, not the play's
+  failed_when: false
 
-- name: "{{ item.label }} | render the stop and start guards"
-  when: oe_ok and oe_confirm and (oe_diff.stdout is search('would install'))
-  ansible.builtin.template:
-    src: "{{ g }}.j2"
-    dest: "{{ oe_rendered_dir }}/{{ item.label }}/{{ g | replace('mirror-', '') }}"
-    mode: "0755"
-  loop: [mirror-stop.sh, mirror-start.sh]
-  loop_control:
-    loop_var: g
-  changed_when: false
+- name: "{{ item.label }} | render the stop and start guards (recorded, not fatal)"
+  when:
+    - oe_ok and oe_confirm and not oe_render_failed
+    - oe_diff.stdout is search('would install')
+  block:
+    - name: "{{ item.label }} | render the stop and start guards"
+      ansible.builtin.template:
+        src: "{{ g }}.j2"
+        dest: "{{ oe_rendered_dir }}/{{ item.label }}/{{ g | replace('mirror-', '') }}"
+        mode: "0755"
+      loop: [mirror-stop.sh, mirror-start.sh]
+      loop_control:
+        loop_var: g
+      changed_when: false
+  rescue:
+    - name: "{{ item.label }} | a guard could not be rendered"
+      ansible.builtin.set_fact:
+        oe_render_failed: true
 
 - name: "{{ item.label }} | STOP the unit before anything is written"
   # Phase 1. Files are replaced only after this proves the unit is stopped and nothing lingers: the
@@ -121,6 +156,8 @@
   # old, coherent configuration.
   when:
     - oe_prod_permitted | default(false)
+    - not oe_render_failed
+    - (oe_diff.rc | default(1)) == 0
     - oe_ok and oe_confirm
     - oe_diff.stdout is search('would install')
   ansible.builtin.command:
@@ -134,6 +171,8 @@
   # could be read.
   when:
     - oe_prod_permitted | default(false)
+    - not oe_render_failed
+    - (oe_diff.rc | default(1)) == 0
     - oe_ok and oe_confirm
     - oe_diff.stdout is search('would install')
     - (oe_stop.rc | default(1)) == 0
@@ -144,6 +183,9 @@
       # this trap exists to undo was exactly what it left behind.
       set -Eeuo pipefail
       R="{{ oe_rendered_dir }}/{{ item.label }}"; M="{{ item.mdir }}"; PL="{{ item.plist }}"
+      # BEFORE the mkdir: read after it this is always "yes", and a failed FIRST install then leaves
+      # an empty unit directory behind, which is not "exactly as it was"
+      HAD_DIR=yes; [ -d "$M" ] || HAD_DIR=no
       mkdir -p "$M"
       # Each file is written beside its target and MOVED into place, so no reader sees a torn file —
       # and the five together are made ATOMIC ENOUGH by keeping the previous generation and restoring
@@ -162,13 +204,21 @@
           if [ -e "$BK/$b" ]; then mv -f "$BK/$b" "$d"; else rm -f "$d"; fi
           rm -f "$d.ansible-new"
         done
+        [ "$HAD_DIR" = yes ] || rmdir "$M" 2>/dev/null || true
         echo "FAIL: an install step failed; the unit has been put back exactly as it was (files that did not exist before are removed) and left stopped" >&2
       }
       trap 'restore; rm -rf "$BK"; exit 1' ERR
+      # A backup is NAMED only once it is complete: cp writes .part and a rename makes it a backup,
+      # so a cp that fails halfway can never be restored over an intact live file.
+      backup() { # source  backup-name
+        [ -e "$1" ] || return 0
+        cp -p "$1" "$BK/$2.part"
+        mv -f "$BK/$2.part" "$BK/$2"
+      }
       for f in consumer.properties producer.properties log4j.properties run-mirror.sh; do
-        [ -e "$M/$f" ] && cp -p "$M/$f" "$BK/$f"
+        backup "$M/$f" "$f"
       done
-      [ -e "$PL" ] && cp -p "$PL" "$BK/plist.xml"
+      backup "$PL" plist.xml
       put() { # rendered-name  destination  mode
         cp "$R/$1" "$2.ansible-new"
         chmod "$3" "$2.ansible-new"
@@ -191,6 +241,8 @@
   # reading THIS unit's config, and the only process doing so.
   when:
     - oe_prod_permitted | default(false)
+    - not oe_render_failed
+    - (oe_diff.rc | default(1)) == 0
     - oe_ok and oe_confirm
     - oe_diff.stdout is search('would install')
     - (oe_stop.rc | default(1)) == 0
@@ -216,6 +268,9 @@
   # reporting, not a gate: a lag that cannot be read must not abort the play before this unit is
   # recorded and the remaining units run
   failed_when: false
+  # reporting, not a gate: a lag that cannot be read must not abort the play before this unit is
+  # recorded and the remaining units run
+  failed_when: false
 
 - name: "{{ item.label }} | record"
   ansible.builtin.set_fact:
@@ -224,14 +279,16 @@
            item.label ~ ' | ' ~ ('OK' if oe_ok else 'NOT INSTALLED')
            ~ ' | ' ~ (((oe_shape.stdout | default('')) ~ (oe_shape.stderr | default(''))) | trim)
            ~ ' | ' ~ (((oe_group.stdout | default('')) ~ (oe_group.stderr | default(''))) | trim)
-           ~ ' | ' ~ ((oe_diff.stdout | default('not compared')) | trim)
+           ~ ' | ' ~ (('RENDER FAILED' if oe_render_failed else ((oe_diff.stdout | default('')) ~ (oe_diff.stderr | default('')))) | trim | default('not compared', true))
            ~ ' | ' ~ ([ (oe_stop.stdout | default('')), (oe_stop.stderr | default('')),
                          (oe_install.stdout | default('')), (oe_install.stderr | default('')),
                          (oe_start.stdout | default('')), (oe_start.stderr | default('')) ]
                        | select | join(' ') | trim | default('no change applied', true))
            ~ ' | ' ~ ((oe_lag.stdout | default('lag not read')) | trim)
          ] }}
-    oe_failed: "{{ (oe_failed | default([])) + ([] if oe_ok else [item.label]) }}"
+    oe_failed: >-
+      {{ (oe_failed | default([])) +
+         ([] if (oe_ok and (not oe_render_failed) and ((oe_diff.rc | default(1)) == 0)) else [item.label]) }}
     # a unit whose stop, install or start did not succeed: its files may be new while its process is
     # not, which the play's final assertion names separately from a unit it never tried to install
     oe_reload_failed: >-

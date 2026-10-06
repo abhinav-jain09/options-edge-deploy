@@ -25,11 +25,19 @@ LBL=com.optionsedge.test-mirror
 PL="$WORK/$LBL.plist"; : > "$PL"
 
 # render the template the way ansible would for one unit (these are its only expressions)
+# Two renderings per phase: a DEV unit (the production lock must not fire) and a PRODUCTION one (it
+# must, and must refuse from any checkout that is not the permitted commit on origin/main).
 for pair in "stop:$STOP_TPL" "start:$START_TPL"; do
   n=${pair%%:*}; t=${pair#*:}
-  sed -e "s|{{ item.plist }}|$PL|g" -e "s|{{ item.label }}|$LBL|g" -e "s|{{ item.mdir }}|$MDIR|g" "$t" > "$WORK/$n.sh"
+  sed -e "s|{{ item.plist }}|$PL|g" -e "s|{{ item.label }}|$LBL|g" -e "s|{{ item.mdir }}|$MDIR|g" \
+      -e "s|{{ item.target }}|127.0.0.1:19092|g" -e "s|{{ playbook_dir }}|$PWD/ansible|g" \
+      -e "s|{{ oe_permitted_sha }}||g" -e "s|{{ oe_guard_version }}|deadbeef|g" "$t" > "$WORK/$n.sh"
   chmod +x "$WORK/$n.sh"
   grep -q '{{' "$WORK/$n.sh" && { echo "FAIL: the rendered $n guard still has unresolved expressions — this test's substitution list is stale"; exit 1; }
+  sed -e "s|{{ item.plist }}|$PL|g" -e "s|{{ item.label }}|$LBL|g" -e "s|{{ item.mdir }}|$MDIR|g" \
+      -e "s|{{ item.target }}|192.168.100.252:9092|g" -e "s|{{ playbook_dir }}|$PWD/ansible|g" \
+      -e "s|{{ oe_permitted_sha }}||g" -e "s|{{ oe_guard_version }}|deadbeef|g" "$t" > "$WORK/$n-prod.sh"
+  chmod +x "$WORK/$n-prod.sh"
 done
 
 # stub launchctl and ps: behaviour driven by marker files in $WORK
@@ -81,6 +89,7 @@ scenario() { # phase(stop|start|both)  name  expect(pass|fail)  [want=<substring
   set +e
   case "$phase" in
     stop)  out=$(bash "$WORK/stop.sh" 2>&1); rc=$? ;;
+    stop-prod) out=$(bash "$WORK/stop-prod.sh" 2>&1); rc=$? ;;
     start) out=$(OE_OLD_PID="${OE_OLD_PID_FOR_TEST:-}" bash "$WORK/start.sh" 2>&1); rc=$? ;;
     both)  out=$(bash "$WORK/stop.sh" 2>&1); rc=$?
            if [ "$rc" = 0 ]; then
@@ -141,6 +150,13 @@ scenario stop "launchctl list fails" fail want="cannot read launchctl list" setu
 
 scenario stop "a unit that was not running stops cleanly" pass want="stopped: was pid none" setup_first_install
 
+# ---- the production lock, inside the script that touches the unit first ----
+# A DEV unit never consults the guard (the cases above are all dev renderings and they pass). A
+# PRODUCTION unit does, and from this checkout — not the permitted commit on origin/main, and with an
+# empty PERMITTED_SHA — it must refuse before stopping or writing anything. This is the lock an
+# Ansible extra var cannot wave through.
+scenario stop-prod "a PRODUCTION unit consults the permitted-commit guard" fail want="REFUSED this PRODUCTION unit" setup_replaced
+
 # ---- PHASE 2 (start): the unit must come up on the new files, alone ----
 scenario start "a first install starts a pid" pass want="started: pid none -> 300" setup_first_install
 
@@ -171,4 +187,4 @@ setup_start_list_fails() { setup_replaced; echo unloaded > "$WORK/phase"; : > "$
 scenario start "launchctl list fails after a successful load" fail want="cannot read launchctl list" setup_start_list_fails
 
 [ "$fail" = 0 ] || { echo "mirror reload guard: FAILED"; exit 1; }
-echo "mirror stop/start guards: 15 scenarios behave as specified"
+echo "mirror stop/start guards: 16 scenarios behave as specified"

@@ -9,6 +9,23 @@
 # It prints `stopped: was pid <n|none>`; the caller passes that pid to PHASE 2 as OE_OLD_PID.
 set -uo pipefail
 PL="{{ item.plist }}"; LBL="{{ item.label }}"; MDIR="{{ item.mdir }}"
+TGT="{{ item.target }}"; REPO="{{ playbook_dir }}/.."
+
+# THE PRODUCTION LOCK LIVES HERE, in the first thing that touches a unit, and not in a variable.
+# An Ansible extra var outranks every var, fact and register, so `-e oe_prod_permitted=true` defeated
+# a play-level condition — the playbook's own checks are still there, but this is the one that cannot
+# be waved through from the command line: for a PRODUCTION target this re-runs the repository's own
+# permitted-commit guard, which passes only when this checkout is on origin/main AND its HEAD is
+# exactly the permitted commit. A forged PERMITTED_SHA does not help: the guard compares it with the
+# real HEAD and the real origin/main.
+if [ "$TGT" = "192.168.100.252:9092" ]; then
+  if ! ( cd "$REPO" && PERMITTED_SHA="{{ oe_permitted_sha }}" \
+         PERMITTED_SHA_GUARD_VERSION="{{ oe_guard_version }}" \
+         bash scripts/jenkins/permitted-sha-guard.sh ); then
+    echo "FAIL: the permitted-commit guard REFUSED this PRODUCTION unit — nothing has been stopped or written"
+    exit 1
+  fi
+fi
 
 # launchctl's own status matters: an unreadable list is not an unloaded unit. Returning empty there
 # would let the stop phase conclude the unit is gone and write files under a still-registered,

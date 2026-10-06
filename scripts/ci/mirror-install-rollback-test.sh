@@ -73,14 +73,20 @@ fi
 # Restoring by moving back only the files that EXISTED would leave the ones just written: a partial
 # new generation, on a unit that is down, with nothing naming it.
 D="$WORK/first"; seed "$D"
-rm -f "$D/unit"/* "$D/u.plist"            # nothing installed yet
+# nothing installed yet, and the unit DIRECTORY does not exist either: leaving an empty one behind is
+# not "exactly as it was", and a test that pre-creates it cannot see that
+rm -rf "$D/unit" "$D/u.plist"
 r=$(render "$D" break); [ "$r" = OK ] || { echo "FAIL: cannot extract/patch the install task body ($r)"; exit 1; }
 set +e; out=$(bash "$D/install.sh" 2>&1); rc=$?; set -e
-left=$(ls -1 "$D/unit" 2>/dev/null | wc -l | tr -d ' '); plist_left=$([ -e "$D/u.plist" ] && echo 1 || echo 0)
-if [ "$rc" != 0 ] && [ "$left" = 0 ] && [ "$plist_left" = 0 ]; then
-  printf '  ok   %-44s rc=%s files-left=%s plist-left=%s\n' "a failed FIRST install leaves nothing" "$rc" "$left" "$plist_left"
+# counted only when the directory exists: under `set -o pipefail` a failing ls makes the whole
+# assignment non-zero, which with `set -e` ended this test silently before it could judge anything
+left=0; [ -d "$D/unit" ] && left=$(ls -1 "$D/unit" | wc -l | tr -d ' ')
+plist_left=$([ -e "$D/u.plist" ] && echo 1 || echo 0)
+dir_left=$([ -d "$D/unit" ] && echo 1 || echo 0)
+if [ "$rc" != 0 ] && [ "$left" = 0 ] && [ "$plist_left" = 0 ] && [ "$dir_left" = 0 ]; then
+  printf '  ok   %-44s rc=%s files=%s plist=%s dir=%s\n' "a failed FIRST install leaves nothing" "$rc" "$left" "$plist_left" "$dir_left"
 else
-  printf '  FAIL %-44s rc=%s files-left=%s plist-left=%s out=%s\n' "a failed FIRST install leaves nothing" "$rc" "$left" "$plist_left" "$out"; fail=1
+  printf '  FAIL %-44s rc=%s files=%s plist=%s dir=%s out=%s\n' "a failed FIRST install leaves nothing" "$rc" "$left" "$plist_left" "$dir_left" "$out"; fail=1
 fi
 
 [ "$fail" = 0 ] || { echo "mirror install rollback: FAILED"; exit 1; }

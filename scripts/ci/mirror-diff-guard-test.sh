@@ -39,8 +39,9 @@ cat > "$WORK/bin/stat" <<T
 #!/usr/bin/env bash
 [ -e "$WORK/gnu_stat" ] || exec /usr/bin/stat "\$@"
 case "\$1" in
-  -f) exit 1 ;;
-  -c) exec /usr/bin/stat -f "%m" "\$3" ;;
+  -f) exit 1 ;;                                  # the BSD form is what GNU coreutils rejects
+  -c) # answer the GNU form with GNU semantics, computed rather than delegated to the host's BSD stat
+      exec python3 -c 'import os,sys; print(int(os.stat(sys.argv[1]).st_mtime))' "\$3" ;;
 esac
 exit 1
 T

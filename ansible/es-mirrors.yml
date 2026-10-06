@@ -25,13 +25,15 @@
 #   # one topic
 #   ansible-playbook ansible/es-mirrors.yml -e only_topics=es.futures.footprint.bars -e confirm_mirror_install=true
 #
-# WHAT THE PRODUCTION LOCK IS, AND IS NOT. A production install runs the repository's own
-# permitted-commit guard, and every task that stops, writes or starts a unit re-checks both its
-# verdict and the literal production broker. That makes an ACCIDENT impossible — a wrong target, a
-# forgotten SHA, an unmerged branch, a copy-pasted command — and it makes a deliberate bypass
-# something you have to spell out, because in Ansible an extra var (-e) outranks every var, fact and
-# register, so a run that passes -e naming this playbook's internals can always defeat it. The
-# ENFORCED path for production remains the Jenkins job, where the guard is not the operator's to pass.
+# WHERE THE PRODUCTION LOCK ACTUALLY IS. In Ansible an extra var outranks every var, fact and
+# register, so a play-level condition is advisory: `-e oe_prod_permitted=true` defeated the first
+# version of this. The binding lock therefore lives in ansible/templates/mirror-stop.sh.j2 — the
+# first thing that touches a unit — which, for the production target, re-runs the repository's own
+# permitted-commit guard before stopping or writing anything. That cannot be waved through from the
+# command line: the guard passes only when THIS checkout is on origin/main with HEAD exactly the
+# permitted commit, and a forged PERMITTED_SHA is compared against the real HEAD and the real
+# origin/main. The checks in this play remain, in front of it, so a refusal is reported once and
+# early rather than once per unit.
 #
 # A unit is reloaded ONLY when something that matters differs: an EFFECTIVE property of
 # consumer/producer.properties (compared key-and-value with comments and key order ignored — not the

@@ -60,6 +60,20 @@ oe_prod_permitted: "{{ ((oe_target_ip ~ ':' ~ oe_target_port) != '192.168.100.25
 target: "{{ oe_target_ip }}:{{ oe_target_port }}"
 PATS
 
+# ---- 2c. the BINDING lock is in the stop script, not in a variable ----
+# An extra var outranks every var, fact and register, so the play-level conditions are advisory:
+# `-e oe_prod_permitted=true` defeated them. The lock that cannot be waved through is the one inside
+# the first script that touches a unit.
+STOP_TPL=ansible/templates/mirror-stop.sh.j2
+grep -qF 'if [ "$TGT" = "192.168.100.252:9092" ]; then' "$STOP_TPL" \
+  || { echo "FAIL: $STOP_TPL must gate on the literal production target"; fail=1; }
+grep -qF 'bash scripts/jenkins/permitted-sha-guard.sh' "$STOP_TPL" \
+  || { echo "FAIL: $STOP_TPL must re-run the repository's own permitted-commit guard for a production unit"; fail=1; }
+grep -qF 'PERMITTED_SHA_GUARD_VERSION="{{ oe_guard_version }}"' "$STOP_TPL" \
+  || { echo "FAIL: $STOP_TPL must pass the DECLARED guard version"; fail=1; }
+awk '/THE PRODUCTION LOCK LIVES HERE/{f=1} f&&/launchctl unload/{print "LATE"; exit} f&&/permitted-sha-guard.sh/{print "EARLY"; exit}' "$STOP_TPL" | grep -q EARLY \
+  || { echo "FAIL: $STOP_TPL must run the guard BEFORE it unloads anything"; fail=1; }
+
 # ---- 3. every mutating task re-checks the guard's verdict ----
 grep -qF "oe_prod_permitted: \"{{ ((oe_target_ip ~ ':' ~ oe_target_port) != '192.168.100.252:9092') or ((oe_guard.rc | default(1)) == 0) }}\"" "$PB" \
   || { echo "FAIL: $PB must publish oe_prod_permitted from the guard's verdict, against the literal broker"; fail=1; }
