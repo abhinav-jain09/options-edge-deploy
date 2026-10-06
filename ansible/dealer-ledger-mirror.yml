@@ -80,11 +80,34 @@
           - oe_group_id is match('^[A-Za-z0-9._-]+$')
           - oe_auto_offset_reset in ['latest', 'earliest']
           - oe_state in ['present', 'absent']
-          - oe_num_streams | int >= 1
+          # `| int >= 1` is NOT a validation: Jinja's int filter parses the leading digits and
+          # discards the rest, so "1; id" passes it and then renders unquoted into run-mirror.sh.
+          # Require the WHOLE value to be decimal.
+          - oe_num_streams is string or oe_num_streams is number
+          - (oe_num_streams | string) is match('^[1-9][0-9]{0,2}$')
+          # Rendered verbatim into producer.properties; constrain to the codecs Kafka accepts.
+          - oe_compression in ['none', 'gzip', 'snappy', 'lz4', 'zstd']
+          # Reaches `stat` and a tar argument vector on the CONTROLLER. Absolute, no traversal,
+          # no whitespace or option-looking prefix.
+          - oe_tools_src is match('^/[A-Za-z0-9._/-]+$')
+          - "'..' not in oe_tools_src"
+          # A digit-count regex accepts :0 and :99999. Bound the actual range.
+          - oe_source.split(':')[1] | int >= 1
+          - oe_source.split(':')[1] | int <= 65535
+          - oe_target.split(':')[1] | int >= 1
+          - oe_target.split(':')[1] | int <= 65535
+          # oe_home controls every path this play writes and CAN be overridden through extra vars.
+          - oe_home is match('^/[A-Za-z0-9._/-]+$')
+          - "'..' not in oe_home"
+          # `hosts:` is resolved before any task, so this cannot gate host selection — it is a
+          # tripwire for a direct playbook invocation against something the lane does not own.
+          - inventory_hostname in ['mac74']
         fail_msg: >-
-          mirror_instance must be a lowercase slug; source and target must be host:port and differ;
-          every topic must match Kafka's legal charset [A-Za-z0-9._-]; group id likewise;
-          auto_offset_reset latest|earliest; state present|absent.
+          mirror_instance must be a lowercase slug; source and target must be host:port with a port
+          in 1..65535 and must differ; every topic and the group id must match Kafka's legal charset
+          [A-Za-z0-9._-]; num_streams must be wholly decimal; compression must be a Kafka codec;
+          tools_src and home must be absolute paths without '..'; auto_offset_reset latest|earliest;
+          state present|absent; the target host must be one this lane owns.
 
     # A mirror whose source or target is unreachable FROM THE HOST IT RUNS ON installs cleanly, goes
     # into a connect-retry loop, and reports nothing — that is how seven prod-targeted legs sat dead.
@@ -151,18 +174,24 @@
     # target-side work — rather than halfway through.
     - name: Preflight the controller-side Kafka tooling source
       ansible.builtin.stat:
-        path: "{{ oe_tools_src }}/bin/kafka-mirror-maker"
+        path: "{{ oe_tools_src }}/{{ item }}"
       delegate_to: localhost
       register: oe_src_stat
+      loop:
+        - bin/kafka-mirror-maker
+        - bin/kafka-run-class
+        - share/java/kafka
 
     - name: Fail early when the controller has no Kafka tooling to ship
       ansible.builtin.assert:
-        that: oe_src_stat.stat.exists
+        that: oe_src_stat.results | map(attribute='stat.exists') | select | list | length == 3
         fail_msg: >-
-          {{ oe_tools_src }}/bin/kafka-mirror-maker is absent on the Ansible controller
-          ({{ inventory_hostname }} is the target; the controller is the Jenkins agent). Pass
-          kafka_tools_src=<path to a confluent-7.3.1 tree>. It must be 7.3.x: kafka.tools.MirrorMaker
-          was removed in Kafka 4.x.
+          {{ oe_tools_src }} does not look like a usable Kafka tooling tree on the Ansible controller
+          ({{ inventory_hostname }} is the TARGET; the controller is the Jenkins agent). All three of
+          bin/kafka-mirror-maker, bin/kafka-run-class and share/java/kafka must exist — the first two
+          because the launcher execs one through the other, the third because it IS the classpath.
+          Pass kafka_tools_src=<path to a confluent-7.3.x tree>: kafka.tools.MirrorMaker was removed
+          in Kafka 4.x, so a 4.x tree would satisfy a mere existence check and then fail at runtime.
 
     - name: Check whether the Kafka tooling is already present
       ansible.builtin.stat:
@@ -174,7 +203,14 @@
     # tooling, i.e. once per host, so re-packing costs seconds and is always the tree just verified.
     - name: Pack the minimal Kafka tooling on the controller
       ansible.builtin.command:
-        cmd: 'tar -czf {{ oe_tools_tar }} -C {{ oe_tools_src }} bin share/java/kafka'
+        argv:
+          - tar
+          - -czf
+          - "{{ oe_tools_tar }}"
+          - -C
+          - "{{ oe_tools_src }}"
+          - bin
+          - share/java/kafka
       delegate_to: localhost
       changed_when: true
       when: not oe_tools.stat.exists
@@ -222,6 +258,7 @@
         - { src: mirror-consumer.properties.j2,   dest: consumer.properties,   mode: '0644' }
         - { src: mirror-producer.properties.j2,   dest: producer.properties,   mode: '0644' }
         - { src: mirror-log4j.properties.j2,      dest: log4j.properties,      mode: '0644' }
+        - { src: mirror-readme.txt.j2,            dest: README.txt,            mode: '0644' }
       register: oe_rendered
 
     - name: Install the launchd agent

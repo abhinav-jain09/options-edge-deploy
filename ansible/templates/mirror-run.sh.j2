@@ -5,7 +5,9 @@
 #   {{ oe_source }}  ->  {{ oe_target }}
 #   topics: {{ oe_topics }}
 #
-# {{ oe_rationale }}
+# The human rationale for this leg is in README.txt beside this file, NOT here: free text rendered
+# into a shell comment is executable shell one newline later, and oe_rationale is unconstrained
+# (Codex r2 on deploy#1159, P0).
 #
 # bash 3.2 only: this host has no Homebrew and therefore no coreutils.
 set -euo pipefail
@@ -13,4 +15,4 @@ export KAFKA_LOG4J_OPTS="-Dlog4j.configuration=file:{{ oe_instance_dir }}/log4j.
 exec "{{ oe_kafka_tools }}/bin/kafka-mirror-maker" \
   --consumer.config "{{ oe_instance_dir }}/consumer.properties" \
   --producer.config "{{ oe_instance_dir }}/producer.properties" \
-  --whitelist '{{ oe_topics_regex }}' --num.streams {{ oe_num_streams }}
+  --whitelist '{{ oe_topics_regex }}' --num.streams {{ oe_num_streams | int }}

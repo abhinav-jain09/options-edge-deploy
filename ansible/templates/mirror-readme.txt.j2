@@ -1,0 +1,9 @@
+{{ oe_instance }} — MANAGED BY ANSIBLE (ansible/dealer-ledger-mirror.yml). Not executable, so the
+free-text rationale below cannot become shell the way it could in run-mirror.sh.
+
+route   : {{ oe_source }} -> {{ oe_target }}
+topics  : {{ oe_topics }}
+group   : {{ oe_group_id }} (auto.offset.reset={{ oe_auto_offset_reset }})
+agent   : {{ oe_label }}
+
+{{ oe_rationale }}

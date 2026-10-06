@@ -92,11 +92,12 @@ pipeline {
   }
   post {
     success { echo "mirror leg ${params.MIRROR_INSTANCE}: ${params.CONFIRM_DEPLOY ? "state=${params.MIRROR_STATE} applied" : 'validated (plan only)'} on ${params.MIRROR_HOST}." }
-    // NOT "nothing is half-installed" — that was false and Codex r1 called it. A failed apply CAN
-    // leave shipped tooling or rendered configs behind. What the ordering does guarantee is that the
-    // RUNNING mirror is not taken down first: reachability is proved, tooling shipped, configs
-    // rendered and linted, and only then is the agent bounced, and only if something changed. So a
-    // failure leaves the previous leg still running, not a dark one.
-    failure { echo "mirror leg ${params.MIRROR_INSTANCE} failed on ${params.MIRROR_HOST} — see the Ansible output above. Files may be partially written; the previously running agent was NOT unloaded unless the log shows the bootout/bootstrap pair. Re-run this job: the playbook is idempotent and will re-render and reload." }
+    // Two earlier versions of this message overclaimed. "Nothing is half-installed" was false (a
+    // failed apply can leave shipped tooling and rendered configs behind), and so was "a failure
+    // leaves the previous leg still running" — Codex r2 pinned the exception: once the bootout has
+    // succeeded, a failing bootstrap leaves the leg DOWN. That handoff window is inherent to
+    // replacing a single launchd label and is not closed here. What IS true: every failure up to and
+    // including the lint tasks leaves the old process alive, and a no-op re-apply never bounces it.
+    failure { echo "mirror leg ${params.MIRROR_INSTANCE} failed on ${params.MIRROR_HOST} — see the Ansible output above. If the log shows no 'Unload any previous instance' task, the previously running agent is untouched and only files may be partially written. If it DOES show that task, the leg is DOWN until a successful re-run: check `launchctl list | grep ${params.MIRROR_INSTANCE}` on the host. The playbook is idempotent — re-run this job." }
   }
 }
