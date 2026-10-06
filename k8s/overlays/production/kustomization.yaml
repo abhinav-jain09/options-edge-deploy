@@ -26,6 +26,8 @@ resources:
   - ../../services/es-aggressor-flow/base
   # es-trade-linearizer: PROD-ONLY for the same reason; es-aggressor-flow's slope reads its tape.
   - ../../services/es-trade-linearizer/base
+  # es-compression-expansion: PROD-ONLY SHADOW for the same reason — it reads the linearizer's tape.
+  - ../../services/es-compression-expansion/base
   # nifty-gex: the NIFTY/BANKNIFTY Pressure boards (DhanHQ), public via cloudflared path
   # routes to NodePort 30188. STANDALONE overlay k8s/services/nifty-gex/overlays/production
   # mirrors the prod patches — sync enforced by validate-services render equivalence.

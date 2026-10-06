@@ -1,0 +1,98 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: es-compression-expansion-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: es-compression-expansion-service
+    app.kubernetes.io/component: es-compression-expansion-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: es-compression-expansion-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: es-compression-expansion-service
+        app.kubernetes.io/component: es-compression-expansion-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: es-compression-expansion
+          image: 192.168.100.252:5000/options-edge-es-compression-expansion:dev
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: options-edge-config              # KAFKA_BOOTSTRAP_SERVERS and the shared platform config
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            # SHADOW ONLY (options-edge-processing docs/es-compression-expansion, design rev 8 + calibration
+            # report 2026-10-06). A movement-clock state machine over the linearized ES tape: box, compression
+            # episode, COMPRESSION_FLOOR, breach attempts, EXPANSION_EARLY / CONFIRMED / FAILED. Nothing reads
+            # its two topics. Its purpose in production is the forward read of the side evidence recorded in
+            # every record's `observed` block (near-spot 0DTE SPXW semantic signal, IV/RV, footprint, AMT):
+            # the year-long ES tape alone was measured uninformative at the breach (AUC ~0.5), so only the
+            # options-side inputs can still separate holds from failures, and they exist only live.
+            - name: HEALTH_PORT
+              value: "8080"
+            - name: KAFKA_ESCX_TAPE_TOPIC
+              value: underlying.es.trades.linearized
+            - name: KAFKA_ESCX_FOOTPRINT_TOPIC
+              value: es.futures.footprint.evidence
+            - name: KAFKA_ESCX_AMT_TOPIC
+              value: es.futures.auction
+            - name: KAFKA_ESCX_STRUCTURE_TOPIC
+              value: options.spx.market-structure.current     # not provisioned yet: reported UNAVAILABLE{NOT_PROVISIONED}
+            - name: KAFKA_ESCX_NEAR_SPOT_TOPIC
+              value: options.databento.near-spot-semantic
+            - name: KAFKA_ESCX_IVRV_TOPIC
+              value: options.spx.vol-premium.ivrv
+            - name: KAFKA_ESCX_STATE_TOPIC
+              value: es.futures.compression-expansion.current
+            - name: KAFKA_ESCX_EVENTS_TOPIC
+              value: es.futures.compression-expansion.events
+            - name: ESCX_SYMBOL
+              value: ES.v.0
+            - name: ESCX_CONSUMER_GROUP
+              value: es-compression-expansion-service
+            - name: ESCX_SIDE_BUFFER_RECORDS
+              value: "2000"
+            - name: ESCX_STATE_PUBLISH_EVERY_N_TRADES
+              value: "200"
+            - name: ESCX_TAPE_SILENCE_MS
+              value: "30000"
+            # The engine constants are FROZEN CODE CONSTANTS (EscxCalibration.FROZEN_2026_10_06), deliberately
+            # absent here: a config knob would let the live signals drift from the evaluated ones.
+            - name: JAVA_TOOL_OPTIONS
+              value: -Xms256m -Xmx640m
+          ports:
+            - name: health
+              containerPort: 8080
+          # readiness is 503 until the first tape record of the current session arrives (NOT_READY{TAPE_DARK}):
+          # a dark linearizer keeps the pod NotReady, visibly, instead of a silent empty shadow.
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 200m
+              memory: 768Mi
+            limits:
+              memory: 1536Mi

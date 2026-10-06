@@ -60,6 +60,8 @@ pipeline {
       'es-aggressor-flow',
       // es-trade-linearizer: PRODUCTION only; publishes the one-partition ES tape es-aggressor-flow reads.
       'es-trade-linearizer',
+      // es-compression-expansion: PRODUCTION only SHADOW; consumes the linearized ES tape plus the SPX-side evidence topics.
+      'es-compression-expansion',
       // stock-gex-close-scheduler: PRODUCTION only — the closing-board SCHEDULE, which now lives
       // inside the batch itself (USER 2026-09-01: "I don't want anything Jenkins-based, it should
       // run based on Spring Batch configuration"). This job DEPLOYS it; nothing here decides when
@@ -538,6 +540,23 @@ PYEOF
           export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
           . scripts/kafka/load-kafka-settings.sh
           scripts/kafka/ensure-multileg-topics.sh
+        '''
+      }
+    }
+    stage('Verify es-compression-expansion output topics') {
+      // BEFORE the rollout, same barrier as gamma-ladder-path above: apply-topics lives in a different job, so on a FIRST
+      // deploy neither output topic exists and, with auto-create off on prod, the transactional producer fails on its
+      // first publish and the pod crash-loops. .current is compacted/-1 (latest state per session, reset-rebuildable);
+      // .events is delete/30 d (the signal ledger keyed by tape coordinates).
+      when {
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'es-compression-expansion' && !params.DEPLOY_DRY_RUN) }
+      }
+      steps {
+        sh '''
+          set -euo pipefail
+          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
+          . scripts/kafka/load-kafka-settings.sh
+          scripts/kafka/ensure-es-compression-expansion-topics.sh
         '''
       }
     }
