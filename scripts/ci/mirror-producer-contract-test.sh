@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Every MM1 mirror pipeline must generate the SAME producer contract, and must say what it does and
+# does not buy. A silent edit back to acks=1, or dropping the pinned idempotence, is what this test
+# exists to catch: the settings live inside a heredoc that no other check reads (the shape tests
+# extract only the block after BEGIN SHAPE ASSERTIONS), so nothing else would notice.
+#
+# It asserts the BYTES of the generated producer.properties, not a comment: for each pipeline, the
+# producer heredoc must contain exactly one acks= line reading acks=all, and exactly one
+# enable.idempotence= line reading true.
+set -euo pipefail
+cd "$(dirname "$0")/../.."
+
+MIRRORS=(
+  Jenkinsfile.es-cvd-mirror
+  Jenkinsfile.es-indicator-mirror
+  Jenkinsfile.es-auction-mirror
+  Jenkinsfile.es-futures-flow-mirror
+  Jenkinsfile.es-strike-intel-mirror
+  Jenkinsfile.opra-definition-enumeration-mirror
+  Jenkinsfile.es-tape-zones-mirror
+)
+
+fail=0
+for f in "${MIRRORS[@]}"; do
+  [ -r "$f" ] || { echo "FAIL $f: not readable — the mirror set in this test is stale"; fail=1; continue; }
+  # the generated file: everything between the producer heredoc opener and its terminator
+  block=$(awk '/cat > "\$MDIR\/producer\.properties" <<P$/{inb=1; next} inb && /^P$/{inb=0} inb' "$f")
+  [ -n "$block" ] || { echo "FAIL $f: no producer.properties heredoc found"; fail=1; continue; }
+
+  acks=$(printf '%s\n' "$block" | grep -c '^acks=' || true)
+  acks_all=$(printf '%s\n' "$block" | grep -c '^acks=all$' || true)
+  idem=$(printf '%s\n' "$block" | grep -c '^enable\.idempotence=true$' || true)
+  bootstrap=$(printf '%s\n' "$block" | grep -c '^bootstrap\.servers=' || true)
+
+  [ "$acks" = "1" ] && [ "$acks_all" = "1" ] || { echo "FAIL $f: producer must set exactly one acks= line, reading acks=all (found $acks acks lines, $acks_all of them acks=all)"; fail=1; }
+  [ "$idem" = "1" ] || { echo "FAIL $f: producer must pin enable.idempotence=true (found $idem)"; fail=1; }
+  [ "$bootstrap" = "1" ] || { echo "FAIL $f: producer must set exactly one bootstrap.servers (found $bootstrap)"; fail=1; }
+done
+
+[ "$fail" = "0" ] || { echo "mirror producer contract: FAILED"; exit 1; }
+echo "mirror producer contract: ${#MIRRORS[@]} pipelines publish with acks=all and pinned idempotence"

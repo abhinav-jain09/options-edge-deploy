@@ -184,11 +184,17 @@ C
 bootstrap.servers=$TGT
 key.serializer=org.apache.kafka.common.serialization.ByteArraySerializer
 value.serializer=org.apache.kafka.common.serialization.ByteArraySerializer
-# acks=all, not 1: with acks=1 the mirror treats a record as delivered once the leader has
-# RECEIVED it, so a broker that dies before that write reaches its log drops it silently and the
-# mirror's committed offset has already moved past it — that is how a footprint bar was lost on
-# the 2026-09 production power cut. The target topics are RF=1, so this costs one log write.
+# acks=all + explicit idempotence. On these RF=1 targets this buys NO extra durability over
+# acks=1: both wait for the one in-sync replica (the leader) to write its own log, and NEITHER
+# survives losing that sole broker — a power cut can still take records the leader had written
+# but not fsynced. Only RF>=2 with min.insync.replicas>=2 would. It is set because it is the
+# right setting the day a target has replicas, and because acks=all is what the idempotent
+# producer requires; idempotence is pinned rather than left to the client default so a client
+# upgrade cannot silently turn duplicate/order protection off. MM1 flushes before committing
+# the source offset, so a crash between flush and commit REPLAYS records — idempotence keeps a
+# replay from writing a second copy within a producer session, it is not exactly-once.
 acks=all
+enable.idempotence=true
 P
           cat > "$MDIR/log4j.properties" <<L
 log4j.rootLogger=INFO, stdout
