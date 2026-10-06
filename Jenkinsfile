@@ -609,12 +609,26 @@ pipeline {
           export KAFKA_BOOTSTRAP_SERVERS
           export KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS=1
           # Single source of truth for the per-env retention cap: load-kafka-settings.sh
-          # exports KAFKA_MAX_RETENTION_MS from the rendered configmap (dev=10h; unset in
-          # prod). KAFKA_BOOTSTRAP_SERVERS/MIN_ISR are already set above, so its ':='
+          # exports KAFKA_MAX_RETENTION_MS from the rendered configmap (dev=-1 i.e. NO cap;
+          # unset in prod). KAFKA_BOOTSTRAP_SERVERS/MIN_ISR are already set above, so its ':='
           # derivations no-op for those. The streams-internal + changelog retention then
-          # default to the cap (dev 10h), or 24h when no cap is set (prod unchanged).
+          # default to a FINITE value: 24h whenever the cap is absent or means "no cap"
+          # (dev's -1, prod's unset), which is what the sanitiser below guarantees.
           . scripts/kafka/load-kafka-settings.sh
+          # KAFKA_MAX_RETENTION_MS is a retention CAP, not a retention DEFAULT, and the two
+          # are not interchangeable: dev sets it to "-1" meaning "no TTL cap". The cap's real
+          # consumers (create-hpsf-topics.sh / verify-hpsf-topics.sh) both guard with
+          # ^[0-9]+$, so they correctly read "-1" as "do not cap". Using it verbatim as the
+          # internal-topic default instead turned "no cap" into retention.ms=-1 (INFINITE) on
+          # every changelog and repartition topic on dev, so Streams repartition topics never
+          # trimmed and only the once-a-day wipe bounded them. Measured 2026-10-05:
+          # options-edge-strike-liquidity-heatmap-dev-chain-rekey at 11 GB in ONE partition,
+          # dev Kafka 27 GB -> 120 GB in 16 h, disk at 99%. A cap that is unset, non-numeric
+          # or zero means "no cap" and must fall back to the finite 24h default, never to -1.
           internal_ret_default="${KAFKA_MAX_RETENTION_MS:-86400000}"
+          case "$internal_ret_default" in
+            ''|0|*[!0-9]*) internal_ret_default=86400000 ;;
+          esac
           export KAFKA_TOPIC_RETENTION_MS="${internal_ret_default}"
           export KAFKA_STREAMS_INTERNAL_RETENTION_MS="${KAFKA_STREAMS_INTERNAL_RETENTION_MS:-$internal_ret_default}"
           export KAFKA_STREAMS_INTERNAL_SEGMENT_MS="${KAFKA_STREAMS_INTERNAL_SEGMENT_MS:-3600000}"
