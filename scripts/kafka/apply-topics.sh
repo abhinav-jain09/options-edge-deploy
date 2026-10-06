@@ -108,6 +108,24 @@ broker_ids() {
     | uniq
 }
 
+# Preflight for the main loop (Codex review, 2026-10-06): reassign_topic_replication_factor's own
+# insufficient-broker check runs AFTER a partition count has already been widened (the caller does
+# partition-alter, THEN RF-reassign). Checking here first catches the common case — broker count
+# already insufficient before this topic is touched at all — without widening its partitions.
+# NOT a full guarantee: Kafka cannot shrink a partition count back down, so a broker that drops
+# between this check and the actual reassignment call (or any OTHER reassignment failure — a
+# network blip, a timeout) still leaves the topic widened with its old replication factor. That
+# narrow window is a pre-existing property of this being two non-transactional admin calls with no
+# undo for the first one; it is no worse than the original script, which hit the exact same partial
+# state on any post-widen failure and simply never reported it because it exited immediately after.
+# What this changeset guarantees, unconditionally: the run no longer abandons every OTHER topic
+# over this one's outcome either way.
+enough_brokers_for_rf() {
+  local -a _brokers
+  mapfile -t _brokers < <(broker_ids)
+  (( ${#_brokers[@]} >= REPLICATION_FACTOR ))
+}
+
 wait_for_topic_absent() {
   local topic="$1"
   local attempts="${KAFKA_TOPIC_DELETE_WAIT_SECONDS:-90}"
@@ -153,7 +171,11 @@ reassign_topic_replication_factor() {
 
   if (( ${#brokers[@]} < REPLICATION_FACTOR )); then
     echo "Cannot assign replication factor $REPLICATION_FACTOR with only ${#brokers[@]} brokers" >&2
-    exit 1
+    # Returns to the caller rather than exiting the whole script (Codex review, 2026-10-06): this
+    # is a per-topic repair step inside the main loop, and an insufficient-broker-count condition
+    # on ONE topic's RF repair must not abandon every topic still waiting after it — the same
+    # defect this changeset exists to close.
+    return 1
   fi
 
   tmp="$(mktemp)"
@@ -178,7 +200,14 @@ reassign_topic_replication_factor() {
   kafka-reassign-partitions --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" \
     --reassignment-json-file "$tmp" \
     --execute
+  # Codex review, 2026-10-06: `rm -f` was the LAST command in this function, so its (near-always 0)
+  # exit status silently became the function's own return value — a genuine --execute failure was
+  # masked as success, and the caller would then call wait_for_topic_shape on a reassignment that
+  # never happened. Capture --execute's status explicitly, clean up unconditionally, return the
+  # CAPTURED status.
+  local rc=$?
   rm -f "$tmp"
+  return "$rc"
 }
 
 create_topic() {
@@ -312,6 +341,18 @@ alter_topic_config() {
   return 1
 }
 
+# SKIPPED_TOPICS accumulates every topic this run could not reconcile, instead of the OLD
+# behaviour of `exit 1` on the FIRST one and silently abandoning every topic after it in
+# $OPTIONS_EDGE_TOPICS. On 2026-10-06 a single pre-existing drifted topic
+# (options.spx.strike-invasion.current, 1 partition vs. a declared 32) aborted this script partway
+# through a 148-topic list; the 27 topics after it — including es.futures.cvd.levels,
+# underlying.es.trades.linearized, spx.drop.nowcast — were never created, and that surfaced an hour
+# later as four UNRELATED-LOOKING service crash-loops on prod with no single error pointing back
+# here. The safety property this script exists to enforce (never silently destroy a mismatched
+# topic's data) is preserved: every skip below is still reported, and the script still exits 1 at
+# the end if anything was skipped. What changes is that skipping topic N no longer skips N+1..last.
+SKIPPED_TOPICS=()
+
 for entry in $OPTIONS_EDGE_TOPICS; do
   topic="${entry%%:*}"
   partitions="${entry##*:}"
@@ -324,7 +365,8 @@ for entry in $OPTIONS_EDGE_TOPICS; do
     if [[ -z "$current_partitions" || -z "$current_replication_factor" ]]; then
       echo "Cannot parse current topic shape for $topic" >&2
       echo "$description" >&2
-      exit 1
+      SKIPPED_TOPICS+=("$topic (unparseable shape)")
+      continue
     fi
 
     exact_partition_mismatch=false
@@ -337,20 +379,23 @@ for entry in $OPTIONS_EDGE_TOPICS; do
       # (KAFKA_CLEANUP_TOPICS -> KAFKA_RECREATE_MISMATCHED_TOPICS) must NOT be able to
       # delete+recreate these topics — that would destroy the compacted price history.
       # Hard error EVEN IF KAFKA_RECREATE_MISMATCHED_TOPICS=true; repairing a listed
-      # topic requires an explicit, human-run migration, never this script.
+      # topic requires an explicit, human-run migration, never this script. It does NOT,
+      # however, require abandoning every OTHER topic still waiting in this loop.
       if topic_never_recreate "$topic"; then
         echo "HARD ERROR: topic $topic has partitions=$current_partitions but requires EXACTLY $partitions," >&2
         echo "and it is listed in OPTIONS_EDGE_NEVER_RECREATE_TOPICS: the destructive delete+recreate repair" >&2
         echo "is FORBIDDEN for this topic even with KAFKA_RECREATE_MISMATCHED_TOPICS=true (its compacted" >&2
         echo "records must never be destroyed by a global operator flag). Fix this topic manually." >&2
-        exit 1
+        SKIPPED_TOPICS+=("$topic (NEVER-RECREATE, manual migration required)")
+        continue
       fi
       if [[ "$RECREATE_MISMATCHED" != "true" ]]; then
         echo "Topic $topic exists with partitions=$current_partitions but requires EXACTLY $partitions (exact-partition contract: fixed assign() reads or fixed key->partition mapping)." >&2
         echo "Kafka cannot shrink partitions: this needs a destructive delete+recreate." >&2
         echo "Set KAFKA_RECREATE_MISMATCHED_TOPICS=true only for approved destructive cleanup deployments." >&2
         echo "NOTE: recreating $topic DISCARDS its records — any bootstrap state it held must be re-seeded afterwards." >&2
-        exit 1
+        SKIPPED_TOPICS+=("$topic (exact-partition mismatch: $current_partitions vs $partitions, needs destructive recreate)")
+        continue
       fi
       echo "Repairing EXACT-partition topic $topic: partitions=$current_partitions -> $partitions (destructive delete+recreate; records discarded)"
       kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --delete --topic "$topic"
@@ -362,11 +407,20 @@ for entry in $OPTIONS_EDGE_TOPICS; do
         if (( current_partitions < partitions )); then
           echo "Topic $topic exists with partitions=$current_partitions replicationFactor=$current_replication_factor; expected at least partitions=$partitions replicationFactor=$REPLICATION_FACTOR" >&2
           echo "Set KAFKA_RECREATE_MISMATCHED_TOPICS=true only for approved destructive cleanup deployments." >&2
-          exit 1
+          SKIPPED_TOPICS+=("$topic (partitions=$current_partitions below declared minimum $partitions)")
+          continue
         fi
         echo "Topic $topic exists with partitions=$current_partitions replicationFactor=$current_replication_factor; expected at least replicationFactor=$REPLICATION_FACTOR" >&2
         echo "Set KAFKA_RECREATE_MISMATCHED_TOPICS=true only for approved destructive cleanup deployments." >&2
-        exit 1
+        SKIPPED_TOPICS+=("$topic (replicationFactor=$current_replication_factor below required $REPLICATION_FACTOR)")
+        continue
+      fi
+
+      if [[ "$current_replication_factor" != "$REPLICATION_FACTOR" ]] && ! enough_brokers_for_rf; then
+        echo "Topic $topic needs replicationFactor=$REPLICATION_FACTOR but the cluster does not have enough brokers right now." >&2
+        echo "Skipping BEFORE any change (partition widen included) so this topic is not left half-migrated." >&2
+        SKIPPED_TOPICS+=("$topic (insufficient brokers for replicationFactor=$REPLICATION_FACTOR)")
+        continue
       fi
 
       echo "Repairing mismatched topic $topic: partitions=$current_partitions replicationFactor=$current_replication_factor -> partitions=$partitions replicationFactor=$REPLICATION_FACTOR"
@@ -378,7 +432,10 @@ for entry in $OPTIONS_EDGE_TOPICS; do
           --partitions "$partitions"
       fi
       if [[ "$current_replication_factor" != "$REPLICATION_FACTOR" ]]; then
-        reassign_topic_replication_factor "$topic" "$desired_partitions"
+        if ! reassign_topic_replication_factor "$topic" "$desired_partitions"; then
+          SKIPPED_TOPICS+=("$topic (replication-factor reassignment failed, see log above)")
+          continue
+        fi
       fi
       wait_for_topic_shape "$topic" "$desired_partitions" "$REPLICATION_FACTOR"
     else
@@ -391,3 +448,12 @@ for entry in $OPTIONS_EDGE_TOPICS; do
 
   alter_topic_config "$topic" "$cleanup_policy"
 done
+
+if (( ${#SKIPPED_TOPICS[@]} > 0 )); then
+  echo "" >&2
+  echo "apply-topics.sh: ${#SKIPPED_TOPICS[@]} topic(s) could NOT be reconciled (every OTHER declared" >&2
+  echo "topic above this line WAS still created/updated — this run does not abandon the rest of the" >&2
+  echo "list over one drifted topic):" >&2
+  for t in "${SKIPPED_TOPICS[@]}"; do echo "  - $t" >&2; done
+  exit 1
+fi
