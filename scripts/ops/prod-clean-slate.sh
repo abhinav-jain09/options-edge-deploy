@@ -132,7 +132,8 @@ RRC=${PIPESTATUS[0]}
 # reconciled, while saying in the same breath that every OTHER topic WAS created/updated. This wrapper
 # reads that exit code as "the recreate is unusable" and leaves the whole es4->prod mirror set paused —
 # so one drifted topic takes twelve mirrors down with it, which is what happened on 2026-10-07
-# (options.spx.strike-invasion.current, 1 partition vs a declared 32). The declaration side of that
+# (options.spx.strike-invasion.current, 1 partition vs a declared 32 — a drift, not data loss: widening
+# a non-exact topic is non-destructive, it only re-routes keys). The declaration side of that
 # incident is fixed (scripts/kafka/resolve-prod-partition-overrides.sh); this coupling is NOT, because
 # loosening it means deciding which apply-topics failures still permit a bring-up, and that is an
 # owner decision about the "a failed reset stays DOWN" rule, not a refactor.

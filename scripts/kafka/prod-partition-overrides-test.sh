@@ -63,6 +63,15 @@ done
 expect "an override applies to any declared topic" 4 "$(count_of options.spx.strike-sr.current 'options.spx.strike-sr.current=4')"
 expect "...and leaves the others alone" 32 "$(count_of options.spx.strike-invasion.current 'options.spx.strike-sr.current=4')"
 
+audit=$(ENVIRONMENT=production bash -c '
+  source scripts/kafka/topics.env
+  source scripts/kafka/resolve-prod-partition-overrides.sh
+  _oe_resolve_prod_partition_overrides' 2>&1 | tail -1)
+case "$audit" in
+  *"options.spx.strike-invasion.current:1"*) printf '  ok   %-56s %s\n' "the audit line names what it rewrote" "named" ;;
+  *) printf '  FAIL %-56s %s\n' "the audit line names what it rewrote" "$audit"; fail=1 ;;
+esac
+
 # ---- a PROD-ONLY topic: the applier merges that set into OPTIONS_EDGE_TOPICS before resolving, the
 #      verifier keeps it separate. Validating against one list only meant an override for such a topic
 #      applied in the applier and was REFUSED in the verifier. Both input shapes are driven here. ----
@@ -84,10 +93,12 @@ expect "...and in the VERIFIER shape, from the prod-only list" 4 "$separate"
 
 # ---- fail closed ----
 refuses "an override for an UNDECLARED topic"        'no.such.topic=1'                      'NOT declared'
-refuses "a non-numeric count"                        'options.spx.strike-sr.current=many'   'positive integer'
-refuses "a zero count"                               'options.spx.strike-sr.current=0'      'canonical positive integer'
-refuses "a non-canonical 00"                         'options.spx.strike-sr.current=00'     'canonical positive integer'
-refuses "a leading-zero count"                       'options.spx.strike-sr.current=032'    'canonical positive integer'
+refuses "a non-numeric count"                        'options.spx.strike-sr.current=many'   'canonical integer'
+refuses "a zero count"                               'options.spx.strike-sr.current=0'      'canonical integer'
+refuses "a non-canonical 00"                         'options.spx.strike-sr.current=00'     'canonical integer'
+refuses "a leading-zero count"                       'options.spx.strike-sr.current=032'    'canonical integer'
+refuses "digits followed by garbage"                 'options.spx.strike-sr.current=12garbage' 'canonical integer'
+refuses "a count above the stated bound"             'options.spx.strike-sr.current=99999'  'canonical integer'
 refuses "a malformed entry"                          'options.spx.strike-sr.current'        'not topic=partitions'
 
 # ---- and now the SCRIPTS themselves, with mocked Kafka CLIs ----
@@ -171,4 +182,4 @@ script_case "verify-topics still REFUSES it without production"   verify-topics.
 script_case "the es4 set never sees the override"                 apply-topics.sh  production es4 pass "TOPIC_SET='es4'"
 
 [ "$fail" = 0 ] || { echo "prod partition overrides: FAILED"; exit 1; }
-echo "prod partition overrides: the production declaration resolves, dev and es4 are untouched, six malformed/stale shapes are refused, and both REAL scripts accept the topic on production while still refusing it off production"
+echo "prod partition overrides: 24 cases — the production declaration resolves and the audit line names it, dev and es4 are untouched, seven malformed or stale shapes are refused, and both REAL scripts accept the topic on production while still refusing it off production"
