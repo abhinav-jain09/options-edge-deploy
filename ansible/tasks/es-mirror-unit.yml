@@ -41,41 +41,28 @@
   changed_when: false
   failed_when: false
 
-- name: "{{ item.label }} | the consumer group must already exist on the source"
-  # The group carries the committed offsets. A group that does not exist yet means THIS install is the
-  # first one — and a first install copies from auto.offset.reset={{ item.offset_reset }}, which on an
-  # `earliest` unit is the whole retained history. That is a decision, not a side effect, so it needs
-  # -e allow_new_consumer_group=true.
-  ansible.builtin.shell:
-    cmd: |
-      set -euo pipefail
+- name: "{{ item.label }} | render the consumer-group check (recorded, not fatal)"
+  when: oe_shape.rc == 0
+  block:
+    - name: "{{ item.label }} | render the consumer-group check"
+      ansible.builtin.template:
+        src: mirror-group-check.sh.j2
+        dest: "{{ oe_rendered_dir }}/{{ item.label }}/group-check.sh"
+        mode: "0755"
+      changed_when: false
+  rescue:
+    - name: "{{ item.label }} | the consumer-group check could not be rendered"
+      ansible.builtin.set_fact:
+        oe_render_failed: true
 
-      # The LISTING must have succeeded before its silence means anything: a broker that refused the
-      # query, or a kafka-consumer-groups that failed, prints nothing — which read as "the group does
-      # not exist" and, with allow_new_consumer_group=true, installed a mirror that then re-read the
-      # whole retention window. A failed or empty listing is now a refusal whatever the flag says.
-      KBIN={{ oe_kbin | quote }}; SRC={{ item.source | quote }}; G={{ item.group_id | quote }}
-      LIST=$("$KBIN/kafka-consumer-groups" --bootstrap-server "$SRC" --list 2>&1); rc=$?
-      if [ "$rc" != 0 ] || [ -z "$(printf '%s' "$LIST" | tr -d '[:space:]')" ]; then
-        echo "FAIL: cannot list consumer groups on {{ item.source }} (rc=$rc) — refusing, because an"
-        echo "      unreadable listing is indistinguishable from an absent group:"
-        printf '%s\n' "$LIST" | sed 's/^/      /' | head -5
-        exit 1
-      fi
-      if printf '%s\n' "$LIST" | grep -Fxq "$G"; then
-        echo "group exists: $G"
-      elif [ "{{ oe_allow_new_group | lower }}" = "true" ]; then
-        echo "group ABSENT, creating a FIRST install under $G (allow_new_consumer_group=true, auto.offset.reset={{ item.offset_reset }})"
-      else
-        echo "FAIL: consumer group $G does not exist on {{ item.source }}."
-        echo "      A first install re-reads from auto.offset.reset={{ item.offset_reset }}; pass -e allow_new_consumer_group=true to accept that."
-        exit 1
-      fi
-    executable: /bin/bash
+- name: "{{ item.label }} | the consumer group, and what an absent one means"
+  # The three outcomes it keeps apart are in the rendered script's header; it is read-only.
+  when: oe_shape.rc == 0 and not oe_render_failed
+  ansible.builtin.command:
+    cmd: "bash {{ oe_rendered_dir }}/{{ item.label }}/group-check.sh"
   register: oe_group
   changed_when: false
   failed_when: false
-  when: oe_shape.rc == 0
 
 - name: "{{ item.label }} | this unit is installable"
   ansible.builtin.set_fact:

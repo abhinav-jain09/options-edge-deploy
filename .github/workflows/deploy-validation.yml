@@ -249,6 +249,12 @@ jobs:
       - name: Validate the mirror comparison guard
         run: bash scripts/ci/mirror-diff-guard-test.sh
 
+      # What an ABSENT consumer group means is the difference between a first install and re-copying a
+      # retention window into the target — and a SUCCESSFUL but empty listing is the correct answer on
+      # a source with no groups, not a failure. Driven once per outcome against a stubbed CLI.
+      - name: Validate the mirror consumer-group check
+        run: bash scripts/ci/mirror-group-check-test.sh
+
       # The install replaces five files for a unit the stop phase has already brought DOWN, so a
       # failed move must restore the previous generation whole — which depends on `set -E`, without
       # which the ERR trap is not inherited by the function doing the moves and the mixed generation
