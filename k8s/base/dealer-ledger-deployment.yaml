@@ -11,7 +11,11 @@ spec:
   # HELD AT 0 EVERYWHERE (USER 2026-09-10 after the prod OOM at 13:09/13:11 ET — #1034; prod lift
   # of 2026-10-06 REVERTED on 2026-10-07 — this PR).
   #
-  # THE LEDGER DOES NOT RUN ON DEV OR PROD. It runs on .74 (offload requirement 3.2), because it is
+  # THIS REVISION HOLDS THE LEDGER AT ZERO ON EVERY ENVIRONMENT. That is the DECLARED state; the
+  # running state may differ until a service-deploy applies it (on 2026-10-07 prod was still 1/1
+  # from #1148, and a hand `kubectl scale` cannot change it — the
+  # options-edge-jenkins-only-workloads admission policy admits only the jenkins-deployer SA).
+  # It is held because the ledger belongs on .74 (offload requirement 3.2), being
   # memory-hungry and unproven: it was the 6.1 GB process the kernel killed on 2026-09-10. The
   # intended lane is
   #   dev(.102) --[6 input topics]--> .74 --> ledger + calibration scorer --> prod and dev
