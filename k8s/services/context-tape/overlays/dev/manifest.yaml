@@ -96,6 +96,10 @@ spec:
               value: ES.v.0
             - name: ZERO_DTE_OPTION_TOPIC
               value: options.databento.gex.strike
+            - name: ES_BOX_VIEW_ENABLED
+              value: "true"
+            - name: KAFKA_ES_BOX_TOPIC
+              value: es.futures.compression-expansion.current
             - name: ZERO_DTE_CURRENT_TOPIC
               value: context-tape.compression.current
             - name: ZERO_DTE_HISTORY_TOPIC

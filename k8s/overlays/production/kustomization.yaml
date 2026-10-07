@@ -90,6 +90,12 @@ patches:
         value:
           name: VITE_ZERO_DTE_COMPRESSION_ENABLED
           value: "true"
+      # ES BOX layer on /context-tape (2026-10-07): the es-compression-expansion shadow view.
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: VITE_ES_BOX_ENABLED
+          value: "true"
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value:
