@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Resolve OPTIONS_EDGE_PROD_ONLY_PARTITION_OVERRIDES into OPTIONS_EDGE_TOPICS.
 #
-# WHY THIS EXISTS. topics.env declares ONE partition count per topic, for every environment, and
+# WHY THIS EXISTS. topics.env declares ONE partition count per topic for the dev/prod (default) topic
+# set — es4 has its own declaration, OPTIONS_EDGE_ES4_TOPICS, which does not carry this topic at
+# all — and
 # apply-topics.sh treats it as a MINIMUM: a live topic below it is SKIPPED (and the run exits 1)
 # unless KAFKA_RECREATE_MISMATCHED_TOPICS=true. With that flag a non-exact topic is WIDENED in place
 # with `kafka-topics --alter --partitions` — no records are deleted; only an EXACT-partition topic
@@ -30,7 +32,7 @@ _oe_resolve_prod_partition_overrides() {
   local overrides="${OPTIONS_EDGE_PROD_ONLY_PARTITION_OVERRIDES:-}"
   [ -n "${overrides// /}" ] || return 0
 
-  local ov name count applied=""
+  local ov name count applied="" _oe_seen=""
   for ov in $overrides; do
     case "$ov" in
       *=*) ;;
@@ -42,14 +44,24 @@ _oe_resolve_prod_partition_overrides() {
     # errored on it and could carry on treating the topic as compatible. The bound is stated rather
     # than left open: a count above it is a typo, not a declaration (Kafka would accept it and the
     # partitions would be real).
-    if ! [[ "$count" =~ ^[1-9][0-9]*$ ]] || (( count > 1024 )); then
-      echo "resolve-prod-partition-overrides: $name=$count — the count must be a canonical integer from 1 to 1024 (not 0, 00, 032, 12garbage or 99999)" >&2
+    # The LENGTH is checked before any arithmetic: `(( count > 1024 ))` on an unbounded string wraps
+    # in bash's 64-bit arithmetic, so 18446744073709552640 compared as "not greater than 1024" and
+    # passed the bound it was supposed to fail. Four digits cannot overflow, and 1024 partitions is
+    # already far past anything this estate declares.
+    if ! [[ "$count" =~ ^[1-9][0-9]{0,3}$ ]] || (( count > 1024 )); then
+      echo "resolve-prod-partition-overrides: $name=$count — the count must be a canonical integer from 1 to 1024 (not 0, 00, 032, 12garbage, 99999 or 18446744073709552640)" >&2
       return 1
     fi
     # Declared in EITHER list. apply-topics.sh merges OPTIONS_EDGE_PROD_ONLY_TOPICS into
     # OPTIONS_EDGE_TOPICS before calling this; verify-topics.sh keeps the two apart and checks the
     # prod-only set separately. Validating against only one of them meant an override for a prod-only
     # topic applied in the applier and was REFUSED in the verifier — shared code, different input.
+    # One entry per topic. Two entries silently applied the LAST one and wrote both into the audit
+    # line, so the log said the declaration was adjusted to two different counts.
+    case " $_oe_seen " in
+      *" $name "*) echo "resolve-prod-partition-overrides: $name appears more than once — one override per topic, or the audit line reports a count that was not applied" >&2; return 1 ;;
+    esac
+    _oe_seen="$_oe_seen $name"
     case " $OPTIONS_EDGE_TOPICS ${OPTIONS_EDGE_PROD_ONLY_TOPICS:-} " in
       *" $name:"*) ;;
       *) echo "resolve-prod-partition-overrides: $name is NOT declared in OPTIONS_EDGE_TOPICS or OPTIONS_EDGE_PROD_ONLY_TOPICS — an override that describes nothing is a stale declaration, not a no-op" >&2; return 1 ;;

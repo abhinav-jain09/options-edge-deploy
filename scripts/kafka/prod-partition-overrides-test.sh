@@ -9,6 +9,8 @@ cd "$(dirname "$0")/../.."
 R=scripts/kafka/resolve-prod-partition-overrides.sh
 [ -r "$R" ] || { echo "FAIL: $R not readable"; exit 1; }
 fail=0
+cases=0
+refusals=0
 
 count_of() { # topic  [override-list]  [topic-list-var-override]
   local topic="$1" ovr="${2-__keep__}"
@@ -24,10 +26,12 @@ count_of() { # topic  [override-list]  [topic-list-var-override]
     echo absent'
 }
 expect() { # name  expected  actual
+  cases=$((cases+1))
   if [ "$2" = "$3" ]; then printf '  ok   %-56s %s\n' "$1" "$3"
   else printf '  FAIL %-56s expected=%s actual=%s\n' "$1" "$2" "$3"; fail=1; fi
 }
 refuses() { # name  override-list  want-substring
+  cases=$((cases+1)); refusals=$((refusals+1))
   local out rc
   set +e
   out=$(ENVIRONMENT=production OVR="$2" bash -c '
@@ -52,6 +56,7 @@ expect "the dev/shared declaration still says 32" 32 "$dev"
 es4=$(bash -c 'source scripts/kafka/topics.env; case " ${OPTIONS_EDGE_ES4_TOPICS:-} " in *" options.spx.strike-invasion.current:"*) echo present;; *) echo absent;; esac')
 expect "the es4 set does not carry the topic at all" absent "$es4"
 for s in scripts/kafka/apply-topics.sh scripts/kafka/verify-topics.sh; do
+  cases=$((cases+1))
   if grep -q 'ENVIRONMENT:-}" == "production"' "$s" && grep -q '_oe_resolve_prod_partition_overrides' "$s"; then
     printf '  ok   %-56s %s\n' "$s resolves under the production predicate" "wired"
   else
@@ -67,6 +72,7 @@ audit=$(ENVIRONMENT=production bash -c '
   source scripts/kafka/topics.env
   source scripts/kafka/resolve-prod-partition-overrides.sh
   _oe_resolve_prod_partition_overrides' 2>&1 | tail -1)
+cases=$((cases+1))
 case "$audit" in
   *"options.spx.strike-invasion.current:1"*) printf '  ok   %-56s %s\n' "the audit line names what it rewrote" "named" ;;
   *) printf '  FAIL %-56s %s\n' "the audit line names what it rewrote" "$audit"; fail=1 ;;
@@ -99,6 +105,11 @@ refuses "a non-canonical 00"                         'options.spx.strike-sr.curr
 refuses "a leading-zero count"                       'options.spx.strike-sr.current=032'    'canonical integer'
 refuses "digits followed by garbage"                 'options.spx.strike-sr.current=12garbage' 'canonical integer'
 refuses "a count above the stated bound"             'options.spx.strike-sr.current=99999'  'canonical integer'
+# bash arithmetic is 64-bit and WRAPS: this value compared as "not greater than 1024" and passed the
+# bound it was supposed to fail, so the length is checked before any arithmetic
+refuses "a count that overflows bash arithmetic"     'options.spx.strike-sr.current=18446744073709552640' 'canonical integer'
+# two entries for one topic silently applied the LAST and wrote both into the audit line
+refuses "the same topic declared twice"              'options.spx.strike-sr.current=1 options.spx.strike-sr.current=32' 'more than once'
 refuses "a malformed entry"                          'options.spx.strike-sr.current'        'not topic=partitions'
 
 # ---- and now the SCRIPTS themselves, with mocked Kafka CLIs ----
@@ -115,6 +126,11 @@ fixture() { # -> prints a temp dir holding kafka/{apply,verify,resolver,topics.e
   cat >> "$tmp/kafka/topics.env" <<'T'
 OPTIONS_EDGE_TOPICS="options.spx.strike-invasion.current:32 options.spx.strike-sr.current:32"
 OPTIONS_EDGE_ES4_TOPICS="es.futures.cvd:1"
+OPTIONS_EDGE_ES4_COMPACTED_TOPICS=""
+OPTIONS_EDGE_ES4_PURE_COMPACT_TOPICS=""
+OPTIONS_EDGE_ES4_EXACT_PARTITION_TOPICS=""
+OPTIONS_EDGE_ES4_TOPIC_RETENTION_OVERRIDES=""
+OPTIONS_EDGE_ES4_TOPIC_RETENTION_BYTES_OVERRIDES=""
 OPTIONS_EDGE_COMPACTED_TOPICS=""
 OPTIONS_EDGE_PURE_COMPACT_TOPICS=""
 OPTIONS_EDGE_EXACT_PARTITION_TOPICS=""
@@ -154,6 +170,7 @@ K
 }
 
 script_case() { # name  script  env(production|"")  topic-set  expect(pass|fail)  want-substring
+  cases=$((cases+1))
   local name="$1" script="$2" env="$3" set="$4" expect="$5" want="$6"
   local tmp out rc; tmp=$(fixture)
   set +e
@@ -179,7 +196,8 @@ script_case "apply-topics ACCEPTS the 1-partition topic on prod"  apply-topics.s
 script_case "apply-topics still REFUSES it without production"    apply-topics.sh  ""         "" fail "below declared minimum 32"
 script_case "verify-topics ACCEPTS it on prod"                    verify-topics.sh production "" pass "production declaration adjusted"
 script_case "verify-topics still REFUSES it without production"   verify-topics.sh ""         "" fail "expected at least 32"
-script_case "the es4 set never sees the override"                 apply-topics.sh  production es4 pass "TOPIC_SET='es4'"
+script_case "the es4 APPLIER never sees the override"             apply-topics.sh  production es4 pass "TOPIC_SET='es4'"
+script_case "the es4 VERIFIER never sees it either"               verify-topics.sh production es4 pass "TOPIC_SET='es4'"
 
 [ "$fail" = 0 ] || { echo "prod partition overrides: FAILED"; exit 1; }
-echo "prod partition overrides: 24 cases — the production declaration resolves and the audit line names it, dev and es4 are untouched, seven malformed or stale shapes are refused, and both REAL scripts accept the topic on production while still refusing it off production"
+echo "prod partition overrides: $cases cases — the production declaration resolves and the audit line names it, dev and es4 are untouched in BOTH scripts, $refusals malformed, stale or duplicated shapes are refused, and both REAL scripts accept the topic on production while still refusing it off production"
