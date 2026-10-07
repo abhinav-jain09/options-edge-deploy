@@ -56,8 +56,12 @@ offs() { # $1 bootstrap
   [ -n "$o" ] && echo "$o" || echo ABSENT
 }
 # Sum of the mirror group's COMMITTED offsets at the source, across the lane's topics.
+# ⚠ SCOPED TO $TOPIC (Codex r3, P0). The first version summed committed offsets for EVERY topic in
+# the group. The .74->prod group carries four — profile, state, signal-fired, outcome-scored — so
+# movement on any ONE of them passed a gate that claims the PROFILE is being delivered, which is the
+# only one close-direction needs. That is a false pass, in the direction that matters.
 grp_pos() { "$KBIN/kafka-consumer-groups" --bootstrap-server "$SRC_BOOTSTRAP" --group "$TGT_GROUP" --describe 2>/dev/null \
-    | awk 'NR>1 && $4 ~ /^[0-9]+$/ {s+=$4} END{print s+0}'; }
+    | awk -v t="$TOPIC" 'NR>1 && $2==t && $4 ~ /^[0-9]+$/ {s+=$4} END{print s+0}'; }
 # `--describe --state` on a NON-EXISTENT group prints prose ("Consumer group 'x' does not exist."),
 # not an empty result, so a naive last-two-fields awk returns "not exist." — a non-empty string that
 # sails past an emptiness test and lands in the catch-all branch. Detect the prose explicitly and
@@ -84,24 +88,39 @@ case "$state" in
   *)  echo "  (group state is not Stable; continuing to the progress test, which decides)" ;;
 esac
 
-t0=$(offs "$TGT_BOOTSTRAP"); g0=$(grp_pos)
+t0=$(offs "$TGT_BOOTSTRAP"); g0=$(grp_pos); s0=$(offs "$SRC_BOOTSTRAP")
 echo "  target t0         : $t0"
-echo "  group committed g0: $g0"
+echo "  group committed g0: $g0   (scoped to $TOPIC)"
+echo "  source t0         : $s0"
 [ "$t0" = ABSENT ] && fail "$TOPIC does not exist on $TARGET — the mirror has never delivered"
 
 echo "  sampling ${SETTLE}s for MIRROR progress (group position), not merely target offset..."
 sleep "$SETTLE"
-t1=$(offs "$TGT_BOOTSTRAP"); g1=$(grp_pos)
+t1=$(offs "$TGT_BOOTSTRAP"); g1=$(grp_pos); s1=$(offs "$SRC_BOOTSTRAP")
 echo "  target t1         : $t1"
-echo "  group committed g1: $g1"
+echo "  group committed g1: $g1   (scoped to $TOPIC)"
+echo "  source t1         : $s1"
 
-# THE VERDICT IS THE GROUP, not the target. Only the group's progress attributes the records to the
-# mirror.
+# THE VERDICT IS THE GROUP, SCOPED TO THIS TOPIC — only that attributes records to the mirror.
+#
+# But a non-advancing group has TWO causes and they are not the same thing (Codex r3, P1): a broken
+# mirror, or a source that simply produced nothing in the window. The earlier version blamed
+# "off-hours", which is only one way to have an idle source — a sparse source mid-session reads
+# identically. So snapshot the SOURCE too and separate the three outcomes. All non-PASS outcomes
+# still BLOCK, because the gate's job is positive proof; what changes is what the operator is told.
 if [ "${g1:-0}" -le "${g0:-0}" ]; then
+  if [ "${s1:-0}" -le "${s0:-0}" ]; then
+    fail "INCONCLUSIVE, not a failure: the SOURCE did not advance either (s0=$s0 s1=$s1), so there was
+      no traffic to mirror in ${SETTLE}s and this window proves nothing either way. The ledger on .74
+      is idle — expected off-hours, and possible mid-session on a sparse topic. RETRY during active
+      flow. Blocking anyway, because deployment needs positive proof, not absence of evidence."
+  fi
   echo "  (target moved $(( ${t1:-0} - ${t0:-0} )) records, but that is NOT attributable to the mirror)" >&2
-  fail "mirror group $TGT_GROUP did not advance at .74 over ${SETTLE}s (g0=$g0 g1=$g1). Off-hours the ledger on .74 is idle and this is an expected FALSE NEGATIVE — re-run during RTH. During a session it means the mirror is not delivering."
+  fail "MIRROR FAILURE: the source advanced $(( ${s1:-0} - ${s0:-0} )) records for $TOPIC in ${SETTLE}s
+      but the mirror group $TGT_GROUP committed nothing (g0=$g0 g1=$g1). Records exist and are not
+      being carried. Check the agent on the host that runs this leg."
 fi
 
-echo "LANE DELIVERING to $TARGET: the mirror group advanced $((g1 - g0)) committed records at .74"
+echo "LANE DELIVERING to $TARGET: for $TOPIC the mirror group advanced $((g1 - g0)) committed records at .74"
 echo "in ${SETTLE}s, which it commits only after the target's producer accepted them. Target moved"
 echo "$(( ${t1:-0} - ${t0:-0} )). Holding the local ledger down now removes a duplicate producer."
