@@ -20,12 +20,22 @@ body = [t for t in tasks if "install the rendered files" in t["name"]]
 if not body:
     print("NO_TASK"); raise SystemExit(0)
 cmd = body[0]["ansible.builtin.shell"]["cmd"]
-import os
-cmd = (cmd.replace("{{ oe_rendered_dir }}/{{ item.label }}", T + "/rendered")
-          .replace("{{ item.mdir }}", T + "/unit")
-          .replace("{{ item.plist }}", T + "/u.plist")
-          .replace("{{ item.target }}", os.environ.get("OE_TEST_TARGET", "127.0.0.1:19092"))
-          .replace("{{ playbook_dir }}", os.getcwd() + "/ansible"))
+import os, re
+# the body shell-QUOTES every value it renders (Ansible's quote filter), so the substitutions have to
+# match THOSE expressions; anything left unresolved is reported rather than handed to bash, which
+# turned a syntax error into a passing case
+subs = {
+    '{{ (oe_rendered_dir ~ "/" ~ item.label) | quote }}': "'%s/rendered'" % T,
+    "{{ item.mdir | quote }}": "'%s/unit'" % T,
+    "{{ item.plist | quote }}": "'%s/u.plist'" % T,
+    "{{ item.target | quote }}": "'%s'" % os.environ.get("OE_TEST_TARGET", "127.0.0.1:19092"),
+    '{{ (playbook_dir ~ "/..") | quote }}': "'%s'" % os.getcwd(),
+}
+for k, v in subs.items():
+    cmd = cmd.replace(k, v)
+left = re.findall(r"\{\{[^}]*\}\}", cmd)
+if left:
+    print("UNRESOLVED:" + left[0]); raise SystemExit(0)
 if brk == "break":
     old = 'put run-mirror.sh       "$M/run-mirror.sh"       0755'
     if old not in cmd:
@@ -76,7 +86,7 @@ generation() { # dir -> OLD | NEW | MIXED
 fail=0
 # ---- a clean install lands the new generation ----
 D="$WORK/ok"; seed "$D"
-r=$(render "$D"); [ "$r" = OK ] || { echo "FAIL: cannot extract the install task body ($r)"; exit 1; }
+r=$(render "$D"); [ "$r" = OK ] || { echo "FAIL: cannot render the install task body ($r)"; exit 1; }
 set +e; out=$(bash "$D/install.sh" 2>&1); rc=$?; set -e
 g=$(generation "$D")
 if [ "$rc" = 0 ] && [ "$g" = NEW ]; then printf '  ok   %-44s rc=%s generation=%s\n' "a clean install" "$rc" "$g"
@@ -84,7 +94,7 @@ else printf '  FAIL %-44s rc=%s generation=%s %s\n' "a clean install" "$rc" "$g"
 
 # ---- a failure at the FOURTH move restores the previous generation, whole ----
 D="$WORK/broken"; seed "$D"
-r=$(render "$D" break); [ "$r" = OK ] || { echo "FAIL: cannot extract/patch the install task body ($r)"; exit 1; }
+r=$(render "$D" break); [ "$r" = OK ] || { echo "FAIL: cannot render/patch the install task body ($r)"; exit 1; }
 set +e; out=$(bash "$D/install.sh" 2>&1); rc=$?; set -e
 g=$(generation "$D"); strays=$(ls -1 "$D/unit" | grep -c 'ansible-new' || true)
 if [ "$rc" != 0 ] && [ "$g" = OLD ] && [ "$strays" = 0 ] && printf '%s' "$out" | grep -q 'put back exactly as it was'; then
@@ -100,7 +110,7 @@ D="$WORK/first"; seed "$D"
 # nothing installed yet, and the unit DIRECTORY does not exist either: leaving an empty one behind is
 # not "exactly as it was", and a test that pre-creates it cannot see that
 rm -rf "$D/unit" "$D/u.plist"
-r=$(render "$D" break); [ "$r" = OK ] || { echo "FAIL: cannot extract/patch the install task body ($r)"; exit 1; }
+r=$(render "$D" break); [ "$r" = OK ] || { echo "FAIL: cannot render/patch the install task body ($r)"; exit 1; }
 set +e; out=$(bash "$D/install.sh" 2>&1); rc=$?; set -e
 # counted only when the directory exists: under `set -o pipefail` a failing ls makes the whole
 # assignment non-zero, which with `set -e` ended this test silently before it could judge anything
@@ -115,7 +125,7 @@ fi
 
 # ---- a failure during the BACKUP phase must not cost the old generation ----
 D="$WORK/backup"; seed "$D"
-r=$(render "$D" break-backup); [ "$r" = OK ] || { echo "FAIL: cannot extract/patch the install task body ($r)"; exit 1; }
+r=$(render "$D" break-backup); [ "$r" = OK ] || { echo "FAIL: cannot render/patch the install task body ($r)"; exit 1; }
 set +e; out=$(bash "$D/install.sh" 2>&1); rc=$?; set -e
 g=$(generation "$D")
 if [ "$rc" != 0 ] && [ "$g" = OLD ]; then printf '  ok   %-44s rc=%s generation=%s\n' "a backup-phase failure keeps the old files" "$rc" "$g"
@@ -123,7 +133,7 @@ else printf '  FAIL %-44s rc=%s generation=%s out=%s\n' "a backup-phase failure 
 
 # ---- a mktemp failure must not leave a unit directory behind ----
 D="$WORK/mktemp"; seed "$D"; rm -rf "$D/unit" "$D/u.plist"
-r=$(render "$D" break-mktemp); [ "$r" = OK ] || { echo "FAIL: cannot extract/patch the install task body ($r)"; exit 1; }
+r=$(render "$D" break-mktemp); [ "$r" = OK ] || { echo "FAIL: cannot render/patch the install task body ($r)"; exit 1; }
 set +e; out=$(bash "$D/install.sh" 2>&1); rc=$?; set -e
 dir_left=$([ -d "$D/unit" ] && echo 1 || echo 0)
 if [ "$rc" != 0 ] && [ "$dir_left" = 0 ]; then
@@ -134,7 +144,7 @@ fi
 
 # ---- a failure in the window right after the mkdir also leaves nothing ----
 D="$WORK/early"; seed "$D"; rm -rf "$D/unit" "$D/u.plist"
-r=$(render "$D" break-early); [ "$r" = OK ] || { echo "FAIL: cannot extract/patch the install task body ($r)"; exit 1; }
+r=$(render "$D" break-early); [ "$r" = OK ] || { echo "FAIL: cannot render/patch the install task body ($r)"; exit 1; }
 set +e; out=$(bash "$D/install.sh" 2>&1); rc=$?; set -e
 dir_left=$([ -d "$D/unit" ] && echo 1 || echo 0)
 if [ "$rc" != 0 ] && [ "$dir_left" = 0 ]; then
@@ -148,7 +158,7 @@ fi
 # `-e oe_stop='{"rc":0}'` makes them true however the stop ended. So the body re-runs the
 # permitted-commit guard for a production target — from this checkout it must refuse, writing nothing.
 D="$WORK/prodlock"; seed "$D"
-r=$(OE_TEST_TARGET=192.168.100.252:9092 render "$D"); [ "$r" = OK ] || { echo "FAIL: cannot extract the install task body ($r)"; exit 1; }
+r=$(OE_TEST_TARGET=192.168.100.252:9092 render "$D"); [ "$r" = OK ] || { echo "FAIL: cannot render the install task body ($r)"; exit 1; }
 set +e; out=$(bash "$D/install.sh" 2>&1); rc=$?; set -e
 g=$(generation "$D")
 if [ "$rc" != 0 ] && [ "$g" = OLD ] && printf '%s' "$out" | grep -q 'REFUSED this PRODUCTION unit'; then

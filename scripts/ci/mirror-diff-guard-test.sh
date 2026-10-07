@@ -13,8 +13,11 @@ TPL=ansible/templates/mirror-diff.sh.j2
 WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
 R="$WORK/rendered"; M="$WORK/live"; PL="$WORK/unit.plist"; LBL=com.optionsedge.test-mirror
 mkdir -p "$R" "$M" "$WORK/bin"
-sed -e "s|{{ oe_rendered_dir }}/{{ item.label }}|$R|g" -e "s|{{ item.mdir }}|$M|g" \
-    -e "s|{{ item.plist }}|$PL|g" -e "s|{{ item.label }}|$LBL|g" "$TPL" > "$WORK/diff.sh"
+# the template shell-QUOTES what it renders, so these patterns carry the quote filter too
+sed -E -e "s#\{\{ \(oe_rendered_dir ~ \"/\" ~ item\.label\) \| quote \}\}#'$R'#g" \
+       -e "s#\{\{ item\.mdir \| quote \}\}#'$M'#g" \
+       -e "s#\{\{ item\.plist \| quote \}\}#'$PL'#g" \
+       -e "s#\{\{ item\.label \| quote \}\}#'$LBL'#g" "$TPL" > "$WORK/diff.sh"
 grep -q '{{' "$WORK/diff.sh" && { echo "FAIL: the rendered comparison still has unresolved expressions — this test's substitution list is stale"; exit 1; }
 
 # stubs: a live pid whose start time is controlled by $WORK/pid_epoch

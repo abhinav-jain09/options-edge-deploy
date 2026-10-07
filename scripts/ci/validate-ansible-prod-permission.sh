@@ -93,6 +93,20 @@ done
 awk '/THE PRODUCTION LOCK LIVES HERE/{f=1} f&&/launchctl unload/{print "LATE"; exit} f&&/permitted-sha-guard.sh/{print "EARLY"; exit}' "$STOP_TPL" | grep -q EARLY \
   || { echo "FAIL: $STOP_TPL must run the guard BEFORE it unloads anything"; fail=1; }
 
+# ---- 2d. every value rendered into a script is shell-QUOTED ----
+# ops_dir, launch_agents_dir, kafka_bin and the target are operator-supplied extra vars, and they are
+# interpolated into shell BEFORE the guard runs: a double-quoted Jinja interpolation let a crafted
+# value define a `bash() { return 0; }` function and make every guard invocation succeed. Each of them
+# must go through the quote filter.
+for f in ansible/templates/mirror-stop.sh.j2 ansible/templates/mirror-start.sh.j2 \
+         ansible/templates/mirror-diff.sh.j2 ansible/templates/mirror-shape-check.sh.j2 \
+         ansible/tasks/es-mirror-unit.yml; do
+  # anywhere in the line, not only at its start: these scripts put several assignments on one line,
+  # and a start-anchored pattern missed `PL=...; MDIR="{{ item.mdir }}"`
+  bad=$(grep -nE '[A-Z_]+="\{\{' "$f" || true)
+  [ -z "$bad" ] || { echo "FAIL: $f assigns a shell variable from an UNQUOTED interpolation — use the quote filter:"; printf '%s\n' "$bad" | sed 's/^/    /'; fail=1; }
+done
+
 # ---- 3. every mutating task re-checks the guard's verdict ----
 grep -qF "oe_prod_permitted: \"{{ ((oe_target_ip ~ ':' ~ oe_target_port) != '192.168.100.252:9092') or ((oe_guard.rc | default(1)) == 0) }}\"" "$PB" \
   || { echo "FAIL: $PB must publish oe_prod_permitted from the guard's verdict, against the literal broker"; fail=1; }

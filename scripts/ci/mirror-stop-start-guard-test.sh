@@ -25,21 +25,29 @@ LBL=com.optionsedge.test-mirror
 PL="$WORK/$LBL.plist"; : > "$PL"
 
 # render the template the way ansible would for one unit (these are its only expressions)
+# The templates shell-QUOTE every value they render (Ansible's quote filter), so the substitutions
+# here must match those expressions, not the bare ones — a stale list is caught below by the
+# unresolved-expression check rather than silently producing a script that tests nothing.
+render_tpl() { # template  target
+  sed -E -e "s#\{\{ item\.plist \| quote \}\}#'$PL'#g" \
+         -e "s#\{\{ item\.label \| quote \}\}#'$LBL'#g" \
+         -e "s#\{\{ item\.mdir \| quote \}\}#'$MDIR'#g" \
+         -e "s#\{\{ item\.target \| quote \}\}#'$2'#g" \
+         -e "s#\{\{ \(playbook_dir ~ \"/\.\.\"\) \| quote \}\}#'$PWD'#g" \
+         -e "s#\{\{ item\.topic[^}]*\}\}#'es\\\\.test\\\\.topic'#g" \
+         "$1"
+}
+
 # Two renderings per phase: a DEV unit (the production lock must not fire) and a PRODUCTION one (it
 # must, and must refuse from any checkout that is not the permitted commit on origin/main).
 for pair in "stop:$STOP_TPL" "start:$START_TPL"; do
   n=${pair%%:*}; t=${pair#*:}
-  sed -e "s|{{ item.plist }}|$PL|g" -e "s|{{ item.label }}|$LBL|g" -e "s|{{ item.mdir }}|$MDIR|g" \
-      -e "s|{{ item.target }}|127.0.0.1:19092|g" -e "s|{{ playbook_dir }}|$PWD/ansible|g" \
-      -E -e "s#\{\{ item\.topic[^}]*\}\}#es\\.test\\.topic#g" \
-      -e "s|{{ oe_permitted_sha }}||g" -e "s|{{ oe_guard_version }}|deadbeef|g" "$t" > "$WORK/$n.sh"
+  render_tpl "$t" "127.0.0.1:19092" > "$WORK/$n.sh"
   chmod +x "$WORK/$n.sh"
-  grep -q '{{' "$WORK/$n.sh" && { echo "FAIL: the rendered $n guard still has unresolved expressions — this test's substitution list is stale"; exit 1; }
-  sed -e "s|{{ item.plist }}|$PL|g" -e "s|{{ item.label }}|$LBL|g" -e "s|{{ item.mdir }}|$MDIR|g" \
-      -e "s|{{ item.target }}|192.168.100.252:9092|g" -e "s|{{ playbook_dir }}|$PWD/ansible|g" \
-      -E -e "s#\{\{ item\.topic[^}]*\}\}#es\\.test\\.topic#g" \
-      -e "s|{{ oe_permitted_sha }}||g" -e "s|{{ oe_guard_version }}|deadbeef|g" "$t" > "$WORK/$n-prod.sh"
+  grep -q '{{' "$WORK/$n.sh" && { echo "FAIL: the rendered $n guard still has unresolved expressions — this test's substitution list is stale:"; grep -n '{{' "$WORK/$n.sh" | head -3; exit 1; }
+  render_tpl "$t" "192.168.100.252:9092" > "$WORK/$n-prod.sh"
   chmod +x "$WORK/$n-prod.sh"
+  grep -q '{{' "$WORK/$n-prod.sh" && { echo "FAIL: the rendered $n-prod guard still has unresolved expressions:"; grep -n '{{' "$WORK/$n-prod.sh" | head -3; exit 1; }
 done
 
 # stub launchctl and ps: behaviour driven by marker files in $WORK
@@ -228,9 +236,7 @@ dup_check() {
   local D; D=$(mktemp -d)
   mkdir -p "$D/bin" "$D/unit" "$D/other"; : > "$D/u.plist"
   printf 'bootstrap.servers=127.0.0.1:19092\n' > "$D/other/producer.properties"
-  sed -E -e "s|{{ item.plist }}|$D/u.plist|g" -e "s|{{ item.label }}|L|g" -e "s|{{ item.mdir }}|$D/unit|g" \
-         -e "s|{{ item.target }}|127.0.0.1:19092|g" -e "s|{{ playbook_dir }}|$PWD/ansible|g" \
-         -e "s#\{\{ item\.topic[^}]*\}\}#es\\\\.test\\\\.topic#g" "$START_TPL" > "$D/start.sh"
+  PL="$D/u.plist" LBL=L MDIR="$D/unit" render_tpl "$START_TPL" "127.0.0.1:19092" > "$D/start.sh"
   if grep -q '{{' "$D/start.sh"; then echo "  FAIL duplicate-mirror check: unresolved expressions in the rendering"; fail=1; rm -rf "$D"; return; fi
   cat > "$D/bin/launchctl" <<L
 #!/usr/bin/env bash

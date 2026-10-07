@@ -49,12 +49,13 @@
   ansible.builtin.shell:
     cmd: |
       set -euo pipefail
-      G="{{ item.group_id }}"
+
       # The LISTING must have succeeded before its silence means anything: a broker that refused the
       # query, or a kafka-consumer-groups that failed, prints nothing — which read as "the group does
       # not exist" and, with allow_new_consumer_group=true, installed a mirror that then re-read the
       # whole retention window. A failed or empty listing is now a refusal whatever the flag says.
-      LIST=$("{{ oe_kbin }}/kafka-consumer-groups" --bootstrap-server "{{ item.source }}" --list 2>&1); rc=$?
+      KBIN={{ oe_kbin | quote }}; SRC={{ item.source | quote }}; G={{ item.group_id | quote }}
+      LIST=$("$KBIN/kafka-consumer-groups" --bootstrap-server "$SRC" --list 2>&1); rc=$?
       if [ "$rc" != 0 ] || [ -z "$(printf '%s' "$LIST" | tr -d '[:space:]')" ]; then
         echo "FAIL: cannot list consumer groups on {{ item.source }} (rc=$rc) — refusing, because an"
         echo "      unreadable listing is indistinguishable from an absent group:"
@@ -185,8 +186,10 @@
       # failed inside put() exited the script with the restore never running — the mixed generation
       # this trap exists to undo was exactly what it left behind.
       set -Eeuo pipefail
-      R="{{ oe_rendered_dir }}/{{ item.label }}"; M="{{ item.mdir }}"; PL="{{ item.plist }}"
-      TGT="{{ item.target }}"; REPO="{{ playbook_dir }}/.."
+      # shell-QUOTED: see the note in ansible/templates/mirror-stop.sh.j2 — these are operator
+      # values and an unquoted interpolation ran shell before the production guard below
+      R={{ (oe_rendered_dir ~ "/" ~ item.label) | quote }}; M={{ item.mdir | quote }}; PL={{ item.plist | quote }}
+      TGT={{ item.target | quote }}; REPO={{ (playbook_dir ~ "/..") | quote }}
       # THE PRODUCTION LOCK, repeated here because a variable cannot carry it. An Ansible extra var
       # outranks every var, fact and register, so `-e oe_stop='{"rc":0}'` (or oe_diff, or
       # oe_prod_permitted) can make this task's conditions true however the previous phase ended. Each

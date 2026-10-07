@@ -3,8 +3,12 @@
 # the owning Jenkins pipeline asserts, at the ends that pipeline asserts, and never creates or alters
 # anything. The rendered copy under ansible/.ansible-rendered/ is the exact script that ran.
 set -uo pipefail
-KBIN="{{ oe_kbin }}"
-SRC="{{ item.source }}"; TGT="{{ item.target }}"; T="{{ item.topic }}"
+# Every value rendered into this script is shell-QUOTED with Ansible's quote filter. These are
+# operator-supplied through extra vars (ops_dir, launch_agents_dir, kafka_bin, the target), and a
+# double-quoted Jinja interpolation (no quote filter) let a crafted value run shell BEFORE the guard
+# below — a `bash() { return 0; }` function defined that way would have made every guard call succeed.
+KBIN={{ oe_kbin | quote }}
+SRC={{ item.source | quote }}; TGT={{ item.target | quote }}; T={{ item.topic | quote }}
 eff() {
   local out
   out=$("$KBIN/kafka-configs" --bootstrap-server "$1" --entity-type topics \

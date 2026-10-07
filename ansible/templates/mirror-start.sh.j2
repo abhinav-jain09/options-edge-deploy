@@ -11,9 +11,13 @@
 # OE_OLD_PID is the pid PHASE 1 stopped (empty for a first install); OE_RELOAD_SETTLE lets the guard
 # test drive this with no wait, and defaults to the 8s a real unit needs before launchctl reports one.
 set -uo pipefail
-PL="{{ item.plist }}"; LBL="{{ item.label }}"; MDIR="{{ item.mdir }}"
-TGT="{{ item.target }}"; RE="{{ item.topic | regex_replace('\.', '\\.') }}"
-REPO="{{ playbook_dir }}/.."
+# Every value rendered into this script is shell-QUOTED with Ansible's quote filter. These are
+# operator-supplied through extra vars (ops_dir, launch_agents_dir, kafka_bin, the target), and a
+# double-quoted Jinja interpolation (no quote filter) let a crafted value run shell BEFORE the guard
+# below — a `bash() { return 0; }` function defined that way would have made every guard call succeed.
+PL={{ item.plist | quote }}; LBL={{ item.label | quote }}; MDIR={{ item.mdir | quote }}
+TGT={{ item.target | quote }}; RE={{ item.topic | regex_replace('\.', '\\.') | quote }}
+REPO={{ (playbook_dir ~ "/..") | quote }}
 
 # THE PRODUCTION LOCK, repeated here because a variable cannot carry it. An Ansible extra var
 # outranks every var, fact and register, so `-e oe_stop='{"rc":0}'` (or oe_diff, or

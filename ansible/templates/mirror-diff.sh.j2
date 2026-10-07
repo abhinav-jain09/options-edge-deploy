@@ -5,7 +5,11 @@
 # running, and "would install" for a comment opens a gap in a healthy mirror — so it is a script with
 # its own test (scripts/ci/mirror-diff-guard-test.sh) rather than a block of shell nobody can run.
 set -uo pipefail
-R="{{ oe_rendered_dir }}/{{ item.label }}"; M="{{ item.mdir }}"; PL="{{ item.plist }}"
+# Every value rendered into this script is shell-QUOTED with Ansible's quote filter. These are
+# operator-supplied through extra vars (ops_dir, launch_agents_dir, kafka_bin, the target), and a
+# double-quoted Jinja interpolation (no quote filter) let a crafted value run shell BEFORE the guard
+# below — a `bash() { return 0; }` function defined that way would have made every guard call succeed.
+R={{ (oe_rendered_dir ~ "/" ~ item.label) | quote }}; M={{ item.mdir | quote }}; PL={{ item.plist | quote }}
 # the PROPERTY lines only: a backslash in a comment is prose (these files carry paragraphs of
 # it), and refusing the parse for that put every unit on a byte comparison, which differs by
 # those same comments — i.e. it would have reloaded all 14 live mirrors to change nothing.
@@ -61,7 +65,7 @@ epoch_of() { date -j -f '%a %b %e %T %Y' "$1" +%s 2>/dev/null || date -d "$1" +%
 # An unreadable job table is not an absent process: reporting it as absent said something false and
 # would have driven a stop/start on a unit whose state was never read. It fails closed instead.
 LST=$(launchctl list) || { echo "FAIL: cannot read launchctl list — this unit's state cannot be compared, so nothing about it is reported as in sync"; exit 1; }
-PID=$(printf '%s\n' "$LST" | awk -v l="{{ item.label }}" '$3==l{print $1}')
+PID=$(printf '%s\n' "$LST" | awk -v l={{ item.label | quote }} '$3==l{print $1}')
 case "$PID" in
   (*[!0-9]*|"") WHY="$WHY process=absent" ;;
   (*) PS=$(ps -p "$PID" -o lstart= 2>/dev/null)
