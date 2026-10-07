@@ -263,8 +263,8 @@ ES_ENV = {
         # rejected_symbol_total 1073+, processed 0) — this override is the durable fix.
         {"name": "STRIKE_FLOW_SYMBOL", "value": "ES", "_override": True},
         # The near-spot 0DTE SPXW semantic signal's producer (#1155) is PROD-ONLY, same scoping as
-        # dev: its only consumer, es-compression-expansion-service (#1149), has no es4 overlay
-        # (k8s/services/es-compression-expansion has base + production only), and es4's own
+        # dev before 2026-10-07: its only consumer, es-compression-expansion-service (#1149), has no es4
+        # overlay (k8s/services/es-compression-expansion has base + dev + production, no es4), and es4's own
         # hand-maintained topic declaration (OPTIONS_EDGE_ES4_TOPICS in scripts/kafka/topics.env)
         # does not list options.databento.near-spot-semantic — unlike the shared OPTIONS_EDGE_TOPICS
         # set dev/prod apply from, es4 topics are NOT inherited automatically, so the topic does not
