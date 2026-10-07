@@ -139,7 +139,9 @@ OPTIONS_EDGE_PURE_COMPACT_TOPICS=""
 OPTIONS_EDGE_EXACT_PARTITION_TOPICS=""
 OPTIONS_EDGE_PROD_ONLY_TOPICS="es.futures.cvd.levels:8"
 OPTIONS_EDGE_PROD_ONLY_PURE_COMPACT_TOPICS=""
-OPTIONS_EDGE_PROD_ONLY_EXACT_PARTITION_TOPICS=""
+# KEPT, not emptied: verify-topics.sh checks a prod-only topic's partition count only through this
+# list, so with it empty the "both scripts need the override" case proved nothing about the VERIFIER.
+OPTIONS_EDGE_PROD_ONLY_EXACT_PARTITION_TOPICS="es.futures.cvd.levels"
 OPTIONS_EDGE_PROD_ONLY_TOPIC_RETENTION_OVERRIDES=""
 OPTIONS_EDGE_PROD_ONLY_UNCOMPACTED_TOPICS=""
 OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES=""
