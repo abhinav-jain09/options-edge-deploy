@@ -356,9 +356,12 @@ patches:
                 resources:
                   limits:
                     memory: 8Gi
-                  # RAISED 2Gi -> 6Gi (2026-10-06, with the prod replicas lift below), so the
-                  # request matches the heap this container is configured with instead of a third of
-                  # it.
+                  # RAISED 2Gi -> 6Gi (2026-10-06) so the request matches the heap this container
+                  # is configured with instead of a third of it. This OUTLIVED the prod replicas lift
+                  # it shipped with: that lift is reverted (the ledger runs on .74, not prod — see
+                  # k8s/base), but a 6GB-heap container described to the scheduler as a 2GB one is
+                  # wrong independently of whether it is currently scheduled, and it is what es4 and
+                  # any future re-enable would inherit.
                   #
                   # THE RECORD, not a prediction. Two sizings of this container have failed in
                   # production, in opposite directions:
@@ -388,41 +391,12 @@ patches:
                   # the measured node, and the two recorded failures. A repeat of the 09-10 kill is not
                   # excluded by anything in this file.
                   #
-                  # ABORT if the node comes under pressure with this running:
-                  #   kubectl -n options-edge scale deploy/dealer-ledger-service --replicas=0
+                  # This deployment is HELD AT 0 on prod. If it is ever scaled up again and the node
+                  # comes under pressure, scaling it back to 0 must go through Jenkins: the
+                  # options-edge-jenkins-only-workloads ValidatingAdmissionPolicy denies a direct
+                  # `kubectl scale` to every principal except the jenkins-deployer ServiceAccount.
                   requests:
                     memory: 6Gi
-  # PROD REPLICAS LIFT (USER 2026-10-06: "start the dealer ledger on prod so it produces a verdict").
-  # This lifts the 2026-09-10 "until further notice" hold (#1034) on PRODUCTION ONLY. The base stays
-  # replicas:0, so dev and experiment stay held and this Mac never starts a 6GB-heap JVM; es4 is
-  # unaffected (the family has been in ES4_KEEP_DOWN since 2026-08-18).
-  #
-  # WHY IT IS NEEDED. close-direction-service's prod verdict is NO_VERDICT_DATA_FAILURE with
-  # failureReasons [PROFILE_ABSENT, SPOT_MISSING, CHARM_UNSTABLE] and direction UNKNOWN. Those three
-  # are ONE cause: `dealer-ledger-profile` is close-direction's only profile input, onProfile is the
-  # only writer of the engine's spotTicks, and charmQuality(null) is UNSTABLE by construction. The
-  # topic is empty because this deployment has not been Available since 2026-09-10. Every other link
-  # in the chain already starts automatically.
-  #
-  # WHY IT TAKES THIS PATCH AND NOT ONLY THE KEEP_DOWN LISTS. #1034 closed four paths; a hand-scale or
-  # a KEEP_DOWN edit alone reaches two of them. `kubectl apply -k` re-applies base replicas on every
-  # deploy, which is what silently returned this pod to 0/0 after it was hand-scaled to 1/1 on
-  # 2026-10-05. This patch is the declarative half; scripts/ops/{oe-boot-bringup,morning-autostart}.sh
-  # KEEP_DOWN removal is the scheduler half. dev-cleanup.sh DISABLED_DEV is deliberately NOT touched.
-  #
-  # WHAT THIS DOES NOT CLAIM. close-direction reports calibration=UNCALIBRATED, and this repo's own
-  # studies found the ledger's DIRECTION dead across four designs and concluded it cannot be
-  # calibrated as built. This makes a verdict appear where there was none; it does not make it
-  # trustworthy. Verification to take at the next RTH open, not asserted here: `dealer-ledger-profile`
-  # advances, pod RSS against the 6Gi request, and node `free` through 13:00-13:30 ET (the window of
-  # the 09-10 kill).
-  - target:
-      kind: Deployment
-      name: dealer-ledger-service
-    patch: |-
-      - op: replace
-        path: /spec/replicas
-        value: 1
   # PROD enable of the top-N gate (proc PR #466/#467, requirement 2026-07-22; dev-verified first per
   # rollout decision): fade (gamma-flow) + lifecycle (EMERGING/STICKY/FADING) compute ONLY the top-3
   # |netGex| strikes per chain — the rest are gated BEFORE those calculations. Stage-1 per-strike netGex

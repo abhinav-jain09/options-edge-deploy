@@ -8,12 +8,14 @@ metadata:
     app.kubernetes.io/component: dealer-ledger-service
     app.kubernetes.io/part-of: options-edge
 spec:
-  # HELD AT 0 IN THE BASE (USER 2026-09-10, after the prod OOM at 13:09/13:11 ET — #1034).
-  # PRODUCTION ONLY was lifted on 2026-10-06 (USER: "start the dealer ledger on prod so it produces a
-  # verdict") by a replicas patch in k8s/overlays/production/kustomization.yaml, which carries the
-  # reasoning and the abort action. This base value is what still holds DEV and EXPERIMENT down, so
-  # raising it here would re-enable a 6GB-heap JVM on the dev Mac as well — change the prod overlay,
-  # not this line. es4 is held separately (ES4_KEEP_DOWN since 2026-08-18).
+  # HELD AT 0 EVERYWHERE (USER 2026-09-10 after the prod OOM at 13:09/13:11 ET — #1034; prod lift
+  # of 2026-10-06 REVERTED on 2026-10-07 — this PR).
+  #
+  # THE LEDGER DOES NOT RUN ON DEV OR PROD. It runs on .74 (offload requirement 3.2), because it is
+  # memory-hungry and unproven: it was the 6.1 GB process the kernel killed on 2026-09-10. The lane
+  # is dev(.102) --6 input topics--> .74 --> ledger + calibration scorer --> prod and dev. So prod
+  # and dev CONSUME dealer-ledger-profile from .74 via mirrors; they must not produce it.
+  # Raising this value anywhere re-creates the duplicate producer that this reverts.
   replicas: 0
   strategy:
     type: Recreate
