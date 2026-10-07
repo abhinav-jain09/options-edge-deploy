@@ -58,6 +58,7 @@
     oe_topics_list: "{{ oe_topics.split() }}"
     oe_tools_tar: /tmp/oe-kafka-tools-confluent-7.3.1.tgz
     oe_probe_timeout: "{{ mirror_probe_timeout | default(10) }}"
+    oe_liveness_settle: "{{ mirror_liveness_settle | default(20) }}"
     oe_topics_regex: "{{ oe_topics_list | map('regex_replace', '\\.', '\\\\.') | join('|') }}"
 
   tasks:
@@ -107,6 +108,7 @@
           - inventory_hostname in ['mac74']
           # Reaches wait_for.timeout; an absurd value turns the safety probe into the outage.
           - (oe_probe_timeout | string) is match('^[1-9][0-9]{0,2}\Z')
+          - (oe_liveness_settle | string) is match('^[1-9][0-9]{0,2}\Z')
         fail_msg: >-
           mirror_instance must be a lowercase slug; source and target must be host:port with a port
           in 1..65535 and must differ; every topic and the group id must match Kafka's legal charset
@@ -236,7 +238,7 @@
         creates: "{{ oe_kafka_tools }}/bin/kafka-mirror-maker"
       when: not oe_tools.stat.exists
 
-    - name: Verify the TARGET now has every piece the launcher execs at runtime
+    - name: Verify the three paths the launcher needs EXIST on the target
       ansible.builtin.stat:
         path: "{{ oe_kafka_tools }}/{{ item }}"
       register: oe_tgt_tools
@@ -253,6 +255,7 @@
           bin/kafka-mirror-maker, bin/kafka-run-class or share/java/kafka after the unpack. The
           controller preflight only proves the SOURCE was complete; a truncated transfer or a
           partially-extracted archive would otherwise surface as a crash-looping agent (Codex r3).
+          NOTE: this proves EXISTENCE only. Executability is the next task.
 
     - name: Make the Kafka tooling executable
       ansible.builtin.file:
@@ -299,6 +302,41 @@
       ansible.builtin.command: 'bash -n {{ oe_instance_dir }}/run-mirror.sh'
       changed_when: false
 
+    # ⚠ EXISTENCE IS NOT EXECUTABILITY (Codex r4, P1). Three stat'd paths say nothing about whether
+    # this host's Java can actually run the tool: wrong architecture, an unreadable jar, a JDK too
+    # old or too new, or a PATH that launchd does not provide would all pass the stats and then
+    # crash-loop a freshly registered agent that mirrors nothing — the highest-risk outcome of a
+    # first apply, and the same "absent is not failed" blindness that left seven legs dead, one
+    # level deeper.
+    #
+    # So load the class for real, with the SAME constrained PATH the plist gives the launcher
+    # (/usr/bin:/bin:/usr/sbin:/sbin — this host has no Homebrew). MirrorMaker v1 with no arguments
+    # prints its usage and exits non-zero, which is fine: the question is whether the JVM resolved
+    # the class, so the test is the ABSENCE of a loader error, not the exit status.
+    - name: Prove the shipped tooling can actually load MirrorMaker under launchd's PATH
+      ansible.builtin.command:
+        argv: ["{{ oe_kafka_tools }}/bin/kafka-run-class", "kafka.tools.MirrorMaker", "--help"]
+      environment:
+        PATH: /usr/bin:/bin:/usr/sbin:/sbin
+      register: oe_classload
+      changed_when: false
+      failed_when: false
+
+    - name: Fail when the tooling cannot run on this host
+      ansible.builtin.assert:
+        that:
+          - "'ClassNotFoundException' not in (oe_classload.stdout + oe_classload.stderr)"
+          - "'NoClassDefFoundError' not in (oe_classload.stdout + oe_classload.stderr)"
+          - "'Unable to locate' not in (oe_classload.stdout + oe_classload.stderr)"
+          - "'UnsupportedClassVersion' not in (oe_classload.stdout + oe_classload.stderr)"
+          - oe_classload.rc != 127
+        fail_msg: >-
+          {{ oe_kafka_tools }}/bin/kafka-run-class could not load kafka.tools.MirrorMaker on
+          {{ inventory_hostname }} under launchd's PATH. rc={{ oe_classload.rc }}. This is the
+          failure that would otherwise appear as an agent launchd accepts and then restarts
+          forever. First 400 chars of its output:
+          {{ (oe_classload.stdout + oe_classload.stderr)[:400] }}
+
     - name: Check whether launchd already holds the label
       ansible.builtin.shell: 'launchctl list | grep -F "{{ oe_label }}"'
       args: { executable: /bin/bash }
@@ -334,15 +372,49 @@
       ansible.builtin.command: 'launchctl bootstrap gui/{{ ansible_user_uid }} {{ oe_plist }}'
       when: oe_reload | bool
 
-    - name: Confirm launchd actually holds the label
-      ansible.builtin.shell: 'launchctl list | grep -F "{{ oe_label }}"'
+    # ⚠ A LABEL IS NOT A LIVE PROCESS (Codex r4, P1). `launchctl list` keeps the service record for a
+    # job that starts and exits immediately; with KeepAlive=true that is a crash-loop, which looks
+    # identical to health in a single read. So sample the PID TWICE: it must be numeric both times
+    # (the process exists) AND unchanged (it has not been restarted in between). launchctl's columns
+    # are PID, last-exit-status, label; a job that is not currently running shows '-' for the PID.
+    - name: Read the agent's PID
+      ansible.builtin.shell: |
+        set -o pipefail
+        launchctl list | awk -v L="{{ oe_label }}" '$3==L {print $1}'
       args: { executable: /bin/bash }
-      register: oe_loaded
+      register: oe_pid0
       changed_when: false
       retries: 6
       delay: 5
-      until: oe_loaded.rc == 0
+      until: oe_pid0.stdout is match('^[0-9]+$')
 
-    - name: Report what launchd holds
+    - name: Let it run before believing it
+      ansible.builtin.wait_for:
+        timeout: "{{ oe_liveness_settle | int }}"
+      delegate_to: localhost
+
+    - name: Read the agent's PID again
+      ansible.builtin.shell: |
+        set -o pipefail
+        launchctl list | awk -v L="{{ oe_label }}" '$3==L {print $1" "$2}'
+      args: { executable: /bin/bash }
+      register: oe_pid1
+      changed_when: false
+
+    - name: Fail when the agent is not a sustained process
+      ansible.builtin.assert:
+        that:
+          - (oe_pid1.stdout.split() | first | default('-')) is match('^[0-9]+\Z')
+          - (oe_pid1.stdout.split() | first | default('-')) == oe_pid0.stdout.strip()
+        fail_msg: >-
+          {{ oe_label }} is registered with launchd but is NOT a sustained process on
+          {{ inventory_hostname }}: pid was {{ oe_pid0.stdout.strip() }} and is now
+          "{{ oe_pid1.stdout.strip() }}" after {{ oe_liveness_settle }}s. A '-' pid means it is not
+          running; a DIFFERENT pid means KeepAlive restarted it, i.e. it is crash-looping and
+          mirroring nothing. Check {{ oe_instance_dir }}/mirror.err.log on the host.
+
+    - name: Report the running agent
       ansible.builtin.debug:
-        msg: "{{ oe_label }} -> {{ oe_loaded.stdout }}"
+        msg: >-
+          {{ oe_label }} running as pid {{ oe_pid0.stdout.strip() }}, unchanged over
+          {{ oe_liveness_settle }}s (launchctl row: {{ oe_pid1.stdout.strip() }})
