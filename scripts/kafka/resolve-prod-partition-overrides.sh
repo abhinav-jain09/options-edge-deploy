@@ -34,11 +34,15 @@ _oe_resolve_prod_partition_overrides() {
 
   local ov name count applied="" _oe_seen=""
   for ov in $overrides; do
+    # EXACTLY one '=': on topic=1=2 the %%/## pair quietly produced name=topic count=2 and applied it,
+    # so a typo in a production declaration moved the partition floor with nothing said.
     case "$ov" in
+      *=*=*) echo "resolve-prod-partition-overrides: '$ov' has more than one '=' — one topic=partitions per entry" >&2; return 1 ;;
       *=*) ;;
       *) echo "resolve-prod-partition-overrides: '$ov' is not topic=partitions" >&2; return 1 ;;
     esac
     name="${ov%%=*}"; count="${ov##*=}"
+    case "$name" in "") echo "resolve-prod-partition-overrides: '$ov' has an empty topic name" >&2; return 1 ;; esac
     # A REGEX, anchored, not a glob: `case` globs are not numeric validation — [1-9][0-9]* matched
     # `12garbage`, the declaration was rewritten to :12garbage, and the applier's arithmetic then
     # errored on it and could carry on treating the topic as compatible. The bound is stated rather
