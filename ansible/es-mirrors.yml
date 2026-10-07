@@ -102,6 +102,23 @@
           source must be es4 (192.168.100.4:9092) and target must be dev ({{ oe_dev_target }})
           or prod ({{ oe_prod_target }}); got source={{ oe_source }} target={{ oe_target }}.
 
+    - name: Refuse a path that could carry shell
+      # ops_dir, launch_agents_dir and kafka_bin are operator-supplied, and they are written into
+      # run-mirror.sh — the script launchd EXECUTES — where they cannot be quoted without breaking the
+      # byte-identity with the pipelines' own generated runner that the parity gate asserts. So a
+      # hostile value is REFUSED here rather than neutralised in six places: a path outside this
+      # character set is rejected before anything is rendered, let alone run.
+      ansible.builtin.assert:
+        that:
+          - oe_ops is match('^[A-Za-z0-9._/-]+$')
+          - oe_agents is match('^[A-Za-z0-9._/-]+$')
+          - oe_kbin is match('^[A-Za-z0-9._/-]+$')
+          - oe_rendered_dir is match('^[A-Za-z0-9._/-]+$')
+        fail_msg: >-
+          ops_dir, launch_agents_dir, kafka_bin and the render directory must be plain paths
+          ([A-Za-z0-9._/-]); got ops_dir={{ oe_ops }} launch_agents_dir={{ oe_agents }}
+          kafka_bin={{ oe_kbin }} rendered={{ oe_rendered_dir }}.
+
     - name: Enforce the permitted commit before any PRODUCTION effect
       # The guard refuses: a checkout that is not on origin/main, a missing/short/malformed
       # PERMITTED_SHA (nothing is substituted for it), and a HEAD that is not exactly that commit.

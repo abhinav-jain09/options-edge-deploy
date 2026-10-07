@@ -107,6 +107,27 @@ for f in ansible/templates/mirror-stop.sh.j2 ansible/templates/mirror-start.sh.j
   [ -z "$bad" ] || { echo "FAIL: $f assigns a shell variable from an UNQUOTED interpolation — use the quote filter:"; printf '%s\n' "$bad" | sed 's/^/    /'; fail=1; }
 done
 
+# ---- 2e. a hostile PATH is refused, not neutralised ----
+# run-mirror.sh — the script launchd EXECUTES — cannot have its paths quoted without breaking the
+# byte-identity with the pipelines' own runner that the parity gate asserts, so the operator-supplied
+# paths are REFUSED unless they are plain. Asserted here, and then behaviourally.
+grep -qF "oe_ops is match('^[A-Za-z0-9._/-]+$')" "$PB" \
+  || { echo "FAIL: $PB must refuse a non-plain ops_dir — run-mirror.sh cannot quote it"; fail=1; }
+for v in oe_agents oe_kbin oe_rendered_dir; do
+  grep -qF "$v is match('^[A-Za-z0-9._/-]+$')" "$PB" \
+    || { echo "FAIL: $PB must refuse a non-plain $v"; fail=1; }
+done
+if command -v ansible-playbook >/dev/null; then
+  hp=$(mktemp); set +e
+  ansible-playbook "$PB" -e mirror_target_ip=192.168.100.252 -e mirror_target_port=9092 \
+    -e only_topics=es.futures.cvd -e '{"ops_dir": "/tmp/x\"; touch /tmp/OE_PATH_GATE_INJECTED; #"}' >"$hp" 2>&1
+  rc=$?; set -e
+  [ "$rc" != 0 ] || { echo "FAIL: a hostile ops_dir did not stop the run"; fail=1; }
+  grep -q 'must be plain paths' "$hp" || { echo "FAIL: the refusal did not come from the path assertion — see $hp"; fail=1; }
+  [ ! -e /tmp/OE_PATH_GATE_INJECTED ] || { echo "FAIL: the hostile ops_dir EXECUTED"; rm -f /tmp/OE_PATH_GATE_INJECTED; fail=1; }
+  rm -f "$hp"
+fi
+
 # ---- 3. every mutating task re-checks the guard's verdict ----
 grep -qF "oe_prod_permitted: \"{{ ((oe_target_ip ~ ':' ~ oe_target_port) != '192.168.100.252:9092') or ((oe_guard.rc | default(1)) == 0) }}\"" "$PB" \
   || { echo "FAIL: $PB must publish oe_prod_permitted from the guard's verdict, against the literal broker"; fail=1; }
