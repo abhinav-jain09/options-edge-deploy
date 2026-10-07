@@ -128,6 +128,14 @@ RRC=${PIPESTATUS[0]}
   && have=$(kafka-topics --bootstrap-server $PROD_BS --list 2>/dev/null) \
   && missing=$(comm -23 <(echo "$want") <(echo "$have" | sort -u)) \
   && say "declared topics present: $(( $(echo "$want" | wc -l) - $(echo "$missing" | grep -c .) ))/$(echo "$want" | wc -l | tr -d ' ')${missing:+  MISSING: $(echo $missing)}" )
+# KNOWN, NOT FIXED HERE (2026-10-07). apply-topics.sh exits 1 when ANY declared topic could not be
+# reconciled, while saying in the same breath that every OTHER topic WAS created/updated. This wrapper
+# reads that exit code as "the recreate is unusable" and leaves the whole es4->prod mirror set paused —
+# so one drifted topic takes twelve mirrors down with it, which is what happened on 2026-10-07
+# (options.spx.strike-invasion.current, 1 partition vs a declared 32). The declaration side of that
+# incident is fixed (scripts/kafka/resolve-prod-partition-overrides.sh); this coupling is NOT, because
+# loosening it means deciding which apply-topics failures still permit a bring-up, and that is an
+# owner decision about the "a failed reset stays DOWN" rule, not a refactor.
 if [ "$RRC" -ne 0 ]; then say "recreate FAILED (exit $RRC) — mirrors stay PAUSED (list: $PAUSED_LIST); no bring-up."; exit "$RRC"; fi
 
 # ---- 4. mirrors back ----

@@ -30,26 +30,39 @@ _oe_resolve_prod_partition_overrides() {
       *) echo "resolve-prod-partition-overrides: '$ov' is not topic=partitions" >&2; return 1 ;;
     esac
     name="${ov%%=*}"; count="${ov##*=}"
+    # CANONICAL positive integer. A class test plus a literal "0" let `00` through, which resolved
+    # the declaration to :00 and made the minimum check vacuous — every live count is >= 00.
     case "$count" in
-      ''|*[!0-9]*) echo "resolve-prod-partition-overrides: $name=$count — the count must be a positive integer" >&2; return 1 ;;
-      0) echo "resolve-prod-partition-overrides: $name=0 — a topic cannot have zero partitions" >&2; return 1 ;;
+      [1-9]|[1-9][0-9]*) ;;
+      *) echo "resolve-prod-partition-overrides: $name=$count — the count must be a canonical positive integer (1, 2, 32 — not 0, 00 or 032)" >&2; return 1 ;;
     esac
-    case " $OPTIONS_EDGE_TOPICS " in
+    # Declared in EITHER list. apply-topics.sh merges OPTIONS_EDGE_PROD_ONLY_TOPICS into
+    # OPTIONS_EDGE_TOPICS before calling this; verify-topics.sh keeps the two apart and checks the
+    # prod-only set separately. Validating against only one of them meant an override for a prod-only
+    # topic applied in the applier and was REFUSED in the verifier — shared code, different input.
+    case " $OPTIONS_EDGE_TOPICS ${OPTIONS_EDGE_PROD_ONLY_TOPICS:-} " in
       *" $name:"*) ;;
-      *) echo "resolve-prod-partition-overrides: $name is NOT declared in OPTIONS_EDGE_TOPICS — an override that describes nothing is a stale declaration, not a no-op" >&2; return 1 ;;
+      *) echo "resolve-prod-partition-overrides: $name is NOT declared in OPTIONS_EDGE_TOPICS or OPTIONS_EDGE_PROD_ONLY_TOPICS — an override that describes nothing is a stale declaration, not a no-op" >&2; return 1 ;;
     esac
   done
 
-  for entry in $OPTIONS_EDGE_TOPICS; do
-    name="${entry%%:*}"; count="${entry##*:}"
-    for ov in $overrides; do
-      if [ "${ov%%=*}" = "$name" ]; then
-        count="${ov##*=}"
-        applied="$applied $name:$count"
-      fi
+  # Both lists are rewritten, for the same reason: whichever one carries the name must come back with
+  # the production count, whether the caller merged them first or keeps them apart.
+  _oe_rewrite() { # list
+    local out="" e n c o
+    for e in $1; do
+      n="${e%%:*}"; c="${e##*:}"
+      for o in $overrides; do
+        if [ "${o%%=*}" = "$n" ]; then c="${o##*=}"; applied="$applied $n:$c"; fi
+      done
+      out="$out $n:$c"
     done
-    resolved="$resolved $name:$count"
-  done
-  OPTIONS_EDGE_TOPICS="${resolved# }"
+    printf '%s' "${out# }"
+  }
+  resolved=$(_oe_rewrite "$OPTIONS_EDGE_TOPICS")
+  OPTIONS_EDGE_TOPICS="$resolved"
+  if [ -n "${OPTIONS_EDGE_PROD_ONLY_TOPICS:-}" ]; then
+    OPTIONS_EDGE_PROD_ONLY_TOPICS=$(_oe_rewrite "$OPTIONS_EDGE_PROD_ONLY_TOPICS")
+  fi
   echo "[prod-partition-overrides] production declaration adjusted:${applied:- <none>}"
 }
