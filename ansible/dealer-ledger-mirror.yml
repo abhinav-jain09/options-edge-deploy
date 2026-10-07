@@ -304,38 +304,51 @@
 
     # ⚠ EXISTENCE IS NOT EXECUTABILITY (Codex r4, P1). Three stat'd paths say nothing about whether
     # this host's Java can actually run the tool: wrong architecture, an unreadable jar, a JDK too
-    # old or too new, or a PATH that launchd does not provide would all pass the stats and then
+    # old or too new, or an environment launchd does not provide would all pass the stats and then
     # crash-loop a freshly registered agent that mirrors nothing — the highest-risk outcome of a
     # first apply, and the same "absent is not failed" blindness that left seven legs dead, one
     # level deeper.
     #
-    # So load the class for real, with the SAME constrained PATH the plist gives the launcher
-    # (/usr/bin:/bin:/usr/sbin:/sbin — this host has no Homebrew). MirrorMaker v1 with no arguments
-    # prints its usage and exits non-zero, which is fine: the question is whether the JVM resolved
-    # the class, so the test is the ABSENCE of a loader error, not the exit status.
-    - name: Prove the shipped tooling can actually load MirrorMaker under launchd's PATH
+    # TWO THINGS THIS GETS RIGHT THAT MY FIRST VERSION DID NOT (Codex r5, P1):
+    #
+    # 1. `env -i` — a TRULY scrubbed environment, not just an overridden PATH. Ansible's
+    #    `environment:` sets PATH but leaves JAVA_HOME, CLASSPATH, KAFKA_OPTS, KAFKA_HEAP_OPTS and
+    #    LOG_DIR inherited from the connection, so the probe could resolve a working Java through an
+    #    inherited JAVA_HOME while launchd — whose plist supplies ONLY PATH — resolves /usr/bin/java
+    #    and fails. `env -i PATH=...` reproduces the launcher's actual environment; verified that it
+    #    leaves PATH alone in it.
+    #
+    # 2. POSITIVE evidence, not the absence of a blacklist. The first version accepted every exit
+    #    code but 127 unless one of four substrings appeared, so a corrupt jar, a wrapper error or a
+    #    permission failure phrased differently passed. The test is now that MirrorMaker's own option
+    #    parser RAN: its help text is unmistakable and only reachable after the class resolved.
+    #    The exit code is deliberately NOT the test — MM1 exits 1 on --help (measured).
+    - name: Prove the shipped tooling actually runs, in launchd's own environment
       ansible.builtin.command:
-        argv: ["{{ oe_kafka_tools }}/bin/kafka-run-class", "kafka.tools.MirrorMaker", "--help"]
-      environment:
-        PATH: /usr/bin:/bin:/usr/sbin:/sbin
+        argv:
+          - /usr/bin/env
+          - -i
+          - PATH=/usr/bin:/bin:/usr/sbin:/sbin
+          - "{{ oe_kafka_tools }}/bin/kafka-run-class"
+          - kafka.tools.MirrorMaker
+          - --help
       register: oe_classload
       changed_when: false
       failed_when: false
 
-    - name: Fail when the tooling cannot run on this host
+    - name: Fail unless MirrorMaker's own option parser ran
       ansible.builtin.assert:
         that:
-          - "'ClassNotFoundException' not in (oe_classload.stdout + oe_classload.stderr)"
-          - "'NoClassDefFoundError' not in (oe_classload.stdout + oe_classload.stderr)"
-          - "'Unable to locate' not in (oe_classload.stdout + oe_classload.stderr)"
-          - "'UnsupportedClassVersion' not in (oe_classload.stdout + oe_classload.stderr)"
-          - oe_classload.rc != 127
+          - "'continuously copy data between two Kafka clusters' in (oe_classload.stdout + oe_classload.stderr)"
+          - "'--consumer.config' in (oe_classload.stdout + oe_classload.stderr)"
+          - "'--producer.config' in (oe_classload.stdout + oe_classload.stderr)"
         fail_msg: >-
-          {{ oe_kafka_tools }}/bin/kafka-run-class could not load kafka.tools.MirrorMaker on
-          {{ inventory_hostname }} under launchd's PATH. rc={{ oe_classload.rc }}. This is the
-          failure that would otherwise appear as an agent launchd accepts and then restarts
-          forever. First 400 chars of its output:
-          {{ (oe_classload.stdout + oe_classload.stderr)[:400] }}
+          {{ oe_kafka_tools }}/bin/kafka-run-class did not produce MirrorMaker's help text on
+          {{ inventory_hostname }} under launchd's environment (env -i, PATH only), so the class did
+          not load or the tool could not run. rc={{ oe_classload.rc }} — note the rc is not the
+          test; MM1 exits 1 on --help. This is the failure that would otherwise appear as an agent
+          launchd accepts and then restarts forever. First 500 chars of its output:
+          {{ (oe_classload.stdout + oe_classload.stderr)[:500] }}
 
     - name: Check whether launchd already holds the label
       ansible.builtin.shell: 'launchctl list | grep -F "{{ oe_label }}"'
