@@ -27,8 +27,18 @@ spec:
   # (.74 -> prod) DOES NOT EXIST — .74 carries no mirror and no Kafka tooling to run one, and
   # deploy#1159 provisions it. Until leg 2 is delivering, prod has NO source of
   # dealer-ledger-profile at all, so deploying this hold takes prod's copy to zero rather than
-  # merely removing a duplicate. scripts/ops/verify-dealer-ledger-lane.sh is the check; it must pass
-  # before a dealer-ledger/production service-deploy from this commit.
+  # merely removing a duplicate.
+  #
+  # ⚠ PRECONDITION FOR DEPLOYING THIS HOLD, and it is currently a HUMAN one. Before a
+  # dealer-ledger/production service-deploy from this commit, confirm that .74's
+  # dealer-ledger-profile is actually reaching prod: the mirror's consumer group for that topic at
+  # .74 must be committing forward while the source advances. An automated checker for this was
+  # written alongside this revert and WITHDRAWN from it: four review rounds found three separate
+  # ways it could report success while the profile was not being delivered (attributing the target's
+  # own local producer to the mirror; summing the group across all four lane topics; and an
+  # overridable topic/group identity). A safety control that green-lights the failure it exists to
+  # prevent is worse than none, so it lands separately once it is specified correctly. Until then
+  # this is verified by inspection, not by exit status.
   replicas: 0
   strategy:
     type: Recreate
