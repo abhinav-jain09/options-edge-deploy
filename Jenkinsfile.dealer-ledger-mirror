@@ -98,6 +98,12 @@ pipeline {
     // succeeded, a failing bootstrap leaves the leg DOWN. That handoff window is inherent to
     // replacing a single launchd label and is not closed here. What IS true: every failure up to and
     // including the lint tasks leaves the old process alive, and a no-op re-apply never bounces it.
-    failure { echo "mirror leg ${params.MIRROR_INSTANCE} failed on ${params.MIRROR_HOST} — see the Ansible output above. If the log shows no 'Unload any previous instance' task, the previously running agent is untouched and only files may be partially written. If it DOES show that task, the leg is DOWN until a successful re-run: check `launchctl list | grep ${params.MIRROR_INSTANCE}` on the host. The playbook is idempotent — re-run this job." }
+    // NOTE: this message deliberately does NOT name the service-manager binary. It is a mutation
+    // token to scripts/jenkins/validate-jenkinsfile-guard.py, which cannot tell a mention inside an
+    // echo from a real invocation and so requires any occurrence in post {} to sit inside the guard
+    // gate. Naming it here failed the validator (rule: "post {} line 101 ... is not inside the true
+    // branch of an env.PERMITTED_SHA_GUARD == 'PASSED' gate") — correctly, since a post block is
+    // exactly where an ungated effect would hide.
+    failure { echo "mirror leg ${params.MIRROR_INSTANCE} failed on ${params.MIRROR_HOST} — see the Ansible output above. If the log shows no 'Unload any previous instance' task, the previously running agent is untouched and only files may be partially written. If it DOES show that task, the leg is DOWN until a successful re-run: confirm the agent's state on the host with scripts/ops/mirror-morning-check.sh, which reports every leg's load state and lag. The playbook is idempotent — re-run this job." }
   }
 }
