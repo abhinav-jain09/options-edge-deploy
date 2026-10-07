@@ -24,9 +24,10 @@ resources:
   # Kyle-style signed-flow response slope (a neutral observability measurement, not a signal).
   # The es4 deployment at k8s/es4/services/ is untouched and keeps the legacy output.
   - ../../services/es-aggressor-flow/base
-  # es-trade-linearizer: PROD-ONLY for the same reason; es-aggressor-flow's slope reads its tape.
+  # es-trade-linearizer: dev+prod since 2026-10-07 (dev's feed does write underlying.es.trades); es-aggressor-flow's
+  # slope and es-compression-expansion read its tape.
   - ../../services/es-trade-linearizer/base
-  # es-compression-expansion: PROD-ONLY SHADOW for the same reason — it reads the linearizer's tape.
+  # es-compression-expansion: dev+prod SHADOW since 2026-10-07 — it reads the linearizer's tape.
   - ../../services/es-compression-expansion/base
   # nifty-gex: the NIFTY/BANKNIFTY Pressure boards (DhanHQ), public via cloudflared path
   # routes to NodePort 30188. STANDALONE overlay k8s/services/nifty-gex/overlays/production

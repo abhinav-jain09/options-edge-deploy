@@ -211,7 +211,7 @@
             done
           fi
           if [ "${ENVIRONMENT}" = "dev" ] || [ "${ENVIRONMENT}" = "production" ]; then
-            for _img_var in SHORT_PREMIUM_AGENT_IMAGE SIGNAL_FOLLOWER_IMAGE CONTEXT_TAPE_IMAGE MULTILEG_STRUCTURE_IMAGE AMT_ORDER_BRIDGE_IMAGE BROKER_EXECUTION_IMAGE; do
+            for _img_var in SHORT_PREMIUM_AGENT_IMAGE SIGNAL_FOLLOWER_IMAGE CONTEXT_TAPE_IMAGE MULTILEG_STRUCTURE_IMAGE AMT_ORDER_BRIDGE_IMAGE BROKER_EXECUTION_IMAGE ES_TRADE_LINEARIZER_IMAGE ES_COMPRESSION_EXPANSION_IMAGE; do
               _pinned="$(pin_ref "${!_img_var}")" || {
                 echo "FATAL: cannot resolve registry digest for ${_img_var}=${!_img_var}; aborting before any kubectl mutation." >&2
                 exit 1
@@ -227,8 +227,9 @@
           # PROD-ONLY images (render only in k8s/overlays/production; the dev registry never
           # carries them, so pinning on dev/experiment would fail closed for an image that is
           # never deployed there). es-aggressor-flow: slope measurement, prod-only by design.
+          # (es-trade-linearizer and es-compression-expansion moved to the dev+prod loop above on 2026-10-07.)
           if [ "${ENVIRONMENT}" = "production" ]; then
-            for _img_var in ES_AGGRESSOR_FLOW_IMAGE ES_TRADE_LINEARIZER_IMAGE ES_COMPRESSION_EXPANSION_IMAGE; do
+            for _img_var in ES_AGGRESSOR_FLOW_IMAGE; do
               _pinned="$(pin_ref "${!_img_var}")" || {
                 echo "FATAL: cannot resolve registry digest for ${_img_var}=${!_img_var}; aborting before any kubectl mutation." >&2
                 exit 1
