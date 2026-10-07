@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# PHASE 1 of replacing a unit: stop it, and prove it is stopped, BEFORE any file is written.
+# Why the order matters: the five unit files cannot be replaced as one transaction, and the plist
+# carries KeepAlive — so a process alive during the copy, or restarted by launchd mid-copy, can come
+# up on a MIXED generation (a new producer.properties with an old run-mirror.sh, say). Stopping first
+# makes that window empty: the files change while nothing is running, and PHASE 2 starts the unit on
+# the complete new set. If this phase fails, nothing is copied and the unit keeps running the old,
+# COHERENT configuration — the safe state to leave behind.
+# It prints `stopped: was pid <n|none>`; the caller passes that pid to PHASE 2 as OE_OLD_PID.
+set -uo pipefail
+# Every value rendered into this script is shell-QUOTED with Ansible's quote filter. These are
+# operator-supplied through extra vars (ops_dir, launch_agents_dir, kafka_bin, the target), and a
+# double-quoted Jinja interpolation (no quote filter) let a crafted value run shell BEFORE the guard
+# below — a `bash() { return 0; }` function defined that way would have made every guard call succeed.
+PL={{ item.plist | quote }}; LBL={{ item.label | quote }}; MDIR={{ item.mdir | quote }}
+TGT={{ item.target | quote }}; REPO={{ (playbook_dir ~ "/..") | quote }}
+
+# THE PRODUCTION LOCK LIVES HERE, in the first thing that touches a unit, and not in a variable.
+# An Ansible extra var outranks every var, fact and register, so `-e oe_prod_permitted=true` defeated
+# a play-level condition — the playbook's own checks are still there, but this is the one that cannot
+# be waved through from the command line: for a PRODUCTION target this re-runs the repository's own
+# permitted-commit guard, which passes only when this checkout is on origin/main AND its HEAD is
+# exactly the permitted commit. A forged PERMITTED_SHA does not help: the guard compares it with the
+# real HEAD and the real origin/main. The version hash is written out LITERALLY here, not taken from
+# a playbook variable: `-e oe_guard_version=<hash of an edited guard>` would otherwise let a locally
+# modified guard self-approve. scripts/ci/validate-ansible-prod-permission.sh asserts this literal
+# equals the one every mirror Jenkinsfile declares.
+if [ "$TGT" = "192.168.100.252:9092" ]; then
+  # PERMITTED_SHA arrives in the ENVIRONMENT (the task sets it), never interpolated into this
+  # script's text: an extra var is operator-supplied data, and interpolating it into a double-quoted
+  # command let a crafted value inject shell — including a `bash` function that returns success.
+  if ! ( cd "$REPO" && PERMITTED_SHA="${PERMITTED_SHA:-}" \
+         PERMITTED_SHA_GUARD_VERSION="2f6fc2ab7aa51eb8a9e8aa350f2d774cd2fb7a253de2591e43645a19a9886b24" \
+         bash scripts/jenkins/permitted-sha-guard.sh ); then
+    echo "FAIL: the permitted-commit guard REFUSED this PRODUCTION unit — nothing has been stopped or written"
+    exit 1
+  fi
+fi
+
+# launchctl's own status matters: an unreadable list is not an unloaded unit. Returning empty there
+# would let the stop phase conclude the unit is gone and write files under a still-registered,
+# KeepAlive job — so this RETURNS non-zero and every call site checks it.
+pid_of() {
+  local out
+  out=$(launchctl list) || { echo "FAIL: cannot read launchctl list — refusing, because an unreadable job table is indistinguishable from an unloaded unit" >&2; return 1; }
+  printf '%s\n' "$out" | awk -v l="$LBL" '$3==l{print $1}'
+  return 0
+}
+# The launchd REGISTRATION is not the process: an unload can deregister the unit while the old java
+# keeps running and keeps publishing. It RETURNS non-zero on an enumeration failure and the call site
+# checks it — `X=$(procs_of)` runs in a SUBSHELL, where an exit would end only the subshell and this
+# script would carry on with an empty list, which is the lie the check exists to refuse.
+procs_of() {
+  local all
+  all=$(ps -axo pid=,command=) || { echo "FAIL: cannot enumerate processes (ps failed) — refusing to touch this unit, because an unreadable process table is indistinguishable from an empty one" >&2; return 1; }
+  # an EMPTY result is the healthy case, not a failure: grep exiting 1 on no match must not become
+  # this function's status, or a unit with nothing running would read as unreadable
+  printf '%s\n' "$all" | grep -- "--producer.config $MDIR/producer.properties" | grep -v grep | awk '{print $1}'
+  return 0
+}
+
+OLD=$(pid_of) || exit 1
+# launchctl prints '-' for a job that is registered but not running: that is not a pid, and reporting
+# it as one would have phase 2 compare its new pid against a dash
+case "$OLD" in (*[!0-9]*) OLD="" ;; esac
+launchctl unload "$PL" 2>/dev/null || true
+STILL=$(pid_of) || exit 1
+if [ -n "$STILL" ]; then
+  echo "FAIL: $LBL is still LOADED after unload (pid='$STILL') — nothing has been written, and the unit keeps its old configuration"
+  exit 1
+fi
+LINGER=$(procs_of) || exit 1
+if [ -n "$LINGER" ]; then
+  echo "FAIL: process(es) still publishing this unit's config after the unload ($(printf '%s' "$LINGER" | tr '\n' ' ')) — nothing has been written; stop them and re-run, or the install would replace the files under a live process"
+  exit 1
+fi
+echo "stopped: was pid ${OLD:-none}"

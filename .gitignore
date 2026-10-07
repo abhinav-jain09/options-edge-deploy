@@ -33,3 +33,6 @@ scripts/ops/archive/vol-premium-open-reference-capture.py
 # binaries fetched by running CI steps locally
 /kubectl
 /yq
+
+# ansible render/plan scratch (the playbook writes its plan here)
+ansible/.ansible-rendered/

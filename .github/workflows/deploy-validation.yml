@@ -227,6 +227,60 @@ jobs:
       - name: Validate the mirror producer contract (acks=all, pinned idempotence)
         run: bash scripts/ci/mirror-producer-contract-test.sh
 
+      # ansible/ is a SECOND generator for the same unit files, used when no Jenkins console is being
+      # watched. This fails the build when the table and the pipelines stop agreeing on the producer
+      # stanza, the consumer group formula, the offset reset, the isolation level, the topic
+      # allow-list or the unit naming. (The per-end shape assertions it cannot read are named in its
+      # header, not implied away.)
+      - name: Validate the Ansible mirror table against the pipelines
+        run: bash scripts/ci/validate-ansible-mirror-parity.sh
+
+      # The stop and start guards are the only part of the Ansible mirror path that touches a LIVE
+      # mirror, and the cases they exist for are quiet ones: a failed `launchctl load` leaves the OLD
+      # process running, and deregistering a unit can leave it running while a load starts a SECOND
+      # mirror on the same topic. Driven against stub launchctl/ps, once per way they can be lied to.
+      - name: Validate the mirror stop/start guards (stubbed launchctl scenarios)
+        run: bash scripts/ci/mirror-stop-start-guard-test.sh
+
+      # The comparison decides whether a LIVE mirror is reloaded, and both wrong answers cost: "in
+      # sync" when a property changed leaves the old settings running, "would install" for a comment
+      # opens a gap in fourteen healthy mirrors. It is also easy to break silently — an apostrophe
+      # inside its awk program once made every unit read "unparseable".
+      - name: Validate the mirror comparison guard
+        run: bash scripts/ci/mirror-diff-guard-test.sh
+
+      # What an ABSENT consumer group means is the difference between a first install and re-copying a
+      # retention window into the target — and a SUCCESSFUL but empty listing is the correct answer on
+      # a source with no groups, not a failure. Driven once per outcome against a stubbed CLI.
+      - name: Validate the mirror consumer-group check
+        run: bash scripts/ci/mirror-group-check-test.sh
+
+      # The install replaces five files for a unit the stop phase has already brought DOWN, so a
+      # failed move must restore the previous generation whole — which depends on `set -E`, without
+      # which the ERR trap is not inherited by the function doing the moves and the mixed generation
+      # the trap exists to undo is exactly what is left behind.
+      - name: Validate the mirror install rollback
+        run: bash scripts/ci/mirror-install-rollback-test.sh
+
+      # A production reload from this playbook must enforce the Deployment Permission Rule itself,
+      # with the same guard script and the DECLARED version hash Jenkins passes — a computed hash
+      # would let a locally edited guard self-approve. Asserted statically and behaviourally.
+      - name: Validate the Ansible production permission path
+        run: |
+          python3 -m pip install --quiet --disable-pip-version-check ansible-core
+          bash scripts/ci/validate-ansible-prod-permission.sh
+
+      # Catches a playbook that cannot even be loaded — a YAML or module-name error in ansible/ is
+      # otherwise found only by the operator running it, mid-install — and then runs the playbook's
+      # own identity logic: the parity gate reads the table and the templates and cannot see the Jinja
+      # that composes a unit's group.id, label, directory and plist from them, which is the most
+      # dangerous code in the file.
+      - name: Ansible syntax check + unit identity (mirror playbook)
+        run: |
+          python3 -m pip install --quiet --disable-pip-version-check ansible-core
+          ansible-playbook --syntax-check ansible/es-mirrors.yml
+          bash scripts/ci/validate-ansible-mirror-naming.sh
+
       # bash -n cannot see this: a backslash escape Groovy rejects inside a '''...''' sh block fails the
       # whole pipeline at COMPILE time ("unexpected char: '\\'"). #1027 merged one and broke every
       # action of the enumeration mirror job until the Jenkins linter was run by hand.

@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# The consumer group carries this mirror's committed offsets, on the SOURCE broker. A group that does
+# not exist yet means THIS install is the first one, and a first install copies from
+# auto.offset.reset — which on an `earliest` unit is the whole retained history, into the target. That
+# is a decision, not a side effect, so it needs -e allow_new_consumer_group=true.
+#
+# Three outcomes, kept apart on purpose:
+#   * the listing FAILED (non-zero): refused whatever the flag says, because an unreadable listing is
+#     indistinguishable from an absent group;
+#   * the listing SUCCEEDED and the group is there: proceed;
+#   * the listing SUCCEEDED and the group is not there — including an EMPTY listing, which is the
+#     correct answer on a source that has no groups at all: proceed only with the flag. An earlier
+#     version treated an empty listing as a failure, which made the first-install escape hatch
+#     unusable on exactly the fresh source it exists for.
+set -uo pipefail
+KBIN={{ oe_kbin | quote }}; SRC={{ item.source | quote }}; G={{ item.group_id | quote }}
+ALLOW={{ (oe_allow_new_group | lower) | quote }}
+RESET={{ item.offset_reset | quote }}
+
+if ! LIST=$("$KBIN/kafka-consumer-groups" --bootstrap-server "$SRC" --list 2>&1); then
+  echo "FAIL: cannot list consumer groups on $SRC — refusing, because an unreadable listing is indistinguishable from an absent group:"
+  printf '%s\n' "$LIST" | sed 's/^/      /' | head -5
+  exit 1
+fi
+if printf '%s\n' "$LIST" | grep -Fxq "$G"; then
+  echo "group exists: $G"
+  exit 0
+fi
+if [ "$ALLOW" = "true" ]; then
+  echo "group ABSENT, creating a FIRST install under $G (allow_new_consumer_group=true, auto.offset.reset=$RESET)"
+  exit 0
+fi
+echo "FAIL: consumer group $G does not exist on $SRC."
+echo "      A first install re-reads from auto.offset.reset=$RESET; pass -e allow_new_consumer_group=true to accept that."
+exit 1

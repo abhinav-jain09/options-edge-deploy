@@ -1,0 +1,125 @@
+---
+# The es4 -> (dev|prod) MirrorMaker-1 unit table: ONE row per launchd unit the mirror pipelines
+# install. Every field is a copy of something a Jenkinsfile declares, so it can drift — and
+# scripts/ci/validate-ansible-mirror-parity.sh fails the build when it does. The Jenkinsfile stays
+# the source of truth: topic lifecycle, config reconciliation and the payload proof live there.
+#
+#   group_parts      the pieces of the consumer group.id AFTER the pipeline name, in order. The group
+#                    is where the committed offsets live: get it wrong and the mirror starts a NEW
+#                    group, and with auto.offset.reset=earliest it re-copies the whole retained
+#                    history into the target. The three shapes below are the three really in use.
+#   slug_with_topic  whether the unit/label/plist name carries the topic (the single-topic flow and
+#                    strike-intel units do not).
+#   assert           EXACTLY what the owning pipeline asserts about the topic, per END — no weaker,
+#                    no stronger. This playbook never creates or alters a topic, so where a pipeline
+#                    RECONCILES the target instead of asserting it (es-auction-mirror --alter), that
+#                    end is left unasserted here and reported as a note. An omitted key is not
+#                    checked; `parts: source` means "must equal the source's count".
+#                    policy/retention are read EFFECTIVELY, and a value that exists only as a broker
+#                    default reads as unset — which is a FAILURE wherever the pipeline asserts it.
+mirror_units:
+  - pipeline: es-cvd-mirror
+    slug_with_topic: true
+    group_parts: [ip, topic]
+    offset_reset: earliest
+    isolation_level: read_committed
+    # asserts the frozen arm at BOTH ends (Jenkinsfile.es-cvd-mirror: SPOL/SRET then TPOL/TRET)
+    topics:
+      - name: es.futures.cvd.bars
+        assert: { source: {parts: 1, policy: delete, retention: "-1"},          target: {parts: 1, policy: delete, retention: "-1"} }
+      - name: es.futures.cvd
+        assert: { source: {parts: 1, policy: delete, retention: "43200000"},    target: {parts: 1, policy: delete, retention: "43200000"} }
+      - name: es.futures.cvd.levels
+        prod_only: true
+        assert: { source: {parts: 1, policy: compact, retention: "-1"},         target: {parts: 1, policy: compact, retention: "-1"} }
+      - name: es.futures.footprint.bars
+        assert: { source: {parts: 1, policy: delete, retention: "-1"},          target: {parts: 1, policy: delete, retention: "-1"} }
+      - name: es.futures.footprint.outcomes
+        assert: { source: {parts: 1, policy: delete, retention: "-1"},          target: {parts: 1, policy: delete, retention: "-1"} }
+      - name: es.futures.footprint
+        assert: { source: {parts: 1, policy: delete, retention: "43200000"},    target: {parts: 1, policy: delete, retention: "43200000"} }
+      - name: es.futures.footprint.evidence
+        assert: { source: {parts: 1, policy: delete, retention: "43200000"},    target: {parts: 1, policy: delete, retention: "43200000"} }
+      # retention.bytes is asserted at BOTH ends for this one, and only this one: the pipeline's
+      # BYTES arm is set here (retention.ms=-1 does not stop byte-based deletion, and a finite
+      # inherited cap on either end deletes the history the cross-session read needs).
+      - name: es.futures.footprint.strike
+        assert: { source: {parts: 1, policy: delete, retention: "-1", bytes: "-1"}, target: {parts: 1, policy: delete, retention: "-1", bytes: "-1"} }
+
+  - pipeline: es-indicator-mirror
+    slug_with_topic: true
+    group_parts: [ip, topic]
+    offset_reset: latest
+    isolation_level: ""
+    # Jenkinsfile.es-indicator-mirror asserts the TARGET only: the partition count, and — for a
+    # `delete` arm — that the target is NOT compacted. It asserts no retention and nothing about the
+    # source, so neither is asserted here.
+    topics:
+      - name: es.options.indicators.snapshot.current
+        assert: { target: {parts: 1, not_compacted: true} }
+      - name: es.options.indicators.bars
+        assert: { target: {parts: 8, not_compacted: true} }
+
+  - pipeline: es-auction-mirror
+    slug_with_topic: true
+    group_parts: [ip, port, topic]
+    offset_reset: earliest
+    isolation_level: ""
+    # --offset.commit.interval.ms is a MIRRORMAKER CLI option, not a consumer property, and its
+    # default is 60000. This pipeline passes 5000 because the committed offset is its per-install
+    # proof that THIS process consumed the reference record; at the default it lags by up to a minute.
+    commit_interval_ms: 5000
+    # Jenkinsfile.es-auction-mirror asserts the SOURCE arm strictly, then RECONCILES the target with
+    # kafka-configs --alter and ASSERTS the result ("the reconcile did not take"). So the end state it
+    # requires of the target is the same frozen arm, and that is what is asserted here. The difference
+    # is who fixes a target that is off it: that pipeline alters the topic, this playbook refuses —
+    # which is why prod's es.futures.auction, whose cleanup.policy is only a broker default, reads as
+    # NOT INSTALLED here and needs the pipeline once.
+    topics:
+      - name: es.futures.auction
+        assert: { source: {parts: 1, policy: delete, retention: "604800000"}, target: {parts: 1, policy: delete, retention: "604800000"} }
+
+  - pipeline: es-tape-zones-mirror
+    slug_with_topic: true
+    group_parts: [ip, port, topic]
+    offset_reset: earliest
+    isolation_level: ""
+    commit_interval_ms: 5000
+    # Jenkinsfile.es-tape-zones-mirror asserts the source's config as an EXACT string (so a source at
+    # compact,delete fails there exactly as it fails here), and — like the auction mirror — reconciles
+    # the target and then asserts the same arm on it.
+    topics:
+      - name: es.tape-zones.board
+        assert: { source: {parts: 1, policy: delete, retention: "-1"}, target: {parts: 1, policy: delete, retention: "-1"} }
+
+  - pipeline: es-futures-flow-mirror
+    slug_with_topic: false
+    group_parts: [ip]
+    offset_reset: latest
+    isolation_level: ""
+    # Jenkinsfile.es-futures-flow-mirror asserts 1 partition at both ends and that the TARGET is
+    # COMPACTED — note its own --create arm passes cleanup.policy=delete, which only applies when the
+    # topic is absent; the assertion is what holds for an existing topic. No retention assertion.
+    topics:
+      - name: es.futures.aggressor-flow
+        assert: { source: {parts: 1}, target: {parts: 1, policy_contains: compact} }
+
+  - pipeline: es-strike-intel-mirror
+    slug_with_topic: false
+    group_parts: [ip]
+    offset_reset: latest
+    isolation_level: ""
+    # Jenkinsfile.es-strike-intel-mirror asserts NO shape at all: it reads the source's partition
+    # count and runs --create --if-not-exists, and never checks an EXISTING target's count. So nothing
+    # is asserted here either — an earlier revision required target==source, which was stricter than
+    # the pipeline and would have refused an install the pipeline performs.
+    # (Both topics must EXIST: that is a precondition of a playbook which never creates a topic, not
+    # an assertion this pipeline makes.)
+    topics:
+      - name: es.strike-intelligence-by-strike
+        assert: {}
+
+# opra-definition-enumeration-mirror is deliberately ABSENT: it is not an es4 -> env unit. It ships a
+# container runner to es4 over scp and mirrors in the other direction, and its install has its own
+# payload proof. Installing it from here would need a second, different shape — add it only with that
+# shape, never by pretending it is one of these.
