@@ -34,10 +34,18 @@ esac
 SRC_BOOTSTRAP="${MAC74_BOOTSTRAP:-192.168.100.74:9092}"
 KBIN="${KBIN:-$HOME/development/confluent-7.3.1/bin}"
 TOPIC="${LANE_TOPIC:-dealer-ledger-profile}"
-SETTLE="${LANE_SETTLE_SECONDS:-60}"
+# ⚠ MUST EXCEED MirrorMaker v1's offset.commit.interval.ms, which defaults to 60000 and is not
+# declared in any mirror's consumer.properties. The verdict below is the mirror GROUP's committed
+# position, and a window at or under the commit interval can see zero movement while records are
+# flowing — a FALSE NEGATIVE that would block a legitimate deploy forever. Measured on leg 3 on
+# 2026-10-07: a 45s window saw +0 while the target advanced 81 records; a 150s window saw +623.
+SETTLE="${LANE_SETTLE_SECONDS:-150}"
 
 fail() { echo "LANE NOT DELIVERING to $TARGET: $*" >&2; exit 1; }
 [ -x "$KBIN/kafka-get-offsets" ] || fail "no kafka CLI at $KBIN"
+# Refuse a window that cannot distinguish "not committing" from "has not committed yet".
+case "$SETTLE" in ''|*[!0-9]*) echo "LANE_SETTLE_SECONDS must be an integer" >&2; exit 2 ;; esac
+[ "$SETTLE" -gt 60 ] || { echo "LANE_SETTLE_SECONDS=$SETTLE is <= MirrorMaker's 60s commit interval; it would report a false negative. Use >60." >&2; exit 2; }
 
 # A missing topic prints NOTHING and an awk sum of nothing is 0, indistinguishable from empty.
 # Establish existence separately — conflating the two is how six topics were once called empty when
