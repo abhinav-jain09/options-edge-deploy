@@ -71,6 +71,7 @@
     # extra var (-e) outranks every var, fact and register in the play: with the decision taken
     # through these names, `-e oe_prod_target=127.0.0.1:19092` would make the real production broker
     # pass the allow-list, skip the permitted-commit guard and set the permission true.
+    oe_run_host: "{{ mirror_run_host | default('localhost') }}"
     oe_prod_target: "192.168.100.252:9092"
     oe_dev_target: "127.0.0.1:19092"
     oe_rendered_dir: "{{ playbook_dir }}/.ansible-rendered/es-mirrors"
@@ -171,7 +172,7 @@
         label: "{{ item.0.pipeline }}/{{ item.1.name }}"
       vars:
         slug: >-
-          {{ (oe_target_ip ~ '-' ~ oe_target_port ~ (('-' ~ item.1.name) if item.0.slug_with_topic else ''))
+          {{ ((item.0.target_ip | default(oe_target_ip)) ~ '-' ~ (item.0.target_port | default(oe_target_port)) ~ (('-' ~ item.1.name) if item.0.slug_with_topic else ''))
              | regex_replace('[^A-Za-z0-9-]', '-') }}
         row:
           pipeline: "{{ item.0.pipeline }}"
@@ -190,8 +191,12 @@
           mdir: "{{ oe_ops }}/{{ item.0.pipeline }}-{{ slug }}"
           label: "com.optionsedge.{{ item.0.pipeline }}-{{ slug }}"
           plist: "{{ oe_agents }}/com.optionsedge.{{ item.0.pipeline }}-{{ slug }}.plist"
-          source: "{{ oe_source_ip }}:{{ oe_source_port }}"
-          target: "{{ oe_target_ip }}:{{ oe_target_port }}"
+          # Per-row source/target, DEFAULTING to the globals so every es4 row renders exactly as it
+          # did before this field existed. Only a row that declares its own (the dealer-ledger
+          # offload leg, whose source is .74 and target is prod) differs.
+          source: "{{ item.0.source_ip | default(oe_source_ip) }}:{{ item.0.source_port | default(oe_source_port) }}"
+          target: "{{ item.0.target_ip | default(oe_target_ip) }}:{{ item.0.target_port | default(oe_target_port) }}"
+          run_host: "{{ item.0.run_host | default('localhost') }}"
 
     - name: Select the units this run covers
       ansible.builtin.set_fact:
@@ -211,12 +216,26 @@
       # resource must stay ABSENT. Skipped here, not failed, so a dev run of the whole table works.
       ansible.builtin.set_fact:
         oe_held: "{{ oe_selected | selectattr('prod_only') | map(attribute='topic') | list if ((oe_target_ip ~ ':' ~ oe_target_port) != '192.168.100.252:9092') else [] }}"
-        oe_plan: "{{ oe_selected | rejectattr('prod_only') | list if ((oe_target_ip ~ ':' ~ oe_target_port) != '192.168.100.252:9092') else oe_selected }}"
+        oe_env_plan: "{{ oe_selected | rejectattr('prod_only') | list if ((oe_target_ip ~ ':' ~ oe_target_port) != '192.168.100.252:9092') else oe_selected }}"
+
+    # A SEPARATE task, not two more keys above: within one set_fact, Ansible resolves every key
+    # against the facts as they were BEFORE the task, so `oe_plan: "{{ oe_env_plan | ... }}"` beside
+    # its own producer fails with "'oe_env_plan' is undefined" — which is exactly how I broke this
+    # play on the first attempt.
+    - name: Keep only the units this host installs, and name the ones it defers
+      # A unit is installed only by a play running ON its run_host — a single play cannot install
+      # some units on .102 and others on .74. The rest are REPORTED as deferred, never dropped: a row
+      # silently missing from a plan is how a mirror goes unnoticed, which is the failure this whole
+      # table exists to prevent.
+      ansible.builtin.set_fact:
+        oe_plan: "{{ oe_env_plan | selectattr('run_host', 'equalto', oe_run_host) | list }}"
+        oe_deferred: "{{ oe_env_plan | rejectattr('run_host', 'equalto', oe_run_host) | list }}"
 
     - name: Report the plan
       ansible.builtin.debug:
         msg: >-
-          {{ oe_source }} -> {{ oe_target }} | {{ oe_plan | length }} unit(s)
+          {{ oe_source }} -> {{ oe_target }} | {{ oe_plan | length }} unit(s) on {{ oe_run_host }}{{
+          (", " ~ (oe_deferred | length | string) ~ " deferred to another run_host: " ~ (oe_deferred | map(attribute='label') | join(', '))) if (oe_deferred | length > 0) else "" }}
           {{ '(PLAN ONLY — pass -e confirm_mirror_install=true to install)' if not oe_confirm else '(INSTALLING)' }}
           {{ ('| held back as production-only: ' ~ (oe_held | join(', '))) if (oe_held | length > 0) else '' }}
 
