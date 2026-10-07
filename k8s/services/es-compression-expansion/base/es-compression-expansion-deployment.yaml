@@ -74,11 +74,14 @@ spec:
           ports:
             - name: health
               containerPort: 8080
-          # readiness is 503 until the first tape record of the current session arrives (NOT_READY{TAPE_DARK}):
-          # a dark linearizer keeps the pod NotReady, visibly, instead of a silent empty shadow.
+          # Owner 2026-10-07: the k8s readiness probe is PROCESS liveness, not tape readiness. The service's own
+          # readiness (/health/ready: 503 while NOT_READY{TAPE_DARK} or STALE, i.e. no tape print for 30 s) stays
+          # available to operators and in /metrics, but it no longer gates the pod: with it on the probe, every deploy
+          # into a dark tape (dev overnight, prod weekends and the 17:00-18:00 ET break) timed out its rollout wait and
+          # Jenkins reported FAILURE for an applied rollout (dev #2115), and the pod sat 0/1 for the whole break.
           readinessProbe:
             httpGet:
-              path: /health/ready
+              path: /health/live
               port: health
             initialDelaySeconds: 30
             periodSeconds: 10
