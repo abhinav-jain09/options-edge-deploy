@@ -94,7 +94,10 @@ EOF
   OUT="$tmp/out"
   # The attestation file is created EMPTY, exactly as scripts/ops/prod-clean-slate.sh creates it, so
   # "did not reach an ending" is observable as an empty file rather than as a missing one.
-  RESULT="${RESULT_PATH:-$tmp/result}"; [ "$RESULT" = /dev/full ] || : > "$RESULT"
+  RESULT="${RESULT_PATH:-$tmp/result}"
+  if [ "$RESULT" != /dev/full ]; then
+    if [ -n "${RESULT_PREFILL:-}" ]; then printf '%s\n' "$RESULT_PREFILL" > "$RESULT"; else : > "$RESULT"; fi
+  fi
   env PATH="$tmp:$PATH" KAFKA_BOOTSTRAP_SERVERS=localhost:9092 KAFKA_TOPIC_REPLICATION_FACTOR=1 \
     ENVIRONMENT=dev KAFKA_RECREATE_MISMATCHED_TOPICS=false KAFKA_TOPIC_DELETE_WAIT_SECONDS=1 \
     KAFKA_TOPIC_REPAIR_WAIT_SECONDS=1 APPLY_TOPICS_RESULT_FILE="$RESULT" "$@" \
@@ -192,6 +195,19 @@ run "" "$HERE" CONFIGS_FORGE_ATTESTATION=1 TOPICS_ABSENT="$VICTIM2" TOPICS_FAIL_
 [ -z "$(attested)" ] && ok "and leaves NO attestation at all, so the decision answers FAIL" \
   || bad "an aborted run with a forging child attested [$(attested)]"
 
+# A STALE attestation cannot survive into this run: apply-topics.sh empties the file itself before it
+# does anything, so a caller that reuses a path (or forgets to truncate) cannot read a previous run's
+# ending as this one's.
+RESULT_PREFILL="apply-topics: state=skipped skipped=stale.topic" run ""
+[ "$(att_state)" = ok ] && [ -z "$(att_names)" ] \
+  && ok "a clean run replaces a stale attestation" || bad "the stale line survived: [$(attested)]"
+RESULT_PREFILL="apply-topics: state=skipped skipped=stale.topic" run "" "$HERE" TOPICS_ABSENT="$VICTIM2" TOPICS_FAIL_ON=--create TOPICS_FAIL_RC=9
+unset RESULT_PREFILL
+[ "$RC" -eq 9 ] && ok "an aborted run with a stale attestation still exits 9" || bad "it exited $RC"
+[ -z "$(attested)" ] \
+  && ok "and the stale attestation is GONE, so the decision answers FAIL rather than reading it" \
+  || bad "an aborted run left the stale attestation in place: [$(attested)]"
+
 # An unwritable attestation path must ABORT the run, not finish quietly with no attestation.
 RESULT_PATH=/dev/full run "$VICTIM=1"
 unset RESULT_PATH
@@ -246,7 +262,15 @@ if [ -n "$m" ]; then
     bad "the mutant did not reproduce the forgery: exit $RC, attestation [$(attested)]"
   fi
 fi
-m="$(mutant "write_run_result ok ''||true")" || { bad "mutation 5 did not apply"; m=""; }
+m="$(mutant 'if [ -n "$RESULT_FILE" ] && ! : > "$RESULT_FILE"; then||if false; then')" || { bad "mutation 5 did not apply"; m=""; }
+if [ -n "$m" ]; then
+  RESULT_PREFILL="apply-topics: state=skipped skipped=stale.topic" run "" "$m" TOPICS_ABSENT="$VICTIM2" TOPICS_FAIL_ON=--create TOPICS_FAIL_RC=9
+  unset RESULT_PREFILL
+  [ "$(att_names)" = stale.topic ] \
+    && ok "without the self-truncation an aborted run leaves the STALE attestation readable (it is load-bearing)" \
+    || bad "the self-truncation mutation changed nothing: [$(attested)]"
+fi
+m="$(mutant "write_run_result ok ''||true")" || { bad "mutation 6 did not apply"; m=""; }
 if [ -n "$m" ]; then
   run "" "$m"
   [ -z "$(attested)" ] && ok "and the clean ending's attestation is load-bearing too (mutant exit $RC)" \

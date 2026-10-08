@@ -16,6 +16,13 @@ RECREATE_MISMATCHED="${KAFKA_RECREATE_MISMATCHED_TOPICS:-false}"
 # variable; write_run_result uses this shell-local copy.
 RESULT_FILE="${APPLY_TOPICS_RESULT_FILE:-}"
 unset APPLY_TOPICS_RESULT_FILE
+# Emptied HERE, by this script, before anything else happens: a caller that reuses a path (or forgets
+# to truncate it) would otherwise have a PREVIOUS run's attestation read as this one's. Refusing when
+# it cannot be emptied is the fail-closed direction -- better no run than an unattestable one.
+if [ -n "$RESULT_FILE" ] && ! : > "$RESULT_FILE"; then
+  echo "apply-topics.sh: cannot empty the result file $RESULT_FILE" >&2
+  exit 1
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
@@ -393,12 +400,16 @@ alter_topic_config() {
 #                                       apply-topics: state=skipped skipped=<name> <name> ...
 #
 # A caller that acts on a partial reconciliation (scripts/ops/prod-clean-slate.sh) must require BOTH
-# the status and that line, as EXACTLY ONE line in the expected shape. The variable is unset at the top
-# of this script, before anything runs, so no child inherits the path; an aborted run never reaches the
-# write; and a write that FAILS aborts the run under set -e, so such a caller sees a non-zero status
-# and an empty file -- the fail-closed direction. (The path is not a secret: it is in this script's own
-# environment for an instant and in the caller's process table. What the unset buys is that no child
-# can write it by inheriting the variable, which is how a kafka CLI or a future helper would.)
+# the status and that line, as EXACTLY ONE line in the expected shape. Four properties make that
+# sound, and each is a case in scripts/kafka/apply-topics-skip-exit-test.sh:
+#   * the variable is UNSET at the top of this script, before anything runs, so no child inherits the
+#     path (the path is not a secret -- it is in this script's environment for an instant and in the
+#     caller's process table -- but no kafka CLI or future helper can write it by inheritance);
+#   * the file is EMPTIED here, by this script, so a previous run's line is never read as this one's
+#     and no caller has to remember to truncate it;
+#   * an aborted run never reaches the write, so there is nothing to read;
+#   * a write that FAILS aborts the run under set -e, so the caller sees a non-zero status and an
+#     empty file -- the fail-closed direction.
 #
 # Callers that only test for non-zero -- the Jenkins stages, scripts/es4/create-es-topics.sh -- are
 # unaffected: a skip is still a failure, and still fails the build.

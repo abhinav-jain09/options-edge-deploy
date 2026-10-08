@@ -4,49 +4,102 @@
 #
 #   mirror_ledger_resume <paused-list> <filter-script> [<hold-topic> ...]
 #
-#     <paused-list>    the file pause_mirrors wrote: one "<launchd label> <plist path>" row per agent
+#     <paused-list>    the file pause_mirrors wrote: one "<launchd label> <plist path>" row per agent.
+#                      The label is the first field; EVERYTHING after it is the path, so a path with
+#                      spaces round-trips (re-parsing a row into fields and re-serialising it is how a
+#                      ledger silently rewrites somebody's path -- deploy Codex round 3).
 #     <filter-script>  scripts/ops/mirror-topic-filter.sh — asked, per agent, whether it copies a
 #                      held topic. Only consulted when at least one hold topic is given.
 #     <hold-topic>...  topics an agent may NOT produce into right now (unreconciled, or missing from
 #                      the broker and therefore auto-creatable at the wrong partition count)
 #
 #   returns 0 only when every row was either started or DELIBERATELY held; non-zero when an agent that
-#   should be running is not, or when the ledger could not be rewritten.
+#   should be running is not, or when the ledger could not be read or rewritten.
 #
 # THE LEDGER IS THE ONLY RECORD that an agent is down, so the invariant is: a row leaves the file ONLY
 # when its agent is confirmed loaded. Everything else keeps it -- held by a topic, failed to load,
-# plist missing right now, or a bookkeeping failure that makes the new ledger untrustworthy (then the
-# OLD file is left exactly as it was, which over-lists rather than under-lists: a later run bootstraps
-# an agent that is already loaded, sees it loaded, and drops the row then). Deploy Codex rounds 1-2
-# found both halves of this: a dropped missing-plist row, and unchecked writes to the scratch file that
-# could end with the original deleted.
+# plist missing right now, or any failure that makes the new ledger untrustworthy (then the OLD file is
+# left exactly as it was, which over-lists rather than under-lists: a later run bootstraps an agent
+# that is already loaded, sees it loaded, and drops the row then).
+#
+# Three ways that invariant was broken before, each found by a deploy Codex round and each now a case
+# in scripts/ops/mirror-ledger-test.sh:
+#   r1  a missing plist dropped the row, so a briefly absent plist left an agent paused and unlisted.
+#   r2  the writes to the scratch file were unchecked, so a failed append could end with the original
+#       ledger deleted and nothing recording the agents that stayed down.
+#   r3  an UNREADABLE non-empty ledger passed the -s test, the read loop ran zero times, and the empty
+#       scratch file then replaced... nothing: the original was deleted as "everything resumed".
+# So the rows are read ONCE, up front, with the read's own status checked, and the count of rows
+# processed must match the count read before anything replaces the file.
+#
+# CONCURRENCY: a lock directory beside the ledger. Two clean slates working one ledger would interleave
+# bootstraps and rewrites; the second one refuses instead. A stale lock (from a crash) also refuses,
+# which is the safe direction -- it leaves every row listed.
 #
 # Lives in its own file because scripts/ops/prod-clean-slate.sh is driven by ssh and sshpass and cannot
-# be run by a test, while this can: scripts/ops/mirror-ledger-test.sh drives it over a fake ledger with
-# a stubbed launchctl.
+# be run by a test, while this can.
 
 # Prefer the caller's logger (prod-clean-slate.sh's `say` tees to its log file).
 _ml_say() { if declare -F say >/dev/null 2>&1; then say "$*"; else printf '%s\n' "$*"; fi; }
 
 mirror_ledger_resume() {
-  local list="${1-}" filter="${2-}"
+  local list="${1-}" lock rc
   [ -n "$list" ] || { _ml_say "mirror_ledger_resume: no ledger path given"; return 1; }
-  shift 2 2>/dev/null || shift $#
-  [ -s "$list" ] || { _ml_say "no paused mirror agents listed ($list)"; return 0; }
-
-  local keep="$list.keep" uid n=0 held=0 failed=0 broken=0 seen="" label plist verdict rc=0
-  uid="$(id -u)"
-  if ! : > "$keep" 2>/dev/null; then
-    _ml_say "WARN: cannot write $keep — the ledger is left untouched and NO agent is started"
+  # No ledger at all = nothing was paused = nothing to do, and nothing to lock. (An EMPTY ledger is
+  # handled inside, after the read, so that an unreadable one cannot be mistaken for it.)
+  if [ ! -e "$list" ]; then _ml_say "no paused mirror agents listed ($list)"; return 0; fi
+  lock="$list.lock"
+  if ! mkdir "$lock" 2>/dev/null; then
+    # Two different causes, and saying the wrong one sends the operator looking for a process that is
+    # not there: the directory beside the ledger may simply not be writable.
+    if [ -d "$lock" ]; then
+      _ml_say "WARN: $lock exists — another run holds this ledger (or one crashed holding it). Nothing is started; every row stays listed."
+    else
+      _ml_say "WARN: cannot create $lock (is $(dirname -- "$list") writable?) — nothing is started; every row stays listed."
+    fi
     return 1
   fi
-  # A row that must stay paused. A failed append makes the new ledger incomplete, which is why it is
-  # recorded instead of ignored: an incomplete ledger must not replace a complete one.
+  _ml_resume_locked "$@"; rc=$?
+  rmdir "$lock" 2>/dev/null
+  return "$rc"
+}
+
+_ml_resume_locked() {
+  local list="$1" filter="${2-}"
+  shift 2 2>/dev/null || shift $#
+
+  # ONE read, status checked. `-s` says "not empty", which an unreadable file also satisfies.
+  local rows read_rc
+  rows="$(cat -- "$list" 2>/dev/null)"; read_rc=$?
+  if [ "$read_rc" -ne 0 ] || [ ! -r "$list" ]; then
+    _ml_say "WARN: cannot READ $list — nothing is started and the file is left untouched"
+    return 1
+  fi
+  if [ -z "$rows" ]; then _ml_say "no paused mirror agents listed ($list)"; return 0; fi
+
+  local total processed=0
+  total="$(printf '%s\n' "$rows" | grep -c . )"
+
+  # A per-run scratch name, so two runs cannot write each other's (the lock above makes that moot for
+  # this ledger, but a fixed name also collides with a stale file left by a crash).
+  local keep
+  if ! keep="$(mktemp "$list.keep.XXXXXX" 2>/dev/null)"; then
+    _ml_say "WARN: cannot create a scratch file beside $list — nothing is started and the file is left untouched"
+    return 1
+  fi
+
+  local uid n=0 held=0 failed=0 broken=0 seen="" label plist verdict
+  uid="$(id -u)"
+  # A row that must stay paused. A failed append makes the new ledger incomplete, which is recorded
+  # rather than ignored: an incomplete ledger must not replace a complete one.
   _ml_hold_row() { printf '%s %s\n' "$1" "$2" >> "$keep" || broken=1; }
 
-  while read -r label plist _rest; do
-    [ -n "$label" ] || continue
-    # A duplicate row would bootstrap the same agent twice; the second attempt looks like a failure.
+  while IFS= read -r row; do
+    [ -n "$row" ] || continue
+    processed=$((processed+1))
+    # First field is the label; the REST is the path, verbatim.
+    label="${row%% *}"
+    if [ "$label" = "$row" ]; then plist=""; else plist="${row#* }"; fi
     case " $seen " in *" $label "*) _ml_say "   (duplicate ledger row ignored): $label"; continue ;; esac
     seen="$seen $label"
 
@@ -54,12 +107,11 @@ mirror_ledger_resume() {
       _ml_say "   KEPT paused (ledger row has no plist path): $label"; _ml_hold_row "$label" ""; held=$((held+1)); continue
     fi
     if [ ! -f "$plist" ]; then
-      # Not a resumed agent: it stays listed so a later run picks it up when the plist is back.
       _ml_say "   KEPT paused (plist not found): $label"; _ml_hold_row "$label" "$plist"; held=$((held+1)); continue
     fi
     if [ "$#" -gt 0 ]; then
       if [ -z "$filter" ] || [ ! -x "$filter" ]; then
-        _ml_say "   HELD paused (the topic filter $filter is missing or not executable): $label"
+        _ml_say "   HELD paused (the topic filter ${filter:-<none>} is missing or not executable): $label"
         _ml_hold_row "$label" "$plist"; held=$((held+1)); continue
       fi
       if ! verdict="$("$filter" "$plist" "$@" 2>&1)"; then
@@ -74,11 +126,11 @@ mirror_ledger_resume() {
       _ml_say "   WARN: mirror agent $label did not load"
       _ml_hold_row "$label" "$plist"; failed=$((failed+1))
     fi
-  done < "$list"
+  done <<< "$rows"
 
-  if [ "$broken" -ne 0 ]; then
+  if [ "$broken" -ne 0 ] || [ "$processed" -ne "$total" ]; then
     rm -f "$keep"
-    _ml_say "WARN: could not record which agents stay paused — $list is left as it was (it now over-lists: a later run will drop the rows it finds loaded)"
+    _ml_say "WARN: the new ledger is incomplete ($processed of $total row(s) handled, write-failures=$broken) — $list is left as it was (it now over-lists: a later run drops the rows it finds loaded)"
     return 1
   fi
   if [ -s "$keep" ]; then
@@ -88,13 +140,13 @@ mirror_ledger_resume() {
       return 1
     fi
   else
-    rm -f "$keep" "$list"
+    rm -f "$keep"
+    rm -f "$list"
   fi
 
   local extra=""
   [ "$held" -gt 0 ]   && extra="$extra, HELD $held still paused (a topic they copy was not reconciled)"
   [ "$failed" -gt 0 ] && extra="$extra, $failed failed to load"
   _ml_say "resumed $n mirror agent(s)$extra"
-  [ "$failed" -eq 0 ] || rc=1
-  return "$rc"
+  [ "$failed" -eq 0 ]
 }

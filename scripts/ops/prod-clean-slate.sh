@@ -214,9 +214,14 @@ esac
 # empty (apply-topics.sh reconciled the whole declaration), so this is the old unconditional resume.
 # Gated on the decision's OWN resume field rather than on "we got past the FAIL arm": the two agree
 # today, and a later edit that reorders the arms would otherwise silently start every mirror.
+RESUME_RC=0
 if [ "$DECISION_RESUME" = yes ]; then
-  # Its non-zero status is REPORTED, not swallowed: it means an agent that should be running is not.
+  # Its status is carried to THIS SCRIPT'S exit status, not just logged (deploy Codex round 3): an
+  # agent that should be running and is not must not leave a run looking clean. It does not block the
+  # bring-up below — prod coming up does not depend on the es4 copy path, and holding prod down over a
+  # launchd agent would be a worse trade — but the run ends non-zero and says so last.
   if ! mirror_ledger_resume "$PAUSED_LIST" "$DEPLOY_SRC/scripts/ops/mirror-topic-filter.sh" $DECISION_HOLD; then
+    RESUME_RC=1
     say "WARN: not every paused mirror agent is running — see the lines above; $PAUSED_LIST still lists the ones that are not."
   fi
 else
@@ -237,5 +242,9 @@ if [ "$AFTER" = up ]; then
   ssh_root "systemctl restart oe-boot-bringup; for i in \$(seq 1 90); do [ \"\$(systemctl is-active oe-boot-bringup)\" != activating ] && break; sleep 10; done; journalctl -u oe-boot-bringup --since \"-25 min\" --no-pager -o cat | grep -E \"wave:|result:|doctor|REPAIR|UNREPAIRABLE|done\" | tail -8" | tee -a "$LOG"
 else
   say "left at 0 (wipe down) — bring up with: ssh root@.252 systemctl restart oe-boot-bringup"
+fi
+if [ "$RESUME_RC" -ne 0 ]; then
+  say "=== prod clean-slate FINISHED WITH A MIRROR STILL DOWN (exit 1) — $PAUSED_LIST lists it ==="
+  exit 1
 fi
 say "=== prod clean-slate DONE ==="

@@ -50,7 +50,7 @@
 # therefore rejected rather than parsed.
 read_apply_attestation() {
   ATTEST_STATE=""; ATTEST_SKIPPED=""; ATTEST_REASON=""
-  local f="${1-}" lines line
+  local f="${1-}" lines
   if [ -z "$f" ] || [ ! -f "$f" ]; then ATTEST_REASON="no attestation file"; return 0; fi
   lines="$(wc -l < "$f" 2>/dev/null | tr -d ' ')"; lines="${lines:-0}"
   case "$lines" in
@@ -58,7 +58,21 @@ read_apply_attestation() {
     0) ATTEST_REASON="the attestation file holds no complete line (an aborted or truncated write)"; return 0 ;;
     *) ATTEST_REASON="the attestation file holds $lines lines; exactly one is expected"; return 0 ;;
   esac
-  line="$(head -1 "$f")"
+  # `read`, not `$(head -1)`: command substitution on a file with a NUL makes bash print a warning
+  # about it, and the byte check below is what rejects it either way.
+  local line=""; IFS= read -r line < "$f" || true
+  # The line must account for EVERY byte in the file (itself plus its newline). Command substitution
+  # DROPS embedded NULs, so without this a file carrying NULs could parse as a valid attestation out
+  # of a line that is not what the file holds (deploy Codex round 3). It also rejects a stray CR at the
+  # end, trailing bytes after the newline, and anything else the shape check would not see.
+  local bytes; bytes="$(wc -c < "$f" 2>/dev/null | tr -d ' ')"; bytes="${bytes:-0}"
+  if [ "$bytes" -ne "$(( ${#line} + 1 ))" ]; then
+    ATTEST_REASON="the attestation file holds $bytes byte(s) but its one line accounts for $(( ${#line} + 1 ))"
+    return 0
+  fi
+  # A bound, so nothing downstream is handed an unbounded list. The real line is ~40 bytes plus the
+  # skipped names; 4096 is far past any plausible declaration and far below anything worth parsing.
+  if [ "$bytes" -gt 4096 ]; then ATTEST_REASON="the attestation line is $bytes bytes, which is not one this script writes"; return 0; fi
   case "$line" in
     "apply-topics: state=ok skipped=") ATTEST_STATE=ok; return 0 ;;
     "apply-topics: state=ok skipped="*) ATTEST_REASON="state=ok names skipped topics, which contradicts itself"; return 0 ;;
@@ -67,10 +81,12 @@ read_apply_attestation() {
       if [ -z "$ATTEST_SKIPPED" ]; then
         ATTEST_REASON="state=skipped names no topic"; ATTEST_SKIPPED=""; return 0
       fi
-      # Topic names only: letters, digits, dot, dash, underscore, separated by single spaces. Anything
-      # else is not a list apply-topics.sh built out of $OPTIONS_EDGE_TOPICS.
+      # Topic names only: letters, digits, dot, dash, underscore, separated by SINGLE spaces, with no
+      # leading or trailing space. Anything else is not a list apply-topics.sh built out of
+      # $OPTIONS_EDGE_TOPICS -- including a doubled space, which the first version of this rule allowed
+      # while the comment beside it said single (deploy Codex round 3).
       case "$ATTEST_SKIPPED" in
-        *[!A-Za-z0-9._\ -]*|" "*|*" ") ATTEST_REASON="the skipped list is not a plain list of topic names"; ATTEST_SKIPPED=""; return 0 ;;
+        *[!A-Za-z0-9._\ -]*|" "*|*" "|*"  "*) ATTEST_REASON="the skipped list is not a plain list of topic names"; ATTEST_SKIPPED=""; return 0 ;;
       esac
       ATTEST_STATE=skipped; return 0 ;;
     *) ATTEST_REASON="the attestation line is not in the expected shape"; return 0 ;;

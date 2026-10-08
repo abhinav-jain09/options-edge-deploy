@@ -102,6 +102,18 @@ att_is "state=skipped naming nothing is no attestation" 'apply-topics: state=ski
 att_is "anything else is no attestation"    'junk\n'                                                 ""      ""
 att_is "a skip list with shell metacharacters is refused" 'apply-topics: state=skipped skipped=a.topic; rm -rf /\n' "" ""
 att_is "a skip list with a newline-escaped payload is refused" 'apply-topics: state=skipped skipped=$(touch /tmp/OE_NOPE)\n' "" ""
+att_is "a doubled space between names is refused" 'apply-topics: state=skipped skipped=a.topic  b.topic\n' "" ""
+att_is "a line longer than anything this writes is refused" "apply-topics: state=skipped skipped=$(python3 -c "print(' '.join('t.%d'%i for i in range(900)))")\n" "" ""
+# A NUL is DROPPED by the shell when the line is read, so the parse would otherwise see a line the
+# file does not hold. The byte-count check is what rejects it.
+nulf="$WORK/att.nul"; python3 -c "open('$WORK/att.nul','wb').write(b'apply-topics: state=skipped skipped=a.topic\x00evil\n')"
+nul_got="$(bash -c '. "$1"; read_apply_attestation "$2"; printf "%s|%s\n" "$ATTEST_STATE" "$ATTEST_REASON"' _ "$D" "$nulf")"
+[ "${nul_got%%|*}" = "" ] && ok "an embedded NUL is refused" || bad "a NUL-bearing file parsed as [$nul_got]"
+printf '%s' "$nul_got" | grep -q 'byte' && ok "and the reason names the byte mismatch" || bad "the reason is [$nul_got]"
+# Trailing bytes after the newline are the same failure mode from the other side.
+printf 'apply-topics: state=ok skipped=\n\0' > "$WORK/att.trail" 2>/dev/null || printf 'apply-topics: state=ok skipped=\nX' > "$WORK/att.trail"
+trail_got="$(bash -c '. "$1"; read_apply_attestation "$2"; printf "%s\n" "$ATTEST_STATE"' _ "$D" "$WORK/att.trail")"
+[ -z "$trail_got" ] && ok "bytes after the one line are refused" || bad "a file with trailing bytes parsed as [$trail_got]"
 printf '%s' "$(att 'junk\n')" | grep -q 'not in the expected shape' && ok "and each refusal says why" \
   || bad "the refusal gives no reason: $(att 'junk\n')"
 [ ! -e /tmp/OE_NOPE ] && ok "nothing in the file was ever executed" || { bad "the parser EXECUTED file content"; rm -f /tmp/OE_NOPE; }
@@ -146,7 +158,19 @@ printf '%s' "$code" | grep -q 'mirror_ledger_resume "\$PAUSED_LIST"' \
   && ok "the mirrors are started through the ledger helper (which keeps every agent that is still down listed)" \
   || bad "prod-clean-slate.sh does not use mirror_ledger_resume"
 printf '%s' "$code" | grep -q 'if ! mirror_ledger_resume' \
-  && ok "and its failure status is acted on, not discarded" || bad "mirror_ledger_resume's status is ignored"
+  && ok "and its failure status is tested" || bad "mirror_ledger_resume's status is ignored"
+# TESTED is not PROPAGATED: the first version only logged a warning and still ended with "DONE" and
+# exit 0, while an agent that should have been running was not (deploy Codex round 3).
+printf '%s' "$code" | grep -q 'RESUME_RC=1' \
+  && ok "and recorded" || bad "a failed resume is not recorded"
+lr="$(lineof 'RESUME_RC" -ne 0')"; ld="$(lineof 'prod clean-slate DONE')"
+if [ -n "$lr" ] && [ -n "$ld" ] && [ "$lr" -lt "$ld" ]; then
+  ok "and checked BEFORE the DONE line, so a run with a mirror down cannot end clean ($lr < $ld)"
+else
+  bad "the resume status is not checked before the DONE line (check=$lr done=$ld)"
+fi
+printf '%s' "$code" | grep -A3 'RESUME_RC" -ne 0' | grep -q 'exit 1' \
+  && ok "and the script exits non-zero" || bad "a failed resume does not make the script exit non-zero"
 printf '%s' "$code" | grep -q ': > "\$APPLY_RESULT"' \
   && ok "the attestation file is created EMPTY, so no attestation is observable" \
   || bad "the attestation file is not truncated before the run — a stale file could be read as this run's"

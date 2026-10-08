@@ -111,9 +111,10 @@ OUT="$(LAUNCHCTL_STATE="$WORK/state" bash -c '
 [ "$(calls | wc -l | tr -d ' ')" = 0 ] && ok "nothing was started" || bad "bootstraps: $(calls | tr '\n' ' ')"
 [ "$(rows | wc -l | tr -d ' ')" = 3 ] && ok "all three rows survive" || bad "the ledger holds: $(rows)"
 
-echo "8. when the scratch file cannot be written, the ORIGINAL ledger is left as it was"
-# A directory where the ".keep" path must go makes every write to it fail.
-LEDGER="$WORK/ledger.ro"; printf '%s' "$L3" > "$LEDGER"; mkdir -p "$LEDGER.keep"
+echo "8. when nothing can be written beside the ledger, the ORIGINAL is left as it was"
+# A read-only directory: the ledger can be read, but neither the lock nor the scratch file can be
+# created. Either refusal is the same guarantee -- nothing starts and the file is untouched.
+mkdir -p "$WORK/ro"; LEDGER="$WORK/ro/ledger"; printf '%s' "$L3" > "$LEDGER"; chmod 500 "$WORK/ro"
 rm -rf "$WORK/state"; mkdir -p "$WORK/state"; : > "$WORK/state/loaded"; : > "$WORK/state/calls"
 OUT="$(LAUNCHCTL_STATE="$WORK/state" bash -c '
   . "$1/mirror-ledger.sh"; mirror_ledger_resume "$2" "$1/mirror-topic-filter.sh" topic.bbb' _ "$HERE" "$LEDGER" 2>&1)"; RC=$?
@@ -123,7 +124,53 @@ OUT="$(LAUNCHCTL_STATE="$WORK/state" bash -c '
 # the trailing newline, so that comparison called an intact file changed.
 diff <(printf '%s' "$L3") "$LEDGER" >/dev/null \
   && ok "the original ledger is byte-for-byte intact" || bad "the ledger changed: $(cat "$LEDGER")"
-rmdir "$LEDGER.keep"
+chmod 700 "$WORK/ro"
+
+echo "8b. an UNREADABLE but non-empty ledger is not an empty one"
+# `-s` is true for a file that cannot be read; the read loop then runs zero times. Treating that as
+# "everything resumed" DELETED the only record of the agents that were down (deploy Codex round 3).
+LEDGER="$WORK/ledger.unreadable"; printf '%s' "$L3" > "$LEDGER"; chmod 000 "$LEDGER"
+rm -rf "$WORK/state"; mkdir -p "$WORK/state"; : > "$WORK/state/loaded"; : > "$WORK/state/calls"
+OUT="$(LAUNCHCTL_STATE="$WORK/state" bash -c '
+  . "$1/mirror-ledger.sh"; mirror_ledger_resume "$2" "$1/mirror-topic-filter.sh"' _ "$HERE" "$LEDGER" 2>&1)"; RC=$?
+chmod 600 "$LEDGER"
+[ "$RC" -ne 0 ] && ok "returns non-zero" || bad "an unreadable ledger returned 0"
+[ "$(calls | wc -l | tr -d ' ')" = 0 ] && ok "and starts NOTHING" || bad "it started: $(calls | tr '\n' ' ')"
+[ -f "$LEDGER" ] && diff <(printf '%s' "$L3") "$LEDGER" >/dev/null \
+  && ok "and the ledger is still there, byte-for-byte" || bad "the ledger was changed or deleted"
+printf '%s' "$OUT" | grep -q 'cannot READ' && ok "and says it could not read it" || bad "no diagnostic: $OUT"
+
+echo "8c. a plist path containing SPACES round-trips"
+# The row is "<label> <path>": the first field is the label, the REST is the path. Re-splitting the
+# path into fields is how a ledger rewrites somebody's path into something that does not exist.
+SP="$WORK/unit with space"; mkdir -p "$SP"
+printf "exec kafka-mirror-maker --whitelist 'topic\\.spaced' --num.streams 1\n" > "$SP/run-mirror.sh"
+chmod +x "$SP/run-mirror.sh"
+SPP="$WORK/com.optionsedge.spaced.plist"
+python3 - "$SPP" "$SP/run-mirror.sh" <<'PY'
+import plistlib, sys
+plistlib.dump({"Label": "com.optionsedge.spaced", "ProgramArguments": [sys.argv[2]]}, open(sys.argv[1], "wb"))
+PY
+run "com.optionsedge.spaced $SPP
+" topic.spaced
+[ "$RC" -eq 0 ] && ok "a held agent with a spaced path is not a failure" || bad "returned $RC"
+diff <(printf '%s\n' "com.optionsedge.spaced $SPP") "$LEDGER" >/dev/null \
+  && ok "and its row is written back verbatim" || bad "the row changed: $(rows)"
+run "com.optionsedge.spaced $SPP
+"
+[ "$(calls | wc -l | tr -d ' ')" = 1 ] && ok "and it starts when nothing is held" || bad "bootstraps: $(calls | tr '\n' ' ')"
+
+echo "8d. a STALE lock refuses, and leaves everything listed"
+run "$L3"   # a normal run first, to be sure the lock is released afterwards
+[ ! -d "$LEDGER.lock" ] && ok "a normal run releases the lock" || bad "the lock directory was left behind"
+LEDGER="$WORK/ledger.locked"; printf '%s' "$L3" > "$LEDGER"; mkdir -p "$LEDGER.lock"
+rm -rf "$WORK/state"; mkdir -p "$WORK/state"; : > "$WORK/state/loaded"; : > "$WORK/state/calls"
+OUT="$(LAUNCHCTL_STATE="$WORK/state" bash -c '
+  . "$1/mirror-ledger.sh"; mirror_ledger_resume "$2" "$1/mirror-topic-filter.sh"' _ "$HERE" "$LEDGER" 2>&1)"; RC=$?
+[ "$RC" -ne 0 ] && ok "a held lock refuses" || bad "it ran while another run held the ledger"
+[ "$(calls | wc -l | tr -d ' ')" = 0 ] && ok "and starts NOTHING" || bad "it started: $(calls | tr '\n' ' ')"
+diff <(printf '%s' "$L3") "$LEDGER" >/dev/null && ok "and the ledger is untouched" || bad "the ledger changed"
+rmdir "$LEDGER.lock"
 
 echo "9. an EMPTY or absent ledger is a no-op, not an error"
 run ""
@@ -133,37 +180,80 @@ OUT="$(bash -c '. "$1/mirror-ledger.sh"; mirror_ledger_resume "/nope/ledger" "$1
 OUT="$(bash -c '. "$1/mirror-ledger.sh"; mirror_ledger_resume' _ "$HERE" 2>&1)"; RC=$?
 [ "$RC" -ne 0 ] && ok "no ledger path at all is refused" || bad "no arguments returned 0"
 
-echo "10. MUTATIONS: the two halves of the invariant are load-bearing"
-mut() { # <old||new> <label> <ledger> <hold...> ; expects the ledger to differ from the correct run
-  local edit="$1" label="$2"; shift 2
-  local dir="$WORK/mut.$RANDOM"; mkdir -p "$dir"
-  cp "$HERE/mirror-ledger.sh" "$dir/"; cp "$HERE/mirror-topic-filter.sh" "$dir/"
-  python3 - "$dir/mirror-ledger.sh" "$edit" <<'PY'
+echo "10. MUTATIONS: each half of the invariant is load-bearing"
+# One explicit block per mutation. A shared helper plumbed the ledger content, the mutated copy and the
+# hold topics through three layers and a `bash -c`, and a mistake in that plumbing reported "the mutant
+# failed for its own reason (127)" -- a mutation that never ran, scored as a pass.
+mutant_dir() { # <OLD%%->%%NEW> -> prints the directory holding a mutated copy, or fails
+  local edit="$1" dir="$WORK/mut.$RANDOM"
+  mkdir -p "$dir" || return 1
+  cp "$HERE/mirror-ledger.sh" "$HERE/mirror-topic-filter.sh" "$dir/" || return 1
+  printf '%s' "$edit" > "$dir/edit"
+  python3 -c '
 import sys
-path, edit = sys.argv[1], sys.argv[2]
-old, new = edit.split("||", 1)
+path, editfile = sys.argv[1], sys.argv[2]
+old, new = open(editfile).read().split("%%->%%", 1)
 src = open(path).read()
 assert old in src, "the mutation did not apply: %r not found" % old
 open(path, "w").write(src.replace(old, new, 1))
-PY
-  [ $? -eq 0 ] || { bad "$label: the mutation did not apply"; return; }
-  local led="$WORK/mled.$RANDOM"; printf '%s' "$1" > "$led"; shift
-  rm -rf "$WORK/state"; mkdir -p "$WORK/state"; : > "$WORK/state/loaded"; : > "$WORK/state/calls"
-  local out; out="$(LAUNCHCTL_STATE="$WORK/state" LAUNCH_FAIL="${LAUNCH_FAIL:-}" bash -c '
-    . "$1/mirror-ledger.sh"; mirror_ledger_resume "$2" "$1/mirror-topic-filter.sh" "${@:3}"' _ "$dir" "$led" "$@" 2>&1)"
-  MUT_RC=$?; MUT_LEDGER="$led"; MUT_OUT="$out"
+' "$dir/mirror-ledger.sh" "$dir/edit" || return 1
+  printf '%s\n' "$dir"
 }
-# Drop the missing-plist row instead of keeping it: the agent would be paused and unlisted.
-mut '_ml_say "   KEPT paused (plist not found): $label"; _ml_hold_row "$label" "$plist"; held=$((held+1)); continue||_ml_say "   KEPT paused (plist not found): $label"; continue' \
-    "a dropped missing-plist row" "com.optionsedge.aaa $A
-com.optionsedge.gone $WORK/no-such.plist
-"
-[ ! -f "$MUT_LEDGER" ] && ok "the mutant loses the row (case 4 is load-bearing)" || bad "the mutation changed nothing: $(cat "$MUT_LEDGER")"
-# Replace the ledger even when the scratch writes failed.
-mut 'if [ "$broken" -ne 0 ]; then||if false; then' "an unchecked scratch write" "com.optionsedge.aaa $A
-"
-[ "$MUT_RC" -eq 0 ] && ok "the mutant stops reporting the bookkeeping failure (case 8 is load-bearing)" \
-  || ok "the mutant still fails, for its own reason (rc=$MUT_RC)"
+run_in() { # <dir> <ledger> [hold...] -> MUT_RC, MUT_OUT
+  local dir="$1" led="$2"; shift 2
+  rm -rf "$led.lock"   # a mutant that died mid-run leaves one, and the next run would only see that
+  rm -rf "$WORK/state"; mkdir -p "$WORK/state"; : > "$WORK/state/loaded"; : > "$WORK/state/calls"
+  MUT_OUT="$(LAUNCHCTL_STATE="$WORK/state" bash -c '
+    . "$1/mirror-ledger.sh"; mirror_ledger_resume "$2" "$1/mirror-topic-filter.sh" "${@:3}"' _ "$dir" "$led" "$@" 2>&1)"
+  MUT_RC=$?
+}
+
+# (a) the missing-plist row: dropped instead of kept, so the agent stays paused and unlisted.
+if d="$(mutant_dir '_ml_say "   KEPT paused (plist not found): $label"; _ml_hold_row "$label" "$plist"; held=$((held+1)); continue%%->%%_ml_say "   KEPT paused (plist not found): $label"; continue')"; then
+  led="$WORK/mled.a"; printf '%s %s\n' "com.optionsedge.gone" "$WORK/no-such.plist" > "$led"
+  run_in "$d" "$led"
+  [ ! -f "$led" ] && ok "the mutant LOSES the missing-plist row (case 4 is load-bearing)" \
+    || bad "the mutation changed nothing: the row is still listed"
+else bad "(a) the missing-plist mutation did not apply"; fi
+
+# (b) the completeness check. A failing APPEND cannot be forced from outside, so the fault is
+#     INJECTED (the hold rows go to /dev/full, which always fails) and held constant across the two
+#     runs below; the mutation under test is the removal of the check.
+FAULT='>> "$keep"%%->%%>> /dev/full'
+if d="$(mutant_dir "$FAULT")"; then
+  led="$WORK/mled.b1"; printf '%s %s\n' "com.optionsedge.aaa" "$A" > "$led"
+  run_in "$d" "$led" topic.aaa
+  [ "$MUT_RC" -ne 0 ] && printf '%s' "$MUT_OUT" | grep -q 'incomplete' \
+    && ok "with a failing append the check FIRES and says the ledger is incomplete" \
+    || bad "the injected append failure was not caught: rc=$MUT_RC out=[$MUT_OUT]"
+  diff <(printf '%s %s\n' "com.optionsedge.aaa" "$A") "$led" >/dev/null \
+    && ok "and the original ledger survives" || bad "the ledger was changed: $(cat "$led" 2>/dev/null)"
+  # ...and now the same injected failure with the check REMOVED: the row is lost.
+  if d2="$(mutant_dir "$FAULT")" && python3 -c '
+import sys
+p = sys.argv[1]; s = open(p).read()
+old = "if [ \"$broken\" -ne 0 ] || [ \"$processed\" -ne \"$total\" ]; then"
+assert old in s, "the second mutation did not apply"
+open(p, "w").write(s.replace(old, "if false; then", 1))
+' "$d2/mirror-ledger.sh"; then
+    led="$WORK/mled.b2"; printf '%s %s\n' "com.optionsedge.aaa" "$A" > "$led"
+    run_in "$d2" "$led" topic.aaa
+    [ ! -f "$led" ] && ok "without the check the held row is LOST (case 8 is load-bearing)" \
+      || bad "removing the check changed nothing: the ledger still holds $(cat "$led")"
+  else bad "(b) the check-removal mutation did not apply"; fi
+else bad "(b) the append-failure injection did not apply"; fi
+
+# (c) the read-status check: an unreadable ledger would then report SUCCESS and say nothing.
+if d="$(mutant_dir 'if [ "$read_rc" -ne 0 ] || [ ! -r "$list" ]; then%%->%%if false; then')"; then
+  led="$WORK/mled.c"; printf '%s' "$L3" > "$led"; chmod 000 "$led"
+  run_in "$d" "$led"
+  chmod 600 "$led"
+  if [ "$MUT_RC" -eq 0 ] && ! printf '%s' "$MUT_OUT" | grep -q 'cannot READ'; then
+    ok "the mutant calls an unreadable ledger a clean run (case 8b is load-bearing)"
+  else
+    bad "the read-check mutation changed nothing: rc=$MUT_RC out=[$MUT_OUT]"
+  fi
+else bad "(c) the read-check mutation did not apply"; fi
 
 echo
 if [ "$fails" -eq 0 ]; then echo "=== mirror-ledger: OK ==="; exit 0; fi
