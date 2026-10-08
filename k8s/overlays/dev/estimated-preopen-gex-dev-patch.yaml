@@ -44,3 +44,18 @@ spec:
                 secretKeyRef:
                   name: options-edge-runtime-secrets
                   key: POSTGRES_PASSWORD
+            # PREOPEN_GEX_MAX_REL_SPREAD code default (0.25) is shared with Task A/Task B's live,
+            # same-day quote gate and is miscalibrated for Task C specifically: Task C prices
+            # against YESTERDAY'S 16:00 ET closing NBBO (PreOpenNbboCaptureProvider captures the
+            # prior session's close), and a deep-OTM/cheap leg's closing quote is routinely one
+            # minimum tick ($0.05-$0.10) wide -- at a $0.10-$0.30 mid that is mathematically a
+            # 25-100% relative spread regardless of how tight the real market was. Verified against
+            # 2026-10-08's first-ever successful capture (snapshot 6eb1fb5a...): at the code default,
+            # OI-weighted coverage was 39.6% (dominant reject reason "wide-spread", 152,018 of
+            # 264,907 OI) -- always well under PREOPEN_GEX_MIN_COVERAGE_PCT's 70% floor, so the
+            # calculator abstained on every single tick. 0.75 is the data-driven ceiling: coverage
+            # plateaus at 85.0% from 0.75 up to 1.0 (the remaining ~15% is genuinely crossed/missing
+            # quotes that no spread tolerance recovers), so this is not an arbitrary loosening -- it
+            # is the point past which no more real coverage is recoverable. Task A is disabled on dev
+            # (PREOPEN_GEX_ENABLED=false, see the comment above), so this affects Task C only here.
+            - { name: PREOPEN_GEX_MAX_REL_SPREAD, value: "0.75" }
