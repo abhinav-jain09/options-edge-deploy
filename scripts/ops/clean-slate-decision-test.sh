@@ -49,6 +49,8 @@ expect "a non-numeric status is a FAILURE" \
   abc 0 "" "" "verdict=FAIL resume=no bringup=no exit=1 hold="
 expect "a non-numeric ensure status is a FAILURE" \
   0 "x7" "" "" "verdict=FAIL resume=no bringup=no exit=1 hold="
+expect "apply=0 WITH named skips is a contradiction, and neither input is trusted" \
+  0 0 "a.topic" "" "verdict=FAIL resume=no bringup=no exit=1 hold="
 expect "whitespace-only names do not make a partial success" \
   9 0 "   " "" "verdict=FAIL resume=no bringup=no exit=9 hold="
 expect "the hold set is a SET: duplicates and extra whitespace collapse" \
@@ -69,6 +71,7 @@ for a in 0 1 2 9 127 "" zz; do for e in 0 1 9 "" zz; do for sk in "" "t.one"; do
   [ "$v" = FAIL ] && [ -n "$h" ] && bad "apply=$a ensure=$e: FAIL with a non-empty hold set ($h)"
   [ "$v" = PARTIAL ] && [ "$b" = yes ] && bad "apply=$a ensure=$e: PARTIAL that brings up"
   [ "$v" = OK ] && [ "$(printf '%s' "$line" | sed -n 's/.*exit=\([0-9]*\).*/\1/p')" != 0 ] && bad "apply=$a ensure=$e: OK with a non-zero exit"
+  [ "$v" = OK ] && [ "$a" = 0 ] && [ -n "$sk" ] && bad "apply=0 with skipped names [$sk] was called OK"
 done; done; done; done
 ok "the sweep found no self-contradicting verdict (140 input combinations)"
 
@@ -94,10 +97,23 @@ else bad "the bring-up gate does not precede oe-boot-bringup (gate=$lb bringup=$
 printf '%s' "$code" | grep -q 'ARC=\$?' && printf '%s' "$code" | grep -q 'ERC=\${PIPESTATUS\[0\]}' \
   && ok "the two recreate steps keep separate statuses" || bad "the recreate statuses are not captured separately"
 printf '%s' "$code" | grep -q 'apply-topics.sh ) *> *"\$APPLY_OUT"' \
-  && ok "apply-topics.sh's own output is captured (the SKIPPED_TOPIC_NAMES line is read from it)" \
+  && ok "apply-topics.sh's own output is captured (for the log; the decision does not read it)" \
   || bad "apply-topics.sh's output is not captured to a file"
-printf '%s' "$code" | grep -q "SKIPPED_TOPIC_NAMES" \
-  && ok "and the skipped names are parsed out of it" || bad "nothing parses SKIPPED_TOPIC_NAMES"
+# WHERE THE NAMES COME FROM. Not stdout: apply-topics.sh shares that stream with every kafka CLI it
+# runs, and a child that exits 9 aborts it mid-loop WITH the skip status. The names must be read from
+# the attestation file apply-topics.sh writes only at its endings (deploy Codex round 1).
+printf '%s' "$code" | grep -q 'APPLY_TOPICS_RESULT_FILE="\$APPLY_RESULT"' \
+  && ok "it passes an attestation file to apply-topics.sh" || bad "no APPLY_TOPICS_RESULT_FILE is passed"
+printf '%s' "$code" | grep -qE 'APPLY_STATE=.*"\$APPLY_RESULT"' \
+  && ok "and reads the run state from THAT file" || bad "the run state is not read from the attestation file"
+printf '%s' "$code" | grep -E 'SKIPPED_NAMES=' | grep -q '"\$APPLY_RESULT"' \
+  && ok "and the skipped names too" || bad "the skipped names are not read from the attestation file"
+printf '%s' "$code" | grep -E 'SKIPPED_NAMES=' | grep -q '"\$APPLY_OUT"' \
+  && bad "the skipped names are still parsed out of apply-topics.sh's OUTPUT" \
+  || ok "and never out of its output"
+printf '%s' "$code" | grep -q ': > "\$APPLY_RESULT"' \
+  && ok "the attestation file is created EMPTY, so no attestation is observable" \
+  || bad "the attestation file is not truncated before the run — a stale file could be read as this run's"
 
 echo "4. the skip status is the SAME number apply-topics.sh exits with"
 # Two files hold the number 9: apply-topics.sh's SKIPPED_EXIT and the PARTIAL arm here. Changing one
@@ -136,8 +152,11 @@ PY
   else ok "$label (mutant answers [$got])"; fi
 }
 # Drop the "names must be non-empty" condition: exit 9 with no names would become a partial success.
+# Targets the PARTIAL arm's condition specifically: the same `-n` test now appears twice (the
+# contradiction check above uses it too), and a mutation anchored on the shorter string edited the
+# wrong one and reported the rule as untested.
 run_mut "the no-names refusal is load-bearing" \
-  '[ -n "$(_cs_norm "$skipped")" ]||[ -z "$(_cs_norm "$skipped")" ]' \
+  'elif [ "$arc" -eq 9 ] && [ "$erc" -eq 0 ] && [ -n "$(_cs_norm "$skipped")" ]; then||elif [ "$arc" -eq 9 ] && [ "$erc" -eq 0 ]; then' \
   9 0 "" "" "verdict=FAIL resume=no bringup=no exit=9 hold="
 # Let PARTIAL bring prod up: the owner rule would be gone.
 run_mut "PARTIAL must not bring up" \
@@ -151,6 +170,11 @@ run_mut "MISSING topics are held on a full success" \
 run_mut "SKIPPED topics are held under PARTIAL" \
   'DECISION_HOLD="$(_cs_norm "$skipped $missing")"||DECISION_HOLD="$(_cs_norm "$missing")"' \
   9 0 "a.topic" "" "verdict=PARTIAL resume=yes bringup=no exit=9 hold=a.topic"
+# Ignore the contradiction: apply=0 with named skips would be answered OK, with the skipped topics
+# NOT in the hold set, so their mirrors would start.
+run_mut "the apply=0-with-skips contradiction is refused" \
+  'if [ "$arc" -eq 0 ] && [ -n "$(_cs_norm "$skipped")" ]; then||if false; then' \
+  0 0 "a.topic" "" "verdict=FAIL resume=no bringup=no exit=1 hold="
 # Treat a non-numeric status as a success.
 run_mut "a non-numeric status fails closed" \
   "case \"\$arc\" in ''|*[!0-9]*) DECISION_EXIT=1; _cs_emit; return 0 ;; esac||case \"\$arc\" in ''|*[!0-9]*) DECISION_VERDICT=OK; DECISION_RESUME=yes; DECISION_BRINGUP=yes; DECISION_EXIT=0; _cs_emit; return 0 ;; esac" \

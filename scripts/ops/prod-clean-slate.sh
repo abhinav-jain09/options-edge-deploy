@@ -11,7 +11,10 @@
 #      scripts/kafka/ensure-partition-only-topics.sh creates the config-less partition-only topics
 #   4. resume the mirrors — every one EXCEPT those that copy a topic step 3 could not reconcile or did
 #      not create (scripts/ops/clean-slate-decision.sh decides; scripts/ops/mirror-topic-filter.sh
-#      answers it per agent). A recreate that did not COMPLETE still resumes nothing.
+#      answers it per agent). Two different outcomes, deliberately not treated alike: a recreate that
+#      WALKED THE WHOLE declared list and could not reconcile some of it resumes the mirrors with no
+#      stake in those topics (and still does NOT bring prod up, step 5); a recreate that did not reach
+#      the end of the list at all resumes nothing, because nothing is known about the rest of it.
 #   5. full bring-up on .252 (systemctl restart oe-boot-bringup: waves + partition doctor) unless `down`
 #
 #   prod-clean-slate.sh dry            steps 2 (DRY_RUN) + what 1/3 would do; changes nothing
@@ -91,7 +94,10 @@ resume_mirrors() {
   : > "$PAUSED_LIST.keep"
   while read -r label plist; do
     [ -n "$label" ] || continue
-    [ -f "$plist" ] || { say "   (agent removed, skipped): $label"; continue; }
+    # A plist that is not there right now is NOT a resumed agent: it stays in the ledger so a later
+    # run resumes it. Dropping it silently was how a temporarily absent plist could leave an agent
+    # paused and unlisted forever (deploy Codex round 1).
+    [ -f "$plist" ] || { say "   KEPT paused (plist not found): $label"; printf '%s %s\n' "$label" "$plist" >> "$PAUSED_LIST.keep"; held=$((held+1)); continue; }
     if [ "$#" -gt 0 ]; then
       # Fail-closed by construction: the filter answers HOLD when it cannot read the agent's whitelist,
       # and a filter that cannot RUN at all (missing, unreadable) is a HOLD here for the same reason.
@@ -157,8 +163,16 @@ fi
 # apply-topics.sh's status alone.
 say "recreate: apply-topics.sh (ENVIRONMENT=production) + ensure-partition-only-topics.sh against $PROD_BS"
 APPLY_OUT=$(mktemp -t prod-clean-slate-apply) || { say "could not create a temp file for the apply output"; exit 1; }
-trap 'rm -f "$APPLY_OUT"' EXIT
-( cd "$DEPLOY_SRC" && export ENVIRONMENT=production KAFKA_BOOTSTRAP_SERVERS=$PROD_BS && . scripts/kafka/load-kafka-settings.sh \
+# The ATTESTATION file. apply-topics.sh writes one line here from its endings and nowhere else, so this
+# — not its exit status, and not a line on a stream it shares with every kafka CLI it runs — is what
+# says the declared list was walked to the end. Created EMPTY: a run that falls over leaves it empty.
+# Under `set -e` a child that exits 9 aborts apply-topics.sh WITH status 9, which would otherwise be
+# indistinguishable from its skip ending (deploy Codex round 1).
+APPLY_RESULT=$(mktemp -t prod-clean-slate-result) || { say "could not create a temp file for the apply result"; exit 1; }
+: > "$APPLY_RESULT"
+trap 'rm -f "$APPLY_OUT" "$APPLY_RESULT"' EXIT
+( cd "$DEPLOY_SRC" && export ENVIRONMENT=production KAFKA_BOOTSTRAP_SERVERS=$PROD_BS APPLY_TOPICS_RESULT_FILE="$APPLY_RESULT" \
+  && . scripts/kafka/load-kafka-settings.sh \
   && KAFKA_RECREATE_MISMATCHED_TOPICS=false scripts/kafka/apply-topics.sh ) > "$APPLY_OUT" 2>&1
 ARC=$?
 grep -vE '^\s*$' "$APPLY_OUT" | tail -25 | tee -a "$LOG"
@@ -190,16 +204,27 @@ fi
 ( cd "$DEPLOY_SRC" && . scripts/kafka/topics.env && want=$(echo $OPTIONS_EDGE_TOPICS $OPTIONS_EDGE_PROD_ONLY_TOPICS | tr ' ' '\n' | sed 's/:.*//' | sort -u) \
   && say "declared topics present: $(( $(echo "$want" | wc -l) - $(echo "$MISSING" | grep -c .) ))/$(echo "$want" | wc -l | tr -d ' ')${MISSING:+  MISSING: $(echo $MISSING)}" )
 
-# The topics apply-topics.sh reached the end of the list WITHOUT reconciling. Names only; the human
-# list in its output carries the reason after each name.
-SKIPPED_NAMES=$(sed -n 's/^apply-topics\.sh: SKIPPED_TOPIC_NAMES: *//p' "$APPLY_OUT" | tail -1)
+# The topics apply-topics.sh reached the end of the list WITHOUT reconciling — read from the
+# attestation file, never from the output. An EMPTY $SKIPPED_NAMES therefore means "no attested skip
+# ending", which the decision treats as a failure whenever the status is the skip status; that is what
+# closes the exit-9-from-a-child hole. state=ok attests the other ending and names nothing.
+APPLY_STATE=$(sed -n 's/^apply-topics: state=\([a-z]*\) skipped=.*/\1/p' "$APPLY_RESULT" | tail -1)
+SKIPPED_NAMES=""
+case "$APPLY_STATE" in
+  skipped) SKIPPED_NAMES=$(sed -n 's/^apply-topics: state=skipped skipped=//p' "$APPLY_RESULT" | tail -1) ;;
+  ok)      say "apply-topics attested state=ok (the whole declared list was reconciled)" ;;
+  "")      say "apply-topics left NO attestation — it did not reach either ending" ;;
+  *)       say "apply-topics attested an unknown state '$APPLY_STATE' — treating it as no attestation" ;;
+esac
 
 # ---- the mirror decision (2026-10-08) ----
-# WHAT CHANGED. apply-topics.sh exits 9 when it reached the END of the declared list and some topics
-# could not be reconciled, and any OTHER non-zero when the run did not complete. Until this block
-# existed both were exit 1, so one drifted topic read as "the recreate is unusable" and left all twelve
-# es4->prod mirrors paused on 2026-10-07 (options.spx.strike-invasion.current, 1 partition vs a
-# declared 32 — a drift, and one no mirror produces into).
+# WHAT CHANGED. apply-topics.sh exits 9 AND attests `state=skipped` when it reached the END of the
+# declared list and some topics could not be reconciled; it exits any other non-zero, with no
+# attestation, when the run did not complete. Both of those were exit 1 until this block existed, so
+# one drifted topic read as "the recreate is unusable" and left all twelve es4->prod mirrors paused on
+# 2026-10-07 (options.spx.strike-invasion.current, 1 partition vs a declared 32 — a drift, and one no
+# mirror produces into). The status is necessary and not sufficient: the attestation is what makes the
+# two distinguishable, because a child process exiting 9 produces the same status.
 #
 # WHAT DID NOT CHANGE: the owner rule that a reset which did not complete stays DOWN. A partial
 # recreate still does NOT bring prod up. Starting the mirrors is a different act from a bring-up: the
@@ -219,7 +244,7 @@ case "$DECISION_VERDICT" in
     # told apart from a partial success any other way.
     say "recreate FAILED (apply=$ARC ensure=$ERC) — mirrors stay PAUSED (list: $PAUSED_LIST); no bring-up."
     [ "$ARC" -eq 9 ] 2>/dev/null && [ -z "$SKIPPED_NAMES" ] && \
-      say "   (apply-topics.sh exited 9 without its SKIPPED_TOPIC_NAMES line, so which mirrors are safe is unknowable)"
+      say "   (it exited with the skip status but attested no skip ending, so which topics are unreconciled — and therefore which mirrors are safe — is unknowable)"
     exit "$DECISION_EXIT"
     ;;
 esac

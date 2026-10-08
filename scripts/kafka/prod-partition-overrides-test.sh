@@ -140,8 +140,16 @@ refuses "an empty topic name"                        '=4'                       
 # scripts themselves, and the resolver they source, are the real ones.
 fixture() { # -> prints a temp dir holding kafka/{apply,verify,resolver,topics.env} + mocked CLIs
   local tmp; tmp=$(mktemp -d); mkdir -p "$tmp/kafka" "$tmp/bin"
-  cp scripts/kafka/apply-topics.sh scripts/kafka/verify-topics.sh \
-     scripts/kafka/resolve-prod-partition-overrides.sh scripts/kafka/topics.env "$tmp/kafka/"
+  cp scripts/kafka/apply-topics.sh scripts/kafka/verify-topics.sh "$tmp/kafka/"
+  # ...plus every sibling each of them sources out of its own directory (topics.env and
+  # resolve-prod-partition-overrides.sh today), derived rather than listed: a hard-coded list here is
+  # what left two OTHER tests running crippled copies when apply-topics.sh gained a second sibling
+  # (#1165), and the failure surfaced as findings about topics.env.
+  for _s in apply-topics.sh verify-topics.sh; do
+    for _sib in $(bash scripts/kafka/apply-topics-sibling-files.sh "scripts/kafka/$_s"); do
+      cp "scripts/kafka/$_sib" "$tmp/kafka/" || return 1
+    done
+  done
   # trimmed declaration, appended so it wins over everything the real file built up
   cat >> "$tmp/kafka/topics.env" <<'T'
 OPTIONS_EDGE_TOPICS="options.spx.strike-invasion.current:32 options.spx.strike-sr.current:32"

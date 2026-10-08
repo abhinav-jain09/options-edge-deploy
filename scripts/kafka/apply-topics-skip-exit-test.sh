@@ -57,7 +57,12 @@ run() {
 echo "kafka-topics \$*" >> "$LOG"
 name=""; prev=""
 for a in "\$@"; do [ "\$prev" = "--topic" ] && name="\$a"; prev="\$a"; done
+if [ -n "\${TOPICS_FAIL_ON:-}" ] && [[ "\$*" == *"\$TOPICS_FAIL_ON"* ]]; then
+  echo "mock kafka-topics: forced failure" >&2; exit \${TOPICS_FAIL_RC:-7}
+fi
 if [[ "\$*" == *--describe* ]]; then
+  # An ABSENT topic answers nothing, which is how apply-topics.sh decides to CREATE it.
+  for a in \${TOPICS_ABSENT:-}; do [ "\$a" = "\$name" ] && exit 0; done
   d=\$(printf '%s' "$drift" | tr ' ' '\\n' | awk -F= -v n="\$name" '\$1 == n {print \$2; exit}')
   if [ -n "\$d" ]; then
     echo "Topic: \$name TopicId: ID PartitionCount: \$d ReplicationFactor: 1"
@@ -72,21 +77,28 @@ EOF
 #!/usr/bin/env bash
 echo "kafka-configs \$*" >> "$LOG"
 if [ -n "\${CONFIGS_FAIL_ON:-}" ] && [[ "\$*" == *"\$CONFIGS_FAIL_ON"* ]]; then
-  echo "mock kafka-configs: forced failure" >&2; exit 7
+  echo "mock kafka-configs: forced failure" >&2; exit \${CONFIGS_FAIL_RC:-7}
 fi
+if [ -n "\${CONFIGS_FORGE_LINE:-}" ]; then echo "\$CONFIGS_FORGE_LINE"; fi
 exit 0
 EOF
   printf '#!/usr/bin/env bash\necho "localhost:9092 (id: 1 rack: null) -> ("\nexit 0\n' > "$tmp/kafka-broker-api-versions"
   printf '#!/usr/bin/env bash\necho "kafka-reassign-partitions $*" >> "%s"\nexit 0\n' "$LOG" > "$tmp/kafka-reassign-partitions"
   chmod +x "$tmp"/kafka-*
   OUT="$tmp/out"
+  # The attestation file is created EMPTY, exactly as scripts/ops/prod-clean-slate.sh creates it, so
+  # "did not reach an ending" is observable as an empty file rather than as a missing one.
+  RESULT="${RESULT_PATH:-$tmp/result}"; [ "$RESULT" = /dev/full ] || : > "$RESULT"
   env PATH="$tmp:$PATH" KAFKA_BOOTSTRAP_SERVERS=localhost:9092 KAFKA_TOPIC_REPLICATION_FACTOR=1 \
     ENVIRONMENT=dev KAFKA_RECREATE_MISMATCHED_TOPICS=false KAFKA_TOPIC_DELETE_WAIT_SECONDS=1 \
-    KAFKA_TOPIC_REPAIR_WAIT_SECONDS=1 "$@" \
+    KAFKA_TOPIC_REPAIR_WAIT_SECONDS=1 APPLY_TOPICS_RESULT_FILE="$RESULT" "$@" \
     bash "$src/apply-topics.sh" > "$OUT" 2>&1
   RC=$?
 }
-names_line() { sed -n 's/^apply-topics\.sh: SKIPPED_TOPIC_NAMES: *//p' "$OUT" | tail -1; }
+names_line()  { sed -n 's/^apply-topics\.sh: SKIPPED_TOPIC_NAMES: *//p' "$OUT" | tail -1; }
+attested()    { cat "$RESULT" 2>/dev/null; }
+att_state()   { sed -n 's/^apply-topics: state=\([a-z]*\) skipped=.*/\1/p' "$RESULT" 2>/dev/null | tail -1; }
+att_names()   { sed -n 's/^apply-topics: state=skipped skipped=//p' "$RESULT" 2>/dev/null | tail -1; }
 
 echo "1. a clean broker: exit 0 and NO skipped-names line"
 run ""
@@ -130,7 +142,40 @@ rc=0; ( env -u KAFKA_TOPIC_REPLICATION_FACTOR KAFKA_BOOTSTRAP_SERVERS=localhost:
 [ "$rc" -ne 0 ] && [ "$rc" -ne 9 ] && ok "a missing replication factor exits $rc (non-zero, not 9)" \
   || bad "a missing replication factor exited $rc"
 
-echo "5. MUTATIONS: the status and the line are each load-bearing"
+echo "5. THE ATTESTATION FILE: the only signal a child process cannot produce"
+run ""
+[ "$(att_state)" = ok ] && ok "a clean run attests state=ok" || bad "a clean run attested [$(attested)]"
+[ -z "$(att_names)" ] && ok "and names no skipped topic" || bad "a clean run named [$(att_names)]"
+run "$VICTIM=1"
+[ "$(att_state)" = skipped ] && ok "a skip run attests state=skipped" || bad "a skip run attested [$(attested)]"
+[ "$(att_names)" = "$VICTIM" ] && ok "and names exactly $VICTIM" || bad "it names [$(att_names)]"
+[ "$(wc -l < "$RESULT" | tr -d ' ')" = 1 ] && ok "one line, nothing else" || bad "the file holds $(wc -l < "$RESULT") lines"
+
+# THE COLLISION this file exists for: create_topic ends in `kafka-topics --create`, whose status the
+# function returns and `set -e` then exits with. A CLI that exits 9 therefore aborts apply-topics.sh
+# mid-loop with status 9 -- the SKIP status. Only the attestation tells the two apart.
+run "" "$HERE" TOPICS_ABSENT="$VICTIM" TOPICS_FAIL_ON=--create TOPICS_FAIL_RC=9
+[ "$RC" -eq 9 ] && ok "a kafka CLI exiting 9 makes apply-topics.sh exit 9 too (the collision is real)" \
+  || { bad "the forced CLI failure exited $RC, so this case proves nothing"; tail -4 "$OUT" | sed 's/^/      | /'; }
+[ -z "$(attested)" ] && ok "but the attestation file is EMPTY, so no caller may read it as a skip" \
+  || bad "an aborted run attested [$(attested)]"
+
+# ...and a child that PRINTS the stdout marker cannot fake one either.
+run "" "$HERE" CONFIGS_FORGE_LINE="apply-topics.sh: SKIPPED_TOPIC_NAMES: evil.topic"
+[ "$RC" -eq 0 ] && ok "a run whose child forges the stdout line still exits 0" || bad "exit $RC"
+printf '%s' "$(names_line)" | grep -q 'evil.topic' \
+  && ok "the forged line IS in the output (so parsing stdout would have believed it)" \
+  || bad "the mock did not forge the line — this case proves nothing"
+[ "$(att_state)" = ok ] && [ -z "$(att_names)" ] \
+  && ok "while the attestation says state=ok and names nothing" || bad "the attestation was polluted: [$(attested)]"
+
+# An unwritable attestation path must ABORT the run, not finish quietly with no attestation.
+RESULT_PATH=/dev/full run "$VICTIM=1"
+unset RESULT_PATH
+[ "$RC" -ne 0 ] && [ "$RC" -ne 9 ] && ok "an unwritable attestation path exits $RC (non-zero, not the skip status)" \
+  || bad "an unwritable attestation path exited $RC"
+
+echo "6. MUTATIONS: the status, the line and the attestation are each load-bearing"
 mutant() { # <python old||new> -> dir
   local dir; dir="$WORK/mut.$RANDOM"; mkdir -p "$dir"
   cp "$HERE/apply-topics.sh" "$dir/"
@@ -153,7 +198,19 @@ fi
 m="$(mutant 'echo "apply-topics.sh: SKIPPED_TOPIC_NAMES:||echo "apply-topics.sh: NOTHING_TO_SEE:')" || { bad "mutation 2 did not apply"; m=""; }
 if [ -n "$m" ]; then
   run "$VICTIM=1" "$m"
-  [ -z "$(names_line)" ] && ok "without the line the wrapper gets nothing (mutant exit $RC)" || bad "the names-line mutation changed nothing"
+  [ -z "$(names_line)" ] && ok "without the line a reader gets nothing (mutant exit $RC)" || bad "the names-line mutation changed nothing"
+fi
+m="$(mutant 'write_run_result skipped "${SKIPPED_TOPICS[*]%% *}"||true')" || { bad "mutation 3 did not apply"; m=""; }
+if [ -n "$m" ]; then
+  run "$VICTIM=1" "$m"
+  [ -z "$(attested)" ] && ok "without the write there is no attestation, so a wrapper must refuse (mutant exit $RC)" \
+    || bad "the attestation mutation changed nothing: [$(attested)]"
+fi
+m="$(mutant "write_run_result ok ''||true")" || { bad "mutation 4 did not apply"; m=""; }
+if [ -n "$m" ]; then
+  run "" "$m"
+  [ -z "$(attested)" ] && ok "and the clean ending's attestation is load-bearing too (mutant exit $RC)" \
+    || bad "the ok-attestation mutation changed nothing: [$(attested)]"
 fi
 
 echo

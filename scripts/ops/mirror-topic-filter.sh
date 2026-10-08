@@ -21,9 +21,15 @@
 #     mirrors for in the first place.
 # The caller passes both sets; this file does not distinguish them.
 #
-# FAIL CLOSED. Anything that stops this from reading the agent's real whitelist -- no plist, no unit
-# directory, no run script, no --whitelist in it, a regex that will not compile -- is a HOLD. A mirror
-# left paused is a stale panel; a mirror started against a wrong-shaped topic re-routes keys.
+# WHAT THE VERDICT IS DERIVED FROM: ProgramArguments[0] -- the program launchd actually starts -- which
+# must be an absolute path, readable, and carry a --whitelist of its own. Any other run-mirror*.sh in
+# the same directory is then unioned in, so a stale or extra script can only ADD holds, never explain
+# one away.
+#
+# FAIL CLOSED. Anything that stops this from reading the agent's real whitelist -- no plist, a plist
+# that does not parse, a relative or missing program path, an unreadable script, no --whitelist in the
+# program, a regex that will not compile -- is a HOLD. A mirror left paused is a stale panel; a mirror
+# started against a wrong-shaped topic re-routes keys.
 #
 # OVER-INCLUSIVE ON PURPOSE. MirrorMaker-1 subscribes by pattern and Kafka matches a topic against it
 # in FULL, so `es\.futures\.cvd` does not actually match es.futures.cvd.bars. This holds on a partial
@@ -54,38 +60,51 @@ if not isinstance(job, dict):
     hold("the plist is not a job dictionary")
 label = job.get("Label") or label
 
-# The unit directory is the directory of the program the job runs, exactly as prod_mirror_agents finds
-# the producer.properties beside it.
-unit_dirs = []
-for arg in (job.get("ProgramArguments") or []):
-    arg = str(arg)
-    if os.path.isabs(arg):
-        d = os.path.dirname(arg)
-        if d not in unit_dirs:
-            unit_dirs.append(d)
-if not unit_dirs:
-    hold("no absolute ProgramArguments entry, so the unit directory is unknown")
+# THE PROGRAM THE JOB ACTUALLY RUNS comes first, and it must be readable and carry a whitelist of its
+# own; a verdict derived from a SIBLING script in the same directory could describe a stale or unused
+# file rather than the mirror launchd will start (deploy Codex round 1).
+args = [str(a) for a in (job.get("ProgramArguments") or [])]
+program = args[0] if args else ""
+if not program or not os.path.isabs(program):
+    hold("ProgramArguments[0] is not an absolute path, so the program it runs is unknown")
 
-scripts = []
-for d in unit_dirs:
-    scripts.extend(sorted(glob.glob(os.path.join(d, "run-mirror*.sh"))))
-if not scripts:
-    hold("no run-mirror*.sh in %s" % ", ".join(unit_dirs))
+# Everything else in the unit directory is then UNIONED in, because a whitelist found anywhere beside
+# the program is a topic this unit may plausibly copy, and holding on it is the cheap mistake. Both the
+# program and the extra files must parse; an unreadable one is a HOLD, not a skip.
+unit_dir = os.path.dirname(program)
+scripts = [program]
+for extra in sorted(glob.glob(os.path.join(unit_dir, "run-mirror*.sh"))):
+    if extra not in scripts:
+        scripts.append(extra)
 
 # --whitelist 'es\.futures\.cvd\.bars'  /  --whitelist es\.futures\.auction
 WL = re.compile(r"--whitelist\s+(?:'([^']*)'|\"([^\"]*)\"|(\S+))")
-patterns = []
-for path in scripts:
+
+def patterns_in(path):
+    # Any failure to read the file as text is a HOLD with a message, not a traceback: a plist whose
+    # ProgramArguments[0] is a BINARY (a /bin/bash wrapper layout) raised UnicodeDecodeError here, which
+    # happened to exit non-zero and so happened to be safe -- the wrong reason to be right.
     try:
-        text = open(path).read()
-    except OSError as exc:
-        hold("cannot read %s (%s)" % (os.path.basename(path), exc.__class__.__name__))
+        with open(path, "r", errors="replace") as fh:
+            text = fh.read()
+    except Exception as exc:
+        hold("cannot read %s as text (%s)" % (os.path.basename(path), exc.__class__.__name__))
+    found = []
     for m in WL.finditer(text):
         pat = m.group(1) or m.group(2) or m.group(3)
-        if pat and pat not in patterns:
-            patterns.append(pat)
+        if pat and pat not in found:
+            found.append(pat)
+    return found
+
+# The program's OWN whitelist is required: without it this does not know what launchd would start, and
+# a sibling's whitelist is not an answer about the program.
+patterns = patterns_in(program)
 if not patterns:
-    hold("no --whitelist in %s" % ", ".join(os.path.basename(p) for p in scripts))
+    hold("no --whitelist in the program the job runs (%s)" % os.path.basename(program))
+for extra in scripts[1:]:
+    for pat in patterns_in(extra):
+        if pat not in patterns:
+            patterns.append(pat)
 
 for pat in patterns:
     try:

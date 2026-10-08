@@ -371,12 +371,37 @@ alter_topic_config() {
 #   any other non-zero            the run did NOT complete -- set -e aborted it, or a precondition
 #                                 refused it. Nothing may be inferred about the rest of the list.
 #
-# The code is only reachable from the final block, which only runs if the loop ran to completion, so
-# `set -e` keeps the third row honest: a hard failure exits with ITS status, never this one.
-# 9 is not a shell-reserved status (0, 1, 2, 126, 127, 128+n are), so it cannot collide with one.
+# THE STATUS ALONE IS NOT PROOF OF COMPLETION, and must not be treated as such (deploy Codex round 1):
+# under `set -e` a child process that itself exits 9 -- a kafka CLI, a future helper -- aborts this
+# script mid-loop WITH STATUS 9, which is indistinguishable from the skip ending. Nor is the stdout
+# line below proof: it shares a stream with every child's output.
+#
+# So completion is attested OUT OF BAND, in a file only this script's endings write:
+#
+#   APPLY_TOPICS_RESULT_FILE=<path>   optional. When set, this script writes exactly one line to it,
+#                                     AFTER the declared list has been walked to the end:
+#                                       apply-topics: state=ok skipped=
+#                                       apply-topics: state=skipped skipped=<name> <name> ...
+#
+# A caller that acts on a partial reconciliation (scripts/ops/prod-clean-slate.sh) must require BOTH
+# the status and that line; nothing a child prints or exits with can produce it, because a child does
+# not know the path and an aborted run never reaches the write. A write that FAILS aborts the run under
+# set -e, so such a caller sees a non-zero status and an empty file -- the fail-closed direction.
+#
 # Callers that only test for non-zero -- the Jenkins stages, scripts/es4/create-es-topics.sh -- are
 # unaffected: a skip is still a failure, and still fails the build.
 SKIPPED_EXIT=9
+
+# One line, written only from the two endings at the bottom of this file. Truncating (>) rather than
+# appending keeps a reused path honest: a caller that pre-creates the file EMPTY therefore reads "no
+# attestation" from every run that did not reach an ending.
+write_run_result() { # <state> <space-separated skipped names>
+  [ -n "${APPLY_TOPICS_RESULT_FILE:-}" ] || return 0
+  if ! printf 'apply-topics: state=%s skipped=%s\n' "$1" "$2" > "$APPLY_TOPICS_RESULT_FILE"; then
+    echo "apply-topics.sh: could not write APPLY_TOPICS_RESULT_FILE=$APPLY_TOPICS_RESULT_FILE" >&2
+    return 1
+  fi
+}
 SKIPPED_TOPICS=()
 
 for entry in $OPTIONS_EDGE_TOPICS; do
@@ -481,9 +506,17 @@ if (( ${#SKIPPED_TOPICS[@]} > 0 )); then
   echo "topic above this line WAS still created/updated — this run does not abandon the rest of the" >&2
   echo "list over one drifted topic):" >&2
   for t in "${SKIPPED_TOPICS[@]}"; do echo "  - $t" >&2; done
-  # The same facts once more, parseable, on ONE line and on STDOUT: a wrapper deciding what a skip
-  # permits needs the NAMES, and the human list above carries a free-text reason in parentheses after
-  # each one. Each entry's name is its first whitespace-delimited field, which is how it is built above.
+  # The same facts once more, parseable: the NAMES alone, since the human list above carries a
+  # free-text reason in parentheses after each one. Each entry's name is its first whitespace-delimited
+  # field, which is how it is built above.
+  #
+  # On stdout for a reader; in APPLY_TOPICS_RESULT_FILE for a CALLER, which is the only one of the two
+  # a child process cannot produce. The write comes first, and a failed write aborts under set -e.
+  write_run_result skipped "${SKIPPED_TOPICS[*]%% *}"
   echo "apply-topics.sh: SKIPPED_TOPIC_NAMES:$(printf ' %s' "${SKIPPED_TOPICS[@]%% *}")"
   exit "$SKIPPED_EXIT"
 fi
+
+# The OTHER ending: the whole declared list reconciled. Attested the same way, so a caller reading the
+# file sees which of the two endings ran rather than inferring it from a status.
+write_run_result ok ''

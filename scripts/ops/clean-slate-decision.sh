@@ -17,6 +17,9 @@
 #                                topic still MISSING from the broker is held anyway -- auto-create
 #                                would otherwise let a mirror's first produce create it at the broker
 #                                default partition count.
+#   apply=0, named skips FAIL     a CONTRADICTION: apply-topics.sh cannot both reconcile everything and
+#                                attest a skip ending. One of the two inputs is wrong, so neither is
+#                                trusted.
 #   apply=0, ensure!=0  FAIL     the partition-only topics did not get made. Nothing starts.
 #   apply=9, no names   FAIL     exit 9 is DEFINED to carry the SKIPPED_TOPIC_NAMES line. Without it
 #                                there is no way to tell which mirrors are safe, so none are.
@@ -42,6 +45,11 @@ clean_slate_decide() {
 
   case "$arc" in ''|*[!0-9]*) DECISION_EXIT=1; _cs_emit; return 0 ;; esac
   case "$erc" in ''|*[!0-9]*) DECISION_EXIT=1; _cs_emit; return 0 ;; esac
+
+  if [ "$arc" -eq 0 ] && [ -n "$(_cs_norm "$skipped")" ]; then
+    # Impossible by construction, which is exactly why it is refused rather than ignored.
+    DECISION_EXIT=1; _cs_emit; return 0
+  fi
 
   if [ "$arc" -eq 0 ] && [ "$erc" -eq 0 ]; then
     DECISION_VERDICT=OK; DECISION_RESUME=yes; DECISION_BRINGUP=yes; DECISION_EXIT=0

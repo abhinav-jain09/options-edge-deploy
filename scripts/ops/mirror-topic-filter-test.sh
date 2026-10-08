@@ -53,7 +53,53 @@ echo "3. OVER-INCLUSIVE on purpose: a family prefix holds its children"
 want_hold "$FAM" es.futures.cvd.bars && ok "a prefix pattern holds es.futures.cvd.bars" || bad "a prefix pattern did not hold its child topic"
 want_hold "$FAM" es.futures.cvd      && ok "and holds its own exact topic"              || bad "a prefix pattern did not hold its exact topic"
 
-echo "4. FAIL CLOSED on anything it cannot read"
+echo "4. the verdict comes from the program the plist RUNS, and siblings can only ADD holds"
+# A unit whose executed program whitelists A, with a stale sibling whitelisting B.
+mkdir -p "$WORK/twoscripts"
+printf '%s\n' "exec kafka-mirror-maker --whitelist 'topic\\.aaa' --num.streams 1" > "$WORK/twoscripts/run-mirror.sh"
+printf '%s\n' "exec kafka-mirror-maker --whitelist 'topic\\.bbb' --num.streams 1" > "$WORK/twoscripts/run-mirror-old.sh"
+chmod +x "$WORK/twoscripts"/*.sh
+TWO="$WORK/com.optionsedge.twoscripts.plist"
+python3 - "$TWO" "$WORK/twoscripts/run-mirror.sh" <<'PY'
+import plistlib, sys
+plistlib.dump({"Label": "com.optionsedge.twoscripts", "ProgramArguments": [sys.argv[2]]}, open(sys.argv[1], "wb"))
+PY
+want_hold "$TWO" topic.aaa && ok "the executed program's own whitelist holds"        || bad "the program's whitelist did not hold"
+want_hold "$TWO" topic.bbb && ok "a sibling's whitelist ADDS a hold (conservative)"  || bad "a sibling's whitelist was ignored"
+want_clear "$TWO" topic.ccc && ok "and a topic in neither is still CLEAR"            || bad "an unrelated topic was held"
+
+# The program itself carries no whitelist; a sibling does. The sibling is not an answer about the
+# program, so this is a HOLD rather than a verdict derived from the wrong file.
+mkdir -p "$WORK/progless"
+printf '%s\n' "exec kafka-mirror-maker --consumer.config c --num.streams 1" > "$WORK/progless/run-mirror.sh"
+printf '%s\n' "exec kafka-mirror-maker --whitelist 'topic\\.zzz' --num.streams 1" > "$WORK/progless/run-mirror-legacy.sh"
+chmod +x "$WORK/progless"/*.sh
+PL="$WORK/com.optionsedge.progless.plist"
+python3 - "$PL" "$WORK/progless/run-mirror.sh" <<'PY'
+import plistlib, sys
+plistlib.dump({"Label": "com.optionsedge.progless", "ProgramArguments": [sys.argv[2]]}, open(sys.argv[1], "wb"))
+PY
+want_hold "$PL" topic.qqq && ok "a program with no whitelist is a HOLD, even with a sibling that has one" \
+  || bad "the verdict came from a sibling instead of the program"
+
+# ProgramArguments[0] must BE the program: an absolute path later in the argument list is not it.
+LATER="$WORK/com.optionsedge.later.plist"
+python3 - "$LATER" "$WORK/twoscripts/run-mirror.sh" <<'PY'
+import plistlib, sys
+plistlib.dump({"Label": "com.optionsedge.later", "ProgramArguments": ["/bin/bash", sys.argv[2]]}, open(sys.argv[1], "wb"))
+PY
+want_hold "$LATER" topic.ccc && ok "a wrapper layout (ProgramArguments[0]=/bin/bash) is a HOLD" \
+  || bad "a wrapper layout was CLEARED from a later argument's directory"
+
+# A program path that is not there at all.
+GONE="$WORK/com.optionsedge.gone.plist"
+python3 - "$GONE" "$WORK/no-such-dir/run-mirror.sh" <<'PY'
+import plistlib, sys
+plistlib.dump({"Label": "com.optionsedge.gone", "ProgramArguments": [sys.argv[2]]}, open(sys.argv[1], "wb"))
+PY
+want_hold "$GONE" topic.ccc && ok "a program that does not exist is a HOLD" || bad "a missing program was CLEARED"
+
+echo "5. FAIL CLOSED on anything it cannot read"
 NOSCRIPT="$WORK/com.optionsedge.noscript.plist"
 python3 - "$NOSCRIPT" "$WORK/empty-unit/run-mirror.sh" <<'PY'
 import os, plistlib, sys
@@ -77,17 +123,17 @@ python3 - "$NOARGS" <<'PY'
 import plistlib, sys
 plistlib.dump({"Label": "com.optionsedge.noargs", "ProgramArguments": ["relative/run.sh"]}, open(sys.argv[1], "wb"))
 PY
-want_hold "$NOARGS" any.topic && ok "no absolute ProgramArguments entry" || bad "a job with no absolute program path was CLEARED"
+want_hold "$NOARGS" any.topic && ok "a relative ProgramArguments[0]" || bad "a relative program path was CLEARED"
 
 rc=0; bash "$F" >/dev/null 2>&1 || rc=$?
 [ "$rc" -eq 2 ] && ok "no arguments is a usage error (exit 2)" || bad "no arguments exited $rc, expected 2"
 
-echo "5. the verdict names the topic and the pattern, so the operator log says WHY"
+echo "6. the verdict names the topic and the pattern, so the operator log says WHY"
 v="$(bash "$F" "$CVD" es.futures.cvd.bars 2>&1 || true)"
 printf '%s' "$v" | grep -q 'es.futures.cvd.bars ~ /es\\.futures\\.cvd\\.bars/' \
   && ok "the HOLD line names both" || bad "the HOLD line does not name both: $v"
 
-echo "6. MUTATION: a filter that stops matching must not silently CLEAR"
+echo "7. MUTATION: a filter that stops matching must not silently CLEAR"
 mkdir -p "$WORK/mut"; cp "$F" "$WORK/mut/f.sh"
 python3 - "$WORK/mut/f.sh" <<'PY'
 import sys

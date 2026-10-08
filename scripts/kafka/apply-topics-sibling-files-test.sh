@@ -83,7 +83,11 @@ rc=0; got="$(bash "$WORK/mut/h.sh" "$HERE/apply-topics.sh" 2>&1)" || rc=$?
 echo "6. every test that copies apply-topics.sh into a temp dir uses the helper"
 # Derived from the tree, so a NEW test that hard-codes its copy list fails here rather than discovering
 # the next missing sibling as a wrong verdict about somebody's declaration.
-callers="$(grep -rl 'cp "\$HERE/apply-topics\.sh"\|cp "\$HERE/apply-topics\.sh" ' "$HERE/.." --include='*test*.sh' 2>/dev/null | sort -u)"
+# ANY form of the copy, not just the "$HERE" one: prod-partition-overrides-test.sh writes
+# `cp scripts/kafka/apply-topics.sh ...`, and a detector that only knew the first form called this
+# check green while that test carried its own hard-coded sibling list (deploy Codex round 1).
+callers="$(grep -rlE '(^|[^-[:alnum:]_])cp([[:space:]]+-[A-Za-z]+)*[[:space:]]+[^#]*apply-topics\.sh' \
+  "$HERE/.." --include='*test*.sh' 2>/dev/null | grep -v 'apply-topics-sibling-files-test\.sh' | sort -u)"
 [ -n "$callers" ] && ok "found $(printf '%s\n' "$callers" | wc -l | tr -d ' ') test(s) that copy apply-topics.sh" \
   || bad "found NO test that copies apply-topics.sh — this check has gone vacuous, re-derive it"
 for c in $callers; do
