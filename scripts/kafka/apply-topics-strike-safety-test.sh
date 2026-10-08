@@ -167,11 +167,14 @@ done
 echo "4. the test can fail: WITHOUT the declaration the same drift deletes and recreates the log"
 MUT="$WORK/mutant"; mkdir -p "$MUT"
 cp "$HERE/apply-topics.sh" "$MUT/"
-# ...with every sibling apply-topics.sh sources out of its own directory. Copying only the script left
-# the production+default-TOPIC_SET run dying at `source resolve-prod-partition-overrides.sh: No such
-# file or directory` (#1165), and case 4 reported that as "the mutant did not delete — the test is not
-# sensitive to the declaration". The list is derived from apply-topics.sh, so a future sibling needs no
-# edit here; it fails closed, so a parse that finds nothing stops the test instead of under-copying.
+# ...with every sibling apply-topics.sh sources out of its own directory. resolve-prod-partition-overrides.sh
+# is one: apply-topics.sh sources it by $SCRIPT_DIR -- this copy's own directory -- whenever
+# ENVIRONMENT=production and TOPIC_SET is the default set, which is exactly the first case the loop below
+# runs. A copy without it died at `source: No such file or directory` before the mutant could act, and
+# case 4 reported that as "the mutant did not delete — the test is not sensitive to the declaration"
+# (#1165, and main's own fix in #1171, which hard-coded the one file).
+# The list is DERIVED from apply-topics.sh instead, so a sibling added tomorrow needs no edit here, and it
+# fails closed: a parse that finds nothing stops the test rather than under-copying.
 # topics.env is one of those siblings and is deliberately copied BEFORE the mutated one is written below.
 for _sib in $(bash "$HERE/apply-topics-sibling-files.sh"); do cp "$HERE/$_sib" "$MUT/"; done
 # Position-independent: the strike token is removed wherever it sits in the list. The first form was anchored on
