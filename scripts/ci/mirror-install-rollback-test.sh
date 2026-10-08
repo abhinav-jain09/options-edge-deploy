@@ -84,6 +84,25 @@ generation() { # dir -> OLD | NEW | MIXED
 }
 
 fail=0
+
+# ⚠ The install body now refuses ANY install that did not come through
+# scripts/ops/install-es-mirrors.sh — enforced in the shell, not in a task, because
+# `--skip-tags always` skips exactly the always-tagged refusals. This gate runs that body directly
+# to test ROLLBACK, a different subject, so it presents itself as a wrapper run. The requirement
+# itself is asserted first, so an export that stopped being necessary fails this gate rather than
+# passing it quietly.
+D="$WORK/wrapreq"; seed "$D"
+r=$(render "$D"); [ "$r" = OK ] || { echo "FAIL: cannot render the install task body ($r)"; exit 1; }
+set +e; out=$(env -u OE_MIRROR_RECEIPT bash "$D/install.sh" 2>&1); rc=$?; set -e
+g=$(generation "$D")
+if [ "$rc" != 0 ] && [ "$g" = OLD ] \
+   && grep -q 'must run through scripts/ops/install-es-mirrors.sh' <<<"$out"; then
+  printf '  ok   %-44s rc=%s generation=%s\n' "no receipt: refused, nothing written" "$rc" "$g"
+else
+  printf '  FAIL %-44s rc=%s generation=%s %s\n' "no receipt: refused, nothing written" "$rc" "$g" "$out"; fail=1
+fi
+export OE_MIRROR_RECEIPT=/tmp/oe-rollback-gate-receipt
+
 # ---- a clean install lands the new generation ----
 D="$WORK/ok"; seed "$D"
 r=$(render "$D"); [ "$r" = OK ] || { echo "FAIL: cannot render the install task body ($r)"; exit 1; }

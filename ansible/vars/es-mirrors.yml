@@ -123,3 +123,70 @@ mirror_units:
 # container runner to es4 over scp and mirrors in the other direction, and its install has its own
 # payload proof. Installing it from here would need a second, different shape — add it only with that
 # shape, never by pretending it is one of these.
+
+  # ------------------------------------------------------------------------------------------------
+  # THE DEALER-LEDGER OFFLOAD LANE, leg 2: .74 -> prod. The ONLY row whose source is not es4 and
+  # whose unit does not run on .102 (mirror_run_host=mac74) — the ledger runs on .74 under offload
+  # requirement 3.2, and prod's routable address is reachable from there while dev's
+  # host.docker.internal is not reachable from anywhere but .102.
+  #
+  # ⚠ THIS ROW HAS NO JENKINSFILE GENERATOR. Every other pipeline here is a copy of what a
+  # Jenkinsfile.<pipeline> declares, and scripts/ci/validate-ansible-mirror-parity.sh compares the two
+  # so they cannot drift. The dealer-ledger legs were built by hand and have no pipeline, so this
+  # table is their SOLE generator and there is nothing to drift against. The gate knows this row by
+  # name and asserts that no Jenkinsfile.dl-mirror exists — so if one is ever added, the gate fails
+  # and forces whoever adds it to wire the parity comparison rather than quietly gaining a second
+  # generator.
+  #
+  # ⚠ AND IT IS THE FIRST ROW WHERE source parts != target parts, measured 2026-10-08:
+  #   profile 8 -> 32, state 8 -> 32, signal-fired 4 -> 32, outcome-scored 8 -> 32.
+  # MirrorMaker v1 re-partitions by key, so a count change is not an error but it is not a no-op
+  # either: records that are co-partitioned on .74 are redistributed on prod. close-direction keys on
+  # symbol|expiry and reads whole frames, so this is believed harmless — BELIEVED, not demonstrated,
+  # and it is the open question on this lane. The asserts below record the counts that EXIST; they do
+  # not endorse the asymmetry.
+  #
+  # outcome-scored asserts the target's PARTITION COUNT but not its policy/retention: on prod those
+  # two exist only as broker defaults, which this system reads as unset, and an assert on an unset
+  # value is a guaranteed failure. Declaring a default would be a lie that passes; declaring nothing
+  # at all — my first draft — threw away the partition check, which a different reader can make.
+  # ⚠⚠ THIS ROW IS A DECLARATION, NOT AN INSTALLABLE LEG. Be clear about what merging it delivers:
+  # the lane is described, planned, parity-checked and asymmetry-checked — and its production install
+  # is REFUSED by ansible/es-mirrors.yml, deliberately. Two things do not exist:
+  #   1. .74 has no confluent-7.3.x kafka-mirror-maker, so no unit here can exec;
+  #   2. the permitted-commit guard runs inside the CONTROLLER's checkout, and a secure remote model
+  #      has to bind the rendered unit content to the verified checkout — render FROM the reviewed
+  #      release on .74 and verify that same immutable identity there. An operator-settable repo path
+  #      would not do it: the guard would validate one tree while the units came from another.
+  # Until that model is built, leg 2 of the dealer-ledger offload lane is NON-FUNCTIONAL and this row
+  # is staged, not live. Codex r4 on #1166 was right to insist the distinction be written down here
+  # rather than left to the reader of a green plan.
+  - pipeline: dl-mirror
+    # The unit runs on .74, not on the controller. The play installs only the rows whose run_host is
+    # the host it is executing on, and REPORTS the rest rather than silently dropping them — so the
+    # default invocation (localhost, for every es4 leg) leaves this row alone instead of installing
+    # four units pointed at the wrong brokers, which is what it did before this field existed.
+    run_host: mac74
+    source_ip: 192.168.100.74
+    source_port: "9092"
+    target_ip: 192.168.100.252
+    target_port: "9092"
+    slug_with_topic: true
+    group_parts: [ip, topic]
+    offset_reset: latest
+    isolation_level: read_uncommitted
+    topics:
+      - name: dealer-ledger-profile
+        assert: { source: {parts: 8, policy: delete, retention: "86400000"}, target: {parts: 32, policy: delete, retention: "86400000"} }
+      - name: dealer-ledger-state
+        assert: { source: {parts: 8, policy: delete, retention: "86400000"}, target: {parts: 32, policy: delete, retention: "86400000"} }
+      - name: dealer-ledger-signal-fired
+        assert: { source: {parts: 4, policy: delete, retention: "-1"},       target: {parts: 32, policy: delete, retention: "-1"} }
+      - name: dealer-ledger-outcome-scored
+        # Target PARTS is asserted; target policy/retention deliberately are NOT (Codex on #1166, P1).
+        # The two come from different readers: parts from `kafka-topics --describe`, which reports the
+        # real count, and policy/retention from the dynamic-config reader, which on prod returns
+        # nothing for this topic because both exist only as broker defaults — and this system reads an
+        # unset dynamic config as unset, so asserting them is a guaranteed failure. My first draft
+        # asserted nothing at all for the target, which was lazier than the readers require.
+        assert: { source: {parts: 8, policy: delete, retention: "-1"}, target: {parts: 32} }

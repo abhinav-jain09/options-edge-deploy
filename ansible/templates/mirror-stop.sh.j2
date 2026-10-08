@@ -25,6 +25,23 @@ TGT={{ item.target | quote }}; REPO={{ (playbook_dir ~ "/..") | quote }}
 # a playbook variable: `-e oe_guard_version=<hash of an edited guard>` would otherwise let a locally
 # modified guard self-approve. scripts/ci/validate-ansible-prod-permission.sh asserts this literal
 # equals the one every mirror Jenkinsfile declares.
+# ⚠ THE WRAPPER REQUIREMENT LIVES HERE, AND FOR THE SAME REASON THE GUARD DOES: a TASK cannot
+# carry it. The playbook also refuses an install that did not come through
+# scripts/ops/install-es-mirrors.sh, but that refusal is a task, and `--skip-tags always` skips
+# precisely the `always`-tagged tasks while RUNNING every untagged one — so tagging the refusals
+# `always` made them the one thing that flag removes. Measured: a direct `--skip-tags always`
+# production install skipped the refusal entirely and only the guard below stopped it. A shell
+# script that is executing cannot be tag-selected away, so the check belongs beside the lock.
+#
+# EVERY install, not just production. A dev install that silently did nothing is the same defect as
+# a production one, and a dev/prod asymmetry here is its own trap. A PLAN is unaffected: it never
+# reaches this script.
+if [ -z "${OE_MIRROR_RECEIPT:-}" ]; then
+  echo "FAIL: an install must run through scripts/ops/install-es-mirrors.sh — it is the only"
+  echo "      invocation that can prove the run completed. Nothing has been stopped or written."
+  exit 1
+fi
+
 if [ "$TGT" = "192.168.100.252:9092" ]; then
   # PERMITTED_SHA arrives in the ENVIRONMENT (the task sets it), never interpolated into this
   # script's text: an extra var is operator-supplied data, and interpolating it into a double-quoted

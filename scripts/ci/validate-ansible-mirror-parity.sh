@@ -75,6 +75,12 @@ PIPELINES = {
     "es-tape-zones-mirror": "Jenkinsfile.es-tape-zones-mirror",
     "es-futures-flow-mirror": "Jenkinsfile.es-futures-flow-mirror",
     "es-strike-intel-mirror": "Jenkinsfile.es-strike-intel-mirror",
+    # None = NO Jenkinsfile generator exists for this pipeline, so there is no second generator to
+    # drift against and nothing to compare. The dealer-ledger offload legs were built by hand and
+    # never had a pipeline. This is declared rather than silently skipped, and the assertion below
+    # makes the declaration load-bearing: if a Jenkinsfile.dl-mirror ever appears, this gate FAILS
+    # and whoever added it must wire the comparison instead of quietly gaining a second generator.
+    "dl-mirror": None,
 }
 
 def stanza(text, name, term):
@@ -83,6 +89,13 @@ def stanza(text, name, term):
 
 # ---- 1. the producer stanza, byte for byte ----
 for pipe, jf in PIPELINES.items():
+    if jf is None:
+        if pathlib.Path(f"Jenkinsfile.{pipe}").exists():
+            fail.append(f"Jenkinsfile.{pipe} now EXISTS, but ansible/vars/es-mirrors.yml still "
+                        f"declares {pipe!r} as having no generator. There are now two generators for "
+                        "these unit files and this gate is not comparing them. Map the pipeline to "
+                        "its Jenkinsfile here and let every check below run against it.")
+        continue
     body = stanza(pathlib.Path(jf).read_text(), "producer.properties", "P")
     if body is None:
         fail.append(f"{jf}: no producer.properties heredoc — this gate cannot compare it")
@@ -106,9 +119,14 @@ if len(blocks) != len(PIPELINES):
 
 for blk in blocks:
     pipe = blk.split("\n", 1)[0].strip()
-    jf = PIPELINES.get(pipe)
-    if not jf:
+    if pipe not in PIPELINES:
         fail.append(f"ansible/vars/es-mirrors.yml declares pipeline {pipe!r}, which this gate does not know")
+        continue
+    jf = PIPELINES[pipe]
+    # A table-only pipeline has no Jenkinsfile to compare its group formula, allow-list, naming or
+    # generated files against; the per-pipeline checks below all read `j`. Its declaration is
+    # verified above instead.
+    if jf is None:
         continue
     j = pathlib.Path(jf).read_text()
 
