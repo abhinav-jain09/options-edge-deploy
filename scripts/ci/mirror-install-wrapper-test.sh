@@ -52,7 +52,7 @@ banners() {
 # the playbook does, so a wrapper that stopped exporting it would fail these sections.
 r="${OE_MIRROR_RECEIPT:-}"
 case "${STUB_MODE:-}" in
-  receipt)  banners; [ -n "$r" ] && printf 'host=localhost\nunits_in_table=18\n' > "$r"; exit 0;;
+  receipt)  banners; [ -n "$r" ] && printf 'nonce=%s\nhost=localhost\nunits_in_table=18\n' "${OE_MIRROR_NONCE:-}" > "$r"; exit 0;;
   fail)     banners; exit 2;;
   nobanner) exit 0;;
   *)        banners; exit 0;;
@@ -62,7 +62,7 @@ chmod +x "$STUB/ansible-playbook"
 
 # 2a. exit 0 with no receipt MUST fail — this is the whole reason the wrapper exists
 out=$(PATH="$STUB:$PATH" STUB_MODE=silent bash "$W" 2>&1); rc=$?
-if [ "$rc" != 3 ] || ! grep -q 'exited 0 but produced NO RECEIPT' <<<"$out"; then
+if [ "$rc" != 3 ] || ! grep -q 'wrote no receipt carrying' <<<"$out"; then
   echo "FAIL: a run that exited 0 having written no receipt was not caught (rc=$rc)"; echo "$out" | sed 's/^/    /' | tail -5; fail=1
 fi
 # 2b. a receipt means success, and the receipt is shown
@@ -72,7 +72,7 @@ if [ "$rc" != 0 ] || ! grep -q 'units_in_table=18' <<<"$out"; then
 fi
 # 2c. a DIAGNOSED failure keeps its own exit code rather than being relabelled 3
 out=$(PATH="$STUB:$PATH" STUB_MODE=fail bash "$W" 2>&1); rc=$?
-if [ "$rc" != 2 ] || ! grep -q 'no receipt: ansible-playbook exited 2' <<<"$out"; then
+if [ "$rc" != 2 ] || ! grep -q 'no receipt for this run: ansible-playbook exited 2' <<<"$out"; then
   echo "FAIL: a playbook failure was not reported with its own exit code (rc=$rc)"; echo "$out" | sed 's/^/    /' | tail -5; fail=1
 fi
 
@@ -80,6 +80,8 @@ fi
 # The wrapper used to pass `-e install_receipt=` BEFORE the caller's arguments, so a later
 # `-e install_receipt=<elsewhere>` won and a real install could mutate units while the wrapper saw
 # an empty receipt and reported exit 3 — "it failed, run it again", against production (Codex r5).
+grep -q 'export OE_MIRROR_NONCE=' "$W" \
+  || { echo "FAIL: $W no longer exports a per-run nonce, so a stale exported receipt would pass"; fail=1; }
 grep -q 'export OE_MIRROR_RECEIPT=' "$W" \
   || { echo "FAIL: $W no longer passes the receipt path through the environment"; fail=1; }
 grep -qE '^[^#]*-e[[:space:]]+"?install_receipt=' "$W" \
@@ -150,11 +152,18 @@ open(dst, 'w').write(s2)
 PYEOF
 if [ -s "$MUT" ]; then
   out=$(ANSIBLE_RUN_TAGS=always bash "$MUT" 2>&1); rc=$?
+  # ⚠ WHAT THE BACKSTOP IS NOW. It used to be a grep for Ansible's own TASK banners, on the theory
+  # that a play cannot forge its own output. It can — task names are playbook-controlled and all
+  # task output shares one pipe, and this very file's stub forges those lines (Codex r6). That check
+  # is gone. What catches a narrowed run now is the RECEIPT CARRYING THIS RUN'S NONCE: only the
+  # play's work path writes it, and a nonce minted seconds ago cannot come from a stale export.
+  # Honest scope: that stops every ACCIDENTAL no-op, which is every way this has gone wrong. It does
+  # not stop a caller who sets out to forge a receipt, and nothing runnable by that caller could.
   if [ "$rc" = 0 ]; then
     echo "FAIL: with the env enumeration defeated, a zero-work run exited 0 — the backstop does not stand alone"
     fail=1
-  elif ! grep -q 'did not run the tasks that do the work' <<<"$out"; then
-    echo "FAIL: the zero-work run failed (rc=$rc) but not on the mandatory-task check, so the backstop is not what caught it"
+  elif ! grep -q 'wrote no receipt carrying' <<<"$out"; then
+    echo "FAIL: the zero-work run failed (rc=$rc) but not on the nonce check, so the backstop is not what caught it"
     echo "$out" | sed 's/^/    /' | tail -6
     fail=1
   fi

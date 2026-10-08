@@ -74,8 +74,10 @@ for v in ANSIBLE_TAGS ANSIBLE_RUN_TAGS ANSIBLE_SKIP_TAGS ANSIBLE_LIMIT ANSIBLE_C
   fi
 done
 # and from an ansible.cfg in the directory ansible-playbook will read it from
-if [ -f ansible.cfg ] && grep -qE '^[[:space:]]*(tags|skip_tags|limit)[[:space:]]*=' ansible.cfg; then
-  echo "FAIL: ansible.cfg sets tags/skip_tags/limit, which can select the install away silently."
+if [ -f ansible.cfg ] && grep -qE '^[[:space:]]*(tags|skip_tags|limit|stdout_callback)[[:space:]]*=' ansible.cfg; then
+  echo "FAIL: ansible.cfg sets tags/skip_tags/limit/stdout_callback. The first three can select the"
+  echo "      install away silently; a non-default stdout_callback changes the output this script"
+  echo "      reads back — the env refusal alone did not cover the cfg (Codex r6)."
   exit 2
 fi
 
@@ -104,77 +106,109 @@ trap 'rm -f "$RECEIPT" "$OUT"' EXIT
 # OE_MIRROR_RECEIPT with an inline lookup that is never bound to a variable name, so there is no
 # name for an extra var to outrank.
 export OE_MIRROR_RECEIPT="$RECEIPT"
+# A fresh nonce per invocation, and be precise about what it buys — my first wording here was an
+# overclaim. The line above sets OE_MIRROR_RECEIPT unconditionally, so a value exported in the
+# caller's shell is DISCARDED for wrapper runs and the nonce has nothing to do with that case.
+# What the nonce actually establishes: the file at the path this run chose was written BY this run,
+# not left behind by an earlier one at a colliding path, and not pre-created by the caller. The
+# shell-export workaround Codex r6 predicted is a problem for the SCRIPT-level gate (which only
+# tests the variable is non-empty and cannot verify a nonce without a secret), not for this check —
+# which is one more reason that gate is documented as an accident-catcher and not a boundary.
+NONCE=$( (openssl rand -hex 16 2>/dev/null || od -An -tx1 -N16 /dev/urandom | tr -d ' \n') )
+[ -n "$NONCE" ] || { echo "FAIL: cannot generate a run nonce"; exit 1; }
+export OE_MIRROR_NONCE="$NONCE"
 set +e
 ansible-playbook "${INV_ARGS[@]}" "$PLAY" "$@" 2>&1 | tee "$OUT"
-rc=${PIPESTATUS[0]}
+# ⚠ Snapshot the WHOLE array in one command. `rc=${PIPESTATUS[0]}; teerc=${PIPESTATUS[1]}` is two
+# commands, and PIPESTATUS is reset by the first one — so the second read hit `set -u` and killed
+# the script AFTER the playbook had already run, which is precisely the false-failure-after-a-real-
+# run this check was added to avoid. Caught by my own sweep, not by reasoning.
+st=("${PIPESTATUS[@]}"); rc=${st[0]:-0}; teerc=${st[1]:-0}
 set -e
-
-# ---- 4. cross-check against ANSIBLE'S OWN output, which no playbook variable can forge ----
-# The receipt's counters come from play facts and an extra var outranks a set_fact, so the counters
-# are a report, not proof. What cannot be forged from inside the play is whether Ansible RAN the
-# tasks: these banners appear in its output only when the corresponding task executed. Any tag,
-# skip-tag or limit selection that removes the real work removes these too — which is why this check
-# does not enumerate flags. It asks whether the work happened, not how it might have been avoided.
-MANDATORY=(
-  "Flatten the unit table into one row per launchd unit"
-  "Account for the run, and write the receipt last whatever the outcome"
-)
-missing=()
-for t in "${MANDATORY[@]}"; do grep -qF "TASK [$t" "$OUT" || missing+=("$t"); done
-if [ "${#missing[@]}" -ne 0 ] && [ "$rc" = 0 ]; then
+# tee's own failure matters: an incomplete capture makes anything parsed from $OUT unreliable, and
+# reporting a parse-based failure AFTER a real mutation is the outcome worth avoiding most (r6).
+if [ "$teerc" != 0 ]; then
   echo
-  echo "FAIL: ansible-playbook exited 0 but did not run the tasks that do the work."
-  for t in "${missing[@]}"; do echo "      never ran: $t"; done
-  echo "      Something selected the work away (a tag, a skip-tag, a limit, an ansible.cfg or an"
-  echo "      ANSIBLE_* variable). This run installed nothing."
-  exit 4
+  echo "WARNING: the output capture (tee) failed with $teerc, so the saved output may be incomplete."
+  echo "         ansible-playbook itself exited $rc; trust that, not any parse of the output."
 fi
 
-if [ ! -s "$RECEIPT" ]; then
+# ---- 4. WHAT THIS CAN AND CANNOT PROVE -------------------------------------------------------
+# ⚠ Read this before trusting anything below. THREE successive designs here claimed to prove the
+# run did its work, and Codex broke each one:
+#   r4: a receipt task, which `tags: always` made unskippable — so it ran when nothing else did.
+#   r5: the task untagged, which fixed that, but the counts come from set_fact and `-e oe_failed=[]`
+#       outranks a set_fact, so the numbers are a report and never proof.
+#   r6: a grep for Ansible's own TASK banners and PLAY RECAP, on the theory that Ansible's output
+#       cannot be forged from inside the play. It can: task NAMES are playbook-controlled and all
+#       task output flows through the same pipe. A 12-line play with two debug/copy tasks forges
+#       both banners, a recap and a plausible receipt — measured. This script's own CI stub forges
+#       exactly those lines, which should have told me the theory was wrong a round earlier.
+#
+# So, stated plainly and not claimed away: EVERY input a check here can read — task names, extra
+# vars, the environment, the stdout callback, the receipt's contents — is controlled by whoever runs
+# the command. A tool cannot prove its own completion to someone able to forge its inputs. What this
+# script actually does, and all it claims:
+#   * it catches ACCIDENTAL no-ops — a typo'd run host, a stray --tags/--limit/--check, an exported
+#     ANSIBLE_* variable, an ansible.cfg selection — which is every way this has actually gone wrong;
+#   * for an INSTALL it verifies against REALITY rather than against output text, by re-planning and
+#     requiring no pending unit changes (see below). That reads the files on disk and the live
+#     processes, which is the only thing that was ever the point;
+#   * it is NOT a security boundary and nothing here should be read as one. The permitted-commit
+#     guard in ansible/templates/mirror-stop.sh.j2 and its two siblings is the boundary, it is
+#     enforced inside the rendered scripts, and none of this strengthens or weakens it.
+#
+# The nonce below is the one thing that does get stronger: it distinguishes "the playbook's receipt
+# task ran in THIS invocation" from "some OE_MIRROR_RECEIPT was already exported in the shell" —
+# the workaround r6 correctly predicted someone would reach for once dev installs needed the
+# wrapper. A stale export cannot carry a nonce generated seconds ago.
+if ! grep -qF "nonce=$NONCE" "$RECEIPT" 2>/dev/null; then
   echo
   if [ "$rc" != 0 ]; then
-    # The playbook refused, loudly, and said why above. Its exit code is the useful one; the missing
-    # receipt is just the consequence, so do not overwrite a diagnosed failure with exit 3.
-    echo "no receipt: ansible-playbook exited $rc and refused before its last task — see above."
+    echo "no receipt for this run: ansible-playbook exited $rc — see above."
     exit "$rc"
   fi
-  # THE CASE THIS WRAPPER EXISTS FOR: a SUCCESSFUL exit with no evidence of work.
-  echo "FAIL: ansible-playbook exited 0 but produced NO RECEIPT, so this run installed nothing."
-  echo "      A play that matches no host, or whose tasks were all selected away, exits 0 with an"
-  echo "      empty recap — indistinguishable from a completed install without this check."
-  echo "      Check the run host: -e mirror_run_host=<host> must name a host in the inventory."
+  echo "FAIL: ansible-playbook exited 0 but wrote no receipt carrying THIS run's nonce, so this"
+  echo "      invocation installed nothing. A play that matches no host, or whose tasks were all"
+  echo "      selected away, exits 0 with an empty recap. If OE_MIRROR_RECEIPT is exported in your"
+  echo "      shell, unset it — this script sets its own, and a stale one proves nothing."
   exit 3
 fi
 
-# ---- 5. the receipt must agree with Ansible's own accounting ----
-# A forged counter is only interesting if it DISAGREES with what Ansible did. Ansible's PLAY RECAP
-# is printed by Ansible, not by the play, so a receipt claiming units while the recap shows an
-# empty run (or no recap at all) is a contradiction worth failing on.
-recap=$(grep -E '^[A-Za-z0-9_.-]+[[:space:]]+:[[:space:]]+ok=' "$OUT" | tail -1)
-in_table=$(sed -n 's/^units_in_table=\([0-9]*\)$/\1/p' "$RECEIPT" | tail -1)
-if [ -z "$recap" ]; then
-  echo
-  echo "FAIL: no PLAY RECAP in ansible-playbook's output, so nothing ran on any host,"
-  echo "      yet a receipt exists. Refusing to report this as a completed run."
-  exit 5
-fi
-ok_count=$(sed -n 's/.*[[:space:]]ok=\([0-9]*\).*/\1/p' <<<"$recap")
-if [ "${in_table:-0}" -gt 0 ] && [ "${ok_count:-0}" -eq 0 ]; then
-  echo
-  echo "FAIL: the receipt reports $in_table unit(s) in the table but Ansible's recap shows ok=0."
-  echo "      recap: $recap"
-  exit 5
-fi
-if [ "${in_table:-0}" -eq 0 ]; then
-  echo
-  echo "FAIL: the receipt reports an EMPTY table (units_in_table=0), which the real table never is."
-  echo "      A run that saw no units installed nothing. recap: $recap"
-  exit 5
+# ---- 5. for an INSTALL, verify against the state on disk, not against the output ---------------
+# A second run with no confirm: it reads the live unit files and processes and reports, per file,
+# whether installing WOULD change anything. After a successful install the answer must be "no".
+# This is the only check here that cannot be satisfied by text — it is satisfied by the units
+# actually being in the state the table asks for.
+is_install=no
+for a in "$@"; do case "$a" in confirm_mirror_install=true|confirm_mirror_install=yes) is_install=yes;; esac; done
+grep -qE 'confirm_mirror_install=(true|yes)' <<<"$*" && is_install=yes
+if [ "$is_install" = yes ] && [ "$rc" = 0 ]; then
+  VOUT=$(mktemp -t oe-mirror-verify) || { echo "FAIL: cannot create the verify output file"; exit 1; }
+  # shellcheck disable=SC2086
+  set +e
+  OE_MIRROR_RECEIPT="$RECEIPT" ansible-playbook "${INV_ARGS[@]}" "$PLAY" \
+    $(printf '%s\n' "$@" | grep -v 'confirm_mirror_install=' | tr '\n' ' ') > "$VOUT" 2>&1
+  vrc=$?
+  set -e
+  pending=$(grep -c 'would install' "$VOUT" || true)
+  if [ "$vrc" != 0 ] || [ "${pending:-0}" -gt 0 ]; then
+    echo
+    echo "FAIL: the install reported success, but a verifying re-plan still finds work to do"
+    echo "      (re-plan rc=$vrc, $pending unit(s) would still change). The units on disk are NOT"
+    echo "      in the state the table asks for. Output: $VOUT"
+    rm -f "$VOUT"
+    exit 6
+  fi
+  rm -f "$VOUT"
+  echo "verified: a re-plan finds no pending unit changes"
 fi
 
 echo
 echo "receipt:"
 sed 's/^/  /' "$RECEIPT"
-echo "ansible recap: $recap"
+# Ansible's own recap, for the reader — NOT as evidence. The check that used to parse this was
+# removed because it proved nothing a play could not print itself (Codex r6).
+echo "ansible recap: $(grep -E '^[A-Za-z0-9_.-]+[[:space:]]+:[[:space:]]+ok=' "$OUT" | tail -1)"
 [ "$rc" != 0 ] && echo "ansible-playbook exited $rc — see the Summary above for the unit that refused"
 exit "$rc"

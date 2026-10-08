@@ -16,6 +16,10 @@ OUT=$(mktemp -d); trap 'rm -rf "$OUT"' EXIT
 # ops_dir and launch_agents_dir are passed EXPLICITLY: the playbook derives them from $HOME, and this
 # gate is about the identity the playbook COMPOSES, not about whose home directory CI runs under. On a
 # runner they would be /home/runner/... and every assertion below would be about the wrong thing.
+# This gate neither exports nor asserts the wrapper requirement, and does not need to: it runs with
+# dump_rows, which ends the play before any unit task, so it never reaches the rendered scripts that
+# carry the requirement. eaabbf72's message counted it among four gates that assert it; that was
+# wrong (Codex r6) — two assert it, and this is not one of them.
 # -i is REQUIRED since the table declares a run_host (mac74) that the playbook now checks against the
 # inventory: without it the play refuses the row before reaching the dump, and this gate failed for a
 # reason that has nothing to do with naming (Codex r3 on #1166 — the gate set I had been running did

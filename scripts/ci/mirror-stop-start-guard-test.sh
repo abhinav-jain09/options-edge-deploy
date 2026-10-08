@@ -104,26 +104,34 @@ export OE_MIRROR_RECEIPT=/tmp/oe-stop-start-gate-receipt
 # ---- the wrapper requirement, which is what this export is standing in for ----------------------
 # Asserted BEFORE the scenarios, so an export that silently stopped being necessary (the check
 # deleted from the templates) fails the gate rather than passing it quietly.
+# ⚠ BOTH scripts, not just stop. The first version of this checked only the rendered stop script,
+# so deleting the gate from mirror-start.sh.j2 left every start scenario green — the global export
+# below covered it (Codex r6, MAJOR). A check that covers one of two enforcement sites reports on
+# the site it looks at and says nothing about the other.
 wrapper_requirement() {
   local d; d=$(mktemp -d) || return 1
   local r=0
-  PL="$d/u.plist" LBL=L MDIR="$d/unit" render_tpl "$STOP_TPL" "127.0.0.1:19092" > "$d/stop.sh"
-  grep -q 'OE_MIRROR_RECEIPT' "$d/stop.sh" \
-    || { echo "  FAIL wrapper requirement: mirror-stop.sh.j2 no longer refuses a run without a receipt"; r=1; }
-  # and it must actually FIRE: unset, a dev stop must refuse before touching anything
-  set +e
-  out=$(env -u OE_MIRROR_RECEIPT bash "$d/stop.sh" 2>&1); rc=$?
-  set -e
-  if [ "$rc" = 0 ]; then
-    echo "  FAIL wrapper requirement: a dev stop ran with OE_MIRROR_RECEIPT unset (rc=0)"; r=1
-  elif ! grep -q 'must run through scripts/ops/install-es-mirrors.sh' <<<"$out"; then
-    echo "  FAIL wrapper requirement: the refusal did not name the wrapper (rc=$rc): $(tail -1 <<<"$out")"; r=1
-  fi
+  PL="$d/u.plist" LBL=L MDIR="$d/unit" render_tpl "$STOP_TPL"  "127.0.0.1:19092" > "$d/stop.sh"
+  PL="$d/u.plist" LBL=L MDIR="$d/unit" render_tpl "$START_TPL" "127.0.0.1:19092" > "$d/start.sh"
+  local f
+  for f in stop start; do
+    grep -q 'OE_MIRROR_RECEIPT' "$d/$f.sh" \
+      || { echo "  FAIL wrapper requirement: mirror-$f.sh.j2 no longer refuses a run without a receipt"; r=1; }
+    # and it must actually FIRE: unset, a dev run of that phase must refuse before touching anything
+    set +e
+    out=$(env -u OE_MIRROR_RECEIPT OE_OLD_PID= bash "$d/$f.sh" 2>&1); rc=$?
+    set -e
+    if [ "$rc" = 0 ]; then
+      echo "  FAIL wrapper requirement: a dev $f ran with OE_MIRROR_RECEIPT unset (rc=0)"; r=1
+    elif ! grep -q 'must run through scripts/ops/install-es-mirrors.sh' <<<"$out"; then
+      echo "  FAIL wrapper requirement ($f): the refusal did not name the wrapper (rc=$rc): $(tail -1 <<<"$out")"; r=1
+    fi
+  done
   rm -rf "$d"
   # Report the PASS as well. A function that only speaks when it fails is indistinguishable from a
   # function that never ran — the same "a check that cannot fail is not a check" trap as the
   # always-tagged receipt this requirement exists because of.
-  [ "$r" = 0 ] && echo "  ok   an install without a receipt is refused by the script itself     rc!=0"
+  [ "$r" = 0 ] && echo "  ok   stop AND start both refuse an install with no receipt          rc!=0"
   return "$r"
 }
 

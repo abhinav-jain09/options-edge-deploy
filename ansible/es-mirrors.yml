@@ -648,6 +648,12 @@
     # genuinely the last thing to happen. Described as "the last task" before, it in fact ran BEFORE
     # the assertion and could report units_failed=0 while the run then failed on oe_reload_failed,
     # which it did not record at all (Codex r5, MAJOR).
+    # ⚠ `always:` is NOT "every failure mode" — a correction to what I wrote last round. It runs when
+    # execution REACHES this block; it cannot run after an unreachable host, a controller kill, a
+    # connection lost during a remote mutating command, or a fatal earlier in the play. So a remote
+    # write CAN happen with no receipt, and the wrapper will then report failure for a run that
+    # mutated something. Re-run through the wrapper: its verifying re-plan reports what is actually
+    # pending, which is the only way to tell that case from a run that did nothing.
     - name: Account for the run, and write the receipt last whatever the outcome
       block:
         - name: Fail when any unit was not installable or did not reload
@@ -655,6 +661,16 @@
           # or whose reload did not prove a replacement, has not done what it was asked, and a green
           # exit would say it had. A failed RELOAD is the more serious of the two — that unit's files
           # are new on disk while its process may still be the old one.
+          #
+          # ⚠ NOT BINDING AGAINST A FORGED RUN, and this used to read as though it were. Both lists
+          # come from set_fact and the per-unit tasks are `failed_when: false`, so `-e oe_failed=[]
+          # -e oe_reload_failed=[]` outranks them and makes this assertion pass over real failures
+          # without touching Ansible's own failed= count (Codex r6). Same shape as the production
+          # lock, which is why that one lives in the rendered scripts and not in a variable.
+          # The check that a forged value cannot satisfy is the wrapper's verifying re-plan: it
+          # re-reads the unit files and live processes afterwards and refuses when any unit would
+          # still change. A caller can make this play claim success; they cannot make the units on
+          # disk match a table they do not match.
           ansible.builtin.assert:
             that:
               - (oe_failed | default([])) | length == 0
@@ -666,16 +682,22 @@
             success_msg: "{{ oe_plan | length }} unit(s) accounted for{{ ' (plan only)' if not oe_confirm else '' }}."
       always:
         - name: Write the run receipt
-          # The counters still come from play facts, which an extra var outranks, so they are a
-          # REPORT and not the proof — the proof is that this task ran at all, which only the work
-          # path reaches, plus the mandatory task banners the wrapper reads out of Ansible's own
-          # output. The wrapper cross-checks the two: a forged counter that disagrees with Ansible's
-          # recap is caught, and a narrowed run never gets here.
+          # ⚠ THESE NUMBERS ARE A REPORT, NOT PROOF, and the earlier comment here claiming the
+          # wrapper could cross-check them against Ansible's own output was wrong: task names are
+          # playbook-controlled and all task output shares one pipe, so a 12-line play forges both
+          # the banners and a plausible receipt (Codex r6, measured). Every counter comes from a
+          # set_fact and `-e oe_failed=[]` outranks a set_fact, so a determined caller can make
+          # these say anything.
+          # What the receipt is actually for: it carries the wrapper's per-run NONCE, so the wrapper
+          # can tell "this task ran in THIS invocation" from "OE_MIRROR_RECEIPT was already exported
+          # in someone's shell". The real post-install check is the wrapper's verifying re-plan,
+          # which reads the unit files and live processes instead of any text this play prints.
           when: lookup('env', 'OE_MIRROR_RECEIPT') | length > 0
           ansible.builtin.copy:
             dest: "{{ lookup('env', 'OE_MIRROR_RECEIPT') }}"
             mode: "0644"
             content: |
+              nonce={{ lookup('env', 'OE_MIRROR_NONCE') }}
               host={{ inventory_hostname }}
               connection={{ hostvars[inventory_hostname].ansible_connection | default('') }}
               target={{ oe_target }}
