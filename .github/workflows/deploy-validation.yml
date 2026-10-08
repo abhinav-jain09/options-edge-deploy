@@ -372,6 +372,30 @@ jobs:
       - name: apply-topics / cleanup-topics keep the vol-premium ledgers
         run: bash scripts/kafka/apply-topics-vol-premium-safety-test.sh
 
+      # apply-topics.sh's exit STATUS must tell "the list was reconciled except for these topics" from
+      # "the run did not complete": exit 9 plus a SKIPPED_TOPIC_NAMES line versus any other non-zero.
+      # scripts/ops/prod-clean-slate.sh acts on that difference, and on 2026-10-07 — when both were
+      # exit 1 — one drifted topic left all twelve es4->prod mirrors paused.
+      - name: apply-topics separates a skip from a failure
+        run: bash scripts/kafka/apply-topics-skip-exit-test.sh
+
+      # The sibling files apply-topics.sh sources must be copied by every test that runs it out of a
+      # temp directory. Hard-coding that list is what made TWO such tests report findings about
+      # topics.env the day apply-topics.sh gained resolve-prod-partition-overrides.sh (#1165): their
+      # copies died at `source: No such file or directory` and the durable-topic gate went red on main.
+      - name: apply-topics sibling files are derived, not hard-coded
+        run: bash scripts/kafka/apply-topics-sibling-files-test.sh
+
+      # What a partial recreate permits: mirrors start, prod does NOT come up. Every status combination
+      # is driven through the real decision function, and each rule is mutated to show it is load-bearing.
+      - name: the clean-slate recreate decision
+        run: bash scripts/ops/clean-slate-decision-test.sh
+
+      # And which mirrors may start: the per-agent half of that decision, including every way reading an
+      # agent's --whitelist can fail, each of which must be a HOLD rather than a start.
+      - name: mirror-topic-filter holds the right mirrors
+        run: bash scripts/ops/mirror-topic-filter-test.sh
+
       # The one lever that makes a declared partition count SMALLER on production, in front of two
       # scripts that must agree: apply-topics.sh accepting the live topic and verify-topics.sh not
       # then calling it "below the expected minimum". Every way it can go wrong is quiet — not

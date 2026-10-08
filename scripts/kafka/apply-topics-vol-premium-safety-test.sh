@@ -377,7 +377,15 @@ unit_cleanup() { # <src> <env> [modes, default "sweep delete-recreate retention"
 }
 
 mkcopy() { # <dir> — the three real scripts, byte for byte, beside a topics.env the caller writes
-  mkdir -p "$1" && cp "$HERE/apply-topics.sh" "$HERE/cleanup-topics.sh" "$HERE/reset-preserved-topics.sh" "$1/"
+  mkdir -p "$1" && cp "$HERE/apply-topics.sh" "$HERE/cleanup-topics.sh" "$HERE/reset-preserved-topics.sh" "$1/" \
+    || return 1
+  # ...plus every sibling apply-topics.sh sources out of its own directory. Hard-coding this list is
+  # what made all five control runs below fail to EXECUTE the day apply-topics.sh gained
+  # resolve-prod-partition-overrides.sh (#1165): the copies died at `source: No such file or directory`
+  # and the suite reported it as five findings about the vol-premium declarations. Derived from the
+  # script and fails closed. The caller overwrites topics.env afterwards, control and mutant alike.
+  local _sib
+  for _sib in $(bash "$HERE/apply-topics-sibling-files.sh"); do cp "$HERE/$_sib" "$1/" || return 1; done
 }
 
 unit_protected() { # <env> — the six removed from EVERY *TOPICS* declaration in a copy; the regex alone keeps four

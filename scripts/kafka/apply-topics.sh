@@ -357,8 +357,26 @@ alter_topic_config() {
 # underlying.es.trades.linearized, spx.drop.nowcast — were never created, and that surfaced an hour
 # later as four UNRELATED-LOOKING service crash-loops on prod with no single error pointing back
 # here. The safety property this script exists to enforce (never silently destroy a mismatched
-# topic's data) is preserved: every skip below is still reported, and the script still exits 1 at
-# the end if anything was skipped. What changes is that skipping topic N no longer skips N+1..last.
+# topic's data) is preserved: every skip below is still reported, and the script still exits NON-ZERO
+# at the end if anything was skipped. What changes is that skipping topic N no longer skips N+1..last.
+#
+# AND THE EXIT CODE SAYS WHICH OF THE TWO HAPPENED (2026-10-08). "Some topics were skipped, the rest of
+# the list was reconciled" and "this run fell over" were both exit 1, so no caller could tell them
+# apart. On 2026-10-07 scripts/ops/prod-clean-slate.sh read the skip exit as "the recreate is unusable"
+# and left all twelve es4->prod mirrors paused over ONE drifted topic that no mirror produces into.
+#
+#   exit 0                        every declared topic reconciled
+#   exit $SKIPPED_EXIT (below)    the run reached the END of the list; the named topics could not be
+#                                 reconciled and every other declared topic WAS created/updated
+#   any other non-zero            the run did NOT complete -- set -e aborted it, or a precondition
+#                                 refused it. Nothing may be inferred about the rest of the list.
+#
+# The code is only reachable from the final block, which only runs if the loop ran to completion, so
+# `set -e` keeps the third row honest: a hard failure exits with ITS status, never this one.
+# 9 is not a shell-reserved status (0, 1, 2, 126, 127, 128+n are), so it cannot collide with one.
+# Callers that only test for non-zero -- the Jenkins stages, scripts/es4/create-es-topics.sh -- are
+# unaffected: a skip is still a failure, and still fails the build.
+SKIPPED_EXIT=9
 SKIPPED_TOPICS=()
 
 for entry in $OPTIONS_EDGE_TOPICS; do
@@ -463,5 +481,9 @@ if (( ${#SKIPPED_TOPICS[@]} > 0 )); then
   echo "topic above this line WAS still created/updated — this run does not abandon the rest of the" >&2
   echo "list over one drifted topic):" >&2
   for t in "${SKIPPED_TOPICS[@]}"; do echo "  - $t" >&2; done
-  exit 1
+  # The same facts once more, parseable, on ONE line and on STDOUT: a wrapper deciding what a skip
+  # permits needs the NAMES, and the human list above carries a free-text reason in parentheses after
+  # each one. Each entry's name is its first whitespace-delimited field, which is how it is built above.
+  echo "apply-topics.sh: SKIPPED_TOPIC_NAMES:$(printf ' %s' "${SKIPPED_TOPICS[@]%% *}")"
+  exit "$SKIPPED_EXIT"
 fi

@@ -167,6 +167,13 @@ done
 echo "4. the test can fail: WITHOUT the declaration the same drift deletes and recreates the log"
 MUT="$WORK/mutant"; mkdir -p "$MUT"
 cp "$HERE/apply-topics.sh" "$MUT/"
+# ...with every sibling apply-topics.sh sources out of its own directory. Copying only the script left
+# the production+default-TOPIC_SET run dying at `source resolve-prod-partition-overrides.sh: No such
+# file or directory` (#1165), and case 4 reported that as "the mutant did not delete — the test is not
+# sensitive to the declaration". The list is derived from apply-topics.sh, so a future sibling needs no
+# edit here; it fails closed, so a parse that finds nothing stops the test instead of under-copying.
+# topics.env is one of those siblings and is deliberately copied BEFORE the mutated one is written below.
+for _sib in $(bash "$HERE/apply-topics-sibling-files.sh"); do cp "$HERE/$_sib" "$MUT/"; done
 # Position-independent: the strike token is removed wherever it sits in the list. The first form was anchored on
 # the closing quote, so it only matched while strike was the LAST entry — it stopped matching the day the
 # vol-premium ledgers were appended after it, and the guard below is what caught that.

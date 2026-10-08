@@ -1,0 +1,161 @@
+#!/usr/bin/env bash
+# The recreate decision, driven exhaustively, plus the wiring that makes prod-clean-slate.sh obey it.
+#
+# The rules live in ONE function (scripts/ops/clean-slate-decision.sh) and this drives that function,
+# so there is no second copy of the table to agree with. What the structural half asserts is only what
+# a function cannot: that the operator script reads DECISION_RESUME before starting a mirror, passes
+# DECISION_HOLD, and reaches the bring-up only through DECISION_BRINGUP.
+set -uo pipefail
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+D="$HERE/clean-slate-decision.sh"
+CS="$HERE/prod-clean-slate.sh"
+fails=0
+ok()  { printf '  ok   %s\n' "$1"; }
+bad() { printf '  FAIL %s\n' "$1"; fails=$((fails+1)); }
+WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
+
+for f in "$D" "$CS"; do [ -r "$f" ] || { echo "FAIL: $f missing" >&2; exit 1; }; done
+
+# decide <apply> <ensure> <skipped> <missing> -> "verdict=... resume=... bringup=... exit=... hold=..."
+decide() { bash "$D" "$1" "$2" "$3" "$4" 2>&1; }
+expect() { # <label> <apply> <ensure> <skipped> <missing> <expected-line>
+  local got; got="$(decide "$2" "$3" "$4" "$5")"
+  [ "$got" = "$6" ] && ok "$1" || bad "$1: got [$got] want [$6]"
+}
+
+echo "1. the rules, every arm"
+expect "full success resumes everything and brings up" \
+  0 0 "" "" "verdict=OK resume=yes bringup=yes exit=0 hold="
+expect "a MISSING topic is held even on a full success (auto-create would make it at the broker default)" \
+  0 0 "" "es.futures.cvd.bars" "verdict=OK resume=yes bringup=yes exit=0 hold=es.futures.cvd.bars"
+expect "a partial apply resumes the mirrors but NEVER brings up" \
+  9 0 "options.spx.strike-invasion.current" "" \
+  "verdict=PARTIAL resume=yes bringup=no exit=9 hold=options.spx.strike-invasion.current"
+expect "partial holds the skipped AND the missing topics" \
+  9 0 "a.topic" "b.topic" "verdict=PARTIAL resume=yes bringup=no exit=9 hold=a.topic b.topic"
+expect "exit 9 with no names is a FAILURE, not a partial success" \
+  9 0 "" "" "verdict=FAIL resume=no bringup=no exit=9 hold="
+expect "exit 9 plus a failed partition-only step is a FAILURE" \
+  9 1 "a.topic" "" "verdict=FAIL resume=no bringup=no exit=9 hold="
+expect "a failed partition-only step alone fails, and keeps ITS status" \
+  0 3 "" "" "verdict=FAIL resume=no bringup=no exit=3 hold="
+expect "any other apply status fails and keeps ITS status" \
+  2 0 "" "" "verdict=FAIL resume=no bringup=no exit=2 hold="
+expect "exit 1 (the pre-2026-10-08 everything) still fails closed" \
+  1 0 "x" "y" "verdict=FAIL resume=no bringup=no exit=1 hold="
+expect "an empty status is a FAILURE, not an error" \
+  "" 0 "" "" "verdict=FAIL resume=no bringup=no exit=1 hold="
+expect "a non-numeric status is a FAILURE" \
+  abc 0 "" "" "verdict=FAIL resume=no bringup=no exit=1 hold="
+expect "a non-numeric ensure status is a FAILURE" \
+  0 "x7" "" "" "verdict=FAIL resume=no bringup=no exit=1 hold="
+expect "whitespace-only names do not make a partial success" \
+  9 0 "   " "" "verdict=FAIL resume=no bringup=no exit=9 hold="
+expect "the hold set is a SET: duplicates and extra whitespace collapse" \
+  9 0 "a.topic  a.topic" " b.topic  a.topic " "verdict=PARTIAL resume=yes bringup=no exit=9 hold=a.topic b.topic"
+
+echo "2. no input makes it both resume and refuse, or bring up without resuming"
+# An exhaustive sweep over the statuses that matter, so a future arm cannot contradict the two
+# invariants the operator script depends on.
+for a in 0 1 2 9 127 "" zz; do for e in 0 1 9 "" zz; do for sk in "" "t.one"; do for ms in "" "t.two"; do
+  line="$(decide "$a" "$e" "$sk" "$ms")"
+  v="${line#verdict=}"; v="${v%% *}"
+  r=$(printf '%s' "$line" | sed -n 's/.*resume=\([a-z]*\).*/\1/p')
+  b=$(printf '%s' "$line" | sed -n 's/.*bringup=\([a-z]*\).*/\1/p')
+  h="${line#*hold=}"
+  case "$v" in OK|PARTIAL|FAIL) ;; *) bad "apply=$a ensure=$e: verdict '$v' is not one of OK/PARTIAL/FAIL"; continue ;; esac
+  [ "$b" = yes ] && [ "$r" != yes ] && bad "apply=$a ensure=$e: brings up without resuming"
+  [ "$v" = FAIL ] && [ "$r" = yes ] && bad "apply=$a ensure=$e: FAIL that resumes"
+  [ "$v" = FAIL ] && [ -n "$h" ] && bad "apply=$a ensure=$e: FAIL with a non-empty hold set ($h)"
+  [ "$v" = PARTIAL ] && [ "$b" = yes ] && bad "apply=$a ensure=$e: PARTIAL that brings up"
+  [ "$v" = OK ] && [ "$(printf '%s' "$line" | sed -n 's/.*exit=\([0-9]*\).*/\1/p')" != 0 ] && bad "apply=$a ensure=$e: OK with a non-zero exit"
+done; done; done; done
+ok "the sweep found no self-contradicting verdict (140 input combinations)"
+
+echo "3. prod-clean-slate.sh obeys the decision"
+code="$(sed 's/#.*//' "$CS")"          # comments stripped: a rule described in prose is not a rule
+lineof() { printf '%s\n' "$code" | grep -n -- "$1" | head -1 | cut -d: -f1; }
+printf '%s' "$code" | grep -q 'clean_slate_decide "\$ARC" "\$ERC" "\$SKIPPED_NAMES" "\$MISSING"' \
+  && ok "it calls the decision with the apply status, the ensure status, the skipped names and the missing names" \
+  || bad "it does not call clean_slate_decide with all four inputs"
+printf '%s' "$code" | grep -q '\. "\$DEPLOY_SRC/scripts/ops/clean-slate-decision.sh"' \
+  && ok "and sources it from DEPLOY_SRC" || bad "it does not source clean-slate-decision.sh from DEPLOY_SRC"
+printf '%s' "$code" | grep -q 'resume_mirrors \$DECISION_HOLD' \
+  && ok "it passes DECISION_HOLD to resume_mirrors" || bad "resume_mirrors is not given DECISION_HOLD"
+printf '%s' "$code" | grep -qE '\[ "\$DECISION_RESUME" = yes \]' \
+  && ok "and starts no mirror unless DECISION_RESUME is yes" || bad "the resume is not gated on DECISION_RESUME"
+printf '%s' "$code" | grep -qE '\[ "\$DECISION_BRINGUP" != yes \]' \
+  && ok "and reaches the bring-up only through DECISION_BRINGUP" || bad "the bring-up is not gated on DECISION_BRINGUP"
+# ORDER: the bring-up gate must come BEFORE the only thing that brings prod up.
+lb="$(lineof 'DECISION_BRINGUP')"; lu="$(lineof 'oe-boot-bringup')"
+if [ -n "$lb" ] && [ -n "$lu" ] && [ "$lb" -lt "$lu" ]; then ok "the bring-up gate precedes oe-boot-bringup ($lb < $lu)"
+else bad "the bring-up gate does not precede oe-boot-bringup (gate=$lb bringup=$lu)"; fi
+# ...and apply-topics.sh and ensure-partition-only-topics.sh are no longer one `&&` behind one status.
+printf '%s' "$code" | grep -q 'ARC=\$?' && printf '%s' "$code" | grep -q 'ERC=\${PIPESTATUS\[0\]}' \
+  && ok "the two recreate steps keep separate statuses" || bad "the recreate statuses are not captured separately"
+printf '%s' "$code" | grep -q 'apply-topics.sh ) *> *"\$APPLY_OUT"' \
+  && ok "apply-topics.sh's own output is captured (the SKIPPED_TOPIC_NAMES line is read from it)" \
+  || bad "apply-topics.sh's output is not captured to a file"
+printf '%s' "$code" | grep -q "SKIPPED_TOPIC_NAMES" \
+  && ok "and the skipped names are parsed out of it" || bad "nothing parses SKIPPED_TOPIC_NAMES"
+
+echo "4. the skip status is the SAME number apply-topics.sh exits with"
+# Two files hold the number 9: apply-topics.sh's SKIPPED_EXIT and the PARTIAL arm here. Changing one
+# alone would turn every partial recreate back into a FAIL (mirrors held) with nothing saying why, so
+# the decision is driven with apply-topics.sh's OWN value rather than a literal.
+AT="$HERE/apply-topics.sh"
+[ -r "$AT" ] || AT="$HERE/../kafka/apply-topics.sh"
+SKIP_EXIT="$(sed -nE 's/^SKIPPED_EXIT=([0-9]+).*/\1/p' "$AT" | head -1)"
+if [ -n "$SKIP_EXIT" ]; then
+  ok "apply-topics.sh declares SKIPPED_EXIT=$SKIP_EXIT"
+  got="$(decide "$SKIP_EXIT" 0 "a.topic" "")"
+  case "$got" in verdict=PARTIAL*) ok "the decision reads that status as PARTIAL" ;;
+    *) bad "apply-topics.sh exits $SKIP_EXIT on a skip but the decision answers [$got]" ;; esac
+  printf '%s' "$code" | grep -qE "\[ \"\\\$ARC\" -eq $SKIP_EXIT \]" \
+    && ok "and prod-clean-slate.sh gates ensure-partition-only-topics on the same number" \
+    || bad "prod-clean-slate.sh does not use $SKIP_EXIT where apply-topics.sh exits it"
+else
+  bad "could not read SKIPPED_EXIT out of $AT — apply-topics.sh and this decision can now drift"
+fi
+
+echo "5. MUTATIONS: each rule above is load-bearing"
+run_mut() { # <label> <sed-free python edit> <apply> <ensure> <skipped> <missing> <must-NOT-equal>
+  local label="$1" edit="$2" a="$3" e="$4" sk="$5" ms="$6" forbidden="$7"
+  local dir="$WORK/m$RANDOM"; mkdir -p "$dir"; cp "$D" "$dir/d.sh"
+  python3 - "$dir/d.sh" "$edit" <<'PY'
+import sys
+path, edit = sys.argv[1], sys.argv[2]
+src = open(path).read()
+old, new = edit.split("||", 1)
+assert old in src, "the mutation did not apply: %r is not in the file" % old
+open(path, "w").write(src.replace(old, new, 1))
+PY
+  [ $? -eq 0 ] || { bad "$label: the mutation did not apply"; return; }
+  local got; got="$(bash "$dir/d.sh" "$a" "$e" "$sk" "$ms" 2>&1)"
+  if [ "$got" = "$forbidden" ]; then bad "$label: the mutant still answers [$got] — the rule is not tested"
+  else ok "$label (mutant answers [$got])"; fi
+}
+# Drop the "names must be non-empty" condition: exit 9 with no names would become a partial success.
+run_mut "the no-names refusal is load-bearing" \
+  '[ -n "$(_cs_norm "$skipped")" ]||[ -z "$(_cs_norm "$skipped")" ]' \
+  9 0 "" "" "verdict=FAIL resume=no bringup=no exit=9 hold="
+# Let PARTIAL bring prod up: the owner rule would be gone.
+run_mut "PARTIAL must not bring up" \
+  'DECISION_VERDICT=PARTIAL; DECISION_RESUME=yes; DECISION_BRINGUP=no||DECISION_VERDICT=PARTIAL; DECISION_RESUME=yes; DECISION_BRINGUP=yes' \
+  9 0 "a.topic" "" "verdict=PARTIAL resume=yes bringup=no exit=9 hold=a.topic"
+# Stop holding the missing topics on a full success: auto-create could remake one at 1 partition.
+run_mut "MISSING topics are held on a full success" \
+  'DECISION_HOLD="$(_cs_norm "$missing")"||DECISION_HOLD=""' \
+  0 0 "" "es.futures.cvd.bars" "verdict=OK resume=yes bringup=yes exit=0 hold=es.futures.cvd.bars"
+# Stop holding the skipped ones under PARTIAL: a mirror would produce into a wrong-shaped topic.
+run_mut "SKIPPED topics are held under PARTIAL" \
+  'DECISION_HOLD="$(_cs_norm "$skipped $missing")"||DECISION_HOLD="$(_cs_norm "$missing")"' \
+  9 0 "a.topic" "" "verdict=PARTIAL resume=yes bringup=no exit=9 hold=a.topic"
+# Treat a non-numeric status as a success.
+run_mut "a non-numeric status fails closed" \
+  "case \"\$arc\" in ''|*[!0-9]*) DECISION_EXIT=1; _cs_emit; return 0 ;; esac||case \"\$arc\" in ''|*[!0-9]*) DECISION_VERDICT=OK; DECISION_RESUME=yes; DECISION_BRINGUP=yes; DECISION_EXIT=0; _cs_emit; return 0 ;; esac" \
+  abc 0 "" "" "verdict=FAIL resume=no bringup=no exit=1 hold="
+
+echo
+if [ "$fails" -eq 0 ]; then echo "=== clean-slate-decision: OK ==="; exit 0; fi
+echo "=== clean-slate-decision: $fails problem(s) ===" >&2; exit 1
