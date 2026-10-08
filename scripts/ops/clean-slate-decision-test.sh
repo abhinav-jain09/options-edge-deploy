@@ -225,8 +225,16 @@ if [ -n "$lg" ] && [ -n "$lw2" ] && [ "$lg" -lt "$lw2" ]; then
 else
   bad "the pre-wipe census does not precede the wipe (census=$lg wipe=$lw2)"
 fi
-printf '%s' "$code" | grep -A4 'LIVE_NOW="\$(loaded_mirror_agents_for "\$PROD_BS")"' | grep -q 'exit 1' \
-  && ok "and a failure or a loaded agent there exits instead of wiping" || bad "the pre-wipe census does not stop the run"
+# The two arms are asserted SEPARATELY. A window of lines after the census call matches the FIRST arm's
+# exit, so deleting the loaded-agent arm's exit would have left this green while the wipe went ahead on a
+# live mirror (deploy Codex round 13 — the seventh assertion in this branch found accepting more than it
+# named).
+printf '%s' "$code" | grep -A2 'could not establish which mirrors are loaded immediately before the wipe' | grep -q 'exit 1' \
+  && ok "a census that cannot run immediately before the wipe exits instead of wiping" \
+  || bad "the pre-wipe census failure does not stop the run"
+printf '%s' "$code" | grep -A2 'it would produce into the topics this step deletes' | grep -q 'exit 1' \
+  && ok "and a LOADED mirror found there exits too (its own arm, not the other one's exit)" \
+  || bad "a loaded mirror found immediately before the wipe does not stop the run"
 printf '%s' "$code" | grep -q '\. "\$DEPLOY_SRC/scripts/ops/loaded-mirror-agents.sh"' \
   && ok "and that helper is sourced from DEPLOY_SRC like the others" || bad "loaded-mirror-agents.sh is not sourced"
 printf '%s' "$code" | grep -q 'pause_mirrors || {' \
