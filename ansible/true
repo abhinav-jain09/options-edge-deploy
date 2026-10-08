@@ -1,0 +1,308 @@
+[
+    {
+        "assert_source": {
+            "parts": 1,
+            "policy": "delete",
+            "retention": "-1"
+        },
+        "assert_target": {
+            "parts": 1,
+            "policy": "delete",
+            "retention": "-1"
+        },
+        "commit_interval": "",
+        "group_id": "es-cvd-mirror-127.0.0.1-es.futures.cvd.bars",
+        "isolation_level": "read_committed",
+        "label": "com.optionsedge.es-cvd-mirror-127-0-0-1-19092-es-futures-cvd-bars",
+        "mdir": "/Users/abhinav/oe-ops/es-cvd-mirror-127-0-0-1-19092-es-futures-cvd-bars",
+        "offset_reset": "earliest",
+        "pipeline": "es-cvd-mirror",
+        "plist": "/Users/abhinav/Library/LaunchAgents/com.optionsedge.es-cvd-mirror-127-0-0-1-19092-es-futures-cvd-bars.plist",
+        "prod_only": false,
+        "run_host": "localhost",
+        "source": "192.168.100.4:9092",
+        "target": "127.0.0.1:19092",
+        "topic": "es.futures.cvd.bars"
+    },
+    {
+        "assert_source": {
+            "parts": 1,
+            "policy": "delete",
+            "retention": "43200000"
+        },
+        "assert_target": {
+            "parts": 1,
+            "policy": "delete",
+            "retention": "43200000"
+        },
+        "commit_interval": "",
+        "group_id": "es-cvd-mirror-127.0.0.1-es.futures.cvd",
+        "isolation_level": "read_committed",
+        "label": "com.optionsedge.es-cvd-mirror-127-0-0-1-19092-es-futures-cvd",
+        "mdir": "/Users/abhinav/oe-ops/es-cvd-mirror-127-0-0-1-19092-es-futures-cvd",
+        "offset_reset": "earliest",
+        "pipeline": "es-cvd-mirror",
+        "plist": "/Users/abhinav/Library/LaunchAgents/com.optionsedge.es-cvd-mirror-127-0-0-1-19092-es-futures-cvd.plist",
+        "prod_only": false,
+        "run_host": "localhost",
+        "source": "192.168.100.4:9092",
+        "target": "127.0.0.1:19092",
+        "topic": "es.futures.cvd"
+    },
+    {
+        "assert_source": {
+            "parts": 1,
+            "policy": "delete",
+            "retention": "-1"
+        },
+        "assert_target": {
+            "parts": 1,
+            "policy": "delete",
+            "retention": "-1"
+        },
+        "commit_interval": "",
+        "group_id": "es-cvd-mirror-127.0.0.1-es.futures.footprint.bars",
+        "isolation_level": "read_committed",
+        "label": "com.optionsedge.es-cvd-mirror-127-0-0-1-19092-es-futures-footprint-bars",
+        "mdir": "/Users/abhinav/oe-ops/es-cvd-mirror-127-0-0-1-19092-es-futures-footprint-bars",
+        "offset_reset": "earliest",
+        "pipeline": "es-cvd-mirror",
+        "plist": "/Users/abhinav/Library/LaunchAgents/com.optionsedge.es-cvd-mirror-127-0-0-1-19092-es-futures-footprint-bars.plist",
+        "prod_only": false,
+        "run_host": "localhost",
+        "source": "192.168.100.4:9092",
+        "target": "127.0.0.1:19092",
+        "topic": "es.futures.footprint.bars"
+    },
+    {
+        "assert_source": {
+            "parts": 1,
+            "policy": "delete",
+            "retention": "-1"
+        },
+        "assert_target": {
+            "parts": 1,
+            "policy": "delete",
+            "retention": "-1"
+        },
+        "commit_interval": "",
+        "group_id": "es-cvd-mirror-127.0.0.1-es.futures.footprint.outcomes",
+        "isolation_level": "read_committed",
+        "label": "com.optionsedge.es-cvd-mirror-127-0-0-1-19092-es-futures-footprint-outcomes",
+        "mdir": "/Users/abhinav/oe-ops/es-cvd-mirror-127-0-0-1-19092-es-futures-footprint-outcomes",
+        "offset_reset": "earliest",
+        "pipeline": "es-cvd-mirror",
+        "plist": "/Users/abhinav/Library/LaunchAgents/com.optionsedge.es-cvd-mirror-127-0-0-1-19092-es-futures-footprint-outcomes.plist",
+        "prod_only": false,
+        "run_host": "localhost",
+        "source": "192.168.100.4:9092",
+        "target": "127.0.0.1:19092",
+        "topic": "es.futures.footprint.outcomes"
+    },
+    {
+        "assert_source": {
+            "parts": 1,
+            "policy": "delete",
+            "retention": "43200000"
+        },
+        "assert_target": {
+            "parts": 1,
+            "policy": "delete",
+            "retention": "43200000"
+        },
+        "commit_interval": "",
+        "group_id": "es-cvd-mirror-127.0.0.1-es.futures.footprint",
+        "isolation_level": "read_committed",
+        "label": "com.optionsedge.es-cvd-mirror-127-0-0-1-19092-es-futures-footprint",
+        "mdir": "/Users/abhinav/oe-ops/es-cvd-mirror-127-0-0-1-19092-es-futures-footprint",
+        "offset_reset": "earliest",
+        "pipeline": "es-cvd-mirror",
+        "plist": "/Users/abhinav/Library/LaunchAgents/com.optionsedge.es-cvd-mirror-127-0-0-1-19092-es-futures-footprint.plist",
+        "prod_only": false,
+        "run_host": "localhost",
+        "source": "192.168.100.4:9092",
+        "target": "127.0.0.1:19092",
+        "topic": "es.futures.footprint"
+    },
+    {
+        "assert_source": {
+            "parts": 1,
+            "policy": "delete",
+            "retention": "43200000"
+        },
+        "assert_target": {
+            "parts": 1,
+            "policy": "delete",
+            "retention": "43200000"
+        },
+        "commit_interval": "",
+        "group_id": "es-cvd-mirror-127.0.0.1-es.futures.footprint.evidence",
+        "isolation_level": "read_committed",
+        "label": "com.optionsedge.es-cvd-mirror-127-0-0-1-19092-es-futures-footprint-evidence",
+        "mdir": "/Users/abhinav/oe-ops/es-cvd-mirror-127-0-0-1-19092-es-futures-footprint-evidence",
+        "offset_reset": "earliest",
+        "pipeline": "es-cvd-mirror",
+        "plist": "/Users/abhinav/Library/LaunchAgents/com.optionsedge.es-cvd-mirror-127-0-0-1-19092-es-futures-footprint-evidence.plist",
+        "prod_only": false,
+        "run_host": "localhost",
+        "source": "192.168.100.4:9092",
+        "target": "127.0.0.1:19092",
+        "topic": "es.futures.footprint.evidence"
+    },
+    {
+        "assert_source": {
+            "bytes": "-1",
+            "parts": 1,
+            "policy": "delete",
+            "retention": "-1"
+        },
+        "assert_target": {
+            "bytes": "-1",
+            "parts": 1,
+            "policy": "delete",
+            "retention": "-1"
+        },
+        "commit_interval": "",
+        "group_id": "es-cvd-mirror-127.0.0.1-es.futures.footprint.strike",
+        "isolation_level": "read_committed",
+        "label": "com.optionsedge.es-cvd-mirror-127-0-0-1-19092-es-futures-footprint-strike",
+        "mdir": "/Users/abhinav/oe-ops/es-cvd-mirror-127-0-0-1-19092-es-futures-footprint-strike",
+        "offset_reset": "earliest",
+        "pipeline": "es-cvd-mirror",
+        "plist": "/Users/abhinav/Library/LaunchAgents/com.optionsedge.es-cvd-mirror-127-0-0-1-19092-es-futures-footprint-strike.plist",
+        "prod_only": false,
+        "run_host": "localhost",
+        "source": "192.168.100.4:9092",
+        "target": "127.0.0.1:19092",
+        "topic": "es.futures.footprint.strike"
+    },
+    {
+        "assert_source": {},
+        "assert_target": {
+            "not_compacted": true,
+            "parts": 1
+        },
+        "commit_interval": "",
+        "group_id": "es-indicator-mirror-127.0.0.1-es.options.indicators.snapshot.current",
+        "isolation_level": "",
+        "label": "com.optionsedge.es-indicator-mirror-127-0-0-1-19092-es-options-indicators-snapshot-current",
+        "mdir": "/Users/abhinav/oe-ops/es-indicator-mirror-127-0-0-1-19092-es-options-indicators-snapshot-current",
+        "offset_reset": "latest",
+        "pipeline": "es-indicator-mirror",
+        "plist": "/Users/abhinav/Library/LaunchAgents/com.optionsedge.es-indicator-mirror-127-0-0-1-19092-es-options-indicators-snapshot-current.plist",
+        "prod_only": false,
+        "run_host": "localhost",
+        "source": "192.168.100.4:9092",
+        "target": "127.0.0.1:19092",
+        "topic": "es.options.indicators.snapshot.current"
+    },
+    {
+        "assert_source": {},
+        "assert_target": {
+            "not_compacted": true,
+            "parts": 8
+        },
+        "commit_interval": "",
+        "group_id": "es-indicator-mirror-127.0.0.1-es.options.indicators.bars",
+        "isolation_level": "",
+        "label": "com.optionsedge.es-indicator-mirror-127-0-0-1-19092-es-options-indicators-bars",
+        "mdir": "/Users/abhinav/oe-ops/es-indicator-mirror-127-0-0-1-19092-es-options-indicators-bars",
+        "offset_reset": "latest",
+        "pipeline": "es-indicator-mirror",
+        "plist": "/Users/abhinav/Library/LaunchAgents/com.optionsedge.es-indicator-mirror-127-0-0-1-19092-es-options-indicators-bars.plist",
+        "prod_only": false,
+        "run_host": "localhost",
+        "source": "192.168.100.4:9092",
+        "target": "127.0.0.1:19092",
+        "topic": "es.options.indicators.bars"
+    },
+    {
+        "assert_source": {
+            "parts": 1,
+            "policy": "delete",
+            "retention": "604800000"
+        },
+        "assert_target": {
+            "parts": 1,
+            "policy": "delete",
+            "retention": "604800000"
+        },
+        "commit_interval": 5000,
+        "group_id": "es-auction-mirror-127.0.0.1-19092-es.futures.auction",
+        "isolation_level": "",
+        "label": "com.optionsedge.es-auction-mirror-127-0-0-1-19092-es-futures-auction",
+        "mdir": "/Users/abhinav/oe-ops/es-auction-mirror-127-0-0-1-19092-es-futures-auction",
+        "offset_reset": "earliest",
+        "pipeline": "es-auction-mirror",
+        "plist": "/Users/abhinav/Library/LaunchAgents/com.optionsedge.es-auction-mirror-127-0-0-1-19092-es-futures-auction.plist",
+        "prod_only": false,
+        "run_host": "localhost",
+        "source": "192.168.100.4:9092",
+        "target": "127.0.0.1:19092",
+        "topic": "es.futures.auction"
+    },
+    {
+        "assert_source": {
+            "parts": 1,
+            "policy": "delete",
+            "retention": "-1"
+        },
+        "assert_target": {
+            "parts": 1,
+            "policy": "delete",
+            "retention": "-1"
+        },
+        "commit_interval": 5000,
+        "group_id": "es-tape-zones-mirror-127.0.0.1-19092-es.tape-zones.board",
+        "isolation_level": "",
+        "label": "com.optionsedge.es-tape-zones-mirror-127-0-0-1-19092-es-tape-zones-board",
+        "mdir": "/Users/abhinav/oe-ops/es-tape-zones-mirror-127-0-0-1-19092-es-tape-zones-board",
+        "offset_reset": "earliest",
+        "pipeline": "es-tape-zones-mirror",
+        "plist": "/Users/abhinav/Library/LaunchAgents/com.optionsedge.es-tape-zones-mirror-127-0-0-1-19092-es-tape-zones-board.plist",
+        "prod_only": false,
+        "run_host": "localhost",
+        "source": "192.168.100.4:9092",
+        "target": "127.0.0.1:19092",
+        "topic": "es.tape-zones.board"
+    },
+    {
+        "assert_source": {
+            "parts": 1
+        },
+        "assert_target": {
+            "parts": 1,
+            "policy_contains": "compact"
+        },
+        "commit_interval": "",
+        "group_id": "es-futures-flow-mirror-127.0.0.1",
+        "isolation_level": "",
+        "label": "com.optionsedge.es-futures-flow-mirror-127-0-0-1-19092",
+        "mdir": "/Users/abhinav/oe-ops/es-futures-flow-mirror-127-0-0-1-19092",
+        "offset_reset": "latest",
+        "pipeline": "es-futures-flow-mirror",
+        "plist": "/Users/abhinav/Library/LaunchAgents/com.optionsedge.es-futures-flow-mirror-127-0-0-1-19092.plist",
+        "prod_only": false,
+        "run_host": "localhost",
+        "source": "192.168.100.4:9092",
+        "target": "127.0.0.1:19092",
+        "topic": "es.futures.aggressor-flow"
+    },
+    {
+        "assert_source": {},
+        "assert_target": {},
+        "commit_interval": "",
+        "group_id": "es-strike-intel-mirror-127.0.0.1",
+        "isolation_level": "",
+        "label": "com.optionsedge.es-strike-intel-mirror-127-0-0-1-19092",
+        "mdir": "/Users/abhinav/oe-ops/es-strike-intel-mirror-127-0-0-1-19092",
+        "offset_reset": "latest",
+        "pipeline": "es-strike-intel-mirror",
+        "plist": "/Users/abhinav/Library/LaunchAgents/com.optionsedge.es-strike-intel-mirror-127-0-0-1-19092.plist",
+        "prod_only": false,
+        "run_host": "localhost",
+        "source": "192.168.100.4:9092",
+        "target": "127.0.0.1:19092",
+        "topic": "es.strike-intelligence-by-strike"
+    }
+]

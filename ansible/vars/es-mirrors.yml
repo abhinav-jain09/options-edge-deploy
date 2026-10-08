@@ -146,9 +146,10 @@ mirror_units:
   # and it is the open question on this lane. The asserts below record the counts that EXIST; they do
   # not endorse the asymmetry.
   #
-  # outcome-scored carries NO target assert: on prod its cleanup.policy and retention.ms exist only
-  # as broker defaults, which this system reads as unset, and an assert on an unset value is a
-  # guaranteed failure. Declaring nothing is honest; declaring a default would be a lie that passes.
+  # outcome-scored asserts the target's PARTITION COUNT but not its policy/retention: on prod those
+  # two exist only as broker defaults, which this system reads as unset, and an assert on an unset
+  # value is a guaranteed failure. Declaring a default would be a lie that passes; declaring nothing
+  # at all — my first draft — threw away the partition check, which a different reader can make.
   - pipeline: dl-mirror
     # The unit runs on .74, not on the controller. The play installs only the rows whose run_host is
     # the host it is executing on, and REPORTS the rest rather than silently dropping them — so the
@@ -171,4 +172,10 @@ mirror_units:
       - name: dealer-ledger-signal-fired
         assert: { source: {parts: 4, policy: delete, retention: "-1"},       target: {parts: 32, policy: delete, retention: "-1"} }
       - name: dealer-ledger-outcome-scored
-        assert: { source: {parts: 8, policy: delete, retention: "-1"} }
+        # Target PARTS is asserted; target policy/retention deliberately are NOT (Codex on #1166, P1).
+        # The two come from different readers: parts from `kafka-topics --describe`, which reports the
+        # real count, and policy/retention from the dynamic-config reader, which on prod returns
+        # nothing for this topic because both exist only as broker defaults — and this system reads an
+        # unset dynamic config as unset, so asserting them is a guaranteed failure. My first draft
+        # asserted nothing at all for the target, which was lazier than the readers require.
+        assert: { source: {parts: 8, policy: delete, retention: "-1"}, target: {parts: 32} }

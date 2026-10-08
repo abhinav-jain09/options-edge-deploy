@@ -43,8 +43,13 @@
 # executable, an absent file, an absent process, or a process OLDER than any of those files — MirrorMaker reads its
 # config once, at startup, so a rewritten file under an older process still runs the old settings.
 - name: Install the es4 -> environment MirrorMaker-1 units
-  hosts: localhost
-  connection: local
+  # ⚠ hosts is the RUN HOST, not always localhost (Codex on #1166, P0). Until this was a variable the
+  # play was `hosts: localhost, connection: local` and `mirror_run_host` only SELECTED rows while
+  # Ansible still executed here — so a row declaring run_host: mac74 could never be installed on .74
+  # and the "installs only from a play running ON its run_host" claim was false. The connection comes
+  # from the inventory now (localhost carries ansible_connection: local) rather than being pinned
+  # here, which is what let the play claim a remote target it could not reach.
+  hosts: "{{ mirror_run_host | default('localhost') }}"
   gather_facts: false
 
   vars_files:
@@ -55,9 +60,14 @@
     oe_source_port: "{{ mirror_source_port | default('9092') }}"
     oe_target_ip: "{{ mirror_target_ip | default('127.0.0.1') }}"
     oe_target_port: "{{ mirror_target_port | default('19092') }}"
-    oe_kbin: "{{ kafka_bin | default('/Users/abhinav/development/confluent-7.3.1/bin') }}"
-    oe_ops: "{{ ops_dir | default(lookup('env', 'HOME') ~ '/oe-ops') }}"
-    oe_agents: "{{ launch_agents_dir | default(lookup('env', 'HOME') ~ '/Library/LaunchAgents') }}"
+    # lookup('env','HOME') reads the CONTROLLER's environment even when the play targets another
+    # machine, so every unit path would have been written with /Users/abhinav on a host whose home is
+    # /Users/rajuljain. The inventory carries oe_home per host; the lookup remains the fallback, which
+    # is correct for localhost and is what every existing es4 row still resolves through.
+    oe_home: "{{ hostvars[inventory_hostname].oe_home | default(lookup('env', 'HOME')) }}"
+    oe_kbin: "{{ kafka_bin | default(hostvars[inventory_hostname].oe_kafka_bin | default('/Users/abhinav/development/confluent-7.3.1/bin')) }}"
+    oe_ops: "{{ ops_dir | default(oe_home ~ '/oe-ops') }}"
+    oe_agents: "{{ launch_agents_dir | default(oe_home ~ '/Library/LaunchAgents') }}"
     oe_confirm: "{{ confirm_mirror_install | default(false) | bool }}"
     oe_allow_new_group: "{{ allow_new_consumer_group | default(false) | bool }}"
     oe_only: "{{ (only_topics | default('')) | trim }}"
@@ -102,6 +112,23 @@
         fail_msg: >-
           source must be es4 (192.168.100.4:9092) and target must be dev ({{ oe_dev_target }})
           or prod ({{ oe_prod_target }}); got source={{ oe_source }} target={{ oe_target }}.
+
+    - name: Refuse a run_host that is not a host in the inventory
+      # The other half of the P0 above. `run_host` was a free label: a row saying `mac47` deferred
+      # forever under a SUCCESSFUL plan, so a typo looked like a deliberate deferral and the unit was
+      # never installed by anything. Checking it against the inventory turns that into a build
+      # failure naming the row. Note this also means a row for a host the caller did not supply an
+      # inventory for fails loudly rather than deferring into silence — which is the point.
+      ansible.builtin.assert:
+        that:
+          - (mirror_units | map(attribute='run_host') | map('default', 'localhost') | unique | reject('in', groups['all']) | list) | length == 0
+        fail_msg: >-
+          ansible/vars/es-mirrors.yml declares run_host value(s) that are not hosts in this
+          inventory: {{ mirror_units | map(attribute='run_host') | map('default', 'localhost')
+          | unique | reject('in', groups['all']) | list }}. Known hosts: {{ groups['all'] }}.
+          A run_host that resolves to nothing is never installed by any play and reports as a
+          deferral, so a typo is indistinguishable from a decision. Pass
+          -i ansible/inventory/oe-mirror-hosts.yml, or fix the row.
 
     - name: Refuse a path that could carry shell
       # ops_dir, launch_agents_dir and kafka_bin are operator-supplied, and they are written into
@@ -178,9 +205,16 @@
           pipeline: "{{ item.0.pipeline }}"
           topic: "{{ item.1.name }}"
           # the group.id the pipeline writes, from the RAW ip/port/topic (dots kept) — never the slug
+          # The ROW's target, not the global one (Codex on #1166, P1). This expression read
+          # oe_target_ip/oe_target_port, so dl-mirror rendered a producer for .252 while its group id
+          # said 127.0.0.1-19092 — and the group id is where the committed offsets live, so a wrong
+          # one is a NEW consumer group and an offset reset, not a cosmetic mismatch. Every es4 row is
+          # unchanged: its target_ip/target_port default to exactly these globals.
           group_id: >-
             {{ item.0.pipeline ~ '-' ~ (item.0.group_parts
-               | map('extract', {'ip': oe_target_ip, 'port': oe_target_port, 'topic': item.1.name})
+               | map('extract', {'ip': (item.0.target_ip | default(oe_target_ip)),
+                                 'port': (item.0.target_port | default(oe_target_port)),
+                                 'topic': item.1.name})
                | join('-')) }}
           offset_reset: "{{ item.0.offset_reset }}"
           commit_interval: "{{ item.0.commit_interval_ms | default('') }}"
@@ -228,13 +262,18 @@
       # silently missing from a plan is how a mirror goes unnoticed, which is the failure this whole
       # table exists to prevent.
       ansible.builtin.set_fact:
-        oe_plan: "{{ oe_env_plan | selectattr('run_host', 'equalto', oe_run_host) | list }}"
-        oe_deferred: "{{ oe_env_plan | rejectattr('run_host', 'equalto', oe_run_host) | list }}"
+        # inventory_hostname — the host this play is ACTUALLY executing on — not the operator's
+        # mirror_run_host string (Codex on #1166, P0). With the string, `-e mirror_run_host=mac47`
+        # selected a typo'd row and installed it on localhost while reporting mac47 as its
+        # destination. Resolving `hosts:` through the inventory makes a typo fail to resolve a host
+        # instead, and this comparison then cannot disagree with where the files are being written.
+        oe_plan: "{{ oe_env_plan | selectattr('run_host', 'equalto', inventory_hostname) | list }}"
+        oe_deferred: "{{ oe_env_plan | rejectattr('run_host', 'equalto', inventory_hostname) | list }}"
 
     - name: Report the plan
       ansible.builtin.debug:
         msg: >-
-          {{ oe_source }} -> {{ oe_target }} | {{ oe_plan | length }} unit(s) on {{ oe_run_host }}{{
+          {{ oe_source }} -> {{ oe_target }} | {{ oe_plan | length }} unit(s) on {{ inventory_hostname }}{{
           (", " ~ (oe_deferred | length | string) ~ " deferred to another run_host: " ~ (oe_deferred | map(attribute='label') | join(', '))) if (oe_deferred | length > 0) else "" }}
           {{ '(PLAN ONLY — pass -e confirm_mirror_install=true to install)' if not oe_confirm else '(INSTALLING)' }}
           {{ ('| held back as production-only: ' ~ (oe_held | join(', '))) if (oe_held | length > 0) else '' }}
@@ -249,6 +288,53 @@
     - name: End the play after a dump
       when: oe_dump | length > 0
       ansible.builtin.meta: end_play
+
+    - name: Find the units whose source and target partition counts differ
+      # ⚠ NOT a selectattr chain. `selectattr('assert_source.parts', 'ne', 'assert_target.parts')`
+      # compares the attribute against the literal STRING 'assert_target.parts', so it is true for
+      # every row and my first version of this gate selected all 15 units — it would have refused to
+      # install every es4 mirror. Jinja's selectattr cannot compare one attribute to another; `when`
+      # can, so the list is built here and the assert below only counts it.
+      ansible.builtin.set_fact:
+        oe_asym: "{{ (oe_asym | default([])) + [item.label] }}"
+      loop: "{{ oe_plan }}"
+      loop_control:
+        label: "{{ item.label }}"
+      when:
+        - item.assert_source.parts is defined
+        - item.assert_target.parts is defined
+        - item.assert_target.parts != 'source'
+        - (item.assert_source.parts | string) != (item.assert_target.parts | string)
+
+    - name: Refuse to INSTALL a unit whose source and target partition counts differ
+      # Codex on #1166, P1: "partition asymmetry must be demonstrated before carrying production
+      # traffic". MM1's byte-array producer plus the default partitioner remaps a NON-NULL key
+      # deterministically, so 8->32 does not inherently break per-key ordering — but that is not a
+      # safety claim: a null key, a changed key serialization or a custom partitioner each void the
+      # premise, Kafka gives no ordering across topics regardless of co-partitioning, and nothing
+      # here demonstrates that all four mirrored topics' PRODUCERS key on symbol|expiry.
+      #
+      # PLACED HERE, after the plan is computed and before anything is installed: oe_asym reads
+      # oe_plan, and my first attempt put this task near the other refusals at the top of the play
+      # where oe_plan does not exist yet — the same undefined-fact mistake I had already made once
+      # in this file.
+      #
+      # So the asymmetry cannot be enabled by prose. A plan always renders and reports it; an
+      # INSTALL of such a unit is refused until someone passes
+      # -e partition_asymmetry_demonstrated=<evidence reference>, which is a deliberate act that
+      # names where the evidence is. This is the only gate in this play that exists because a claim is
+      # unproven rather than because a value is wrong.
+      ansible.builtin.assert:
+        that:
+          - ((oe_asym | default([])) | length == 0) or ((partition_asymmetry_demonstrated | default('')) | trim | length > 0)
+        fail_msg: >-
+          refusing to install {{ (oe_asym | default([])) | length }} unit(s) whose source and target
+          partition counts differ: {{ (oe_asym | default([])) | join(', ') }}. MirrorMaker re-partitions by key, so records
+          co-partitioned at the source are redistributed at the target. That is believed harmless for
+          these topics and is NOT demonstrated. Pass
+          -e partition_asymmetry_demonstrated='<where the keyed-record evidence is>' to proceed, or
+          align the partition counts first. Planning (without confirm_mirror_install) is unaffected.
+      when: oe_confirm
 
     - name: Install each unit
       ansible.builtin.include_tasks: tasks/es-mirror-unit.yml
