@@ -45,9 +45,22 @@ refuses() { # name  override-list  want-substring
   else printf '  FAIL %-56s rc=%s out=%s\n' "$1" "$rc" "$out"; fail=1; fi
 }
 
-# ---- the live declaration ----
-expect "production resolves the declared topic to its prod count" 1 "$(count_of options.spx.strike-invasion.current)"
+# ---- the REAL declaration, whatever it holds ----
+# It is EMPTY as of 2026-10-08: the later reading of the production topic (32 partitions) makes the
+# 10-07 entry of =1 false — see topics.env for both readings and for what they do and do not
+# establish. So this does not assert a particular entry — it asserts
+# that whatever the list holds is ACCEPTABLE to the resolver, which is the property that matters: a
+# stale name or a malformed count would refuse here, in CI, instead of at the next production run.
+real=$(ENVIRONMENT=production bash -c '
+  source scripts/kafka/topics.env
+  source scripts/kafka/resolve-prod-partition-overrides.sh
+  _oe_resolve_prod_partition_overrides >/dev/null && echo accepted || echo refused' 2>&1 | tail -1)
+expect "the real override list is accepted by the resolver" accepted "$real"
 expect "a topic with no override keeps its declared count" 32 "$(count_of options.spx.strike-sr.current)"
+
+# ---- and the mechanism itself, driven synthetically ----
+expect "an override resolves a declared topic to its prod count" 1 \
+  "$(count_of options.spx.strike-invasion.current 'options.spx.strike-invasion.current=1')"
 
 # ---- dev and es4 must be untouched: the resolver is only ever called inside the production branch,
 #      so the check is that the raw declaration still says 32 and the es4 set never mentions it ----
@@ -70,6 +83,7 @@ expect "...and leaves the others alone" 32 "$(count_of options.spx.strike-invasi
 
 audit=$(ENVIRONMENT=production bash -c '
   source scripts/kafka/topics.env
+  OPTIONS_EDGE_PROD_ONLY_PARTITION_OVERRIDES="options.spx.strike-invasion.current=1"
   source scripts/kafka/resolve-prod-partition-overrides.sh
   _oe_resolve_prod_partition_overrides' 2>&1 | tail -1)
 cases=$((cases+1))
@@ -115,7 +129,10 @@ refuses "a malformed entry"                          'options.spx.strike-sr.curr
 refuses "an entry with two '='"                      'options.spx.strike-sr.current=1=2'    "more than one '='"
 refuses "an empty topic name"                        '=4'                                   'empty topic name'
 
-# ---- and now the SCRIPTS themselves, with mocked Kafka CLIs ----
+# ---- and now the SCRIPTS themselves, with mocked Kafka CLIs and a SYNTHETIC override ----
+# Nothing below reads the live cluster or the live override list: the declaration is trimmed to two
+# topics and the override is supplied by the fixture, so these cases prove the mechanism, not that any
+# particular topic is currently smaller on production.
 # The cases above read declarations and check that both scripts are wired. That is not the same as
 # running them: the override only matters if apply-topics.sh stops listing the topic as unreconciled
 # AND verify-topics.sh stops calling it "below the expected minimum" — on production, while dev and
@@ -149,7 +166,8 @@ OPTIONS_EDGE_TOPIC_RETENTION_BYTES_OVERRIDES=""
 OPTIONS_EDGE_TOPIC_DELETE_RETENTION_OVERRIDES=""
 OPTIONS_EDGE_PROD_ONLY_PARTITION_OVERRIDES="options.spx.strike-invasion.current=1 es.futures.cvd.levels=1"
 T
-  # the broker: strike-invasion.current is the real production shape (1 partition), the other is 32
+  # the broker: SYNTHETIC shapes, not a current production reading — strike-invasion.current is
+  # reported at 1 partition so the prod-smaller case has something to resolve, the other at 32
   cat > "$tmp/bin/kafka-topics" <<'K'
 #!/usr/bin/env bash
 name=""; prev=""
@@ -211,4 +229,4 @@ script_case "the es4 APPLIER never sees the override"             apply-topics.s
 script_case "the es4 VERIFIER never sees it either"               verify-topics.sh production es4 pass "TOPIC_SET='es4'" "production declaration adjusted"
 
 [ "$fail" = 0 ] || { echo "prod partition overrides: FAILED"; exit 1; }
-echo "prod partition overrides: $cases cases — the production declaration resolves and the audit line names it, dev and es4 are untouched in BOTH scripts, $refusals malformed, stale or duplicated shapes are refused, and both REAL scripts accept the topic on production while still refusing it off production"
+echo "prod partition overrides: $cases cases — the REAL override list (empty as of 2026-10-08) is accepted, the mechanism resolves a synthetic override and names it in the audit line, dev and es4 are untouched in BOTH scripts, $refusals malformed, stale or duplicated shapes are refused, and both REAL scripts accept a prod-smaller topic on production while still refusing it off production"
