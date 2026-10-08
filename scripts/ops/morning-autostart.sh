@@ -69,10 +69,12 @@ CALENDAR_DIR="${CALENDAR_DIR:-$(cd "$SCRIPT_DIR/../jenkins" 2>/dev/null && pwd |
 #   (EXPECTED_ENV=prod, and Jenkinsfile.morning-autostart offers ENVIRONMENT=['prod']), so
 #   the dev bring-up neither needed nor got a change here. See docs/oi-nowcast-retirement.md.
 #   prod-pgadmin ADDED 2026-09-15 so this set equals scripts/ops/oe-boot-bringup.sh KEEP_DOWN
+#   zerodte-research-writer ADDED 2026-10-04 (increment 9e): the dedicated v7 research writer ships at 0 and is activated ONLY by
+#   Jenkinsfile.zerodte-writer-activate (a receipt-bound identity, a writer CHECK Job, the migration exclusion lock) — never by a morning
 #   (tests/test_keep_down_lists_agree.py — change BOTH or neither). It carries no part-of label, so
 #   $SELECTOR never matches it and the entry changes nothing here; the boot bring-up, which scales
 #   every deployment at 0, is the script that needs it.
-KEEP_DOWN="${KEEP_DOWN:-hpsf-stage-a-service hpsf-stage-b-service volume-sandwich-service volume-sandwich-databento-service volume-pace-service volume-pace-databento-service strike-flow-classifier-ibkr options-edge-integration-test spx-mission-control-service short-premium-agent-service spread-skew-service spread-skew-postgres-writer directional-pressure-databento-service databento-mission-sandwich-service directional-pressure-service option-truth-engine-service ibkr-feed-service oi-shadow-service raw-to-display-service dealer-ledger-calibration-scorer dealer-ledger-calibration-accumulator vix-option-inteligence-service broker-execution-service amt-order-bridge prod-pgadmin}"
+KEEP_DOWN="${KEEP_DOWN:-hpsf-stage-a-service hpsf-stage-b-service volume-sandwich-service volume-sandwich-databento-service volume-pace-service volume-pace-databento-service strike-flow-classifier-ibkr options-edge-integration-test spx-mission-control-service short-premium-agent-service spread-skew-service spread-skew-postgres-writer directional-pressure-databento-service databento-mission-sandwich-service directional-pressure-service option-truth-engine-service ibkr-feed-service oi-shadow-service raw-to-display-service dealer-ledger-service dealer-ledger-calibration-scorer dealer-ledger-calibration-accumulator vix-option-inteligence-service broker-execution-service amt-order-bridge prod-pgadmin zerodte-research-writer}"
 
 kc()  { kubectl -n "$NS" --as="$KUBECTL_AS" "$@"; }   # impersonated (scale ops are policy-gated)
 kcr() { kubectl -n "$NS" "$@"; }                       # read-only

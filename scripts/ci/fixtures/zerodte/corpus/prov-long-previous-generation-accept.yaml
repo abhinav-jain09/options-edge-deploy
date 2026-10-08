@@ -8,6 +8,7 @@ bootstrapKind: VIRGIN
 migration: true
 previousGeneration: 9223372036854775806
 eraId: 1
+eraStartSession: "2026-10-05"
 inputs:
   - topic: options.databento.events.raw
     dependencyMode: RAW

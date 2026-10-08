@@ -429,6 +429,20 @@ jobs:
       # The wrapper's receipt contract, driven against a fake kubectl through every outcome the provisioner can print.
       - name: zerodte provision wrapper holds the receipt to the letter
         run: bash scripts/ci/zerodte-provision-receipt-test.sh
+      - name: zerodte research-migration declarations pass the Job's rules
+        run: bash scripts/ci/validate-zerodte-research-migration.sh
+      - name: zerodte research-migrate guard refuses every forbidden ref and SHA
+        run: bash scripts/ci/zerodte-research-migrate-guard-test.sh
+      - name: zerodte research-migrate wrapper holds the receipt to its canonical grammar and proves the legacy writers' quiescence from a closed world
+        run: bash scripts/ci/zerodte-research-migrate-receipt-test.sh
+      - name: zerodte research-migrate barrier is held mutual exclusion (the real service deploy against a bounded fake)
+        run: bash scripts/ci/zerodte-migrate-barrier-test.sh
+      - name: zerodte compatibility render — every overlay sets the legacy writer OFF as a literal
+        run: bash scripts/ci/zerodte-compat-flag-test.sh
+      - name: zerodte writer-activate guard refuses every forbidden ref and SHA
+        run: bash scripts/ci/zerodte-writer-activate-guard-test.sh
+      - name: zerodte writer-activate wrapper holds the WRITER_CHECK receipt to its grammar, binds it to the committed receipt and gates the one replica
+        run: bash scripts/ci/zerodte-writer-activate-receipt-test.sh
 
       # es4's clean-reset deletes the whole Kafka data dir; it must refuse while the strike archive
       # marker is short of the log end (fail closed on unreadable state, explicit opt-out only).

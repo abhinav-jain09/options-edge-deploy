@@ -5,7 +5,10 @@ What lives here is REVIEWED INPUT to the provisioning Job (`Jenkinsfile.zerodte-
 
 * `provisioning/<env>.yaml` — ONE file per environment: the desired topology and generation DECLARATION. Topics are named by Kafka
   topic NAME, never by id (ids exist only after creation and are read live by the Job). `eraId` is a reviewed positive integer (a dry run
-  must not allocate a database sequence value). A generation bump is explicit (`migration: true`, `previousGeneration`, `recreatedTopics`,
+  must not allocate a database sequence value). `eraStartSession` (inc 9 consult Q6) is the session the era starts on — the session of the
+  run, or the next session once today's has closed: the Job computes the same at the insert and REFUSES a stale value
+  (`ERA_START_SESSION_STALE`, 68) rather than moving it, so edit it to the run's session before each attempt; once inserted it is verified
+  under both unique keys on every later run (a rerun after the close is ALREADY_PROVISIONED). A generation bump is explicit (`migration: true`, `previousGeneration`, `recreatedTopics`,
   `modeChange`). Validated by `scripts/ci/validate-zerodte-provisioning.sh` with the SAME rules the Job's parser enforces.
 * `virgin-attestation.yaml` — the ONE-SHOT external VIRGIN attestation: `lineages` (an environment is a LINEAGE: a UUID minted once, with
   the OWNER's recorded approval; a clone names its parent) and append-only `entries` ({symbol, environmentLineageId, ledgerTopicId,
@@ -13,7 +16,7 @@ What lives here is REVIEWED INPUT to the provisioning Job (`Jenkinsfile.zerodte-
   the canonical TLV encoding of the COMPLETE preceding entry. `ledgerTopicId`, `clusterId` and `prevEntryHash` are written QUOTED (YAML
   would read digits as a number). The Job VERIFIES this file and never appends to it: an append is a reviewed Git change
   (`scripts/ci/validate-zerodte-attestation.sh` refuses any change that removes or alters an existing entry or lineage, or breaks the chain).
-* `provisioned/<env>.yaml` — the CONFIRMED receipt of a provisioning (generation, eraId, ledgerTopicId, clusterId, provisionedDigest),
+* `provisioned/<env>.yaml` — the CONFIRMED receipt of a provisioning (generation, eraId, eraStartSession, ledgerTopicId, clusterId, provisionedDigest),
   committed by the operator from the Job's receipt line. The runtime render of increment 8 takes `ZERO_DTE_LEDGER_TOPIC_ID_EXPECTED` and
   `ZERO_DTE_PROVISIONING_GENERATION` from it and refuses a missing or mismatched identity. Never hand-entered.
 
@@ -44,7 +47,156 @@ What lives here is REVIEWED INPUT to the provisioning Job (`Jenkinsfile.zerodte-
   declaration, and the container's exit code must AGREE with the outcome (PROVISIONABLE/PROVISIONED/ALREADY 0, CONFLICTING 66,
   ATTESTATION_REQUIRED 67, REFUSED its own `exit=`). A receipt the process disagrees with is refused.
 * The committed receipt block carries `environmentLineageId` and `bootstrapKind` as well; `validate-zerodte-provisioning.sh` binds a
-  committed `provisioned/<env>.yaml` to `provisioning/<env>.yaml` (symbol, lineage, bootstrapKind, generation, eraId must agree).
+  committed `provisioned/<env>.yaml` to `provisioning/<env>.yaml` (symbol, lineage, bootstrapKind, generation, eraId, eraStartSession must agree).
+
+## The research-store migration (increment 9c — `Jenkinsfile.zerodte-research-migrate`)
+
+Before any provisioning can complete, the research store must be at schema v7 (the provisioner refuses otherwise, `SCHEMA_VERSION`). The
+migration is the service image's own `ZeroDteResearchMigrator` (increment 9a) run as a Job (`k8s/jobs/zerodte-research-migrate-job.yaml`)
+by `scripts/ops/zerodte-research-migrate.sh` under the REVIEWED declaration `research-migration/<env>.yaml` (fromVersion 6, toVersion 7,
+the shipped calendar's version digest the image must carry, how far ahead the calendar must reach; validated by
+`scripts/ci/validate-zerodte-research-migration.sh`). ONE transaction — the typed v6 archive, the v7 DDL and views, the calendar, the
+migration record — EXECUTED AND ROLLED BACK on the dry run (its `MIGRATABLE` receipt carries the real dispositions), committed and
+verified on CONFIRM (`MIGRATED`); a rerun at v7 verifies the recorded calendar version, every calendar row and the catalog digest
+(`ALREADY_MIGRATED`) and never re-applies.
+
+The wrapper repeats every guarantee of the provisioning wrapper (the CA-pinned cluster, the atomic lock `zerodte-research-migrate-lock`,
+the same-build dry-run receipt, HEAD == PERMITTED_SHA re-checked) and holds the receipt to its CANONICAL GRAMMAR: one regular expression
+per outcome — the tokens in the exact order `ZeroDteResearchMigrator` prints them, each in its domain, single spaces, nothing else — then
+every `(reason, exit)` pair of a `REFUSED` line must be one the migrator emits, the container's exit code must agree, and
+`calendarVersion` / `fromVersion` / `toVersion` are bound to the reviewed declaration.
+
+THE QUIESCENCE PROOF (consult Q3). The migrator cannot tell from PostgreSQL whether a legacy (v6) in-process writer still runs, so the
+wrapper proves it on the live cluster, UNDER ITS LOCK, from a CLOSED WORLD — `research-migration/legacy-writers.yaml` (the image
+repository, the declared writer Deployments, the maintenance Jobs that run the same image and never write) — through
+`scripts/ops/zerodte-quiescence.py`:
+
+* every pod of the namespace that runs the service image (judged by spec image AND status `imageID`; app, init and ephemeral containers
+  alike; exempt only when a LISTED Job — name and uid — owns it and that Job carries a declared maintenance label) must be Running on the
+  digest-pinned image this Job runs, with `ZERODTE_RESEARCH_ENABLED` known OFF: for a RUNNING pod only a LITERAL in its own spec is
+  evidence (see below — a ConfigMap, a Secret, a `fieldRef`, an expansion, a duplicate, an `envFrom` source that could carry the key:
+  each a refusal); a literal governs over every `envFrom` (kubelet precedence); no entry and no source that could carry the key = OFF;
+* a TERMINATING pod (still running through its grace period) or a Pending pod is waited for (`QUIESCE_WAIT_S`, default 120 s) and then
+  refused;
+* every Deployment / StatefulSet / DaemonSet / ReplicaSet / Job / CronJob whose pod template runs the image must be a declared writer
+  Deployment (template pinned to the digest, flag off, rollout SETTLED: observed generation current, updated == available == desired,
+  nothing unavailable), a ReplicaSet it owns, or an exempt maintenance Job — anything else is a refusal (a CronJob could create a writer
+  pod at any moment);
+* an unreadable API is never an empty one; the pod set is digested and RE-LISTED immediately before the Job is created — any change since
+  the proof refuses the creation;
+* the lock is also the DEPLOYMENT BARRIER: `scripts/deploy/service-deploy.sh` sources `scripts/deploy/zerodte-migrate-barrier.sh` and
+  refuses to roll `vix-option-inteligence` while the lock exists (an unreadable lock state refuses too).
+
+Only then is `--legacy-writers-quiesced` rendered into the Job; the migrator refuses without it.
+
+THE BOUNDARY OF THIS PROOF, stated plainly: it covers the `options-edge` NAMESPACE of the pinned cluster. A writer in another namespace,
+another cluster or a laptop holding the database credential is outside it — that is a credential / RBAC boundary (the research database's
+role and password are a Jenkins-synced Secret of this namespace), not something this proof establishes. "Quiescent" means: no writer-capable
+workload of this namespace can be running or be created by a controller of this namespace.
+
+For a RUNNING pod only a LITERAL `ZERODTE_RESEARCH_ENABLED` in its own spec is evidence (a container's environment is captured when it
+starts; a ConfigMap or Secret read now says nothing about what it read then), so the V1 compatibility rollout MUST set the flag as a
+literal `"false"` (the base Deployment does); a ConfigMap-sourced flag on a live pod is a refusal. Controller TEMPLATES are judged by what
+the kubelet will resolve for the next pod (a ConfigMap key is read; a Secret source refuses). A pod is exempt only when a LISTED Job owns it
+(name and uid) and that Job carries a declared maintenance label. THE RENDER SOURCES SAY SO: the dev overlay patch
+(`k8s/overlays/dev/vix-option-inteligence-dev-patch.yaml`), the generated dev slice and the production / experiment slices all carry
+`ZERODTE_RESEARCH_ENABLED: "false"` as a literal (`scripts/ci/zerodte-compat-flag-test.sh` renders every overlay and asserts it) — the
+compatibility rollout is the sanctioned deploy of exactly that render.
+
+ORDER ON EVERY ENVIRONMENT (consult Q12): roll the V1 compatibility image with `ZERODTE_RESEARCH_ENABLED` off to the declared Deployment
+and let it settle → this job (dry run, then CONFIRM) → the provisioning job → the dedicated v7 writer (9e) → increment 8.
+`scripts/ci/zerodte-research-migrate-receipt-test.sh` drives the wrapper through 200+ cases (the count is printed by the test) against a fake kubectl, a fake clock and the
+Kubernetes fixtures of `zerodte-research-migrate-fixtures.py` — every outcome and grammar violation, every quiescence refusal, the race,
+the timeout, the unreadable log — and CAPTURES the Job manifest the wrapper creates, executing its container's shell block against a fake
+`java` to prove the attestation and the mode reach the migrator's argv; `zerodte-migrate-barrier-test.sh` the barrier; 
+`zerodte-research-migrate-guard-test.sh` the guard stage through 29.
+
+### Release evidence (capacity) — recorded before the first CONFIRM of each environment
+
+The Job's `activeDeadlineSeconds` is 900 under 896 Mi / 1 Gi (`-Xmx768m`). That ceiling is not assumed: the wrapper prints the Job's wall
+time (`job wall time: Ns`) after every run, and the DRY RUN that precedes every CONFIRM in the same build executes the whole migration
+against the REAL store and rolls it back. ENFORCED, not only recorded: the dry-run receipt carries `wall=<s>` and the CONFIRM stage of the
+same build refuses unless that wall time is at most `CONFIRM_MAX_DRY_RUN_WALL_S` (default 600 s, two thirds of the deadline; a missing or
+unmeasurable wall time refuses too). Record each environment's dry-run wall time here as well, from the build log, before its first CONFIRM:
+
+| store | date | build | v6 feature families | dry-run wall time | notes |
+|---|---|---|---|---|---|
+| local reference (Apple-silicon laptop, Homebrew PostgreSQL 16, synthetic v6 store: 50 001 feature families, 200 004 predictions, 50 000 outcomes, 13 MB feature table) | 2026-10-04 | — (the migrator CLI from the 9a build, `-Xmx768m`) | 50 001 | 17.7 s wall, JVM max RSS 120 MiB | the rate bound (~2 800 families/s on this machine); not an environment |
+| dev | — | — | — | — | fill from the dev dry run |
+| production | — | — | — | — | fill from the production dry run; CONFIRM only after it is under the ceiling with margin |
+
+## The dedicated v7 research writer (increment 9e — `Jenkinsfile.zerodte-writer-activate`)
+
+The writer that fills the v7 research store from the frames log is a SEPARATE service, `zerodte-research-writer`
+(`k8s/base/zerodte-research-writer-deployment.yaml`, generated slices under `k8s/services/zerodte-research-writer/`, `services.yaml`,
+`KEEP_DOWN` in both bring-up scripts): the vix-option-inteligence service image, digest-pinned by the ordinary service deploy, running
+`ZeroDteResearchWriterMain` (increment 9d) with `replicas: 0` AS SHIPPED. No deploy, no bring-up and no morning autostart ever gives it a
+replica; THIS pipeline is the only SANCTIONED path to one — not the only possible one: a `kubectl scale` by hand is outside every gate,
+so an activation REFUSES a Deployment that already has a replica (it starts from zero, never adopts), and denying the scale subresource to
+anything but the deployer identity (RBAC / admission) is the owner's platform item. The gate it enforces is inc 9 consult Q9 verbatim: "an
+exact committed `provisioned/<env>.yaml`, verified era, and a successful writer dry/readiness check".
+
+Its identity is NOT in the Deployment: `ZERO_DTE_ERA_ID` and `ZERO_DTE_PROVISIONING_GENERATION` are read by key from the ConfigMap
+`zerodte-writer-identity`, which only `scripts/ops/zerodte-writer-activate.sh` renders — from the committed receipt, never by hand — so a
+writer with a replica and no activated identity cannot start, and no `envFrom` exists on the container (every variable is named; the
+password by `secretKeyRef`). The writer's environment is the one `vix-option-inteligence-service/docs/STAGE-B-FRAMES-DESIGN.md` §16 lists.
+
+COMMITTED MEANS COMMITTED: the receipt, the declaration, the attestation, the cluster pins and the Job template must be tracked and
+byte-identical to HEAD, and the receipt / declaration are read from HEAD's bytes (`git show HEAD:`) — a worktree edit, even one the validator
+would pass (another `clusterId`), is refused before the validator and before any lock.
+
+`ACTION=check` (ALWAYS runs): the committed receipt `provisioned/<env>.yaml` must pass `validate-zerodte-provisioning.sh` BOUND to its
+declaration; its `eraId`, `generation`, `environmentLineageId`, `clusterId`, `ledgerTopicId` and the declaration's `FRAMES` topic are read
+through `zerodte_attestation.py` (the one strict subset); the live Deployment's NAMED writer container must ALREADY run the digest this run
+pins from `image-tags/<env>.yaml` (the slice is deployed first; another digest, no Deployment or no such container refuses before any lock
+or Job); then, under `zerodte-research-migrate-lock` (holder kind `writer-activate` — a migration, a service rollout and an activation
+exclude each other) the image is RE-READ (a rollout between the pre-lock read and the lock is refused) and the CHECK Job
+`k8s/jobs/zerodte-writer-check-job.yaml` runs `ZeroDteResearchWriterMain --check` on that digest with the receipt's identity as LITERALS
+and prints ONE line, held to its canonical grammar and BOUND to the receipt:
+
+* `WRITER_CHECK READY eraId=<n> generation=<n> clusterId=<id> framesTopicId=<hex32> position=<n> cursorOffset=<n|none> logBeginning=<n>
+  logEnd=<n>` (exit 0) — schema v7, one frames partition, the era the receipt names bound to the LIVE cluster and topic, the calendar's
+  reach, the cursor recovered; `eraId` / `generation` / `clusterId` must equal the receipt's; a BOOTSTRAP (`cursorOffset=none`: no cursor,
+  no feature row of this log) is accepted only on an EMPTY log (`logBeginning == logEnd`) — the first activation happens before increment 8
+  produces frames, and frames nobody persisted are an operator's question, never adopted silently;
+* `WRITER_CHECK REFUSED code=<Code> exit=68` — each code mapped to its remedy (`RESEARCH_SCHEMA_VERSION` → the migration job;
+  `RESEARCH_ERA_MISSING` → the provisioning job and ITS receipt; `RESEARCH_TOPIC_INVALID`; `RESEARCH_CALENDAR_COVERAGE`;
+  `RESEARCH_OFFSET_LOST` → read the store, nothing is invented); `WRITER_CHECK UNAVAILABLE exit=69`; `WRITER_CHECK USAGE exit=64`.
+  The container's exit code must agree with the line; a reordered, extra or missing token, two lines or none, a log that cannot be read,
+  an image without the writer, a Job still active at the client timeout: each a refusal.
+
+Nothing is consumed and nothing is written by a check; it writes the check receipt (`build= env= generation= eraId= receipt_sha256= head=`)
+for the activate stage of the SAME build (the Jenkinsfile clears the previous build's receipt right after the guard).
+
+`ACTION=activate` (`CONFIRM=true`): HEAD == `PERMITTED_SHA` re-checked; this build's check receipt required to the letter; the Deployment
+required at ZERO replicas; the CHECK Job run AGAIN under the lock right before the effect (the live world may have moved); then the identity
+ConfigMap applied FROM THE RECEIPT, the Deployment scaled to ONE replica, the rollout awaited, and EVERY pod of the writer listed (no phase
+filter; deleting ones excluded): exactly one must exist, Running and Ready, its named container's imageID carrying the pinned digest
+(`repo@sha256:…` or bare `sha256:…`) — any other count, phase, readiness or digest fails the build (the replica stays as the API left it;
+read the pods, then deactivate or investigate). `ACTION=deactivate` (`CONFIRM=true`): scale to zero under the lock and await the pods gone
+(a listing that cannot be read is a refusal, never "drained").
+
+A LATER MIGRATION (a v8) needs the dedicated writer at zero: the quiescence helper judges it by what it RUNS, FIRST and over EVERYTHING —
+before the image-repository filter and before the maintenance-Job exemption — every pod (init, app and ephemeral containers alike, whatever
+its image, label or owner) and every controller template whose command or args name `ZeroDteResearchWriterMain`: a pod refuses unless
+Succeeded / Failed; a Deployment / StatefulSet / ReplicaSet must be at zero (desired and reported); a DaemonSet or a CronJob refuses
+outright; a Job refuses unless terminal (the activation's own kept check Jobs). `ACTION=deactivate` first.
+
+ORDER ON EVERY ENVIRONMENT (consult Q12): the compatibility image with the legacy writer off → the migration job (dry run, CONFIRM) → the
+provisioning job (dry run, CONFIRM, ITS receipt committed through review) → the writer slice deployed at zero → THIS job (`check`, then
+`activate` with `CONFIRM`) → increment 8. `scripts/ci/zerodte-writer-activate-receipt-test.sh` drives the wrapper through 100+ cases
+(printed by the test) against a STATEFUL fake cluster (the scale and the identity ConfigMap persist; the pods derive from them — a replica
+without the identity cannot roll out), a fake clock and a throwaway git checkout carrying an APPROVED fixture attestation: the
+committed-bytes refusals (a dirty-but-valid receipt, a dirty declaration, an untracked receipt) and COMMITTED unbound receipts, every
+receipt outcome and grammar violation, the receipt binding, the bootstrap-on-a-non-empty-log refusal, the refusals before the lock, the
+under-lock image race, the lock held by a migration / a rollout, the Job states and admission, the activation ORDER (check Job → ConfigMap
+→ scale → rollout → pods → lock released last), the all-pod gate (Ready + Pending refused, Ready + deleting accepted, the bare digest
+form, a sidecar listed first), activate while already at a replica (refused), the deactivation and its unreadable listing, pruning, the
+parameters and the cluster pins; it CAPTURES the Job and the ConfigMap the wrapper creates and asserts the identity literals, the absence
+of `envFrom` and the password by name. `zerodte-writer-activate-guard-test.sh` runs the guard stage through 29 (in CI — the guard validator
+classifies a script that runs the guard's command as an effect, so it is not a step of the pipeline); `zerodte-compat-flag-test.sh`
+renders the writer slice and asserts `replicas: 0`, no `envFrom`, the identity by key, the WHOLE §16 environment matrix (16 variables, each
+from its one source), the probes, no service-account token, one container, and the CHECK Job template.
 
 ## Owner-only items (stated once)
 

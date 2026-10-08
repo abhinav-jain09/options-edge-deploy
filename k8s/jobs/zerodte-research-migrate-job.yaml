@@ -1,0 +1,142 @@
+# MIGRATE THE 0DTE RESEARCH STORE OF ONE ENVIRONMENT FROM SCHEMA v6 TO v7 — the Job that runs the service image's own migrator
+# (ZeroDteResearchMigrator, options-edge-processing increment 9a) under the REVIEWED declaration of this repository
+# (deploy/zerodte/research-migration/<env>.yaml, mounted from a ConfigMap the wrapper renders per run).
+#
+# WHY A JOB TEMPLATE IN GIT, RENDERED PER RUN BY JENKINS — read zerodte-provision-job.yaml's header: the options-edge-jenkins-only-workloads
+# admission policy permits batch/jobs CREATE only to the jenkins-deployer identity; a Job carries a deadline and a backoff limit and the
+# wrapper can find and prune it by label.
+#
+# TWO STAGES, ONE TEMPLATE. The wrapper (scripts/ops/zerodte-research-migrate.sh) renders this first with MIGRATE_CONFIRM=false — the
+# migrator EXECUTES the whole migration inside one transaction and ROLLS IT BACK, printing MIGRATABLE with the real dispositions — and only
+# when the operator ticked CONFIRM, with MIGRATE_CONFIRM=true, which commits it and verifies the result on a fresh connection (MIGRATED). A
+# rerun at v7 verifies and prints ALREADY_MIGRATED; nothing is ever re-applied.
+#
+# THE QUIESCENCE ATTESTATION. The migrator cannot tell from PostgreSQL whether a legacy (v6) research writer still runs; it REQUIRES
+# --legacy-writers-quiesced, which the WRAPPER passes only after scripts/ops/zerodte-quiescence.py proved, under the migration lock and
+# from the closed world of deploy/zerodte/research-migration/legacy-writers.yaml, that every pod and every controller template running
+# the service image is on the digest-pinned image this Job runs with ZERODTE_RESEARCH_ENABLED resolved OFF from its effective environment,
+# nothing terminating or pending, the declared Deployment's rollout settled (the V1 compatibility image with the legacy writer disabled,
+# rolled out BEFORE the migration — inc 9 consult Q3), and re-listed the pods immediately before creating this Job. The flag is rendered
+# into __QUIESCED__ by the wrapper, never by hand; the receipt test executes this very shell block to prove it reaches the argv.
+#
+# WHAT THE CONTAINER PROVES BEFORE IT RUNS: the mounted declaration's sha256 equals __FILE_SHA256__, which the wrapper computed from the
+# checked-out repository file AFTER scripts/ci/validate-zerodte-research-migration.sh passed on it; the calendar the image ships must be
+# the declaration's (the wrapper holds the receipt's calendarVersion to it — the migrator refuses a migrated database whose recorded
+# calendar differs, so a wrong image can never become ALREADY_MIGRATED either).
+#
+# SECRETS NEVER APPEAR IN A MANIFEST OR A LOG: POSTGRES_PASSWORD arrives by secretKeyRef from options-edge-runtime-secrets; the migrator
+# reads it only through the NAMED environment variable and prints neither it nor a backend's text (its diagnostics carry SQLStates only).
+# The JDBC URL/user come from options-edge-config, the way every service reads them.
+#
+# NOT NODE-PINNED: the migrator talks to Postgres over the network and touches no node-local path.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: __JOB_NAME__
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: zerodte-research-migrate
+    app.kubernetes.io/part-of: options-edge
+    app.kubernetes.io/component: maintenance
+    options-edge.io/zerodte-environment: __ENVIRONMENT__
+spec:
+  # NO k8s-level retry: a migration that stopped must be READ (its one receipt line is the evidence) before anything is tried again; the
+  # migrator is one transaction, rolled back on any failure, and a rerun at v7 verifies instead of re-applying.
+  backoffLimit: 0
+  # The archive copy of the v6 rows, the DDL, 2 261 calendar rows and the catalog digest. Fifteen minutes is the ceiling; the wrapper waits
+  # longer than this on purpose. CAPACITY EVIDENCE is measured, not assumed: the wrapper prints the Job's wall time after every run, and the
+  # DRY RUN that precedes every CONFIRM in the same build executes the whole migration against the REAL store (and rolls it back) — its wall
+  # time under this limit and this memory shape is the release evidence for that environment, recorded in deploy/zerodte/README.md
+  # ("Release evidence") before the first confirmed run. The local reference point there (a synthetic v6 store on a laptop) bounds the rate.
+  activeDeadlineSeconds: 900
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: zerodte-research-migrate
+    spec:
+      restartPolicy: Never
+      # This Job never talks to the k8s API — the token would be an unnecessary credential in a pod that holds the database password.
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migrator
+          # The vix-option-inteligence SERVICE image, digest-pinned by the wrapper from image-tags/<env>.yaml: the migrator, the v7 script,
+          # the views and the shipped calendar are the ones the runtime that will read the store was built with.
+          image: __IMAGE__
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: options-edge-runtime-secrets
+                  key: POSTGRES_PASSWORD
+            # --- the run itself, every value substituted by the wrapper from the reviewed declaration and the Jenkins parameters ---
+            - name: MIGRATE_FILE
+              value: "/zerodte/__FILE_BASENAME__"
+            - name: MIGRATE_FILE_SHA256
+              value: "__FILE_SHA256__"
+            - name: MIGRATE_SESSIONS_AHEAD
+              value: "__SESSIONS_AHEAD__"
+            - name: MIGRATE_QUIESCED
+              value: "__QUIESCED__"
+            - name: MIGRATE_CONFIRM
+              value: "__CONFIRM__"
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xms64m -Xmx768m"
+          command: ["sh", "-c"]
+          args:
+            - |
+              set -eu
+              test -f "${MIGRATE_FILE}" || { echo "FATAL: ${MIGRATE_FILE} is not mounted" >&2; exit 1; }
+              actual="$(sha256sum "${MIGRATE_FILE}" | cut -d' ' -f1)"
+              if [ "${actual}" != "${MIGRATE_FILE_SHA256}" ]; then
+                echo "FATAL: mounted ${MIGRATE_FILE} has sha256 ${actual}, the reviewed declaration has ${MIGRATE_FILE_SHA256} — refusing to migrate under bytes nobody reviewed" >&2
+                exit 1
+              fi
+              for v in POSTGRES_JDBC_URL POSTGRES_USER; do
+                eval "val=\${$v:-}"
+                [ -n "${val}" ] || { echo "FATAL: ${v} is not set by options-edge-config" >&2; exit 1; }
+              done
+              case "${MIGRATE_SESSIONS_AHEAD}" in ''|*[!0-9]*) echo "FATAL: MIGRATE_SESSIONS_AHEAD is not digits" >&2; exit 1 ;; esac
+              echo "declaration ${MIGRATE_FILE} sha256 ${MIGRATE_FILE_SHA256} (verified against the reviewed file); sessions ahead ${MIGRATE_SESSIONS_AHEAD}; legacy writers quiesced: ${MIGRATE_QUIESCED}"
+              set -- --jdbc-url "${POSTGRES_JDBC_URL}" --jdbc-user "${POSTGRES_USER}" --jdbc-password-env POSTGRES_PASSWORD --expected-sessions-ahead "${MIGRATE_SESSIONS_AHEAD}"
+              if [ "${MIGRATE_QUIESCED}" = "true" ]; then
+                set -- "$@" --legacy-writers-quiesced
+              fi
+              if [ "${MIGRATE_CONFIRM}" = "true" ]; then
+                set -- "$@" --confirm
+              fi
+              echo "running ZeroDteResearchMigrator (the password by name only)"
+              exec java -cp /app/app.jar com.optionsedge.processing.zerodte.research.ZeroDteResearchMigrator "$@"
+          volumeMounts:
+            - name: zerodte-files
+              mountPath: /zerodte
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 250m
+              memory: 896Mi
+            limits:
+              memory: 1Gi
+      volumes:
+        - name: zerodte-files
+          configMap:
+            name: __CONFIGMAP__
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi

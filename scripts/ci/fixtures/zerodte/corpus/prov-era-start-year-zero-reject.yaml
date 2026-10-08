@@ -1,0 +1,46 @@
+# 0DTE Stage-B provisioning declaration — dev (design "BUILD decisions for increment 7", Q3; validated by
+# scripts/ci/validate-zerodte-provisioning.sh with the Job's own rules). Topics by NAME; ids are read live by the Job.
+schemaVersion: 1
+symbol: SPX
+environmentLineageId: 6b2c7c1a-5d3e-4a8f-9b41-2f0d7e9c4a10
+generation: 1
+bootstrapKind: VIRGIN
+migration: false
+eraId: 1
+eraStartSession: "0000-10-05"
+inputs:
+  - topic: options.databento.events.raw
+    dependencyMode: RAW
+  - topic: underlying.vix.price
+    dependencyMode: RAW
+  - topic: market.spx.market-carry-service.current
+    dependencyMode: EMBEDDED
+outputs:
+  FRAMES:
+    topic: vix-option-inteligence.spx.frames
+    cleanupPolicy: DELETE
+    partitions: 1
+    retentionMs: 604800000
+  HEAD:
+    topic: vix-option-inteligence.spx.head
+    cleanupPolicy: COMPACT
+    partitions: 1
+    retentionMs: -1
+  CURRENT:
+    topic: vix-option-inteligence.spx.current
+    cleanupPolicy: COMPACT
+    partitions: 1
+    retentionMs: -1
+  PULSE:
+    topic: vix-option-inteligence.spx.pulse
+    cleanupPolicy: COMPACT_DELETE
+    partitions: 1
+    retentionMs: 86400000
+  DEPLOYMENTS:
+    topic: vix-option-inteligence.spx.deployments
+    cleanupPolicy: DELETE
+    partitions: 1
+    retentionMs: -1
+recreatedTopics: []
+modeChange: []
+operator: abhinav.jain

@@ -72,6 +72,7 @@ resources:
   - oi-shadow-service.yaml
   - vix-option-inteligence-deployment.yaml
   - vix-option-inteligence-service.yaml
+  - zerodte-research-writer-deployment.yaml
   - greek-move-authenticity-deployment.yaml
   - greek-move-authenticity-service.yaml
   - option-truth-engine-deployment.yaml

@@ -328,6 +328,14 @@ if [ "$DEPLOY_DRY_RUN" = "true" ]; then
   exit 0
 fi
 
+# --- the 0DTE deployment / migration MUTUAL EXCLUSION (increment 9c): a rollout of vix-option-inteligence HOLDS the research-migration lock
+# from before the apply until after the health gate, so no migration can start mid-rollout and no rollout can be admitted between a
+# migration's quiescence proof and its Job. scripts/deploy/zerodte-migrate-barrier.sh — atomic create, released on EXIT; fail-closed (a
+# held or unreadable lock refuses); a no-op for every other service.
+. "$(dirname "$0")/zerodte-migrate-barrier.sh"
+zerodte_migrate_barrier_acquire "$NAMESPACE" "$SERVICE" "service-deploy-${SERVICE}-${ENVIRONMENT}-build-${BUILD_NUMBER:-manual}-$(date -u +%Y%m%dT%H%M%SZ)" || exit 1
+trap 'zerodte_migrate_barrier_release "$NAMESPACE"' EXIT
+
 echo "=== apply (service-scoped) ==="
 # 2026-09-28 incident: databento-gex-service's live Deployment had drifted out of band (an env var
 # that was `value: SPXW` live vs `valueFrom: configMapKeyRef` in the tracked manifest, plus 5
