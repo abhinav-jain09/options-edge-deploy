@@ -42,7 +42,8 @@
 # Prefer the caller's logger (prod-clean-slate.sh's `say` tees to its log file).
 _ml_say() { if declare -F say >/dev/null 2>&1; then say "$*"; else printf '%s\n' "$*"; fi; }
 
-# mirror_ledger_record <ledger> <rows-file> — put rows INTO the ledger before anything is stopped.
+# mirror_ledger_record <ledger> <rows-file> [command ...] — put rows INTO the ledger before anything is
+# stopped, and run <command> (the stopping) while the ledger LOCK is still held.
 #
 # The other half of the invariant, and the half that was missing (deploy Codex round 5): pause_mirrors
 # merged its freshly-discovered agents into the ledger with `sort -u old new > merged && mv merged old`
@@ -52,9 +53,15 @@ _ml_say() { if declare -F say >/dev/null 2>&1; then say "$*"; else printf '%s\n'
 #
 # So this merges AND VERIFIES: after the move, every row of <rows-file> must be readable back out of
 # the ledger. Anything less is a non-zero return, and the caller must then stop nothing.
+#
+# AND THE STOPPING RUNS UNDER THE SAME LOCK. Releasing it first left a window in which a concurrent
+# resume could see an agent loaded, drop its row, and then this caller would boot that agent out with
+# nothing recording it (deploy Codex round 6). So the caller passes its stop step as <command>: it runs
+# after the verification, before the lock is released, and its status is this function's status.
 mirror_ledger_record() {
-  local list="${1-}" rows="${2-}" lock merged missing=0 n=0 row
+  local list="${1-}" rows="${2-}" lock merged missing=0 n=0 row hook_rc=0
   [ -n "$list" ] && [ -n "$rows" ] || { _ml_say "mirror_ledger_record: need <ledger> <rows-file>"; return 1; }
+  shift 2 2>/dev/null || shift $#
   if [ -L "$list" ]; then
     _ml_say "WARN: $list is a SYMLINK — refusing to record into it; nothing may be stopped"
     return 1
@@ -85,12 +92,19 @@ mirror_ledger_record() {
     [ -n "$row" ] || continue
     grep -qxF -- "$row" "$list" 2>/dev/null || missing=$((missing+1))
   done < "$rows"
-  rmdir "$lock" 2>/dev/null
   if [ "$missing" -ne 0 ]; then
+    rmdir "$lock" 2>/dev/null
     _ml_say "WARN: $missing of $n row(s) are NOT in $list after the merge — nothing may be stopped"
     return 1
   fi
   _ml_say "recorded $n mirror agent(s) in $list"
+  # The caller's stop step, under the lock. Its failure is this function's failure: an agent that is
+  # still running after it was supposed to be stopped must not look like a successful pause.
+  if [ "$#" -gt 0 ]; then
+    "$@" || hook_rc=$?
+  fi
+  rmdir "$lock" 2>/dev/null
+  return "$hook_rc"
 }
 
 mirror_ledger_resume() {

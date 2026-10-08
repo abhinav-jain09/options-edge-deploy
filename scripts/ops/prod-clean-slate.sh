@@ -80,21 +80,37 @@ PY
 # could then report success with them down (deploy Codex round 5). mirror_ledger_record verifies the
 # rows are readable back out of the ledger, and a non-zero return here stops the whole run before
 # anything is paused or wiped.
-pause_mirrors() {
-  local uid label plist n=0 i; uid=$(id -u)
-  prod_mirror_agents | while read -r label plist; do launchctl list "$label" >/dev/null 2>&1 && printf '%s %s\n' "$label" "$plist"; done > "$PAUSED_LIST.new"
-  if ! mirror_ledger_record "$PAUSED_LIST" "$PAUSED_LIST.new"; then
-    rm -f "$PAUSED_LIST.new"
-    say "   refusing to pause anything: the ledger does not hold the agents this run would stop"
-    return 1
-  fi
+# The stop step, run by mirror_ledger_record UNDER THE LEDGER LOCK and only after every row it is about
+# to stop is readable back out of the ledger.
+#
+# A mirror that is STILL LOADED when this finishes is a failure, not a warning (deploy Codex round 6):
+# it is producing into the topics the next step is about to delete, which is the whole reason the pause
+# exists. The non-zero status reaches the caller, which then wipes nothing.
+_bootout_paused_agents() {
+  local uid label plist n=0 stuck=0 i; uid=$(id -u)
   while read -r label plist; do
     [ -n "$label" ] || continue
     launchctl bootout "gui/$uid/$label" >/dev/null 2>&1
     for i in 1 2 3 4 5 6 7 8 9 10; do launchctl list "$label" >/dev/null 2>&1 || break; sleep 3; done
-    launchctl list "$label" >/dev/null 2>&1 && say "   WARN: mirror agent $label is still loaded" || n=$((n+1))
-  done < "$PAUSED_LIST.new"; rm -f "$PAUSED_LIST.new"
+    if launchctl list "$label" >/dev/null 2>&1; then
+      stuck=$((stuck+1)); say "   STILL LOADED after bootout: $label"
+    else
+      n=$((n+1))
+    fi
+  done < "$PAUSED_LIST.new"
   say "paused $n es4->prod mirror agent(s) (list: $PAUSED_LIST)"
+  if [ "$stuck" -gt 0 ]; then
+    say "   $stuck mirror agent(s) are STILL PRODUCING — the wipe must not run while they are"
+    return 1
+  fi
+}
+pause_mirrors() {
+  local rc=0
+  prod_mirror_agents | while read -r label plist; do launchctl list "$label" >/dev/null 2>&1 && printf '%s %s\n' "$label" "$plist"; done > "$PAUSED_LIST.new"
+  mirror_ledger_record "$PAUSED_LIST" "$PAUSED_LIST.new" _bootout_paused_agents || rc=$?
+  rm -f "$PAUSED_LIST.new"
+  [ "$rc" -eq 0 ] || say "   pause did not complete: the ledger holds what was recorded, and nothing may be wiped"
+  return "$rc"
 }
 # ---- 0. ship the repo layout the host script sources ----
 for f in scripts/ops/offhours-clean-slate.sh scripts/kafka/reset-preserved-topics.sh scripts/kafka/topics.env scripts/jenkins/market_calendar.py scripts/kafka/apply-topics.sh scripts/kafka/ensure-partition-only-topics.sh scripts/kafka/load-kafka-settings.sh scripts/ops/mirror-topic-filter.sh scripts/ops/clean-slate-decision.sh scripts/ops/mirror-ledger.sh; do
@@ -204,8 +220,8 @@ esac
 # mirrors are a COPY path this script paused itself in step 1, their offsets live on es4, and every one
 # that is started here is one whose topics were all reconciled. A mirror with a stake in an
 # unreconciled or missing topic stays paused, which is the part that protects key routing.
-clean_slate_decide "$ARC" "$ERC" "$SKIPPED_NAMES" "$MISSING"
-say "decision: $DECISION_VERDICT (apply=$ARC ensure=$ERC) resume=$DECISION_RESUME bringup=$DECISION_BRINGUP exit=$DECISION_EXIT"
+clean_slate_decide "$ARC" "$ERC" "$SKIPPED_NAMES" "$MISSING" "$ATTEST_STATE"
+say "decision: $DECISION_VERDICT (apply=$ARC ensure=$ERC attested=${ATTEST_STATE:-<none>}) resume=$DECISION_RESUME bringup=$DECISION_BRINGUP exit=$DECISION_EXIT"
 case "$DECISION_VERDICT" in
   PARTIAL)
     say "recreate PARTIAL: could not reconcile:$(printf ' %s' $SKIPPED_NAMES)"

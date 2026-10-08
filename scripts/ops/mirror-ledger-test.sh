@@ -273,6 +273,30 @@ rmdir "$LEDGER.lock"
 rec "$WORK/rec.fresh" "com.optionsedge.aaa $A"
 [ ! -d "$WORK/rec.fresh.lock" ] && ok "and a successful record releases the lock" || bad "the lock was left behind"
 
+echo "9d. the STOP step runs under the ledger lock, and its failure is the record's failure"
+# Releasing the lock before stopping left a window where a concurrent resume could drop a row and this
+# caller would then stop that agent unrecorded (deploy Codex round 6). The hook runs while the lock is
+# held; it proves that by looking for the lock itself.
+LEDGER="$WORK/rec.hook"; rm -f "$LEDGER"
+rowsf="$WORK/rec.hook.rows"; printf '%s\n' "com.optionsedge.aaa $A" > "$rowsf"
+# The hook is called with NO arguments, so it must close over the path rather than read $2 (which would
+# be its own, empty, argument list).
+HOOKOUT="$(bash -c '
+  . "$1/mirror-ledger.sh"
+  L="$2"
+  hook() { [ -d "$L.lock" ] && echo "LOCK-HELD" || echo "LOCK-GONE"; }
+  mirror_ledger_record "$2" "$3" hook' _ "$HERE" "$LEDGER" "$rowsf" 2>&1)"; HRC=$?
+printf '%s' "$HOOKOUT" | grep -q 'LOCK-HELD' && ok "the stop step sees the lock still held" || bad "the hook ran without the lock: $HOOKOUT"
+[ "$HRC" -eq 0 ] && ok "and a successful stop step returns 0" || bad "returned $HRC"
+[ ! -d "$LEDGER.lock" ] && ok "and the lock is released afterwards" || bad "the lock was left behind"
+HOOKOUT="$(bash -c '
+  . "$1/mirror-ledger.sh"
+  hook() { echo "STUCK"; return 7; }
+  mirror_ledger_record "$2" "$3" hook' _ "$HERE" "$LEDGER" "$rowsf" 2>&1)"; HRC=$?
+[ "$HRC" -eq 7 ] && ok "a FAILING stop step is the record's status (so the caller wipes nothing)" || bad "returned $HRC, expected 7"
+[ ! -d "$LEDGER.lock" ] && ok "and the lock is released even then" || bad "the lock was left behind after a failing hook"
+grep -qxF "com.optionsedge.aaa $A" "$LEDGER" && ok "and the row stays recorded" || bad "the row is gone: $(cat "$LEDGER" 2>/dev/null)"
+
 echo "9c. MUTATION: the read-back is what makes recording a guarantee"
 # The fault is INJECTED into the merge (it ignores the new rows), because a merge cannot be made to
 # lose a row from outside. Held constant across both runs; the mutation under test is the removal of

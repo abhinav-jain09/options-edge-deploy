@@ -97,7 +97,10 @@ for extra in sorted(glob.glob(os.path.join(unit_dir, "run-mirror*.sh"))):
 #       exec [path/]kafka-mirror-maker (--flag [value])...
 #     with every value a single-quoted literal, a double-quoted literal with no $ or backtick, or a
 #     bare token with none of $ ` " ' # ; | & < > ( );
-#   * that line must carry EXACTLY ONE --whitelist, and its value is the pattern;
+#   * that line must carry EXACTLY ONE --whitelist, QUOTED, and its value is the pattern (an unquoted
+#     value is rewritten by the shell before the program sees it, so the file does not hold it);
+#   * every other line must be a shebang, a `set -flags`, one `export KAFKA_LOG4J_OPTS="..."`, a comment
+#     or blank -- which is all any generator in this repo emits -- so nothing can change what runs;
 #   * the FILE (comments and all) may contain the text --whitelist exactly once, so a commented or
 #     here-doc'd decoy cannot sit beside the real one;
 #   * the file may not contain <<, eval, source, or a dot-include: each of those can bring in a
@@ -108,11 +111,22 @@ for extra in sorted(glob.glob(os.path.join(unit_dir, "run-mirror*.sh"))):
 # runtime one re-routes keys.
 CONT = re.compile(r"\\\s*$")
 LAUNCH = re.compile(
-    r"^exec\s+\"?(?P<prog>[^\"\s]*kafka-mirror-maker)\"?"
+    r"^exec\s+\"?(?P<prog>[^\"\s$`]*kafka-mirror-maker)\"?"
     r"(?P<args>(?:\s+--[A-Za-z0-9.-]+(?:\s+(?:'[^']*'|\"[^\"$`]*\"|[^'\"\s$`#;|&<>()]+))?)+)\s*$"
 )
 ARG = re.compile(r"--(?P<flag>[A-Za-z0-9.-]+)(?:\s+(?:'(?P<sq>[^']*)'|\"(?P<dq>[^\"$`]*)\"|(?P<bare>[^'\"\s$`#;|&<>()]+)))?")
 FORBIDDEN = ("<<", "eval ", "source ")
+# Every OTHER logical line in an accepted file must be one of these. Each generator in this repo
+# (seven Jenkinsfile.*-mirror pipelines and ansible/templates/run-mirror.sh.j2) emits exactly a
+# shebang, `set -euo pipefail`, one `export KAFKA_LOG4J_OPTS="..."`, comments, and the launcher. A line
+# outside that set can change WHAT RUNS -- `PATH=/somewhere-else` in front of a bare `exec
+# kafka-mirror-maker` is the plain example -- and then the whitelist in the file says nothing about the
+# process launchd starts (deploy Codex round 6).
+PRELUDE = (
+    re.compile(r"^#!"),
+    re.compile(r"^set\s+-[A-Za-z]+(\s+-?[A-Za-z]+)*$"),
+    re.compile(r"^export\s+KAFKA_LOG4J_OPTS=\"[^\"$`]*\"$"),
+)
 
 def logical_lines(text):
     out, buf = [], ""
@@ -148,12 +162,16 @@ def whitelist_of(path):
     launchers = []
     for line in logical_lines(text):
         stripped = line.strip()
-        if stripped.startswith("#"):
+        if not stripped or stripped.startswith("#"):
             continue
         if re.match(r"^\.\s+\S", stripped):
             hold("%s dot-includes another file, which can bring in a whitelist this file cannot see" % base)
         if "kafka-mirror-maker" in stripped:
             launchers.append(stripped)
+            continue
+        if not any(rx.match(stripped) for rx in PRELUDE):
+            hold("%s has a line outside the accepted shape (%r), which could change what actually runs"
+                 % (base, stripped[:60]))
     if len(launchers) != 1:
         hold("%s has %d line(s) running kafka-mirror-maker; an accepted launcher has exactly one"
              % (base, len(launchers)))
@@ -161,12 +179,21 @@ def whitelist_of(path):
     if not m:
         hold("%s's launcher line is not the accepted `exec [path/]kafka-mirror-maker --flag value ...` shape"
              % base)
-    pats = [a.group("sq") if a.group("sq") is not None else
-            a.group("dq") if a.group("dq") is not None else a.group("bare")
-            for a in ARG.finditer(m.group("args")) if a.group("flag") == "whitelist"]
-    if len(pats) != 1 or not pats[0]:
-        hold("%s's launcher line carries %d usable --whitelist value(s)" % (base, len(pats)))
-    return pats[0]
+    wl_args = [a for a in ARG.finditer(m.group("args")) if a.group("flag") == "whitelist"]
+    if len(wl_args) != 1:
+        hold("%s's launcher line carries %d --whitelist argument(s)" % (base, len(wl_args)))
+    a = wl_args[0]
+    # QUOTED only. A BARE value is processed by the shell before kafka-mirror-maker sees it, so the text
+    # in the file is not the runtime pattern: `--whitelist es\.safe` reaches the program as `es.safe`,
+    # where the dot matches any character and the pattern is BROADER than the file suggests -- which is
+    # the direction that produces a wrong CLEAR (deploy Codex round 6).
+    if a.group("sq") is None and a.group("dq") is None:
+        hold("%s's --whitelist value is unquoted (%r); the shell would rewrite it before the program sees it"
+             % (base, a.group("bare")))
+    pat = a.group("sq") if a.group("sq") is not None else a.group("dq")
+    if not pat:
+        hold("%s's --whitelist value is empty" % base)
+    return pat
 
 # The program the plist runs decides; every other run-mirror*.sh beside it must ALSO be an accepted
 # launcher, and its whitelist is unioned in, so an extra script can only add holds.
