@@ -432,6 +432,10 @@ jobs:
         run: bash scripts/ci/zerodte-migrate-barrier-test.sh
       - name: zerodte compatibility render — every overlay sets the legacy writer OFF as a literal
         run: bash scripts/ci/zerodte-compat-flag-test.sh
+      - name: zerodte writer-activate guard refuses every forbidden ref and SHA
+        run: bash scripts/ci/zerodte-writer-activate-guard-test.sh
+      - name: zerodte writer-activate wrapper holds the WRITER_CHECK receipt to its grammar, binds it to the committed receipt and gates the one replica
+        run: bash scripts/ci/zerodte-writer-activate-receipt-test.sh
 
       # es4's clean-reset deletes the whole Kafka data dir; it must refuse while the strike archive
       # marker is short of the log end (fail closed on unreadable state, explicit opt-out only).

@@ -10,19 +10,20 @@
 # Fail-closed: an unreadable lock state, a lock held by anyone (a migration or an earlier deploy that died holding it — read its log, then
 # `kubectl -n options-edge delete configmap zerodte-research-migrate-lock` by hand), or a failed create each refuse the deploy.
 #
-#   zerodte_migrate_barrier_acquire <namespace> <service> <holder>   → 0 when the deploy holds the lock (or the service is not covered)
+#   zerodte_migrate_barrier_acquire <namespace> <service> <holder> [<kind>] → 0 when the caller holds the lock (or the service is not covered);
+#                                   kind = service-deploy (default) | writer-activate (Jenkinsfile.zerodte-writer-activate holds it the same way)
 #   zerodte_migrate_barrier_release <namespace>                       → releases what THIS process acquired; a no-op otherwise
 ZERODTE_MIGRATE_LOCK_NAME="zerodte-research-migrate-lock"
-ZERODTE_MIGRATE_BARRIER_SERVICES="vix-option-inteligence"
+ZERODTE_MIGRATE_BARRIER_SERVICES="vix-option-inteligence zerodte-research-writer"
 ZERODTE_MIGRATE_BARRIER_HELD=false
 
-zerodte_migrate_barrier_acquire() {
-  local ns="$1" service="$2" holder="$3" err holder_now
+zerodte_migrate_barrier_acquire() { # acquire <namespace> <service> <holder> [<holder-kind>: service-deploy (default) | writer-activate]
+  local ns="$1" service="$2" holder="$3" kind="${4:-service-deploy}" err holder_now
   case " $ZERODTE_MIGRATE_BARRIER_SERVICES " in *" $service "*) : ;; *) echo "zerodte migration barrier: not applicable to $service"; return 0 ;; esac
   [ -n "$holder" ] || { echo "FATAL: zerodte migration barrier: a holder id is required" >&2; return 1; }
   err="$(mktemp)"
-  if printf 'apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: %s\n  namespace: %s\n  labels:\n    app.kubernetes.io/name: zerodte-research-migrate-lock\n    app.kubernetes.io/part-of: options-edge\n  annotations:\n    options-edge.io/holder: "%s"\n    options-edge.io/holder-kind: "service-deploy"\ndata:\n  held: "true"\n' \
-       "$ZERODTE_MIGRATE_LOCK_NAME" "$ns" "$holder" | kubectl -n "$ns" create -f - >/dev/null 2>"$err"; then
+  if printf 'apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: %s\n  namespace: %s\n  labels:\n    app.kubernetes.io/name: zerodte-research-migrate-lock\n    app.kubernetes.io/part-of: options-edge\n  annotations:\n    options-edge.io/holder: "%s"\n    options-edge.io/holder-kind: "%s"\ndata:\n  held: "true"\n' \
+       "$ZERODTE_MIGRATE_LOCK_NAME" "$ns" "$holder" "$kind" | kubectl -n "$ns" create -f - >/dev/null 2>"$err"; then
     rm -f "$err"
     ZERODTE_MIGRATE_BARRIER_HELD=true
     echo "zerodte migration barrier: $ZERODTE_MIGRATE_LOCK_NAME ACQUIRED by $holder — no research migration can start until this deploy releases it"
@@ -52,7 +53,7 @@ zerodte_migrate_barrier_release() {
 
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
   case "${1:-}" in
-    acquire) zerodte_migrate_barrier_acquire "${2:?namespace}" "${3:?service}" "${4-}" ;;
+    acquire) zerodte_migrate_barrier_acquire "${2:?namespace}" "${3:?service}" "${4-}" "${5:-service-deploy}" ;;
     release) ZERODTE_MIGRATE_BARRIER_HELD=true; zerodte_migrate_barrier_release "${2:?namespace}" ;;
     *) echo "usage: $0 acquire <namespace> <service> <holder> | release <namespace>" >&2; exit 2 ;;
   esac
