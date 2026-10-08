@@ -15,15 +15,19 @@
 #
 #   # plan only — renders every unit under ansible/.ansible-rendered/ and reports, per file,
 #   # whether installing would change the live copy. It reads brokers and never writes a unit.
-#   ansible-playbook ansible/es-mirrors.yml
+#   ansible-playbook -i ansible/inventory/oe-mirror-hosts.yml ansible/es-mirrors.yml
 #   # dev
-#   ansible-playbook ansible/es-mirrors.yml -e confirm_mirror_install=true
+#   ansible-playbook -i ansible/inventory/oe-mirror-hosts.yml ansible/es-mirrors.yml -e confirm_mirror_install=true
 #   # prod — needs the permitted commit, the same rule Jenkins enforces: this checkout must be on
 #   # origin/main and HEAD must be exactly that commit
-#   ansible-playbook ansible/es-mirrors.yml -e mirror_target_ip=192.168.100.252 -e mirror_target_port=9092 \
+#   ansible-playbook -i ansible/inventory/oe-mirror-hosts.yml ansible/es-mirrors.yml \
+#       -e mirror_target_ip=192.168.100.252 -e mirror_target_port=9092 \
 #       -e confirm_mirror_install=true -e permitted_sha=$(git rev-parse origin/main)
 #   # one topic
-#   ansible-playbook ansible/es-mirrors.yml -e only_topics=es.futures.footprint.bars -e confirm_mirror_install=true
+#   ansible-playbook -i ansible/inventory/oe-mirror-hosts.yml ansible/es-mirrors.yml -e only_topics=es.futures.footprint.bars -e confirm_mirror_install=true
+#   # the dealer-ledger leg, which runs ON .74
+#   ansible-playbook -i ansible/inventory/oe-mirror-hosts.yml ansible/es-mirrors.yml -e mirror_run_host=mac74 \
+#       -e mirror_target_ip=192.168.100.252 -e mirror_target_port=9092
 #
 # WHERE THE PRODUCTION LOCK ACTUALLY IS. In Ansible an extra var outranks every var, fact and
 # register, so a play-level condition is advisory: `-e oe_prod_permitted=true` defeated the first
@@ -42,6 +46,39 @@
 # in a live mirror), the bytes of log4j.properties/run-mirror.sh/the plist, that the runner is still
 # executable, an absent file, an absent process, or a process OLDER than any of those files — MirrorMaker reads its
 # config once, at startup, so a rewritten file under an older process still runs the old settings.
+# ⚠ THIS PLAY EXISTS BECAUSE A BAD mirror_run_host IS OTHERWISE SILENT (Codex r2 on #1166, P0).
+# `hosts:` below is a variable, and Ansible treats a pattern matching no host as "skipping: no hosts
+# matched" with an EMPTY recap and exit 0 — so `-e mirror_run_host=mac47` reported success having
+# installed nothing, and the row validation inside that play never ran because the play never ran.
+# A typo is indistinguishable from a completed run, which is the worst possible failure for a tool
+# whose whole job is making mirror state visible.
+#
+# So the requested host is validated HERE, on localhost, which always matches. hostvars is the oracle
+# rather than groups['all']: Ansible's IMPLICIT localhost is not a member of any inventory group, so
+# groups['all'] rejected a perfectly good default invocation (Codex r2, P1) while hostvars contains
+# every host Ansible knows about, implicit or not.
+- name: Validate the requested run host before any host selection
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    # ⚠ hostvars AND groups['all'] are BOTH empty on an inventory-less run — measured: hostvars=[],
+    # groups={'all': [], 'ungrouped': []} — because Ansible's implicit localhost is a member of
+    # neither. Codex r2 flagged groups['all'] for this; my first fix swapped in hostvars, which has
+    # the identical hole and rejected the default `mirror_run_host=localhost` outright. The oracle is
+    # therefore the union with localhost, which is always a legal run host.
+    oe_known_hosts: "{{ (hostvars.keys() | list) | union(['localhost']) }}"
+  tasks:
+    - name: Refuse a mirror_run_host that is not a host Ansible knows
+      ansible.builtin.assert:
+        that:
+          - (mirror_run_host | default('localhost')) in oe_known_hosts
+        fail_msg: >-
+          mirror_run_host={{ mirror_run_host | default('localhost') }} is not a host in this
+          inventory. Known: {{ oe_known_hosts }}. A pattern matching no host makes Ansible
+          skip the play and exit 0, so this would have reported success while installing nothing.
+          Pass -i ansible/inventory/oe-mirror-hosts.yml, or fix the name.
+
 - name: Install the es4 -> environment MirrorMaker-1 units
   # ⚠ hosts is the RUN HOST, not always localhost (Codex on #1166, P0). Until this was a variable the
   # play was `hosts: localhost, connection: local` and `mirror_run_host` only SELECTED rows while
@@ -82,9 +119,18 @@
     # through these names, `-e oe_prod_target=127.0.0.1:19092` would make the real production broker
     # pass the allow-list, skip the permitted-commit guard and set the permission true.
     oe_run_host: "{{ mirror_run_host | default('localhost') }}"
+    # Same union as the validation play above, and for the same measured reason: the implicit
+    # localhost is in neither hostvars nor groups['all'].
+    oe_known_hosts: "{{ (hostvars.keys() | list) | union(['localhost']) }}"
     oe_prod_target: "192.168.100.252:9092"
     oe_dev_target: "127.0.0.1:19092"
-    oe_rendered_dir: "{{ playbook_dir }}/.ansible-rendered/es-mirrors"
+    # On the controller this stays exactly where it was. On a REMOTE run host it cannot: the modules
+    # create this directory on the TARGET, and playbook_dir is the controller checkout's absolute
+    # path, which does not exist there (Codex r2 on #1166, P1). The live unit paths already derive
+    # from oe_home; this one did not.
+    oe_rendered_dir: >-
+      {{ (playbook_dir ~ '/.ansible-rendered/es-mirrors') if inventory_hostname == 'localhost'
+         else (oe_home ~ '/.ansible-rendered/es-mirrors') }}
     # -e dump_rows=<path> writes the rows this run WOULD act on and stops before touching a broker.
     # It exists so scripts/ci/validate-ansible-mirror-naming.sh can test the group.id and unit-name
     # generation in this file — the parity gate reads the table and the templates, and could not see
@@ -119,13 +165,15 @@
       # never installed by anything. Checking it against the inventory turns that into a build
       # failure naming the row. Note this also means a row for a host the caller did not supply an
       # inventory for fails loudly rather than deferring into silence — which is the point.
+      # hostvars, not groups['all']: the implicit localhost belongs to no group, so groups['all']
+      # rejected the documented inventory-less invocation outright (Codex r2 on #1166, P1).
       ansible.builtin.assert:
         that:
-          - (mirror_units | map(attribute='run_host') | map('default', 'localhost') | unique | reject('in', groups['all']) | list) | length == 0
+          - (mirror_units | map(attribute='run_host') | map('default', 'localhost') | unique | reject('in', oe_known_hosts) | list) | length == 0
         fail_msg: >-
           ansible/vars/es-mirrors.yml declares run_host value(s) that are not hosts in this
           inventory: {{ mirror_units | map(attribute='run_host') | map('default', 'localhost')
-          | unique | reject('in', groups['all']) | list }}. Known hosts: {{ groups['all'] }}.
+          | unique | reject('in', oe_known_hosts) | list }}. Known hosts: {{ oe_known_hosts }}.
           A run_host that resolves to nothing is never installed by any play and reports as a
           deferral, so a typo is indistinguishable from a decision. Pass
           -i ansible/inventory/oe-mirror-hosts.yml, or fix the row.
