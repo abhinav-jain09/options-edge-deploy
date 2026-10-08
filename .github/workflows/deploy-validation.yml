@@ -396,6 +396,14 @@ jobs:
       - name: mirror-topic-filter holds the right mirrors
         run: bash scripts/ops/mirror-topic-filter-test.sh
 
+      # The gate in front of the production wipe: which mirrors are LOADED and producing into the broker
+      # about to be wiped, asked of launchd rather than of the plist files — because a job stays loaded
+      # when its plist is moved or edited, and a plist that fails to parse was silently skipped. Every
+      # case where it must REFUSE rather than answer "nothing is loaded" is driven with a stubbed
+      # launchctl, with mutations.
+      - name: the loaded-mirror gate fails closed
+        run: bash scripts/ops/loaded-mirror-agents-test.sh
+
       # The paused-mirror ledger's invariant: a row leaves the file ONLY when its agent is confirmed
       # loaded. Held agents, failed loads, a plist that is briefly absent, duplicate rows and a
       # scratch file that cannot be written all keep their rows — otherwise an agent stays down with

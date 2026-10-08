@@ -43,6 +43,10 @@ say() { echo "[$(date '+%H:%M:%S')] $*" | tee -a "$LOG"; }
 # recorded as down, is driven by scripts/ops/mirror-ledger-test.sh rather than read out of this file.
 # shellcheck source=/dev/null
 . "$DEPLOY_SRC/scripts/ops/mirror-ledger.sh" || { echo "cannot source $DEPLOY_SRC/scripts/ops/mirror-ledger.sh"; exit 1; }
+# ...and the launchd-side question "what is loaded and producing into this broker", which is the gate in
+# front of the wipe. Driven by scripts/ops/loaded-mirror-agents-test.sh with a stubbed launchctl.
+# shellcheck source=/dev/null
+. "$DEPLOY_SRC/scripts/ops/loaded-mirror-agents.sh" || { echo "cannot source $DEPLOY_SRC/scripts/ops/loaded-mirror-agents.sh"; exit 1; }
 # Returns the REMOTE command's exit status (the filter stages would otherwise hide it: a function returns
 # its last pipe stage, and sed always succeeds).
 ssh_root() { local rc; sshpass -p "$PW" ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 "$HOST" "su - root -c '$1'" <<EOF 2>&1 | grep -vE "^Password: *$|WARNING: |vulnerable|openssh|^\*\*" | sed 's/^Password: //'
@@ -128,15 +132,17 @@ pause_mirrors() {
   [ -z "$rows" ] || printf '%s\n' "$rows" > "$PAUSED_LIST.new"
   mirror_ledger_record "$PAUSED_LIST" "$PAUSED_LIST.new" _bootout_paused_agents || rc=$?
   rm -f "$PAUSED_LIST.new"
-  # THE GATE IS THE SECOND PASS, not the snapshot. It answers the question the wipe actually depends
-  # on -- "is any es4->prod mirror loaded right now?" -- and so also covers an agent that appeared
-  # after the snapshot and one the first pass missed.
-  if ! after="$(_loaded_prod_mirror_rows)"; then
-    say "   mirror discovery failed on the verify pass — nothing may be wiped"
+  # THE GATE IS A SECOND PASS, AND IT ASKS LAUNCHD. It answers the question the wipe depends on -- "is
+  # any mirror loaded right now that produces into $PROD_BS?" -- without reading a single plist file,
+  # because a job stays loaded when its plist is moved or edited and a plist that fails to parse was
+  # silently skipped by the discovery above (deploy Codex round 8). It therefore also covers an agent
+  # that appeared after the snapshot and one the first pass missed.
+  if ! after="$(loaded_mirror_agents_for "$PROD_BS")"; then
+    say "   could not establish which mirrors are loaded (see above) — nothing may be wiped"
     return 1
   fi
   if [ -n "$after" ]; then
-    say "   STILL LOADED after the pause: $(printf '%s' "$after" | awk '{print $1}' | tr '\n' ' ')"
+    say "   STILL LOADED after the pause: $(printf '%s' "$after" | tr '\n' ' ')"
     say "   these mirrors are producing into topics the wipe would delete — refusing to continue"
     return 1
   fi
@@ -144,7 +150,7 @@ pause_mirrors() {
   return "$rc"
 }
 # ---- 0. ship the repo layout the host script sources ----
-for f in scripts/ops/offhours-clean-slate.sh scripts/kafka/reset-preserved-topics.sh scripts/kafka/topics.env scripts/jenkins/market_calendar.py scripts/kafka/apply-topics.sh scripts/kafka/ensure-partition-only-topics.sh scripts/kafka/load-kafka-settings.sh scripts/ops/mirror-topic-filter.sh scripts/ops/clean-slate-decision.sh scripts/ops/mirror-ledger.sh; do
+for f in scripts/ops/offhours-clean-slate.sh scripts/kafka/reset-preserved-topics.sh scripts/kafka/topics.env scripts/jenkins/market_calendar.py scripts/kafka/apply-topics.sh scripts/kafka/ensure-partition-only-topics.sh scripts/kafka/load-kafka-settings.sh scripts/ops/mirror-topic-filter.sh scripts/ops/clean-slate-decision.sh scripts/ops/mirror-ledger.sh scripts/ops/loaded-mirror-agents.sh; do
   [ -r "$DEPLOY_SRC/$f" ] || { echo "missing $DEPLOY_SRC/$f"; exit 1; }
 done
 say "=== prod clean-slate $MODE (after=$AFTER) source=$DEPLOY_SRC ==="

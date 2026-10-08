@@ -112,7 +112,7 @@ for extra in sorted(glob.glob(os.path.join(unit_dir, "run-mirror*.sh"))):
 # runtime one re-routes keys.
 CONT = re.compile(r"\\\s*$")
 LAUNCH = re.compile(
-    r"^exec\s+\"?(?P<prog>[^\"\s$`]*kafka-mirror-maker)\"?"
+    r"^exec\s+\"?(?P<prog>(?:/[^\"\s$`]*)?kafka-mirror-maker)\"?"
     r"(?P<args>(?:\s+--[A-Za-z0-9.-]+(?:\s+(?:'[^']*'|\"[^\"$`]*\"|[^'\"\s$`#;|&<>()]+))?)+)\s*$"
 )
 ARG = re.compile(r"--(?P<flag>[A-Za-z0-9.-]+)(?:\s+(?:'(?P<sq>[^']*)'|\"(?P<dq>[^\"$`]*)\"|(?P<bare>[^'\"\s$`#;|&<>()]+)))?")
@@ -190,6 +190,11 @@ def whitelist_of(path):
     if not prog.startswith("/") and "/" in prog:
         hold("%s runs kafka-mirror-maker by a RELATIVE path (%r), which depends on the working directory"
              % (base, prog))
+    # The BASENAME must be exactly kafka-mirror-maker. `[^"\s$`]*kafka-mirror-maker` also matched
+    # /path/evil-kafka-mirror-maker -- a wrapper that could ignore or broaden the whitelist it is handed
+    # and still be read as MirrorMaker itself (deploy Codex round 8).
+    if os.path.basename(prog) != "kafka-mirror-maker":
+        hold("%s runs %r, whose name is not kafka-mirror-maker" % (base, prog))
     wl_args = [a for a in ARG.finditer(m.group("args")) if a.group("flag") == "whitelist"]
     if len(wl_args) != 1:
         hold("%s's launcher line carries %d --whitelist argument(s)" % (base, len(wl_args)))

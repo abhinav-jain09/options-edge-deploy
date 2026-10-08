@@ -44,7 +44,7 @@
 #     passes only with real status 0, an assertion sequence whose IDs equal that inventory exactly (same IDs, same
 #     order, same multiplicity), no line on its channel that is not a well-formed assertion, no stray stdout/stderr
 #     (a shell error inside the unit can make a negative assertion pass), every script run it recorded (apply_run /
-#     cleanup_run, in its own newrun directory) ending with one of that script's own statuses (0 or 1) and no output line
+#     cleanup_run, in its own newrun directory) ending with one of that script's own statuses (0 or 1, plus apply-topics.sh's skip status; see exec_failures) and no output line
 #     matching a shell-level diagnostic (SHELL_DIAG_RX), and no FAIL. So a unit that returns early, aborts, skips a check, makes an extra one, or repeats one check in place of
 #     another, fails.
 #   - Finality: run_captured returns only after every process holding the unit's assertion channel — the unit and any
