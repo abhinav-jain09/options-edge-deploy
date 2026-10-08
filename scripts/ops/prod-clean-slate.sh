@@ -9,7 +9,12 @@
 #   3. from this Mac (exactly what the Jenkins deploy does): scripts/kafka/apply-topics.sh with
 #      ENVIRONMENT=production recreates the declared set at its declared shape, then
 #      scripts/kafka/ensure-partition-only-topics.sh creates the config-less partition-only topics
-#   4. resume the mirrors — only if step 3 succeeded (otherwise they stay paused and this says so loudly)
+#   4. resume the mirrors — every one EXCEPT those that copy a topic step 3 could not reconcile or did
+#      not create (scripts/ops/clean-slate-decision.sh decides; scripts/ops/mirror-topic-filter.sh
+#      answers it per agent). Two different outcomes, deliberately not treated alike: a recreate that
+#      WALKED THE WHOLE declared list and could not reconcile some of it resumes the mirrors with no
+#      stake in those topics (and still does NOT bring prod up, step 5); a recreate that did not reach
+#      the end of the list at all resumes nothing, because nothing is known about the rest of it.
 #   5. full bring-up on .252 (systemctl restart oe-boot-bringup: waves + partition doctor) unless `down`
 #
 #   prod-clean-slate.sh dry            steps 2 (DRY_RUN) + what 1/3 would do; changes nothing
@@ -30,6 +35,18 @@ PAUSED_LIST="${PROD_MIRRORS_PAUSED:-$HOME/oe-ops/.prod-mirrors-paused}"
 LOG=~/oe-ops/logs/prod-clean-slate.log; mkdir -p ~/oe-ops/logs
 case "$MODE" in dry) DRY=true; WIPE=false ;; wipe) DRY=false; WIPE=true ;; *) echo "usage: $0 dry|wipe [up|down]"; exit 2 ;; esac
 say() { echo "[$(date '+%H:%M:%S')] $*" | tee -a "$LOG"; }
+# The recreate decision (what a partial apply permits) lives in its own file so a test can drive every
+# combination of statuses; this script only ACTS on it. Sourced from DEPLOY_SRC like everything else.
+# shellcheck source=/dev/null
+. "$DEPLOY_SRC/scripts/ops/clean-slate-decision.sh" || { echo "cannot source $DEPLOY_SRC/scripts/ops/clean-slate-decision.sh"; exit 1; }
+# ...and the paused-mirror ledger, for the same reason: which agents may start, and what must stay
+# recorded as down, is driven by scripts/ops/mirror-ledger-test.sh rather than read out of this file.
+# shellcheck source=/dev/null
+. "$DEPLOY_SRC/scripts/ops/mirror-ledger.sh" || { echo "cannot source $DEPLOY_SRC/scripts/ops/mirror-ledger.sh"; exit 1; }
+# ...and the launchd-side question "what is loaded and producing into this broker", which is the gate in
+# front of the wipe. Driven by scripts/ops/loaded-mirror-agents-test.sh with a stubbed launchctl.
+# shellcheck source=/dev/null
+. "$DEPLOY_SRC/scripts/ops/loaded-mirror-agents.sh" || { echo "cannot source $DEPLOY_SRC/scripts/ops/loaded-mirror-agents.sh"; exit 1; }
 # Returns the REMOTE command's exit status (the filter stages would otherwise hide it: a function returns
 # its last pipe stage, and sed always succeeds).
 ssh_root() { local rc; sshpass -p "$PW" ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 "$HOST" "su - root -c '$1'" <<EOF 2>&1 | grep -vE "^Password: *$|WARNING: |vulnerable|openssh|^\*\*" | sed 's/^Password: //'
@@ -62,33 +79,85 @@ for plist in sorted(glob.glob(os.path.join(agents_dir, "com.optionsedge.*.plist"
             break
 PY
 }
-pause_mirrors() {
-  local uid label plist n=0 i; uid=$(id -u); touch "$PAUSED_LIST"
-  prod_mirror_agents | while read -r label plist; do launchctl list "$label" >/dev/null 2>&1 && printf '%s %s\n' "$label" "$plist"; done > "$PAUSED_LIST.new"
-  sort -u "$PAUSED_LIST" "$PAUSED_LIST.new" > "$PAUSED_LIST.merged" && mv "$PAUSED_LIST.merged" "$PAUSED_LIST"
+# RECORD FIRST, STOP SECOND. The merge into the ledger used to be unchecked, and every discovered
+# agent was booted out regardless: a failed merge stopped agents that nothing recorded, and the resume
+# could then report success with them down (deploy Codex round 5). mirror_ledger_record verifies the
+# rows are readable back out of the ledger, and a non-zero return here stops the whole run before
+# anything is paused or wiped.
+# The stop step, run by mirror_ledger_record UNDER THE LEDGER LOCK and only after every row it is about
+# to stop is readable back out of the ledger.
+#
+# A mirror that is STILL LOADED when this finishes is a failure, not a warning (deploy Codex round 6):
+# it is producing into the topics the next step is about to delete, which is the whole reason the pause
+# exists. The non-zero status reaches the caller, which then wipes nothing.
+_bootout_paused_agents() {
+  local uid label plist n=0 stuck=0 i; uid=$(id -u)
   while read -r label plist; do
     [ -n "$label" ] || continue
     launchctl bootout "gui/$uid/$label" >/dev/null 2>&1
     for i in 1 2 3 4 5 6 7 8 9 10; do launchctl list "$label" >/dev/null 2>&1 || break; sleep 3; done
-    launchctl list "$label" >/dev/null 2>&1 && say "   WARN: mirror agent $label is still loaded" || n=$((n+1))
-  done < "$PAUSED_LIST.new"; rm -f "$PAUSED_LIST.new"
+    if launchctl list "$label" >/dev/null 2>&1; then
+      stuck=$((stuck+1)); say "   STILL LOADED after bootout: $label"
+    else
+      n=$((n+1))
+    fi
+  done < "$PAUSED_LIST.new"
   say "paused $n es4->prod mirror agent(s) (list: $PAUSED_LIST)"
+  if [ "$stuck" -gt 0 ]; then
+    say "   $stuck mirror agent(s) are STILL PRODUCING — the wipe must not run while they are"
+    return 1
+  fi
 }
-resume_mirrors() {
-  [ -s "$PAUSED_LIST" ] || return 0
-  local uid label plist n=0 failed=0; uid=$(id -u)
-  while read -r label plist; do
+# The LOADED es4->prod mirror agents, with the discovery's own status checked. `prod_mirror_agents |
+# while ...` hid two things: the python discovery's exit status (the pipeline reports the while, which
+# always succeeds) and the difference between "nothing is loaded" and "the discovery did not run" --
+# and an empty list then read as a successful pause while mirrors were live (deploy Codex round 7).
+_loaded_prod_mirror_rows() {
+  local out rc
+  out="$(prod_mirror_agents)"; rc=$?
+  [ "$rc" -eq 0 ] || return 1
+  [ -n "$out" ] || return 0
+  printf '%s\n' "$out" | while read -r label plist; do
     [ -n "$label" ] || continue
-    [ -f "$plist" ] || { say "   (agent removed, skipped): $label"; continue; }
-    launchctl bootstrap "gui/$uid" "$plist" >/dev/null 2>&1
-    launchctl list "$label" >/dev/null 2>&1 && n=$((n+1)) || { failed=$((failed+1)); say "   WARN: mirror agent $label did not load"; }
-  done < "$PAUSED_LIST"
-  [ "$failed" -eq 0 ] && rm -f "$PAUSED_LIST"
-  say "resumed $n es4->prod mirror agent(s)"
+    launchctl list "$label" >/dev/null 2>&1 && printf '%s %s\n' "$label" "$plist"
+  done
 }
-
+pause_mirrors() {
+  local rc=0 rows after
+  if ! rows="$(_loaded_prod_mirror_rows)"; then
+    say "   mirror DISCOVERY failed — nothing may be paused and nothing may be wiped"
+    return 1
+  fi
+  : > "$PAUSED_LIST.new"
+  [ -z "$rows" ] || printf '%s\n' "$rows" > "$PAUSED_LIST.new"
+  mirror_ledger_record "$PAUSED_LIST" "$PAUSED_LIST.new" _bootout_paused_agents || rc=$?
+  rm -f "$PAUSED_LIST.new"
+  # THE GATE IS A SECOND PASS, AND IT ASKS LAUNCHD. It answers the question the wipe depends on -- "is
+  # any mirror loaded right now that produces into $PROD_BS?" -- without reading a single plist file,
+  # because a job stays loaded when its plist is moved or edited and a plist that fails to parse was
+  # silently skipped by the discovery above (deploy Codex round 8).
+  #
+  # WHAT IT COVERS, EXACTLY: every agent loaded up to the moment this census completes, which includes
+  # one that appeared after the first snapshot and one that snapshot missed. It does NOT cover an agent
+  # bootstrapped AFTER it (deploy Codex round 12) -- that is a time-of-check/time-of-use window, and
+  # closing it needs an exclusion the install paths honour (the seven Jenkinsfile.*-mirror jobs and
+  # ansible/es-mirrors.yml all bootstrap agents), not another census. That is not in this change. What
+  # IS done about it: the census is repeated immediately before the wipe, so the window is the seconds
+  # between that call and the remote delete rather than the minutes of this whole step.
+  if ! after="$(loaded_mirror_agents_for "$PROD_BS")"; then
+    say "   could not establish which mirrors are loaded (see above) — nothing may be wiped"
+    return 1
+  fi
+  if [ -n "$after" ]; then
+    say "   STILL LOADED after the pause: $(printf '%s' "$after" | tr '\n' ' ')"
+    say "   these mirrors are producing into topics the wipe would delete — refusing to continue"
+    return 1
+  fi
+  [ "$rc" -eq 0 ] || say "   pause did not complete: the ledger holds what was recorded, and nothing may be wiped"
+  return "$rc"
+}
 # ---- 0. ship the repo layout the host script sources ----
-for f in scripts/ops/offhours-clean-slate.sh scripts/kafka/reset-preserved-topics.sh scripts/kafka/topics.env scripts/jenkins/market_calendar.py scripts/kafka/apply-topics.sh scripts/kafka/ensure-partition-only-topics.sh scripts/kafka/load-kafka-settings.sh; do
+for f in scripts/ops/offhours-clean-slate.sh scripts/kafka/reset-preserved-topics.sh scripts/kafka/topics.env scripts/jenkins/market_calendar.py scripts/kafka/apply-topics.sh scripts/kafka/ensure-partition-only-topics.sh scripts/kafka/load-kafka-settings.sh scripts/ops/mirror-topic-filter.sh scripts/ops/clean-slate-decision.sh scripts/ops/mirror-ledger.sh scripts/ops/loaded-mirror-agents.sh; do
   [ -r "$DEPLOY_SRC/$f" ] || { echo "missing $DEPLOY_SRC/$f"; exit 1; }
 done
 say "=== prod clean-slate $MODE (after=$AFTER) source=$DEPLOY_SRC ==="
@@ -98,9 +167,28 @@ sshpass -p "$PW" scp -q -o StrictHostKeyChecking=no "$DEPLOY_SRC/scripts/kafka/r
 sshpass -p "$PW" scp -q -o StrictHostKeyChecking=no "$DEPLOY_SRC/scripts/jenkins/market_calendar.py" "$HOST:offhours/jenkins/"
 
 # ---- 1. mirrors ----
-if [ "$MODE" = wipe ]; then pause_mirrors; else say "dry: would pause $(prod_mirror_agents | wc -l | tr -d ' ') es4->prod mirror agents"; fi
+if [ "$MODE" = wipe ]; then
+  pause_mirrors || { say "mirror pause FAILED — nothing was paused, nothing wiped, no bring-up. Fix the ledger, then rerun."; exit 1; }
+else
+  say "dry: would pause $(prod_mirror_agents | wc -l | tr -d ' ') es4->prod mirror agents"
+fi
 
 # ---- 2. wipe on the host ----
+# THE LAST THING BEFORE THE DELETE: ask launchd again. The pause above ended with the same question, but
+# minutes of ssh and script shipping sit between the two, and an agent bootstrapped in that window would
+# be producing into topics this step deletes (deploy Codex round 12). This does not close the window --
+# only an exclusion the install paths honour would -- it narrows it to the seconds between here and the
+# remote delete, and it is cheap.
+if [ "$MODE" = wipe ]; then
+  if ! LIVE_NOW="$(loaded_mirror_agents_for "$PROD_BS")"; then
+    say "could not establish which mirrors are loaded immediately before the wipe — refusing to wipe."; exit 1
+  fi
+  if [ -n "$LIVE_NOW" ]; then
+    say "a mirror is LOADED immediately before the wipe: $(printf '%s' "$LIVE_NOW" | tr '\n' ' ')"
+    say "it would produce into the topics this step deletes — refusing to wipe. Pause it and rerun."
+    exit 1
+  fi
+fi
 say "host: offhours-clean-slate.sh DRY_RUN=$DRY WIPE_ENABLED=$WIPE TOPIC_WIPE_MODE=delete START_AFTER_WIPE=none STATE_RESET_MODE=contents ENVIRONMENT=production"
 ssh_root "chmod +x /home/abhinav/offhours/ops/offhours-clean-slate.sh && cd /home/abhinav/offhours/ops && \
   KUBECONFIG=/etc/rancher/k3s/k3s.yaml CALENDAR_DIR=/home/abhinav/offhours/jenkins ENVIRONMENT=production \
@@ -119,34 +207,134 @@ fi
 [ "$RC" -eq 0 ] || { say "host wipe FAILED (exit $RC) — mirrors stay paused, no recreate, no bring-up. Fix, then rerun."; exit "$RC"; }
 
 # ---- 3. recreate the declared set from this Mac (== Jenkins deploy path) ----
+# apply-topics.sh and ensure-partition-only-topics.sh are run SEPARATELY and their statuses kept apart:
+# `a && b` behind one PIPESTATUS could not say which of the two failed, and the decision below turns on
+# apply-topics.sh's status alone.
 say "recreate: apply-topics.sh (ENVIRONMENT=production) + ensure-partition-only-topics.sh against $PROD_BS"
-( cd "$DEPLOY_SRC" && export ENVIRONMENT=production KAFKA_BOOTSTRAP_SERVERS=$PROD_BS && . scripts/kafka/load-kafka-settings.sh \
-  && KAFKA_RECREATE_MISMATCHED_TOPICS=false scripts/kafka/apply-topics.sh \
-  && scripts/kafka/ensure-partition-only-topics.sh ) 2>&1 | grep -vE '^\s*$' | tail -25 | tee -a "$LOG"
-RRC=${PIPESTATUS[0]}
-( cd "$DEPLOY_SRC" && . scripts/kafka/topics.env && want=$(echo $OPTIONS_EDGE_TOPICS $OPTIONS_EDGE_PROD_ONLY_TOPICS | tr ' ' '\n' | sed 's/:.*//' | sort -u) \
+APPLY_OUT=$(mktemp -t prod-clean-slate-apply) || { say "could not create a temp file for the apply output"; exit 1; }
+# The ATTESTATION file. apply-topics.sh writes one line here from its endings and nowhere else, so this
+# — not its exit status, and not a line on a stream it shares with every kafka CLI it runs — is what
+# says the declared list was walked to the end. Created EMPTY: a run that falls over leaves it empty.
+# Under `set -e` a child that exits 9 aborts apply-topics.sh WITH status 9, which would otherwise be
+# indistinguishable from its skip ending (deploy Codex round 1).
+APPLY_RESULT=$(mktemp -t prod-clean-slate-result) || { say "could not create a temp file for the apply result"; exit 1; }
+: > "$APPLY_RESULT"
+trap 'rm -f "$APPLY_OUT" "$APPLY_RESULT"' EXIT
+( cd "$DEPLOY_SRC" && export ENVIRONMENT=production KAFKA_BOOTSTRAP_SERVERS=$PROD_BS APPLY_TOPICS_RESULT_FILE="$APPLY_RESULT" \
+  && . scripts/kafka/load-kafka-settings.sh \
+  && KAFKA_RECREATE_MISMATCHED_TOPICS=false scripts/kafka/apply-topics.sh ) > "$APPLY_OUT" 2>&1
+ARC=$?
+grep -vE '^\s*$' "$APPLY_OUT" | tail -25 | tee -a "$LOG"
+ERC=0
+if [ "$ARC" -eq 0 ] || [ "$ARC" -eq 9 ]; then
+  # Independent of the declared set's reconciliation: these are the config-less partition-only topics.
+  ( cd "$DEPLOY_SRC" && export ENVIRONMENT=production KAFKA_BOOTSTRAP_SERVERS=$PROD_BS && . scripts/kafka/load-kafka-settings.sh \
+    && scripts/kafka/ensure-partition-only-topics.sh ) 2>&1 | grep -vE '^\s*$' | tail -10 | tee -a "$LOG"
+  ERC=${PIPESTATUS[0]}
+else
+  say "skipped ensure-partition-only-topics.sh: apply-topics.sh did not complete (exit $ARC)"
+  ERC="$ARC"
+fi
+
+# What is actually on the broker, and what is not. MISSING feeds the mirror hold set below: on a topic
+# the recreate did not create, a mirror's first produce is what creates it, at the broker default
+# partition count (auto.create.topics.enable) -- the defect mirrors are paused for to begin with.
+MISSING=""
+CENSUS=ok
+MISSING=$( cd "$DEPLOY_SRC" && . scripts/kafka/topics.env && want=$(echo $OPTIONS_EDGE_TOPICS $OPTIONS_EDGE_PROD_ONLY_TOPICS | tr ' ' '\n' | sed 's/:.*//' | sort -u) \
   && have=$(kafka-topics --bootstrap-server $PROD_BS --list 2>/dev/null) \
-  && missing=$(comm -23 <(echo "$want") <(echo "$have" | sort -u)) \
-  && say "declared topics present: $(( $(echo "$want" | wc -l) - $(echo "$missing" | grep -c .) ))/$(echo "$want" | wc -l | tr -d ' ')${missing:+  MISSING: $(echo $missing)}" )
-# KNOWN, NOT FIXED HERE (2026-10-07). apply-topics.sh exits 1 when ANY declared topic could not be
-# reconciled, while saying in the same breath that every OTHER topic WAS created/updated. This wrapper
-# reads that exit code as "the recreate is unusable" and leaves the whole es4->prod mirror set paused —
-# so one drifted topic takes twelve mirrors down with it, which is what happened on 2026-10-07
-# (options.spx.strike-invasion.current, 1 partition vs a declared 32 — a drift, not data loss: widening
-# a non-exact topic is non-destructive, it only re-routes keys). The declaration side of that
-# incident is fixed (scripts/kafka/resolve-prod-partition-overrides.sh); this coupling is NOT, because
-# loosening it means deciding which apply-topics failures still permit a bring-up, and that is an
-# owner decision about the "a failed reset stays DOWN" rule, not a refactor.
-if [ "$RRC" -ne 0 ]; then say "recreate FAILED (exit $RRC) — mirrors stay PAUSED (list: $PAUSED_LIST); no bring-up."; exit "$RRC"; fi
+  && comm -23 <(echo "$want") <(echo "$have" | sort -u) )
+MRC=$?
+if [ "$MRC" -ne 0 ]; then
+  # The census itself failed (no broker, no CLI). Nothing may be concluded about what is present, so
+  # every mirror is held: this is the same fail-closed direction as mirror-topic-filter.sh.
+  CENSUS=unverified
+  say "declared-topic census FAILED (exit $MRC) — treating every declared topic as unverified"
+  MISSING=$( cd "$DEPLOY_SRC" && . scripts/kafka/topics.env && echo $OPTIONS_EDGE_TOPICS $OPTIONS_EDGE_PROD_ONLY_TOPICS | tr ' ' '\n' | sed 's/:.*//' | sort -u )
+fi
+( cd "$DEPLOY_SRC" && . scripts/kafka/topics.env && want=$(echo $OPTIONS_EDGE_TOPICS $OPTIONS_EDGE_PROD_ONLY_TOPICS | tr ' ' '\n' | sed 's/:.*//' | sort -u) \
+  && say "declared topics present: $(( $(echo "$want" | wc -l) - $(echo "$MISSING" | grep -c .) ))/$(echo "$want" | wc -l | tr -d ' ')${MISSING:+  MISSING: $(echo $MISSING)}" )
+
+# The topics apply-topics.sh reached the end of the list WITHOUT reconciling — read from the
+# attestation file, never from the output. An EMPTY $SKIPPED_NAMES therefore means "no attested skip
+# ending", which the decision treats as a failure whenever the status is the skip status; that is what
+# closes the exit-9-from-a-child hole. state=ok attests the other ending and names nothing.
+read_apply_attestation "$APPLY_RESULT"
+SKIPPED_NAMES=""
+case "$ATTEST_STATE" in
+  skipped) SKIPPED_NAMES="$ATTEST_SKIPPED" ;;
+  ok)      say "apply-topics attested state=ok (the whole declared list was reconciled)" ;;
+  *)       say "apply-topics left NO usable attestation: ${ATTEST_REASON:-unknown}" ;;
+esac
+
+# ---- the mirror decision (2026-10-08) ----
+# WHAT CHANGED. apply-topics.sh exits 9 AND attests `state=skipped` when it reached the END of the
+# declared list and some topics could not be reconciled; it exits any other non-zero, with no
+# attestation, when the run did not complete. Both of those were exit 1 until this block existed, so
+# one drifted topic read as "the recreate is unusable" and left all twelve es4->prod mirrors paused on
+# 2026-10-07 (options.spx.strike-invasion.current, 1 partition vs a declared 32 — a drift, and one no
+# mirror produces into). The status is necessary and not sufficient: the attestation is what makes the
+# two distinguishable, because a child process exiting 9 produces the same status.
+#
+# WHAT DID NOT CHANGE: the owner rule that a reset which did not complete stays DOWN. A partial
+# recreate still does NOT bring prod up. Starting the mirrors is a different act from a bring-up: the
+# mirrors are a COPY path this script paused itself in step 1, their offsets live on es4, and every one
+# that is started here is one whose topics were all reconciled. A mirror with a stake in an
+# unreconciled or missing topic stays paused, which is the part that protects key routing.
+clean_slate_decide "$ARC" "$ERC" "$SKIPPED_NAMES" "$MISSING" "$ATTEST_STATE" "$CENSUS"
+say "decision: $DECISION_VERDICT (apply=$ARC ensure=$ERC attested=${ATTEST_STATE:-<none>} census=$CENSUS) resume=$DECISION_RESUME bringup=$DECISION_BRINGUP exit=$DECISION_EXIT"
+case "$DECISION_VERDICT" in
+  PARTIAL)
+    say "recreate PARTIAL: could not reconcile:$(printf ' %s' $SKIPPED_NAMES)"
+    say "   every OTHER declared topic WAS created/updated; mirrors that copy one of those topics stay paused."
+    ;;
+  FAIL)
+    # One message for every way the recreate can be unusable, including `apply-topics.sh exited 9 but
+    # named no skipped topics`, which the decision treats as a failure precisely because it cannot be
+    # told apart from a partial success any other way.
+    say "recreate FAILED (apply=$ARC ensure=$ERC) — mirrors stay PAUSED (list: $PAUSED_LIST); no bring-up."
+    [ "$ARC" -eq 9 ] 2>/dev/null && [ -z "$SKIPPED_NAMES" ] && \
+      say "   (it exited with the skip status but attested no skip ending, so which topics are unreconciled — and therefore which mirrors are safe — is unknowable)"
+    exit "$DECISION_EXIT"
+    ;;
+esac
 
 # ---- 4. mirrors back ----
-resume_mirrors
+# Every paused agent EXCEPT those that copy a topic in the hold set. On a full success the hold set is
+# empty (apply-topics.sh reconciled the whole declaration), so this is the old unconditional resume.
+# Gated on the decision's OWN resume field rather than on "we got past the FAIL arm": the two agree
+# today, and a later edit that reorders the arms would otherwise silently start every mirror.
+RESUME_RC=0
+if [ "$DECISION_RESUME" = yes ]; then
+  # Its status is carried to THIS SCRIPT'S exit status, not just logged (deploy Codex round 3): an
+  # agent that should be running and is not must not leave a run looking clean. It does not block the
+  # bring-up below — prod coming up does not depend on the es4 copy path, and holding prod down over a
+  # launchd agent would be a worse trade — but the run ends non-zero and says so last.
+  if ! mirror_ledger_resume "$PAUSED_LIST" "$DEPLOY_SRC/scripts/ops/mirror-topic-filter.sh" $DECISION_HOLD; then
+    RESUME_RC=1
+    say "WARN: not every paused mirror agent is running — see the lines above; $PAUSED_LIST still lists the ones that are not."
+  fi
+else
+  say "mirrors stay PAUSED (decision resume=$DECISION_RESUME)"
+fi
 
 # ---- 5. bring-up ----
+# A PARTIAL recreate stops here, and stops BEFORE the bring-up: the owner rule is that a reset which
+# did not complete stays DOWN. Step 4 above is deliberately on the other side of this line — resuming a
+# copy path this script paused itself is not bringing prod up.
+if [ "$DECISION_BRINGUP" != yes ]; then
+  say "no bring-up: a reset that did not fully reconcile stays DOWN. Fix the drift above, then rerun."
+  say "=== prod clean-slate $DECISION_VERDICT (exit $DECISION_EXIT) ==="
+  exit "$DECISION_EXIT"
+fi
 if [ "$AFTER" = up ]; then
   say "full bring-up: systemctl restart oe-boot-bringup (waves + partition doctor)"
   ssh_root "systemctl restart oe-boot-bringup; for i in \$(seq 1 90); do [ \"\$(systemctl is-active oe-boot-bringup)\" != activating ] && break; sleep 10; done; journalctl -u oe-boot-bringup --since \"-25 min\" --no-pager -o cat | grep -E \"wave:|result:|doctor|REPAIR|UNREPAIRABLE|done\" | tail -8" | tee -a "$LOG"
 else
   say "left at 0 (wipe down) — bring up with: ssh root@.252 systemctl restart oe-boot-bringup"
+fi
+if [ "$RESUME_RC" -ne 0 ]; then
+  say "=== prod clean-slate FINISHED WITH A MIRROR STILL DOWN (exit 1) — $PAUSED_LIST lists it ==="
+  exit 1
 fi
 say "=== prod clean-slate DONE ==="

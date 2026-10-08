@@ -1,5 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# APPLY_TOPICS_RESULT_FILE — the completion attestation (see the block above the main loop). Captured
+# here and REMOVED FROM THE ENVIRONMENT immediately, before this script runs anything: an exported
+# variable is inherited by every child, so leaving it exported would hand each kafka CLI the path to
+# the file that attests this script's own ending (deploy Codex round 2). Nothing below reads the
+# variable; write_run_result uses this shell-local copy.
+RESULT_FILE="${APPLY_TOPICS_RESULT_FILE:-}"
+unset APPLY_TOPICS_RESULT_FILE
+# Emptied HERE, by this script, before anything else happens: a caller that reuses a path (or forgets
+# to truncate it) would otherwise have a PREVIOUS run's attestation read as this one's. Refusing when
+# it cannot be emptied is the fail-closed direction -- better no run than an unattestable one.
+if [ -n "$RESULT_FILE" ] && ! : > "$RESULT_FILE"; then
+  echo "apply-topics.sh: cannot empty the result file $RESULT_FILE" >&2
+  exit 1
+fi
+
 : "${KAFKA_BOOTSTRAP_SERVERS:?KAFKA_BOOTSTRAP_SERVERS is required}"
 # RF must be provided explicitly (Jenkins sources scripts/kafka/load-kafka-settings.sh,
 # which derives it from the rendered per-environment configmap). No silent default.
@@ -8,6 +23,7 @@ RETENTION_MS="${KAFKA_TOPIC_RETENTION_MS:-86400000}"
 CLEANUP_POLICY="${KAFKA_TOPIC_CLEANUP_POLICY:-delete}"
 MIN_ISR="${KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS:-1}"
 RECREATE_MISMATCHED="${KAFKA_RECREATE_MISMATCHED_TOPICS:-false}"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/topics.env"
@@ -357,8 +373,58 @@ alter_topic_config() {
 # underlying.es.trades.linearized, spx.drop.nowcast — were never created, and that surfaced an hour
 # later as four UNRELATED-LOOKING service crash-loops on prod with no single error pointing back
 # here. The safety property this script exists to enforce (never silently destroy a mismatched
-# topic's data) is preserved: every skip below is still reported, and the script still exits 1 at
-# the end if anything was skipped. What changes is that skipping topic N no longer skips N+1..last.
+# topic's data) is preserved: every skip below is still reported, and the script still exits NON-ZERO
+# at the end if anything was skipped. What changes is that skipping topic N no longer skips N+1..last.
+#
+# AND THE EXIT CODE SAYS WHICH OF THE TWO HAPPENED (2026-10-08). "Some topics were skipped, the rest of
+# the list was reconciled" and "this run fell over" were both exit 1, so no caller could tell them
+# apart. On 2026-10-07 scripts/ops/prod-clean-slate.sh read the skip exit as "the recreate is unusable"
+# and left all twelve es4->prod mirrors paused over ONE drifted topic that no mirror produces into.
+#
+#   exit 0                        every declared topic reconciled
+#   exit $SKIPPED_EXIT (below)    the run reached the END of the list; the named topics could not be
+#                                 reconciled and every other declared topic WAS created/updated
+#   any other non-zero            the run did NOT complete -- set -e aborted it, or a precondition
+#                                 refused it. Nothing may be inferred about the rest of the list.
+#
+# THE STATUS ALONE IS NOT PROOF OF COMPLETION, and must not be treated as such (deploy Codex round 1):
+# under `set -e` a child process that itself exits 9 -- a kafka CLI, a future helper -- aborts this
+# script mid-loop WITH STATUS 9, which is indistinguishable from the skip ending. Nor is the stdout
+# line below proof: it shares a stream with every child's output.
+#
+# So completion is attested OUT OF BAND, in a file only this script's endings write:
+#
+#   APPLY_TOPICS_RESULT_FILE=<path>   optional. When set, this script writes exactly one line to it,
+#                                     AFTER the declared list has been walked to the end:
+#                                       apply-topics: state=ok skipped=
+#                                       apply-topics: state=skipped skipped=<name> <name> ...
+#
+# A caller that acts on a partial reconciliation (scripts/ops/prod-clean-slate.sh) must require BOTH
+# the status and that line, as EXACTLY ONE line in the expected shape. Four properties make that
+# sound, and each is a case in scripts/kafka/apply-topics-skip-exit-test.sh:
+#   * the variable is UNSET at the top of this script, before anything runs, so no child inherits the
+#     path (the path is not a secret -- it is in this script's environment for an instant and in the
+#     caller's process table -- but no kafka CLI or future helper can write it by inheritance);
+#   * the file is EMPTIED here, by this script, so a previous run's line is never read as this one's
+#     and no caller has to remember to truncate it;
+#   * an aborted run never reaches the write, so there is nothing to read;
+#   * a write that FAILS aborts the run under set -e, so the caller sees a non-zero status and an
+#     empty file -- the fail-closed direction.
+#
+# Callers that only test for non-zero -- the Jenkins stages, scripts/es4/create-es-topics.sh -- are
+# unaffected: a skip is still a failure, and still fails the build.
+SKIPPED_EXIT=9
+
+# One line, written only from the two endings at the bottom of this file. Truncating (>) rather than
+# appending keeps a reused path honest: a caller that pre-creates the file EMPTY therefore reads "no
+# attestation" from every run that did not reach an ending.
+write_run_result() { # <state> <space-separated skipped names>
+  [ -n "${RESULT_FILE:-}" ] || return 0
+  if ! printf 'apply-topics: state=%s skipped=%s\n' "$1" "$2" > "$RESULT_FILE"; then
+    echo "apply-topics.sh: could not write the result file $RESULT_FILE" >&2
+    return 1
+  fi
+}
 SKIPPED_TOPICS=()
 
 for entry in $OPTIONS_EDGE_TOPICS; do
@@ -463,5 +529,17 @@ if (( ${#SKIPPED_TOPICS[@]} > 0 )); then
   echo "topic above this line WAS still created/updated — this run does not abandon the rest of the" >&2
   echo "list over one drifted topic):" >&2
   for t in "${SKIPPED_TOPICS[@]}"; do echo "  - $t" >&2; done
-  exit 1
+  # The same facts once more, parseable: the NAMES alone, since the human list above carries a
+  # free-text reason in parentheses after each one. Each entry's name is its first whitespace-delimited
+  # field, which is how it is built above.
+  #
+  # On stdout for a reader; in APPLY_TOPICS_RESULT_FILE for a CALLER, which is the only one of the two
+  # a child process cannot produce. The write comes first, and a failed write aborts under set -e.
+  write_run_result skipped "${SKIPPED_TOPICS[*]%% *}"
+  echo "apply-topics.sh: SKIPPED_TOPIC_NAMES:$(printf ' %s' "${SKIPPED_TOPICS[@]%% *}")"
+  exit "$SKIPPED_EXIT"
 fi
+
+# The OTHER ending: the whole declared list reconciled. Attested the same way, so a caller reading the
+# file sees which of the two endings ran rather than inferring it from a status.
+write_run_result ok ''
