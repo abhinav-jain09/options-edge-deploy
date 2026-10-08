@@ -99,34 +99,87 @@ plistlib.dump({"Label": "com.optionsedge.gone", "ProgramArguments": [sys.argv[2]
 PY
 want_hold "$GONE" topic.ccc && ok "a program that does not exist is a HOLD" || bad "a missing program was CLEARED"
 
-echo "4b. a whitelist it cannot READ from the file is a HOLD, and a comment is not a whitelist"
+echo "4a. the two shapes the install paths really generate are ACCEPTED"
+# One-line (the es-* units) and backslash-continued (the dl-mirror-* units), both taken from the live
+# files under ~/oe-ops. If either stopped being accepted, every mirror of that shape would be held
+# forever by a filter that is supposed to hold only the ones with a stake in an unreconciled topic.
+ONELINE=$(unit real1 'XX')   # placeholder, overwritten below
+cat > "$WORK/real1/run-mirror.sh" <<'RM1'
+#!/usr/bin/env bash
+set -euo pipefail
+export KAFKA_LOG4J_OPTS="-Dlog4j.configuration=file:/Users/abhinav/oe-ops/x/log4j.properties"
+exec "/Users/abhinav/development/confluent-7.3.1/bin/kafka-mirror-maker"   --consumer.config "/Users/abhinav/oe-ops/x/consumer.properties"   --producer.config "/Users/abhinav/oe-ops/x/producer.properties"   --offset.commit.interval.ms 5000   --whitelist 'es\.futures\.auction' --num.streams 1
+RM1
+want_hold "$ONELINE" es.futures.auction && ok "the one-line generated shape is read, and holds its topic" || bad "the real one-line shape was not read"
+want_clear "$ONELINE" something.else && ok "and clears an unrelated topic" || bad "the real one-line shape held an unrelated topic"
+
+CONTD=$(unit real2 'XX')
+cat > "$WORK/real2/run-mirror.sh" <<'RM2'
+#!/usr/bin/env bash
+# DEV -> .74 : a comment block, as the real file has.
+set -euo pipefail
+export KAFKA_LOG4J_OPTS="-Dlog4j.configuration=file:/Users/abhinav/oe-ops/y/log4j.properties"
+exec "/Users/abhinav/development/confluent-7.3.1/bin/kafka-mirror-maker" \
+  --consumer.config "/Users/abhinav/oe-ops/y/consumer.properties" \
+  --producer.config "/Users/abhinav/oe-ops/y/producer.properties" \
+  --whitelist 'dealer-ledger-profile|dealer-ledger-state' \
+  --num.streams 3
+RM2
+want_hold "$CONTD" dealer-ledger-state && ok "the continued generated shape is read, and holds its topic" || bad "the real continued shape was not read"
+want_clear "$CONTD" something.else && ok "and clears an unrelated topic" || bad "the real continued shape held an unrelated topic"
+
+echo "4b. only the ACCEPTED launcher format can produce a CLEAR"
+# A scan over script text cannot be made to hold: a decoy in an inline comment, a here-doc body, or a
+# wrapper that execs the real launcher from elsewhere are all text a scan reads as code or not at all.
+# So the format is accepted and everything else is a HOLD (deploy Codex round 5).
+DECOY=$(unit decoy 'exec /usr/local/bin/real-launcher   # --whitelist '"'"'topic\.decoy'"'"'')
+want_hold "$DECOY" topic.decoy && ok "a launcher with a commented decoy is a HOLD" || bad "a decoy comment was read as the whitelist"
+want_hold "$DECOY" anything.else && ok "and it holds for every topic, since nothing is established" || bad "a wrapper CLEARED a topic"
+
+HEREDOC=$(unit heredoc 'cat > /tmp/x <<EOF
+--whitelist '"'"'topic\.inheredoc'"'"'
+EOF
+exec kafka-mirror-maker --consumer.config c --num.streams 1')
+want_hold "$HEREDOC" anything && ok "a file containing a here-doc is a HOLD" || bad "a here-doc file was CLEARED"
+
+INLINE=$(unit inline "exec kafka-mirror-maker --whitelist 'topic\.live' --num.streams 1  # --whitelist 'topic\.extra'")
+want_hold "$INLINE" anything && ok "a second --whitelist anywhere in the file is a HOLD" || bad "a file with two --whitelist mentions was CLEARED"
+
+TWOEXEC=$(unit twoexec "if [ -f /tmp/a ]; then
+  exec kafka-mirror-maker --consumer.config c --num.streams 1
+fi
+exec kafka-mirror-maker --whitelist 'topic\.second' --num.streams 1")
+want_hold "$TWOEXEC" anything && ok "two kafka-mirror-maker lines are a HOLD" || bad "a file with two launcher lines was CLEARED"
+
+SOURCED=$(unit sourced "source /etc/mirror.env
+exec kafka-mirror-maker --whitelist 'topic\.sourced' --num.streams 1")
+want_hold "$SOURCED" anything && ok "a file that sources another is a HOLD" || bad "a sourcing file was CLEARED"
+DOTINC=$(unit dotinc ". /etc/mirror.env
+exec kafka-mirror-maker --whitelist 'topic\.dotinc' --num.streams 1")
+want_hold "$DOTINC" anything && ok "so is a dot-include" || bad "a dot-including file was CLEARED"
+EVAL=$(unit evaled "eval exec kafka-mirror-maker --whitelist 'topic\.evaled' --num.streams 1")
+want_hold "$EVAL" anything && ok "so is an eval" || bad "an eval'd launcher was CLEARED"
+PIPED=$(unit piped "exec kafka-mirror-maker --whitelist 'topic\.piped' --num.streams 1 | tee /tmp/log")
+want_hold "$PIPED" anything && ok "a launcher line with a pipe is not the accepted shape" || bad "a piped launcher was CLEARED"
+
+echo "4c. a whitelist it cannot READ from the file is a HOLD"
 # A value assembled at runtime is not in the file, so no CLEAR can rest on it.
 DYN=$(unit dyn 'WL="topic\.dyn"
 exec kafka-mirror-maker --whitelist "$WL" --num.streams 1')
 want_hold "$DYN" anything.at.all && ok "a --whitelist built from a variable is a HOLD" \
   || bad "a dynamic whitelist was CLEARED"
 v="$(bash "$F" "$DYN" anything.at.all 2>&1 || true)"
-printf '%s' "$v" | grep -q 'dynamically' && ok "and says it cannot be read from the file" || bad "the reason is [$v]"
+# The reason is the FORMAT one: a value with a $ in it is not an accepted literal, so the launcher
+# line is not the accepted shape. (It used to be a separate "built dynamically" message, from the
+# scan that the accepted format replaced.)
+printf '%s' "$v" | grep -q 'not the accepted' && ok "and says the launcher line is not the accepted shape" || bad "the reason is [$v]"
 DYNC=$(unit dync 'exec kafka-mirror-maker --whitelist "$(cat /etc/whitelist)" --num.streams 1')
 want_hold "$DYNC" anything.at.all && ok "so is one built by a command substitution" || bad "a substituted whitelist was CLEARED"
 
-# A COMMENT is not executed, so its whitelist is not the agent's: a program whose only --whitelist is
-# commented out has none, and that is a HOLD rather than a verdict from dead text.
+# A COMMENTED-OUT launcher leaves the file with no accepted launcher line at all.
 CMT=$(unit cmt '# exec kafka-mirror-maker --whitelist '"'"'topic\.commented'"'"' --num.streams 1
-exec kafka-mirror-maker --consumer.config c --num.streams 1')
-want_hold "$CMT" topic.commented && ok "a commented-out whitelist is not a whitelist" || bad "a comment was read as the whitelist"
-v="$(bash "$F" "$CMT" topic.commented 2>&1 || true)"
-printf '%s' "$v" | grep -q 'no --whitelist in the program' && ok "and it says the program has none" || bad "the reason is [$v]"
-
-# A DEAD BRANCH is text that runs under some condition this file cannot evaluate, so its whitelist is
-# unioned in: it can only add holds.
-DEAD=$(unit dead 'if false; then
-  exec kafka-mirror-maker --whitelist '"'"'topic\.dead'"'"' --num.streams 1
-fi
-exec kafka-mirror-maker --whitelist '"'"'topic\.live'"'"' --num.streams 1')
-want_hold "$DEAD" topic.live && ok "the live branch holds"              || bad "the live whitelist did not hold"
-want_hold "$DEAD" topic.dead && ok "and the dead branch holds too"      || bad "a dead branch's whitelist was ignored"
-want_clear "$DEAD" topic.other && ok "and an unrelated topic is CLEAR"  || bad "an unrelated topic was held"
+exec /usr/local/bin/other-thing')
+want_hold "$CMT" topic.commented && ok "a commented-out launcher is not a launcher" || bad "a comment was read as the launcher"
 
 echo "5. FAIL CLOSED on anything it cannot read"
 NOSCRIPT="$WORK/com.optionsedge.noscript.plist"
@@ -162,7 +215,40 @@ v="$(bash "$F" "$CVD" es.futures.cvd.bars 2>&1 || true)"
 printf '%s' "$v" | grep -q 'es.futures.cvd.bars ~ /es\\.futures\\.cvd\\.bars/' \
   && ok "the HOLD line names both" || bad "the HOLD line does not name both: $v"
 
-echo "7. MUTATION: a filter that stops matching must not silently CLEAR"
+echo "7. MUTATIONS: the accepted format and the matcher are each load-bearing"
+# A launcher line with a TRAILING COMMENT carrying the only --whitelist in the file: the real filter
+# refuses it (the line is not the accepted shape), so no verdict can come from a comment. A mutant
+# whose line pattern tolerates trailing text reads that comment as an argument, and then a decoy
+# decides which mirrors start.
+INLDEC=$(unit inldec "exec kafka-mirror-maker --consumer.config c --num.streams 1  # --whitelist 'topic\\.inlinedecoy'")
+want_hold "$INLDEC" topic.inlinedecoy && ok "a trailing-comment decoy is a HOLD" || bad "the trailing-comment decoy was CLEARED"
+want_hold "$INLDEC" unrelated.topic   && ok "and holds every topic, since nothing is established" || bad "the decoy file CLEARED an unrelated topic"
+
+# TWO rules keep that comment out of the verdict: the line must END after its flags, and only the
+# FLAG REGION is parsed for arguments. Mutating the first alone leaves the second refusing (the comment
+# is outside the flag region), which is itself worth knowing. The mutation below removes the second --
+# the args capture becomes "everything after the program" -- and the comment then decides.
+mkdir -p "$WORK/mutfmt"; cp "$F" "$WORK/mutfmt/f.sh"
+python3 - "$WORK/mutfmt/f.sh" <<'PYEOF'
+import sys
+p = sys.argv[1]
+lines = open(p).read().split("\n")
+hits = [i for i, l in enumerate(lines) if l.strip().startswith('r"(?P<args>')]
+assert len(hits) == 1, "the mutation did not apply -- the args capture has moved (%d candidates)" % len(hits)
+lines[hits[0]] = '    r"(?P<args>.*)$"'
+open(p, "w").write("\n".join(lines))
+PYEOF
+if [ $? -eq 0 ]; then
+  got="$(bash "$WORK/mutfmt/f.sh" "$INLDEC" topic.inlinedecoy 2>&1 || true)"
+  printf '%s' "$got" | grep -q 'inlinedecoy ~' \
+    && ok "the mutant takes its verdict from the COMMENT's whitelist (the accepted format is load-bearing)" \
+    || bad "the args mutation produced [$got]"
+  got="$(bash "$WORK/mutfmt/f.sh" "$INLDEC" unrelated.topic 2>&1 || true)"
+  case "$got" in CLEAR*) ok "and CLEARS everything the comment does not name" ;;
+    *) bad "the mutant answered [$got] for an unrelated topic" ;; esac
+fi
+
+echo "7b. MUTATION: a filter that stops matching must not silently CLEAR"
 mkdir -p "$WORK/mut"; cp "$F" "$WORK/mut/f.sh"
 python3 - "$WORK/mut/f.sh" <<'PY'
 import sys

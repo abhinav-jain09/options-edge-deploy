@@ -213,10 +213,7 @@ OUT="$(bash -c '. "$1/mirror-ledger.sh"; mirror_ledger_resume "/nope/ledger" "$1
 OUT="$(bash -c '. "$1/mirror-ledger.sh"; mirror_ledger_resume' _ "$HERE" 2>&1)"; RC=$?
 [ "$RC" -ne 0 ] && ok "no ledger path at all is refused" || bad "no arguments returned 0"
 
-echo "10. MUTATIONS: each half of the invariant is load-bearing"
-# One explicit block per mutation. A shared helper plumbed the ledger content, the mutated copy and the
-# hold topics through three layers and a `bash -c`, and a mistake in that plumbing reported "the mutant
-# failed for its own reason (127)" -- a mutation that never ran, scored as a pass.
+# The mutation helpers, defined before their first use (section 9c) rather than beside section 10.
 mutant_dir() { # <OLD%%->%%NEW> -> prints the directory holding a mutated copy, or fails
   local edit="$1" dir="$WORK/mut.$RANDOM"
   mkdir -p "$dir" || return 1
@@ -241,6 +238,71 @@ run_in() { # <dir> <ledger> [hold...] -> MUT_RC, MUT_OUT
   MUT_RC=$?
 }
 
+echo "9b. mirror_ledger_record: rows go in BEFORE anything is stopped, and are read back out"
+rec() { # <ledger> <rows...> -> REC_RC, REC_OUT
+  local led="$1"; shift
+  local rowsf="$WORK/rows.$RANDOM"; printf '%s\n' "$@" > "$rowsf"
+  rm -rf "$led.lock"
+  REC_OUT="$(bash -c '. "$1/mirror-ledger.sh"; mirror_ledger_record "$2" "$3"' _ "$HERE" "$led" "$rowsf" 2>&1)"
+  REC_RC=$?
+}
+LEDGER="$WORK/rec.fresh"; rm -f "$LEDGER"
+rec "$LEDGER" "com.optionsedge.aaa $A"
+[ "$REC_RC" -eq 0 ] && ok "recording into a ledger that does not exist yet works" || bad "returned $REC_RC: $REC_OUT"
+grep -qxF "com.optionsedge.aaa $A" "$LEDGER" && ok "and the row is readable back" || bad "the row is not in the ledger: $(cat "$LEDGER" 2>/dev/null)"
+rec "$LEDGER" "com.optionsedge.bbb $B"
+grep -qxF "com.optionsedge.aaa $A" "$LEDGER" && grep -qxF "com.optionsedge.bbb $B" "$LEDGER" \
+  && ok "a second record MERGES rather than replaces" || bad "the ledger holds: $(cat "$LEDGER")"
+rec "$LEDGER" "com.optionsedge.bbb $B"
+[ "$(grep -c "com.optionsedge.bbb" "$LEDGER")" = 1 ] && ok "and recording the same row twice leaves one" || bad "duplicated: $(cat "$LEDGER")"
+rec "$LEDGER"
+[ "$REC_RC" -eq 0 ] && ok "an empty row set is a no-op, not an error" || bad "returned $REC_RC"
+# The cases where NOTHING may be stopped.
+mkdir -p "$WORK/ro3"; LEDGER="$WORK/ro3/rec"; printf '%s %s\n' "com.optionsedge.aaa" "$A" > "$LEDGER"; chmod 500 "$WORK/ro3"
+rec "$LEDGER" "com.optionsedge.bbb $B"
+chmod 700 "$WORK/ro3"
+[ "$REC_RC" -ne 0 ] && ok "a ledger directory that cannot be written refuses" || bad "returned 0: $REC_OUT"
+diff <(printf '%s %s\n' "com.optionsedge.aaa" "$A") "$LEDGER" >/dev/null && ok "and leaves the ledger as it was" || bad "the ledger changed"
+LEDGER="$WORK/rec.link"; ln -sf "$WORK/rec.fresh" "$LEDGER"
+rec "$LEDGER" "com.optionsedge.ccc $C"
+[ "$REC_RC" -ne 0 ] && ok "a symlinked ledger refuses" || bad "recorded into a symlink"
+LEDGER="$WORK/rec.locked"; : > "$LEDGER"; mkdir -p "$LEDGER.lock"
+REC_OUT="$(bash -c '. "$1/mirror-ledger.sh"; printf "%s\n" "x y" > "$2.rows"; mirror_ledger_record "$2" "$2.rows"' _ "$HERE" "$LEDGER" 2>&1)"; REC_RC=$?
+[ "$REC_RC" -ne 0 ] && ok "a held lock refuses" || bad "recorded while the ledger was locked"
+rmdir "$LEDGER.lock"
+rec "$WORK/rec.fresh" "com.optionsedge.aaa $A"
+[ ! -d "$WORK/rec.fresh.lock" ] && ok "and a successful record releases the lock" || bad "the lock was left behind"
+
+echo "9c. MUTATION: the read-back is what makes recording a guarantee"
+# The fault is INJECTED into the merge (it ignores the new rows), because a merge cannot be made to
+# lose a row from outside. Held constant across both runs; the mutation under test is the removal of
+# the read-back.
+RECFAULT='sort -u -- "$list" "$rows" > "$merged"%%->%%sort -u -- "$list" /dev/null > "$merged"'
+if d="$(mutant_dir "$RECFAULT")"; then
+  led="$WORK/rec.m1"; : > "$led"; rowsf="$WORK/rec.m1.rows"; printf '%s\n' "com.optionsedge.zzz /nope.plist" > "$rowsf"
+  REC_OUT="$(bash -c '. "$1/mirror-ledger.sh"; mirror_ledger_record "$2" "$3"' _ "$d" "$led" "$rowsf" 2>&1)"; REC_RC=$?
+  [ "$REC_RC" -ne 0 ] && printf '%s' "$REC_OUT" | grep -q 'are NOT in' \
+    && ok "with the merge losing a row, the read-back CATCHES it and refuses" \
+    || bad "the injected merge fault was not caught: rc=$REC_RC out=[$REC_OUT]"
+  if d2="$(mutant_dir "$RECFAULT")" && python3 -c '
+import sys
+p = sys.argv[1]; s = open(p).read()
+old = "    grep -qxF -- \"$row\" \"$list\" 2>/dev/null || missing=$((missing+1))"
+assert old in s, "the read-back removal did not apply"
+open(p, "w").write(s.replace(old, "    true", 1))
+' "$d2/mirror-ledger.sh"; then
+    led="$WORK/rec.m2"; : > "$led"
+    REC_OUT="$(bash -c '. "$1/mirror-ledger.sh"; mirror_ledger_record "$2" "$3"' _ "$d2" "$led" "$rowsf" 2>&1)"; REC_RC=$?
+    [ "$REC_RC" -eq 0 ] && ! grep -q 'zzz' "$led" \
+      && ok "and without the read-back the same loss REPORTS SUCCESS (it is load-bearing)" \
+      || bad "removing the read-back changed nothing: rc=$REC_RC ledger=[$(cat "$led")]"
+  else bad "(9c) the read-back removal did not apply"; fi
+else bad "(9c) the merge-fault injection did not apply"; fi
+
+echo "10. MUTATIONS: each half of the invariant is load-bearing"
+# One explicit block per mutation. A shared helper plumbed the ledger content, the mutated copy and the
+# hold topics through three layers and a `bash -c`, and a mistake in that plumbing reported "the mutant
+# failed for its own reason (127)" -- a mutation that never ran, scored as a pass.
 # (a) the missing-plist row: dropped instead of kept, so the agent stays paused and unlisted.
 if d="$(mutant_dir '_ml_say "   KEPT paused (plist not found): $label"; _ml_hold_row "$label" "$plist"; held=$((held+1)); continue%%->%%_ml_say "   KEPT paused (plist not found): $label"; continue')"; then
   led="$WORK/mled.a"; printf '%s %s\n' "com.optionsedge.gone" "$WORK/no-such.plist" > "$led"

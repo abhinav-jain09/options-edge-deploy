@@ -75,10 +75,19 @@ for plist in sorted(glob.glob(os.path.join(agents_dir, "com.optionsedge.*.plist"
             break
 PY
 }
+# RECORD FIRST, STOP SECOND. The merge into the ledger used to be unchecked, and every discovered
+# agent was booted out regardless: a failed merge stopped agents that nothing recorded, and the resume
+# could then report success with them down (deploy Codex round 5). mirror_ledger_record verifies the
+# rows are readable back out of the ledger, and a non-zero return here stops the whole run before
+# anything is paused or wiped.
 pause_mirrors() {
-  local uid label plist n=0 i; uid=$(id -u); touch "$PAUSED_LIST"
+  local uid label plist n=0 i; uid=$(id -u)
   prod_mirror_agents | while read -r label plist; do launchctl list "$label" >/dev/null 2>&1 && printf '%s %s\n' "$label" "$plist"; done > "$PAUSED_LIST.new"
-  sort -u "$PAUSED_LIST" "$PAUSED_LIST.new" > "$PAUSED_LIST.merged" && mv "$PAUSED_LIST.merged" "$PAUSED_LIST"
+  if ! mirror_ledger_record "$PAUSED_LIST" "$PAUSED_LIST.new"; then
+    rm -f "$PAUSED_LIST.new"
+    say "   refusing to pause anything: the ledger does not hold the agents this run would stop"
+    return 1
+  fi
   while read -r label plist; do
     [ -n "$label" ] || continue
     launchctl bootout "gui/$uid/$label" >/dev/null 2>&1
@@ -98,7 +107,11 @@ sshpass -p "$PW" scp -q -o StrictHostKeyChecking=no "$DEPLOY_SRC/scripts/kafka/r
 sshpass -p "$PW" scp -q -o StrictHostKeyChecking=no "$DEPLOY_SRC/scripts/jenkins/market_calendar.py" "$HOST:offhours/jenkins/"
 
 # ---- 1. mirrors ----
-if [ "$MODE" = wipe ]; then pause_mirrors; else say "dry: would pause $(prod_mirror_agents | wc -l | tr -d ' ') es4->prod mirror agents"; fi
+if [ "$MODE" = wipe ]; then
+  pause_mirrors || { say "mirror pause FAILED — nothing was paused, nothing wiped, no bring-up. Fix the ledger, then rerun."; exit 1; }
+else
+  say "dry: would pause $(prod_mirror_agents | wc -l | tr -d ' ') es4->prod mirror agents"
+fi
 
 # ---- 2. wipe on the host ----
 say "host: offhours-clean-slate.sh DRY_RUN=$DRY WIPE_ENABLED=$WIPE TOPIC_WIPE_MODE=delete START_AFTER_WIPE=none STATE_RESET_MODE=contents ENVIRONMENT=production"

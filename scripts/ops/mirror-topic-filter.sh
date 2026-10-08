@@ -80,52 +80,101 @@ for extra in sorted(glob.glob(os.path.join(unit_dir, "run-mirror*.sh"))):
         scripts.append(extra)
 
 # --whitelist 'es\.futures\.cvd\.bars'  /  --whitelist es\.futures\.auction
-WL = re.compile(r"--whitelist\s+(?:'([^']*)'|\"([^\"]*)\"|(\S+))")
-# A shell COMMENT is not executed, so a --whitelist inside one says nothing about what launchd starts;
-# and a whitelist built from a variable or a command substitution cannot be read lexically AT ALL. The
-# first is dropped, the second is a HOLD: a value this file cannot establish must never produce a
-# CLEAR (deploy Codex round 4). Only a literal, on a line that runs, is an answer.
-DYNAMIC = ("$", "`")
+# THE ACCEPTED LAUNCHER FORMAT.
+#
+# Earlier rounds of this file inferred the whitelist with a regex scan over the script's text, then
+# patched the scan: comment lines dropped, dynamic values refused. A scan cannot be made to hold
+# (deploy Codex round 5): an inline comment, a here-doc body, a continued command or a wrapper that
+# execs the real launcher from elsewhere are all text this file would read as a command, or not read at
+# all -- so a CLEAR could rest on a decoy and a HOLD on a here-doc.
+#
+# These scripts are GENERATED, by the mirror install paths in this repo and by ansible/es-mirrors.yml,
+# in one shape. So instead of parsing shell, this ACCEPTS that shape and refuses everything else:
+#
+#   * logical lines are formed by joining trailing-backslash continuations, and lines whose first
+#     non-space character is # are dropped;
+#   * EXACTLY ONE logical line may mention kafka-mirror-maker, and it must be, in full,
+#       exec [path/]kafka-mirror-maker (--flag [value])...
+#     with every value a single-quoted literal, a double-quoted literal with no $ or backtick, or a
+#     bare token with none of $ ` " ' # ; | & < > ( );
+#   * that line must carry EXACTLY ONE --whitelist, and its value is the pattern;
+#   * the FILE (comments and all) may contain the text --whitelist exactly once, so a commented or
+#     here-doc'd decoy cannot sit beside the real one;
+#   * the file may not contain <<, eval, source, or a dot-include: each of those can bring in a
+#     whitelist this file cannot see.
+#
+# Anything outside the shape is a HOLD that names what it saw. A mirror held because its launcher was
+# hand-edited is a stale panel and a line in the log; a mirror STARTED on a whitelist that is not the
+# runtime one re-routes keys.
+CONT = re.compile(r"\\\s*$")
+LAUNCH = re.compile(
+    r"^exec\s+\"?(?P<prog>[^\"\s]*kafka-mirror-maker)\"?"
+    r"(?P<args>(?:\s+--[A-Za-z0-9.-]+(?:\s+(?:'[^']*'|\"[^\"$`]*\"|[^'\"\s$`#;|&<>()]+))?)+)\s*$"
+)
+ARG = re.compile(r"--(?P<flag>[A-Za-z0-9.-]+)(?:\s+(?:'(?P<sq>[^']*)'|\"(?P<dq>[^\"$`]*)\"|(?P<bare>[^'\"\s$`#;|&<>()]+)))?")
+FORBIDDEN = ("<<", "eval ", "source ")
 
-def code_lines(text):
-    out = []
+def logical_lines(text):
+    out, buf = [], ""
     for raw in text.splitlines():
-        stripped = raw.lstrip()
-        if stripped.startswith("#"):
+        line = raw.rstrip("\n")
+        if CONT.search(line):
+            buf += CONT.sub(" ", line)
             continue
-        out.append(raw)
-    return "\n".join(out)
+        buf += line
+        out.append(buf)
+        buf = ""
+    if buf:
+        out.append(buf)
+    return out
 
-def patterns_in(path):
-    # Any failure to read the file as text is a HOLD with a message, not a traceback: a plist whose
-    # ProgramArguments[0] is a BINARY (a /bin/bash wrapper layout) raised UnicodeDecodeError here, which
-    # happened to exit non-zero and so happened to be safe -- the wrong reason to be right.
+def whitelist_of(path):
+    """The single whitelist literal of an accepted launcher script, or a HOLD."""
     try:
         with open(path, "r", errors="replace") as fh:
             text = fh.read()
     except Exception as exc:
         hold("cannot read %s as text (%s)" % (os.path.basename(path), exc.__class__.__name__))
-    found = []
-    for m in WL.finditer(code_lines(text)):
-        pat = m.group(1) or m.group(2) or m.group(3)
-        if pat is None:
-            continue
-        if any(ch in pat for ch in DYNAMIC):
-            hold("%s builds its --whitelist dynamically (%r), so the topics it copies cannot be read from the file"
-                 % (os.path.basename(path), pat))
-        if pat and pat not in found:
-            found.append(pat)
-    return found
 
-# The program's OWN whitelist is required: without it this does not know what launchd would start, and
-# a sibling's whitelist is not an answer about the program.
-patterns = patterns_in(program)
-if not patterns:
-    hold("no --whitelist in the program the job runs (%s)" % os.path.basename(program))
+    base = os.path.basename(path)
+    if text.count("--whitelist") != 1:
+        hold("%s mentions --whitelist %d time(s); an accepted launcher mentions it exactly once"
+             % (base, text.count("--whitelist")))
+    for bad in FORBIDDEN:
+        if bad in text:
+            hold("%s contains %r, which can bring in a whitelist this file cannot see"
+                 % (base, bad.strip()))
+    # A dot-include: `. somefile` at the start of a logical line.
+    launchers = []
+    for line in logical_lines(text):
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        if re.match(r"^\.\s+\S", stripped):
+            hold("%s dot-includes another file, which can bring in a whitelist this file cannot see" % base)
+        if "kafka-mirror-maker" in stripped:
+            launchers.append(stripped)
+    if len(launchers) != 1:
+        hold("%s has %d line(s) running kafka-mirror-maker; an accepted launcher has exactly one"
+             % (base, len(launchers)))
+    m = LAUNCH.match(launchers[0])
+    if not m:
+        hold("%s's launcher line is not the accepted `exec [path/]kafka-mirror-maker --flag value ...` shape"
+             % base)
+    pats = [a.group("sq") if a.group("sq") is not None else
+            a.group("dq") if a.group("dq") is not None else a.group("bare")
+            for a in ARG.finditer(m.group("args")) if a.group("flag") == "whitelist"]
+    if len(pats) != 1 or not pats[0]:
+        hold("%s's launcher line carries %d usable --whitelist value(s)" % (base, len(pats)))
+    return pats[0]
+
+# The program the plist runs decides; every other run-mirror*.sh beside it must ALSO be an accepted
+# launcher, and its whitelist is unioned in, so an extra script can only add holds.
+patterns = [whitelist_of(program)]
 for extra in scripts[1:]:
-    for pat in patterns_in(extra):
-        if pat not in patterns:
-            patterns.append(pat)
+    pat = whitelist_of(extra)
+    if pat not in patterns:
+        patterns.append(pat)
 
 for pat in patterns:
     try:

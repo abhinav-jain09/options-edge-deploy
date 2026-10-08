@@ -42,6 +42,57 @@
 # Prefer the caller's logger (prod-clean-slate.sh's `say` tees to its log file).
 _ml_say() { if declare -F say >/dev/null 2>&1; then say "$*"; else printf '%s\n' "$*"; fi; }
 
+# mirror_ledger_record <ledger> <rows-file> — put rows INTO the ledger before anything is stopped.
+#
+# The other half of the invariant, and the half that was missing (deploy Codex round 5): pause_mirrors
+# merged its freshly-discovered agents into the ledger with `sort -u old new > merged && mv merged old`
+# and then booted every one of them out REGARDLESS of whether that merge had worked. A failed merge
+# therefore stopped agents that nothing recorded, and a later resume could report success with them
+# still down.
+#
+# So this merges AND VERIFIES: after the move, every row of <rows-file> must be readable back out of
+# the ledger. Anything less is a non-zero return, and the caller must then stop nothing.
+mirror_ledger_record() {
+  local list="${1-}" rows="${2-}" lock merged missing=0 n=0 row
+  [ -n "$list" ] && [ -n "$rows" ] || { _ml_say "mirror_ledger_record: need <ledger> <rows-file>"; return 1; }
+  if [ -L "$list" ]; then
+    _ml_say "WARN: $list is a SYMLINK — refusing to record into it; nothing may be stopped"
+    return 1
+  fi
+  [ -r "$rows" ] || { _ml_say "WARN: cannot read $rows — nothing may be stopped"; return 1; }
+  n="$(grep -c . -- "$rows" 2>/dev/null)"; n="${n:-0}"
+  [ "$n" -gt 0 ] || { _ml_say "no mirror agents to record"; return 0; }
+
+  lock="$list.lock"
+  if ! mkdir "$lock" 2>/dev/null; then
+    if [ -d "$lock" ]; then _ml_say "WARN: $lock exists — another run holds this ledger; nothing may be stopped"
+    else _ml_say "WARN: cannot create $lock (is $(dirname -- "$list") writable?) — nothing may be stopped"; fi
+    return 1
+  fi
+  touch "$list" 2>/dev/null || { _ml_say "WARN: cannot create $list — nothing may be stopped"; rmdir "$lock" 2>/dev/null; return 1; }
+  if ! merged="$(mktemp "$list.rec.XXXXXX" 2>/dev/null)"; then
+    _ml_say "WARN: cannot create a scratch file beside $list — nothing may be stopped"; rmdir "$lock" 2>/dev/null; return 1
+  fi
+  if ! sort -u -- "$list" "$rows" > "$merged"; then
+    rm -f "$merged"; _ml_say "WARN: could not merge $rows into $list — nothing may be stopped"; rmdir "$lock" 2>/dev/null; return 1
+  fi
+  if ! mv "$merged" "$list"; then
+    rm -f "$merged"; _ml_say "WARN: could not replace $list — nothing may be stopped"; rmdir "$lock" 2>/dev/null; return 1
+  fi
+  # READ IT BACK. A merge that "succeeded" into a file that does not hold the rows is the case this
+  # exists for; every row must be there, byte for byte.
+  while IFS= read -r row; do
+    [ -n "$row" ] || continue
+    grep -qxF -- "$row" "$list" 2>/dev/null || missing=$((missing+1))
+  done < "$rows"
+  rmdir "$lock" 2>/dev/null
+  if [ "$missing" -ne 0 ]; then
+    _ml_say "WARN: $missing of $n row(s) are NOT in $list after the merge — nothing may be stopped"
+    return 1
+  fi
+  _ml_say "recorded $n mirror agent(s) in $list"
+}
+
 mirror_ledger_resume() {
   local list="${1-}" lock rc
   [ -n "$list" ] || { _ml_say "mirror_ledger_resume: no ledger path given"; return 1; }
