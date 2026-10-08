@@ -80,6 +80,12 @@ if [ -n "\${CONFIGS_FAIL_ON:-}" ] && [[ "\$*" == *"\$CONFIGS_FAIL_ON"* ]]; then
   echo "mock kafka-configs: forced failure" >&2; exit \${CONFIGS_FAIL_RC:-7}
 fi
 if [ -n "\${CONFIGS_FORGE_LINE:-}" ]; then echo "\$CONFIGS_FORGE_LINE"; fi
+# What this child INHERITED, and what it can do with it: the attestation path must not be in its
+# environment at all (apply-topics.sh unsets it before running anything).
+echo "child-saw-result-file=[\${APPLY_TOPICS_RESULT_FILE:-}]" >> "$LOG"
+if [ -n "\${CONFIGS_FORGE_ATTESTATION:-}" ] && [ -n "\${APPLY_TOPICS_RESULT_FILE:-}" ]; then
+  echo "apply-topics: state=skipped skipped=benign.topic" > "\$APPLY_TOPICS_RESULT_FILE"
+fi
 exit 0
 EOF
   printf '#!/usr/bin/env bash\necho "localhost:9092 (id: 1 rack: null) -> ("\nexit 0\n' > "$tmp/kafka-broker-api-versions"
@@ -169,6 +175,23 @@ printf '%s' "$(names_line)" | grep -q 'evil.topic' \
 [ "$(att_state)" = ok ] && [ -z "$(att_names)" ] \
   && ok "while the attestation says state=ok and names nothing" || bad "the attestation was polluted: [$(attested)]"
 
+# ...and a child cannot reach the attestation THROUGH THE ENVIRONMENT either: apply-topics.sh takes
+# APPLY_TOPICS_RESULT_FILE out of its own environment before it runs anything, so an exported path is
+# not inherited by any kafka CLI (deploy Codex round 2).
+run "" "$HERE" CONFIGS_FORGE_ATTESTATION=1
+grep -q 'child-saw-result-file=\[\]' "$LOG" \
+  && ok "the children saw an EMPTY APPLY_TOPICS_RESULT_FILE" \
+  || bad "a child inherited the attestation path: $(grep -m1 'child-saw-result-file' "$LOG")"
+[ "$(att_state)" = ok ] && [ -z "$(att_names)" ] \
+  && ok "so its attempt to forge a skip attestation wrote nothing" || bad "the attestation was forged: [$(attested)]"
+
+# The whole exploit in one run: a child tries to forge the attestation AND the run then aborts, so
+# nothing of apply-topics.sh's own would overwrite a forgery. The file must still be empty.
+run "" "$HERE" CONFIGS_FORGE_ATTESTATION=1 TOPICS_ABSENT="$VICTIM2" TOPICS_FAIL_ON=--create TOPICS_FAIL_RC=9
+[ "$RC" -eq 9 ] && ok "an aborted run with a forging child still exits 9" || bad "it exited $RC"
+[ -z "$(attested)" ] && ok "and leaves NO attestation at all, so the decision answers FAIL" \
+  || bad "an aborted run with a forging child attested [$(attested)]"
+
 # An unwritable attestation path must ABORT the run, not finish quietly with no attestation.
 RESULT_PATH=/dev/full run "$VICTIM=1"
 unset RESULT_PATH
@@ -206,7 +229,24 @@ if [ -n "$m" ]; then
   [ -z "$(attested)" ] && ok "without the write there is no attestation, so a wrapper must refuse (mutant exit $RC)" \
     || bad "the attestation mutation changed nothing: [$(attested)]"
 fi
-m="$(mutant "write_run_result ok ''||true")" || { bad "mutation 4 did not apply"; m=""; }
+m="$(mutant 'unset APPLY_TOPICS_RESULT_FILE||export APPLY_TOPICS_RESULT_FILE')" || { bad "mutation 4 did not apply"; m=""; }
+if [ -n "$m" ]; then
+  # The WHOLE exploit, not half of it: a child forges the attestation AND the run then aborts, so
+  # nothing overwrites the forgery. That is the state a wrapper would read as "a partial success whose
+  # only unreconciled topic is benign.topic" and resume every mirror on.
+  # The abort is injected on the SECOND victim, not the first declared topic: a create failure on the
+  # very first entry aborts the run before any kafka-configs child has run, so the forging child never
+  # gets to run and the case proves nothing.
+  run "" "$m" CONFIGS_FORGE_ATTESTATION=1 TOPICS_ABSENT="$VICTIM2" TOPICS_FAIL_ON=--create TOPICS_FAIL_RC=9
+  if grep -q 'child-saw-result-file=\[\]' "$LOG"; then
+    bad "the mutant still hides the path from children — the unset is not what does it"
+  elif [ "$(att_state)" = skipped ] && [ "$(att_names)" = benign.topic ]; then
+    ok "with the variable left exported, an aborted run ends with a child's FORGED skip attestation (the unset is load-bearing)"
+  else
+    bad "the mutant did not reproduce the forgery: exit $RC, attestation [$(attested)]"
+  fi
+fi
+m="$(mutant "write_run_result ok ''||true")" || { bad "mutation 5 did not apply"; m=""; }
 if [ -n "$m" ]; then
   run "" "$m"
   [ -z "$(attested)" ] && ok "and the clean ending's attestation is load-bearing too (mutant exit $RC)" \

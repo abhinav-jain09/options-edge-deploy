@@ -39,6 +39,10 @@ say() { echo "[$(date '+%H:%M:%S')] $*" | tee -a "$LOG"; }
 # combination of statuses; this script only ACTS on it. Sourced from DEPLOY_SRC like everything else.
 # shellcheck source=/dev/null
 . "$DEPLOY_SRC/scripts/ops/clean-slate-decision.sh" || { echo "cannot source $DEPLOY_SRC/scripts/ops/clean-slate-decision.sh"; exit 1; }
+# ...and the paused-mirror ledger, for the same reason: which agents may start, and what must stay
+# recorded as down, is driven by scripts/ops/mirror-ledger-test.sh rather than read out of this file.
+# shellcheck source=/dev/null
+. "$DEPLOY_SRC/scripts/ops/mirror-ledger.sh" || { echo "cannot source $DEPLOY_SRC/scripts/ops/mirror-ledger.sh"; exit 1; }
 # Returns the REMOTE command's exit status (the filter stages would otherwise hide it: a function returns
 # its last pipe stage, and sed always succeeds).
 ssh_root() { local rc; sshpass -p "$PW" ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 "$HOST" "su - root -c '$1'" <<EOF 2>&1 | grep -vE "^Password: *$|WARNING: |vulnerable|openssh|^\*\*" | sed 's/^Password: //'
@@ -83,51 +87,8 @@ pause_mirrors() {
   done < "$PAUSED_LIST.new"; rm -f "$PAUSED_LIST.new"
   say "paused $n es4->prod mirror agent(s) (list: $PAUSED_LIST)"
 }
-# resume_mirrors [<hold-topic> ...] — start every paused agent EXCEPT the ones that copy a topic in the
-# hold set (skipped by apply-topics.sh, or missing from the broker). Until 2026-10-08 one unreconciled
-# topic held every mirror; see the decision block in step 3 for why that is not the same as a bring-up.
-# An agent that is held, or that fails to load, STAYS in $PAUSED_LIST so the next run resumes it; the
-# list is removed only when it is empty, because a stale entry is what a rerun relies on.
-resume_mirrors() {
-  [ -s "$PAUSED_LIST" ] || return 0
-  local uid label plist n=0 failed=0 held=0 verdict; uid=$(id -u)
-  : > "$PAUSED_LIST.keep"
-  while read -r label plist; do
-    [ -n "$label" ] || continue
-    # A plist that is not there right now is NOT a resumed agent: it stays in the ledger so a later
-    # run resumes it. Dropping it silently was how a temporarily absent plist could leave an agent
-    # paused and unlisted forever (deploy Codex round 1).
-    [ -f "$plist" ] || { say "   KEPT paused (plist not found): $label"; printf '%s %s\n' "$label" "$plist" >> "$PAUSED_LIST.keep"; held=$((held+1)); continue; }
-    if [ "$#" -gt 0 ]; then
-      # Fail-closed by construction: the filter answers HOLD when it cannot read the agent's whitelist,
-      # and a filter that cannot RUN at all (missing, unreadable) is a HOLD here for the same reason.
-      if verdict="$("$DEPLOY_SRC/scripts/ops/mirror-topic-filter.sh" "$plist" "$@" 2>&1)"; then
-        :
-      else
-        held=$((held+1)); printf '%s %s\n' "$label" "$plist" >> "$PAUSED_LIST.keep"
-        say "   HELD paused: ${verdict:-$label: mirror-topic-filter.sh failed to run}"
-        continue
-      fi
-    fi
-    launchctl bootstrap "gui/$uid" "$plist" >/dev/null 2>&1
-    if launchctl list "$label" >/dev/null 2>&1; then n=$((n+1)); else
-      failed=$((failed+1)); printf '%s %s\n' "$label" "$plist" >> "$PAUSED_LIST.keep"
-      say "   WARN: mirror agent $label did not load"
-    fi
-  done < "$PAUSED_LIST"
-  if [ -s "$PAUSED_LIST.keep" ]; then mv "$PAUSED_LIST.keep" "$PAUSED_LIST"
-  else rm -f "$PAUSED_LIST.keep" "$PAUSED_LIST"; fi
-  # Spelled out rather than ${held:+...}: held=0 is a NON-EMPTY string, so the :+ form said
-  # "held 0 still paused" on every clean run.
-  local extra=""
-  [ "$held" -gt 0 ]   && extra="$extra, HELD $held still paused (a topic they copy was not reconciled)"
-  [ "$failed" -gt 0 ] && extra="$extra, $failed failed to load"
-  say "resumed $n es4->prod mirror agent(s)$extra"
-  [ "$failed" -eq 0 ]
-}
-
 # ---- 0. ship the repo layout the host script sources ----
-for f in scripts/ops/offhours-clean-slate.sh scripts/kafka/reset-preserved-topics.sh scripts/kafka/topics.env scripts/jenkins/market_calendar.py scripts/kafka/apply-topics.sh scripts/kafka/ensure-partition-only-topics.sh scripts/kafka/load-kafka-settings.sh scripts/ops/mirror-topic-filter.sh scripts/ops/clean-slate-decision.sh; do
+for f in scripts/ops/offhours-clean-slate.sh scripts/kafka/reset-preserved-topics.sh scripts/kafka/topics.env scripts/jenkins/market_calendar.py scripts/kafka/apply-topics.sh scripts/kafka/ensure-partition-only-topics.sh scripts/kafka/load-kafka-settings.sh scripts/ops/mirror-topic-filter.sh scripts/ops/clean-slate-decision.sh scripts/ops/mirror-ledger.sh; do
   [ -r "$DEPLOY_SRC/$f" ] || { echo "missing $DEPLOY_SRC/$f"; exit 1; }
 done
 say "=== prod clean-slate $MODE (after=$AFTER) source=$DEPLOY_SRC ==="
@@ -208,13 +169,12 @@ fi
 # attestation file, never from the output. An EMPTY $SKIPPED_NAMES therefore means "no attested skip
 # ending", which the decision treats as a failure whenever the status is the skip status; that is what
 # closes the exit-9-from-a-child hole. state=ok attests the other ending and names nothing.
-APPLY_STATE=$(sed -n 's/^apply-topics: state=\([a-z]*\) skipped=.*/\1/p' "$APPLY_RESULT" | tail -1)
+read_apply_attestation "$APPLY_RESULT"
 SKIPPED_NAMES=""
-case "$APPLY_STATE" in
-  skipped) SKIPPED_NAMES=$(sed -n 's/^apply-topics: state=skipped skipped=//p' "$APPLY_RESULT" | tail -1) ;;
+case "$ATTEST_STATE" in
+  skipped) SKIPPED_NAMES="$ATTEST_SKIPPED" ;;
   ok)      say "apply-topics attested state=ok (the whole declared list was reconciled)" ;;
-  "")      say "apply-topics left NO attestation — it did not reach either ending" ;;
-  *)       say "apply-topics attested an unknown state '$APPLY_STATE' — treating it as no attestation" ;;
+  *)       say "apply-topics left NO usable attestation: ${ATTEST_REASON:-unknown}" ;;
 esac
 
 # ---- the mirror decision (2026-10-08) ----
@@ -254,8 +214,14 @@ esac
 # empty (apply-topics.sh reconciled the whole declaration), so this is the old unconditional resume.
 # Gated on the decision's OWN resume field rather than on "we got past the FAIL arm": the two agree
 # today, and a later edit that reorders the arms would otherwise silently start every mirror.
-if [ "$DECISION_RESUME" = yes ]; then resume_mirrors $DECISION_HOLD || true
-else say "mirrors stay PAUSED (decision resume=$DECISION_RESUME)"; fi
+if [ "$DECISION_RESUME" = yes ]; then
+  # Its non-zero status is REPORTED, not swallowed: it means an agent that should be running is not.
+  if ! mirror_ledger_resume "$PAUSED_LIST" "$DEPLOY_SRC/scripts/ops/mirror-topic-filter.sh" $DECISION_HOLD; then
+    say "WARN: not every paused mirror agent is running — see the lines above; $PAUSED_LIST still lists the ones that are not."
+  fi
+else
+  say "mirrors stay PAUSED (decision resume=$DECISION_RESUME)"
+fi
 
 # ---- 5. bring-up ----
 # A PARTIAL recreate stops here, and stops BEFORE the bring-up: the owner rule is that a reset which

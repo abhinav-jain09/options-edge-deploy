@@ -8,6 +8,15 @@ RETENTION_MS="${KAFKA_TOPIC_RETENTION_MS:-86400000}"
 CLEANUP_POLICY="${KAFKA_TOPIC_CLEANUP_POLICY:-delete}"
 MIN_ISR="${KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS:-1}"
 RECREATE_MISMATCHED="${KAFKA_RECREATE_MISMATCHED_TOPICS:-false}"
+
+# APPLY_TOPICS_RESULT_FILE — the completion attestation (see the block above the main loop). Captured
+# here and REMOVED FROM THE ENVIRONMENT immediately, before this script runs anything: an exported
+# variable is inherited by every child, so leaving it exported would hand each kafka CLI the path to
+# the file that attests this script's own ending (deploy Codex round 2). Nothing below reads the
+# variable; write_run_result uses this shell-local copy.
+RESULT_FILE="${APPLY_TOPICS_RESULT_FILE:-}"
+unset APPLY_TOPICS_RESULT_FILE
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/topics.env"
@@ -384,9 +393,12 @@ alter_topic_config() {
 #                                       apply-topics: state=skipped skipped=<name> <name> ...
 #
 # A caller that acts on a partial reconciliation (scripts/ops/prod-clean-slate.sh) must require BOTH
-# the status and that line; nothing a child prints or exits with can produce it, because a child does
-# not know the path and an aborted run never reaches the write. A write that FAILS aborts the run under
-# set -e, so such a caller sees a non-zero status and an empty file -- the fail-closed direction.
+# the status and that line, as EXACTLY ONE line in the expected shape. The variable is unset at the top
+# of this script, before anything runs, so no child inherits the path; an aborted run never reaches the
+# write; and a write that FAILS aborts the run under set -e, so such a caller sees a non-zero status
+# and an empty file -- the fail-closed direction. (The path is not a secret: it is in this script's own
+# environment for an instant and in the caller's process table. What the unset buys is that no child
+# can write it by inheriting the variable, which is how a kafka CLI or a future helper would.)
 #
 # Callers that only test for non-zero -- the Jenkins stages, scripts/es4/create-es-topics.sh -- are
 # unaffected: a skip is still a failure, and still fails the build.
@@ -396,9 +408,9 @@ SKIPPED_EXIT=9
 # appending keeps a reused path honest: a caller that pre-creates the file EMPTY therefore reads "no
 # attestation" from every run that did not reach an ending.
 write_run_result() { # <state> <space-separated skipped names>
-  [ -n "${APPLY_TOPICS_RESULT_FILE:-}" ] || return 0
-  if ! printf 'apply-topics: state=%s skipped=%s\n' "$1" "$2" > "$APPLY_TOPICS_RESULT_FILE"; then
-    echo "apply-topics.sh: could not write APPLY_TOPICS_RESULT_FILE=$APPLY_TOPICS_RESULT_FILE" >&2
+  [ -n "${RESULT_FILE:-}" ] || return 0
+  if ! printf 'apply-topics: state=%s skipped=%s\n' "$1" "$2" > "$RESULT_FILE"; then
+    echo "apply-topics.sh: could not write the result file $RESULT_FILE" >&2
     return 1
   fi
 }
