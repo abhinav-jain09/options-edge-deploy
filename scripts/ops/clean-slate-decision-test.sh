@@ -17,8 +17,9 @@ WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 for f in "$D" "$CS"; do [ -r "$f" ] || { echo "FAIL: $f missing" >&2; exit 1; }; done
 
 # decide <apply> <ensure> <skipped> <missing> -> "verdict=... resume=... bringup=... exit=... hold=..."
-decide() { bash "$D" "$1" "$2" "$3" "$4" "${5-}" 2>&1; }
+decide() { bash "$D" "$1" "$2" "$3" "$4" "${5-}" "${6-ok}" 2>&1; }
 expect() { # <label> <apply> <ensure> <skipped> <missing> <attested-state> <expected-line>
+  # The census defaults to ok in these rows; the rows that exercise it pass it explicitly through decide.
   local got; got="$(decide "$2" "$3" "$4" "$5" "$6")"
   [ "$got" = "$7" ] && ok "$1" || bad "$1: got [$got] want [$7]"
 }
@@ -26,8 +27,11 @@ expect() { # <label> <apply> <ensure> <skipped> <missing> <attested-state> <expe
 echo "1. the rules, every arm"
 expect "full success resumes everything and brings up" \
   0 0 "" "" ok "verdict=OK resume=yes bringup=yes exit=0 hold="
-expect "a MISSING topic is held even on a full success (auto-create would make it at the broker default)" \
-  0 0 "" "es.futures.cvd.bars" ok "verdict=OK resume=yes bringup=yes exit=0 hold=es.futures.cvd.bars"
+# A declared topic MISSING from the broker after a clean apply means the reset is not established as
+# complete: the mirrors that have no stake in it may start, and prod may NOT come up (deploy Codex
+# round 11 -- this row used to expect a bring-up).
+expect "a MISSING topic holds its mirrors AND stops the bring-up" \
+  0 0 "" "es.futures.cvd.bars" ok "verdict=PARTIAL resume=yes bringup=no exit=1 hold=es.futures.cvd.bars"
 expect "a partial apply resumes the mirrors but NEVER brings up" \
   9 0 "options.spx.strike-invasion.current" "" skipped \
   "verdict=PARTIAL resume=yes bringup=no exit=9 hold=options.spx.strike-invasion.current"
@@ -56,6 +60,15 @@ expect "whitespace-only names do not make a partial success" \
 expect "the hold set is a SET: duplicates and extra whitespace collapse" \
   9 0 "a.topic  a.topic" " b.topic  a.topic " skipped "verdict=PARTIAL resume=yes bringup=no exit=9 hold=a.topic b.topic"
 
+got="$(decide 0 0 "" "" ok unverified)"
+[ "$got" = "verdict=FAIL resume=no bringup=no exit=1 hold=" ] \
+  && ok "a census that could not run is a FAILURE, however clean the statuses look" || bad "got [$got]"
+got="$(decide 0 0 "" "" ok "")"
+[ "$got" = "verdict=FAIL resume=no bringup=no exit=1 hold=" ] \
+  && ok "and so is no census at all" || bad "got [$got]"
+got="$(decide 9 0 "a.topic" "" skipped unverified)"
+[ "$got" = "verdict=FAIL resume=no bringup=no exit=1 hold=" ] \
+  && ok "an unverified census overrides a partial apply too" || bad "got [$got]"
 expect "a zero status with NO attestation is a FAILURE (require BOTH)" \
   0 0 "" "" "" "verdict=FAIL resume=no bringup=no exit=1 hold="
 expect "a zero status attested as a SKIP is a FAILURE" \
@@ -72,7 +85,8 @@ echo "2. no input makes it both resume and refuse, or bring up without resuming"
 # invariants the operator script depends on.
 for a in 0 1 2 9 127 "" zz; do for e in 0 1 9 "" zz; do for sk in "" "t.one"; do for ms in "" "t.two"; do
  for st in ok skipped "" weird; do
-  line="$(decide "$a" "$e" "$sk" "$ms" "$st")"
+ for cs in ok unverified; do
+  line="$(decide "$a" "$e" "$sk" "$ms" "$st" "$cs")"
   v="${line#verdict=}"; v="${v%% *}"
   r=$(printf '%s' "$line" | sed -n 's/.*resume=\([a-z]*\).*/\1/p')
   b=$(printf '%s' "$line" | sed -n 's/.*bringup=\([a-z]*\).*/\1/p')
@@ -85,10 +99,13 @@ for a in 0 1 2 9 127 "" zz; do for e in 0 1 9 "" zz; do for sk in "" "t.one"; do
   [ "$v" = OK ] && [ "$(printf '%s' "$line" | sed -n 's/.*exit=\([0-9]*\).*/\1/p')" != 0 ] && bad "apply=$a ensure=$e: OK with a non-zero exit"
   [ "$v" = OK ] && [ "$a" = 0 ] && [ -n "$sk" ] && bad "apply=0 with skipped names [$sk] was called OK"
   [ "$v" = OK ] && [ "$st" != ok ] && bad "apply=$a with attested state '$st' was called OK"
-  [ "$v" = PARTIAL ] && [ "$st" != skipped ] && bad "a PARTIAL with attested state '$st'"
+  [ "$v" = PARTIAL ] && [ "$st" != skipped ] && [ -z "$ms" ] && bad "a PARTIAL with attested state '$st' and nothing missing"
+  [ "$cs" != ok ] && [ "$v" != FAIL ] && bad "census=$cs was not a FAIL (verdict $v)"
+  [ "$b" = yes ] && [ -n "$ms" ] && bad "brings prod up with topics still MISSING ($ms)"
+ done
  done
 done; done; done; done
-ok "the sweep found no self-contradicting verdict (560 input combinations)"
+ok "the sweep found no self-contradicting verdict (1120 input combinations)"
 
 echo "3. the ATTESTATION parser: only an ending of apply-topics.sh counts"
 # apply-topics.sh writes exactly one line, from one of two endings. Everything else in that file was
@@ -171,9 +188,11 @@ printf '%s' "$code" | grep -q 'apply-topics.sh ) *> *"\$APPLY_OUT"' \
 # the attestation file apply-topics.sh writes only at its endings (deploy Codex round 1).
 printf '%s' "$code" | grep -q 'APPLY_TOPICS_RESULT_FILE="\$APPLY_RESULT"' \
   && ok "it passes an attestation file to apply-topics.sh" || bad "no APPLY_TOPICS_RESULT_FILE is passed"
-printf '%s' "$code" | grep -q 'clean_slate_decide "\$ARC" "\$ERC" "\$SKIPPED_NAMES" "\$MISSING" "\$ATTEST_STATE"' \
-  && ok "and passes the ATTESTED STATE, so a status without its attestation cannot pass as OK" \
-  || bad "the attested state is not passed to the decision"
+printf '%s' "$code" | grep -q 'CENSUS=unverified' \
+  && ok "a failed broker census is recorded as unverified" || bad "a failed census is not recorded"
+printf '%s' "$code" | grep -q 'clean_slate_decide "\$ARC" "\$ERC" "\$SKIPPED_NAMES" "\$MISSING" "\$ATTEST_STATE" "\$CENSUS"' \
+  && ok "and passes the ATTESTED STATE and the CENSUS, so neither a status without its attestation nor an unverified broker can pass as OK" \
+  || bad "the attested state and census are not both passed to the decision"
 printf '%s' "$code" | grep -q 'read_apply_attestation "\$APPLY_RESULT"' \
   && ok "and reads it through the strict parser above" || bad "the attestation is not read by read_apply_attestation"
 printf '%s' "$code" | grep -E 'SKIPPED_NAMES=' | grep -q 'ATTEST_SKIPPED' \
@@ -263,7 +282,7 @@ assert old in src, "the mutation did not apply: %r is not in the file" % old
 open(path, "w").write(src.replace(old, new, 1))
 PY
   [ $? -eq 0 ] || { bad "$label: the mutation did not apply"; return; }
-  local got; got="$(bash "$dir/d.sh" "$a" "$e" "$sk" "$ms" "$st" 2>&1)"
+  local got; got="$(bash "$dir/d.sh" "$a" "$e" "$sk" "$ms" "$st" ok 2>&1)"
   # A mutant that CRASHES is not evidence of sensitivity: its output would differ from the safe answer
   # for a reason that has nothing to do with the rule (deploy Codex round 10). So the mutant must still
   # produce a well-formed decision, and that decision must differ.
@@ -282,13 +301,19 @@ run_mut "the no-names refusal is load-bearing" \
   'elif [ "$arc" -eq 9 ] && [ "$erc" -eq 0 ] && [ -n "$(_cs_norm "$skipped")" ]; then||elif [ "$arc" -eq 9 ] && [ "$erc" -eq 0 ]; then' \
   9 0 "" "" skipped "verdict=FAIL resume=no bringup=no exit=9 hold="
 # Let PARTIAL bring prod up: the owner rule would be gone.
+# Anchored on the SKIP arm's line, which now shares its text with the missing-topics arm above it: the
+# shorter anchor edited the wrong one and reported the rule as untested.
 run_mut "PARTIAL must not bring up" \
-  'DECISION_VERDICT=PARTIAL; DECISION_RESUME=yes; DECISION_BRINGUP=no||DECISION_VERDICT=PARTIAL; DECISION_RESUME=yes; DECISION_BRINGUP=yes' \
+  'DECISION_VERDICT=PARTIAL; DECISION_RESUME=yes; DECISION_BRINGUP=no; DECISION_EXIT=9||DECISION_VERDICT=PARTIAL; DECISION_RESUME=yes; DECISION_BRINGUP=yes; DECISION_EXIT=9' \
   9 0 "a.topic" "" skipped "verdict=PARTIAL resume=yes bringup=no exit=9 hold=a.topic"
 # Stop holding the missing topics on a full success: auto-create could remake one at 1 partition.
-run_mut "MISSING topics are held on a full success" \
-  'DECISION_HOLD="$(_cs_norm "$missing")"||DECISION_HOLD=""' \
-  0 0 "" "es.futures.cvd.bars" ok "verdict=OK resume=yes bringup=yes exit=0 hold=es.futures.cvd.bars"
+run_mut "MISSING topics are held, and stop the bring-up" \
+  'DECISION_VERDICT=PARTIAL; DECISION_RESUME=yes; DECISION_BRINGUP=no; DECISION_EXIT=1
+    DECISION_HOLD="$(_cs_norm "$missing")"
+    _cs_emit; return 0||DECISION_VERDICT=OK; DECISION_RESUME=yes; DECISION_BRINGUP=yes; DECISION_EXIT=0
+    DECISION_HOLD=""
+    _cs_emit; return 0' \
+  0 0 "" "es.futures.cvd.bars" ok "verdict=PARTIAL resume=yes bringup=no exit=1 hold=es.futures.cvd.bars"
 # Stop holding the skipped ones under PARTIAL: a mirror would produce into a wrong-shaped topic.
 run_mut "SKIPPED topics are held under PARTIAL" \
   'DECISION_HOLD="$(_cs_norm "$skipped $missing")"||DECISION_HOLD="$(_cs_norm "$missing")"' \
@@ -360,6 +385,10 @@ mut_att "the name-shape rule is load-bearing" \
 run_mut "the apply=0-with-skips contradiction is refused" \
   'if [ "$arc" -eq 0 ] && [ -n "$(_cs_norm "$skipped")" ]; then||if false; then' \
   0 0 "a.topic" "" ok "verdict=FAIL resume=no bringup=no exit=1 hold="
+# Ignore the census: an unverified broker reading would be answered OK and prod would come up.
+run_mut "the census rule is load-bearing" \
+  'if [ "$census" != ok ]; then||if false; then' \
+  0 0 "" "" ok "verdict=FAIL resume=no bringup=no exit=1 hold="
 # Treat a non-numeric status as a success.
 run_mut "a non-numeric status fails closed" \
   "case \"\$arc\" in ''|*[!0-9]*) DECISION_EXIT=1; _cs_emit; return 0 ;; esac||case \"\$arc\" in ''|*[!0-9]*) DECISION_VERDICT=OK; DECISION_RESUME=yes; DECISION_BRINGUP=yes; DECISION_EXIT=0; _cs_emit; return 0 ;; esac" \

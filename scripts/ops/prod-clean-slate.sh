@@ -218,6 +218,7 @@ fi
 # the recreate did not create, a mirror's first produce is what creates it, at the broker default
 # partition count (auto.create.topics.enable) -- the defect mirrors are paused for to begin with.
 MISSING=""
+CENSUS=ok
 MISSING=$( cd "$DEPLOY_SRC" && . scripts/kafka/topics.env && want=$(echo $OPTIONS_EDGE_TOPICS $OPTIONS_EDGE_PROD_ONLY_TOPICS | tr ' ' '\n' | sed 's/:.*//' | sort -u) \
   && have=$(kafka-topics --bootstrap-server $PROD_BS --list 2>/dev/null) \
   && comm -23 <(echo "$want") <(echo "$have" | sort -u) )
@@ -225,6 +226,7 @@ MRC=$?
 if [ "$MRC" -ne 0 ]; then
   # The census itself failed (no broker, no CLI). Nothing may be concluded about what is present, so
   # every mirror is held: this is the same fail-closed direction as mirror-topic-filter.sh.
+  CENSUS=unverified
   say "declared-topic census FAILED (exit $MRC) — treating every declared topic as unverified"
   MISSING=$( cd "$DEPLOY_SRC" && . scripts/kafka/topics.env && echo $OPTIONS_EDGE_TOPICS $OPTIONS_EDGE_PROD_ONLY_TOPICS | tr ' ' '\n' | sed 's/:.*//' | sort -u )
 fi
@@ -257,8 +259,8 @@ esac
 # mirrors are a COPY path this script paused itself in step 1, their offsets live on es4, and every one
 # that is started here is one whose topics were all reconciled. A mirror with a stake in an
 # unreconciled or missing topic stays paused, which is the part that protects key routing.
-clean_slate_decide "$ARC" "$ERC" "$SKIPPED_NAMES" "$MISSING" "$ATTEST_STATE"
-say "decision: $DECISION_VERDICT (apply=$ARC ensure=$ERC attested=${ATTEST_STATE:-<none>}) resume=$DECISION_RESUME bringup=$DECISION_BRINGUP exit=$DECISION_EXIT"
+clean_slate_decide "$ARC" "$ERC" "$SKIPPED_NAMES" "$MISSING" "$ATTEST_STATE" "$CENSUS"
+say "decision: $DECISION_VERDICT (apply=$ARC ensure=$ERC attested=${ATTEST_STATE:-<none>} census=$CENSUS) resume=$DECISION_RESUME bringup=$DECISION_BRINGUP exit=$DECISION_EXIT"
 case "$DECISION_VERDICT" in
   PARTIAL)
     say "recreate PARTIAL: could not reconcile:$(printf ' %s' $SKIPPED_NAMES)"

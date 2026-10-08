@@ -2,7 +2,7 @@
 # What a prod clean-slate recreate permits: the decision, as one function, so it can be driven by a
 # test instead of being read out of the middle of an ssh-driven operator script.
 #
-#   clean_slate_decide <apply-rc> <ensure-rc> "<skipped names>" "<missing names>" <attested-state>
+#   clean_slate_decide <apply-rc> <ensure-rc> "<skipped names>" "<missing names>" <attested-state> <census>
 #
 # sets, and (run directly) prints:
 #   DECISION_VERDICT  OK | PARTIAL | FAIL
@@ -19,10 +19,19 @@
 # BOTH". A zero status with no attestation used to pass as OK, which contradicted that in the one place
 # it mattered most (deploy Codex round 6): it is now a FAIL, like every other mismatch.
 #
-#   apply=0, ensure=0, state=ok        OK   the whole declaration reconciled. Mirrors start; prod comes up. Any
-#                                topic still MISSING from the broker is held anyway -- auto-create
-#                                would otherwise let a mirror's first produce create it at the broker
-#                                default partition count.
+# AND THE BROKER CENSUS IS PART OF IT (deploy Codex round 11). apply-topics.sh's attestation says what
+# THIS RUN did; the census says what is on the broker now. A declared topic that is MISSING after a
+# successful apply, or a census that could not run at all, means the reset is not established as
+# complete -- and prod must not come up on something unestablished, however clean the statuses look.
+# Mirrors may still start (every missing topic is in the hold set, so none of them produces into one),
+# because that is a copy path, not a bring-up.
+#
+#   apply=0, ensure=0, state=ok, census=ok, nothing missing   OK       mirrors start; prod comes up
+#   apply=0, ensure=0, state=ok, census=ok, topics missing    PARTIAL  mirrors start EXCEPT those that
+#                                copy a missing topic (auto-create would otherwise let a mirror's first
+#                                produce create it at the broker default partition count); NO bring-up,
+#                                exit 1
+#   census anything but ok                                    FAIL     nothing starts, nothing comes up
 #   apply=0, named skips FAIL     a CONTRADICTION: apply-topics.sh cannot both reconcile everything and
 #                                attest a skip ending. One of the two inputs is wrong, so neither is
 #                                trusted.
@@ -102,7 +111,7 @@ read_apply_attestation() {
 }
 
 clean_slate_decide() {
-  local arc="${1-}" erc="${2-}" skipped="${3-}" missing="${4-}" state="${5-}"
+  local arc="${1-}" erc="${2-}" skipped="${3-}" missing="${4-}" state="${5-}" census="${6-}"
   DECISION_VERDICT=FAIL; DECISION_RESUME=no; DECISION_BRINGUP=no; DECISION_HOLD=""; DECISION_EXIT=1
 
   case "$arc" in ''|*[!0-9]*) DECISION_EXIT=1; _cs_emit; return 0 ;; esac
@@ -120,6 +129,19 @@ clean_slate_decide() {
   fi
   if [ "$arc" -eq 9 ] && [ "$state" != skipped ]; then
     DECISION_EXIT="$arc"; _cs_emit; return 0
+  fi
+
+  # The census is a SECOND source, and an unverified one is not a clean one.
+  if [ "$census" != ok ]; then
+    DECISION_EXIT=1; _cs_emit; return 0
+  fi
+
+  if [ "$arc" -eq 0 ] && [ "$erc" -eq 0 ] && [ -n "$(_cs_norm "$missing")" ]; then
+    # Everything apply-topics did succeeded, and the broker still lacks declared topics. Start the
+    # mirrors that have no stake in them; do not bring prod up on that.
+    DECISION_VERDICT=PARTIAL; DECISION_RESUME=yes; DECISION_BRINGUP=no; DECISION_EXIT=1
+    DECISION_HOLD="$(_cs_norm "$missing")"
+    _cs_emit; return 0
   fi
 
   if [ "$arc" -eq 0 ] && [ "$erc" -eq 0 ]; then
@@ -150,5 +172,5 @@ _cs_emit() {
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
   set -uo pipefail
   CLEAN_SLATE_DECISION_PRINT=true
-  clean_slate_decide "${1-}" "${2-}" "${3-}" "${4-}" "${5-}"
+  clean_slate_decide "${1-}" "${2-}" "${3-}" "${4-}" "${5-}" "${6-}"
 fi
