@@ -30,6 +30,12 @@ PB=ansible/es-mirrors.yml
 # exactly what this gate asserts the refusal comes from. Without -i the gate failed while the lock it
 # tests was intact (Codex r3 on #1166). Nothing here connects to mac74.
 INV=ansible/inventory/oe-mirror-hosts.yml
+# A production install now has to come through scripts/ops/install-es-mirrors.sh, and that refusal
+# sits IN FRONT of the permitted-commit guard — which is what this gate asserts the refusal comes
+# from. So the gate presents itself as a wrapper run. It is not weakening anything: the guard is
+# still the thing under test and still refuses, and the wrapper requirement has its own gate in
+# scripts/ci/mirror-install-wrapper-test.sh.
+export OE_MIRROR_RECEIPT=/tmp/oe-prod-permission-gate-receipt
 
 # ---- 1. the declared guard version ----
 # the hash must be a LITERAL at every invocation, in the playbook and in the binding script: as a

@@ -58,14 +58,26 @@ for a in "$@"; do
       exit 2;;
   esac
 done
-# the same flags can arrive through the environment, where argv never sees them
-for v in ANSIBLE_TAGS ANSIBLE_SKIP_TAGS ANSIBLE_LIMIT ANSIBLE_CHECK_MODE ANSIBLE_START_AT_TASK; do
+# the same selection can arrive through the environment, where argv never sees it.
+# ⚠ ANSIBLE_RUN_TAGS is the one that broke the first version of this wrapper: it is the env
+# spelling of --tags and my list only had ANSIBLE_TAGS, so
+# `ANSIBLE_RUN_TAGS=always ... -e confirm_mirror_install=true` exited 0 with a receipt reading
+# confirm=True and every count zero (Codex r5, reproduced). ANSIBLE_CONFIG is refused for the same
+# reason one level up: a chosen cfg can set tags/skip_tags/limit that nothing here would see.
+for v in ANSIBLE_TAGS ANSIBLE_RUN_TAGS ANSIBLE_SKIP_TAGS ANSIBLE_LIMIT ANSIBLE_CHECK_MODE \
+         ANSIBLE_START_AT_TASK ANSIBLE_CONFIG ANSIBLE_PLAYBOOK_DIR ANSIBLE_STDOUT_CALLBACK; do
   if [ -n "${!v:-}" ]; then
     echo "FAIL: $v=${!v} is set in the environment; unset it. $(
-      )It selects tasks or hosts away and the run would exit 0 having installed nothing."
+      )It can select tasks or hosts away, or hide the output this wrapper reads, and the run would"
+    echo "      exit 0 having installed nothing."
     exit 2
   fi
 done
+# and from an ansible.cfg in the directory ansible-playbook will read it from
+if [ -f ansible.cfg ] && grep -qE '^[[:space:]]*(tags|skip_tags|limit)[[:space:]]*=' ansible.cfg; then
+  echo "FAIL: ansible.cfg sets tags/skip_tags/limit, which can select the install away silently."
+  exit 2
+fi
 
 # ---- 2. an inventory must be in play, because the table declares a non-default run_host ----
 # -i on the command line, ANSIBLE_INVENTORY, or an ansible.cfg inventory all satisfy this; only the
@@ -80,13 +92,43 @@ INV_ARGS=()
 
 # ---- 3. the receipt: positive evidence that the play ran ----
 RECEIPT=$(mktemp -t oe-mirror-receipt) || { echo "FAIL: cannot create the receipt file"; exit 1; }
-trap 'rm -f "$RECEIPT"' EXIT
+OUT=$(mktemp -t oe-mirror-out) || { echo "FAIL: cannot create the output file"; exit 1; }
+trap 'rm -f "$RECEIPT" "$OUT"' EXIT
 : > "$RECEIPT"
 
+# ⚠ THE RECEIPT PATH GOES IN THE ENVIRONMENT, NOT -e. An extra var outranks everything, and the
+# wrapper's own `-e install_receipt=` sat BEFORE the caller's arguments, so a later
+# `-e install_receipt=<elsewhere>` (or `-e @file`, or `-e oe_receipt=`) won — a real install could
+# mutate units, send the receipt somewhere else, and hand this script an empty file and exit 3:
+# "it failed, run it again", against production (Codex r5). The playbook reads
+# OE_MIRROR_RECEIPT with an inline lookup that is never bound to a variable name, so there is no
+# name for an extra var to outrank.
+export OE_MIRROR_RECEIPT="$RECEIPT"
 set +e
-ansible-playbook "${INV_ARGS[@]}" "$PLAY" -e "install_receipt=$RECEIPT" "$@"
-rc=$?
+ansible-playbook "${INV_ARGS[@]}" "$PLAY" "$@" 2>&1 | tee "$OUT"
+rc=${PIPESTATUS[0]}
 set -e
+
+# ---- 4. cross-check against ANSIBLE'S OWN output, which no playbook variable can forge ----
+# The receipt's counters come from play facts and an extra var outranks a set_fact, so the counters
+# are a report, not proof. What cannot be forged from inside the play is whether Ansible RAN the
+# tasks: these banners appear in its output only when the corresponding task executed. Any tag,
+# skip-tag or limit selection that removes the real work removes these too — which is why this check
+# does not enumerate flags. It asks whether the work happened, not how it might have been avoided.
+MANDATORY=(
+  "Flatten the unit table into one row per launchd unit"
+  "Account for the run, and write the receipt last whatever the outcome"
+)
+missing=()
+for t in "${MANDATORY[@]}"; do grep -qF "TASK [$t" "$OUT" || missing+=("$t"); done
+if [ "${#missing[@]}" -ne 0 ] && [ "$rc" = 0 ]; then
+  echo
+  echo "FAIL: ansible-playbook exited 0 but did not run the tasks that do the work."
+  for t in "${missing[@]}"; do echo "      never ran: $t"; done
+  echo "      Something selected the work away (a tag, a skip-tag, a limit, an ansible.cfg or an"
+  echo "      ANSIBLE_* variable). This run installed nothing."
+  exit 4
+fi
 
 if [ ! -s "$RECEIPT" ]; then
   echo
@@ -104,8 +146,35 @@ if [ ! -s "$RECEIPT" ]; then
   exit 3
 fi
 
+# ---- 5. the receipt must agree with Ansible's own accounting ----
+# A forged counter is only interesting if it DISAGREES with what Ansible did. Ansible's PLAY RECAP
+# is printed by Ansible, not by the play, so a receipt claiming units while the recap shows an
+# empty run (or no recap at all) is a contradiction worth failing on.
+recap=$(grep -E '^[A-Za-z0-9_.-]+[[:space:]]+:[[:space:]]+ok=' "$OUT" | tail -1)
+in_table=$(sed -n 's/^units_in_table=\([0-9]*\)$/\1/p' "$RECEIPT" | tail -1)
+if [ -z "$recap" ]; then
+  echo
+  echo "FAIL: no PLAY RECAP in ansible-playbook's output, so nothing ran on any host,"
+  echo "      yet a receipt exists. Refusing to report this as a completed run."
+  exit 5
+fi
+ok_count=$(sed -n 's/.*[[:space:]]ok=\([0-9]*\).*/\1/p' <<<"$recap")
+if [ "${in_table:-0}" -gt 0 ] && [ "${ok_count:-0}" -eq 0 ]; then
+  echo
+  echo "FAIL: the receipt reports $in_table unit(s) in the table but Ansible's recap shows ok=0."
+  echo "      recap: $recap"
+  exit 5
+fi
+if [ "${in_table:-0}" -eq 0 ]; then
+  echo
+  echo "FAIL: the receipt reports an EMPTY table (units_in_table=0), which the real table never is."
+  echo "      A run that saw no units installed nothing. recap: $recap"
+  exit 5
+fi
+
 echo
 echo "receipt:"
 sed 's/^/  /' "$RECEIPT"
+echo "ansible recap: $recap"
 [ "$rc" != 0 ] && echo "ansible-playbook exited $rc — see the Summary above for the unit that refused"
 exit "$rc"

@@ -18,20 +18,24 @@
 #
 #   # plan only — renders every unit under ansible/.ansible-rendered/ and reports, per file,
 #   # whether installing would change the live copy. It reads brokers and never writes a unit.
-#   ansible-playbook -i ansible/inventory/oe-mirror-hosts.yml ansible/es-mirrors.yml
+#   scripts/ops/install-es-mirrors.sh
 #   # dev
-#   ansible-playbook -i ansible/inventory/oe-mirror-hosts.yml ansible/es-mirrors.yml -e confirm_mirror_install=true
+#   scripts/ops/install-es-mirrors.sh -e confirm_mirror_install=true
 #   # prod — needs the permitted commit, the same rule Jenkins enforces: this checkout must be on
 #   # origin/main and HEAD must be exactly that commit
-#   ansible-playbook -i ansible/inventory/oe-mirror-hosts.yml ansible/es-mirrors.yml \
+#   scripts/ops/install-es-mirrors.sh \
 #       -e mirror_target_ip=192.168.100.252 -e mirror_target_port=9092 \
 #       -e confirm_mirror_install=true -e permitted_sha=$(git rev-parse origin/main)
 #   # one topic
-#   ansible-playbook -i ansible/inventory/oe-mirror-hosts.yml ansible/es-mirrors.yml -e only_topics=es.futures.footprint.bars -e confirm_mirror_install=true
+#   scripts/ops/install-es-mirrors.sh -e only_topics=es.futures.footprint.bars -e confirm_mirror_install=true
+#
+# A bare `ansible-playbook ansible/es-mirrors.yml` still PLANS, and that is fine — a plan writes no
+# unit, so a plan that quietly did nothing costs nothing. A production INSTALL that way is refused:
+# see "Refuse a PRODUCTION install that did not come through the wrapper" below.
 #   # the dealer-ledger leg, which runs ON .74 — PLAN ONLY, and it cannot be anything else yet:
 #   # installing it needs confluent-7.3.x kafka-mirror-maker on .74 AND a proven way to run the
 #   # permitted-commit guard there (see "Refuse a PRODUCTION install from a run host..." below).
-#   ansible-playbook -i ansible/inventory/oe-mirror-hosts.yml ansible/es-mirrors.yml -e mirror_run_host=mac74 \
+#   scripts/ops/install-es-mirrors.sh -e mirror_run_host=mac74 \
 #       -e mirror_target_ip=192.168.100.252 -e mirror_target_port=9092
 #
 # ⚠ RUN IT THROUGH scripts/ops/install-es-mirrors.sh, which is the only invocation that can tell
@@ -237,16 +241,17 @@
     # generation in this file — the parity gate reads the table and the templates, and could not see
     # a change to the Jinja that composes them.
     oe_dump: "{{ dump_rows | default('') }}"
-    # -e install_receipt=<path> is how scripts/ops/install-es-mirrors.sh proves this play actually
-    # ran. Not a decision and never a row's field: when it is absent the receipt task simply does
-    # not run, which is exactly the signal the wrapper reads.
-    oe_receipt: "{{ install_receipt | default('') }}"
     # Refused unless ABSOLUTE and OUTSIDE this repository. `-e dump_rows=true` — me meaning the flag
     # as a boolean when it takes a path — wrote a 12 KB JSON file named `ansible/true` into the
     # repository and I committed it (Codex r3 on #1166, P2); requiring an absolute path only changed
     # the SPELLING of that mistake, and `-e dump_rows=$PWD/ansible/x.json` still left an untracked
     # artifact in the tree (Codex r4, reproduced). The containment check is what actually prevents
-    # it, so that is what this asserts. The charset is no longer a shell control either: oe_dump is
+    # it, so that is what this asserts. KNOWN LIMIT, stated rather than papered over: realpath
+    # resolves symlinks but not every mount alias, so a bind mount or a second mount of the same
+    # filesystem under a different path is not recognised as this repository (Codex r5, MINOR). This
+    # stops the mistake that actually happened, and every symlinked and /tmp->/private spelling of
+    # it — not a deliberately constructed alias.
+    # The charset is no longer a shell control either: oe_dump is
     # used once, as a module `dest:`, and is never rendered into run-mirror.sh — so ordinary POSIX
     # path characters are allowed and only quoting/expansion metacharacters are refused.
     oe_repo_root: "{{ (playbook_dir ~ '/..') | realpath }}"
@@ -262,16 +267,20 @@
     # scripts/ci/validate-ansible-prod-permission.sh asserts both literals against the Jenkinsfiles.
 
   tasks:
-    - name: Refuse an install_receipt path that is not a plain absolute path
+    - name: Refuse an OE_MIRROR_RECEIPT path that is not a plain absolute path
       # Its own task, NOT a line inside the dump_rows assert: that task is gated on
-      # `when: oe_dump | length > 0`, so the receipt would have been validated only on a run that
-      # also asked for a dump — a check that does not run is not a check.
-      when: oe_receipt | length > 0
+      # `when: oe_dump | length > 0`, so the receipt path would have been validated only on a run
+      # that also asked for a dump — a check that does not run is not a check.
+      # Read from the environment inline, like the receipt write itself: an extra var must not be
+      # able to point this at one path while the write goes to another.
+      when: lookup('env', 'OE_MIRROR_RECEIPT') | length > 0
       tags: always
       ansible.builtin.assert:
         that:
-          - oe_receipt is match('^/[A-Za-z0-9._/+=@:,-]*$')
-        fail_msg: 'install_receipt must be a plain absolute path; got "{{ oe_receipt }}".'
+          - lookup('env', 'OE_MIRROR_RECEIPT') is match('^/[A-Za-z0-9._/+=@:,-]*$')
+        fail_msg: >-
+          OE_MIRROR_RECEIPT must be a plain absolute path; got
+          "{{ lookup('env', 'OE_MIRROR_RECEIPT') }}".
 
     - name: Refuse a dump_rows destination that is not an absolute path outside this repository
       when: oe_dump | length > 0
@@ -335,6 +344,38 @@
           ops_dir, launch_agents_dir, kafka_bin and the render directory must be plain paths
           ([A-Za-z0-9._/-]); got ops_dir={{ oe_ops }} launch_agents_dir={{ oe_agents }}
           kafka_bin={{ oe_kbin }} rendered={{ oe_rendered_dir }}.
+
+    - name: Refuse an install that did not come through the wrapper
+      # A PRODUCTION install must be an invocation whose completion can be PROVEN, and only
+      # scripts/ops/install-es-mirrors.sh can prove it: it refuses the selection flags, requires the
+      # receipt this play writes on the work path, and cross-checks Ansible's own task banners and
+      # recap. Codex r5's point stands that calling it "THE entry point" does not force it, and that
+      # a documented bare ansible-playbook production install is a mutation path with no completion
+      # evidence at all. So the production path now requires the wrapper's receipt variable.
+      #
+      # ⚠ WHAT THIS IS AND IS NOT. OE_MIRROR_RECEIPT is an environment variable, so an operator can
+      # export it by hand and run ansible-playbook directly. That is deliberate and it is the same
+      # standard as everything else in this file: it makes ACCIDENTAL bypass impossible — a bare
+      # production install now fails with an instruction rather than mutating units unprovably — and
+      # makes deliberate bypass an explicit, nameable act rather than the default spelling in the
+      # header. It is not a security boundary. The permitted-commit guard is the security boundary,
+      # it is enforced separately in mirror-stop.sh.j2/mirror-start.sh.j2 and the write step, and
+      # none of this weakens it.
+      #
+      # A PLAN is untouched: it writes no unit, so a plan that quietly did nothing costs nothing.
+      when: oe_confirm
+      tags: always
+      ansible.builtin.assert:
+        that:
+          - lookup('env', 'OE_MIRROR_RECEIPT') | length > 0
+        fail_msg: >-
+          An install must run through scripts/ops/install-es-mirrors.sh, which is the only
+          invocation that can prove it completed — it refuses the flags that make ansible-playbook
+          exit 0 having done nothing, and requires the receipt this play writes on the work path.
+          A PLAN needs nothing: drop -e confirm_mirror_install=true to plan.
+          This task is the EARLY, readable refusal; the binding one is in
+          ansible/templates/mirror-stop.sh.j2 and its two siblings, because `--skip-tags always`
+          skips exactly the always-tagged tasks like this one.
 
     - name: Refuse a PRODUCTION install from a run host that is not the controller
       # ⚠ The production lock is a script that runs INSIDE this checkout, and this checkout exists
@@ -585,48 +626,69 @@
       ansible.builtin.debug:
         msg: "{{ oe_report | default([]) }}"
 
-    - name: Write the run receipt, so "exit 0" cannot mean "installed nothing"
-      # ⚠ THE ONLY HONEST PROOF THAT THIS PLAY RAN. Ansible exits 0 for a play that matched no host
-      # and for one whose every task was selected away, and no task inside the playbook can defend
-      # against a flag that stops that task running — `--skip-tags all`, `--skip-tags always`,
-      # `--list-hosts` and `--check` all exit 0 having installed nothing (Codex r4, all reproduced).
-      # So the contract moves outside: scripts/ops/install-es-mirrors.sh passes a receipt path,
-      # refuses the task-selection flags, and REQUIRES this file afterwards. Nothing reached here
-      # means no receipt means the wrapper fails, whatever ansible-playbook's own exit code was.
-      when: oe_receipt | default('') | length > 0
-      tags: always
-      ansible.builtin.copy:
-        dest: "{{ oe_receipt }}"
-        mode: "0644"
-        content: |
-          host={{ inventory_hostname }}
-          connection={{ hostvars[inventory_hostname].ansible_connection | default('') }}
-          target={{ oe_target }}
-          confirm={{ oe_confirm }}
-          units_in_table={{ (oe_units | default([])) | length }}
-          units_selected={{ (oe_selected | default([])) | length }}
-          units_held_prod_only={{ (oe_held | default([])) | length }}
-          units_deferred_other_run_host={{ ((oe_env_plan | default([])) | length) - ((oe_plan | default([])) | length) }}
-          units_on_this_host={{ (oe_plan | default([])) | length }}
-          units_failed={{ (oe_failed | default([])) | length }}
-          only_topics={{ oe_only }}
-          # The invariant is SELECTED = held + deferred + on_this_host, so a unit cannot go missing
-          # from a run without the arithmetic saying so. Measured on a full dev plan: 18 in the
-          # table, 18 selected, = 1 held prod-only + 4 deferred to mac74 + 13 here.
-          # in_table >= selected, and they differ exactly when -e only_topics narrowed the run —
-          # which is why only_topics is recorded here too rather than left to be inferred from a gap.
-
-    - name: Fail when any unit was not installable or did not reload
-      # Reported per unit above, and fatal here: a run that could not install part of the table, or
-      # whose reload did not prove a replacement, has not done what it was asked, and a green exit
-      # would say it had. A failed RELOAD is the more serious of the two — that unit's files are new
-      # on disk while its process may still be the old one.
-      ansible.builtin.assert:
-        that:
-          - (oe_failed | default([])) | length == 0
-          - (oe_reload_failed | default([])) | length == 0
-        fail_msg: >-
-          {{ ('not installable: ' ~ (oe_failed | default([]) | join(', '))) if (oe_failed | default([]) | length > 0) else '' }}
-          {{ ('reload did not prove a replacement: ' ~ (oe_reload_failed | default([]) | join(', '))) if (oe_reload_failed | default([]) | length > 0) else '' }}
-          — see the Summary above for each reason.
-        success_msg: "{{ oe_plan | length }} unit(s) accounted for{{ ' (plan only)' if not oe_confirm else '' }}."
+    # ⚠⚠ THE RECEIPT IS EVIDENCE PRODUCED BY THE WORK, AND IT IS DELIBERATELY NOT `tags: always`.
+    # My first version was exactly backwards and Codex r5 broke it in one command:
+    #   ANSIBLE_RUN_TAGS=always scripts/ops/install-es-mirrors.sh -e confirm_mirror_install=true
+    # exited 0 with a receipt reading confirm=True and EVERY COUNT ZERO. `tags: always` guarantees
+    # the receipt task runs under a narrowed tag selection — which is the opposite of proving the
+    # work ran. An always-tagged terminal task cannot be evidence of anything.
+    #
+    # So: no `always` tag here. Any tag or limit selection that skips the real work skips this too,
+    # there is no receipt, and scripts/ops/install-es-mirrors.sh fails. The refusals at the top of
+    # the playbook keep their `always` tag, because a REFUSAL should survive selection; evidence
+    # must not.
+    #
+    # The path comes from the ENVIRONMENT, read inline at the point of use and never through a
+    # variable name. `-e install_receipt=<elsewhere>` and `-e oe_receipt=<elsewhere>` both outranked
+    # a play var, which let a caller redirect or suppress the receipt AFTER a real install and hand
+    # the wrapper an exit 3 — "it failed, run it again" against production (Codex r5). An extra var
+    # cannot override a lookup that is never bound to a name.
+    #
+    # block/always, so the receipt is written whether or not the terminal assertion passes and is
+    # genuinely the last thing to happen. Described as "the last task" before, it in fact ran BEFORE
+    # the assertion and could report units_failed=0 while the run then failed on oe_reload_failed,
+    # which it did not record at all (Codex r5, MAJOR).
+    - name: Account for the run, and write the receipt last whatever the outcome
+      block:
+        - name: Fail when any unit was not installable or did not reload
+          # Reported per unit above, and fatal here: a run that could not install part of the table,
+          # or whose reload did not prove a replacement, has not done what it was asked, and a green
+          # exit would say it had. A failed RELOAD is the more serious of the two — that unit's files
+          # are new on disk while its process may still be the old one.
+          ansible.builtin.assert:
+            that:
+              - (oe_failed | default([])) | length == 0
+              - (oe_reload_failed | default([])) | length == 0
+            fail_msg: >-
+              {{ ('not installable: ' ~ (oe_failed | default([]) | join(', '))) if (oe_failed | default([]) | length > 0) else '' }}
+              {{ ('reload did not prove a replacement: ' ~ (oe_reload_failed | default([]) | join(', '))) if (oe_reload_failed | default([]) | length > 0) else '' }}
+              — see the Summary above for each reason.
+            success_msg: "{{ oe_plan | length }} unit(s) accounted for{{ ' (plan only)' if not oe_confirm else '' }}."
+      always:
+        - name: Write the run receipt
+          # The counters still come from play facts, which an extra var outranks, so they are a
+          # REPORT and not the proof — the proof is that this task ran at all, which only the work
+          # path reaches, plus the mandatory task banners the wrapper reads out of Ansible's own
+          # output. The wrapper cross-checks the two: a forged counter that disagrees with Ansible's
+          # recap is caught, and a narrowed run never gets here.
+          when: lookup('env', 'OE_MIRROR_RECEIPT') | length > 0
+          ansible.builtin.copy:
+            dest: "{{ lookup('env', 'OE_MIRROR_RECEIPT') }}"
+            mode: "0644"
+            content: |
+              host={{ inventory_hostname }}
+              connection={{ hostvars[inventory_hostname].ansible_connection | default('') }}
+              target={{ oe_target }}
+              confirm={{ oe_confirm }}
+              units_in_table={{ (oe_units | default([])) | length }}
+              units_selected={{ (oe_selected | default([])) | length }}
+              units_held_prod_only={{ (oe_held | default([])) | length }}
+              units_deferred_other_run_host={{ ((oe_env_plan | default([])) | length) - ((oe_plan | default([])) | length) }}
+              units_on_this_host={{ (oe_plan | default([])) | length }}
+              units_failed={{ (oe_failed | default([])) | length }}
+              units_reload_failed={{ (oe_reload_failed | default([])) | length }}
+              only_topics={{ oe_only }}
+              # SELECTED = held + deferred + on_this_host; in_table >= selected, and they differ
+              # exactly when -e only_topics narrowed the run, which is why only_topics is recorded
+              # rather than left to be inferred from a gap. Measured on a full dev plan:
+              # 18 in table, 18 selected = 1 held prod-only + 4 deferred to mac74 + 13 here.

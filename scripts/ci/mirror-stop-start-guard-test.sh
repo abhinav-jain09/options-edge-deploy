@@ -93,6 +93,40 @@ chmod +x "$WORK/bin/ps"
 export PATH="$WORK/bin:$PATH" OE_RELOAD_SETTLE=0
 
 fail=0
+# ⚠ These scripts now refuse ANY install that did not come through
+# scripts/ops/install-es-mirrors.sh, enforced in the script rather than in a task because
+# `--skip-tags always` skips exactly the always-tagged refusals. This gate drives the scripts
+# directly, so it presents itself as a wrapper run — it tests the stop/start guards, which is a
+# different subject. The requirement itself is asserted below, in `wrapper_requirement`, and again
+# in scripts/ci/mirror-install-wrapper-test.sh; it is not being worked around here.
+export OE_MIRROR_RECEIPT=/tmp/oe-stop-start-gate-receipt
+
+# ---- the wrapper requirement, which is what this export is standing in for ----------------------
+# Asserted BEFORE the scenarios, so an export that silently stopped being necessary (the check
+# deleted from the templates) fails the gate rather than passing it quietly.
+wrapper_requirement() {
+  local d; d=$(mktemp -d) || return 1
+  local r=0
+  PL="$d/u.plist" LBL=L MDIR="$d/unit" render_tpl "$STOP_TPL" "127.0.0.1:19092" > "$d/stop.sh"
+  grep -q 'OE_MIRROR_RECEIPT' "$d/stop.sh" \
+    || { echo "  FAIL wrapper requirement: mirror-stop.sh.j2 no longer refuses a run without a receipt"; r=1; }
+  # and it must actually FIRE: unset, a dev stop must refuse before touching anything
+  set +e
+  out=$(env -u OE_MIRROR_RECEIPT bash "$d/stop.sh" 2>&1); rc=$?
+  set -e
+  if [ "$rc" = 0 ]; then
+    echo "  FAIL wrapper requirement: a dev stop ran with OE_MIRROR_RECEIPT unset (rc=0)"; r=1
+  elif ! grep -q 'must run through scripts/ops/install-es-mirrors.sh' <<<"$out"; then
+    echo "  FAIL wrapper requirement: the refusal did not name the wrapper (rc=$rc): $(tail -1 <<<"$out")"; r=1
+  fi
+  rm -rf "$d"
+  # Report the PASS as well. A function that only speaks when it fails is indistinguishable from a
+  # function that never ran — the same "a check that cannot fail is not a check" trap as the
+  # always-tagged receipt this requirement exists because of.
+  [ "$r" = 0 ] && echo "  ok   an install without a receipt is refused by the script itself     rc!=0"
+  return "$r"
+}
+
 scenario() { # phase(stop|start|both)  name  expect(pass|fail)  [want=<substring>]  setup...
   local phase="$1" name="$2" expect="$3"; shift 3
   local want=""
@@ -146,6 +180,8 @@ setup_first_install() {
   : > "$WORK/procs.loaded"; : > "$WORK/procs.unloaded"; echo "300 $MDIR/producer.properties" > "$WORK/procs.running"
   echo loaded > "$WORK/phase"
 }
+
+wrapper_requirement || fail=1
 
 scenario both "stop then start replaces the process" pass want="started: pid 100 -> 200" setup_replaced
 
