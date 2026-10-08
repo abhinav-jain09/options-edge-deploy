@@ -20,8 +20,14 @@ sed 's/^    approvedBy: UNAPPROVED$/    approvedBy: Test Owner/' deploy/zerodte/
 grep -q "approvedBy: Test Owner" "$W/deploy/zerodte/virgin-attestation.yaml" || { echo "FAIL: the fixture attestation was not approved"; exit 1; }
 L=6b2c7c1a-5d3e-4a8f-9b41-2f0d7e9c4a10
 LT="$(printf 'c%.0s' $(seq 32))"; PD="$(printf 'b%.0s' $(seq 64))"
+# eraStartSession is READ FROM THE DECLARATION the fixture copied, never typed here: #1131 made the validator bind the committed receipt's
+# eraStartSession to the declaration's, and this fixture — written before #1131 and merged after it — still emitted the older grammar, so the
+# test's very first "check: READY" was refused with "the receipt lacks the key: eraStartSession" before the writer gate was ever exercised, and
+# every later case failed downstream of it (no Job was ever written). Deriving the value is what stops the next grammar change doing it again.
+ES="$(sed -n 's/^eraStartSession: *"\{0,1\}\([0-9-]*\)"\{0,1\}$/\1/p' deploy/zerodte/provisioning/dev.yaml)"
+[ -n "$ES" ] || { echo "FAIL: deploy/zerodte/provisioning/dev.yaml declares no eraStartSession; the fixture cannot build a receipt the validator binds"; exit 1; }
 receipt() { # receipt <generation> <eraId> <clusterId> → the committed receipt block, in the shape the provisioning wrapper prints
-  printf 'environment: dev\nsymbol: SPX\nenvironmentLineageId: %s\nbootstrapKind: VIRGIN\ngeneration: %s\neraId: %s\nledgerTopicId: "%s"\nclusterId: "%s"\nprovisionedDigest: "%s"\nledgerOffset: 0\n' "$L" "$1" "$2" "$LT" "$3" "$PD"
+  printf 'environment: dev\nsymbol: SPX\nenvironmentLineageId: %s\nbootstrapKind: VIRGIN\ngeneration: %s\neraId: %s\neraStartSession: "%s"\nledgerTopicId: "%s"\nclusterId: "%s"\nprovisionedDigest: "%s"\nledgerOffset: 0\n' "$L" "$1" "$2" "$ES" "$LT" "$3" "$PD"
 }
 receipt 1 1 cluster-dev-A > "$W/deploy/zerodte/provisioned/dev.yaml"
 printf 'images:\n  vix-option-inteligence-service: 192.168.100.252:5000/options-edge-vix-option-inteligence:dev\n' > "$W/image-tags/dev.yaml"
