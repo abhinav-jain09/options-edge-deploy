@@ -15,9 +15,10 @@
 # read as "not loaded" (deploy Codex round 8). Each of those turns a live mirror into a clear gate.
 #
 # So this asks launchd: `launchctl list` for the loaded labels, then `launchctl list <label>` for each,
-# which prints the job AS LOADED including the Program it runs. The unit directory is that program's
-# directory, exactly as the plist-based discovery derives it, and the agent produces into this broker
-# when the producer.properties beside it says so.
+# which prints the job AS LOADED including the Program and ProgramArguments it runs. The unit is whichever
+# of those paths has a producer.properties beside it -- EVERY absolute path is considered, because a
+# wrapper layout runs ["/bin/bash", "/unit/run-mirror.sh"] and the unit is the second one. Two candidate
+# directories that both hold one is a refusal, not a guess.
 #
 # WHAT COUNTS AS TARGETING THE BROKER: bootstrap.servers is a LIST. `host:9092,other:9092` targets this
 # broker just as `host:9092` does, and requiring the whole value to equal it hid exactly that case
@@ -84,22 +85,29 @@ PROG = re.compile(r'^\s*"Program"\s*=\s*"(?P<p>.*)";\s*$')
 ARGS_OPEN = re.compile(r'^\s*"ProgramArguments"\s*=\s*\(\s*$')
 ARG = re.compile(r'^\s*"(?P<p>.*)";\s*$')
 
-def program_of(label, text):
-    prog, in_args = "", False
+def paths_of(text):
+    """EVERY absolute path launchd reports for the job: the Program and all ProgramArguments entries.
+    Not just the first one -- a wrapper layout runs ["/bin/bash", "/unit/run-mirror.sh"], where the unit
+    is the SECOND argument and [0] is a shell whose directory holds no producer.properties, so taking [0]
+    called a loaded prod mirror 'not a mirror' (deploy Codex round 14)."""
+    out, in_args = [], False
     for line in text.splitlines():
         m = PROG.match(line)
         if m:
-            return m.group("p")
+            if m.group("p") and m.group("p") not in out:
+                out.append(m.group("p"))
+            continue
         if ARGS_OPEN.match(line):
             in_args = True
             continue
         if in_args:
-            m = ARG.match(line)
-            if m:
-                return m.group("p")
             if line.strip().startswith(")"):
                 in_args = False
-    return prog
+                continue
+            m = ARG.match(line)
+            if m and m.group("p") and m.group("p") not in out:
+                out.append(m.group("p"))
+    return out
 
 def _logical_lines(text):
     """Properties logical lines: a trailing ODD number of backslashes continues onto the next line, and
@@ -182,21 +190,32 @@ def bootstrap_list(path):
 
 out = []
 for label in labels:
-    prog = program_of(label, launchctl("list", label))
-    if not prog:
+    paths = paths_of(launchctl("list", label))
+    if not paths:
         fail("%s is loaded but launchd reports no program for it" % label)
-    if not os.path.isabs(prog):
-        fail("%s runs a non-absolute program (%r)" % (label, prog))
-    d = os.path.dirname(prog)
-    # A directory that cannot be searched or read cannot answer "is there a producer.properties", so it
-    # is a refusal rather than a "not a mirror".
-    if not os.path.isdir(d):
-        fail("%s runs %r, whose directory does not exist, so where it produces is unknown" % (label, prog))
-    if not os.access(d, os.R_OK | os.X_OK):
-        fail("%s's unit directory %r cannot be read, so where it produces is unknown" % (label, d))
-    props = os.path.join(d, "producer.properties")
-    if not os.path.exists(props):
-        continue                      # not a mirror
+    abs_paths = [p for p in paths if os.path.isabs(p)]
+    if not abs_paths:
+        fail("%s runs no absolute program (%r)" % (label, paths))
+
+    # The unit is the directory that holds a producer.properties. A job may name several paths (a
+    # wrapper and its script); each candidate directory must be readable to answer the question at all.
+    units = []
+    for p in abs_paths:
+        d = os.path.dirname(p)
+        if not os.path.isdir(d):
+            # A path whose directory is gone cannot be the unit, and cannot be ruled out either.
+            fail("%s runs %r, whose directory does not exist, so where it produces is unknown" % (label, p))
+        if not os.access(d, os.R_OK | os.X_OK):
+            fail("%s's candidate unit directory %r cannot be read, so where it produces is unknown" % (label, d))
+        props = os.path.join(d, "producer.properties")
+        if os.path.exists(props) and props not in units:
+            units.append(props)
+    if not units:
+        continue                      # not a mirror: no producer config beside anything it runs
+    if len(units) > 1:
+        fail("%s runs programs in %d directories that each hold a producer.properties (%s), so which one "
+             "it produces with is ambiguous" % (label, len(units), ", ".join(units)))
+    props = units[0]
     if not os.access(props, os.R_OK):
         fail("%s has an unreadable %s, so where it produces is unknown" % (label, props))
     entries = bootstrap_list(props)

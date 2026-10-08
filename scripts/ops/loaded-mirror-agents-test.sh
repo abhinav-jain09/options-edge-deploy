@@ -42,6 +42,13 @@ exit 0
 EOF
   chmod +x "$WORK/bin/launchctl"
 }
+jobargs() { # <label> <arg...> ; a job whose ProgramArguments has SEVERAL entries (a wrapper layout)
+  mkdir -p "$WORK/jobs"
+  { printf '{\n\t"Label" = "%s";\n\t"ProgramArguments" = (\n' "$1"
+    shift
+    local a; for a in "$@"; do printf '\t\t"%s";\n' "$a"; done
+    printf '\t);\n};\n'; } > "$WORK/jobs/$1"
+}
 job() { # <label> <program|-> ; writes the per-label dict
   mkdir -p "$WORK/jobs"
   { printf '{\n\t"Label" = "%s";\n' "$1"
@@ -161,6 +168,30 @@ run
 [ "$OUT" = "com.optionsedge.prodmirror" ] && ok "a \\uXXXX escape inside an entry is resolved" || bad "out=[$OUT]"
 printf 'bootstrap.servers=192.168.100.252:9092\n' > "$WORK/prodmirror/producer.properties"
 
+echo "4c. a WRAPPER layout: the unit is whichever path has a producer.properties beside it"
+# launchd runs ["/bin/bash", "/unit/run-mirror.sh"] here. Taking ProgramArguments[0] put the unit in
+# /bin, found no producer.properties and called a LOADED PROD MIRROR "not a mirror" -- invisible to the
+# gate that exists to see it (deploy Codex round 14).
+mkdir -p "$WORK/jobs"
+{ printf '{\n\t"Label" = "com.optionsedge.wrapped";\n\t"ProgramArguments" = (\n'
+  printf '\t\t"/bin/bash";\n\t\t"%s";\n' "$P1"
+  printf '\t);\n};\n'; } > "$WORK/jobs/com.optionsedge.wrapped"
+table com.optionsedge.wrapped
+run
+[ "$RC" -eq 0 ] && [ "$OUT" = "com.optionsedge.wrapped" ] \
+  && ok "a wrapper layout is classified by its SCRIPT argument, not by /bin" || bad "rc=$RC out=[$OUT] err=$ERR"
+# ...and when two of the paths each have a producer.properties, which one it produces with is a guess:
+# a refusal, not a pick.
+P4=$(unit secondunit "$OTHER")
+{ printf '{\n\t"Label" = "com.optionsedge.twounits";\n\t"ProgramArguments" = (\n'
+  printf '\t\t"%s";\n\t\t"%s";\n' "$P1" "$P4"
+  printf '\t);\n};\n'; } > "$WORK/jobs/com.optionsedge.twounits"
+table com.optionsedge.twounits
+run
+[ "$RC" -ne 0 ] && ok "two candidate units is a refusal" || bad "rc=$RC out=[$OUT]"
+printf '%s' "$ERR" | grep -q 'ambiguous' && ok "and says it is ambiguous" || bad "the diagnostic is [$ERR]"
+table com.optionsedge.prodmirror; job com.optionsedge.prodmirror "$P1"
+
 echo "5b. a label with a SPACE in it is not lost"
 table "com.optionsedge.spaced label" ; job "com.optionsedge.spaced label" "$P1"
 run
@@ -199,7 +230,7 @@ printf 'bootstrap.servers=192.168.100.252:9092\n' > "$WORK/prodmirror/producer.p
 run
 [ "$RC" -eq 0 ] && [ "$OUT" = "com.optionsedge.prodmirror" ] && ok "and the exact value does" || bad "rc=$RC out=[$OUT]"
 
-echo "6. MUTATION: each refusal is load-bearing"
+echo "6. MUTATIONS: the launchctl-status and unreadable-config refusals (not every refusal above)"
 mut() { # <OLD%%->%%NEW> <label>
   local dir="$WORK/mut.$RANDOM"; mkdir -p "$dir"; cp "$H" "$dir/h.sh"
   printf '%s' "$1" > "$dir/edit"
