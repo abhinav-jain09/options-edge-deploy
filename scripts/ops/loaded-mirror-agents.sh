@@ -8,64 +8,123 @@
 #       1  it could not be established — then the output is NOT an answer and the caller must refuse
 #
 # WHY NOT THE PLISTS. scripts/ops/prod-clean-slate.sh discovers agents by reading
-# ~/Library/LaunchAgents/com.optionsedge.*.plist and checking each one with `launchctl list`. That is
-# the right way to RECORD what to resume later (the ledger needs the plist path), and the wrong way to
-# ask "is anything still producing into the broker I am about to wipe": a job stays loaded when its
-# plist is moved or edited, a plist that fails to parse was silently skipped, and a `launchctl list`
-# that failed read as "not loaded" (deploy Codex round 8). All three turn a live mirror into a clear
-# gate.
+# ~/Library/LaunchAgents/com.optionsedge.*.plist and checking each with `launchctl list`. That is the
+# right way to RECORD what to resume later (the ledger needs the plist path) and the wrong way to ask
+# "is anything still producing into the broker I am about to wipe": a job stays loaded when its plist is
+# moved or edited, a plist that fails to parse was silently skipped, and a `launchctl list` that failed
+# read as "not loaded" (deploy Codex round 8). Each of those turns a live mirror into a clear gate.
 #
-# So this asks launchd: `launchctl list` for the loaded labels, then `launchctl list <label>` for each
-# one, which prints the job as loaded -- including the Program it actually runs. The unit directory is
-# that program's directory, exactly as the plist-based discovery derives it, and the agent is producing
-# into this broker when the producer.properties beside it says so.
+# So this asks launchd: `launchctl list` for the loaded labels, then `launchctl list <label>` for each,
+# which prints the job AS LOADED including the Program it runs. The unit directory is that program's
+# directory, exactly as the plist-based discovery derives it, and the agent produces into this broker
+# when the producer.properties beside it says so.
 #
-# FAILS CLOSED, and the distinction matters: a loaded com.optionsedge.* job whose unit directory has NO
-# producer.properties is NOT a mirror (that is how a mirror is identified at all), while one that HAS
-# an unreadable producer.properties, or whose program cannot be read out of launchd, is a job this
-# cannot classify -- and that is a refusal, not an empty answer.
-
-_lma_launchctl() { command launchctl "$@"; }   # indirection so a test can stub `launchctl`
+# WHAT COUNTS AS TARGETING THE BROKER: bootstrap.servers is a LIST. `host:9092,other:9092` targets this
+# broker just as `host:9092` does, and requiring the whole value to equal it hid exactly that case
+# (deploy Codex round 9). The value is split on commas and each entry compared, after stripping
+# whitespace and a trailing CR; the LAST assignment in the file wins, which is java.util.Properties'
+# own rule.
+#
+# FAILS CLOSED, and the distinction matters:
+#   * a loaded com.optionsedge.* job whose unit directory has NO producer.properties is NOT a mirror --
+#     that is how a mirror is identified at all;
+#   * a job whose program launchd will not report, whose unit directory cannot be searched or read,
+#     whose producer.properties cannot be read, or which has one with NO bootstrap.servers, is a job
+#     this cannot classify: a REFUSAL, not an empty answer.
+#
+# launchctl is called through PATH on purpose, so scripts/ops/loaded-mirror-agents-test.sh drives this
+# very code with a stub.
 
 loaded_mirror_agents_for() {
-  local bs="${1-}" table labels label job prog dir props rc
-  [ -n "$bs" ] || { echo "loaded_mirror_agents_for: need <bootstrap-host:port>" >&2; return 1; }
+  [ -n "${1-}" ] || { echo "loaded_mirror_agents_for: need <bootstrap-host:port>" >&2; return 1; }
+  python3 - "$1" <<'PY'
+import os, re, subprocess, sys
 
-  table="$(_lma_launchctl list 2>/dev/null)"; rc=$?
-  [ "$rc" -eq 0 ] || { echo "loaded_mirror_agents_for: \`launchctl list\` failed (status $rc)" >&2; return 1; }
+target = sys.argv[1].strip()
 
-  # The table is "PID Status Label"; the label is the last field. Only our own namespace is considered.
-  labels="$(printf '%s\n' "$table" | awk 'NF >= 3 { print $NF }' | grep '^com\.optionsedge\.' || true)"
-  [ -n "$labels" ] && : || return 0
+def fail(msg):
+    sys.stderr.write("loaded_mirror_agents_for: %s\n" % msg)
+    sys.exit(1)
 
-  while IFS= read -r label; do
-    [ -n "$label" ] || continue
-    job="$(_lma_launchctl list "$label" 2>/dev/null)"; rc=$?
-    if [ "$rc" -ne 0 ]; then
-      echo "loaded_mirror_agents_for: cannot read the loaded job $label (status $rc)" >&2
-      return 1
-    fi
-    # `"Program" = "/path";` or the first entry of `"ProgramArguments" = ( "/path"; ... )`.
-    prog="$(printf '%s\n' "$job" | sed -nE 's/^[[:space:]]*"Program"[[:space:]]*=[[:space:]]*"(.*)";[[:space:]]*$/\1/p' | head -1)"
-    if [ -z "$prog" ]; then
-      prog="$(printf '%s\n' "$job" | awk '/"ProgramArguments"/{f=1;next} f&&/"/{gsub(/^[[:space:]]*"|";?[[:space:]]*$/,"");print;exit}')"
-    fi
-    if [ -z "$prog" ]; then
-      echo "loaded_mirror_agents_for: $label is loaded but launchd reports no program for it" >&2
-      return 1
-    fi
-    case "$prog" in /*) : ;; *) echo "loaded_mirror_agents_for: $label runs a non-absolute program ($prog)" >&2; return 1 ;; esac
-    dir="$(dirname -- "$prog")"
-    props="$dir/producer.properties"
-    # Not a mirror at all: no producer config beside the program. (This is the same test the plist-based
-    # discovery uses to decide what IS a mirror.)
-    [ -e "$props" ] || continue
-    if [ ! -r "$props" ]; then
-      echo "loaded_mirror_agents_for: $label has an unreadable $props, so where it produces is unknown" >&2
-      return 1
-    fi
-    if grep -qE "^[[:space:]]*bootstrap\.servers[[:space:]]*=[[:space:]]*$(printf '%s' "$bs" | sed 's/[.[\*^$()+?{|]/\\&/g')[[:space:]]*$" "$props"; then
-      printf '%s\n' "$label"
-    fi
-  done <<< "$labels"
+def launchctl(*args):
+    try:
+        p = subprocess.run(["launchctl"] + list(args), capture_output=True, text=True)
+    except Exception as exc:
+        fail("could not run `launchctl %s` (%s)" % (" ".join(args), exc.__class__.__name__))
+    if p.returncode != 0:
+        fail("`launchctl %s` failed (status %d)" % (" ".join(args), p.returncode))
+    return p.stdout
+
+# The table is PID \t Status \t Label, with a header line. The label is everything from the third
+# TAB-separated field on, so a label containing spaces survives (a last-field parse lost it).
+labels = []
+for line in launchctl("list").splitlines():
+    parts = line.split("\t")
+    if len(parts) < 3:
+        continue
+    label = "\t".join(parts[2:]).strip()
+    if label.startswith("com.optionsedge."):
+        labels.append(label)
+
+PROG = re.compile(r'^\s*"Program"\s*=\s*"(?P<p>.*)";\s*$')
+ARGS_OPEN = re.compile(r'^\s*"ProgramArguments"\s*=\s*\(\s*$')
+ARG = re.compile(r'^\s*"(?P<p>.*)";\s*$')
+
+def program_of(label, text):
+    prog, in_args = "", False
+    for line in text.splitlines():
+        m = PROG.match(line)
+        if m:
+            return m.group("p")
+        if ARGS_OPEN.match(line):
+            in_args = True
+            continue
+        if in_args:
+            m = ARG.match(line)
+            if m:
+                return m.group("p")
+            if line.strip().startswith(")"):
+                in_args = False
+    return prog
+
+def bootstrap_list(path):
+    """Every bootstrap.servers entry of the LAST such assignment, or None when there is none."""
+    value = None
+    with open(path, "r", errors="replace") as fh:
+        for line in fh:
+            line = line.rstrip("\r\n")
+            m = re.match(r"^\s*bootstrap\.servers\s*=\s*(.*)$", line)
+            if m:
+                value = m.group(1)
+    if value is None:
+        return None
+    return [e.strip() for e in value.replace("\r", "").split(",") if e.strip()]
+
+out = []
+for label in labels:
+    prog = program_of(label, launchctl("list", label))
+    if not prog:
+        fail("%s is loaded but launchd reports no program for it" % label)
+    if not os.path.isabs(prog):
+        fail("%s runs a non-absolute program (%r)" % (label, prog))
+    d = os.path.dirname(prog)
+    # A directory that cannot be searched or read cannot answer "is there a producer.properties", so it
+    # is a refusal rather than a "not a mirror".
+    if not os.path.isdir(d):
+        fail("%s runs %r, whose directory does not exist, so where it produces is unknown" % (label, prog))
+    if not os.access(d, os.R_OK | os.X_OK):
+        fail("%s's unit directory %r cannot be read, so where it produces is unknown" % (label, d))
+    props = os.path.join(d, "producer.properties")
+    if not os.path.exists(props):
+        continue                      # not a mirror
+    if not os.access(props, os.R_OK):
+        fail("%s has an unreadable %s, so where it produces is unknown" % (label, props))
+    entries = bootstrap_list(props)
+    if entries is None:
+        fail("%s's %s has no bootstrap.servers, so where it produces is unknown" % (label, props))
+    if target in entries:
+        out.append(label)
+
+print("\n".join(out))
+PY
 }

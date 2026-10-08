@@ -104,7 +104,48 @@ PY
 run
 [ "$OUT" = "com.optionsedge.prodmirror" ] && ok "ProgramArguments[0] is used when Program is absent" || bad "out=[$OUT] rc=$RC err=$ERR"
 
-echo "5. the broker match is exact, not a substring"
+echo "5. the broker match is over the LIST, and exact per entry"
+job com.optionsedge.prodmirror "$P1"
+printf 'bootstrap.servers=192.168.100.252:90921\n' > "$WORK/prodmirror/producer.properties"
+run
+[ -z "$OUT" ] && ok "a longer host:port that merely starts the same does not match" || bad "matched [$OUT]"
+# bootstrap.servers is a LIST: a mirror that names this broker among others targets it just as much, and
+# requiring the whole value to equal it hid exactly that (deploy Codex round 9).
+printf 'bootstrap.servers=192.168.100.252:9092,other.host:9092\n' > "$WORK/prodmirror/producer.properties"
+run
+[ "$OUT" = "com.optionsedge.prodmirror" ] && ok "a multi-broker list naming the target FIRST matches" || bad "out=[$OUT]"
+printf 'bootstrap.servers=other.host:9092, 192.168.100.252:9092 \n' > "$WORK/prodmirror/producer.properties"
+run
+[ "$OUT" = "com.optionsedge.prodmirror" ] && ok "...and naming it later, with spaces around the entries" || bad "out=[$OUT]"
+printf 'bootstrap.servers=a:1\nbootstrap.servers=192.168.100.252:9092\n' > "$WORK/prodmirror/producer.properties"
+run
+[ "$OUT" = "com.optionsedge.prodmirror" ] && ok "the LAST assignment wins, as java.util.Properties reads it" || bad "out=[$OUT]"
+printf 'bootstrap.servers=192.168.100.252:9092\r\n' > "$WORK/prodmirror/producer.properties"
+run
+[ "$OUT" = "com.optionsedge.prodmirror" ] && ok "a CRLF line still matches" || bad "out=[$OUT]"
+printf 'acks=all\n' > "$WORK/prodmirror/producer.properties"
+run
+[ "$RC" -ne 0 ] && ok "a producer.properties with NO bootstrap.servers is a refusal" || bad "a config with no bootstrap returned 0"
+printf 'bootstrap.servers=192.168.100.252:9092\n' > "$WORK/prodmirror/producer.properties"
+
+echo "5b. a label with a SPACE in it is not lost"
+table "com.optionsedge.spaced label" ; job "com.optionsedge.spaced label" "$P1"
+run
+[ "$OUT" = "com.optionsedge.spaced label" ] && ok "the table parse keeps everything after the second tab" || bad "out=[$OUT]"
+table com.optionsedge.prodmirror; job com.optionsedge.prodmirror "$P1"
+
+echo "5c. a unit directory that cannot be searched is a refusal, not 'not a mirror'"
+mkdir -p "$WORK/locked/unit"; printf '#!/usr/bin/env bash\nexec /bin/true\n' > "$WORK/locked/unit/run-mirror.sh"
+printf 'bootstrap.servers=%s\n' "$PROD" > "$WORK/locked/unit/producer.properties"
+table com.optionsedge.lockeddir; job com.optionsedge.lockeddir "$WORK/locked/unit/run-mirror.sh"
+chmod 000 "$WORK/locked/unit"; run; chmod 700 "$WORK/locked/unit"
+[ "$RC" -ne 0 ] && ok "an unreadable unit directory refuses" || bad "an unreadable unit directory returned 0 with [$OUT]"
+table com.optionsedge.gonedir; job com.optionsedge.gonedir "$WORK/no-such-dir/run-mirror.sh"
+run
+[ "$RC" -ne 0 ] && ok "a program whose directory does not exist refuses" || bad "a vanished directory returned 0"
+table com.optionsedge.prodmirror; job com.optionsedge.prodmirror "$P1"
+
+echo "5d. the old exactness case, kept"
 job com.optionsedge.prodmirror "$P1"
 printf 'bootstrap.servers=192.168.100.252:90921\n' > "$WORK/prodmirror/producer.properties"
 run
@@ -127,21 +168,31 @@ open(path, "w").write(s.replace(old, new, 1))
 ' "$dir/h.sh" "$dir/edit" || { bad "$2: the mutation did not apply"; return 1; }
   printf '%s\n' "$dir/h.sh"
 }
-if m="$(mut '  [ "$rc" -eq 0 ] || { echo "loaded_mirror_agents_for: \`launchctl list\` failed (status $rc)" >&2; return 1; }%%->%%  :' "the list-status refusal")"; then
+if m="$(mut '    if p.returncode != 0:%%->%%    if False:' "the launchctl-status refusal")"; then
   MOUT="$(PATH="$WORK/bin:$PATH" STUB_TABLE="$WORK/table" STUB_JOBS="$WORK/jobs" LIST_RC=3 \
     bash -c '. "$1"; loaded_mirror_agents_for "$2"' _ "$m" "$PROD" 2>/dev/null)"; MRC=$?
   [ "$MRC" -eq 0 ] && [ -z "$MOUT" ] \
     && ok "without it, a failed \`launchctl list\` answers 'nothing is loaded' (case 3 is load-bearing)" \
     || bad "the mutant answered rc=$MRC out=[$MOUT]"
 fi
-if m="$(mut '    if [ ! -r "$props" ]; then%%->%%    if false; then' "the unreadable-config refusal")"; then
+# The unreadable-config check is a DIAGNOSTIC rule, not the thing that stands between the probe and a
+# wipe: without it the read throws and the probe dies anyway. What it buys is that the operator is told
+# WHICH job cannot be classified instead of reading a traceback -- so that, and not a flipped verdict,
+# is what the mutation shows. Saying it the other way round would be the "right for the wrong reason"
+# claim this repo keeps finding.
+if m="$(mut '    if not os.access(props, os.R_OK):%%->%%    if False:' "the unreadable-config refusal")"; then
   chmod 000 "$WORK/prodmirror/producer.properties"
+  MERR="$WORK/mut.err"
   MOUT="$(PATH="$WORK/bin:$PATH" STUB_TABLE="$WORK/table" STUB_JOBS="$WORK/jobs" \
-    bash -c '. "$1"; loaded_mirror_agents_for "$2"' _ "$m" "$PROD" 2>/dev/null)"; MRC=$?
+    bash -c '. "$1"; loaded_mirror_agents_for "$2"' _ "$m" "$PROD" 2>"$MERR")"; MRC=$?
   chmod 600 "$WORK/prodmirror/producer.properties"
-  [ "$MRC" -eq 0 ] && [ -z "$MOUT" ] \
-    && ok "without it, an unreadable producer config answers 'not a mirror' (case 3 is load-bearing)" \
-    || bad "the mutant answered rc=$MRC out=[$MOUT]"
+  if [ "$MRC" -ne 0 ] && grep -qE 'Traceback|PermissionError' "$MERR"; then
+    ok "without it the probe still refuses, but by CRASHING (traceback, no job named) — the check turns that into a stated reason"
+  elif [ "$MRC" -eq 0 ]; then
+    bad "the mutant ANSWERED (rc=0, out=[$MOUT]) — then the check is load-bearing in the stronger sense and this case should say so"
+  else
+    bad "the mutant failed without a traceback: rc=$MRC err=[$(head -2 "$MERR")]"
+  fi
 fi
 
 echo
