@@ -102,6 +102,18 @@ mirror_ledger_record() {
   # still running after it was supposed to be stopped must not look like a successful pause.
   if [ "$#" -gt 0 ]; then
     "$@" || hook_rc=$?
+    # AND THE ROWS MUST STILL BE THERE. The hook runs arbitrary caller code under the lock; if it
+    # rewrote or truncated the ledger, the verification above no longer describes the file (deploy
+    # Codex round 7). Re-read it, and report that rather than the hook's own status.
+    missing=0
+    while IFS= read -r row; do
+      [ -n "$row" ] || continue
+      grep -qxF -- "$row" "$list" 2>/dev/null || missing=$((missing+1))
+    done < "$rows"
+    if [ "$missing" -ne 0 ]; then
+      _ml_say "WARN: after the stop step, $missing of $n row(s) are no longer in $list"
+      hook_rc=1
+    fi
   fi
   rmdir "$lock" 2>/dev/null
   return "$hook_rc"

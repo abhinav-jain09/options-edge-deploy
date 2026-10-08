@@ -94,7 +94,8 @@ for extra in sorted(glob.glob(os.path.join(unit_dir, "run-mirror*.sh"))):
 #   * logical lines are formed by joining trailing-backslash continuations, and lines whose first
 #     non-space character is # are dropped;
 #   * EXACTLY ONE logical line may mention kafka-mirror-maker, and it must be, in full,
-#       exec [path/]kafka-mirror-maker (--flag [value])...
+#       exec [/absolute/path/]kafka-mirror-maker (--flag [value])...
+#     where the program is an absolute path or the bare name, never a relative path;
 #     with every value a single-quoted literal, a double-quoted literal with no $ or backtick, or a
 #     bare token with none of $ ` " ' # ; | & < > ( );
 #   * that line must carry EXACTLY ONE --whitelist, QUOTED, and its value is the pattern (an unquoted
@@ -179,6 +180,16 @@ def whitelist_of(path):
     if not m:
         hold("%s's launcher line is not the accepted `exec [path/]kafka-mirror-maker --flag value ...` shape"
              % base)
+    # The program is either an ABSOLUTE path or the BARE name (which one unit really uses: the OPRA
+    # enumeration mirror's container launcher runs `exec kafka-mirror-maker` with /mirror paths inside
+    # its image). A RELATIVE path with slashes depends on the working directory, which neither this file
+    # nor launchd pins, so it is refused. What a bare name costs is that PATH decides WHICH
+    # kafka-mirror-maker runs; what the verdict needs is the whitelist that program is handed, and that
+    # is on the line either way (deploy Codex round 7).
+    prog = m.group("prog")
+    if not prog.startswith("/") and "/" in prog:
+        hold("%s runs kafka-mirror-maker by a RELATIVE path (%r), which depends on the working directory"
+             % (base, prog))
     wl_args = [a for a in ARG.finditer(m.group("args")) if a.group("flag") == "whitelist"]
     if len(wl_args) != 1:
         hold("%s's launcher line carries %d --whitelist argument(s)" % (base, len(wl_args)))

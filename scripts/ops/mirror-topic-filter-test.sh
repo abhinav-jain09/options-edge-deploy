@@ -35,7 +35,9 @@ BARE=$(unit bare    'exec kafka-mirror-maker --whitelist es\.tape-zones\.board -
 FAM=$(unit family   "exec kafka-mirror-maker --whitelist 'es\.futures\.cvd' --num.streams 1")
 
 echo "1. the 2026-10-07 case: a drifted topic no mirror copies starts every mirror"
-for u in "$CVD" "$AUC" "$BARE" "$FAM"; do
+# $BARE is deliberately NOT in this list: its whitelist is unquoted, which section 2 shows is a HOLD
+# whatever the topic, because the shell would rewrite the value before the program saw it.
+for u in "$CVD" "$AUC" "$FAM"; do
   want_clear "$u" options.spx.strike-invasion.current \
     && ok "CLEAR on options.spx.strike-invasion.current: $(basename "$u")" \
     || bad "held $(basename "$u") over a topic it does not copy"
@@ -44,7 +46,12 @@ done
 echo "2. a topic the mirror DOES copy is a HOLD, in all three quoting forms"
 want_hold "$CVD"  es.futures.cvd.bars   && ok "single-quoted whitelist matches"  || bad "single-quoted whitelist did not match"
 want_hold "$AUC"  es.futures.auction    && ok "double-quoted whitelist matches"  || bad "double-quoted whitelist did not match"
-want_hold "$BARE" es.tape-zones.board   && ok "unquoted whitelist matches"       || bad "unquoted whitelist did not match"
+# An UNQUOTED whitelist is refused outright now: the shell rewrites it before kafka-mirror-maker sees
+# it, so the text in the file is not the runtime pattern (`es\.x` arrives as `es.x`, which matches MORE).
+want_hold "$BARE" es.tape-zones.board   && ok "an unquoted whitelist is a HOLD, whatever the topic"  || bad "an unquoted whitelist produced a verdict"
+want_hold "$BARE" nothing.to.do.with.it && ok "...and holds for an unrelated topic too"              || bad "an unquoted whitelist CLEARED a topic"
+v="$(bash "$F" "$BARE" nothing.to.do.with.it 2>&1 || true)"
+printf '%s' "$v" | grep -q 'unquoted' && ok "and says why" || bad "the reason is [$v]"
 want_hold "$CVD"  a.b es.futures.cvd.bars c.d && ok "matches anywhere in the topic list" || bad "only the first topic is checked"
 
 echo "3. OVER-INCLUSIVE on purpose: a family prefix holds its children"
@@ -172,7 +179,11 @@ v="$(bash "$F" "$DYN" anything.at.all 2>&1 || true)"
 # The reason is the FORMAT one: a value with a $ in it is not an accepted literal, so the launcher
 # line is not the accepted shape. (It used to be a separate "built dynamically" message, from the
 # scan that the accepted format replaced.)
-printf '%s' "$v" | grep -q 'not the accepted' && ok "and says the launcher line is not the accepted shape" || bad "the reason is [$v]"
+# The reason is a FORMAT one: the variable assignment that builds the value is itself a line outside the
+# accepted shape, and even without it a `"$WL"` value is not an accepted literal. Either way no verdict
+# comes out of a value this file cannot read.
+printf '%s' "$v" | grep -qE 'outside the accepted shape|not the accepted' \
+  && ok "and says the file is not the accepted shape" || bad "the reason is [$v]"
 DYNC=$(unit dync 'exec kafka-mirror-maker --whitelist "$(cat /etc/whitelist)" --num.streams 1')
 want_hold "$DYNC" anything.at.all && ok "so is one built by a command substitution" || bad "a substituted whitelist was CLEARED"
 

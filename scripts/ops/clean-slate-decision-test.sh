@@ -186,6 +186,15 @@ printf '%s' "$code" | grep -E 'SKIPPED_NAMES=' | grep -q '"\$APPLY_OUT"' \
 printf '%s' "$code" | grep -q 'mirror_ledger_record "\$PAUSED_LIST" "\$PAUSED_LIST.new" _bootout_paused_agents' \
   && ok "the bootout runs as the ledger's stop step (under its lock, after the rows are recorded)" \
   || bad "the bootout is not run by mirror_ledger_record"
+# The discovery's own status, and the SECOND pass that is the actual gate.
+printf '%s' "$code" | grep -q 'if ! rows="\$(_loaded_prod_mirror_rows)"' \
+  && ok "the mirror discovery's status is checked before anything is paused" \
+  || bad "the discovery status is ignored (an empty list would read as 'nothing is loaded')"
+printf '%s' "$code" | grep -q 'if ! after="\$(_loaded_prod_mirror_rows)"' \
+  && ok "and again on a verify pass after the bootout" || bad "there is no verify pass after the pause"
+printf '%s' "$code" | grep -A3 'STILL LOADED after the pause' | grep -q 'return 1' \
+  && ok "which refuses when anything is still loaded (so a raced or missed agent stops the wipe)" \
+  || bad "the verify pass does not refuse on a loaded agent"
 printf '%s' "$code" | grep -q 'pause_mirrors || {' \
   && ok "and a failed pause stops the run" || bad "a failed pause does not stop the run"
 lp="$(lineof 'pause_mirrors ||')"; lw="$(lineof 'offhours-clean-slate.sh DRY_RUN')"

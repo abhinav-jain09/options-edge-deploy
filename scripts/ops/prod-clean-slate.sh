@@ -104,11 +104,42 @@ _bootout_paused_agents() {
     return 1
   fi
 }
+# The LOADED es4->prod mirror agents, with the discovery's own status checked. `prod_mirror_agents |
+# while ...` hid two things: the python discovery's exit status (the pipeline reports the while, which
+# always succeeds) and the difference between "nothing is loaded" and "the discovery did not run" --
+# and an empty list then read as a successful pause while mirrors were live (deploy Codex round 7).
+_loaded_prod_mirror_rows() {
+  local out rc
+  out="$(prod_mirror_agents)"; rc=$?
+  [ "$rc" -eq 0 ] || return 1
+  [ -n "$out" ] || return 0
+  printf '%s\n' "$out" | while read -r label plist; do
+    [ -n "$label" ] || continue
+    launchctl list "$label" >/dev/null 2>&1 && printf '%s %s\n' "$label" "$plist"
+  done
+}
 pause_mirrors() {
-  local rc=0
-  prod_mirror_agents | while read -r label plist; do launchctl list "$label" >/dev/null 2>&1 && printf '%s %s\n' "$label" "$plist"; done > "$PAUSED_LIST.new"
+  local rc=0 rows after
+  if ! rows="$(_loaded_prod_mirror_rows)"; then
+    say "   mirror DISCOVERY failed — nothing may be paused and nothing may be wiped"
+    return 1
+  fi
+  : > "$PAUSED_LIST.new"
+  [ -z "$rows" ] || printf '%s\n' "$rows" > "$PAUSED_LIST.new"
   mirror_ledger_record "$PAUSED_LIST" "$PAUSED_LIST.new" _bootout_paused_agents || rc=$?
   rm -f "$PAUSED_LIST.new"
+  # THE GATE IS THE SECOND PASS, not the snapshot. It answers the question the wipe actually depends
+  # on -- "is any es4->prod mirror loaded right now?" -- and so also covers an agent that appeared
+  # after the snapshot and one the first pass missed.
+  if ! after="$(_loaded_prod_mirror_rows)"; then
+    say "   mirror discovery failed on the verify pass — nothing may be wiped"
+    return 1
+  fi
+  if [ -n "$after" ]; then
+    say "   STILL LOADED after the pause: $(printf '%s' "$after" | awk '{print $1}' | tr '\n' ' ')"
+    say "   these mirrors are producing into topics the wipe would delete — refusing to continue"
+    return 1
+  fi
   [ "$rc" -eq 0 ] || say "   pause did not complete: the ledger holds what was recorded, and nothing may be wiped"
   return "$rc"
 }

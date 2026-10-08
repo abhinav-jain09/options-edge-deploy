@@ -297,6 +297,23 @@ HOOKOUT="$(bash -c '
 [ ! -d "$LEDGER.lock" ] && ok "and the lock is released even then" || bad "the lock was left behind after a failing hook"
 grep -qxF "com.optionsedge.aaa $A" "$LEDGER" && ok "and the row stays recorded" || bad "the row is gone: $(cat "$LEDGER" 2>/dev/null)"
 
+echo "9e. a hook that is not a command, and a hook that rewrites the ledger"
+LEDGER="$WORK/rec.hook2"; rm -f "$LEDGER"
+rowsf="$WORK/rec.hook2.rows"; printf '%s\n' "com.optionsedge.aaa $A" > "$rowsf"
+HOOKOUT="$(bash -c '. "$1/mirror-ledger.sh"; mirror_ledger_record "$2" "$3" /no/such/command' _ "$HERE" "$LEDGER" "$rowsf" 2>&1)"; HRC=$?
+[ "$HRC" -ne 0 ] && ok "a hook that cannot be run is a failure (rc=$HRC)" || bad "a missing hook returned 0"
+[ ! -d "$LEDGER.lock" ] && ok "and the lock is still released" || bad "the lock was left behind"
+grep -qxF "com.optionsedge.aaa $A" "$LEDGER" && ok "and the row stays recorded" || bad "the row is gone"
+# A hook is arbitrary caller code running under the lock: if it rewrites the ledger, the verification
+# that ran BEFORE it no longer describes the file.
+HOOKOUT="$(bash -c '
+  . "$1/mirror-ledger.sh"
+  L="$2"
+  hook() { : > "$L"; }
+  mirror_ledger_record "$2" "$3" hook' _ "$HERE" "$LEDGER" "$rowsf" 2>&1)"; HRC=$?
+[ "$HRC" -ne 0 ] && ok "a hook that TRUNCATES the ledger is caught after the fact" || bad "a truncating hook returned 0"
+printf '%s' "$HOOKOUT" | grep -q 'after the stop step' && ok "and the message says when it was noticed" || bad "the message is [$HOOKOUT]"
+
 echo "9c. MUTATION: the read-back is what makes recording a guarantee"
 # The fault is INJECTED into the merge (it ignores the new rows), because a merge cannot be made to
 # lose a row from outside. Held constant across both runs; the mutation under test is the removal of

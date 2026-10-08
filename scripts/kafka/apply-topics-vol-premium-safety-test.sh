@@ -253,6 +253,9 @@ apply_run() { # <run-dir> <src-dir> <env> <recreate-flag> <absent-topics> <drift
     KAFKA_TOPIC_DELETE_WAIT_SECONDS=2 KAFKA_TOPIC_REPAIR_WAIT_SECONDS=2 \
     "$BASH" "$src/apply-topics.sh" > "$d/out" 2>&1 3>&-
   echo "$?" > "$d/rc"
+  # WHICH script this run was: apply-topics.sh has a third legitimate ending (its skip status) that
+  # cleanup-topics.sh does not, and the execution judge below must not grant it to both.
+  echo apply > "$d/script"
 }
 cleanup_run() { # <run-dir> <src-dir> <env> <retention|delete-recreate> <delete-unwanted> <topics-the-broker-lists>
   local d="$1" src="$2"; mkdir -p "$d/state"; : > "$d/log"
@@ -262,6 +265,7 @@ cleanup_run() { # <run-dir> <src-dir> <env> <retention|delete-recreate> <delete-
     KAFKA_CLEANUP_MODE="$4" KAFKA_DELETE_UNWANTED_TOPICS="$5" KAFKA_TOPIC_DELETE_WAIT_SECONDS=2 \
     "$BASH" "$src/cleanup-topics.sh" > "$d/out" 2>&1 3>&-
   echo "$?" > "$d/rc"
+  echo cleanup > "$d/script"
 }
 exit_ok() { # <id> <run-dir> <label> — a negative assertion is satisfied just as well by a crash on line 1
   [ "$(rc_of "$2")" = 0 ] && ok "$1" "$3: exits 0" || bad "$1" "$3: exited $(rc_of "$2"): $(tail -2 "$2/out" | tr '\n' ' ')"
@@ -457,20 +461,34 @@ run_captured() {
 }
 
 # exec_failures <runs-root>: one line per recorded script run (apply-topics.sh / cleanup-topics.sh) that did not end the
-# way the script itself ends. Both scripts leave only through `exit 1` or completion (exit 0); under their set -e a
-# failing command such as a missing one ends them with that command's status instead (127 command not found, 126 not
-# executable, >128 a signal). So a run is an EXECUTION failure when its status is not 0 or 1, when no status was
-# recorded, or when its output holds a shell-level diagnostic (the diagnostic catches a failure that happened to exit 1).
+# way the script itself ends. cleanup-topics.sh leaves only through `exit 1` or completion (exit 0); apply-topics.sh has
+# a THIRD ending, its $SKIPPED_EXIT (9), which means "the declared list was walked to the end and these topics could not
+# be reconciled" -- the NEVER-RECREATE drift units below reach it on purpose, so for an apply run it is an ending, not an
+# execution failure. Granting 9 to cleanup runs as well would be granting it where it means nothing.
+#
+# Under their set -e a failing command ends either script with THAT command's status instead (127 command not found, 126
+# not executable, >128 a signal). So a run is an EXECUTION failure when its status is not one of its script's endings,
+# when no status was recorded, or when its output holds a shell-level diagnostic (the diagnostic catches a failure that
+# happened to exit with an ending's status).
+#
+# The 9 is read from apply-topics.sh itself rather than written here, so the two cannot drift apart.
+APPLY_SKIPPED_EXIT="$(sed -nE 's/^SKIPPED_EXIT=([0-9]+).*/\1/p' "$HERE/apply-topics.sh" | head -1)"
+[ -n "$APPLY_SKIPPED_EXIT" ] || { echo "cannot read SKIPPED_EXIT out of apply-topics.sh" >&2; exit 1; }
 SHELL_DIAG_RX=': line [0-9]+: |command not found|unbound variable|syntax error|No such file or directory|Permission denied|Traceback \(most recent call last\)'
 exec_failures() {
-  local r s
+  local r s which
   for r in "$1"/run.*; do
     [ -d "$r" ] || continue
     s="$(cat "$r/rc" 2>/dev/null)"
+    which="$(cat "$r/script" 2>/dev/null)"
+    if [ "$which" = apply ] && [ "$s" = "$APPLY_SKIPPED_EXIT" ]; then
+      grep -m1 -E "$SHELL_DIAG_RX" "$r/out" 2>/dev/null | sed "s|^|${r##*/}: exited $s with a shell-level diagnostic: |"
+      continue
+    fi
     case "$s" in
       0|1) ;;
       "") echo "${r##*/}: no exit status recorded (the script never finished)"; continue ;;
-      *)  echo "${r##*/}: the script exited $s, not one of its own statuses (0, 1): $(tail -1 "$r/out" 2>/dev/null)"; continue ;;
+      *)  echo "${r##*/}: the script exited $s, not one of its own statuses: $(tail -1 "$r/out" 2>/dev/null)"; continue ;;
     esac
     grep -m1 -E "$SHELL_DIAG_RX" "$r/out" 2>/dev/null | sed "s|^|${r##*/}: exited $s with a shell-level diagnostic: |"
   done
