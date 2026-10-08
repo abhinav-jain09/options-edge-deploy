@@ -213,8 +213,20 @@ printf '%s' "$code" | grep -q 'if ! after="\$(loaded_mirror_agents_for "\$PROD_B
   && ok "and the GATE asks launchd (loaded_mirror_agents_for), not the plist files" \
   || bad "the gate still reads the plists, so a moved or malformed plist hides a live mirror"
 printf '%s' "$code" | grep -A3 'STILL LOADED after the pause' | grep -q 'return 1' \
-  && ok "which refuses when anything is still loaded (so a raced or missed agent stops the wipe)" \
+  && ok "which refuses when anything is still loaded (an agent the snapshot missed, or one that arrived before the census)" \
   || bad "the verify pass does not refuse on a loaded agent"
+# ...and the same question is asked ONE more time, immediately before the delete, because minutes of ssh
+# sit between the pause and the wipe. The order is what makes it mean anything.
+printf '%s' "$code" | grep -q 'LIVE_NOW="\$(loaded_mirror_agents_for "\$PROD_BS")"' \
+  && ok "the gate is asked again immediately before the wipe" || bad "there is no pre-wipe census"
+lg="$(lineof 'LIVE_NOW=')"; lw2="$(lineof 'offhours-clean-slate.sh DRY_RUN')"
+if [ -n "$lg" ] && [ -n "$lw2" ] && [ "$lg" -lt "$lw2" ]; then
+  ok "and it precedes the wipe invocation ($lg < $lw2)"
+else
+  bad "the pre-wipe census does not precede the wipe (census=$lg wipe=$lw2)"
+fi
+printf '%s' "$code" | grep -A4 'LIVE_NOW="\$(loaded_mirror_agents_for "\$PROD_BS")"' | grep -q 'exit 1' \
+  && ok "and a failure or a loaded agent there exits instead of wiping" || bad "the pre-wipe census does not stop the run"
 printf '%s' "$code" | grep -q '\. "\$DEPLOY_SRC/scripts/ops/loaded-mirror-agents.sh"' \
   && ok "and that helper is sourced from DEPLOY_SRC like the others" || bad "loaded-mirror-agents.sh is not sourced"
 printf '%s' "$code" | grep -q 'pause_mirrors || {' \

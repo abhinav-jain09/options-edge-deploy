@@ -135,8 +135,15 @@ pause_mirrors() {
   # THE GATE IS A SECOND PASS, AND IT ASKS LAUNCHD. It answers the question the wipe depends on -- "is
   # any mirror loaded right now that produces into $PROD_BS?" -- without reading a single plist file,
   # because a job stays loaded when its plist is moved or edited and a plist that fails to parse was
-  # silently skipped by the discovery above (deploy Codex round 8). It therefore also covers an agent
-  # that appeared after the snapshot and one the first pass missed.
+  # silently skipped by the discovery above (deploy Codex round 8).
+  #
+  # WHAT IT COVERS, EXACTLY: every agent loaded up to the moment this census completes, which includes
+  # one that appeared after the first snapshot and one that snapshot missed. It does NOT cover an agent
+  # bootstrapped AFTER it (deploy Codex round 12) -- that is a time-of-check/time-of-use window, and
+  # closing it needs an exclusion the install paths honour (the seven Jenkinsfile.*-mirror jobs and
+  # ansible/es-mirrors.yml all bootstrap agents), not another census. That is not in this change. What
+  # IS done about it: the census is repeated immediately before the wipe, so the window is the seconds
+  # between that call and the remote delete rather than the minutes of this whole step.
   if ! after="$(loaded_mirror_agents_for "$PROD_BS")"; then
     say "   could not establish which mirrors are loaded (see above) — nothing may be wiped"
     return 1
@@ -167,6 +174,21 @@ else
 fi
 
 # ---- 2. wipe on the host ----
+# THE LAST THING BEFORE THE DELETE: ask launchd again. The pause above ended with the same question, but
+# minutes of ssh and script shipping sit between the two, and an agent bootstrapped in that window would
+# be producing into topics this step deletes (deploy Codex round 12). This does not close the window --
+# only an exclusion the install paths honour would -- it narrows it to the seconds between here and the
+# remote delete, and it is cheap.
+if [ "$MODE" = wipe ]; then
+  if ! LIVE_NOW="$(loaded_mirror_agents_for "$PROD_BS")"; then
+    say "could not establish which mirrors are loaded immediately before the wipe — refusing to wipe."; exit 1
+  fi
+  if [ -n "$LIVE_NOW" ]; then
+    say "a mirror is LOADED immediately before the wipe: $(printf '%s' "$LIVE_NOW" | tr '\n' ' ')"
+    say "it would produce into the topics this step deletes — refusing to wipe. Pause it and rerun."
+    exit 1
+  fi
+fi
 say "host: offhours-clean-slate.sh DRY_RUN=$DRY WIPE_ENABLED=$WIPE TOPIC_WIPE_MODE=delete START_AFTER_WIPE=none STATE_RESET_MODE=contents ENVIRONMENT=production"
 ssh_root "chmod +x /home/abhinav/offhours/ops/offhours-clean-slate.sh && cd /home/abhinav/offhours/ops && \
   KUBECONFIG=/etc/rancher/k3s/k3s.yaml CALENDAR_DIR=/home/abhinav/offhours/jenkins ENVIRONMENT=production \
