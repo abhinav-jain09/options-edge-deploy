@@ -323,6 +323,10 @@ SERVICE_CHOICES_EXEMPT=(
   # parameter's own description in Jenkinsfile.service-deploy.
   spread-skew
   spread-skew-postgres-writer
+  # zerodte writer deployment, increment 9e (#1133, services.yaml:207-208): the dedicated v7 writer
+  # sits at replicas 0 and is reached only through its own check/activate/deactivate pipeline,
+  # Jenkinsfile.zerodte-writer-activate — never through this job's generic SERVICE picker.
+  zerodte-research-writer
 )
 python3 - "${SERVICE_CHOICES_EXEMPT[@]}" <<'PYCHK' || fail=1
 import re, sys, yaml
