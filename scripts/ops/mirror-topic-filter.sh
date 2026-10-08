@@ -22,9 +22,11 @@
 # The caller passes both sets; this file does not distinguish them.
 #
 # WHAT THE VERDICT IS DERIVED FROM: ProgramArguments[0] -- the program launchd actually starts -- which
-# must be an absolute path, readable, and carry a --whitelist of its own. Any other run-mirror*.sh in
-# the same directory is then unioned in, so a stale or extra script can only ADD holds, never explain
-# one away.
+# must be an absolute path, readable, and carry a LITERAL --whitelist of its own on a line that runs.
+# Any other run-mirror*.sh in the same directory is then unioned in, so a stale or extra script can
+# only ADD holds, never explain one away. Comment lines are ignored (a comment is not executed) and a
+# --whitelist assembled from a variable or a command substitution is a HOLD, because its runtime value
+# is not in the file.
 #
 # FAIL CLOSED. Anything that stops this from reading the agent's real whitelist -- no plist, a plist
 # that does not parse, a relative or missing program path, an unreadable script, no --whitelist in the
@@ -79,6 +81,20 @@ for extra in sorted(glob.glob(os.path.join(unit_dir, "run-mirror*.sh"))):
 
 # --whitelist 'es\.futures\.cvd\.bars'  /  --whitelist es\.futures\.auction
 WL = re.compile(r"--whitelist\s+(?:'([^']*)'|\"([^\"]*)\"|(\S+))")
+# A shell COMMENT is not executed, so a --whitelist inside one says nothing about what launchd starts;
+# and a whitelist built from a variable or a command substitution cannot be read lexically AT ALL. The
+# first is dropped, the second is a HOLD: a value this file cannot establish must never produce a
+# CLEAR (deploy Codex round 4). Only a literal, on a line that runs, is an answer.
+DYNAMIC = ("$", "`")
+
+def code_lines(text):
+    out = []
+    for raw in text.splitlines():
+        stripped = raw.lstrip()
+        if stripped.startswith("#"):
+            continue
+        out.append(raw)
+    return "\n".join(out)
 
 def patterns_in(path):
     # Any failure to read the file as text is a HOLD with a message, not a traceback: a plist whose
@@ -90,8 +106,13 @@ def patterns_in(path):
     except Exception as exc:
         hold("cannot read %s as text (%s)" % (os.path.basename(path), exc.__class__.__name__))
     found = []
-    for m in WL.finditer(text):
+    for m in WL.finditer(code_lines(text)):
         pat = m.group(1) or m.group(2) or m.group(3)
+        if pat is None:
+            continue
+        if any(ch in pat for ch in DYNAMIC):
+            hold("%s builds its --whitelist dynamically (%r), so the topics it copies cannot be read from the file"
+                 % (os.path.basename(path), pat))
         if pat and pat not in found:
             found.append(pat)
     return found

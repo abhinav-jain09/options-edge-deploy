@@ -99,6 +99,35 @@ plistlib.dump({"Label": "com.optionsedge.gone", "ProgramArguments": [sys.argv[2]
 PY
 want_hold "$GONE" topic.ccc && ok "a program that does not exist is a HOLD" || bad "a missing program was CLEARED"
 
+echo "4b. a whitelist it cannot READ from the file is a HOLD, and a comment is not a whitelist"
+# A value assembled at runtime is not in the file, so no CLEAR can rest on it.
+DYN=$(unit dyn 'WL="topic\.dyn"
+exec kafka-mirror-maker --whitelist "$WL" --num.streams 1')
+want_hold "$DYN" anything.at.all && ok "a --whitelist built from a variable is a HOLD" \
+  || bad "a dynamic whitelist was CLEARED"
+v="$(bash "$F" "$DYN" anything.at.all 2>&1 || true)"
+printf '%s' "$v" | grep -q 'dynamically' && ok "and says it cannot be read from the file" || bad "the reason is [$v]"
+DYNC=$(unit dync 'exec kafka-mirror-maker --whitelist "$(cat /etc/whitelist)" --num.streams 1')
+want_hold "$DYNC" anything.at.all && ok "so is one built by a command substitution" || bad "a substituted whitelist was CLEARED"
+
+# A COMMENT is not executed, so its whitelist is not the agent's: a program whose only --whitelist is
+# commented out has none, and that is a HOLD rather than a verdict from dead text.
+CMT=$(unit cmt '# exec kafka-mirror-maker --whitelist '"'"'topic\.commented'"'"' --num.streams 1
+exec kafka-mirror-maker --consumer.config c --num.streams 1')
+want_hold "$CMT" topic.commented && ok "a commented-out whitelist is not a whitelist" || bad "a comment was read as the whitelist"
+v="$(bash "$F" "$CMT" topic.commented 2>&1 || true)"
+printf '%s' "$v" | grep -q 'no --whitelist in the program' && ok "and it says the program has none" || bad "the reason is [$v]"
+
+# A DEAD BRANCH is text that runs under some condition this file cannot evaluate, so its whitelist is
+# unioned in: it can only add holds.
+DEAD=$(unit dead 'if false; then
+  exec kafka-mirror-maker --whitelist '"'"'topic\.dead'"'"' --num.streams 1
+fi
+exec kafka-mirror-maker --whitelist '"'"'topic\.live'"'"' --num.streams 1')
+want_hold "$DEAD" topic.live && ok "the live branch holds"              || bad "the live whitelist did not hold"
+want_hold "$DEAD" topic.dead && ok "and the dead branch holds too"      || bad "a dead branch's whitelist was ignored"
+want_clear "$DEAD" topic.other && ok "and an unrelated topic is CLEAR"  || bad "an unrelated topic was held"
+
 echo "5. FAIL CLOSED on anything it cannot read"
 NOSCRIPT="$WORK/com.optionsedge.noscript.plist"
 python3 - "$NOSCRIPT" "$WORK/empty-unit/run-mirror.sh" <<'PY'

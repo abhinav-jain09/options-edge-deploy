@@ -1,14 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
-: "${KAFKA_BOOTSTRAP_SERVERS:?KAFKA_BOOTSTRAP_SERVERS is required}"
-# RF must be provided explicitly (Jenkins sources scripts/kafka/load-kafka-settings.sh,
-# which derives it from the rendered per-environment configmap). No silent default.
-REPLICATION_FACTOR="${KAFKA_TOPIC_REPLICATION_FACTOR:?KAFKA_TOPIC_REPLICATION_FACTOR must be set (source scripts/kafka/load-kafka-settings.sh)}"
-RETENTION_MS="${KAFKA_TOPIC_RETENTION_MS:-86400000}"
-CLEANUP_POLICY="${KAFKA_TOPIC_CLEANUP_POLICY:-delete}"
-MIN_ISR="${KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS:-1}"
-RECREATE_MISMATCHED="${KAFKA_RECREATE_MISMATCHED_TOPICS:-false}"
-
 # APPLY_TOPICS_RESULT_FILE — the completion attestation (see the block above the main loop). Captured
 # here and REMOVED FROM THE ENVIRONMENT immediately, before this script runs anything: an exported
 # variable is inherited by every child, so leaving it exported would hand each kafka CLI the path to
@@ -23,6 +14,15 @@ if [ -n "$RESULT_FILE" ] && ! : > "$RESULT_FILE"; then
   echo "apply-topics.sh: cannot empty the result file $RESULT_FILE" >&2
   exit 1
 fi
+
+: "${KAFKA_BOOTSTRAP_SERVERS:?KAFKA_BOOTSTRAP_SERVERS is required}"
+# RF must be provided explicitly (Jenkins sources scripts/kafka/load-kafka-settings.sh,
+# which derives it from the rendered per-environment configmap). No silent default.
+REPLICATION_FACTOR="${KAFKA_TOPIC_REPLICATION_FACTOR:?KAFKA_TOPIC_REPLICATION_FACTOR must be set (source scripts/kafka/load-kafka-settings.sh)}"
+RETENTION_MS="${KAFKA_TOPIC_RETENTION_MS:-86400000}"
+CLEANUP_POLICY="${KAFKA_TOPIC_CLEANUP_POLICY:-delete}"
+MIN_ISR="${KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS:-1}"
+RECREATE_MISMATCHED="${KAFKA_RECREATE_MISMATCHED_TOPICS:-false}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null

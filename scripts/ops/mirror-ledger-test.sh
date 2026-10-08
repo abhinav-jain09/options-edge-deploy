@@ -172,6 +172,39 @@ OUT="$(LAUNCHCTL_STATE="$WORK/state" bash -c '
 diff <(printf '%s' "$L3") "$LEDGER" >/dev/null && ok "and the ledger is untouched" || bad "the ledger changed"
 rmdir "$LEDGER.lock"
 
+echo "8e. a SYMLINKED ledger is refused, dangling or not"
+# A dangling symlink satisfies `! -e`, which would otherwise read as "nothing was paused" and let the
+# clean slate bring prod up with its mirrors still down (deploy Codex round 4).
+LEDGER="$WORK/ledger.dangling"; ln -sf "$WORK/not-there" "$LEDGER"
+rm -rf "$WORK/state"; mkdir -p "$WORK/state"; : > "$WORK/state/loaded"; : > "$WORK/state/calls"
+OUT="$(LAUNCHCTL_STATE="$WORK/state" bash -c '
+  . "$1/mirror-ledger.sh"; mirror_ledger_resume "$2" "$1/mirror-topic-filter.sh"' _ "$HERE" "$LEDGER" 2>&1)"; RC=$?
+[ "$RC" -ne 0 ] && ok "a dangling symlink refuses (not 'nothing was paused')" || bad "a dangling symlink returned 0"
+printf '%s' "$OUT" | grep -q 'SYMLINK' && ok "and says so" || bad "the diagnostic is [$OUT]"
+REAL="$WORK/ledger.real"; printf '%s' "$L3" > "$REAL"
+LEDGER="$WORK/ledger.live-link"; ln -sf "$REAL" "$LEDGER"
+rm -rf "$WORK/state"; mkdir -p "$WORK/state"; : > "$WORK/state/loaded"; : > "$WORK/state/calls"
+OUT="$(LAUNCHCTL_STATE="$WORK/state" bash -c '
+  . "$1/mirror-ledger.sh"; mirror_ledger_resume "$2" "$1/mirror-topic-filter.sh"' _ "$HERE" "$LEDGER" 2>&1)"; RC=$?
+[ "$RC" -ne 0 ] && ok "a LIVE symlink is refused too" || bad "a live symlink was worked"
+[ "$(calls | wc -l | tr -d ' ')" = 0 ] && ok "and nothing was started" || bad "it started: $(calls | tr '\n' ' ')"
+diff <(printf '%s' "$L3") "$REAL" >/dev/null && ok "and the target file is untouched" || bad "the target changed"
+
+echo "8f. rows the format cannot represent are kept and reported, never acted on"
+# A label with a space would hand "<rest of label> <path>" to launchctl as a path. A CRLF row leaves a
+# carriage return on the path. Both are held, with their row written back verbatim.
+run "com.optionsedge.two words $A
+"
+[ "$(calls | wc -l | tr -d ' ')" = 0 ] && ok "a spaced label starts nothing" || bad "it started: $(calls | tr '\n' ' ')"
+diff <(printf '%s %s\n' "com.optionsedge.two" "words $A") "$LEDGER" >/dev/null \
+  && ok "and its row survives verbatim" || bad "the row became: $(rows)"
+printf 'com.optionsedge.aaa %s\r\n' "$A" > "$WORK/ledger.crlf"; LEDGER="$WORK/ledger.crlf"
+rm -rf "$WORK/state"; mkdir -p "$WORK/state"; : > "$WORK/state/loaded"; : > "$WORK/state/calls"
+OUT="$(LAUNCHCTL_STATE="$WORK/state" bash -c '
+  . "$1/mirror-ledger.sh"; mirror_ledger_resume "$2" "$1/mirror-topic-filter.sh"' _ "$HERE" "$LEDGER" 2>&1)"; RC=$?
+[ "$(calls | wc -l | tr -d ' ')" = 0 ] && ok "a CRLF row starts nothing (the path does not exist)" || bad "it started: $(calls | tr '\n' ' ')"
+[ -s "$LEDGER" ] && ok "and keeps its row" || bad "the CRLF row was dropped"
+
 echo "9. an EMPTY or absent ledger is a no-op, not an error"
 run ""
 [ "$RC" -eq 0 ] && ok "an empty ledger returns 0" || bad "returned $RC"

@@ -103,7 +103,16 @@ att_is "anything else is no attestation"    'junk\n'                            
 att_is "a skip list with shell metacharacters is refused" 'apply-topics: state=skipped skipped=a.topic; rm -rf /\n' "" ""
 att_is "a skip list with a newline-escaped payload is refused" 'apply-topics: state=skipped skipped=$(touch /tmp/OE_NOPE)\n' "" ""
 att_is "a doubled space between names is refused" 'apply-topics: state=skipped skipped=a.topic  b.topic\n' "" ""
-att_is "a line longer than anything this writes is refused" "apply-topics: state=skipped skipped=$(python3 -c "print(' '.join('t.%d'%i for i in range(900)))")\n" "" ""
+# THE WORST LEGITIMATE LINE: apply-topics.sh builds the skipped list out of the declared topic names,
+# so the longest one it can write names the WHOLE production declaration. A 4096-byte bound rejected
+# exactly that (deploy Codex round 4), which would have turned a real partial recreate into a FAIL and
+# held every mirror — the defect this change exists to remove.
+ALLDECL="$(bash -c '. "$1"; printf "%s %s" "$OPTIONS_EDGE_TOPICS" "${OPTIONS_EDGE_PROD_ONLY_TOPICS:-}"' _ "$HERE/../kafka/topics.env" \
+  | tr " " "\n" | sed "s/:.*//" | grep . | sort -u | tr "\n" " " | sed "s/ *$//")"
+ALLBYTES=$(( ${#ALLDECL} + 37 ))
+att_is "an attestation naming EVERY declared topic ($ALLBYTES bytes) parses" \
+  "apply-topics: state=skipped skipped=$ALLDECL\n" skipped "$ALLDECL"
+att_is "a line longer than anything this writes is refused" "apply-topics: state=skipped skipped=$(python3 -c "print(' '.join('t.%06d'%i for i in range(9000)))")\n" "" ""
 # A NUL is DROPPED by the shell when the line is read, so the parse would otherwise see a line the
 # file does not hold. The byte-count check is what rejects it.
 nulf="$WORK/att.nul"; python3 -c "open('$WORK/att.nul','wb').write(b'apply-topics: state=skipped skipped=a.topic\x00evil\n')"

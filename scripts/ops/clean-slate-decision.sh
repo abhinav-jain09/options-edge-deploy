@@ -70,9 +70,11 @@ read_apply_attestation() {
     ATTEST_REASON="the attestation file holds $bytes byte(s) but its one line accounts for $(( ${#line} + 1 ))"
     return 0
   fi
-  # A bound, so nothing downstream is handed an unbounded list. The real line is ~40 bytes plus the
-  # skipped names; 4096 is far past any plausible declaration and far below anything worth parsing.
-  if [ "$bytes" -gt 4096 ]; then ATTEST_REASON="the attestation line is $bytes bytes, which is not one this script writes"; return 0; fi
+  # A bound, so nothing downstream is handed an unbounded list -- NOT a claim about the shape. The
+  # worst legitimate line names every declared topic: the production declaration's names are ~4.7 KB
+  # today (152 topics), which a 4096-byte limit would have REJECTED (deploy Codex round 4). 64 KiB is
+  # far above the whole declaration and far below anything worth parsing.
+  if [ "$bytes" -gt 65536 ]; then ATTEST_REASON="the attestation line is $bytes bytes, which is not one this script writes"; return 0; fi
   case "$line" in
     "apply-topics: state=ok skipped=") ATTEST_STATE=ok; return 0 ;;
     "apply-topics: state=ok skipped="*) ATTEST_REASON="state=ok names skipped topics, which contradicts itself"; return 0 ;;

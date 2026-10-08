@@ -45,6 +45,15 @@ _ml_say() { if declare -F say >/dev/null 2>&1; then say "$*"; else printf '%s\n'
 mirror_ledger_resume() {
   local list="${1-}" lock rc
   [ -n "$list" ] || { _ml_say "mirror_ledger_resume: no ledger path given"; return 1; }
+  # A SYMLINK is refused outright. A DANGLING one satisfies `! -e` and would otherwise read as "nothing
+  # was paused", which is the same silent all-clear as the unreadable file below -- prod comes up while
+  # the mirrors stay down (deploy Codex round 4). A live one raises a second question this file should
+  # not answer: whether replacing the ledger should write through the link or over it. The real ledger
+  # is a regular file (~/oe-ops/.prod-mirrors-paused), so refusing costs nothing.
+  if [ -L "$list" ]; then
+    _ml_say "WARN: $list is a SYMLINK — refusing to work it; nothing is started and every row stays listed"
+    return 1
+  fi
   # No ledger at all = nothing was paused = nothing to do, and nothing to lock. (An EMPTY ledger is
   # handled inside, after the read, so that an unreadable one cannot be mistaken for it.)
   if [ ! -e "$list" ]; then _ml_say "no paused mirror agents listed ($list)"; return 0; fi
@@ -106,6 +115,14 @@ _ml_resume_locked() {
     if [ -z "$plist" ]; then
       _ml_say "   KEPT paused (ledger row has no plist path): $label"; _ml_hold_row "$label" ""; held=$((held+1)); continue
     fi
+    # The path must be ABSOLUTE, which is how pause_mirrors writes it. A row whose label contains a
+    # space would otherwise hand "<rest of the label> <path>" to launchctl as a path: not a
+    # representable row, so it is kept and reported rather than acted on or rewritten.
+    case "$plist" in
+      /*) : ;;
+      *)  _ml_say "   KEPT paused (ledger row is not '<label> <absolute plist path>'): $label"
+          _ml_hold_row "$label" "$plist"; held=$((held+1)); continue ;;
+    esac
     if [ ! -f "$plist" ]; then
       _ml_say "   KEPT paused (plist not found): $label"; _ml_hold_row "$label" "$plist"; held=$((held+1)); continue
     fi
