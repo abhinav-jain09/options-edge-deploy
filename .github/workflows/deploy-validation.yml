@@ -372,6 +372,13 @@ jobs:
       - name: apply-topics / cleanup-topics keep the vol-premium ledgers
         run: bash scripts/kafka/apply-topics-vol-premium-safety-test.sh
 
+      # The one lever that makes a declared partition count SMALLER on production, in front of two
+      # scripts that must agree: apply-topics.sh accepting the live topic and verify-topics.sh not
+      # then calling it "below the expected minimum". Every way it can go wrong is quiet — not
+      # applying, applying to dev or es4, or surviving as a stale name — so each is a case.
+      - name: Validate the prod-only partition overrides
+        run: bash scripts/kafka/prod-partition-overrides-test.sh
+
       # The vol-premium event calendar the deployment PINS (VOL_PREMIUM_CALENDAR_VERSION / _CONTENT_HASH in
       # k8s/base/vol-premium-deployment.yaml) and the file the publish job writes to the Postgres ledger
       # (scripts/vol-premium/calendars/calendar-2026.1.json) must be one artefact: the engine halts at boot when

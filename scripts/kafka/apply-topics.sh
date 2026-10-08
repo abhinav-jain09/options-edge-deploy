@@ -50,6 +50,14 @@ if [[ -z "$TOPIC_SET" ]]; then
     OPTIONS_EDGE_PURE_COMPACT_TOPICS="${OPTIONS_EDGE_PURE_COMPACT_TOPICS:-} ${OPTIONS_EDGE_PROD_ONLY_PURE_COMPACT_TOPICS:-}"
     OPTIONS_EDGE_EXACT_PARTITION_TOPICS="${OPTIONS_EDGE_EXACT_PARTITION_TOPICS:-} ${OPTIONS_EDGE_PROD_ONLY_EXACT_PARTITION_TOPICS:-}"
     OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES="${OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES:-} ${OPTIONS_EDGE_PROD_ONLY_TOPIC_RETENTION_OVERRIDES:-}"
+    # Partition overrides are a REPLACEMENT, not an addition: the merges above can only ADD, and a
+    # topic that is legitimately SMALLER on prod than the single declared count has no other lever —
+    # the count is read as a minimum, so the topic is refused on every run and (through the
+    # clean-slate wrapper) takes the es4->prod mirror set down with it. One resolver, shared with
+    # verify-topics.sh, so the applier and the verifier cannot disagree about what prod declares.
+    # shellcheck source=/dev/null
+    source "$SCRIPT_DIR/resolve-prod-partition-overrides.sh"
+    _oe_resolve_prod_partition_overrides || exit 1
     # Prod-only SUBTRACTION (archive fidelity, 2026-08-25). The merges above only ever ADD, so a
     # topic that must stop being compacted on prod without changing dev/es4 has no other lever:
     # deleting it from OPTIONS_EDGE_COMPACTED_TOPICS would change every environment. This runs
