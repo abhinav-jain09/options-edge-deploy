@@ -16,8 +16,12 @@ OUT=$(mktemp -d); trap 'rm -rf "$OUT"' EXIT
 # ops_dir and launch_agents_dir are passed EXPLICITLY: the playbook derives them from $HOME, and this
 # gate is about the identity the playbook COMPOSES, not about whose home directory CI runs under. On a
 # runner they would be /home/runner/... and every assertion below would be about the wrong thing.
+# -i is REQUIRED since the table declares a run_host (mac74) that the playbook now checks against the
+# inventory: without it the play refuses the row before reaching the dump, and this gate failed for a
+# reason that has nothing to do with naming (Codex r3 on #1166 — the gate set I had been running did
+# not include this script). Nothing here connects to mac74: the dump play runs on localhost.
 run() { # target-ip target-port out-file
-  ansible-playbook ansible/es-mirrors.yml \
+  ansible-playbook -i ansible/inventory/oe-mirror-hosts.yml ansible/es-mirrors.yml \
     -e ops_dir=/Users/abhinav/oe-ops \
     -e launch_agents_dir=/Users/abhinav/Library/LaunchAgents \
     -e "mirror_target_ip=$1" -e "mirror_target_port=$2" -e "dump_rows=$3" >"$OUT/log" 2>&1 \

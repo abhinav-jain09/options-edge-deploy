@@ -25,9 +25,15 @@
 #       -e confirm_mirror_install=true -e permitted_sha=$(git rev-parse origin/main)
 #   # one topic
 #   ansible-playbook -i ansible/inventory/oe-mirror-hosts.yml ansible/es-mirrors.yml -e only_topics=es.futures.footprint.bars -e confirm_mirror_install=true
-#   # the dealer-ledger leg, which runs ON .74
+#   # the dealer-ledger leg, which runs ON .74 — PLAN ONLY, and it cannot be anything else yet:
+#   # installing it needs confluent-7.3.x kafka-mirror-maker on .74 AND a proven way to run the
+#   # permitted-commit guard there (see "Refuse a PRODUCTION install from a run host..." below).
 #   ansible-playbook -i ansible/inventory/oe-mirror-hosts.yml ansible/es-mirrors.yml -e mirror_run_host=mac74 \
 #       -e mirror_target_ip=192.168.100.252 -e mirror_target_port=9092
+#
+# -i IS REQUIRED, and --limit is REFUSED. The run host is chosen with -e mirror_run_host, which the
+# first play validates against the inventory; --limit can only disagree with that, and a limit that
+# excludes the install play made Ansible skip it with exit 0 (Codex r3 on #1166, P0).
 #
 # WHERE THE PRODUCTION LOCK ACTUALLY IS. In Ansible an extra var outranks every var, fact and
 # register, so a play-level condition is advisory: `-e oe_prod_permitted=true` defeated the first
@@ -53,12 +59,25 @@
 # A typo is indistinguishable from a completed run, which is the worst possible failure for a tool
 # whose whole job is making mirror state visible.
 #
-# So the requested host is validated HERE, on localhost, which always matches. hostvars is the oracle
-# rather than groups['all']: Ansible's IMPLICIT localhost is not a member of any inventory group, so
-# groups['all'] rejected a perfectly good default invocation (Codex r2, P1) while hostvars contains
-# every host Ansible knows about, implicit or not.
+# So the requested host is validated HERE, in a play that cannot be selected away. hostvars is the
+# oracle rather than groups['all']: Ansible's IMPLICIT localhost is not a member of any inventory
+# group, so groups['all'] rejected a perfectly good default invocation (Codex r2, P1) while hostvars
+# contains every host Ansible knows about, implicit or not.
+#
+# ⚠ `hosts: localhost` was NOT enough, and the claim that it "always matches" was false (Codex r3 on
+# #1166, P0). --limit applies to EVERY play, this one included, so it could silence the validation
+# and the install together: measured, `-l localhost -e mirror_run_host=mac74` validated mac74 and
+# then limited the install away — rc=0, empty work, "All assertions passed" — and `-l mac74 -e
+# mirror_run_host=mac47` skipped BOTH plays for rc=0 with a completely empty recap. Two defences,
+# because one of them has to survive the limit that hides the other:
+#   1. the pattern is `localhost:all`, so this play matches whenever ANY host survives the limit —
+#      under `-l mac74` it runs ON mac74 (measured) instead of being skipped. A limit matching no
+#      host at all is Ansible's own rc=1 ("leaves us with no hosts to target"), never silence.
+#   2. --limit is then REFUSED outright. It has no legitimate use here: the run host is chosen with
+#      -e mirror_run_host, which this play validates, and a limit can only ever disagree with it.
+# ansible_limit is UNDEFINED when no limit was passed (measured) — hence the default.
 - name: Validate the requested run host before any host selection
-  hosts: localhost
+  hosts: localhost:all
   connection: local
   gather_facts: false
   vars:
@@ -69,7 +88,49 @@
     # therefore the union with localhost, which is always a legal run host.
     oe_known_hosts: "{{ (hostvars.keys() | list) | union(['localhost']) }}"
   tasks:
+    - name: Refuse --limit, which can silence the install play and this check with it
+      # Defence 1 above puts this play in front of any limit; this is defence 2. Checked BEFORE the
+      # host oracle, because a limit can make the oracle's answer irrelevant.
+      run_once: true
+      ansible.builtin.assert:
+        that:
+          - ((ansible_limit | default('')) | string | trim) | length == 0
+        fail_msg: >-
+          --limit/-l is refused by this playbook; got --limit={{ ansible_limit | default('') }}.
+          The run host is chosen with -e mirror_run_host (validated here), so a limit can only
+          disagree with it — and a limit that excludes the install play makes Ansible skip it with
+          exit 0, reporting success having installed nothing. Drop the limit.
+
+    - name: Refuse a mirror_run_host that is pattern syntax rather than one host name
+      # A host PATTERN in run_host is not a run host: `mac*`, `all`, `a:b`, `!x` can each resolve to
+      # several hosts or to a different host than the name suggests, and the table's rows are matched
+      # against this value as a literal. Refused by shape so the message names the real problem
+      # instead of the oracle reporting "not a host Ansible knows".
+      run_once: true
+      ansible.builtin.assert:
+        that:
+          - (mirror_run_host | default('localhost')) is match('^[A-Za-z0-9._-]+$')
+        fail_msg: >-
+          mirror_run_host={{ mirror_run_host | default('localhost') }} must be a single host name
+          ([A-Za-z0-9._-]), not an Ansible host pattern.
+
+    - name: Refuse a mirror_run_host that names a GROUP
+      # The union oracle below accepts the literal 'localhost' unconditionally, which is right for
+      # Ansible's implicit localhost but leaves one collision: an inventory GROUP named localhost
+      # would be accepted here and then resolved as a group by `hosts:` (Codex r3 on #1166, PROCESS).
+      # Ordinary group names are already refused — they are absent from hostvars — so this closes the
+      # reserved-name case specifically, and any future group that shadows a host name with it.
+      run_once: true
+      ansible.builtin.assert:
+        that:
+          - (mirror_run_host | default('localhost')) not in ((groups | default({})).keys() | list)
+        fail_msg: >-
+          mirror_run_host={{ mirror_run_host | default('localhost') }} is the name of a GROUP in
+          this inventory, not a host. A group can resolve to several hosts, or to a host other than
+          the one the name suggests; name the host.
+
     - name: Refuse a mirror_run_host that is not a host Ansible knows
+      run_once: true
       ansible.builtin.assert:
         that:
           - (mirror_run_host | default('localhost')) in oe_known_hosts
@@ -128,14 +189,22 @@
     # create this directory on the TARGET, and playbook_dir is the controller checkout's absolute
     # path, which does not exist there (Codex r2 on #1166, P1). The live unit paths already derive
     # from oe_home; this one did not.
+    # The connection, not just the name: an inventory may call a REMOTE host `localhost`, and the
+    # controller's playbook_dir does not exist there. Same reserved-name collision as the oracle.
     oe_rendered_dir: >-
-      {{ (playbook_dir ~ '/.ansible-rendered/es-mirrors') if inventory_hostname == 'localhost'
+      {{ (playbook_dir ~ '/.ansible-rendered/es-mirrors')
+         if (inventory_hostname == 'localhost'
+             and (hostvars[inventory_hostname].ansible_connection | default('local')) == 'local')
          else (oe_home ~ '/.ansible-rendered/es-mirrors') }}
     # -e dump_rows=<path> writes the rows this run WOULD act on and stops before touching a broker.
     # It exists so scripts/ci/validate-ansible-mirror-naming.sh can test the group.id and unit-name
     # generation in this file — the parity gate reads the table and the templates, and could not see
     # a change to the Jinja that composes them.
     oe_dump: "{{ dump_rows | default('') }}"
+    # Refused unless ABSOLUTE, because the relative case already cost something: `-e dump_rows=true`
+    # — me meaning the flag as a boolean when it takes a path — wrote a 12 KB JSON file named
+    # `ansible/true` into the repository, and I committed it (Codex r3 on #1166, P2). A path is the
+    # only thing this takes, and a bare word is far more likely a mistake than a destination.
     # Deployment Permission Rule (options-edge rule.md): a PRODUCTION effect runs only under a commit
     # Abhinav permitted, on main, proven inside the checkout the effect comes from. Jenkins enforces
     # it per job; this playbook can reload a production unit from a laptop, so it enforces the same
@@ -147,6 +216,16 @@
     # scripts/ci/validate-ansible-prod-permission.sh asserts both literals against the Jenkinsfiles.
 
   tasks:
+    - name: Refuse a dump_rows destination that is not an absolute path
+      when: oe_dump | length > 0
+      ansible.builtin.assert:
+        that:
+          - oe_dump is match('^/[A-Za-z0-9._/-]*$')
+        fail_msg: >-
+          dump_rows takes an absolute PATH to write the planned rows to, not a flag; got
+          "{{ oe_dump }}". A relative value is written relative to the repository root — `-e
+          dump_rows=true` created ansible/true, a generated artifact that then got committed.
+
     - name: Validate the broker pair, fail-closed
       # The target is an ALLOW-LIST, not a free string: these units are per (target, topic) and a
       # typo'd broker would install a unit nothing reads, under a group nothing commits.
@@ -195,7 +274,49 @@
           ([A-Za-z0-9._/-]); got ops_dir={{ oe_ops }} launch_agents_dir={{ oe_agents }}
           kafka_bin={{ oe_kbin }} rendered={{ oe_rendered_dir }}.
 
+    - name: Refuse a PRODUCTION install from a run host that is not the controller
+      # ⚠ The production lock is a script that runs INSIDE this checkout, and this checkout exists
+      # only on the controller (Codex r3 on #1166, P1). Every site that enforces it — the task below,
+      # ansible/templates/mirror-stop.sh.j2, mirror-start.sh.j2 and the write step in
+      # ansible/tasks/es-mirror-unit.yml — renders `REPO={{ '{{' }} playbook_dir {{ '}}' }}/..` and
+      # `cd`s there, but those scripts EXECUTE ON THE TARGET. On .74 that /private/tmp/... path does
+      # not exist, so the `cd` fails and the guard reports "the permitted-commit guard REFUSED this
+      # PRODUCTION unit" — which fails CLOSED (verified: cd failing makes the `&&` subshell non-zero
+      # and the `if !` take the FAIL branch), but says the commit was refused when the truth is that
+      # the guard could not run. Per unit, late, and misleading.
+      #
+      # So it is refused here instead, once and early. I am NOT provisioning a remote checkout to
+      # make this pass: playbook_dir is a magic variable that -e cannot override, and that is the
+      # whole reason the lock holds from a laptop. Any operator-settable repo path — including one
+      # read from the inventory, since extra vars land in hostvars too — would let
+      # `-e <repo>=<a clean clone at the permitted sha>` satisfy the guard while the units installed
+      # come from THIS tree. A weaker lock is a worse answer than a refusal.
+      #
+      # What this means for the dl-mirror row: it plans on .74 (a plan takes no production effect, so
+      # this is scoped to oe_confirm) and installs nowhere until .74 has BOTH confluent-7.3.x
+      # kafka-mirror-maker AND a proven model for running the permitted-commit guard against a
+      # checkout provisioned on .74. Neither exists today; leg 2 of the offload lane does not exist.
+      #
+      # The name alone is not the test. `localhost` is a name an inventory may give to a REMOTE host
+      # (`localhost: {ansible_host: 192.168.100.74, ansible_connection: ssh}`) — the same
+      # reserved-name collision r3 found in the union oracle — so the connection is checked too: only
+      # a host Ansible executes LOCALLY is the controller. `-e ansible_connection=local` does not
+      # defeat this; it makes execution genuinely local, which is the case the guard already handles.
+      when: oe_confirm and (oe_target_ip == '192.168.100.252') and (oe_target_port == '9092')
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname == 'localhost'
+          - (hostvars[inventory_hostname].ansible_connection | default('local')) == 'local'
+        fail_msg: >-
+          A PRODUCTION install must run on the controller, and this run targets
+          {{ inventory_hostname }}. The permitted-commit guard runs inside this checkout
+          ({{ playbook_dir }}/..), which does not exist on {{ inventory_hostname }} — the guard
+          would fail to start and every unit would report the commit as refused. Installing the
+          .74 -> prod leg needs confluent-7.3.x kafka-mirror-maker on .74 and a proven way to run
+          the guard there; until then this plays (plan only) and installs nothing.
+
     - name: Enforce the permitted commit before any PRODUCTION effect
+      # Runs on the controller — guaranteed by the refusal above, which this depends on.
       # The guard refuses: a checkout that is not on origin/main, a missing/short/malformed
       # PERMITTED_SHA (nothing is substituted for it), and a HEAD that is not exactly that commit.
       # Only a production INSTALL goes through it — a plan reads brokers and writes nothing, and dev
