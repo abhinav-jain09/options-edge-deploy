@@ -108,7 +108,7 @@ echo "5. the broker match is over the LIST, and exact per entry"
 job com.optionsedge.prodmirror "$P1"
 printf 'bootstrap.servers=192.168.100.252:90921\n' > "$WORK/prodmirror/producer.properties"
 run
-[ -z "$OUT" ] && ok "a longer host:port that merely starts the same does not match" || bad "matched [$OUT]"
+[ "$RC" -eq 0 ] && [ -z "$OUT" ] && ok "a longer host:port that merely starts the same does not match" || bad "rc=$RC out=[$OUT]"
 # bootstrap.servers is a LIST: a mirror that names this broker among others targets it just as much, and
 # requiring the whole value to equal it hid exactly that (deploy Codex round 9).
 printf 'bootstrap.servers=192.168.100.252:9092,other.host:9092\n' > "$WORK/prodmirror/producer.properties"
@@ -128,11 +128,56 @@ run
 [ "$RC" -ne 0 ] && ok "a producer.properties with NO bootstrap.servers is a refusal" || bad "a config with no bootstrap returned 0"
 printf 'bootstrap.servers=192.168.100.252:9092\n' > "$WORK/prodmirror/producer.properties"
 
+echo "5a. the file is a JAVA PROPERTIES file, not a line of key=value"
+# Kafka unescapes `\,` before splitting, so the raw text holds ONE entry where the config holds two: a
+# live prod mirror the naive split missed entirely (deploy Codex round 10).
+printf 'bootstrap.servers=other.host:9092\\,192.168.100.252:9092\n' > "$WORK/prodmirror/producer.properties"
+run
+[ "$RC" -eq 0 ] && [ -z "$OUT" ] \
+  && ok "an ESCAPED comma is part of one entry, so that value does not target the broker" || bad "rc=$RC out=[$OUT]"
+printf 'bootstrap.servers=other.host:9092\\,x:1,192.168.100.252:9092\n' > "$WORK/prodmirror/producer.properties"
+run
+[ "$RC" -eq 0 ] && [ "$OUT" = "com.optionsedge.prodmirror" ] \
+  && ok "...while an UNESCAPED one still separates, so the target is found beside it" || bad "rc=$RC out=[$OUT]"
+# A CONTINUATION line: the value carries on, and the continuation's leading whitespace is dropped.
+printf 'bootstrap.servers=other.host:9092,\\\n    192.168.100.252:9092\n' > "$WORK/prodmirror/producer.properties"
+run
+[ "$RC" -eq 0 ] && [ "$OUT" = "com.optionsedge.prodmirror" ] && ok "a backslash CONTINUATION is read as one value" || bad "rc=$RC out=[$OUT]"
+# The separator may be a colon or plain whitespace, and comments start with # or !.
+printf 'bootstrap.servers:192.168.100.252:9092\n' > "$WORK/prodmirror/producer.properties"
+run
+[ "$OUT" = "com.optionsedge.prodmirror" ] && ok "a COLON separator reads the same" || bad "out=[$OUT]"
+printf 'bootstrap.servers 192.168.100.252:9092\n' > "$WORK/prodmirror/producer.properties"
+run
+[ "$OUT" = "com.optionsedge.prodmirror" ] && ok "so does a WHITESPACE separator" || bad "out=[$OUT]"
+printf '#bootstrap.servers=192.168.100.252:9092\n!bootstrap.servers=192.168.100.252:9092\nacks=all\n' > "$WORK/prodmirror/producer.properties"
+run
+[ "$RC" -ne 0 ] && ok "a value only in COMMENTS is no bootstrap.servers at all — a refusal" || bad "rc=$RC out=[$OUT]"
+printf '\xef\xbb\xbfbootstrap.servers=192.168.100.252:9092\n' > "$WORK/prodmirror/producer.properties"
+run
+[ "$OUT" = "com.optionsedge.prodmirror" ] && ok "a UTF-8 BOM before the first key does not hide it" || bad "out=[$OUT]"
+printf 'bootstrap.servers=192.168.100.252\\u003a9092\n' > "$WORK/prodmirror/producer.properties"
+run
+[ "$OUT" = "com.optionsedge.prodmirror" ] && ok "a \\uXXXX escape inside an entry is resolved" || bad "out=[$OUT]"
+printf 'bootstrap.servers=192.168.100.252:9092\n' > "$WORK/prodmirror/producer.properties"
+
 echo "5b. a label with a SPACE in it is not lost"
 table "com.optionsedge.spaced label" ; job "com.optionsedge.spaced label" "$P1"
 run
 [ "$OUT" = "com.optionsedge.spaced label" ] && ok "the table parse keeps everything after the second tab" || bad "out=[$OUT]"
 table com.optionsedge.prodmirror; job com.optionsedge.prodmirror "$P1"
+
+echo "4b. job-dict shapes that must REFUSE rather than answer"
+for shape in 'empty-program:{\n\t"Program" = "";\n};' \
+             'args-same-line:{\n\t"ProgramArguments" = ( );\n};' \
+             'args-empty:{\n\t"ProgramArguments" = (\n\t);\n};' ; do
+  name="${shape%%:*}"; body="${shape#*:}"
+  mkdir -p "$WORK/jobs"; printf "$body\n" > "$WORK/jobs/com.optionsedge.prodmirror"
+  table com.optionsedge.prodmirror
+  run
+  [ "$RC" -ne 0 ] && ok "$name is a refusal" || bad "$name answered rc=$RC out=[$OUT]"
+done
+job com.optionsedge.prodmirror "$P1"
 
 echo "5c. a unit directory that cannot be searched is a refusal, not 'not a mirror'"
 mkdir -p "$WORK/locked/unit"; printf '#!/usr/bin/env bash\nexec /bin/true\n' > "$WORK/locked/unit/run-mirror.sh"
@@ -149,10 +194,10 @@ echo "5d. the old exactness case, kept"
 job com.optionsedge.prodmirror "$P1"
 printf 'bootstrap.servers=192.168.100.252:90921\n' > "$WORK/prodmirror/producer.properties"
 run
-[ -z "$OUT" ] && ok "a longer host:port that merely starts the same does not match" || bad "matched [$OUT]"
+[ "$RC" -eq 0 ] && [ -z "$OUT" ] && ok "a longer host:port that merely starts the same does not match" || bad "rc=$RC out=[$OUT]"
 printf 'bootstrap.servers=192.168.100.252:9092\n' > "$WORK/prodmirror/producer.properties"
 run
-[ "$OUT" = "com.optionsedge.prodmirror" ] && ok "and the exact value does" || bad "out=[$OUT]"
+[ "$RC" -eq 0 ] && [ "$OUT" = "com.optionsedge.prodmirror" ] && ok "and the exact value does" || bad "rc=$RC out=[$OUT]"
 
 echo "6. MUTATION: each refusal is load-bearing"
 mut() { # <OLD%%->%%NEW> <label>

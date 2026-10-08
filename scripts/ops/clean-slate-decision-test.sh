@@ -264,6 +264,13 @@ open(path, "w").write(src.replace(old, new, 1))
 PY
   [ $? -eq 0 ] || { bad "$label: the mutation did not apply"; return; }
   local got; got="$(bash "$dir/d.sh" "$a" "$e" "$sk" "$ms" "$st" 2>&1)"
+  # A mutant that CRASHES is not evidence of sensitivity: its output would differ from the safe answer
+  # for a reason that has nothing to do with the rule (deploy Codex round 10). So the mutant must still
+  # produce a well-formed decision, and that decision must differ.
+  case "$got" in
+    verdict=*resume=*bringup=*exit=*hold=*) ;;
+    *) bad "$label: the mutant did not produce a decision at all ([$got]) — that is a crash, not sensitivity"; return ;;
+  esac
   if [ "$got" = "$forbidden" ]; then bad "$label: the mutant still answers [$got] — the rule is not tested"
   else ok "$label (mutant answers [$got])"; fi
 }
@@ -301,7 +308,14 @@ open(path, "w").write(src.replace(old, new, 1))
 PY
   [ $? -eq 0 ] || { bad "$label: the mutation did not apply"; return; }
   local f="$WORK/matt.$RANDOM"; printf "$content" > "$f"
-  local got; got="$(bash -c '. "$1"; read_apply_attestation "$2"; printf "%s|%s\n" "$ATTEST_STATE" "$ATTEST_SKIPPED"' _ "$dir/d.sh" "$f")"
+  local got; got="$(bash -c '. "$1"; read_apply_attestation "$2"; printf "%s|%s\n" "$ATTEST_STATE" "$ATTEST_SKIPPED"' _ "$dir/d.sh" "$f" 2>&1)"
+  # One `|`-separated answer and nothing else: a mutant that crashed would print a diagnostic instead,
+  # which is not evidence that the rule under test is what refuses this input.
+  case "$got" in
+    *$'\n'*) bad "$label: the mutant printed more than an answer ([$got]) — that is a crash, not sensitivity"; return ;;
+    *"|"*) ;;
+    *) bad "$label: the mutant did not answer at all ([$got])"; return ;;
+  esac
   if [ "${got%%|*}" = "$forbidden" ]; then ok "$label (mutant reads it as [$got])"
   else bad "$label: the mutant answers [$got] too — the check is not tested"; fi
 }
