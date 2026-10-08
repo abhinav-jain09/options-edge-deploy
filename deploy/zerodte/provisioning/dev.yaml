@@ -7,6 +7,9 @@ generation: 1
 bootstrapKind: VIRGIN
 migration: false
 eraId: 1
+# the session the era starts on: the session of the run, or the next session once today's has closed (the Job computes the same and
+# refuses a stale value — ERA_START_SESSION_STALE — rather than moving it; edit this line to the run's session before each attempt)
+eraStartSession: "2026-10-05"
 inputs:
   - topic: options.databento.events.raw
     dependencyMode: RAW

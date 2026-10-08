@@ -298,7 +298,7 @@ def corpus_cases(d):
 # ONE canonical corpus (Codex 7b r3): corpus.sha256 is regenerated from the fixtures, so by itself it only proves a copy is self-consistent.
 # CORPUS_DIGEST — the sha256 of corpus.sha256 — is a LITERAL pinned here AND in the Job's YamlSubsetCorpusTest: a change to the corpus must
 # change the literal in BOTH repositories (printed by --corpus-manifest), so a copy that drifted from the pinned version fails its runner.
-CORPUS_DIGEST = "e48dbd54def37d649a8036dd9c3ecbe1fab6a31e5d2eb35baf28baeee44b7370"
+CORPUS_DIGEST = "07c3ea83552fb8817d420fa53f0123a33818a1c2a01c4b50970ab981d14142b5"
 
 
 def corpus_manifest(d, cases):
@@ -430,7 +430,7 @@ def append_only(base, now):
 
 def parse_provisioning(text):
     root = load(text)
-    keys = ["schemaVersion", "symbol", "environmentLineageId", "generation", "bootstrapKind", "migration", "eraId", "inputs", "outputs", "recreatedTopics", "modeChange", "operator"]
+    keys = ["schemaVersion", "symbol", "environmentLineageId", "generation", "bootstrapKind", "migration", "eraId", "eraStartSession", "inputs", "outputs", "recreatedTopics", "modeChange", "operator"]
     if not isinstance(root, dict):
         raise Refused("the provisioning file is a map")
     for k in root:
@@ -471,6 +471,8 @@ def parse_provisioning(text):
     if migration and previous != generation - 1:
         raise Refused("a migration names its predecessor: previousGeneration = generation - 1")
     era = integer(root["eraId"], "eraId", 1, LONG_MAX)
+    # the session the era starts on (inc 9 consult Q6): the attestation's lexical date domain, then a real calendar date — as ProvisioningFile.eraStartSession
+    era_start = _date(root["eraStartSession"], "eraStartSession")
     inputs = root["inputs"]
     if not isinstance(inputs, list) or not 1 <= len(inputs) <= INPUT_TOPICS_MAX:
         raise Refused("inputs names 1-%d topics" % INPUT_TOPICS_MAX)
@@ -541,7 +543,7 @@ def parse_provisioning(text):
         raise Refused("recreatedTopics and modeChange describe a MIGRATION: empty unless migration is true")
     operator = _text(root["operator"], "operator", OPERATOR)
     return {"symbol": symbol, "environmentLineageId": lineage, "generation": generation, "bootstrapKind": kind, "migration": migration,
-            "previousGeneration": previous, "eraId": era, "inputs": [{"topic": t, "dependencyMode": mode_of[t]} for t in mode_of], "outputs": out,
+            "previousGeneration": previous, "eraId": era, "eraStartSession": era_start, "inputs": [{"topic": t, "dependencyMode": mode_of[t]} for t in mode_of], "outputs": out,
             "recreatedTopics": sorted(rec), "modeChange": changes and [{"topic": _text(c["topic"], "t"), "from": _text(c["from"], "f"), "to": _text(c["to"], "t")} for c in changes] or [],
             "operator": operator}
 
@@ -655,7 +657,7 @@ def main(argv):
             return 0
         if cmd == "provisioning":
             d = parse_provisioning(_read(argv[1]))
-            print(json.dumps({k: d[k] for k in ("symbol", "environmentLineageId", "generation", "bootstrapKind", "migration", "previousGeneration", "eraId", "operator")}, sort_keys=True))
+            print(json.dumps({k: d[k] for k in ("symbol", "environmentLineageId", "generation", "bootstrapKind", "migration", "previousGeneration", "eraId", "eraStartSession", "operator")}, sort_keys=True))
             return 0
         raise Refused("unknown command %s" % cmd)
     except Refused as r:

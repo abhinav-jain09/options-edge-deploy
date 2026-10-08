@@ -37,19 +37,20 @@ import re, sys
 sys.path.insert(0, "scripts/ci")
 import zerodte_attestation as z
 root = z.load(open(sys.argv[1], encoding="utf-8").read())
-keys = ["environment", "symbol", "environmentLineageId", "bootstrapKind", "generation", "eraId", "ledgerTopicId", "clusterId", "provisionedDigest", "ledgerOffset"]
+keys = ["environment", "symbol", "environmentLineageId", "bootstrapKind", "generation", "eraId", "eraStartSession", "ledgerTopicId", "clusterId", "provisionedDigest", "ledgerOffset"]
 z._exact_keys(root, keys, "the receipt")
 env = sys.argv[2]
 assert z._text(root["environment"], "environment") == env, "environment names the file"
 for k in ("generation", "eraId", "ledgerOffset"):
     v = root[k]
     assert isinstance(v, int) and not isinstance(v, bool) and v >= 0, k + " is a non-negative integer (an unquoted plain integer)"
+z._text(root["eraStartSession"], "eraStartSession", z.ISO_DATE, quoted=True)
 z._text(root["ledgerTopicId"], "ledgerTopicId", z.HEX32, quoted=True)
 z._text(root["clusterId"], "clusterId", z.TEXT, quoted=True)
 z._text(root["provisionedDigest"], "provisionedDigest", z.HEX64, quoted=True)
 # BOUND to the declaration of the same environment: the static identity the Job echoed must be the declaration's
 d = z.parse_provisioning(open("deploy/zerodte/provisioning/%s.yaml" % env, encoding="utf-8").read())
-for key, want in (("symbol", d["symbol"]), ("environmentLineageId", d["environmentLineageId"]), ("bootstrapKind", d["bootstrapKind"])):
+for key, want in (("symbol", d["symbol"]), ("environmentLineageId", d["environmentLineageId"]), ("bootstrapKind", d["bootstrapKind"]), ("eraStartSession", d["eraStartSession"])):
     got = z._text(root[key], key)
     assert got == want, "%s is '%s' in the receipt, '%s' in the declaration" % (key, got, want)
 for key, want in (("generation", d["generation"]), ("eraId", d["eraId"])):

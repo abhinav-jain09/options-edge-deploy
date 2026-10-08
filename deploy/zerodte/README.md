@@ -5,7 +5,10 @@ What lives here is REVIEWED INPUT to the provisioning Job (`Jenkinsfile.zerodte-
 
 * `provisioning/<env>.yaml` — ONE file per environment: the desired topology and generation DECLARATION. Topics are named by Kafka
   topic NAME, never by id (ids exist only after creation and are read live by the Job). `eraId` is a reviewed positive integer (a dry run
-  must not allocate a database sequence value). A generation bump is explicit (`migration: true`, `previousGeneration`, `recreatedTopics`,
+  must not allocate a database sequence value). `eraStartSession` (inc 9 consult Q6) is the session the era starts on — the session of the
+  run, or the next session once today's has closed: the Job computes the same at the insert and REFUSES a stale value
+  (`ERA_START_SESSION_STALE`, 68) rather than moving it, so edit it to the run's session before each attempt; once inserted it is verified
+  under both unique keys on every later run (a rerun after the close is ALREADY_PROVISIONED). A generation bump is explicit (`migration: true`, `previousGeneration`, `recreatedTopics`,
   `modeChange`). Validated by `scripts/ci/validate-zerodte-provisioning.sh` with the SAME rules the Job's parser enforces.
 * `virgin-attestation.yaml` — the ONE-SHOT external VIRGIN attestation: `lineages` (an environment is a LINEAGE: a UUID minted once, with
   the OWNER's recorded approval; a clone names its parent) and append-only `entries` ({symbol, environmentLineageId, ledgerTopicId,
@@ -13,7 +16,7 @@ What lives here is REVIEWED INPUT to the provisioning Job (`Jenkinsfile.zerodte-
   the canonical TLV encoding of the COMPLETE preceding entry. `ledgerTopicId`, `clusterId` and `prevEntryHash` are written QUOTED (YAML
   would read digits as a number). The Job VERIFIES this file and never appends to it: an append is a reviewed Git change
   (`scripts/ci/validate-zerodte-attestation.sh` refuses any change that removes or alters an existing entry or lineage, or breaks the chain).
-* `provisioned/<env>.yaml` — the CONFIRMED receipt of a provisioning (generation, eraId, ledgerTopicId, clusterId, provisionedDigest),
+* `provisioned/<env>.yaml` — the CONFIRMED receipt of a provisioning (generation, eraId, eraStartSession, ledgerTopicId, clusterId, provisionedDigest),
   committed by the operator from the Job's receipt line. The runtime render of increment 8 takes `ZERO_DTE_LEDGER_TOPIC_ID_EXPECTED` and
   `ZERO_DTE_PROVISIONING_GENERATION` from it and refuses a missing or mismatched identity. Never hand-entered.
 
@@ -44,7 +47,7 @@ What lives here is REVIEWED INPUT to the provisioning Job (`Jenkinsfile.zerodte-
   declaration, and the container's exit code must AGREE with the outcome (PROVISIONABLE/PROVISIONED/ALREADY 0, CONFLICTING 66,
   ATTESTATION_REQUIRED 67, REFUSED its own `exit=`). A receipt the process disagrees with is refused.
 * The committed receipt block carries `environmentLineageId` and `bootstrapKind` as well; `validate-zerodte-provisioning.sh` binds a
-  committed `provisioned/<env>.yaml` to `provisioning/<env>.yaml` (symbol, lineage, bootstrapKind, generation, eraId must agree).
+  committed `provisioned/<env>.yaml` to `provisioning/<env>.yaml` (symbol, lineage, bootstrapKind, generation, eraId, eraStartSession must agree).
 
 ## Owner-only items (stated once)
 
