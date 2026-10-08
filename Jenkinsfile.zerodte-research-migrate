@@ -1,0 +1,154 @@
+@Library('oe') _
+
+// MIGRATE THE 0DTE RESEARCH STORE OF ONE ENVIRONMENT FROM SCHEMA v6 TO v7 — dry run first, commit only on CONFIRM.
+//
+// Design: options-edge-processing vix-option-inteligence-service/docs/STAGE-B-FRAMES-DESIGN.md §5.3 / §11 / §14 and "BUILD decisions for
+// increment 9" (Q2 the runner, Q3 V1 coexistence, Q9 the deploy repository). The migrator is the service image's own ZeroDteResearchMigrator
+// (increment 9a), run as a Kubernetes Job under the deployer identity (k8s/jobs/zerodte-research-migrate-job.yaml) under the REVIEWED
+// declaration deploy/zerodte/research-migration/<env>.yaml. ONE transaction: the typed v6 archive, the v7 DDL and views, the shipped
+// calendar, the migration record — executed and ROLLED BACK on a dry run, committed and verified on CONFIRM; a rerun at v7 verifies
+// (ALREADY_MIGRATED) and never re-applies. ONE receipt line, exit codes 0/64/65/68/69/70 (the wrapper maps each).
+//
+// WHAT RUNS: scripts/ops/zerodte-research-migrate.sh, which validates the declaration with the PR validator, pins the cluster by its CA and
+// the service image by its digest, takes the migration lock (the deployment / migration barrier — scripts/deploy/zerodte-migrate-barrier.sh
+// refuses to roll the service while it is held), PROVES THE LEGACY WRITERS QUIESCENT under it from a closed world
+// (scripts/ops/zerodte-quiescence.py over deploy/zerodte/research-migration/legacy-writers.yaml: every pod and controller template that
+// runs the service image — pinned digest, flag resolved OFF from the effective environment, rollout settled, nothing terminating or
+// pending, no undeclared workload; consult Q3), re-lists the pods immediately before creating the Job, waits, prints the pod log and the
+// Job's wall time, and holds the receipt to its canonical grammar.
+//
+// THREE STAGES, IN ORDER, EVERY BUILD:
+//   1. VALIDATE — the declarations (the Job's own rules, the legacy-writer closed world), the receipt + quiescence test and the barrier test.
+//   2. DRY RUN — ALWAYS runs. The migrator executes the migration and ROLLS BACK, printing MIGRATABLE with the real dispositions. A build
+//      with CONFIRM=false ends here, green, having changed nothing.
+//   3. MIGRATE — runs ONLY when CONFIRM=true, and only after stage 2 passed in the same build: the migrator commits and verifies (MIGRATED).
+//   The build log carries the receipt. The provisioning job (Jenkinsfile.zerodte-provision) refuses before this one has run (SCHEMA_VERSION).
+//
+// ORDER ON EVERY ENVIRONMENT (consult Q12): the V1 compatibility image with ZERODTE_RESEARCH_ENABLED off rolled to every pod → THIS job
+// (dry run, then CONFIRM) → the provisioning job → the dedicated v7 writer → increment 8.
+//
+// PERMITTED COMMIT (Deployment Permission Rule): every run needs PERMITTED_SHA, the full 40-character commit id of the checkout the migration
+// must come from; the first stage fails closed unless the checked-out HEAD equals it exactly AND is on origin/main. The guard is the shared
+// scripts/jenkins/permitted-sha-guard.sh in its canonical stage, and every later stage is gated on its flag
+// (scripts/jenkins/validate-jenkinsfile-guard.py judges this file; scripts/ci/jenkins-permitted-sha-scope.txt). The wrapper re-checks
+// HEAD == PERMITTED_SHA right before the write and requires the dry-run receipt THIS build wrote.
+//
+// BEFORE THE FIRST RUN: a Pipeline-from-SCM item (docs/deploy-single-service.md):
+//     scripts/jenkins/create-service-job.sh zerodte-research-migrate git@github.com:abhinav-jain09/options-edge-deploy.git Jenkinsfile.zerodte-research-migrate zerodte-provision
+//   then one plain /build so Jenkins parses the parameters. The image-tags/<env>.yaml vix-option-inteligence-service tag must carry a build
+//   with the migrator (increment 9a or later) — the SAME build rolled to the service's pods.
+pipeline {
+  agent { label 'hpsf-replay-mac' }
+  parameters {
+    choice(name: 'ENVIRONMENT', choices: ['dev', 'production'],
+      description: 'Target environment — selects the declaration deploy/zerodte/research-migration/<env>.yaml, the deployer kubeconfig (oeProfile) and the image registry.')
+    booleanParam(name: 'CONFIRM', defaultValue: false,
+      description: 'false (DEFAULT) = dry run only: the migrator executes the migration inside one transaction and ROLLS IT BACK, printing MIGRATABLE with the real counts. true = after that same dry run passes, run the migrator again with --confirm: commit v6 → v7 and verify. A rerun at v7 verifies (ALREADY_MIGRATED) and re-applies nothing.')
+    string(name: 'PERMITTED_SHA', defaultValue: '', trim: true,
+      description: 'REQUIRED. The full 40-character lowercase commit id of the options-edge-deploy commit this run is permitted for. The build fails closed unless the checked-out HEAD equals it exactly and it is on origin/main.')
+    string(name: 'PERMITTED_SHA_GUARD_VERSION', defaultValue: '2f6fc2ab7aa51eb8a9e8aa350f2d774cd2fb7a253de2591e43645a19a9886b24',
+      description: 'DO NOT EDIT BY HAND — the sha256 of scripts/jenkins/permitted-sha-guard.sh this definition runs (Deployment Permission Rule). The guard refuses to run under any other value. It is a DECLARATION, not proof that this job enforces the guard: a caller that triggers this job judges its SCM definition and its Jenkinsfile at the forwarded commit (scripts/jenkins/require-guarded-downstream.sh). Regenerate with scripts/jenkins/permitted-sha-guard-version.sh when the guard changes.')
+    string(name: 'KUBECONFIG_FILE', defaultValue: '',
+      description: 'Deployer kubeconfig on the Jenkins agent. Empty = oeProfile(ENVIRONMENT).kubeconfigDeployer.')
+    string(name: 'KEEP_JOBS', defaultValue: '5',
+      description: 'How many most-recent TERMINAL migration Jobs to retain (nothing else prunes them). 1..100.')
+  }
+  // NO TRIGGERS: a schema migration is a person's decision, once per environment.
+  options {
+    disableConcurrentBuilds()
+    // "Restart from Stage" would resume at 'Migrate (--confirm)' with the guard, the validation and the dry run SKIPPED. Disabled outright;
+    // and the wrapper additionally refuses a CONFIRM run without the dry-run receipt this build wrote and without HEAD == PERMITTED_SHA re-checked.
+    disableRestartFromStage()
+    timeout(time: 60, unit: 'MINUTES')
+    buildDiscarder(logRotator(numToKeepStr: '50'))
+  }
+  environment {
+    KUBECONFIG    = "${params.KUBECONFIG_FILE ?: oeProfile(params.ENVIRONMENT).kubeconfigDeployer}"
+    ENVIRONMENT   = "${params.ENVIRONMENT}"
+    KEEP_JOBS     = "${params.KEEP_JOBS}"
+    // PERMITTED_SHA is NOT mirrored here: Jenkins already exposes the (trimmed) parameter as that environment variable,
+    // and a permission variable may be defined only by parameters{} (validator: permission variables are read-only).
+  }
+  stages {
+    // ---- Deployment Permission Rule (options-edge rule.md): Jenkins enforces the permitted commit ----
+    // The shared scripts/jenkins/permitted-sha-guard.sh, in the canonical stage every guarded job carries, in the workspace the effect
+    // will come from. error(), never catchError. scripts/ci/zerodte-research-migrate-guard-test.sh runs the exact command of this stage
+    // through the cases the rule names.
+    stage('Permitted commit guard') {
+      options { timeout(time: 10, unit: 'MINUTES') }
+      steps {
+        script {
+          def rc = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')
+          if (rc != 0) {
+            error("Permitted commit guard REFUSED this build (rc=${rc}) — see its output above. Nothing was validated, dry-run or migrated.")
+          }
+          env.PERMITTED_SHA_GUARD = 'PASSED'
+        }
+      }
+    }
+    stage('Clear previous dry-run receipt') {
+      // The dry-run receipt of a PREVIOUS build is removed right after the guard passed and before anything else, so the confirm stage
+      // can only ever see one made in THIS build (the wrapper also checks the receipt's build number and HEAD).
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
+      steps {
+        sh '''
+          set -euo pipefail
+          rm -f "${WORKSPACE}/zerodte-research-migrate-dry-run.receipt"
+        '''
+      }
+    }
+    stage('Validate declaration') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
+      // The Job's own rules over the declaration, and this pipeline's own receipt and guard tests — before a cluster is touched.
+      steps {
+        sh '''
+          set -euo pipefail
+          bash scripts/ci/validate-zerodte-research-migration.sh
+          bash scripts/ci/zerodte-research-migrate-receipt-test.sh
+          bash scripts/ci/zerodte-migrate-barrier-test.sh
+          bash scripts/ci/zerodte-compat-flag-test.sh
+        '''
+      }
+    }
+    stage('Dry run: MIGRATABLE?') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
+      // ALWAYS (once the guard passed). Executes and rolls back; ends the build green when CONFIRM=false.
+      steps {
+        sh '''
+          set -euo pipefail
+          chmod +x scripts/ops/zerodte-research-migrate.sh
+          DRY_RUN_RECEIPT="${WORKSPACE}/zerodte-research-migrate-dry-run.receipt" CONFIRM=false scripts/ops/zerodte-research-migrate.sh
+        '''
+      }
+    }
+    stage('Migrate (--confirm)') {
+      when {
+        beforeAgent true
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.CONFIRM) }
+      }
+      // The wrapper re-establishes BOTH prerequisites before the effect: HEAD == PERMITTED_SHA (again), and a dry-run receipt written by
+      // THIS build (BUILD_NUMBER) for THIS environment, declaration and HEAD.
+      steps {
+        sh '''
+          set -euo pipefail
+          DRY_RUN_RECEIPT="${WORKSPACE}/zerodte-research-migrate-dry-run.receipt" CONFIRM=true scripts/ops/zerodte-research-migrate.sh
+        '''
+      }
+    }
+  }
+  post {
+    success {
+      script {
+        echo params.CONFIRM ? "MIGRATED (or already at v7) ${params.ENVIRONMENT} — see the 'Migrate (--confirm)' log for the receipt; the provisioning job may now run" :
+                              "DRY RUN ONLY — the migration was executed and rolled back; nothing changed. Re-run with CONFIRM=true to migrate ${params.ENVIRONMENT}."
+      }
+    }
+    unsuccessful {
+      script {
+        echo "zerodte research migration ${currentBuild.currentResult} (build ${env.BUILD_NUMBER}, env ${params.ENVIRONMENT}, confirm ${params.CONFIRM}). " +
+             "Read the Job log above: a quiescence refusal names the pod, container, env source or controller that could still write (another build, the flag resolved on, a terminating / pending pod, an undeclared workload, a rollout in flight) — roll the V1 compatibility image to the declared Deployment with the flag off and let it settle first; " +
+             "68 is a precondition (the recorded version, the calendar's coverage or version, a drifted catalog); 70 means the migration rolled back or its commit could not be verified — read zerodte_schema_version and zerodte_research_migration before trying again."
+      }
+    }
+  }
+}

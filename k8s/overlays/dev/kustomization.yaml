@@ -289,7 +289,8 @@ patches:
   # DEV: the linearizer base pins the PROD broker in ES_LINEARIZER_BOOTSTRAP_SERVERS (its own key, read before the
   # shared KAFKA_BOOTSTRAP_SERVERS); on dev it must read and write THIS env's local broker, like the feeds.
   - path: es-trade-linearizer-dev-patch.yaml
-  # DEV-ONLY: Gate-3 research evidence store ON (base is OFF and carries no URL — see the patch).
+  # DEV-ONLY: the V1 compatibility release — the legacy research writer OFF as a literal, the dev research-store URL declared next to it
+  # (the base carries no URL — see the patch header; increments 9a / 9c).
   - path: vix-option-inteligence-dev-patch.yaml
   # DEV-ONLY ONE-TIME (2026-08-12): epoch-genesis grant after the dev Kafka wipe (#801) —
   # mirrors the standalone overlay so both render identically. Revert BOTH once genesis'd.

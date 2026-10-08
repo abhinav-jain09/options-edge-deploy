@@ -428,6 +428,34 @@ def append_only(base, now):
         raise Refused("an entry of the base version was removed or altered (entries are append-only)")
 
 
+MIGRATION_KEYS = ["schemaVersion", "fromVersion", "toVersion", "calendarVersion", "expectedSessionsAhead", "operator"]
+OPERATOR = re.compile(r"^[\x20-\x7e]{1,64}$")
+
+
+def parse_migration(text):
+    """The research-migration declaration (deploy/zerodte/research-migration/<env>.yaml): exact keys, exact types, the domains the Job's run is held to."""
+    root = load(text)
+    _exact_keys(root, MIGRATION_KEYS, "the migration declaration")
+
+    def integer(v, what, lo, hi):
+        if not isinstance(v, int) or isinstance(v, bool):
+            raise Refused("%s is an integer" % what)
+        if v < lo or v > hi:
+            raise Refused("%s is in [%d, %d]" % (what, lo, hi))
+        return v
+
+    if integer(root["schemaVersion"], "schemaVersion", 1, 1 << 31) != 1:
+        raise Refused("schemaVersion is 1")
+    if integer(root["fromVersion"], "fromVersion", 1, 1 << 31) != 6:
+        raise Refused("fromVersion is 6 (the only migration this declaration can state)")
+    if integer(root["toVersion"], "toVersion", 1, 1 << 31) != 7:
+        raise Refused("toVersion is 7")
+    calendar = _text(root["calendarVersion"], "calendarVersion", HEX64, quoted=True)
+    ahead = integer(root["expectedSessionsAhead"], "expectedSessionsAhead", 0, 400)
+    operator = _text(root["operator"], "operator", OPERATOR)
+    return {"fromVersion": 6, "toVersion": 7, "calendarVersion": calendar, "expectedSessionsAhead": ahead, "operator": operator}
+
+
 def parse_provisioning(text):
     root = load(text)
     keys = ["schemaVersion", "symbol", "environmentLineageId", "generation", "bootstrapKind", "migration", "eraId", "eraStartSession", "inputs", "outputs", "recreatedTopics", "modeChange", "operator"]
@@ -632,6 +660,9 @@ def main(argv):
             if n < 30:
                 raise Refused("the corpus has only %d cases" % n)
             print("OK: %d corpus cases give the expected verdict; corpus.sha256 agrees" % n)
+            return 0
+        if cmd == "migration":
+            print(json.dumps(parse_migration(_read(argv[1])), sort_keys=True))
             return 0
         if cmd == "verify":
             path = argv[1]

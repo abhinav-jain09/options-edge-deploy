@@ -1,0 +1,19 @@
+# THE CLOSED WORLD of the legacy (v6) research writer — read by scripts/ops/zerodte-research-migrate.sh (increment 9c, consult Q3) and
+# handed to scripts/ops/zerodte-quiescence.py, which proves from the live API that no writer can be running before the migration is told
+# --legacy-writers-quiesced. The writer lives in the vix-option-inteligence SERVICE image and runs when ZERODTE_RESEARCH_ENABLED is
+# "true" (ResearchWriterSettings.fromEnvironment, case-insensitive). The proof is image-based, never label-based: EVERY pod and EVERY
+# controller template of the namespace that runs an image of this repository is judged, and anything that runs it without being named
+# here is a refusal. Both environments share this file: the workload names are the same on dev and production.
+#
+#   imageRepository     the repository name (the last path segment of the image reference, without registry, tag or digest)
+#   writerDeployments   the Deployments that may run the image — each must be on the digest the migration Job runs, have the flag
+#                       resolved OFF in its template, and have a SETTLED rollout
+#   exemptJobLabels     app.kubernetes.io/name values of the maintenance Jobs that run the same image and never write research rows
+#                       (the provisioner refuses below v7 and writes only the era; the migrator is this Job itself); a pod is exempt
+#                       only when a Job owns it AND it carries one of these labels
+imageRepository: options-edge-vix-option-inteligence
+writerDeployments:
+  - vix-option-inteligence-service
+exemptJobLabels:
+  - zerodte-research-migrate
+  - zerodte-provision

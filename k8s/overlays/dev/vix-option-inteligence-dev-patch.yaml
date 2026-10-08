@@ -1,17 +1,18 @@
-# DEV-ONLY: turn the Gate-3 research evidence store ON, and say WHERE in the same breath.
+# DEV-ONLY: the V1 COMPATIBILITY RELEASE of the vix-option-inteligence service (increments 9a / 9c, inc 9 consult Q3) — the LEGACY
+# in-process research writer OFF as a LITERAL, and the research store's destination and shadow settings declared in the same file.
 #
-# Both variables are set here TOGETHER, deliberately. The switch alone would be enough — the
-# writer falls back to POSTGRES_JDBC_URL — but that fallback resolves through the shared
-# options-edge-config, whose BASE value is production (k8s/infra/base/configmap.yaml:
-# jdbc:postgresql://192.168.100.252:5432/options_flow). dev is correct today only because a
-# SEPARATE file, configmap-dev-local-patch.yaml, overrides it. If that override were ever dropped,
-# renamed, or left out of a new overlay, this pod would come up ENABLED and pointed at the
-# PRODUCTION database — writing research evidence into it.
+# ZERODTE_RESEARCH_ENABLED is "false" here, as a literal value: a RUNNING pod's flag is knowable only from its own spec
+# (scripts/ops/zerodte-quiescence.py), and the migration to schema v7 refuses while any pod of this service could still write v6. After the
+# migration the legacy writer refuses v7 anyway (LEGACY_RESEARCH_WRITER_RETIRED_V7) and the DEDICATED v7 writer (increments 9d / 9e, its own
+# Deployment zerodte-research-writer) takes over. Nothing in this overlay turns the legacy writer on; scripts/ci/zerodte-compat-flag-test.sh
+# renders this overlay and asserts the literal.
 #
-# So enablement and destination live in one file: nothing can turn the writer on in dev without
-# also stating the dev database, and the two cannot drift apart in separate reviews. The URL below
-# is intentionally the same value the dev configmap patch carries; if they ever disagree, this one
-# wins and the writer is still in the right database.
+# The JDBC URL stays declared here, next to the flag, deliberately: the research store's URL falls back to POSTGRES_JDBC_URL, which resolves
+# through the shared options-edge-config whose BASE value is production (k8s/infra/base/configmap.yaml:
+# jdbc:postgresql://192.168.100.252:5432/options_flow); dev is correct today only because a SEPARATE file, configmap-dev-local-patch.yaml,
+# overrides it. Keeping the dev database URL in the same file as the flag means a future change that turns a writer on in dev cannot
+# drift apart from the statement of WHICH database, across separate reviews. The URL below is the same value the dev configmap patch
+# carries; if they ever disagree, this one wins. The shadow-model and environment settings are retained for the fail-fast pair.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -23,8 +24,13 @@ spec:
       containers:
         - name: vix-option-inteligence
           env:
+            # THE V1 COMPATIBILITY RELEASE (increment 9a / 9c, inc 9 consult Q3): the LEGACY in-process research writer is OFF — as a LITERAL,
+            # because a running pod's flag is knowable only from its own spec (scripts/ops/zerodte-quiescence.py). The migration to schema v7
+            # refuses while any pod of this service could still write v6; after the migration the legacy writer refuses v7 anyway
+            # (LEGACY_RESEARCH_WRITER_RETIRED_V7) and the DEDICATED v7 writer (increment 9d / 9e) takes over. The JDBC URL, the shadow model
+            # and the environment stay declared here for the dedicated writer's render and the fail-fast pair.
             - name: ZERODTE_RESEARCH_ENABLED
-              value: "true"
+              value: "false"
             - name: ZERODTE_RESEARCH_JDBC_URL
               value: jdbc:postgresql://host.docker.internal:5432/options_flow_dev
             # Shadow model (REQ rev 7 §6a): predictions go to the shadow columns only; predicted_state
