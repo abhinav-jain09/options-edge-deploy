@@ -376,8 +376,14 @@ unit_cleanup() { # <src> <env> [modes, default "sweep delete-recreate retention"
   done
 }
 
-mkcopy() { # <dir> — the three real scripts, byte for byte, beside a topics.env the caller writes
-  mkdir -p "$1" && cp "$HERE/apply-topics.sh" "$HERE/cleanup-topics.sh" "$HERE/reset-preserved-topics.sh" "$1/"
+mkcopy() { # <dir> — the real scripts, byte for byte, beside a topics.env the caller writes
+  # resolve-prod-partition-overrides.sh travels WITH apply-topics.sh: apply-topics.sh sources it by
+  # $SCRIPT_DIR (its own directory) whenever ENVIRONMENT=production and TOPIC_SET is the default
+  # set, so a copy of apply-topics.sh without it fails "No such file or directory" the instant any
+  # control/mutant run here exercises that branch — every run in this file came back unprovable at
+  # once, not any one mutant surviving, which is what a sandbox-packaging gap looks like.
+  mkdir -p "$1" && cp "$HERE/apply-topics.sh" "$HERE/cleanup-topics.sh" "$HERE/reset-preserved-topics.sh" \
+    "$HERE/resolve-prod-partition-overrides.sh" "$1/"
 }
 
 unit_protected() { # <env> — the six removed from EVERY *TOPICS* declaration in a copy; the regex alone keeps four

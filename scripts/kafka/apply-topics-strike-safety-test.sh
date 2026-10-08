@@ -166,7 +166,11 @@ done
 
 echo "4. the test can fail: WITHOUT the declaration the same drift deletes and recreates the log"
 MUT="$WORK/mutant"; mkdir -p "$MUT"
-cp "$HERE/apply-topics.sh" "$MUT/"
+# resolve-prod-partition-overrides.sh travels WITH apply-topics.sh: it is sourced by $SCRIPT_DIR
+# (this copy's own directory) whenever ENVIRONMENT=production and TOPIC_SET is the default set —
+# exactly the first case the loop below runs — so a copy without it fails "No such file or
+# directory" before the mutant can be exercised at all.
+cp "$HERE/apply-topics.sh" "$HERE/resolve-prod-partition-overrides.sh" "$MUT/"
 # Position-independent: the strike token is removed wherever it sits in the list. The first form was anchored on
 # the closing quote, so it only matched while strike was the LAST entry — it stopped matching the day the
 # vol-premium ledgers were appended after it, and the guard below is what caught that.
