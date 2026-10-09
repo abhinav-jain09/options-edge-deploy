@@ -56,7 +56,7 @@ import org.apache.kafka.common.serialization.ByteArraySerializer;
  *   fingerprint bootstrap topic fromMs              count + sha256 of (partition, ts, key, value, headers)
  *   truncate    bootstrap topic                     advance every partition's log start to its end (empty it)
  *   state       bootstrap inFile                    EMPTY | COMPLETE | PARTIAL: what the topic holds vs the export
- *   pin         bootstrap inFile [skipGroupsRx]     pin the recorded groups to the topic's current end
+ *   pin         bootstrap inFile [skipGroupsRx]     re-run the reader scan, then pin the recorded groups to the current end (rc 7: breach, topic emptied)
  *   topicid     bootstrap topic                     print the topic's id (a recreated topic has a new one)
  *
  * CONSUMER GROUPS. Whoever read the topic before the wipe will, after it, be a brand-new group that reads the
@@ -171,8 +171,10 @@ public final class TapePreserve {
                 v.members = d.members().size();
                 for (StreamsGroupSubtopologyDescription st : d.subtopologies())
                     if (st.sourceTopics().contains(topic) || st.repartitionSourceTopics().containsKey(topic)) v.declared = true;
-                // Same reasoning as share groups: a member that may not yet hold its tasks is still about to read.
-                v.reads = v.members > 0;
+                // A topology that names its sources is conclusive: a live Streams app on OTHER topics is not a reader (it
+                // would otherwise block every restore for as long as it runs). A topology not yet described (no
+                // sub-topologies on a live group) or a member that may not yet hold its tasks cannot be ruled out.
+                v.reads = v.members > 0 && (v.declared || d.subtopologies().isEmpty());
                 Map<TopicPartition, OffsetAndMetadata> o = admin.listStreamsGroupOffsets(Map.of(id, new ListStreamsGroupOffsetsSpec())).partitionsToOffsetAndMetadata(id).get();
                 for (Map.Entry<TopicPartition, OffsetAndMetadata> e : o.entrySet()) if (e.getValue() != null) v.offsets.put(e.getKey(), e.getValue().offset());
             } else {
@@ -584,10 +586,29 @@ public final class TapePreserve {
         return failed;
     }
 
-    /** Standalone pin for a restore that was interrupted after its records landed (wrapper settle path). */
+    /** Standalone pin for a restore that was interrupted after its records landed (wrapper settle path). The importer
+     *  that died never ran its own reader scan, so this does: the topic was empty before the import, hence its log
+     *  start is the pre-import end, and any group with a live member on the topic or a commit beyond that started
+     *  reading during the restore. (A pin that was itself interrupted leaves recorded groups committed at the end; they
+     *  are indistinguishable from readers, so a re-run empties the topic - the safe direction, same as a plain wipe.) A breach empties the topic again (rc 7), exactly as the normal path does. */
     private static int pinCommand(String bootstrap, Path tape, String skipGroupsRx) throws Exception {
         Properties mf = manifest(tape);
-        List<String> failed = pin(bootstrap, mf.getProperty("topic"), recordedGroups(mf, skipGroupsRx));
+        String topic = mf.getProperty("topic");
+        long[] base;
+        try (KafkaConsumer<byte[], byte[]> c = new KafkaConsumer<>(consumerProps(bootstrap))) {
+            List<TopicPartition> parts = partitions(c, topic);
+            Map<TopicPartition, Long> begins = c.beginningOffsets(parts);
+            base = new long[parts.size()];
+            for (TopicPartition tp : parts) base[tp.partition()] = begins.get(tp);
+        }
+        List<String> breach = readers(bootstrap, topic, skipGroupsRx, base);
+        if (!breach.isEmpty()) {
+            try { truncate(bootstrap, topic); } catch (Exception t) { System.out.println("TAPE_IMPORT_TRUNCATE_FAILED topic=" + topic + " " + t); }
+            System.out.println("TAPE_IMPORT_FENCE_BREACH topic=" + topic + " groups=" + String.join(",", breach)
+                    + " - they may have read part of the restored tape; anything they republished downstream must be checked");
+            return 7;
+        }
+        List<String> failed = pin(bootstrap, topic, recordedGroups(mf, skipGroupsRx));
         return failed.isEmpty() ? 0 : 7;
     }
 

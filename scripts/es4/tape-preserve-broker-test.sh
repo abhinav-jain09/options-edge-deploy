@@ -196,7 +196,7 @@ tool import "$BS" "$W/shr.tape" '^none' > "$W/i13.txt" 2>&1; rc=$?
 grep -q "$GS" "$W/i13.txt" && ok "names the share group" || bad "share group not named: $(cat "$W/i13.txt")"
 kill "$SP" 2>/dev/null; sleep 8
 
-case_ "14. a recorded SHARE group is pinned through the SHARE API, or the restore fails closed (rc 7, topic emptied) - never skipped"
+case_ "14. (routing + fail-closed smoke test, NOT a proof that a share pin prevents re-reads) a recorded SHARE group is pinned through the SHARE API, or the restore fails closed (rc 7, topic emptied) - never skipped"
 # Whether this broker's share coordinator keeps state for an idle group varies, so the export may or may not list
 # the group on its own. The manifest is therefore written to record it as SHARE (the shape an export produces on
 # a broker that does) and the real import must then either pin it or roll back.
@@ -207,6 +207,24 @@ tool import "$BS" "$W/shr2.tape" > "$W/i14.txt" 2>&1; rc=$?
 if [ $rc = 0 ] && grep -q "TAPE_PINNED group=$GS type=SHARE" "$W/i14.txt"; then ok "rc 0, pinned via the SHARE API (type=SHARE in the report)"
 elif [ $rc = 7 ] && [ "$(live "$T")" = 0 ] && grep -q "TAPE_PIN_FAILED group=$GS" "$W/i14.txt"; then ok "pin via the SHARE API refused by this broker: rc 7 and the topic was emptied (fail closed)"
 else bad "rc=$rc live=$(live "$T") out=$(cat "$W/i14.txt")"; fi
+
+case_ "15. importer KILLED after the records landed but before its own scan, while an UNRECORDED consumer reads: the wrapper's settle must detect it, empty the topic and say so"
+T=$(mk kfence); seed "$T" 1200
+tool export "$BS" "$T" $FROM "$W/kf.tape" > /dev/null 2>&1; recreate "$T"
+cp "$W/kf.tape" "$W/$T.tape"; sed -e "s/^topic=.*/topic=$T/" -e "s/^groups=.*/groups=/" -e "s/^groupTypes=.*/groupTypes=/" "$W/kf.tape.manifest" > "$W/$T.tape.manifest"
+GK="$RUN-killed-intruder"; GROUPS_+=("$GK")
+( for _ in $(seq 1 60); do [ "$(live "$T")" = 1200 ] && break; sleep 1; done
+  "$KBIN/kafka-console-consumer" --bootstrap-server "$BS" --topic "$T" --group "$GK" --from-beginning --consumer-property auto.commit.interval.ms=500 >/dev/null 2>&1 ) &
+PIDS+=("$!"); KP=$!
+out=$( ( export ES4_TAPE_JAVA="$(command -v java)" ES4_KAFKA_LIBS="$LIBS" ES4_TAPE_BOOTSTRAP="$BS" ES4_TAPE_PRESERVE_DIR="$W" \
+              ES4_TAPE_PRESERVE_TOPICS="$T" ES4_TAPE_TIMEOUT_S=120 ES4_TAPE_IMPORT_TIMEOUT_S=25 ES4_TAPE_UNPINNED_GROUPS='^none' DRY=false TAPE_PRESERVE_FAULT=pause-before-fence2
+         . "$HERE/tape-preserve.sh"
+         tp_window() { echo "0 0 0"; }
+         tape_preserve_import; echo "WRAPPER_RC=$?" ) 2>&1 )
+kill "$KP" 2>/dev/null; pkill -f "group $GK" 2>/dev/null; sleep 2
+echo "$out" | grep -q "WRAPPER_RC=1" && ok "wrapper rc 1 (not restored, not UNSAFE)" || bad "wrapper: $(echo "$out" | tail -4)"
+echo "$out" | grep -q "ERROR: a consumer started reading.*$GK" && ok "the unrecorded intruder is named in an ERROR" || bad "intruder not reported: $(echo "$out" | tail -5)"
+[ "$(live "$T")" = 0 ] && ok "the topic was emptied" || bad "live=$(live "$T")"
 
 case_ "9. truncate empties a topic and is idempotent"
 tool truncate "$BS" "$T" > /dev/null 2>&1; tool truncate "$BS" "$T" > /dev/null 2>&1

@@ -57,6 +57,7 @@ fi
 [ "$cmd" = import ] && [ "$rc" = 6 ] && echo "TAPE_IMPORT_TIMESTAMP_TYPE topic=x type=LogAppendTime (needs CreateTime)"
 [ "$cmd" = import ] && [ "$rc" = 7 ] && echo "TAPE_IMPORT_ROLLED_BACK topic=x reason=pin-or-fence groups=es-trades-bridge-x"
 [ "$cmd" = import ] && [ "$rc" = 7 ] && [ "$(cat "$FIX/import.breach" 2>/dev/null)" = 1 ] && echo "TAPE_IMPORT_FENCE_BREACH topic=x groups=intruder-group - they may have read part of the restored tape"
+[ "$cmd" = pin ] && [ "$rc" = 7 ] && [ "$(cat "$FIX/pin.breach" 2>/dev/null)" = 1 ] && echo "TAPE_IMPORT_FENCE_BREACH topic=x groups=intruder-group - they may have read part of the restored tape"
 [ "$cmd" = import ] && [ "$rc" = 4 ] && echo "TAPE_IMPORT_TARGET_NOT_EMPTY topic=x liveRecords=9"
 [ "$cmd" = import ] && [ "$rc" = 1 ] && echo "TAPE_PRESERVE_ERROR java.io.IOException: boom" >&2
 exit "$rc"
@@ -102,15 +103,36 @@ after="$(cksum < "$W/art/es.underlying.es.trades.tape.manifest" 2>/dev/null)$(ck
 [ $r = 1 ] && grep -q "previous artifact" "$W/out" && ok "the failed publish is reported (rc 1)" || bad "r=$r out=$(cat "$W/out")"
 [ "$before" = "$after" ] && ok "the previous tape+manifest pair is back, byte for byte" || bad "previous pair lost or changed"
 [ -z "$(ls -A "$W/art" | grep -E '^(prev|\.tmp)')" ] && ok "no parked or temp files left" || bad "leftovers: $(ls -A "$W/art")"
-# a publish killed half-way (new tape in place, no manifest, previous pair parked) is recovered at the next run
-fresh; echo 5 > "$FIX/export.records"; tp tape_preserve_export
-cp "$W/art/es.underlying.es.trades.tape" "$W/prev.tape"; cp "$W/art/es.underlying.es.trades.tape.manifest" "$W/prev.mf"
-mv "$W/art/es.underlying.es.trades.tape" "$W/art/prev.es.underlying.es.trades.tape"; mv "$W/art/es.underlying.es.trades.tape.manifest" "$W/art/prev.es.underlying.es.trades.tape.manifest"
-echo partial > "$W/art/es.underlying.es.trades.tape"
-tp tp_recover "$W/art" es.underlying.es.trades
-if cmp -s "$W/prev.tape" "$W/art/es.underlying.es.trades.tape" && cmp -s "$W/prev.mf" "$W/art/es.underlying.es.trades.tape.manifest" && [ -z "$(ls -A "$W/art" | grep '^prev')" ]; then
-  ok "a half-published artifact is rolled back to the previous pair (byte for byte) at the next run"
-else bad "no recovery: $(ls -A "$W/art")"; fi
+# every crash point of a publish, built by hand from the park/install order (manifest parked first, tape second;
+# new tape installed first, manifest last) - recovery must end on the previous pair or the complete new one
+D="$W/art"; N=es.underlying.es.trades
+mkstate() { # <old|new|none> : which tape/manifest content sits at the active names, plus what is parked
+  fresh; echo 5 > "$FIX/export.records"; tp tape_preserve_export
+  cp "$D/$N.tape" "$W/old.tape"; cp "$D/$N.tape.manifest" "$W/old.mf"
+  echo newnewnew > "$W/new.tape"; echo "records=9" > "$W/new.mf"
+}
+same() { cmp -s "$1" "$2"; }
+recovered_old() { same "$W/old.tape" "$D/$N.tape" && same "$W/old.mf" "$D/$N.tape.manifest" && [ -z "$(ls -A "$D" | grep '^prev')" ]; }
+# (a) died between the two PARKING renames: parked manifest, old tape still active
+mkstate; mv "$D/$N.tape.manifest" "$D/prev.$N.tape.manifest"
+tp tp_recover "$D" $N; recovered_old && ok "crash after parking the manifest, before parking the tape: previous pair restored" || bad "(a) $(ls -A "$D")"
+# (b) both parked, nothing installed yet
+mkstate; mv "$D/$N.tape.manifest" "$D/prev.$N.tape.manifest"; mv "$D/$N.tape" "$D/prev.$N.tape"
+tp tp_recover "$D" $N; recovered_old && ok "crash with both old files parked: previous pair restored" || bad "(b) $(ls -A "$D")"
+# (c) both parked, the new tape installed but not its manifest
+mkstate; mv "$D/$N.tape.manifest" "$D/prev.$N.tape.manifest"; mv "$D/$N.tape" "$D/prev.$N.tape"; cp "$W/new.tape" "$D/$N.tape"
+tp tp_recover "$D" $N; recovered_old && ok "crash after installing the new tape, before its manifest: the half-published tape is dropped, previous pair restored" || bad "(c) $(ls -A "$D")"
+# (d) a recovery that itself died after restoring the tape but before the manifest
+mkstate; mv "$D/$N.tape.manifest" "$D/prev.$N.tape.manifest"
+tp tp_recover "$D" $N; recovered_old && ok "re-running a recovery that died between its two renames converges to the previous pair" || bad "(d) $(ls -A "$D")"
+# (e) the new pair is complete and only the cleanup of the parked pair was missed: the NEW pair must win
+mkstate; mv "$D/$N.tape.manifest" "$D/prev.$N.tape.manifest"; mv "$D/$N.tape" "$D/prev.$N.tape"; cp "$W/new.tape" "$D/$N.tape"; cp "$W/new.mf" "$D/$N.tape.manifest"
+tp tp_recover "$D" $N
+if same "$W/new.tape" "$D/$N.tape" && same "$W/new.mf" "$D/$N.tape.manifest" && [ -z "$(ls -A "$D" | grep '^prev')" ]; then ok "complete new pair + stale parked pair: the new pair is kept, the parked files are dropped"; else bad "(e) $(ls -A "$D")"; fi
+# (f) a parked manifest with no tape anywhere is an orphan: nothing importable, and it must not look like an artifact
+mkstate; mv "$D/$N.tape.manifest" "$D/prev.$N.tape.manifest"; find "$D" -name "$N.tape" -delete
+tp tp_recover "$D" $N; r=$?
+[ $r = 1 ] && [ ! -e "$D/$N.tape.manifest" ] && [ ! -e "$D/prev.$N.tape.manifest" ] && ok "an orphaned parked manifest is reported and removed (no artifact is invented)" || bad "(f) r=$r $(ls -A "$D")"
 
 case_ "4. a failing export is non-fatal and KEEPS an earlier artifact (a resumed reset needs it)"
 fresh; tp tape_preserve_export; echo 1 > "$FIX/export.rc"
@@ -258,6 +280,13 @@ fresh; tp tape_preserve_export; echo 124 > "$FIX/import.rc"; printf 'COMPLETE\n'
 tp tape_preserve_import; r=$?
 [ $r = 0 ] && [ "$(calls pin)" = 1 ] && ok "pin was run; treated as restored (rc 0)" || bad "rc=$r pins=$(calls pin) out=$(cat "$W/out")"
 [ -f "$W/art/consumed.es.underlying.es.trades.tape" ] && ok "artifact retired" || bad "artifact not retired"
+
+# Codex r4: the killed importer never ran its own reader scan; the standalone pin does, and a breach there is a breach.
+fresh; tp tape_preserve_export; echo 124 > "$FIX/import.rc"; echo 7 > "$FIX/pin.rc"; echo 1 > "$FIX/pin.breach"; printf 'COMPLETE\nEMPTY\n' > "$FIX/state.seq"; : > "$FIX/calls"
+tp tape_preserve_import; r=$?
+[ $r = 1 ] && [ "$(calls truncate)" = 1 ] && grep -q "ERROR: a consumer started reading" "$W/out" && grep -q "intruder-group" "$W/out" \
+  && ok "a reader found by the settle-time pin scan: ERROR names it, the topic is emptied and proven empty (rc 1, not restored)" || bad "r=$r truncs=$(calls truncate) out=$(cat "$W/out")"
+[ -f "$W/art/es.underlying.es.trades.tape" ] && [ ! -e "$W/art/es.underlying.es.trades.importing" ] && ok "artifact kept, marker cleared after the proven rollback" || bad "artifact/marker: $(ls -A "$W/art")"
 
 case_ "10e. state COMPLETE but pinning fails: the tape comes back out (all or nothing)"
 fresh; tp tape_preserve_export; echo 124 > "$FIX/import.rc"; echo 7 > "$FIX/pin.rc"; printf 'COMPLETE\nEMPTY\n' > "$FIX/state.seq"; : > "$FIX/calls"

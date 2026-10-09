@@ -230,19 +230,26 @@ tp_publish() { # <dir> <topic> <tmp>
   return 1
 }
 
-# Settles an interrupted publish: a manifest means the active pair is complete (it is renamed last) and any parked
-# pair is stale; no manifest but a parked pair means the publish died half-way, and the parked pair is restored.
+# Settles an interrupted publish. Park order is: manifest first, then tape; install order is tape first, then
+# manifest. So every crash point is one of:
+#   manifest present                  -> the active pair is complete (it is installed last); any parked files are stale;
+#   no manifest, parked manifest      -> the publish (or a recovery) died half-way: the previous pair is the good one.
+#       its tape is the parked tape if that was already moved, else it is still the active tape (the crash fell
+#       between the two parking renames, or between the two renames of an earlier recovery);
+#   neither manifest                  -> nothing to recover.
 tp_recover() { # <dir> <topic>
   local dir="$1" t="$2"
   if [ -f "$dir/$t.tape.manifest" ]; then rm -f "$dir/prev.$t.tape" "$dir/prev.$t.tape.manifest"; return 0; fi
-  if [ -f "$dir/prev.$t.tape" ] && [ -f "$dir/prev.$t.tape.manifest" ]; then
-    rm -f "$dir/$t.tape"
-    if mv -f "$dir/prev.$t.tape" "$dir/$t.tape" && mv -f "$dir/prev.$t.tape.manifest" "$dir/$t.tape.manifest"; then
-      tp_log "recovered the previous artifact for $t after an interrupted publish"; return 0
-    fi
-    tp_log "ERROR: could not restore the previous artifact for $t from $dir/prev.$t.tape"; return 1
+  [ -f "$dir/prev.$t.tape.manifest" ] || return 0
+  if [ -f "$dir/prev.$t.tape" ]; then
+    rm -f "$dir/$t.tape"        # the new (possibly partial) tape
+    mv -f "$dir/prev.$t.tape" "$dir/$t.tape" || { tp_log "ERROR: could not restore the previous tape for $t from $dir/prev.$t.tape"; return 1; }
+  elif [ ! -f "$dir/$t.tape" ]; then
+    tp_log "ERROR: the parked manifest for $t has no tape to go with it - nothing importable; removing the orphan"
+    rm -f "$dir/prev.$t.tape.manifest"; return 1
   fi
-  return 0
+  mv -f "$dir/prev.$t.tape.manifest" "$dir/$t.tape.manifest" || { tp_log "ERROR: could not restore the previous manifest for $t from $dir/prev.$t.tape.manifest"; return 1; }
+  tp_log "recovered the previous artifact for $t after an interrupted publish"
 }
 
 # --------------------------------------------------------------------------------------------- import
@@ -255,14 +262,20 @@ tp_valid_id() { printf '%s' "$1" | grep -Eq '^[A-Za-z0-9_-]{22}$'; }   # a Kafka
 tp_topic_id() { tp_tool topicid "${ES4_TAPE_BOOTSTRAP:-localhost:9092}" "$1" 2>&1 | sed -n 's/^TAPE_TOPIC_ID //p' | tail -1; }
 tp_state() { tp_tool state "${ES4_TAPE_BOOTSTRAP:-localhost:9092}" "$1" 2>&1 | sed -n 's/^TAPE_STATE \([A-Z]*\).*/\1/p' | tail -1; }
 tp_settle() { # <topic> <tape>
-  local t="$1" tape="$2" bs="${ES4_TAPE_BOOTSTRAP:-localhost:9092}" st
+  local t="$1" tape="$2" bs="${ES4_TAPE_BOOTSTRAP:-localhost:9092}" st pout
   st="$(tp_state "$tape")"
   case "$st" in
     EMPTY) echo EMPTY; return 0 ;;
     COMPLETE)
       # The records landed but the process died before (or during) pinning: finish the job; if it cannot be
       # finished the tape comes back out rather than stay un-pinned.
-      if tp_tool pin "$bs" "$tape" "${ES4_TAPE_UNPINNED_GROUPS:-^es-amt-service}" >/dev/null 2>&1; then echo COMPLETE; return 0; fi ;;
+      # pin also re-runs the reader scan (a consumer that began during the produce is as dangerous after a kill as
+      # in the normal path); a breach empties the topic itself, and falls through to prove it below.
+      if pout="$(tp_tool pin "$bs" "$tape" "${ES4_TAPE_UNPINNED_GROUPS:-^es-amt-service}" 2>&1)"; then echo COMPLETE; return 0; fi
+      if printf '%s' "$pout" | grep -q 'TAPE_IMPORT_FENCE_BREACH'; then
+        # stderr: the caller captures this function's stdout as its RESULT word (EMPTY | COMPLETE | ...)
+        tp_log "ERROR: a consumer started reading $t WHILE the history was being restored (importer killed before its own scan): $(printf '%s' "$pout" | sed -n 's/^TAPE_IMPORT_FENCE_BREACH .*groups=\([^ ]*\).*/\1/p'). Whatever it consumed may already have been republished downstream - check prod's underlying.es.trades for repeated keys in the restored window" >&2
+      fi ;;
   esac
   # PARTIAL, unreadable, or complete-but-unpinnable: empty it and PROVE it is empty.
   tp_tool truncate "$bs" "$t" >/dev/null 2>&1
