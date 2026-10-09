@@ -95,8 +95,13 @@ case_ "4. group stopped: restored, pinned to the end, and the resumed consumer r
 kill "$CONSUMER" 2>/dev/null; sleep 6
 tool import "$BS" "$W/grp.tape" > "$W/i4.txt" 2>&1; rc=$?
 [ $rc = 0 ] && grep -q "TAPE_PINNED group=$G" "$W/i4.txt" && ok "rc 0 and the group was pinned" || bad "rc=$rc out=$(cat "$W/i4.txt")"
-n=$("$KBIN/kafka-console-consumer" --bootstrap-server "$BS" --topic "$T" --group "$G" --timeout-ms 8000 2>/dev/null | wc -l | tr -d ' ')
-[ "$n" = 0 ] && ok "the pinned group re-read 0 records (no duplicate stream)" || bad "pinned group re-read $n records"
+# --from-beginning only applies to a group WITHOUT committed offsets, so 0 here can only mean the pin is in force;
+# the control (a fresh group, same flag) proves the topic really does hold records to re-read.
+n=$("$KBIN/kafka-console-consumer" --bootstrap-server "$BS" --topic "$T" --group "$G" --from-beginning --timeout-ms 8000 2>/dev/null | wc -l | tr -d ' ')
+GC="$RUN-control"; GROUPS_+=("$GC")
+nc=$("$KBIN/kafka-console-consumer" --bootstrap-server "$BS" --topic "$T" --group "$GC" --from-beginning --timeout-ms 8000 2>/dev/null | wc -l | tr -d ' ')
+[ "$nc" -gt 0 ] && ok "control: an un-pinned group re-reads all $nc records (so the topic is not simply empty)" || bad "control read $nc"
+[ "$n" = 0 ] && ok "the pinned group re-read 0 records (committed offsets override --from-beginning)" || bad "pinned group re-read $n records"
 
 case_ "5. FORCED pin failure rolls the restore back to an empty topic (rc 7)"
 T=$(mk pinf); seed "$T" 1500; G2="$RUN-pinf"; GROUPS_+=("$G2")
@@ -144,6 +149,33 @@ echo "$out" | grep -q "WRAPPER_RC=1" && ok "wrapper rc 1 (a warning, not UNSAFE)
 [ "$(live "$T")" = 0 ] && ok "the topic holds 0 live records after the kill" || bad "live=$(live "$T") (a partial tape survived)"
 echo "$out" | grep -q "rolled back: $T is empty" && ok "reports the rollback it verified" || bad "no rollback line: $(echo "$out" | tail -3)"
 [ -f "$W/$T.tape" ] && ok "artifact kept for a retry" || bad "artifact lost"
+
+case_ "11. an UNRECORDED consumer that is reading the topic also blocks the restore (rc 5): we do not only trust the export's list"
+T=$(mk unrec); seed "$T" 1200
+tool export "$BS" "$T" $FROM "$W/unrec.tape" > /dev/null 2>&1; recreate "$T"
+GU="$RUN-unrecorded"; GROUPS_+=("$GU")
+"$KBIN/kafka-console-consumer" --bootstrap-server "$BS" --topic "$T" --group "$GU" --from-beginning >/dev/null 2>&1 &
+PIDS+=("$!"); UP=$!
+sleep 7
+tool import "$BS" "$W/unrec.tape" '^none' > "$W/i11.txt" 2>&1; rc=$?
+[ $rc = 5 ] && [ "$(ends "$T")" = 0 ] && ok "rc 5, nothing produced" || bad "rc=$rc ends=$(ends "$T") out=$(cat "$W/i11.txt")"
+grep -q "$GU" "$W/i11.txt" && ok "names the unrecorded reader" || bad "reader not named: $(cat "$W/i11.txt")"
+kill "$UP" 2>/dev/null; sleep 6
+
+case_ "12. a consumer that starts WHILE the history is being restored (fence 2): detected, rolled back (rc 7), named"
+T=$(mk intr); seed "$T" 1200
+tool export "$BS" "$T" $FROM "$W/intr.tape" > /dev/null 2>&1; recreate "$T"
+GI="$RUN-intruder"; GROUPS_+=("$GI")
+( TAPE_PRESERVE_FAULT=pause-before-fence2 tool import "$BS" "$W/intr.tape" '^none' > "$W/i12.txt" 2>&1; echo "RC=$?" >> "$W/i12.txt" ) &
+IP=$!
+for _ in $(seq 1 60); do grep -q "TAPE_IMPORTED" "$W/i12.txt" 2>/dev/null && break; sleep 1; done
+"$KBIN/kafka-console-consumer" --bootstrap-server "$BS" --topic "$T" --group "$GI" --from-beginning --consumer-property auto.commit.interval.ms=500 >/dev/null 2>&1 &
+PIDS+=("$!"); XP=$!
+wait "$IP"
+kill "$XP" 2>/dev/null
+grep -q "RC=7" "$W/i12.txt" && ok "rc 7" || bad "not rolled back: $(tail -3 "$W/i12.txt")"
+grep -q "TAPE_IMPORT_FENCE_BREACH.*$GI" "$W/i12.txt" && ok "the intruding group is named in the breach report" || bad "breach not reported: $(cat "$W/i12.txt")"
+[ "$(live "$T")" = 0 ] && ok "the topic was emptied again" || bad "live=$(live "$T")"
 
 case_ "9. truncate empties a topic and is idempotent"
 tool truncate "$BS" "$T" > /dev/null 2>&1; tool truncate "$BS" "$T" > /dev/null 2>&1

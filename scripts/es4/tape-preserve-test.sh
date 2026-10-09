@@ -29,10 +29,11 @@ cat > "$W/java" <<'SH'
 #!/usr/bin/env bash
 cmd=""; args=("$@")
 for i in "${!args[@]}"; do
-  case "${args[$i]}" in export|import|coverage|truncate|fingerprint|state|pin) cmd="${args[$i]}"; idx=$i; break ;; esac
+  case "${args[$i]}" in export|import|coverage|truncate|fingerprint|state|pin|topicid) cmd="${args[$i]}"; idx=$i; break ;; esac
 done
 echo "$cmd ${args[*]:$((idx+1))}" >> "$FIX/calls"
 rc=$(cat "$FIX/$cmd.rc" 2>/dev/null || echo 0)
+if [ "$cmd" = topicid ]; then [ -f "$FIX/topicid.fail" ] && exit 1; echo "TAPE_TOPIC_ID $(cat "$FIX/topicid" 2>/dev/null || echo TOPIC-INCARNATION-1)"; exit 0; fi
 if [ "$cmd" = state ]; then
   st=$(head -1 "$FIX/state.seq" 2>/dev/null)
   if [ -n "$st" ]; then tail -n +2 "$FIX/state.seq" > "$FIX/state.seq.n"; mv "$FIX/state.seq.n" "$FIX/state.seq"
@@ -55,6 +56,7 @@ fi
 [ "$cmd" = import ] && [ "$rc" = 5 ] && echo "TAPE_IMPORT_GROUP_ACTIVE group=es-trades-bridge-x members=1"
 [ "$cmd" = import ] && [ "$rc" = 6 ] && echo "TAPE_IMPORT_TIMESTAMP_TYPE topic=x type=LogAppendTime (needs CreateTime)"
 [ "$cmd" = import ] && [ "$rc" = 7 ] && echo "TAPE_IMPORT_ROLLED_BACK topic=x reason=pin-or-fence groups=es-trades-bridge-x"
+[ "$cmd" = import ] && [ "$rc" = 7 ] && [ "$(cat "$FIX/import.breach" 2>/dev/null)" = 1 ] && echo "TAPE_IMPORT_FENCE_BREACH topic=x groups=intruder-group - they may have read part of the restored tape"
 [ "$cmd" = import ] && [ "$rc" = 4 ] && echo "TAPE_IMPORT_TARGET_NOT_EMPTY topic=x liveRecords=9"
 [ "$cmd" = import ] && [ "$rc" = 1 ] && echo "TAPE_PRESERVE_ERROR java.io.IOException: boom" >&2
 exit "$rc"
@@ -164,6 +166,12 @@ fresh; tp tape_preserve_export; echo 7 > "$FIX/import.rc"; tp tape_preserve_impo
 [ $r = 1 ] && grep -q "rolled back: es.underlying.es.trades is empty" "$W/out" && ok "rc 1, topic proven empty" || bad "rc=$r out=$(cat "$W/out")"
 [ -f "$W/art/es.underlying.es.trades.tape" ] && ok "artifact kept for a retry" || bad "artifact lost"
 
+case_ "9d2. a consumer appeared WHILE the history was being restored (fence breach, rc 7): rolled back and shouted about"
+fresh; tp tape_preserve_export; echo 7 > "$FIX/import.rc"; echo 1 > "$FIX/import.breach"; tp tape_preserve_import; r=$?
+[ $r = 1 ] && grep -q "ERROR: a consumer started reading" "$W/out" && ok "an ERROR names the breach" || bad "rc=$r out=$(cat "$W/out")"
+grep -q "intruder-group" "$W/out" && grep -q "check prod's underlying.es.trades" "$W/out" && ok "names the group and says what to check downstream" || bad "no group / no downstream hint"
+[ -f "$W/art/es.underlying.es.trades.tape" ] && ok "topic proven empty and the artifact kept" || bad "artifact lost"
+
 case_ "9e. rc 6 (topic is LogAppendTime) -> nothing produced, says why, artifact kept"
 fresh; tp tape_preserve_export; echo 6 > "$FIX/import.rc"; tp tape_preserve_import; r=$?
 [ $r = 1 ] && grep -q "LogAppendTime" "$W/out" && ok "refused with the reason" || bad "rc=$r out=$(cat "$W/out")"
@@ -185,6 +193,24 @@ before="$(cksum < "$W/art/es.underlying.es.trades.tape")"; : > "$FIX/calls"; rm 
 tp tape_preserve_export; r=$?
 [ "$(calls export)" = 0 ] && [ "$(cksum < "$W/art/es.underlying.es.trades.tape")" = "$before" ] && ok "a resumed reset does NOT re-export the possibly partial topic: the good artifact is untouched" || bad "export ran / artifact changed ($(cat "$FIX/calls"))"
 grep -q "NOT exporting" "$W/out" && ok "says why" || bad "silent skip"
+# the wedge: the reset is resumed much later, AFTER the wipe has recreated the topic. The marker described the
+# old incarnation and must not disable preservation for every later reset.
+echo TOPIC-INCARNATION-2 > "$FIX/topicid"; : > "$FIX/calls"
+touch -t 202001010000 "$W/art/es.underlying.es.trades.tape.manifest"     # the artifact is also stale by now
+tp tape_preserve_export; r=$?
+[ "$(calls export)" = 1 ] && [ ! -e "$W/art/es.underlying.es.trades.importing" ] && ok "after the topic is recreated the marker is obsolete: cleared, and a fresh export runs (no permanent wedge)" || bad "wedged: calls=$(cat "$FIX/calls") marker=$(ls -A "$W/art" | grep importing)"
+grep -q "describes an earlier incarnation" "$W/out" && ok "says the marker was obsolete" || bad "silent"
+[ "$(find "$W/art/es.underlying.es.trades.tape.manifest" -newer "$FIX/topicid" | wc -l | tr -d ' ')" = 1 ] && ok "the stale artifact was replaced by the fresh export" || bad "stale artifact survived"
+# topic gone entirely
+fresh; tp tape_preserve_export; echo 124 > "$FIX/import.rc"; printf 'PARTIAL\nPARTIAL\n' > "$FIX/state.seq"; tp tape_preserve_import >/dev/null
+echo ABSENT > "$FIX/topicid"; rm -f "$FIX/import.rc" "$FIX/state.seq"; : > "$FIX/calls"; tp tape_preserve_export
+[ "$(calls export)" = 1 ] && ok "a marker for a topic that no longer exists is obsolete too" || bad "blocked on an absent topic"
+# the id cannot be read (broker down): the marker cannot be proven obsolete, so it keeps protecting the artifact
+fresh; tp tape_preserve_export; echo 124 > "$FIX/import.rc"; printf 'PARTIAL\nPARTIAL\n' > "$FIX/state.seq"; tp tape_preserve_import >/dev/null
+: > "$FIX/topicid.fail"; rm -f "$FIX/import.rc" "$FIX/state.seq"; : > "$FIX/calls"
+tp tape_preserve_export
+[ "$(calls export)" = 0 ] && [ -e "$W/art/es.underlying.es.trades.importing" ] && grep -q "NOT exporting" "$W/out" && ok "an unreadable topic id keeps the marker in force (fail toward protecting the artifact)" || bad "marker dropped without proof: $(cat "$W/out")"
+rm -f "$FIX/topicid.fail"
 
 case_ "10d. killed after the records landed but before pinning (state COMPLETE): the wrapper finishes the pin and keeps the tape"
 fresh; tp tape_preserve_export; echo 124 > "$FIX/import.rc"; printf 'COMPLETE\n' > "$FIX/state.seq"; : > "$FIX/calls"

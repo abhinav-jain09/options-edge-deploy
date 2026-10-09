@@ -21,14 +21,22 @@
 # plain wipe would have left it: a Kafka Streams app (indicator-service-es4) with wiped state stores does NOT
 # rebuild from the restored history, and nothing here changes that. Only es-amt-service reads the history.
 #
+# THE RESTORE-IN-PROGRESS MARKER (<topic>.importing) records the topic's id. It blocks export while that
+# incarnation exists (a stopped reset is resumed and would otherwise snapshot a possibly partial tape over the
+# good artifact) and is obsolete the moment the topic is recreated, so it can never disable later resets.
+#
 # THE FENCE IS A PROTOCOL, NOT A LOCK — what it guarantees and what it does not:
-#   * before the first record: a recorded group with live members refuses the import (nothing produced);
-#   * after the last record, before pinning: the same check again, then ALL-OR-NOTHING pinning - a group that
-#     appeared meanwhile, or cannot be pinned, empties the topic again (rc 7). The tape is never left standing
-#     on a group that was not fenced and pinned;
-#   * NOT guaranteed: a consumer that is started by someone else in the milliseconds between those checks has
-#     read part of the tape before the rollback. The off-box es-trades-bridge is held down by es4-cleanup.sh
-#     for the whole reset, so only a manual start during the restore can do this.
+#   * before the first record: a recorded group with live members - or ANY group with a live member assigned
+#     to the topic, recorded or not - refuses the import (nothing produced);
+#   * after the last record, before pinning: the topic is scanned again for any group that holds offsets on it
+#     or is assigned to it (nothing was pinned yet, so on a topic that was empty a moment ago that is an
+#     intruder); one empties the topic again (rc 7, TAPE_IMPORT_FENCE_BREACH, named and logged as an ERROR);
+#     then ALL-OR-NOTHING pinning - a group that cannot be pinned also empties the topic;
+#   * NOT guaranteed, and not achievable from a client: a consumer started by someone else during the few
+#     seconds of the produce reads part of the tape before the rollback, and Kafka without ACLs has nothing
+#     that can keep it out. The window is the produce itself; the off-box es-trades-bridge is held down by
+#     es4-cleanup.sh for the whole reset, so only a manual start during that window can open it - and then it
+#     is detected, rolled back and shouted about rather than silent.
 #
 # ANY OUTCOME THE TOOL DOES NOT REPORT CLEANLY IS SETTLED FROM THE TOPIC'S REAL STATE, not trusted: a killed
 # process cannot roll itself back, and an exit code is only a claim. tp_settle reads the topic (EMPTY /
@@ -138,7 +146,7 @@ PY
 # Call AFTER every producer is proven down and BEFORE the Kafka data directory is wiped.
 tape_preserve_export() {
   tp_enabled || { tp_log "disabled (ES4_TAPE_PRESERVE=off)"; return 0; }
-  local dir topics bs win from t tmp recs out rc=0
+  local dir topics bs win from t tmp recs out rc=0 mid cur obsolete
   dir="$(tp_dir)"; topics="${ES4_TAPE_PRESERVE_TOPICS:-es.underlying.es.trades}"; bs="${ES4_TAPE_BOOTSTRAP:-localhost:9092}"
   if win="$(tp_window)" && [ -n "$win" ]; then
     from="${win%% *}"
@@ -156,9 +164,22 @@ tape_preserve_export() {
     # topic may then hold a PARTIAL restored tape, and exporting it would overwrite the good artifact with a
     # partial copy that a later restore would present as complete. Keep the artifact; the wipe that follows
     # (resumed reset) empties the topic and the good artifact is restored.
+    # The marker describes ONE incarnation of the topic (its id). Once the topic has been recreated - the wipe that
+    # follows a stopped reset - it no longer applies; left in place it would silently disable preservation for
+    # every later reset. If the current id cannot be read, assume it still applies (the export would fail anyway).
     if [ -e "$dir/$t.importing" ]; then
-      tp_log "NOT exporting $t: an earlier restore did not finish cleanly (marker $dir/$t.importing) - the topic may hold a partial tape; keeping the existing artifact"
-      continue
+      mid="$(awk '{print $2}' "$dir/$t.importing" 2>/dev/null)"; cur="$(tp_topic_id "$t")"
+      if [ -z "$cur" ]; then obsolete=0
+      elif [ "$cur" = ABSENT ]; then obsolete=1
+      elif [ -n "$mid" ]; then [ "$cur" != "$mid" ] && obsolete=1 || obsolete=0
+      else obsolete=$(( $(date +%s) - $(stat -c %Y "$dir/$t.importing" 2>/dev/null || stat -f %m "$dir/$t.importing") > ${ES4_TAPE_PRESERVE_MAX_AGE_HOURS:-24} * 3600 )); fi
+      if [ "$obsolete" = 1 ]; then
+        tp_log "the restore marker for $t describes an earlier incarnation of the topic (marker id '${mid:-none}', now '${cur}') - obsolete, clearing it"
+        rm -f "$dir/$t.importing"
+      else
+        tp_log "NOT exporting $t: an earlier restore did not finish cleanly (marker $dir/$t.importing) - the topic may hold a partial tape; keeping the existing artifact"
+        continue
+      fi
     fi
     tmp="$dir/.tmp.$t.$$"
     rm -f "$tmp" "$tmp.manifest"
@@ -188,6 +209,8 @@ tape_preserve_export() {
 # outcome - including one whose process was killed and so could not roll itself back. Prints the state it
 # settled in on the LAST line (EMPTY | COMPLETE) and returns 0, or returns 2 when the topic holds a partial
 # tape that could not be emptied: the one state nothing may start on.
+# The broker's id for the topic's CURRENT incarnation (a recreated topic gets a new one); "ABSENT" if it does not exist.
+tp_topic_id() { tp_tool topicid "${ES4_TAPE_BOOTSTRAP:-localhost:9092}" "$1" 2>&1 | sed -n 's/^TAPE_TOPIC_ID //p' | tail -1; }
 tp_state() { tp_tool state "${ES4_TAPE_BOOTSTRAP:-localhost:9092}" "$1" 2>&1 | sed -n 's/^TAPE_STATE \([A-Z]*\).*/\1/p' | tail -1; }
 tp_settle() { # <topic> <tape>
   local t="$1" tape="$2" bs="${ES4_TAPE_BOOTSTRAP:-localhost:9092}" st
@@ -250,7 +273,7 @@ tape_preserve_import() {
       rc=1; continue
     fi
     if [ "${DRY:-false}" = true ]; then tp_log "DRY: would restore $t from $tape"; continue; fi
-    date +%s > "$dir/$t.importing"
+    printf '%s %s\n' "$(date +%s)" "$(tp_topic_id "$t")" > "$dir/$t.importing"
     out="$(tp_tool import "$bs" "$tape" "$skip" 2>&1)"; irc=$?
     # An exit code is a claim, not evidence: look at the topic before believing "restored". 98 = the tool said
     # success but the topic is not COMPLETE, which is handled exactly like any other unknown outcome.
@@ -264,7 +287,10 @@ tape_preserve_import() {
       *)
         # 7 = the tool rolled itself back; anything else (error, timeout kill, signal) = outcome unknown.
         # Never trust either: look at the topic and make it safe.
-        tp_log "WARNING: restore of $t did not complete cleanly (rc=$irc): $(printf '%s' "$out" | grep -E 'ROLLED_BACK|PIN_FAILED|PRESERVE_ERROR|TRUNCATE' | tail -2 | tr '\n' ' ')"
+        tp_log "WARNING: restore of $t did not complete cleanly (rc=$irc): $(printf '%s' "$out" | grep -E 'ROLLED_BACK|PIN_FAILED|PRESERVE_ERROR|TRUNCATE|FENCE_BREACH' | tail -2 | tr '\n' ' ')"
+        if printf '%s' "$out" | grep -q 'TAPE_IMPORT_FENCE_BREACH'; then
+          tp_log "ERROR: a consumer started reading $t WHILE the history was being restored: $(printf '%s' "$out" | sed -n 's/^TAPE_IMPORT_FENCE_BREACH .*groups=\([^ ]*\).*/\1/p'). The restore was rolled back, but whatever it consumed may already have been republished downstream - if that is the es-trades-bridge, check prod's underlying.es.trades for repeated keys in the restored window"
+        fi
         settled="$(tp_settle "$t" "$tape")"; sc=$?
         if [ "$sc" = 2 ]; then
           tp_log "UNSAFE: $t holds a PARTIAL tape that could not be emptied (state=$settled). Nothing may start on it."

@@ -13,6 +13,8 @@ import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.Config;
 import org.apache.kafka.clients.admin.ConsumerGroupDescription;
 import org.apache.kafka.clients.admin.GroupListing;
+import org.apache.kafka.clients.admin.MemberDescription;
+import org.apache.kafka.clients.admin.TopicDescription;
 import org.apache.kafka.clients.admin.RecordsToDelete;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -25,6 +27,7 @@ import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.PartitionInfo;
 import org.apache.kafka.common.GroupType;
+import org.apache.kafka.common.TopicCollection;
 import org.apache.kafka.common.KafkaFuture;
 import org.apache.kafka.common.config.ConfigResource;
 import org.apache.kafka.common.TopicPartition;
@@ -48,6 +51,7 @@ import org.apache.kafka.common.serialization.ByteArraySerializer;
  *   truncate    bootstrap topic                     advance every partition's log start to its end (empty it)
  *   state       bootstrap inFile                    EMPTY | COMPLETE | PARTIAL: what the topic holds vs the export
  *   pin         bootstrap inFile [skipGroupsRx]     pin the recorded groups to the topic's current end
+ *   topicid     bootstrap topic                     print the topic's id (a recreated topic has a new one)
  *
  * CONSUMER GROUPS. Whoever read the topic before the wipe will, after it, be a brand-new group that reads the
  * restored history from the start (or from "latest" resolved before the import began). Off-box that is a
@@ -71,7 +75,8 @@ public final class TapePreserve {
     private static final String MAGIC = "ES4TAPE1";
     /** TEST ONLY (tape-preserve-broker-test.sh): force a failure so the rollback paths can be exercised on a real
      *  broker. "produce-midway" fails an import half-way; "hang-midway" stalls it half-way so an outer timeout has to
-     *  KILL it (a process that dies cannot roll itself back); "pin" makes every pin fail. Never set in production. */
+     *  KILL it (a process that dies cannot roll itself back); "pause-before-fence2" waits 20s after the records
+     *  landed so a test can start an intruding consumer; "pin" makes every pin fail. Never set in production. */
     private static final String FAULT = System.getenv("TAPE_PRESERVE_FAULT") == null ? "" : System.getenv("TAPE_PRESERVE_FAULT");
     private static final Duration POLL = Duration.ofMillis(500);
     private static final long DEADLINE_MS = 15 * 60_000L;   // a stalled broker must not hang the clean
@@ -86,6 +91,7 @@ public final class TapePreserve {
                 case "fingerprint" -> { need(a, 4); exit(fingerprint(a[1], a[2], Long.parseLong(a[3]))); }
                 case "truncate" -> { need(a, 3); exit(truncate(a[1], a[2])); }
                 case "state" -> { need(a, 3); exit(state(a[1], Path.of(a[2]))); }
+                case "topicid" -> { need(a, 3); exit(topicId(a[1], a[2])); }
                 case "pin" -> { if (a.length != 3 && a.length != 4) usage(); exit(pinCommand(a[1], Path.of(a[2]), a.length == 4 ? a[3] : "")); }
                 default -> usage();
             }
@@ -135,10 +141,62 @@ public final class TapePreserve {
         if (raw.isEmpty()) return out;
         for (String g : raw.split(",")) {
             g = g.trim();
-            if (g.isEmpty() || (!skipRx.isEmpty() && g.matches(skipRx.startsWith("^") ? skipRx + ".*" : ".*" + skipRx + ".*"))) continue;
+            if (g.isEmpty() || skipped(g, skipRx)) continue;
             out.add(g);
         }
         return out;
+    }
+
+    private static boolean skipped(String groupId, String skipRx) {
+        return !skipRx.isEmpty() && groupId.matches(skipRx.startsWith("^") ? skipRx + ".*" : ".*" + skipRx + ".*");
+    }
+
+    /**
+     * Groups that read {@code topic} RIGHT NOW (a live member assigned one of its partitions) and, when
+     * {@code committedAbove} is given (the end offset of each partition before anything was produced), groups
+     * whose committed offset on a partition is BEYOND that - a commit AT the starting position (a consumer that
+     * subscribed to the empty topic and left) proves nothing was read. It is not limited to the groups recorded
+     * at export: a consumer we have never heard of that is reading the topic while history is injected is exactly
+     * as dangerous as the bridge. Groups matching {@code skipRx} (es-amt-service) are not readers in this sense.
+     */
+    private static List<String> readers(String bootstrap, String topic, String skipRx, long[] committedAbove) throws Exception {
+        TreeSet<String> out = new TreeSet<>();
+        try (Admin admin = admin(bootstrap)) {
+            for (GroupListing g : admin.listGroups().all().get()) {
+                String id = g.groupId();
+                if (skipped(id, skipRx)) continue;
+                boolean strict = g.type().map(t -> t == GroupType.CLASSIC || t == GroupType.CONSUMER).orElse(true);
+                try {
+                    ConsumerGroupDescription d = admin.describeConsumerGroups(List.of(id)).describedGroups().get(id).get();
+                    for (MemberDescription m : d.members())
+                        for (TopicPartition tp : m.assignment().topicPartitions())
+                            if (tp.topic().equals(topic)) out.add(id);
+                    if (committedAbove != null)
+                        for (Map.Entry<TopicPartition, OffsetAndMetadata> o : admin.listConsumerGroupOffsets(id).partitionsToOffsetAndMetadata().get().entrySet())
+                            if (o.getKey().topic().equals(topic) && o.getValue() != null
+                                    && o.getValue().offset() > committedAbove[o.getKey().partition()]) out.add(id);
+                } catch (Exception e) {
+                    // Schema Registry ("schema-registry", protocol sr), Connect workers and the like are classic groups
+                    // that are not consumer-protocol groups: they cannot be reading a topic through an assignment and
+                    // describeConsumerGroups rejects them. Anything ELSE we cannot inspect is not guessed at.
+                    Throwable c = e instanceof ExecutionException && e.getCause() != null ? e.getCause() : e;
+                    boolean notAConsumerGroup = c instanceof IllegalArgumentException && String.valueOf(c.getMessage()).contains("not a consumer group");
+                    if (strict && !notAConsumerGroup) throw new IOException("cannot inspect group " + id + " - refusing to guess whether it reads " + topic + ": " + e);
+                }
+            }
+        }
+        return new ArrayList<>(out);
+    }
+
+    private static int topicId(String bootstrap, String topic) throws Exception {
+        try (Admin admin = admin(bootstrap)) {
+            TopicDescription d = admin.describeTopics(TopicCollection.ofTopicNames(List.of(topic))).allTopicNames().get().get(topic);
+            System.out.println("TAPE_TOPIC_ID " + d.topicId());
+        } catch (ExecutionException e) {
+            if (e.getCause() instanceof org.apache.kafka.common.errors.UnknownTopicOrPartitionException) { System.out.println("TAPE_TOPIC_ID ABSENT"); return 0; }
+            throw e;
+        }
+        return 0;
     }
 
     /** Recorded groups that currently have live members; an unknown group has none (a wipe removes them). */
@@ -330,7 +388,11 @@ public final class TapePreserve {
         // Fence 1 (before the first record): a recorded group with live members would consume the restored
         // history as it is produced (the es4 -> prod bridge would republish it into prod).
         List<String> groups = recordedGroups(mf, skipGroupsRx);
-        if (!activeGroups(bootstrap, groups).isEmpty()) return 5;
+        TreeSet<String> blockers = new TreeSet<>(activeGroups(bootstrap, groups));
+        for (String r : readers(bootstrap, topic, skipGroupsRx, null)) {
+            if (blockers.add(r)) System.out.println("TAPE_IMPORT_GROUP_ACTIVE group=" + r + " members=assigned-to-topic (not recorded at export)");
+        }
+        if (!blockers.isEmpty()) return 5;
 
         // The whole point is that AMT sees the ORIGINAL timestamps; a LogAppendTime topic overwrites them with
         // the import time and the restore would silently achieve nothing. (es.underlying.es.trades was once
@@ -394,6 +456,16 @@ public final class TapePreserve {
         System.out.println("TAPE_IMPORTED topic=" + topic + " records=" + expectRecords + " partitions=" + expectParts);
         // Fence 2 + pin, all or nothing: a group that appeared while we produced may have read part of the tape,
         // and a group that cannot be pinned would re-read all of it. Either way the topic goes back to empty.
+        if ("pause-before-fence2".equals(FAULT)) Thread.sleep(20_000);
+        // Nothing has been pinned yet, so on a topic that was empty a moment ago ANY group holding offsets on it,
+        // or a live member assigned to it, started reading during the restore.
+        List<String> breach = readers(bootstrap, topic, skipGroupsRx, base);
+        if (!breach.isEmpty()) {
+            try { truncate(bootstrap, topic); } catch (Exception t) { System.out.println("TAPE_IMPORT_TRUNCATE_FAILED topic=" + topic + " " + t); }
+            System.out.println("TAPE_IMPORT_FENCE_BREACH topic=" + topic + " groups=" + String.join(",", breach)
+                    + " - they may have read part of the restored tape; anything they republished downstream must be checked");
+            return 7;
+        }
         List<String> failed = pin(bootstrap, topic, groups);
         if (!failed.isEmpty()) {
             try { truncate(bootstrap, topic); System.out.println("TAPE_IMPORT_ROLLED_BACK topic=" + topic + " reason=pin-or-fence groups=" + String.join(",", failed)); }
