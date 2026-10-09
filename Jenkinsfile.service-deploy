@@ -92,7 +92,13 @@ pipeline {
       'bleedingoptions-gamma-lab',
       // bleedingoptions tenant — the email sender. Same reason it lives here and not in
       // config.xml: this job regenerates its parameters from this file on every build.
-      'bleedingoptions-email'
+      'bleedingoptions-email',
+      // zerodte-research-writer: the dedicated v7 research writer (increment 9e, services.yaml:208),
+      // same image as vix-option-inteligence, its own Deployment at replicas 0. THIS job is its only
+      // deploy path — Jenkinsfile.zerodte-writer-activate requires the Deployment to already exist at
+      // the exact digest before it will scale it to one replica, it does not create or build anything
+      // itself. Selecting it here deploys it inert; activation is the separate job's job.
+      'zerodte-research-writer'
     ], description: 'Which service to deploy (dir under k8s/services; spread-skew and its writer are intentionally unavailable under the 2026-07-26 operator hold).')
     choice(name: 'ENVIRONMENT', choices: ['dev', 'production'],
       description: 'Target environment — selects the overlay + deployer kubeconfig (oeProfile).')
