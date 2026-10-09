@@ -473,6 +473,10 @@ if [ "$DESIRED_TOTAL" -eq 0 ]; then
   echo "=== $SERVICE deployed to $ENVIRONMENT (replicas 0): $PINNED_IMAGE ==="
   exit 0
 fi
+# BEGIN HEALTH_GATE — scripts/deploy/service-deploy-health-gate-test.sh extracts and sources
+# everything between this marker and END HEALTH_GATE, verbatim, against a mocked kubectl/yq. Keep
+# this block self-contained (NAMESPACE, DEPLOYMENTS, PINNED_DIGEST as its only inputs, gate_fail as
+# its only output) so the extraction stays valid as the surrounding script changes.
 gate_fail=0
 for dep in $DEPLOYMENTS; do
   desired="$(kubectl -n "$NAMESPACE" get deployment "$dep" -o jsonpath='{.spec.replicas}' 2>/dev/null || echo 0)"
@@ -525,6 +529,7 @@ for dep in $DEPLOYMENTS; do
     gate_fail=1
   fi
 done
+# END HEALTH_GATE
 
 if [ -n "${HEALTH_URL:-}" ]; then
   # `rollout status` returns the moment the Deployment is Available, but a web
