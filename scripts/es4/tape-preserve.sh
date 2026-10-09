@@ -27,10 +27,16 @@
 #   * a consumed artifact is renamed away, so one export restores into one wipe;
 #   * the target must be empty (log start == log end).
 #
-# KNOWN EFFECT, by design: other consumers of es.underlying.es.trades that read from earliest (cvd,
-# footprint, indicators, tape-zones) will re-derive their outputs from the restored window. That
-# rebuilds the screen, and it re-emits records the dev/prod mirrors already hold — consumers of the
-# mirrored es.* series must tolerate repeats (they already do after every es4 restart).
+# CONSUMER GROUPS — the part that is easy to get wrong. After a wipe every group that read the tape is
+# brand new, so each would re-read the restored history: the off-box es-trades-bridge would republish
+# it into PROD's trade tape (duplicate trades), and on-box services would re-derive a session of
+# outputs that the mirrors then re-append to dev/prod. So:
+#   * export records the groups that held offsets on the topic (visible in its log line);
+#   * import REFUSES (nothing is produced) while any of them has live members — pause the
+#     es-trades-bridge launchd job first (es4-cleanup.sh does) — and tells you which;
+#   * after a successful import every recorded group is pinned to the restored end, so each starts
+#     exactly where it would have after a plain wipe. A group that cannot be pinned is a WARNING that
+#     names it. es-amt-service is excluded (it assigns and seeks by timestamp; ES4_TAPE_UNPINNED_GROUPS).
 #
 # Knobs (all optional):
 #   ES4_TAPE_PRESERVE=off             disable both steps
@@ -39,6 +45,7 @@
 #   ES4_TAPE_PRESERVE_MAX_AGE_HOURS   refuse older artifacts (default 24)
 #   ES4_TAPE_LOOKBACK_HOURS           must equal ES_AMT_REPLAY_LOOKBACK_HOURS on es-amt-service (default 34)
 #   ES4_TAPE_MARGIN_HOURS             extra history before the horizon (default 2)
+#   ES4_TAPE_UNPINNED_GROUPS          regex of groups NOT pinned (default ^es-amt-service)
 #   ES4_TAPE_BOOTSTRAP / ES4_KAFKA_LIBS / ES4_TAPE_JAVA / ES4_TAPE_TIMEOUT_S
 #   ES4_TAPE_CAL_DIR / ES4_TAPE_NOW_EPOCH   (tests: calendar module dir, frozen clock)
 
@@ -130,7 +137,7 @@ tape_preserve_export() {
         mv -f "$tmp" "$dir/$t.tape" && mv -f "$tmp.manifest" "$dir/$t.tape.manifest" \
           || { tp_log "WARNING: could not publish the export of $t"; rc=1; continue; }
         printf '%s\n' "$required" > "$dir/$t.required"
-        tp_log "preserved $t: $recs records ($(printf '%s' "$out" | sed -n 's/.*bytes=//p') bytes) -> $dir/$t.tape"
+        tp_log "preserved $t: $recs records -> $dir/$t.tape (readers to pin on restore: $(printf '%s' "$out" | sed -n 's/.*groups=//p'))"
       else
         rm -f "$tmp" "$tmp.manifest"
         tp_log "WARNING: $t held no records in the window (already wiped?) — any earlier artifact is kept for a resumed reset"
@@ -160,10 +167,15 @@ tape_preserve_import() {
       rc=1; continue
     fi
     if [ "${DRY:-false}" = true ]; then tp_log "DRY: would restore $t from $tape"; continue; fi
-    out="$(tp_tool import "$bs" "$tape" 2>&1)"; irc=$?
+    out="$(tp_tool import "$bs" "$tape" "${ES4_TAPE_UNPINNED_GROUPS:-^es-amt-service}" 2>&1)"; irc=$?
     case "$irc" in
       0)
         tp_log "restored $t: $(printf '%s' "$out" | grep -E 'TAPE_IMPORTED|TAPE_IMPORT_SKIPPED' | tail -1)"
+        printf '%s\n' "$out" | grep '^TAPE_PINNED' | while read -r l; do tp_log "pinned to the restored end: ${l#TAPE_PINNED }"; done
+        if printf '%s\n' "$out" | grep -q '^TAPE_PIN_FAILED'; then
+          tp_log "WARNING: could not pin: $(printf '%s' "$out" | sed -n 's/^TAPE_PIN_FAILED group=\([^ ]*\).*/\1/p' | tr '\n' ' ')— they will RE-READ the restored history"
+          rc=1
+        fi
         required="$(cat "$dir/$t.required" 2>/dev/null)"
         if [ -n "$required" ]; then
           if tp_tool coverage "$bs" "$t" "$required" >/dev/null 2>&1; then
@@ -178,6 +190,7 @@ tape_preserve_import() {
         rm -f "$dir/$t.required"
         ;;
       4) tp_log "WARNING: $t already holds records — not importing over them (artifact kept)"; rc=1 ;;
+      5) tp_log "WARNING: NOT restoring $t — consumer group(s) that read it are ACTIVE: $(printf '%s' "$out" | sed -n 's/^TAPE_IMPORT_GROUP_ACTIVE group=\([^ ]*\).*/\1/p' | tr '\n' ' ')— restored history would stream to them (the es4->prod bridge would republish it into prod). Pause them (launchctl bootout gui/\$(id -u)/com.optionsedge.es-trades-bridge-192-168-100-252-9092) and rerun, or accept es-amt-service NOT_READY"; rc=1 ;;
       *) tp_log "WARNING: restore of $t failed (rc=$irc; the topic was truncated back to empty): $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; rc=1 ;;
     esac
   done

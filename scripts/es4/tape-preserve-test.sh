@@ -36,9 +36,16 @@ rc=$(cat "$FIX/$cmd.rc" 2>/dev/null || echo 0)
 if [ "$cmd" = export ] && [ "$rc" = 0 ]; then
   out="${args[$((idx+4))]}"; n=$(cat "$FIX/export.records" 2>/dev/null || echo 5)
   : > "$out"; printf 'records=%s\ntopic=%s\n' "$n" "${args[$((idx+2))]}" > "$out.manifest"
-  echo "TAPE_EXPORTED topic=${args[$((idx+2))]} records=$n bytes=123"
+  echo "TAPE_EXPORTED topic=${args[$((idx+2))]} records=$n bytes=123 groups=es-trades-bridge-x,indicator-service-es4"
 fi
-[ "$cmd" = import ] && [ "$rc" = 0 ] && echo "TAPE_IMPORTED topic=x records=5 partitions=4"
+if [ "$cmd" = import ] && [ "$rc" = 0 ]; then
+  echo "TAPE_IMPORTED topic=x records=5 partitions=4"
+  case "$(cat "$FIX/import.pin" 2>/dev/null || echo ok)" in
+    ok)   echo "TAPE_PINNED group=es-trades-bridge-x partitions=4"; echo "TAPE_PINNED group=indicator-service-es4 partitions=4" ;;
+    fail) echo "TAPE_PINNED group=indicator-service-es4 partitions=4"; echo "TAPE_PIN_FAILED group=es-trades-bridge-x reason=GroupNotEmptyException: busy" ;;
+  esac
+fi
+[ "$cmd" = import ] && [ "$rc" = 5 ] && echo "TAPE_IMPORT_GROUP_ACTIVE group=es-trades-bridge-x members=1"
 [ "$cmd" = import ] && [ "$rc" = 4 ] && echo "TAPE_IMPORT_TARGET_NOT_EMPTY topic=x liveRecords=9"
 [ "$cmd" = import ] && [ "$rc" = 1 ] && echo "TAPE_PRESERVE_ERROR java.io.IOException: boom" >&2
 exit "$rc"
@@ -119,6 +126,24 @@ case_ "11. import ok but the tape is still SHORT of the prior RTH open -> warn, 
 fresh; tp tape_preserve_export; echo 3 > "$FIX/coverage.rc"; tp tape_preserve_import; r=$?
 [ $r = 1 ] && grep -q "does NOT reach the prior RTH open" "$W/out" && ok "short coverage is surfaced, not hidden" || bad "rc=$r out=$(cat "$W/out")"
 [ -f "$W/art/consumed.es.underlying.es.trades.tape" ] && ok "the imported artifact is still retired" || bad "not retired"
+
+case_ "9b. a recorded consumer group is ACTIVE -> refuse, name it, keep the artifact (never stream history to prod)"
+fresh; tp tape_preserve_export; echo 5 > "$FIX/import.rc"; tp tape_preserve_import; r=$?
+[ $r = 1 ] && [ -f "$W/art/es.underlying.es.trades.tape" ] && ok "refused; artifact kept; rc 1" || bad "rc=$r artifact=$(ls -A "$W/art")"
+grep -q "es-trades-bridge-x" "$W/out" && grep -q "ACTIVE" "$W/out" && ok "names the active group" || bad "group not named: $(cat "$W/out")"
+grep -q "launchctl bootout" "$W/out" && ok "tells the operator how to pause the bridge" || bad "no remedy printed"
+
+case_ "9c. success pins every recorded group to the restored end and says so"
+fresh; tp tape_preserve_export; : > "$FIX/calls"; tp tape_preserve_import; r=$?
+[ $r = 0 ] && grep -q "pinned to the restored end: group=es-trades-bridge-x" "$W/out" && grep -q "pinned to the restored end: group=indicator-service-es4" "$W/out" && ok "both groups reported pinned" || bad "pins not reported (rc=$r): $(cat "$W/out")"
+grep -q "^import .*\^es-amt-service" "$FIX/calls" && ok "es-amt-service is passed as the group NOT to pin" || bad "skip regex not passed: $(grep '^import' "$FIX/calls")"
+: > "$FIX/calls"; fresh; tp tape_preserve_export; ES4_TAPE_UNPINNED_GROUPS='^custom' tp tape_preserve_import
+grep -q "^import .*\^custom" "$FIX/calls" && ok "the skip regex is configurable" || bad "override ignored"
+
+case_ "9d. a group that cannot be pinned is a WARNING naming it (import itself still succeeded and is retired)"
+fresh; tp tape_preserve_export; echo fail > "$FIX/import.pin"; tp tape_preserve_import; r=$?
+[ $r = 1 ] && grep -q "could not pin: es-trades-bridge-x" "$W/out" && grep -q "RE-READ the restored history" "$W/out" && ok "warns which group will re-read the history" || bad "rc=$r out=$(cat "$W/out")"
+[ -f "$W/art/consumed.es.underlying.es.trades.tape" ] && ok "the artifact is still retired (the topic was restored)" || bad "not retired"
 
 case_ "12. two topics are handled independently"
 fresh; TOPICS="a.t b.t" tp tape_preserve_export
