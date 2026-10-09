@@ -20,6 +20,11 @@
 # Invariant enforced here: wipe _schemas AND every data topic TOGETHER, with ALL producers
 # fenced, so no message can outlive its schema id.
 #
+# The ES trade tape (es.underlying.es.trades) is carried across the wipe — exported before it, imported
+# after the topics are recreated and before any app is restored — so es-amt-service, which needs the
+# prior RTH session, starts READY. Plain-JSON values, so the schema-id invariant above does not apply to it.
+# See tape-preserve.sh (failure is a warning, never an abort).
+#
 # Safety: preflight before ANY mutation; fail-closed quiescence (verified, not best-effort);
 # durable deployment snapshot (survives interruption); topics come from the topics.env SSOT,
 #         NOT from a live-broker snapshot; single-instance lock;
@@ -138,6 +143,10 @@ fi
 . "$SCRIPT_DIR/strike-archive-interlock.sh" \
   || die "cannot load $SCRIPT_DIR/strike-archive-interlock.sh (rsync scripts/ , not a single file)"
 command -v kafka-get-offsets >/dev/null 2>&1 || PATH="$SCRIPT_DIR/kafka-cli-shim:$PATH"
+# The ES trade tape survives the wipe so es-amt-service starts READY (tape-preserve.sh). Non-fatal by design.
+# shellcheck source=/dev/null
+. "$SCRIPT_DIR/tape-preserve.sh" \
+  || die "cannot load $SCRIPT_DIR/tape-preserve.sh (rsync scripts/ , not a single file)"
 if [ ! -s "$STATE" ]; then
   log "strike archive interlock (preflight — nothing has been touched yet)"
   strike_archive_interlock "preflight" \
@@ -290,6 +299,12 @@ fi
 log "strike archive interlock (producers quiesced — the log can no longer grow)"
 strike_archive_interlock "before the wipe" \
   || die "unarchived es.futures.footprint.strike records on es4 — the app is DOWN and $STATE holds its replica counts; Kafka is up so the archive can read it: run the es4 archive, then rerun to resume (see above)"
+# Producers are proven down above, so the tape can no longer grow: copy the window es-amt-service needs
+# (its replay horizon, EsAmtSession.replayHorizonMs) out of the Kafka volume before the volume is wiped.
+# Failure is a WARNING, never an abort — an emergency clean must still be able to wipe.
+log "preserving the ES trade tape window for es-amt-service (outside the Kafka volume; non-fatal)"
+tape_preserve_export \
+  || echo "  WARNING: ES trade tape NOT preserved — es-amt-service will be NOT_READY until a session roll (ES4_TAPE_PRESERVE=off silences this)" >&2
 log "docker compose down (Kafka and all local infra stopped; Docker container logs removed)"
 run "(cd '$INFRA_DIR' && docker compose down)"
 log "wiping Kafka data volume CONTENTS ($KAFKA_DATA/* — all topics + _schemas), Kafka offline"
@@ -372,6 +387,11 @@ log "reconciling required core es.* topic contracts (create-es-topics.sh)"
 # the broker an independent source of truth.
 log "verifying declared topics were created (missing/narrower are fatal; apps still down)"
 run "bash '$SCRIPT_DIR/verify-topic-partition-contract.sh' created"
+# The topics now exist EMPTY and no app is running: put the preserved tape back (original partitions and
+# timestamps) BEFORE anything can start, so es-amt-service finds its prior session on its first seek.
+log "restoring the preserved ES trade tape (non-fatal; a failed restore leaves the topic empty)"
+tape_preserve_import \
+  || echo "  WARNING: ES trade tape NOT restored — es-amt-service will be NOT_READY until a session roll" >&2
 log "docker compose up -d (start mm2 + any remaining infra now that topics exist)"
 run "(cd '$INFRA_DIR' && docker compose up -d)"
 

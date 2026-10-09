@@ -488,6 +488,11 @@ jobs:
       - name: es4 clean-reset strike archive interlock
         run: bash scripts/es4/strike-archive-interlock-test.sh
 
+      # The same wipe also erases the ES trade tape es-amt-service needs for its prior-session readiness.
+      # tape-preserve carries it across (original partitions + timestamps); failure must only ever warn.
+      - name: es4 clean-reset preserves the ES trade tape for es-amt-service
+        run: bash scripts/es4/tape-preserve-test.sh
+
       - name: Validate image-pinning completeness (every rendered image wired into resolve-images + apply)
         run: scripts/ci/validate-image-pinning.sh
 
