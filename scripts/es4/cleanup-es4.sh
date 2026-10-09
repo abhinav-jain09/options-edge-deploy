@@ -390,8 +390,13 @@ run "bash '$SCRIPT_DIR/verify-topic-partition-contract.sh' created"
 # The topics now exist EMPTY and no app is running: put the preserved tape back (original partitions and
 # timestamps) BEFORE anything can start, so es-amt-service finds its prior session on its first seek.
 log "restoring the preserved ES trade tape (non-fatal; a failed restore leaves the topic empty)"
-tape_preserve_import \
-  || echo "  WARNING: ES trade tape NOT restored — es-amt-service will be NOT_READY until a session roll" >&2
+tape_preserve_import && tp_rc=0 || tp_rc=$?
+# The one outcome that is not a warning: a PARTIAL tape that could not be emptied. A partial prior session is
+# worse than none (es-amt-service would trust it), so nothing starts on it; $STATE keeps the replica counts,
+# empty the topic (TapePreserve truncate) and rerun to resume.
+[ "$tp_rc" != 2 ] || die "the restored ES trade tape is PARTIAL and could not be emptied — no app was started on it; $STATE holds the replica counts: run 'TapePreserve truncate' on es.underlying.es.trades, then rerun to resume"
+[ "$tp_rc" = 0 ] \
+  || echo "  WARNING: ES trade tape NOT restored (or restored with warnings above) — es-amt-service may be NOT_READY until a session roll" >&2
 log "docker compose up -d (start mm2 + any remaining infra now that topics exist)"
 run "(cd '$INFRA_DIR' && docker compose up -d)"
 

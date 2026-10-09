@@ -17,6 +17,24 @@
 # WHY IT IS SAFE TO RESTORE: the tape values are plain JSON, not Schema-Registry-framed Avro, so no record
 # carries a schema id that the wiped registry could resolve differently (see cleanup-es4.sh header).
 #
+# PINNED CONSUMERS START COLD, ON PURPOSE. Pinning a group to the restored end makes it start exactly where a
+# plain wipe would have left it: a Kafka Streams app (indicator-service-es4) with wiped state stores does NOT
+# rebuild from the restored history, and nothing here changes that. Only es-amt-service reads the history.
+#
+# THE FENCE IS A PROTOCOL, NOT A LOCK — what it guarantees and what it does not:
+#   * before the first record: a recorded group with live members refuses the import (nothing produced);
+#   * after the last record, before pinning: the same check again, then ALL-OR-NOTHING pinning - a group that
+#     appeared meanwhile, or cannot be pinned, empties the topic again (rc 7). The tape is never left standing
+#     on a group that was not fenced and pinned;
+#   * NOT guaranteed: a consumer that is started by someone else in the milliseconds between those checks has
+#     read part of the tape before the rollback. The off-box es-trades-bridge is held down by es4-cleanup.sh
+#     for the whole reset, so only a manual start during the restore can do this.
+#
+# ANY OUTCOME THE TOOL DOES NOT REPORT CLEANLY IS SETTLED FROM THE TOPIC'S REAL STATE, not trusted: a killed
+# process cannot roll itself back, and an exit code is only a claim. tp_settle reads the topic (EMPTY /
+# COMPLETE / PARTIAL), finishes a complete-but-unpinned restore or empties the rest, and PROVES it. If a
+# partial tape cannot be emptied the function returns 2 and cleanup-es4.sh stops before any app starts.
+#
 # FAILURE POLICY — NON-FATAL, fail toward the old behaviour. Both functions return non-zero on failure
 # and the caller only warns: an emergency clean (disk full) must still be able to wipe, and AMT without
 # a preserved tape is merely not-ready, exactly as before. What this file refuses to do is leave a
@@ -24,7 +42,10 @@
 #   * an import that fails part-way truncates the topic again (TapePreserve), never leaving half a tape;
 #   * a preserved file older than ES4_TAPE_PRESERVE_MAX_AGE_HOURS (24) is never imported — a stale
 #     artifact must not be restored into a later, unrelated wipe;
-#   * a consumed artifact is renamed away, so one export restores into one wipe;
+#   * a consumed artifact is retired (renamed, else removed, else an ERROR), so one export restores into one wipe;
+#   * the artifact must run THROUGH the close of the prior session as of import time, or it is refused (an
+#     abandoned earlier reset's mid-session export would otherwise pass AMT's timestamp test while partial);
+#   * the target topic must be CreateTime - a LogAppendTime topic would overwrite every restored timestamp;
 #   * the target must be empty (log start == log end).
 #
 # CONSUMER GROUPS — the part that is easy to get wrong. After a wipe every group that read the tape is
@@ -46,7 +67,7 @@
 #   ES4_TAPE_LOOKBACK_HOURS           must equal ES_AMT_REPLAY_LOOKBACK_HOURS on es-amt-service (default 34)
 #   ES4_TAPE_MARGIN_HOURS             extra history before the horizon (default 2)
 #   ES4_TAPE_UNPINNED_GROUPS          regex of groups NOT pinned (default ^es-amt-service)
-#   ES4_TAPE_BOOTSTRAP / ES4_KAFKA_LIBS / ES4_TAPE_JAVA / ES4_TAPE_TIMEOUT_S
+#   ES4_TAPE_BOOTSTRAP / ES4_KAFKA_LIBS / ES4_TAPE_JAVA / ES4_TAPE_TIMEOUT_S / ES4_TAPE_IMPORT_TIMEOUT_S
 #   ES4_TAPE_CAL_DIR / ES4_TAPE_NOW_EPOCH   (tests: calendar module dir, frozen clock)
 
 _TP_SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -70,7 +91,9 @@ tp_java() {
 # TapePreserve <args...>; stdout/stderr pass through, exit status is the tool's.
 tp_tool() {
   local java; java="$(tp_java)" || { echo "no java found" >&2; return 127; }
-  timeout "${ES4_TAPE_TIMEOUT_S:-900}" "$java" -cp "${ES4_KAFKA_LIBS:-/opt/kafka/current/libs}/*" \
+  local tmo="${ES4_TAPE_TIMEOUT_S:-900}"
+  [ "${1:-}" = import ] && tmo="${ES4_TAPE_IMPORT_TIMEOUT_S:-$tmo}"
+  timeout --kill-after=30 "$tmo" "$java" -cp "${ES4_KAFKA_LIBS:-/opt/kafka/current/libs}/*" \
     "$_TP_SELF_DIR/tape-preserve/TapePreserve.java" "$@"
 }
 
@@ -153,18 +176,56 @@ tape_preserve_export() {
 }
 
 # --------------------------------------------------------------------------------------------- import
+# Brings the topic to a state that is SAFE to start apps on after an import that did not report a clean
+# outcome - including one whose process was killed and so could not roll itself back. Prints the state it
+# settled in on the LAST line (EMPTY | COMPLETE) and returns 0, or returns 2 when the topic holds a partial
+# tape that could not be emptied: the one state nothing may start on.
+tp_state() { tp_tool state "${ES4_TAPE_BOOTSTRAP:-localhost:9092}" "$1" 2>&1 | sed -n 's/^TAPE_STATE \([A-Z]*\).*/\1/p' | tail -1; }
+tp_settle() { # <topic> <tape>
+  local t="$1" tape="$2" bs="${ES4_TAPE_BOOTSTRAP:-localhost:9092}" st
+  st="$(tp_state "$tape")"
+  case "$st" in
+    EMPTY) echo EMPTY; return 0 ;;
+    COMPLETE)
+      # The records landed but the process died before (or during) pinning: finish the job; if it cannot be
+      # finished the tape comes back out rather than stay un-pinned.
+      if tp_tool pin "$bs" "$tape" "${ES4_TAPE_UNPINNED_GROUPS:-^es-amt-service}" >/dev/null 2>&1; then echo COMPLETE; return 0; fi ;;
+  esac
+  # PARTIAL, unreadable, or complete-but-unpinnable: empty it and PROVE it is empty.
+  tp_tool truncate "$bs" "$t" >/dev/null 2>&1
+  st="$(tp_state "$tape")"
+  if [ "$st" = EMPTY ]; then echo EMPTY; return 0; fi
+  echo "${st:-UNKNOWN}"; return 2
+}
+
+# Retire the artifact so one export restores into one wipe. A rename that fails must not leave it active
+# (it could be imported into a later incarnation): fall back to removing it, and say so if even that fails.
+tp_retire() { # <dir> <topic>
+  local dir="$1" t="$2"
+  mv -f "$dir/$t.tape" "$dir/consumed.$t.tape" 2>/dev/null && mv -f "$dir/$t.tape.manifest" "$dir/consumed.$t.tape.manifest" 2>/dev/null && return 0
+  rm -f "$dir/$t.tape" "$dir/$t.tape.manifest"
+  if [ -e "$dir/$t.tape" ] || [ -e "$dir/$t.tape.manifest" ]; then
+    tp_log "ERROR: could not retire the artifact for $t (still at $dir/$t.tape) - remove it by hand or it may be restored into a later wipe"
+    return 1
+  fi
+  tp_log "WARNING: could not rename the artifact for $t; it was removed instead"
+}
+
 # Call AFTER the topics are recreated (empty) and BEFORE any app is restored.
+# Returns 0 restored (or nothing to do); 1 not restored / needs attention (a warning); 2 UNSAFE - the topic
+# holds a partial tape that could not be emptied, and the caller must NOT start anything on it.
 tape_preserve_import() {
   tp_enabled || { tp_log "disabled (ES4_TAPE_PRESERVE=off)"; return 0; }
-  local dir topics bs t tape mf age_s max_s required reqclose maxts win out rc=0 irc
+  local dir topics bs t tape mf age_s max_s required reqclose maxts win out rc=0 irc settled sc skip
   dir="$(tp_dir)"; topics="${ES4_TAPE_PRESERVE_TOPICS:-es.underlying.es.trades}"; bs="${ES4_TAPE_BOOTSTRAP:-localhost:9092}"
+  skip="${ES4_TAPE_UNPINNED_GROUPS:-^es-amt-service}"
   max_s=$(( ${ES4_TAPE_PRESERVE_MAX_AGE_HOURS:-24} * 3600 ))
   for t in $topics; do
     tape="$dir/$t.tape"; mf="$tape.manifest"
     if [ ! -f "$tape" ] || [ ! -f "$mf" ]; then tp_log "no preserved $t to restore"; continue; fi
     age_s=$(( $(date +%s) - $(stat -c %Y "$mf" 2>/dev/null || stat -f %m "$mf") ))
     if [ "$age_s" -gt "$max_s" ]; then
-      tp_log "WARNING: preserved $t is $((age_s / 3600))h old (> $((max_s / 3600))h) — refusing to restore a stale tape into this wipe"
+      tp_log "WARNING: preserved $t is $((age_s / 3600))h old (> $((max_s / 3600))h) - refusing to restore a stale tape into this wipe"
       rc=1; continue
     fi
     # The artifact must run THROUGH the close of the prior session as of NOW. Timestamps alone would pass AMT's
@@ -181,30 +242,41 @@ tape_preserve_import() {
       rc=1; continue
     fi
     if [ "${DRY:-false}" = true ]; then tp_log "DRY: would restore $t from $tape"; continue; fi
-    out="$(tp_tool import "$bs" "$tape" "${ES4_TAPE_UNPINNED_GROUPS:-^es-amt-service}" 2>&1)"; irc=$?
+    out="$(tp_tool import "$bs" "$tape" "$skip" 2>&1)"; irc=$?
+    # An exit code is a claim, not evidence: look at the topic before believing "restored". 98 = the tool said
+    # success but the topic is not COMPLETE, which is handled exactly like any other unknown outcome.
+    if [ "$irc" = 0 ] && [ "$(tp_state "$tape")" != COMPLETE ]; then irc=98; fi
+    settled=""
     case "$irc" in
-      0)
-        tp_log "restored $t: $(printf '%s' "$out" | grep -E 'TAPE_IMPORTED|TAPE_IMPORT_SKIPPED' | tail -1)"
-        printf '%s\n' "$out" | grep '^TAPE_PINNED' | while read -r l; do tp_log "pinned to the restored end: ${l#TAPE_PINNED }"; done
-        if printf '%s\n' "$out" | grep -q '^TAPE_PIN_FAILED'; then
-          tp_log "WARNING: could not pin: $(printf '%s' "$out" | sed -n 's/^TAPE_PIN_FAILED group=\([^ ]*\).*/\1/p' | tr '\n' ' ')— they will RE-READ the restored history"
-          rc=1
+      0) settled=COMPLETE ;;
+      4) tp_log "WARNING: $t already holds records - not importing over them (artifact kept)"; rc=1; continue ;;
+      5) tp_log "WARNING: NOT restoring $t - consumer group(s) that read it are ACTIVE: $(printf '%s' "$out" | sed -n 's/^TAPE_IMPORT_GROUP_ACTIVE group=\([^ ]*\).*/\1/p' | tr '\n' ' ')- restored history would stream to them (the es4->prod bridge would republish it into prod). Pause them (launchctl bootout gui/\$(id -u)/com.optionsedge.es-trades-bridge-192-168-100-252-9092) and rerun, or accept es-amt-service NOT_READY"; rc=1; continue ;;
+      6) tp_log "WARNING: NOT restoring $t - $(printf '%s' "$out" | sed -n 's/^TAPE_IMPORT_TIMESTAMP_TYPE //p' | head -1). A LogAppendTime topic stamps every restored record with the import time, which would defeat the restore. Nothing was produced"; rc=1; continue ;;
+      *)
+        # 7 = the tool rolled itself back; anything else (error, timeout kill, signal) = outcome unknown.
+        # Never trust either: look at the topic and make it safe.
+        tp_log "WARNING: restore of $t did not complete cleanly (rc=$irc): $(printf '%s' "$out" | grep -E 'ROLLED_BACK|PIN_FAILED|PRESERVE_ERROR|TRUNCATE' | tail -2 | tr '\n' ' ')"
+        settled="$(tp_settle "$t" "$tape")"; sc=$?
+        if [ "$sc" = 2 ]; then
+          tp_log "UNSAFE: $t holds a PARTIAL tape that could not be emptied (state=$settled). Nothing may start on it."
+          return 2
         fi
-        if [ -n "$required" ]; then
-          if tp_tool coverage "$bs" "$t" "$required" >/dev/null 2>&1; then
-            tp_log "coverage check: $t reaches the prior RTH open — es-amt-service will start READY"
-          else
-            tp_log "WARNING: coverage check: $t does NOT reach the prior RTH open (the source tape was already short) — es-amt-service will stay NOT_READY until a session roll"
-            rc=1
-          fi
+        if [ "$settled" = EMPTY ]; then
+          tp_log "rolled back: $t is empty (artifact kept); es-amt-service will be NOT_READY until a session roll"
+          rc=1; continue
         fi
-        # one export restores into one wipe: retire the artifact, keep only the latest retired copy.
-        mv -f "$tape" "$dir/consumed.$t.tape" 2>/dev/null; mv -f "$mf" "$dir/consumed.$t.tape.manifest" 2>/dev/null
         ;;
-      4) tp_log "WARNING: $t already holds records — not importing over them (artifact kept)"; rc=1 ;;
-      5) tp_log "WARNING: NOT restoring $t — consumer group(s) that read it are ACTIVE: $(printf '%s' "$out" | sed -n 's/^TAPE_IMPORT_GROUP_ACTIVE group=\([^ ]*\).*/\1/p' | tr '\n' ' ')— restored history would stream to them (the es4->prod bridge would republish it into prod). Pause them (launchctl bootout gui/\$(id -u)/com.optionsedge.es-trades-bridge-192-168-100-252-9092) and rerun, or accept es-amt-service NOT_READY"; rc=1 ;;
-      *) tp_log "WARNING: restore of $t failed (rc=$irc; the topic was truncated back to empty): $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; rc=1 ;;
     esac
+    # Restored: complete, and every recorded group fenced and pinned.
+    tp_log "restored $t: $(printf '%s' "$out" | grep -E 'TAPE_IMPORTED|TAPE_IMPORT_SKIPPED' | tail -1)"
+    printf '%s\n' "$out" | grep '^TAPE_PINNED' | while read -r l; do tp_log "pinned to the restored end: ${l#TAPE_PINNED }"; done
+    if tp_tool coverage "$bs" "$t" "$required" >/dev/null 2>&1; then
+      tp_log "coverage check: $t reaches the prior RTH open - es-amt-service will start READY"
+    else
+      tp_log "WARNING: coverage check: $t does NOT reach the prior RTH open (the source tape was already short) - es-amt-service will stay NOT_READY until a session roll"
+      rc=1
+    fi
+    tp_retire "$dir" "$t" || rc=1
   done
   return $rc
 }

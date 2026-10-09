@@ -10,6 +10,7 @@ import java.util.zip.CheckedInputStream;
 import java.util.zip.CheckedOutputStream;
 
 import org.apache.kafka.clients.admin.Admin;
+import org.apache.kafka.clients.admin.Config;
 import org.apache.kafka.clients.admin.ConsumerGroupDescription;
 import org.apache.kafka.clients.admin.GroupListing;
 import org.apache.kafka.clients.admin.RecordsToDelete;
@@ -23,7 +24,9 @@ import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.PartitionInfo;
+import org.apache.kafka.common.GroupType;
 import org.apache.kafka.common.KafkaFuture;
+import org.apache.kafka.common.config.ConfigResource;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.errors.GroupIdNotFoundException;
 import org.apache.kafka.common.header.Header;
@@ -43,6 +46,8 @@ import org.apache.kafka.common.serialization.ByteArraySerializer;
  *   coverage    bootstrap topic requiredFromMs      AMT's own retention test; exit 0 covered, 3 short
  *   fingerprint bootstrap topic fromMs              count + sha256 of (partition, ts, key, value, headers)
  *   truncate    bootstrap topic                     advance every partition's log start to its end (empty it)
+ *   state       bootstrap inFile                    EMPTY | COMPLETE | PARTIAL: what the topic holds vs the export
+ *   pin         bootstrap inFile [skipGroupsRx]     pin the recorded groups to the topic's current end
  *
  * CONSUMER GROUPS. Whoever read the topic before the wipe will, after it, be a brand-new group that reads the
  * restored history from the start (or from "latest" resolved before the import began). Off-box that is a
@@ -56,10 +61,18 @@ import org.apache.kafka.common.serialization.ByteArraySerializer;
  * consumer believe it has a complete prior session, which is worse than an empty one (an empty tape fails closed).
  *
  * Exit codes: 0 ok, 1 error, 2 usage, 3 not covered (coverage only), 4 target not empty (import only),
- * 5 a recorded consumer group is active (import only; nothing was produced).
+ * 5 a recorded consumer group is active (nothing was produced), 6 the target is not CreateTime (nothing was
+ * produced), 7 the restore was ROLLED BACK because a group appeared during it or could not be pinned.
+ *
+ * ALL-OR-NOTHING. A restore stands only if every recorded group was idle when it started, idle when it
+ * finished, and was pinned. Anything else truncates the topic back to empty (the plain-wipe state).
  */
 public final class TapePreserve {
     private static final String MAGIC = "ES4TAPE1";
+    /** TEST ONLY (tape-preserve-broker-test.sh): force a failure so the rollback paths can be exercised on a real
+     *  broker. "produce-midway" fails an import half-way; "hang-midway" stalls it half-way so an outer timeout has to
+     *  KILL it (a process that dies cannot roll itself back); "pin" makes every pin fail. Never set in production. */
+    private static final String FAULT = System.getenv("TAPE_PRESERVE_FAULT") == null ? "" : System.getenv("TAPE_PRESERVE_FAULT");
     private static final Duration POLL = Duration.ofMillis(500);
     private static final long DEADLINE_MS = 15 * 60_000L;   // a stalled broker must not hang the clean
 
@@ -72,6 +85,8 @@ public final class TapePreserve {
                 case "coverage" -> { need(a, 4); exit(coverage(a[1], a[2], Long.parseLong(a[3]))); }
                 case "fingerprint" -> { need(a, 4); exit(fingerprint(a[1], a[2], Long.parseLong(a[3]))); }
                 case "truncate" -> { need(a, 3); exit(truncate(a[1], a[2])); }
+                case "state" -> { need(a, 3); exit(state(a[1], Path.of(a[2]))); }
+                case "pin" -> { if (a.length != 3 && a.length != 4) usage(); exit(pinCommand(a[1], Path.of(a[2]), a.length == 4 ? a[3] : "")); }
                 default -> usage();
             }
         } catch (Exception e) {
@@ -99,10 +114,16 @@ public final class TapePreserve {
         TreeSet<String> out = new TreeSet<>();
         try (Admin admin = admin(bootstrap)) {
             for (GroupListing g : admin.listGroups().all().get()) {
+                // Share/streams-protocol groups hold no classic committed offsets and legitimately cannot be read
+                // this way. A consumer-protocol group that CANNOT be read is a reader we would neither fence nor
+                // pin, so the export fails rather than record an incomplete list.
+                boolean strict = g.type().map(t -> t == GroupType.CLASSIC || t == GroupType.CONSUMER).orElse(true);
                 try {
                     for (TopicPartition tp : admin.listConsumerGroupOffsets(g.groupId()).partitionsToOffsetAndMetadata().get().keySet())
                         if (tp.topic().equals(topic)) { out.add(g.groupId()); break; }
-                } catch (Exception ignore) { /* a group that cannot be read is not one we can pin either */ }
+                } catch (Exception e) {
+                    if (strict) throw new IOException("cannot read the committed offsets of group " + g.groupId() + " - refusing to record an incomplete reader list: " + e);
+                }
             }
         }
         return new ArrayList<>(out);
@@ -118,6 +139,32 @@ public final class TapePreserve {
             out.add(g);
         }
         return out;
+    }
+
+    /** Recorded groups that currently have live members; an unknown group has none (a wipe removes them). */
+    private static List<String> activeGroups(String bootstrap, List<String> groups) throws Exception {
+        List<String> active = new ArrayList<>();
+        if (groups.isEmpty()) return active;
+        try (Admin admin = admin(bootstrap)) {
+            for (Map.Entry<String, KafkaFuture<ConsumerGroupDescription>> e : admin.describeConsumerGroups(groups).describedGroups().entrySet()) {
+                try {
+                    int members = e.getValue().get().members().size();
+                    if (members > 0) { System.out.println("TAPE_IMPORT_GROUP_ACTIVE group=" + e.getKey() + " members=" + members); active.add(e.getKey()); }
+                } catch (ExecutionException x) {
+                    if (!(x.getCause() instanceof GroupIdNotFoundException)) throw x;
+                }
+            }
+        }
+        return active;
+    }
+
+    /** message.timestamp.type of the topic as the broker reports it ("CreateTime" when unset). */
+    private static String timestampType(String bootstrap, String topic) throws Exception {
+        try (Admin admin = admin(bootstrap)) {
+            ConfigResource r = new ConfigResource(ConfigResource.Type.TOPIC, topic);
+            Config c = admin.describeConfigs(List.of(r)).all().get().get(r);
+            return c.get("message.timestamp.type") == null ? "CreateTime" : c.get("message.timestamp.type").value();
+        }
     }
 
     // ------------------------------------------------------------------------------------------ export
@@ -280,24 +327,18 @@ public final class TapePreserve {
             }
         }
 
-        // Interlock: a recorded group with live members would consume the restored history as it is produced
-        // (the es4 -> prod bridge would republish it into prod's tape). Nothing has been produced yet.
+        // Fence 1 (before the first record): a recorded group with live members would consume the restored
+        // history as it is produced (the es4 -> prod bridge would republish it into prod).
         List<String> groups = recordedGroups(mf, skipGroupsRx);
-        if (!groups.isEmpty()) {
-            try (Admin admin = admin(bootstrap)) {
-                // One group at a time: after a wipe the recorded groups usually do NOT exist (their offsets lived on
-                // the wiped volume) and describing an unknown group fails. Unknown = no members = safe.
-                boolean active = false;
-                for (Map.Entry<String, KafkaFuture<ConsumerGroupDescription>> e : admin.describeConsumerGroups(groups).describedGroups().entrySet()) {
-                    try {
-                        int members = e.getValue().get().members().size();
-                        if (members > 0) { System.out.println("TAPE_IMPORT_GROUP_ACTIVE group=" + e.getKey() + " members=" + members); active = true; }
-                    } catch (ExecutionException x) {
-                        if (!(x.getCause() instanceof GroupIdNotFoundException)) throw x;
-                    }
-                }
-                if (active) return 5;
-            }
+        if (!activeGroups(bootstrap, groups).isEmpty()) return 5;
+
+        // The whole point is that AMT sees the ORIGINAL timestamps; a LogAppendTime topic overwrites them with
+        // the import time and the restore would silently achieve nothing. (es.underlying.es.trades was once
+        // altered to LogAppendTime by hand on es4; a wipe reverts it, but nothing declares it either way.)
+        String tsType = timestampType(bootstrap, topic);
+        if (!"CreateTime".equals(tsType)) {
+            System.out.println("TAPE_IMPORT_TIMESTAMP_TYPE topic=" + topic + " type=" + tsType + " (needs CreateTime)");
+            return 6;
         }
 
         Properties pp = new Properties();
@@ -326,6 +367,8 @@ public final class TapePreserve {
                 p.send(new ProducerRecord<>(topic, part, ts, k, v, hs), (md, ex) -> { if (ex != null) failure[0] = ex; });
                 sent[part]++;
                 if (failure[0] != null) throw new IOException("produce failed: " + failure[0]);
+                if ("produce-midway".equals(FAULT) && Arrays.stream(sent).sum() >= expectRecords / 2) throw new IOException("injected fault: produce-midway");
+                if ("hang-midway".equals(FAULT) && Arrays.stream(sent).sum() >= expectRecords / 2) { p.flush(); Thread.sleep(Long.MAX_VALUE); }
             }
             p.flush();
         }
@@ -349,29 +392,81 @@ public final class TapePreserve {
             throw e;
         }
         System.out.println("TAPE_IMPORTED topic=" + topic + " records=" + expectRecords + " partitions=" + expectParts);
-        pin(bootstrap, topic, groups);
+        // Fence 2 + pin, all or nothing: a group that appeared while we produced may have read part of the tape,
+        // and a group that cannot be pinned would re-read all of it. Either way the topic goes back to empty.
+        List<String> failed = pin(bootstrap, topic, groups);
+        if (!failed.isEmpty()) {
+            try { truncate(bootstrap, topic); System.out.println("TAPE_IMPORT_ROLLED_BACK topic=" + topic + " reason=pin-or-fence groups=" + String.join(",", failed)); }
+            catch (Exception t) { System.out.println("TAPE_IMPORT_TRUNCATE_FAILED topic=" + topic + " " + t); }
+            return 7;
+        }
         return 0;
     }
 
-    /** Pins each group to the restored end so it starts where a plain wipe would have left it. Never fatal. */
-    private static void pin(String bootstrap, String topic, List<String> groups) {
-        if (groups.isEmpty()) return;
+    /** Pins each group to the restored end so it starts where a plain wipe would have left it. Returns the groups
+     *  that are active or could not be pinned (empty = every group fenced and pinned). */
+    private static List<String> pin(String bootstrap, String topic, List<String> groups) {
+        List<String> failed = new ArrayList<>();
+        if (groups.isEmpty()) return failed;
+        try {
+            failed.addAll(activeGroups(bootstrap, groups));
+        } catch (Exception e) {
+            System.out.println("TAPE_PIN_FAILED group=* reason=" + e);
+            failed.addAll(groups);
+            return failed;
+        }
         try (KafkaConsumer<byte[], byte[]> c = new KafkaConsumer<>(consumerProps(bootstrap)); Admin admin = admin(bootstrap)) {
             List<TopicPartition> parts = partitions(c, topic);
             Map<TopicPartition, Long> ends = c.endOffsets(parts);
             Map<TopicPartition, OffsetAndMetadata> target = new HashMap<>();
             parts.forEach(tp -> target.put(tp, new OffsetAndMetadata(ends.get(tp))));
             for (String g : groups) {
+                if (failed.contains(g)) continue;
                 try {
+                    if ("pin".equals(FAULT)) throw new IOException("injected fault: pin");
                     admin.alterConsumerGroupOffsets(g, target).all().get();
                     System.out.println("TAPE_PINNED group=" + g + " partitions=" + parts.size());
                 } catch (Exception e) {
                     System.out.println("TAPE_PIN_FAILED group=" + g + " reason=" + e.getClass().getSimpleName() + ": " + String.valueOf(e.getMessage()).replace('\n', ' '));
+                    failed.add(g);
                 }
             }
         } catch (Exception e) {
             System.out.println("TAPE_PIN_FAILED group=* reason=" + e);
+            for (String g : groups) if (!failed.contains(g)) failed.add(g);
         }
+        return failed;
+    }
+
+    /** Standalone pin for a restore that was interrupted after its records landed (wrapper settle path). */
+    private static int pinCommand(String bootstrap, Path tape, String skipGroupsRx) throws Exception {
+        Properties mf = manifest(tape);
+        List<String> failed = pin(bootstrap, mf.getProperty("topic"), recordedGroups(mf, skipGroupsRx));
+        return failed.isEmpty() ? 0 : 7;
+    }
+
+    // ------------------------------------------------------------------------------------- state
+
+    /** What the topic holds right now against the export: EMPTY (log start == end everywhere), COMPLETE (the
+     *  per-partition counts equal the export's), otherwise PARTIAL. The wrapper uses it to settle any import that
+     *  did not report a clean outcome (a killed process cannot roll itself back). */
+    private static int state(String bootstrap, Path tape) throws Exception {
+        Properties mf = manifest(tape);
+        String topic = mf.getProperty("topic");
+        try (KafkaConsumer<byte[], byte[]> c = new KafkaConsumer<>(consumerProps(bootstrap))) {
+            List<TopicPartition> parts = partitions(c, topic);
+            Map<TopicPartition, Long> ends = c.endOffsets(parts), begins = c.beginningOffsets(parts);
+            long live = 0, expected = 0;
+            boolean exact = true;
+            for (TopicPartition tp : parts) {
+                long n = ends.get(tp) - begins.get(tp), want = Long.parseLong(mf.getProperty("p" + tp.partition(), "0"));
+                live += n; expected += want;
+                if (n != want) exact = false;
+            }
+            String st = live == 0 ? "EMPTY" : (exact ? "COMPLETE" : "PARTIAL");
+            System.out.println("TAPE_STATE " + st + " live=" + live + " expected=" + expected);
+        }
+        return 0;
     }
 
     // ---------------------------------------------------------------------------------- truncate

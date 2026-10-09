@@ -29,16 +29,23 @@ cat > "$W/java" <<'SH'
 #!/usr/bin/env bash
 cmd=""; args=("$@")
 for i in "${!args[@]}"; do
-  case "${args[$i]}" in export|import|coverage|truncate|fingerprint) cmd="${args[$i]}"; idx=$i; break ;; esac
+  case "${args[$i]}" in export|import|coverage|truncate|fingerprint|state|pin) cmd="${args[$i]}"; idx=$i; break ;; esac
 done
 echo "$cmd ${args[*]:$((idx+1))}" >> "$FIX/calls"
 rc=$(cat "$FIX/$cmd.rc" 2>/dev/null || echo 0)
+if [ "$cmd" = state ]; then
+  st=$(head -1 "$FIX/state.seq" 2>/dev/null)
+  if [ -n "$st" ]; then tail -n +2 "$FIX/state.seq" > "$FIX/state.seq.n"; mv "$FIX/state.seq.n" "$FIX/state.seq"
+  elif [ -f "$FIX/imported" ]; then st=COMPLETE; else st=EMPTY; fi
+  echo "TAPE_STATE $st live=1 expected=1"; exit 0
+fi
 if [ "$cmd" = export ] && [ "$rc" = 0 ]; then
   out="${args[$((idx+4))]}"; n=$(cat "$FIX/export.records" 2>/dev/null || echo 5)
   : > "$out"; printf 'records=%s\ntopic=%s\nmaxTs=%s\n' "$n" "${args[$((idx+2))]}" "$(cat "$FIX/export.maxts" 2>/dev/null || echo 9999999999999)" > "$out.manifest"
   echo "TAPE_EXPORTED topic=${args[$((idx+2))]} records=$n bytes=123 groups=es-trades-bridge-x,indicator-service-es4"
 fi
 if [ "$cmd" = import ] && [ "$rc" = 0 ]; then
+  [ "$(cat "$FIX/import.lie" 2>/dev/null)" = 1 ] || : > "$FIX/imported"
   echo "TAPE_IMPORTED topic=x records=5 partitions=4"
   case "$(cat "$FIX/import.pin" 2>/dev/null || echo ok)" in
     ok)   echo "TAPE_PINNED group=es-trades-bridge-x partitions=4"; echo "TAPE_PINNED group=indicator-service-es4 partitions=4" ;;
@@ -46,6 +53,8 @@ if [ "$cmd" = import ] && [ "$rc" = 0 ]; then
   esac
 fi
 [ "$cmd" = import ] && [ "$rc" = 5 ] && echo "TAPE_IMPORT_GROUP_ACTIVE group=es-trades-bridge-x members=1"
+[ "$cmd" = import ] && [ "$rc" = 6 ] && echo "TAPE_IMPORT_TIMESTAMP_TYPE topic=x type=LogAppendTime (needs CreateTime)"
+[ "$cmd" = import ] && [ "$rc" = 7 ] && echo "TAPE_IMPORT_ROLLED_BACK topic=x reason=pin-or-fence groups=es-trades-bridge-x"
 [ "$cmd" = import ] && [ "$rc" = 4 ] && echo "TAPE_IMPORT_TARGET_NOT_EMPTY topic=x liveRecords=9"
 [ "$cmd" = import ] && [ "$rc" = 1 ] && echo "TAPE_PRESERVE_ERROR java.io.IOException: boom" >&2
 exit "$rc"
@@ -58,6 +67,8 @@ fresh() { find "$FIX" "$W/art" -mindepth 1 -delete 2>/dev/null; mkdir -p "$FIX" 
 tp() {
   ( export ES4_TAPE_JAVA="$W/java" ES4_TAPE_PRESERVE_DIR="$W/art" ES4_TAPE_BOOTSTRAP=stub:9092 \
            ES4_TAPE_PRESERVE_TOPICS="${TOPICS:-es.underlying.es.trades}" FIX="$FIX" DRY="${DRY:-false}"
+    [ "${TP_FAIL_MV:-0}" = 1 ] && mv() { return 1; }
+    [ "${TP_FAIL_RM:-0}" = 1 ] && rm() { return 1; }
     # shellcheck source=/dev/null
     . "$HERE/tape-preserve.sh"; "$@" ) > "$W/out" 2>&1
 }
@@ -117,10 +128,16 @@ fresh; tp tape_preserve_export; echo 4 > "$FIX/import.rc"; tp tape_preserve_impo
 [ $r = 1 ] && [ -f "$W/art/es.underlying.es.trades.tape" ] && ok "kept; rc 1" || bad "rc=$r artifact=$(ls -A "$W/art")"
 grep -q "already holds records" "$W/out" && ok "says why" || bad "silent"
 
-case_ "10. a failed import is reported and keeps the artifact (the tool has already truncated the topic)"
+case_ "10. a failed import is settled by inspecting the topic, and keeps the artifact"
 fresh; tp tape_preserve_export; echo 1 > "$FIX/import.rc"; tp tape_preserve_import; r=$?
 [ $r = 1 ] && [ -f "$W/art/es.underlying.es.trades.tape" ] && ok "kept; rc 1" || bad "rc=$r"
-grep -q "truncated back to empty" "$W/out" && ok "tells the operator the topic was left empty, not half-restored" || bad "no truncation notice"
+grep -q "rolled back: es.underlying.es.trades is empty" "$W/out" && ok "settled by LOOKING at the topic: it is empty, not half-restored" || bad "no settle result: $(cat "$W/out")"
+
+case_ "8b. the tool claims success (rc 0) but the topic is EMPTY: the wrapper does not believe it"
+fresh; tp tape_preserve_export; echo 1 > "$FIX/import.lie"; tp tape_preserve_import; r=$?
+[ $r = 1 ] && ok "rc 1: not reported as restored" || bad "rc=$r out=$(cat "$W/out")"
+grep -q "rolled back: es.underlying.es.trades is empty" "$W/out" && ! grep -q "restored es.underlying" "$W/out" && ok "settled from the topic's real state, never says 'restored'" || bad "believed the exit code: $(cat "$W/out")"
+[ -f "$W/art/es.underlying.es.trades.tape" ] && ok "artifact kept" || bad "artifact lost"
 
 case_ "11. import ok but the tape is still SHORT of the prior RTH open -> warn, still retire"
 fresh; tp tape_preserve_export; echo 3 > "$FIX/coverage.rc"; tp tape_preserve_import; r=$?
@@ -140,10 +157,48 @@ grep -q "^import .*\^es-amt-service" "$FIX/calls" && ok "es-amt-service is passe
 : > "$FIX/calls"; fresh; tp tape_preserve_export; ES4_TAPE_UNPINNED_GROUPS='^custom' tp tape_preserve_import
 grep -q "^import .*\^custom" "$FIX/calls" && ok "the skip regex is configurable" || bad "override ignored"
 
-case_ "9d. a group that cannot be pinned is a WARNING naming it (import itself still succeeded and is retired)"
-fresh; tp tape_preserve_export; echo fail > "$FIX/import.pin"; tp tape_preserve_import; r=$?
-[ $r = 1 ] && grep -q "could not pin: es-trades-bridge-x" "$W/out" && grep -q "RE-READ the restored history" "$W/out" && ok "warns which group will re-read the history" || bad "rc=$r out=$(cat "$W/out")"
-[ -f "$W/art/consumed.es.underlying.es.trades.tape" ] && ok "the artifact is still retired (the topic was restored)" || bad "not retired"
+case_ "9d. a pin failure rolls the restore back (rc 7): the tool empties the topic, the wrapper proves it"
+fresh; tp tape_preserve_export; echo 7 > "$FIX/import.rc"; tp tape_preserve_import; r=$?
+[ $r = 1 ] && grep -q "rolled back: es.underlying.es.trades is empty" "$W/out" && ok "rc 1, topic proven empty" || bad "rc=$r out=$(cat "$W/out")"
+[ -f "$W/art/es.underlying.es.trades.tape" ] && ok "artifact kept for a retry" || bad "artifact lost"
+
+case_ "9e. rc 6 (topic is LogAppendTime) -> nothing produced, says why, artifact kept"
+fresh; tp tape_preserve_export; echo 6 > "$FIX/import.rc"; tp tape_preserve_import; r=$?
+[ $r = 1 ] && grep -q "LogAppendTime" "$W/out" && ok "refused with the reason" || bad "rc=$r out=$(cat "$W/out")"
+[ -f "$W/art/es.underlying.es.trades.tape" ] && ok "artifact kept" || bad "artifact lost"
+
+case_ "10b. the tool is KILLED mid-import (timeout, rc 124) leaving a PARTIAL tape: the wrapper empties it and proves it"
+fresh; tp tape_preserve_export; echo 124 > "$FIX/import.rc"; printf 'PARTIAL\nEMPTY\n' > "$FIX/state.seq"; : > "$FIX/calls"
+tp tape_preserve_import; r=$?
+[ $r = 1 ] && [ "$(calls truncate)" = 1 ] && ok "rc 1 (a warning); the wrapper ran truncate itself" || bad "rc=$r truncates=$(calls truncate)"
+grep -q "rolled back" "$W/out" && ok "reports the rollback" || bad "silent: $(cat "$W/out")"
+
+case_ "10c. killed mid-import AND the partial tape cannot be emptied -> UNSAFE (rc 2): the clean must not start apps"
+fresh; tp tape_preserve_export; echo 124 > "$FIX/import.rc"; printf 'PARTIAL\nPARTIAL\n' > "$FIX/state.seq"
+tp tape_preserve_import; r=$?
+[ $r = 2 ] && grep -q "UNSAFE" "$W/out" && ok "rc 2 and an UNSAFE message" || bad "rc=$r out=$(cat "$W/out")"
+
+case_ "10d. killed after the records landed but before pinning (state COMPLETE): the wrapper finishes the pin and keeps the tape"
+fresh; tp tape_preserve_export; echo 124 > "$FIX/import.rc"; printf 'COMPLETE\n' > "$FIX/state.seq"; : > "$FIX/calls"
+tp tape_preserve_import; r=$?
+[ $r = 0 ] && [ "$(calls pin)" = 1 ] && ok "pin was run; treated as restored (rc 0)" || bad "rc=$r pins=$(calls pin) out=$(cat "$W/out")"
+[ -f "$W/art/consumed.es.underlying.es.trades.tape" ] && ok "artifact retired" || bad "artifact not retired"
+
+case_ "10e. state COMPLETE but pinning fails: the tape comes back out (all or nothing)"
+fresh; tp tape_preserve_export; echo 124 > "$FIX/import.rc"; echo 7 > "$FIX/pin.rc"; printf 'COMPLETE\nEMPTY\n' > "$FIX/state.seq"; : > "$FIX/calls"
+tp tape_preserve_import; r=$?
+[ $r = 1 ] && [ "$(calls truncate)" = 1 ] && ok "rc 1; truncated because it could not be pinned" || bad "rc=$r truncates=$(calls truncate)"
+
+case_ "10f. an unreadable state after a failure is treated as UNSAFE, never assumed fine"
+fresh; tp tape_preserve_export; echo 124 > "$FIX/import.rc"; printf 'GARBAGE\nGARBAGE\n' > "$FIX/state.seq"
+tp tape_preserve_import; r=$?
+[ $r = 2 ] && ok "rc 2" || bad "rc=$r out=$(cat "$W/out")"
+
+case_ "10g. retirement: a failed rename falls back to removing the artifact; if even that fails it is an ERROR"
+fresh; tp tape_preserve_export; TP_FAIL_MV=1 tp tape_preserve_import; r=$?
+[ ! -f "$W/art/es.underlying.es.trades.tape" ] && ok "artifact gone despite the rename failing" || bad "artifact still active"
+fresh; tp tape_preserve_export; TP_FAIL_MV=1 TP_FAIL_RM=1 tp tape_preserve_import; r=$?
+[ $r = 1 ] && grep -q "ERROR: could not retire the artifact" "$W/out" && ok "both failing is reported as an ERROR, rc 1" || bad "rc=$r out=$(cat "$W/out")"
 
 case_ "11b. an artifact that stops BEFORE the prior session's close is refused (it would present a partial prior session as complete)"
 fresh; echo 1 > "$FIX/export.maxts"; tp tape_preserve_export; : > "$FIX/calls"; tp tape_preserve_import; r=$?
@@ -193,6 +248,13 @@ up=$(grep -n -F "docker compose up -d)\"" "$C" | head -1 | cut -d: -f1); rs=$(ln
 [ "$vf" -lt "$im" ] && [ "$im" -lt "$up" ] && [ "$up" -lt "$rs" ] && ok "import: after topics verified, before mm2/infra start and before ANY app is restored" || bad "import out of order"
 grep -F 'tape_preserve_export' "$C" | grep -qF '||' || grep -A1 -F 'tape_preserve_export' "$C" | grep -qF '||' && ok "export can never abort the clean (guarded with ||)" || bad "export is not guarded"
 grep -A1 -F 'tape_preserve_import' "$C" | grep -qF '||' && ok "import can never abort the clean (guarded with ||)" || bad "import is not guarded"
+
+case_ "14b. static guards"
+grep -q -- '--kill-after' "$HERE/tape-preserve.sh" && ok "the tool runs under timeout --kill-after (a TERM-ignoring child cannot hang the clean)" || bad "no --kill-after"
+grep -q '\[ "\$tp_rc" != 2 \] || die' "$C" && ok "cleanup-es4.sh DIES on rc 2 (partial tape) - the only non-warning outcome" || bad "rc 2 is not fatal in cleanup-es4.sh"
+amt="$(sed -n '/ES_AMT_REPLAY_LOOKBACK_HOURS/{n;p;}' "$HERE/../../k8s/es4/services/es-amt.yaml" | sed -n "s/.*value: *'\{0,1\}\([0-9]*\)'\{0,1\}.*/\1/p" | head -1)"
+lib="$(sed -n 's/.*ES4_TAPE_LOOKBACK_HOURS:-\([0-9]*\)}.*/\1/p' "$HERE/tape-preserve.sh" | head -1)"
+[ -n "$amt" ] && [ "$amt" = "$lib" ] && ok "ES4_TAPE_LOOKBACK_HOURS ($lib) == ES_AMT_REPLAY_LOOKBACK_HOURS ($amt) in k8s/es4/services/es-amt.yaml - drift fails CI" || bad "lookback drift: lib='$lib' es-amt.yaml='$amt'"
 
 case_ "15. the tool compiles for the box's Java 17 (when a JDK and kafka-clients are available)"
 LIBS="${KAFKA_LIBS:-$HOME/kafka-4.3.0/libs}"
