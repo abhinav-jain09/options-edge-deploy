@@ -484,7 +484,29 @@ for dep in $DEPLOYMENTS; do
   selector="$(kubectl -n "$NAMESPACE" get deployment "$dep" -o json \
     | yq -r '.spec.selector.matchLabels | to_entries | map(.key + "=" + .value) | join(",")')"
 
-  running_ids="$(kubectl -n "$NAMESPACE" get pods -l "$selector" --field-selector=status.phase=Running \
+  # Scope to the CURRENT rollout's pods only, by pod-template-hash. `rollout status` returns as
+  # soon as the Deployment condition is Available — the OUTGOING ReplicaSet's pod can still report
+  # phase=Running for several more seconds while it terminates, so the bare deployment selector
+  # above still matches it too. A gate meant to judge "the new pods" (see this function's header)
+  # then silently judges the OLD pod's ENTIRE LIFETIME alongside it: `sort -rn | head -1` on
+  # restartCount took the higher of the two, and a pod that had been up for days with an unrelated
+  # historical restart failed a rollout that introduced zero new crashes (web-service-deploy #773,
+  # 2026-10-09 — options-edge-web-76fc7b5687-trjnc, 2 days old, mid-termination, restartCount=2,
+  # wrongly blamed on the brand-new options-edge-web-7d75d6cc75-fd4h2, which was already at 0). The
+  # CURRENT ReplicaSet is the one still carrying replicas>0 this late in the rollout (the outgoing
+  # one has already been scaled to 0 by the time `rollout status` returns); its pod-template-hash
+  # is what Kubernetes itself stamps onto only its own pods, so adding it to the selector is exact
+  # where phase=Running alone is not.
+  rs_hash="$(kubectl -n "$NAMESPACE" get rs -l "$selector" -o json \
+    | yq -r '[.items[] | select((.spec.replicas // 0) > 0)] | sort_by(.metadata.creationTimestamp) | .[-1].metadata.labels["pod-template-hash"] // ""')"
+  if [ -z "$rs_hash" ]; then
+    echo "  $dep: FAIL — could not resolve the current ReplicaSet's pod-template-hash; refusing to gate against a possibly-stale pod set" >&2
+    gate_fail=1
+    continue
+  fi
+  current_selector="$selector,pod-template-hash=$rs_hash"
+
+  running_ids="$(kubectl -n "$NAMESPACE" get pods -l "$current_selector" --field-selector=status.phase=Running \
     -o jsonpath='{range .items[*]}{.status.containerStatuses[0].imageID}{"\n"}{end}')"
   if printf '%s\n' "$running_ids" | grep -q "$PINNED_DIGEST"; then
     echo "  $dep image: running imageID matches pinned digest ✓"
@@ -494,7 +516,7 @@ for dep in $DEPLOYMENTS; do
     gate_fail=1
   fi
 
-  restarts="$(kubectl -n "$NAMESPACE" get pods -l "$selector" --field-selector=status.phase=Running \
+  restarts="$(kubectl -n "$NAMESPACE" get pods -l "$current_selector" --field-selector=status.phase=Running \
     -o jsonpath='{range .items[*]}{.status.containerStatuses[0].restartCount}{"\n"}{end}' | sort -rn | head -1)"
   if [ "${restarts:-0}" -eq 0 ]; then
     echo "  $dep restarts: 0 ✓"
