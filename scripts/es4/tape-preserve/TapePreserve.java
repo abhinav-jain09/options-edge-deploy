@@ -13,7 +13,13 @@ import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.Config;
 import org.apache.kafka.clients.admin.ConsumerGroupDescription;
 import org.apache.kafka.clients.admin.GroupListing;
+import org.apache.kafka.clients.admin.ListShareGroupOffsetsSpec;
+import org.apache.kafka.clients.admin.ListStreamsGroupOffsetsSpec;
 import org.apache.kafka.clients.admin.MemberDescription;
+import org.apache.kafka.clients.admin.ShareGroupDescription;
+import org.apache.kafka.clients.admin.SharePartitionOffsetInfo;
+import org.apache.kafka.clients.admin.StreamsGroupDescription;
+import org.apache.kafka.clients.admin.StreamsGroupSubtopologyDescription;
 import org.apache.kafka.clients.admin.TopicDescription;
 import org.apache.kafka.clients.admin.RecordsToDelete;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
@@ -60,6 +66,12 @@ import org.apache.kafka.common.serialization.ByteArraySerializer;
  * - restored records must never reach a running consumer - and after a successful import pins every
  * recorded group to the restored end, so each starts exactly where it would have after a plain wipe.
  * Groups matching skipGroupsRx (es-amt-service: it assigns and seeks by timestamp) are left alone.
+ *
+ * Group protocols: consumer/classic groups are read through the consumer-group APIs, SHARE and STREAMS groups
+ * through their own (the consumer-group APIs do not see them) and are pinned through theirs; a live member of a
+ * SHARE or STREAMS group always counts as a reader because their assignment materialises lazily. A group whose
+ * protocol is anything else, or that cannot be read, FAILS the run rather than being guessed at. The reader
+ * scans are best-effort detection, not a lock: nothing a client can do keeps a consumer out of a topic.
  *
  * A failed import truncates the topic again before it reports the error: a half-restored tape would let a
  * consumer believe it has a complete prior session, which is worse than an empty one (an empty tape fails closed).
@@ -115,34 +127,102 @@ public final class TapePreserve {
         return Admin.create(ap);
     }
 
-    /** Groups that hold committed offsets on {@code topic} right now (sorted, so the manifest is stable). */
-    private static List<String> groupsOn(String bootstrap, String topic) throws Exception {
-        TreeSet<String> out = new TreeSet<>();
-        try (Admin admin = admin(bootstrap)) {
-            for (GroupListing g : admin.listGroups().all().get()) {
-                // Share/streams-protocol groups hold no classic committed offsets and legitimately cannot be read
-                // this way. A consumer-protocol group that CANNOT be read is a reader we would neither fence nor
-                // pin, so the export fails rather than record an incomplete list.
-                boolean strict = g.type().map(t -> t == GroupType.CLASSIC || t == GroupType.CONSUMER).orElse(true);
-                try {
-                    for (TopicPartition tp : admin.listConsumerGroupOffsets(g.groupId()).partitionsToOffsetAndMetadata().get().keySet())
-                        if (tp.topic().equals(topic)) { out.add(g.groupId()); break; }
-                } catch (Exception e) {
-                    if (strict) throw new IOException("cannot read the committed offsets of group " + g.groupId() + " - refusing to record an incomplete reader list: " + e);
-                }
-            }
-        }
-        return new ArrayList<>(out);
+    /** What one group looks like to the fence, whatever protocol it speaks. */
+    private static final class View {
+        int members;                 // live members
+        boolean reads;               // a live member is assigned the topic (streams: the group sources it)
+        boolean declared;            // streams: the topic is a declared source even with no member right now
+        final Map<TopicPartition, Long> offsets = new HashMap<>();   // committed (share: start) offsets
     }
 
-    private static List<String> recordedGroups(Properties mf, String skipRx) {
-        String raw = mf.getProperty("groups", "").trim();
-        List<String> out = new ArrayList<>();
+    private static boolean consumerLike(GroupType t) { return t == GroupType.CLASSIC || t == GroupType.CONSUMER; }
+
+    private static Throwable cause(Throwable e) { return e instanceof ExecutionException && e.getCause() != null ? e.getCause() : e; }
+
+    private static Map<String, GroupType> listTypes(Admin admin) throws Exception {
+        Map<String, GroupType> out = new TreeMap<>();
+        // A broker that predates group types lists none: those are classic groups.
+        for (GroupListing g : admin.listGroups().all().get()) out.put(g.groupId(), g.type().orElse(GroupType.CLASSIC));
+        return out;
+    }
+
+    /**
+     * Reads one group through the API of ITS protocol: consumer/classic groups through the consumer-group calls,
+     * share groups and streams groups through their own (the consumer-group calls do not see them). A group whose
+     * protocol is not one of these, or that cannot be read, is not guessed at - the caller fails closed. A group
+     * that has vanished (expired empty group, wiped) has no members and no offsets.
+     */
+    private static View view(Admin admin, String id, GroupType type, String topic) throws Exception {
+        if (type != GroupType.SHARE && type != GroupType.STREAMS && !consumerLike(type))
+            throw new IOException("group " + id + " has protocol " + type + " - cannot tell whether it reads " + topic + ", refusing to guess");
+        View v = new View();
+        try {
+            if (type == GroupType.SHARE) {
+                ShareGroupDescription d = admin.describeShareGroups(List.of(id)).describedGroups().get(id).get();
+                v.members = d.members().size();
+                // A share member's subscription is not exposed and its assignment materialises lazily (a member of a
+                // share group the coordinator has not initialised yet shows NO partitions while it is subscribed
+                // and about to read). Assignment therefore proves nothing: any live member may read the topic.
+                v.reads = !d.members().isEmpty();
+                Map<TopicPartition, SharePartitionOffsetInfo> o = admin.listShareGroupOffsets(Map.of(id, new ListShareGroupOffsetsSpec())).partitionsToOffsetInfo(id).get();
+                for (Map.Entry<TopicPartition, SharePartitionOffsetInfo> e : o.entrySet()) v.offsets.put(e.getKey(), e.getValue().startOffset());
+            } else if (type == GroupType.STREAMS) {
+                StreamsGroupDescription d = admin.describeStreamsGroups(List.of(id)).describedGroups().get(id).get();
+                v.members = d.members().size();
+                for (StreamsGroupSubtopologyDescription st : d.subtopologies())
+                    if (st.sourceTopics().contains(topic) || st.repartitionSourceTopics().containsKey(topic)) v.declared = true;
+                // Same reasoning as share groups: a member that may not yet hold its tasks is still about to read.
+                v.reads = v.members > 0;
+                Map<TopicPartition, OffsetAndMetadata> o = admin.listStreamsGroupOffsets(Map.of(id, new ListStreamsGroupOffsetsSpec())).partitionsToOffsetAndMetadata(id).get();
+                for (Map.Entry<TopicPartition, OffsetAndMetadata> e : o.entrySet()) if (e.getValue() != null) v.offsets.put(e.getKey(), e.getValue().offset());
+            } else {
+                ConsumerGroupDescription d = admin.describeConsumerGroups(List.of(id)).describedGroups().get(id).get();
+                v.members = d.members().size();
+                for (MemberDescription m : d.members())
+                    for (TopicPartition tp : m.assignment().topicPartitions()) if (tp.topic().equals(topic)) v.reads = true;
+                for (Map.Entry<TopicPartition, OffsetAndMetadata> e : admin.listConsumerGroupOffsets(id).partitionsToOffsetAndMetadata().get().entrySet())
+                    if (e.getValue() != null) v.offsets.put(e.getKey(), e.getValue().offset());
+            }
+        } catch (Exception e) {
+            Throwable c = cause(e);
+            if (c instanceof GroupIdNotFoundException) return new View();
+            // Schema Registry ("schema-registry", protocol sr), Connect workers and the like are classic groups that
+            // are not consumer-protocol groups: they cannot be reading a topic through an assignment and
+            // describeConsumerGroups rejects them. Anything ELSE we cannot inspect is not guessed at.
+            if (consumerLike(type) && c instanceof IllegalArgumentException && String.valueOf(c.getMessage()).contains("not a consumer group")) return new View();
+            throw new IOException("cannot inspect " + type + " group " + id + " - refusing to guess whether it reads " + topic + ": " + e, e);
+        }
+        return v;
+    }
+
+    /** Groups that hold committed offsets on {@code topic} right now (sorted, so the manifest is stable), with their protocol. */
+    private static Map<String, GroupType> groupsOn(String bootstrap, String topic) throws Exception {
+        Map<String, GroupType> out = new TreeMap<>();
+        try (Admin admin = admin(bootstrap)) {
+            for (Map.Entry<String, GroupType> g : listTypes(admin).entrySet()) {
+                View v = view(admin, g.getKey(), g.getValue(), topic);
+                boolean holds = v.declared;
+                for (TopicPartition tp : v.offsets.keySet()) if (tp.topic().equals(topic)) holds = true;
+                if (holds) out.put(g.getKey(), g.getValue());
+            }
+        }
+        return out;
+    }
+
+    /** The groups recorded at export with the protocol each spoke (artifacts from before types were recorded: classic). */
+    private static Map<String, GroupType> recordedGroups(Properties mf, String skipRx) {
+        String raw = mf.getProperty("groups", "").trim(), types = mf.getProperty("groupTypes", "").trim();
+        Map<String, GroupType> out = new LinkedHashMap<>();
         if (raw.isEmpty()) return out;
-        for (String g : raw.split(",")) {
-            g = g.trim();
+        String[] gs = raw.split(","), ts = types.isEmpty() ? new String[0] : types.split(",");
+        for (int i = 0; i < gs.length; i++) {
+            String g = gs[i].trim();
             if (g.isEmpty() || skipped(g, skipRx)) continue;
-            out.add(g);
+            GroupType t = GroupType.CLASSIC;
+            if (i < ts.length) {
+                try { t = GroupType.valueOf(ts[i].trim()); } catch (IllegalArgumentException e) { t = GroupType.UNKNOWN; }
+            }
+            out.put(g, t);
         }
         return out;
     }
@@ -162,27 +242,14 @@ public final class TapePreserve {
     private static List<String> readers(String bootstrap, String topic, String skipRx, long[] committedAbove) throws Exception {
         TreeSet<String> out = new TreeSet<>();
         try (Admin admin = admin(bootstrap)) {
-            for (GroupListing g : admin.listGroups().all().get()) {
-                String id = g.groupId();
+            for (Map.Entry<String, GroupType> g : listTypes(admin).entrySet()) {
+                String id = g.getKey();
                 if (skipped(id, skipRx)) continue;
-                boolean strict = g.type().map(t -> t == GroupType.CLASSIC || t == GroupType.CONSUMER).orElse(true);
-                try {
-                    ConsumerGroupDescription d = admin.describeConsumerGroups(List.of(id)).describedGroups().get(id).get();
-                    for (MemberDescription m : d.members())
-                        for (TopicPartition tp : m.assignment().topicPartitions())
-                            if (tp.topic().equals(topic)) out.add(id);
-                    if (committedAbove != null)
-                        for (Map.Entry<TopicPartition, OffsetAndMetadata> o : admin.listConsumerGroupOffsets(id).partitionsToOffsetAndMetadata().get().entrySet())
-                            if (o.getKey().topic().equals(topic) && o.getValue() != null
-                                    && o.getValue().offset() > committedAbove[o.getKey().partition()]) out.add(id);
-                } catch (Exception e) {
-                    // Schema Registry ("schema-registry", protocol sr), Connect workers and the like are classic groups
-                    // that are not consumer-protocol groups: they cannot be reading a topic through an assignment and
-                    // describeConsumerGroups rejects them. Anything ELSE we cannot inspect is not guessed at.
-                    Throwable c = e instanceof ExecutionException && e.getCause() != null ? e.getCause() : e;
-                    boolean notAConsumerGroup = c instanceof IllegalArgumentException && String.valueOf(c.getMessage()).contains("not a consumer group");
-                    if (strict && !notAConsumerGroup) throw new IOException("cannot inspect group " + id + " - refusing to guess whether it reads " + topic + ": " + e);
-                }
+                View v = view(admin, id, g.getValue(), topic);
+                if (v.members > 0 && v.reads) out.add(id);
+                if (committedAbove != null)
+                    for (Map.Entry<TopicPartition, Long> o : v.offsets.entrySet())
+                        if (o.getKey().topic().equals(topic) && o.getValue() > committedAbove[o.getKey().partition()]) out.add(id);
             }
         }
         return new ArrayList<>(out);
@@ -199,18 +266,16 @@ public final class TapePreserve {
         return 0;
     }
 
-    /** Recorded groups that currently have live members; an unknown group has none (a wipe removes them). */
-    private static List<String> activeGroups(String bootstrap, List<String> groups) throws Exception {
+    /** Recorded groups that currently have live members; a group that no longer exists has none (a wipe removes them). */
+    private static List<String> activeGroups(String bootstrap, Map<String, GroupType> groups, String topic) throws Exception {
         List<String> active = new ArrayList<>();
         if (groups.isEmpty()) return active;
         try (Admin admin = admin(bootstrap)) {
-            for (Map.Entry<String, KafkaFuture<ConsumerGroupDescription>> e : admin.describeConsumerGroups(groups).describedGroups().entrySet()) {
-                try {
-                    int members = e.getValue().get().members().size();
-                    if (members > 0) { System.out.println("TAPE_IMPORT_GROUP_ACTIVE group=" + e.getKey() + " members=" + members); active.add(e.getKey()); }
-                } catch (ExecutionException x) {
-                    if (!(x.getCause() instanceof GroupIdNotFoundException)) throw x;
-                }
+            Map<String, GroupType> now = listTypes(admin);
+            for (String id : groups.keySet()) {
+                if (!now.containsKey(id)) continue;
+                int members = view(admin, id, now.get(id), topic).members;
+                if (members > 0) { System.out.println("TAPE_IMPORT_GROUP_ACTIVE group=" + id + " members=" + members); active.add(id); }
             }
         }
         return active;
@@ -319,8 +384,10 @@ public final class TapePreserve {
          .append("partitions=").append(perPart.length).append('\n')
          .append("bytes=").append(Files.size(out)).append('\n')
          .append("crc32=").append(crc.getValue()).append('\n');
-        List<String> groups = groupsOn(bootstrap, topic);
+        Map<String, GroupType> gmap = groupsOn(bootstrap, topic);
+        List<String> groups = new ArrayList<>(gmap.keySet());
         m.append("groups=").append(String.join(",", groups)).append('\n');
+        m.append("groupTypes=").append(String.join(",", gmap.values().stream().map(Enum::name).toList())).append('\n');
         for (int i = 0; i < perPart.length; i++) m.append("p").append(i).append('=').append(perPart[i]).append('\n');
         Files.writeString(Path.of(out + ".manifest"), m.toString(), StandardCharsets.UTF_8);
         System.out.println("TAPE_EXPORTED topic=" + topic + " records=" + total + " minTs=" + (total == 0 ? 0 : minTs)
@@ -387,8 +454,8 @@ public final class TapePreserve {
 
         // Fence 1 (before the first record): a recorded group with live members would consume the restored
         // history as it is produced (the es4 -> prod bridge would republish it into prod).
-        List<String> groups = recordedGroups(mf, skipGroupsRx);
-        TreeSet<String> blockers = new TreeSet<>(activeGroups(bootstrap, groups));
+        Map<String, GroupType> groups = recordedGroups(mf, skipGroupsRx);
+        TreeSet<String> blockers = new TreeSet<>(activeGroups(bootstrap, groups, topic));
         for (String r : readers(bootstrap, topic, skipGroupsRx, null)) {
             if (blockers.add(r)) System.out.println("TAPE_IMPORT_GROUP_ACTIVE group=" + r + " members=assigned-to-topic (not recorded at export)");
         }
@@ -454,7 +521,7 @@ public final class TapePreserve {
             throw e;
         }
         System.out.println("TAPE_IMPORTED topic=" + topic + " records=" + expectRecords + " partitions=" + expectParts);
-        // Fence 2 + pin, all or nothing: a group that appeared while we produced may have read part of the tape,
+        // Fence 2 (best-effort detection) + pin, all or nothing: a group that appeared while we produced may have read part of the tape,
         // and a group that cannot be pinned would re-read all of it. Either way the topic goes back to empty.
         if ("pause-before-fence2".equals(FAULT)) Thread.sleep(20_000);
         // Nothing has been pinned yet, so on a topic that was empty a moment ago ANY group holding offsets on it,
@@ -475,16 +542,17 @@ public final class TapePreserve {
         return 0;
     }
 
-    /** Pins each group to the restored end so it starts where a plain wipe would have left it. Returns the groups
-     *  that are active or could not be pinned (empty = every group fenced and pinned). */
-    private static List<String> pin(String bootstrap, String topic, List<String> groups) {
+    /** Pins each group to the restored end so it starts where a plain wipe would have left it, through the offset
+     *  API of the protocol the group spoke at export. Returns the groups that are active or could not be pinned
+     *  (empty = every group fenced and pinned). */
+    private static List<String> pin(String bootstrap, String topic, Map<String, GroupType> groups) {
         List<String> failed = new ArrayList<>();
         if (groups.isEmpty()) return failed;
         try {
-            failed.addAll(activeGroups(bootstrap, groups));
+            failed.addAll(activeGroups(bootstrap, groups, topic));
         } catch (Exception e) {
             System.out.println("TAPE_PIN_FAILED group=* reason=" + e);
-            failed.addAll(groups);
+            failed.addAll(groups.keySet());
             return failed;
         }
         try (KafkaConsumer<byte[], byte[]> c = new KafkaConsumer<>(consumerProps(bootstrap)); Admin admin = admin(bootstrap)) {
@@ -492,12 +560,18 @@ public final class TapePreserve {
             Map<TopicPartition, Long> ends = c.endOffsets(parts);
             Map<TopicPartition, OffsetAndMetadata> target = new HashMap<>();
             parts.forEach(tp -> target.put(tp, new OffsetAndMetadata(ends.get(tp))));
-            for (String g : groups) {
+            for (Map.Entry<String, GroupType> ge : groups.entrySet()) {
+                String g = ge.getKey();
                 if (failed.contains(g)) continue;
                 try {
                     if ("pin".equals(FAULT)) throw new IOException("injected fault: pin");
-                    admin.alterConsumerGroupOffsets(g, target).all().get();
-                    System.out.println("TAPE_PINNED group=" + g + " partitions=" + parts.size());
+                    switch (ge.getValue()) {
+                        case SHARE -> admin.alterShareGroupOffsets(g, new HashMap<>(ends)).all().get();
+                        case STREAMS -> admin.alterStreamsGroupOffsets(g, target).all().get();
+                        case CLASSIC, CONSUMER -> admin.alterConsumerGroupOffsets(g, target).all().get();
+                        default -> throw new IOException("group protocol " + ge.getValue() + " cannot be pinned");
+                    }
+                    System.out.println("TAPE_PINNED group=" + g + " type=" + ge.getValue() + " partitions=" + parts.size());
                 } catch (Exception e) {
                     System.out.println("TAPE_PIN_FAILED group=" + g + " reason=" + e.getClass().getSimpleName() + ": " + String.valueOf(e.getMessage()).replace('\n', ' '));
                     failed.add(g);
@@ -505,7 +579,7 @@ public final class TapePreserve {
             }
         } catch (Exception e) {
             System.out.println("TAPE_PIN_FAILED group=* reason=" + e);
-            for (String g : groups) if (!failed.contains(g)) failed.add(g);
+            for (String g : groups.keySet()) if (!failed.contains(g)) failed.add(g);
         }
         return failed;
     }

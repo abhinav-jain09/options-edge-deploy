@@ -33,7 +33,7 @@ for i in "${!args[@]}"; do
 done
 echo "$cmd ${args[*]:$((idx+1))}" >> "$FIX/calls"
 rc=$(cat "$FIX/$cmd.rc" 2>/dev/null || echo 0)
-if [ "$cmd" = topicid ]; then [ -f "$FIX/topicid.fail" ] && exit 1; echo "TAPE_TOPIC_ID $(cat "$FIX/topicid" 2>/dev/null || echo TOPIC-INCARNATION-1)"; exit 0; fi
+if [ "$cmd" = topicid ]; then [ -f "$FIX/topicid.fail" ] && exit 1; echo "TAPE_TOPIC_ID $(cat "$FIX/topicid" 2>/dev/null || echo AAAAAAAAAAAAAAAAAAAAA1)"; exit 0; fi
 if [ "$cmd" = state ]; then
   st=$(head -1 "$FIX/state.seq" 2>/dev/null)
   if [ -n "$st" ]; then tail -n +2 "$FIX/state.seq" > "$FIX/state.seq.n"; mv "$FIX/state.seq.n" "$FIX/state.seq"
@@ -70,6 +70,8 @@ tp() {
   ( export ES4_TAPE_JAVA="$W/java" ES4_TAPE_PRESERVE_DIR="$W/art" ES4_TAPE_BOOTSTRAP=stub:9092 \
            ES4_TAPE_PRESERVE_TOPICS="${TOPICS:-es.underlying.es.trades}" FIX="$FIX" DRY="${DRY:-false}"
     [ "${TP_FAIL_MV:-0}" = 1 ] && mv() { return 1; }
+    # fails only the publish of a NEW manifest (the second rename of an export), nothing else
+    [ "${TP_FAIL_MV:-0}" = manifest ] && mv() { local a; for a; do :; done; case "$*" in *.tmp.*) [ "${a##*.}" = manifest ] && return 1 ;; esac; command mv "$@"; }
     [ "${TP_FAIL_RM:-0}" = 1 ] && rm() { return 1; }
     # shellcheck source=/dev/null
     . "$HERE/tape-preserve.sh"; "$@" ) > "$W/out" 2>&1
@@ -91,6 +93,24 @@ fresh; tp tape_preserve_export; r=$?
   && ok "artifact + manifest published" || bad "export did not publish: $(cat "$W/out")"
 [ ! -e "$W/art/es.underlying.es.trades.required" ] && ok "no stale side marker: the requirement is recomputed at import time" || bad "a .required marker is still written"
 [ -z "$(ls -A "$W/art" | grep '^\.tmp')" ] && ok "no temp files left behind" || bad "temp files left: $(ls -A "$W/art")"
+
+case_ "3b. a failed second rename of a publish must not destroy the previous importable artifact (Codex r3)"
+fresh; echo 5 > "$FIX/export.records"; tp tape_preserve_export
+before="$(cksum < "$W/art/es.underlying.es.trades.tape.manifest")$(cksum < "$W/art/es.underlying.es.trades.tape")"
+echo 9 > "$FIX/export.records"; TP_FAIL_MV=manifest tp tape_preserve_export; r=$?
+after="$(cksum < "$W/art/es.underlying.es.trades.tape.manifest" 2>/dev/null)$(cksum < "$W/art/es.underlying.es.trades.tape" 2>/dev/null)"
+[ $r = 1 ] && grep -q "previous artifact" "$W/out" && ok "the failed publish is reported (rc 1)" || bad "r=$r out=$(cat "$W/out")"
+[ "$before" = "$after" ] && ok "the previous tape+manifest pair is back, byte for byte" || bad "previous pair lost or changed"
+[ -z "$(ls -A "$W/art" | grep -E '^(prev|\.tmp)')" ] && ok "no parked or temp files left" || bad "leftovers: $(ls -A "$W/art")"
+# a publish killed half-way (new tape in place, no manifest, previous pair parked) is recovered at the next run
+fresh; echo 5 > "$FIX/export.records"; tp tape_preserve_export
+cp "$W/art/es.underlying.es.trades.tape" "$W/prev.tape"; cp "$W/art/es.underlying.es.trades.tape.manifest" "$W/prev.mf"
+mv "$W/art/es.underlying.es.trades.tape" "$W/art/prev.es.underlying.es.trades.tape"; mv "$W/art/es.underlying.es.trades.tape.manifest" "$W/art/prev.es.underlying.es.trades.tape.manifest"
+echo partial > "$W/art/es.underlying.es.trades.tape"
+tp tp_recover "$W/art" es.underlying.es.trades
+if cmp -s "$W/prev.tape" "$W/art/es.underlying.es.trades.tape" && cmp -s "$W/prev.mf" "$W/art/es.underlying.es.trades.tape.manifest" && [ -z "$(ls -A "$W/art" | grep '^prev')" ]; then
+  ok "a half-published artifact is rolled back to the previous pair (byte for byte) at the next run"
+else bad "no recovery: $(ls -A "$W/art")"; fi
 
 case_ "4. a failing export is non-fatal and KEEPS an earlier artifact (a resumed reset needs it)"
 fresh; tp tape_preserve_export; echo 1 > "$FIX/export.rc"
@@ -195,11 +215,11 @@ tp tape_preserve_export; r=$?
 grep -q "NOT exporting" "$W/out" && ok "says why" || bad "silent skip"
 # the wedge: the reset is resumed much later, AFTER the wipe has recreated the topic. The marker described the
 # old incarnation and must not disable preservation for every later reset.
-echo TOPIC-INCARNATION-2 > "$FIX/topicid"; : > "$FIX/calls"
+echo AAAAAAAAAAAAAAAAAAAAA2 > "$FIX/topicid"; : > "$FIX/calls"
 touch -t 202001010000 "$W/art/es.underlying.es.trades.tape.manifest"     # the artifact is also stale by now
 tp tape_preserve_export; r=$?
 [ "$(calls export)" = 1 ] && [ ! -e "$W/art/es.underlying.es.trades.importing" ] && ok "after the topic is recreated the marker is obsolete: cleared, and a fresh export runs (no permanent wedge)" || bad "wedged: calls=$(cat "$FIX/calls") marker=$(ls -A "$W/art" | grep importing)"
-grep -q "describes an earlier incarnation" "$W/out" && ok "says the marker was obsolete" || bad "silent"
+grep -q "marker for .* is obsolete" "$W/out" && ok "says the marker was obsolete" || bad "silent"
 [ "$(find "$W/art/es.underlying.es.trades.tape.manifest" -newer "$FIX/topicid" | wc -l | tr -d ' ')" = 1 ] && ok "the stale artifact was replaced by the fresh export" || bad "stale artifact survived"
 # topic gone entirely
 fresh; tp tape_preserve_export; echo 124 > "$FIX/import.rc"; printf 'PARTIAL\nPARTIAL\n' > "$FIX/state.seq"; tp tape_preserve_import >/dev/null
@@ -211,6 +231,27 @@ fresh; tp tape_preserve_export; echo 124 > "$FIX/import.rc"; printf 'PARTIAL\nPA
 tp tape_preserve_export
 [ "$(calls export)" = 0 ] && [ -e "$W/art/es.underlying.es.trades.importing" ] && grep -q "NOT exporting" "$W/out" && ok "an unreadable topic id keeps the marker in force (fail toward protecting the artifact)" || bad "marker dropped without proof: $(cat "$W/out")"
 rm -f "$FIX/topicid.fail"
+# Codex r3: the marker must never be written without a usable id, and an id-less marker must not age-clear.
+fresh; tp tape_preserve_export; : > "$FIX/topicid.fail"; : > "$FIX/calls"
+tp tape_preserve_import; r=$?
+[ $r = 1 ] && [ "$(calls import)" = 0 ] && [ ! -e "$W/art/es.underlying.es.trades.importing" ] && [ -f "$W/art/es.underlying.es.trades.tape" ] \
+  && ok "an unreadable topic id at import time: nothing imported, no marker written, artifact kept (rc 1)" || bad "r=$r calls=$(cat "$FIX/calls") out=$(cat "$W/out")"
+rm -f "$FIX/topicid.fail"
+fresh; tp tape_preserve_export; echo ABSENT > "$FIX/topicid"; : > "$FIX/calls"
+tp tape_preserve_import; r=$?
+[ $r = 1 ] && [ "$(calls import)" = 0 ] && [ ! -e "$W/art/es.underlying.es.trades.importing" ] && ok "an ABSENT topic id is refused the same way" || bad "ABSENT: r=$r calls=$(cat "$FIX/calls")"
+echo AAAAAAAAAAAAAAAAAAAAA1 > "$FIX/topicid"
+# a marker from before ids were recorded (just an epoch), 25h old, the topic still holding records: age must NOT clear it
+fresh; tp tape_preserve_export; date +%s > "$W/art/es.underlying.es.trades.importing"
+touch -t 202001010000 "$W/art/es.underlying.es.trades.importing" "$W/art/es.underlying.es.trades.tape.manifest"
+printf 'PARTIAL\n' > "$FIX/state.seq"; : > "$FIX/calls"
+tp tape_preserve_export
+[ "$(calls export)" = 0 ] && [ -e "$W/art/es.underlying.es.trades.importing" ] && grep -q "NOT exporting" "$W/out" && ok "an id-less marker survives 24h+ while the topic still holds a partial tape (no age expiry)" || bad "id-less marker age-cleared: calls=$(cat "$FIX/calls")"
+# ...and is cleared once the topic is PROVEN empty
+printf 'EMPTY\n' > "$FIX/state.seq"; : > "$FIX/calls"
+tp tape_preserve_export
+[ "$(calls export)" = 1 ] && [ ! -e "$W/art/es.underlying.es.trades.importing" ] && ok "an id-less marker is cleared when the topic is proven EMPTY" || bad "not cleared on proven-empty: calls=$(cat "$FIX/calls")"
+rm -f "$FIX/state.seq"
 
 case_ "10d. killed after the records landed but before pinning (state COMPLETE): the wrapper finishes the pin and keeps the tape"
 fresh; tp tape_preserve_export; echo 124 > "$FIX/import.rc"; printf 'COMPLETE\n' > "$FIX/state.seq"; : > "$FIX/calls"

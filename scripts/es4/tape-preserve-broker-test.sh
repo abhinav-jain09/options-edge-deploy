@@ -15,10 +15,12 @@ BS="${TAPE_PRESERVE_TEST_BOOTSTRAP:-}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIBS="${KAFKA_LIBS:-$HOME/kafka-4.3.0/libs}"
 KBIN="${KBIN:-$HOME/development/confluent-7.3.1/bin}"
+KAFKA_BIN="${KAFKA_BIN:-$HOME/kafka-4.3.0/bin}"   # Kafka 4.x CLIs: the share-group console consumer does not exist in 7.3.1
 for x in kafka-topics kafka-console-producer kafka-console-consumer kafka-consumer-groups kafka-get-offsets; do
   [ -x "$KBIN/$x" ] || { echo "FATAL: $KBIN/$x not found (set KBIN)"; exit 2; }
 done
 ls "$LIBS"/kafka-clients-*.jar >/dev/null 2>&1 || { echo "FATAL: no kafka-clients jar in $LIBS (set KAFKA_LIBS)"; exit 2; }
+[ -x "$KAFKA_BIN/kafka-console-share-consumer.sh" ] || { echo "skip: $KAFKA_BIN/kafka-console-share-consumer.sh not found (Kafka 4.x CLIs needed for the share-group drills; set KAFKA_BIN)"; exit 0; }
 command -v timeout >/dev/null 2>&1 || { echo "FATAL: coreutils timeout required"; exit 2; }
 
 fails=0
@@ -37,7 +39,11 @@ cleanup() {
   for t in $("$KBIN/kafka-topics" --bootstrap-server "$BS" --list 2>/dev/null | grep -F "$RUN."); do
     "$KBIN/kafka-topics" --bootstrap-server "$BS" --delete --topic "$t" >/dev/null 2>&1
   done
-  for g in "${GROUPS_[@]:-}"; do [ -n "$g" ] && "$KBIN/kafka-consumer-groups" --bootstrap-server "$BS" --delete --group "$g" >/dev/null 2>&1; done
+  for g in "${GROUPS_[@]:-}"; do
+    [ -n "$g" ] || continue
+    "$KBIN/kafka-consumer-groups" --bootstrap-server "$BS" --delete --group "$g" >/dev/null 2>&1
+    "$KAFKA_BIN/kafka-share-groups.sh" --bootstrap-server "$BS" --delete --group "$g" >/dev/null 2>&1
+  done
   find "$W" -mindepth 1 -delete 2>/dev/null; rmdir "$W" 2>/dev/null
 }
 trap cleanup EXIT
@@ -176,6 +182,31 @@ kill "$XP" 2>/dev/null
 grep -q "RC=7" "$W/i12.txt" && ok "rc 7" || bad "not rolled back: $(tail -3 "$W/i12.txt")"
 grep -q "TAPE_IMPORT_FENCE_BREACH.*$GI" "$W/i12.txt" && ok "the intruding group is named in the breach report" || bad "breach not reported: $(cat "$W/i12.txt")"
 [ "$(live "$T")" = 0 ] && ok "the topic was emptied again" || bad "live=$(live "$T")"
+
+case_ "13. a SHARE group is invisible to the consumer-group tools: a live share member blocks the restore (rc 5), named, nothing produced"
+T=$(mk shr); seed "$T" 1200
+tool export "$BS" "$T" $FROM "$W/shr.tape" > /dev/null 2>&1; recreate "$T"
+GS="$RUN-share"; GROUPS_+=("$GS")
+"$KBIN/kafka-consumer-groups" --bootstrap-server "$BS" --list 2>/dev/null | grep -qF "$GS" && bad "premise: share group visible to consumer-groups" || ok "premise: the consumer-group tools do not list it"
+"$KAFKA_BIN/kafka-console-share-consumer.sh" --bootstrap-server "$BS" --topic "$T" --group "$GS" >/dev/null 2>&1 &
+PIDS+=("$!"); SP=$!
+sleep 8
+tool import "$BS" "$W/shr.tape" '^none' > "$W/i13.txt" 2>&1; rc=$?
+[ $rc = 5 ] && [ "$(ends "$T")" = 0 ] && ok "rc 5, nothing produced" || bad "rc=$rc ends=$(ends "$T") out=$(cat "$W/i13.txt")"
+grep -q "$GS" "$W/i13.txt" && ok "names the share group" || bad "share group not named: $(cat "$W/i13.txt")"
+kill "$SP" 2>/dev/null; sleep 8
+
+case_ "14. a recorded SHARE group is pinned through the SHARE API, or the restore fails closed (rc 7, topic emptied) - never skipped"
+# Whether this broker's share coordinator keeps state for an idle group varies, so the export may or may not list
+# the group on its own. The manifest is therefore written to record it as SHARE (the shape an export produces on
+# a broker that does) and the real import must then either pin it or roll back.
+T=$(mk shr2); seed "$T" 900
+tool export "$BS" "$T" $FROM "$W/shr2.tape" > "$W/e14.txt" 2>&1; recreate "$T"
+sed -i.bak -e "s/^groups=.*/groups=$GS/" "$W/shr2.tape.manifest"; echo "groupTypes=SHARE" >> "$W/shr2.tape.manifest"
+tool import "$BS" "$W/shr2.tape" > "$W/i14.txt" 2>&1; rc=$?
+if [ $rc = 0 ] && grep -q "TAPE_PINNED group=$GS type=SHARE" "$W/i14.txt"; then ok "rc 0, pinned via the SHARE API (type=SHARE in the report)"
+elif [ $rc = 7 ] && [ "$(live "$T")" = 0 ] && grep -q "TAPE_PIN_FAILED group=$GS" "$W/i14.txt"; then ok "pin via the SHARE API refused by this broker: rc 7 and the topic was emptied (fail closed)"
+else bad "rc=$rc live=$(live "$T") out=$(cat "$W/i14.txt")"; fi
 
 case_ "9. truncate empties a topic and is idempotent"
 tool truncate "$BS" "$T" > /dev/null 2>&1; tool truncate "$BS" "$T" > /dev/null 2>&1
