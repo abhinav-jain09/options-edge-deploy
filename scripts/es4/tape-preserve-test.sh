@@ -120,6 +120,7 @@ fresh; tp tape_preserve_export; : > "$FIX/calls"; tp tape_preserve_import; r=$?
 [ ! -f "$W/art/es.underlying.es.trades.tape" ] && [ -f "$W/art/consumed.es.underlying.es.trades.tape" ] && ok "artifact retired to consumed.*" || bad "artifact not retired: $(ls -A "$W/art")"
 [ "$(calls coverage)" = 1 ] && ok "AMT's own coverage test ran after the import" || bad "coverage not checked"
 grep -q "will start READY" "$W/out" && ok "reports READY outcome" || bad "no READY line: $(cat "$W/out")"
+[ ! -e "$W/art/es.underlying.es.trades.importing" ] && ok "no restore-in-progress marker left after a clean restore" || bad "marker left behind"
 : > "$FIX/calls"; tp tape_preserve_import
 [ "$(calls import)" = 0 ] && ok "a second import finds nothing to restore (cannot double-import)" || bad "double import"
 
@@ -149,6 +150,7 @@ fresh; tp tape_preserve_export; echo 5 > "$FIX/import.rc"; tp tape_preserve_impo
 [ $r = 1 ] && [ -f "$W/art/es.underlying.es.trades.tape" ] && ok "refused; artifact kept; rc 1" || bad "rc=$r artifact=$(ls -A "$W/art")"
 grep -q "es-trades-bridge-x" "$W/out" && grep -q "ACTIVE" "$W/out" && ok "names the active group" || bad "group not named: $(cat "$W/out")"
 grep -q "launchctl bootout" "$W/out" && ok "tells the operator how to pause the bridge" || bad "no remedy printed"
+[ ! -e "$W/art/es.underlying.es.trades.importing" ] && ok "a refusal (nothing produced) leaves no marker" || bad "marker left after a refusal"
 
 case_ "9c. success pins every recorded group to the restored end and says so"
 fresh; tp tape_preserve_export; : > "$FIX/calls"; tp tape_preserve_import; r=$?
@@ -172,11 +174,17 @@ fresh; tp tape_preserve_export; echo 124 > "$FIX/import.rc"; printf 'PARTIAL\nEM
 tp tape_preserve_import; r=$?
 [ $r = 1 ] && [ "$(calls truncate)" = 1 ] && ok "rc 1 (a warning); the wrapper ran truncate itself" || bad "rc=$r truncates=$(calls truncate)"
 grep -q "rolled back" "$W/out" && ok "reports the rollback" || bad "silent: $(cat "$W/out")"
+[ ! -e "$W/art/es.underlying.es.trades.importing" ] && ok "a proven rollback clears the marker" || bad "marker left after a proven rollback"
 
 case_ "10c. killed mid-import AND the partial tape cannot be emptied -> UNSAFE (rc 2): the clean must not start apps"
 fresh; tp tape_preserve_export; echo 124 > "$FIX/import.rc"; printf 'PARTIAL\nPARTIAL\n' > "$FIX/state.seq"
 tp tape_preserve_import; r=$?
 [ $r = 2 ] && grep -q "UNSAFE" "$W/out" && ok "rc 2 and an UNSAFE message" || bad "rc=$r out=$(cat "$W/out")"
+[ -e "$W/art/es.underlying.es.trades.importing" ] && ok "UNSAFE keeps the marker" || bad "marker cleared although the topic may hold a partial tape"
+before="$(cksum < "$W/art/es.underlying.es.trades.tape")"; : > "$FIX/calls"; rm -f "$FIX/import.rc"
+tp tape_preserve_export; r=$?
+[ "$(calls export)" = 0 ] && [ "$(cksum < "$W/art/es.underlying.es.trades.tape")" = "$before" ] && ok "a resumed reset does NOT re-export the possibly partial topic: the good artifact is untouched" || bad "export ran / artifact changed ($(cat "$FIX/calls"))"
+grep -q "NOT exporting" "$W/out" && ok "says why" || bad "silent skip"
 
 case_ "10d. killed after the records landed but before pinning (state COMPLETE): the wrapper finishes the pin and keeps the tape"
 fresh; tp tape_preserve_export; echo 124 > "$FIX/import.rc"; printf 'COMPLETE\n' > "$FIX/state.seq"; : > "$FIX/calls"

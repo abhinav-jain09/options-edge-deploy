@@ -152,6 +152,14 @@ tape_preserve_export() {
   fi
   mkdir -p "$dir" || { tp_log "WARNING: cannot create $dir"; return 1; }
   for t in $topics; do
+    # A restore that did not finish cleanly (UNSAFE, or the wrapper itself was killed) leaves this marker. The
+    # topic may then hold a PARTIAL restored tape, and exporting it would overwrite the good artifact with a
+    # partial copy that a later restore would present as complete. Keep the artifact; the wipe that follows
+    # (resumed reset) empties the topic and the good artifact is restored.
+    if [ -e "$dir/$t.importing" ]; then
+      tp_log "NOT exporting $t: an earlier restore did not finish cleanly (marker $dir/$t.importing) - the topic may hold a partial tape; keeping the existing artifact"
+      continue
+    fi
     tmp="$dir/.tmp.$t.$$"
     rm -f "$tmp" "$tmp.manifest"
     if out="$(tp_tool export "$bs" "$t" "$from" "$tmp" 2>&1)"; then
@@ -242,6 +250,7 @@ tape_preserve_import() {
       rc=1; continue
     fi
     if [ "${DRY:-false}" = true ]; then tp_log "DRY: would restore $t from $tape"; continue; fi
+    date +%s > "$dir/$t.importing"
     out="$(tp_tool import "$bs" "$tape" "$skip" 2>&1)"; irc=$?
     # An exit code is a claim, not evidence: look at the topic before believing "restored". 98 = the tool said
     # success but the topic is not COMPLETE, which is handled exactly like any other unknown outcome.
@@ -249,9 +258,9 @@ tape_preserve_import() {
     settled=""
     case "$irc" in
       0) settled=COMPLETE ;;
-      4) tp_log "WARNING: $t already holds records - not importing over them (artifact kept)"; rc=1; continue ;;
-      5) tp_log "WARNING: NOT restoring $t - consumer group(s) that read it are ACTIVE: $(printf '%s' "$out" | sed -n 's/^TAPE_IMPORT_GROUP_ACTIVE group=\([^ ]*\).*/\1/p' | tr '\n' ' ')- restored history would stream to them (the es4->prod bridge would republish it into prod). Pause them (launchctl bootout gui/\$(id -u)/com.optionsedge.es-trades-bridge-192-168-100-252-9092) and rerun, or accept es-amt-service NOT_READY"; rc=1; continue ;;
-      6) tp_log "WARNING: NOT restoring $t - $(printf '%s' "$out" | sed -n 's/^TAPE_IMPORT_TIMESTAMP_TYPE //p' | head -1). A LogAppendTime topic stamps every restored record with the import time, which would defeat the restore. Nothing was produced"; rc=1; continue ;;
+      4) rm -f "$dir/$t.importing"; tp_log "WARNING: $t already holds records - not importing over them (artifact kept)"; rc=1; continue ;;
+      5) rm -f "$dir/$t.importing"; tp_log "WARNING: NOT restoring $t - consumer group(s) that read it are ACTIVE: $(printf '%s' "$out" | sed -n 's/^TAPE_IMPORT_GROUP_ACTIVE group=\([^ ]*\).*/\1/p' | tr '\n' ' ')- restored history would stream to them (the es4->prod bridge would republish it into prod). Pause them (launchctl bootout gui/\$(id -u)/com.optionsedge.es-trades-bridge-192-168-100-252-9092) and rerun, or accept es-amt-service NOT_READY"; rc=1; continue ;;
+      6) rm -f "$dir/$t.importing"; tp_log "WARNING: NOT restoring $t - $(printf '%s' "$out" | sed -n 's/^TAPE_IMPORT_TIMESTAMP_TYPE //p' | head -1). A LogAppendTime topic stamps every restored record with the import time, which would defeat the restore. Nothing was produced"; rc=1; continue ;;
       *)
         # 7 = the tool rolled itself back; anything else (error, timeout kill, signal) = outcome unknown.
         # Never trust either: look at the topic and make it safe.
@@ -262,12 +271,14 @@ tape_preserve_import() {
           return 2
         fi
         if [ "$settled" = EMPTY ]; then
+          rm -f "$dir/$t.importing"
           tp_log "rolled back: $t is empty (artifact kept); es-amt-service will be NOT_READY until a session roll"
           rc=1; continue
         fi
         ;;
     esac
     # Restored: complete, and every recorded group fenced and pinned.
+    rm -f "$dir/$t.importing"
     tp_log "restored $t: $(printf '%s' "$out" | grep -E 'TAPE_IMPORTED|TAPE_IMPORT_SKIPPED' | tail -1)"
     printf '%s\n' "$out" | grep '^TAPE_PINNED' | while read -r l; do tp_log "pinned to the restored end: ${l#TAPE_PINNED }"; done
     if tp_tool coverage "$bs" "$t" "$required" >/dev/null 2>&1; then
