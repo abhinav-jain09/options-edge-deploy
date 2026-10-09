@@ -35,7 +35,7 @@ echo "$cmd ${args[*]:$((idx+1))}" >> "$FIX/calls"
 rc=$(cat "$FIX/$cmd.rc" 2>/dev/null || echo 0)
 if [ "$cmd" = export ] && [ "$rc" = 0 ]; then
   out="${args[$((idx+4))]}"; n=$(cat "$FIX/export.records" 2>/dev/null || echo 5)
-  : > "$out"; printf 'records=%s\ntopic=%s\n' "$n" "${args[$((idx+2))]}" > "$out.manifest"
+  : > "$out"; printf 'records=%s\ntopic=%s\nmaxTs=%s\n' "$n" "${args[$((idx+2))]}" "$(cat "$FIX/export.maxts" 2>/dev/null || echo 9999999999999)" > "$out.manifest"
   echo "TAPE_EXPORTED topic=${args[$((idx+2))]} records=$n bytes=123 groups=es-trades-bridge-x,indicator-service-es4"
 fi
 if [ "$cmd" = import ] && [ "$rc" = 0 ]; then
@@ -72,11 +72,11 @@ case_ "2. DRY run — no tool call, no files"
 fresh; DRY=true tp tape_preserve_export; r=$?
 [ $r = 0 ] && [ ! -s "$FIX/calls" ] && [ -z "$(ls -A "$W/art")" ] && ok "DRY export: nothing exported, nothing written" || bad "DRY mutated: $(cat "$FIX/calls")"
 
-case_ "3. export success publishes the tape, manifest last, and the required-from marker"
+case_ "3. export success publishes the tape, manifest last"
 fresh; tp tape_preserve_export; r=$?
 [ $r = 0 ] && [ -f "$W/art/es.underlying.es.trades.tape" ] && [ -f "$W/art/es.underlying.es.trades.tape.manifest" ] \
   && ok "artifact + manifest published" || bad "export did not publish: $(cat "$W/out")"
-[ "$(cat "$W/art/es.underlying.es.trades.required" 2>/dev/null | tr -d '\n' | grep -cE '^[0-9]+$')" = 1 ] && ok "required-from ms recorded for the post-import coverage check" || bad "required marker missing"
+[ ! -e "$W/art/es.underlying.es.trades.required" ] && ok "no stale side marker: the requirement is recomputed at import time" || bad "a .required marker is still written"
 [ -z "$(ls -A "$W/art" | grep '^\.tmp')" ] && ok "no temp files left behind" || bad "temp files left: $(ls -A "$W/art")"
 
 case_ "4. a failing export is non-fatal and KEEPS an earlier artifact (a resumed reset needs it)"
@@ -145,25 +145,40 @@ fresh; tp tape_preserve_export; echo fail > "$FIX/import.pin"; tp tape_preserve_
 [ $r = 1 ] && grep -q "could not pin: es-trades-bridge-x" "$W/out" && grep -q "RE-READ the restored history" "$W/out" && ok "warns which group will re-read the history" || bad "rc=$r out=$(cat "$W/out")"
 [ -f "$W/art/consumed.es.underlying.es.trades.tape" ] && ok "the artifact is still retired (the topic was restored)" || bad "not retired"
 
+case_ "11b. an artifact that stops BEFORE the prior session's close is refused (it would present a partial prior session as complete)"
+fresh; echo 1 > "$FIX/export.maxts"; tp tape_preserve_export; : > "$FIX/calls"; tp tape_preserve_import; r=$?
+[ $r = 1 ] && [ "$(calls import)" = 0 ] && ok "refused: the tool was never asked to import" || bad "partial artifact imported (rc=$r)"
+grep -q "BEFORE the prior session's close" "$W/out" && ok "says why" || bad "silent: $(cat "$W/out")"
+[ -f "$W/art/es.underlying.es.trades.tape" ] && ok "artifact left in place" || bad "artifact deleted"
+
+case_ "11c. an artifact that runs through the close is restored (a normal clean exports after the close)"
+fresh; echo 9999999999999 > "$FIX/export.maxts"; tp tape_preserve_export; : > "$FIX/calls"; tp tape_preserve_import; r=$?
+[ $r = 0 ] && [ "$(calls import)" = 1 ] && ok "restored" || bad "rc=$r calls=$(cat "$FIX/calls")"
+
+case_ "11d. without the calendar the import refuses (it cannot prove the close) instead of guessing"
+fresh; tp tape_preserve_export; : > "$FIX/calls"; ES4_TAPE_CAL_DIR=/nonexistent tp tape_preserve_import; r=$?
+[ $r = 1 ] && [ "$(calls import)" = 0 ] && grep -q "calendar unavailable" "$W/out" && ok "refused, fails toward the old behaviour" || bad "rc=$r out=$(cat "$W/out")"
+
 case_ "12. two topics are handled independently"
 fresh; TOPICS="a.t b.t" tp tape_preserve_export
 [ -f "$W/art/a.t.tape" ] && [ -f "$W/art/b.t.tape" ] && ok "both exported" || bad "$(ls -A "$W/art")"
 
 # ---------------------------------------------------------------------------------------------------
 case_ "13. the window mirrors EsAmtSession (tradeDate rolls at 18:00 ET; required = prior trading day 09:30 ET)"
-win() { # <y m d H M> in ET -> "<from_ET> | <required_ET>"
+win() { # <y m d H M> in ET -> "<from_ET> | <required_ET> | <requiredClose_ET>"
   local e; e=$(python3 -c "import datetime as d;from zoneinfo import ZoneInfo as Z;print(int(d.datetime($1,$2,$3,$4,$5,tzinfo=Z('America/New_York')).timestamp()))")
   ( ES4_TAPE_NOW_EPOCH=$e; export ES4_TAPE_NOW_EPOCH; . "$HERE/tape-preserve.sh"; tp_window ) | python3 -c "
 import sys,datetime as d;from zoneinfo import ZoneInfo as Z
-f,r=map(int,sys.stdin.read().split())
+f,r,c=map(int,sys.stdin.read().split())
 t=lambda ms:d.datetime.fromtimestamp(ms/1000,Z('America/New_York')).strftime('%a %m-%d %H:%M')
-print(t(f),'|',t(r))"
+print(t(f),'|',t(r),'|',t(c))"
 }
 chk() { [ "$(win $2 $3 $4 $5 $6)" = "$7" ] && ok "$1" || bad "$1: got '$(win $2 $3 $4 $5 $6)' want '$7'"; }
-chk "Thu 16:40 ET restart needs WEDNESDAY's open (the 2026-10-08 failure)"  2026 10 8 16 40 "Wed 10-07 04:40 | Wed 10-07 09:30"
-chk "Fri 18:30 ET (session rolled to Monday) needs Friday's open"          2026 10 9 18 30 "Thu 10-08 06:30 | Fri 10-09 09:30"
-chk "Mon 07:00 ET needs Friday's open across the weekend"                  2026 10 12 7 0 "Fri 10-09 07:30 | Fri 10-09 09:30"
-chk "Labor Day 2026-09-07 12:00 ET: prior session skips the weekend AND the holiday (Fri 09-04)" 2026 9 7 12 0 "Fri 09-04 07:30 | Fri 09-04 09:30"
+chk "Thu 16:40 ET restart needs WEDNESDAY's open (the 2026-10-08 failure)"  2026 10 8 16 40 "Wed 10-07 04:40 | Wed 10-07 09:30 | Wed 10-07 16:00"
+chk "Fri 18:30 ET (session rolled to Monday) needs Friday's open"          2026 10 9 18 30 "Thu 10-08 06:30 | Fri 10-09 09:30 | Fri 10-09 16:00"
+chk "Mon 07:00 ET needs Friday's open across the weekend"                  2026 10 12 7 0 "Fri 10-09 07:30 | Fri 10-09 09:30 | Fri 10-09 16:00"
+chk "Labor Day 2026-09-07 12:00 ET: prior session skips the weekend AND the holiday (Fri 09-04)" 2026 9 7 12 0 "Fri 09-04 07:30 | Fri 09-04 09:30 | Fri 09-04 16:00"
+chk "Mon 2026-11-30 07:00 ET: the prior session is the EARLY-CLOSE Friday after Thanksgiving, which closes at 13:00" 2026 11 30 7 0 "Fri 11-27 07:30 | Fri 11-27 09:30 | Fri 11-27 13:00"
 
 # ---------------------------------------------------------------------------------------------------
 case_ "14. cleanup-es4.sh wiring — order and failure policy (static)"

@@ -74,9 +74,10 @@ tp_tool() {
     "$_TP_SELF_DIR/tape-preserve/TapePreserve.java" "$@"
 }
 
-# Prints "<exportFromMs> <requiredFromMs>", mirroring the definitions in EsAmtSession:
+# Prints "<exportFromMs> <requiredFromMs> <requiredCloseMs>", mirroring the definitions in EsAmtSession:
 #   tradeDate    = today, or tomorrow from 18:00 ET, rolled forward to a trading day
 #   required     = 09:30 ET of the trading day BEFORE tradeDate (what the tape must reach)
+#   requiredClose= that same day's close (16:00 ET, 13:00 on an early close): the tape must run THROUGH it
 #   horizon      = min(now - lookback, required)           (where AMT seeks)
 #   exportFrom   = horizon - margin
 # Prints nothing and returns non-zero if the calendar cannot be loaded.
@@ -103,9 +104,10 @@ for _ in range(15):
         break
     p -= dt.timedelta(days=1)
 required = int(dt.datetime.combine(p, dt.time(9, 30), et).timestamp() * 1000)
+required_close = int(dt.datetime.combine(p, cal.close_time(p), et).timestamp() * 1000)
 lookback = int((now - dt.timedelta(hours=float(os.environ["LOOKBACK_H"]))).timestamp() * 1000)
 horizon = min(lookback, required)
-print(horizon - int(float(os.environ["MARGIN_H"]) * 3600 * 1000), required)
+print(horizon - int(float(os.environ["MARGIN_H"]) * 3600 * 1000), required, required_close)
 PY
 }
 
@@ -113,13 +115,13 @@ PY
 # Call AFTER every producer is proven down and BEFORE the Kafka data directory is wiped.
 tape_preserve_export() {
   tp_enabled || { tp_log "disabled (ES4_TAPE_PRESERVE=off)"; return 0; }
-  local dir topics bs win from required t tmp recs out rc=0
+  local dir topics bs win from t tmp recs out rc=0
   dir="$(tp_dir)"; topics="${ES4_TAPE_PRESERVE_TOPICS:-es.underlying.es.trades}"; bs="${ES4_TAPE_BOOTSTRAP:-localhost:9092}"
   if win="$(tp_window)" && [ -n "$win" ]; then
-    from="${win% *}"; required="${win#* }"
+    from="${win%% *}"
   else
-    from=$(( ($(date +%s) - 96 * 3600) * 1000 )); required=""
-    tp_log "WARNING: calendar unavailable — exporting a fixed 96h window and skipping the coverage check"
+    from=$(( ($(date +%s) - 96 * 3600) * 1000 ))
+    tp_log "WARNING: calendar unavailable — exporting a fixed 96h window (the import will refuse without the calendar)"
   fi
   if [ "${DRY:-false}" = true ]; then
     tp_log "DRY: would export $topics from ${from} (ms) to $dir"
@@ -136,7 +138,6 @@ tape_preserve_export() {
         rm -f "$dir/$t.tape.manifest"
         mv -f "$tmp" "$dir/$t.tape" && mv -f "$tmp.manifest" "$dir/$t.tape.manifest" \
           || { tp_log "WARNING: could not publish the export of $t"; rc=1; continue; }
-        printf '%s\n' "$required" > "$dir/$t.required"
         tp_log "preserved $t: $recs records -> $dir/$t.tape (readers to pin on restore: $(printf '%s' "$out" | sed -n 's/.*groups=//p'))"
       else
         rm -f "$tmp" "$tmp.manifest"
@@ -155,7 +156,7 @@ tape_preserve_export() {
 # Call AFTER the topics are recreated (empty) and BEFORE any app is restored.
 tape_preserve_import() {
   tp_enabled || { tp_log "disabled (ES4_TAPE_PRESERVE=off)"; return 0; }
-  local dir topics bs t tape mf age_s max_s required out rc=0 irc
+  local dir topics bs t tape mf age_s max_s required reqclose maxts win out rc=0 irc
   dir="$(tp_dir)"; topics="${ES4_TAPE_PRESERVE_TOPICS:-es.underlying.es.trades}"; bs="${ES4_TAPE_BOOTSTRAP:-localhost:9092}"
   max_s=$(( ${ES4_TAPE_PRESERVE_MAX_AGE_HOURS:-24} * 3600 ))
   for t in $topics; do
@@ -164,6 +165,19 @@ tape_preserve_import() {
     age_s=$(( $(date +%s) - $(stat -c %Y "$mf" 2>/dev/null || stat -f %m "$mf") ))
     if [ "$age_s" -gt "$max_s" ]; then
       tp_log "WARNING: preserved $t is $((age_s / 3600))h old (> $((max_s / 3600))h) — refusing to restore a stale tape into this wipe"
+      rc=1; continue
+    fi
+    # The artifact must run THROUGH the close of the prior session as of NOW. Timestamps alone would pass AMT's
+    # coverage test for an artifact exported mid-session by an abandoned earlier reset - and AMT would then
+    # build today's references from a partial prior session. An export taken after that close is complete.
+    if ! win="$(tp_window)" || [ -z "$win" ]; then
+      tp_log "WARNING: calendar unavailable - cannot prove the preserved $t reaches the prior session's close; not restoring"
+      rc=1; continue
+    fi
+    required="$(printf '%s' "$win" | cut -d' ' -f2)"; reqclose="$(printf '%s' "$win" | cut -d' ' -f3)"
+    maxts="$(sed -n 's/^maxTs=//p' "$mf" 2>/dev/null)"
+    if [ "${maxts:-0}" -lt "$reqclose" ] 2>/dev/null; then
+      tp_log "WARNING: preserved $t ends at ${maxts:-0} ms, BEFORE the prior session's close ($reqclose ms) - restoring it would present a partial prior session as complete; not restoring"
       rc=1; continue
     fi
     if [ "${DRY:-false}" = true ]; then tp_log "DRY: would restore $t from $tape"; continue; fi
@@ -176,7 +190,6 @@ tape_preserve_import() {
           tp_log "WARNING: could not pin: $(printf '%s' "$out" | sed -n 's/^TAPE_PIN_FAILED group=\([^ ]*\).*/\1/p' | tr '\n' ' ')— they will RE-READ the restored history"
           rc=1
         fi
-        required="$(cat "$dir/$t.required" 2>/dev/null)"
         if [ -n "$required" ]; then
           if tp_tool coverage "$bs" "$t" "$required" >/dev/null 2>&1; then
             tp_log "coverage check: $t reaches the prior RTH open — es-amt-service will start READY"
@@ -187,7 +200,6 @@ tape_preserve_import() {
         fi
         # one export restores into one wipe: retire the artifact, keep only the latest retired copy.
         mv -f "$tape" "$dir/consumed.$t.tape" 2>/dev/null; mv -f "$mf" "$dir/consumed.$t.tape.manifest" 2>/dev/null
-        rm -f "$dir/$t.required"
         ;;
       4) tp_log "WARNING: $t already holds records — not importing over them (artifact kept)"; rc=1 ;;
       5) tp_log "WARNING: NOT restoring $t — consumer group(s) that read it are ACTIVE: $(printf '%s' "$out" | sed -n 's/^TAPE_IMPORT_GROUP_ACTIVE group=\([^ ]*\).*/\1/p' | tr '\n' ' ')— restored history would stream to them (the es4->prod bridge would republish it into prod). Pause them (launchctl bootout gui/\$(id -u)/com.optionsedge.es-trades-bridge-192-168-100-252-9092) and rerun, or accept es-amt-service NOT_READY"; rc=1 ;;
