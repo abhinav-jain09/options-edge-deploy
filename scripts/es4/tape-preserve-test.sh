@@ -129,6 +129,19 @@ tp tp_recover "$D" $N; recovered_old && ok "re-running a recovery that died betw
 mkstate; mv "$D/$N.tape.manifest" "$D/prev.$N.tape.manifest"; mv "$D/$N.tape" "$D/prev.$N.tape"; cp "$W/new.tape" "$D/$N.tape"; cp "$W/new.mf" "$D/$N.tape.manifest"
 tp tp_recover "$D" $N
 if same "$W/new.tape" "$D/$N.tape" && same "$W/new.mf" "$D/$N.tape.manifest" && [ -z "$(ls -A "$D" | grep '^prev')" ]; then ok "complete new pair + stale parked pair: the new pair is kept, the parked files are dropped"; else bad "(e) $(ls -A "$D")"; fi
+# (g) the cross-operation sequence Codex r5 found: an OLD-order retirement died after moving the tape (manifest left
+# active), then a new publish installs its tape and dies before its manifest - the old manifest must never end up
+# paired with the new tape. publish clears the orphan manifest BEFORE installing anything.
+mkstate; mv "$D/$N.tape" "$D/consumed.$N.tape"
+echo 9 > "$FIX/export.records"; TP_FAIL_MV=manifest tp tape_preserve_export
+if [ ! -e "$D/$N.tape.manifest" ] && [ ! -e "$D/$N.tape" ]; then ok "orphan manifest + a publish that dies before its manifest: no old manifest is left next to the new tape"
+else bad "(g) mispaired: $(ls -A "$D")"; fi
+mkstate; mv "$D/$N.tape" "$D/consumed.$N.tape"; tp tp_recover "$D" $N
+[ ! -e "$D/$N.tape.manifest" ] && ok "recovery alone also drops a manifest whose tape is gone" || bad "(g2) $(ls -A "$D")"
+# (h) retirement now moves the manifest FIRST: a crash between its renames leaves a tape without a manifest (inactive)
+mkstate; tp tp_retire "$D" $N
+[ ! -e "$D/$N.tape" ] && [ ! -e "$D/$N.tape.manifest" ] && [ -f "$D/consumed.$N.tape" ] && [ -f "$D/consumed.$N.tape.manifest" ] && ok "retirement moves the whole pair" || bad "(h) $(ls -A "$D")"
+grep -n 'consumed.\$t.tape.manifest" 2>/dev/null && mv' "$HERE/tape-preserve.sh" >/dev/null && ok "static: retirement renames the manifest before the tape" || bad "retirement order changed"
 # (f) a parked manifest with no tape anywhere is an orphan: nothing importable, and it must not look like an artifact
 mkstate; mv "$D/$N.tape.manifest" "$D/prev.$N.tape.manifest"; find "$D" -name "$N.tape" -delete
 tp tp_recover "$D" $N; r=$?

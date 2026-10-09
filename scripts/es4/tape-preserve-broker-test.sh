@@ -204,8 +204,8 @@ T=$(mk shr2); seed "$T" 900
 tool export "$BS" "$T" $FROM "$W/shr2.tape" > "$W/e14.txt" 2>&1; recreate "$T"
 sed -i.bak -e "s/^groups=.*/groups=$GS/" "$W/shr2.tape.manifest"; echo "groupTypes=SHARE" >> "$W/shr2.tape.manifest"
 tool import "$BS" "$W/shr2.tape" > "$W/i14.txt" 2>&1; rc=$?
-if [ $rc = 0 ] && grep -q "TAPE_PINNED group=$GS type=SHARE" "$W/i14.txt"; then ok "rc 0, pinned via the SHARE API (type=SHARE in the report)"
-elif [ $rc = 7 ] && [ "$(live "$T")" = 0 ] && grep -q "TAPE_PIN_FAILED group=$GS" "$W/i14.txt"; then ok "pin via the SHARE API refused by this broker: rc 7 and the topic was emptied (fail closed)"
+if [ $rc = 0 ] && grep -q "TAPE_PINNED group=$GS type=SHARE api=alterShareGroupOffsets" "$W/i14.txt"; then ok "rc 0, pinned via the SHARE API (type=SHARE in the report)"
+elif [ $rc = 7 ] && [ "$(live "$T")" = 0 ] && grep -q "TAPE_PIN_FAILED group=$GS api=alterShareGroupOffsets" "$W/i14.txt"; then ok "pin via the SHARE API (alterShareGroupOffsets was the call made) refused by this broker: rc 7 and the topic was emptied (fail closed)"
 else bad "rc=$rc live=$(live "$T") out=$(cat "$W/i14.txt")"; fi
 
 case_ "15. importer KILLED after the records landed but before its own scan, while an UNRECORDED consumer reads: the wrapper's settle must detect it, empty the topic and say so"

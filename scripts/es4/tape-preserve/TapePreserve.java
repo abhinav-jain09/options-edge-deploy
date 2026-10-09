@@ -573,9 +573,9 @@ public final class TapePreserve {
                         case CLASSIC, CONSUMER -> admin.alterConsumerGroupOffsets(g, target).all().get();
                         default -> throw new IOException("group protocol " + ge.getValue() + " cannot be pinned");
                     }
-                    System.out.println("TAPE_PINNED group=" + g + " type=" + ge.getValue() + " partitions=" + parts.size());
+                    System.out.println("TAPE_PINNED group=" + g + " type=" + ge.getValue() + " api=" + pinApi(ge.getValue()) + " partitions=" + parts.size());
                 } catch (Exception e) {
-                    System.out.println("TAPE_PIN_FAILED group=" + g + " reason=" + e.getClass().getSimpleName() + ": " + String.valueOf(e.getMessage()).replace('\n', ' '));
+                    System.out.println("TAPE_PIN_FAILED group=" + g + " api=" + pinApi(ge.getValue()) + " reason=" + e.getClass().getSimpleName() + ": " + String.valueOf(e.getMessage()).replace('\n', ' '));
                     failed.add(g);
                 }
             }
@@ -584,6 +584,10 @@ public final class TapePreserve {
             for (String g : groups.keySet()) if (!failed.contains(g)) failed.add(g);
         }
         return failed;
+    }
+
+    private static String pinApi(GroupType t) {
+        return switch (t) { case SHARE -> "alterShareGroupOffsets"; case STREAMS -> "alterStreamsGroupOffsets"; case CLASSIC, CONSUMER -> "alterConsumerGroupOffsets"; default -> "none"; };
     }
 
     /** Standalone pin for a restore that was interrupted after its records landed (wrapper settle path). The importer

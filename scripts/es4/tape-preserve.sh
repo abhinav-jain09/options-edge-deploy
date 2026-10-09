@@ -215,6 +215,7 @@ tape_preserve_export() {
 # destroyed by a half-published new one.
 tp_publish() { # <dir> <topic> <tmp>
   local dir="$1" t="$2" tmp="$3" parked=0
+  tp_recover "$dir" "$t" || return 1
   if [ -f "$dir/$t.tape" ] && [ -f "$dir/$t.tape.manifest" ]; then
     rm -f "$dir/prev.$t.tape" "$dir/prev.$t.tape.manifest"
     mv -f "$dir/$t.tape.manifest" "$dir/prev.$t.tape.manifest" || return 1
@@ -239,6 +240,9 @@ tp_publish() { # <dir> <topic> <tmp>
 #   neither manifest                  -> nothing to recover.
 tp_recover() { # <dir> <topic>
   local dir="$1" t="$2"
+  # A manifest whose tape is gone belongs to nothing (an interrupted retirement of an older version, say): left in
+  # place, a later publish could pair it with a DIFFERENT tape.
+  if [ -f "$dir/$t.tape.manifest" ] && [ ! -f "$dir/$t.tape" ]; then rm -f "$dir/$t.tape.manifest"; fi
   if [ -f "$dir/$t.tape.manifest" ]; then rm -f "$dir/prev.$t.tape" "$dir/prev.$t.tape.manifest"; return 0; fi
   [ -f "$dir/prev.$t.tape.manifest" ] || return 0
   if [ -f "$dir/prev.$t.tape" ]; then
@@ -288,8 +292,10 @@ tp_settle() { # <topic> <tape>
 # (it could be imported into a later incarnation): fall back to removing it, and say so if even that fails.
 tp_retire() { # <dir> <topic>
   local dir="$1" t="$2"
-  mv -f "$dir/$t.tape" "$dir/consumed.$t.tape" 2>/dev/null && mv -f "$dir/$t.tape.manifest" "$dir/consumed.$t.tape.manifest" 2>/dev/null && return 0
-  rm -f "$dir/$t.tape" "$dir/$t.tape.manifest"
+  # Manifest FIRST, like every other move of the pair: a crash between the two renames then leaves a tape with no
+  # manifest (inactive), never a manifest with no tape - which a later publish could pair with a different tape.
+  mv -f "$dir/$t.tape.manifest" "$dir/consumed.$t.tape.manifest" 2>/dev/null && mv -f "$dir/$t.tape" "$dir/consumed.$t.tape" 2>/dev/null && return 0
+  rm -f "$dir/$t.tape.manifest" "$dir/$t.tape"
   if [ -e "$dir/$t.tape" ] || [ -e "$dir/$t.tape.manifest" ]; then
     tp_log "ERROR: could not retire the artifact for $t (still at $dir/$t.tape) - remove it by hand or it may be restored into a later wipe"
     return 1
