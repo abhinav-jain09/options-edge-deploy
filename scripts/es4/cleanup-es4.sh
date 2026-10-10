@@ -183,7 +183,8 @@ force_held_zero() {
     [ "$h_rc" -eq 0 ] || die "the $held Deployment query failed (rc=$h_rc: $h_out) - refusing to clear state while its replica count is unknown"
     [ -n "$h_out" ] || continue
     cur=$($KC get deploy "$held" -o jsonpath='{.spec.replicas}' 2>/dev/null || echo ERR)
-    [ "$cur" != "ERR" ] || die "$held replicas are unreadable - refusing to clear state while its count is unknown"
+    # a non-negative integer or nothing: an empty or garbled answer is an unknown count, not "needs scaling"
+    case "$cur" in ''|*[!0-9]*) die "$held replicas are unreadable ('$cur') - refusing to clear state while its count is unknown" ;; esac
     if [ "$cur" != "0" ]; then
       log "$held was left at $cur (an older build restored the captured count) - forcing 0 (owner hold)"
       $KC scale "deploy/$held" --replicas=0 >/dev/null || die "could not force $held to 0"

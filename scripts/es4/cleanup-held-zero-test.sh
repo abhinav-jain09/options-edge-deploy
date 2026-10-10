@@ -49,6 +49,12 @@ rm -f "$FAKE/strike-liquidity-heatmap-service"
 ( set -e; force_held_zero ) >/dev/null 2>&1 && ok "a missing Deployment is not an error" || bad "missing Deployment failed the resume"
 echo 1 > "$FAKE/strike-liquidity-heatmap-service"
 FAKE_FAIL=get; export FAKE_FAIL; out=$( ( force_held_zero ) 2>&1 ); echo "$out" | grep -q "DIE: .*query failed" && ok "an API failure fails closed (state would not be cleared)" || bad "API failure not fatal: $out"
+for bad_count in "" "not-a-replica" "-1" "1.5"; do
+  printf '%s' "$bad_count" > "$FAKE/strike-liquidity-heatmap-service"; FAKE_FAIL=none; export FAKE_FAIL
+  : > "$FAKE/calls"; out=$( ( force_held_zero ) 2>&1 )
+  if echo "$out" | grep -q "DIE: .*unreadable" && ! grep -q "^scale" "$FAKE/calls"; then ok "a malformed current count ('$bad_count') fails closed and scales nothing"; else bad "malformed count '$bad_count' accepted: $out"; fi
+done
+echo 1 > "$FAKE/strike-liquidity-heatmap-service"
 FAKE_FAIL=scale; export FAKE_FAIL; out=$( ( force_held_zero ) 2>&1 ); echo "$out" | grep -q "DIE: could not force" && ok "a scale failure fails closed" || bad "scale failure not fatal: $out"
 FAKE_FAIL=stick; export FAKE_FAIL; out=$( ( force_held_zero ) 2>&1 ); echo "$out" | grep -q "DIE: .*still at" && ok "a scale that does not take fails closed (verified, not assumed)" || bad "unverified scale accepted: $out"
 grep -q '^      force_held_zero$' "$C" && ok "the RESTORED resume path calls force_held_zero before clearing state" || bad "RESTORED path does not call force_held_zero"
