@@ -299,6 +299,8 @@ patches:
   # against dev's thin greek surface — see the patch header). Prod untouched.
   - path: delta-flow-dev-env-patch.yaml
   - path: drop-classifier-dev-env-patch.yaml
+  # DEV-ONLY: near-spot producer ON (flag + 3000ms tolerance, same as prod) — see the patch header.
+  - path: strike-flow-classifier-near-spot-dev-patch.yaml
   # DEV-ONLY: Candle Direction commissioning shadow inside context-tape-service (flag OFF in code and in prod) —
   # see the patch header. Adds the :8136 direction projection port to the Deployment + Service.
   - path: context-tape-direction-dev-env-patch.yaml
