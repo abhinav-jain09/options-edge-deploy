@@ -1,0 +1,6 @@
+# The build context is a git clone of upstream Bugzilla with this overlay on top. Nothing here
+# belongs in the runtime image's document root; the Dockerfile also removes them defensively, since
+# a .dockerignore in the context root is easy to lose in a refactor.
+.git
+.upstream-commit
+RUNBOOK-app-state.md
