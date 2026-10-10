@@ -55,3 +55,11 @@ patches:
             secretKeyRef:
               name: options-edge-runtime-secrets
               key: POSTGRES_PASSWORD
+      # PROD-ONLY: promote the Implied-vs-Realised panel out of SHADOW. /api/config reads this
+      # from the web pod's env (System.getenv); the vol-premium engine is CALIBRATED on gen4.
+      # MIRRORS the web patch in k8s/overlays/production/kustomization.yaml exactly.
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: VOL_PREMIUM_UI_ACTIVATED
+          value: "true"
