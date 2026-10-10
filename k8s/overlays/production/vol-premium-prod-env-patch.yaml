@@ -1,0 +1,26 @@
+# PROD-ONLY: calibrate vol-premium and promote the UI out of shadow (owner Gate-1 §9 decision,
+# 2026-10-10). Pins the gen4 reconstructed NAS-year baseline (varianceTimeBase=OBSERVABLE_SPAN,
+# 248 sessions, shapeComplete) that was published to options.spx.vol-premium.baseline with
+# --confirm --confirm-reconstructed. Because the baseline is RECONSTRUCTED_PARITY_FORWARD, the
+# engine refuses it at boot without VOL_PREMIUM_ADMIT_RECONSTRUCTED_BASELINE=true. UI_ACTIVATED
+# flips SHADOW -> ACTIVE. Dev/experiment stay NONE/shadow (their ledgers are empty).
+# MIRRORS k8s/services/vol-premium/overlays/production — the slice generator renders it from here.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vol-premium-service
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: vol-premium
+          env:
+            - name: VOL_PREMIUM_BASELINE_VERSION
+              value: bl-reconstructed-20261005-nasyear-gen4
+            - name: VOL_PREMIUM_BASELINE_CONTENT_HASH
+              value: "305b1d7d9df1665a249ba937fd9c439f8c9ce55fc5048775b375084bafa78b80"
+            - name: VOL_PREMIUM_ADMIT_RECONSTRUCTED_BASELINE
+              value: "true"
+            - name: VOL_PREMIUM_UI_ACTIVATED
+              value: "true"
