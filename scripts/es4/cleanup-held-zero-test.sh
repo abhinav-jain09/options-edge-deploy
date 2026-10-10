@@ -20,8 +20,13 @@ for n in es-amt-service es-feed-gateway strike-liquidity-heatmap-service-x es-fe
 done
 # --- the phase=RESTORED resume path (Codex r2): an older build restored a held service to 1 and was killed before
 # clearing state; the resume must force it to 0, verify, and fail closed when it cannot.
+eval "$(sed -n '/^valid_count()/p' "$C")"
 eval "$(sed -n '/^force_held_zero()/,/^}/p' "$C")"
-die() { echo "DIE: $*"; return 1; }
+for v in 0 1 12; do valid_count "$v" && ok "valid_count accepts '$v'" || bad "valid_count rejected '$v'"; done
+for v in "" ERR -1 1.5 abc "1 2"; do valid_count "$v" && bad "valid_count accepted '$v'" || ok "valid_count rejects '$v'"; done
+[ "$(grep -c 'valid_count "\$cur"' "$C")" = 2 ] && ok "both the es-feed RESTORED check and force_held_zero use valid_count" || bad "a replica-count check does not use valid_count"
+
+die() { echo "DIE: $*"; exit 1; }   # exit, like the real die: callers run it in a subshell
 log() { :; }
 W="$(cd "$(mktemp -d)" && pwd -P)"; trap 'find "$W" -mindepth 1 -delete 2>/dev/null; rmdir "$W" 2>/dev/null' EXIT
 cat > "$W/kc" <<'SH'
@@ -62,7 +67,15 @@ grep -q '^      force_held_zero$' "$C" && ok "the RESTORED resume path calls for
 [ "$(grep -c 'if held_zero "\$name"; then' "$C")" -ge 1 ] && ok "restore loop uses held_zero" || bad "restore loop does not use held_zero"
 [ "$(grep -c 'if held_zero "\$name"; then reps=0; fi' "$C")" = 2 ] && ok "verification and readiness loops use held_zero" || bad "verification/readiness loops do not both use held_zero"
 if grep -n 'if \[ "\$name" = "es-feed" \]; then' "$C" | grep -v "^$" >/dev/null; then bad "a bare es-feed-only check is still in a restore loop"; else ok "no es-feed-only check left in the restore loops"; fi
-grep -q 'strike-liquidity-heatmap-service' "$HERE/render_es4_manifests.py" && ok "also listed in ES4_KEEP_DOWN (renderer)" || bad "missing from ES4_KEEP_DOWN"
+python3 - "$HERE/render_es4_manifests.py" <<'PY' && ok "strike-liquidity-heatmap-service is an actual member of ES4_KEEP_DOWN (parsed, not grepped)" || bad "not a member of ES4_KEEP_DOWN"
+import ast, sys
+tree = ast.parse(open(sys.argv[1]).read())
+for n in tree.body:
+    if isinstance(n, ast.Assign) and any(getattr(t, "id", "") == "ES4_KEEP_DOWN" for t in n.targets):
+        names = {e.value for e in n.value.elts}
+        sys.exit(0 if "strike-liquidity-heatmap-service" in names else 1)
+sys.exit(1)
+PY
 echo
 [ "$fails" -eq 0 ] && { echo "=== cleanup-held-zero: OK ==="; exit 0; }
 echo "=== cleanup-held-zero: $fails problem(s) ===" >&2; exit 1

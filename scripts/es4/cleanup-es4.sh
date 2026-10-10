@@ -175,6 +175,8 @@ held_zero() { case "$HELD_AT_ZERO" in *" $1 "*) return 0 ;; esac; return 1; }
 # Forces every HELD_AT_ZERO deployment EXCEPT es-feed (which has its own, stricter pod-level check on the
 # RESTORED resume path) to 0 and verifies it took. Used where the restore loop does not run: an older build may
 # have restored a held service to its captured 1 and been killed before clearing state. Fails closed.
+# A replica count is a non-negative integer or it is unknown; an empty or garbled answer is never "needs scaling".
+valid_count() { case "$1" in ''|*[!0-9]*) return 1 ;; esac; return 0; }
 force_held_zero() {
   local held h_out h_rc cur after
   for held in $HELD_AT_ZERO; do
@@ -184,7 +186,7 @@ force_held_zero() {
     [ -n "$h_out" ] || continue
     cur=$($KC get deploy "$held" -o jsonpath='{.spec.replicas}' 2>/dev/null || echo ERR)
     # a non-negative integer or nothing: an empty or garbled answer is an unknown count, not "needs scaling"
-    case "$cur" in ''|*[!0-9]*) die "$held replicas are unreadable ('$cur') - refusing to clear state while its count is unknown" ;; esac
+    valid_count "$cur" || die "$held replicas are unreadable ('$cur') - refusing to clear state while its count is unknown"
     if [ "$cur" != "0" ]; then
       log "$held was left at $cur (an older build restored the captured count) - forcing 0 (owner hold)"
       $KC scale "deploy/$held" --replicas=0 >/dev/null || die "could not force $held to 0"
@@ -220,7 +222,7 @@ if [ -s "$STATE" ]; then
       [ "$es_rc" -eq 0 ] || die "phase=RESTORED but the es-feed Deployment query failed (rc=$es_rc: $es_out) — refusing to clear state while the feed's state is unknown"
       if [ -n "$es_out" ]; then
         cur=$($KC get deploy es-feed -o jsonpath='{.spec.replicas}' 2>/dev/null || echo ERR)
-        [ "$cur" != "ERR" ] || die "phase=RESTORED but es-feed replicas are unreadable — refusing to clear state while the feed's state is unknown"
+        valid_count "$cur" || die "phase=RESTORED but es-feed replicas are unreadable ('$cur') — refusing to clear state while the feed's state is unknown"
         if [ "$cur" != "0" ]; then
           log "phase=RESTORED left es-feed at $cur (an older build restored the captured count) — forcing 0; use activate-es-feed to start it"
           $KC scale deploy/es-feed --replicas=0 >/dev/null || die "could not force es-feed to 0 on the RESTORED resume path"
