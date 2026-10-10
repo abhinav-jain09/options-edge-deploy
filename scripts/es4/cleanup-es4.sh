@@ -165,6 +165,46 @@ fi
 # ATOMICALLY (temp+mv) so the phase is always consistent with its content — no second marker file
 # that could go stale and make a future reset silently skip the wipe. A resume keys off line 1.
 REPS() { tail -n +2 "$STATE" | awk 'NF >= 2'; } # replica lines (skip phase header)
+# Deployments a reset must NEVER raise, whatever the (durable) snapshot captured:
+#   es-feed                          - owns a Databento session on a shared key; only ACTION=activate-es-feed starts it (DBP-R22)
+#   strike-liquidity-heatmap-service - owner hold 2026-10-11: its Streams repartition topic (retention.ms=-1) filled
+#                                      es4 /home on 2026-10-08. Keep in step with ES4_KEEP_DOWN in render_es4_manifests.py.
+# A snapshot taken while one of them ran would otherwise be restored as 1 and undo the hold.
+HELD_AT_ZERO=" es-feed strike-liquidity-heatmap-service "
+held_zero() { case "$HELD_AT_ZERO" in *" $1 "*) return 0 ;; esac; return 1; }
+# Forces every HELD_AT_ZERO deployment EXCEPT es-feed (which has its own, stricter pod-level check on the
+# RESTORED resume path) to 0 and verifies it took. Used where the restore loop does not run: an older build may
+# have restored a held service to its captured 1 and been killed before clearing state. Fails closed.
+# A replica count is a non-negative integer or it is unknown; an empty or garbled answer is never "needs scaling".
+valid_count() { case "$1" in ''|*[!0-9]*) return 1 ;; esac; return 0; }
+force_held_zero() {
+  local held h_out h_rc cur after p_out p_rc n i
+  for held in $HELD_AT_ZERO; do
+    [ "$held" = "es-feed" ] && continue
+    set +e; h_out=$($KC get deploy "$held" --ignore-not-found -o name 2>&1); h_rc=$?; set -e
+    [ "$h_rc" -eq 0 ] || die "the $held Deployment query failed (rc=$h_rc: $h_out) - refusing to clear state while its replica count is unknown"
+    if [ -n "$h_out" ]; then
+      cur=$($KC get deploy "$held" -o jsonpath='{.spec.replicas}' 2>/dev/null || echo ERR)
+      valid_count "$cur" || die "$held replicas are unreadable ('$cur') - refusing to clear state while its count is unknown"
+      if [ "$cur" != "0" ]; then
+        log "$held was left at $cur (an older build restored the captured count) - forcing 0 (owner hold)"
+        $KC scale "deploy/$held" --replicas=0 >/dev/null || die "could not force $held to 0"
+        after=$($KC get deploy "$held" -o jsonpath='{.spec.replicas}' 2>/dev/null || echo ERR)
+        [ "$after" = "0" ] || die "$held still at '$after' after scaling to 0"
+      fi
+    fi
+    # Desired 0 is not "stopped": a pod from the older restore can outlive its Deployment (or hang terminating).
+    # Wait for it to go - regardless of whether the Deployment exists - before the state, the only resume gate, is cleared.
+    for i in $(seq 1 "${HELD_POD_WAIT_TRIES:-24}"); do
+      set +e; p_out=$($KC get pods -l "app.kubernetes.io/name=$held" -o name 2>&1); p_rc=$?; set -e
+      [ "$p_rc" -eq 0 ] || die "the $held pod query failed (rc=$p_rc: $p_out) - failing closed"
+      n=$(printf '%s\n' "$p_out" | awk '/^pod\// {c++} END {print c+0}')
+      [ "$n" = "0" ] && break
+      sleep "${HELD_POD_WAIT_SLEEP:-5}"
+    done
+    [ "$n" = "0" ] || die "$n $held pod(s) are still present after scaling to 0 - refusing to clear state while the held service may be live"
+  done
+}
 # A legacy state file from a pre-single-file build would have a deployment row (not a phase word) on
 # line 1. Never misread that as a phase — fail closed and make the operator inspect/clear it.
 [ -e "$ES4_HOME/.es4-cleanup.phase" ] && die "legacy phase marker $ES4_HOME/.es4-cleanup.phase present — inspect + remove it (and $STATE) before rerunning"
@@ -180,7 +220,7 @@ if [ -s "$STATE" ]; then
     # leave a Databento session running that DBP-R22 says only ACTION=activate-es-feed may start.
     # So enforce the invariant on this path too before clearing state.
     if [ "$DRY" = "true" ]; then
-      echo "DRY: would force deploy/es-feed to 0 (DBP-R22) and clear $STATE"
+      echo "DRY: would force deploy/es-feed (DBP-R22) and the other HELD_AT_ZERO deployments to 0 and clear $STATE"
     else
       # Existence query: capture the exit status directly. `$KC ... | grep -q .` masks kubectl's
       # status behind grep's, so an API failure would have read as "no Deployment" and skipped the
@@ -192,7 +232,7 @@ if [ -s "$STATE" ]; then
       [ "$es_rc" -eq 0 ] || die "phase=RESTORED but the es-feed Deployment query failed (rc=$es_rc: $es_out) — refusing to clear state while the feed's state is unknown"
       if [ -n "$es_out" ]; then
         cur=$($KC get deploy es-feed -o jsonpath='{.spec.replicas}' 2>/dev/null || echo ERR)
-        [ "$cur" != "ERR" ] || die "phase=RESTORED but es-feed replicas are unreadable — refusing to clear state while the feed's state is unknown"
+        valid_count "$cur" || die "phase=RESTORED but es-feed replicas are unreadable ('$cur') — refusing to clear state while the feed's state is unknown"
         if [ "$cur" != "0" ]; then
           log "phase=RESTORED left es-feed at $cur (an older build restored the captured count) — forcing 0; use activate-es-feed to start it"
           $KC scale deploy/es-feed --replicas=0 >/dev/null || die "could not force es-feed to 0 on the RESTORED resume path"
@@ -214,6 +254,7 @@ if [ -s "$STATE" ]; then
       [ "$pods_rc" -eq 0 ] || die "phase=RESTORED but the es-feed pod query failed (rc=$pods_rc: $pods_out) — failing closed"
       n=$(printf '%s\n' "$pods_out" | awk '/^pod\// {c++} END {print c+0}')
       [ "$n" = "0" ] || die "phase=RESTORED but $n es-feed pod(s) are still present — refusing to clear state while a Databento session may be live"
+      force_held_zero
       rm -f "$STATE"
     fi
     log "prior run already restored the app (phase=RESTORED); leftover state cleared, NO wipe"
@@ -416,13 +457,13 @@ else
     # must never be raised by a restore. The snapshot is durable and survives an interrupted run, so
     # an earlier capture of 1 would otherwise be restored long after the operator took the feed down
     # — silently starting a Databento session nobody asked for. Requirement DBP-R21/R22.
-    if [ "$name" = "es-feed" ]; then
-      # es-feed is NEVER restored by a reset. It owns a Databento live session on a shared API key,
+    if held_zero "$name"; then
+      # es-feed is NEVER restored by a reset (nor is any other deployment in HELD_AT_ZERO). It owns a Databento live session on a shared API key,
       # and DBP-R22 says only the separate activate action may raise it. Restoring a captured 1 --
       # or a stale 1 from a durable snapshot that survived an interrupted run -- would make
       # clean-reset an activation path, which is exactly the class of side effect that caused the
       # 2026-07-24 incident. After a reset, start it deliberately with ACTION=activate-es-feed.
-      [ "$reps" = "0" ] || log "es-feed: captured replicas=$reps IGNORED — a reset never activates the feed (DBP-R22); use activate-es-feed"
+      [ "$reps" = "0" ] || log "$name: captured replicas=$reps IGNORED — held at 0 by a reset (es-feed: DBP-R22, use activate-es-feed; others: owner hold, see HELD_AT_ZERO)"
       reps=0
     fi
     $KC scale "deploy/$name" --replicas="$reps" >/dev/null || { echo "restore scale FAILED for $name" >&2; fail=1; }
@@ -432,7 +473,7 @@ else
     [ -n "$name" ] || continue
     [ "$reps" = "<none>" ] && reps=1
     # same override as the scale loop above, or verification would compare against the stale capture
-    if [ "$name" = "es-feed" ]; then reps=0; fi   # must match the restore loop above
+    if held_zero "$name"; then reps=0; fi   # must match the restore loop above
     got=$($KC get "deploy/$name" -o jsonpath='{.spec.replicas}' 2>/dev/null || echo ERR)
     [ "$got" = "$reps" ] || { echo "restore MISMATCH $name: want $reps got $got" >&2; fail=1; }
   done < <(REPS)
@@ -441,7 +482,7 @@ else
     missing=0
     while read -r name reps; do
       [ "$reps" = "<none>" ] && reps=1
-      if [ "$name" = "es-feed" ]; then reps=0; fi   # must match the restore loop above
+      if held_zero "$name"; then reps=0; fi   # must match the restore loop above
       [ "$reps" -gt 0 ] || continue
       avail=$($KC get "deploy/$name" -o jsonpath='{.status.availableReplicas}' 2>/dev/null || echo 0)
       [ "${avail:-0}" -ge "$reps" ] || missing=$((missing + 1))
