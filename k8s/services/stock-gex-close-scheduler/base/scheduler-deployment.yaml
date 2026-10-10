@@ -88,7 +88,7 @@ spec:
             - name: VP_VALIDATION_KAFKA_BOOTSTRAP
               value: "192.168.100.252:9092"
             - name: VP_VALIDATION_DB_DSN
-              value: "postgresql://options_flow:Options#100@192.168.100.252:5432/options_flow"
+              value: "postgresql://options_flow:Options%23100@192.168.100.252:5432/options_flow"
             - name: CLOSE_SNAPSHOT_ROOT
               value: "/oi-index/close/.batch-fetch-csv"
             # THE OPEN-INTEREST JOB'S CHUNKS, under a root of their own. Both jobs name their
