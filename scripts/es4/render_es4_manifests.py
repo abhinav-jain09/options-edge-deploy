@@ -409,6 +409,14 @@ ES4_KEEP_DOWN = {
     "dealer-ledger-calibration-scorer",
     "volume-pace-databento-service",
     "directional-pressure-databento-service",
+    # USER 2026-10-11, "we dont need this service on es, turn it off until further notice":
+    # strike-liquidity-heatmap-service is OFF on es4 again. Its Kafka Streams repartition topic
+    # (options-edge-strike-liquidity-heatmap-es4-chain-rekey) is created with retention.ms=-1 and
+    # grew to 46G in ONE partition, filling /home and crash-looping es4-kafka on 2026-10-08. Capping the
+    # topic is undone every time the service starts, so the service itself is what stays down.
+    # Re-enable = delete the name here, re-render, deploy that service - AND first bound the retention
+    # of its internal topics (see the 10-08 es4 disk-full incident).
+    "strike-liquidity-heatmap-service",
     # USER 2026-07-30: strike-liquidity-heatmap RE-ENABLED on es4 to evaluate the wall-line /
     # buy-bubble overlay against the ES chain. Measured headroom before removing it: .4 was at
     # 8251m/12 cores (68%) live with 39Gi memory available, so its 750m/512Mi request fits.
