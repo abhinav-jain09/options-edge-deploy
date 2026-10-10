@@ -172,6 +172,26 @@ REPS() { tail -n +2 "$STATE" | awk 'NF >= 2'; } # replica lines (skip phase head
 # A snapshot taken while one of them ran would otherwise be restored as 1 and undo the hold.
 HELD_AT_ZERO=" es-feed strike-liquidity-heatmap-service "
 held_zero() { case "$HELD_AT_ZERO" in *" $1 "*) return 0 ;; esac; return 1; }
+# Forces every HELD_AT_ZERO deployment EXCEPT es-feed (which has its own, stricter pod-level check on the
+# RESTORED resume path) to 0 and verifies it took. Used where the restore loop does not run: an older build may
+# have restored a held service to its captured 1 and been killed before clearing state. Fails closed.
+force_held_zero() {
+  local held h_out h_rc cur after
+  for held in $HELD_AT_ZERO; do
+    [ "$held" = "es-feed" ] && continue
+    set +e; h_out=$($KC get deploy "$held" --ignore-not-found -o name 2>&1); h_rc=$?; set -e
+    [ "$h_rc" -eq 0 ] || die "the $held Deployment query failed (rc=$h_rc: $h_out) - refusing to clear state while its replica count is unknown"
+    [ -n "$h_out" ] || continue
+    cur=$($KC get deploy "$held" -o jsonpath='{.spec.replicas}' 2>/dev/null || echo ERR)
+    [ "$cur" != "ERR" ] || die "$held replicas are unreadable - refusing to clear state while its count is unknown"
+    if [ "$cur" != "0" ]; then
+      log "$held was left at $cur (an older build restored the captured count) - forcing 0 (owner hold)"
+      $KC scale "deploy/$held" --replicas=0 >/dev/null || die "could not force $held to 0"
+      after=$($KC get deploy "$held" -o jsonpath='{.spec.replicas}' 2>/dev/null || echo ERR)
+      [ "$after" = "0" ] || die "$held still at '$after' after scaling to 0"
+    fi
+  done
+}
 # A legacy state file from a pre-single-file build would have a deployment row (not a phase word) on
 # line 1. Never misread that as a phase — fail closed and make the operator inspect/clear it.
 [ -e "$ES4_HOME/.es4-cleanup.phase" ] && die "legacy phase marker $ES4_HOME/.es4-cleanup.phase present — inspect + remove it (and $STATE) before rerunning"
@@ -187,7 +207,7 @@ if [ -s "$STATE" ]; then
     # leave a Databento session running that DBP-R22 says only ACTION=activate-es-feed may start.
     # So enforce the invariant on this path too before clearing state.
     if [ "$DRY" = "true" ]; then
-      echo "DRY: would force deploy/es-feed to 0 (DBP-R22) and clear $STATE"
+      echo "DRY: would force deploy/es-feed (DBP-R22) and the other HELD_AT_ZERO deployments to 0 and clear $STATE"
     else
       # Existence query: capture the exit status directly. `$KC ... | grep -q .` masks kubectl's
       # status behind grep's, so an API failure would have read as "no Deployment" and skipped the
@@ -221,6 +241,7 @@ if [ -s "$STATE" ]; then
       [ "$pods_rc" -eq 0 ] || die "phase=RESTORED but the es-feed pod query failed (rc=$pods_rc: $pods_out) — failing closed"
       n=$(printf '%s\n' "$pods_out" | awk '/^pod\// {c++} END {print c+0}')
       [ "$n" = "0" ] || die "phase=RESTORED but $n es-feed pod(s) are still present — refusing to clear state while a Databento session may be live"
+      force_held_zero
       rm -f "$STATE"
     fi
     log "prior run already restored the app (phase=RESTORED); leftover state cleared, NO wipe"
