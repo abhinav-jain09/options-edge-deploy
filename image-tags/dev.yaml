@@ -73,6 +73,7 @@ images:
   context-tape-service: 192.168.100.252:5000/options-edge-context-tape:dev
   es-trade-linearizer-service: 192.168.100.252:5000/options-edge-es-trade-linearizer:dev
   es-compression-expansion-service: 192.168.100.252:5000/options-edge-es-compression-expansion:dev
+  hedging-pressure-service: 192.168.100.252:5000/options-edge-hedging-pressure:dev
   multileg-structure-service: 192.168.100.252:5000/options-edge-multileg-structure:dev
   reversal-postgres-writer: 192.168.100.252:5000/options-edge-reversal-postgres-writer:dev
   spread-skew-postgres-writer: 192.168.100.252:5000/options-edge-spread-skew-postgres-writer:dev

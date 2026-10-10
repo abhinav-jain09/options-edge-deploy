@@ -76,6 +76,7 @@ pipeline {
     string(name: 'ES_AGGRESSOR_FLOW_IMAGE', defaultValue: '', description: 'ES aggressor-flow slope image (prod-only)')
     string(name: 'ES_TRADE_LINEARIZER_IMAGE', defaultValue: '', description: 'ES trade linearizer image (dev+prod since 2026-10-07)')
     string(name: 'ES_COMPRESSION_EXPANSION_IMAGE', defaultValue: '', description: 'ES compression/expansion shadow image (dev+prod since 2026-10-07)')
+    string(name: 'HEDGING_PRESSURE_IMAGE', defaultValue: '', description: 'hedging-pressure service image (dev+prod, deployed held at replicas 0)')
     string(name: 'SIGNAL_FOLLOWER_IMAGE', defaultValue: '', description: 'signal-follower image (dev+prod)')
     string(name: 'CONTEXT_TAPE_IMAGE', defaultValue: '', description: 'context-tape service image (dev+prod)')
     string(name: 'MULTILEG_STRUCTURE_IMAGE', defaultValue: '', description: 'multileg-structure service image (dev+prod)')
@@ -473,6 +474,8 @@ pipeline {
             'ES_AGGRESSOR_FLOW_IMAGE': 'es-aggressor-flow',
             'ES_TRADE_LINEARIZER_IMAGE': 'es-trade-linearizer',
             'ES_COMPRESSION_EXPANSION_IMAGE': 'es-compression-expansion',
+            // hedging-pressure: dev+prod standalone, held at replicas 0 (the image is still built and pinned).
+            'HEDGING_PRESSURE_IMAGE': 'hedging-pressure',
             // signal-follower: same dev+prod standalone pattern as short-premium-agent.
             'SIGNAL_FOLLOWER_IMAGE': 'signal-follower',
             // context-tape: same dev+prod standalone pattern as short-premium-agent.
@@ -870,7 +873,7 @@ void promoteToProduction() {
       'STRIKE_LIQUIDITY_HEATMAP_IMAGE', 'UNIFIED_SR_IMAGE', 'STRIKE_INTELLIGENCE_IMAGE', 'OPTION_TRUTH_ENGINE_IMAGE', 'MARKET_CARRY_IMAGE', 'ES_SPX_ALIGN_IMAGE', 'DATABENTO_SR3_FEED_IMAGE', 'VIX_OPTION_INTELIGENCE_IMAGE', 'GREEK_MOVE_AUTHENTICITY_IMAGE', 'STRIKE_INVASION_IMAGE',
       'INVASION_POSTGRES_WRITER_IMAGE', 'SPREAD_SKEW_IMAGE', 'SPREAD_SKEW_POSTGRES_WRITER_IMAGE', 'REVERSAL_CONFIRMATION_IMAGE', 'CORRIDOR_GAUGE_IMAGE', 'GAMMA_LADDER_PATH_IMAGE',
       'ES_OPEN_DIRECTION_IMAGE', 'ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE', 'CLOSE_DIRECTION_IMAGE', 'SPOT_VOL_REGIME_IMAGE', 'GAMMA_LEADERSHIP_IMAGE', 'VOL_PREMIUM_IMAGE', 'OI_SHADOW_IMAGE', 'REVERSAL_POSTGRES_WRITER_IMAGE', 'STRIKE_FLOW_AVRO_ADAPTER_IMAGE',
-      'GEX_DELTA_REDIS_WRITER_IMAGE', 'IBKR_FEED_IMAGE', 'SHORT_PREMIUM_AGENT_IMAGE', 'ES_AGGRESSOR_FLOW_IMAGE', 'ES_TRADE_LINEARIZER_IMAGE', 'ES_COMPRESSION_EXPANSION_IMAGE', 'SIGNAL_FOLLOWER_IMAGE',
+      'GEX_DELTA_REDIS_WRITER_IMAGE', 'IBKR_FEED_IMAGE', 'SHORT_PREMIUM_AGENT_IMAGE', 'ES_AGGRESSOR_FLOW_IMAGE', 'ES_TRADE_LINEARIZER_IMAGE', 'ES_COMPRESSION_EXPANSION_IMAGE', 'HEDGING_PRESSURE_IMAGE', 'SIGNAL_FOLLOWER_IMAGE',
       'CONTEXT_TAPE_IMAGE', 'MULTILEG_STRUCTURE_IMAGE', 'AMT_ORDER_BRIDGE_IMAGE', 'BROKER_EXECUTION_IMAGE',
     ].collect { _n -> string(name: _n, value: params[_n]) } + [
       string(name: 'DATABENTO_API_KEY_CREDENTIAL_ID', value: params.DATABENTO_API_KEY_CREDENTIAL_ID),

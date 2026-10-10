@@ -62,6 +62,8 @@ pipeline {
       'es-trade-linearizer',
       // es-compression-expansion: dev+prod SHADOW (dev since 2026-10-07); consumes the linearized ES tape plus the SPX-side evidence topics.
       'es-compression-expansion',
+      // hedging-pressure: dev+prod, deployed HELD AT replicas 0 (the owner turns it on later); single replica only.
+      'hedging-pressure',
       // stock-gex-close-scheduler: PRODUCTION only — the closing-board SCHEDULE, which now lives
       // inside the batch itself (USER 2026-09-01: "I don't want anything Jenkins-based, it should
       // run based on Spring Batch configuration"). This job DEPLOYS it; nothing here decides when
@@ -563,6 +565,24 @@ PYEOF
           export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
           . scripts/kafka/load-kafka-settings.sh
           scripts/kafka/ensure-es-compression-expansion-topics.sh
+        '''
+      }
+    }
+    stage('Verify hedging-pressure output topics') {
+      // BEFORE the rollout, same barrier as es-compression-expansion above: the service REQUIRES both output topics to exist
+      // at start (it never relies on auto-creation) and publishes them in ONE transaction per cycle. hedging-pressure.state is
+      // compacted/-1 (latest state per SPX|tradingDate, reset-rebuildable); hedging-pressure.cycle-input is delete/30 d
+      // (the per-cycle input archive, rebuildable but not durable, so not in the reset-rebuildable list). The service is held at replicas 0, but the topics must still be
+      // right the day the owner scales it up, and creating them here is idempotent.
+      when {
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'hedging-pressure' && !params.DEPLOY_DRY_RUN) }
+      }
+      steps {
+        sh '''
+          set -euo pipefail
+          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
+          . scripts/kafka/load-kafka-settings.sh
+          scripts/kafka/ensure-hedging-pressure-topics.sh
         '''
       }
     }

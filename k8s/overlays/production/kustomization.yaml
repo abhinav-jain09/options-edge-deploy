@@ -29,6 +29,9 @@ resources:
   - ../../services/es-trade-linearizer/base
   # es-compression-expansion: dev+prod SHADOW since 2026-10-07 — it reads the linearizer's tape.
   - ../../services/es-compression-expansion/base
+  # hedging-pressure: dev+prod, HELD AT replicas 0 (base). Reads delta-flow / spot / strike-flow / gex topics, publishes
+  # its own state + cycle-input topics (see the base manifest). Owner turns it on later.
+  - ../../services/hedging-pressure/base
   # nifty-gex: the NIFTY/BANKNIFTY Pressure boards (DhanHQ), public via cloudflared path
   # routes to NodePort 30188. STANDALONE overlay k8s/services/nifty-gex/overlays/production
   # mirrors the prod patches — sync enforced by validate-services render equivalence.
@@ -45,6 +48,12 @@ resources:
 # cached image (no pull, no throttle). Dev keeps Always so it always picks up a
 # freshly-built :dev image.
 patches:
+  # PROD-ONLY: hedging-pressure's own transactional.id (held at replicas 0; the base carries the dev id).
+  # MIRRORS k8s/services/hedging-pressure/overlays/production — the slice generator renders it from here.
+  - path: hedging-pressure-prod-env-patch.yaml
+    target:
+      kind: Deployment
+      name: hedging-pressure-service
   # PROD-ONLY: calibrate vol-premium with the gen4 reconstructed NAS-year baseline and promote the
   # UI out of shadow (owner Gate-1 §9 decision, 2026-10-10).
   # MIRRORS k8s/services/vol-premium/overlays/production — the slice generator renders it from here.

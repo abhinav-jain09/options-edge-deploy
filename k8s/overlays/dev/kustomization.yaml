@@ -17,6 +17,8 @@ resources:
   # service-base resources as k8s/overlays/production/kustomization.yaml.
   - ../../services/es-trade-linearizer/base
   - ../../services/es-compression-expansion/base
+  # hedging-pressure: HELD AT replicas 0 (base) on dev and production alike; the owner turns it on later.
+  - ../../services/hedging-pressure/base
   # short-premium-agent is DEV-ONLY: referenced here (NOT in k8s/base/kustomization.yaml)
   # so the production/experiment monolith overlays never render it. services.yaml declares
   # envs: [dev] to match; the dev image remap below applies to it.
@@ -907,6 +909,9 @@ images:
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-es-compression-expansion
     newName: host.docker.internal:5001/options-edge-es-compression-expansion
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-hedging-pressure
+    newName: host.docker.internal:5001/options-edge-hedging-pressure
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-multileg-structure
     newName: host.docker.internal:5001/options-edge-multileg-structure

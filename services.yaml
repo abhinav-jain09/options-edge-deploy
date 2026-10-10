@@ -186,6 +186,13 @@ services:
   # evidence topics; the ES-side ones (footprint, auction) exist only on prod and are reported UNAVAILABLE on dev.
   # No Service object; nothing reads its output (see the deployment yaml).
   - { name: es-compression-expansion,     managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-es-compression-expansion,     deployments: [es-compression-expansion-service] }
+  # hedging-pressure: DEPLOYED HELD AT replicas 0 on dev AND production (owner turns it on later). Consumes
+  # delta-flow-by-strike, underlying.spx.price, options.databento.strike-flow and options.databento.gex.strike and
+  # publishes hedging-pressure.state (compacted) + hedging-pressure.cycle-input in ONE Kafka transaction per cycle.
+  # SINGLE replica only (a second instance with the same transactional.id fences the first). No Service object.
+  # Held down by: replicas: 0 in the base, KEEP_DOWN in morning-autostart.sh + oe-boot-bringup.sh, DISABLED_DEV in
+  # dev-cleanup.sh. HEDGING_PRESSURE_REGIMES is deliberately unset (the service then reports UNAVAILABLE(REGIME_UNSET)).
+  - { name: hedging-pressure,             managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-hedging-pressure,             deployments: [hedging-pressure-service] }
   # multileg-structure: DESCRIPTIVE co-print observation surface (options.opra.tcbbo -> ranked
   # observations + per-window status). It claims no ownership, direction or dealer attribution —
   # OPRA carries no multi-leg marker (measured 2026-08-18) — so it is a screening surface only.
