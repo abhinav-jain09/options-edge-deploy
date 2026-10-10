@@ -6,7 +6,7 @@
 # record and the cycle-input archive record of one cycle in ONE Kafka transaction. apply-topics lives in a different
 # job, so on a FIRST deploy neither topic exists; a broker that auto-creates would give them cluster defaults (state NOT
 # compacted, time retention — the state record then expires), and with auto-create off the producer fails. Declared in
-# scripts/kafka/topics.env (both RESET_REBUILDABLE):
+# scripts/kafka/topics.env (.state is RESET_REBUILDABLE; .cycle-input is a rebuildable 30-day archive):
 #   hedging-pressure.state        1 partition, cleanup.policy=compact, retention.ms=-1          (key SPX|<tradingDate>)
 #   hedging-pressure.cycle-input  1 partition, cleanup.policy=delete,  retention.ms=2592000000 (30 d; key SPX|<tradingDate>|<cycleSeq>)
 #

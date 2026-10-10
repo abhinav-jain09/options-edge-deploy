@@ -572,7 +572,7 @@ PYEOF
       // BEFORE the rollout, same barrier as es-compression-expansion above: the service REQUIRES both output topics to exist
       // at start (it never relies on auto-creation) and publishes them in ONE transaction per cycle. hedging-pressure.state is
       // compacted/-1 (latest state per SPX|tradingDate, reset-rebuildable); hedging-pressure.cycle-input is delete/30 d
-      // (the per-cycle input archive, reset-rebuildable). The service is held at replicas 0, but the topics must still be
+      // (the per-cycle input archive, rebuildable but not durable, so not in the reset-rebuildable list). The service is held at replicas 0, but the topics must still be
       // right the day the owner scales it up, and creating them here is idempotent.
       when {
         expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'hedging-pressure' && !params.DEPLOY_DRY_RUN) }
