@@ -43,6 +43,23 @@ spec:
             # This remains far below the 90s UI staleAfterMs and does not admit old bootstrap data.
             - name: DELTA_FLOW_GREEK_MAX_AGE_MS
               value: "15000"
+            # 2026-08-28: WITHOUT this, delta-flow published NOTHING for 10 days. Every trade was
+            # rejected LOOKAHEAD_GREEK: 522,014 seen, 0 accepted. The nine real outputs sat frozen at
+            # offset 2,582,201 since 08-18 while delta-flow-diagnostics (which is written on REJECT too)
+            # grew by 194,106 - that inversion is the tell.
+            #
+            # Cause: options.opra.tcbbo carries an event-time that lags options.databento.gex.strike.
+            # Measured on prod - both streams are BEHIND the wall clock, but the trade leg is behind the
+            # greek leg by 3.4 min (08-26) and 5.5 min (08-28, max 329,649 ms). The validator rejects any
+            # greekAge < -tolerance, and the default tolerance is 0, so a skew of even 1 ms drops the trade.
+            # 600000 is ~2x the largest measured skew, not a guess.
+            #
+            # THIS IS A COVER, NOT A CURE, and it is not free: delta-flow may now weight a trade with a
+            # greek surface up to 10 minutes AFTER it. That is acceptable for the live view, where the
+            # freshest surface is what you want, but it puts LOOK-AHEAD into the output - so this data is
+            # contaminated for backtest/research until the upstream event-time skew itself is fixed.
+            - name: DELTA_FLOW_GREEK_LOOKAHEAD_TOLERANCE_MS
+              value: "600000"
             - name: DELTA_FLOW_STREAMS_APP_ID
               value: options-edge-delta-flow-service
             - name: DELTA_FLOW_STREAMS_COMMIT_INTERVAL_MS
