@@ -80,6 +80,15 @@ spec:
                   key: DATABENTO_API_KEY
             - name: STOCK_GEX_CLOSE_DB_DSN
               value: "postgresql://bleedingoptions:fAE80oxjlQ75edJe5nmfTLoIDJerlkddoFRm@bo-app-postgres-db.bleedingoptions.svc.cluster.local:5432/bleedingoptions"
+            # The vol-premium daily validation job (BATCH_JOB_NAME=volPremiumValidation) reads the
+            # service's own .events/.warnings and writes one scorecard per session into the database
+            # the web reads (options_flow), NOT the batch's bleedingoptions repo DB above. The scheduler
+            # launches it in-process (16:45 ET + 07:55 ET catch-up); it is inert for the close-board /
+            # OI jobs, which never touch these.
+            - name: VP_VALIDATION_KAFKA_BOOTSTRAP
+              value: "192.168.100.252:9092"
+            - name: VP_VALIDATION_DB_DSN
+              value: "postgresql://options_flow:Options#100@192.168.100.252:5432/options_flow"
             - name: CLOSE_SNAPSHOT_ROOT
               value: "/oi-index/close/.batch-fetch-csv"
             # THE OPEN-INTEREST JOB'S CHUNKS, under a root of their own. Both jobs name their
