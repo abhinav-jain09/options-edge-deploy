@@ -45,6 +45,13 @@ resources:
 # cached image (no pull, no throttle). Dev keeps Always so it always picks up a
 # freshly-built :dev image.
 patches:
+  # PROD-ONLY: calibrate vol-premium with the gen4 reconstructed NAS-year baseline and promote the
+  # UI out of shadow (owner Gate-1 §9 decision, 2026-10-10).
+  # MIRRORS k8s/services/vol-premium/overlays/production — the slice generator renders it from here.
+  - path: vol-premium-prod-env-patch.yaml
+    target:
+      kind: Deployment
+      name: vol-premium-service
   # PROD-ONLY: turns on the near-spot 0DTE SPXW semantic signal's live producer — ES
   # compression-expansion's forward read (#1149) has been reading an empty topic since it merged.
   # MIRRORS k8s/services/strike-flow-classifier/overlays/production — validate-services enforces it.

@@ -60,6 +60,14 @@ spec:
     spec:
       containers:
         - env:
+            - name: VOL_PREMIUM_BASELINE_VERSION
+              value: bl-reconstructed-20261005-nasyear-gen4
+            - name: VOL_PREMIUM_BASELINE_CONTENT_HASH
+              value: 305b1d7d9df1665a249ba937fd9c439f8c9ce55fc5048775b375084bafa78b80
+            - name: VOL_PREMIUM_ADMIT_RECONSTRUCTED_BASELINE
+              value: "true"
+            - name: VOL_PREMIUM_UI_ACTIVATED
+              value: "true"
             - name: HEALTH_PORT
               value: "8152"
             - name: VOL_PREMIUM_ENABLED
@@ -92,18 +100,10 @@ spec:
               value: "60000"
             - name: VOL_PREMIUM_GRID_LATENESS_MS
               value: "30000"
-            - name: VOL_PREMIUM_BASELINE_VERSION
-              value: bl-reconstructed-20261005-nasyear-gen4
-            - name: VOL_PREMIUM_BASELINE_CONTENT_HASH
-              value: 305b1d7d9df1665a249ba937fd9c439f8c9ce55fc5048775b375084bafa78b80
-            - name: VOL_PREMIUM_ADMIT_RECONSTRUCTED_BASELINE
-              value: "true"
             - name: VOL_PREMIUM_CALENDAR_VERSION
               value: "2026.1"
             - name: VOL_PREMIUM_CALENDAR_CONTENT_HASH
               value: cf209ff9ff428428988322928b27cd625556a2bb5a28131410b4d4631ea9c347
-            - name: VOL_PREMIUM_UI_ACTIVATED
-              value: "true"
             - name: POSTGRES_JDBC_URL
               valueFrom:
                 configMapKeyRef:
