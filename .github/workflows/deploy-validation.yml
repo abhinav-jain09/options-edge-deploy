@@ -493,6 +493,10 @@ jobs:
       - name: es4 clean-reset preserves the ES trade tape for es-amt-service
         run: bash scripts/es4/tape-preserve-test.sh
 
+      # A reset must never raise an owner-held deployment (es-feed, strike-liquidity-heatmap-service).
+      - name: es4 clean-reset restore never raises held deployments
+        run: bash scripts/es4/cleanup-held-zero-test.sh
+
       - name: Validate image-pinning completeness (every rendered image wired into resolve-images + apply)
         run: scripts/ci/validate-image-pinning.sh
 

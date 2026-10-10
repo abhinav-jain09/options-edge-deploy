@@ -165,6 +165,13 @@ fi
 # ATOMICALLY (temp+mv) so the phase is always consistent with its content — no second marker file
 # that could go stale and make a future reset silently skip the wipe. A resume keys off line 1.
 REPS() { tail -n +2 "$STATE" | awk 'NF >= 2'; } # replica lines (skip phase header)
+# Deployments a reset must NEVER raise, whatever the (durable) snapshot captured:
+#   es-feed                          - owns a Databento session on a shared key; only ACTION=activate-es-feed starts it (DBP-R22)
+#   strike-liquidity-heatmap-service - owner hold 2026-10-11: its Streams repartition topic (retention.ms=-1) filled
+#                                      es4 /home on 2026-10-08. Keep in step with ES4_KEEP_DOWN in render_es4_manifests.py.
+# A snapshot taken while one of them ran would otherwise be restored as 1 and undo the hold.
+HELD_AT_ZERO=" es-feed strike-liquidity-heatmap-service "
+held_zero() { case "$HELD_AT_ZERO" in *" $1 "*) return 0 ;; esac; return 1; }
 # A legacy state file from a pre-single-file build would have a deployment row (not a phase word) on
 # line 1. Never misread that as a phase — fail closed and make the operator inspect/clear it.
 [ -e "$ES4_HOME/.es4-cleanup.phase" ] && die "legacy phase marker $ES4_HOME/.es4-cleanup.phase present — inspect + remove it (and $STATE) before rerunning"
@@ -416,13 +423,13 @@ else
     # must never be raised by a restore. The snapshot is durable and survives an interrupted run, so
     # an earlier capture of 1 would otherwise be restored long after the operator took the feed down
     # — silently starting a Databento session nobody asked for. Requirement DBP-R21/R22.
-    if [ "$name" = "es-feed" ]; then
-      # es-feed is NEVER restored by a reset. It owns a Databento live session on a shared API key,
+    if held_zero "$name"; then
+      # es-feed is NEVER restored by a reset (nor is any other deployment in HELD_AT_ZERO). It owns a Databento live session on a shared API key,
       # and DBP-R22 says only the separate activate action may raise it. Restoring a captured 1 --
       # or a stale 1 from a durable snapshot that survived an interrupted run -- would make
       # clean-reset an activation path, which is exactly the class of side effect that caused the
       # 2026-07-24 incident. After a reset, start it deliberately with ACTION=activate-es-feed.
-      [ "$reps" = "0" ] || log "es-feed: captured replicas=$reps IGNORED — a reset never activates the feed (DBP-R22); use activate-es-feed"
+      [ "$reps" = "0" ] || log "$name: captured replicas=$reps IGNORED — held at 0 by a reset (es-feed: DBP-R22, use activate-es-feed; others: owner hold, see HELD_AT_ZERO)"
       reps=0
     fi
     $KC scale "deploy/$name" --replicas="$reps" >/dev/null || { echo "restore scale FAILED for $name" >&2; fail=1; }
@@ -432,7 +439,7 @@ else
     [ -n "$name" ] || continue
     [ "$reps" = "<none>" ] && reps=1
     # same override as the scale loop above, or verification would compare against the stale capture
-    if [ "$name" = "es-feed" ]; then reps=0; fi   # must match the restore loop above
+    if held_zero "$name"; then reps=0; fi   # must match the restore loop above
     got=$($KC get "deploy/$name" -o jsonpath='{.spec.replicas}' 2>/dev/null || echo ERR)
     [ "$got" = "$reps" ] || { echo "restore MISMATCH $name: want $reps got $got" >&2; fail=1; }
   done < <(REPS)
@@ -441,7 +448,7 @@ else
     missing=0
     while read -r name reps; do
       [ "$reps" = "<none>" ] && reps=1
-      if [ "$name" = "es-feed" ]; then reps=0; fi   # must match the restore loop above
+      if held_zero "$name"; then reps=0; fi   # must match the restore loop above
       [ "$reps" -gt 0 ] || continue
       avail=$($KC get "deploy/$name" -o jsonpath='{.status.availableReplicas}' 2>/dev/null || echo 0)
       [ "${avail:-0}" -ge "$reps" ] || missing=$((missing + 1))
