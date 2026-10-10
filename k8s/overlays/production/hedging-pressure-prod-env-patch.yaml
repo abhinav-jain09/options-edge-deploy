@@ -1,0 +1,17 @@
+# PROD-ONLY: the transactional.id of hedging-pressure-service. Each environment has its OWN id (a second instance with the
+# same id fences the first, and a dev pod must never fence the prod producer on a shared broker). The base carries the dev id.
+# The service is HELD AT replicas 0; this only fixes the identity it will use the day the owner scales it up.
+# MIRRORS k8s/services/hedging-pressure/overlays/production — the slice generator renders it from here.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hedging-pressure-service
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: hedging-pressure
+          env:
+            - name: HEDGING_PRESSURE_TRANSACTIONAL_ID
+              value: hedging-pressure-service-production

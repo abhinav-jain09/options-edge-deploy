@@ -211,7 +211,7 @@
             done
           fi
           if [ "${ENVIRONMENT}" = "dev" ] || [ "${ENVIRONMENT}" = "production" ]; then
-            for _img_var in SHORT_PREMIUM_AGENT_IMAGE SIGNAL_FOLLOWER_IMAGE CONTEXT_TAPE_IMAGE MULTILEG_STRUCTURE_IMAGE AMT_ORDER_BRIDGE_IMAGE BROKER_EXECUTION_IMAGE ES_TRADE_LINEARIZER_IMAGE ES_COMPRESSION_EXPANSION_IMAGE; do
+            for _img_var in SHORT_PREMIUM_AGENT_IMAGE SIGNAL_FOLLOWER_IMAGE CONTEXT_TAPE_IMAGE MULTILEG_STRUCTURE_IMAGE AMT_ORDER_BRIDGE_IMAGE BROKER_EXECUTION_IMAGE ES_TRADE_LINEARIZER_IMAGE ES_COMPRESSION_EXPANSION_IMAGE HEDGING_PRESSURE_IMAGE; do
               _pinned="$(pin_ref "${!_img_var}")" || {
                 echo "FATAL: cannot resolve registry digest for ${_img_var}=${!_img_var}; aborting before any kubectl mutation." >&2
                 exit 1
