@@ -36,6 +36,12 @@ d=""; for a in "$@"; do case "$a" in deploy/*) d="${a#deploy/}" ;; esac; done
 echo "$*" >> "$FAKE/calls"
 case "$1" in
   get)
+    if [ "$2" = "pods" ]; then
+      [ "$FAKE_FAIL" = podget ] && { echo "boom" >&2; exit 1; }
+      sel="${4#app.kubernetes.io/name=}"
+      [ -f "$FAKE/pods.$sel" ] && [ "$(cat "$FAKE/pods.$sel")" -gt 0 ] && for i in $(seq 1 "$(cat "$FAKE/pods.$sel")"); do echo "pod/$sel-$i"; done
+      exit 0
+    fi
     n="$3"; [ "$FAKE_FAIL" = get ] && { echo "boom" >&2; exit 1; }
     if [ "$4" = "--ignore-not-found" ]; then [ -f "$FAKE/$n" ] && echo "deployment.apps/$n"; exit 0; fi
     [ -f "$FAKE/$3" ] && cat "$FAKE/$3" || echo ERR ;;
@@ -60,6 +66,17 @@ for bad_count in "" "not-a-replica" "-1" "1.5"; do
   if echo "$out" | grep -q "DIE: .*unreadable" && ! grep -q "^scale" "$FAKE/calls"; then ok "a malformed current count ('$bad_count') fails closed and scales nothing"; else bad "malformed count '$bad_count' accepted: $out"; fi
 done
 echo 1 > "$FAKE/strike-liquidity-heatmap-service"
+# pods that outlive the Deployment (Codex r5): a stuck / terminating pod must block clearing the state
+HELD_POD_WAIT_TRIES=2; HELD_POD_WAIT_SLEEP=0; export HELD_POD_WAIT_TRIES HELD_POD_WAIT_SLEEP
+echo 0 > "$FAKE/strike-liquidity-heatmap-service"; echo 2 > "$FAKE/pods.strike-liquidity-heatmap-service"; FAKE_FAIL=none; export FAKE_FAIL
+out=$( ( force_held_zero ) 2>&1 ); echo "$out" | grep -q "DIE: 2 strike-liquidity-heatmap-service pod(s) are still present" && ok "desired 0 but pods still present: fails closed (state would not be cleared)" || bad "pods outliving the deployment accepted: $out"
+rm -f "$FAKE/strike-liquidity-heatmap-service"
+out=$( ( force_held_zero ) 2>&1 ); echo "$out" | grep -q "DIE: 2 strike-liquidity-heatmap-service pod(s)" && ok "a MISSING Deployment with live pods also fails closed" || bad "orphan pods accepted: $out"
+echo 0 > "$FAKE/pods.strike-liquidity-heatmap-service"
+( set -e; force_held_zero ) >/dev/null 2>&1 && ok "no pods: passes" || bad "clean state rejected"
+FAKE_FAIL=podget; export FAKE_FAIL; echo 0 > "$FAKE/strike-liquidity-heatmap-service"
+out=$( ( force_held_zero ) 2>&1 ); echo "$out" | grep -q "DIE: .*pod query failed" && ok "a pod-query failure fails closed" || bad "pod query failure accepted: $out"
+echo 1 > "$FAKE/strike-liquidity-heatmap-service"; FAKE_FAIL=none; export FAKE_FAIL
 FAKE_FAIL=scale; export FAKE_FAIL; out=$( ( force_held_zero ) 2>&1 ); echo "$out" | grep -q "DIE: could not force" && ok "a scale failure fails closed" || bad "scale failure not fatal: $out"
 FAKE_FAIL=stick; export FAKE_FAIL; out=$( ( force_held_zero ) 2>&1 ); echo "$out" | grep -q "DIE: .*still at" && ok "a scale that does not take fails closed (verified, not assumed)" || bad "unverified scale accepted: $out"
 grep -q '^      force_held_zero$' "$C" && ok "the RESTORED resume path calls force_held_zero before clearing state" || bad "RESTORED path does not call force_held_zero"

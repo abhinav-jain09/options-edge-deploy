@@ -178,21 +178,31 @@ held_zero() { case "$HELD_AT_ZERO" in *" $1 "*) return 0 ;; esac; return 1; }
 # A replica count is a non-negative integer or it is unknown; an empty or garbled answer is never "needs scaling".
 valid_count() { case "$1" in ''|*[!0-9]*) return 1 ;; esac; return 0; }
 force_held_zero() {
-  local held h_out h_rc cur after
+  local held h_out h_rc cur after p_out p_rc n i
   for held in $HELD_AT_ZERO; do
     [ "$held" = "es-feed" ] && continue
     set +e; h_out=$($KC get deploy "$held" --ignore-not-found -o name 2>&1); h_rc=$?; set -e
     [ "$h_rc" -eq 0 ] || die "the $held Deployment query failed (rc=$h_rc: $h_out) - refusing to clear state while its replica count is unknown"
-    [ -n "$h_out" ] || continue
-    cur=$($KC get deploy "$held" -o jsonpath='{.spec.replicas}' 2>/dev/null || echo ERR)
-    # a non-negative integer or nothing: an empty or garbled answer is an unknown count, not "needs scaling"
-    valid_count "$cur" || die "$held replicas are unreadable ('$cur') - refusing to clear state while its count is unknown"
-    if [ "$cur" != "0" ]; then
-      log "$held was left at $cur (an older build restored the captured count) - forcing 0 (owner hold)"
-      $KC scale "deploy/$held" --replicas=0 >/dev/null || die "could not force $held to 0"
-      after=$($KC get deploy "$held" -o jsonpath='{.spec.replicas}' 2>/dev/null || echo ERR)
-      [ "$after" = "0" ] || die "$held still at '$after' after scaling to 0"
+    if [ -n "$h_out" ]; then
+      cur=$($KC get deploy "$held" -o jsonpath='{.spec.replicas}' 2>/dev/null || echo ERR)
+      valid_count "$cur" || die "$held replicas are unreadable ('$cur') - refusing to clear state while its count is unknown"
+      if [ "$cur" != "0" ]; then
+        log "$held was left at $cur (an older build restored the captured count) - forcing 0 (owner hold)"
+        $KC scale "deploy/$held" --replicas=0 >/dev/null || die "could not force $held to 0"
+        after=$($KC get deploy "$held" -o jsonpath='{.spec.replicas}' 2>/dev/null || echo ERR)
+        [ "$after" = "0" ] || die "$held still at '$after' after scaling to 0"
+      fi
     fi
+    # Desired 0 is not "stopped": a pod from the older restore can outlive its Deployment (or hang terminating).
+    # Wait for it to go - regardless of whether the Deployment exists - before the state, the only resume gate, is cleared.
+    for i in $(seq 1 "${HELD_POD_WAIT_TRIES:-24}"); do
+      set +e; p_out=$($KC get pods -l "app.kubernetes.io/name=$held" -o name 2>&1); p_rc=$?; set -e
+      [ "$p_rc" -eq 0 ] || die "the $held pod query failed (rc=$p_rc: $p_out) - failing closed"
+      n=$(printf '%s\n' "$p_out" | awk '/^pod\// {c++} END {print c+0}')
+      [ "$n" = "0" ] && break
+      sleep "${HELD_POD_WAIT_SLEEP:-5}"
+    done
+    [ "$n" = "0" ] || die "$n $held pod(s) are still present after scaling to 0 - refusing to clear state while the held service may be live"
   done
 }
 # A legacy state file from a pre-single-file build would have a deployment row (not a phase word) on
