@@ -121,6 +121,14 @@ patches:
             secretKeyRef:
               name: options-edge-runtime-secrets
               key: POSTGRES_PASSWORD
+      # PROD-ONLY: promote the Implied-vs-Realised panel out of SHADOW. /api/config reads this
+      # from the web pod's env (System.getenv); the vol-premium engine is CALIBRATED on gen4.
+      # MIRRORS k8s/services/web/overlays/production exactly.
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: VOL_PREMIUM_UI_ACTIVATED
+          value: "true"
   # PROD-ONLY: the ES GEX strike topic for the databento display service. MIRRORS the standalone
   # slice k8s/services/raw-to-display/overlays/production, which #714 added it to without the
   # matching top-level patch — validate-services caught the drift and blocked every deploy.
