@@ -76,17 +76,31 @@ spec:
               value: trading.order.status
             - name: BROKER_EXECUTION_CONSUMER_GROUP
               value: broker-execution-service
-            # --- the three values that decide whether anything is placed (OWNER SETS THESE) ---
+            # --- the values that decide whether anything is placed (OWNER SETS THESE) ---
+            # Armed 2026-10-11 at the account owner's instruction: PAPER + ENABLED + TRANSMIT. This now
+            # places paper orders WITHOUT a human pressing Transmit. It still cannot reach a live account:
+            # LIVE has no adapter and is refused at startup, and the adapter asserts the gateway's
+            # managed-account list is exactly the DU paper account on every connect.
             - name: BROKER_EXECUTION_MODE
-              value: "SHADOW"          # SHADOW records tickets; PAPER connects to the paper gateway
+              value: "PAPER"           # SHADOW records tickets; PAPER connects to the paper gateway
             - name: BROKER_EXECUTION_ENABLED
-              value: "false"           # false refuses every intent
+              value: "true"            # false refuses every intent
             - name: BROKER_EXECUTION_TRANSMIT
-              value: "false"           # false stages the order for a human to transmit
+              value: "true"            # false stages the order for a human to transmit
+            # Which deployment caused a ticket. The paper account is PINNED and therefore SHARED by dev and
+            # production, so without this the account's own order list cannot tell them apart. It rides
+            # Interactive Brokers' orderRef and is shown against the order in Trader Workstation. PAPER
+            # REFUSES TO START without it, so a manifest that arms the mode and forgets the label does not
+            # trade — it fails to boot. Base carries the dev name; production overrides it in
+            # k8s/overlays/production/broker-execution-prod-env-patch.yaml.
+            - name: BROKER_EXECUTION_ENVIRONMENT
+              value: "dev"
             # --- IB GATEWAY PAPER. 4002 is paper; 4001 (in the configmap as IB_PORT) is LIVE. The adapter
             #     also asserts the gateway's managed-account list is exactly the DU account below. ---
+            # host.docker.internal, NOT 127.0.0.1: inside a pod, loopback is the POD, and the gateway runs
+            # on the Mac that hosts the dev cluster. Verified 2026-10-11 reachable on 4002 from a container.
             - name: BROKER_EXECUTION_IBKR_HOST
-              value: "127.0.0.1"
+              value: "host.docker.internal"
             - name: BROKER_EXECUTION_IBKR_PORT
               value: "4002"
             - name: BROKER_EXECUTION_IBKR_CLIENT_ID

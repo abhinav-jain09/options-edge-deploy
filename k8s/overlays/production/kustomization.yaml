@@ -48,6 +48,13 @@ resources:
 # cached image (no pull, no throttle). Dev keeps Always so it always picks up a
 # freshly-built :dev image.
 patches:
+  # PROD-ONLY: the environment name every order broker-execution-service places carries as the broker's
+  # orderRef. The paper account is pinned in code and therefore SHARED by dev and production, so the label is
+  # the only thing in that account's order list that attributes a ticket. PAPER refuses to start without it.
+  - path: broker-execution-prod-env-patch.yaml
+    target:
+      kind: Deployment
+      name: broker-execution-service
   # PROD-ONLY: hedging-pressure's own transactional.id (held at replicas 0; the base carries the dev id).
   # MIRRORS k8s/services/hedging-pressure/overlays/production — the slice generator renders it from here.
   - path: hedging-pressure-prod-env-patch.yaml

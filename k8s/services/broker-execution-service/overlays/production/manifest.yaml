@@ -38,6 +38,12 @@ spec:
     spec:
       containers:
         - env:
+            - name: BROKER_EXECUTION_ENVIRONMENT
+              value: prod
+            - name: BROKER_EXECUTION_IBKR_HOST
+              value: 192.168.100.102
+            - name: BROKER_EXECUTION_IBKR_CLIENT_ID
+              value: "22"
             - name: HEALTH_PORT
               value: "8131"
             - name: BROKER_EXECUTION_INTENT_TOPIC
@@ -47,17 +53,13 @@ spec:
             - name: BROKER_EXECUTION_CONSUMER_GROUP
               value: broker-execution-service
             - name: BROKER_EXECUTION_MODE
-              value: SHADOW
+              value: PAPER
             - name: BROKER_EXECUTION_ENABLED
-              value: "false"
+              value: "true"
             - name: BROKER_EXECUTION_TRANSMIT
-              value: "false"
-            - name: BROKER_EXECUTION_IBKR_HOST
-              value: 127.0.0.1
+              value: "true"
             - name: BROKER_EXECUTION_IBKR_PORT
               value: "4002"
-            - name: BROKER_EXECUTION_IBKR_CLIENT_ID
-              value: "21"
             - name: BROKER_EXECUTION_PAPER_ACCOUNT
               value: DUQ287805
             - name: BROKER_EXECUTION_MAX_QUANTITY

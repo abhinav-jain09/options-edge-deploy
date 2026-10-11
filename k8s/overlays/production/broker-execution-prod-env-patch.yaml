@@ -1,0 +1,51 @@
+# PROD-ONLY: the DEPLOYMENT ENVIRONMENT NAME for broker-execution-service.
+#
+# Every order this service places carries this as Interactive Brokers' orderRef, which is shown against the
+# order in Trader Workstation and on the account's activity. It exists because the paper account is PINNED in
+# code (DUQ287805) and therefore SHARED: dev and production trade the SAME account, so an unlabelled ticket in
+# that account's order list cannot be attributed to the deployment that caused it.
+#
+# PAPER mode REFUSES TO START without it. That is deliberate — a deployment that can place must be able to
+# attribute — and it means the failure of a forgotten label is a pod that does not boot rather than an
+# untraceable order.
+#
+# NAMING: this says `prod`, which the account owner asked to see in the remark. Note that
+# ZERODTE_RESEARCH_ENVIRONMENT next door uses `production` for the same environment; that one's value joins
+# evidence across services and must match a closed set, whereas this one is a human-readable broker field that
+# nothing joins on. If one name for the fact is wanted here too, this is the line to change.
+#
+# It lives in the overlay rather than the base because each environment must carry ITS OWN name; the base
+# carries `dev`, which the dev overlay inherits unchanged.
+# ⚠ PRODUCTION SHARES THE DEV GATEWAY. The account owner confirmed (2026-10-11) there is no gateway on the
+# production host: this deployment connects to the one on the Mac at 192.168.100.102:4002, the same gateway and
+# the same pinned paper account (DUQ287805) that dev uses. Verified reachable from .252 on that port.
+#
+# TWO CONSEQUENCES, both handled here:
+#   1. CLIENT ID MUST DIFFER. Interactive Brokers permits one connection per client id per gateway, so leaving
+#      production on the base's 21 would have had the two deployments evicting each other's connection
+#      continuously. 22 is free (951 and 913 belong to approach-position-publisher).
+#   2. THE ORDER LABEL IS THE ONLY THING THAT SEPARATES THEM. One account, two placers: orderRef is what the
+#      account's order list has to attribute a ticket by, which is why PAPER refuses to start without it.
+#
+# ⚠ WHAT THIS DOES NOT SOLVE: duplicate orders ACROSS environments. The duplicate-order fence is the durable
+# intent ledger, and dev and production keep SEPARATE databases, so neither can see the other's claims. If the
+# same desk call reaches both (each environment runs its own amt-order-bridge off the same es4 auction data),
+# the shared account receives TWO orders for one call — correctly labelled, and still two. Only one of the two
+# should be armed at a time, or the ledger has to become shared; this comment is here so that choice is a
+# decision rather than a discovery.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: broker-execution-service
+spec:
+  template:
+    spec:
+      containers:
+        - name: broker-execution
+          env:
+            - name: BROKER_EXECUTION_ENVIRONMENT
+              value: prod
+            - name: BROKER_EXECUTION_IBKR_HOST
+              value: "192.168.100.102"
+            - name: BROKER_EXECUTION_IBKR_CLIENT_ID
+              value: "22"
