@@ -17,10 +17,24 @@
 # WHY IT IS SAFE TO RESTORE: the tape values are plain JSON, not Schema-Registry-framed Avro, so no record
 # carries a schema id that the wiped registry could resolve differently (see cleanup-es4.sh header).
 #
-# PINNED CONSUMERS START COLD, ON PURPOSE. Pinning a group to the restored end makes it start exactly where a
-# plain wipe would have left it: a Kafka Streams app (indicator-service-es4) with wiped state stores does NOT
-# rebuild from the restored history, and nothing here changes that. Only es-amt-service reads the history.
-#
+# THE PIN ONLY REACHES CONSUMERS THAT COMMIT OFFSETS, AND MOST ES4 READERS REPLAY THE TAPE ANYWAY. Pinning a group to
+# the restored end makes a plain committing consumer start where a plain wipe would have left it, but it is NOT a
+# statement that nothing else reads the history (audited 2026-10-12, processing repo at aa4ec232):
+#   * indicator-service (Kafka Streams): pinned offsets + wiped state is exactly the "no checkpoint" case its
+#     BootstrapPlanner answers with a session backfill that REWINDS the group to the retained beginning - the pin
+#     is overridden. That replay used to abort on the 48 MiB admission bound (pre-anchor dedup state, fixed in
+#     processing #982); with the fix it replays one session and republishes it.
+#   * context-tape, es-aggressor-flow: assign + time seek (about a session / 24 h back), no committed offsets.
+#   * es-cvd (24 h) and tape-zones (26 h): assign + time seek, never commit, so they are never recorded or
+#     pinned and they REBUILD today's/yesterday's outputs from the restored tape. es-cvd republishes its bars into
+#     non-compacted mirrors; tape-zones treats a partition whose log start is 0 as complete history, which a
+#     restored topic always is even when the seek skipped its oldest hours - a clean in the middle of a session can
+#     therefore publish FINAL cells / a terminal board built from a partial session.
+#   * close-direction: subscribe, but it seeks by timestamp (35 min) on every assignment and ignores the pin.
+#   * es-footprint-strike does not read the tape; it consumes es-cvd's footprint bars from the beginning.
+#   * only es-amt-service is MEANT to read the history; it is excluded from the pin by design.
+# So "start cold" is true only of groups that really resume from committed offsets (es-trades-bridge, spread-skew).
+
 # THE RESTORE-IN-PROGRESS MARKER (<topic>.importing) records the topic's id. It blocks export while that
 # incarnation exists (a stopped reset is resumed and would otherwise snapshot a possibly partial tape over the
 # good artifact) and is obsolete the moment the topic is recreated, so it can never disable later resets.
