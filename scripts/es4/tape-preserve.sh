@@ -28,7 +28,7 @@
 #   * context-tape and es-aggressor-flow: assign + timestamp seek, no committed offsets, so they are never
 #     recorded or pinned; they rebuild from the tape back to their configured replay horizons.
 #   * es-cvd and tape-zones: assign + timestamp seek (defaults 24 h / 26 h), never commit, never pinned; they
-#     REBUILD their outputs from the restored tape. es-cvd therefore republishes bars into non-compacted mirrors.
+#     REBUILD their outputs from the restored tape; es-cvd therefore republishes its keyed bar outputs.
 #     tape-zones treats a partition whose log start is 0 as complete history (TapeZonesRuntime
 #     computeTruncatedSessions), and a restored topic always starts at 0 even when the seek skipped its oldest
 #     hours; read from the code, a session that straddles the seek point is then not marked truncated. That
