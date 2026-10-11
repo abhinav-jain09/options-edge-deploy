@@ -10,6 +10,13 @@ resources:
   # scripts/ci/validate-services.sh render equivalence.
   - ../../services/web/base
 patches:
+  # EXPERIMENT-ONLY: keep broker-execution DISARMED. services.yaml scopes it to [dev, production], but the
+  # shared base renders it here, so arming the base would have armed a third environment on DEV'S gateway
+  # client id. See broker-execution-experiment-disarm-patch.yaml.
+  - path: broker-execution-experiment-disarm-patch.yaml
+    target:
+      kind: Deployment
+      name: broker-execution-service
   - path: approach-position-publisher-delete.yaml
     target:
       kind: Deployment

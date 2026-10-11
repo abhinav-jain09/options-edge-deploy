@@ -1,0 +1,32 @@
+# EXPERIMENT-ONLY: broker-execution-service stays DISARMED here.
+#
+# services.yaml declares this service for `envs: [dev, production]` — experiment is not one of them, yet the
+# shared base renders it here anyway, so arming the base armed THREE environments rather than the two the
+# account owner asked for. The base is also where the gateway client id lives, so an armed experiment would
+# have carried DEV'S client id (21): Interactive Brokers permits one connection per client id per gateway, and
+# dev and experiment would have evicted each other continuously on the one shared gateway.
+#
+# replicas:0 in the base is not sufficient on its own. It makes the hole conditional on someone scaling this
+# up rather than absent, and "nothing is running right now" is a different statement from "this cannot place
+# an order". SHADOW + ENABLED=false means that even scaled, this instance connects to no broker and refuses
+# every intent.
+#
+# NAME-KEYED strategic merge, not an index-based json6902 patch: an env/N path silently lands on whichever
+# variable has drifted into that index (this repo has the dealer-ledger heap landing on QUOTE_STALE_MS to
+# show for it).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: broker-execution-service
+spec:
+  template:
+    spec:
+      containers:
+        - name: broker-execution
+          env:
+            - name: BROKER_EXECUTION_MODE
+              value: "SHADOW"
+            - name: BROKER_EXECUTION_ENABLED
+              value: "false"
+            - name: BROKER_EXECUTION_TRANSMIT
+              value: "false"

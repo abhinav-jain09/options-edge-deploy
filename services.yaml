@@ -237,8 +237,16 @@ services:
   - { name: pin-postgres-writer,          managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-pin-postgres-writer,          deployments: [pin-postgres-writer] }
   - { name: pressure-postgres-writer,     managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-pressure-postgres-writer,     deployments: [pressure-postgres-writer] }
   - { name: spx-mission-control,          managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-spx-mission-control,          deployments: [spx-mission-control-service] }
-  # amt-order-bridge / broker-execution-service: DEPLOYED INERT (both AMT_BRIDGE_ENABLED and
-  # BROKER_EXECUTION_ENABLED are "false", replicas:0 in k8s/base — see the Deployment headers).
+  # amt-order-bridge: DEPLOYED INERT (AMT_BRIDGE_ENABLED "false", replicas:0 in k8s/base).
+  # broker-execution-service: ARMED 2026-10-11 at the account owner's instruction — PAPER + ENABLED
+  # + TRANSMIT in dev and production, so it places paper orders with no human pressing Transmit. It
+  # is STILL replicas:0 in k8s/base and still in both production hold-down lists, so arming is
+  # configuration and not execution: nothing is placed until the owner scales it up. It cannot reach
+  # a live account (LIVE has no adapter; the adapter asserts the gateway's managed-account list is
+  # exactly the pinned DU paper account on every connect). The experiment overlay stays DISARMED.
+  # ⚠ dev and production share ONE gateway and ONE pinned paper account, with SEPARATE intent
+  # ledgers — so scaling BOTH up can put two orders in that account for one desk call. See
+  # k8s/overlays/production/broker-execution-prod-env-patch.yaml.
   # Neither carries a buildJob because neither needs one: Jenkinsfile.service-deploy's
   # 'Build image (this service only)' stage reads the `image` field below, hands it to
   # options-edge-processing as BUILD_TARGET, and lets that job build the module (`mvn -pl <module> -am`).
