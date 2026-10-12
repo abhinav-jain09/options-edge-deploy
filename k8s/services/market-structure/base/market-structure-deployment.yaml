@@ -1,0 +1,86 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: market-structure-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: market-structure-service
+    app.kubernetes.io/component: market-structure-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  # RUNNING on dev and production. Unlike the shadow services deployed at replicas 0, this one is
+  # safe to run: it consumes options.indicators.bars read-only and writes ONLY its own three topics,
+  # and what a reader sees of it is gated on the gateway's own GATEWAY_MARKET_STRUCTURE_ENABLED,
+  # which is false until the owner turns it on. SINGLE replica ONLY: a second instance with the same
+  # transactional.id fences the first, and both would rebuild the same session.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: market-structure-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: market-structure-service
+        app.kubernetes.io/component: market-structure-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: market-structure
+          image: 192.168.100.252:5000/options-edge-market-structure:dev
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: options-edge-config              # KAFKA_BOOTSTRAP_SERVERS, TOPIC_PREFIX
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            # Input (JSON, no schema registry): options.indicators.bars — the owner's SPX 1m/5m/15m
+            # bars with the seven D1 properties. Outputs: options.spx.market-structure.ui (the
+            # Context Tape projection, one record per 1m fold), .sequence (R3's session records) and
+            # .dlq (R2's rejections). All three must EXIST at start — R13's boot verification refuses
+            # to become ready otherwise, and scripts/kafka/ensure-market-structure-topics.sh is the
+            # first-deploy barrier. The topic names are the code defaults and TOPIC_PREFIX is "" on
+            # dev and prod, so no KAFKA_MARKET_STRUCTURE_*_TOPIC override is set.
+            #
+            # MARKET_STRUCTURE_BOOTSTRAP_TRADE_DATE is deliberately UNSET: it then defaults to today
+            # in New York, which is the session the pod was started for. Setting it pins the service
+            # to one past session and it will not move off it.
+            #
+            # One transactional.id per environment; this base is the dev one, the production slice is
+            # patched by k8s/overlays/production/market-structure-prod-env-patch.yaml.
+            - name: MARKET_STRUCTURE_TRANSACTIONAL_ID
+              value: market-structure-service-dev
+            - name: MARKET_STRUCTURE_HEALTH_PORT
+              value: "8080"
+            - name: JAVA_TOOL_OPTIONS
+              value: -Xms256m -Xmx640m
+          ports:
+            - name: health
+              containerPort: 8080
+          # /health/ready answers R13's readiness as far as this deployment evaluates it: it is 503
+          # until the topics verify AND a session is running, so it is RED before the day's first bar
+          # and that is accurate — the service has nothing to serve yet. /health/live and /metrics
+          # always answer; a dead runner halts the process rather than leaving the probe to notice.
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 200m
+              memory: 640Mi
+            limits:
+              memory: 1280Mi

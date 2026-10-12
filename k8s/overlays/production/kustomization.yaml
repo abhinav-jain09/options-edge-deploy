@@ -32,6 +32,10 @@ resources:
   # hedging-pressure: dev+prod, HELD AT replicas 0 (base). Reads delta-flow / spot / strike-flow / gex topics, publishes
   # its own state + cycle-input topics (see the base manifest). Owner turns it on later.
   - ../../services/hedging-pressure/base
+  # market-structure: dev+prod at replicas 1. Reads options.indicators.bars read-only and publishes
+  # options.spx.market-structure.ui (the Context Tape projection), .sequence and .dlq. Single replica
+  # only (per-environment transactional.id).
+  - ../../services/market-structure/base
   # nifty-gex: the NIFTY/BANKNIFTY Pressure boards (DhanHQ), public via cloudflared path
   # routes to NodePort 30188. STANDALONE overlay k8s/services/nifty-gex/overlays/production
   # mirrors the prod patches — sync enforced by validate-services render equivalence.
@@ -61,6 +65,12 @@ patches:
     target:
       kind: Deployment
       name: hedging-pressure-service
+  # PROD-ONLY: market-structure's own transactional.id (the base carries the dev id).
+  # MIRRORS k8s/services/market-structure/overlays/production — the slice generator renders it from here.
+  - path: market-structure-prod-env-patch.yaml
+    target:
+      kind: Deployment
+      name: market-structure-service
   # PROD-ONLY: calibrate vol-premium with the gen4 reconstructed NAS-year baseline and promote the
   # UI out of shadow (owner Gate-1 §9 decision, 2026-10-10).
   # MIRRORS k8s/services/vol-premium/overlays/production — the slice generator renders it from here.
