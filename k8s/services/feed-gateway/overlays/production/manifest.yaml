@@ -63,6 +63,10 @@ spec:
               value: "true"
             - name: GATEWAY_IBKR_PREOPEN_GEX_ARBITRATION_ENABLED
               value: "false"
+            - name: GATEWAY_MARKET_STRUCTURE_ENABLED
+              value: "true"
+            - name: KAFKA_MARKET_STRUCTURE_TOPIC
+              value: options.spx.market-structure.ui
             - name: OE_WATCH_JDBC_URL
               value: jdbc:postgresql://192.168.100.252:5432/options_flow
             - name: OE_WATCH_DB_USER
@@ -103,10 +107,6 @@ spec:
               value: es.futures.cvd
             - name: KAFKA_ES_CVD_BARS_TOPIC
               value: es.futures.cvd.bars
-            - name: GATEWAY_MARKET_STRUCTURE_ENABLED
-              value: "true"
-            - name: KAFKA_MARKET_STRUCTURE_TOPIC
-              value: options.spx.market-structure.ui
             - name: GATEWAY_ES_FOOTPRINT_ENABLED
               value: "true"
             - name: KAFKA_ES_FOOTPRINT_TOPIC

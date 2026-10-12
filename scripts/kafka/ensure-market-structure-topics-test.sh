@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 # Drives the REAL ensure-market-structure-topics.sh against mocked kafka-topics / kafka-configs that print the
-# broker's real --describe format (sensitive=…, synonyms={… DEFAULT_CONFIG:log.cleanup.policy=…}) and that can
-# FAIL: absent → create → verified; right shape (either broker default) → ok; wrong shape or any CLI failure →
-# fail closed. Same pattern as ensure-hedging-pressure-topics-test.sh, with ONE difference that is the point of
-# this barrier: retention is a FLOOR, so a longer retention and -1 both pass while a shorter one does not.
+# broker's real `--describe --all` format (sensitive=…, synonyms={… DEFAULT_CONFIG:…}) and that can FAIL:
+# absent → create → verified; right shape (either broker default) → ok; wrong shape or any CLI failure →
+# fail closed. Same pattern as ensure-hedging-pressure-topics-test.sh, with two differences that are the point
+# of this barrier: retention is a FLOOR (a longer retention and -1 both pass, one millisecond short does not),
+# and the barrier checks the SAME SIX THINGS the service's own boot verification checks — so every one of them
+# has a case here, including the three a shape-only check would miss (max.message.bytes, the replication factor
+# and min.insync.replicas). A barrier that passed a topic the service refuses would leave the Deployment
+# permanently unready, which is the failure this file exists to make impossible.
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 T="$(mktemp -d)"; trap 'rm -r "$T"' EXIT
@@ -15,12 +19,18 @@ SEQ=options.spx.market-structure.sequence
 DLQ=options.spx.market-structure.dlq
 ALL="$UI $SEQ $DLQ"
 
-# cfgline <policy> <retention> <broker default policy>: the real kafka-configs --describe shape
+# cfgline <policy> <retention> <broker default policy> [max.message.bytes] [min.insync.replicas]:
+# the real `kafka-configs --describe --all` shape, whose first key=value per line is the EFFECTIVE value.
 cfgline() {
-  printf 'Dynamic configs for topic x are:\n  cleanup.policy=%s sensitive=false synonyms={DYNAMIC_TOPIC_CONFIG:cleanup.policy=%s, DEFAULT_CONFIG:log.cleanup.policy=%s}\n  retention.ms=%s sensitive=false synonyms={DYNAMIC_TOPIC_CONFIG:retention.ms=%s, STATIC_BROKER_CONFIG:log.retention.ms=86400000}\n' "$1" "$1" "$3" "$2" "$2"
+  printf 'All configs for topic x are:\n  cleanup.policy=%s sensitive=false synonyms={DYNAMIC_TOPIC_CONFIG:cleanup.policy=%s, DEFAULT_CONFIG:log.cleanup.policy=%s}\n  max.message.bytes=%s sensitive=false synonyms={STATIC_BROKER_CONFIG:message.max.bytes=%s, DEFAULT_CONFIG:message.max.bytes=1048588}\n  min.insync.replicas=%s sensitive=false synonyms={STATIC_BROKER_CONFIG:min.insync.replicas=%s, DEFAULT_CONFIG:min.insync.replicas=1}\n  retention.ms=%s sensitive=false synonyms={DYNAMIC_TOPIC_CONFIG:retention.ms=%s}\n' "$1" "$1" "$3" "${4:-1048588}" "${4:-1048588}" "${5:-1}" "${5:-1}" "$2" "$2"
 }
 
-# mock <list> <partitions> <ui cfg> <sequence cfg> <dlq cfg> [fail: list|create|describe|configs]
+# A config read with a key MISSING entirely, which is what an unreadable or absent value looks like.
+cfgmissing() {
+  printf 'All configs for topic x are:\n  cleanup.policy=delete sensitive=false synonyms={DYNAMIC_TOPIC_CONFIG:cleanup.policy=delete}\n  retention.ms=604800000 sensitive=false synonyms={DYNAMIC_TOPIC_CONFIG:retention.ms=604800000}\n'
+}
+
+# mock <list> <partitions> <ui cfg> <sequence cfg> <dlq cfg> [fail: list|create|describe|configs] [rf]
 mock() {
   mkdir -p "$T/bin"; : > "$T/created"
   printf '%s\n' "$3" > "$T/cfg_ui"; printf '%s\n' "$4" > "$T/cfg_seq"; printf '%s\n' "$5" > "$T/cfg_dlq"
@@ -30,7 +40,7 @@ case " \$* " in
   *" --list "*) [ "${6:-}" = list ] && { echo "Timed out waiting for a node assignment" >&2; exit 1; }; printf '%s\n' $1 ;;
   *" --create "*) [ "${6:-}" = create ] && { echo "Error while executing topic command : Not authorized" >&2; exit 1; }; echo "\$*" >> "$T/created"; echo "Created topic." ;;
   *" --describe "*) [ "${6:-}" = describe ] && { echo "Error: broker unreachable" >&2; exit 1; }
-     echo "Topic: x	TopicId: AbCdEfGhIjKlMnOpQrStUv	PartitionCount: $2	ReplicationFactor: 1	Configs: " ;;
+     echo "Topic: x	TopicId: AbCdEfGhIjKlMnOpQrStUv	PartitionCount: $2	ReplicationFactor: ${7:-1}	Configs: " ;;
 esac
 M
   cat > "$T/bin/kafka-configs" <<M
@@ -75,7 +85,21 @@ mock "$ALL" 1 "$WEEK" "$(cfgline delete 172799999 delete)" "$WEEK"; expect_fail 
 mock "$ALL" 32 "$WEEK" "$TWO" "$WEEK";                             expect_fail "32 partitions (the dev auto-create default) → fail"
 mock "$ALL" 1 "$(cfgline compact 604800000 delete)" "$TWO" "$WEEK"; expect_fail "ui compacted → fail"
 mock "$ALL" 1 "$(cfgline compact,delete 604800000 delete)" "$TWO" "$WEEK"; expect_fail "ui compact,delete → fail"
-mock "$ALL" 1 "Dynamic configs for topic x are:" "$TWO" "$WEEK";   expect_fail "ui inherits the cluster retention → fail"
+mock "$ALL" 1 "$(cfgmissing)" "$TWO" "$WEEK";                      expect_fail "ui with no max.message.bytes or min.insync.replicas reported → fail"
+mock "$ALL" 1 "$(cfgline delete 604800000 delete 1048575)" "$TWO" "$WEEK"; expect_fail "ui max.message.bytes one byte below an input record's bound → fail"
+mock "$ALL" 1 "$(cfgline delete 604800000 delete 1048576)" "$TWO" "$WEEK"; run; rc=$?
+[ $rc -eq 0 ] && ok "ui max.message.bytes exactly at the bound → ok" || { bad "max.message.bytes at the bound"; cat "$T/out"; }
+mock "$ALL" 1 "$(cfgline delete 604800000 delete 1048588 0)" "$TWO" "$WEEK"; expect_fail "ui min.insync.replicas below the minimum → fail"
+mock "$ALL" 1 "$WEEK" "$TWO" "$WEEK" "" 0;                         expect_fail "ReplicationFactor 0 → fail"
+# The minimum is the DEPLOYMENT's, not this script's: an estate with three brokers raises it, and a
+# single-replica topic must then be refused. Checked here because the service reads the same variable.
+mock "$ALL" 1 "$WEEK" "$TWO" "$WEEK"
+if PATH="$T/bin:$PATH" KAFKA_BOOTSTRAP_SERVERS=mock:9092 MARKET_STRUCTURE_MIN_REPLICATION_FACTOR=3 \
+     bash "$HERE/ensure-market-structure-topics.sh" > "$T/out" 2>&1; then
+  bad "RF>=3 refuses a single-replica topic"; cat "$T/out"
+else
+  ok "a replicated estate's minimum (RF>=3) refuses a single-replica topic"
+fi
 mock "other.topic" 1 "$WEEK" "$TWO" "$WEEK" create;                expect_fail "create fails → fail (never reported as success)"
 mock "$ALL" 1 "$WEEK" "$TWO" "$WEEK" list;                         expect_fail "topic list unreadable → fail"
 mock "$ALL" 1 "$WEEK" "$TWO" "$WEEK" describe;                     expect_fail "describe fails → fail"

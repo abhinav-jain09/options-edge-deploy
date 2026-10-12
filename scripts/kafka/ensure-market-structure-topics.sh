@@ -3,10 +3,16 @@
 # declared shape BEFORE the service rolls out (the same barrier as ensure-hedging-pressure-topics).
 #
 # Why: the service never relies on auto-creation, and its own R13 boot verification refuses readiness until every
-# topic matches — existence, the exact partition count, cleanup.policy=delete, retention.ms at or above the floor and
-# max.message.bytes >= 1 048 576. apply-topics lives in a different job, so on a FIRST deploy none of the three
-# exists; a broker that auto-creates would give them cluster defaults (dev runs num.partitions=32), and the service
-# would then sit not-ready with a partition-count failure. Declared in scripts/kafka/topics.env:
+# topic matches. This script checks THE SAME SIX THINGS the service checks, so a topic that passes here cannot leave
+# the new Deployment permanently unready: existence, the exact partition count, cleanup.policy=delete, retention.ms
+# at or above the floor, max.message.bytes >= 1 048 576, the replication factor and min.insync.replicas.
+#
+# Every config check reads the EFFECTIVE value (`kafka-configs --describe --all`), which is what the service's own
+# AdminClient describeConfigs returns: a topic that sets nothing of its own and inherits a broker default that
+# satisfies the requirement is a topic the service accepts, so refusing it here would be a barrier that blocks a
+# deployment the service would have run. apply-topics lives in a different job, so on a FIRST deploy none of the
+# three exists; a broker that auto-creates would give them cluster defaults (dev runs num.partitions=32), and the
+# service would then sit not-ready with a partition-count failure. Declared in scripts/kafka/topics.env:
 #   options.spx.market-structure.ui        1 partition, delete, retention.ms=604800000 (1 week)
 #   options.spx.market-structure.sequence  1 partition, delete, retention.ms=172800000 (2 sessions)
 #   options.spx.market-structure.dlq       1 partition, delete, retention.ms=604800000 (1 week)
@@ -21,6 +27,10 @@ SEQUENCE_TOPIC="${KAFKA_MARKET_STRUCTURE_SEQUENCE_TOPIC:-options.spx.market-stru
 DLQ_TOPIC="${KAFKA_MARKET_STRUCTURE_DLQ_TOPIC:-options.spx.market-structure.dlq}"
 : "${KAFKA_BOOTSTRAP_SERVERS:?KAFKA_BOOTSTRAP_SERVERS unset — refusing to verify against an unknown cluster}"
 RF="${KAFKA_TOPIC_REPLICATION_FACTOR:-1}"
+# The two minima the SERVICE verifies, which its own deployment freezes (1 on this single-broker estate).
+MIN_RF="${MARKET_STRUCTURE_MIN_REPLICATION_FACTOR:-1}"
+MIN_ISR="${MARKET_STRUCTURE_MIN_INSYNC_REPLICAS:-1}"
+MIN_MAX_MESSAGE_BYTES=1048576
 
 kt() { kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" "$@"; }
 kc() { kafka-configs --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" "$@"; }
@@ -32,8 +42,8 @@ if ! LIST=$(kt --list 2>&1); then
   echo "FAIL: cannot list topics — refusing to deploy on an unverified cluster:"; printf '%s\n' "$LIST"; exit 1
 fi
 
-ensure() { # <topic> <exact retention.ms>
-  local topic="$1" wantRet="$2" out desc parts cfg policy retention
+ensure() { # <topic> <retention.ms floor>
+  local topic="$1" wantRet="$2" out desc parts rf cfg policy retention maxBytes isr
   if ! grep -qxF "$topic" <<<"$LIST"; then
     echo "creating '$topic' (1 partition, RF=$RF, cleanup.policy=delete, retention.ms=$wantRet)"
     if ! out=$(kt --create --topic "$topic" --partitions 1 --replication-factor "$RF" \
@@ -49,7 +59,16 @@ ensure() { # <topic> <exact retention.ms>
     echo "FAIL: '$topic' has PartitionCount=${parts:-unknown}, expected 1 (the service's boot verification requires exactly 1, and one partition is what gives the page and the sequence readers a total order)."
     return 1
   fi
-  if ! cfg=$(kc --entity-type topics --entity-name "$topic" --describe 2>&1); then
+  rf=$(awk '{for (i = 1; i < NF; i++) if ($i == "ReplicationFactor:") { print $(i + 1); exit }}' <<<"$desc")
+  case "${rf:-}" in
+    ''|*[!0-9]*) echo "FAIL: '$topic' reports ReplicationFactor='${rf:-unknown}', which is not a number."; return 1 ;;
+  esac
+  if [ "$rf" -lt "$MIN_RF" ]; then
+    echo "FAIL: '$topic' has ReplicationFactor=$rf, expected >= $MIN_RF (the service verifies the same minimum)."
+    return 1
+  fi
+  # --all, not the dynamic view: these are the EFFECTIVE values the service's own describeConfigs sees.
+  if ! cfg=$(kc --entity-type topics --entity-name "$topic" --describe --all 2>&1); then
     echo "FAIL: could not read the config of '$topic':"; printf '%s\n' "$cfg"; return 1
   fi
   # extract() takes the FIRST whitespace/comma-bounded key=value, i.e. the topic's own value, never a
@@ -62,15 +81,30 @@ ensure() { # <topic> <exact retention.ms>
   fi
   # At or above the floor: R13's requirement is a floor, and -1 (infinite) satisfies any floor. A SHORTER
   # retention is refused, because the service rebuilds a session by replaying and cannot replay what was deleted.
-  if [ "${retention:-}" = "" ]; then
-    echo "FAIL: '$topic' has no retention.ms of its own (it inherits the cluster default), expected >= $wantRet."
-    return 1
-  fi
+  case "${retention:-}" in
+    ''|*[!0-9-]*) echo "FAIL: '$topic' reports retention.ms='${retention:-<unreadable>}', expected >= $wantRet."; return 1 ;;
+  esac
   if [ "$retention" != "-1" ] && [ "$retention" -lt "$wantRet" ]; then
     echo "FAIL: '$topic' has retention.ms=$retention, expected >= $wantRet (or -1)."
     return 1
   fi
-  echo "ok: '$topic' — partitions=1 cleanup.policy=delete retention.ms=$retention (floor $wantRet)"
+  maxBytes=$(extract 'max\.message\.bytes' "$cfg")
+  case "${maxBytes:-}" in
+    ''|*[!0-9]*) echo "FAIL: '$topic' reports max.message.bytes='${maxBytes:-<unreadable>}', expected >= $MIN_MAX_MESSAGE_BYTES."; return 1 ;;
+  esac
+  if [ "$maxBytes" -lt "$MIN_MAX_MESSAGE_BYTES" ]; then
+    echo "FAIL: '$topic' has max.message.bytes=$maxBytes, expected >= $MIN_MAX_MESSAGE_BYTES (one input record's bound)."
+    return 1
+  fi
+  isr=$(extract 'min\.insync\.replicas' "$cfg")
+  case "${isr:-}" in
+    ''|*[!0-9]*) echo "FAIL: '$topic' reports min.insync.replicas='${isr:-<unreadable>}', expected >= $MIN_ISR."; return 1 ;;
+  esac
+  if [ "$isr" -lt "$MIN_ISR" ]; then
+    echo "FAIL: '$topic' has min.insync.replicas=$isr, expected >= $MIN_ISR (the service verifies the same minimum)."
+    return 1
+  fi
+  echo "ok: '$topic' — partitions=1 rf=$rf cleanup.policy=delete retention.ms=$retention (floor $wantRet) max.message.bytes=$maxBytes min.insync.replicas=$isr"
 }
 
 rc=0
