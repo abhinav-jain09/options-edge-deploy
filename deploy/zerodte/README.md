@@ -206,8 +206,9 @@ from its one source), the probes, no service-account token, one container, and t
 * The lineage approval: every lineage row of `virgin-attestation.yaml` carries `approvedBy` — the owner's name, written by the owner. The
   rows shipped by increment 7b carry the marker `UNAPPROVED`, and BOTH readers (the Job's `VirginAttestation` and
   `scripts/ci/zerodte_attestation.py`) REFUSE a lineage that carries it: until the owner's edit the validators, the wrapper and the Job
-  all stop on exactly that marker, so nothing can be provisioned under an unapproved lineage (and append-only forbids changing the row later —
-  the approval must be in the founding row). `validate-zerodte-attestation-test.sh` asserts that refusal while the marker is there, and the pass after.
+  all stop on exactly that marker, so nothing can be provisioned under an unapproved lineage. Append-only permits exactly ONE change to
+  an existing row: `approvedBy` moving from the marker to the owner's name, every other field identical — a base that still carries the
+  marker is loaded as history for that comparison (10-12: the owner's edit, which the design expected, had been refused as "altered"). `validate-zerodte-attestation-test.sh` asserts that refusal while the marker is there, and the pass after.
 * The cluster pins, `clusters.yaml`: each environment's cluster is identified by the sha256 fingerprint of the CA its deployer kubeconfig
   carries (production by its API server address too) — not by a kubeconfig's cluster NAME, which anyone can relabel, and not by an
   environment variable. A pin changes only through review. Certificates are public; nothing in that file is a secret. The pin binds the TLS
