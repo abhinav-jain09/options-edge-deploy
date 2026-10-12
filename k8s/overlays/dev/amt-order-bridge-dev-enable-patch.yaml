@@ -12,6 +12,11 @@
 # NAME-KEYED strategic merge, deliberately. An env/N json6902 patch silently lands on whichever
 # variable has drifted into that index — this repository has the dealer-ledger heap landing on
 # QUOTE_STALE_MS from exactly that mistake.
+#
+# It DOES move AMT_BRIDGE_ENABLED to the head of the env list (review corrected me — I had written
+# that it does not reorder). That is harmless: Kubernetes env is a set keyed by name, not an ordered
+# list, and the other five variables keep their values. It is recorded because the claim was wrong,
+# not because the effect matters.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
