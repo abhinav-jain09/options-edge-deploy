@@ -44,7 +44,14 @@ KEEP='keycloak'                                          # deployments to leave 
 # stock-gex-service is PROD-ONLY (USER 2026-08-18): the public Gamma Lab page reads it there,
 # and it pulls straight from Databento (billed) rather than from Kafka — a dev copy spends
 # money serving a page dev does not host, and it was sitting at 0/1 on dev anyway.
-DISABLED_DEV='hpsf-stage-a-service|hpsf-stage-b-service|volume-pace-service|volume-pace-databento-service|volume-sandwich-service|volume-sandwich-databento-service|databento-timewarp-snapshot-replay|strike-flow-classifier-ibkr|options-edge-integration-test|databento-mission-pressure-service|databento-mission-pace-service|spx-mission-control-service|short-premium-agent-service|spread-skew-service|spread-skew-postgres-writer|directional-pressure-databento-service|databento-maxpain-service|databento-mission-sandwich-service|directional-pressure-service|option-truth-engine-service|stock-gex-service|dealer-ledger-service|dealer-ledger-calibration-scorer|dealer-ledger-calibration-accumulator|vix-option-inteligence-service|broker-execution-service|amt-order-bridge|hedging-pressure-service'
+# 2026-10-11: broker-execution-service and amt-order-bridge REMOVED from this set so the
+# auction-to-paper-order chain survives a clean. They are lifted to 1 replica in the DEV
+# OVERLAY (k8s/overlays/dev/kustomization.yaml), not in the shared base — production keeps 0
+# because it shares dev's one gateway and one pinned paper account with a separate intent
+# ledger. Lifting replicas WITHOUT this edit would have them come up and be pinned straight
+# back to 0 by the scale-up loop below, which is #1034's lesson about closing only some of
+# the hold paths.
+DISABLED_DEV='hpsf-stage-a-service|hpsf-stage-b-service|volume-pace-service|volume-pace-databento-service|volume-sandwich-service|volume-sandwich-databento-service|databento-timewarp-snapshot-replay|strike-flow-classifier-ibkr|options-edge-integration-test|databento-mission-pressure-service|databento-mission-pace-service|spx-mission-control-service|short-premium-agent-service|spread-skew-service|spread-skew-postgres-writer|directional-pressure-databento-service|databento-maxpain-service|databento-mission-sandwich-service|directional-pressure-service|option-truth-engine-service|stock-gex-service|dealer-ledger-service|dealer-ledger-calibration-scorer|dealer-ledger-calibration-accumulator|vix-option-inteligence-service|hedging-pressure-service'
 # OVERNIGHT ES-tracking set — the ONLY services brought up right after the (17:20 ET, trading days) clean,
 # so ES futures are tracked overnight. Everything else stays at 0 until the 06:15 ET full start. (2026-08-03: was 07:30)
 # databento-feed + databento-gex-service are kept alive overnight so the pre-market LIVE OI path runs before

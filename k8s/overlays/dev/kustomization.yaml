@@ -64,6 +64,45 @@ resources:
   # k8s/services/nifty-gex/overlays/dev exactly — validate-services enforces it.
   - ../../services/nifty-gex/base
 patches:
+  # DEV-ONLY, 2026-10-11: run the auction-to-paper-order chain. The account owner wants an auction
+  # market theory signal to reach the broker as a paper order from the next session.
+  #
+  # WHY THIS IS DEV-ONLY AND THE BASE STAYS AT 0. The base is shared, so lifting replicas there would
+  # arm production too — and production shares dev's ONE gateway and ONE pinned paper account with a
+  # SEPARATE intent ledger, so two running copies put two orders in that account for one desk call.
+  # Both Codex reviews made that a blocker. Keeping the base at 0 also means any future environment
+  # inherits OFF rather than ON, which is the fail-safe direction.
+  #
+  # BOTH HALVES ARE NEEDED, and neither alone does anything: amt-order-bridge turns the auction signal
+  # into a trading.order.intent, and broker-execution-service turns that intent into an order. The
+  # bridge is also ENABLED here rather than in the base for the same reason as the replicas — an armed
+  # bridge in production would start producing intents the moment anything scaled it.
+  #
+  # ⚠ scripts/ops/dev-cleanup.sh pins the DISABLED_DEV set to 0 on every clean, so lifting replicas
+  # here WITHOUT removing both names there would have them come up and be put straight back down at
+  # the next clean. Both are removed from that list in the same commit (#1034's lesson: closing fewer
+  # than all of the hold paths is worse than closing none).
+  - target:
+      kind: Deployment
+      name: broker-execution-service
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+  - target:
+      kind: Deployment
+      name: amt-order-bridge
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+  # The ENABLE is a separate NAME-KEYED strategic merge, never an env/N json6902 index: an index patch
+  # lands on whichever variable has drifted into that position, and this repository already has the
+  # dealer-ledger heap landing on QUOTE_STALE_MS to show for exactly that.
+  - path: amt-order-bridge-dev-enable-patch.yaml
+    target:
+      kind: Deployment
+      name: amt-order-bridge
   # nifty-gex runs at ZERO replicas on dev (mirror of the standalone slice patch): prod
   # polls Dhan with the SAME account token; a second poller trips the per-account 429
   # and a second renewer invalidates prod's token.

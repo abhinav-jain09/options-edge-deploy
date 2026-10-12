@@ -23,7 +23,7 @@ metadata:
   namespace: options-edge
 spec:
   progressDeadlineSeconds: 1200
-  replicas: 0
+  replicas: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: broker-execution-service
@@ -64,6 +64,8 @@ spec:
               value: DUQ287805
             - name: BROKER_EXECUTION_MAX_QUANTITY
               value: "1"
+            - name: BROKER_EXECUTION_MAX_CREDIT
+              value: "100.0"
             - name: BROKER_EXECUTION_REPRICE_MS
               value: "3000"
             - name: BROKER_EXECUTION_CHASE_MS
