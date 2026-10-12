@@ -40,6 +40,8 @@ spec:
         - env:
             - name: AMT_BRIDGE_ENABLED
               value: "true"
+            - name: AMT_BRIDGE_EXIT_ENABLED
+              value: "false"
             - name: HEALTH_PORT
               value: "8132"
             - name: AMT_BRIDGE_AUCTION_TOPIC
