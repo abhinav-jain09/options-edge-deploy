@@ -367,7 +367,9 @@ def _exact_keys(m, keys, what):
             raise Refused("%s lacks the key: %s" % (what, k))
 
 
-def parse_attestation(text):
+def parse_attestation(text, allow_unapproved=False):
+    """allow_unapproved: the file is a BASE being compared against (history), not a file to provision under — a base that still carries
+    the marker is exactly the state the owner's approval is appended OVER, and refusing to load it refused the approval itself (10-12)."""
     root = load(text)
     _exact_keys(root, ["lineages", "entries"], "the attestation file")
     lineages, entries = [], []
@@ -383,7 +385,7 @@ def parse_attestation(text):
             "approvedBy": _text(l["approvedBy"], "lineages[].approvedBy", APPROVER),
             "date": _date(l["date"], "lineages[].date"),
         }
-        if row["approvedBy"].upper() == UNAPPROVED:
+        if row["approvedBy"].upper() == UNAPPROVED and not allow_unapproved:
             raise Refused("lineage %s carries the %s marker: a lineage is usable only with the OWNER's recorded approval (approvedBy = the owner's name)" % (row["id"], UNAPPROVED))
         if row["id"] in ids:
             raise Refused("a lineage id occurs once: %s" % row["id"])
@@ -422,8 +424,19 @@ def parse_attestation(text):
 
 def append_only(base, now):
     """Everything the base held is still there, unchanged, in the same order; the chain of what follows is already verified."""
-    if len(now["lineages"]) < len(base["lineages"]) or now["lineages"][: len(base["lineages"])] != base["lineages"]:
+    if len(now["lineages"]) < len(base["lineages"]):
         raise Refused("a lineage of the base version was removed or altered (lineages are append-only)")
+    for b, n in zip(base["lineages"], now["lineages"]):
+        if n == b:
+            continue
+        # THE ONE PERMITTED ALTERATION: the owner's approval of a row that was FOUNDED with the marker. approvedBy moves from UNAPPROVED
+        # to a valid name (the grammar already held at parse) and NOTHING else on the row changes. A row already approved may not be
+        # re-approved under another name, and an approval may not ride along with any other change (10-12: without this, the owner's
+        # own designed edit was refused as "altered" — the design expected the transition; the tests had only ever built an approved base).
+        same_otherwise = {k: v for k, v in b.items() if k != "approvedBy"} == {k: v for k, v in n.items() if k != "approvedBy"}
+        if b["approvedBy"].upper() == UNAPPROVED and n["approvedBy"].upper() != UNAPPROVED and same_otherwise:
+            continue
+        raise Refused("a lineage of the base version was removed or altered (lineages are append-only; the only permitted change is approvedBy moving from %s to the owner's name, with every other field identical)" % UNAPPROVED)
     if len(now["entries"]) < len(base["entries"]) or now["entries"][: len(base["entries"])] != base["entries"]:
         raise Refused("an entry of the base version was removed or altered (entries are append-only)")
 
@@ -674,7 +687,7 @@ def main(argv):
             now = parse_attestation(_read(path))
             text = _base_text(base, path)
             if text is not None:
-                append_only(parse_attestation(text), now)
+                append_only(parse_attestation(text, allow_unapproved=True), now)
                 print("append-only against %s: OK" % base)
             print("OK: %d lineages, %d entries, chain intact, tail=%s" % (len(now["lineages"]), len(now["entries"]), now["tail"]))
             return 0

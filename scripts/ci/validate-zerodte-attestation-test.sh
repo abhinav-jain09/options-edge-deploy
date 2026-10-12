@@ -70,6 +70,13 @@ expect "removal of a lineage vs base"              1 "a lineage of the base vers
 expect "alteration of a lineage vs base"           1 "a lineage of the base version was removed or altered" -- $Z verify "$T/relabel.yaml" --base "$T/base0.yaml"
 { lineages; printf '  - id: 22222222-3333-4444-8555-666666666666\n    name: dev-clone\n    parent: %s\n    approvedBy: Abhinav Jain\n    date: "2026-10-04"\nentries: []\n' "$L1"; } > "$T/clone.yaml"
 expect "a new cloned lineage with a known parent" 0 "append-only against $T/base0.yaml: OK" -- $Z verify "$T/clone.yaml" --base "$T/base0.yaml"
+echo "--- the owner's approval over a base that still carries the marker (10-12) ---"
+{ lineages | sed 's/approvedBy: Abhinav Jain/approvedBy: UNAPPROVED/'; printf 'entries: []\n'; } > "$T/base_unapproved.yaml"
+expect "the file itself still refuses the marker (no base)" 1 "carries the UNAPPROVED marker" -- $Z verify "$T/base_unapproved.yaml"
+expect "a base carrying the marker loads as HISTORY, and the owner's approval over it passes" 0 "append-only against $T/base_unapproved.yaml: OK" -- $Z verify "$T/base0.yaml" --base "$T/base_unapproved.yaml"
+{ lineages | sed 's/date: "2026-10-03"/date: "2026-10-04"/'; printf 'entries: []\n'; } > "$T/approved_redated.yaml"
+expect "an approval may not ride along with any other change to the row" 1 "removed or altered" -- $Z verify "$T/approved_redated.yaml" --base "$T/base_unapproved.yaml"
+expect "the marker may not be re-approved as another marker (NOW still refuses it)" 1 "carries the UNAPPROVED marker" -- $Z verify "$T/base_unapproved.yaml" --base "$T/base_unapproved.yaml"
 echo "--- the provisioning declaration ---"
 P=deploy/zerodte/provisioning/dev.yaml
 expect "the shipped dev declaration"               0 '"generation": 1' -- $Z provisioning "$P"
