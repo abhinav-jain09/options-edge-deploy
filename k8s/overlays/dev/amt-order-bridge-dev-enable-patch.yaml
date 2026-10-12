@@ -1,0 +1,26 @@
+# DEV-ONLY: turn the auction-to-intent bridge ON.
+#
+# The base ships AMT_BRIDGE_ENABLED=false — it reads the desk and publishes nothing. Dev enables it so
+# an auction market theory signal becomes a trading.order.intent, which broker-execution-service then
+# places as a paper order. Without this the intent topic stays empty and the execution service has
+# nothing to act on, however many replicas it has.
+#
+# It is NOT enabled in the base: production shares dev's one gateway and one pinned paper account with
+# a SEPARATE intent ledger, so an armed bridge there would start producing intents the moment anything
+# scaled it, and two placers against one account put two orders in it for one desk call.
+#
+# NAME-KEYED strategic merge, deliberately. An env/N json6902 patch silently lands on whichever
+# variable has drifted into that index — this repository has the dealer-ledger heap landing on
+# QUOTE_STALE_MS from exactly that mistake.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: amt-order-bridge
+spec:
+  template:
+    spec:
+      containers:
+        - name: amt-order-bridge
+          env:
+            - name: AMT_BRIDGE_ENABLED
+              value: "true"
