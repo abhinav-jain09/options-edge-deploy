@@ -182,15 +182,36 @@ resume_dev_mirrors() {
       continue
     fi
     "$LAUNCHCTL" bootstrap "gui/$uid" "$plist" >/dev/null 2>&1   # non-zero when already loaded; judged below
-    if "$LAUNCHCTL" list "$label" >/dev/null 2>&1; then
-      n=$((n + 1))
-    else
-      failed=$((failed + 1))
-      echo "   WARN: mirror agent $label did not load"
-    fi
+    # ⚠ A RUNNING PID, not `launchctl list <label>`. That exits 0 for a job that is merely
+    # REGISTERED with nothing running — measured on this Mac 2026-10-12: 34 com.optionsedge.* agents
+    # were loaded with no pid at all. So this check was satisfied by registration, counted every
+    # agent as resumed, deleted the pause list, and let the clean report SUCCESS while the es4 -> dev
+    # mirrors were not running. That is how dev spent a night with all 14 mirrors down, every
+    # mirrored topic frozen and every downstream dev service reading stale data while looking
+    # healthy; the auction mirror had logged a clean shutdown at 05:44 and no process existed.
+    # The pid column is the only thing that tells those two states apart.
+    local pid="" tries=0
+    while [ "$tries" -lt 10 ]; do
+      pid=$("$LAUNCHCTL" list 2>/dev/null | awk -v l="$label" '$3==l {print $1}')
+      case "$pid" in ''|'-') tries=$((tries + 1)); sleep 1 ;; *) break ;; esac
+    done
+    case "$pid" in
+      ''|'-')
+        failed=$((failed + 1))
+        echo "   FAIL: mirror agent $label is not RUNNING after bootstrap (pid='${pid:--}')"
+        ;;
+      *) n=$((n + 1)) ;;
+    esac
   done < "$DEV_MIRRORS_PAUSED"
   [ "$failed" -eq 0 ] && rm -f "$DEV_MIRRORS_PAUSED"
-  echo "   resumed $n es4->dev mirror agent(s)"
+  if [ "$failed" -gt 0 ]; then
+    echo "   resumed $n es4->dev mirror agent(s), $failed NOT RUNNING"
+  else
+    echo "   resumed $n es4->dev mirror agent(s)"
+  fi
+  # Return the verdict. This function used to end on an echo, so it ALWAYS returned 0 and a total
+  # failure to resume was indistinguishable from success to every caller.
+  [ "$failed" -eq 0 ]
 }
 
 # ---------- LOGS: safe, non-destructive (no topic/state data touched) ----------
@@ -455,7 +476,14 @@ ensure_topics() {
 # (list kept) until a later start/overnight run whose ensure_topics succeeds.
 resume_dev_mirrors_if_declared() {
   if [ "$1" -eq 0 ]; then
-    resume_dev_mirrors
+    if ! resume_dev_mirrors; then
+      # LOUD, because silent is exactly what happened. With the mirrors down, es4 -> dev carries
+      # nothing and every downstream dev service reads a frozen topic while reporting healthy.
+      echo "   ERROR: es4->dev mirrors did NOT all come back RUNNING — dev will read FROZEN es4"
+      echo "          topics until they do. Recover with:"
+      echo "            launchctl load -w ~/Library/LaunchAgents/com.optionsedge.*127-0-0-1-19092*.plist"
+      echo "          then confirm each has a PID (not '-'): launchctl list | grep 127-0-0-1-19092"
+    fi
   elif [ -s "$DEV_MIRRORS_PAUSED" ]; then
     echo "   WARN: es4->dev mirrors stay PAUSED — topics.env was not applied (list: $DEV_MIRRORS_PAUSED)"
   fi
