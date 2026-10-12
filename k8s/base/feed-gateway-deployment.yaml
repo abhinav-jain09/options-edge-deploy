@@ -58,6 +58,21 @@ spec:
               value: es.futures.cvd
             - name: KAFKA_ES_CVD_BARS_TOPIC
               value: es.futures.cvd.bars
+            # MARKET STRUCTURE relay (gateway #194): the latest market-structure record is retained
+            # and replayed to the Context Tape page as the `market-structure` frame, which draws the
+            # STRUCTURE layer. The topic is market-structure-service's UI projection — the namespace
+            # R13 of MARKET-STRUCTURE-SERVICE-DESIGN.md gives this service — and NOT the gateway's own
+            # code default (options.market-structure.levels), which nothing declares, nothing creates
+            # and nothing publishes to.
+            #
+            # These two values were live on the DEV gateway as a hand-applied `kubectl set env` and
+            # existed in no manifest (they are absent from that deployment's last-applied
+            # configuration), so a redeploy would have silently switched the relay off. They are here
+            # now, which is the only place a flag of this kind survives a rollout.
+            - name: GATEWAY_MARKET_STRUCTURE_ENABLED
+              value: "true"
+            - name: KAFKA_MARKET_STRUCTURE_TOPIC
+              value: options.spx.market-structure.ui
             # ES FOOTPRINT relay (ES-FOOTPRINT-GATEWAY-DESIGN.md; es-cvd-service on es4, mirrored
             # here as es.futures.footprint* by Jenkinsfile.es-cvd-mirror). Same opt-in shape as the
             # CVD block above: the flag is on and the topics are the mirrored es.-prefixed names.
