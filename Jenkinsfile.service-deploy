@@ -255,6 +255,12 @@ PYEOF
           export VALIDATE_ONLY_SERVICE="$SERVICE_PARAM"
           export VALIDATE_ONLY_ENV="$ENVIRONMENT"
           bash scripts/ci/validate-services.sh
+          # dev-cleanup's mirror resume must judge a resumed agent by a SETTLED running pid, never by
+          # `launchctl list` exiting 0 — that exits 0 for a job merely REGISTERED with nothing running,
+          # which let a clean report success while all 14 es4 -> dev mirrors were down and every mirrored
+          # dev topic was frozen. Hermetic (a fake launchctl, no cluster, no broker) and it FAILS against
+          # the pre-fix script, so it is a real gate rather than a script that always passes.
+          bash scripts/ci/dev-mirror-resume-test.sh
           # FIRE-input verdict is a dealer-ledger property — only assert it when deploying that
           # service (it reads the dealer-ledger render, unrelated to any other service being rolled).
           if [ "$SERVICE_PARAM" = "dealer-ledger" ]; then

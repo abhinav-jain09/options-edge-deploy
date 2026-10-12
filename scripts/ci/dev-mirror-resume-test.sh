@@ -41,24 +41,31 @@ printf 'com.optionsedge.fake-mirror %s/fake.plist\n' "$T" > "$T/paused"
 python3 - "$SCRIPT" > "$T/funcs.sh" <<'PY'
 import sys
 s = open(sys.argv[1]).read()
-name = "resume_dev_mirrors"
-i = s.index(name + "() {")
-depth = 0
-j = i
-while True:
-    if s[j] == '{':
-        depth += 1
-    elif s[j] == '}':
-        depth -= 1
-        if depth == 0:
-            print(s[i:j + 1])
-            break
-    j += 1
+# mirror_agent_pid is OPTIONAL: a script that does not define it is by definition the pre-fix
+# version, which must FAIL this gate on the pid check rather than crash the extractor.
+for name in ("mirror_agent_pid", "resume_dev_mirrors"):
+    if (name + "() {") not in s:
+        if name == "resume_dev_mirrors":
+            raise SystemExit("resume_dev_mirrors not found")
+        continue
+    i = s.index(name + "() {")
+    depth = 0
+    j = i
+    while True:
+        if s[j] == '{':
+            depth += 1
+        elif s[j] == '}':
+            depth -= 1
+            if depth == 0:
+                print(s[i:j + 1])
+                break
+        j += 1
 PY
 [ -s "$T/funcs.sh" ] || { echo "FAIL: could not extract resume_dev_mirrors from $SCRIPT"; exit 1; }
 
-out=$(LAUNCHCTL="$T/bin/launchctl" DEV_MIRRORS_PAUSED="$T/paused" bash -c "
+out=$(LAUNCHCTL="$T/bin/launchctl" DEV_MIRRORS_PAUSED="$T/paused" DEV_MIRROR_WAIT_S=4 DEV_MIRROR_SETTLE_S=1 bash -c "
   LAUNCHCTL='$T/bin/launchctl'; DEV_MIRRORS_PAUSED='$T/paused'
+  DEV_MIRROR_WAIT_S=4; DEV_MIRROR_SETTLE_S=1
   source '$T/funcs.sh'
   resume_dev_mirrors; echo \"RC=\$?\"
 " 2>&1)
@@ -69,7 +76,10 @@ if [ "${rc:-0}" = 0 ]; then
   echo "$out" | sed 's/^/    /'
   fail=1
 fi
-if ! grep -q 'not RUNNING' <<<"$out"; then
+# Case-INSENSITIVE and matching the literal both failure branches share. My first version grepped
+# 'not RUNNING' while the code says 'NOT RUNNING', so the gate failed the very fix it was written
+# for — the assertion was testing my memory of the wording, not the behaviour.
+if ! grep -qi 'not running' <<<"$out"; then
   echo "FAIL: the failure was not reported as a not-RUNNING agent — the operator cannot see what broke"
   fail=1
 fi
@@ -93,8 +103,9 @@ exit 0
 FAKE2
 chmod +x "$T/bin/launchctl"
 printf 'com.optionsedge.fake-mirror %s/fake.plist\n' "$T" > "$T/paused"
-out2=$(LAUNCHCTL="$T/bin/launchctl" DEV_MIRRORS_PAUSED="$T/paused" bash -c "
+out2=$(LAUNCHCTL="$T/bin/launchctl" DEV_MIRRORS_PAUSED="$T/paused" DEV_MIRROR_WAIT_S=4 DEV_MIRROR_SETTLE_S=1 bash -c "
   LAUNCHCTL='$T/bin/launchctl'; DEV_MIRRORS_PAUSED='$T/paused'
+  DEV_MIRROR_WAIT_S=4; DEV_MIRROR_SETTLE_S=1
   source '$T/funcs.sh'
   resume_dev_mirrors; echo \"RC=\$?\"
 " 2>&1)
