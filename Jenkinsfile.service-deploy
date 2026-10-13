@@ -67,6 +67,8 @@ pipeline {
       // market-structure: dev+prod at replicas 1. Reads options.indicators.bars read-only and publishes
       // options.spx.market-structure.{ui,sequence,dlq}; single replica only (per-environment transactional.id).
       'market-structure',
+      // early-auction-verdict: shadow, HELD at replicas 0; deploy = image pinned, scale is the owner's.
+      'early-auction-verdict',
       // stock-gex-close-scheduler: PRODUCTION only — the closing-board SCHEDULE, which now lives
       // inside the batch itself (USER 2026-09-01: "I don't want anything Jenkins-based, it should
       // run based on Spring Batch configuration"). This job DEPLOYS it; nothing here decides when
@@ -592,6 +594,23 @@ PYEOF
           export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
           . scripts/kafka/load-kafka-settings.sh
           scripts/kafka/ensure-hedging-pressure-topics.sh
+        '''
+      }
+    }
+    stage('Verify early-auction-verdict output topic') {
+      // Same first-deploy barrier as market-structure below: the ledger topic
+      // early-auction.verdicts.shadow (1 partition, cleanup.policy=delete, retention -1) must
+      // exist before the rollout — dev's broker would auto-create it at 32 partitions, which the
+      // service's EAV-R2a verification would then correctly refuse. Idempotent.
+      when {
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'early-auction-verdict' && !params.DEPLOY_DRY_RUN) }
+      }
+      steps {
+        sh '''
+          set -euo pipefail
+          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
+          . scripts/kafka/load-kafka-settings.sh
+          scripts/kafka/ensure-early-auction-verdict-topics.sh
         '''
       }
     }

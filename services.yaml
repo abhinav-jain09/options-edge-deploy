@@ -206,6 +206,12 @@ services:
   # scripts/kafka/ensure-market-structure-topics.sh is the first-deploy barrier and the service's own
   # R13 boot verification refuses readiness until they match.
   - { name: market-structure,             managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-market-structure,             deployments: [market-structure-service] }
+  # early-auction-verdict: shadow predictor of the auction desk's four selling confirmations
+  # (EARLY-AUCTION-VERDICT-STAGE1-GATE1.md rev 18a). HELD AT replicas 0 everywhere: the pod
+  # cannot even start before the verifier-produced lock ConfigMap exists (EAV-R2a fail-closed
+  # boot), and EAV-R17's emission floor blocks any non-dev enable. Reads the auction + witness
+  # topics read-only; writes only early-auction.verdicts.shadow (1 partition, retention -1).
+  - { name: early-auction-verdict,        managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-early-auction-verdict,        deployments: [early-auction-verdict-service] }
   # stock-gex: SPX-500 single-stock GEX (Databento equity options; NO Kafka). Its image builds in the
   # options-edge-databento-feed repo (Dockerfile.stockgex), like databento-sr3-feed — hence buildJob.
   # DEV-FIRST/on-demand: prod overlay holds it at replicas:0 until the nightly OI-index builder exists.

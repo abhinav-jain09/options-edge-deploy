@@ -36,6 +36,9 @@ resources:
   # options.spx.market-structure.ui (the Context Tape projection), .sequence and .dlq. Single replica
   # only (per-environment transactional.id).
   - ../../services/market-structure/base
+  # early-auction-verdict: HELD AT replicas 0 (shadow; EAV-R17 blocks any non-dev enable
+  # until the emission floor is proven reachable on dev).
+  - ../../services/early-auction-verdict/base
   # nifty-gex: the NIFTY/BANKNIFTY Pressure boards (DhanHQ), public via cloudflared path
   # routes to NodePort 30188. STANDALONE overlay k8s/services/nifty-gex/overlays/production
   # mirrors the prod patches — sync enforced by validate-services render equivalence.
@@ -67,6 +70,10 @@ patches:
       name: hedging-pressure-service
   # PROD-ONLY: market-structure's own transactional.id (the base carries the dev id).
   # MIRRORS k8s/services/market-structure/overlays/production — the slice generator renders it from here.
+  - path: early-auction-verdict-prod-env-patch.yaml
+    target:
+      kind: Deployment
+      name: early-auction-verdict-service
   - path: market-structure-prod-env-patch.yaml
     target:
       kind: Deployment
