@@ -1,0 +1,17 @@
+# PROD-ONLY: the environment component of the EAV sessionId (sha256(env|tradeDate|calendarVersion
+# |auctionSourceEpoch) — EARLY-AUCTION-VERDICT-STAGE1-GATE1.md EAV-R0b). The base carries dev.
+# MIRRORS k8s/services/early-auction-verdict/overlays/production — the slice generator renders it
+# from here.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: early-auction-verdict-service
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: early-auction-verdict
+          env:
+            - name: EAV_ENVIRONMENT
+              value: prod
