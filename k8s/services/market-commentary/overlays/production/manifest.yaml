@@ -43,11 +43,11 @@ spec:
             - name: MC_TOPIC_AUCTION
               value: es.futures.auction
             - name: MC_CONTRACT_CAPACITY
-              value: "3000"
+              value: "1500"
             - name: MC_VERSIONS_PER_KEY
-              value: "400"
+              value: "1500"
             - name: MC_HEAP_LIMIT_MB
-              value: "2048"
+              value: "3072"
             - name: MC_MIN_PARTITION_RATE_PER_SECOND
               value: "500"
             - name: MC_ORDERING_I2
@@ -59,7 +59,7 @@ spec:
             - name: HEALTH_PORT
               value: "8080"
             - name: JAVA_TOOL_OPTIONS
-              value: -Xms512m -Xmx2048m
+              value: -Xms512m -Xmx3072m
           envFrom:
             - configMapRef:
                 name: options-edge-config
@@ -85,8 +85,8 @@ spec:
             periodSeconds: 10
           resources:
             limits:
-              memory: 3072Mi
+              memory: 4096Mi
             requests:
               cpu: 200m
-              memory: 1536Mi
+              memory: 2048Mi
       terminationGracePeriodSeconds: 60
