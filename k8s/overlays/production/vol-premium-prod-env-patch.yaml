@@ -1,9 +1,20 @@
 # PROD-ONLY: calibrate vol-premium and promote the UI out of shadow (owner Gate-1 §9 decision,
-# 2026-10-10). Pins the gen4 reconstructed NAS-year baseline (varianceTimeBase=OBSERVABLE_SPAN,
-# 248 sessions, shapeComplete) that was published to options.spx.vol-premium.baseline with
-# --confirm --confirm-reconstructed. Because the baseline is RECONSTRUCTED_PARITY_FORWARD, the
-# engine refuses it at boot without VOL_PREMIUM_ADMIT_RECONSTRUCTED_BASELINE=true. UI_ACTIVATED
-# flips SHADOW -> ACTIVE. Dev/experiment stay NONE/shadow (their ledgers are empty).
+# 2026-10-10; baseline re-pinned 2026-10-13). Pins the gen5 LIVE-INDEX baseline
+# `bl-live-20261009-spxindex-gen5` (varianceTimeBase=OBSERVABLE_SPAN, 248 accepted sessions,
+# shapeComplete, calibratedThroughDate=2026-10-09) published to options.spx.vol-premium.baseline
+# with --confirm. It is calibrated from the OBSERVED SPX 1-second index (spx-1s-ticks) over the
+# year 2025-10-10..2026-10-09, so spotProvenance=LIVE_INDEX / reconstructed=false.
+#
+# WHY gen5 REPLACES gen4: gen4's calibratedThroughDate was 2026-07-31, so at boot the engine
+# replayed the SESSION_FINALISED chain over (2026-07-31, lastCompleted] = ~45 sessions prod never
+# produced cleanly, reseeded, and carried LEVEL_STATE_LOST on every frame (the overallLevel/danger
+# verdict was blanked, though the forecast itself was fine). gen5's calibratedThroughDate=2026-10-09
+# makes that reconstruction interval ~empty, so the level is SEEDED clean and levelStateLost=false.
+#
+# VOL_PREMIUM_ADMIT_RECONSTRUCTED_BASELINE is kept true but is now VESTIGIAL: gen5 is LIVE_INDEX
+# (not reconstructed) so the engine binds it with or without this flag. It is retained only so a
+# future reconstructed re-pin still binds without another overlay change. UI_ACTIVATED keeps the
+# page ACTIVE (unchanged from gen4). Dev/experiment stay NONE/shadow (their ledgers are empty).
 # MIRRORS k8s/services/vol-premium/overlays/production — the slice generator renders it from here.
 apiVersion: apps/v1
 kind: Deployment
@@ -17,9 +28,9 @@ spec:
         - name: vol-premium
           env:
             - name: VOL_PREMIUM_BASELINE_VERSION
-              value: bl-reconstructed-20261005-nasyear-gen4
+              value: bl-live-20261009-spxindex-gen5
             - name: VOL_PREMIUM_BASELINE_CONTENT_HASH
-              value: "305b1d7d9df1665a249ba937fd9c439f8c9ce55fc5048775b375084bafa78b80"
+              value: "0b872edfc8fc558a2f9175a4330a32d4605907d4379e007d5fc5360dc87170c6"
             - name: VOL_PREMIUM_ADMIT_RECONSTRUCTED_BASELINE
               value: "true"
             - name: VOL_PREMIUM_UI_ACTIVATED
