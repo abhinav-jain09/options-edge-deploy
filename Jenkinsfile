@@ -481,8 +481,6 @@ pipeline {
             'HEDGING_PRESSURE_IMAGE': 'hedging-pressure',
             // market-structure: dev+prod standalone at replicas 1.
             'MARKET_STRUCTURE_IMAGE': 'market-structure',
-            // market-commentary: dev-only standalone at replicas 1 (shadow).
-            'MARKET_COMMENTARY_IMAGE': 'market-commentary',
             // early-auction-verdict: HELD at replicas 0 (shadow; fail-closed boot on the lock ConfigMap).
             'EARLY_AUCTION_VERDICT_IMAGE': 'early-auction-verdict',
             // signal-follower: same dev+prod standalone pattern as short-premium-agent.
