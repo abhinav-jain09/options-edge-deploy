@@ -61,9 +61,9 @@ spec:
       containers:
         - env:
             - name: VOL_PREMIUM_BASELINE_VERSION
-              value: bl-reconstructed-20261005-nasyear-gen4
+              value: bl-live-20261009-spxindex-gen5
             - name: VOL_PREMIUM_BASELINE_CONTENT_HASH
-              value: 305b1d7d9df1665a249ba937fd9c439f8c9ce55fc5048775b375084bafa78b80
+              value: 0b872edfc8fc558a2f9175a4330a32d4605907d4379e007d5fc5360dc87170c6
             - name: VOL_PREMIUM_ADMIT_RECONSTRUCTED_BASELINE
               value: "true"
             - name: VOL_PREMIUM_UI_ACTIVATED
