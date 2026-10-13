@@ -251,6 +251,9 @@ create_topic() {
   if [[ -n "$retention_bytes" ]]; then
     extra_configs+=(--config "retention.bytes=$retention_bytes")
   fi
+  if [[ "$topic" == "options.spx.market-structure.recovery" ]]; then
+    extra_configs+=(--config "segment.bytes=16777216" --config "max.compaction.lag.ms=300000")
+  fi
   # --if-not-exists: CreateTopics is not idempotent on the CLIENT's own retry. The Kafka admin client retries a
   # request whose reply was lost or slow; when the first attempt had in fact created the topic, the retry answers
   # TopicExistsException and kafka-topics exits 1 for a topic that was created exactly as asked. Seen on prod
@@ -363,7 +366,8 @@ alter_topic_config() {
       --entity-type topics --entity-name "$topic" --alter \
       --add-config "retention.ms=$(topic_retention_ms "$topic"),cleanup.policy=$(kafka_config_value "$cleanup_policy"),min.insync.replicas=$MIN_ISR$( \
         dr="$(topic_delete_retention_ms "$topic")"; [[ -n "$dr" ]] && echo ",delete.retention.ms=$dr")$( \
-        rb="$(topic_retention_bytes "$topic")"; [[ -n "$rb" ]] && echo ",retention.bytes=$rb")"; then
+        rb="$(topic_retention_bytes "$topic")"; [[ -n "$rb" ]] && echo ",retention.bytes=$rb")$( \
+        [[ "$topic" == "options.spx.market-structure.recovery" ]] && echo ",segment.bytes=16777216,max.compaction.lag.ms=300000")"; then
       return 0
     fi
     sleep 1

@@ -68,6 +68,15 @@ echo "2. the topic really was created exactly once, with the declared partitions
 n=$(grep -c -- "--create .*--topic $NAME " "$LOG"); [ "$n" = 1 ] && ok "one create call for $NAME" || bad "$n create calls for $NAME"
 grep -- "--create" "$LOG" | grep -- "--topic $NAME " | grep -q -- "--partitions $PARTS " && ok "with --partitions $PARTS" || bad "wrong partition count in the create"
 
+echo "3. recovery compaction cadence survives a global topic reset"
+REC="options.spx.market-structure.recovery"
+run SIMULATE_CLIENT_RETRY=0 TOPICS_ABSENT_NAME="$REC"
+[ "$RC" -eq 0 ] && ok "recovery reset reconciliation exits 0" || bad "recovery reset exit $RC"
+grep -q -- "--entity-name $REC --alter .*segment.bytes=16777216,max.compaction.lag.ms=300000" "$LOG" \
+  && ok "global config apply restores recovery compaction cadence" || bad "recovery compaction cadence absent"
+# All other topics must keep their original configuration; the extra keys are specific to recovery.
+if grep 'segment.bytes=16777216' "$LOG" | grep -v "$REC" >/dev/null; then bad "compaction cadence leaked to another topic"; else ok "cadence applies only to recovery"; fi
+
 echo
 [ "$fails" -eq 0 ] && { echo "=== apply-topics-create-retry: OK ==="; exit 0; }
 echo "=== apply-topics-create-retry: $fails problem(s) ===" >&2; exit 1
