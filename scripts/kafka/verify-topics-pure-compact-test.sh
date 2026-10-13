@@ -144,8 +144,8 @@ WANT_ENV=production PART_OVERRIDE="underlying.vix.price=2" \
   "underlying.vix.price has partitions=2 but requires EXACTLY 1"
 
 # retention.BYTES (deploy Codex round 2, finding 2): declared per topic in topics.env, verified for
-# the active set; a finite cap or an unreadable value fails, on the default set and on es4.
-check "retention.bytes contract passes when the broker says -1" 0 compact "retention.bytes contract OK"
+# the active set; a value differing from its declaration or an unreadable value fails.
+check "retention.bytes contract passes when the broker matches declarations" 0 compact "retention.bytes contract OK"
 BYTES_OVERRIDE="trading.order.intent=-1" \
   check "finite order-topic byte cap is enforced" 1 compact \
   "trading.order.intent retention.bytes='-1' but the declaration says '1073741824'"
