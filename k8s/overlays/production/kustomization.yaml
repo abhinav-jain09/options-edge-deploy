@@ -36,6 +36,9 @@ resources:
   # options.spx.market-structure.ui (the Context Tape projection), .sequence and .dlq. Single replica
   # only (per-environment transactional.id).
   - ../../services/market-structure/base
+  # market-commentary: shadow at replicas 1 (the same base as dev). Reads futures.auction, the spread-skew snapshot, SPX spot and option
+  # quotes read-only; writes only options.spx.market-commentary.{minute,current,events,rejections}. Makes no forecast.
+  - ../../services/market-commentary/base
   # early-auction-verdict: HELD AT replicas 0 (shadow; EAV-R17 blocks any non-dev enable
   # until the emission floor is proven reachable on dev).
   - ../../services/early-auction-verdict/base
@@ -68,6 +71,12 @@ patches:
     target:
       kind: Deployment
       name: hedging-pressure-service
+  # PROD-ONLY: market-commentary's environment name (its transactional.id is derived from it).
+  # MIRRORS k8s/services/market-commentary/overlays/production — the slice generator renders it from here.
+  - path: market-commentary-prod-env-patch.yaml
+    target:
+      kind: Deployment
+      name: market-commentary-service
   # PROD-ONLY: market-structure's own transactional.id (the base carries the dev id).
   # MIRRORS k8s/services/market-structure/overlays/production — the slice generator renders it from here.
   - path: early-auction-verdict-prod-env-patch.yaml

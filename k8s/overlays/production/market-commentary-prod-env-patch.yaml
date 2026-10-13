@@ -1,0 +1,17 @@
+# PROD-ONLY: the environment name of market-commentary-service; its transactional.id is market-commentary-service-<environment>.
+# Each environment has its OWN id (a second producer with the same id fences the first, and a dev pod must never fence the
+# prod one on a shared broker). The base carries the dev value.
+# MIRRORS k8s/services/market-commentary/overlays/production — the slice generator renders it from here.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: market-commentary-service
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: market-commentary
+          env:
+            - name: MC_ENVIRONMENT
+              value: production
