@@ -396,6 +396,13 @@ jobs:
       - name: mirror-topic-filter holds the right mirrors
         run: bash scripts/ops/mirror-topic-filter-test.sh
 
+      # The dev time-warp replay deletes the broker's topics and then waits for them to be gone: both
+      # halves must agree about the RESET-PRESERVED keep-list. The delete loop ignored it entirely, and
+      # the first fix for that made the WAIT hang on the topics it now keeps — a structural grep cannot
+      # tell those apart, so this drives both through a stubbed broker, with a mutation.
+      - name: the dev replay keeps the preserved topics
+        run: bash scripts/kafka/run-dev-timewarp-replay-keep-test.sh
+
       # The gate in front of the production wipe: which mirrors are LOADED and producing into the broker
       # about to be wiped, asked of launchd rather than of the plist files — because a job stays loaded
       # when its plist is moved or edited, and a plist that fails to parse was silently skipped. Every

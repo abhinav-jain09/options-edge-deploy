@@ -37,11 +37,29 @@ wait_deployments_zero() {
   exit 1
 }
 
+# The RESET-PRESERVED topics are deliberately still there when this runs, so "all topics gone" is the
+# wrong condition: it would time out and abort every replay. That is what the keep-branch below cost
+# before this was fixed with it (deploy Codex round 2 of the trading.order classification) -- a fix that
+# re-created the bug one level down.
+_rdtr_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+# shellcheck source=/dev/null
+. "$_rdtr_dir/reset-preserved-topics.sh"
+
 wait_topics_deleted() {
-  local attempts="${TOPIC_DELETE_WAIT_SECONDS:-180}"
+  local attempts="${TOPIC_DELETE_WAIT_SECONDS:-180}" t
+  if ! declare -F is_reset_preserved >/dev/null 2>&1; then
+    echo "wait_topics_deleted: reset-preserved-topics.sh is not loaded, so 'which topics should still" >&2
+    echo "  be here' cannot be answered. Refusing rather than waiting for the wrong condition." >&2
+    exit 1
+  fi
   for ((i = 1; i <= attempts; i++)); do
-    remaining="$(kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --list \
-      | grep -Ev '^(__consumer_offsets|__transaction_state)$' || true)"
+    remaining=""
+    while IFS= read -r t; do
+      [[ -z "$t" ]] && continue
+      is_reset_preserved "$t" && continue
+      remaining+="$t"$'\n'
+    done < <(kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --list \
+      | grep -Ev '^(__consumer_offsets|__transaction_state)$' || true)
     if [[ -z "$remaining" ]]; then
       return 0
     fi
@@ -173,11 +191,23 @@ echo "[replay] scaling options-edge dev services to zero"
 kube scale deploy -l app.kubernetes.io/part-of=options-edge --replicas=0
 wait_deployments_zero
 
-echo "[replay] deleting all non-system Kafka topics from dev broker $KAFKA_BOOTSTRAP_SERVERS"
+# THE RESET-PRESERVED KEEP-LIST APPLIES HERE TOO. This is a destructive reset like any other: it
+# deleted EVERY non-system dev topic, including the ones topics.env declares as records a reset must
+# keep, and it consulted no keep-list at all (found by the deploy Codex review of the
+# trading.order.{intent,status} classification, 2026-10-13). A declaration that two of the three
+# destructive paths honour is not a declaration.
+#
+# The same helper the off-hours clean slate and cleanup-topics.sh use, so there is one definition of
+# "preserved" and this file cannot drift from it.
+echo "[replay] deleting non-system Kafka topics from dev broker $KAFKA_BOOTSTRAP_SERVERS (RESET-PRESERVED topics kept)"
 kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --list \
   | grep -Ev '^(__consumer_offsets|__transaction_state)$' \
   | while read -r topic; do
       [[ -z "$topic" ]] && continue
+      if is_reset_preserved "$topic"; then
+        echo "[replay] KEEPING $topic (RESET-PRESERVED in topics.env)"
+        continue
+      fi
       kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --delete --topic "$topic" || true
     done
 wait_topics_deleted

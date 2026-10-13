@@ -19,6 +19,16 @@ trap 'rm -rf "$work"' EXIT
 REPO="$work/repo"
 mkdir -p "$REPO/scripts"
 cp -R "$SRC/scripts/ci" "$SRC/scripts/kafka" "$SRC/scripts/ops" "$REPO/scripts/"
+# The validator also reads a REPO-ROOT file: Jenkinsfile.kafka-reset, because it checks that the job
+# shipping daily-kafka-reset.sh to the production host also ships the keep-list files that script now
+# sources. A sandbox of scripts/ alone made the UNMUTATED tree fail with "Jenkinsfile.kafka-reset not
+# found" (2026-10-13) — the same packaging gap that made two other harnesses report findings about
+# topics.env when apply-topics.sh gained a sibling (#1165). Derived from what the validator reads, so a
+# future root-level dependency fails here loudly rather than silently.
+for _root in $(sed -nE 's/^[A-Z_]+="(Jenkinsfile[A-Za-z0-9._-]*)"$/\1/p' "$SRC/scripts/ci/validate-durable-topic-preservation.sh"); do
+  [ -r "$SRC/$_root" ] || { echo "FATAL: the validator names $_root, which is not in $SRC" >&2; exit 1; }
+  cp "$SRC/$_root" "$REPO/"
+done
 # The validator runs apply-topics-vol-premium-safety-test.sh (about 45 mocked apply-topics runs plus its own mutation
 # self-checks) on EVERY expect() below. In THIS COPY only it is a stub. Two cases here DO clear the preserved
 # declarations, and with them the four vol-premium memberships. But every case asserts a STRUCTURAL finding the
