@@ -10,6 +10,23 @@ resources:
   # (k8s/services/web/overlays/dev) mirrors them — sync is enforced by
   # scripts/ci/validate-services.sh render equivalence.
   - ../../services/web/base
+  # es-trade-linearizer + es-compression-expansion (2026-10-07, owner: "create linearized tape on dev and deploy"):
+  # dev's databento feed DOES write underlying.es.trades (32 partitions, same as prod), so the linearizer can produce
+  # the one-partition linearized tape here and the compression/expansion SHADOW reads it. The ES-side evidence topics
+  # (footprint, auction) do not exist on dev; the shadow reports them UNAVAILABLE{NOT_PROVISIONED}. Same explicit
+  # service-base resources as k8s/overlays/production/kustomization.yaml.
+  - ../../services/es-trade-linearizer/base
+  - ../../services/es-compression-expansion/base
+  # hedging-pressure: HELD AT replicas 0 (base) on dev and production alike; the owner turns it on later.
+  - ../../services/hedging-pressure/base
+  # market-structure: RUNNING on dev and production (replicas 1 in the base). Reads
+  # options.indicators.bars read-only and writes only options.spx.market-structure.{ui,sequence,dlq};
+  # what a reader sees is gated on the gateway's own GATEWAY_MARKET_STRUCTURE_ENABLED.
+  - ../../services/market-structure/base
+  # early-auction-verdict: HELD AT replicas 0 (shadow). Boot is fail-closed on the
+  # verifier-produced lock ConfigMap early-auction-verdict-lock (EAV-R2a); reads the
+  # auction + witness topics read-only and writes only early-auction.verdicts.shadow.
+  - ../../services/early-auction-verdict/base
   # short-premium-agent is DEV-ONLY: referenced here (NOT in k8s/base/kustomization.yaml)
   # so the production/experiment monolith overlays never render it. services.yaml declares
   # envs: [dev] to match; the dev image remap below applies to it.
@@ -55,6 +72,45 @@ resources:
   # k8s/services/nifty-gex/overlays/dev exactly — validate-services enforces it.
   - ../../services/nifty-gex/base
 patches:
+  # DEV-ONLY, 2026-10-11: run the auction-to-paper-order chain. The account owner wants an auction
+  # market theory signal to reach the broker as a paper order from the next session.
+  #
+  # WHY THIS IS DEV-ONLY AND THE BASE STAYS AT 0. The base is shared, so lifting replicas there would
+  # arm production too — and production shares dev's ONE gateway and ONE pinned paper account with a
+  # SEPARATE intent ledger, so two running copies put two orders in that account for one desk call.
+  # Both Codex reviews made that a blocker. Keeping the base at 0 also means any future environment
+  # inherits OFF rather than ON, which is the fail-safe direction.
+  #
+  # BOTH HALVES ARE NEEDED, and neither alone does anything: amt-order-bridge turns the auction signal
+  # into a trading.order.intent, and broker-execution-service turns that intent into an order. The
+  # bridge is also ENABLED here rather than in the base for the same reason as the replicas — an armed
+  # bridge in production would start producing intents the moment anything scaled it.
+  #
+  # ⚠ scripts/ops/dev-cleanup.sh pins the DISABLED_DEV set to 0 on every clean, so lifting replicas
+  # here WITHOUT removing both names there would have them come up and be put straight back down at
+  # the next clean. Both are removed from that list in the same commit (#1034's lesson: closing fewer
+  # than all of the hold paths is worse than closing none).
+  - target:
+      kind: Deployment
+      name: broker-execution-service
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+  - target:
+      kind: Deployment
+      name: amt-order-bridge
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+  # The ENABLE is a separate NAME-KEYED strategic merge, never an env/N json6902 index: an index patch
+  # lands on whichever variable has drifted into that position, and this repository already has the
+  # dealer-ledger heap landing on QUOTE_STALE_MS to show for exactly that.
+  - path: amt-order-bridge-dev-enable-patch.yaml
+    target:
+      kind: Deployment
+      name: amt-order-bridge
   # nifty-gex runs at ZERO replicas on dev (mirror of the standalone slice patch): prod
   # polls Dhan with the SAME account token; a second poller trips the per-account 429
   # and a second renewer invalidates prod's token.
@@ -279,7 +335,11 @@ patches:
   - path: raw-postgres-writer-dev-patch.yaml
   - path: databento-feed-dev-patch.yaml
   - path: databento-vix-feed-dev-patch.yaml
-  # DEV-ONLY: Gate-3 research evidence store ON (base is OFF and carries no URL — see the patch).
+  # DEV: the linearizer base pins the PROD broker in ES_LINEARIZER_BOOTSTRAP_SERVERS (its own key, read before the
+  # shared KAFKA_BOOTSTRAP_SERVERS); on dev it must read and write THIS env's local broker, like the feeds.
+  - path: es-trade-linearizer-dev-patch.yaml
+  # DEV-ONLY: the V1 compatibility release — the legacy research writer OFF as a literal, the dev research-store URL declared next to it
+  # (the base carries no URL — see the patch header; increments 9a / 9c).
   - path: vix-option-inteligence-dev-patch.yaml
   # DEV-ONLY ONE-TIME (2026-08-12): epoch-genesis grant after the dev Kafka wipe (#801) —
   # mirrors the standalone overlay so both render identically. Revert BOTH once genesis'd.
@@ -288,6 +348,8 @@ patches:
   # against dev's thin greek surface — see the patch header). Prod untouched.
   - path: delta-flow-dev-env-patch.yaml
   - path: drop-classifier-dev-env-patch.yaml
+  # DEV-ONLY: near-spot producer ON (flag + 3000ms tolerance, same as prod) — see the patch header.
+  - path: strike-flow-classifier-near-spot-dev-patch.yaml
   # DEV-ONLY: Candle Direction commissioning shadow inside context-tape-service (flag OFF in code and in prod) —
   # see the patch header. Adds the :8136 direction projection port to the Deployment + Service.
   - path: context-tape-direction-dev-env-patch.yaml
@@ -888,6 +950,19 @@ images:
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-context-tape
     newName: host.docker.internal:5001/options-edge-context-tape
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-es-trade-linearizer
+    newName: host.docker.internal:5001/options-edge-es-trade-linearizer
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-es-compression-expansion
+    newName: host.docker.internal:5001/options-edge-es-compression-expansion
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-hedging-pressure
+    newName: host.docker.internal:5001/options-edge-hedging-pressure
+  - name: 192.168.100.252:5000/options-edge-market-structure
+    newName: host.docker.internal:5001/options-edge-market-structure
+  - name: 192.168.100.252:5000/options-edge-early-auction-verdict
+    newName: host.docker.internal:5001/options-edge-early-auction-verdict
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-multileg-structure
     newName: host.docker.internal:5001/options-edge-multileg-structure

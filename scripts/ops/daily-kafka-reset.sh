@@ -56,6 +56,13 @@ is_disposable() {
   case "$t" in
     __*|_schemas) return 1 ;;                       # system: keep
   esac
+  # THE RESET-PRESERVED KEEP-LIST WINS over every pattern below. This was not hypothetical: the
+  # disposable rule deletes *-changelog, and ...gamma-migration-scorer-changelog is a topic
+  # scripts/ops/premarket-reset.sh preserves BY NAME and which exists on dev and production right now --
+  # so this reset deleted what another reset path protects (deploy Codex round 2 of the
+  # trading.order.{intent,status} classification, 2026-10-13).
+  if is_reset_preserved "$t"; then return 1; fi
+  if printf '%s\n' "$t" | grep -qE "$PRESERVE_TOPICS_REGEX"; then return 1; fi
   case "$t" in
     *-changelog|*-repartition) return 0 ;;          # Streams state: delete (recreated fresh)
     *replay*|*smoke*) return 0 ;;                    # one-off run leftovers: delete
@@ -63,6 +70,37 @@ is_disposable() {
   esac
   return 1                                           # everything else (real data): keep
 }
+
+# ---- the keep-list, one definition shared with every other destructive path ----
+#
+# TWO mechanisms protect topics in this estate and this script needs BOTH:
+#   * the exact names in topics.env (OPTIONS_EDGE_RESET_PRESERVED_TOPICS), via is_reset_preserved;
+#   * PRESERVE_TOPICS_REGEX in scripts/ops/premarket-reset.sh, which carries the WILDCARD arms that
+#     topics.env cannot name -- Streams-internal changelogs. That is not a theoretical difference:
+#     ...gamma-migration-scorer-changelog matches the regex, exists on dev and production, and is
+#     deleted by the *-changelog rule below unless this script reads the regex too.
+# The regex is read from premarket-reset.sh rather than copied, so there is one definition; failing to
+# read it is a REFUSAL, because this script's whole job is deleting topics.
+_dkr_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+_dkr_keep="$_dkr_dir/../kafka/reset-preserved-topics.sh"
+if [ ! -r "$_dkr_keep" ]; then
+  echo "daily-kafka-reset: cannot read $_dkr_keep — refusing to delete anything." >&2
+  echo "  This script does not travel alone; ship ops/{daily-kafka-reset,premarket-reset}.sh and" >&2
+  echo "  kafka/{reset-preserved-topics.sh,topics.env} together (Jenkinsfile.kafka-reset does)." >&2
+  exit 1
+fi
+# shellcheck source=/dev/null
+. "$_dkr_keep"
+PRESERVE_TOPICS_REGEX="$( { grep -m1 "^PRESERVE_TOPICS_REGEX=" "$_dkr_dir/premarket-reset.sh" || true; } \
+  | sed "s/^PRESERVE_TOPICS_REGEX='//; s/'$//")"
+if [ -z "$PRESERVE_TOPICS_REGEX" ]; then
+  echo "daily-kafka-reset: cannot read PRESERVE_TOPICS_REGEX from $_dkr_dir/premarket-reset.sh — refusing to delete anything" >&2
+  echo "  This script does not travel alone. Ship the repo layout it resolves against:" >&2
+  echo "    ops/daily-kafka-reset.sh  ops/premarket-reset.sh" >&2
+  echo "    kafka/reset-preserved-topics.sh  kafka/topics.env" >&2
+  echo "  Jenkinsfile.kafka-reset does exactly that (~/oe-reset/{ops,kafka})." >&2
+  exit 1
+fi
 
 # ---- single-instance lock ----
 LOCK="/tmp/daily-kafka-reset.lock"

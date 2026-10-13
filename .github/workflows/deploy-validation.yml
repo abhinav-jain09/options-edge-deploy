@@ -218,6 +218,69 @@ jobs:
       - name: Validate mirror shell helpers are defined where they are used
         run: bash scripts/ci/validate-mirror-shell-helpers.sh
 
+      # The MM1 producer stanza is generated inside a heredoc that NO other check reads: the mirror
+      # shape tests extract only the block after BEGIN SHAPE ASSERTIONS, so an edit back to acks=1 or
+      # a dropped enable.idempotence would land silently. Four assertions: the seven stanzas hash EQUAL
+      # to one another, that stanza carries exactly one acks= (all) and one enable.idempotence= (true),
+      # no line outside the heredoc writes the file, and each generated run-mirror*.sh actually hands
+      # the file to kafka-mirror-maker — bytes nothing runs would prove nothing.
+      - name: Validate the mirror producer contract (acks=all, pinned idempotence)
+        run: bash scripts/ci/mirror-producer-contract-test.sh
+
+      # ansible/ is a SECOND generator for the same unit files, used when no Jenkins console is being
+      # watched. This fails the build when the table and the pipelines stop agreeing on the producer
+      # stanza, the consumer group formula, the offset reset, the isolation level, the topic
+      # allow-list or the unit naming. (The per-end shape assertions it cannot read are named in its
+      # header, not implied away.)
+      - name: Validate the Ansible mirror table against the pipelines
+        run: bash scripts/ci/validate-ansible-mirror-parity.sh
+
+      # The stop and start guards are the only part of the Ansible mirror path that touches a LIVE
+      # mirror, and the cases they exist for are quiet ones: a failed `launchctl load` leaves the OLD
+      # process running, and deregistering a unit can leave it running while a load starts a SECOND
+      # mirror on the same topic. Driven against stub launchctl/ps, once per way they can be lied to.
+      - name: Validate the mirror stop/start guards (stubbed launchctl scenarios)
+        run: bash scripts/ci/mirror-stop-start-guard-test.sh
+
+      # The comparison decides whether a LIVE mirror is reloaded, and both wrong answers cost: "in
+      # sync" when a property changed leaves the old settings running, "would install" for a comment
+      # opens a gap in fourteen healthy mirrors. It is also easy to break silently — an apostrophe
+      # inside its awk program once made every unit read "unparseable".
+      - name: Validate the mirror comparison guard
+        run: bash scripts/ci/mirror-diff-guard-test.sh
+
+      # What an ABSENT consumer group means is the difference between a first install and re-copying a
+      # retention window into the target — and a SUCCESSFUL but empty listing is the correct answer on
+      # a source with no groups, not a failure. Driven once per outcome against a stubbed CLI.
+      - name: Validate the mirror consumer-group check
+        run: bash scripts/ci/mirror-group-check-test.sh
+
+      # The install replaces five files for a unit the stop phase has already brought DOWN, so a
+      # failed move must restore the previous generation whole — which depends on `set -E`, without
+      # which the ERR trap is not inherited by the function doing the moves and the mixed generation
+      # the trap exists to undo is exactly what is left behind.
+      - name: Validate the mirror install rollback
+        run: bash scripts/ci/mirror-install-rollback-test.sh
+
+      # A production reload from this playbook must enforce the Deployment Permission Rule itself,
+      # with the same guard script and the DECLARED version hash Jenkins passes — a computed hash
+      # would let a locally edited guard self-approve. Asserted statically and behaviourally.
+      - name: Validate the Ansible production permission path
+        run: |
+          python3 -m pip install --quiet --disable-pip-version-check ansible-core
+          bash scripts/ci/validate-ansible-prod-permission.sh
+
+      # Catches a playbook that cannot even be loaded — a YAML or module-name error in ansible/ is
+      # otherwise found only by the operator running it, mid-install — and then runs the playbook's
+      # own identity logic: the parity gate reads the table and the templates and cannot see the Jinja
+      # that composes a unit's group.id, label, directory and plist from them, which is the most
+      # dangerous code in the file.
+      - name: Ansible syntax check + unit identity (mirror playbook)
+        run: |
+          python3 -m pip install --quiet --disable-pip-version-check ansible-core
+          ansible-playbook --syntax-check ansible/es-mirrors.yml
+          bash scripts/ci/validate-ansible-mirror-naming.sh
+
       # bash -n cannot see this: a backslash escape Groovy rejects inside a '''...''' sh block fails the
       # whole pipeline at COMPILE time ("unexpected char: '\\'"). #1027 merged one and broke every
       # action of the enumeration mirror job until the Jenkins linter was run by hand.
@@ -309,6 +372,70 @@ jobs:
       - name: apply-topics / cleanup-topics keep the vol-premium ledgers
         run: bash scripts/kafka/apply-topics-vol-premium-safety-test.sh
 
+      # apply-topics.sh's exit STATUS must tell "the list was reconciled except for these topics" from
+      # "the run did not complete": exit 9 plus a SKIPPED_TOPIC_NAMES line versus any other non-zero.
+      # scripts/ops/prod-clean-slate.sh acts on that difference, and on 2026-10-07 — when both were
+      # exit 1 — one drifted topic left all twelve es4->prod mirrors paused.
+      - name: apply-topics separates a skip from a failure
+        run: bash scripts/kafka/apply-topics-skip-exit-test.sh
+
+      # A create that the Kafka admin client retried must not fail the run (prod clean-slate 2026-10-13).
+      - name: apply-topics survives the admin client's retry of a successful create
+        run: bash scripts/kafka/apply-topics-create-retry-test.sh
+
+      # The sibling files apply-topics.sh sources must be copied by every test that runs it out of a
+      # temp directory. Hard-coding that list is what made TWO such tests report findings about
+      # topics.env the day apply-topics.sh gained resolve-prod-partition-overrides.sh (#1165): their
+      # copies died at `source: No such file or directory` and the durable-topic gate went red on main.
+      - name: apply-topics sibling files are derived, not hard-coded
+        run: bash scripts/kafka/apply-topics-sibling-files-test.sh
+
+      # What a partial recreate permits: mirrors start, prod does NOT come up. Every status combination
+      # is driven through the real decision function, and each rule is mutated to show it is load-bearing.
+      - name: the clean-slate recreate decision
+        run: bash scripts/ops/clean-slate-decision-test.sh
+
+      # And which mirrors may start: the per-agent half of that decision, including every way reading an
+      # agent's --whitelist can fail, each of which must be a HOLD rather than a start.
+      - name: mirror-topic-filter holds the right mirrors
+        run: bash scripts/ops/mirror-topic-filter-test.sh
+
+      # A production reset runs the files in ITS checkout, not the ones in main. On 2026-10-13 a clean
+      # slate ran from a tree whose apply-topics.sh had uncommitted edits and was 89 lines behind main,
+      # wiped production and took the pre-#1173 failure path. The guard compares every file the run uses
+      # against origin/main, by content, and refuses a wipe otherwise — driven here over real git repos.
+      - name: a production wipe refuses an unreviewed source tree
+        run: bash scripts/ops/reviewed-source-guard-test.sh
+
+      # The dev time-warp replay deletes the broker's topics and then waits for them to be gone: both
+      # halves must agree about the RESET-PRESERVED keep-list. The delete loop ignored it entirely, and
+      # the first fix for that made the WAIT hang on the topics it now keeps — a structural grep cannot
+      # tell those apart, so this drives both through a stubbed broker, with a mutation.
+      - name: the dev replay keeps the preserved topics
+        run: bash scripts/kafka/run-dev-timewarp-replay-keep-test.sh
+
+      # The gate in front of the production wipe: which mirrors are LOADED and producing into the broker
+      # about to be wiped, asked of launchd rather than of the plist files — because a job stays loaded
+      # when its plist is moved or edited, and a plist that fails to parse was silently skipped. Every
+      # case where it must REFUSE rather than answer "nothing is loaded" is driven with a stubbed
+      # launchctl, with mutations.
+      - name: the loaded-mirror gate fails closed
+        run: bash scripts/ops/loaded-mirror-agents-test.sh
+
+      # The paused-mirror ledger's invariant: a row leaves the file ONLY when its agent is confirmed
+      # loaded. Held agents, failed loads, a plist that is briefly absent, duplicate rows and a
+      # scratch file that cannot be written all keep their rows — otherwise an agent stays down with
+      # nothing recording that it is.
+      - name: the paused-mirror ledger never loses a down agent
+        run: bash scripts/ops/mirror-ledger-test.sh
+
+      # The one lever that makes a declared partition count SMALLER on production, in front of two
+      # scripts that must agree: apply-topics.sh accepting the live topic and verify-topics.sh not
+      # then calling it "below the expected minimum". Every way it can go wrong is quiet — not
+      # applying, applying to dev or es4, or surviving as a stale name — so each is a case.
+      - name: Validate the prod-only partition overrides
+        run: bash scripts/kafka/prod-partition-overrides-test.sh
+
       # The vol-premium event calendar the deployment PINS (VOL_PREMIUM_CALENDAR_VERSION / _CONTENT_HASH in
       # k8s/base/vol-premium-deployment.yaml) and the file the publish job writes to the Postgres ledger
       # (scripts/vol-premium/calendars/calendar-2026.1.json) must be one artefact: the engine halts at boot when
@@ -359,11 +486,34 @@ jobs:
       # The wrapper's receipt contract, driven against a fake kubectl through every outcome the provisioner can print.
       - name: zerodte provision wrapper holds the receipt to the letter
         run: bash scripts/ci/zerodte-provision-receipt-test.sh
+      - name: zerodte research-migration declarations pass the Job's rules
+        run: bash scripts/ci/validate-zerodte-research-migration.sh
+      - name: zerodte research-migrate guard refuses every forbidden ref and SHA
+        run: bash scripts/ci/zerodte-research-migrate-guard-test.sh
+      - name: zerodte research-migrate wrapper holds the receipt to its canonical grammar and proves the legacy writers' quiescence from a closed world
+        run: bash scripts/ci/zerodte-research-migrate-receipt-test.sh
+      - name: zerodte research-migrate barrier is held mutual exclusion (the real service deploy against a bounded fake)
+        run: bash scripts/ci/zerodte-migrate-barrier-test.sh
+      - name: zerodte compatibility render — every overlay sets the legacy writer OFF as a literal
+        run: bash scripts/ci/zerodte-compat-flag-test.sh
+      - name: zerodte writer-activate guard refuses every forbidden ref and SHA
+        run: bash scripts/ci/zerodte-writer-activate-guard-test.sh
+      - name: zerodte writer-activate wrapper holds the WRITER_CHECK receipt to its grammar, binds it to the committed receipt and gates the one replica
+        run: bash scripts/ci/zerodte-writer-activate-receipt-test.sh
 
       # es4's clean-reset deletes the whole Kafka data dir; it must refuse while the strike archive
       # marker is short of the log end (fail closed on unreadable state, explicit opt-out only).
       - name: es4 clean-reset strike archive interlock
         run: bash scripts/es4/strike-archive-interlock-test.sh
+
+      # The same wipe also erases the ES trade tape es-amt-service needs for its prior-session readiness.
+      # tape-preserve carries it across (original partitions + timestamps); failure must only ever warn.
+      - name: es4 clean-reset preserves the ES trade tape for es-amt-service
+        run: bash scripts/es4/tape-preserve-test.sh
+
+      # A reset must never raise an owner-held deployment (es-feed, strike-liquidity-heatmap-service).
+      - name: es4 clean-reset restore never raises held deployments
+        run: bash scripts/es4/cleanup-held-zero-test.sh
 
       - name: Validate image-pinning completeness (every rendered image wired into resolve-images + apply)
         run: scripts/ci/validate-image-pinning.sh

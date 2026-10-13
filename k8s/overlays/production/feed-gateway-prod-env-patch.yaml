@@ -24,6 +24,29 @@ spec:
       containers:
         - name: feed-gateway
           env:
+            # MARKET STRUCTURE relay (gateway #194): the latest market-structure record is retained and
+            # replayed to the Context Tape page as the `market-structure` frame, which draws the STRUCTURE
+            # layer. The topic is market-structure-service's UI projection — the namespace R13 of
+            # MARKET-STRUCTURE-SERVICE-DESIGN.md gives that service, declared in scripts/kafka/topics.env and
+            # created by scripts/kafka/ensure-market-structure-topics.sh — and NOT the gateway's own code
+            # default (options.market-structure.levels), which nothing declares, nothing creates and nothing
+            # publishes to.
+            #
+            # PER-ENVIRONMENT on purpose, not in the base: market-structure-service renders in dev and
+            # production only, and the experiment overlay has no instance of it, so enabling the relay there
+            # would point the gateway at a topic that environment never fills. These two values were live on
+            # the DEV gateway as a hand-applied `kubectl set env` and existed in no manifest (they are absent
+            # from that deployment's last-applied configuration), so the next redeploy would have silently
+            # switched the relay off.
+            #
+            # ⚠️ Applying feed-gateway ROLLS THE GATEWAY: it runs hostNetwork with strategy Recreate, so the
+            # :8091 WebSocket blips while the new pod binds the port. Deliberate, and the same blip every
+            # gateway deploy has — but it is a shared workload, so a production apply belongs outside the
+            # session, not mid-afternoon.
+            - name: GATEWAY_MARKET_STRUCTURE_ENABLED
+              value: "true"
+            - name: KAFKA_MARKET_STRUCTURE_TOPIC
+              value: options.spx.market-structure.ui
             - name: OE_WATCH_JDBC_URL
               value: "jdbc:postgresql://192.168.100.252:5432/options_flow"
             - name: OE_WATCH_DB_USER

@@ -1,0 +1,97 @@
+# THE WRITER CHECK (increment 9e; inc 9 consult Q9 "a successful writer dry/readiness check"): the dedicated v7 research writer's BOOT, and
+# nothing else — ZeroDteResearchWriterMain --check (increment 9d) proves, against the LIVE cluster and the LIVE store, that the schema is v7,
+# the frames topic has one partition and names its cluster and topic id, the era bound to that topic is the one the COMMITTED provisioning
+# receipt names (eraId, generation), the calendar reaches far enough, and the cursor recovers (or bootstraps on an empty log) — then prints
+# ONE receipt line and exits: nothing is consumed, nothing is written. Rendered per run by scripts/ops/zerodte-writer-activate.sh with the
+# receipt's identity as LITERALS (__ERA_ID__, __GENERATION__), the same image digest the Deployment runs, and the Deployment's own env.
+#
+# Why a Job and not the Deployment's own probe: the activation must REFUSE before a replica exists when the live world is not what the receipt
+# says; a Deployment at one replica with a failing probe would already be a running writer. The identity ConfigMap the Deployment reads
+# (zerodte-writer-identity) is applied by the wrapper from the same receipt; this Job carries the same values inline so the check does not
+# depend on that ConfigMap being there yet.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: __JOB_NAME__
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: zerodte-writer-check
+    app.kubernetes.io/part-of: options-edge
+    app.kubernetes.io/component: maintenance
+    options-edge.io/zerodte-environment: __ENVIRONMENT__
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: zerodte-writer-check
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: writer-check
+          image: __IMAGE__
+          imagePullPolicy: IfNotPresent
+          command: ["java", "-cp", "/app/app.jar", "com.optionsedge.processing.zerodte.research.ZeroDteResearchWriterMain", "--check"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              valueFrom:
+                configMapKeyRef:
+                  name: options-edge-config
+                  key: KAFKA_BOOTSTRAP_SERVERS
+            - name: POSTGRES_JDBC_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: options-edge-config
+                  key: POSTGRES_JDBC_URL
+            - name: POSTGRES_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: options-edge-config
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: options-edge-runtime-secrets
+                  key: POSTGRES_PASSWORD
+            - name: ZERO_DTE_RESEARCH_JDBC_PASSWORD_ENV
+              value: POSTGRES_PASSWORD
+            - name: ZERO_DTE_SYMBOL
+              value: "__SYMBOL__"
+            - name: ZERO_DTE_FRAMES_TOPIC
+              value: "__FRAMES_TOPIC__"
+            - name: ZERO_DTE_RESEARCH_GROUP
+              value: "zerodte-writer-check-__ENVIRONMENT__"
+            - name: ZERO_DTE_ERA_ID
+              value: "__ERA_ID__"
+            - name: ZERO_DTE_PROVISIONING_GENERATION
+              value: "__GENERATION__"
+            - name: ZERO_DTE_EXPECTED_SESSIONS_AHEAD
+              value: "60"
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xms64m -Xmx384m"
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi

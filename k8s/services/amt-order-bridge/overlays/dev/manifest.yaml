@@ -23,7 +23,7 @@ metadata:
   namespace: options-edge
 spec:
   progressDeadlineSeconds: 1200
-  replicas: 0
+  replicas: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: amt-order-bridge
@@ -38,6 +38,10 @@ spec:
     spec:
       containers:
         - env:
+            - name: AMT_BRIDGE_ENABLED
+              value: "true"
+            - name: AMT_BRIDGE_EXIT_ENABLED
+              value: "false"
             - name: HEALTH_PORT
               value: "8132"
             - name: AMT_BRIDGE_AUCTION_TOPIC
@@ -46,8 +50,6 @@ spec:
               value: trading.order.intent
             - name: AMT_BRIDGE_CONSUMER_GROUP
               value: amt-order-bridge
-            - name: AMT_BRIDGE_ENABLED
-              value: "false"
             - name: AMT_BRIDGE_INTENT_VALID_MS
               value: "600000"
           envFrom:

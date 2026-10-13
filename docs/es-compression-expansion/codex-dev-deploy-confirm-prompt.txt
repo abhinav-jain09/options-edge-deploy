@@ -1,0 +1,9 @@
+You are doing a SCOPED CONFIRMATION review, not a new review round. Work in this repository (a worktree of options-edge-deploy, branch feat/escx-dev-deploy). Your round-1 review is docs/es-compression-expansion/ES-COMPRESSION-EXPANSION-CODEX-DEV-DEPLOY.md: VERDICT REQUEST_CHANGES with ONE MAJOR (underlying.es.trades.linearized declared :1 but not in OPTIONS_EDGE_EXACT_PARTITION_TOPICS, so a 32-partition pre-existing/auto-created topic would pass apply-topics) and two MINOR stale comments (k8s/overlays/production/kustomization.yaml prod-only comments; scripts/es4/render_es4_manifests.py "base + production only").
+
+The fold is the LAST commit on this branch (`git show HEAD`; the full branch diff is `git diff origin/main...HEAD` after `git fetch origin main`). Verify, read-only (do NOT write or modify any file; do NOT run deploys or kubectl against any cluster):
+  A. scripts/kafka/topics.env now appends underlying.es.trades.linearized to OPTIONS_EDGE_EXACT_PARTITION_TOPICS, and apply-topics.sh (read it) treats an EXACT topic as a hard mismatch when the live count differs from the declared :1 — i.e. the concrete failing case from your round 1 (a 32-partition topic) is now refused, on dev and on prod alike, and a 1-partition topic (what prod has today, 304k+ records) still passes untouched.
+  B. The two MINOR comments are corrected and no behaviour changed in those files.
+State RESOLVED or NOT RESOLVED for A and B each, with the evidence line. Scope discipline: do not re-open settled findings or raise preferences; a new finding is reportable only if it is BLOCKER-level. Your FINAL message must be the complete result (only the final message is captured) and must end with exactly one line:
+  VERDICT: APPROVE — <reason>   (both resolved, and you saw no NEW blocker-level defect while verifying)
+  or
+  VERDICT: REQUEST_CHANGES — <reason>

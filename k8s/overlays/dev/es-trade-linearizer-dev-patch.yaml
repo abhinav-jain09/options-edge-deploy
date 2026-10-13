@@ -1,0 +1,18 @@
+# DEV-ONLY patch for es-trade-linearizer-service (2026-10-07).
+# The base deployment sets ES_LINEARIZER_BOOTSTRAP_SERVERS to the production broker because the service was
+# production-only; LinearizerSettings reads that key BEFORE the shared KAFKA_BOOTSTRAP_SERVERS, so the configmap
+# alone would not redirect it. On dev the ES trades (underlying.es.trades) and the linearized tape live on the
+# env-local broker, exactly like the feeds' KAFKA_BOOTSTRAP_SERVERS in the sibling dev patches.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: es-trade-linearizer-service
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: es-trade-linearizer
+          env:
+            - name: ES_LINEARIZER_BOOTSTRAP_SERVERS
+              value: host.docker.internal:19092

@@ -262,6 +262,18 @@ ES_ENV = {
         # production "SPX" rejected 100% of es4 input once the allow-list went live (2026-07-27 outage:
         # rejected_symbol_total 1073+, processed 0) — this override is the durable fix.
         {"name": "STRIKE_FLOW_SYMBOL", "value": "ES", "_override": True},
+        # The near-spot 0DTE SPXW semantic signal's producer (#1155) is PROD-ONLY, same scoping as
+        # dev before 2026-10-07: its only consumer, es-compression-expansion-service (#1149), has no es4
+        # overlay (k8s/services/es-compression-expansion has base + dev + production, no es4), and es4's own
+        # hand-maintained topic declaration (OPTIONS_EDGE_ES4_TOPICS in scripts/kafka/topics.env)
+        # does not list options.databento.near-spot-semantic — unlike the shared OPTIONS_EDGE_TOPICS
+        # set dev/prod apply from, es4 topics are NOT inherited automatically, so the topic does not
+        # exist on the es4 broker. Enabling the producer without it declared hits exactly the
+        # broker-auto-create wedge topics.env warns about elsewhere (num.partitions=1 default, a
+        # later Streams reader sized from that wrong count wedges). Without this override the
+        # non-override merge would silently inherit prod's "true" the next render — _override pins
+        # it explicitly so a future prod change can't flip es4 too.
+        {"name": "STRIKE_FLOW_NEAR_SPOT_ENABLED", "value": "false", "_override": True},
     ],
     # ES trades ~23h on CME Globex (Sun 18:00 ET - Fri 17:00 ET, daily 17:00-18:00 halt); the default
     # spx-rth calendar wrongly forced the pace board + spot model to SESSION_IDLE outside 09:30-16:15 ET.
@@ -397,6 +409,14 @@ ES4_KEEP_DOWN = {
     "dealer-ledger-calibration-scorer",
     "volume-pace-databento-service",
     "directional-pressure-databento-service",
+    # USER 2026-10-11, "we dont need this service on es, turn it off until further notice":
+    # strike-liquidity-heatmap-service is OFF on es4 again. Its Kafka Streams repartition topic
+    # (options-edge-strike-liquidity-heatmap-es4-chain-rekey) is created with retention.ms=-1 and
+    # grew to 46G in ONE partition, filling /home and crash-looping es4-kafka on 2026-10-08. Capping the
+    # topic is undone every time the service starts, so the service itself is what stays down.
+    # Re-enable = delete the name here, re-render, deploy that service - AND first bound the retention
+    # of its internal topics (see the 10-08 es4 disk-full incident).
+    "strike-liquidity-heatmap-service",
     # USER 2026-07-30: strike-liquidity-heatmap RE-ENABLED on es4 to evaluate the wall-line /
     # buy-bubble overlay against the ES chain. Measured headroom before removing it: .4 was at
     # 8251m/12 cores (68%) live with 39Gi memory available, so its 750m/512Mi request fits.

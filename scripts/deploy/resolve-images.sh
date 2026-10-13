@@ -90,6 +90,10 @@ EOF
 SHORT_PREMIUM_AGENT_IMAGE=$registry/options-edge-short-premium-agent:$image_tag
 ES_AGGRESSOR_FLOW_IMAGE=$registry/options-edge-es-aggressor-flow:$image_tag
 ES_TRADE_LINEARIZER_IMAGE=$registry/options-edge-es-trade-linearizer:$image_tag
+ES_COMPRESSION_EXPANSION_IMAGE=$registry/options-edge-es-compression-expansion:$image_tag
+HEDGING_PRESSURE_IMAGE=$registry/options-edge-hedging-pressure:$image_tag
+MARKET_STRUCTURE_IMAGE=$registry/options-edge-market-structure:$image_tag
+EARLY_AUCTION_VERDICT_IMAGE=$registry/options-edge-early-auction-verdict:$image_tag
 SIGNAL_FOLLOWER_IMAGE=$registry/options-edge-signal-follower:$image_tag
 CONTEXT_TAPE_IMAGE=$registry/options-edge-context-tape:$image_tag
 MULTILEG_STRUCTURE_IMAGE=$registry/options-edge-multileg-structure:$image_tag
@@ -173,6 +177,9 @@ EOF
 SHORT_PREMIUM_AGENT_IMAGE=$SHORT_PREMIUM_AGENT_IMAGE
 ES_AGGRESSOR_FLOW_IMAGE=$ES_AGGRESSOR_FLOW_IMAGE
 ES_TRADE_LINEARIZER_IMAGE=$ES_TRADE_LINEARIZER_IMAGE
+ES_COMPRESSION_EXPANSION_IMAGE=$ES_COMPRESSION_EXPANSION_IMAGE
+HEDGING_PRESSURE_IMAGE=$HEDGING_PRESSURE_IMAGE
+MARKET_STRUCTURE_IMAGE=$MARKET_STRUCTURE_IMAGE
 SIGNAL_FOLLOWER_IMAGE=$SIGNAL_FOLLOWER_IMAGE
 CONTEXT_TAPE_IMAGE=$CONTEXT_TAPE_IMAGE
 MULTILEG_STRUCTURE_IMAGE=$MULTILEG_STRUCTURE_IMAGE

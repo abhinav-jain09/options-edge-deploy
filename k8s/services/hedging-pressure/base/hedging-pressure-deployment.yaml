@@ -1,0 +1,90 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hedging-pressure-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: hedging-pressure-service
+    app.kubernetes.io/component: hedging-pressure-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  # HELD AT 0 on every environment (owner 2026-10-11: deploy it, the owner turns it on later). To turn it on:
+  # set replicas to 1 here, regenerate the slices (scripts/deploy/generate-service-slices.sh), remove
+  # hedging-pressure-service from KEEP_DOWN in scripts/ops/morning-autostart.sh AND scripts/ops/oe-boot-bringup.sh
+  # (tests/test_keep_down_lists_agree.py) and from DISABLED_DEV in scripts/ops/dev-cleanup.sh, set
+  # HEDGING_PRESSURE_REGIMES, then run service-deploy. SINGLE replica ONLY: a second instance with the same
+  # transactional.id fences the first.
+  replicas: 0
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: hedging-pressure-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: hedging-pressure-service
+        app.kubernetes.io/component: hedging-pressure-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: hedging-pressure
+          image: 192.168.100.252:5000/options-edge-hedging-pressure:dev
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: options-edge-config              # KAFKA_BOOTSTRAP_SERVERS, SCHEMA_REGISTRY_URL, HPSF_MARKET_EARLY_CLOSES, TOPIC_PREFIX
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            # Inputs (Avro, SCHEMA_REGISTRY_URL from the shared configmap): delta-flow-by-strike, underlying.spx.price,
+            # options.databento.strike-flow, options.databento.gex.strike. Outputs, published in ONE Kafka transaction per
+            # cycle: hedging-pressure.state (compacted, retention -1, key SPX|<tradingDate>, 1 partition, reset-rebuildable)
+            # and hedging-pressure.cycle-input (delete, 30 days, key SPX|<tradingDate>|<cycleSeq>, 1 partition, rebuildable).
+            # Both output topics must EXIST at start (scripts/kafka/ensure-hedging-pressure-topics.sh); the service never
+            # relies on auto-creation. The topic names are the code defaults and TOPIC_PREFIX is "" on dev and prod, so no
+            # KAFKA_HEDGING_PRESSURE_*_TOPIC override is set. es4 is NOT a target of this service (no es4 render entry).
+            #
+            # SETTLEMENT CONVENTION / MODEL FLOOR (requirement rule 12: ONE shared configuration with databento-gex).
+            # DATABENTO_GEX_SETTLEMENT_HOUR / _MINUTE / _ZONE and DATABENTO_GEX_MIN_TTE_YEARS are deliberately NOT set here:
+            # databento-gex-service (k8s/base/databento-gex-deployment.yaml) does not set them in any env either, so both
+            # services read the same code defaults. Setting a value here would make the two diverge. HPSF_MARKET_EARLY_CLOSES
+            # arrives through the same shared configmap (options-edge-config, envFrom above) databento-gex reads it from.
+            # If a value is ever pinned for databento-gex it must be pinned for this service in the same change.
+            #
+            # HEDGING_PRESSURE_REGIMES is deliberately UNSET: with no explicit daily regime the service reports
+            # UNAVAILABLE(REGIME_UNSET); there is no default regime. The owner supplies it when turning the service on.
+            #
+            # One transactional.id per environment; this base is the dev one, the production slice is patched by the
+            # production overlay (k8s/overlays/production/hedging-pressure-prod-env-patch.yaml).
+            - name: HEDGING_PRESSURE_TRANSACTIONAL_ID
+              value: hedging-pressure-service-dev
+            - name: HEDGING_PRESSURE_HEALTH_PORT
+              value: "8080"
+            - name: JAVA_TOOL_OPTIONS
+              value: -Xms256m -Xmx640m
+          ports:
+            - name: health
+              containerPort: 8080
+          # /health/ready is 503 until the runner is LIVE (or IDLE outside the session); /health/live and /metrics always answer.
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 200m
+              memory: 768Mi
+            limits:
+              memory: 1536Mi

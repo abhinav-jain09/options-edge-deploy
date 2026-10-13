@@ -1,0 +1,323 @@
+---
+# One mirror unit, in one order for both plan and install: assert the topic shape the owning pipeline
+# asserts, assert the consumer group already exists, RENDER into a scratch directory, compare with
+# what is installed, and only then — and only when something that matters differs — copy into place
+# and reload. Plan mode is the same path with the copy and the reload left out, so what a plan reports
+# is what an install would do.
+- name: "{{ item.label }} | this unit has not failed to render (yet)"
+  # A render failure is a UNIT failure, not the play's — and `failed_when: false` on a template task
+  # SUPPRESSES it, after which the unit is compared against a STALE rendering and reported fine. Each
+  # render is therefore wrapped in a block whose rescue records it here.
+  ansible.builtin.set_fact:
+    oe_render_failed: false
+
+- name: "{{ item.label }} | scratch directory for everything this run renders"
+  ansible.builtin.file:
+    path: "{{ oe_rendered_dir }}/{{ item.label }}"
+    state: directory
+    mode: "0755"
+  changed_when: false
+
+- name: "{{ item.label }} | render the shape check (recorded, not fatal)"
+  block:
+    - name: "{{ item.label }} | render the shape check"
+      ansible.builtin.template:
+        src: mirror-shape-check.sh.j2
+        dest: "{{ oe_rendered_dir }}/{{ item.label }}/shape-check.sh"
+        mode: "0755"
+      changed_when: false
+  rescue:
+    - name: "{{ item.label }} | the shape check could not be rendered"
+      ansible.builtin.set_fact:
+        oe_render_failed: true
+
+- name: "{{ item.label }} | topic shape, exactly what the owning pipeline asserts"
+  # Read-only, and no weaker or stronger than the pipeline that owns the topic: see the rendered
+  # script and ansible/vars/es-mirrors.yml. A skew is reported, not fatal — the other units are still
+  # installable and the play exits non-zero at the end; aborting here would let one skew hide the rest.
+  ansible.builtin.command:
+    cmd: "bash {{ oe_rendered_dir }}/{{ item.label }}/shape-check.sh"
+  register: oe_shape
+  changed_when: false
+  failed_when: false
+
+- name: "{{ item.label }} | render the consumer-group check (recorded, not fatal)"
+  when: oe_shape.rc == 0
+  block:
+    - name: "{{ item.label }} | render the consumer-group check"
+      ansible.builtin.template:
+        src: mirror-group-check.sh.j2
+        dest: "{{ oe_rendered_dir }}/{{ item.label }}/group-check.sh"
+        mode: "0755"
+      changed_when: false
+  rescue:
+    - name: "{{ item.label }} | the consumer-group check could not be rendered"
+      ansible.builtin.set_fact:
+        oe_render_failed: true
+
+- name: "{{ item.label }} | the consumer group, and what an absent one means"
+  # The three outcomes it keeps apart are in the rendered script's header; it is read-only.
+  when: oe_shape.rc == 0 and not oe_render_failed
+  ansible.builtin.command:
+    cmd: "bash {{ oe_rendered_dir }}/{{ item.label }}/group-check.sh"
+  register: oe_group
+  changed_when: false
+  failed_when: false
+
+- name: "{{ item.label }} | this unit is installable"
+  ansible.builtin.set_fact:
+    oe_ok: "{{ (oe_shape.rc == 0) and ((oe_group.rc | default(1)) == 0) }}"
+
+- name: "{{ item.label }} | render the unit files (recorded, not fatal)"
+  when: oe_ok and not oe_render_failed
+  block:
+    - name: "{{ item.label }} | render the unit files into the scratch directory"
+      # Rendered here even on an install, never straight over the live files: the comparison below
+      # needs both copies, and a half-written unit directory is not a state to leave a mirror in.
+      ansible.builtin.template:
+        src: "{{ tpl.src }}"
+        dest: "{{ oe_rendered_dir }}/{{ item.label }}/{{ tpl.dest }}"
+        mode: "{{ tpl.mode }}"
+      loop:
+        - { src: mirror-consumer.properties.j2, dest: consumer.properties, mode: "0644" }
+        - { src: mirror-producer.properties.j2, dest: producer.properties, mode: "0644" }
+        - { src: mirror-log4j.properties.j2,    dest: log4j.properties,    mode: "0644" }
+        - { src: run-mirror.sh.j2,              dest: run-mirror.sh,       mode: "0755" }
+        - { src: mirror.plist.j2,               dest: plist.xml,           mode: "0644" }
+      loop_control:
+        loop_var: tpl
+        label: "{{ tpl.dest }}"
+      changed_when: false
+  rescue:
+    - name: "{{ item.label }} | a unit file could not be rendered"
+      ansible.builtin.set_fact:
+        oe_render_failed: true
+
+- name: "{{ item.label }} | render the comparison (recorded, not fatal)"
+  when: oe_ok and not oe_render_failed
+  block:
+    - name: "{{ item.label }} | render the comparison"
+      ansible.builtin.template:
+        src: mirror-diff.sh.j2
+        dest: "{{ oe_rendered_dir }}/{{ item.label }}/diff.sh"
+        mode: "0755"
+      changed_when: false
+  rescue:
+    - name: "{{ item.label }} | the comparison could not be rendered"
+      ansible.builtin.set_fact:
+        oe_render_failed: true
+
+- name: "{{ item.label }} | compare the rendered unit with the installed one"
+  # What counts as a difference, and why, is in the rendered script's own header and in
+  # ansible/templates/mirror-diff.sh.j2. It is read-only.
+  when: oe_ok and not oe_render_failed
+  ansible.builtin.command:
+    cmd: "bash {{ oe_rendered_dir }}/{{ item.label }}/diff.sh"
+  register: oe_diff
+  changed_when: false
+  # collected like the rest: a comparison that cannot run is this unit's failure, not the play's
+  failed_when: false
+
+- name: "{{ item.label }} | render the stop and start guards (recorded, not fatal)"
+  when:
+    - oe_ok and oe_confirm and not oe_render_failed
+    - oe_diff.stdout is search('would install')
+  block:
+    - name: "{{ item.label }} | render the stop and start guards"
+      ansible.builtin.template:
+        src: "{{ g }}.j2"
+        dest: "{{ oe_rendered_dir }}/{{ item.label }}/{{ g | replace('mirror-', '') }}"
+        mode: "0755"
+      loop: [mirror-stop.sh, mirror-start.sh]
+      loop_control:
+        loop_var: g
+      changed_when: false
+  rescue:
+    - name: "{{ item.label }} | a guard could not be rendered"
+      ansible.builtin.set_fact:
+        oe_render_failed: true
+
+- name: "{{ item.label }} | STOP the unit before anything is written"
+  # Phase 1. Files are replaced only after this proves the unit is stopped and nothing lingers: the
+  # five files are not one transaction and the plist carries KeepAlive, so a process alive during the
+  # copy can come up on a MIXED generation. If this fails, nothing is copied and the unit keeps its
+  # old, coherent configuration.
+  when:
+    - oe_prod_permitted | default(false)
+    - not oe_render_failed
+    - (oe_diff.rc | default(1)) == 0
+    - oe_ok and oe_confirm
+    - oe_diff.stdout is search('would install')
+  ansible.builtin.command:
+    cmd: "bash {{ oe_rendered_dir }}/{{ item.label }}/stop.sh"
+  environment:
+    # the production lock inside the script reads this from the environment; see mirror-stop.sh.j2
+    PERMITTED_SHA: "{{ oe_permitted_sha }}"
+  register: oe_stop
+  failed_when: false
+
+- name: "{{ item.label }} | install the rendered files"
+  # Each file is copied beside its target and MOVED into place, so no reader ever sees a torn file.
+  # Nothing is running at this point — phase 1 proved it — so there is no window in which a mixed set
+  # could be read.
+  when:
+    - oe_prod_permitted | default(false)
+    - not oe_render_failed
+    - (oe_diff.rc | default(1)) == 0
+    - oe_ok and oe_confirm
+    - oe_diff.stdout is search('would install')
+    - (oe_stop.rc | default(1)) == 0
+  ansible.builtin.shell:
+    cmd: |
+      # -E, not just -e: without errtrace the ERR trap is NOT inherited by a function, so a cp that
+      # failed inside put() exited the script with the restore never running — the mixed generation
+      # this trap exists to undo was exactly what it left behind.
+      set -Eeuo pipefail
+      # shell-QUOTED: see the note in ansible/templates/mirror-stop.sh.j2 — these are operator
+      # values and an unquoted interpolation ran shell before the production guard below
+      R={{ (oe_rendered_dir ~ "/" ~ item.label) | quote }}; M={{ item.mdir | quote }}; PL={{ item.plist | quote }}
+      TGT={{ item.target | quote }}; REPO={{ (playbook_dir ~ "/..") | quote }}
+      # THE PRODUCTION LOCK, repeated here because a variable cannot carry it. An Ansible extra var
+      # outranks every var, fact and register, so `-e oe_stop='{"rc":0}'` (or oe_diff, or
+      # oe_prod_permitted) can make this task's conditions true however the previous phase ended. Each
+      # path that stops, WRITES or starts a unit therefore re-runs the repository's own permitted-commit
+      # guard itself for the production target, with the version hash written out literally.
+      if [ "$TGT" = "192.168.100.252:9092" ]; then
+        if ! ( cd "$REPO" && PERMITTED_SHA="${PERMITTED_SHA:-}" \
+               PERMITTED_SHA_GUARD_VERSION="2f6fc2ab7aa51eb8a9e8aa350f2d774cd2fb7a253de2591e43645a19a9886b24" \
+               bash scripts/jenkins/permitted-sha-guard.sh ); then
+          echo "FAIL: the permitted-commit guard REFUSED this PRODUCTION unit — nothing has been written"
+          exit 1
+        fi
+      fi
+      # Order matters: the backup directory and the ERR trap come FIRST, and only then is the unit
+      # directory created — with the mkdir ahead of the trap, a mktemp that failed exited under -e
+      # with a new empty directory left behind. HAD_DIR is read before the mkdir for the same reason
+      # (read after, it is always "yes").
+      # Each file is written beside its target and MOVED into place, so no reader sees a torn file —
+      # and the five together are made ATOMIC ENOUGH by keeping the previous generation and restoring
+      # it if any move fails. Without that, a failure after the second move left a unit that is both
+      # DOWN (phase 1 stopped it) and mixed on disk, with nothing to go back to. The unit is restarted
+      # only after all five land; a failed install leaves the OLD generation complete and the unit
+      # down, which is a state phase 2 can be run against and the next plan can read.
+      BK=$(mktemp -d)
+      HAD_DIR=yes; [ -d "$M" ] || HAD_DIR=no
+      # declared BEFORE the trap that reads it: under set -u a failure during the backup phase made
+      # restore() itself die on an unbound variable, so nothing was restored and nothing said so
+      WROTE=""
+      # Restoring means putting the unit back EXACTLY as it was, which on a FIRST install means
+      # removing what was just written: moving back only the files that existed would have left a
+      # partial new generation behind, down and half-written, with nothing naming it.
+      restore() {
+        for pair in "consumer.properties:$M/consumer.properties" "producer.properties:$M/producer.properties" \
+                    "log4j.properties:$M/log4j.properties" "run-mirror.sh:$M/run-mirror.sh" "plist.xml:$PL"; do
+          b=${pair%%:*}; d=${pair#*:}
+          if [ -e "$BK/$b" ]; then mv -f "$BK/$b" "$d"
+          else
+            case " $WROTE " in (*" $d "*) rm -f "$d" ;; esac
+          fi
+          rm -f "$d.ansible-new"
+        done
+        [ "$HAD_DIR" = yes ] || rmdir "$M" 2>/dev/null || true
+        echo "FAIL: an install step failed; the unit has been put back exactly as it was (files that did not exist before are removed) and left stopped" >&2
+      }
+      trap 'restore; rm -rf "$BK"; exit 1' ERR
+      mkdir -p "$M"
+      # A backup is NAMED only once it is complete: cp writes .part and a rename makes it a backup,
+      # so a cp that fails halfway can never be restored over an intact live file.
+      backup() { # source  backup-name
+        [ -e "$1" ] || return 0
+        cp -p "$1" "$BK/$2.part"
+        mv -f "$BK/$2.part" "$BK/$2"
+      }
+      for f in consumer.properties producer.properties log4j.properties run-mirror.sh; do
+        backup "$M/$f" "$f"
+      done
+      backup "$PL" plist.xml
+      # WROTE (declared above) records every destination this run has actually written, so the restore
+      # can tell "we put this here" from "this was already here": deleting an unbacked destination
+      # unconditionally destroyed an intact OLD file when the failure came during the BACKUP phase.
+      put() { # rendered-name  destination  mode
+        cp "$R/$1" "$2.ansible-new"
+        chmod "$3" "$2.ansible-new"
+        mv -f "$2.ansible-new" "$2"
+        WROTE="$WROTE $2"
+      }
+      put consumer.properties "$M/consumer.properties" 0644
+      put producer.properties "$M/producer.properties" 0644
+      put log4j.properties    "$M/log4j.properties"    0644
+      put run-mirror.sh       "$M/run-mirror.sh"       0755
+      put plist.xml           "$PL"                    0644
+      trap - ERR
+      rm -rf "$BK"
+      echo "installed 5 file(s) into $M"
+    executable: /bin/bash
+  environment:
+    # the in-script production lock reads this; see the guard block at the top of the body
+    PERMITTED_SHA: "{{ oe_permitted_sha }}"
+  register: oe_install
+  failed_when: false
+
+- name: "{{ item.label }} | START the unit on the installed files"
+  # Phase 2, and it proves the replacement: a numeric pid, different from the one phase 1 stopped,
+  # reading THIS unit's config, and the only process doing so.
+  when:
+    - oe_prod_permitted | default(false)
+    - not oe_render_failed
+    - (oe_diff.rc | default(1)) == 0
+    - oe_ok and oe_confirm
+    - oe_diff.stdout is search('would install')
+    - (oe_stop.rc | default(1)) == 0
+    - (oe_install.rc | default(1)) == 0
+  ansible.builtin.command:
+    cmd: "bash {{ oe_rendered_dir }}/{{ item.label }}/start.sh"
+  environment:
+    PERMITTED_SHA: "{{ oe_permitted_sha }}"
+    OE_OLD_PID: "{{ (oe_stop.stdout | default('')) | regex_search('was pid ([0-9]+)', '\\1') | first | default('', true) }}"
+  register: oe_start
+  failed_when: false
+
+- name: "{{ item.label }} | replication lag on the source"
+  when: oe_ok and oe_confirm
+  ansible.builtin.shell:
+    cmd: |
+      set -uo pipefail
+      "{{ oe_kbin }}/kafka-consumer-groups" --bootstrap-server "{{ item.source }}" --describe \
+        --group "{{ item.group_id }}" 2>/dev/null \
+        | awk -v t="{{ item.topic }}" '$2==t{printf "partition %s lag %s\n", $3, $6}'
+    executable: /bin/bash
+  register: oe_lag
+  changed_when: false
+  # reporting, not a gate: a lag that cannot be read must not abort the play before this unit is
+  # recorded and the remaining units run
+  failed_when: false
+  # reporting, not a gate: a lag that cannot be read must not abort the play before this unit is
+  # recorded and the remaining units run
+  failed_when: false
+
+- name: "{{ item.label }} | record"
+  ansible.builtin.set_fact:
+    oe_report: >-
+      {{ (oe_report | default([])) + [
+           item.label ~ ' | ' ~ ('OK' if oe_ok else 'NOT INSTALLED')
+           ~ ' | ' ~ (((oe_shape.stdout | default('')) ~ (oe_shape.stderr | default(''))) | trim)
+           ~ ' | ' ~ (((oe_group.stdout | default('')) ~ (oe_group.stderr | default(''))) | trim)
+           ~ ' | ' ~ (('RENDER FAILED' if oe_render_failed else ((oe_diff.stdout | default('')) ~ (oe_diff.stderr | default('')))) | trim | default('not compared', true))
+           ~ ' | ' ~ ([ (oe_stop.stdout | default('')), (oe_stop.stderr | default('')),
+                         (oe_install.stdout | default('')), (oe_install.stderr | default('')),
+                         (oe_start.stdout | default('')), (oe_start.stderr | default('')) ]
+                       | select | join(' ') | trim | default('no change applied', true))
+           ~ ' | ' ~ ((oe_lag.stdout | default('lag not read')) | trim)
+         ] }}
+    oe_failed: >-
+      {{ (oe_failed | default([])) +
+         ([] if (oe_ok and (not oe_render_failed) and ((oe_diff.rc | default(1)) == 0)) else [item.label]) }}
+    # a unit whose stop, install or start did not succeed: its files may be new while its process is
+    # not, which the play's final assertion names separately from a unit it never tried to install
+    oe_reload_failed: >-
+      {{ (oe_reload_failed | default([])) +
+         ([item.label] if (((oe_stop.rc | default(0)) != 0) or ((oe_install.rc | default(0)) != 0)
+                            or ((oe_start.rc | default(0)) != 0)
+                            or (oe_confirm and (oe_diff.stdout | default('') is search('would install'))
+                                and ((oe_start.rc | default(1)) != 0)))
+                        else []) }}

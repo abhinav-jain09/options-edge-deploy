@@ -85,6 +85,9 @@ spec:
               value: "http://localhost:8090"
             - name: VITE_REPLAY_ORCHESTRATOR_URL
               value: "http://localhost:8095"
+            # ES BOX layer on /context-tape (2026-10-07): the es-compression-expansion shadow view (dev runs it too).
+            - name: VITE_ES_BOX_ENABLED
+              value: "true"
             # Personal trading journal (options-edge-trading-journal). The BASE URL of that
             # service, not a link target: the Journal page itself is served by this web app on
             # this origin, like every other nav item, and only its DATA is fetched from here with

@@ -70,12 +70,28 @@ pipeline {
         timeout(time: 10, unit: 'MINUTES') {
           sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp'
         }
-        sh 'scp -o BatchMode=yes -o StrictHostKeyChecking=accept-new scripts/ops/daily-kafka-reset.sh "${PROD_HOST}:/home/abhinav/daily-kafka-reset.sh"'
+        // THE SCRIPT NO LONGER TRAVELS ALONE (2026-10-13). daily-kafka-reset.sh now consults the
+        // RESET-PRESERVED keep-list before deleting anything, which means it sources
+        // scripts/kafka/reset-preserved-topics.sh (which reads topics.env beside it) and reads
+        // PRESERVE_TOPICS_REGEX out of scripts/ops/premarket-reset.sh. Shipping the one file would
+        // leave it refusing to run on the host -- it fails closed by design -- so the copy carries the
+        // repo LAYOUT it resolves against: ~/oe-reset/{ops,kafka}, the same shape
+        // scripts/ops/prod-clean-slate.sh ships for the off-hours clean slate.
+        sh '''
+          set -euo pipefail
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "${PROD_HOST}" 'mkdir -p ~/oe-reset/ops ~/oe-reset/kafka'
+          scp -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+            scripts/ops/daily-kafka-reset.sh scripts/ops/premarket-reset.sh \
+            "${PROD_HOST}:oe-reset/ops/"
+          scp -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+            scripts/kafka/reset-preserved-topics.sh scripts/kafka/topics.env \
+            "${PROD_HOST}:oe-reset/kafka/"
+        '''
         sh '''
           set -euo pipefail
           echo "Running daily-kafka-reset on ${PROD_HOST} (DRY_RUN=${DRY_RUN})"
           ssh -o BatchMode=yes "${PROD_HOST}" \
-            "chmod +x ~/daily-kafka-reset.sh && DRY_RUN=${DRY_RUN} ~/daily-kafka-reset.sh"
+            "chmod +x ~/oe-reset/ops/daily-kafka-reset.sh && DRY_RUN=${DRY_RUN} ~/oe-reset/ops/daily-kafka-reset.sh"
         '''
       }
     }

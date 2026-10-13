@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+export KAFKA_LOG4J_OPTS="-Dlog4j.configuration=file:{{ item.mdir }}/log4j.properties"
+exec "{{ oe_kbin }}/kafka-mirror-maker"   --consumer.config "{{ item.mdir }}/consumer.properties"   --producer.config "{{ item.mdir }}/producer.properties"{% if item.commit_interval | string | length > 0 %}   --offset.commit.interval.ms {{ item.commit_interval }}{% endif %}   --whitelist '{{ item.topic | regex_replace('\.', '\\.') }}' --num.streams 1

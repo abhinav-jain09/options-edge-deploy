@@ -177,14 +177,41 @@ services:
   # es-aggressor-flow: PRODUCTION ONLY (dev has no ES feed). On prod it publishes only the
   # Kyle-style signed-flow response slope; the legacy absorption label is switched off there.
   - { name: es-aggressor-flow,            managedBy: standalone, sliceGenerated: true, envs: [production],      image: options-edge-es-aggressor-flow,            deployments: [es-aggressor-flow-service] }
-  # es-trade-linearizer: PRODUCTION ONLY, same reason (dev has no ES feed). It republishes
+  # es-trade-linearizer: dev+prod since 2026-10-07 (dev's databento feed DOES write underlying.es.trades, 32 partitions,
+  # same as prod; the dev overlay patches ES_LINEARIZER_BOOTSTRAP_SERVERS to the env-local broker). It republishes
   # underlying.es.trades in one durable total order onto a single-partition tape so the slope
   # above can run at all. PUBLISHES under the APPEND late policy — ES_LINEARIZER_OUTPUT_ENABLED=true in the manifest.
-  - { name: es-trade-linearizer,          managedBy: standalone, sliceGenerated: true, envs: [production],      image: options-edge-es-trade-linearizer,          deployments: [es-trade-linearizer-service] }
+  - { name: es-trade-linearizer,          managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-es-trade-linearizer,          deployments: [es-trade-linearizer-service] }
+  # es-compression-expansion: dev+prod SHADOW (dev since 2026-10-07) — reads the linearizer's tape plus the SPX-side
+  # evidence topics; the ES-side ones (footprint, auction) exist only on prod and are reported UNAVAILABLE on dev.
+  # No Service object; nothing reads its output (see the deployment yaml).
+  - { name: es-compression-expansion,     managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-es-compression-expansion,     deployments: [es-compression-expansion-service] }
+  # hedging-pressure: DEPLOYED HELD AT replicas 0 on dev AND production (owner turns it on later). Consumes
+  # delta-flow-by-strike, underlying.spx.price, options.databento.strike-flow and options.databento.gex.strike and
+  # publishes hedging-pressure.state (compacted) + hedging-pressure.cycle-input in ONE Kafka transaction per cycle.
+  # SINGLE replica only (a second instance with the same transactional.id fences the first). No Service object.
+  # Held down by: replicas: 0 in the base, KEEP_DOWN in morning-autostart.sh + oe-boot-bringup.sh, DISABLED_DEV in
+  # dev-cleanup.sh. HEDGING_PRESSURE_REGIMES is deliberately unset (the service then reports UNAVAILABLE(REGIME_UNSET)).
+  - { name: hedging-pressure,             managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-hedging-pressure,             deployments: [hedging-pressure-service] }
   # multileg-structure: DESCRIPTIVE co-print observation surface (options.opra.tcbbo -> ranked
   # observations + per-window status). It claims no ownership, direction or dealer attribution —
   # OPRA carries no multi-leg marker (measured 2026-08-18) — so it is a screening surface only.
   - { name: multileg-structure,           managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-multileg-structure,           deployments: [multileg-structure-service] }
+  # market-structure: RUNNING on dev and production (replicas 1). Consumes options.indicators.bars
+  # read-only (the owner's SPX 1m/5m/15m bars) and publishes options.spx.market-structure.ui — the
+  # projection the Context Tape page already validates — plus .sequence (R3's session records) and
+  # .dlq (R2's rejections), and transactional .recovery. Lifecycle and structural state are now in the UI;
+  # the broader public snapshot contract remains separate. SINGLE replica only
+  # (per-environment transactional.id). All four output/recovery topics must exist at start —
+  # scripts/kafka/ensure-market-structure-topics.sh is the first-deploy barrier and the service's own
+  # R13 boot verification refuses readiness until they match.
+  - { name: market-structure,             managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-market-structure,             deployments: [market-structure-service] }
+  # early-auction-verdict: shadow predictor of the auction desk's four selling confirmations
+  # (EARLY-AUCTION-VERDICT-STAGE1-GATE1.md rev 18a). HELD AT replicas 0 everywhere: the pod
+  # cannot even start before the verifier-produced lock ConfigMap exists (EAV-R2a fail-closed
+  # boot), and EAV-R17's emission floor blocks any non-dev enable. Reads the auction + witness
+  # topics read-only; writes only early-auction.verdicts.shadow (1 partition, retention -1).
+  - { name: early-auction-verdict,        managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-early-auction-verdict,        deployments: [early-auction-verdict-service] }
   # stock-gex: SPX-500 single-stock GEX (Databento equity options; NO Kafka). Its image builds in the
   # options-edge-databento-feed repo (Dockerfile.stockgex), like databento-sr3-feed — hence buildJob.
   # DEV-FIRST/on-demand: prod overlay holds it at replicas:0 until the nightly OI-index builder exists.
@@ -199,6 +226,8 @@ services:
   # k8s/overlays/dev/kustomization.yaml.
   - { name: oi-shadow,                    managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-oi-shadow,                    deployments: [oi-shadow-service] }
   - { name: vix-option-inteligence,        managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-vix-option-inteligence,        deployments: [vix-option-inteligence-service] }
+  # the dedicated v7 research writer (increment 9e): the SAME image, its own Deployment at replicas 0; activated only by Jenkinsfile.zerodte-writer-activate
+  - { name: zerodte-research-writer,       managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-vix-option-inteligence,        deployments: [zerodte-research-writer] }
   - { name: greek-move-authenticity,       managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-greek-move-authenticity,       deployments: [greek-move-authenticity-service] }
   - { name: es-open-direction-postgres-writer, managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-es-open-direction-postgres-writer, deployments: [es-open-direction-postgres-writer] }
   - { name: reversal-postgres-writer,     managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-reversal-postgres-writer,     deployments: [reversal-postgres-writer] }
@@ -223,8 +252,16 @@ services:
   - { name: pin-postgres-writer,          managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-pin-postgres-writer,          deployments: [pin-postgres-writer] }
   - { name: pressure-postgres-writer,     managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-pressure-postgres-writer,     deployments: [pressure-postgres-writer] }
   - { name: spx-mission-control,          managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-spx-mission-control,          deployments: [spx-mission-control-service] }
-  # amt-order-bridge / broker-execution-service: DEPLOYED INERT (both AMT_BRIDGE_ENABLED and
-  # BROKER_EXECUTION_ENABLED are "false", replicas:0 in k8s/base — see the Deployment headers).
+  # amt-order-bridge: DEPLOYED INERT (AMT_BRIDGE_ENABLED "false", replicas:0 in k8s/base).
+  # broker-execution-service: ARMED 2026-10-11 at the account owner's instruction — PAPER + ENABLED
+  # + TRANSMIT in dev and production, so it places paper orders with no human pressing Transmit. It
+  # is STILL replicas:0 in k8s/base and still in both production hold-down lists, so arming is
+  # configuration and not execution: nothing is placed until the owner scales it up. It cannot reach
+  # a live account (LIVE has no adapter; the adapter asserts the gateway's managed-account list is
+  # exactly the pinned DU paper account on every connect). The experiment overlay stays DISARMED.
+  # ⚠ dev and production share ONE gateway and ONE pinned paper account, with SEPARATE intent
+  # ledgers — so scaling BOTH up can put two orders in that account for one desk call. See
+  # k8s/overlays/production/broker-execution-prod-env-patch.yaml.
   # Neither carries a buildJob because neither needs one: Jenkinsfile.service-deploy's
   # 'Build image (this service only)' stage reads the `image` field below, hands it to
   # options-edge-processing as BUILD_TARGET, and lets that job build the module (`mvn -pl <module> -am`).

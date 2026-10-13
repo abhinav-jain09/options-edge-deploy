@@ -1,0 +1,23 @@
+# DEV-ONLY: turns on the near-spot 0DTE SPXW semantic signal producer in the dev classifier so the
+# web UI's NEAR-SPOT chips (option-chain, strike-board, seller-activity) have records to read on dev.
+# Mirrors the production patch (strike-flow-classifier-near-spot-prod-patch.yaml): same two env
+# vars, same 3000ms causal-skew tolerance. Dev had no producer at all (topic end-offset 0 on all 32
+# partitions) because the code default is STRIKE_FLOW_NEAR_SPOT_ENABLED=false and only prod set it.
+# The flag only works with an image that contains the near-spot code (options-edge-processing
+# #952/#955, merged 2026-10-05); a dev image built before that ignores it, so redeploy with
+# BUILD_IMAGES=true. This patch does not change replicas.
+# MIRRORS k8s/services/strike-flow-classifier/overlays/dev — validate-services enforces render
+# equality; re-run scripts/deploy/generate-service-slices.sh after any change here.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: strike-flow-classifier-databento
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: strike-flow-classifier
+          env:
+            - {name: STRIKE_FLOW_NEAR_SPOT_ENABLED, value: "true"}
+            - {name: STRIKE_FLOW_NEAR_SPOT_CAUSAL_SKEW_TOLERANCE_MS, value: "3000"}

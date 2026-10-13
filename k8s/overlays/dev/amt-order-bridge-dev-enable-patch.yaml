@@ -1,0 +1,46 @@
+# DEV-ONLY: turn the auction-to-intent bridge ON.
+#
+# The base ships AMT_BRIDGE_ENABLED=false — it reads the desk and publishes nothing. Dev enables it so
+# an auction market theory signal becomes a trading.order.intent, which broker-execution-service then
+# places as a paper order. Without this the intent topic stays empty and the execution service has
+# nothing to act on, however many replicas it has.
+#
+# It is NOT enabled in the base: production shares dev's one gateway and one pinned paper account with
+# a SEPARATE intent ledger, so an armed bridge there would start producing intents the moment anything
+# scaled it, and two placers against one account put two orders in it for one desk call.
+#
+# NAME-KEYED strategic merge, deliberately. An env/N json6902 patch silently lands on whichever
+# variable has drifted into that index — this repository has the dealer-ledger heap landing on
+# QUOTE_STALE_MS from exactly that mistake.
+#
+# It DOES move AMT_BRIDGE_ENABLED to the head of the env list (review corrected me — I had written
+# that it does not reorder). That is harmless: Kubernetes env is a set keyed by name, not an ordered
+# list, and the other five variables keep their values. It is recorded because the claim was wrong,
+# not because the effect matters.
+# It ALSO switches the desk's CLOSES off (AMT_BRIDGE_EXIT_ENABLED=false), owner decision 2026-10-12.
+# The first exit the engine ever issued live closed a short 7800/7790 put spread for a 2.35 debit
+# against the 1.55 credit it was entered at — a realised $80 loss — and the index then settled at
+# 7807.79, where both legs expire worthless and holding would have kept the full $155. That one exit
+# cost $235 and turned the day's strategy result from +$285 gross into +$50. Entries are unaffected.
+#
+# What this gives up, stated plainly: the engine's MANDATORY exit, raised when price is accepted beyond
+# the very level the spread is short against, is not sent either, so a trade whose thesis has broken
+# runs to its maximum loss instead of being cut. A 0DTE vertical's loss is bounded by its width either
+# way, and the owner would rather keep the credit on the ones that hold.
+#
+# The service DEFAULTS closes to ON, so this file is the only thing switching them off — an omitted or
+# misspelled variable leaves the desk able to close, which is the safer way round for a typo to fail.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: amt-order-bridge
+spec:
+  template:
+    spec:
+      containers:
+        - name: amt-order-bridge
+          env:
+            - name: AMT_BRIDGE_ENABLED
+              value: "true"
+            - name: AMT_BRIDGE_EXIT_ENABLED
+              value: "false"

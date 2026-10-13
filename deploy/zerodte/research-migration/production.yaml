@@ -1,0 +1,11 @@
+# 0DTE Stage-B research-store MIGRATION declaration — production (design "BUILD decisions for increment 9", Q2 / Q5 / Q9; validated by
+# scripts/ci/validate-zerodte-research-migration.sh). The migration itself is the service image's ZeroDteResearchMigrator; this file is
+# the REVIEWED statement of what that run may do: which versions, which shipped calendar (its version digest — the image must ship exactly
+# it; a corrected calendar is a NEW reviewed migration), and how far ahead the calendar must reach. The calendarVersion is QUOTED: YAML
+# would read an all-digit scalar as a number.
+schemaVersion: 1
+fromVersion: 6
+toVersion: 7
+calendarVersion: "537d6b144261d77639f67df326f529a8c5ee184a9e9de68fc2f79926153c67c3"
+expectedSessionsAhead: 60
+operator: abhinav.jain

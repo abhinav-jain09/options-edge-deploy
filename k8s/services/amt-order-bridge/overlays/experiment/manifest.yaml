@@ -46,6 +46,8 @@ spec:
               value: amt-order-bridge
             - name: AMT_BRIDGE_ENABLED
               value: "false"
+            - name: AMT_BRIDGE_EXIT_ENABLED
+              value: "true"
             - name: AMT_BRIDGE_INTENT_VALID_MS
               value: "600000"
           envFrom:

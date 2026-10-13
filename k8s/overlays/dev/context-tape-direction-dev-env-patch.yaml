@@ -38,6 +38,11 @@ spec:
             - { name: ZERO_DTE_ES_TOPIC, value: "underlying.es.trades" }
             - { name: ZERO_DTE_ES_SYMBOL, value: "ES.v.0" }
             - { name: ZERO_DTE_OPTION_TOPIC, value: "options.databento.gex.strike" }
+            # ES BOX view (2026-10-07): the es-compression-expansion-service state record served to the Context
+            # Tape page from the shadow's compacted topic on THIS broker. Read-only projection; roll back by
+            # setting the flag false and redeploying the same reviewed manifests.
+            - { name: ES_BOX_VIEW_ENABLED, value: "true" }
+            - { name: KAFKA_ES_BOX_TOPIC, value: "es.futures.compression-expansion.current" }
             - { name: ZERO_DTE_CURRENT_TOPIC, value: "context-tape.compression.current" }
             - { name: ZERO_DTE_HISTORY_TOPIC, value: "context-tape.compression.history" }
             - { name: ZERO_DTE_CHECKPOINT_TOPIC, value: "context-tape.compression.checkpoint" }

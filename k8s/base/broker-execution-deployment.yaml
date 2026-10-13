@@ -11,6 +11,11 @@ spec:
   # Deployed INERT. BROKER_EXECUTION_MODE=SHADOW places nothing and connects to no broker; ENABLED=false
   # refuses every intent. Turning this into something that trades is three values below, set by the account
   # owner — not by this manifest landing.
+  # DEV IS NO LONGER HELD DOWN (2026-10-11): the dev overlay lifts this to 1 replica and
+  # scripts/ops/dev-cleanup.sh no longer lists it in DISABLED_DEV, so dev's full start brings it up.
+  # The lists below are the PRODUCTION paths (morning-autostart.sh, oe-boot-bringup.sh) and production
+  # stays down. Note dev's post-clean OVERNIGHT_SET still excludes it, so after a clean it returns at
+  # the 06:15 full start rather than overnight.
   # replicas 0 — but the hold that MATTERS is the entry in the three ops lists, because a replica count
   # in a manifest is not a hold by itself. All three list this service, and each reaches it by its own
   # route — do not assume one shape covers all three:
@@ -76,17 +81,31 @@ spec:
               value: trading.order.status
             - name: BROKER_EXECUTION_CONSUMER_GROUP
               value: broker-execution-service
-            # --- the three values that decide whether anything is placed (OWNER SETS THESE) ---
+            # --- the values that decide whether anything is placed (OWNER SETS THESE) ---
+            # Armed 2026-10-11 at the account owner's instruction: PAPER + ENABLED + TRANSMIT. This now
+            # places paper orders WITHOUT a human pressing Transmit. It still cannot reach a live account:
+            # LIVE has no adapter and is refused at startup, and the adapter asserts the gateway's
+            # managed-account list is exactly the DU paper account on every connect.
             - name: BROKER_EXECUTION_MODE
-              value: "SHADOW"          # SHADOW records tickets; PAPER connects to the paper gateway
+              value: "PAPER"           # SHADOW records tickets; PAPER connects to the paper gateway
             - name: BROKER_EXECUTION_ENABLED
-              value: "false"           # false refuses every intent
+              value: "true"            # false refuses every intent
             - name: BROKER_EXECUTION_TRANSMIT
-              value: "false"           # false stages the order for a human to transmit
+              value: "true"            # false stages the order for a human to transmit
+            # Which deployment caused a ticket. The paper account is PINNED and therefore SHARED by dev and
+            # production, so without this the account's own order list cannot tell them apart. It rides
+            # Interactive Brokers' orderRef and is shown against the order in Trader Workstation. PAPER
+            # REFUSES TO START without it, so a manifest that arms the mode and forgets the label does not
+            # trade — it fails to boot. Base carries the dev name; production overrides it in
+            # k8s/overlays/production/broker-execution-prod-env-patch.yaml.
+            - name: BROKER_EXECUTION_ENVIRONMENT
+              value: "dev"
             # --- IB GATEWAY PAPER. 4002 is paper; 4001 (in the configmap as IB_PORT) is LIVE. The adapter
             #     also asserts the gateway's managed-account list is exactly the DU account below. ---
+            # host.docker.internal, NOT 127.0.0.1: inside a pod, loopback is the POD, and the gateway runs
+            # on the Mac that hosts the dev cluster. Verified 2026-10-11 reachable on 4002 from a container.
             - name: BROKER_EXECUTION_IBKR_HOST
-              value: "127.0.0.1"
+              value: "host.docker.internal"
             - name: BROKER_EXECUTION_IBKR_PORT
               value: "4002"
             - name: BROKER_EXECUTION_IBKR_CLIENT_ID
@@ -94,8 +113,16 @@ spec:
             - name: BROKER_EXECUTION_PAPER_ACCOUNT
               value: "DUQ287805"
             # --- bounds ---
+            # MAX_QUANTITY caps ONE order's quantity, not the number of orders a session can place —
+            # review was right that this manifest declared no money bound at all. MAX_CREDIT is stated
+            # here explicitly at the value the code already defaults to, so the ceiling is visible
+            # where an operator looks rather than only in BrokerExecutionSettings. Lowering it is a
+            # trading decision for the account owner, not a deployment one; a malformed value stops
+            # the service rather than becoming the default.
             - name: BROKER_EXECUTION_MAX_QUANTITY
               value: "1"
+            - name: BROKER_EXECUTION_MAX_CREDIT
+              value: "100.0"
             - name: BROKER_EXECUTION_REPRICE_MS
               value: "3000"
             - name: BROKER_EXECUTION_CHASE_MS

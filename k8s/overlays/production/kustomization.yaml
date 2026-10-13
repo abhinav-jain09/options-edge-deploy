@@ -24,8 +24,21 @@ resources:
   # Kyle-style signed-flow response slope (a neutral observability measurement, not a signal).
   # The es4 deployment at k8s/es4/services/ is untouched and keeps the legacy output.
   - ../../services/es-aggressor-flow/base
-  # es-trade-linearizer: PROD-ONLY for the same reason; es-aggressor-flow's slope reads its tape.
+  # es-trade-linearizer: dev+prod since 2026-10-07 (dev's feed does write underlying.es.trades); es-aggressor-flow's
+  # slope and es-compression-expansion read its tape.
   - ../../services/es-trade-linearizer/base
+  # es-compression-expansion: dev+prod SHADOW since 2026-10-07 — it reads the linearizer's tape.
+  - ../../services/es-compression-expansion/base
+  # hedging-pressure: dev+prod, HELD AT replicas 0 (base). Reads delta-flow / spot / strike-flow / gex topics, publishes
+  # its own state + cycle-input topics (see the base manifest). Owner turns it on later.
+  - ../../services/hedging-pressure/base
+  # market-structure: dev+prod at replicas 1. Reads options.indicators.bars read-only and publishes
+  # options.spx.market-structure.ui (the Context Tape projection), .sequence and .dlq. Single replica
+  # only (per-environment transactional.id).
+  - ../../services/market-structure/base
+  # early-auction-verdict: HELD AT replicas 0 (shadow; EAV-R17 blocks any non-dev enable
+  # until the emission floor is proven reachable on dev).
+  - ../../services/early-auction-verdict/base
   # nifty-gex: the NIFTY/BANKNIFTY Pressure boards (DhanHQ), public via cloudflared path
   # routes to NodePort 30188. STANDALONE overlay k8s/services/nifty-gex/overlays/production
   # mirrors the prod patches — sync enforced by validate-services render equivalence.
@@ -42,6 +55,43 @@ resources:
 # cached image (no pull, no throttle). Dev keeps Always so it always picks up a
 # freshly-built :dev image.
 patches:
+  # PROD-ONLY: the environment name every order broker-execution-service places carries as the broker's
+  # orderRef. The paper account is pinned in code and therefore SHARED by dev and production, so the label is
+  # the only thing in that account's order list that attributes a ticket. PAPER refuses to start without it.
+  - path: broker-execution-prod-env-patch.yaml
+    target:
+      kind: Deployment
+      name: broker-execution-service
+  # PROD-ONLY: hedging-pressure's own transactional.id (held at replicas 0; the base carries the dev id).
+  # MIRRORS k8s/services/hedging-pressure/overlays/production — the slice generator renders it from here.
+  - path: hedging-pressure-prod-env-patch.yaml
+    target:
+      kind: Deployment
+      name: hedging-pressure-service
+  # PROD-ONLY: market-structure's own transactional.id (the base carries the dev id).
+  # MIRRORS k8s/services/market-structure/overlays/production — the slice generator renders it from here.
+  - path: early-auction-verdict-prod-env-patch.yaml
+    target:
+      kind: Deployment
+      name: early-auction-verdict-service
+  - path: market-structure-prod-env-patch.yaml
+    target:
+      kind: Deployment
+      name: market-structure-service
+  # PROD-ONLY: calibrate vol-premium with the gen4 reconstructed NAS-year baseline and promote the
+  # UI out of shadow (owner Gate-1 §9 decision, 2026-10-10).
+  # MIRRORS k8s/services/vol-premium/overlays/production — the slice generator renders it from here.
+  - path: vol-premium-prod-env-patch.yaml
+    target:
+      kind: Deployment
+      name: vol-premium-service
+  # PROD-ONLY: turns on the near-spot 0DTE SPXW semantic signal's live producer — ES
+  # compression-expansion's forward read (#1149) has been reading an empty topic since it merged.
+  # MIRRORS k8s/services/strike-flow-classifier/overlays/production — validate-services enforces it.
+  - path: strike-flow-classifier-near-spot-prod-patch.yaml
+    target:
+      kind: Deployment
+      name: strike-flow-classifier-databento
   # PROD-ONLY: the deployment environment name Stage-B requires and the research writer already reads.
   # MIRRORS k8s/services/vix-option-inteligence/overlays/production — the slice generator renders it from here.
   - path: vix-option-inteligence-prod-env-patch.yaml
@@ -80,6 +130,12 @@ patches:
         value:
           name: VITE_ZERO_DTE_COMPRESSION_ENABLED
           value: "true"
+      # ES BOX layer on /context-tape (2026-10-07): the es-compression-expansion shadow view.
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: VITE_ES_BOX_ENABLED
+          value: "true"
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value:
@@ -98,6 +154,14 @@ patches:
             secretKeyRef:
               name: options-edge-runtime-secrets
               key: POSTGRES_PASSWORD
+      # PROD-ONLY: promote the Implied-vs-Realised panel out of SHADOW. /api/config reads this
+      # from the web pod's env (System.getenv); the vol-premium engine is CALIBRATED on gen4.
+      # MIRRORS k8s/services/web/overlays/production exactly.
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: VOL_PREMIUM_UI_ACTIVATED
+          value: "true"
   # PROD-ONLY: the ES GEX strike topic for the databento display service. MIRRORS the standalone
   # slice k8s/services/raw-to-display/overlays/production, which #714 added it to without the
   # matching top-level patch — validate-services caught the drift and blocked every deploy.
@@ -347,9 +411,12 @@ patches:
                 resources:
                   limits:
                     memory: 8Gi
-                  # RAISED 2Gi -> 6Gi (2026-10-06, with the prod replicas lift below), so the
-                  # request matches the heap this container is configured with instead of a third of
-                  # it.
+                  # RAISED 2Gi -> 6Gi (2026-10-06) so the request matches the heap this container
+                  # is configured with instead of a third of it. This OUTLIVED the prod replicas lift
+                  # it shipped with: that lift is reverted (the ledger runs on .74, not prod — see
+                  # k8s/base), but a 6GB-heap container described to the scheduler as a 2GB one is
+                  # wrong independently of whether it is currently scheduled, and it is what es4 and
+                  # any future re-enable would inherit.
                   #
                   # THE RECORD, not a prediction. Two sizings of this container have failed in
                   # production, in opposite directions:
@@ -379,41 +446,12 @@ patches:
                   # the measured node, and the two recorded failures. A repeat of the 09-10 kill is not
                   # excluded by anything in this file.
                   #
-                  # ABORT if the node comes under pressure with this running:
-                  #   kubectl -n options-edge scale deploy/dealer-ledger-service --replicas=0
+                  # This deployment is HELD AT 0 on prod. If it is ever scaled up again and the node
+                  # comes under pressure, scaling it back to 0 must go through Jenkins: the
+                  # options-edge-jenkins-only-workloads ValidatingAdmissionPolicy denies a direct
+                  # `kubectl scale` to every principal except the jenkins-deployer ServiceAccount.
                   requests:
                     memory: 6Gi
-  # PROD REPLICAS LIFT (USER 2026-10-06: "start the dealer ledger on prod so it produces a verdict").
-  # This lifts the 2026-09-10 "until further notice" hold (#1034) on PRODUCTION ONLY. The base stays
-  # replicas:0, so dev and experiment stay held and this Mac never starts a 6GB-heap JVM; es4 is
-  # unaffected (the family has been in ES4_KEEP_DOWN since 2026-08-18).
-  #
-  # WHY IT IS NEEDED. close-direction-service's prod verdict is NO_VERDICT_DATA_FAILURE with
-  # failureReasons [PROFILE_ABSENT, SPOT_MISSING, CHARM_UNSTABLE] and direction UNKNOWN. Those three
-  # are ONE cause: `dealer-ledger-profile` is close-direction's only profile input, onProfile is the
-  # only writer of the engine's spotTicks, and charmQuality(null) is UNSTABLE by construction. The
-  # topic is empty because this deployment has not been Available since 2026-09-10. Every other link
-  # in the chain already starts automatically.
-  #
-  # WHY IT TAKES THIS PATCH AND NOT ONLY THE KEEP_DOWN LISTS. #1034 closed four paths; a hand-scale or
-  # a KEEP_DOWN edit alone reaches two of them. `kubectl apply -k` re-applies base replicas on every
-  # deploy, which is what silently returned this pod to 0/0 after it was hand-scaled to 1/1 on
-  # 2026-10-05. This patch is the declarative half; scripts/ops/{oe-boot-bringup,morning-autostart}.sh
-  # KEEP_DOWN removal is the scheduler half. dev-cleanup.sh DISABLED_DEV is deliberately NOT touched.
-  #
-  # WHAT THIS DOES NOT CLAIM. close-direction reports calibration=UNCALIBRATED, and this repo's own
-  # studies found the ledger's DIRECTION dead across four designs and concluded it cannot be
-  # calibrated as built. This makes a verdict appear where there was none; it does not make it
-  # trustworthy. Verification to take at the next RTH open, not asserted here: `dealer-ledger-profile`
-  # advances, pod RSS against the 6Gi request, and node `free` through 13:00-13:30 ET (the window of
-  # the 09-10 kill).
-  - target:
-      kind: Deployment
-      name: dealer-ledger-service
-    patch: |-
-      - op: replace
-        path: /spec/replicas
-        value: 1
   # PROD enable of the top-N gate (proc PR #466/#467, requirement 2026-07-22; dev-verified first per
   # rollout decision): fade (gamma-flow) + lifecycle (EMERGING/STICKY/FADING) compute ONLY the top-3
   # |netGex| strikes per chain — the rest are gated BEFORE those calculations. Stage-1 per-strike netGex

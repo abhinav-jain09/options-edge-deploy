@@ -44,7 +44,14 @@ KEEP='keycloak'                                          # deployments to leave 
 # stock-gex-service is PROD-ONLY (USER 2026-08-18): the public Gamma Lab page reads it there,
 # and it pulls straight from Databento (billed) rather than from Kafka — a dev copy spends
 # money serving a page dev does not host, and it was sitting at 0/1 on dev anyway.
-DISABLED_DEV='hpsf-stage-a-service|hpsf-stage-b-service|volume-pace-service|volume-pace-databento-service|volume-sandwich-service|volume-sandwich-databento-service|databento-timewarp-snapshot-replay|strike-flow-classifier-ibkr|options-edge-integration-test|databento-mission-pressure-service|databento-mission-pace-service|spx-mission-control-service|short-premium-agent-service|spread-skew-service|spread-skew-postgres-writer|directional-pressure-databento-service|databento-maxpain-service|databento-mission-sandwich-service|directional-pressure-service|option-truth-engine-service|stock-gex-service|dealer-ledger-service|dealer-ledger-calibration-scorer|dealer-ledger-calibration-accumulator|vix-option-inteligence-service|broker-execution-service|amt-order-bridge'
+# 2026-10-11: broker-execution-service and amt-order-bridge REMOVED from this set so the
+# auction-to-paper-order chain survives a clean. They are lifted to 1 replica in the DEV
+# OVERLAY (k8s/overlays/dev/kustomization.yaml), not in the shared base — production keeps 0
+# because it shares dev's one gateway and one pinned paper account with a separate intent
+# ledger. Lifting replicas WITHOUT this edit would have them come up and be pinned straight
+# back to 0 by the scale-up loop below, which is #1034's lesson about closing only some of
+# the hold paths.
+DISABLED_DEV='hpsf-stage-a-service|hpsf-stage-b-service|volume-pace-service|volume-pace-databento-service|volume-sandwich-service|volume-sandwich-databento-service|databento-timewarp-snapshot-replay|strike-flow-classifier-ibkr|options-edge-integration-test|databento-mission-pressure-service|databento-mission-pace-service|spx-mission-control-service|short-premium-agent-service|spread-skew-service|spread-skew-postgres-writer|directional-pressure-databento-service|databento-maxpain-service|databento-mission-sandwich-service|directional-pressure-service|option-truth-engine-service|stock-gex-service|dealer-ledger-service|dealer-ledger-calibration-scorer|dealer-ledger-calibration-accumulator|vix-option-inteligence-service|hedging-pressure-service'
 # OVERNIGHT ES-tracking set — the ONLY services brought up right after the (17:20 ET, trading days) clean,
 # so ES futures are tracked overnight. Everything else stays at 0 until the 06:15 ET full start. (2026-08-03: was 07:30)
 # databento-feed + databento-gex-service are kept alive overnight so the pre-market LIVE OI path runs before
@@ -98,6 +105,23 @@ LOG=/Users/abhinav/oe-ops/dev-cleanup.log
 LAUNCH_AGENTS_DIR="${LAUNCH_AGENTS_DIR:-$HOME/Library/LaunchAgents}"
 LAUNCHCTL="${LAUNCHCTL:-launchctl}"
 DEV_MIRRORS_PAUSED="${DEV_MIRRORS_PAUSED:-/Users/abhinav/oe-ops/.dev-mirrors-paused}"
+# How long a resumed mirror must hold the SAME pid before it counts as running.
+DEV_MIRROR_SETTLE_S="${DEV_MIRROR_SETTLE_S:-5}"
+# How long to wait for a resumed mirror to reach a pid at all. 60s because 14 JVMs starting
+# together on a Mac at load ~24 can take well over 10s, and calling a healthy mirror failed is
+# its own outage. Overridable so the CI gate does not spend a minute per case.
+DEV_MIRROR_WAIT_S="${DEV_MIRROR_WAIT_S:-60}"
+# Set when a resume did not bring every mirror back. Reported at exit so a clean that left dev
+# reading frozen topics cannot exit 0; deliberately NOT a mid-clean abort, which would leave the
+# wipe half-applied and is a worse failure than a frozen mirror.
+DEV_MIRRORS_RESUME_FAILED=0
+
+# The RUNNING pid of a launchd label, or empty. Prints only a numeric pid: `launchctl list` shows '-'
+# in that column for a job that is loaded but not running, and the label is matched with an exact
+# field comparison so a label containing whitespace cannot shift the column being read.
+mirror_agent_pid() {
+  "$LAUNCHCTL" list 2>/dev/null | awk -v l="$1" '$3 == l && $1 ~ /^[0-9]+$/ { print $1; exit }'
+}
 DEV_MIRROR_TARGET_RE='^bootstrap\.servers=(127\.0\.0\.1|localhost):19092[[:space:]]*$'
 
 # "label plist" for every com.optionsedge agent with a ProgramArguments entry whose directory holds a
@@ -175,15 +199,49 @@ resume_dev_mirrors() {
       continue
     fi
     "$LAUNCHCTL" bootstrap "gui/$uid" "$plist" >/dev/null 2>&1   # non-zero when already loaded; judged below
-    if "$LAUNCHCTL" list "$label" >/dev/null 2>&1; then
-      n=$((n + 1))
-    else
+    # ⚠ A RUNNING PID, not `launchctl list <label>`. That exits 0 for a job that is merely
+    # REGISTERED with nothing running — measured on this Mac 2026-10-12: 34 com.optionsedge.* agents
+    # were loaded with no pid at all. So this check was satisfied by registration, counted every
+    # agent as resumed, deleted the pause list, and let the clean report SUCCESS while the es4 -> dev
+    # mirrors were not running. That is how dev spent a night with all 14 mirrors down, every
+    # mirrored topic frozen and every downstream dev service reading stale data while looking
+    # healthy; the auction mirror had logged a clean shutdown at 05:44 and no process existed.
+    # The pid column is the only thing that tells those two states apart.
+    # A SETTLED pid, not the first one seen. Review was right that the first version was a
+    # point-in-time liveness observation: a JVM that starts, gets a pid and then dies in a KeepAlive
+    # restart loop passes on its brief pid window, and the retry list is then deleted while the
+    # mirror is down moments later. So: wait up to 60s for a NUMERIC pid (14 JVMs starting together
+    # on a Mac at load ~24 can take well over 10s — the old budget would have called a healthy
+    # mirror failed), then require the SAME pid still present after a settle, which a respawn loop
+    # cannot satisfy because each restart issues a new pid.
+    local pid="" pid2="" waited=0
+    while [ "$waited" -lt "$DEV_MIRROR_WAIT_S" ]; do
+      pid=$(mirror_agent_pid "$label")
+      case "$pid" in '') waited=$((waited + 2)); sleep 2 ;; *) break ;; esac
+    done
+    if [ -n "$pid" ]; then
+      sleep "$DEV_MIRROR_SETTLE_S"
+      pid2=$(mirror_agent_pid "$label")
+    fi
+    if [ -z "$pid" ]; then
       failed=$((failed + 1))
-      echo "   WARN: mirror agent $label did not load"
+      echo "   FAIL: mirror agent $label is NOT RUNNING — no pid within ${DEV_MIRROR_WAIT_S}s"
+    elif [ "$pid2" != "$pid" ]; then
+      failed=$((failed + 1))
+      echo "   FAIL: mirror agent $label is NOT RUNNING stably — pid $pid became '${pid2:--}' after ${DEV_MIRROR_SETTLE_S}s (restart loop)"
+    else
+      n=$((n + 1))
     fi
   done < "$DEV_MIRRORS_PAUSED"
   [ "$failed" -eq 0 ] && rm -f "$DEV_MIRRORS_PAUSED"
-  echo "   resumed $n es4->dev mirror agent(s)"
+  if [ "$failed" -gt 0 ]; then
+    echo "   resumed $n es4->dev mirror agent(s), $failed NOT RUNNING"
+  else
+    echo "   resumed $n es4->dev mirror agent(s)"
+  fi
+  # Return the verdict. This function used to end on an echo, so it ALWAYS returned 0 and a total
+  # failure to resume was indistinguishable from success to every caller.
+  [ "$failed" -eq 0 ]
 }
 
 # ---------- LOGS: safe, non-destructive (no topic/state data touched) ----------
@@ -448,7 +506,20 @@ ensure_topics() {
 # (list kept) until a later start/overnight run whose ensure_topics succeeds.
 resume_dev_mirrors_if_declared() {
   if [ "$1" -eq 0 ]; then
-    resume_dev_mirrors
+    if ! resume_dev_mirrors; then
+      # LOUD, because silent is exactly what happened. With the mirrors down, es4 -> dev carries
+      # nothing and every downstream dev service reads a frozen topic while reporting healthy.
+      echo "   ERROR: es4->dev mirrors did NOT all come back RUNNING — dev will read FROZEN es4"
+      echo "          topics until they do. Recover with:"
+      echo "            launchctl load -w ~/Library/LaunchAgents/com.optionsedge.*127-0-0-1-19092*.plist"
+      echo "          then confirm each has a PID (not '-'): launchctl list | grep 127-0-0-1-19092"
+      # RECORDED, so the script's own exit status says it. My first version ended this branch on an
+      # echo, so the wrapper returned 0 and every caller — and cron, and Jenkins — still saw success
+      # while the mirrors were down. That is the same "a failure nobody can read" shape as the bug
+      # being fixed, one level up.
+      DEV_MIRRORS_RESUME_FAILED=1
+      return 1
+    fi
   elif [ -s "$DEV_MIRRORS_PAUSED" ]; then
     echo "   WARN: es4->dev mirrors stay PAUSED — topics.env was not applied (list: $DEV_MIRRORS_PAUSED)"
   fi
@@ -998,7 +1069,17 @@ PY
     # older than delete.retention.ms, can legitimately lose it. So: safe for the declared contract,
     # not unconditionally safe for an arbitrary reader — check what reads a topic before widening
     # this to one whose history someone depends on.
-    ensure_topics
+    ensure_topics; resume_dev_mirrors_if_declared $?
     ;;
   *) echo "usage: dev-cleanup [ | now | start | overnight | topics | logs ]  (no arg = calendar-gated auto for launchd)"; exit 2 ;;
 esac
+
+# EXIT STATUS CARRIES THE MIRROR VERDICT. A clean that finished its work but left the es4 -> dev
+# mirrors down must not exit 0: cron and Jenkins read only this number, and the night this was
+# written they read 0 while every mirrored dev topic was frozen. The work is already complete by
+# this point, so this REPORTS rather than aborts — a mid-clean abort would leave the wipe
+# half-applied, which is worse than a frozen mirror.
+if [ "${DEV_MIRRORS_RESUME_FAILED:-0}" != 0 ]; then
+  echo "dev-cleanup: FINISHED WITH FROZEN MIRRORS — es4 -> dev is not flowing (see the ERROR above)"
+  exit 3
+fi

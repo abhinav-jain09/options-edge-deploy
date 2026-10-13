@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+# PHASE 2 of replacing a unit: start it on the files just installed, and PROVE the replacement.
+# `launchctl load` of a unit that is already loaded is a no-op, and a load that FAILS leaves whatever
+# was running — whose command line still names this unit's producer.properties, so a
+# "bound to the right config" check alone would report success for a mirror that never restarted.
+# WHAT THIS PROVES, AND FOR HOW LONG: a snapshot, taken OE_RELOAD_SETTLE seconds after the load —
+# that one process is publishing this unit's config, that it is the pid launchd reports, and that it
+# is not the pid phase 1 stopped. It says nothing about the minutes after that: a unit that dies
+# later is KeepAlive's business and the next plan's (a process younger than its files reads as a
+# difference). Continued health is not something a one-shot install can assert.
+# OE_OLD_PID is the pid PHASE 1 stopped (empty for a first install); OE_RELOAD_SETTLE lets the guard
+# test drive this with no wait, and defaults to the 8s a real unit needs before launchctl reports one.
+set -uo pipefail
+# Every value rendered into this script is shell-QUOTED with Ansible's quote filter. These are
+# operator-supplied through extra vars (ops_dir, launch_agents_dir, kafka_bin, the target), and a
+# double-quoted Jinja interpolation (no quote filter) let a crafted value run shell BEFORE the guard
+# below — a `bash() { return 0; }` function defined that way would have made every guard call succeed.
+PL={{ item.plist | quote }}; LBL={{ item.label | quote }}; MDIR={{ item.mdir | quote }}
+TGT={{ item.target | quote }}; RE={{ item.topic | regex_replace('\.', '\\.') | quote }}
+REPO={{ (playbook_dir ~ "/..") | quote }}
+
+# THE PRODUCTION LOCK, repeated here because a variable cannot carry it. An Ansible extra var
+# outranks every var, fact and register, so `-e oe_stop='{"rc":0}'` (or oe_diff, or
+# oe_prod_permitted) can make this task's conditions true however the previous phase ended. Each
+# path that stops, WRITES or starts a unit therefore re-runs the repository's own permitted-commit
+# guard itself for the production target, with the version hash written out literally.
+if [ "$TGT" = "192.168.100.252:9092" ]; then
+  if ! ( cd "$REPO" && PERMITTED_SHA="${PERMITTED_SHA:-}" \
+         PERMITTED_SHA_GUARD_VERSION="2f6fc2ab7aa51eb8a9e8aa350f2d774cd2fb7a253de2591e43645a19a9886b24" \
+         bash scripts/jenkins/permitted-sha-guard.sh ); then
+    echo "FAIL: the permitted-commit guard REFUSED this PRODUCTION unit — nothing has been loaded"
+    exit 1
+  fi
+fi
+
+OLD="${OE_OLD_PID:-}"; SETTLE="${OE_RELOAD_SETTLE:-8}"
+
+# launchctl's own status matters: an unreadable list is not an unloaded unit. Returning empty there
+# would let the stop phase conclude the unit is gone and write files under a still-registered,
+# KeepAlive job — so this RETURNS non-zero and every call site checks it.
+pid_of() {
+  local out
+  out=$(launchctl list) || { echo "FAIL: cannot read launchctl list — refusing, because an unreadable job table is indistinguishable from an unloaded unit" >&2; return 1; }
+  printf '%s\n' "$out" | awk -v l="$LBL" '$3==l{print $1}'
+  return 0
+}
+procs_of() {
+  local all
+  all=$(ps -axo pid=,command=) || { echo "FAIL: cannot enumerate processes (ps failed) — cannot prove this unit is the only mirror for its topic" >&2; return 1; }
+  # an EMPTY result is the healthy case, not a failure: grep exiting 1 on no match must not become
+  # this function's status, or a unit with nothing running would read as unreadable
+  printf '%s\n' "$all" | grep -- "--producer.config $MDIR/producer.properties" | grep -v grep | awk '{print $1}'
+  return 0
+}
+
+# PREFLIGHT, before the load: no OTHER mirror may already be carrying this (topic, target) from a
+# different unit directory. Two such processes duplicate every record — and detecting it AFTER the
+# load left the new, KeepAlive-managed process running, which is the opposite of what the check is
+# for. The target is read from each candidate's own producer config, because the same source topic IS
+# legitimately mirrored to dev and to production at once.
+# The match is against UNQUOTED argv: run-mirror.sh writes --whitelist 'es\.futures\.cvd', but the
+# shell strips those quotes, so `ps` shows --whitelist es\.futures\.cvd. Matching the quoted form
+# found NOTHING on a real machine — and the stub in the guard test had encoded the quotes too, so the
+# test certified a dead check. The quotes are stripped from the line before matching.
+foreign_dupes() {
+  local all out=""
+  all=$(ps -axo pid=,command=) || { echo "FAIL: cannot enumerate processes (ps failed) — cannot prove this is the only mirror for this topic and target" >&2; return 1; }
+  while read -r pid cfg; do
+    [ -n "${cfg:-}" ] || continue
+    [ "$cfg" = "$MDIR/producer.properties" ] && continue
+    if grep -qx "bootstrap.servers=$TGT" "$cfg" 2>/dev/null; then out="$out $pid"; fi
+  done <<EOFD
+$(printf '%s\n' "$all" | tr -d "'" | grep -F -- "--whitelist $RE" | grep -v grep \
+   | sed -E 's/^[[:space:]]*([0-9]+).*--producer\.config[[:space:]]+"?([^"[:space:]]+)"?.*/\1 \2/')
+EOFD
+  printf '%s' "$out"
+  return 0
+}
+PRE=$(foreign_dupes) || exit 1
+if [ -n "$PRE" ]; then
+  echo "FAIL: another mirror is already publishing $RE to $TGT from a different unit directory (pid(s):$PRE) — nothing has been loaded; two mirrors on one topic duplicate every record"
+  exit 1
+fi
+
+if ! launchctl load "$PL"; then
+  echo "FAIL: launchctl load $PL failed — the unit is DOWN and its new configuration is not running"
+  exit 1
+fi
+# From here on the unit is LOADED, so every refusal below must put that back: launchd would keep a
+# KeepAlive job alive otherwise, which on a failed proof is a process nobody has verified.
+# The cause is printed LAST, after the undo note, so a reader (and the guard test) sees the refusal
+# that ended the run on the final line rather than a side effect of cleaning up.
+fail_loaded() { undo_load; echo "FAIL: $*"; exit 1; }
+undo_load() {
+  launchctl unload "$PL" 2>/dev/null || true
+  sleep 1
+  # The REGISTRATION is not the process — the same lesson as phase 1 — so the undo is verified both
+  # ways, and an unreadable answer is reported as unverified rather than as success.
+  local still procs lst
+  if lst=$(launchctl list 2>/dev/null); then
+    still=$(printf '%s\n' "$lst" | awk -v l="$LBL" '$3==l{print $1}')
+  else
+    echo "      AND the job table could not be read afterwards, so whether the unit is still loaded is UNKNOWN — check it by hand" >&2
+    return
+  fi
+  if ! procs=$(procs_of); then
+    echo "      AND the process table could not be read afterwards, so whether anything is still publishing this config is UNKNOWN — check it by hand" >&2
+    return
+  fi
+  if [ -n "$still" ] || [ -n "$procs" ]; then
+    echo "      AND it is STILL there after the unload (launchctl pid='$still', publishing pid(s):$procs) — it is running UNVERIFIED; stop it by hand" >&2
+  else
+    echo "      the unit was unloaded again and nothing is publishing this config, so nothing unverified is left running" >&2
+  fi
+}
+sleep "$SETTLE"
+NEW=$(pid_of) || fail_loaded "cannot read launchctl list after the load — refusing, because an unreadable job table is indistinguishable from an unloaded unit"
+case "$NEW" in
+  (*[!0-9]*|"") fail_loaded "$LBL is loaded but not running (launchctl pid='$NEW') — it did not start on the new configuration" ;;
+esac
+if [ -n "$OLD" ] && [ "$NEW" = "$OLD" ]; then
+  fail_loaded "$LBL still runs pid $NEW, the same process PHASE 1 was supposed to have stopped — the new configuration is not in effect"
+fi
+# Binding and uniqueness from ONE enumeration: exactly one process may be publishing this unit's
+# config, and it must be the pid launchd just reported. Asking `ps -p $NEW` separately needed a second
+# ps form and answered a narrower question — it could not see a SECOND mirror on the same topic.
+RUNNING=$(procs_of) || fail_loaded "cannot enumerate processes (ps failed) — cannot prove this unit is the only mirror for its topic"
+N=$(printf '%s\n' "$RUNNING" | grep -c .)
+if [ "$N" != "1" ]; then
+  fail_loaded "$N process(es) are publishing this unit's config ($(printf '%s' "$RUNNING" | tr '\n' ' ')) — one mirror per topic: none means it is not running on this config, two duplicate every record into the target"
+fi
+if [ "$(printf '%s\n' "$RUNNING" | head -1)" != "$NEW" ]; then
+  fail_loaded "launchd reports pid $NEW for $LBL but the process publishing this config is $(printf '%s\n' "$RUNNING" | head -1)"
+fi
+echo "started: pid ${OLD:-none} -> $NEW, bound to $MDIR, the only mirror for this topic and target"

@@ -36,6 +36,12 @@ spec:
     spec:
       containers:
         - env:
+            - name: BROKER_EXECUTION_MODE
+              value: SHADOW
+            - name: BROKER_EXECUTION_ENABLED
+              value: "false"
+            - name: BROKER_EXECUTION_TRANSMIT
+              value: "false"
             - name: HEALTH_PORT
               value: "8131"
             - name: BROKER_EXECUTION_INTENT_TOPIC
@@ -44,14 +50,10 @@ spec:
               value: trading.order.status
             - name: BROKER_EXECUTION_CONSUMER_GROUP
               value: broker-execution-service
-            - name: BROKER_EXECUTION_MODE
-              value: SHADOW
-            - name: BROKER_EXECUTION_ENABLED
-              value: "false"
-            - name: BROKER_EXECUTION_TRANSMIT
-              value: "false"
+            - name: BROKER_EXECUTION_ENVIRONMENT
+              value: dev
             - name: BROKER_EXECUTION_IBKR_HOST
-              value: 127.0.0.1
+              value: host.docker.internal
             - name: BROKER_EXECUTION_IBKR_PORT
               value: "4002"
             - name: BROKER_EXECUTION_IBKR_CLIENT_ID
@@ -60,6 +62,8 @@ spec:
               value: DUQ287805
             - name: BROKER_EXECUTION_MAX_QUANTITY
               value: "1"
+            - name: BROKER_EXECUTION_MAX_CREDIT
+              value: "100.0"
             - name: BROKER_EXECUTION_REPRICE_MS
               value: "3000"
             - name: BROKER_EXECUTION_CHASE_MS

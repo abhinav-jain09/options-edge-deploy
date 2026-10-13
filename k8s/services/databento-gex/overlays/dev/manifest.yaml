@@ -67,6 +67,11 @@ spec:
                 secretKeyRef:
                   key: POSTGRES_PASSWORD
                   name: options-edge-runtime-secrets
+            # Mirrors k8s/overlays/dev/estimated-preopen-gex-dev-patch.yaml (PR #1167) — the
+            # standalone-overlay/monolithic-overlay mirror-drift guard requires both renders match.
+            # See that patch file for the data-driven justification (0.75, not the 0.25 code default).
+            - name: PREOPEN_GEX_MAX_REL_SPREAD
+              value: "0.75"
             - name: PREOPEN_GEX_ENABLED
               value: "false"
             - name: IBKR_GEX_CONSUME_ENABLED

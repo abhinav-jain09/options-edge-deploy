@@ -60,9 +60,14 @@ spec:
             - name: CONTEXT_TAPE_MAX_SNAPSHOT_BYTES
               value: "1048576"
             # Full session held in memory + a ~2.2M-record backfill pass; heap sized under
-            # the 1Gi container limit.
+            # the container limit. BUMPED 2026-10-06: the 768m/1Gi pairing (which held when this
+            # comment was first written) threw a live `OutOfMemoryError: Java heap space` in
+            # production — the backfill volume this now holds has grown past what 768m fits.
+            # 1536m keeps the SAME ~75% heap/container ratio as before (768/1024), just scaled up
+            # against the new 2Gi limit below, so there is still ~512Mi of headroom for metaspace
+            # and the Kafka clients' off-heap/native buffers.
             - name: JAVA_TOOL_OPTIONS
-              value: "-Xms256m -Xmx768m"
+              value: "-Xms256m -Xmx1536m"
           ports:
             - name: api
               containerPort: 8134
@@ -90,6 +95,6 @@ spec:
           resources:
             requests:
               cpu: 250m
-              memory: 512Mi
+              memory: 768Mi
             limits:
-              memory: 1Gi
+              memory: 2Gi

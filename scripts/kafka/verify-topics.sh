@@ -24,6 +24,17 @@ case "${TOPIC_SET:-}" in
   *)   echo "FAIL: unknown TOPIC_SET='$TOPIC_SET' — refusing to verify against an unresolved declaration" >&2
        exit 1 ;;
 esac
+# The same prod-only partition overrides apply-topics.sh resolves, from the same shared resolver and
+# under the same explicit predicate: ENVIRONMENT=production with the default topic set. Without this
+# the verifier would call a topic apply-topics.sh just accepted "below the expected minimum" and fail
+# the deploy a moment later. Unset/empty ENVIRONMENT, or any TOPIC_SET, leaves the declaration alone.
+if [[ -z "${TOPIC_SET:-}" && "${ENVIRONMENT:-}" == "production" ]]; then
+  # shellcheck source=/dev/null
+  source "$SCRIPT_DIR/resolve-prod-partition-overrides.sh"
+  _oe_resolve_prod_partition_overrides || exit 1
+  VERIFY_TOPICS="$OPTIONS_EDGE_TOPICS"
+fi
+
 is_exact_partition() { case " $EXACT_PARTITION_LIST " in *" $1 "*) return 0 ;; esac; return 1; }
 for entry in $VERIFY_TOPICS; do
   topic="${entry%%:*}"

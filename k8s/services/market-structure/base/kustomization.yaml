@@ -1,0 +1,14 @@
+# SERVICE SLICE — market-structure. Owns ONLY this service's Deployment.
+#
+# Referenced from BOTH k8s/overlays/dev and k8s/overlays/production (NOT k8s/base), at replicas: 1.
+# Single replica only (its transactional.id is per environment; a second instance would fence the
+# first, and both would rebuild the same session from the same input).
+#
+# No Service object on purpose (the vol-state / hedging-pressure pattern): kubelet probes reach the
+# pod directly and a ClusterIP would make /metrics reachable in-cluster. What reads this service's
+# output reads it from Kafka — the gateway relays options.spx.market-structure.ui to the Context Tape
+# page, gated on its own GATEWAY_MARKET_STRUCTURE_ENABLED.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - market-structure-deployment.yaml

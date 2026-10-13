@@ -1,0 +1,17 @@
+# PROD-ONLY: the transactional.id of market-structure-service. Each environment has its OWN id (a
+# second producer with the same id fences the first, and a dev pod must never fence the prod one on a
+# shared broker). The base carries the dev id.
+# MIRRORS k8s/services/market-structure/overlays/production — the slice generator renders it from here.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: market-structure-service
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: market-structure
+          env:
+            - name: MARKET_STRUCTURE_TRANSACTIONAL_ID
+              value: market-structure-service-production

@@ -1,0 +1,11 @@
+# SERVICE SLICE — hedging-pressure. Owns ONLY this service's Deployment.
+#
+# Referenced from BOTH k8s/overlays/dev and k8s/overlays/production (NOT k8s/base), HELD AT replicas: 0 until the owner
+# turns it on. Single replica only (its transactional.id is per environment; a second instance would fence the first).
+#
+# No Service object on purpose (the vol-state / es-compression-expansion shadow pattern): kubelet probes reach the pod
+# directly and a ClusterIP would make /metrics reachable in-cluster. Nothing reads this service's output yet.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - hedging-pressure-deployment.yaml

@@ -76,6 +76,14 @@ prov-dot-topic-reject	provisioning	reject
 prov-dotdot-topic-reject	provisioning	reject
 prov-duplicate-key-reject	provisioning	reject
 prov-empty-flow-list-whitespace-reject	provisioning	reject
+prov-era-start-bad-month-reject	provisioning	reject
+prov-era-start-instant-reject	provisioning	reject
+prov-era-start-int-reject	provisioning	reject
+prov-era-start-missing-reject	provisioning	reject
+prov-era-start-not-real-reject	provisioning	reject
+prov-era-start-plain-accept	provisioning	accept
+prov-era-start-single-quoted-accept	provisioning	accept
+prov-era-start-year-zero-reject	provisioning	reject
 prov-escape-in-quotes-reject	provisioning	reject
 prov-explicit-end-reject	provisioning	reject
 prov-flow-nonempty-reject	provisioning	reject

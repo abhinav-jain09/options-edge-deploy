@@ -58,8 +58,17 @@ pipeline {
       // es-aggressor-flow: PRODUCTION only. On prod it publishes just the Kyle-style
       // signed-flow response slope; the legacy absorption label is disabled there.
       'es-aggressor-flow',
-      // es-trade-linearizer: PRODUCTION only; publishes the one-partition ES tape es-aggressor-flow reads.
+      // es-trade-linearizer: dev+prod (dev since 2026-10-07); publishes the one-partition ES tape es-aggressor-flow and es-compression-expansion read.
       'es-trade-linearizer',
+      // es-compression-expansion: dev+prod SHADOW (dev since 2026-10-07); consumes the linearized ES tape plus the SPX-side evidence topics.
+      'es-compression-expansion',
+      // hedging-pressure: dev+prod, deployed HELD AT replicas 0 (the owner turns it on later); single replica only.
+      'hedging-pressure',
+      // market-structure: dev+prod at replicas 1. Reads options.indicators.bars read-only and publishes
+      // options.spx.market-structure.{ui,sequence,dlq,recovery}; single replica only (per-environment transactional.id).
+      'market-structure',
+      // early-auction-verdict: shadow, HELD at replicas 0; deploy = image pinned, scale is the owner's.
+      'early-auction-verdict',
       // stock-gex-close-scheduler: PRODUCTION only — the closing-board SCHEDULE, which now lives
       // inside the batch itself (USER 2026-09-01: "I don't want anything Jenkins-based, it should
       // run based on Spring Batch configuration"). This job DEPLOYS it; nothing here decides when
@@ -90,7 +99,13 @@ pipeline {
       'bleedingoptions-gamma-lab',
       // bleedingoptions tenant — the email sender. Same reason it lives here and not in
       // config.xml: this job regenerates its parameters from this file on every build.
-      'bleedingoptions-email'
+      'bleedingoptions-email',
+      // zerodte-research-writer: the dedicated v7 research writer (increment 9e, services.yaml:208),
+      // same image as vix-option-inteligence, its own Deployment at replicas 0. THIS job is its only
+      // deploy path — Jenkinsfile.zerodte-writer-activate requires the Deployment to already exist at
+      // the exact digest before it will scale it to one replica, it does not create or build anything
+      // itself. Selecting it here deploys it inert; activation is the separate job's job.
+      'zerodte-research-writer'
     ], description: 'Which service to deploy (dir under k8s/services; spread-skew and its writer are intentionally unavailable under the 2026-07-26 operator hold).')
     choice(name: 'ENVIRONMENT', choices: ['dev', 'production'],
       description: 'Target environment — selects the overlay + deployer kubeconfig (oeProfile).')
@@ -245,6 +260,12 @@ PYEOF
           export VALIDATE_ONLY_SERVICE="$SERVICE_PARAM"
           export VALIDATE_ONLY_ENV="$ENVIRONMENT"
           bash scripts/ci/validate-services.sh
+          # dev-cleanup's mirror resume must judge a resumed agent by a SETTLED running pid, never by
+          # `launchctl list` exiting 0 — that exits 0 for a job merely REGISTERED with nothing running,
+          # which let a clean report success while all 14 es4 -> dev mirrors were down and every mirrored
+          # dev topic was frozen. Hermetic (a fake launchctl, no cluster, no broker) and it FAILS against
+          # the pre-fix script, so it is a real gate rather than a script that always passes.
+          bash scripts/ci/dev-mirror-resume-test.sh
           # FIRE-input verdict is a dealer-ledger property — only assert it when deploying that
           # service (it reads the dealer-ledger render, unrelated to any other service being rolled).
           if [ "$SERVICE_PARAM" = "dealer-ledger" ]; then
@@ -538,6 +559,76 @@ PYEOF
           export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
           . scripts/kafka/load-kafka-settings.sh
           scripts/kafka/ensure-multileg-topics.sh
+        '''
+      }
+    }
+    stage('Verify es-compression-expansion output topics') {
+      // BEFORE the rollout, same barrier as gamma-ladder-path above: apply-topics lives in a different job, so on a FIRST
+      // deploy neither output topic exists and, with auto-create off on prod, the transactional producer fails on its
+      // first publish and the pod crash-loops. .current is compacted/-1 (latest state per session, reset-rebuildable);
+      // .events is delete/30 d (the signal ledger keyed by tape coordinates).
+      when {
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'es-compression-expansion' && !params.DEPLOY_DRY_RUN) }
+      }
+      steps {
+        sh '''
+          set -euo pipefail
+          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
+          . scripts/kafka/load-kafka-settings.sh
+          scripts/kafka/ensure-es-compression-expansion-topics.sh
+        '''
+      }
+    }
+    stage('Verify hedging-pressure output topics') {
+      // BEFORE the rollout, same barrier as es-compression-expansion above: the service REQUIRES both output topics to exist
+      // at start (it never relies on auto-creation) and publishes them in ONE transaction per cycle. hedging-pressure.state is
+      // compacted/-1 (latest state per SPX|tradingDate, reset-rebuildable); hedging-pressure.cycle-input is delete/30 d
+      // (the per-cycle input archive, rebuildable but not durable, so not in the reset-rebuildable list). The service is held at replicas 0, but the topics must still be
+      // right the day the owner scales it up, and creating them here is idempotent.
+      when {
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'hedging-pressure' && !params.DEPLOY_DRY_RUN) }
+      }
+      steps {
+        sh '''
+          set -euo pipefail
+          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
+          . scripts/kafka/load-kafka-settings.sh
+          scripts/kafka/ensure-hedging-pressure-topics.sh
+        '''
+      }
+    }
+    stage('Verify early-auction-verdict output topic') {
+      // Same first-deploy barrier as market-structure below: the ledger topic
+      // early-auction.verdicts.shadow (1 partition, cleanup.policy=delete, retention -1) must
+      // exist before the rollout — dev's broker would auto-create it at 32 partitions, which the
+      // service's EAV-R2a verification would then correctly refuse. Idempotent.
+      when {
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'early-auction-verdict' && !params.DEPLOY_DRY_RUN) }
+      }
+      steps {
+        sh '''
+          set -euo pipefail
+          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
+          . scripts/kafka/load-kafka-settings.sh
+          scripts/kafka/ensure-early-auction-verdict-topics.sh
+        '''
+      }
+    }
+    stage('Verify market-structure output topics') {
+      // BEFORE the rollout, same barrier as hedging-pressure above: the service never relies on auto-creation, and
+      // its own R13 boot verification refuses readiness until all four output/recovery topics match — existence, exactly one
+      // partition, declared cleanup policy (recovery is compacted), retention.ms at or above the floor and max.message.bytes >= 1 MiB. On a
+      // FIRST deploy none of the four exists and dev's broker would auto-create them at 32 partitions, which the
+      // service would then correctly refuse. Creating them here is idempotent.
+      when {
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'market-structure' && !params.DEPLOY_DRY_RUN) }
+      }
+      steps {
+        sh '''
+          set -euo pipefail
+          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
+          . scripts/kafka/load-kafka-settings.sh
+          scripts/kafka/ensure-market-structure-topics.sh
         '''
       }
     }

@@ -50,6 +50,10 @@ spec:
     spec:
       containers:
       - env:
+        - name: STRIKE_FLOW_NEAR_SPOT_ENABLED
+          value: 'false'
+        - name: STRIKE_FLOW_NEAR_SPOT_CAUSAL_SKEW_TOLERANCE_MS
+          value: '3000'
         - name: APP_MARKET_DATA_SOURCE
           value: DATABENTO
         - name: STRIKE_FLOW_SOURCE

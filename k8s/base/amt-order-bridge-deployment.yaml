@@ -76,6 +76,12 @@ spec:
               value: amt-order-bridge
             - name: AMT_BRIDGE_ENABLED
               value: "false"          # OWNER SETS THIS: false publishes no intents
+            # Whether a close the desk asks for is SENT. ON here deliberately: the safer default is the
+            # one where the desk can still close a position it believes has gone wrong, so switching it
+            # off is something an overlay has to SAY (dev does, from 2026-10-12). With it off the
+            # MANDATORY exit is not sent either and a broken trade runs to its maximum loss.
+            - name: AMT_BRIDGE_EXIT_ENABLED
+              value: "true"
             - name: AMT_BRIDGE_INTENT_VALID_MS
               value: "600000"
           resources:
