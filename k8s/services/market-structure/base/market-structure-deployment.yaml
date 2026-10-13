@@ -40,7 +40,7 @@ spec:
             # Input (JSON, no schema registry): options.indicators.bars — the owner's SPX 1m/5m/15m
             # bars with the seven D1 properties. Outputs: options.spx.market-structure.ui (the
             # Context Tape projection, one record per 1m fold), .sequence (R3's session records) and
-            # .dlq (R2's rejections). All three must EXIST at start — R13's boot verification refuses
+            # .dlq (R2's rejections), and compacted .recovery. All four must EXIST at start — R13's boot verification refuses
             # to become ready otherwise, and scripts/kafka/ensure-market-structure-topics.sh is the
             # first-deploy barrier. The topic names are the code defaults and TOPIC_PREFIX is "" on
             # dev and prod, so no KAFKA_MARKET_STRUCTURE_*_TOPIC override is set.

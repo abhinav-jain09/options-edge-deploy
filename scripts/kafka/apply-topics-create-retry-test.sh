@@ -30,15 +30,16 @@ if [[ "\$*" == *--describe* ]]; then
   if [ "\$name" = "$NAME" ]; then
     grep -qx "\$name" "$STATE" && echo "Topic: \$name TopicId: ID PartitionCount: $PARTS ReplicationFactor: 1"
   else
+    if [ "\$name" = "\${TOPICS_ABSENT_NAME:-}" ] && ! grep -qx "\$name" "$STATE"; then exit 0; fi
     p=\$(printf '%s' "$OPTIONS_EDGE_TOPICS" | tr ' ' '\n' | awk -F: -v n="\$name" '\$1 == n {print \$2; exit}')
     echo "Topic: \$name TopicId: ID PartitionCount: \${p:-1} ReplicationFactor: 1"
   fi
   exit 0
 fi
-if [[ "\$*" == *--create* ]] && [ "\$name" = "$NAME" ]; then
+if [[ "\$*" == *--create* ]]; then
   echo "\$name" >> "$STATE"
   # the admin client's retry after a SUCCESSFUL create: only --if-not-exists makes it harmless
-  if [ "\$ine" = 0 ] && [ "\${SIMULATE_CLIENT_RETRY:-0}" = 1 ]; then
+  if [ "\$name" = "$NAME" ] && [ "\$ine" = 0 ] && [ "\${SIMULATE_CLIENT_RETRY:-0}" = 1 ]; then
     echo "Error while executing topic command : Topic '\$name' already exists." >&2; exit 1
   fi
 fi
@@ -67,6 +68,17 @@ grep -q -- "--entity-name $NAME --alter" "$LOG" && ok "the declared configs were
 echo "2. the topic really was created exactly once, with the declared partitions"
 n=$(grep -c -- "--create .*--topic $NAME " "$LOG"); [ "$n" = 1 ] && ok "one create call for $NAME" || bad "$n create calls for $NAME"
 grep -- "--create" "$LOG" | grep -- "--topic $NAME " | grep -q -- "--partitions $PARTS " && ok "with --partitions $PARTS" || bad "wrong partition count in the create"
+
+echo "3. recovery compaction cadence survives a global topic reset"
+REC="options.spx.market-structure.recovery"
+run SIMULATE_CLIENT_RETRY=0 TOPICS_ABSENT_NAME="$REC"
+[ "$RC" -eq 0 ] && ok "recovery reset reconciliation exits 0" || bad "recovery reset exit $RC"
+grep -q -- "--create .*--topic $REC .*--config segment.bytes=16777216 --config max.compaction.lag.ms=300000" "$LOG" \
+  && ok "recreated recovery topic has bounded compaction cadence" || bad "recovery create lacks compaction cadence"
+grep -q -- "--entity-name $REC --alter .*segment.bytes=16777216,max.compaction.lag.ms=300000" "$LOG" \
+  && ok "global config apply restores recovery compaction cadence" || bad "recovery compaction cadence absent"
+# All other topics must keep their original configuration; the extra keys are specific to recovery.
+if grep 'segment.bytes=16777216' "$LOG" | grep -v "$REC" >/dev/null; then bad "compaction cadence leaked to another topic"; else ok "cadence applies only to recovery"; fi
 
 echo
 [ "$fails" -eq 0 ] && { echo "=== apply-topics-create-retry: OK ==="; exit 0; }
