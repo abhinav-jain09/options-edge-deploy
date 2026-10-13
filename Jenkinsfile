@@ -78,6 +78,7 @@ pipeline {
     string(name: 'ES_COMPRESSION_EXPANSION_IMAGE', defaultValue: '', description: 'ES compression/expansion shadow image (dev+prod since 2026-10-07)')
     string(name: 'HEDGING_PRESSURE_IMAGE', defaultValue: '', description: 'hedging-pressure service image (dev+prod, deployed held at replicas 0)')
     string(name: 'MARKET_STRUCTURE_IMAGE', defaultValue: '', description: 'market-structure service image (dev+prod, replicas 1)')
+    string(name: 'MARKET_COMMENTARY_IMAGE', defaultValue: '', description: 'market-commentary service image (dev only, replicas 1)')
     string(name: 'EARLY_AUCTION_VERDICT_IMAGE', defaultValue: '', description: 'early-auction-verdict service image (shadow, HELD at replicas 0)')
     string(name: 'SIGNAL_FOLLOWER_IMAGE', defaultValue: '', description: 'signal-follower image (dev+prod)')
     string(name: 'CONTEXT_TAPE_IMAGE', defaultValue: '', description: 'context-tape service image (dev+prod)')

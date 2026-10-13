@@ -206,6 +206,11 @@ services:
   # scripts/kafka/ensure-market-structure-topics.sh is the first-deploy barrier and the service's own
   # R13 boot verification refuses readiness until they match.
   - { name: market-structure,             managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-market-structure,             deployments: [market-structure-service] }
+  # market-commentary: DEV-ONLY shadow (replicas 1). Fuses the auction lean, the spread-skew option lean, SPX spot and option quote
+  # spreads into one labelled description per minute; publishes options.spx.market-commentary.{minute,current,events,rejections}.
+  # Makes no forecast. Single replica only (per-environment transactional.id). All four topics must exist at start —
+  # scripts/kafka/ensure-market-commentary-topics.sh is the first-deploy barrier.
+  - { name: market-commentary,            managedBy: standalone, sliceGenerated: true, envs: [dev], image: options-edge-market-commentary,            deployments: [market-commentary-service] }
   # early-auction-verdict: shadow predictor of the auction desk's four selling confirmations
   # (EARLY-AUCTION-VERDICT-STAGE1-GATE1.md rev 18a). HELD AT replicas 0 everywhere: the pod
   # cannot even start before the verifier-produced lock ConfigMap exists (EAV-R2a fail-closed

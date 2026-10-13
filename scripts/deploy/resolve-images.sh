@@ -80,6 +80,7 @@ OI_NEXT_PUBLICATION_IMAGE=$registry/options-edge-oi-next-publication:$image_tag
 OI_NEXT_PUBLICATION_POSTGRES_WRITER_IMAGE=$registry/options-edge-oi-next-publication-postgres-writer:$image_tag
 VOL_STATE_IMAGE=$registry/options-edge-vol-state:$image_tag
 ZN_GEX_IMAGE=$registry/options-edge-zn-gex:$image_tag
+MARKET_COMMENTARY_IMAGE=$registry/options-edge-market-commentary:$image_tag
 EOF
             fi
             # short-premium-agent renders in dev+production (a standalone service that runs on prod too),
@@ -166,6 +167,7 @@ OI_NEXT_PUBLICATION_IMAGE=${OI_NEXT_PUBLICATION_IMAGE:-$registry/options-edge-oi
 OI_NEXT_PUBLICATION_POSTGRES_WRITER_IMAGE=${OI_NEXT_PUBLICATION_POSTGRES_WRITER_IMAGE:-$registry/options-edge-oi-next-publication-postgres-writer:dev}
 VOL_STATE_IMAGE=${VOL_STATE_IMAGE:-$registry/options-edge-vol-state:dev}
 ZN_GEX_IMAGE=${ZN_GEX_IMAGE:-$registry/options-edge-zn-gex:dev}
+MARKET_COMMENTARY_IMAGE=${MARKET_COMMENTARY_IMAGE:-$registry/options-edge-market-commentary:dev}
 EOF
             fi
             # short-premium-agent renders in dev+production; on the promoted/branch-2 path (prod) its

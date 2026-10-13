@@ -224,6 +224,22 @@
               echo "pinned ${_img_var} -> ${_pinned}"
             done
           fi
+          # DEV-ONLY images (render only in k8s/overlays/dev; production never carries them).
+          # market-commentary: dev-only shadow.
+          if [ "${ENVIRONMENT}" = "dev" ]; then
+            for _img_var in MARKET_COMMENTARY_IMAGE; do
+              _pinned="$(pin_ref "${!_img_var}")" || {
+                echo "FATAL: cannot resolve registry digest for ${_img_var}=${!_img_var}; aborting before any kubectl mutation." >&2
+                exit 1
+              }
+              printf -v "$_img_var" '%s' "$_pinned"
+              _repo="${_pinned%@*}"; _repo="${_repo%:*}"; _pdigest="${_pinned#*@}"; _pbase="${_repo##*/}"
+              _pname="$_base_registry/$_pbase"
+              _pname="$_pname" _pnewname="$_repo" _pdigest="$_pdigest" \
+                yq -i '.images += [{"name": strenv(_pname), "newName": strenv(_pnewname), "digest": strenv(_pdigest)}]' "$_overlay_kustomization"
+              echo "pinned ${_img_var} -> ${_pinned}"
+            done
+          fi
           # PROD-ONLY images (render only in k8s/overlays/production; the dev registry never
           # carries them, so pinning on dev/experiment would fail closed for an image that is
           # never deployed there). es-aggressor-flow: slope measurement, prod-only by design.
