@@ -251,8 +251,16 @@ create_topic() {
   if [[ -n "$retention_bytes" ]]; then
     extra_configs+=(--config "retention.bytes=$retention_bytes")
   fi
+  # --if-not-exists: CreateTopics is not idempotent on the CLIENT's own retry. The Kafka admin client retries a
+  # request whose reply was lost or slow; when the first attempt had in fact created the topic, the retry answers
+  # TopicExistsException and kafka-topics exits 1 for a topic that was created exactly as asked. Seen on prod
+  # 2026-10-13 06:05 (delta-flow-10s: ONE create reached the broker, at 06:05:09 with the declared 32 partitions,
+  # the error came from the same command 1.1 s later) - the clean-slate run then left every mirror paused and prod
+  # down. The caller verifies the shape (wait_for_topic_shape) and applies the declared configs
+  # (alter_topic_config) right after, so a pre-existing topic of the WRONG shape is still caught there.
   kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" \
     --create \
+    --if-not-exists \
     --topic "$topic" \
     --partitions "$partitions" \
     --replication-factor "$REPLICATION_FACTOR" \
