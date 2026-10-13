@@ -247,14 +247,25 @@ pipeline {
           #
           # RESOLVED 2026-10-13, by reading the creation code rather than by matching live state:
           # ensureExact stamped a LITERAL `compact,delete`, bypassing both the archive-uncompaction
-          # flag every sibling service reads and processing-common's ServedTopicsAreNeverCompactedTest
-          # (which greps for ensureCompactedTopic, a call this module never makes). The service now
-          # reads that flag, es4 sets it true, so the source stamps `delete` — the value POLICY below
-          # has always had. Nothing here was relaxed to fit the broker; the stamp was corrected to fit
-          # the contract. See options-edge-processing TapeZonesTopics.servedCleanupPolicy for the
-          # evidence that dropping compaction loses nothing: retention.ms=-1 keeps the last value per
-          # key regardless, and on es4 the cleaner was not collapsing this log anyway (earliest offset
-          # 0 of 49,998 records, measured 2026-10-13).
+          # flag (OPTIONS_EDGE_UNCOMPACTED_SERVED_TOPICS, which a service creating a served topic
+          # through KafkaTopics.ensureServedTopic reads, and which es4 sets true) and
+          # processing-common's ServedTopicsAreNeverCompactedTest, which greps for
+          # ensureCompactedTopic, a call this module never makes. The service now stamps `delete`
+          # UNCONDITIONALLY — not flag-gated, because the board is declared `delete` for every
+          # cluster, so a conditional stamp would only let an absent or miswired flag override those
+          # declarations again. That is the value POLICY below has always had. Nothing here was
+          # relaxed to fit the broker; the stamp was corrected to fit the contract.
+          #
+          # PENDING: a stamp is not a broker edit. es4 stays compact,delete, and THIS PREFLIGHT GOES
+          # ON FAILING, until the fixed image is rolled to es4 and ensureTopics runs on boot. That is
+          # the intended order — the mirror must not be installed against a source that still
+          # contradicts the contract.
+          #
+          # Dropping compaction at the source costs little but not nothing: retention.ms=-1 ages
+          # nothing out by time so the newest record per key is always present, and the cleaner was
+          # not collapsing this log anyway (earliest offset 0 of 49,998 records, measured), but the
+          # source is now committed to growing with every board write. See
+          # options-edge-processing TapeZonesTopics.boardCleanupPolicy.
           case "$TOPIC" in
             es.tape-zones.board) PARTS=1; POLICY=delete; RET=-1 ;;
             *) echo "FAIL: topic $TOPIC not in the tape-zones-mirror allow-list"; exit 1 ;;
@@ -302,15 +313,16 @@ pipeline {
           # `compact,delete` -- measured, and exactly the literal tape-zones-service stamped on every
           # boot -- which is what the source preflight above rejected; an earlier note here recorded
           # it as bare `compact`, but the preflight compares the whole value, so the distinction is
-          # not cosmetic. The service now reads the archive-uncompaction flag instead of restating a
-          # policy, so the source stamps `delete` too. Prose that disagrees with the code beside it is
-          # how the two-declarations trap starts, so it now says what the code does.)
+          # not cosmetic. The service now stamps `delete` unconditionally instead of restating a
+          # policy of its own, so the source will match once that image is rolled to es4 — a merged
+          # commit alone does not move a broker. Prose that disagrees with the code beside it is how
+          # the two-declarations trap starts, so it now says what the code does.)
           # 1 partition = the board's ordering contract. The /zones page reads the LAST value for the
-          # current `ES|<sessionDate>` key, and plain `delete` with retention.ms=-1 keeps every record
-          # ever written, so that last value is trivially present — which is also why the prod copy
-          # reached 64 GiB and now carries an 8 GiB retention.bytes cap (topics.env). A byte cap never
-          # deletes the active segment, so the current session's last value still survives it; what
-          # ages out is older sessions' snapshots. This comment claimed the opposite until 2026-10-13
+          # current `ES|<sessionDate>` key, and plain `delete` with retention.ms=-1 ages nothing out by
+          # time, so that last value is present — which is also why the prod copy reached 64 GiB and
+          # now carries an 8 GiB retention.bytes cap (topics.env). That cap is a real bound, not a
+          # formality: it CAN drop an old session's snapshots and with them that key's last record. It
+          # never deletes the active segment, so the session the page is reading keeps its last value. This comment claimed the opposite until 2026-10-13
           # ("creating the target as plain `delete` would silently discard those semantics"), which was
           # never what the code beside it did. The TOPIC parameter is a
           # choice list, but re-assert here fail-closed so a job-config drift can never mirror an
