@@ -43,6 +43,14 @@ spec:
               value: "true"
             - name: KAFKA_MARKET_STRUCTURE_TOPIC
               value: options.spx.market-structure.ui
+            # Early-auction verdict ledger relay (the read-only /early-auction panel behind
+            # GET /api/early-auction/events). DELIBERATELY OFF: the owner flips this to "true" as
+            # their own go-live step once the shadow service is scaled up — the panel then says
+            # "relay off" rather than rendering an empty table. The topic defaults to
+            # early-auction.verdicts.shadow (override: KAFKA_EARLY_AUCTION_VERDICT_TOPIC); the
+            # restart replay window defaults to 7 days (GATEWAY_EARLY_AUCTION_VERDICT_SEEK_BACK_MS).
+            - name: GATEWAY_EARLY_AUCTION_VERDICT_ENABLED
+              value: "false"
             - name: WS_ALLOWED_ORIGINS
               value: "http://localhost:8090"
             - name: WS_AUTH_ISSUER_URI
