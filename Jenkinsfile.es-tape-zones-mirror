@@ -230,11 +230,31 @@ pipeline {
           printf '%s\\n' "$SD" | grep -q "Topic: $TOPIC" || { echo "FAIL: source topic $TOPIC missing"; exit 1; }
 
           # VERIFY-THEN-CODIFY: the frozen shape contract below is asserted against the SOURCE too,
-          # not just applied to the target. es4 creates this topic itself (tape-zones-service
-          # ensure-topic via processing-common changelogTopicConfigs, declared in
-          # scripts/kafka/topics.env). If .4 ever drifts from the contract, mirroring it into a
+          # not just applied to the target. If .4 ever drifts from the contract, mirroring it into a
           # target built to the OLD contract is exactly the silent corruption this job must prevent,
           # so a mismatch fails the install instead of being papered over.
+          #
+          # es4 creates this topic itself, and WHICH code does it matters, because that code ALTERS
+          # the policy on every boot and therefore outranks apply-topics.sh. It is
+          # tape-zones-service's own TapeZonesTopics.ensureExact (an exact-contract helper that
+          # refuses to adopt a different partition count), NOT processing-common's
+          # changelogTopicConfigs as this comment claimed until 2026-10-13. That misattribution is
+          # why the contradiction below went unseen for weeks: changelogTopicConfigs is a CHANGELOG
+          # helper, so naming it made `compact,delete` on the source look like the intended contract
+          # rather than a drift, and the comment also claimed the board was "declared in
+          # scripts/kafka/topics.env" as compacted when the es4 block lists it in no compaction list
+          # at all (OPTIONS_EDGE_ES4_COMPACTED_TOPICS holds one unrelated topic).
+          #
+          # RESOLVED 2026-10-13, by reading the creation code rather than by matching live state:
+          # ensureExact stamped a LITERAL `compact,delete`, bypassing both the archive-uncompaction
+          # flag every sibling service reads and processing-common's ServedTopicsAreNeverCompactedTest
+          # (which greps for ensureCompactedTopic, a call this module never makes). The service now
+          # reads that flag, es4 sets it true, so the source stamps `delete` — the value POLICY below
+          # has always had. Nothing here was relaxed to fit the broker; the stamp was corrected to fit
+          # the contract. See options-edge-processing TapeZonesTopics.servedCleanupPolicy for the
+          # evidence that dropping compaction loses nothing: retention.ms=-1 keeps the last value per
+          # key regardless, and on es4 the cleaner was not collapsing this log anyway (earliest offset
+          # 0 of 49,998 records, measured 2026-10-13).
           case "$TOPIC" in
             es.tape-zones.board) PARTS=1; POLICY=delete; RET=-1 ;;
             *) echo "FAIL: topic $TOPIC not in the tape-zones-mirror allow-list"; exit 1 ;;
@@ -278,9 +298,13 @@ pipeline {
           # FROZEN per-topic shape contract (scripts/kafka/topics.env, es4 block -- keep in sync):
           #   es.tape-zones.board : 1 partition, delete, retention.ms=-1
           # (This comment said compact,delete until 2026-10-13. The executable contract below has
-          # always been POLICY=delete, and the live TARGET is delete; the live SOURCE on es4 is
-          # `compact`, which is what the source preflight above rejects. Prose that disagrees with the
-          # code beside it is how the two-declarations trap starts, so it now says what the code does.)
+          # always been POLICY=delete, and the live TARGET is delete. The live SOURCE on es4 was
+          # `compact,delete` -- measured, and exactly the literal tape-zones-service stamped on every
+          # boot -- which is what the source preflight above rejected; an earlier note here recorded
+          # it as bare `compact`, but the preflight compares the whole value, so the distinction is
+          # not cosmetic. The service now reads the archive-uncompaction flag instead of restating a
+          # policy, so the source stamps `delete` too. Prose that disagrees with the code beside it is
+          # how the two-declarations trap starts, so it now says what the code does.)
           # 1 partition = the board's ordering contract. The /zones page reads the LAST value for the
           # current `ES|<sessionDate>` key, and plain `delete` with retention.ms=-1 keeps every record
           # ever written, so that last value is trivially present — which is also why the prod copy
@@ -298,14 +322,21 @@ pipeline {
 
           mkdir -p "$MDIR"
           # auto.offset.reset=earliest -- DELIBERATE, and the one substantive difference from the
-          # indicator mirror's `latest`. The board is a COMPACTED last-value view keyed
-          # `ES|<sessionDate>`: its consumers need the newest record PER KEY, not a live tail. With
-          # `latest` the target topic would sit EMPTY until .4 next publishes -- across a weekend or
-          # a holiday that is hours-to-days of a blank /zones board, i.e. precisely the failure this
-          # mirror exists to fix. Seeding from earliest is bounded and cheap because compaction
-          # leaves ~one record per session date (4 records total on 2026-08-09), unlike an
-          # append-only history topic where earliest would replay the whole retention window.
-          # Re-copying after a group reset is harmless: identical keys, and compaction collapses them.
+          # indicator mirror's `latest`. The board is a last-value view keyed `ES|<sessionDate>`: its
+          # consumers need the newest record PER KEY, not a live tail. With `latest` the target topic
+          # would sit EMPTY until .4 next publishes -- across a weekend or a holiday that is
+          # hours-to-days of a blank /zones board, i.e. precisely the failure this mirror exists to
+          # fix.
+          #
+          # WHAT THAT SEED COSTS, corrected 2026-10-13. This said the seed was "bounded and cheap
+          # because compaction leaves ~one record per session date (4 records total on 2026-08-09)".
+          # It is not: neither end is compacted, and the board is written on every board change, so
+          # earliest replays the whole RETAINED source log -- 49,998 records on es4 when measured.
+          # That is the honest cost, and it is bounded by retention, not by the cleaner: es4 is wiped
+          # whole by its clean-reset, and the dev/prod targets carry the 8 GiB retention.bytes cap in
+          # topics.env (the prod copy had reached 64 GiB under retention.ms=-1 with nothing capping
+          # it). Re-copying after a group reset is still harmless, but for the plainer reason that the
+          # records are byte-identical with identical keys -- NOT because compaction collapses them.
           #
           cat > "$MDIR/consumer.properties" <<C
 bootstrap.servers=$SRC
@@ -363,9 +394,11 @@ S
           # ...and assert the IMMUTABLE part of the shape FIRST, before touching anything. Partition
           # count is not auto-repairable -- adding partitions re-shards the key->partition mapping --
           # so a target with the wrong count must be refused, and refused UNTOUCHED. Doing the config
-          # reconcile below first would enable compaction on exactly the topic the job is about to
-          # reject, and compaction eventually discards superseded records: a failed install would
-          # have changed the data semantics of a target it declared unsafe to adopt.
+          # reconcile below first would rewrite cleanup.policy and retention.ms on exactly the topic
+          # the job is about to reject: a failed install would have changed the configuration of a
+          # target it declared unsafe to adopt. (Until 2026-10-13 this said the danger was "enabling
+          # compaction"; with POLICY=delete the reconcile no longer enables anything, but the ordering
+          # rule stands on its own and is unchanged -- refuse first, touch nothing.)
           TD=$("$KBIN/kafka-topics" --bootstrap-server "$TGT" --describe --topic "$TOPIC" 2>/dev/null) \
             || { echo "FAIL: cannot describe target $TOPIC after create"; exit 1; }
           printf '%s\\n' "$TD" | grep -q "Topic: $TOPIC" || { echo "FAIL: target $TOPIC absent after create"; exit 1; }
@@ -376,15 +409,21 @@ S
           # contract configs. --create --if-not-exists leaves an EXISTING topic's configuration
           # completely untouched, and that is not hypothetical: on the first prod install (build #1,
           # 2026-08-09) es.tape-zones.board ALREADY existed on 192.168.100.252 with NO cleanup.policy
-          # at all -- broker auto-create defaults, i.e. plain delete -- so the mirror would have fed a
-          # compacted source into a target that quietly aged records out and kept no last value. The
-          # assertion below caught it and failed the install; this step is the repair.
+          # at all -- broker auto-create defaults -- and under the contract AS IT THEN STOOD
+          # (POLICY=compact,delete) that was a real mismatch the assertion below caught; this step is
+          # the repair. What the mismatch MEANT was recorded wrongly: an inherited default resolves to
+          # plain delete with the broker's finite retention, so the risk was records aging out of the
+          # window, not a "compacted source" feeding an uncompacted target. Both ends are plain delete
+          # now, and retention.ms=-1 is the config that keeps the last value per key reachable, which
+          # is why RET is asserted here with the same force as the policy.
           #
           # The alter is additive and structural, not destructive: kafka-configs --alter --add-config
           # is incremental (verified: an unrelated segment.ms override survives it) and never deletes
-          # or recreates the topic. It does turn compaction ON, which by design lets the log cleaner
-          # eventually drop superseded records for a repeated key -- that IS the board's contract,
-          # and it is why the partition assertion above has to come first.
+          # or recreates the topic. With POLICY=delete it turns NO cleaner on: it pins the two values
+          # the contract names and leaves the log append-only. (This claimed until 2026-10-13 that the
+          # alter "does turn compaction ON ... that IS the board's contract" -- it was describing a
+          # POLICY the case arm beside it has never had.) It also does not touch retention.bytes, so
+          # the 8 GiB cap the dev/prod copies carry from topics.env survives an install untouched.
           #
           # A value containing a comma MUST be bracket-wrapped or kafka-configs splits the config
           # list on it and rejects the argument ("all configs to be added must be in the format
@@ -396,12 +435,14 @@ S
             || { echo "FAIL: cannot reconcile $TOPIC config on $TGT to cleanup.policy=$POLICY, retention.ms=$RET"; exit 1; }
 
           # Assert what the reconcile was supposed to achieve, BEFORE any persistent artifact (plist)
-          # is written. A cleanup.policy mismatch would strip compaction and destroy the last-value
-          # view; a retention mismatch would age the board out from under the page.
+          # is written. A cleanup.policy mismatch means the target would not keep the board the way
+          # the contract says -- compaction here would start discarding superseded records the source
+          # still holds, diverging the copy from a source the whole job exists to reproduce verbatim;
+          # a retention mismatch would age the board out from under the page.
           TC=$("$KBIN/kafka-configs" --bootstrap-server "$TGT" --describe --topic "$TOPIC" 2>/dev/null) \
             || { echo "FAIL: cannot read target config for $TOPIC"; exit 1; }
           TCP=$(printf '%s\\n' "$TC" | awk '$1 ~ /^cleanup\\.policy=/ {print $1; exit}')
-          [ "$TCP" = "cleanup.policy=$POLICY" ] || { echo "FAIL: target $TOPIC cleanup.policy is '${TCP:-<unset>}', want cleanup.policy=$POLICY -- a plain-delete target would silently lose the board's last-value semantics"; exit 1; }
+          [ "$TCP" = "cleanup.policy=$POLICY" ] || { echo "FAIL: target $TOPIC cleanup.policy is '${TCP:-<unset>}', want cleanup.policy=$POLICY -- the target must hold the board exactly as the source does, and a compacted copy would discard superseded records the source still serves"; exit 1; }
           TRET=$(printf '%s\\n' "$TC" | awk '$1 ~ /^retention\\.ms=/ {print $1; exit}')
           [ "$TRET" = "retention.ms=$RET" ] || { echo "FAIL: target $TOPIC retention.ms is '${TRET:-<unset>}', want retention.ms=$RET"; exit 1; }
           echo "config generated; target $TOPIC verified: $PARTS partition(s), $POLICY, retention.ms=$RET"
@@ -415,8 +456,8 @@ S
         sh '''
           set -euo pipefail
           # WHY THIS STAGE EXISTS. The MM1 consumer group and the target topic both OUTLIVE an
-          # install, and the target is compacted, so a re-install of a BROKEN mirror could otherwise
-          # be verified entirely by artefacts of an earlier, working install: the reference record
+          # install, so a re-install of a BROKEN mirror could otherwise be verified entirely by
+          # artefacts of an earlier, working install: the reference record
           # is already on the target, and the group's committed offset is already at the source end,
           # so a fresh process could join the group, consume NOTHING, and still satisfy every check.
           #
@@ -425,7 +466,8 @@ S
           # if it sits ahead). The new process must
           # then re-consume and re-produce that record itself before the committed offset can reach
           # the snapshot again -- which is exactly the evidence the payload stage demands. Replaying
-          # one record into a compacted, keyed topic is idempotent: same key, same bytes.
+          # one record is harmless: same key, same bytes, and the board's consumers read the last
+          # value for a key, so a duplicate tail record is indistinguishable from the original.
           GROUP="es-tape-zones-mirror-${TARGET_SPX_CLUSTER_IP}-${TARGET_PORT}-${TOPIC}"
 
           # 1. snapshot the source end offset, and persist it: later stages are separate shells.
@@ -489,7 +531,7 @@ S
               *)
                 # ONLY EVER REWIND. Resetting unconditionally to $REFOFF would move a LAGGING group
                 # FORWARD and permanently skip every source record between its position and the
-                # reference one -- on this session-keyed compacted board, whole session dates. A
+                # reference one -- on this session-keyed board, whole session dates. A
                 # group already at or behind $REFOFF needs no help: consuming forward from there
                 # necessarily crosses the reference record, which is all the proof requires.
                 if [ "$CUR" -gt "$REFOFF" ]; then
@@ -610,7 +652,7 @@ PL
           #       committed offset can only reach the snapshot by this process re-consuming and (MM1
           #       commits only after a successful produce) re-producing it. Without that arming this
           #       check was satisfiable by an earlier install's committed offset, so a dead mirror
-          #       over an already-populated compacted target would have passed.
+          #       over an already-populated target would have passed.
           #   (b) the record is on the TARGET, identical in key and value to the source's.
           #   (c) the target copy satisfies the board's structural contract.
           # Note on (b): the comparison is on the console-consumer's rendered `key<SEP>value` line.
@@ -684,8 +726,13 @@ PL
             TEND=$("$KBIN/kafka-run-class" kafka.tools.GetOffsetShell --bootstrap-server "$TGT" --topic "$TOPIC" 2>/dev/null | awk -F: 'NR==1{print $3}') || TEND=""
             case "${TEND:-}" in ''|*[!0-9]*) TEND=0 ;; esac
             if [ "$TEND" -gt 0 ]; then
-              # Read the tail of the target (bounded: compaction keeps ~one record per session
-              # date, so 200 covers well over a trading year).
+              # Read the tail of the target. 200 is sufficient for the REASON that matters: the
+              # reference record is the source's LAST record (REFOFF=SEND-1), so a working mirror
+              # puts it within a few records of the target's end, and the retry loop below re-reads
+              # the tail as it moves. It is NOT, as this said until 2026-10-13, "well over a trading
+              # year" because "compaction keeps ~one record per session date" -- neither end is
+              # compacted, so 200 records of an append-only board is a short window of one session,
+              # which is all this check needs.
               N=200
               START=$((TEND - N))
               # NOTE: written as a full `if`, not `[ ... ] && START=0`. Under `set -e` that AND-list
@@ -693,7 +740,8 @@ PL
               if [ "$START" -lt 0 ]; then START=0; fi
               CNT=$((TEND - START))
               rm -f "$TOUT"
-              # Compaction can leave holes, so fewer than CNT records may be readable and the
+              # Fewer than CNT records may be readable -- a retention.bytes cap can drop a segment
+              # under the read, and the start offset is computed before the consumer runs -- and the
               # consumer then stops on --timeout-ms instead of --max-messages; that is fine, we
               # grep whatever it managed to read and retry if the reference is not among it.
               "$KBIN/kafka-console-consumer" --bootstrap-server "$TGT" --topic "$TOPIC" \
