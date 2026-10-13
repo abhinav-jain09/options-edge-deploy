@@ -12,7 +12,6 @@ pipeline {
   }
   options { disableRestartFromStage(); disableConcurrentBuilds(); timeout(time: 15, unit: 'MINUTES') }
   environment {
-    ANSIBLE_BECOME_PASSWORD_FILE = 'scripts/ops/jenkins-become-password.sh'
     ANSIBLE_HOST_KEY_CHECKING = 'True'
   }
   stages {
@@ -47,10 +46,12 @@ pipeline {
       when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.RUN_TESTS_ONLY == false) } }
       steps {
         withCredentials([string(credentialsId: 'options-edge-remote-become-password', variable: 'BECOME_PASSWORD')]) {
-          timeout(time: 10, unit: 'MINUTES') {
-            sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir .'
+          withEnv(["ANSIBLE_BECOME_PASSWORD_FILE=${env.WORKSPACE}/scripts/ops/jenkins-become-password.sh"]) {
+            timeout(time: 10, unit: 'MINUTES') {
+              sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir .'
+            }
+            sh 'ansible-playbook -i scripts/ops/tunnel-watchdog-prod.ini -u abhinav -b scripts/ops/install-tunnel-watchdog.yml'
           }
-          sh 'ansible-playbook -i scripts/ops/tunnel-watchdog-prod.ini -u abhinav -b scripts/ops/install-tunnel-watchdog.yml'
         }
         sh '''
           set -euo pipefail
