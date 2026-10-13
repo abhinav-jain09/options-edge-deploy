@@ -190,7 +190,10 @@ verify_reviewed_tree() { # <src-dir> <tree-dir> <sha> <repo-relative-script>
 
   # ...and anything present that the commit does not contain, including an empty directory.
   local extra
-  extra="$(find "$treep" -mindepth 1 \( -type f -o -type l \) -print 2>/dev/null \
+  # `! -type d` rather than `-type f -o -type l`: anything that is not a directory counts, so a fifo,
+  # socket or device node planted in the temp tree is an extra too instead of being invisible to the
+  # sweep. git archive can only produce blobs, symlinks and directories, so the commit never has one.
+  extra="$(find "$treep" -mindepth 1 ! -type d -print 2>/dev/null \
             | LC_ALL=C sort | LC_ALL=C comm -23 - <(LC_ALL=C sort "$paths"))"
   if [ -n "$extra" ]; then
     printf '%s\n' "$extra" | head -8 | while IFS= read -r _e; do _rsg_say "  not in the commit: ${_e#$treep/}"; done
