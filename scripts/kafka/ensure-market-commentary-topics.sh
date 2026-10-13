@@ -85,8 +85,9 @@ ensure() { # <topic> <retention.ms floor> [cleanup policy]
   case "${retention:-}" in
     ''|*[!0-9-]*) echo "FAIL: '$topic' reports retention.ms='${retention:-<unreadable>}', expected >= $wantRet."; return 1 ;;
   esac
-  if [ "$retention" != "-1" ] && { [ "$wantRet" = "-1" ] || [ "$retention" -lt "$wantRet" ]; }; then
-    echo "FAIL: '$topic' has retention.ms=$retention, expected >= $wantRet (or -1)."
+  # -1 (infinite) is refused too: the service's own boot verification compares retention.ms numerically and rejects it.
+  if [ "$retention" = "-1" ] || [ "$retention" -lt "$wantRet" ]; then
+    echo "FAIL: '$topic' has retention.ms=$retention, expected a number >= $wantRet."
     return 1
   fi
   maxBytes=$(extract 'max\.message\.bytes' "$cfg")

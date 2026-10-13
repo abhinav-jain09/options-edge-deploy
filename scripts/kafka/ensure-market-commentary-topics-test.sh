@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Drives the REAL ensure-market-commentary-topics.sh against mocked kafka-topics / kafka-configs that print the
 # broker's `--describe --all` format. Cases: absent -> created and verified; right shape -> ok; wrong partition count,
-# wrong cleanup policy, retention one millisecond short, a CLI failure -> fail closed; retention at -1 passes (a floor).
+# wrong cleanup policy, retention one millisecond short or -1, a CLI failure -> fail closed.
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 T="$(mktemp -d)"; trap 'rm -r "$T"' EXIT
@@ -50,7 +50,7 @@ mock "" 1 delete 10368000000; if run && [ "$(wc -l < "$T/created" | tr -d " ")" 
 mock "$ALL" 32 delete 10368000000; if run; then bad "32 partitions passed"; else ok "wrong partition count fails closed"; fi
 mock "$ALL" 1 compact 10368000000; if run; then bad "compact passed"; else ok "wrong cleanup policy fails closed"; fi
 mock "$ALL" 1 delete 10367999999; if run; then bad "short retention passed"; else ok "retention one millisecond short fails closed"; fi
-mock "$ALL" 1 delete -1; if run; then ok "retention -1 satisfies the floor"; else bad "-1 rejected: $(cat "$T/out")"; fi
+mock "$ALL" 1 delete -1; if run; then bad "retention -1 passed (the service rejects it)"; else ok "retention -1 fails closed (the service compares numerically)"; fi
 for f in list create describe configs; do
   mock "" 1 delete 10368000000 "$f"; if run; then bad "$f failure passed"; else ok "$f failure fails closed"; fi
 done
