@@ -379,6 +379,10 @@ jobs:
       - name: apply-topics separates a skip from a failure
         run: bash scripts/kafka/apply-topics-skip-exit-test.sh
 
+      # A create that the Kafka admin client retried must not fail the run (prod clean-slate 2026-10-13).
+      - name: apply-topics survives the admin client's retry of a successful create
+        run: bash scripts/kafka/apply-topics-create-retry-test.sh
+
       # The sibling files apply-topics.sh sources must be copied by every test that runs it out of a
       # temp directory. Hard-coding that list is what made TWO such tests report findings about
       # topics.env the day apply-topics.sh gained resolve-prod-partition-overrides.sh (#1165): their
