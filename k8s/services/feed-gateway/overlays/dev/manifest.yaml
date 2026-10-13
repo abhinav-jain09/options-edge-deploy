@@ -69,6 +69,8 @@ spec:
               value: options.spx.market-structure.ui
             - name: GATEWAY_EARLY_AUCTION_VERDICT_ENABLED
               value: "true"
+            - name: GATEWAY_MARKET_COMMENTARY_ENABLED
+              value: "true"
             - name: WS_ALLOWED_ORIGINS
               value: http://localhost:8090
             - name: WS_AUTH_ISSUER_URI
