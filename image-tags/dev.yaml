@@ -75,6 +75,7 @@ images:
   es-compression-expansion-service: 192.168.100.252:5000/options-edge-es-compression-expansion:dev
   hedging-pressure-service: 192.168.100.252:5000/options-edge-hedging-pressure:dev
   market-structure-service: 192.168.100.252:5000/options-edge-market-structure:dev
+  market-commentary-service: 192.168.100.252:5000/options-edge-market-commentary:dev
   early-auction-verdict-service: 192.168.100.252:5000/options-edge-early-auction-verdict:dev
   multileg-structure-service: 192.168.100.252:5000/options-edge-multileg-structure:dev
   reversal-postgres-writer: 192.168.100.252:5000/options-edge-reversal-postgres-writer:dev
