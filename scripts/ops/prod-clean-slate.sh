@@ -1,6 +1,8 @@
 #!/bin/bash
 # "clean up prod" (owner rule 2026-09-16, "make prod similar to dev"): the dev-cleanup.sh flow on prod.
 #
+#   0. refuse unless every file this run uses is identical to origin/main's — a reset runs DEPLOY_SRC's
+#      code, not main's (scripts/ops/reviewed-source-guard.sh; `dry` is not guarded)
 #   1. pause the es4->prod MirrorMaker launchd agents on this Mac (they produce into topics that are about to go)
 #   2. on .252 as root: scripts/ops/offhours-clean-slate.sh with TOPIC_WIPE_MODE=delete START_AFTER_WIPE=none —
 #      scale every pipeline deployment to 0 (Keycloak exempt), DELETE every non-whitelisted topic (state and
@@ -47,6 +49,10 @@ say() { echo "[$(date '+%H:%M:%S')] $*" | tee -a "$LOG"; }
 # front of the wipe. Driven by scripts/ops/loaded-mirror-agents-test.sh with a stubbed launchctl.
 # shellcheck source=/dev/null
 . "$DEPLOY_SRC/scripts/ops/loaded-mirror-agents.sh" || { echo "cannot source $DEPLOY_SRC/scripts/ops/loaded-mirror-agents.sh"; exit 1; }
+# ...and the guard that decides whether THIS source tree may wipe production at all. Driven by
+# scripts/ops/reviewed-source-guard-test.sh.
+# shellcheck source=/dev/null
+. "$DEPLOY_SRC/scripts/ops/reviewed-source-guard.sh" || { echo "cannot source $DEPLOY_SRC/scripts/ops/reviewed-source-guard.sh"; exit 1; }
 # Returns the REMOTE command's exit status (the filter stages would otherwise hide it: a function returns
 # its last pipe stage, and sed always succeeds).
 ssh_root() { local rc; sshpass -p "$PW" ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 "$HOST" "su - root -c '$1'" <<EOF 2>&1 | grep -vE "^Password: *$|WARNING: |vulnerable|openssh|^\*\*" | sed 's/^Password: //'
@@ -156,11 +162,46 @@ pause_mirrors() {
   [ "$rc" -eq 0 ] || say "   pause did not complete: the ledger holds what was recorded, and nothing may be wiped"
   return "$rc"
 }
-# ---- 0. ship the repo layout the host script sources ----
-for f in scripts/ops/offhours-clean-slate.sh scripts/kafka/reset-preserved-topics.sh scripts/kafka/topics.env scripts/jenkins/market_calendar.py scripts/kafka/apply-topics.sh scripts/kafka/ensure-partition-only-topics.sh scripts/kafka/load-kafka-settings.sh scripts/ops/mirror-topic-filter.sh scripts/ops/clean-slate-decision.sh scripts/ops/mirror-ledger.sh scripts/ops/loaded-mirror-agents.sh; do
+# ---- 0. the files this run uses, in ONE list ----
+# It feeds both the readable-check below and the reviewed-source guard after it, so the guard cannot
+# check a different set from the one that actually runs. apply-topics.sh's own siblings are DERIVED
+# (topics.env, resolve-prod-partition-overrides.sh today) rather than named twice: a hard-coded copy of
+# that list is what left two test harnesses running a crippled apply-topics on 2026-10-08.
+DEPLOY_FILES=(
+  scripts/ops/offhours-clean-slate.sh
+  scripts/kafka/reset-preserved-topics.sh
+  scripts/kafka/topics.env
+  scripts/jenkins/market_calendar.py
+  scripts/kafka/apply-topics.sh
+  scripts/kafka/ensure-partition-only-topics.sh
+  scripts/kafka/load-kafka-settings.sh
+  scripts/ops/mirror-topic-filter.sh
+  scripts/ops/clean-slate-decision.sh
+  scripts/ops/mirror-ledger.sh
+  scripts/ops/loaded-mirror-agents.sh
+)
+if _sibs="$(bash "$DEPLOY_SRC/scripts/kafka/apply-topics-sibling-files.sh" 2>/dev/null)"; then
+  for _s in $_sibs; do
+    case " ${DEPLOY_FILES[*]} " in *" scripts/kafka/$_s "*) ;; *) DEPLOY_FILES+=("scripts/kafka/$_s") ;; esac
+  done
+else
+  echo "cannot derive apply-topics.sh's siblings from $DEPLOY_SRC — refusing"; exit 1
+fi
+for f in "${DEPLOY_FILES[@]}"; do
   [ -r "$DEPLOY_SRC/$f" ] || { echo "missing $DEPLOY_SRC/$f"; exit 1; }
 done
 say "=== prod clean-slate $MODE (after=$AFTER) source=$DEPLOY_SRC ==="
+
+# ---- 0b. the source must be the REVIEWED one, before anything is paused or wiped ----
+# A production reset runs the files in DEPLOY_SRC, not the ones in main. On 2026-10-13 05:47 that
+# distinction cost a wipe with pre-#1173 code and left 53 declared topics absent and 15 mirrors down.
+# `dry` changes nothing, so it is deliberately NOT guarded; `wipe` is.
+if [ "$MODE" = wipe ]; then
+  require_reviewed_source "$DEPLOY_SRC" "${DEPLOY_FILES[@]}" || {
+    say "nothing was paused, nothing wiped, no bring-up."
+    exit 1
+  }
+fi
 sshpass -p "$PW" ssh -o StrictHostKeyChecking=no "$HOST" 'mkdir -p ~/offhours/ops ~/offhours/kafka ~/offhours/jenkins' </dev/null
 sshpass -p "$PW" scp -q -o StrictHostKeyChecking=no "$DEPLOY_SRC/scripts/ops/offhours-clean-slate.sh" "$HOST:offhours/ops/"
 sshpass -p "$PW" scp -q -o StrictHostKeyChecking=no "$DEPLOY_SRC/scripts/kafka/reset-preserved-topics.sh" "$DEPLOY_SRC/scripts/kafka/topics.env" "$HOST:offhours/kafka/"

@@ -400,6 +400,13 @@ jobs:
       - name: mirror-topic-filter holds the right mirrors
         run: bash scripts/ops/mirror-topic-filter-test.sh
 
+      # A production reset runs the files in ITS checkout, not the ones in main. On 2026-10-13 a clean
+      # slate ran from a tree whose apply-topics.sh had uncommitted edits and was 89 lines behind main,
+      # wiped production and took the pre-#1173 failure path. The guard compares every file the run uses
+      # against origin/main, by content, and refuses a wipe otherwise — driven here over real git repos.
+      - name: a production wipe refuses an unreviewed source tree
+        run: bash scripts/ops/reviewed-source-guard-test.sh
+
       # The dev time-warp replay deletes the broker's topics and then waits for them to be gone: both
       # halves must agree about the RESET-PRESERVED keep-list. The delete loop ignored it entirely, and
       # the first fix for that made the WAIT hang on the topics it now keeps — a structural grep cannot
