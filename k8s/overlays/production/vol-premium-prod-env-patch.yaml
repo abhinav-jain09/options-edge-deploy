@@ -1,17 +1,25 @@
 # PROD-ONLY: calibrate vol-premium and promote the UI out of shadow (owner Gate-1 §9 decision,
-# 2026-10-10; baseline re-pinned 2026-10-13). Pins the gen5 LIVE-INDEX baseline
-# `bl-live-20261009-spxindex-gen5` (varianceTimeBase=OBSERVABLE_SPAN, 248 accepted sessions,
-# shapeComplete, calibratedThroughDate=2026-10-09) published to options.spx.vol-premium.baseline
-# with --confirm. It is calibrated from the OBSERVED SPX 1-second index (spx-1s-ticks) over the
-# year 2025-10-10..2026-10-09, so spotProvenance=LIVE_INDEX / reconstructed=false.
+# 2026-10-10; baseline re-pinned 2026-10-13). Pins the gen6 LIVE-INDEX baseline
+# `bl-live-20261012-spxindex-gen6` (varianceTimeBase=OBSERVABLE_SPAN, 249 accepted sessions,
+# shapeComplete, calibratedThroughDate=2026-10-12, effectiveFromSessionDate=2026-10-13) published
+# to options.spx.vol-premium.baseline with --confirm. It is calibrated from the OBSERVED SPX
+# 1-second index (spx-1s-ticks for 2025-10-10..2026-10-09 + the live underlying.spx.price archive
+# for 2026-10-12), so spotProvenance=LIVE_INDEX / reconstructed=false.
 #
-# WHY gen5 REPLACES gen4: gen4's calibratedThroughDate was 2026-07-31, so at boot the engine
+# WHY gen6 REPLACES gen4/gen5: gen4's calibratedThroughDate was 2026-07-31, so at boot the engine
 # replayed the SESSION_FINALISED chain over (2026-07-31, lastCompleted] = ~45 sessions prod never
 # produced cleanly, reseeded, and carried LEVEL_STATE_LOST on every frame (the overallLevel/danger
-# verdict was blanked, though the forecast itself was fine). gen5's calibratedThroughDate=2026-10-09
-# makes that reconstruction interval ~empty, so the level is SEEDED clean and levelStateLost=false.
+# verdict was blanked, though the forecast itself was fine). gen5 (through 2026-10-09) still left
+# the 2026-10-12 SESSION_FINALISED record — written UNDER gen4, encoding gen4's EWMA seed — inside
+# the reconstruction interval (2026-10-09, 2026-10-12], and gen5's own recurrence could not
+# reproduce that record's level, so it still reseeded (LEVEL_STATE_LOST). gen6's
+# calibratedThroughDate=2026-10-12 moves the reconstruction start to the next trading date
+# (2026-10-13), so NO gen4-written record remains in the interval: the first session gen6 operates
+# seeds clean (levelStateLost=false) and every record gen6 writes from 2026-10-13 onward matches
+# its own recurrence. effectiveFromSessionDate=2026-10-13 is why this must be deployed for the
+# 2026-10-13 session (firstSession>=2026-10-13), not retroactively into 2026-10-12.
 #
-# VOL_PREMIUM_ADMIT_RECONSTRUCTED_BASELINE is kept true but is now VESTIGIAL: gen5 is LIVE_INDEX
+# VOL_PREMIUM_ADMIT_RECONSTRUCTED_BASELINE is kept true but is now VESTIGIAL: gen6 is LIVE_INDEX
 # (not reconstructed) so the engine binds it with or without this flag. It is retained only so a
 # future reconstructed re-pin still binds without another overlay change. UI_ACTIVATED keeps the
 # page ACTIVE (unchanged from gen4). Dev/experiment stay NONE/shadow (their ledgers are empty).
@@ -28,9 +36,9 @@ spec:
         - name: vol-premium
           env:
             - name: VOL_PREMIUM_BASELINE_VERSION
-              value: bl-live-20261009-spxindex-gen5
+              value: bl-live-20261012-spxindex-gen6
             - name: VOL_PREMIUM_BASELINE_CONTENT_HASH
-              value: "0b872edfc8fc558a2f9175a4330a32d4605907d4379e007d5fc5360dc87170c6"
+              value: "34a235f211660843d51196244cf8ecd29d1c435bd8a3afb2cc7be84bcefb632d"
             - name: VOL_PREMIUM_ADMIT_RECONSTRUCTED_BASELINE
               value: "true"
             - name: VOL_PREMIUM_UI_ACTIVATED
