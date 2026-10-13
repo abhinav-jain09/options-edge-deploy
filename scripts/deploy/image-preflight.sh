@@ -96,6 +96,13 @@
             "
           fi
 
+          # market-commentary renders ONLY in dev (dev-only shadow).
+          if [ "${ENVIRONMENT:-dev}" = "dev" ] && [ "${DEPLOY_TARGET:-all}" = "all" ]; then
+            images="$images
+            MARKET_COMMENTARY_IMAGE=${MARKET_COMMENTARY_IMAGE:-}
+            "
+          fi
+
           # es-aggressor-flow renders ONLY in production (slope measurement; dev is SPX-only
           # with no ES feed) — preflight it only for a production all-deploy.
           if [ "${ENVIRONMENT:-dev}" = "production" ] && [ "${DEPLOY_TARGET:-all}" = "all" ]; then

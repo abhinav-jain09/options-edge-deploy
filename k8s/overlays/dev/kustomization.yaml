@@ -23,6 +23,9 @@ resources:
   # options.indicators.bars read-only and writes only options.spx.market-structure.{ui,sequence,dlq};
   # what a reader sees is gated on the gateway's own GATEWAY_MARKET_STRUCTURE_ENABLED.
   - ../../services/market-structure/base
+  # market-commentary: DEV-ONLY shadow (replicas 1). Reads futures.auction, the spread-skew snapshot, SPX spot and option quotes
+  # read-only; writes only options.spx.market-commentary.{minute,current,events,rejections}. Makes no forecast.
+  - ../../services/market-commentary/base
   # early-auction-verdict: HELD AT replicas 0 (shadow). Boot is fail-closed on the
   # verifier-produced lock ConfigMap early-auction-verdict-lock (EAV-R2a); reads the
   # auction + witness topics read-only and writes only early-auction.verdicts.shadow.
@@ -961,6 +964,9 @@ images:
     newName: host.docker.internal:5001/options-edge-hedging-pressure
   - name: 192.168.100.252:5000/options-edge-market-structure
     newName: host.docker.internal:5001/options-edge-market-structure
+  - name: 192.168.100.252:5000/options-edge-market-commentary
+    newName: host.docker.internal:5001/options-edge-market-commentary
+    newTag: dev
   - name: 192.168.100.252:5000/options-edge-early-auction-verdict
     newName: host.docker.internal:5001/options-edge-early-auction-verdict
     newTag: dev
