@@ -1,0 +1,84 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: market-commentary-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: market-commentary-service
+    app.kubernetes.io/component: market-commentary-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  # RUNNING on dev only, as a SHADOW: it reads futures.auction, the spread-skew snapshot, SPX spot and option quotes read-only
+  # and writes ONLY its own four topics; nothing acts on its output. It describes the market and makes no forecast.
+  # SINGLE replica ONLY: a second instance with the same transactional.id fences the first.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: market-commentary-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: market-commentary-service
+        app.kubernetes.io/component: market-commentary-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: market-commentary
+          image: 192.168.100.252:5000/options-edge-market-commentary:dev
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: options-edge-config              # KAFKA_BOOTSTRAP_SERVERS, TOPIC_PREFIX
+          env:
+            # Topic names are the code defaults (TOPIC_PREFIX is "" on dev). The four outputs must EXIST at start:
+            # scripts/kafka/ensure-market-commentary-topics.sh is the first-deploy barrier.
+            - name: MC_ENVIRONMENT
+              value: dev
+            # The bounded-state limits have no default in the service on purpose. Capacity x versions x 1 KiB must fit in
+            # 80 percent of MC_HEAP_LIMIT_MB (6000 x 100 x 1 KiB = about 586 MiB of 1024 MiB x 0.8 = 819 MiB).
+            - name: MC_CONTRACT_CAPACITY
+              value: "6000"
+            - name: MC_VERSIONS_PER_KEY
+              value: "100"
+            - name: MC_HEAP_LIMIT_MB
+              value: "1024"
+            - name: MC_MIN_PARTITION_RATE_PER_SECOND
+              value: "500"
+            # Ordering contracts per input (section 4): the snapshot and the spot are emitted in event-time order by their
+            # single producers; the option quotes may interleave by up to two seconds.
+            - name: MC_ORDERING_I2
+              value: ORDERED
+            - name: MC_ORDERING_I4
+              value: ORDERED
+            - name: MC_ORDERING_I5
+              value: LATENESS_MS=2000
+            - name: HEALTH_PORT
+              value: "8080"
+            - name: JAVA_TOOL_OPTIONS
+              value: -Xms512m -Xmx1024m
+          ports:
+            - name: health
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 200m
+              memory: 1024Mi
+            limits:
+              memory: 1536Mi
