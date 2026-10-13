@@ -52,6 +52,12 @@ spec:
             # KAFKA_EARLY_AUCTION_VERDICT_TOPIC; replay window: GATEWAY_EARLY_AUCTION_VERDICT_SEEK_BACK_MS.
             - name: GATEWAY_EARLY_AUCTION_VERDICT_ENABLED
               value: "true"
+            # MARKET COMMENTARY relay: the per-minute records of market-commentary-service, polled by the read-only
+            # /market-commentary panel through GET /api/market-commentary/state (a REST view, no WebSocket event). The topic is the
+            # code default; declared in scripts/kafka/topics.env and created by ensure-market-commentary-topics.sh. Applying
+            # feed-gateway ROLLS THE GATEWAY (hostNetwork, Recreate): the :8091 WebSocket blips, so apply it outside the session.
+            - name: GATEWAY_MARKET_COMMENTARY_ENABLED
+              value: "true"
             - name: WS_ALLOWED_ORIGINS
               value: "http://localhost:8090"
             - name: WS_AUTH_ISSUER_URI
