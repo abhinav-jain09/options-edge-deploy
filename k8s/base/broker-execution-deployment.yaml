@@ -119,6 +119,21 @@ spec:
             # where an operator looks rather than only in BrokerExecutionSettings. Lowering it is a
             # trading decision for the account owner, not a deployment one; a malformed value stops
             # the service rather than becoming the default.
+            # Session dates (Eastern) on which this service OPENS NOTHING. Federal Reserve decision days,
+            # from the desk's own event calendar: OE0DTE_EVENT_CALENDAR_v1.json in
+            # vix-option-inteligence-service (fomcDecisionDates, sourced from federalreserve.gov).
+            #
+            # EXITS ARE NOT BLOCKED by this — a date rule that could stop a position being closed would trap
+            # it through the very event the rule exists to avoid. R16_EVENT_DAY refuses ENTER only.
+            #
+            # ⚠️ The calendar covers 2026-01-01 to 2026-12-31 ONLY. These eight dates are that whole year;
+            # the list must be EXTENDED for 2027, and nothing here detects that it has run out — a stale list
+            # simply stops matching and the desk trades through the day. Re-read the calendar each January.
+            #
+            # The inflation-report dates in that calendar are deliberately NOT included: it carries 2 for the
+            # year where a full year has 12, so the list is incomplete and would give false protection.
+            - name: BROKER_EXECUTION_NO_TRADE_DATES
+              value: "2026-01-28,2026-03-18,2026-04-29,2026-06-17,2026-07-29,2026-09-16,2026-10-28,2026-12-09"
             - name: BROKER_EXECUTION_MAX_QUANTITY
               value: "1"
             - name: BROKER_EXECUTION_MAX_CREDIT
