@@ -36,7 +36,39 @@ UNIT="${UNIT:-options-edge-cloudflared-stable}"
 TAG="oe-tunnel-watchdog"
 log() { logger -t "$TAG" -- "$*"; echo "[$(date -Is)] $*"; }
 
-code() { curl -s -o /dev/null -w '%{http_code}' -m 15 "$1" 2>/dev/null; }
+# The homepage intentionally redirects to /gamma-lab. Check the final response a browser sees;
+# treating the initial 302 as a tunnel failure makes this watchdog restart a healthy tunnel.
+# Bound redirects so a loop cannot keep the timer occupied indefinitely.
+code() { curl -L --max-redirs 5 -s -o /dev/null -w '%{http_code}' -m 15 "$1" 2>/dev/null; }
+
+# A healthy homepage does not prove /ws/events is being forwarded. Both public and origin
+# normally answer 401 without a bearer token; restart only for tunnel-shaped public failures
+# while the WebSocket origin itself still answers. This gate is already active on the prod host.
+WS_PATH="${WS_PATH:-/ws/events}"
+WS_ORIGIN="${WS_ORIGIN:-http://192.168.100.252:30097}"
+ws_code() {
+  curl -s -o /dev/null -w '%{http_code}' -m 12 \
+    -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+    -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
+    "$1" 2>/dev/null
+}
+ws_pub="$(ws_code "${PUBLIC_URL}${WS_PATH}")"
+ws_org="$(ws_code "${WS_ORIGIN}${WS_PATH}")"
+case "$ws_org" in
+  000|5??) : ;; # Origin down is not evidence of a tunnel failure.
+  *)
+    case "$ws_pub" in
+      000|502|503|504)
+        log "ws gate: public${WS_PATH}=$ws_pub while origin=$ws_org — tunnel is not forwarding websockets; restarting $UNIT"
+        systemctl restart "$UNIT"
+        sleep 10
+        ws_pub2="$(ws_code "${PUBLIC_URL}${WS_PATH}")"
+        log "ws gate: after restart public${WS_PATH}=$ws_pub2 (origin=$ws_org)"
+        exit 0
+        ;;
+    esac
+    ;;
+esac
 
 pub="$(code "$PUBLIC_URL")"
 [ "$pub" = "200" ] && exit 0          # healthy: the overwhelmingly common case, stay silent
