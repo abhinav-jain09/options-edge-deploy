@@ -32,6 +32,8 @@ run() { # policy-for-basis-state -> exit status of verify-topics; output in $OUT
   # The mock reports each topic at ITS SET's declared count: verify-topics now walks the es4 list under
   # SET=es4, and a few names are declared at different counts on the two clusters.
   local decl="$DECLARED"; [ "${SET:-}" = es4 ] && decl="$OPTIONS_EDGE_ES4_TOPICS"
+  local byte_declarations="${OPTIONS_EDGE_TOPIC_RETENTION_BYTES_OVERRIDES:-}"
+  [ "${SET:-}" = es4 ] && byte_declarations="${OPTIONS_EDGE_ES4_TOPIC_RETENTION_BYTES_OVERRIDES:-}"
   # Report each topic's DECLARED partition count. A flat "1" fails verify-topics' own
   # at-least-declared check on every 4- and 32-partition topic, which would mask the contract
   # this test is actually about.
@@ -61,7 +63,9 @@ ret=\$(printf '%s' "$RETENTIONS" | tr ' ' '\\n' | awk -F= -v n="\$name" '\$1 == 
 case "$ret_ov" in "\$name="*) ret="${ret_ov#*=}";; esac
 # retention.bytes rides AFTER retention.ms, as the real tool prints it; BYTES_OVERRIDE=name=value
 # overrides one topic, BYTES_OVERRIDE=name= (empty) OMITS the field so the reader's refusal is tested.
-bytes=-1
+# Match the active declaration, including the order topics' finite byte caps.
+bytes=\$(printf '%s' "$byte_declarations" | tr ' ' '\\n' | awk -F= -v n="\$name" '\$1 == n {print \$2; exit}')
+bytes=\${bytes:--1}
 case "$bytes_ov" in "\$name="*) bytes="${bytes_ov#*=}";; esac
 if [ -n "\$bytes" ]; then bytes_field=", retention.bytes=\$bytes sensitive=false"; else bytes_field=""; fi
 echo "Dynamic configs for topic \$name are: cleanup.policy=\$pol sensitive=false, retention.ms=\${ret:--1} sensitive=false\$bytes_field"
@@ -140,8 +144,11 @@ WANT_ENV=production PART_OVERRIDE="underlying.vix.price=2" \
   "underlying.vix.price has partitions=2 but requires EXACTLY 1"
 
 # retention.BYTES (deploy Codex round 2, finding 2): declared per topic in topics.env, verified for
-# the active set; a finite cap or an unreadable value fails, on the default set and on es4.
-check "retention.bytes contract passes when the broker says -1" 0 compact "retention.bytes contract OK"
+# the active set; a value differing from its declaration or an unreadable value fails.
+check "retention.bytes contract passes when the broker matches declarations" 0 compact "retention.bytes contract OK"
+BYTES_OVERRIDE="trading.order.intent=-1" \
+  check "finite order-topic byte cap is enforced" 1 compact \
+  "trading.order.intent retention.bytes='-1' but the declaration says '1073741824'"
 BYTES_OVERRIDE="es.futures.footprint.strike=1073741824" \
   check "a FINITE retention.bytes on the strike log fails" 1 compact \
   "es.futures.footprint.strike retention.bytes='1073741824' but the declaration says '-1'"
