@@ -1,8 +1,8 @@
 #!/bin/bash
 # "clean up prod" (owner rule 2026-09-16, "make prod similar to dev"): the dev-cleanup.sh flow on prod.
 #
-#   0. refuse unless every file this run uses is identical to origin/main's — a reset runs DEPLOY_SRC's
-#      code, not main's (scripts/ops/reviewed-source-guard.sh; `dry` is not guarded)
+#   0. re-exec from origin/main: the commit is read from the remote, extracted to a temp tree, and this
+#      script runs from there, in BOTH modes (scripts/ops/reviewed-source-guard.sh)
 #   1. pause the es4->prod MirrorMaker launchd agents on this Mac (they produce into topics that are about to go)
 #   2. on .252 as root: scripts/ops/offhours-clean-slate.sh with TOPIC_WIPE_MODE=delete START_AFTER_WIPE=none —
 #      scale every pipeline deployment to 0 (Keycloak exempt), DELETE every non-whitelisted topic (state and
@@ -37,6 +37,26 @@ PAUSED_LIST="${PROD_MIRRORS_PAUSED:-$HOME/oe-ops/.prod-mirrors-paused}"
 LOG=~/oe-ops/logs/prod-clean-slate.log; mkdir -p ~/oe-ops/logs
 case "$MODE" in dry) DRY=true; WIPE=false ;; wipe) DRY=false; WIPE=true ;; *) echo "usage: $0 dry|wipe [up|down]"; exit 2 ;; esac
 say() { echo "[$(date '+%H:%M:%S')] $*" | tee -a "$LOG"; }
+# ---- RUN FROM origin/main, NOT FROM THIS CHECKOUT ----
+# A reset runs the files in DEPLOY_SRC. On 2026-10-13 05:47 that meant a wipe with pre-#1173 code from a
+# tree with 14 uncommitted files, which left 53 declared topics absent and 15 mirrors down. So before
+# anything else is sourced, origin/main's commit is read from the REMOTE, extracted into a private temp
+# directory, and this script re-execs itself from there with DEPLOY_SRC pointing at it. Both modes: a
+# `dry` run still copies files to the production host and root-executes the host-side script there, so
+# exempting it would exempt exactly the code that can ignore DRY_RUN.
+#
+# WHAT REMAINS UNREVIEWED, stated rather than glossed: the lines above this point plus the guard's own
+# resolve-and-extract — the bootstrap. Everything that pauses, wipes, recreates, resumes or brings up
+# runs from the extracted commit. This defends against a stale or dirty tree, which is what happened; it
+# cannot defend against a tree edited to defeat it, and no in-process check can.
+# shellcheck source=/dev/null
+. "$DEPLOY_SRC/scripts/ops/reviewed-source-guard.sh" || { echo "cannot source $DEPLOY_SRC/scripts/ops/reviewed-source-guard.sh"; exit 1; }
+exec_from_reviewed_tree "${OE_REVIEWED_FROM:-$DEPLOY_SRC}" scripts/ops/prod-clean-slate.sh "$MODE" "$AFTER" || {
+  say "nothing was paused, nothing wiped, no bring-up."
+  exit 1
+}
+DEPLOY_SRC="$reviewed_tree_dir"
+
 # The recreate decision (what a partial apply permits) lives in its own file so a test can drive every
 # combination of statuses; this script only ACTS on it. Sourced from DEPLOY_SRC like everything else.
 # shellcheck source=/dev/null
@@ -49,10 +69,6 @@ say() { echo "[$(date '+%H:%M:%S')] $*" | tee -a "$LOG"; }
 # front of the wipe. Driven by scripts/ops/loaded-mirror-agents-test.sh with a stubbed launchctl.
 # shellcheck source=/dev/null
 . "$DEPLOY_SRC/scripts/ops/loaded-mirror-agents.sh" || { echo "cannot source $DEPLOY_SRC/scripts/ops/loaded-mirror-agents.sh"; exit 1; }
-# ...and the guard that decides whether THIS source tree may wipe production at all. Driven by
-# scripts/ops/reviewed-source-guard-test.sh.
-# shellcheck source=/dev/null
-. "$DEPLOY_SRC/scripts/ops/reviewed-source-guard.sh" || { echo "cannot source $DEPLOY_SRC/scripts/ops/reviewed-source-guard.sh"; exit 1; }
 # Returns the REMOTE command's exit status (the filter stages would otherwise hide it: a function returns
 # its last pipe stage, and sed always succeeds).
 ssh_root() { local rc; sshpass -p "$PW" ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 "$HOST" "su - root -c '$1'" <<EOF 2>&1 | grep -vE "^Password: *$|WARNING: |vulnerable|openssh|^\*\*" | sed 's/^Password: //'
@@ -192,16 +208,9 @@ for f in "${DEPLOY_FILES[@]}"; do
 done
 say "=== prod clean-slate $MODE (after=$AFTER) source=$DEPLOY_SRC ==="
 
-# ---- 0b. the source must be the REVIEWED one, before anything is paused or wiped ----
-# A production reset runs the files in DEPLOY_SRC, not the ones in main. On 2026-10-13 05:47 that
-# distinction cost a wipe with pre-#1173 code and left 53 declared topics absent and 15 mirrors down.
-# `dry` changes nothing, so it is deliberately NOT guarded; `wipe` is.
-if [ "$MODE" = wipe ]; then
-  require_reviewed_source "$DEPLOY_SRC" "${DEPLOY_FILES[@]}" || {
-    say "nothing was paused, nothing wiped, no bring-up."
-    exit 1
-  }
-fi
+# No separate content check: $DEPLOY_SRC IS the extracted origin/main commit by the time this runs, so
+# there is nothing to compare it against. The list above is still the readable-check, which catches an
+# incomplete extraction as well as a missing file.
 sshpass -p "$PW" ssh -o StrictHostKeyChecking=no "$HOST" 'mkdir -p ~/offhours/ops ~/offhours/kafka ~/offhours/jenkins' </dev/null
 sshpass -p "$PW" scp -q -o StrictHostKeyChecking=no "$DEPLOY_SRC/scripts/ops/offhours-clean-slate.sh" "$HOST:offhours/ops/"
 sshpass -p "$PW" scp -q -o StrictHostKeyChecking=no "$DEPLOY_SRC/scripts/kafka/reset-preserved-topics.sh" "$DEPLOY_SRC/scripts/kafka/topics.env" "$HOST:offhours/kafka/"
