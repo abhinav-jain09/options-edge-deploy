@@ -33,7 +33,7 @@ cfgmissing() {
 
 # mock <list> <partitions> <ui cfg> <sequence cfg> <dlq cfg> [fail: list|create|describe|configs] [rf]
 mock() {
-  mkdir -p "$T/bin"; : > "$T/created"
+  mkdir -p "$T/bin"; : > "$T/created"; : > "$T/altered"
   printf '%s\n' "$3" > "$T/cfg_ui"; printf '%s\n' "$4" > "$T/cfg_seq"; printf '%s\n' "$5" > "$T/cfg_dlq"
   cfgline compact -1 delete > "$T/cfg_recovery"
   cat > "$T/bin/kafka-topics" <<M
@@ -48,6 +48,9 @@ M
   cat > "$T/bin/kafka-configs" <<M
 #!/usr/bin/env bash
 [ "${6:-}" = configs ] && { echo "Error: TimeoutException" >&2; exit 1; }
+case " \$* " in *" --alter "*)
+  [ "${6:-}" = alter ] && { echo "Error: alteration refused" >&2; exit 1; }
+  echo "\$*" >> "$T/altered"; exit 0 ;; esac
 case " \$* " in
   *"$UI"*) cat "$T/cfg_ui" ;;
   *"$SEQ"*) cat "$T/cfg_seq" ;;
@@ -117,5 +120,11 @@ mock "$ALL" 1 "$WEEK" "$TWO" "$WEEK"
 cfgline compact 604800000 delete > "$T/cfg_recovery"; expect_fail "recovery finite retention refused"
 mock "$ALL" 1 "$WEEK" "$TWO" "$WEEK"
 cfgline compact -1 delete 1048575 > "$T/cfg_recovery"; expect_fail "recovery undersized message bound refused"
+
+mock "$ALL" 1 "$WEEK" "$TWO" "$WEEK" alter; expect_fail "compaction configuration failure refuses rollout"
+mock "$ALL" 1 "$WEEK" "$TWO" "$WEEK"; run
+if grep -q "$REC.*segment.bytes=16777216,max.compaction.lag.ms=300000" "$T/altered" && [ "$(wc -l < "$T/altered" | tr -d ' ')" = 1 ]; then
+  ok "recovery cadence reconciled after reset; other topics never altered"
+else bad "recovery cadence reconciliation"; cat "$T/altered"; fi
 
 echo "passed=$pass failed=$fail"; [ $fail -eq 0 ]

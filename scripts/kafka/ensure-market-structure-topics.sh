@@ -19,7 +19,7 @@
 #   options.spx.market-structure.recovery  1 partition, compact, retention.ms=-1 (checkpoint state)
 #
 # CREATE if absent, then VERIFY every topic — including one just created — and fail closed. Never alters an
-# existing topic. Every CLI call's status is checked explicitly: ensure() runs in an `if` context, where bash
+# existing topic's identity, policy or retention. Recovery compaction cadence is reconciled below. Every CLI call's status is checked explicitly: ensure() runs in an `if` context, where bash
 # ignores `set -e`, so nothing here may rely on errexit.
 set -euo pipefail
 
@@ -54,7 +54,7 @@ ensure() { # <topic> <retention.ms floor> [cleanup policy]
     echo "creating '$topic' (1 partition, RF=$RF, cleanup.policy=$wantPolicy, retention.ms=$wantRet)"
     if ! out=$(kt --create --if-not-exists --topic "$topic" --partitions 1 --replication-factor "$RF" \
                   --config cleanup.policy="$wantPolicy" --config retention.ms="$wantRet" \
-                  --config max.message.bytes="$MIN_MAX_MESSAGE_BYTES" --config min.insync.replicas="$MIN_ISR" "${extra[@]}" 2>&1); then
+                  --config max.message.bytes="$MIN_MAX_MESSAGE_BYTES" --config min.insync.replicas="$MIN_ISR" ${extra[@]+"${extra[@]}"} 2>&1); then
       echo "FAIL: could not create '$topic':"; printf '%s\n' "$out"; return 1
     fi
   fi
@@ -110,6 +110,14 @@ ensure() { # <topic> <retention.ms floor> [cleanup policy]
   if [ "$isr" -lt "$MIN_ISR" ]; then
     echo "FAIL: '$topic' has min.insync.replicas=$isr, expected >= $MIN_ISR (the service verifies the same minimum)."
     return 1
+  fi
+  # A reset can recreate this topic through apply-topics with broker compaction defaults.
+  # Reconcile cadence here on every sanctioned deploy, after identity/policy/retention verification.
+  if [ "$wantPolicy" = compact ]; then
+    if ! out=$(kc --entity-type topics --entity-name "$topic" --alter \
+        --add-config segment.bytes=16777216,max.compaction.lag.ms=300000 2>&1); then
+      echo "FAIL: could not configure recovery compaction for '$topic':"; printf '%s\n' "$out"; return 1
+    fi
   fi
   echo "ok: '$topic' — partitions=1 rf=$rf cleanup.policy=$wantPolicy retention.ms=$retention (floor $wantRet) max.message.bytes=$maxBytes min.insync.replicas=$isr"
 }

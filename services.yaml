@@ -200,9 +200,9 @@ services:
   # market-structure: RUNNING on dev and production (replicas 1). Consumes options.indicators.bars
   # read-only (the owner's SPX 1m/5m/15m bars) and publishes options.spx.market-structure.ui — the
   # projection the Context Tape page already validates — plus .sequence (R3's session records) and
-  # .dlq (R2's rejections). It publishes NO snapshot topic: R6/R7's lifecycle is not built, and
-  # decision D-4 of market-structure-service/DESIGN-DECISIONS.md says so. SINGLE replica only
-  # (per-environment transactional.id). All three output topics must exist at start —
+  # .dlq (R2's rejections), and transactional .recovery. Lifecycle and structural state are now in the UI;
+  # the broader public snapshot contract remains separate. SINGLE replica only
+  # (per-environment transactional.id). All four output/recovery topics must exist at start —
   # scripts/kafka/ensure-market-structure-topics.sh is the first-deploy barrier and the service's own
   # R13 boot verification refuses readiness until they match.
   - { name: market-structure,             managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-market-structure,             deployments: [market-structure-service] }

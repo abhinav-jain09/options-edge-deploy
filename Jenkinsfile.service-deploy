@@ -65,7 +65,7 @@ pipeline {
       // hedging-pressure: dev+prod, deployed HELD AT replicas 0 (the owner turns it on later); single replica only.
       'hedging-pressure',
       // market-structure: dev+prod at replicas 1. Reads options.indicators.bars read-only and publishes
-      // options.spx.market-structure.{ui,sequence,dlq}; single replica only (per-environment transactional.id).
+      // options.spx.market-structure.{ui,sequence,dlq,recovery}; single replica only (per-environment transactional.id).
       'market-structure',
       // stock-gex-close-scheduler: PRODUCTION only — the closing-board SCHEDULE, which now lives
       // inside the batch itself (USER 2026-09-01: "I don't want anything Jenkins-based, it should
@@ -597,9 +597,9 @@ PYEOF
     }
     stage('Verify market-structure output topics') {
       // BEFORE the rollout, same barrier as hedging-pressure above: the service never relies on auto-creation, and
-      // its own R13 boot verification refuses readiness until all three output topics match — existence, exactly one
-      // partition, cleanup.policy=delete, retention.ms at or above the floor and max.message.bytes >= 1 MiB. On a
-      // FIRST deploy none of the three exists and dev's broker would auto-create them at 32 partitions, which the
+      // its own R13 boot verification refuses readiness until all four output/recovery topics match — existence, exactly one
+      // partition, declared cleanup policy (recovery is compacted), retention.ms at or above the floor and max.message.bytes >= 1 MiB. On a
+      // FIRST deploy none of the four exists and dev's broker would auto-create them at 32 partitions, which the
       // service would then correctly refuse. Creating them here is idempotent.
       when {
         expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'market-structure' && !params.DEPLOY_DRY_RUN) }
