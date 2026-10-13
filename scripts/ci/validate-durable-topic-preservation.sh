@@ -324,7 +324,29 @@ if [ ! -x "$HELPER" ]; then
   echo "FAIL: $HELPER missing or not executable — nothing defines what may not be purged"
   fail=1
 fi
-for caller in "$CLEANSLATE" scripts/kafka/cleanup-topics.sh; do
+# THE FOUR PATHS THIS GATE COVERS, and why those four. These are the ESTATE-WIDE RESET paths: each one
+# walks the broker's whole topic list and deletes what it does not recognise, so a keep-list it ignores
+# is a keep-list that does not exist. run-dev-timewarp-replay.sh and daily-kafka-reset.sh were added on
+# 2026-10-13, when the declaration held on two of the four.
+#
+# WHAT IS NOT IN THIS LIST, stated so the inventory is not mistaken for "every script that can delete a
+# topic" (which it is not -- a sweep of `kafka-topics --delete` finds eleven more):
+#   * scripts/kafka/streams-partition-doctor.sh deletes a Streams-internal topic (…-repartition,
+#     …-changelog, FK subscription) ONLY when its partition count is the one Streams just refused to
+#     start on. That includes the preserved …gamma-migration-scorer-changelog arm of
+#     PRESERVE_TOPICS_REGEX -- and keeping it there would mean the app cannot run at all, which is a
+#     worse outcome than the rebuild the doctor's own header documents. It is a conditional REPAIR, not
+#     a reset, so the keep-list deliberately does not bind there.
+#   * scripts/kafka/apply-topics.sh and cleanup-topics.sh are covered by their own executable tests
+#     below (the ledger, strike and vol-premium safety tests), not by this caller list.
+#   * ensure-indicator-topics.sh, prune-retired-zero-dte-identity.lib.sh,
+#     reset-hpsf-stage-b-internal-topics.sh and es-predown.sh delete a NAMED, bounded set they own; none
+#     of those names is in the preserved list today. A new preserved topic inside one of those sets
+#     would need the same treatment, and nothing here would catch it -- that is the known limit of this
+#     gate.
+#   * the rest are tests, one-off replay scripts and scripts/ops/archive/.
+for caller in "$CLEANSLATE" scripts/kafka/cleanup-topics.sh scripts/kafka/run-dev-timewarp-replay.sh \
+             scripts/ops/daily-kafka-reset.sh; do
   code=$(sed 's/#.*//' "$caller")
   if ! printf '%s' "$code" | grep -q 'reset-preserved-topics.sh'; then
     echo "FAIL: $caller does not source $HELPER — it would purge topics the declaration says"
@@ -332,12 +354,98 @@ for caller in "$CLEANSLATE" scripts/kafka/cleanup-topics.sh; do
     fail=1
   fi
 done
-code=$(sed 's/#.*//' "$CLEANSLATE")
-if ! printf '%s' "$code" | grep -qE 'if[[:space:]]+is_reset_preserved'; then
-  echo "FAIL: $CLEANSLATE sources the keep-list but never BRANCHES on is_reset_preserved —"
-  echo "      the list is loaded and then ignored."
+for caller in "$CLEANSLATE" scripts/kafka/run-dev-timewarp-replay.sh scripts/ops/daily-kafka-reset.sh; do
+  code=$(sed 's/#.*//' "$caller")
+  if ! printf '%s' "$code" | grep -qE 'if[[:space:]]+is_reset_preserved'; then
+    echo "FAIL: $caller sources the keep-list but never BRANCHES on is_reset_preserved —"
+    echo "      the list is loaded and then ignored."
+    fail=1
+  fi
+done
+
+# THE DAILY RESET NEEDS BOTH MECHANISMS. Its disposable rule deletes *-changelog, and the preserved
+# Streams changelog (...gamma-migration-scorer-changelog) is protected only by PRESERVE_TOPICS_REGEX --
+# topics.env cannot name a wildcard arm. Reading the regex is therefore load-bearing there, not a nicety
+# (deploy Codex round 2, 2026-10-13: before this, that script deleted what premarket-reset.sh protects).
+DAILY="scripts/ops/daily-kafka-reset.sh"
+daily_code=$(sed 's/#.*//' "$DAILY")
+if ! printf '%s' "$daily_code" | grep -q 'PRESERVE_TOPICS_REGEX='; then
+  echo "FAIL: $DAILY does not read PRESERVE_TOPICS_REGEX from $PREMARKET, so it deletes the preserved"
+  echo "      Streams changelogs that only the regex names."
   fail=1
 fi
+if ! printf '%s' "$daily_code" | grep -qE 'grep -qE "\$PRESERVE_TOPICS_REGEX"'; then
+  echo "FAIL: $DAILY reads PRESERVE_TOPICS_REGEX but never MATCHES a topic against it."
+  fail=1
+fi
+
+# AND WHATEVER SHIPS IT MUST SHIP WHAT IT SOURCES. Jenkinsfile.kafka-reset copies
+# daily-kafka-reset.sh to the production host and runs it there. It used to copy that ONE file, which
+# would now leave the script refusing to run (it fails closed when the keep-list is unreadable) -- the
+# fix for one path breaking another, which is the shape this branch keeps finding.
+KAFKA_RESET_JOB="Jenkinsfile.kafka-reset"
+if [ ! -r "$KAFKA_RESET_JOB" ]; then
+  echo "FAIL: $KAFKA_RESET_JOB not found — layout changed, update this validator"; fail=1
+else
+  # COMMENT LINES ARE STRIPPED FIRST. The block explaining this coupling names the very files it
+  # requires, so grepping the raw file passed on the comment while the scp shipped nothing — the
+  # "assertion satisfied by both" shape, caught by mutating the scp line.
+  kafka_reset_code=$(sed 's|^[[:space:]]*//.*||' "$KAFKA_RESET_JOB")
+  for needed in scripts/kafka/reset-preserved-topics.sh scripts/kafka/topics.env scripts/ops/premarket-reset.sh; do
+    if ! printf '%s' "$kafka_reset_code" | grep -q "$needed"; then
+      echo "FAIL: $KAFKA_RESET_JOB does not ship $needed, which $DAILY sources or reads — the job would"
+      echo "      copy a script that refuses to run."
+      fail=1
+    fi
+  done
+fi
+
+# THE BYTE HALF OF "KEPT FOREVER". retention.ms=-1 does not stop BYTE-based deletion, so a preserved
+# topic declared -1 and nothing else can still be deleted by a finite broker default or a stray
+# retention.bytes. Requiring the byte contract is therefore part of preservation, not a separate nicety
+# (deploy Codex round 1 of the trading.order classification, 2026-10-13: without this, removing the two
+# byte entries left every gate green).
+#
+# THE EXEMPTION IS THE PRE-EXISTING SET, LISTED. 22 of the 31 preserved -1 topics have never carried a
+# byte override; closing that is a change to two live brokers for 22 topics and is NOT done here. They
+# are named so the gap is visible and so a NEW preserved topic cannot join them silently.
+BYTES_EXEMPT="context-tape.direction.ledger corridor-gauge-event-log es.drop.final-summary es.drop.outcome
+es.options.spx.gamma-ladder-path.events es.options.spx.gamma-ladder-path.state
+es.options.spx.gamma-migration.crossings es.options.spx.gamma-migration.fragility
+es.options.spx.gamma-migration.wall-touch es.tape-zones.board options.databento.oi.anchor-manifest
+options.ibkr.gex.status options.spx.gamma-ladder-path.events options.spx.gamma-ladder-path.state
+options.spx.gamma-migration.crossings options.spx.gamma-migration.fragility
+options.spx.gamma-migration.scoring options.spx.gamma-migration.wall-touch spx.basis.state
+spx.drop.final-summary spx.drop.outcome underlying.vix.price"   # BZ 363, latent
+# ANY declared byte value counts, not only -1. A preserved topic needs a byte contract so a broker
+# default cannot delete it; whether that contract is "never by bytes" (-1) or "never in practice" (a cap
+# far above the measured volume) is a disk decision per topic, and the disk cannot grow (owner,
+# 2026-10-13). Requiring -1 here would have forbidden the only shape that protects the broker from a
+# producer fault.
+BYTES_DECLARED=$( { sed -nE 's/^[A-Z0-9_]*TOPIC_RETENTION_BYTES_OVERRIDES="(.*)"$/\1/p' "$TOPICS_ENV" \
+  | tr ' ' '\n' | grep -E '=-?[0-9]+$' || true; } | cut -d= -f1 | sort -u)
+_bytes_exempt_n=0
+for topic in $PRESERVED; do
+  in_list "$topic" "$MINUS_ONE" || continue
+  in_list "$topic" "$BYTES_DECLARED" && continue
+  if in_list "$topic" "$(printf '%s\n' $BYTES_EXEMPT)"; then _bytes_exempt_n=$((_bytes_exempt_n+1)); continue; fi
+  echo "FAIL: '$topic' is RESET-PRESERVED at retention.ms=-1 but declares no retention.bytes at all, so a"
+  echo "      byte cap can still delete it. Add it to OPTIONS_EDGE_TOPIC_RETENTION_BYTES_OVERRIDES, or"
+  echo "      to BYTES_EXEMPT in this validator with the reason."
+  fail=1
+done
+echo "note: $_bytes_exempt_n preserved topic(s) carry no retention.bytes contract — known, exempt, tracked as BZ 363"
+# EXACTLY THIS SET AND NO MORE. Without this, a name could be parked in BYTES_EXEMPT and the exemption
+# would quietly cover a topic that no longer needs it -- or never did (deploy Codex round 2 NIT).
+for topic in $BYTES_EXEMPT; do
+  if ! in_list "$topic" "$PRESERVED"; then
+    echo "FAIL: BYTES_EXEMPT names '$topic', which is not RESET-PRESERVED — the exemption covers nothing."; fail=1
+  elif ! in_list "$topic" "$MINUS_ONE"; then
+    echo "FAIL: BYTES_EXEMPT names '$topic', which has no retention.ms=-1 — the rule would not reach it."; fail=1
+  elif in_list "$topic" "$BYTES_DECLARED"; then
+    echo "FAIL: BYTES_EXEMPT names '$topic', which DOES declare a retention.bytes contract — remove the exemption."; fail=1
+  fi
+done
 
 # --- RETIRED topics: names that used to be durable and must now be preserved NOWHERE ----------------------------
 # options.spx.vol-premium.calendar (2026-09-13): the calendar ledger moved to Postgres. A retirement is complete only
