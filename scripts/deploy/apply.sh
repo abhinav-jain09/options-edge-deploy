@@ -211,7 +211,23 @@
             done
           fi
           if [ "${ENVIRONMENT}" = "dev" ] || [ "${ENVIRONMENT}" = "production" ]; then
-            for _img_var in SHORT_PREMIUM_AGENT_IMAGE SIGNAL_FOLLOWER_IMAGE CONTEXT_TAPE_IMAGE MULTILEG_STRUCTURE_IMAGE AMT_ORDER_BRIDGE_IMAGE BROKER_EXECUTION_IMAGE ES_TRADE_LINEARIZER_IMAGE ES_COMPRESSION_EXPANSION_IMAGE HEDGING_PRESSURE_IMAGE MARKET_STRUCTURE_IMAGE MARKET_COMMENTARY_IMAGE; do
+            for _img_var in SHORT_PREMIUM_AGENT_IMAGE SIGNAL_FOLLOWER_IMAGE CONTEXT_TAPE_IMAGE MULTILEG_STRUCTURE_IMAGE AMT_ORDER_BRIDGE_IMAGE BROKER_EXECUTION_IMAGE ES_TRADE_LINEARIZER_IMAGE ES_COMPRESSION_EXPANSION_IMAGE HEDGING_PRESSURE_IMAGE MARKET_STRUCTURE_IMAGE; do
+              _pinned="$(pin_ref "${!_img_var}")" || {
+                echo "FATAL: cannot resolve registry digest for ${_img_var}=${!_img_var}; aborting before any kubectl mutation." >&2
+                exit 1
+              }
+              printf -v "$_img_var" '%s' "$_pinned"
+              _repo="${_pinned%@*}"; _repo="${_repo%:*}"; _pdigest="${_pinned#*@}"; _pbase="${_repo##*/}"
+              _pname="$_base_registry/$_pbase"
+              _pname="$_pname" _pnewname="$_repo" _pdigest="$_pdigest" \
+                yq -i '.images += [{"name": strenv(_pname), "newName": strenv(_pnewname), "digest": strenv(_pdigest)}]' "$_overlay_kustomization"
+              echo "pinned ${_img_var} -> ${_pinned}"
+            done
+          fi
+          # DEV-ONLY images (render only in k8s/overlays/dev; production never carries them).
+          # market-commentary: dev-only shadow.
+          if [ "${ENVIRONMENT}" = "dev" ]; then
+            for _img_var in MARKET_COMMENTARY_IMAGE; do
               _pinned="$(pin_ref "${!_img_var}")" || {
                 echo "FATAL: cannot resolve registry digest for ${_img_var}=${!_img_var}; aborting before any kubectl mutation." >&2
                 exit 1

@@ -33,10 +33,14 @@ spec:
             - configMapRef:
                 name: options-edge-config              # KAFKA_BOOTSTRAP_SERVERS, TOPIC_PREFIX
           env:
-            # Topic names are the code defaults (TOPIC_PREFIX is "" on dev). The four outputs must EXIST at start:
+            # Output and the other input topic names are the code defaults (TOPIC_PREFIX is "" on dev). The four outputs must EXIST at start:
             # scripts/kafka/ensure-market-commentary-topics.sh is the first-deploy barrier.
             - name: MC_ENVIRONMENT
               value: dev
+            # The auction input on this estate is the es-namespaced topic (the mirror of the es4 SPX Auction Desk topic,
+            # one partition, delete, 7 days); the service's default is the unprefixed name.
+            - name: MC_TOPIC_AUCTION
+              value: es.futures.auction
             # The bounded-state limits have no default in the service on purpose. Capacity x versions x 1 KiB must fit in
             # 80 percent of MC_HEAP_LIMIT_MB (6000 x 100 x 1 KiB = about 586 MiB of 1024 MiB x 0.8 = 819 MiB).
             - name: MC_CONTRACT_CAPACITY

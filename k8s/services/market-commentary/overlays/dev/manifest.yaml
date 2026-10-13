@@ -40,6 +40,8 @@ spec:
         - env:
             - name: MC_ENVIRONMENT
               value: dev
+            - name: MC_TOPIC_AUCTION
+              value: es.futures.auction
             - name: MC_CONTRACT_CAPACITY
               value: "6000"
             - name: MC_VERSIONS_PER_KEY

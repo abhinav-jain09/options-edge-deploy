@@ -93,6 +93,12 @@
             BROKER_EXECUTION_IMAGE=${BROKER_EXECUTION_IMAGE:-}
             HEDGING_PRESSURE_IMAGE=${HEDGING_PRESSURE_IMAGE:-}
             MARKET_STRUCTURE_IMAGE=${MARKET_STRUCTURE_IMAGE:-}
+            "
+          fi
+
+          # market-commentary renders ONLY in dev (dev-only shadow).
+          if [ "${ENVIRONMENT:-dev}" = "dev" ] && [ "${DEPLOY_TARGET:-all}" = "all" ]; then
+            images="$images
             MARKET_COMMENTARY_IMAGE=${MARKET_COMMENTARY_IMAGE:-}
             "
           fi
