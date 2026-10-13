@@ -67,13 +67,6 @@ spec:
               value: "true"
             - name: KAFKA_MARKET_STRUCTURE_TOPIC
               value: options.spx.market-structure.ui
-            # Early-auction verdict ledger relay (the read-only /early-auction panel + the home-page
-            # strip behind GET /api/early-auction/events). ON since 2026-10-13 (owner: "flip the
-            # relay flag when rollout lands") — DEV ONLY; production stays off with the shadow
-            # service itself. The topic (early-auction.verdicts.shadow) is empty until the service
-            # scales up (scheduled 2026-10-14 ~09:45 Eastern Time), so until then the panel renders
-            # its empty state ("relay on, no session records yet"), which is correct. Topic override:
-            # KAFKA_EARLY_AUCTION_VERDICT_TOPIC; replay window: GATEWAY_EARLY_AUCTION_VERDICT_SEEK_BACK_MS.
             - name: GATEWAY_EARLY_AUCTION_VERDICT_ENABLED
               value: "true"
             - name: WS_ALLOWED_ORIGINS

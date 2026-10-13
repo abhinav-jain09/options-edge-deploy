@@ -42,13 +42,15 @@ spec:
             - name: MC_TOPIC_AUCTION
               value: es.futures.auction
             # The bounded-state limits have no default in the service on purpose. Capacity x versions x 1 KiB must fit in
-            # 80 percent of MC_HEAP_LIMIT_MB (6000 x 100 x 1 KiB = about 586 MiB of 1024 MiB x 0.8 = 819 MiB).
+            # 80 percent of MC_HEAP_LIMIT_MB (3000 x 400 x 1 KiB = about 1.17 GiB of 2048 MiB x 0.8 = 1.6 GiB). Sized from the live dev feed:
+            # the spot alone holds about 130 versions in the 65-second retention and hot option contracts hundreds, so 100 versions per key
+            # made the service refuse versions and withhold spot.
             - name: MC_CONTRACT_CAPACITY
-              value: "6000"
+              value: "3000"
             - name: MC_VERSIONS_PER_KEY
-              value: "100"
+              value: "400"
             - name: MC_HEAP_LIMIT_MB
-              value: "1024"
+              value: "2048"
             - name: MC_MIN_PARTITION_RATE_PER_SECOND
               value: "500"
             # Ordering contracts per input (section 4): the snapshot and the spot are emitted in event-time order by their
@@ -62,7 +64,7 @@ spec:
             - name: HEALTH_PORT
               value: "8080"
             - name: JAVA_TOOL_OPTIONS
-              value: -Xms512m -Xmx1024m
+              value: -Xms512m -Xmx2048m
           ports:
             - name: health
               containerPort: 8080
@@ -83,6 +85,6 @@ spec:
           resources:
             requests:
               cpu: 200m
-              memory: 1024Mi
-            limits:
               memory: 1536Mi
+            limits:
+              memory: 3072Mi
