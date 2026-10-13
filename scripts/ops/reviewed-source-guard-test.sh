@@ -33,6 +33,7 @@ build_repo() { # <root> -> sets BARE and CO
   BARE="$1/remote.git"; CO="$1/checkout"
   mkdir -p "$1"
   git init -q --bare "$BARE"
+  git -C "$BARE" symbolic-ref HEAD refs/heads/main   # or a --depth clone lands on a nonexistent master
   git init -q "$CO"
   git -C "$CO" symbolic-ref HEAD refs/heads/main
   git -C "$CO" config user.email test@example.com
@@ -41,6 +42,8 @@ build_repo() { # <root> -> sets BARE and CO
   mkdir -p "$CO/scripts/ops"
   cp "$GUARD" "$CO/scripts/ops/reviewed-source-guard.sh"
   write_wrapper "$CO/scripts/ops/wrapper.sh" reviewed-v1
+  printf 'echo helper\n' > "$CO/scripts/ops/helper.sh"; chmod +x "$CO/scripts/ops/helper.sh"
+  ln -sf helper.sh "$CO/scripts/ops/helper-link.sh"      # main really does carry symlinks (7 of them)
   git -C "$CO" add scripts >/dev/null
   git -C "$CO" commit -qm "first" >/dev/null
   git -C "$CO" remote add origin "$BARE"
@@ -77,6 +80,24 @@ run_with_marker() { # <checkout> <marker> <from> -> OUT, RC
   else
     OUT="$(cd "$co" && env -u OE_REVIEWED_FROM OE_REVIEWED_TREE="$marker" bash scripts/ops/wrapper.sh wipe 2>&1)"
   fi
+  RC=$?
+}
+
+# `bash -c <script> <name> <args...>` sets $0 to <name>, so this drives verify_reviewed_tree with the
+# self-path check satisfied while the GUARD IT SOURCES comes from <guard-dir> — which a mutation case
+# can edit. Without this a mutation of any other rule would be masked by the self-path refusal, and
+# neutering two rules at once could not say which one the case binds to.
+drive_verify() { # <guard-dir> <tree> <sha> <src> -> OUT, RC
+  OUT="$(bash -c '. "$1/scripts/ops/reviewed-source-guard.sh" || exit 1
+                  verify_reviewed_tree "$2" "$3" "$4" scripts/ops/wrapper.sh' \
+           "$2/scripts/ops/wrapper.sh" "$1" "$4" "$2" "$3" 2>&1)"
+  RC=$?
+}
+
+# ...and the end-to-end form: run the wrapper that lives INSIDE the tree, which is how a re-exec'd run
+# actually looks.
+run_from_tree() { # <tree> <sha> <src> -> OUT, RC
+  OUT="$(cd "$1" && env OE_REVIEWED_TREE="$1:$2" OE_REVIEWED_FROM="$3" bash "$1/scripts/ops/wrapper.sh" wipe 2>&1)"
   RC=$?
 }
 
@@ -194,7 +215,7 @@ run_with_marker "$CO" "$tree:$sha" "$CO"
 [ "$RC" -ne 0 ] && ok "an extra file in the extracted tree: refused" || bad "an extra file was accepted"
 # and the same tree without it is accepted, so the case above is not refusing for another reason
 rm -f "$tree/EXTRA-UNREVIEWED.sh"
-run_with_marker "$CO" "$tree:$sha" "$CO"
+run_from_tree "$tree" "$sha" "$CO"
 case "$OUT" in *"RAN version=reviewed-v1"*) ok "the same tree, extra removed: accepted" ;; *) bad "a faithful tree was refused: $OUT" ;; esac
 
 # ---- 11. a marker with no source checkout to verify against ----
@@ -222,7 +243,7 @@ build_repo "$WORK/c12"
 # which in a shallow clone means the fetch has to bring the new commit in.
 build_repo "$WORK/c12b"
 shallow="$WORK/c12b/shallow"
-git clone -q --depth 1 "file://$BARE" "$shallow" 2>/dev/null
+git clone -q --depth 1 --branch main "file://$BARE" "$shallow" 2>/dev/null
 if [ -r "$shallow/scripts/ops/wrapper.sh" ] && [ "$(git -C "$shallow" rev-parse --is-shallow-repository)" = true ]; then
   write_wrapper "$shallow/scripts/ops/wrapper.sh" dirty-in-a-shallow-clone
   run_wrapper "$shallow" wipe
@@ -240,6 +261,78 @@ else
   bad "could not build a shallow clone to test with"
 fi
 
+# ---- 12c. A VERIFIED TREE DOES NOT EXCUSE AN UNVERIFIED PROCESS (round 2 BLOCKER). The marker points
+# at a faithful extraction, and the script that is actually executing is the dirty one in the checkout.
+# Verification of the marker's tree succeeds; the run must still refuse, because what continues past
+# the guard is this process, not the tree.
+build_repo "$WORK/c12c"
+sha="$(git -C "$CO" rev-parse HEAD)"
+tree="$WORK/c12c/faithful"; mkdir -p "$tree"
+git -C "$CO" archive --format=tar "$sha" | tar -x -C "$tree"
+write_wrapper "$CO/scripts/ops/wrapper.sh" dirty-with-a-good-marker
+run_with_marker "$CO" "$tree:$sha" "$CO"
+[ "$RC" -ne 0 ] && ok "a faithful tree plus a dirty running script: refused" || bad "the self-path check did not bind"
+case "$OUT" in *dirty-with-a-good-marker*) bad "the dirty script ran behind a faithful tree" ;; *) ok "the dirty script did not run" ;; esac
+
+# ---- 12d. A CLEAN FILTER MUST NOT LAUNDER A DIFFERENT FILE (round 2 BLOCKER). The commit assigns a
+# filter to the wrapper and the operator's checkout configures the driver; the extracted tree's wrapper
+# is physically different but cleans to the committed blob. Any comparison that goes through git's
+# index (status, diff-index) calls that equal and then executes the physical file.
+build_repo "$WORK/c12d"
+printf 'scripts/ops/wrapper.sh filter=stripdirt\n' > "$CO/.gitattributes"
+git -C "$CO" add .gitattributes >/dev/null
+git -C "$CO" commit -qm "attributes" >/dev/null
+git -C "$CO" push -q origin main
+git -C "$CO" config filter.stripdirt.clean "grep -v '^#DIRT'"
+sha="$(git -C "$CO" rev-parse HEAD)"
+tree="$WORK/c12d/laundered"; mkdir -p "$tree"
+git -C "$CO" archive --format=tar "$sha" | tar -x -C "$tree"
+printf '#DIRT this line is stripped by the configured clean filter\n' >> "$tree/scripts/ops/wrapper.sh"
+OUT="$(cd "$tree" && env OE_REVIEWED_TREE="$tree:$sha" OE_REVIEWED_FROM="$CO" bash "$tree/scripts/ops/wrapper.sh" wipe 2>&1)"
+RC=$?
+[ "$RC" -ne 0 ] && ok "a file laundered by a clean filter: refused" || bad "a clean filter laundered an unreviewed file"
+case "$OUT" in
+  *"content differs: scripts/ops/wrapper.sh"*) ok "and the physical difference is what was reported" ;;
+  *) bad "refused for another reason, so the filter case is not what bound: $OUT" ;;
+esac
+
+# ---- 12e. the kinds of entry this guard is willing to verify ----
+build_repo "$WORK/c12e"
+sha="$(git -C "$CO" rev-parse HEAD)"
+tree="$WORK/c12e/t"; mkdir -p "$tree"
+git -C "$CO" archive --format=tar "$sha" | tar -x -C "$tree"
+ln -sf /bin/sh "$tree/scripts/ops/helper-link.sh"
+OUT="$(cd "$tree" && env OE_REVIEWED_TREE="$tree:$sha" OE_REVIEWED_FROM="$CO" bash "$tree/scripts/ops/wrapper.sh" wipe 2>&1)"; RC=$?
+case "$OUT" in *"symlink points somewhere else"*) ok "a retargeted symlink: refused, and named" ;; *) bad "symlink retarget not caught: $OUT" ;; esac
+rm -f "$tree/scripts/ops/helper-link.sh"; ln -sf helper.sh "$tree/scripts/ops/helper-link.sh"
+chmod -x "$tree/scripts/ops/helper.sh"
+OUT="$(cd "$tree" && env OE_REVIEWED_TREE="$tree:$sha" OE_REVIEWED_FROM="$CO" bash "$tree/scripts/ops/wrapper.sh" wipe 2>&1)"; RC=$?
+case "$OUT" in *"not executable, but the commit says it is"*) ok "a cleared executable bit: refused, and named" ;; *) bad "exec bit not caught: $OUT" ;; esac
+chmod +x "$tree/scripts/ops/helper.sh"
+mkdir -p "$tree/scripts/ops/empty-dir"
+OUT="$(cd "$tree" && env OE_REVIEWED_TREE="$tree:$sha" OE_REVIEWED_FROM="$CO" bash "$tree/scripts/ops/wrapper.sh" wipe 2>&1)"; RC=$?
+case "$OUT" in *"empty directory, not in the commit"*) ok "an added empty directory: refused" ;; *) bad "empty directory not caught: $OUT" ;; esac
+rmdir "$tree/scripts/ops/empty-dir"
+OUT="$(cd "$tree" && env OE_REVIEWED_TREE="$tree:$sha" OE_REVIEWED_FROM="$CO" bash "$tree/scripts/ops/wrapper.sh" wipe 2>&1)"; RC=$?
+case "$OUT" in *"RAN version=reviewed-v1"*) ok "and the same tree, restored, is accepted" ;; *) bad "a faithful tree was refused: $OUT" ;; esac
+
+# ---- 12f. a gitlink: `diff-index` can be configured to ignore submodules outright, so this guard
+# refuses the entry kind instead of trying to verify it. Adding a submodule here must fail loudly.
+build_repo "$WORK/c12f"
+git -C "$CO" update-index --add --cacheinfo "160000,$(git -C "$CO" rev-parse HEAD),vendor/sub" 2>/dev/null
+git -C "$CO" commit -qm "a gitlink" >/dev/null 2>&1
+git -C "$CO" push -q origin main 2>/dev/null
+sha="$(git -C "$CO" rev-parse HEAD)"
+tree="$WORK/c12f/t"; mkdir -p "$tree"
+git -C "$CO" archive --format=tar "$sha" | tar -x -C "$tree"
+OUT="$(cd "$tree" && env OE_REVIEWED_TREE="$tree:$sha" OE_REVIEWED_FROM="$CO" bash "$tree/scripts/ops/wrapper.sh" wipe 2>&1)"; RC=$?
+if git -C "$CO" ls-tree -r "$sha" | grep -q '^160000'; then
+  [ "$RC" -ne 0 ] && ok "a gitlink in the commit: refused rather than skipped" || bad "a gitlink was verified away"
+  case "$OUT" in *"only verifies blobs and symlinks"*) ok "and the refusal says why" ;; *) bad "wrong reason: $OUT" ;; esac
+else
+  bad "could not build a commit with a gitlink to test with"
+fi
+
 # ---- 13. mutations: each case above must FAIL to refuse when its own rule is removed ----
 # One mutation at a time, each aimed at exactly one assertion.
 mutate_and_run_stale() { # removes the freshness comparison; case 9 must then pass
@@ -253,25 +346,42 @@ mutate_and_run_stale() { # removes the freshness comparison; case 9 must then pa
   # which "passes" the stale case for the opposite reason and proves nothing.
   sed -i.bak 's/^  \[ "\$fresh" = "\$sha" \] ||/  [ -n "$fresh" ] ||/' "$CO/scripts/ops/reviewed-source-guard.sh"
   grep -q '^  \[ -n "\$fresh" \] ||' "$CO/scripts/ops/reviewed-source-guard.sh" || { bad "mutation 1 did not apply"; return; }
-  run_with_marker "$CO" "$tree:$sha" "$CO"
+  drive_verify "$CO" "$tree" "$sha" "$CO"
   [ "$RC" -eq 0 ] && ok "mutation 1 (freshness check removed) is caught by case 9" \
-                  || bad "mutation 1 still refused, so case 9 proves nothing (rc=$RC)"
+                  || bad "mutation 1 still refused, so case 9 proves nothing (rc=$RC): $OUT"
 }
 mutate_and_run_stale
 
-mutate_and_run_content() { # removes the content comparison; case 8 must then pass
+mutate_and_run_content() { # removes the content/extras verdict; case 10 must then pass
   build_repo "$WORK/m2"
-  write_wrapper "$CO/scripts/ops/wrapper.sh" dirty-via-marker
   sha="$(git -C "$CO" rev-parse HEAD)"
-  sed -i.bak 's/^  if \[ -n "\$out" \]; then/  if [ -n "" ]; then/' "$CO/scripts/ops/reviewed-source-guard.sh"
-  grep -q 'if \[ -n "" \]; then' "$CO/scripts/ops/reviewed-source-guard.sh" || { bad "mutation 2 did not apply"; return; }
-  run_with_marker "$CO" "$CO:$sha" "$CO"
-  case "$OUT" in
-    *dirty-via-marker*) ok "mutation 2 (content comparison removed) is caught by case 8" ;;
-    *) bad "mutation 2 still refused, so case 8 proves nothing: $OUT" ;;
-  esac
+  tree="$WORK/m2/extracted"; mkdir -p "$tree"
+  git -C "$CO" archive --format=tar "$sha" | tar -x -C "$tree"
+  printf 'x\n' > "$tree/EXTRA-UNREVIEWED.sh"
+  sed -i.bak 's/^  \[ "\$diffs" -eq 0 \] ||/  [ 0 -eq 0 ] ||/' "$CO/scripts/ops/reviewed-source-guard.sh"
+  grep -q '^  \[ 0 -eq 0 \] ||' "$CO/scripts/ops/reviewed-source-guard.sh" || { bad "mutation 2 did not apply"; return; }
+  drive_verify "$CO" "$tree" "$sha" "$CO"
+  [ "$RC" -eq 0 ] && ok "mutation 2 (the difference verdict removed) is caught by case 10" \
+                  || bad "mutation 2 still refused, so case 10 proves nothing (rc=$RC): $OUT"
 }
 mutate_and_run_content
+
+mutate_and_run_selfpath() { # removes the self-path check; case 12c must then run the dirty script
+  build_repo "$WORK/m3"
+  sha="$(git -C "$CO" rev-parse HEAD)"
+  tree="$WORK/m3/faithful"; mkdir -p "$tree"
+  git -C "$CO" archive --format=tar "$sha" | tar -x -C "$tree"
+  write_wrapper "$CO/scripts/ops/wrapper.sh" dirty-with-a-good-marker
+  # '#' as the delimiter: the line being replaced ends in '||', so '|' cannot delimit it.
+  sed -i.bak 's#^  \[ "\$selfp" = "\$treep/\$rel" \] ||#  [ -n "$selfp" ] ||#' "$CO/scripts/ops/reviewed-source-guard.sh"
+  grep -q '^  \[ -n "\$selfp" \] ||' "$CO/scripts/ops/reviewed-source-guard.sh" || { bad "mutation 3 did not apply"; return; }
+  run_with_marker "$CO" "$tree:$sha" "$CO"
+  case "$OUT" in
+    *dirty-with-a-good-marker*) ok "mutation 3 (self-path check removed) is caught by case 12c" ;;
+    *) bad "mutation 3 still refused, so case 12c proves nothing (rc=$RC): $OUT" ;;
+  esac
+}
+mutate_and_run_selfpath
 
 if [ "$fails" -eq 0 ]; then echo "reviewed-source-guard: all checks passed"; else
   echo "reviewed-source-guard: $fails check(s) FAILED"; fi

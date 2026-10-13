@@ -203,8 +203,14 @@ if _sibs="$(bash "$DEPLOY_SRC/scripts/kafka/apply-topics-sibling-files.sh" 2>/de
 else
   echo "cannot derive apply-topics.sh's siblings from $DEPLOY_SRC — refusing"; exit 1
 fi
+# A REGULAR FILE, not merely readable: `-r` is satisfied by a symlink, and the guard verifies a tracked
+# symlink by comparing its TARGET STRING to the commit's — so a reviewed symlink pointing outside the
+# extracted tree would verify and then be sourced, scp'd or executed as whatever it points at (deploy
+# Codex round 2). None of the files below is a symlink in main; if one ever becomes one, this refuses.
 for f in "${DEPLOY_FILES[@]}"; do
-  [ -r "$DEPLOY_SRC/$f" ] || { echo "missing $DEPLOY_SRC/$f"; exit 1; }
+  [ -f "$DEPLOY_SRC/$f" ] || { echo "missing or not a regular file: $DEPLOY_SRC/$f"; exit 1; }
+  [ -L "$DEPLOY_SRC/$f" ] && { echo "$DEPLOY_SRC/$f is a symlink — this run ships and executes these files, so it refuses"; exit 1; }
+  [ -r "$DEPLOY_SRC/$f" ] || { echo "unreadable $DEPLOY_SRC/$f"; exit 1; }
 done
 say "=== prod clean-slate $MODE (after=$AFTER) source=$DEPLOY_SRC ==="
 
