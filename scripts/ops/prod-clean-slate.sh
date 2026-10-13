@@ -1,6 +1,8 @@
 #!/bin/bash
 # "clean up prod" (owner rule 2026-09-16, "make prod similar to dev"): the dev-cleanup.sh flow on prod.
 #
+#   0. re-exec from origin/main: the commit is read from the remote, extracted to a temp tree, and this
+#      script runs from there, in BOTH modes (scripts/ops/reviewed-source-guard.sh)
 #   1. pause the es4->prod MirrorMaker launchd agents on this Mac (they produce into topics that are about to go)
 #   2. on .252 as root: scripts/ops/offhours-clean-slate.sh with TOPIC_WIPE_MODE=delete START_AFTER_WIPE=none —
 #      scale every pipeline deployment to 0 (Keycloak exempt), DELETE every non-whitelisted topic (state and
@@ -35,6 +37,26 @@ PAUSED_LIST="${PROD_MIRRORS_PAUSED:-$HOME/oe-ops/.prod-mirrors-paused}"
 LOG=~/oe-ops/logs/prod-clean-slate.log; mkdir -p ~/oe-ops/logs
 case "$MODE" in dry) DRY=true; WIPE=false ;; wipe) DRY=false; WIPE=true ;; *) echo "usage: $0 dry|wipe [up|down]"; exit 2 ;; esac
 say() { echo "[$(date '+%H:%M:%S')] $*" | tee -a "$LOG"; }
+# ---- RUN FROM origin/main, NOT FROM THIS CHECKOUT ----
+# A reset runs the files in DEPLOY_SRC. On 2026-10-13 05:47 that meant a wipe with pre-#1173 code from a
+# tree with 14 uncommitted files, which left 53 declared topics absent and 15 mirrors down. So before
+# anything else is sourced, origin/main's commit is read from the REMOTE, extracted into a private temp
+# directory, and this script re-execs itself from there with DEPLOY_SRC pointing at it. Both modes: a
+# `dry` run still copies files to the production host and root-executes the host-side script there, so
+# exempting it would exempt exactly the code that can ignore DRY_RUN.
+#
+# WHAT REMAINS UNREVIEWED, stated rather than glossed: the lines above this point plus the guard's own
+# resolve-and-extract — the bootstrap. Everything that pauses, wipes, recreates, resumes or brings up
+# runs from the extracted commit. This defends against a stale or dirty tree, which is what happened; it
+# cannot defend against a tree edited to defeat it, and no in-process check can.
+# shellcheck source=/dev/null
+. "$DEPLOY_SRC/scripts/ops/reviewed-source-guard.sh" || { echo "cannot source $DEPLOY_SRC/scripts/ops/reviewed-source-guard.sh"; exit 1; }
+exec_from_reviewed_tree "${OE_REVIEWED_FROM:-$DEPLOY_SRC}" scripts/ops/prod-clean-slate.sh "$MODE" "$AFTER" || {
+  say "nothing was paused, nothing wiped, no bring-up."
+  exit 1
+}
+DEPLOY_SRC="$reviewed_tree_dir"
+
 # The recreate decision (what a partial apply permits) lives in its own file so a test can drive every
 # combination of statuses; this script only ACTS on it. Sourced from DEPLOY_SRC like everything else.
 # shellcheck source=/dev/null
@@ -156,11 +178,45 @@ pause_mirrors() {
   [ "$rc" -eq 0 ] || say "   pause did not complete: the ledger holds what was recorded, and nothing may be wiped"
   return "$rc"
 }
-# ---- 0. ship the repo layout the host script sources ----
-for f in scripts/ops/offhours-clean-slate.sh scripts/kafka/reset-preserved-topics.sh scripts/kafka/topics.env scripts/jenkins/market_calendar.py scripts/kafka/apply-topics.sh scripts/kafka/ensure-partition-only-topics.sh scripts/kafka/load-kafka-settings.sh scripts/ops/mirror-topic-filter.sh scripts/ops/clean-slate-decision.sh scripts/ops/mirror-ledger.sh scripts/ops/loaded-mirror-agents.sh; do
-  [ -r "$DEPLOY_SRC/$f" ] || { echo "missing $DEPLOY_SRC/$f"; exit 1; }
+# ---- 0. the files this run uses, in ONE list ----
+# It feeds both the readable-check below and the reviewed-source guard after it, so the guard cannot
+# check a different set from the one that actually runs. apply-topics.sh's own siblings are DERIVED
+# (topics.env, resolve-prod-partition-overrides.sh today) rather than named twice: a hard-coded copy of
+# that list is what left two test harnesses running a crippled apply-topics on 2026-10-08.
+DEPLOY_FILES=(
+  scripts/ops/offhours-clean-slate.sh
+  scripts/kafka/reset-preserved-topics.sh
+  scripts/kafka/topics.env
+  scripts/jenkins/market_calendar.py
+  scripts/kafka/apply-topics.sh
+  scripts/kafka/ensure-partition-only-topics.sh
+  scripts/kafka/load-kafka-settings.sh
+  scripts/ops/mirror-topic-filter.sh
+  scripts/ops/clean-slate-decision.sh
+  scripts/ops/mirror-ledger.sh
+  scripts/ops/loaded-mirror-agents.sh
+)
+if _sibs="$(bash "$DEPLOY_SRC/scripts/kafka/apply-topics-sibling-files.sh" 2>/dev/null)"; then
+  for _s in $_sibs; do
+    case " ${DEPLOY_FILES[*]} " in *" scripts/kafka/$_s "*) ;; *) DEPLOY_FILES+=("scripts/kafka/$_s") ;; esac
+  done
+else
+  echo "cannot derive apply-topics.sh's siblings from $DEPLOY_SRC — refusing"; exit 1
+fi
+# A REGULAR FILE, not merely readable: `-r` is satisfied by a symlink, and the guard verifies a tracked
+# symlink by comparing its TARGET STRING to the commit's — so a reviewed symlink pointing outside the
+# extracted tree would verify and then be sourced, scp'd or executed as whatever it points at (deploy
+# Codex round 2). None of the files below is a symlink in main; if one ever becomes one, this refuses.
+for f in "${DEPLOY_FILES[@]}"; do
+  [ -f "$DEPLOY_SRC/$f" ] || { echo "missing or not a regular file: $DEPLOY_SRC/$f"; exit 1; }
+  [ -L "$DEPLOY_SRC/$f" ] && { echo "$DEPLOY_SRC/$f is a symlink — this run ships and executes these files, so it refuses"; exit 1; }
+  [ -r "$DEPLOY_SRC/$f" ] || { echo "unreadable $DEPLOY_SRC/$f"; exit 1; }
 done
 say "=== prod clean-slate $MODE (after=$AFTER) source=$DEPLOY_SRC ==="
+
+# No separate content check: $DEPLOY_SRC IS the extracted origin/main commit by the time this runs, so
+# there is nothing to compare it against. The list above is still the readable-check, which catches an
+# incomplete extraction as well as a missing file.
 sshpass -p "$PW" ssh -o StrictHostKeyChecking=no "$HOST" 'mkdir -p ~/offhours/ops ~/offhours/kafka ~/offhours/jenkins' </dev/null
 sshpass -p "$PW" scp -q -o StrictHostKeyChecking=no "$DEPLOY_SRC/scripts/ops/offhours-clean-slate.sh" "$HOST:offhours/ops/"
 sshpass -p "$PW" scp -q -o StrictHostKeyChecking=no "$DEPLOY_SRC/scripts/kafka/reset-preserved-topics.sh" "$DEPLOY_SRC/scripts/kafka/topics.env" "$HOST:offhours/kafka/"
