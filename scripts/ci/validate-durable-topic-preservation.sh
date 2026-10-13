@@ -406,13 +406,15 @@ fi
 # (deploy Codex round 1 of the trading.order classification, 2026-10-13: without this, removing the two
 # byte entries left every gate green).
 #
-# THE EXEMPTION IS THE PRE-EXISTING SET, LISTED. 22 of the 31 preserved -1 topics have never carried a
-# byte override; closing that is a change to two live brokers for 22 topics and is NOT done here. They
+# THE EXEMPTION IS THE PRE-EXISTING SET, LISTED. 21 of the 31 preserved -1 topics have never carried a
+# byte override; closing that is a change to two live brokers for 21 topics and is NOT done here. They
 # are named so the gap is visible and so a NEW preserved topic cannot join them silently.
+# es.tape-zones.board LEFT this list on 2026-10-13: it now declares a finite 8 GiB cap (the owner's
+# "cap the tape-zones board"; the measurement and what the cap costs are in topics.env beside it).
 BYTES_EXEMPT="context-tape.direction.ledger corridor-gauge-event-log es.drop.final-summary es.drop.outcome
 es.options.spx.gamma-ladder-path.events es.options.spx.gamma-ladder-path.state
 es.options.spx.gamma-migration.crossings es.options.spx.gamma-migration.fragility
-es.options.spx.gamma-migration.wall-touch es.tape-zones.board options.databento.oi.anchor-manifest
+es.options.spx.gamma-migration.wall-touch options.databento.oi.anchor-manifest
 options.ibkr.gex.status options.spx.gamma-ladder-path.events options.spx.gamma-ladder-path.state
 options.spx.gamma-migration.crossings options.spx.gamma-migration.fragility
 options.spx.gamma-migration.scoring options.spx.gamma-migration.wall-touch spx.basis.state

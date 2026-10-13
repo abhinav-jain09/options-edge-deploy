@@ -245,8 +245,8 @@ pipeline {
             || { echo "FAIL: cannot read source config for $TOPIC"; exit 1; }
           # awk on $1 keeps `delete.retention.ms=` and the synonyms={...} blob from ever matching:
           # only the leading token of the config line is considered, and equality is EXACT (a grep
-          # for "cleanup.policy=compact" would happily accept a bare `compact` where the contract
-          # says `compact,delete`).
+          # for "cleanup.policy=compact" would happily accept `compact,delete` where the contract
+          # says exactly `compact`, and vice versa).
           SCP=$(printf '%s\\n' "$SC" | awk '$1 ~ /^cleanup\\.policy=/ {print $1; exit}')
           [ "$SCP" = "cleanup.policy=$POLICY" ] || { echo "FAIL: source $TOPIC cleanup.policy is '${SCP:-<unset>}', contract says cleanup.policy=$POLICY"; exit 1; }
           SRET=$(printf '%s\\n' "$SC" | awk '$1 ~ /^retention\\.ms=/ {print $1; exit}')
@@ -276,10 +276,19 @@ pipeline {
           set -euo pipefail
 
           # FROZEN per-topic shape contract (scripts/kafka/topics.env, es4 block -- keep in sync):
-          #   es.tape-zones.board : 1 partition, compact,delete, retention.ms=-1
-          # 1 partition = the board's ordering contract; compact,delete + retention -1 = the
-          # last-value-per-session view the /zones page reads. Creating the target as plain `delete`
-          # would silently discard exactly those last-value semantics. The TOPIC parameter is a
+          #   es.tape-zones.board : 1 partition, delete, retention.ms=-1
+          # (This comment said compact,delete until 2026-10-13. The executable contract below has
+          # always been POLICY=delete, and the live TARGET is delete; the live SOURCE on es4 is
+          # `compact`, which is what the source preflight above rejects. Prose that disagrees with the
+          # code beside it is how the two-declarations trap starts, so it now says what the code does.)
+          # 1 partition = the board's ordering contract. The /zones page reads the LAST value for the
+          # current `ES|<sessionDate>` key, and plain `delete` with retention.ms=-1 keeps every record
+          # ever written, so that last value is trivially present — which is also why the prod copy
+          # reached 64 GiB and now carries an 8 GiB retention.bytes cap (topics.env). A byte cap never
+          # deletes the active segment, so the current session's last value still survives it; what
+          # ages out is older sessions' snapshots. This comment claimed the opposite until 2026-10-13
+          # ("creating the target as plain `delete` would silently discard those semantics"), which was
+          # never what the code beside it did. The TOPIC parameter is a
           # choice list, but re-assert here fail-closed so a job-config drift can never mirror an
           # unknown topic with a guessed shape.
           case "$TOPIC" in
