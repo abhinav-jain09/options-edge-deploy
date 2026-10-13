@@ -201,6 +201,7 @@ for t in scripts/kafka/ensure-oi-anchor-topic-parse-test.sh scripts/kafka/ensure
          scripts/kafka/ensure-es-compression-expansion-topics-test.sh \
          scripts/kafka/ensure-hedging-pressure-topics-test.sh \
          scripts/kafka/ensure-market-structure-topics-test.sh \
+         scripts/kafka/ensure-early-auction-verdict-topics-test.sh \
          scripts/kafka/ensure-zero-dte-compression-topics-test.sh \
          scripts/kafka/reset-preserved-topics-test.sh \
          scripts/ci/validate-durable-topic-preservation-mutation-test.sh \

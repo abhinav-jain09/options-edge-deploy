@@ -23,6 +23,10 @@ resources:
   # options.indicators.bars read-only and writes only options.spx.market-structure.{ui,sequence,dlq};
   # what a reader sees is gated on the gateway's own GATEWAY_MARKET_STRUCTURE_ENABLED.
   - ../../services/market-structure/base
+  # early-auction-verdict: HELD AT replicas 0 (shadow). Boot is fail-closed on the
+  # verifier-produced lock ConfigMap early-auction-verdict-lock (EAV-R2a); reads the
+  # auction + witness topics read-only and writes only early-auction.verdicts.shadow.
+  - ../../services/early-auction-verdict/base
   # short-premium-agent is DEV-ONLY: referenced here (NOT in k8s/base/kustomization.yaml)
   # so the production/experiment monolith overlays never render it. services.yaml declares
   # envs: [dev] to match; the dev image remap below applies to it.
@@ -957,6 +961,8 @@ images:
     newName: host.docker.internal:5001/options-edge-hedging-pressure
   - name: 192.168.100.252:5000/options-edge-market-structure
     newName: host.docker.internal:5001/options-edge-market-structure
+  - name: 192.168.100.252:5000/options-edge-early-auction-verdict
+    newName: host.docker.internal:5001/options-edge-early-auction-verdict
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-multileg-structure
     newName: host.docker.internal:5001/options-edge-multileg-structure
