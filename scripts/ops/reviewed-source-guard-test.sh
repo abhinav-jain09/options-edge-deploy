@@ -215,6 +215,31 @@ build_repo "$WORK/c12"
 ( exec_from_reviewed_tree "$CO" scripts/ops/not-in-the-commit.sh ) >/dev/null 2>&1 \
   && bad "a path absent from the commit was accepted" || ok "a path absent from the commit is refused"
 
+# ---- 12b. A SHALLOW checkout, which is not hypothetical: on 2026-10-13 the deploy clone on this Mac
+# was shallow (one boundary commit in .git/shallow), so every open branch had NO merge base with
+# origin/main and a "Merge pull request" commit read as a parentless root. The guard needs one commit's
+# tree and nothing of the history, so it must work there — and must still follow main when it moves,
+# which in a shallow clone means the fetch has to bring the new commit in.
+build_repo "$WORK/c12b"
+shallow="$WORK/c12b/shallow"
+git clone -q --depth 1 "file://$BARE" "$shallow" 2>/dev/null
+if [ -r "$shallow/scripts/ops/wrapper.sh" ] && [ "$(git -C "$shallow" rev-parse --is-shallow-repository)" = true ]; then
+  write_wrapper "$shallow/scripts/ops/wrapper.sh" dirty-in-a-shallow-clone
+  run_wrapper "$shallow" wipe
+  case "$OUT" in
+    *"RAN version=reviewed-v1"*) ok "a shallow checkout: the committed version still ran" ;;
+    *) bad "shallow checkout (rc=$RC): $OUT" ;;
+  esac
+  push_upstream_version "$WORK/c12b" reviewed-v5
+  run_wrapper "$shallow" wipe
+  case "$OUT" in
+    *"RAN version=reviewed-v5"*) ok "a shallow checkout follows main when it moves" ;;
+    *) bad "shallow checkout did not follow main (rc=$RC): $OUT" ;;
+  esac
+else
+  bad "could not build a shallow clone to test with"
+fi
+
 # ---- 13. mutations: each case above must FAIL to refuse when its own rule is removed ----
 # One mutation at a time, each aimed at exactly one assertion.
 mutate_and_run_stale() { # removes the freshness comparison; case 9 must then pass
