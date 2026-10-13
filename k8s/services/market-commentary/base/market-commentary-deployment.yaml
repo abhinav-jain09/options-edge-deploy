@@ -8,7 +8,7 @@ metadata:
     app.kubernetes.io/component: market-commentary-service
     app.kubernetes.io/part-of: options-edge
 spec:
-  # RUNNING on dev only, as a SHADOW: it reads futures.auction, the spread-skew snapshot, SPX spot and option quotes read-only
+  # RUNNING on dev and production, as a SHADOW: it reads futures.auction, the spread-skew snapshot, SPX spot and option quotes read-only
   # and writes ONLY its own four topics; nothing acts on its output. It describes the market and makes no forecast.
   # SINGLE replica ONLY: a second instance with the same transactional.id fences the first.
   replicas: 1
