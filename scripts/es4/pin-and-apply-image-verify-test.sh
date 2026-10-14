@@ -56,8 +56,10 @@ case "$args" in
   *"apply --dry-run=client -f "*" -o json")
     # kubectl emits the bare object for a single-document render and a v1.List for several
     f="${args#*--dry-run=client -f }"; f="${f%% -o json}"
-    if [ "$(yq -o=json -I=0 ea '[.] | length' "$f")" = 1 ]; then yq -o=json ea '[.][0]' "$f"
-    else yq -o=json ea '[.] | {"kind":"List","items": .}' "$f"; fi ;;
+    # `ea '[.]'` is yq's documented collect-all-documents idiom and the only yq expression this
+    # harness relies on; jq does the shaping, so nothing here depends on a yq release's
+    # per-document evaluation rules (the workflow pins yq 4.44.3, dev machines run newer).
+    yq -o=json -I=0 ea '[.]' "$f" | jq -c 'if length == 1 then .[0] else {kind: "List", items: .} end' ;;
   "apply -f "*) echo "deployment.apps/applied configured" ;;
   *"rollout status deployment/"*)
     d="${args#*rollout status deployment/}"; d="${d%% *}"
