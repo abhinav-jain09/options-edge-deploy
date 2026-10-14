@@ -76,9 +76,9 @@ services:
     image: oe-close-batch
     deployments: [stock-gex-close-scheduler]
     container: scheduler
-    buildJob: oe-close-batch-build
+    buildJob: oe-close-batch
     sourceRepo: oe-close-batch
-    envs: [production]
+    envs: [dev, production]
 
   - name: bleedingoptions-email
     managedBy: standalone
