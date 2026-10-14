@@ -515,6 +515,15 @@ jobs:
       - name: es4 clean-reset restore never raises held deployments
         run: bash scripts/es4/cleanup-held-zero-test.sh
 
+      # `kubectl rollout status` returns while the OUTGOING pod is still terminating and still
+      # matching the Deployment's label selector, so the post-rollout digest gate used to compare
+      # the dying pod's imageID against the new pin and fail green rollouts (es4-deploy #768/#769,
+      # tape-zones-service, 2026-10-13). This drives the gate against a fake registry and a fake
+      # kubectl over the pod sets that actually occur, and then removes each clause of the pod
+      # selector in turn to prove the case that names it goes red.
+      - name: es4 pin-and-apply post-rollout image verification (pod selection + mutations)
+        run: bash scripts/es4/pin-and-apply-image-verify-test.sh
+
       - name: Validate image-pinning completeness (every rendered image wired into resolve-images + apply)
         run: scripts/ci/validate-image-pinning.sh
 
