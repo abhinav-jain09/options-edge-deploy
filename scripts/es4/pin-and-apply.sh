@@ -69,26 +69,27 @@ if [ -z "$DRY" ]; then
   # init container declared above the app container (es-feed-gateway.yaml), would have compared a
   # correct pod against another container's digest.
   applied_json=$(kubectl -n options-edge apply --dry-run=client -f "$OUT" -o json)
-  # one "<deployment> <container> <digest>" line per app container of each Deployment in the render
+  # one "<deployment> <container> <digest>" line per container of each Deployment — init
+  # containers included: es-feed-gateway.yaml runs one, its image is pinned by the gate above,
+  # and a pod whose init container ran ANOTHER build is as stale as one whose app container did
+  # (Codex r2 MINOR). Kubernetes forbids a name collision between the two lists, so the union of
+  # containerStatuses and initContainerStatuses below resolves each name unambiguously.
   pinned=$(printf '%s' "$applied_json" | jq -r '
     (if .kind == "List" then (.items // []) else [.] end)
     | .[] | select(.kind == "Deployment")
     | .metadata.name as $d
-    | (.spec.template.spec.containers // [])[]
+    | ((.spec.template.spec.initContainers // []) + (.spec.template.spec.containers // []))[]
     | ((.image | split("@")) as $p
        | "\($d) \(.name) \(if ($p | length) == 2 then $p[1] else "UNPINNED" end)")')
-  # one "<deployment> <replicas> <pod label selector>" line per Deployment. BOTH facts come from the
-  # render that was just applied, never from the live object (Codex r1 BLOCKER 2): `kubectl apply`
-  # has already written .spec.replicas from THIS manifest, so reading the live value back only
-  # opens a hole — an HPA, a concurrent operator or a half-reverted reconciliation presenting 0
-  # would skip the rollout and the whole image proof for a Deployment this manifest asked to run.
-  # The selector is .spec.selector.matchLabels for the same reason: it is what Kubernetes itself
-  # uses to own these pods, where `app.kubernetes.io/name=<deployment name>` was an assumption
-  # that happens to hold for all 38 es4 Deployments today and is not guaranteed of the next one.
+  # one "<deployment> <replicas>" line per Deployment. The replica count comes from the render that
+  # was just applied, never from the live object (Codex r1 BLOCKER 2): `kubectl apply` has already
+  # written .spec.replicas from THIS manifest, so reading the live value back only opens a hole —
+  # an HPA, a concurrent operator or a half-reverted reconciliation presenting 0 would skip the
+  # rollout and the whole image proof for a Deployment this manifest asked to run.
   wanted=$(printf '%s' "$applied_json" | jq -r '
     (if .kind == "List" then (.items // []) else [.] end)
     | .[] | select(.kind == "Deployment")
-    | "\(.metadata.name) \(.spec.replicas // 1) \(((.spec.selector.matchLabels // {}) | to_entries | map("\(.key)=\(.value)") | join(",")))"')
+    | "\(.metadata.name) \(.spec.replicas // 1)"')
   if [ -z "$(printf '%s\n' "$wanted" | awk 'NF')" ]; then
     echo "IMAGE VERIFY FAILED: no Deployment found in $OUT (manifest has none)" >&2
     exit 1
@@ -98,7 +99,7 @@ if [ -z "$DRY" ]; then
     printf '%s\n' "$pinned" | grep ' UNPINNED$' >&2
     exit 1
   fi
-  while read -r name want selector; do
+  while read -r name want; do
     [ -n "$name" ] || continue
     # An INTENTIONALLY zero-replica Deployment — one THIS MANIFEST declares at 0 (es-feed, the held
     # spread-skew stack) — has no pods, so there is neither a rollout to wait for nor a running
@@ -111,49 +112,74 @@ if [ -z "$DRY" ]; then
          continue ;;
       ''|*[!0-9]*) echo "IMAGE VERIFY FAILED: $OUT declares a non-numeric replica count for $name (got '$want')" >&2; exit 1 ;;
     esac
-    if [ -z "$selector" ]; then
-      echo "IMAGE VERIFY FAILED: $name declares no .spec.selector.matchLabels in $OUT — its pods cannot be identified" >&2; exit 1
-    fi
     # 600s mirrors the standalone path's default (service-deploy.sh ROLLOUT_TIMEOUT).
     # The old 240s was shorter than documented startup allowances (e.g. context-tape's
     # session backfill), so a valid slow start failed the build AFTER the apply had
     # already mutated the cluster.
     kubectl -n options-edge rollout status "deployment/$name" --timeout=600s || {
       echo "ROLLOUT FAILED: deployment/$name (manifest $MANIFEST)" >&2; exit 1; }
-    pods_json=$(kubectl -n options-edge get pods -l "$selector" -o json) || {
-      echo "IMAGE VERIFY FAILED: cannot list the pods of $name ($selector) after the rollout" >&2; exit 1; }
-    # WHICH pods this judges. The jq form follows scripts/ops/zerodte-writer-activate.sh:371 —
-    # `select(.metadata.deletionTimestamp == null)`, `select(.status.phase == "Running")`, a Ready
-    # condition and `select(.name == $c)` so only the NAMED container's imageID counts — rather
-    # than service-deploy.sh's pod-template-hash scoping, which needs a second ReplicaSet listing
-    # and yq where this script already has the render and jq.
+
+    # WHICH PODS THIS JUDGES — by OWNERSHIP, not by labels (Codex r2 MAJOR). A label selector is
+    # not a statement of ownership: a pod of another controller, or a hand-made one, that happens
+    # to carry app.kubernetes.io/name would be judged as this Deployment's and could both
+    # false-fail the refusal and satisfy the proof, and rendering only .spec.selector.matchLabels
+    # would silently drop any matchExpressions and widen the set further. So: the Deployment's own
+    # uid, the ReplicaSets whose ownerReferences name it, and the pods whose ownerReferences name
+    # those. (Reading the live Deployment for its UID is not the hazard BLOCKER 2 named: a uid is
+    # identity, fixed for the object this script just applied, not a mutable desired state that
+    # another actor could set to a value which skips the proof.)
+    dep_uid=$(kubectl -n options-edge get "deployment/$name" -o jsonpath='{.metadata.uid}') || dep_uid=""
+    if [ -z "$dep_uid" ]; then
+      echo "IMAGE VERIFY FAILED: cannot read the uid of deployment/$name — its pods cannot be identified by ownership" >&2; exit 1
+    fi
+    rs_json=$(kubectl -n options-edge get rs -o json) || {
+      echo "IMAGE VERIFY FAILED: cannot list the ReplicaSets of $name after the rollout" >&2; exit 1; }
+    rs_uids=$(printf '%s' "$rs_json" | jq -c --arg u "$dep_uid" \
+      '[.items[] | select(any((.metadata.ownerReferences // [])[]; .uid == $u)) | .metadata.uid]')
+    if [ "$rs_uids" = "[]" ]; then
+      echo "IMAGE VERIFY FAILED: deployment/$name owns no ReplicaSet after a completed rollout — nothing to prove the pinned digest on" >&2; exit 1
+    fi
+    all_pods=$(kubectl -n options-edge get pods -o json) || {
+      echo "IMAGE VERIFY FAILED: cannot list the pods of $name after the rollout" >&2; exit 1; }
+    pods_json=$(printf '%s' "$all_pods" | jq -c --argjson rs "$rs_uids" \
+      '{items: [.items[] | select(any((.metadata.ownerReferences // [])[]; .uid as $x | ($rs | index($x)) != null))]}') || {
+      echo "IMAGE VERIFY FAILED: cannot determine which pods belong to $name" >&2; exit 1; }
+
     #   `kubectl rollout status` returns as soon as the NEW ReplicaSet is complete, but the
-    #   OUTGOING pod — already carrying a deletionTimestamp — still matches the Deployment's label
-    #   selector for several more seconds. Comparing ITS digest against the new pin failed two
-    #   green rollouts of tape-zones-service on 2026-10-13 (es4-deploy #768 and #769) with a false
-    #   "STALE IMAGE"; #769 pinned ae5cf68d, the live pod carried ae5cf68d on both spec.image and
-    #   status.imageID, and the build reported 827b7a98 — the digest of the terminating pod of a
-    #   ReplicaSet already scaled to zero.
-    # The two rules below are deliberately asymmetric (Codex r1 BLOCKER 1). READINESS IS NOT PART
-    # OF THE NEGATIVE RULE: a Running pod that is not Ready is still running its image, so it is
-    # still evidence of a stale build. Readiness is demanded only of the pod that PROVES the pin,
-    # because an unready pod proves nothing. Nothing retries until the old pod disappears.
+    #   OUTGOING pod — already carrying a deletionTimestamp — is still owned by this Deployment's
+    #   previous ReplicaSet and still Running for several more seconds. Comparing ITS digest
+    #   against the new pin failed two green rollouts of tape-zones-service on 2026-10-13
+    #   (es4-deploy #768 and #769) with a false "STALE IMAGE"; #769 pinned ae5cf68d, the live pod
+    #   carried ae5cf68d on both spec.image and status.imageID, and the build reported 827b7a98 —
+    #   the digest of the terminating pod of a ReplicaSet already scaled to zero. The jq clauses
+    #   below are the form scripts/ops/zerodte-writer-activate.sh:371 already uses.
+    # The two rules are deliberately asymmetric (Codex r1 BLOCKER 1). READINESS IS NOT PART OF THE
+    # NEGATIVE RULE: a Running pod that is not Ready is still running its image, so it is still
+    # evidence of a stale build. Readiness is demanded only of the pod that PROVES the pin, because
+    # an unready pod proves nothing. Nothing retries until the old pod disappears.
     running_filter='.items[]
       | select(.metadata.deletionTimestamp == null)
       | select(.status.phase == "Running")'
     ready_filter="$running_filter"'
       | select(([(.status.conditions // [])[] | select(.type == "Ready" and .status == "True")] | length) >= 1)'
+    # every status and every spec entry of a pod, init and app alike, keyed by container name
+    statuses='((.status.initContainerStatuses // []) + (.status.containerStatuses // []))'
+    specs='((.spec.initContainers // []) + (.spec.containers // []))'
     while read -r pdeploy pcontainer pdigest; do
       [ "$pdeploy" = "$name" ] || continue
-      # (a) NEGATIVE — no live, Running pod may report ANY other digest on this container. An empty
-      # or absent imageID is not evidence of staleness (the kubelet has not reported one yet); it
-      # simply cannot prove anything, which rule (b) then catches.
+      # (a) NEGATIVE — no live, Running pod may be on ANY other digest for this container. When the
+      # kubelet has not reported an imageID yet, the pod's own SPEC image for that container is
+      # judged instead, so an old-template pod cannot hide behind an unreported status (Codex r2
+      # MAJOR). Only a container with neither an imageID nor a spec image is passed over, and rule
+      # (b) then refuses to count it as proof.
       bad=$(printf '%s' "$pods_json" | jq -r --arg c "$pcontainer" --arg dg "$pdigest" "[$running_filter"'
         | {pod: .metadata.name,
-           id: (([(.status.containerStatuses // [])[] | select(.name == $c) | (.imageID // "")] | first) // "")}
-        | select(.id != "")
-        | select((((.id | endswith("@" + $dg)) or (.id == $dg))) | not)
-        | "\(.pod) runs \(.id)"] | .[]')
+           id:   (([ '"$statuses"'[] | select(.name == $c) | (.imageID // "")] | first) // ""),
+           spec: (([ '"$specs"'[]    | select(.name == $c) | (.image   // "")] | first) // "")}
+        | (if .id != "" then {pod: .pod, what: "imageID", ref: .id} else {pod: .pod, what: "spec image", ref: .spec} end)
+        | select(.ref != "")
+        | select((((.ref | endswith("@" + $dg)) or (.ref == $dg))) | not)
+        | "\(.pod) runs \(.what) \(.ref)"] | .[]')
       if [ -n "$bad" ]; then
         echo "IMAGE VERIFY FAILED: $name container $pcontainer pinned $pdigest (STALE IMAGE)" >&2
         printf '%s\n' "$bad" | sed 's/^/  /' >&2
@@ -161,12 +187,12 @@ if [ -z "$DRY" ]; then
       fi
       # (b) POSITIVE — at least one live, Running AND Ready pod must actually report the pin.
       proof=$(printf '%s' "$pods_json" | jq -r --arg c "$pcontainer" --arg dg "$pdigest" "[$ready_filter"'
-        | select(([(.status.containerStatuses // [])[] | select(.name == $c)
-                   | select((((.imageID // "") | endswith("@" + $dg)) or ((.imageID // "") == $dg)))] | length) >= 1)] | length')
+        | select(([ '"$statuses"'[] | select(.name == $c)
+                    | select((((.imageID // "") | endswith("@" + $dg)) or ((.imageID // "") == $dg)))] | length) >= 1)] | length')
       if [ "${proof:-0}" -lt 1 ]; then
         echo "IMAGE VERIFY FAILED: $name has no live (not deleting) Running and Ready pod carrying the pinned digest $pdigest on container $pcontainer" >&2
         printf '%s' "$pods_json" | jq -r --arg c "$pcontainer" '.items[]
-          | "  \(.metadata.name) phase=\(.status.phase) deleting=\(if .metadata.deletionTimestamp then "yes" else "no" end) ready=\([(.status.conditions // [])[] | select(.type == "Ready")] | (first.status // "?")) \($c)=\((([(.status.containerStatuses // [])[] | select(.name == $c) | (.imageID // "")] | first) // "<no containerStatus>"))"' >&2
+          | "  \(.metadata.name) phase=\(.status.phase) deleting=\(if .metadata.deletionTimestamp then "yes" else "no" end) ready=\([(.status.conditions // [])[] | select(.type == "Ready")] | (first.status // "?")) \($c)=\((([ '"$statuses"'[] | select(.name == $c) | (.imageID // "")] | first) // "<no containerStatus>"))"' >&2
         exit 1
       fi
       echo "verified $name container $pcontainer runs pinned digest $pdigest ($proof Running+Ready pod(s) carry it; no live pod reports another digest)"
