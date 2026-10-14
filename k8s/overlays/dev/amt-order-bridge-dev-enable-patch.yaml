@@ -44,3 +44,15 @@ spec:
               value: "true"
             - name: AMT_BRIDGE_EXIT_ENABLED
               value: "false"
+            # DEV-ONLY (owner, 2026-10-14: "we have to built now real applicaiotn not shadow"):
+            # the early-auction-verdict order bridge goes LIVE against the shared PAPER gateway.
+            # From the next session open, dev places real PAPER orders from early verdicts —
+            # entering ahead of the desk on the desk-policy spread — and the desk's own later
+            # ENTER for that structure is suppressed (one position per structuralRef, first
+            # trigger wins; the 2026-10-12 averaging incident rule). Exits are the verdict
+            # service's OWN prints only: OUTCOME WRONG pre-match, STRUCTURE_BREACHED post-match;
+            # otherwise the position runs to settlement. Production stays "false" — enabling it
+            # there is the owner's explicit word. The executor's allowlist is the second half,
+            # in broker-execution-dev-eav-sources-patch.yaml; neither alone places an order.
+            - name: EAV_BRIDGE_ENABLED
+              value: "true"

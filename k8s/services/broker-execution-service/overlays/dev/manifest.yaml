@@ -38,6 +38,8 @@ spec:
     spec:
       containers:
         - env:
+            - name: BROKER_EXECUTION_ALLOWED_SOURCES
+              value: amt-auction,eav-bridge
             - name: HEALTH_PORT
               value: "8131"
             - name: BROKER_EXECUTION_INTENT_TOPIC

@@ -1,0 +1,23 @@
+# DEV-ONLY: admit the early-auction-verdict order bridge as an intent source.
+#
+# The executor acts only for sources it was configured to act for (IntentGuard R15_SOURCE);
+# the code's default is "amt-auction" alone. The eav-bridge entry is the SECOND half of the
+# dev paper go-live (owner, 2026-10-14) — the first half is EAV_BRIDGE_ENABLED=true in
+# amt-order-bridge-dev-enable-patch.yaml, and neither alone places an order. Production keeps
+# the default: admitting the source there is part of the owner's explicit production
+# enablement, never inherited from dev.
+#
+# NAME-KEYED strategic merge, deliberately — same reasoning as the bridge enable patch: an
+# env/N json6902 index patch lands on whichever variable drifts into that position.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: broker-execution-service
+spec:
+  template:
+    spec:
+      containers:
+        - name: broker-execution
+          env:
+            - name: BROKER_EXECUTION_ALLOWED_SOURCES
+              value: "amt-auction,eav-bridge"
