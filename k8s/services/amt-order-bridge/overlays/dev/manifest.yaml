@@ -42,6 +42,8 @@ spec:
               value: "true"
             - name: AMT_BRIDGE_EXIT_ENABLED
               value: "false"
+            - name: EAV_BRIDGE_ENABLED
+              value: "true"
             - name: HEALTH_PORT
               value: "8132"
             - name: AMT_BRIDGE_AUCTION_TOPIC
@@ -52,8 +54,6 @@ spec:
               value: amt-order-bridge
             - name: AMT_BRIDGE_INTENT_VALID_MS
               value: "600000"
-            - name: EAV_BRIDGE_ENABLED
-              value: "false"
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:

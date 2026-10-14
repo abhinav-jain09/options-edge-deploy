@@ -114,6 +114,11 @@ patches:
     target:
       kind: Deployment
       name: amt-order-bridge
+  # The executor's allowlist half of the eav-bridge dev go-live (see that patch's header).
+  - path: broker-execution-dev-eav-sources-patch.yaml
+    target:
+      kind: Deployment
+      name: broker-execution-service
   # nifty-gex runs at ZERO replicas on dev (mirror of the standalone slice patch): prod
   # polls Dhan with the SAME account token; a second poller trips the per-account 429
   # and a second renewer invalidates prod's token.
