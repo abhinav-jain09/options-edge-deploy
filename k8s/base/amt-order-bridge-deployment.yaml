@@ -84,6 +84,21 @@ spec:
               value: "true"
             - name: AMT_BRIDGE_INTENT_VALID_MS
               value: "600000"
+            # --- early-auction-verdict order bridge (same pod, its own flag) ---------------
+            # OWNER SETS THIS at go-live, after the promotion gate. false reads the verdicts
+            # ledger, decides and books into an in-memory dark book, logs what it WOULD do and
+            # publishes nothing. true additionally requires the durable position book — the
+            # POSTGRES_PASSWORD below; the JDBC URL and USER already arrive via the
+            # options-edge-config envFrom — and the executor's own second gate: "eav-bridge"
+            # must be added to BROKER_EXECUTION_ALLOWED_SOURCES on broker-execution-service or
+            # every intent this side publishes is refused R15_SOURCE.
+            - name: EAV_BRIDGE_ENABLED
+              value: "false"
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: options-edge-runtime-secrets
+                  key: POSTGRES_PASSWORD
           resources:
             requests:
               cpu: 50m

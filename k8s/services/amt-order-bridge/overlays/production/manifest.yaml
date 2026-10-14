@@ -52,6 +52,13 @@ spec:
               value: "true"
             - name: AMT_BRIDGE_INTENT_VALID_MS
               value: "600000"
+            - name: EAV_BRIDGE_ENABLED
+              value: "false"
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  key: POSTGRES_PASSWORD
+                  name: options-edge-runtime-secrets
           envFrom:
             - configMapRef:
                 name: options-edge-config
