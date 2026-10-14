@@ -24,6 +24,10 @@ spec:
       containers:
         - name: feed-gateway
           env:
+            # The supported budget covers startup topic validation and periodic metadata refresh.
+            # Two seconds timed out during clean production starts; keep validation strict at five.
+            - name: GATEWAY_PARTITION_REFRESH_METADATA_TIMEOUT_MS
+              value: "5000"
             # MARKET STRUCTURE relay (gateway #194): the latest market-structure record is retained and
             # replayed to the Context Tape page as the `market-structure` frame, which draws the STRUCTURE
             # layer. The topic is market-structure-service's UI projection — the namespace R13 of
