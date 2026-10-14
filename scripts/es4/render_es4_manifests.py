@@ -391,7 +391,36 @@ DROP_ENV_PREFIXES = {
     # ZDCE-113/114 is calibrated and wired only for the SPX dev/prod source identities. The es4
     # renderer inherits the production Context Tape slice, but prefixing these Kafka topics would
     # silently create an unvalidated ES detector with the SPX artifact and the prod transaction id.
-    "context-tape": ("ZERO_DTE_",),
+    #
+    # ES_BOX_/KAFKA_ES_BOX_ is the READ-ONLY view layer of that same detector, and it is dev+prod
+    # ONLY for the same reason, one pipeline further out. The prod slice sets
+    # ES_BOX_VIEW_ENABLED=true + KAFKA_ES_BOX_TOPIC=es.futures.compression-expansion.current
+    # (ae5b014c, 2026-10-07, "dev and prod"), sitting inside the ZERO_DTE_ block above. On es4 that
+    # pair is a consumer with no producer and no topic:
+    #   - es-compression-expansion-service, the only writer of that state topic, has NO es4 overlay
+    #     (k8s/services/es-compression-expansion has base + dev + production only), and every input
+    #     it needs is absent from es4: underlying.es.trades.linearized (es-trade-linearizer, dev+prod),
+    #     options.databento.near-spot-semantic (the reason STRIKE_FLOW_NEAR_SPOT_ENABLED is pinned
+    #     false above), options.spx.market-structure.current and options.spx.vol-premium.ivrv.
+    #   - es.futures.compression-expansion.current is declared only in the SHARED OPTIONS_EDGE_TOPICS
+    #     set dev/prod apply from. es4 topics are NOT inherited — OPTIONS_EDGE_ES4_TOPICS is
+    #     hand-maintained and does not list it — so the topic does not exist on the es4 broker.
+    #   - NOT a double-prefix bug: the value already carries es., and KafkaSettings.topicValue is
+    #     idempotent about that (see the topic envs on the hand-authored tape-zones es4 slice, which
+    #     rely on it), so es4 would subscribe to es.futures.compression-expansion.current verbatim —
+    #     a name no es4 producer writes and apply-topics never creates. es4 sets
+    #     KAFKA_AUTO_CREATE_TOPICS_ENABLE=false (infra/es4/docker-compose.yml), so the broker
+    #     never conjures it: the projection does not read a quietly-misconfigured topic, it hits a
+    #     MISSING one. Which way that lands — a fail-closed refusal or an idle store on an
+    #     unresolvable source — is a property of the ES-box reader and has never been exercised on
+    #     es4, and the Streams boot race that KAFKA_NUM_PARTITIONS=32 documents is reached from
+    #     exactly this state. Same family as DATABENTO_GEX_DYNAMIC_CARRY_ENABLED: a store whose
+    #     source topic has no producer here.
+    # Dropped rather than pinned false so a new ES_BOX_* knob on the growing prod path is excluded
+    # without a second incident; the code default is fail-closed (EsBoxSettings defaults the flag to
+    # false), so absence is OFF. Turning the ES box ON for es4 means deploying the producer and its
+    # inputs there and declaring the topic in OPTIONS_EDGE_ES4_TOPICS first — not a re-render.
+    "context-tape": ("ZERO_DTE_", "ES_BOX_", "KAFKA_ES_BOX_"),
 }
 
 # Rendered at replicas:0 on es4 ONLY — still defined, still deployable, just not running.
