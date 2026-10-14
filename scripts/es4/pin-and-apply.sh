@@ -77,8 +77,19 @@ if [ -z "$DRY" ]; then
     | (.spec.template.spec.containers // [])[]
     | ((.image | split("@")) as $p
        | "\($d) \(.name) \(if ($p | length) == 2 then $p[1] else "UNPINNED" end)")')
-  deploys=$(printf '%s\n' "$pinned" | awk 'NF {print $1}' | sort -u)
-  if [ -z "$deploys" ]; then
+  # one "<deployment> <replicas> <pod label selector>" line per Deployment. BOTH facts come from the
+  # render that was just applied, never from the live object (Codex r1 BLOCKER 2): `kubectl apply`
+  # has already written .spec.replicas from THIS manifest, so reading the live value back only
+  # opens a hole — an HPA, a concurrent operator or a half-reverted reconciliation presenting 0
+  # would skip the rollout and the whole image proof for a Deployment this manifest asked to run.
+  # The selector is .spec.selector.matchLabels for the same reason: it is what Kubernetes itself
+  # uses to own these pods, where `app.kubernetes.io/name=<deployment name>` was an assumption
+  # that happens to hold for all 38 es4 Deployments today and is not guaranteed of the next one.
+  wanted=$(printf '%s' "$applied_json" | jq -r '
+    (if .kind == "List" then (.items // []) else [.] end)
+    | .[] | select(.kind == "Deployment")
+    | "\(.metadata.name) \(.spec.replicas // 1) \(((.spec.selector.matchLabels // {}) | to_entries | map("\(.key)=\(.value)") | join(",")))"')
+  if [ -z "$(printf '%s\n' "$wanted" | awk 'NF')" ]; then
     echo "IMAGE VERIFY FAILED: no Deployment found in $OUT (manifest has none)" >&2
     exit 1
   fi
@@ -87,67 +98,78 @@ if [ -z "$DRY" ]; then
     printf '%s\n' "$pinned" | grep ' UNPINNED$' >&2
     exit 1
   fi
-  while read -r name; do
+  while read -r name want selector; do
     [ -n "$name" ] || continue
-    # Read the DESIRED replica count once, fail-closed. An INTENTIONALLY zero-replica Deployment
-    # has no pods, so there is neither a rollout to wait for nor a running imageID to prove.
-    # Without this branch the pod listing below yields nothing and the check fail-closes AFTER
-    # `kubectl apply` has already mutated the cluster — which would (a) make every zero-replica
-    # deploy exit red, and (b) scale an already-running Deployment to zero and then abort, leaving
-    # a wanted workload down. The digest guarantee is NOT weakened: the manifest was already proven
+    # An INTENTIONALLY zero-replica Deployment — one THIS MANIFEST declares at 0 (es-feed, the held
+    # spread-skew stack) — has no pods, so there is neither a rollout to wait for nor a running
+    # imageID to prove. Without this branch the pod listing below yields nothing and the check
+    # fail-closes AFTER `kubectl apply` has already mutated the cluster, so every zero-replica
+    # deploy would exit red. The digest guarantee is NOT weakened: the manifest was already proven
     # fully digest-pinned above, and nothing is running that could be stale.
-    want=$(kubectl -n options-edge get "deployment/$name" -o jsonpath='{.spec.replicas}' 2>/dev/null || echo ERR)
     case "$want" in
-      0) echo "image verify: $name is at replicas 0 by design — manifest is digest-pinned, no rollout or running pod to assert"
+      0) echo "image verify: $name is declared at replicas 0 by $MANIFEST — digest-pinned, no rollout or running pod to assert"
          continue ;;
-      ''|*[!0-9]*) echo "IMAGE VERIFY FAILED: cannot read desired replicas for $name (got '$want')" >&2; exit 1 ;;
+      ''|*[!0-9]*) echo "IMAGE VERIFY FAILED: $OUT declares a non-numeric replica count for $name (got '$want')" >&2; exit 1 ;;
     esac
+    if [ -z "$selector" ]; then
+      echo "IMAGE VERIFY FAILED: $name declares no .spec.selector.matchLabels in $OUT — its pods cannot be identified" >&2; exit 1
+    fi
     # 600s mirrors the standalone path's default (service-deploy.sh ROLLOUT_TIMEOUT).
     # The old 240s was shorter than documented startup allowances (e.g. context-tape's
     # session backfill), so a valid slow start failed the build AFTER the apply had
     # already mutated the cluster.
     kubectl -n options-edge rollout status "deployment/$name" --timeout=600s || {
       echo "ROLLOUT FAILED: deployment/$name (manifest $MANIFEST)" >&2; exit 1; }
-    pods_json=$(kubectl -n options-edge get pods -l "app.kubernetes.io/name=${name}" -o json) || {
-      echo "IMAGE VERIFY FAILED: cannot list the pods of $name after the rollout" >&2; exit 1; }
-    # WHICH pods this judges. The selector follows scripts/ops/zerodte-writer-activate.sh:371 — the
-    # jq form `select(.metadata.deletionTimestamp == null)`, `select(.status.phase == "Running")`, a
-    # Ready condition, and `select(.name == $c)` so only the NAMED container's imageID counts —
-    # rather than service-deploy.sh's pod-template-hash scoping, because that one needs a second
-    # ReplicaSet listing and yq while this script already has the render and jq, and the fact it
-    # must exclude is simply "this pod is on its way out".
+    pods_json=$(kubectl -n options-edge get pods -l "$selector" -o json) || {
+      echo "IMAGE VERIFY FAILED: cannot list the pods of $name ($selector) after the rollout" >&2; exit 1; }
+    # WHICH pods this judges. The jq form follows scripts/ops/zerodte-writer-activate.sh:371 —
+    # `select(.metadata.deletionTimestamp == null)`, `select(.status.phase == "Running")`, a Ready
+    # condition and `select(.name == $c)` so only the NAMED container's imageID counts — rather
+    # than service-deploy.sh's pod-template-hash scoping, which needs a second ReplicaSet listing
+    # and yq where this script already has the render and jq.
     #   `kubectl rollout status` returns as soon as the NEW ReplicaSet is complete, but the
-    #   OUTGOING pod — already carrying a deletionTimestamp — still matches the bare
-    #   app.kubernetes.io/name selector for several more seconds. Comparing ITS digest against the
-    #   new pin failed two green rollouts of tape-zones-service on 2026-10-13 (es4-deploy #768 and
-    #   #769) with a false "STALE IMAGE"; #769 pinned ae5cf68d, the live pod carried ae5cf68d on
-    #   both spec.image and status.imageID, and the build reported 827b7a98 — the digest of the
-    #   terminating pod of a ReplicaSet already scaled to zero.
-    # The assertion is NOT weakened and there is no retry-until-it-goes-away: EVERY live (not
-    # deleting) Running and Ready pod must carry the pin on the named container, and at least one
-    # must exist. A genuinely stale pod is live, Running and Ready, so it still fails the build.
-    live_filter='.items[]
+    #   OUTGOING pod — already carrying a deletionTimestamp — still matches the Deployment's label
+    #   selector for several more seconds. Comparing ITS digest against the new pin failed two
+    #   green rollouts of tape-zones-service on 2026-10-13 (es4-deploy #768 and #769) with a false
+    #   "STALE IMAGE"; #769 pinned ae5cf68d, the live pod carried ae5cf68d on both spec.image and
+    #   status.imageID, and the build reported 827b7a98 — the digest of the terminating pod of a
+    #   ReplicaSet already scaled to zero.
+    # The two rules below are deliberately asymmetric (Codex r1 BLOCKER 1). READINESS IS NOT PART
+    # OF THE NEGATIVE RULE: a Running pod that is not Ready is still running its image, so it is
+    # still evidence of a stale build. Readiness is demanded only of the pod that PROVES the pin,
+    # because an unready pod proves nothing. Nothing retries until the old pod disappears.
+    running_filter='.items[]
       | select(.metadata.deletionTimestamp == null)
-      | select(.status.phase == "Running")
+      | select(.status.phase == "Running")'
+    ready_filter="$running_filter"'
       | select(([(.status.conditions // [])[] | select(.type == "Ready" and .status == "True")] | length) >= 1)'
-    live=$(printf '%s' "$pods_json" | jq -r "[$live_filter] | length")
-    if [ "${live:-0}" -lt 1 ]; then
-      echo "IMAGE VERIFY FAILED: $name has no live (not deleting) Running and Ready pod to prove the pinned digest on" >&2
-      exit 1
-    fi
     while read -r pdeploy pcontainer pdigest; do
       [ "$pdeploy" = "$name" ] || continue
-      bad=$(printf '%s' "$pods_json" | jq -r --arg c "$pcontainer" --arg dg "$pdigest" "[$live_filter"'
+      # (a) NEGATIVE — no live, Running pod may report ANY other digest on this container. An empty
+      # or absent imageID is not evidence of staleness (the kubelet has not reported one yet); it
+      # simply cannot prove anything, which rule (b) then catches.
+      bad=$(printf '%s' "$pods_json" | jq -r --arg c "$pcontainer" --arg dg "$pdigest" "[$running_filter"'
         | {pod: .metadata.name,
-           id: (([(.status.containerStatuses // [])[] | select(.name == $c) | (.imageID // "")] | first) // "<no containerStatus>")}
+           id: (([(.status.containerStatuses // [])[] | select(.name == $c) | (.imageID // "")] | first) // "")}
+        | select(.id != "")
         | select((((.id | endswith("@" + $dg)) or (.id == $dg))) | not)
-        | "\(.pod) runs \(if .id == "" then "<no imageID yet>" else .id end)"] | .[]')
+        | "\(.pod) runs \(.id)"] | .[]')
       if [ -n "$bad" ]; then
         echo "IMAGE VERIFY FAILED: $name container $pcontainer pinned $pdigest (STALE IMAGE)" >&2
         printf '%s\n' "$bad" | sed 's/^/  /' >&2
         exit 1
       fi
-      echo "verified $name container $pcontainer runs pinned digest $pdigest on all $live live Running+Ready pod(s)"
+      # (b) POSITIVE — at least one live, Running AND Ready pod must actually report the pin.
+      proof=$(printf '%s' "$pods_json" | jq -r --arg c "$pcontainer" --arg dg "$pdigest" "[$ready_filter"'
+        | select(([(.status.containerStatuses // [])[] | select(.name == $c)
+                   | select((((.imageID // "") | endswith("@" + $dg)) or ((.imageID // "") == $dg)))] | length) >= 1)] | length')
+      if [ "${proof:-0}" -lt 1 ]; then
+        echo "IMAGE VERIFY FAILED: $name has no live (not deleting) Running and Ready pod carrying the pinned digest $pdigest on container $pcontainer" >&2
+        printf '%s' "$pods_json" | jq -r --arg c "$pcontainer" '.items[]
+          | "  \(.metadata.name) phase=\(.status.phase) deleting=\(if .metadata.deletionTimestamp then "yes" else "no" end) ready=\([(.status.conditions // [])[] | select(.type == "Ready")] | (first.status // "?")) \($c)=\((([(.status.containerStatuses // [])[] | select(.name == $c) | (.imageID // "")] | first) // "<no containerStatus>"))"' >&2
+        exit 1
+      fi
+      echo "verified $name container $pcontainer runs pinned digest $pdigest ($proof Running+Ready pod(s) carry it; no live pod reports another digest)"
     done <<< "$pinned"
-  done <<< "$deploys"
+  done <<< "$wanted"
 fi
