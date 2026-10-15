@@ -108,9 +108,9 @@ pipeline {
           if (params.DEPLOY_DRY_RUN) { error('refresh-es-replay does not support dry run') }
           if (!(params.FEED_PERMITTED_SHA ==~ /[0-9a-f]{40}/)) { error('Exact FEED_PERMITTED_SHA required') }
         }
+        dir('.jenkins-tmp/feed') { deleteDir() }
         sh '''
           set -eu
-          rm -rf .jenkins-tmp/feed
           git clone git@github.com:abhinav-jain09/options-edge-databento-feed.git .jenkins-tmp/feed
           git -C .jenkins-tmp/feed checkout main
         '''
@@ -123,6 +123,7 @@ pipeline {
           export PATH="/opt/homebrew/opt/rustup/bin:$PATH"
           cargo test --locked --manifest-path .jenkins-tmp/feed/rust/Cargo.toml
           python3 -m unittest tests.test_es_replay_refresh
+          python3 -c 'from pathlib import Path; Path(".jenkins-tmp/es-replay-image.json").unlink(missing_ok=True)'
           docker buildx inspect options-edge-builder | python3 -c 'import sys; e=[s.split(":",1)[1].strip() for s in sys.stdin if s.startswith("Endpoint:")]; assert e == ["desktop-linux"], e'
         '''
         timeout(time: 10, unit: 'MINUTES') {
