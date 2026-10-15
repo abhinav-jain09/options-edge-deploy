@@ -60,7 +60,7 @@ pipeline {
     booleanParam(name: 'ES_FEED_ACK_OI_AND_CAPACITY', defaultValue: false,
       description: 'activate-es-feed only. Explicit acknowledgement of the two preconditions the requirement will not let a deploy assume: (1) the ES-OI consequence of DATABENTO_USE_LIVE_REPLAY=false has been resolved (ESM-Q4 — either es4 GEX moved to direct OI fetch, or the bounded out-of-band OI request landed), and (2) real .4 headroom has been MEASURED with the full es4 fleet running (DBP-V10/ESM-V6). Activation refuses to proceed without this.')
   }
-  options { disableRestartFromStage(); disableConcurrentBuilds(); timeout(time: 60, unit: 'MINUTES') }
+  options { disableRestartFromStage(); disableConcurrentBuilds(); timeout(time: params.ACTION == 'refresh-es-replay' ? 180 : 60, unit: 'MINUTES') }
   environment {
     ES4_HOST       = 'abhinav@192.168.100.4'
     // The es4 DEPLOYER identity, not the cluster admin. es4.kubeconfig authenticates as
@@ -102,6 +102,7 @@ pipeline {
       }
     }
     stage('Build ES replay feed') {
+      options { timeout(time: 120, unit: 'MINUTES') }
       when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.ACTION == 'refresh-es-replay') } }
       steps {
         script {
@@ -139,6 +140,7 @@ pipeline {
       }
     }
     stage('Roll shared ES replay feed') {
+      options { timeout(time: 45, unit: 'MINUTES') }
       when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.ACTION == 'refresh-es-replay') } }
       steps {
         timeout(time: 10, unit: 'MINUTES') {
@@ -430,5 +432,5 @@ pipeline {
       }
     }
   }
-  post { always { archiveArtifacts artifacts: '.jenkins-tmp/*.yaml', allowEmptyArchive: true } }
+  post { always { archiveArtifacts artifacts: '.jenkins-tmp/*.yaml,.jenkins-tmp/es-replay-image.json', allowEmptyArchive: true } }
 }

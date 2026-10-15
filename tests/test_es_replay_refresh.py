@@ -20,7 +20,8 @@ class ReplayRefreshTest(unittest.TestCase):
     def exercise(self, replicas=1, strategy="Recreate", ready=True, restarts=0,
                  image_id=CHILD, fail_patch=False, fail_rollout=False,
                  action="refresh-es-replay", dry="false", subscription=True,
-                 identity_failure=False, concurrent=False, malformed=False):
+                 identity_failure=False, concurrent=False, malformed=False, rollback_conflicts=0,
+                 pod_changed=False, env_missing=False, reconnect=False, logscroll=False, interrupt=False):
         calls = []
         image = "registry/options-edge-databento-feed@" + DIGEST
         before = {"metadata": {"resourceVersion": "123", "uid": "deployment-uid"},
@@ -28,8 +29,10 @@ class ReplayRefreshTest(unittest.TestCase):
                 {"name": "es-feed", "image": "old", "env": [{"name": "EXISTING", "value": "preserved"}]}]}}}}
         deployment = copy.deepcopy(before)
         patch_count = 0
+        pod_reads = 0
+        log_reads = 0
         def run(*args):
-            nonlocal patch_count
+            nonlocal patch_count, pod_reads, log_reads
             calls.append(args)
             if identity_failure and "scripts/es4/assert-cluster-identity.sh" in args:
                 raise RuntimeError("wrong cluster")
@@ -37,6 +40,8 @@ class ReplayRefreshTest(unittest.TestCase):
                 patch_count += 1
                 if fail_patch and patch_count == 1:
                     raise RuntimeError("resourceVersion conflict")
+                if patch_count > 1 and patch_count <= 1 + rollback_conflicts:
+                    raise RuntimeError("rollback resourceVersion conflict")
                 payload = json.loads(args[-1])
                 self.assertEqual(payload["metadata"]["resourceVersion"], "123")
                 self.assertNotIn("replicas", payload["spec"])
@@ -46,6 +51,8 @@ class ReplayRefreshTest(unittest.TestCase):
                         {"name": "DATABENTO_ES_TRADES_REPLAY_START_MINUTES", "value": "60"}])
                     self.assertEqual(selected["image"], image)
                 deployment["spec"]["template"] = payload["spec"]["template"]
+            if "rollout" in args and patch_count == 1 and interrupt:
+                refresh.interrupted(15, None)
             if "rollout" in args and patch_count == 1 and fail_rollout:
                 if concurrent:
                     deployment["spec"]["template"]["metadata"] = {"annotations": {"another": "rollout"}}
@@ -53,10 +60,19 @@ class ReplayRefreshTest(unittest.TestCase):
             if "get" in args and "deployment" in args:
                 return json.dumps(deployment)
             if "get" in args and "pods" in args:
-                return json.dumps({"items": [{"metadata": {"name": "new"}, "spec": deployment["spec"]["template"]["spec"], "status": {
+                pod_reads += 1
+                pod_spec = copy.deepcopy(deployment["spec"]["template"]["spec"])
+                if env_missing:
+                    pod_spec["containers"][0]["env"] = []
+                return json.dumps({"items": [{"metadata": {"name": "changed" if pod_changed and pod_reads > 1 else "new"}, "spec": pod_spec, "status": {
                     "containerStatuses": [{"name": "es-feed", "ready": ready,
                     "restartCount": restarts, "imageID": "runtime://" + image_id}]}}]})
             if "logs" in args:
+                log_reads += 1
+                if logscroll and log_reads > 1:
+                    return ""
+                if reconnect:
+                    return "ES trades subscription: first\nES trades subscription: second"
                 return 'ES trades subscription: replay_minutes=60 start=Some("2026-10-16T13:30:00Z")' if subscription else ""
             return ""
         env = {"ACTION": action, "DEPLOY_DRY_RUN": dry, "ES4_KUBECONFIG": "es4", "PROD_KUBECONFIG": "prod",
@@ -97,12 +113,25 @@ class ReplayRefreshTest(unittest.TestCase):
         for kwargs, message in [({"image_id": "sha256:" + "d" * 64}, "differs"),
                                 ({"ready": False}, "not ready"), ({"restarts": 1}, "not ready"),
                                 ({"fail_rollout": True}, "rollout timeout"),
-                                ({"subscription": False}, "No 60-minute")]:
+                                ({"subscription": False}, "No 60-minute"), ({"pod_changed": True}, "pod changed"),
+                                ({"env_missing": True}, "explicitly set"), ({"reconnect": True}, "reconnected"),
+                                ({"interrupt": True}, "interrupted")]:
             result, calls, after, before = self.exercise(**kwargs)
             self.assertEqual(after, before, "rollback must restore the entire template including old env")
             self.assertIsNotNone(result)
             self.assertIn(message, result)
             self.assertEqual(sum("patch" in c for c in calls), 2)
+
+    def test_log_line_remains_seen_after_it_scrolls_away(self):
+        result, calls, _, _ = self.exercise(logscroll=True)
+        self.assertIsNone(result)
+        self.assertEqual(sum("patch" in c for c in calls), 1)
+
+    def test_recovery_retries_version_conflicts(self):
+        result, calls, after, before = self.exercise(fail_rollout=True, rollback_conflicts=2)
+        self.assertEqual(after, before)
+        self.assertIn("rollout timeout", result)
+        self.assertEqual(sum("patch" in c for c in calls), 4)
 
     def test_initial_concurrent_update_stops_without_rollback(self):
         result, calls, _, _ = self.exercise(fail_patch=True)
@@ -133,6 +162,12 @@ class ImageProvenanceTest(unittest.TestCase):
             return io.BytesIO(b"{}" if corrupt else blobs[digest])
         with patch.object(refresh.urllib.request, "urlopen", fetch):
             return refresh.verify_image("registry", root, SOURCE)
+
+    def test_real_malformed_digest_refuses_before_network(self):
+        with patch.object(refresh.urllib.request, "urlopen") as network:
+            with self.assertRaisesRegex(RuntimeError, "Missing immutable image digest"):
+                refresh.verify_image("registry", "bad", SOURCE)
+            network.assert_not_called()
 
     def test_index_and_single_manifest_both_bind_source(self):
         self.assertEqual(len(self.exercise()), 2)

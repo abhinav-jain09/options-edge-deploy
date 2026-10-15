@@ -6,13 +6,20 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import subprocess
 import time
 import urllib.request
 
 
 def run(*args):
-    return subprocess.check_output(args, text=True).strip()
+    try:
+        return subprocess.check_output(args, text=True, stderr=subprocess.PIPE,
+            timeout=620 if "rollout" in args else 30).strip()
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(f"{args[0]} failed (exit {exc.returncode}); inspect the target read-only") from None
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"{args[0]} command timed out") from None
 
 
 def registry_json(registry, kind, digest):
@@ -71,6 +78,10 @@ def verify_pod(command, image, accepted):
     return pod["metadata"]["name"]
 
 
+def interrupted(signum, frame):
+    raise RuntimeError("Deployment interrupted; recovering previous template")
+
+
 def main():
     if os.environ.get("ACTION") != "refresh-es-replay":
         raise SystemExit("refresh-es-replay action required")
@@ -103,6 +114,7 @@ def main():
         patch = {"metadata": {"resourceVersion": current["metadata"]["resourceVersion"]}, "spec": {"template": target}}
         run(*command, "patch", "deployment", "es-feed", "--type=merge", "-p", json.dumps(patch))
     print("Previous image:", container(old_template)["image"], flush=True)
+    previous_signal = signal.signal(signal.SIGTERM, interrupted)
     try:
         # One atomic template update; no ConfigMap, replica or other workload mutation.
         patch_template(before, template)
@@ -114,8 +126,10 @@ def main():
             time.sleep(30)
             if verify_pod(command, image, accepted) != pod_name:
                 raise RuntimeError("ES feed pod changed during stability verification")
-            log = run(*command, "logs", pod_name, "--tail=400")
-            subscription_seen = bool(re.search(r'ES trades subscription: replay_minutes=60 start=Some\("[^\"]+"\)', log))
+            log = run(*command, "logs", pod_name, "--since=6m")
+            if len(re.findall(r"ES trades subscription:", log)) > 1:
+                raise RuntimeError("ES feed reconnected during stability verification")
+            subscription_seen = subscription_seen or bool(re.search(r'ES trades subscription: replay_minutes=60 start=Some\("[^\"]+"\)', log))
             if subscription_seen and attempt >= 1:
                 break
         if not subscription_seen:
@@ -126,16 +140,32 @@ def main():
         print(json.dumps({"image": image, "pod": pod_name, "ready": True, "replayMinutes": 60, "subscriptionSeen": True}))
     except Exception:
         # Recover only this action's template, with optimistic concurrency. Never overwrite another rollout.
-        actual = deployment()
-        if actual["spec"]["template"] == template and actual["metadata"]["uid"] == before["metadata"]["uid"]:
-            patch_template(actual, old_template)
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        recovered = False
+        for attempt in range(3):
+            actual = deployment()
+            if actual["metadata"]["uid"] != before["metadata"]["uid"]:
+                raise RuntimeError("Recovery refused: deployment identity changed")
+            if actual["spec"]["template"] == old_template:
+                break
+            if actual["spec"]["template"] != template:
+                raise RuntimeError("Recovery refused: deployment changed concurrently; inspect runtime state")
+            try:
+                patch_template(actual, old_template)
+                recovered = True
+                break
+            except Exception:
+                if attempt == 2:
+                    raise RuntimeError("Recovery patch failed after three bounded attempts; inspect runtime state")
+        if recovered:
             run(*command, "rollout", "status", "deployment/es-feed", "--timeout=600s")
             if deployment()["spec"]["template"] != old_template:
                 raise RuntimeError("Recovery template verification failed")
             print("RECOVERED previous ES feed template; requested replay deployment failed", flush=True)
-        elif actual["spec"]["template"] != old_template:
-            raise RuntimeError("Recovery refused: deployment changed concurrently; inspect runtime state")
         raise
+
+    finally:
+        signal.signal(signal.SIGTERM, previous_signal)
 
 
 if __name__ == "__main__":
