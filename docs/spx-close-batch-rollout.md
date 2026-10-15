@@ -17,7 +17,7 @@ its daily capture. Production uses the `scheduler` profile; dev uses `spx-schedu
    `ENVIRONMENT=production` or `dev`, `BUILD_IMAGES=false`, `DEPLOY_DRY_RUN=false`,
    `PERMITTED_SHA=<approved deploy-repository main commit>`, and `REQUIRED_IMAGE=<BATCH_IMAGE>`.
    Both the pipeline and shell entry point reject a missing binding; the shell rejects tag-only
-   and other-repository bindings. The service is excluded from processing-reactor builds.
+   other-repository and crossed-environment registry/tag bindings. The service is excluded from processing-reactor builds.
 4. Require Jenkins SUCCESS, verify the running digest/readiness/restarts, and inspect the dated
    `spxDailyClose` execution and its two steps. If a capture is already SUCCESS in
    `market_reference.spx_daily_close_attempts`, the fetch step acknowledges it without HTTP and
@@ -38,3 +38,10 @@ Implementation anchors: `Jenkinsfile.service-deploy` (own-job exclusion and requ
 `scripts/deploy/require-batch-image-binding.sh` (entry-point binding),
 `scripts/deploy/service-deploy.sh` (pin/apply/verify), and the batch's
 `scripts/jenkins/verify-pushed-platform.py` and `spxclose/SpxDailyCloseScheduler.java`.
+
+Vendor-evidence limit: the archived Yahoo fixture is from a normal cash session. An archived
+13:00 early-close response is not yet available. The session-end check remains fail-closed:
+a vendor calendar disagreement spends that day's claim and logs a failed job without saving
+an intraday value. Before the next early close (27 November 2026), verify this metadata against
+an independently archived early-close response. Monitor SPX job failures and the dated SUCCESS
+receipt; never remove a daily claim to force another request.
