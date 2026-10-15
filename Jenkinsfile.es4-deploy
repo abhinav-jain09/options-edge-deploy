@@ -124,6 +124,7 @@ pipeline {
           export PATH="/opt/homebrew/opt/rustup/bin:$PATH"
           cargo test --locked --manifest-path .jenkins-tmp/feed/rust/Cargo.toml
           python3 -m unittest tests.test_es_replay_refresh
+          python3 scripts/es4/run-es-replay-shadow.py .jenkins-tmp/feed
           python3 -c 'from pathlib import Path; Path(".jenkins-tmp/es-replay-image.json").unlink(missing_ok=True)'
           docker buildx inspect options-edge-builder | python3 -c 'import sys; e=[s.split(":",1)[1].strip() for s in sys.stdin if s.startswith("Endpoint:")]; assert e == ["desktop-linux"], e'
         '''
@@ -134,7 +135,6 @@ pipeline {
             -f .jenkins-tmp/feed/Dockerfile.rust \
             --label "org.opencontainers.image.revision=${FEED_PERMITTED_SHA}" \
             --tag "${REGISTRY}/options-edge-databento-feed:es-replay-${BUILD_NUMBER}-${FEED_PERMITTED_SHA}" \
-            --tag "${REGISTRY}/options-edge-databento-feed:prod" \
             --metadata-file .jenkins-tmp/es-replay-image.json --push .jenkins-tmp/feed
         '''
       }

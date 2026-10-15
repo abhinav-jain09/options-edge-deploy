@@ -38,6 +38,35 @@ def registry_json(registry, kind, digest):
     return json.loads(body)
 
 
+def promote_verified_image(registry, digest):
+    """Promote the exact verified manifest bytes only after replay and readiness pass."""
+    accept = ', '.join(['application/vnd.oci.image.index.v1+json',
+        'application/vnd.docker.distribution.manifest.list.v2+json',
+        'application/vnd.oci.image.manifest.v1+json', 'application/vnd.docker.distribution.manifest.v2+json'])
+    url = f'http://{registry}/v2/options-edge-databento-feed/manifests/'
+    with urllib.request.urlopen(urllib.request.Request(url+digest, headers={'Accept':accept}), timeout=30) as response:
+        body = response.read()
+        content_type = response.headers['Content-Type']
+    if 'sha256:' + hashlib.sha256(body).hexdigest() != digest:
+        raise RuntimeError('Promotion manifest digest mismatch')
+    request = urllib.request.Request(url+'prod', data=body, method='PUT', headers={'Content-Type':content_type})
+    with urllib.request.urlopen(request, timeout=30) as response:
+        if response.status != 201: raise RuntimeError('Registry promotion failed')
+    with urllib.request.urlopen(urllib.request.Request(url+'prod', headers={'Accept':accept}), timeout=30) as response:
+        if 'sha256:' + hashlib.sha256(response.read()).hexdigest() != digest:
+            raise RuntimeError('Registry promotion verification failed')
+
+
+def replay_result(log):
+    reports = re.findall(r'ES replay caught up: (\{[^\n]+\})', log)
+    for raw in reports:
+        report = json.loads(raw)
+        expected, matched = report.get('expected_unique'), report.get('matched_unique')
+        if report.get('verified') is not True or type(expected) is not int or type(matched) is not int or expected != matched:
+            raise RuntimeError('ES replay identity verification failed')
+    return json.loads(reports[-1]) if reports else None
+
+
 def verify_image(registry, digest, source):
     manifest = registry_json(registry, "manifests", digest)
     accepted = [digest]
@@ -121,6 +150,7 @@ def main():
         run(*command, "rollout", "status", "deployment/es-feed", "--timeout=600s")
         pod_name = verify_pod(command, image, accepted)
         subscription_seen = False
+        replay_report = None
         # Require at least 60 seconds of stability; allow startup/contract resolution up to 5 minutes.
         for attempt in range(10):
             time.sleep(30)
@@ -130,14 +160,18 @@ def main():
             if len(re.findall(r"ES trades subscription:", log)) > 1:
                 raise RuntimeError("ES feed reconnected during stability verification")
             subscription_seen = subscription_seen or bool(re.search(r'ES trades subscription: replay_minutes=60 start=Some\("[^\"]+"\)', log))
-            if subscription_seen and attempt >= 1:
+            replay_report = replay_result(log) or replay_report
+            if subscription_seen and replay_report is not None and attempt >= 1:
                 break
         if not subscription_seen:
             raise RuntimeError("No 60-minute ES subscription observed within five minutes")
+        if replay_report is None:
+            raise RuntimeError("No completed, verified ES replay observed within five minutes")
         actual = deployment()
         if actual["spec"]["template"] != template:
             raise RuntimeError("Deployment template changed during verification")
-        print(json.dumps({"image": image, "pod": pod_name, "ready": True, "replayMinutes": 60, "subscriptionSeen": True}))
+        promote_verified_image(registry, digest)
+        print(json.dumps({"replay": replay_report, "image": image, "pod": pod_name, "ready": True, "replayMinutes": 60, "subscriptionSeen": True}))
     except Exception:
         # Recover only this action's template, with optimistic concurrency. Never overwrite another rollout.
         signal.signal(signal.SIGTERM, signal.SIG_IGN)

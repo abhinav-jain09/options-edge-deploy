@@ -21,7 +21,7 @@ class ReplayRefreshTest(unittest.TestCase):
                  image_id=CHILD, fail_patch=False, fail_rollout=False,
                  action="refresh-es-replay", dry="false", subscription=True,
                  identity_failure=False, concurrent=False, malformed=False, rollback_conflicts=0,
-                 pod_changed=False, env_missing=False, reconnect=False, logscroll=False, interrupt=False):
+                 pod_changed=False, env_missing=False, reconnect=False, logscroll=False, interrupt=False, caught_up=True, mismatch=False):
         calls = []
         image = "registry/options-edge-databento-feed@" + DIGEST
         before = {"metadata": {"resourceVersion": "123", "uid": "deployment-uid"},
@@ -73,19 +73,20 @@ class ReplayRefreshTest(unittest.TestCase):
                     return ""
                 if reconnect:
                     return "ES trades subscription: first\nES trades subscription: second"
-                return 'ES trades subscription: replay_minutes=60 start=Some("2026-10-16T13:30:00Z")' if subscription else ""
+                return ('ES trades subscription: replay_minutes=60 start=Some("2026-10-16T13:30:00Z")' if subscription else "") + ('\nES replay caught up: '+json.dumps({'expected_unique':20,'matched_unique':0 if mismatch else 20,'verified':not mismatch}) if caught_up else '')
             return ""
         env = {"ACTION": action, "DEPLOY_DRY_RUN": dry, "ES4_KUBECONFIG": "es4", "PROD_KUBECONFIG": "prod",
                "ES4_NS_UID": "es4-uid", "PROD_NS_UID": "prod-uid", "REGISTRY": "registry", "FEED_PERMITTED_SHA": SOURCE}
         with patch.dict(refresh.os.environ, env), patch.object(refresh, "run", run), \
              patch.object(refresh.Path, "read_text", return_value=json.dumps({"containerimage.digest": "bad" if malformed else DIGEST})), \
              patch.object(refresh, "verify_image", side_effect=RuntimeError("bad digest") if malformed else None, return_value=[DIGEST, CHILD]), \
-             patch.object(refresh.time, "sleep"), patch("builtins.print"):
+             patch.object(refresh.time, "sleep"), patch.object(refresh, "promote_verified_image") as promote, patch("builtins.print"):
             try:
                 refresh.main()
                 result = None
             except (SystemExit, RuntimeError) as exc:
                 result = str(exc)
+        self.assertEqual(promote.call_count, 1 if result is None else 0)
         return result, calls, deployment, before
 
     def test_success_preserves_singleton_and_pins_digest(self):
@@ -115,7 +116,7 @@ class ReplayRefreshTest(unittest.TestCase):
                                 ({"fail_rollout": True}, "rollout timeout"),
                                 ({"subscription": False}, "No 60-minute"), ({"pod_changed": True}, "pod changed"),
                                 ({"env_missing": True}, "explicitly set"), ({"reconnect": True}, "reconnected"),
-                                ({"interrupt": True}, "interrupted")]:
+                                ({"interrupt": True}, "interrupted"), ({"caught_up": False}, "No completed"), ({"mismatch": True}, "identity verification failed")]:
             result, calls, after, before = self.exercise(**kwargs)
             self.assertEqual(after, before, "rollback must restore the entire template including old env")
             self.assertIsNotNone(result)
@@ -162,6 +163,25 @@ class ImageProvenanceTest(unittest.TestCase):
             return io.BytesIO(b"{}" if corrupt else blobs[digest])
         with patch.object(refresh.urllib.request, "urlopen", fetch):
             return refresh.verify_image("registry", root, SOURCE)
+
+    def test_promotion_preserves_exact_manifest_bytes(self):
+        body = b'{ "schemaVersion":2, "manifests": [] }'
+        digest = 'sha256:' + hashlib.sha256(body).hexdigest()
+        calls = []
+        class Reply(io.BytesIO):
+            headers = {'Content-Type':'application/vnd.oci.image.index.v1+json'}
+            status = 201
+        def fetch(request, timeout):
+            calls.append(request)
+            return Reply(body)
+        with patch.object(refresh.urllib.request, 'urlopen', fetch):
+            refresh.promote_verified_image('registry',digest)
+        self.assertEqual([r.get_method() for r in calls],['GET','PUT','GET'])
+        self.assertEqual(calls[1].data, body)
+        self.assertTrue(calls[1].full_url.endswith('/prod'))
+        with patch.object(refresh.urllib.request, 'urlopen', return_value=Reply(b'corrupt')):
+            with self.assertRaisesRegex(RuntimeError,'digest mismatch'):
+                refresh.promote_verified_image('registry',digest)
 
     def test_real_malformed_digest_refuses_before_network(self):
         with patch.object(refresh.urllib.request, "urlopen") as network:
