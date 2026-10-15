@@ -24,7 +24,7 @@
 //   (deploy-es-feed was REMOVED 2026-07-25, DBP-R33: the prod-cluster es-feed is retired, so no
 //    second location exists that could run a duplicate.)
 //
-// Image policy: every apply digest-pins the :prod tag against 192.168.100.252:5000 at
+// Image policy: every apply digest-pins the manifest tag against 192.168.100.252:5000 at
 // deploy time (Docker-Content-Digest) — a floating tag is never applied (Codex D4).
 pipeline {
   agent { label 'local-mac' }

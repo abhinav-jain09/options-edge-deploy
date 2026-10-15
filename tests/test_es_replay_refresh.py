@@ -21,7 +21,7 @@ class ReplayRefreshTest(unittest.TestCase):
                  image_id=CHILD, fail_patch=False, fail_rollout=False,
                  action="refresh-es-replay", dry="false", subscription=True,
                  identity_failure=False, concurrent=False, malformed=False, rollback_conflicts=0,
-                 pod_changed=False, env_missing=False, reconnect=False, logscroll=False, interrupt=False, caught_up=True, mismatch=False):
+                 pod_changed=False, env_missing=False, reconnect=False, logscroll=False, interrupt=False, caught_up=True, mismatch=False, recovery_get_failures=0):
         calls = []
         image = "registry/options-edge-databento-feed@" + DIGEST
         before = {"metadata": {"resourceVersion": "123", "uid": "deployment-uid"},
@@ -31,8 +31,9 @@ class ReplayRefreshTest(unittest.TestCase):
         patch_count = 0
         pod_reads = 0
         log_reads = 0
+        recovery_reads = 0
         def run(*args):
-            nonlocal patch_count, pod_reads, log_reads
+            nonlocal patch_count, pod_reads, log_reads, recovery_reads
             calls.append(args)
             if identity_failure and "scripts/es4/assert-cluster-identity.sh" in args:
                 raise RuntimeError("wrong cluster")
@@ -58,6 +59,9 @@ class ReplayRefreshTest(unittest.TestCase):
                     deployment["spec"]["template"]["metadata"] = {"annotations": {"another": "rollout"}}
                 raise RuntimeError("rollout timeout")
             if "get" in args and "deployment" in args:
+                if patch_count == 1 and fail_rollout:
+                    recovery_reads += 1
+                    if recovery_reads <= recovery_get_failures: raise RuntimeError("transient recovery GET")
                 return json.dumps(deployment)
             if "get" in args and "pods" in args:
                 pod_reads += 1
@@ -134,6 +138,12 @@ class ReplayRefreshTest(unittest.TestCase):
         self.assertIn("rollout timeout", result)
         self.assertEqual(sum("patch" in c for c in calls), 4)
 
+    def test_recovery_retries_transient_get_failures(self):
+        result,calls,after,before=self.exercise(fail_rollout=True,recovery_get_failures=2)
+        self.assertEqual(after,before)
+        self.assertIn('rollout timeout',result)
+        self.assertEqual(sum('patch' in c for c in calls),2)
+
     def test_initial_concurrent_update_stops_without_rollback(self):
         result, calls, _, _ = self.exercise(fail_patch=True)
         self.assertEqual(result, "resourceVersion conflict")
@@ -178,7 +188,7 @@ class ImageProvenanceTest(unittest.TestCase):
             refresh.promote_verified_image('registry',digest)
         self.assertEqual([r.get_method() for r in calls],['GET','PUT','GET'])
         self.assertEqual(calls[1].data, body)
-        self.assertTrue(calls[1].full_url.endswith('/prod'))
+        self.assertTrue(calls[1].full_url.endswith('/es-replay'))
         with patch.object(refresh.urllib.request, 'urlopen', return_value=Reply(b'corrupt')):
             with self.assertRaisesRegex(RuntimeError,'digest mismatch'):
                 refresh.promote_verified_image('registry',digest)

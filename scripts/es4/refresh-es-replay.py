@@ -49,10 +49,10 @@ def promote_verified_image(registry, digest):
         content_type = response.headers['Content-Type']
     if 'sha256:' + hashlib.sha256(body).hexdigest() != digest:
         raise RuntimeError('Promotion manifest digest mismatch')
-    request = urllib.request.Request(url+'prod', data=body, method='PUT', headers={'Content-Type':content_type})
+    request = urllib.request.Request(url+'es-replay', data=body, method='PUT', headers={'Content-Type':content_type})
     with urllib.request.urlopen(request, timeout=30) as response:
         if response.status != 201: raise RuntimeError('Registry promotion failed')
-    with urllib.request.urlopen(urllib.request.Request(url+'prod', headers={'Accept':accept}), timeout=30) as response:
+    with urllib.request.urlopen(urllib.request.Request(url+'es-replay', headers={'Accept':accept}), timeout=30) as response:
         if 'sha256:' + hashlib.sha256(response.read()).hexdigest() != digest:
             raise RuntimeError('Registry promotion verification failed')
 
@@ -177,20 +177,21 @@ def main():
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
         recovered = False
         for attempt in range(3):
-            actual = deployment()
-            if actual["metadata"]["uid"] != before["metadata"]["uid"]:
-                raise RuntimeError("Recovery refused: deployment identity changed")
-            if actual["spec"]["template"] == old_template:
-                break
-            if actual["spec"]["template"] != template:
-                raise RuntimeError("Recovery refused: deployment changed concurrently; inspect runtime state")
             try:
+                actual = deployment()
+                if actual["metadata"]["uid"] != before["metadata"]["uid"]:
+                    raise RuntimeError("Recovery refused: deployment identity changed")
+                if actual["spec"]["template"] == old_template:
+                    break
+                if actual["spec"]["template"] != template:
+                    raise RuntimeError("Recovery refused: deployment changed concurrently; inspect runtime state")
                 patch_template(actual, old_template)
                 recovered = True
                 break
-            except Exception:
-                if attempt == 2:
-                    raise RuntimeError("Recovery patch failed after three bounded attempts; inspect runtime state")
+            except Exception as exc:
+                if str(exc).startswith("Recovery refused:") or attempt == 2:
+                    print("Inspect read-only: kubectl --kubeconfig", kube, "-n options-edge get deployment es-feed -o wide", flush=True)
+                    raise
         if recovered:
             run(*command, "rollout", "status", "deployment/es-feed", "--timeout=600s")
             if deployment()["spec"]["template"] != old_template:

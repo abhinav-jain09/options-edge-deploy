@@ -17,10 +17,12 @@ def main():
         stderr=subprocess.PIPE, timeout=30).decode()
     key = base64.b64decode(encoded, validate=True).decode()
     if not key: raise RuntimeError('Missing Databento key')
-    env = dict(os.environ, DATABENTO_API_KEY=key)
+    env = dict(os.environ)
+    env.pop("DATABENTO_API_KEY",None)
     # No API key in argv, disk artifacts, or output. Sanitize even vendor errors.
-    def invoke(args, timeout):
-        result = subprocess.run(args, env=env, text=True, stdout=subprocess.PIPE,
+    def invoke(args, timeout, binary=False):
+        child_env = dict(env, DATABENTO_API_KEY=key) if binary else env
+        result = subprocess.run(args, env=child_env, text=True, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, timeout=timeout)
         safe = result.stdout.replace(key, '[REDACTED]').replace(encoded, '[REDACTED]')
         print(safe, flush=True)
@@ -35,7 +37,7 @@ def main():
         a,b=text.split(','); windows.append((datetime.fromisoformat(a),datetime.fromisoformat(b)))
     for start,end in windows:
         invoke([str(binary), '192.168.100.4:9092', 'es.underlying.es.trades',
-            start.isoformat(), end.isoformat()], 210)
+            start.isoformat(), end.isoformat()], 210, binary=True)
 
 if __name__ == '__main__':
     try: main()
