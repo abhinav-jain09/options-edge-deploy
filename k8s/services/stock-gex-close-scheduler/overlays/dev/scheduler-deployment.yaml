@@ -73,6 +73,16 @@ spec:
                   key: KAFKA_SCHEMA_REGISTRY_URL
             - name: STRETCH_THETA_URL
               value: "http://host.docker.internal:25503/v3"
+            # THE AFTER-CLOSE LEARNING JOB (oscillationZoneLearn): copies the day's index prints from the dev Kafka before the
+            # 20:30 ET reset, scores the session against what was drawn that morning, learns from it and writes the end-of-day
+            # report. Every 15 minutes from 16:45 ET until stored, and a 07:55 ET catch-up.
+            - name: OSCILLATION_ENABLED
+              value: "true"
+            - name: OSCILLATION_KAFKA_BOOTSTRAP
+              valueFrom:
+                configMapKeyRef:
+                  name: options-edge-config
+                  key: KAFKA_BOOTSTRAP_SERVERS
             - name: JAVA_TOOL_OPTIONS
               value: "-Duser.timezone=UTC"
           volumeMounts:
