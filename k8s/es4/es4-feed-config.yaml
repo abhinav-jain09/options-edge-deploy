@@ -54,6 +54,8 @@ data:
   # Kept explicit even though USE_LIVE_REPLAY=false makes the window unused: if replay is
   # ever re-enabled these must not silently fall back to library defaults.
   DATABENTO_REPLAY_START_MINUTES: "5"
+  # ES futures only; options replay stays off. Shared source for dev and production.
+  DATABENTO_ES_TRADES_REPLAY_START_MINUTES: "60"
   DATABENTO_STATISTICS_REPLAY_LOCAL_TIME: "06:00"
   DATABENTO_STATISTICS_REPLAY_TIMEZONE: "America/New_York"
   # Library default is 48h — far outside intent and dangerous after a long outage.

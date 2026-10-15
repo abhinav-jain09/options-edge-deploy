@@ -31,9 +31,11 @@ pipeline {
   parameters {
     string(name: 'PERMITTED_SHA', defaultValue: '', trim: true,
       description: 'REQUIRED — Deployment Permission Rule (options-edge rule.md). The full 40-character commit id of THIS repository that Abhinav permitted for this run. The Permitted commit guard stage refuses the build before any effect unless the checked-out HEAD is exactly this commit AND on origin/main; empty, short or mismatched values are refused and nothing is substituted. A manual click needs it too: copy it from `git rev-parse origin/main`.')
+    string(name: 'FEED_PERMITTED_SHA', defaultValue: '', trim: true,
+      description: 'refresh-es-replay only: exact main SHA of options-edge-databento-feed. Builds on local-mac, then rolls the single active ES feed serving dev and production.')
     string(name: 'PERMITTED_SHA_GUARD_VERSION', defaultValue: '2f6fc2ab7aa51eb8a9e8aa350f2d774cd2fb7a253de2591e43645a19a9886b24',
       description: 'DO NOT EDIT BY HAND — the sha256 of scripts/jenkins/permitted-sha-guard.sh this definition runs (Deployment Permission Rule). The guard refuses to run under any other value. It is a DECLARATION, not proof that this job enforces the guard: a caller that triggers this job judges its SCM definition and its Jenkinsfile at the forwarded commit (scripts/jenkins/require-guarded-downstream.sh). Regenerate with scripts/jenkins/permitted-sha-guard-version.sh when the guard changes.')
-    choice(name: 'ACTION', choices: ['deploy-service', 'deploy-all', 'infra-sync', 'create-topics', 'clean-reset', 'activate-es-feed', 'deactivate-es-feed'],
+    choice(name: 'ACTION', choices: ['deploy-service', 'deploy-all', 'infra-sync', 'create-topics', 'clean-reset', 'activate-es-feed', 'deactivate-es-feed', 'refresh-es-replay'],
       description: 'What to do (see header).')
     choice(name: 'SERVICE', choices: [
       'close-direction',
@@ -97,6 +99,50 @@ pipeline {
           }
           env.PERMITTED_SHA_GUARD = 'PASSED'
         }
+      }
+    }
+    stage('Build ES replay feed') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.ACTION == 'refresh-es-replay') } }
+      steps {
+        script {
+          if (params.DEPLOY_DRY_RUN) { error('refresh-es-replay does not support dry run') }
+          if (!(params.FEED_PERMITTED_SHA ==~ /[0-9a-f]{40}/)) { error('Exact FEED_PERMITTED_SHA required') }
+        }
+        sh '''
+          set -eu
+          rm -rf .jenkins-tmp/feed
+          git clone git@github.com:abhinav-jain09/options-edge-databento-feed.git .jenkins-tmp/feed
+          git -C .jenkins-tmp/feed checkout main
+        '''
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${FEED_PERMITTED_SHA:-}" bash scripts/jenkins/permitted-sha-guard.sh --dir .jenkins-tmp/feed --ref main'
+        }
+        sh '''
+          set -euo pipefail
+          # Both compilation and the Linux image build stay on the Mac CI agent.
+          export PATH="/opt/homebrew/opt/rustup/bin:$PATH"
+          cargo test --locked --manifest-path .jenkins-tmp/feed/rust/Cargo.toml
+          python3 -m unittest tests.test_es_replay_refresh
+          docker buildx inspect options-edge-builder | python3 -c 'import sys; e=[s.split(":",1)[1].strip() for s in sys.stdin if s.startswith("Endpoint:")]; assert e == ["desktop-linux"], e'
+        '''
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${FEED_PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir .jenkins-tmp/feed --allow-ignored rust/target'
+        }
+        sh '''docker buildx build --builder options-edge-builder --platform linux/amd64 \
+            -f .jenkins-tmp/feed/Dockerfile.rust \
+            --label "org.opencontainers.image.revision=${FEED_PERMITTED_SHA}" \
+            --tag "${REGISTRY}/options-edge-databento-feed:es-replay-${BUILD_NUMBER}-${FEED_PERMITTED_SHA}" \
+            --metadata-file .jenkins-tmp/es-replay-image.json --push .jenkins-tmp/feed
+        '''
+      }
+    }
+    stage('Roll shared ES replay feed') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.ACTION == 'refresh-es-replay') } }
+      steps {
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp'
+        }
+        sh 'python3 scripts/es4/refresh-es-replay.py'
       }
     }
     stage('Infra sync + bootstrap') {

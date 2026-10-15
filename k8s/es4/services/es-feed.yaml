@@ -69,6 +69,9 @@ spec:
             - secretRef:
                 name: options-edge-databento-feed-env   # DATABENTO_API_KEY
           env:
+            # Shared ES futures source for dev and production; options replay stays off.
+            - name: DATABENTO_ES_TRADES_REPLAY_START_MINUTES
+              value: "60"
             # ---- outputs -> es4 (NODE-LOCAL after the relocation) ----------------
             # Kafka and Schema Registry run on the es4 HOST, not as pods, so the pod must
             # still address them by node IP — but the hop is now node-local rather than
