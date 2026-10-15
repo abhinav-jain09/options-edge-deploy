@@ -55,6 +55,24 @@ spec:
                 secretKeyRef:
                   name: options-edge-runtime-secrets
                   key: POSTGRES_PASSWORD
+            # THE MARKET-STRETCH MORNING REPORT, owned by this batch (it used to be a launchd job on a laptop that
+            # produced nothing whenever the Mac slept or the dev topic had been reset). One attempt every five minutes
+            # from 06:30 to 09:25 ET until the day's report is issued; the gamma board comes from the dev Kafka, the
+            # index closes and the live VIX from the ThetaData terminal on the host.
+            - name: STRETCH_ENABLED
+              value: "true"
+            - name: STRETCH_KAFKA_BOOTSTRAP
+              valueFrom:
+                configMapKeyRef:
+                  name: options-edge-config
+                  key: KAFKA_BOOTSTRAP_SERVERS
+            - name: STRETCH_SCHEMA_REGISTRY_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: options-edge-config
+                  key: KAFKA_SCHEMA_REGISTRY_URL
+            - name: STRETCH_THETA_URL
+              value: "http://host.docker.internal:25503/v3"
             - name: JAVA_TOOL_OPTIONS
               value: "-Duser.timezone=UTC"
           volumeMounts:
