@@ -34,6 +34,7 @@ set -euo pipefail
 SERVICE="${SERVICE:?SERVICE must be set (a dir under k8s/services)}"
 ENVIRONMENT="${ENVIRONMENT:?ENVIRONMENT must be set (dev|production|experiment)}"
 DEPLOY_DRY_RUN="${DEPLOY_DRY_RUN:-false}"
+bash "$(dirname "$0")/require-batch-image-binding.sh"
 if [ -z "${ROLLOUT_TIMEOUT:-}" ]; then
   if [ "$SERVICE" = "market-carry" ] && [ "$ENVIRONMENT" = "production" ]; then
     ROLLOUT_TIMEOUT="7260s"

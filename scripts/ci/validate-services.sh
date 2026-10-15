@@ -16,6 +16,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
+bash scripts/deploy/require-batch-image-binding-test.sh
+
 command -v yq >/dev/null 2>&1 || { echo "FATAL: yq is required" >&2; exit 1; }
 fail=0
 TMP="$(mktemp -d)"
