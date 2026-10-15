@@ -133,6 +133,7 @@ pipeline {
             -f .jenkins-tmp/feed/Dockerfile.rust \
             --label "org.opencontainers.image.revision=${FEED_PERMITTED_SHA}" \
             --tag "${REGISTRY}/options-edge-databento-feed:es-replay-${BUILD_NUMBER}-${FEED_PERMITTED_SHA}" \
+            --tag "${REGISTRY}/options-edge-databento-feed:prod" \
             --metadata-file .jenkins-tmp/es-replay-image.json --push .jenkins-tmp/feed
         '''
       }
