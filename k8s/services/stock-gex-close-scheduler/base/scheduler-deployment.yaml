@@ -71,6 +71,23 @@ spec:
             capabilities:
               drop: ["ALL"]
           env:
+            - name: SPX_CLOSE_ENABLED
+              value: "true"
+            - name: SPX_DAILY_CLOSE_JDBC_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: options-edge-config
+                  key: POSTGRES_JDBC_URL
+            - name: SPX_DAILY_CLOSE_DB_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: options-edge-config
+                  key: POSTGRES_USER
+            - name: SPX_DAILY_CLOSE_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: options-edge-runtime-secrets
+                  key: POSTGRES_PASSWORD
             - name: SPRING_PROFILES_ACTIVE
               value: "scheduler"
             - name: DATABENTO_API_KEY

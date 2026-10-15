@@ -347,6 +347,7 @@ PYEOF
             'databento-sr3-feed': 'options-edge-databento-sr3-feed-deploy',
             'feed-gateway'      : 'feed-gateway-deploy',
             'web'               : 'options-edge-web-deploy',
+            'stock-gex-close-scheduler': 'oe-close-batch',
             'ibkr-feed'         : 'options-edge-ibkr-feed',
             // thetadata-feed REUSES the ibkr-feed image (same shaded jar, a command override
             // selects ThetaDataFeedApplication as the main class instead of the default
@@ -430,6 +431,9 @@ PYEOF
       steps {
         script {
           def req = (params.REQUIRED_IMAGE ?: '').trim()
+          if (params.SERVICE == 'stock-gex-close-scheduler' && !params.DEPLOY_DRY_RUN && !req) {
+            error('stock-gex-close-scheduler requires REQUIRED_IMAGE from the guarded oe-close-batch image lock. Nothing was deployed.')
+          }
           if (req) {
             if (params.BUILD_IMAGES) {
               error("REQUIRED_IMAGE and BUILD_IMAGES=true are mutually exclusive: the image is bound either by this job's own child build or by the caller's, never both. Nothing was deployed.")

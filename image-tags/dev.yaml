@@ -88,3 +88,4 @@ images:
   # comes to fail closed. Both carry the :5001 spelling, which is where the dev build actually pushes.
   broker-execution-service: host.docker.internal:5001/options-edge-broker-execution:dev
   amt-order-bridge: host.docker.internal:5001/options-edge-amt-order-bridge:dev
+  close-batch: host.docker.internal:5001/oe-close-batch:dev

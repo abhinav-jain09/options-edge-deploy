@@ -1,4 +1,6 @@
 resources:
+  # Same batch image, SPX-only resident profile; stock close/OI jobs remain production-only.
+  - ../../services/stock-gex-close-scheduler/overlays/dev
   - ../../base
   # Common infra (namespace, shared ConfigMaps with the dev-local values, streams-state
   # PVCs with dev's 'standard' storageClassName, ops CronJobs) — the same overlay
