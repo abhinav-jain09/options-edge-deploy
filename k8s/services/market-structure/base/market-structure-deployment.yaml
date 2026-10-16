@@ -70,8 +70,14 @@ spec:
             # rebuild is this flag: the first start ignores the saved checkpoint, rebuilds the bootstrap session
             # (MARKET_STRUCTURE_BOOTSTRAP_TRADE_DATE defaults to today in New York) from the retained input topic,
             # reports market_structure_recovery_ignored=1 and writes a fresh ms-runtime-3 checkpoint at its first
-            # committed cut. REMOVE this variable in the next deploy after that cut exists: while it stays, every
-            # restart rebuilds the day from inputs instead of resuming from the checkpoint.
+            # committed cut. MARKET_STRUCTURE_BOOTSTRAP_TRADE_DATE is deliberately NOT pinned: the rollout runs after
+            # the 2026-10-16 close (the rebuilt session is 2026-10-16's, from inputs retained 7 days), and the next
+            # morning autostart rebuilds its own day; a pinned date would make tomorrow's start replay yesterday.
+            # REMOVE this variable in the very next deploy once a committed ms-runtime-3 cut is observed on the
+            # recovery topic (`market_structure_recovery_ignored` back to 0): while it stays, EVERY restart discards
+            # the saved cut and replays the day's retained inputs, which re-emits that day's .ui, .sequence, .dlq
+            # and pattern records — consumers deduplicate sequence records by (scheduleId, sequencePosition) and
+            # dlqIds (README), but the replay is real and the service's crash recovery is off until then.
             - name: MARKET_STRUCTURE_IGNORE_RECOVERY
               value: "true"
             - name: JAVA_TOOL_OPTIONS
