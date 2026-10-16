@@ -22,6 +22,7 @@ cfgline() {
 mock() {
   mkdir -p "$T/bin"
   : > "$T/created"
+  : > "$T/altered"
   printf '%s\n' "$3" > "$T/cfg_current"
   printf '%s\n' "$5" > "$T/cfg_history"
   printf '%s\n' "$7" > "$T/cfg_checkpoint"
@@ -38,7 +39,17 @@ M
   cat > "$T/bin/kafka-configs" <<M
 #!/usr/bin/env bash
 [ "${8:-}" = configs ] && { echo "TimeoutException" >&2; exit 1; }
-case " \$* " in *"$C"*) cat "$T/cfg_current" ;; *"$H"*) cat "$T/cfg_history" ;; *) cat "$T/cfg_checkpoint" ;; esac
+case " \$* " in *"$C"*) cfg="$T/cfg_current" ;; *"$H"*) cfg="$T/cfg_history" ;; *) cfg="$T/cfg_checkpoint" ;; esac
+case " \$* " in
+  *" --alter "*)
+    [ "${8:-}" = alter ] && { echo "not authorized" >&2; exit 1; }
+    echo "\$*" >> "$T/altered"
+    [ "${8:-}" = unconfirmed ] && exit 0
+    printf '  retention.bytes=-1 sensitive=false\n' >> "\$cfg"
+    exit 0 ;;
+esac
+[ "${8:-}" = readback ] && [ -s "$T/altered" ] && { echo "TimeoutException" >&2; exit 1; }
+cat "\$cfg"
 M
   chmod +x "$T/bin/kafka-topics" "$T/bin/kafka-configs"
 }
@@ -61,9 +72,34 @@ run; rc=$?
 
 mock "$ALL" 1 "$CC" 1 "$CH" 1 "$CC"
 run; rc=$?
-{ [ "$rc" -eq 0 ] && [ ! -s "$T/created" ]; } \
+{ [ "$rc" -eq 0 ] && [ ! -s "$T/created" ] && [ ! -s "$T/altered" ]; } \
   && ok "present topics with exact shapes are accepted without mutation" \
   || { bad "present exact topics"; cat "$T/out"; }
+
+# Reproduce the deployment failure: no dynamic byte-retention entry.
+INHERITED=$(printf '%s\n' "$CC" | sed '/^  retention.bytes=/d')
+mock "$ALL" 1 "$INHERITED" 1 "$CH" 1 "$CC"
+run; rc=$?
+{ [ "$rc" -eq 0 ] && [ ! -s "$T/created" ] \
+  && [ "$(wc -l < "$T/altered" | tr -d ' ')" = 1 ] \
+  && grep -qx -- "--bootstrap-server mock:9092 --entity-type topics --entity-name $C --alter --add-config retention.bytes=-1" "$T/altered" \
+  && grep -q '^  retention.bytes=-1 ' "$T/cfg_current"; } \
+  && ok "missing override is pinned exactly once and verified" \
+  || { bad "missing override repair"; cat "$T/out"; }
+mock "$ALL" 1 "$CC" 1 "$CH" 1 "$INHERITED"
+run; rc=$?
+{ [ "$rc" -eq 0 ] && grep -q -- "--entity-name $P --alter --add-config retention.bytes=-1" "$T/altered"; } \
+  && ok "missing checkpoint override is repaired" || { bad "checkpoint repair"; cat "$T/out"; }
+for mode in alter unconfirmed readback; do
+  mock "$ALL" 1 "$INHERITED" 1 "$CH" 1 "$CC" "$mode"
+  expect_fail "byte-retention repair $mode fails closed"
+done
+mock "$ALL" 1 "$(printf '%s\n' "$INHERITED" | sed 's/cleanup.policy=compact/cleanup.policy=delete/g')" 1 "$CH" 1 "$CC"
+run; rc=$?
+{ [ "$rc" -ne 0 ] && [ ! -s "$T/altered" ]; } && ok "wrong policy is refused before repair" || bad "wrong policy repair refusal"
+mock "$ALL" 1 "$CC" 1 "$CH" 1 "$(cfgline compact -1 1048576)"
+run; rc=$?
+{ [ "$rc" -ne 0 ] && [ ! -s "$T/altered" ]; } && ok "explicit byte bound is refused without alteration" || bad "explicit byte bound refusal"
 
 mock "$ALL" 2 "$CC" 1 "$CH" 1 "$CC"; expect_fail "wrong partition count fails closed"
 mock "$ALL" 1 "$(cfgline delete -1 -1)" 1 "$CH" 1 "$CC"; expect_fail "wrong current policy fails closed"
