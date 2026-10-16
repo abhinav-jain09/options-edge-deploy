@@ -130,6 +130,7 @@ class ReplayRefreshTest(unittest.TestCase):
 
     def test_late_feed_pod_replacement_refuses_promotion_without_rollback(self):
         result,calls,after,before=self.exercise(late_pod_changed=True)
+        self.assertIsNotNone(result,'a replacement pod must refuse acceptance')
         self.assertIn('ES feed pod changed during downstream verification',result)
         self.assertIn('no rollback or tag promotion',result)
         self.assertNotEqual(after,before)
