@@ -67,6 +67,13 @@ spec:
               value: "true"
             - name: KAFKA_MARKET_STRUCTURE_TOPIC
               value: options.spx.market-structure.ui
+            # Candlestick pattern annotations (processing CANDLESTICK-PATTERN-REQUIREMENT.md R6.4): the gateway's
+            # own switch for frame market-structure-patterns and the hello's patterns field. OFF until the owner
+            # turns it on, after MARKET_STRUCTURE_PATTERNS_ENABLED on the market-structure service.
+            - name: GATEWAY_MARKET_STRUCTURE_PATTERNS_ENABLED
+              value: "false"
+            - name: KAFKA_MARKET_STRUCTURE_PATTERNS_TOPIC
+              value: options.spx.market-structure.patterns
             - name: GATEWAY_EARLY_AUCTION_VERDICT_ENABLED
               value: "true"
             - name: GATEWAY_MARKET_COMMENTARY_ENABLED
