@@ -149,7 +149,7 @@ form; that is deliberate):
             directory), every nested checkout lying inside it; each verify with the SAME permission variable its checkout's
             guard bound. Consecutive verify steps directly before the effect form its chain; anything else between them
             breaks coverage.
-     Six bounded image-group methods may be expanded at their one direct Build Images call site before these checks.
+     Seven bounded image-group methods may be expanded at their one direct Build Images call site before these checks.
      Admission is fail-closed: unannotated no-argument top-level methods, only 1..12 literal buildImage calls each,
      canonical call order and stage/withEnv placement, no aliases or indirect dispatch. Their complete bodies are checked;
      a helper name alone exempts nothing. Source-line diagnostics are mapped back to the original method definitions.
@@ -1697,12 +1697,12 @@ def downstream_flag(job: str) -> str:
 # ----------------------------------------------------------------------------------------- the rules
 IMAGE_GROUP_METHODS = (
     "buildCoreImages", "buildFlowImages", "buildStructureImages",
-    "buildResearchImages", "buildExecutionImages", "buildFeedImages",
+    "buildResearchImages", "buildExecutionImages", "buildFeedImages", "buildScoringImages",
 )
 
 
 def expand_image_groups(text: str) -> tuple[str, list[int], list[str]]:
-    """Analyze six bounded CPS methods at their one literal, gated call site.
+    """Analyze seven bounded CPS methods at their one literal, gated call site.
 
     This is deliberately not a general Groovy call-graph interpreter. A group is
     an unannotated top-level no-argument method containing only 1..12 literal
