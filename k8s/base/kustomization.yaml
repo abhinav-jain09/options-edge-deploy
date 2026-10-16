@@ -118,6 +118,8 @@ resources:
   - gamma-leadership-service.yaml
   - option-price-behavior-deployment.yaml
   - option-price-behavior-service.yaml
+  - option-pressure-state-deployment.yaml
+  - option-pressure-state-service.yaml
   - feed-gateway-nightly-restart-cronjob.yaml
   - signal-follower-spx-deployment.yaml
   - signal-follower-spx-service.yaml

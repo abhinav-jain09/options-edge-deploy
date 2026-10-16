@@ -247,6 +247,7 @@ services:
   - { name: databento-maxpain,            managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-databento-maxpain,            deployments: [databento-maxpain-service] }
   - { name: strike-liquidity-heatmap,     managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-strike-liquidity-heatmap,     deployments: [strike-liquidity-heatmap-service] }
   - { name: option-price-behavior,        managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-option-price-behavior,        deployments: [option-price-behavior-service] }
+  - { name: option-pressure-state,        managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-option-pressure-state,        deployments: [option-pressure-state-service] }
   - { name: directional-pressure,         managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-directional-pressure,         deployments: [directional-pressure-service, directional-pressure-databento-service] }
   - { name: volume-pace,                  managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-volume-pace,                  deployments: [volume-pace-databento-service] }
   - { name: strike-flow-classifier,       managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-strike-flow-classifier,       deployments: [strike-flow-classifier-databento] }

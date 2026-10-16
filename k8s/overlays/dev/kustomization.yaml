@@ -854,6 +854,8 @@ images:
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-option-price-behavior
     newName: host.docker.internal:5001/options-edge-option-price-behavior
+  - name: 192.168.100.252:5000/options-edge-option-pressure-state
+    newName: host.docker.internal:5001/options-edge-option-pressure-state
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-databento-mission-sandwich
     newName: host.docker.internal:5001/options-edge-databento-mission-sandwich
