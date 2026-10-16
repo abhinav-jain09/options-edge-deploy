@@ -99,7 +99,7 @@ class ReplayRefreshTest(unittest.TestCase):
         def sleep(seconds):
             nonlocal elapsed
             elapsed+=seconds
-        with patch.dict(refresh.os.environ, env), patch.object(refresh, "run", run), \
+        with patch.dict(refresh.os.environ, env, clear=True), patch.object(refresh, "run", run), \
              patch.object(refresh.Path, "read_text", return_value=json.dumps({"containerimage.digest": "bad" if malformed else DIGEST})), \
              patch.object(refresh, "verify_image", side_effect=RuntimeError("bad digest") if malformed else None, return_value=[DIGEST, CHILD]), \
              patch.object(refresh.time, "sleep",side_effect=sleep),patch.object(refresh.time,"monotonic",side_effect=lambda:elapsed), patch.object(refresh,"preflight_downstream",side_effect=RuntimeError("pre-existing laggard") if preexisting else None,return_value={"pods":{},"groups":{},"highs":{"0":50}}), patch.object(refresh, "downstream_state", side_effect=downstream), patch.object(refresh,"downstream_healthy",side_effect=health_function if progress_advances else lambda *args:downstream_drain), patch.object(refresh, "promote_verified_image", side_effect=RuntimeError("registry unavailable") if promotion_fail else None) as promote, patch("builtins.print") as output:
