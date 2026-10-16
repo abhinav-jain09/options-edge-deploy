@@ -18,7 +18,8 @@ UI=options.spx.market-structure.ui
 SEQ=options.spx.market-structure.sequence
 DLQ=options.spx.market-structure.dlq
 REC=options.spx.market-structure.recovery
-ALL="$UI $SEQ $DLQ $REC"
+PAT=options.spx.market-structure.patterns
+ALL="$UI $SEQ $DLQ $REC $PAT"
 
 # cfgline <policy> <retention> <broker default policy> [max.message.bytes] [min.insync.replicas]:
 # the real `kafka-configs --describe --all` shape, whose first key=value per line is the EFFECTIVE value.
@@ -55,6 +56,7 @@ case " \$* " in
   *"$UI"*) cat "$T/cfg_ui" ;;
   *"$SEQ"*) cat "$T/cfg_seq" ;;
   *"$REC"*) cat "$T/cfg_recovery" ;;
+  *"$PAT"*) cat "$T/cfg_seq" ;;
   *) cat "$T/cfg_dlq" ;;
 esac
 M
@@ -71,8 +73,9 @@ mock "other.topic" 1 "$WEEK" "$TWO" "$WEEK"; run; rc=$?
   && grep -q "$SEQ.*cleanup.policy=delete.*retention.ms=172800000" "$T/created" \
   && grep -q "$DLQ.*cleanup.policy=delete.*retention.ms=604800000" "$T/created" \
   && grep -q "$REC.*cleanup.policy=compact.*retention.ms=-1" "$T/created" \
-  && grep -q "ok: '$UI'" "$T/out"; } \
-  && ok "absent → all four created with the declared shape, then verified" || { bad "absent → create"; cat "$T/out"; }
+  && grep -q "$PAT.*cleanup.policy=delete.*retention.ms=172800000" "$T/created" \
+  && grep -q "ok: '$UI'" "$T/out" && grep -q "ok: '$PAT'" "$T/out"; } \
+  && ok "absent → all five created with the declared shape, then verified" || { bad "absent → create"; cat "$T/out"; }
 
 mock "$ALL" 1 "$WEEK" "$TWO" "$WEEK"; run; rc=$?
 { [ $rc -eq 0 ] && [ ! -s "$T/created" ]; } && ok "present + right shape → ok, nothing created" || { bad "present ok"; cat "$T/out"; }

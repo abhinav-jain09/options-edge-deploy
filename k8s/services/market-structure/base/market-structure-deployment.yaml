@@ -55,6 +55,15 @@ spec:
               value: market-structure-service-dev
             - name: MARKET_STRUCTURE_HEALTH_PORT
               value: "8080"
+            # Candlestick pattern annotations (processing CANDLESTICK-PATTERN-REQUIREMENT.md R6.4). The fold always
+            # runs and is always in the recovery fingerprint; this flag gates ONLY publication to
+            # options.spx.market-structure.patterns (ensured by scripts/kafka/ensure-market-structure-topics.sh).
+            # OFF until the owner turns it on; the gateway has its own GATEWAY_MARKET_STRUCTURE_PATTERNS_ENABLED.
+            # NOTE: the service's recovery method moved to ms-runtime-3 with this fold — deploy OUTSIDE regular
+            # trading hours so the next session starts fresh; an intraday rollout refuses the older checkpoint
+            # and needs the README's explicit rebuild (MARKET_STRUCTURE_IGNORE_RECOVERY).
+            - name: MARKET_STRUCTURE_PATTERNS_ENABLED
+              value: "false"
             - name: JAVA_TOOL_OPTIONS
               value: -Xms256m -Xmx640m
           ports:

@@ -27,6 +27,8 @@ UI_TOPIC="${KAFKA_MARKET_STRUCTURE_UI_TOPIC:-options.spx.market-structure.ui}"
 SEQUENCE_TOPIC="${KAFKA_MARKET_STRUCTURE_SEQUENCE_TOPIC:-options.spx.market-structure.sequence}"
 DLQ_TOPIC="${KAFKA_MARKET_STRUCTURE_DLQ_TOPIC:-options.spx.market-structure.dlq}"
 RECOVERY_TOPIC="${KAFKA_MARKET_STRUCTURE_RECOVERY_TOPIC:-options.spx.market-structure.recovery}"
+# Candlestick pattern annotations (flag-gated output; ensured unconditionally so the flag is a one-variable change).
+PATTERNS_TOPIC="${KAFKA_MARKET_STRUCTURE_PATTERNS_TOPIC:-options.spx.market-structure.patterns}"
 : "${KAFKA_BOOTSTRAP_SERVERS:?KAFKA_BOOTSTRAP_SERVERS unset — refusing to verify against an unknown cluster}"
 RF="${KAFKA_TOPIC_REPLICATION_FACTOR:-1}"
 # The two minima the SERVICE verifies, which its own deployment freezes (1 on this single-broker estate).
@@ -127,4 +129,5 @@ if ! ensure "$UI_TOPIC" 604800000; then rc=1; fi
 if ! ensure "$SEQUENCE_TOPIC" 172800000; then rc=1; fi
 if ! ensure "$DLQ_TOPIC" 604800000; then rc=1; fi
 if ! ensure "$RECOVERY_TOPIC" -1 compact; then rc=1; fi
+if ! ensure "$PATTERNS_TOPIC" 172800000; then rc=1; fi
 exit $rc
