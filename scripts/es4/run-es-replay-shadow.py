@@ -11,7 +11,7 @@ import sys
 
 def main():
     source = Path(sys.argv[1]).resolve()
-    target = os.environ.get('REPLAY_TARGET','production')
+    target = os.environ.get('REPLAY_TARGET','')
     if target not in ('dev','production'): raise ValueError('Unknown replay target')
     dev = target == 'dev'
     kube = os.environ['DEV_KUBECONFIG' if dev else 'ES4_KUBECONFIG']

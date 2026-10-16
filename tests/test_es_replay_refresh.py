@@ -21,13 +21,13 @@ class ReplayRefreshTest(unittest.TestCase):
                  image_id=CHILD, fail_patch=False, fail_rollout=False,
                  action="refresh-es-replay", dry="false", subscription=True,
                  identity_failure=False, concurrent=False, malformed=False, rollback_conflicts=0,
-                 pod_changed=False, env_missing=False, reconnect=False, logscroll=False, interrupt=False, caught_up=True, mismatch=False, recovery_get_failures=0, target="production", downstream_drain=True, promotion_fail=False, progress_advances=False):
+                 pod_changed=False, env_missing=False, reconnect=False, logscroll=False, interrupt=False, caught_up=True, mismatch=False, recovery_get_failures=0, target="production", downstream_drain=True, promotion_fail=False, progress_advances=False, preexisting=False, settings_failure=False, downstream_problem=False):
         workload = "options-edge-databento-feed" if target == "dev" else "es-feed"
         container_name = "databento-feed" if target == "dev" else "es-feed"
         calls = []
         image = "registry/options-edge-databento-feed@" + DIGEST
         before = {"metadata": {"resourceVersion": "123", "uid": "deployment-uid"},
-            "spec": {"replicas": replicas, "strategy": {"type": strategy}, "template": {"spec": {"containers": [
+            "spec": {"selector":{"matchLabels":{"app.kubernetes.io/name":workload}},"replicas": replicas, "strategy": {"type": strategy}, "template": {"spec": {"containers": [
                 {"name": container_name, "image": "old", "env": [{"name": "EXISTING", "value": "preserved"}]}]}}}}
         deployment = copy.deepcopy(before)
         patch_count = 0
@@ -37,6 +37,7 @@ class ReplayRefreshTest(unittest.TestCase):
         def run(*args):
             nonlocal patch_count, pod_reads, log_reads, recovery_reads
             calls.append(args)
+            if settings_failure and "scripts/es4/validate-es-replay-settings.py" in args:raise RuntimeError("settings preflight failed")
             if identity_failure and "scripts/es4/assert-cluster-identity.sh" in args:
                 raise RuntimeError("wrong cluster")
             if "patch" in args:
@@ -88,12 +89,13 @@ class ReplayRefreshTest(unittest.TestCase):
         def downstream(*args):
             nonlocal downstream_reads
             downstream_reads+=1
+            if downstream_problem:raise RuntimeError("Downstream consumer restarted")
             high,offset=(90,89) if downstream_reads==1 else (100,99) if downstream_reads==2 else (200,101)
             return {"pods":{},"highs":{"0":high},"groups":{"consumer":{"lag":high-offset,"offsets":{"0":offset},"state":"Stable"}}} if progress_advances else {"pods":{},"groups":{},"highs":{"0":100}}
         with patch.dict(refresh.os.environ, env), patch.object(refresh, "run", run), \
              patch.object(refresh.Path, "read_text", return_value=json.dumps({"containerimage.digest": "bad" if malformed else DIGEST})), \
              patch.object(refresh, "verify_image", side_effect=RuntimeError("bad digest") if malformed else None, return_value=[DIGEST, CHILD]), \
-             patch.object(refresh.time, "sleep"), patch.object(refresh, "downstream_state", side_effect=downstream), patch.object(refresh,"downstream_healthy",side_effect=health_function if progress_advances else lambda *args:downstream_drain), patch.object(refresh, "promote_verified_image", side_effect=RuntimeError("registry unavailable") if promotion_fail else None) as promote, patch("builtins.print"):
+             patch.object(refresh.time, "sleep"), patch.object(refresh,"preflight_downstream",side_effect=RuntimeError("pre-existing laggard") if preexisting else None,return_value={"pods":{},"groups":{},"highs":{"0":90}}), patch.object(refresh, "downstream_state", side_effect=downstream), patch.object(refresh,"downstream_healthy",side_effect=health_function if progress_advances else lambda *args:downstream_drain), patch.object(refresh, "promote_verified_image", side_effect=RuntimeError("registry unavailable") if promotion_fail else None) as promote, patch("builtins.print"):
             try:
                 refresh.main()
                 result = None
@@ -124,6 +126,24 @@ class ReplayRefreshTest(unittest.TestCase):
         self.assertEqual(sum('patch' in c for c in calls),1)
         self.assertEqual(sum('logs' in c for c in calls),2)
 
+    def test_downstream_timeout_leaves_verified_feed_in_place(self):
+        result,calls,after,before=self.exercise(downstream_drain=False)
+        self.assertIn('no rollback or tag promotion',result)
+        self.assertNotEqual(after,before)
+        self.assertEqual(sum('patch' in c for c in calls),1)
+
+    def test_downstream_pod_failure_leaves_verified_feed_in_place(self):
+        result,calls,after,before=self.exercise(downstream_problem=True)
+        self.assertIn('no rollback or tag promotion',result)
+        self.assertNotEqual(after,before)
+        self.assertEqual(sum('patch' in c for c in calls),1)
+
+    def test_preflight_rejects_an_unstable_group_before_mutation(self):
+        state={'pods':{},'highs':{'0':100},'groups':{'g':{'state':'PreparingRebalance','offsets':{'0':90}}}}
+        with patch.object(refresh,'downstream_state',return_value=state):
+            with self.assertRaisesRegex(RuntimeError,'Pre-existing unstable'):
+                refresh.preflight_downstream([], 'broker','topic')
+
     def test_success_preserves_singleton_and_pins_digest(self):
         result, calls, _, _ = self.exercise()
         self.assertIsNone(result)
@@ -148,7 +168,7 @@ class ReplayRefreshTest(unittest.TestCase):
     def test_preconditions_refuse_before_mutation(self):
         for kwargs, message in [({"action": "deploy-all"}, "action required"),
                                 ({"dry": "true"}, "DRY_RUN"), ({"target":""},"Unknown replay target"), ({"identity_failure": True}, "wrong cluster"),
-                                ({"malformed": True}, "bad digest")]:
+                                ({"malformed": True}, "bad digest"), ({"settings_failure":True},"settings preflight failed"), ({"preexisting":True},"pre-existing laggard")]:
             result, calls, _, _ = self.exercise(**kwargs)
             self.assertIn(message, result)
             self.assertFalse(any("patch" in c for c in calls))
@@ -159,7 +179,7 @@ class ReplayRefreshTest(unittest.TestCase):
                                 ({"fail_rollout": True}, "rollout timeout"),
                                 ({"subscription": False}, "No 60-minute"), ({"pod_changed": True}, "pod changed"),
                                 ({"env_missing": True}, "explicitly set"), ({"reconnect": True}, "reconnected"),
-                                ({"interrupt": True}, "interrupted"), ({"caught_up": False}, "No completed"), ({"mismatch": True}, "identity verification failed"), ({"downstream_drain":False},"did not drain")]:
+                                ({"interrupt": True}, "interrupted"), ({"caught_up": False}, "No completed"), ({"mismatch": True}, "identity verification failed")]:
             result, calls, after, before = self.exercise(**kwargs)
             self.assertEqual(after, before, "rollback must restore the entire template including old env")
             self.assertIsNotNone(result)
@@ -252,6 +272,35 @@ class ImageProvenanceTest(unittest.TestCase):
                                 ({"architecture": "arm64"}, "amd64"), ({"corrupt": True}, "digest")]:
             with self.assertRaisesRegex(RuntimeError, message):
                 self.exercise(**kwargs)
+
+
+class SettingsPreflightRedactionTest(unittest.TestCase):
+    def test_secrets_use_stdin_and_are_redacted_even_when_the_native_check_fails(self):
+        import base64
+        import contextlib
+        spec=importlib.util.spec_from_file_location('settings_preflight',ROOT/'scripts/es4/validate-es-replay-settings.py')
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        key='db-fake-secret-'+('x'*20);password='fake-database-password-'+('y'*10)
+        def run(args,**kwargs):
+            if args[0]=='bash':value={}
+            elif args[0]=='kubectl':
+                if 'deployment' in args:
+                    value={'spec':{'template':{'spec':{'containers':[{'name':'es-feed','envFrom':[{'configMapRef':{'name':'config'}},{'secretRef':{'name':'env'}}]}]}}}}
+                elif 'configmap' in args:value={'data':{'DATABENTO_DATASET':'GLBX.MDP3'}}
+                else:value={'data':{k:base64.b64encode(v.encode()).decode() for k,v in {'DATABENTO_API_KEY':key,'DB_PASSWORD':password}.items()}}
+            else:
+                self.assertNotIn('DATABENTO_API_KEY',kwargs['env'])
+                self.assertEqual(json.loads(kwargs['input'])['DATABENTO_API_KEY'],key)
+                self.assertNotIn(key,' '.join(args));self.assertNotIn(password,' '.join(args))
+                return module.subprocess.CompletedProcess(args,1,'native error '+key+' '+password,'')
+            return module.subprocess.CompletedProcess(args,0,json.dumps(value),'')
+        output=io.StringIO()
+        env={'REPLAY_TARGET':'production','ES4_KUBECONFIG':'kube','ES4_NS_UID':'uid','CARGO_TARGET_DIR':'/tmp/not-used','DATABENTO_API_KEY':'ambient-fake-secret'}
+        with patch.dict(module.os.environ,env),patch.object(module.sys,'argv',['preflight',str(ROOT)]),patch.object(module.subprocess,'run',side_effect=run),contextlib.redirect_stdout(output):
+            with self.assertRaisesRegex(RuntimeError,'Prospective Rust settings'):
+                module.main()
+        self.assertNotIn(key,output.getvalue());self.assertNotIn(password,output.getvalue())
+        self.assertEqual(output.getvalue().count('[REDACTED]'),2)
 
 
 if __name__ == "__main__":

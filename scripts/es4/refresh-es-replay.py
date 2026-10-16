@@ -90,8 +90,8 @@ def container(template, name="es-feed"):
     return next(c for c in template["spec"]["containers"] if c["name"] == name)
 
 
-def verify_pod(command, image, accepted, name="es-feed", workload="es-feed"):
-    pods = json.loads(run(*command, "get", "pods", "-l", f"app.kubernetes.io/name={workload}", "-o", "json"))
+def verify_pod(command, image, accepted, name="es-feed", workload="es-feed", selector=None):
+    pods = json.loads(run(*command, "get", "pods", "-l", selector or f"app.kubernetes.io/name={workload}", "-o", "json"))
     active = [p for p in pods["items"] if not p["metadata"].get("deletionTimestamp")]
     if len(active) != 1:
         raise RuntimeError("Expected exactly one active ES feed pod")
@@ -130,6 +130,32 @@ def downstream_healthy(before, after, fence):
                for name in required)
 
 
+def preflight_downstream(command, bootstrap, topic):
+    before=downstream_state(command,bootstrap,topic)
+    fence=dict(before["highs"])
+    deadline=time.monotonic()+60
+    after=before
+    while True:
+        if any(g["state"]!="Stable" for g in after["groups"].values()):
+            raise RuntimeError("Pre-existing unstable ES consumer; no feed mutation performed")
+        if downstream_healthy(before,after,fence):return after
+        if time.monotonic()>=deadline:
+            raise RuntimeError("Pre-existing ES backlog did not advance within sixty seconds; no feed mutation performed")
+        time.sleep(5)
+        after=downstream_state(command,bootstrap,topic)
+
+
+def verify_downstream_fence(before, command, bootstrap, topic):
+    # Phase B: the feed has passed verification. Never recreate it for a consumer problem.
+    after=downstream_state(command,bootstrap,topic)
+    fence=dict(after["highs"])
+    for attempt in range(40):
+        if downstream_healthy(before,after,fence):return fence
+        time.sleep(15)
+        after=downstream_state(command,bootstrap,topic)
+    raise RuntimeError("Downstream ES consumers did not pass the replay fence within ten minutes")
+
+
 def interrupted(signum, frame):
     raise RuntimeError("Deployment interrupted; recovering previous template")
 
@@ -162,6 +188,10 @@ def main():
     before = deployment()
     if before["spec"]["replicas"] != 1 or before["spec"]["strategy"]["type"] != "Recreate":
         raise SystemExit("Only the active singleton Recreate feed may be refreshed")
+    labels=before["spec"]["selector"].get("matchLabels",{})
+    if not labels or before["spec"]["selector"].get("matchExpressions"):raise RuntimeError("Unsupported feed selector")
+    selector=",".join(f"{key}={value}" for key,value in sorted(labels.items()))
+    run("python3","-B","scripts/es4/validate-es-replay-settings.py",str(Path(".jenkins-tmp/feed").resolve()))
     digest = json.loads(Path(".jenkins-tmp/es-replay-image.json").read_text())["containerimage.digest"]
     registry = os.environ.get("REPLAY_REGISTRY",os.environ["REGISTRY"])
     accepted = verify_image(registry, digest, source, architecture)
@@ -177,40 +207,34 @@ def main():
         run(*command, "patch", "deployment", workload, "--type=merge", "-p", json.dumps(patch))
     print("Previous image:", container(old_template, container_name)["image"], flush=True)
     bootstrap, topic = ("localhost:19092","underlying.es.trades") if target=="dev" else ("192.168.100.4:9092","es.underlying.es.trades")
-    downstream_before=downstream_state(command,bootstrap,topic)
+    downstream_before=preflight_downstream(command,bootstrap,topic)
     previous_signal = signal.signal(signal.SIGTERM, interrupted)
     try:
         # One atomic template update; no ConfigMap, replica or other workload mutation.
         patch_template(before, template)
         run(*command, "rollout", "status", f"deployment/{workload}", "--timeout=600s")
-        pod_name = verify_pod(command, image, accepted, container_name, workload)
+        pod_name = verify_pod(command, image, accepted, container_name, workload, selector)
         subscription_seen = False
         replay_report = None
-        progress_fence = None
         # Require at least 60 seconds of stability; allow startup/contract resolution up to 5 minutes.
         for attempt in range(10):
             time.sleep(30)
-            if verify_pod(command, image, accepted, container_name, workload) != pod_name:
+            if verify_pod(command, image, accepted, container_name, workload, selector) != pod_name:
                 raise RuntimeError("ES feed pod changed during stability verification")
             log = run(*command, "logs", pod_name, "--since=6m")
             if len(re.findall(r"ES trades subscription:", log)) > 1:
                 raise RuntimeError("ES feed reconnected during stability verification")
             subscription_seen = subscription_seen or bool(re.search(r'ES trades subscription: replay_minutes=60 start=Some\("[^\"]+"\)', log))
             replay_report = replay_result(log) or replay_report
-            downstream_after=downstream_state(command,bootstrap,topic)
-            if replay_report is not None and progress_fence is None:progress_fence=dict(downstream_after["highs"])
-            drained=progress_fence is not None and downstream_healthy(downstream_before,downstream_after,progress_fence)
-            if subscription_seen and replay_report is not None and drained and attempt >= 1:
+            if subscription_seen and replay_report is not None and attempt >= 1:
                 break
         if not subscription_seen:
             raise RuntimeError("No 60-minute ES subscription observed within five minutes")
         if replay_report is None:
             raise RuntimeError("No completed, verified ES replay observed within five minutes")
-        if not drained: raise RuntimeError("Downstream ES consumers did not drain within five minutes")
         actual = deployment()
         if actual["spec"]["template"] != template:
             raise RuntimeError("Deployment template changed during verification")
-        print(json.dumps({"target":target, "replay": replay_report, "image": image, "pod": pod_name, "ready": True, "replayMinutes": 60, "subscriptionSeen": True}))
     except Exception:
         # Recover only this action's template, with optimistic concurrency. Never overwrite another rollout.
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
@@ -232,6 +256,7 @@ def main():
                 if str(exc).startswith("Recovery refused:") or attempt == 2:
                     print("Inspect read-only: kubectl --kubeconfig", kube, f"-n options-edge get deployment {workload} -o wide", flush=True)
                     raise
+                time.sleep(attempt+1)
         if recovered:
             run(*command, "rollout", "status", f"deployment/{workload}", "--timeout=600s")
             if deployment()["spec"]["template"] != old_template:
@@ -241,10 +266,17 @@ def main():
 
     finally:
         signal.signal(signal.SIGTERM, previous_signal)
+    try:
+        progress_fence=verify_downstream_fence(downstream_before,command,bootstrap,topic)
+        verify_pod(command,image,accepted,container_name,workload,selector)
+        if deployment()["spec"]["template"]!=template:raise RuntimeError("Feed template changed during downstream verification")
+    except Exception as exc:
+        raise RuntimeError("Feed passed verification; downstream verification failed; no rollback or tag promotion performed: "+str(exc)) from None
     # A tag transport failure must not undo a verified healthy running feed.
     try:promote_verified_image(registry,digest)
     except Exception:
         raise RuntimeError("Feed verified and running; ES tag was not confirmed promoted. No workload rollback performed") from None
+    print(json.dumps({"target":target,"replay":replay_report,"image":image,"pod":pod_name,"ready":True,"replayMinutes":60,"downstreamFence":progress_fence}))
 
 
 
