@@ -102,7 +102,9 @@ mock "$ALL" 1 "$WEEK" "$TWO" "$WEEK" "" 1 "$(cfgline delete 172799999 delete)"; 
 mock "$ALL" 1 "$WEEK" "$TWO" "$WEEK" "" 1 "$(cfgline compact 172800000 delete)"; run; rc=$?
 { [ $rc -ne 0 ] && grep -q "$PAT" "$T/out" && grep -q "ok: '$SEQ'" "$T/out"; } \
   && ok "patterns compacted, everything else right → fail, naming the patterns topic" || { bad "patterns compacted"; cat "$T/out"; }
-mock "$ALL" 1 "$WEEK" "$TWO" "$WEEK" "" 1 "$(cfgline delete 172800000 delete 1048575)"; expect_fail "patterns max.message.bytes one byte below a set's bound → fail"
+mock "$ALL" 1 "$WEEK" "$TWO" "$WEEK" "" 1 "$(cfgline delete 172800000 delete 1048575)"; run; rc=$?
+{ [ $rc -ne 0 ] && grep -q "$PAT" "$T/out" && ! grep -q "ok: '$PAT'" "$T/out" && grep -q "ok: '$SEQ'" "$T/out"; } \
+  && ok "patterns max.message.bytes one byte below a set's bound, everything else right → fail, naming the patterns topic" || { bad "patterns message bound"; cat "$T/out"; }
 mock "$ALL" 1 "$WEEK" "$TWO" "$WEEK" "" 1 "$(cfgline delete 999999999 delete)"; run; rc=$?
 [ $rc -eq 0 ] && ok "patterns retention above its floor → ok" || { bad "patterns above floor"; cat "$T/out"; }
 mock "$ALL" 32 "$WEEK" "$TWO" "$WEEK";                             expect_fail "32 partitions (the dev auto-create default) → fail"
