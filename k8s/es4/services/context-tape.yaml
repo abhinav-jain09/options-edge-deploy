@@ -76,6 +76,10 @@ spec:
           value: context-tape.direction.scorecard
         - name: CONTEXT_TAPE_DIRECTION_API_PORT
           value: '8136'
+        - name: ES_BOX_VIEW_ENABLED
+          value: 'false'
+        - name: KAFKA_ES_BOX_TOPIC
+          value: es.futures.compression-expansion.current
         - name: HEALTH_PORT
           value: '8135'
         - name: CONTEXT_TAPE_SPOT_TOPIC

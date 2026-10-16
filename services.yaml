@@ -182,9 +182,9 @@ services:
   # underlying.es.trades in one durable total order onto a single-partition tape so the slope
   # above can run at all. PUBLISHES under the APPEND late policy — ES_LINEARIZER_OUTPUT_ENABLED=true in the manifest.
   - { name: es-trade-linearizer,          managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-es-trade-linearizer,          deployments: [es-trade-linearizer-service] }
-  # es-compression-expansion: dev+prod SHADOW (dev since 2026-10-07) — reads the linearizer's tape plus the SPX-side
-  # evidence topics; the ES-side ones (footprint, auction) exist only on prod and are reported UNAVAILABLE on dev.
-  # No Service object; nothing reads its output (see the deployment yaml).
+  # es-compression-expansion: dev SHADOW; production is held at replicas 0 by the production overlay after the
+  # 2026-10-16 accuracy-gate withdrawal. It reads the linearizer's tape plus the SPX-side evidence topics; the
+  # ES-side ones (footprint, auction) exist only on prod and are reported UNAVAILABLE on dev. No Service object.
   - { name: es-compression-expansion,     managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-es-compression-expansion,     deployments: [es-compression-expansion-service] }
   # hedging-pressure: DEPLOYED HELD AT replicas 0 on dev AND production (owner turns it on later). Consumes
   # delta-flow-by-strike, underlying.spx.price, options.databento.strike-flow and options.databento.gex.strike and

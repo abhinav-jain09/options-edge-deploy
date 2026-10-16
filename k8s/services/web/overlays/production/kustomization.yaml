@@ -27,13 +27,13 @@ patches:
         path: /spec/template/spec/containers/0/env/-
         value:
           name: VITE_ZERO_DTE_COMPRESSION_ENABLED
-          value: "true"
-      # ES BOX layer on /context-tape (2026-10-07): the es-compression-expansion shadow view.
+          value: "false"
+      # ES BOX layer withdrawn on 2026-10-16 after the candidate missed the accuracy gate.
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value:
           name: VITE_ES_BOX_ENABLED
-          value: "true"
+          value: "false"
       # Position-flow Leaderboard store on the INTERNAL surface: APP_POSTGRES_* pointed at the
       # platform Postgres (no bo-app-postgres here; the nightly publisher writes options_flow
       # too). MIRRORS the web patch in k8s/overlays/production/kustomization.yaml exactly.
