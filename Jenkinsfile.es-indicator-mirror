@@ -35,7 +35,7 @@ pipeline {
     string(name: 'SOURCE_PORT',          defaultValue: '9092',          description: 'Source Kafka port.')
     string(name: 'TARGET_SPX_CLUSTER_IP',defaultValue: '127.0.0.1',     description: 'Target env broker IP (dev = 127.0.0.1, prod = 192.168.100.252).')
     string(name: 'TARGET_PORT',          defaultValue: '19092',         description: 'Target Kafka port (dev = 19092, prod = 9092).')
-    choice(name: 'TOPIC', choices: ['es.options.indicators.snapshot.current', 'es.options.indicators.bars'], description: 'Indicator topic to mirror (frozen allow-list — the shape contract below is per-topic).')
+    choice(name: 'TOPIC', choices: ['es.options.indicators.snapshot.current', 'es.options.indicators.bars', 'es.options.indicators.signals.current', 'es.options.indicators.signals.events'], description: 'Indicator topic to mirror (frozen allow-list — the shape contract below is per-topic).')
     choice(name: 'ACTION', choices: ['install', 'teardown'], description: 'install = create+run the mirror; teardown = stop+remove it.')
   }
   // 45 minutes, not 15: every shape assertion is a kafka-topics/kafka-configs round trip, and on the
@@ -161,14 +161,22 @@ pipeline {
         sh '''
           set -euo pipefail
 
-          # FROZEN per-topic shape contract (rev 14 §7.1 + scripts/kafka/topics.env — keep in sync):
+          # FROZEN per-topic shape contract (rev 14 §7.1 + SIGNALS_V1 §3 + scripts/kafka/topics.env — keep in sync):
           #   snapshot.current : 1 partition,  compact,delete, retention 7 d  (last-value live view)
           #   bars             : 8 partitions, delete,         retention 45 d (append-only history)
+          #   signals.current  : 1 partition,  delete,         retention 7 d  (SIGNALS_V1 last-value view, key = symbol;
+          #                      compact,delete on DEV only — on prod/es4 and on every mirror target it is plain delete,
+          #                      like snapshot.current: "Nothing SERVED is compacted" in topics.env, prod is the archive
+          #                      of record and the daily archiver needs every record, so the consumer reads the LATEST
+          #                      record per key within the 7 d window, never a compacted tail)
+          #   signals.events   : 1 partition,  delete,         retention 45 d (SIGNALS_V1 lifecycle events; 20 sessions)
           # The TOPIC parameter is a choice list, but re-assert here fail-closed so a job-config
           # drift can never mirror an unknown topic with a guessed shape.
           case "$TOPIC" in
             es.options.indicators.snapshot.current) PARTS=1; POLICY=delete; RET=604800000 ;;
             es.options.indicators.bars)             PARTS=8; POLICY=delete;         RET=3888000000 ;;
+            es.options.indicators.signals.current)  PARTS=1; POLICY=delete; RET=604800000 ;;
+            es.options.indicators.signals.events)   PARTS=1; POLICY=delete;         RET=3888000000 ;;
             *) echo "FAIL: topic $TOPIC not in the indicator-mirror allow-list"; exit 1 ;;
           esac
 
