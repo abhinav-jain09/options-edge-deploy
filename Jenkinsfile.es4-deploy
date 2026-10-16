@@ -136,12 +136,16 @@ pipeline {
           python3 -m unittest tests.test_es_replay_refresh
           python3 scripts/es4/run-es-replay-shadow.py .jenkins-tmp/feed
           python3 -c 'from pathlib import Path; Path(".jenkins-tmp/es-replay-image.json").unlink(missing_ok=True)'
-          docker buildx inspect options-edge-builder | python3 -c 'import sys; e=[s.split(":",1)[1].strip() for s in sys.stdin if s.startswith("Endpoint:")]; assert e == ["desktop-linux"], e'
+          # An owned builder configures HTTP for this target without changing shared builders.
+          python3 -c 'import json,os,pathlib; pathlib.Path(".jenkins-tmp/es-replay-buildkitd.toml").write_text(chr(10).join(["[registry."+json.dumps(os.environ["REPLAY_REGISTRY"])+"]", "  http = true", "  insecure = true", ""]))'
+          docker buildx create --name "es-replay-${BUILD_NUMBER}" --driver docker-container \
+            --driver-opt memory=10g --buildkitd-config .jenkins-tmp/es-replay-buildkitd.toml desktop-linux
+          docker buildx inspect "es-replay-${BUILD_NUMBER}" --bootstrap | python3 -c 'import sys; e=[s.split(":",1)[1].strip() for s in sys.stdin if s.startswith("Endpoint:")]; assert e == ["desktop-linux"], e'
         '''
         timeout(time: 10, unit: 'MINUTES') {
           sh 'PERMITTED_SHA="${FEED_PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir .jenkins-tmp/feed --allow-ignored rust/target'
         }
-        sh '''docker buildx build --builder options-edge-builder --platform "${REPLAY_PLATFORM}" \
+        sh '''docker buildx build --builder "es-replay-${BUILD_NUMBER}" --platform "${REPLAY_PLATFORM}" \
             -f .jenkins-tmp/feed/Dockerfile.rust \
             --label "org.opencontainers.image.revision=${FEED_PERMITTED_SHA}" \
             --tag "${REPLAY_REGISTRY}/options-edge-databento-feed:es-replay-${BUILD_NUMBER}-${FEED_PERMITTED_SHA}" \
@@ -442,5 +446,16 @@ pipeline {
       }
     }
   }
-  post { always { archiveArtifacts artifacts: '.jenkins-tmp/*.yaml,.jenkins-tmp/es-replay-image.json', allowEmptyArchive: true } }
+  post {
+    always {
+      script {
+        if (env.PERMITTED_SHA_GUARD == 'PASSED') {
+          if (params.ACTION == 'refresh-es-replay') {
+            sh(script: 'docker buildx rm --force "es-replay-${BUILD_NUMBER}"', returnStatus: true)
+          }
+        }
+      }
+      archiveArtifacts artifacts: '.jenkins-tmp/*.yaml,.jenkins-tmp/es-replay-image.json', allowEmptyArchive: true
+    }
+  }
 }
