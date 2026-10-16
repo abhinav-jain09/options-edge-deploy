@@ -190,3 +190,20 @@ spec:
   resources:
     requests:
       storage: 100Gi
+---
+# option-pressure-state-service: both engines keep persistent RocksDB stores (one snapshot per
+# store, plus the one-second blocks held for the longest rolling horizon). Far smaller than the
+# surface/aggregate stores above, so 20Gi rather than 100Gi. Claimed now so a later enable does
+# not have to provision storage at the same time as flipping the data path on.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: option-pressure-state-service-streams-state
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/component: kafka-streams-state
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 20Gi
