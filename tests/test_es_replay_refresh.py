@@ -21,7 +21,7 @@ class ReplayRefreshTest(unittest.TestCase):
                  image_id=CHILD, fail_patch=False, fail_rollout=False,
                  action="refresh-es-replay", dry="false", subscription=True,
                  identity_failure=False, concurrent=False, malformed=False, rollback_conflicts=0,
-                 pod_changed=False, env_missing=False, reconnect=False, logscroll=False, interrupt=False, caught_up=True, mismatch=False, recovery_get_failures=0, target="production", downstream_drain=True, promotion_fail=False, progress_advances=False, preexisting=False, settings_failure=False, downstream_problem=False, late_pod_changed=False):
+                 pod_changed=False, env_missing=False, reconnect=False, logscroll=False, interrupt=False, caught_up=True, mismatch=False, recovery_get_failures=0, target="production", downstream_drain=True, promotion_fail=False, progress_advances=False, preexisting=False, settings_failure=False, downstream_problem=False, late_pod_changed=False, late_reconnect=False, late_unverified=False, delayed_completion=False):
         workload = "options-edge-databento-feed" if target == "dev" else "es-feed"
         container_name = "databento-feed" if target == "dev" else "es-feed"
         calls = []
@@ -71,16 +71,16 @@ class ReplayRefreshTest(unittest.TestCase):
                 pod_spec = copy.deepcopy(deployment["spec"]["template"]["spec"])
                 if env_missing:
                     pod_spec["containers"][0]["env"] = []
-                return json.dumps({"items": [{"metadata": {"name": "changed" if (pod_changed and pod_reads > 1) or (late_pod_changed and pod_reads > 3) else "new"}, "spec": pod_spec, "status": {
+                return json.dumps({"items": [{"metadata": {"name": "changed" if (pod_changed and pod_reads > 1) or (late_pod_changed and pod_reads > 4) else "new"}, "spec": pod_spec, "status": {
                     "containerStatuses": [{"name": container_name, "ready": ready,
                     "restartCount": restarts, "imageID": "runtime://" + image_id}]}}]})
             if "logs" in args:
                 log_reads += 1
                 if logscroll and log_reads > 1:
                     return ""
-                if reconnect:
+                if reconnect or (late_reconnect and log_reads>3):
                     return "ES trades subscription: first\nES trades subscription: second"
-                return ('ES trades subscription: replay_minutes=60 start=Some("2026-10-16T13:30:00Z")' if subscription else "") + ('\nES replay caught up: '+json.dumps({'expected_unique':20,'matched_unique':0 if mismatch else 20,'verified':not mismatch}) if caught_up else '')
+                return ('ES trades subscription: replay_minutes=60 start=Some("2026-10-16T13:30:00Z")' if subscription else "") + ('\nES replay caught up: '+json.dumps({'expected_unique':20,'matched_unique':0 if mismatch else 20,'verified':not mismatch and not (late_unverified and log_reads>3)}) if caught_up and not (delayed_completion and log_reads<3) else '')
             return ""
         env = {"REPLAY_TARGET":target,"DEV_KUBECONFIG":"dev","DEV_NS_UID":"dev-uid","ACTION": action, "DEPLOY_DRY_RUN": dry, "ES4_KUBECONFIG": "es4", "PROD_KUBECONFIG": "prod",
                "ES4_NS_UID": "es4-uid", "PROD_NS_UID": "prod-uid", "REGISTRY": "registry", "FEED_PERMITTED_SHA": SOURCE}
@@ -92,10 +92,14 @@ class ReplayRefreshTest(unittest.TestCase):
             if downstream_problem:raise RuntimeError("Downstream consumer restarted")
             high,offset=(90,89) if downstream_reads==1 else (100,99) if downstream_reads==2 else (200,101)
             return {"pods":{},"highs":{"0":high},"groups":{"consumer":{"lag":high-offset,"offsets":{"0":offset},"state":"Stable"}}} if progress_advances else {"pods":{},"groups":{},"highs":{"0":100}}
+        elapsed=0
+        def sleep(seconds):
+            nonlocal elapsed
+            elapsed+=seconds
         with patch.dict(refresh.os.environ, env), patch.object(refresh, "run", run), \
              patch.object(refresh.Path, "read_text", return_value=json.dumps({"containerimage.digest": "bad" if malformed else DIGEST})), \
              patch.object(refresh, "verify_image", side_effect=RuntimeError("bad digest") if malformed else None, return_value=[DIGEST, CHILD]), \
-             patch.object(refresh.time, "sleep"), patch.object(refresh,"preflight_downstream",side_effect=RuntimeError("pre-existing laggard") if preexisting else None,return_value={"pods":{},"groups":{},"highs":{"0":50}}), patch.object(refresh, "downstream_state", side_effect=downstream), patch.object(refresh,"downstream_healthy",side_effect=health_function if progress_advances else lambda *args:downstream_drain), patch.object(refresh, "promote_verified_image", side_effect=RuntimeError("registry unavailable") if promotion_fail else None) as promote, patch("builtins.print") as output:
+             patch.object(refresh.time, "sleep",side_effect=sleep),patch.object(refresh.time,"monotonic",side_effect=lambda:elapsed), patch.object(refresh,"preflight_downstream",side_effect=RuntimeError("pre-existing laggard") if preexisting else None,return_value={"pods":{},"groups":{},"highs":{"0":50}}), patch.object(refresh, "downstream_state", side_effect=downstream), patch.object(refresh,"downstream_healthy",side_effect=health_function if progress_advances else lambda *args:downstream_drain), patch.object(refresh, "promote_verified_image", side_effect=RuntimeError("registry unavailable") if promotion_fail else None) as promote, patch("builtins.print") as output:
             try:
                 refresh.main()
                 result = None
@@ -115,6 +119,11 @@ class ReplayRefreshTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError,'restart count changed'):
             refresh.downstream_healthy(before,{'pods':{'uid':3},'groups':{}},fence)
 
+    def test_active_group_without_any_commits_cannot_pass_a_fence(self):
+        state={'pods':{},'groups':{'consumer':{'state':'Stable','offsets':{},'lag':None}}}
+        self.assertFalse(refresh.downstream_healthy(state,state,{'0':100}))
+        self.assertFalse(refresh.downstream_healthy(state,state,{'0':0}))
+
     def test_tag_failure_never_rolls_back_the_verified_feed(self):
         result,calls,after,before=self.exercise(promotion_fail=True)
         self.assertIn('No workload rollback',result)
@@ -125,7 +134,7 @@ class ReplayRefreshTest(unittest.TestCase):
         result,calls,_,_=self.exercise(progress_advances=True)
         self.assertIsNone(result)
         self.assertEqual(sum('patch' in c for c in calls),1)
-        self.assertEqual(sum('logs' in c for c in calls),2)
+        self.assertEqual(sum('logs' in c for c in calls),6)
         self.assertEqual(self.report['downstreamFence'],{'0':90},'fence must include the post-rollout replay burst')
 
     def test_late_feed_pod_replacement_refuses_promotion_without_rollback(self):
@@ -172,7 +181,7 @@ class ReplayRefreshTest(unittest.TestCase):
         self.assertIsNone(result)
         self.assertEqual(sum("patch" in c for c in calls), 1)
         self.assertFalse(any("apply" in c for c in calls))
-        self.assertEqual(sum("logs" in c for c in calls), 2)
+        self.assertEqual(sum("logs" in c for c in calls), 5)
 
     def test_dev_routes_only_to_dev_native_feed(self):
         result,calls,_,_=self.exercise(target='dev')
@@ -200,7 +209,7 @@ class ReplayRefreshTest(unittest.TestCase):
         for kwargs, message in [({"image_id": "sha256:" + "d" * 64}, "differs"),
                                 ({"ready": False}, "not ready"), ({"restarts": 1}, "not ready"),
                                 ({"fail_rollout": True}, "rollout timeout"),
-                                ({"subscription": False}, "No 60-minute"), ({"pod_changed": True}, "pod changed"),
+                                ({"subscription": False}, "60-minute"), ({"pod_changed": True}, "pod changed"),
                                 ({"env_missing": True}, "explicitly set"), ({"reconnect": True}, "reconnected"),
                                 ({"interrupt": True}, "interrupted"), ({"caught_up": False}, "No completed"), ({"mismatch": True}, "identity verification failed")]:
             result, calls, after, before = self.exercise(**kwargs)
@@ -209,10 +218,24 @@ class ReplayRefreshTest(unittest.TestCase):
             self.assertIn(message, result)
             self.assertEqual(sum("patch" in c for c in calls), 2)
 
-    def test_log_line_remains_seen_after_it_scrolls_away(self):
-        result, calls, _, _ = self.exercise(logscroll=True)
+    def test_missing_session_evidence_refuses_acceptance(self):
+        result,calls,after,before=self.exercise(logscroll=True)
+        self.assertIn('evidence missing',result)
+        self.assertEqual(after,before)
+        self.assertEqual(sum('patch' in c for c in calls),2)
+
+    def test_same_pod_reconnect_during_phase_b_never_promotes_or_rolls_back(self):
+        for kwargs in ({'late_reconnect':True},{'late_unverified':True}):
+            result,calls,after,before=self.exercise(**kwargs)
+            self.assertIsNotNone(result)
+            self.assertIn('no rollback or tag promotion',result)
+            self.assertNotEqual(after,before)
+            self.assertEqual(sum('patch' in c for c in calls),1)
+
+    def test_delayed_completion_still_requires_a_full_minute_of_subsequent_stability(self):
+        result,calls,_,_=self.exercise(delayed_completion=True)
         self.assertIsNone(result)
-        self.assertEqual(sum("patch" in c for c in calls), 1)
+        self.assertEqual(sum('logs' in c for c in calls),7,'five Phase A polls, one Phase B poll, final session check')
 
     def test_recovery_retries_version_conflicts(self):
         result, calls, after, before = self.exercise(fail_rollout=True, rollback_conflicts=2)

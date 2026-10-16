@@ -133,6 +133,7 @@ pipeline {
           python3 -B -c 'import pathlib,subprocess; files=subprocess.check_output(["git","ls-files","-z","--others","--ignored","--exclude-standard"]).decode().split("\\0"); [pathlib.Path(p).unlink() for p in files if "__pycache__/" in p and p.endswith(".pyc")]'
 
           cargo test --locked --manifest-path .jenkins-tmp/feed/rust/Cargo.toml
+          cargo test --locked --manifest-path .jenkins-tmp/feed/rust/Cargo.toml --example es-replay-lag
           python3 -m unittest tests.test_es_replay_refresh
           python3 scripts/es4/run-es-replay-shadow.py .jenkins-tmp/feed
           python3 -c 'from pathlib import Path; Path(".jenkins-tmp/es-replay-image.json").unlink(missing_ok=True)'

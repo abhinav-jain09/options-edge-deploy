@@ -126,7 +126,8 @@ def downstream_healthy(before, after, fence):
     if before["pods"] != after["pods"]: raise RuntimeError("Downstream consumer pod or restart count changed")
     required=set(before["groups"]) | set(after["groups"])
     return all(name in after["groups"] and after["groups"][name]["state"]=="Stable"
-               and all(after["groups"][name]["offsets"].get(p,0)>=offset for p,offset in fence.items())
+               and all(after["groups"][name]["offsets"].get(p) is not None
+                       and after["groups"][name]["offsets"][p]>=offset for p,offset in fence.items())
                for name in required)
 
 
@@ -145,15 +146,29 @@ def preflight_downstream(command, bootstrap, topic):
         after=downstream_state(command,bootstrap,topic)
 
 
-def verify_downstream_fence(before, command, bootstrap, topic):
+def verify_downstream_fence(before, command, bootstrap, topic, observe=None):
     # Phase B: the feed has passed verification. Never recreate it for a consumer problem.
     after=downstream_state(command,bootstrap,topic)
     fence=dict(after["highs"])
     for attempt in range(40):
+        if observe is not None: observe()
         if downstream_healthy(before,after,fence):return fence
         time.sleep(15)
         after=downstream_state(command,bootstrap,topic)
     raise RuntimeError("Downstream ES consumers did not pass the replay fence within ten minutes")
+
+
+def observe_es_session(command, pod_name, require_complete=False):
+    # All evidence from this new pod, bounded. Missing/truncated proof refuses acceptance.
+    log=run(*command,"logs",pod_name,"--limit-bytes=4194304")
+    subscriptions=re.findall(r"ES trades subscription:",log)
+    if len(subscriptions)>1 or re.search(r"Databento ES(?:-only)? live stream error:|ES replay unavailable:",log):
+        raise RuntimeError("ES feed reconnected or replay became unavailable during verification")
+    subscribed=bool(re.search(r'ES trades subscription: replay_minutes=60 start=Some\("[^\"]+"\)',log))
+    report=replay_result(log)
+    if require_complete and (len(subscriptions)!=1 or not subscribed or report is None):
+        raise RuntimeError("Completed ES session evidence missing during verification")
+    return report if subscribed else None
 
 
 def interrupted(signum, frame):
@@ -214,24 +229,22 @@ def main():
         patch_template(before, template)
         run(*command, "rollout", "status", f"deployment/{workload}", "--timeout=600s")
         pod_name = verify_pod(command, image, accepted, container_name, workload, selector)
-        subscription_seen = False
         replay_report = None
-        # Require at least 60 seconds of stability; allow startup/contract resolution up to 5 minutes.
+        verified_at = None
+        # Require 60 seconds AFTER the first verified completion, within five minutes.
         for attempt in range(10):
             time.sleep(30)
             if verify_pod(command, image, accepted, container_name, workload, selector) != pod_name:
                 raise RuntimeError("ES feed pod changed during stability verification")
-            log = run(*command, "logs", pod_name, "--since=6m")
-            if len(re.findall(r"ES trades subscription:", log)) > 1:
-                raise RuntimeError("ES feed reconnected during stability verification")
-            subscription_seen = subscription_seen or bool(re.search(r'ES trades subscription: replay_minutes=60 start=Some\("[^\"]+"\)', log))
-            replay_report = replay_result(log) or replay_report
-            if subscription_seen and replay_report is not None and attempt >= 1:
-                break
-        if not subscription_seen:
-            raise RuntimeError("No 60-minute ES subscription observed within five minutes")
+            report=observe_es_session(command,pod_name,require_complete=replay_report is not None)
+            if report is not None:
+                replay_report=report
+                if verified_at is None: verified_at=time.monotonic()
+                if time.monotonic()-verified_at>=60:break
         if replay_report is None:
-            raise RuntimeError("No completed, verified ES replay observed within five minutes")
+            raise RuntimeError("No completed, verified 60-minute ES replay observed within five minutes")
+        if verified_at is None or time.monotonic()-verified_at<60:
+            raise RuntimeError("No sixty-second post-replay stability interval within five minutes")
         actual = deployment()
         if actual["spec"]["template"] != template:
             raise RuntimeError("Deployment template changed during verification")
@@ -267,10 +280,12 @@ def main():
     finally:
         signal.signal(signal.SIGTERM, previous_signal)
     try:
-        progress_fence=verify_downstream_fence(downstream_before,command,bootstrap,topic)
+        progress_fence=verify_downstream_fence(downstream_before,command,bootstrap,topic,
+            observe=lambda:observe_es_session(command,pod_name,require_complete=True))
         if verify_pod(command,image,accepted,container_name,workload,selector)!=pod_name:
             raise RuntimeError("ES feed pod changed during downstream verification")
         if deployment()["spec"]["template"]!=template:raise RuntimeError("Feed template changed during downstream verification")
+        observe_es_session(command,pod_name,require_complete=True)
     except Exception as exc:
         raise RuntimeError("Feed passed verification; downstream verification failed; no rollback or tag promotion performed: "+str(exc)) from None
     # A tag transport failure must not undo a verified healthy running feed.
