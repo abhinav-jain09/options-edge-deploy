@@ -54,6 +54,8 @@ spec:
             # repartition record on the SINGLE partition that carries the whole 0DTE chain — the one
             # measured ~1.1M records behind and growing at +6849/min. Dev has no wings-coverage
             # requirement to trade off, so the cheapest real relief is to stop generating the volume.
+            - name: DATABENTO_ES_TRADES_REPLAY_START_MINUTES
+              value: "60"
             - name: DATABENTO_PUBLISH_INTERVAL_MS
               value: "5000"
             # DEV-ONLY spot cascade: native SPX index (unwired stub) -> ES-basis (cost-of-carry from

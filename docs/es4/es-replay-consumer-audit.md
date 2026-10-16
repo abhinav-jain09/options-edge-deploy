@@ -1,0 +1,26 @@
+# ES replay consumer preparation
+
+The processing-source audit uses approved commit `329afe7a2b5c73ba1fdbd99f4d5aaf121237f7a1` of `options-edge-processing`. It does not claim every running consumer image is byte-identical to that tree. This change deploys feed code, not processing workloads.
+
+| Consumer | Treatment of time | Source anchor in options-edge-processing |
+|---|---|---|
+| CVD | Uses input event milliseconds and second buckets; committed intervals can reject late input. | `es-cvd-service/src/main/java/com/optionsedge/processing/escvd/EsCvdEngine.java:198`, `:220` |
+| Auction / AMT | Applies input in event-time/sequence order. | `es-amt-service/src/main/java/com/optionsedge/processing/esamt/AuctionEngine.java:13` |
+| Footprint strike | Consumes footprint bars carrying their original barStartMs; it does not pour replay ticks into an arrival-time candle. | `es-footprint-strike-service/src/main/java/com/optionsedge/processing/esfootprintstrike/BarInput.java:10` |
+| Context Tape | Uses event-time admission and raw event-time identity. | `context-tape-service/src/main/java/com/optionsedge/processing/contexttape/direction/EsParticipationEngine.java:12`, `context-tape-service/src/main/java/com/optionsedge/processing/contexttape/direction/candle/AdmissionPipeline.java:1` |
+| Indicator | Per-partition event-time lateness and sealed-horizon rejection. | `indicator-service/src/main/java/com/optionsedge/processing/indicator/engine/AdmissionPipeline.java:16`, `:191`, `:978` |
+| Close direction | Reorders by event time; impact buckets use the trade's event minute. | `close-direction-service/src/main/java/com/optionsedge/processing/closedirection/CanonicalMerge.java:18`, `close-direction-service/src/main/java/com/optionsedge/processing/closedirection/engine/ImpactEstimator.java:73` |
+| Tape zones | Event-time release buffer and session buckets; no wall clock in ordering. | `tape-zones-service/src/main/java/com/optionsedge/processing/tapezones/ReleaseBuffer.java:11`, `tape-zones-service/src/main/java/com/optionsedge/processing/tapezones/SessionGrid.java:46` |
+| Aggressor | Parses the source eventTime into its print identity. | `es-aggressor-flow-service/src/main/java/com/optionsedge/processing/esaggressor/EsAggressorFlowRuntime.java:369`, `:459` |
+
+The recorded opening-hour probe supplied 111,075 persisted rows to the actual CVD, aggressor, AMT identity, Context Tape and indicator admission code, then repeated them and supplied distinct shifted prints. All five rejected the duplicate pass, admitted distinct input and passed the bounded burst probe. This is an offline engine test, not an actual peak-load runtime replay. Some first-pass indicator records were rejected under existing admission rules; no completeness repair is claimed.
+
+At preparation, ES4 has eight ready consumer deployments. Production and dev Kubernetes linearizers are paused at replicas zero, as are their indicator/Context Tape deployments; this task does not activate them. The earlier production linearizer image includes the 700-print resume fix, but it is not exposed as a running consumer in this rollout. The acceptance gate checks unchanged ready ES4 consumer pods/restart counts and committed offsets past a frozen replay-completion fence for active Kafka group members on the source topic. Manually assigned consumers without membership are covered by pod health, not committed-group lag (`scripts/es4/refresh-es-replay.py:110`).
+
+Late replay prints retain their exchange event time and may remain excluded from finalized output. This task enables bounded source reconnect recovery; it does not rebuild historical VWAP or clear completeness latches.
+
+Detailed probe limits: CVD labelled 2,251 records DUPLICATE in both the original and shifted-new passes, all 111,075 records DUPLICATE on the replay pass, and 316 records LATE on the shifted-new pass. The probe seals through the original last event plus one second before shifting the next pass by exactly one hour; its existing lateness fence rejects those early new-pass records. These are engine classifications, not proof that every rejected record was a duplicate exchange print. Signed session CVD was 5,224, stayed 5,224 on replay, and became 10,292 after the new pass (a 5,068 contribution under those rejection rules). Every engine admitted some distinct input; complete acceptance is not claimed.
+
+The APPEND linearizer produced 333,187 records across the three passes, with 111,044 marked late. It is not a duplicate filter; source suppression is required. Its Kubernetes deployments are paused during this refresh. The recorded opening-hour export is selected by Kafka publication CreateTime, while the real vendor shadow is selected by payload eventTime. They are different boundary grains; 111,075 versus 111,074 must not be interpreted as dropped replay data. The boundary-count diagnostic records the exact difference.
+
+The exact boundary reconciliation is: 111,075 publication-window rows contain 111,071 rows inside the requested event-time window and four outside it. A five-minute publication margin supplies three additional rows inside the event-time window, yielding the shadow's 111,074. Thus the one-row net difference is a window-selection difference, not evidence of a lost shadow print.
