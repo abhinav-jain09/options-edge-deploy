@@ -21,7 +21,7 @@ class ReplayRefreshTest(unittest.TestCase):
                  image_id=CHILD, fail_patch=False, fail_rollout=False,
                  action="refresh-es-replay", dry="false", subscription=True,
                  identity_failure=False, concurrent=False, malformed=False, rollback_conflicts=0,
-                 pod_changed=False, env_missing=False, reconnect=False, logscroll=False, interrupt=False, caught_up=True, mismatch=False, recovery_get_failures=0, target="production", downstream_drain=True, promotion_fail=False, progress_advances=False, preexisting=False, settings_failure=False, downstream_problem=False):
+                 pod_changed=False, env_missing=False, reconnect=False, logscroll=False, interrupt=False, caught_up=True, mismatch=False, recovery_get_failures=0, target="production", downstream_drain=True, promotion_fail=False, progress_advances=False, preexisting=False, settings_failure=False, downstream_problem=False, late_pod_changed=False):
         workload = "options-edge-databento-feed" if target == "dev" else "es-feed"
         container_name = "databento-feed" if target == "dev" else "es-feed"
         calls = []
@@ -71,7 +71,7 @@ class ReplayRefreshTest(unittest.TestCase):
                 pod_spec = copy.deepcopy(deployment["spec"]["template"]["spec"])
                 if env_missing:
                     pod_spec["containers"][0]["env"] = []
-                return json.dumps({"items": [{"metadata": {"name": "changed" if pod_changed and pod_reads > 1 else "new"}, "spec": pod_spec, "status": {
+                return json.dumps({"items": [{"metadata": {"name": "changed" if (pod_changed and pod_reads > 1) or (late_pod_changed and pod_reads > 3) else "new"}, "spec": pod_spec, "status": {
                     "containerStatuses": [{"name": container_name, "ready": ready,
                     "restartCount": restarts, "imageID": "runtime://" + image_id}]}}]})
             if "logs" in args:
@@ -95,10 +95,11 @@ class ReplayRefreshTest(unittest.TestCase):
         with patch.dict(refresh.os.environ, env), patch.object(refresh, "run", run), \
              patch.object(refresh.Path, "read_text", return_value=json.dumps({"containerimage.digest": "bad" if malformed else DIGEST})), \
              patch.object(refresh, "verify_image", side_effect=RuntimeError("bad digest") if malformed else None, return_value=[DIGEST, CHILD]), \
-             patch.object(refresh.time, "sleep"), patch.object(refresh,"preflight_downstream",side_effect=RuntimeError("pre-existing laggard") if preexisting else None,return_value={"pods":{},"groups":{},"highs":{"0":90}}), patch.object(refresh, "downstream_state", side_effect=downstream), patch.object(refresh,"downstream_healthy",side_effect=health_function if progress_advances else lambda *args:downstream_drain), patch.object(refresh, "promote_verified_image", side_effect=RuntimeError("registry unavailable") if promotion_fail else None) as promote, patch("builtins.print"):
+             patch.object(refresh.time, "sleep"), patch.object(refresh,"preflight_downstream",side_effect=RuntimeError("pre-existing laggard") if preexisting else None,return_value={"pods":{},"groups":{},"highs":{"0":50}}), patch.object(refresh, "downstream_state", side_effect=downstream), patch.object(refresh,"downstream_healthy",side_effect=health_function if progress_advances else lambda *args:downstream_drain), patch.object(refresh, "promote_verified_image", side_effect=RuntimeError("registry unavailable") if promotion_fail else None) as promote, patch("builtins.print") as output:
             try:
                 refresh.main()
                 result = None
+                self.report=json.loads(output.call_args[0][0])
             except (SystemExit, RuntimeError) as exc:
                 result = str(exc)
         self.assertEqual(promote.call_count, 1 if result is None or promotion_fail else 0)
@@ -125,6 +126,14 @@ class ReplayRefreshTest(unittest.TestCase):
         self.assertIsNone(result)
         self.assertEqual(sum('patch' in c for c in calls),1)
         self.assertEqual(sum('logs' in c for c in calls),2)
+        self.assertEqual(self.report['downstreamFence'],{'0':90},'fence must include the post-rollout replay burst')
+
+    def test_late_feed_pod_replacement_refuses_promotion_without_rollback(self):
+        result,calls,after,before=self.exercise(late_pod_changed=True)
+        self.assertIn('ES feed pod changed during downstream verification',result)
+        self.assertIn('no rollback or tag promotion',result)
+        self.assertNotEqual(after,before)
+        self.assertEqual(sum('patch' in c for c in calls),1)
 
     def test_downstream_timeout_leaves_verified_feed_in_place(self):
         result,calls,after,before=self.exercise(downstream_drain=False)
@@ -142,6 +151,19 @@ class ReplayRefreshTest(unittest.TestCase):
         state={'pods':{},'highs':{'0':100},'groups':{'g':{'state':'PreparingRebalance','offsets':{'0':90}}}}
         with patch.object(refresh,'downstream_state',return_value=state):
             with self.assertRaisesRegex(RuntimeError,'Pre-existing unstable'):
+                refresh.preflight_downstream([], 'broker','topic')
+
+    def test_preflight_accepts_progress_past_its_original_fence(self):
+        before={'pods':{},'highs':{'0':90},'groups':{'g':{'state':'Stable','offsets':{'0':89}}}}
+        after={'pods':{},'highs':{'0':200},'groups':{'g':{'state':'Stable','offsets':{'0':91}}}}
+        with patch.object(refresh,'downstream_state',side_effect=[before,after]),patch.object(refresh.time,'sleep') as sleep,patch.object(refresh.time,'monotonic',side_effect=[0,1]):
+            self.assertEqual(refresh.preflight_downstream([], 'broker','topic'),after)
+            sleep.assert_called_once_with(5)
+
+    def test_preflight_refuses_a_backlog_at_its_deadline(self):
+        state={'pods':{},'highs':{'0':100},'groups':{'g':{'state':'Stable','offsets':{'0':90}}}}
+        with patch.object(refresh,'downstream_state',return_value=state),patch.object(refresh.time,'monotonic',side_effect=[0,61]):
+            with self.assertRaisesRegex(RuntimeError,'Pre-existing ES backlog'):
                 refresh.preflight_downstream([], 'broker','topic')
 
     def test_success_preserves_singleton_and_pins_digest(self):

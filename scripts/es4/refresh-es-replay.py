@@ -268,7 +268,8 @@ def main():
         signal.signal(signal.SIGTERM, previous_signal)
     try:
         progress_fence=verify_downstream_fence(downstream_before,command,bootstrap,topic)
-        verify_pod(command,image,accepted,container_name,workload,selector)
+        if verify_pod(command,image,accepted,container_name,workload,selector)!=pod_name:
+            raise RuntimeError("ES feed pod changed during downstream verification")
         if deployment()["spec"]["template"]!=template:raise RuntimeError("Feed template changed during downstream verification")
     except Exception as exc:
         raise RuntimeError("Feed passed verification; downstream verification failed; no rollback or tag promotion performed: "+str(exc)) from None

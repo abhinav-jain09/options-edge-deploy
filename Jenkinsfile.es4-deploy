@@ -160,7 +160,10 @@ pipeline {
         timeout(time: 10, unit: 'MINUTES') {
           sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp'
         }
-        sh 'python3 -B scripts/es4/refresh-es-replay.py'
+        sh '''
+          unset CARGO_TARGET_DIR
+          python3 -B scripts/es4/refresh-es-replay.py
+        '''
       }
     }
     stage('Infra sync + bootstrap') {
