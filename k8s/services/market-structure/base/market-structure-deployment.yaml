@@ -64,20 +64,30 @@ spec:
             # and needs the README's explicit rebuild (MARKET_STRUCTURE_IGNORE_RECOVERY).
             - name: MARKET_STRUCTURE_PATTERNS_ENABLED
               value: "false"
-            # RECOVERY METHOD ROLLOVER (one deploy only): the image at processing main 55293e18+ writes checkpoints as
-            # ms-runtime-3 and REFUSES the ms-runtime-2 checkpoints both environments hold ("incompatible recovery
-            # method; explicit rebuild required" — the runner dies and the pod crash-loops). The README's explicit
-            # rebuild is this flag: the first start ignores the saved checkpoint, rebuilds the bootstrap session
-            # (MARKET_STRUCTURE_BOOTSTRAP_TRADE_DATE defaults to today in New York) from the retained input topic,
-            # reports market_structure_recovery_ignored=1 and writes a fresh ms-runtime-3 checkpoint at its first
-            # committed cut. MARKET_STRUCTURE_BOOTSTRAP_TRADE_DATE is deliberately NOT pinned: the rollout runs after
-            # the 2026-10-16 close (the rebuilt session is 2026-10-16's, from inputs retained 7 days), and the next
-            # morning autostart rebuilds its own day; a pinned date would make tomorrow's start replay yesterday.
-            # REMOVE this variable in the very next deploy once a committed ms-runtime-3 cut is observed on the
-            # recovery topic (`market_structure_recovery_ignored` back to 0): while it stays, EVERY restart discards
-            # the saved cut and replays the day's retained inputs, which re-emits that day's .ui, .sequence, .dlq
-            # and pattern records — consumers deduplicate sequence records by (scheduleId, sequencePosition) and
-            # dlqIds (README), but the replay is real and the service's crash recovery is off until then.
+            # RECOVERY METHOD ROLLOVER (one deploy only). The image at processing main 55293e18+ writes checkpoints as
+            # ms-runtime-3 and REFUSES an older checkpoint ("incompatible recovery method; explicit rebuild required":
+            # the runner dies and the pod crash-loops). What the recovery topic holds, read read_committed on 2026-10-16
+            # before this rollout (PR #1227 round-2 evidence):
+            #   production (.252:9092, options.spx.market-structure.recovery, 1 partition): latest committed record at
+            #     offset 2272, key market-structure-service-production, envelope methodVersion=ms-runtime-2, payload
+            #     sha256 verified, tradeDate 2026-10-15 — the new image WOULD refuse it;
+            #   dev (host.docker.internal:19092 per options-edge-config, same topic): EMPTY, high watermark 0 — there is
+            #     nothing to refuse and the new image bootstraps from retained inputs with or without this flag.
+            # The README's explicit rebuild is this flag: a start with it ignores whatever checkpoint is saved, rebuilds
+            # the bootstrap session (MARKET_STRUCTURE_BOOTSTRAP_TRADE_DATE unset = today in New York) from the retained
+            # input topic, and writes a fresh ms-runtime-3 checkpoint at its first committed cut. The date is
+            # deliberately NOT pinned: this rollout is applied OUTSIDE the New York regular session (service-deploy.sh's
+            # RTH_ROLLOVER_GATE refuses to apply a manifest carrying this flag Mon-Fri 09:30-16:00 New York, no
+            # override), so the rebuilt session is the current New York day's, and a start or restart on a later day
+            # bootstraps THAT day; a pinned date would make a later start replay an older session.
+            # REMOVE this variable in the very next deploy, immediately after the FIRST committed ms-runtime-3 record is
+            # observed on the recovery topic (read_committed, envelope methodVersion=ms-runtime-3). Do not wait for a
+            # metric to clear: market_structure_recovery_ignored reads 1 for the whole life of a process started with
+            # this flag and returns to 0 only in a process started without it. While the flag stays, EVERY restart
+            # discards the saved cut — including the new ms-runtime-3 one — and replays the day's retained inputs,
+            # re-emitting that day's .ui, .sequence, .dlq and pattern records (consumers deduplicate sequence records by
+            # (scheduleId, sequencePosition) and dlqIds, per the README, but the replay is real) and the service has no
+            # crash recovery until the flag is gone.
             - name: MARKET_STRUCTURE_IGNORE_RECOVERY
               value: "true"
             - name: JAVA_TOOL_OPTIONS
