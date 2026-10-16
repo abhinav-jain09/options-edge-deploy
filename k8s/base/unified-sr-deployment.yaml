@@ -75,7 +75,13 @@ spec:
               mountPath: /var/lib/options-edge/kafka-streams
           resources:
             requests:
-              cpu: 250m
+              # 2026-10-16: raised from 250m. Measured on prod while this service worked through a backlog: the
+              # process sustained 155-197% CPU, i.e. about two cores, so a 250m request understated it by ~8x.
+              # The request is what the scheduler and the CPU-shares weighting use, so under contention (the prod
+              # host runs 50+ services and research replays) it was being throttled to roughly a quarter core and
+              # could not keep up with its own input: after the 10-16 recovery it published while its backlog still
+              # GREW 20.5k records per 90s. Deliberately NO cpu limit, so catch-up can still burst past two cores.
+              cpu: "2"
               memory: 768Mi
             limits:
               memory: 3Gi
