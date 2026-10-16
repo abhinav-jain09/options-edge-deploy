@@ -149,6 +149,10 @@ form; that is deliberate):
             directory), every nested checkout lying inside it; each verify with the SAME permission variable its checkout's
             guard bound. Consecutive verify steps directly before the effect form its chain; anything else between them
             breaks coverage.
+     Six bounded image-group methods may be expanded at their one direct Build Images call site before these checks.
+     Admission is fail-closed: unannotated no-argument top-level methods, only 1..12 literal buildImage calls each,
+     canonical call order and stage/withEnv placement, no aliases or indirect dispatch. Their complete bodies are checked;
+     a helper name alone exempts nothing. Source-line diagnostics are mapped back to the original method definitions.
      The verify step is recognised from the Groovy token structure exactly like the guard (a real `sh` token whose sole
      argument is one single-quoted literal equal to the template), sits alone in a timeout(time: N, unit: 'MINUTES')
      block inside a stage's steps. verify-permitted-tree.sh re-checks HEAD == permitted AND a clean working tree at run
@@ -1691,9 +1695,201 @@ def downstream_flag(job: str) -> str:
 
 
 # ----------------------------------------------------------------------------------------- the rules
+IMAGE_GROUP_METHODS = (
+    "buildCoreImages", "buildFlowImages", "buildStructureImages",
+    "buildResearchImages", "buildExecutionImages", "buildFeedImages",
+)
+
+
+def expand_image_groups(text: str) -> tuple[str, list[int], list[str]]:
+    """Analyze six bounded CPS methods at their one literal, gated call site.
+
+    This is deliberately not a general Groovy call-graph interpreter. A group is
+    an unannotated top-level no-argument method containing only 1..12 literal
+    buildImage calls. Each is invoked once, in declaration order, inside the
+    Build Images steps/script/withEnv chain. Aliases, arguments, other references,
+    quoted dispatch, Unicode escapes, slashy/division syntax and reflective constructs are refused. The existing rules
+    then inspect every expanded guard/effect without exceptions. Preserve a map
+    back to original source lines for diagnostics. This restricted syntax model
+    supplements the SCM job Groovy sandbox; it is not a general Groovy sandbox.
+    """
+    g = Groovy(text)
+    lines = text.split("\n")
+    identity = list(range(1, len(lines) + 1))
+    mentions = list(re.finditer(r"\b(?:" + "|".join(IMAGE_GROUP_METHODS) + r")\b", text))
+    mentions = [m for m in mentions if not any(a <= m.start() < b for a, b in g.comments)]
+    if not mentions:
+        return text, identity, []
+    failures: list[str] = []
+    definitions = {}
+    allowed = set()
+    erased = set()
+    literal_image = re.compile(
+        r"buildImage\('options-edge-[a-z0-9-]+', '[A-Za-z0-9_./-]+', "
+        r"'[A-Za-z0-9_./-]+', '[A-Z0-9_]+', (?:true|false)\)"
+    )
+    for name in IMAGE_GROUP_METHODS:
+        headers = [m for m in re.finditer(r"(?m)^def " + name + r"\(\) \{$", text)
+                   if g.is_code(m.start())]
+        if len(headers) != 1:
+            failures.append(f"image-group helper {name}: exactly one top-level definition is required")
+            continue
+        header = headers[0]
+        block = next((b for b in g.blocks if b.open == header.end() - 1), None)
+        if block is None or block.parent is not None or block.close >= len(text):
+            failures.append(f"image-group helper {name}: definition must be a closed top-level method")
+            continue
+        preceding = [b.close for b in g.blocks if b.parent is None and b.close < header.start()]
+        if not preceding or g.code_only(max(preceding) + 1, header.start()).strip():
+            failures.append(f"image-group helper {name}: annotations or intervening top-level code are refused")
+            continue
+        last = block.open + 1
+        valid = 1 <= len(block.kids) <= 12
+        for child_id in block.kids:
+            child = g.blocks[child_id]
+            line_start = text.rfind("\n", 0, child.open) + 1
+            if (not literal_image.fullmatch(child.header)
+                    or g.code_only(last, line_start).strip()
+                    or text[line_start:child.open].strip() != child.header):
+                valid = False
+            last = child.close + 1
+        if g.code_only(last, block.close).strip():
+            valid = False
+        closing_line = lines[text.count("\n", 0, block.close)]
+        if closing_line.strip() != "}":
+            valid = False
+        if not valid:
+            failures.append(f"image-group helper {name}: body must contain only 1..12 literal buildImage calls")
+            continue
+        begin_line = text.count("\n", 0, header.start())
+        end_line = text.count("\n", 0, block.close)
+        definitions[name] = (header, block, text[block.open + 1:block.close])
+        allowed.add(header.start() + len("def "))
+        erased.update(range(begin_line, end_line + 1))
+    code = g.code_only(0, len(text))
+    if "/" in code or BS in code:
+        failures.append("image-group helpers: slashy strings or division syntax are not supported")
+    # Groovy's Unicode preprocessing can turn an apparent comment into code.
+    if BS + "u" in text:
+        failures.append("image-group helpers: Unicode escapes are not supported")
+    dispatch_re = re.compile(
+        r"\b(?:this|owner|delegate|binding|getBinding|setVariable|getProperty|setProperty|"
+        r"invokeMethod|methodMissing|metaClass|getMetaClass|setMetaClass|GroovyShell|"
+        r"evaluate|classLoader|getClass|Class|getThisObject|getOwner|getDelegate|respondsTo|"
+        r"hasProperty|getMetaMethod|InvokerHelper|Eval|MethodClosure|GroovySystem|asType)\b|\.&"
+    )
+    if dispatch_re.search(code):
+        failures.append("image-group helpers: reflective or indirect Groovy dispatch is not supported")
+    # The lexer does not parse executable GString interpolation. Admit dotted
+    # variable reads and these three existing, exact expressions only; reject
+    # nested quoting, calls, closures and computed dispatch before expansion.
+    fixed_interpolations = {
+        "env.MAVEN_OPTS ? ' ' + env.MAVEN_OPTS : ''",
+        "moduleByImage.keySet().sort().join(', ')",
+        "env.TARGET_MAVEN_MODULE ?: '(all)'",
+    }
+    for quote, begin, end in g.strings:
+        if quote in ('"', '"""'):
+            body = text[begin:end]
+            for expression in re.findall(r"\$\{([^{}]*)\}", body):
+                if (not re.fullmatch(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*", expression)
+                        and expression not in fixed_interpolations) or dispatch_re.search(expression):
+                    failures.append("image-group helpers: unsupported executable GString interpolation")
+            remainder = re.sub(r"\$\{[^{}]*\}|\$[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*", "", body)
+            if "$" in remainder:
+                failures.append("image-group helpers: unsupported executable GString interpolation")
+        if re.compile(r"\s*\(").match(text, end + len(quote)):
+            failures.append("image-group helpers: quoted method dispatch is not supported")
+            break
+    calls = {}
+    call_positions = []
+    for name in IMAGE_GROUP_METHODS:
+        candidates = []
+        for match in re.finditer(r"(?m)^(?P<indent>[ \t]*)" + name + r"\(\)[ \t]*$", text):
+            pos = match.start() + len(match.group("indent"))
+            if not g.is_code(pos):
+                continue
+            ancestors = [g.blocks[i].header for i in g.ancestors(pos)]
+            stage = g.stage_of(pos)
+            permitted_parent = all(
+                h in ("pipeline", "stages", "steps", "script", "try", "withEnv(imagesEnv)")
+                or re.fullmatch(r"stage\('[^']+'\)", h)
+                for h in ancestors
+            )
+            if (stage is None or g.blocks[stage].header != "stage('Build Images')"
+                    or "steps" not in ancestors or "script" not in ancestors
+                    or "withEnv(imagesEnv)" not in ancestors or not permitted_parent):
+                failures.append(f"image-group helper {name}: call must be direct in Build Images withEnv steps")
+                continue
+            candidates.append((match, pos))
+        if len(candidates) != 1:
+            failures.append(f"image-group helper {name}: exactly one direct no-argument call is required")
+            continue
+        match, pos = candidates[0]
+        allowed.add(pos)
+        calls[text.count("\n", 0, pos)] = (name, match.group("indent"))
+        call_positions.append(pos)
+    if call_positions != sorted(call_positions):
+        failures.append("image-group helpers: calls must retain canonical group order")
+    if len(call_positions) == len(IMAGE_GROUP_METHODS):
+        ordered = sorted(call_positions)
+        for left, right in zip(ordered, ordered[1:]):
+            gap = text[left + len(IMAGE_GROUP_METHODS[call_positions.index(left)]) + 2:right]
+            for begin, end in reversed(g.comments):
+                lo = max(begin, left + len(IMAGE_GROUP_METHODS[call_positions.index(left)]) + 2)
+                hi = min(end, right)
+                if lo < hi:
+                    offset = left + len(IMAGE_GROUP_METHODS[call_positions.index(left)]) + 2
+                    gap = gap[:lo-offset] + " " * (hi-lo) + gap[hi-offset:]
+            if gap.strip():
+                failures.append("image-group helpers: calls must form a consecutive unconditional sequence")
+        before = g.code_only(0, ordered[0]).rstrip()
+        after = g.code_only(ordered[-1] + len(IMAGE_GROUP_METHODS[call_positions.index(ordered[-1])]) + 2, len(text)).lstrip()
+        if not before.endswith(("{", "}")) or not after.startswith("}"):
+            failures.append("image-group helpers: calls must form a consecutive unconditional sequence")
+    for match in mentions:
+        if match.start() not in allowed:
+            failures.append(f"line {text.count(chr(10), 0, match.start()) + 1}: "
+                            f"image-group helper {match.group()}: unsupported reference or dispatch")
+    if failures:
+        return text, identity, failures
+    expanded = []
+    mapping = []
+    for number, line in enumerate(lines):
+        if number in erased:
+            expanded.append("")
+            mapping.append(number + 1)
+        elif number in calls:
+            name, indent = calls[number]
+            _, block, body = definitions[name]
+            expanded.append(indent + "script {")
+            mapping.append(number + 1)
+            first_line = text.count("\n", 0, block.open) + 1
+            for offset, body_line in enumerate(body.split("\n")):
+                expanded.append(body_line)  # Do not alter string-literal contents by reindenting.
+                mapping.append(first_line + offset)
+            expanded.append(indent + "}")
+            mapping.append(number + 1)
+        else:
+            expanded.append(line)
+            mapping.append(number + 1)
+    return "\n".join(expanded), mapping, []
+
+
 def check_in_scope(path: str, entry: dict, guard_hash: str, root_dir: str = ".") -> list[str]:
     with open(path, encoding="utf-8") as fh:
         text = fh.read()
+    text, mapping, problems = expand_image_groups(text)
+    if problems:
+        return problems
+    problems = check_expanded_scope(path, entry, guard_hash, root_dir, text)
+    def original_line(match):
+        number = int(match.group(1))
+        return "line " + str(mapping[number - 1] if 1 <= number <= len(mapping) else number)
+    return [re.sub(r"\bline ([0-9]+)", original_line, problem) for problem in problems]
+
+
+def check_expanded_scope(path: str, entry: dict, guard_hash: str, root_dir: str, text: str) -> list[str]:
     lines = text.split("\n")
     offs = [0]
     for l in lines:
