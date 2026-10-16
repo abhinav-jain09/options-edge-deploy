@@ -337,6 +337,36 @@ fi
 zerodte_migrate_barrier_acquire "$NAMESPACE" "$SERVICE" "service-deploy-${SERVICE}-${ENVIRONMENT}-build-${BUILD_NUMBER:-manual}-$(date -u +%Y%m%dT%H%M%SZ)" || exit 1
 trap 'zerodte_migrate_barrier_release "$NAMESPACE"' EXIT
 
+# BEGIN RTH_ROLLOVER_GATE — scripts/deploy/service-deploy-rth-rollover-gate-test.sh extracts and runs this block
+# A rendered Deployment that carries MARKET_STRUCTURE_IGNORE_RECOVERY=true is the market-structure
+# recovery-method rollover (k8s/services/market-structure/base/market-structure-deployment.yaml): its
+# first start throws the saved checkpoint away and rebuilds the bootstrap session from the retained
+# input topic, re-emitting that session's .ui, .sequence, .dlq and pattern records. Applied while the
+# New York regular session is open, that is a live replay of the open session into every consumer
+# (PR #1227 Codex round 2). So this refuses, fail-closed and with NO override, to apply such a
+# manifest Monday-Friday 09:30:00-15:59:59 America/New_York. Before 09:30 or from 16:00 the rebuilt
+# session is today's with no open session to replay, so the deploy proceeds. The gate keys on the
+# flag, not on the service name: once the flag leaves the manifest (the very next deploy) it has
+# nothing to refuse, and a general trading-hours deployment freeze remains the owner's decision.
+# A DEPLOY_DRY_RUN applies nothing and has already exited above, so it is not gated.
+ROLLOVER_FLAG_DEPLOYMENTS="$(yq -r '
+    select(.kind == "Deployment")
+    | select([.spec.template.spec
+              | (.containers[]?, .initContainers[]?, .ephemeralContainers[]?)
+              | .env[]?
+              | select(.name == "MARKET_STRUCTURE_IGNORE_RECOVERY" and .value == "true")] | length > 0)
+    | .metadata.name' "$RENDER" | grep -v '^---$' | grep -v '^null$' | tr '\n' ' ' | sed 's/ $//' || true)"
+if [ -n "$ROLLOVER_FLAG_DEPLOYMENTS" ]; then
+  NY_NOW="$(TZ=America/New_York date '+%u %H%M %Y-%m-%d %H:%M:%S %Z')"
+  NY_DOW="${NY_NOW%% *}"; _ny_rest="${NY_NOW#* }"; NY_HHMM="${_ny_rest%% *}"
+  if (( 10#$NY_DOW >= 1 && 10#$NY_DOW <= 5 && 10#$NY_HHMM >= 930 && 10#$NY_HHMM < 1600 )); then
+    echo "FATAL: Deployment(s) $ROLLOVER_FLAG_DEPLOYMENTS carry MARKET_STRUCTURE_IGNORE_RECOVERY=true and New York time is $NY_NOW — inside the regular session (Mon-Fri 09:30-16:00). Applying it now would rebuild and replay the OPEN session into live consumers. Nothing was applied. Re-run after 16:00 America/New_York; there is no override." >&2
+    exit 1
+  fi
+  echo "rollover gate: $ROLLOVER_FLAG_DEPLOYMENTS carry MARKET_STRUCTURE_IGNORE_RECOVERY=true; New York time $NY_NOW is outside the regular session — proceeding"
+fi
+# END RTH_ROLLOVER_GATE
+
 echo "=== apply (service-scoped) ==="
 # 2026-09-28 incident: databento-gex-service's live Deployment had drifted out of band (an env var
 # that was `value: SPXW` live vs `valueFrom: configMapKeyRef` in the tracked manifest, plus 5
