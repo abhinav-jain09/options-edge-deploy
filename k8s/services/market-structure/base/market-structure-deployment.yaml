@@ -64,6 +64,16 @@ spec:
             # and needs the README's explicit rebuild (MARKET_STRUCTURE_IGNORE_RECOVERY).
             - name: MARKET_STRUCTURE_PATTERNS_ENABLED
               value: "false"
+            # RECOVERY METHOD ROLLOVER (one deploy only): the image at processing main 55293e18+ writes checkpoints as
+            # ms-runtime-3 and REFUSES the ms-runtime-2 checkpoints both environments hold ("incompatible recovery
+            # method; explicit rebuild required" — the runner dies and the pod crash-loops). The README's explicit
+            # rebuild is this flag: the first start ignores the saved checkpoint, rebuilds the bootstrap session
+            # (MARKET_STRUCTURE_BOOTSTRAP_TRADE_DATE defaults to today in New York) from the retained input topic,
+            # reports market_structure_recovery_ignored=1 and writes a fresh ms-runtime-3 checkpoint at its first
+            # committed cut. REMOVE this variable in the next deploy after that cut exists: while it stays, every
+            # restart rebuilds the day from inputs instead of resuming from the checkpoint.
+            - name: MARKET_STRUCTURE_IGNORE_RECOVERY
+              value: "true"
             - name: JAVA_TOOL_OPTIONS
               value: -Xms256m -Xmx640m
           ports:
