@@ -57,7 +57,7 @@ spec:
     spec:
       containers:
         - name: es-feed
-          image: 192.168.100.252:5000/options-edge-databento-feed:es-replay
+          image: 192.168.100.252:5000/options-edge-databento-feed:prod
           envFrom:
             # es-feed's OWN configmap (k8s/es4/es4-feed-config.yaml). Fixes the root cause of
             # the 2026-07-24 incident: a secret-only envFrom silently inherited the library's

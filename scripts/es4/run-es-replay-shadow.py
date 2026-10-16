@@ -11,7 +11,11 @@ import sys
 
 def main():
     source = Path(sys.argv[1]).resolve()
-    kube = os.environ['ES4_KUBECONFIG']
+    target = os.environ.get('REPLAY_TARGET','production')
+    if target not in ('dev','production'): raise ValueError('Unknown replay target')
+    dev = target == 'dev'
+    kube = os.environ['DEV_KUBECONFIG' if dev else 'ES4_KUBECONFIG']
+    bootstrap,topic = ('localhost:19092','underlying.es.trades') if dev else ('192.168.100.4:9092','es.underlying.es.trades')
     encoded = subprocess.check_output(['kubectl', '--kubeconfig', kube, '-n', 'options-edge',
         'get', 'secret', 'options-edge-databento-feed-env', '-o', 'jsonpath={.data.DATABENTO_API_KEY}'],
         stderr=subprocess.PIPE, timeout=30).decode()
@@ -28,7 +32,7 @@ def main():
         print(safe, flush=True)
         if result.returncode: raise RuntimeError('Read-only replay validation failed')
     invoke(['cargo', 'build', '--locked', '--manifest-path', str(source/'rust/Cargo.toml'),
-        '--example', 'es-replay-shadow'], 600)
+        '--example', 'es-replay-shadow', '--example', 'es-replay-lag'], 600)
     binary = Path(env.get('CARGO_TARGET_DIR', str(source/'rust/target')))/'debug/examples/es-replay-shadow'
     now = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(seconds=5)
     # Current rolling hour. Additional opening/session windows can be supplied explicitly.
@@ -36,7 +40,7 @@ def main():
     for text in sys.argv[2:]:
         a,b=text.split(','); windows.append((datetime.fromisoformat(a),datetime.fromisoformat(b)))
     for start,end in windows:
-        invoke([str(binary), '192.168.100.4:9092', 'es.underlying.es.trades',
+        invoke([str(binary), bootstrap, topic,
             start.isoformat(), end.isoformat()], 210, binary=True)
 
 if __name__ == '__main__':

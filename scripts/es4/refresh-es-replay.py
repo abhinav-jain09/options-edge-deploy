@@ -67,44 +67,66 @@ def replay_result(log):
     return json.loads(reports[-1]) if reports else None
 
 
-def verify_image(registry, digest, source):
+def verify_image(registry, digest, source, architecture="amd64"):
     manifest = registry_json(registry, "manifests", digest)
     accepted = [digest]
     if "manifests" in manifest:
         children = [m["digest"] for m in manifest["manifests"]
                     if m.get("platform", {}).get("os") == "linux"
-                    and m.get("platform", {}).get("architecture") == "amd64"]
+                    and m.get("platform", {}).get("architecture") == architecture]
         if len(children) != 1:
-            raise RuntimeError("Expected one Linux amd64 image in build result")
+            raise RuntimeError("Expected one Linux target-platform image in build result")
         accepted.extend(children)
         manifest = registry_json(registry, "manifests", children[0])
     config = registry_json(registry, "blobs", manifest["config"]["digest"])
-    if config.get("os") != "linux" or config.get("architecture") != "amd64":
-        raise RuntimeError("Built image must be Linux amd64")
+    if config.get("os") != "linux" or config.get("architecture") != architecture:
+        raise RuntimeError(f"Built image must be Linux {architecture}")
     if config.get("config", {}).get("Labels", {}).get("org.opencontainers.image.revision") != source:
         raise RuntimeError("Image source differs from FEED_PERMITTED_SHA")
     return accepted
 
 
-def container(template):
-    return next(c for c in template["spec"]["containers"] if c["name"] == "es-feed")
+def container(template, name="es-feed"):
+    return next(c for c in template["spec"]["containers"] if c["name"] == name)
 
 
-def verify_pod(command, image, accepted):
-    pods = json.loads(run(*command, "get", "pods", "-l", "app.kubernetes.io/name=es-feed", "-o", "json"))
+def verify_pod(command, image, accepted, name="es-feed", workload="es-feed"):
+    pods = json.loads(run(*command, "get", "pods", "-l", f"app.kubernetes.io/name={workload}", "-o", "json"))
     active = [p for p in pods["items"] if not p["metadata"].get("deletionTimestamp")]
     if len(active) != 1:
         raise RuntimeError("Expected exactly one active ES feed pod")
     pod = active[0]
-    status = next(c for c in pod["status"]["containerStatuses"] if c["name"] == "es-feed")
+    status = next(c for c in pod["status"]["containerStatuses"] if c["name"] == name)
     if not status["ready"] or status["restartCount"] != 0:
         raise RuntimeError("New ES feed is not ready with zero restarts")
-    if container({"spec": pod["spec"]})["image"] != image or not any(status["imageID"].endswith(d) for d in accepted):
+    if container({"spec": pod["spec"]}, name)["image"] != image or not any(status["imageID"].endswith(d) for d in accepted):
         raise RuntimeError("Running ES feed image differs from verified image")
-    env = {e["name"]: e.get("value") for e in container({"spec": pod["spec"]}).get("env", [])}
+    env = {e["name"]: e.get("value") for e in container({"spec": pod["spec"]}, name).get("env", [])}
     if env.get("DATABENTO_ES_TRADES_REPLAY_START_MINUTES") != "60":
         raise RuntimeError("Pod does not explicitly set ES replay to 60 minutes")
     return pod["metadata"]["name"]
+
+
+def downstream_state(command, bootstrap, topic):
+    pods = json.loads(run(*command, "get", "pods", "-o", "json"))["items"]
+    names = re.compile(r"(indicator|context-tape|close-direction|tape-zones|es-cvd|es-footprint|es-amt|linearizer|es-aggressor)")
+    state = {}
+    for pod in pods:
+        if pod["metadata"].get("deletionTimestamp") or not names.search(pod["metadata"]["name"]): continue
+        if not any(o.get("kind")=="ReplicaSet" for o in pod["metadata"].get("ownerReferences",[])): continue
+        statuses=pod.get("status",{}).get("containerStatuses",[])
+        if not statuses or not all(c.get("ready") for c in statuses): raise RuntimeError("Downstream consumer is not ready")
+        state[pod["metadata"]["uid"]] = sum(c["restartCount"] for c in statuses)
+    lag_binary = Path('.jenkins-tmp/feed/rust/target/debug/examples/es-replay-lag').resolve()
+    groups=json.loads(run(str(lag_binary),bootstrap,topic))
+    return {"pods":state,"groups":groups}
+
+
+def downstream_healthy(before, after):
+    if before["pods"] != after["pods"]: raise RuntimeError("Downstream consumer pod or restart count changed")
+    required=set(before["groups"]) | set(after["groups"])
+    return all(name in after["groups"] and after["groups"][name]["lag"]==0
+               and after["groups"][name]["state"]=="Stable" for name in required)
 
 
 def interrupted(signum, frame):
@@ -119,59 +141,73 @@ def main():
     source = os.environ["FEED_PERMITTED_SHA"]
     if not re.fullmatch(r"[0-9a-f]{40}", source):
         raise SystemExit("Exact FEED_PERMITTED_SHA required")
-    kube, prod = os.environ["ES4_KUBECONFIG"], os.environ["PROD_KUBECONFIG"]
-    run("bash", "scripts/es4/assert-cluster-identity.sh", kube, "es4", os.environ["ES4_NS_UID"])
-    run("bash", "scripts/es4/assert-cluster-identity.sh", prod, "prod", os.environ["PROD_NS_UID"])
+    target = os.environ.get("REPLAY_TARGET", "production")
+    if target == "production":
+        kube, role, expected_uid = os.environ["ES4_KUBECONFIG"], "es4", os.environ["ES4_NS_UID"]
+        workload, container_name, architecture = "es-feed", "es-feed", "amd64"
+    elif target == "dev":
+        kube, role, expected_uid = os.environ["DEV_KUBECONFIG"], "dev", os.environ["DEV_NS_UID"]
+        workload, container_name, architecture = "options-edge-databento-feed", "databento-feed", "arm64"
+    else:
+        raise SystemExit("Unknown replay target")
+    run("bash", "scripts/es4/assert-cluster-identity.sh", kube, role, expected_uid)
+    if target == "production":
+        prod = os.environ["PROD_KUBECONFIG"]
+        run("bash", "scripts/es4/assert-cluster-identity.sh", prod, "prod", os.environ["PROD_NS_UID"])
+        run("bash", "scripts/es4/assert-es-feed-exclusive.sh", kube, prod, "es4")
     command = ["kubectl", "--kubeconfig", kube, "-n", "options-edge"]
     def deployment():
-        return json.loads(run(*command, "get", "deployment", "es-feed", "-o", "json"))
+        return json.loads(run(*command, "get", "deployment", workload, "-o", "json"))
     before = deployment()
     if before["spec"]["replicas"] != 1 or before["spec"]["strategy"]["type"] != "Recreate":
         raise SystemExit("Only the active singleton Recreate feed may be refreshed")
-    run("bash", "scripts/es4/assert-es-feed-exclusive.sh", kube, prod, "es4")
     digest = json.loads(Path(".jenkins-tmp/es-replay-image.json").read_text())["containerimage.digest"]
-    registry = os.environ["REGISTRY"]
-    accepted = verify_image(registry, digest, source)
+    registry = os.environ.get("REPLAY_REGISTRY",os.environ["REGISTRY"])
+    accepted = verify_image(registry, digest, source, architecture)
     image = f"{registry}/options-edge-databento-feed@{digest}"
     old_template = before["spec"]["template"]
     template = copy.deepcopy(old_template)
-    selected = container(template)
+    selected = container(template, container_name)
     selected["image"] = image
     selected["env"] = [e for e in selected.get("env", []) if e["name"] != "DATABENTO_ES_TRADES_REPLAY_START_MINUTES"]
     selected["env"].append({"name": "DATABENTO_ES_TRADES_REPLAY_START_MINUTES", "value": "60"})
     def patch_template(current, target):
         patch = {"metadata": {"resourceVersion": current["metadata"]["resourceVersion"]}, "spec": {"template": target}}
-        run(*command, "patch", "deployment", "es-feed", "--type=merge", "-p", json.dumps(patch))
-    print("Previous image:", container(old_template)["image"], flush=True)
+        run(*command, "patch", "deployment", workload, "--type=merge", "-p", json.dumps(patch))
+    print("Previous image:", container(old_template, container_name)["image"], flush=True)
+    bootstrap, topic = ("localhost:19092","underlying.es.trades") if target=="dev" else ("192.168.100.4:9092","es.underlying.es.trades")
+    downstream_before=downstream_state(command,bootstrap,topic)
     previous_signal = signal.signal(signal.SIGTERM, interrupted)
     try:
         # One atomic template update; no ConfigMap, replica or other workload mutation.
         patch_template(before, template)
-        run(*command, "rollout", "status", "deployment/es-feed", "--timeout=600s")
-        pod_name = verify_pod(command, image, accepted)
+        run(*command, "rollout", "status", f"deployment/{workload}", "--timeout=600s")
+        pod_name = verify_pod(command, image, accepted, container_name, workload)
         subscription_seen = False
         replay_report = None
         # Require at least 60 seconds of stability; allow startup/contract resolution up to 5 minutes.
         for attempt in range(10):
             time.sleep(30)
-            if verify_pod(command, image, accepted) != pod_name:
+            if verify_pod(command, image, accepted, container_name, workload) != pod_name:
                 raise RuntimeError("ES feed pod changed during stability verification")
             log = run(*command, "logs", pod_name, "--since=6m")
             if len(re.findall(r"ES trades subscription:", log)) > 1:
                 raise RuntimeError("ES feed reconnected during stability verification")
             subscription_seen = subscription_seen or bool(re.search(r'ES trades subscription: replay_minutes=60 start=Some\("[^\"]+"\)', log))
             replay_report = replay_result(log) or replay_report
-            if subscription_seen and replay_report is not None and attempt >= 1:
+            drained=downstream_healthy(downstream_before,downstream_state(command,bootstrap,topic))
+            if subscription_seen and replay_report is not None and drained and attempt >= 1:
                 break
         if not subscription_seen:
             raise RuntimeError("No 60-minute ES subscription observed within five minutes")
         if replay_report is None:
             raise RuntimeError("No completed, verified ES replay observed within five minutes")
+        if not drained: raise RuntimeError("Downstream ES consumers did not drain within five minutes")
         actual = deployment()
         if actual["spec"]["template"] != template:
             raise RuntimeError("Deployment template changed during verification")
         promote_verified_image(registry, digest)
-        print(json.dumps({"replay": replay_report, "image": image, "pod": pod_name, "ready": True, "replayMinutes": 60, "subscriptionSeen": True}))
+        print(json.dumps({"target":target, "replay": replay_report, "image": image, "pod": pod_name, "ready": True, "replayMinutes": 60, "subscriptionSeen": True}))
     except Exception:
         # Recover only this action's template, with optimistic concurrency. Never overwrite another rollout.
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
@@ -182,6 +218,7 @@ def main():
                 if actual["metadata"]["uid"] != before["metadata"]["uid"]:
                     raise RuntimeError("Recovery refused: deployment identity changed")
                 if actual["spec"]["template"] == old_template:
+                    recovered = True
                     break
                 if actual["spec"]["template"] != template:
                     raise RuntimeError("Recovery refused: deployment changed concurrently; inspect runtime state")
@@ -190,10 +227,10 @@ def main():
                 break
             except Exception as exc:
                 if str(exc).startswith("Recovery refused:") or attempt == 2:
-                    print("Inspect read-only: kubectl --kubeconfig", kube, "-n options-edge get deployment es-feed -o wide", flush=True)
+                    print("Inspect read-only: kubectl --kubeconfig", kube, f"-n options-edge get deployment {workload} -o wide", flush=True)
                     raise
         if recovered:
-            run(*command, "rollout", "status", "deployment/es-feed", "--timeout=600s")
+            run(*command, "rollout", "status", f"deployment/{workload}", "--timeout=600s")
             if deployment()["spec"]["template"] != old_template:
                 raise RuntimeError("Recovery template verification failed")
             print("RECOVERED previous ES feed template; requested replay deployment failed", flush=True)

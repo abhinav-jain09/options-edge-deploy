@@ -21,12 +21,14 @@ class ReplayRefreshTest(unittest.TestCase):
                  image_id=CHILD, fail_patch=False, fail_rollout=False,
                  action="refresh-es-replay", dry="false", subscription=True,
                  identity_failure=False, concurrent=False, malformed=False, rollback_conflicts=0,
-                 pod_changed=False, env_missing=False, reconnect=False, logscroll=False, interrupt=False, caught_up=True, mismatch=False, recovery_get_failures=0):
+                 pod_changed=False, env_missing=False, reconnect=False, logscroll=False, interrupt=False, caught_up=True, mismatch=False, recovery_get_failures=0, target="production", downstream_drain=True):
+        workload = "options-edge-databento-feed" if target == "dev" else "es-feed"
+        container_name = "databento-feed" if target == "dev" else "es-feed"
         calls = []
         image = "registry/options-edge-databento-feed@" + DIGEST
         before = {"metadata": {"resourceVersion": "123", "uid": "deployment-uid"},
             "spec": {"replicas": replicas, "strategy": {"type": strategy}, "template": {"spec": {"containers": [
-                {"name": "es-feed", "image": "old", "env": [{"name": "EXISTING", "value": "preserved"}]}]}}}}
+                {"name": container_name, "image": "old", "env": [{"name": "EXISTING", "value": "preserved"}]}]}}}}
         deployment = copy.deepcopy(before)
         patch_count = 0
         pod_reads = 0
@@ -69,7 +71,7 @@ class ReplayRefreshTest(unittest.TestCase):
                 if env_missing:
                     pod_spec["containers"][0]["env"] = []
                 return json.dumps({"items": [{"metadata": {"name": "changed" if pod_changed and pod_reads > 1 else "new"}, "spec": pod_spec, "status": {
-                    "containerStatuses": [{"name": "es-feed", "ready": ready,
+                    "containerStatuses": [{"name": container_name, "ready": ready,
                     "restartCount": restarts, "imageID": "runtime://" + image_id}]}}]})
             if "logs" in args:
                 log_reads += 1
@@ -79,12 +81,12 @@ class ReplayRefreshTest(unittest.TestCase):
                     return "ES trades subscription: first\nES trades subscription: second"
                 return ('ES trades subscription: replay_minutes=60 start=Some("2026-10-16T13:30:00Z")' if subscription else "") + ('\nES replay caught up: '+json.dumps({'expected_unique':20,'matched_unique':0 if mismatch else 20,'verified':not mismatch}) if caught_up else '')
             return ""
-        env = {"ACTION": action, "DEPLOY_DRY_RUN": dry, "ES4_KUBECONFIG": "es4", "PROD_KUBECONFIG": "prod",
+        env = {"REPLAY_TARGET":target,"DEV_KUBECONFIG":"dev","DEV_NS_UID":"dev-uid","ACTION": action, "DEPLOY_DRY_RUN": dry, "ES4_KUBECONFIG": "es4", "PROD_KUBECONFIG": "prod",
                "ES4_NS_UID": "es4-uid", "PROD_NS_UID": "prod-uid", "REGISTRY": "registry", "FEED_PERMITTED_SHA": SOURCE}
         with patch.dict(refresh.os.environ, env), patch.object(refresh, "run", run), \
              patch.object(refresh.Path, "read_text", return_value=json.dumps({"containerimage.digest": "bad" if malformed else DIGEST})), \
              patch.object(refresh, "verify_image", side_effect=RuntimeError("bad digest") if malformed else None, return_value=[DIGEST, CHILD]), \
-             patch.object(refresh.time, "sleep"), patch.object(refresh, "promote_verified_image") as promote, patch("builtins.print"):
+             patch.object(refresh.time, "sleep"), patch.object(refresh, "downstream_state", return_value={"pods":{},"groups":{}}), patch.object(refresh,"downstream_healthy",return_value=downstream_drain), patch.object(refresh, "promote_verified_image") as promote, patch("builtins.print"):
             try:
                 refresh.main()
                 result = None
@@ -93,12 +95,28 @@ class ReplayRefreshTest(unittest.TestCase):
         self.assertEqual(promote.call_count, 1 if result is None else 0)
         return result, calls, deployment, before
 
+    def test_downstream_gate_covers_restart_disappearance_and_lag(self):
+        before={'pods':{'uid':2},'groups':{'consumer':{'lag':9,'state':'Stable'}}}
+        self.assertTrue(refresh.downstream_healthy(before,{'pods':{'uid':2},'groups':{'consumer':{'lag':0,'state':'Stable'}}}))
+        self.assertFalse(refresh.downstream_healthy(before,{'pods':{'uid':2},'groups':{}}))
+        self.assertFalse(refresh.downstream_healthy(before,before))
+        with self.assertRaisesRegex(RuntimeError,'restart count changed'):
+            refresh.downstream_healthy(before,{'pods':{'uid':3},'groups':{}})
+
     def test_success_preserves_singleton_and_pins_digest(self):
         result, calls, _, _ = self.exercise()
         self.assertIsNone(result)
         self.assertEqual(sum("patch" in c for c in calls), 1)
         self.assertFalse(any("apply" in c for c in calls))
         self.assertEqual(sum("logs" in c for c in calls), 2)
+
+    def test_dev_routes_only_to_dev_native_feed(self):
+        result,calls,_,_=self.exercise(target='dev')
+        self.assertIsNone(result)
+        writes=[c for c in calls if 'patch' in c]
+        self.assertEqual(len(writes),1)
+        self.assertIn('dev',writes[0]);self.assertIn('options-edge-databento-feed',writes[0])
+        self.assertFalse(any('prod' in c or 'es4' in c for c in calls if c[0]=='kubectl'))
 
     def test_inactive_or_rolling_feed_is_refused_before_mutation(self):
         for kwargs in ({"replicas": 0}, {"strategy": "RollingUpdate"}):
@@ -120,7 +138,7 @@ class ReplayRefreshTest(unittest.TestCase):
                                 ({"fail_rollout": True}, "rollout timeout"),
                                 ({"subscription": False}, "No 60-minute"), ({"pod_changed": True}, "pod changed"),
                                 ({"env_missing": True}, "explicitly set"), ({"reconnect": True}, "reconnected"),
-                                ({"interrupt": True}, "interrupted"), ({"caught_up": False}, "No completed"), ({"mismatch": True}, "identity verification failed")]:
+                                ({"interrupt": True}, "interrupted"), ({"caught_up": False}, "No completed"), ({"mismatch": True}, "identity verification failed"), ({"downstream_drain":False},"did not drain")]:
             result, calls, after, before = self.exercise(**kwargs)
             self.assertEqual(after, before, "rollback must restore the entire template including old env")
             self.assertIsNotNone(result)
@@ -147,7 +165,7 @@ class ReplayRefreshTest(unittest.TestCase):
     def test_initial_concurrent_update_stops_without_rollback(self):
         result, calls, _, _ = self.exercise(fail_patch=True)
         self.assertEqual(result, "resourceVersion conflict")
-        self.assertFalse(any("rollout" in c for c in calls))
+        self.assertEqual(sum("rollout" in c for c in calls),1)
         self.assertEqual(sum("patch" in c for c in calls), 1)
 
     def test_recovery_never_overwrites_another_rollout(self):
@@ -158,7 +176,7 @@ class ReplayRefreshTest(unittest.TestCase):
 
 
 class ImageProvenanceTest(unittest.TestCase):
-    def exercise(self, single=False, revision=SOURCE, architecture="amd64", corrupt=False):
+    def exercise(self, single=False, revision=SOURCE, architecture="amd64", corrupt=False, manifest_arch="amd64", expected_arch="amd64"):
         blobs = {}
         def blob(value):
             body = json.dumps(value).encode()
@@ -167,12 +185,12 @@ class ImageProvenanceTest(unittest.TestCase):
             return digest
         config = blob({"os": "linux", "architecture": architecture, "config": {"Labels": {"org.opencontainers.image.revision": revision}}})
         child = blob({"config": {"digest": config}})
-        root = child if single else blob({"manifests": [{"digest": child, "platform": {"os": "linux", "architecture": "amd64"}}]})
+        root = child if single else blob({"manifests": [{"digest": child, "platform": {"os": "linux", "architecture": manifest_arch}}]})
         def fetch(request, timeout):
             digest = request.full_url.rsplit("/", 1)[1]
             return io.BytesIO(b"{}" if corrupt else blobs[digest])
         with patch.object(refresh.urllib.request, "urlopen", fetch):
-            return refresh.verify_image("registry", root, SOURCE)
+            return refresh.verify_image("registry", root, SOURCE, expected_arch)
 
     def test_promotion_preserves_exact_manifest_bytes(self):
         body = b'{ "schemaVersion":2, "manifests": [] }'
@@ -202,6 +220,11 @@ class ImageProvenanceTest(unittest.TestCase):
     def test_index_and_single_manifest_both_bind_source(self):
         self.assertEqual(len(self.exercise()), 2)
         self.assertEqual(len(self.exercise(single=True)), 1)
+
+    def test_native_dev_arm64_is_bound_to_the_target(self):
+        self.assertEqual(len(self.exercise(architecture='arm64',manifest_arch='arm64',expected_arch='arm64')),2)
+        with self.assertRaisesRegex(RuntimeError,'target-platform'):
+            self.exercise(architecture='arm64',manifest_arch='arm64')
 
     def test_wrong_source_platform_or_registry_bytes_are_refused(self):
         for kwargs, message in [({"revision": "wrong"}, "FEED_PERMITTED_SHA"),
