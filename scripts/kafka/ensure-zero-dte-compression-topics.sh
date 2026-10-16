@@ -60,6 +60,28 @@ ensure() { # <topic> <exact cleanup.policy: compact|delete>
     echo "FAIL: '$topic' has retention.ms='${retention:-<unset>}', expected -1."
     return 1
   fi
+  # Older compacted topics inherited the broker byte limit. Pin only an ABSENT
+  # override after the other invariants pass; never overwrite an explicit bound.
+  if [ -z "$retention_bytes" ]; then
+    echo "pinning '$topic' retention.bytes=-1 (previously inherited)"
+    if ! out=$(kc --entity-type topics --entity-name "$topic" --alter --add-config retention.bytes=-1 2>&1); then
+      echo "FAIL: could not pin the byte retention of '$topic':"
+      printf '%s\n' "$out"
+      return 1
+    fi
+    if ! cfg=$(kc --entity-type topics --entity-name "$topic" --describe 2>&1); then
+      echo "FAIL: could not verify the updated config of '$topic':"
+      printf '%s\n' "$cfg"
+      return 1
+    fi
+    policy=$(extract 'cleanup\.policy' "$cfg")
+    retention=$(extract 'retention\.ms' "$cfg")
+    retention_bytes=$(extract 'retention\.bytes' "$cfg")
+    if [ "$policy" != "$want" ] || [ "$retention" != "-1" ]; then
+      echo "FAIL: '$topic' policy or time retention changed during byte-retention pinning."
+      return 1
+    fi
+  fi
   if [ "${retention_bytes:-}" != "-1" ]; then
     echo "FAIL: '$topic' has retention.bytes='${retention_bytes:-<unset>}', expected -1."
     return 1
