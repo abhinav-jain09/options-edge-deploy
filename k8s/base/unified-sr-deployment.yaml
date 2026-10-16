@@ -81,9 +81,11 @@ spec:
               # WEIGHT, which is what decides who yields when the 24-core prod host is oversubscribed (50+ services
               # plus research replays have driven load past 70). At 250m it was the lightest-weighted heavy
               # consumer on the box and could not keep up with its own input: after the 10-16 recovery it published
-              # while its backlog still GREW 20.5k records per 90s with 24.1M outstanding. Live capacity checked
-              # before raising it: node allocatable 24 cores, admitted requests 12675m (52%), so +1750m fits.
-              # Still deliberately NO cpu limit, so catch-up can burst past two cores.
+              # while its backlog still GREW 20.5k records per 90s with 24.1M outstanding. Live capacity measured on
+              # the prod node before raising it: allocatable 24 cores; admitted pod requests cpu 12675m (52.8%) and
+              # memory 38012Mi (59%). This change adds 1750m, taking admitted CPU requests to ~14425m, i.e. ~60%
+              # of 24 cores - it schedules with room. Still deliberately NO cpu limit, so catch-up can burst
+              # past two cores.
               cpu: "2"
               memory: 768Mi
             limits:
