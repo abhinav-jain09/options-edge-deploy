@@ -87,7 +87,7 @@ spec:
             - name: CONTEXT_TAPE_DIRECTION_API_PORT
               value: "8136"
             - name: ZERO_DTE_COMPRESSION_ENABLED
-              value: "true"
+              value: "false"
             - name: ZERO_DTE_SPOT_TOPIC
               value: underlying.spx.price
             - name: ZERO_DTE_ES_TOPIC
@@ -97,7 +97,7 @@ spec:
             - name: ZERO_DTE_OPTION_TOPIC
               value: options.databento.gex.strike
             - name: ES_BOX_VIEW_ENABLED
-              value: "true"
+              value: "false"
             - name: KAFKA_ES_BOX_TOPIC
               value: es.futures.compression-expansion.current
             - name: ZERO_DTE_CURRENT_TOPIC

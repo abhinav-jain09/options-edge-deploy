@@ -17,7 +17,7 @@ TOPICS = (
 
 
 class ZeroDteCompressionDeployTest(unittest.TestCase):
-    def test_dev_stays_disabled_and_production_enables_the_hash_pinned_shadow(self) -> None:
+    def test_compression_runtime_is_disabled_and_production_withdraws_es_projection(self) -> None:
         for environment in ("dev", "production"):
             patch = (
                 ROOT
@@ -47,8 +47,8 @@ class ZeroDteCompressionDeployTest(unittest.TestCase):
             container = next(item for item in deployment["spec"]["template"]["spec"]["containers"]
                              if item["name"] == "context-tape")
             env = {item["name"]: str(item.get("value", "")) for item in container["env"]}
-            expected_enabled = "false" if environment == "dev" else "true"
-            self.assertEqual(expected_enabled, env["ZERO_DTE_COMPRESSION_ENABLED"])
+            self.assertEqual("false", env["ZERO_DTE_COMPRESSION_ENABLED"])
+            self.assertEqual("true" if environment == "dev" else "false", env["ES_BOX_VIEW_ENABLED"])
             self.assertEqual(
                 f"context-tape-compression-{'dev' if environment == 'dev' else 'prod'}",
                 env["ZERO_DTE_TRANSACTIONAL_ID"],
@@ -57,7 +57,7 @@ class ZeroDteCompressionDeployTest(unittest.TestCase):
             self.assertEqual("390", env["ZERO_DTE_SESSION_MINUTES"])
             self.assertIn("2026-11-27", env["ZERO_DTE_UNSUPPORTED_SESSION_DATES"])
 
-    def test_production_web_explicitly_exposes_the_shadow_feature_flag(self) -> None:
+    def test_production_web_hides_withdrawn_compression_layers(self) -> None:
         rendered = subprocess.run(
             ["kubectl", "kustomize", str(ROOT / "k8s" / "services" / "web"
                                           / "overlays" / "production")],
@@ -70,7 +70,26 @@ class ZeroDteCompressionDeployTest(unittest.TestCase):
         container = next(item for item in deployment["spec"]["template"]["spec"]["containers"]
                          if item["name"] == "web")
         env = {item["name"]: str(item.get("value", "")) for item in container["env"]}
-        self.assertEqual("true", env["VITE_ZERO_DTE_COMPRESSION_ENABLED"])
+        self.assertEqual("false", env["VITE_ZERO_DTE_COMPRESSION_ENABLED"])
+        self.assertEqual("false", env["VITE_ES_BOX_ENABLED"])
+
+    def test_production_es_challenger_is_held_at_zero_in_both_renders(self) -> None:
+        umbrella = subprocess.run(
+            ["kubectl", "kustomize", str(ROOT / "k8s" / "overlays" / "production")],
+            check=True, capture_output=True, text=True,
+        ).stdout
+        standalone = (
+            ROOT / "k8s" / "services" / "es-compression-expansion"
+            / "overlays" / "production" / "manifest.yaml"
+        ).read_text()
+        for rendered in (umbrella, standalone):
+            documents = list(yaml.safe_load_all(rendered))
+            deployment = next(
+                doc for doc in documents
+                if doc and doc.get("kind") == "Deployment"
+                and doc["metadata"]["name"] == "es-compression-expansion-service"
+            )
+            self.assertEqual(0, deployment["spec"]["replicas"])
 
     def test_context_tape_standalone_deploy_provisions_shadow_topics_before_rollout(self) -> None:
         pipeline = (ROOT / "Jenkinsfile.service-deploy").read_text()

@@ -56,6 +56,9 @@ resources:
 # cached image (no pull, no throttle). Dev keeps Always so it always picks up a
 # freshly-built :dev image.
 patches:
+  # Production withdrawal (2026-10-16): keep the unqualified ES challenger out of runtime
+  # until an independently frozen candidate clears the accuracy and coverage gates.
+  - path: es-compression-expansion-prod-hold-patch.yaml
   # PROD-ONLY: the environment name every order broker-execution-service places carries as the broker's
   # orderRef. The paper account is pinned in code and therefore SHARED by dev and production, so the label is
   # the only thing in that account's order list that attributes a ticket. PAPER refuses to start without it.
@@ -136,13 +139,13 @@ patches:
         path: /spec/template/spec/containers/0/env/-
         value:
           name: VITE_ZERO_DTE_COMPRESSION_ENABLED
-          value: "true"
-      # ES BOX layer on /context-tape (2026-10-07): the es-compression-expansion shadow view.
+          value: "false"
+      # ES BOX layer withdrawn on 2026-10-16 after the candidate missed the accuracy gate.
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value:
           name: VITE_ES_BOX_ENABLED
-          value: "true"
+          value: "false"
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value:

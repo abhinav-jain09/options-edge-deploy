@@ -1,0 +1,11 @@
+# Production withdrawal: the current ES compression/expansion challenger remains a
+# reproducible research baseline, but its historical false-alert rate is too high for
+# continued production shadow operation. A future enablement requires a separately
+# reviewed change after frozen, untouched validation clears the accuracy gate.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: es-compression-expansion-service
+  namespace: options-edge
+spec:
+  replicas: 0
