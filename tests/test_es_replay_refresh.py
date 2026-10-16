@@ -21,7 +21,7 @@ class ReplayRefreshTest(unittest.TestCase):
                  image_id=CHILD, fail_patch=False, fail_rollout=False,
                  action="refresh-es-replay", dry="false", subscription=True,
                  identity_failure=False, concurrent=False, malformed=False, rollback_conflicts=0,
-                 pod_changed=False, env_missing=False, reconnect=False, logscroll=False, interrupt=False, caught_up=True, mismatch=False, recovery_get_failures=0, target="production", downstream_drain=True):
+                 pod_changed=False, env_missing=False, reconnect=False, logscroll=False, interrupt=False, caught_up=True, mismatch=False, recovery_get_failures=0, target="production", downstream_drain=True, promotion_fail=False, progress_advances=False):
         workload = "options-edge-databento-feed" if target == "dev" else "es-feed"
         container_name = "databento-feed" if target == "dev" else "es-feed"
         calls = []
@@ -83,25 +83,46 @@ class ReplayRefreshTest(unittest.TestCase):
             return ""
         env = {"REPLAY_TARGET":target,"DEV_KUBECONFIG":"dev","DEV_NS_UID":"dev-uid","ACTION": action, "DEPLOY_DRY_RUN": dry, "ES4_KUBECONFIG": "es4", "PROD_KUBECONFIG": "prod",
                "ES4_NS_UID": "es4-uid", "PROD_NS_UID": "prod-uid", "REGISTRY": "registry", "FEED_PERMITTED_SHA": SOURCE}
+        downstream_reads=0
+        health_function=refresh.downstream_healthy
+        def downstream(*args):
+            nonlocal downstream_reads
+            downstream_reads+=1
+            high,offset=(90,89) if downstream_reads==1 else (100,99) if downstream_reads==2 else (200,101)
+            return {"pods":{},"highs":{"0":high},"groups":{"consumer":{"lag":high-offset,"offsets":{"0":offset},"state":"Stable"}}} if progress_advances else {"pods":{},"groups":{},"highs":{"0":100}}
         with patch.dict(refresh.os.environ, env), patch.object(refresh, "run", run), \
              patch.object(refresh.Path, "read_text", return_value=json.dumps({"containerimage.digest": "bad" if malformed else DIGEST})), \
              patch.object(refresh, "verify_image", side_effect=RuntimeError("bad digest") if malformed else None, return_value=[DIGEST, CHILD]), \
-             patch.object(refresh.time, "sleep"), patch.object(refresh, "downstream_state", return_value={"pods":{},"groups":{}}), patch.object(refresh,"downstream_healthy",return_value=downstream_drain), patch.object(refresh, "promote_verified_image") as promote, patch("builtins.print"):
+             patch.object(refresh.time, "sleep"), patch.object(refresh, "downstream_state", side_effect=downstream), patch.object(refresh,"downstream_healthy",side_effect=health_function if progress_advances else lambda *args:downstream_drain), patch.object(refresh, "promote_verified_image", side_effect=RuntimeError("registry unavailable") if promotion_fail else None) as promote, patch("builtins.print"):
             try:
                 refresh.main()
                 result = None
             except (SystemExit, RuntimeError) as exc:
                 result = str(exc)
-        self.assertEqual(promote.call_count, 1 if result is None else 0)
+        self.assertEqual(promote.call_count, 1 if result is None or promotion_fail else 0)
         return result, calls, deployment, before
 
-    def test_downstream_gate_covers_restart_disappearance_and_lag(self):
-        before={'pods':{'uid':2},'groups':{'consumer':{'lag':9,'state':'Stable'}}}
-        self.assertTrue(refresh.downstream_healthy(before,{'pods':{'uid':2},'groups':{'consumer':{'lag':0,'state':'Stable'}}}))
-        self.assertFalse(refresh.downstream_healthy(before,{'pods':{'uid':2},'groups':{}}))
-        self.assertFalse(refresh.downstream_healthy(before,before))
+    def test_downstream_progress_uses_a_frozen_replay_fence(self):
+        before={'pods':{'uid':2},'groups':{'consumer':{'lag':9,'state':'Stable','offsets':{'0':91}}}}
+        fence={'0':100}
+        after={'pods':{'uid':2},'groups':{'consumer':{'lag':20,'state':'Stable','offsets':{'0':101}}}}
+        self.assertTrue(refresh.downstream_healthy(before,after,fence),'ongoing fresh lag must not undo drained replay')
+        self.assertFalse(refresh.downstream_healthy(before,before,fence))
+        self.assertFalse(refresh.downstream_healthy(before,{'pods':{'uid':2},'groups':{}},fence))
         with self.assertRaisesRegex(RuntimeError,'restart count changed'):
-            refresh.downstream_healthy(before,{'pods':{'uid':3},'groups':{}})
+            refresh.downstream_healthy(before,{'pods':{'uid':3},'groups':{}},fence)
+
+    def test_tag_failure_never_rolls_back_the_verified_feed(self):
+        result,calls,after,before=self.exercise(promotion_fail=True)
+        self.assertIn('No workload rollback',result)
+        self.assertNotEqual(after,before)
+        self.assertEqual(sum('patch' in c for c in calls),1)
+
+    def test_rollout_freezes_the_replay_fence_while_live_offsets_keep_advancing(self):
+        result,calls,_,_=self.exercise(progress_advances=True)
+        self.assertIsNone(result)
+        self.assertEqual(sum('patch' in c for c in calls),1)
+        self.assertEqual(sum('logs' in c for c in calls),2)
 
     def test_success_preserves_singleton_and_pins_digest(self):
         result, calls, _, _ = self.exercise()
@@ -126,7 +147,7 @@ class ReplayRefreshTest(unittest.TestCase):
 
     def test_preconditions_refuse_before_mutation(self):
         for kwargs, message in [({"action": "deploy-all"}, "action required"),
-                                ({"dry": "true"}, "DRY_RUN"), ({"identity_failure": True}, "wrong cluster"),
+                                ({"dry": "true"}, "DRY_RUN"), ({"target":""},"Unknown replay target"), ({"identity_failure": True}, "wrong cluster"),
                                 ({"malformed": True}, "bad digest")]:
             result, calls, _, _ = self.exercise(**kwargs)
             self.assertIn(message, result)

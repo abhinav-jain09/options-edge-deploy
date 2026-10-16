@@ -31,7 +31,7 @@ pipeline {
   parameters {
     string(name: 'PERMITTED_SHA', defaultValue: '', trim: true,
       description: 'REQUIRED — Deployment Permission Rule (options-edge rule.md). The full 40-character commit id of THIS repository that Abhinav permitted for this run. The Permitted commit guard stage refuses the build before any effect unless the checked-out HEAD is exactly this commit AND on origin/main; empty, short or mismatched values are refused and nothing is substituted. A manual click needs it too: copy it from `git rev-parse origin/main`.')
-    choice(name: 'REPLAY_TARGET', choices: ['production', 'dev'], description: 'refresh-es-replay only: production is the ES4 source; dev is its own native ES subscription in the dev Databento feed.')
+    choice(name: 'REPLAY_TARGET', choices: ['', 'dev', 'production'], description: 'refresh-es-replay only: production is the ES4 source; dev is its own native ES subscription in the dev Databento feed.')
     string(name: 'FEED_PERMITTED_SHA', defaultValue: '', trim: true,
       description: 'refresh-es-replay only: exact main SHA of options-edge-databento-feed. Builds on local-mac, then refreshes the selected native ES source.')
     string(name: 'PERMITTED_SHA_GUARD_VERSION', defaultValue: '2f6fc2ab7aa51eb8a9e8aa350f2d774cd2fb7a253de2591e43645a19a9886b24',
@@ -149,7 +149,7 @@ pipeline {
         '''
       }
     }
-    stage('Roll shared ES replay feed') {
+    stage('Roll selected ES replay feed') {
       options { timeout(time: 45, unit: 'MINUTES') }
       when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.ACTION == 'refresh-es-replay') } }
       steps {

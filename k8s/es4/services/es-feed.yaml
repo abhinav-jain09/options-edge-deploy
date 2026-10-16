@@ -69,7 +69,7 @@ spec:
             - secretRef:
                 name: options-edge-databento-feed-env   # DATABENTO_API_KEY
           env:
-            # Shared ES futures source for dev and production; options replay stays off.
+            # Production ES futures source; options replay stays off.
             - name: DATABENTO_ES_TRADES_REPLAY_START_MINUTES
               value: "60"
             # ---- outputs -> es4 (NODE-LOCAL after the relocation) ----------------

@@ -118,15 +118,16 @@ def downstream_state(command, bootstrap, topic):
         if not statuses or not all(c.get("ready") for c in statuses): raise RuntimeError("Downstream consumer is not ready")
         state[pod["metadata"]["uid"]] = sum(c["restartCount"] for c in statuses)
     lag_binary = Path('.jenkins-tmp/feed/rust/target/debug/examples/es-replay-lag').resolve()
-    groups=json.loads(run(str(lag_binary),bootstrap,topic))
-    return {"pods":state,"groups":groups}
+    lag=json.loads(run(str(lag_binary),bootstrap,topic))
+    return {"pods":state,"groups":lag["groups"],"highs":lag["highs"]}
 
 
-def downstream_healthy(before, after):
+def downstream_healthy(before, after, fence):
     if before["pods"] != after["pods"]: raise RuntimeError("Downstream consumer pod or restart count changed")
     required=set(before["groups"]) | set(after["groups"])
-    return all(name in after["groups"] and after["groups"][name]["lag"]==0
-               and after["groups"][name]["state"]=="Stable" for name in required)
+    return all(name in after["groups"] and after["groups"][name]["state"]=="Stable"
+               and all(after["groups"][name]["offsets"].get(p,0)>=offset for p,offset in fence.items())
+               for name in required)
 
 
 def interrupted(signum, frame):
@@ -141,7 +142,7 @@ def main():
     source = os.environ["FEED_PERMITTED_SHA"]
     if not re.fullmatch(r"[0-9a-f]{40}", source):
         raise SystemExit("Exact FEED_PERMITTED_SHA required")
-    target = os.environ.get("REPLAY_TARGET", "production")
+    target = os.environ.get("REPLAY_TARGET", "")
     if target == "production":
         kube, role, expected_uid = os.environ["ES4_KUBECONFIG"], "es4", os.environ["ES4_NS_UID"]
         workload, container_name, architecture = "es-feed", "es-feed", "amd64"
@@ -185,6 +186,7 @@ def main():
         pod_name = verify_pod(command, image, accepted, container_name, workload)
         subscription_seen = False
         replay_report = None
+        progress_fence = None
         # Require at least 60 seconds of stability; allow startup/contract resolution up to 5 minutes.
         for attempt in range(10):
             time.sleep(30)
@@ -195,7 +197,9 @@ def main():
                 raise RuntimeError("ES feed reconnected during stability verification")
             subscription_seen = subscription_seen or bool(re.search(r'ES trades subscription: replay_minutes=60 start=Some\("[^\"]+"\)', log))
             replay_report = replay_result(log) or replay_report
-            drained=downstream_healthy(downstream_before,downstream_state(command,bootstrap,topic))
+            downstream_after=downstream_state(command,bootstrap,topic)
+            if replay_report is not None and progress_fence is None:progress_fence=dict(downstream_after["highs"])
+            drained=progress_fence is not None and downstream_healthy(downstream_before,downstream_after,progress_fence)
             if subscription_seen and replay_report is not None and drained and attempt >= 1:
                 break
         if not subscription_seen:
@@ -206,7 +210,6 @@ def main():
         actual = deployment()
         if actual["spec"]["template"] != template:
             raise RuntimeError("Deployment template changed during verification")
-        promote_verified_image(registry, digest)
         print(json.dumps({"target":target, "replay": replay_report, "image": image, "pod": pod_name, "ready": True, "replayMinutes": 60, "subscriptionSeen": True}))
     except Exception:
         # Recover only this action's template, with optimistic concurrency. Never overwrite another rollout.
@@ -238,6 +241,11 @@ def main():
 
     finally:
         signal.signal(signal.SIGTERM, previous_signal)
+    # A tag transport failure must not undo a verified healthy running feed.
+    try:promote_verified_image(registry,digest)
+    except Exception:
+        raise RuntimeError("Feed verified and running; ES tag was not confirmed promoted. No workload rollback performed") from None
+
 
 
 if __name__ == "__main__":
