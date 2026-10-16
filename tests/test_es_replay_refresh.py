@@ -21,7 +21,7 @@ class ReplayRefreshTest(unittest.TestCase):
                  image_id=CHILD, fail_patch=False, fail_rollout=False,
                  action="refresh-es-replay", dry="false", subscription=True,
                  identity_failure=False, concurrent=False, malformed=False, rollback_conflicts=0,
-                 pod_changed=False, env_missing=False, reconnect=False, logscroll=False, interrupt=False, caught_up=True, mismatch=False, recovery_get_failures=0, target="production", downstream_drain=True, promotion_fail=False, progress_advances=False, preexisting=False, settings_failure=False, downstream_problem=False, late_pod_changed=False, late_reconnect=False, late_unverified=False, delayed_completion=False):
+                 pod_changed=False, env_missing=False, reconnect=False, logscroll=False, interrupt=False, caught_up=True, mismatch=False, recovery_get_failures=0, target="production", downstream_drain=True, promotion_fail=False, progress_advances=False, preexisting=False, settings_failure=False, downstream_problem=False, late_pod_changed=False, late_reconnect=False, late_unverified=False, delayed_completion=False, large_phase_b_log=False):
         workload = "options-edge-databento-feed" if target == "dev" else "es-feed"
         container_name = "databento-feed" if target == "dev" else "es-feed"
         calls = []
@@ -80,7 +80,10 @@ class ReplayRefreshTest(unittest.TestCase):
                     return ""
                 if reconnect or (late_reconnect and log_reads>3):
                     return "ES trades subscription: first\nES trades subscription: second"
-                return ('ES trades subscription: replay_minutes=60 start=Some("2026-10-16T13:30:00Z")' if subscription else "") + ('\nES replay caught up: '+json.dumps({'expected_unique':20,'matched_unique':0 if mismatch else 20,'verified':not mismatch and not (late_unverified and log_reads>3)}) if caught_up and not (delayed_completion and log_reads<3) else '')
+                log = ('ES trades subscription: replay_minutes=60 start=Some("2026-10-16T13:30:00Z")' if subscription else "") + ('\nES replay caught up: '+json.dumps({'expected_unique':20,'matched_unique':0 if mismatch else 20,'verified':not mismatch and not (late_unverified and log_reads>3)}) if caught_up and not (delayed_completion and log_reads<3) else '')
+                if large_phase_b_log and log_reads>3:
+                    log+='x'*(4194304-len(log.encode()))
+                return log
             return ""
         env = {"REPLAY_TARGET":target,"DEV_KUBECONFIG":"dev","DEV_NS_UID":"dev-uid","ACTION": action, "DEPLOY_DRY_RUN": dry, "ES4_KUBECONFIG": "es4", "PROD_KUBECONFIG": "prod",
                "ES4_NS_UID": "es4-uid", "PROD_NS_UID": "prod-uid", "REGISTRY": "registry", "FEED_PERMITTED_SHA": SOURCE}
@@ -231,6 +234,14 @@ class ReplayRefreshTest(unittest.TestCase):
             self.assertIn('no rollback or tag promotion',result)
             self.assertNotEqual(after,before)
             self.assertEqual(sum('patch' in c for c in calls),1)
+
+    def test_truncated_phase_b_log_refuses_promotion_without_rollback(self):
+        result,calls,after,before=self.exercise(large_phase_b_log=True)
+        self.assertIsNotNone(result)
+        self.assertIn('session evidence truncated',result)
+        self.assertIn('no rollback or tag promotion',result)
+        self.assertNotEqual(after,before)
+        self.assertEqual(sum('patch' in c for c in calls),1)
 
     def test_delayed_completion_still_requires_a_full_minute_of_subsequent_stability(self):
         result,calls,_,_=self.exercise(delayed_completion=True)

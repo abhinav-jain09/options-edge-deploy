@@ -161,6 +161,8 @@ def verify_downstream_fence(before, command, bootstrap, topic, observe=None):
 def observe_es_session(command, pod_name, require_complete=False):
     # All evidence from this new pod, bounded. Missing/truncated proof refuses acceptance.
     log=run(*command,"logs",pod_name,"--limit-bytes=4194304")
+    if len(log.encode())>=4194304-4096:
+        raise RuntimeError("ES feed log reached the 4 MiB bound; session evidence truncated")
     subscriptions=re.findall(r"ES trades subscription:",log)
     if len(subscriptions)>1 or re.search(r"Databento ES(?:-only)? live stream error:|ES replay unavailable:",log):
         raise RuntimeError("ES feed reconnected or replay became unavailable during verification")
