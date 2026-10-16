@@ -39,7 +39,12 @@ options.indicators.snapshot.current|1|compact,delete|604800000
 options.indicators.bars|8|delete|3888000000
 options.indicators.repartition|4|delete|
 options.indicators.bootstrap.control|1|compact,delete|-1
+options.indicators.signals.current|1|compact,delete|604800000
+options.indicators.signals.events|1|delete|3888000000
 "
+# signals.current / signals.events: SIGNALS_V1 (indicator-service spec rev 13 §3) — the same
+# producer, the same deploy path, the same two failure modes as snapshot.current/bars above; the
+# shapes are the topics.env declarations (1 partition each, exact-partition; 7 d / 45 d).
 
 echo "=== ensure-indicator-topics: prefix='${PREFIX}' on $KAFKA_BOOTSTRAP_SERVERS (dry_run=$DRY) ==="
 
@@ -49,13 +54,29 @@ while IFS='|' read -r base parts policy retention; do
   topic="${PREFIX}${base}"
 
   if ! kt --list 2>/dev/null | grep -qxF "$topic"; then
-    echo "FAIL: topic '$topic' does not exist."
-    echo "      Run the apply-topics / create-topics job for THIS environment first. Deploying now"
-    echo "      would let the broker auto-create it with cluster defaults — the 32-partition shape"
-    echo "      that crash-looped es4 on MissingSourceTopicException and an invalid-partition"
-    echo "      changelog for 20 hours on 2026-08-11."
-    fail=1
-    continue
+    # A missing DECLARED topic is created here with its declared shape — the same values the
+    # fleet's apply-topics applies (--if-not-exists exactly as apply-topics.sh does, since the
+    # admin client's own retry can answer TopicExistsException for a create that succeeded).
+    # Refusing used to be the stance, but apply-topics lives in a different job and a FIRST deploy
+    # of a new output (signals.current/.events, 2026-10-16) otherwise waits on that job while the
+    # broker would auto-create the topic with cluster defaults at the first write — the very drift
+    # this barrier exists to prevent. Partition count is still never changed on an EXISTING topic.
+    echo "  MISSING $topic  -> create partitions=$parts cleanup.policy=$policy retention.ms=${retention:-<broker default>}"
+    if [ "$DRY" = "true" ]; then
+      echo "        DEPLOY_DRY_RUN=true — not creating."
+      continue
+    fi
+    : "${KAFKA_TOPIC_REPLICATION_FACTOR:?KAFKA_TOPIC_REPLICATION_FACTOR unset — source scripts/kafka/load-kafka-settings.sh}"
+    create_cfg=(--config "cleanup.policy=$policy")
+    [ -n "$retention" ] && create_cfg+=(--config "retention.ms=$retention")
+    kt --create --if-not-exists --topic "$topic" --partitions "$parts" \
+       --replication-factor "$KAFKA_TOPIC_REPLICATION_FACTOR" "${create_cfg[@]}"
+    if ! kt --list 2>/dev/null | grep -qxF "$topic"; then
+      echo "FAIL: '$topic' still absent after create."
+      fail=1
+      continue
+    fi
+    echo "        created."
   fi
 
   actual_parts=$(kt --describe --topic "$topic" 2>/dev/null \
