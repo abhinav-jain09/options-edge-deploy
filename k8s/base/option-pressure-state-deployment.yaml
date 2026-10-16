@@ -22,6 +22,11 @@ spec:
   # gate sets, and a Lane D validation over the Databento SPXW year found no directional content
   # (see opb-calibration/LANE-D-VALIDATION-RESULT.md in options-edge-processing).
   replicas: 0
+  # Recreate, not RollingUpdate: both engines keep RocksDB state on one ReadWriteOnce PVC under a
+  # single Streams application id, and a rolling replacement can run the outgoing and incoming pod
+  # against the same state directory. Set now so a later enable cannot inherit the wrong strategy.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: option-pressure-state-service

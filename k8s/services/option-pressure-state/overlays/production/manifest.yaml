@@ -46,6 +46,8 @@ spec:
   selector:
     matchLabels:
       app.kubernetes.io/name: option-pressure-state-service
+  strategy:
+    type: Recreate
   template:
     metadata:
       labels:

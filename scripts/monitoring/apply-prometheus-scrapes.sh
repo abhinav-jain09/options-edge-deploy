@@ -92,6 +92,7 @@ EOF
 # currently disabled/removed (mission-pressure, volume-pace, volume-sandwich)
 # are harmless — they light up automatically if the service comes back.
 add_service_scrape raw-to-display-service 8080
+add_service_scrape option-pressure-state-service 8080
 add_service_scrape options-edge-databento-feed 8010
 # databento-vix-feed (VIX feed separation PR-2): prod-only standalone VIX feed; the
 # helper skips absent services safely, so this entry can precede the pod (design §5 —
