@@ -393,9 +393,10 @@ patches:
   # DEV-ONLY: start the L1 pressure CONSUMER, on dev only. Production renders replicas 0 with
   # OPTION_PRESSURE_ENABLED=false and has no image built, which is what keeps it inert — not the
   # KEEP_DOWN lists, whose production copies do not in fact carry this entry (see the base manifest).
-  # The PRODUCER (OPB_L1_ENABLED) is a separate change, so this cannot start producing into a topic
-  # nothing reads. See the patch header for what it costs and what the signal is and is not — every
-  # frame is actionable=false and the register was rejected on two gate sets.
+  # The PRODUCER (OPB_L1_ENABLED) is a separate change and must be deployed FIRST: it creates the
+  # input topic, and Kafka Streams refuses to start a topology whose source topic is absent. See the
+  # patch header for what it costs and what the signal is and is not — every frame is
+  # actionable=false and the register was rejected on two gate sets.
   - path: option-pressure-state-dev-enable-patch.yaml
     target:
       kind: Deployment

@@ -16,3 +16,11 @@ spec:
           env:
             - { name: OPB_ROLLING_WINDOWS_ENABLED, value: "false" }
             - { name: JAVA_TOOL_OPTIONS, value: "-Xms512m -Xmx3g" }
+            # DEV-ONLY: emit the L1 contribution stream, which also CREATES the topic
+            # option-price-behavior-l1-contributions. That creation is why this has to land: Kafka
+            # Streams refuses to start a topology whose source topic does not exist
+            # (MissingSourceTopicException, SHUTDOWN_CLIENT), so option-pressure-state cannot run
+            # at all until this does. Measured on a real session it adds 735 MiB to that topic,
+            # which the service retains for 4 days rather than forever. It adds one sink to an
+            # already-running topology; the existing outputs are untouched.
+            - { name: OPB_L1_ENABLED, value: "true" }

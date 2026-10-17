@@ -58,6 +58,8 @@ spec:
               value: "false"
             - name: JAVA_TOOL_OPTIONS
               value: -Xms512m -Xmx3g
+            - name: OPB_L1_ENABLED
+              value: "true"
             - name: APP_MARKET_DATA_SOURCE
               value: DATABENTO
             - name: OPTION_PRICE_BEHAVIOR_INPUT_TCBBO_TOPIC
