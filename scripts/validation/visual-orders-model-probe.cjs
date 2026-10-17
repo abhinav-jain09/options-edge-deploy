@@ -1,0 +1,18 @@
+'use strict';
+const os=require('node:os'),{performance}=require('node:perf_hooks');
+const et=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',weekday:'short',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date());
+const parts=Object.fromEntries(et.map(x=>[x.type,x.value])),minute=Number(parts.hour)*60+Number(parts.minute);
+if(!Object.values(os.networkInterfaces()).flat().some(a=>a&&a.address==='192.168.100.4')||process.env.VISUAL_BENCH_HOST!=='es4'||os.platform()!=='linux'||!['Sat','Sun'].includes(parts.weekday)&&minute>=570&&minute<960)throw Error('PERMITTED_HOST_OUTSIDE_RTH_REQUIRED');
+const m=require(process.argv[2]),g={left:0,right:1000,top:0,bottom:600,priceTop:7800,priceBottom:7400,y:p=>(7800-p)*1.5},d=m.draft('probe',{strike:7650,wing:10});
+const available=Array.from({length:4096},(_,i)=>5*(i+1));
+const gesture=m.begin(d,{x:400,y:g.y(7650)},g,'translate',1);let result;
+for(let i=0;i<10000;i++)result=m.move(gesture,{x:400,y:g.y(7650)+i%100},available);
+const start=performance.now(),count=100000;for(let i=0;i<count;i++)result=m.move(gesture,{x:400,y:g.y(7650)+i%100},available);
+const nanos=Math.round((performance.now()-start)*1e6/count);
+if(!result||m.legs(result).length!==2)throw Error('Geometry computation did not preserve two legs');
+process.stdout.write('VISUAL_PROBE '+JSON.stringify({probe:'model-geometry',records:count,nsPerRecord:nanos,budgetNsPerRecord:500000,withinBudget:nanos<=500000})+'\n');
+const book=new Map(Array.from({length:4096},(_,i)=>['position:p'+i,{id:'p'+i,state:i<1024?'OPEN':'CLOSED',aggregateVersion:1}]));
+const page={orders:[],positions:Array.from({length:100},(_,i)=>({id:'history'+i,state:'CLOSED',aggregateVersion:1})),nextBefore:null};
+const at=performance.now(),merged=m.mergeHistory(book,page,'100000','position:p1500'),ms=performance.now()-at;
+if(merged.book.size!==4096||!merged.book.has('position:p1500')||!merged.book.has('position:p0'))throw Error('History evicted selected/active exposure');
+process.stdout.write('VISUAL_PROBE '+JSON.stringify({probe:'model-history-page',records:100,elapsedMs:ms,budgetMs:100,withinBudget:ms<=100})+'\n');

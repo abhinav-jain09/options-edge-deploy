@@ -49,6 +49,15 @@ spec:
           env:
             - name: APP_PROFILE
               value: "prod"
+            - name: CONTEXT_TAPE_PUBLIC_ORIGINS
+              value: "https://bleadingoptions.com"
+            - name: CONTEXT_TAPE_EXECUTION_URL
+              value: "http://broker-execution-service:8131"
+            - name: CONTEXT_TAPE_EXECUTION_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: context-tape-execution-auth
+                  key: token
             - name: APP_WEB_PORT
               value: "8080"
             - name: JAVA_TOOL_OPTIONS

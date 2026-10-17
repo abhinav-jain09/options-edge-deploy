@@ -1,0 +1,13 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: broker-execution-service
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: broker-execution
+          env:
+            - name: AUTH_ISSUER_URI
+              value: "https://dev-auth.bleadingoptions.com/realms/optionsedge"

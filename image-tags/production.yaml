@@ -51,6 +51,8 @@ images:
   market-structure-service: 192.168.100.252:5000/options-edge-market-structure:prod
   market-commentary-service: 192.168.100.252:5000/options-edge-market-commentary:prod
   early-auction-verdict-service: 192.168.100.252:5000/options-edge-early-auction-verdict:prod
+  break-score-service: 192.168.100.252:5000/options-edge-break-score:prod
+  level-absorption-service: 192.168.100.252:5000/options-edge-level-absorption:prod
   spot-vol-regime-service: 192.168.100.252:5000/options-edge-spot-vol-regime:prod
   vol-premium-service: 192.168.100.252:5000/options-edge-vol-premium:prod
   # Required even though prod holds stock-gex at replicas:0: without a production mapping the

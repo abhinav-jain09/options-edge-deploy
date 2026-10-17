@@ -1,0 +1,24 @@
+[
+  {
+    "case": "positive",
+    "returncode": 0,
+    "stderr": "test_registry_namespace_rendering_uses_read_only_lookup_of_latest_identity (test_context_tape_order_initialization.InitializationTest.test_registry_namespace_rendering_uses_read_only_lookup_of_latest_identity) ... ok\n\n----------------------------------------------------------------------\nRan 1 test in 0.001s\n\nOK\n"
+  },
+  {
+    "case": "subject-check-removed",
+    "returncode": 1,
+    "stderr": "test_registry_namespace_rendering_uses_read_only_lookup_of_latest_identity (test_context_tape_order_initialization.InitializationTest.test_registry_namespace_rendering_uses_read_only_lookup_of_latest_identity) ... FAIL\n\n======================================================================\nFAIL: test_registry_namespace_rendering_uses_read_only_lookup_of_latest_identity (test_context_tape_order_initialization.InitializationTest.test_registry_namespace_rendering_uses_read_only_lookup_of_latest_identity)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/private/var/folders/t3/_t_9ln7d49g_yvjqnyr_rdj40000gn/T/tmpkowk0f9w/tests/test_context_tape_order_initialization.py\", line 288, in test_registry_namespace_rendering_uses_read_only_lookup_of_latest_identity\n    with self.assertRaisesRegex(RuntimeError, 'differs from canonical'):\n         ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: RuntimeError not raised\n\n----------------------------------------------------------------------\nRan 1 test in 0.001s\n\nFAILED (failures=1)\n"
+  },
+  {
+    "case": "optimizer-refused",
+    "returncode": 1,
+    "outputCreated": false,
+    "stderr": "Traceback (most recent call last):\n  File \"/var/folders/t3/_t_9ln7d49g_yvjqnyr_rdj40000gn/T/tmp9adehhvp/scripts/validation/check-order-initialization-controls.py\", line 81, in <module>\n    main()\n    ~~~~^^\n  File \"/var/folders/t3/_t_9ln7d49g_yvjqnyr_rdj40000gn/T/tmp9adehhvp/scripts/validation/check-order-initialization-controls.py\", line 47, in main\n    raise RuntimeError(\"Optimized Python is not supported for evidence generation\")\nRuntimeError: Optimized Python is not supported for evidence generation\n"
+  },
+  {
+    "case": "optimizer-guard-removed",
+    "returncode": 0,
+    "outputCreated": true,
+    "stderr": ""
+  }
+]

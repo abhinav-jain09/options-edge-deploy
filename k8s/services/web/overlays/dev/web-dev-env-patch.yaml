@@ -55,6 +55,8 @@ spec:
             # actual login redirect target). If the Mac IP or hostname ever drifts again, re-add
             # VITE_AUTH_ENABLED=false + AUTH_ALLOW_DISABLED=true here to boot public. MUST MIRROR the
             # top-level k8s/overlays/dev/web-dev-env-patch.yaml (validate-services render equivalence).
+            - name: CONTEXT_TAPE_PUBLIC_ORIGINS
+              value: "http://localhost:8090,http://127.0.0.1:8090"
             - name: VITE_AUTH_ISSUER
               value: "https://dev-auth.bleadingoptions.com/realms/optionsedge"
             # The browser's live WS talks to the dev feed-gateway at localhost:8093 — the gateway that

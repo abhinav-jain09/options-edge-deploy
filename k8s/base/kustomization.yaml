@@ -27,6 +27,7 @@ resources:
   - delta-flow-service.yaml
   - dealer-ledger-deployment.yaml
   - broker-execution-deployment.yaml
+  - broker-execution-service.yaml
   - amt-order-bridge-deployment.yaml
   - dealer-ledger-service.yaml
   - dealer-ledger-calibration-scorer-deployment.yaml

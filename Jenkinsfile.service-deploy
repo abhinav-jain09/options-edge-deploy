@@ -72,6 +72,12 @@ pipeline {
       'market-commentary',
       // early-auction-verdict: shadow, HELD at replicas 0; deploy = image pinned, scale is the owner's.
       'early-auction-verdict',
+      // break-score: dev+prod SHADOW, deployed HELD AT replicas 0 (the owner enables it). Reads the linearized ES tape, publishes
+      // futures.break-score.events; single replica only. Deploy = image pinned, scale is the owner's.
+      'break-score',
+      // level-absorption: dev+prod EYEBALL phase, deployed HELD AT replicas 0 and unable to start until the owner supplies the
+      // Phase 0 freeze file and the retention artifact. Publishes futures.level-absorption.{events,voice,closures}; single replica only.
+      'level-absorption',
       // stock-gex-close-scheduler: PRODUCTION only — the closing-board SCHEDULE, which now lives
       // inside the batch itself (USER 2026-09-01: "I don't want anything Jenkins-based, it should
       // run based on Spring Batch configuration"). This job DEPLOYS it; nothing here decides when
@@ -698,6 +704,34 @@ PYEOF
           export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
           . scripts/kafka/load-kafka-settings.sh
           scripts/kafka/ensure-early-auction-verdict-topics.sh
+        '''
+      }
+    }
+    stage('Verify break-score output topic') {
+      // BEFORE the rollout, same barrier as early-auction-verdict above: the service never creates its events topic and refuses to START unless futures.break-score.events has ONE partition, a delete cleanup policy, retention.ms=-1 and a finite positive retention.bytes (decided 16777216); dev's broker would auto-create it at 32 partitions with no byte cap. The service is held at replicas 0, but the topic must be right the day the owner scales it up, and creating it here is idempotent.
+      when {
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'break-score' && !params.DEPLOY_DRY_RUN) }
+      }
+      steps {
+        sh '''
+          set -euo pipefail
+          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
+          . scripts/kafka/load-kafka-settings.sh
+          scripts/kafka/ensure-break-score-topics.sh
+        '''
+      }
+    }
+    stage('Verify level-absorption output topics') {
+      // BEFORE the rollout, same barrier as early-auction-verdict above: the service never creates its topics and refuses to START unless voice, closures and events each have ONE partition, cleanup.policy=delete and no finite message.timestamp.before.max.ms, and the events topic matches the retention artifact exactly. Voice and closures (7 days) are created here; the events topic needs the artifact's retention.bytes (LEVEL_ABSORPTION_EVENTS_RETENTION_BYTES), which does not exist yet, so while it is absent this stage WARNS and passes (the service is held at replicas 0 and its own startup check is the hard gate).
+      when {
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'level-absorption' && !params.DEPLOY_DRY_RUN) }
+      }
+      steps {
+        sh '''
+          set -euo pipefail
+          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
+          . scripts/kafka/load-kafka-settings.sh
+          scripts/kafka/ensure-level-absorption-topics.sh
         '''
       }
     }
