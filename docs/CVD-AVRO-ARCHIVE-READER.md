@@ -18,7 +18,12 @@ frames fail the capture without advancing a successful record count/checkpoint.
 shared exact-writer admission and bounded preallocation decoder, with the explicit
 old Strike-null role. Framed failures never become JSON fallback. Canonical reads
 use max.poll.records=1, 8 MiB fetch limits and no automatic topic creation. The
-existing same-topic history, topic identities, groups, offsets and files remain.
+existing same-topic history and topic identities remain; no group or offset is reset.
+Previously unstamped console-path checkpoints enter the existing LEGACY path:
+the first committed capture recaptures from retained log start, so old files may
+overlap the new capture. This safely duplicates history rather than skipping it.
+Offset marking uses its original raw Java17 path and does not load the SDK or
+resolve a registry, including when a registry argument is supplied directly.
 The filesystem still contains API JSON; this helper writes no Kafka record values.
 
 The native raw reader remains Java-17-source compatible, without static SDK
@@ -48,10 +53,13 @@ other models use the shared source-renderer cuts. No live broker, archive, feed,
 replay, load or max-domain qualification ran on the Mac.
 
 One source bar, one prime and five singles measured raw line-write CPU medians
-11/12 microseconds before/after (+9.09%), with identical 280-byte allocation
+11/12 microseconds before/after, with identical 280-byte allocation
 medians. The new framed projection plus line write measured 450 microseconds and
 31,224 bytes, within the finite 100 ms/8 MiB ceiling with positive allocation
-calibration. These measurements do not establish real source maxima or throughput.
+calibration. The 1-microsecond difference is timer quantization across five singles;
+it is not a reliable measured percentage regression. These measurements do not
+establish real source maxima or throughput. The 100 ms/8 MiB ceiling is a smoke
+bound only.
 
 The 83-test guard suite ran: 81 passed and two failed. An initial dynamic scp path
 in this change was corrected to a literal guarded alias; the changed archive job
@@ -64,3 +72,13 @@ Before activation: complete the normal Jenkins Linux archive suite and es4 nativ
 classpath/source-domain/mixed-history/cold-registry/metadata-offset qualification,
 then deploy readers before writers. No source/main preparation approval is an
 application activation or complete migration claim.
+
+The activation throughput gate must compare retained records per partition with
+measured sustained records/second under the 900-second capture deadline. There is
+no chunking outside UNTIL_TS mode; a timeout discards the capture and advances no
+checkpoint, so an oversized legacy recapture would repeatedly fail. Illustratively,
+450 microseconds/record permits only about 2.0 million records in 900 seconds before
+I/O and startup costs; that single-record timing is not throughput qualification.
+Also prove which decoder artifact loads: JDK22+ multi-file source launching may
+resolve the adjacent source rather than the tested helper jar. Prove native Kafka
+and Confluent classpath linkage separately from the Maven test classpath.

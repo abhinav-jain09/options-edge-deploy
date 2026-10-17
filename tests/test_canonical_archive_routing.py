@@ -117,3 +117,13 @@ class CanonicalArchiveRoutingTest(unittest.TestCase):
         r = self.run_shell('run_strike_reader 10 --topic es.futures.cvd.bars', STRIKE_READER=str(self.java17))
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.commands()[-1]['args'], ['--topic', 'es.futures.cvd.bars'])
+
+    def test_marker_uses_raw_java17_without_sdk_or_registry(self):
+        (self.dir / 'canonical-archive-reader.jar').unlink()
+        (self.dir / 'options-edge-contracts.jar').unlink()
+        r = self.run_shell('run_strike_reader 10 --topic es.futures.cvd.bars --mark-group archive-marker --mark-offset 7', CANONICAL_ARCHIVE_JAVA='/missing/java')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        command = self.commands()[-1]
+        self.assertEqual(command['binary'], str(self.java17))
+        self.assertIn('-Xmx256m', command['args'])
+        self.assertNotIn('--canonical-registry', command['args'])

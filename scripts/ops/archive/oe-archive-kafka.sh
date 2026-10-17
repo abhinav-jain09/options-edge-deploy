@@ -350,12 +350,13 @@ canonical_archive_java() {
 run_strike_reader() {
   local limit="$1"; shift
   if [ -n "$STRIKE_READER" ]; then timeout "$limit" "$STRIKE_READER" "$@"; return; fi
-  local topic="" previous="" arg
+  local topic="" previous="" arg marking=false
   for arg in "$@"; do
     [ "$previous" != --topic ] || topic="$arg"
+    [ "$arg" != --mark-group ] || marking=true
     previous="$arg"
   done
-  if is_canonical_archive_topic "$topic"; then
+  if [ "$marking" = false ] && is_canonical_archive_topic "$topic"; then
     local java helper
     java=$(canonical_archive_java) || return 2
     helper="$(dirname "$STRIKE_READER_SRC")/canonical-archive-reader.jar"

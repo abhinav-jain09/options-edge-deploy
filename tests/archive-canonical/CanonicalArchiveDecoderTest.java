@@ -55,6 +55,8 @@ public class CanonicalArchiveDecoderTest {
     }
     public static void main(String[] args) throws Exception {
         if(args.length!=1)throw new IllegalArgumentException("contracts source directory required");
+        var marker=new StrikeArchiveReader.Opts(); marker.markGroup="archive-marker"; marker.canonicalRegistry="http://not-accessed";
+        check(StrikeArchiveReader.canonicalDecoder(marker)==null,"offset marker must not load a decoder or registry");
         Path source=Path.of(args[0]);String scope="archive-canonical-unit";
         var registry=MockSchemaRegistry.getClientForScope(scope);var props=new Properties();CanonicalAvroKafka.producer(props,"mock://"+scope);
         var config=new HashMap<String,Object>();props.forEach((k,v)->config.put((String)k,v));

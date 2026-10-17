@@ -103,7 +103,7 @@ public class StrikeArchiveReader {
         p.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, ByteArrayDeserializer.class.getName());
         p.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, ByteArrayDeserializer.class.getName());
         p.put(ConsumerConfig.CLIENT_ID_CONFIG, "oe-strike-archive-reader");
-        if (o.canonicalRegistry != null) {
+        if (o.canonicalRegistry != null && o.markGroup == null) {
             p.put(ConsumerConfig.ALLOW_AUTO_CREATE_TOPICS_CONFIG, "false");
             p.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, "1");
             p.put(ConsumerConfig.FETCH_MAX_BYTES_CONFIG, "8388608");
@@ -129,7 +129,7 @@ public class StrikeArchiveReader {
     // The optional helper is compiled against the canonical SDK and loaded on JDK 21+.
     @SuppressWarnings("unchecked")
     static Deserializer<byte[]> canonicalDecoder(Opts o) throws Exception {
-        if (o.canonicalRegistry == null) return null;
+        if (o.markGroup != null || o.canonicalRegistry == null) return null;
         return (Deserializer<byte[]>) Class.forName("CanonicalArchiveDecoder")
                 .getConstructor(String.class, String.class).newInstance(o.topic, o.canonicalRegistry);
     }
