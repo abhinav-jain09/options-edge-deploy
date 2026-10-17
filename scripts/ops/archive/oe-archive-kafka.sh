@@ -131,7 +131,10 @@ is_strict_topic() { case " $OE_STRICT_TOPICS " in *" $1 "*) return 0 ;; *) retur
 # (options.spx.vol-premium.calendar is not listed: since 2026-09-13 the calendar ledger is a Postgres table, not a topic.)
 OE_VOL_PREMIUM_TRANSACTIONAL_TOPICS="options.spx.vol-premium.ivrv options.spx.vol-premium.events options.spx.vol-premium.warnings options.spx.vol-premium.current options.spx.vol-premium.dlq options.spx.vol-premium.baseline"
 OE_COMMITTED_READ_TOPICS="${OE_COMMITTED_READ_TOPICS:-es.futures.footprint.strike $OE_VOL_PREMIUM_TRANSACTIONAL_TOPICS}"
-is_committed_read_topic() { case " $OE_COMMITTED_READ_TOPICS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+# Canonical archive inputs cannot be opted back into the binary-unsafe console path.
+OE_CANONICAL_ARCHIVE_TOPICS="es.futures.cvd.bars es.futures.footprint.bars es.futures.footprint.outcomes es.futures.footprint.strike context-tape.direction.ledger"
+is_canonical_archive_topic() { case " $OE_CANONICAL_ARCHIVE_TOPICS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+is_committed_read_topic() { is_canonical_archive_topic "$1" || case " $OE_COMMITTED_READ_TOPICS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 # Topics that are AVRO on the wire (Kafka Serialization Rule) and are captured through IndicatorArchiveReader.java,
 # which writes the console consumer's own line layout with the record decoded to the owner's JSON text — the
 # archive keeps the JSON-era line byte for byte while the topic carries Confluent-framed Avro
@@ -142,12 +145,13 @@ is_indicator_avro_topic() { case " $OE_INDICATOR_AVRO_TOPICS " in *" $1 "*) retu
 # 8082); OE_INDICATOR_REGISTRY_URL overrides. The reader runs under a JDK 21+ (the contracts classes need it; the
 # host's default java is 17) with the Kafka client jars, the Confluent registry client and serializer jars, and
 # the options-edge-contracts jar the archive unit ships beside this script (options-edge-contracts.jar, the version
-# scripts/ops/archive/contracts.version pins).
-indicator_registry_url() {
-  if [ -n "${OE_INDICATOR_REGISTRY_URL:-}" ]; then printf '%s' "$OE_INDICATOR_REGISTRY_URL"; return; fi
+# scripts/ops/archive/contracts.version requires from guarded latest main).
+archive_registry_url() {
+  if [ -n "${1:-}" ]; then printf '%s' "$1"; return; fi
   local host="${BOOTSTRAP%%:*}"
   case "$host" in 192.168.100.4) printf 'http://%s:8081' "$host" ;; *) printf 'http://%s:8082' "$host" ;; esac
 }
+indicator_registry_url() { archive_registry_url "${OE_INDICATOR_REGISTRY_URL:-}"; }
 INDICATOR_READER="${INDICATOR_READER:-}"   # test seam: an executable taking the reader's arguments
 INDICATOR_READER_SRC="${INDICATOR_READER_SRC:-$(cd "$(dirname "$0")" && pwd)/IndicatorArchiveReader.java}"
 INDICATOR_READER_JAVA="${INDICATOR_READER_JAVA:-}"
@@ -327,9 +331,39 @@ case "$STRIKE_READER_DEADLINE_S" in ''|*[!0-9]*|0) echo "FATAL: STRIKE_READER_DE
 # $1 = the OUTER wall-clock limit in seconds; the rest are the reader's own arguments. The limit is
 # applied in here because `timeout` runs programs, not shell functions (a `timeout N run_strike_reader`
 # call site fails with 127 on every run — the suite caught exactly that).
+canonical_archive_java() {
+  local candidate major
+  if [ -n "${CANONICAL_ARCHIVE_JAVA:-}" ]; then
+    major=$("$CANONICAL_ARCHIVE_JAVA" -version 2>&1 | sed -n '1s/.*version "\([0-9][0-9]*\).*/\1/p')
+    case "$major" in ''|*[!0-9]*) return 2 ;; esac
+    [ "$major" -ge 21 ] || return 2
+    printf '%s' "$CANONICAL_ARCHIVE_JAVA"; return
+  fi
+  for candidate in "${JAVA_HOME:+$JAVA_HOME/bin/java}" /usr/lib/jvm/java-latest-openjdk/bin/java "$(command -v java 2>/dev/null)"; do
+    [ -n "$candidate" ] && [ -x "$candidate" ] || continue
+    major=$("$candidate" -version 2>&1 | sed -n '1s/.*version "\([0-9][0-9]*\).*/\1/p')
+    case "$major" in ''|*[!0-9]*) continue ;; esac
+    if [ "$major" -ge 21 ]; then printf '%s' "$candidate"; return; fi
+  done
+  echo 'FATAL: canonical archive requires JDK 21+; refusing binary fallback' >&2; return 2
+}
 run_strike_reader() {
   local limit="$1"; shift
   if [ -n "$STRIKE_READER" ]; then timeout "$limit" "$STRIKE_READER" "$@"; return; fi
+  local topic="" previous="" arg
+  for arg in "$@"; do
+    [ "$previous" != --topic ] || topic="$arg"
+    previous="$arg"
+  done
+  if is_canonical_archive_topic "$topic"; then
+    local java helper
+    java=$(canonical_archive_java) || return 2
+    helper="$(dirname "$STRIKE_READER_SRC")/canonical-archive-reader.jar"
+    [ -r "$helper" ] && [ -r "$INDICATOR_CONTRACTS_JAR" ] || { echo 'FATAL: canonical archive SDK/helper missing' >&2; return 2; }
+    timeout "$limit" "$java" -Xmx512m -cp "$(indicator_reader_classpath):$helper" "$STRIKE_READER_SRC" \
+      "$@" --canonical-registry "$(archive_registry_url "${OE_CANONICAL_REGISTRY_URL:-}")"
+    return
+  fi
   timeout "$limit" "${JAVA_HOME:+$JAVA_HOME/bin/}java" -Xmx256m -cp "$KAFKA_BIN/../libs/*" "$STRIKE_READER_SRC" "$@"
 }
 # THE ARCHIVE MARKER. After a committed-read capture is durably published and its checkpoint written,

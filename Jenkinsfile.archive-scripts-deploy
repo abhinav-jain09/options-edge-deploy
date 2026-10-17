@@ -35,7 +35,7 @@ pipeline {
     string(name: 'PERMITTED_SHA_GUARD_VERSION', defaultValue: '2f6fc2ab7aa51eb8a9e8aa350f2d774cd2fb7a253de2591e43645a19a9886b24',
       description: 'DO NOT EDIT BY HAND — the sha256 of scripts/jenkins/permitted-sha-guard.sh this definition runs (Deployment Permission Rule). The guard refuses to run under any other value. It is a DECLARATION, not proof that this job enforces the guard: a caller that triggers this job judges its SCM definition and its Jenkinsfile at the forwarded commit (scripts/jenkins/require-guarded-downstream.sh). Regenerate with scripts/jenkins/permitted-sha-guard-version.sh when the guard changes.')
     string(name: 'CONTRACTS_PERMITTED_SHA', defaultValue: '', trim: true,
-      description: 'REQUIRED for an install — the full 40-character options-edge-contracts commit on main whose build is the options-edge-contracts.jar the archiver decodes Avro indicator bars with (INDICATOR-AVRO-CONVERSION-PLAN.md section 2); its version must equal scripts/ops/archive/contracts.version. The contracts checkout is a nested acquisition bound by its own guard (Deployment Permission Rule).')
+      description: 'REQUIRED for an archive build — the full 40-character options-edge-contracts commit on main whose build is the options-edge-contracts.jar the archiver decodes released Avro inputs with; its Maven coordinate comes from that guarded latest-main commit. The contracts checkout is a nested acquisition bound by its own guard (Deployment Permission Rule).')
     string(name: 'PROD_HOST', defaultValue: 'abhinav@192.168.100.252',
       description: 'SSH target that runs the archive crons (Kafka + the NAS mount are local there).')
     string(name: 'INSTALL_DIR', defaultValue: '/home/abhinav/oe-ops',
@@ -65,8 +65,8 @@ pipeline {
     // options-edge-contracts.jar travels WITH the unit but is not a committed file: it is built from the permitted
     // options-edge-contracts commit in this job and shipped by its own dedicated step (SIDECAR below); the host
     // installs, records and verifies it exactly like a unit file.
-    SIDECAR     = "options-edge-contracts.jar"
-    UNIT        = "oe-archive-kafka.sh StrikeArchiveReader.java IndicatorArchiveReader.java oe-alert.sh oe-topics.env test-archive-reset.sh oe-archive.crontab oe-archive.crontab.predecessor oe-calibration-progress.sh oe_corpus_reader.py oe-push-validation-artifact.sh push-validation-artifact-test.sh calibration-targets.env market_calendar.py oe-archive-verify.sh oe-trading-day.sh oe-archive-daily.sh oe-archive-dev.sh ibkr-raw-retention.sh oe-archive-postgres.sh oe-vol-premium-open-capture.sh vol-premium-open-reference-capture.py"
+    SIDECAR     = "options-edge-contracts.jar canonical-archive-reader.jar"
+    UNIT        = "oe-archive-kafka.sh StrikeArchiveReader.java CanonicalArchiveDecoder.java IndicatorArchiveReader.java oe-alert.sh oe-topics.env test-archive-reset.sh oe-archive.crontab oe-archive.crontab.predecessor oe-calibration-progress.sh oe_corpus_reader.py oe-push-validation-artifact.sh push-validation-artifact-test.sh calibration-targets.env market_calendar.py oe-archive-verify.sh oe-trading-day.sh oe-archive-daily.sh oe-archive-dev.sh ibkr-raw-retention.sh oe-archive-postgres.sh oe-vol-premium-open-capture.sh vol-premium-open-reference-capture.py"
     // Both of these are read by the shell in sh ''' blocks, which Groovy does NOT
     // interpolate — without them here the scripts would see an unset variable under `set -u`.
     TEST_IMAGE       = "${params.TEST_IMAGE}"
@@ -243,6 +243,73 @@ pipeline {
       }
     }
 
+    stage('Canonical archive routing') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
+      steps { sh 'PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests.test_canonical_archive_routing' }
+    }
+
+    stage('Build canonical archive helper') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
+      steps {
+        // IndicatorArchiveReader.java decodes the Avro indicator bars (INDICATOR-AVRO-CONVERSION-PLAN.md section 2); it
+        // needs the options-edge-contracts classes on the host. The jar is BUILT here from the permitted contracts
+        // commit — a nested acquisition bound by its own guard (validator rule 9), packaged and shipped as dedicated
+        // effects each immediately after a verify of that tree (rule 9b) — never taken from a cache.
+        script {
+          def csha = (params.CONTRACTS_PERMITTED_SHA ?: '').trim()
+          if (!(csha ==~ /[0-9a-f]{40}/)) {
+            error("an archive build needs CONTRACTS_PERMITTED_SHA (the full 40-character options-edge-contracts commit on main), got '${csha}'.")
+          }
+        }
+        dir('.jenkins-tmp/contracts') { deleteDir() }
+        sh '''
+          set -eu
+          git clone git@github.com:abhinav-jain09/options-edge-contracts.git .jenkins-tmp/contracts
+          git -C .jenkins-tmp/contracts checkout main
+        '''
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${CONTRACTS_PERMITTED_SHA:-}" bash scripts/jenkins/permitted-sha-guard.sh --dir .jenkins-tmp/contracts --ref main'
+        }
+        sh '''
+          set -euo pipefail
+          # The exact guarded latest-main commit determines the coordinate; no second pin.
+          [ "$(tr -d '[:space:]' < scripts/ops/archive/contracts.version)" = latest-main ] || exit 1
+          PV=$(sed -nE 's#^[[:space:]]*<version>([^<]+)</version>.*#\\1#p' .jenkins-tmp/contracts/pom.xml | head -1)
+          [[ "$PV" =~ ^[0-9]+[.][0-9]+[.][0-9]+$ ]] || exit 1
+          printf '%s\\n' "$PV" > .jenkins-tmp/archive-contracts.version
+        '''
+        script {
+          env.ARCHIVE_CONTRACTS_VERSION = readFile('.jenkins-tmp/archive-contracts.version').trim()
+          if (!(env.ARCHIVE_CONTRACTS_VERSION ==~ /[0-9]+[.][0-9]+[.][0-9]+/)) error('Invalid contracts coordinate')
+        }
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${CONTRACTS_PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir .jenkins-tmp/contracts'
+        }
+        sh 'mvn -B -q -ntp -f .jenkins-tmp/contracts/pom.xml -DskipTests package'
+        sh 'unzip -l .jenkins-tmp/contracts/target/options-edge-contracts-${ARCHIVE_CONTRACTS_VERSION}.jar | grep -q com/optionsedge/contracts/indicators/avro/IndicatorSchemas.class'
+        sh 'cp ".jenkins-tmp/contracts/target/options-edge-contracts-${ARCHIVE_CONTRACTS_VERSION}.jar" .jenkins-tmp/contracts/target/options-edge-contracts-archive.jar'
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${CONTRACTS_PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir .jenkins-tmp/contracts --allow-ignored target'
+        }
+        sh 'mvn -B -q -ntp -f .jenkins-tmp/contracts/pom.xml dependency:build-classpath -Dmdep.includeScope=test -Dmdep.outputFile="${WORKSPACE}/.jenkins-tmp/archive-contracts-deps.txt"'
+        sh 'rm -rf .jenkins-tmp/canonical-archive-classes .jenkins-tmp/canonical-archive-tests && mkdir -p .jenkins-tmp/canonical-archive-classes .jenkins-tmp/canonical-archive-tests'
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored .jenkins-tmp --allow-ignored scripts/ops/archive/market_calendar.py --allow-ignored scripts/ops/archive/vol-premium-open-reference-capture.py'
+        }
+        sh 'javac --release 21 -cp ".jenkins-tmp/contracts/target/options-edge-contracts-${ARCHIVE_CONTRACTS_VERSION}.jar:$(cat .jenkins-tmp/archive-contracts-deps.txt)" -d .jenkins-tmp/canonical-archive-classes scripts/ops/archive/CanonicalArchiveDecoder.java'
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored .jenkins-tmp --allow-ignored scripts/ops/archive/market_calendar.py --allow-ignored scripts/ops/archive/vol-premium-open-reference-capture.py'
+        }
+        sh 'javac --release 21 -cp ".jenkins-tmp/canonical-archive-classes:.jenkins-tmp/contracts/target/options-edge-contracts-${ARCHIVE_CONTRACTS_VERSION}.jar:$(cat .jenkins-tmp/archive-contracts-deps.txt)" -d .jenkins-tmp/canonical-archive-tests scripts/ops/archive/StrikeArchiveReader.java tests/archive-canonical/CanonicalArchiveDecoderTest.java'
+        sh 'java -Xmx512m -cp ".jenkins-tmp/canonical-archive-tests:.jenkins-tmp/canonical-archive-classes:.jenkins-tmp/contracts/target/options-edge-contracts-${ARCHIVE_CONTRACTS_VERSION}.jar:$(cat .jenkins-tmp/archive-contracts-deps.txt)" CanonicalArchiveDecoderTest .jenkins-tmp/contracts'
+        sh 'PYTHONDONTWRITEBYTECODE=1 OE_INDICATOR_READER_CP=".jenkins-tmp/contracts/target/options-edge-contracts-${ARCHIVE_CONTRACTS_VERSION}.jar:$(cat .jenkins-tmp/archive-contracts-deps.txt)" python3 -m unittest tests.test_indicator_archive_reader'
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored .jenkins-tmp --allow-ignored scripts/ops/archive/market_calendar.py --allow-ignored scripts/ops/archive/vol-premium-open-reference-capture.py'
+        }
+        sh 'jar --create --file .jenkins-tmp/canonical-archive-reader.jar -C .jenkins-tmp/canonical-archive-classes .'
+      }
+    }
+
     stage('Check the host has not drifted') {
       when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (!params.RUN_TESTS_ONLY) } }
       steps {
@@ -306,42 +373,14 @@ EOSSH
           set -euo pipefail
           ssh -o BatchMode=yes "$PROD_HOST" "mkdir -p '$STAGE_DIR'"
         '''
-        // IndicatorArchiveReader.java decodes the Avro indicator bars (INDICATOR-AVRO-CONVERSION-PLAN.md section 2); it
-        // needs the options-edge-contracts classes on the host. The jar is BUILT here from the permitted contracts
-        // commit — a nested acquisition bound by its own guard (validator rule 9), packaged and shipped as dedicated
-        // effects each immediately after a verify of that tree (rule 9b) — never taken from a cache.
-        script {
-          def csha = (params.CONTRACTS_PERMITTED_SHA ?: '').trim()
-          if (!(csha ==~ /[0-9a-f]{40}/)) {
-            error("an install needs CONTRACTS_PERMITTED_SHA (the full 40-character options-edge-contracts commit on main), got '${csha}'.")
-          }
-        }
-        dir('.jenkins-tmp/contracts') { deleteDir() }
-        sh '''
-          set -eu
-          git clone git@github.com:abhinav-jain09/options-edge-contracts.git .jenkins-tmp/contracts
-          git -C .jenkins-tmp/contracts checkout main
-        '''
-        timeout(time: 10, unit: 'MINUTES') {
-          sh 'PERMITTED_SHA="${CONTRACTS_PERMITTED_SHA:-}" bash scripts/jenkins/permitted-sha-guard.sh --dir .jenkins-tmp/contracts --ref main'
-        }
-        sh '''
-          set -euo pipefail
-          # the contracts version this unit pins is the version that checkout builds — the jar name below is literal
-          CV=$(tr -d '[:space:]' < scripts/ops/archive/contracts.version)
-          [ "$CV" = 0.19.0 ] || { echo "FAIL: scripts/ops/archive/contracts.version is $CV but this job ships options-edge-contracts-0.19.0.jar — change both together"; exit 1; }
-          PV=$(sed -nE 's#^[[:space:]]*<version>([^<]+)</version>.*#\\1#p' .jenkins-tmp/contracts/pom.xml | head -1)
-          [ "$PV" = "$CV" ] || { echo "FAIL: options-edge-contracts at CONTRACTS_PERMITTED_SHA is version $PV, the unit pins $CV"; exit 1; }
-        '''
-        timeout(time: 10, unit: 'MINUTES') {
-          sh 'PERMITTED_SHA="${CONTRACTS_PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir .jenkins-tmp/contracts'
-        }
-        sh 'mvn -B -q -ntp -f .jenkins-tmp/contracts/pom.xml -DskipTests package'
-        sh 'unzip -l .jenkins-tmp/contracts/target/options-edge-contracts-0.19.0.jar | grep -q com/optionsedge/contracts/indicators/avro/IndicatorSchemas.class'
         timeout(time: 10, unit: 'MINUTES') {
           sh 'PERMITTED_SHA="${CONTRACTS_PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir .jenkins-tmp/contracts --allow-ignored target'
         }
-        sh 'scp -o BatchMode=yes .jenkins-tmp/contracts/target/options-edge-contracts-0.19.0.jar "${PROD_HOST}:${STAGE_DIR}/options-edge-contracts.jar"'
+        sh 'scp -o BatchMode=yes .jenkins-tmp/contracts/target/options-edge-contracts-archive.jar "${PROD_HOST}:${STAGE_DIR}/options-edge-contracts.jar"'
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored .jenkins-tmp --allow-ignored scripts/ops/archive/market_calendar.py --allow-ignored scripts/ops/archive/vol-premium-open-reference-capture.py'
+        }
+        sh 'scp -o BatchMode=yes .jenkins-tmp/canonical-archive-reader.jar "${PROD_HOST}:${STAGE_DIR}/canonical-archive-reader.jar"'
         // The whole unit travels together: the archiver, the alert helper it sources, the topic policy it refuses to
         // start without, and the suite. Shipping the archiver alone would leave its dependencies as whatever happened to
         // be on the host. ONE scp of the literal UNIT list (market_calendar.py from its one committed home), as a
@@ -364,7 +403,7 @@ EOSSH
           // satisfies it. The path may be given unquoted, as here, or double-quoted.
           sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp --allow-ignored scripts/ops/archive/market_calendar.py --allow-ignored scripts/ops/archive/vol-premium-open-reference-capture.py'
         }
-        sh 'scp -o BatchMode=yes scripts/ops/archive/oe-archive-kafka.sh scripts/ops/archive/StrikeArchiveReader.java scripts/ops/archive/IndicatorArchiveReader.java scripts/ops/archive/oe-alert.sh scripts/ops/archive/oe-topics.env scripts/ops/archive/test-archive-reset.sh scripts/ops/archive/oe-archive.crontab scripts/ops/archive/oe-archive.crontab.predecessor scripts/ops/archive/oe-calibration-progress.sh scripts/ops/archive/oe_corpus_reader.py scripts/ops/archive/oe-push-validation-artifact.sh scripts/ops/archive/push-validation-artifact-test.sh scripts/ops/archive/calibration-targets.env scripts/jenkins/market_calendar.py scripts/ops/archive/oe-archive-verify.sh scripts/ops/archive/oe-trading-day.sh scripts/ops/archive/oe-archive-daily.sh scripts/ops/archive/oe-archive-dev.sh scripts/ops/archive/ibkr-raw-retention.sh scripts/ops/archive/oe-archive-postgres.sh scripts/ops/archive/oe-vol-premium-open-capture.sh scripts/ops/vol-premium-open-reference-capture.py "${PROD_HOST}:${STAGE_DIR}/"'
+        sh 'scp -o BatchMode=yes scripts/ops/archive/oe-archive-kafka.sh scripts/ops/archive/StrikeArchiveReader.java scripts/ops/archive/CanonicalArchiveDecoder.java scripts/ops/archive/IndicatorArchiveReader.java scripts/ops/archive/oe-alert.sh scripts/ops/archive/oe-topics.env scripts/ops/archive/test-archive-reset.sh scripts/ops/archive/oe-archive.crontab scripts/ops/archive/oe-archive.crontab.predecessor scripts/ops/archive/oe-calibration-progress.sh scripts/ops/archive/oe_corpus_reader.py scripts/ops/archive/oe-push-validation-artifact.sh scripts/ops/archive/push-validation-artifact-test.sh scripts/ops/archive/calibration-targets.env scripts/jenkins/market_calendar.py scripts/ops/archive/oe-archive-verify.sh scripts/ops/archive/oe-trading-day.sh scripts/ops/archive/oe-archive-daily.sh scripts/ops/archive/oe-archive-dev.sh scripts/ops/archive/ibkr-raw-retention.sh scripts/ops/archive/oe-archive-postgres.sh scripts/ops/archive/oe-vol-premium-open-capture.sh scripts/ops/vol-premium-open-reference-capture.py "${PROD_HOST}:${STAGE_DIR}/"'
         sh '''
           set -euo pipefail
 
@@ -501,7 +540,8 @@ EOSSH
           # archive incident this change fixes was built on.
           for f in $UNIT $SIDECAR; do
             case "$f" in
-              options-edge-contracts.jar) local_sha=$(sha256sum .jenkins-tmp/contracts/target/options-edge-contracts-0.19.0.jar | cut -d' ' -f1) ;;
+              options-edge-contracts.jar) local_sha=$(sha256sum .jenkins-tmp/contracts/target/options-edge-contracts-archive.jar | cut -d' ' -f1) ;;
+              canonical-archive-reader.jar) local_sha=$(sha256sum .jenkins-tmp/canonical-archive-reader.jar | cut -d' ' -f1) ;;
               *) local_sha=$(sha256sum "scripts/ops/archive/$f" | cut -d' ' -f1) ;;
             esac
             host_sha=$(ssh -o BatchMode=yes "$PROD_HOST" "sha256sum '$INSTALL_DIR/$f' | cut -d' ' -f1")
