@@ -40,10 +40,12 @@ for i in $(seq 1 5); do
   done
   taskset -c 2 java -Xms128m -Xmx512m -XX:ActiveProcessorCount=1 -XX:+UseSerialGC -cp 'candidate/test-classes:candidate/classes:lib/*' com.optionsedge.processing.brokerexec.NativeQueuePerformanceProbe >"results/native-queue-$i.log" 2>&1
   taskset -c 2 java -Xms128m -Xmx512m -XX:ActiveProcessorCount=1 -XX:+UseSerialGC -cp 'candidate/test-classes:candidate/classes:lib/*' com.optionsedge.processing.brokerexec.VisualOrderPerformanceProbe quotes >"results/quotes-$i.log" 2>&1
-  database="visual_validation_$i"
-  sudo -n docker exec "$pg_id" psql -U validation -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE $database" >/dev/null
-  export VISUAL_BENCH_JDBC_URL="jdbc:postgresql://127.0.0.1:$port/$database"
-  taskset -c 2 java -Xms128m -Xmx512m -XX:ActiveProcessorCount=1 -XX:+UseSerialGC -cp 'candidate/test-classes:candidate/classes:lib/*' com.optionsedge.processing.brokerexec.VisualOrderPerformanceProbe journal >"results/journal-$i.log" 2>&1
+  for variant in baseline candidate; do
+    suffix=0; [ "$variant" = baseline ] || suffix=1
+    database="visual_validation_${i}_${suffix}"
+    sudo -n docker exec "$pg_id" psql -U validation -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE $database" >/dev/null
+    VISUAL_BENCH_JDBC_URL="jdbc:postgresql://127.0.0.1:$port/$database" taskset -c 2 java -Xms128m -Xmx512m -XX:ActiveProcessorCount=1 -XX:+UseSerialGC -cp "candidate/test-classes:$variant/classes:lib/*" com.optionsedge.processing.brokerexec.VisualOrderPerformanceProbe journal >"results/journal-$variant-$i.log" 2>&1
+  done
   taskset -c 2 java -Xms128m -Xmx512m -XX:ActiveProcessorCount=1 -XX:+UseSerialGC -cp 'candidate/test-classes:candidate/classes:lib/*' com.optionsedge.processing.brokerexec.VisualLinkedExitPerformanceProbe >"results/linked-evaluator-$i.log" 2>&1
   linked_database="visual_validation_${i}_2"
   sudo -n docker exec "$pg_id" psql -U validation -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE $linked_database" >/dev/null
@@ -57,7 +59,7 @@ p=pathlib.Path('results'); groups={}
 for f in p.glob('*.log'):
  for line in f.read_text().splitlines():
   if not line.startswith('VISUAL_PROBE '): continue
-  row=json.loads(line.removeprefix('VISUAL_PROBE '));key=row['probe']+('-'+row['variant'] if 'variant' in row else '-baseline' if 'baseline' in f.name else '-candidate' if 'native-candidate' in f.name else '')
+  row=json.loads(line.removeprefix('VISUAL_PROBE '));key=row['probe']+('-'+row['variant'] if 'variant' in row else '-baseline' if 'baseline' in f.name else '-candidate' if 'candidate' in f.name else '')
   groups.setdefault(key,[]).append(row)
 out={'classification':'source-validation-only; not a deployment/replay release gate','samples':groups,'medians':{k:statistics.median(x.get('nsPerRecord',x.get('elapsedMs')) for x in v) for k,v in groups.items() if all('nsPerRecord' in x or 'elapsedMs' in x for x in v)}}
 if 'native-callback-baseline' in groups and 'native-callback-candidate' in groups:
@@ -67,15 +69,17 @@ out['nativeRelativeBudgetPass']=out.get('nativeRelativeChange',float('inf'))<=0.
 # Keep the relative diagnostic; all other probe gates are unchanged.
 out['nativeWrapperBudgetNs']=1000
 out['nativeWrapperBudgetPass']=0<=out['medians'].get('native-callback-candidate',float('inf'))<=out['nativeWrapperBudgetNs']
-budgets={'native-adapter-queue':('nsPerRecord','budgetNsPerRecord',10000),'quote-book':('nsPerRecord','budgetNsPerRecord',500000),'journal-postgres':('nsPerRecord','budgetNsPerRecord',20000000),'model-geometry':('nsPerRecord','budgetNsPerRecord',500000),'model-history-page':('elapsedMs','budgetMs',100)}
+budgets={'native-adapter-queue':('nsPerRecord','budgetNsPerRecord',10000),'quote-book':('nsPerRecord','budgetNsPerRecord',500000),'journal-postgres-candidate':('nsPerRecord','budgetNsPerRecord',20000000),'model-geometry':('nsPerRecord','budgetNsPerRecord',500000),'model-history-page':('elapsedMs','budgetMs',100)}
 out['allNetNewBudgetsPass']=all(x.get('withinBudget') is True and type(x.get(metric)) in (int,float) and math.isfinite(x[metric]) and 0<=x[metric]<=limit and type(x.get(budget)) is int and x[budget]==limit for name,(metric,budget,limit) in budgets.items() for x in groups.get(name,[]))
 (p/'summary.json').write_text(json.dumps(out,indent=2)+'\n');print(json.dumps(out['medians']));print('allNetNewBudgetsPass',out['allNetNewBudgetsPass'])
 linked={'linked-evaluator-risk','linked-postgres-races','existing-overlay-baseline','existing-overlay-candidate','linked-overlay-candidate'}
 assert all(x.get('withinBudget') is True for k in linked for x in groups.get(k,[])), 'Linked evaluator, actual PostgreSQL or browser budget/semantic failure'
+out['journalRelativeChange']=out['medians'].get('journal-postgres-candidate',float('inf'))/out['medians'].get('journal-postgres-baseline',1)-1
+assert out['journalRelativeChange']<=0.10, 'Existing journal median regressed more than ten percent'
 out['overlayRelativeChange']=out['medians'].get('existing-overlay-candidate',float('inf'))/out['medians'].get('existing-overlay-baseline',1)-1
 assert out['overlayRelativeChange']<=0.10, 'Existing overlay median regressed more than ten percent'
 (p/'summary.json').write_text(json.dumps(out,indent=2)+'\n')
-assert set(groups)==linked|{'native-callback-baseline','native-callback-candidate','native-adapter-queue','quote-book','journal-postgres','model-geometry','model-history-page'},'Every declared probe must run'
+assert set(groups)==linked|{'native-callback-baseline','native-callback-candidate','native-adapter-queue','quote-book','journal-postgres-baseline','journal-postgres-candidate','model-geometry','model-history-page'},'Every declared probe must run'
 assert all(len(v)==5 for v in groups.values()),'Five repeated commands required for each scenario'
 assert out['allNetNewBudgetsPass'],'A declared net-new budget failed'
 assert out['nativeWrapperBudgetPass'],'Native callback wrapper median exceeded owner-approved 1000 ns budget or was negative'
