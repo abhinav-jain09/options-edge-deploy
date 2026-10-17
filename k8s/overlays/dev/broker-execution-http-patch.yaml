@@ -9,5 +9,13 @@ spec:
       containers:
         - name: broker-execution
           env:
+            - name: LINKED_EXIT_SPOT_ENABLED
+              value: "true"
+            - name: LINKED_EXIT_ARMING_ENABLED
+              value: "true"
+            - name: LINKED_EXIT_MID_CHASE_ENABLED
+              value: "true"
+            - name: CONTEXT_TAPE_SPOT_TOPIC
+              value: underlying.spx.index.price
             - name: AUTH_ISSUER_URI
               value: "https://dev-auth.bleadingoptions.com/realms/optionsedge"
