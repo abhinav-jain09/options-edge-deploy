@@ -284,6 +284,22 @@ class InitializationTest(unittest.TestCase):
             lookup['id'], lookup['version'] = 99, 1
             with self.assertRaisesRegex(RuntimeError, 'differs from canonical'):
                 initializer.schema(MODULE.TOPICS[0])
+            lookup['version'], lookup['subject'] = 2, 'different-value'
+            with self.assertRaisesRegex(RuntimeError, 'differs from canonical'):
+                initializer.schema(MODULE.TOPICS[0])
+            latest['id'], latest['version'] = 1, 1
+            lookup['id'], lookup['version'], lookup['subject'] = True, True, MODULE.TOPICS[0]+'-value'
+            with self.assertRaisesRegex(RuntimeError, 'differs from canonical'):
+                initializer.schema(MODULE.TOPICS[0])
+        for error in (MODULE.urllib.error.URLError('unavailable'), TimeoutError('timed out'),
+                      MODULE.urllib.error.HTTPError('http://registry', 404, 'not found', {}, io.BytesIO(b'{"error_code":40403}'))):
+            def unavailable(request, timeout):
+                if isinstance(request, str):
+                    return Response(latest)
+                raise error
+            with patch.object(MODULE.urllib.request, 'urlopen', side_effect=unavailable):
+                with self.assertRaisesRegex(RuntimeError, 'identity lookup unavailable'):
+                    initializer.schema(MODULE.TOPICS[0])
 
     def test_fixture_recovery_is_exact_dev_only_and_never_permanent(self):
         value = {'subject': MODULE.TOPICS[0]+'-value', 'version': 1, 'id': 32,

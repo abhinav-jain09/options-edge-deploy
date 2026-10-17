@@ -150,10 +150,11 @@ class Initializer:
             try:
                 with urllib.request.urlopen(request, timeout=15) as response:
                     canonical = json.load(response)
-            except urllib.error.HTTPError as error:
+            except (urllib.error.URLError, TimeoutError) as error:
                 raise RuntimeError('existing schema differs from canonical contract or identity lookup unavailable: ' + topic) from error
             require(type(value.get('id')) is int and value['id'] > 0 and type(value.get('version')) is int
-                    and value['version'] > 0 and canonical.get('subject') == topic + '-value'
+                    and value['version'] > 0 and type(canonical.get('id')) is int and type(canonical.get('version')) is int
+                    and canonical.get('subject') == topic + '-value'
                     and canonical.get('id') == value['id'] and canonical.get('version') == value['version'],
                     'existing schema differs from canonical contract: ' + topic)
         return True
