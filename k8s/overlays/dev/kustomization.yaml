@@ -21,6 +21,11 @@ resources:
   - ../../services/es-compression-expansion/base
   # hedging-pressure: HELD AT replicas 0 (base) on dev and production alike; the owner turns it on later.
   - ../../services/hedging-pressure/base
+  # break-score + level-absorption: both HELD AT replicas 0 (base) on dev and production alike. break-score is SHADOW (scores
+  # level breaks off the linearized ES tape); level-absorption is EYEBALL phase and cannot start until its Phase 0 freeze file
+  # and retention artifact exist. The owner turns each on later (docs/break-score/DEPLOY-WIRING.md, docs/level-absorption/DEPLOY-WIRING.md).
+  - ../../services/break-score/base
+  - ../../services/level-absorption/base
   # market-structure: RUNNING on dev and production (replicas 1 in the base). Reads
   # options.indicators.bars read-only and writes only options.spx.market-structure.{ui,sequence,dlq};
   # what a reader sees is gated on the gateway's own GATEWAY_MARKET_STRUCTURE_ENABLED.
@@ -391,6 +396,17 @@ patches:
   # DEV mirror of the standalone overlay: OPB rolling windows disabled on dev (matches #482, which
   # touched only the standalone overlay and drifted the monolithic dev render). Prod already has it.
   - path: option-price-behavior-dev-env-patch.yaml
+  # DEV-ONLY: start the L1 pressure CONSUMER, on dev only. Production renders replicas 0 with
+  # OPTION_PRESSURE_ENABLED=false and has no image built, which is what keeps it inert — not the
+  # KEEP_DOWN lists, whose production copies do not in fact carry this entry (see the base manifest).
+  # The PRODUCER (OPB_L1_ENABLED) is a separate change and must be deployed FIRST: it creates the
+  # input topic, and Kafka Streams refuses to start a topology whose source topic is absent. See the
+  # patch header for what it costs and what the signal is and is not — every frame is
+  # actionable=false and the register was rejected on two gate sets.
+  - path: option-pressure-state-dev-enable-patch.yaml
+    target:
+      kind: Deployment
+      name: option-pressure-state-service
   # strike-intelligence §7a conflict bypass: 2-of-4 fresh agreement clears a non-opposed
   # (FAKE_VOLUME/PIN/EXHAUSTION) near-tie; opposed runner-ups still veto regardless. Dev/prod
   # parity with the production overlay (PRs #462/#463 — engine default stays 3).
@@ -979,6 +995,12 @@ images:
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-early-auction-verdict
     newName: host.docker.internal:5001/options-edge-early-auction-verdict
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-break-score
+    newName: host.docker.internal:5001/options-edge-break-score
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-level-absorption
+    newName: host.docker.internal:5001/options-edge-level-absorption
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-multileg-structure
     newName: host.docker.internal:5001/options-edge-multileg-structure

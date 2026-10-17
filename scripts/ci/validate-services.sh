@@ -202,6 +202,8 @@ for t in scripts/kafka/ensure-oi-anchor-topic-parse-test.sh scripts/kafka/ensure
          scripts/kafka/ensure-gamma-ladder-path-topics-test.sh \
          scripts/kafka/ensure-es-compression-expansion-topics-test.sh \
          scripts/kafka/ensure-hedging-pressure-topics-test.sh \
+         scripts/kafka/ensure-break-score-topics-test.sh \
+         scripts/kafka/ensure-level-absorption-topics-test.sh \
          scripts/kafka/ensure-market-structure-topics-test.sh \
          scripts/kafka/ensure-market-commentary-topics-test.sh \
          scripts/kafka/ensure-early-auction-verdict-topics-test.sh \

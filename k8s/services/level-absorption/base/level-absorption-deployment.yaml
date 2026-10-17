@@ -1,0 +1,137 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: level-absorption-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: level-absorption-service
+    app.kubernetes.io/component: level-absorption-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  # HELD AT 0 on every environment, and it CANNOT start yet on any: two of its required input files do not exist and cannot be
+  # invented here. LEVEL_ABSORPTION_FROZEN_CONFIGURATION is the Phase 0 freeze file (minimumEffort, minimumBarImbalanceBps and
+  # flatRatioCutoff have no code default anywhere) and LEVEL_ABSORPTION_RETENTION_ARTIFACT records a measured session's event
+  # size. Deploy = image built, pushed and pinned. To turn it on: place both files under /home/options-edge/config/level-absorption
+  # on the host (docs/level-absorption/DEPLOY-WIRING.md), create futures.level-absorption.events with the artifact's
+  # retention.bytes, set replicas to 1 here, regenerate the slices (scripts/deploy/generate-service-slices.sh), remove
+  # level-absorption-service from KEEP_DOWN in scripts/ops/morning-autostart.sh AND scripts/ops/oe-boot-bringup.sh
+  # (tests/test_keep_down_lists_agree.py) and from DISABLED_DEV in scripts/ops/dev-cleanup.sh, then run service-deploy.
+  # SINGLE replica ONLY (the engine is single-threaded state per session).
+  replicas: 0
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: level-absorption-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: level-absorption-service
+        app.kubernetes.io/component: level-absorption-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: level-absorption
+          image: 192.168.100.252:5000/options-edge-level-absorption:dev
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: options-edge-config              # KAFKA_BOOTSTRAP_SERVERS, TOPIC_PREFIX and the runtime profile
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            # EYEBALL phase: status events on screen and NO verdict for any level. It runs after the Phase 0 freeze and BEFORE the
+            # holdout is opened, so the publication table does not exist yet. LEVEL_ABSORPTION_PUBLICATION_TABLE is therefore
+            # deliberately NOT set here (and must not be set in options-edge-config): the service REFUSES to start when it is
+            # set with the EYEBALL phase. LIVE needs it, a new decision and a deploy change.
+            - name: LEVEL_ABSORPTION_PHASE
+              value: EYEBALL
+            # The input topics are named by the service's input-contract manifest (trades = underlying.es.trades.linearized,
+            # footprint = futures.footprint.bars, auction = futures.auction, manual line = futures.level-absorption.manual-line);
+            # an override may only ADD a namespace prefix to a manifest name. On dev and production the footprint and auction
+            # topics are the es4 outputs MIRRORED under the "es." prefix (es.futures.footprint.bars, es.futures.auction; see
+            # topics.env and Jenkinsfile.es-cvd-mirror), while TOPIC_PREFIX is "" there, so those two are named in full. The trades
+            # topic (linearizer, dev+prod) and the manual-line topic carry no prefix and are left to the manifest.
+            - name: KAFKA_LEVEL_ABSORPTION_FOOTPRINT_TOPIC
+              value: es.futures.footprint.bars
+            - name: KAFKA_LEVEL_ABSORPTION_AUCTION_TOPIC
+              value: es.futures.auction
+            - name: KAFKA_LEVEL_ABSORPTION_EVENTS_TOPIC
+              value: futures.level-absorption.events      # 1 partition, delete, retention.ms=-1, retention.bytes = the retention artifact
+            - name: KAFKA_LEVEL_ABSORPTION_VOICE_TOPIC
+              value: futures.level-absorption.voice       # 1 partition, delete, 7 days
+            - name: KAFKA_LEVEL_ABSORPTION_CLOSURES_TOPIC
+              value: futures.level-absorption.closures    # 1 partition, delete, 7 days
+            - name: LEVEL_ABSORPTION_CONSUMER_GROUP
+              value: level-absorption-service
+            - name: LEVEL_ABSORPTION_SYMBOL
+              value: ES.v.0
+            # Owner-supplied files on the host, read-only (see the volumes): the Phase 0 freeze and the retention artifact.
+            # The mount path equals the host path, so the Home Directory Storage Rule check (the REAL path must lie under
+            # /home/options-edge) passes with no LEVEL_ABSORPTION_CONTAINER_PATH_PREFIX.
+            - name: LEVEL_ABSORPTION_FROZEN_CONFIGURATION
+              value: /home/options-edge/config/level-absorption/frozen-configuration.json
+            - name: LEVEL_ABSORPTION_RETENTION_ARTIFACT
+              value: /home/options-edge/config/level-absorption/retention-artifact.json
+            # The only directory the service writes (one latency-trace-YYYY-MM-DD.jsonl per day).
+            - name: LEVEL_ABSORPTION_LATENCY_TRACE_DIRECTORY
+              value: /home/options-edge/data/level-absorption/latency
+            - name: HEALTH_PORT
+              value: "8080"
+            # Operational bounds, spelled out at the code defaults (each is range-checked at start).
+            - name: LEVEL_ABSORPTION_TAPE_SILENCE_MILLIS
+              value: "30000"
+            - name: LEVEL_ABSORPTION_MAX_HELD_PRINTS
+              value: "500000"
+            - name: LEVEL_ABSORPTION_SILENT_TAPE_GRACE_MILLIS
+              value: "5000"
+            - name: LEVEL_ABSORPTION_LIVENESS_BOUND_MILLIS
+              value: "120000"
+            - name: LEVEL_ABSORPTION_LEVEL_SOURCE_MAX_AGE_MILLIS
+              value: "3600000"
+            - name: JAVA_TOOL_OPTIONS
+              value: -Xms256m -Xmx1024m
+          ports:
+            - name: health
+              containerPort: 8080
+          # The k8s readiness probe is PROCESS liveness, not market readiness (the es-compression-expansion rule, owner 2026-10-07):
+          # /health/ready is 503 until the replay has caught up and while the level-source record is older than
+          # LEVEL_ABSORPTION_LEVEL_SOURCE_MAX_AGE_MILLIS, so gating the pod on it would time out every deploy outside the session.
+          # /health/ready stays available to operators and in /metrics. /health/live is 503 when the last completed pass is
+          # older than LEVEL_ABSORPTION_LIVENESS_BOUND_MILLIS (a wedged loop), which the kubelet then restarts.
+          readinessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 200m
+              memory: 1Gi
+            limits:
+              memory: 2Gi
+          volumeMounts:
+            - name: level-absorption-config
+              mountPath: /home/options-edge/config/level-absorption
+              readOnly: true
+            - name: level-absorption-data
+              mountPath: /home/options-edge/data/level-absorption
+      volumes:
+        - name: level-absorption-config
+          hostPath:
+            path: /home/options-edge/config/level-absorption
+            type: DirectoryOrCreate
+        - name: level-absorption-data
+          hostPath:
+            path: /home/options-edge/data/level-absorption
+            type: DirectoryOrCreate
