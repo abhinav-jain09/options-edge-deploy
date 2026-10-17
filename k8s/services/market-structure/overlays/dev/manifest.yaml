@@ -43,7 +43,7 @@ spec:
             - name: MARKET_STRUCTURE_HEALTH_PORT
               value: "8080"
             - name: MARKET_STRUCTURE_PATTERNS_ENABLED
-              value: "false"
+              value: "true"
             - name: JAVA_TOOL_OPTIONS
               value: -Xms256m -Xmx640m
           envFrom:
