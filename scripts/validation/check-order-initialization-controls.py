@@ -43,6 +43,8 @@ sys.exit(0 if result.wasSuccessful() and result.testsRun==1 else 1)
 
 
 def main():
+    if not __debug__:
+        raise RuntimeError("Optimized Python is not supported for evidence generation")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
