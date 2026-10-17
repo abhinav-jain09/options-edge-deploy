@@ -52,6 +52,10 @@ pipeline {
     PLIST = "/Users/abhinav/Library/LaunchAgents/com.optionsedge.es-indicator-mirror-${(params.TARGET_SPX_CLUSTER_IP + '-' + params.TARGET_PORT + '-' + params.TOPIC).replaceAll('[^A-Za-z0-9-]', '-')}.plist"
     SRC   = "${params.SOURCE_ES_CLUSTER_IP}:${params.SOURCE_PORT}"
     TGT   = "${params.TARGET_SPX_CLUSTER_IP}:${params.TARGET_PORT}"
+    // The registries beside the brokers (INDICATOR-AVRO-CONVERSION-PLAN.md section 4): es4's on 8081, the dev and prod
+    // registries on 8082 — dev's is this Jenkins host's own (its pods reach it as host.docker.internal).
+    SRC_REGISTRY = "http://${params.SOURCE_ES_CLUSTER_IP}:8081"
+    TGT_REGISTRY = "http://${params.TARGET_SPX_CLUSTER_IP == 'host.docker.internal' ? 'localhost' : params.TARGET_SPX_CLUSTER_IP}:8082"
     // Target-only slug (no topic): the approved-legacy-topics allow-list is a property of the
     // BROKER, shared by both indicator topics mirrored to it.
     TSLUG = "${(params.TARGET_SPX_CLUSTER_IP + '-' + params.TARGET_PORT).replaceAll('[^A-Za-z0-9-]', '-')}"
@@ -180,11 +184,22 @@ pipeline {
             *) echo "FAIL: topic $TOPIC not in the indicator-mirror allow-list"; exit 1 ;;
           esac
 
+          # Kafka Serialization Rule / plan section 4: the four mirrored topics carry Confluent-framed Avro whose
+          # schema ids must resolve to the SAME schema on the target registry. Assert ids 2001-2007 are identical
+          # on source and target BEFORE any byte is copied; a differing or absent id fails the install.
+          bash scripts/kafka/assert-indicator-schema-parity.sh "$SRC_REGISTRY" "$TGT_REGISTRY"
+
           mkdir -p "$MDIR"
+          # Plan section 6 step 8: the target topic was recreated EMPTY by the cutover and the source topic holds
+          # only Avro records from its own recreate, so the copy starts at the source's offset 0 — the group is
+          # deleted (a resumed committed offset would skip the records written since the teardown) and the
+          # consumer resets to earliest. Before the cutover this was `latest` to spare the target the JSON history.
+          "$KBIN/kafka-consumer-groups" --bootstrap-server "$SRC" --delete --group "es-indicator-mirror-${TARGET_SPX_CLUSTER_IP}-${TOPIC}" 2>&1 \
+            | grep -v 'does not exist' || true
           cat > "$MDIR/consumer.properties" <<C
 bootstrap.servers=$SRC
 group.id=es-indicator-mirror-${TARGET_SPX_CLUSTER_IP}-${TOPIC}
-auto.offset.reset=latest
+auto.offset.reset=earliest
 key.deserializer=org.apache.kafka.common.serialization.ByteArrayDeserializer
 value.deserializer=org.apache.kafka.common.serialization.ByteArrayDeserializer
 C
@@ -288,6 +303,21 @@ PL
           # visible in the log next to the result it licensed.
           GRAND=$(grep -E "$JUNK_RE" "$BASE" | tr '\\n' ' ') || { rc=$?; [ "$rc" = 1 ] || { echo "FAIL: junk scan of $BASE errored (grep rc=$rc)"; exit 1; }; GRAND=""; }
           echo "grandfathered pre-existing junk topics on $TGT: ${GRAND:-<none>}"
+          # Plan section 6 step 8 gate: target end offsets equal the source's (the copy caught up from offset 0),
+          # and the newest copied value decodes as Avro under the TARGET registry's schema for its id.
+          SEND=$("$KBIN/kafka-get-offsets" --bootstrap-server "$SRC" --topic "$TOPIC" 2>/dev/null | sort)
+          for i in $(seq 1 30); do
+            TEND=$("$KBIN/kafka-get-offsets" --bootstrap-server "$TGT" --topic "$TOPIC" 2>/dev/null | sort)
+            [ "$SEND" = "$TEND" ] && break; sleep 2
+          done
+          [ "$SEND" = "$TEND" ] || { echo "FAIL: target end offsets differ from the source after 60 s: source=[$SEND] target=[$TEND]"; exit 1; }
+          echo "offsets: target end offsets equal the source's ($SEND)"
+          TOTAL=$(printf '%s\n' "$TEND" | awk -F: '{s+=$3} END {print s+0}')
+          if [ "$TOTAL" -gt 0 ]; then
+            bash scripts/kafka/decode-newest-indicator-record.sh "$TGT" "$TGT_REGISTRY" "$TOPIC" "$KBIN"
+          else
+            echo "source holds no record yet; the decode gate runs on the first record (nothing to copy)"
+          fi
           # (read twice — kafka-topics --list gives flaky counts during MM startup)
           for i in 1 2; do
             L=$("$KBIN/kafka-topics" --bootstrap-server "$TGT" --list 2>/dev/null) \

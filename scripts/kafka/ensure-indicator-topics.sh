@@ -30,8 +30,8 @@ set -euo pipefail
 PREFIX="${TOPIC_PREFIX:-}"
 DRY="${DEPLOY_DRY_RUN:-false}"
 
-kt() { kafka-topics  --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" "$@"; }
-kc() { kafka-configs --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" "$@"; }
+kt() { "${KAFKA_TOPICS_CMD:-kafka-topics}"  --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" "$@"; }
+kc() { "${KAFKA_CONFIGS_CMD:-kafka-configs}" --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" "$@"; }
 
 # topic|partitions|cleanup.policy|retention.ms — byte-for-byte the topics.env declaration.
 CONTRACT="
@@ -45,6 +45,73 @@ options.indicators.signals.events|1|delete|3888000000
 # signals.current / signals.events: SIGNALS_V1 (indicator-service spec rev 13 §3) — the same
 # producer, the same deploy path, the same two failure modes as snapshot.current/bars above; the
 # shapes are the topics.env declarations (1 partition each, exact-partition; 7 d / 45 d).
+
+# ---- --recreate: the Avro cutover (INDICATOR-AVRO-CONVERSION-PLAN.md section 5) -------------------------
+# Deletes and recreates, EMPTY, exactly the per-environment allow-list below at the shape topics.env declares,
+# applied through the same functions apply-topics.sh uses (scripts/kafka/topic-shape.lib.sh), and verifies each
+# topic's partitions, policy, retention and end offset 0. Refuses any other name. Run with indicator-service at
+# 0 replicas and after reset-indicator-state.sh (the group offsets must be 0 BEFORE the state goes).
+#   es4 (RECREATE_ENVIRONMENT=es4):  the six es.options.indicators.* source topics
+#   dev / production:                 the six options.indicators.* base topics PLUS the four es.options.indicators.*
+#                                     mirror targets, which hold retained JSON copies and are recreated empty before
+#                                     any reader of them starts
+if [ "${1:-}" = "--recreate" ]; then
+  : "${RECREATE_ENVIRONMENT:?RECREATE_ENVIRONMENT unset (dev|production|es4) — the allow-list is environment-qualified}"
+  : "${KAFKA_TOPIC_REPLICATION_FACTOR:?KAFKA_TOPIC_REPLICATION_FACTOR unset — source scripts/kafka/load-kafka-settings.sh}"
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  # shellcheck source=/dev/null
+  source "${TOPICS_ENV:-$SCRIPT_DIR/topics.env}"
+  # shellcheck source=/dev/null
+  source "$SCRIPT_DIR/topic-shape.lib.sh"
+  REPLICATION_FACTOR="$KAFKA_TOPIC_REPLICATION_FACTOR"
+  RETENTION_MS="${KAFKA_TOPIC_RETENTION_MS:-86400000}"
+  CLEANUP_POLICY="${KAFKA_TOPIC_CLEANUP_POLICY:-delete}"
+  MIN_ISR="${KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS:-1}"
+  BASE6="options.indicators.snapshot.current options.indicators.bars options.indicators.bootstrap.control options.indicators.signals.current options.indicators.signals.events options.indicators.repartition"
+  MIRROR4="es.options.indicators.snapshot.current es.options.indicators.bars es.options.indicators.signals.current es.options.indicators.signals.events"
+  case "$RECREATE_ENVIRONMENT" in
+    es4)        TOPIC_SET=es4; ENVIRONMENT=es4; ALLOW=$(printf '%s\n' $BASE6 | sed 's/^/es./' | tr '\n' ' ') ;;
+    dev)        TOPIC_SET=""; ENVIRONMENT=dev; ALLOW="$BASE6 $MIRROR4" ;;
+    production) TOPIC_SET=""; ENVIRONMENT=production; ALLOW="$BASE6 $MIRROR4" ;;
+    *) echo "FAIL: RECREATE_ENVIRONMENT must be dev, production or es4 (got '$RECREATE_ENVIRONMENT')"; exit 1 ;;
+  esac
+  export TOPIC_SET ENVIRONMENT
+  topic_shape_resolve_declarations
+  echo "=== ensure-indicator-topics --recreate: environment=$RECREATE_ENVIRONMENT on $KAFKA_BOOTSTRAP_SERVERS (dry_run=$DRY) ==="
+  echo "allow-list ($(echo $ALLOW | wc -w | tr -d ' ') topics): $ALLOW"
+  rfail=0
+  for topic in $ALLOW; do
+    parts=""
+    for entry in $OPTIONS_EDGE_TOPICS; do [ "${entry%%:*}" = "$topic" ] && parts="${entry##*:}"; done
+    if [ -z "$parts" ]; then echo "FAIL: $topic is not declared in topics.env for $RECREATE_ENVIRONMENT — refusing to recreate an undeclared topic"; rfail=1; continue; fi
+    policy="$(topic_cleanup_policy "$topic")"; retention="$(topic_retention_ms "$topic")"
+    echo "--- $topic -> partitions=$parts cleanup.policy=$policy retention.ms=$retention rf=$REPLICATION_FACTOR min.isr=$MIN_ISR"
+    if [ "$DRY" = true ]; then echo "    DEPLOY_DRY_RUN=true — not deleting, not creating."; continue; fi
+    if kt --list 2>/dev/null | grep -qxF "$topic"; then
+      kt --delete --topic "$topic"
+      wait_for_topic_absent "$topic" || { rfail=1; continue; }
+      echo "    deleted"
+    else
+      echo "    absent"
+    fi
+    create_topic "$topic" "$parts" || { echo "FAIL: create of $topic failed"; rfail=1; continue; }
+    wait_for_topic_shape "$topic" "$parts" "$REPLICATION_FACTOR" || { rfail=1; continue; }
+    alter_topic_config "$topic" "$policy" || { echo "FAIL: config of $topic failed"; rfail=1; continue; }
+    actual_parts=$(kt --describe --topic "$topic" 2>/dev/null | awk '{for (i = 1; i < NF; i++) if ($i == "PartitionCount:") { print $(i + 1); exit }}')
+    CFG=$(kc --entity-type topics --entity-name "$topic" --describe 2>&1 || true)
+    cur_policy=$(printf '%s' "$CFG" | tr ' ' '\n' | sed -n 's/^cleanup\.policy=\(.*\)$/\1/p' | head -1)
+    cur_ret=$(printf '%s' "$CFG" | tr ' ' '\n' | sed -n 's/^retention\.ms=\(.*\)$/\1/p' | head -1)
+    ends=$("${KAFKA_GET_OFFSETS_CMD:-kafka-get-offsets}" --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --topic "$topic" 2>/dev/null | awk -F: -v t="$topic" '$1 == t {print $3}' | sort -u | tr '\n' ' ')
+    if [ "$actual_parts" != "$parts" ] || [ "$cur_policy" != "$policy" ] || [ "$cur_ret" != "$retention" ] || [ "${ends% }" != "0" ]; then
+      echo "FAIL: $topic after recreate: partitions=$actual_parts policy=$cur_policy retention=$cur_ret endOffsets=[${ends% }] (declared $parts/$policy/$retention, end 0)"
+      rfail=1; continue
+    fi
+    echo "    recreated empty at the declared shape (end offset 0 on every partition)"
+  done
+  if [ "$rfail" -ne 0 ]; then echo "=== ensure-indicator-topics --recreate: FAILED ==="; exit 1; fi
+  echo "=== ensure-indicator-topics --recreate: OK ==="
+  exit 0
+fi
 
 echo "=== ensure-indicator-topics: prefix='${PREFIX}' on $KAFKA_BOOTSTRAP_SERVERS (dry_run=$DRY) ==="
 

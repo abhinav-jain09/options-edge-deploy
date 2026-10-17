@@ -36,3 +36,6 @@ scripts/ops/archive/vol-premium-open-reference-capture.py
 
 # ansible render/plan scratch (the playbook writes its plan here)
 ansible/.ansible-rendered/
+
+# fetched from the Jenkins Maven repository at deploy time (Jenkinsfile.archive-scripts-deploy), never committed
+scripts/ops/archive/options-edge-contracts.jar

@@ -132,6 +132,38 @@ is_strict_topic() { case " $OE_STRICT_TOPICS " in *" $1 "*) return 0 ;; *) retur
 OE_VOL_PREMIUM_TRANSACTIONAL_TOPICS="options.spx.vol-premium.ivrv options.spx.vol-premium.events options.spx.vol-premium.warnings options.spx.vol-premium.current options.spx.vol-premium.dlq options.spx.vol-premium.baseline"
 OE_COMMITTED_READ_TOPICS="${OE_COMMITTED_READ_TOPICS:-es.futures.footprint.strike $OE_VOL_PREMIUM_TRANSACTIONAL_TOPICS}"
 is_committed_read_topic() { case " $OE_COMMITTED_READ_TOPICS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+# Topics that are AVRO on the wire (Kafka Serialization Rule) and are captured through IndicatorArchiveReader.java,
+# which writes the console consumer's own line layout with the record decoded to the owner's JSON text — the
+# archive keeps the JSON-era line byte for byte while the topic carries Confluent-framed Avro
+# (INDICATOR-AVRO-CONVERSION-PLAN.md section 2, archiver row). Everything else in this branch is untouched.
+OE_INDICATOR_AVRO_TOPICS="${OE_INDICATOR_AVRO_TOPICS:-options.indicators.bars es.options.indicators.bars}"
+is_indicator_avro_topic() { case " $OE_INDICATOR_AVRO_TOPICS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+# The Schema Registry beside the broker being read: the plan's three registries (es4 on 8081, dev and prod on
+# 8082); OE_INDICATOR_REGISTRY_URL overrides. The reader runs under a JDK 21+ (the contracts classes need it; the
+# host's default java is 17) with the Kafka client jars, the Confluent registry client and serializer jars, and
+# the options-edge-contracts jar the archive unit ships beside this script (options-edge-contracts.jar, the version
+# scripts/ops/archive/contracts.version pins).
+indicator_registry_url() {
+  if [ -n "${OE_INDICATOR_REGISTRY_URL:-}" ]; then printf '%s' "$OE_INDICATOR_REGISTRY_URL"; return; fi
+  local host="${BOOTSTRAP%%:*}"
+  case "$host" in 192.168.100.4) printf 'http://%s:8081' "$host" ;; *) printf 'http://%s:8082' "$host" ;; esac
+}
+INDICATOR_READER="${INDICATOR_READER:-}"   # test seam: an executable taking the reader's arguments
+INDICATOR_READER_SRC="${INDICATOR_READER_SRC:-$(cd "$(dirname "$0")" && pwd)/IndicatorArchiveReader.java}"
+INDICATOR_READER_JAVA="${INDICATOR_READER_JAVA:-}"
+CONFLUENT_HOME="${CONFLUENT_HOME:-/home/confluent/confluent-8.2.1}"
+INDICATOR_CONTRACTS_JAR="${INDICATOR_CONTRACTS_JAR:-$(cd "$(dirname "$0")" && pwd)/options-edge-contracts.jar}"
+indicator_reader_classpath() {
+  printf '%s' "$KAFKA_BIN/../libs/*:$CONFLUENT_HOME/share/java/schema-registry/*:$CONFLUENT_HOME/share/java/kafka-rest-lib/kafka-avro-serializer-8.2.1.jar:$CONFLUENT_HOME/share/java/kafka-rest-lib/kafka-schema-serializer-8.2.1.jar:$CONFLUENT_HOME/share/java/confluent-common/*:$INDICATOR_CONTRACTS_JAR"
+}
+run_indicator_reader() { # <wall-clock limit s> <reader args...>
+  local limit="$1"; shift
+  if [ -n "$INDICATOR_READER" ]; then timeout "$limit" "$INDICATOR_READER" "$@"; return; fi
+  local java="${INDICATOR_READER_JAVA:-${JAVA_HOME:+$JAVA_HOME/bin/java}}"
+  [ -n "$java" ] || { [ -x /usr/lib/jvm/java-latest-openjdk/bin/java ] && java=/usr/lib/jvm/java-latest-openjdk/bin/java || java=java; }
+  [ -f "$INDICATOR_CONTRACTS_JAR" ] || { echo "FATAL: $INDICATOR_CONTRACTS_JAR missing — the archive unit ships the contracts jar beside this script" >&2; return 2; }
+  timeout "$limit" "$java" -Xmx512m -cp "$(indicator_reader_classpath)" "$INDICATOR_READER_SRC" "$@"
+}
 # THE RECORD LAYOUT OF A COMMITTED-READ FILE. The reader writes "<ts>\tPartition:<p>\tOffset:<o>\t<key>\t<value>",
 # and every committed-read topic KEEPS that Offset column. It is the record's only coordinate on the ledger, and a
 # calibration loader cannot do without it: (deploy #1041 review, engine #44) a run that publishes a file and dies
@@ -1081,6 +1113,12 @@ for topic in $TOPICS; do
       # NOTE: `consumer | gzip` reports GZIP's exit status, so a consumer that emitted zero records
       # still "succeeds". That is how the first version silently archived empty files and advanced
       # its checkpoints. Verify by COUNTING what actually landed, then commit.
+      if is_indicator_avro_topic "$topic"; then
+        run_indicator_reader 900 --bootstrap "$BOOTSTRAP" --registry "$(indicator_registry_url)" \
+             --topic "$topic" --partition "$part" --from "$from" --count "$count" --timeout-ms 60000 \
+             $(is_strict_topic "$topic" && echo "--print-offset") 2>/dev/null | grep -av '^Processed a total of' | gzip -6 > "$tmp"
+        pipe_rc=("${PIPESTATUS[@]}")
+      else
       timeout 900 "$KAFKA_BIN/kafka-console-consumer.sh" --bootstrap-server "$BOOTSTRAP" \
            --topic "$topic" --partition "$part" --offset "$from" --max-messages "$count" \
            --formatter-property print.timestamp=true \
@@ -1088,10 +1126,11 @@ for topic in $TOPICS; do
            --formatter-property print.partition=true \
            $(is_strict_topic "$topic" && echo "--formatter-property print.offset=true") \
            --timeout-ms 60000 2>/dev/null | grep -av '^Processed a total of' | gzip -6 > "$tmp"
-      # EVERY stage's status, saved at once (final review, finding 5). Keeping only the consumer's let a
-      # compressor that died mid-stream, or a failed filter, publish whatever bytes had landed. The
-      # filter's 1 means "selected no line", i.e. an empty capture, which the count check refuses anyway.
-      pipe_rc=("${PIPESTATUS[@]}")
+        # EVERY stage's status, saved at once (final review, finding 5). Keeping only the consumer's let a
+        # compressor that died mid-stream, or a failed filter, publish whatever bytes had landed. The
+        # filter's 1 means "selected no line", i.e. an empty capture, which the count check refuses anyway.
+        pipe_rc=("${PIPESTATUS[@]}")
+      fi
       consumer_rc=${pipe_rc[0]}; filter_rc=${pipe_rc[1]:-255}; gzip_rc=${pipe_rc[2]:-255}
       # The statistics helper's own status, taken BEFORE its output is parsed: `read <<< "$(helper)"`
       # returned read's status and let a failed decompression (a truncated or corrupt gzip) or a failed

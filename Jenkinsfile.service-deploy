@@ -124,6 +124,10 @@ pipeline {
       description: 'true = render + digest-pin + server-side validate only; nothing changes.')
     string(name: 'KUBECONFIG_FILE', defaultValue: '',
       description: 'Deployer kubeconfig on the Jenkins agent. Empty = oeProfile(ENVIRONMENT).kubeconfigDeployer.')
+    booleanParam(name: 'REGISTER_INDICATOR_SCHEMAS', defaultValue: false,
+      description: 'indicator-service only. true = before the rollout, register the indicator family\'s seven Avro schemas under their FIXED ids (2001-2007, subject compatibility FULL) on this environment\'s Schema Registry through scripts/kafka/ensure-indicator-schemas.sh (idempotent: a registry that already holds them is verified, a wiped one is re-imported). The schemas come from options-edge-contracts at CONTRACTS_PERMITTED_SHA, which is REQUIRED with this flag. INDICATOR-AVRO-CONVERSION-PLAN.md section 4.')
+    booleanParam(name: 'RECREATE_INDICATOR_TOPICS', defaultValue: false,
+      description: 'indicator-service only, DESTRUCTIVE, the Avro cutover (INDICATOR-AVRO-CONVERSION-PLAN.md section 5): scale indicator-service to 0, reset its consumer-group offsets on the retained input to 0, delete its state changelog, then delete and recreate EMPTY the ten indicator topics of this environment (six base topics plus the four es.* mirror targets) at the topics.env shape, verify each (partitions, policy, retention, end offset 0), and only then roll the producer. Every reader of these topics must be stopped first (the release train, section 6). DEPLOY_DRY_RUN reports and changes nothing.')
     booleanParam(name: 'FORCE_RESTART', defaultValue: false,
       description: 'false (DEFAULT). true = also roll the pods even when the manifest is UNCHANGED. Applying an identical manifest is a no-op to Kubernetes — same digest, same pod template, no new pods — so a deploy CANNOT pick up a changed Secret or ConfigMap, because those are injected as environment variables and those are fixed for the life of a container. Needed for credential rotation (docs/bleedingoptions-app-db-rotation.md), which would otherwise report a green rollout while every pod kept using the old value. Leave false for ordinary deploys: they already roll pods by changing the digest, and restarting every run would discard the no-op property that makes re-running a deploy safe.')
   }
@@ -141,6 +145,7 @@ pipeline {
     SERVICE_PARAM        = "${params.SERVICE}"
     DEPLOY_DRY_RUN_PARAM = "${params.DEPLOY_DRY_RUN}"
     FORCE_RESTART        = "${params.FORCE_RESTART}"
+    CONTRACTS_REPO       = 'git@github.com:abhinav-jain09/options-edge-contracts.git'
   }
   stages {
     // ---- Deployment Permission Rule (options-edge rule.md): Jenkins enforces the permitted commit ----
@@ -514,6 +519,81 @@ PYEOF
           export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
           . scripts/kafka/load-kafka-settings.sh
           scripts/kafka/ensure-oi-anchor-topic.sh
+        '''
+      }
+    }
+    stage('Register indicator schemas') {
+      // INDICATOR-AVRO-CONVERSION-PLAN.md section 4: the family's schemas live on every registry under the
+      // SAME fixed ids (the mirrors copy bytes, and a framed value names its schema by id). Idempotent; runs
+      // before the rollout so a producer configured with auto.register.schemas=false can start. The schema
+      // files are the contracts checkout's schemas-registry/indicators at the permitted contracts commit —
+      // the same commit the image was built against — never a copy kept in this repository.
+      when {
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'indicator-service') && params.REGISTER_INDICATOR_SCHEMAS }
+      }
+      steps {
+        script {
+          def csha = (params.CONTRACTS_PERMITTED_SHA ?: '').trim()
+          if (!(csha ==~ /[0-9a-f]{40}/)) {
+            error("REGISTER_INDICATOR_SCHEMAS=true needs CONTRACTS_PERMITTED_SHA: the full 40-character options-edge-contracts commit whose schemas-registry/indicators are registered (got '${csha}').")
+          }
+        }
+        sh '''
+          set -euo pipefail
+          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
+          rm -rf "$WORKSPACE/.jenkins-tmp/contracts" && mkdir -p "$WORKSPACE/.jenkins-tmp"
+          git clone -q "$CONTRACTS_REPO" "$WORKSPACE/.jenkins-tmp/contracts"
+          git -C "$WORKSPACE/.jenkins-tmp/contracts" checkout -q "${CONTRACTS_PERMITTED_SHA:?}"
+          git -C "$WORKSPACE/.jenkins-tmp/contracts" merge-base --is-ancestor "${CONTRACTS_PERMITTED_SHA}" origin/main \
+            || { echo "FAIL: CONTRACTS_PERMITTED_SHA ${CONTRACTS_PERMITTED_SHA} is not on options-edge-contracts main"; exit 1; }
+          # The registry this environment's pods use, from the deployed configuration (never a literal here):
+          # docker-desktop's host.docker.internal is this Jenkins host itself.
+          SR=$(kubectl -n options-edge get configmap options-edge-config -o jsonpath='{.data.SCHEMA_REGISTRY_URL}' 2>/dev/null || true)
+          : "${SR:?SCHEMA_REGISTRY_URL not readable from the options-edge-config configmap — refusing to guess the registry}"
+          SR="${SR/host.docker.internal/localhost}"
+          echo "registry for ${ENVIRONMENT}: $SR"
+          SCHEMA_REGISTRY_URL="$SR" SCHEMAS_DIR="$WORKSPACE/.jenkins-tmp/contracts/schemas-registry/indicators" \
+            DEPLOY_DRY_RUN="${DEPLOY_DRY_RUN:-false}" bash scripts/kafka/ensure-indicator-schemas.sh
+        '''
+      }
+    }
+    stage('Recreate indicator topics (Avro cutover)') {
+      // INDICATOR-AVRO-CONVERSION-PLAN.md section 5 and section 1 "State rotation at deploy", in this order:
+      // the producer at 0 replicas (its local state is an emptyDir, gone with the pod) -> its consumer-group
+      // offsets on the retained input to 0 and read back -> its changelog deleted -> the ten topics deleted
+      // and recreated EMPTY at the topics.env shape (through apply-topics.sh's own shape functions) and each
+      // verified: partitions, policy, retention and end offset 0. The rollout below then starts the Avro producer.
+      when {
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'indicator-service') && params.RECREATE_INDICATOR_TOPICS }
+      }
+      steps {
+        sh '''
+          set -euo pipefail
+          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
+          . scripts/kafka/load-kafka-settings.sh
+          export TOPIC_PREFIX
+          export DEPLOY_DRY_RUN="${DEPLOY_DRY_RUN:-false}"
+          SUFFIX=$(kubectl -n options-edge get configmap options-edge-config -o jsonpath='{.data.KAFKA_APPLICATION_ID_SUFFIX}' 2>/dev/null || true)
+          : "${SUFFIX:?KAFKA_APPLICATION_ID_SUFFIX not readable — refusing to guess the app id}"
+          export INDICATOR_APP_ID="indicator-service${SUFFIX}"
+          export INDICATOR_INPUT_TOPIC=$(kubectl -n options-edge get deployment indicator-service -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="INDICATOR_INPUT_TOPIC")].value}' 2>/dev/null || true)
+          : "${INDICATOR_INPUT_TOPIC:=underlying.spx.price}"
+          case "$ENVIRONMENT" in dev) RECREATE_ENVIRONMENT=dev ;; production) RECREATE_ENVIRONMENT=production ;; *) echo "FAIL: unknown ENVIRONMENT $ENVIRONMENT"; exit 1 ;; esac
+          export RECREATE_ENVIRONMENT
+          if [ "$DEPLOY_DRY_RUN" != true ]; then
+            kubectl -n options-edge scale deployment indicator-service --replicas=0
+            kubectl -n options-edge rollout status deployment indicator-service --timeout=180s || true
+            for _ in $(seq 1 60); do
+              n=$(kubectl -n options-edge get pods -l app.kubernetes.io/name=indicator-service --no-headers 2>/dev/null | wc -l | tr -d ' ')
+              [ "$n" = 0 ] && break; sleep 2
+            done
+            [ "$(kubectl -n options-edge get pods -l app.kubernetes.io/name=indicator-service --no-headers 2>/dev/null | wc -l | tr -d ' ')" = 0 ] \
+              || { echo "FAIL: indicator-service pods still present — the state rotation needs the producer down"; exit 1; }
+          else
+            echo "DEPLOY_DRY_RUN=true — not scaling indicator-service"
+          fi
+          bash scripts/kafka/reset-indicator-state.sh
+          bash scripts/kafka/ensure-indicator-topics.sh --recreate
         '''
       }
     }
