@@ -38,6 +38,7 @@ for i in $(seq 1 5); do
   for variant in baseline candidate; do
     taskset -c 2 java -Xms128m -Xmx512m -XX:ActiveProcessorCount=1 -XX:+UseSerialGC -cp "candidate/test-classes:$variant/classes:lib/*" com.optionsedge.processing.brokerexec.NativeCallbackPerformanceProbe >"results/native-$variant-$i.log" 2>&1
   done
+  taskset -c 2 java -Xms128m -Xmx512m -XX:ActiveProcessorCount=1 -XX:+UseSerialGC -cp 'candidate/test-classes:candidate/classes:lib/*' com.optionsedge.processing.brokerexec.NativeQueuePerformanceProbe >"results/native-queue-$i.log" 2>&1
   taskset -c 2 java -Xms128m -Xmx512m -XX:ActiveProcessorCount=1 -XX:+UseSerialGC -cp 'candidate/test-classes:candidate/classes:lib/*' com.optionsedge.processing.brokerexec.VisualOrderPerformanceProbe quotes >"results/quotes-$i.log" 2>&1
   database="visual_validation_$i"
   sudo -n docker exec "$pg_id" psql -U validation -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE $database" >/dev/null
@@ -59,7 +60,7 @@ if 'native-callback-baseline' in groups and 'native-callback-candidate' in group
 out['nativeRelativeBudgetPass']=out.get('nativeRelativeChange',float('inf'))<=0.10
 out['allNetNewBudgetsPass']=all(x.get('withinBudget',True) for v in groups.values() for x in v)
 (p/'summary.json').write_text(json.dumps(out,indent=2)+'\n');print(json.dumps(out['medians']));print('allNetNewBudgetsPass',out['allNetNewBudgetsPass'])
-assert set(groups)=={'native-callback-baseline','native-callback-candidate','quote-book','journal-postgres','model-geometry','model-history-page'},'Every declared probe must run'
+assert set(groups)=={'native-callback-baseline','native-callback-candidate','native-adapter-queue','quote-book','journal-postgres','model-geometry','model-history-page'},'Every declared probe must run'
 assert all(len(v)==5 for v in groups.values()),'Five repeated commands required for each scenario'
 assert out['allNetNewBudgetsPass'],'A declared net-new budget failed'
 assert out['nativeRelativeBudgetPass'],'Native callback median regressed by more than 10 percent'
