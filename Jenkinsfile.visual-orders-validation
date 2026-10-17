@@ -11,6 +11,7 @@ pipeline {
   stages {
     stage('Exact test source guard') {
       steps {
+        dir('validation-results') { deleteDir() }
         script {
           for (value in [params.TEST_INFRA_SHA,params.CANDIDATE_SHA,params.BASELINE_SHA,params.WEB_SHA]) {
             if (!(value ==~ /[0-9a-f]{40}/)) { error('All validation SHAs must be full immutable commit IDs') }

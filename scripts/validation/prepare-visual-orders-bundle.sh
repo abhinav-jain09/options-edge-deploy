@@ -49,8 +49,16 @@ rsync -a --delete validation-candidate/broker-execution-service/target/classes/ 
 rsync -a --delete validation-candidate/broker-execution-service/target/test-classes/ bundle/candidate/test-classes/
 rsync -a --delete validation-baseline/broker-execution-service/target/classes/ bundle/baseline/classes/
 cp validation-web/src/app/web/assets/context-tape-orders-model.js bundle/web/
-cp scripts/validation/run-visual-orders-es4.sh scripts/validation/visual-orders-model-probe.cjs bundle/scripts/validation/
+git -C validation-web fetch --depth=512 origin main:refs/remotes/origin/main
+web_baseline="$(git -C validation-web merge-base HEAD origin/main)"
+mkdir -p bundle/web/{baseline,candidate}
+for asset in context-tape-orders-model.js context-tape-orders-overlay.js context-tape-orders.css; do
+  cp "validation-web/src/app/web/assets/$asset" "bundle/web/candidate/$asset"
+  git -C validation-web show "$web_baseline:src/app/web/assets/$asset" > "bundle/web/baseline/$asset"
+done
+cp scripts/validation/run-visual-orders-es4.sh scripts/validation/visual-orders-model-probe.cjs scripts/validation/linked-exits-browser-probe.cjs scripts/validation/headless-overlay-session.cjs bundle/scripts/validation/
 {
   printf 'infrastructure=%s\ncandidate=%s\nbaseline=%s\nweb=%s\n' "$(git rev-parse HEAD)" "$CANDIDATE_SHA" "$BASELINE_SHA" "$WEB_SHA"
+  printf 'webBaseline=%s\n' "$web_baseline"
   shasum -a 256 bundle/lib/*.jar
 } > bundle/source-identities.txt
