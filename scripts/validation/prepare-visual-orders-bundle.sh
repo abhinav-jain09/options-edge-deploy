@@ -56,7 +56,7 @@ for asset in context-tape-orders-model.js context-tape-orders-overlay.js context
   cp "validation-web/src/app/web/assets/$asset" "bundle/web/candidate/$asset"
   git -C validation-web show "$web_baseline:src/app/web/assets/$asset" > "bundle/web/baseline/$asset"
 done
-cp scripts/validation/run-visual-orders-es4.sh scripts/validation/visual-orders-model-probe.cjs scripts/validation/linked-exits-browser-probe.cjs bundle/scripts/validation/
+cp scripts/validation/run-visual-orders-es4.sh scripts/validation/visual-orders-model-probe.cjs scripts/validation/linked-exits-browser-probe.cjs scripts/validation/headless-overlay-session.cjs bundle/scripts/validation/
 {
   printf 'infrastructure=%s\ncandidate=%s\nbaseline=%s\nweb=%s\n' "$(git rev-parse HEAD)" "$CANDIDATE_SHA" "$BASELINE_SHA" "$WEB_SHA"
   printf 'webBaseline=%s\n' "$web_baseline"
