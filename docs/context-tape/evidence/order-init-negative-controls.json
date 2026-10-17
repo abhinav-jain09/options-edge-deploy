@@ -18,7 +18,7 @@
     "positivePassed": true,
     "removedMechanismRejected": true,
     "effectRoutes": "unit-test urlopen and subprocess barrier active",
-    "test": "test_schema_mismatch_and_registry_failure_are_not_absence"
+    "test": "test_registry_namespace_rendering_uses_read_only_lookup_of_latest_identity"
   },
   {
     "control": "source guards",

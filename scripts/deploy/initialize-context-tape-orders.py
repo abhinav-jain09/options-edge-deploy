@@ -141,7 +141,21 @@ class Initializer:
             require(self.fixture_history(topic), 'fixture recovery history changed')
             self.fixture_pending = True
             return False
-        require(json.loads(value['schema']) == self.schemas[topic], 'existing schema differs from canonical contract: ' + topic)
+        if json.loads(value['schema']) != self.schemas[topic]:
+            # Registry Avro rendering can omit a redundant inherited namespace.
+            # Use its official read-only lookup; never normalize/reimplement Avro here.
+            request = urllib.request.Request(self.registry + '/subjects/' + topic + '-value',
+                data=json.dumps({'schemaType': 'AVRO', 'schema': json.dumps(self.schemas[topic])}).encode(),
+                headers={'Content-Type': 'application/vnd.schemaregistry.v1+json'}, method='POST')
+            try:
+                with urllib.request.urlopen(request, timeout=15) as response:
+                    canonical = json.load(response)
+            except urllib.error.HTTPError as error:
+                raise RuntimeError('existing schema differs from canonical contract or identity lookup unavailable: ' + topic) from error
+            require(type(value.get('id')) is int and value['id'] > 0 and type(value.get('version')) is int
+                    and value['version'] > 0 and canonical.get('subject') == topic + '-value'
+                    and canonical.get('id') == value['id'] and canonical.get('version') == value['version'],
+                    'existing schema differs from canonical contract: ' + topic)
         return True
 
     def fixture_value(self, topic, value):

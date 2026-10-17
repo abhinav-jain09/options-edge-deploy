@@ -251,6 +251,31 @@ class InitializationTest(unittest.TestCase):
         with patch.object(MODULE.urllib.request, 'urlopen', return_value=Response({'schema': json.dumps(SCHEMAS[MODULE.TOPICS[0]])})):
             self.assertTrue(MODULE.Initializer.schema(fixture, MODULE.TOPICS[0]))
 
+    def test_registry_namespace_rendering_uses_read_only_lookup_of_latest_identity(self):
+        canonical = {'type': 'record', 'name': 'Root', 'namespace': 'example', 'fields': [
+            {'name': 'child', 'type': {'type': 'record', 'name': 'Child', 'namespace': 'example', 'fields': []}}]}
+        rendered = json.loads(json.dumps(canonical))
+        del rendered['fields'][0]['type']['namespace']
+        initializer = MODULE.Initializer('dev', {MODULE.TOPICS[0]: canonical})
+        latest = {'id': 99, 'version': 2, 'schema': json.dumps(rendered)}
+        lookup = {'subject': MODULE.TOPICS[0]+'-value', 'id': 99, 'version': 2}
+        calls = []
+        def registry(request, timeout):
+            if isinstance(request, str):
+                return Response(latest)
+            calls.append((request.get_method(), request.full_url))
+            self.assertEqual(canonical, json.loads(json.loads(request.data)['schema']))
+            return Response(lookup)
+        with patch.object(MODULE.urllib.request, 'urlopen', side_effect=registry):
+            self.assertTrue(initializer.schema(MODULE.TOPICS[0]))
+            self.assertEqual([('POST', initializer.registry+'/subjects/'+MODULE.TOPICS[0]+'-value')], calls)
+            lookup['id'] = 98
+            with self.assertRaisesRegex(RuntimeError, 'differs from canonical'):
+                initializer.schema(MODULE.TOPICS[0])
+            lookup['id'], lookup['version'] = 99, 1
+            with self.assertRaisesRegex(RuntimeError, 'differs from canonical'):
+                initializer.schema(MODULE.TOPICS[0])
+
     def test_fixture_recovery_is_exact_dev_only_and_never_permanent(self):
         value = {'subject': MODULE.TOPICS[0]+'-value', 'version': 1, 'id': 32,
                  'schema': json.dumps({'type': 'record', 'name': 'Order0', 'fields': []})}
