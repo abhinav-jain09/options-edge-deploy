@@ -4,7 +4,8 @@
 # Turn ARBITRATION back on only once the web grows that consumer (gateway #169).
 # PROD gate (gamma), gateway half — mirrors k8s/overlays/dev/ibkr-preopen-gateway-dev-patch.yaml.
 #
-# Lets the gateway relay the pre-open status stream (options.ibkr.gex.status) to the UI, which is
+# Lets the gateway relay the pre-open status stream (options.ibkr.gex.status.v2, Avro since the
+# 2026-10-18 cutover) to the UI, which is
 # what drives the per-strike FRESH/STALE/GATED states and the D12++ SWITCHING/LIVE chips. Without
 # it the gex values would reach the board with no status plane: the UI could not tell a modelled
 # pre-open number from a live one, which is precisely the mislabelling the dev gate refused to ship.
