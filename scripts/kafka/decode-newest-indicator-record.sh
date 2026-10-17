@@ -9,7 +9,7 @@ fail=0
 # the partition count from broker metadata, and one end-offset row for every partition 0..N-1 exactly once —
 # an empty, short or malformed kafka-get-offsets answer is a failure, never "nothing to decode"
 PARTS=$("${KAFKA_TOPICS_CMD:-$KBIN/kafka-topics}" --bootstrap-server "$BS" --describe --topic "$TOPIC" 2>/dev/null \
-  | awk '{for (i = 1; i < NF; i++) if ($i == "PartitionCount:") { print $(i + 1); exit }}')
+  | awk '!done { for (i = 1; i < NF; i++) if ($i == "PartitionCount:") { print $(i + 1); done = 1 } }')
 case "$PARTS" in ''|*[!0-9]*|0) echo "FAIL: cannot read the partition count of $TOPIC on $BS (got '$PARTS')"; exit 1 ;; esac
 OFFSETS=$("${KAFKA_GET_OFFSETS_CMD:-$KBIN/kafka-get-offsets}" --bootstrap-server "$BS" --topic "$TOPIC" 2>/dev/null) \
   || { echo "FAIL: kafka-get-offsets failed for $TOPIC on $BS"; exit 1; }
