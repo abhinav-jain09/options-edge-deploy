@@ -7,7 +7,7 @@ try{
  for(const variant of ['baseline','candidate'])for(const feature of [false,true]){
   if(variant==='baseline'&&feature)continue;
   const source=path.join(process.argv[2],variant),inline=name=>fs.readFileSync(path.join(source,name),'utf8').replace(/<\/script/gi,'<\\/script');
-  const html=`<!doctype html><meta charset="utf-8"><style>${inline('context-tape-orders.css')}</style><div id="chart" style="position:relative;width:1200px;height:620px"></div><pre id="result"></pre><script>${inline('context-tape-orders-model.js')}</script><script>${inline('context-tape-orders-overlay.js')}</script><script>
+  const html=`<!doctype html><meta charset="utf-8"><style>${inline('context-tape-orders.css')}</style><div id="chart" style="position:relative;width:1200px;height:620px"></div><pre id="result"></pre><script>window.addEventListener('error',event=>{document.querySelector('#result').textContent=JSON.stringify({error:event.message});});</script><script>${inline('context-tape-orders-model.js')}</script><script>${inline('context-tape-orders-overlay.js')}</script><script>
  let callback;window.requestAnimationFrame=f=>{callback=f;return 1;};window.cancelAnimationFrame=()=>{};
  const chart=document.querySelector('#chart'),overlay=ContextTapeOrdersOverlay.mount(chart),g={left:0,right:1000,top:0,bottom:600,priceTop:7800,priceBottom:7500,y:p=>(7800-p)*2};
  const feature=${feature},items=Array.from({length:16},(_,i)=>({id:'position:trade-'+i,geometry:{strategy:'bearcall',strike:7550+i*10,wing:10},locked:true,...(feature?{visual:i%3===0?'closing':'filled',status:'Stop loss closing',exits:{stopLevel:String(7570+i*10),profitLevel:String(7540+i*10)},linkedPlan:{trigger:{purpose:'STOP'}}}:{})}));
@@ -20,6 +20,6 @@ try{
   const file=path.join(dir,variant+'-'+feature+'.html');fs.writeFileSync(file,html);
   const result=spawnSync('/usr/bin/google-chrome',['--headless=new','--no-sandbox','--disable-gpu','--disable-background-networking','--host-resolver-rules=MAP * ~NOTFOUND','--no-proxy-server','--user-data-dir='+path.join(dir,variant+'-'+feature), '--dump-dom',pathToFileURL(file).href],{encoding:'utf8',timeout:60000,maxBuffer:2*1024*1024});
   if(result.error||result.status!==0)throw Error('Browser probe failed: '+(result.error?.message||result.stderr));
-  const raw=/<pre id="result">([^<]+)<\/pre>/.exec(result.stdout);if(!raw)throw Error('No completed browser measurement');const row=JSON.parse(raw[1].replace(/&quot;/g,'"').replace(/&amp;/g,'&'));console.log('VISUAL_PROBE '+JSON.stringify(row));if(!row.withinBudget)throw Error('Overlay latency or semantic fixture failed');
+  const raw=/<pre id="result">([^<]+)<\/pre>/.exec(result.stdout);if(!raw){fs.writeFileSync(path.join(process.cwd(),'results','linked-browser-failure.html'),result.stdout);throw Error('No completed browser measurement: '+result.stdout.slice(-1800));}const row=JSON.parse(raw[1].replace(/&quot;/g,'"').replace(/&amp;/g,'&'));if(row.error)throw Error('Browser fixture: '+row.error);console.log('VISUAL_PROBE '+JSON.stringify(row));if(!row.withinBudget)throw Error('Overlay latency or semantic fixture failed');
  }
 }finally{fs.rmSync(dir,{recursive:true,force:true});}
