@@ -45,7 +45,6 @@ spec:
         - name: KAFKA_LADDER_PATH_PREOPEN_TOPIC
           value: options.databento.gex.strike.preopen
         - name: KAFKA_LADDER_PATH_OI_STATUS_TOPIC
-          # .v2 is the AVRO topic; the rename IS the JSON-to-Avro cutover.
           value: options.databento.gex.oi-status.v2
         - name: KAFKA_LADDER_PATH_SPOT_TOPIC
           value: underlying.spx.price
