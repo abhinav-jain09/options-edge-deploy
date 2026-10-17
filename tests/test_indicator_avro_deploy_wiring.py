@@ -115,18 +115,18 @@ class IndicatorAvroDeployWiring(unittest.TestCase):
         stage = t[t.index("git clone git@github.com:abhinav-jain09/options-edge-contracts.git .jenkins-tmp/contracts"):]
         order = ["git -C .jenkins-tmp/contracts checkout main",
                  "PERMITTED_SHA=\"${CONTRACTS_PERMITTED_SHA:-}\" bash scripts/jenkins/permitted-sha-guard.sh --dir .jenkins-tmp/contracts --ref main",
-                 "[ \"$CV\" = 0.18.0 ]",
+                 "[ \"$CV\" = 0.19.0 ]",
                  "PERMITTED_SHA=\"${CONTRACTS_PERMITTED_SHA:?}\" bash scripts/jenkins/verify-permitted-tree.sh --dir .jenkins-tmp/contracts'",
                  "sh 'mvn -B -q -ntp -f .jenkins-tmp/contracts/pom.xml -DskipTests package'",
                  "verify-permitted-tree.sh --dir .jenkins-tmp/contracts --allow-ignored target'",
-                 "sh 'scp -o BatchMode=yes .jenkins-tmp/contracts/target/options-edge-contracts-0.18.0.jar \"${PROD_HOST}:${STAGE_DIR}/options-edge-contracts.jar\"'",
+                 "sh 'scp -o BatchMode=yes .jenkins-tmp/contracts/target/options-edge-contracts-0.19.0.jar \"${PROD_HOST}:${STAGE_DIR}/options-edge-contracts.jar\"'",
                  "sh 'scp -o BatchMode=yes scripts/ops/archive/oe-archive-kafka.sh"]
         at = -1
         for token in order:
             nxt = stage.index(token)
             self.assertGreater(nxt, at, token)
             at = nxt
-        self.assertEqual((ROOT / "scripts/ops/archive/contracts.version").read_text().strip(), "0.18.0", "the literal jar the job ships")
+        self.assertEqual((ROOT / "scripts/ops/archive/contracts.version").read_text().strip(), "0.19.0", "the literal jar the job ships")
         self.assertIn("UNIT='$UNIT $SIDECAR'", t, "the host installs, records and verifies the jar with the unit")
         self.assertNotIn(".m2/repository", t, "never a cached jar")
         arch = (ROOT / "scripts/ops/archive/oe-archive-kafka.sh").read_text()
