@@ -230,6 +230,9 @@ pipeline {
           sh 'PERMITTED_SHA="${CONTRACTS_PERMITTED_SHA:-}" bash scripts/jenkins/permitted-sha-guard.sh --dir .jenkins-tmp/contracts --ref main'
         }
         sh 'ls .jenkins-tmp/contracts/schemas-registry/indicators/*.avsc'
+        // the target's parents exist before the ship: rsync does not create nested parents (es4-deploy #781 failed
+        // on a fresh box with "mkdir .../schemas-registry/indicators failed: No such file or directory")
+        sh 'ssh -o BatchMode=yes "${ES4_HOST}" mkdir -p /home/es4/repo/schemas-registry/indicators'
         // rule 9b: the ship is a DEDICATED rsync of the verified contracts tree, nothing between the verify and it
         timeout(time: 10, unit: 'MINUTES') {
           sh 'PERMITTED_SHA="${CONTRACTS_PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir .jenkins-tmp/contracts'
@@ -326,6 +329,14 @@ pipeline {
     stage('Deploy to es4') {
       when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.ACTION == 'deploy-service' || params.ACTION == 'deploy-all') } }
       steps {
+        // The on-box scripts this path runs over ssh (the indicator state rotation and recreate, plan section 5) are
+        // the committed scripts/ tree: ship it first, as the create-topics path does — a dedicated rsync right after
+        // the verify of the tree it ships (Deployment Permission Rule, validator rule 9b). es4-deploy #783 ran the
+        // rotation against a box that had never received the new kafka scripts.
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp'
+        }
+        sh 'rsync -az --delete scripts/ "${ES4_HOST}:/home/es4/repo/scripts/"'
         sh '''
           set -euo pipefail
           export KUBECONFIG="$ES4_KUBECONFIG"
@@ -358,10 +369,14 @@ pipeline {
               [ "$(kubectl -n options-edge get pods -l app.kubernetes.io/name=indicator-service --no-headers 2>/dev/null | wc -l | tr -d ' ')" = 0 ] \
                 || { echo "FAIL: indicator-service pods still present on es4 — the state rotation needs the producer down"; exit 1; }
             fi
-            SUFFIX=$(kubectl -n options-edge get configmap options-edge-config -o jsonpath='{.data.KAFKA_APPLICATION_ID_SUFFIX}' 2>/dev/null || true)
-            : "${SUFFIX:?KAFKA_APPLICATION_ID_SUFFIX not readable on es4 — refusing to guess the app id}"
-            ssh -o BatchMode=yes "$ES4_HOST" "set -e; cd /home/es4/repo; export PATH=/opt/kafka/current/bin:\$PATH; \
-              export KAFKA_BOOTSTRAP_SERVERS=localhost:9092 INDICATOR_APP_ID=indicator-service${SUFFIX} INDICATOR_INPUT_TOPIC=es.underlying.es.trades \
+            # es4's Streams applications take their application.id suffix from the es4-common-env configmap
+            # (k8s/es4/es4-common-env.yaml: KAFKA_APPLICATION_ID_SUFFIX "-es4"), not from options-edge-config
+            SUFFIX=$(kubectl -n options-edge get configmap es4-common-env -o jsonpath='{.data.KAFKA_APPLICATION_ID_SUFFIX}' 2>/dev/null || true)
+            : "${SUFFIX:?KAFKA_APPLICATION_ID_SUFFIX not readable from es4-common-env on es4 — refusing to guess the app id}"
+            # the Kafka CLI is not installed on the es4 host: scripts/es4/kafka-cli-shim proxies each CLI into the
+            # es4-kafka container (as create-es-topics.sh does), whose in-container listener is localhost:29092
+            ssh -o BatchMode=yes "$ES4_HOST" "set -e; cd /home/es4/repo; export PATH=/home/es4/repo/scripts/es4/kafka-cli-shim:\$PATH; \
+              export KAFKA_BOOTSTRAP_SERVERS=localhost:29092 INDICATOR_APP_ID=indicator-service${SUFFIX} INDICATOR_INPUT_TOPIC=es.underlying.es.trades \
                      DEPLOY_DRY_RUN=${DEPLOY_DRY_RUN:-false} RECREATE_ENVIRONMENT=es4 TOPIC_PREFIX=es. \
                      KAFKA_TOPIC_REPLICATION_FACTOR=1 KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS=1 KAFKA_TOPIC_RETENTION_MS=86400000; \
               bash scripts/kafka/reset-indicator-state.sh && bash scripts/kafka/ensure-indicator-topics.sh --recreate"
