@@ -65,6 +65,7 @@ import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.record.TimestampType;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
+import org.apache.kafka.common.serialization.Deserializer;
 
 public class StrikeArchiveReader {
 
@@ -78,7 +79,7 @@ public class StrikeArchiveReader {
     }
 
     static final class Opts {
-        String bootstrap, topic, out, summary, markGroup, markMetadata = "";
+        String bootstrap, topic, out, summary, markGroup, canonicalRegistry, markMetadata = "";
         int partition = -1;
         long from = -1, maxEnd = -1, markOffset = -1, deadlineMs = 900_000, pollMs = 500;
     }
@@ -102,22 +103,43 @@ public class StrikeArchiveReader {
         p.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, ByteArrayDeserializer.class.getName());
         p.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, ByteArrayDeserializer.class.getName());
         p.put(ConsumerConfig.CLIENT_ID_CONFIG, "oe-strike-archive-reader");
+        if (o.canonicalRegistry != null && o.markGroup == null) {
+            p.put(ConsumerConfig.ALLOW_AUTO_CREATE_TOPICS_CONFIG, "false");
+            p.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, "1");
+            p.put(ConsumerConfig.FETCH_MAX_BYTES_CONFIG, "8388608");
+            p.put(ConsumerConfig.MAX_PARTITION_FETCH_BYTES_CONFIG, "8388608");
+        }
         if (o.markGroup != null) {
             p.put(ConsumerConfig.GROUP_ID_CONFIG, o.markGroup);
         }
         TopicPartition tp = new TopicPartition(o.topic, o.partition);
-        try (KafkaConsumer<byte[], byte[]> c = new KafkaConsumer<>(p)) {
+        try (Deserializer<byte[]> decoder = canonicalDecoder(o);
+             KafkaConsumer<byte[], byte[]> c = new KafkaConsumer<>(p)) {
             c.assign(Collections.singletonList(tp));
             if (o.markGroup != null) {
                 return mark(c, tp, o, s);
             }
-            return capture(c, tp, o, s);
+            return capture(c, tp, o, s, decoder);
         } catch (Exception e) {
             return s.finish("FAILED", EXIT_FAILED, e.getClass().getSimpleName() + ": " + e.getMessage());
         }
     }
 
+    // The raw reader remains source-launchable with Java 17 and only the Kafka CLI jars.
+    // The optional helper is compiled against the canonical SDK and loaded on JDK 21+.
+    @SuppressWarnings("unchecked")
+    static Deserializer<byte[]> canonicalDecoder(Opts o) throws Exception {
+        if (o.markGroup != null || o.canonicalRegistry == null) return null;
+        return (Deserializer<byte[]>) Class.forName("CanonicalArchiveDecoder")
+                .getConstructor(String.class, String.class).newInstance(o.topic, o.canonicalRegistry);
+    }
+
     static int capture(KafkaConsumer<byte[], byte[]> c, TopicPartition tp, Opts o, Summary s) throws IOException {
+        return capture(c, tp, o, s, null);
+    }
+
+    static int capture(KafkaConsumer<byte[], byte[]> c, TopicPartition tp, Opts o, Summary s,
+                       Deserializer<byte[]> decoder) throws IOException {
         long deadline = s.t0 + o.deadlineMs;
         Map<TopicPartition, Long> ends = c.endOffsets(Collections.singletonList(tp), remaining(deadline));
         Long lso = ends.get(tp);
@@ -145,7 +167,7 @@ public class StrikeArchiveReader {
                         if (r.offset() < o.from || r.offset() >= s.boundary) {
                             continue;   // past the boundary: read again next run, never written now
                         }
-                        writeRecord(out, r, s);
+                        writeRecord(out, r, s, decoder);
                     }
                 }
             }
@@ -170,6 +192,14 @@ public class StrikeArchiveReader {
     }
 
     static void writeRecord(OutputStream out, ConsumerRecord<byte[], byte[]> r, Summary s) throws IOException {
+        writeRecord(out, r, s, null);
+    }
+
+    static void writeRecord(OutputStream out, ConsumerRecord<byte[], byte[]> r, Summary s,
+                            Deserializer<byte[]> decoder) throws IOException {
+        // Decode before writing a prefix: a malformed frame cannot leave a partial line or
+        // advance the successful record count. Capture failure never publishes a checkpoint.
+        byte[] value = decoder == null ? r.value() : decoder.deserialize(r.topic(), r.headers(), r.value());
         StringBuilder head = new StringBuilder(64);
         if (r.timestampType() == TimestampType.NO_TIMESTAMP_TYPE) {
             head.append("NO_TIMESTAMP");
@@ -180,7 +210,7 @@ public class StrikeArchiveReader {
         out.write(head.toString().getBytes(StandardCharsets.US_ASCII));
         boolean escaped = writeField(out, r.key());
         out.write('\t');
-        escaped |= writeField(out, r.value());
+        escaped |= writeField(out, value);
         out.write('\n');
         s.records++;
         if (escaped) {
@@ -258,6 +288,9 @@ public class StrikeArchiveReader {
             String v = a[++i];
             switch (k) {
                 case "--bootstrap": o.bootstrap = v; break;
+                case "--canonical-registry":
+                    if (v.isBlank()) throw new IllegalArgumentException("blank canonical registry");
+                    o.canonicalRegistry = v; break;
                 case "--topic": o.topic = v; break;
                 case "--partition": o.partition = Integer.parseInt(v); break;
                 case "--from": o.from = Long.parseLong(v); break;

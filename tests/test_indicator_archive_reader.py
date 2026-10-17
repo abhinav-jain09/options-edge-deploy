@@ -3,7 +3,7 @@ byte-identical to the JSON-era archive line of the same record; a value that is 
 
 Needs a JDK 21+ and the reader's classpath (Kafka clients, Avro, the Confluent serializer and registry client, and
 the options-edge-contracts jar): set OE_INDICATOR_READER_CP to it (and OE_INDICATOR_READER_JAVA to the java binary),
-otherwise it is resolved from the local Maven repository at the pinned contracts version; a machine without either FAILS
+an explicit classpath from the guarded latest-main checkout is required; a machine without it FAILS
 this test (the archive's release boundary is never skipped)."""
 from __future__ import annotations
 
@@ -20,24 +20,11 @@ JAVA = os.environ.get("OE_INDICATOR_READER_JAVA", "java")
 
 
 def reader_classpath() -> str:
-    """OE_INDICATOR_READER_CP, or the classpath of the contracts artifact the unit pins (scripts/ops/archive/contracts.version)
-    resolved from the local Maven repository: the jar plus its runtime dependencies (Kafka clients, Avro, the Confluent
-    serializer and registry client). A missing artifact or a failed resolution FAILS the test — this is the archive's
-    release boundary, never a skip."""
+    """Use the classpath from the exact guarded latest-main build, never guess a cached release."""
     cp = os.environ.get("OE_INDICATOR_READER_CP")
-    if cp:
-        return cp
-    version = (ROOT / "scripts/ops/archive/contracts.version").read_text().strip()
-    m2 = Path(os.environ.get("MAVEN_REPO", Path.home() / ".m2/repository")) / "com/optionsedge/options-edge-contracts" / version
-    jar, pom = m2 / f"options-edge-contracts-{version}.jar", m2 / f"options-edge-contracts-{version}.pom"
-    if not jar.is_file() or not pom.is_file():
-        raise AssertionError(f"options-edge-contracts {version} is not in the local Maven repository ({m2}); install it (mvn install on the contracts checkout at the permitted commit)")
-    out = Path(tempfile.mkdtemp()) / "cp.txt"
-    r = subprocess.run(["mvn", "-o", "-q", "-f", str(pom), "dependency:build-classpath", "-Dmdep.includeScope=runtime",
-                        f"-Dmdep.outputFile={out}"], capture_output=True, text=True)
-    if r.returncode != 0 or not out.is_file():
-        raise AssertionError("cannot resolve the contracts runtime classpath offline: " + (r.stdout + r.stderr)[-1500:])
-    return str(jar) + os.pathsep + out.read_text().strip()
+    if not cp:
+        raise AssertionError("OE_INDICATOR_READER_CP from the guarded latest-main contracts checkout is required")
+    return cp
 
 
 CP = None

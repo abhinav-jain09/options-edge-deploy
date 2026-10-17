@@ -108,27 +108,30 @@ class IndicatorAvroDeployWiring(unittest.TestCase):
         unit = re.search(r'UNIT\s*=\s*"([^"]*)"', t).group(1).split()
         self.assertIn("IndicatorArchiveReader.java", unit)
         self.assertNotIn("options-edge-contracts.jar", unit, "the jar is not a committed file: it is the SIDECAR")
-        self.assertIn('SIDECAR     = "options-edge-contracts.jar"', t)
+        self.assertIn('SIDECAR     = "options-edge-contracts.jar canonical-archive-reader.jar"', t)
         self.assertIn("scripts/ops/archive/IndicatorArchiveReader.java", t)
         # the jar is BUILT from the permitted contracts commit: nested acquisition, its guard as the next statement,
         # a verify immediately before the package effect, a verify (target allowed) immediately before the ship
         stage = t[t.index("git clone git@github.com:abhinav-jain09/options-edge-contracts.git .jenkins-tmp/contracts"):]
         order = ["git -C .jenkins-tmp/contracts checkout main",
                  "PERMITTED_SHA=\"${CONTRACTS_PERMITTED_SHA:-}\" bash scripts/jenkins/permitted-sha-guard.sh --dir .jenkins-tmp/contracts --ref main",
-                 "[ \"$CV\" = 0.19.0 ]",
+                 "latest-main",
                  "PERMITTED_SHA=\"${CONTRACTS_PERMITTED_SHA:?}\" bash scripts/jenkins/verify-permitted-tree.sh --dir .jenkins-tmp/contracts'",
                  "sh 'mvn -B -q -ntp -f .jenkins-tmp/contracts/pom.xml -DskipTests package'",
                  "verify-permitted-tree.sh --dir .jenkins-tmp/contracts --allow-ignored target'",
-                 "sh 'scp -o BatchMode=yes .jenkins-tmp/contracts/target/options-edge-contracts-0.19.0.jar \"${PROD_HOST}:${STAGE_DIR}/options-edge-contracts.jar\"'",
+                 "sh 'scp -o BatchMode=yes .jenkins-tmp/contracts/target/options-edge-contracts-archive.jar \"${PROD_HOST}:${STAGE_DIR}/options-edge-contracts.jar\"'",
                  "sh 'scp -o BatchMode=yes scripts/ops/archive/oe-archive-kafka.sh"]
         at = -1
         for token in order:
             nxt = stage.index(token)
             self.assertGreater(nxt, at, token)
             at = nxt
-        self.assertEqual((ROOT / "scripts/ops/archive/contracts.version").read_text().strip(), "0.19.0", "the literal jar the job ships")
+        self.assertEqual((ROOT / "scripts/ops/archive/contracts.version").read_text().strip(), "latest-main", "the guarded main POM determines the coordinate")
         self.assertIn("UNIT='$UNIT $SIDECAR'", t, "the host installs, records and verifies the jar with the unit")
         self.assertNotIn(".m2/repository", t, "never a cached jar")
+        self.assertLess(t.index("stage('Build canonical archive helper')"), t.index("stage('Check the host has not drifted')"))
+        self.assertIn('ARCHIVE_CONTRACTS_VERSION = readFile(', t)
+        self.assertIn('canonical-archive-reader.jar', t)
         arch = (ROOT / "scripts/ops/archive/oe-archive-kafka.sh").read_text()
         self.assertIn('OE_INDICATOR_AVRO_TOPICS="${OE_INDICATOR_AVRO_TOPICS:-options.indicators.bars es.options.indicators.bars}"', arch)
         self.assertLess(arch.index("if is_indicator_avro_topic \"$topic\"; then"), arch.index('kafka-console-consumer.sh" --bootstrap-server "$BOOTSTRAP" \\\n           --topic "$topic" --partition "$part" --offset "$from"'))

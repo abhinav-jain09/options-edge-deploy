@@ -1191,6 +1191,20 @@ class ActualJenkinsfileMutationTest(unittest.TestCase):
             self.assertEqual(r.returncode, 1, name + r.stdout)
             self.assertIn("no dedicated verify-permitted-tree step immediately precedes it", r.stdout, name)
 
+    def test_archive_ship_guards_independent_of_other_jobs(self) -> None:
+        name = "Jenkinsfile.archive-scripts-deploy"
+        eff = "        sh 'scp -o BatchMode=yes scripts/ops/archive/"
+        r = self._validate_mutated(name, eff, "        sh 'scp -o BatchMode=yes \"$EXTRA\" scripts/ops/archive/")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("every scp source must be a literal path", r.stdout)
+        t = (ROOT / name).read_text()
+        i = t.index(eff)
+        j = t.rindex("timeout(time: 10, unit: 'MINUTES') {", 0, i)
+        j = t.rindex("\n", 0, j) + 1
+        r = self._validate_mutated(name, t[j:i] + eff, eff)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("no dedicated verify-permitted-tree step immediately precedes it", r.stdout)
+
     def test_the_archive_ship_is_exactly_the_unit(self) -> None:
         t = (ROOT / "Jenkinsfile.archive-scripts-deploy").read_text()
         unit = re.search(r'^    UNIT\s*=\s*"([^"]*)"', t, re.M).group(1).split()
