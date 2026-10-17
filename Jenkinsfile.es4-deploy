@@ -329,6 +329,14 @@ pipeline {
     stage('Deploy to es4') {
       when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.ACTION == 'deploy-service' || params.ACTION == 'deploy-all') } }
       steps {
+        // The on-box scripts this path runs over ssh (the indicator state rotation and recreate, plan section 5) are
+        // the committed scripts/ tree: ship it first, as the create-topics path does — a dedicated rsync right after
+        // the verify of the tree it ships (Deployment Permission Rule, validator rule 9b). es4-deploy #783 ran the
+        // rotation against a box that had never received the new kafka scripts.
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp'
+        }
+        sh 'rsync -az --delete scripts/ "${ES4_HOST}:/home/es4/repo/scripts/"'
         sh '''
           set -euo pipefail
           export KUBECONFIG="$ES4_KUBECONFIG"
