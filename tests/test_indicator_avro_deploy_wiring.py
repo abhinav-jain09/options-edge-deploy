@@ -113,20 +113,24 @@ class IndicatorAvroDeployWiring(unittest.TestCase):
         # the jar is BUILT from the permitted contracts commit: nested acquisition, its guard as the next statement,
         # a verify immediately before the package effect, a verify (target allowed) immediately before the ship
         stage = t[t.index("git clone git@github.com:abhinav-jain09/options-edge-contracts.git .jenkins-tmp/contracts"):]
+        # ONE coordinate: the version file names the jar the job ships, and every literal in the job must be that one
+        cv = (ROOT / "scripts/ops/archive/contracts.version").read_text().strip()
+        self.assertRegex(cv, r"^\d+\.\d+\.\d+$", "scripts/ops/archive/contracts.version is the coordinate")
         order = ["git -C .jenkins-tmp/contracts checkout main",
                  "PERMITTED_SHA=\"${CONTRACTS_PERMITTED_SHA:-}\" bash scripts/jenkins/permitted-sha-guard.sh --dir .jenkins-tmp/contracts --ref main",
-                 "[ \"$CV\" = 0.19.0 ]",
+                 "[ \"$CV\" = " + cv + " ]",
                  "PERMITTED_SHA=\"${CONTRACTS_PERMITTED_SHA:?}\" bash scripts/jenkins/verify-permitted-tree.sh --dir .jenkins-tmp/contracts'",
                  "sh 'mvn -B -q -ntp -f .jenkins-tmp/contracts/pom.xml -DskipTests package'",
                  "verify-permitted-tree.sh --dir .jenkins-tmp/contracts --allow-ignored target'",
-                 "sh 'scp -o BatchMode=yes .jenkins-tmp/contracts/target/options-edge-contracts-0.19.0.jar \"${PROD_HOST}:${STAGE_DIR}/options-edge-contracts.jar\"'",
+                 "sh 'scp -o BatchMode=yes .jenkins-tmp/contracts/target/options-edge-contracts-" + cv + ".jar \"${PROD_HOST}:${STAGE_DIR}/options-edge-contracts.jar\"'",
                  "sh 'scp -o BatchMode=yes scripts/ops/archive/oe-archive-kafka.sh"]
         at = -1
         for token in order:
             nxt = stage.index(token)
             self.assertGreater(nxt, at, token)
             at = nxt
-        self.assertEqual((ROOT / "scripts/ops/archive/contracts.version").read_text().strip(), "0.19.0", "the literal jar the job ships")
+        self.assertEqual(t.count("options-edge-contracts-" + cv + ".jar"), 4, "the version check message, the unzip check, the scp and the sha256 record all name the one jar")
+        self.assertNotRegex(t, r"options-edge-contracts-(?!" + cv.replace(".", r"\.") + r"\.jar)\d+\.\d+\.\d+\.jar", "no other coordinate survives a bump")
         self.assertIn("UNIT='$UNIT $SIDECAR'", t, "the host installs, records and verifies the jar with the unit")
         self.assertNotIn(".m2/repository", t, "never a cached jar")
         arch = (ROOT / "scripts/ops/archive/oe-archive-kafka.sh").read_text()
