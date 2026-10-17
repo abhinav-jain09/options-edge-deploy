@@ -13,7 +13,9 @@ REPO = Path(__file__).resolve().parents[1]
 ENV = (REPO / "scripts" / "kafka" / "topics.env").read_text()
 CLEANUP = (REPO / "scripts" / "es4" / "cleanup-es4.sh").read_text()
 CREATE = (REPO / "scripts" / "es4" / "create-es-topics.sh").read_text()
-APPLY = (REPO / "scripts" / "kafka" / "apply-topics.sh").read_text()
+# apply-topics.sh sources scripts/kafka/topic-shape.lib.sh for the declaration resolution (the TOPIC_SET case) and the
+# shape functions, shared with ensure-indicator-topics.sh --recreate; the SSOT assertions read both as one text.
+APPLY = (REPO / "scripts" / "kafka" / "apply-topics.sh").read_text() + (REPO / "scripts" / "kafka" / "topic-shape.lib.sh").read_text()
 
 
 def _var(name):
