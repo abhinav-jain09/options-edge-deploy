@@ -39,6 +39,17 @@ class IndicatorAvroDeployWiring(unittest.TestCase):
         self.assertLess(reset, recreate, "offsets to 0 BEFORE the topics go")
         self.assertIn("params.SERVICE == 'indicator-service'", rec)
 
+    def test_a_destructive_recreate_requires_the_schema_registration_in_the_same_run(self):
+        sd = (ROOT / "Jenkinsfile.service-deploy").read_text()
+        rec = sd[sd.index("stage('Recreate indicator topics (Avro cutover)')"):sd.index("stage('Verify indicator topics')")]
+        self.assertIn("if (!params.REGISTER_INDICATOR_SCHEMAS)", rec)
+        self.assertLess(rec.index("error(\"RECREATE_INDICATOR_TOPICS=true requires REGISTER_INDICATOR_SCHEMAS=true"), rec.index("reset-indicator-state.sh"))
+        es4 = (ROOT / "Jenkinsfile.es4-deploy").read_text()
+        dep = es4[es4.index("stage('Deploy to es4')"):]
+        self.assertLess(dep.index('[ "${RECREATE_INDICATOR_TOPICS:-false}" = true ] && [ "${REGISTER_INDICATOR_SCHEMAS:-false}" != true ]'),
+                        dep.index("ensure-indicator-schemas.sh"))
+        self.assertLess(dep.index("ensure-indicator-schemas.sh"), dep.index("reset-indicator-state.sh"))
+
     def test_es4_deploy_fetches_schemas_registers_on_every_topic_creating_path_and_recreates_on_request(self):
         t = (ROOT / "Jenkinsfile.es4-deploy").read_text()
         s = stages(t)
@@ -86,6 +97,8 @@ class IndicatorAvroDeployWiring(unittest.TestCase):
         decode = (ROOT / "scripts/kafka/decode-newest-indicator-record.sh").read_text()
         self.assertIn("kafka-avro-console-consumer", decode, "the gate deserializes the record, not just its frame")
         self.assertIn("does not deserialize", decode)
+        self.assertIn('PartitionCount:', decode, "the partition count comes from broker metadata")
+        self.assertLess(decode.index("every partition must be gated"), decode.index("while IFS=: read -r t p end"))
         verify = t[t.index("stage('Verify (running + zero pollution)')"):]
         self.assertIn("target end offsets equal the source", verify)
         self.assertIn("decode-newest-indicator-record.sh", verify)
@@ -102,18 +115,18 @@ class IndicatorAvroDeployWiring(unittest.TestCase):
         stage = t[t.index("git clone git@github.com:abhinav-jain09/options-edge-contracts.git .jenkins-tmp/contracts"):]
         order = ["git -C .jenkins-tmp/contracts checkout main",
                  "PERMITTED_SHA=\"${CONTRACTS_PERMITTED_SHA:-}\" bash scripts/jenkins/permitted-sha-guard.sh --dir .jenkins-tmp/contracts --ref main",
-                 "[ \"$CV\" = 0.11.0 ]",
+                 "[ \"$CV\" = 0.14.0 ]",
                  "PERMITTED_SHA=\"${CONTRACTS_PERMITTED_SHA:?}\" bash scripts/jenkins/verify-permitted-tree.sh --dir .jenkins-tmp/contracts'",
                  "sh 'mvn -B -q -ntp -f .jenkins-tmp/contracts/pom.xml -DskipTests package'",
                  "verify-permitted-tree.sh --dir .jenkins-tmp/contracts --allow-ignored target'",
-                 "sh 'scp -o BatchMode=yes .jenkins-tmp/contracts/target/options-edge-contracts-0.11.0.jar \"${PROD_HOST}:${STAGE_DIR}/options-edge-contracts.jar\"'",
+                 "sh 'scp -o BatchMode=yes .jenkins-tmp/contracts/target/options-edge-contracts-0.14.0.jar \"${PROD_HOST}:${STAGE_DIR}/options-edge-contracts.jar\"'",
                  "sh 'scp -o BatchMode=yes scripts/ops/archive/oe-archive-kafka.sh"]
         at = -1
         for token in order:
             nxt = stage.index(token)
             self.assertGreater(nxt, at, token)
             at = nxt
-        self.assertEqual((ROOT / "scripts/ops/archive/contracts.version").read_text().strip(), "0.11.0", "the literal jar the job ships")
+        self.assertEqual((ROOT / "scripts/ops/archive/contracts.version").read_text().strip(), "0.14.0", "the literal jar the job ships")
         self.assertIn("UNIT='$UNIT $SIDECAR'", t, "the host installs, records and verifies the jar with the unit")
         self.assertNotIn(".m2/repository", t, "never a cached jar")
         arch = (ROOT / "scripts/ops/archive/oe-archive-kafka.sh").read_text()

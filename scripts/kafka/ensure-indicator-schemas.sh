@@ -166,8 +166,11 @@ while IFS='|' read -r subject id file; do
   if [ "$DRY" = true ]; then echo "    would import under id $id (DEPLOY_DRY_RUN=true)"; continue; fi
   # capture the mode, then import
   M=$(http GET "/mode/$subject")
-  if [ "$(status "$M")" = 200 ]; then CUR_HAD_OVERRIDE=true; CUR_MODE=$(json_field "$(body "$M")" mode)
-  else CUR_HAD_OVERRIDE=false; CUR_MODE="$GLOBAL_MODE"; fi
+  case "$(status "$M")" in
+    200) CUR_HAD_OVERRIDE=true; CUR_MODE=$(json_field "$(body "$M")" mode) ;;
+    404) CUR_HAD_OVERRIDE=false; CUR_MODE="$GLOBAL_MODE" ;;   # the registry's own "no subject mode" (40409): inherited
+    *) echo "FAIL: cannot capture the mode of $subject (GET /mode/$subject -> $M) — a transient failure here would be restored as an inherited mode and delete a real override"; fail=1; continue ;;
+  esac
   CUR_SUBJECT="$subject"
   R=$(http PUT "/mode/$subject" '{"mode":"IMPORT"}')
   [ "$(status "$R")" = 200 ] || { echo "FAIL: PUT /mode/$subject IMPORT -> $R"; fail=1; restore_mode || true; continue; }

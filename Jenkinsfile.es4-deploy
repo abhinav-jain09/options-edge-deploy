@@ -339,6 +339,9 @@ pipeline {
           # the fixed-id registration (idempotent) and, on request, the destructive cutover — producer at 0,
           # group offsets to 0, changelog deleted, the six es.options.indicators.* topics recreated empty and
           # verified — BEFORE the apply below rolls the Avro producer.
+          if [ "${RECREATE_INDICATOR_TOPICS:-false}" = true ] && [ "${REGISTER_INDICATOR_SCHEMAS:-false}" != true ]; then
+            echo "FAIL: RECREATE_INDICATOR_TOPICS=true requires REGISTER_INDICATOR_SCHEMAS=true — the fixed schemas are registered and verified before the destructive cutover"; exit 1
+          fi
           if [ "${REGISTER_INDICATOR_SCHEMAS:-false}" = true ]; then
             SCHEMA_REGISTRY_URL="$ES4_REGISTRY" SCHEMAS_DIR=".jenkins-tmp/contracts/schemas-registry/indicators" \
               DEPLOY_DRY_RUN="${DEPLOY_DRY_RUN:-false}" bash scripts/kafka/ensure-indicator-schemas.sh

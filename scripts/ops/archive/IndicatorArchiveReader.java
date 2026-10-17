@@ -160,10 +160,10 @@ public class IndicatorArchiveReader {
                     if (read >= o.count) {
                         break;
                     }
-                    if (r.value() == null) {
-                        continue; // a tombstone is the broker's delete marker, not a record (the console consumer prints "null")
-                    }
-                    line(out, o, r.timestampType().name, r.timestamp(), r.partition(), r.offset(), r.key(), json(avro, o.topic, r.value()));
+                    // a tombstone (null value) is archived exactly as the console consumer archived it — the value text
+                    // "null" — and counted, so the archive's record count and checkpoints are what they were
+                    line(out, o, r.timestampType().name, r.timestamp(), r.partition(), r.offset(), r.key(),
+                            r.value() == null ? "null" : json(avro, o.topic, r.value()));
                     read++;
                 }
             }

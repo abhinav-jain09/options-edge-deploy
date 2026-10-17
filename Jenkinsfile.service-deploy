@@ -579,6 +579,14 @@ PYEOF
         expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'indicator-service' && params.RECREATE_INDICATOR_TOPICS) }
       }
       steps {
+        script {
+          // the recreate deletes the state, the changelog and every cutover topic: it never runs without the fixed
+          // schemas having been registered and verified in THIS run (the stage above), or the producer could roll
+          // onto an empty family with its schemas absent or divergent
+          if (!params.REGISTER_INDICATOR_SCHEMAS) {
+            error("RECREATE_INDICATOR_TOPICS=true requires REGISTER_INDICATOR_SCHEMAS=true (with CONTRACTS_PERMITTED_SHA): the schemas are registered before the destructive cutover.")
+          }
+        }
         sh '''
           set -euo pipefail
           export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
