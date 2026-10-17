@@ -197,6 +197,15 @@ class InitializationTest(unittest.TestCase):
         self.apply(fixture)  # Real Empty classic groups have no assignment strategy.
         self.assertEqual(4, len(fixture.writes))
 
+    def test_actual_selector_includes_terminating_pods_with_zero_status_replicas(self):
+        fixture = Fixture()
+        fixture.pods = [{'metadata': {'deletionTimestamp': '2026-10-17T15:00:00Z'}}]
+        self.assertEqual(0, fixture.desired)
+        self.assertEqual(0, fixture.actual)
+        with self.assertRaisesRegex(RuntimeError, 'still has pods'):
+            self.apply(fixture)
+        self.assertEqual([], fixture.writes)
+
     def test_missing_or_expression_selector_refused(self):
         for selector, expressions in [({}, []), ({'runtime': 'actual-executor'}, [{'key': 'app', 'operator': 'Exists'}])]:
             fixture = Fixture()
