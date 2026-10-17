@@ -217,6 +217,17 @@ services:
   # boot), and EAV-R17's emission floor blocks any non-dev enable. Reads the auction + witness
   # topics read-only; writes only early-auction.verdicts.shadow (1 partition, retention -1).
   - { name: early-auction-verdict,        managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-early-auction-verdict,        deployments: [early-auction-verdict-service] }
+  # break-score: SHADOW (version 1: no voice, no screen). Scores a break of a level from the linearized ES tape
+  # (underlying.es.trades.linearized) and publishes futures.break-score.events (1 partition, delete, retention.ms=-1,
+  # retention.bytes=16777216). DEPLOYED HELD AT replicas 0 on dev AND production: the owner enables it. Single replica only.
+  # Held down by: replicas: 0 in the base, KEEP_DOWN in morning-autostart.sh + oe-boot-bringup.sh, DISABLED_DEV in dev-cleanup.sh.
+  # scripts/kafka/ensure-break-score-topics.sh is the first-deploy barrier. No Service object.
+  - { name: break-score,                  managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-break-score,                  deployments: [break-score-service] }
+  # level-absorption: EYEBALL phase (status events, NO verdict). DEPLOYED HELD AT replicas 0 on dev AND production and unable to start
+  # until the owner supplies the Phase 0 freeze file and the retention artifact (docs/level-absorption/DEPLOY-WIRING.md). Reads the
+  # linearized ES tape, es.futures.footprint.bars, es.futures.auction and the manual-line topic; publishes futures.level-absorption.{events,
+  # voice,closures}. Same hold-down paths as break-score. scripts/kafka/ensure-level-absorption-topics.sh is the first-deploy barrier.
+  - { name: level-absorption,             managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-level-absorption,             deployments: [level-absorption-service] }
   # stock-gex: SPX-500 single-stock GEX (Databento equity options; NO Kafka). Its image builds in the
   # options-edge-databento-feed repo (Dockerfile.stockgex), like databento-sr3-feed — hence buildJob.
   # DEV-FIRST/on-demand: prod overlay holds it at replicas:0 until the nightly OI-index builder exists.

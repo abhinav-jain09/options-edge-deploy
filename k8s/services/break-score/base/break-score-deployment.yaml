@@ -1,0 +1,116 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: break-score-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: break-score-service
+    app.kubernetes.io/component: break-score-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  # HELD AT 0 on every environment (options-edge-processing docs/break-score/as-built/runtime-gaps.md section 3:
+  # "deploy at replicas 0, then scale to 1 when the owner enables it"). Deploy = image built, pushed and pinned; scale is
+  # the owner's. To turn it on: set replicas to 1 here, regenerate the slices (scripts/deploy/generate-service-slices.sh),
+  # remove break-score-service from KEEP_DOWN in scripts/ops/morning-autostart.sh AND scripts/ops/oe-boot-bringup.sh
+  # (tests/test_keep_down_lists_agree.py) and from DISABLED_DEV in scripts/ops/dev-cleanup.sh, seed the baselines
+  # (docs/break-score/DEPLOY-WIRING.md), then run service-deploy. SINGLE replica ONLY (one consumer group, one total order).
+  replicas: 0
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: break-score-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: break-score-service
+        app.kubernetes.io/component: break-score-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: break-score
+          image: 192.168.100.252:5000/options-edge-break-score:dev
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: options-edge-config              # KAFKA_BOOTSTRAP_SERVERS, TOPIC_PREFIX and the runtime profile
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            # SHADOW ONLY (version 1: no voice, no screen). The engine scores a level break from the LINEARIZED ES tape
+            # (the raw underlying.es.trades is not totally ordered across its partitions; the engine refuses a print
+            # that arrives out of exchange-time order) and publishes one event per state change.
+            # Every value below is spelled out even where it equals the code default, so the rendered manifest is the
+            # whole record of what the pod runs with. BREAK_SCORE_MODE and the three paths have NO code default.
+            - name: BREAK_SCORE_MODE
+              value: SHADOW
+            - name: KAFKA_BREAK_SCORE_TRADES_TOPIC
+              value: underlying.es.trades.linearized      # base name; TOPIC_PREFIX is "" on dev and production
+            - name: KAFKA_BREAK_SCORE_EVENTS_TOPIC
+              value: futures.break-score.events           # 1 partition, delete, retention.ms=-1, retention.bytes=16777216
+            - name: BREAK_SCORE_CONSUMER_GROUP
+              value: break-score-service
+            - name: BREAK_SCORE_SYMBOL
+              value: ES.v.0
+            - name: BREAK_SCORE_BAR_TYPE
+              value: TIME                                 # 1-minute time bars; BREAK_SCORE_VOLUME_BAR_SIZE must stay UNSET with TIME
+            # The calibratable thresholds file (a startup failure when absent or incomplete) and the manual level file are
+            # the two keys of the break-score-config ConfigMap, mounted at the SAME path inside the container as on the host
+            # so the Home Directory Storage Rule allow-list (/home/options-edge) admits them with no
+            # BREAK_SCORE_CONTAINER_STORAGE_PREFIXES override. manual-levels.tsv is shipped EMPTY (a valid, empty set).
+            - name: BREAK_SCORE_CONFIG
+              value: /home/options-edge/config/break-score/break-score.properties
+            - name: BREAK_SCORE_MANUAL_LEVELS
+              value: /home/options-edge/config/break-score/manual-levels.tsv
+            # The baseline ring (one file per closed regular session, 20 sessions): a hostPath under /home/options-edge.
+            - name: BREAK_SCORE_BASELINE_DIR
+              value: /home/options-edge/data/break-score/baselines
+            - name: HEALTH_PORT
+              value: "8080"
+            - name: JAVA_TOOL_OPTIONS
+              value: -Xms256m -Xmx640m
+          ports:
+            - name: health
+              containerPort: 8080
+          # The k8s readiness probe is PROCESS liveness, not tape readiness (the es-compression-expansion rule, owner 2026-10-07):
+          # /health/ready is 503 while NOT_READY{STARTING} or STALE (no tape record for BREAK_SCORE_TAPE_SILENCE_MILLIS), so
+          # gating the pod on it would time out every deploy into a dark tape (overnight, weekends, the 17:00-18:00 ET break).
+          # /health/ready stays available to operators and in /metrics.
+          readinessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 200m
+              memory: 768Mi
+            limits:
+              memory: 1536Mi
+          volumeMounts:
+            - name: break-score-config
+              mountPath: /home/options-edge/config/break-score
+              readOnly: true
+            - name: break-score-data
+              mountPath: /home/options-edge/data/break-score
+      volumes:
+        # optional: false ON PURPOSE — the pod cannot start without its thresholds file (the service refuses to start
+        # without it anyway, and a pod stuck ContainerCreating names the missing ConfigMap).
+        - name: break-score-config
+          configMap:
+            name: break-score-config
+            optional: false
+        - name: break-score-data
+          hostPath:
+            path: /home/options-edge/data/break-score
+            type: DirectoryOrCreate
