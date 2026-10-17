@@ -1,0 +1,57 @@
+# DEV-ONLY: start the L1 pressure CONSUMER.
+#
+# The base ships this service inert on purpose: replicas 0 and OPTION_PRESSURE_ENABLED=false, with
+# the upstream gate (OPB_L1_ENABLED) shut as well, so nothing was produced and nothing consumed.
+#
+# This change starts the consumer ONLY. The producer flag is a separate change, deliberately: the
+# consumer must exist before option-price-behavior begins emitting, or OPB writes 735 MiB a session
+# into a topic nothing reads. Splitting them makes that order a property of what has been merged
+# rather than an instruction someone has to follow. (The consumer sets auto.offset.reset=earliest,
+# so nothing would be LOST in the other order — it would simply be wasted.)
+#
+# It also must not land before the image exists. options-edge-option-pressure-state has never been
+# built: with replicas 1 and no image, a full deploy aborts at the digest-pinning step and a direct
+# apply gives ImagePullBackOff. Build it first with the service's own deploy job while the base is
+# still inert, then merge this.
+# Dev now runs it, and only dev: the base is unchanged, so production still renders replicas 0 with
+# OPTION_PRESSURE_ENABLED=false, and no production image is built.
+#
+# Nothing on dev contends with this patch. The two scripts whose KEEP_DOWN lists would force a
+# deployment to zero — scripts/ops/morning-autostart.sh and scripts/ops/oe-boot-bringup.sh — are not
+# scheduled on dev (com.optionsedge.dev-boot-start.plist is disabled-untilfurthernotice, and
+# morning-autostart defaults EXPECTED_ENV=prod and is installed on the production host). Their
+# entries are therefore left in place: they are the production hold, and a KEEP_DOWN entry forces
+# target=0, which is mutually exclusive with replicas:1. Only the DISABLED_DEV entry in
+# scripts/ops/dev-cleanup.sh is removed, because that script IS run against dev and would scale this
+# service back to zero on every clean.
+#
+# What turning it on costs, measured rather than assumed, on a real session of 944,068 contributions:
+# the contributions topic carries 735 MiB, the symbol rekey topic the same, the evidence topic
+# 2,709 MiB, and the two state stores write 10.29 GiB and 6.29 GiB of changelog. Retention is
+# declared in the services (4 days, 2 days, 3 days), so this is roughly 12.5 GiB steady state rather
+# than growth without end. The head topic is compacted and stays at a few hundred kilobytes.
+#
+# What it is for, stated plainly: collecting the live stream, nothing more. Every frame carries
+# actionable=false and nothing may act on one. The register was REJECTED on two gate sets, and a
+# Lane D validation over the Databento SPXW year found no directional content — Brier 0.63877
+# against a 0.63910 momentum baseline, a confidence interval spanning zero, and a PUT_PRESSURE
+# UP-minus-DOWN edge that flipped sign between splits. Enabling it buys live data for research; it
+# does not make the signal usable, and no consumer should be built on it on that basis.
+#
+# NAME-KEYED strategic merge, deliberately — not an env/N json6902 patch, which lands on whichever
+# variable has drifted into that index (this repository has the dealer-ledger heap landing on
+# QUOTE_STALE_MS from exactly that mistake).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: option-pressure-state-service
+  namespace: options-edge
+spec:
+  replicas: 1
+  template:
+    spec:
+      containers:
+        - name: option-pressure-state
+          env:
+            - name: OPTION_PRESSURE_ENABLED
+              value: "true"

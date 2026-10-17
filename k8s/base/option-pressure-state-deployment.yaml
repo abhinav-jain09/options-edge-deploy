@@ -7,14 +7,24 @@ metadata:
     app.kubernetes.io/name: option-pressure-state-service
     app.kubernetes.io/part-of: options-edge
 spec:
-  # DEPLOYED INERT, and it has no input to read even if started. Two gates are shut upstream of it:
-  #   1. OPB_L1_ENABLED defaults false and is set nowhere, so option-price-behavior emits no
-  #      option-price-behavior-l1-contributions records at all.
-  #   2. OPTION_PRESSURE_ENABLED defaults false, so this service's topology does not start.
-  # Neither the input topic nor the two output topics are provisioned anywhere in this repo.
-  # Wiring it here gives the service a real deploy target (services.yaml + a SERVICE choice in
-  # Jenkinsfile.service-deploy) so an image can be rolled and pinned; turning the data path ON is a
-  # separate decision that must provision three topics and flip OPB_L1_ENABLED on a live service.
+  # THE BASE IS INERT, and production runs the base. Both gates here are shut:
+  #   1. OPTION_PRESSURE_ENABLED defaults false, so this service's topology does not start.
+  #   2. Upstream, OPB_L1_ENABLED is false in the base, so option-price-behavior emits no
+  #      option-price-behavior-l1-contributions records for it to read.
+  # DEV turns both on, and only dev: k8s/overlays/dev/option-pressure-state-dev-enable-patch.yaml
+  # sets replicas 1 and OPTION_PRESSURE_ENABLED=true, and the OPB dev env patch sets OPB_L1_ENABLED.
+  # Production therefore stays at zero from this file, and no production image is built for it.
+  # NOTE, checked 2026-10-17 rather than assumed: production's INSTALLED
+  # ~/oe-ops/morning-autostart.sh does NOT carry the KEEP_DOWN entry this repository added for this
+  # service, and ~/oe-ops/oe-boot-bringup.sh is not installed there at all. That script scales every
+  # deployment it does not hold down to one replica, so once a production image exists it would
+  # start this service inert rather than leave it absent. Installing this repository's copy is what
+  # would actually hold it; until then what holds production is that there is no image to pull.
+  # The topics are provisioned by the services themselves at startup, with declared retention rather
+  # than the platform default of infinite: contributions 4 days, symbol rekey 2 days, evidence
+  # 3 days, and the head topic compacted. Measured on a real session of 944,068 contributions that is
+  # roughly 12.5 GiB steady state; see docs/option-price-behavior/L1-PRESSURE-STATE-CAPACITY.md in
+  # options-edge-processing.
   #
   # What it would do: consume the L1 contributions, aggregate one-second information blocks per
   # strike AND per symbol, and publish option-pressure-state-current / -evidence. Every frame
