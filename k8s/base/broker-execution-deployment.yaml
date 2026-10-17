@@ -92,6 +92,10 @@ spec:
               value: trading.order.status
             - name: BROKER_EXECUTION_CONSUMER_GROUP
               value: broker-execution-service
+            # The Jenkins cutover must establish/reverify the fresh Avro partition boundary at zero.
+            # Zero skips no records. Any unexpected retained JSON fails the Avro decoder closed.
+            - name: BROKER_EXECUTION_AVRO_START_OFFSETS
+              value: "0:0"
             # --- the values that decide whether anything is placed (OWNER SETS THESE) ---
             # Armed 2026-10-11 at the account owner's instruction: PAPER + ENABLED + TRANSMIT. This now
             # places paper orders WITHOUT a human pressing Transmit. It still cannot reach a live account:

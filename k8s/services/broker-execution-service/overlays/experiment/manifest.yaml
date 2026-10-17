@@ -81,6 +81,8 @@ spec:
               value: trading.order.status
             - name: BROKER_EXECUTION_CONSUMER_GROUP
               value: broker-execution-service
+            - name: BROKER_EXECUTION_AVRO_START_OFFSETS
+              value: "0:0"
             - name: BROKER_EXECUTION_ENVIRONMENT
               value: dev
             - name: BROKER_EXECUTION_IBKR_HOST
