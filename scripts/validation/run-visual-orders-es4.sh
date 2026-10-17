@@ -47,7 +47,7 @@ for i in $(seq 1 5); do
   taskset -c 2 node scripts/validation/visual-orders-model-probe.cjs "$PWD/web/context-tape-orders-model.js" >"results/model-$i.log" 2>&1
 done
 python3 - <<'PY'
-import json,pathlib,statistics
+import json,math,pathlib,statistics
 p=pathlib.Path('results'); groups={}
 for f in p.glob('*.log'):
  for line in f.read_text().splitlines():
@@ -62,7 +62,8 @@ out['nativeRelativeBudgetPass']=out.get('nativeRelativeChange',float('inf'))<=0.
 # Keep the relative diagnostic; all other probe gates are unchanged.
 out['nativeWrapperBudgetNs']=1000
 out['nativeWrapperBudgetPass']=0<=out['medians'].get('native-callback-candidate',float('inf'))<=out['nativeWrapperBudgetNs']
-out['allNetNewBudgetsPass']=all(x.get('withinBudget',True) for v in groups.values() for x in v)
+budgets={'native-adapter-queue':('nsPerRecord','budgetNsPerRecord',10000),'quote-book':('nsPerRecord','budgetNsPerRecord',500000),'journal-postgres':('nsPerRecord','budgetNsPerRecord',20000000),'model-geometry':('nsPerRecord','budgetNsPerRecord',500000),'model-history-page':('elapsedMs','budgetMs',100)}
+out['allNetNewBudgetsPass']=all(x.get('withinBudget') is True and type(x.get(metric)) in (int,float) and math.isfinite(x[metric]) and 0<=x[metric]<=limit and type(x.get(budget)) is int and x[budget]==limit for name,(metric,budget,limit) in budgets.items() for x in groups.get(name,[]))
 (p/'summary.json').write_text(json.dumps(out,indent=2)+'\n');print(json.dumps(out['medians']));print('allNetNewBudgetsPass',out['allNetNewBudgetsPass'])
 assert set(groups)=={'native-callback-baseline','native-callback-candidate','native-adapter-queue','quote-book','journal-postgres','model-geometry','model-history-page'},'Every declared probe must run'
 assert all(len(v)==5 for v in groups.values()),'Five repeated commands required for each scenario'

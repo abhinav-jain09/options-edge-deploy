@@ -8,7 +8,19 @@ cache=/Users/abhinav/development/workspace/support/tmp/visual-orders-private-m2/
 settings=/Users/abhinav/development/workspace/support/tmp/visual-orders-private-m2/settings.xml
 [ -d "$cache" ] && [ -r "$settings" ] || { echo 'Prepared isolated Maven cache/settings are required; see validation runbook.' >&2; exit 1; }
 root="$PWD"
-mkdir -p .validation-m2 bundle/{candidate,baseline,lib,web,scripts/validation}
+# These two generated roots belong to this validation job. Never follow stale links.
+reset_generated_dir(){
+  local directory="$1"
+  case "$directory" in .validation-m2|bundle) ;; *) echo 'Unexpected validation output root' >&2; exit 1;; esac
+  [ ! -L "$directory" ] && { [ ! -e "$directory" ] || [ -d "$directory" ]; } || { echo 'Invalid validation output root' >&2; exit 1; }
+  mkdir -p "$directory"
+  find -P "$directory" -xdev -depth \( -type f -o -type l \) -delete
+  find -P "$directory" -xdev -depth -mindepth 1 -type d -empty -delete
+  [ -z "$(find -P "$directory" -mindepth 1 -print -quit)" ] || { echo 'Validation output root could not be emptied' >&2; exit 1; }
+}
+reset_generated_dir .validation-m2
+reset_generated_dir bundle
+mkdir -p bundle/{candidate,baseline,lib,web,scripts/validation}
 rsync -a "$cache/" .validation-m2/
 cp "$settings" .validation-settings.xml
 checkout(){
