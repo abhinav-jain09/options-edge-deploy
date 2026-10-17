@@ -329,7 +329,7 @@ EOSSH
           set -euo pipefail
           # the contracts version this unit pins is the version that checkout builds — the jar name below is literal
           CV=$(tr -d '[:space:]' < scripts/ops/archive/contracts.version)
-          [ "$CV" = 0.16.0 ] || { echo "FAIL: scripts/ops/archive/contracts.version is $CV but this job ships options-edge-contracts-0.16.0.jar — change both together"; exit 1; }
+          [ "$CV" = 0.17.0 ] || { echo "FAIL: scripts/ops/archive/contracts.version is $CV but this job ships options-edge-contracts-0.17.0.jar — change both together"; exit 1; }
           PV=$(sed -nE 's#^[[:space:]]*<version>([^<]+)</version>.*#\\1#p' .jenkins-tmp/contracts/pom.xml | head -1)
           [ "$PV" = "$CV" ] || { echo "FAIL: options-edge-contracts at CONTRACTS_PERMITTED_SHA is version $PV, the unit pins $CV"; exit 1; }
         '''
@@ -337,11 +337,11 @@ EOSSH
           sh 'PERMITTED_SHA="${CONTRACTS_PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir .jenkins-tmp/contracts'
         }
         sh 'mvn -B -q -ntp -f .jenkins-tmp/contracts/pom.xml -DskipTests package'
-        sh 'unzip -l .jenkins-tmp/contracts/target/options-edge-contracts-0.16.0.jar | grep -q com/optionsedge/contracts/indicators/avro/IndicatorSchemas.class'
+        sh 'unzip -l .jenkins-tmp/contracts/target/options-edge-contracts-0.17.0.jar | grep -q com/optionsedge/contracts/indicators/avro/IndicatorSchemas.class'
         timeout(time: 10, unit: 'MINUTES') {
           sh 'PERMITTED_SHA="${CONTRACTS_PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir .jenkins-tmp/contracts --allow-ignored target'
         }
-        sh 'scp -o BatchMode=yes .jenkins-tmp/contracts/target/options-edge-contracts-0.16.0.jar "${PROD_HOST}:${STAGE_DIR}/options-edge-contracts.jar"'
+        sh 'scp -o BatchMode=yes .jenkins-tmp/contracts/target/options-edge-contracts-0.17.0.jar "${PROD_HOST}:${STAGE_DIR}/options-edge-contracts.jar"'
         // The whole unit travels together: the archiver, the alert helper it sources, the topic policy it refuses to
         // start without, and the suite. Shipping the archiver alone would leave its dependencies as whatever happened to
         // be on the host. ONE scp of the literal UNIT list (market_calendar.py from its one committed home), as a
@@ -501,7 +501,7 @@ EOSSH
           # archive incident this change fixes was built on.
           for f in $UNIT $SIDECAR; do
             case "$f" in
-              options-edge-contracts.jar) local_sha=$(sha256sum .jenkins-tmp/contracts/target/options-edge-contracts-0.16.0.jar | cut -d' ' -f1) ;;
+              options-edge-contracts.jar) local_sha=$(sha256sum .jenkins-tmp/contracts/target/options-edge-contracts-0.17.0.jar | cut -d' ' -f1) ;;
               *) local_sha=$(sha256sum "scripts/ops/archive/$f" | cut -d' ' -f1) ;;
             esac
             host_sha=$(ssh -o BatchMode=yes "$PROD_HOST" "sha256sum '$INSTALL_DIR/$f' | cut -d' ' -f1")
