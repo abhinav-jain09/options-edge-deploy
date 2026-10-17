@@ -20,6 +20,13 @@ try{
   const file=path.join(dir,variant+'-'+feature+'.html');fs.writeFileSync(file,html);
   const result=spawnSync('/usr/bin/google-chrome',['--headless=new','--no-sandbox','--disable-gpu','--disable-background-networking','--host-resolver-rules=MAP * ~NOTFOUND','--no-proxy-server','--user-data-dir='+path.join(dir,variant+'-'+feature), '--dump-dom',pathToFileURL(file).href],{encoding:'utf8',timeout:60000,maxBuffer:2*1024*1024});
   if(result.error||result.status!==0)throw Error('Browser probe failed: '+(result.error?.message||result.stderr));
-  const raw=/<pre id="result">([^<]+)<\/pre>/.exec(result.stdout);if(!raw){fs.writeFileSync(path.join(process.cwd(),'results','linked-browser-failure.html'),result.stdout);throw Error('No completed browser measurement: '+result.stdout.slice(-1800));}const row=JSON.parse(raw[1].replace(/&quot;/g,'"').replace(/&amp;/g,'&'));if(row.error)throw Error('Browser fixture: '+row.error);console.log('VISUAL_PROBE '+JSON.stringify(row));if(!row.withinBudget)throw Error('Overlay latency or semantic fixture failed');
+  const raw=/<pre id="result">([^<]+)<\/pre>/.exec(result.stdout);if(!raw){fs.writeFileSync(path.join(process.cwd(),'results','linked-browser-failure.html'),result.stdout);throw Error('No completed browser measurement: '+result.stdout.slice(-1800));}const row=JSON.parse(raw[1].replace(/&quot;/g,'"').replace(/&amp;/g,'&'));if(row.error)throw Error('Browser fixture: '+row.error);console.log('VISUAL_PROBE '+JSON.stringify(row));if(!row.withinBudget){
+    // A separate diagnostic run cannot qualify the failed measured run.
+    const trace=path.join(process.cwd(),'results','linked-browser-trace.json');
+    const diagnostic=spawnSync('/usr/bin/google-chrome',['--headless=new','--no-sandbox','--disable-gpu','--disable-background-networking','--host-resolver-rules=MAP * ~NOTFOUND','--no-proxy-server','--user-data-dir='+path.join(dir,'diagnostic'),'--trace-startup=devtools.timeline,v8,blink.user_timing,disabled-by-default-devtools.timeline','--trace-startup-file='+trace,'--trace-startup-duration=5','--dump-dom',pathToFileURL(file).href],{encoding:'utf8',timeout:60000,maxBuffer:2*1024*1024});
+    console.log('DIAGNOSTIC_ONLY '+JSON.stringify({status:diagnostic.status,error:diagnostic.error?.message,trace:fs.existsSync(trace)}));
+    if(fs.existsSync(trace)){const events=JSON.parse(fs.readFileSync(trace,'utf8')).traceEvents,totals=new Map();for(const e of events)if(e.ph==='X'&&e.dur>0){const old=totals.get(e.name)||{count:0,totalUs:0,maxUs:0};old.count++;old.totalUs+=e.dur;old.maxUs=Math.max(old.maxUs,e.dur);totals.set(e.name,old);}console.log('DIAGNOSTIC_EVENTS '+JSON.stringify([...totals].sort((a,b)=>b[1].totalUs-a[1].totalUs).slice(0,35)));fs.unlinkSync(trace);}
+    throw Error('Overlay latency or semantic fixture failed');
+  }
  }
 }finally{fs.rmSync(dir,{recursive:true,force:true});}
