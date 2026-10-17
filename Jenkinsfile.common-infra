@@ -25,6 +25,8 @@ pipeline {
       description: 'Target environment — selects k8s/infra/overlays/<env> and the deployer kubeconfig (oeProfile).')
     booleanParam(name: 'CONTEXT_TAPE_ORDER_INIT_ONLY', defaultValue: false,
       description: 'First-start only: initialize absent/empty order topics and canonical schemas under executor/bridge quiescence. Caps unbounded retention.bytes only on verified empty topics; no conversion, deletion, offset reset, workload, grant or realm changes.')
+    booleanParam(name: 'CONTEXT_TAPE_DEV_FIXTURE_RECOVERY', defaultValue: false,
+      description: 'Dev-only recovery: soft-delete exactly the accidental empty Order0 intent schema id32/version1 under empty-topic/quiescence checks, then register canonical. No permanent deletion or Kafka record change. Refuses all other schema identities.')
     string(name: 'CONTRACTS_PERMITTED_SHA', defaultValue: '', trim: true,
       description: 'Required for order initialization: exact current options-edge-contracts main SHA. Independently guarded before using its canonical schemas.')
     booleanParam(name: 'CONTEXT_TAPE_AUTH_ONLY', defaultValue: false,
@@ -74,6 +76,12 @@ pipeline {
           if (params.CONTEXT_TAPE_AUTH_ONLY && params.CONTEXT_TAPE_ORDER_INIT_ONLY) {
             error('Select only one Context Tape preparation mode.')
           }
+          if (params.CONTEXT_TAPE_DEV_FIXTURE_RECOVERY && (!params.CONTEXT_TAPE_ORDER_INIT_ONLY || params.ENVIRONMENT != 'dev')) {
+            error('Fixture recovery requires dev order-initialization-only mode.')
+          }
+          if (params.CONTEXT_TAPE_ORDER_INIT_ONLY && !params.CONTRACTS_PERMITTED_SHA?.trim()) {
+            error('Order initialization requires CONTRACTS_PERMITTED_SHA.')
+          }
         }
       }
     }
@@ -88,15 +96,22 @@ pipeline {
         }
         script {
           env.CONTRACTS_SHA_GUARD = 'PASSED'
-          sh 'python3 scripts/deploy/initialize-context-tape-orders.py --contracts .jenkins-tmp/context-tape-contracts'
+          env.ORDER_INIT_RECOVERY_ARG = params.CONTEXT_TAPE_DEV_FIXTURE_RECOVERY ? '--recover-dev-fixture' : ''
+          timeout(time: 20, unit: 'MINUTES') {
+            sh 'python3 scripts/deploy/initialize-context-tape-orders.py --contracts .jenkins-tmp/context-tape-contracts ${ORDER_INIT_RECOVERY_ARG}'
+          }
           if (!params.DEPLOY_DRY_RUN) {
             if (params.ENVIRONMENT == 'production') {
-              input message: 'Initialize missing order topics/canonical schemas and cap empty-topic byte retention in production? No records are converted/deleted, and no workload or account access changes.', ok: 'Initialize missing contracts'
+              timeout(time: 10, unit: 'MINUTES') {
+                input message: 'Initialize missing order topics/canonical schemas and cap empty-topic byte retention in production? No records are converted/deleted, and no workload or account access changes.', ok: 'Initialize missing contracts'
+              }
             }
             timeout(time: 10, unit: 'MINUTES') {
               sh 'PERMITTED_SHA="${CONTRACTS_PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir .jenkins-tmp/context-tape-contracts'
             }
-            sh 'python3 scripts/deploy/initialize-context-tape-orders.py --contracts .jenkins-tmp/context-tape-contracts --apply'
+            timeout(time: 20, unit: 'MINUTES') {
+              sh 'python3 scripts/deploy/initialize-context-tape-orders.py --contracts .jenkins-tmp/context-tape-contracts ${ORDER_INIT_RECOVERY_ARG} --apply'
+            }
           }
         }
       }

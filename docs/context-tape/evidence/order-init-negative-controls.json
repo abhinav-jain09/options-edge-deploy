@@ -1,0 +1,51 @@
+[
+  {
+    "control": "retained offsets",
+    "positivePassed": true,
+    "removedMechanismRejected": true,
+    "effectRoutes": "unit-test urlopen and subprocess barrier active",
+    "test": "test_retained_data_or_nonzero_floor_refused_before_any_write"
+  },
+  {
+    "control": "quiescence",
+    "positivePassed": true,
+    "removedMechanismRejected": true,
+    "effectRoutes": "unit-test urlopen and subprocess barrier active",
+    "test": "test_quiescence_cluster_and_read_failures_refused"
+  },
+  {
+    "control": "schema identity",
+    "positivePassed": true,
+    "removedMechanismRejected": true,
+    "effectRoutes": "unit-test urlopen and subprocess barrier active",
+    "test": "test_schema_mismatch_and_registry_failure_are_not_absence"
+  },
+  {
+    "control": "source guards",
+    "positivePassed": true,
+    "removedMechanismRejected": true,
+    "effectRoutes": "unit-test urlopen and subprocess barrier active",
+    "test": "test_both_source_guards_and_jenkins_identity_required"
+  },
+  {
+    "control": "repeat quiescence",
+    "positivePassed": true,
+    "removedMechanismRejected": true,
+    "effectRoutes": "unit-test urlopen and subprocess barrier active",
+    "test": "test_quiescence_is_rechecked_before_first_write"
+  },
+  {
+    "control": "actual deployment pod selector",
+    "positivePassed": true,
+    "removedMechanismRejected": true,
+    "effectRoutes": "unit-test urlopen and subprocess barrier active",
+    "test": "test_quiescence_cluster_and_read_failures_refused"
+  },
+  {
+    "control": "exact recovery schema id",
+    "positivePassed": true,
+    "removedMechanismRejected": true,
+    "effectRoutes": "unit-test urlopen and subprocess barrier active",
+    "test": "test_fixture_recovery_is_exact_dev_only_and_never_permanent"
+  }
+]

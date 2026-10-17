@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import time
 import urllib.error
 import urllib.request
 
@@ -50,8 +51,12 @@ def kafka_tool(name):
 
 
 class Initializer:
-    def __init__(self, environment, schemas):
+    def __init__(self, environment, schemas, recover_dev_fixture=False):
         self.bootstrap, self.registry, self.allowed_bootstrap, self.allowed_registry = TARGETS[environment]
+        self.environment = environment
+        self.recover_dev_fixture = recover_dev_fixture
+        self.fixture_pending = False
+        require(not recover_dev_fixture or environment == 'dev', 'fixture recovery is dev-only')
         self.schemas = schemas
         self.unbounded = set()
 
@@ -72,7 +77,11 @@ class Initializer:
             require(all(deployment.get('status', {}).get(k, 0) == 0
                         for k in ('replicas', 'readyReplicas', 'availableReplicas', 'updatedReplicas')),
                     name + ' still has replicas')
-            pods = self.kube('get', 'pods', '-l', 'app.kubernetes.io/name=' + name)
+            selector = deployment['spec'].get('selector', {})
+            labels = selector.get('matchLabels')
+            require(isinstance(labels, dict) and labels and not selector.get('matchExpressions'),
+                    'deployment selector must have explicit matchLabels only: ' + name)
+            pods = self.kube('get', 'pods', '-l', ','.join(key + '=' + value for key, value in sorted(labels.items())))
             require(not pods['items'], name + ' still has pods (including terminating pods)')
             for container in deployment['spec']['template']['spec']['containers']:
                 for entry in container.get('env', []):
@@ -83,11 +92,10 @@ class Initializer:
         for group in sorted(groups & existing):
             state = self.kafka('kafka-consumer-groups', '--describe', '--group', group, '--state')
             lines = [line.split() for line in state.splitlines() if line.strip()]
-            header = next((row for row in lines if 'STATE' in row and '#MEMBERS' in row), None)
+            header = next((row for row in lines if row[-2:] == ['STATE', '#MEMBERS']), None)
             rows = [row for row in lines if row and row[0] == group]
-            require(header is not None and len(rows) == 1 and len(rows[0]) == len(header), 'unreadable consumer group state: ' + group)
-            row = dict(zip(header, rows[0]))
-            require(row['STATE'] in ('Empty', 'Dead') and row['#MEMBERS'] == '0', 'active execution group: ' + group)
+            require(header is not None and len(rows) == 1 and len(rows[0]) >= 3, 'unreadable consumer group state: ' + group)
+            require(rows[0][-2] in ('Empty', 'Dead') and rows[0][-1] == '0', 'active execution group: ' + group)
 
     def topic(self, topic):
         existing = set(self.kafka('kafka-topics', '--list').splitlines())
@@ -119,9 +127,37 @@ class Initializer:
                 raise
             body = json.loads(error.read())
             require(body.get('error_code') in (40401, 40402), 'unexpected schema-registry 404')
+            try:
+                with urllib.request.urlopen(self.registry + '/subjects/' + topic + '-value/versions?deleted=true', timeout=15) as response:
+                    history = json.load(response)
+                require(history == [] or (history == [1] and self.fixture_history(topic)),
+                        'subject has deleted/history versions; initialization refuses resurrection: ' + topic)
+            except urllib.error.HTTPError as history_error:
+                require(history_error.code == 404 and json.loads(history_error.read()).get('error_code') == 40401,
+                        'cannot prove subject has no deleted/history versions: ' + topic)
             return False
         require(value.get('schemaType', 'AVRO') == 'AVRO' and not value.get('references'), 'incompatible schema type/references: ' + topic)
+        if json.loads(value['schema']) != self.schemas[topic] and self.fixture_value(topic, value):
+            require(self.fixture_history(topic), 'fixture recovery history changed')
+            self.fixture_pending = True
+            return False
         require(json.loads(value['schema']) == self.schemas[topic], 'existing schema differs from canonical contract: ' + topic)
+        return True
+
+    def fixture_value(self, topic, value):
+        return (self.recover_dev_fixture and self.environment == 'dev' and topic == TOPICS[0]
+                and value.get('subject') == topic + '-value' and value.get('version') == 1 and value.get('id') == 32
+                and value.get('schemaType', 'AVRO') == 'AVRO' and not value.get('references')
+                and json.loads(value['schema']) == {'type': 'record', 'name': 'Order0', 'fields': []})
+
+    def fixture_history(self, topic):
+        if not self.recover_dev_fixture or self.environment != 'dev' or topic != TOPICS[0]:
+            return False
+        root = self.registry + '/subjects/' + topic + '-value/versions'
+        with urllib.request.urlopen(root + '?deleted=true', timeout=15) as response:
+            require(json.load(response) == [1], 'fixture recovery requires exactly historical version 1')
+        with urllib.request.urlopen(root + '/1?deleted=true', timeout=15) as response:
+            require(self.fixture_value(topic, json.load(response)), 'fixture recovery identity changed')
         return True
 
     def preflight(self):
@@ -132,6 +168,7 @@ class Initializer:
         plan = self.preflight()  # Check BOTH contracts before the first write.
         for topic, exists, registered in plan:
             print(topic + ': topic=' + ('preserve' if exists else 'create') + ', schema=' + ('preserve' if registered else 'register')
+                  + (', RECOVER known dev-only empty fixture id32/version1' if self.fixture_pending and topic == TOPICS[0] else '')
                   + ', retention.bytes=' + ('cap empty topic at 1 GiB' if topic in self.unbounded else 'declared'), flush=True)
         if not apply:
             print('Dry run: no Kafka or schema mutation.')
@@ -156,12 +193,31 @@ class Initializer:
                 print('Capped verified empty topic byte retention: ' + topic, flush=True)
             self.preflight()
             if not self.schema(topic):
+                if self.fixture_pending and topic == TOPICS[0]:
+                    self.quiescent()
+                    require(self.topic(topic), 'fixture recovery requires the empty topic')
+                    require(self.fixture_history(topic), 'fixture history unavailable')
+                    request = urllib.request.Request(self.registry + '/subjects/' + topic + '-value/versions/1', method='DELETE')
+                    with urllib.request.urlopen(request, timeout=15) as response:
+                        require(json.load(response) == 1, 'fixture soft-delete did not confirm version 1')
+                    self.fixture_pending = False
+                    print('Soft-deleted only known empty dev fixture id32/version1; retained schema id/history, no records changed.', flush=True)
                 request = urllib.request.Request(self.registry + '/subjects/' + topic + '-value/versions',
                     data=json.dumps({'schemaType': 'AVRO', 'schema': json.dumps(self.schemas[topic])}).encode(),
                     headers={'Content-Type': 'application/vnd.schemaregistry.v1+json'}, method='POST')
                 with urllib.request.urlopen(request, timeout=15) as response:
                     require(isinstance(json.load(response).get('id'), int), 'registration did not return a schema id')
-                require(self.schema(topic), 'schema still absent after registration: ' + topic)
+                for attempt in range(20):
+                    try:
+                        ready = self.schema(topic)
+                    except (RuntimeError, urllib.error.URLError):
+                        ready = False
+                    if ready:
+                        break
+                    if attempt != 19:
+                        time.sleep(1)
+                else:
+                    raise RuntimeError('canonical schema not visible after registration: ' + topic)
                 print('Registered/verified ' + topic + '-value', flush=True)
         require(all(exists and registered for _, exists, registered in self.preflight()), 'initialization did not complete')
         print('Context Tape order topics and canonical schemas ready. No records, offsets or account grants changed.')
@@ -171,11 +227,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--contracts', type=Path, required=True)
     parser.add_argument('--apply', action='store_true')
+    parser.add_argument('--recover-dev-fixture', action='store_true', help='Explicit recovery of dev-only empty Order0 schema id32/version1; no other schema may be deleted.')
     args = parser.parse_args()
     environment = os.environ.get('ENVIRONMENT')
     require(environment in TARGETS, 'only dev and production are allowed')
     schemas = {topic: json.loads((args.contracts / 'schemas' / file).read_text()) for topic, file in zip(TOPICS, FILES)}
-    Initializer(environment, schemas).run(args.apply)
+    Initializer(environment, schemas, args.recover_dev_fixture).run(args.apply)
 
 
 if __name__ == '__main__':
