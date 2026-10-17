@@ -125,8 +125,16 @@ if [ "$DEPLOY_DRY_RUN" = "true" ]; then
   for name in ${pvc_create[@]+"${pvc_create[@]}"}; do
     yq "select(.metadata.name == \"$name\")" "$PVCS" | kubectl create --dry-run=server -f -
   done
+  if [ "$ENVIRONMENT" = dev ] || [ "$ENVIRONMENT" = production ]; then
+    DEPLOY_DRY_RUN=true bash scripts/deploy/ensure-context-tape-execution-auth.sh
+  fi
   echo "dry-run OK — would create ${#pvc_create[@]} PVC(s) and apply $((total_docs - pvc_docs)) infra docs."
   exit 0
+fi
+
+# Same shared-infra ownership as other credentials. Dry-run above remains mutation-free.
+if [ "$ENVIRONMENT" = dev ] || [ "$ENVIRONMENT" = production ]; then
+  bash scripts/deploy/ensure-context-tape-execution-auth.sh
 fi
 
 echo "=== apply (non-PVC infra) ==="

@@ -69,11 +69,20 @@ spec:
             - configMapRef:
                 name: options-edge-config
           env:
-            # NOTE: no HTTP health server is implemented yet, so this port is declared and unused and there
-            # are deliberately no readiness/liveness probes — a probe against a port nothing listens on
-            # would fail the pod rather than describe it.
-            - name: HEALTH_PORT
+            # Process health is separate from authenticated end-to-end trading readiness.
+            - name: SERVER_PORT
               value: "8131"
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xms256m -Xmx512m -XX:MaxDirectMemorySize=128m"
+            - name: AUTH_ISSUER_URI
+              value: "https://auth.bleadingoptions.com/realms/optionsedge"
+            - name: AUTH_AUDIENCE
+              value: "options-edge-web"
+            - name: CONTEXT_TAPE_EXECUTION_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: context-tape-execution-auth
+                  key: token
             # --- what it reads and writes ---
             - name: BROKER_EXECUTION_INTENT_TOPIC
               value: trading.order.intent
@@ -144,9 +153,23 @@ spec:
               value: "300000"
             - name: BROKER_EXECUTION_MAX_CHASE_GIVEUP_FRACTION
               value: "0.25"
+          ports:
+            - name: http
+              containerPort: 8131
+          startupProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 20
+            failureThreshold: 3
           resources:
             requests:
               cpu: 50m
-              memory: 256Mi
-            limits:
               memory: 512Mi
+            limits:
+              memory: 1Gi
