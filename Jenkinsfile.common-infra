@@ -23,6 +23,10 @@ pipeline {
       description: 'DO NOT EDIT BY HAND — the sha256 of scripts/jenkins/permitted-sha-guard.sh this definition runs (Deployment Permission Rule). The guard refuses to run under any other value. It is a DECLARATION, not proof that this job enforces the guard: a caller that triggers this job judges its SCM definition and its Jenkinsfile at the forwarded commit (scripts/jenkins/require-guarded-downstream.sh). Regenerate with scripts/jenkins/permitted-sha-guard-version.sh when the guard changes.')
     choice(name: 'ENVIRONMENT', choices: ['dev', 'production', 'experiment'],
       description: 'Target environment — selects k8s/infra/overlays/<env> and the deployer kubeconfig (oeProfile).')
+    booleanParam(name: 'CONTEXT_TAPE_ORDER_INIT_ONLY', defaultValue: false,
+      description: 'First-start only: initialize absent/empty order topics and canonical schemas under executor/bridge quiescence. Caps unbounded retention.bytes only on verified empty topics; no conversion, deletion, offset reset, workload, grant or realm changes.')
+    string(name: 'CONTRACTS_PERMITTED_SHA', defaultValue: '', trim: true,
+      description: 'Required for order initialization: exact current options-edge-contracts main SHA. Independently guarded before using its canonical schemas.')
     booleanParam(name: 'CONTEXT_TAPE_AUTH_ONLY', defaultValue: false,
       description: 'Only validate/create the shared private execution credential. No manifests, PVCs, realm configuration or workloads are applied in this mode.')
     booleanParam(name: 'DEPLOY_DRY_RUN', defaultValue: true,
@@ -63,8 +67,42 @@ pipeline {
         }
       }
     }
+    stage('Validate preparation mode') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
+      steps {
+        script {
+          if (params.CONTEXT_TAPE_AUTH_ONLY && params.CONTEXT_TAPE_ORDER_INIT_ONLY) {
+            error('Select only one Context Tape preparation mode.')
+          }
+        }
+      }
+    }
+    stage('Context Tape order initialization only') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.CONTEXT_TAPE_ORDER_INIT_ONLY) } }
+      steps {
+        dir('.jenkins-tmp/context-tape-contracts') {
+          git url: 'https://github.com/abhinav-jain09/options-edge-contracts.git', branch: 'main'
+        }
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${CONTRACTS_PERMITTED_SHA:-}" bash scripts/jenkins/permitted-sha-guard.sh --dir .jenkins-tmp/context-tape-contracts --ref main'
+        }
+        script {
+          env.CONTRACTS_SHA_GUARD = 'PASSED'
+          sh 'python3 scripts/deploy/initialize-context-tape-orders.py --contracts .jenkins-tmp/context-tape-contracts'
+          if (!params.DEPLOY_DRY_RUN) {
+            if (params.ENVIRONMENT == 'production') {
+              input message: 'Initialize missing order topics/canonical schemas and cap empty-topic byte retention in production? No records are converted/deleted, and no workload or account access changes.', ok: 'Initialize missing contracts'
+            }
+            timeout(time: 10, unit: 'MINUTES') {
+              sh 'PERMITTED_SHA="${CONTRACTS_PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir .jenkins-tmp/context-tape-contracts'
+            }
+            sh 'python3 scripts/deploy/initialize-context-tape-orders.py --contracts .jenkins-tmp/context-tape-contracts --apply'
+          }
+        }
+      }
+    }
     stage('Context Tape execution credential only') {
-      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && params.CONTEXT_TAPE_AUTH_ONLY } }
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.CONTEXT_TAPE_AUTH_ONLY) } }
       steps {
         script {
           sh 'DEPLOY_DRY_RUN=true bash scripts/deploy/ensure-context-tape-execution-auth.sh'
@@ -84,7 +122,7 @@ pipeline {
     // an infra deploy is a natural moment to notice that the public workload has been scaled up
     // without evidence. Cheap, and it fails the same way.
     stage('Public gate (PGL-072, secondary)') {
-      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && !params.CONTEXT_TAPE_AUTH_ONLY && (params.ENVIRONMENT == 'production') } }
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (!params.CONTEXT_TAPE_AUTH_ONLY && !params.CONTEXT_TAPE_ORDER_INIT_ONLY && params.ENVIRONMENT == 'production') } }
       steps {
         sh '''
           set -euo pipefail
@@ -93,7 +131,7 @@ pipeline {
       }
     }
     stage('Render + Diff (always)') {
-      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && !params.CONTEXT_TAPE_AUTH_ONLY } }
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (!params.CONTEXT_TAPE_AUTH_ONLY && !params.CONTEXT_TAPE_ORDER_INIT_ONLY) } }
       steps {
         sh '''
           set -euo pipefail
@@ -104,7 +142,7 @@ pipeline {
       }
     }
     stage('Approve production infra change') {
-      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && !params.CONTEXT_TAPE_AUTH_ONLY && ((params.ENVIRONMENT == 'production') && (!params.DEPLOY_DRY_RUN)) } }
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (!params.CONTEXT_TAPE_AUTH_ONLY && !params.CONTEXT_TAPE_ORDER_INIT_ONLY && params.ENVIRONMENT == 'production' && !params.DEPLOY_DRY_RUN) } }
       steps {
         // §13.8: manual approval for prod infra changes. The diff is in the stage above.
         input message: "Apply the rendered infra changes to PRODUCTION? Review the 'Render + Diff' stage log first.",
@@ -112,7 +150,7 @@ pipeline {
       }
     }
     stage('Apply') {
-      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && !params.CONTEXT_TAPE_AUTH_ONLY && (!params.DEPLOY_DRY_RUN) } }
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (!params.CONTEXT_TAPE_AUTH_ONLY && !params.CONTEXT_TAPE_ORDER_INIT_ONLY && !params.DEPLOY_DRY_RUN) } }
       steps {
         sh '''
           set -euo pipefail
@@ -123,7 +161,7 @@ pipeline {
     // Skipping realm reconciliation is ANNOUNCED, not silent: a build that quietly omitted it would
     // look identical to one that performed it.
     stage('WARN: realm reconciliation skipped') {
-      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && !params.CONTEXT_TAPE_AUTH_ONLY && ((params.ENVIRONMENT == 'production') && (!params.DEPLOY_DRY_RUN) && (!params.RECONCILE_REALM)) } }
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (!params.CONTEXT_TAPE_AUTH_ONLY && !params.CONTEXT_TAPE_ORDER_INIT_ONLY && params.ENVIRONMENT == 'production' && !params.DEPLOY_DRY_RUN && !params.RECONCILE_REALM) } }
       steps {
         script {
           unstable('RECONCILE_REALM=false: the public realm was NOT reconciled. Its login settings, ' +
@@ -139,7 +177,7 @@ pipeline {
     // drifted into the default composite (PGL-031A/PGL-031B). It FAILS THE BUILD on drift it cannot
     // correct.
     stage('Reconcile public realm') {
-      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && !params.CONTEXT_TAPE_AUTH_ONLY && ((params.ENVIRONMENT == 'production') && (!params.DEPLOY_DRY_RUN) && (params.RECONCILE_REALM)) } }
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (!params.CONTEXT_TAPE_AUTH_ONLY && !params.CONTEXT_TAPE_ORDER_INIT_ONLY && params.ENVIRONMENT == 'production' && !params.DEPLOY_DRY_RUN && params.RECONCILE_REALM) } }
       steps {
         withCredentials([
           string(credentialsId: 'bo-keycloak-reconciler-secret', variable: 'KC_ADMIN_SECRET'),
