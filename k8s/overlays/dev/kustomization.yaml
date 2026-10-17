@@ -82,6 +82,7 @@ resources:
   # k8s/services/nifty-gex/overlays/dev exactly — validate-services enforces it.
   - ../../services/nifty-gex/base
 patches:
+  - path: broker-execution-http-patch.yaml
   # DEV-ONLY, 2026-10-11: run the auction-to-paper-order chain. The account owner wants an auction
   # market theory signal to reach the broker as a paper order from the next session.
   #

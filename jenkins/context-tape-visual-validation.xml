@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<flow-definition plugin="workflow-job">
+  <description>Source validation only: pinned before/after callback probes and isolated PostgreSQL/model tests on es4 outside RTH. No application rollout, runtime image publication, Kafka operation or release/replay gate.</description>
+  <keepDependencies>false</keepDependencies>
+  <properties>
+    <hudson.model.ParametersDefinitionProperty>
+      <parameterDefinitions>
+        <hudson.model.StringParameterDefinition>
+          <name>TEST_INFRA_SHA</name>
+          <description>Required exact 40-character pushed validation source SHA</description>
+          <defaultValue />
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>CANDIDATE_SHA</name>
+          <description>Required exact 40-character pushed validation source SHA</description>
+          <defaultValue />
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>BASELINE_SHA</name>
+          <description>Required exact 40-character pushed validation source SHA</description>
+          <defaultValue />
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>WEB_SHA</name>
+          <description>Required exact 40-character pushed validation source SHA</description>
+          <defaultValue />
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
+      </parameterDefinitions>
+    </hudson.model.ParametersDefinitionProperty>
+  </properties>
+  <definition class="org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition" plugin="workflow-cps">
+    <scm class="hudson.plugins.git.GitSCM" plugin="git">
+      <configVersion>2</configVersion>
+      <userRemoteConfigs>
+        <hudson.plugins.git.UserRemoteConfig>
+          <url>https://github.com/abhinav-jain09/options-edge-deploy.git</url>
+        </hudson.plugins.git.UserRemoteConfig>
+      </userRemoteConfigs>
+      <branches>
+        <hudson.plugins.git.BranchSpec>
+          <name>*/feat/context-tape-visual-order-deploy</name>
+        </hudson.plugins.git.BranchSpec>
+      </branches>
+      <doGenerateSubmoduleConfigurations>false</doGenerateSubmoduleConfigurations>
+      <submoduleCfg class="empty-list" />
+      <extensions />
+    </scm>
+    <scriptPath>Jenkinsfile.visual-orders-validation</scriptPath>
+    <lightweight>true</lightweight>
+  </definition>
+  <triggers />
+  <disabled>false</disabled>
+</flow-definition>

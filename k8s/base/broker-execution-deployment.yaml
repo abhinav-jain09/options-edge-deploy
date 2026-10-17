@@ -69,11 +69,22 @@ spec:
             - configMapRef:
                 name: options-edge-config
           env:
-            # NOTE: no HTTP health server is implemented yet, so this port is declared and unused and there
-            # are deliberately no readiness/liveness probes — a probe against a port nothing listens on
-            # would fail the pod rather than describe it.
-            - name: HEALTH_PORT
+            # Process health is separate from authenticated end-to-end trading readiness.
+            - name: SERVER_PORT
               value: "8131"
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xms256m -Xmx512m -XX:MaxDirectMemorySize=128m"
+            - name: VISUAL_ORDER_STORE_BUDGET_BYTES
+              value: "34359738368" # 32 GiB external audit-state budget; new entries stop at 90%
+            - name: AUTH_ISSUER_URI
+              value: "https://auth.bleadingoptions.com/realms/optionsedge"
+            - name: AUTH_AUDIENCE
+              value: "options-edge-web"
+            - name: CONTEXT_TAPE_EXECUTION_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: context-tape-execution-auth
+                  key: token
             # --- what it reads and writes ---
             - name: BROKER_EXECUTION_INTENT_TOPIC
               value: trading.order.intent
@@ -81,6 +92,10 @@ spec:
               value: trading.order.status
             - name: BROKER_EXECUTION_CONSUMER_GROUP
               value: broker-execution-service
+            # The Jenkins cutover must establish/reverify the fresh Avro partition boundary at zero.
+            # Zero skips no records. Any unexpected retained JSON fails the Avro decoder closed.
+            - name: BROKER_EXECUTION_AVRO_START_OFFSETS
+              value: "0:0"
             # --- the values that decide whether anything is placed (OWNER SETS THESE) ---
             # Armed 2026-10-11 at the account owner's instruction: PAPER + ENABLED + TRANSMIT. This now
             # places paper orders WITHOUT a human pressing Transmit. It still cannot reach a live account:
@@ -144,9 +159,23 @@ spec:
               value: "300000"
             - name: BROKER_EXECUTION_MAX_CHASE_GIVEUP_FRACTION
               value: "0.25"
+          ports:
+            - name: http
+              containerPort: 8131
+          startupProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 20
+            failureThreshold: 3
           resources:
             requests:
               cpu: 50m
-              memory: 256Mi
-            limits:
               memory: 512Mi
+            limits:
+              memory: 1Gi
