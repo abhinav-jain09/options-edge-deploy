@@ -1,0 +1,17 @@
+# SERVICE SLICE — break-score. Owns this service's Deployment, plus the ConfigMap it mounts.
+#
+# Referenced from BOTH k8s/overlays/dev and k8s/overlays/production (NOT k8s/base), HELD AT replicas: 0 until the owner
+# turns it on. Single replica only. SHADOW mode (no voice, no screen).
+#
+# No Service object on purpose (the vol-state / es-compression-expansion shadow pattern): kubelet probes reach the pod
+# directly and a ClusterIP would make /metrics reachable in-cluster. Nothing reads this service's output yet.
+#
+# The ConfigMap is part of the MONOLITHIC render only: the generated standalone slices (and the validator's blast radius)
+# are Deployment/Service only, so `service-deploy` rolls the Deployment and does not create the ConfigMap. The pod is
+# held at 0 and mounts the ConfigMap with optional: false, so it must exist before the owner scales the service up
+# (docs/break-score/DEPLOY-WIRING.md says how).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - break-score-deployment.yaml
+  - break-score-config.yaml

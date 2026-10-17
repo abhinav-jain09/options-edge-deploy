@@ -21,6 +21,11 @@ resources:
   - ../../services/es-compression-expansion/base
   # hedging-pressure: HELD AT replicas 0 (base) on dev and production alike; the owner turns it on later.
   - ../../services/hedging-pressure/base
+  # break-score + level-absorption: both HELD AT replicas 0 (base) on dev and production alike. break-score is SHADOW (scores
+  # level breaks off the linearized ES tape); level-absorption is EYEBALL phase and cannot start until its Phase 0 freeze file
+  # and retention artifact exist. The owner turns each on later (docs/break-score/DEPLOY-WIRING.md, docs/level-absorption/DEPLOY-WIRING.md).
+  - ../../services/break-score/base
+  - ../../services/level-absorption/base
   # market-structure: RUNNING on dev and production (replicas 1 in the base). Reads
   # options.indicators.bars read-only and writes only options.spx.market-structure.{ui,sequence,dlq};
   # what a reader sees is gated on the gateway's own GATEWAY_MARKET_STRUCTURE_ENABLED.
@@ -978,6 +983,12 @@ images:
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-early-auction-verdict
     newName: host.docker.internal:5001/options-edge-early-auction-verdict
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-break-score
+    newName: host.docker.internal:5001/options-edge-break-score
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-level-absorption
+    newName: host.docker.internal:5001/options-edge-level-absorption
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-multileg-structure
     newName: host.docker.internal:5001/options-edge-multileg-structure

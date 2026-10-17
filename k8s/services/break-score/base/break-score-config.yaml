@@ -1,0 +1,32 @@
+# The Break Score configuration the pod mounts at /home/options-edge/config/break-score.
+#
+# break-score.properties: the CALIBRATABLE thresholds, the rev 11 STARTING VALUES from BreakScoreConfig.startingValues()
+# (options-edge-processing, break-score-service). BreakScoreConfig.load reads exactly these seven keys and refuses a file
+# with an absent, repeated or out-of-domain one; the other eight constants of the record are FIXED in code and have no key.
+#   breakTicks 1..4 | absorptionK 2..8 | retestProximityTicks 1..4 | failHoldMillis 60000..300000
+#   confirmDepartTicks 2..8 | w1, w2 in 0..1 and w1 + w2 = 1
+# Changing a value here is a CALIBRATION decision, not a deploy detail (docs/break-score/BREAK-SCORE-SERVICE-REQUIREMENT.md);
+# the pod reads the file once at start, so a change needs a restart.
+#
+# manual-levels.tsv: the manual level set, shipped EMPTY. ManualLevels treats an empty file as a valid, empty set (it is how an
+# operator withdraws every manual level); a record is  priceTicks<TAB>side<TAB>MANUAL<TAB>yyyy-mm-dd  and a non-empty file must end
+# in a newline. The service re-reads the file by content, so editing this ConfigMap changes the set within the kubelet's
+# ConfigMap sync period, without a restart. Real manual levels are the owner's to supply (docs/break-score/DEPLOY-WIRING.md).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: break-score-config
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: break-score-service
+    app.kubernetes.io/part-of: options-edge
+data:
+  break-score.properties: |
+    breakTicks=2
+    absorptionK=4.0
+    retestProximityTicks=2
+    failHoldMillis=120000
+    confirmDepartTicks=4
+    w1=0.5
+    w2=0.5
+  manual-levels.tsv: ""
