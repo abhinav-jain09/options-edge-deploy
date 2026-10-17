@@ -407,6 +407,16 @@ fi
 # (ibkr.*, hpsf.*, mission-control, strike-invasion, strike-sr, open-direction, volume-sandwich).
 # Now the single source of truth is topics.env, applied by the SAME scripts/kafka/apply-topics.sh
 # Jenkins uses, scoped to the es4 set. This script is deliberately DUMB about topics.
+# INDICATOR-AVRO-CONVERSION-PLAN.md section 4: the wipe above emptied the registry's _schemas with the registry
+# STOPPED; it is healthy again on an empty store, so the indicator family's fixed ids (2001-2007) are re-imported
+# here — before any topic exists and before any app is restored (indicator-service does not auto-register).
+# /subjects must be empty on this path: a registry that still holds subjects did not come back from the wipe.
+log "registering the indicator family's fixed-id schemas (ensure-indicator-schemas.sh)"
+if [ "$DRY" != "true" ]; then
+  subjects=$(curl -sS -m 10 http://localhost:8081/subjects || echo '?')
+  [ "$subjects" = "[]" ] || die "schema registry /subjects is not empty after the wipe ($subjects) — the registry did not restart on the empty store"
+fi
+run "SCHEMA_REGISTRY_URL=http://localhost:8081 SCHEMAS_DIR='$SCRIPT_DIR/../../schemas-registry/indicators' DEPLOY_DRY_RUN=$DRY bash '$SCRIPT_DIR/../kafka/ensure-indicator-schemas.sh'"
 log "reconciling required core es.* topic contracts (create-es-topics.sh)"
 # A clean-reset IS the "approved destructive cleanup deployment" that
   # KAFKA_RECREATE_MISMATCHED_TOPICS gates: the wipe just deleted every topic, so anything

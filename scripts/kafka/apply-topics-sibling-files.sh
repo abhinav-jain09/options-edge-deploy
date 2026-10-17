@@ -35,8 +35,27 @@ TARGET="${1:-$HERE/apply-topics.sh}"
 # Both spellings of the source builtin, both quoting styles, at any indentation. The file name must be a
 # literal: a computed path cannot be resolved here, and silently dropping it would under-report, so it is
 # a refusal below (nothing matched) rather than an omission.
-files="$(sed -nE 's/^[[:space:]]*(source|\.)[[:space:]]+"?\$\{?SCRIPT_DIR\}?\/([A-Za-z0-9._-]+)"?[[:space:]]*$/\2/p' "$TARGET" \
-  | awk '!seen[$0]++')"
+# TRANSITIVE: a sibling may source siblings of its own out of the same directory (topic-shape.lib.sh sources
+# resolve-prod-partition-overrides.sh); every one of them belongs to the unit a copy must carry, so each listed
+# sibling that exists beside TARGET is parsed the same way until the list stops growing.
+siblings_of() {
+  sed -nE 's/^[[:space:]]*(source|\.)[[:space:]]+"?\$\{?SCRIPT_DIR\}?\/([A-Za-z0-9._-]+)"?[[:space:]]*$/\2/p' "$1"
+}
+TARGET_DIR="$(cd "$(dirname "$TARGET")" && pwd)"
+files="$(siblings_of "$TARGET" | awk '!seen[$0]++')"
+queue="$files"
+while [ -n "$queue" ]; do
+  next=""
+  for f in $queue; do
+    [ -r "$TARGET_DIR/$f" ] || continue
+    for g in $(siblings_of "$TARGET_DIR/$f"); do
+      case " $files " in *" $g "*) ;; *) files="$files
+$g"; next="$next $g" ;; esac
+    done
+  done
+  queue="$next"
+done
+files="$(printf '%s\n' $files | awk 'NF && !seen[$0]++')"
 
 if [ -z "$files" ]; then
   echo "apply-topics-sibling-files.sh: found no \$SCRIPT_DIR sibling in $TARGET." >&2

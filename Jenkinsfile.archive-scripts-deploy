@@ -34,6 +34,8 @@ pipeline {
       description: 'REQUIRED — Deployment Permission Rule (options-edge rule.md). The full 40-character commit id of THIS repository that Abhinav permitted for this run. The Permitted commit guard stage refuses the build before any effect unless the checked-out HEAD is exactly this commit AND on origin/main; empty, short or mismatched values are refused and nothing is substituted. A manual click needs it too: copy it from `git rev-parse origin/main`.')
     string(name: 'PERMITTED_SHA_GUARD_VERSION', defaultValue: '2f6fc2ab7aa51eb8a9e8aa350f2d774cd2fb7a253de2591e43645a19a9886b24',
       description: 'DO NOT EDIT BY HAND — the sha256 of scripts/jenkins/permitted-sha-guard.sh this definition runs (Deployment Permission Rule). The guard refuses to run under any other value. It is a DECLARATION, not proof that this job enforces the guard: a caller that triggers this job judges its SCM definition and its Jenkinsfile at the forwarded commit (scripts/jenkins/require-guarded-downstream.sh). Regenerate with scripts/jenkins/permitted-sha-guard-version.sh when the guard changes.')
+    string(name: 'CONTRACTS_PERMITTED_SHA', defaultValue: '', trim: true,
+      description: 'REQUIRED for an install — the full 40-character options-edge-contracts commit on main whose build is the options-edge-contracts.jar the archiver decodes Avro indicator bars with (INDICATOR-AVRO-CONVERSION-PLAN.md section 2); its version must equal scripts/ops/archive/contracts.version. The contracts checkout is a nested acquisition bound by its own guard (Deployment Permission Rule).')
     string(name: 'PROD_HOST', defaultValue: 'abhinav@192.168.100.252',
       description: 'SSH target that runs the archive crons (Kafka + the NAS mount are local there).')
     string(name: 'INSTALL_DIR', defaultValue: '/home/abhinav/oe-ops',
@@ -60,7 +62,11 @@ pipeline {
     // StrikeArchiveReader.java is run by oe-archive-kafka.sh through the JDK source launcher (no build
     // step) for OE_COMMITTED_READ_TOPICS; it is data to the unit exactly like oe-topics.env, so it ships
     // and swaps with the archiver or not at all.
-    UNIT        = "oe-archive-kafka.sh StrikeArchiveReader.java oe-alert.sh oe-topics.env test-archive-reset.sh oe-archive.crontab oe-archive.crontab.predecessor oe-calibration-progress.sh oe_corpus_reader.py oe-push-validation-artifact.sh push-validation-artifact-test.sh calibration-targets.env market_calendar.py oe-archive-verify.sh oe-trading-day.sh oe-archive-daily.sh oe-archive-dev.sh ibkr-raw-retention.sh oe-archive-postgres.sh oe-vol-premium-open-capture.sh vol-premium-open-reference-capture.py"
+    // options-edge-contracts.jar travels WITH the unit but is not a committed file: it is built from the permitted
+    // options-edge-contracts commit in this job and shipped by its own dedicated step (SIDECAR below); the host
+    // installs, records and verifies it exactly like a unit file.
+    SIDECAR     = "options-edge-contracts.jar"
+    UNIT        = "oe-archive-kafka.sh StrikeArchiveReader.java IndicatorArchiveReader.java oe-alert.sh oe-topics.env test-archive-reset.sh oe-archive.crontab oe-archive.crontab.predecessor oe-calibration-progress.sh oe_corpus_reader.py oe-push-validation-artifact.sh push-validation-artifact-test.sh calibration-targets.env market_calendar.py oe-archive-verify.sh oe-trading-day.sh oe-archive-daily.sh oe-archive-dev.sh ibkr-raw-retention.sh oe-archive-postgres.sh oe-vol-premium-open-capture.sh vol-premium-open-reference-capture.py"
     // Both of these are read by the shell in sh ''' blocks, which Groovy does NOT
     // interpolate — without them here the scripts would see an unset variable under `set -u`.
     TEST_IMAGE       = "${params.TEST_IMAGE}"
@@ -243,7 +249,7 @@ pipeline {
         sh '''
           set -euo pipefail
           ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$PROD_HOST" \
-            "INSTALL_DIR='$INSTALL_DIR' UNIT='$UNIT' ALLOW_DRIFT='${ALLOW_HOST_DRIFT}' bash -s" <<'EOSSH'
+            "INSTALL_DIR='$INSTALL_DIR' UNIT='$UNIT $SIDECAR' ALLOW_DRIFT='${ALLOW_HOST_DRIFT}' bash -s" <<'EOSSH'
 set -euo pipefail
 record="$INSTALL_DIR/.archive-unit.sha256"
 if [ ! -f "$record" ]; then
@@ -300,6 +306,42 @@ EOSSH
           set -euo pipefail
           ssh -o BatchMode=yes "$PROD_HOST" "mkdir -p '$STAGE_DIR'"
         '''
+        // IndicatorArchiveReader.java decodes the Avro indicator bars (INDICATOR-AVRO-CONVERSION-PLAN.md section 2); it
+        // needs the options-edge-contracts classes on the host. The jar is BUILT here from the permitted contracts
+        // commit — a nested acquisition bound by its own guard (validator rule 9), packaged and shipped as dedicated
+        // effects each immediately after a verify of that tree (rule 9b) — never taken from a cache.
+        script {
+          def csha = (params.CONTRACTS_PERMITTED_SHA ?: '').trim()
+          if (!(csha ==~ /[0-9a-f]{40}/)) {
+            error("an install needs CONTRACTS_PERMITTED_SHA (the full 40-character options-edge-contracts commit on main), got '${csha}'.")
+          }
+        }
+        dir('.jenkins-tmp/contracts') { deleteDir() }
+        sh '''
+          set -eu
+          git clone git@github.com:abhinav-jain09/options-edge-contracts.git .jenkins-tmp/contracts
+          git -C .jenkins-tmp/contracts checkout main
+        '''
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${CONTRACTS_PERMITTED_SHA:-}" bash scripts/jenkins/permitted-sha-guard.sh --dir .jenkins-tmp/contracts --ref main'
+        }
+        sh '''
+          set -euo pipefail
+          # the contracts version this unit pins is the version that checkout builds — the jar name below is literal
+          CV=$(tr -d '[:space:]' < scripts/ops/archive/contracts.version)
+          [ "$CV" = 0.14.0 ] || { echo "FAIL: scripts/ops/archive/contracts.version is $CV but this job ships options-edge-contracts-0.14.0.jar — change both together"; exit 1; }
+          PV=$(sed -nE 's#^[[:space:]]*<version>([^<]+)</version>.*#\\1#p' .jenkins-tmp/contracts/pom.xml | head -1)
+          [ "$PV" = "$CV" ] || { echo "FAIL: options-edge-contracts at CONTRACTS_PERMITTED_SHA is version $PV, the unit pins $CV"; exit 1; }
+        '''
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${CONTRACTS_PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir .jenkins-tmp/contracts'
+        }
+        sh 'mvn -B -q -ntp -f .jenkins-tmp/contracts/pom.xml -DskipTests package'
+        sh 'unzip -l .jenkins-tmp/contracts/target/options-edge-contracts-0.14.0.jar | grep -q com/optionsedge/contracts/indicators/avro/IndicatorSchemas.class'
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${CONTRACTS_PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir .jenkins-tmp/contracts --allow-ignored target'
+        }
+        sh 'scp -o BatchMode=yes .jenkins-tmp/contracts/target/options-edge-contracts-0.14.0.jar "${PROD_HOST}:${STAGE_DIR}/options-edge-contracts.jar"'
         // The whole unit travels together: the archiver, the alert helper it sources, the topic policy it refuses to
         // start without, and the suite. Shipping the archiver alone would leave its dependencies as whatever happened to
         // be on the host. ONE scp of the literal UNIT list (market_calendar.py from its one committed home), as a
@@ -322,12 +364,12 @@ EOSSH
           // satisfies it. The path may be given unquoted, as here, or double-quoted.
           sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp --allow-ignored scripts/ops/archive/market_calendar.py --allow-ignored scripts/ops/archive/vol-premium-open-reference-capture.py'
         }
-        sh 'scp -o BatchMode=yes scripts/ops/archive/oe-archive-kafka.sh scripts/ops/archive/StrikeArchiveReader.java scripts/ops/archive/oe-alert.sh scripts/ops/archive/oe-topics.env scripts/ops/archive/test-archive-reset.sh scripts/ops/archive/oe-archive.crontab scripts/ops/archive/oe-archive.crontab.predecessor scripts/ops/archive/oe-calibration-progress.sh scripts/ops/archive/oe_corpus_reader.py scripts/ops/archive/oe-push-validation-artifact.sh scripts/ops/archive/push-validation-artifact-test.sh scripts/ops/archive/calibration-targets.env scripts/jenkins/market_calendar.py scripts/ops/archive/oe-archive-verify.sh scripts/ops/archive/oe-trading-day.sh scripts/ops/archive/oe-archive-daily.sh scripts/ops/archive/oe-archive-dev.sh scripts/ops/archive/ibkr-raw-retention.sh scripts/ops/archive/oe-archive-postgres.sh scripts/ops/archive/oe-vol-premium-open-capture.sh scripts/ops/vol-premium-open-reference-capture.py "${PROD_HOST}:${STAGE_DIR}/"'
+        sh 'scp -o BatchMode=yes scripts/ops/archive/oe-archive-kafka.sh scripts/ops/archive/StrikeArchiveReader.java scripts/ops/archive/IndicatorArchiveReader.java scripts/ops/archive/oe-alert.sh scripts/ops/archive/oe-topics.env scripts/ops/archive/test-archive-reset.sh scripts/ops/archive/oe-archive.crontab scripts/ops/archive/oe-archive.crontab.predecessor scripts/ops/archive/oe-calibration-progress.sh scripts/ops/archive/oe_corpus_reader.py scripts/ops/archive/oe-push-validation-artifact.sh scripts/ops/archive/push-validation-artifact-test.sh scripts/ops/archive/calibration-targets.env scripts/jenkins/market_calendar.py scripts/ops/archive/oe-archive-verify.sh scripts/ops/archive/oe-trading-day.sh scripts/ops/archive/oe-archive-daily.sh scripts/ops/archive/oe-archive-dev.sh scripts/ops/archive/ibkr-raw-retention.sh scripts/ops/archive/oe-archive-postgres.sh scripts/ops/archive/oe-vol-premium-open-capture.sh scripts/ops/vol-premium-open-reference-capture.py "${PROD_HOST}:${STAGE_DIR}/"'
         sh '''
           set -euo pipefail
 
           ssh -o BatchMode=yes "$PROD_HOST" \
-            "INSTALL_DIR='$INSTALL_DIR' STAGE_DIR='$STAGE_DIR' UNIT='$UNIT' BUILD='${BUILD_NUMBER}' ALLOW_DRIFT='${ALLOW_HOST_DRIFT}' bash -s" <<'EOSSH'
+            "INSTALL_DIR='$INSTALL_DIR' STAGE_DIR='$STAGE_DIR' UNIT='$UNIT $SIDECAR' BUILD='${BUILD_NUMBER}' ALLOW_DRIFT='${ALLOW_HOST_DRIFT}' bash -s" <<'EOSSH'
 set -euo pipefail
 bak="$INSTALL_DIR/.bak-build$BUILD"
 mkdir -p "$bak"
@@ -457,8 +499,11 @@ EOSSH
           # Compare the bytes now running against the bytes the suite passed against, computed HERE
           # from the workspace. Trusting the previous stage's exit status is the same reasoning the
           # archive incident this change fixes was built on.
-          for f in $UNIT; do
-            local_sha=$(sha256sum "scripts/ops/archive/$f" | cut -d' ' -f1)
+          for f in $UNIT $SIDECAR; do
+            case "$f" in
+              options-edge-contracts.jar) local_sha=$(sha256sum .jenkins-tmp/contracts/target/options-edge-contracts-0.14.0.jar | cut -d' ' -f1) ;;
+              *) local_sha=$(sha256sum "scripts/ops/archive/$f" | cut -d' ' -f1) ;;
+            esac
             host_sha=$(ssh -o BatchMode=yes "$PROD_HOST" "sha256sum '$INSTALL_DIR/$f' | cut -d' ' -f1")
             if [ "$local_sha" != "$host_sha" ]; then
               echo "MISMATCH $f: tested=$local_sha installed=$host_sha" >&2
