@@ -373,8 +373,10 @@ pipeline {
             # (k8s/es4/es4-common-env.yaml: KAFKA_APPLICATION_ID_SUFFIX "-es4"), not from options-edge-config
             SUFFIX=$(kubectl -n options-edge get configmap es4-common-env -o jsonpath='{.data.KAFKA_APPLICATION_ID_SUFFIX}' 2>/dev/null || true)
             : "${SUFFIX:?KAFKA_APPLICATION_ID_SUFFIX not readable from es4-common-env on es4 — refusing to guess the app id}"
-            ssh -o BatchMode=yes "$ES4_HOST" "set -e; cd /home/es4/repo; export PATH=/opt/kafka/current/bin:\$PATH; \
-              export KAFKA_BOOTSTRAP_SERVERS=localhost:9092 INDICATOR_APP_ID=indicator-service${SUFFIX} INDICATOR_INPUT_TOPIC=es.underlying.es.trades \
+            # the Kafka CLI is not installed on the es4 host: scripts/es4/kafka-cli-shim proxies each CLI into the
+            # es4-kafka container (as create-es-topics.sh does), whose in-container listener is localhost:29092
+            ssh -o BatchMode=yes "$ES4_HOST" "set -e; cd /home/es4/repo; export PATH=/home/es4/repo/scripts/es4/kafka-cli-shim:\$PATH; \
+              export KAFKA_BOOTSTRAP_SERVERS=localhost:29092 INDICATOR_APP_ID=indicator-service${SUFFIX} INDICATOR_INPUT_TOPIC=es.underlying.es.trades \
                      DEPLOY_DRY_RUN=${DEPLOY_DRY_RUN:-false} RECREATE_ENVIRONMENT=es4 TOPIC_PREFIX=es. \
                      KAFKA_TOPIC_REPLICATION_FACTOR=1 KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS=1 KAFKA_TOPIC_RETENTION_MS=86400000; \
               bash scripts/kafka/reset-indicator-state.sh && bash scripts/kafka/ensure-indicator-topics.sh --recreate"
