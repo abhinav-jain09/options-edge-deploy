@@ -35,7 +35,7 @@ pipeline {
           set -euo pipefail
           host=abhinav@192.168.100.4
           remote="$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" 'mktemp -d /tmp/visual-validation.XXXXXXXX')"
-          [[ "$remote" =~ ^/tmp/visual-validation\.[A-Za-z0-9]{8}$ ]] || { echo 'Invalid isolated validation directory' >&2; exit 1; }
+          [[ "$remote" =~ ^/tmp/visual-validation[.][A-Za-z0-9]{8}$ ]] || { echo 'Invalid isolated validation directory' >&2; exit 1; }
           cleanup(){ ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" "rm -rf -- '$remote'" || true; }
           trap cleanup EXIT
           rsync -az bundle/ "$host:$remote/"
