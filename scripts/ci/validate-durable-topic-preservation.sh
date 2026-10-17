@@ -415,10 +415,19 @@ BYTES_EXEMPT="context-tape.direction.ledger corridor-gauge-event-log es.drop.fin
 es.options.spx.gamma-ladder-path.events es.options.spx.gamma-ladder-path.state
 es.options.spx.gamma-migration.crossings es.options.spx.gamma-migration.fragility
 es.options.spx.gamma-migration.wall-touch options.databento.oi.anchor-manifest
-options.ibkr.gex.status options.spx.gamma-ladder-path.events options.spx.gamma-ladder-path.state
+options.ibkr.gex.status options.ibkr.gex.status.v2 options.spx.gamma-ladder-path.events options.spx.gamma-ladder-path.state
 options.spx.gamma-migration.crossings options.spx.gamma-migration.fragility
 options.spx.gamma-migration.scoring options.spx.gamma-migration.wall-touch spx.basis.state
 spx.drop.final-summary spx.drop.outcome underlying.vix.price"   # BZ 363, latent
+# options.ibkr.gex.status.v2 ADDED 2026-10-18, and NOT as part of the latent BZ 363 set above. It is
+# the only member here with a positive reason rather than a historical one: it is PURE COMPACT
+# (cleanup.policy=compact, no delete half), and a pure-compact topic never evicts by bytes or by
+# time at all — so a retention.bytes contract would protect nothing and would mislead the next
+# reader into thinking something was capped. This check is policy-blind by design, which is why the
+# exemption rather than a cap is the right remedy, and why it is spelled out here: the topic carries
+# the pre-open identity ledger, whose records recovery mints above, and the cap that this rule would
+# otherwise demand is exactly what the cutover plan rejected (the seed controls are written once and
+# are therefore the OLDEST records, so a cap evicts the ledger first).
 # ANY declared byte value counts, not only -1. A preserved topic needs a byte contract so a broker
 # default cannot delete it; whether that contract is "never by bytes" (-1) or "never in practice" (a cap
 # far above the measured volume) is a disk decision per topic, and the disk cannot grow (owner,
