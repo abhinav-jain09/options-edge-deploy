@@ -21,6 +21,10 @@ spec:
             # Streams refuses to start a topology whose source topic does not exist
             # (MissingSourceTopicException, SHUTDOWN_CLIENT), so option-pressure-state cannot run
             # at all until this does. Measured on a real session it adds 735 MiB to that topic,
-            # which the service retains for 4 days rather than forever. It adds one sink to an
-            # already-running topology; the existing outputs are untouched.
+            # which the service retains for 4 days rather than forever. It adds one sink to the
+            # topology, which keeps the application id and the existing store identities — but
+            # calling the existing outputs "untouched" was wrong: applying it restarts the service,
+            # and because its RocksDB state is on one ReadWriteOnce PVC the base now pins
+            # strategy: Recreate, so the restart is a brief full stop and
+            # option-price-behavior-by-strike is unavailable for that window.
             - { name: OPB_L1_ENABLED, value: "true" }
