@@ -68,7 +68,7 @@ spec:
             - name: KAFKA_MARKET_STRUCTURE_TOPIC
               value: options.spx.market-structure.ui
             - name: GATEWAY_MARKET_STRUCTURE_PATTERNS_ENABLED
-              value: "false"
+              value: "true"
             - name: KAFKA_MARKET_STRUCTURE_PATTERNS_TOPIC
               value: options.spx.market-structure.patterns
             - name: GATEWAY_EARLY_AUCTION_VERDICT_ENABLED

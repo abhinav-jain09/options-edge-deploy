@@ -58,12 +58,11 @@ spec:
             # Candlestick pattern annotations (processing CANDLESTICK-PATTERN-REQUIREMENT.md R6.4). The fold always
             # runs and is always in the recovery fingerprint; this flag gates ONLY publication to
             # options.spx.market-structure.patterns (ensured by scripts/kafka/ensure-market-structure-topics.sh).
-            # OFF until the owner turns it on; the gateway has its own GATEWAY_MARKET_STRUCTURE_PATTERNS_ENABLED.
-            # NOTE: the service's recovery method moved to ms-runtime-3 with this fold — deploy OUTSIDE regular
-            # trading hours so the next session starts fresh; an intraday rollout refuses the older checkpoint
-            # and needs the README's explicit rebuild (MARKET_STRUCTURE_IGNORE_RECOVERY).
+            # ON by default (owner decision 2026-10-16, after the dark dev+prod rollout verified clean); the gateway
+            # has its own GATEWAY_MARKET_STRUCTURE_PATTERNS_ENABLED, also ON. Set this to "false" to stop publishing
+            # without touching the fold or the recovery fingerprint.
             - name: MARKET_STRUCTURE_PATTERNS_ENABLED
-              value: "false"
+              value: "true"
             # The ms-runtime-3 recovery-method rollover (PR #1227) is COMPLETE: MARKET_STRUCTURE_IGNORE_RECOVERY=true
             # was applied once, after the 2026-10-16 close, and production's recovery topic then held a committed
             # ms-runtime-3 record (offset 3126, key market-structure-service-production, read read_committed); dev's
