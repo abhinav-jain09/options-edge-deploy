@@ -58,10 +58,14 @@ out={'classification':'source-validation-only; not a deployment/replay release g
 if 'native-callback-baseline' in groups and 'native-callback-candidate' in groups:
  out['nativeRelativeChange']=out['medians']['native-callback-candidate']/out['medians']['native-callback-baseline']-1
 out['nativeRelativeBudgetPass']=out.get('nativeRelativeChange',float('inf'))<=0.10
+# Owner accepted this specific median wrapper budget on 17 October 2026.
+# Keep the relative diagnostic; all other probe gates are unchanged.
+out['nativeWrapperBudgetNs']=1000
+out['nativeWrapperBudgetPass']=0<=out['medians'].get('native-callback-candidate',float('inf'))<=out['nativeWrapperBudgetNs']
 out['allNetNewBudgetsPass']=all(x.get('withinBudget',True) for v in groups.values() for x in v)
 (p/'summary.json').write_text(json.dumps(out,indent=2)+'\n');print(json.dumps(out['medians']));print('allNetNewBudgetsPass',out['allNetNewBudgetsPass'])
 assert set(groups)=={'native-callback-baseline','native-callback-candidate','native-adapter-queue','quote-book','journal-postgres','model-geometry','model-history-page'},'Every declared probe must run'
 assert all(len(v)==5 for v in groups.values()),'Five repeated commands required for each scenario'
 assert out['allNetNewBudgetsPass'],'A declared net-new budget failed'
-assert out['nativeRelativeBudgetPass'],'Native callback median regressed by more than 10 percent'
+assert out['nativeWrapperBudgetPass'],'Native callback wrapper median exceeded owner-approved 1000 ns budget or was negative'
 PY
