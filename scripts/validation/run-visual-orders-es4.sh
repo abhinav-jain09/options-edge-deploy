@@ -34,34 +34,36 @@ done
 port="$(sudo -n docker port "$pg_id" 5432/tcp | sed -n 's/^127.0.0.1://p')"
 [[ "$port" =~ ^[2-6][0-9]{4}$ ]] || { echo 'Unexpected isolated test port.' >&2; exit 1; }
 export VISUAL_BENCH_PG_PASSWORD="$(sed -n 's/^POSTGRES_PASSWORD=//p' "$secret_file")"
+probe_failed=0
 for i in $(seq 1 5); do
   for variant in baseline candidate; do
-    taskset -c 2 java -Xms128m -Xmx512m -XX:ActiveProcessorCount=1 -XX:+UseSerialGC -cp "candidate/test-classes:$variant/classes:lib/*" com.optionsedge.processing.brokerexec.NativeCallbackPerformanceProbe >"results/native-$variant-$i.log" 2>&1
+    taskset -c 2 java -Xms128m -Xmx512m -XX:ActiveProcessorCount=1 -XX:+UseSerialGC -cp "candidate/test-classes:$variant/classes:lib/*" com.optionsedge.processing.brokerexec.NativeCallbackPerformanceProbe >"results/native-$variant-$i.log" 2>&1 || probe_failed=1
   done
-  taskset -c 2 java -Xms128m -Xmx512m -XX:ActiveProcessorCount=1 -XX:+UseSerialGC -cp 'candidate/test-classes:candidate/classes:lib/*' com.optionsedge.processing.brokerexec.NativeQueuePerformanceProbe >"results/native-queue-$i.log" 2>&1
-  taskset -c 2 java -Xms128m -Xmx512m -XX:ActiveProcessorCount=1 -XX:+UseSerialGC -cp 'candidate/test-classes:candidate/classes:lib/*' com.optionsedge.processing.brokerexec.VisualOrderPerformanceProbe quotes >"results/quotes-$i.log" 2>&1
+  taskset -c 2 java -Xms128m -Xmx512m -XX:ActiveProcessorCount=1 -XX:+UseSerialGC -cp 'candidate/test-classes:candidate/classes:lib/*' com.optionsedge.processing.brokerexec.NativeQueuePerformanceProbe >"results/native-queue-$i.log" 2>&1 || probe_failed=1
+  taskset -c 2 java -Xms128m -Xmx512m -XX:ActiveProcessorCount=1 -XX:+UseSerialGC -cp 'candidate/test-classes:candidate/classes:lib/*' com.optionsedge.processing.brokerexec.VisualOrderPerformanceProbe quotes >"results/quotes-$i.log" 2>&1 || probe_failed=1
   for variant in baseline candidate; do
     suffix=0; [ "$variant" = baseline ] || suffix=1
     database="visual_validation_${i}_${suffix}"
     sudo -n docker exec "$pg_id" psql -U validation -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE $database" >/dev/null
-    VISUAL_BENCH_JDBC_URL="jdbc:postgresql://127.0.0.1:$port/$database" taskset -c 2 java -Xms128m -Xmx512m -XX:ActiveProcessorCount=1 -XX:+UseSerialGC -cp "candidate/test-classes:$variant/classes:lib/*" com.optionsedge.processing.brokerexec.VisualOrderPerformanceProbe journal >"results/journal-$variant-$i.log" 2>&1
+    VISUAL_BENCH_JDBC_URL="jdbc:postgresql://127.0.0.1:$port/$database" taskset -c 2 java -Xms128m -Xmx512m -XX:ActiveProcessorCount=1 -XX:+UseSerialGC -cp "candidate/test-classes:$variant/classes:lib/*" com.optionsedge.processing.brokerexec.VisualOrderPerformanceProbe journal >"results/journal-$variant-$i.log" 2>&1 || probe_failed=1
   done
-  taskset -c 2 java -Xms128m -Xmx512m -XX:ActiveProcessorCount=1 -XX:+UseSerialGC -cp 'candidate/test-classes:candidate/classes:lib/*' com.optionsedge.processing.brokerexec.VisualLinkedExitPerformanceProbe >"results/linked-evaluator-$i.log" 2>&1
+  taskset -c 2 java -Xms128m -Xmx512m -XX:ActiveProcessorCount=1 -XX:+UseSerialGC -cp 'candidate/test-classes:candidate/classes:lib/*' com.optionsedge.processing.brokerexec.VisualLinkedExitPerformanceProbe >"results/linked-evaluator-$i.log" 2>&1 || probe_failed=1
   linked_database="visual_validation_${i}_2"
   sudo -n docker exec "$pg_id" psql -U validation -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE $linked_database" >/dev/null
-  VISUAL_BENCH_JDBC_URL="jdbc:postgresql://127.0.0.1:$port/$linked_database" taskset -c 2 java -Xms128m -Xmx512m -XX:ActiveProcessorCount=1 -XX:+UseSerialGC -cp 'candidate/test-classes:candidate/classes:lib/*' com.optionsedge.processing.brokerexec.VisualLinkedExitPostgresProbe >"results/linked-postgres-$i.log" 2>&1
-  taskset -c 2 node scripts/validation/linked-exits-browser-probe.cjs "$PWD/web" >"results/linked-browser-$i.log" 2>&1
-  taskset -c 2 node scripts/validation/visual-orders-model-probe.cjs "$PWD/web/context-tape-orders-model.js" >"results/model-$i.log" 2>&1
+  VISUAL_BENCH_JDBC_URL="jdbc:postgresql://127.0.0.1:$port/$linked_database" taskset -c 2 java -Xms128m -Xmx512m -XX:ActiveProcessorCount=1 -XX:+UseSerialGC -cp 'candidate/test-classes:candidate/classes:lib/*' com.optionsedge.processing.brokerexec.VisualLinkedExitPostgresProbe >"results/linked-postgres-$i.log" 2>&1 || probe_failed=1
+  taskset -c 2 node scripts/validation/linked-exits-browser-probe.cjs "$PWD/web" >"results/linked-browser-$i.log" 2>&1 || probe_failed=1
+  taskset -c 2 node scripts/validation/visual-orders-model-probe.cjs "$PWD/web/context-tape-orders-model.js" >"results/model-$i.log" 2>&1 || probe_failed=1
 done
+export VISUAL_VALIDATION_COMMANDS_FAILED="$probe_failed"
 python3 - <<'PY'
-import json,math,pathlib,statistics
+import json,math,os,pathlib,statistics
 p=pathlib.Path('results'); groups={}
 for f in p.glob('*.log'):
  for line in f.read_text().splitlines():
   if not line.startswith('VISUAL_PROBE '): continue
   row=json.loads(line.removeprefix('VISUAL_PROBE '));key=row['probe']+('-'+row['variant'] if 'variant' in row else '-baseline' if 'baseline' in f.name else '-candidate' if 'candidate' in f.name else '')
   groups.setdefault(key,[]).append(row)
-out={'classification':'source-validation-only; not a deployment/replay release gate','samples':groups,'medians':{k:statistics.median(x.get('nsPerRecord',x.get('elapsedMs')) for x in v) for k,v in groups.items() if all('nsPerRecord' in x or 'elapsedMs' in x for x in v)}}
+out={'allCommandsPass':os.environ['VISUAL_VALIDATION_COMMANDS_FAILED']=='0','classification':'source-validation-only; not a deployment/replay release gate','samples':groups,'medians':{k:statistics.median(x.get('nsPerRecord',x.get('elapsedMs')) for x in v) for k,v in groups.items() if all('nsPerRecord' in x or 'elapsedMs' in x for x in v)}}
 if 'native-callback-baseline' in groups and 'native-callback-candidate' in groups:
  out['nativeRelativeChange']=out['medians']['native-callback-candidate']/out['medians']['native-callback-baseline']-1
 out['nativeRelativeBudgetPass']=out.get('nativeRelativeChange',float('inf'))<=0.10
@@ -94,5 +96,6 @@ assert out['overlayRelativeChange']<=0.10, 'Existing overlay median regressed mo
 assert set(groups)==linked|{'native-callback-baseline','native-callback-candidate','native-adapter-queue','quote-book','journal-postgres-baseline','journal-postgres-candidate','model-geometry','model-history-page'},'Every declared probe must run'
 assert all(len(v)==5 for v in groups.values()),'Five repeated commands required for each scenario'
 assert out['allNetNewBudgetsPass'],'A declared net-new budget failed'
+assert out['allCommandsPass'],'A probe command failed; later samples cannot qualify it'
 assert out['nativeWrapperBudgetPass'],'Native callback wrapper median exceeded owner-approved 1000 ns budget or was negative'
 PY
