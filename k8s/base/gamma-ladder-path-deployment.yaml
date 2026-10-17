@@ -34,8 +34,12 @@ spec:
               value: options.databento.gex.strike
             - name: KAFKA_LADDER_PATH_PREOPEN_TOPIC
               value: options.databento.gex.strike.preopen
+            # .v2 is the AVRO topic. Its predecessor retains hand-built JSON forever
+            # (cleanup.policy=delete, retention.ms=-1) and this service is a Streams source with no
+            # explicit auto.offset.reset, so Streams' EARLIEST default would replay that JSON into an
+            # Avro deserializer after any state loss. The rename IS the cutover.
             - name: KAFKA_LADDER_PATH_OI_STATUS_TOPIC
-              value: options.databento.gex.oi-status
+              value: options.databento.gex.oi-status.v2
             - name: KAFKA_LADDER_PATH_SPOT_TOPIC
               value: underlying.spx.index.price
             - name: KAFKA_LADDER_PATH_ES_TOPIC
