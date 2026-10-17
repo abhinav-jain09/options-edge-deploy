@@ -97,7 +97,7 @@ if [ "${1:-}" = "--recreate" ]; then
     create_topic "$topic" "$parts" || { echo "FAIL: create of $topic failed"; rfail=1; continue; }
     wait_for_topic_shape "$topic" "$parts" "$REPLICATION_FACTOR" || { rfail=1; continue; }
     alter_topic_config "$topic" "$policy" || { echo "FAIL: config of $topic failed"; rfail=1; continue; }
-    actual_parts=$(kt --describe --topic "$topic" 2>/dev/null | awk '{for (i = 1; i < NF; i++) if ($i == "PartitionCount:") { print $(i + 1); exit }}')
+    actual_parts=$(kt --describe --topic "$topic" 2>/dev/null | awk '!done { for (i = 1; i < NF; i++) if ($i == "PartitionCount:") { print $(i + 1); done = 1 } }')
     CFG=$(kc --entity-type topics --entity-name "$topic" --describe 2>&1 || true)
     cur_policy=$(printf '%s' "$CFG" | tr ' ' '\n' | sed -n 's/^cleanup\.policy=\(.*\)$/\1/p' | head -1)
     cur_ret=$(printf '%s' "$CFG" | tr ' ' '\n' | sed -n 's/^retention\.ms=\(.*\)$/\1/p' | head -1)
@@ -149,7 +149,7 @@ while IFS='|' read -r base parts policy retention; do
   fi
 
   actual_parts=$(kt --describe --topic "$topic" 2>/dev/null \
-    | awk '{for (i = 1; i < NF; i++) if ($i == "PartitionCount:") { print $(i + 1); exit }}')
+    | awk '!done { for (i = 1; i < NF; i++) if ($i == "PartitionCount:") { print $(i + 1); done = 1 } }')
   if [ "${actual_parts:-0}" != "$parts" ]; then
     echo "FAIL: '$topic' has PartitionCount=${actual_parts:-unknown}, declared $parts."
     echo "      NOT reconciled on purpose: Kafka cannot shrink a topic, and recreating it would"
@@ -220,7 +220,7 @@ CHANGELOG="${INDICATOR_APP_ID}-indicator-state-changelog"
 EXPECT_PARTS=4   # the repartition topic's partition count: the aggregate reads it
 
 if kt --list 2>/dev/null | grep -qxF "$CHANGELOG"; then
-  cl_parts=$(kt --describe --topic "$CHANGELOG" 2>/dev/null     | awk '{for (i = 1; i < NF; i++) if ($i == "PartitionCount:") { print $(i + 1); exit }}')
+  cl_parts=$(kt --describe --topic "$CHANGELOG" 2>/dev/null     | awk '!done { for (i = 1; i < NF; i++) if ($i == "PartitionCount:") { print $(i + 1); done = 1 } }')
   if [ "${cl_parts:-0}" != "$EXPECT_PARTS" ]; then
     echo "FAIL: '$CHANGELOG' has PartitionCount=${cl_parts:-unknown}, expected $EXPECT_PARTS."
     echo "      Streams refuses to run against it: 'Existing internal topic ... has invalid"

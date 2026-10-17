@@ -37,9 +37,11 @@ case "$STATE" in
   absent|Empty) echo "group $GROUP: $STATE" ;;
   *) echo "FAIL: consumer group $GROUP is '${STATE:-unknown}' — only an absent or Empty group may be reset (scale indicator-service to 0 first):"; printf '%s\n' "$DESC"; exit 1 ;;
 esac
-# the retained input's partitions, from broker metadata: the read-back below must name every one of them
+# the retained input's partitions, from broker metadata: the read-back below must name every one of them.
+# The awk reads the WHOLE describe output (no early exit): an `exit` on the first match closes the pipe while the
+# CLI is still writing, and through the es4 docker-exec shim that SIGPIPE surfaces as pipefail 141 (es4-deploy #785).
 PARTS=$("$KT" --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --describe --topic "$INDICATOR_INPUT_TOPIC" 2>/dev/null \
-  | awk '{for (i = 1; i < NF; i++) if ($i == "PartitionCount:") { print $(i + 1); exit }}')
+  | awk '!done { for (i = 1; i < NF; i++) if ($i == "PartitionCount:") { print $(i + 1); done = 1 } }')
 case "$PARTS" in ''|*[!0-9]*|0) echo "FAIL: cannot read the partition count of $INDICATOR_INPUT_TOPIC (got '$PARTS')"; exit 1 ;; esac
 echo "input $INDICATOR_INPUT_TOPIC: $PARTS partition(s)"
 
