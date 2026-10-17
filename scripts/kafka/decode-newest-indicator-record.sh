@@ -19,6 +19,13 @@ while IFS=: read -r t p end; do
   case "$id" in 2001|2002|2003|2004|2005|2006|2007) ;; *) echo "FAIL: $TOPIC-$p offset $from: schema id $id is not one of the family's fixed ids"; fail=1; continue ;; esac
   code=$(curl -sS -m 10 -o /dev/null -w '%{http_code}' "${REG%/}/schemas/ids/$id")
   [ "$code" = 200 ] || { echo "FAIL: $TOPIC-$p offset $from: schema id $id does not resolve on $REG (HTTP $code)"; fail=1; continue; }
+  # and the value DESERIALIZES under the target registry's schema for that id: the Confluent Avro console
+  # consumer prints the decoded record, or prints nothing and exits non-zero on a deserialization error
+  if ! decoded=$(timeout 90 "${KAFKA_AVRO_CONSOLE_CONSUMER_CMD:-$KBIN/kafka-avro-console-consumer}" --bootstrap-server "$BS" --topic "$TOPIC" \
+        --partition "$p" --offset "$from" --max-messages 1 --timeout-ms 30000 --property schema.registry.url="$REG" 2>/dev/null) \
+     || [ -z "$decoded" ]; then
+    echo "FAIL: $TOPIC-$p offset $from: the value does not deserialize under $REG (schema id $id)"; fail=1; continue
+  fi
   echo "  $TOPIC-$p offset $from: Avro, schema id $id resolves on $REG"
 done < <("$KBIN/kafka-get-offsets" --bootstrap-server "$BS" --topic "$TOPIC" 2>/dev/null)
 [ "$fail" -eq 0 ] || exit 1

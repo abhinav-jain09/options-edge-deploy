@@ -72,6 +72,18 @@ class EnsureIndicatorSchemas(unittest.TestCase):
         finally:
             server.shutdown()
 
+    def test_a_subject_holding_a_later_version_is_refused_on_rerun(self):
+        reg = Registry()
+        server, url = serve(reg)
+        try:
+            self.assertEqual(run(url)[0], 0)
+            reg.register(NS + "IndicatorBar", '{"type":"record","name":"IndicatorBar","namespace":"x","fields":[]}')   # version 2, a new id
+            rc, out = run(url)
+            self.assertEqual(rc, 1, out)
+            self.assertIn("only version 1 (the fixed id 2002) is admissible", out)
+        finally:
+            server.shutdown()
+
     def test_fixed_id_held_by_another_schema_fails(self):
         reg = Registry()
         reg.register("some.other.Subject", json.dumps({"type": "string"}), id=2003, version=1)

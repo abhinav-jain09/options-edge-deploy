@@ -101,6 +101,12 @@ class EnsureIndicatorTopicsRecreate(unittest.TestCase):
         self.assertIn("RECREATE_ENVIRONMENT must be dev, production or es4", out)
         self.assertEqual(calls, [])
 
+    def test_an_end_offset_line_missing_for_one_partition_fails_the_recreate(self):
+        rc, out, _, _ = run("es4", retained(BASE6), extra_env={"FAKE_KAFKA_OFFSETS_DROP_PARTITION": "es.options.indicators.bars:3"})
+        self.assertEqual(rc, 1, out)
+        self.assertIn("FAIL: es.options.indicators.bars after recreate", out)
+        self.assertIn("want [", out)
+
     def test_dry_run_deletes_and_creates_nothing(self):
         rc, out, calls, topics = run("dev", retained(BASE6 + MIRROR4), dry=True)
         self.assertEqual(rc, 0, out)

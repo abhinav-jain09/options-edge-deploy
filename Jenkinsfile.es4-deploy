@@ -218,16 +218,23 @@ pipeline {
             error("ACTION=${params.ACTION} registers the indicator schemas and needs CONTRACTS_PERMITTED_SHA (full 40-character options-edge-contracts commit on main), got '${csha}'.")
           }
         }
+        // Deployment Permission Rule, validator rule 9: the contracts source is a NESTED acquisition (clone + main)
+        // bound by its own guard step (CONTRACTS_PERMITTED_SHA == HEAD, on main) as the very next statement.
+        dir('.jenkins-tmp/contracts') { deleteDir() }
         sh '''
-          set -euo pipefail
-          rm -rf "$WORKSPACE/.jenkins-tmp/contracts" && mkdir -p "$WORKSPACE/.jenkins-tmp"
-          git clone -q "$CONTRACTS_REPO" "$WORKSPACE/.jenkins-tmp/contracts"
-          git -C "$WORKSPACE/.jenkins-tmp/contracts" checkout -q "${CONTRACTS_PERMITTED_SHA:?}"
-          git -C "$WORKSPACE/.jenkins-tmp/contracts" merge-base --is-ancestor "${CONTRACTS_PERMITTED_SHA}" origin/main \
-            || { echo "FAIL: CONTRACTS_PERMITTED_SHA ${CONTRACTS_PERMITTED_SHA} is not on options-edge-contracts main"; exit 1; }
-          ls "$WORKSPACE/.jenkins-tmp/contracts/schemas-registry/indicators/"*.avsc
-          rsync -az --delete "$WORKSPACE/.jenkins-tmp/contracts/schemas-registry/indicators/" "${ES4_HOST}:/home/es4/repo/schemas-registry/indicators/"
+          set -eu
+          git clone git@github.com:abhinav-jain09/options-edge-contracts.git .jenkins-tmp/contracts
+          git -C .jenkins-tmp/contracts checkout main
         '''
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${CONTRACTS_PERMITTED_SHA:-}" bash scripts/jenkins/permitted-sha-guard.sh --dir .jenkins-tmp/contracts --ref main'
+        }
+        sh 'ls .jenkins-tmp/contracts/schemas-registry/indicators/*.avsc'
+        // rule 9b: the ship is a DEDICATED rsync of the verified contracts tree, nothing between the verify and it
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${CONTRACTS_PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir .jenkins-tmp/contracts'
+        }
+        sh 'rsync -az --delete .jenkins-tmp/contracts/schemas-registry/indicators/ "${ES4_HOST}:/home/es4/repo/schemas-registry/indicators/"'
       }
     }
     stage('Create topics') {
@@ -333,7 +340,7 @@ pipeline {
           # group offsets to 0, changelog deleted, the six es.options.indicators.* topics recreated empty and
           # verified — BEFORE the apply below rolls the Avro producer.
           if [ "${REGISTER_INDICATOR_SCHEMAS:-false}" = true ]; then
-            SCHEMA_REGISTRY_URL="$ES4_REGISTRY" SCHEMAS_DIR="$WORKSPACE/.jenkins-tmp/contracts/schemas-registry/indicators" \
+            SCHEMA_REGISTRY_URL="$ES4_REGISTRY" SCHEMAS_DIR=".jenkins-tmp/contracts/schemas-registry/indicators" \
               DEPLOY_DRY_RUN="${DEPLOY_DRY_RUN:-false}" bash scripts/kafka/ensure-indicator-schemas.sh
           fi
           if [ "${RECREATE_INDICATOR_TOPICS:-false}" = true ]; then

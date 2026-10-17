@@ -535,7 +535,7 @@ PYEOF
       // files are the contracts checkout's schemas-registry/indicators at the permitted contracts commit —
       // the same commit the image was built against — never a copy kept in this repository.
       when {
-        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'indicator-service') && params.REGISTER_INDICATOR_SCHEMAS }
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'indicator-service' && params.REGISTER_INDICATOR_SCHEMAS) }
       }
       steps {
         script {
@@ -544,21 +544,27 @@ PYEOF
             error("REGISTER_INDICATOR_SCHEMAS=true needs CONTRACTS_PERMITTED_SHA: the full 40-character options-edge-contracts commit whose schemas-registry/indicators are registered (got '${csha}').")
           }
         }
+        // Deployment Permission Rule, validator rule 9: the contracts source is a NESTED acquisition (clone + main)
+        // bound by its own guard step (CONTRACTS_PERMITTED_SHA == HEAD, on main) as the very next statement.
+        dir('.jenkins-tmp/contracts') { deleteDir() }
+        sh '''
+          set -eu
+          git clone git@github.com:abhinav-jain09/options-edge-contracts.git .jenkins-tmp/contracts
+          git -C .jenkins-tmp/contracts checkout main
+        '''
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${CONTRACTS_PERMITTED_SHA:-}" bash scripts/jenkins/permitted-sha-guard.sh --dir .jenkins-tmp/contracts --ref main'
+        }
         sh '''
           set -euo pipefail
           export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
-          rm -rf "$WORKSPACE/.jenkins-tmp/contracts" && mkdir -p "$WORKSPACE/.jenkins-tmp"
-          git clone -q "$CONTRACTS_REPO" "$WORKSPACE/.jenkins-tmp/contracts"
-          git -C "$WORKSPACE/.jenkins-tmp/contracts" checkout -q "${CONTRACTS_PERMITTED_SHA:?}"
-          git -C "$WORKSPACE/.jenkins-tmp/contracts" merge-base --is-ancestor "${CONTRACTS_PERMITTED_SHA}" origin/main \
-            || { echo "FAIL: CONTRACTS_PERMITTED_SHA ${CONTRACTS_PERMITTED_SHA} is not on options-edge-contracts main"; exit 1; }
           # The registry this environment's pods use, from the deployed configuration (never a literal here):
           # docker-desktop's host.docker.internal is this Jenkins host itself.
           SR=$(kubectl -n options-edge get configmap options-edge-config -o jsonpath='{.data.SCHEMA_REGISTRY_URL}' 2>/dev/null || true)
           : "${SR:?SCHEMA_REGISTRY_URL not readable from the options-edge-config configmap — refusing to guess the registry}"
           SR="${SR/host.docker.internal/localhost}"
           echo "registry for ${ENVIRONMENT}: $SR"
-          SCHEMA_REGISTRY_URL="$SR" SCHEMAS_DIR="$WORKSPACE/.jenkins-tmp/contracts/schemas-registry/indicators" \
+          SCHEMA_REGISTRY_URL="$SR" SCHEMAS_DIR=".jenkins-tmp/contracts/schemas-registry/indicators" \
             DEPLOY_DRY_RUN="${DEPLOY_DRY_RUN:-false}" bash scripts/kafka/ensure-indicator-schemas.sh
         '''
       }
@@ -570,7 +576,7 @@ PYEOF
       // and recreated EMPTY at the topics.env shape (through apply-topics.sh's own shape functions) and each
       // verified: partitions, policy, retention and end offset 0. The rollout below then starts the Avro producer.
       when {
-        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'indicator-service') && params.RECREATE_INDICATOR_TOPICS }
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'indicator-service' && params.RECREATE_INDICATOR_TOPICS) }
       }
       steps {
         sh '''

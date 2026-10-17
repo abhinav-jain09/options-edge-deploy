@@ -69,7 +69,10 @@ if name == "kafka-configs":
     sys.exit(0)
 if name == "kafka-get-offsets":
     t = arg("--topic")
+    drop = os.environ.get("FAKE_KAFKA_OFFSETS_DROP_PARTITION")   # "<topic>:<p>" — that partition line is not printed
     for p in range(topics[t]["partitions"]):
+        if drop == f"{t}:{p}":
+            continue
         print(f"{t}:{p}:{topics[t]['end']}")
     sys.exit(0)
 if name == "kafka-broker-api-versions":

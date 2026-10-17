@@ -35,7 +35,6 @@ import com.optionsedge.contracts.indicators.avro.AvroRecordMapper;
 import com.optionsedge.contracts.indicators.avro.IndicatorSchemas;
 import io.confluent.kafka.schemaregistry.testutil.MockSchemaRegistry;
 import io.confluent.kafka.serializers.KafkaAvroDeserializer;
-import org.apache.avro.generic.GenericRecord;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
@@ -111,11 +110,15 @@ public class IndicatorArchiveReader {
 
     /** The owner's JSON of one framed value; anything else is a failure, never a line. */
     static String json(KafkaAvroDeserializer avro, String topic, byte[] value) throws java.io.IOException {
+        IndicatorSchemas.assertFramedAs(value, com.optionsedge.contracts.indicators.avro.IndicatorBar.class);
         Object decoded = avro.deserialize(topic, value);
-        if (!(decoded instanceof GenericRecord record)) {
-            throw new IllegalStateException(topic + ": value is not an Avro record");
+        // the contracts serde configuration reads SPECIFIC records: the generated IndicatorBar and nothing else
+        if (decoded == null || decoded.getClass() != com.optionsedge.contracts.indicators.avro.IndicatorBar.class) {
+            throw new IllegalStateException(topic + ": value is not the generated IndicatorBar (got "
+                    + (decoded == null ? "null" : decoded.getClass().getName()) + ")");
         }
-        return IndicatorJson.writer().writeValueAsString(AvroRecordMapper.fromAvro(record, IndicatorBar.class));
+        return IndicatorJson.writer().writeValueAsString(AvroRecordMapper.fromAvro(
+                (com.optionsedge.contracts.indicators.avro.IndicatorBar) decoded, IndicatorBar.class));
     }
 
     static void line(Writer out, Opts o, String tsType, long ts, int partition, long offset, byte[] key, String json)

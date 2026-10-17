@@ -27,7 +27,8 @@ class IndicatorAvroDeployWiring(unittest.TestCase):
         reg = t[t.index("stage('Register indicator schemas')"):t.index("stage('Recreate indicator topics (Avro cutover)')")]
         self.assertIn("ensure-indicator-schemas.sh", reg)
         self.assertIn("CONTRACTS_PERMITTED_SHA", reg)
-        self.assertIn("merge-base --is-ancestor", reg, "the contracts commit must be on main")
+        self.assertIn("git -C .jenkins-tmp/contracts checkout main", reg)
+        self.assertIn("PERMITTED_SHA=\"${CONTRACTS_PERMITTED_SHA:-}\" bash scripts/jenkins/permitted-sha-guard.sh --dir .jenkins-tmp/contracts --ref main", reg, "the contracts commit must be on main: the guard proves it")
         self.assertIn("jsonpath='{.data.SCHEMA_REGISTRY_URL}'", reg, "the registry comes from the deployed configuration")
         self.assertNotIn("192.168.100.252:8082", reg, "no registry literal")
         rec = t[t.index("stage('Recreate indicator topics (Avro cutover)')"):t.index("stage('Verify indicator topics')")]
@@ -45,7 +46,11 @@ class IndicatorAvroDeployWiring(unittest.TestCase):
         self.assertLess(s.index("Fetch indicator schemas (contracts)"), s.index("Clean reset (atomic Kafka + Schema Registry wipe)"))
         fetch = t[t.index("stage('Fetch indicator schemas (contracts)')"):t.index("stage('Create topics')")]
         self.assertIn("schemas-registry/indicators/", fetch)
-        self.assertIn("merge-base --is-ancestor", fetch)
+        # the contracts source is a nested acquisition bound by its own guard (on main at CONTRACTS_PERMITTED_SHA),
+        # and the ship is a dedicated rsync right after a verify of that tree
+        self.assertIn("git -C .jenkins-tmp/contracts checkout main", fetch)
+        self.assertIn("PERMITTED_SHA=\"${CONTRACTS_PERMITTED_SHA:-}\" bash scripts/jenkins/permitted-sha-guard.sh --dir .jenkins-tmp/contracts --ref main", fetch)
+        self.assertLess(fetch.index("verify-permitted-tree.sh --dir .jenkins-tmp/contracts'"), fetch.index("sh 'rsync -az --delete .jenkins-tmp/contracts/schemas-registry/indicators/"))
         create = t[t.index("stage('Create topics')"):t.index("stage('Clean reset")]
         self.assertLess(create.index("ensure-indicator-schemas.sh"), create.index("create-es-topics.sh"))
         deploy = t[t.index("stage('Deploy to es4')"):t.index("stage('Activate es-feed")]
@@ -74,18 +79,43 @@ class IndicatorAvroDeployWiring(unittest.TestCase):
         self.assertLess(parity, group)
         self.assertLess(group, reset)
         self.assertNotIn("auto.offset.reset=latest", t)
+        delete_block = gen[group:reset]
+        self.assertNotIn("|| true", delete_block, "the delete is not swallowed")
+        self.assertIn("grep -q 'does not exist'", delete_block, "an absent group is the only accepted failure")
+        self.assertIn("still listed", delete_block, "the group is polled to absence before MM1 starts")
+        decode = (ROOT / "scripts/kafka/decode-newest-indicator-record.sh").read_text()
+        self.assertIn("kafka-avro-console-consumer", decode, "the gate deserializes the record, not just its frame")
+        self.assertIn("does not deserialize", decode)
         verify = t[t.index("stage('Verify (running + zero pollution)')"):]
         self.assertIn("target end offsets equal the source", verify)
         self.assertIn("decode-newest-indicator-record.sh", verify)
 
-    def test_archive_unit_ships_the_avro_reader_and_the_contracts_jar(self):
+    def test_archive_unit_ships_the_avro_reader_and_builds_the_contracts_jar_from_the_permitted_commit(self):
         t = (ROOT / "Jenkinsfile.archive-scripts-deploy").read_text()
         unit = re.search(r'UNIT\s*=\s*"([^"]*)"', t).group(1).split()
         self.assertIn("IndicatorArchiveReader.java", unit)
-        self.assertIn("options-edge-contracts.jar", unit)
+        self.assertNotIn("options-edge-contracts.jar", unit, "the jar is not a committed file: it is the SIDECAR")
+        self.assertIn('SIDECAR     = "options-edge-contracts.jar"', t)
         self.assertIn("scripts/ops/archive/IndicatorArchiveReader.java", t)
-        self.assertIn("contracts.version", t)
-        self.assertRegex((ROOT / "scripts/ops/archive/contracts.version").read_text().strip(), r"^\d+\.\d+\.\d+$")
+        # the jar is BUILT from the permitted contracts commit: nested acquisition, its guard as the next statement,
+        # a verify immediately before the package effect, a verify (target allowed) immediately before the ship
+        stage = t[t.index("git clone git@github.com:abhinav-jain09/options-edge-contracts.git .jenkins-tmp/contracts"):]
+        order = ["git -C .jenkins-tmp/contracts checkout main",
+                 "PERMITTED_SHA=\"${CONTRACTS_PERMITTED_SHA:-}\" bash scripts/jenkins/permitted-sha-guard.sh --dir .jenkins-tmp/contracts --ref main",
+                 "[ \"$CV\" = 0.11.0 ]",
+                 "PERMITTED_SHA=\"${CONTRACTS_PERMITTED_SHA:?}\" bash scripts/jenkins/verify-permitted-tree.sh --dir .jenkins-tmp/contracts'",
+                 "sh 'mvn -B -q -ntp -f .jenkins-tmp/contracts/pom.xml -DskipTests package'",
+                 "verify-permitted-tree.sh --dir .jenkins-tmp/contracts --allow-ignored target'",
+                 "sh 'scp -o BatchMode=yes .jenkins-tmp/contracts/target/options-edge-contracts-0.11.0.jar \"${PROD_HOST}:${STAGE_DIR}/options-edge-contracts.jar\"'",
+                 "sh 'scp -o BatchMode=yes scripts/ops/archive/oe-archive-kafka.sh"]
+        at = -1
+        for token in order:
+            nxt = stage.index(token)
+            self.assertGreater(nxt, at, token)
+            at = nxt
+        self.assertEqual((ROOT / "scripts/ops/archive/contracts.version").read_text().strip(), "0.11.0", "the literal jar the job ships")
+        self.assertIn("UNIT='$UNIT $SIDECAR'", t, "the host installs, records and verifies the jar with the unit")
+        self.assertNotIn(".m2/repository", t, "never a cached jar")
         arch = (ROOT / "scripts/ops/archive/oe-archive-kafka.sh").read_text()
         self.assertIn('OE_INDICATOR_AVRO_TOPICS="${OE_INDICATOR_AVRO_TOPICS:-options.indicators.bars es.options.indicators.bars}"', arch)
         self.assertLess(arch.index("if is_indicator_avro_topic \"$topic\"; then"), arch.index('kafka-console-consumer.sh" --bootstrap-server "$BOOTSTRAP" \\\n           --topic "$topic" --partition "$part" --offset "$from"'))

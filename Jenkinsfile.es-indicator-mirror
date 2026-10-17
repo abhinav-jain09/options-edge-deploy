@@ -194,8 +194,23 @@ pipeline {
           # only Avro records from its own recreate, so the copy starts at the source's offset 0 — the group is
           # deleted (a resumed committed offset would skip the records written since the teardown) and the
           # consumer resets to earliest. Before the cutover this was `latest` to spare the target the JSON history.
-          "$KBIN/kafka-consumer-groups" --bootstrap-server "$SRC" --delete --group "es-indicator-mirror-${TARGET_SPX_CLUSTER_IP}-${TOPIC}" 2>&1 \
-            | grep -v 'does not exist' || true
+          GROUP="es-indicator-mirror-${TARGET_SPX_CLUSTER_IP}-${TOPIC}"
+          set +e
+          DEL=$("$KBIN/kafka-consumer-groups" --bootstrap-server "$SRC" --delete --group "$GROUP" 2>&1); DRC=$?
+          set -e
+          # only two answers are accepted: a successful delete, or "does not exist"; anything else (broker
+          # unreachable, a still-active group) fails the install instead of starting MM1 on retained offsets
+          if [ "$DRC" -ne 0 ] && ! printf '%s' "$DEL" | grep -q 'does not exist'; then
+            echo "FAIL: could not delete the mirror's source group $GROUP (rc=$DRC): $DEL"; exit 1
+          fi
+          for i in $(seq 1 30); do
+            "$KBIN/kafka-consumer-groups" --bootstrap-server "$SRC" --list 2>/dev/null | grep -qxF "$GROUP" || break
+            sleep 2
+          done
+          if "$KBIN/kafka-consumer-groups" --bootstrap-server "$SRC" --list 2>/dev/null | grep -qxF "$GROUP"; then
+            echo "FAIL: source group $GROUP is still listed 60s after its delete"; exit 1
+          fi
+          echo "source group $GROUP absent"
           cat > "$MDIR/consumer.properties" <<C
 bootstrap.servers=$SRC
 group.id=es-indicator-mirror-${TARGET_SPX_CLUSTER_IP}-${TOPIC}

@@ -135,7 +135,14 @@ while IFS='|' read -r subject id file; do
     200)
       have_id=$(json_field "$(body "$LOOKUP")" id); have_v=$(json_field "$(body "$LOOKUP")" version)
       if [ "$have_id" = "$id" ] && [ "$have_v" = 1 ]; then
-        echo "    registered: version 1, id $id"
+        # version 1 is canonical under the fixed id; the subject must hold NOTHING else — producers run with
+        # use.latest.version=true, so a later version would be what they resolve and frame under its own id
+        V1=$(http GET "/subjects/$subject/versions")
+        if [ "$(status "$V1")" != 200 ] || [ "$(body "$V1" | tr -d ' ')" != "[1]" ]; then
+          echo "FAIL: $subject holds versions $(body "$V1") — only version 1 (the fixed id $id) is admissible; a later version would be the one producers resolve"
+          fail=1; continue
+        fi
+        echo "    registered: version 1, id $id (the only version)"
         ensure_full "$subject" || fail=1
         continue
       fi

@@ -30,12 +30,19 @@ echo "2. the list is COMPLETE, cross-checked by a different engine"
 # Scoped identically but written independently (python, not sed): this catches an under-read, which is
 # the failure mode that matters -- a sibling the helper misses is a sibling no caller copies.
 indep="$(python3 - "$HERE/apply-topics.sh" <<'PY'
-import re, sys
-s = open(sys.argv[1]).read()
-names = []
-for m in re.finditer(r'(?m)^\s*(?:source|\.)\s+"?\$\{?SCRIPT_DIR\}?/([A-Za-z0-9._-]+)"?\s*$', s):
-    if m.group(1) not in names:
-        names.append(m.group(1))
+import os, re, sys
+# TRANSITIVE, like the helper: a sibling's own $SCRIPT_DIR siblings belong to the unit too
+pat = re.compile(r'(?m)^\s*(?:source|\.)\s+"?\$\{?SCRIPT_DIR\}?/([A-Za-z0-9._-]+)"?\s*$')
+here = os.path.dirname(os.path.abspath(sys.argv[1]))
+names, queue = [], [sys.argv[1]]
+while queue:
+    f = queue.pop(0)
+    if not os.path.isfile(f):
+        continue
+    for m in pat.finditer(open(f).read()):
+        if m.group(1) not in names:
+            names.append(m.group(1))
+            queue.append(os.path.join(here, m.group(1)))
 print("\n".join(names))
 PY
 )"
