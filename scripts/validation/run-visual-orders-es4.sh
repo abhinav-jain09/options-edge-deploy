@@ -59,7 +59,7 @@ if 'native-callback-baseline' in groups and 'native-callback-candidate' in group
 out['nativeRelativeBudgetPass']=out.get('nativeRelativeChange',float('inf'))<=0.10
 out['allNetNewBudgetsPass']=all(x.get('withinBudget',True) for v in groups.values() for x in v)
 (p/'summary.json').write_text(json.dumps(out,indent=2)+'\n');print(json.dumps(out['medians']));print('allNetNewBudgetsPass',out['allNetNewBudgetsPass'])
-assert set(groups)=={'native-callback-baseline','native-callback-candidate','quote-ingestion','journal-correction','geometry','history-merge'},'Every declared probe must run'
+assert set(groups)=={'native-callback-baseline','native-callback-candidate','quote-book','journal-postgres','model-geometry','model-history-page'},'Every declared probe must run'
 assert all(len(v)==5 for v in groups.values()),'Five repeated commands required for each scenario'
 assert out['allNetNewBudgetsPass'],'A declared net-new budget failed'
 assert out['nativeRelativeBudgetPass'],'Native callback median regressed by more than 10 percent'
