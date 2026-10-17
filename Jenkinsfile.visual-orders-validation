@@ -1,0 +1,52 @@
+// Test-only work-branch validation. No runtime image, topic, release gate or cluster deployment.
+pipeline {
+  agent { label 'hpsf-replay-mac' }
+  options { disableConcurrentBuilds(); disableRestartFromStage(); timeout(time: 35, unit: 'MINUTES') }
+  parameters {
+    string(name:'TEST_INFRA_SHA',defaultValue:'',trim:true,description:'Exact pushed infrastructure work-branch SHA; test-only checkout guard.')
+    string(name:'CANDIDATE_SHA',defaultValue:'',trim:true,description:'Exact pushed processing PR head; only tests/fakes are executed.')
+    string(name:'BASELINE_SHA',defaultValue:'',trim:true,description:'Exact processing merge-base on main for before/after comparison.')
+    string(name:'WEB_SHA',defaultValue:'',trim:true,description:'Exact pushed web PR head for model-only validation.')
+  }
+  stages {
+    stage('Exact test source guard') {
+      steps {
+        script {
+          for (value in [params.TEST_INFRA_SHA,params.CANDIDATE_SHA,params.BASELINE_SHA,params.WEB_SHA]) {
+            if (!(value ==~ /[0-9a-f]{40}/)) { error('All validation SHAs must be full immutable commit IDs') }
+          }
+          if (sh(returnStdout:true,script:'git rev-parse HEAD').trim()!=params.TEST_INFRA_SHA) { error('Test infrastructure SHA changed; no remote action authorized') }
+        }
+      }
+    }
+    stage('Compile validation bundle') {
+      steps {
+        withEnv(["CANDIDATE_SHA=${params.CANDIDATE_SHA}","BASELINE_SHA=${params.BASELINE_SHA}","WEB_SHA=${params.WEB_SHA}"]){
+          sh '''
+            set -euo pipefail
+            bash scripts/validation/prepare-visual-orders-bundle.sh
+          '''
+        }
+      }
+    }
+    stage('Isolated es4 probes outside RTH') {
+      steps {
+        sh '''
+          set -euo pipefail
+          host=abhinav@192.168.100.4
+          remote="$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" 'mktemp -d /tmp/visual-validation.XXXXXXXX')"
+          [[ "$remote" =~ ^/tmp/visual-validation\.[A-Za-z0-9]{8}$ ]] || { echo 'Invalid isolated validation directory' >&2; exit 1; }
+          cleanup(){ ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" "rm -rf -- '$remote'" || true; }
+          trap cleanup EXIT
+          rsync -az bundle/ "$host:$remote/"
+          status=0
+          ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" "bash '$remote/scripts/validation/run-visual-orders-es4.sh'" || status=$?
+          mkdir -p validation-results
+          rsync -az "$host:$remote/results/" validation-results/ || true
+          exit "$status"
+        '''
+      }
+    }
+  }
+  post { always { archiveArtifacts artifacts:'validation-results/*, bundle/source-identities.txt',allowEmptyArchive:true } }
+}

@@ -64,6 +64,8 @@ spec:
               value: "8131"
             - name: JAVA_TOOL_OPTIONS
               value: -Xms256m -Xmx512m -XX:MaxDirectMemorySize=128m
+            - name: VISUAL_ORDER_STORE_BUDGET_BYTES
+              value: "34359738368"
             - name: AUTH_ISSUER_URI
               value: https://auth.bleadingoptions.com/realms/optionsedge
             - name: AUTH_AUDIENCE
