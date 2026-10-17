@@ -230,6 +230,9 @@ pipeline {
           sh 'PERMITTED_SHA="${CONTRACTS_PERMITTED_SHA:-}" bash scripts/jenkins/permitted-sha-guard.sh --dir .jenkins-tmp/contracts --ref main'
         }
         sh 'ls .jenkins-tmp/contracts/schemas-registry/indicators/*.avsc'
+        // the target's parents exist before the ship: rsync does not create nested parents (es4-deploy #781 failed
+        // on a fresh box with "mkdir .../schemas-registry/indicators failed: No such file or directory")
+        sh 'ssh -o BatchMode=yes "${ES4_HOST}" mkdir -p /home/es4/repo/schemas-registry/indicators'
         // rule 9b: the ship is a DEDICATED rsync of the verified contracts tree, nothing between the verify and it
         timeout(time: 10, unit: 'MINUTES') {
           sh 'PERMITTED_SHA="${CONTRACTS_PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir .jenkins-tmp/contracts'
