@@ -247,9 +247,11 @@ services:
   - { name: databento-maxpain,            managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-databento-maxpain,            deployments: [databento-maxpain-service] }
   - { name: strike-liquidity-heatmap,     managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-strike-liquidity-heatmap,     deployments: [strike-liquidity-heatmap-service] }
   - { name: option-price-behavior,        managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-option-price-behavior,        deployments: [option-price-behavior-service] }
-  # option-pressure-state: RUNNING on dev, INERT on production. Consumes
-  # option-price-behavior-l1-contributions (which option-price-behavior emits only where
-  # OPB_L1_ENABLED is true — dev only) and publishes option-pressure-state-current/-evidence. Dev is
+  # option-pressure-state: RUNNING on dev, INERT on production. It consumes
+  # option-price-behavior-l1-contributions and publishes option-pressure-state-current/-evidence —
+  # but OPB_L1_ENABLED is set NOWHERE yet, so on dev it currently runs, provisions its own topics and
+  # idles with no input. Enabling the producer is a separate change, deliberately, so the consumer is
+  # never left behind a producer already writing into a topic nothing reads. Dev is
   # turned on by k8s/overlays/dev/option-pressure-state-dev-enable-patch.yaml; the base stays
   # replicas 0 with OPTION_PRESSURE_ENABLED=false and no production image is built for it — the
   # absent image is what actually keeps production inert, because its INSTALLED morning-autostart.sh

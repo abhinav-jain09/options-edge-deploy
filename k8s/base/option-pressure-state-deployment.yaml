@@ -11,8 +11,12 @@ spec:
   #   1. OPTION_PRESSURE_ENABLED defaults false, so this service's topology does not start.
   #   2. Upstream, OPB_L1_ENABLED is false in the base, so option-price-behavior emits no
   #      option-price-behavior-l1-contributions records for it to read.
-  # DEV turns both on, and only dev: k8s/overlays/dev/option-pressure-state-dev-enable-patch.yaml
-  # sets replicas 1 and OPTION_PRESSURE_ENABLED=true, and the OPB dev env patch sets OPB_L1_ENABLED.
+  # DEV opens the SECOND gate only, and only dev:
+  # k8s/overlays/dev/option-pressure-state-dev-enable-patch.yaml sets replicas 1 and
+  # OPTION_PRESSURE_ENABLED=true, so the consumer runs, provisions its own topics and idles. The
+  # FIRST gate stays shut everywhere for now — OPB_L1_ENABLED is set nowhere, so there is nothing on
+  # the input topic yet. Enabling the producer is a separate change, so that the consumer cannot be
+  # left behind a producer already writing 735 MiB a session into a topic nothing reads.
   # Production therefore stays at zero from this file, and no production image is built for it.
   # NOTE, checked 2026-10-17 rather than assumed: production's INSTALLED
   # ~/oe-ops/morning-autostart.sh does NOT carry the KEEP_DOWN entry this repository added for this
