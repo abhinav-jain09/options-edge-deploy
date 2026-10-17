@@ -74,6 +74,18 @@ out['allNetNewBudgetsPass']=all(x.get('withinBudget') is True and type(x.get(met
 (p/'summary.json').write_text(json.dumps(out,indent=2)+'\n');print(json.dumps(out['medians']));print('allNetNewBudgetsPass',out['allNetNewBudgetsPass'])
 linked={'linked-evaluator-risk','linked-postgres-races','existing-overlay-baseline','existing-overlay-candidate','linked-overlay-candidate'}
 assert all(x.get('withinBudget') is True for k in linked for x in groups.get(k,[])), 'Linked evaluator, actual PostgreSQL or browser budget/semantic failure'
+def bounded(row,key,limit):
+ return type(row.get(key)) in (int,float) and math.isfinite(row[key]) and 0<=row[key]<=limit
+for row in groups.get('linked-evaluator-risk',[]):
+ assert row.get('records')==100000 and row.get('budgetP99Ns')==5000000 and bounded(row,'sampleP99Ns',5000000), 'Pinned evaluator latency gate failed'
+ assert row.get('allocationBudget')==4096 and bounded(row,'allocatedBytesPerRecord',4096), 'Pinned allocation gate failed'
+ assert row.get('retainedBudgetBytes')==8388608 and bounded(row,'retainedUpperBytes',8388608), 'Pinned retained-state gate failed'
+for key in ['existing-overlay-baseline','existing-overlay-candidate','linked-overlay-candidate']:
+ for row in groups.get(key,[]):
+  assert row.get('records')==200 and row.get('budgetMs')==16 and bounded(row,'sampleP99Ms',16) and row.get('shades')==16, 'Pinned browser latency/area-count gate failed'
+  if key=='linked-overlay-candidate':assert row.get('threads')==32 and row.get('labels')==32, 'Linked geometry is missing'
+for row in groups.get('linked-postgres-races',[]):
+ assert row.get('records')==4 and all(row.get(k) is True for k in ['singleTrigger','singleReservation','otherLotPreserved','independentStoreLock']), 'Required PostgreSQL race assertion missing'
 out['journalRelativeChange']=out['medians'].get('journal-postgres-candidate',float('inf'))/out['medians'].get('journal-postgres-baseline',1)-1
 assert out['journalRelativeChange']<=0.10, 'Existing journal median regressed more than ten percent'
 out['overlayRelativeChange']=out['medians'].get('existing-overlay-candidate',float('inf'))/out['medians'].get('existing-overlay-baseline',1)-1
