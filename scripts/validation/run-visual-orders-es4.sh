@@ -84,9 +84,10 @@ for row in groups.get('linked-evaluator-risk',[]):
  assert row.get('retainedBudgetBytes')==8388608 and bounded(row,'retainedUpperBytes',8388608), 'Pinned retained-state gate failed'
 for key in ['existing-overlay-baseline','existing-overlay-candidate','linked-overlay-candidate']:
  for row in groups.get(key,[]):
+  assert row.get('fixedBindings') is True and row.get('viewportUpdates')==250 and row.get('workload')=='fixed-trade-viewport-pan-and-latched-stop', 'Valid immutable contract bindings/changed viewport workload missing'
   assert row.get('sameCandle') is True and row.get('frameScheduler')=='native-requestAnimationFrame' and row.get('nativeFrames')==250 and row.get('distinctFrameTimestamps') is True, 'Actual distinct animation frames/candle preservation missing'
   assert row.get('records')==200 and row.get('budgetMs')==16 and bounded(row,'sampleP99Ms',16) and row.get('shades')==16, 'Pinned browser latency/area-count gate failed'
-  if key=='linked-overlay-candidate':assert row.get('threads')==32 and row.get('labels')==32, 'Linked geometry is missing'
+  if key=='linked-overlay-candidate':assert row.get('stateTransitions')==1 and bounded(row,'transitionMaxMs',float('inf')) and row.get('threads')==32 and row.get('labels')==32, 'Linked geometry is missing'
 for row in groups.get('linked-postgres-races',[]):
  assert row.get('records')==4 and all(row.get(k) is True for k in ['singleTrigger','singleReservation','otherLotPreserved','independentStoreLock']), 'Required PostgreSQL race assertion missing'
 out['journalRelativeChange']=out['medians'].get('journal-postgres-candidate',float('inf'))/out['medians'].get('journal-postgres-baseline',1)-1
