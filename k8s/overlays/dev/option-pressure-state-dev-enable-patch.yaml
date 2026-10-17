@@ -3,11 +3,15 @@
 # The base ships this service inert on purpose: replicas 0 and OPTION_PRESSURE_ENABLED=false, with
 # the upstream gate (OPB_L1_ENABLED) shut as well, so nothing was produced and nothing consumed.
 #
-# This change starts the consumer ONLY. The producer flag is a separate change, deliberately: the
-# consumer must exist before option-price-behavior begins emitting, or OPB writes 735 MiB a session
-# into a topic nothing reads. Splitting them makes that order a property of what has been merged
-# rather than an instruction someone has to follow. (The consumer sets auto.offset.reset=earliest,
-# so nothing would be LOST in the other order — it would simply be wasted.)
+# The producer flag is a separate change. The order it enforces is the OPPOSITE of what this file
+# first claimed, and the correction is kept here because the original reasoning looked sound and was
+# not: splitting these was meant to start the consumer first, so that option-price-behavior never
+# wrote 735 MiB a session into a topic nothing read. Kafka Streams will not allow that order. It
+# refuses to start a topology whose source topic is absent — MissingSourceTopicException, handler
+# opts to SHUTDOWN_CLIENT — so with the producer still shut this deployment crash-looped, which is
+# how the mistake was found rather than reasoned out. option-price-behavior CREATES the input topic,
+# so the producer must go first. Nothing is wasted by that order either: the consumer sets
+# auto.offset.reset=earliest, so it reads the topic from the beginning whenever it starts.
 #
 # It also must not land before the image exists. options-edge-option-pressure-state has never been
 # built: with replicas 1 and no image, a full deploy aborts at the digest-pinning step and a direct

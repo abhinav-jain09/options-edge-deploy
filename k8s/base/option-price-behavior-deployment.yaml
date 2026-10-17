@@ -17,6 +17,19 @@ spec:
   # Watch: it was disabled after native-memory OOM on the capacity-limited cluster; the dev overlay
   # already carries -Xmx3g. If it OOM-crash-loops, raise the memory limit before leaving it up.
   replicas: 1
+  # Recreate, not RollingUpdate. This service keeps its Kafka Streams RocksDB state on ONE
+  # ReadWriteOnce PVC (option-price-behavior-service-streams-state, mounted at
+  # /var/lib/options-edge/kafka-streams) under a single Streams application id, and the default
+  # RollingUpdate can run the outgoing and incoming pod against that same state directory: the new
+  # pod then fails on the state-directory lock while the old one keeps serving, or both touch it.
+  # The live dev Deployment already carried Recreate while no manifest here set it, so a deploy from
+  # this repository would have REPLACED that with RollingUpdate and reintroduced the hazard — which
+  # is how this was found, adding the L1 contribution sink below. option-pressure-state carries the
+  # same field for the same reason. The cost is stated plainly: a deploy of this service is a brief
+  # full stop, not a rolling handover, and option-price-behavior-by-strike (which
+  # strike-intelligence consumes) is unavailable for that window.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: option-price-behavior-service

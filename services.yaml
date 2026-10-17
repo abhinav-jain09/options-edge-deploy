@@ -259,10 +259,10 @@ services:
   - { name: strike-liquidity-heatmap,     managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-strike-liquidity-heatmap,     deployments: [strike-liquidity-heatmap-service] }
   - { name: option-price-behavior,        managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-option-price-behavior,        deployments: [option-price-behavior-service] }
   # option-pressure-state: RUNNING on dev, INERT on production. It consumes
-  # option-price-behavior-l1-contributions and publishes option-pressure-state-current/-evidence —
-  # but OPB_L1_ENABLED is set NOWHERE yet, so on dev it currently runs, provisions its own topics and
-  # idles with no input. Enabling the producer is a separate change, deliberately, so the consumer is
-  # never left behind a producer already writing into a topic nothing reads. Dev is
+  # option-price-behavior-l1-contributions and publishes option-pressure-state-current/-evidence.
+  # It cannot start until that input topic EXISTS — Kafka Streams refuses a topology whose source
+  # topic is absent — and option-price-behavior creates it when OPB_L1_ENABLED is true, so the
+  # producer is enabled first and this follows it. Dev is
   # turned on by k8s/overlays/dev/option-pressure-state-dev-enable-patch.yaml; the base stays
   # replicas 0 with OPTION_PRESSURE_ENABLED=false and no production image is built for it — the
   # absent image is what actually keeps production inert, because its INSTALLED morning-autostart.sh
