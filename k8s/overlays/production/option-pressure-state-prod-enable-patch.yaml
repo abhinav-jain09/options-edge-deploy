@@ -22,8 +22,13 @@
 # that output. The 2026-07-14 work was rolling-window multi-key STORE updates; a sink forward is one
 # append to the transaction's producer batch, which is a much smaller operation - but that is an
 # argument about magnitude, not a measurement, and no throughput measurement exists because every
-# pressure topic on dev still reads log end offset 0. If OPB output stalls after this lands, this
-# flag is the first thing to set back to false.
+# pressure topic on dev still reads log end offset 0 - an EXTERNAL fact, checked 2026-10-18 with
+#   for t in option-price-behavior-l1-contributions option-pressure-state-current option-pressure-state-evidence option-pressure-state-service-dev-symbol-rk; do printf '%s ' "$t"; ~/kafka-4.3.0/bin/kafka-get-offsets.sh --bootstrap-server localhost:19092 --topic "$t" | awk -F: '{s+=$3; n++} END {if (n==0) print "NO-OUTPUT-DO-NOT-READ-AS-ZERO"; else printf "%d across %d partitions\n", s, n}'; done
+# which printed `0 across 32 partitions` for all four. That command leaves stderr alone and prints
+# its partition count on purpose: a bare `awk '{s+=$3} END {print s+0}'` prints 0 on NO input, so an
+# absent topic or an unreachable broker would read as a confirmed zero. Re-run it rather than
+# trusting this line. If OPB output stalls after this lands, this flag is the first thing to set back
+# to false.
 #
 # WHAT THE SURFACE IS. Descriptive, not predictive. Every frame carries actionable=false by the
 # producing record's own invariant: the register was REJECTED on two gate sets and a Lane D

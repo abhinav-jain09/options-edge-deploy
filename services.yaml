@@ -284,16 +284,24 @@ services:
   #
   # PRODUCTION IS ENABLED. The two prerequisites it had are met by the change that enabled it, and
   # both were real rather than paperwork:
-  #   1. An ENVIRONMENT=production image of this service. There was none - the production registry
-  #      returned NAME_UNKNOWN for the repository itself, not merely a missing :prod tag - and no
-  #      production build in Jenkins' retained history had ever targeted it.
+  # Every runtime and registry fact below is EXTERNAL to this repository, which can establish desired
+  # manifests and nothing else. Each carries the command and the date it was run; re-run them.
+  #   1. An ENVIRONMENT=production image of this service. There was none. Checked 2026-10-18,
+  #      `curl -s http://192.168.100.252:5000/v2/options-edge-option-pressure-state/tags/list`
+  #      now returns tags ["prod-1924-2bf3f8bb2a6c","prod"] and before this change returned
+  #      NAME_UNKNOWN for the repository itself, not merely a missing :prod tag.
   #   2. OPB_L1_ENABLED on option-price-behavior, WITH an image that reads it. Production ran an OPB
-  #      image built 2026-09-22 (prod-1650-d6a7d010980a) containing zero occurrences of
-  #      OPB_L1_ENABLED and no L1 sink at all, so setting the flag alone would have done nothing.
+  #      image built 2026-09-22, tag prod-1650-d6a7d010980a, containing no L1 sink at all, so setting
+  #      the flag alone would have done nothing. Verifiable in options-edge-processing rather than
+  #      here: `git show d6a7d010980a:option-price-behavior-service/src/main/java/app/pricebehavior/OptionPriceBehaviorStreams.java | grep -c OPB_L1_ENABLED`
+  #      printed 0 on 2026-10-18, as did the same grep for L1_CONTRIB_SINK.
   #      Rolling that image forward also closes an existing drift worth knowing about: production's
   #      manifest has been declaring OPB_CALIBRATION_STATUS and OPB_MODEL_VERSION to a binary that
-  #      reads NEITHER. The numeric OPB parameters were read, so production was not mis-tuned, but
-  #      the calibration-status gate and the model-version stamp were inert for about a month.
+  #      reads NEITHER -
+  #      `git grep -c OPB_CALIBRATION_STATUS d6a7d010980a -- option-price-behavior-service processing-common`
+  #      returned no matches on 2026-10-18, and the same for OPB_MODEL_VERSION. The NUMERIC OPB
+  #      parameters were read, so production was not mis-tuned, but the calibration-status gate and
+  #      the model-version stamp were inert for about a month while the config claimed otherwise.
   #
   # THE RISK, and what to do about it. OPB_L1_ENABLED adds a per-trade sink forward inside
   # option-price-behavior's exactly-once transaction. Compare the 2026-07-14 incident recorded in

@@ -61,12 +61,20 @@ spec:
   # producer change is options-edge-processing PR #1103, both merged 2026-10-18. The strike
   # thresholds remain seeds, which PressureConfig says in the code.
   #
-  # PRODUCTION IS ENABLED, and the two prerequisites it had are met by the change that enabled it: an
-  # ENVIRONMENT=production image of this service now exists - the production registry previously
-  # returned NAME_UNKNOWN for it, not merely a missing :prod tag - and OPB_L1_ENABLED is set in
-  # k8s/overlays/production/option-price-behavior-prod-patch.yaml together with a rebuilt production
-  # image that actually reads it. The previous one, prod-1650-d6a7d010980a built 2026-09-22,
-  # contained zero occurrences of that variable, so the flag alone would have been inert.
+  # PRODUCTION IS ENABLED, and the two prerequisites it had are met by the change that enabled it.
+  # BOTH are external facts this repository cannot establish - re-run the commands rather than
+  # trusting these lines:
+  #   - An ENVIRONMENT=production image of this service exists. Checked 2026-10-18:
+  #     `curl -s http://192.168.100.252:5000/v2/options-edge-option-pressure-state/tags/list`
+  #     returns {"name":"options-edge-option-pressure-state","tags":["prod-1924-2bf3f8bb2a6c","prod"]}.
+  #     Before this change the same command returned NAME_UNKNOWN for the repository itself, which is
+  #     stronger than a missing :prod tag.
+  #   - OPB_L1_ENABLED is set in k8s/overlays/production/option-price-behavior-prod-patch.yaml
+  #     together with a rebuilt production image that actually READS it. The previous one,
+  #     prod-1650-d6a7d010980a built 2026-09-22, contained zero occurrences of that variable, so the
+  #     flag alone would have been inert. Verifiable in options-edge-processing, not here, with
+  #     `git show d6a7d010980a:option-price-behavior-service/src/main/java/app/pricebehavior/OptionPriceBehaviorStreams.java | grep -c OPB_L1_ENABLED`
+  #     which printed 0 on 2026-10-18.
   #
   # THE RISK THAT CAME WITH IT, stated here because this is where someone will look. OPB_L1_ENABLED
   # adds a per-trade sink forward inside option-price-behavior's exactly-once transaction. The
