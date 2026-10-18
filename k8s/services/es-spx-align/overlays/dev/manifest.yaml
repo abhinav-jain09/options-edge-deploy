@@ -89,3 +89,34 @@ spec:
             requests:
               cpu: 100m
               memory: 1Gi
+      initContainers:
+        - command:
+            - java
+            - -cp
+            - /app/app.jar
+            - com.optionsedge.processing.esspxalign.AlignSchemaProvisioner
+          env:
+            - name: ES_SPX_ALIGN_ENABLED
+              value: "true"
+            - name: KAFKA_ES_GEX_SPX_ALIGNED_TOPIC
+              value: options.es-gex-spx-aligned
+            - name: ES_SPX_ALIGN_STRIKE_INTEL_ENABLED
+              value: "true"
+            - name: KAFKA_ES_STRIKE_INTEL_SPX_ALIGNED_TOPIC
+              value: options.es-strike-intel-spx-aligned
+            - name: JAVA_TOOL_OPTIONS
+              value: -Xms64m -Xmx256m
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
+          image: host.docker.internal:5001/options-edge-es-spx-align:dev
+          imagePullPolicy: Always
+          name: align-schema-provision
+          resources:
+            limits:
+              memory: 512Mi
+            requests:
+              cpu: 50m
+              memory: 128Mi

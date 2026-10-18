@@ -21,6 +21,57 @@ spec:
         app.kubernetes.io/component: es-spx-align-service
         app.kubernetes.io/part-of: options-edge
     spec:
+      initContainers:
+        # WHY THIS EXISTS: the service's startup snapshot reads its canonical Avro subjects with
+        # auto.register.schemas=false and refuses to boot unless each one is already registered with
+        # exactly the released schema (processing docs/CVD-AVRO-MIGRATION.md: "Existing output/schema
+        # resource subjects must be registered through Jenkins before startup"). Nothing ever registered
+        # them -- neither dev's nor prod's _schemas held a single esspxalign record -- so the pod
+        # crash-looped on "Subject 'com.optionsedge.processing.esspxalign.state.Basis' not found" (40401)
+        # from the day the snapshot shipped. This init container is that missing registration step.
+        #
+        # It runs from the SAME image as the service, so the schemas it writes are the ones this release
+        # looks up, and with the SAME configuration, because the subject names are env-derived. It is
+        # idempotent: a subject already holding the released schema is verified and NOT rewritten, so every
+        # rollout re-runs it harmlessly and a fresh or wiped registry self-heals. It never deletes a
+        # subject or version and never changes a compatibility level, so it cannot become a silent
+        # schema-evolution path -- a genuine mismatch fails here instead of starting the service degraded.
+        # scripts/ci/validate-align-schema-provisioning.sh fails the build if this container's image or any
+        # value it reads drifts from the main container's.
+        - name: align-schema-provision
+          image: 192.168.100.252:5000/options-edge-es-spx-align:dev
+          imagePullPolicy: Always
+          command:
+            - java
+            - -cp
+            - /app/app.jar
+            - com.optionsedge.processing.esspxalign.AlignSchemaProvisioner
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            # Every value the provisioner reads, identical to the main container's. ES_SPX_ALIGN_ENABLED
+            # because a disabled service idles without touching the registry and provisioning must match;
+            # the three topic/flag knobs because they decide the subject NAMES and which of the two
+            # optional strike-intel subjects exist at all.
+            - name: ES_SPX_ALIGN_ENABLED
+              value: "true"
+            - name: KAFKA_ES_GEX_SPX_ALIGNED_TOPIC
+              value: options.es-gex-spx-aligned
+            - name: ES_SPX_ALIGN_STRIKE_INTEL_ENABLED
+              value: "true"
+            - name: KAFKA_ES_STRIKE_INTEL_SPX_ALIGNED_TOPIC
+              value: options.es-strike-intel-spx-aligned
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xms64m -Xmx256m"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
       containers:
         - name: es-spx-align
           image: 192.168.100.252:5000/options-edge-es-spx-align:dev

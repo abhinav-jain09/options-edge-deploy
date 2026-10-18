@@ -402,7 +402,12 @@ EOF
           kubectl -n options-edge set image deployment/strike-intelligence-service strike-intelligence="$STRIKE_INTELLIGENCE_IMAGE"
           kubectl -n options-edge set image deployment/option-truth-engine-service option-truth-engine="$OPTION_TRUTH_ENGINE_IMAGE"
           kubectl -n options-edge set image deployment/market-carry-service market-carry="$MARKET_CARRY_IMAGE"
-          kubectl -n options-edge set image deployment/es-spx-align-service es-spx-align="$ES_SPX_ALIGN_IMAGE"
+          # BOTH containers, in one call. The align-schema-provision init container registers the canonical
+          # Avro subjects this release's service will look up, so it must run the SAME image; rolling only
+          # the service container would leave the provisioner on the previously applied image and let it
+          # register schemas the service rejects. kubectl matches a container name across containers and
+          # initContainers, so one set image covers both.
+          kubectl -n options-edge set image deployment/es-spx-align-service es-spx-align="$ES_SPX_ALIGN_IMAGE" align-schema-provision="$ES_SPX_ALIGN_IMAGE"
           kubectl -n options-edge set image deployment/databento-sr3-feed-service databento-sr3-feed="$DATABENTO_SR3_FEED_IMAGE"
           kubectl -n options-edge set image deployment/vix-option-inteligence-service vix-option-inteligence="$VIX_OPTION_INTELIGENCE_IMAGE"
           kubectl -n options-edge set image deployment/greek-move-authenticity-service greek-move-authenticity="$GREEK_MOVE_AUTHENTICITY_IMAGE"
