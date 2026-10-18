@@ -55,6 +55,9 @@ for variant in ['baseline', 'candidate']:
                     require(row.get('floatingPreparation', {}).get('method') ==
                             'public-layer-controls; existing five-second deadline drained',
                             f'{name}: floating-only fixed-chart preparation required')
+                    require(row.get('panelPreparation') == {
+                                'method': 'prior document layout forced synchronously before panel clock',
+                                'warmup': 50}, f'{name}: panel-only clean-layout preparation required')
                 require(set(row.get('paths', {})) == paths, f'{name}: missing/extra paths')
                 for key in paths:
                     sample = row.get('paths', {}).get(key, {})
@@ -68,6 +71,12 @@ for variant in ['baseline', 'candidate']:
                                 and sample.get('sameSvg') is True, f'{name}/{key}: native frames/unchanged candles')
                     if key.startswith('floating-') or key == 'panel-dock-detach':
                         require(finite(sample.get('p99Ms')) and sample['p99Ms'] <= 16, f'{name}/{key}: 16ms p99')
+                    if key == 'panel-dock-detach':
+                        stamps = sample.get('frameTimestamps', [])
+                        require(sample.get('nativeFrames') == 250 and sample.get('distinctFrameTimestamps') is True
+                                and len(stamps) == 250 and all(map(finite, stamps))
+                                and all(b > a for a, b in zip(stamps, stamps[1:])),
+                                f'{name}: 250 native panel frames and timestamps required')
                 memory = row.get('memory', {})
                 retained = memory.get('retainedBytes')
                 require(retained == memory.get('loaded', {}).get('heapBytes', -1) - memory.get('empty', {}).get('heapBytes', -1), f'{name}: retained bytes must recompute from actual counters')

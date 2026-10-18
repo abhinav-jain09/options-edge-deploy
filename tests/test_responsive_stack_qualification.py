@@ -40,6 +40,8 @@ class ResponsiveQualificationTest(unittest.TestCase):
                            'geometry': {'shades': 16, 'threads': 32, 'labels': 32}, 'paths': paths, 'memory': memory}
                     if variant == 'candidate':
                         row['floatingPreparation'] = {'method': 'public-layer-controls; existing five-second deadline drained'}
+                        row['panelPreparation'] = {'method': 'prior document layout forced synchronously before panel clock', 'warmup': 50}
+                        paths['panel-dock-detach'].update(nativeFrames=250, frameTimestamps=list(range(250)), distinctFrameTimestamps=True)
                     self.write(f'stack-{variant}-{count}-{repeat}', row)
         for repeat in range(1, 6):
             groups = []
@@ -100,6 +102,22 @@ class ResponsiveQualificationTest(unittest.TestCase):
     def test_missing_floating_preparation(self):
         self.mutate(lambda row: row.pop('floatingPreparation'))
         self.qualify(1, phrase='floating-only fixed-chart preparation required')
+
+    def test_missing_panel_preparation(self):
+        self.mutate(lambda row: row.pop('panelPreparation'))
+        self.qualify(1, phrase='panel-only clean-layout preparation required')
+
+    def test_wrong_panel_warmup(self):
+        self.mutate(lambda row: row['panelPreparation'].update(warmup=49))
+        self.qualify(1, phrase='panel-only clean-layout preparation required')
+
+    def test_repeated_panel_frame_cannot_claim_native_distinctness(self):
+        self.mutate(lambda row: row['paths']['panel-dock-detach'].update(frameTimestamps=[1]*250))
+        self.qualify(1, phrase='250 native panel frames and timestamps required')
+
+    def test_missing_panel_frames(self):
+        self.mutate(lambda row: row['paths']['panel-dock-detach'].update(frameTimestamps=list(range(249)), nativeFrames=249))
+        self.qualify(1, phrase='250 native panel frames and timestamps required')
 
     def test_floating_chart_rebuild(self):
         self.mutate(lambda row: row['paths']['floating-move'].update(sameSvg=False))
