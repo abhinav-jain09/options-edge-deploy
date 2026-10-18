@@ -118,7 +118,10 @@ class VixOptionInteligenceStageBEnvironmentTest(unittest.TestCase):
 
         services = renderer.split("SERVICES = [", 1)[1].split("\n]", 1)[0]
         in_services = '"vix-option-inteligence"' in services
-        known_stale = validator.split("KNOWN_STALE = {", 1)[1].split("}", 1)[0]
+        # KNOWN_STALE is a set literal: `{ ... }` while something is quarantined, or `set()` once the
+        # list is emptied. Parse either form — the name is only "in" it when the braces form holds it.
+        ks_decl = validator.split("KNOWN_STALE = ", 1)[1].lstrip()
+        known_stale = ks_decl.split("}", 1)[0] if ks_decl.startswith("{") else ""
         in_known_stale = '"vix-option-inteligence"' in known_stale
 
         # The hold is CONSISTENT: held means absent from SERVICES and quarantined. Half a transition is a

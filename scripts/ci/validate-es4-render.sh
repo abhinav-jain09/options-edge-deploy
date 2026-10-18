@@ -126,10 +126,10 @@ HAND_AUTHORED = {
 # request bump on a box whose capacity pressure is why ES4_KEEP_DOWN exists.
 #
 # This list must only ever SHRINK. Emptying it is the fix.
-KNOWN_STALE = {
-    "strike-intelligence",
-    "vix-option-inteligence",
-}
+KNOWN_STALE = set()  # EMPTIED 2026-10-18: strike-intelligence re-rendered (es4-only premium floor
+# preserved in ES_ENV; adopts current-prod decision knobs) and vix-option-inteligence re-rendered
+# (es4 replicas:1 via ES4_KEEP_UP, cpu:100m via ES4_CPU_REQUEST, ZERODTE_RESEARCH_ENABLED dropped via
+# ES4_DROP_ENV_NAMES — current es4 behaviour preserved exactly). Both now produced by the renderer.
 
 # REGULAR files only, and no symlinks. Classifying on filename alone would let a committed
 # symlink or a directory named "<something>.yaml" inherit an allowlisted name.
@@ -176,7 +176,21 @@ if missing:
     print(f"FAIL: SERVICES lists service(s) with no manifest in {OUT_DIR}: "
           f"{', '.join(missing)}", file=sys.stderr)
 
+# KNOWN_STALE is EMPTY and this gate FAILS if anything is added back. A name here is exactly the
+# "un-rendered yet deployed by deploy-all" drift this gate exists to stop, and because an
+# allowlisted name otherwise PASSES CI, a silent append would reopen that failure mode unseen
+# (Codex MAJOR). Re-quarantining a service must be a deliberate, reviewed edit to THIS
+# enforcement, never a one-line list addition. The fix for a stale manifest is to re-render it.
+if KNOWN_STALE:
+    fail = True
+    print(f"FAIL: KNOWN_STALE must stay empty; it lists: {', '.join(sorted(KNOWN_STALE))}. "
+          f"These manifests are deployed by deploy-all but not produced by the renderer. "
+          f"Re-render them (add to SERVICES, move any es4-only values into ES_ENV) instead of "
+          f"quarantining — or, to deliberately re-quarantine, remove THIS check in review.",
+          file=sys.stderr)
 # A declared-stale entry that is gone, or that came back into SERVICES, means the list is lying.
+# (Unreachable while the fail-closed check above stands, but kept so the list stays self-checking
+# if that check is ever relaxed.)
 for n in sorted(KNOWN_STALE):
     if n in rendered:
         fail = True
@@ -206,11 +220,6 @@ if fail:
 
 print(f"ok: {len(on_disk)} manifest(s) = {len(rendered)} rendered "
       f"+ {len(HAND_AUTHORED)} hand-authored + {len(KNOWN_STALE)} known-stale")
-if KNOWN_STALE:
-    # Printed on EVERY green run on purpose: this is unfinished business on a live environment,
-    # and a quarantine nobody sees again is just a silence with extra steps.
-    print("NOTE: still un-rendered and still deployed by deploy-all: "
-          + ", ".join(sorted(KNOWN_STALE)))
 PY
 
 echo "=== validate-es4-render: OK ==="
