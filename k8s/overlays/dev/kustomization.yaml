@@ -411,6 +411,10 @@ patches:
     target:
       kind: Deployment
       name: breakout-sequencer-service
+  - path: breakout-episode-dev-enable-patch.yaml
+    target:
+      kind: Deployment
+      name: breakout-episode-service
   # DEV-ONLY: run the option pressure state READER, and only that one of this service's four
   # writers. See the patch header for why the other three are switched off rather than left to
   # create a topic and three tables as a side effect.

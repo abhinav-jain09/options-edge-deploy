@@ -15,6 +15,10 @@
 apiVersion: v1
 kind: Service
 metadata:
+  annotations:
+    prometheus.io/path: /metrics
+    prometheus.io/port: "8080"
+    prometheus.io/scrape: "true"
   labels:
     app.kubernetes.io/name: breakout-episode-service
     app.kubernetes.io/part-of: options-edge
@@ -38,7 +42,7 @@ metadata:
   namespace: options-edge
 spec:
   progressDeadlineSeconds: 1200
-  replicas: 0
+  replicas: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: breakout-episode-service
@@ -52,6 +56,10 @@ spec:
     spec:
       containers:
         - env:
+            - name: BREAKOUT_EP_PROFILE
+              value: dev-unsecured
+            - name: BREAKOUT_EP_CREATE_TOPICS
+              value: "true"
             - name: BREAKOUT_EP_MODE
               value: SHADOW
             - name: BREAKOUT_EP_SEQUENCED_TOPIC
