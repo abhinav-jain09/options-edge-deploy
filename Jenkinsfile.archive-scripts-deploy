@@ -294,19 +294,26 @@ pipeline {
         sh 'mvn -B -q -ntp -f .jenkins-tmp/contracts/pom.xml dependency:build-classpath -Dmdep.includeScope=test -Dmdep.outputFile="${WORKSPACE}/.jenkins-tmp/archive-contracts-deps.txt"'
         sh 'rm -rf .jenkins-tmp/canonical-archive-classes .jenkins-tmp/canonical-archive-tests && mkdir -p .jenkins-tmp/canonical-archive-classes .jenkins-tmp/canonical-archive-tests'
         timeout(time: 10, unit: 'MINUTES') {
-          sh 'PERMITTED_SHA="${PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored .jenkins-tmp --allow-ignored scripts/ops/archive/market_calendar.py --allow-ignored scripts/ops/archive/vol-premium-open-reference-capture.py'
+          sh 'PERMITTED_SHA="${PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored .jenkins-tmp --allow-ignored tools/canonical-archive-reader/target --allow-ignored scripts/ops/archive/market_calendar.py --allow-ignored scripts/ops/archive/vol-premium-open-reference-capture.py'
         }
-        sh 'javac --release 21 -cp ".jenkins-tmp/contracts/target/options-edge-contracts-${ARCHIVE_CONTRACTS_VERSION}.jar:$(cat .jenkins-tmp/archive-contracts-deps.txt)" -d .jenkins-tmp/canonical-archive-classes scripts/ops/archive/CanonicalArchiveDecoder.java scripts/ops/archive/StrikeArchiveReader.java'
+        sh 'mvn -B -ntp -Dmaven.repo.local="${WORKSPACE}/.jenkins-tmp/archive-m2" org.apache.maven.plugins:maven-install-plugin:3.1.3:install-file -Dfile=.jenkins-tmp/contracts/target/options-edge-contracts-archive.jar -DpomFile=.jenkins-tmp/contracts/pom.xml'
         timeout(time: 10, unit: 'MINUTES') {
-          sh 'PERMITTED_SHA="${PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored .jenkins-tmp --allow-ignored scripts/ops/archive/market_calendar.py --allow-ignored scripts/ops/archive/vol-premium-open-reference-capture.py'
+          sh 'PERMITTED_SHA="${PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored .jenkins-tmp --allow-ignored tools/canonical-archive-reader/target --allow-ignored scripts/ops/archive/market_calendar.py --allow-ignored scripts/ops/archive/vol-premium-open-reference-capture.py'
         }
-        sh 'javac --release 21 -cp ".jenkins-tmp/canonical-archive-classes:.jenkins-tmp/contracts/target/options-edge-contracts-${ARCHIVE_CONTRACTS_VERSION}.jar:$(cat .jenkins-tmp/archive-contracts-deps.txt)" -d .jenkins-tmp/canonical-archive-tests tests/archive-canonical/CanonicalArchiveDecoderTest.java'
+        sh 'mvn -B -ntp -Dmaven.repo.local="${WORKSPACE}/.jenkins-tmp/archive-m2" -f tools/canonical-archive-reader/pom.xml -Dcontracts.version="${ARCHIVE_CONTRACTS_VERSION}" -DskipTests package'
+        sh 'cp tools/canonical-archive-reader/target/canonical-archive-reader.jar .jenkins-tmp/canonical-archive-reader.jar'
+        sh 'javac --release 21 -cp .jenkins-tmp/canonical-archive-reader.jar -d .jenkins-tmp/canonical-archive-tests tests/archive-canonical/CanonicalArchiveDecoderTest.java'
         sh 'PYTHONDONTWRITEBYTECODE=1 OE_INDICATOR_READER_CP=".jenkins-tmp/contracts/target/options-edge-contracts-${ARCHIVE_CONTRACTS_VERSION}.jar:$(cat .jenkins-tmp/archive-contracts-deps.txt)" python3 -m unittest tests.test_indicator_archive_reader'
+        sh 'java -Xmx512m -cp ".jenkins-tmp/canonical-archive-reader.jar:.jenkins-tmp/canonical-archive-tests" CanonicalArchiveDecoderTest .jenkins-tmp/contracts .jenkins-tmp/canonical-archive-reader.jar'
         timeout(time: 10, unit: 'MINUTES') {
-          sh 'PERMITTED_SHA="${PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored .jenkins-tmp --allow-ignored scripts/ops/archive/market_calendar.py --allow-ignored scripts/ops/archive/vol-premium-open-reference-capture.py'
+          sh 'PERMITTED_SHA="${PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored .jenkins-tmp --allow-ignored tools/canonical-archive-reader/target --allow-ignored scripts/ops/archive/market_calendar.py --allow-ignored scripts/ops/archive/vol-premium-open-reference-capture.py'
         }
-        sh 'jar --create --file .jenkins-tmp/canonical-archive-reader.jar -C .jenkins-tmp/canonical-archive-classes .'
-        sh 'java -Xmx512m -cp ".jenkins-tmp/canonical-archive-reader.jar:.jenkins-tmp/canonical-archive-tests:.jenkins-tmp/contracts/target/options-edge-contracts-${ARCHIVE_CONTRACTS_VERSION}.jar:$(cat .jenkins-tmp/archive-contracts-deps.txt)" CanonicalArchiveDecoderTest .jenkins-tmp/contracts .jenkins-tmp/canonical-archive-reader.jar'
+        sh 'PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests.test_archive_packaged_gate'
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored .jenkins-tmp --allow-ignored tools/canonical-archive-reader/target --allow-ignored scripts/ops/archive/market_calendar.py --allow-ignored scripts/ops/archive/vol-premium-open-reference-capture.py'
+        }
+        sh 'python3 scripts/jenkins/archive-packaged-on-es4.py'
+
       }
     }
 
@@ -378,7 +385,7 @@ EOSSH
         }
         sh 'scp -o BatchMode=yes .jenkins-tmp/contracts/target/options-edge-contracts-archive.jar "${PROD_HOST}:${STAGE_DIR}/options-edge-contracts.jar"'
         timeout(time: 10, unit: 'MINUTES') {
-          sh 'PERMITTED_SHA="${PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored .jenkins-tmp --allow-ignored scripts/ops/archive/market_calendar.py --allow-ignored scripts/ops/archive/vol-premium-open-reference-capture.py'
+          sh 'PERMITTED_SHA="${PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored .jenkins-tmp --allow-ignored tools/canonical-archive-reader/target --allow-ignored scripts/ops/archive/market_calendar.py --allow-ignored scripts/ops/archive/vol-premium-open-reference-capture.py'
         }
         sh 'scp -o BatchMode=yes .jenkins-tmp/canonical-archive-reader.jar "${PROD_HOST}:${STAGE_DIR}/canonical-archive-reader.jar"'
         // The whole unit travels together: the archiver, the alert helper it sources, the topic policy it refuses to
@@ -401,7 +408,7 @@ EOSSH
           // neither the literal in an echo, nor an echo of the verifier itself carrying the
           // declarations, nor text after a shell operator, nor a declaration for a neighbouring path
           // satisfies it. The path may be given unquoted, as here, or double-quoted.
-          sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp --allow-ignored scripts/ops/archive/market_calendar.py --allow-ignored scripts/ops/archive/vol-premium-open-reference-capture.py'
+          sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp --allow-ignored tools/canonical-archive-reader/target --allow-ignored scripts/ops/archive/market_calendar.py --allow-ignored scripts/ops/archive/vol-premium-open-reference-capture.py'
         }
         sh 'scp -o BatchMode=yes scripts/ops/archive/oe-archive-kafka.sh scripts/ops/archive/StrikeArchiveReader.java scripts/ops/archive/CanonicalArchiveDecoder.java scripts/ops/archive/IndicatorArchiveReader.java scripts/ops/archive/oe-alert.sh scripts/ops/archive/oe-topics.env scripts/ops/archive/test-archive-reset.sh scripts/ops/archive/oe-archive.crontab scripts/ops/archive/oe-archive.crontab.predecessor scripts/ops/archive/oe-calibration-progress.sh scripts/ops/archive/oe_corpus_reader.py scripts/ops/archive/oe-push-validation-artifact.sh scripts/ops/archive/push-validation-artifact-test.sh scripts/ops/archive/calibration-targets.env scripts/jenkins/market_calendar.py scripts/ops/archive/oe-archive-verify.sh scripts/ops/archive/oe-trading-day.sh scripts/ops/archive/oe-archive-daily.sh scripts/ops/archive/oe-archive-dev.sh scripts/ops/archive/ibkr-raw-retention.sh scripts/ops/archive/oe-archive-postgres.sh scripts/ops/archive/oe-vol-premium-open-capture.sh scripts/ops/vol-premium-open-reference-capture.py "${PROD_HOST}:${STAGE_DIR}/"'
         sh '''
@@ -562,6 +569,7 @@ EOSSH
       // SSHes contradicts the guarantee the earlier stages advertise.
       // ...and never after a permitted-commit guard refusal: STAGED can only be set by a stage that
       // runs after the guard, but the flag is checked here too so the post path is closed on its own.
+      archiveArtifacts artifacts: '.jenkins-tmp/archive-packaged-*/receipt.json,.jenkins-tmp/archive-packaged-*/test.log', allowEmptyArchive: true, fingerprint: true
       script {
         if (env.PERMITTED_SHA_GUARD == 'PASSED') {
           if (!params.RUN_TESTS_ONLY && env.STAGED == 'true') {

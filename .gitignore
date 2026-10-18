@@ -38,3 +38,6 @@ scripts/ops/archive/vol-premium-open-reference-capture.py
 ansible/.ansible-rendered/
 
 # fetched from the Jenkins Maven repository at deploy time (Jenkinsfile.archive-scripts-deploy), never committed
+
+# Standalone canonical archive package built by Jenkins
+/tools/canonical-archive-reader/target/

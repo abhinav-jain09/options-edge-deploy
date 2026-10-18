@@ -363,7 +363,7 @@ run_strike_reader() {
     [ -r "$helper" ] && [ -r "$INDICATOR_CONTRACTS_JAR" ] || { echo 'FATAL: canonical archive SDK/helper missing' >&2; return 2; }
     # Run the reviewed compiled entrypoint. A source launcher on JDK22+ may otherwise
     # resolve adjacent decoder sources instead of the tested helper jar.
-    timeout "$limit" "$java" -Xmx512m -cp "$helper:$(indicator_reader_classpath)" StrikeArchiveReader \
+    timeout "$limit" "$java" -Xmx512m -Dorg.slf4j.simpleLogger.defaultLogLevel=warn -cp "$helper" StrikeArchiveReader \
       "$@" --canonical-registry "$(archive_registry_url "${OE_CANONICAL_REGISTRY_URL:-}")"
     return
   fi

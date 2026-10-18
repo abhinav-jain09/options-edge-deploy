@@ -57,7 +57,9 @@ public class CanonicalArchiveDecoderTest {
         if(args.length<1||args.length>2)throw new IllegalArgumentException("contracts source directory and optional tested helper jar required");
         if(args.length==2) {
             Path expected=Path.of(args[1]).toRealPath();
-            for(Class<?> type:new Class<?>[]{StrikeArchiveReader.class,CanonicalArchiveDecoder.class}) {
+            for(Class<?> type:new Class<?>[]{StrikeArchiveReader.class,CanonicalArchiveDecoder.class,
+                    CanonicalJsonAvro.class,Schema.class,org.apache.kafka.clients.consumer.KafkaConsumer.class,
+                    io.confluent.kafka.schemaregistry.client.CachedSchemaRegistryClient.class}) {
                 Path actual=Path.of(type.getProtectionDomain().getCodeSource().getLocation().toURI()).toRealPath();
                 check(expected.equals(actual),"Canonical archive class must load from tested helper jar: "+type+" actual="+actual);
             }

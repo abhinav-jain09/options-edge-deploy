@@ -93,3 +93,25 @@ This removes the JDK22+ multi-file source-launch ambiguity. Marker and unrelated
 raw-topic paths retain their original Java17-compatible source launch and do not
 load the SDK. Native Confluent/Kafka linkage, sustained retained-history capture
 and cold-registry/metadata-boundary qualification remain open before installation.
+
+## Self-contained canonical reader
+
+A read-only inventory found production's external archive classpath has 256 JARs,
+while es4 has only 108 members of that set. The canonical reader now bundles its
+guarded latest-main SDK and runtime dependencies with Maven Shade, including
+service metadata. The canonical branch runs with that JAR alone. Indicator and
+raw/offset-marker paths keep their existing classpaths and Java selection.
+
+The Jenkins build installs its exact just-built SDK into a private Maven repository,
+packages only the two canonical reader classes, and verifies every non-META-INF SDK
+member against the bundled bytes. Metadata is merged by Shade and exercised by the
+actual serializer tests. Duplicate ZIP members and oversized packages refuse.
+All codec checks assert that the reader, SDK, Avro, Kafka and registry classes load
+from the tested package, with no external library fallback. A bounded es4 transient
+unit repeats the 56 codec/layout assertions on Linux with 512 MiB heap, a 1 GiB
+no-swap unit, two available CPUs, 128 tasks and 60 seconds. It contacts no broker
+or production host. Both provenance and test output are archived.
+
+These checks establish packaged-codec compatibility only. Actual retained-history,
+source-domain, committed-read boundary and sustained capture throughput remain
+separate gates before installing the reader. No archive or offset is changed here.
