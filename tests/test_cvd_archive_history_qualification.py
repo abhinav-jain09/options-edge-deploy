@@ -109,4 +109,9 @@ class ArchiveQualificationTest(unittest.TestCase):
   with patch.object(worker,'digest',return_value='b'*64),self.assertRaisesRegex(ValueError,'bytes differ'):worker.verify_inputs({'files':files})
   with self.assertRaisesRegex(ValueError,'inventory'):worker.verify_inputs({'files':{}})
 
+ def test_cpu_affinity_requires_exactly_two_available_cpus(self):
+  self.assertEqual([2,5],worker.validate_cpu_affinity({5,2}))
+  for cpus in [set(),{0},{0,1,2},{-1,1},{1,4096}]:
+   with self.subTest(cpus=cpus),self.assertRaises(ValueError):worker.validate_cpu_affinity(cpus)
+
 if __name__=='__main__':unittest.main()

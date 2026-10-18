@@ -143,3 +143,12 @@ preserved audit location with sufficient space. Do not delete captures, change
 archive checkpoints, raise the cap automatically, or interrupt another run. Tool
 and runtime prerequisites are checked before allocating a run directory. No heavy
 qualification is permitted on the controller or production host.
+
+
+ES4's user manager does not delegate the CPU cgroup controller. Qualification
+therefore uses `taskset` with exactly two CPUs from the SSH session's permitted
+set, inherited by the worker and JVM children. The worker checks its actual
+scheduler affinity, records it, and the controller checks the result against the
+allocation. This enforces at most two simultaneously available cores without
+changing host-wide delegation. Memory/swap/task cgroups remain independently
+verified; no CPU quota claim is made.
