@@ -43,7 +43,20 @@ spec:
         app.kubernetes.io/part-of: options-edge
     spec:
       containers:
-      - envFrom:
+      - env:
+        - name: POSTGRES_DIRECTIONAL_PRESSURE_ENABLED
+          value: 'false'
+        - name: POSTGRES_DIRECTIONAL_OUTCOME_ENABLED
+          value: 'false'
+        - name: POSTGRES_DIRECTIONAL_THRESHOLD_CALIBRATOR_ENABLED
+          value: 'false'
+        - name: POSTGRES_PRESSURE_STATE_GRANULARITY
+          value: SYMBOL
+        - name: POSTGRES_PRESSURE_STATE_MIN_INTERVAL_MS
+          value: '60000'
+        - name: POSTGRES_PRESSURE_STATE_ENABLED
+          value: 'false'
+        envFrom:
         - configMapRef:
             name: es4-base-env
         - configMapRef:
