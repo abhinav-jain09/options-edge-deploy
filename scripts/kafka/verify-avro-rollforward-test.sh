@@ -51,15 +51,76 @@ exit 0
 MOCK
 chmod +x "$TMP/bin/kafka-topics.sh"
 
+# kafka-get-offsets: drives which partitions the wire check looks at.
+#   MOCK_EARLIEST / MOCK_LATEST — "<topic>:<partition>:<offset>" lines. A partition whose latest
+#   exceeds its earliest is non-empty, which is how rf_nonempty_partitions decides.
+cat > "$TMP/bin/kafka-get-offsets.sh" <<'MOCK'
+#!/usr/bin/env bash
+set -u
+for a in "$@"; do case "$a" in -2) printf '%s\n' "${MOCK_EARLIEST:-}" | grep -v '^$'; exit "${MOCK_OFFSETS_RC:-0}" ;; esac; done
+printf '%s\n' "${MOCK_LATEST:-}" | grep -v '^$'
+exit "${MOCK_OFFSETS_RC:-0}"
+MOCK
+chmod +x "$TMP/bin/kafka-get-offsets.sh"
+
+# kafka-console-consumer: emits the bytes the wire check inspects.
+#   MOCK_WIRE — "avro" (0x00 frame), "json" ({...), or "empty" (nothing, i.e. unreadable).
+cat > "$TMP/bin/kafka-console-consumer.sh" <<'MOCK'
+#!/usr/bin/env bash
+set -u
+# MOCK_WIRE applies to every offset; MOCK_WIRE_AT_<offset> overrides one, which is how the
+# "Avro at the start, JSON at the end" case is expressed.
+off=""
+prev=""
+for a in "$@"; do [ "$prev" = "--offset" ] && off="$a"; prev="$a"; done
+eval "specific=\${MOCK_WIRE_AT_${off}:-}"
+kind="${specific:-${MOCK_WIRE:-avro}}"
+case "$kind" in
+  avro) printf '\000\000\000\000\001some-avro-body' ;;
+  json) printf '{"emitterEpoch":1,"state":"GATED"}' ;;
+  tombstone) printf 'null\n' ;;
+  empty) : ;;
+esac
+exit 0
+MOCK
+chmod +x "$TMP/bin/kafka-console-consumer.sh"
+
 PRE_ID=Etuw6A2-RZiWnbq4oPLHLw            # the es4 pre-cutover id, from avro-rollforward.lib.sh
 T=es.options.databento.gex.oi-status
 GOOD_CFG='min.insync.replicas=1,cleanup.policy=delete,segment.bytes=268435456,retention.ms=43200000'
 desc() { printf '%s=Topic: %s\tTopicId: %s\tPartitionCount: %s\tReplicationFactor: 1\tConfigs: %s\n' "$T" "$T" "$1" "$2" "$3"; }
 
+# snap <records-in-partition-0> -> full 32-partition earliest/latest snapshots, exported as
+# SNAP_EARLY / SNAP_LATE. Every declared partition must appear or the barrier refuses the response
+# as partial, so a case that wants ONE non-empty partition still has to name all 32.
+snap() {
+  local n="$1" i
+  SNAP_EARLY=""; SNAP_LATE=""
+  for i in $(seq 0 31); do
+    SNAP_EARLY="$SNAP_EARLY$T:$i:0
+"
+    if [ "$i" = 0 ]; then SNAP_LATE="$SNAP_LATE$T:$i:$n
+"; else SNAP_LATE="$SNAP_LATE$T:$i:0
+"; fi
+  done
+}
+
 pass=0; fail=0
 run() { # <name> <expected rc> ; env comes from the caller
+  # Default the wire inputs to "one non-empty partition carrying Avro" so the pre-existing cases
+  # keep testing what they were written to test; the wire cases below override them.
   local name="$1" want="$2" out rc
-  out="$(PATH="$TMP/bin:$PATH" bash "$HERE/verify-avro-rollforward.sh" --cluster es4 mock:9092 "$TMP/bin" 2>&1)"
+  # The default snapshots name ALL 32 declared partitions, because a partial response is now refused.
+  local all_early all_late i
+  all_early=""; all_late=""
+  for i in $(seq 0 31); do
+    all_early="$all_early$T:$i:0\n"
+    all_late="$all_late$T:$i:$([ "$i" = 0 ] && echo 5 || echo 0)\n"
+  done
+  out="$(MOCK_EARLIEST="${MOCK_EARLIEST-$(printf "$all_early")}" MOCK_LATEST="${MOCK_LATEST-$(printf "$all_late")}" \
+         MOCK_WIRE="${MOCK_WIRE-avro}" \
+         RF_ALLOW_VERSIONED_SIBLINGS="${RF_ALLOW_VERSIONED_SIBLINGS:-0}" \
+         PATH="$TMP/bin:$PATH" bash "$HERE/verify-avro-rollforward.sh" --cluster es4 mock:9092 "$TMP/bin" 2>&1)"
   rc=$?
   if [ "$rc" = "$want" ]; then
     pass=$((pass+1)); echo "ok    $name (rc=$rc)"
@@ -110,10 +171,59 @@ MOCK_LIST="$T" MOCK_DESCRIBE="$(desc NEWIDxxxxxxxxxxxxxxxxx 32 'min.insync.repli
 MOCK_LIST="$T" MOCK_DESCRIBE="$(desc NEWIDxxxxxxxxxxxxxxxxx 32 'cleanup.policy=delete,retention.ms=43200000')" \
   run "a MISSING declared config (min.insync.replicas) is refused" 1
 
+# THE WIRE FORMAT — the check that caught a real, self-inflicted defect on 2026-10-18. The dev topic
+# was recreated at 15:10 and the still-running PRE-CUTOVER image wrote 31 hand-built JSON heartbeats
+# into it before the new image rolled at 15:59. The topic id was post-wipe the whole time, so an
+# id-only barrier passed over exactly the retained JSON the rule forbids an Avro consumer to meet.
+MOCK_LIST="$T" MOCK_DESCRIBE="$(desc NEWIDxxxxxxxxxxxxxxxxx 32 "$GOOD_CFG")" MOCK_WIRE=json \
+  run "a JSON value written AFTER the wipe is refused (post-wipe contamination)" 1
+
+MOCK_LIST="$T" MOCK_DESCRIBE="$(desc NEWIDxxxxxxxxxxxxxxxxx 32 "$GOOD_CFG")" MOCK_WIRE=avro \
+  run "an Avro value at the earliest offset passes" 0
+
+# An EMPTY topic has no non-empty partition, so there is nothing to read and nothing to refuse.
+snap 0
+MOCK_LIST="$T" MOCK_DESCRIBE="$(desc NEWIDxxxxxxxxxxxxxxxxx 32 "$GOOD_CFG")" \
+  MOCK_EARLIEST="$SNAP_EARLY" MOCK_LATEST="$SNAP_LATE" MOCK_WIRE=json \
+  run "an EMPTY topic passes (no record to classify)" 0
+
+# A non-empty partition that cannot be read is refused rather than assumed Avro.
+MOCK_LIST="$T" MOCK_DESCRIBE="$(desc NEWIDxxxxxxxxxxxxxxxxx 32 "$GOOD_CFG")" MOCK_WIRE=empty \
+  run "a non-empty partition that reads back nothing is refused" 1
+
+# And a failure of the offset query itself must not read as "no non-empty partitions".
+MOCK_LIST="$T" MOCK_DESCRIBE="$(desc NEWIDxxxxxxxxxxxxxxxxx 32 "$GOOD_CFG")" MOCK_OFFSETS_RC=1 \
+  run "a kafka-get-offsets failure is refused, not read as an empty topic" 1
+
+# THE DECISIVE CASE Codex found missing: Avro at the START, retained JSON at the END. An
+# earliest-only check passes this, and an Avro consumer still meets the JSON.
+snap 5
+MOCK_LIST="$T" MOCK_DESCRIBE="$(desc NEWIDxxxxxxxxxxxxxxxxx 32 "$GOOD_CFG")" \
+  MOCK_EARLIEST="$SNAP_EARLY" MOCK_LATEST="$SNAP_LATE" MOCK_WIRE=avro MOCK_WIRE_AT_4=json \
+  run "Avro at the start and JSON at the END is refused" 1
+
+# A TOMBSTONE is a valid record, not malformed. options.ibkr.gex.status is pure compact and retains
+# tombstones for 48 h by design, so refusing one would block a correct topic.
+snap 5
+MOCK_LIST="$T" MOCK_DESCRIBE="$(desc NEWIDxxxxxxxxxxxxxxxxx 32 "$GOOD_CFG")" \
+  MOCK_EARLIEST="$SNAP_EARLY" MOCK_LATEST="$SNAP_LATE" MOCK_WIRE=tombstone \
+  run "a TOMBSTONE passes (null value is valid, not malformed)" 0
+
+# A PARTIAL offsets response must not read as authoritative: it would omit a contaminated partition.
+MOCK_LIST="$T" MOCK_DESCRIBE="$(desc NEWIDxxxxxxxxxxxxxxxxx 32 "$GOOD_CFG")" \
+  MOCK_EARLIEST="$T:0:0
+" MOCK_LATEST="$T:0:5
+" \
+  run "a PARTIAL offsets response (1 of 32 partitions) is refused" 1
+
 # A versioned sibling present is REPORTED, not fatal — the documented exception, asserted so a later
 # edit cannot quietly make it fatal and deadlock the cutover rollout.
 MOCK_LIST="$(printf '%s\n%s\n' "$T" "$T.v2")" MOCK_DESCRIBE="$(desc NEWIDxxxxxxxxxxxxxxxxx 32 "$GOOD_CFG")" \
-  run "a versioned sibling present does NOT fail the barrier" 0
+  run "a versioned sibling present FAILS by default (owner rule)" 1
+
+RF_ALLOW_VERSIONED_SIBLINGS=1 \
+  MOCK_LIST="$(printf '%s\n%s\n' "$T" "$T.v2")" MOCK_DESCRIBE="$(desc NEWIDxxxxxxxxxxxxxxxxx 32 "$GOOD_CFG")" \
+  run "a versioned sibling is allowed ONLY with the explicit cutover-window opt-out" 0
 
 # The cluster argument is mandatory: without it the script cannot know which topics apply.
 out="$(PATH="$TMP/bin:$PATH" bash "$HERE/verify-avro-rollforward.sh" mock:9092 2>&1)"; rc=$?

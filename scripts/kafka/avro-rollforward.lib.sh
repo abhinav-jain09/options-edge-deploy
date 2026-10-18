@@ -161,3 +161,106 @@ rf_config_value() {
       if (have) print out
     }'
 }
+
+# rf_resolve_cli_named <base-name> [bin-dir] -> the command to run for that Kafka CLI.
+# Same resolution as rf_resolve_cli, for the other tools the barrier needs.
+rf_resolve_cli_named() {
+  local base="$1" bin="${2:-${KAFKA_BIN_DIR:-}}"
+  if [ -n "$bin" ]; then
+    if [ ! -x "$bin/$base.sh" ]; then
+      echo "FATAL: $bin/$base.sh is not executable" >&2; return 1
+    fi
+    printf '%s\n' "$bin/$base.sh"
+  elif command -v "$base" >/dev/null 2>&1; then
+    printf '%s\n' "$base"
+  elif command -v "$base.sh" >/dev/null 2>&1; then
+    printf '%s\n' "$base.sh"
+  else
+    echo "FATAL: no $base CLI found (pass a bin dir or set KAFKA_BIN_DIR)" >&2; return 1
+  fi
+}
+
+# rf_nonempty_partitions <get-offsets-cli> <bootstrap> <topic> -> partition numbers that hold records.
+#
+# Derived from earliest vs latest offsets rather than by polling every partition: a 32-partition topic
+# would otherwise cost 32 consumer timeouts to discover that 31 of them are empty.
+rf_nonempty_partitions() {
+  local cli="$1" bs="$2" topic="$3" early late
+  if ! early="$("$cli" --bootstrap-server "$bs" --topic "$topic" --time -2 2>&1)"; then
+    echo "FATAL: cannot read earliest offsets for $topic on $bs:" >&2; printf '%s\n' "$early" >&2; return 1
+  fi
+  if ! late="$("$cli" --bootstrap-server "$bs" --topic "$topic" --time -1 2>&1)"; then
+    echo "FATAL: cannot read latest offsets for $topic on $bs:" >&2; printf '%s\n' "$late" >&2; return 1
+  fi
+  # A successful-but-PARTIAL response must not read as authoritative: a snapshot missing a partition
+  # would silently omit a contaminated one and read as a clean pass (Codex). Both snapshots must name
+  # every partition from 0..expected-1 exactly once.
+  local expected="${4:-}"
+  if [ -n "$expected" ]; then
+    local n_early n_late
+    n_early="$(printf '%s\n' "$early" | awk -F: -v t="$topic" '$1==t{c++} END{print c+0}')"
+    n_late="$(printf '%s\n' "$late" | awk -F: -v t="$topic" '$1==t{c++} END{print c+0}')"
+    if [ "$n_early" != "$expected" ] || [ "$n_late" != "$expected" ]; then
+      echo "FATAL: offsets for $topic are PARTIAL — earliest named $n_early partition(s), latest" >&2
+      echo "       named $n_late, expected $expected. Refusing rather than treating a partial" >&2
+      echo "       response as authoritative." >&2
+      return 1
+    fi
+  fi
+  printf '%s\n%s\n' "$early" "$late" | awk -F: -v t="$topic" '
+    $1==t { if (seen[$2]++) { if ($3+0 > first[$2]+0) print $2 ":" first[$2] ":" $3 } else { first[$2]=$3 } }'
+}
+
+# rf_wire_is_avro <console-consumer-cli> <bootstrap> <topic> <partition> <from-offset>
+#   -> 0 when the record at that offset is Confluent-framed Avro OR a tombstone,
+#      1 when it is something else, 2 when nothing could be read at that offset.
+#
+# WHY THIS EXISTS, and why the topic-id check is not enough. A new topic id proves the ORIGINAL
+# JSON-bearing topic is gone. It does NOT prove nothing has written JSON SINCE. On 2026-10-18 that
+# gap was real and self-inflicted: the dev topic was recreated at 15:10 and the still-running
+# PRE-CUTOVER image then wrote 31 hand-built JSON heartbeats into it before the new image rolled at
+# 15:59. The topic id was post-wipe the whole time, so the barrier passed while the topic held
+# exactly the retained JSON the Kafka Serialization Rule forbids an Avro consumer to meet.
+#
+# A Confluent-framed Avro value begins with the magic byte 0x00 followed by a 4-byte schema id; the
+# hand-built JSON this estate is retiring begins with 0x7b, "{".
+#
+# A TOMBSTONE PASSES. A null value is a valid record, not a malformed one, and
+# options.ibkr.gex.status is pure compact with delete.retention.ms=172800000 — it RETAINS tombstones
+# for 48 h by design, so an earliest tombstone is reachable and refusing it would block a correct
+# topic (Codex). kafka-console-consumer renders a null value as its null literal, so that literal is
+# accepted explicitly rather than by accident.
+#
+# WHAT THIS DOES NOT PROVE, stated because the first cut of this comment overclaimed it: sampling the
+# first and last records of a partition is not a full scan, so it does not prove that NO retained
+# JSON exists anywhere in the log. A full scan is not available through this CLI — records are
+# newline-delimited in its output while Avro bodies contain newlines, so a line-based scan over
+# binary values is unsound, not merely slow. What rules out a non-Avro writer is the CODE: the
+# producer serializer refuses a non-Avro payload (IbkrMixedSerializer) and the contract refuses a
+# versioned topic name (KafkaTopicNames). This check is the operational backstop for the one failure
+# those cannot see — a stale image still running at wipe time — and the two ends of the log are where
+# that shows up: the start if it was writing when the topic was recreated, the end if it still is.
+rf_wire_is_avro() {
+  local cli="$1" bs="$2" topic="$3" part="$4" off="$5" tmp first
+  tmp="$(mktemp)"
+  # < /dev/null is REQUIRED, not hygiene: kafka-console-consumer reads stdin, and without this it
+  # swallows the caller's `while read ... <<<` herestring — the outer topic loop then silently
+  # processes one topic and stops, which looks exactly like a clean pass.
+  if ! "$cli" --bootstrap-server "$bs" --topic "$topic" --partition "$part" \
+        --offset "$off" --max-messages 1 --timeout-ms "${RF_WIRE_TIMEOUT_MS:-15000}" \
+        > "$tmp" 2>/dev/null < /dev/null; then
+    # A compacted-away offset reads as empty rather than as a failure; treat unreadable as unknown.
+    if [ ! -s "$tmp" ]; then rm -f "$tmp"; return 2; fi
+  fi
+  if [ ! -s "$tmp" ]; then rm -f "$tmp"; return 2; fi
+  first="$(od -An -tx1 -N1 "$tmp" | tr -d ' \n')"
+  # A tombstone: the consumer renders a null value as its null literal on a line of its own.
+  if [ "$(tr -d '\n\r' < "$tmp")" = "${RF_NULL_LITERAL:-null}" ]; then
+    rm -f "$tmp"; return 0
+  fi
+  rm -f "$tmp"
+  [ "$first" = "00" ] && return 0
+  echo "    value at offset $off starts 0x$first (Avro is 0x00, a tombstone renders as" >&2
+  echo "    '${RF_NULL_LITERAL:-null}', hand-built JSON is 0x7b '{')" >&2
+  return 1
+}

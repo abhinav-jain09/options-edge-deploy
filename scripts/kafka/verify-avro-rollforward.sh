@@ -42,12 +42,14 @@ BIN="${4:-${KAFKA_BIN_DIR:-}}"
 . "$(dirname "${BASH_SOURCE[0]}")/avro-rollforward.lib.sh"
 
 KT="$(rf_resolve_cli "$BIN")"
+GO="$(rf_resolve_cli_named kafka-get-offsets "$BIN")"
+CC="$(rf_resolve_cli_named kafka-console-consumer "$BIN")"
 SPECS="$(rf_specs "$CLUSTER")"
 LIST="$(rf_list "$KT" "$BS")"
 
 echo "=== verify-avro-rollforward on $BS (cluster $CLUSTER) ==="
 fail=0
-while IFS='|' read -r topic parts cfgs pre_id; do
+while IFS='|' read -r -u 3 topic parts cfgs pre_id; do
   [ -n "$topic" ] || continue
   if ! printf '%s\n' "$LIST" | grep -qx "$topic"; then
     echo "FAIL: $topic does not exist on $BS. The roll-forward has not completed here — run" >&2
@@ -90,8 +92,58 @@ while IFS='|' read -r topic parts cfgs pre_id; do
       || { echo "FAIL: $topic has $want_key='$got', declared '$want_val': $desc" >&2; shape_ok=0; }
   done <<<"$(rf_split_declared "$cfgs")"
   [ "$shape_ok" -eq 1 ] || { fail=1; continue; }
-  echo "ok  $topic rolled forward (topic id $id, $parts partition(s), $cfgs)"
-done <<<"$SPECS"
+  # THE WIRE FORMAT, which is the property the whole barrier is for. The topic id proves the
+  # ORIGINAL JSON-bearing topic is gone; it does NOT prove nothing has written JSON since, and on
+  # 2026-10-18 that gap was real — the dev topic was recreated at 15:10 and the still-running
+  # pre-cutover image wrote 31 JSON heartbeats into it before the new image rolled. The id was
+  # post-wipe throughout, so an id-only barrier passed over exactly the retained JSON the Kafka
+  # Serialization Rule forbids. One record per NON-EMPTY partition, so an empty 32-partition topic
+  # costs two offset queries rather than 32 consumer timeouts.
+  parts_checked=0
+  wire_ok=1
+  # Captured with an explicit status check, NOT inlined as `<<<"$(rf_nonempty_partitions ...)"`:
+  # command substitution discards the function's exit status, so an offsets failure would arrive as
+  # empty output and read as "no non-empty partitions" — a pass over an unverified topic. The
+  # barrier's own test caught this, which is the same class of bug as reading a `--list` failure as
+  # absence.
+  if ! nonempty="$(rf_nonempty_partitions "$GO" "$BS" "$topic" "$parts")"; then
+    echo "FAIL: $topic — could not determine which partitions hold records, so the wire format is" >&2
+    echo "      unverified. Refusing rather than assuming the topic is empty." >&2
+    fail=1
+    continue
+  fi
+  # BOTH ENDS of each non-empty partition, not just the earliest. An earliest-only check passes a
+  # partition that begins with Avro and is followed by retained JSON — the exact shape a stale writer
+  # produces when it starts writing AFTER the first good record (Codex). The start catches a writer
+  # that was live when the topic was recreated; the end catches one that is live now.
+  while IFS=: read -r pnum p_early p_late; do
+    [ -n "$pnum" ] || continue
+    for probe in "earliest:$p_early" "latest:$((p_late - 1))"; do
+      label="${probe%%:*}"; off="${probe#*:}"
+      [ "$off" -ge 0 ] 2>/dev/null || continue
+      # `|| wrc=$?` and not a bare call: under `set -e` a non-zero return from the check would abort
+      # the script before the diagnosis below could print — the failure would be a silent exit 1.
+      wrc=0
+      rf_wire_is_avro "$CC" "$BS" "$topic" "$pnum" "$off" || wrc=$?
+      case $wrc in
+        0) parts_checked=$((parts_checked + 1)) ;;
+        1) echo "FAIL: $topic partition $pnum holds a NON-AVRO value at its $label offset ($off)." >&2
+           echo "      Something wrote to this topic after it was rolled forward. Stop that writer," >&2
+           echo "      then re-run roll-forward-avro-cutover-topics.sh --recreate --cluster $CLUSTER" >&2
+           wire_ok=0 ;;
+        2) # Compaction can remove the record AT an offset; that is not evidence of anything.
+           [ "$label" = "earliest" ] && continue
+           echo "FAIL: $topic partition $pnum could not be read at its $label offset ($off)." >&2
+           wire_ok=0 ;;
+      esac
+    done
+  done <<<"$nonempty"
+  if [ "$wire_ok" -ne 1 ]; then
+    fail=1
+    continue
+  fi
+  echo "ok  $topic rolled forward (topic id $id, $parts partition(s), $cfgs; $parts_checked log end(s) sampled, all Avro or tombstone)"
+done 3<<<"$SPECS"
 
 # Versioned topic names on the broker are REPORTED but do not fail this gate, and the reason is the
 # cutover itself. While the rollout is in flight the OLD image is still running and still writing to
@@ -105,9 +157,20 @@ done <<<"$SPECS"
 # manifest names one, and contracts' KafkaTopicNames, which refuses one at resolution. Those cover
 # the only two paths by which a versioned name can reach a client.
 if versioned="$(printf '%s\n' "$LIST" | grep -E '\.v[0-9]+$' || true)"; [ -n "$versioned" ]; then
-  echo "NOTE: versioned topic name(s) present on $BS — retire them with"
-  echo "      roll-forward-avro-cutover-topics.sh --retire-siblings --cluster $CLUSTER once the new image is live:"
-  printf '      %s\n' $versioned
+  printf '      %s\n' $versioned >&2
+  if [ "${RF_ALLOW_VERSIONED_SIBLINGS:-0}" = "1" ]; then
+    echo "NOTE: versioned topic name(s) present on $BS, ALLOWED by RF_ALLOW_VERSIONED_SIBLINGS=1." >&2
+    echo "      That opt-out exists only for the cutover window itself, where the old image is still" >&2
+    echo "      writing to its sibling and recreates it within seconds of any deletion. Retire them" >&2
+    echo "      with --retire-siblings once the new image is live, then stop setting this." >&2
+  else
+    echo "FAIL: versioned topic name(s) present on $BS. Topics here are rolled forward under their" >&2
+    echo "      own name and NO versioned topic may remain (owner, 2026-10-18). Retire them with" >&2
+    echo "      roll-forward-avro-cutover-topics.sh --retire-siblings --cluster $CLUSTER." >&2
+    echo "      During the cutover window itself, where the old image still recreates its sibling," >&2
+    echo "      set RF_ALLOW_VERSIONED_SIBLINGS=1 deliberately for that one run." >&2
+    fail=1
+  fi
 else
   echo "ok  no versioned topic names on $BS"
 fi
