@@ -60,4 +60,10 @@ s, b = call("GET", f"/config/{subject}")
 if s != 200 or b.get("compatibilityLevel") != "FULL":
     sys.exit(f"FATAL: {subject} compatibility is not FULL: {s} {b}")
 print(f"compatibility: {subject} FULL")
+# The feed binds to the LATEST version of the subject at start and refuses any shape but the canonical one, so the
+# canonical schema must BE the latest version, not merely present somewhere in the subject's history.
+s, latest = call("GET", f"/subjects/{subject}/versions/latest")
+if s != 200 or json.loads(latest["schema"]) != json.loads(schema):
+    sys.exit(f"FATAL: the latest version of {subject} is not the canonical schema (the feed would refuse to start): {s} {latest}")
+print(f"latest: {subject} version={latest['version']} id={latest['id']} is the canonical schema")
 PY

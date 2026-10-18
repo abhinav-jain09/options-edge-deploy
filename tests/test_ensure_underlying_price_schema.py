@@ -20,7 +20,8 @@ SUBJECT = "com.optionsedge.contracts.hpsf.UnderlyingPrice"
 def schema_file(name: str = "UnderlyingPrice") -> str:
     f = tempfile.NamedTemporaryFile("w", suffix=".avsc", delete=False)
     json.dump({"type": "record", "name": name, "namespace": "com.optionsedge.contracts.hpsf",
-               "fields": [{"name": "symbol", "type": "string"}]}, f)
+               "fields": [{"name": "symbol", "type": "string"},
+                          {"name": "price", "type": {"type": "bytes", "logicalType": "decimal", "precision": 38, "scale": 18}}]}, f)
     f.close()
     return f.name
 
@@ -66,6 +67,20 @@ class EnsureUnderlyingPriceSchema(unittest.TestCase):
             self.assertNotEqual(rc, 0)
             self.assertIn("not the subject", out)
             self.assertEqual(reg.calls, [])
+        finally:
+            server.shutdown()
+
+    def test_a_newer_version_after_the_canonical_one_is_refused(self):
+        reg = Registry()
+        server, url = serve(reg)
+        try:
+            path = schema_file()
+            self.assertEqual(run(url, path)[0], 0)
+            reg.register(SUBJECT, json.dumps({"type": "record", "name": "UnderlyingPrice", "namespace": "com.optionsedge.contracts.hpsf",
+                                              "fields": [{"name": "symbol", "type": "string"}]}))
+            rc, out = run(url, path)
+            self.assertNotEqual(rc, 0)
+            self.assertIn("latest version", out)
         finally:
             server.shutdown()
 
