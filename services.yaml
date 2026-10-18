@@ -297,14 +297,19 @@ services:
   #      froze ALL OPB output for about an hour during RTH, and the gateway and the web option price
   #      behavior page read that output. That L1 is the SAME class of change is an inference from
   #      both being per-trade work inside that transaction, not something either repository records;
-  #      weigh it as an inference. Two RUNTIME observations, external to this repository and checked
-  #      on 2026-10-18 — re-run them rather than trusting these lines: option-price-behavior-service
-  #      on dev has run with OPB_L1_ENABLED since 2026-10-17 with zero restarts
-  #      (`kubectl -n options-edge get pod -l app.kubernetes.io/name=option-price-behavior-service`),
-  #      AND every pressure topic on dev reads log end offset 0
-  #      (`kafka-get-offsets.sh --bootstrap-server localhost:19092 --topic
-  #      option-price-behavior-l1-contributions`). The second is why the first is not throughput
-  #      evidence: there has been no traffic to survive. Measure a real dev session first.
+  #      weigh it as an inference. Two RUNTIME observations, external to this repository, checked on
+  #      2026-10-18 — re-run them rather than trusting these lines, and note what each does and does
+  #      NOT establish:
+  #        `kubectl -n options-edge get deploy option-price-behavior-service -o jsonpath='{.spec.template.spec.containers[0].env}'`
+  #      shows OPB_L1_ENABLED=true NOW, and the pod has run since 2026-10-17T14:24Z with 0 restarts
+  #      (`kubectl -n options-edge get pod -l app.kubernetes.io/name=option-price-behavior-service`).
+  #      Those two together do NOT prove the flag was set for that whole period; nothing checked here
+  #      does.
+  #        for t in option-price-behavior-l1-contributions option-pressure-state-current option-pressure-state-evidence option-pressure-state-service-dev-symbol-rk; do printf '%s ' "$t"; ~/kafka-4.3.0/bin/kafka-get-offsets.sh --bootstrap-server localhost:19092 --topic "$t" 2>/dev/null | awk -F: '{s+=$3} END {print s+0}'; done
+  #      prints 0 for ALL FOUR topics (the awk sums the 32 per-partition offsets, so the printed
+  #      number is what the claim is about). That is the observation that matters: whatever the flag has
+  #      been, no record has been produced, so the clean restart count is not throughput evidence.
+  #      Measure a real dev session first.
   #
   # DO NOT read the missing image as a safety hold. It is not one. The full statement of what does and
   # does not hold production — with the dated external checks behind it, and the distinction between
