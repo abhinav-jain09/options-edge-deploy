@@ -348,6 +348,9 @@ def main():
                 if current and current!=before['pid']:
                     try:command=run('ps','-ww','-p',str(current),'-o','command=',timeout=5)
                     except (OSError,subprocess.SubprocessError) as error:last_readiness=diagnostic(error);time.sleep(.5);continue
+                    # launchd reports the shell PID before its exec replaces it with Java.
+                    if shlex.split(command)==['/bin/bash',str(runner)]:
+                        last_readiness='managed launcher has not execed Java';time.sleep(.5);continue
                     if str(destination/'canonical-cvd-mirror.jar') not in command:raise ValueError('Unexpected new process')
                     try:
                         status=run(str(JAVA),'-Xmx64m','--add-modules','jdk.attach',str(probe),str(current),topic,before['group'],timeout=12)

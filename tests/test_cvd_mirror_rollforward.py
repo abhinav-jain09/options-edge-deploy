@@ -27,7 +27,7 @@ class MirrorTest(unittest.TestCase):
         self.definition={'Label':self.label,'ProgramArguments':[str(self.directory/'run-mirror.sh')],'KeepAlive':True,'EnvironmentVariables':{'PATH':'unchanged'},'StandardOutPath':'unchanged.log'}
         self.plist.write_bytes(plistlib.dumps(self.definition));self.raw=self.plist.read_bytes();self.state={'loaded':True,'pid':900001};self.effects=[]
         self.env={'JENKINS_URL':'http://jenkins/','PERMITTED_SHA_GUARD':'PASSED','PERMITTED_SHA':'a'*40,'BUILD_NUMBER':'17','SOURCE_ES_CLUSTER_IP':'192.168.100.4','SOURCE_PORT':'9092','TARGET_SPX_CLUSTER_IP':'127.0.0.1','TARGET_PORT':'19092','TOPIC':self.topic,'DEPLOY_DRY_RUN':'false','CVD_TARGET_READERS_READY':'true'}
-    def execute(self,dry=False,held=False,smoke_failure=False,bootstrap_failure=False,tail_records=25,readiness_failure=False):
+    def execute(self,dry=False,held=False,smoke_failure=False,bootstrap_failure=False,tail_records=25,readiness_failure=False,process_commands=None):
         self.env['DEPLOY_DRY_RUN']=str(dry).lower()
         if held:self.state.update(loaded=False,pid=None)
         def release(root):
@@ -41,7 +41,12 @@ class MirrorTest(unittest.TestCase):
                 if bootstrap_failure:raise OSError('bootstrap failed fixture')
                 self.state.update(loaded=True,pid=900002)
             if args[0]=='ps' and self.state['pid']==900001:return str(self.directory)
-            if args[0]=='ps':return str(self.owner/'oe-ops/cvd-mirror-releases/build-17/canonical-cvd-mirror.jar')
+            if args[0]=='ps':
+                if process_commands:
+                    value=process_commands[0]
+                    if len(process_commands)>1:process_commands.pop(0)
+                    return value.replace('{runner}',str(self.owner/'oe-ops/cvd-mirror-releases/build-17/run-mirror.sh')).replace('{jar}',str(self.owner/'oe-ops/cvd-mirror-releases/build-17/canonical-cvd-mirror.jar'))
+                return str(self.owner/'oe-ops/cvd-mirror-releases/build-17/canonical-cvd-mirror.jar')
             if args[0]==str(m.JAVA):
                 if readiness_failure:raise m.subprocess.CalledProcessError(2,list(args),stderr='configured readiness failure')
                 return 'CANONICAL_MIRROR_READY records=0\n'
@@ -55,6 +60,29 @@ class MirrorTest(unittest.TestCase):
         after=plistlib.loads(self.plist.read_bytes());expected=dict(self.definition);expected['ProgramArguments']=after['ProgramArguments'];self.assertEqual(expected,after)
         self.assertEqual(a,(self.directory/'consumer.properties').read_bytes());self.assertEqual(b,(self.directory/'producer.properties').read_bytes())
         script=Path(after['ProgramArguments'][1]).read_text();self.assertIn('SOURCE_SCHEMA_REGISTRY_URL=http://192.168.100.4:8081',script);self.assertIn('TARGET_SCHEMA_REGISTRY_URL=http://127.0.0.1:8082',script);self.assertNotIn('192.168.100.201',script)
+    def test_exact_managed_shell_can_exec_into_the_verified_java_process(self):
+        with patch.object(m.time,'sleep'):
+            proof=self.execute(process_commands=['/bin/bash {runner}','{jar}'])
+        self.assertTrue(proof['runtimeReady']);self.assertEqual(900002,proof['newPid'])
+
+    def test_managed_shell_that_never_execs_times_out(self):
+        clock=[0]
+        with patch.object(m.time,'monotonic',side_effect=lambda:clock[0]),patch.object(m.time,'sleep',side_effect=lambda seconds:clock.__setitem__(0,clock[0]+61)):
+            with self.assertRaisesRegex(TimeoutError,'managed launcher has not execed Java'):
+                self.execute(process_commands=['/bin/bash {runner}'])
+        proof=json.loads((self.base/'.jenkins-tmp/cvd-mirror-17/receipt.json').read_text())
+        self.assertFalse(proof['runtimeReady']);self.assertEqual('launcher-updated',proof['phase'])
+
+    def test_other_shells_or_extra_launcher_arguments_are_refused(self):
+        for command in ['/bin/bash /foreign/run-mirror.sh','/bin/bash {runner} extra']:
+            with self.subTest(command=command):
+                # Each refusal needs a fresh build-owned fixture directory.
+                case=MirrorTest();case.setUp()
+                try:
+                    with self.assertRaisesRegex(ValueError,'Unexpected new process'):
+                        case.execute(process_commands=[command])
+                finally:case.doCleanups()
+
     def test_dry_run_never_changes_launcher_or_runtime(self):
         self.env['CVD_TARGET_READERS_READY']='false'
         proof=self.execute(dry=True);self.assertEqual([],self.effects);self.assertEqual(self.raw,self.plist.read_bytes());self.assertFalse(proof['installed']);self.assertFalse(proof['runtimeReady']);self.assertFalse((self.owner/'oe-ops/cvd-mirror-releases').exists())
