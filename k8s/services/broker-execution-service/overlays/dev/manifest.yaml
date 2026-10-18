@@ -73,7 +73,7 @@ spec:
             - name: BROKER_LIVE_EXECUTION_HOST
               value: host.docker.internal
             - name: BROKER_LIVE_EXECUTION_PORT
-              value: "4001"
+              value: "7496"
             - name: BROKER_LIVE_EXECUTION_CLIENT_BASE
               value: "31001"
             - name: SERVER_PORT
