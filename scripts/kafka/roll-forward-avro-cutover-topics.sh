@@ -30,14 +30,26 @@
 #
 # TWO PHASES, because the rollout sits between them.
 #
-#   --recreate         delete and recreate the rolled-forward topics, then verify them. Safe to run
-#                      while the OLD image is live: that image writes to its VERSIONED sibling, so
-#                      the unversioned topics are idle. Run this BEFORE the rollout — it is what
-#                      makes verify-avro-rollforward.sh pass.
-#   --retire-siblings  delete the versioned siblings. Run this AFTER the new image is live. Running
-#                      it earlier does not stick: the old image recreates its sibling within seconds
-#                      (dev's broker has auto-create on with num.partitions=32).
-#   --all              both, in order. For an environment where nothing is running.
+#   --recreate         delete and recreate the rolled-forward topics, then verify them.
+#   --retire-siblings  delete the versioned siblings. Running it before the new image is live does
+#                      not stick: the old image recreates its sibling within seconds (dev's broker
+#                      has auto-create on with num.partitions=32).
+#   --all              both, in order.
+#
+# ORDER: ROLL THE NEW IMAGE FIRST, THEN --recreate, THEN --retire-siblings.
+#
+# An earlier version of this header said --recreate was safe to run while the old image was still
+# live, on the reasoning that the old image writes only to its VERSIONED sibling so the unversioned
+# topics sit idle. THAT WAS WRONG, and it cost a contaminated topic: on 2026-10-18 the dev topic was
+# recreated at 15:10 while a PRE-CUTOVER image — one that predates the versioned sibling entirely and
+# writes JSON to the topic's own name — was still running. It wrote 31 hand-built JSON heartbeats
+# into the fresh topic before the new image rolled at 15:59, which is precisely the retained JSON
+# this whole exercise removes. "The old image" is not one thing: whatever is actually deployed may be
+# older than the cutover that introduced the sibling.
+#
+# So the only writer that may be live when --recreate runs is the Avro one. Roll the new image first;
+# verify-avro-rollforward.sh then samples both ends of each non-empty partition and refuses if
+# anything non-Avro got in.
 #
 # Usage:
 #   roll-forward-avro-cutover-topics.sh <phase> --cluster dev|production|es4 <bootstrap> [bin-dir]

@@ -192,12 +192,28 @@ rf_nonempty_partitions() {
   if ! late="$("$cli" --bootstrap-server "$bs" --topic "$topic" --time -1 2>&1)"; then
     echo "FATAL: cannot read latest offsets for $topic on $bs:" >&2; printf '%s\n' "$late" >&2; return 1
   fi
+  # A successful-but-PARTIAL response must not read as authoritative: a snapshot missing a partition
+  # would silently omit a contaminated one and read as a clean pass (Codex). Both snapshots must name
+  # every partition from 0..expected-1 exactly once.
+  local expected="${4:-}"
+  if [ -n "$expected" ]; then
+    local n_early n_late
+    n_early="$(printf '%s\n' "$early" | awk -F: -v t="$topic" '$1==t{c++} END{print c+0}')"
+    n_late="$(printf '%s\n' "$late" | awk -F: -v t="$topic" '$1==t{c++} END{print c+0}')"
+    if [ "$n_early" != "$expected" ] || [ "$n_late" != "$expected" ]; then
+      echo "FATAL: offsets for $topic are PARTIAL — earliest named $n_early partition(s), latest" >&2
+      echo "       named $n_late, expected $expected. Refusing rather than treating a partial" >&2
+      echo "       response as authoritative." >&2
+      return 1
+    fi
+  fi
   printf '%s\n%s\n' "$early" "$late" | awk -F: -v t="$topic" '
-    $1==t { if (seen[$2]++) { if ($3+0 > first[$2]+0) print $2 } else { first[$2]=$3 } }'
+    $1==t { if (seen[$2]++) { if ($3+0 > first[$2]+0) print $2 ":" first[$2] ":" $3 } else { first[$2]=$3 } }'
 }
 
 # rf_wire_is_avro <console-consumer-cli> <bootstrap> <topic> <partition> <from-offset>
-#   -> 0 when the record at that offset is Confluent-framed Avro, 1 when it is not, 2 when unreadable.
+#   -> 0 when the record at that offset is Confluent-framed Avro OR a tombstone,
+#      1 when it is something else, 2 when nothing could be read at that offset.
 #
 # WHY THIS EXISTS, and why the topic-id check is not enough. A new topic id proves the ORIGINAL
 # JSON-bearing topic is gone. It does NOT prove nothing has written JSON SINCE. On 2026-10-18 that
@@ -207,8 +223,23 @@ rf_nonempty_partitions() {
 # exactly the retained JSON the Kafka Serialization Rule forbids an Avro consumer to meet.
 #
 # A Confluent-framed Avro value begins with the magic byte 0x00 followed by a 4-byte schema id; the
-# hand-built JSON this estate is leaving behind begins with 0x7b, "{". That one byte is the whole
-# discriminator, so this reads ONE record per non-empty partition.
+# hand-built JSON this estate is retiring begins with 0x7b, "{".
+#
+# A TOMBSTONE PASSES. A null value is a valid record, not a malformed one, and
+# options.ibkr.gex.status is pure compact with delete.retention.ms=172800000 — it RETAINS tombstones
+# for 48 h by design, so an earliest tombstone is reachable and refusing it would block a correct
+# topic (Codex). kafka-console-consumer renders a null value as its null literal, so that literal is
+# accepted explicitly rather than by accident.
+#
+# WHAT THIS DOES NOT PROVE, stated because the first cut of this comment overclaimed it: sampling the
+# first and last records of a partition is not a full scan, so it does not prove that NO retained
+# JSON exists anywhere in the log. A full scan is not available through this CLI — records are
+# newline-delimited in its output while Avro bodies contain newlines, so a line-based scan over
+# binary values is unsound, not merely slow. What rules out a non-Avro writer is the CODE: the
+# producer serializer refuses a non-Avro payload (IbkrMixedSerializer) and the contract refuses a
+# versioned topic name (KafkaTopicNames). This check is the operational backstop for the one failure
+# those cannot see — a stale image still running at wipe time — and the two ends of the log are where
+# that shows up: the start if it was writing when the topic was recreated, the end if it still is.
 rf_wire_is_avro() {
   local cli="$1" bs="$2" topic="$3" part="$4" off="$5" tmp first
   tmp="$(mktemp)"
@@ -223,8 +254,13 @@ rf_wire_is_avro() {
   fi
   if [ ! -s "$tmp" ]; then rm -f "$tmp"; return 2; fi
   first="$(od -An -tx1 -N1 "$tmp" | tr -d ' \n')"
+  # A tombstone: the consumer renders a null value as its null literal on a line of its own.
+  if [ "$(tr -d '\n\r' < "$tmp")" = "${RF_NULL_LITERAL:-null}" ]; then
+    rm -f "$tmp"; return 0
+  fi
   rm -f "$tmp"
   [ "$first" = "00" ] && return 0
-  echo "    first value byte is 0x$first (Confluent Avro is 0x00; hand-built JSON is 0x7b '{')" >&2
+  echo "    value at offset $off starts 0x$first (Avro is 0x00, a tombstone renders as" >&2
+  echo "    '${RF_NULL_LITERAL:-null}', hand-built JSON is 0x7b '{')" >&2
   return 1
 }

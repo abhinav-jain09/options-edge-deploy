@@ -106,33 +106,43 @@ while IFS='|' read -r -u 3 topic parts cfgs pre_id; do
   # empty output and read as "no non-empty partitions" — a pass over an unverified topic. The
   # barrier's own test caught this, which is the same class of bug as reading a `--list` failure as
   # absence.
-  if ! nonempty="$(rf_nonempty_partitions "$GO" "$BS" "$topic")"; then
+  if ! nonempty="$(rf_nonempty_partitions "$GO" "$BS" "$topic" "$parts")"; then
     echo "FAIL: $topic — could not determine which partitions hold records, so the wire format is" >&2
     echo "      unverified. Refusing rather than assuming the topic is empty." >&2
     fail=1
     continue
   fi
-  while read -r pnum; do
+  # BOTH ENDS of each non-empty partition, not just the earliest. An earliest-only check passes a
+  # partition that begins with Avro and is followed by retained JSON — the exact shape a stale writer
+  # produces when it starts writing AFTER the first good record (Codex). The start catches a writer
+  # that was live when the topic was recreated; the end catches one that is live now.
+  while IFS=: read -r pnum p_early p_late; do
     [ -n "$pnum" ] || continue
-    # `|| wrc=$?` and not a bare call: under `set -e` a non-zero return from the check would abort
-    # the script before the diagnosis below could print — the failure would be a silent exit 1.
-    wrc=0
-    rf_wire_is_avro "$CC" "$BS" "$topic" "$pnum" earliest || wrc=$?
-    case $wrc in
-      0) parts_checked=$((parts_checked + 1)) ;;
-      1) echo "FAIL: $topic partition $pnum holds a NON-AVRO value at its earliest offset." >&2
-         echo "      Something wrote to this topic after it was rolled forward. Stop that writer," >&2
-         echo "      then re-run roll-forward-avro-cutover-topics.sh --recreate --cluster $CLUSTER" >&2
-         wire_ok=0 ;;
-      *) echo "FAIL: $topic partition $pnum could not be read to check its wire format." >&2
-         wire_ok=0 ;;
-    esac
+    for probe in "earliest:$p_early" "latest:$((p_late - 1))"; do
+      label="${probe%%:*}"; off="${probe#*:}"
+      [ "$off" -ge 0 ] 2>/dev/null || continue
+      # `|| wrc=$?` and not a bare call: under `set -e` a non-zero return from the check would abort
+      # the script before the diagnosis below could print — the failure would be a silent exit 1.
+      wrc=0
+      rf_wire_is_avro "$CC" "$BS" "$topic" "$pnum" "$off" || wrc=$?
+      case $wrc in
+        0) parts_checked=$((parts_checked + 1)) ;;
+        1) echo "FAIL: $topic partition $pnum holds a NON-AVRO value at its $label offset ($off)." >&2
+           echo "      Something wrote to this topic after it was rolled forward. Stop that writer," >&2
+           echo "      then re-run roll-forward-avro-cutover-topics.sh --recreate --cluster $CLUSTER" >&2
+           wire_ok=0 ;;
+        2) # Compaction can remove the record AT an offset; that is not evidence of anything.
+           [ "$label" = "earliest" ] && continue
+           echo "FAIL: $topic partition $pnum could not be read at its $label offset ($off)." >&2
+           wire_ok=0 ;;
+      esac
+    done
   done <<<"$nonempty"
   if [ "$wire_ok" -ne 1 ]; then
     fail=1
     continue
   fi
-  echo "ok  $topic rolled forward (topic id $id, $parts partition(s), $cfgs; $parts_checked non-empty partition(s) carry Avro)"
+  echo "ok  $topic rolled forward (topic id $id, $parts partition(s), $cfgs; $parts_checked log end(s) sampled, all Avro or tombstone)"
 done 3<<<"$SPECS"
 
 # Versioned topic names on the broker are REPORTED but do not fail this gate, and the reason is the
@@ -147,9 +157,20 @@ done 3<<<"$SPECS"
 # manifest names one, and contracts' KafkaTopicNames, which refuses one at resolution. Those cover
 # the only two paths by which a versioned name can reach a client.
 if versioned="$(printf '%s\n' "$LIST" | grep -E '\.v[0-9]+$' || true)"; [ -n "$versioned" ]; then
-  echo "NOTE: versioned topic name(s) present on $BS — retire them with"
-  echo "      roll-forward-avro-cutover-topics.sh --retire-siblings --cluster $CLUSTER once the new image is live:"
-  printf '      %s\n' $versioned
+  printf '      %s\n' $versioned >&2
+  if [ "${RF_ALLOW_VERSIONED_SIBLINGS:-0}" = "1" ]; then
+    echo "NOTE: versioned topic name(s) present on $BS, ALLOWED by RF_ALLOW_VERSIONED_SIBLINGS=1." >&2
+    echo "      That opt-out exists only for the cutover window itself, where the old image is still" >&2
+    echo "      writing to its sibling and recreates it within seconds of any deletion. Retire them" >&2
+    echo "      with --retire-siblings once the new image is live, then stop setting this." >&2
+  else
+    echo "FAIL: versioned topic name(s) present on $BS. Topics here are rolled forward under their" >&2
+    echo "      own name and NO versioned topic may remain (owner, 2026-10-18). Retire them with" >&2
+    echo "      roll-forward-avro-cutover-topics.sh --retire-siblings --cluster $CLUSTER." >&2
+    echo "      During the cutover window itself, where the old image still recreates its sibling," >&2
+    echo "      set RF_ALLOW_VERSIONED_SIBLINGS=1 deliberately for that one run." >&2
+    fail=1
+  fi
 else
   echo "ok  no versioned topic names on $BS"
 fi
