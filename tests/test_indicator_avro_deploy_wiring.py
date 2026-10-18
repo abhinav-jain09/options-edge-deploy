@@ -106,6 +106,8 @@ class IndicatorAvroDeployWiring(unittest.TestCase):
         # which include one commit marker per transaction on the source only.
         self.assertIn("--isolation-level read_committed", verify)
         self.assertIn("print.offset=true", verify)
+        self.assertIn("auto.offset.reset=none", verify)
+        self.assertIn("Processed a total of", verify)
         self.assertNotIn('[ "$SEND" = "$TEND" ] && break', verify)
         self.assertIn("decode-newest-indicator-record.sh", verify)
 
