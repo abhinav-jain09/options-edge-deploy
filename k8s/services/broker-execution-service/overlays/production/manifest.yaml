@@ -99,6 +99,8 @@ spec:
               value: "true"
             - name: BROKER_EXECUTION_TRANSMIT
               value: "true"
+            - name: BROKER_LIVE_EXECUTION_ENABLED
+              value: "false"
             - name: BROKER_EXECUTION_IBKR_PORT
               value: "4002"
             - name: BROKER_EXECUTION_PAPER_ACCOUNT
