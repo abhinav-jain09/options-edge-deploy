@@ -31,13 +31,17 @@ pipeline {
             host=abhinav@192.168.100.4
             remote="$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" 'mktemp -d /tmp/responsive-validation.XXXXXXXX')"
             [[ "$remote" =~ ^/tmp/responsive-validation[.][A-Za-z0-9]{8}$ ]] || exit 1
-            cleanup(){ ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" "find -P '$remote' -depth -type f -delete && find -P '$remote' -depth -type d -delete" || true; }
+            collected=0
+            cleanup(){
+              original=$?
+              bash ../scripts/validation/responsive-evidence.sh cleanup "$remote" "$collected" || { echo "Cleanup incomplete; owned evidence remains at $host:$remote" >&2; [ "$original" != 0 ] || original=1; }
+              exit "$original"
+            }
             trap cleanup EXIT
             rsync -az bundle/ "$host:$remote/"
             status=0
-            ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" "bash '$remote/scripts/validation/run-responsive-stack-es4.sh'" || status=$?
-            mkdir -p results
-            rsync -az "$host:$remote/results/" results/ || status=1
+            ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" "mkdir -p '$remote/results' && python3 '$remote/scripts/validation/responsive-supervisor.py' >'$remote/results/runner.log' 2>&1" || status=$?
+            if bash ../scripts/validation/responsive-evidence.sh collect "$remote" results; then collected=1; else status=1; fi
             exit "$status"
           '''
         }

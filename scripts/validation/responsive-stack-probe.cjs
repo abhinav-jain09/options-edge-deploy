@@ -8,7 +8,7 @@ function permitted(){
  assert.ok(['Sat','Sun'].includes(p.weekday)||t<570||t>=960,'OUTSIDE_RTH_REQUIRED');
 }
 permitted();
-const {chromium}=require('playwright-core'),[source,fixtureSource,variant,countText,repeatText]=process.argv.slice(2),count=+countText,repeat=+repeatText;
+const {chromium}=require('playwright-core'),prepareChart=require('./prepare-responsive-chart.cjs'),[source,fixtureSource,variant,countText,repeatText]=process.argv.slice(2),count=+countText,repeat=+repeatText;
 assert.ok(['baseline','candidate'].includes(variant)&&[390,1439].includes(count)&&repeat>=1&&repeat<=5);
 const {createFixture}=require(path.join(fixtureSource,'test/browser/helpers/trade-workspace-fixture.cjs')),{capacitySession}=require(path.join(fixtureSource,'test/browser/helpers/capacity-session.cjs'));
 const decoded=capacitySession(count),fixture=createFixture({session:decoded.session,assetsDir:path.join(source,'src/app/web/assets'),lifetimeMs:3600000,pageSize:128,transformBundle:text=>{
@@ -21,7 +21,7 @@ const decoded=capacitySession(count),fixture=createFixture({session:decoded.sess
 const prototype=fixture.positions.values().next().value;fixture.positions.clear();
 for(let i=0;i<4096;i++){
  const id='capacity-'+i,strike=6005+(i%16)*5,active=i<16,entry={...prototype.entryTicket,intentId:id,reviewId:'entry-'+id,lastTradingCutoffMs:fixture.clock()+3600000,legs:[{strike:String(strike),action:'SELL',right:'PUT',conId:strike},{strike:String(strike-5),action:'BUY',right:'PUT',conId:strike-5}]};
- const row={...prototype,id,entryTicket:entry,state:active?'OPEN':'CLOSED',openQuantity:active?100:0,closeableQuantity:active?100:0,allowedActions:active?['UPDATE','CLOSE']:[]};
+ const row={...prototype,id,entryTicket:entry,state:active?'OPEN':'CLOSED',openQuantity:active?100:0,filledQuantity:active?100:0,closeableQuantity:active?100:0,allowedActions:active?['UPDATE','CLOSE']:[]};
  if(active){const plan={positionRef:id,version:1,state:'ARMED',stopLevel:String(strike-10),profitLevel:String(strike+10),stopQuantityMode:'FULL',profitQuantityMode:'FULL',stopInstructionState:'ARMED',profitInstructionState:'ARMED',stopCoverageQuantity:100,profitCoverageQuantity:100,stopConsumedQuantity:0,profitConsumedQuantity:0,sequentialCloseAuthority:{STOP:2,PROFIT:2},policyRevision:'linked-exit-touch-beyond-mid-limit-v1',quantityPolicyRevision:'POSITION_QUANTITY_V1'};fixture.plans.set(id,plan);row.linkedExit=plan;}
  fixture.positions.set(id,row);
 }
@@ -58,7 +58,7 @@ async function memory(){
    const original=requestAnimationFrame.bind(window);window.__stackSamples=[];window.__stackStamps=[];window.requestAnimationFrame=callback=>original(ts=>{const measuring=window.__measureStack&&String(callback).includes('nextRect');const start=performance.now();callback(ts);if(measuring){document.body.offsetHeight;window.__stackSamples.push(performance.now()-start);window.__stackStamps.push(ts);}});
   },{issuer:fixture.issuer,owner:fixture.owner,time:fixture.clock()});
   await page.goto('http://127.0.0.1:'+fixture.server.address().port);await page.evaluate(session=>{window.__session=session;window.map=ContextTapeMarketMap.mount(document.querySelector('#contextTapeRoot'),{fetch:(url,options={})=>fetch(url,{...options,headers:{...options.headers,Authorization:'Bearer '+OptionChainAuth.token()}})});map.update({session,hidden:{}});map.show();},decoded.session);await page.waitForFunction(()=>document.querySelector('[data-order-dot]')?.classList.contains('is-ready'));
-  await page.locator('[data-order-record]').selectOption('position:capacity-0');await page.locator('[data-controls]').click();await page.locator('[data-tf="1"]').click();await page.locator('[data-controls]').click();await page.locator('[data-session]').click();await frames(page);
+  await page.locator('[data-order-record]').selectOption('position:capacity-0');await prepareChart(page);await frames(page);
   assert.equal(await page.locator('[data-order-record] option').count(),4097,'ACTUAL_BOOK_ACCEPTED');assert.equal(await page.locator('[data-chart] [data-candle-time]').count(),count,'ACTUAL_RENDERED_CAPACITY');assert.equal(fixture.streams.size,1,'ONE_PRIVATE_STREAM');
   const counts=await page.evaluate(()=>({shades:document.querySelectorAll('.mm-order-shade').length,threads:document.querySelectorAll('.mm-exit-thread').length,labels:document.querySelectorAll('.mm-exit-label').length}));assert.deepEqual(counts,{shades:16,threads:32,labels:32},'FULL_GEOMETRY_RETAINED');results.geometry=counts;
   if(variant==='candidate'){for(const key of ['pending','stop','profit']){const card=page.locator(`[data-stack-card="${key}"]`);if(!await card.getAttribute('open'))await card.evaluate(n=>n.open=true);}await frames(page);assert.equal(await page.locator('[data-stack-card]').count(),4);}

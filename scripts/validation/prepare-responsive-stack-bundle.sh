@@ -12,14 +12,19 @@ git -C source merge-base --is-ancestor "$baseline" "$WEB_SHA"
 for variant in baseline candidate; do
   sha="$baseline"; [ "$variant" = baseline ] || sha="$WEB_SHA"
   mkdir -p "bundle/web/$variant"
-  git -C source archive "$sha" src/app/web test/js/helpers test/browser/helpers | tar -x -C "bundle/web/$variant"
+  git -C source archive "$sha" src/app/web test/js/helpers | tar -x -C "bundle/web/$variant"
+  if [ "$variant" = candidate ]; then
+    git -C source archive "$sha" test/browser/helpers | tar -x -C "bundle/web/$variant"
+  fi
 done
 cmp bundle/web/{baseline,candidate}/src/app/web/assets/context-tape-model.js
 mkdir -p bundle/node_modules bundle/scripts/validation
+mkdir -p bundle/tests
+cp "$infra_root/tests/test_responsive_supervisor.py" bundle/tests/
 runtime=/Users/abhinav/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules
 [ -f "$runtime/playwright-core/package.json" ] || { echo 'Prepared Playwright core runtime required' >&2; exit 1; }
 cp -R "$runtime/playwright-core" bundle/node_modules/
-for file in run-responsive-stack-es4.sh responsive-stack-probe.cjs qualify-responsive-stack.py linked-exits-browser-probe.cjs headless-overlay-session.cjs; do
+for file in run-responsive-stack-es4.sh responsive-stack-probe.cjs prepare-responsive-chart.cjs responsive-supervisor.py qualify-responsive-stack.py linked-exits-browser-probe.cjs headless-overlay-session.cjs; do
   cp "$infra_root/scripts/validation/$file" bundle/scripts/validation/
 done
 # The existing legacy overlay probe remains byte-identical, with its original workload/gates.

@@ -1,0 +1,20 @@
+/* Small functional UI-preparation check only. No maximum book/load/timing measurement on Mac. */
+'use strict';
+const assert=require('node:assert/strict'),http=require('node:http'),path=require('node:path');
+const {chromium}=require('playwright-core'),prepare=require('../scripts/validation/prepare-responsive-chart.cjs');
+const [baseline,candidate]=process.argv.slice(2),{createFixture}=require(path.join(candidate,'test/browser/helpers/trade-workspace-fixture.cjs'));
+(async()=>{
+ const guard=http.createServer((req,res)=>{res.writeHead(403);res.end();});guard.on('connect',(req,s)=>s.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n'));await new Promise(r=>guard.listen(0,'127.0.0.1',r));let browser;const cases=[];
+ try{
+  browser=await chromium.launch({headless:true,executablePath:process.env.PLAYWRIGHT_EXECUTABLE_PATH,proxy:{server:'http://127.0.0.1:'+guard.address().port,bypass:'127.0.0.1,localhost'}});
+  for(const [variant,source]of [['baseline',baseline],['candidate',candidate]])for(const initial of ['open','closed']){
+   const f=createFixture({assetsDir:path.join(source,'src/app/web/assets'),lifetimeMs:60000});await new Promise(r=>f.server.listen(0,'127.0.0.1',r));const context=await browser.newContext({viewport:{width:5120,height:1440}});const errors=[];
+   try{
+    await context.addInitScript(({issuer,owner,time})=>{const started=performance.now();Date.now=()=>time+performance.now()-started;window.OptionChainAuth={whenReady:()=>Promise.resolve(),token:()=> 'h.'+btoa(JSON.stringify({sub:owner,iss:issuer,exp:time/1000+3600}))+'.s'};},{issuer:f.issuer,owner:f.owner,time:f.clock()});
+    const p=await context.newPage();p.on('pageerror',e=>errors.push(e.message));await p.goto('http://127.0.0.1:'+f.server.address().port);await p.evaluate(session=>{const map=ContextTapeMarketMap.mount(document.querySelector('#contextTapeRoot'),{fetch:(url,options={})=>fetch(url,{...options,headers:{Authorization:'Bearer '+OptionChainAuth.token()}})});map.update({session,hidden:{}});map.show();},f.session);await p.waitForFunction(()=>document.querySelector('[data-order-dot]')?.classList.contains('is-ready'));
+    const toggle=p.locator('[data-controls]');assert.equal(await toggle.getAttribute('aria-expanded'),'true','REAL_WIDE_VIEW_STARTS_EXPANDED');if(initial==='closed')await toggle.click();await prepare(p);await p.waitForFunction(n=>document.querySelectorAll('[data-chart] [data-candle-time]').length===n,f.session.candles.length);assert.equal(await toggle.getAttribute('aria-expanded'),'false');assert.deepEqual(errors,[]);assert.deepEqual(f.unexpected,[]);assert.equal(f.calls.filter(x=>!x.path.endsWith('/selections')).length,0);cases.push({variant,initial,status:'PASS',sourceCandles:f.session.candles.length});
+   }finally{await context.close();for(const s of f.streams)s.end();f.server.closeAllConnections();await new Promise(r=>f.server.close(r));}
+  }
+  console.log(JSON.stringify({status:'PASS',classification:'Small functional UI preparation only; no performance result',cases}));
+ }finally{await browser?.close();guard.closeAllConnections();await new Promise(r=>guard.close(r));}
+})().catch(e=>{console.error(e);process.exitCode=1;});
