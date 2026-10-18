@@ -15,16 +15,32 @@ spec:
   # k8s/overlays/dev/option-pressure-state-dev-enable-patch.yaml sets replicas 1 and
   # OPTION_PRESSURE_ENABLED=true. The PRODUCER must be deployed first, because it is what creates
   # the input topic and Kafka Streams refuses to start a topology whose source topic is absent.
-  # Production therefore stays at zero from this file, and no production image is built for it.
-  # NOTE, checked outside this repository on 2026-10-17 and again on 2026-10-18 rather than assumed:
-  # production's INSTALLED ~/oe-ops/morning-autostart.sh contains NO occurrence of
-  # option-pressure-state-service, so it does NOT carry the KEEP_DOWN entry this repository added,
-  # and ~/oe-ops/oe-boot-bringup.sh is not installed there at all. That script scales every
-  # deployment it does not hold down to one replica. CORRECTED: an earlier version of this note said
-  # that the absent image is what holds production. It is not a hold. With no image in the registry
-  # the scale-up would leave a pod in ImagePullBackOff - a visibly broken pod, not replicas 0 - and
-  # once an image DID exist the same scale-up would start this service inert. Installing this
-  # repository's copy of the script is the only thing here that would actually hold it.
+  # Production therefore stays at zero from this file. THIS COMMENT IS THE ONE PLACE that states what
+  # does and does not hold production for this service; three other files used to restate it and had
+  # drifted into contradicting each other, so they now point here instead of repeating it.
+  #
+  # CORRECTED. An earlier version of this note, and the three that copied it, said the absent
+  # production image is what holds production inert. That is wrong twice over:
+  #   - Nothing in this repository holds it except this file's own replicas: 0, and an autostart
+  #     scale-up overrides exactly that.
+  #   - An absent image is not a hold. If a scale-up happens, the Deployment's desired count becomes
+  #     1 and what follows depends on the node, not on this repository: the PRODUCTION RENDER sets
+  #     imagePullPolicy IfNotPresent (k8s/services/option-pressure-state/overlays/production/
+  #     manifest.yaml - note that the field two screens below in THIS file says Always, and the
+  #     render is what runs), so a node that already has that exact image cached starts the pod
+  #     without contacting the registry, and only a node without it gets ImagePullBackOff. Either way
+  #     the result is a pod that should not be there, not replicas 0.
+  #
+  # The facts behind that, checked OUTSIDE this repository because it cannot establish them, on
+  # 2026-10-18 - re-run these rather than trusting the lines:
+  #   - `curl http://192.168.100.252:5000/v2/options-edge-option-pressure-state/tags/list` returns
+  #     NAME_UNKNOWN. The production registry does not know this repository at all, which is stronger
+  #     than a missing :prod tag. No ENVIRONMENT=production build has ever run, so no node should have
+  #     the image cached either - but that is an inference from the same check, not a node survey.
+  #   - `grep -c option-pressure-state-service ~/oe-ops/morning-autostart.sh` on 192.168.100.252
+  #     returns 0, so the INSTALLED script does not carry the KEEP_DOWN entry this repository added
+  #     (also checked 2026-10-17, same result), and ~/oe-ops/oe-boot-bringup.sh is not installed
+  #     there at all. Installing this repository's copies is what would make those entries a hold.
   # The topics are provisioned by the services themselves at startup, with declared retention rather
   # than the platform default of infinite: contributions 4 days, symbol rekey 2 days, evidence
   # 3 days, and the head topic compacted. Measured on a real session of 944,068 contributions that is
