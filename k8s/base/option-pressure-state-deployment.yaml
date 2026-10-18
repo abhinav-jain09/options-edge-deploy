@@ -54,7 +54,16 @@ spec:
   # cannot be checked here - each has a named artefact in options-edge-processing at the commit that
   # merged it, and that artefact is the evidence, not this comment: the register was REJECTED on two
   # gate sets and a Lane D validation over the Databento SPXW year found no directional content
-  # (opb-calibration/LANE-D-VALIDATION-RESULT.md); the symbol thresholds are the p95 and p90 of
+  # - and that citation was WRONG: opb-calibration/LANE-D-VALIDATION-RESULT.md does not exist on
+  # options-edge-processing main. `git cat-file -e origin/main:opb-calibration/LANE-D-VALIDATION-RESULT.md`
+  # fails there (checked 2026-10-18); the only artefact under that directory is
+  # EXISTING-OPB-CALIBRATION-RESULT.md. The gate-set rejections and the Lane D result are recorded in
+  # session notes rather than in either repository, so treat them as background and not as something
+  # a reader here can verify. What IS enforced and verifiable is the invariant they produced:
+  # PressureFrame's constructor throws "shadow pressure frames are never actionable", so no frame
+  # with actionable=true can be constructed at all -
+  # `git grep -n 'never actionable' origin/main -- option-pressure-state-service` in
+  # options-edge-processing. The symbol thresholds are the p95 and p90 of
   # |level| over 5,504,676 GOOD seconds of the 251-session corpus, replacing a seed that fired on
   # 34.5% of all seconds (PR #1102, merged 2026-10-18, PressureConfig and
   # PressureConfigIdentityTest); the Avro schemas are options-edge-contracts PR #109 and the
@@ -77,14 +86,19 @@ spec:
   #     flag - and 1 and 3 at the NEW one, which is what establishes that the replacement image
   #     actually reads the flag rather than merely being newer:
   #     `for c in d6a7d010980a e0274feaf6b2; do for v in OPB_L1_ENABLED L1_CONTRIB_SINK; do git show $c:option-price-behavior-service/src/main/java/app/pricebehavior/OptionPriceBehaviorStreams.java | grep -c "$v"; done; done`
-  #     What that loop proves is that the SOURCE REVISION reads the flag. The link from revision to
-  #     deployed image is the tag convention - the suffix of a per-build tag is the commit - so,
-  #     checked 2026-10-18:
+  #     What that loop proves is that the SOURCE REVISION reads the flag. Two more checks close the
+  #     link from that revision to the image production will pull, both on 2026-10-18:
   #     `curl -s http://192.168.100.252:5000/v2/options-edge-option-price-behavior/tags/list`
   #     returns {"name":"options-edge-option-price-behavior","tags":["prod","prod-1650-d6a7d010980a","prod-1927-e0274feaf6b2"]}
-  #     - the new prod-1927-e0274feaf6b2 beside the old prod-1650-d6a7d010980a. That the image was
-  #     BUILT from that commit rests on the pipeline's tagging, which neither this repository nor the
-  #     registry listing proves on its own; the Jenkins build is 1927.
+  #     - the new tag beside the old one. And the build that pushed it declares the revision it built:
+  #     `curl -sg 'http://localhost:8085/job/options-edge-processing/1927/api/json?tree=result,actions%5Bparameters%5Bname,value%5D%5D'`
+  #     shows result SUCCESS, ENVIRONMENT production, BUILD_TARGET
+  #     options-edge-option-price-behavior and PERMITTED_SHA
+  #     e0274feaf6b205ec454c79a7e860c28070430abe, and that build's console contains
+  #     `options-edge-option-price-behavior:prod-1927-e0274feaf6b2`. The permitted-commit guard
+  #     refuses a build whose checked-out HEAD is not exactly PERMITTED_SHA, so the tag, the build
+  #     parameter and the guard together are what make "built from that revision" more than a naming
+  #     convention.
   #
   #   - A claim I made and then WITHDREW, kept because the withdrawal is the useful part. I wrote
   #     that rolling OPB's image forward would close a drift, because production declares
@@ -107,8 +121,11 @@ spec:
   #     prints exactly one line, `option-pressure-state-postgres-writer option-pressure-state-evidence`,
   #     and printed nothing at all before that reader was deployed. Those are two bounded
   #     observations, not a statement about all time: a group deleted before either check would not
-  #     appear in either. The supporting point, which is a different kind of evidence, is that
-  #     nothing in any of the nineteen repositories in this workspace references either topic.
+  #     appear in either. The supporting point, which is a different kind of evidence and a bounded
+  #     one, is that a grep of every distinct repository checked out in this workspace found no
+  #     reference to either topic outside options-edge-processing itself - done 2026-10-18 by
+  #     resolving one checkout per distinct `remote.origin.url` and grepping each for
+  #     option-pressure-state. It covers the repositories present on this machine and nothing else.
   #
   # THE EVIDENCE FOR THE OFFSET CLAIM BELOW lives here too, so the three files that mention it can
   # point at one copy instead of repeating it - which is how four copies of an earlier note drifted

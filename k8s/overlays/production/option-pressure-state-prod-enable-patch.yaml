@@ -16,10 +16,13 @@
 # lands, OPB_L1_ENABLED in k8s/overlays/production/option-price-behavior-prod-patch.yaml is the first
 # thing to set back to false.
 #
-# WHAT THE SURFACE IS. Descriptive, not predictive. Every frame carries actionable=false by the
-# producing record's own invariant: the register was REJECTED on two gate sets and a Lane D
-# validation over the Databento SPXW year found no directional content. A consumer may describe a
-# frame or store it for research. Nothing may trade on one, in either environment.
+# WHAT THE SURFACE IS. Descriptive, not predictive. Every frame carries actionable=false, and that
+# is enforced rather than conventional: PressureFrame's constructor throws for any other value, so a
+# frame with actionable=true cannot be constructed. The research behind that - gate-set rejections
+# and a directional validation that found nothing - is recorded in session notes rather than in
+# either repository, so it is background here, not something a reader can verify from these files.
+# The enforced part is the part that matters: a consumer may describe a frame or store it for
+# research, and nothing may trade on one, in either environment.
 #
 # NAME-KEYED strategic merge, deliberately - not an env/N json6902 patch, which lands on whichever
 # variable has drifted into that index.

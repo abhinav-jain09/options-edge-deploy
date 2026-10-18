@@ -940,6 +940,20 @@ patches:
 # entries resolved from the build (.images = [] first), so this mapping only hardens the
 # at-rest render. Tag-level ref here; the digest pin still happens fail-closed at deploy.
 images:
+  # option-pressure-state + pressure-postgres-writer: added because this change takes BOTH to
+  # replicas 1 on production. While a workload renders replicas 0 a stray `kubectl apply` of its
+  # slice is harmless; at replicas 1 it would start whatever tag the render carries, and the base
+  # carries :dev. option-price-behavior is here for the same reason even though it already ran at
+  # replicas 1 - its production patch is edited by this change, and leaving the hazard in place in a
+  # file I am already touching is worse than the two lines it costs. Note that most of the fleet is
+  # still absent from this list, so the invariant above describes the services someone added rather
+  # than a property the render has.
+  - name: 192.168.100.252:5000/options-edge-option-pressure-state
+    newTag: prod
+  - name: 192.168.100.252:5000/options-edge-pressure-postgres-writer
+    newTag: prod
+  - name: 192.168.100.252:5000/options-edge-option-price-behavior
+    newTag: prod
   - name: 192.168.100.252:5000/options-edge-market-carry
     newTag: prod
   - name: 192.168.100.252:5000/options-edge-databento-sr3-feed
