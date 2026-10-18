@@ -72,7 +72,7 @@ def qualified_image(service, builds, fetch_lock):
             raise ValueError('invalid or duplicate image-lock field')
         values[match[1]] = match[2]
     prefix = 'OPTIONS_EDGE_IMAGE_LOCK_'
-    source_repo = 'options-edge-feed-gateway' if gateway else 'options-edge-processing'
+    source_repo = 'option-edge-feed-gateway' if gateway else 'options-edge-processing'
     if values.get(prefix + 'FORMAT') != '1' or values.get(prefix + 'SOURCE_REPO') != 'git@github.com:abhinav-jain09/' + source_repo + '.git':
         raise ValueError('unexpected image-lock format or source repository')
     if values.get(prefix + 'BUILD_ID') != str(build['number']) or values.get(prefix + 'PLATFORM') != IMAGE_PLATFORM:
@@ -208,7 +208,7 @@ def main():
     image, provenance = qualified_image(service, builds,
         lambda number: read_url(base + str(number) + '/artifact/.jenkins-tmp/options-edge-image-lock.env', 262144))
     if gateway:
-        if provenance['gatewaySource'] != processing_main('options-edge-feed-gateway'):
+        if provenance['gatewaySource'] != processing_main('option-edge-feed-gateway'):
             raise ValueError('latest gateway qualification must match current main')
         sdk = processing_main('options-edge-contracts')
         if provenance['contractsSource'] != sdk or os.environ.get('CONTRACTS_PERMITTED_SHA') != sdk:
