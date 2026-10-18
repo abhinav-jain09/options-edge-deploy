@@ -82,6 +82,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(404, {"error_code": 40401, "message": "Subject not found"})
         if p.startswith("/subjects/") and "/versions/" in p:
             s, _, v = p[len("/subjects/"):].partition("/versions/")
+            if v == "latest" and r.subjects.get(s):
+                v = str(r.subjects[s][-1]["version"])
             for row in r.subjects.get(s, []):
                 if str(row["version"]) == v:
                     return self._send(200, {"subject": s, "version": row["version"], "id": row["id"], "schema": row["schema"]})

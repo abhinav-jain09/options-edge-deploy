@@ -1,0 +1,20 @@
+{
+  "type": "record",
+  "name": "UnderlyingPrice",
+  "namespace": "com.optionsedge.contracts.hpsf",
+  "doc": "One underlying.spx.price tick, published by options-edge-databento-feed. Until the 2026-10-18 cutover this topic carried hand-built JSON (the Java record com.optionsedge.contracts.hpsf.UnderlyingPriceEvent); the topic was wiped and recreated under its own name carrying Avro. The record reproduces that JSON FIELD FOR FIELD AND NAME FOR NAME. Only (source NATIVE_SPX_INDEX, quality LIVE_INDEX) is the eligible SPX index; SYNTHETIC_OPTION_SPOT and ES_BASIS_DERIVED ticks share the topic. The registry subject is this record's FULL NAME (RecordNameStrategy), so one subject serves every environment whatever its TOPIC_PREFIX.",
+  "fields": [
+    {"name": "schemaVersion", "type": "int", "doc": "Wire revision of the tick; 1 today."},
+    {"name": "symbol", "type": "string", "doc": "SPX. Also the Kafka record key."},
+    {"name": "eventTime", "type": "string", "doc": "ISO-8601 UTC event time exactly as the feed stamped it (parsed with Instant.parse by every reader)."},
+    {"name": "price", "type": {"type": "bytes", "logicalType": "decimal", "precision": 38, "scale": 18}, "doc": "The spot. The feed's double is written as the decimal of its shortest round-trip text, so BigDecimal.doubleValue() returns the identical double (exact, no rounding)."},
+    {"name": "size", "type": ["null", "long"], "default": null, "doc": "Trade size; null for a spot tick (always null on this topic today)."},
+    {"name": "source", "type": "string", "doc": "Provenance token: NATIVE_SPX_INDEX, ES_BASIS_DERIVED or SYNTHETIC_OPTION_SPOT."},
+    {"name": "quality", "type": "string", "doc": "Cascade tier: LIVE_INDEX, LIVE_ES_BASIS or SYNTHETIC."},
+    {"name": "canonicalSpot", "type": {"type": "bytes", "logicalType": "decimal", "precision": 38, "scale": 18}, "doc": "The canonical spot; equals price on this stream."},
+    {"name": "spotEventTimeNs", "type": "long", "doc": "Canonical spot event clock, epoch nanoseconds."},
+    {"name": "feedEpochId", "type": "string", "doc": "Feed epoch identity."},
+    {"name": "epochSeq", "type": "long", "doc": "Monotonic sequence within the feed epoch."},
+    {"name": "spotQuality", "type": "string", "doc": "Same token as quality."}
+  ]
+}
