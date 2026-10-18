@@ -25,7 +25,8 @@ The JSON topic is "removed" by the wipe in step 4 — its removal date is the da
    (sha256-pinned bytes, FULL by read-back, the canonical schema must be the latest version).
 3. **Stop** the old (JSON) feed and EVERY reader of the topic (the list is in "Readers" below). Production adds two readers that are not
    Kubernetes workloads: the **NAS archive** `*/10` spot cron (`ARCHIVE_JOB=spot`: suspend the crontab line, then confirm no `oe-archive-kafka.sh`
-   process holds the spot lock, so the post-recreate group check cannot see its offsets and its checkpoint is not advanced over the wipe) and
+   process holds the spot lock, so it cannot read or advance its checkpoint across the wipe; stopping it does NOT delete any committed offset
+   a group of its own may hold, which is what the script's group check is for) and
    the **`spx-es4-bridge`** console-consumer|producer (stop it and keep it stopped until the decode-and-re-encode mirror replaces it). The
    operator asserts all of this; Kafka cannot prove a writer is absent. Do not leave a pre-cutover feed running: it writes JSON into the fresh topic.
 4. **Wipe and recreate empty**. Freeze topic administration on that broker for the window (Kafka's delete takes a NAME, not a
@@ -38,7 +39,7 @@ The JSON topic is "removed" by the wipe in step 4 — its removal date is the da
    offsets are keyed by topic name; a surviving one would resume beyond the new log end and skip the first Avro records).
    If only the consumer-group check fails (the topic was already recreated, so a second `--recreate` correctly refuses the new id):
    DELETE those stopped groups' offsets (`kafka-consumer-groups --bootstrap-server <bootstrap> --delete-offsets --group <g> --topic underlying.spx.price`, or `--delete --group <g>`; a reset to 0 still leaves a committed offset and is refused by the verifier), then run the SAME
-   command with `--verify` instead of `--recreate` (post-conditions only, no mutation) and continue at step 5.
+   command with `--verify` BEFORE any reader or the feed starts instead of `--recreate` (post-conditions only, no mutation) and continue at step 5.
    Persisted reader state: a Kafka Streams GLOBAL store checkpoints the end offset of its source topic on its volume. The only
    PVC-backed global store on this topic is `strike-flow-classifier-databento`; its spot store is in-memory in the converted
    code, so no checkpoint can outlive the recreation. (strike-intelligence's global store sits on an emptyDir that is lost with

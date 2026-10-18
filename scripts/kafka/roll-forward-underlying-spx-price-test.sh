@@ -40,6 +40,12 @@ printf 'GROUP TOPIC PARTITION CURRENT-OFFSET LOG-END-OFFSET LAG CONSUMER-ID HOST
 MOCK
 chmod +x "$TMP/bin/kafka-consumer-groups.sh"
 
+cat > "$TMP/bin/kafka-get-offsets.sh" <<'MOCK'
+#!/usr/bin/env bash
+printf 'underlying.spx.price:0:%s\n' "${MOCK_END:-0}"
+MOCK
+chmod +x "$TMP/bin/kafka-get-offsets.sh"
+
 pass=0; fail=0
 check() { if [ "$2" = "$3" ]; then pass=$((pass+1)); echo "ok    $1"; else fail=$((fail+1)); echo "FAIL  $1: expected '$3' got '$2'"; fi; }
 run() { MOCK_DIR="$TMP/state" PATH="$TMP/bin:$PATH" bash "$HERE/roll-forward-underlying-spx-price.sh" "$@" >"$TMP/out" 2>&1; echo $?; }
@@ -95,5 +101,14 @@ reset RECREATED; echo 1 > "$TMP/state/parts"; echo "cleanup.policy=delete,retent
 check "--verify rejects a topic whose shape is not the declared one" "$(run "${VARGS[@]}")" 1
 reset RECREATED; echo 3 > "$TMP/state/rf"; echo 1 > "$TMP/state/parts"; echo "cleanup.policy=compact,delete,retention.ms=-1,delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.01,segment.ms=3600000,min.insync.replicas=1" > "$TMP/state/cfg"
 check "--verify rejects a different replication factor" "$(run "${VARGS[@]}")" 1
+
+reset RECREATED; echo 11 > "$TMP/state/rf"; echo 1 > "$TMP/state/parts"; echo "cleanup.policy=compact,delete,retention.ms=-1,delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.01,segment.ms=3600000,min.insync.replicas=1" > "$TMP/state/cfg"
+check "--verify rejects replication factor 11 (not a prefix match for 1)" "$(run "${VARGS[@]}")" 1
+reset RECREATED; echo 10 > "$TMP/state/parts"; echo "cleanup.policy=compact,delete,retention.ms=-1,delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.01,segment.ms=3600000,min.insync.replicas=1" > "$TMP/state/cfg"
+check "--verify rejects 10 partitions (not a prefix match for 1)" "$(run "${VARGS[@]}")" 1
+reset RECREATED; echo 1 > "$TMP/state/parts"; echo "cleanup.policy=compact,delete,retention.ms=-1,delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.01,segment.ms=3600000,min.insync.replicas=1" > "$TMP/state/cfg"
+check "a recreated topic that already holds records fails (a writer is live)" "$(MOCK_END=31 run "${VARGS[@]}")" 1
+reset OLDID
+check "…and --recreate fails the same way when records appear after the create" "$(MOCK_END=5 run "${ARGS[@]}")" 1
 
 echo "passed=$pass failed=$fail"; [ "$fail" = 0 ]

@@ -105,12 +105,19 @@ fi
 DESC="$(rf_describe "$KT" "$BS" "$TOPIC")" || exit 1
 NEW_ID="$(rf_topic_id "$DESC" "$TOPIC")" || exit 1
 [ "$NEW_ID" != "$PRE_ID" ] || { echo "FAIL: $TOPIC still has the pre-cutover id $PRE_ID" >&2; exit 1; }
-printf '%s\n' "$DESC" | grep -q "ReplicationFactor: $REPLICATION_FACTOR" || { echo "FAIL: replication factor is not $REPLICATION_FACTOR: $DESC" >&2; exit 1; }
-printf '%s\n' "$DESC" | grep -q "PartitionCount: $PARTITIONS" || { echo "FAIL: partition count is not $PARTITIONS: $DESC" >&2; exit 1; }
+# exact field match: `grep ReplicationFactor: 1` would also accept 11
+printf '%s\n' "$DESC" | tr '\t' '\n' | grep -qx "ReplicationFactor: $REPLICATION_FACTOR" || { echo "FAIL: replication factor is not $REPLICATION_FACTOR: $DESC" >&2; exit 1; }
+printf '%s\n' "$DESC" | tr '\t' '\n' | grep -qx "PartitionCount: $PARTITIONS" || { echo "FAIL: partition count is not $PARTITIONS: $DESC" >&2; exit 1; }
 rf_split_declared "$CONFIGS" | while IFS='=' read -r k want; do
   have="$(rf_config_value "$DESC" "$k")"
   [ "$have" = "$want" ] || { echo "FAIL: $TOPIC $k is '$have', declared '$want'" >&2; exit 1; }
 done
+# The recreated topic must be EMPTY: a feed that was not actually stopped would already have written into it (log end > 0).
+GO="$(rf_resolve_cli_named kafka-get-offsets "$BIN")"
+ENDS="$("$GO" --bootstrap-server "$BS" --topic "$TOPIC" --time -1 2>&1)" || { echo "FAIL: cannot read end offsets of $TOPIC:" >&2; printf '%s\n' "$ENDS" >&2; exit 1; }
+[ "$(printf '%s\n' "$ENDS" | awk -F: -v t="$TOPIC" '$1 == t {n++; if ($3 != 0) bad++} END {print (n == '"$PARTITIONS"' && bad == 0) ? "empty" : "not-empty"}')" = empty ] \
+  || { echo "FAIL: $TOPIC is not empty (or its partitions could not be read): $ENDS — a writer is live; stop it and run --recreate again" >&2; exit 1; }
+
 # Committed offsets are keyed by topic NAME. Deleting the topic removes them from the (stopped) groups, but that is a broker
 # behaviour, so it is verified, not assumed: a group that kept an offset for the name would resume beyond the new log end and
 # silently skip the first Avro records.
