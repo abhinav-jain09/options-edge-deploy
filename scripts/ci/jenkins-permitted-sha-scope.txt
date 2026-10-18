@@ -70,3 +70,5 @@ tests/fixtures/permitted-sha-guard/refused/Jenkinsfile.fixture-apply-before-guar
 Jenkinsfile.visual-orders-validation      | out |                                 | source-validation-only job: pinned deterministic/probe bundle on es4, no runtime artifact publication, workload/Kafka mutation or release/replay gate; not a deployment job
 
 Jenkinsfile.cvd-image-rollforward | in | | fixed dev/prod namespace/deployer image-only CVD reader CAS; guard first, tests then immediate source verification before effect; no scale, state, topic or offset changes
+
+Jenkinsfile.cvd-evidence-api-images | in | | primary Mac fixed-profile latest-main API image build/test/publish or stopped-only image CAS; canonical guard and immediate tree verification, no secret/config reads or service starts

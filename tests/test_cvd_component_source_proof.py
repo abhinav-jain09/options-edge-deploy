@@ -18,7 +18,7 @@ class SourceProofTest(unittest.TestCase):
     def test_unrelated_source_update_preserves_exact_component_trees(self):
         self.write('unrelated-service/src/main/java/Model.java','class Other {}\n');new=self.commit();p=m.compare(self.root,self.old,new);self.assertEqual(len(m.COMPONENTS)+1,len(p['componentTrees']));self.assertEqual(self.old,p['qualifiedSource']);self.assertEqual(new,p['currentMainSource'])
     def test_new_unreferenced_simple_module_and_operational_document_are_allowed(self):
-        self.names.append('new-service');self.parent();self.child('new-service');self.write('docs/indicator-service/INDICATOR-AVRO-CONVERSION-PLAN.md','operational progress');p=m.compare(self.root,self.old,self.commit());self.assertEqual(['new-service'],p['newUnreferencedModules'])
+        self.names.append('new-service');self.parent();self.child('new-service');self.write('docs/indicator-service/INDICATOR-AVRO-CONVERSION-PLAN.md','operational progress');self.write('docs/market-read/MARKET-READ-REQUIREMENT.md','unrelated market-read design');p=m.compare(self.root,self.old,self.commit());self.assertEqual(['new-service'],p['newUnreferencedModules'])
     def test_new_module_cannot_launder_an_existing_shared_directory(self):
         self.write('scripts/ci/publisher.py','verified publisher\n');old=self.commit()
         self.names.append('scripts');self.parent();self.child('scripts');self.write('scripts/ci/publisher.py','changed publisher\n')

@@ -44,7 +44,7 @@ If unrelated processing commits advance main during qualification, the shared
 source proof compares exact Git trees for all CVD modules and their transitive
 internal Maven dependencies, including the evidence API. Every existing reactor
 POM and the shared parent model must remain identical. Only unrelated module
-source changes, two explicitly named non-runtime files, and simple appended
+source changes, three explicitly named non-runtime files, and simple appended
 modules that cannot shadow an existing dependency are accepted. Unknown shared
 build changes or CVD code changes require a fresh full qualification. The proof
 is bounded and archived with both actual qualified and observed main commits.
