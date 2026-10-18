@@ -938,39 +938,70 @@ patches:
 # `kubectl apply -f manifest.yaml` roll the dev image into production. The entries below remove that
 # for the services they name.
 #
-# COMPLETED 2026-10-18. Earlier the same day this block held five services and the note above it
-# claimed, unqualified, that the committed production render carries no :dev ref - which was false
-# for 39 workloads rendering replicas 1. Those are now listed, together with the replicas-0 ones, so
-# NO production workload that can start carries :dev at rest. Verify with the two commands below,
-# which read only this repository:
-#   for f in k8s/services/*/overlays/production/manifest.yaml; do grep -q "replicas: 1" "$f" && grep -q ":dev$" "$f" && echo "$f"; done
+# COMPLETED 2026-10-18. Earlier the same day this block held five services while the note above it
+# claimed, unqualified, that the committed production render carries no :dev ref. It was false for
+# 39 workloads rendering replicas 1. Every remaining one is now listed, so NO Deployment in the
+# production render carries :dev - no exceptions. Verify against the RENDER, which is the only
+# enumeration that sees everything:
+#   kubectl kustomize k8s/overlays/production | yq 'select(.kind=="Deployment") | .spec.template.spec.containers[].image' | grep ':dev$'
 #     -> nothing
-#   for f in k8s/services/*/overlays/production/manifest.yaml; do grep -q ":dev$" "$f" && echo "$f"; done
-#     -> break-score, ibkr-feed and thetadata-feed, all replicas 0; the last RUNS THE IBKR-FEED
-#        IMAGE, so three names there are two exceptions
 #
-# TWO DELIBERATE EXCEPTIONS, left at :dev because there is no prod tag to point them at and pointing
-# a render at a tag that does not exist trades a wrong image for a broken pull:
-#   - break-score: the production registry does not know the repository at all. Checked 2026-10-18,
-#     `curl -s http://192.168.100.252:5000/v2/options-edge-break-score/tags/list` returns
-#     NAME_UNKNOWN.
-#   - ibkr-feed: the repository exists but carries only a per-build tag and no floating prod one.
-#     The same curl for options-edge-ibkr-feed returns tags ["prod-166-142d8587bd30"].
-# Both render replicas 0 AND appear in both hold-down lists (scripts/ops/morning-autostart.sh and
-# scripts/ops/oe-boot-bringup.sh), so a stray apply of either slice starts nothing. Give either a
-# prod image and it belongs in this list.
+# Use THAT and not a loop over k8s/services/*/overlays/production/manifest.yaml. My first pass did
+# the latter and missed nifty-gex-service and options-edge-web, both replicas 1 on :dev: their slice
+# directories hold only a kustomization.yaml, so a glob for manifest.yaml cannot see them. A
+# slice-based enumeration answers a question about slices; the hazard lives in the render.
 #
-# Every name added here was checked to HAVE a floating prod tag before being pointed at one - 56 of
-# them, each by `curl -s http://192.168.100.252:5000/v2/<image>/tags/list` on 2026-10-18. A render
-# pointing at a missing tag would turn a working raw apply into ImagePullBackOff, which is the
-# failure this change must not introduce while preventing another.
+# FOUR of these are worth knowing about individually:
+#   - ibkr-feed and break-score have NO floating prod tag in the registry. Checked 2026-10-18,
+#     `curl -s http://192.168.100.252:5000/v2/options-edge-ibkr-feed/tags/list` returns only
+#     ["prod-166-142d8587bd30"], and the same call for options-edge-break-score returns
+#     NAME_UNKNOWN. They are mapped to :prod anyway because image-tags/production.yaml ALREADY
+#     declares exactly that for both, so this makes the render agree with the repository's own
+#     declaration - and because the alternative is worse: a raw apply would otherwise start a DEV
+#     image in production, where now it fails to pull. A broken pull is visible and harmless; a dev
+#     image serving production is neither. Build either a prod image and nothing here changes.
+#   - thetadata-feed-service runs the ibkr-feed image and is in NEITHER hold-down list, so a normal
+#     production bring-up scales it from 0 to 1. Being at replicas 0 in the render is NOT protection
+#     on its own: the autostart raises anything it does not hold. Before this change that start used
+#     a DEV image; now it fails to pull, because the image has no floating prod tag. That is the
+#     correct failure for a workload with no production image, and it is the most this change should
+#     do: whether thetadata-feed is meant to run on production at all - give it a prod image - or to
+#     be held down beside ibkr-feed-service is an operational decision, not a rendering one, and it
+#     is deliberately left to the owner rather than taken here. (Note while reading those lists that
+#     morning-autostart.sh's own comment says ibkr-feed-service was removed from KEEP_DOWN on
+#     2026-07-29 while the KEEP_DOWN line still contains it - a pre-existing contradiction, untouched
+#     by this change.)
+#   - nifty-gex and web are the two a slice-based search cannot find, above. They also needed the
+#     SAME mapping added to their own standalone overlays
+#     (k8s/services/{web,nifty-gex}/overlays/production/kustomization.yaml), because unlike the
+#     generated slices those are hand-written and the mirror rule compares the two renders:
+#     validate-services reported MIRROR DRIFT for both until the mapping was in both places. That is
+#     the mechanical reason they had been left out of this block, not a safety one.
 #
-# And every name was checked to be RENDERED by this overlay, which caught a 57th that is not:
-# options-edge-tape-zones. An entry here for an image the overlay never renders is dead
-# configuration that reads like coverage. tape-zones is an es4-only service - it is a choice in
-# Jenkinsfile.es4-deploy and not in service-deploy, its real manifest is k8s/es4/services/tape-zones.yaml
-# and that already carries :prod - so it needs nothing here. Check an addition with:
+# Every name was checked to HAVE the tag it is pointed at, except the two documented above, and to be
+# RENDERED by this overlay. That second check caught one that is not: options-edge-tape-zones. An
+# entry for an image the overlay never renders is dead configuration that reads like coverage. Check
+# an addition with:
 #   kubectl kustomize k8s/overlays/production | grep -c <image-name>
+#
+# OUT OF SCOPE AND LEFT ALONE, found while verifying this change. scripts/ci/validate-es4-render.sh
+# FAILS on a clean origin/main: 28 files under k8s/es4/services are out of date with
+# scripts/es4/render_es4_manifests.py. Confirmed pre-existing by running that gate in a separate
+# worktree at origin/main on 2026-10-18 - the reported drift is byte-identical, 86 lines and the same
+# 28 files, with and without this change. Running the renderer also showed that es4 INHERITS the
+# production slices, so the option-pressure change merged earlier the same day propagates
+# OPB_L1_ENABLED=true and the pressure-writer flags into es4's manifests on the next regeneration.
+# Whether es4 should carry those is a separate decision - the pressure CONSUMER is not in that
+# renderer's SERVICES list, so es4 would produce L1 contributions nothing there reads - and
+# regenerating two of twenty-eight files inside a tag change would leave the tree half-regenerated.
+# So neither was done here.
+#
+# A CORRECTION worth keeping, because the mistake was expensive. I first read
+# k8s/services/tape-zones/ as an orphaned slice and deleted it. It is not orphaned: it is the INPUT
+# to scripts/es4/render_es4_manifests.py, which lists "tape-zones" in SERVICES, exits "MISSING slice"
+# without it, rewrites the image to :prod itself (so its :dev is harmless input, not a hazard), and
+# is run by scripts/ci/validate-es4-render.sh. Deleting it broke es4 regeneration and that CI gate.
+# Restored. A file carrying a GENERATED header is not necessarily output of the generator you assume.
 #
 # Deploy behavior is unchanged: apply.sh REPLACES this images block with digest-pinned
 # entries resolved from the build (.images = [] first), so this mapping only hardens the
@@ -1095,6 +1126,14 @@ images:
   # replicas 1 - its production patch is edited by this change, and leaving the hazard in place in a
   # file I am already touching is worse than the two lines it costs. The note above this block now
   # says what that means for everything NOT listed here.
+  - name: 192.168.100.252:5000/options-edge-nifty-gex
+    newTag: prod
+  - name: 192.168.100.252:5000/options-edge-web
+    newTag: prod
+  - name: 192.168.100.252:5000/options-edge-ibkr-feed
+    newTag: prod
+  - name: 192.168.100.252:5000/options-edge-break-score
+    newTag: prod
   - name: 192.168.100.252:5000/options-edge-option-pressure-state
     newTag: prod
   - name: 192.168.100.252:5000/options-edge-pressure-postgres-writer
