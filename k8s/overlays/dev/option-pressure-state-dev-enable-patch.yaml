@@ -17,15 +17,19 @@
 # built: with replicas 1 and no image, a full deploy aborts at the digest-pinning step and a direct
 # apply gives ImagePullBackOff. Build it first with the service's own deploy job while the base is
 # still inert, then merge this.
-# Dev now runs it, and only dev: the base is unchanged, so production still renders replicas 0 with
-# OPTION_PRESSURE_ENABLED=false, and no production image is built.
+# Dev now runs it, and only dev: the base is unchanged, so a production deploy would render
+# replicas 0 with OPTION_PRESSURE_ENABLED=false - and none has happened, the Deployment is not
+# applied on production at all. What does and does not hold production there is stated ONCE, in
+# k8s/base/option-pressure-state-deployment.yaml. Do not restate it here.
 #
 # Nothing on dev contends with this patch. The two scripts whose KEEP_DOWN lists would force a
 # deployment to zero — scripts/ops/morning-autostart.sh and scripts/ops/oe-boot-bringup.sh — are not
 # scheduled on dev (com.optionsedge.dev-boot-start.plist is disabled-untilfurthernotice, and
 # morning-autostart defaults EXPECTED_ENV=prod and is installed on the production host). Their
-# entries are therefore left in place: they are the production hold, and a KEEP_DOWN entry forces
-# target=0, which is mutually exclusive with replicas:1. Only the DISABLED_DEV entry in
+# entries are therefore left in place: a KEEP_DOWN entry forces target=0, which is mutually
+# exclusive with replicas:1, so they WOULD hold production if the installed copies carried this
+# service - which, checked on 2026-10-18, they do not. See the base manifest; they are not the
+# production hold today. Only the DISABLED_DEV entry in
 # scripts/ops/dev-cleanup.sh is removed, because that script IS run against dev and would scale this
 # service back to zero on every clean.
 #

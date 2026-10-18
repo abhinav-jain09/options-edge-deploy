@@ -44,13 +44,16 @@ pipeline {
     string(name: 'TARGET_PORT',          defaultValue: '19092',         description: 'Target Kafka port (dev = 19092, prod = 9092).')
     choice(name: 'TOPIC', choices: ['es.futures.cvd.bars', 'es.futures.cvd', 'es.futures.cvd.levels',
       'es.futures.footprint.bars', 'es.futures.footprint.outcomes', 'es.futures.footprint', 'es.futures.footprint.strike', 'es.futures.footprint.evidence'], description: 'CVD topic to mirror (frozen allow-list — the shape contract below is per-topic).')
-    choice(name: 'ACTION', choices: ['install', 'teardown'], description: 'install = create+run the mirror; teardown = stop+remove it.')
+    choice(name: 'ACTION', choices: ['install', 'teardown', 'roll-forward'], description: 'install = legacy setup; teardown = remove; roll-forward = upgrade this existing primary-Mac mirror with latest qualified registry-aware code, preserving its group and offsets.')
+    booleanParam(name: 'DEPLOY_DRY_RUN', defaultValue: true, description: 'roll-forward only: validate existing unit, qualified release, registries and committed offsets without changing the launcher.')
+    booleanParam(name: 'CVD_TARGET_READERS_READY', defaultValue: false, description: 'roll-forward only: active destination readers have been upgraded to accept retained JSON and canonical Avro; mandatory before an active mirror launcher changes.')
   }
   // 45 minutes, not 15: every shape assertion is a kafka-topics/kafka-configs round trip, and on the
   // PRODUCTION broker (318 topics on 2026-10-06) one such call takes ~16 s, so a single install can
   // spend ten minutes in metadata alone — 15 minutes aborted three real installs mid-flight.
   options { disableRestartFromStage(); disableConcurrentBuilds(); timeout(time: 45, unit: 'MINUTES') }
   environment {
+    PYTHONDONTWRITEBYTECODE = '1'
     KBIN  = '/Users/abhinav/development/confluent-7.3.1/bin'
     // Per-(TARGET,TOPIC) identity: dev/prod each mirror SEVERAL topics from .4, so every
     // (env, topic) pair must be an independent launchd unit instead of one shared label/dir.
@@ -88,6 +91,21 @@ pipeline {
           env.PERMITTED_SHA_GUARD = 'PASSED'
         }
       }
+    }
+
+    stage('Roll forward existing canonical mirror') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.ACTION == 'roll-forward') } }
+      steps {
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored .jenkins-tmp'
+        }
+        sh 'PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests.test_cvd_mirror_rollforward tests.test_cvd_component_source_proof'
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored .jenkins-tmp'
+        }
+        sh 'python3 scripts/ops/cvd-mirror-rollforward.py'
+      }
+      post { always { archiveArtifacts artifacts: ".jenkins-tmp/cvd-mirror-${env.BUILD_NUMBER}/receipt.json,.jenkins-tmp/cvd-mirror-${env.BUILD_NUMBER}/release.json", allowEmptyArchive: true } }
     }
 
     stage('Teardown') {

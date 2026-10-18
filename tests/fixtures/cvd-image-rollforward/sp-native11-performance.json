@@ -1,0 +1,22 @@
+{
+  "realPayloadParity": 60,
+  "repetitionsPerPath": 5,
+  "emissionsPerRepetition": 12,
+  "results": {
+    "baseline": {
+      "cpuUsec": 142539,
+      "memoryPeak": 39952384,
+      "latencyMedian": 0.032309225061908364
+    },
+    "candidate": {
+      "cpuUsec": 81090,
+      "memoryPeak": 42717184,
+      "latencyMedian": 0.006951401941478252
+    }
+  },
+  "regressionThresholdPercent": 10,
+  "cadenceSeconds": 1,
+  "childCpuIncluded": true,
+  "memoryAbsoluteLimit": 230686720,
+  "sameBenchmarkInputAndHost": true
+}

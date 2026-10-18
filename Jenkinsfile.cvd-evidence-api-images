@@ -1,0 +1,41 @@
+// Build latest-main Evidence API images; image-only updates require existing stopped holds.
+pipeline {
+  agent { label 'local-mac' }
+  parameters {
+    string(name: 'PERMITTED_SHA', defaultValue: '', trim: true, description: 'Required exact current deploy main commit.')
+    string(name: 'PERMITTED_SHA_GUARD_VERSION', defaultValue: '2f6fc2ab7aa51eb8a9e8aa350f2d774cd2fb7a253de2591e43645a19a9886b24', description: 'Canonical guard digest; do not edit manually.')
+    choice(name: 'ENVIRONMENT', choices: ['dev', 'production'], description: 'Existing target cluster; fixed deployer identity and namespace UID.')
+    choice(name: 'ACTION', choices: ['build', 'roll-forward'], description: 'Build and test one architecture then publish; or update its existing stopped workload image. No runtime start, secrets or config changes.')
+    booleanParam(name: 'DEPLOY_DRY_RUN', defaultValue: true, description: 'Server admission only, no runtime patch.')
+  }
+  options { disableRestartFromStage(); disableConcurrentBuilds(); timeout(time: 45, unit: 'MINUTES') }
+  environment { PYTHONDONTWRITEBYTECODE = '1' }
+  stages {
+    stage('Permitted commit guard') {
+      options { timeout(time: 10, unit: 'MINUTES') }
+      steps {
+        script {
+          def rc = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')
+          if (rc != 0) {
+            error("Permitted commit guard REFUSED this build (rc=${rc}) — no deployment effect has run.")
+          }
+          env.PERMITTED_SHA_GUARD = 'PASSED'
+        }
+      }
+    }
+    stage('Build or roll existing stopped API') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
+      steps {
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored .jenkins-tmp'
+        }
+        sh 'PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests.test_cvd_evidence_api_image tests.test_es4_pinned_image tests.test_cvd_reader_image tests.test_cvd_component_source_proof'
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored .jenkins-tmp'
+        }
+        sh 'python3 scripts/deploy/cvd-evidence-api-image.py'
+      }
+    }
+  }
+  post { always { archiveArtifacts artifacts: ".jenkins-tmp/evidence-api-${env.BUILD_NUMBER}/build-receipt.json,.jenkins-tmp/evidence-api-${env.BUILD_NUMBER}/release.json,.jenkins-tmp/evidence-api-${env.BUILD_NUMBER}/publish.json,.jenkins-tmp/evidence-api-${env.BUILD_NUMBER}/*.log,.jenkins-tmp/evidence-api-${env.BUILD_NUMBER}/contracts/*.release.json,.jenkins-tmp/es4-image-${env.BUILD_NUMBER}/receipt.json,.jenkins-tmp/es4-image-${env.BUILD_NUMBER}/patch.json", allowEmptyArchive: true } }
+}
