@@ -85,7 +85,7 @@ class CanonicalArchiveRoutingTest(unittest.TestCase):
             self.assertEqual(args[args.index('--canonical-registry') + 1], registry)
             self.assertIn('-Xmx512m', args)
             self.assertIn('canonical-archive-reader.jar', args[args.index('-cp') + 1])
-            self.assertTrue(args[args.index('-cp') + 1].startswith(str(self.dir / 'canonical-archive-reader.jar') + ':'))
+            self.assertEqual(args[args.index('-cp') + 1], str(self.dir / 'canonical-archive-reader.jar'))
             self.assertEqual(args[args.index('-cp') + 2], 'StrikeArchiveReader')
             self.assertNotIn(str(self.dir / 'StrikeArchiveReader.java'), args)
         r = self.run_shell('run_strike_reader 10 --topic context-tape.direction.ledger', OE_CANONICAL_REGISTRY_URL='http://explicit:8081')
