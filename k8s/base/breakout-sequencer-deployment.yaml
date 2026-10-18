@@ -27,6 +27,21 @@ spec:
         app.kubernetes.io/name: breakout-sequencer-service
         app.kubernetes.io/part-of: options-edge
     spec:
+      initContainers:
+        # Generates the development Ed25519 key set onto the volume if (and only if) there is none; an existing set is never touched.
+        - name: key-init
+          image: 192.168.100.252:5000/options-edge-breakout-sequencer:dev
+          imagePullPolicy: Always
+          command: ["java", "-cp", "/app/service.jar", "com.optionsedge.processing.breakoutseq.KeyInit", "/etc/breakout-sequencer"]
+          volumeMounts:
+            - name: signing-key
+              mountPath: /etc/breakout-sequencer
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 256Mi
       containers:
         - name: breakout-sequencer
           image: 192.168.100.252:5000/options-edge-breakout-sequencer:dev
@@ -50,9 +65,9 @@ spec:
             - name: BREAKOUT_SEQ_CORRECTION_TOPIC
               value: breakout.correction.in
             - name: BREAKOUT_SEQ_PRIVATE_KEY_PATH
-              value: /etc/breakout-sequencer/signing.key
+              value: /etc/breakout-sequencer/v1/signing.key
             - name: BREAKOUT_SEQ_PUBLIC_KEY_PATH
-              value: /etc/breakout-sequencer/signing.pub
+              value: /etc/breakout-sequencer/v1/signing.pub
             - name: JAVA_TOOL_OPTIONS
               value: "-Xms128m -Xmx512m"
           ports:
@@ -83,6 +98,5 @@ spec:
               memory: 768Mi
       volumes:
         - name: signing-key
-          secret:
-            secretName: breakout-sequencer-signing
-            optional: true
+          persistentVolumeClaim:
+            claimName: breakout-sequencer-keys

@@ -63,9 +63,9 @@ spec:
             - name: BREAKOUT_SEQ_CORRECTION_TOPIC
               value: breakout.correction.in
             - name: BREAKOUT_SEQ_PRIVATE_KEY_PATH
-              value: /etc/breakout-sequencer/signing.key
+              value: /etc/breakout-sequencer/v1/signing.key
             - name: BREAKOUT_SEQ_PUBLIC_KEY_PATH
-              value: /etc/breakout-sequencer/signing.pub
+              value: /etc/breakout-sequencer/v1/signing.pub
             - name: JAVA_TOOL_OPTIONS
               value: -Xms128m -Xmx512m
           envFrom:
@@ -100,8 +100,26 @@ spec:
             - mountPath: /etc/breakout-sequencer
               name: signing-key
               readOnly: true
+      initContainers:
+        - command:
+            - java
+            - -cp
+            - /app/service.jar
+            - com.optionsedge.processing.breakoutseq.KeyInit
+            - /etc/breakout-sequencer
+          image: 192.168.100.252:5000/options-edge-breakout-sequencer:dev
+          imagePullPolicy: Always
+          name: key-init
+          resources:
+            limits:
+              memory: 256Mi
+            requests:
+              cpu: 50m
+              memory: 128Mi
+          volumeMounts:
+            - mountPath: /etc/breakout-sequencer
+              name: signing-key
       volumes:
         - name: signing-key
-          secret:
-            optional: true
-            secretName: breakout-sequencer-signing
+          persistentVolumeClaim:
+            claimName: breakout-sequencer-keys
