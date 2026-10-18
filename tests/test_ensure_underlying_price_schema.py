@@ -17,11 +17,15 @@ SCRIPT = ROOT / "scripts/kafka/ensure-underlying-price-schema.sh"
 SUBJECT = "com.optionsedge.contracts.hpsf.UnderlyingPrice"
 
 
-def schema_file(name: str = "UnderlyingPrice") -> str:
+CANONICAL = ROOT / "tests/fixtures/underlying-price/UnderlyingPrice.avsc"
+
+
+def schema_file(canonical: bool = True) -> str:
+    if canonical:
+        return str(CANONICAL)
     f = tempfile.NamedTemporaryFile("w", suffix=".avsc", delete=False)
-    json.dump({"type": "record", "name": name, "namespace": "com.optionsedge.contracts.hpsf",
-               "fields": [{"name": "symbol", "type": "string"},
-                          {"name": "price", "type": {"type": "bytes", "logicalType": "decimal", "precision": 38, "scale": 18}}]}, f)
+    json.dump({"type": "record", "name": "UnderlyingPrice", "namespace": "com.optionsedge.contracts.hpsf",
+               "fields": [{"name": "symbol", "type": "string"}]}, f)
     f.close()
     return f.name
 
@@ -59,13 +63,13 @@ class EnsureUnderlyingPriceSchema(unittest.TestCase):
         finally:
             server.shutdown()
 
-    def test_a_schema_that_is_not_the_subject_is_refused_before_any_call(self):
+    def test_any_file_but_the_pinned_canonical_bytes_is_refused_before_any_call(self):
         reg = Registry()
         server, url = serve(reg)
         try:
-            rc, out = run(url, schema_file("SomethingElse"))
+            rc, out = run(url, schema_file(canonical=False))
             self.assertNotEqual(rc, 0)
-            self.assertIn("not the subject", out)
+            self.assertIn("not the canonical", out)
             self.assertEqual(reg.calls, [])
         finally:
             server.shutdown()
@@ -76,8 +80,7 @@ class EnsureUnderlyingPriceSchema(unittest.TestCase):
         try:
             path = schema_file()
             self.assertEqual(run(url, path)[0], 0)
-            reg.register(SUBJECT, json.dumps({"type": "record", "name": "UnderlyingPrice", "namespace": "com.optionsedge.contracts.hpsf",
-                                              "fields": [{"name": "symbol", "type": "string"}]}))
+            reg.register(SUBJECT, open(schema_file(canonical=False)).read())
             rc, out = run(url, path)
             self.assertNotEqual(rc, 0)
             self.assertIn("latest version", out)

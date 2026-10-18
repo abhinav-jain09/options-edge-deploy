@@ -13,12 +13,17 @@ set -euo pipefail
 : "${SCHEMA_FILE:?SCHEMA_FILE is required (options-edge-contracts schemas/hpsf/UnderlyingPrice.avsc at the permitted sha)}"
 SUBJECT="${SUBJECT:-com.optionsedge.contracts.hpsf.UnderlyingPrice}"
 exec python3 - "$SCHEMA_REGISTRY_URL" "$SCHEMA_FILE" "$SUBJECT" "${DEPLOY_DRY_RUN:-false}" <<'PY'
-import json, sys, urllib.error, urllib.request
+import hashlib, json, sys, urllib.error, urllib.request
 
+# The exact bytes of options-edge-contracts schemas/hpsf/UnderlyingPrice.avsc this deploy registers. A registration under
+# FULL is irreversible, so no other file is ever sent: when the canonical schema changes, this hash changes in the same
+# deploy change (tests/fixtures/underlying-price/UnderlyingPrice.avsc is the pinned copy, hash-checked by the test).
+CANONICAL_SHA256 = "719c6589c62c0eeed9e2a5fa5459b98344e1a3f112b13e018a467851868ea41b"
 url, path, subject, dry = sys.argv[1].rstrip("/"), sys.argv[2], sys.argv[3], sys.argv[4] == "true"
-schema = json.dumps(json.load(open(path, encoding="utf-8")), separators=(",", ":"))
-if json.loads(schema).get("namespace", "") + "." + json.loads(schema)["name"] != subject:
-    sys.exit(f"FATAL: {path} defines {json.loads(schema).get('namespace')}.{json.loads(schema)['name']}, not the subject {subject}")
+raw = open(path, "rb").read()
+if hashlib.sha256(raw).hexdigest() != CANONICAL_SHA256:
+    sys.exit(f"FATAL: {path} is not the canonical UnderlyingPrice.avsc this deploy pins (sha256 {hashlib.sha256(raw).hexdigest()})")
+schema = json.dumps(json.loads(raw), separators=(",", ":"))
 HDR = {"Content-Type": "application/vnd.schemaregistry.v1+json"}
 
 
