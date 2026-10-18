@@ -12,8 +12,8 @@
 # broker runs num.partitions=32) or, with auto-create off, the idempotent producer fails and the
 # pod crash-loops on startup. Declared in scripts/kafka/topics.env (both plain delete, default
 # 1-day retention, NOT compacted, NOT reset-preserved — see the comment there):
-#   rates.databento.zn.options.raw.v1         1 partition, cleanup.policy=delete, retention.ms=86400000
-#   rates.databento.zn.options.gex.strike.v1  1 partition, cleanup.policy=delete, retention.ms=86400000
+#   rates.databento.zn.options.raw         1 partition, cleanup.policy=delete, retention.ms=86400000
+#   rates.databento.zn.options.gex.strike  1 partition, cleanup.policy=delete, retention.ms=86400000
 #
 # CREATE if absent, then VERIFY every topic — including one just created — and fail closed. Never
 # alters an existing topic. Every CLI call's status is checked explicitly: ensure() runs in an
@@ -21,8 +21,8 @@
 # comment warns about — nothing here may rely on errexit inside that context).
 set -euo pipefail
 
-RAW_TOPIC="${KAFKA_ZN_RAW_TOPIC:-rates.databento.zn.options.raw.v1}"
-GEX_TOPIC="${KAFKA_ZN_GEX_TOPIC:-rates.databento.zn.options.gex.strike.v1}"
+RAW_TOPIC="${KAFKA_ZN_RAW_TOPIC:-rates.databento.zn.options.raw}"
+GEX_TOPIC="${KAFKA_ZN_GEX_TOPIC:-rates.databento.zn.options.gex.strike}"
 : "${KAFKA_BOOTSTRAP_SERVERS:?KAFKA_BOOTSTRAP_SERVERS unset — refusing to verify against an unknown cluster}"
 RF="${KAFKA_TOPIC_REPLICATION_FACTOR:-1}"
 RETENTION_MS="${KAFKA_TOPIC_RETENTION_MS:-86400000}"

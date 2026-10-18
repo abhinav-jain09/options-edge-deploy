@@ -55,7 +55,7 @@ spec:
             - name: KAFKA_LADDER_PATH_PREOPEN_TOPIC
               value: options.databento.gex.strike.preopen
             - name: KAFKA_LADDER_PATH_OI_STATUS_TOPIC
-              value: options.databento.gex.oi-status.v2
+              value: options.databento.gex.oi-status
             - name: KAFKA_LADDER_PATH_SPOT_TOPIC
               value: underlying.spx.index.price
             - name: KAFKA_LADDER_PATH_ES_TOPIC

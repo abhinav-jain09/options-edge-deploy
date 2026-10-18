@@ -113,8 +113,8 @@ class Es4TopicSsotTest(unittest.TestCase):
         """OPTIONS_EDGE_TOPIC_DELETE_RETENTION_OVERRIDES is the one list apply-topics.sh consults
         that has NO es4 twin and is NOT reset by the es4 arm, so an entry for an es.* topic would
         be applied on the es4 broker from the dev/prod declaration. Harmless today because the only
-        entries are options.ibkr.gex.status and its Avro successor options.ibkr.gex.status.v2,
-        neither of which is an es4 topic; asserted so it stays that way."""
+        entry is options.ibkr.gex.status, which is not an es4 topic; asserted so it stays
+        that way."""
         leak_keys = {e.split("=", 1)[0] for e in _var("OPTIONS_EDGE_TOPIC_DELETE_RETENTION_OVERRIDES")}
         self.assertFalse(
             leak_keys & _topics("OPTIONS_EDGE_ES4_TOPICS"),

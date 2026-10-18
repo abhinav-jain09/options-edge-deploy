@@ -785,6 +785,32 @@ PYEOF
         '''
       }
     }
+    stage('Verify the Avro roll-forward') {
+      // BEFORE the rollout, and for the two services that read the rolled-forward topics.
+      //
+      // The 2026-10-18 Avro cutovers DELETED AND RECREATED their topics under their own names rather
+      // than renaming to a versioned sibling. That deletion is a PRECONDITION of this rollout, not a
+      // tidy-up: both topics are retention.ms=-1, and gamma-ladder-path reads
+      // options.databento.gex.oi-status as a Kafka Streams source with an AVRO serde and no explicit
+      // auto.offset.reset -- so Streams replays the topic from its beginning after any state loss. If
+      // the topic still holds the old hand-built JSON, that replay feeds JSON to an Avro
+      // deserializer, which the Kafka Serialization Rule forbids and which surfaces as a dead source
+      // rather than an error. This refuses the rollout in that state. A topic id differs after any
+      // delete-and-recreate, so the check cannot be satisfied by anything except a topic that is not
+      // the one that held the JSON. scripts/kafka/roll-forward-avro-cutover-topics.sh is what makes
+      // it pass.
+      when {
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'databento-gex' || params.SERVICE == 'gamma-ladder-path') && !params.DEPLOY_DRY_RUN }
+      }
+      steps {
+        sh '''
+          set -euo pipefail
+          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
+          . scripts/kafka/load-kafka-settings.sh
+          scripts/kafka/verify-avro-rollforward.sh "$KAFKA_BOOTSTRAP_SERVERS"
+        '''
+      }
+    }
     stage('Verify gamma-ladder-path output topics') {
       // BEFORE the rollout, same barrier as multileg above: apply-topics lives in a different job, so on a FIRST
       // deploy neither output topic exists and the broker auto-creates them with cluster defaults (state not
