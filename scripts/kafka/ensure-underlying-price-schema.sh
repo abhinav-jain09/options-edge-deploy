@@ -11,7 +11,7 @@
 set -euo pipefail
 : "${SCHEMA_REGISTRY_URL:?SCHEMA_REGISTRY_URL is required (the registry of the deployed environment)}"
 : "${SCHEMA_FILE:?SCHEMA_FILE is required (options-edge-contracts schemas/hpsf/UnderlyingPrice.avsc at the permitted sha)}"
-SUBJECT="${SUBJECT:-com.optionsedge.contracts.hpsf.UnderlyingPrice}"
+SUBJECT="com.optionsedge.contracts.hpsf.UnderlyingPrice"   # fixed: the feed reads exactly this subject; there is no override
 exec python3 - "$SCHEMA_REGISTRY_URL" "$SCHEMA_FILE" "$SUBJECT" "${DEPLOY_DRY_RUN:-false}" <<'PY'
 import hashlib, json, sys, urllib.error, urllib.request
 

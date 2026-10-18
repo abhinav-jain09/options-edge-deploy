@@ -87,6 +87,17 @@ class EnsureUnderlyingPriceSchema(unittest.TestCase):
         finally:
             server.shutdown()
 
+    def test_a_subject_override_in_the_environment_is_ignored(self):
+        reg = Registry()
+        server, url = serve(reg)
+        try:
+            e = dict(os.environ, SCHEMA_REGISTRY_URL=url, SCHEMA_FILE=schema_file(), SUBJECT="some.other.Subject")
+            r = subprocess.run(["bash", str(SCRIPT)], capture_output=True, text=True, env=e)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertEqual(list(reg.subjects), [SUBJECT])
+        finally:
+            server.shutdown()
+
     def test_dry_run_mutates_nothing(self):
         reg = Registry()
         server, url = serve(reg)
