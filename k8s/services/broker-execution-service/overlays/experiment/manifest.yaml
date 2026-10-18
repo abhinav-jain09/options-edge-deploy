@@ -85,6 +85,8 @@ spec:
               value: "0:0"
             - name: BROKER_EXECUTION_ENVIRONMENT
               value: dev
+            - name: BROKER_LIVE_EXECUTION_ENABLED
+              value: "false"
             - name: BROKER_EXECUTION_IBKR_HOST
               value: host.docker.internal
             - name: BROKER_EXECUTION_IBKR_PORT

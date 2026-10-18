@@ -19,3 +19,13 @@ spec:
               value: underlying.spx.index.price
             - name: AUTH_ISSUER_URI
               value: "https://dev-auth.bleadingoptions.com/realms/optionsedge"
+            # Owner-authorized UI Paper/Live selection; account choice remains explicit in the service.
+            # This does not submit an order, change quantity/money limits or start a production broker.
+            - name: BROKER_LIVE_EXECUTION_ENABLED
+              value: "true"
+            - name: BROKER_LIVE_EXECUTION_HOST
+              value: host.docker.internal
+            - name: BROKER_LIVE_EXECUTION_PORT
+              value: "4001"
+            - name: BROKER_LIVE_EXECUTION_CLIENT_BASE
+              value: "31001"

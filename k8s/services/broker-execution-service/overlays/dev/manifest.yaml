@@ -68,6 +68,14 @@ spec:
               value: underlying.spx.index.price
             - name: AUTH_ISSUER_URI
               value: https://dev-auth.bleadingoptions.com/realms/optionsedge
+            - name: BROKER_LIVE_EXECUTION_ENABLED
+              value: "true"
+            - name: BROKER_LIVE_EXECUTION_HOST
+              value: host.docker.internal
+            - name: BROKER_LIVE_EXECUTION_PORT
+              value: "4001"
+            - name: BROKER_LIVE_EXECUTION_CLIENT_BASE
+              value: "31001"
             - name: SERVER_PORT
               value: "8131"
             - name: JAVA_TOOL_OPTIONS

@@ -119,6 +119,10 @@ spec:
             #     also asserts the gateway's managed-account list is exactly the DU account below. ---
             # host.docker.internal, NOT 127.0.0.1: inside a pod, loopback is the POD, and the gateway runs
             # on the Mac that hosts the dev cluster. Verified 2026-10-11 reachable on 4002 from a container.
+            # Live capability is enabled only on the dev overlay with a configured local gateway.
+            # Production remains silent with zero broker replicas. Numerical risk bounds are unchanged.
+            - name: BROKER_LIVE_EXECUTION_ENABLED
+              value: "false"
             - name: BROKER_EXECUTION_IBKR_HOST
               value: "host.docker.internal"
             - name: BROKER_EXECUTION_IBKR_PORT
