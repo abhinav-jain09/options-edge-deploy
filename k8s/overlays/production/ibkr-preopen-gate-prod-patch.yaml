@@ -22,7 +22,7 @@
 #     records never enter the gamma-flow topology or the gex history series;
 #   - the prod web UI carries the ibkr-preopen handler (#439), so IBKR values render with their
 #     own provenance instead of being labelled Databento;
-#   - options.ibkr.gex.status.v2 / options.ibkr.gex.strike.shadow are declared in topics.env and must
+#   - options.ibkr.gex.status / options.ibkr.gex.strike.shadow are declared in topics.env and must
 #     EXIST on the prod cluster before this is rolled (apply topics first);
 #   - the prod IBKR fan-out and the raw-to-display disposition land together with this patch
 #     (see ibkr-raw-to-display-prod-hold-patch.yaml) — a fan-out without that hold would activate

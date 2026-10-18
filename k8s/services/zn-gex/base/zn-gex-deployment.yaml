@@ -57,9 +57,9 @@ spec:
             - name: HEALTH_PORT
               value: "8101"
             - name: KAFKA_ZN_RAW_TOPIC
-              value: rates.databento.zn.options.raw.v1
+              value: rates.databento.zn.options.raw
             - name: KAFKA_ZN_GEX_TOPIC
-              value: rates.databento.zn.options.gex.strike.v1
+              value: rates.databento.zn.options.gex.strike
             - name: KAFKA_APPLICATION_ID
               value: zn-gex
             - name: ZN_GEX_DV01_MAP_PATH

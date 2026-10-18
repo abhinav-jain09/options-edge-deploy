@@ -56,10 +56,13 @@ data:
   IBKR_GEX_PUBLISH_ENABLED: "false"
   IBKR_GEX_TOPIC_STAGE: "shadow"
   IBKR_GEX_TOPIC: "options.ibkr.gex.strike.shadow"
-  # AVRO successor (2026-10-18 cutover, nine record types under RecordNameStrategy). The
-  # predecessor retains hand-built JSON forever, so both the producer and the gateway refuse it
-  # through IbkrPreOpenStatusAvro.requireAvroTopic — naming it here would fail them at startup.
-  KAFKA_IBKR_GEX_STATUS_TOPIC: "options.ibkr.gex.status.v2"
+  # AVRO since the 2026-10-18 cutover (nine record types under RecordNameStrategy), under the
+  # topic's OWN name: the topic was WIPED and recreated rather than renamed, so there is one topic
+  # and it holds only Avro. A VERSIONED value here is refused by both the producer and the gateway
+  # through IbkrPreOpenStatusAvro.requireTopic and would fail them at startup, deliberately: a
+  # versioned name is one nothing creates, writes or reads, and pointing a consumer at it shows up
+  # as an empty panel rather than an error.
+  KAFKA_IBKR_GEX_STATUS_TOPIC: "options.ibkr.gex.status"
   IBKR_VIX_PRICE_ENABLED: "true"
   IBKR_VIX_SYMBOL: VIX
   IBKR_VIX_EXCHANGE: CBOE
