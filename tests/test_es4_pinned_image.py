@@ -37,7 +37,7 @@ def gateway_build(number=17,**kwargs):
     return row
 
 def gateway_lock(number=17):
-    return lock(number).replace('options-edge-processing.git','options-edge-feed-gateway.git').replace('ES_CVD_IMAGE','FEED_GATEWAY_IMAGE').replace('options-edge-es-cvd','options-edge-feed-gateway')
+    return lock(number).replace('options-edge-processing.git','option-edge-feed-gateway.git').replace('ES_CVD_IMAGE','FEED_GATEWAY_IMAGE').replace('options-edge-es-cvd','options-edge-feed-gateway')
 
 def gateway_live(replicas=1):
     d=live(replicas);d['metadata']['name']='es-feed-gateway'
@@ -46,6 +46,17 @@ def gateway_live(replicas=1):
     return d
 
 class GatewayImageTest(unittest.TestCase):
+    def test_actual_jenkins_gateway_release_lock_uses_singular_repository_name(self):
+        # Immutable artifact from option-edge-feed-gateway build 768, not a generated mock lock.
+        text=(Path(__file__).parent/'fixtures/gateway-image-lock-768.env').read_text()
+        row=gateway_build(768)
+        values={'PERMITTED_SHA':'6bc14a5958cce10eaa99fd33f75ad26eb5e9f193','CONTRACTS_PERMITTED_SHA':'dfd0084bdb4a13eb728c721420cab3595e802871'}
+        for entry in row['actions'][0]['parameters']:
+            if entry['name'] in values:entry['value']=values[entry['name']]
+        image,proof=p.qualified_image('es-feed-gateway',[row],lambda n:text)
+        self.assertEqual('192.168.100.252:5000/options-edge-feed-gateway:prod-768-6bc14a5958cc@sha256:6a2435965a993027ffdf82355ab0b1027dbf341650633bad447e993d8179128f',image)
+        self.assertEqual(768,proof['gatewayBuild'])
+
     def test_gateway_lock_requires_own_repository_and_publish_parameter(self):
         image,proof=p.qualified_image('es-feed-gateway',[gateway_build()],gateway_lock)
         self.assertEqual(GATEWAY_IMAGE,image);self.assertEqual(17,proof['gatewayBuild']);self.assertEqual(SOURCE,proof['gatewaySource'])
@@ -195,7 +206,10 @@ class MainFlowTest(unittest.TestCase):
         env.update(extra_env or {})
         self.calls=calls
         self.receipt_path=Path(tmp.name)/'.jenkins-tmp/es4-image-90/receipt.json'
-        with patch.dict(os.environ,env,clear=True),patch.object(p,'kube',side_effect=kube),patch.object(p,'read_url',side_effect=url),patch.object(p,'processing_main',side_effect=lambda repository='options-edge-processing':sdk_main if repository=='options-edge-contracts' else main),patch.object(p,'open_direct',return_value=io.BytesIO(manifest)),patch('sys.stdout',new=io.StringIO()):p.main()
+        def source_main(repository='options-edge-processing'):
+            if gateway:self.assertIn(repository,['option-edge-feed-gateway','options-edge-contracts'])
+            return sdk_main if repository=='options-edge-contracts' else main
+        with patch.dict(os.environ,env,clear=True),patch.object(p,'kube',side_effect=kube),patch.object(p,'read_url',side_effect=url),patch.object(p,'processing_main',side_effect=source_main),patch.object(p,'open_direct',return_value=io.BytesIO(manifest)),patch('sys.stdout',new=io.StringIO()):p.main()
         receipt=json.loads(Path('.jenkins-tmp/es4-image-90/receipt.json').read_text());return calls,receipt
     def test_gateway_real_and_dry_paths_preserve_spec_and_provenance(self):
         for dry in [True,False]:
