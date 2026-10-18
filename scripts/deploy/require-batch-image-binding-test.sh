@@ -2,6 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 guard=scripts/deploy/require-batch-image-binding.sh
+export DEPLOY_DRY_RUN=false
 for image in '' 'registry/oe-close-batch:prod' 'registry/another-service:prod@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'; do
   if SERVICE=stock-gex-close-scheduler ENVIRONMENT=production DEPLOY_DRY_RUN=false REQUIRED_IMAGE="$image" bash "$guard" > /dev/null 2>&1; then
     echo 'FAIL: an unbound scheduler image was accepted' >&2;exit 1
