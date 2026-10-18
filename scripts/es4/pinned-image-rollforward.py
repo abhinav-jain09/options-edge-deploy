@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Image-only updates for five existing CVD readers/writers. Never creates or scales a workload."""
 import json
+import importlib.util
 import hashlib
 import copy
 import os
@@ -169,6 +170,12 @@ def verify(service, before, after, image):
         raise ValueError('non-image workload spec changed or image is not pinned')
 
 
+def component_source_proof(qualified,current):
+    spec=importlib.util.spec_from_file_location('cvd_component_proof',Path(__file__).parents[1]/'jenkins/cvd-component-source-proof.py')
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    return module.prove(qualified,current)
+
+
 def main():
     if not os.environ.get('JENKINS_URL') or os.environ.get('PERMITTED_SHA_GUARD') != 'PASSED':
         raise ValueError('guarded Jenkins execution required')
@@ -182,8 +189,8 @@ def main():
     builds = json.loads(read_url(base + 'api/json?' + urllib.parse.urlencode({'tree': tree}), 2 << 20))['builds']
     image, provenance = qualified_image(service, builds,
         lambda number: read_url(base + str(number) + '/artifact/.jenkins-tmp/options-edge-image-lock.env', 262144))
-    if provenance['processingSource'] != processing_main():
-        raise ValueError('latest qualification is not current processing main; qualify latest main first')
+    current=processing_main()
+    source_proof=component_source_proof(provenance['processingSource'],current) if provenance['processingSource']!=current else None
     repo, digest = image_parts(service, image)
     dry = os.environ['DEPLOY_DRY_RUN']
     if dry not in ['true', 'false']:
@@ -223,7 +230,7 @@ def main():
     args = ['patch', 'deployment/' + SERVICES[service][0], '--type=json', '--patch', payload]
     receipt = {'source': os.environ['PERMITTED_SHA'], 'environment': TARGET_ENVIRONMENT, 'deployment': SERVICES[service][0], 'image': image,
                'replicas': before['spec']['replicas'], 'readyReplicasBefore': before.get('status', {}).get('readyReplicas', 0), 'dryRun': dry == 'true', **provenance,
-               'readerClosureAcknowledged': closure == 'true',
+               'readerClosureAcknowledged': closure == 'true', 'componentSourceProof': source_proof,
                'patchSha256': hashlib.sha256(payload.encode()).hexdigest(),
                'phase': 'patch-prepared', 'runtimeReadinessVerified': False,
                'scope': 'selected existing image only; no configuration, state, topic, group or offset changes'}

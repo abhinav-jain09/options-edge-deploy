@@ -158,8 +158,13 @@ class MainFlowTest(unittest.TestCase):
         self.assertFalse(any(c[0]=='patch' and '--dry-run=server' not in c for c in self.calls))
         receipt=json.loads(self.receipt_path.read_text());self.assertEqual(receipt['phase'],'patch-prepared')
     def test_stale_processing_main_refuses_before_cluster_calls(self):
-        with self.assertRaisesRegex(ValueError,'not current processing main'):self.run_case(True,main='f'*40)
+        with patch.object(p,'component_source_proof',side_effect=ValueError('CVD source changed')),self.assertRaisesRegex(ValueError,'CVD source changed'):self.run_case(True,main='f'*40)
         self.assertEqual(self.calls,[])
+    def test_unrelated_main_changes_require_explicit_exact_component_source_proof(self):
+        proof={'qualifiedSource':SOURCE,'currentMainSource':'f'*40,'componentTrees':{'context-tape':'verified-identical-tree'}}
+        with patch.object(p,'component_source_proof',return_value=proof) as verifier:
+            calls,receipt=self.run_case(True,main='f'*40)
+        verifier.assert_called_once_with(SOURCE,'f'*40);self.assertEqual(proof,receipt['componentSourceProof']);self.assertTrue(all('--dry-run=server' in c for c in calls if c[0]=='patch'))
     def test_manifest_digest_mismatch_or_oversize_refuses_before_patch(self):
         for manifest in [MANIFEST+b' ',b'x'*((2<<20)+1)]:
             with self.subTest(size=len(manifest)),self.assertRaisesRegex(ValueError,'manifest digest mismatch'):self.run_case(True,manifest=manifest)
