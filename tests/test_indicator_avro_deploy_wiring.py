@@ -113,6 +113,10 @@ class IndicatorAvroDeployWiring(unittest.TestCase):
         self.assertIn("DECODE_EMPTY_OK=", verify, "an empty target partition passes only when its source holds no committed record")
         self.assertIn("is not empty (partition=endOffset:", gen, "an install over a non-empty target is refused: the copy restarts at the earliest offset")
         self.assertIn("PARITY_CONSUMER_TIMEOUT_S", verify)
+        # Groovy parses the sh '''...''' blocks: a single backslash before ( ) or a digit is an illegal escape that
+        # fails the whole pipeline at startup (build #46, 2026-10-18); the shell needs \\( \\) \\1 in the source.
+        groovy_rejects = [n for n, line in enumerate(t.splitlines(), 1) if re.search(r"(?<!\\)\\[()1-9]", line)]
+        self.assertEqual(groovy_rejects, [], f"single-backslash escapes Groovy rejects at lines {groovy_rejects}")
         self.assertNotIn("source holds no record yet; the decode gate runs on the first record", verify)
 
     def test_archive_unit_ships_the_avro_reader_and_builds_the_contracts_jar_from_the_permitted_commit(self):
