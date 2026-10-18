@@ -1,0 +1,48 @@
+// SOURCE TEST ONLY. No deployment, runtime image, cluster, Kafka or broker operations.
+pipeline {
+  agent { label 'hpsf-replay-mac' }
+  options { disableConcurrentBuilds(); disableRestartFromStage(); timeout(time:45,unit:'MINUTES') }
+  parameters {
+    string(name:'TEST_INFRA_SHA',defaultValue:'',trim:true,description:'Exact reviewed test infrastructure work-branch commit')
+    string(name:'WEB_SHA',defaultValue:'',trim:true,description:'Exact pushed frontend work-branch commit; no release authority')
+  }
+  stages {
+    stage('Immutable source guard') {
+      steps {
+        script {
+          if (!(params.TEST_INFRA_SHA ==~ /[0-9a-f]{40}/) || !(params.WEB_SHA ==~ /[0-9a-f]{40}/)) { error('Full immutable SHAs required') }
+          if (sh(returnStdout:true,script:'git rev-parse HEAD').trim()!=params.TEST_INFRA_SHA) { error('Infrastructure source mismatch') }
+        }
+      }
+    }
+    stage('Prepare source-only bundle') {
+      steps {
+        dir('responsive-generated') {
+          deleteDir()
+          withEnv(["WEB_SHA=${params.WEB_SHA}"]) { sh 'bash ../scripts/validation/prepare-responsive-stack-bundle.sh' }
+        }
+      }
+    }
+    stage('es4 CPU2 outside RTH') {
+      steps {
+        dir('responsive-generated') {
+          sh '''
+            set -euo pipefail
+            host=abhinav@192.168.100.4
+            remote="$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" 'mktemp -d /tmp/responsive-validation.XXXXXXXX')"
+            [[ "$remote" =~ ^/tmp/responsive-validation[.][A-Za-z0-9]{8}$ ]] || exit 1
+            cleanup(){ ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" "find -P '$remote' -depth -type f -delete && find -P '$remote' -depth -type d -delete" || true; }
+            trap cleanup EXIT
+            rsync -az bundle/ "$host:$remote/"
+            status=0
+            ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" "bash '$remote/scripts/validation/run-responsive-stack-es4.sh'" || status=$?
+            mkdir -p results
+            rsync -az "$host:$remote/results/" results/ || status=1
+            exit "$status"
+          '''
+        }
+      }
+    }
+  }
+  post { always { archiveArtifacts artifacts:'responsive-generated/results/**,responsive-generated/bundle/source-identities.json,responsive-generated/bundle/manifest.sha256',allowEmptyArchive:true } }
+}
