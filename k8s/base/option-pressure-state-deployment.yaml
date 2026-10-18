@@ -77,9 +77,14 @@ spec:
   #     flag - and 1 and 3 at the NEW one, which is what establishes that the replacement image
   #     actually reads the flag rather than merely being newer:
   #     `for c in d6a7d010980a e0274feaf6b2; do for v in OPB_L1_ENABLED L1_CONTRIB_SINK; do git show $c:option-price-behavior-service/src/main/java/app/pricebehavior/OptionPriceBehaviorStreams.java | grep -c "$v"; done; done`
-  #     The new production image is tag prod-1927-e0274feaf6b2, whose suffix is that commit; the
-  #     registry listing for options-edge-option-price-behavior shows it alongside the old
-  #     prod-1650-d6a7d010980a.
+  #     What that loop proves is that the SOURCE REVISION reads the flag. The link from revision to
+  #     deployed image is the tag convention - the suffix of a per-build tag is the commit - so,
+  #     checked 2026-10-18:
+  #     `curl -s http://192.168.100.252:5000/v2/options-edge-option-price-behavior/tags/list`
+  #     returns {"name":"options-edge-option-price-behavior","tags":["prod","prod-1650-d6a7d010980a","prod-1927-e0274feaf6b2"]}
+  #     - the new prod-1927-e0274feaf6b2 beside the old prod-1650-d6a7d010980a. That the image was
+  #     BUILT from that commit rests on the pipeline's tagging, which neither this repository nor the
+  #     registry listing proves on its own; the Jenkins build is 1927.
   #
   # THE EVIDENCE FOR THE OFFSET CLAIM BELOW lives here too, so the three files that mention it can
   # point at one copy instead of repeating it - which is how four copies of an earlier note drifted

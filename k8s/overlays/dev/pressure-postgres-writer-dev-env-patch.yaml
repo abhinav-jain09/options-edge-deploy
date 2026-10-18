@@ -29,10 +29,12 @@
 # actionable=false: the table is a descriptive record for calibration, and nothing may trade on a
 # row in it.
 #
-# Production is NOT changed. Its reader would have nothing to read - checked 2026-10-18,
-# `ssh abhinav@192.168.100.252 'kubectl -n options-edge get deploy option-pressure-state-service'`
-# returns NotFound, so the producer is not deployed there at all - and enabling the producer side is
-# gated on measuring option-price-behavior's per-trade cost under exactly-once; see services.yaml.
+# PRODUCTION RUNS THIS READER TOO, through its own twin of this patch
+# (k8s/overlays/production/pressure-postgres-writer-prod-env-patch.yaml). An earlier version of this
+# paragraph said production was not changed and that enabling it was gated on a throughput
+# measurement; that is no longer true and the statement is replaced rather than left to contradict
+# the production patch beside it. What production needed, and the risk that came with enabling it,
+# are stated ONCE in k8s/base/option-pressure-state-deployment.yaml.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

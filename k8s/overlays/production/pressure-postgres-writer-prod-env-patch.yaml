@@ -11,11 +11,15 @@
 #
 # The other three writers are switched off because they would not idle. Their producer is held down -
 # directional-pressure-service is in both production hold-down lists - but each would act on its
-# first tick, which is verifiable in options-edge-processing rather than here. At commit
-# e0274feaf6b2, `git grep -c ensureTopic -- pressure-postgres-writer/src/main/java/app/kafka/DirectionalPressurePostgresWriter.java`
-# returns 1 (it would CREATE options.ibkr.directional-pressure), and
-# `git grep -c 'create table if not exists' -- pressure-postgres-writer/src/main/java/app/kafka/DirectionalPressureOutcomeWriter.java pressure-postgres-writer/src/main/java/app/kafka/DirectionalPressureThresholdCalibrator.java`
-# returns 1 for each. Creating a topic and three tables as a side effect of enabling an unrelated
+# first tick, which is verifiable in options-edge-processing rather than here - and the REVISION must
+# be in the command or it reports whatever is checked out. On 2026-10-18:
+#   git grep -c ensureTopic e0274feaf6b2 -- pressure-postgres-writer/src/main/java/app/kafka/DirectionalPressurePostgresWriter.java
+#     -> e0274feaf6b2:pressure-postgres-writer/src/main/java/app/kafka/DirectionalPressurePostgresWriter.java:1
+#        (that call would CREATE options.ibkr.directional-pressure)
+#   git grep -c 'create table if not exists' e0274feaf6b2 -- pressure-postgres-writer/src/main/java/app/kafka/DirectionalPressureOutcomeWriter.java pressure-postgres-writer/src/main/java/app/kafka/DirectionalPressureThresholdCalibrator.java
+#     -> one `<rev>:<path>:1` line for each of the two files
+# git grep -c prints `<rev>:<path>:<count>`, not a bare count, which is why the outputs are quoted
+# in that shape. Creating a topic and three tables as a side effect of enabling an unrelated
 # reader is the kind of change nobody looks for later. Turning any of them on is a separate decision
 # with its own reason.
 #
