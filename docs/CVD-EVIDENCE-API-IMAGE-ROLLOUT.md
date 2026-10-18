@@ -4,8 +4,11 @@
 and the newest successful current-main contracts release, using one fixed dev
 or production architecture and registry. There is no version or source selector.
 The ordinary Python suite runs inside the final image before publication, with
-512 MiB, no extra swap, one CPU, 128 tasks and a two-minute limit. Build and
-publish commands have finite deadlines and 8 MiB log limits. Publication must
+512 MiB, no extra swap, one CPU, 128 tasks and a two-minute client limit. A 110-second controller inside the named test
+container bounds the test even if its client disappears. Failed, timed out or
+log-limited tests trigger a bounded ownership-label check and kill only that
+exact container ID. The shared builder is never stopped or removed. Build and
+publish clients have finite deadlines and 8 MiB log limits. Publication must
 produce the exact image configuration tested; the immutable digest and source
 provenance are archived only after that check. Failed or running latest builds
 never fall back to a previous release.
@@ -21,7 +24,8 @@ Both architectures receive their own image build and final-image tests.
 This path avoids the existing API deployment pipeline, whose production apply
 starts the service and manages authentication configuration. The new job has no
 schedule or trigger. It runs on the primary build Mac; 192.168.100.201 is outside
-scope. Fresh source/cache staging is preserved within count/file/byte budgets;
+scope. Only the API directory is checked out from processing main; unrelated tracked
+symlinks stay outside the worktree. Fresh source/cache staging is preserved within count/file/byte budgets;
 no recursive filesystem deletion is introduced. Reaching a budget refuses a
 new build rather than discarding old evidence.
 

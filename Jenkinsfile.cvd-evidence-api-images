@@ -29,7 +29,7 @@ pipeline {
         timeout(time: 10, unit: 'MINUTES') {
           sh 'PERMITTED_SHA="${PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored .jenkins-tmp'
         }
-        sh 'PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests.test_cvd_evidence_api_image tests.test_es4_pinned_image tests.test_cvd_reader_image'
+        sh 'PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests.test_cvd_evidence_api_image tests.test_es4_pinned_image tests.test_cvd_reader_image tests.test_cvd_component_source_proof'
         timeout(time: 10, unit: 'MINUTES') {
           sh 'PERMITTED_SHA="${PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored .jenkins-tmp'
         }

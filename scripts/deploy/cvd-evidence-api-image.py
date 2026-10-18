@@ -45,7 +45,7 @@ def staging(build):
     if len(old)>=64:raise ValueError('Preserved API staging count full')
     count=0;size=0
     for root in old:
-        if root.is_symlink():raise ValueError('Symbolic API staging entry')
+        if root.is_symlink() or not root.is_dir():raise ValueError('Regular API staging directory required')
         for path in root.rglob('*'):
             count+=1
             if path.is_symlink():raise ValueError('Symbolic API staging entry')
@@ -53,23 +53,43 @@ def staging(build):
             if count>131072 or size>3<<30:raise ValueError('Preserved API staging budget full')
     root=parent/('evidence-api-'+build);root.mkdir();return root
 
+def prepare_source(root,source):
+    checkout=root/'processing'
+    command('git','clone','--no-checkout','--depth=1','--single-branch','--branch','main',PROCESSING,str(checkout),timeout=90)
+    if command('git','-C',str(checkout),'rev-parse','HEAD').strip()!=source:raise ValueError('Processing main moved during source capture')
+    command('git','-C',str(checkout),'sparse-checkout','set','--no-cone','/trade-evidence-api/',timeout=30)
+    command('git','-C',str(checkout),'checkout','main',timeout=30)
+    if any(line.startswith('120000 ') for line in command('git','-C',str(checkout),'ls-tree','-r','HEAD','--','trade-evidence-api').splitlines()):raise ValueError('Symbolic API build inputs refused')
+    command('git','-C',str(checkout),'diff','--exit-code','HEAD','--',timeout=15)
+    if command('git','-C',str(checkout),'status','--porcelain','--untracked-files=all',timeout=15).strip():raise ValueError('Fresh API source is dirty')
+    return checkout
+
+
+def cleanup_test(name,owner):
+    template='{{.Id}}|{{index .Config.Labels "com.optionsedge.cvd-evidence-api-test"}}'
+    try:value=command('docker','container','inspect','--format',template,name,timeout=10).strip()
+    except subprocess.CalledProcessError as error:
+        text=(error.stderr or '').lower()
+        if ('no such container: '+name in text) or ('no such object: '+name in text):return
+        raise
+    fields=value.split('|')
+    if len(fields)!=2 or not re.fullmatch('[0-9a-f]{64}',fields[0]) or fields[1]!=owner:raise ValueError('Refusing cleanup of a foreign test container')
+    command('docker','kill',fields[0],timeout=10)
+
+
 def build_image(environment,build,reader):
     target=reader.TARGETS[environment];root=staging(build);source=current()
     receipt={'status':'PREPARING','deploymentSource':os.environ['PERMITTED_SHA'],'processingSource':source,'environment':environment,'build':int(build),'runtimeDeployed':False}
     def save():(root/'build-receipt.json').write_text(json.dumps(receipt,indent=2)+'\n')
     save()
     try:
-        checkout=root/'processing'
-        command('git','clone','--depth=1','--single-branch','--branch','main',PROCESSING,str(checkout),timeout=90)
-        if command('git','-C',str(checkout),'rev-parse','HEAD').strip()!=source:raise ValueError('Processing main moved during source capture')
-        command('git','-C',str(checkout),'diff','--exit-code','HEAD','--',timeout=15)
-        if command('git','-C',str(checkout),'status','--porcelain','--untracked-files=all',timeout=15).strip():raise ValueError('Fresh API source is dirty')
+        checkout=prepare_source(root,source)
         sdk=load('api_sdk',Path(__file__).parents[1]/'jenkins/fetch-canonical-contracts.py')
         contracts=root/'contracts';contracts.mkdir();sdk.latest(os.environ['JENKINS_URL'],root/'contracts-source',contracts/'contracts.jar')
         release=json.loads((contracts/'contracts.release.json').read_text())
         if release['source']!=reader.sdk_main():raise ValueError('SDK main changed during source capture')
         tag=('dev' if environment=='dev' else 'prod')+'-'+build+'-'+source[:12]
-        push_registry='127.0.0.1:5001' if environment=='dev' else '192.168.100.252:5000'
+        push_registry='192.168.100.102:5001' if environment=='dev' else '192.168.100.252:5000'
         image=push_registry+'/'+REPO+':'+tag
         command('docker','buildx','inspect','options-edge-builder')
         args=['docker','buildx','build','--builder','options-edge-builder','--platform',target['platform'],'--provenance=false',
@@ -78,8 +98,17 @@ def build_image(environment,build,reader):
         context=str(checkout/'trade-evidence-api')
         docker_step([*args,'--load',context],root,'build',900)
         receipt['status']='IMAGE_BUILT';save()
-        docker_step(['docker','run','--rm','--platform',target['platform'],'--memory=512m','--memory-swap=512m','--cpus=1','--pids-limit=128',
-                '-e','TRADE_API_TEST=1','-e','TRADE_API_AUTH_REQUIRED=false',image,'python','-m','pytest','-q','tests','-p','no:cacheprovider'],root,'tests',120)
+        test_name='cvd-evidence-api-test-'+environment+'-'+build
+        owner=os.environ['PERMITTED_SHA']+'-'+environment+'-'+build
+        if command('docker','container','ls','--all','--filter','name=^/'+test_name+'$','--format','{{.Names}}').strip():raise ValueError('Test container name already exists')
+        controller='import subprocess,sys; sys.exit(subprocess.run([sys.executable,"-m","pytest","-q","tests","-p","no:cacheprovider"],timeout=110).returncode)'
+        try:
+            docker_step(['docker','run','--rm','--pull=never','--name',test_name,'--label','com.optionsedge.cvd-evidence-api-test='+owner,
+                '--platform',target['platform'],'--memory=512m','--memory-swap=512m','--cpus=1','--pids-limit=128',
+                '-e','TRADE_API_TEST=1','-e','TRADE_API_AUTH_REQUIRED=false',image,'python','-c',controller],root,'tests',120)
+        except BaseException:
+            cleanup_test(test_name,owner)
+            raise
         tested=command('docker','image','inspect',image,'--format','{{.Id}}').strip()
         if not re.fullmatch('sha256:[0-9a-f]{64}',tested):raise ValueError('Tested image config digest missing')
         if current()!=source or reader.sdk_main()!=release['source']:raise ValueError('Source main changed before publication')
@@ -111,7 +140,7 @@ def select_release(environment,rows,read,reader):
     if proof.get('format')!=1 or proof.get('status')!='PASS' or proof.get('runtimeDeployed') is not False or proof.get('build')!=row['number'] or proof.get('deploymentSource')!=params.get('PERMITTED_SHA') or proof.get('guardVersion')!=GUARD:
         raise ValueError('API release build/guard provenance differs')
     if proof.get('environment')!=environment or proof.get('platform')!=target['platform'] or proof.get('contractsSource')!=reader.sdk_main():raise ValueError('API release target or current SDK differs')
-    if not all(re.fullmatch('(?:sha256:)?[0-9a-f]{64}',proof.get(key,'')) for key in ['contractsJarSha256','testedConfigDigest']):raise ValueError('API byte/config digest provenance missing')
+    if not re.fullmatch('[0-9a-f]{64}',proof.get('contractsJarSha256','')) or not re.fullmatch('sha256:[0-9a-f]{64}',proof.get('testedConfigDigest','')):raise ValueError('API byte/config digest provenance missing')
     prefix='dev' if environment=='dev' else 'prod';expected=target['registry']+'/'+REPO+':'+prefix+'-'+str(row['number'])+'-'+source[:12]+'@sha256:'
     image=proof.get('image','')
     if not image.startswith(expected) or not re.fullmatch('[0-9a-f]{64}',image[len(expected):]):raise ValueError('API image is not bound to this release')

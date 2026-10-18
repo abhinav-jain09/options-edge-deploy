@@ -14,7 +14,7 @@ COMPONENTS=('processing-common','canonical-topic-mirror','es-cvd-service','es-fo
 'es-open-direction-service','es-open-direction-postgres-writer','es-spx-align-service','es-compression-expansion-service',
 'level-absorption-service','close-direction-service')
 EXTRA=('trade-evidence-api',)
-NON_RUNTIME={'docs/indicator-service/INDICATOR-AVRO-CONVERSION-PLAN.md','tests/test_processing_image_lock_coverage.py'}
+NON_RUNTIME={'docs/market-read/MARKET-READ-REQUIREMENT.md','docs/indicator-service/INDICATOR-AVRO-CONVERSION-PLAN.md','tests/test_processing_image_lock_coverage.py'}
 NS='{http://maven.apache.org/POM/4.0.0}'
 DEADLINE=None
 
@@ -119,7 +119,7 @@ def compare(repo,qualified,current):
     return {'qualifiedSource':qualified,'currentMainSource':current,'componentTrees':trees,
         'parentModelSha256':hashlib.sha256(parent_model(xml(blob(repo,current,'pom.xml')))).hexdigest(),
         'existingPomCount':len(prior),'newUnreferencedModules':added,'unrelatedChangedPaths':changed,
-        'scope':'identical CVD implementation/dependency trees and existing build models; only unrelated module sources, two named operational files, and simple unreferenced module additions differ'}
+        'scope':'identical CVD implementation/dependency trees and existing build models; only unrelated module sources, named operational files, and simple unreferenced module additions differ'}
 
 def prove(qualified,current):
     global DEADLINE
