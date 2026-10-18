@@ -40,6 +40,7 @@ images:
   databento-volume-aggregator: 192.168.100.252:5000/options-edge-databento-volume-aggregator:prod
   option-price-behavior-service: 192.168.100.252:5000/options-edge-option-price-behavior:prod
   option-pressure-state-service: 192.168.100.252:5000/options-edge-option-pressure-state:prod
+  breakout-sequencer-service: 192.168.100.252:5000/options-edge-breakout-sequencer:prod
   volume-pace-databento-service: 192.168.100.252:5000/options-edge-volume-pace:prod
   gex-delta-redis-writer: 192.168.100.252:5000/options-edge-gex-delta-redis-writer:prod
   es-open-direction-service: 192.168.100.252:5000/options-edge-es-open-direction:prod
