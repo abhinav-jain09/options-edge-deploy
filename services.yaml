@@ -288,11 +288,14 @@ services:
   # repository: there was no ENVIRONMENT=production image of this service at all (the registry
   # returned NAME_UNKNOWN for the repository itself, not merely a missing :prod tag), and
   # production's option-price-behavior image, built 2026-09-22 as prod-1650-d6a7d010980a, contained
-  # no L1 sink - so OPB_L1_ENABLED alone would have been inert. Rolling that image forward also
-  # closes a drift worth knowing about: production's manifest had been declaring
-  # OPB_CALIBRATION_STATUS and OPB_MODEL_VERSION to a binary that read NEITHER, so the numeric
-  # tuning applied but the calibration-status gate and the model-version stamp were inert for about
-  # a month while the config claimed otherwise.
+  # no L1 sink - so OPB_L1_ENABLED alone would have been inert.
+  #
+  # A CLAIM WITHDRAWN, because the correction is worth more than the claim was. An earlier version of
+  # this comment said rolling OPB's image forward would also close a drift, since production declares
+  # OPB_CALIBRATION_STATUS and OPB_MODEL_VERSION to a binary that reads neither. Checking it found
+  # the conclusion wrong: those two are read NOWHERE, at the new commit as well as the old, in any
+  # repository - both environments declare two values no code consumes. The command and its output
+  # are in k8s/base/option-pressure-state-deployment.yaml with the rest of the external checks.
   #
   # THE RISK. OPB_L1_ENABLED adds a per-trade sink forward inside option-price-behavior's
   # exactly-once transaction. Compare the 2026-07-14 incident recorded in
@@ -319,8 +322,10 @@ services:
   # cannot make; re-run them rather than trusting these lines.
   #
   # ITS READER. pressure-postgres-writer consumes option-pressure-state-evidence into
-  # option_pressure_state_frame, in both environments, and it is the ONLY subscriber this surface has
-  # ever had. Only that one of its four writers is enabled; see the per-environment env patches.
+  # option_pressure_state_frame, in both environments, and it is the only consumer group this surface
+  # has - the command behind that, and the limit of what a group listing can prove about history, are
+  # in k8s/base/option-pressure-state-deployment.yaml. Only that one of its four writers is enabled;
+  # see the per-environment env patches.
   # It provisions its own topics with declared retention; see
   # docs/option-price-behavior/L1-PRESSURE-STATE-CAPACITY.md in options-edge-processing for the
   # measured per-session volume, which was measured on the JSON bodies and is now an upper bound.
