@@ -26,26 +26,32 @@ set -euo pipefail
 usage() {
   echo "usage: roll-forward-underlying-spx-price.sh --recreate|--verify --cluster dev|production --pre-cutover-id <id> \\" >&2
   echo "         [--new-topic-id <id>   (REQUIRED for --verify: the id --recreate printed)] \\" >&2
+  echo "         [--avro-feed-live --json-writers-stopped   (INSTEAD of --writers-and-readers-stopped: the AVRO feed is writing, readers are rolling; the operator attests no JSON writer is live)] \\" >&2
   echo "         [--topic-absent-after-failed-create   (ONLY to finish a --recreate whose delete succeeded but whose create failed)] \\" >&2
-  echo "         --writers-and-readers-stopped <bootstrap-servers> [kafka-bin-dir]" >&2
+  echo "         --writers-and-readers-stopped (strict mode) <bootstrap-servers> [kafka-bin-dir]" >&2
   exit 2
 }
 PHASE="${1:-}"
 case "$PHASE" in --recreate|--verify) ;; *) usage ;; esac
 shift
-CLUSTER=""; PRE_ID=""; NEW_ID=""; STOPPED=""; ABSENT_OK=""; POS=()
+CLUSTER=""; PRE_ID=""; NEW_ID=""; STOPPED=""; JSON_STOPPED=""; ABSENT_OK=""; AVRO_LIVE=""; POS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --cluster) CLUSTER="${2:-}"; shift 2 ;;
     --pre-cutover-id) PRE_ID="${2:-}"; shift 2 ;;
     --new-topic-id) NEW_ID="${2:-}"; shift 2 ;;
     --writers-and-readers-stopped) STOPPED=yes; shift ;;
+    --json-writers-stopped) JSON_STOPPED=yes; shift ;;
     --topic-absent-after-failed-create) ABSENT_OK=yes; shift ;;
+    --avro-feed-live) AVRO_LIVE=yes; shift ;;
     *) POS+=("$1"); shift ;;
   esac
 done
 case "$CLUSTER" in dev|production) ;; *) usage ;; esac
-[ -n "$PRE_ID" ] && [ "$STOPPED" = yes ] || usage
+[ -n "$PRE_ID" ] || usage
+# The attestation must say what is TRUE of the mode: strict = every writer AND reader is stopped; --avro-feed-live = the AVRO feed
+# (and still-rolling readers) are live, and the operator attests that NO JSON WRITER (the pre-cutover feed pod) is.
+if [ "$AVRO_LIVE" = yes ]; then [ "$JSON_STOPPED" = yes ] && [ "$STOPPED" != yes ] || usage; else [ "$STOPPED" = yes ] && [ "$JSON_STOPPED" != yes ] || usage; fi
 # --verify must name the topic that --recreate printed: "a different id from the old one" proves nothing about WHICH topic it is.
 if [ "$PHASE" = "--verify" ]; then [ -n "$NEW_ID" ] || usage; elif [ -n "$NEW_ID" ]; then usage; fi
 BS="${POS[0]:-}"; [ -n "$BS" ] || usage
@@ -129,18 +135,46 @@ rf_split_declared "$CONFIGS" | while IFS='=' read -r k want; do
   have="$(rf_config_value "$DESC" "$k")"
   [ "$have" = "$want" ] || { echo "FAIL: $TOPIC $k is '$have', declared '$want'" >&2; exit 1; }
 done
-# The recreated topic must be EMPTY: a feed that was not actually stopped would already have written into it (log end > 0).
 GO="$(rf_resolve_cli_named kafka-get-offsets "$BIN")"
 ENDS="$("$GO" --bootstrap-server "$BS" --topic "$TOPIC" --time -1 2>&1)" || { echo "FAIL: cannot read end offsets of $TOPIC:" >&2; printf '%s\n' "$ENDS" >&2; exit 1; }
-[ "$(printf '%s\n' "$ENDS" | awk -F: -v t="$TOPIC" '$1 == t {n++; if ($3 != 0) bad++} END {print (n == '"$PARTITIONS"' && bad == 0) ? "empty" : "not-empty"}')" = empty ] \
-  || { echo "FAIL: $TOPIC is not empty (or its partitions could not be read): $ENDS — a writer is live; stop it and run --recreate again" >&2; exit 1; }
+END_OFFSET="$(printf '%s\n' "$ENDS" | awk -F: -v t="$TOPIC" '$1 == t {n++; e = $3} END {print (n == '"$PARTITIONS"') ? e : "unreadable"}')"
+case "$END_OFFSET" in unreadable|"") echo "FAIL: end offsets of $TOPIC could not be read: $ENDS" >&2; exit 1 ;; esac
+if [ "$AVRO_LIVE" = yes ]; then
+  # Jenkins cannot stop the feed, so the AVRO feed is writing while the topic is recreated (the order the 2026-10-18 roll-forward
+  # settled on: the Avro writer first, then the wipe). Emptiness is therefore not required; what is required is that nothing in
+  # the log is JSON: the first and the last record must be Confluent-framed Avro (or a tombstone). A sample, not a scan; the
+  # guarantee that no JSON writer exists is the old feed pod being gone (runbook step 4), which the operator asserts.
+  if [ "$END_OFFSET" -gt 0 ]; then
+    CC="$(rf_resolve_cli_named kafka-console-consumer "$BIN")"
+    EARLIEST="$("$GO" --bootstrap-server "$BS" --topic "$TOPIC" --time -2 2>&1 | awk -F: -v t="$TOPIC" '$1 == t {e = $3} END {print e}')"
+    case "$EARLIEST" in ''|*[!0-9]*) echo "FAIL: cannot read the earliest offset of $TOPIC" >&2; exit 1 ;; esac
+    for off in "$EARLIEST" "$((END_OFFSET - 1))"; do
+      rc=0; rf_wire_is_avro "$CC" "$BS" "$TOPIC" 0 "$off" || rc=$?
+      # fail CLOSED: only an explicit Avro (or tombstone) verdict passes; "not Avro" and "could not be read" both stop the run
+      [ "$rc" -eq 0 ] || { echo "FAIL: the record at offset $off of $TOPIC is not verifiably Avro (verdict $rc: 1 = not Avro, a JSON writer is live; 2 = unreadable). Resolve it and run --recreate again." >&2; exit 1; }
+    done
+  fi
+elif [ "$END_OFFSET" != 0 ]; then
+  echo "FAIL: $TOPIC is not empty (end offset $END_OFFSET): a writer is live; stop it and run --recreate again (or, if the AVRO feed is the live writer, pass --avro-feed-live)" >&2
+  exit 1
+fi
 
 # Committed offsets are keyed by topic NAME. Deleting the topic removes them from the (stopped) groups, but that is a broker
 # behaviour, so it is verified, not assumed: a group that kept an offset for the name would resume beyond the new log end and
 # silently skip the first Avro records.
 GROUPS_OUT="$("$KG" --bootstrap-server "$BS" --describe --all-groups 2>&1)" || { echo "FAIL: cannot read consumer groups on $BS:" >&2; printf '%s\n' "$GROUPS_OUT" >&2; exit 1; }
-STALE="$(printf '%s\n' "$GROUPS_OUT" | awk -v t="$TOPIC" '$2 == t && $4 ~ /^[0-9]+$/ {print $1 ":" $3 "@" $4}')"
-if [ -n "$STALE" ]; then
+# Strict mode: ANY committed offset is stale. With the Avro feed (and still-rolling readers) live, an offset INSIDE the new log is
+# legitimate (a reader committed its position in the recreated topic); only an offset BEYOND the log end is the stale one.
+STALE="$(printf '%s\n' "$GROUPS_OUT" | awk -v t="$TOPIC" -v live="$AVRO_LIVE" '$2 == t && $4 ~ /^[0-9]+$/ && (live != "yes" || $4 + 0 > $5 + 0) {print $1 ":" $3 "@" $4 " (log end " $5 ")"}')"
+if [ -n "$STALE" ] && [ "$AVRO_LIVE" = yes ]; then
+  # With readers still rolling (Jenkins cannot stop them) a group cannot be made inactive on demand. A regular consumer whose offset is
+  # beyond the log end resets by its auto.offset.reset policy on its first poll; the cases that do not (a Streams GLOBAL store) are handled
+  # in the reader (checkpoint discarded) and the per-reader gate is runbook step 8. So here it is reported, and step 8 decides.
+  # The topic is a latest-value spot stream (each record supersedes the last), so a reader resuming at an in-range offset that was
+  # committed before the recreation skips at most the first few records of the new log and loses no information.
+  echo "WARN: consumer groups with a committed offset BEYOND the new log end (group:partition@offset): they reset on first poll; runbook step 8 verifies each reader:" >&2
+  printf '%s\n' "$STALE" >&2
+elif [ -n "$STALE" ]; then
   echo "FAIL: consumer groups still hold committed offsets for $TOPIC (group:partition@offset):" >&2
   printf '%s\n' "$STALE" >&2
   echo "      DELETE them (kafka-consumer-groups --delete-offsets --group <g> --topic $TOPIC, or delete the stopped group) before any reader starts;" >&2
