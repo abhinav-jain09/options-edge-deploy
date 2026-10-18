@@ -280,23 +280,36 @@ services:
   # producer is enabled first and this follows it. Dev is turned on by
   # k8s/overlays/dev/option-pressure-state-dev-enable-patch.yaml.
   #
-  # PRODUCTION is still at replicas 0 from the base with OPTION_PRESSURE_ENABLED=false, and what
-  # actually holds it there is that no production image is built: its INSTALLED morning-autostart.sh
-  # does not carry this service's KEEP_DOWN entry (see the base manifest's note), and the
-  # repository's KEEP_DOWN entries are kept so that installing that copy would hold it. Dev is
-  # unaffected by them because neither of those scripts is scheduled there. Enabling production
+  # PRODUCTION is still at replicas 0 from the base with OPTION_PRESSURE_ENABLED=false. Enabling it
   # needs TWO things that are not done, and neither is a formality:
-  #   1. A production image, which means an ENVIRONMENT=production build of
-  #      options-edge-option-pressure-state.
+  #   1. A production image. There is no ENVIRONMENT=production build of this service, and the image
+  #      does not merely lack the :prod tag — the whole repository is unknown to the production
+  #      registry. Checked OUTSIDE this repository on 2026-10-18:
+  #      `curl http://192.168.100.252:5000/v2/options-edge-option-pressure-state/tags/list` returns
+  #      NAME_UNKNOWN. This repository cannot establish that by itself; re-check it rather than
+  #      trusting this line.
   #   2. A judgement about the PRODUCER, not this service. OPB_L1_ENABLED adds a per-trade sink
-  #      forward inside option-price-behavior's exactly-once transaction, and that service has a
+  #      forward inside option-price-behavior's exactly-once transaction. That service has a
   #      documented production incident — 2026-07-14, recorded in
   #      k8s/overlays/production/option-price-behavior-prod-patch.yaml — where added per-trade
   #      multi-key work under exactly-once wedged its SESSION thread into CONCURRENT_TRANSACTIONS and
-  #      froze ALL OPB output for about an hour during RTH. The gateway and the web option price
-  #      behavior page read that output. Dev has run with OPB_L1_ENABLED since 2026-10-17 with zero
-  #      restarts, but dev has had no live option feed in that window, so there is no throughput
-  #      evidence yet. Measure it on a real dev session first.
+  #      froze ALL OPB output for about an hour during RTH, and the gateway and the web option price
+  #      behavior page read that output. That L1 is the SAME class of change is an inference from
+  #      both being per-trade work inside that transaction, not something either repository records;
+  #      weigh it as an inference. Dev has run with OPB_L1_ENABLED since 2026-10-17 with zero
+  #      restarts, but every pressure topic on dev still reads log end offset 0, so dev has had no
+  #      live option feed in that window and that restart count is not throughput evidence. Measure a
+  #      real dev session first.
+  #
+  # DO NOT read the missing image as a safety hold. It is not one. The repository's KEEP_DOWN entries
+  # in scripts/ops/morning-autostart.sh and scripts/ops/oe-boot-bringup.sh would hold this service,
+  # but production does not run those copies: checked on 2026-10-18, the installed
+  # ~/oe-ops/morning-autostart.sh on 192.168.100.252 contains NO occurrence of
+  # option-pressure-state-service, and ~/oe-ops/oe-boot-bringup.sh is not installed there at all.
+  # Those are external facts this repository cannot verify. So if that autostart runs before an image
+  # exists it will scale this Deployment to 1 and leave a pod in ImagePullBackOff — a visibly broken
+  # pod, not replicas 0. Build the image as part of enabling production, not before. Dev is
+  # unaffected by any of this because neither script is scheduled there.
   # It provisions its own topics with declared retention; see
   # docs/option-price-behavior/L1-PRESSURE-STATE-CAPACITY.md in options-edge-processing for the
   # measured per-session volume, which was measured on the JSON bodies and is now an upper bound.

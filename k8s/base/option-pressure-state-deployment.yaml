@@ -16,12 +16,15 @@ spec:
   # OPTION_PRESSURE_ENABLED=true. The PRODUCER must be deployed first, because it is what creates
   # the input topic and Kafka Streams refuses to start a topology whose source topic is absent.
   # Production therefore stays at zero from this file, and no production image is built for it.
-  # NOTE, checked 2026-10-17 rather than assumed: production's INSTALLED
-  # ~/oe-ops/morning-autostart.sh does NOT carry the KEEP_DOWN entry this repository added for this
-  # service, and ~/oe-ops/oe-boot-bringup.sh is not installed there at all. That script scales every
-  # deployment it does not hold down to one replica, so once a production image exists it would
-  # start this service inert rather than leave it absent. Installing this repository's copy is what
-  # would actually hold it; until then what holds production is that there is no image to pull.
+  # NOTE, checked outside this repository on 2026-10-17 and again on 2026-10-18 rather than assumed:
+  # production's INSTALLED ~/oe-ops/morning-autostart.sh contains NO occurrence of
+  # option-pressure-state-service, so it does NOT carry the KEEP_DOWN entry this repository added,
+  # and ~/oe-ops/oe-boot-bringup.sh is not installed there at all. That script scales every
+  # deployment it does not hold down to one replica. CORRECTED: an earlier version of this note said
+  # that the absent image is what holds production. It is not a hold. With no image in the registry
+  # the scale-up would leave a pod in ImagePullBackOff - a visibly broken pod, not replicas 0 - and
+  # once an image DID exist the same scale-up would start this service inert. Installing this
+  # repository's copy of the script is the only thing here that would actually hold it.
   # The topics are provisioned by the services themselves at startup, with declared retention rather
   # than the platform default of infinite: contributions 4 days, symbol rekey 2 days, evidence
   # 3 days, and the head topic compacted. Measured on a real session of 944,068 contributions that is
@@ -39,12 +42,16 @@ spec:
   # thresholds are the p95 and p90 of |level| over 5,504,676 GOOD seconds of the 251-session corpus,
   # replacing a seed that fired on 34.5% of all seconds. The strike thresholds remain seeds.
   #
-  # Enabling production is not just a replica count. It needs an ENVIRONMENT=production image, and it
-  # needs OPB_L1_ENABLED on option-price-behavior, which adds a per-trade sink forward inside that
-  # service's exactly-once transaction — the same class of change as the 2026-07-14 incident recorded
-  # in k8s/overlays/production/option-price-behavior-prod-patch.yaml, which froze all OPB output for
-  # about an hour during RTH and is read by the gateway and the web page. Measure the throughput on a
-  # real dev session before enabling it here.
+  # Enabling production is not just a replica count. It needs an ENVIRONMENT=production image - as of
+  # 2026-10-18 the production registry does not know this repository at all, not merely the :prod tag
+  # - and it needs OPB_L1_ENABLED on option-price-behavior, which adds a per-trade sink forward
+  # inside that service's exactly-once transaction. Compare the 2026-07-14 incident recorded in
+  # k8s/overlays/production/option-price-behavior-prod-patch.yaml, where added per-trade multi-key
+  # work under exactly-once froze all OPB output for about an hour during RTH; the gateway and the
+  # web page read that output. Calling L1 the same class of change is an INFERENCE from both being
+  # per-trade work inside that transaction, so measure the throughput on a real dev session before
+  # enabling it here. See services.yaml for why the missing image is not a safety hold: an autostart
+  # that does not hold this service would scale it to 1 and leave ImagePullBackOff.
   replicas: 0
   # Recreate, not RollingUpdate: both engines keep RocksDB state on one ReadWriteOnce PVC under a
   # single Streams application id, and a rolling replacement can run the outgoing and incoming pod
