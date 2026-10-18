@@ -15,7 +15,11 @@ spec:
   # k8s/overlays/dev/option-pressure-state-dev-enable-patch.yaml sets replicas 1 and
   # OPTION_PRESSURE_ENABLED=true. The PRODUCER must be deployed first, because it is what creates
   # the input topic and Kafka Streams refuses to start a topology whose source topic is absent.
-  # Production therefore stays at zero from this file. THIS COMMENT IS THE ONE PLACE that states what
+  # Production therefore stays at zero from this file - and as of 2026-10-18 the Deployment is not
+  # applied on production at all: `ssh abhinav@192.168.100.252 'kubectl -n options-edge get deploy
+  # option-pressure-state-service'` returns NotFound. So the scale-up case below is what would happen
+  # AFTER a deploy puts it there, not something pending today.
+  # THIS COMMENT IS THE ONE PLACE that states what
   # does and does not hold production for this service; three other files used to restate it and had
   # drifted into contradicting each other, so they now point here instead of repeating it.
   #
