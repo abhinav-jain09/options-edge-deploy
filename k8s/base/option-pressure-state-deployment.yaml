@@ -21,8 +21,11 @@ spec:
   #
   # CORRECTED. An earlier version of this note, and the three that copied it, said the absent
   # production image is what holds production inert. That is wrong twice over:
-  #   - Nothing in this repository holds it except this file's own replicas: 0, and an autostart
-  #     scale-up overrides exactly that.
+  #   - The repository's KEEP_DOWN lists DO name this service - scripts/ops/morning-autostart.sh and
+  #     scripts/ops/oe-boot-bringup.sh both carry it - so the repository is not the problem. What is
+  #     the problem is that the PRODUCTION HOST does not run those copies (checks below), so on that
+  #     host nothing holds this service except this file's own replicas: 0, which an autostart
+  #     scale-up overrides. Reinstalling the host copies is what would turn the entries into a hold.
   #   - An absent image is not a hold. If a scale-up happens, the Deployment's desired count becomes
   #     1 and what follows depends on the node, not on this repository: the PRODUCTION RENDER sets
   #     imagePullPolicy IfNotPresent (k8s/services/option-pressure-state/overlays/production/
@@ -35,8 +38,12 @@ spec:
   # 2026-10-18 - re-run these rather than trusting the lines:
   #   - `curl http://192.168.100.252:5000/v2/options-edge-option-pressure-state/tags/list` returns
   #     NAME_UNKNOWN. The production registry does not know this repository at all, which is stronger
-  #     than a missing :prod tag. No ENVIRONMENT=production build has ever run, so no node should have
-  #     the image cached either - but that is an inference from the same check, not a node survey.
+  #     than a missing :prod tag. Separately, and because NAME_UNKNOWN says nothing about build
+  #     history: no ENVIRONMENT=production build of options-edge-processing in Jenkins' retained
+  #     history - builds 1700 to 1888, checked 2026-10-18 - targeted this image, with BUILD_TARGET
+  #     either `all` or this service. That is a bounded search of retained builds, not a claim about
+  #     all time, and it is still not a node survey: whether any node holds the image cached is
+  #     unverified here.
   #   - `grep -c option-pressure-state-service ~/oe-ops/morning-autostart.sh` on 192.168.100.252
   #     returns 0, so the INSTALLED script does not carry the KEEP_DOWN entry this repository added
   #     (also checked 2026-10-17, same result), and ~/oe-ops/oe-boot-bringup.sh is not installed
@@ -66,8 +73,8 @@ spec:
   # work under exactly-once froze all OPB output for about an hour during RTH; the gateway and the
   # web page read that output. Calling L1 the same class of change is an INFERENCE from both being
   # per-trade work inside that transaction, so measure the throughput on a real dev session before
-  # enabling it here. See services.yaml for why the missing image is not a safety hold: an autostart
-  # that does not hold this service would scale it to 1 and leave ImagePullBackOff.
+  # enabling it here. Why the missing image is NOT a safety hold is stated once, at the top of this
+  # file; do not restate it here, which is how four copies of it drifted apart.
   replicas: 0
   # Recreate, not RollingUpdate: both engines keep RocksDB state on one ReadWriteOnce PVC under a
   # single Streams application id, and a rolling replacement can run the outgoing and incoming pod

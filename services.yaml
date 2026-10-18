@@ -305,13 +305,13 @@ services:
   #      option-price-behavior-l1-contributions`). The second is why the first is not throughput
   #      evidence: there has been no traffic to survive. Measure a real dev session first.
   #
-  # DO NOT read the missing image as a safety hold. It is not one, and the full statement of what does
-  # and does not hold production lives in ONE place — k8s/base/option-pressure-state-deployment.yaml
-  # — including the dated external checks behind it. In short: nothing here holds it but that file's
-  # replicas: 0, which an autostart scale-up overrides, and the production render pulls
-  # IfNotPresent, so what a scale-up produces depends on whether the node has the image cached.
-  # Build the image as part of enabling production, not before. Dev is unaffected because neither
-  # KEEP_DOWN script is scheduled there.
+  # DO NOT read the missing image as a safety hold. It is not one. The full statement of what does and
+  # does not hold production — with the dated external checks behind it, and the distinction between
+  # this repository's KEEP_DOWN lists, which DO name this service, and the installed production
+  # copies, which do not — lives in ONE place: k8s/base/option-pressure-state-deployment.yaml. Read
+  # it there rather than trusting a summary here; four copies of this paragraph drifted into
+  # contradicting each other, which is why there is now one. Build the image as part of enabling
+  # production, not before. Dev is unaffected because neither KEEP_DOWN script is scheduled there.
   # It provisions its own topics with declared retention; see
   # docs/option-price-behavior/L1-PRESSURE-STATE-CAPACITY.md in options-edge-processing for the
   # measured per-session volume, which was measured on the JSON bodies and is now an upper bound.
