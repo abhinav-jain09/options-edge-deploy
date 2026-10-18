@@ -1,0 +1,33 @@
+# DEV-ONLY: run the breakout episode service in SHADOW.
+#
+# The base ships it inert (replicas 0). The service replays the sequenced stream (breakout.sequenced) from its first record,
+# builds strike snapshots from options.databento.gex.strike on the stream clock, runs the episode engine and publishes the frozen
+# episodes (breakout.episode), every outcome emission and alert-eligibility verdict (breakout.emission) and the feature snapshot of
+# every episode decision (breakout.features) in Avro, in transactions that also commit its stream position. Nothing it writes is
+# actionable: BREAKOUT_EP_MODE is SHADOW and the service refuses any other value (STG 05); the label and selection parameters are the
+# uncalibrated development policy and are stored with every episode; every output is quality-DEGRADED because the strike topic's
+# Kafka timestamp policy is not a verified broker append clock (DAT 10).
+# Prerequisites, all met before this patch is merged:
+#   1. The sequencer runs on this environment (deploy #1295) and its key volume breakout-sequencer-keys exists; this pod reads the
+#      sequencer's PUBLIC key from it, read-only.
+#   2. The output value schemas are registered under breakout.episode-value / breakout.emission-value / breakout.features-value
+#      (auto-registration is off); the service creates the three single-partition output topics itself (retention -1) because the
+#      nightly dev clean deletes every topic: BREAKOUT_EP_PROFILE=dev-unsecured is what permits that.
+#   3. The image options-edge-breakout-episode:dev exists in the registry (built by the service-deploy job while the base was inert).
+# Name-keyed strategic merge, deliberately.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: breakout-episode-service
+  namespace: options-edge
+spec:
+  replicas: 1
+  template:
+    spec:
+      containers:
+        - name: breakout-episode
+          env:
+            - name: BREAKOUT_EP_PROFILE
+              value: dev-unsecured
+            - name: BREAKOUT_EP_CREATE_TOPICS
+              value: "true"
