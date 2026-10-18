@@ -84,7 +84,13 @@ echo "=== roll forward on $BS (cluster $CLUSTER, phase $PHASE) ==="
 if [ "$PHASE" = "--retire-siblings" ]; then
   # The recreate phase must already have happened, or retiring the sibling would leave the old image
   # with nowhere to write AND the JSON still in the unversioned topic. Assert it, never assume it.
-  if ! "$HERE/verify-avro-rollforward.sh" --cluster "$CLUSTER" "$BS" ${BIN:+"$BIN"}; then
+  #
+  # RF_ALLOW_VERSIONED_SIBLINGS=1 is not a loosening here, it is the PREMISE of this phase: the
+  # siblings exist, which is why we are retiring them. Without it this precondition can never pass,
+  # because the barrier refuses a surviving versioned topic — exactly the state --retire-siblings is
+  # called to end. The topic-id, shape and WIRE-FORMAT checks all still apply unchanged; only the
+  # sweep for the very topics about to be deleted is suppressed.
+  if ! RF_ALLOW_VERSIONED_SIBLINGS=1 "$HERE/verify-avro-rollforward.sh" --cluster "$CLUSTER" "$BS" ${BIN:+"$BIN"}; then
     echo "FAIL: the rolled-forward topics do not verify, so the siblings are NOT retired." >&2
     echo "      Run --recreate first." >&2
     exit 1
