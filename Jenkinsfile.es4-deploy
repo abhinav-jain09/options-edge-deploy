@@ -73,6 +73,7 @@ pipeline {
   }
   options { disableRestartFromStage(); disableConcurrentBuilds(); timeout(time: params.ACTION == 'refresh-es-replay' ? 180 : 60, unit: 'MINUTES') }
   environment {
+    PYTHONDONTWRITEBYTECODE = '1'
     ES4_HOST       = 'abhinav@192.168.100.4'
     ES4_REGISTRY   = 'http://192.168.100.4:8081'
     CONTRACTS_REPO = 'git@github.com:abhinav-jain09/options-edge-contracts.git'
@@ -346,9 +347,13 @@ pipeline {
       options { timeout(time: 15, unit: 'MINUTES') }
       steps {
         timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored .jenkins-tmp --allow-ignored scripts/jenkins/__pycache__'
+        }
+        sh 'python3 -I -B scripts/jenkins/quarantine-cvd-proof-bytecode.py'
+        timeout(time: 10, unit: 'MINUTES') {
           sh 'PERMITTED_SHA="${PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored .jenkins-tmp'
         }
-        sh 'PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests.test_es4_pinned_image'
+        sh 'PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests.test_es4_pinned_image tests.test_cvd_proof_bytecode'
         sh 'python3 scripts/es4/pinned-image-rollforward.py'
       }
     }
