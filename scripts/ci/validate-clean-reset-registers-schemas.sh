@@ -19,11 +19,23 @@ STAGE="Register existing CVD schemas"
 
 # The stage's own `when` expression: the lines from the stage header to the first `steps {`. Reading only
 # that window is what makes the check specific; "clean-reset" appears many times elsewhere in the file.
+#
+# Groovy COMMENTS ARE STRIPPED FIRST. Grepping the raw text proved only that the words occur, not that
+# Jenkins evaluates them: `params.ACTION == 'other' // params.ACTION == 'clean-reset'` passed while
+# clean-reset skipped registration entirely. Stripping // and /* */ before matching means the check reads
+# the condition Jenkins actually evaluates. (A Groovy string containing "//" inside this window would be
+# truncated too; there is none, and a comment that hides the condition is the failure this must catch.)
 window=$(awk -v stage="stage('$STAGE')" '
   index($0, stage) { inside = 1 }
   inside { print }
   inside && /steps[[:space:]]*\{/ { exit }
-' "$FILE")
+' "$FILE" | python3 -c '
+import re, sys
+text = sys.stdin.read()
+text = re.sub(r"/\*.*?\*/", " ", text, flags=re.S)   # block comments, including multi-line
+text = re.sub(r"//[^\n]*", " ", text)                 # line comments
+sys.stdout.write(text)
+')
 
 [ -n "$window" ] || { echo "::error file=$FILE::no stage named \"$STAGE\" — a clean-reset would wipe the registry and register nothing"; exit 1; }
 

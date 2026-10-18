@@ -51,6 +51,12 @@ end = next(i for i, l in enumerate(lines[start:], start) if re.search(r"steps\s*
 kept = [l for l in lines[start:end] if "when" not in l and "params.ACTION" not in l]
 s = "\n".join(lines[:start] + kept + lines[end:])'
 
+run "a line-commented-out clean-reset condition is refused" "does not run for ACTION=clean-reset" \
+  's = s.replace("params.ACTION == " + q + "register-cvd-schemas" + q + " || params.ACTION == " + q + "clean-reset" + q, "params.ACTION == " + q + "register-cvd-schemas" + q + " // params.ACTION == " + q + "clean-reset" + q, 1)'
+
+run "a block-commented-out clean-reset condition is refused" "does not run for ACTION=clean-reset" \
+  's = s.replace(" || params.ACTION == " + q + "clean-reset" + q, " /* || params.ACTION == " + q + "clean-reset" + q + " */", 1)'
+
 echo
 [ "$fails" = 0 ] && { echo "all clean-reset schema-registration guard arms refuse their own violation"; exit 0; }
 echo "$fails arm(s) did not hold"; exit 1
