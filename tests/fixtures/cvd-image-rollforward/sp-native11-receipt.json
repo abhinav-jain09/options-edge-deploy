@@ -1,0 +1,13 @@
+{
+  "source": "5434fb3099f2e85e067ae0c9d8e59e672bf2fbce",
+  "sdkSource": "6aa2f00a884af24caeac7db2d3633357deb1893c",
+  "sdkSha256": "0d34bcc3bedca388f7699165f15955ff10a64c562dd0614983075588cf3de641",
+  "imageId": "sha256:4c73b304cfe613bd36816aac01fd159ced09e557ac2ce1cdecbc5a45928edcbb",
+  "imageSize": 249196925,
+  "baselineSha256": "f005cf6ecae99f6a9f80a5ab8cb0d9da214a2c4ee5ad5cd9616238df2fc0b5a2",
+  "host": "Linux es4",
+  "installed": false,
+  "agentAChanged": false,
+  "agentBChanged": false,
+  "scope": "private real broker/registry, read-only retained forecast tails, bounded cadence and aggregate cgroupCPU/RSS; not a native macOS performance guarantee"
+}
