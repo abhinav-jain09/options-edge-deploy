@@ -408,6 +408,13 @@ patches:
     target:
       kind: Deployment
       name: option-pressure-state-service
+  # DEV-ONLY: run the option pressure state READER, and only that one of this service's four
+  # writers. See the patch header for why the other three are switched off rather than left to
+  # create a topic and three tables as a side effect.
+  - path: pressure-postgres-writer-dev-env-patch.yaml
+    target:
+      kind: Deployment
+      name: pressure-postgres-writer
   # strike-intelligence §7a conflict bypass: 2-of-4 fresh agreement clears a non-opposed
   # (FAKE_VOLUME/PIN/EXHAUSTION) near-tie; opposed runner-ups still veto regardless. Dev/prod
   # parity with the production overlay (PRs #462/#463 — engine default stays 3).
