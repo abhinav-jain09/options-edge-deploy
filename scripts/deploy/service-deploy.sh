@@ -286,10 +286,17 @@ require_min_image_build || {
 # Pin EVERY container that carries the shared service image (RENDER_IMAGE0), not just
 # containers[0] — a single-container Deployment is unchanged, while a multi-container pod
 # (agent-a + agent-b) gets its sidecar pinned too instead of failing the digest-pin gate below.
+# initContainers and ephemeralContainers ARE covered: es-spx-align runs its schema-provisioning
+# init container on the service's own image, and pinning containers[] alone would have applied a
+# digest-pinned service beside an init container still on the mutable :dev/:prod tag. If that tag
+# then pointed at a different build, the init container would register one release's schemas for
+# another release's service. The containers[]-only verification below could not see it either,
+# which is why both the rewrite and the check walk all three lists — the same three the readiness
+# and image-equality checks later in this script already walk.
 PINNED_IMAGE="$PINNED_IMAGE" RENDER_IMAGE0="$RENDER_IMAGE0" yq -i \
-  "(. | select(.kind == \"Deployment\") | .spec.template.spec.containers[] | select(.image == strenv(RENDER_IMAGE0)) | .image) |= strenv(PINNED_IMAGE)" \
+  "(. | select(.kind == \"Deployment\") | .spec.template.spec | (.containers[]?, .initContainers[]?, .ephemeralContainers[]?) | select(.image == strenv(RENDER_IMAGE0)) | .image) |= strenv(PINNED_IMAGE)" \
   "$RENDER"
-unpinned="$(yq -r 'select(.kind=="Deployment") | .spec.template.spec.containers[].image' "$RENDER" \
+unpinned="$(yq -r 'select(.kind=="Deployment") | .spec.template.spec | (.containers[]?, .initContainers[]?, .ephemeralContainers[]?) | .image' "$RENDER" \
   | { grep '/options-edge-' || true; } | { grep -v '@sha256:' || true; })"
 [ -z "$unpinned" ] || { echo "FATAL: rendered image not digest-pinned: $unpinned" >&2; exit 1; }
 

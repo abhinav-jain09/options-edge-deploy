@@ -88,6 +88,26 @@ jobs:
       - name: Validate service registry (completeness + mirror + image name)
         run: scripts/ci/validate-services.sh
 
+      # es-spx-align refuses to start unless its canonical Avro subjects are already registered with
+      # exactly the released schema, and the align-schema-provision init container is what registers
+      # them. The init container and the service must agree on image and on every value that decides
+      # the subject names, and the rollout must roll BOTH to the same image — none of which is visible
+      # from one manifest, so a drift would only show as a crash-loop whose subjects look registered.
+      - name: es-spx-align schema provisioning agrees with the service it provisions for
+        run: bash scripts/ci/validate-align-schema-provisioning.sh
+
+      - name: es-spx-align schema provisioning guard refuses its own violations (mutation test)
+        run: bash scripts/ci/validate-align-schema-provisioning-test.sh
+
+      # Same defect class, other direction: ACTION=clean-reset wipes _schemas with the Kafka data, so it
+      # must register the schemas back. It did not, and the 2026-10-18 clean left context-tape-service
+      # crash-looping on a 40401 with all 18 es4 subjects gone while the build reported success.
+      - name: clean-reset registers the schemas it wipes
+        run: bash scripts/ci/validate-clean-reset-registers-schemas.sh
+
+      - name: clean-reset schema-registration guard refuses its own violations (mutation test)
+        run: bash scripts/ci/validate-clean-reset-registers-schemas-test.sh
+
       # ES Footprint G-R8: the record ceiling is ONE value across two manifests, and the relay's
       # working set lives outside the heap. Neither fact is visible from either manifest alone,
       # and both fail SILENTLY in production — a producer above the gateway's ceiling loses records
