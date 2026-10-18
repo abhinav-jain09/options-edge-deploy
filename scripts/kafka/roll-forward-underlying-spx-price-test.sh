@@ -46,6 +46,16 @@ printf 'underlying.spx.price:0:%s\n' "${MOCK_END:-0}"
 MOCK
 chmod +x "$TMP/bin/kafka-get-offsets.sh"
 
+cat > "$TMP/bin/kafka-console-consumer.sh" <<'MOCK'
+#!/usr/bin/env bash
+case "${MOCK_WIRE:-avro}" in
+  avro) printf '\000\000\000\007\310some-avro' ;;
+  json) printf '{"symbol":"SPX"}' ;;
+esac
+exit 0
+MOCK
+chmod +x "$TMP/bin/kafka-console-consumer.sh"
+
 pass=0; fail=0
 check() { if [ "$2" = "$3" ]; then pass=$((pass+1)); echo "ok    $1"; else fail=$((fail+1)); echo "FAIL  $1: expected '$3' got '$2'"; fi; }
 run() { MOCK_DIR="$TMP/state" PATH="$TMP/bin:$PATH" bash "$HERE/roll-forward-underlying-spx-price.sh" "$@" >"$TMP/out" 2>&1; echo $?; }
@@ -123,5 +133,18 @@ reset OLDID; MOCK_GROUPS='g underlying.spx.price 0 9 9 0 - - -' run "${ARGS[@]}"
 check "a failed group check still printed the new id for --verify" "$(grep -c 'NEW TOPIC ID: newid-' "$TMP/out")" 1
 reset OLDID; MOCK_END=5 run "${ARGS[@]}" >/dev/null
 check "a failed emptiness check still printed the new id for --verify" "$(grep -c 'NEW TOPIC ID: newid-' "$TMP/out")" 1
+
+# --avro-feed-live: the Avro feed is writing while the topic is recreated (Jenkins cannot stop it)
+LARGS=("${ARGS[@]}" --avro-feed-live)
+reset OLDID
+check "without --avro-feed-live a live writer (records present) fails the run" "$(MOCK_END=12 run "${ARGS[@]}")" 1
+reset OLDID
+check "with --avro-feed-live, Avro records already present are accepted" "$(MOCK_END=12 run "${LARGS[@]}")" 0
+reset OLDID
+check "with --avro-feed-live, a JSON record present still fails (a JSON writer is live)" "$(MOCK_END=12 MOCK_WIRE=json run "${LARGS[@]}")" 1
+reset OLDID
+check "with --avro-feed-live, a reader offset INSIDE the new log is legitimate" "$(MOCK_END=12 MOCK_GROUPS='g underlying.spx.price 0 7 12 5 - - -' run "${LARGS[@]}")" 0
+reset OLDID
+check "with --avro-feed-live, a reader offset BEYOND the new log end is stale and fails" "$(MOCK_END=12 MOCK_GROUPS='g underlying.spx.price 0 6505 12 0 - - -' run "${LARGS[@]}")" 1
 
 echo "passed=$pass failed=$fail"; [ "$fail" = 0 ]

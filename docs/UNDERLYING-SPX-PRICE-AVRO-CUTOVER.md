@@ -17,47 +17,51 @@ The JSON topic is "removed" by the wipe in step 4 — its removal date is the da
   loudly; there is no fallback anywhere.
 
 ## Order (one environment)
+Workloads can only be changed through Jenkins (an admission policy denies `kubectl scale`/`apply` to everyone else), and no Jenkins job scales a
+service to zero, so the readers cannot be "stopped" first. The order below is the one the 2026-10-18 roll-forward settled on instead: the
+AVRO writer first, then the wipe, then the Avro readers — so no Avro-only reader ever meets retained JSON, and the only readers that meet a
+format they cannot read are the OLD JSON readers, for the minutes before each is replaced.
 1. **Merge** contracts, then the reader PRs (processing A-D, feed-gateway, approach-monitor), then the feed and this deploy change.
    WARNING: from the first merge on, a PROD image built from main for any converted service reads Avro against the still-JSON prod
    topic. Do not build prod images of the feed or any reader until the prod cutover below.
 2. **Register** the subject on the environment's registry (before any producer):
    `SCHEMA_REGISTRY_URL=<registry> SCHEMA_FILE=<contracts>/schemas/hpsf/UnderlyingPrice.avsc scripts/kafka/ensure-underlying-price-schema.sh`
    (sha256-pinned bytes, FULL by read-back, the canonical schema must be the latest version).
-3. **Stop** the old (JSON) feed and EVERY reader of the topic (the list is in "Readers" below). Production adds two readers that are not
-   Kubernetes workloads: the **NAS archive** `*/10` spot cron (`ARCHIVE_JOB=spot`: suspend the crontab line, then confirm no `oe-archive-kafka.sh`
-   process holds the spot lock, so it cannot read or advance its checkpoint across the wipe; stopping it does NOT delete any committed offset
-   a group of its own may hold, which is what the script's group check is for) and
-   the **`spx-es4-bridge`** console-consumer|producer (stop it and keep it stopped until the decode-and-re-encode mirror replaces it). The
-   operator asserts all of this; Kafka cannot prove a writer is absent. Do not leave a pre-cutover feed running: it writes JSON into the fresh topic.
-4. **Wipe and recreate empty**. Freeze topic administration on that broker for the window (Kafka's delete takes a NAME, not a
-   TopicId; the script re-checks the id immediately before the delete but cannot exclude another administrator). With the SAME
-   `<bootstrap>` for both commands (dev: `host.docker.internal:19092`; production: `192.168.100.252:9092`):
+3. **Roll the Avro feed** (`options-edge-databento-feed-deploy`, then `service-deploy SERVICE=databento-feed`) and prove the OLD (JSON) feed pod is
+   gone: exactly one feed pod, running the new image digest. The topic now holds the retained JSON followed by Avro. A pre-cutover feed that
+   survives would write JSON into the fresh topic after step 4. Production adds two writers/readers that are not Kubernetes workloads and
+   must be stopped first: the **NAS archive** `*/10` spot cron (`ARCHIVE_JOB=spot`: suspend the crontab line, then confirm no `oe-archive-kafka.sh`
+   process holds the spot lock, so it cannot read or advance its checkpoint across the wipe) and the **`spx-es4-bridge`** console-consumer|producer
+   (stop it and keep it stopped until the decode-and-re-encode mirror replaces it).
+4. **Wipe and recreate** (retained JSON deleted, never read by an Avro reader). Freeze topic administration on that broker for the window (Kafka's
+   delete takes a NAME, not a TopicId; the script re-checks the id immediately before the delete but cannot exclude another administrator). With
+   the SAME `<bootstrap>` for both commands (dev: `host.docker.internal:19092`; production: `192.168.100.252:9092`):
    `kafka-topics --bootstrap-server <bootstrap> --describe --topic underlying.spx.price` -> note the `TopicId`, then
-   `scripts/kafka/roll-forward-underlying-spx-price.sh --recreate --cluster dev|production --pre-cutover-id <TopicId> --writers-and-readers-stopped <bootstrap> [bin-dir]`.
-   The script refuses a bootstrap that is not the named cluster's broker, refuses a topic whose id is not the pre-cutover one,
-   verifies the shape from the broker, and FAILS if any consumer group still holds a committed offset for the topic (committed
-   offsets are keyed by topic name; a surviving one would resume beyond the new log end and skip the first Avro records).
-   If the DELETE succeeded but the CREATE failed (the topic is now absent and the script said so), re-run the same command with
+   `scripts/kafka/roll-forward-underlying-spx-price.sh --recreate --cluster dev --pre-cutover-id <TopicId> --writers-and-readers-stopped --avro-feed-live <bootstrap> [bin-dir]`
+   (`--avro-feed-live` because the Avro feed is writing; without it the run also requires the topic to be empty and every committed offset to be gone).
+   The script refuses a bootstrap that is not the named cluster's broker, refuses a topic whose id is not the pre-cutover one, verifies the
+   shape (partitions, replication factor, configs) from the broker, verifies the first and last records are Confluent-framed Avro (a JSON record
+   means a JSON writer is live), and fails if any consumer group holds an offset BEYOND the new log end (an offset beyond the end would skip the first Avro
+   records; offsets inside the new log are legitimate). It prints `NEW TOPIC ID: <id>` right after reading it.
+   If the DELETE succeeded but the CREATE failed (the topic is absent and the script said so), re-run the same command with
    `--topic-absent-after-failed-create` added; an absent topic is otherwise refused, because it means somebody else deleted it.
-   If only the consumer-group check fails (the topic was already recreated, so a second `--recreate` correctly refuses the new id):
-   DELETE those stopped groups' offsets (`kafka-consumer-groups --bootstrap-server <bootstrap> --delete-offsets --group <g> --topic underlying.spx.price`, or `--delete --group <g>`; a reset to 0 still leaves a committed offset and is refused by the verifier), then run the SAME
-   command plus `--new-topic-id <the id --recreate printed as NEW TOPIC ID>` with `--verify` instead of `--recreate`, BEFORE any reader or the feed starts instead of `--recreate` (post-conditions only, no mutation) and continue at step 5.
-   Persisted reader state: a Kafka Streams GLOBAL store checkpoints the end offset of its source topic on its volume. The only
-   PVC-backed global store on this topic is `strike-flow-classifier-databento`; its spot store is in-memory in the converted
-   code, so no checkpoint can outlive the recreation. (strike-intelligence's global store sits on an emptyDir that is lost with
-   the pod.) Any other reader added later that keeps source offsets in persistent state must be reset the same way.
-5. **Deploy the Avro readers** (each `service-deploy` with `BUILD_IMAGES=true`, PERMITTED_SHA per rule) — they start on an empty topic.
-6. **Enable the Avro feed** (`options-edge-databento-feed-deploy` then `service-deploy SERVICE=databento-feed`). Verify its first
-   records decode, with the environment's registry (dev `http://host.docker.internal:8082`; production `http://192.168.100.252:8082`):
+   If only a post-check fails (the topic was already recreated, so a second `--recreate` correctly refuses the new id): fix the cause (stop the JSON writer; or
+   delete the group's offsets `kafka-consumer-groups --bootstrap-server <bootstrap> --delete-offsets --group <g> --topic underlying.spx.price`, or `--delete --group <g>`
+   for an inactive group), then run the same command with `--verify --new-topic-id <the printed id>` instead of `--recreate` (post-conditions only, no mutation).
+   Persisted reader state: a Kafka Streams GLOBAL store checkpoints the end offset of its source topic on its volume. The only PVC-backed global store on this topic
+   is `strike-flow-classifier-databento`; its spot store is in-memory in the converted code and the stale global checkpoint is discarded at every start,
+   so no checkpoint can outlive the recreation. (strike-intelligence's global store sits on an emptyDir that is lost with the pod.) Any other reader added later
+   that keeps source offsets in persistent state must be reset the same way.
+5. **Roll the Avro readers**, one `service-deploy` each (`BUILD_IMAGES=true`, PERMITTED_SHA per rule). They start on a topic that holds only Avro.
+6. **Verify the wire**, with the environment's registry (dev `http://host.docker.internal:8082`; production `http://192.168.100.252:8082`):
    `kafka-avro-console-consumer --bootstrap-server <bootstrap> --topic underlying.spx.price --partition 0 --offset earliest --max-messages 3 --property schema.registry.url=<registry> --property print.key=true`
-   (the record prints as JSON; `price`/`canonicalSpot` show as the decimal bytes). Then prove the wire framing: 
+   (the record prints as JSON; `price`/`canonicalSpot` show as the decimal bytes). Then prove the framing:
    `kafka-console-consumer --bootstrap-server <bootstrap> --topic underlying.spx.price --partition 0 --offset earliest --max-messages 1 | head -c 5 | xxd -p`
-   prints `00` followed by the 4-byte big-endian schema id (e.g. `000000004d` is id 77); convert it mechanically with `printf '%d\n' 0x<the last 8 hex digits>` (`printf '%d\n' 0x0000004d` -> 77); that id must resolve to the canonical subject:
-   `curl -s <registry>/schemas/ids/<decimal id>/versions` returns entries whose `subject` field equals `com.optionsedge.contracts.hpsf.UnderlyingPrice`. Every reader's log then
-   shows a tick.
-7. Verify each reader: its committed offset now lies in the NEW topic's offset range (`kafka-consumer-groups --describe --group <g>`), its
-   log shows a tick decoded from a known, freshly produced record (compare the offset/eventTime with the console-consumer view),
-   there are no deserialization errors, and the browser `spx-price` events are unchanged.
+   prints `00` followed by the 4-byte big-endian schema id (e.g. `000000004d` is id 77); convert it with `printf '%d\n' 0x<the last 8 hex digits>`; that id must resolve to
+   the canonical subject: `curl -s <registry>/schemas/ids/<decimal id>/versions` returns entries whose `subject` field equals `com.optionsedge.contracts.hpsf.UnderlyingPrice`.
+7. **Verify each reader**: its committed offset lies in the NEW topic's offset range (`kafka-consumer-groups --describe --group <g>`), its log shows a tick decoded
+   from a freshly produced record (compare offset/eventTime with the console-consumer view), there are no deserialization errors, and the browser `spx-price`
+   events are unchanged.
 8. Environment-specific follow-ups: NAS archive reader (prod), es4 bridge (below).
 
 ## Reader and producer changes (separate PRs; each Codex-approved on all three bars before merge)
