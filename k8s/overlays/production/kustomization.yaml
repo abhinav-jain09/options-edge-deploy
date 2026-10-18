@@ -982,9 +982,14 @@ patches:
 # RENDERED by this overlay. Both checks are reproducible - run them over this block rather than
 # trusting the sentence:
 #   yq -r '.images[].name' k8s/overlays/production/kustomization.yaml | sed 's|.*/||' | while read -r i; do printf '%-46s ' "$i"; curl -s --max-time 10 "http://192.168.100.252:5000/v2/$i/tags/list" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("NAME_UNKNOWN" if "errors" in d else ("prod" if "prod" in (d.get("tags") or []) else "NO-PROD-TAG"))'; done
-#   R=$(kubectl kustomize k8s/overlays/production); yq -r '.images[].name' k8s/overlays/production/kustomization.yaml | while read -r n; do printf '%s %s\n' "$n" "$(printf '%s' "$R" | grep -c "$n")"; done
+#   R=$(kubectl kustomize k8s/overlays/production); yq -r '.images[] | (.newName // .name)' k8s/overlays/production/kustomization.yaml | while read -r n; do printf '%s' "$R" | grep -q "$n" || echo "NOT-RENDERED $n"; done
 # On 2026-10-18 the first printed prod for every name except options-edge-ibkr-feed and
-# options-edge-break-score, and the second printed a non-zero count for every name.
+# options-edge-break-score, and the second printed nothing.
+#
+# That second command reads `.newName // .name` for a reason worth keeping: a first version read
+# .name only and reported options-edge-strike-liquidity-heatmap as unrendered. That entry rewrites
+# the name to ghcr.io/..., so the original never appears in the render and the check was accusing a
+# correct entry. An entry that changes newName must be looked up by what it changes TO.
 # That second check caught one that is not rendered: options-edge-tape-zones. An
 # entry for an image the overlay never renders is dead configuration that reads like coverage. Check
 # an addition with:
