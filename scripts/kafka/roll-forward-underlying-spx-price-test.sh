@@ -157,12 +157,15 @@ check "avro-live: an unreadable endpoint fails closed" "$(MOCK_END=12 MOCK_WIRE_
 reset OLDID
 check "avro-live reads the EARLIEST retained offset, not 0 (a compacted-away 0 must not matter)" "$(MOCK_START=5 MOCK_END=12 MOCK_WIRE_AT_0=json run "${LARGS[@]}")" 0
 reset OLDID
+check "avro-live: the retained earliest record being JSON fails even when 0 is Avro" "$(MOCK_START=5 MOCK_END=12 MOCK_WIRE_AT_5=json run "${LARGS[@]}")" 1
+reset OLDID
 check "avro-live needs --json-writers-stopped, not the strict attestation" "$(run --recreate --cluster dev --pre-cutover-id OLDID --avro-feed-live --writers-and-readers-stopped localhost:19092 "$TMP/bin")" 2
 reset OLDID
 check "the strict attestation cannot be combined with --json-writers-stopped alone" "$(run --recreate --cluster dev --pre-cutover-id OLDID --json-writers-stopped localhost:19092 "$TMP/bin")" 2
 reset OLDID
 check "with --avro-feed-live, a reader offset INSIDE the new log is legitimate" "$(MOCK_END=12 MOCK_GROUPS='g underlying.spx.price 0 7 12 5 - - -' run "${LARGS[@]}")" 0
 reset OLDID
-check "with --avro-feed-live, a reader offset BEYOND the new log end is stale and fails" "$(MOCK_END=12 MOCK_GROUPS='g underlying.spx.price 0 6505 12 0 - - -' run "${LARGS[@]}")" 1
+check "with --avro-feed-live, a reader offset BEYOND the new log end is reported (WARN), not fatal: step 7 gates each reader" "$(MOCK_END=12 MOCK_GROUPS='g underlying.spx.price 0 6505 12 0 - - -' run "${LARGS[@]}")" 0
+check "…and the WARN names the group" "$(grep -c 'WARN: consumer groups' "$TMP/out")" 1
 
 echo "passed=$pass failed=$fail"; [ "$fail" = 0 ]

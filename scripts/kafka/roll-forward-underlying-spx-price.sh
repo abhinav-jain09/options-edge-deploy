@@ -143,7 +143,7 @@ if [ "$AVRO_LIVE" = yes ]; then
   # Jenkins cannot stop the feed, so the AVRO feed is writing while the topic is recreated (the order the 2026-10-18 roll-forward
   # settled on: the Avro writer first, then the wipe). Emptiness is therefore not required; what is required is that nothing in
   # the log is JSON: the first and the last record must be Confluent-framed Avro (or a tombstone). A sample, not a scan; the
-  # guarantee that no JSON writer exists is the old feed pod being gone (runbook step 2), which the operator asserts.
+  # guarantee that no JSON writer exists is the old feed pod being gone (runbook step 4), which the operator asserts.
   if [ "$END_OFFSET" -gt 0 ]; then
     CC="$(rf_resolve_cli_named kafka-console-consumer "$BIN")"
     EARLIEST="$("$GO" --bootstrap-server "$BS" --topic "$TOPIC" --time -2 2>&1 | awk -F: -v t="$TOPIC" '$1 == t {e = $3} END {print e}')"
@@ -166,7 +166,13 @@ GROUPS_OUT="$("$KG" --bootstrap-server "$BS" --describe --all-groups 2>&1)" || {
 # Strict mode: ANY committed offset is stale. With the Avro feed (and still-rolling readers) live, an offset INSIDE the new log is
 # legitimate (a reader committed its position in the recreated topic); only an offset BEYOND the log end is the stale one.
 STALE="$(printf '%s\n' "$GROUPS_OUT" | awk -v t="$TOPIC" -v live="$AVRO_LIVE" '$2 == t && $4 ~ /^[0-9]+$/ && (live != "yes" || $4 + 0 > $5 + 0) {print $1 ":" $3 "@" $4 " (log end " $5 ")"}')"
-if [ -n "$STALE" ]; then
+if [ -n "$STALE" ] && [ "$AVRO_LIVE" = yes ]; then
+  # With readers still rolling (Jenkins cannot stop them) a group cannot be made inactive on demand. A regular consumer whose offset is
+  # beyond the log end resets by its auto.offset.reset policy on its first poll; the cases that do not (a Streams GLOBAL store) are handled
+  # in the reader (checkpoint discarded) and the per-reader gate is runbook step 8. So here it is reported, and step 8 decides.
+  echo "WARN: consumer groups with a committed offset BEYOND the new log end (group:partition@offset): they reset on first poll; runbook step 8 verifies each reader:" >&2
+  printf '%s\n' "$STALE" >&2
+elif [ -n "$STALE" ]; then
   echo "FAIL: consumer groups still hold committed offsets for $TOPIC (group:partition@offset):" >&2
   printf '%s\n' "$STALE" >&2
   echo "      DELETE them (kafka-consumer-groups --delete-offsets --group <g> --topic $TOPIC, or delete the stopped group) before any reader starts;" >&2

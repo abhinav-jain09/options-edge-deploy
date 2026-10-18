@@ -27,13 +27,13 @@ format they cannot read are the OLD JSON readers, for the minutes before each is
 2. **Register** the subject on the environment's registry (before any producer):
    `SCHEMA_REGISTRY_URL=<registry> SCHEMA_FILE=<contracts>/schemas/hpsf/UnderlyingPrice.avsc scripts/kafka/ensure-underlying-price-schema.sh`
    (sha256-pinned bytes, FULL by read-back, the canonical schema must be the latest version).
-3. **Roll the Avro feed** (`options-edge-databento-feed-deploy`, then `service-deploy SERVICE=databento-feed`) and prove the OLD (JSON) feed pod is
+3. **Production prerequisites (stop BEFORE the feed rollout; verify each):** the **NAS archive** `*/10` spot cron (`ARCHIVE_JOB=spot`: suspend the crontab
+   line, then confirm no `oe-archive-kafka.sh` process holds the spot lock) and the **`spx-es4-bridge`** console-consumer|producer (a byte copier and a possible
+   JSON writer: stop it and keep it stopped until the decode-and-re-encode mirror replaces it). Not applicable on dev (it archives no spot and has no bridge).
+4. **Roll the Avro feed** (`options-edge-databento-feed-deploy`, then `service-deploy SERVICE=databento-feed`) and prove the OLD (JSON) feed pod is
    gone: exactly one feed pod, running the new image digest. The topic now holds the retained JSON followed by Avro. A pre-cutover feed that
-   survives would write JSON into the fresh topic after step 4. Production adds two writers/readers that are not Kubernetes workloads and
-   must be stopped first: the **NAS archive** `*/10` spot cron (`ARCHIVE_JOB=spot`: suspend the crontab line, then confirm no `oe-archive-kafka.sh`
-   process holds the spot lock, so it cannot read or advance its checkpoint across the wipe) and the **`spx-es4-bridge`** console-consumer|producer
-   (stop it and keep it stopped until the decode-and-re-encode mirror replaces it).
-4. **Wipe and recreate** (retained JSON deleted, never read by an Avro reader). Freeze topic administration on that broker for the window (Kafka's
+   survives would write JSON into the fresh topic after step 4.
+5. **Wipe and recreate** (retained JSON deleted, never read by an Avro reader). Freeze topic administration on that broker for the window (Kafka's
    delete takes a NAME, not a TopicId; the script re-checks the id immediately before the delete but cannot exclude another administrator). With
    the SAME `<bootstrap>` for both commands (dev: `host.docker.internal:19092`; production: `192.168.100.252:9092`):
    `kafka-topics --bootstrap-server <bootstrap> --describe --topic underlying.spx.price` -> note the `TopicId`, then
@@ -42,28 +42,28 @@ format they cannot read are the OLD JSON readers, for the minutes before each is
    is live. The strict mode, `--writers-and-readers-stopped` without `--avro-feed-live`, additionally requires an empty topic and no committed offset at all. Production is refused until its shape is recorded.)
    The script refuses a bootstrap that is not the named cluster's broker, refuses a topic whose id is not the pre-cutover one, verifies the
    shape (partitions, replication factor, configs) from the broker, verifies the first and last records are Confluent-framed Avro (a JSON record
-   means a JSON writer is live), and fails if any consumer group holds an offset BEYOND the new log end (an offset beyond the end would skip the first Avro
-   records; offsets inside the new log are legitimate). It prints `NEW TOPIC ID: <id>` right after reading it.
+   means a JSON writer is live), and REPORTS (WARN) any consumer group holding an offset BEYOND the new log end: readers are still rolling, so a group cannot be made inactive on demand, and a regular
+   consumer resets by its auto.offset.reset policy on its first poll; step 8 is the per-reader gate (strict mode, with everything stopped, FAILS on any committed offset). It prints `NEW TOPIC ID: <id>` right after reading it.
    If the DELETE succeeded but the CREATE failed (the topic is absent and the script said so), re-run the same command with
    `--topic-absent-after-failed-create` added; an absent topic is otherwise refused, because it means somebody else deleted it.
-   If only a post-check fails (the topic was already recreated, so a second `--recreate` correctly refuses the new id): fix the cause (stop the JSON writer; or
-   delete the group's offsets `kafka-consumer-groups --bootstrap-server <bootstrap> --delete-offsets --group <g> --topic underlying.spx.price`, or `--delete --group <g>`
-   for an inactive group), then run the same command with `--verify --new-topic-id <the printed id>` instead of `--recreate` (post-conditions only, no mutation).
+   If only a post-check fails (the topic was already recreated, so a second `--recreate` correctly refuses the new id): fix the cause (stop the JSON writer, i.e. make the
+   old feed pod go away), then run the same command with `--verify --new-topic-id <the printed id>` instead of `--recreate` (post-conditions only, no mutation).
    Persisted reader state: a Kafka Streams GLOBAL store checkpoints the end offset of its source topic on its volume. The only PVC-backed global store on this topic
    is `strike-flow-classifier-databento`; its spot store is in-memory in the converted code and the stale global checkpoint is discarded at every start,
    so no checkpoint can outlive the recreation. (strike-intelligence's global store sits on an emptyDir that is lost with the pod.) Any other reader added later
    that keeps source offsets in persistent state must be reset the same way.
-5. **Roll the Avro readers**, one `service-deploy` each (`BUILD_IMAGES=true`, PERMITTED_SHA per rule). They start on a topic that holds only Avro.
-6. **Verify the wire**, with the environment's registry (dev `http://host.docker.internal:8082`; production `http://192.168.100.252:8082`):
+6. **Roll the Avro readers**, one `service-deploy` each (`BUILD_IMAGES=true`, PERMITTED_SHA per rule). They start on a topic that holds only Avro.
+7. **Verify the wire**, with the environment's registry (dev `http://host.docker.internal:8082`; production `http://192.168.100.252:8082`):
    `kafka-avro-console-consumer --bootstrap-server <bootstrap> --topic underlying.spx.price --partition 0 --offset earliest --max-messages 3 --property schema.registry.url=<registry> --property print.key=true`
    (the record prints as JSON; `price`/`canonicalSpot` show as the decimal bytes). Then prove the framing:
    `kafka-console-consumer --bootstrap-server <bootstrap> --topic underlying.spx.price --partition 0 --offset earliest --max-messages 1 | head -c 5 | xxd -p`
    prints `00` followed by the 4-byte big-endian schema id (e.g. `000000004d` is id 77); convert it with `printf '%d\n' 0x<the last 8 hex digits>`; that id must resolve to
    the canonical subject: `curl -s <registry>/schemas/ids/<decimal id>/versions` returns entries whose `subject` field equals `com.optionsedge.contracts.hpsf.UnderlyingPrice`.
-7. **Verify each reader**: its committed offset lies in the NEW topic's offset range (`kafka-consumer-groups --describe --group <g>`), its log shows a tick decoded
+8. **Verify each reader** (the gate for stale offsets): its committed offset lies in the NEW topic's offset range (`kafka-consumer-groups --describe --group <g>`), its log shows a tick decoded
    from a freshly produced record (compare offset/eventTime with the console-consumer view), there are no deserialization errors, and the browser `spx-price`
-   events are unchanged.
-8. Environment-specific follow-ups: NAS archive reader (prod), es4 bridge (below).
+   events are unchanged. A reader stuck on an out-of-range offset (reset policy `none`) is crash-looping, and a crash-looping group is Empty between restarts: delete its offsets
+   then (`kafka-consumer-groups --bootstrap-server <bootstrap> --delete-offsets --group <g> --topic underlying.spx.price`, which succeeds only on an Empty group) and let it restart.
+9. Environment-specific follow-ups: NAS archive reader (prod), es4 bridge (below).
 
 ## Reader and producer changes (separate PRs; each Codex-approved on all three bars before merge)
 contracts `options-edge-contracts#112` (schema + codec, 0.27.0) · feed `options-edge-databento-feed#178` · processing
