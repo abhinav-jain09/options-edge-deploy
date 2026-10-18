@@ -25,19 +25,29 @@ set -euo pipefail
 
 usage() {
   echo "usage: roll-forward-underlying-spx-price.sh --recreate|--verify --cluster dev|production --pre-cutover-id <id> \\" >&2
+  echo "         [--new-topic-id <id>   (REQUIRED for --verify: the id --recreate printed)] \\" >&2
   echo "         --writers-and-readers-stopped <bootstrap-servers> [kafka-bin-dir]" >&2
   exit 2
 }
 PHASE="${1:-}"
 case "$PHASE" in --recreate|--verify) ;; *) usage ;; esac
-[ "${2:-}" = "--cluster" ] || usage
-CLUSTER="${3:-}"
+shift
+CLUSTER=""; PRE_ID=""; NEW_ID=""; STOPPED=""; POS=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --cluster) CLUSTER="${2:-}"; shift 2 ;;
+    --pre-cutover-id) PRE_ID="${2:-}"; shift 2 ;;
+    --new-topic-id) NEW_ID="${2:-}"; shift 2 ;;
+    --writers-and-readers-stopped) STOPPED=yes; shift ;;
+    *) POS+=("$1"); shift ;;
+  esac
+done
 case "$CLUSTER" in dev|production) ;; *) usage ;; esac
-[ "${4:-}" = "--pre-cutover-id" ] || usage
-PRE_ID="${5:-}"; [ -n "$PRE_ID" ] || usage
-[ "${6:-}" = "--writers-and-readers-stopped" ] || usage
-BS="${7:-}"; [ -n "$BS" ] || usage
-BIN="${8:-${KAFKA_BIN_DIR:-}}"
+[ -n "$PRE_ID" ] && [ "$STOPPED" = yes ] || usage
+# --verify must name the topic that --recreate printed: "a different id from the old one" proves nothing about WHICH topic it is.
+if [ "$PHASE" = "--verify" ]; then [ -n "$NEW_ID" ] || usage; elif [ -n "$NEW_ID" ]; then usage; fi
+BS="${POS[0]:-}"; [ -n "$BS" ] || usage
+BIN="${POS[1]:-${KAFKA_BIN_DIR:-}}"
 
 # --cluster is not a label: the bootstrap server must BE that cluster's broker, or a destructive command declared "dev" could
 # wipe production (and the reverse). dev: the local broker (what pods dial) or the Mac's LAN address; production: the prod host.
@@ -103,8 +113,9 @@ fi
 
 # Verify what was created, from the broker, not from the create command's exit code.
 DESC="$(rf_describe "$KT" "$BS" "$TOPIC")" || exit 1
-NEW_ID="$(rf_topic_id "$DESC" "$TOPIC")" || exit 1
-[ "$NEW_ID" != "$PRE_ID" ] || { echo "FAIL: $TOPIC still has the pre-cutover id $PRE_ID" >&2; exit 1; }
+FOUND_ID="$(rf_topic_id "$DESC" "$TOPIC")" || exit 1
+[ "$FOUND_ID" != "$PRE_ID" ] || { echo "FAIL: $TOPIC still has the pre-cutover id $PRE_ID" >&2; exit 1; }
+[ -z "$NEW_ID" ] || [ "$FOUND_ID" = "$NEW_ID" ] || { echo "FAIL: $TOPIC has id $FOUND_ID, not the recreated topic $NEW_ID that --recreate reported" >&2; exit 1; }
 # exact field match: `grep ReplicationFactor: 1` would also accept 11
 printf '%s\n' "$DESC" | tr '\t' '\n' | grep -qx "ReplicationFactor: $REPLICATION_FACTOR" || { echo "FAIL: replication factor is not $REPLICATION_FACTOR: $DESC" >&2; exit 1; }
 printf '%s\n' "$DESC" | tr '\t' '\n' | grep -qx "PartitionCount: $PARTITIONS" || { echo "FAIL: partition count is not $PARTITIONS: $DESC" >&2; exit 1; }
@@ -130,4 +141,4 @@ if [ -n "$STALE" ]; then
   echo "      a reset to 0 still leaves a committed offset and is refused here." >&2
   exit 1
 fi
-echo "=== DONE: $TOPIC recreated empty (id $NEW_ID, was $PRE_ID). Next: deploy the Avro readers, then the Avro feed ==="
+echo "=== DONE: $TOPIC recreated empty. NEW TOPIC ID: $FOUND_ID (was $PRE_ID). Next: deploy the Avro readers, then the Avro feed ==="

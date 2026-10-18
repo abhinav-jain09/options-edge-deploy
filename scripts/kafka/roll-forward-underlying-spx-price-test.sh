@@ -88,7 +88,7 @@ reset OLDID
 check "an unreadable group list fails the run" "$(MOCK_GROUPS_RC=1 run "${ARGS[@]}")" 1
 
 # --verify: post-conditions only, no mutation; the recovery path after a failed group check
-VARGS=(--verify --cluster dev --pre-cutover-id OLDID --writers-and-readers-stopped localhost:19092 "$TMP/bin")
+VARGS=(--verify --cluster dev --pre-cutover-id OLDID --new-topic-id RECREATED --writers-and-readers-stopped localhost:19092 "$TMP/bin")
 reset OLDID
 check "--verify on the still-pre-cutover topic fails and deletes nothing" "$(run "${VARGS[@]}")" 1
 check "…nothing deleted by --verify" "$(cat "$TMP/state/log" 2>/dev/null | wc -l | tr -d ' ')" 0
@@ -96,7 +96,7 @@ reset RECREATED; echo 1 > "$TMP/state/parts"; echo "cleanup.policy=compact,delet
 check "--verify passes on a correctly recreated topic with no stale groups" "$(run "${VARGS[@]}")" 0
 check "--verify fails while a group still holds an offset" "$(MOCK_GROUPS='g underlying.spx.price 0 9 9 0 - - -' run "${VARGS[@]}")" 1
 
-check "--verify also refuses a bootstrap that is not the named cluster's broker" "$(run --verify --cluster dev --pre-cutover-id OLDID --writers-and-readers-stopped 192.168.100.252:9092 "$TMP/bin")" 2
+check "--verify also refuses a bootstrap that is not the named cluster's broker" "$(run --verify --cluster dev --pre-cutover-id OLDID --new-topic-id RECREATED --writers-and-readers-stopped 192.168.100.252:9092 "$TMP/bin")" 2
 reset RECREATED; echo 1 > "$TMP/state/parts"; echo "cleanup.policy=delete,retention.ms=86400000" > "$TMP/state/cfg"
 check "--verify rejects a topic whose shape is not the declared one" "$(run "${VARGS[@]}")" 1
 reset RECREATED; echo 3 > "$TMP/state/rf"; echo 1 > "$TMP/state/parts"; echo "cleanup.policy=compact,delete,retention.ms=-1,delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.01,segment.ms=3600000,min.insync.replicas=1" > "$TMP/state/cfg"
@@ -110,5 +110,10 @@ reset RECREATED; echo 1 > "$TMP/state/parts"; echo "cleanup.policy=compact,delet
 check "a recreated topic that already holds records fails (a writer is live)" "$(MOCK_END=31 run "${VARGS[@]}")" 1
 reset OLDID
 check "…and --recreate fails the same way when records appear after the create" "$(MOCK_END=5 run "${ARGS[@]}")" 1
+
+reset OTHER; echo 1 > "$TMP/state/parts"; echo "cleanup.policy=compact,delete,retention.ms=-1,delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.01,segment.ms=3600000,min.insync.replicas=1" > "$TMP/state/cfg"
+check "--verify is bound to the topic --recreate created: another id (not the pre-cutover one) is refused" "$(run "${VARGS[@]}")" 1
+check "--verify without --new-topic-id is a usage error" "$(run --verify --cluster dev --pre-cutover-id OLDID --writers-and-readers-stopped localhost:19092 "$TMP/bin")" 2
+reset OLDID; run "${ARGS[@]}" >/dev/null; check "--recreate reports the new topic id for --verify" "$(grep -c 'NEW TOPIC ID: newid-' "$TMP/out")" 1
 
 echo "passed=$pass failed=$fail"; [ "$fail" = 0 ]

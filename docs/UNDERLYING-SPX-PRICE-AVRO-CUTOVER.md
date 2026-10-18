@@ -39,7 +39,7 @@ The JSON topic is "removed" by the wipe in step 4 — its removal date is the da
    offsets are keyed by topic name; a surviving one would resume beyond the new log end and skip the first Avro records).
    If only the consumer-group check fails (the topic was already recreated, so a second `--recreate` correctly refuses the new id):
    DELETE those stopped groups' offsets (`kafka-consumer-groups --bootstrap-server <bootstrap> --delete-offsets --group <g> --topic underlying.spx.price`, or `--delete --group <g>`; a reset to 0 still leaves a committed offset and is refused by the verifier), then run the SAME
-   command with `--verify` BEFORE any reader or the feed starts instead of `--recreate` (post-conditions only, no mutation) and continue at step 5.
+   command plus `--new-topic-id <the id --recreate printed as NEW TOPIC ID>` with `--verify` instead of `--recreate`, BEFORE any reader or the feed starts instead of `--recreate` (post-conditions only, no mutation) and continue at step 5.
    Persisted reader state: a Kafka Streams GLOBAL store checkpoints the end offset of its source topic on its volume. The only
    PVC-backed global store on this topic is `strike-flow-classifier-databento`; its spot store is in-memory in the converted
    code, so no checkpoint can outlive the recreation. (strike-intelligence's global store sits on an emptyDir that is lost with
@@ -50,7 +50,7 @@ The JSON topic is "removed" by the wipe in step 4 — its removal date is the da
    `kafka-avro-console-consumer --bootstrap-server <bootstrap> --topic underlying.spx.price --partition 0 --offset earliest --max-messages 3 --property schema.registry.url=<registry> --property print.key=true`
    (the record prints as JSON; `price`/`canonicalSpot` show as the decimal bytes). Then prove the wire framing: 
    `kafka-console-consumer --bootstrap-server <bootstrap> --topic underlying.spx.price --partition 0 --offset earliest --max-messages 1 | head -c 5 | xxd -p`
-   prints `00` followed by the 4-byte big-endian schema id (e.g. `000000004d` is id 77); that id must resolve to the canonical subject:
+   prints `00` followed by the 4-byte big-endian schema id (e.g. `000000004d` is id 77); convert it mechanically with `printf '%d\n' 0x<the last 8 hex digits>` (`printf '%d\n' 0x0000004d` -> 77); that id must resolve to the canonical subject:
    `curl -s <registry>/schemas/ids/<decimal id>/versions` returns entries whose `subject` field equals `com.optionsedge.contracts.hpsf.UnderlyingPrice`. Every reader's log then
    shows a tick.
 7. Verify each reader: its committed offset now lies in the NEW topic's offset range (`kafka-consumer-groups --describe --group <g>`), its
