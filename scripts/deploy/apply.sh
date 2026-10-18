@@ -382,7 +382,7 @@ EOF
           kubectl -n options-edge set image deployment/nifty-gex-service nifty-gex="$NIFTY_GEX_IMAGE"
           kubectl -n options-edge set image deployment/option-price-behavior-service option-price-behavior="$OPTION_PRICE_BEHAVIOR_IMAGE"
           kubectl -n options-edge set image deployment/option-pressure-state-service option-pressure-state="$OPTION_PRESSURE_STATE_IMAGE"
-          kubectl -n options-edge set image deployment/breakout-sequencer-service breakout-sequencer="$BREAKOUT_SEQUENCER_IMAGE" key-init="$BREAKOUT_SEQUENCER_IMAGE"
+          kubectl -n options-edge set image deployment/breakout-sequencer-service breakout-sequencer="$BREAKOUT_SEQUENCER_IMAGE"
           kubectl -n options-edge set image deployment/databento-mission-sandwich-service databento-mission-sandwich="$DATABENTO_MISSION_SANDWICH_IMAGE"
           kubectl -n options-edge set image deployment/volume-pace-databento-service volume-pace="$VOLUME_PACE_IMAGE"
           kubectl -n options-edge set image deployment/directional-pressure-service directional-pressure="$DIRECTIONAL_PRESSURE_IMAGE"

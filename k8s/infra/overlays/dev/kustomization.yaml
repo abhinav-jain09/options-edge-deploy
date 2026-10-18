@@ -24,3 +24,12 @@ patches:
       - op: add
         path: /spec/storageClassName
         value: standard
+  # The breakout-sequencer key volume is not a Streams state volume (a state reset must never wipe the key a stream was signed
+  # with), so it does not carry the kafka-streams-state label and gets its storage class by name.
+  - target:
+      kind: PersistentVolumeClaim
+      name: breakout-sequencer-keys
+    patch: |-
+      - op: add
+        path: /spec/storageClassName
+        value: standard

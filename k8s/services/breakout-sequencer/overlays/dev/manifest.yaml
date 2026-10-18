@@ -101,26 +101,6 @@ spec:
           volumeMounts:
             - mountPath: /etc/breakout-sequencer
               name: signing-key
-              readOnly: true
-      initContainers:
-        - command:
-            - java
-            - -cp
-            - /app/service.jar
-            - com.optionsedge.processing.breakoutseq.KeyInit
-            - /etc/breakout-sequencer
-          image: host.docker.internal:5001/options-edge-breakout-sequencer:dev
-          imagePullPolicy: Always
-          name: key-init
-          resources:
-            limits:
-              memory: 256Mi
-            requests:
-              cpu: 50m
-              memory: 128Mi
-          volumeMounts:
-            - mountPath: /etc/breakout-sequencer
-              name: signing-key
       volumes:
         - name: signing-key
           persistentVolumeClaim:
