@@ -981,10 +981,17 @@ patches:
 # Every name was checked to HAVE the tag it is pointed at, except the two documented above, and to be
 # RENDERED by this overlay. Both checks are reproducible - run them over this block rather than
 # trusting the sentence:
-#   yq -r '.images[].name' k8s/overlays/production/kustomization.yaml | sed 's|.*/||' | while read -r i; do printf '%-46s ' "$i"; curl -s --max-time 10 "http://192.168.100.252:5000/v2/$i/tags/list" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("NAME_UNKNOWN" if "errors" in d else ("prod" if "prod" in (d.get("tags") or []) else "NO-PROD-TAG"))'; done
+# yq -r '.images[].name' k8s/overlays/production/kustomization.yaml | sed 's|.*/||' | while read -r i; do b=$(curl -sS --max-time 10 "http://192.168.100.252:5000/v2/$i/tags/list" 2>/dev/null); printf '%-46s ' "$i"; { [ -n "$b" ] && printf '%s' "$b" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("NAME_UNKNOWN" if "errors" in d else ("prod" if "prod" in (d.get("tags") or []) else "NO-PROD-TAG"))' 2>/dev/null || echo "COULD-NOT-ASK-DO-NOT-READ-AS-MISSING"; }; done
+#   ONE LINE on purpose, and it distinguishes "there is no prod tag" from "I could not ask". The
+#   first version piped `curl -s` straight into json.load, so from a host that cannot reach the
+#   registry it raised instead of answering - the same shape of mistake as a summing awk that prints
+#   0 on empty input, where a failure reads as a finding. Two controls, run 2026-10-18: pointed at
+#   127.0.0.1:59999 (nothing listening) and at a reachable host that returns non-JSON, every line
+#   reads COULD-NOT-ASK-DO-NOT-READ-AS-MISSING and not one reports a tag verdict.
 #   R=$(kubectl kustomize k8s/overlays/production); yq -r '.images[] | (.newName // .name)' k8s/overlays/production/kustomization.yaml | while read -r n; do printf '%s' "$R" | grep -q "$n" || echo "NOT-RENDERED $n"; done
-# On 2026-10-18 the first printed prod for every name except options-edge-ibkr-feed and
-# options-edge-break-score, and the second printed nothing.
+# On 2026-10-18, FROM A HOST THAT CAN REACH THE REGISTRY, the first printed prod for every name
+# except options-edge-ibkr-feed (NO-PROD-TAG) and options-edge-break-score (NAME_UNKNOWN), and the
+# second printed nothing.
 #
 # That second command reads `.newName // .name` for a reason worth keeping: a first version read
 # .name only and reported options-edge-strike-liquidity-heatmap as unrendered. That entry rewrites
