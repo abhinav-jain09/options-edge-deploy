@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 import signal
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -102,7 +103,10 @@ def verify_schema(response, text):
     rules=response.get('ruleSet') or {}
     if response.get('schemaType','AVRO')!='AVRO' or response.get('references') or response.get('metadata') or any(rules.values()):
         raise ValueError('Unexpected registry type/references/metadata/rules')
-    if json.loads(response['schema'])!=json.loads(text):raise ValueError('Registered schema differs from released bytes')
+    from optionsedge_contracts.model import CanonicalModelCodec
+    expected=CanonicalModelCodec(text).schema_fingerprint()
+    actual=CanonicalModelCodec(response['schema']).schema_fingerprint()
+    if actual!=expected:raise ValueError('Registered schema graph differs from released contract')
 
 
 def reconcile(url, topic, text, apply, call=http):
@@ -139,6 +143,11 @@ def main():
     release=importlib.util.module_from_spec(spec);spec.loader.exec_module(release)
     release.latest(os.environ['JENKINS_URL'],root/'contracts-source',root/'contracts.jar')
     proof=json.loads((root/'contracts.release.json').read_text())
+    # The tests use this verified SDK's actual schema identity, not a substitute parser.
+    subprocess.run([sys.executable,'-B','-m','unittest','tests.test_register_cvd_schemas','tests.test_canonical_contracts_release'],
+        env={**os.environ,'PYTHONDONTWRITEBYTECODE':'1','PYTHONPATH':str((root/'contracts.jar').resolve()),
+             'CANONICAL_PACKAGED_ARTIFACT':str((root/'contracts.jar').resolve()),
+             'OPTIONS_EDGE_CONTRACTS_VERSION':proof['version']},check=True,timeout=120)
     with zipfile.ZipFile(root/'contracts.jar') as jar:
         schemas={name:jar.read(name).decode() for name in sorted(set(BINDINGS.values()))}
     for text in schemas.values():

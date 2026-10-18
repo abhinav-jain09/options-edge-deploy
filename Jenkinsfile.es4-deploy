@@ -334,7 +334,6 @@ pipeline {
       when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.ACTION == 'register-cvd-schemas') } }
       options { timeout(time: 20, unit: 'MINUTES') }
       steps {
-        sh 'PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests.test_register_cvd_schemas'
         timeout(time: 10, unit: 'MINUTES') {
           sh 'PERMITTED_SHA="${PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored .jenkins-tmp'
         }
