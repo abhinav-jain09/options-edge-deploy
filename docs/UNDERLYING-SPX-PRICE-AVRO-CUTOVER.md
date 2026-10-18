@@ -23,8 +23,11 @@ The JSON topic is "removed" by the wipe in step 4 — its removal date is the da
 2. **Register** the subject on the environment's registry (before any producer):
    `SCHEMA_REGISTRY_URL=<registry> SCHEMA_FILE=<contracts>/schemas/hpsf/UnderlyingPrice.avsc scripts/kafka/ensure-underlying-price-schema.sh`
    (sha256-pinned bytes, FULL by read-back, the canonical schema must be the latest version).
-3. **Stop** the old (JSON) feed and every reader of the topic (the list is in "Readers" below). The operator asserts this; Kafka
-   cannot prove a writer is absent. Do not leave a pre-cutover feed running: it writes JSON into the fresh topic.
+3. **Stop** the old (JSON) feed and EVERY reader of the topic (the list is in "Readers" below). Production adds two readers that are not
+   Kubernetes workloads: the **NAS archive** `*/10` spot cron (`ARCHIVE_JOB=spot`: suspend the crontab line, then confirm no `oe-archive-kafka.sh`
+   process holds the spot lock, so the post-recreate group check cannot see its offsets and its checkpoint is not advanced over the wipe) and
+   the **`spx-es4-bridge`** console-consumer|producer (stop it and keep it stopped until the decode-and-re-encode mirror replaces it). The
+   operator asserts all of this; Kafka cannot prove a writer is absent. Do not leave a pre-cutover feed running: it writes JSON into the fresh topic.
 4. **Wipe and recreate empty**. Freeze topic administration on that broker for the window (Kafka's delete takes a NAME, not a
    TopicId; the script re-checks the id immediately before the delete but cannot exclude another administrator). With the SAME
    `<bootstrap>` for both commands (dev: `host.docker.internal:19092`; production: `192.168.100.252:9092`):
@@ -44,8 +47,11 @@ The JSON topic is "removed" by the wipe in step 4 — its removal date is the da
 6. **Enable the Avro feed** (`options-edge-databento-feed-deploy` then `service-deploy SERVICE=databento-feed`). Verify its first
    records decode, with the environment's registry (dev `http://host.docker.internal:8082`; production `http://192.168.100.252:8082`):
    `kafka-avro-console-consumer --bootstrap-server <bootstrap> --topic underlying.spx.price --partition 0 --offset earliest --max-messages 3 --property schema.registry.url=<registry> --property print.key=true`
-   (the record prints as JSON; `price`/`canonicalSpot` show as the decimal bytes), and the first record's `magic byte 0 + schema id`
-   resolves to the canonical subject (`curl <registry>/schemas/ids/<id>/versions`). Every reader's log then shows a tick.
+   (the record prints as JSON; `price`/`canonicalSpot` show as the decimal bytes). Then prove the wire framing: 
+   `kafka-console-consumer --bootstrap-server <bootstrap> --topic underlying.spx.price --partition 0 --offset earliest --max-messages 1 | head -c 5 | xxd -p`
+   prints `00` followed by the 4-byte big-endian schema id (e.g. `000000004d` is id 77); that id must resolve to the canonical subject:
+   `curl -s <registry>/schemas/ids/<decimal id>/versions` returns `com.optionsedge.contracts.hpsf.UnderlyingPrice`. Every reader's log then
+   shows a tick.
 7. Verify each reader: its committed offset now lies in the NEW topic's offset range (`kafka-consumer-groups --describe --group <g>`), its
    log shows a tick decoded from a known, freshly produced record (compare the offset/eventTime with the console-consumer view),
    there are no deserialization errors, and the browser `spx-price` events are unchanged.

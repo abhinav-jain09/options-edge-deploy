@@ -88,4 +88,8 @@ reset RECREATED; echo 1 > "$TMP/state/parts"; echo "cleanup.policy=compact,delet
 check "--verify passes on a correctly recreated topic with no stale groups" "$(run "${VARGS[@]}")" 0
 check "--verify fails while a group still holds an offset" "$(MOCK_GROUPS='g underlying.spx.price 0 9 9 0 - - -' run "${VARGS[@]}")" 1
 
+check "--verify also refuses a bootstrap that is not the named cluster's broker" "$(run --verify --cluster dev --pre-cutover-id OLDID --writers-and-readers-stopped 192.168.100.252:9092 "$TMP/bin")" 2
+reset RECREATED; echo 1 > "$TMP/state/parts"; echo "cleanup.policy=delete,retention.ms=86400000" > "$TMP/state/cfg"
+check "--verify rejects a topic whose shape is not the declared one" "$(run "${VARGS[@]}")" 1
+
 echo "passed=$pass failed=$fail"; [ "$fail" = 0 ]
