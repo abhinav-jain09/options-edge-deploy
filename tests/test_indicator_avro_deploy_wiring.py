@@ -101,6 +101,14 @@ class IndicatorAvroDeployWiring(unittest.TestCase):
         self.assertLess(decode.index("every partition must be gated"), decode.index("while IFS=: read -r t p end"))
         verify = t[t.index("stage('Verify (running + zero pollution)')"):]
         self.assertIn("target end offsets equal the source", verify)
+        # EOS-aware parity (2026-10-18): the es4 producer is transactional, so the gate counts committed source
+        # records (read_committed, offsets printed) against the target end offset instead of comparing end offsets,
+        # which include one commit marker per transaction on the source only.
+        self.assertIn("--isolation-level read_committed", verify)
+        self.assertIn("print.offset=true", verify)
+        self.assertIn("auto.offset.reset=none", verify)
+        self.assertIn("Processed a total of", verify)
+        self.assertNotIn('[ "$SEND" = "$TEND" ] && break', verify)
         self.assertIn("decode-newest-indicator-record.sh", verify)
 
     def test_archive_unit_ships_the_avro_reader_and_builds_the_contracts_jar_from_the_permitted_commit(self):
