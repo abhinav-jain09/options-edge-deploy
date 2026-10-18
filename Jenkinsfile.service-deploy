@@ -807,7 +807,7 @@ PYEOF
       // deployed by the es4 path, and its `es.` twin is rolled forward with
       // `roll-forward-avro-cutover-topics.sh --cluster es4` against 192.168.100.4:9092.
       when {
-        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'databento-gex' || params.SERVICE == 'gamma-ladder-path') && !params.DEPLOY_DRY_RUN }
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && ((params.SERVICE == 'databento-gex' || params.SERVICE == 'gamma-ladder-path') && !params.DEPLOY_DRY_RUN) }
       }
       steps {
         sh '''
