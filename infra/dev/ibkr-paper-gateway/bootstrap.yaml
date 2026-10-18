@@ -1,0 +1,4 @@
+# Initial authentication gets one attempt. Enable persistent restart only after the API is healthy.
+services:
+  gateway:
+    restart: 'no'

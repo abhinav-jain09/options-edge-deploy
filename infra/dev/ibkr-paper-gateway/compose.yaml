@@ -1,0 +1,89 @@
+name: ibkr-paper-gateway
+services:
+  credentials:
+    image: ghcr.io/gnzsnz/ib-gateway@sha256:1b7d2be59d95293b5695f678e2001f524ca0e8b89b4c0f46013df10a934d55c5
+    platform: linux/arm64
+    user: '0:0'
+    restart: 'no'
+    network_mode: none
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 128m
+    pids_limit: 32
+    entrypoint: [/bin/bash, -euc]
+    command:
+      - |
+        umask 077
+        for name in username password vnc; do
+          install -m 0400 -o 1000 -g 1000 "/source/$$name" "/credentials/$$name"
+        done
+        chown 1000:1000 /credentials /settings
+        chmod 0700 /credentials /settings
+    volumes:
+      - type: bind
+        source: ${IBKR_PAPER_SECRET_ROOT:?owner-only credential directory required}
+        target: /source
+        read_only: true
+      - credentials:/credentials
+      - settings:/settings
+  gateway:
+    image: ghcr.io/gnzsnz/ib-gateway@sha256:1b7d2be59d95293b5695f678e2001f524ca0e8b89b4c0f46013df10a934d55c5
+    platform: linux/arm64
+    container_name: ibkr-paper-gateway
+    restart: unless-stopped
+    depends_on:
+      credentials:
+        condition: service_completed_successfully
+    user: '1000:1000'
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    # 768MiB heap plus 1280MiB for GUI, JVM native/non-heap, socat and IBC.
+    mem_limit: 2g
+    cpus: 2
+    pids_limit: 256
+    stop_grace_period: 45s
+    environment:
+      TRADING_MODE: paper
+      TWS_PASSWORD_FILE: /credentials/password
+      VNC_SERVER_PASSWORD_FILE: /credentials/vnc
+      TWS_SETTINGS_PATH: /home/ibgateway/tws_settings
+      READ_ONLY_API: 'no'
+      TWS_ACCEPT_INCOMING: accept
+      AUTO_RESTART_TIME: '11:45 PM'
+      TIME_ZONE: Europe/Amsterdam
+      JAVA_HEAP_SIZE: '768'
+      TWOFA_TIMEOUT_ACTION: exit
+      RELOGIN_AFTER_TWOFA_TIMEOUT: 'no'
+      EXISTING_SESSION_DETECTED_ACTION: secondary
+      ALLOW_BLIND_TRADING: 'no'
+      BYPASS_WARNING: 'no'
+    entrypoint: [/bin/bash, -euc]
+    command:
+      - |
+        umask 077
+        test "$$TRADING_MODE" = paper
+        TWS_USERID="$$(cat /credentials/username)"
+        export TWS_USERID
+        exec /home/ibgateway/scripts/run.sh
+    ports:
+      - '127.0.0.1:4002:4004'
+      - '127.0.0.1:5902:5900'
+    volumes:
+      - credentials:/credentials:ro
+      - settings:/home/ibgateway/tws_settings
+    healthcheck:
+      # Check the actual Gateway API socket, not the pre-login socat listener.
+      test: [CMD, /bin/bash, -ec, 'exec 3<>/dev/tcp/127.0.0.1/4002']
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 180s
+    logging:
+      driver: local
+      options:
+        max-size: 5m
+        max-file: '3'
+volumes:
+  credentials:
+  settings:

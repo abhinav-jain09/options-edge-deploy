@@ -1,0 +1,33 @@
+pipeline {
+  agent { label 'local-mac' }
+  parameters {
+    string(name: 'PERMITTED_SHA', defaultValue: '', trim: true,
+      description: 'Exact approved options-edge-deploy origin/main SHA for dev-only Paper gateway provisioning.')
+    string(name: 'PERMITTED_SHA_GUARD_VERSION', defaultValue: '2f6fc2ab7aa51eb8a9e8aa350f2d774cd2fb7a253de2591e43645a19a9886b24',
+      description: 'Pinned SHA256 of the permitted commit guard.')
+  }
+  options { disableRestartFromStage(); disableConcurrentBuilds(); timeout(time: 20, unit: 'MINUTES') }
+  environment { ENVIRONMENT = 'dev' }
+  stages {
+    stage('Permitted commit guard') {
+      steps {
+        script {
+          def rc = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')
+          if (rc != 0) { error("Permitted source refused (rc=${rc}); no deployment effect.") }
+          env.PERMITTED_SHA_GUARD = 'PASSED'
+        }
+      }
+    }
+    stage('Validate Paper gateway') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
+      steps { sh 'python3 scripts/ops/deploy-dev-paper-gateway-test.py' }
+    }
+    stage('Provision on dev Mac') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
+      steps {
+        sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir .'
+        sh 'python3 scripts/ops/deploy-dev-paper-gateway.py'
+      }
+    }
+  }
+}

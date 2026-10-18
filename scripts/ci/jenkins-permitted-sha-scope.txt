@@ -74,3 +74,5 @@ Jenkinsfile.cvd-image-rollforward | in | | fixed dev/prod namespace/deployer ima
 Jenkinsfile.cvd-evidence-api-images | in | | primary Mac fixed-profile latest-main API image build/test/publish or stopped-only image CAS; canonical guard and immediate tree verification, no secret/config reads or service starts
 
 Jenkinsfile.cvd-archive-retained-qualification | in | | read-only retained-history qualification on ES4 with installed archive bytes; no rollout or checkpoint/group changes
+
+Jenkinsfile.ibkr-paper-gateway             | in  |                                 | provisions dev-only persistent Paper IB Gateway through Docker Desktop; exact main guard first, no production or Live target
