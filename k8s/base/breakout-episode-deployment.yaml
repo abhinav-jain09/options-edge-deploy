@@ -1,0 +1,86 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: breakout-episode-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: breakout-episode-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  # THE BASE IS INERT. The episode service (requirement MON 01-05) replays the sequenced stream, selects strikes from
+  # options.databento.gex.strike and publishes shadow-only episodes and outcome emissions to breakout.episode and
+  # breakout.emission (Avro, schemas registered by the operator; auto-register is off). Nothing it writes is actionable
+  # (BREAKOUT_EP_MODE is SHADOW and the service refuses any other value). replicas 0 is not a hold on its own (boot
+  # bring-up, morning autostart and dev-cleanup scale selected deployments up), so the service is ALSO named in the hold
+  # lists; an environment turns it on with an explicit patch after the output topics and their schemas exist.
+  replicas: 0
+  # One transactional writer: a rolling update would run the outgoing and incoming instance together (the transactional
+  # id fences the old one, but Recreate avoids the fencing event altogether).
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: breakout-episode-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: breakout-episode-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      containers:
+        - name: breakout-episode
+          image: 192.168.100.252:5000/options-edge-breakout-episode:dev
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+          env:
+            - name: BREAKOUT_EP_MODE
+              value: SHADOW
+            - name: BREAKOUT_EP_SEQUENCED_TOPIC
+              value: breakout.sequenced
+            - name: BREAKOUT_EP_QUARANTINE_TOPIC
+              value: breakout.quarantine
+            - name: BREAKOUT_EP_GEX_TOPIC
+              value: options.databento.gex.strike
+            - name: BREAKOUT_EP_EPISODE_TOPIC
+              value: breakout.episode
+            - name: BREAKOUT_EP_EMISSION_TOPIC
+              value: breakout.emission
+            - name: BREAKOUT_EP_SEQUENCER_PUBLIC_KEY_PATH
+              value: /etc/breakout-sequencer/v1/signing.pub
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xms128m -Xmx768m"
+          ports:
+            - name: health
+              containerPort: 8080
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 120
+            periodSeconds: 15
+            failureThreshold: 4
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          volumeMounts:
+            # The sequencer's PUBLIC key is the only thing read: the volume is mounted read-only. (The volume is ReadWriteOnce, so
+            # this pod schedules on the sequencer's node; the cluster has one node.)
+            - name: sequencer-key
+              mountPath: /etc/breakout-sequencer
+              readOnly: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 384Mi
+            limits:
+              memory: 1Gi
+      volumes:
+        - name: sequencer-key
+          persistentVolumeClaim:
+            claimName: breakout-sequencer-keys
+            readOnly: true

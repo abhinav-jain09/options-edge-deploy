@@ -31,6 +31,7 @@ pipeline {
     string(name: 'OPTION_PRICE_BEHAVIOR_IMAGE', defaultValue: '', description: 'Option Price Behavior image')
     string(name: 'OPTION_PRESSURE_STATE_IMAGE', defaultValue: '', description: 'Option Pressure State image')
     string(name: 'BREAKOUT_SEQUENCER_IMAGE', defaultValue: '', description: 'Breakout sequencer image')
+    string(name: 'BREAKOUT_EPISODE_IMAGE', defaultValue: '', description: 'Breakout episode image')
     string(name: 'DATABENTO_MISSION_SANDWICH_IMAGE', defaultValue: '', description: 'Databento mission sandwich image')
     string(name: 'VOLUME_PACE_IMAGE', defaultValue: '', description: 'Volume-pace image')
     string(name: 'DIRECTIONAL_PRESSURE_IMAGE', defaultValue: '', description: 'Directional-pressure image')
@@ -444,7 +445,7 @@ pipeline {
             'DATABENTO_VOLUME_AGGREGATOR_IMAGE': 'databento-volume-aggregator', 'DATABENTO_FEED_IMAGE': 'databento-feed',
             'DATABENTO_GEX_IMAGE': 'databento-gex', 'DATABENTO_MAXPAIN_IMAGE': 'databento-maxpain',
             'NIFTY_GEX_IMAGE': 'nifty-gex',
-            'OPTION_PRICE_BEHAVIOR_IMAGE': 'option-price-behavior', 'OPTION_PRESSURE_STATE_IMAGE': 'option-pressure-state', 'BREAKOUT_SEQUENCER_IMAGE': 'breakout-sequencer', 'DATABENTO_MISSION_SANDWICH_IMAGE': 'databento-mission-sandwich',
+            'OPTION_PRICE_BEHAVIOR_IMAGE': 'option-price-behavior', 'OPTION_PRESSURE_STATE_IMAGE': 'option-pressure-state', 'BREAKOUT_SEQUENCER_IMAGE': 'breakout-sequencer', 'BREAKOUT_EPISODE_IMAGE': 'breakout-episode', 'DATABENTO_MISSION_SANDWICH_IMAGE': 'databento-mission-sandwich',
             'VOLUME_PACE_IMAGE': 'volume-pace', 'DIRECTIONAL_PRESSURE_IMAGE': 'directional-pressure',
             'DATABENTO_GEX_HISTORY_IMAGE': 'databento-gex-history', 'RAW_POSTGRES_WRITER_IMAGE': 'raw-postgres-writer',
             'GAMMA_MIGRATION_IMAGE': 'gamma-migration',
@@ -881,7 +882,7 @@ void promoteToProduction() {
       // Image refs are uniform pass-throughs — build them programmatically so this method stays
       // under the Groovy CPS 64KB bytecode limit ("Method too large"). Add new services here.
       'RAW_TO_DISPLAY_IMAGE', 'WEB_IMAGE', 'DATABENTO_VOLUME_AGGREGATOR_IMAGE', 'DATABENTO_GEX_IMAGE', 'NIFTY_GEX_IMAGE',
-      'DATABENTO_MAXPAIN_IMAGE', 'OPTION_PRICE_BEHAVIOR_IMAGE', 'OPTION_PRESSURE_STATE_IMAGE', 'BREAKOUT_SEQUENCER_IMAGE', 'DATABENTO_MISSION_SANDWICH_IMAGE',
+      'DATABENTO_MAXPAIN_IMAGE', 'OPTION_PRICE_BEHAVIOR_IMAGE', 'OPTION_PRESSURE_STATE_IMAGE', 'BREAKOUT_SEQUENCER_IMAGE', 'BREAKOUT_EPISODE_IMAGE', 'DATABENTO_MISSION_SANDWICH_IMAGE',
       'VOLUME_PACE_IMAGE', 'DIRECTIONAL_PRESSURE_IMAGE', 'DATABENTO_GEX_HISTORY_IMAGE', 'GAMMA_MIGRATION_IMAGE',
       'RAW_POSTGRES_WRITER_IMAGE', 'PRESSURE_POSTGRES_WRITER_IMAGE', 'PIN_POSTGRES_WRITER_IMAGE',
       'FEED_GATEWAY_IMAGE', 'SPX_MISSION_CONTROL_IMAGE',

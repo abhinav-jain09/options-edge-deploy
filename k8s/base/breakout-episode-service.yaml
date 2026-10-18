@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: breakout-episode-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: breakout-episode-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  selector:
+    app.kubernetes.io/name: breakout-episode-service
+  ports:
+    - name: health
+      port: 8080
+      targetPort: health

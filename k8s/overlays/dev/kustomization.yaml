@@ -887,6 +887,9 @@ images:
   - name: 192.168.100.252:5000/options-edge-breakout-sequencer
     newName: host.docker.internal:5001/options-edge-breakout-sequencer
     newTag: dev
+  - name: 192.168.100.252:5000/options-edge-breakout-episode
+    newName: host.docker.internal:5001/options-edge-breakout-episode
+    newTag: dev
   - name: 192.168.100.252:5000/options-edge-databento-mission-sandwich
     newName: host.docker.internal:5001/options-edge-databento-mission-sandwich
     newTag: dev

@@ -123,6 +123,8 @@ resources:
   - option-pressure-state-service.yaml
   - breakout-sequencer-deployment.yaml
   - breakout-sequencer-service.yaml
+  - breakout-episode-deployment.yaml
+  - breakout-episode-service.yaml
   - feed-gateway-nightly-restart-cronjob.yaml
   - signal-follower-spx-deployment.yaml
   - signal-follower-spx-service.yaml
