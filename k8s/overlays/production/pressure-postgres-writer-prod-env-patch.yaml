@@ -26,8 +26,9 @@
 # The reader needs no flag: POSTGRES_PRESSURE_STATE_ENABLED defaults true. It consumes
 # option-pressure-state-evidence and writes option_pressure_state_frame. On production that table is
 # the point: the evidence topic keeps three days, so the table is what makes the record outlive it,
-# and it is the production calibration history the offline forward-corpus job on the development
-# machine assembles by hand today.
+# and it is INTENDED to become the production calibration history, replacing a corpus the research
+# work has had to assemble by hand. That is a statement about what this table is FOR; nothing here
+# establishes the state of any offline job on another machine.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
