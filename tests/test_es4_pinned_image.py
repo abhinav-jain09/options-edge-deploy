@@ -27,6 +27,71 @@ def lock(number=17):
 def live(replicas=0):
     return {'apiVersion':'apps/v1','kind':'Deployment','metadata':{'name':'es-cvd-service','namespace':'options-edge','uid':'known-uid','resourceVersion':'123'},'spec':{'replicas':replicas,'template':{'spec':{'containers':[{'name':'es-cvd','image':'registry/old:prod','env':[{'name':'PASSWORD','value':'do-not-leak'}],'volumeMounts':[{'name':'state','mountPath':'/data'}]}],'volumes':[{'name':'state','persistentVolumeClaim':{'claimName':'preserved'}}]}}}}
 
+GATEWAY_IMAGE=IMAGE.replace('options-edge-es-cvd','options-edge-feed-gateway')
+
+def gateway_build(number=17,**kwargs):
+    row=build(number,**kwargs)
+    fields=row['actions'][0]['parameters']
+    fields[:]=[v for v in fields if v['name']!='BUILD_TARGET']
+    next(v for v in fields if v['name']=='PUSH_IMAGES')['name']='PUSH_IMAGE'
+    return row
+
+def gateway_lock(number=17):
+    return lock(number).replace('options-edge-processing.git','options-edge-feed-gateway.git').replace('ES_CVD_IMAGE','FEED_GATEWAY_IMAGE').replace('options-edge-es-cvd','options-edge-feed-gateway')
+
+def gateway_live(replicas=1):
+    d=live(replicas);d['metadata']['name']='es-feed-gateway'
+    pod=d['spec']['template']['spec'];pod['containers'][0]['name']='feed-gateway'
+    pod['initContainers']=[{'name':'wait-for-kafka-sr','image':pod['containers'][0]['image'],'command':['bash','-c','preserved dependency wait']}]
+    return d
+
+class GatewayImageTest(unittest.TestCase):
+    def test_gateway_lock_requires_own_repository_and_publish_parameter(self):
+        image,proof=p.qualified_image('es-feed-gateway',[gateway_build()],gateway_lock)
+        self.assertEqual(GATEWAY_IMAGE,image);self.assertEqual(17,proof['gatewayBuild']);self.assertEqual(SOURCE,proof['gatewaySource'])
+        for row,text in [(build(),gateway_lock()),(gateway_build(),lock())]:
+            with self.subTest(row=row),self.assertRaises(ValueError):p.qualified_image('es-feed-gateway',[row],lambda n:text)
+        with self.assertRaisesRegex(ValueError,'latest relevant'):
+            p.qualified_image('es-feed-gateway',[gateway_build(18,result='FAILURE'),gateway_build()],gateway_lock)
+
+    def test_gateway_newest_running_or_unpublished_refuses_and_dev_is_not_a_candidate(self):
+        for result,building in [(None,True),('FAILURE',False)]:
+            with self.subTest(result=result),self.assertRaisesRegex(ValueError,'latest relevant'):
+                p.qualified_image('es-feed-gateway',[gateway_build(18,result=result,building=building),gateway_build()],gateway_lock)
+        unpublished=gateway_build()
+        next(v for v in unpublished['actions'][0]['parameters'] if v['name']=='PUSH_IMAGE')['value']=False
+        with self.assertRaisesRegex(ValueError,'latest relevant'):p.qualified_image('es-feed-gateway',[unpublished],gateway_lock)
+        dev=gateway_build(18)
+        next(v for v in dev['actions'][0]['parameters'] if v['name']=='ENVIRONMENT')['value']='dev'
+        image,proof=p.qualified_image('es-feed-gateway',[dev,gateway_build()],gateway_lock)
+        self.assertEqual(GATEWAY_IMAGE,image);self.assertEqual(17,proof['gatewayBuild'])
+
+    def test_gateway_replaces_exactly_app_and_known_dependency_init_images(self):
+        before=gateway_live();saved=copy.deepcopy(before);ops=p.patch_for('es-feed-gateway',before,GATEWAY_IMAGE)
+        self.assertEqual(before,saved)
+        writes=[o for o in ops if o['op']!='test']
+        self.assertEqual(writes,[{'op':'replace','path':'/spec/template/spec/containers/0/image','value':GATEWAY_IMAGE},{'op':'replace','path':'/spec/template/spec/initContainers/0/image','value':GATEWAY_IMAGE}])
+        tests={o['path']:o['value'] for o in ops if o['op']=='test'}
+        self.assertEqual('wait-for-kafka-sr',tests['/spec/template/spec/initContainers/0/name'])
+        self.assertEqual('registry/old:prod',tests['/spec/template/spec/initContainers/0/image'])
+        after=copy.deepcopy(before)
+        for key in ['containers','initContainers']:after['spec']['template']['spec'][key][0]['image']=GATEWAY_IMAGE
+        p.verify('es-feed-gateway',before,after,GATEWAY_IMAGE)
+        bad=copy.deepcopy(after);bad['spec']['template']['spec']['initContainers'][0]['command']=['changed']
+        with self.assertRaisesRegex(ValueError,'non-image'):p.verify('es-feed-gateway',before,bad,GATEWAY_IMAGE)
+        bad=copy.deepcopy(after);bad['spec']['template']['spec']['initContainers'][0]['image']='registry/old:prod'
+        with self.assertRaises(ValueError):p.verify('es-feed-gateway',before,bad,GATEWAY_IMAGE)
+
+    def test_missing_foreign_extra_or_different_image_init_is_refused(self):
+        for fault in ['missing','foreign','extra','image','sidecar']:
+            d=gateway_live();pod=d['spec']['template']['spec']
+            if fault=='missing':pod['initContainers']=[]
+            elif fault=='foreign':pod['initContainers'][0]['name']='other'
+            elif fault=='extra':pod['initContainers'].append(copy.deepcopy(pod['initContainers'][0]))
+            elif fault=='image':pod['initContainers'][0]['image']='foreign'
+            else:pod['containers'].append({'name':'sidecar','image':'foreign'})
+            with self.subTest(fault=fault),self.assertRaises(ValueError):p.patch_for('es-feed-gateway',d,GATEWAY_IMAGE)
+
 class ImagePatchTest(unittest.TestCase):
     def test_only_image_is_written_and_zero_or_active_count_is_fenced(self):
         for replicas in [0,1,3]:
@@ -98,9 +163,13 @@ class LatestQualificationTest(unittest.TestCase):
 class MainFlowTest(unittest.TestCase):
     def run_case(self,dry,replicas=0,namespace='expected-ns',mutate_admission=False,closure=True,
                  manifest=MANIFEST,identity='system:serviceaccount:options-edge:jenkins-deployer',
-                 main=SOURCE,fail_rollout=False,extra_env=None):
+                 main=SOURCE,fail_rollout=False,extra_env=None,gateway=False,sdk_main=SDK):
         tmp=tempfile.TemporaryDirectory();self.addCleanup(tmp.cleanup);previous=Path.cwd();os.chdir(tmp.name);self.addCleanup(os.chdir,previous)
-        before=live(replicas);after=copy.deepcopy(before);after['spec']['template']['spec']['containers'][0]['image']=IMAGE;calls=[];reads=0
+        before=gateway_live(replicas) if gateway else live(replicas);after=copy.deepcopy(before)
+        image=GATEWAY_IMAGE if gateway else IMAGE
+        after['spec']['template']['spec']['containers'][0]['image']=image
+        if gateway:after['spec']['template']['spec']['initContainers'][0]['image']=image
+        calls=[];reads=0
         def kube(*args,**kwargs):
             nonlocal reads
             calls.append(args)
@@ -116,13 +185,33 @@ class MainFlowTest(unittest.TestCase):
                 return json.dumps(admitted)
             if args[0]=='rollout' and fail_rollout:raise subprocess.TimeoutExpired(['kubectl','rollout'],620)
             return 'ok\n'
-        def url(url,limit):return lock() if '/artifact/' in url else json.dumps({'builds':[build()]})
+        def url(url,limit):
+            if gateway:
+                self.assertIn('/job/option-edge-feed-gateway/',url)
+                return gateway_lock() if '/artifact/' in url else json.dumps({'builds':[gateway_build()]})
+            return lock() if '/artifact/' in url else json.dumps({'builds':[build()]})
         env={'JENKINS_URL':'http://jenkins/','PERMITTED_SHA_GUARD':'PASSED','PERMITTED_SHA':SOURCE,'SERVICE':'es-cvd','DEPLOY_DRY_RUN':str(dry).lower(),'ES4_NS_UID':'expected-ns','BUILD_NUMBER':'90','CVD_READER_CLOSURE_CONFIRMED':str(closure).lower()}
+        if gateway:env.update(SERVICE='es-feed-gateway',CONTRACTS_PERMITTED_SHA=SDK)
         env.update(extra_env or {})
         self.calls=calls
         self.receipt_path=Path(tmp.name)/'.jenkins-tmp/es4-image-90/receipt.json'
-        with patch.dict(os.environ,env,clear=True),patch.object(p,'kube',side_effect=kube),patch.object(p,'read_url',side_effect=url),patch.object(p,'processing_main',return_value=main),patch.object(p,'open_direct',return_value=io.BytesIO(manifest)),patch('sys.stdout',new=io.StringIO()):p.main()
+        with patch.dict(os.environ,env,clear=True),patch.object(p,'kube',side_effect=kube),patch.object(p,'read_url',side_effect=url),patch.object(p,'processing_main',side_effect=lambda repository='options-edge-processing':sdk_main if repository=='options-edge-contracts' else main),patch.object(p,'open_direct',return_value=io.BytesIO(manifest)),patch('sys.stdout',new=io.StringIO()):p.main()
         receipt=json.loads(Path('.jenkins-tmp/es4-image-90/receipt.json').read_text());return calls,receipt
+    def test_gateway_real_and_dry_paths_preserve_spec_and_provenance(self):
+        for dry in [True,False]:
+            calls,receipt=self.run_case(dry,replicas=1,gateway=True)
+            self.assertEqual(17,receipt['gatewayBuild']);self.assertEqual(SOURCE,receipt['gatewaySource'])
+            self.assertEqual(GATEWAY_IMAGE,receipt['image']);self.assertEqual(1,receipt['replicas'])
+            self.assertEqual(not dry,receipt['runtimeReadinessVerified'])
+            writes=[c for c in calls if c[0]=='patch' and '--dry-run=server' not in c]
+            self.assertEqual(int(not dry),len(writes))
+
+    def test_gateway_stale_source_or_sdk_refuses_before_cluster_inspection(self):
+        for changes in [{'main':'d'*40},{'sdk_main':'e'*40},{'extra_env':{'CONTRACTS_PERMITTED_SHA':'f'*40}},{'sdk_main':'e'*40,'extra_env':{'CONTRACTS_PERMITTED_SHA':'e'*40}}]:
+            with self.subTest(changes=changes),self.assertRaisesRegex(ValueError,'current'):
+                self.run_case(False,replicas=1,gateway=True,**changes)
+            self.assertEqual([],self.calls)
+
     def test_dry_run_never_writes_or_rolls_a_workload(self):
         calls,receipt=self.run_case(True)
         self.assertEqual(len([c for c in calls if c[0]=='patch']),1);self.assertTrue(all('--dry-run=server' in c for c in calls if c[0]=='patch'));self.assertFalse(any(c[0]=='rollout' for c in calls));self.assertTrue(receipt['dryRun'])
