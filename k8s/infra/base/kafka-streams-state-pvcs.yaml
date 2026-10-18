@@ -208,7 +208,7 @@ spec:
     requests:
       storage: 20Gi
 ---
-# breakout-sequencer-service: the DEVELOPMENT signing key set (Ed25519, generated once by the KeyInit init container and never
+# breakout-sequencer-service: the DEVELOPMENT signing key set (Ed25519, generated once by the sequencer itself (the dev-unsecured profile calls KeyInit before loading keys) and never
 # changed, so a stream signed today still verifies on replay after any restart). Production uses the platform signing authority
 # instead and does not rely on this claim. Tiny on purpose.
 apiVersion: v1
