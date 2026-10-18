@@ -10,6 +10,8 @@
 # passed by the operator who stopped the (old, JSON) feed and every reader first. A pre-cutover feed that is still
 # running writes JSON into the fresh topic within seconds (found the hard way on 2026-10-18 for the gex status topic).
 #
+# Also refuses a bootstrap server that is not the named cluster's broker, re-checks the TopicId immediately before the delete,
+# and fails if any consumer group still holds a committed offset for the recreated topic.
 # Usage:
 #   roll-forward-underlying-spx-price.sh --recreate --cluster dev|production --pre-cutover-id <TopicId> \
 #       --writers-and-readers-stopped <bootstrap-servers> [kafka-bin-dir]
@@ -33,10 +35,19 @@ PRE_ID="${5:-}"; [ -n "$PRE_ID" ] || usage
 BS="${7:-}"; [ -n "$BS" ] || usage
 BIN="${8:-${KAFKA_BIN_DIR:-}}"
 
+# --cluster is not a label: the bootstrap server must BE that cluster's broker, or a destructive command declared "dev" could
+# wipe production (and the reverse). dev: the local broker (what pods dial) or the Mac's LAN address; production: the prod host.
+case "$CLUSTER:$BS" in
+  dev:localhost:19092|dev:host.docker.internal:19092|dev:192.168.100.102:19092) ;;
+  production:192.168.100.252:9092) ;;
+  *) echo "FATAL: bootstrap '$BS' is not the $CLUSTER cluster's broker; refusing (nothing was changed)" >&2; exit 2 ;;
+esac
+
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 . "$HERE/avro-rollforward.lib.sh"
 KT="$(rf_resolve_cli "$BIN")"
+KG="$(rf_resolve_cli_named kafka-consumer-groups "$BIN")"
 kt() { "$KT" --bootstrap-server "$BS" "$@"; }
 
 # The shape the live dev topic carried, read off the broker 2026-10-18 (topics.env: compacted, retention -1).
@@ -54,6 +65,11 @@ if printf '%s\n' "$LIST" | grep -qx "$TOPIC"; then
     echo "      refusing to wipe it. Nothing was changed." >&2
     exit 1
   fi
+  # Last look immediately before the delete: Kafka's delete takes a NAME, not a TopicId, so a topic another administrator
+  # recreated since the check above would be deleted. The runbook freezes topic administration for the window; this
+  # shrinks the race to the gap between this describe and the delete call.
+  AGAIN="$(rf_topic_id "$(rf_describe "$KT" "$BS" "$TOPIC")" "$TOPIC")" || exit 1
+  [ "$AGAIN" = "$PRE_ID" ] || { echo "FAIL: $TOPIC changed id to $AGAIN while checking; nothing deleted." >&2; exit 1; }
   echo "-- delete $TOPIC (id $CUR_ID)"
   kt --delete --topic "$TOPIC"
   settled=0
@@ -83,4 +99,15 @@ rf_split_declared "$CONFIGS" | while IFS='=' read -r k want; do
   have="$(rf_config_value "$DESC" "$k")"
   [ "$have" = "$want" ] || { echo "FAIL: $TOPIC $k is '$have', declared '$want'" >&2; exit 1; }
 done
+# Committed offsets are keyed by topic NAME. Deleting the topic removes them from the (stopped) groups, but that is a broker
+# behaviour, so it is verified, not assumed: a group that kept an offset for the name would resume beyond the new log end and
+# silently skip the first Avro records.
+GROUPS_OUT="$("$KG" --bootstrap-server "$BS" --describe --all-groups 2>&1)" || { echo "FAIL: cannot read consumer groups on $BS:" >&2; printf '%s\n' "$GROUPS_OUT" >&2; exit 1; }
+STALE="$(printf '%s\n' "$GROUPS_OUT" | awk -v t="$TOPIC" '$2 == t && $4 ~ /^[0-9]+$/ {print $1 ":" $3 "@" $4}')"
+if [ -n "$STALE" ]; then
+  echo "FAIL: consumer groups still hold committed offsets for $TOPIC (group:partition@offset):" >&2
+  printf '%s\n' "$STALE" >&2
+  echo "      reset them (kafka-consumer-groups --reset-offsets --to-earliest --execute, or delete the stopped group) before any reader starts." >&2
+  exit 1
+fi
 echo "=== DONE: $TOPIC recreated empty (id $NEW_ID, was $PRE_ID). Next: deploy the Avro readers, then the Avro feed ==="

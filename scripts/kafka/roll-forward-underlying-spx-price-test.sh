@@ -33,15 +33,21 @@ esac
 exit 0
 MOCK
 chmod +x "$TMP/bin/kafka-topics.sh"
+cat > "$TMP/bin/kafka-consumer-groups.sh" <<'MOCK'
+#!/usr/bin/env bash
+[ "${MOCK_GROUPS_RC:-0}" = 0 ] || { echo "coordinator down" >&2; exit 1; }
+printf 'GROUP TOPIC PARTITION CURRENT-OFFSET LOG-END-OFFSET LAG CONSUMER-ID HOST CLIENT-ID\n%s\n' "${MOCK_GROUPS:-}"
+MOCK
+chmod +x "$TMP/bin/kafka-consumer-groups.sh"
 
 pass=0; fail=0
 check() { if [ "$2" = "$3" ]; then pass=$((pass+1)); echo "ok    $1"; else fail=$((fail+1)); echo "FAIL  $1: expected '$3' got '$2'"; fi; }
 run() { MOCK_DIR="$TMP/state" PATH="$TMP/bin:$PATH" bash "$HERE/roll-forward-underlying-spx-price.sh" "$@" >"$TMP/out" 2>&1; echo $?; }
 reset() { rm -rf "$TMP/state"; mkdir -p "$TMP/state"; [ -z "${1:-}" ] || echo "$1" > "$TMP/state/topic"; }
-ARGS=(--recreate --cluster dev --pre-cutover-id OLDID --writers-and-readers-stopped mock:9092 "$TMP/bin")
+ARGS=(--recreate --cluster dev --pre-cutover-id OLDID --writers-and-readers-stopped localhost:19092 "$TMP/bin")
 
 reset OLDID
-check "refuses without the exclusion assertion" "$(run --recreate --cluster dev --pre-cutover-id OLDID mock:9092 "$TMP/bin")" 2
+check "refuses without the exclusion assertion" "$(run --recreate --cluster dev --pre-cutover-id OLDID localhost:19092 "$TMP/bin")" 2
 check "nothing deleted when refused" "$(cat "$TMP/state/log" 2>/dev/null | wc -l | tr -d ' ')" 0
 
 reset NEWER
@@ -59,6 +65,18 @@ check "creates an absent topic" "$(run "${ARGS[@]}")" 0
 reset OLDID
 check "an unlistable broker aborts before any delete" "$(MOCK_LIST_RC=1 run "${ARGS[@]}")" 1
 check "…nothing deleted" "$(cat "$TMP/state/log" 2>/dev/null | wc -l | tr -d ' ')" 0
-check "an unknown cluster name is a usage error" "$(reset OLDID; run --recreate --cluster staging --pre-cutover-id OLDID --writers-and-readers-stopped mock:9092 "$TMP/bin")" 2
+check "an unknown cluster name is a usage error" "$(reset OLDID; run --recreate --cluster staging --pre-cutover-id OLDID --writers-and-readers-stopped localhost:19092 "$TMP/bin")" 2
+
+reset OLDID
+check "a bootstrap that is not the named cluster is refused" "$(run --recreate --cluster dev --pre-cutover-id OLDID --writers-and-readers-stopped 192.168.100.252:9092 "$TMP/bin")" 2
+check "…and nothing deleted" "$(cat "$TMP/state/log" 2>/dev/null | wc -l | tr -d ' ')" 0
+check "production names only the prod broker" "$(run --recreate --cluster production --pre-cutover-id OLDID --writers-and-readers-stopped localhost:19092 "$TMP/bin")" 2
+
+reset OLDID
+check "a group still holding an offset for the topic fails the run" "$(MOCK_GROUPS='vol-premium underlying.spx.price 0 6505 6505 0 - - -' run "${ARGS[@]}")" 1
+reset OLDID
+check "groups holding offsets for OTHER topics do not" "$(MOCK_GROUPS='vol-premium other.topic 0 55 55 0 - - -' run "${ARGS[@]}")" 0
+reset OLDID
+check "an unreadable group list fails the run" "$(MOCK_GROUPS_RC=1 run "${ARGS[@]}")" 1
 
 echo "passed=$pass failed=$fail"; [ "$fail" = 0 ]
