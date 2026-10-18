@@ -1,0 +1,124 @@
+{
+  "_class": "org.jenkinsci.plugins.workflow.job.WorkflowRun",
+  "actions": [
+    {
+      "_class": "hudson.model.ParametersAction",
+      "parameters": [
+        {
+          "_class": "hudson.model.StringParameterValue",
+          "name": "PERMITTED_SHA_GUARD_VERSION",
+          "value": "2f6fc2ab7aa51eb8a9e8aa350f2d774cd2fb7a253de2591e43645a19a9886b24"
+        },
+        {
+          "_class": "hudson.model.StringParameterValue",
+          "name": "CONTRACTS_PERMITTED_SHA",
+          "value": "6aa2f00a884af24caeac7db2d3633357deb1893c"
+        },
+        {
+          "_class": "hudson.model.StringParameterValue",
+          "name": "PERMITTED_SHA",
+          "value": "a33fa6618b4cf07829ee38ba675f6629c3ef5602"
+        },
+        {
+          "_class": "hudson.model.StringParameterValue",
+          "name": "ENVIRONMENT",
+          "value": "dev"
+        },
+        {
+          "_class": "hudson.model.StringParameterValue",
+          "name": "IMAGE_REGISTRY",
+          "value": ""
+        },
+        {
+          "_class": "hudson.model.StringParameterValue",
+          "name": "IMAGE_TAG",
+          "value": ""
+        },
+        {
+          "_class": "hudson.model.StringParameterValue",
+          "name": "DEV_IMAGE_TAG",
+          "value": ""
+        },
+        {
+          "_class": "hudson.model.StringParameterValue",
+          "name": "BUILD_PLATFORM",
+          "value": "linux/arm64"
+        },
+        {
+          "_class": "hudson.model.StringParameterValue",
+          "name": "CONTRACTS_BRANCH",
+          "value": "main"
+        },
+        {
+          "_class": "hudson.model.StringParameterValue",
+          "name": "PROCESSING_BRANCH",
+          "value": "main"
+        },
+        {
+          "_class": "hudson.model.BooleanParameterValue",
+          "name": "ALLOW_FULL_REACTOR",
+          "value": false
+        },
+        {
+          "_class": "hudson.model.StringParameterValue",
+          "name": "BUILD_TARGET",
+          "value": "options-edge-context-tape"
+        },
+        {
+          "_class": "hudson.model.BooleanParameterValue",
+          "name": "PUSH_IMAGES",
+          "value": true
+        },
+        {
+          "_class": "hudson.model.StringParameterValue",
+          "name": "REMOTE_BUILD_HOST",
+          "value": "192.168.100.252"
+        },
+        {
+          "_class": "hudson.model.StringParameterValue",
+          "name": "REMOTE_BUILD_ROOT",
+          "value": "/home/abhinav/ci/remote-builds"
+        }
+      ]
+    },
+    {
+      "_class": "hudson.model.CauseAction"
+    },
+    {
+      "_class": "jenkins.metrics.impl.TimeInQueueAction"
+    },
+    {
+      "_class": "org.jenkinsci.plugins.workflow.libs.LibrariesAction"
+    },
+    {
+      "_class": "hudson.plugins.git.util.BuildData"
+    },
+    {},
+    {},
+    {
+      "_class": "org.jenkinsci.plugins.workflow.cps.EnvActionImpl"
+    },
+    {},
+    {
+      "_class": "hudson.plugins.git.util.BuildData"
+    },
+    {},
+    {},
+    {},
+    {
+      "_class": "org.jenkinsci.plugins.displayurlapi.actions.RunDisplayAction"
+    },
+    {
+      "_class": "org.jenkinsci.plugins.pipeline.modeldefinition.actions.RestartDeclarativePipelineAction"
+    },
+    {},
+    {
+      "_class": "org.jenkinsci.plugins.workflow.job.views.FlowGraphAction"
+    },
+    {},
+    {}
+  ],
+  "building": false,
+  "number": 1901,
+  "result": "SUCCESS"
+}
