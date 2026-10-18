@@ -98,13 +98,17 @@ spec:
   #     them nowhere either. So both environments declare two values that no code consumes: they are
   #     documentation sitting in a manifest, not configuration, and no image roll changes that.
   #
-  #   - THE ONLY SUBSCRIBER. pressure-postgres-writer is the only consumer group this surface has,
-  #     and the only one it has ever had. Checked 2026-10-18:
+  #   - THE ONLY SUBSCRIBER, as observed - and the claim is deliberately limited to that, because an
+  #     earlier version said "the only one it has ever had" one sentence before admitting a group
+  #     listing cannot establish history. What is observed: pressure-postgres-writer is the only
+  #     consumer group on either topic now, and there was no group on either topic before it was
+  #     deployed. Checked 2026-10-18:
   #     `~/kafka-4.3.0/bin/kafka-consumer-groups.sh --bootstrap-server localhost:19092 --all-groups --describe | awk '$2 ~ /option-pressure-state-(current|evidence)/ {print $1, $2}' | sort -u`
   #     prints exactly one line, `option-pressure-state-postgres-writer option-pressure-state-evidence`,
-  #     and printed nothing at all before that reader was deployed. A consumer group is not proof
-  #     about all of history - a group deleted long ago would not appear - but nothing in any of the
-  #     nineteen repositories in this workspace references either topic.
+  #     and printed nothing at all before that reader was deployed. Those are two bounded
+  #     observations, not a statement about all time: a group deleted before either check would not
+  #     appear in either. The supporting point, which is a different kind of evidence, is that
+  #     nothing in any of the nineteen repositories in this workspace references either topic.
   #
   # THE EVIDENCE FOR THE OFFSET CLAIM BELOW lives here too, so the three files that mention it can
   # point at one copy instead of repeating it - which is how four copies of an earlier note drifted
