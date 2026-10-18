@@ -17,8 +17,9 @@
 # built: with replicas 1 and no image, a full deploy aborts at the digest-pinning step and a direct
 # apply gives ImagePullBackOff. Build it first with the service's own deploy job while the base is
 # still inert, then merge this.
-# Dev now runs it, and only dev: the base is unchanged, so production still renders replicas 0 with
-# OPTION_PRESSURE_ENABLED=false. What does and does not hold production there is stated ONCE, in
+# Dev now runs it, and only dev: the base is unchanged, so a production deploy would render
+# replicas 0 with OPTION_PRESSURE_ENABLED=false - and none has happened, the Deployment is not
+# applied on production at all. What does and does not hold production there is stated ONCE, in
 # k8s/base/option-pressure-state-deployment.yaml. Do not restate it here.
 #
 # Nothing on dev contends with this patch. The two scripts whose KEEP_DOWN lists would force a

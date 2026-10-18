@@ -7,7 +7,9 @@ metadata:
     app.kubernetes.io/name: option-pressure-state-service
     app.kubernetes.io/part-of: options-edge
 spec:
-  # THE BASE IS INERT, and production runs the base. Both gates here are shut:
+  # THE BASE IS INERT, and the production render of this workload is this base - though as of
+  # 2026-10-18 nothing is applied there yet (see the NotFound check below), so everything said about
+  # production here describes what a deploy WOULD put there. Both gates are shut:
   #   1. OPTION_PRESSURE_ENABLED defaults false, so this service's topology does not start.
   #   2. Upstream, OPB_L1_ENABLED is false in the base, so option-price-behavior emits no
   #      option-price-behavior-l1-contributions records for it to read.
@@ -15,10 +17,11 @@ spec:
   # k8s/overlays/dev/option-pressure-state-dev-enable-patch.yaml sets replicas 1 and
   # OPTION_PRESSURE_ENABLED=true. The PRODUCER must be deployed first, because it is what creates
   # the input topic and Kafka Streams refuses to start a topology whose source topic is absent.
-  # Production therefore stays at zero from this file - and as of 2026-10-18 the Deployment is not
-  # applied on production at all: `ssh abhinav@192.168.100.252 'kubectl -n options-edge get deploy
-  # option-pressure-state-service'` returns NotFound. So the scale-up case below is what would happen
-  # AFTER a deploy puts it there, not something pending today.
+  # A production deploy from this file would therefore render replicas 0. It has not happened: as of
+  # 2026-10-18 the Deployment is not applied on production at all -
+  # `ssh abhinav@192.168.100.252 'kubectl -n options-edge get deploy option-pressure-state-service'`
+  # returns NotFound. So the scale-up case below is what would happen after a deploy puts it there,
+  # not something pending today, and the autostart cannot scale a Deployment that does not exist.
   # THIS COMMENT IS THE ONE PLACE that states what
   # does and does not hold production for this service; three other files used to restate it and had
   # drifted into contradicting each other, so they now point here instead of repeating it.
@@ -27,9 +30,11 @@ spec:
   # production image is what holds production inert. That is wrong twice over:
   #   - The repository's KEEP_DOWN lists DO name this service - scripts/ops/morning-autostart.sh and
   #     scripts/ops/oe-boot-bringup.sh both carry it - so the repository is not the problem. What is
-  #     the problem is that the PRODUCTION HOST does not run those copies (checks below), so on that
-  #     host nothing holds this service except this file's own replicas: 0, which an autostart
-  #     scale-up overrides. Reinstalling the host copies is what would turn the entries into a hold.
+  #     the problem is that the PRODUCTION HOST does not run those copies (checks below), so ONCE A
+  #     DEPLOY HAS PUT THIS DEPLOYMENT THERE nothing on that host would hold it except the rendered
+  #     replicas: 0, which an autostart scale-up overrides. Until that deploy happens there is
+  #     nothing to hold, which is a stronger position than any of this and the only reason none of it
+  #     bites today. Reinstalling the host copies is what would turn the entries into a hold.
   #   - An absent image is not a hold. If a scale-up happens, the Deployment's desired count becomes
   #     1 and what follows depends on the node, not on this repository: the PRODUCTION RENDER sets
   #     imagePullPolicy IfNotPresent (k8s/services/option-pressure-state/overlays/production/

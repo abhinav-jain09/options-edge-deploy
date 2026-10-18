@@ -396,8 +396,9 @@ patches:
   # DEV mirror of the standalone overlay: OPB rolling windows disabled on dev (matches #482, which
   # touched only the standalone overlay and drifted the monolithic dev render). Prod already has it.
   - path: option-price-behavior-dev-env-patch.yaml
-  # DEV-ONLY: start the L1 pressure CONSUMER, on dev only. Production renders replicas 0 with
-  # OPTION_PRESSURE_ENABLED=false. What does and does not hold production is stated ONCE, in
+  # DEV-ONLY: start the L1 pressure CONSUMER, on dev only. A production deploy would render
+  # replicas 0 with OPTION_PRESSURE_ENABLED=false, and none has happened - the Deployment is not
+  # applied there. What does and does not hold production is stated ONCE, in
   # k8s/base/option-pressure-state-deployment.yaml; this line used to restate it and was wrong.
   # The PRODUCER (OPB_L1_ENABLED) is a separate change and must be deployed FIRST: it creates the
   # input topic, and Kafka Streams refuses to start a topology whose source topic is absent. See the
