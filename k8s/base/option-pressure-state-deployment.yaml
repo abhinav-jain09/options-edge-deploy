@@ -28,11 +28,23 @@ spec:
   # roughly 12.5 GiB steady state; see docs/option-price-behavior/L1-PRESSURE-STATE-CAPACITY.md in
   # options-edge-processing.
   #
-  # What it would do: consume the L1 contributions, aggregate one-second information blocks per
-  # strike AND per symbol, and publish option-pressure-state-current / -evidence. Every frame
-  # carries actionable=false and nothing downstream may act on it: the register was REJECTED on two
-  # gate sets, and a Lane D validation over the Databento SPXW year found no directional content
-  # (see opb-calibration/LANE-D-VALIDATION-RESULT.md in options-edge-processing).
+  # What it does, where it runs: consume the L1 contributions, aggregate one-second information
+  # blocks per strike AND per symbol, and publish option-pressure-state-current / -evidence as AVRO
+  # through the Schema Registry (released schemas in options-edge-contracts, schemas/optionpressure).
+  # This is a DESCRIPTIVE surface. Every frame carries actionable=false and nothing downstream may
+  # trade on one: the register was REJECTED on two gate sets, and a Lane D validation over the
+  # Databento SPXW year found no directional content (see
+  # opb-calibration/LANE-D-VALIDATION-RESULT.md in options-edge-processing). What it does say is what
+  # the flow currently looks like, in a vocabulary that is MEASURED rather than seeded: the symbol
+  # thresholds are the p95 and p90 of |level| over 5,504,676 GOOD seconds of the 251-session corpus,
+  # replacing a seed that fired on 34.5% of all seconds. The strike thresholds remain seeds.
+  #
+  # Enabling production is not just a replica count. It needs an ENVIRONMENT=production image, and it
+  # needs OPB_L1_ENABLED on option-price-behavior, which adds a per-trade sink forward inside that
+  # service's exactly-once transaction — the same class of change as the 2026-07-14 incident recorded
+  # in k8s/overlays/production/option-price-behavior-prod-patch.yaml, which froze all OPB output for
+  # about an hour during RTH and is read by the gateway and the web page. Measure the throughput on a
+  # real dev session before enabling it here.
   replicas: 0
   # Recreate, not RollingUpdate: both engines keep RocksDB state on one ReadWriteOnce PVC under a
   # single Streams application id, and a rolling replacement can run the outgoing and incoming pod
