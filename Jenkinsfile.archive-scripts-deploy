@@ -296,17 +296,17 @@ pipeline {
         timeout(time: 10, unit: 'MINUTES') {
           sh 'PERMITTED_SHA="${PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored .jenkins-tmp --allow-ignored scripts/ops/archive/market_calendar.py --allow-ignored scripts/ops/archive/vol-premium-open-reference-capture.py'
         }
-        sh 'javac --release 21 -cp ".jenkins-tmp/contracts/target/options-edge-contracts-${ARCHIVE_CONTRACTS_VERSION}.jar:$(cat .jenkins-tmp/archive-contracts-deps.txt)" -d .jenkins-tmp/canonical-archive-classes scripts/ops/archive/CanonicalArchiveDecoder.java'
+        sh 'javac --release 21 -cp ".jenkins-tmp/contracts/target/options-edge-contracts-${ARCHIVE_CONTRACTS_VERSION}.jar:$(cat .jenkins-tmp/archive-contracts-deps.txt)" -d .jenkins-tmp/canonical-archive-classes scripts/ops/archive/CanonicalArchiveDecoder.java scripts/ops/archive/StrikeArchiveReader.java'
         timeout(time: 10, unit: 'MINUTES') {
           sh 'PERMITTED_SHA="${PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored .jenkins-tmp --allow-ignored scripts/ops/archive/market_calendar.py --allow-ignored scripts/ops/archive/vol-premium-open-reference-capture.py'
         }
-        sh 'javac --release 21 -cp ".jenkins-tmp/canonical-archive-classes:.jenkins-tmp/contracts/target/options-edge-contracts-${ARCHIVE_CONTRACTS_VERSION}.jar:$(cat .jenkins-tmp/archive-contracts-deps.txt)" -d .jenkins-tmp/canonical-archive-tests scripts/ops/archive/StrikeArchiveReader.java tests/archive-canonical/CanonicalArchiveDecoderTest.java'
-        sh 'java -Xmx512m -cp ".jenkins-tmp/canonical-archive-tests:.jenkins-tmp/canonical-archive-classes:.jenkins-tmp/contracts/target/options-edge-contracts-${ARCHIVE_CONTRACTS_VERSION}.jar:$(cat .jenkins-tmp/archive-contracts-deps.txt)" CanonicalArchiveDecoderTest .jenkins-tmp/contracts'
+        sh 'javac --release 21 -cp ".jenkins-tmp/canonical-archive-classes:.jenkins-tmp/contracts/target/options-edge-contracts-${ARCHIVE_CONTRACTS_VERSION}.jar:$(cat .jenkins-tmp/archive-contracts-deps.txt)" -d .jenkins-tmp/canonical-archive-tests tests/archive-canonical/CanonicalArchiveDecoderTest.java'
         sh 'PYTHONDONTWRITEBYTECODE=1 OE_INDICATOR_READER_CP=".jenkins-tmp/contracts/target/options-edge-contracts-${ARCHIVE_CONTRACTS_VERSION}.jar:$(cat .jenkins-tmp/archive-contracts-deps.txt)" python3 -m unittest tests.test_indicator_archive_reader'
         timeout(time: 10, unit: 'MINUTES') {
           sh 'PERMITTED_SHA="${PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored .jenkins-tmp --allow-ignored scripts/ops/archive/market_calendar.py --allow-ignored scripts/ops/archive/vol-premium-open-reference-capture.py'
         }
         sh 'jar --create --file .jenkins-tmp/canonical-archive-reader.jar -C .jenkins-tmp/canonical-archive-classes .'
+        sh 'java -Xmx512m -cp ".jenkins-tmp/canonical-archive-reader.jar:.jenkins-tmp/canonical-archive-tests:.jenkins-tmp/contracts/target/options-edge-contracts-${ARCHIVE_CONTRACTS_VERSION}.jar:$(cat .jenkins-tmp/archive-contracts-deps.txt)" CanonicalArchiveDecoderTest .jenkins-tmp/contracts .jenkins-tmp/canonical-archive-reader.jar'
       }
     }
 

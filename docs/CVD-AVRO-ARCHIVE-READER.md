@@ -82,3 +82,14 @@ I/O and startup costs; that single-record timing is not throughput qualification
 Also prove which decoder artifact loads: JDK22+ multi-file source launching may
 resolve the adjacent source rather than the tested helper jar. Prove native Kafka
 and Confluent classpath linkage separately from the Maven test classpath.
+
+## Compiled capture entrypoint follow-up (2026-10-18)
+
+Canonical captures now execute the compiled StrikeArchiveReader main class from
+the first classpath entry, the shipped helper jar. That jar contains the reader
+and decoder compiled with release21. Jenkins runs the existing codec/layout
+suite against this exact jar and asserts both classes' CodeSource locations.
+This removes the JDK22+ multi-file source-launch ambiguity. Marker and unrelated
+raw-topic paths retain their original Java17-compatible source launch and do not
+load the SDK. Native Confluent/Kafka linkage, sustained retained-history capture
+and cold-registry/metadata-boundary qualification remain open before installation.

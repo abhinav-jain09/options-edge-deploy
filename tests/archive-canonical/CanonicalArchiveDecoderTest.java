@@ -54,7 +54,15 @@ public class CanonicalArchiveDecoderTest {
         throw new AssertionError("Missing actual source fixture "+schema);
     }
     public static void main(String[] args) throws Exception {
-        if(args.length!=1)throw new IllegalArgumentException("contracts source directory required");
+        if(args.length<1||args.length>2)throw new IllegalArgumentException("contracts source directory and optional tested helper jar required");
+        if(args.length==2) {
+            Path expected=Path.of(args[1]).toRealPath();
+            for(Class<?> type:new Class<?>[]{StrikeArchiveReader.class,CanonicalArchiveDecoder.class}) {
+                Path actual=Path.of(type.getProtectionDomain().getCodeSource().getLocation().toURI()).toRealPath();
+                check(expected.equals(actual),"Canonical archive class must load from tested helper jar: "+type+" actual="+actual);
+            }
+            System.out.println("Canonical archive helper identity PASS "+expected);
+        }
         var marker=new StrikeArchiveReader.Opts(); marker.markGroup="archive-marker"; marker.canonicalRegistry="http://not-accessed";
         check(StrikeArchiveReader.canonicalDecoder(marker)==null,"offset marker must not load a decoder or registry");
         Path source=Path.of(args[0]);String scope="archive-canonical-unit";
