@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# PATH shim: proxy 'kafka-console-consumer' into the es4-kafka container so the SHARED
+# scripts/kafka/verify-avro-rollforward.sh runs unmodified on the es4 box (no CLI on the host).
+# Added 2026-10-18 for the Avro roll-forward barrier's WIRE-FORMAT check, which reads one record
+# from each non-empty partition and refuses a value that is not Confluent-framed Avro.
+# sudo -n: non-interactive, matching the rest of the es4 tooling. Fail loudly, never silently.
+set -euo pipefail
+exec sudo -n docker exec -i "${ES4_KAFKA_CONTAINER:-es4-kafka}" kafka-console-consumer "$@"

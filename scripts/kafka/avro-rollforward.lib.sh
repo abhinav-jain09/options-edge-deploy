@@ -161,3 +161,70 @@ rf_config_value() {
       if (have) print out
     }'
 }
+
+# rf_resolve_cli_named <base-name> [bin-dir] -> the command to run for that Kafka CLI.
+# Same resolution as rf_resolve_cli, for the other tools the barrier needs.
+rf_resolve_cli_named() {
+  local base="$1" bin="${2:-${KAFKA_BIN_DIR:-}}"
+  if [ -n "$bin" ]; then
+    if [ ! -x "$bin/$base.sh" ]; then
+      echo "FATAL: $bin/$base.sh is not executable" >&2; return 1
+    fi
+    printf '%s\n' "$bin/$base.sh"
+  elif command -v "$base" >/dev/null 2>&1; then
+    printf '%s\n' "$base"
+  elif command -v "$base.sh" >/dev/null 2>&1; then
+    printf '%s\n' "$base.sh"
+  else
+    echo "FATAL: no $base CLI found (pass a bin dir or set KAFKA_BIN_DIR)" >&2; return 1
+  fi
+}
+
+# rf_nonempty_partitions <get-offsets-cli> <bootstrap> <topic> -> partition numbers that hold records.
+#
+# Derived from earliest vs latest offsets rather than by polling every partition: a 32-partition topic
+# would otherwise cost 32 consumer timeouts to discover that 31 of them are empty.
+rf_nonempty_partitions() {
+  local cli="$1" bs="$2" topic="$3" early late
+  if ! early="$("$cli" --bootstrap-server "$bs" --topic "$topic" --time -2 2>&1)"; then
+    echo "FATAL: cannot read earliest offsets for $topic on $bs:" >&2; printf '%s\n' "$early" >&2; return 1
+  fi
+  if ! late="$("$cli" --bootstrap-server "$bs" --topic "$topic" --time -1 2>&1)"; then
+    echo "FATAL: cannot read latest offsets for $topic on $bs:" >&2; printf '%s\n' "$late" >&2; return 1
+  fi
+  printf '%s\n%s\n' "$early" "$late" | awk -F: -v t="$topic" '
+    $1==t { if (seen[$2]++) { if ($3+0 > first[$2]+0) print $2 } else { first[$2]=$3 } }'
+}
+
+# rf_wire_is_avro <console-consumer-cli> <bootstrap> <topic> <partition> <from-offset>
+#   -> 0 when the record at that offset is Confluent-framed Avro, 1 when it is not, 2 when unreadable.
+#
+# WHY THIS EXISTS, and why the topic-id check is not enough. A new topic id proves the ORIGINAL
+# JSON-bearing topic is gone. It does NOT prove nothing has written JSON SINCE. On 2026-10-18 that
+# gap was real and self-inflicted: the dev topic was recreated at 15:10 and the still-running
+# PRE-CUTOVER image then wrote 31 hand-built JSON heartbeats into it before the new image rolled at
+# 15:59. The topic id was post-wipe the whole time, so the barrier passed while the topic held
+# exactly the retained JSON the Kafka Serialization Rule forbids an Avro consumer to meet.
+#
+# A Confluent-framed Avro value begins with the magic byte 0x00 followed by a 4-byte schema id; the
+# hand-built JSON this estate is leaving behind begins with 0x7b, "{". That one byte is the whole
+# discriminator, so this reads ONE record per non-empty partition.
+rf_wire_is_avro() {
+  local cli="$1" bs="$2" topic="$3" part="$4" off="$5" tmp first
+  tmp="$(mktemp)"
+  # < /dev/null is REQUIRED, not hygiene: kafka-console-consumer reads stdin, and without this it
+  # swallows the caller's `while read ... <<<` herestring — the outer topic loop then silently
+  # processes one topic and stops, which looks exactly like a clean pass.
+  if ! "$cli" --bootstrap-server "$bs" --topic "$topic" --partition "$part" \
+        --offset "$off" --max-messages 1 --timeout-ms "${RF_WIRE_TIMEOUT_MS:-15000}" \
+        > "$tmp" 2>/dev/null < /dev/null; then
+    # A compacted-away offset reads as empty rather than as a failure; treat unreadable as unknown.
+    if [ ! -s "$tmp" ]; then rm -f "$tmp"; return 2; fi
+  fi
+  if [ ! -s "$tmp" ]; then rm -f "$tmp"; return 2; fi
+  first="$(od -An -tx1 -N1 "$tmp" | tr -d ' \n')"
+  rm -f "$tmp"
+  [ "$first" = "00" ] && return 0
+  echo "    first value byte is 0x$first (Confluent Avro is 0x00; hand-built JSON is 0x7b '{')" >&2
+  return 1
+}

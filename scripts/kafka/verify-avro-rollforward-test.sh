@@ -51,6 +51,32 @@ exit 0
 MOCK
 chmod +x "$TMP/bin/kafka-topics.sh"
 
+# kafka-get-offsets: drives which partitions the wire check looks at.
+#   MOCK_EARLIEST / MOCK_LATEST — "<topic>:<partition>:<offset>" lines. A partition whose latest
+#   exceeds its earliest is non-empty, which is how rf_nonempty_partitions decides.
+cat > "$TMP/bin/kafka-get-offsets.sh" <<'MOCK'
+#!/usr/bin/env bash
+set -u
+for a in "$@"; do case "$a" in -2) printf '%s\n' "${MOCK_EARLIEST:-}" | grep -v '^$'; exit "${MOCK_OFFSETS_RC:-0}" ;; esac; done
+printf '%s\n' "${MOCK_LATEST:-}" | grep -v '^$'
+exit "${MOCK_OFFSETS_RC:-0}"
+MOCK
+chmod +x "$TMP/bin/kafka-get-offsets.sh"
+
+# kafka-console-consumer: emits the bytes the wire check inspects.
+#   MOCK_WIRE — "avro" (0x00 frame), "json" ({...), or "empty" (nothing, i.e. unreadable).
+cat > "$TMP/bin/kafka-console-consumer.sh" <<'MOCK'
+#!/usr/bin/env bash
+set -u
+case "${MOCK_WIRE:-avro}" in
+  avro) printf '\000\000\000\000\001some-avro-body' ;;
+  json) printf '{"emitterEpoch":1,"state":"GATED"}' ;;
+  empty) : ;;
+esac
+exit 0
+MOCK
+chmod +x "$TMP/bin/kafka-console-consumer.sh"
+
 PRE_ID=Etuw6A2-RZiWnbq4oPLHLw            # the es4 pre-cutover id, from avro-rollforward.lib.sh
 T=es.options.databento.gex.oi-status
 GOOD_CFG='min.insync.replicas=1,cleanup.policy=delete,segment.bytes=268435456,retention.ms=43200000'
@@ -58,8 +84,12 @@ desc() { printf '%s=Topic: %s\tTopicId: %s\tPartitionCount: %s\tReplicationFacto
 
 pass=0; fail=0
 run() { # <name> <expected rc> ; env comes from the caller
+  # Default the wire inputs to "one non-empty partition carrying Avro" so the pre-existing cases
+  # keep testing what they were written to test; the wire cases below override them.
   local name="$1" want="$2" out rc
-  out="$(PATH="$TMP/bin:$PATH" bash "$HERE/verify-avro-rollforward.sh" --cluster es4 mock:9092 "$TMP/bin" 2>&1)"
+  out="$(MOCK_EARLIEST="${MOCK_EARLIEST-$T:0:0}" MOCK_LATEST="${MOCK_LATEST-$T:0:5}" \
+         MOCK_WIRE="${MOCK_WIRE-avro}" \
+         PATH="$TMP/bin:$PATH" bash "$HERE/verify-avro-rollforward.sh" --cluster es4 mock:9092 "$TMP/bin" 2>&1)"
   rc=$?
   if [ "$rc" = "$want" ]; then
     pass=$((pass+1)); echo "ok    $name (rc=$rc)"
@@ -109,6 +139,29 @@ MOCK_LIST="$T" MOCK_DESCRIBE="$(desc NEWIDxxxxxxxxxxxxxxxxx 32 'min.insync.repli
 # And a config that is ABSENT from the broker, rather than wrong, is refused too.
 MOCK_LIST="$T" MOCK_DESCRIBE="$(desc NEWIDxxxxxxxxxxxxxxxxx 32 'cleanup.policy=delete,retention.ms=43200000')" \
   run "a MISSING declared config (min.insync.replicas) is refused" 1
+
+# THE WIRE FORMAT — the check that caught a real, self-inflicted defect on 2026-10-18. The dev topic
+# was recreated at 15:10 and the still-running PRE-CUTOVER image wrote 31 hand-built JSON heartbeats
+# into it before the new image rolled at 15:59. The topic id was post-wipe the whole time, so an
+# id-only barrier passed over exactly the retained JSON the rule forbids an Avro consumer to meet.
+MOCK_LIST="$T" MOCK_DESCRIBE="$(desc NEWIDxxxxxxxxxxxxxxxxx 32 "$GOOD_CFG")" MOCK_WIRE=json \
+  run "a JSON value written AFTER the wipe is refused (post-wipe contamination)" 1
+
+MOCK_LIST="$T" MOCK_DESCRIBE="$(desc NEWIDxxxxxxxxxxxxxxxxx 32 "$GOOD_CFG")" MOCK_WIRE=avro \
+  run "an Avro value at the earliest offset passes" 0
+
+# An EMPTY topic has no non-empty partition, so there is nothing to read and nothing to refuse.
+MOCK_LIST="$T" MOCK_DESCRIBE="$(desc NEWIDxxxxxxxxxxxxxxxxx 32 "$GOOD_CFG")" \
+  MOCK_EARLIEST="$T:0:0" MOCK_LATEST="$T:0:0" MOCK_WIRE=json \
+  run "an EMPTY topic passes (no record to classify)" 0
+
+# A non-empty partition that cannot be read is refused rather than assumed Avro.
+MOCK_LIST="$T" MOCK_DESCRIBE="$(desc NEWIDxxxxxxxxxxxxxxxxx 32 "$GOOD_CFG")" MOCK_WIRE=empty \
+  run "a non-empty partition that reads back nothing is refused" 1
+
+# And a failure of the offset query itself must not read as "no non-empty partitions".
+MOCK_LIST="$T" MOCK_DESCRIBE="$(desc NEWIDxxxxxxxxxxxxxxxxx 32 "$GOOD_CFG")" MOCK_OFFSETS_RC=1 \
+  run "a kafka-get-offsets failure is refused, not read as an empty topic" 1
 
 # A versioned sibling present is REPORTED, not fatal — the documented exception, asserted so a later
 # edit cannot quietly make it fatal and deadlock the cutover rollout.

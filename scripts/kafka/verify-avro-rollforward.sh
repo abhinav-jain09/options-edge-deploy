@@ -42,12 +42,14 @@ BIN="${4:-${KAFKA_BIN_DIR:-}}"
 . "$(dirname "${BASH_SOURCE[0]}")/avro-rollforward.lib.sh"
 
 KT="$(rf_resolve_cli "$BIN")"
+GO="$(rf_resolve_cli_named kafka-get-offsets "$BIN")"
+CC="$(rf_resolve_cli_named kafka-console-consumer "$BIN")"
 SPECS="$(rf_specs "$CLUSTER")"
 LIST="$(rf_list "$KT" "$BS")"
 
 echo "=== verify-avro-rollforward on $BS (cluster $CLUSTER) ==="
 fail=0
-while IFS='|' read -r topic parts cfgs pre_id; do
+while IFS='|' read -r -u 3 topic parts cfgs pre_id; do
   [ -n "$topic" ] || continue
   if ! printf '%s\n' "$LIST" | grep -qx "$topic"; then
     echo "FAIL: $topic does not exist on $BS. The roll-forward has not completed here — run" >&2
@@ -90,8 +92,48 @@ while IFS='|' read -r topic parts cfgs pre_id; do
       || { echo "FAIL: $topic has $want_key='$got', declared '$want_val': $desc" >&2; shape_ok=0; }
   done <<<"$(rf_split_declared "$cfgs")"
   [ "$shape_ok" -eq 1 ] || { fail=1; continue; }
-  echo "ok  $topic rolled forward (topic id $id, $parts partition(s), $cfgs)"
-done <<<"$SPECS"
+  # THE WIRE FORMAT, which is the property the whole barrier is for. The topic id proves the
+  # ORIGINAL JSON-bearing topic is gone; it does NOT prove nothing has written JSON since, and on
+  # 2026-10-18 that gap was real — the dev topic was recreated at 15:10 and the still-running
+  # pre-cutover image wrote 31 JSON heartbeats into it before the new image rolled. The id was
+  # post-wipe throughout, so an id-only barrier passed over exactly the retained JSON the Kafka
+  # Serialization Rule forbids. One record per NON-EMPTY partition, so an empty 32-partition topic
+  # costs two offset queries rather than 32 consumer timeouts.
+  parts_checked=0
+  wire_ok=1
+  # Captured with an explicit status check, NOT inlined as `<<<"$(rf_nonempty_partitions ...)"`:
+  # command substitution discards the function's exit status, so an offsets failure would arrive as
+  # empty output and read as "no non-empty partitions" — a pass over an unverified topic. The
+  # barrier's own test caught this, which is the same class of bug as reading a `--list` failure as
+  # absence.
+  if ! nonempty="$(rf_nonempty_partitions "$GO" "$BS" "$topic")"; then
+    echo "FAIL: $topic — could not determine which partitions hold records, so the wire format is" >&2
+    echo "      unverified. Refusing rather than assuming the topic is empty." >&2
+    fail=1
+    continue
+  fi
+  while read -r pnum; do
+    [ -n "$pnum" ] || continue
+    # `|| wrc=$?` and not a bare call: under `set -e` a non-zero return from the check would abort
+    # the script before the diagnosis below could print — the failure would be a silent exit 1.
+    wrc=0
+    rf_wire_is_avro "$CC" "$BS" "$topic" "$pnum" earliest || wrc=$?
+    case $wrc in
+      0) parts_checked=$((parts_checked + 1)) ;;
+      1) echo "FAIL: $topic partition $pnum holds a NON-AVRO value at its earliest offset." >&2
+         echo "      Something wrote to this topic after it was rolled forward. Stop that writer," >&2
+         echo "      then re-run roll-forward-avro-cutover-topics.sh --recreate --cluster $CLUSTER" >&2
+         wire_ok=0 ;;
+      *) echo "FAIL: $topic partition $pnum could not be read to check its wire format." >&2
+         wire_ok=0 ;;
+    esac
+  done <<<"$nonempty"
+  if [ "$wire_ok" -ne 1 ]; then
+    fail=1
+    continue
+  fi
+  echo "ok  $topic rolled forward (topic id $id, $parts partition(s), $cfgs; $parts_checked non-empty partition(s) carry Avro)"
+done 3<<<"$SPECS"
 
 # Versioned topic names on the broker are REPORTED but do not fail this gate, and the reason is the
 # cutover itself. While the rollout is in flight the OLD image is still running and still writing to
