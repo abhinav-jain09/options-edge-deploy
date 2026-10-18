@@ -121,6 +121,8 @@ resources:
   - option-price-behavior-service.yaml
   - option-pressure-state-deployment.yaml
   - option-pressure-state-service.yaml
+  - breakout-sequencer-deployment.yaml
+  - breakout-sequencer-service.yaml
   - feed-gateway-nightly-restart-cronjob.yaml
   - signal-follower-spx-deployment.yaml
   - signal-follower-spx-service.yaml

@@ -34,6 +34,7 @@ IMAGE_MAP = {
     ("databento-maxpain-service", "databento-maxpain"): "DATABENTO_MAXPAIN_IMAGE",
     ("option-price-behavior-service", "option-price-behavior"): "OPTION_PRICE_BEHAVIOR_IMAGE",
     ("option-pressure-state-service", "option-pressure-state"): "OPTION_PRESSURE_STATE_IMAGE",
+    ("breakout-sequencer-service", "breakout-sequencer"): "BREAKOUT_SEQUENCER_IMAGE",
     ("databento-mission-sandwich-service", "databento-mission-sandwich"): "DATABENTO_MISSION_SANDWICH_IMAGE",
     ("volume-pace-databento-service", "volume-pace"): "VOLUME_PACE_IMAGE",
     ("directional-pressure-service", "directional-pressure"): "DIRECTIONAL_PRESSURE_IMAGE",

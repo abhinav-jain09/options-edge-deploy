@@ -330,6 +330,7 @@ services:
   # docs/option-price-behavior/L1-PRESSURE-STATE-CAPACITY.md in options-edge-processing for the
   # measured per-session volume, which was measured on the JSON bodies and is now an upper bound.
   - { name: option-pressure-state,        managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-option-pressure-state,        deployments: [option-pressure-state-service] }
+  - { name: breakout-sequencer,            managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-breakout-sequencer,            deployments: [breakout-sequencer-service] }
   - { name: directional-pressure,         managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-directional-pressure,         deployments: [directional-pressure-service, directional-pressure-databento-service] }
   - { name: volume-pace,                  managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-volume-pace,                  deployments: [volume-pace-databento-service] }
   - { name: strike-flow-classifier,       managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-strike-flow-classifier,       deployments: [strike-flow-classifier-databento] }
