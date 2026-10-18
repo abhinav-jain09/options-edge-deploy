@@ -110,6 +110,8 @@ def reconcile(url, topic, text, apply, call=http):
     lookup=call(url,'/subjects/'+subject,body,missing=True)
     created=False
     if lookup is None:
+        versions=call(url,'/subjects/'+subject+'/versions?deleted=true',missing=True)
+        if versions is not None and versions!=[]:raise ValueError('Existing subject history conflicts with the released schema')
         if not apply:return {'topic':topic,'registered':False,'action':'missing; dry run only'}
         registered=call(url,'/subjects/'+subject+'/versions',body)
         expected_id=registered['id'];created=True
@@ -150,13 +152,22 @@ def main():
     receipt={'source':os.environ['PERMITTED_SHA'],'contracts':proof,'dryRun':dry=='true','clusters':[],
              'scope':'Exact released external schemas for existing topics only; no Kafka/group/offset/config/mode changes; inactive internal state schemas are outside this action'}
     file=root/'receipt.json'
+    def save():file.write_text(json.dumps(receipt,indent=2)+'\n')
     try:
+        # Preview every existing subject before any version can be registered.
+        receipt['phase']='preflight-registry'
         for environment,url,topics in inventory:
-            row={'environment':environment,'registry':url,'subjects':[]};receipt['clusters'].append(row)
+            row={'environment':environment,'registry':url,'plan':[],'subjects':[]};receipt['clusters'].append(row)
             for topic in topics:
-                row['subjects'].append(reconcile(url,topic,schemas[binding(topic)],dry=='false'))
-                file.write_text(json.dumps(receipt,indent=2)+'\n')
-        receipt['complete']=True
+                receipt['currentSubject']={'environment':environment,'topic':topic};save()
+                row['plan'].append(reconcile(url,topic,schemas[binding(topic)],False));save()
+        receipt['phase']='register' if dry=='false' else 'dry-run'
+        for row,(_,url,topics) in zip(receipt['clusters'],inventory):
+            for topic in topics:
+                receipt['currentSubject']={'environment':row['environment'],'topic':topic};save()
+                # Recheck history at the write boundary; a changed subject fails closed.
+                row['subjects'].append(reconcile(url,topic,schemas[binding(topic)],dry=='false'));save()
+        receipt.update(complete=True,phase='completed',currentSubject=None)
     except Exception as error:
         receipt.update(complete=False,failureType=type(error).__name__);raise
     finally:file.write_text(json.dumps(receipt,indent=2)+'\n')

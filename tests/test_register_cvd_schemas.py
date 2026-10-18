@@ -18,6 +18,7 @@ class Registry:
     def __init__(self,present=False):self.present=present;self.calls=[];self.schema=json.loads(TEXT)
     def __call__(self,url,path,body=None,missing=False):
         self.calls.append((path,body))
+        if path.endswith('/versions?deleted=true'):return [1] if self.present else None
         if path.endswith('/versions'):
             self.present=True;return {'id':42}
         if path.startswith('/schemas/ids/'):
@@ -34,13 +35,25 @@ class CvdSchemasTest(unittest.TestCase):
             self.assertIsNone(m.binding(unknown))
     def test_dry_missing_performs_lookup_only(self):
         r=Registry();result=m.reconcile('http://registry','es.futures.cvd',TEXT,False,r)
-        self.assertFalse(result['registered']);self.assertEqual([('/subjects/es.futures.cvd-value',{'schemaType':'AVRO','schema':TEXT})],r.calls)
+        self.assertFalse(result['registered']);self.assertEqual([('/subjects/es.futures.cvd-value',{'schemaType':'AVRO','schema':TEXT}),('/subjects/es.futures.cvd-value/versions?deleted=true',None)],r.calls)
     def test_apply_then_idempotent_lookup_exact_subject_and_id(self):
         r=Registry();result=m.reconcile('http://registry','es.futures.cvd',TEXT,True,r)
         self.assertTrue(result['registered']);self.assertTrue(result['created']);self.assertEqual(42,result['schemaId'])
-        self.assertEqual(['/subjects/es.futures.cvd-value','/subjects/es.futures.cvd-value/versions','/subjects/es.futures.cvd-value','/schemas/ids/42'],[p for p,b in r.calls])
+        self.assertEqual(['/subjects/es.futures.cvd-value','/subjects/es.futures.cvd-value/versions?deleted=true','/subjects/es.futures.cvd-value/versions','/subjects/es.futures.cvd-value','/schemas/ids/42'],[p for p,b in r.calls])
         r.calls=[];result=m.reconcile('http://registry','es.futures.cvd',TEXT,True,r)
         self.assertFalse(result['created']);self.assertNotIn('/subjects/es.futures.cvd-value/versions',[p for p,b in r.calls])
+    def test_lookup_miss_with_existing_or_deleted_history_never_registers(self):
+        for apply in [False,True]:
+            calls=[]
+            def existing(url,path,body=None,missing=False):
+                calls.append(path)
+                if path.endswith('/versions'):self.fail('must not register over existing subject history')
+                if path.endswith('/versions?deleted=true'):return [1,2]
+                return None
+            with self.subTest(apply=apply),self.assertRaisesRegex(ValueError,'history conflicts'):
+                m.reconcile('http://registry','es.futures.cvd',TEXT,apply,existing)
+            self.assertEqual(['/subjects/es.futures.cvd-value','/subjects/es.futures.cvd-value/versions?deleted=true'],calls)
+
     def test_conflicting_schema_and_behavioral_metadata_fail(self):
         for changes in [{'schema':'{"type":"record","name":"Other","fields":[]}'},{'references':[{'name':'x'}]},{'schemaType':'JSON'},{'metadata':{'properties':{'x':'y'}}},{'ruleSet':{'domainRules':[{'name':'transform'}]}}]:
             with self.subTest(changes=changes),self.assertRaises(ValueError):m.verify_schema({'schema':TEXT,**changes},TEXT)
