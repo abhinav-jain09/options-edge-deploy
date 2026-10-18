@@ -33,13 +33,19 @@ The JSON topic is "removed" by the wipe in step 4 — its removal date is the da
    The script refuses a bootstrap that is not the named cluster's broker, refuses a topic whose id is not the pre-cutover one,
    verifies the shape from the broker, and FAILS if any consumer group still holds a committed offset for the topic (committed
    offsets are keyed by topic name; a surviving one would resume beyond the new log end and skip the first Avro records).
+   If only the consumer-group check fails (the topic was already recreated, so a second `--recreate` correctly refuses the new id):
+   delete or reset those stopped groups (`kafka-consumer-groups --bootstrap-server <bootstrap> --delete --group <g>`), then run the SAME
+   command with `--verify` instead of `--recreate` (post-conditions only, no mutation) and continue at step 5.
    Persisted reader state: a Kafka Streams GLOBAL store checkpoints the end offset of its source topic on its volume. The only
    PVC-backed global store on this topic is `strike-flow-classifier-databento`; its spot store is in-memory in the converted
    code, so no checkpoint can outlive the recreation. (strike-intelligence's global store sits on an emptyDir that is lost with
    the pod.) Any other reader added later that keeps source offsets in persistent state must be reset the same way.
 5. **Deploy the Avro readers** (each `service-deploy` with `BUILD_IMAGES=true`, PERMITTED_SHA per rule) — they start on an empty topic.
 6. **Enable the Avro feed** (`options-edge-databento-feed-deploy` then `service-deploy SERVICE=databento-feed`). Verify its first
-   records decode: `kafka-avro-console-consumer ... --topic underlying.spx.price` shows the record; every reader's log shows a tick.
+   records decode, with the environment's registry (dev `http://host.docker.internal:8082`; production `http://192.168.100.252:8082`):
+   `kafka-avro-console-consumer --bootstrap-server <bootstrap> --topic underlying.spx.price --partition 0 --offset earliest --max-messages 3 --property schema.registry.url=<registry> --property print.key=true`
+   (the record prints as JSON; `price`/`canonicalSpot` show as the decimal bytes), and the first record's `magic byte 0 + schema id`
+   resolves to the canonical subject (`curl <registry>/schemas/ids/<id>/versions`). Every reader's log then shows a tick.
 7. Verify each reader: its committed offset now lies in the NEW topic's offset range (`kafka-consumer-groups --describe --group <g>`), its
    log shows a tick decoded from a known, freshly produced record (compare the offset/eventTime with the console-consumer view),
    there are no deserialization errors, and the browser `spx-price` events are unchanged.
@@ -61,6 +67,17 @@ indicator-service (SPX_PRICE mode), market-commentary, multileg-structure, rever
 feed-gateway, approach-monitor; replicas 0 on dev/prod but converted: breakout-sequencer, hedging-pressure, spread-skew,
 dealer-ledger-calibration scorer. es4-only (read `es.underlying.spx.price`): es-cvd, es-amt, gamma-ladder-path, context-tape main tape.
 No change needed: option-price-behavior (names the topic in an env var no code reads), vol-state, broker-execution (index.price).
+
+## PRODUCTION GO / NO-GO (all must hold before step 3 on `192.168.100.252`)
+1. **NAS archive converted AND deployed** (`oe-archive-kafka.sh`, `OE_SPOT_TOPICS`, prod */10 cron): an Avro reader writing the JSON-era line
+   (the `IndicatorArchiveReader` pattern) is live; otherwise prod spot history stops being archived at step 6 (the archive is the only durable
+   history of this compacted topic). NO-GO until proven on a staged range.
+2. **`spx-es4-bridge` stopped or replaced** (see below): it byte-copies Confluent-framed records into a registry where their schema id is
+   invalid. It is part of the stop list in step 3 and stays stopped until the decode-and-re-encode mirror is installed.
+3. The prod reader images were built AFTER the reader PRs merged and verified against an Avro topic on dev; the prod feed image is the
+   Rust build containing `spx_price_avro.rs`; the subject is registered on the prod registry (step 2) and `ensure-underlying-price-schema.sh`
+   reports the canonical schema as latest.
+4. A prod window outside the US session (the topic feeds live trading surfaces), and the prod pre-cutover `TopicId` read off the live broker.
 
 ## Not covered by the dev cutover — remaining for prod / owner
 * **Production**: steps 1-8 on `192.168.100.252` after a prod window; read the prod pre-cutover `TopicId` off the live broker.

@@ -79,4 +79,13 @@ check "groups holding offsets for OTHER topics do not" "$(MOCK_GROUPS='vol-premi
 reset OLDID
 check "an unreadable group list fails the run" "$(MOCK_GROUPS_RC=1 run "${ARGS[@]}")" 1
 
+# --verify: post-conditions only, no mutation; the recovery path after a failed group check
+VARGS=(--verify --cluster dev --pre-cutover-id OLDID --writers-and-readers-stopped localhost:19092 "$TMP/bin")
+reset OLDID
+check "--verify on the still-pre-cutover topic fails and deletes nothing" "$(run "${VARGS[@]}")" 1
+check "…nothing deleted by --verify" "$(cat "$TMP/state/log" 2>/dev/null | wc -l | tr -d ' ')" 0
+reset RECREATED; echo 1 > "$TMP/state/parts"; echo "cleanup.policy=compact,delete,retention.ms=-1,delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.01,segment.ms=3600000,min.insync.replicas=1" > "$TMP/state/cfg"
+check "--verify passes on a correctly recreated topic with no stale groups" "$(run "${VARGS[@]}")" 0
+check "--verify fails while a group still holds an offset" "$(MOCK_GROUPS='g underlying.spx.price 0 9 9 0 - - -' run "${VARGS[@]}")" 1
+
 echo "passed=$pass failed=$fail"; [ "$fail" = 0 ]
