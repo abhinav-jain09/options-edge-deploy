@@ -72,9 +72,17 @@ spec:
   #   - OPB_L1_ENABLED is set in k8s/overlays/production/option-price-behavior-prod-patch.yaml
   #     together with a rebuilt production image that actually READS it. The previous one,
   #     prod-1650-d6a7d010980a built 2026-09-22, contained zero occurrences of that variable, so the
-  #     flag alone would have been inert. Verifiable in options-edge-processing, not here, with
-  #     `git show d6a7d010980a:option-price-behavior-service/src/main/java/app/pricebehavior/OptionPriceBehaviorStreams.java | grep -c OPB_L1_ENABLED`
-  #     which printed 0 on 2026-10-18.
+  #     flag alone would have been inert. Verifiable in options-edge-processing, not here. On
+  #     2026-10-18 this printed 0 for BOTH variables - the sink name as well as the flag:
+  #     `for v in OPB_L1_ENABLED L1_CONTRIB_SINK; do git show d6a7d010980a:option-price-behavior-service/src/main/java/app/pricebehavior/OptionPriceBehaviorStreams.java | grep -c "$v"; done`
+  #
+  # THE EVIDENCE FOR THE OFFSET CLAIM BELOW lives here too, so the three files that mention it can
+  # point at one copy instead of repeating it - which is how four copies of an earlier note drifted
+  # apart. On 2026-10-18 this printed `0 across 32 partitions` for all four topics:
+  #   for t in option-price-behavior-l1-contributions option-pressure-state-current option-pressure-state-evidence option-pressure-state-service-dev-symbol-rk; do printf '%s ' "$t"; ~/kafka-4.3.0/bin/kafka-get-offsets.sh --bootstrap-server localhost:19092 --topic "$t" | awk -F: '{s+=$3; n++} END {if (n==0) print "NO-OUTPUT-DO-NOT-READ-AS-ZERO"; else printf "%d across %d partitions\n", s, n}'; done
+  # It leaves stderr alone and prints its partition count on purpose: a bare
+  # `awk '{s+=$3} END {print s+0}'` prints 0 on NO input, so an absent topic or an unreachable
+  # broker would read as a confirmed zero. All of these are external checks; re-run them.
   #
   # THE RISK THAT CAME WITH IT, stated here because this is where someone will look. OPB_L1_ENABLED
   # adds a per-trade sink forward inside option-price-behavior's exactly-once transaction. The
@@ -82,7 +90,8 @@ spec:
   # multi-key STORE work under exactly-once wedged OPB's SESSION thread and froze all OPB output for
   # about an hour during RTH, and the gateway and the web page read that output. A sink forward is a
   # much smaller operation than those store updates, but that is an argument about magnitude and not
-  # a measurement - none exists, because every pressure topic on dev still reads log end offset 0.
+  # a measurement - none exists, because every pressure topic on dev still reads log end offset 0
+  # (the command and its output are above, in this same comment).
   # IF OPB OUTPUT STALLS, SET OPB_L1_ENABLED BACK TO false FIRST.
   replicas: 0
   # Recreate, not RollingUpdate: both engines keep RocksDB state on one ReadWriteOnce PVC under a

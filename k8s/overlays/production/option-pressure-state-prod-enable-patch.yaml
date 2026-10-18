@@ -6,29 +6,15 @@
 # enabling it in the base would quietly start a third copy nobody asked for. The base stays inert and
 # each environment that wants this service says so.
 #
-# WHAT THIS NEEDS THAT THE DEV ONE DID NOT. Production ran an option-price-behavior image built on
-# 2026-09-22 (tag prod-1650-d6a7d010980a) that contains NO L1 sink at all: at that commit
-# OptionPriceBehaviorStreams has zero occurrences of L1_CONTRIB_SINK and OPB_L1_ENABLED. Setting the
-# flag alone would therefore have done nothing - the running binary does not read it - so this change
-# travels with a rebuilt production image for option-price-behavior as well as for this service.
-# Checked 2026-10-18; verify with `git show d6a7d010980a:option-price-behavior-service/src/main/java/app/pricebehavior/OptionPriceBehaviorStreams.java | grep -c OPB_L1_ENABLED`
-# in options-edge-processing.
-#
-# WHAT IT COSTS AND WHAT THE RISK IS. OPB_L1_ENABLED adds a per-trade sink forward inside
-# option-price-behavior's exactly-once transaction, and that service has a recorded production
-# incident - 2026-07-14, in option-price-behavior-prod-patch.yaml - where added per-trade multi-key
-# work under exactly-once wedged its SESSION thread into CONCURRENT_TRANSACTIONS and froze ALL OPB
-# output for about an hour during RTH. The feed-gateway and the web option price behaviour page read
-# that output. The 2026-07-14 work was rolling-window multi-key STORE updates; a sink forward is one
-# append to the transaction's producer batch, which is a much smaller operation - but that is an
-# argument about magnitude, not a measurement, and no throughput measurement exists because every
-# pressure topic on dev still reads log end offset 0 - an EXTERNAL fact, checked 2026-10-18 with
-#   for t in option-price-behavior-l1-contributions option-pressure-state-current option-pressure-state-evidence option-pressure-state-service-dev-symbol-rk; do printf '%s ' "$t"; ~/kafka-4.3.0/bin/kafka-get-offsets.sh --bootstrap-server localhost:19092 --topic "$t" | awk -F: '{s+=$3; n++} END {if (n==0) print "NO-OUTPUT-DO-NOT-READ-AS-ZERO"; else printf "%d across %d partitions\n", s, n}'; done
-# which printed `0 across 32 partitions` for all four. That command leaves stderr alone and prints
-# its partition count on purpose: a bare `awk '{s+=$3} END {print s+0}'` prints 0 on NO input, so an
-# absent topic or an unreachable broker would read as a confirmed zero. Re-run it rather than
-# trusting this line. If OPB output stalls after this lands, this flag is the first thing to set back
-# to false.
+# WHAT THIS NEEDED, AND THE RISK IT CARRIES, are stated ONCE - with the dated external checks
+# behind them - in k8s/base/option-pressure-state-deployment.yaml: that production's previous
+# option-price-behavior image had no L1 sink so the flag alone would have been inert, that an
+# ENVIRONMENT=production image of this service now exists where the registry returned NAME_UNKNOWN,
+# that OPB_L1_ENABLED adds per-trade work inside an exactly-once transaction which froze all OPB
+# output for about an hour on 2026-07-14, and that no throughput measurement exists because every
+# pressure topic on dev still reads log end offset 0. Read it there. If OPB output stalls after this
+# lands, OPB_L1_ENABLED in k8s/overlays/production/option-price-behavior-prod-patch.yaml is the first
+# thing to set back to false.
 #
 # WHAT THE SURFACE IS. Descriptive, not predictive. Every frame carries actionable=false by the
 # producing record's own invariant: the register was REJECTED on two gate sets and a Lane D
