@@ -57,6 +57,18 @@ SERVICES = [
 ]
 
 ES_ENV = {
+    # The option pressure surface has NEITHER half on es4. Its producer's input is dropped above
+    # (DROP_ENV_PREFIXES: OPB_L1_ on option-price-behavior) and option-pressure-state is not in
+    # SERVICES, so no es4 workload publishes option-pressure-state-evidence. Switching the reader
+    # off here keeps the pair coherent: without this the inherited production slice would run a
+    # consumer on es4 for a topic nothing there writes, which costs a consumer group, an empty
+    # option_pressure_state_frame table in es4's Postgres, and a reader whose probe says READY
+    # while it can never read anything - the kind of green that hides a missing producer. The other
+    # three writers in this service are already false in the inherited production slice.
+    # Re-enable = remove this, and add option-pressure-state to SERVICES in the same change.
+    "pressure-postgres-writer": [
+        {"name": "POSTGRES_PRESSURE_STATE_ENABLED", "value": "false", "_override": True},
+    ],
     "indicator-service": [
         # 0DTE indicator service (rev 14 §7.3): es4 is the SOLE ES indicator producer. The
         # production slice ships SPX mode; flip every mode-scoped knob here. Topics prefix via
@@ -392,6 +404,17 @@ DROP_ENV_PREFIXES = {
     # renderer inherits the production Context Tape slice, but prefixing these Kafka topics would
     # silently create an unvalidated ES detector with the SPX artifact and the prod transaction id.
     "context-tape": ("ZERO_DTE_",),
+    # OPB_L1_ENABLED was turned on for PRODUCTION on 2026-10-18 so the option pressure register has
+    # an input there. es4 inherits that slice, and on es4 it would be a producer with NO CONSUMER:
+    # option-pressure-state is not in SERVICES above, so nothing here reads
+    # option-price-behavior-l1-contributions. That topic is ~2.87 GiB a session at its declared four
+    # day retention (docs/option-price-behavior/L1-PRESSURE-STATE-CAPACITY.md in
+    # options-edge-processing), and es4's /home has filled and crash-looped es4-kafka twice -
+    # 2026-09-18 and again 2026-10-08, the second time from exactly this shape of problem, an
+    # unbounded Streams topic nobody was reading. So the flag is dropped here rather than inherited.
+    # Re-enable = remove this entry, but add option-pressure-state to SERVICES in the same change,
+    # or es4 pays the disk for a topic with no reader.
+    "option-price-behavior": ("OPB_L1_",),
 }
 
 # Rendered at replicas:0 on es4 ONLY — still defined, still deployable, just not running.
