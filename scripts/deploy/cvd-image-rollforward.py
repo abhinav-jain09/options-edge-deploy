@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+from types import SimpleNamespace
 
 BINDINGS = {
     'context-tape': ('context-tape-service','context-tape','options-edge-context-tape'),
@@ -54,7 +55,12 @@ def main():
     if not os.environ.get('JENKINS_URL') or os.environ.get('PERMITTED_SHA_GUARD')!='PASSED':raise ValueError('Guarded Jenkins required')
     spec=importlib.util.spec_from_file_location('cvd_image_core',Path(__file__).parents[1]/'es4/pinned-image-rollforward.py')
     core=importlib.util.module_from_spec(spec);spec.loader.exec_module(core)
-    configure(core,os.environ['ENVIRONMENT'],os.environ['SERVICE'])
+    service=os.environ['SERVICE']
+    configure(core,os.environ['ENVIRONMENT'],'context-tape' if service=='short-premium-agent' else service)
+    if service=='short-premium-agent':
+        spec=importlib.util.spec_from_file_location('cvd_sp_hold',Path(__file__).with_name('cvd-short-premium-held-image.py'))
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        module.configure(core,os.environ['ENVIRONMENT'],SimpleNamespace(TARGETS=TARGETS,sdk_main=sdk_main))
     core.main()
 
 
