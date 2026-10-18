@@ -19,6 +19,8 @@
 //                  DESTRUCTIVE (drops all es4 Kafka data); honors DEPLOY_DRY_RUN.
 //   deploy-service apply ONE service from k8s/es4/services/<SERVICE>.yaml (digest-pinned).
 //   deploy-all     apply es4-common-env + every manifest in k8s/es4/services (digest-pinned).
+//   update-image   derive the latest qualified production image for one of five CVD workloads;
+//                  JSON-patch only that image, preserving live replicas and configuration.
 //   activate-es-feed / deactivate-es-feed  start or stop the es4 es-feed. Activation is its own
 //                  action so no deploy can raise the feed as a side effect.
 //   (deploy-es-feed was REMOVED 2026-07-25, DBP-R33: the prod-cluster es-feed is retired, so no
@@ -36,7 +38,7 @@ pipeline {
       description: 'refresh-es-replay only: exact main SHA of options-edge-databento-feed. Builds on local-mac, then refreshes the selected native ES source.')
     string(name: 'PERMITTED_SHA_GUARD_VERSION', defaultValue: '2f6fc2ab7aa51eb8a9e8aa350f2d774cd2fb7a253de2591e43645a19a9886b24',
       description: 'DO NOT EDIT BY HAND — the sha256 of scripts/jenkins/permitted-sha-guard.sh this definition runs (Deployment Permission Rule). The guard refuses to run under any other value. It is a DECLARATION, not proof that this job enforces the guard: a caller that triggers this job judges its SCM definition and its Jenkinsfile at the forwarded commit (scripts/jenkins/require-guarded-downstream.sh). Regenerate with scripts/jenkins/permitted-sha-guard-version.sh when the guard changes.')
-    choice(name: 'ACTION', choices: ['deploy-service', 'deploy-all', 'infra-sync', 'create-topics', 'clean-reset', 'activate-es-feed', 'deactivate-es-feed', 'refresh-es-replay'],
+    choice(name: 'ACTION', choices: ['deploy-service', 'update-image', 'deploy-all', 'infra-sync', 'create-topics', 'clean-reset', 'activate-es-feed', 'deactivate-es-feed', 'refresh-es-replay'],
       description: 'What to do (see header).')
     choice(name: 'SERVICE', choices: [
       'close-direction',
@@ -51,13 +53,15 @@ pipeline {
       // ONLY sanctioned way to reconcile the ES4_KEEP_DOWN replicas:0 hold onto live pods (or to ever
       // deliberately re-apply the stack) is an explicit per-service run of each of these two.
       'spread-skew', 'spread-skew-postgres-writer'
-    ], description: 'Service (deploy-service only). NOTE: es-feed is the RELOCATED ES options feed now running on the es4 cluster; it always deploys at replicas 0 — starting it is a separate ACTION=activate-es-feed.')
+    ], description: 'Service (deploy-service or update-image). NOTE: es-feed is the RELOCATED ES options feed now running on the es4 cluster; it always deploys at replicas 0 — starting it is a separate ACTION=activate-es-feed.')
     string(name: 'CONTRACTS_PERMITTED_SHA', defaultValue: '', trim: true,
       description: 'The full 40-character options-edge-contracts commit (on main) whose schemas-registry/indicators are registered on es4\'s Schema Registry under the FIXED ids 2001-2007 (INDICATOR-AVRO-CONVERSION-PLAN.md section 4). REQUIRED for clean-reset (the wipe empties the registry and the schemas are re-imported before any app starts), for create-topics, and for deploy-service / deploy-all of indicator-service with REGISTER_INDICATOR_SCHEMAS=true.')
     booleanParam(name: 'REGISTER_INDICATOR_SCHEMAS', defaultValue: false,
       description: 'deploy-service / deploy-all: register (idempotently) the indicator family\'s seven schemas under their fixed ids on es4\'s registry before the rollout; needs CONTRACTS_PERMITTED_SHA.')
     booleanParam(name: 'RECREATE_INDICATOR_TOPICS', defaultValue: false,
       description: 'deploy-service of indicator-service only, DESTRUCTIVE, the Avro cutover (plan section 5): indicator-service to 0 replicas, its consumer-group offsets on es.underlying.es.trades reset to 0, its changelog deleted, the six es.options.indicators.* topics deleted and recreated EMPTY at the topics.env shape and verified, then the rollout. Every mirror of these topics must be torn down first (plan section 6).')
+    booleanParam(name: 'CVD_READER_CLOSURE_CONFIRMED', defaultValue: false,
+      description: 'update-image only: acknowledge that schema registration, all affected readers and native runtime qualification are complete. Required for a real image update of any active CVD workload; dry runs and existing zero holds need no acknowledgement.')
     booleanParam(name: 'DEPLOY_DRY_RUN', defaultValue: false,
       description: 'true = render + digest-pin + kubectl apply --dry-run=server only.')
     booleanParam(name: 'ACCEPT_UNARCHIVED_STRIKE_LOSS', defaultValue: false,
@@ -326,6 +330,17 @@ pipeline {
         '''
       }
     }
+    stage('Update selected pinned image') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.ACTION == 'update-image') } }
+      options { timeout(time: 15, unit: 'MINUTES') }
+      steps {
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored .jenkins-tmp'
+        }
+        sh 'PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests.test_es4_pinned_image'
+        sh 'python3 scripts/es4/pinned-image-rollforward.py'
+      }
+    }
     stage('Deploy to es4') {
       when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.ACTION == 'deploy-service' || params.ACTION == 'deploy-all') } }
       steps {
@@ -551,7 +566,7 @@ pipeline {
           }
         }
       }
-      archiveArtifacts artifacts: '.jenkins-tmp/*.yaml,.jenkins-tmp/es-replay-image.json', allowEmptyArchive: true
+      archiveArtifacts artifacts: '.jenkins-tmp/*.yaml,.jenkins-tmp/es-replay-image.json,.jenkins-tmp/es4-image-*/patch.json,.jenkins-tmp/es4-image-*/receipt.json', allowEmptyArchive: true
     }
   }
 }
