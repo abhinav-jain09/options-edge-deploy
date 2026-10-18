@@ -108,9 +108,9 @@ def main():
             bundle.add(path,arcname=name,recursive=False)
     if (out/'inputs.tar.gz').stat().st_size>128<<20: raise ValueError('bundle byte budget')
     checksum=hashlib.file_digest((out/'inputs.tar.gz').open('rb'),'sha256').hexdigest()
-    init=r'''import os,pathlib,tempfile,shutil,sys
+    init=r'''import os,pathlib,tempfile,shutil,sys,json
 if sys.version_info<(3,9):raise ValueError('Python3.9+ required for zoneinfo')
-for tool in ['/usr/lib/jvm/java-21-openjdk/bin/java','/usr/lib/jvm/java-21-openjdk/bin/javac','/usr/bin/systemd-run']:
+for tool in ['/usr/lib/jvm/java-21-openjdk/bin/java','/usr/lib/jvm/java-21-openjdk/bin/javac','/usr/bin/systemd-run','/usr/bin/taskset']:
  if not os.access(tool,os.X_OK):raise ValueError('missing native qualification tool')
 root=pathlib.Path('/home/abhinav/ci/cvd-archive-history');root.mkdir(mode=0o700,exist_ok=True)
 if root.is_symlink() or root.stat().st_uid!=os.getuid():raise ValueError('private root identity')
@@ -121,12 +121,17 @@ for path in root.rglob('*'):
  if path.is_file():size+=path.stat().st_size
  if files>8192 or size>8<<30:raise ValueError('preserved qualification budget full')
 if len(list(root.iterdir()))>=4 or shutil.disk_usage(root).free<3<<30:raise ValueError('private disk/run budget full')
-print(tempfile.mkdtemp(prefix='run.'+sys.argv[1]+'.',dir=root))
+cpus=sorted(os.sched_getaffinity(0))[:2]
+if len(cpus)!=2:raise ValueError('two available qualification CPUs required')
+print(json.dumps({'remote':tempfile.mkdtemp(prefix='run.'+sys.argv[1]+'.',dir=root),'cpus':cpus}))
 '''
-    remote=run(*SSH,HOST,'python3 - '+build,input=init)
+    allocation=json.loads(run(*SSH,HOST,'python3 - '+build,input=init))
+    remote=allocation['remote'];cpus=allocation['cpus']
+    if not isinstance(cpus,list) or len(cpus)!=2 or any(type(c)is not int or not 0<=c<=4095 for c in cpus) or len(set(cpus))!=2:raise ValueError('invalid two-core allocation')
+    cpu_list=','.join(map(str,cpus))
     if not re.fullmatch(re.escape(ROOT)+r'/run\.'+build+r'\.[a-z0-9_]{8}',remote): raise ValueError('private run path')
     unit='oe-cvd-archive-'+remote.rsplit('/',1)[-1].replace('.','-')
-    controller={'status':'PREPARING','source':source,'sdkSource':sdk,'installedBuild':number,'helperSha256':expected,'remote':remote,'scope':'retained-history qualification only; no archive deployment, groups, commits or production capture'}
+    controller={'status':'PREPARING','source':source,'sdkSource':sdk,'installedBuild':number,'helperSha256':expected,'remote':remote,'cpuAffinity':cpus,'scope':'retained-history qualification only; no archive deployment, groups, commits or production capture'}
     def save(): (out/'controller-receipt.json').write_text(json.dumps(controller,indent=2)+'\n')
     save()
     try:
@@ -155,15 +160,15 @@ with tarfile.open('inputs.tar.gz') as bundle:
    while data:=source.read(1048576):out.write(data)
 EXTRACT
 systemd-run --user --quiet --wait --pipe --collect --unit="$3" --working-directory="$PWD" \
- --property=MemoryMax=768M --property=MemorySwapMax=0 --property=TasksMax=128 --property=CPUQuota=200% \
+ --property=MemoryMax=768M --property=MemorySwapMax=0 --property=TasksMax=128 \
  --property=RuntimeMaxSec=1800 --property=TimeoutStopSec=10 --property=KillMode=control-group \
- env -i PATH=/usr/lib/jvm/java-21-openjdk/bin:/usr/bin:/bin PYTHONDONTWRITEBYTECODE=1 python3 history_worker.py
+ taskset -c "$4" env -i PATH=/usr/lib/jvm/java-21-openjdk/bin:/usr/bin:/bin PYTHONDONTWRITEBYTECODE=1 python3 history_worker.py
 '''
         with (out/'history.log').open('wb') as log:
-            subprocess.run(SSH+[HOST,'bash','-s','--',remote,checksum,unit],input=command.encode(),stdout=log,stderr=subprocess.STDOUT,check=True,timeout=1850)
+            subprocess.run(SSH+[HOST,'bash','-s','--',remote,checksum,unit,cpu_list],input=command.encode(),stdout=log,stderr=subprocess.STDOUT,check=True,timeout=1850)
         subprocess.run(['scp','-o','BatchMode=yes','-o','StrictHostKeyChecking=yes','-o','ConnectTimeout=10',HOST+':'+remote+'/result.json',str(out/'result.json')],check=True,timeout=30)
         result=json.loads((out/'result.json').read_text())
-        if result.get('status')!='PASS_OBSERVED_RETAINED_HISTORY' or result.get('helperSha256')!=expected: raise ValueError('native retained-history qualification did not pass')
+        if result.get('status')!='PASS_OBSERVED_RETAINED_HISTORY' or result.get('helperSha256')!=expected or result.get('cpuAffinity')!=cpus: raise ValueError('native retained-history qualification did not pass')
         installed_after=run(*SSH,'abhinav@192.168.100.252','sha256sum /home/abhinav/oe-ops/canonical-archive-reader.jar')
         if installed_after.split()[0]!=expected: raise ValueError('archive install changed during qualification')
         controller.update(status='PASS_OBSERVED_RETAINED_HISTORY',records=sum(r['records'] for r in result['rows']),qualification=result);save();print(json.dumps({'status':controller['status'],'records':controller['records']}))

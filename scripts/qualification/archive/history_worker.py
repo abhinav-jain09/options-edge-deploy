@@ -126,6 +126,13 @@ def verify_inputs(manifest):
             raise ValueError('qualification input bytes differ')
 
 
+def validate_cpu_affinity(available):
+    cpus=sorted(available)
+    if len(cpus)!=2 or any(type(cpu)is not int or not 0<=cpu<=4095 for cpu in cpus):
+        raise ValueError('exactly two inherited qualification CPUs required')
+    return cpus
+
+
 def main():
     root = Path.cwd().resolve()
     if not re.fullmatch(r'/home/abhinav/ci/cvd-archive-history/run\.[0-9]+\.[a-z0-9_]{8}', str(root)):
@@ -134,8 +141,7 @@ def main():
     cgroup = Path('/sys/fs/cgroup')/group.lstrip('/')
     if (cgroup/'memory.max').read_text().strip() != str(768 << 20) or (cgroup/'memory.swap.max').read_text().strip() != '0' or (cgroup/'pids.max').read_text().strip() != '128':
         raise ValueError('actual archive qualification cgroup differs from fixed budgets')
-    quota,period=(cgroup/'cpu.max').read_text().split()
-    if not quota.isdigit() or int(quota)!=2*int(period):raise ValueError('fixed two-CPU budget required')
+    cpus=validate_cpu_affinity(os.sched_getaffinity(0))
     manifest = json.loads(Path('inputs.json').read_text())
     verify_inputs(manifest)
     Path('classes').mkdir(); Path('captures').mkdir()
@@ -147,7 +153,7 @@ def main():
     result = {'status': 'RUNNING', 'source': manifest['source'], 'sdkSource': manifest['sdkSource'],
               'helperSha256': manifest['files']['reader.jar'], 'installedBuild': manifest['installedBuild'],
               'scope': 'actual retained-history capture only; cold/mixed/transaction controls and other-service performance gates remain separate',
-              'productionAccess': False, 'qualificationOnlyResolver':{'host.docker.internal':'192.168.100.102'}, 'archiveHostDevDnsReadinessClaim':False, 'groupOrOffsetWrites': False, 'heapMiB':512, 'totalCgroupMiB':768, 'swapping':False, 'rows': []}
+              'productionAccess': False, 'qualificationOnlyResolver':{'host.docker.internal':'192.168.100.102'}, 'archiveHostDevDnsReadinessClaim':False, 'groupOrOffsetWrites': False, 'heapMiB':512, 'totalCgroupMiB':768, 'swapping':False, 'cpuAffinity':cpus, 'cpuBudget':'exactly two inherited CPUs, no CPU-controller dependency', 'rows': []}
     def save(): save_result(result)
     save(); total = 0
     try:
