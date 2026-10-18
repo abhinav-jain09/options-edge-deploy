@@ -1,0 +1,59 @@
+# DEV ONLY: run pressure-postgres-writer for ONE of its four writers - the option pressure state
+# reader - and leave the other three off.
+#
+# Why this patch exists at all. The base already renders replicas 1 for this Deployment, in both
+# environments, and yet the live Deployment is 0/0 in dev AND production (checked 2026-10-18:
+# `kubectl -n options-edge get deploy pressure-postgres-writer` shows 0/0 on dev and the same over
+# ssh on 192.168.100.252). No KEEP_DOWN or DISABLED_DEV list names it, so that zero is DRIFT from a
+# manual scale-down, not policy. A deploy would therefore start all four writers at once, and three
+# of them are not the point of this change.
+#
+# What the other three would do if started. Their surface is held down: directional-pressure-service
+# is in BOTH production hold-down lists and renders 0 replicas, so there is no
+# options.ibkr.directional-pressure data to consume. They would not sit idle though - the
+# directional consumer calls KafkaTopics.ensureTopic and would CREATE that topic, and the outcome
+# writer and the threshold calibrator run `create table if not exists` against the directional
+# tables on their first tick. Creating a topic and three tables on dev as a side effect of enabling
+# an unrelated reader is the kind of change nobody would look for later, so they are switched off
+# explicitly here rather than allowed to happen quietly. Turning any of them on is a separate
+# decision with its own reason.
+#
+# The reader itself needs no flag: POSTGRES_PRESSURE_STATE_ENABLED defaults true. It consumes
+# option-pressure-state-evidence and writes option_pressure_state_frame. It is the ONLY subscriber
+# that surface has ever had: checked 2026-10-18,
+# `~/kafka-4.3.0/bin/kafka-consumer-groups.sh --bootstrap-server localhost:19092 --all-groups --describe`
+# listed no group against option-pressure-state-current or -evidence. That is an external check this
+# repository cannot make; re-run it rather than trusting this line. Every frame it stores carries
+# actionable=false: the table is a descriptive record for calibration, and nothing may trade on a
+# row in it.
+#
+# Production is NOT changed. Its reader would have nothing to read - checked 2026-10-18,
+# `ssh abhinav@192.168.100.252 'kubectl -n options-edge get deploy option-pressure-state-service'`
+# returns NotFound, so the producer is not deployed there at all - and enabling the producer side is
+# gated on measuring option-price-behavior's per-trade cost under exactly-once; see services.yaml.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pressure-postgres-writer
+  namespace: options-edge
+spec:
+  replicas: 1
+  template:
+    spec:
+      containers:
+        - name: pressure-postgres-writer
+          env:
+            # The three directional writers, off. Their producer is held down in both environments.
+            - name: POSTGRES_DIRECTIONAL_PRESSURE_ENABLED
+              value: "false"
+            - name: POSTGRES_DIRECTIONAL_OUTCOME_ENABLED
+              value: "false"
+            - name: POSTGRES_DIRECTIONAL_THRESHOLD_CALIBRATOR_ENABLED
+              value: "false"
+            # Symbol granularity only, which is the calibrated vocabulary: the strike thresholds are
+            # still seeds, so strike frames would be volume under a reading that is not trustworthy
+            # yet. One row per state change, and otherwise at most one a minute per key.
+            - name: POSTGRES_PRESSURE_STATE_GRANULARITY
+              value: "SYMBOL"
+            - name: POSTGRES_PRESSURE_STATE_MIN_INTERVAL_MS
+              value: "60000"
