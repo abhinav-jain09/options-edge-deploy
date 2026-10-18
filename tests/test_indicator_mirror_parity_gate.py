@@ -110,6 +110,24 @@ class ParityGateTest(unittest.TestCase):
         self.assertEqual(rc, 1, out)
         self.assertIn("terminated on an error", out)
 
+    def test_an_error_is_not_excused_by_a_timeout_line_elsewhere_in_stderr(self):
+        # a KafkaException whose diagnostics also mention TimeoutException: only the exact idle-timeout event passes
+        rc, out, _ = run(one(0, 902, evens(0, 902), [451],
+                             consumer={"error": "KafkaException: broker gone\norg.apache.kafka.common.errors.TimeoutException"}))
+        self.assertEqual(rc, 1, out)
+        self.assertIn("other than the idle timeout", out)
+
+    def test_two_termination_events_fail_even_when_one_is_the_idle_timeout(self):
+        rc, out, _ = run(one(0, 902, evens(0, 902), [451],
+                             consumer={"error": "TimeoutException\n[ERROR] second event (kafka.tools.ConsoleConsumer$)\norg.apache.kafka.common.errors.TimeoutException"}))
+        self.assertEqual(rc, 1, out)
+        self.assertIn("error events", out)
+
+    def test_the_idle_timeout_event_alone_is_accepted(self):
+        # the stand-in emits the measured idle-timeout signature whenever fewer than max-messages records exist
+        rc, out, _ = run(one(0, 20, evens(0, 20), [10]))
+        self.assertEqual(rc, 0, out)
+
     def test_a_consumer_whose_total_disagrees_with_its_output_fails_the_gate(self):
         rc, out, _ = run(one(0, 902, evens(0, 902), [451], consumer={"total_off_by": -3}))
         self.assertEqual(rc, 1, out)
@@ -119,8 +137,7 @@ class ParityGateTest(unittest.TestCase):
         # the stand-in answers --time -2 with 0 but refuses to start there (retention advanced in between)
         rc, out, _ = run(one(0, 902, evens(100, 902), [401], begin_sequence={"0": [0]}) | {"source": {"0": {"begin": 100, "end": 902, "records": evens(100, 902)}}})
         self.assertEqual(rc, 1, out)
-        self.assertIn("OffsetOutOfRange", out + "")  # the FAIL line names the cause
-        self.assertTrue("no longer holds the earliest offset" in out or "terminated on an error" in out, out)
+        self.assertIn("no longer holds the earliest offset 0", out)
 
 
 if __name__ == "__main__":

@@ -339,7 +339,7 @@ PL
           # error (measured 2026-10-18: idle timeout, out-of-range offset and max-messages all exit 0), so its
           # exit status proves nothing. The count is accepted only when (1) its stderr carries the consumer's own
           # "Processed a total of N messages" line and N equals the offsets it printed, (2) no ERROR other than
-          # the idle-timeout TimeoutException appears, and (3) auto.offset.reset=none, so a start offset the
+          # the single idle-timeout TimeoutException event appears, and (3) auto.offset.reset=none, so a start offset the
           # broker no longer holds is an OffsetOutOfRange ERROR instead of a silent reset to the live edge.
           # --- parity gate begin (tests/test_indicator_mirror_parity_gate.py executes this block) ---
           SEND=$("$KBIN/kafka-get-offsets" --bootstrap-server "$SRC" --topic "$TOPIC" 2>/dev/null | sort)
@@ -369,11 +369,19 @@ PL
                 if [ -z "$CTOTAL" ] || [ "$CTOTAL" != "$CLINES" ]; then
                   echo "FAIL: the committed-record count of partition $p is not trustworthy: the consumer reported total '$CTOTAL' but printed $CLINES offsets"; tail -5 "$ERR"; exit 1
                 fi
-                if grep -q 'ERROR' "$ERR" && ! grep -q 'TimeoutException' "$ERR"; then
-                  echo "FAIL: the committed-record count of partition $p terminated on an error:"; grep -A1 'ERROR' "$ERR" | head -4; exit 1
-                fi
                 if grep -q 'OffsetOutOfRange' "$ERR"; then
                   echo "FAIL: partition $p — the broker no longer holds the earliest offset $SB the gate asked for"; exit 1
+                fi
+                # Event-aware: the consumer reports a termination as an ERROR line followed by the exception's class.
+                # Exactly one such event is permitted, and only when its exception is exactly the idle-timeout
+                # org.apache.kafka.common.errors.TimeoutException (the signature measured on 2026-10-18); a second
+                # event, or any other exception — even one whose text also mentions a timeout — fails the gate.
+                CERRS=$(grep -c 'ERROR' "$ERR" || true)
+                if [ "$CERRS" -gt 1 ]; then
+                  echo "FAIL: the committed-record count of partition $p reported $CERRS error events:"; grep -A1 'ERROR' "$ERR" | head -6; exit 1
+                fi
+                if [ "$CERRS" -eq 1 ] && [ "$(grep -A1 'ERROR' "$ERR" | sed -n '2p')" != "org.apache.kafka.common.errors.TimeoutException" ]; then
+                  echo "FAIL: the committed-record count of partition $p terminated on an error other than the idle timeout:"; grep -A1 'ERROR' "$ERR" | head -2; exit 1
                 fi
                 N=$(awk -F'[:\\t]' -v se="$SE" '$1 == "Offset" && ($2 + 0) < se { n++ } END { print n + 0 }' "$OUT")
               fi
