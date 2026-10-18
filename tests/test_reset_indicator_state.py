@@ -16,15 +16,23 @@ ZERO2 = "indicator-service-dev underlying.spx.price 0 0 120 120\\nindicator-serv
 
 
 def run(state: str, offsets_after: str, changelog_present: bool, env: dict | None = None, describe_rc: int = 0,
-        partition_count: str = "2"):
+        partition_count: str = "2", states: list[str] | None = None):
     tmp = Path(tempfile.mkdtemp())
     calls = tmp / "calls"
     calls.touch()
     listing = tmp / "list"
     listing.write_text("indicator-service-dev-indicator-state-changelog\nother\n" if changelog_present else "other\n")
     kcg = tmp / "kafka-consumer-groups"
-    state_line = (f'  *" --state "*) echo "Consumer group \'indicator-service-dev\' does not exist."; exit 1 ;;\n' if state == "absent" else
-                  f'  *" --state "*) printf "GROUP  COORDINATOR  ASSIGNMENT-STRATEGY  STATE  #MEMBERS\\nindicator-service-dev  b:1 (1)  range  {state}  0\\n"; exit {describe_rc} ;;\n')
+    if states:
+        # successive --state answers: the n-th describe returns states[n] (the last one repeats)
+        seq = tmp / "seq"
+        seq.write_text("0")
+        arr = " ".join(states)
+        state_line = (f'  *" --state "*) n=$(cat "{seq}"); set -- {arr}; i=$(( n < $# ? n : $# - 1 )); shift $i; st=$1; echo $((n + 1)) > "{seq}";'
+                      f' printf "GROUP  COORDINATOR  ASSIGNMENT-STRATEGY  STATE  #MEMBERS\\nindicator-service-dev  b:1 (1)  range  $st  0\\n"; exit 0 ;;\n')
+    else:
+        state_line = (f'  *" --state "*) echo "Consumer group \'indicator-service-dev\' does not exist."; exit 1 ;;\n' if state == "absent" else
+                      f'  *" --state "*) printf "GROUP  COORDINATOR  ASSIGNMENT-STRATEGY  STATE  #MEMBERS\\nindicator-service-dev  b:1 (1)  range  {state}  0\\n"; exit {describe_rc} ;;\n')
     kcg.write_text(
         "#!/bin/bash\n"
         f'echo "KCG $*" >> "{calls}"\n'
@@ -68,13 +76,35 @@ class ResetIndicatorState(unittest.TestCase):
         # the allow-list is explicit: Stable, a rebalance, Dead, an unparseable answer and a failed describe all refuse
         for state, rc_desc in [("Stable", 0), ("PreparingRebalance", 0), ("CompletingRebalance", 0), ("Dead", 0),
                                ("Garbage", 0), ("Empty", 1)]:
-            rc, out, calls = run(state, "", True, describe_rc=rc_desc)
+            # a member state is POLLED for GROUP_EMPTY_WAIT_S before the refusal; zero means refuse at once
+            rc, out, calls = run(state, "", True, describe_rc=rc_desc, env={"GROUP_EMPTY_WAIT_S": "0"})
             self.assertEqual(rc, 1, (state, rc_desc, out))
             self.assertIn("only an absent or Empty group may be reset", out, state)
             self.assertFalse(any("--reset-offsets" in c or "--delete" in c for c in calls), state)
         rc, out, _ = run("absent", ZERO2, True)
         self.assertEqual(rc, 0, out)
         self.assertIn("group indicator-service-dev: absent", out)
+
+    def test_a_group_whose_last_member_is_still_leaving_is_waited_for(self):
+        # es4-deploy #791: the pods were gone but the coordinator still held a member (Stable) for a few seconds,
+        # the reset refused and the deployment was left at 0 replicas. A Stable or rebalancing group is polled
+        # until it empties (bounded), then the reset proceeds exactly as for an Empty group.
+        rc, out, calls = run("Empty", ZERO2, True, states=["Stable", "PreparingRebalance", "Empty"], env={"GROUP_EMPTY_WAIT_S": "60"})
+        self.assertEqual(rc, 0, out)
+        self.assertIn("Stable — waiting for the last member to leave", out)
+        self.assertIn("group indicator-service-dev: Empty", out)
+        self.assertEqual(3, sum(1 for c in calls if "--state" in c), calls)
+        self.assertTrue(any("--reset-offsets" in c for c in calls))
+        # Dead and an unparseable state are never waited for
+        for state in ["Dead", "Garbage"]:
+            rc, out, calls = run("Empty", ZERO2, True, states=[state, "Empty"], env={"GROUP_EMPTY_WAIT_S": "60"})
+            self.assertEqual(rc, 1, (state, out))
+            self.assertEqual(1, sum(1 for c in calls if "--state" in c), state)
+        # the wait is bounded: a group that never empties is refused after the budget
+        rc, out, calls = run("Empty", ZERO2, True, states=["Stable"], env={"GROUP_EMPTY_WAIT_S": "5"})
+        self.assertEqual(rc, 1, out)
+        self.assertIn("only an absent or Empty group may be reset", out)
+        self.assertFalse(any("--reset-offsets" in c for c in calls))
 
     def test_an_unreadable_partition_count_refuses(self):
         rc, out, calls = run("Empty", ZERO2, True, partition_count="")
