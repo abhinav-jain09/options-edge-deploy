@@ -55,7 +55,8 @@ while IFS='|' read -r topic parts cfgs pre_id; do
     fail=1
     continue
   fi
-  id="$(rf_topic_id "$KT" "$BS" "$topic")" || { fail=1; continue; }
+  desc="$(rf_describe "$KT" "$BS" "$topic")" || { fail=1; continue; }
+  id="$(rf_topic_id "$desc" "$topic")" || { fail=1; continue; }
   if [ "$pre_id" != "-" ] && [ "$id" = "$pre_id" ]; then
     echo "FAIL: $topic still carries its PRE-CUTOVER topic id $id — it is the original JSON-bearing" >&2
     echo "      topic and has NOT been rolled forward. Run" >&2
@@ -64,21 +65,30 @@ while IFS='|' read -r topic parts cfgs pre_id; do
     fail=1
     continue
   fi
-  # The SHAPE too: a topic recreated by broker auto-create carries a new id and the cluster default,
+  # The SHAPE too, from the SAME describe (one broker call per topic): a topic recreated by broker
+  # auto-create carries a new id and the cluster default,
   # which would pass an id-only check while being the wrong topic (32 partitions for a 1-partition
   # ledger read by assign(partition 0) hides every record that hashed elsewhere).
-  desc="$("$KT" --bootstrap-server "$BS" --describe --topic "$topic" | head -1)"
   got_parts="$(printf '%s' "$desc" | sed -nE 's/.*PartitionCount: ([0-9]+).*/\1/p')"
   if [ "$got_parts" != "$parts" ]; then
     echo "FAIL: $topic has $got_parts partition(s), declared $parts: $desc" >&2
     fail=1
     continue
   fi
+  # EXACT key=value comparison, never a substring grep: an unanchored `grep -q retention.ms=-1`
+  # also matches `retention.ms=-10`, and `min.insync.replicas=1` matches `...=10`, so the barrier
+  # would certify the wrong broker setting (Codex). topic-config-parse.sh's extract() is not usable
+  # here either — it parses the SPACE-separated `kafka-configs --describe` output and this is the
+  # COMMA-separated Configs field of a topic describe, where `[^ ]*` swallows every later key.
+  # rf_config_value handles both, including a value that itself contains a comma
+  # (cleanup.policy=compact,delete).
   shape_ok=1
-  IFS=',' read -ra kvs <<<"$cfgs"
-  for kv in "${kvs[@]}"; do
-    printf '%s' "$desc" | grep -q -- "$kv" || { echo "FAIL: $topic is missing $kv: $desc" >&2; shape_ok=0; }
-  done
+  while IFS='=' read -r want_key want_val; do
+    [ -n "$want_key" ] || continue
+    got="$(rf_config_value "$desc" "$want_key")"
+    [ "$got" = "$want_val" ] \
+      || { echo "FAIL: $topic has $want_key='$got', declared '$want_val': $desc" >&2; shape_ok=0; }
+  done <<<"$(rf_split_declared "$cfgs")"
   [ "$shape_ok" -eq 1 ] || { fail=1; continue; }
   echo "ok  $topic rolled forward (topic id $id, $parts partition(s), $cfgs)"
 done <<<"$SPECS"

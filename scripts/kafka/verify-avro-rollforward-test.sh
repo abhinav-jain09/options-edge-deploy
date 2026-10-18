@@ -94,6 +94,22 @@ MOCK_LIST="$T" MOCK_DESCRIBE="$(desc NEWIDxxxxxxxxxxxxxxxxx 32 'min.insync.repli
 MOCK_LIST="$T" MOCK_DESCRIBE="$(desc NEWIDxxxxxxxxxxxxxxxxx 32 'min.insync.replicas=1,cleanup.policy=delete,retention.ms=604800000')" \
   run "the wrong RETENTION is refused" 1
 
+# The PREFIX traps: an unanchored substring grep would accept every one of these.
+MOCK_LIST="$T" MOCK_DESCRIBE="$(desc NEWIDxxxxxxxxxxxxxxxxx 32 'min.insync.replicas=1,cleanup.policy=delete,segment.bytes=268435456,retention.ms=432000000')" \
+  run "retention.ms=432000000 is refused where 43200000 is declared (prefix trap)" 1
+
+MOCK_LIST="$T" MOCK_DESCRIBE="$(desc NEWIDxxxxxxxxxxxxxxxxx 32 'min.insync.replicas=10,cleanup.policy=delete,segment.bytes=268435456,retention.ms=43200000')" \
+  run "min.insync.replicas=10 is refused where 1 is declared (prefix trap)" 1
+
+# cleanup.policy=compact,delete must NOT satisfy a declared cleanup.policy=delete: the comma makes
+# the value two words, and the declared value is the whole of it.
+MOCK_LIST="$T" MOCK_DESCRIBE="$(desc NEWIDxxxxxxxxxxxxxxxxx 32 'min.insync.replicas=1,cleanup.policy=compact,delete,segment.bytes=268435456,retention.ms=43200000')" \
+  run "cleanup.policy=compact,delete is refused where delete is declared" 1
+
+# And a config that is ABSENT from the broker, rather than wrong, is refused too.
+MOCK_LIST="$T" MOCK_DESCRIBE="$(desc NEWIDxxxxxxxxxxxxxxxxx 32 'cleanup.policy=delete,retention.ms=43200000')" \
+  run "a MISSING declared config (min.insync.replicas) is refused" 1
+
 # A versioned sibling present is REPORTED, not fatal — the documented exception, asserted so a later
 # edit cannot quietly make it fatal and deadlock the cutover rollout.
 MOCK_LIST="$(printf '%s\n%s\n' "$T" "$T.v2")" MOCK_DESCRIBE="$(desc NEWIDxxxxxxxxxxxxxxxxx 32 "$GOOD_CFG")" \

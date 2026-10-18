@@ -80,35 +80,47 @@ if [ "$PHASE" = "--retire-siblings" ]; then
 fi
 
 if [ "$PHASE" = "--recreate" ] || [ "$PHASE" = "--all" ]; then
-  LIST="$(rf_list "$KT" "$BS")"
+  # ONE TOPIC AT A TIME: delete, wait for it to settle, create, then move on.
+  #
+  # The first cut deleted every topic and only then created them, so a create or broker failure
+  # part-way left SEVERAL required topics absent at once (Codex). Per topic, the window in which
+  # anything is missing covers one topic, and the barrier names exactly which one.
+  #
+  # The recovery procedure is to RUN THIS PHASE AGAIN: it is idempotent by construction — an absent
+  # topic is created fresh, and a present one is deleted and recreated. There is nothing to roll back
+  # to, because the pre-wipe content is what the roll-forward exists to remove. A topic left absent
+  # is also created by its own ensure script and by apply-topics.sh, so a missed re-run degrades to
+  # the broker defaults rather than to nothing — which is precisely what the barrier then refuses.
   while IFS='|' read -r topic parts cfgs pre_id; do
     [ -n "$topic" ] || continue
+    LIST="$(rf_list "$KT" "$BS")" || exit 1
     if printf '%s\n' "$LIST" | grep -qx "$topic"; then
       echo "-- delete $topic"
       kt --delete --topic "$topic"
+      settled=0
+      for _ in $(seq 1 60); do
+        # Explicit status check: a list failure must NOT be read as "the topic is gone".
+        cur="$(rf_list "$KT" "$BS")" || exit 1
+        if ! printf '%s\n' "$cur" | grep -qx "$topic"; then settled=1; break; fi
+        sleep 2
+      done
+      if [ "$settled" -ne 1 ]; then
+        echo "FAIL: $topic is still present 120s after the delete. Nothing further is touched; this" >&2
+        echo "      phase is re-runnable once the broker settles." >&2
+        exit 1
+      fi
     else
       echo "-- $topic absent, creating fresh"
-    fi
-  done <<<"$SPECS"
-
-  while IFS='|' read -r topic parts cfgs pre_id; do
-    [ -n "$topic" ] || continue
-    settled=0
-    for _ in $(seq 1 60); do
-      # Explicit status check: a list failure must NOT be read as "the topic is gone".
-      cur="$(rf_list "$KT" "$BS")" || exit 1
-      if ! printf '%s\n' "$cur" | grep -qx "$topic"; then settled=1; break; fi
-      sleep 2
-    done
-    if [ "$settled" -ne 1 ]; then
-      echo "FAIL: $topic is still present 120s after the delete — aborting before anything is created" >&2
-      exit 1
     fi
     args=(--create --topic "$topic" --partitions "$parts" --replication-factor "${KAFKA_TOPIC_REPLICATION_FACTOR:-1}")
     IFS=',' read -ra kvs <<<"$cfgs"
     for kv in "${kvs[@]}"; do args+=(--config "$kv"); done
     echo "-- create $topic ($parts partitions, $cfgs)"
-    kt "${args[@]}"
+    if ! kt "${args[@]}"; then
+      echo "FAIL: $topic was deleted but could NOT be created. It is absent now. Re-run this phase:" >&2
+      echo "      roll-forward-avro-cutover-topics.sh --recreate --cluster $CLUSTER $BS" >&2
+      exit 1
+    fi
   done <<<"$SPECS"
 
   # VERIFY through the barrier itself, not a second copy of the rules: if the barrier would refuse

@@ -95,15 +95,69 @@ rf_list() {
   printf '%s\n' "$out"
 }
 
-# rf_topic_id <cli> <bootstrap> <topic> -> the topic id on stdout, NON-ZERO if it cannot be read.
-rf_topic_id() {
-  local cli="$1" bs="$2" topic="$3" desc id
-  if ! desc="$("$cli" --bootstrap-server "$bs" --describe --topic "$topic" 2>&1 | head -1)"; then
-    echo "FATAL: cannot describe $topic on $bs" >&2; return 1
+# rf_describe <cli> <bootstrap> <topic> -> the FIRST line of --describe, NON-ZERO if it fails.
+#
+# NO PIPE around the CLI. `cli --describe | head -1` looks equivalent and is not: under `pipefail`,
+# head closing the pipe SIGPIPEs the producer and the pipeline reports failure. That is invisible on
+# a short output and fatal through the es4 kafka-cli-shim, which `exec`s `docker exec` and writes a
+# line per partition — 32 of them for oi-status. Found by running this against the real shim rather
+# than assuming the two were the same. So: capture it all, THEN take the first line.
+rf_describe() {
+  local cli="$1" bs="$2" topic="$3" raw
+  if ! raw="$("$cli" --bootstrap-server "$bs" --describe --topic "$topic" 2>&1)"; then
+    echo "FATAL: cannot describe $topic on $bs:" >&2
+    printf '%s\n' "$raw" >&2
+    return 1
   fi
+  printf '%s\n' "$raw" | sed -n '1p'
+}
+
+# rf_topic_id <describe-first-line> <topic> -> the topic id on stdout, NON-ZERO if absent.
+rf_topic_id() {
+  local desc="$1" topic="$2" id
   id="$(printf '%s\n' "$desc" | awk -F'\t' '{for(i=1;i<=NF;i++) if ($i ~ /^TopicId: /) {sub(/^TopicId: /,"",$i); print $i}}')"
   if [ -z "$id" ]; then
     echo "FATAL: could not parse a topic id for $topic out of: $desc" >&2; return 1
   fi
   printf '%s\n' "$id"
+}
+
+# rf_split_declared <declared-configs> -> one `key=value` per line.
+#
+# The declared string is comma-separated AND a value may itself contain a comma
+# (cleanup.policy=compact,delete). A field with no `=` is therefore a CONTINUATION of the previous
+# value, not a new key — splitting naively turns `compact,delete` into a key called `delete`.
+rf_split_declared() {
+  printf '%s' "$1" | awk 'BEGIN{RS=","} {
+    if (index($0,"=")) { if (NR>1) printf "\n"; printf "%s", $0 }
+    else { printf ",%s", $0 }
+  } END{ printf "\n" }'
+}
+
+# rf_config_value <describe-first-line> <key> -> that key's value out of the `Configs:` field.
+#
+# Anchored on a start-or-comma boundary so `retention.ms` never reads `delete.retention.ms`, and the
+# value runs to the next `,<key>=` or end of field — so `cleanup.policy` yields `compact,delete`
+# whole. Empty when the key is absent, which is a legitimate answer the caller compares against.
+rf_config_value() {
+  printf '%s' "$1" | awk -v key="$2" '
+    {
+      i = index($0, "Configs: ")
+      if (i == 0) exit
+      cfg = substr($0, i + 9)
+      sub(/[\t\r].*$/, "", cfg)
+      n = split(cfg, f, ",")
+      out = ""; have = 0
+      for (j = 1; j <= n; j++) {
+        eq = index(f[j], "=")
+        if (eq > 0) {
+          k = substr(f[j], 1, eq - 1)
+          if (have) break
+          if (k == key) { have = 1; out = substr(f[j], eq + 1) }
+        } else if (have) {
+          out = out "," f[j]
+        }
+      }
+      if (have) print out
+    }'
 }
