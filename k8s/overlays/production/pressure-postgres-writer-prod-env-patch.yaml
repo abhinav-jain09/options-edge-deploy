@@ -1,0 +1,46 @@
+# PROD: run pressure-postgres-writer for ONE of its four writers - the option pressure state reader -
+# and leave the other three off. Mirrors k8s/overlays/dev/pressure-postgres-writer-dev-env-patch.yaml.
+#
+# The base already renders replicas 1 and the live Deployment is 0/0 in both environments (checked
+# 2026-10-18: `ssh abhinav@192.168.100.252 'kubectl -n options-edge get deploy pressure-postgres-writer'`
+# shows 0/0, and the same on dev), with no KEEP_DOWN or DISABLED_DEV list naming it - so that zero is
+# drift from a manual scale-down rather than policy, and a deploy starts all four writers at once.
+#
+# The other three are switched off because they would not idle. Their producer is held down -
+# directional-pressure-service is in both production hold-down lists - but the directional consumer
+# calls KafkaTopics.ensureTopic and would CREATE options.ibkr.directional-pressure, and the outcome
+# writer and the threshold calibrator each run `create table if not exists` against the directional
+# tables on their first tick. Creating a topic and three tables as a side effect of enabling an
+# unrelated reader is the kind of change nobody looks for later. Turning any of them on is a separate
+# decision with its own reason.
+#
+# The reader needs no flag: POSTGRES_PRESSURE_STATE_ENABLED defaults true. It consumes
+# option-pressure-state-evidence and writes option_pressure_state_frame. On production that table is
+# the point: the evidence topic keeps three days, so the table is what makes the record outlive it,
+# and it is the production calibration history the offline forward-corpus job on the development
+# machine assembles by hand today.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pressure-postgres-writer
+  namespace: options-edge
+spec:
+  replicas: 1
+  template:
+    spec:
+      containers:
+        - name: pressure-postgres-writer
+          env:
+            # The three directional writers, off. Their producer is held down in both environments.
+            - name: POSTGRES_DIRECTIONAL_PRESSURE_ENABLED
+              value: "false"
+            - name: POSTGRES_DIRECTIONAL_OUTCOME_ENABLED
+              value: "false"
+            - name: POSTGRES_DIRECTIONAL_THRESHOLD_CALIBRATOR_ENABLED
+              value: "false"
+            # Symbol granularity only, which is the calibrated vocabulary: the strike thresholds are
+            # still seeds. One row per state change, and otherwise at most one a minute per key.
+            - name: POSTGRES_PRESSURE_STATE_GRANULARITY
+              value: "SYMBOL"
+            - name: POSTGRES_PRESSURE_STATE_MIN_INTERVAL_MS
+              value: "60000"

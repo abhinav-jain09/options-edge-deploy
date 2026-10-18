@@ -771,6 +771,23 @@ patches:
   # k8s/services/signal-follower/overlays/production (validate-services: mono==slice).
   - path: signal-follower-prod-env-patch.yaml
   - path: option-price-behavior-prod-patch.yaml
+  # PROD: run the L1 option pressure register, so the surface exists in BOTH environments and other
+  # services can build on it. Patched here rather than in k8s/base because the base is also the
+  # experiment render and that overlay does not patch this service - flipping the base would start a
+  # third copy nobody asked for. See the patch header for the OPB image prerequisite and the
+  # exactly-once risk this travels with. MUST MIRROR the standalone slice
+  # k8s/services/option-pressure-state/overlays/production (validate-services: mono==slice).
+  - path: option-pressure-state-prod-enable-patch.yaml
+    target:
+      kind: Deployment
+      name: option-pressure-state-service
+  # PROD: run the option pressure state READER, and only that one of this service's four writers.
+  # See the patch header for why the other three are switched off rather than left to create a topic
+  # and three tables as a side effect.
+  - path: pressure-postgres-writer-prod-env-patch.yaml
+    target:
+      kind: Deployment
+      name: pressure-postgres-writer
   # PROD-ONLY: databento-feed 5s snapshot publish interval (explicit container env overrides the
   # shared configmap default; ships via service-deploy). Relieves the single-core CPU backpressure.
   # MUST MIRROR the standalone slice k8s/services/databento-feed/overlays/production (validate-services).

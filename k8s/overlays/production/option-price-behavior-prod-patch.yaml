@@ -43,6 +43,21 @@ spec:
             # the changelog + emits commit transactionally (broker hosts __transaction_state).
             - name: OPB_EXACTLY_ONCE
               value: "true"
+            # Publish the L1 contributions the option pressure register consumes, so that surface
+            # exists on production and not only on dev. This adds a per-trade sink forward INSIDE the
+            # exactly-once transaction configured just above, which is the same transaction the
+            # 2026-07-14 incident recorded in this file wedged. That incident was rolling-window
+            # multi-key STORE updates per trade; a sink forward is one append to the transaction's
+            # producer batch, a much smaller operation - but that is magnitude, not measurement, and
+            # no throughput measurement exists yet because every pressure topic on dev still reads
+            # log end offset 0. IF OPB OUTPUT STALLS, SET THIS BACK TO false FIRST: the gateway and
+            # the web option price behaviour page read this service's output.
+            #
+            # It also requires an image that HAS the sink. The production image before this change
+            # (prod-1650-d6a7d010980a, built 2026-09-22) contains zero occurrences of OPB_L1_ENABLED,
+            # so the flag was inert there; this ships with a rebuilt production image.
+            - name: OPB_L1_ENABLED
+              value: "true"
           resources:
             limits:
               memory: 8Gi
