@@ -72,3 +72,5 @@ Jenkinsfile.visual-orders-validation      | out |                               
 Jenkinsfile.cvd-image-rollforward | in | | fixed dev/prod namespace/deployer image-only CVD reader CAS; guard first, tests then immediate source verification before effect; no scale, state, topic or offset changes
 
 Jenkinsfile.cvd-evidence-api-images | in | | primary Mac fixed-profile latest-main API image build/test/publish or stopped-only image CAS; canonical guard and immediate tree verification, no secret/config reads or service starts
+
+Jenkinsfile.cvd-archive-retained-qualification | in | | read-only retained-history qualification on ES4 with installed archive bytes; no rollout or checkpoint/group changes

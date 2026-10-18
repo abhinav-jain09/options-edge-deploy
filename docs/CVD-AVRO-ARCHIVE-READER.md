@@ -115,3 +115,31 @@ or production host. Both provenance and test output are archived.
 These checks establish packaged-codec compatibility only. Actual retained-history,
 source-domain, committed-read boundary and sustained capture throughput remain
 separate gates before installing the reader. No archive or offset is changed here.
+
+
+### Retained-history qualification job
+
+`Jenkinsfile.cvd-archive-retained-qualification` is a main-SCM, manually invoked,
+read-only source qualification on ES4. It copies the installed production helper
+bytes for execution on ES4, preserves captures under the build-owned
+`/home/abhinav/ci/cvd-archive-history/run.*` directory, and never marks consumer
+offsets or modifies archive schedules. The source SDK must equal current main;
+changed archive component bytes require a new reviewed install first. The current
+56-assertion packaged receipt is required conservatively; changes to that receipt
+contract require updating this qualifier explicitly.
+
+A result named `PASS_OBSERVED_RETAINED_HISTORY` qualifies only the nonempty topics
+listed in `qualifiedNonemptyTopics`; `emptyTopics` remains an explicit coverage
+limitation. It is JDK21 evidence, not native archive-host JDK26 compatibility,
+cold registry, controlled mixed-history/transaction-boundary proof, or other
+services' runtime/performance qualification. The private JVM resolver maps the dev
+broker's advertised `host.docker.internal` to 192.168.100.102, matching the archive
+host; it does not change the broker or host-wide DNS.
+
+The job preserves at most four runs and refuses further allocation at its
+8 GiB/8192-entry budget. When full, an operator must inspect receipts and confirm no
+owned transient unit is active, then move completed run directories to a separate
+preserved audit location with sufficient space. Do not delete captures, change
+archive checkpoints, raise the cap automatically, or interrupt another run. Tool
+and runtime prerequisites are checked before allocating a run directory. No heavy
+qualification is permitted on the controller or production host.

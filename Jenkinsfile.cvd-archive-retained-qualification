@@ -1,0 +1,40 @@
+pipeline {
+  agent { label 'local-mac' }
+  options { disableRestartFromStage(); disableConcurrentBuilds(); timeout(time: 40, unit: 'MINUTES') }
+  parameters {
+    string(name: 'PERMITTED_SHA', defaultValue: '', trim: true, description: 'Exact current options-edge-deploy main commit; qualification only, no deployment.')
+    string(name: 'PERMITTED_SHA_GUARD_VERSION', defaultValue: '2f6fc2ab7aa51eb8a9e8aa350f2d774cd2fb7a253de2591e43645a19a9886b24', description: 'Canonical guard identity.')
+  }
+  environment { PYTHONDONTWRITEBYTECODE = '1' }
+  stages {
+    stage('Permitted commit guard') {
+      options { timeout(time: 10, unit: 'MINUTES') }
+      steps {
+        script {
+          def rc = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')
+          if (rc != 0) { error('Permitted commit guard refused; no qualification effect has run.') }
+          env.PERMITTED_SHA_GUARD = 'PASSED'
+        }
+      }
+    }
+    stage('Validate finite qualification') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
+      steps {
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored .jenkins-tmp'
+        }
+        sh 'python3 -m unittest tests.test_cvd_archive_history_qualification'
+      }
+    }
+    stage('Qualify installed archive on ES4') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
+      steps {
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored .jenkins-tmp'
+        }
+        sh 'python3 scripts/jenkins/cvd-archive-retained-qualification.py'
+      }
+    }
+  }
+  post { always { archiveArtifacts artifacts: '.jenkins-tmp/cvd-archive-history-*/controller-receipt.json,.jenkins-tmp/cvd-archive-history-*/inputs.json,.jenkins-tmp/cvd-archive-history-*/result.json,.jenkins-tmp/cvd-archive-history-*/history.log', allowEmptyArchive: true } }
+}
