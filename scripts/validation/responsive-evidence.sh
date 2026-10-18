@@ -48,7 +48,7 @@ actual = {}
 for path in root.rglob('*'):
     if path.is_symlink():
         raise RuntimeError('Local evidence symlink refused')
-    if path.is_file() and path.name != 'evidence-manifest.sha256':
+    if path.is_file() and path != root / 'evidence-manifest.sha256':
         actual[str(path.relative_to(root))] = hashlib.sha256(path.read_bytes()).hexdigest()
 if not expected or actual != expected:
     raise RuntimeError('Evidence set/hash mismatch; remote originals retained')

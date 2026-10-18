@@ -44,10 +44,13 @@ def proc(pid):
 
 class OwnedTree:
     def __init__(self):
+        self.limit = 512
+        self.overflow = False
         self.entries = {}
         self.runner = None
 
-    def collect(self):
+    def collect(self, terminating=False):
+        self.overflow = False
         for pid, row in list(self.entries.items()):
             if select.select([row['fd']], [], [], 0)[0]:
                 os.close(row['fd'])
@@ -76,13 +79,29 @@ class OwnedTree:
                 owned_parent = self.entries.get(row['parent'])
                 if row['parent'] != os.getpid() and not (parent and owned_parent and parent['start'] == owned_parent['start']):
                     continue
-                if len(self.entries) >= 512:
-                    raise RuntimeError('OWNED_PROCESS_CAPACITY')
                 try:
                     fd = os.pidfd_open(pid)
                     current = proc(pid)
                     if current != row:
                         os.close(fd)
+                        continue
+                    if select.select([fd], [], [], 0)[0]:
+                        os.close(fd)
+                        if pid != self.runner:
+                            try:
+                                os.waitpid(pid, os.WNOHANG)
+                            except ChildProcessError:
+                                pass
+                        continue
+                    if len(self.entries) >= self.limit:
+                        self.overflow = True
+                        # Bound retained handles, but never abandon overflow writers.
+                        # Their children reparent to this subreaper after termination.
+                        try:
+                            if terminating:
+                                signal.pidfd_send_signal(fd, signal.SIGKILL)
+                        finally:
+                            os.close(fd)
                         continue
                     self.entries[pid] = {**row, 'fd': fd}
                     changed = True
@@ -126,6 +145,9 @@ def run(command, seconds, root):
         tree.runner = child.pid
         while True:
             live = tree.collect()
+            if tree.overflow:
+                reason = 'OWNED_PROCESS_CAPACITY'
+                break
             if stopped[0]:
                 reason = 'INTERRUPTED'
                 break
@@ -139,32 +161,64 @@ def run(command, seconds, root):
                 reason = 'GUARDED_DEADLINE'
                 break
             if child.poll() is not None:
-                reason = 'ORPHANS_AFTER_RUN' if live else 'COMPLETE' if child.returncode == 0 else 'COMMAND_FAILED'
+                survivors = [pid for pid in tree.collect() if pid != child.pid]
+                reason = 'ORPHANS_AFTER_RUN' if survivors or tree.overflow else 'COMPLETE' if child.returncode == 0 else 'COMMAND_FAILED'
                 break
             time.sleep(min(.1, max(0, cutoff - time.monotonic())))
+    except Exception as error:
+        reason = 'SUPERVISOR_ERROR:' + repr(error)
     finally:
-        if child:
-            # Stop the runner first so it cannot launch another probe during cleanup.
-            if child.poll() is None:
-                child.terminate()
-            tree.collect()
-            tree.send(signal.SIGTERM)
-            grace = time.monotonic() + 3
-            while tree.live() and time.monotonic() < grace:
-                time.sleep(.05)
-                tree.collect()  # Detached orphan browsers reparent to this subreaper.
-            tree.collect()
-            tree.send(signal.SIGKILL)
-            child.wait(timeout=3)
-            end = time.monotonic() + 2
-            while tree.live() and time.monotonic() < end:
+        cleanup_errors = []
+        def discover():
+            try:
+                tree.collect(terminating=True)
+                return True
+            except Exception as error:
+                # Failure to discover must not prevent signaling already owned PIDs.
+                cleanup_errors.append(repr(error))
+                return False
+        remaining = []
+        cleanup_complete = False
+        try:
+            if child:
+                if child.poll() is None:
+                    child.terminate()
+                discover()
+                tree.send(signal.SIGTERM)
+                grace = time.monotonic() + 3
+                while (tree.live() or tree.overflow) and time.monotonic() < grace:
+                    time.sleep(.05)
+                    discover()
                 tree.send(signal.SIGKILL)
-                time.sleep(.05)
-                tree.collect()
-            remaining = tree.live()
-            (root / 'supervisor.json').write_text(json.dumps({'reason': reason, 'runnerExit': child.returncode, 'remainingOwned': remaining, 'status': 'PASS' if reason == 'COMPLETE' and not remaining else 'FAIL'}, indent=2) + '\n')
-        tree.close()
-    return 0 if reason == 'COMPLETE' and not remaining else 1
+                try:
+                    child.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    cleanup_errors.append('RUNNER_DID_NOT_EXIT')
+                end = time.monotonic() + 2
+                while time.monotonic() < end:
+                    discovery_ok = discover()
+                    remaining = tree.live()
+                    if discovery_ok and not remaining and not tree.overflow:
+                        cleanup_complete = not cleanup_errors
+                        break
+                    tree.send(signal.SIGKILL)
+                    time.sleep(.05)
+            else:
+                cleanup_complete = True
+            (root / 'supervisor.json').write_text(json.dumps({'reason': reason,
+                'runnerExit': child.returncode if child else None,
+                'remainingOwned': remaining, 'cleanupComplete': cleanup_complete,
+                'cleanupErrors': cleanup_errors,
+                'status': 'PASS' if reason == 'COMPLETE' and cleanup_complete else 'FAIL'}, indent=2) + '\n')
+        finally:
+            tree.close()
+    return 0 if reason == 'COMPLETE' and cleanup_complete else 1
+
+
+def release_marker(root):
+    report = json.loads((root / 'results/supervisor.json').read_text())
+    if report.get('cleanupComplete') is True and not report.get('remainingOwned'):
+        (root / 'supervisor-active.json').unlink()
 
 
 def main():
@@ -188,7 +242,7 @@ def main():
     marker = root / 'supervisor-active.json'
     marker.write_text(json.dumps({'pid': os.getpid(), 'start': proc(os.getpid())['start']}) + '\n')
     result = run(['bash', str(root / 'scripts/validation/run-responsive-stack-es4.sh')], seconds, root / 'results')
-    marker.unlink()
+    release_marker(root)
     return result
 
 

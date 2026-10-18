@@ -53,6 +53,8 @@ if source.is_dir():
         raise SystemExit(1)
     shutil.copytree(source,destination,dirs_exist_ok=True,symlinks=True)
     if mode=='corrupt':(destination/'sample.log').write_text('corrupt')
+    if mode=='nested-manifest':
+        (destination/'extra').mkdir();(destination/'extra/evidence-manifest.sha256').write_text('not in manifest')
     if mode=='extra':(destination/'extra.log').write_text('not in manifest')
 else:shutil.copy2(source,destination)
 ''')
@@ -92,6 +94,17 @@ else:shutil.copy2(source,destination)
         self.invoke('collect', 'results', 1)
         self.invoke('cleanup', '0', 0)
         self.assertTrue((self.remote / 'evidence/sample.log').exists())
+
+    def test_nested_manifest_extra_is_refused(self):
+        self.env['TEST_TRANSFER'] = 'nested-manifest'
+        self.invoke('collect', 'results', 1)
+        self.assertTrue((self.remote / 'evidence/sample.log').exists())
+
+    def test_legitimate_nested_manifest_is_collected(self):
+        (self.remote / 'results/nested').mkdir()
+        (self.remote / 'results/nested/evidence-manifest.sha256').write_text('legitimate evidence')
+        self.invoke('collect', 'results', 0)
+        self.assertEqual((self.local / 'results/nested/evidence-manifest.sha256').read_text(), 'legitimate evidence')
 
     def test_active_supervisor_prevents_collection_and_cleanup(self):
         (self.remote / 'supervisor-active.json').write_text('{}')
