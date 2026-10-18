@@ -4,6 +4,7 @@
 and the newest successful current-main contracts release, using one fixed dev
 or production architecture and registry. There is no version or source selector.
 The ordinary Python suite runs inside the final image before publication, with
+same-source test-control helpers mounted read-only at `/app/tools`,
 512 MiB, no extra swap, one CPU, 128 tasks and a two-minute client limit. A 110-second controller inside the named test
 container bounds the test even if its client disappears. Failed, timed out or
 log-limited tests trigger a bounded ownership-label check and kill only that

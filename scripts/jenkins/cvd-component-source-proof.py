@@ -141,7 +141,7 @@ def prove(qualified,current):
             if count>131072 or size>4<<30:raise ValueError('Preserved source proof quarantine full')
     root=parent/('cvd-source-proof-'+build);root.mkdir()
     repo=root/'processing'
-    result=subprocess.run(['git','clone','--depth=64','--filter=blob:none','--no-checkout','--single-branch','--branch','main',
+    result=subprocess.run(['git','clone','--depth=64','--no-checkout','--single-branch','--branch','main',
         'git@github.com:abhinav-jain09/options-edge-processing.git',str(repo)],capture_output=True,text=True,timeout=90)
     if result.returncode or git(repo,'rev-parse','HEAD').strip()!=current:raise ValueError('Latest processing main changed during source proof')
     proof=compare(repo,qualified,current);(root/'receipt.json').write_text(json.dumps(proof,indent=2)+'\n');return proof

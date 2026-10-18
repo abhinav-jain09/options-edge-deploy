@@ -56,3 +56,12 @@ class SourceProofTest(unittest.TestCase):
         with patch.dict(os.environ,{},clear=True),patch.object(m.subprocess,'run') as run:
             with self.assertRaisesRegex(ValueError,'Guarded Jenkins'):m.prove(self.old,self.old)
             run.assert_not_called()
+
+    def test_guarded_source_proof_fetches_models_in_one_bulk_clone(self):
+        from types import SimpleNamespace
+        previous=Path.cwd();os.chdir(self.root)
+        try:
+            with patch.dict(os.environ,{'JENKINS_URL':'http://jenkins/','PERMITTED_SHA_GUARD':'PASSED','BUILD_NUMBER':'19'},clear=True),patch.object(m,'DEADLINE',None),patch.object(m.subprocess,'run',return_value=SimpleNamespace(returncode=0)) as run,patch.object(m,'git',return_value=self.old+'\n'),patch.object(m,'compare',return_value={'qualifiedSource':self.old}):
+                proof=m.prove(self.old,self.old)
+                clone=run.call_args.args[0];self.assertEqual(['git','clone'],clone[:2]);self.assertIn('--depth=64',clone);self.assertIn('--no-checkout',clone);self.assertFalse(any(arg.startswith('--filter') for arg in clone));self.assertEqual(90,run.call_args.kwargs['timeout']);self.assertEqual(self.old,proof['qualifiedSource'])
+        finally:os.chdir(previous)
