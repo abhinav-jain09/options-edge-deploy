@@ -51,7 +51,7 @@ spec:
                 name: options-edge-config
             - secretRef:
                 name: options-edge-runtime-secrets
-          image: 192.168.100.252:5000/options-edge-market-structure:dev
+          image: 192.168.100.252:5000/options-edge-market-structure:prod
           imagePullPolicy: IfNotPresent
           livenessProbe:
             failureThreshold: 3

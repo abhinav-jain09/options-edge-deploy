@@ -125,7 +125,7 @@ spec:
                 name: options-edge-config
             - secretRef:
                 name: options-edge-runtime-secrets
-          image: 192.168.100.252:5000/options-edge-strike-flow-classifier:dev
+          image: 192.168.100.252:5000/options-edge-strike-flow-classifier:prod
           imagePullPolicy: IfNotPresent
           livenessProbe:
             httpGet:

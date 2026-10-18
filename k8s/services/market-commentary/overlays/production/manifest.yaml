@@ -63,7 +63,7 @@ spec:
           envFrom:
             - configMapRef:
                 name: options-edge-config
-          image: 192.168.100.252:5000/options-edge-market-commentary:dev
+          image: 192.168.100.252:5000/options-edge-market-commentary:prod
           imagePullPolicy: IfNotPresent
           livenessProbe:
             failureThreshold: 3

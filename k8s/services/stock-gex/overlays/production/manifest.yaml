@@ -74,7 +74,7 @@ spec:
               value: "8022"
             - name: STOCK_GEX_CLOSE_DB_DSN
               value: postgresql://bleedingoptions:fAE80oxjlQ75edJe5nmfTLoIDJerlkddoFRm@bo-app-postgres-db.bleedingoptions.svc.cluster.local:5432/bleedingoptions
-          image: 192.168.100.252:5000/options-edge-stock-gex:dev
+          image: 192.168.100.252:5000/options-edge-stock-gex:prod
           imagePullPolicy: IfNotPresent
           livenessProbe:
             httpGet:

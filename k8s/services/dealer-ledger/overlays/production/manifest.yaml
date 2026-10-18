@@ -119,7 +119,7 @@ spec:
                 name: options-edge-config
             - secretRef:
                 name: options-edge-runtime-secrets
-          image: 192.168.100.252:5000/options-edge-dealer-ledger:dev
+          image: 192.168.100.252:5000/options-edge-dealer-ledger:prod
           imagePullPolicy: IfNotPresent
           livenessProbe:
             httpGet:

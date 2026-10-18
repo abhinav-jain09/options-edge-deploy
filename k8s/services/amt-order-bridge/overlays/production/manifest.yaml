@@ -62,7 +62,7 @@ spec:
           envFrom:
             - configMapRef:
                 name: options-edge-config
-          image: 192.168.100.252:5000/options-edge-amt-order-bridge:dev
+          image: 192.168.100.252:5000/options-edge-amt-order-bridge:prod
           imagePullPolicy: IfNotPresent
           name: amt-order-bridge
           resources:

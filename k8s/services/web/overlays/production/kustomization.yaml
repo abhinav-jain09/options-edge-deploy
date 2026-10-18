@@ -63,3 +63,14 @@ patches:
         value:
           name: VOL_PREMIUM_UI_ACTIVATED
           value: "true"
+
+# MIRROR of the monolithic k8s/overlays/production images: block (validate-services: mono==slice).
+# That block exists so a committed production render never carries the base :dev ref - a raw
+# `kubectl apply` of this slice would otherwise roll the dev image into production. The monolith
+# gained this mapping on 2026-10-18; without the same mapping here the two renders disagree and the
+# mirror rule fails, which is how this file came to need editing at all.
+# Deploy behaviour is unchanged either way: service-deploy.sh remaps via image-tags/production.yaml
+# and digest-pins fail-closed before any apply. This hardens the at-rest render only.
+images:
+  - name: 192.168.100.252:5000/options-edge-web
+    newTag: prod
