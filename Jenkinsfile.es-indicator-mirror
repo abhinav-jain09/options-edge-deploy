@@ -273,11 +273,18 @@ S
           # already holds records would receive every record a second time (2026-10-18 build #45: a prod target
           # re-installed over a previous install's copy reached twice the source's committed count). Fail closed:
           # the target must be empty on every partition; plan section 5 recreates it, this job never empties it.
+          # --- empty-target precondition begin (tests/test_indicator_mirror_parity_gate.py executes this block) ---
           TPRE=$("$KBIN/kafka-get-offsets" --bootstrap-server "$TGT" --topic "$TOPIC" 2>/dev/null | sort)
           [ -n "$TPRE" ] || { echo "FAIL: cannot read the target end offsets of $TOPIC on $TGT"; exit 1; }
-          NONEMPTY=$(printf '%s\\n' "$TPRE" | awk -F: '$3 != 0 {print $2"="$3}' | tr '\\n' ' ')
+          # exactly one numeric end-offset row for every partition 0..PARTS-1 — a partial, duplicated or malformed
+          # answer is a failure (it could hide a non-empty partition), never "looks empty"
+          TROWS=$(printf '%s\\n' "$TPRE" | awk -F: -v t="$TOPIC" '$1 == t && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ {print $2}' | sort -n | tr '\\n' ' ')
+          TWANT=$(for ((i = 0; i < PARTS; i++)); do printf '%s ' "$i"; done)
+          [ "$TROWS" = "$TWANT" ] || { echo "FAIL: target $TOPIC on $TGT has $PARTS partition(s) but kafka-get-offsets answered for [${TROWS% }] — every partition must be proven empty"; exit 1; }
+          NONEMPTY=$(printf '%s\\n' "$TPRE" | awk -F: -v t="$TOPIC" '$1 == t && $3 != 0 {print $2"="$3}' | tr '\\n' ' ')
           [ -z "$NONEMPTY" ] || { echo "FAIL: target $TOPIC on $TGT is not empty (partition=endOffset: ${NONEMPTY% }) — the copy would duplicate every record; recreate the target empty (plan section 5, step 8) before installing"; exit 1; }
           echo "target $TOPIC on $TGT is empty on every partition (end offsets: $(printf '%s' "$TPRE" | tr '\\n' ' '))"
+          # --- empty-target precondition end ---
           echo "config generated; target $TOPIC verified: $PARTS partition(s), $POLICY"
         '''
       }

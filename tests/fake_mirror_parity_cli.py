@@ -42,6 +42,8 @@ bootstrap = arg("--bootstrap-server")
 is_source = bootstrap == os.environ["FAKE_SRC"]
 
 if name == "kafka-get-offsets":
+    if not is_source and "target_raw" in scenario and "--partitions" not in argv:
+        print("\n".join(scenario["target_raw"])); sys.exit(0)   # verbatim rows: lets a test feed partial or malformed answers
     parts = [arg("--partitions")] if "--partitions" in argv else sorted(src if is_source else tgt, key=int)
     for p in parts:
         if is_source:

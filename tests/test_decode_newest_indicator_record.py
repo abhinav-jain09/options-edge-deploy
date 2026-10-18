@@ -36,7 +36,8 @@ if name in ("kafka-console-consumer", "kafka-avro-console-consumer"):
     if not recs: sys.exit(0)   # idle timeout: nothing printed, exit 0 (measured behaviour)
     if name == "kafka-console-consumer":
         if "print.offset=true" in argv:
-            for o, _ in recs: print(f"Offset:{o}")
+            for o, _ in recs[:sc.get("lister_prints", 10**9)]: print(f"Offset:{o}")
+            if sc.get("lister_exit"): sys.stdout.flush(); sys.exit(sc["lister_exit"])
         else:
             for o, r in recs: sys.stdout.buffer.write(bytes.fromhex(r["frame"]) + b"payload\n")
     else:
@@ -64,12 +65,12 @@ def tx_partition(begin, end, schema_id=2001):
     return {"begin": begin, "end": end, "records": {str(o): avro(schema_id) for o in range(begin, end, 2)}}
 
 
-def run(partitions, registry=None, empty_ok=None):
+def run(partitions, registry=None, empty_ok=None, **scenario_extra):
     d = pathlib.Path(tempfile.mkdtemp(prefix="decode-gate-"))
     kbin = d / "kbin"; kbin.mkdir()
     for n in ("kafka-topics", "kafka-get-offsets", "kafka-console-consumer", "kafka-avro-console-consumer", "curl"):
         (kbin / n).write_text(STUB); os.chmod(kbin / n, 0o755)
-    (d / "scenario.json").write_text(json.dumps({"partitions": partitions, "registry": registry or {"2001": "200", "2004": "200"}}))
+    (d / "scenario.json").write_text(json.dumps({"partitions": partitions, "registry": registry or {"2001": "200", "2004": "200"}, **scenario_extra}))
     calls = d / "calls.log"; calls.write_text("")
     env = dict(os.environ, PATH=f"{kbin}:{os.environ['PATH']}", DECODE_SCENARIO=str(d / "scenario.json"), DECODE_CALLS=str(calls))
     if empty_ok is not None:
@@ -110,6 +111,12 @@ class DecodeGateTest(unittest.TestCase):
         rc, out, _ = run({"0": part})
         self.assertEqual(rc, 1, out)
         self.assertIn("offset 8: the value does not deserialize", out)
+
+    def test_a_lister_that_prints_an_older_offset_then_fails_does_not_certify_that_record(self):
+        rc, out, _ = run({"0": tx_partition(0, 20)}, lister_prints=3, lister_exit=1)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("listing the committed records of [0, 20) failed (consumer exit status 1)", out)
+        self.assertNotIn("(newest committed)", out)
 
     def test_a_short_partition_starts_at_its_earliest_offset(self):
         rc, out, calls = run({"0": tx_partition(100, 120)})

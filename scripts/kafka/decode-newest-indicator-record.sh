@@ -47,11 +47,14 @@ while IFS=: read -r t p end; do
   from=$((end - 64)); [ "$from" -ge "$begin" ] || from=$begin
   # (a) the committed records of the window, offsets only (a text line per record, never value bytes)
   # On a live topic the window holds fewer than 64 committed records (markers take the other offsets) and the
-  # consumer never idles, so the 60 s bound ends the listing; the newest offset listed by then is the answer
-  # and the bound itself is not a failure (`|| true` keeps pipefail from turning the kill into an abort).
-  last=$({ timeout 60 "$KBIN/kafka-console-consumer" --bootstrap-server "$BS" --topic "$TOPIC" --partition "$p" --offset "$from" --max-messages 64 \
-          "${CC[@]}" --property print.offset=true --property print.key=false --property print.value=false --timeout-ms 20000 2>/dev/null || true; } \
-          | awk -F'[:\t]' '$1 == "Offset" && $2 ~ /^[0-9]+$/ {o = $2} END {print o}')
+  # consumer never idles, so the 60 s bound ends the listing; the newest offset listed by then is the answer.
+  # Only a clean exit (0) or the bound itself (124) is accepted: any other status means the listing may have
+  # stopped before the newest record, and an older record must not be certified in its place.
+  LST=$(mktemp); LRC=0
+  timeout 60 "$KBIN/kafka-console-consumer" --bootstrap-server "$BS" --topic "$TOPIC" --partition "$p" --offset "$from" --max-messages 64 \
+    "${CC[@]}" --property print.offset=true --property print.key=false --property print.value=false --timeout-ms 20000 > "$LST" 2>/dev/null || LRC=$?
+  case "$LRC" in 0|124) ;; *) echo "FAIL: $TOPIC-$p: listing the committed records of [$from, $end) failed (consumer exit status $LRC) — the newest record is unknown"; rm -f "$LST"; fail=1; continue ;; esac
+  last=$(awk -F'[:\t]' '$1 == "Offset" && $2 ~ /^[0-9]+$/ {o = $2} END {print o}' "$LST"); rm -f "$LST"
   case "$last" in ''|*[!0-9]*) echo "FAIL: $TOPIC-$p: no committed record read in [$from, $end) within the timeout"; fail=1; continue ;; esac
   # (b) the newest committed record, raw value bytes: the hex of the first five bytes is the Confluent frame
   hex=$(timeout 60 "$KBIN/kafka-console-consumer" --bootstrap-server "$BS" --topic "$TOPIC" --partition "$p" --offset "$last" --max-messages 1 \
