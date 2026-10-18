@@ -20,25 +20,27 @@
 #       --writers-and-readers-stopped <bootstrap-servers> [kafka-bin-dir]
 # The pre-cutover topic id is read off the LIVE broker by the operator (kafka-topics --describe) and passed in: a topic
 # whose id is anything else is not the topic that held the JSON, and is refused (an already-recreated topic may hold live
-# Avro). An absent topic is created fresh. Re-runnable after a failed create.
+# Avro). An absent topic is REFUSED unless the operator passes --topic-absent-after-failed-create (the delete succeeded, the create failed).
 set -euo pipefail
 
 usage() {
   echo "usage: roll-forward-underlying-spx-price.sh --recreate|--verify --cluster dev|production --pre-cutover-id <id> \\" >&2
   echo "         [--new-topic-id <id>   (REQUIRED for --verify: the id --recreate printed)] \\" >&2
+  echo "         [--topic-absent-after-failed-create   (ONLY to finish a --recreate whose delete succeeded but whose create failed)] \\" >&2
   echo "         --writers-and-readers-stopped <bootstrap-servers> [kafka-bin-dir]" >&2
   exit 2
 }
 PHASE="${1:-}"
 case "$PHASE" in --recreate|--verify) ;; *) usage ;; esac
 shift
-CLUSTER=""; PRE_ID=""; NEW_ID=""; STOPPED=""; POS=()
+CLUSTER=""; PRE_ID=""; NEW_ID=""; STOPPED=""; ABSENT_OK=""; POS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --cluster) CLUSTER="${2:-}"; shift 2 ;;
     --pre-cutover-id) PRE_ID="${2:-}"; shift 2 ;;
     --new-topic-id) NEW_ID="${2:-}"; shift 2 ;;
     --writers-and-readers-stopped) STOPPED=yes; shift ;;
+    --topic-absent-after-failed-create) ABSENT_OK=yes; shift ;;
     *) POS+=("$1"); shift ;;
   esac
 done
@@ -100,7 +102,10 @@ if [ "$PHASE" = "--recreate" ]; then
     done
     [ "$settled" -eq 1 ] || { echo "FAIL: $TOPIC still present 120s after the delete; re-run once the broker settles." >&2; exit 1; }
   else
-    echo "-- $TOPIC absent, creating fresh"
+    # An absent topic is NOT a normal start state: it means somebody deleted it. The only legitimate cause is this script's own
+    # earlier --recreate, whose delete succeeded and create failed; the operator says so explicitly (and saw that failure).
+    [ "$ABSENT_OK" = yes ] || { echo "FAIL: $TOPIC does not exist. If a previous --recreate deleted it and then failed to create it, re-run with --topic-absent-after-failed-create; otherwise find out who deleted it first. Nothing was changed." >&2; exit 1; }
+    echo "-- $TOPIC absent (recovering a failed create), creating fresh"
   fi
 
   args=(--create --topic "$TOPIC" --partitions "$PARTITIONS" --replication-factor "$REPLICATION_FACTOR")
@@ -108,7 +113,7 @@ if [ "$PHASE" = "--recreate" ]; then
   args+=(--config "cleanup.policy=compact,delete" --config retention.ms=-1 --config delete.retention.ms=3600000 \
          --config min.cleanable.dirty.ratio=0.01 --config segment.ms=3600000 --config min.insync.replicas=1)
   echo "-- create $TOPIC ($PARTITIONS partition, $CONFIGS)"
-  kt "${args[@]}" || { echo "FAIL: $TOPIC was deleted but could not be created; it is absent. Re-run this command." >&2; exit 1; }
+  kt "${args[@]}" || { echo "FAIL: $TOPIC was deleted but could not be created; it is absent. Re-run this command with --topic-absent-after-failed-create added." >&2; exit 1; }
 fi
 
 # Verify what was created, from the broker, not from the create command's exit code.

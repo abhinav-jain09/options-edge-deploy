@@ -66,7 +66,10 @@ check "new id differs from the old" "$([ "$(cat "$TMP/state/topic")" != OLDID ] 
 check "declared shape applied" "$(cat "$TMP/state/cfg")" "cleanup.policy=compact,delete,retention.ms=-1,delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.01,segment.ms=3600000,min.insync.replicas=1"
 
 reset
-check "creates an absent topic" "$(run "${ARGS[@]}")" 0
+check "an ABSENT topic is refused by default (somebody deleted it)" "$(run "${ARGS[@]}")" 1
+check "…and nothing is created" "$(cat "$TMP/state/log" 2>/dev/null | wc -l | tr -d ' ')" 0
+reset
+check "an absent topic is created only with --topic-absent-after-failed-create" "$(run "${ARGS[@]}" --topic-absent-after-failed-create)" 0
 
 reset OLDID
 check "an unlistable broker aborts before any delete" "$(MOCK_LIST_RC=1 run "${ARGS[@]}")" 1

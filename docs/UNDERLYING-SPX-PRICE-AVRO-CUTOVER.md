@@ -37,6 +37,8 @@ The JSON topic is "removed" by the wipe in step 4 — its removal date is the da
    The script refuses a bootstrap that is not the named cluster's broker, refuses a topic whose id is not the pre-cutover one,
    verifies the shape from the broker, and FAILS if any consumer group still holds a committed offset for the topic (committed
    offsets are keyed by topic name; a surviving one would resume beyond the new log end and skip the first Avro records).
+   If the DELETE succeeded but the CREATE failed (the topic is now absent and the script said so), re-run the same command with
+   `--topic-absent-after-failed-create` added; an absent topic is otherwise refused, because it means somebody else deleted it.
    If only the consumer-group check fails (the topic was already recreated, so a second `--recreate` correctly refuses the new id):
    DELETE those stopped groups' offsets (`kafka-consumer-groups --bootstrap-server <bootstrap> --delete-offsets --group <g> --topic underlying.spx.price`, or `--delete --group <g>`; a reset to 0 still leaves a committed offset and is refused by the verifier), then run the SAME
    command plus `--new-topic-id <the id --recreate printed as NEW TOPIC ID>` with `--verify` instead of `--recreate`, BEFORE any reader or the feed starts instead of `--recreate` (post-conditions only, no mutation) and continue at step 5.
