@@ -12,6 +12,7 @@
 #
 # --verify runs ONLY the post-conditions (new id, shape, consumer-group offsets) and changes nothing: the recovery path when
 # --recreate created the topic but then failed the consumer-group check (a re-run of --recreate would refuse the new id).
+# PRODUCTION IS NOT ENABLED: the declared shape below was read off the dev broker; a production run needs its own recorded shape.
 # Also refuses a bootstrap server that is not the named cluster's broker, re-checks the TopicId immediately before the delete,
 # and fails if any consumer group still holds a committed offset for the recreated topic.
 # Usage:
@@ -40,9 +41,13 @@ BIN="${8:-${KAFKA_BIN_DIR:-}}"
 
 # --cluster is not a label: the bootstrap server must BE that cluster's broker, or a destructive command declared "dev" could
 # wipe production (and the reverse). dev: the local broker (what pods dial) or the Mac's LAN address; production: the prod host.
+TOPIC_NAME=underlying.spx.price
 case "$CLUSTER:$BS" in
   dev:localhost:19092|dev:host.docker.internal:19092|dev:192.168.100.102:19092) ;;
-  production:192.168.100.252:9092) ;;
+  production:192.168.100.252:9092)
+    echo "FATAL: the production shape (replication factor, retention, cleanup policy) of $TOPIC_NAME has not been recorded; read it off the live" >&2
+    echo "       production broker, add a production row here with its own verification, and review it before this script may touch production." >&2
+    exit 2 ;;
   *) echo "FATAL: bootstrap '$BS' is not the $CLUSTER cluster's broker; refusing (nothing was changed)" >&2; exit 2 ;;
 esac
 
@@ -56,6 +61,7 @@ kt() { "$KT" --bootstrap-server "$BS" "$@"; }
 # The shape the live dev topic carried, read off the broker 2026-10-18 (topics.env: compacted, retention -1).
 TOPIC=underlying.spx.price
 PARTITIONS=1
+REPLICATION_FACTOR=1
 CONFIGS="cleanup.policy=compact,delete,retention.ms=-1,delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.01,segment.ms=3600000,min.insync.replicas=1"
 
 if [ "$PHASE" = "--recreate" ]; then
@@ -87,7 +93,7 @@ if [ "$PHASE" = "--recreate" ]; then
     echo "-- $TOPIC absent, creating fresh"
   fi
 
-  args=(--create --topic "$TOPIC" --partitions "$PARTITIONS" --replication-factor "${KAFKA_TOPIC_REPLICATION_FACTOR:-1}")
+  args=(--create --topic "$TOPIC" --partitions "$PARTITIONS" --replication-factor "$REPLICATION_FACTOR")
   # cleanup.policy carries a comma of its own, so the --config flags are spelled out rather than split from CONFIGS.
   args+=(--config "cleanup.policy=compact,delete" --config retention.ms=-1 --config delete.retention.ms=3600000 \
          --config min.cleanable.dirty.ratio=0.01 --config segment.ms=3600000 --config min.insync.replicas=1)
@@ -99,6 +105,7 @@ fi
 DESC="$(rf_describe "$KT" "$BS" "$TOPIC")" || exit 1
 NEW_ID="$(rf_topic_id "$DESC" "$TOPIC")" || exit 1
 [ "$NEW_ID" != "$PRE_ID" ] || { echo "FAIL: $TOPIC still has the pre-cutover id $PRE_ID" >&2; exit 1; }
+printf '%s\n' "$DESC" | grep -q "ReplicationFactor: $REPLICATION_FACTOR" || { echo "FAIL: replication factor is not $REPLICATION_FACTOR: $DESC" >&2; exit 1; }
 printf '%s\n' "$DESC" | grep -q "PartitionCount: $PARTITIONS" || { echo "FAIL: partition count is not $PARTITIONS: $DESC" >&2; exit 1; }
 rf_split_declared "$CONFIGS" | while IFS='=' read -r k want; do
   have="$(rf_config_value "$DESC" "$k")"
@@ -112,7 +119,8 @@ STALE="$(printf '%s\n' "$GROUPS_OUT" | awk -v t="$TOPIC" '$2 == t && $4 ~ /^[0-9
 if [ -n "$STALE" ]; then
   echo "FAIL: consumer groups still hold committed offsets for $TOPIC (group:partition@offset):" >&2
   printf '%s\n' "$STALE" >&2
-  echo "      reset them (kafka-consumer-groups --reset-offsets --to-earliest --execute, or delete the stopped group) before any reader starts." >&2
+  echo "      DELETE them (kafka-consumer-groups --delete-offsets --group <g> --topic $TOPIC, or delete the stopped group) before any reader starts;" >&2
+  echo "      a reset to 0 still leaves a committed offset and is refused here." >&2
   exit 1
 fi
 echo "=== DONE: $TOPIC recreated empty (id $NEW_ID, was $PRE_ID). Next: deploy the Avro readers, then the Avro feed ==="

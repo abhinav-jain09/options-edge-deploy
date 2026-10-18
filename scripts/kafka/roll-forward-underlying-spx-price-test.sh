@@ -22,8 +22,8 @@ done
 case "$mode" in
   list) [ -f "$MOCK_DIR/topic" ] && echo underlying.spx.price; exit 0 ;;
   describe) [ -f "$MOCK_DIR/topic" ] || exit 1
-    printf 'Topic: underlying.spx.price\tTopicId: %s\tPartitionCount: %s\tReplicationFactor: 1\tConfigs: %s\n' \
-      "$(cat "$MOCK_DIR/topic")" "$(cat "$MOCK_DIR/parts" 2>/dev/null || echo 1)" "$(cat "$MOCK_DIR/cfg" 2>/dev/null || echo)"; exit 0 ;;
+    printf 'Topic: underlying.spx.price\tTopicId: %s\tPartitionCount: %s\tReplicationFactor: %s\tConfigs: %s\n' \
+      "$(cat "$MOCK_DIR/topic")" "$(cat "$MOCK_DIR/parts" 2>/dev/null || echo 1)" "$(cat "$MOCK_DIR/rf" 2>/dev/null || echo 1)" "$(cat "$MOCK_DIR/cfg" 2>/dev/null || echo)"; exit 0 ;;
   delete) rm -f "$MOCK_DIR/topic" "$MOCK_DIR/cfg" "$MOCK_DIR/parts"; echo deleted >> "$MOCK_DIR/log"; exit 0 ;;
   create) echo "newid-$RANDOM" > "$MOCK_DIR/topic"; echo created >> "$MOCK_DIR/log"
     pp=""; p2=""; for a in "$@"; do [ "$p2" = "--partitions" ] && pp="$a"; p2="$a"; done
@@ -70,7 +70,9 @@ check "an unknown cluster name is a usage error" "$(reset OLDID; run --recreate 
 reset OLDID
 check "a bootstrap that is not the named cluster is refused" "$(run --recreate --cluster dev --pre-cutover-id OLDID --writers-and-readers-stopped 192.168.100.252:9092 "$TMP/bin")" 2
 check "…and nothing deleted" "$(cat "$TMP/state/log" 2>/dev/null | wc -l | tr -d ' ')" 0
-check "production names only the prod broker" "$(run --recreate --cluster production --pre-cutover-id OLDID --writers-and-readers-stopped localhost:19092 "$TMP/bin")" 2
+check "production is not enabled (no recorded shape), whatever the bootstrap" "$(run --recreate --cluster production --pre-cutover-id OLDID --writers-and-readers-stopped 192.168.100.252:9092 "$TMP/bin")" 2
+check "…and its refusal says why" "$(grep -c 'has not been recorded' "$TMP/out")" 1
+check "production with a non-prod bootstrap is refused too" "$(run --recreate --cluster production --pre-cutover-id OLDID --writers-and-readers-stopped localhost:19092 "$TMP/bin")" 2
 
 reset OLDID
 check "a group still holding an offset for the topic fails the run" "$(MOCK_GROUPS='vol-premium underlying.spx.price 0 6505 6505 0 - - -' run "${ARGS[@]}")" 1
@@ -91,5 +93,7 @@ check "--verify fails while a group still holds an offset" "$(MOCK_GROUPS='g und
 check "--verify also refuses a bootstrap that is not the named cluster's broker" "$(run --verify --cluster dev --pre-cutover-id OLDID --writers-and-readers-stopped 192.168.100.252:9092 "$TMP/bin")" 2
 reset RECREATED; echo 1 > "$TMP/state/parts"; echo "cleanup.policy=delete,retention.ms=86400000" > "$TMP/state/cfg"
 check "--verify rejects a topic whose shape is not the declared one" "$(run "${VARGS[@]}")" 1
+reset RECREATED; echo 3 > "$TMP/state/rf"; echo 1 > "$TMP/state/parts"; echo "cleanup.policy=compact,delete,retention.ms=-1,delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.01,segment.ms=3600000,min.insync.replicas=1" > "$TMP/state/cfg"
+check "--verify rejects a different replication factor" "$(run "${VARGS[@]}")" 1
 
 echo "passed=$pass failed=$fail"; [ "$fail" = 0 ]

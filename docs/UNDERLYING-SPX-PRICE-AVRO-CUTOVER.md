@@ -37,7 +37,7 @@ The JSON topic is "removed" by the wipe in step 4 — its removal date is the da
    verifies the shape from the broker, and FAILS if any consumer group still holds a committed offset for the topic (committed
    offsets are keyed by topic name; a surviving one would resume beyond the new log end and skip the first Avro records).
    If only the consumer-group check fails (the topic was already recreated, so a second `--recreate` correctly refuses the new id):
-   delete or reset those stopped groups (`kafka-consumer-groups --bootstrap-server <bootstrap> --delete --group <g>`), then run the SAME
+   DELETE those stopped groups' offsets (`kafka-consumer-groups --bootstrap-server <bootstrap> --delete-offsets --group <g> --topic underlying.spx.price`, or `--delete --group <g>`; a reset to 0 still leaves a committed offset and is refused by the verifier), then run the SAME
    command with `--verify` instead of `--recreate` (post-conditions only, no mutation) and continue at step 5.
    Persisted reader state: a Kafka Streams GLOBAL store checkpoints the end offset of its source topic on its volume. The only
    PVC-backed global store on this topic is `strike-flow-classifier-databento`; its spot store is in-memory in the converted
@@ -50,7 +50,7 @@ The JSON topic is "removed" by the wipe in step 4 — its removal date is the da
    (the record prints as JSON; `price`/`canonicalSpot` show as the decimal bytes). Then prove the wire framing: 
    `kafka-console-consumer --bootstrap-server <bootstrap> --topic underlying.spx.price --partition 0 --offset earliest --max-messages 1 | head -c 5 | xxd -p`
    prints `00` followed by the 4-byte big-endian schema id (e.g. `000000004d` is id 77); that id must resolve to the canonical subject:
-   `curl -s <registry>/schemas/ids/<decimal id>/versions` returns `com.optionsedge.contracts.hpsf.UnderlyingPrice`. Every reader's log then
+   `curl -s <registry>/schemas/ids/<decimal id>/versions` returns entries whose `subject` field equals `com.optionsedge.contracts.hpsf.UnderlyingPrice`. Every reader's log then
    shows a tick.
 7. Verify each reader: its committed offset now lies in the NEW topic's offset range (`kafka-consumer-groups --describe --group <g>`), its
    log shows a tick decoded from a known, freshly produced record (compare the offset/eventTime with the console-consumer view),
@@ -83,7 +83,10 @@ No change needed: option-price-behavior (names the topic in an env var no code r
 3. The prod reader images were built AFTER the reader PRs merged and verified against an Avro topic on dev; the prod feed image is the
    Rust build containing `spx_price_avro.rs`; the subject is registered on the prod registry (step 2) and `ensure-underlying-price-schema.sh`
    reports the canonical schema as latest.
-4. A prod window outside the US session (the topic feeds live trading surfaces), and the prod pre-cutover `TopicId` read off the live broker.
+4. The script does not yet enable production: read the production topic's shape (replication factor, partitions, cleanup, retention, segment
+   settings) off the live broker, record it as a production row in `roll-forward-underlying-spx-price.sh` with its own verification, and review that
+   change; the script refuses `--cluster production` until then.
+5. A prod window outside the US session (the topic feeds live trading surfaces), and the prod pre-cutover `TopicId` read off the live broker.
 
 ## Not covered by the dev cutover — remaining for prod / owner
 * **Production**: steps 1-8 on `192.168.100.252` after a prod window; read the prod pre-cutover `TopicId` off the live broker.
