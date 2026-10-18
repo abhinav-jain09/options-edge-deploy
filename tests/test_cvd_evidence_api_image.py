@@ -26,7 +26,7 @@ class ApiImageTest(unittest.TestCase):
             destination.write_bytes(b'official SDK fixture');destination.with_suffix('.release.json').write_text(json.dumps({'source':SDK,'sha256':'f'*64,'version':'0.23.0'}))
         def command(*args,**kwargs):
             self.commands.append(args)
-            if args[:2]==('git','clone'):Path(args[-1]).mkdir();return ''
+            if args[:2]==('git','clone'):(Path(args[-1])/'trade-evidence-api/tools').mkdir(parents=True);return ''
             if 'rev-parse' in args:return SOURCE+'\n'
             if args[:3]==('docker','image','inspect'):return CONFIG+'\n'
             return ''
@@ -45,7 +45,7 @@ class ApiImageTest(unittest.TestCase):
     def test_both_architectures_publish_only_after_their_own_tests(self):
         proof=self.build();self.assertEqual(['build','tests','publish'],[x[0] for x in self.steps]);self.assertEqual('PASS',proof['status']);self.assertFalse(proof['runtimeDeployed']);self.assertEqual(SOURCE,proof['processingSource']);self.assertEqual(SDK,proof['contractsSource']);self.assertIn('host.docker.internal:5001/',proof['image']);self.assertEqual('linux/arm64',proof['platform'])
         test=self.steps[1][1];self.assertIn('--memory=512m',test);self.assertIn('--cpus=1',test);self.assertIn('TRADE_API_TEST=1',test);self.assertNotIn('-p',test[:test.index('python')]);self.assertEqual(120,self.steps[1][2])
-        self.assertTrue(self.steps[-1][1][self.steps[-1][1].index('-t')+1].startswith('192.168.100.102:5001/'));self.assertIn('--name',test);self.assertIn('timeout=110',test[-1])
+        self.assertTrue(self.steps[-1][1][self.steps[-1][1].index('-t')+1].startswith('192.168.100.102:5001/'));self.assertIn('--name',test);self.assertIn('timeout=110',test[-1]);mount=test[test.index('--mount')+1];self.assertTrue(mount.startswith('type=bind,source='+str(self.root.resolve())));self.assertTrue(mount.endswith('/trade-evidence-api/tools,target=/app/tools,readonly'))
         self.assertFalse(any(x[0] in ['kubectl','launchctl','ssh'] for x in self.commands))
         image,meta=self.select(proof);self.assertEqual(proof['image'],image);self.assertEqual(SOURCE,meta['processingSource'])
     def test_production_uses_only_the_production_architecture_and_registry(self):

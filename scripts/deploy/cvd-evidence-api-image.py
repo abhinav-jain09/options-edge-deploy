@@ -101,10 +101,13 @@ def build_image(environment,build,reader):
         test_name='cvd-evidence-api-test-'+environment+'-'+build
         owner=os.environ['PERMITTED_SHA']+'-'+environment+'-'+build
         if command('docker','container','ls','--all','--filter','name=^/'+test_name+'$','--format','{{.Names}}').strip():raise ValueError('Test container name already exists')
+        tools=checkout/'trade-evidence-api/tools'
+        if not tools.is_dir() or tools.is_symlink():raise ValueError('Same-source API test tools required')
         controller='import subprocess,sys; sys.exit(subprocess.run([sys.executable,"-m","pytest","-q","tests","-p","no:cacheprovider"],timeout=110).returncode)'
         try:
             docker_step(['docker','run','--rm','--pull=never','--name',test_name,'--label','com.optionsedge.cvd-evidence-api-test='+owner,
                 '--platform',target['platform'],'--memory=512m','--memory-swap=512m','--cpus=1','--pids-limit=128',
+                '--mount','type=bind,source='+str(tools.resolve())+',target=/app/tools,readonly',
                 '-e','TRADE_API_TEST=1','-e','TRADE_API_AUTH_REQUIRED=false',image,'python','-c',controller],root,'tests',120)
         except BaseException:
             cleanup_test(test_name,owner)

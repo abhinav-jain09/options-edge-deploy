@@ -73,3 +73,7 @@ build changes or CVD code changes require a fresh full qualification. The proof
 is bounded and archived with both actual qualified and observed main commits.
 It never selects an older successful build behind a newer relevant running or
 failed build, relaxes the current SDK requirement, or waives any campaign.
+
+The proof fetches the bounded shallow Git history in one bulk transfer. Lazy
+per-POM fetches exhausted the same 180-second deadline in the first production
+reader dry run. The deadline, tree/POM checks and quarantine budgets stay fixed.
