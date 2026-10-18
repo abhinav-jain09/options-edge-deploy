@@ -45,7 +45,7 @@ class GatewayTests(unittest.TestCase):
             if args[:3]==['docker','context','inspect']:return 'unix:///Users/abhinav/.docker/run/docker.sock'
             if 'info' in args:return 'linux/aarch64'
             if 'ps' in args:return gateway.NAME if existing else ''
-            if 'inspect' in args:return json.dumps([{'Config':{'Image':'wrong' if wrong_identity else gateway.IMAGE,'Labels':{'com.docker.compose.project':gateway.NAME},'Env':['TRADING_MODE=paper']},'State':{'Running':running,'Health':{'Status':'healthy' if healthy else 'starting'}},'HostConfig':{'RestartPolicy':{'Name':restart}}}])
+            if 'inspect' in args:return json.dumps([{'Config':{'Image':'wrong' if wrong_identity else gateway.IMAGE,'Labels':{'com.docker.compose.project':gateway.NAME},'Env':['TRADING_MODE=paper']},'State':{'Running':running,'Health':{'Status':'healthy' if healthy else 'starting'}},'HostConfig':{'RestartPolicy':{'Name':restart},'PortBindings':gateway.PORTS}}])
             if 'update' in args:restart='unless-stopped'
             return ''
         env={'JOB_NAME':gateway.NAME,'NODE_LABELS':'local-mac','BUILD_URL':'http://fixture/job/ibkr-paper-gateway/1/','PERMITTED_SHA':'a'*40}

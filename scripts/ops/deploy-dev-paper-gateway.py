@@ -16,6 +16,7 @@ SECRETS = pathlib.Path('/Users/abhinav/.config/options-edge/ibkr-paper-gateway')
 IMAGE = 'ghcr.io/gnzsnz/ib-gateway@sha256:1b7d2be59d95293b5695f678e2001f524ca0e8b89b4c0f46013df10a934d55c5'
 DOCKER = ['docker', '--context', 'desktop-linux']
 NAME = 'ibkr-paper-gateway'
+PORTS = {'4004/tcp': [{'HostIp': '127.0.0.1', 'HostPort': '4002'}], '5900/tcp': [{'HostIp': '127.0.0.1', 'HostPort': '5902'}]}
 AGENT = pathlib.Path('/Users/abhinav/Library/LaunchAgents/com.optionsedge.ibkr-paper-gateway.plist')
 
 def run(args, timeout=30, env=None):
@@ -42,7 +43,7 @@ def inspect():
     return json.loads(run(DOCKER + ['inspect', NAME]))[0]
 
 def verify_identity(value):
-    if value['Config']['Image'] != IMAGE or value['Config'].get('Labels', {}).get('com.docker.compose.project') != NAME or 'TRADING_MODE=paper' not in value['Config']['Env']:
+    if value['Config']['Image'] != IMAGE or value['Config'].get('Labels', {}).get('com.docker.compose.project') != NAME or 'TRADING_MODE=paper' not in value['Config']['Env'] or value['HostConfig'].get('PortBindings') != PORTS:
         raise RuntimeError('EXISTING_CONTAINER_IDENTITY_MISMATCH; no replacement performed')
 
 def install_startup():

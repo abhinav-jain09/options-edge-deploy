@@ -10,10 +10,13 @@ pipeline {
   environment { ENVIRONMENT = 'dev' }
   stages {
     stage('Permitted commit guard') {
+      options { timeout(time: 10, unit: 'MINUTES') }
       steps {
         script {
           def rc = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')
-          if (rc != 0) { error("Permitted source refused (rc=${rc}); no deployment effect.") }
+          if (rc != 0) {
+            error("Permitted commit guard REFUSED this build (rc=${rc}) — see its output above. No deployment effect has run.")
+          }
           env.PERMITTED_SHA_GUARD = 'PASSED'
         }
       }
@@ -25,7 +28,9 @@ pipeline {
     stage('Provision on dev Mac') {
       when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
       steps {
-        sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir .'
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir .'
+        }
         sh 'python3 scripts/ops/deploy-dev-paper-gateway.py'
       }
     }
