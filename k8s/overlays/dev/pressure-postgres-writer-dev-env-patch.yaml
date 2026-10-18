@@ -2,11 +2,13 @@
 # reader - and leave the other three off.
 #
 # Why this patch exists at all. The base already renders replicas 1 for this Deployment, in both
-# environments, and yet the live Deployment is 0/0 in dev AND production (checked 2026-10-18:
-# `kubectl -n options-edge get deploy pressure-postgres-writer` shows 0/0 on dev and the same over
-# ssh on 192.168.100.252). No KEEP_DOWN or DISABLED_DEV list names it, so that zero is DRIFT from a
-# manual scale-down, not policy. A deploy would therefore start all four writers at once, and three
-# of them are not the point of this change.
+# environments, and yet the live Deployment was 0/0 in dev AND production before this patch was
+# deployed. No KEEP_DOWN or DISABLED_DEV list names it, so that zero was DRIFT from a manual
+# scale-down, not policy. A deploy therefore starts all four writers at once, and three of them are
+# not the point of this change. The dated external checks for that, and for what the other three
+# would create, are stated ONCE in
+# k8s/overlays/production/pressure-postgres-writer-prod-env-patch.yaml - including that dev now
+# reads 1/1 because this patch has landed, while production still reads 0/0.
 #
 # What the other three would do if started. Their surface is held down: directional-pressure-service
 # is in BOTH production hold-down lists and renders 0 replicas, so there is no

@@ -73,8 +73,13 @@ spec:
   #     together with a rebuilt production image that actually READS it. The previous one,
   #     prod-1650-d6a7d010980a built 2026-09-22, contained zero occurrences of that variable, so the
   #     flag alone would have been inert. Verifiable in options-edge-processing, not here. On
-  #     2026-10-18 this printed 0 for BOTH variables - the sink name as well as the flag:
-  #     `for v in OPB_L1_ENABLED L1_CONTRIB_SINK; do git show d6a7d010980a:option-price-behavior-service/src/main/java/app/pricebehavior/OptionPriceBehaviorStreams.java | grep -c "$v"; done`
+  #     2026-10-18 this printed 0 for BOTH variables at the OLD commit - the sink name as well as the
+  #     flag - and 1 and 3 at the NEW one, which is what establishes that the replacement image
+  #     actually reads the flag rather than merely being newer:
+  #     `for c in d6a7d010980a e0274feaf6b2; do for v in OPB_L1_ENABLED L1_CONTRIB_SINK; do git show $c:option-price-behavior-service/src/main/java/app/pricebehavior/OptionPriceBehaviorStreams.java | grep -c "$v"; done; done`
+  #     The new production image is tag prod-1927-e0274feaf6b2, whose suffix is that commit; the
+  #     registry listing for options-edge-option-price-behavior shows it alongside the old
+  #     prod-1650-d6a7d010980a.
   #
   # THE EVIDENCE FOR THE OFFSET CLAIM BELOW lives here too, so the three files that mention it can
   # point at one copy instead of repeating it - which is how four copies of an earlier note drifted
