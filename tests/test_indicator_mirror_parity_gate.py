@@ -12,9 +12,9 @@ FAKE = ROOT / "tests/fake_mirror_parity_cli.py"
 SRC, TGT, TOPIC = "192.168.100.4:9092", "127.0.0.1:19092", "es.options.indicators.snapshot.current"
 
 
-def gate_block() -> str:
+def gate_block(begin="# --- parity gate begin", end="# --- parity gate end ---") -> str:
     t = (ROOT / "Jenkinsfile.es-indicator-mirror").read_text()
-    b = t[t.index("# --- parity gate begin"):t.index("# --- parity gate end ---")]
+    b = t[t.index(begin):t.index(end)]
     # Groovy '''...''' hands \\n and \\t to the shell as \n and \t
     return b.replace("\\\\n", "\\n").replace("\\\\t", "\\t").replace("\\\\(", "\\(").replace("\\\\)", "\\)").replace("\\\\1", "\\1")
 
@@ -24,7 +24,7 @@ def evens(lo, hi):
     return list(range(lo, hi, 2))
 
 
-def run(scenario: dict):
+def run(scenario: dict, timeout_s: int | None = None, block=None, parts=1):
     d = pathlib.Path(tempfile.mkdtemp(prefix="parity-gate-"))
     kbin = d / "kbin"; kbin.mkdir()
     for n in ("kafka-get-offsets", "kafka-console-consumer"):
@@ -33,10 +33,12 @@ def run(scenario: dict):
     mdir = d / "mdir"; mdir.mkdir()
     (d / "scenario.json").write_text(json.dumps(scenario))
     calls = d / "calls.log"; calls.write_text("")
-    script = "set -euo pipefail\n" + gate_block()
-    env = dict(os.environ, PATH=f"{kbin}:{os.environ['PATH']}", KBIN=str(kbin), SRC=SRC, TGT=TGT, TOPIC=TOPIC, MDIR=str(mdir),
+    script = "set -euo pipefail\n" + (gate_block(*block) if block else gate_block())
+    env = dict(os.environ, PATH=f"{kbin}:{os.environ['PATH']}", KBIN=str(kbin), SRC=SRC, TGT=TGT, TOPIC=TOPIC, MDIR=str(mdir), PARTS=str(parts),
                FAKE_PARITY_SCENARIO=str(d / "scenario.json"), FAKE_PARITY_STATE=str(d / "state.json"),
                FAKE_PARITY_CALLS=str(calls), FAKE_SRC=SRC)
+    if timeout_s is not None:
+        env["PARITY_CONSUMER_TIMEOUT_S"] = str(timeout_s)
     r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env)
     return r.returncode, r.stdout + r.stderr, calls.read_text()
 
@@ -128,6 +130,21 @@ class ParityGateTest(unittest.TestCase):
         rc, out, _ = run(one(0, 20, evens(0, 20), [10]))
         self.assertEqual(rc, 0, out)
 
+    def test_a_duplicated_target_on_a_live_topic_is_judged_once_the_consumer_read_past_the_source_end(self):
+        # target holds 451 but the source committed 226 below its end (a re-install copied everything twice);
+        # TE+1 = 452 exceeds the committed count, so on a live topic the consumer runs into the wall-time bound —
+        # the live record at offset 904 (>= SE 902) proves every committed record below SE was read: N=226 < TE → FAIL
+        recs = evens(0, 452) + [904]
+        rc, out, _ = run(one(0, 902, recs, [451], consumer={"hang_s": 3}), timeout_s=1)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("consumer stopped at the wall-time bound after reading past the source end (904 >= 902)", out)
+        self.assertIn("a duplicate copy or a second writer", out)
+
+    def test_a_consumer_killed_before_the_source_end_is_inconclusive_and_fails(self):
+        rc, out, _ = run(one(0, 902, evens(0, 452), [451], consumer={"hang_s": 3}), timeout_s=1)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("did not reach the source end offset 902", out)
+
     def test_a_consumer_whose_total_disagrees_with_its_output_fails_the_gate(self):
         rc, out, _ = run(one(0, 902, evens(0, 902), [451], consumer={"total_off_by": -3}))
         self.assertEqual(rc, 1, out)
@@ -138,6 +155,46 @@ class ParityGateTest(unittest.TestCase):
         rc, out, _ = run(one(0, 902, evens(100, 902), [401], begin_sequence={"0": [0]}) | {"source": {"0": {"begin": 100, "end": 902, "records": evens(100, 902)}}})
         self.assertEqual(rc, 1, out)
         self.assertIn("no longer holds the earliest offset 0", out)
+
+
+PRE = ("# --- empty-target precondition begin", "# --- empty-target precondition end ---")
+
+
+class EmptyTargetPreconditionTest(unittest.TestCase):
+    """The install refuses to start MirrorMaker over a target that is not proven empty on every partition."""
+
+    def pre(self, raw, parts):
+        return run({"source": {"0": {"begin": 0, "end": 0, "records": []}}, "target": {"0": [0]}, "target_raw": raw}, block=PRE, parts=parts)
+
+    def test_all_partitions_at_zero_pass(self):
+        rc, out, _ = self.pre([f"{TOPIC}:{p}:0" for p in range(8)], 8)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("is empty on every partition", out)
+
+    def test_a_non_zero_partition_is_refused(self):
+        rc, out, _ = self.pre([f"{TOPIC}:0:0", f"{TOPIC}:1:451"], 2)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("is not empty (partition=endOffset: 1=451)", out)
+
+    def test_a_missing_partition_row_is_refused(self):
+        rc, out, _ = self.pre([f"{TOPIC}:0:0", f"{TOPIC}:1:0"], 3)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("answered for [0 1]", out)
+
+    def test_a_duplicate_row_is_refused(self):
+        rc, out, _ = self.pre([f"{TOPIC}:0:0", f"{TOPIC}:0:0"], 1)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("every partition must be proven empty", out)
+
+    def test_a_malformed_row_is_refused(self):
+        rc, out, _ = self.pre([f"{TOPIC}:0:", f"{TOPIC}:1:0"], 2)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("every partition must be proven empty", out)
+
+    def test_an_empty_answer_is_refused(self):
+        rc, out, _ = self.pre([], 1)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("cannot read the target end offsets", out)
 
 
 if __name__ == "__main__":

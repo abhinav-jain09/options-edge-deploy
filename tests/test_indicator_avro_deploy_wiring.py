@@ -110,6 +110,10 @@ class IndicatorAvroDeployWiring(unittest.TestCase):
         self.assertIn("Processed a total of", verify)
         self.assertNotIn('[ "$SEND" = "$TEND" ] && break', verify)
         self.assertIn("decode-newest-indicator-record.sh", verify)
+        self.assertIn("DECODE_EMPTY_OK=", verify, "an empty target partition passes only when its source holds no committed record")
+        self.assertIn("is not empty (partition=endOffset:", gen, "an install over a non-empty target is refused: the copy restarts at the earliest offset")
+        self.assertIn("PARITY_CONSUMER_TIMEOUT_S", verify)
+        self.assertNotIn("source holds no record yet; the decode gate runs on the first record", verify)
 
     def test_archive_unit_ships_the_avro_reader_and_builds_the_contracts_jar_from_the_permitted_commit(self):
         t = (ROOT / "Jenkinsfile.archive-scripts-deploy").read_text()

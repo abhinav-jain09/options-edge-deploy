@@ -12,7 +12,7 @@ Call counters live in FAKE_PARITY_STATE so the sequences advance across invocati
 FAKE_PARITY_CALLS. The console-consumer stand-in reproduces the real tool's measured behaviour (2026-10-18): it
 prints "Offset:<n>" per record to stdout, "Processed a total of N messages" to stderr, an idle timeout as
 "[ERROR] ... TimeoutException" on stderr, and it EXITS 0 on every error unless the scenario says otherwise."""
-import json, os, sys
+import json, os, sys, time
 
 argv = sys.argv[1:]
 name = os.path.basename(sys.argv[0])
@@ -42,6 +42,8 @@ bootstrap = arg("--bootstrap-server")
 is_source = bootstrap == os.environ["FAKE_SRC"]
 
 if name == "kafka-get-offsets":
+    if not is_source and "target_raw" in scenario and "--partitions" not in argv:
+        print("\n".join(scenario["target_raw"])); sys.exit(0)   # verbatim rows: lets a test feed partial or malformed answers
     parts = [arg("--partitions")] if "--partitions" in argv else sorted(src if is_source else tgt, key=int)
     for p in parts:
         if is_source:
@@ -81,6 +83,8 @@ if name == "kafka-console-consumer":
     elif len(out) < maxm:
         print("[2026-10-18 05:09:11,239] ERROR Error processing message, terminating consumer process:  (kafka.tools.ConsoleConsumer$)", file=sys.stderr)
         print("org.apache.kafka.common.errors.TimeoutException", file=sys.stderr)
+    if c.get("hang_s"):   # a live topic never idles: the consumer keeps running until the gate's wall-time bound kills it
+        sys.stdout.flush(); time.sleep(c["hang_s"])
     print(f"Processed a total of {len(out) + c.get('total_off_by', 0)} messages", file=sys.stderr)
     sys.exit(c.get("exit", 0))
 
