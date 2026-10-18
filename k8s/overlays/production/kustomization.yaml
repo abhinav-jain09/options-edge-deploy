@@ -979,16 +979,28 @@ patches:
 #     the mechanical reason they had been left out of this block, not a safety one.
 #
 # Every name was checked to HAVE the tag it is pointed at, except the two documented above, and to be
-# RENDERED by this overlay. That second check caught one that is not: options-edge-tape-zones. An
+# RENDERED by this overlay. Both checks are reproducible - run them over this block rather than
+# trusting the sentence:
+#   yq -r '.images[].name' k8s/overlays/production/kustomization.yaml | sed 's|.*/||' | while read -r i; do printf '%-46s ' "$i"; curl -s --max-time 10 "http://192.168.100.252:5000/v2/$i/tags/list" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("NAME_UNKNOWN" if "errors" in d else ("prod" if "prod" in (d.get("tags") or []) else "NO-PROD-TAG"))'; done
+#   R=$(kubectl kustomize k8s/overlays/production); yq -r '.images[].name' k8s/overlays/production/kustomization.yaml | while read -r n; do printf '%s %s\n' "$n" "$(printf '%s' "$R" | grep -c "$n")"; done
+# On 2026-10-18 the first printed prod for every name except options-edge-ibkr-feed and
+# options-edge-break-score, and the second printed a non-zero count for every name.
+# That second check caught one that is not rendered: options-edge-tape-zones. An
 # entry for an image the overlay never renders is dead configuration that reads like coverage. Check
 # an addition with:
 #   kubectl kustomize k8s/overlays/production | grep -c <image-name>
 #
 # OUT OF SCOPE AND LEFT ALONE, found while verifying this change. scripts/ci/validate-es4-render.sh
 # FAILS on a clean origin/main: 28 files under k8s/es4/services are out of date with
-# scripts/es4/render_es4_manifests.py. Confirmed pre-existing by running that gate in a separate
-# worktree at origin/main on 2026-10-18 - the reported drift is byte-identical, 86 lines and the same
-# 28 files, with and without this change. Running the renderer also showed that es4 INHERITS the
+# scripts/es4/render_es4_manifests.py. Confirmed pre-existing on 2026-10-18 by comparing the gate's
+# own output from a baseline worktree, which is the only way to tell a pre-existing failure from one
+# you caused:
+#   git worktree add /tmp/es4-baseline origin/main
+#   (cd /tmp/es4-baseline && bash scripts/ci/validate-es4-render.sh) >/tmp/es4-base.log 2>&1
+#   bash scripts/ci/validate-es4-render.sh >/tmp/es4-mine.log 2>&1
+#   diff <(grep -vE '^\+\+\+|^---' /tmp/es4-mine.log) <(grep -vE '^\+\+\+|^---' /tmp/es4-base.log)
+# The diff was EMPTY: both logs are 86 lines naming the same 28 files, so the drift is identical with
+# and without this change. Running the renderer also showed that es4 INHERITS the
 # production slices, so the option-pressure change merged earlier the same day propagates
 # OPB_L1_ENABLED=true and the pressure-writer flags into es4's manifests on the next regeneration.
 # Whether es4 should carry those is a separate decision - the pressure CONSUMER is not in that
