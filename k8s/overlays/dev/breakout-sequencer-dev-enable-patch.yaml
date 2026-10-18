@@ -1,0 +1,18 @@
+# DEV-ONLY: run the breakout sequencer.
+#
+# The base ships it inert (replicas 0). The sequencer is the ONE writer of the SPX breakout label stream (requirement LBL 12).
+# Its prerequisites, in order, all met before this patch is merged:
+#   1. underlying.spx.price carries AVRO on this environment (the feed conversion, contracts 0.27.0): the sequencer decodes only
+#      Avro and quarantines anything else, so starting it against JSON would quarantine every tick.
+#   2. The topics breakout.sequenced / breakout.quarantine (one partition, LogAppendTime, retention -1) and
+#      breakout.control.in / breakout.correction.in exist, and their schema subjects are registered.
+#   3. The key volume breakout-sequencer-keys exists (common-infra); the dev profile generates its Ed25519 key set on it once.
+# Profile dev-unsecured skips the ACL read-back and says so in its log: writer exclusivity is NOT enforced on this cluster.
+# Name-keyed strategic merge, deliberately.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: breakout-sequencer-service
+  namespace: options-edge
+spec:
+  replicas: 1
