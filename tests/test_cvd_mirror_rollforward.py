@@ -1,4 +1,6 @@
 """Bounded mirror source/group identity and real handoff orchestration; effects are stubbed."""
+import ast
+import shlex
 import importlib.util
 import json
 import os
@@ -113,6 +115,10 @@ class MirrorTest(unittest.TestCase):
             return 'CANONICAL_MIRROR_PREFLIGHT_PASS records=25 bytes=4096\n'
         with patch.dict(os.environ,self.env,clear=True),patch.object(m,'run',side_effect=run),patch.object(m,'read',return_value=b'{"id":2012}'):
             proof=m.linux_probe(root,self.topic,'http://127.0.0.1:8082')
+            remote = ast.parse(shlex.split(calls[-1][-1])[-1])
+            java = ast.literal_eval(remote.body[-1].value.args[0])
+            self.assertEqual('/usr/lib/jvm/java-21-openjdk/bin/java', java[0])
+            self.assertEqual('21', java[java.index('--source') + 1])
         self.assertEqual('Linux CI es4',proof['host']);self.assertEqual(25,proof['records']);self.assertEqual(4096,proof['bytes'])
         command=calls[-1][-1];self.assertIn('--pipe',command);self.assertIn('MemoryMax=512M',command);self.assertIn('MemorySwapMax=0',command);self.assertIn('RuntimeMaxSec=90',command);self.assertIn('http://192.168.100.102:8082',command)
         for call in calls:self.assertNotIn('192.168.100.201',' '.join(call))

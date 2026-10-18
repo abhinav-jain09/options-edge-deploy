@@ -240,7 +240,7 @@ for name,expected in EXPECTED.items():
  if actual!=expected:raise ValueError('transported qualification bytes differ')
 subprocess.run(JAVA,check=True,timeout=65)
 """.replace('DIRECTORY',repr(directory)).replace('EXPECTED',repr(expected))
-    command=['java','-Xmx256m','-XX:MaxDirectMemorySize=64m','--class-path',directory+'/canonical-cvd-mirror.jar','--source','21',directory+'/CvdMirrorPreflight.java',
+    command=['/usr/lib/jvm/java-21-openjdk/bin/java','-Xmx256m','-XX:MaxDirectMemorySize=64m','--class-path',directory+'/canonical-cvd-mirror.jar','--source','21',directory+'/CvdMirrorPreflight.java',
         '192.168.100.4:9092','http://192.168.100.4:8081',registry,topic,str(target_id)]
     if type(target_id) is not int or target_id<=0:raise ValueError('Positive existing destination schema ID required')
     check=check.replace('JAVA',repr(command))
