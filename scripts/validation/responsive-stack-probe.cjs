@@ -66,6 +66,9 @@ async function memory(){
   await measurePath(page,cdp,'map-snapshot',i=>page.evaluate(i=>map.update({session:{...__session,generatedAtMs:__session.generatedAtMs+i},hidden:{}}),i));
   await measurePath(page,cdp,'orders-render-health',async i=>{publisher.publish(i);await page.waitForFunction(i=>window.__probeReadinessSequence===i,i,{polling:10});publisher.acknowledge(i);});
   if(variant==='candidate'){
+   results.floatingPreparation=await prepareChart.isolateFloating(page,fixture);
+   assert.deepEqual(await page.evaluate(()=>({shades:document.querySelectorAll('.mm-order-shade').length,threads:document.querySelectorAll('.mm-exit-thread').length,labels:document.querySelectorAll('.mm-exit-label').length})),results.geometry,'FIXED_CHART_FULL_GEOMETRY_RETAINED');
+   assert.equal(await page.locator('[data-chart] [data-candle-time]').count(),count,'FIXED_CHART_ALL_CANDLES_RETAINED');
    await page.setViewportSize({width:1920,height:1440});await frames(page);await page.locator('[data-stack-action="detach"]').click();await frames(page);
    // Narrow through the real keyboard grip to create room for native drag frames.
    const edge=page.locator('[data-stack-grip="resize"][data-direction="e"]');await edge.focus();for(let i=0;i<35;i++)await page.keyboard.press('Shift+ArrowLeft');await frames(page);

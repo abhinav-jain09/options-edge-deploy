@@ -32,3 +32,20 @@ module.exports.admitCompanion=async function(main,child,fixture){
  assert.equal(fixture.streams.size,1,'COMPANION_ONE_PRIVATE_STREAM');
  return prepared;
 };
+
+// The floating-only gate holds chart input fixed: ordinary five-second VWAP
+// and level-signal refreshes legitimately redraw it. Use public controls rather
+// than intercepting timers, requests, the renderer, or any native frame.
+module.exports.isolateFloating=async function(page,fixture){
+ const toggle=page.locator('[data-controls]');
+ if(await toggle.getAttribute('aria-expanded')!=='true')await toggle.click();
+ for(const key of ['vwap','levelSignals'])await page.locator(`[data-layer="${key}"]`).uncheck();
+ if(await toggle.getAttribute('aria-expanded')==='true')await toggle.click();
+ // An already scheduled signal timer can issue its final redraw after the
+// control is disabled. Drain its existing <=5s deadline before observation.
+ await page.waitForTimeout(5100);
+ await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+ const admitted=await module.exports.waitForOrders(page,fixture);
+ for(const key of ['vwap','levelSignals'])assert.equal(await page.locator(`[data-layer="${key}"]`).isChecked(),false,'FIXED_CHART_LAYER_DISABLED');
+ return {method:'public-layer-controls; existing five-second deadline drained',...admitted};
+};

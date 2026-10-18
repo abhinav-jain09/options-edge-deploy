@@ -52,6 +52,9 @@ for variant in ['baseline', 'candidate']:
                 paths = {'full-chart-resize', 'map-snapshot', 'orders-render-health'}
                 if variant == 'candidate':
                     paths |= {'floating-move', 'floating-resize', 'panel-dock-detach'}
+                    require(row.get('floatingPreparation', {}).get('method') ==
+                            'public-layer-controls; existing five-second deadline drained',
+                            f'{name}: floating-only fixed-chart preparation required')
                 require(set(row.get('paths', {})) == paths, f'{name}: missing/extra paths')
                 for key in paths:
                     sample = row.get('paths', {}).get(key, {})

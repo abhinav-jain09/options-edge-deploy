@@ -38,6 +38,8 @@ class ResponsiveQualificationTest(unittest.TestCase):
                     row = {'status': 'MEASURED', 'variant': variant, 'count': count, 'repeat': repeat,
                            'assetHashes': hashes[variant], 'bookRecords': 4096, 'activePositions': 16, 'linkedPlans': 16,
                            'geometry': {'shades': 16, 'threads': 32, 'labels': 32}, 'paths': paths, 'memory': memory}
+                    if variant == 'candidate':
+                        row['floatingPreparation'] = {'method': 'public-layer-controls; existing five-second deadline drained'}
                     self.write(f'stack-{variant}-{count}-{repeat}', row)
         for repeat in range(1, 6):
             groups = []
@@ -94,6 +96,14 @@ class ResponsiveQualificationTest(unittest.TestCase):
     def test_wrong_warmup_count(self):
         self.mutate(lambda row: row['paths']['floating-move'].update(nativeFrames=249))
         self.qualify(1, phrase='native frames')
+
+    def test_missing_floating_preparation(self):
+        self.mutate(lambda row: row.pop('floatingPreparation'))
+        self.qualify(1, phrase='floating-only fixed-chart preparation required')
+
+    def test_floating_chart_rebuild(self):
+        self.mutate(lambda row: row['paths']['floating-move'].update(sameSvg=False))
+        self.qualify(1, phrase='native frames/unchanged candles')
 
     def test_p99_budget_and_summary_recomputation(self):
         self.mutate(lambda row: row['paths']['floating-resize'].update(samples=[17]*200, p99Ms=17, meanMs=17))
