@@ -19,7 +19,7 @@
 //                  DESTRUCTIVE (drops all es4 Kafka data); honors DEPLOY_DRY_RUN.
 //   deploy-service apply ONE service from k8s/es4/services/<SERVICE>.yaml (digest-pinned).
 //   deploy-all     apply es4-common-env + every manifest in k8s/es4/services (digest-pinned).
-//   update-image   derive the latest qualified production image for one of five CVD workloads;
+//   update-image   derive the latest qualified production image for a CVD workload or the ES gateway;
 //                  JSON-patch only that image, preserving live replicas and configuration.
 //   activate-es-feed / deactivate-es-feed  start or stop the es4 es-feed. Activation is its own
 //                  action so no deploy can raise the feed as a side effect.

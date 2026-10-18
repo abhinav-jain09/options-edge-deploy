@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Image-only updates for five existing CVD readers/writers. Never creates or scales a workload."""
+"""Image-only updates for existing CVD readers/writers and the ES gateway. Never creates or scales a workload."""
 import json
 import importlib.util
 import hashlib
@@ -19,6 +19,7 @@ IMAGE_PLATFORM = 'linux/amd64'
 IMAGE_TAG_PREFIX = 'prod'
 TARGET_ENVIRONMENT = 'es4'
 SERVICES = {
+    'es-feed-gateway': ('es-feed-gateway', 'feed-gateway', 'options-edge-feed-gateway'),
     'es-cvd': ('es-cvd-service', 'es-cvd', 'options-edge-es-cvd'),
     'es-footprint-strike': ('es-footprint-strike-service', 'es-footprint-strike', 'options-edge-es-footprint-strike'),
     'gamma-migration': ('gamma-migration-service', 'gamma-migration', 'options-edge-gamma-migration'),
@@ -43,6 +44,7 @@ def qualified_image(service, builds, fetch_lock):
     if not isinstance(builds, list) or len(builds) > 64:
         raise ValueError('bounded Jenkins build list required')
     repo = SERVICES[service][2]
+    gateway = service == 'es-feed-gateway'
     candidates = []
     for build in builds:
         if type(build.get('number')) is not int or build['number'] < 1:
@@ -52,13 +54,13 @@ def qualified_image(service, builds, fetch_lock):
             for entry in action.get('parameters', []):
                 params[entry['name']] = entry.get('value')
         target = params.get('BUILD_TARGET')
-        relevant = target == repo or (target == 'cvd-avro-related' and service != 'close-direction')
+        relevant = gateway or target == repo or (target == 'cvd-avro-related' and service != 'close-direction')
         if relevant and params.get('ENVIRONMENT') == IMAGE_ENVIRONMENT:
             candidates.append((build, params))
     if not candidates:
         raise ValueError('no recent production build for this service')
     build, params = max(candidates, key=lambda row: row[0]['number'])
-    if build.get('building') is not False or build.get('result') != 'SUCCESS' or params.get('PUSH_IMAGES') is not True:
+    if build.get('building') is not False or build.get('result') != 'SUCCESS' or params.get('PUSH_IMAGE' if gateway else 'PUSH_IMAGES') is not True:
         raise ValueError('latest relevant production build is not a successful published qualification')
     text = fetch_lock(build['number'])
     if len(text.encode()) > 262144:
@@ -70,7 +72,8 @@ def qualified_image(service, builds, fetch_lock):
             raise ValueError('invalid or duplicate image-lock field')
         values[match[1]] = match[2]
     prefix = 'OPTIONS_EDGE_IMAGE_LOCK_'
-    if values.get(prefix + 'FORMAT') != '1' or values.get(prefix + 'SOURCE_REPO') != 'git@github.com:abhinav-jain09/options-edge-processing.git':
+    source_repo = 'options-edge-feed-gateway' if gateway else 'options-edge-processing'
+    if values.get(prefix + 'FORMAT') != '1' or values.get(prefix + 'SOURCE_REPO') != 'git@github.com:abhinav-jain09/' + source_repo + '.git':
         raise ValueError('unexpected image-lock format or source repository')
     if values.get(prefix + 'BUILD_ID') != str(build['number']) or values.get(prefix + 'PLATFORM') != IMAGE_PLATFORM:
         raise ValueError('foreign build or platform in image lock')
@@ -97,7 +100,7 @@ def qualified_image(service, builds, fetch_lock):
         raise ValueError('service image does not use this build and source tag')
     if values.get(key + '_GIT_COMMIT') != values[prefix + 'GIT_COMMIT']:
         raise ValueError('service image source differs from image lock')
-    return image, {'processingBuild': build['number'], 'processingSource': values[prefix + 'GIT_COMMIT'],
+    return image, {('gatewayBuild' if gateway else 'processingBuild'): build['number'], ('gatewaySource' if gateway else 'processingSource'): values[prefix + 'GIT_COMMIT'],
                    'contractsSource': values[prefix + 'CONTRACTS_GIT_COMMIT'],
                    'contractsJarSha256': values[prefix + 'CONTRACTS_JAR_SHA256']}
 
@@ -106,8 +109,8 @@ def open_direct(url, timeout):
     return urllib.request.build_opener(urllib.request.ProxyHandler({})).open(url, timeout=timeout)
 
 
-def processing_main():
-    result = subprocess.run(['git', 'ls-remote', 'git@github.com:abhinav-jain09/options-edge-processing.git',
+def processing_main(repository='options-edge-processing'):
+    result = subprocess.run(['git', 'ls-remote', 'git@github.com:abhinav-jain09/' + repository + '.git',
                              'refs/heads/main'], check=True, text=True, capture_output=True, timeout=30)
     match = re.fullmatch(r'([0-9a-f]{40})\s+refs/heads/main\s*', result.stdout)
     if not match:
@@ -138,12 +141,13 @@ def patch_for(service, live, image):
         raise ValueError('explicit nonnegative replica count required')
     pod = spec.get('template', {}).get('spec', {})
     containers = pod.get('containers', [])
-    if len(containers) != 1 or containers[0].get('name') != container or pod.get('initContainers'):
+    gateway = service == 'es-feed-gateway'
+    if len(containers) != 1 or containers[0].get('name') != container or (pod.get('initContainers') and not gateway):
         raise ValueError('known single application container required')
     old = containers[0].get('image')
     if not isinstance(old, str) or not old:
         raise ValueError('existing image required')
-    return [
+    ops = [
         {'op': 'test', 'path': '/metadata/uid', 'value': meta['uid']},
         {'op': 'test', 'path': '/metadata/resourceVersion', 'value': meta['resourceVersion']},
         {'op': 'test', 'path': '/spec/replicas', 'value': replicas},
@@ -151,6 +155,16 @@ def patch_for(service, live, image):
         {'op': 'test', 'path': '/spec/template/spec/containers/0/image', 'value': old},
         {'op': 'replace', 'path': '/spec/template/spec/containers/0/image', 'value': image},
     ]
+    if gateway:
+        init = pod.get('initContainers', [])
+        if len(init) != 1 or init[0].get('name') != 'wait-for-kafka-sr' or init[0].get('image') != old:
+            raise ValueError('known gateway dependency init container with the same image required')
+        ops += [
+            {'op': 'test', 'path': '/spec/template/spec/initContainers/0/name', 'value': 'wait-for-kafka-sr'},
+            {'op': 'test', 'path': '/spec/template/spec/initContainers/0/image', 'value': old},
+            {'op': 'replace', 'path': '/spec/template/spec/initContainers/0/image', 'value': image},
+        ]
+    return ops
 
 
 def kube(*args, timeout=30):
@@ -166,6 +180,8 @@ def verify(service, before, after, image):
         raise ValueError('replica hold changed during image update')
     expected = copy.deepcopy(before['spec'])
     expected['template']['spec']['containers'][0]['image'] = image
+    if service == 'es-feed-gateway':
+        expected['template']['spec']['initContainers'][0]['image'] = image
     if after['spec'] != expected:
         raise ValueError('non-image workload spec changed or image is not pinned')
 
@@ -184,13 +200,23 @@ def main():
     service = os.environ['SERVICE']
     if os.environ.get('REQUIRED_IMAGE'):
         raise ValueError('image is derived from latest qualification; manual image selectors are refused')
-    base = os.environ['JENKINS_URL'].rstrip('/') + '/job/options-edge-processing/'
+    gateway = service == 'es-feed-gateway'
+    job = 'option-edge-feed-gateway' if gateway else 'options-edge-processing'
+    base = os.environ['JENKINS_URL'].rstrip('/') + '/job/' + job + '/'
     tree = 'builds[number,result,building,actions[parameters[name,value]]]{0,64}'
     builds = json.loads(read_url(base + 'api/json?' + urllib.parse.urlencode({'tree': tree}), 2 << 20))['builds']
     image, provenance = qualified_image(service, builds,
         lambda number: read_url(base + str(number) + '/artifact/.jenkins-tmp/options-edge-image-lock.env', 262144))
-    current=processing_main()
-    source_proof=component_source_proof(provenance['processingSource'],current) if provenance['processingSource']!=current else None
+    if gateway:
+        if provenance['gatewaySource'] != processing_main('options-edge-feed-gateway'):
+            raise ValueError('latest gateway qualification must match current main')
+        sdk = processing_main('options-edge-contracts')
+        if provenance['contractsSource'] != sdk or os.environ.get('CONTRACTS_PERMITTED_SHA') != sdk:
+            raise ValueError('latest gateway qualification must use current permitted SDK')
+        source_proof = None
+    else:
+        current=processing_main()
+        source_proof=component_source_proof(provenance['processingSource'],current) if provenance['processingSource']!=current else None
     repo, digest = image_parts(service, image)
     dry = os.environ['DEPLOY_DRY_RUN']
     if dry not in ['true', 'false']:
