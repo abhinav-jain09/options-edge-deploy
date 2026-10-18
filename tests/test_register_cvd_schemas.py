@@ -5,11 +5,13 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import sys
 import unittest
 import urllib.error
 from unittest.mock import patch
 
 ROOT=Path(__file__).resolve().parents[1]
+if os.environ.get('CANONICAL_PACKAGED_ARTIFACT'):sys.path.insert(0,str(Path(os.environ['CANONICAL_PACKAGED_ARTIFACT']).resolve()))
 spec=importlib.util.spec_from_file_location('cvd_registry',ROOT/'scripts/kafka/register-cvd-schemas.py')
 m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
 TEXT='{"type":"record","name":"Proof","fields":[]}'
@@ -58,6 +60,23 @@ class CvdSchemasTest(unittest.TestCase):
         for changes in [{'schema':'{"type":"record","name":"Other","fields":[]}'},{'references':[{'name':'x'}]},{'schemaType':'JSON'},{'metadata':{'properties':{'x':'y'}}},{'ruleSet':{'domainRules':[{'name':'transform'}]}}]:
             with self.subTest(changes=changes),self.assertRaises(ValueError):m.verify_schema({'schema':TEXT,**changes},TEXT)
         m.verify_schema({'schema':TEXT,'ruleSet':{'domainRules':[],'migrationRules':[]}},TEXT)
+    def test_server_namespace_normalization_preserves_full_schema_identity(self):
+        expected={'type':'record','name':'Proof','namespace':'com.example','fields':[
+            {'name':'first','type':{'type':'record','name':'Child','namespace':'com.example','fields':[{'name':'price','type':{'type':'bytes','logicalType':'decimal','precision':38,'scale':18}}]}},
+            {'name':'second','type':['null','com.example.Child'],'default':None}]}
+        actual=json.loads(json.dumps(expected));actual['fields'][0]['type'].pop('namespace')
+        actual['fields'][1]['type'][1]='Child'
+        m.verify_schema({'schema':json.dumps(actual)},json.dumps(expected))
+        for change in ['namespace','precision','scale','field','reference']:
+            changed=json.loads(json.dumps(actual))
+            if change=='namespace':changed['namespace']='com.other'
+            elif change=='precision':changed['fields'][0]['type']['fields'][0]['type']['precision']=37
+            elif change=='scale':changed['fields'][0]['type']['fields'][0]['type']['scale']=17
+            elif change=='field':changed['fields'][0]['type']['fields'][0]['name']='different'
+            else:changed['fields'][1]['type'][1]='Unknown'
+            with self.subTest(change=change),self.assertRaises(ValueError):
+                m.verify_schema({'schema':json.dumps(changed)},json.dumps(expected))
+
     def test_foreign_or_invalid_id_fails(self):
         for schema_id in [0,-1,True,'42']:
             with self.subTest(schema_id=schema_id),self.assertRaises(ValueError):
