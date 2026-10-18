@@ -12,7 +12,8 @@ The wrapper fixes the environment's registry, architecture, deployer kubeconfig
 and namespace UID. Dev uses ARM64 images and production uses AMD64 images.
 Image selection takes the highest-numbered relevant build in the bounded recent
 Jenkins inventory; running, failed, unpublished or missing latest builds refuse
-instead of falling back. Source and SDK commits must both match current main.
+instead of falling back. The SDK must match current main. Processing source must match current main or
+pass the component-source identity proof below.
 There is no operator image, version or build-number selector.
 
 The existing image-only core checks the published lock and registry manifest
@@ -38,3 +39,14 @@ Context Tape baseline is explicit. Image pins must be reconciled to the verified
 new digests after rollout so a later manifest deployment stays forward-only.
 Literal successful processing locks from dev1901 and production1897 cover the
 actual tag formats, rather than an invented environment prefix.
+
+If unrelated processing commits advance main during qualification, the shared
+source proof compares exact Git trees for all CVD modules and their transitive
+internal Maven dependencies, including the evidence API. Every existing reactor
+POM and the shared parent model must remain identical. Only unrelated module
+source changes, two explicitly named non-runtime files, and simple appended
+modules that cannot shadow an existing dependency are accepted. Unknown shared
+build changes or CVD code changes require a fresh full qualification. The proof
+is bounded and archived with both actual qualified and observed main commits.
+It never selects an older successful build behind a newer relevant running or
+failed build, relaxes the current SDK requirement, or waives any campaign.
