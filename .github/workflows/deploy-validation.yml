@@ -223,6 +223,17 @@ jobs:
       - name: Validate the mirrored-record byte comparison
         run: bash scripts/ci/find-mirrored-record-test.sh
 
+      # The Avro roll-forward barrier is the only thing standing between a rollout and replaying
+      # hand-built JSON into an Avro deserializer, so the cases that matter are the ways it could
+      # wrongly PASS. Codex round 2 found two of those by reading it — an absent topic admitted as
+      # success, and a `--list` failure indistinguishable from an absent topic inside a conditional.
+      # This drives the real script against both, plus pre-cutover id, wrong partition count, wrong
+      # cleanup policy, wrong retention, an unparseable describe, and the deliberate exception that a
+      # versioned sibling present is reported rather than fatal (making it fatal would deadlock the
+      # very rollout that retires it). Mocked CLI: no broker needed.
+      - name: Validate the Avro roll-forward barrier refuses what it must
+        run: bash scripts/kafka/verify-avro-rollforward-test.sh
+
       # A shell FUNCTION used in a `sh` block that does not DEFINE it is a runtime failure nothing
       # else catches: `bash -n` parses `es4 "..."` happily as a command, and review sees a helper
       # that plainly exists — twelve lines away, in a different stage's shell. Each `sh` step is its

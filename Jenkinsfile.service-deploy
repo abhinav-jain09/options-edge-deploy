@@ -799,6 +799,13 @@ PYEOF
       // delete-and-recreate, so the check cannot be satisfied by anything except a topic that is not
       // the one that held the JSON. scripts/kafka/roll-forward-avro-cutover-topics.sh is what makes
       // it pass.
+      //
+      // The CLUSTER is passed explicitly, from ENVIRONMENT (dev or production, the job's own
+      // choices). Each broker carries a different topic set, and inferring the set from what exists
+      // would make an absent topic look inapplicable — which is how the es4 twin came to be missed
+      // in the first place. es4 is NOT a service-deploy environment: its gamma-ladder-path slice is
+      // deployed by the es4 path, and its `es.` twin is rolled forward with
+      // `roll-forward-avro-cutover-topics.sh --cluster es4` against 192.168.100.4:9092.
       when {
         expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'databento-gex' || params.SERVICE == 'gamma-ladder-path') && !params.DEPLOY_DRY_RUN }
       }
@@ -807,7 +814,7 @@ PYEOF
           set -euo pipefail
           export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
           . scripts/kafka/load-kafka-settings.sh
-          scripts/kafka/verify-avro-rollforward.sh "$KAFKA_BOOTSTRAP_SERVERS"
+          scripts/kafka/verify-avro-rollforward.sh --cluster "$ENVIRONMENT" "$KAFKA_BOOTSTRAP_SERVERS"
         '''
       }
     }

@@ -5,87 +5,99 @@
 #
 # The Avro cutovers ROLLED THEIR TOPICS FORWARD: each topic was deleted and recreated under its own
 # name, so the hand-built JSON it used to hold is gone. That deletion is load-bearing, not tidiness.
-# gamma-ladder-path-service reads options.databento.gex.oi-status as a Kafka Streams source with an
-# AVRO serde and no explicit auto.offset.reset, so Streams' EARLIEST default replays the topic from
-# its beginning after any state loss; both topics are retention.ms=-1, so nothing would ever have
-# aged the JSON out. Rolling the WORKLOADS forward onto a topic that still holds that JSON is exactly
-# the case the Kafka Serialization Rule forbids ("never deploy an Avro consumer that can encounter
-# retained JSON values"), and its symptom is a dead source or an empty panel, not an error.
+# gamma-ladder-path-service reads the oi-status topic as a Kafka Streams source with an AVRO serde
+# and no explicit auto.offset.reset, so Streams' EARLIEST default replays the topic from its
+# beginning after any state loss; on dev and production the topic is retention.ms=-1, so nothing
+# would ever have aged the JSON out. Rolling the WORKLOADS forward onto a topic that still holds that
+# JSON is exactly the case the Kafka Serialization Rule forbids ("never deploy an Avro consumer that
+# can encounter retained JSON values"), and its symptom is a dead source or an empty panel, not an
+# error.
 #
-# So this refuses to let that happen. A topic's TOPIC ID is assigned at creation and is a different
-# value after any delete-and-recreate. The pre-cutover IDs below were read off the live brokers on
-# 2026-10-18, BEFORE the wipe. If a live topic still carries its pre-cutover ID, the original
-# JSON-bearing topic is still there and the workloads must not roll.
+# So this refuses to let that happen. For EVERY topic the named cluster declares
+# (scripts/kafka/avro-rollforward.lib.sh), it requires the topic to EXIST, to carry the declared
+# partition count and configs, and to carry a topic id that is NOT its pre-cutover id.
 #
-# One metadata read per topic, and it stays correct afterwards: the nightly clean-slate also deletes
-# and recreates these topics, which mints another new ID and removes any JSON with it. There is no
-# value this check can be satisfied by except "not the topic that held the JSON".
+# ABSENT IS A FAILURE, not a pass. An earlier cut of this script admitted an absent topic on the
+# reasoning that a topic which does not exist holds no JSON. True, and beside the point: absence also
+# results from a half-finished or failed roll-forward, and a barrier that certifies "rolled forward"
+# must not certify "nothing is there" (Codex round 2). The remedy is the same documented step either
+# way — roll-forward-avro-cutover-topics.sh --recreate creates an absent topic.
 #
-# Usage: verify-avro-rollforward.sh <bootstrap-servers> [kafka-bin-dir]
-# Exits non-zero on ANY unverifiable condition, including a broker it cannot reach.
+# Usage: verify-avro-rollforward.sh --cluster dev|production|es4 <bootstrap-servers> [kafka-bin-dir]
+# Exits non-zero on ANY unverifiable condition, a broker it cannot reach included.
 set -euo pipefail
 
-BS="${1:-${KAFKA_BOOTSTRAP_SERVERS:-}}"
-: "${BS:?usage: verify-avro-rollforward.sh <bootstrap-servers> [kafka-bin-dir]}"
-BIN="${2:-${KAFKA_BIN_DIR:-}}"
+usage() {
+  echo "usage: verify-avro-rollforward.sh --cluster dev|production|es4 <bootstrap-servers> [kafka-bin-dir]" >&2
+  echo "       the cluster is REQUIRED: each broker carries a different topic set, and inferring it" >&2
+  echo "       from what exists would make an absent topic look inapplicable" >&2
+  exit 2
+}
+[ "${1:-}" = "--cluster" ] || usage
+CLUSTER="${2:-}"; [ -n "$CLUSTER" ] || usage
+BS="${3:-${KAFKA_BOOTSTRAP_SERVERS:-}}"; [ -n "$BS" ] || usage
+BIN="${4:-${KAFKA_BIN_DIR:-}}"
 
-if [ -n "$BIN" ]; then
-  KT="$BIN/kafka-topics.sh"
-elif command -v kafka-topics >/dev/null 2>&1; then
-  KT="kafka-topics"            # the deploy images put the CLI on PATH without the .sh suffix
-elif command -v kafka-topics.sh >/dev/null 2>&1; then
-  KT="kafka-topics.sh"
-else
-  echo "FAIL: no kafka-topics CLI found (pass a bin dir or set KAFKA_BIN_DIR)" >&2
-  exit 1
-fi
+# shellcheck source=/dev/null
+. "$(dirname "${BASH_SOURCE[0]}")/avro-rollforward.lib.sh"
 
-# topic|pre-cutover topic id on dev|pre-cutover topic id on production
-# Both are listed because this script runs against either broker and must not need to be told which.
-ROLLED_FORWARD=(
-  "options.ibkr.gex.status|yCF-rRJwQo-VVdaMHfiUkg|5OTMCxITTtWRiljc0z-kxA"
-  "options.databento.gex.oi-status|YevJMOiKSCeVwF5LHm8x1A|75HJ4F03QFy7763nzdSYPA"
-)
+KT="$(rf_resolve_cli "$BIN")"
+SPECS="$(rf_specs "$CLUSTER")"
+LIST="$(rf_list "$KT" "$BS")"
 
-echo "=== verify-avro-rollforward on $BS ==="
-if ! LIST="$("$KT" --bootstrap-server "$BS" --list 2>&1)"; then
-  echo "FAIL: cannot list topics on $BS — refusing to certify an unverified cluster:" >&2
-  printf '%s\n' "$LIST" >&2
-  exit 1
-fi
-
+echo "=== verify-avro-rollforward on $BS (cluster $CLUSTER) ==="
 fail=0
-for spec in "${ROLLED_FORWARD[@]}"; do
-  IFS='|' read -r topic dev_id prod_id <<<"$spec"
+while IFS='|' read -r topic parts cfgs pre_id; do
+  [ -n "$topic" ] || continue
   if ! printf '%s\n' "$LIST" | grep -qx "$topic"; then
-    # Absent is fine: the ensure scripts create it, and a topic that does not exist holds no JSON.
-    echo "ok  $topic absent (will be created by its ensure script)"
-    continue
-  fi
-  desc="$("$KT" --bootstrap-server "$BS" --describe --topic "$topic" 2>/dev/null | head -1)"
-  id="$(printf '%s\n' "$desc" | awk -F'\t' '{for(i=1;i<=NF;i++) if ($i ~ /^TopicId: /) {sub(/^TopicId: /,"",$i); print $i}}')"
-  if [ -z "$id" ]; then
-    echo "FAIL: could not read the topic id of $topic from: $desc" >&2
+    echo "FAIL: $topic does not exist on $BS. The roll-forward has not completed here — run" >&2
+    echo "      scripts/kafka/roll-forward-avro-cutover-topics.sh --recreate --cluster $CLUSTER" >&2
     fail=1
     continue
   fi
-  if [ "$id" = "$dev_id" ] || [ "$id" = "$prod_id" ]; then
-    echo "FAIL: $topic still carries its PRE-CUTOVER topic id $id — it is the original" >&2
-    echo "      JSON-bearing topic and has NOT been rolled forward. Run" >&2
-    echo "      scripts/kafka/roll-forward-avro-cutover-topics.sh against $BS first; rolling the" >&2
-    echo "      workloads now would replay JSON into an Avro deserializer." >&2
+  id="$(rf_topic_id "$KT" "$BS" "$topic")" || { fail=1; continue; }
+  if [ "$pre_id" != "-" ] && [ "$id" = "$pre_id" ]; then
+    echo "FAIL: $topic still carries its PRE-CUTOVER topic id $id — it is the original JSON-bearing" >&2
+    echo "      topic and has NOT been rolled forward. Run" >&2
+    echo "      scripts/kafka/roll-forward-avro-cutover-topics.sh --recreate --cluster $CLUSTER" >&2
+    echo "      first; rolling the workloads now would replay JSON into an Avro deserializer." >&2
     fail=1
     continue
   fi
-  echo "ok  $topic rolled forward (topic id $id, not the pre-cutover id)"
-done
+  # The SHAPE too: a topic recreated by broker auto-create carries a new id and the cluster default,
+  # which would pass an id-only check while being the wrong topic (32 partitions for a 1-partition
+  # ledger read by assign(partition 0) hides every record that hashed elsewhere).
+  desc="$("$KT" --bootstrap-server "$BS" --describe --topic "$topic" | head -1)"
+  got_parts="$(printf '%s' "$desc" | sed -nE 's/.*PartitionCount: ([0-9]+).*/\1/p')"
+  if [ "$got_parts" != "$parts" ]; then
+    echo "FAIL: $topic has $got_parts partition(s), declared $parts: $desc" >&2
+    fail=1
+    continue
+  fi
+  shape_ok=1
+  IFS=',' read -ra kvs <<<"$cfgs"
+  for kv in "${kvs[@]}"; do
+    printf '%s' "$desc" | grep -q -- "$kv" || { echo "FAIL: $topic is missing $kv: $desc" >&2; shape_ok=0; }
+  done
+  [ "$shape_ok" -eq 1 ] || { fail=1; continue; }
+  echo "ok  $topic rolled forward (topic id $id, $parts partition(s), $cfgs)"
+done <<<"$SPECS"
 
-# A versioned topic name must not exist at all: nothing creates, writes or reads one.
+# Versioned topic names on the broker are REPORTED but do not fail this gate, and the reason is the
+# cutover itself. While the rollout is in flight the OLD image is still running and still writing to
+# its versioned sibling, so it recreates that topic within seconds of any deletion (dev's broker has
+# auto-create on with num.partitions=32). A fatal sweep here would therefore block the one rollout
+# that retires the sibling — unsatisfiable exactly when it is needed.
+#
+# The sibling is removed by `roll-forward-avro-cutover-topics.sh --retire-siblings` AFTER the new
+# image is live and nothing writes to it. What stops a versioned name coming BACK is not this sweep
+# but tests/test_no_versioned_topic_names.py, which fails if any declaration, regex or Kubernetes
+# manifest names one, and contracts' KafkaTopicNames, which refuses one at resolution. Those cover
+# the only two paths by which a versioned name can reach a client.
 if versioned="$(printf '%s\n' "$LIST" | grep -E '\.v[0-9]+$' || true)"; [ -n "$versioned" ]; then
-  echo "FAIL: versioned topic name(s) still present on $BS — topics are rolled forward under their" >&2
-  echo "      own name and no versioned topic exists:" >&2
-  printf '      %s\n' $versioned >&2
-  fail=1
+  echo "NOTE: versioned topic name(s) present on $BS — retire them with"
+  echo "      roll-forward-avro-cutover-topics.sh --retire-siblings --cluster $CLUSTER once the new image is live:"
+  printf '      %s\n' $versioned
 else
   echo "ok  no versioned topic names on $BS"
 fi

@@ -6,118 +6,156 @@
 # 2026-10-18: "there is no version, it is always rolled forward ... and no version in the system",
 # with explicit authorisation to wipe these topics).
 #
-# WHY A SCRIPT AND NOT A ONE-OFF COMMAND. The deletion is a PRECONDITION of the rollout, not a
-# side effect of it: both topics are retention.ms=-1, and gamma-ladder-path-service reads
-# options.databento.gex.oi-status as a Kafka Streams source with an AVRO serde and no explicit
-# auto.offset.reset, so Streams replays from the beginning of the topic after any state loss. Roll
-# the workloads onto a topic that still holds the old JSON and that replay feeds JSON to an Avro
-# deserializer — the exact case the Kafka Serialization Rule forbids. An operation that a rollout
-# depends on belongs in the repository, where it can be reviewed and repeated, and it has a
-# fail-closed partner: scripts/kafka/verify-avro-rollforward.sh refuses to let the workloads roll
-# while a topic still carries its pre-cutover topic id.
+# WHY A SCRIPT AND NOT A ONE-OFF COMMAND. The deletion is a PRECONDITION of the rollout, not a side
+# effect of it: on dev and production both topics are retention.ms=-1, and gamma-ladder-path-service
+# reads oi-status as a Kafka Streams source with an AVRO serde and no explicit auto.offset.reset, so
+# Streams replays from the beginning of the topic after any state loss. Roll the workloads onto a
+# topic that still holds the old JSON and that replay feeds JSON to an Avro deserializer — the exact
+# case the Kafka Serialization Rule forbids. An operation a rollout depends on belongs in the
+# repository, where it can be reviewed and repeated, and it has a fail-closed partner:
+# scripts/kafka/verify-avro-rollforward.sh refuses the rollout until this has run.
 #
 # WHAT IS LOST, so nobody runs this expecting otherwise: options.ibkr.gex.status was the only store
 # of databento-gex-service's generation/epoch identity ledger (12,461,124 records / 1.31 GiB on prod,
 # measured 2026-10-17). Wiping it makes the next mint start from zero and reissue numbers the old
-# topic had spent. That is safe only because every consumer comparison is scoped to an OI-as-of date
-# (options-edge-documents design/KAFKA-AVRO-CUTOVER-IBKR-GEX-STATUS.md §12.2).
+# topic had spent. That is safe because a publication is bounded to a five-second event-time window
+# in LadderPathProcessor, so two publications separated by the wipe cannot merge
+# (options-edge-documents design/KAFKA-AVRO-CUTOVER-IBKR-GEX-STATUS.md section 12.2).
 #
-# Shapes below MIRROR scripts/kafka/topics.env. apply-topics.sh remains the reconciler of record;
-# this script exists for the one-time destructive step the reconciler will not do (it never deletes
-# a topic), and it VERIFIES everything it creates before touching the versioned siblings.
+# THE CLUSTER IS EXPLICIT. Three brokers carry these topics and each carries a different set:
+# dev and production carry the `options.*` names, es4 carries the `es.` twin its gamma-ladder-path
+# slice reads. The set and the shapes live in scripts/kafka/avro-rollforward.lib.sh, shared with the
+# barrier so the two cannot disagree. apply-topics.sh remains the reconciler of record; this script
+# exists for the one destructive step the reconciler will not do — it never deletes a topic.
 #
-# Usage:  roll-forward-avro-cutover-topics.sh <bootstrap-servers> <kafka-bin-dir>
-# Fails closed: any unverifiable condition aborts before the versioned siblings are removed.
+# TWO PHASES, because the rollout sits between them.
+#
+#   --recreate         delete and recreate the rolled-forward topics, then verify them. Safe to run
+#                      while the OLD image is live: that image writes to its VERSIONED sibling, so
+#                      the unversioned topics are idle. Run this BEFORE the rollout — it is what
+#                      makes verify-avro-rollforward.sh pass.
+#   --retire-siblings  delete the versioned siblings. Run this AFTER the new image is live. Running
+#                      it earlier does not stick: the old image recreates its sibling within seconds
+#                      (dev's broker has auto-create on with num.partitions=32).
+#   --all              both, in order. For an environment where nothing is running.
+#
+# Usage:
+#   roll-forward-avro-cutover-topics.sh <phase> --cluster dev|production|es4 <bootstrap> [bin-dir]
+# Fails closed: any unverifiable condition aborts before a versioned sibling is removed, and a
+# broker that cannot be listed aborts immediately rather than looking like an empty cluster.
 set -euo pipefail
-BS="${1:-${KAFKA_BOOTSTRAP_SERVERS:-}}"
-: "${BS:?usage: roll-forward-avro-cutover-topics.sh <bootstrap-servers> [kafka-bin-dir]}"
-BIN="${2:-${KAFKA_BIN_DIR:-}}"
-# The deploy images put the CLI on PATH without the .sh suffix; a developer Mac has a bin dir.
-if [ -n "$BIN" ]; then
-  KT="$BIN/kafka-topics.sh"
-elif command -v kafka-topics >/dev/null 2>&1; then
-  KT="kafka-topics"
-elif command -v kafka-topics.sh >/dev/null 2>&1; then
-  KT="kafka-topics.sh"
-else
-  echo "FAIL: no kafka-topics CLI found (pass a bin dir or set KAFKA_BIN_DIR)" >&2; exit 1
-fi
+
+usage() {
+  echo "usage: roll-forward-avro-cutover-topics.sh --recreate|--retire-siblings|--all \\" >&2
+  echo "         --cluster dev|production|es4 <bootstrap-servers> [kafka-bin-dir]" >&2
+  echo "       the phase is REQUIRED: --retire-siblings is destructive and must not be a default." >&2
+  echo "       the cluster is REQUIRED: each broker carries a different topic set." >&2
+  exit 2
+}
+PHASE="${1:-}"
+case "$PHASE" in --recreate|--retire-siblings|--all) ;; *) usage ;; esac
+[ "${2:-}" = "--cluster" ] || usage
+CLUSTER="${3:-}"; [ -n "$CLUSTER" ] || usage
+BS="${4:-${KAFKA_BOOTSTRAP_SERVERS:-}}"; [ -n "$BS" ] || usage
+BIN="${5:-${KAFKA_BIN_DIR:-}}"
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+. "$HERE/avro-rollforward.lib.sh"
+
+KT="$(rf_resolve_cli "$BIN")"
+SPECS="$(rf_specs "$CLUSTER")"
 kt() { "$KT" --bootstrap-server "$BS" "$@"; }
 
-# topic|partitions|configs(comma separated)
-SPECS=(
-  "options.ibkr.gex.status|1|cleanup.policy=compact,retention.ms=-1,delete.retention.ms=172800000,min.insync.replicas=1"
-  "options.databento.gex.oi-status|32|cleanup.policy=delete,retention.ms=-1,min.insync.replicas=1"
-  "rates.databento.zn.options.raw|1|cleanup.policy=delete,retention.ms=86400000,min.insync.replicas=1"
-  "rates.databento.zn.options.gex.strike|1|cleanup.policy=delete,retention.ms=86400000,min.insync.replicas=1"
-)
-# Versioned siblings to remove outright. Nothing reads these once the new images are live.
-RETIRE=(
-  "options.ibkr.gex.status.v2"
-  "options.databento.gex.oi-status.v2"
-  "rates.databento.zn.options.raw.v1"
-  "rates.databento.zn.options.gex.strike.v1"
-)
+echo "=== roll forward on $BS (cluster $CLUSTER, phase $PHASE) ==="
 
-LIST="$(kt --list)"
-has() { printf '%s\n' "$LIST" | grep -qx "$1"; }
-
-echo "=== roll forward on $BS ==="
-for spec in "${SPECS[@]}"; do
-  IFS='|' read -r t parts cfgs <<<"$spec"
-  if has "$t"; then
-    echo "-- delete $t"
-    kt --delete --topic "$t"
-  else
-    echo "-- $t absent, creating fresh"
+if [ "$PHASE" = "--retire-siblings" ]; then
+  # The recreate phase must already have happened, or retiring the sibling would leave the old image
+  # with nowhere to write AND the JSON still in the unversioned topic. Assert it, never assume it.
+  if ! "$HERE/verify-avro-rollforward.sh" --cluster "$CLUSTER" "$BS" ${BIN:+"$BIN"}; then
+    echo "FAIL: the rolled-forward topics do not verify, so the siblings are NOT retired." >&2
+    echo "      Run --recreate first." >&2
+    exit 1
   fi
-done
+fi
 
-# One wait for every deletion to settle, then create.
-for spec in "${SPECS[@]}"; do
-  IFS='|' read -r t parts cfgs <<<"$spec"
-  for i in $(seq 1 60); do
-    kt --list | grep -qx "$t" || break
-    sleep 2
-  done
-  if kt --list | grep -qx "$t"; then
-    echo "FAIL: $t still present 120s after delete"; exit 1
+if [ "$PHASE" = "--recreate" ] || [ "$PHASE" = "--all" ]; then
+  LIST="$(rf_list "$KT" "$BS")"
+  while IFS='|' read -r topic parts cfgs pre_id; do
+    [ -n "$topic" ] || continue
+    if printf '%s\n' "$LIST" | grep -qx "$topic"; then
+      echo "-- delete $topic"
+      kt --delete --topic "$topic"
+    else
+      echo "-- $topic absent, creating fresh"
+    fi
+  done <<<"$SPECS"
+
+  while IFS='|' read -r topic parts cfgs pre_id; do
+    [ -n "$topic" ] || continue
+    settled=0
+    for _ in $(seq 1 60); do
+      # Explicit status check: a list failure must NOT be read as "the topic is gone".
+      cur="$(rf_list "$KT" "$BS")" || exit 1
+      if ! printf '%s\n' "$cur" | grep -qx "$topic"; then settled=1; break; fi
+      sleep 2
+    done
+    if [ "$settled" -ne 1 ]; then
+      echo "FAIL: $topic is still present 120s after the delete — aborting before anything is created" >&2
+      exit 1
+    fi
+    args=(--create --topic "$topic" --partitions "$parts" --replication-factor "${KAFKA_TOPIC_REPLICATION_FACTOR:-1}")
+    IFS=',' read -ra kvs <<<"$cfgs"
+    for kv in "${kvs[@]}"; do args+=(--config "$kv"); done
+    echo "-- create $topic ($parts partitions, $cfgs)"
+    kt "${args[@]}"
+  done <<<"$SPECS"
+
+  # VERIFY through the barrier itself, not a second copy of the rules: if the barrier would refuse
+  # the rollout, this run has not finished its job, whatever the create commands reported.
+  echo "=== verify (through the rollout barrier) ==="
+  if ! "$HERE/verify-avro-rollforward.sh" --cluster "$CLUSTER" "$BS" ${BIN:+"$BIN"}; then
+    echo "FAIL: the recreated topics do not satisfy the rollout barrier." >&2
+    exit 1
   fi
-  args=(--create --topic "$t" --partitions "$parts" --replication-factor 1)
-  IFS=',' read -ra kvs <<<"$cfgs"
-  for kv in "${kvs[@]}"; do args+=(--config "$kv"); done
-  echo "-- create $t ($parts partitions, $cfgs)"
-  kt "${args[@]}"
-done
+fi
 
-echo "=== verify ==="
-fail=0
-for spec in "${SPECS[@]}"; do
-  IFS='|' read -r t parts cfgs <<<"$spec"
-  desc="$(kt --describe --topic "$t" | head -1)"
-  got_parts="$(printf '%s' "$desc" | sed -nE 's/.*PartitionCount: ([0-9]+).*/\1/p')"
-  [ "$got_parts" = "$parts" ] || { echo "FAIL $t: partitions $got_parts != $parts"; fail=1; }
-  IFS=',' read -ra kvs <<<"$cfgs"
-  for kv in "${kvs[@]}"; do
-    printf '%s' "$desc" | grep -q -- "$kv" || { echo "FAIL $t: missing $kv in: $desc"; fail=1; }
-  done
-  echo "ok $t  $desc"
-done
-[ "$fail" -eq 0 ] || exit 1
+if [ "$PHASE" = "--recreate" ]; then
+  echo "=== DONE on $BS: topics recreated. Roll the new image, then run --retire-siblings ==="
+  exit 0
+fi
 
 echo "=== retire the versioned siblings ==="
-LIST="$(kt --list)"
-for t in "${RETIRE[@]}"; do
+LIST="$(rf_list "$KT" "$BS")"
+SIBLINGS="$(rf_siblings "$CLUSTER")"
+while read -r t; do
+  [ -n "$t" ] || continue
   if printf '%s\n' "$LIST" | grep -qx "$t"; then
     echo "-- delete $t"; kt --delete --topic "$t"
   else
     echo "-- $t already absent"
   fi
-done
-for t in "${RETIRE[@]}"; do
-  for i in $(seq 1 60); do kt --list | grep -qx "$t" || break; sleep 2; done
-  if kt --list | grep -qx "$t"; then echo "FAIL: $t still present"; exit 1; fi
-done
-echo "=== no versioned topic names remain ==="
-kt --list | grep -E '\.v[0-9]+$' && { echo "FAIL: a versioned topic name survives"; exit 1; } || echo "confirmed: none"
+done <<<"$SIBLINGS"
+
+while read -r t; do
+  [ -n "$t" ] || continue
+  settled=0
+  for _ in $(seq 1 60); do
+    cur="$(rf_list "$KT" "$BS")" || exit 1
+    if ! printf '%s\n' "$cur" | grep -qx "$t"; then settled=1; break; fi
+    sleep 2
+  done
+  if [ "$settled" -ne 1 ]; then
+    echo "FAIL: $t is still present 120s after the delete — something recreated it, which means a" >&2
+    echo "      writer is still configured for it. Check that the new image is actually live." >&2
+    exit 1
+  fi
+done <<<"$SIBLINGS"
+
+FINAL="$(rf_list "$KT" "$BS")"
+if printf '%s\n' "$FINAL" | grep -E '\.v[0-9]+$'; then
+  echo "FAIL: a versioned topic name survives on $BS (listed above)." >&2
+  exit 1
+fi
+echo "confirmed: no versioned topic names on $BS"
 echo "=== DONE on $BS ==="
