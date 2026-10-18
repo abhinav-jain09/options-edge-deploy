@@ -53,12 +53,23 @@ spec:
         app.kubernetes.io/part-of: options-edge
     spec:
       containers:
-        - envFrom:
+        - env:
+            - name: POSTGRES_DIRECTIONAL_PRESSURE_ENABLED
+              value: "false"
+            - name: POSTGRES_DIRECTIONAL_OUTCOME_ENABLED
+              value: "false"
+            - name: POSTGRES_DIRECTIONAL_THRESHOLD_CALIBRATOR_ENABLED
+              value: "false"
+            - name: POSTGRES_PRESSURE_STATE_GRANULARITY
+              value: SYMBOL
+            - name: POSTGRES_PRESSURE_STATE_MIN_INTERVAL_MS
+              value: "60000"
+          envFrom:
             - configMapRef:
                 name: options-edge-config
             - secretRef:
                 name: options-edge-runtime-secrets
-          image: 192.168.100.252:5000/options-edge-pressure-postgres-writer:dev
+          image: 192.168.100.252:5000/options-edge-pressure-postgres-writer:prod
           imagePullPolicy: IfNotPresent
           livenessProbe:
             httpGet:

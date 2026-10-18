@@ -43,6 +43,19 @@ spec:
             # the changelog + emits commit transactionally (broker hosts __transaction_state).
             - name: OPB_EXACTLY_ONCE
               value: "true"
+            # Publish the L1 contributions the option pressure register consumes, so that surface
+            # exists on production and not only on dev. This adds a per-trade sink forward INSIDE the
+            # exactly-once transaction configured just above - the same transaction the 2026-07-14
+            # incident recorded in this file wedged.
+            #
+            # IF OPB OUTPUT STALLS, SET THIS BACK TO false FIRST. The feed-gateway and the web option
+            # price behaviour page read this service's output, and this is one value in one patch.
+            #
+            # Why that risk is judged acceptable, why this needed a rebuilt production image to do
+            # anything at all, and the dated external checks behind both, are stated ONCE in
+            # k8s/base/option-pressure-state-deployment.yaml. Do not restate them here.
+            - name: OPB_L1_ENABLED
+              value: "true"
           resources:
             limits:
               memory: 8Gi

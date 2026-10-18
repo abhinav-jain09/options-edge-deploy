@@ -1,0 +1,42 @@
+# PROD: run the L1 option pressure register, so the surface exists in BOTH environments and other
+# services can build on it. Mirrors k8s/overlays/dev/option-pressure-state-dev-enable-patch.yaml.
+#
+# Patched here rather than flipped in k8s/base on purpose. The base is the render for production AND
+# for the experiment overlay, and the experiment overlay does not patch this service at all, so
+# enabling it in the base would quietly start a third copy nobody asked for. The base stays inert and
+# each environment that wants this service says so.
+#
+# WHAT THIS NEEDED, AND THE RISK IT CARRIES, are stated ONCE - with the dated external checks
+# behind them - in k8s/base/option-pressure-state-deployment.yaml: that production's previous
+# option-price-behavior image had no L1 sink so the flag alone would have been inert, that an
+# ENVIRONMENT=production image of this service now exists where the registry returned NAME_UNKNOWN,
+# that OPB_L1_ENABLED adds per-trade work inside an exactly-once transaction which froze all OPB
+# output for about an hour on 2026-07-14, and that no throughput measurement exists because every
+# pressure topic on dev still reads log end offset 0. Read it there. If OPB output stalls after this
+# lands, OPB_L1_ENABLED in k8s/overlays/production/option-price-behavior-prod-patch.yaml is the first
+# thing to set back to false.
+#
+# WHAT THE SURFACE IS. Descriptive, not predictive. Every frame carries actionable=false, and that
+# is enforced rather than conventional: PressureFrame's constructor throws for any other value, so a
+# frame with actionable=true cannot be constructed. The research behind that - gate-set rejections
+# and a directional validation that found nothing - is recorded in session notes rather than in
+# either repository, so it is background here, not something a reader can verify from these files.
+# The enforced part is the part that matters: a consumer may describe a frame or store it for
+# research, and nothing may trade on one, in either environment.
+#
+# NAME-KEYED strategic merge, deliberately - not an env/N json6902 patch, which lands on whichever
+# variable has drifted into that index.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: option-pressure-state-service
+  namespace: options-edge
+spec:
+  replicas: 1
+  template:
+    spec:
+      containers:
+        - name: option-pressure-state
+          env:
+            - name: OPTION_PRESSURE_ENABLED
+              value: "true"

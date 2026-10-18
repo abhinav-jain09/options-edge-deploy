@@ -771,6 +771,23 @@ patches:
   # k8s/services/signal-follower/overlays/production (validate-services: mono==slice).
   - path: signal-follower-prod-env-patch.yaml
   - path: option-price-behavior-prod-patch.yaml
+  # PROD: run the L1 option pressure register, so the surface exists in BOTH environments and other
+  # services can build on it. Patched here rather than in k8s/base because the base is also the
+  # experiment render and that overlay does not patch this service - flipping the base would start a
+  # third copy nobody asked for. See the patch header for the OPB image prerequisite and the
+  # exactly-once risk this travels with. MUST MIRROR the standalone slice
+  # k8s/services/option-pressure-state/overlays/production (validate-services: mono==slice).
+  - path: option-pressure-state-prod-enable-patch.yaml
+    target:
+      kind: Deployment
+      name: option-pressure-state-service
+  # PROD: run the option pressure state READER, and only that one of this service's four writers.
+  # See the patch header for why the other three are switched off rather than left to create a topic
+  # and three tables as a side effect.
+  - path: pressure-postgres-writer-prod-env-patch.yaml
+    target:
+      kind: Deployment
+      name: pressure-postgres-writer
   # PROD-ONLY: databento-feed 5s snapshot publish interval (explicit container env overrides the
   # shared configmap default; ships via service-deploy). Relieves the single-core CPU backpressure.
   # MUST MIRROR the standalone slice k8s/services/databento-feed/overlays/production (validate-services).
@@ -916,13 +933,39 @@ patches:
   # deploy on production too (experiment-only exclusions removed). Prod image build/pin must produce both
   # images (UNIFIED_SR_IMAGE / STRIKE_FLOW_AVRO_ADAPTER_IMAGE) or the digest-pin guard will fail-closed.
 
-# Institutional review (strike-liquidity package, P1): the COMMITTED production render — and
-# therefore its generated k8s/services mirror slice — must not carry the base :dev image ref,
-# so a raw `kubectl apply -f manifest.yaml` can never roll the dev image into production.
+# Institutional review (strike-liquidity package, P1): a COMMITTED production render — and therefore
+# its generated k8s/services mirror slice — that carries the base :dev image ref lets a raw
+# `kubectl apply -f manifest.yaml` roll the dev image into production. The entries below remove that
+# for the services they name.
+#
+# CORRECTED 2026-10-18, because the previous wording stated this as a property of the render rather
+# than of a list. It said the committed production render "must not carry the base :dev image ref",
+# unqualified - and most of the fleet is NOT in this block, so many workloads that render replicas 1
+# on production still carry :dev. Counted 2026-10-18 against the committed slices in this
+# repository, so this one IS verifiable here:
+#   n=0; for f in k8s/services/*/overlays/production/manifest.yaml; do if grep -q "replicas: 1" "$f" && grep -q ":dev$" "$f"; then n=$((n+1)); fi; done; echo "$n"
+# printed 39 - close-direction-service, feed-gateway-service and options-edge-web among them. A raw
+# apply of those slices remains unsafe. This is a per-service hardening applied where someone applied
+# it, and reading it as a fleet-wide guarantee is exactly the mistake that wording invited.
+# Hardening the remaining 39 is its own job and is not attempted here.
+#
 # Deploy behavior is unchanged: apply.sh REPLACES this images block with digest-pinned
 # entries resolved from the build (.images = [] first), so this mapping only hardens the
 # at-rest render. Tag-level ref here; the digest pin still happens fail-closed at deploy.
 images:
+  # option-pressure-state + pressure-postgres-writer: added because this change takes BOTH to
+  # replicas 1 on production. While a workload renders replicas 0 a stray `kubectl apply` of its
+  # slice is harmless; at replicas 1 it would start whatever tag the render carries, and the base
+  # carries :dev. option-price-behavior is here for the same reason even though it already ran at
+  # replicas 1 - its production patch is edited by this change, and leaving the hazard in place in a
+  # file I am already touching is worse than the two lines it costs. The note above this block now
+  # says what that means for everything NOT listed here.
+  - name: 192.168.100.252:5000/options-edge-option-pressure-state
+    newTag: prod
+  - name: 192.168.100.252:5000/options-edge-pressure-postgres-writer
+    newTag: prod
+  - name: 192.168.100.252:5000/options-edge-option-price-behavior
+    newTag: prod
   - name: 192.168.100.252:5000/options-edge-market-carry
     newTag: prod
   - name: 192.168.100.252:5000/options-edge-databento-sr3-feed

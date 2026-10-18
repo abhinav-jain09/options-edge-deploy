@@ -7,62 +7,38 @@ metadata:
     app.kubernetes.io/name: option-pressure-state-service
     app.kubernetes.io/part-of: options-edge
 spec:
-  # THE BASE IS INERT, and the production render of this workload is this base - though as of
-  # 2026-10-18 nothing is applied there yet (see the NotFound check below), so everything said about
-  # production here describes what a deploy WOULD put there. Both gates are shut:
+  # THE BASE IS INERT, and that is now a default rather than a policy: BOTH dev and production
+  # enable this service through their own overlay patch, and the base stays shut so a third
+  # environment does not inherit it by accident. The experiment overlay does not patch this service
+  # at all, which is exactly why the gates were not simply flipped here.
   #   1. OPTION_PRESSURE_ENABLED defaults false, so this service's topology does not start.
   #   2. Upstream, OPB_L1_ENABLED is false in the base, so option-price-behavior emits no
   #      option-price-behavior-l1-contributions records for it to read.
-  # DEV opens both, and only dev: the OPB dev env patch sets OPB_L1_ENABLED, and
-  # k8s/overlays/dev/option-pressure-state-dev-enable-patch.yaml sets replicas 1 and
-  # OPTION_PRESSURE_ENABLED=true. The PRODUCER must be deployed first, because it is what creates
-  # the input topic and Kafka Streams refuses to start a topology whose source topic is absent.
-  # A production deploy from this file would therefore render replicas 0. It has not happened: as of
-  # 2026-10-18 the Deployment is not applied on production at all -
-  # `ssh abhinav@192.168.100.252 'kubectl -n options-edge get deploy option-pressure-state-service'`
-  # returns NotFound. So the scale-up case below is what would happen after a deploy puts it there,
-  # not something pending today, and the autostart cannot scale a Deployment that does not exist.
-  # THIS COMMENT IS THE ONE PLACE that states what
-  # does and does not hold production for this service; three other files used to restate it and had
-  # drifted into contradicting each other, so they now point here instead of repeating it.
+  # Dev opens both via k8s/overlays/dev/option-pressure-state-dev-enable-patch.yaml and the OPB dev
+  # env patch; production opens both via
+  # k8s/overlays/production/option-pressure-state-prod-enable-patch.yaml and OPB_L1_ENABLED in
+  # k8s/overlays/production/option-price-behavior-prod-patch.yaml. In BOTH environments the PRODUCER
+  # must be deployed first, because it creates the input topic and Kafka Streams refuses to start a
+  # topology whose source topic is absent.
   #
-  # CORRECTED. An earlier version of this note, and the three that copied it, said the absent
-  # production image is what holds production inert. That is wrong twice over:
-  #   - The repository's KEEP_DOWN lists DO name this service - scripts/ops/morning-autostart.sh and
-  #     scripts/ops/oe-boot-bringup.sh both carry it - so the repository is not the problem. What is
-  #     the problem is that the PRODUCTION HOST does not run those copies (checks below), so ONCE A
-  #     DEPLOY HAS PUT THIS DEPLOYMENT THERE nothing on that host would hold it except the rendered
-  #     replicas: 0, which an autostart scale-up overrides. Until that deploy happens there is
-  #     nothing to hold, which is a stronger position than any of this and the only reason none of it
-  #     bites today. Reinstalling the host copies is what would turn the entries into a hold.
-  #   - An absent image is not a hold. If a scale-up happens, the Deployment's desired count becomes
-  #     1 and what follows depends on the node, not on this repository: the PRODUCTION RENDER sets
-  #     imagePullPolicy IfNotPresent (k8s/services/option-pressure-state/overlays/production/
-  #     manifest.yaml - note that the field two screens below in THIS file says Always, and the
-  #     render is what runs), so a node that already has that exact image cached starts the pod
-  #     without contacting the registry, and only a node without it gets ImagePullBackOff. Either way
-  #     the result is a pod that should not be there, not replicas 0.
+  # The hold-down entries this service used to carry in scripts/ops/morning-autostart.sh and
+  # scripts/ops/oe-boot-bringup.sh are REMOVED, because production is meant to run it now. They were
+  # never the production hold in any case: checked outside this repository on 2026-10-17 and again on
+  # 2026-10-18, `ssh abhinav@192.168.100.252 'grep -c option-pressure-state-service ~/oe-ops/morning-autostart.sh'`
+  # returned 0 - the INSTALLED copy never carried the entry - and
+  # `ssh abhinav@192.168.100.252 'test -f ~/oe-ops/oe-boot-bringup.sh && echo PRESENT || echo ABSENT'`
+  # prints ABSENT, so that script is not installed there at all. Both are external facts this
+  # repository cannot establish; re-run them rather than trusting these lines.
   #
-  # The facts behind that, checked OUTSIDE this repository because it cannot establish them, on
-  # 2026-10-18 - re-run these rather than trusting the lines:
-  #   - `curl http://192.168.100.252:5000/v2/options-edge-option-pressure-state/tags/list` returns
-  #     NAME_UNKNOWN. The production registry does not know this repository at all, which is stronger
-  #     than a missing :prod tag. Separately, and because NAME_UNKNOWN says nothing about build
-  #     history: no ENVIRONMENT=production build of options-edge-processing in Jenkins' retained
-  #     history targeted this image. This command printed nothing on 2026-10-18. It is ONE LINE on
-  #     purpose - an earlier version of this note wrapped it and the wrap broke it:
-  # for n in $(seq 1700 1888); do curl -sg "http://localhost:8085/job/options-edge-processing/$n/api/json?tree=actions%5Bparameters%5Bname,value%5D%5D" | python3 -c 'import sys,json;d=json.load(sys.stdin);p={q["name"]:q.get("value") for a in d.get("actions",[]) for q in (a.get("parameters") or [])};print(sys.argv[1]) if p.get("ENVIRONMENT")=="production" and p.get("BUILD_TARGET") in ("all","options-edge-option-pressure-state") else None' "$n" 2>/dev/null; done
-  #     The tree brackets are percent-encoded above; with LITERAL brackets curl needs -g or it treats
-  #     them as URL globbing and the loop finds nothing for the wrong reason - which would read as
-  #     confirmation. That is a bounded search of RETAINED builds 1700-1888, not a claim about all
-  #     time: Jenkins discards older builds, so a production build before 1700 would not appear. It is
-  #     also not a node survey - whether any node holds the image cached is unverified here.
-  #   - `ssh abhinav@192.168.100.252 'grep -c option-pressure-state-service ~/oe-ops/morning-autostart.sh'`
-  #     returns 0, so the INSTALLED script does not carry the KEEP_DOWN entry this repository added
-  #     (also checked 2026-10-17, same result). And
-  #     `ssh abhinav@192.168.100.252 'test -f ~/oe-ops/oe-boot-bringup.sh && echo PRESENT || echo ABSENT'`
-  #     prints ABSENT, so that script is not installed there at all. Installing this repository's
-  #     copies is what would make those entries a hold.
+  # HISTORY, kept because it was wrong in a way worth not repeating. Earlier versions of this note,
+  # and three files that copied it, said the absent production image was what held production inert.
+  # An absent image is not a hold. A scale-up sets the desired count to 1 and what follows depends on
+  # the node: the PRODUCTION RENDER sets imagePullPolicy IfNotPresent
+  # (k8s/services/option-pressure-state/overlays/production/manifest.yaml - the field two screens
+  # below in THIS file says Always, and the render is what runs), so a node holding that exact image
+  # cached starts the pod without contacting the registry and only a node without it gets
+  # ImagePullBackOff. Either outcome is a pod that should not be there, not replicas 0. That question
+  # is now moot for this service, since production is supposed to be running it.
   # The topics are provisioned by the services themselves at startup, with declared retention rather
   # than the platform default of infinite: contributions 4 days, symbol rekey 2 days, evidence
   # 3 days, and the head topic compacted. Measured on a real session of 944,068 contributions that is
@@ -78,23 +54,96 @@ spec:
   # cannot be checked here - each has a named artefact in options-edge-processing at the commit that
   # merged it, and that artefact is the evidence, not this comment: the register was REJECTED on two
   # gate sets and a Lane D validation over the Databento SPXW year found no directional content
-  # (opb-calibration/LANE-D-VALIDATION-RESULT.md); the symbol thresholds are the p95 and p90 of
+  # - and that citation was WRONG: opb-calibration/LANE-D-VALIDATION-RESULT.md does not exist on
+  # options-edge-processing main. `git cat-file -e origin/main:opb-calibration/LANE-D-VALIDATION-RESULT.md`
+  # fails there (checked 2026-10-18); the only artefact under that directory is
+  # EXISTING-OPB-CALIBRATION-RESULT.md. The gate-set rejections and the Lane D result are recorded in
+  # session notes rather than in either repository, so treat them as background and not as something
+  # a reader here can verify. What IS enforced and verifiable is the invariant they produced:
+  # PressureFrame's constructor throws "shadow pressure frames are never actionable", so no frame
+  # with actionable=true can be constructed at all -
+  # `git grep -n 'never actionable' origin/main -- option-pressure-state-service` in
+  # options-edge-processing. The symbol thresholds are the p95 and p90 of
   # |level| over 5,504,676 GOOD seconds of the 251-session corpus, replacing a seed that fired on
   # 34.5% of all seconds (PR #1102, merged 2026-10-18, PressureConfig and
   # PressureConfigIdentityTest); the Avro schemas are options-edge-contracts PR #109 and the
   # producer change is options-edge-processing PR #1103, both merged 2026-10-18. The strike
   # thresholds remain seeds, which PressureConfig says in the code.
   #
-  # Enabling production is not just a replica count. It needs an ENVIRONMENT=production image - as of
-  # 2026-10-18 the production registry does not know this repository at all, not merely the :prod tag
-  # - and it needs OPB_L1_ENABLED on option-price-behavior, which adds a per-trade sink forward
-  # inside that service's exactly-once transaction. Compare the 2026-07-14 incident recorded in
-  # k8s/overlays/production/option-price-behavior-prod-patch.yaml, where added per-trade multi-key
-  # work under exactly-once froze all OPB output for about an hour during RTH; the gateway and the
-  # web page read that output. Calling L1 the same class of change is an INFERENCE from both being
-  # per-trade work inside that transaction, so measure the throughput on a real dev session before
-  # enabling it here. Why the missing image is NOT a safety hold is stated once, at the top of this
-  # file; do not restate it here, which is how four copies of it drifted apart.
+  # PRODUCTION IS ENABLED, and the two prerequisites it had are met by the change that enabled it.
+  # BOTH are external facts this repository cannot establish - re-run the commands rather than
+  # trusting these lines:
+  #   - An ENVIRONMENT=production image of this service exists. Checked 2026-10-18:
+  #     `curl -s http://192.168.100.252:5000/v2/options-edge-option-pressure-state/tags/list`
+  #     returns {"name":"options-edge-option-pressure-state","tags":["prod-1924-2bf3f8bb2a6c","prod"]}.
+  #     Before this change the same command returned NAME_UNKNOWN for the repository itself, which is
+  #     stronger than a missing :prod tag.
+  #   - OPB_L1_ENABLED is set in k8s/overlays/production/option-price-behavior-prod-patch.yaml
+  #     together with a rebuilt production image that actually READS it. The previous one,
+  #     prod-1650-d6a7d010980a built 2026-09-22, contained zero occurrences of that variable, so the
+  #     flag alone would have been inert. Verifiable in options-edge-processing, not here. On
+  #     2026-10-18 this printed 0 for BOTH variables at the OLD commit - the sink name as well as the
+  #     flag - and 1 and 3 at the NEW one, which is what establishes that the replacement image
+  #     actually reads the flag rather than merely being newer:
+  #     `for c in d6a7d010980a e0274feaf6b2; do for v in OPB_L1_ENABLED L1_CONTRIB_SINK; do git show $c:option-price-behavior-service/src/main/java/app/pricebehavior/OptionPriceBehaviorStreams.java | grep -c "$v"; done; done`
+  #     What that loop proves is that the SOURCE REVISION reads the flag. Two more checks close the
+  #     link from that revision to the image production will pull, both on 2026-10-18:
+  #     `curl -s http://192.168.100.252:5000/v2/options-edge-option-price-behavior/tags/list`
+  #     returns {"name":"options-edge-option-price-behavior","tags":["prod","prod-1650-d6a7d010980a","prod-1927-e0274feaf6b2"]}
+  #     - the new tag beside the old one. And the build that pushed it declares the revision it built:
+  #     `curl -sg 'http://localhost:8085/job/options-edge-processing/1927/api/json?tree=result,actions%5Bparameters%5Bname,value%5D%5D'`
+  #     shows result SUCCESS, ENVIRONMENT production, BUILD_TARGET
+  #     options-edge-option-price-behavior and PERMITTED_SHA
+  #     e0274feaf6b205ec454c79a7e860c28070430abe, and that build's console contains
+  #     `options-edge-option-price-behavior:prod-1927-e0274feaf6b2`. The permitted-commit guard
+  #     refuses a build whose checked-out HEAD is not exactly PERMITTED_SHA, so the tag, the build
+  #     parameter and the guard together are what make "built from that revision" more than a naming
+  #     convention.
+  #
+  #   - A claim I made and then WITHDREW, kept because the withdrawal is the useful part. I wrote
+  #     that rolling OPB's image forward would close a drift, because production declares
+  #     OPB_CALIBRATION_STATUS and OPB_MODEL_VERSION to a binary that reads neither. The first half
+  #     is true and the conclusion is not: those two variables are read NOWHERE, at the new commit as
+  #     well as the old. Checked 2026-10-18 in options-edge-processing -
+  #     `for v in OPB_CALIBRATION_STATUS OPB_MODEL_VERSION; do git grep -l "$v" e0274feaf6b2; done`
+  #     returns only docs/option-price-behavior/option-price-behavior-predictability-design.md, and
+  #     the same grep at d6a7d010980a scoped to option-price-behavior-service and processing-common
+  #     returns nothing at all. A grep of gma-gateway, gma-contracts and the web repository finds
+  #     them nowhere either. So both environments declare two values that no code consumes: they are
+  #     documentation sitting in a manifest, not configuration, and no image roll changes that.
+  #
+  #   - THE ONLY SUBSCRIBER, as observed - and the claim is deliberately limited to that, because an
+  #     earlier version said "the only one it has ever had" one sentence before admitting a group
+  #     listing cannot establish history. What is observed: pressure-postgres-writer is the only
+  #     consumer group on either topic now, and there was no group on either topic before it was
+  #     deployed. Checked 2026-10-18:
+  #     `~/kafka-4.3.0/bin/kafka-consumer-groups.sh --bootstrap-server localhost:19092 --all-groups --describe | awk '$2 ~ /option-pressure-state-(current|evidence)/ {print $1, $2}' | sort -u`
+  #     prints exactly one line, `option-pressure-state-postgres-writer option-pressure-state-evidence`,
+  #     and printed nothing at all before that reader was deployed. Those are two bounded
+  #     observations, not a statement about all time: a group deleted before either check would not
+  #     appear in either. The supporting point, which is a different kind of evidence and a bounded
+  #     one, is that a grep of every distinct repository checked out in this workspace found no
+  #     reference to either topic outside options-edge-processing itself - done 2026-10-18 by
+  #     resolving one checkout per distinct `remote.origin.url` and grepping each for
+  #     option-pressure-state. It covers the repositories present on this machine and nothing else.
+  #
+  # THE EVIDENCE FOR THE OFFSET CLAIM BELOW lives here too, so the three files that mention it can
+  # point at one copy instead of repeating it - which is how four copies of an earlier note drifted
+  # apart. On 2026-10-18 this printed `0 across 32 partitions` for all four topics:
+  #   for t in option-price-behavior-l1-contributions option-pressure-state-current option-pressure-state-evidence option-pressure-state-service-dev-symbol-rk; do printf '%s ' "$t"; ~/kafka-4.3.0/bin/kafka-get-offsets.sh --bootstrap-server localhost:19092 --topic "$t" | awk -F: '{s+=$3; n++} END {if (n==0) print "NO-OUTPUT-DO-NOT-READ-AS-ZERO"; else printf "%d across %d partitions\n", s, n}'; done
+  # It leaves stderr alone and prints its partition count on purpose: a bare
+  # `awk '{s+=$3} END {print s+0}'` prints 0 on NO input, so an absent topic or an unreachable
+  # broker would read as a confirmed zero. All of these are external checks; re-run them.
+  #
+  # THE RISK THAT CAME WITH IT, stated here because this is where someone will look. OPB_L1_ENABLED
+  # adds a per-trade sink forward inside option-price-behavior's exactly-once transaction. The
+  # 2026-07-14 incident recorded in that same production patch is the comparison: added per-trade
+  # multi-key STORE work under exactly-once wedged OPB's SESSION thread and froze all OPB output for
+  # about an hour during RTH, and the gateway and the web page read that output. A sink forward is a
+  # much smaller operation than those store updates, but that is an argument about magnitude and not
+  # a measurement - none exists, because every pressure topic on dev still reads log end offset 0
+  # (the command and its output are above, in this same comment).
+  # IF OPB OUTPUT STALLS, SET OPB_L1_ENABLED BACK TO false FIRST.
   replicas: 0
   # Recreate, not RollingUpdate: both engines keep RocksDB state on one ReadWriteOnce PVC under a
   # single Streams application id, and a rolling replacement can run the outgoing and incoming pod

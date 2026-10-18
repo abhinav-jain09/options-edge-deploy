@@ -258,12 +258,9 @@ services:
   - { name: databento-maxpain,            managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-databento-maxpain,            deployments: [databento-maxpain-service] }
   - { name: strike-liquidity-heatmap,     managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-strike-liquidity-heatmap,     deployments: [strike-liquidity-heatmap-service] }
   - { name: option-price-behavior,        managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-option-price-behavior,        deployments: [option-price-behavior-service] }
-  # option-pressure-state: a DESCRIPTIVE SURFACE. Runtime state, so command-backed and dated rather
-  # than asserted - checked 2026-10-18: `kubectl -n options-edge get deploy option-pressure-state-service`
-  # shows 1/1 on dev, while
-  # `ssh abhinav@192.168.100.252 'kubectl -n options-edge get deploy option-pressure-state-service'`
-  # returns NotFound, so on production the Deployment does not exist at all rather than sitting at
-  # 0/0. It
+  # option-pressure-state: a DESCRIPTIVE SURFACE, enabled in BOTH environments so other services can
+  # build on it. Each environment turns it on through its own overlay patch and the base stays inert,
+  # because the experiment overlay patches this service not at all and would otherwise inherit it. It
   # consumes option-price-behavior-l1-contributions and publishes option-pressure-state-current and
   # -evidence, both now AVRO through the Schema Registry under the released schemas in
   # options-edge-contracts (schemas/optionpressure). Descriptive means it names what the aggregated
@@ -285,52 +282,50 @@ services:
   # producer is enabled first and this follows it. Dev is turned on by
   # k8s/overlays/dev/option-pressure-state-dev-enable-patch.yaml.
   #
-  # A PRODUCTION deploy from the base would render replicas 0 with OPTION_PRESSURE_ENABLED=false, and
-  # no such deploy has happened - the Deployment is NotFound there, per the check above. Enabling it
-  # needs TWO things that are not done, and neither is a formality:
-  #   1. A production image. The image does not merely lack the :prod tag — the whole repository is
-  #      unknown to the production registry. Checked OUTSIDE this repository on 2026-10-18:
-  #      `curl http://192.168.100.252:5000/v2/options-edge-option-pressure-state/tags/list` returns
-  #      NAME_UNKNOWN. That says nothing about build HISTORY, which is a separate bounded check with
-  #      its own evidence and caveats; both live in the canonical paragraph in
-  #      k8s/base/option-pressure-state-deployment.yaml. Neither is verifiable from this repository,
-  #      so re-run them rather than trusting these lines.
-  #   2. A judgement about the PRODUCER, not this service. OPB_L1_ENABLED adds a per-trade sink
-  #      forward inside option-price-behavior's exactly-once transaction. That service has a
-  #      documented production incident — 2026-07-14, recorded in
-  #      k8s/overlays/production/option-price-behavior-prod-patch.yaml — where added per-trade
-  #      multi-key work under exactly-once wedged its SESSION thread into CONCURRENT_TRANSACTIONS and
-  #      froze ALL OPB output for about an hour during RTH, and the gateway and the web option price
-  #      behavior page read that output. That L1 is the SAME class of change is an inference from
-  #      both being per-trade work inside that transaction, not something either repository records;
-  #      weigh it as an inference. Two RUNTIME observations, external to this repository, checked on
-  #      2026-10-18 — re-run them rather than trusting these lines, and note what each does and does
-  #      NOT establish:
-  #        kubectl -n options-edge get deploy option-price-behavior-service -o jsonpath='{.spec.template.spec.containers[0].env}'
-  #      shows OPB_L1_ENABLED=true NOW. And
-  #        kubectl -n options-edge get pod -l app.kubernetes.io/name=option-price-behavior-service -o custom-columns=RESTARTS:.status.containerStatuses[0].restartCount,START:.status.startTime --no-headers
-  #      shows 0 restarts and a start time of 2026-10-17T14:24:14Z. The plain `get pod` form prints an
-  #      AGE column, not that timestamp, which is why the custom-columns form is the one quoted.
-  #      Together these still do NOT prove the flag was set for that whole period: nothing checked
-  #      here establishes the flag's history, only its present value.
-  #        for t in option-price-behavior-l1-contributions option-pressure-state-current option-pressure-state-evidence option-pressure-state-service-dev-symbol-rk; do printf '%s ' "$t"; ~/kafka-4.3.0/bin/kafka-get-offsets.sh --bootstrap-server localhost:19092 --topic "$t" | awk -F: '{s+=$3; n++} END {if (n==0) print "NO-OUTPUT-DO-NOT-READ-AS-ZERO"; else printf "%d across %d partitions\n", s, n}'; done
-  #      prints `0 across 32 partitions` for all four. Written that way ON PURPOSE: stderr is NOT
-  #      suppressed and the partition count IS printed, because a bare `awk '{s+=$3} END {print s+0}'`
-  #      prints 0 when it receives nothing at all - an absent topic or an unreachable broker then
-  #      reads as a confirmed zero. Both negative controls were run and both print the sentinel.
-  #      What this establishes is bounded: the end offsets are zero AT QUERY TIME, so there is nothing
-  #      to read now. It is NOT proof that nothing was ever produced - deleting and recreating a topic
-  #      would also show this. That is the observation that matters: whatever the flag has
-  #      been, no record has been produced, so the clean restart count is not throughput evidence.
-  #      Measure a real dev session first.
+  # PRODUCTION IS ENABLED. The two prerequisites it had are met by the change that enabled it, and
+  # both were real rather than paperwork:
+  # Its two prerequisites were real rather than paperwork, and BOTH rested on facts external to this
+  # repository: there was no ENVIRONMENT=production image of this service at all (the registry
+  # returned NAME_UNKNOWN for the repository itself, not merely a missing :prod tag), and
+  # production's option-price-behavior image, built 2026-09-22 as prod-1650-d6a7d010980a, contained
+  # no L1 sink - so OPB_L1_ENABLED alone would have been inert.
   #
-  # DO NOT read the missing image as a safety hold. It is not one. The full statement of what does and
-  # does not hold production — with the dated external checks behind it, and the distinction between
-  # this repository's KEEP_DOWN lists, which DO name this service, and the installed production
-  # copies, which do not — lives in ONE place: k8s/base/option-pressure-state-deployment.yaml. Read
-  # it there rather than trusting a summary here; four copies of this paragraph drifted into
-  # contradicting each other, which is why there is now one. Build the image as part of enabling
-  # production, not before. Dev is unaffected because neither KEEP_DOWN script is scheduled there.
+  # A CLAIM WITHDRAWN, because the correction is worth more than the claim was. An earlier version of
+  # this comment said rolling OPB's image forward would also close a drift, since production declares
+  # OPB_CALIBRATION_STATUS and OPB_MODEL_VERSION to a binary that reads neither. Checking it found
+  # the conclusion wrong: those two are read NOWHERE, at the new commit as well as the old, in any
+  # repository - both environments declare two values no code consumes. The command and its output
+  # are in k8s/base/option-pressure-state-deployment.yaml with the rest of the external checks.
+  #
+  # THE RISK. OPB_L1_ENABLED adds a per-trade sink forward inside option-price-behavior's
+  # exactly-once transaction. Compare the 2026-07-14 incident recorded in
+  # k8s/overlays/production/option-price-behavior-prod-patch.yaml: added per-trade multi-key STORE
+  # work under exactly-once wedged OPB's SESSION thread into CONCURRENT_TRANSACTIONS and froze ALL
+  # OPB output for about an hour during RTH, and the feed-gateway and the web option price behaviour
+  # page read that output. A sink forward is a much smaller operation than those store updates, but
+  # that is magnitude and not measurement, and no measurement exists.
+  # IF OPB OUTPUT STALLS AFTER THIS LANDS, SET OPB_L1_ENABLED BACK TO false FIRST. It is one value
+  # in one patch and reverting it stops the per-trade work without touching anything else.
+  #
+  # Every one of those external facts carries its command, its date and its observed output in ONE
+  # place - k8s/base/option-pressure-state-deployment.yaml - including why the offset-zero check is
+  # written so that an absent topic cannot read as a confirmed zero. They are not repeated here,
+  # because four copies of an earlier note drifted into contradicting each other. Read them there and
+  # re-run them rather than trusting any summary.
+  #
+  # The hold-down entries for this service are REMOVED from scripts/ops/morning-autostart.sh and
+  # scripts/ops/oe-boot-bringup.sh, because production is meant to run it. They were never the
+  # production hold in any case: the INSTALLED morning-autostart.sh on 192.168.100.252 contained zero
+  # occurrences of this service (checked 2026-10-17 and again 2026-10-18 with
+  # `ssh abhinav@192.168.100.252 'grep -c option-pressure-state-service ~/oe-ops/morning-autostart.sh'`)
+  # and oe-boot-bringup.sh is not installed there at all. Those are external checks this repository
+  # cannot make; re-run them rather than trusting these lines.
+  #
+  # ITS READER. pressure-postgres-writer consumes option-pressure-state-evidence into
+  # option_pressure_state_frame, in both environments, and it is the only consumer group this surface
+  # has - the command behind that, and the limit of what a group listing can prove about history, are
+  # in k8s/base/option-pressure-state-deployment.yaml. Only that one of its four writers is enabled;
+  # see the per-environment env patches.
   # It provisions its own topics with declared retention; see
   # docs/option-price-behavior/L1-PRESSURE-STATE-CAPACITY.md in options-edge-processing for the
   # measured per-session volume, which was measured on the JSON bodies and is now an upper bound.
