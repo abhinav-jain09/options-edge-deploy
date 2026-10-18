@@ -318,15 +318,58 @@ PL
           # visible in the log next to the result it licensed.
           GRAND=$(grep -E "$JUNK_RE" "$BASE" | tr '\\n' ' ') || { rc=$?; [ "$rc" = 1 ] || { echo "FAIL: junk scan of $BASE errored (grep rc=$rc)"; exit 1; }; GRAND=""; }
           echo "grandfathered pre-existing junk topics on $TGT: ${GRAND:-<none>}"
-          # Plan section 6 step 8 gate: target end offsets equal the source's (the copy caught up from offset 0),
-          # and the newest copied value decodes as Avro under the TARGET registry's schema for its id.
+          # Plan section 6 step 8 gate, EOS-aware. The es4 producer (indicator-service, exactly-once v2) is
+          # transactional, so the SOURCE log end offset counts one commit marker per transaction beside each data
+          # record; MM1 copies committed data records only (a marker is not a record), so source and target END
+          # OFFSETS can never be equal on a live topic (observed 2026-10-18 build #35: source 620 / target 342,
+          # one record + one marker every 5 s — the old equality gate failed every install of a live topic).
+          # Parity is therefore measured on RECORDS, per partition: the target's end offset TE (every copied
+          # record is one offset — MM1's producer is not transactional and the target was recreated empty) must
+          # equal the number N of COMMITTED source records below the source's end offset. N comes from a
+          # read_committed console consumer that reads from the earliest offset, prints offsets only and stops ON
+          # ITS OWN at TE+1 records or after 30 s without a record (a quiet topic) — never on a closed pipe, which
+          # a Java process would not notice. TE is read BEFORE the source end, so N < TE can only mean the target
+          # holds records the source never committed (a duplicating second writer: the 2026-10-18 laptop-clone
+          # incident) — an immediate FAIL; N = TE+1 means at least one committed record is not on the target yet
+          # (the copy trails, or a record landed between the two reads) — re-measured for up to five minutes;
+          # N = TE is parity. (A TE+1 bound rather than a tolerance: waiting for extra live records beyond the
+          # source end would cost one producer interval per record, 30 s on bars.)
+          SBEG=$("$KBIN/kafka-get-offsets" --bootstrap-server "$SRC" --topic "$TOPIC" --time -2 2>/dev/null | sort)
           SEND=$("$KBIN/kafka-get-offsets" --bootstrap-server "$SRC" --topic "$TOPIC" 2>/dev/null | sort)
-          for i in $(seq 1 30); do
-            TEND=$("$KBIN/kafka-get-offsets" --bootstrap-server "$TGT" --topic "$TOPIC" 2>/dev/null | sort)
-            [ "$SEND" = "$TEND" ] && break; sleep 2
+          [ -n "$SEND" ] && [ -n "$SBEG" ] || { echo "FAIL: cannot read source offsets for $TOPIC on $SRC"; exit 1; }
+          echo "source offsets: beginning=[$SBEG] end=[$SEND]"
+          PARTS=$(printf '%s\\n' "$SEND" | awk -F: '{print $2}')
+          PASS=0; REPORT=""
+          for attempt in $(seq 1 20); do
+            OK=1; REPORT=""
+            for p in $PARTS; do
+              TE=$("$KBIN/kafka-get-offsets" --bootstrap-server "$TGT" --topic "$TOPIC" --partitions "$p" 2>/dev/null | awk -F: '{print $3}')
+              [ -n "$TE" ] || { echo "FAIL: cannot read the target end offset of partition $p"; exit 1; }
+              SE=$("$KBIN/kafka-get-offsets" --bootstrap-server "$SRC" --topic "$TOPIC" --partitions "$p" 2>/dev/null | awk -F: '{print $3}')
+              SB=$(printf '%s\\n' "$SBEG" | awk -F: -v p="$p" '$2 == p {print $3}')
+              [ -n "$SE" ] && [ -n "$SB" ] || { echo "FAIL: cannot read the source offsets of partition $p"; exit 1; }
+              if [ "$SE" -le "$SB" ]; then
+                N=0
+              else
+                N=$("$KBIN/kafka-console-consumer" --bootstrap-server "$SRC" --topic "$TOPIC" --partition "$p" --offset "$SB" \
+                  --isolation-level read_committed --timeout-ms 30000 --max-messages "$((TE + 1))" \
+                  --property print.offset=true --property print.key=false --property print.value=false 2>/dev/null \
+                  | awk -F'[:\\t]' -v se="$SE" '$1 == "Offset" && ($2 + 0) < se { n++ } END { print n + 0 }')
+              fi
+              REPORT="$REPORT p$p:targetEnd=$TE sourceRecordsBelowEnd=$N;"
+              if [ "$N" -lt "$TE" ]; then
+                echo "FAIL: partition $p — the target holds $TE records but the source has only $N committed records below its end offset $SE: a duplicate copy or a second writer"
+                exit 1
+              fi
+              [ "$N" -eq "$TE" ] || OK=0
+            done
+            echo "parity attempt $attempt:$REPORT"
+            if [ "$OK" = 1 ]; then PASS=1; break; fi
+            sleep 15
           done
-          [ "$SEND" = "$TEND" ] || { echo "FAIL: target end offsets differ from the source after 60 s: source=[$SEND] target=[$TEND]"; exit 1; }
-          echo "offsets: target end offsets equal the source's ($SEND)"
+          [ "$PASS" = 1 ] || { echo "FAIL: the target has not caught up with the source's committed records after 20 attempts:$REPORT"; exit 1; }
+          echo "offsets: target end offsets equal the source's committed record count (markers excluded):$REPORT"
+          TEND=$("$KBIN/kafka-get-offsets" --bootstrap-server "$TGT" --topic "$TOPIC" 2>/dev/null | sort)
           TOTAL=$(printf '%s\n' "$TEND" | awk -F: '{s+=$3} END {print s+0}')
           if [ "$TOTAL" -gt 0 ]; then
             bash scripts/kafka/decode-newest-indicator-record.sh "$TGT" "$TGT_REGISTRY" "$TOPIC" "$KBIN"
