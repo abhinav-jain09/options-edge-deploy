@@ -40,9 +40,17 @@ spec:
   #     NAME_UNKNOWN. The production registry does not know this repository at all, which is stronger
   #     than a missing :prod tag. Separately, and because NAME_UNKNOWN says nothing about build
   #     history: no ENVIRONMENT=production build of options-edge-processing in Jenkins' retained
-  #     history - builds 1700 to 1888, checked 2026-10-18 - targeted this image, with BUILD_TARGET
-  #     either `all` or this service. That is a bounded search of retained builds, not a claim about
-  #     all time, and it is still not a node survey: whether any node holds the image cached is
+  #     history targeted this image. Checked 2026-10-18 with this exact command, which printed
+  #     nothing - run it again rather than trusting this line:
+  #       for n in $(seq 1700 1888); do curl -sg
+  #         "http://localhost:8085/job/options-edge-processing/$n/api/json?tree=actions[parameters[name,value]]" \
+  #         | python3 -c 'import sys,json;d=json.load(sys.stdin);p={q["name"]:q.get("value") for a in
+  #           d.get("actions",[]) for q in (a.get("parameters") or [])};print(sys.argv[1]) if
+  #           p.get("ENVIRONMENT")=="production" and p.get("BUILD_TARGET") in
+  #           ("all","options-edge-option-pressure-state") else None' "$n"; done
+  #     (curl needs -g for a tree=[...] query.) That is a bounded search of RETAINED builds 1700-1888,
+  #     not a claim about all time: Jenkins discards older builds, so a production build before 1700
+  #     would not appear. It is also not a node survey - whether any node holds the image cached is
   #     unverified here.
   #   - `grep -c option-pressure-state-service ~/oe-ops/morning-autostart.sh` on 192.168.100.252
   #     returns 0, so the INSTALLED script does not carry the KEEP_DOWN entry this repository added
