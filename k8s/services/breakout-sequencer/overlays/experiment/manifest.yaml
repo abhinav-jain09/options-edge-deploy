@@ -63,9 +63,9 @@ spec:
             - name: BREAKOUT_SEQ_CORRECTION_TOPIC
               value: breakout.correction.in
             - name: BREAKOUT_SEQ_PRIVATE_KEY_PATH
-              value: /etc/breakout-sequencer/signing.key
+              value: /etc/breakout-sequencer/v1/signing.key
             - name: BREAKOUT_SEQ_PUBLIC_KEY_PATH
-              value: /etc/breakout-sequencer/signing.pub
+              value: /etc/breakout-sequencer/v1/signing.pub
             - name: JAVA_TOOL_OPTIONS
               value: -Xms128m -Xmx512m
           envFrom:
@@ -99,9 +99,7 @@ spec:
           volumeMounts:
             - mountPath: /etc/breakout-sequencer
               name: signing-key
-              readOnly: true
       volumes:
         - name: signing-key
-          secret:
-            optional: true
-            secretName: breakout-sequencer-signing
+          persistentVolumeClaim:
+            claimName: breakout-sequencer-keys

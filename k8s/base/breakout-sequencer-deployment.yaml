@@ -50,9 +50,9 @@ spec:
             - name: BREAKOUT_SEQ_CORRECTION_TOPIC
               value: breakout.correction.in
             - name: BREAKOUT_SEQ_PRIVATE_KEY_PATH
-              value: /etc/breakout-sequencer/signing.key
+              value: /etc/breakout-sequencer/v1/signing.key
             - name: BREAKOUT_SEQ_PUBLIC_KEY_PATH
-              value: /etc/breakout-sequencer/signing.pub
+              value: /etc/breakout-sequencer/v1/signing.pub
             - name: JAVA_TOOL_OPTIONS
               value: "-Xms128m -Xmx512m"
           ports:
@@ -72,9 +72,9 @@ spec:
             initialDelaySeconds: 20
             periodSeconds: 10
           volumeMounts:
+            # Writable: the development profile generates its key set here ONCE (KeyInit, atomic, never replaces an existing set).
             - name: signing-key
               mountPath: /etc/breakout-sequencer
-              readOnly: true
           resources:
             requests:
               cpu: 100m
@@ -83,6 +83,5 @@ spec:
               memory: 768Mi
       volumes:
         - name: signing-key
-          secret:
-            secretName: breakout-sequencer-signing
-            optional: true
+          persistentVolumeClaim:
+            claimName: breakout-sequencer-keys
