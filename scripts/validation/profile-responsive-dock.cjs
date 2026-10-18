@@ -33,7 +33,7 @@ module.exports=async function profileDock(cdp,page,file){
  }catch(error){failure=error;}
  finally{
   clearTimeout(completionTimer);if(completionListener)cdp.off('Tracing.tracingComplete',completionListener);cdp.off('Tracing.dataCollected',collect);
-  if(tracing){try{await within(cdp.send('Tracing.end'),2000,'DOCK_TRACE_CLEANUP_DEADLINE');}catch(error){failure=failure?new AggregateError([failure,error],'Dock diagnostic and tracing cleanup failed'):error;}}
+  if(tracing){try{await within(cdp.send('Tracing.end'),2000,'DOCK_TRACE_CLEANUP_DEADLINE');}catch(error){failure=failure?new AggregateError([failure,error],'Dock diagnostic and tracing cleanup failed\nPrimary: '+(failure.stack||String(failure))+'\nCleanup: '+(error.stack||String(error))):error;}}
  }
  if(failure)throw failure;
  const report={classification:'Post-measurement diagnostic only; no gate authority',result,traceEvents:events,collectedBytes:bytes,maxEvents:MAX_EVENTS,maxBytes:MAX_BYTES};fs.writeFileSync(file,JSON.stringify(report));return {classification:report.classification,file,eventCount:events.length,collectedBytes:bytes,samples:result.samples};
