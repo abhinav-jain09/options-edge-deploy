@@ -116,4 +116,9 @@ check "--verify is bound to the topic --recreate created: another id (not the pr
 check "--verify without --new-topic-id is a usage error" "$(run --verify --cluster dev --pre-cutover-id OLDID --writers-and-readers-stopped localhost:19092 "$TMP/bin")" 2
 reset OLDID; run "${ARGS[@]}" >/dev/null; check "--recreate reports the new topic id for --verify" "$(grep -c 'NEW TOPIC ID: newid-' "$TMP/out")" 1
 
+reset OLDID; MOCK_GROUPS='g underlying.spx.price 0 9 9 0 - - -' run "${ARGS[@]}" >/dev/null
+check "a failed group check still printed the new id for --verify" "$(grep -c 'NEW TOPIC ID: newid-' "$TMP/out")" 1
+reset OLDID; MOCK_END=5 run "${ARGS[@]}" >/dev/null
+check "a failed emptiness check still printed the new id for --verify" "$(grep -c 'NEW TOPIC ID: newid-' "$TMP/out")" 1
+
 echo "passed=$pass failed=$fail"; [ "$fail" = 0 ]

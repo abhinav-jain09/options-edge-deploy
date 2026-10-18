@@ -114,6 +114,7 @@ fi
 # Verify what was created, from the broker, not from the create command's exit code.
 DESC="$(rf_describe "$KT" "$BS" "$TOPIC")" || exit 1
 FOUND_ID="$(rf_topic_id "$DESC" "$TOPIC")" || exit 1
+echo "NEW TOPIC ID: $FOUND_ID (was $PRE_ID)"   # printed before any further check so a later failure can still be recovered with --verify
 [ "$FOUND_ID" != "$PRE_ID" ] || { echo "FAIL: $TOPIC still has the pre-cutover id $PRE_ID" >&2; exit 1; }
 [ -z "$NEW_ID" ] || [ "$FOUND_ID" = "$NEW_ID" ] || { echo "FAIL: $TOPIC has id $FOUND_ID, not the recreated topic $NEW_ID that --recreate reported" >&2; exit 1; }
 # exact field match: `grep ReplicationFactor: 1` would also accept 11
@@ -141,4 +142,4 @@ if [ -n "$STALE" ]; then
   echo "      a reset to 0 still leaves a committed offset and is refused here." >&2
   exit 1
 fi
-echo "=== DONE: $TOPIC recreated empty. NEW TOPIC ID: $FOUND_ID (was $PRE_ID). Next: deploy the Avro readers, then the Avro feed ==="
+echo "=== DONE: $TOPIC recreated empty. Next: deploy the Avro readers, then the Avro feed ==="
