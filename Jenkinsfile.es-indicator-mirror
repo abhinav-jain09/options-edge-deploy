@@ -269,6 +269,15 @@ S
             compact,delete) printf '%s\\n' "$TC" | grep -q "cleanup.policy=compact,delete" || { echo "FAIL: target $TOPIC not compact,delete: $TC"; exit 1; } ;;
             delete)         printf '%s\\n' "$TC" | grep -q "cleanup.policy=compact" && { echo "FAIL: target $TOPIC unexpectedly compacted: $TC"; exit 1; } || true ;;
           esac
+          # The copy restarts at the source's EARLIEST offset (the source group was deleted above), so a target that
+          # already holds records would receive every record a second time (2026-10-18 build #45: a prod target
+          # re-installed over a previous install's copy reached twice the source's committed count). Fail closed:
+          # the target must be empty on every partition; plan section 5 recreates it, this job never empties it.
+          TPRE=$("$KBIN/kafka-get-offsets" --bootstrap-server "$TGT" --topic "$TOPIC" 2>/dev/null | sort)
+          [ -n "$TPRE" ] || { echo "FAIL: cannot read the target end offsets of $TOPIC on $TGT"; exit 1; }
+          NONEMPTY=$(printf '%s\\n' "$TPRE" | awk -F: '$3 != 0 {print $2"="$3}' | tr '\\n' ' ')
+          [ -z "$NONEMPTY" ] || { echo "FAIL: target $TOPIC on $TGT is not empty (partition=endOffset: ${NONEMPTY% }) — the copy would duplicate every record; recreate the target empty (plan section 5, step 8) before installing"; exit 1; }
+          echo "target $TOPIC on $TGT is empty on every partition (end offsets: $(printf '%s' "$TPRE" | tr '\\n' ' '))"
           echo "config generated; target $TOPIC verified: $PARTS partition(s), $POLICY"
         '''
       }
@@ -359,15 +368,31 @@ PL
                 N=0
               else
                 OUT="$MDIR/parity-p$p.offsets"; ERR="$MDIR/parity-p$p.err"
-                "$KBIN/kafka-console-consumer" --bootstrap-server "$SRC" --topic "$TOPIC" --partition "$p" --offset "$SB" \
+                # Wall-time bound: when the target holds MORE records than the source committed (a duplicate copy),
+                # TE+1 exceeds the committed count and the consumer would wait for live records one producer
+                # interval at a time (build #45 waited 43 minutes). After the bound the count is still conclusive
+                # when the consumer has read past the source end offset SE captured above: every committed record
+                # below SE is then in the file. Killed before reaching SE, the count is inconclusive and fails.
+                CRC=0
+                timeout "${PARITY_CONSUMER_TIMEOUT_S:-120}" "$KBIN/kafka-console-consumer" --bootstrap-server "$SRC" --topic "$TOPIC" --partition "$p" --offset "$SB" \
                   --isolation-level read_committed --consumer-property auto.offset.reset=none \
                   --timeout-ms 30000 --max-messages "$((TE + 1))" \
                   --property print.offset=true --property print.key=false --property print.value=false \
-                  > "$OUT" 2> "$ERR" || { echo "FAIL: the committed-record count of partition $p failed (consumer exit status $?)"; tail -5 "$ERR"; exit 1; }
-                CTOTAL=$(sed -n 's/^Processed a total of \\([0-9][0-9]*\\) messages.*/\\1/p' "$ERR" | tail -1)
+                  > "$OUT" 2> "$ERR" || CRC=$?
                 CLINES=$(grep -c '^Offset:' "$OUT" || true)
-                if [ -z "$CTOTAL" ] || [ "$CTOTAL" != "$CLINES" ]; then
-                  echo "FAIL: the committed-record count of partition $p is not trustworthy: the consumer reported total '$CTOTAL' but printed $CLINES offsets"; tail -5 "$ERR"; exit 1
+                CLAST=$(awk -F'[:\\t]' '$1 == "Offset" && $2 ~ /^[0-9]+$/ {o = $2} END {print o}' "$OUT")
+                if [ "$CRC" = 124 ]; then
+                  if [ -z "$CLAST" ] || [ "$CLAST" -lt "$SE" ]; then
+                    echo "FAIL: the committed-record count of partition $p did not reach the source end offset $SE within ${PARITY_CONSUMER_TIMEOUT_S:-120} s (last offset read: '${CLAST:-none}')"; exit 1
+                  fi
+                  echo "partition $p: consumer stopped at the wall-time bound after reading past the source end ($CLAST >= $SE); the count below $SE is complete"
+                elif [ "$CRC" != 0 ]; then
+                  echo "FAIL: the committed-record count of partition $p failed (consumer exit status $CRC)"; tail -5 "$ERR"; exit 1
+                else
+                  CTOTAL=$(sed -n 's/^Processed a total of \\([0-9][0-9]*\\) messages.*/\\1/p' "$ERR" | tail -1)
+                  if [ -z "$CTOTAL" ] || [ "$CTOTAL" != "$CLINES" ]; then
+                    echo "FAIL: the committed-record count of partition $p is not trustworthy: the consumer reported total '$CTOTAL' but printed $CLINES offsets"; tail -5 "$ERR"; exit 1
+                  fi
                 fi
                 if grep -q 'OffsetOutOfRange' "$ERR"; then
                   echo "FAIL: partition $p — the broker no longer holds the earliest offset $SB the gate asked for"; exit 1
@@ -399,13 +424,13 @@ PL
           [ "$PASS" = 1 ] || { echo "FAIL: the target has not caught up with the source's committed records after 20 attempts:$REPORT"; exit 1; }
           echo "offsets: target end offsets equal the source's committed record count (markers excluded):$REPORT"
           # --- parity gate end ---
-          TEND=$("$KBIN/kafka-get-offsets" --bootstrap-server "$TGT" --topic "$TOPIC" 2>/dev/null | sort)
-          TOTAL=$(printf '%s\n' "$TEND" | awk -F: '{s+=$3} END {print s+0}')
-          if [ "$TOTAL" -gt 0 ]; then
-            bash scripts/kafka/decode-newest-indicator-record.sh "$TGT" "$TGT_REGISTRY" "$TOPIC" "$KBIN"
-          else
-            echo "source holds no record yet; the decode gate runs on the first record (nothing to copy)"
-          fi
+          # Decode gate on EVERY partition of the target: the newest committed record is framed Avro whose fixed id
+          # resolves on the TARGET registry and deserializes there. A target partition may be empty only when the
+          # parity gate just measured zero committed records on its source partition — those are passed to the
+          # script as DECODE_EMPTY_OK; any other empty partition fails the install.
+          EMPTY_OK=$(printf '%s\n' "$REPORT" | tr ';' '\n' | sed -n 's/^ *p\([0-9][0-9]*\):targetEnd=0 sourceRecordsBelowEnd=0 .*/\1/p' | tr '\n' ' ')
+          echo "decode gate: partitions whose source holds no committed record: [${EMPTY_OK% }]"
+          DECODE_EMPTY_OK="$EMPTY_OK" bash scripts/kafka/decode-newest-indicator-record.sh "$TGT" "$TGT_REGISTRY" "$TOPIC" "$KBIN"
           # (read twice — kafka-topics --list gives flaky counts during MM startup)
           for i in 1 2; do
             L=$("$KBIN/kafka-topics" --bootstrap-server "$TGT" --list 2>/dev/null) \

@@ -24,7 +24,7 @@ def evens(lo, hi):
     return list(range(lo, hi, 2))
 
 
-def run(scenario: dict):
+def run(scenario: dict, timeout_s: int | None = None):
     d = pathlib.Path(tempfile.mkdtemp(prefix="parity-gate-"))
     kbin = d / "kbin"; kbin.mkdir()
     for n in ("kafka-get-offsets", "kafka-console-consumer"):
@@ -37,6 +37,8 @@ def run(scenario: dict):
     env = dict(os.environ, PATH=f"{kbin}:{os.environ['PATH']}", KBIN=str(kbin), SRC=SRC, TGT=TGT, TOPIC=TOPIC, MDIR=str(mdir),
                FAKE_PARITY_SCENARIO=str(d / "scenario.json"), FAKE_PARITY_STATE=str(d / "state.json"),
                FAKE_PARITY_CALLS=str(calls), FAKE_SRC=SRC)
+    if timeout_s is not None:
+        env["PARITY_CONSUMER_TIMEOUT_S"] = str(timeout_s)
     r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env)
     return r.returncode, r.stdout + r.stderr, calls.read_text()
 
@@ -127,6 +129,21 @@ class ParityGateTest(unittest.TestCase):
         # the stand-in emits the measured idle-timeout signature whenever fewer than max-messages records exist
         rc, out, _ = run(one(0, 20, evens(0, 20), [10]))
         self.assertEqual(rc, 0, out)
+
+    def test_a_duplicated_target_on_a_live_topic_is_judged_once_the_consumer_read_past_the_source_end(self):
+        # target holds 451 but the source committed 226 below its end (a re-install copied everything twice);
+        # TE+1 = 452 exceeds the committed count, so on a live topic the consumer runs into the wall-time bound —
+        # the live record at offset 904 (>= SE 902) proves every committed record below SE was read: N=226 < TE → FAIL
+        recs = evens(0, 452) + [904]
+        rc, out, _ = run(one(0, 902, recs, [451], consumer={"hang_s": 3}), timeout_s=1)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("consumer stopped at the wall-time bound after reading past the source end (904 >= 902)", out)
+        self.assertIn("a duplicate copy or a second writer", out)
+
+    def test_a_consumer_killed_before_the_source_end_is_inconclusive_and_fails(self):
+        rc, out, _ = run(one(0, 902, evens(0, 452), [451], consumer={"hang_s": 3}), timeout_s=1)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("did not reach the source end offset 902", out)
 
     def test_a_consumer_whose_total_disagrees_with_its_output_fails_the_gate(self):
         rc, out, _ = run(one(0, 902, evens(0, 902), [451], consumer={"total_off_by": -3}))
