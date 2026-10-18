@@ -25,14 +25,29 @@ echo "=== reset-indicator-state: group=$GROUP input=$INDICATOR_INPUT_TOPIC chang
 
 # 1. the group must be ABSENT or Empty — an explicit allow-list; any other state (Stable, a rebalance, Dead,
 #    an unparseable answer, a failed describe) refuses, because a member could commit behind the reset.
-DRC=0; DESC=$("$KCG" --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --describe --group "$GROUP" --state 2>&1) || DRC=$?
-if printf '%s' "$DESC" | grep -qiE "Consumer group '$GROUP' does not exist"; then
-  STATE=absent
-elif [ "$DRC" -ne 0 ]; then
-  STATE="describe-failed(rc=$DRC)"
-else
-  STATE=$(printf '%s\n' "$DESC" | awk -v g="$GROUP" '$1 == g {print $(NF-1)}' | head -1)
-fi
+#    The producer's pods are already gone when this runs, but the group coordinator keeps a member until its
+#    leave arrives or its session expires (es4-deploy #791: pods gone, group still 'Stable', reset refused, the
+#    deployment left at 0 replicas) — so a Stable or rebalancing group is polled, up to GROUP_EMPTY_WAIT_S
+#    seconds (default 120, above the 45 s session timeout), before it is refused.
+group_state() {
+  DRC=0; DESC=$("$KCG" --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --describe --group "$GROUP" --state 2>&1) || DRC=$?
+  if printf '%s' "$DESC" | grep -qiE "Consumer group '$GROUP' does not exist"; then
+    STATE=absent
+  elif [ "$DRC" -ne 0 ]; then
+    STATE="describe-failed(rc=$DRC)"
+  else
+    STATE=$(printf '%s\n' "$DESC" | awk -v g="$GROUP" '$1 == g {print $(NF-1)}' | head -1)
+  fi
+}
+WAIT_S="${GROUP_EMPTY_WAIT_S:-120}"
+waited=0
+group_state
+while [ "$STATE" != absent ] && [ "$STATE" != Empty ] && [ "$waited" -lt "$WAIT_S" ]; do
+  case "$STATE" in
+    Stable|PreparingRebalance|CompletingRebalance) echo "group $GROUP: $STATE — waiting for the last member to leave (${waited}s/${WAIT_S}s)"; sleep 5; waited=$((waited + 5)); group_state ;;
+    *) break ;;
+  esac
+done
 case "$STATE" in
   absent|Empty) echo "group $GROUP: $STATE" ;;
   *) echo "FAIL: consumer group $GROUP is '${STATE:-unknown}' — only an absent or Empty group may be reset (scale indicator-service to 0 first):"; printf '%s\n' "$DESC"; exit 1 ;;
