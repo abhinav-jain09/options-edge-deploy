@@ -24,7 +24,7 @@ cp "$infra_root/tests/test_responsive_supervisor.py" bundle/tests/
 runtime=/Users/abhinav/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules
 [ -f "$runtime/playwright-core/package.json" ] || { echo 'Prepared Playwright core runtime required' >&2; exit 1; }
 cp -R "$runtime/playwright-core" bundle/node_modules/
-for file in run-responsive-stack-es4.sh responsive-stack-probe.cjs prepare-responsive-chart.cjs readiness-stimulus.cjs responsive-supervisor.py qualify-responsive-stack.py linked-exits-browser-probe.cjs headless-overlay-session.cjs; do
+for file in run-responsive-stack-es4.sh responsive-stack-probe.cjs prepare-responsive-chart.cjs readiness-stimulus.cjs profile-responsive-dock.cjs responsive-supervisor.py qualify-responsive-stack.py linked-exits-browser-probe.cjs headless-overlay-session.cjs; do
   cp "$infra_root/scripts/validation/$file" bundle/scripts/validation/
 done
 # The existing legacy overlay probe remains byte-identical, with its original workload/gates.
