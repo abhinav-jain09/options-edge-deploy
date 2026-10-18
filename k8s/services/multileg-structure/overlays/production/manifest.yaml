@@ -91,7 +91,7 @@ spec:
                 name: options-edge-config
             - secretRef:
                 name: options-edge-runtime-secrets
-          image: 192.168.100.252:5000/options-edge-multileg-structure:dev
+          image: 192.168.100.252:5000/options-edge-multileg-structure:prod
           imagePullPolicy: IfNotPresent
           livenessProbe:
             httpGet:

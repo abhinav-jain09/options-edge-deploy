@@ -83,7 +83,7 @@ spec:
                 name: options-edge-config
             - secretRef:
                 name: options-edge-runtime-secrets
-          image: 192.168.100.252:5000/options-edge-databento-maxpain:dev
+          image: 192.168.100.252:5000/options-edge-databento-maxpain:prod
           imagePullPolicy: IfNotPresent
           livenessProbe:
             httpGet:

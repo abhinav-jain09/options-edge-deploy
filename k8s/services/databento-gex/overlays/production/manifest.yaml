@@ -140,7 +140,7 @@ spec:
             - secretRef:
                 name: options-edge-databento-feed-env
                 optional: true
-          image: 192.168.100.252:5000/options-edge-databento-gex:dev
+          image: 192.168.100.252:5000/options-edge-databento-gex:prod
           imagePullPolicy: IfNotPresent
           livenessProbe:
             httpGet:

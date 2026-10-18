@@ -92,7 +92,7 @@ spec:
               value: "5000"
             - name: JAVA_TOOL_OPTIONS
               value: -Xms64m -Xmx384m
-          image: 192.168.100.252:5000/options-edge-vix-option-inteligence:dev
+          image: 192.168.100.252:5000/options-edge-vix-option-inteligence:prod
           imagePullPolicy: IfNotPresent
           livenessProbe:
             httpGet:

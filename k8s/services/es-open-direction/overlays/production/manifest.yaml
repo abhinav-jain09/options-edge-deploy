@@ -92,7 +92,7 @@ spec:
                 name: options-edge-config
             - secretRef:
                 name: options-edge-runtime-secrets
-          image: 192.168.100.252:5000/options-edge-es-open-direction:dev
+          image: 192.168.100.252:5000/options-edge-es-open-direction:prod
           imagePullPolicy: IfNotPresent
           livenessProbe:
             httpGet:

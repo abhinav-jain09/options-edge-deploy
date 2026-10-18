@@ -79,7 +79,7 @@ spec:
                 name: options-edge-config
             - secretRef:
                 name: options-edge-runtime-secrets
-          image: 192.168.100.252:5000/options-edge-gex-delta-redis-writer:dev
+          image: 192.168.100.252:5000/options-edge-gex-delta-redis-writer:prod
           imagePullPolicy: IfNotPresent
           livenessProbe:
             httpGet:

@@ -53,7 +53,7 @@ spec:
                 name: options-edge-config
             - secretRef:
                 name: options-edge-runtime-secrets
-          image: 192.168.100.252:5000/options-edge-early-auction-verdict:dev
+          image: 192.168.100.252:5000/options-edge-early-auction-verdict:prod
           imagePullPolicy: IfNotPresent
           livenessProbe:
             failureThreshold: 4

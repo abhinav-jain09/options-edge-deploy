@@ -99,7 +99,7 @@ spec:
                 name: options-edge-config
             - secretRef:
                 name: options-edge-runtime-secrets
-          image: 192.168.100.252:5000/options-edge-gamma-migration:dev
+          image: 192.168.100.252:5000/options-edge-gamma-migration:prod
           imagePullPolicy: IfNotPresent
           livenessProbe:
             httpGet:

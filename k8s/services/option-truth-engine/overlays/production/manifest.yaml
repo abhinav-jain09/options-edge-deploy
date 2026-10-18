@@ -80,7 +80,7 @@ spec:
                 name: options-edge-config
             - secretRef:
                 name: options-edge-runtime-secrets
-          image: 192.168.100.252:5000/options-edge-option-truth-engine:dev
+          image: 192.168.100.252:5000/options-edge-option-truth-engine:prod
           imagePullPolicy: IfNotPresent
           livenessProbe:
             httpGet:
