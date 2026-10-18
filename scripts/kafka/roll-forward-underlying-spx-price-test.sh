@@ -42,13 +42,19 @@ chmod +x "$TMP/bin/kafka-consumer-groups.sh"
 
 cat > "$TMP/bin/kafka-get-offsets.sh" <<'MOCK'
 #!/usr/bin/env bash
+for a in "$@"; do case "$a" in -2) printf 'underlying.spx.price:0:%s\n' "${MOCK_START:-0}"; exit 0 ;; esac; done
 printf 'underlying.spx.price:0:%s\n' "${MOCK_END:-0}"
 MOCK
 chmod +x "$TMP/bin/kafka-get-offsets.sh"
 
 cat > "$TMP/bin/kafka-console-consumer.sh" <<'MOCK'
 #!/usr/bin/env bash
-case "${MOCK_WIRE:-avro}" in
+# MOCK_WIRE applies to every offset; MOCK_WIRE_AT_<offset> overrides one (the asymmetric cases)
+off=""; prev=""
+for a in "$@"; do [ "$prev" = "--offset" ] && off="$a"; prev="$a"; done
+eval "specific=\${MOCK_WIRE_AT_${off}:-}"
+case "${specific:-${MOCK_WIRE:-avro}}" in
+  unreadable) exit 0 ;;
   avro) printf '\000\000\000\007\310some-avro' ;;
   json) printf '{"symbol":"SPX"}' ;;
 esac
@@ -135,13 +141,25 @@ reset OLDID; MOCK_END=5 run "${ARGS[@]}" >/dev/null
 check "a failed emptiness check still printed the new id for --verify" "$(grep -c 'NEW TOPIC ID: newid-' "$TMP/out")" 1
 
 # --avro-feed-live: the Avro feed is writing while the topic is recreated (Jenkins cannot stop it)
-LARGS=("${ARGS[@]}" --avro-feed-live)
+LARGS=(--recreate --cluster dev --pre-cutover-id OLDID --avro-feed-live --json-writers-stopped localhost:19092 "$TMP/bin")
 reset OLDID
 check "without --avro-feed-live a live writer (records present) fails the run" "$(MOCK_END=12 run "${ARGS[@]}")" 1
 reset OLDID
 check "with --avro-feed-live, Avro records already present are accepted" "$(MOCK_END=12 run "${LARGS[@]}")" 0
 reset OLDID
 check "with --avro-feed-live, a JSON record present still fails (a JSON writer is live)" "$(MOCK_END=12 MOCK_WIRE=json run "${LARGS[@]}")" 1
+reset OLDID
+check "avro-live: Avro first / JSON LAST fails (the last endpoint is checked)" "$(MOCK_END=12 MOCK_WIRE_AT_11=json run "${LARGS[@]}")" 1
+reset OLDID
+check "avro-live: JSON FIRST / Avro last fails (the first endpoint is checked)" "$(MOCK_END=12 MOCK_WIRE_AT_0=json run "${LARGS[@]}")" 1
+reset OLDID
+check "avro-live: an unreadable endpoint fails closed" "$(MOCK_END=12 MOCK_WIRE_AT_11=unreadable run "${LARGS[@]}")" 1
+reset OLDID
+check "avro-live reads the EARLIEST retained offset, not 0 (a compacted-away 0 must not matter)" "$(MOCK_START=5 MOCK_END=12 MOCK_WIRE_AT_0=json run "${LARGS[@]}")" 0
+reset OLDID
+check "avro-live needs --json-writers-stopped, not the strict attestation" "$(run --recreate --cluster dev --pre-cutover-id OLDID --avro-feed-live --writers-and-readers-stopped localhost:19092 "$TMP/bin")" 2
+reset OLDID
+check "the strict attestation cannot be combined with --json-writers-stopped alone" "$(run --recreate --cluster dev --pre-cutover-id OLDID --json-writers-stopped localhost:19092 "$TMP/bin")" 2
 reset OLDID
 check "with --avro-feed-live, a reader offset INSIDE the new log is legitimate" "$(MOCK_END=12 MOCK_GROUPS='g underlying.spx.price 0 7 12 5 - - -' run "${LARGS[@]}")" 0
 reset OLDID

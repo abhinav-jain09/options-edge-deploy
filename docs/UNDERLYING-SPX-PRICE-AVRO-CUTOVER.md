@@ -37,8 +37,9 @@ format they cannot read are the OLD JSON readers, for the minutes before each is
    delete takes a NAME, not a TopicId; the script re-checks the id immediately before the delete but cannot exclude another administrator). With
    the SAME `<bootstrap>` for both commands (dev: `host.docker.internal:19092`; production: `192.168.100.252:9092`):
    `kafka-topics --bootstrap-server <bootstrap> --describe --topic underlying.spx.price` -> note the `TopicId`, then
-   `scripts/kafka/roll-forward-underlying-spx-price.sh --recreate --cluster dev --pre-cutover-id <TopicId> --writers-and-readers-stopped --avro-feed-live <bootstrap> [bin-dir]`
-   (`--avro-feed-live` because the Avro feed is writing; without it the run also requires the topic to be empty and every committed offset to be gone).
+   `scripts/kafka/roll-forward-underlying-spx-price.sh --recreate --cluster <dev|production> --pre-cutover-id <TopicId> --avro-feed-live --json-writers-stopped <bootstrap> [bin-dir]`
+   (`--avro-feed-live --json-writers-stopped` because the Avro feed is writing and readers are rolling: the operator attests only that NO JSON WRITER, i.e. the pre-cutover feed pod,
+   is live. The strict mode, `--writers-and-readers-stopped` without `--avro-feed-live`, additionally requires an empty topic and no committed offset at all. Production is refused until its shape is recorded.)
    The script refuses a bootstrap that is not the named cluster's broker, refuses a topic whose id is not the pre-cutover one, verifies the
    shape (partitions, replication factor, configs) from the broker, verifies the first and last records are Confluent-framed Avro (a JSON record
    means a JSON writer is live), and fails if any consumer group holds an offset BEYOND the new log end (an offset beyond the end would skip the first Avro

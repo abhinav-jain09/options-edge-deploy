@@ -26,28 +26,32 @@ set -euo pipefail
 usage() {
   echo "usage: roll-forward-underlying-spx-price.sh --recreate|--verify --cluster dev|production --pre-cutover-id <id> \\" >&2
   echo "         [--new-topic-id <id>   (REQUIRED for --verify: the id --recreate printed)] \\" >&2
-  echo "         [--avro-feed-live   (the AVRO feed is already running and writing; Jenkins cannot stop it. Emptiness becomes 'every record is Avro')] \\" >&2
+  echo "         [--avro-feed-live --json-writers-stopped   (INSTEAD of --writers-and-readers-stopped: the AVRO feed is writing, readers are rolling; the operator attests no JSON writer is live)] \\" >&2
   echo "         [--topic-absent-after-failed-create   (ONLY to finish a --recreate whose delete succeeded but whose create failed)] \\" >&2
-  echo "         --writers-and-readers-stopped <bootstrap-servers> [kafka-bin-dir]" >&2
+  echo "         --writers-and-readers-stopped (strict mode) <bootstrap-servers> [kafka-bin-dir]" >&2
   exit 2
 }
 PHASE="${1:-}"
 case "$PHASE" in --recreate|--verify) ;; *) usage ;; esac
 shift
-CLUSTER=""; PRE_ID=""; NEW_ID=""; STOPPED=""; ABSENT_OK=""; AVRO_LIVE=""; POS=()
+CLUSTER=""; PRE_ID=""; NEW_ID=""; STOPPED=""; JSON_STOPPED=""; ABSENT_OK=""; AVRO_LIVE=""; POS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --cluster) CLUSTER="${2:-}"; shift 2 ;;
     --pre-cutover-id) PRE_ID="${2:-}"; shift 2 ;;
     --new-topic-id) NEW_ID="${2:-}"; shift 2 ;;
     --writers-and-readers-stopped) STOPPED=yes; shift ;;
+    --json-writers-stopped) JSON_STOPPED=yes; shift ;;
     --topic-absent-after-failed-create) ABSENT_OK=yes; shift ;;
     --avro-feed-live) AVRO_LIVE=yes; shift ;;
     *) POS+=("$1"); shift ;;
   esac
 done
 case "$CLUSTER" in dev|production) ;; *) usage ;; esac
-[ -n "$PRE_ID" ] && [ "$STOPPED" = yes ] || usage
+[ -n "$PRE_ID" ] || usage
+# The attestation must say what is TRUE of the mode: strict = every writer AND reader is stopped; --avro-feed-live = the AVRO feed
+# (and still-rolling readers) are live, and the operator attests that NO JSON WRITER (the pre-cutover feed pod) is.
+if [ "$AVRO_LIVE" = yes ]; then [ "$JSON_STOPPED" = yes ] && [ "$STOPPED" != yes ] || usage; else [ "$STOPPED" = yes ] && [ "$JSON_STOPPED" != yes ] || usage; fi
 # --verify must name the topic that --recreate printed: "a different id from the old one" proves nothing about WHICH topic it is.
 if [ "$PHASE" = "--verify" ]; then [ -n "$NEW_ID" ] || usage; elif [ -n "$NEW_ID" ]; then usage; fi
 BS="${POS[0]:-}"; [ -n "$BS" ] || usage
@@ -142,9 +146,12 @@ if [ "$AVRO_LIVE" = yes ]; then
   # guarantee that no JSON writer exists is the old feed pod being gone (runbook step 2), which the operator asserts.
   if [ "$END_OFFSET" -gt 0 ]; then
     CC="$(rf_resolve_cli_named kafka-console-consumer "$BIN")"
-    for off in 0 "$((END_OFFSET - 1))"; do
+    EARLIEST="$("$GO" --bootstrap-server "$BS" --topic "$TOPIC" --time -2 2>&1 | awk -F: -v t="$TOPIC" '$1 == t {e = $3} END {print e}')"
+    case "$EARLIEST" in ''|*[!0-9]*) echo "FAIL: cannot read the earliest offset of $TOPIC" >&2; exit 1 ;; esac
+    for off in "$EARLIEST" "$((END_OFFSET - 1))"; do
       rc=0; rf_wire_is_avro "$CC" "$BS" "$TOPIC" 0 "$off" || rc=$?
-      [ "$rc" -ne 1 ] || { echo "FAIL: the record at offset $off of $TOPIC is not Avro: a JSON writer is live. Stop it and run --recreate again." >&2; exit 1; }
+      # fail CLOSED: only an explicit Avro (or tombstone) verdict passes; "not Avro" and "could not be read" both stop the run
+      [ "$rc" -eq 0 ] || { echo "FAIL: the record at offset $off of $TOPIC is not verifiably Avro (verdict $rc: 1 = not Avro, a JSON writer is live; 2 = unreadable). Resolve it and run --recreate again." >&2; exit 1; }
     done
   fi
 elif [ "$END_OFFSET" != 0 ]; then
