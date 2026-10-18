@@ -29,8 +29,19 @@ PROVISIONER=com.optionsedge.processing.esspxalign.AlignSchemaProvisioner
 # decide the subject names and whether the two optional strike-intel subjects exist.
 SHARED_ENV="ES_SPX_ALIGN_ENABLED KAFKA_ES_GEX_SPX_ALIGNED_TOPIC ES_SPX_ALIGN_STRIKE_INTEL_ENABLED KAFKA_ES_STRIKE_INTEL_SPX_ALIGNED_TOPIC"
 
-files=$(grep -rl "name: $DEPLOYMENT" --include='*.yaml' k8s/base k8s/services 2>/dev/null || true)
-[ -n "$files" ] || { echo "::error::no manifest declares $DEPLOYMENT — this gate would pass vacuously"; exit 1; }
+# The manifests that MUST each hold exactly one es-spx-align-service Deployment, named explicitly
+# rather than discovered. Discovery by grep was not fail-closed: renaming the Deployment's
+# metadata.name while leaving the app.kubernetes.io/name label behind still matched the file, found no
+# Deployment in it, and was skipped as "not this file" — so the gate could pass on the manifests that
+# happened to be left. A fixed list cannot be emptied by a rename; a moved or renamed path fails here.
+FILES="k8s/base/es-spx-align-deployment.yaml
+k8s/services/es-spx-align/overlays/dev/manifest.yaml
+k8s/services/es-spx-align/overlays/production/manifest.yaml
+k8s/services/es-spx-align/overlays/experiment/manifest.yaml"
+files=$FILES
+for f in $files; do
+  [ -f "$f" ] || { echo "::error::$f is missing — this gate names the manifests it checks, so a moved path fails closed"; exit 1; }
+done
 
 rc=0
 checked=0
@@ -83,7 +94,10 @@ for document in documents:
         problems.append("envFrom differs — the registry URL and bootstrap servers come from there")
 
     def values(container):
-        return {e['name']: e.get('value') for e in container.get('env') or []}
+        # The WHOLE entry, not just e['value']: two entries sourced from different ConfigMap keys both
+        # have value=None, so comparing values alone passed a genuine divergence of the subject names.
+        # Comparing entries makes differing valueFrom references differ and identical ones match.
+        return {e['name']: {k: v for k, v in e.items() if k != 'name'} for e in container.get('env') or []}
 
     init_env, service_env = values(provision), values(service)
     for key in shared:
@@ -104,16 +118,56 @@ sys.exit(1 if problems else 0)
 PY
       ) && status=0 || status=$?
   if [ "$status" != 0 ]; then
-    # "no Deployment named X in this file" means grep matched the name somewhere else (a selector, a
-    # comment); that is not a failure of this gate.
-    if [ "$out" = "no Deployment named $DEPLOYMENT in this file" ]; then continue; fi
+    # Every named file must hold the Deployment. There is no "wrong file" case left to excuse, because
+    # the file list is fixed rather than grepped: a missing Deployment here IS the failure.
     echo "::error file=$f::$DEPLOYMENT schema provisioning: $out"
     rc=1
   fi
   checked=$((checked + 1))
 done
 
-[ "$checked" -gt 0 ] || { echo "::error::$DEPLOYMENT was never actually checked"; exit 1; }
+# 6. There are TWO deploy paths, and the init container must get the same image on both. apply.sh
+#    rolls images with `kubectl set image` (checked above); service-deploy.sh renders the overlay and
+#    DIGEST-PINS it. That rewrite walked .containers[] only, so it applied a digest-pinned service
+#    beside an init container still carrying the mutable :dev/:prod tag -- and its own "not
+#    digest-pinned" verification walked .containers[] only too, so nothing failed. If that tag later
+#    pointed at a different build, the init container would register one release's schemas for another
+#    release's service. Both the rewrite and its verification must therefore reach initContainers.
+SVC=scripts/deploy/service-deploy.sh
+if [ ! -f "$SVC" ]; then
+  echo "::error::$SVC is missing — the per-service deploy path cannot be checked"
+  rc=1
+else
+  # The pinning rewrite and the unpinned-image verification, each identified by what it does.
+  pin_line=$(grep -n 'select(.image == strenv(RENDER_IMAGE0))' "$SVC" | head -1 | cut -d: -f1 || true)
+  ver_line=$(grep -n 'not digest-pinned' "$SVC" | head -1 | cut -d: -f1 || true)
+  if [ -z "$pin_line" ]; then
+    echo "::error file=$SVC::no digest-pinning rewrite found (expected a yq selecting .image == strenv(RENDER_IMAGE0))"
+    rc=1
+  elif ! sed -n "${pin_line}p" "$SVC" | grep -q 'initContainers\[\]'; then
+    echo "::error file=$SVC,line=$pin_line::the digest-pinning rewrite does not reach initContainers[], so align-schema-provision would keep a mutable tag while the service is digest-pinned"
+    rc=1
+  fi
+  if [ -z "$ver_line" ]; then
+    echo "::error file=$SVC::no unpinned-image verification found"
+    rc=1
+  else
+    # The `unpinned=` assignment itself, not a line window around the FATAL it guards: a window reached
+    # back into the pinning expression above, which also mentions initContainers, so a verification
+    # narrowed to .containers[].image still satisfied it. This guard's own mutation test caught that.
+    ver_assign=$(grep -n '^unpinned=' "$SVC" | head -1 | cut -d: -f1 || true)
+    if [ -z "$ver_assign" ]; then
+      echo "::error file=$SVC::the unpinned-image verification is not an 'unpinned=' assignment this gate can read"
+      rc=1
+    elif ! sed -n "${ver_assign}p" "$SVC" | grep -q 'initContainers\[\]'; then
+      echo "::error file=$SVC,line=$ver_assign::the unpinned-image verification does not read initContainers[], so an unpinned init container would pass it"
+      rc=1
+    fi
+  fi
+fi
+
+expected=$(printf '%s\n' $FILES | grep -c .)
+[ "$checked" = "$expected" ] || { echo "::error::checked $checked of $expected named manifests — refusing to report a partial pass"; exit 1; }
 
 # 5. The manifests agreeing is not enough: the deploy rolls images with `kubectl set image`, which only
 #    touches the container names it is given. If that line names the service container alone, the init

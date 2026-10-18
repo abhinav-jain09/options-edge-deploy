@@ -332,7 +332,17 @@ pipeline {
       }
     }
     stage('Register existing CVD schemas') {
-      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.ACTION == 'register-cvd-schemas') } }
+      // ALSO on clean-reset, which wipes _schemas along with the Kafka data. Every service whose
+      // schemas must be registered BEFORE it starts then came up against an empty registry and
+      // crash-looped on a 40401 that no later stage fixed: 2026-10-18, context-tape-service died on
+      // "Subject 'es.context-tape.direction.alert-value' not found" after a clean, and all 18 es4
+      // subjects were gone. Registration was a separate ACTION an operator had to remember, so a
+      // clean was never self-sufficient. It runs here, immediately after the wipe and before the
+      // rollout. The on-box cleanup restores Deployments at the end of its own run, so an affected
+      // pod may crash-loop for the seconds until this stage lands and then recover on its own
+      // backoff -- a bounded self-healing window, not the permanent failure it replaces.
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED'
+        && (params.ACTION == 'register-cvd-schemas' || params.ACTION == 'clean-reset') } }
       options { timeout(time: 20, unit: 'MINUTES') }
       steps {
         timeout(time: 10, unit: 'MINUTES') {

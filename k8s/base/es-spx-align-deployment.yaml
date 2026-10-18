@@ -37,7 +37,15 @@ spec:
         # subject or version and never changes a compatibility level, so it cannot become a silent
         # schema-evolution path -- a genuine mismatch fails here instead of starting the service degraded.
         # scripts/ci/validate-align-schema-provisioning.sh fails the build if this container's image or any
-        # value it reads drifts from the main container's.
+        # value it reads drifts from the main container's, and if either deploy path would roll the two to
+        # different images.
+        #
+        # LIMIT, stated because it is real: identical envFrom references are not an immutable snapshot.
+        # Kubernetes creates the init and application containers at different moments, so a ConfigMap or
+        # Secret edit in between can hand them different values -- including the registry endpoint. That
+        # cannot be prevented from here, but it cannot pass silently either: the application container
+        # runs the SAME startup check against whatever registry IT reads, so a divergence makes the
+        # service refuse to start rather than run against schemas provisioned somewhere else.
         - name: align-schema-provision
           image: 192.168.100.252:5000/options-edge-es-spx-align:dev
           imagePullPolicy: Always

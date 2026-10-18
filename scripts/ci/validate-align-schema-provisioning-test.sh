@@ -9,6 +9,7 @@ GUARD=scripts/ci/validate-align-schema-provisioning.sh
 BASE=k8s/base/es-spx-align-deployment.yaml
 DEV=k8s/services/es-spx-align/overlays/dev/manifest.yaml
 APPLY=scripts/deploy/apply.sh
+SVC=scripts/deploy/service-deploy.sh
 
 fails=0
 pass() { echo "  ok   $1"; }
@@ -25,7 +26,7 @@ run_mutation() { # $1=label $2=expect $3=python mutation
   # A copy, never the real tree: a mutation left behind would be committed.
   (cd "$REPO" && git archive HEAD | tar -x -C "$work") 2>/dev/null
   # Uncommitted work in progress has to be carried over too, or the mutation lands on the old file.
-  for f in "$GUARD" "$BASE" "$DEV" "$APPLY" k8s/services/es-spx-align/overlays/production/manifest.yaml \
+  for f in "$GUARD" "$BASE" "$DEV" "$APPLY" "$SVC" k8s/services/es-spx-align/overlays/production/manifest.yaml \
            k8s/services/es-spx-align/overlays/experiment/manifest.yaml; do
     mkdir -p "$work/$(dirname "$f")"; cp "$REPO/$f" "$work/$f"
   done
@@ -100,6 +101,43 @@ p="scripts/deploy/apply.sh"
 s=open(p).read()
 s="\n".join(l for l in s.split("\n") if "set image deployment/es-spx-align-service" not in l)
 open(p,"w").write(s)'
+
+run_mutation "digest-pinning that skips initContainers is refused" "does not reach initContainers" '
+p="scripts/deploy/service-deploy.sh"
+s=open(p).read()
+old="| .spec.template.spec | (.containers[]?, .initContainers[]?, .ephemeralContainers[]?) | select(.image == strenv(RENDER_IMAGE0))"
+new="| .spec.template.spec.containers[] | select(.image == strenv(RENDER_IMAGE0))"
+assert old in s
+open(p,"w").write(s.replace(old,new,1))'
+
+run_mutation "an unpinned-image check that skips initContainers is refused" "does not read initContainers" '
+p="scripts/deploy/service-deploy.sh"
+s=open(p).read()
+old="(.containers[]?, .initContainers[]?, .ephemeralContainers[]?) | .image"
+assert s.count(old)==1, "the unpinned-image image list is not uniquely identifiable"
+open(p,"w").write(s.replace(old, ".containers[].image", 1))'
+
+run_mutation "a divergent valueFrom reference is refused" "KAFKA_ES_GEX_SPX_ALIGNED_TOPIC differs" '
+import yaml
+p="k8s/base/es-spx-align-deployment.yaml"
+d=yaml.safe_load(open(p))
+spec=d["spec"]["template"]["spec"]
+# Both containers source the subject name from a ConfigMap, but from DIFFERENT keys. Comparing only
+# e["value"] saw None == None and passed, while the two containers would read different topic names.
+for container,key in ((spec["initContainers"][0],"topic-a"),(spec["containers"][0],"topic-b")):
+    for e in container["env"]:
+        if e["name"]=="KAFKA_ES_GEX_SPX_ALIGNED_TOPIC":
+            e.pop("value",None)
+            e["valueFrom"]={"configMapKeyRef":{"name":"options-edge-config","key":key}}
+yaml.safe_dump(d, open(p,"w"))'
+
+run_mutation "renaming the Deployment out of a named manifest is refused" "no Deployment named" '
+import yaml
+p="k8s/base/es-spx-align-deployment.yaml"
+d=yaml.safe_load(open(p))
+# The rename that defeated grep discovery: metadata.name changes, the app label stays behind.
+d["metadata"]["name"]="es-spx-align-service-renamed"
+yaml.safe_dump(d, open(p,"w"))'
 
 echo
 [ "$fails" = 0 ] && { echo "all align schema provisioning guard arms refuse their own violation"; exit 0; }
