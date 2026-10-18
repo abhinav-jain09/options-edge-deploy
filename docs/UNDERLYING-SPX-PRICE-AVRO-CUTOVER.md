@@ -43,11 +43,15 @@ format they cannot read are the OLD JSON readers, for the minutes before each is
    The script refuses a bootstrap that is not the named cluster's broker, refuses a topic whose id is not the pre-cutover one, verifies the
    shape (partitions, replication factor, configs) from the broker, verifies the first and last records are Confluent-framed Avro (a JSON record
    means a JSON writer is live), and REPORTS (WARN) any consumer group holding an offset BEYOND the new log end: readers are still rolling, so a group cannot be made inactive on demand, and a regular
-   consumer resets by its auto.offset.reset policy on its first poll; step 8 is the per-reader gate (strict mode, with everything stopped, FAILS on any committed offset). It prints `NEW TOPIC ID: <id>` right after reading it.
+   consumer resets by its auto.offset.reset policy on its first poll; step 8 is the per-reader gate. This topic is a LATEST-VALUE spot stream (compacted, one record per symbol every few seconds, each record supersedes the previous), so a reader that
+   resumes a few records late loses no information; that is why a numerically in-range offset is accepted without proof of provenance (strict mode, with everything stopped, FAILS on any committed offset). It prints `NEW TOPIC ID: <id>` right after reading it.
    If the DELETE succeeded but the CREATE failed (the topic is absent and the script said so), re-run the same command with
    `--topic-absent-after-failed-create` added; an absent topic is otherwise refused, because it means somebody else deleted it.
-   If only a post-check fails (the topic was already recreated, so a second `--recreate` correctly refuses the new id): fix the cause (stop the JSON writer, i.e. make the
-   old feed pod go away), then run the same command with `--verify --new-topic-id <the printed id>` instead of `--recreate` (post-conditions only, no mutation).
+   If a post-check finds JSON in the new topic (a JSON writer was live), that topic is CONTAMINATED and verifying it in place proves nothing (a later Avro record would
+   hide the JSON in the middle): make the JSON writer go away, then wipe again: re-run `--recreate` with `--pre-cutover-id` set to the `NEW TOPIC ID` the failed run printed
+   (it now names the contaminated topic). Any other post-check failure (shape, replication factor) leaves no JSON in question: fix the cause, then run the same command with
+   `--verify --new-topic-id <the printed id>` instead of `--recreate` (post-conditions only, no mutation). The first/last-record check is a SAMPLE, not a scan; the guarantee
+   that no JSON writer exists is the operator's attestation (the old feed pod is gone).
    Persisted reader state: a Kafka Streams GLOBAL store checkpoints the end offset of its source topic on its volume. The only PVC-backed global store on this topic
    is `strike-flow-classifier-databento`; its spot store is in-memory in the converted code and the stale global checkpoint is discarded at every start,
    so no checkpoint can outlive the recreation. (strike-intelligence's global store sits on an emptyDir that is lost with the pod.) Any other reader added later

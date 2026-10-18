@@ -170,6 +170,8 @@ if [ -n "$STALE" ] && [ "$AVRO_LIVE" = yes ]; then
   # With readers still rolling (Jenkins cannot stop them) a group cannot be made inactive on demand. A regular consumer whose offset is
   # beyond the log end resets by its auto.offset.reset policy on its first poll; the cases that do not (a Streams GLOBAL store) are handled
   # in the reader (checkpoint discarded) and the per-reader gate is runbook step 8. So here it is reported, and step 8 decides.
+  # The topic is a latest-value spot stream (each record supersedes the last), so a reader resuming at an in-range offset that was
+  # committed before the recreation skips at most the first few records of the new log and loses no information.
   echo "WARN: consumer groups with a committed offset BEYOND the new log end (group:partition@offset): they reset on first poll; runbook step 8 verifies each reader:" >&2
   printf '%s\n' "$STALE" >&2
 elif [ -n "$STALE" ]; then
