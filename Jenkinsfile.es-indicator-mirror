@@ -435,7 +435,7 @@ PL
           # resolves on the TARGET registry and deserializes there. A target partition may be empty only when the
           # parity gate just measured zero committed records on its source partition — those are passed to the
           # script as DECODE_EMPTY_OK; any other empty partition fails the install.
-          EMPTY_OK=$(printf '%s\n' "$REPORT" | tr ';' '\n' | sed -n 's/^ *p\([0-9][0-9]*\):targetEnd=0 sourceRecordsBelowEnd=0 .*/\1/p' | tr '\n' ' ')
+          EMPTY_OK=$(printf '%s\\n' "$REPORT" | tr ';' '\\n' | sed -n 's/^ *p\\([0-9][0-9]*\\):targetEnd=0 sourceRecordsBelowEnd=0 .*/\\1/p' | tr '\\n' ' ')
           echo "decode gate: partitions whose source holds no committed record: [${EMPTY_OK% }]"
           DECODE_EMPTY_OK="$EMPTY_OK" bash scripts/kafka/decode-newest-indicator-record.sh "$TGT" "$TGT_REGISTRY" "$TOPIC" "$KBIN"
           # (read twice — kafka-topics --list gives flaky counts during MM startup)
