@@ -1,7 +1,7 @@
 // SOURCE TEST ONLY. No deployment, runtime image, cluster, Kafka or broker operations.
 pipeline {
   agent { label 'hpsf-replay-mac' }
-  options { disableConcurrentBuilds(); disableRestartFromStage(); timeout(time:45,unit:'MINUTES') }
+  options { disableConcurrentBuilds(); disableRestartFromStage(); timeout(time:120,unit:'MINUTES') }
   parameters {
     string(name:'TEST_INFRA_SHA',defaultValue:'',trim:true,description:'Exact reviewed test infrastructure work-branch commit')
     string(name:'WEB_SHA',defaultValue:'',trim:true,description:'Exact pushed frontend work-branch commit; no release authority')

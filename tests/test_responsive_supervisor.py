@@ -35,7 +35,7 @@ class BoundaryTests(unittest.TestCase):
 
     def test_weekend_and_dst(self):
         seconds, boundary = self.budget('2026-10-18T10:00:00')
-        self.assertEqual(seconds, 2100)
+        self.assertEqual(seconds, 5400)
         self.assertEqual(boundary.isoformat(), '2026-10-19T13:30:00+00:00')
         self.assertEqual(self.budget('2026-11-01T10:00:00')[1].isoformat(), '2026-11-02T14:30:00+00:00')
 

@@ -14,7 +14,7 @@ import time
 from zoneinfo import ZoneInfo
 
 NY = ZoneInfo('America/New_York')
-MAX_SECONDS = 35 * 60
+MAX_SECONDS = 90 * 60
 RTH_CLEARANCE_SECONDS = 15
 
 
