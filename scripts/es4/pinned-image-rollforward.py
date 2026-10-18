@@ -12,6 +12,11 @@ import urllib.parse
 
 NS = 'options-edge'
 REGISTRY = '192.168.100.252:5000'
+REGISTRY_HTTP = 'http://' + REGISTRY
+IMAGE_ENVIRONMENT = 'production'
+IMAGE_PLATFORM = 'linux/amd64'
+IMAGE_TAG_PREFIX = 'prod'
+TARGET_ENVIRONMENT = 'es4'
 SERVICES = {
     'es-cvd': ('es-cvd-service', 'es-cvd', 'options-edge-es-cvd'),
     'es-footprint-strike': ('es-footprint-strike-service', 'es-footprint-strike', 'options-edge-es-footprint-strike'),
@@ -47,7 +52,7 @@ def qualified_image(service, builds, fetch_lock):
                 params[entry['name']] = entry.get('value')
         target = params.get('BUILD_TARGET')
         relevant = target == repo or (target == 'cvd-avro-related' and service != 'close-direction')
-        if relevant and params.get('ENVIRONMENT') == 'production':
+        if relevant and params.get('ENVIRONMENT') == IMAGE_ENVIRONMENT:
             candidates.append((build, params))
     if not candidates:
         raise ValueError('no recent production build for this service')
@@ -66,7 +71,7 @@ def qualified_image(service, builds, fetch_lock):
     prefix = 'OPTIONS_EDGE_IMAGE_LOCK_'
     if values.get(prefix + 'FORMAT') != '1' or values.get(prefix + 'SOURCE_REPO') != 'git@github.com:abhinav-jain09/options-edge-processing.git':
         raise ValueError('unexpected image-lock format or source repository')
-    if values.get(prefix + 'BUILD_ID') != str(build['number']) or values.get(prefix + 'PLATFORM') != 'linux/amd64':
+    if values.get(prefix + 'BUILD_ID') != str(build['number']) or values.get(prefix + 'PLATFORM') != IMAGE_PLATFORM:
         raise ValueError('foreign build or platform in image lock')
     for field, parameter in [('GIT_COMMIT', 'PERMITTED_SHA'), ('CONTRACTS_GIT_COMMIT', 'CONTRACTS_PERMITTED_SHA')]:
         value = values.get(prefix + field, '')
@@ -86,7 +91,7 @@ def qualified_image(service, builds, fetch_lock):
         raise ValueError('image lock must contain one exact service image')
     key, image = matches[0]
     tag = values.get(prefix + 'TAG', '')
-    tag_match = re.fullmatch('prod-' + str(build['number']) + '-([0-9a-f]{12,40})', tag)
+    tag_match = re.fullmatch((re.escape(IMAGE_TAG_PREFIX) + '-' if IMAGE_TAG_PREFIX else '') + str(build['number']) + '-([0-9a-f]{12,40})', tag)
     if not tag_match or not values[prefix + 'GIT_COMMIT'].startswith(tag_match[1]) or ':' + tag + '@' not in image:
         raise ValueError('service image does not use this build and source tag')
     if values.get(key + '_GIT_COMMIT') != values[prefix + 'GIT_COMMIT']:
@@ -189,7 +194,7 @@ def main():
     namespace = json.loads(kube('get', 'namespace', NS, '-o', 'json'))
     if namespace['metadata']['uid'] != os.environ['ES4_NS_UID']:
         raise ValueError('es4 namespace identity mismatch')
-    request = urllib.request.Request('http://' + REGISTRY + '/v2/' + repo + '/manifests/' + digest,
+    request = urllib.request.Request(REGISTRY_HTTP + '/v2/' + repo + '/manifests/' + digest,
         headers={'Accept': 'application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.docker.distribution.manifest.list.v2+json'})
     with open_direct(request, timeout=10) as response:
         body = response.read((2 << 20) + 1)
@@ -216,8 +221,8 @@ def main():
     payload = json.dumps(patch)
     file.write_text(payload)  # Review copy only; the write consumes the immutable in-memory payload.
     args = ['patch', 'deployment/' + SERVICES[service][0], '--type=json', '--patch', payload]
-    receipt = {'source': os.environ['PERMITTED_SHA'], 'deployment': SERVICES[service][0], 'image': image,
-               'replicas': before['spec']['replicas'], 'dryRun': dry == 'true', **provenance,
+    receipt = {'source': os.environ['PERMITTED_SHA'], 'environment': TARGET_ENVIRONMENT, 'deployment': SERVICES[service][0], 'image': image,
+               'replicas': before['spec']['replicas'], 'readyReplicasBefore': before.get('status', {}).get('readyReplicas', 0), 'dryRun': dry == 'true', **provenance,
                'readerClosureAcknowledged': closure == 'true',
                'patchSha256': hashlib.sha256(payload.encode()).hexdigest(),
                'phase': 'patch-prepared', 'runtimeReadinessVerified': False,

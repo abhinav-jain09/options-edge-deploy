@@ -1,0 +1,219 @@
+[
+  {
+    "environment": "dev",
+    "deployments": [
+      {
+        "name": "amt-order-bridge",
+        "replicas": 0,
+        "ready": 0,
+        "uid": "116bbca6-b8a8-4fa4-8105-fa80b31cd336",
+        "images": {
+          "amt-order-bridge": "host.docker.internal:5001/options-edge-amt-order-bridge:dev@sha256:ea1701e86dc47544b1a02159054f553e06d7f479800cccf425d387e67c65a012"
+        }
+      },
+      {
+        "name": "close-direction-service",
+        "replicas": 0,
+        "ready": 0,
+        "uid": "f7d7f78a-c32f-4dd6-a1aa-972e2b347e1f",
+        "images": {
+          "close-direction": "host.docker.internal:5001/options-edge-close-direction:dev@sha256:9b671fb738ee40bb76cfd783dbde5b3d5bed9b6ec4b35066345a2f00b890a70c"
+        }
+      },
+      {
+        "name": "context-tape-service",
+        "replicas": 1,
+        "ready": 1,
+        "uid": "0338327a-b1e0-4900-a887-5f55057e9b9b",
+        "images": {
+          "context-tape": "host.docker.internal:5001/options-edge-context-tape:dev@sha256:9c651d77749a640a64ed0b2a1d9ca61e42b781c89f2de7282b7497a3533c1a02"
+        }
+      },
+      {
+        "name": "early-auction-verdict-service",
+        "replicas": 0,
+        "ready": 0,
+        "uid": "4d9a71cc-293a-4f49-b854-22a498eb50b8",
+        "images": {
+          "early-auction-verdict": "host.docker.internal:5001/options-edge-early-auction-verdict:dev@sha256:7178e1efd5b1be436ff8d9b4c28802022b90ce2de90db5db00d5b5d9c0fa1a63"
+        }
+      },
+      {
+        "name": "es-compression-expansion-service",
+        "replicas": 0,
+        "ready": 0,
+        "uid": "788b5fa1-b18c-4feb-81fd-031b03d6dd24",
+        "images": {
+          "es-compression-expansion": "host.docker.internal:5001/options-edge-es-compression-expansion:dev@sha256:804bb9347d437f05c8a8e40c6eecd7d2e1bdf6592bcabd4aa16b9c590500a6ef"
+        }
+      },
+      {
+        "name": "es-open-direction-postgres-writer",
+        "replicas": 0,
+        "ready": 0,
+        "uid": "b644af19-0891-4559-9b2b-01e7500d37d7",
+        "images": {
+          "es-open-direction-postgres-writer": "host.docker.internal:5001/options-edge-es-open-direction-postgres-writer@sha256:f291b251c6903a742385cae7fdff7bba8d31cc8efed3276023d9a13d88f36feb"
+        }
+      },
+      {
+        "name": "es-open-direction-service",
+        "replicas": 0,
+        "ready": 0,
+        "uid": "83454625-16a3-4c77-bf36-1653a7c9c04b",
+        "images": {
+          "es-open-direction": "host.docker.internal:5001/options-edge-es-open-direction@sha256:8df9454108c843361151533ada59434c05bfad082c7af2832d8b53bc930f5538"
+        }
+      },
+      {
+        "name": "es-spx-align-service",
+        "replicas": 0,
+        "ready": 0,
+        "uid": "306b0cf8-ebb9-4384-b260-4d4107aef2b0",
+        "images": {
+          "es-spx-align": "host.docker.internal:5001/options-edge-es-spx-align:dev@sha256:058b756485866ffbdca49307482d7fadc0647c8dda568d8998842e4019981f2b"
+        }
+      },
+      {
+        "name": "gamma-migration-service",
+        "replicas": 0,
+        "ready": 0,
+        "uid": "a91cfa23-11ed-4597-84b8-ec7d84a5c661",
+        "images": {
+          "gamma-migration": "host.docker.internal:5001/options-edge-gamma-migration:dev@sha256:fd3a82d8be6d6aa6919cc3f74c74b94c0fb34b2e9ed758d786a8d98b1b08d1f8"
+        }
+      },
+      {
+        "name": "journal-api",
+        "replicas": 0,
+        "ready": 0,
+        "uid": "31bb111f-5400-4753-b0e2-af41c9f59a04",
+        "images": {
+          "journal-api": "host.docker.internal:5001/options-edge-journal-eod-job:24-4fc98f1c7eb8@sha256:d09a22063d9f205d18d473851a24a7ec092c7ebe700e629b0de03c204b360419"
+        }
+      },
+      {
+        "name": "journal-dispatcher",
+        "replicas": 0,
+        "ready": 0,
+        "uid": "9cc2304f-981b-47c7-b196-4c04b06f0225",
+        "images": {
+          "journal-dispatcher": "host.docker.internal:5001/options-edge-journal-eod-job:24-4fc98f1c7eb8@sha256:d09a22063d9f205d18d473851a24a7ec092c7ebe700e629b0de03c204b360419"
+        }
+      },
+      {
+        "name": "level-absorption-service",
+        "replicas": 0,
+        "ready": 0,
+        "uid": "072387dc-e4b5-4879-beab-2a90be1968a1",
+        "images": {
+          "level-absorption": "host.docker.internal:5001/options-edge-level-absorption:dev@sha256:03c484e6ed143fb58e87d834145ad6ace94fbd5562364d69bf73361968a49635"
+        }
+      },
+      {
+        "name": "trade-evidence-api",
+        "replicas": 0,
+        "ready": 0,
+        "uid": "b3c4efd1-7d02-4101-9911-d502564b0b5f",
+        "images": {
+          "api": "host.docker.internal:5001/options-edge-trade-evidence-api@sha256:eeb001c629bad37c017c15c78ccefcaa1e164c6c917de60766816183e3407f1e"
+        }
+      }
+    ]
+  },
+  {
+    "environment": "production",
+    "deployments": [
+      {
+        "name": "amt-order-bridge",
+        "replicas": 0,
+        "ready": 0,
+        "uid": "c6c9c527-5af2-4406-bea8-5626b0c87db3",
+        "images": {
+          "amt-order-bridge": "192.168.100.252:5000/options-edge-amt-order-bridge:prod@sha256:5d25f65e05e68f9d084032bf2938b4a81cf1f1e1f389c78376b782461a7aebfc"
+        }
+      },
+      {
+        "name": "close-direction-service",
+        "replicas": 0,
+        "ready": 0,
+        "uid": "d92f5d63-a701-4c4a-b64b-e43e77893cb3",
+        "images": {
+          "close-direction": "192.168.100.252:5000/options-edge-close-direction:prod@sha256:d0447a392436d873a159dc016ea9fd72e9d5ac01737beb9bec97b5a36f510162"
+        }
+      },
+      {
+        "name": "context-tape-service",
+        "replicas": 1,
+        "ready": 0,
+        "uid": "5512a5aa-a51c-4c60-8d9e-63bb455c4417",
+        "images": {
+          "context-tape": "192.168.100.252:5000/options-edge-context-tape:prod@sha256:09a69979f98414cfb0211199e37230104c5d956dfe072a014485b79a1ebf47fa"
+        }
+      },
+      {
+        "name": "early-auction-verdict-service",
+        "replicas": 0,
+        "ready": 0,
+        "uid": "54a7da65-508b-4239-9a51-f5d4ffdc9453",
+        "images": {
+          "early-auction-verdict": "192.168.100.252:5000/options-edge-early-auction-verdict:prod@sha256:b3c3e296d87604140e1740a0b7b8e5c2d9c8a41779ce134d6652562d1e4ae033"
+        }
+      },
+      {
+        "name": "es-compression-expansion-service",
+        "replicas": 0,
+        "ready": 0,
+        "uid": "e9958d3e-85a5-40d0-8880-c775a3bbe529",
+        "images": {
+          "es-compression-expansion": "192.168.100.252:5000/options-edge-es-compression-expansion:prod@sha256:a4cbadfb9271eb6acf9e1856ef36c230e6b7eddfd34f765629b7206be5297210"
+        }
+      },
+      {
+        "name": "es-open-direction-postgres-writer",
+        "replicas": 0,
+        "ready": 0,
+        "uid": "1615b8cb-e1b4-4b60-92d1-cf561d203d3c",
+        "images": {
+          "es-open-direction-postgres-writer": "192.168.100.252:5000/options-edge-es-open-direction-postgres-writer@sha256:6f48716f9edcdff205922600f574d0c289db4ae3a9188962386ce7b02520b0ac"
+        }
+      },
+      {
+        "name": "es-open-direction-service",
+        "replicas": 0,
+        "ready": 0,
+        "uid": "6ac08987-f8b7-4a7c-acb1-450ab8e65e80",
+        "images": {
+          "es-open-direction": "192.168.100.252:5000/options-edge-es-open-direction@sha256:38632a8adc3d616e4768252c82c70358a0b8281300e933320727d17c8b45b827"
+        }
+      },
+      {
+        "name": "es-spx-align-service",
+        "replicas": 0,
+        "ready": 0,
+        "uid": "c5031463-a8e6-4112-962a-143b47904404",
+        "images": {
+          "es-spx-align": "192.168.100.252:5000/options-edge-es-spx-align:prod@sha256:bacb2809914aee32e84820126042ab9d5328ca7002c6881767fc4213221bc9b0"
+        }
+      },
+      {
+        "name": "gamma-migration-service",
+        "replicas": 0,
+        "ready": 0,
+        "uid": "41a194b6-b9d1-408b-b42e-66c1d7edbad1",
+        "images": {
+          "gamma-migration": "192.168.100.252:5000/options-edge-gamma-migration:prod@sha256:4de52afdc3c8da14bf22bba3eed92f4a0e6403b20a4036c08a6bd1a5ccb0636e"
+        }
+      },
+      {
+        "name": "trade-evidence-api",
+        "replicas": 0,
+        "ready": 0,
+        "uid": "2d38000b-953d-4296-8a90-50310093951d",
+        "images": {
+          "api": "192.168.100.252:5000/options-edge-trade-evidence-api@sha256:aea842212824e1235050cfbc6011a73fdcde748efbbb584a9dcef53ce864874c"
+        }
+      }
+    ]
+  }
+]
