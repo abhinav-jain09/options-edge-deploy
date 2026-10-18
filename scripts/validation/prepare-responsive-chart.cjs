@@ -24,3 +24,11 @@ module.exports.waitForOrders=async function(page,fixture,limitMs=15000){
  assert.equal(fixture.streams.size,1,'PREPARED_ONE_PRIVATE_STREAM');
  assert.equal(ready,true,'PREPARED_EXECUTION_READY');
 };
+
+module.exports.admitCompanion=async function(main,child,fixture){
+ assert.equal(await main.locator('.mm-orders').count(),0,'COMPANION_ONLY_ROOT');
+ assert.equal(await child.locator('.mm-orders').count(),1,'COMPANION_SINGLE_ROOT');
+ const prepared=await module.exports.waitForOrders(child,fixture);
+ assert.equal(fixture.streams.size,1,'COMPANION_ONE_PRIVATE_STREAM');
+ return prepared;
+};
