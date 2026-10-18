@@ -282,12 +282,13 @@ services:
   #
   # PRODUCTION is still at replicas 0 from the base with OPTION_PRESSURE_ENABLED=false. Enabling it
   # needs TWO things that are not done, and neither is a formality:
-  #   1. A production image. There is no ENVIRONMENT=production build of this service, and the image
-  #      does not merely lack the :prod tag — the whole repository is unknown to the production
-  #      registry. Checked OUTSIDE this repository on 2026-10-18:
+  #   1. A production image. The image does not merely lack the :prod tag — the whole repository is
+  #      unknown to the production registry. Checked OUTSIDE this repository on 2026-10-18:
   #      `curl http://192.168.100.252:5000/v2/options-edge-option-pressure-state/tags/list` returns
-  #      NAME_UNKNOWN. This repository cannot establish that by itself; re-check it rather than
-  #      trusting this line.
+  #      NAME_UNKNOWN. That says nothing about build HISTORY, which is a separate bounded check with
+  #      its own evidence and caveats; both live in the canonical paragraph in
+  #      k8s/base/option-pressure-state-deployment.yaml. Neither is verifiable from this repository,
+  #      so re-run them rather than trusting these lines.
   #   2. A judgement about the PRODUCER, not this service. OPB_L1_ENABLED adds a per-trade sink
   #      forward inside option-price-behavior's exactly-once transaction. That service has a
   #      documented production incident — 2026-07-14, recorded in
