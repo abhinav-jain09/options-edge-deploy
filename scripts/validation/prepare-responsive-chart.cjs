@@ -11,3 +11,16 @@ module.exports=async function prepareChart(page){
  assert.equal(await toggle.getAttribute('aria-expanded'),'false','CONTROLS_EXPLICITLY_CLOSED');
  await page.locator('[data-session]').click();
 };
+
+// UI preparation can invalidate a health lease and restart synchronization.
+// Recheck the current admitted state, rather than an earlier green indicator.
+module.exports.waitForOrders=async function(page,fixture,limitMs=15000){
+ const deadline=Date.now()+limitMs,initialStreams=fixture.streams.size;let ready=false,checks=0;
+ do{
+  ready=await page.evaluate(()=>document.querySelector('[data-order-dot]')?.classList.contains('is-ready')===true);checks++;
+  if(ready&&fixture.streams.size===1)return {initialStreams,finalStreams:1,ready:true,checks};
+  await new Promise(resolve=>setTimeout(resolve,20));
+ }while(Date.now()<deadline);
+ assert.equal(fixture.streams.size,1,'PREPARED_ONE_PRIVATE_STREAM');
+ assert.equal(ready,true,'PREPARED_EXECUTION_READY');
+};
