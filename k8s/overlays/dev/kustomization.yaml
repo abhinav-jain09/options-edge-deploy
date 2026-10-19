@@ -634,6 +634,14 @@ patches:
           # IBKR_SPX_KAFKA_TARGETS fallback so the chain contract is visible here.
           - name: IBKR_CHAIN_ENABLED
             value: "true"
+          # DEV ONLY: keep the option chain armed through the cash session. The base/default
+          # teardown is 09:25 ET (the pre-open GEX fence), which left broker-execution-service
+          # with no IBKR option quotes on options.ibkr.raw all day (every visual-order quote was
+          # refused IBKR_FEED_STALE). 16:15 ET is the SPX/SPXW options close. The pre-open GEX
+          # consumer keeps its own IBKR_GEX_FENCE (09:25), so the GEX hand-over to Databento is
+          # unchanged. Must stay AFTER IB_AUTO_EXPIRY_ROLL_TIME (06:16) or the feed refuses boot.
+          - name: IB_CHAIN_TEARDOWN_TIME
+            value: "16:15"
           # SPX options quote pre-market on CBOE's Global Trading Hours session, but the base
           # config subscribes the chain through SMART, which has no pre-open route for them:
           # verified 2026-08-05 07:50 ET, when every strike's raw snapshot carried

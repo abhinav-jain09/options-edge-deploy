@@ -72,6 +72,8 @@ spec:
               value: dev=host.docker.internal:19092,prod=192.168.100.252:9092
             - name: IBKR_CHAIN_ENABLED
               value: "true"
+            - name: IB_CHAIN_TEARDOWN_TIME
+              value: "16:15"
             - name: IB_OPTION_EXCHANGE
               value: CBOE
             - name: IBKR_CHAIN_KAFKA_TARGETS
