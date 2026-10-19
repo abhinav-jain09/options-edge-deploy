@@ -4,6 +4,12 @@ Rule: Kafka Serialization Rule + owner ruling of 2026-10-18 (no versioned topic 
 JSON is deleted, never read). Contracts 0.31.0 (PR options-edge-contracts#119), processing #1179, feed-gateway #241. Generic wipe tool:
 `scripts/kafka/roll-forward-topics.sh` (deploy PR 1320, docs/KAFKA-AVRO-TOPIC-ROLL-FORWARD.md). Registration tool: this PR.
 
+## HARD PREREQUISITE (blocks step 5; nothing below may start without it)
+**Merge options-edge-deploy#1320 (`scripts/kafka/roll-forward-topics.sh`) FIRST.** The destructive wipe in step 5 is performed ONLY by that merged script;
+this runbook neither contains nor copies it. At cutover record here, in the cutover change, the merge commit sha of #1320 that the operator ran:
+`roll-forward-topics.sh merge commit sha: ____________` and run the script from a checkout at (or after) that sha. Steps 1-4 and the registration script
+of this PR do not need it; step 5 and everything after it do. If #1320 is not merged, STOP at the end of step 4.
+
 ## What is converted
 | Item | Shape | Subject (RecordNameStrategy, FULL) |
 |---|---|---|
@@ -23,8 +29,9 @@ for r in options-edge-processing options-edge-feed-gateway options-edge-approach
 done
 ```
 * processing: the producer itself (`spot-vol-regime-service`), `docs/market-read/MARKET-READ-REQUIREMENT.md` (prose), and
-  `trade-evidence-api` (`registry.py` freshness subscription, `inventory.json` env listing). trade-evidence-api reads the topic through its generic
-  collector, which decodes Confluent Avro by schema id with fastavro (verified against the Java wire bytes; Decimal handled by `clean()`); no code change.
+  `trade-evidence-api` (`registry.py` freshness subscription, `inventory.json` env listing). `trade-evidence-api` IS in the repo set (options-edge-processing#1179):
+  its collector decodes the topic through the registry schema id with fastavro, and `collector.AVRO_ONLY_TOPICS` now refuses any non-Avro (JSON) value on it;
+  `trade-evidence-api/tests/test_spot_vol_regime_avro_decode.py` pins an Avro frame written by the Java serializer (decodes, Decimal preserved) and that JSON is refused.
 * feed-gateway: the only data reader; converted in #241 (Avro consumers, identical browser JSON).
 * contracts: the types. deploy: k8s env values, `topics.env`, topic-preservation scripts (shape only). options-edge web: `option-chain.js` reads the gateway websocket JSON, unchanged.
 * approach-monitor, trading-journal, short-premium-agent, databento-feed: no match. No NAS archive entry, no mirror (envs dev and production only), no Postgres writer.
