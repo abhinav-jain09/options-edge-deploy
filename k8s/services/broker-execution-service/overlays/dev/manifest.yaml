@@ -92,6 +92,10 @@ spec:
               value: "7496"
             - name: BROKER_LIVE_EXECUTION_CLIENT_BASE
               value: "31001"
+            - name: BROKER_EXECUTION_MAX_QUANTITY
+              value: "10"
+            - name: BROKER_LIVE_EXECUTION_MAX_QUANTITY
+              value: "1"
             - name: SERVER_PORT
               value: "8131"
             - name: JAVA_TOOL_OPTIONS
@@ -129,8 +133,6 @@ spec:
               value: DUQ287805
             - name: BROKER_EXECUTION_NO_TRADE_DATES
               value: 2026-01-28,2026-03-18,2026-04-29,2026-06-17,2026-07-29,2026-09-16,2026-10-28,2026-12-09
-            - name: BROKER_EXECUTION_MAX_QUANTITY
-              value: "1"
             - name: BROKER_EXECUTION_MAX_CREDIT
               value: "100.0"
             - name: BROKER_EXECUTION_REPRICE_MS

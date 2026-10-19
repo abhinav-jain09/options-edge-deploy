@@ -46,3 +46,11 @@ spec:
               value: "7496"
             - name: BROKER_LIVE_EXECUTION_CLIENT_BASE
               value: "31001"
+            # 2026-10-20, owner: Paper orders on dev must allow more than one spread. Live keeps its own cap of 1
+            # (BROKER_LIVE_EXECUTION_MAX_QUANTITY; without it Live would inherit the Paper limit), so this
+            # raises Paper only. The cap exists from processing PR "live-max-quantity-own-cap" onward: deploy that
+            # build before this value, or an older build would give Live the Paper limit.
+            - name: BROKER_EXECUTION_MAX_QUANTITY
+              value: "10"
+            - name: BROKER_LIVE_EXECUTION_MAX_QUANTITY
+              value: "1"
