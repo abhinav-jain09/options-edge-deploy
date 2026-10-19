@@ -44,11 +44,27 @@ def call(method, route, body=None):
         return e.code, json.loads(e.read() or b"{}")
 
 
+# PHASE 1 - READ EVERYTHING, MUTATE NOTHING. Every refusal (a non-canonical latest version, an unreadable subject, a
+# canonical schema that is not the latest) happens here, so a refused run leaves the registry exactly as it found it.
+plan = {}
 for subject, schema in loaded.items():
-    status, found = call("POST", f"/subjects/{subject}", {"schema": schema})
-    if status == 200:
-        print(f"registered: {subject} id={found['id']} version={found['version']} (identical schema already present)")
-    elif status == 404:
+    s, latest = call("GET", f"/subjects/{subject}/versions/latest")
+    if s == 200:
+        if json.loads(latest["schema"]) != json.loads(schema):
+            sys.exit(f"FATAL: the latest version of {subject} is not the canonical schema (nothing was changed): {latest.get('version')} id={latest.get('id')}")
+        plan[subject] = "present"
+    elif s == 404:
+        plan[subject] = "absent"
+    else:
+        sys.exit(f"FATAL: registry read failed for {subject} (nothing was changed): {s} {latest}")
+    if plan[subject] == "present":
+        s, b = call("GET", f"/config/{subject}")
+        if s not in (200, 404):
+            sys.exit(f"FATAL: cannot read the config of {subject} (nothing was changed): {s} {b}")
+
+# PHASE 2 - mutate, only after every subject passed phase 1.
+for subject, schema in loaded.items():
+    if plan[subject] == "absent":
         if dry:
             print(f"DRY RUN: {subject} would be registered under FULL")
             continue
@@ -59,22 +75,18 @@ for subject, schema in loaded.items():
         s, b = call("POST", f"/subjects/{subject}/versions", {"schema": schema})
         if s != 200:
             sys.exit(f"FATAL: registration refused (compatibility or content): {s} {b}")
-        status, found = call("POST", f"/subjects/{subject}", {"schema": schema})
-        if status != 200:
-            sys.exit(f"FATAL: registered schema is not found by lookup: {status} {found}")
-        print(f"registered: {subject} id={found['id']} version={found['version']}")
-    else:
-        sys.exit(f"FATAL: registry lookup failed: {status} {found}")
-    if not dry:
+    elif not dry:
         s, b = call("PUT", f"/config/{subject}", {"compatibility": "FULL"})
         if s != 200:
             sys.exit(f"FATAL: could not set FULL on {subject}: {s} {b}")
+    status, found = call("POST", f"/subjects/{subject}", {"schema": schema})
+    if status != 200:
+        sys.exit(f"FATAL: canonical schema is not found by lookup on {subject}: {status} {found}")
+    print(f"registered: {subject} id={found['id']} version={found['version']}")
     s, b = call("GET", f"/config/{subject}")
     if s != 200 or b.get("compatibilityLevel") != "FULL":
         sys.exit(f"FATAL: {subject} compatibility is not FULL: {s} {b}")
     print(f"compatibility: {subject} FULL")
-    # The service frames the id of exactly the canonical schema and the readers refuse any other shape, so the canonical
-    # schema must BE the latest version, not merely present somewhere in the subject's history.
     s, latest = call("GET", f"/subjects/{subject}/versions/latest")
     if s != 200 or json.loads(latest["schema"]) != json.loads(schema):
         sys.exit(f"FATAL: the latest version of {subject} is not the canonical schema: {s} {latest}")

@@ -74,9 +74,28 @@ class EnsureMultilegSchemas(unittest.TestCase):
         try:
             self.assertEqual(run(url, str(FIXTURES))[0], 0)
             reg.register(SUBJECTS[0], (FIXTURES / "MultilegWindowStatus.avsc").read_text())
+            reg.configs[SUBJECTS[0]] = "BACKWARD"
+            before = len(reg.calls)
             rc, out = run(url, str(FIXTURES))
             self.assertNotEqual(rc, 0)
             self.assertIn("latest version", out)
+            self.assertIn("nothing was changed", out)
+            # NON-MUTATING: the refused run sent no PUT/POST-version, and the drifted config stays as it was.
+            self.assertEqual([c for c in reg.calls[before:] if c.startswith(("PUT", "POST /subjects/" + SUBJECTS[0] + "/versions"))], [])
+            self.assertEqual(reg.configs[SUBJECTS[0]], "BACKWARD")
+        finally:
+            server.shutdown()
+
+    def test_a_bad_later_subject_refuses_before_the_first_one_is_touched(self):
+        reg = Registry()
+        server, url = serve(reg)
+        try:
+            reg.register(SUBJECTS[2], (FIXTURES / "MultilegWindowStatus.avsc").read_text())
+            rc, out = run(url, str(FIXTURES))
+            self.assertNotEqual(rc, 0)
+            self.assertNotIn(SUBJECTS[0], reg.subjects)
+            self.assertEqual(reg.configs, {})
+            self.assertEqual([c for c in reg.calls if c.startswith("PUT")], [])
         finally:
             server.shutdown()
 
