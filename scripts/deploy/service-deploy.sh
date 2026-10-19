@@ -60,6 +60,17 @@ NAMESPACE="$(yq -r ".services[] | select(.name == \"$SERVICE\") | .namespace // 
 [ -n "$NAMESPACE" ] || { echo "FATAL: $SERVICE is not registered in services.yaml — register it before deploying" >&2; exit 1; }
 echo "=== service-deploy: $SERVICE -> namespace $NAMESPACE (env=$ENVIRONMENT) ==="
 
+# Fail CLOSED on an unset/empty/unreadable KUBECONFIG before touching any cluster. Jenkins DROPS
+# environment{} entries whose value is the empty string, so a deployer kubeconfig that failed to
+# resolve (e.g. oeProfile evaluated in the pipeline-level environment{} WITHOUT a node returns "")
+# leaves KUBECONFIG unset — and `kubectl` then silently falls back to the agent's DEFAULT cluster.
+# On a build host that deploys to dev (.102) / prod (.252) / es, that default is the WRONG cluster;
+# that is exactly how a web deploy hit the laptop's local docker-desktop (no options-edge) and failed
+# late. Refuse here instead of deploying somewhere unintended.
+: "${KUBECONFIG:?FATAL: KUBECONFIG is unset/empty — refusing to deploy via the agent default cluster. The Jenkins job must set it from oeProfile(ENVIRONMENT).kubeconfigDeployer (or pass KUBECONFIG_FILE).}"
+[ -r "$KUBECONFIG" ] || { echo "FATAL: KUBECONFIG='$KUBECONFIG' is not a readable file — refusing to deploy." >&2; exit 1; }
+echo "deployer kubeconfig: $KUBECONFIG (server $(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null || echo '?'))"
+
 # The namespace must already exist. Creating one is a platform action with its own job and
 # its own credential (see k8s/tenants/<tenant>/bootstrap), never a side effect of a service
 # deploy — otherwise a typo in the registry silently creates a namespace and deploys into it.
