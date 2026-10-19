@@ -95,8 +95,9 @@ check "an unknown cluster name is a usage error" "$(reset OLDID; run --recreate 
 reset OLDID
 check "a bootstrap that is not the named cluster is refused" "$(run --recreate --cluster dev --pre-cutover-id OLDID --writers-and-readers-stopped 192.168.100.252:9092 "$TMP/bin")" 2
 check "…and nothing deleted" "$(cat "$TMP/state/log" 2>/dev/null | wc -l | tr -d ' ')" 0
-check "production is not enabled (no recorded shape), whatever the bootstrap" "$(run --recreate --cluster production --pre-cutover-id OLDID --writers-and-readers-stopped 192.168.100.252:9092 "$TMP/bin")" 2
-check "…and its refusal says why" "$(grep -c 'has not been recorded' "$TMP/out")" 1
+reset OLDID
+check "production recreates at ITS recorded shape (delete policy, 1 GiB segments, no compaction settings)" "$(run --recreate --cluster production --pre-cutover-id OLDID --avro-feed-live --json-writers-stopped 192.168.100.252:9092 "$TMP/bin")" 0
+check "…and the production shape was applied" "$(cat "$TMP/state/cfg")" "cleanup.policy=delete,retention.ms=-1,segment.bytes=1073741824,min.insync.replicas=1"
 check "production with a non-prod bootstrap is refused too" "$(run --recreate --cluster production --pre-cutover-id OLDID --writers-and-readers-stopped localhost:19092 "$TMP/bin")" 2
 
 reset OLDID
