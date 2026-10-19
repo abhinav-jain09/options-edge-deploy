@@ -21,7 +21,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 shopt -s nullglob
-FILES=(Jenkinsfile.*-mirror)
+FILES=(Jenkinsfile.*-mirror Jenkinsfile.spx-price-reencoder)
 shopt -u nullglob
 [ "${#FILES[@]}" -gt 0 ] || { echo "FAIL: no Jenkinsfile.*-mirror found - the glob and the repo layout have diverged"; exit 1; }
 
