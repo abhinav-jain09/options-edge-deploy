@@ -7,16 +7,39 @@ import sys
 import yaml
 
 
+class Unparseable(ValueError):
+    """A quantity this gate could not read. It is a FAILURE, never a skip: a limit nobody can
+    parse is a limit nobody is checking, and the first version silently passed those."""
+
+
+# Kubernetes quantities come in two families and they are NOT interchangeable: the binary
+# suffixes are powers of 1024, the bare SI ones powers of 1000. Reading "1G" as 1024Mi
+# overstates the limit by 7% and makes a borderline container look compliant.
+_BINARY = {"Ki": 1024 ** 1, "Mi": 1024 ** 2, "Gi": 1024 ** 3, "Ti": 1024 ** 4,
+           "Pi": 1024 ** 5, "Ei": 1024 ** 6}
+_DECIMAL = {"m": 1e-3, "": 1, "k": 1e3, "K": 1e3, "M": 1e6, "G": 1e9,
+            "T": 1e12, "P": 1e15, "E": 1e18}
+
+
 def to_mib(value):
-    m = re.fullmatch(r"(\d+)(Mi|Gi|M|G|Ki|K)?", str(value).strip())
+    """A Kubernetes memory quantity in MiB. Fractions ("0.5Gi") and exponent form ("3e9") are
+    valid quantities and are accepted; anything unreadable raises."""
+    text = str(value).strip()
+    m = re.fullmatch(r"(\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)([A-Za-z]{1,2})?", text)
     if not m:
-        return None
-    n, unit = int(m.group(1)), (m.group(2) or "")
-    if unit in ("Gi", "G"):
-        return n * 1024
-    if unit in ("Ki", "K"):
-        return n // 1024
-    return n
+        raise Unparseable(text)
+    number, suffix = m.group(1), (m.group(2) or "")
+    try:
+        number = float(number)
+    except ValueError as exc:
+        raise Unparseable(text) from exc
+    if suffix in _BINARY:
+        scale = _BINARY[suffix]
+    elif suffix in _DECIMAL:
+        scale = _DECIMAL[suffix]
+    else:
+        raise Unparseable(text)
+    return number * scale / (1024 ** 2)
 
 
 def xmx_mib(container):
@@ -42,9 +65,14 @@ def containers(doc):
 
 def main():
     max_pct = int(sys.argv[1])
-    files = sorted(glob.glob("k8s/services/*/overlays/*/manifest.yaml"))
+    # Both trees, because both deploy containers. The es4 tree is NOT rendered from k8s/base —
+    # it carried its own copies of the same 100% heaps (databento-maxpain, greek-move-authenticity,
+    # option-truth-engine), so a gate on the overlays alone would have reported those fixed while
+    # es4 kept shipping the fault.
+    files = sorted(glob.glob("k8s/services/*/overlays/*/manifest.yaml")
+                   + glob.glob("k8s/es4/services/*.yaml"))
     if not files:
-        sys.exit("FAIL: no rendered overlays found — the glob and the repo layout have diverged")
+        sys.exit("FAIL: no manifests found — the globs and the repo layout have diverged")
 
     failures, checked = [], 0
     for path in files:
@@ -56,24 +84,34 @@ def main():
                 if heap is None:
                     continue
                 limit_raw = ((c.get("resources") or {}).get("limits") or {}).get("memory")
+                where = (f"{path}: {doc.get('kind')}/"
+                         f"{(doc.get('metadata') or {}).get('name')} container {c.get('name')}")
                 if limit_raw is None:
                     failures.append(
-                        f"{path}: {doc.get('kind')}/{(doc.get('metadata') or {}).get('name')} "
-                        f"container {c.get('name')} pins -Xmx{heap}Mi with NO memory limit — an "
-                        f"unbounded container with a pinned heap hides the ratio this gate checks")
+                        f"{where} pins -Xmx{heap}Mi with NO memory limit — an unbounded container "
+                        f"with a pinned heap hides the ratio this gate checks")
                     continue
-                limit = to_mib(limit_raw)
-                if limit is None or limit == 0:
+                try:
+                    limit = to_mib(limit_raw)
+                except Unparseable:
+                    # Fail CLOSED. Skipping here is how a gate reports coverage it does not have.
+                    failures.append(
+                        f"{where} has a memory limit this gate cannot read: {limit_raw!r}. Teach "
+                        f"to_mib() the quantity rather than leaving the container unchecked")
+                    continue
+                if limit <= 0:
+                    failures.append(
+                        f"{where} pins -Xmx{heap}Mi against a memory limit of {limit_raw!r}, "
+                        f"which is zero or negative")
                     continue
                 checked += 1
-                pct = heap * 100 // limit
+                pct = int(heap * 100 // limit)
                 if pct > max_pct:
                     failures.append(
-                        f"{path}: container {c.get('name')} has -Xmx{heap}Mi against a {limit}Mi "
-                        f"limit ({pct}%). The heap must leave the container room for RocksDB, "
-                        f"metaspace, thread stacks, code cache and direct buffers; over {max_pct}% "
-                        f"is OOMKilled (exit 137) with no OutOfMemoryError to read. Lower -Xmx or "
-                        f"raise the limit.")
+                        f"{where} has -Xmx{heap}Mi against a {limit:.0f}Mi limit ({pct}%). The heap "
+                        f"must leave the container room for RocksDB, metaspace, thread stacks, code "
+                        f"cache and direct buffers; over {max_pct}% is OOMKilled (exit 137) with no "
+                        f"OutOfMemoryError to read. Lower -Xmx or raise the limit.")
 
     if checked == 0:
         sys.exit("FAIL: no container with both a pinned -Xmx and a memory limit was found — this "
