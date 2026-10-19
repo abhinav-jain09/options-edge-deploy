@@ -13,9 +13,10 @@
 # the UI already reads (USER D14). The 09:25 fence, the 09:25-09:30 freeze and the source-scoped
 # 09:30 eviction all live in the service; nothing here widens them.
 #
-# Spot topic is underlying.spx.index.price — the IBKR SPX cash index that the feed fans to BOTH
-# clusters (IBKR_SPX_KAFKA_TARGETS, long-standing). Production therefore reads its own local copy;
-# no cross-cluster read is introduced by this patch.
+# Spot topic is underlying.spx.price — the feed's CANONICAL spot, Avro since the 18 Oct cutover, and
+# what the Avro-only pre-open reader consumes. It was underlying.spx.index.price (the IBKR SPX cash
+# index the feed fans to both clusters) until 19 Oct; that topic is still JSON and the reader can no
+# longer read it. Production reads its own local copy either way; no cross-cluster read is introduced.
 #
 # PREREQUISITES, all verified before this gate (2026-08-10):
 #   - processing main carries Phase 2 (#545) AND the R-DOWN dispositions (#552), so pre-open
