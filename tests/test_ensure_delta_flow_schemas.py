@@ -10,11 +10,14 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-from stub_schema_registry import Registry, serve
+# collectable as tests.test_ensure_delta_flow_schemas (validate-tests-are-collectable.sh) as well as from inside tests/
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from stub_schema_registry import Registry, serve  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/kafka/ensure-delta-flow-schemas.sh"
