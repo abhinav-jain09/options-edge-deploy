@@ -17,8 +17,13 @@ Contracts 0.32.0 (`schemas/greekmoveauth/`), processing PR 1175, feed-gateway PR
 
 ## Readers (origin/main)
 
-Only `options-edge-feed-gateway` reads `current` (now Avro, same browser JSON; the web page is unchanged). `trade-evidence-api` decodes
-generic Avro. Nothing reads `events` or archives either topic. `delta-flow-by-strike` is a JSON INPUT written by delta-flow-service;
+Only `options-edge-feed-gateway` reads `current` (now Avro, same browser JSON; the web page is unchanged). `trade-evidence-api` (processing `trade-evidence-api/registry.py:29` subscribes to `current`; no canonical binding) reads it through
+`Collector.decode` in `trade-evidence-api/collector.py`: the generic Confluent Avro path (schema fetched by id, cached, `fastavro`), added by
+processing commit `a08fab4a6`, already on processing main. That decoder tries `json.loads` first, so it ALSO accepts a JSON value; it
+does not refuse JSON, and that is harmless here only because the topic is wiped and then written by the Avro producer alone. Decode of a
+real `MoveAuthenticityVerdict` frame is pinned by `trade-evidence-api/tests/test_greek_move_auth_avro_reader.py` (processing PR 1175).
+Price fidelity: the writer refuses (never rounds) any price needing more than 18 fractional digits, a non-finite price or negative
+zero; the service drops such an input and counts it in `gma_malformed_total` (`GreekMoveAuthTopologyTest`), it does not crash-loop. Nothing reads `events` or archives either topic. `delta-flow-by-strike` is a JSON INPUT written by delta-flow-service;
 its conversion is scheduled in the next wave and `LegacyJsonDeltaFlowReader` (the only JSON read) must switch to Avro in lockstep.
 
 ## Order
