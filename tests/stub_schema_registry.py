@@ -70,6 +70,14 @@ class Handler(BaseHTTPRequestHandler):
             if s in r.configs:
                 return self._send(200, {"compatibilityLevel": r.configs[s]})
             return self._send(404, {"error_code": 40408, "message": "Subject does not have subject-level compatibility configured"})
+        if p.startswith("/schemas/ids/") and p.split("?")[0].endswith("/subjects"):
+            i = int(p.split("?")[0].split("/")[-2])
+            names = [s for s, vs in r.subjects.items() for v in vs if v["id"] == i]
+            return self._send(200, names) if names else self._send(404, {"error_code": 40403, "message": "Schema not found"})
+        if p.startswith("/schemas/ids/") and p.split("?")[0].endswith("/versions"):
+            i = int(p.split("?")[0].split("/")[-2])
+            rows = [{"subject": s, "version": v["version"]} for s, vs in r.subjects.items() for v in vs if v["id"] == i]
+            return self._send(200, rows) if rows else self._send(404, {"error_code": 40403, "message": "Schema not found"})
         if p.startswith("/schemas/ids/"):
             i = int(p.split("?")[0].split("/")[-1])
             if i in r.by_id:

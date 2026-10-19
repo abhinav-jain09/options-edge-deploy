@@ -99,6 +99,8 @@ pipeline {
             echo "  reachable: $hp"
           done
 
+          # 0. Stop OUR OWN unit if this is a re-install, so the "no legacy writer" behaviour sample below sees only foreign writers.
+          launchctl unload "$PLIST" 2>/dev/null || true
           # 1. NO SECOND WRITER of the target. A byte copier still feeding the same topic puts source-registry ids into it.
           if [ "$TARGET" = es4 ]; then
             # Retire the es4 byte-copy bridge BEFORE any target-state check: a still-running copier could write between the freshness check and the
@@ -130,6 +132,7 @@ pipeline {
 
           # 3. Both topics exist and every partition is led; the TARGET holds no retained JSON (earliest AND newest record of every
           #    non-empty partition are framed Avro whose id resolves to the subject on the TARGET registry).
+          CP="$CONFLUENT/share/java/kafka/*:$CONFLUENT/share/java/kafka-serde-tools/*:$CONFLUENT/share/java/confluent-common/*"
           for side in SRC TGT; do
             if [ "$side" = SRC ]; then bs="$SRC_BS"; t="$SRC_TOPIC"; else bs="$TGT_BS"; t="$TGT_TOPIC"; fi
             "$CONFLUENT/bin/kafka-topics" --bootstrap-server "$bs" --describe --topic "$t" > "/tmp/spx-price-mirror-$TARGET.$side.describe"
@@ -139,13 +142,16 @@ pipeline {
             [ "$bad" -eq 0 ] || { echo "FAIL: $t on $bs has $bad partition(s) without a leader"; exit 1; }
             echo "  $side topic $t on $bs: $parts partition(s), all led"
           done
+          # the target must not be fed by a legacy byte copier: no such process, and its end offset is steady with no mirror of ours installed
+          bash "scripts/kafka/spx-price-mirror/assert-no-legacy-writer.sh" "$TGT_BS" "$TGT_TOPIC" "$CONFLUENT/bin"
           bash "scripts/kafka/spx-price-mirror/assert-target-fresh.sh" "$TGT_BS" "$TGT_TOPIC" "$GROUP" "$SRC_BS" "$SRC_TOPIC" "$CONFLUENT/bin"
           bash "scripts/kafka/spx-price-mirror/assert-timestamp-type.sh" "$TGT_BS" "$TGT_TOPIC" "$CONFLUENT/bin"
+          # FULL SCAN of the target (the middle of the log): every record decodes to the canonical record under the target registry; bounded, fail closed
+          java -cp "$CP" scripts/kafka/spx-price-mirror/SpxPriceAvroMirror.java verify-all "$TGT_BS" "$TGT_REG" "$TGT_TOPIC" 200000 300
           CHECK_FIRST=true ALLOW_EMPTY=true bash "scripts/kafka/spx-price-mirror/verify-target-record.sh" "$TGT_BS" "$TGT_REG" "$TGT_TOPIC" "$CONFLUENT/bin"
           CHECK_FIRST=true ALLOW_EMPTY=true bash "scripts/kafka/spx-price-mirror/verify-target-record.sh" "$SRC_BS" "$SRC_REG" "$SRC_TOPIC" "$CONFLUENT/bin"
 
           # 4. Compile check of the mirror against the installed jars, then report the durable group's position.
-          CP="$CONFLUENT/share/java/kafka/*:$CONFLUENT/share/java/kafka-serde-tools/*:$CONFLUENT/share/java/confluent-common/*"
           javac -proc:none -cp "$CP" -d "$(mktemp -d)" "scripts/kafka/spx-price-mirror/SpxPriceAvroMirror.java"
           GRC=0
           GD=$("$CONFLUENT/bin/kafka-consumer-groups" --bootstrap-server "$SRC_BS" --describe --group "$GROUP" --offsets 2>&1) || GRC=$?
@@ -245,6 +251,8 @@ EOS
             3) echo INCONCLUSIVE > "$T.verdict" ;;
             *) echo DROPPING > "$T.verdict"; echo "FAIL: the mirror is not moving data (see above); check ${MDIR}/mirror.log"; exit 1 ;;
           esac
+          CP="$CONFLUENT/share/java/kafka/*:$CONFLUENT/share/java/kafka-serde-tools/*:$CONFLUENT/share/java/confluent-common/*"
+          java -cp "$CP" scripts/kafka/spx-price-mirror/SpxPriceAvroMirror.java verify-all "$TGT_BS" "$TGT_REG" "$TGT_TOPIC" 200000 300
           # the earliest and newest target records fully decode under the target registry (a byte copy fails this)
           ALLOW_EMPTY=true CHECK_FIRST=true bash "scripts/kafka/spx-price-mirror/verify-target-record.sh" "$TGT_BS" "$TGT_REG" "$TGT_TOPIC" "$CONFLUENT/bin"
         '''

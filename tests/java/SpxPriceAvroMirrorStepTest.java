@@ -9,6 +9,8 @@ import org.apache.kafka.clients.consumer.MockConsumer;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.apache.kafka.clients.producer.MockProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.clients.consumer.OffsetAndTimestamp;
+import org.apache.kafka.common.PartitionInfo;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.header.internals.RecordHeaders;
@@ -59,6 +61,46 @@ public final class SpxPriceAvroMirrorStepTest {
         super.flush();
       }
     };
+  }
+
+
+  static byte[] reframe(byte[] v, int id) {
+    byte[] o = v.clone();
+    java.nio.ByteBuffer.wrap(o, 1, 4).putInt(id);
+    return o;
+  }
+
+  static long verifyAll(SpxPriceAvroMirror m, byte[][] values, long max) {
+    MockConsumer<byte[], byte[]> c = new MockConsumer<>(OffsetResetStrategy.EARLIEST);
+    c.updatePartitions("t", List.of(new PartitionInfo("t", 0, null, null, null)));
+    TopicPartition tp = new TopicPartition("t", 0);
+    c.updateBeginningOffsets(Map.of(tp, 0L));
+    c.updateEndOffsets(Map.of(tp, (long) values.length));
+    c.assign(List.of(tp));
+    for (int i = 0; i < values.length; i++) {
+      c.addRecord(new ConsumerRecord<>("t", 0, i, 1L, TimestampType.CREATE_TIME, 1, values[i] == null ? 0 : values[i].length, "SPX".getBytes(), values[i], new RecordHeaders(), Optional.empty()));
+    }
+    return SpxPriceAvroMirror.verifyAll(c, "t", m, max, 30);
+  }
+
+  /** a source record (key zk, ts) against a target holding a decoy, then one record with the given key/timestamp */
+  static boolean flow(SpxPriceAvroMirror m, byte[] srcValue, byte[] tgtValue, byte[] srcKey, long srcTs, byte[] tgtKey, long tgtTs) {
+    TopicPartition sp = new TopicPartition("underlying.spx.price", 0);
+    MockConsumer<byte[], byte[]> s = consumer(srcKey, srcValue, srcTs, new RecordHeaders());
+    TopicPartition tp = new TopicPartition(TARGET, 0);
+    MockConsumer<byte[], byte[]> t = new MockConsumer<>(OffsetResetStrategy.EARLIEST) {
+      @Override
+      public Map<TopicPartition, OffsetAndTimestamp> offsetsForTimes(Map<TopicPartition, Long> q) {
+        return Map.of(tp, new OffsetAndTimestamp(0L, 0L));
+      }
+    };
+    t.updatePartitions(TARGET, List.of(new PartitionInfo(TARGET, 0, null, null, null)));
+    t.updateBeginningOffsets(Map.of(tp, 0L));
+    t.updateEndOffsets(Map.of(tp, 2L));
+    t.assign(List.of(tp));
+    t.addRecord(new ConsumerRecord<>(TARGET, 0, 0L, srcTs - 5, TimestampType.CREATE_TIME, 3, tgtValue.length, "OTH".getBytes(), tgtValue, new RecordHeaders(), Optional.empty()));
+    t.addRecord(new ConsumerRecord<>(TARGET, 0, 1L, tgtTs, TimestampType.CREATE_TIME, tgtKey.length, tgtValue.length, tgtKey, tgtValue, new RecordHeaders(), Optional.empty()));
+    return SpxPriceAvroMirror.flowCheck(s, t, sp, 0L, TARGET, m, 1000);
   }
 
   public static void main(String[] a) {
@@ -120,6 +162,32 @@ public final class SpxPriceAvroMirrorStepTest {
       threw = true;
     }
     check(threw && EVENTS.isEmpty(), "JSON must stop the mirror, events " + EVENTS);
+
+    // ---- verify-all: every record decoded; null, JSON, unknown id and an over-large topic fail closed ----
+    SpxPriceAvroMirror onTarget = new SpxPriceAvroMirror(a[1], a[1]);
+    check(verifyAll(onTarget, new byte[][] {want, want}, 100) == 2, "two good records verified");
+    for (byte[][] bad : new byte[][][] {{want, null}, {want, "{\"symbol\":\"SPX\"}".getBytes()}, {want, reframe(want, 99)}}) {
+      threw = false;
+      try {
+        verifyAll(onTarget, bad, 100);
+      } catch (IllegalStateException e) {
+        threw = true;
+      }
+      check(threw, "verify-all must fail on a null, JSON or unresolvable-id record");
+    }
+    threw = false;
+    try {
+      verifyAll(onTarget, new byte[][] {want, want, want}, 2);
+    } catch (IllegalStateException e) {
+      threw = true;
+    }
+    check(threw, "verify-all must fail closed above maxRecords");
+
+    // ---- flow-check: located by timestamp, matched on timestamp + KEY BYTES + decoded value ----
+    byte[] zk = {0, (byte) 0xff, 'S'};
+    check(flow(mirror, src, want, zk, ts, zk, ts), "same timestamp/key bytes/value is found");
+    check(!flow(mirror, src, want, zk, ts, new byte[] {0, (byte) 0xfe, 'S'}, ts), "a different key byte is not a match");
+    check(!flow(mirror, src, want, zk, ts, zk, ts + 1), "a different timestamp is not a match");
     System.out.println("OK");
   }
 }

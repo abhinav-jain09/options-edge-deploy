@@ -3,15 +3,18 @@
 # Proves the MIRROR moves data, not merely that the target offset advanced (another writer would advance it too):
 #   * the mirror's consumer group holds committed offsets on the SOURCE topic and its lag is within MAX_LAG (default 1000);
 #   * while the source advanced over FLOW_WAIT_S (default 30) the group's committed offsets advanced too;
-#   * the source record just BEFORE the group's committed position (the last one the mirror flushed) appears on the target
-#     with the same key, the same timestamp and the same decoded value (searched in the newest TAIL=500 records of every target partition).
+#   * the source record just BEFORE the group's committed position (the last one the mirror flushed) is on the target: located by TIMESTAMP
+#     (offsetsForTimes, no fixed tail window) and matched on the timestamp, the KEY BYTES and the decoded value (SpxPriceAvroMirror flow-check).
 # Exit 0 FLOWING, 3 INCONCLUSIVE (source did not advance: market closed), 1 FAIL.
 set -euo pipefail
 SB="${1:?}"; SR="${2:?}"; ST="${3:?}"; TB="${4:?}"; TR="${5:?}"; TT="${6:?}"; GROUP="${7:?}"; KBIN="${8:?}"
-MAX_LAG="${MAX_LAG:-1000}"; WAIT="${FLOW_WAIT_S:-30}"; TAIL="${TAIL:-500}"
+MAX_LAG="${MAX_LAG:-1000}"; WAIT="${FLOW_WAIT_S:-30}"
+if [ -n "${SPX_MIRROR_CMD:-}" ]; then read -ra TOOL <<< "$SPX_MIRROR_CMD"; else
+  CONF="$(dirname "$KBIN")"
+  TOOL=(java -cp "$CONF/share/java/kafka/*:$CONF/share/java/kafka-serde-tools/*:$CONF/share/java/confluent-common/*" "$(dirname "$0")/SpxPriceAvroMirror.java")
+fi
 GO="${KAFKA_GET_OFFSETS_CMD:-$KBIN/kafka-get-offsets}"; CG="${KAFKA_CONSUMER_GROUPS_CMD:-$KBIN/kafka-consumer-groups}"
-AC="${KAFKA_AVRO_CONSOLE_CONSUMER_CMD:-$KBIN/kafka-avro-console-consumer}"
-tmp=$(mktemp); trap 'rm -f "$tmp" "$tmp.t"' EXIT
+tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
 ends() { "$GO" --bootstrap-server "$1" --topic "$2" 2>/dev/null | awk -F: -v t="$2" '$1 == t && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ { s += $3; n++ } END { if (n == 0) exit 3; print s }'; }
 # prints "<sum committed> <sum lag> <partition:committed ...>"
 group() {
@@ -41,19 +44,9 @@ for pc in $PARTS; do
   p=${pc%%:*}; c=${pc##*:}
   [ "$c" -ge 1 ] || continue
   tried=$((tried + 1))
-  "$AC" --bootstrap-server "$SB" --topic "$ST" --partition "$p" --offset $((c - 1)) --max-messages 1 --timeout-ms 20000 \
-    --property schema.registry.url="$SR" --property print.key=true --property print.timestamp=true > "$tmp" 2>/dev/null || true
-  line=$(head -n 1 "$tmp")
-  [ -n "$line" ] || { echo "FAIL: cannot read source $ST-$p@$((c - 1)) (compacted away or unreadable)"; exit 1; }
-  : > "$tmp.t"
-  while IFS=: read -r t tp end; do
-    [ "$t" = "$TT" ] || continue
-    from=$((end - TAIL)); [ "$from" -ge 0 ] || from=0
-    "$AC" --bootstrap-server "$TB" --topic "$TT" --partition "$tp" --offset "$from" --max-messages "$TAIL" --timeout-ms 15000 \
-      --property schema.registry.url="$TR" --property print.key=true --property print.timestamp=true >> "$tmp.t" 2>/dev/null || true
-  done <<< "$("$GO" --bootstrap-server "$TB" --topic "$TT" 2>/dev/null)"
-  if grep -qxF -- "$line" "$tmp.t"; then found=$((found + 1)); echo "  $ST-$p@$((c - 1)) found on the target with the same key, timestamp and decoded value"
-  else echo "FAIL: the mirror's last flushed record ($ST-$p@$((c - 1))) is not on the target with the same key, timestamp and value"; exit 1; fi
+  if "${TOOL[@]}" flow-check "$SB" "$SR" "$ST" "$p" $((c - 1)) "$TB" "$TR" "$TT" > "$tmp" 2>&1; then
+    found=$((found + 1)); echo "  $ST-$p@$((c - 1)) found on the target: same timestamp, key bytes and decoded value"
+  else echo "FAIL: the mirror's last flushed record ($ST-$p@$((c - 1))) is not on the target (looked up by timestamp; key bytes, timestamp and decoded value compared)"; sed 's/^/      /' "$tmp"; exit 1; fi
 done
 [ "$tried" -ge 1 ] || { echo "FAIL: the group has consumed nothing yet (committed 0 everywhere)"; exit 1; }
 [ "$moving" -eq 1 ] && { echo "  MIRROR FLOWING"; exit 0; }

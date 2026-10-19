@@ -54,6 +54,14 @@ class SpxPriceMirrorJob(unittest.TestCase):
         self.assertIn("assert-target-fresh.sh", JOB)
         self.assertNotIn("TGT1", JOB)
 
+    def test_full_scan_and_legacy_writer_gates_are_wired_in_order(self):
+        pre = JOB.index("stage('Preflight (registries, topics, group)')")
+        self.assertLess(JOB.index("assert-no-legacy-writer.sh"), JOB.index("assert-target-fresh.sh"))
+        self.assertLess(JOB.index("assert-target-fresh.sh"), JOB.index("verify-all", pre))
+        self.assertLess(JOB.index("verify-all", pre), JOB.index("stage('Install')"))
+        self.assertGreater(JOB.index("verify-all", JOB.index("stage('Verify')")), JOB.index("stage('Verify')"))
+        self.assertLess(JOB.index('launchctl unload "$PLIST"'), JOB.index("assert-no-legacy-writer.sh"))
+
     def test_the_mm1_guard_is_a_script_run_by_literal_path(self):
         self.assertIn('bash "scripts/kafka/spx-price-mirror/assert-mm1-whitelist-clean.sh" /Users/abhinav/oe-ops/dl-mirror-dev-to-mac74/run-mirror.sh', JOB)
 

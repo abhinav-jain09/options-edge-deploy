@@ -20,10 +20,9 @@ elif name == "kafka-consumer-groups":
     c = sc["group"][min(n, 1)]
     print("GROUP TOPIC PARTITION CURRENT-OFFSET LOG-END-OFFSET LAG")
     print(f"g src 0 {c} {sc['src_end'][min(n, 1)]} {sc['lag']}")
-elif name == "kafka-avro-console-consumer":
-    if t == "src": print(sc["src_line"])
-    else:
-        for l in sc["tgt_lines"]: print(l)
+elif name == "tool":
+    open(os.path.join(os.path.dirname(os.environ["SC"]), "tool.args"), "w").write(" ".join(argv))
+    sys.exit(0 if sc["found"] else 1)
 elif name == "sleep":
     open(st, "w").write(str(n + 1))
 '''
@@ -31,18 +30,17 @@ elif name == "sleep":
 
 def setup(**sc):
     d = pathlib.Path(tempfile.mkdtemp()); kb = d / "kb"; kb.mkdir()
-    base = dict(src_end=[100, 110], tgt_end=50, group=[100, 110], lag=0, src_line="CreateTime:1\tSPX\t{\"symbol\":\"SPX\"}",
-                tgt_lines=["CreateTime:0\tSPX\t{\"symbol\":\"OLD\"}", "CreateTime:1\tSPX\t{\"symbol\":\"SPX\"}"])
+    base = dict(src_end=[100, 110], tgt_end=50, group=[100, 110], lag=0, found=True)
     base.update(sc)
     (d / "sc.json").write_text(json.dumps(base))
-    for n in ("kafka-get-offsets", "kafka-consumer-groups", "kafka-avro-console-consumer", "sleep"):
+    for n in ("kafka-get-offsets", "kafka-consumer-groups", "tool", "sleep"):
         (kb / n).write_text(STUB); os.chmod(kb / n, 0o755)
     return d, kb
 
 
 def flow(**sc):
     d, kb = setup(**sc)
-    env = dict(os.environ, SC=str(d / "sc.json"), PATH=f"{kb}:{os.environ['PATH']}", FLOW_WAIT_S="0")
+    env = dict(os.environ, SC=str(d / "sc.json"), PATH=f"{kb}:{os.environ['PATH']}", FLOW_WAIT_S="0", SPX_MIRROR_CMD=str(kb / "tool"))
     r = subprocess.run(["bash", str(D / "verify-flow.sh"), "sb", "http://s", "src", "tb", "http://t", "tgt", "g", str(kb)], capture_output=True, text=True, env=env)
     return r.returncode, r.stdout + r.stderr
 
@@ -68,13 +66,17 @@ class VerifyFlow(unittest.TestCase):
     def test_lag_over_the_bound_fails(self):
         self.assertEqual(flow(lag=5000)[0], 1)
 
-    def test_record_missing_on_the_target_fails(self):
-        rc, out = flow(tgt_lines=["CreateTime:0\tSPX\t{\"symbol\":\"OLD\"}"])
+    def test_record_not_found_on_the_target_fails(self):
+        rc, out = flow(found=False)
         self.assertEqual(rc, 1, out)
         self.assertIn("not on the target", out)
 
-    def test_same_value_with_another_timestamp_is_not_a_match(self):
-        self.assertEqual(flow(tgt_lines=["CreateTime:2\tSPX\t{\"symbol\":\"SPX\"}"])[0], 1)
+    def test_the_lookup_is_by_timestamp_through_the_tool_for_the_last_flushed_offset(self):
+        d, kb = setup()
+        env = dict(os.environ, SC=str(d / "sc.json"), PATH=f"{kb}:{os.environ['PATH']}", FLOW_WAIT_S="0", SPX_MIRROR_CMD=str(kb / "tool"))
+        r = subprocess.run(["bash", str(D / "verify-flow.sh"), "sb", "http://s", "src", "tb", "http://t", "tgt", "g", str(kb)], capture_output=True, text=True, env=env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual((d / "tool.args").read_text(), "flow-check sb http://s src 0 109 tb http://t tgt")
 
     def test_no_committed_group_while_the_source_advances_fails(self):
         self.assertEqual(flow(group=None)[0], 1)

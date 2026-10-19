@@ -1,10 +1,14 @@
+import io.confluent.kafka.schemaregistry.client.CachedSchemaRegistryClient;
+import io.confluent.kafka.schemaregistry.client.SchemaRegistryClient;
 import io.confluent.kafka.serializers.KafkaAvroDeserializer;
 import io.confluent.kafka.serializers.KafkaAvroSerializer;
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.kafka.clients.consumer.Consumer;
@@ -12,10 +16,12 @@ import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.consumer.OffsetAndTimestamp;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.header.internals.RecordHeader;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
@@ -35,6 +41,9 @@ import org.apache.kafka.common.serialization.ByteArraySerializer;
  * never skips one. Latest-value topic: a repeated tick is superseded by the next one.
  *
  *   mirror <sourceBootstrap> <sourceTopic> <sourceRegistry> <targetBootstrap> <targetTopic> <targetRegistry> <group> <offsetReset>
+ *   verify-all <bootstrap> <registry> <topic> <maxRecords> <maxSeconds>      decodes EVERY record from earliest to the end offsets captured at start
+ *   flow-check <srcBootstrap> <srcRegistry> <srcTopic> <partition> <offset> <tgtBootstrap> <tgtRegistry> <tgtTopic>
+ *                                                                          the source record is on the target: same timestamp, key BYTES and decoded value
  *   transcode <sourceRegistry> <targetRegistry> <hex of one framed source value>      prints the hex of the target value
  */
 public final class SpxPriceAvroMirror {
@@ -42,9 +51,13 @@ public final class SpxPriceAvroMirror {
 
   private final KafkaAvroDeserializer decoder = new KafkaAvroDeserializer();
   private final KafkaAvroSerializer encoder = new KafkaAvroSerializer();
+  private final KafkaAvroDeserializer targetDecoder = new KafkaAvroDeserializer();
+  private final SchemaRegistryClient targetClient;
 
   SpxPriceAvroMirror(String sourceRegistry, String targetRegistry) {
     decoder.configure(Map.of("schema.registry.url", sourceRegistry), false);
+    targetDecoder.configure(Map.of("schema.registry.url", targetRegistry), false);
+    targetClient = new CachedSchemaRegistryClient(targetRegistry, 100);
     Map<String, Object> out = new HashMap<>();
     out.put("schema.registry.url", targetRegistry);
     out.put("auto.register.schemas", false);
@@ -73,10 +86,128 @@ public final class SpxPriceAvroMirror {
       System.out.println(HexFormat.of().formatHex(out));
     } else if (a.length == 9 && a[0].equals("mirror")) {
       mirror(a);
+    } else if (a.length == 6 && a[0].equals("verify-all")) {
+      try (KafkaConsumer<byte[], byte[]> c = plainConsumer(a[1])) {
+        long n = verifyAll(c, a[3], new SpxPriceAvroMirror(a[2], a[2]), Long.parseLong(a[4]), Long.parseLong(a[5]));
+        System.out.println("verified " + n + " record(s) of " + a[3]);
+      }
+    } else if (a.length == 9 && a[0].equals("flow-check")) {
+      try (KafkaConsumer<byte[], byte[]> s = plainConsumer(a[1]); KafkaConsumer<byte[], byte[]> t = plainConsumer(a[6])) {
+        boolean ok = flowCheck(s, t, new TopicPartition(a[3], Integer.parseInt(a[4])), Long.parseLong(a[5]), a[8],
+            new SpxPriceAvroMirror(a[2], a[7]), 100000);
+        System.out.println(ok ? "FOUND" : "NOT FOUND");
+        System.exit(ok ? 0 : 1);
+      }
     } else {
       System.err.println("usage: see the class comment");
       System.exit(64);
     }
+  }
+
+  static KafkaConsumer<byte[], byte[]> plainConsumer(String bootstrap) {
+    Map<String, Object> in = new HashMap<>();
+    in.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap);
+    in.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
+    return new KafkaConsumer<>(in, new ByteArrayDeserializer(), new ByteArrayDeserializer());
+  }
+
+  private static List<TopicPartition> partitionsOf(Consumer<byte[], byte[]> c, String topic) {
+    List<TopicPartition> tps = new java.util.ArrayList<>();
+    c.partitionsFor(topic).forEach(p -> tps.add(new TopicPartition(topic, p.partition())));
+    return tps;
+  }
+
+  /** Full scan: every record from the earliest offset to the end offsets captured now must be framed Avro whose id resolves to the
+   *  canonical subject on the registry and deserializes to the canonical record. A null value, JSON or a foreign record fails; exceeding
+   *  maxRecords or maxSeconds fails closed (the guard is a bound, never a pass). Returns the number of records verified. */
+  static long verifyAll(Consumer<byte[], byte[]> c, String topic, SpxPriceAvroMirror m, long maxRecords, long maxSeconds) {
+    List<TopicPartition> tps = partitionsOf(c, topic);
+    c.assign(tps);
+    c.seekToBeginning(tps);
+    Map<TopicPartition, Long> end = c.endOffsets(tps);
+    long n = 0;
+    long deadline = System.nanoTime() + maxSeconds * 1_000_000_000L;
+    while (tps.stream().anyMatch(tp -> c.position(tp) < end.get(tp))) {
+      if (System.nanoTime() > deadline) {
+        throw new IllegalStateException("verify-all exceeded " + maxSeconds + "s: the topic is larger than the guard allows");
+      }
+      for (ConsumerRecord<byte[], byte[]> r : c.poll(Duration.ofSeconds(1))) {
+        if (r.offset() >= end.get(new TopicPartition(r.topic(), r.partition()))) {
+          continue;
+        }
+        if (++n > maxRecords) {
+          throw new IllegalStateException("verify-all exceeded " + maxRecords + " records: the topic is larger than the guard allows");
+        }
+        m.verifyTargetValue(r.value(), r.partition() + ":" + r.offset());
+      }
+    }
+    return n;
+  }
+
+  void verifyTargetValue(byte[] value, String where) {
+    if (value == null || value.length < 6 || value[0] != 0) {
+      throw new IllegalStateException(where + ": null, tombstone or non-Avro value");
+    }
+    int id = java.nio.ByteBuffer.wrap(value, 1, 4).getInt();
+    try {
+      if (!targetClient.getAllSubjectsById(id).contains(RECORD)) {
+        throw new IllegalStateException(where + ": schema id " + id + " does not resolve to " + RECORD + " on the registry");
+      }
+    } catch (java.io.IOException | io.confluent.kafka.schemaregistry.client.rest.exceptions.RestClientException e) {
+      throw new IllegalStateException(where + ": schema id " + id + " unresolvable", e);
+    }
+    Object d = targetDecoder.deserialize("t", value);
+    if (!(d instanceof GenericRecord g) || !RECORD.equals(g.getSchema().getFullName())) {
+      throw new IllegalStateException(where + ": not a " + RECORD);
+    }
+  }
+
+  /** True when the SOURCE record (partition, offset) is on the target: located by TIMESTAMP (offsetsForTimes, no fixed tail window),
+   *  matched on timestamp, KEY BYTES and the decoded value. Scans at most maxScan target records per partition. */
+  static boolean flowCheck(Consumer<byte[], byte[]> src, Consumer<byte[], byte[]> tgt, TopicPartition sp, long offset,
+      String targetTopic, SpxPriceAvroMirror m, long maxScan) {
+    src.assign(List.of(sp));
+    src.seek(sp, offset);
+    ConsumerRecord<byte[], byte[]> want = null;
+    for (int i = 0; i < 30 && want == null; i++) {
+      for (ConsumerRecord<byte[], byte[]> r : src.poll(Duration.ofSeconds(1))) {
+        if (r.offset() == offset) {
+          want = r;
+        }
+      }
+    }
+    if (want == null) {
+      throw new IllegalStateException("cannot read the source record " + sp + "@" + offset);
+    }
+    final ConsumerRecord<byte[], byte[]> w = want;
+    String wantValue = m.decoder.deserialize("t", w.value()).toString();
+    List<TopicPartition> tps = partitionsOf(tgt, targetTopic);
+    tgt.assign(tps);
+    Map<TopicPartition, Long> ask = new HashMap<>();
+    tps.forEach(tp -> ask.put(tp, w.timestamp()));
+    Map<TopicPartition, OffsetAndTimestamp> from = tgt.offsetsForTimes(ask);
+    Map<TopicPartition, Long> end = tgt.endOffsets(tps);
+    for (TopicPartition tp : tps) {
+      if (from.get(tp) == null) {
+        continue;
+      }
+      tgt.seek(tp, from.get(tp).offset());
+      long scanned = 0;
+      long deadline = System.nanoTime() + 30_000_000_000L;
+      while (tgt.position(tp) < end.get(tp) && scanned < maxScan && System.nanoTime() < deadline) {
+        for (ConsumerRecord<byte[], byte[]> r : tgt.poll(Duration.ofSeconds(1))) {
+          if (r.partition() != tp.partition()) {
+            continue;
+          }
+          scanned++;
+          if (r.timestamp() == w.timestamp() && Arrays.equals(r.key(), w.key()) && r.value() != null
+              && m.targetDecoder.deserialize("t", r.value()).toString().equals(wantValue)) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
   }
 
   private static void mirror(String[] a) {
