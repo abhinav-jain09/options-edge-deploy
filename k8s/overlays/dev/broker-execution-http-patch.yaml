@@ -9,6 +9,8 @@ spec:
       containers:
         - name: broker-execution
           env:
+            - name: BROKER_EXECUTION_IBKR_CLIENT_ID
+              value: "31"
             - name: LINKED_EXIT_SPOT_ENABLED
               value: "true"
             - name: LINKED_EXIT_ARMING_ENABLED
