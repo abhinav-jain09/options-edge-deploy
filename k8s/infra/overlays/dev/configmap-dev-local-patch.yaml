@@ -62,7 +62,11 @@ data:
   HPSF_SPX_SPOT_SOURCE: CASCADED
   # USER rule 2026-07-29: first IBKR, second SYNTHETIC, third ES-basis (the crude
   # cost-of-carry tier is last resort — review F3's ~10pt discrepancy source).
-  DATABENTO_CASCADE_TIER_ORDER: NATIVE,SYNTHETIC,ES_BASIS
+  # DEV-ONLY 2026-10-19 (owner: draw bars overnight from the ES feed): ES-basis ahead of SYNTHETIC so the overnight
+  # spot is the ES-derived estimate (published source ES_BASIS_DERIVED, quality LIVE_ES_BASIS) that the candle builders
+  # accept; the synthetic option-parity tier is rejected for candles. This reverses the 2026-07-29 rule on dev ONLY —
+  # production (configmap-prod-feed-synthetic-spot-patch.yaml) keeps NATIVE,SYNTHETIC,ES_BASIS.
+  DATABENTO_CASCADE_TIER_ORDER: NATIVE,ES_BASIS,SYNTHETIC
   # Starvation-incident guard (2026-07-15 class): bound the cascade's full-book snapshot
   # refresh so tier-1/tier-2 ticks cannot starve the OPRA read loop.
   DATABENTO_CASCADE_REFRESH_MIN_INTERVAL_MS: "250"
