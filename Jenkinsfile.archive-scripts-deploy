@@ -66,7 +66,7 @@ pipeline {
     // options-edge-contracts commit in this job and shipped by its own dedicated step (SIDECAR below); the host
     // installs, records and verifies it exactly like a unit file.
     SIDECAR     = "options-edge-contracts.jar canonical-archive-reader.jar"
-    UNIT        = "oe-archive-kafka.sh StrikeArchiveReader.java CanonicalArchiveDecoder.java IndicatorArchiveReader.java oe-alert.sh oe-topics.env test-archive-reset.sh oe-archive.crontab oe-archive.crontab.predecessor oe-calibration-progress.sh oe_corpus_reader.py oe-push-validation-artifact.sh push-validation-artifact-test.sh calibration-targets.env market_calendar.py oe-archive-verify.sh oe-trading-day.sh oe-archive-daily.sh oe-archive-dev.sh ibkr-raw-retention.sh oe-archive-postgres.sh oe-vol-premium-open-capture.sh vol-premium-open-reference-capture.py"
+    UNIT        = "oe-archive-kafka.sh StrikeArchiveReader.java CanonicalArchiveDecoder.java IndicatorArchiveReader.java SpotArchiveReader.java oe-alert.sh oe-topics.env test-archive-reset.sh oe-archive.crontab oe-archive.crontab.predecessor oe-calibration-progress.sh oe_corpus_reader.py oe-push-validation-artifact.sh push-validation-artifact-test.sh calibration-targets.env market_calendar.py oe-archive-verify.sh oe-trading-day.sh oe-archive-daily.sh oe-archive-dev.sh ibkr-raw-retention.sh oe-archive-postgres.sh oe-vol-premium-open-capture.sh vol-premium-open-reference-capture.py"
     // Both of these are read by the shell in sh ''' blocks, which Groovy does NOT
     // interpolate — without them here the scripts would see an unset variable under `set -u`.
     TEST_IMAGE       = "${params.TEST_IMAGE}"
@@ -287,6 +287,7 @@ pipeline {
         }
         sh 'mvn -B -q -ntp -f .jenkins-tmp/contracts/pom.xml -DskipTests package'
         sh 'unzip -l .jenkins-tmp/contracts/target/options-edge-contracts-${ARCHIVE_CONTRACTS_VERSION}.jar | grep -q com/optionsedge/contracts/indicators/avro/IndicatorSchemas.class'
+        sh 'unzip -l .jenkins-tmp/contracts/target/options-edge-contracts-${ARCHIVE_CONTRACTS_VERSION}.jar | grep -q com/optionsedge/contracts/hpsf/UnderlyingPriceAvro.class'
         sh 'cp ".jenkins-tmp/contracts/target/options-edge-contracts-${ARCHIVE_CONTRACTS_VERSION}.jar" .jenkins-tmp/contracts/target/options-edge-contracts-archive.jar'
         timeout(time: 10, unit: 'MINUTES') {
           sh 'PERMITTED_SHA="${CONTRACTS_PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir .jenkins-tmp/contracts --allow-ignored target'
@@ -303,7 +304,7 @@ pipeline {
         sh 'mvn -B -ntp -Dmaven.repo.local="${WORKSPACE}/.jenkins-tmp/archive-m2" -f tools/canonical-archive-reader/pom.xml -Dcontracts.version="${ARCHIVE_CONTRACTS_VERSION}" -DskipTests package'
         sh 'cp tools/canonical-archive-reader/target/canonical-archive-reader.jar .jenkins-tmp/canonical-archive-reader.jar'
         sh 'javac --release 21 -cp .jenkins-tmp/canonical-archive-reader.jar -d .jenkins-tmp/canonical-archive-tests tests/archive-canonical/CanonicalArchiveDecoderTest.java'
-        sh 'PYTHONDONTWRITEBYTECODE=1 OE_INDICATOR_READER_CP=".jenkins-tmp/contracts/target/options-edge-contracts-${ARCHIVE_CONTRACTS_VERSION}.jar:$(cat .jenkins-tmp/archive-contracts-deps.txt)" python3 -m unittest tests.test_indicator_archive_reader'
+        sh 'PYTHONDONTWRITEBYTECODE=1 OE_INDICATOR_READER_CP=".jenkins-tmp/contracts/target/options-edge-contracts-${ARCHIVE_CONTRACTS_VERSION}.jar:$(cat .jenkins-tmp/archive-contracts-deps.txt)" python3 -m unittest tests.test_indicator_archive_reader tests.test_spot_archive_reader'
         sh 'java -Xmx512m -cp ".jenkins-tmp/canonical-archive-reader.jar:.jenkins-tmp/canonical-archive-tests" CanonicalArchiveDecoderTest .jenkins-tmp/contracts .jenkins-tmp/canonical-archive-reader.jar'
         timeout(time: 10, unit: 'MINUTES') {
           sh 'PERMITTED_SHA="${PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored .jenkins-tmp --allow-ignored tools/canonical-archive-reader/target --allow-ignored scripts/ops/archive/market_calendar.py --allow-ignored scripts/ops/archive/vol-premium-open-reference-capture.py'
@@ -410,7 +411,7 @@ EOSSH
           // satisfies it. The path may be given unquoted, as here, or double-quoted.
           sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp --allow-ignored tools/canonical-archive-reader/target --allow-ignored scripts/ops/archive/market_calendar.py --allow-ignored scripts/ops/archive/vol-premium-open-reference-capture.py'
         }
-        sh 'scp -o BatchMode=yes scripts/ops/archive/oe-archive-kafka.sh scripts/ops/archive/StrikeArchiveReader.java scripts/ops/archive/CanonicalArchiveDecoder.java scripts/ops/archive/IndicatorArchiveReader.java scripts/ops/archive/oe-alert.sh scripts/ops/archive/oe-topics.env scripts/ops/archive/test-archive-reset.sh scripts/ops/archive/oe-archive.crontab scripts/ops/archive/oe-archive.crontab.predecessor scripts/ops/archive/oe-calibration-progress.sh scripts/ops/archive/oe_corpus_reader.py scripts/ops/archive/oe-push-validation-artifact.sh scripts/ops/archive/push-validation-artifact-test.sh scripts/ops/archive/calibration-targets.env scripts/jenkins/market_calendar.py scripts/ops/archive/oe-archive-verify.sh scripts/ops/archive/oe-trading-day.sh scripts/ops/archive/oe-archive-daily.sh scripts/ops/archive/oe-archive-dev.sh scripts/ops/archive/ibkr-raw-retention.sh scripts/ops/archive/oe-archive-postgres.sh scripts/ops/archive/oe-vol-premium-open-capture.sh scripts/ops/vol-premium-open-reference-capture.py "${PROD_HOST}:${STAGE_DIR}/"'
+        sh 'scp -o BatchMode=yes scripts/ops/archive/oe-archive-kafka.sh scripts/ops/archive/StrikeArchiveReader.java scripts/ops/archive/CanonicalArchiveDecoder.java scripts/ops/archive/IndicatorArchiveReader.java scripts/ops/archive/SpotArchiveReader.java scripts/ops/archive/oe-alert.sh scripts/ops/archive/oe-topics.env scripts/ops/archive/test-archive-reset.sh scripts/ops/archive/oe-archive.crontab scripts/ops/archive/oe-archive.crontab.predecessor scripts/ops/archive/oe-calibration-progress.sh scripts/ops/archive/oe_corpus_reader.py scripts/ops/archive/oe-push-validation-artifact.sh scripts/ops/archive/push-validation-artifact-test.sh scripts/ops/archive/calibration-targets.env scripts/jenkins/market_calendar.py scripts/ops/archive/oe-archive-verify.sh scripts/ops/archive/oe-trading-day.sh scripts/ops/archive/oe-archive-daily.sh scripts/ops/archive/oe-archive-dev.sh scripts/ops/archive/ibkr-raw-retention.sh scripts/ops/archive/oe-archive-postgres.sh scripts/ops/archive/oe-vol-premium-open-capture.sh scripts/ops/vol-premium-open-reference-capture.py "${PROD_HOST}:${STAGE_DIR}/"'
         sh '''
           set -euo pipefail
 
