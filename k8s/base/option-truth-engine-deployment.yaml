@@ -54,7 +54,10 @@ spec:
             - name: KAFKA_STREAMS_STATE_DIR
               value: /var/lib/options-edge/kafka-streams
             - name: JAVA_TOOL_OPTIONS
-              value: -Xms1g -Xmx5g
+              # 67% of the 6Gi limit (was -Xmx5g = 83%, above the band every healthy
+              # workload in this fleet sits in). Kafka-Streams RocksDB, metaspace, thread
+              # stacks and direct buffers all need the rest of the container.
+              value: -Xms1g -Xmx4g
           ports:
             - name: health
               containerPort: 8131
