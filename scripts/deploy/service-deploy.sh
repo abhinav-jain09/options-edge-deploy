@@ -604,6 +604,15 @@ if [ "$SERVICE" = "context-tape" ] && [ "$ENVIRONMENT" != "experiment" ]; then
   fi
 fi
 
+# broker-execution-service: the stored execution destination must still be selectable after the rollout (a changed broker
+# configuration fingerprint otherwise leaves every order request refused while the pod looks healthy).
+if [ "$SERVICE" = "broker-execution-service" ]; then
+  echo "=== execution destination gate ==="
+  if ! NAMESPACE="$NAMESPACE" bash scripts/smoke/check-broker-destination.sh; then
+    gate_fail=1
+  fi
+fi
+
 # --- §13.2 rollback instructions (always printed) --------------------------------------
 echo "=== rollback (no rebuild needed — re-points to the recorded digests) ==="
 while IFS=$'\t' read -r dep ctr prev; do
