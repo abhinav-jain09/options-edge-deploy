@@ -16,6 +16,7 @@ from stub_schema_registry import Registry, serve
 ROOT = Path(__file__).resolve().parents[1]
 ENSURE = ROOT / "scripts/kafka/ensure-strike-invasion-schemas.sh"
 RESET = ROOT / "scripts/kafka/reset-strike-invasion-state.sh"
+GATE = ROOT / "scripts/kafka/strike-invasion-start-offsets.sh"
 NS = "com.optionsedge.contracts.strikeinvasion."
 NAMES = ["StrikeInvasionSnapshot"] + ["StrikeInvasionEvent" + t for t in (
     "NonFiniteSpotDropped", "OutOfOrderSpotDropped", "NonFiniteStrikeDropped", "SessionReset", "CandidateInvalidated",
@@ -184,6 +185,82 @@ class ResetState(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         self.assertIn("would delete group", out)
         self.assertFalse(any("--delete" in c for c in calls))
+
+
+SRC = ["t.a", "t.b"]
+
+
+def gate(mode, group_state="Empty", committed=None, ends=None, env=None):
+    """pin/verify against stub kafka-consumer-groups and kafka-get-offsets."""
+    tmp = Path(tempfile.mkdtemp())
+    calls = tmp / "calls"
+    calls.touch()
+    ends = ends if ends is not None else {"t.a": [("0", 10), ("1", 20)], "t.b": [("0", 5)]}
+    go = tmp / "kafka-get-offsets"
+    rows = "".join(f"{t}:{p}:{o}\\n" for t, ps in ends.items() for p, o in ps)
+    go.write_text("#!/bin/bash\n" f'echo "GO $*" >> "{calls}"\n' f'for t in $@; do :; done; printf "{rows}"\n')
+    go.chmod(0o755)
+    committed = committed if committed is not None else {("t.a", "0"): "10", ("t.a", "1"): "20", ("t.b", "0"): "5"}
+    desc = "".join(f"{APP}  {t}  {p}  {o}  99  0\\n" for (t, p), o in committed.items())
+    kcg = tmp / "kafka-consumer-groups"
+    kcg.write_text(
+        "#!/bin/bash\n" f'echo "KCG $*" >> "{calls}"\n' 'case " $* " in\n'
+        f'  *" --state "*) if [ "{group_state}" = absent ]; then echo "Consumer group \'{APP}\' does not exist."; exit 1; fi;'
+        f' printf "GROUP  COORDINATOR  ASSIGNMENT-STRATEGY  STATE  #MEMBERS\\n{APP}  b:1 (1)  range  {group_state}  0\\n"; exit 0 ;;\n'
+        f'  *" --offsets "*) printf "GROUP TOPIC PARTITION CURRENT-OFFSET LOG-END-OFFSET LAG\\n{desc}"; exit 0 ;;\n'
+        '  *" --reset-offsets "*) exit 0 ;;\nesac\nexit 1\n')
+    kcg.chmod(0o755)
+    e = dict(os.environ, KAFKA_BOOTSTRAP_SERVERS="b:1", STRIKE_INVASION_APP_ID=APP, KAFKA_CONSUMER_GROUPS_CMD=str(kcg),
+             KAFKA_GET_OFFSETS_CMD=str(go), STRIKE_INVASION_SOURCE_TOPICS=" ".join(SRC), STATE_FILE=str(tmp / "state"))
+    e.update(env or {})
+    r = subprocess.run(["bash", str(GATE), mode], capture_output=True, text=True, env=e)
+    return r.returncode, r.stdout + r.stderr, calls.read_text().splitlines(), tmp / "state"
+
+
+class StartOffsetGate(unittest.TestCase):
+    def test_pin_commits_the_captured_end_offsets_from_a_file_and_records_them(self):
+        rc, out, calls, state = gate("pin")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(sorted(state.read_text().split()), ["t.a:0:10", "t.a:1:20", "t.b:0:5"])
+        self.assertTrue(any("--reset-offsets" in c and "--from-file" in c and "--execute" in c for c in calls), calls)
+
+    def test_pin_refuses_a_running_group_an_unreadable_topic_and_a_partitionless_answer(self):
+        rc, out, calls, _ = gate("pin", group_state="Stable")
+        self.assertEqual(rc, 1)
+        self.assertIn("ABORT", out)
+        self.assertFalse(any("--reset-offsets" in c for c in calls))
+        rc, out, calls, _ = gate("pin", ends={"t.a": [("0", 10)]})
+        self.assertEqual(rc, 1)
+        self.assertIn("no partitions returned for t.b", out)
+        self.assertFalse(any("--reset-offsets" in c for c in calls))
+
+    def test_verify_passes_only_when_every_partition_is_at_its_pinned_end_offset(self):
+        tmp_state = gate("pin")[3]
+        # reuse the pinned state file for the verify run
+        rc, out, _, _ = gate("verify", env={"STATE_FILE": str(tmp_state)})
+        self.assertEqual(rc, 0, out)
+        self.assertIn("start-offset gate OK", out)
+
+    def test_verify_aborts_on_any_difference_missing_partition_nonnumeric_or_absent_group(self):
+        state = gate("pin")[3]
+        cases = {
+            "different": {("t.a", "0"): "10", ("t.a", "1"): "19", ("t.b", "0"): "5"},
+            "missing": {("t.a", "0"): "10", ("t.b", "0"): "5"},
+            "nonnumeric": {("t.a", "0"): "10", ("t.a", "1"): "-", ("t.b", "0"): "5"},
+        }
+        for name, committed in cases.items():
+            rc, out, _, _ = gate("verify", committed=committed, env={"STATE_FILE": str(state)})
+            self.assertEqual(rc, 1, name)
+            self.assertIn("ABORT", out, name)
+            self.assertIn("MISMATCH", out, name)
+        rc, out, _, _ = gate("verify", group_state="absent", env={"STATE_FILE": str(state)})
+        self.assertEqual(rc, 1)
+        self.assertIn("deleted group restarts at 'latest'", out)
+        rc, out, _, _ = gate("verify", env={"STATE_FILE": "/nonexistent/none"})
+        self.assertEqual(rc, 1)
+        self.assertIn("no pinned offsets", out)
+        rc, out, _, _ = gate("verify", group_state="Stable", env={"STATE_FILE": str(state)})
+        self.assertEqual(rc, 1)
 
 
 def var(name: str) -> list[str]:
