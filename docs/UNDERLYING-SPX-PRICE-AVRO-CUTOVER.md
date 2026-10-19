@@ -173,3 +173,15 @@ No change needed: option-price-behavior (names the topic in an env var no code r
   `~/oe-ops/dl-mirror-dev-to-mac74/run-mirror.sh`, backup `run-mirror.sh.pre-spx-avro-20261019`). Both reported FLOWING.
 * Not rolled: services at 0 replicas on prod (hedging-pressure, spread-skew, dealer-ledger scorer, drop-classifier, strike-flow-classifier-databento at the time) still carry the old image; they
   must be rolled before anyone scales them up.
+
+### Execution evidence (auditable identity and commands)
+* **Schema identity:** record `com.optionsedge.contracts.hpsf.UnderlyingPrice`, registry subject `com.optionsedge.contracts.hpsf.UnderlyingPrice` (RecordNameStrategy), version 1, compatibility FULL, canonical file
+  sha256 `719c6589c62c0eeed9e2a5fa5459b98344e1a3f112b13e018a467851868ea41b` (contracts 0.27.0). Registry schema ids are per registry: dev 2056, production 2045, es4 2029, .74 2052. Each was created or confirmed by
+  `scripts/kafka/ensure-underlying-price-schema.sh` (it prints `id=… version=1`, `compatibility … FULL`, `latest … is the canonical schema`).
+* **Production manual wipe (commands, run over ssh on 192.168.100.252 with `/opt/kafka/current/bin`):** `kafka-topics.sh --describe` (TopicId must equal GzbDxB_vQ92ZKODUZl5PKw, else abort) ->
+  `--delete --topic underlying.spx.price` -> wait until absent from `--list` -> `--create --partitions 1 --replication-factor 1 --config cleanup.policy=delete --config retention.ms=-1 --config segment.bytes=1073741824 --config min.insync.replicas=1`
+  -> `--describe` (new TopicId 00xQIW3XR9GJQ7cVREYeSA, shape as created) -> end offset 21 after 20 s and the first record's bytes `00 00 00 07 fd` (magic 0, schema id 0x7fd = 2045). The script
+  `roll-forward-underlying-spx-price.sh` now carries this production shape (options-edge-deploy #1317), so the next production roll-forward uses the script, not these commands.
+* **Avro-only evidence on production:** at the end of the rollout every reader group (indicator-service-prod, greek-move-authenticity, spot-vol-regime, strike-invasion, strike-liquidity-heatmap, vol-premium) and the
+  `spx-price-mirror-es4` group sat at the log end; no reader logged `SerializationException`, `Unknown magic byte` or `Error retrieving Avro` in the preceding 30 minutes. The log holds only records written after the
+  recreate by the Avro feed (its first and last records were checked; the feed is the only writer: the JSON feed image was replaced before the wipe, and the byte-copy bridges are retired).
