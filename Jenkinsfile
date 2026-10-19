@@ -711,13 +711,13 @@ pipeline {
           # "/option-chain" == 200; "/api/config" == 200+provider when auth is off OR 401 when on), so the
           # verify is auth-on/off portable instead of false-failing on the (correct) 401.
           if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
-            # Default to the k8s web Service (LoadBalancer :8090, bound on localhost by
-            # docker-desktop ServiceLB on the native Mac agent). The dev web is exposed on
-            # :8090 (the legacy host Tomcat that previously owned :8090 was retired), which
-            # is the origin the feed-gateway (WS_ALLOWED_ORIGINS) and replay orchestrator
-            # (CORS) already trust — so the browser's live-data WS and replay work without
-            # per-port allow-list churn. Prod is unchanged (:8094 behind Cloudflare).
-            WEB_PUBLIC_URL="${WEB_PUBLIC_URL:-http://localhost:8090}" \
+            # Default to the dev box's LAN IP on :8090 (the k8s web Service, docker-desktop
+            # ServiceLB, binds 0.0.0.0:8090). The LAN IP — not localhost — so this smoke works
+            # whether the Jenkins agent is the dev host itself or a REMOTE agent verifying this
+            # dev box over the LAN. The dev web is exposed on :8090 (the legacy host Tomcat that
+            # owned :8090 was retired), the origin the feed-gateway (WS_ALLOWED_ORIGINS) and
+            # replay orchestrator (CORS) already trust. Prod is unchanged (:8094 behind Cloudflare).
+            WEB_PUBLIC_URL="${WEB_PUBLIC_URL:-http://${DEV_HOST_IP:-192.168.100.102}:8090}" \
               scripts/smoke/check-options-edge-web.sh
           else
             # The prod web app runs on the prod host (192.168.100.252), not the Jenkins agent;
@@ -747,9 +747,9 @@ pipeline {
               # promote step forwards the dev value); it always targets prod.
               WEB_BASE_URL="$WEB_PUBLIC_URL"
             elif [ "${ENVIRONMENT:-dev}" = "dev" ]; then
-              # k8s web Service on :8090 (localhost via docker-desktop ServiceLB) — same
-              # rationale as the Verify stage above (origin the gateway/orchestrator trust).
-              WEB_BASE_URL=http://localhost:8090
+              # k8s web Service on :8090 — the dev box's LAN IP (not localhost) so this is correct
+              # from a remote Jenkins agent too; same rationale as the Verify stage above.
+              WEB_BASE_URL=http://192.168.100.102:8090
             else
               WEB_BASE_URL=http://192.168.100.252:8094
             fi
