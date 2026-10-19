@@ -4,8 +4,11 @@
 # the Globex hours until the 09:30 ET cash open and writes them to ITS OWN topic options.indicators.estimate.bars. It never
 # writes options.indicators.bars, so market-structure, hunt and every other production consumer cannot see an estimate.
 # The container refuses to start unless INDICATOR_ESTIMATE_ENABLED=true and the runtime profile is not production.
-# It has no readiness probe on purpose: a problem in the estimate must never take the native indicator pod out of rotation;
-# its own liveness probe restarts only this container. Production overlays do not reference this file.
+# Isolation, stated exactly: the container has no readiness probe and the entrypoint halts the JVM when its loop fails, so
+# kubelet restarts ONLY this container (liveness covers a hung loop). A sidecar still shares the pod: while kubelet restarts
+# it, the pod's ContainersReady condition is briefly false and the (single) indicator-service endpoint leaves the Service;
+# the native indicator container itself keeps running and Kafka consumers are unaffected. Accepted for dev only.
+# Production overlays do not reference this file.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
