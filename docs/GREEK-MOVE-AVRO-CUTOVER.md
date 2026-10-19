@@ -23,7 +23,7 @@ processing commit `a08fab4a6`, already on processing main. That decoder tries `j
 does not refuse JSON, and that is harmless here only because the topic is wiped and then written by the Avro producer alone. Decode of a
 real `MoveAuthenticityVerdict` frame is pinned by `trade-evidence-api/tests/test_greek_move_auth_avro_reader.py` (processing PR 1175).
 Price fidelity: the writer refuses (never rounds) any price needing more than 18 fractional digits, a non-finite price or negative
-zero; the service drops such an input and counts it in `gma_malformed_total` (`GreekMoveAuthTopologyTest`), it does not crash-loop. Nothing reads `events` or archives either topic. `delta-flow-by-strike` is a JSON INPUT written by delta-flow-service;
+zero; the service drops such an input and counts it in `gma_malformed_records_total` (`GreekMoveAuthTopologyTest`), it does not crash-loop. Nothing reads `events` or archives either topic. `delta-flow-by-strike` is a JSON INPUT written by delta-flow-service;
 its conversion is scheduled in the next wave and `LegacyJsonDeltaFlowReader` (the only JSON read) must switch to Avro in lockstep.
 
 ## Order
