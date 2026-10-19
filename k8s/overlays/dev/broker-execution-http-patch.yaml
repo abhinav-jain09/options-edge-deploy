@@ -54,3 +54,8 @@ spec:
               value: "10"
             - name: BROKER_LIVE_EXECUTION_MAX_QUANTITY
               value: "1"
+            # Read-only Paper balance socket for the Order tab (own client id: not 31 nor the 32-50 fallbacks).
+            - name: BROKER_PAPER_BALANCE_ENABLED
+              value: "true"
+            - name: BROKER_PAPER_BALANCE_CLIENT_ID
+              value: "51"
