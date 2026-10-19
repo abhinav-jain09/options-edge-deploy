@@ -12,7 +12,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from stub_schema_registry import Registry, serve
+from tests.stub_schema_registry import Registry, serve
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "scripts/kafka/spx-price-mirror/SpxPriceAvroMirror.java"

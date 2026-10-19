@@ -11,7 +11,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from stub_schema_registry import Registry, serve
+from tests.stub_schema_registry import Registry, serve
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/kafka/ensure-indicator-schemas.sh"
