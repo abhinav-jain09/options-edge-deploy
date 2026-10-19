@@ -49,7 +49,9 @@ mirror_units:
   - pipeline: es-indicator-mirror
     slug_with_topic: true
     group_parts: [ip, topic]
-    offset_reset: latest
+    # earliest, matching Jenkinsfile.es-indicator-mirror:217. A mirror that starts at `latest`
+    # silently skips the history the target is being built to hold.
+    offset_reset: earliest
     isolation_level: ""
     # Jenkinsfile.es-indicator-mirror asserts the TARGET only: the partition count, and — for a
     # `delete` arm — that the target is NOT compacted. It asserts no retention and nothing about the
@@ -59,6 +61,14 @@ mirror_units:
         assert: { target: {parts: 1, not_compacted: true} }
       - name: es.options.indicators.bars
         assert: { target: {parts: 8, not_compacted: true} }
+      # SIGNALS_V1. Added to the Jenkinsfile's TOPIC allow-list (lines 182-183: both 1 partition,
+      # POLICY=delete) without this table following, which this gate could not report while it was
+      # unreachable behind an earlier failing step. "Nothing SERVED is compacted" — on every mirror
+      # target these are plain delete, so not_compacted holds for both.
+      - name: es.options.indicators.signals.current
+        assert: { target: {parts: 1, not_compacted: true} }
+      - name: es.options.indicators.signals.events
+        assert: { target: {parts: 1, not_compacted: true} }
 
   - pipeline: es-auction-mirror
     slug_with_topic: true
