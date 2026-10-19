@@ -18,6 +18,10 @@ class Registry:
         self.by_id: dict[int, str] = {}
         self.next_id = 100
         self.calls: list[str] = []
+        self.fail: list[tuple[str, str]] = []   # (METHOD, path-prefix) -> answer 500 (failure injection)
+
+    def injected(self, method: str, path: str) -> bool:
+        return any(method == m and path.startswith(p) for m, p in self.fail)
 
     def register(self, subject: str, schema: str, id: int | None = None, version: int | None = None):
         if id is None:
@@ -56,6 +60,8 @@ class Handler(BaseHTTPRequestHandler):
         r = self.registry
         p = self.path
         r.calls.append("GET " + p)
+        if r.injected("GET", p):
+            return self._send(500, {"error_code": 500, "message": "injected"})
         if p == "/mode":
             return self._send(200, {"mode": r.global_mode})
         if p.startswith("/mode/"):
@@ -103,6 +109,8 @@ class Handler(BaseHTTPRequestHandler):
         p = self.path
         body = self._body()
         r.calls.append(f"PUT {p} {json.dumps(body)}")
+        if r.injected("PUT", p):
+            return self._send(500, {"error_code": 500, "message": "injected"})
         if p.startswith("/mode/"):
             if not r.mutable:
                 return self._send(422, {"error_code": 42205, "message": "Mode changes are not allowed"})
@@ -130,6 +138,8 @@ class Handler(BaseHTTPRequestHandler):
         p = self.path
         body = self._body()
         r.calls.append(f"POST {p} " + ("{schema…}" if "schema" in body else json.dumps(body)))
+        if r.injected("POST", p):
+            return self._send(500, {"error_code": 500, "message": "injected"})
         if p.startswith("/subjects/") and p.endswith("/versions"):
             s = p[len("/subjects/"):-len("/versions")]
             if "id" in body:
