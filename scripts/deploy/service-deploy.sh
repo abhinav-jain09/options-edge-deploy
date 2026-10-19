@@ -242,6 +242,10 @@ for _claim in $(yq -r 'select(.kind == "Deployment") | .spec.template.spec.volum
 done
 
 # --- §13.7 digest-pin the image (fail-closed via the shared resolver) -----------------
+# The dev images are named host.docker.internal:5001/... (resolved by kubelet ON the dev host). On a REMOTE
+# Jenkins agent that name is the agent's own loopback, so read the digest over the LAN at the dev box's IP
+# (same default as apply.sh; override with DEV_HOST_IP or REGISTRY_RESOLVE_HOST).
+if [ "${ENVIRONMENT:-dev}" = "dev" ]; then export REGISTRY_RESOLVE_HOST="${REGISTRY_RESOLVE_HOST:-${DEV_HOST_IP:-192.168.100.102}:5001}"; else unset REGISTRY_RESOLVE_HOST; fi
 . scripts/deploy/pin-image.sh
 PINNED_IMAGE="$(pin_ref "$MUTABLE_IMAGE")" || {
   echo "FATAL: cannot resolve registry digest for $MUTABLE_IMAGE (is the image built + pushed for $ENVIRONMENT?)" >&2
