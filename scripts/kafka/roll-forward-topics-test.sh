@@ -67,7 +67,7 @@ mk() { # <topic> <id> <parts> <rf> <cfg lines...>
   shift 4; printf '%s\n' "$@" > "$TMP/state/$t/cfg"
 }
 reset() { rm -rf "$TMP/state" "$TMP/shapes"; mkdir -p "$TMP/state"; }
-logn() { wc -l < "$TMP/state/log" 2>/dev/null | tr -d ' ' || echo 0; }
+logn() { { cat "$TMP/state/log" 2>/dev/null || true; } | wc -l | tr -d " "; }
 two() { reset; mk a.one OLDA 1 1 "cleanup.policy=[compact,delete]" "retention.ms=-1" "min.insync.replicas=1"; mk b.two OLDB 32 1 "cleanup.policy=delete" "retention.ms=86400000"; mk c.three OLDC 4 1 "segment.bytes=1073741824"; }
 STOP=(--writers-and-readers-stopped)
 LIVE=(--avro-writer-live --json-writers-stopped)
