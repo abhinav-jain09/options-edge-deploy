@@ -188,6 +188,28 @@ run_spot_reader() { # <wall-clock limit s> <reader args...>
   if [ -n "$SPOT_READER" ]; then timeout "$limit" "$SPOT_READER" "$@"; return; fi
   INDICATOR_READER_SRC="$SPOT_READER_SRC" INDICATOR_READER="" run_indicator_reader "$limit" "$@"
 }
+# options.spx.strike-invasion.events turns Avro at its cutover (docs/STRIKE-INVASION-AVRO-CUTOVER.md); until then the
+# topic is JSON and the console consumer archives it, so this list ships EMPTY. THE SWITCH, performed at the cutover step
+# (after the topic is wiped and recreated under Avro, before the first run that reads it): set
+# OE_INVASION_AVRO_TOPICS="options.spx.strike-invasion.events" in the archive environment on the archive host (the cron
+# line that archives it). The topic is then captured through StrikeInvasionEventsArchiveReader.java, which decodes the
+# twelve event record types and writes the SAME line layout with the value rendered as the JSON-era text
+# (StrikeInvasionJson.eventJson; tombstone = null). The topic is not a committed-read topic, so it takes the same
+# console-consumer-shaped branch as spot. A topic must not be in this list and another Avro list (each reader decodes
+# its own record types): the run refuses. The reader shares the indicator reader's JDK and contracts jar.
+OE_INVASION_AVRO_TOPICS="${OE_INVASION_AVRO_TOPICS:-}"
+is_invasion_avro_topic() { case " $OE_INVASION_AVRO_TOPICS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+for _t in $OE_INVASION_AVRO_TOPICS; do
+  if is_indicator_avro_topic "$_t"; then echo "FATAL: $_t is in both OE_INVASION_AVRO_TOPICS and OE_INDICATOR_AVRO_TOPICS" >&2; exit 2; fi
+  case " $OE_SPOT_AVRO_TOPICS " in *" $_t "*) echo "FATAL: $_t is in both OE_INVASION_AVRO_TOPICS and OE_SPOT_AVRO_TOPICS" >&2; exit 2 ;; esac
+done
+INVASION_READER="${INVASION_READER:-}"   # test seam: an executable taking the reader's arguments
+INVASION_READER_SRC="${INVASION_READER_SRC:-$(cd "$(dirname "$0")" && pwd)/StrikeInvasionEventsArchiveReader.java}"
+run_invasion_reader() { # <wall-clock limit s> <reader args...>
+  local limit="$1"; shift
+  if [ -n "$INVASION_READER" ]; then timeout "$limit" "$INVASION_READER" "$@"; return; fi
+  INDICATOR_READER_SRC="$INVASION_READER_SRC" INDICATOR_READER="" run_indicator_reader "$limit" "$@"
+}
 # THE RECORD LAYOUT OF A COMMITTED-READ FILE. The reader writes "<ts>\tPartition:<p>\tOffset:<o>\t<key>\t<value>",
 # and every committed-read topic KEEPS that Offset column. It is the record's only coordinate on the ledger, and a
 # calibration loader cannot do without it: (deploy #1041 review, engine #44) a run that publishes a file and dies
@@ -1172,6 +1194,11 @@ for topic in $TOPICS; do
       # its checkpoints. Verify by COUNTING what actually landed, then commit.
       if is_spot_avro_topic "$topic"; then
         run_spot_reader 900 --bootstrap "$BOOTSTRAP" --registry "$(archive_registry_url "${OE_SPOT_REGISTRY_URL:-}")" \
+             --topic "$topic" --partition "$part" --from "$from" --count "$count" --timeout-ms 60000 \
+             $(is_strict_topic "$topic" && echo "--print-offset") 2>/dev/null | grep -av '^Processed a total of' | gzip -6 > "$tmp"
+        pipe_rc=("${PIPESTATUS[@]}")
+      elif is_invasion_avro_topic "$topic"; then
+        run_invasion_reader 900 --bootstrap "$BOOTSTRAP" --registry "$(archive_registry_url "${OE_INVASION_REGISTRY_URL:-}")" \
              --topic "$topic" --partition "$part" --from "$from" --count "$count" --timeout-ms 60000 \
              $(is_strict_topic "$topic" && echo "--print-offset") 2>/dev/null | grep -av '^Processed a total of' | gzip -6 > "$tmp"
         pipe_rc=("${PIPESTATUS[@]}")
