@@ -96,6 +96,10 @@ spec:
               value: "10"
             - name: BROKER_LIVE_EXECUTION_MAX_QUANTITY
               value: "1"
+            - name: BROKER_PAPER_BALANCE_ENABLED
+              value: "true"
+            - name: BROKER_PAPER_BALANCE_CLIENT_ID
+              value: "51"
             - name: SERVER_PORT
               value: "8131"
             - name: JAVA_TOOL_OPTIONS
