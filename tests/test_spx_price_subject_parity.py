@@ -12,6 +12,8 @@ SUBJECT = "com.optionsedge.contracts.hpsf.UnderlyingPrice"
 
 
 def run(a: Registry, b: Registry):
+    for r in (a, b):
+        r.configs.setdefault(SUBJECT, "FULL")
     (s1, u1), (s2, u2) = serve(a), serve(b)
     try:
         r = subprocess.run(["bash", str(SCRIPT), u1, u2], capture_output=True, text=True)
@@ -30,6 +32,28 @@ class SubjectParity(unittest.TestCase):
         self.assertIn("source id 77", out)
         self.assertIn("target id 9", out)
         self.assertFalse([c for c in b.calls if c.startswith(("POST", "PUT"))])
+
+    def test_compatibility_must_be_full_on_both_registries(self):
+        for which in (0, 1):
+            a, b = Registry(), Registry()
+            a.register(SUBJECT, SCHEMA, id=77); b.register(SUBJECT, SCHEMA, id=9)
+            a.configs[SUBJECT] = "FULL"; b.configs[SUBJECT] = "FULL"
+            [a, b][which].configs[SUBJECT] = "BACKWARD"
+            rc, out = run(a, b)
+            self.assertNotEqual(rc, 0, out)
+            self.assertIn("FULL", out)
+
+    def test_compatibility_not_configured_on_the_subject_fails(self):
+        a, b = Registry(), Registry()
+        a.register(SUBJECT, SCHEMA, id=77); b.register(SUBJECT, SCHEMA, id=9)
+        a.configs[SUBJECT] = "FULL"   # b has no subject-level config (the global default is not enough)
+        (s1, u1), (s2, u2) = serve(a), serve(b)
+        try:
+            r = subprocess.run(["bash", str(SCRIPT), u1, u2], capture_output=True, text=True)
+        finally:
+            s1.shutdown(); s2.shutdown()
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("FULL compatibility", r.stdout)
 
     def test_subject_absent_on_the_target_fails(self):
         a, b = Registry(), Registry()
@@ -64,6 +88,8 @@ else:
 
 
 def retained(a, b, frames, begin=0, end=10):
+    for r in (a, b):
+        r.configs.setdefault(SUBJECT, "FULL")
     import tempfile
     d = Path(tempfile.mkdtemp()); (d / "sc.json").write_text(json.dumps({"begin": begin, "end": end, "frames": frames}))
     for n in ("kafka-get-offsets", "kafka-console-consumer"):

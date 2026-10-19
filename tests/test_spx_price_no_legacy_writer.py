@@ -9,17 +9,17 @@ d = os.path.dirname(os.path.abspath(sys.argv[0])); st = os.path.join(d, "n")
 n = int(open(st).read()) if os.path.exists(st) else 0
 open(st, "w").write(str(n + 1))
 ends = os.environ["ENDS"].split(",")
-print("tgt:0:" + ends[min(n, len(ends) - 1)])
+print(sys.argv[sys.argv.index("--topic") + 1] + ":0:" + ends[min(n, len(ends) - 1)])
 '''
 
 
-def run(ps, ends="5,5"):
+def run(ps, ends="5,5", bs="b:9092", topic="tgt"):
     d = pathlib.Path(tempfile.mkdtemp())
     (d / "kafka-get-offsets").write_text(GO); os.chmod(d / "kafka-get-offsets", 0o755)
     (d / "sleep").write_text("#!/bin/bash\nexit 0\n"); os.chmod(d / "sleep", 0o755)
     (d / "ps.sh").write_text("#!/bin/bash\ncat <<'EOT'\n" + ps + "\nEOT\n"); os.chmod(d / "ps.sh", 0o755)
     env = dict(os.environ, PATH=f"{d}:{os.environ['PATH']}", PS_CMD=str(d / "ps.sh"), ENDS=ends)
-    r = subprocess.run(["bash", str(SCRIPT), "b:9092", "tgt", str(d)], capture_output=True, text=True, env=env)
+    r = subprocess.run(["bash", str(SCRIPT), bs, topic, str(d)], capture_output=True, text=True, env=env)
     return r.returncode, r.stdout + r.stderr
 
 
@@ -37,7 +37,15 @@ class NoLegacyWriter(unittest.TestCase):
 
     def test_the_es4_bridge_process_fails(self):
         self.assertEqual(run("/bin/bash /Users/abhinav/oe-ops/spx-es4-bridge/run.sh")[0], 1)
-        self.assertEqual(run("kafka-console-producer --topic es.underlying.spx.price")[0], 1)
+
+    def test_a_console_producer_into_the_target_topic_fails_for_both_targets(self):
+        es4 = "/x/bin/kafka-console-producer --bootstrap-server 192.168.100.4:9092 --topic es.underlying.spx.price"
+        m74 = "java -cp x kafka.tools.ConsoleProducer --bootstrap-server 192.168.100.74:9092 --topic underlying.spx.price"
+        self.assertEqual(run(es4, bs="192.168.100.4:9092", topic="es.underlying.spx.price")[0], 1)
+        self.assertEqual(run(m74, bs="192.168.100.74:9092", topic="underlying.spx.price")[0], 1)
+        # the same producer aimed at the OTHER broker or another topic is not this target's writer
+        self.assertEqual(run(es4, bs="192.168.100.74:9092", topic="underlying.spx.price")[0], 0)
+        self.assertEqual(run("kafka-console-producer --bootstrap-server 192.168.100.74:9092 --topic other.topic", bs="192.168.100.74:9092", topic="underlying.spx.price")[0], 0)
 
     def test_an_advancing_target_fails_with_a_clean_process_list(self):
         rc, out = run(QUIET, ends="5,9")

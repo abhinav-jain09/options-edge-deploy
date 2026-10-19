@@ -3,7 +3,7 @@
 # Run BEFORE the new mirror is installed. A byte copier that is still alive writes source-registry ids into the target, and an edited script does not
 # stop a process that is already running. Two independent proofs:
 #   1. PROCESS: no running process (ps, this host is the MirrorMaker/bridge host) carries a MirrorMaker --whitelist naming underlying.spx.price, runs the
-#      spx-es4-bridge, or pipes a console producer into es.underlying.spx.price;
+#      spx-es4-bridge, or runs a console producer that writes THIS target topic on THIS target broker (both targets);
 #   2. BEHAVIOUR: the target topic's end offset does not advance over WAIT_S (default 30) with no mirror of ours installed. A topic fed by a
 #      legitimate low-rate writer is not the case here: the only writers of this topic are the feed (source side) and the mirror.
 # PS_CMD overrides `ps -axo command` for the tests.
@@ -11,7 +11,10 @@ set -euo pipefail
 BS="${1:?}"; TOPIC="${2:?}"; KBIN="${3:?}"
 WAIT="${WAIT_S:-30}"
 procs=$(${PS_CMD:-ps -axo command}) || { echo "FAIL: cannot list processes"; exit 1; }
-hit=$(printf '%s\n' "$procs" | grep -E "MirrorMaker.*underlying(\\\\[.]|\[[.]\]|[.])spx(\\\\[.]|\[[.]\]|[.])price(\$|[^-.A-Za-z\\\\[])|spx-es4-bridge|kafka-console-producer.*es[.]underlying[.]spx[.]price" | grep -v "assert-no-legacy-writer" || true)
+legacy=$(printf '%s\n' "$procs" | grep -E "MirrorMaker.*underlying(\\\\[.]|\[[.]\]|[.])spx(\\\\[.]|\[[.]\]|[.])price(\$|[^-.A-Za-z\\\\[])|spx-es4-bridge" || true)
+# a console producer writing THIS target topic on THIS target broker (es4: es.underlying.spx.price on .4; mac74: underlying.spx.price on .74)
+writers=$(printf '%s\n' "$procs" | grep -E "kafka-console-producer|kafka[.]tools[.]ConsoleProducer" | grep -F -- "$TOPIC" | grep -F -- "${BS%:*}" || true)
+hit=$(printf '%s\n%s\n' "$legacy" "$writers" | grep -v '^$' | grep -v "assert-no-legacy-writer" || true)
 if [ -n "$hit" ]; then
   echo "FAIL: a legacy byte copier of underlying.spx.price is RUNNING:"; printf '%s\n' "$hit" | cut -c1-200 | sed 's/^/      /'
   echo "      Stop it (edit its whitelist AND restart the unit; an edited script does not stop a running process), then re-run."

@@ -14,6 +14,12 @@ a=$(curl -sS -m 20 -w $'\n%{http_code}' "${SRC%/}/subjects/$SUBJECT/versions/lat
 b=$(curl -sS -m 20 -w $'\n%{http_code}' "${TGT%/}/subjects/$SUBJECT/versions/latest") || { echo "FAIL: $TGT unreachable"; exit 1; }
 [ "${a##*$'\n'}" = 200 ] || { echo "FAIL: subject $SUBJECT absent on source registry $SRC"; exit 1; }
 [ "${b##*$'\n'}" = 200 ] || { echo "FAIL: subject $SUBJECT absent on target registry $TGT (the mirror never registers; run ensure-underlying-price-schema.sh there)"; exit 1; }
+for reg in "$SRC" "$TGT"; do
+  c=$(curl -sS -m 20 -w $'\n%{http_code}' "${reg%/}/config/$SUBJECT") || { echo "FAIL: $reg unreachable"; exit 1; }
+  [ "${c##*$'\n'}" = 200 ] && printf '%s' "${c%$'\n'*}" | grep -q '"compatibilityLevel" *: *"FULL"' \
+    || { echo "FAIL: $SUBJECT on $reg does not have FULL compatibility configured on the subject itself (GET /config/$SUBJECT); run ensure-underlying-price-schema.sh"; exit 1; }
+  echo "  $reg: $SUBJECT compatibility FULL"
+done
 python3 - "${a%$'\n'*}" "${b%$'\n'*}" <<'PY'
 import json, sys
 def structural(x):
