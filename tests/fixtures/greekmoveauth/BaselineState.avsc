@@ -1,0 +1,26 @@
+{
+  "type": "record",
+  "name": "BaselineState",
+  "namespace": "com.optionsedge.contracts.greekmoveauth",
+  "doc": "INTERNAL Kafka Streams gma-baseline-store value: the robust-z baseline of one symbol and greek. Not a topic contract; committed so the serde is never service-local.",
+  "fields": [
+    {
+      "name": "session",
+      "type": "string"
+    },
+    {
+      "name": "prior",
+      "type": {
+        "type": "array",
+        "items": "double"
+      }
+    },
+    {
+      "name": "cur",
+      "type": {
+        "type": "array",
+        "items": "double"
+      }
+    }
+  ]
+}

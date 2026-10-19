@@ -1,0 +1,25 @@
+{
+  "type": "record",
+  "name": "SpotFrameEvent",
+  "namespace": "com.optionsedge.contracts.greekmoveauth",
+  "doc": "INTERNAL Kafka Streams frame-rekey repartition record carrying one spot tick. Not a topic contract; committed so the serde is never service-local. price is decimal(38,18) (HALF_EVEN to 18 places).",
+  "fields": [
+    {
+      "name": "symbol",
+      "type": "string"
+    },
+    {
+      "name": "price",
+      "type": {
+        "type": "bytes",
+        "logicalType": "decimal",
+        "precision": 38,
+        "scale": 18
+      }
+    },
+    {
+      "name": "eventMs",
+      "type": "long"
+    }
+  ]
+}
