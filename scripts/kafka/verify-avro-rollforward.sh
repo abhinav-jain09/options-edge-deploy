@@ -124,7 +124,17 @@ while IFS='|' read -r -u 3 topic parts cfgs pre_id; do
       # `|| wrc=$?` and not a bare call: under `set -e` a non-zero return from the check would abort
       # the script before the diagnosis below could print — the failure would be a silent exit 1.
       wrc=0
-      rf_wire_is_avro "$CC" "$BS" "$topic" "$pnum" "$off" || wrc=$?
+      # The LATEST end is probed with the walk-back variant, not with a fixed read. The offset below
+      # the high watermark is frequently a transaction commit marker, which no isolation level
+      # delivers, so a fixed read there returns nothing and the topic would be failed as
+      # unverifiable while every value in it is correct Avro — that refusal blocked the production
+      # gamma rollout twice on 19 Oct. The earliest end keeps the fixed read: there, nothing
+      # delivered means the record was compacted away, which is evidence of nothing.
+      if [ "$label" = "latest" ]; then
+        rf_wire_is_avro_at_log_end "$CC" "$BS" "$topic" "$pnum" "$off" "$p_early" || wrc=$?
+      else
+        rf_wire_is_avro "$CC" "$BS" "$topic" "$pnum" "$off" || wrc=$?
+      fi
       case $wrc in
         0) parts_checked=$((parts_checked + 1)) ;;
         1) echo "FAIL: $topic partition $pnum holds a NON-AVRO value at its $label offset ($off)." >&2
@@ -133,7 +143,11 @@ while IFS='|' read -r -u 3 topic parts cfgs pre_id; do
            wire_ok=0 ;;
         2) # Compaction can remove the record AT an offset; that is not evidence of anything.
            [ "$label" = "earliest" ] && continue
-           echo "FAIL: $topic partition $pnum could not be read at its $label offset ($off)." >&2
+           echo "FAIL: $topic partition $pnum delivered NO record in the ${RF_LOG_END_PROBE_BACK:-8}" >&2
+           echo "      offsets ending at its $label offset ($off), so the wire format at the log end" >&2
+           echo "      is unverified. Transaction markers alone cannot fill that window; a writer" >&2
+           echo "      that is down with an empty-transaction loop, or a probe window too small for" >&2
+           echo "      this topic, can. Refusing rather than assuming Avro." >&2
            wire_ok=0 ;;
       esac
     done
