@@ -48,5 +48,63 @@ class SubjectParity(unittest.TestCase):
         self.assertIn("differs", out)
 
 
+STUB = r'''#!/usr/bin/env python3
+import json, os, sys
+name = os.path.basename(sys.argv[0]); argv = sys.argv[1:]
+sc = json.load(open(os.environ["SC"]))
+arg = lambda f: argv[argv.index(f) + 1] if f in argv else None
+t = arg("--topic")
+if name == "kafka-get-offsets":
+    k = "begin" if arg("--time") == "-2" else "end"
+    print(f"{t}:0:{sc[k]}")
+else:
+    off = int(arg("--offset"))
+    sys.stdout.buffer.write(bytes.fromhex(sc["frames"][str(off)]) + b"x\\n")
+'''
+
+
+def retained(a, b, frames, begin=0, end=10):
+    import tempfile
+    d = Path(tempfile.mkdtemp()); (d / "sc.json").write_text(json.dumps({"begin": begin, "end": end, "frames": frames}))
+    for n in ("kafka-get-offsets", "kafka-console-consumer"):
+        (d / n).write_text(STUB); os.chmod(d / n, 0o755)
+    (s1, u1), (s2, u2) = serve(a), serve(b)
+    try:
+        r = subprocess.run(["bash", str(SCRIPT), u1, u2, "b:9092", "underlying.spx.price", str(d)], capture_output=True, text=True, env=dict(os.environ, SC=str(d / "sc.json")))
+    finally:
+        s1.shutdown(); s2.shutdown()
+    return r.returncode, r.stdout + r.stderr
+
+
+class RetainedRecords(unittest.TestCase):
+    def regs(self, extra_source_schema=None):
+        a, b = Registry(), Registry()
+        a.register(SUBJECT, SCHEMA, id=77)
+        b.register(SUBJECT, SCHEMA, id=9)
+        return a, b
+
+    def test_earliest_and_newest_ids_present_on_the_target_pass(self):
+        a, b = self.regs()
+        rc, out = retained(a, b, {"0": "000000004d", "9": "000000004d"})
+        self.assertEqual(rc, 0, out)
+        self.assertIn("schema id 77: present", out)
+
+    def test_an_older_version_on_the_source_missing_on_the_target_fails(self):
+        a, b = Registry(), Registry()
+        old = json.loads(SCHEMA); old["fields"] = old["fields"][:-1]
+        a.register(SUBJECT, json.dumps(old), id=70)
+        a.register(SUBJECT, SCHEMA, id=77)
+        b.register(SUBJECT, SCHEMA, id=9)
+        rc, out = retained(a, b, {"0": "0000000046", "9": "000000004d"})
+        self.assertNotEqual(rc, 0)
+        self.assertIn("schema id 70 has no byte-identical schema", out)
+
+    def test_json_at_the_start_of_the_source_fails(self):
+        a, b = self.regs()
+        rc, out = retained(a, b, {"0": "7b227379", "9": "000000004d"})
+        self.assertNotEqual(rc, 0)
+        self.assertIn("not Confluent-framed", out)
+
+
 if __name__ == "__main__":
     unittest.main()

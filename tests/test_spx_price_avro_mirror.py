@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 import unittest
 from decimal import Decimal
 from pathlib import Path
@@ -109,15 +110,38 @@ class SpxPriceAvroMirrorTest(unittest.TestCase):
         self.assertEqual(out, "")
 
 
+@unittest.skipUnless(HAVE_JAVA, "needs java and the Confluent 7.3.1 serializer jars (CONFLUENT=...)")
+class MirrorStepBehaviour(unittest.TestCase):
+    """SpxPriceAvroMirror.step through kafka-clients MockConsumer/MockProducer (no broker): key bytes, headers, source timestamp,
+    re-encoded value, send -> flush -> commit order, and the stops (tombstone, JSON, failed produce) that must not commit."""
+
+    def test_step_preserves_key_headers_timestamp_and_commits_after_flush(self):
+        src, tgt = Registry(), Registry()
+        src.register(SUBJECT, SCHEMA, id=77)
+        tgt.register("unrelated-subject", json.dumps({"type": "string"}), id=3)
+        tgt.register(SUBJECT, SCHEMA, id=9)
+        (s1, u1), (s2, u2) = serve(src), serve(tgt)
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                c = subprocess.run(["javac", "-proc:none", "-cp", CP, "-d", d, str(SOURCE), str(ROOT / "tests/java/SpxPriceAvroMirrorStepTest.java")],
+                                   capture_output=True, text=True, timeout=120)
+                self.assertEqual(c.returncode, 0, c.stderr)
+                r = subprocess.run(["java", "-cp", f"{d}:{CP}", "SpxPriceAvroMirrorStepTest", u1, u2, framed(77).hex(), framed(9).hex()],
+                                   capture_output=True, text=True, timeout=120)
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                self.assertIn("OK", r.stdout)
+        finally:
+            s1.shutdown()
+            s2.shutdown()
+
+
 class MirrorSourceContract(unittest.TestCase):
-    def test_the_mirror_never_registers_and_commits_after_the_flush(self):
+    def test_the_mirror_never_registers(self):
         text = SOURCE.read_text()
         self.assertIn('"auto.register.schemas", false', text)
         self.assertIn('"use.latest.version", false', text)
         self.assertIn("RecordNameStrategy", text)
         self.assertLess(text.index("producer.flush()"), text.index("consumer.commitSync()"))
-        self.assertIn("r.timestamp()", text)
-        self.assertIn("r.key()", text)
 
 
 if __name__ == "__main__":

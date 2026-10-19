@@ -39,6 +39,12 @@ class SpxPriceMirrorJob(unittest.TestCase):
         self.assertRegex(SCOPE, r"(?m)^Jenkinsfile\.spx-price-reencoder\s+\| in ")
         self.assertIn("bash scripts/jenkins/permitted-sha-guard.sh", JOB)
 
+    def test_preflight_gates_are_wired(self):
+        self.assertIn('assert-timestamp-type.sh" "$TGT_BS" "$TGT_TOPIC"', JOB)
+        self.assertIn('"$SRC_REG" "$TGT_REG" "$SRC_BS" "$SRC_TOPIC"', JOB)
+        self.assertRegex(JOB, r'CHECK_FIRST=true ALLOW_EMPTY=true bash "scripts/kafka/spx-price-mirror/verify-target-record\.sh" "\$SRC_BS"')
+        self.assertRegex(JOB, r'CHECK_FIRST=true ALLOW_EMPTY=true bash "scripts/kafka/spx-price-mirror/verify-target-record\.sh" "\$TGT_BS"')
+
     def test_the_mm1_whitelist_guard_matches_only_the_spot_topic(self):
         m = re.search(r"grep -qE '([^']*underlying[^']*)'", JOB)
         pattern = m.group(1).replace("\\\\", "\\")   # Groovy hands \\ to the shell as one backslash

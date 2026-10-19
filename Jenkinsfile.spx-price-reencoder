@@ -126,7 +126,7 @@ pipeline {
           [ -n "$JH" ] || { echo "FAIL: no JDK found"; exit 1; }
           export JAVA_HOME="$JH"; export PATH="$JAVA_HOME/bin:$PATH"
           # 2. Both registries carry the subject in the same shape (the mirror never registers; ids may differ).
-          bash "scripts/kafka/spx-price-mirror/assert-subject-parity.sh" "$SRC_REG" "$TGT_REG"
+          bash "scripts/kafka/spx-price-mirror/assert-subject-parity.sh" "$SRC_REG" "$TGT_REG" "$SRC_BS" "$SRC_TOPIC" "$CONFLUENT/bin"
 
           # 3. Both topics exist and every partition is led; the TARGET holds no retained JSON (earliest AND newest record of every
           #    non-empty partition are framed Avro whose id resolves to the subject on the TARGET registry).
@@ -139,8 +139,9 @@ pipeline {
             [ "$bad" -eq 0 ] || { echo "FAIL: $t on $bs has $bad partition(s) without a leader"; exit 1; }
             echo "  $side topic $t on $bs: $parts partition(s), all led"
           done
+          bash "scripts/kafka/spx-price-mirror/assert-timestamp-type.sh" "$TGT_BS" "$TGT_TOPIC" "$CONFLUENT/bin"
           CHECK_FIRST=true ALLOW_EMPTY=true bash "scripts/kafka/spx-price-mirror/verify-target-record.sh" "$TGT_BS" "$TGT_REG" "$TGT_TOPIC" "$CONFLUENT/bin"
-          ALLOW_EMPTY=true bash "scripts/kafka/spx-price-mirror/verify-target-record.sh" "$SRC_BS" "$SRC_REG" "$SRC_TOPIC" "$CONFLUENT/bin"
+          CHECK_FIRST=true ALLOW_EMPTY=true bash "scripts/kafka/spx-price-mirror/verify-target-record.sh" "$SRC_BS" "$SRC_REG" "$SRC_TOPIC" "$CONFLUENT/bin"
 
           # 4. Compile check of the mirror against the installed jars, then report the durable group's position.
           CP="$CONFLUENT/share/java/kafka/*:$CONFLUENT/share/java/kafka-serde-tools/*:$CONFLUENT/share/java/confluent-common/*"

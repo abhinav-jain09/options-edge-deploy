@@ -61,7 +61,7 @@ class VerifyTargetRecord(unittest.TestCase):
     def test_json_fails(self):
         rc, out = run({"0": part("7b227379")}, {})
         self.assertNotEqual(rc, 0)
-        self.assertIn("JSON writer or a byte copy", out)
+        self.assertIn("a JSON writer", out)
 
     def test_an_id_that_means_another_subject_on_the_target_fails(self):
         rc, out = run({"0": part("000000004d")}, {"77": "some.other.Record"})
@@ -73,12 +73,24 @@ class VerifyTargetRecord(unittest.TestCase):
         self.assertNotEqual(rc, 0)
         self.assertIn("could not decode", out)
 
+    def test_earliest_record_is_fully_decoded_not_just_byte_zero(self):
+        # framed (byte 0 = 00) but its id means another subject on the registry, or it does not decode
+        bad_id = {"0": part("0000000009", first="00000000aa")}
+        rc, out = run(bad_id, {"9": SUBJECT, "170": "some.other.Record"}, check_first=True)
+        self.assertNotEqual(rc, 0)
+        self.assertIn("@0: schema id 170 does not resolve", out)
+
+    def test_a_tombstone_newest_record_fails(self):
+        rc, out = run({"0": part("6e756c6c")}, {})   # the console consumer prints a null value as the text null
+        self.assertNotEqual(rc, 0)
+        self.assertIn("tombstone", out)
+
     def test_retained_json_before_avro_is_caught_only_by_the_earliest_record_check(self):
         mixed = {"0": part("0000000009", first="7b22")}
         self.assertEqual(run(mixed, {"9": SUBJECT})[0], 0, "the newest-record check alone cannot see it")
         rc, out = run(mixed, {"9": SUBJECT}, check_first=True)
         self.assertNotEqual(rc, 0)
-        self.assertIn("retained JSON", out)
+        self.assertIn("@0: not Confluent-framed", out)
 
     def test_an_empty_topic_fails_unless_the_caller_allows_it(self):
         self.assertNotEqual(run({"0": part("00", 4, 4)}, {})[0], 0)

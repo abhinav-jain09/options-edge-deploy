@@ -88,15 +88,19 @@ Install order (per target), after the source topic is Avro (cutover step 5-7 of 
 3. `mac74` only: delete the `underlying\.spx\.price|` alternative from the MM1 `--whitelist` and restart `com.optionsedge.dl-mirror-dev-to-mac74`. The Preflight reads that file and
    FAILS while the alternative is present (two writers, one copying source ids). The old group `oe-mac74-input-from-dev` keeps a stale committed offset on the topic; it is harmless and
    is not the mirror's group.
-4. Run the job (`PERMITTED_SHA` = `git rev-parse origin/main`). Preflight: brokers reachable; no second writer; the subject is on BOTH registries in the same shape (ids may differ,
-   `assert-subject-parity.sh`); both topics exist and are led; the target holds no retained JSON and its ids resolve on the target registry; the mirror compiles against the installed jars.
-   Install, then Verify (60 s window): the group holds committed offsets; if the target advanced, the newest target record on every partition is Confluent-framed Avro whose schema id resolves to
-   `com.optionsedge.contracts.hpsf.UnderlyingPrice` ON THE TARGET REGISTRY and decodes there (`verify-target-record.sh`; a byte copy would fail this); source advanced with the target flat is
-   a FAIL; both flat (market closed) is UNSTABLE, flow not proven: re-run while the feed produces.
+4. Run the job (`PERMITTED_SHA` = `git rev-parse origin/main`). Exactly what is verified:
+   * Preflight: brokers reachable; no second writer; the subject is on BOTH registries with the same LATEST shape (ids may differ); the EARLIEST and the NEWEST retained record of every
+     non-empty source partition name a schema id whose text is byte-identical (canonical JSON) to a version registered under the subject on the TARGET registry; both topics exist and are led;
+     the target topic's `message.timestamp.type` is `CreateTime` (otherwise the source timestamp is overwritten by the broker); on BOTH topics the EARLIEST and the NEWEST record of every
+     non-empty partition is Confluent-framed Avro whose id resolves to the subject on that topic's registry AND deserializes there (JSON, a tombstone or a foreign id fails);
+     the mirror compiles against the installed jars. NOT verified: records between the earliest and the newest; a mid-log record written under an older compatible schema version is caught by the
+     mirror's own fail-closed stop (the target serializer cannot find its schema, the mirror exits and the group does not advance).
+   * Null values: this topic declares no tombstones, so a null value STOPS the mirror (and fails the verifier); it is never copied.
+   * Verify (60 s): the group holds committed offsets; target advanced -> earliest and newest target records fully decoded under the target registry (a byte copy fails this); source advanced with the
+     target flat is a FAIL; both flat (market closed) is UNSTABLE, flow not proven: re-run while the feed produces.
 5. es4 only, after FLOWING: es4 readers (es-cvd, es-amt, gamma-ladder-path, context-tape) already select Avro by the resolved topic name; verify each as in step 8 against `es.underlying.spx.price`.
-Tests: `tests/test_spx_price_avro_mirror.py` (the real tool through two stub registries whose ids differ: target id replaces source id, payload unchanged, JSON/unknown/foreign/unregistered refused),
-`test_spx_price_verify_target_record.py`, `test_spx_price_subject_parity.py`, `test_spx_price_mirror_job.py`. Not exercised by any test: a live broker round trip (key, headers and timestamp
-preservation are asserted on the source text only); the first install on each target is that proof, via Verify.
+Tests: `tests/test_spx_price_avro_mirror.py` (the real tool through two stub registries whose ids differ: target id replaces source id, payload unchanged, JSON/unknown/foreign/unregistered refused; plus `tests/java/SpxPriceAvroMirrorStepTest.java` on kafka-clients MockConsumer/MockProducer: key bytes, headers, source timestamp, re-encoded value, send -> flush -> commit order, no commit after a tombstone, JSON or failed produce), `test_spx_price_timestamp_type.py`,
+`test_spx_price_verify_target_record.py`, `test_spx_price_subject_parity.py`, `test_spx_price_mirror_job.py`. Not exercised by any test: a live broker round trip (the mock-based test covers the transcode+send+commit path, not broker semantics); the first install on each target is that proof, via Verify.
 
 ## Reader and producer changes (separate PRs; each Codex-approved on all three bars before merge)
 contracts `options-edge-contracts#112` (schema + codec, 0.27.0) · feed `options-edge-databento-feed#178` · processing
