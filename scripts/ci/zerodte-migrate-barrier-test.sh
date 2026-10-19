@@ -95,14 +95,24 @@ case "\$*" in
   *"get deployment "*"-o jsonpath={.spec.replicas}") printf '0' ;;
   *"get deployment "*"-o jsonpath={.spec.template.spec.containers[0].image}") printf '' ;;
   *"get pvc"*|*"get namespace"*|*"apply --dry-run=server"*|*"patch "*|*"delete deployment"*|*"delete service"*) : ;;
+  *"config view"*) printf 'https://fake-dev:6443' ;;
   *) echo "fake kubectl: unexpected call: \$*" >&2; exit 99 ;;
 esac
 FAKE
 chmod +x "$W/bin/kubectl"
+# service-deploy.sh now fails closed if KUBECONFIG is unset/empty/unreadable — it must never fall back
+# to the agent's default cluster. kubectl is stubbed here, so a dummy readable kubeconfig satisfies the
+# guard without pointing anywhere real.
+printf 'apiVersion: v1\nkind: Config\nclusters: []\ncontexts: []\nusers: []\n' > "$W/kubeconfig.fake"
 deploy() { # deploy <journal> → rc
   : > "$1"
-  (cd "$W" && env PATH="$W/bin:$PATH" FAKE_K8S="$T/k8s" FAKE_JOURNAL="$1" SERVICE=vix-option-inteligence ENVIRONMENT=dev BUILD_NUMBER=21 WORK_DIR="$T/work" DEPLOY_PLATFORM=linux/amd64 REGISTRY_SCHEME=http bash scripts/deploy/service-deploy.sh > "$1.out" 2>&1); echo $?
+  (cd "$W" && env PATH="$W/bin:$PATH" KUBECONFIG="$W/kubeconfig.fake" FAKE_K8S="$T/k8s" FAKE_JOURNAL="$1" SERVICE=vix-option-inteligence ENVIRONMENT=dev BUILD_NUMBER=21 WORK_DIR="$T/work" DEPLOY_PLATFORM=linux/amd64 REGISTRY_SCHEME=http bash scripts/deploy/service-deploy.sh > "$1.out" 2>&1); echo $?
 }
+# Guard coverage: with KUBECONFIG unset, service-deploy.sh must FAIL before any cluster mutation
+# (never silently use the agent default). FAKE_JOURNAL must stay empty (no kubectl call happened).
+nokc_rc="$(cd "$W" && env PATH="$W/bin:$PATH" FAKE_K8S="$T/k8s" FAKE_JOURNAL="$T/nokc.journal" SERVICE=vix-option-inteligence ENVIRONMENT=dev BUILD_NUMBER=99 WORK_DIR="$T/work-nokc" DEPLOY_PLATFORM=linux/amd64 REGISTRY_SCHEME=http bash scripts/deploy/service-deploy.sh >/dev/null 2>&1; echo $?)"
+check "service-deploy.sh FAILS CLOSED when KUBECONFIG is unset (rc=$nokc_rc != 0)" test "$nokc_rc" != 0
+check "no kubectl ran before the KUBECONFIG guard fired" bash -c "! [ -s '$T/nokc.journal' ]"
 rm -f "$T/k8s/lock"; mkdir -p "$T/work"
 rc="$(deploy "$T/deploy.journal")"
 check "service-deploy.sh runs to its end against the bounded fake (rc=$rc)" test "$rc" = 0
