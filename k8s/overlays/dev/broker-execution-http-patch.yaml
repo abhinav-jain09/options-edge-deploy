@@ -11,6 +11,8 @@ spec:
           env:
             - name: BROKER_EXECUTION_IBKR_CLIENT_ID
               value: "31"
+            - name: BROKER_EXECUTION_IBKR_CLIENT_ID_FALLBACKS
+              value: "32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50"
             - name: LINKED_EXIT_SPOT_ENABLED
               value: "true"
             - name: LINKED_EXIT_ARMING_ENABLED
