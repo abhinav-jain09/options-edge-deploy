@@ -58,6 +58,8 @@ spec:
         - env:
             - name: BROKER_EXECUTION_ALLOWED_SOURCES
               value: amt-auction,eav-bridge
+            - name: BROKER_EXECUTION_IBKR_CLIENT_ID
+              value: "31"
             - name: LINKED_EXIT_SPOT_ENABLED
               value: "true"
             - name: LINKED_EXIT_ARMING_ENABLED
@@ -117,8 +119,6 @@ spec:
               value: host.docker.internal
             - name: BROKER_EXECUTION_IBKR_PORT
               value: "4002"
-            - name: BROKER_EXECUTION_IBKR_CLIENT_ID
-              value: "21"
             - name: BROKER_EXECUTION_PAPER_ACCOUNT
               value: DUQ287805
             - name: BROKER_EXECUTION_NO_TRADE_DATES
