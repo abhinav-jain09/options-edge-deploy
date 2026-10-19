@@ -28,9 +28,13 @@ class SpxPriceMirrorJob(unittest.TestCase):
         self.assertIn('GROUP     = "spx-price-mirror-${params.TARGET}"', JOB)
         self.assertNotIn("GROUP     = \"oe-mac74-input-from-dev\"", JOB)
 
-    def test_the_old_es4_bridge_is_retired_before_the_new_unit_loads(self):
-        i = JOB.index("com.optionsedge.spx-es4-bridge.plist")
-        self.assertLess(i, JOB.index('launchctl load "$PLIST"'))
+    def test_the_old_es4_bridge_is_retired_before_any_target_state_check(self):
+        retire = JOB.index("com.optionsedge.spx-es4-bridge.plist")
+        self.assertLess(retire, JOB.index("assert-target-fresh.sh"))
+        self.assertLess(retire, JOB.index("assert-subject-parity.sh"))
+        self.assertLess(JOB.index("Preflight (fail-closed)"), retire)
+        self.assertLess(retire, JOB.index("stage('Preflight (registries, topics, group)')"))
+        self.assertNotIn("spx-es4-bridge.plist", JOB[JOB.index("stage('Install')"):], "Install must not be where the copier is retired")
         self.assertIn(".retired-by-spx-price-mirror", JOB)
 
     def test_the_gates_run_by_literal_repository_path_and_the_job_is_in_the_guard_scope(self):
@@ -50,17 +54,26 @@ class SpxPriceMirrorJob(unittest.TestCase):
         self.assertIn("assert-target-fresh.sh", JOB)
         self.assertNotIn("TGT1", JOB)
 
-    def test_the_mm1_whitelist_guard_matches_only_the_spot_topic(self):
-        m = re.search(r"grep -qE '([^']*underlying[^']*)'", JOB)
-        pattern = m.group(1).replace("\\\\", "\\")   # Groovy hands \\ to the shell as one backslash
-        def hits(text):
+    def test_the_mm1_guard_is_a_script_run_by_literal_path(self):
+        self.assertIn('bash "scripts/kafka/spx-price-mirror/assert-mm1-whitelist-clean.sh" /Users/abhinav/oe-ops/dl-mirror-dev-to-mac74/run-mirror.sh', JOB)
+
+    def test_the_mm1_guard_fails_on_every_spelling_of_the_topic_and_passes_when_absent(self):
+        guard = ROOT / "scripts/kafka/spx-price-mirror/assert-mm1-whitelist-clean.sh"
+        def rc(text):
             with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False) as f:
                 f.write(text)
-            return subprocess.run(["grep", "-qE", pattern, f.name]).returncode == 0
-        self.assertTrue(hits(r"--whitelist 'a\.b|underlying\.spx\.price|options\.ibkr\.raw'"))
-        self.assertTrue(hits(r"--whitelist 'underlying\.es\.trades|underlying\.spx\.price'"))
-        self.assertFalse(hits(r"--whitelist 'underlying\.spx\.index\.price|underlying\.vix\.price'"))
-        self.assertFalse(hits(r"--whitelist 'underlying\.spx\.price\.other'"))
+            return subprocess.run(["bash", str(guard), f.name], capture_output=True, text=True).returncode
+        self.assertEqual(rc(r"--whitelist 'a\.b|underlying\.spx\.price|options\.ibkr\.raw'"), 1)
+        self.assertEqual(rc(r"--whitelist 'underlying\.es\.trades|underlying\.spx\.price'"), 1)
+        self.assertEqual(rc("--whitelist 'underlying[.]spx[.]price|x'"), 1)
+        self.assertEqual(rc("--whitelist 'underlying.spx.price'"), 1)
+        self.assertEqual(rc(r"--whitelist 'underlying\.spx\.index\.price|underlying\.vix\.price'"), 0)
+        self.assertEqual(rc(r"--whitelist 'underlying\.spx\.price\.other'"), 0)
+        self.assertEqual(subprocess.run(["bash", str(guard), "/nonexistent"], capture_output=True).returncode, 1)
+        real = Path.home() / "oe-ops/dl-mirror-dev-to-mac74/run-mirror.sh"
+        if real.exists() and "underlying" in real.read_text():
+            self.assertEqual(subprocess.run(["bash", str(guard), str(real)], capture_output=True).returncode,
+                             1 if re.search(r"underlying\\\.spx\\\.price", real.read_text()) else 0)
 
 
 if __name__ == "__main__":

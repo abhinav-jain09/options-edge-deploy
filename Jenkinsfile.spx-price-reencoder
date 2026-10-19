@@ -101,16 +101,16 @@ pipeline {
 
           # 1. NO SECOND WRITER of the target. A byte copier still feeding the same topic puts source-registry ids into it.
           if [ "$TARGET" = es4 ]; then
-            echo "  spx-es4-bridge is retired by the Install stage (it is a byte copier)"
+            # Retire the es4 byte-copy bridge BEFORE any target-state check: a still-running copier could write between the freshness check and the
+            # install. Renamed, not deleted, so the retirement is reversible and visible; a KeepAlive unit would otherwise return at the next login.
+            OLD=/Users/abhinav/Library/LaunchAgents/com.optionsedge.spx-es4-bridge.plist
+            launchctl unload "$OLD" 2>/dev/null || true
+            if [ -f "$OLD" ]; then mv "$OLD" "$OLD.retired-by-spx-price-mirror"; fi
+            launchctl list > "/tmp/spx-price-mirror-$TARGET.launchctl"
+            if grep -qF com.optionsedge.spx-es4-bridge "/tmp/spx-price-mirror-$TARGET.launchctl"; then echo "FAIL: spx-es4-bridge is still loaded"; exit 1; fi
+            echo "  spx-es4-bridge retired"
           else
-            MM1=/Users/abhinav/oe-ops/dl-mirror-dev-to-mac74/run-mirror.sh
-            if [ ! -r "$MM1" ]; then echo "FAIL: cannot read $MM1 — cannot prove the MM1 whitelist no longer copies underlying.spx.price"; exit 1; fi
-            if grep -qE 'underlying\\\\[.]spx\\\\[.]price($|[^-.A-Za-z\\\\])' "$MM1"; then
-              echo "FAIL: the dev->.74 MirrorMaker whitelist in $MM1 still carries underlying.spx.price (a BYTE copier, group oe-mac74-input-from-dev)."
-              echo "      Remove that alternative from --whitelist, restart com.optionsedge.dl-mirror-dev-to-mac74, then re-run this job."
-              exit 1
-            fi
-            echo "  MM1 whitelist no longer carries underlying.spx.price"
+            bash "scripts/kafka/spx-price-mirror/assert-mm1-whitelist-clean.sh" /Users/abhinav/oe-ops/dl-mirror-dev-to-mac74/run-mirror.sh
           fi
 
         '''
@@ -161,16 +161,6 @@ pipeline {
       steps {
         sh '''
           set -euo pipefail
-          # Retire the es4 byte-copy bridge FIRST (renamed, not deleted, so the retirement is reversible and visible): a KeepAlive unit
-          # would otherwise return at the next login and write source-registry ids into es4.
-          if [ "$TARGET" = es4 ]; then
-            OLD=/Users/abhinav/Library/LaunchAgents/com.optionsedge.spx-es4-bridge.plist
-            launchctl unload "$OLD" 2>/dev/null || true
-            if [ -f "$OLD" ]; then mv "$OLD" "$OLD.retired-by-spx-price-mirror"; fi
-            launchctl list > "/tmp/spx-price-mirror-$TARGET.launchctl"
-            if grep -qF com.optionsedge.spx-es4-bridge "/tmp/spx-price-mirror-$TARGET.launchctl"; then echo "FAIL: spx-es4-bridge is still loaded"; exit 1; fi
-            echo "  spx-es4-bridge retired"
-          fi
           launchctl unload "$PLIST" 2>/dev/null || true
           mkdir -p "$MDIR"
           cp "scripts/kafka/spx-price-mirror/SpxPriceAvroMirror.java" "$MDIR/SpxPriceAvroMirror.java"
