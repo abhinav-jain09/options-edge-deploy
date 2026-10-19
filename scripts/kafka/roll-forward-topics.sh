@@ -133,9 +133,9 @@ shape_get() { sed -n "s/^$2=//p" "$1" | head -1; }
 check_schema_id() { # <topic> <partition> <offset>
   local topic="$1" p="$2" off="$3" subj tmp id out
   subj="$(id_of "$SUBJECTS" "$topic")"; tmp="$(mktemp)"
-  "$CC" --bootstrap-server "$BS" --topic "$topic" --partition "$p" --offset "$off" --max-messages 1 --timeout-ms "${RF_WIRE_TIMEOUT_MS:-15000}" > "$tmp" 2>/dev/null < /dev/null || true
-  # tombstone: the console consumer renders a null value as its null literal OR (raw formatter) as zero bytes
-  if [ ! -s "$tmp" ] || [ "$(tr -d '\n\r' < "$tmp")" = "${RF_NULL_LITERAL:-null}" ]; then rm -f "$tmp"; return 0; fi
+  "$CC" --bootstrap-server "$BS" --topic "$topic" --partition "$p" --offset "$off" --max-messages 1 --timeout-ms "${RF_WIRE_TIMEOUT_MS:-15000}" --property "null.literal=__OE_TOMBSTONE__" > "$tmp" 2>/dev/null < /dev/null || true
+  # tombstone: ONLY the unique sentinel we asked the consumer to print for a null value; zero bytes is never a tombstone
+  if [ "$(tr -d '\n\r' < "$tmp")" = "__OE_TOMBSTONE__" ]; then rm -f "$tmp"; return 0; fi
   id=$(od -An -tu1 -N5 "$tmp" | awk 'NR==1 {print $2*16777216 + $3*65536 + $4*256 + $5}'); rm -f "$tmp"
   case "$id" in ''|*[!0-9]*) echo "FAIL: $topic partition $p offset $off: cannot read a schema id" >&2; return 1 ;; esac
   out="$(curl -fsS "$REGISTRY/schemas/ids/$id/versions" 2>&1)" || { echo "FAIL: registry has no schema id $id (record at $topic:$p@$off): $out" >&2; return 1; }
@@ -159,7 +159,7 @@ post_checks() { # <topic> <pre-id> <want-new-id|"">
   # two-way, exact: the broker's dynamic overrides must equal the captured set (no missing, no extra, no altered value)
   local live_cfg want_cfg
   live_cfg="$(rf_dynamic_configs "$topic")" || return 1
-  want_cfg="$(grep '^config\.' "$shape" | sed 's/^config\.//' | LC_ALL=C sort)"
+  want_cfg="$({ grep '^config\.' "$shape" || true; } | sed 's/^config\.//' | LC_ALL=C sort)"
   [ "$live_cfg" = "$want_cfg" ] || { echo "FAIL: $topic configs differ from the captured live set. broker: [$(echo $live_cfg)] captured: [$(echo $want_cfg)]. The topic exists EMPTY with wrong config: fix it with kafka-configs --alter (captured set: $shape), then run --verify --new-topic-id $topic=$found" >&2; return 1; }
   local early late
   early="$("$GO" --bootstrap-server "$BS" --topic "$topic" --time -2 2>&1)" || { echo "FAIL: cannot read earliest offsets of $topic: $early" >&2; return 1; }
@@ -179,7 +179,7 @@ post_checks() { # <topic> <pre-id> <want-new-id|"">
     elif [ "$l" -gt "$e" ]; then
       # the Avro writer is live, so emptiness is not required; the FIRST and LAST record must be Avro (or a tombstone). A sample, not a scan.
       for off in "$e" "$((l - 1))"; do
-        rc=0; rf_wire_is_avro "$CC" "$BS" "$topic" "$p" "$off" tombstone-empty || rc=$?
+        rc=0; rf_wire_is_avro "$CC" "$BS" "$topic" "$p" "$off" sentinel || rc=$?
         [ "$rc" -eq 0 ] || { echo "FAIL: $topic partition $p offset $off is not verifiably Avro (verdict $rc: 1 = not Avro, a JSON writer is live; 2 = unreadable). The topic is contaminated: stop the JSON writer and --recreate again with --pre-cutover-id $topic=$found" >&2; return 1; }
         check_schema_id "$topic" "$p" "$off" || return 1
       done
@@ -230,6 +230,7 @@ fi
 # PREFLIGHT, all topics, before anything is deleted: the topic list is readable, each topic is present with its pre-cutover id (or absent
 # with the explicit flag and a captured shape), and the live shape is captured to the state dir. One bad topic means NOTHING is deleted.
 LIST="$(rf_list "$KT" "$BS")" || exit 1
+"$KG" --bootstrap-server "$BS" --describe --all-groups >/dev/null 2>&1 || { echo "FAIL: cannot read consumer groups on $BS; the stale-offset post-check would be blind. NOTHING was deleted." >&2; exit 1; }
 PRESENT=$'\n'
 for t in "${TOPICS[@]}"; do
   pre="$(id_of "$PRE_IDS" "$t")"
@@ -239,6 +240,8 @@ for t in "${TOPICS[@]}"; do
     cur="$(rf_topic_id "$desc" "$t")" || exit 1
     [ "$cur" = "$pre" ] || { echo "FAIL: $t carries id $cur, not the pre-cutover id $pre. It was already recreated and may hold live Avro; refusing. NOTHING was deleted." >&2; exit 1; }
     capture_shape "$desc" "$STATE/$t.shape" "$cur" "$t" || exit 1
+    # every read-only tool the post-checks need must work NOW, for every topic, before the first delete
+    "$GO" --bootstrap-server "$BS" --topic "$t" --time -1 >/dev/null 2>&1 || { echo "FAIL: cannot read offsets of $t; the post-checks would be blind. NOTHING was deleted." >&2; exit 1; }
     echo "-- $t id $cur: shape captured -> $(tr '\n' ' ' < "$STATE/$t.shape")"
   else
     [ "$ABSENT_OK" = yes ] || { echo "FAIL: $t does not exist. If a previous run deleted it and failed to create it, re-run with --topic-absent-after-failed-create; otherwise find out who deleted it. NOTHING was deleted." >&2; exit 1; }
@@ -276,7 +279,7 @@ for t in "${TOPICS[@]}"; do
     k="${k#config.}"
     case "$RF_LIST_KEYS" in *" $k "*) case "$v" in *,*) v="[$v]" ;; esac ;; esac   # only LIST-typed configs take the bracket form; the rest verbatim
     args+=(--config "$k=$v")
-  done < <(grep '^config\.' "$STATE/$t.shape")
+  done < <(grep '^config\.' "$STATE/$t.shape" || true)
   echo "-- create $t (${parts} partitions, RF $rf, $(grep -c '^config\.' "$STATE/$t.shape") configs)"
   kt "${args[@]}" || fail_run "$t" "$t was deleted but could not be created; it is ABSENT. Re-run with --topic-absent-after-failed-create."
   post_checks "$t" "$pre" "" || fail_run "$t" "created, but a post-check failed. If no JSON was found run --verify --new-topic-id $t=<printed id>; if JSON was found re-run --recreate with --pre-cutover-id $t=<printed id>."

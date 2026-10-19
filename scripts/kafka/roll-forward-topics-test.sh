@@ -63,6 +63,8 @@ for a in "$@"; do [ "$prev" = "--offset" ] && off="$a"; [ "$prev" = "--topic" ] 
 eval "specific=\${MOCK_WIRE_AT_${off}:-}"; v="MOCK_WIRE_${topic//[.-]/_}"
 case "${specific:-${!v:-${MOCK_WIRE:-avro}}}" in
   unreadable) exit 0 ;;
+  tombstone) case "$*" in *null.literal=__OE_TOMBSTONE__*) printf '__OE_TOMBSTONE__\n' ;; *) printf 'null\n' ;; esac ;;
+  jsonnull) printf 'null\n' ;;
   failing) exit 1 ;;
   avro) printf '\000\000\000\000\007some-avro' ;;
   json) printf '{"symbol":"SPX"}' ;;
@@ -244,7 +246,22 @@ check "…the refusal says it was present at preflight" "$(grep -c 'present at p
 two
 check "a vanished topic is recreated only with the explicit flag" "$(MOCK_DELETE_ALSO=b.two run "${RA[@]}" --topic-absent-after-failed-create "${STOP[@]}" localhost:19092 "$TMP/bin")" 0
 two
-check "avro-live: a raw tombstone (zero bytes, exit 0) is accepted at both ends" "$(MOCK_END=12 MOCK_WIRE=unreadable run "${RA[@]}" "${LV[@]}" localhost:19092 "$TMP/bin")" 0
+check "avro-live: ZERO bytes from an exit-0 consumer is NEVER a tombstone (fails closed)" "$(MOCK_END=12 MOCK_WIRE=unreadable run "${RA[@]}" "${LV[@]}" localhost:19092 "$TMP/bin")" 1
+two
+check "avro-live: a sentinel-rendered tombstone is accepted" "$(MOCK_END=12 MOCK_WIRE=tombstone run "${RA[@]}" "${LV[@]}" localhost:19092 "$TMP/bin")" 0
+two
+check "avro-live: a record whose value is the TEXT null is not a tombstone" "$(MOCK_END=12 MOCK_WIRE=jsonnull run "${RA[@]}" "${LV[@]}" localhost:19092 "$TMP/bin")" 1
+two
+check "no-output read on topic A stops the run before topic B is deleted" "$(MOCK_END=12 MOCK_WIRE_a_one=unreadable run "${RA[@]}" "${LV[@]}" localhost:19092 "$TMP/bin")" 1
+check "…b.two was never deleted" "$(grep -c '^deleted:b.two' "$TMP/state/log")" 0
+check "…and names b.two as not touched" "$(grep -c 'NOT TOUCHED: b.two' "$TMP/out")" 1
+two
+r="$(MOCK_GROUPS_RC=1 run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")"
+check "unreadable consumer groups abort in preflight, nothing deleted" "$r" 1
+check "…nothing deleted" "$(logn)" 0
+reset; mk z.zero OLDZ 3 1
+check "a topic with ZERO dynamic overrides recreates through every post-check" "$(run --recreate --cluster dev --topics z.zero --pre-cutover-id z.zero=OLDZ "${STOP[@]}" localhost:19092 "$TMP/bin")" 0
+check "…it has a new id" "$([ "$(cat "$TMP/state/z.zero/id")" != OLDZ ] && echo yes)" yes
 two
 check "avro-live: a subject that differs from the declared one by a wildcard-matching letter fails" "$(MOCK_END=12 MOCK_ID_SUBJECTS='SXa.one SXb.two' run "${RA[@]}" "${LV[@]}" localhost:19092 "$TMP/bin")" 1
 two
