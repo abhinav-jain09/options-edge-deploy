@@ -21,6 +21,8 @@ spec:
               value: "true"
             - name: BRACKET_ORDERS_ENABLED
               value: "true"
+            - name: BROKER_PROBE_ON_START
+              value: "true"
             - name: CONTEXT_TAPE_SPOT_TOPIC
               value: underlying.spx.index.price
             - name: AUTH_ISSUER_URI
