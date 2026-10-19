@@ -12,7 +12,10 @@ JAR="${AUDIT_JAR:-$HOME_DIR/oe-ops/breakout-audit/options-edge-breakout-audit.ja
 AUDIT_ROOT="${AUDIT_ROOT:-$HOME_DIR/oe-ops/breakout-audit/data}"
 BOOTSTRAP="${AUDIT_BOOTSTRAP:-localhost:19092}"
 REGISTRY="${AUDIT_REGISTRY:-http://localhost:8082}"
-TOPICS="${AUDIT_TOPICS:-breakout.sequenced options.databento.gex.strike underlying.spx.price breakout.episode breakout.emission breakout.features}"
+# ORDER IS LOAD-BEARING: a later capture is a superset of an earlier one, so every record must be captured AFTER the records it refers to are
+# already durable: terminals (emission) name episodes, episodes name sequenced offsets and strike rows. Outputs first, inputs last; the reverse
+# order captured a terminal whose episode arrived after the episode topic was filed and the enumerator rightly refused the dataset.
+TOPICS="${AUDIT_TOPICS:-breakout.emission breakout.features breakout.episode breakout.sequenced options.databento.gex.strike underlying.spx.price}"
 DAY="$(TZ=America/New_York date +%Y-%m-%d)"
 DOW="$(TZ=America/New_York date +%u)"
 log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"; }
