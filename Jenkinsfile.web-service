@@ -118,6 +118,14 @@ pipeline {
         }
         sh '''
           set -euo pipefail
+          # SCOPED validation (mirrors Jenkinsfile.service-deploy): this job deploys ONLY the web
+          # service to ONE env, so validate exactly that — its slice structure, blast radius, image
+          # name and the mirror rule for THIS service/env. The whole-fleet drift sweep + global
+          # invariants (§1,5-8) render ~every overlay × 3 envs and are the slow part (~15 min measured
+          # above); they run in full-fleet mode on CI / manual validate-services.sh, not on each web
+          # deploy. Without this scope the web deploy validated the entire fleet every time.
+          export VALIDATE_ONLY_SERVICE="web"
+          export VALIDATE_ONLY_ENV="$ENVIRONMENT"
           bash scripts/ci/validate-services.sh
         '''
       }
