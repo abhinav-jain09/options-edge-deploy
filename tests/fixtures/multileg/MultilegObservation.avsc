@@ -40,7 +40,7 @@
         {"name": "strike", "type": {"type": "bytes", "logicalType": "decimal", "precision": 38, "scale": 18}},
         {"name": "right", "type": "string", "doc": "CALL or PUT."},
         {"name": "aggregatedSize", "type": "long"},
-        {"name": "avgPrice", "type": {"type": "bytes", "logicalType": "decimal", "precision": 38, "scale": 18}, "doc": "Size-weighted average price: a price, so decimal(38,18) (shortest round-trip text of the engine double, HALF_EVEN beyond 18 places)."},
+        {"name": "avgPrice", "type": {"type": "bytes", "logicalType": "decimal", "precision": 38, "scale": 18}, "doc": "Size-weighted average price: a price, so decimal(38,18) (shortest round-trip text of the engine double; a value needing more than 18 places is refused, never rounded)."},
         {"name": "printCount", "type": "long"},
         {"name": "qty", "type": "int"},
         {"name": "canonicalGeometryCoefficient", "type": "int", "doc": "The template's canonical orientation (+1/-1), NOT an observed traded direction."},

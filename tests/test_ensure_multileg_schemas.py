@@ -99,6 +99,61 @@ class EnsureMultilegSchemas(unittest.TestCase):
         finally:
             server.shutdown()
 
+    def test_an_unwritable_later_subject_refuses_before_any_mutation(self):
+        reg = Registry()
+        server, url = serve(reg)
+        try:
+            reg.subject_modes[SUBJECTS[2]] = "READONLY"
+            rc, out = run(url, str(FIXTURES))
+            self.assertNotEqual(rc, 0)
+            self.assertIn("not writable", out)
+            self.assertEqual(reg.subjects, {})
+            self.assertEqual([c for c in reg.calls if c.startswith(("PUT", "POST"))], [])
+        finally:
+            server.shutdown()
+
+    def test_registration_failing_on_the_2nd_subject_leaves_only_canonical_v1_and_a_rerun_converges(self):
+        reg = Registry()
+        server, url = serve(reg)
+        try:
+            reg.fail = [("POST", f"/subjects/{SUBJECTS[1]}/versions")]
+            rc, out = run(url, str(FIXTURES))
+            self.assertNotEqual(rc, 0)
+            self.assertIn("re-run", out)
+            self.assertEqual(len(reg.subjects[SUBJECTS[0]]), 1)       # canonical v1 only
+            self.assertNotIn(SUBJECTS[1], reg.subjects)
+            self.assertNotIn(SUBJECTS[2], reg.subjects)
+            self.assertEqual(reg.configs, {})                          # FULL is set only after every registration
+            reg.fail = []
+            rc, out = run(url, str(FIXTURES))
+            self.assertEqual(rc, 0, out)
+            for s in SUBJECTS:
+                self.assertEqual(len(reg.subjects[s]), 1)
+                self.assertEqual(reg.configs[s], "FULL")
+        finally:
+            server.shutdown()
+
+    def test_config_failing_on_the_3rd_subject_leaves_idempotent_state_and_a_rerun_converges(self):
+        reg = Registry()
+        server, url = serve(reg)
+        try:
+            reg.fail = [("PUT", f"/config/{SUBJECTS[2]}")]
+            rc, out = run(url, str(FIXTURES))
+            self.assertNotEqual(rc, 0)
+            self.assertIn("could not set FULL", out)
+            for s in SUBJECTS:
+                self.assertEqual(len(reg.subjects[s]), 1)              # all canonical, no wrong content anywhere
+            self.assertEqual(reg.configs.get(SUBJECTS[0]), "FULL")
+            self.assertEqual(reg.configs.get(SUBJECTS[1]), "FULL")
+            self.assertNotIn(SUBJECTS[2], reg.configs)
+            reg.fail = []
+            self.assertEqual(run(url, str(FIXTURES))[0], 0)
+            for s in SUBJECTS:
+                self.assertEqual(len(reg.subjects[s]), 1)
+                self.assertEqual(reg.configs[s], "FULL")
+        finally:
+            server.shutdown()
+
     def test_dry_run_mutates_nothing(self):
         reg = Registry()
         server, url = serve(reg)
