@@ -25,6 +25,17 @@ State dir `kafka-streams-state` is an `emptyDir` (lost with the pod). Consumer g
 the feed-gateway groups `options-edge-feed-gateway-*`, `early-auction-verdict` (EAV; its local store is truth: check it holds nothing derived from JSON events),
 spx-mission-control (`kafka-consumer-groups --list | grep mission`), approach-monitor reads neither topic.
 
+## Ordering against the delta-flow cutover (options-edge-deploy#1324, DELTA-FLOW-AVRO-CUTOVER.md)
+strike-invasion-service reads `delta-flow-by-strike` as Avro `com.optionsedge.contracts.deltaflow.DeltaFlowStrikeSnapshot` (strict `DeltaFlowAvro.RecordDeserializer`; JSON is
+refused and counted, never read). Therefore:
+* the processing change that carries this reader (options-edge-processing#1177) must be **deployed before `delta-flow-by-strike` is wiped and recreated** (a JSON reader of the
+  recreated topic would see Confluent Avro; an Avro-only reader of the still-JSON topic counts every record as a deserialization failure and sees no flow evidence);
+* the `DeltaFlowStrikeSnapshot` subject must be **registered before this service starts** (it is registered by the delta-flow cutover's schema step; this runbook's
+  `ensure-strike-invasion-schemas.sh` registers only the 23 strike-invasion subjects). Verify it: `curl <registry>/subjects/com.optionsedge.contracts.deltaflow.DeltaFlowStrikeSnapshot/versions/latest`;
+* contracts: this service needs the strike-invasion classes (contracts#117, 0.33.0) AND `DeltaFlowAvro` (contracts#120, 0.35.0). #120 was cut from 0.29.0 and does not contain #117,
+  so the merge order is #117 first, then #120 rebased/renumbered on top (the single released artifact must contain both); processing#1177 pins `contracts.version` 0.35.0 and
+  cannot build until that combined artifact exists. Nothing here renumbers either PR.
+
 ## Order (rule step 4; one environment at a time, off-hours, topic administration frozen)
 1. Merge contracts 0.33.0, the processing PRs (service, postgres writer, mission control, EAV), feed-gateway, trading-journal/python readers, then this change.
    From the first merge on, an image built from main for any converted service reads Avro: build no prod image before the prod cutover.
