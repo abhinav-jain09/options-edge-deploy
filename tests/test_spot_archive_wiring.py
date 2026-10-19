@@ -37,8 +37,12 @@ class SpotArchiveWiring(unittest.TestCase):
         self.assertIn('OE_SPOT_AVRO_TOPICS="${OE_SPOT_AVRO_TOPICS:-}"', ARCHIVE)
         r = sh(PRELUDE + block() + '\nis_spot_avro_topic underlying.spx.price && echo ON || echo OFF')
         self.assertEqual(r.stdout.strip(), "OFF", r.stderr)
-        for f in ["oe-topics.env", "oe-archive.crontab", "oe-archive-dev.sh", "oe-archive-daily.sh"]:
-            self.assertNotIn("OE_SPOT_AVRO_TOPICS=", (ROOT / "scripts/ops/archive" / f).read_text(), f"{f}: enabled only by the cutover step")
+        for f in ["oe-topics.env", "oe-archive-dev.sh", "oe-archive-daily.sh"]:
+            self.assertNotIn("OE_SPOT_AVRO_TOPICS=", (ROOT / "scripts/ops/archive" / f).read_text(), f"{f}: only the prod spot cron enables it")
+        # the prod spot cron enables it for exactly the converted topic (prod cutover 2026-10-19), nowhere else in the crontab
+        cron = (ROOT / "scripts/ops/archive/oe-archive.crontab").read_text()
+        self.assertEqual(cron.count('OE_SPOT_AVRO_TOPICS="underlying.spx.price"'), 1)
+        self.assertEqual(cron.count("OE_SPOT_AVRO_TOPICS="), 1)
 
     def test_the_switch_routes_only_the_listed_topic(self):
         r = sh(PRELUDE + block() + '\nfor t in underlying.spx.price underlying.es.price options.indicators.bars; do '

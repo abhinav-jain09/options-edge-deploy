@@ -28,7 +28,7 @@ CRON_TZ=America/New_York
 # exited 0 having archived nothing, every weekday from 08-10. The job name is half the lock key now,
 # and the topic list here must stay DISJOINT from OE_HEAVY_TOPICS_prod in oe-topics.env — the list
 # below is exactly OE_SPOT_TOPICS.
-*/10 * * * * TOPICS="underlying.spx.price underlying.spx.index.price underlying.es.price spx.basis.state" ARCHIVE_DIR=/mnt/nas/optionsedge ENV=prod ARCHIVE_JOB=spot JAVA_HOME=$(ls -d /usr/lib/jvm/*jre-17* 2>/dev/null|head -1) /home/abhinav/oe-ops/oe-archive-kafka.sh >> /home/abhinav/oe-ops/archive-spot.log 2>&1
+*/10 * * * * TOPICS="underlying.spx.price underlying.spx.index.price underlying.es.price spx.basis.state" OE_SPOT_AVRO_TOPICS="underlying.spx.price" ARCHIVE_DIR=/mnt/nas/optionsedge ENV=prod ARCHIVE_JOB=spot JAVA_HOME=$(ls -d /usr/lib/jvm/*jre-17* 2>/dev/null|head -1) /home/abhinav/oe-ops/oe-archive-kafka.sh >> /home/abhinav/oe-ops/archive-spot.log 2>&1
 # dev dealer-ledger evidence every 2h: dev signal-fired has a 24h retention the service re-stamps,
 # so a once-daily capture is one missed run from losing a session permanently. 2026-08-08.
 # DISABLED 2026-09-17 (owner: only ibkr + spot + databento raw are backed up) — dev 2-hourly archive
