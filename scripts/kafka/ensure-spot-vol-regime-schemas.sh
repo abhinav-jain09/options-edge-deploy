@@ -19,7 +19,7 @@ import hashlib, json, os, sys, urllib.error, urllib.request
 # (tests/fixtures/spotvolregime/*.avsc are the pinned copies, hash-checked by the test).
 CANONICAL = {
     "SpotVolRegimeSnapshot": ("com.optionsedge.contracts.spotvolregime.SpotVolRegimeSnapshot", "af166c74cc98c1619f67925f321be93c73450d0a173cf817acdb279e04de932b"),
-    "SpotVolRegimeWindowState": ("com.optionsedge.contracts.spotvolregime.SpotVolRegimeWindowState", "650b37eb36dcb5283957a296083a6d665e3b8ccbe141eb4a85988167ec7007ac"),
+    "SpotVolRegimeWindowState": ("com.optionsedge.contracts.spotvolregime.SpotVolRegimeWindowState", "09ecef1d5196fe5c7b9e0f698b9ca2855ba9cac767de51bdf9a2341303937821"),
     "SpotVolRegimeLastFrameState": ("com.optionsedge.contracts.spotvolregime.SpotVolRegimeLastFrameState", "717472443a0292d76b54f0f5ad3c4314a1d95d50eea0c860d2446956e9a16e07"),
 }
 url, directory, dry = sys.argv[1].rstrip("/"), sys.argv[2], sys.argv[3] == "true"

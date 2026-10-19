@@ -10,7 +10,7 @@
       "name": "SpotVolRegimeSample",
       "fields": [
         {"name": "ts", "type": "long", "doc": "Event time of the sample, epoch milliseconds; strictly increasing within the buffer."},
-        {"name": "price", "type": {"type": "bytes", "logicalType": "decimal", "precision": 38, "scale": 18}, "doc": "Price, decimal(38,18) (rounded HALF_EVEN to 18 places); finite, positive."},
+        {"name": "price", "type": {"type": "bytes", "logicalType": "decimal", "precision": 38, "scale": 18}, "doc": "Price, decimal(38,18) of the double's shortest round-trip text (never rounded; the service drops a value it cannot encode before it is buffered); finite, positive."},
         {"name": "straddleMid", "type": ["null", {"type": "bytes", "logicalType": "decimal", "precision": 38, "scale": 18}], "default": null, "doc": "ATM straddle mid; null = no option evidence. Finite and positive when present."}
       ]
     }}}
