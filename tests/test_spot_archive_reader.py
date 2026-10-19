@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import struct
 import subprocess
 import tempfile
@@ -20,6 +21,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 READER = ROOT / "scripts/ops/archive/SpotArchiveReader.java"
 FIX = ROOT / "tests/fixtures/spot-archive/EncodeFixture.java"
+RANDOM_N = 3000
 JAVA = os.environ.get("OE_SPOT_READER_JAVA", os.environ.get("OE_INDICATOR_READER_JAVA", "java"))
 TOPIC = "underlying.spx.price"
 
@@ -62,21 +64,36 @@ class SpotArchiveReaderTest(unittest.TestCase):
     def setUpClass(cls):
         cls.cp = reader_classpath()
         cls.tmp = Path(tempfile.mkdtemp())
-        enc = subprocess.run([JAVA, "-cp", cls.cp, str(FIX), "spot-archive-reader-test", TOPIC] + [format(b, "x") for b in GOLDEN],
+        cls.foreign_avsc = cls.tmp / "other.avsc"
+        cls.foreign_avsc.write_text('{"type":"record","name":"Other","namespace":"x","fields":[{"name":"a","type":"long"}]}')
+        enc = subprocess.run([JAVA, "-cp", cls.cp, str(FIX), "spot-archive-reader-test", TOPIC, str(cls.foreign_avsc)]
+                             + [format(b, "x") for b in GOLDEN + cls.random_bits()],
                              capture_output=True, text=True)
         assert enc.returncode == 0, enc.stderr[-2000:]
         cls.framed = [l for l in enc.stdout.splitlines() if l.startswith("SPX\t")]
         cls.foreign = next(l for l in enc.stdout.splitlines() if l.startswith("FOREIGN\t"))
-        assert len(cls.framed) == len(GOLDEN)
+        assert len(cls.framed) == len(GOLDEN) + RANDOM_N
+
+    @staticmethod
+    def random_bits():
+        """RANDOM_N seeded doubles inside decimal(38,18): |x| < 1e20, at most 18 fractional digits (so the decimal is exact)."""
+        rng = random.Random(20261019)
+        out = []
+        while len(out) < RANDOM_N:
+            digits = rng.randint(0, 18)
+            x = round(rng.uniform(-1, 1) * 10 ** rng.randint(-6, 19), digits)
+            if x != 0 and abs(x) < 1e20 and len(repr(abs(x)).split(".")[-1]) <= 18 and "e" not in repr(x):
+                out.append(struct.unpack(">Q", struct.pack(">d", x))[0])
+        return out
 
     def run_reader(self, file_lines, *extra):
         f = self.tmp / "in.tsv"
         f.write_text("\n".join(file_lines) + "\n")
         return subprocess.run([JAVA, "-cp", self.cp, str(READER), "--registry", "mock://spot-archive-reader-test", "--topic", TOPIC,
-                               "--partition", "3", "--from", "41", *extra, "--decode-file", str(f)], capture_output=True, text=True)
+                               "--partition", "3", "--from", "41", "--mock-extra-schema", str(self.foreign_avsc), *extra, "--decode-file", str(f)], capture_output=True, text=True)
 
     def test_every_golden_price_is_the_json_era_line(self):
-        dec = self.run_reader(self.framed)
+        dec = self.run_reader(self.framed[:len(GOLDEN)])
         self.assertEqual(dec.returncode, 0, dec.stderr[-2000:])
         out = dec.stdout.rstrip("\n").split("\n")
         self.assertEqual(len(out), len(GOLDEN))
@@ -89,6 +106,15 @@ class SpotArchiveReaderTest(unittest.TestCase):
                 self.assertIn('"canonicalSpot":%s,' % ANCHORS[bits], value)
         self.assertTrue(out[0].split("\t")[3].startswith('{"schemaVersion":1,"symbol":"SPX","eventTime":'))
         self.assertIn('"size":null,', out[0])
+
+    def test_random_doubles_in_the_decimal_domain_equal_cpython_repr(self):
+        bits = self.random_bits()
+        dec = self.run_reader(self.framed[len(GOLDEN):])
+        self.assertEqual(dec.returncode, 0, dec.stderr[-2000:])
+        out = dec.stdout.rstrip("\n").split("\n")
+        self.assertEqual(len(out), RANDOM_N)
+        for i, (b, line) in enumerate(zip(bits, out), len(GOLDEN) + 1):
+            self.assertEqual(line.split("\t")[3], expected_line(b, i), hex(b))
 
     def test_print_offset_adds_only_the_offset_column(self):
         dec = self.run_reader(self.framed[:2], "--print-offset")
@@ -105,14 +131,15 @@ class SpotArchiveReaderTest(unittest.TestCase):
         json_value = '{"schemaVersion":1,"symbol":"SPX","price":7335.0}'.encode().hex()
         cases = {"json": "SPX\t" + json_value,
                  "garbage": "SPX\t" + "0000000001ff",              # framed with the contracts id, undecodable body
-                 "foreign schema": self.foreign}
+                 "foreign schema (registered and resolvable)": self.foreign}
         for name, line in cases.items():
             dec = self.run_reader([line])
             self.assertEqual(dec.returncode, 2, f"{name}: {dec.stderr[-500:]}")
             self.assertEqual(dec.stdout, "", f"{name}: nothing is published for an undecodable range")
             self.assertIn("FAILED", dec.stderr)
         mixed = self.run_reader([self.framed[0], "SPX\t" + json_value])
-        self.assertEqual(mixed.returncode, 2, "one bad value fails the whole range (the archiver then publishes nothing)")
+        self.assertEqual(mixed.returncode, 2, "one bad value fails the whole range")
+        self.assertEqual(mixed.stdout, "", "all-or-nothing: the valid line before the bad one is not published either")
 
 
 if __name__ == "__main__":

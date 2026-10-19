@@ -49,7 +49,7 @@ public class SpotArchiveReader {
     }
 
     static final class Opts {
-        String bootstrap, registry, topic, decodeFile;
+        String bootstrap, registry, topic, decodeFile, mockExtraSchema;
         int partition = -1;
         long from = -1, count = -1, timeoutMs = 60_000;
         boolean printOffset;
@@ -68,6 +68,7 @@ public class SpotArchiveReader {
                 case "--timeout-ms" -> o.timeoutMs = Long.parseLong(a[++i]);
                 case "--print-offset" -> o.printOffset = true;
                 case "--decode-file" -> o.decodeFile = a[++i];
+                case "--mock-extra-schema" -> o.mockExtraSchema = a[++i];
                 default -> throw new IllegalArgumentException("unknown argument " + a[i]);
             }
         }
@@ -94,22 +95,38 @@ public class SpotArchiveReader {
             // the in-memory scope is per JVM: hold the contracts schema first (id 1), as the test's encoder did
             try {
                 mock.register(UnderlyingPriceAvro.SUBJECT, new io.confluent.kafka.schemaregistry.avro.AvroSchema(UnderlyingPriceAvro.SCHEMA));
+                if (o.mockExtraSchema != null) {   // test seam: a second (foreign) schema, id 2, resolvable like a real registry's
+                    mock.register(new org.apache.avro.Schema.Parser().parse(new java.io.File(o.mockExtraSchema)).getFullName(),
+                            new io.confluent.kafka.schemaregistry.avro.AvroSchema(new org.apache.avro.Schema.Parser().parse(new java.io.File(o.mockExtraSchema))));
+                }
             } catch (Exception e) {
                 System.err.println("SpotArchiveReader: FAILED mock registry setup: " + e.getMessage());
                 return EXIT_FAILED;
             }
         }
+        // ALL-OR-NOTHING: the range is spooled to a scratch file and copied to stdout only after every record decoded, so a
+        // failure part-way publishes nothing (stdout stays empty and the exit is 2).
+        java.nio.file.Path spool = null;
         try (UnderlyingPriceAvro.EventDeserializer avro = mock != null
-                     ? new UnderlyingPriceAvro.EventDeserializer(mock) : new UnderlyingPriceAvro.EventDeserializer();
-             Writer out = new BufferedWriter(new OutputStreamWriter(System.out, StandardCharsets.UTF_8), 1 << 16)) {
+                     ? new UnderlyingPriceAvro.EventDeserializer(mock) : new UnderlyingPriceAvro.EventDeserializer()) {
             avro.configure(UnderlyingPriceAvro.deserializerConfig(o.registry), false);
-            if (o.decodeFile != null) {
-                return decodeFile(o, avro, out);
+            spool = java.nio.file.Files.createTempFile("spot-archive-", ".spool");
+            int rc;
+            try (Writer out = new BufferedWriter(new OutputStreamWriter(java.nio.file.Files.newOutputStream(spool), StandardCharsets.UTF_8), 1 << 16)) {
+                rc = o.decodeFile != null ? decodeFile(o, avro, out) : capture(o, avro, out);
             }
-            return capture(o, avro, out);
+            if (rc == EXIT_OK) {
+                java.nio.file.Files.copy(spool, System.out);
+                System.out.flush();
+            }
+            return rc;
         } catch (Exception e) {
             System.err.println("SpotArchiveReader: FAILED " + e.getClass().getSimpleName() + ": " + e.getMessage());
             return EXIT_FAILED;
+        } finally {
+            if (spool != null) {
+                try { java.nio.file.Files.deleteIfExists(spool); } catch (java.io.IOException ignored) { }
+            }
         }
     }
 
