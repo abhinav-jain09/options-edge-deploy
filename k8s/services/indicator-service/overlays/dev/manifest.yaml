@@ -60,6 +60,43 @@ spec:
     spec:
       containers:
         - env:
+            - name: INDICATOR_SOURCE_MODE
+              value: SPX_GLOBEX_ESTIMATE
+            - name: INDICATOR_ESTIMATE_ENABLED
+              value: "true"
+            - name: INDICATOR_INPUT_TOPIC
+              value: underlying.spx.price
+            - name: INDICATOR_BARS_TOPIC
+              value: options.indicators.estimate.bars
+            - name: HEALTH_PORT
+              value: "8139"
+            - name: JAVA_TOOL_OPTIONS
+              value: -Xms64m -Xmx256m
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
+          image: host.docker.internal:5001/options-edge-indicator-service:dev
+          imagePullPolicy: Always
+          livenessProbe:
+            failureThreshold: 4
+            httpGet:
+              path: /health/live
+              port: estimate
+            initialDelaySeconds: 60
+            periodSeconds: 30
+          name: indicator-estimate
+          ports:
+            - containerPort: 8139
+              name: estimate
+          resources:
+            limits:
+              memory: 512Mi
+            requests:
+              cpu: 50m
+              memory: 192Mi
+        - env:
             - name: HEALTH_PORT
               value: "8133"
             - name: INDICATOR_SOURCE_MODE

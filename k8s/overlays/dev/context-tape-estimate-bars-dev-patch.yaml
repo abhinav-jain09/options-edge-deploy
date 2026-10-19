@@ -1,0 +1,23 @@
+# DEV-ONLY: the Context Tape and the Market Map / Order tab draw overnight (Globex) bars.
+#  - CONTEXT_TAPE_SESSION_MODE=GLOBEX: the session opens at the prior evening's 18:00 ET Globex reopen, so the overnight
+#    hours are in-session (es4 already runs this mode; dev ran NYSE_RTH and served Friday's closed session overnight).
+#  - CONTEXT_TAPE_ESTIMATE_BARS_ENABLED=true: reads options.indicators.estimate.bars (indicator-estimate container) and
+#    draws those bars, labelled ES ESTIMATE, in [Globex open, 09:30 ET). Native SPX bars take over at the cash open.
+#  - CONTEXT_TAPE_MAX_SNAPSHOT_BYTES=4194304: the GLOBEX cap in code (a ~23 hour session exceeds the 1 MiB RTH cap and would
+#    be served as SNAPSHOT_TOO_LARGE, blanking the page instead of drawing the bars).
+# Both default off in code and the production overlay is untouched. env merges by name over the base.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: context-tape-service
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: context-tape
+          env:
+            - { name: CONTEXT_TAPE_SESSION_MODE, value: "GLOBEX" }
+            - { name: CONTEXT_TAPE_MAX_SNAPSHOT_BYTES, value: "4194304" }
+            - { name: CONTEXT_TAPE_ESTIMATE_BARS_ENABLED, value: "true" }
+            - { name: CONTEXT_TAPE_ESTIMATE_BARS_TOPIC, value: "options.indicators.estimate.bars" }
