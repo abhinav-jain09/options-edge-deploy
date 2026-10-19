@@ -13,6 +13,12 @@
           # Platform mirrors the build (dev=BUILD_PLATFORM arm64; non-dev amd64).
           if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
             export DEPLOY_PLATFORM="${BUILD_PLATFORM:-linux/arm64}"
+            # The dev images are named host.docker.internal:5001/... in the manifests (resolved by
+            # kubelet ON the dev host). This script may run on a REMOTE Jenkins agent that cannot reach
+            # that name (it is the agent's own loopback), so resolve the digest over the LAN at the dev
+            # box's IP while the pinned ref keeps host.docker.internal:5001 for the pods. On the dev host
+            # the IP is locally reachable too (the registry binds 0.0.0.0:5001). Override with DEV_HOST_IP.
+            export REGISTRY_RESOLVE_HOST="${REGISTRY_RESOLVE_HOST:-${DEV_HOST_IP:-192.168.100.102}:5001}"
           else
             export DEPLOY_PLATFORM="linux/amd64"
           fi

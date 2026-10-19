@@ -2,6 +2,17 @@
           set -euo pipefail
           . "$JENKINS_WORK_DIR/options-edge-images.env"
           . "$JENKINS_WORK_DIR/options-edge-build.env"
+
+          # Remote-agent support: the dev images are named host.docker.internal:5001/... in images.env
+          # (resolved by kubelet ON the dev host). This preflight may run on a REMOTE Jenkins agent that
+          # cannot reach that name (it is the agent's own loopback via Docker Desktop), so resolve image
+          # manifests over the LAN at the dev box's registry. This only changes where the AGENT reads the
+          # manifest; nothing about the deployed ref changes. Prod images already use a LAN IP registry.
+          # (This stage runs separately from apply.sh, so the override is set here too.) Override: DEV_HOST_IP.
+          REGISTRY_RESOLVE_HOST="${REGISTRY_RESOLVE_HOST:-}"
+          if [ "${ENVIRONMENT:-dev}" = "dev" ] && [ -z "$REGISTRY_RESOLVE_HOST" ]; then
+            REGISTRY_RESOLVE_HOST="${DEV_HOST_IP:-192.168.100.102}:5001"
+          fi
           images="
             RAW_TO_DISPLAY_IMAGE=$RAW_TO_DISPLAY_IMAGE
             WEB_IMAGE=$WEB_IMAGE
@@ -114,8 +125,11 @@
 
           image_exists_once() {
             local image="$1"
-            local registry remainder repository reference tagged
+            local registry resolve remainder repository reference tagged
             registry="${image%%/*}"
+            # Read the manifest over the LAN at REGISTRY_RESOLVE_HOST when set (remote agent); the dev
+            # registry images all share the one host (host.docker.internal:5001), so a host swap is safe.
+            resolve="${REGISTRY_RESOLVE_HOST:-$registry}"
             remainder="${image#*/}"
             if [ "$registry" = "$image" ] || [ "$remainder" = "$image" ] || { [[ "$remainder" != *:* ]] && [[ "$remainder" != *@sha256:* ]]; }; then
               docker pull "$image" >/dev/null 2>&1
@@ -138,15 +152,15 @@
                 -H 'Accept: application/vnd.docker.distribution.manifest.list.v2+json' \
                 -H 'Accept: application/vnd.oci.image.manifest.v1+json' \
                 -H 'Accept: application/vnd.oci.image.index.v1+json' \
-                "$scheme://$registry/v2/$repository/manifests/$reference" >/dev/null 2>&1; then
+                "$scheme://$resolve/v2/$repository/manifests/$reference" >/dev/null 2>&1; then
                 return 0
               fi
             done
 
-            # Fallback (only reached if the registry HEAD check above could not run,
-            # e.g. dev's host.docker.internal registry which the agent can't resolve
-            # by curl). Use a plain pull so it matches the agent's own platform —
-            # dev images are arm64, prod images are validated via the HEAD check.
+            # Fallback (only reached if the HEAD check above could not run at all). On the dev host
+            # this pulls the host.docker.internal:5001 ref the local daemon trusts; a remote agent
+            # normally never reaches here because the HEAD check resolves over the LAN via
+            # REGISTRY_RESOLVE_HOST. Plain pull so it matches the agent's own platform (dev=arm64).
             docker pull "$image" >/dev/null 2>&1
           }
 

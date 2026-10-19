@@ -13,7 +13,10 @@ set -euo pipefail
 # It deliberately does NOT obtain a token: that needs a dedicated CI identity and belongs to a separate
 # authenticated integration smoke, not this deploy liveness/posture check.
 
-WEB_PUBLIC_URL="${WEB_PUBLIC_URL:-http://localhost:8090}"
+# Default to the dev box's LAN IP on :8090 (not localhost) so this smoke works both on the dev host
+# and from a remote Jenkins agent checking this dev box over the LAN (the k8s web Service binds
+# 0.0.0.0:8090). Callers that want a different target still override WEB_PUBLIC_URL.
+WEB_PUBLIC_URL="${WEB_PUBLIC_URL:-http://192.168.100.102:8090}"
 WEB_PUBLIC_URL="${WEB_PUBLIC_URL%/}"
 TIMEOUT_SECONDS="${OPTIONS_EDGE_WEB_TIMEOUT_SECONDS:-120}"
 

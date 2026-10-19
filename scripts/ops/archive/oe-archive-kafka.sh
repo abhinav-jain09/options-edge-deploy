@@ -168,6 +168,26 @@ run_indicator_reader() { # <wall-clock limit s> <reader args...>
   [ -f "$INDICATOR_CONTRACTS_JAR" ] || { echo "FATAL: $INDICATOR_CONTRACTS_JAR missing — the archive unit ships the contracts jar beside this script" >&2; return 2; }
   timeout "$limit" "$java" -Xmx512m -cp "$(indicator_reader_classpath)" "$INDICATOR_READER_SRC" "$@"
 }
+# underlying.spx.price turns Avro at the PRODUCTION cutover (docs/UNDERLYING-SPX-PRICE-AVRO-CUTOVER.md); until then
+# prod's topic is still JSON and the console consumer archives it, so this list ships EMPTY. THE SWITCH, performed at
+# the prod cutover step (after the topic is wiped and recreated under Avro, before the first */10 run that reads it):
+# set OE_SPOT_AVRO_TOPICS="underlying.spx.price" in the archive environment on the archive host (e.g. the cron line or
+# oe-topics.env override). Those topics are then captured through SpotArchiveReader.java, which writes the SAME line
+# layout with the value rendered as the JSON-era text (CPython repr numbers, size null, tombstone = null). A topic must
+# not be in both this list and OE_INDICATOR_AVRO_TOPICS (each reader decodes one record type): the run refuses.
+# Dev does not archive spot, so dev leaves it empty. The reader shares the indicator reader's JDK and contracts jar.
+OE_SPOT_AVRO_TOPICS="${OE_SPOT_AVRO_TOPICS:-}"
+is_spot_avro_topic() { case " $OE_SPOT_AVRO_TOPICS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+for _t in $OE_SPOT_AVRO_TOPICS; do
+  if is_indicator_avro_topic "$_t"; then echo "FATAL: $_t is in both OE_SPOT_AVRO_TOPICS and OE_INDICATOR_AVRO_TOPICS" >&2; exit 2; fi
+done
+SPOT_READER="${SPOT_READER:-}"   # test seam: an executable taking the reader's arguments
+SPOT_READER_SRC="${SPOT_READER_SRC:-$(cd "$(dirname "$0")" && pwd)/SpotArchiveReader.java}"
+run_spot_reader() { # <wall-clock limit s> <reader args...>
+  local limit="$1"; shift
+  if [ -n "$SPOT_READER" ]; then timeout "$limit" "$SPOT_READER" "$@"; return; fi
+  INDICATOR_READER_SRC="$SPOT_READER_SRC" INDICATOR_READER="" run_indicator_reader "$limit" "$@"
+}
 # THE RECORD LAYOUT OF A COMMITTED-READ FILE. The reader writes "<ts>\tPartition:<p>\tOffset:<o>\t<key>\t<value>",
 # and every committed-read topic KEEPS that Offset column. It is the record's only coordinate on the ledger, and a
 # calibration loader cannot do without it: (deploy #1041 review, engine #44) a run that publishes a file and dies
@@ -1150,7 +1170,12 @@ for topic in $TOPICS; do
       # NOTE: `consumer | gzip` reports GZIP's exit status, so a consumer that emitted zero records
       # still "succeeds". That is how the first version silently archived empty files and advanced
       # its checkpoints. Verify by COUNTING what actually landed, then commit.
-      if is_indicator_avro_topic "$topic"; then
+      if is_spot_avro_topic "$topic"; then
+        run_spot_reader 900 --bootstrap "$BOOTSTRAP" --registry "$(archive_registry_url "${OE_SPOT_REGISTRY_URL:-}")" \
+             --topic "$topic" --partition "$part" --from "$from" --count "$count" --timeout-ms 60000 \
+             $(is_strict_topic "$topic" && echo "--print-offset") 2>/dev/null | grep -av '^Processed a total of' | gzip -6 > "$tmp"
+        pipe_rc=("${PIPESTATUS[@]}")
+      elif is_indicator_avro_topic "$topic"; then
         run_indicator_reader 900 --bootstrap "$BOOTSTRAP" --registry "$(indicator_registry_url)" \
              --topic "$topic" --partition "$part" --from "$from" --count "$count" --timeout-ms 60000 \
              $(is_strict_topic "$topic" && echo "--print-offset") 2>/dev/null | grep -av '^Processed a total of' | gzip -6 > "$tmp"

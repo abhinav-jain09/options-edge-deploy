@@ -6,16 +6,24 @@
 # reports as the pod imageID on docker-desktop -- so a post-rollout imageID check can match it.
 #
 # Env: DEPLOY_PLATFORM (e.g. linux/arm64), REGISTRY_SCHEME (http for the local insecure registry).
+#      REGISTRY_RESOLVE_HOST (optional) — the host:port the AGENT curls to read manifests/blobs,
+#      used in place of the registry component of the image ref WITHOUT changing the ref itself. The
+#      dev registry is named host.docker.internal:5001 in the manifests (resolved by kubelet ON the
+#      dev host), but a REMOTE Jenkins agent cannot reach it by that name (host.docker.internal is its
+#      OWN loopback); set REGISTRY_RESOLVE_HOST=<dev-LAN-ip>:5001 so the agent resolves the digest over
+#      the LAN while the pinned ref still carries host.docker.internal:5001 for the pods. Same registry,
+#      same digest. Unset = resolve via the ref's own registry (agent IS the dev host).
 # Requires: curl, jq.
 
 resolve_repo_digest() {
   local registry="$1" repo="$2" tag="$3"
+  local resolve="${REGISTRY_RESOLVE_HOST:-$registry}"
   local os="${DEPLOY_PLATFORM%/*}" arch="${DEPLOY_PLATFORM#*/}"
   local accept='application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json'
   local hdr man digest media n cfg cfgblob
   hdr="$(mktemp)"; man="$(mktemp)"
   curl -fsSL -D "$hdr" -H "Accept: $accept" -o "$man" \
-    "${REGISTRY_SCHEME:-http}://$registry/v2/$repo/manifests/$tag"
+    "${REGISTRY_SCHEME:-http}://$resolve/v2/$repo/manifests/$tag"
   digest="$(awk 'tolower($1)=="docker-content-digest:"{gsub("\r","",$2);print $2}' "$hdr" | tail -1)"
   [[ -n "$digest" ]] || { echo "no Docker-Content-Digest for $repo:$tag" >&2; return 1; }
   media="$(jq -r '.mediaType // ""' "$man")"
@@ -28,7 +36,7 @@ resolve_repo_digest() {
       cfg="$(jq -r '.config.digest // ""' "$man")"
       [[ -n "$cfg" ]] || { echo "$repo:$tag manifest has no config digest" >&2; return 1; }
       cfgblob="$(mktemp)"
-      curl -fsSL -o "$cfgblob" "${REGISTRY_SCHEME:-http}://$registry/v2/$repo/blobs/$cfg"
+      curl -fsSL -o "$cfgblob" "${REGISTRY_SCHEME:-http}://$resolve/v2/$repo/blobs/$cfg"
       jq -e --arg os "$os" --arg arch "$arch" '.os==$os and .architecture==$arch' "$cfgblob" >/dev/null \
         || { echo "$repo:$tag is not $DEPLOY_PLATFORM" >&2; return 1; }
       ;;

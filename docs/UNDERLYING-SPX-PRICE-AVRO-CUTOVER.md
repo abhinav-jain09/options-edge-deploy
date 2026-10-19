@@ -127,9 +127,15 @@ dealer-ledger-calibration scorer. es4-only (read `es.underlying.spx.price`): es-
 No change needed: option-price-behavior (names the topic in an env var no code reads), vol-state, broker-execution (index.price).
 
 ## PRODUCTION GO / NO-GO (all must hold before step 3 on `192.168.100.252`)
-1. **NAS archive converted AND deployed** (`oe-archive-kafka.sh`, `OE_SPOT_TOPICS`, prod */10 cron): an Avro reader writing the JSON-era line
-   (the `IndicatorArchiveReader` pattern) is live; otherwise prod spot history stops being archived at step 6 (the archive is the only durable
-   history of this compacted topic). NO-GO until proven on a staged range.
+1. **NAS archive reader exists; enable `OE_SPOT_AVRO_TOPICS` at the prod cutover step.** `scripts/ops/archive/SpotArchiveReader.java`
+   (shipped in the archive unit with the contracts jar, unit-tested against the real serializer) writes the console consumer's line layout with the
+   value as the JSON-era text (CPython-repr `price`/`canonicalSpot`, `size` null, tombstone `null`; a non-Avro value exits 2 and publishes nothing).
+   `OE_SPOT_AVRO_TOPICS` ships EMPTY, so prod's still-JSON topic keeps archiving by console consumer until the switch. THE SWITCH (after step 5 has
+   recreated the topic under Avro and the Avro feed is live, before the spot cron is resumed): set `OE_SPOT_AVRO_TOPICS="underlying.spx.price"` for
+   the `*/10` spot job on the archive host, resume the cron, and confirm the next archive run logs a captured range for `underlying.spx.price` whose
+   lines start `{"schemaVersion":1,"symbol":"SPX",`. Enabling it while the topic still holds JSON makes the run fail loud (no range published, checkpoint not advanced);
+   not enabling it after the cutover does the same via the console consumer's undecodable bytes. Dev does not archive spot, so dev leaves it empty.
+   The archive unit must be deployed (`archive-scripts-deploy`) before the switch.
 2. **`spx-es4-bridge` replaced** by `Jenkinsfile.spx-price-reencoder` TARGET=es4 (see "Mirrors"): the bridge byte-copies Confluent-framed records into a registry where their
    schema id is invalid. It is part of the stop list in step 3 and stays stopped; the mirror install retires its unit.
 3. The prod reader images were built AFTER the reader PRs merged and verified against an Avro topic on dev; the prod feed image is the
@@ -143,9 +149,9 @@ No change needed: option-price-behavior (names the topic in an env var no code r
 ## Not covered by the dev cutover — remaining for prod / owner
 * **Production**: steps 1-8 on `192.168.100.252` after a prod window; read the prod pre-cutover `TopicId` off the live broker.
 * **NAS archive** (`scripts/ops/archive/oe-archive-kafka.sh`, `OE_SPOT_TOPICS`, prod */10 cron): the console-consumer text pipe
-  cannot decode Avro; it needs an Avro reader writing the JSON-era line (the `IndicatorArchiveReader` pattern) BEFORE the prod
-  topic converts, or prod spot history stops being archived (the archive is the only durable history of this compacted topic).
-  Dev does not archive spot, so dev is unaffected.
+  cannot decode Avro; `SpotArchiveReader.java` (the `IndicatorArchiveReader` pattern) now exists and is wired as the opt-in
+  `OE_SPOT_AVRO_TOPICS` (empty until the prod cutover; enable it at the cutover step, go/no-go item 1) so prod spot history keeps being
+  archived (the archive is the only durable history of this compacted topic). Dev does not archive spot, so dev is unaffected.
 * **Mirrors (decode-and-re-encode, this repository)**: see the next section. Both byte copiers of this topic are replaced; do NOT point es4 or the
   .74 stack at Avro until the corresponding mirror job is installed and its Verify stage reports FLOWING.
 * **Python timewarp/replay tools** (`timewarp_snapshot_replay.py`, `hpsf_replay.py`) publish a JSON variant of this payload to
