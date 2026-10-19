@@ -14,6 +14,7 @@
 #   roll-forward-topics.sh --recreate|--verify --cluster dev|production --topics t1,t2,... \
 #       --pre-cutover-id t1=<TopicId> [--pre-cutover-id t2=<TopicId> ...]            (one per topic, read off the live broker)
 #       [--new-topic-id t1=<id> ...]                                                  (--verify only: the ids --recreate printed)
+#       --registry <schema-registry-url> --subject t1=<record.full.Name> [--subject t2=... ]   (RecordNameStrategy subject per topic)
 #       ( --writers-and-readers-stopped | --avro-writer-live --json-writers-stopped )
 #       [--topic-absent-after-failed-create] [--state-dir DIR] <bootstrap-servers> [kafka-bin-dir]
 # Every topic is checked (id, shape captured) BEFORE any topic is deleted. Topics are then processed in order and the run STOPS at
@@ -28,7 +29,7 @@ usage() {
 PHASE="${1:-}"
 case "$PHASE" in --recreate|--verify) ;; *) usage ;; esac
 shift
-CLUSTER=""; TOPICS_CSV=""; PRE_IDS=""; NEW_IDS=""; STOPPED=""; JSON_STOPPED=""; AVRO_LIVE=""; ABSENT_OK=""; STATE_BASE="${RF_STATE_DIR:-$HOME/.roll-forward-topics}"; POS=()
+REGISTRY=""; SUBJECTS=""; CLUSTER=""; TOPICS_CSV=""; PRE_IDS=""; NEW_IDS=""; STOPPED=""; JSON_STOPPED=""; AVRO_LIVE=""; ABSENT_OK=""; STATE_BASE="${RF_STATE_DIR:-$HOME/.roll-forward-topics}"; POS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --cluster) CLUSTER="${2:-}"; shift 2 ;;
@@ -39,14 +40,19 @@ while [ $# -gt 0 ]; do
     --json-writers-stopped) JSON_STOPPED=yes; shift ;;
     --avro-writer-live) AVRO_LIVE=yes; shift ;;
     --topic-absent-after-failed-create) ABSENT_OK=yes; shift ;;
+    --registry) REGISTRY="${2:-}"; shift 2 ;;
+    --subject) SUBJECTS="$SUBJECTS${2:-}"$'\n'; shift 2 ;;
     --state-dir) STATE_BASE="${2:-}"; shift 2 ;;
+    --*) echo "FATAL: unknown option '$1'" >&2; exit 2 ;;
     *) POS+=("$1"); shift ;;
   esac
 done
 case "$CLUSTER" in dev|production) ;; *) usage ;; esac
 [ -n "$TOPICS_CSV" ] || usage
 if [ "$AVRO_LIVE" = yes ]; then [ "$JSON_STOPPED" = yes ] && [ "$STOPPED" != yes ] || usage; else [ "$STOPPED" = yes ] && [ "$JSON_STOPPED" != yes ] || usage; fi
-BS="${POS[0]:-}"; [ -n "$BS" ] || usage
+[ "${#POS[@]}" -ge 1 ] && [ "${#POS[@]}" -le 2 ] || usage
+BS="${POS[0]}"
+[ -n "$REGISTRY" ] || usage
 BIN="${POS[1]:-${KAFKA_BIN_DIR:-}}"
 
 # --cluster is not a label: the bootstrap must BE that cluster's broker (a "dev" wipe must never reach production).
@@ -79,12 +85,14 @@ check_ids() { # <flag> <list> <required>
   done <<< "$list"
 }
 check_ids --pre-cutover-id "$PRE_IDS" yes
+check_ids --subject "$SUBJECTS" yes
 if [ "$PHASE" = "--verify" ]; then check_ids --new-topic-id "$NEW_IDS" yes; else [ -z "$NEW_IDS" ] || usage; fi
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 . "$HERE/avro-rollforward.lib.sh"
 KT="$(rf_resolve_cli "$BIN")"
+command -v curl >/dev/null || { echo "FATAL: curl is required for the Schema Registry check" >&2; exit 2; }
 KG="$(rf_resolve_cli_named kafka-consumer-groups "$BIN")"
 GO="$(rf_resolve_cli_named kafka-get-offsets "$BIN")"
 CC="$(rf_resolve_cli_named kafka-console-consumer "$BIN")"
@@ -94,22 +102,36 @@ mkdir -p "$STATE" || { echo "FATAL: cannot create state dir $STATE" >&2; exit 2;
 
 # shape file: partitions=N / rf=N / one `config.<key>=<value>` per live config (values may contain commas)
 describe_field() { printf '%s\n' "$1" | tr '\t' '\n' | sed -n "s/^$2: //p" | head -1; }
-capture_shape() { # <describe-line> <file>
+capture_shape() { # <describe-line> <file> <topic-id>
   local desc="$1" file="$2" parts rf cfg
   parts="$(describe_field "$desc" PartitionCount)"; rf="$(describe_field "$desc" ReplicationFactor)"
   case "$parts" in ''|*[!0-9]*) echo "FATAL: cannot read PartitionCount from: $desc" >&2; return 1 ;; esac
   case "$rf" in ''|*[!0-9]*) echo "FATAL: cannot read ReplicationFactor from: $desc" >&2; return 1 ;; esac
   cfg="$(describe_field "$desc" Configs)"
-  { echo "partitions=$parts"; echo "rf=$rf"
+  { echo "cluster=$CLUSTER"; echo "topicid=$3"; echo "partitions=$parts"; echo "rf=$rf"
     [ -z "$cfg" ] || rf_split_declared "$cfg" | sed 's/^/config./'; } > "$file.tmp" && mv "$file.tmp" "$file" \
     || { echo "FATAL: cannot write $file" >&2; return 1; }
 }
 shape_get() { sed -n "s/^$2=//p" "$1" | head -1; }
 
+# the Avro record's 4-byte schema id must be registered under THIS topic's declared subject (not just "starts with 0x00")
+check_schema_id() { # <topic> <partition> <offset>
+  local topic="$1" p="$2" off="$3" subj tmp id out
+  subj="$(id_of "$SUBJECTS" "$topic")"; tmp="$(mktemp)"
+  "$CC" --bootstrap-server "$BS" --topic "$topic" --partition "$p" --offset "$off" --max-messages 1 --timeout-ms "${RF_WIRE_TIMEOUT_MS:-15000}" > "$tmp" 2>/dev/null < /dev/null || true
+  if [ "$(tr -d '\n\r' < "$tmp")" = "${RF_NULL_LITERAL:-null}" ]; then rm -f "$tmp"; return 0; fi   # tombstone
+  id=$(od -An -tu1 -N5 "$tmp" | awk 'NR==1 {print $2*16777216 + $3*65536 + $4*256 + $5}'); rm -f "$tmp"
+  case "$id" in ''|*[!0-9]*) echo "FAIL: $topic partition $p offset $off: cannot read a schema id" >&2; return 1 ;; esac
+  out="$(curl -fsS "$REGISTRY/schemas/ids/$id/versions" 2>&1)" || { echo "FAIL: registry has no schema id $id (record at $topic:$p@$off): $out" >&2; return 1; }
+  printf '%s' "$out" | grep -q "\"subject\":\"$subj\"" || { echo "FAIL: schema id $id of $topic:$p@$off is not registered under subject $subj: $out" >&2; return 1; }
+}
+
 # post-checks of ONE topic, from the broker; prints the new id first so a later failure is recoverable with --verify.
 post_checks() { # <topic> <pre-id> <want-new-id|"">
   local topic="$1" pre="$2" want="$3" shape="$STATE/$1.shape" desc found parts rf k want_v have
   [ -f "$shape" ] || { echo "FAIL: no captured shape for $topic at $shape (the --recreate that deleted it ran elsewhere?)" >&2; return 1; }
+  [ "$(shape_get "$shape" topicid)" = "$pre" ] && [ "$(shape_get "$shape" cluster)" = "$CLUSTER" ] \
+    || { echo "FAIL: the shape of $topic was not captured from id $pre on cluster $CLUSTER" >&2; return 1; }
   desc="$(rf_describe "$KT" "$BS" "$topic")" || return 1
   found="$(rf_topic_id "$desc" "$topic")" || return 1
   echo "NEW TOPIC ID: $topic=$found (was $pre)"
@@ -122,13 +144,20 @@ post_checks() { # <topic> <pre-id> <want-new-id|"">
     k="${k#config.}"; have="$(rf_config_value "$desc" "$k")"
     [ "$have" = "$want_v" ] || { echo "FAIL: $topic $k is '$have', live topic had '$want_v'" >&2; return 1; }
   done < <(grep '^config\.' "$shape")
+  # two-way: the live topic must carry NO topic-level override beyond the captured set
+  local live_keys want_keys
+  live_keys="$(rf_split_declared "$(describe_field "$desc" Configs)" | sed -n 's/=.*//p' | sort)"
+  want_keys="$(grep '^config\.' "$shape" | sed 's/^config\.//; s/=.*//' | sort)"
+  [ "$live_keys" = "$want_keys" ] || { echo "FAIL: $topic carries configs other than the captured set. live: $(echo $live_keys) captured: $(echo $want_keys)" >&2; return 1; }
   local early late
   early="$("$GO" --bootstrap-server "$BS" --topic "$topic" --time -2 2>&1)" || { echo "FAIL: cannot read earliest offsets of $topic: $early" >&2; return 1; }
   late="$("$GO" --bootstrap-server "$BS" --topic "$topic" --time -1 2>&1)" || { echo "FAIL: cannot read end offsets of $topic: $late" >&2; return 1; }
   # partial answers are not authoritative: both snapshots must name every partition exactly once
+  local want_p snap got_p
+  want_p="$(seq 0 $((parts - 1)) | paste -sd, -)"
   for snap in "$early" "$late"; do
-    [ "$(printf '%s\n' "$snap" | awk -F: -v t="$topic" '$1 == t {c++} END {print c+0}')" = "$parts" ] \
-      || { echo "FAIL: offsets of $topic name a number of partitions other than $parts: $snap" >&2; return 1; }
+    got_p="$(printf '%s\n' "$snap" | awk -F: -v t="$topic" '$1 == t {print $2}' | sort -n | paste -sd, -)"
+    [ "$got_p" = "$want_p" ] || { echo "FAIL: offsets of $topic must name each partition 0..$((parts - 1)) exactly once, got [$got_p]: $snap" >&2; return 1; }
   done
   local p e l off rc
   while IFS=: read -r p e l; do
@@ -140,6 +169,7 @@ post_checks() { # <topic> <pre-id> <want-new-id|"">
       for off in "$e" "$((l - 1))"; do
         rc=0; rf_wire_is_avro "$CC" "$BS" "$topic" "$p" "$off" || rc=$?
         [ "$rc" -eq 0 ] || { echo "FAIL: $topic partition $p offset $off is not verifiably Avro (verdict $rc: 1 = not Avro, a JSON writer is live; 2 = unreadable). The topic is contaminated: stop the JSON writer and --recreate again with --pre-cutover-id $topic=$found" >&2; return 1; }
+        check_schema_id "$topic" "$p" "$off" || return 1
       done
     fi
   done < <(paste -d: <(printf '%s\n' "$early" | awk -F: -v t="$topic" '$1 == t {print $2 ":" $3}' | sort -t: -k1,1n) \
@@ -168,6 +198,13 @@ fail_run() { # <topic> <hint>: stop, name what was not touched
   exit 1
 }
 
+# the subject must exist and be FULL-compatible on the registry BEFORE anything is changed (RecordNameStrategy: subject = record full name)
+for t in "${TOPICS[@]}"; do
+  subj="$(id_of "$SUBJECTS" "$t")"
+  curl -fsS "$REGISTRY/subjects/$subj/versions/latest" >/dev/null 2>&1 || { echo "FATAL: subject $subj (topic $t) has no version on $REGISTRY; register the schema first. Nothing was changed." >&2; exit 1; }
+  curl -fsS "$REGISTRY/config/$subj?defaultToGlobal=true" 2>/dev/null | grep -q '"compatibilityLevel":"FULL"' || { echo "FATAL: subject $subj is not FULL compatibility on $REGISTRY. Nothing was changed." >&2; exit 1; }
+done
+
 echo "=== roll forward ${TOPICS[*]} on $BS (cluster $CLUSTER) $PHASE ==="
 if [ "$PHASE" = "--verify" ]; then
   for t in "${TOPICS[@]}"; do post_checks "$t" "$(id_of "$PRE_IDS" "$t")" "$(id_of "$NEW_IDS" "$t")" || fail_run "$t" "fix the cause and re-run --verify."; done
@@ -183,11 +220,13 @@ for t in "${TOPICS[@]}"; do
     desc="$(rf_describe "$KT" "$BS" "$t")" || exit 1
     cur="$(rf_topic_id "$desc" "$t")" || exit 1
     [ "$cur" = "$pre" ] || { echo "FAIL: $t carries id $cur, not the pre-cutover id $pre. It was already recreated and may hold live Avro; refusing. NOTHING was deleted." >&2; exit 1; }
-    capture_shape "$desc" "$STATE/$t.shape" || exit 1
+    capture_shape "$desc" "$STATE/$t.shape" "$cur" || exit 1
     echo "-- $t id $cur: shape captured -> $(tr '\n' ' ' < "$STATE/$t.shape")"
   else
     [ "$ABSENT_OK" = yes ] || { echo "FAIL: $t does not exist. If a previous run deleted it and failed to create it, re-run with --topic-absent-after-failed-create; otherwise find out who deleted it. NOTHING was deleted." >&2; exit 1; }
     [ -f "$STATE/$t.shape" ] || { echo "FAIL: $t is absent and no captured shape exists at $STATE/$t.shape; the live shape is lost, create it by hand then --verify. NOTHING was deleted." >&2; exit 1; }
+    [ "$(shape_get "$STATE/$t.shape" topicid)" = "$pre" ] && [ "$(shape_get "$STATE/$t.shape" cluster)" = "$CLUSTER" ] \
+      || { echo "FAIL: the shape at $STATE/$t.shape was not captured from $t id $pre on cluster $CLUSTER (stale or foreign). NOTHING was deleted." >&2; exit 1; }
     echo "-- $t absent (recovering a failed create); captured shape $(tr '\n' ' ' < "$STATE/$t.shape")"
   fi
 done

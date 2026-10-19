@@ -8,7 +8,7 @@ full worked example is `docs/UNDERLYING-SPX-PRICE-AVRO-CUTOVER.md`.
 ## Runbook order (one environment)
 1. Merge the contract, then the reader and writer changes. A prod image built from main for a converted service reads Avro against a
    still-JSON topic: build no prod images of converted services until this environment's cutover.
-2. **Register** every subject on the environment's registry before any producer (sha256-pinned schema, compatibility FULL, read back).
+2. **Register** every subject on the environment's registry before any producer (sha256-pinned schema, compatibility FULL, read back). Subject strategy is RecordNameStrategy: subject = the record's full name (one subject for every environment). Producers run with `auto.register.schemas=false` (verify the writer's config; it must refuse an unregistered shape, not register one).
 3. Stop non-Kubernetes JSON writers and byte copiers (archive crons, console-consumer|producer bridges, launchd mirrors) and keep them stopped.
 4. **Avro writer first**: roll it, then prove the OLD JSON writer pod is gone (one pod, new image digest).
 5. **Read the TopicIds** off the live broker (`kafka-topics --describe --topic <t>`), same `<bootstrap>` as step 6, and freeze topic
@@ -16,6 +16,7 @@ full worked example is `docs/UNDERLYING-SPX-PRICE-AVRO-CUTOVER.md`.
 6. **Wipe and recreate**:
    `roll-forward-topics.sh --recreate --cluster dev|production --topics t1,t2 --pre-cutover-id t1=<id> --pre-cutover-id t2=<id> --avro-writer-live --json-writers-stopped <bootstrap> [bin-dir]`
    (everything stopped: `--writers-and-readers-stopped` instead; then the topic must be empty and no group may hold an offset).
+   Also required: `--registry <url> --subject <topic>=<record.full.Name>` per topic. Before any change the script verifies each subject exists with FULL compatibility; in live mode each sampled record's schema id must be registered under that topic's subject.
    Bootstrap is bound to the cluster (dev `localhost:19092`, `host.docker.internal:19092`, `192.168.100.102:19092`; production `192.168.100.252:9092`).
 7. **Roll the Avro readers**, then **verify the wire** (registry subjects, a decoded record per topic, reader group lag).
 
@@ -24,6 +25,9 @@ full worked example is `docs/UNDERLYING-SPX-PRICE-AVRO-CUTOVER.md`.
   and the live partition count, replication factor and every topic-level config are captured to `$RF_STATE_DIR` (default
   `~/.roll-forward-topics/<cluster>/<topic>.shape`, `--state-dir` overrides). No per-topic table exists; the recreate copies the live shape.
   A list-valued config (`cleanup.policy=compact,delete`) is created in the bracket form `[compact,delete]`.
+* The shape file also records the cluster and the pre-cutover TopicId; absent-topic recovery and every post-check refuse a shape not bound to the supplied id.
+* Config verification is two-way: the recreated topic must carry exactly the captured overrides, no extra ones. Offsets must name each partition 0..N-1 exactly once.
+* Unknown options and extra positional arguments are refused.
 * Last-look id re-check immediately before each delete; absent topic refused unless `--topic-absent-after-failed-create`
   (the shape captured by the failed run is reused).
 * Post-checks per topic, from the broker: new id (printed first as `NEW TOPIC ID: <topic>=<id>`), exact partitions/RF/configs, offsets
@@ -43,3 +47,5 @@ full worked example is `docs/UNDERLYING-SPX-PRICE-AVRO-CUTOVER.md`.
   Discard it in the reader at start, or empty that PVC. Any reader with persistent state keyed by source offsets needs the same.
 * **Persistent state** (changelogs, snapshots, PVC stores) written from JSON records outlives the wipe; inventory it per reader and
   rotate or rebuild it. A topic recreated while a stale JSON image still runs gets JSON again within seconds: a new TopicId does not prove no JSON since.
+
+The test suite uses CLI mocks (no real broker or registry); run a dry rehearsal on a scratch topic on dev before first production use.

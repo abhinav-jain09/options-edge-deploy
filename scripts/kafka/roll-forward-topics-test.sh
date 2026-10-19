@@ -41,6 +41,7 @@ topic=""; prev=""; time=""
 for a in "$@"; do [ "$prev" = "--topic" ] && topic="$a"; [ "$prev" = "--time" ] && time="$a"; prev="$a"; done
 n="$(cat "$MOCK_DIR/$topic/parts")"; v="MOCK_END_${topic//[.-]/_}"; end="${!v:-${MOCK_END:-0}}"
 [ "${MOCK_OFFSETS_PARTIAL:-}" = "$topic" ] && n=$((n - 1))
+[ "${MOCK_OFFSETS_DUP:-}" = "$topic" ] && { for ((p = 0; p < n - 1; p++)); do echo "$topic:$p:${MOCK_END:-0}"; done; echo "$topic:0:${MOCK_END:-0}"; exit 0; }
 for ((p = 0; p < n; p++)); do
   if [ "$time" = -2 ]; then echo "$topic:$p:${MOCK_START:-0}"; else echo "$topic:$p:$end"; fi
 done
@@ -52,16 +53,27 @@ for a in "$@"; do [ "$prev" = "--offset" ] && off="$a"; [ "$prev" = "--topic" ] 
 eval "specific=\${MOCK_WIRE_AT_${off}:-}"; v="MOCK_WIRE_${topic//[.-]/_}"
 case "${specific:-${!v:-${MOCK_WIRE:-avro}}}" in
   unreadable) exit 0 ;;
-  avro) printf '\000\000\000\007\310some-avro' ;;
+  avro) printf '\000\000\000\000\007some-avro' ;;
   json) printf '{"symbol":"SPX"}' ;;
 esac
 exit 0
 MOCK
-chmod +x "$TMP/bin/"*.sh
+cat > "$TMP/bin/curl" <<'MOCK'
+#!/usr/bin/env bash
+url="${@: -1}"
+case "$url" in
+  */schemas/ids/7/versions) s="${MOCK_ID_SUBJECTS:-S.a.one S.b.two S.c.three}"; printf '['; sep=""; for x in $s; do printf '%s{"subject":"%s","version":1}' "$sep" "$x"; sep=","; done; printf ']' ;;
+  */schemas/ids/*) exit 22 ;;
+  */versions/latest) [ -z "${MOCK_NO_SUBJECT:-}" ] || exit 22; echo '{"id":7}' ;;
+  */config/*) echo "{\"compatibilityLevel\":\"${MOCK_COMPAT:-FULL}\"}" ;;
+esac
+MOCK
+chmod +x "$TMP/bin/"*.sh "$TMP/bin/curl"
 
 pass=0; fail=0
 check() { if [ "$2" = "$3" ]; then pass=$((pass+1)); echo "ok    $1"; else fail=$((fail+1)); echo "FAIL  $1: expected '$3' got '$2'"; fi; }
-run() { RF_STATE_DIR="$TMP/shapes" MOCK_DIR="$TMP/state" PATH="$TMP/bin:$PATH" bash "$HERE/roll-forward-topics.sh" "$@" >"$TMP/out" 2>&1; echo $?; }
+run() { local a=("$@") i; for ((i = 0; i < ${#a[@]}; i++)); do if [ "${a[i]}" = --topics ]; then local tl="${a[i+1]}" t; for t in ${tl//,/ }; do a+=(--subject "$t=S.$t"); done; a+=(--registry http://reg); fi; done
+  RF_STATE_DIR="$TMP/shapes" MOCK_DIR="$TMP/state" PATH="$TMP/bin:$PATH" bash "$HERE/roll-forward-topics.sh" "${a[@]}" >"$TMP/out" 2>&1; echo $?; }
 mk() { # <topic> <id> <parts> <rf> <cfg lines...>
   local t="$1"; mkdir -p "$TMP/state/$t"; echo "$2" > "$TMP/state/$t/id"; echo "$3" > "$TMP/state/$t/parts"; echo "$4" > "$TMP/state/$t/rf"
   shift 4; printf '%s\n' "$@" > "$TMP/state/$t/cfg"
@@ -140,6 +152,23 @@ two
 check "an unreadable group list fails" "$(MOCK_GROUPS_RC=1 run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
 two
 check "partial offsets (a partition missing) fail" "$(MOCK_OFFSETS_PARTIAL=b.two run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
+
+check "offsets with a DUPLICATE partition and a missing one fail (same row count)" "$(two; MOCK_OFFSETS_DUP=b.two run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
+check "an unknown option is refused" "$(two; run "${RA[@]}" "${STOP[@]}" --bogus localhost:19092 "$TMP/bin")" 2
+check "extra positional arguments are refused" "$(two; run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin" extra)" 2
+check "a missing --subject is a usage error" "$(two; RF_STATE_DIR="$TMP/shapes" MOCK_DIR="$TMP/state" PATH="$TMP/bin:$PATH" bash "$HERE/roll-forward-topics.sh" "${RA[@]}" --registry http://reg --subject a.one=S.a.one "${STOP[@]}" localhost:19092 "$TMP/bin" >/dev/null 2>&1; echo $?)" 2
+check "a subject absent on the registry refuses before any delete" "$(two; MOCK_NO_SUBJECT=1 run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
+check "…nothing deleted" "$(logn)" 0
+check "a subject that is not FULL compatibility refuses before any delete" "$(two; MOCK_COMPAT=BACKWARD run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
+check "…nothing deleted" "$(logn)" 0
+check "avro-live: a record whose schema id is not under the topic's subject fails" "$(two; MOCK_END=12 MOCK_ID_SUBJECTS=S.other run "${RA[@]}" --avro-writer-live --json-writers-stopped localhost:19092 "$TMP/bin")" 1
+two; run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin" >/dev/null
+echo "extra.override=1" >> "$TMP/state/a.one/cfg"
+VX=(--verify --cluster dev --topics a.one --pre-cutover-id a.one=OLDA --new-topic-id a.one="$(cat "$TMP/state/a.one/id")")
+check "--verify rejects an EXTRA topic-level override beyond the captured set" "$(run "${VX[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
+two; run --recreate --cluster dev --topics a.one --pre-cutover-id a.one=OLDA "${STOP[@]}" localhost:19092 "$TMP/bin" >/dev/null
+check "recovery with a shape bound to a DIFFERENT TopicId is refused" "$(rm -rf "$TMP/state/a.one"; run --recreate --cluster dev --topics a.one --pre-cutover-id a.one=OTHERID --topic-absent-after-failed-create "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
+check "…and nothing was created" "$([ -f "$TMP/state/a.one/id" ] && echo created || echo absent)" absent
 
 # avro-writer-live
 LV=(--avro-writer-live --json-writers-stopped)
