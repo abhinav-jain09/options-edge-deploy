@@ -22,12 +22,22 @@ case "$mode" in
     # like a broker: list values print WITHOUT brackets, joined by commas
     cfg="$(sed 's/\[\(.*\)\]/\1/' "$d/cfg" 2>/dev/null | paste -sd, -)"
     printf 'Topic: %s\tTopicId: %s\tPartitionCount: %s\tReplicationFactor: %s\tConfigs: %s\n' "$topic" "$(cat "$d/id")" "$(cat "$d/parts")" "$(cat "$d/rf")" "$cfg"; exit 0 ;;
-  delete) rm -f "$d/id" "$d/cfg" "$d/parts" "$d/rf"; echo "deleted:$topic" >> "$MOCK_DIR/log"; exit 0 ;;
+  delete) [ -z "${MOCK_DELETE_ALSO:-}" ] || rm -f "$MOCK_DIR/$MOCK_DELETE_ALSO/id"; rm -f "$d/id" "$d/cfg" "$d/parts" "$d/rf"; echo "deleted:$topic" >> "$MOCK_DIR/log"; exit 0 ;;
   create) [ "${MOCK_CREATE_FAIL:-}" = "$topic" ] && { echo "create refused" >&2; exit 1; }
     mkdir -p "$d"; echo "newid-$RANDOM" > "$d/id"; echo "$parts" > "$d/parts"; echo "$rf" > "$d/rf"
-    printf '%s\n' "${configs[@]}" > "$d/cfg"; echo "created:$topic" >> "$MOCK_DIR/log"; exit 0 ;;
+    printf '%s\n' "${configs[@]}" > "$d/cfg"; [ -z "${MOCK_CREATE_MUTATE:-}" ] || sed -i.bak "s/^${MOCK_CREATE_MUTATE}=.*/${MOCK_CREATE_MUTATE}=mutated/" "$d/cfg"; echo "created:$topic" >> "$MOCK_DIR/log"; exit 0 ;;
 esac
 exit 0
+MOCK
+cat > "$TMP/bin/kafka-configs.sh" <<'MOCK'
+#!/usr/bin/env bash
+# like kafka-configs --describe: dynamic topic overrides, one per line, list values printed WITHOUT brackets
+name=""; prev=""; for a in "$@"; do [ "$prev" = "--entity-name" ] && name="$a"; prev="$a"; done
+[ -f "$MOCK_DIR/$name/id" ] || { echo "no such topic" >&2; exit 1; }
+echo "Dynamic configs for topic $name are:"
+while IFS= read -r l; do [ -n "$l" ] || continue; l="$(printf '%s' "$l" | sed 's/=\[\(.*\)\]$/=\1/')"
+  printf '  %s sensitive=false synonyms={DYNAMIC_TOPIC_CONFIG:%s}\n' "$l" "$l"; done < "$MOCK_DIR/$name/cfg"
+printf '  broker.default=1 sensitive=false synonyms={STATIC_BROKER_CONFIG:broker.default=1}\n'
 MOCK
 cat > "$TMP/bin/kafka-consumer-groups.sh" <<'MOCK'
 #!/usr/bin/env bash
@@ -53,6 +63,7 @@ for a in "$@"; do [ "$prev" = "--offset" ] && off="$a"; [ "$prev" = "--topic" ] 
 eval "specific=\${MOCK_WIRE_AT_${off}:-}"; v="MOCK_WIRE_${topic//[.-]/_}"
 case "${specific:-${!v:-${MOCK_WIRE:-avro}}}" in
   unreadable) exit 0 ;;
+  failing) exit 1 ;;
   avro) printf '\000\000\000\000\007some-avro' ;;
   json) printf '{"symbol":"SPX"}' ;;
 esac
@@ -181,7 +192,7 @@ check "avro-live: JSON LAST fails" "$(MOCK_END=12 MOCK_WIRE_AT_11=json run "${RA
 two
 check "avro-live: JSON FIRST fails" "$(MOCK_END=12 MOCK_WIRE_AT_0=json run "${RA[@]}" "${LV[@]}" localhost:19092 "$TMP/bin")" 1
 two
-check "avro-live: an unreadable end fails closed" "$(MOCK_END=12 MOCK_WIRE_AT_11=unreadable run "${RA[@]}" "${LV[@]}" localhost:19092 "$TMP/bin")" 1
+check "avro-live: a FAILED consumer read at the end fails closed" "$(MOCK_END=12 MOCK_WIRE_AT_11=failing run "${RA[@]}" "${LV[@]}" localhost:19092 "$TMP/bin")" 1
 two
 check "avro-live reads the EARLIEST retained offset (a compacted-away 0 is not checked)" "$(MOCK_START=5 MOCK_END=12 MOCK_WIRE_AT_0=json run "${RA[@]}" "${LV[@]}" localhost:19092 "$TMP/bin")" 0
 two
@@ -211,4 +222,35 @@ echo "retention.ms=-1" > "$TMP/state/b.two/cfg"
 rm -f "$TMP/shapes/dev/a.one.shape"
 check "--verify with no captured shape fails closed" "$(run "${VA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
 
-echo "passed=$pass failed=$fail"; [ "$fail" = 0 ]
+
+# --- config fidelity: list keys bracketed only when comma-valued; other values verbatim; mismatch after create fails the run
+reset; mk d.four OLDD 2 1 "cleanup.policy=[compact,delete]" "retention.ms=1000" "x.custom.list=a,b" "follower.replication.throttled.replicas=0:1,1:2" "segment.bytes=5"
+check "recreate preserves comma values exactly" "$(run --recreate --cluster dev --topics d.four --pre-cutover-id d.four=OLDD "${STOP[@]}" localhost:19092 "$TMP/bin")" 0
+check "single-valued config verbatim" "$(grep -c '^retention.ms=1000$' "$TMP/state/d.four/cfg")" 1
+check "cleanup.policy list is bracketed" "$(grep -c '^cleanup.policy=\[compact,delete\]$' "$TMP/state/d.four/cfg")" 1
+check "throttled-replicas list is bracketed" "$(grep -c '^follower.replication.throttled.replicas=\[0:1,1:2\]$' "$TMP/state/d.four/cfg")" 1
+check "a non-list key with a comma is passed VERBATIM (no brackets)" "$(grep -c '^x.custom.list=a,b$' "$TMP/state/d.four/cfg")" 1
+check "a single-valued list key is not bracketed" "$(reset; mk e.five OLDE 1 1 "cleanup.policy=delete"; run --recreate --cluster dev --topics e.five --pre-cutover-id e.five=OLDE "${STOP[@]}" localhost:19092 "$TMP/bin" >/dev/null; grep -c '^cleanup.policy=delete$' "$TMP/state/e.five/cfg")" 1
+reset; mk d.four OLDD 2 1 "cleanup.policy=[compact,delete]" "retention.ms=1000"
+check "a config altered by the create fails the run" "$(MOCK_CREATE_MUTATE=retention.ms run --recreate --cluster dev --topics d.four --pre-cutover-id d.four=OLDD "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
+check "…the failure names the config mismatch and recovery" "$(grep -c 'configs differ from the captured live set.*kafka-configs --alter' "$TMP/out")" 1
+check "…and prints the stop line" "$(grep -c '^STOPPED at d.four' "$TMP/out")" 1
+
+# --- round-3 hardening
+two
+check "a topic that vanishes after preflight is NOT recreated blind" "$(MOCK_DELETE_ALSO=b.two run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
+check "…b.two was never created" "$(grep -c '^created:b.two' "$TMP/state/log")" 0
+check "…the refusal says it was present at preflight" "$(grep -c 'present at preflight' "$TMP/out")" 1
+two
+check "a vanished topic is recreated only with the explicit flag" "$(MOCK_DELETE_ALSO=b.two run "${RA[@]}" --topic-absent-after-failed-create "${STOP[@]}" localhost:19092 "$TMP/bin")" 0
+two
+check "avro-live: a raw tombstone (zero bytes, exit 0) is accepted at both ends" "$(MOCK_END=12 MOCK_WIRE=unreadable run "${RA[@]}" "${LV[@]}" localhost:19092 "$TMP/bin")" 0
+two
+check "avro-live: a subject that differs from the declared one by a wildcard-matching letter fails" "$(MOCK_END=12 MOCK_ID_SUBJECTS='SXa.one SXb.two' run "${RA[@]}" "${LV[@]}" localhost:19092 "$TMP/bin")" 1
+two
+check "a group row with a non-numeric log-end offset fails closed" "$(MOCK_GROUPS='g a.one 0 5 - - - - -' run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
+two
+check "a group row with a missing log-end offset fails closed" "$(MOCK_GROUPS='g a.one 0 5' run "${RA[@]}" "${LV[@]}" localhost:19092 "$TMP/bin")" 1
+
+echo "passed=$pass failed=$fail"
+[ "$fail" = 0 ]

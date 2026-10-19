@@ -24,9 +24,9 @@ full worked example is `docs/UNDERLYING-SPX-PRICE-AVRO-CUTOVER.md`.
 * Preflight over ALL topics before any delete: id equals the supplied pre-cutover id (else the run is refused and nothing is deleted),
   and the live partition count, replication factor and every topic-level config are captured to `$RF_STATE_DIR` (default
   `~/.roll-forward-topics/<cluster>/<topic>.shape`, `--state-dir` overrides). No per-topic table exists; the recreate copies the live shape.
-  A list-valued config (`cleanup.policy=compact,delete`) is created in the bracket form `[compact,delete]`.
+  Configs are captured machine-exact from `kafka-configs --describe` (only `DYNAMIC_TOPIC_CONFIG` overrides, values verbatim). Only LIST-typed keys (`cleanup.policy`, `leader.replication.throttled.replicas`, `follower.replication.throttled.replicas`) with a comma value are created in bracket form (`[compact,delete]`); every other value, commas included, is passed verbatim.
 * The shape file also records the cluster and the pre-cutover TopicId; absent-topic recovery and every post-check refuse a shape not bound to the supplied id.
-* Config verification is two-way: the recreated topic must carry exactly the captured overrides, no extra ones. Offsets must name each partition 0..N-1 exactly once.
+* Config verification is two-way: the broker's overrides (read back with `kafka-configs`) must equal the captured set exactly; a mismatch fails the run with `kafka-configs --alter` recovery instructions. A topic present at preflight but absent at its turn is refused unless `--topic-absent-after-failed-create` is given. A tombstone is a `null` literal or zero bytes from a consumer that exited 0; the registry subject is matched by exact JSON equality (`jq` is required); a consumer-group row with a non-integer offset fails closed. Offsets must name each partition 0..N-1 exactly once.
 * Unknown options and extra positional arguments are refused.
 * Last-look id re-check immediately before each delete; absent topic refused unless `--topic-absent-after-failed-create`
   (the shape captured by the failed run is reused).

@@ -92,7 +92,9 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 . "$HERE/avro-rollforward.lib.sh"
 KT="$(rf_resolve_cli "$BIN")"
+command -v jq >/dev/null || { echo "FATAL: jq is required for the exact Schema Registry subject check" >&2; exit 2; }
 command -v curl >/dev/null || { echo "FATAL: curl is required for the Schema Registry check" >&2; exit 2; }
+KC="$(rf_resolve_cli_named kafka-configs "$BIN")"
 KG="$(rf_resolve_cli_named kafka-consumer-groups "$BIN")"
 GO="$(rf_resolve_cli_named kafka-get-offsets "$BIN")"
 CC="$(rf_resolve_cli_named kafka-console-consumer "$BIN")"
@@ -100,18 +102,31 @@ kt() { "$KT" --bootstrap-server "$BS" "$@"; }
 STATE="$STATE_BASE/$CLUSTER"
 mkdir -p "$STATE" || { echo "FATAL: cannot create state dir $STATE" >&2; exit 2; }
 
-# shape file: partitions=N / rf=N / one `config.<key>=<value>` per live config (values may contain commas)
+# shape file: partitions=N / rf=N / one `config.<key>=<value>` per DYNAMIC_TOPIC_CONFIG override, captured MACHINE-EXACT from
+# `kafka-configs --describe` (one config per line: key up to the first '=', value verbatim up to ` sensitive=`). The comma-joined
+# `Configs:` field of kafka-topics --describe is NOT parsed for configs: a value may contain commas and '='.
 describe_field() { printf '%s\n' "$1" | tr '\t' '\n' | sed -n "s/^$2: //p" | head -1; }
-capture_shape() { # <describe-line> <file> <topic-id>
+rf_dynamic_configs() { # <topic> -> sorted key=value lines of the topic's dynamic overrides; non-zero if unreadable
+  local out
+  out="$("$KC" --bootstrap-server "$BS" --describe --entity-type topics --entity-name "$1" 2>&1)" \
+    || { echo "FATAL: cannot read the configs of $1: $out" >&2; return 1; }
+  printf '%s\n' "$out" | grep -q "^Dynamic configs for topic $1 are:" \
+    || { echo "FATAL: unrecognised kafka-configs output for $1: $out" >&2; return 1; }
+  printf '%s\n' "$out" | awk '/^[ \t]+[^ \t=]+=/ && / sensitive=(true|false) synonyms=\{DYNAMIC_TOPIC_CONFIG:/ {
+    sub(/^[ \t]+/, ""); sub(/ sensitive=(true|false) synonyms=\{.*$/, ""); print }' | LC_ALL=C sort
+}
+capture_shape() { # <describe-line> <file> <topic-id> <topic>
   local desc="$1" file="$2" parts rf cfg
   parts="$(describe_field "$desc" PartitionCount)"; rf="$(describe_field "$desc" ReplicationFactor)"
   case "$parts" in ''|*[!0-9]*) echo "FATAL: cannot read PartitionCount from: $desc" >&2; return 1 ;; esac
   case "$rf" in ''|*[!0-9]*) echo "FATAL: cannot read ReplicationFactor from: $desc" >&2; return 1 ;; esac
-  cfg="$(describe_field "$desc" Configs)"
+  cfg="$(rf_dynamic_configs "$4")" || return 1
   { echo "cluster=$CLUSTER"; echo "topicid=$3"; echo "partitions=$parts"; echo "rf=$rf"
-    [ -z "$cfg" ] || rf_split_declared "$cfg" | sed 's/^/config./'; } > "$file.tmp" && mv "$file.tmp" "$file" \
+    [ -z "$cfg" ] || printf '%s\n' "$cfg" | sed 's/^/config./'; } > "$file.tmp" && mv "$file.tmp" "$file" \
     || { echo "FATAL: cannot write $file" >&2; return 1; }
 }
+# Kafka LIST-typed topic configs: only these take the [a,b] bracket form on --create --config; every other value goes verbatim.
+RF_LIST_KEYS=" cleanup.policy leader.replication.throttled.replicas follower.replication.throttled.replicas "
 shape_get() { sed -n "s/^$2=//p" "$1" | head -1; }
 
 # the Avro record's 4-byte schema id must be registered under THIS topic's declared subject (not just "starts with 0x00")
@@ -119,16 +134,17 @@ check_schema_id() { # <topic> <partition> <offset>
   local topic="$1" p="$2" off="$3" subj tmp id out
   subj="$(id_of "$SUBJECTS" "$topic")"; tmp="$(mktemp)"
   "$CC" --bootstrap-server "$BS" --topic "$topic" --partition "$p" --offset "$off" --max-messages 1 --timeout-ms "${RF_WIRE_TIMEOUT_MS:-15000}" > "$tmp" 2>/dev/null < /dev/null || true
-  if [ "$(tr -d '\n\r' < "$tmp")" = "${RF_NULL_LITERAL:-null}" ]; then rm -f "$tmp"; return 0; fi   # tombstone
+  # tombstone: the console consumer renders a null value as its null literal OR (raw formatter) as zero bytes
+  if [ ! -s "$tmp" ] || [ "$(tr -d '\n\r' < "$tmp")" = "${RF_NULL_LITERAL:-null}" ]; then rm -f "$tmp"; return 0; fi
   id=$(od -An -tu1 -N5 "$tmp" | awk 'NR==1 {print $2*16777216 + $3*65536 + $4*256 + $5}'); rm -f "$tmp"
   case "$id" in ''|*[!0-9]*) echo "FAIL: $topic partition $p offset $off: cannot read a schema id" >&2; return 1 ;; esac
   out="$(curl -fsS "$REGISTRY/schemas/ids/$id/versions" 2>&1)" || { echo "FAIL: registry has no schema id $id (record at $topic:$p@$off): $out" >&2; return 1; }
-  printf '%s' "$out" | grep -q "\"subject\":\"$subj\"" || { echo "FAIL: schema id $id of $topic:$p@$off is not registered under subject $subj: $out" >&2; return 1; }
+  printf '%s' "$out" | jq -e --arg s "$subj" 'type == "array" and any(.[]; type == "object" and .subject == $s)' >/dev/null 2>&1 || { echo "FAIL: schema id $id of $topic:$p@$off is not registered under subject $subj: $out" >&2; return 1; }
 }
 
 # post-checks of ONE topic, from the broker; prints the new id first so a later failure is recoverable with --verify.
 post_checks() { # <topic> <pre-id> <want-new-id|"">
-  local topic="$1" pre="$2" want="$3" shape="$STATE/$1.shape" desc found parts rf k want_v have
+  local topic="$1" pre="$2" want="$3" shape="$STATE/$1.shape" desc found parts rf
   [ -f "$shape" ] || { echo "FAIL: no captured shape for $topic at $shape (the --recreate that deleted it ran elsewhere?)" >&2; return 1; }
   [ "$(shape_get "$shape" topicid)" = "$pre" ] && [ "$(shape_get "$shape" cluster)" = "$CLUSTER" ] \
     || { echo "FAIL: the shape of $topic was not captured from id $pre on cluster $CLUSTER" >&2; return 1; }
@@ -140,15 +156,11 @@ post_checks() { # <topic> <pre-id> <want-new-id|"">
   parts="$(shape_get "$shape" partitions)"; rf="$(shape_get "$shape" rf)"
   printf '%s\n' "$desc" | tr '\t' '\n' | grep -qx "ReplicationFactor: $rf" || { echo "FAIL: $topic replication factor is not $rf: $desc" >&2; return 1; }
   printf '%s\n' "$desc" | tr '\t' '\n' | grep -qx "PartitionCount: $parts" || { echo "FAIL: $topic partition count is not $parts: $desc" >&2; return 1; }
-  while IFS='=' read -r k want_v; do
-    k="${k#config.}"; have="$(rf_config_value "$desc" "$k")"
-    [ "$have" = "$want_v" ] || { echo "FAIL: $topic $k is '$have', live topic had '$want_v'" >&2; return 1; }
-  done < <(grep '^config\.' "$shape")
-  # two-way: the live topic must carry NO topic-level override beyond the captured set
-  local live_keys want_keys
-  live_keys="$(rf_split_declared "$(describe_field "$desc" Configs)" | sed -n 's/=.*//p' | sort)"
-  want_keys="$(grep '^config\.' "$shape" | sed 's/^config\.//; s/=.*//' | sort)"
-  [ "$live_keys" = "$want_keys" ] || { echo "FAIL: $topic carries configs other than the captured set. live: $(echo $live_keys) captured: $(echo $want_keys)" >&2; return 1; }
+  # two-way, exact: the broker's dynamic overrides must equal the captured set (no missing, no extra, no altered value)
+  local live_cfg want_cfg
+  live_cfg="$(rf_dynamic_configs "$topic")" || return 1
+  want_cfg="$(grep '^config\.' "$shape" | sed 's/^config\.//' | LC_ALL=C sort)"
+  [ "$live_cfg" = "$want_cfg" ] || { echo "FAIL: $topic configs differ from the captured live set. broker: [$(echo $live_cfg)] captured: [$(echo $want_cfg)]. The topic exists EMPTY with wrong config: fix it with kafka-configs --alter (captured set: $shape), then run --verify --new-topic-id $topic=$found" >&2; return 1; }
   local early late
   early="$("$GO" --bootstrap-server "$BS" --topic "$topic" --time -2 2>&1)" || { echo "FAIL: cannot read earliest offsets of $topic: $early" >&2; return 1; }
   late="$("$GO" --bootstrap-server "$BS" --topic "$topic" --time -1 2>&1)" || { echo "FAIL: cannot read end offsets of $topic: $late" >&2; return 1; }
@@ -167,7 +179,7 @@ post_checks() { # <topic> <pre-id> <want-new-id|"">
     elif [ "$l" -gt "$e" ]; then
       # the Avro writer is live, so emptiness is not required; the FIRST and LAST record must be Avro (or a tombstone). A sample, not a scan.
       for off in "$e" "$((l - 1))"; do
-        rc=0; rf_wire_is_avro "$CC" "$BS" "$topic" "$p" "$off" || rc=$?
+        rc=0; rf_wire_is_avro "$CC" "$BS" "$topic" "$p" "$off" tombstone-empty || rc=$?
         [ "$rc" -eq 0 ] || { echo "FAIL: $topic partition $p offset $off is not verifiably Avro (verdict $rc: 1 = not Avro, a JSON writer is live; 2 = unreadable). The topic is contaminated: stop the JSON writer and --recreate again with --pre-cutover-id $topic=$found" >&2; return 1; }
         check_schema_id "$topic" "$p" "$off" || return 1
       done
@@ -177,7 +189,11 @@ post_checks() { # <topic> <pre-id> <want-new-id|"">
   # stale committed offsets survive a topic delete (they are keyed by NAME): verified, not assumed
   local groups stale
   groups="$("$KG" --bootstrap-server "$BS" --describe --all-groups 2>&1)" || { echo "FAIL: cannot read consumer groups on $BS: $groups" >&2; return 1; }
-  stale="$(printf '%s\n' "$groups" | awk -v t="$topic" -v live="$AVRO_LIVE" '$2 == t && $4 ~ /^[0-9]+$/ && (live != "yes" || $4 + 0 > $5 + 0) {print $1 ":" $3 "@" $4 " (log end " $5 ")"}')"
+  # a row for this topic whose current or log-end offset is not an integer ("-", missing) cannot be judged: fail closed
+  local badrow
+  badrow="$(printf '%s\n' "$groups" | awk -v t="$topic" '$2 == t && $4 != "-" && ($4 !~ /^[0-9]+$/ || $5 !~ /^[0-9]+$/) {print}')"
+  [ -z "$badrow" ] || { echo "FAIL: consumer-group rows for $topic with an unreadable log-end offset (cannot judge staleness):" >&2; printf '%s\n' "$badrow" >&2; return 1; }
+  stale="$(printf '%s\n' "$groups" | awk -v t="$topic" -v live="$AVRO_LIVE" '$2 == t && $4 ~ /^[0-9]+$/ && $5 ~ /^[0-9]+$/ && (live != "yes" || $4 + 0 > $5 + 0) {print $1 ":" $3 "@" $4 " (log end " $5 ")"}')"
   if [ -n "$stale" ] && [ "$AVRO_LIVE" = yes ]; then
     echo "WARN: consumer groups with a committed offset BEYOND the new log end of $topic (group:partition@offset); they reset on first poll, the per-reader gate decides:" >&2
     printf '%s\n' "$stale" >&2
@@ -214,13 +230,15 @@ fi
 # PREFLIGHT, all topics, before anything is deleted: the topic list is readable, each topic is present with its pre-cutover id (or absent
 # with the explicit flag and a captured shape), and the live shape is captured to the state dir. One bad topic means NOTHING is deleted.
 LIST="$(rf_list "$KT" "$BS")" || exit 1
+PRESENT=$'\n'
 for t in "${TOPICS[@]}"; do
   pre="$(id_of "$PRE_IDS" "$t")"
   if printf '%s\n' "$LIST" | grep -qx "$t"; then
+    PRESENT="$PRESENT$t"$'\n'
     desc="$(rf_describe "$KT" "$BS" "$t")" || exit 1
     cur="$(rf_topic_id "$desc" "$t")" || exit 1
     [ "$cur" = "$pre" ] || { echo "FAIL: $t carries id $cur, not the pre-cutover id $pre. It was already recreated and may hold live Avro; refusing. NOTHING was deleted." >&2; exit 1; }
-    capture_shape "$desc" "$STATE/$t.shape" "$cur" || exit 1
+    capture_shape "$desc" "$STATE/$t.shape" "$cur" "$t" || exit 1
     echo "-- $t id $cur: shape captured -> $(tr '\n' ' ' < "$STATE/$t.shape")"
   else
     [ "$ABSENT_OK" = yes ] || { echo "FAIL: $t does not exist. If a previous run deleted it and failed to create it, re-run with --topic-absent-after-failed-create; otherwise find out who deleted it. NOTHING was deleted." >&2; exit 1; }
@@ -247,12 +265,16 @@ for t in "${TOPICS[@]}"; do
       sleep 2
     done
     [ "$settled" -eq 1 ] || fail_run "$t" "still present 120s after the delete; re-run once the broker settles."
+  elif [ "$ABSENT_OK" != yes ]; then
+    case "$PRESENT" in
+      *$'\n'"$t"$'\n'*) fail_run "$t" "$t was present at preflight but is ABSENT at its turn (deleted by someone else, or an earlier part of this run?). Refusing to recreate it blind; find out why, then re-run with --topic-absent-after-failed-create." ;;
+    esac
   fi
   parts="$(shape_get "$STATE/$t.shape" partitions)"; rf="$(shape_get "$STATE/$t.shape" rf)"
   args=(--create --topic "$t" --partitions "$parts" --replication-factor "$rf")
   while IFS='=' read -r k v; do
     k="${k#config.}"
-    case "$v" in *,*) v="[$v]" ;; esac   # a list value (cleanup.policy=compact,delete) must use the bracket form
+    case "$RF_LIST_KEYS" in *" $k "*) case "$v" in *,*) v="[$v]" ;; esac ;; esac   # only LIST-typed configs take the bracket form; the rest verbatim
     args+=(--config "$k=$v")
   done < <(grep '^config\.' "$STATE/$t.shape")
   echo "-- create $t (${parts} partitions, RF $rf, $(grep -c '^config\.' "$STATE/$t.shape") configs)"

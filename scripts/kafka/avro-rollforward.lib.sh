@@ -241,7 +241,7 @@ rf_nonempty_partitions() {
 # those cannot see — a stale image still running at wipe time — and the two ends of the log are where
 # that shows up: the start if it was writing when the topic was recreated, the end if it still is.
 rf_wire_is_avro() {
-  local cli="$1" bs="$2" topic="$3" part="$4" off="$5" tmp first
+  local cli="$1" bs="$2" topic="$3" part="$4" off="$5" empty_ok="${6:-}" tmp first
   tmp="$(mktemp)"
   # < /dev/null is REQUIRED, not hygiene: kafka-console-consumer reads stdin, and without this it
   # swallows the caller's `while read ... <<<` herestring — the outer topic loop then silently
@@ -252,7 +252,8 @@ rf_wire_is_avro() {
     # A compacted-away offset reads as empty rather than as a failure; treat unreadable as unknown.
     if [ ! -s "$tmp" ]; then rm -f "$tmp"; return 2; fi
   fi
-  if [ ! -s "$tmp" ]; then rm -f "$tmp"; return 2; fi
+  # empty_ok=tombstone-empty: a consumer that exited 0 with ZERO bytes rendered a null value (raw tombstone); a failed consumer is still unknown
+  if [ ! -s "$tmp" ]; then rm -f "$tmp"; [ "$empty_ok" = tombstone-empty ] && return 0; return 2; fi
   first="$(od -An -tx1 -N1 "$tmp" | tr -d ' \n')"
   # A tombstone: the consumer renders a null value as its null literal on a line of its own.
   if [ "$(tr -d '\n\r' < "$tmp")" = "${RF_NULL_LITERAL:-null}" ]; then
