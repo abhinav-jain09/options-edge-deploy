@@ -1,0 +1,94 @@
+{
+  "type": "record",
+  "name": "DeltaFlowRollingState",
+  "namespace": "com.optionsedge.contracts.deltaflow",
+  "doc": "A PRIVATE image of delta-flow-service (a Kafka Streams state-store value / its compacted changelog, or an internal repartition topic), not a topic contract: it exists as a released .avsc only so the serde has a registered schema (RecordNameStrategy, auto.register.schemas=false), FULL compatibility. Until the Avro cutover these values were hand-built JSON text; the changelogs and repartition topics are DELETED at the cutover (retained JSON is never read). Prices (strike, trade price, bid, ask, spot) are decimal(38,18); every derived statistic keeps its double. Per-(symbol, session) rolling second buckets (rolling-store value).",
+  "fields": [
+    {
+      "name": "symbol",
+      "type": "string"
+    },
+    {
+      "name": "tradingDate",
+      "type": "string"
+    },
+    {
+      "name": "maxSeenEventTimeMs",
+      "type": "long"
+    },
+    {
+      "name": "buckets",
+      "type": {
+        "type": "array",
+        "items": {
+          "type": "record",
+          "name": "DeltaFlowRollingBucket",
+          "namespace": "com.optionsedge.contracts.deltaflow",
+          "doc": "One second bucket of a rolling window.",
+          "fields": [
+            {
+              "name": "epochSecond",
+              "type": "long"
+            },
+            {
+              "name": "netDeltaFlow",
+              "type": "double"
+            },
+            {
+              "name": "highConfidenceNetDeltaFlow",
+              "type": "double"
+            },
+            {
+              "name": "confidenceWeightedNetDeltaFlow",
+              "type": "double"
+            },
+            {
+              "name": "buyerContracts",
+              "type": "long"
+            },
+            {
+              "name": "sellerContracts",
+              "type": "long"
+            },
+            {
+              "name": "highConfidenceTradeCount",
+              "type": "long"
+            },
+            {
+              "name": "mediumConfidenceTradeCount",
+              "type": "long"
+            },
+            {
+              "name": "lowConfidenceTradeCount",
+              "type": "long"
+            },
+            {
+              "name": "noConfidenceTradeCount",
+              "type": "long"
+            },
+            {
+              "name": "callBoughtDeltaFlow",
+              "type": "double"
+            },
+            {
+              "name": "callSoldDeltaFlow",
+              "type": "double"
+            },
+            {
+              "name": "putBoughtDeltaFlow",
+              "type": "double"
+            },
+            {
+              "name": "putSoldDeltaFlow",
+              "type": "double"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "droppedLateEvents",
+      "type": "long"
+    }
+  ]
+}
