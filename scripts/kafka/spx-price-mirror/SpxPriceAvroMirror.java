@@ -16,7 +16,6 @@ import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
-import org.apache.kafka.clients.consumer.OffsetAndTimestamp;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerConfig;
@@ -94,7 +93,7 @@ public final class SpxPriceAvroMirror {
     } else if (a.length == 9 && a[0].equals("flow-check")) {
       try (KafkaConsumer<byte[], byte[]> s = plainConsumer(a[1]); KafkaConsumer<byte[], byte[]> t = plainConsumer(a[6])) {
         boolean ok = flowCheck(s, t, new TopicPartition(a[3], Integer.parseInt(a[4])), Long.parseLong(a[5]), a[8],
-            new SpxPriceAvroMirror(a[2], a[7]), 100000);
+            new SpxPriceAvroMirror(a[2], a[7]), 50000);
         System.out.println(ok ? "FOUND" : "NOT FOUND");
         System.exit(ok ? 0 : 1);
       }
@@ -162,10 +161,10 @@ public final class SpxPriceAvroMirror {
     }
   }
 
-  /** True when the SOURCE record (partition, offset) is on the target: located by TIMESTAMP (offsetsForTimes, no fixed tail window),
-   *  matched on timestamp, KEY BYTES and the decoded value. Scans at most maxScan target records per partition. */
+  /** True when the SOURCE record (partition, offset) is on the target: found in the newest `window` records of
+   *  every target partition (no offsetsForTimes: CreateTime need not be offset-monotonic), matched on timestamp, KEY BYTES and the decoded value. */
   static boolean flowCheck(Consumer<byte[], byte[]> src, Consumer<byte[], byte[]> tgt, TopicPartition sp, long offset,
-      String targetTopic, SpxPriceAvroMirror m, long maxScan) {
+      String targetTopic, SpxPriceAvroMirror m, long window) {
     src.assign(List.of(sp));
     src.seek(sp, offset);
     ConsumerRecord<byte[], byte[]> want = null;
@@ -183,24 +182,16 @@ public final class SpxPriceAvroMirror {
     String wantValue = m.decoder.deserialize("t", w.value()).toString();
     List<TopicPartition> tps = partitionsOf(tgt, targetTopic);
     tgt.assign(tps);
-    Map<TopicPartition, Long> ask = new HashMap<>();
-    tps.forEach(tp -> ask.put(tp, w.timestamp()));
-    Map<TopicPartition, OffsetAndTimestamp> from = tgt.offsetsForTimes(ask);
+    // No offsetsForTimes: CreateTime is not offset-monotonic. Scan the newest `window` records of every target partition (from the end offset captured
+    // now, floored at the earliest offset) and match on timestamp + raw key bytes + decoded value. Not found inside the window fails closed.
     Map<TopicPartition, Long> end = tgt.endOffsets(tps);
+    Map<TopicPartition, Long> begin = tgt.beginningOffsets(tps);
     for (TopicPartition tp : tps) {
-      if (from.get(tp) == null) {
-        continue;
-      }
-      tgt.seek(tp, from.get(tp).offset());
-      long scanned = 0;
+      tgt.seek(tp, Math.max(begin.get(tp), end.get(tp) - window));
       long deadline = System.nanoTime() + 30_000_000_000L;
-      while (tgt.position(tp) < end.get(tp) && scanned < maxScan && System.nanoTime() < deadline) {
+      while (tgt.position(tp) < end.get(tp) && System.nanoTime() < deadline) {
         for (ConsumerRecord<byte[], byte[]> r : tgt.poll(Duration.ofSeconds(1))) {
-          if (r.partition() != tp.partition()) {
-            continue;
-          }
-          scanned++;
-          if (r.timestamp() == w.timestamp() && Arrays.equals(r.key(), w.key()) && r.value() != null
+          if (r.partition() == tp.partition() && r.timestamp() == w.timestamp() && Arrays.equals(r.key(), w.key()) && r.value() != null
               && m.targetDecoder.deserialize("t", r.value()).toString().equals(wantValue)) {
             return true;
           }

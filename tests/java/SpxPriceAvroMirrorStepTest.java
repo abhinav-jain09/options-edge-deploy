@@ -84,23 +84,33 @@ public final class SpxPriceAvroMirrorStepTest {
   }
 
   /** a source record (key zk, ts) against a target holding a decoy, then one record with the given key/timestamp */
+  static boolean flowWindow(SpxPriceAvroMirror m, byte[] srcValue, byte[] tgtValue, byte[] key, long ts, long window) {
+    return flow(m, srcValue, tgtValue, key, ts, key, ts, window);
+  }
+
   static boolean flow(SpxPriceAvroMirror m, byte[] srcValue, byte[] tgtValue, byte[] srcKey, long srcTs, byte[] tgtKey, long tgtTs) {
+    return flow(m, srcValue, tgtValue, srcKey, srcTs, tgtKey, tgtTs, 1000);
+  }
+
+  static boolean flow(SpxPriceAvroMirror m, byte[] srcValue, byte[] tgtValue, byte[] srcKey, long srcTs, byte[] tgtKey, long tgtTs, long window) {
     TopicPartition sp = new TopicPartition("underlying.spx.price", 0);
     MockConsumer<byte[], byte[]> s = consumer(srcKey, srcValue, srcTs, new RecordHeaders());
     TopicPartition tp = new TopicPartition(TARGET, 0);
     MockConsumer<byte[], byte[]> t = new MockConsumer<>(OffsetResetStrategy.EARLIEST) {
       @Override
       public Map<TopicPartition, OffsetAndTimestamp> offsetsForTimes(Map<TopicPartition, Long> q) {
-        return Map.of(tp, new OffsetAndTimestamp(0L, 0L));
+        throw new AssertionError("flow-check must not use offsetsForTimes");
       }
     };
     t.updatePartitions(TARGET, List.of(new PartitionInfo(TARGET, 0, null, null, null)));
     t.updateBeginningOffsets(Map.of(tp, 0L));
-    t.updateEndOffsets(Map.of(tp, 2L));
+    t.updateEndOffsets(Map.of(tp, 3L));
     t.assign(List.of(tp));
     t.addRecord(new ConsumerRecord<>(TARGET, 0, 0L, srcTs - 5, TimestampType.CREATE_TIME, 3, tgtValue.length, "OTH".getBytes(), tgtValue, new RecordHeaders(), Optional.empty()));
     t.addRecord(new ConsumerRecord<>(TARGET, 0, 1L, tgtTs, TimestampType.CREATE_TIME, tgtKey.length, tgtValue.length, tgtKey, tgtValue, new RecordHeaders(), Optional.empty()));
-    return SpxPriceAvroMirror.flowCheck(s, t, sp, 0L, TARGET, m, 1000);
+    // CreateTime out of order: a later offset carries an EARLIER timestamp (offsetsForTimes would have mislocated the scan)
+    t.addRecord(new ConsumerRecord<>(TARGET, 0, 2L, srcTs - 10_000, TimestampType.CREATE_TIME, 3, tgtValue.length, "OOO".getBytes(), tgtValue, new RecordHeaders(), Optional.empty()));
+    return SpxPriceAvroMirror.flowCheck(s, t, sp, 0L, TARGET, m, window);
   }
 
   public static void main(String[] a) {
@@ -188,6 +198,8 @@ public final class SpxPriceAvroMirrorStepTest {
     check(flow(mirror, src, want, zk, ts, zk, ts), "same timestamp/key bytes/value is found");
     check(!flow(mirror, src, want, zk, ts, new byte[] {0, (byte) 0xfe, 'S'}, ts), "a different key byte is not a match");
     check(!flow(mirror, src, want, zk, ts, zk, ts + 1), "a different timestamp is not a match");
+    check(flowWindow(mirror, src, want, zk, ts, 3) , "found with a window covering the match");
+    check(!flowWindow(mirror, src, want, zk, ts, 1), "a match older than the window is NOT found: fail closed");
     System.out.println("OK");
   }
 }

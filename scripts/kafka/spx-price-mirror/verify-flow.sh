@@ -3,8 +3,8 @@
 # Proves the MIRROR moves data, not merely that the target offset advanced (another writer would advance it too):
 #   * the mirror's consumer group holds committed offsets on the SOURCE topic and its lag is within MAX_LAG (default 1000);
 #   * while the source advanced over FLOW_WAIT_S (default 30) the group's committed offsets advanced too;
-#   * the source record just BEFORE the group's committed position (the last one the mirror flushed) is on the target: located by TIMESTAMP
-#     (offsetsForTimes, no fixed tail window) and matched on the timestamp, the KEY BYTES and the decoded value (SpxPriceAvroMirror flow-check).
+#   * the source record just BEFORE the group's committed position (the last one the mirror flushed) is on the target: searched in the newest 50000
+#     target records per partition (no offsetsForTimes; CreateTime need not be monotonic) and matched on timestamp, KEY BYTES and decoded value.
 # Exit 0 FLOWING, 3 INCONCLUSIVE (source did not advance: market closed), 1 FAIL.
 set -euo pipefail
 SB="${1:?}"; SR="${2:?}"; ST="${3:?}"; TB="${4:?}"; TR="${5:?}"; TT="${6:?}"; GROUP="${7:?}"; KBIN="${8:?}"
