@@ -1,0 +1,39 @@
+{
+  "type": "record",
+  "name": "MultilegSrLevels",
+  "namespace": "com.optionsedge.contracts.multileg",
+  "doc": "One options.multileg.sr.levels record (the support/resistance surface from resting top-of-book size), published by multileg-structure-service on every publication cadence tick, including ticks with spotFresh=false or warming=true (that is the retraction). Until the cutover this topic carried hand-built JSON (MultilegServiceMain.levelsJsonOf); the topic is wiped and recreated under its OWN name carrying Avro. Field for field and name for name, in the same order. Kafka key = the underlying. spot and strikes are decimal(38,18); rates, distances and ratios keep the finite double the JSON carried. tapeLagMs is -1 when coverage is UNKNOWN. Registry subject = the record full name (RecordNameStrategy).",
+  "fields": [
+    {"name": "schemaVersion", "type": "int", "doc": "Wire revision; 2 today."},
+    {"name": "recordType", "type": "string", "doc": "SR_LEVELS."},
+    {"name": "runEpoch", "type": "string"},
+    {"name": "spot", "type": {"type": "bytes", "logicalType": "decimal", "precision": 38, "scale": 18}, "doc": "0 when no spot has been seen."},
+    {"name": "spotAtMs", "type": "long"},
+    {"name": "asOfMs", "type": "long"},
+    {"name": "trackedContracts", "type": "int"},
+    {"name": "spotFresh", "type": "boolean"},
+    {"name": "warming", "type": "boolean"},
+    {"name": "warmingRemainingMs", "type": "long"},
+    {"name": "tapeLagMs", "type": "long", "doc": "Minimum-partition tape lag; -1 = coverage unknown."},
+    {"name": "maxQuoteAgeMs", "type": "long"},
+    {"name": "basis", "type": "string"},
+    {"name": "sideIsObserved", "type": "boolean"},
+    {"name": "openCloseKnown", "type": "boolean"},
+    {"name": "levels", "type": {"type": "array", "items": {
+      "type": "record",
+      "name": "MultilegSrLevel",
+      "doc": "One resting-size level.",
+      "fields": [
+        {"name": "expiry", "type": "string"},
+        {"name": "strike", "type": {"type": "bytes", "logicalType": "decimal", "precision": 38, "scale": 18}},
+        {"name": "side", "type": "string"},
+        {"name": "distancePoints", "type": "double"},
+        {"name": "restingSize", "type": "long"},
+        {"name": "sizeBucket", "type": "string"},
+        {"name": "historicalBreakRate", "type": "double"},
+        {"name": "noWallBreakRate", "type": "double"},
+        {"name": "quoteAgeMs", "type": "long"}
+      ]
+    }}}
+  ]
+}

@@ -1,0 +1,51 @@
+{
+  "type": "record",
+  "name": "MultilegObservation",
+  "namespace": "com.optionsedge.contracts.multileg",
+  "doc": "One options.multileg.observations record, published by multileg-structure-service. Until the cutover this topic carried hand-built JSON (MultilegServiceMain.toJson(Observation)); the topic is wiped and recreated under its OWN name carrying Avro. The record reproduces that JSON FIELD FOR FIELD AND NAME FOR NAME, in the same order. Kafka key = observationId. The four score fields are present only when measurementState is MEASURED (null otherwise: a score that could not be computed is absent, never a fabricated zero). Strikes are decimal(38,18); every score, surprisal, effort and size-weighted price keeps the finite double the JSON carried. Registry subject = the record full name (RecordNameStrategy).",
+  "fields": [
+    {"name": "schemaVersion", "type": "int", "doc": "Wire revision; 2 today."},
+    {"name": "observationId", "type": "string", "doc": "Content-derived stable id; consumers dedupe on it (delivery is at-least-once)."},
+    {"name": "underlying", "type": "string"},
+    {"name": "expiry", "type": "string"},
+    {"name": "windowIndex", "type": "long"},
+    {"name": "windowStartMs", "type": "long"},
+    {"name": "windowEndMs", "type": "long"},
+    {"name": "template", "type": "string", "doc": "Template enum name."},
+    {"name": "baseSize", "type": "long"},
+    {"name": "measurementState", "type": "string"},
+    {"name": "coincidenceRarityScore", "type": ["null", "double"], "default": null, "doc": "Present only when measurementState is MEASURED."},
+    {"name": "rawSurprisal", "type": ["null", "double"], "default": null, "doc": "Present only when measurementState is MEASURED."},
+    {"name": "searchEffort", "type": ["null", "double"], "default": null, "doc": "Present only when measurementState is MEASURED."},
+    {"name": "scoreClamped", "type": ["null", "boolean"], "default": null, "doc": "Present only when measurementState is MEASURED."},
+    {"name": "hypothesesEvaluated", "type": "long"},
+    {"name": "sessionId", "type": "string"},
+    {"name": "runEpoch", "type": "string", "doc": "The run that produced the record; a restart can re-emit the same observationId with a different score."},
+    {"name": "modelWindowsObserved", "type": "long"},
+    {"name": "observationState", "type": "string", "doc": "CANDIDATE_ONLY today."},
+    {"name": "scoreIsRankingOnly", "type": "boolean"},
+    {"name": "scoreAssumesIndependence", "type": "boolean"},
+    {"name": "scoreIsProbability", "type": "boolean"},
+    {"name": "customerDirectionKnown", "type": "boolean"},
+    {"name": "tradeDirectionKnown", "type": "boolean"},
+    {"name": "openCloseKnown", "type": "boolean"},
+    {"name": "exchangeLabelAvailable", "type": "boolean"},
+    {"name": "deliveryIsAtLeastOnce", "type": "boolean"},
+    {"name": "legs", "type": {"type": "array", "items": {
+      "type": "record",
+      "name": "MultilegLeg",
+      "doc": "One leg of the co-print structure.",
+      "fields": [
+        {"name": "contractKey", "type": "string"},
+        {"name": "strike", "type": {"type": "bytes", "logicalType": "decimal", "precision": 38, "scale": 18}},
+        {"name": "right", "type": "string", "doc": "CALL or PUT."},
+        {"name": "aggregatedSize", "type": "long"},
+        {"name": "avgPrice", "type": "double", "doc": "Size-weighted average price (a computed statistic, finite double as the JSON carried)."},
+        {"name": "printCount", "type": "long"},
+        {"name": "qty", "type": "int"},
+        {"name": "canonicalGeometryCoefficient", "type": "int", "doc": "The template's canonical orientation (+1/-1), NOT an observed traded direction."},
+        {"name": "coefficientIsNotObserved", "type": "boolean"}
+      ]
+    }}}
+  ]
+}
