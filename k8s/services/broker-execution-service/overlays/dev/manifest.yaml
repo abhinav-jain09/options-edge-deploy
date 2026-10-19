@@ -60,6 +60,8 @@ spec:
               value: amt-auction,eav-bridge
             - name: BROKER_EXECUTION_IBKR_CLIENT_ID
               value: "31"
+            - name: BROKER_TEST_AUTH_PUBLIC_KEY
+              value: MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA6ntEubs9YZWmme2Ol/y9yE5n/05wWBGsLOsoce8nDU+BO2ClgNYy8Fk1M45uNxWr13XLazq+o/1lCv8q6Yj15khBZuBe7Qzz9kICPUMk/JtXd/13J+Bd8rRkPfWJqkg+31mRl///u9H8HsXxaJAq+CDSZHrE0QdpVsAuLjm8YXdHZ993I6CgIL3gO5gbFZPEa7DKurKcsuvHa4ptTy+pXFB4Ts102KV1kuMhzMlfY9Brd7/dp9sVZ02/an4u+xgMBNSlvt21MaZnR8SLRTCpcuP3NVwBuPsyazBZacjylcLAuk+ceR6Hq0jNWwSPFTgFDU8uMnk0bcvk3tUeMC2O6wIDAQAB
             - name: BROKER_EXECUTION_IBKR_CLIENT_ID_FALLBACKS
               value: 32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50
             - name: LINKED_EXIT_SPOT_ENABLED
