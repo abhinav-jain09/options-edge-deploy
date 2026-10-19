@@ -84,6 +84,13 @@ public final class SpxPriceAvroMirrorStepTest {
     Header trace = out.headers().lastHeader("trace");
     check(trace != null && java.util.Arrays.equals(trace.value(), "abc".getBytes()), "header preserved");
 
+    // keys are preserved byte for byte, whatever their first byte
+    EVENTS.clear();
+    byte[] zeroKey = {0, 1, 'S'};
+    MockProducer<byte[], byte[]> pz = producer(false);
+    SpxPriceAvroMirror.step(consumer(zeroKey, src, ts, new RecordHeaders()), pz, mirror, TARGET, new AtomicReference<>());
+    check(java.util.Arrays.equals(pz.history().get(0).key(), zeroKey), "key starting with 0x00 preserved");
+
     // a tombstone stops the mirror: nothing sent, nothing committed
     EVENTS.clear();
     boolean threw = false;

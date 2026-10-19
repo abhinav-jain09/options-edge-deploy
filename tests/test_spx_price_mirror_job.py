@@ -45,6 +45,11 @@ class SpxPriceMirrorJob(unittest.TestCase):
         self.assertRegex(JOB, r'CHECK_FIRST=true ALLOW_EMPTY=true bash "scripts/kafka/spx-price-mirror/verify-target-record\.sh" "\$SRC_BS"')
         self.assertRegex(JOB, r'CHECK_FIRST=true ALLOW_EMPTY=true bash "scripts/kafka/spx-price-mirror/verify-target-record\.sh" "\$TGT_BS"')
 
+    def test_flow_is_proven_by_the_mirror_group_not_the_target_offset(self):
+        self.assertIn("verify-flow.sh", JOB)
+        self.assertIn("assert-target-fresh.sh", JOB)
+        self.assertNotIn("TGT1", JOB)
+
     def test_the_mm1_whitelist_guard_matches_only_the_spot_topic(self):
         m = re.search(r"grep -qE '([^']*underlying[^']*)'", JOB)
         pattern = m.group(1).replace("\\\\", "\\")   # Groovy hands \\ to the shell as one backslash

@@ -107,9 +107,6 @@ public final class SpxPriceAvroMirror {
       String targetTopic, AtomicReference<Exception> failed) {
     ConsumerRecords<byte[], byte[]> batch = consumer.poll(Duration.ofSeconds(1));
     for (ConsumerRecord<byte[], byte[]> r : batch) {
-      if (r.key() != null && r.key().length > 0 && r.key()[0] == 0) {
-        throw new IllegalStateException("record key at " + r.partition() + ":" + r.offset() + " looks Confluent-framed; this mirror copies plain keys only");
-      }
       byte[] value = mirror.transcode(targetTopic, r.value());
       List<Header> headers = new java.util.ArrayList<>();
       r.headers().forEach(h -> headers.add(new RecordHeader(h.key(), h.value())));

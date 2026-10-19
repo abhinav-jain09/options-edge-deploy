@@ -95,11 +95,17 @@ Install order (per target), after the source topic is Avro (cutover step 5-7 of 
      non-empty partition is Confluent-framed Avro whose id resolves to the subject on that topic's registry AND deserializes there (JSON, a tombstone or a foreign id fails);
      the mirror compiles against the installed jars. NOT verified: records between the earliest and the newest; a mid-log record written under an older compatible schema version is caught by the
      mirror's own fail-closed stop (the target serializer cannot find its schema, the mirror exits and the group does not advance).
-   * Null values: this topic declares no tombstones, so a null value STOPS the mirror (and fails the verifier); it is never copied.
-   * Verify (60 s): the group holds committed offsets; target advanced -> earliest and newest target records fully decoded under the target registry (a byte copy fails this); source advanced with the
-     target flat is a FAIL; both flat (market closed) is UNSTABLE, flow not proven: re-run while the feed produces.
+   * Middle of the log (what is and is not claimed): the gates sample only the earliest and newest records. The middle is covered by PROVENANCE, not by sampling: `assert-target-fresh.sh`
+     requires every target end offset to be 0 (created empty), or, for a re-install, that THIS mirror's durable group already holds committed offsets on the source. That the mirror is the
+     ONLY writer is an operator attestation (the brokers have no ACLs and the mirror's producer is not transactional); the two known byte copiers are checked separately. A mid-log record
+     of an older compatible schema version is stopped by the mirror itself (the target serializer cannot find its schema; the mirror exits and the group does not advance).
+   * Null values: this topic declares no tombstones, so a null value STOPS the mirror (and fails the verifier); it is never copied. Keys are copied byte for byte, whatever their first byte.
+   * Verify: the unit is loaded; then `verify-flow.sh` proves the MIRROR moves data (not that the target offset advanced, which any other writer would also do): the mirror group's lag on the source is
+     bounded (1000), its committed offsets advance over 30 s while the source does, and the source record just before the group's committed position (the last one flushed) is found on the target with
+     the same key, timestamp and decoded value. Source flat (market closed) is UNSTABLE (flow not proven); source advancing with the group not is a FAIL. Then the earliest and newest target records are
+     fully decoded under the target registry.
 5. es4 only, after FLOWING: es4 readers (es-cvd, es-amt, gamma-ladder-path, context-tape) already select Avro by the resolved topic name; verify each as in step 8 against `es.underlying.spx.price`.
-Tests: `tests/test_spx_price_avro_mirror.py` (the real tool through two stub registries whose ids differ: target id replaces source id, payload unchanged, JSON/unknown/foreign/unregistered refused; plus `tests/java/SpxPriceAvroMirrorStepTest.java` on kafka-clients MockConsumer/MockProducer: key bytes, headers, source timestamp, re-encoded value, send -> flush -> commit order, no commit after a tombstone, JSON or failed produce), `test_spx_price_timestamp_type.py`,
+Tests: `tests/test_spx_price_avro_mirror.py` (the real tool through two stub registries whose ids differ: target id replaces source id, payload unchanged, JSON/unknown/foreign/unregistered refused; plus `tests/java/SpxPriceAvroMirrorStepTest.java` on kafka-clients MockConsumer/MockProducer: key bytes, headers, source timestamp, re-encoded value, send -> flush -> commit order, no commit after a tombstone, JSON or failed produce), `test_spx_price_timestamp_type.py`, `test_spx_price_flow_and_fresh.py`; source values in the Java tests are written by the production `KafkaAvroSerializer` (`tests/java/SerializeFixture.java`), not hand-encoded,
 `test_spx_price_verify_target_record.py`, `test_spx_price_subject_parity.py`, `test_spx_price_mirror_job.py`. Not exercised by any test: a live broker round trip (the mock-based test covers the transcode+send+commit path, not broker semantics); the first install on each target is that proof, via Verify.
 
 ## Reader and producer changes (separate PRs; each Codex-approved on all three bars before merge)

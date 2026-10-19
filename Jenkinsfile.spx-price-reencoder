@@ -139,6 +139,7 @@ pipeline {
             [ "$bad" -eq 0 ] || { echo "FAIL: $t on $bs has $bad partition(s) without a leader"; exit 1; }
             echo "  $side topic $t on $bs: $parts partition(s), all led"
           done
+          bash "scripts/kafka/spx-price-mirror/assert-target-fresh.sh" "$TGT_BS" "$TGT_TOPIC" "$GROUP" "$SRC_BS" "$SRC_TOPIC" "$CONFLUENT/bin"
           bash "scripts/kafka/spx-price-mirror/assert-timestamp-type.sh" "$TGT_BS" "$TGT_TOPIC" "$CONFLUENT/bin"
           CHECK_FIRST=true ALLOW_EMPTY=true bash "scripts/kafka/spx-price-mirror/verify-target-record.sh" "$TGT_BS" "$TGT_REG" "$TGT_TOPIC" "$CONFLUENT/bin"
           CHECK_FIRST=true ALLOW_EMPTY=true bash "scripts/kafka/spx-price-mirror/verify-target-record.sh" "$SRC_BS" "$SRC_REG" "$SRC_TOPIC" "$CONFLUENT/bin"
@@ -243,41 +244,19 @@ EOS
           grep -qF "$LABEL" "$T.launchctl" || { echo "FAIL: launchd unit $LABEL not loaded"; exit 1; }
           echo "  launchd unit loaded: $LABEL"
 
-          # Sample BOTH ends across one window: target advanced -> FLOWING; both flat -> INCONCLUSIVE (market closed); source advanced
-          # and target flat -> the mirror drops records (FAIL). A query that cannot be answered is a FAIL, never a zero.
-          end_offset() {
-            raw=$("$CONFLUENT/bin/kafka-get-offsets" --bootstrap-server "$1" --topic "$2" 2>/dev/null) || { echo "FAIL: kafka-get-offsets $2 on $1" >&2; return 1; }
-            printf '%s\\n' "$raw" | awk -F: -v t="$2" '$1 == t && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ { n++; s += $3 } END { if (n == 0) exit 3; print s }'
-          }
-          SRC0=$(end_offset "$SRC_BS" "$SRC_TOPIC"); TGT0=$(end_offset "$TGT_BS" "$TGT_TOPIC")
-          sleep 60
-          SRC1=$(end_offset "$SRC_BS" "$SRC_TOPIC"); TGT1=$(end_offset "$TGT_BS" "$TGT_TOPIC")
-          echo "  source $SRC_TOPIC end-offset $SRC0 -> $SRC1"
-          echo "  target $TGT_TOPIC end-offset $TGT0 -> $TGT1"
-
-          # the durable group must hold a committed offset on the source topic
-          GRC=0
-          GD=$("$CONFLUENT/bin/kafka-consumer-groups" --bootstrap-server "$SRC_BS" --describe --group "$GROUP" --offsets 2>&1) || GRC=$?
-          [ "$GRC" -eq 0 ] || { echo "FAIL: cannot query consumer group $GROUP (exit $GRC)"; exit 1; }
-          COMMITTED=$(printf '%s\\n' "$GD" | awk -v g="$GROUP" -v t="$SRC_TOPIC" '$1 == g && $2 == t && $4 ~ /^[0-9]+$/ { n++ } END { print n+0 }')
-          [ "$COMMITTED" -ge 1 ] || { echo "FAIL: group $GROUP has NO committed offset on $SRC_TOPIC after 60s; check ${MDIR}/mirror.log"; exit 1; }
-          echo "  restart continuity OK: committed offsets on $COMMITTED partition(s)"
-
-          if [ "$TGT1" -gt "$TGT0" ]; then
-            # the decisive proof: the newest TARGET record is framed Avro whose id resolves to the subject on the TARGET registry
-            # and decodes there (a byte copy would carry the source id)
-            CHECK_FIRST=true bash "scripts/kafka/spx-price-mirror/verify-target-record.sh" "$TGT_BS" "$TGT_REG" "$TGT_TOPIC" "$CONFLUENT/bin"
-            echo "  MIRROR FLOWING and the target records decode under the target registry"
-            echo FLOWING > "$T.verdict"
-          elif [ "$SRC1" -gt "$SRC0" ]; then
-            echo "FAIL: source produced $((SRC1-SRC0)) records in 60s but the target did not advance; check ${MDIR}/mirror.log"
-            echo DROPPING > "$T.verdict"
-            exit 1
-          else
-            ALLOW_EMPTY=true CHECK_FIRST=true bash "scripts/kafka/spx-price-mirror/verify-target-record.sh" "$TGT_BS" "$TGT_REG" "$TGT_TOPIC" "$CONFLUENT/bin"
-            echo "  INCONCLUSIVE: neither end advanced in 60s (no spot ticks: market closed). Re-run while the feed is producing to assert flow."
-            echo INCONCLUSIVE > "$T.verdict"
-          fi
+          # FLOW is proven by the MIRROR's own group, not by the target offset (any other writer advances that too):
+          # the group must advance while the source does, its lag must be bounded, and the last record it flushed must be on the target with the
+          # same key, timestamp and decoded value. Exit 0 FLOWING, 3 INCONCLUSIVE (source flat: market closed), anything else FAIL.
+          sleep 20
+          RC=0
+          bash "scripts/kafka/spx-price-mirror/verify-flow.sh" "$SRC_BS" "$SRC_REG" "$SRC_TOPIC" "$TGT_BS" "$TGT_REG" "$TGT_TOPIC" "$GROUP" "$CONFLUENT/bin" || RC=$?
+          case "$RC" in
+            0) echo FLOWING > "$T.verdict" ;;
+            3) echo INCONCLUSIVE > "$T.verdict" ;;
+            *) echo DROPPING > "$T.verdict"; echo "FAIL: the mirror is not moving data (see above); check ${MDIR}/mirror.log"; exit 1 ;;
+          esac
+          # the earliest and newest target records fully decode under the target registry (a byte copy fails this)
+          ALLOW_EMPTY=true CHECK_FIRST=true bash "scripts/kafka/spx-price-mirror/verify-target-record.sh" "$TGT_BS" "$TGT_REG" "$TGT_TOPIC" "$CONFLUENT/bin"
         '''
         script {
           // The shell cannot set a Jenkins result, so the verdict crosses the boundary as a file. No traffic is NOT proof of flow.

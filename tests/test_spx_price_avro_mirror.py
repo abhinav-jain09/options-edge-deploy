@@ -10,7 +10,6 @@ import shutil
 import subprocess
 import tempfile
 import unittest
-from decimal import Decimal
 from pathlib import Path
 
 from stub_schema_registry import Registry, serve
@@ -24,35 +23,25 @@ CP = ":".join(str(CONFLUENT / "share/java" / d / "*") for d in ("kafka", "kafka-
 HAVE_JAVA = shutil.which("java") is not None and (CONFLUENT / "share/java/kafka-serde-tools").is_dir()
 
 
-def zigzag(n: int) -> bytes:
-    n = (n << 1) ^ (n >> 63)
-    out = bytearray()
-    while n > 0x7F:
-        out.append((n & 0x7F) | 0x80)
-        n >>= 7
-    out.append(n)
-    return bytes(out)
+_FIX = {}
 
 
-def string(s: str) -> bytes:
-    b = s.encode()
-    return zigzag(len(b)) + b
+def fixture(registry_url: str, schema_text: str = SCHEMA) -> bytes:
+    """One value serialized by the PRODUCTION Confluent serializer (tests/java/SerializeFixture.java) against the given registry."""
+    if "dir" not in _FIX:
+        _FIX["dir"] = tempfile.mkdtemp(prefix="spx-fixture-")
+        c = subprocess.run(["javac", "-proc:none", "-cp", CP, "-d", _FIX["dir"], str(ROOT / "tests/java/SerializeFixture.java")],
+                           capture_output=True, text=True, timeout=120)
+        assert c.returncode == 0, c.stderr
+    sf = Path(_FIX["dir"]) / "schema.avsc"
+    sf.write_text(schema_text)
+    r = subprocess.run(["java", "-cp", f"{_FIX['dir']}:{CP}", "SerializeFixture", registry_url, str(sf)], capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stderr
+    return bytes.fromhex(r.stdout.strip())
 
 
-def decimal(d: str) -> bytes:
-    unscaled = int(Decimal(d).scaleb(18))
-    b = unscaled.to_bytes((unscaled.bit_length() + 8) // 8, "big", signed=True)
-    return zigzag(len(b)) + b
-
-
-def payload() -> bytes:
-    return (zigzag(1) + string("SPX") + string("2026-10-19T14:30:00.123456Z") + decimal("5801.25") + b"\x00"
-            + string("NATIVE_SPX_INDEX") + string("LIVE_INDEX") + decimal("5801.25")
-            + zigzag(1760884200123456789) + string("epoch-7") + zigzag(42) + string("LIVE_INDEX"))
-
-
-def framed(schema_id: int, body: bytes | None = None) -> bytes:
-    return b"\x00" + schema_id.to_bytes(4, "big") + (payload() if body is None else body)
+def reframe(value: bytes, schema_id: int) -> bytes:
+    return b"\x00" + schema_id.to_bytes(4, "big") + value[5:]
 
 
 def transcode(src_url: str, tgt_url: str, value: bytes):
@@ -76,10 +65,13 @@ class SpxPriceAvroMirrorTest(unittest.TestCase):
         self.s2.shutdown()
 
     def test_the_target_id_replaces_the_source_id_and_the_payload_is_unchanged(self):
-        rc, out, err = transcode(self.src_url, self.tgt_url, framed(77))
+        value = fixture(self.src_url)
+        self.assertEqual(value[:5], b"\x00\x00\x00\x00M")
+        rc, out, err = transcode(self.src_url, self.tgt_url, value)
         self.assertEqual(rc, 0, err)
-        self.assertEqual(bytes.fromhex(out), framed(9))
-        self.assertNotEqual(bytes.fromhex(out)[:5], framed(77)[:5], "a byte copy would keep the source id")
+        self.assertEqual(bytes.fromhex(out), fixture(self.tgt_url), "identical to what the production serializer writes against the target")
+        self.assertEqual(bytes.fromhex(out)[:5], b"\x00\x00\x00\x00\x09")
+        self.assertEqual(bytes.fromhex(out)[5:], value[5:], "payload unchanged")
 
     def test_json_is_refused_not_copied(self):
         rc, out, err = transcode(self.src_url, self.tgt_url, b'{"symbol":"SPX"}')
@@ -87,7 +79,7 @@ class SpxPriceAvroMirrorTest(unittest.TestCase):
         self.assertEqual(out, "")
 
     def test_a_frame_whose_id_the_source_registry_does_not_know_is_refused(self):
-        rc, out, _ = transcode(self.src_url, self.tgt_url, framed(78))
+        rc, out, _ = transcode(self.src_url, self.tgt_url, reframe(fixture(self.src_url), 78))
         self.assertNotEqual(rc, 0)
         self.assertEqual(out, "")
 
@@ -95,7 +87,7 @@ class SpxPriceAvroMirrorTest(unittest.TestCase):
         bare = Registry()
         server, bare_url = serve(bare)
         try:
-            rc, out, _ = transcode(self.src_url, bare_url, framed(77))
+            rc, out, _ = transcode(self.src_url, bare_url, fixture(self.src_url))
         finally:
             server.shutdown()
         self.assertNotEqual(rc, 0)
@@ -105,7 +97,7 @@ class SpxPriceAvroMirrorTest(unittest.TestCase):
     def test_a_foreign_record_on_the_source_is_refused(self):
         other = json.dumps({"type": "record", "name": "Other", "namespace": "x", "fields": [{"name": "symbol", "type": "string"}]})
         self.src.register("x.Other", other, id=80)
-        rc, out, _ = transcode(self.src_url, self.tgt_url, framed(80, string("SPX")))
+        rc, out, _ = transcode(self.src_url, self.tgt_url, fixture(self.src_url, other))
         self.assertNotEqual(rc, 0)
         self.assertEqual(out, "")
 
@@ -126,7 +118,7 @@ class MirrorStepBehaviour(unittest.TestCase):
                 c = subprocess.run(["javac", "-proc:none", "-cp", CP, "-d", d, str(SOURCE), str(ROOT / "tests/java/SpxPriceAvroMirrorStepTest.java")],
                                    capture_output=True, text=True, timeout=120)
                 self.assertEqual(c.returncode, 0, c.stderr)
-                r = subprocess.run(["java", "-cp", f"{d}:{CP}", "SpxPriceAvroMirrorStepTest", u1, u2, framed(77).hex(), framed(9).hex()],
+                r = subprocess.run(["java", "-cp", f"{d}:{CP}", "SpxPriceAvroMirrorStepTest", u1, u2, fixture(u1).hex(), fixture(u2).hex()],
                                    capture_output=True, text=True, timeout=120)
                 self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
                 self.assertIn("OK", r.stdout)
