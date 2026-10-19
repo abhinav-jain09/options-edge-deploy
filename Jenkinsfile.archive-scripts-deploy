@@ -304,7 +304,7 @@ pipeline {
         sh 'mvn -B -ntp -Dmaven.repo.local="${WORKSPACE}/.jenkins-tmp/archive-m2" -f tools/canonical-archive-reader/pom.xml -Dcontracts.version="${ARCHIVE_CONTRACTS_VERSION}" -DskipTests package'
         sh 'cp tools/canonical-archive-reader/target/canonical-archive-reader.jar .jenkins-tmp/canonical-archive-reader.jar'
         sh 'javac --release 21 -cp .jenkins-tmp/canonical-archive-reader.jar -d .jenkins-tmp/canonical-archive-tests tests/archive-canonical/CanonicalArchiveDecoderTest.java'
-        sh 'PYTHONDONTWRITEBYTECODE=1 OE_INDICATOR_READER_CP=".jenkins-tmp/contracts/target/options-edge-contracts-${ARCHIVE_CONTRACTS_VERSION}.jar:$(cat .jenkins-tmp/archive-contracts-deps.txt)" python3 -m unittest tests.test_indicator_archive_reader tests.test_spot_archive_reader test_spot_archive_wiring'
+        sh 'PYTHONDONTWRITEBYTECODE=1 OE_INDICATOR_READER_CP=".jenkins-tmp/contracts/target/options-edge-contracts-${ARCHIVE_CONTRACTS_VERSION}.jar:$(cat .jenkins-tmp/archive-contracts-deps.txt)" python3 -m unittest tests.test_indicator_archive_reader tests.test_spot_archive_reader tests.test_spot_archive_wiring'
         sh 'java -Xmx512m -cp ".jenkins-tmp/canonical-archive-reader.jar:.jenkins-tmp/canonical-archive-tests" CanonicalArchiveDecoderTest .jenkins-tmp/contracts .jenkins-tmp/canonical-archive-reader.jar'
         timeout(time: 10, unit: 'MINUTES') {
           sh 'PERMITTED_SHA="${PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored .jenkins-tmp --allow-ignored tools/canonical-archive-reader/target --allow-ignored scripts/ops/archive/market_calendar.py --allow-ignored scripts/ops/archive/vol-premium-open-reference-capture.py'
