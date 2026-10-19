@@ -1,0 +1,57 @@
+{
+  "type": "record",
+  "name": "SpotVolRegimeSnapshot",
+  "namespace": "com.optionsedge.contracts.spotvolregime",
+  "doc": "One regime frame of the standalone spot-vol-regime service: the value of options.spx.spot-vol-regime.current (compacted, keyed by symbol) and of options.spx.spot-vol-regime.events (declared-regime transitions). Until the 2026-10-19 conversion both topics carried the Jackson JSON of the Java record com.optionsedge.contracts.spotvolregime.SpotVolRegimeSnapshot; this record reproduces that JSON FIELD FOR FIELD, NAME FOR NAME and IN THE SAME ORDER. Both topics carry this ONE record type (one JSON shape), so the registry subject is this record's FULL NAME (RecordNameStrategy) for every environment whatever its TOPIC_PREFIX. spxLast/vixLast are prices: decimal(38,18) holding the exact shortest round-trip text of the engine's double, so BigDecimal.doubleValue() returns the identical double. The per-window deltas are statistics and stay finite doubles, exactly as the CVD canonical schemas keep statistical ratios.",
+  "fields": [
+    {"name": "schemaVersion", "type": "int", "doc": "SpotVolRegimeSnapshot.CURRENT_SCHEMA_VERSION; 4 today."},
+    {"name": "symbol", "type": "string", "doc": "SPX, the spot leg; the vol leg is always VIX. Also the Kafka record key."},
+    {"name": "asOfEventTimeMs", "type": "long", "doc": "Stream time the classification was computed at, epoch milliseconds."},
+    {"name": "spxLast", "type": ["null", {"type": "bytes", "logicalType": "decimal", "precision": 38, "scale": 18}], "default": null, "doc": "Latest SPX print the frame read; null until the first tick."},
+    {"name": "spxEventTimeMs", "type": ["null", "long"], "default": null, "doc": "Event time of spxLast; null until the first tick."},
+    {"name": "vixLast", "type": ["null", {"type": "bytes", "logicalType": "decimal", "precision": 38, "scale": 18}], "default": null, "doc": "Latest VIX print the frame read; null until the first tick."},
+    {"name": "vixEventTimeMs", "type": ["null", "long"], "default": null, "doc": "Event time of vixLast; null until the first tick."},
+    {"name": "window1m", "type": ["null", {
+      "type": "record",
+      "name": "WindowStats",
+      "doc": "Per-window measurement of the spot-vol pair. A null delta means the window could not be measured; the matching direction is then UNKNOWN. Never NaN or infinite.",
+      "fields": [
+        {"name": "windowMs", "type": "long"},
+        {"name": "spxDeltaPct", "type": ["null", "double"], "default": null, "doc": "(last-base)/base*100 over the window; null = unmeasurable."},
+        {"name": "vixDeltaPts", "type": ["null", "double"], "default": null, "doc": "last-base points over the window; null = unmeasurable."},
+        {"name": "spxDirection", "type": {"type": "enum", "name": "SpxDirection", "symbols": ["UP", "DOWN", "FLAT", "UNKNOWN"], "default": "UNKNOWN", "doc": "Windowed SPX spot direction. UNKNOWN is never a synonym for FLAT."}},
+        {"name": "vixDirection", "type": {"type": "enum", "name": "VixDirection", "symbols": ["UP", "DOWN", "STABLE", "NO_CONFIRMATION", "UNKNOWN"], "default": "UNKNOWN", "doc": "Windowed VIX direction. NO_CONFIRMATION = the print fell but the ATM straddle premium did not."}},
+        {"name": "regime", "type": {"type": "enum", "name": "Regime", "symbols": ["CONFIRMED_UP", "STABLE_UP", "DIVERGENT_UP", "CONFIRMED_DOWN", "COMPLACENT_DOWN", "NEUTRAL", "UNKNOWN"], "default": "UNKNOWN", "doc": "Joint SPX-direction by VIX-direction classification; UNKNOWN is an honest abstention, never latched over."}}
+      ]
+    }], "default": null, "doc": "The 1-minute window read; null only when the engine produced no result for the frame."},
+    {"name": "window5m", "type": ["null", "WindowStats"], "default": null, "doc": "The 5-minute window read; null only when the engine produced no result for the frame."},
+    {"name": "combinedRegime", "type": "Regime", "doc": "The INSTANT reading, derived from the two windows (1m and 5m agree => that regime; both known but different => the 1m read; anything UNKNOWN => UNKNOWN)."},
+    {"name": "conviction", "type": {"type": "enum", "name": "Conviction", "symbols": ["ALIGNED", "MIXED", "NA"], "default": "NA", "doc": "Agreement between the 1m and 5m window regimes."}},
+    {"name": "declaredRegime", "type": "Regime", "doc": "The instant reading after the minimum-persistence filter; consumers render and alert on THIS field."},
+    {"name": "declaredSinceMs", "type": ["null", "long"], "default": null, "doc": "When the run behind declaredRegime began (event time); null exactly while declaredRegime is UNKNOWN."},
+    {"name": "reasonCodes", "type": {"type": "array", "items": "string"}, "doc": "Why the frame is what it is (WARMUP_SPX_5M, VIX_STALE, MARKET_CLOSED, ...); empty when clean."},
+    {"name": "strikeBand", "type": ["null", {
+      "type": "record",
+      "name": "StrikeBand",
+      "doc": "The LATCHED strike marking of the session: the RESOLVED state of the whole session every time, strictly ascending by strike, at most 512 marks, never empty.",
+      "fields": [
+        {"name": "schemaVersion", "type": "int", "doc": "StrikeBand.CURRENT_SCHEMA_VERSION; 1 today."},
+        {"name": "sessionDate", "type": "string", "doc": "ISO yyyy-MM-dd ET trading date the band belongs to."},
+        {"name": "strikeIncrement", "type": "int", "doc": "The chain's strike spacing the marks were enumerated on (descriptive)."},
+        {"name": "marks", "type": {"type": "array", "items": {
+          "type": "record",
+          "name": "StrikeMark",
+          "doc": "ONE strike carrying a latched regime colour.",
+          "fields": [
+            {"name": "strike", "type": "int"},
+            {"name": "regime", "type": "Regime", "doc": "DIVERGENT_UP or COMPLACENT_DOWN only."},
+            {"name": "markedAtEventTimeMs", "type": "long", "doc": "Event time this strike was FIRST marked (first writer wins)."}
+          ]
+        }}}
+      ]
+    }], "default": null, "doc": "The latched strike marking, or null when there is nothing to mark (the common, correct state)."},
+    {"name": "codeVersion", "type": "string", "doc": "Producer code version (provenance)."},
+    {"name": "producedAtMs", "type": "long", "doc": "Wall-clock publish time, epoch milliseconds (provenance)."},
+    {"name": "seq", "type": "long", "doc": "Monotonic output sequence."}
+  ]
+}
