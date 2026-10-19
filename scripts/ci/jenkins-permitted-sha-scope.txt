@@ -28,6 +28,7 @@ Jenkinsfile.es-strike-intel-mirror        | in  |                               
 Jenkinsfile.es-tape-zones-mirror          | in  |                                 | installs/tears down a launchd MirrorMaker unit on the Mac and creates the target topic
 Jenkinsfile.es-trades-bridge              | in  |                                 | installs/tears down the es4->prod trades bridge (launchd unit writing a LIVE prod market-data topic)
 Jenkinsfile.opra-definition-enumeration-mirror | in |                             | installs/tears down the prod->es4 definition-enumeration mirror (launchd unit or es4 docker container)
+Jenkinsfile.spx-price-reencoder            | in  |                                 | installs/tears down the underlying.spx.price decode-and-re-encode mirror (launchd unit; retires the spx-es4-bridge byte copier; writes the es4 and .74 topics)
 Jenkinsfile.es-predown                    | in  |                                 | manual-only (no cron): scales the overnight ES services to 0 and deletes transient ES topics on prod over ssh
 Jenkinsfile.es4-deploy                    | in  |                                 | es4: infra rsync+bootstrap, topic creation, destructive clean-reset, digest-pinned applies, es-feed activation — every ACTION is an effect
 Jenkinsfile.fullfunding-deploy            | in  |                                 | applies the fullfunding tenant slice to production

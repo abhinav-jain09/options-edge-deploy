@@ -1,0 +1,297 @@
+// SPX-PRICE MIRROR — decode-and-re-encode mirror of the Avro topic underlying.spx.price, as a managed launchd service.
+//
+// Why this job exists (docs/UNDERLYING-SPX-PRICE-AVRO-CUTOVER.md): underlying.spx.price is Confluent Avro (record
+// com.optionsedge.contracts.hpsf.UnderlyingPrice, registry subject = its full name). A framed value names its schema by an id that is
+// PER REGISTRY, so a BYTE COPY into another registry's topic is undecodable (the id there means another schema, or none). The two
+// byte copiers this topic had, the spx-es4-bridge console pipe (prod -> es4) and the dev -> .74 MirrorMaker whitelist entry, are
+// replaced by this job. Owner rules honoured: Avro only (no JSON on Kafka), no versioned topic names, no byte copy.
+//
+// What it does (scripts/kafka/spx-price-mirror/SpxPriceAvroMirror.java, one JVM, Confluent 7.3.1 jars): consume the source topic in a
+// DURABLE group, decode each value with the SOURCE registry, serialize it again with the TARGET registry under the SAME subject
+// (RecordNameStrategy; the target must already carry the subject, the mirror never registers), and produce it with the SAME key bytes,
+// headers and the SOURCE record timestamp (CreateTime). Offsets are committed only after the producer flushed the batch. JSON,
+// non-Avro bytes, a foreign record or a shape the target does not know STOP the mirror (launchd restarts it, the group does not advance);
+// there is no skip and no fallback.
+//
+// WHY NOT MirrorMaker 1/2: neither can re-encode a value, and MM1 cannot rename a topic (es4 reads es.underlying.spx.price).
+//
+// TARGET picks one of two fixed paths (the allow-list is the profile table below, nothing else is installable):
+//   es4   prod .252 underlying.spx.price           -> es4 .4 es.underlying.spx.price   (replaces com.optionsedge.spx-es4-bridge)
+//   mac74 dev 127.0.0.1:19092 underlying.spx.price -> .74 192.168.100.74:9092 underlying.spx.price
+//         (replaces the underlying.spx.price entry in the dl-mirror-dev-to-mac74 MM1 whitelist, group oe-mac74-input-from-dev)
+// It runs on the 'local-mac' agent (the dev Mac, which reaches dev through its published listener and .252/.4/.74 over the LAN).
+// Nothing is hand-edited: the config and the launchd unit are generated here.
+pipeline {
+  agent { label 'local-mac' }
+  parameters {
+    string(name: 'PERMITTED_SHA', defaultValue: '', trim: true,
+      description: 'REQUIRED — Deployment Permission Rule (options-edge rule.md). The full 40-character commit id of THIS repository that Abhinav permitted for this run. The Permitted commit guard stage refuses the build before any effect unless the checked-out HEAD is exactly this commit AND on origin/main; empty, short or mismatched values are refused and nothing is substituted. A manual click needs it too: copy it from `git rev-parse origin/main`.')
+    string(name: 'PERMITTED_SHA_GUARD_VERSION', defaultValue: '2f6fc2ab7aa51eb8a9e8aa350f2d774cd2fb7a253de2591e43645a19a9886b24',
+      description: 'DO NOT EDIT BY HAND — the sha256 of scripts/jenkins/permitted-sha-guard.sh this definition runs (Deployment Permission Rule). The guard refuses to run under any other value. It is a DECLARATION, not proof that this job enforces the guard: a caller that triggers this job judges its SCM definition and its Jenkinsfile at the forwarded commit (scripts/jenkins/require-guarded-downstream.sh). Regenerate with scripts/jenkins/permitted-sha-guard-version.sh when the guard changes.')
+    choice(name: 'TARGET', choices: ['es4', 'mac74'], description: 'es4 = prod -> es4 (replaces spx-es4-bridge). mac74 = dev -> .74 (replaces the MM1 whitelist entry).')
+    choice(name: 'ACTION', choices: ['install', 'teardown'], description: 'install = create+run the mirror; teardown = stop+remove it (the consumer group is kept).')
+    // Applies only to a BRAND-NEW durable group. latest on purpose: the topic is a latest-value spot stream, so a restart that resumes a
+    // few records late loses nothing, and earliest would replay the retained history into a live topic.
+    choice(name: 'OFFSET_RESET', choices: ['latest', 'earliest'], description: 'Where a BRAND-NEW consumer group starts. Ignored once the group has committed offsets.')
+  }
+  options { disableRestartFromStage(); disableConcurrentBuilds(); timeout(time: 30, unit: 'MINUTES') }
+  environment {
+    CONFLUENT = '/Users/abhinav/development/confluent-7.3.1'
+    // The profile table: the ONLY paths this job can install. Registries: prod and dev on 8082, es4 on 8081, .74 native on 8082.
+    SRC_BS    = "${params.TARGET == 'es4' ? '192.168.100.252:9092' : '127.0.0.1:19092'}"
+    SRC_REG   = "${params.TARGET == 'es4' ? 'http://192.168.100.252:8082' : 'http://localhost:8082'}"
+    SRC_TOPIC = 'underlying.spx.price'
+    TGT_BS    = "${params.TARGET == 'es4' ? '192.168.100.4:9092' : '192.168.100.74:9092'}"
+    TGT_REG   = "${params.TARGET == 'es4' ? 'http://192.168.100.4:8081' : 'http://192.168.100.74:8082'}"
+    TGT_TOPIC = "${params.TARGET == 'es4' ? 'es.underlying.spx.price' : 'underlying.spx.price'}"
+    // One target == one unit == one durable reading position. The group is NOT oe-mac74-input-from-dev: that one is the MM1 group.
+    GROUP     = "spx-price-mirror-${params.TARGET}"
+    LABEL     = "com.optionsedge.spx-price-mirror-${params.TARGET}"
+    MDIR      = "/Users/abhinav/oe-ops/spx-price-mirror-${params.TARGET}"
+    PLIST     = "/Users/abhinav/Library/LaunchAgents/com.optionsedge.spx-price-mirror-${params.TARGET}.plist"
+  }
+  stages {
+    // ---- Deployment Permission Rule (options-edge rule.md): Jenkins enforces the permitted commit ----
+    // PERMITTED_SHA is REQUIRED. scripts/jenkins/permitted-sha-guard.sh refuses, in this order: a checkout
+    // that is not on origin/main (the environment-branch restriction, kept as its own condition); a
+    // missing, empty, short or otherwise malformed PERMITTED_SHA (nothing is substituted for it); a
+    // checked-out HEAD that is not exactly PERMITTED_SHA. It runs FIRST, in the workspace every later
+    // stage uses, so nothing below can build, push, apply, roll, restart, create a topic or copy a file
+    // under an unpermitted commit — including a build queued for one commit that checked out a newer one.
+    // error(), never catchError: a refusal is a stop, not a coloured result. Both SHAs are in the log.
+    stage('Permitted commit guard') {
+      options { timeout(time: 10, unit: 'MINUTES') }
+      steps {
+        script {
+          def rc = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')
+          if (rc != 0) {
+            error("Permitted commit guard REFUSED this build (rc=${rc}) — see its output above. No deployment effect has run.")
+          }
+          env.PERMITTED_SHA_GUARD = 'PASSED'
+        }
+      }
+    }
+
+    stage('Teardown') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.ACTION == 'teardown') } }
+      steps {
+        sh '''
+          set -euo pipefail
+          launchctl unload "$PLIST" 2>/dev/null || true
+          rm -f "$PLIST" "$MDIR/run.sh" "$MDIR/mirror.env" "$MDIR/SpxPriceAvroMirror.java"
+          echo "torn down ${LABEL} (consumer group ${GROUP} retained; logs left in ${MDIR})"
+        '''
+      }
+    }
+
+    stage('Preflight (fail-closed)') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.ACTION == 'install') } }
+      steps {
+        sh '''
+          set -euo pipefail
+          echo "TARGET=$TARGET  ${SRC_BS}/${SRC_TOPIC} (${SRC_REG}) -> ${TGT_BS}/${TGT_TOPIC} (${TGT_REG})  group=${GROUP}"
+          [ "$SRC_BS/$SRC_TOPIC" != "$TGT_BS/$TGT_TOPIC" ] || { echo "FAIL: source and target are identical — a same-topic mirror would loop"; exit 1; }
+          JH="$(/usr/libexec/java_home 2>/dev/null || true)"
+          [ -n "$JH" ] || { echo "FAIL: no JDK found"; exit 1; }
+          export JAVA_HOME="$JH"; export PATH="$JAVA_HOME/bin:$PATH"
+          for hp in "$SRC_BS" "$TGT_BS"; do
+            nc -z -G 5 "${hp%:*}" "${hp#*:}" || { echo "FAIL: broker $hp unreachable"; exit 1; }
+            echo "  reachable: $hp"
+          done
+
+          # 1. NO SECOND WRITER of the target. A byte copier still feeding the same topic puts source-registry ids into it.
+          if [ "$TARGET" = es4 ]; then
+            echo "  spx-es4-bridge is retired by the Install stage (it is a byte copier)"
+          else
+            MM1=/Users/abhinav/oe-ops/dl-mirror-dev-to-mac74/run-mirror.sh
+            if [ ! -r "$MM1" ]; then echo "FAIL: cannot read $MM1 — cannot prove the MM1 whitelist no longer copies underlying.spx.price"; exit 1; fi
+            if grep -qE 'underlying\\\\[.]spx\\\\[.]price($|[^-.A-Za-z\\\\])' "$MM1"; then
+              echo "FAIL: the dev->.74 MirrorMaker whitelist in $MM1 still carries underlying.spx.price (a BYTE copier, group oe-mac74-input-from-dev)."
+              echo "      Remove that alternative from --whitelist, restart com.optionsedge.dl-mirror-dev-to-mac74, then re-run this job."
+              exit 1
+            fi
+            echo "  MM1 whitelist no longer carries underlying.spx.price"
+          fi
+
+        '''
+      }
+    }
+
+    stage('Preflight (registries, topics, group)') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.ACTION == 'install') } }
+      steps {
+        sh '''
+          set -euo pipefail
+          JH="$(/usr/libexec/java_home 2>/dev/null || true)"
+          [ -n "$JH" ] || { echo "FAIL: no JDK found"; exit 1; }
+          export JAVA_HOME="$JH"; export PATH="$JAVA_HOME/bin:$PATH"
+          # 2. Both registries carry the subject in the same shape (the mirror never registers; ids may differ).
+          bash "scripts/kafka/spx-price-mirror/assert-subject-parity.sh" "$SRC_REG" "$TGT_REG"
+
+          # 3. Both topics exist and every partition is led; the TARGET holds no retained JSON (earliest AND newest record of every
+          #    non-empty partition are framed Avro whose id resolves to the subject on the TARGET registry).
+          for side in SRC TGT; do
+            if [ "$side" = SRC ]; then bs="$SRC_BS"; t="$SRC_TOPIC"; else bs="$TGT_BS"; t="$TGT_TOPIC"; fi
+            "$CONFLUENT/bin/kafka-topics" --bootstrap-server "$bs" --describe --topic "$t" > "/tmp/spx-price-mirror-$TARGET.$side.describe"
+            parts=$(awk '/Partition:/ { n++ } END { print n+0 }' "/tmp/spx-price-mirror-$TARGET.$side.describe")
+            bad=$(awk '/Partition:/ { for (i = 1; i <= NF; i++) if ($i == "Leader:" && $(i+1) !~ /^[0-9]+$/) b++ } END { print b+0 }' "/tmp/spx-price-mirror-$TARGET.$side.describe")
+            [ "$parts" -ge 1 ] || { echo "FAIL: $t does not exist on $bs (this mirror must not rely on broker auto-create)"; exit 1; }
+            [ "$bad" -eq 0 ] || { echo "FAIL: $t on $bs has $bad partition(s) without a leader"; exit 1; }
+            echo "  $side topic $t on $bs: $parts partition(s), all led"
+          done
+          CHECK_FIRST=true ALLOW_EMPTY=true bash "scripts/kafka/spx-price-mirror/verify-target-record.sh" "$TGT_BS" "$TGT_REG" "$TGT_TOPIC" "$CONFLUENT/bin"
+          ALLOW_EMPTY=true bash "scripts/kafka/spx-price-mirror/verify-target-record.sh" "$SRC_BS" "$SRC_REG" "$SRC_TOPIC" "$CONFLUENT/bin"
+
+          # 4. Compile check of the mirror against the installed jars, then report the durable group's position.
+          CP="$CONFLUENT/share/java/kafka/*:$CONFLUENT/share/java/kafka-serde-tools/*:$CONFLUENT/share/java/confluent-common/*"
+          javac -proc:none -cp "$CP" -d "$(mktemp -d)" "scripts/kafka/spx-price-mirror/SpxPriceAvroMirror.java"
+          GRC=0
+          GD=$("$CONFLUENT/bin/kafka-consumer-groups" --bootstrap-server "$SRC_BS" --describe --group "$GROUP" --offsets 2>&1) || GRC=$?
+          [ "$GRC" -eq 0 ] || { echo "FAIL: cannot query consumer group $GROUP on $SRC_BS (exit $GRC)"; exit 1; }
+          PRIOR=$(printf '%s\\n' "$GD" | awk -v g="$GROUP" -v t="$SRC_TOPIC" '$1 == g && $2 == t && $4 ~ /^[0-9]+$/ { n++ } END { print n+0 }')
+          if [ "$PRIOR" -ge 1 ]; then echo "  group $GROUP holds committed offsets on $PRIOR partition(s): this install RESUMES"; else echo "  group $GROUP is NEW: it starts at OFFSET_RESET=${OFFSET_RESET}"; fi
+        '''
+      }
+    }
+
+    stage('Install') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.ACTION == 'install') } }
+      steps {
+        sh '''
+          set -euo pipefail
+          # Retire the es4 byte-copy bridge FIRST (renamed, not deleted, so the retirement is reversible and visible): a KeepAlive unit
+          # would otherwise return at the next login and write source-registry ids into es4.
+          if [ "$TARGET" = es4 ]; then
+            OLD=/Users/abhinav/Library/LaunchAgents/com.optionsedge.spx-es4-bridge.plist
+            launchctl unload "$OLD" 2>/dev/null || true
+            if [ -f "$OLD" ]; then mv "$OLD" "$OLD.retired-by-spx-price-mirror"; fi
+            launchctl list > "/tmp/spx-price-mirror-$TARGET.launchctl"
+            if grep -qF com.optionsedge.spx-es4-bridge "/tmp/spx-price-mirror-$TARGET.launchctl"; then echo "FAIL: spx-es4-bridge is still loaded"; exit 1; fi
+            echo "  spx-es4-bridge retired"
+          fi
+          launchctl unload "$PLIST" 2>/dev/null || true
+          mkdir -p "$MDIR"
+          cp "scripts/kafka/spx-price-mirror/SpxPriceAvroMirror.java" "$MDIR/SpxPriceAvroMirror.java"
+
+          cat > "$MDIR/mirror.env" <<EOS
+# GENERATED by Jenkinsfile.spx-price-reencoder — do not hand-edit; re-run the job instead.
+CONFLUENT=${CONFLUENT}
+SRC_BS=${SRC_BS}
+SRC_TOPIC=${SRC_TOPIC}
+SRC_REG=${SRC_REG}
+TGT_BS=${TGT_BS}
+TGT_TOPIC=${TGT_TOPIC}
+TGT_REG=${TGT_REG}
+GROUP=${GROUP}
+OFFSET_RESET=${OFFSET_RESET}
+EOS
+
+          cat > "$MDIR/run.sh" <<'EOS'
+#!/usr/bin/env bash
+# GENERATED by Jenkinsfile.spx-price-reencoder — do not hand-edit; re-run the job instead.
+set -uo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
+. "$HERE/mirror.env"
+LOG="$HERE/mirror.log"
+# launchd has a minimal environment: resolve a JDK explicitly.
+if [ -z "${JAVA_HOME:-}" ]; then JAVA_HOME="$(/usr/libexec/java_home 2>/dev/null || true)"; fi
+export JAVA_HOME
+export PATH="$JAVA_HOME/bin:/usr/bin:/bin:$PATH"
+[ -x "$JAVA_HOME/bin/java" ] || { echo "[$(date '+%F %T')] ERROR: no JDK found" >> "$LOG"; exit 2; }
+echo "[$(date '+%F %T')] starting spx-price mirror $SRC_BS/$SRC_TOPIC -> $TGT_BS/$TGT_TOPIC (group=$GROUP reset=$OFFSET_RESET)" >> "$LOG"
+exec java -cp "$CONFLUENT/share/java/kafka/*:$CONFLUENT/share/java/kafka-serde-tools/*:$CONFLUENT/share/java/confluent-common/*" \
+  "$HERE/SpxPriceAvroMirror.java" mirror "$SRC_BS" "$SRC_TOPIC" "$SRC_REG" "$TGT_BS" "$TGT_TOPIC" "$TGT_REG" "$GROUP" "$OFFSET_RESET" 2>>"$LOG"
+EOS
+          chmod +x "$MDIR/run.sh"
+
+          cat > "$PLIST" <<EOS
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>${LABEL}</string>
+  <key>ProgramArguments</key>
+  <array><string>/bin/bash</string><string>${MDIR}/run.sh</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <!-- a crash-looping mirror (a record it refuses) must not respawn faster than the group coordinator evicts the dead member -->
+  <key>ThrottleInterval</key><integer>30</integer>
+  <key>StandardOutPath</key><string>${MDIR}/mirror.out.log</string>
+  <key>StandardErrorPath</key><string>${MDIR}/mirror.err.log</string>
+</dict>
+</plist>
+EOS
+          launchctl load "$PLIST"
+          echo "installed ${LABEL}"
+        '''
+      }
+    }
+
+    stage('Verify') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.ACTION == 'install') } }
+      steps {
+        sh '''
+          set -euo pipefail
+          JH="$(/usr/libexec/java_home 2>/dev/null || true)"
+          [ -n "$JH" ] || { echo "FAIL: no JDK found"; exit 1; }
+          export JAVA_HOME="$JH"; export PATH="$JAVA_HOME/bin:$PATH"
+          T="/tmp/spx-price-mirror-$TARGET"
+          rm -f "$T.verdict"
+          # grep through a FILE, never a pipe (SIGPIPE under pipefail)
+          launchctl list > "$T.launchctl"
+          grep -qF "$LABEL" "$T.launchctl" || { echo "FAIL: launchd unit $LABEL not loaded"; exit 1; }
+          echo "  launchd unit loaded: $LABEL"
+
+          # Sample BOTH ends across one window: target advanced -> FLOWING; both flat -> INCONCLUSIVE (market closed); source advanced
+          # and target flat -> the mirror drops records (FAIL). A query that cannot be answered is a FAIL, never a zero.
+          end_offset() {
+            raw=$("$CONFLUENT/bin/kafka-get-offsets" --bootstrap-server "$1" --topic "$2" 2>/dev/null) || { echo "FAIL: kafka-get-offsets $2 on $1" >&2; return 1; }
+            printf '%s\\n' "$raw" | awk -F: -v t="$2" '$1 == t && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ { n++; s += $3 } END { if (n == 0) exit 3; print s }'
+          }
+          SRC0=$(end_offset "$SRC_BS" "$SRC_TOPIC"); TGT0=$(end_offset "$TGT_BS" "$TGT_TOPIC")
+          sleep 60
+          SRC1=$(end_offset "$SRC_BS" "$SRC_TOPIC"); TGT1=$(end_offset "$TGT_BS" "$TGT_TOPIC")
+          echo "  source $SRC_TOPIC end-offset $SRC0 -> $SRC1"
+          echo "  target $TGT_TOPIC end-offset $TGT0 -> $TGT1"
+
+          # the durable group must hold a committed offset on the source topic
+          GRC=0
+          GD=$("$CONFLUENT/bin/kafka-consumer-groups" --bootstrap-server "$SRC_BS" --describe --group "$GROUP" --offsets 2>&1) || GRC=$?
+          [ "$GRC" -eq 0 ] || { echo "FAIL: cannot query consumer group $GROUP (exit $GRC)"; exit 1; }
+          COMMITTED=$(printf '%s\\n' "$GD" | awk -v g="$GROUP" -v t="$SRC_TOPIC" '$1 == g && $2 == t && $4 ~ /^[0-9]+$/ { n++ } END { print n+0 }')
+          [ "$COMMITTED" -ge 1 ] || { echo "FAIL: group $GROUP has NO committed offset on $SRC_TOPIC after 60s; check ${MDIR}/mirror.log"; exit 1; }
+          echo "  restart continuity OK: committed offsets on $COMMITTED partition(s)"
+
+          if [ "$TGT1" -gt "$TGT0" ]; then
+            # the decisive proof: the newest TARGET record is framed Avro whose id resolves to the subject on the TARGET registry
+            # and decodes there (a byte copy would carry the source id)
+            CHECK_FIRST=true bash "scripts/kafka/spx-price-mirror/verify-target-record.sh" "$TGT_BS" "$TGT_REG" "$TGT_TOPIC" "$CONFLUENT/bin"
+            echo "  MIRROR FLOWING and the target records decode under the target registry"
+            echo FLOWING > "$T.verdict"
+          elif [ "$SRC1" -gt "$SRC0" ]; then
+            echo "FAIL: source produced $((SRC1-SRC0)) records in 60s but the target did not advance; check ${MDIR}/mirror.log"
+            echo DROPPING > "$T.verdict"
+            exit 1
+          else
+            ALLOW_EMPTY=true CHECK_FIRST=true bash "scripts/kafka/spx-price-mirror/verify-target-record.sh" "$TGT_BS" "$TGT_REG" "$TGT_TOPIC" "$CONFLUENT/bin"
+            echo "  INCONCLUSIVE: neither end advanced in 60s (no spot ticks: market closed). Re-run while the feed is producing to assert flow."
+            echo INCONCLUSIVE > "$T.verdict"
+          fi
+        '''
+        script {
+          // The shell cannot set a Jenkins result, so the verdict crosses the boundary as a file. No traffic is NOT proof of flow.
+          def verdict = sh(script: "cat '/tmp/spx-price-mirror-${params.TARGET}.verdict' 2>/dev/null || echo MISSING", returnStdout: true).trim()
+          echo "spx-price mirror verify verdict: ${verdict}"
+          if (verdict == 'INCONCLUSIVE') {
+            currentBuild.result = 'UNSTABLE'
+            currentBuild.description = 'mirror installed; flow NOT proven (no spot ticks in window)'
+          } else if (verdict == 'FLOWING') {
+            currentBuild.description = 'mirror installed and flow proven'
+          } else {
+            error("mirror verify produced no verdict (${verdict}) — treat as unverified")
+          }
+        }
+      }
+    }
+  }
+}

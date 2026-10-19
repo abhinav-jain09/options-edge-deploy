@@ -29,7 +29,7 @@ format they cannot read are the OLD JSON readers, for the minutes before each is
    (sha256-pinned bytes, FULL by read-back, the canonical schema must be the latest version).
 3. **Production prerequisites (stop BEFORE the feed rollout; verify each):** the **NAS archive** `*/10` spot cron (`ARCHIVE_JOB=spot`: suspend the crontab
    line, then confirm no `oe-archive-kafka.sh` process holds the spot lock) and the **`spx-es4-bridge`** console-consumer|producer (a byte copier and a possible
-   JSON writer: stop it and keep it stopped until the decode-and-re-encode mirror replaces it). Not applicable on dev (it archives no spot and has no bridge).
+   JSON writer: stop it and keep it stopped; `Jenkinsfile.spx-price-reencoder` TARGET=es4 retires its launchd unit and replaces it, see "Mirrors" below). Not applicable on dev (it archives no spot and has no bridge).
 4. **Roll the Avro feed** (`options-edge-databento-feed-deploy`, then `service-deploy SERVICE=databento-feed`) and prove the OLD (JSON) feed pod is
    gone: exactly one feed pod, running the new image digest. The topic now holds the retained JSON followed by Avro. A pre-cutover feed that
    survives would write JSON into the fresh topic after step 4.
@@ -67,7 +67,36 @@ format they cannot read are the OLD JSON readers, for the minutes before each is
    from a freshly produced record (compare offset/eventTime with the console-consumer view), there are no deserialization errors, and the browser `spx-price`
    events are unchanged. A reader stuck on an out-of-range offset (reset policy `none`) is crash-looping, and a crash-looping group is Empty between restarts: delete its offsets
    then (`kafka-consumer-groups --bootstrap-server <bootstrap> --delete-offsets --group <g> --topic underlying.spx.price`, which succeeds only on an Empty group) and let it restart.
-9. Environment-specific follow-ups: NAS archive reader (prod), es4 bridge (below).
+9. Environment-specific follow-ups: NAS archive reader (prod), the two re-encoding mirrors (below).
+
+## Mirrors: `Jenkinsfile.spx-price-reencoder`
+Schema ids are per registry, so a framed record copied byte for byte into another registry's topic is undecodable (the id there means another
+schema or none). The topic had two byte copiers; one job, one JVM tool (`scripts/kafka/spx-price-mirror/SpxPriceAvroMirror.java`, Confluent 7.3.1 jars) replaces both:
+it decodes each value with the SOURCE registry, serializes it again with the TARGET registry under the same subject (RecordNameStrategy), and produces it with the
+same key bytes, headers and the source record timestamp. It never registers and has no fallback: JSON, non-Avro bytes, a foreign record or a shape the target
+registry does not know stop the mirror (launchd restarts it, the durable group does not advance). Offsets are committed only after the producer flushed.
+
+| `TARGET` | path | replaces | durable group |
+|---|---|---|---|
+| `es4` | prod `192.168.100.252:9092` `underlying.spx.price` (registry :8082) -> es4 `192.168.100.4:9092` `es.underlying.spx.price` (registry :8081) | the `spx-es4-bridge` console pipe (launchd `com.optionsedge.spx-es4-bridge`, defined outside git; its plist is renamed `*.retired-by-spx-price-mirror`) | `spx-price-mirror-es4` |
+| `mac74` | dev `127.0.0.1:19092` `underlying.spx.price` (registry :8082) -> `.74` `192.168.100.74:9092` `underlying.spx.price` (registry :8082) | the `underlying\.spx\.price` alternative of the `--whitelist` of `~/oe-ops/dl-mirror-dev-to-mac74/run-mirror.sh` (MirrorMaker 1, group `oe-mac74-input-from-dev`, also defined outside git) | `spx-price-mirror-mac74` |
+
+Install order (per target), after the source topic is Avro (cutover step 5-7 of the SOURCE environment):
+1. Register the subject on the TARGET registry (`ensure-underlying-price-schema.sh`, es4 :8081 / .74 :8082): the mirror never registers.
+2. **Wipe and recreate the target topic under its own name** (es4 `es.underlying.spx.price`, .74 `underlying.spx.price`; no versioned sibling): it holds JSON from before the
+   cutover. The Preflight reads the EARLIEST and the newest record of every non-empty target partition and refuses a topic whose first record is not framed Avro.
+3. `mac74` only: delete the `underlying\.spx\.price|` alternative from the MM1 `--whitelist` and restart `com.optionsedge.dl-mirror-dev-to-mac74`. The Preflight reads that file and
+   FAILS while the alternative is present (two writers, one copying source ids). The old group `oe-mac74-input-from-dev` keeps a stale committed offset on the topic; it is harmless and
+   is not the mirror's group.
+4. Run the job (`PERMITTED_SHA` = `git rev-parse origin/main`). Preflight: brokers reachable; no second writer; the subject is on BOTH registries in the same shape (ids may differ,
+   `assert-subject-parity.sh`); both topics exist and are led; the target holds no retained JSON and its ids resolve on the target registry; the mirror compiles against the installed jars.
+   Install, then Verify (60 s window): the group holds committed offsets; if the target advanced, the newest target record on every partition is Confluent-framed Avro whose schema id resolves to
+   `com.optionsedge.contracts.hpsf.UnderlyingPrice` ON THE TARGET REGISTRY and decodes there (`verify-target-record.sh`; a byte copy would fail this); source advanced with the target flat is
+   a FAIL; both flat (market closed) is UNSTABLE, flow not proven: re-run while the feed produces.
+5. es4 only, after FLOWING: es4 readers (es-cvd, es-amt, gamma-ladder-path, context-tape) already select Avro by the resolved topic name; verify each as in step 8 against `es.underlying.spx.price`.
+Tests: `tests/test_spx_price_avro_mirror.py` (the real tool through two stub registries whose ids differ: target id replaces source id, payload unchanged, JSON/unknown/foreign/unregistered refused),
+`test_spx_price_verify_target_record.py`, `test_spx_price_subject_parity.py`, `test_spx_price_mirror_job.py`. Not exercised by any test: a live broker round trip (key, headers and timestamp
+preservation are asserted on the source text only); the first install on each target is that proof, via Verify.
 
 ## Reader and producer changes (separate PRs; each Codex-approved on all three bars before merge)
 contracts `options-edge-contracts#112` (schema + codec, 0.27.0) · feed `options-edge-databento-feed#178` · processing
@@ -90,8 +119,8 @@ No change needed: option-price-behavior (names the topic in an env var no code r
 1. **NAS archive converted AND deployed** (`oe-archive-kafka.sh`, `OE_SPOT_TOPICS`, prod */10 cron): an Avro reader writing the JSON-era line
    (the `IndicatorArchiveReader` pattern) is live; otherwise prod spot history stops being archived at step 6 (the archive is the only durable
    history of this compacted topic). NO-GO until proven on a staged range.
-2. **`spx-es4-bridge` stopped or replaced** (see below): it byte-copies Confluent-framed records into a registry where their schema id is
-   invalid. It is part of the stop list in step 3 and stays stopped until the decode-and-re-encode mirror is installed.
+2. **`spx-es4-bridge` replaced** by `Jenkinsfile.spx-price-reencoder` TARGET=es4 (see "Mirrors"): the bridge byte-copies Confluent-framed records into a registry where their
+   schema id is invalid. It is part of the stop list in step 3 and stays stopped; the mirror install retires its unit.
 3. The prod reader images were built AFTER the reader PRs merged and verified against an Avro topic on dev; the prod feed image is the
    Rust build containing `spx_price_avro.rs`; the subject is registered on the prod registry (step 2) and `ensure-underlying-price-schema.sh`
    reports the canonical schema as latest.
@@ -106,10 +135,8 @@ No change needed: option-price-behavior (names the topic in an env var no code r
   cannot decode Avro; it needs an Avro reader writing the JSON-era line (the `IndicatorArchiveReader` pattern) BEFORE the prod
   topic converts, or prod spot history stops being archived (the archive is the only durable history of this compacted topic).
   Dev does not archive spot, so dev is unaffected.
-* **es4 byte-copy bridge** `spx-es4-bridge` (console-consumer | console-producer from prod `underlying.spx.price` to es4
-  `es.underlying.spx.price`, defined outside git): schema ids are per-registry, so a byte copy of Avro is undecodable on es4. It
-  needs a decode-and-re-encode mirror (the `es-indicator-mirror` pattern). es4 readers (es-cvd, es-amt, gamma-ladder-path,
-  context-tape) already select Avro by the resolved topic name; do NOT point es4 at Avro until the bridge is converted.
+* **Mirrors (decode-and-re-encode, this repository)**: see the next section. Both byte copiers of this topic are replaced; do NOT point es4 or the
+  .74 stack at Avro until the corresponding mirror job is installed and its Verify stage reports FLOWING.
 * **Python timewarp/replay tools** (`timewarp_snapshot_replay.py`, `hpsf_replay.py`) publish a JSON variant of this payload to
   replay-scoped topic names; they are not part of the live path and must be converted before they are run against a converted topic.
 * Components that still write other JSON topics (the services touched here keep their own JSON outputs) remain on the rule's
