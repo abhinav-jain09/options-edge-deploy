@@ -12,7 +12,7 @@
 #
 # --verify runs ONLY the post-conditions (new id, shape, consumer-group offsets) and changes nothing: the recovery path when
 # --recreate created the topic but then failed the consumer-group check (a re-run of --recreate would refuse the new id).
-# PRODUCTION IS NOT ENABLED: the declared shape below was read off the dev broker; a production run needs its own recorded shape.
+# Shapes are per cluster (dev and production recorded below).
 # Also refuses a bootstrap server that is not the named cluster's broker, re-checks the TopicId immediately before the delete,
 # and fails if any consumer group still holds a committed offset for the recreated topic.
 # Usage:
@@ -62,10 +62,7 @@ BIN="${POS[1]:-${KAFKA_BIN_DIR:-}}"
 TOPIC_NAME=underlying.spx.price
 case "$CLUSTER:$BS" in
   dev:localhost:19092|dev:host.docker.internal:19092|dev:192.168.100.102:19092) ;;
-  production:192.168.100.252:9092)
-    echo "FATAL: the production shape (replication factor, retention, cleanup policy) of $TOPIC_NAME has not been recorded; read it off the live" >&2
-    echo "       production broker, add a production row here with its own verification, and review it before this script may touch production." >&2
-    exit 2 ;;
+  production:192.168.100.252:9092) ;;
   *) echo "FATAL: bootstrap '$BS' is not the $CLUSTER cluster's broker; refusing (nothing was changed)" >&2; exit 2 ;;
 esac
 
@@ -80,7 +77,17 @@ kt() { "$KT" --bootstrap-server "$BS" "$@"; }
 TOPIC=underlying.spx.price
 PARTITIONS=1
 REPLICATION_FACTOR=1
-CONFIGS="cleanup.policy=compact,delete,retention.ms=-1,delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.01,segment.ms=3600000,min.insync.replicas=1"
+# dev: read off the dev broker 2026-10-18 (compacted, retention -1). production: read off the production broker 2026-10-19
+# (delete, retention -1, 1 GiB segments); the cleanup policy differs by environment, so the shape is per cluster.
+if [ "$CLUSTER" = production ]; then
+  CONFIGS="cleanup.policy=delete,retention.ms=-1,segment.bytes=1073741824,min.insync.replicas=1"
+  CONFIG_ARGS=(--config cleanup.policy=delete --config retention.ms=-1 --config segment.bytes=1073741824 --config min.insync.replicas=1)
+else
+  CONFIGS="cleanup.policy=compact,delete,retention.ms=-1,delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.01,segment.ms=3600000,min.insync.replicas=1"
+  # cleanup.policy carries a comma of its own, so the --config flags are spelled out rather than split from CONFIGS.
+  CONFIG_ARGS=(--config "cleanup.policy=compact,delete" --config retention.ms=-1 --config delete.retention.ms=3600000
+               --config min.cleanable.dirty.ratio=0.01 --config segment.ms=3600000 --config min.insync.replicas=1)
+fi
 
 if [ "$PHASE" = "--recreate" ]; then
   echo "=== roll forward $TOPIC on $BS (cluster $CLUSTER) ==="
@@ -115,9 +122,7 @@ if [ "$PHASE" = "--recreate" ]; then
   fi
 
   args=(--create --topic "$TOPIC" --partitions "$PARTITIONS" --replication-factor "$REPLICATION_FACTOR")
-  # cleanup.policy carries a comma of its own, so the --config flags are spelled out rather than split from CONFIGS.
-  args+=(--config "cleanup.policy=compact,delete" --config retention.ms=-1 --config delete.retention.ms=3600000 \
-         --config min.cleanable.dirty.ratio=0.01 --config segment.ms=3600000 --config min.insync.replicas=1)
+  args+=("${CONFIG_ARGS[@]}")
   echo "-- create $TOPIC ($PARTITIONS partition, $CONFIGS)"
   kt "${args[@]}" || { echo "FAIL: $TOPIC was deleted but could not be created; it is absent. Re-run this command with --topic-absent-after-failed-create added." >&2; exit 1; }
 fi
