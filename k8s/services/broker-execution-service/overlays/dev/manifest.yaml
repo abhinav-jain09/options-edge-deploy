@@ -64,6 +64,12 @@ spec:
               value: "true"
             - name: LINKED_EXIT_MID_CHASE_ENABLED
               value: "true"
+            - name: TRIGGER_ORDERS_ENABLED
+              value: "true"
+            - name: ORDER_MID_PRICING_ENABLED
+              value: "true"
+            - name: BRACKET_ORDERS_ENABLED
+              value: "true"
             - name: CONTEXT_TAPE_SPOT_TOPIC
               value: underlying.spx.index.price
             - name: AUTH_ISSUER_URI
