@@ -341,8 +341,8 @@ pipeline {
       // rollout. The on-box cleanup restores Deployments at the end of its own run, so an affected
       // pod may crash-loop for the seconds until this stage lands and then recover on its own
       // backoff -- a bounded self-healing window, not the permanent failure it replaces.
-      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED'
-        && (params.ACTION == 'register-cvd-schemas' || params.ACTION == 'clean-reset') } }
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' &&
+        (params.ACTION == 'register-cvd-schemas' || params.ACTION == 'clean-reset') } }
       options { timeout(time: 20, unit: 'MINUTES') }
       steps {
         timeout(time: 10, unit: 'MINUTES') {
