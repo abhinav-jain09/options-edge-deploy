@@ -168,7 +168,7 @@
         }
       ],
       "default": null,
-      "doc": "Reference-leg strike; the service's double written as the decimal of its shortest round-trip text."
+      "doc": "Reference-leg strike; the service's double written as the decimal of its shortest round-trip text; a strike needing more than 18 fractional digits is refused (never rounded)."
     },
     {
       "name": "refLeg",
@@ -358,7 +358,7 @@
                 "precision": 38,
                 "scale": 18
               },
-              "doc": "The spot at the finalized frame. The service's double is written as the decimal of its shortest round-trip text, so BigDecimal.doubleValue() returns the identical double."
+              "doc": "The spot at the finalized frame. The service's double is written as the decimal of its shortest round-trip text, so BigDecimal.doubleValue() returns the identical double. A price needing more than 18 fractional digits, a non-finite price or negative zero is refused by the writer (never rounded)."
             },
             {
               "name": "authClass",

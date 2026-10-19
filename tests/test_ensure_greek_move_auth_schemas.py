@@ -26,6 +26,15 @@ def run(url: str, directory: str, dry: bool = False):
 
 
 class EnsureGreekMoveAuthSchemas(unittest.TestCase):
+    def test_every_fixture_is_the_byte_identical_canonical_schema_the_script_pins(self):
+        # Canonical = contracts 0.32.0 schemas/greekmoveauth/*.avsc (PR options-edge-contracts#118); the script pins their sha256.
+        import hashlib
+        import re
+        pins = dict(re.findall(r'"(\w+)": \("[\w.]+", "([0-9a-f]{64})"\)', SCRIPT.read_text()))
+        self.assertEqual(sorted(pins), NAMES)
+        for n in NAMES:
+            self.assertEqual(hashlib.sha256((FIXTURES / f"{n}.avsc").read_bytes()).hexdigest(), pins[n], n)
+
     def test_fresh_registry_gets_every_subject_under_full(self):
         reg = Registry()
         server, url = serve(reg)

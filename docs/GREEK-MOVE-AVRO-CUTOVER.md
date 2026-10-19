@@ -18,10 +18,10 @@ Contracts 0.32.0 (`schemas/greekmoveauth/`), processing PR 1175, feed-gateway PR
 ## Readers (origin/main)
 
 Only `options-edge-feed-gateway` reads `current` (now Avro, same browser JSON; the web page is unchanged). `trade-evidence-api` (processing `trade-evidence-api/registry.py:29` subscribes to `current`; no canonical binding) reads it through
-`Collector.decode` in `trade-evidence-api/collector.py`: the generic Confluent Avro path (schema fetched by id, cached, `fastavro`), added by
-processing commit `a08fab4a6`, already on processing main. That decoder tries `json.loads` first, so it ALSO accepts a JSON value; it
-does not refuse JSON, and that is harmless here only because the topic is wiped and then written by the Avro producer alone. Decode of a
-real `MoveAuthenticityVerdict` frame is pinned by `trade-evidence-api/tests/test_greek_move_auth_avro_reader.py` (processing PR 1175).
+`Collector.decode` in `trade-evidence-api/collector.py`: the generic Confluent Avro path (schema fetched by id, cached, `fastavro`, processing
+commit `a08fab4a6`). `current` is listed in `AVRO_ONLY_TOPICS` (processing PR 1175): a value that is not Confluent-framed Avro (JSON,
+or any non-magic-byte payload) is REFUSED before any registry lookup and counted as a decode error, with no JSON fallback.
+`tests/test_greek_move_auth_avro_reader.py` pins both the decode of a real `MoveAuthenticityVerdict` frame and the JSON refusal.
 Price fidelity: the writer refuses (never rounds) any price needing more than 18 fractional digits, a non-finite price or negative
 zero; the service drops such an input and counts it in `gma_malformed_records_total` (`GreekMoveAuthTopologyTest`), it does not crash-loop. Nothing reads `events` or archives either topic. `delta-flow-by-strike` is a JSON INPUT written by delta-flow-service;
 its conversion is scheduled in the next wave and `LegacyJsonDeltaFlowReader` (the only JSON read) must switch to Avro in lockstep.
@@ -37,3 +37,9 @@ its conversion is scheduled in the next wave and `LegacyJsonDeltaFlowReader` (th
    `scripts/kafka/roll-forward-topics.sh --recreate --cluster dev --topics options.spx.greek-move-auth.current,options.spx.greek-move-auth.events --pre-cutover-id options.spx.greek-move-auth.current=<id> --pre-cutover-id options.spx.greek-move-auth.events=<id> --writers-and-readers-stopped localhost:19092`
    then the same with `--verify --new-topic-id ...`; production uses `--cluster production ... 192.168.100.252:9092`.
 6. Deploy the gateway, verify it Ready with zero records consumed, then the service; verify the first records start with magic byte 0 and decode under the canonical subject id.
+
+## Ordering with delta-flow-by-strike
+
+`LegacyJsonDeltaFlowReader` (behind the single `DeltaFlowReader` seam in the service) still reads the JSON `delta-flow-by-strike` topic.
+JSON on Kafka is prohibited, so this cutover is ordered AFTER the delta-flow-by-strike Avro cutover; the reader swap to the Avro decoder is
+the final commit on the processing PR before merge. Do not roll this change set before that.

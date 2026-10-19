@@ -2,7 +2,7 @@
   "type": "record",
   "name": "SpotFrameEvent",
   "namespace": "com.optionsedge.contracts.greekmoveauth",
-  "doc": "INTERNAL Kafka Streams frame-rekey repartition record carrying one spot tick. Not a topic contract; committed so the serde is never service-local. price is decimal(38,18) (HALF_EVEN to 18 places).",
+  "doc": "INTERNAL Kafka Streams frame-rekey repartition record carrying one spot tick. Not a topic contract; committed so the serde is never service-local. price is decimal(38,18) holding the shortest round-trip text of the double; a price needing more than 18 fractional digits, a non-finite price or negative zero is refused, never rounded.",
   "fields": [
     {
       "name": "symbol",

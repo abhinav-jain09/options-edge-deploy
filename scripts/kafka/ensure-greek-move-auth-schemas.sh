@@ -24,9 +24,9 @@ CANONICAL = {
     "EngineCarryState": ("com.optionsedge.contracts.greekmoveauth.EngineCarryState", "7efb83fc607dd14e454269b757c720e442f995e5aab1d29de857802deb7f31e5"),
     "GexFrameEvent": ("com.optionsedge.contracts.greekmoveauth.GexFrameEvent", "a186970fdf778bd93f18ce4e47d40a5460cea6df22a84af7b37b22c71c7de0dc"),
     "LastVerdict": ("com.optionsedge.contracts.greekmoveauth.LastVerdict", "f70f4a0e757d2d200493b47e8e9039100b94981ca959ba8f9dc55223ecfd306b"),
-    "MoveAuthenticityVerdict": ("com.optionsedge.contracts.greekmoveauth.MoveAuthenticityVerdict", "8fdfa2b1d8529e918e27e25f50649fca59c154d1c93fe34558abfadf1d89f522"),
+    "MoveAuthenticityVerdict": ("com.optionsedge.contracts.greekmoveauth.MoveAuthenticityVerdict", "3ab66b1efc0eae786d9f1d62a707df2d2e553fd8eaa02a2a65f47d54bfa1e047"),
     "SampleWindow": ("com.optionsedge.contracts.greekmoveauth.SampleWindow", "2d310c6a965f3ecddd5c7ef0058c127865876a81bf3855bb8bf759fd6a7c2f84"),
-    "SpotFrameEvent": ("com.optionsedge.contracts.greekmoveauth.SpotFrameEvent", "f0572728a9b6e20921fda36a211127ac2952d20aefbe1fd1181a0fa3ef93ed1c"),
+    "SpotFrameEvent": ("com.optionsedge.contracts.greekmoveauth.SpotFrameEvent", "e71666eab2b4499feec768823cadf68893d51a6ad6ac2d86c8cebaf2a75bb46e"),
 }
 url, directory, dry = sys.argv[1].rstrip("/"), sys.argv[2], sys.argv[3] == "true"
 HDR = {"Content-Type": "application/vnd.schemaregistry.v1+json"}
