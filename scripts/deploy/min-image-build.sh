@@ -26,27 +26,30 @@
 
 _mib_labels_of_pinned() {
   # Prints the image config's Labels (JSON object) for a digest-pinned ref on DEPLOY_PLATFORM.
-  local ref="$1" registry repo digest os arch man media cfg sub
+  local ref="$1" registry resolve repo digest os arch man media cfg sub
   registry="${ref%%/*}"
+  # Read over the LAN at REGISTRY_RESOLVE_HOST when set (remote Jenkins agent — the ref's host,
+  # host.docker.internal:5001, is the agent's own loopback). Same registry, same labels.
+  resolve="${REGISTRY_RESOLVE_HOST:-$registry}"
   repo="${ref#*/}"; repo="${repo%%@*}"; repo="${repo%:*}"
   digest="${ref#*@}"
   os="${DEPLOY_PLATFORM%/*}"; arch="${DEPLOY_PLATFORM#*/}"
   local accept='application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json'
-  man="$(curl -fsSL -H "Accept: $accept" "${REGISTRY_SCHEME:-http}://$registry/v2/$repo/manifests/$digest")" || return 1
+  man="$(curl -fsSL -H "Accept: $accept" "${REGISTRY_SCHEME:-http}://$resolve/v2/$repo/manifests/$digest")" || return 1
   media="$(jq -r '.mediaType // ""' <<<"$man")"
   case "$media" in
     *image.index*|*manifest.list*)
       sub="$(jq -r --arg os "$os" --arg arch "$arch" '[.manifests[]? | select(.platform.os==$os and .platform.architecture==$arch)] | .[0].digest // ""' <<<"$man")"
       [ -n "$sub" ] || { echo "min-image-build: $repo@$digest has no $DEPLOY_PLATFORM manifest" >&2; return 1; }
       man="$(curl -fsSL -H "Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json" \
-        "${REGISTRY_SCHEME:-http}://$registry/v2/$repo/manifests/$sub")" || return 1
+        "${REGISTRY_SCHEME:-http}://$resolve/v2/$repo/manifests/$sub")" || return 1
       ;;
     *image.manifest*|*manifest.v2*) ;;
     *) echo "min-image-build: unsupported manifest mediaType '$media' for $repo@$digest" >&2; return 1 ;;
   esac
   cfg="$(jq -r '.config.digest // ""' <<<"$man")"
   [ -n "$cfg" ] || { echo "min-image-build: $repo@$digest manifest has no config digest" >&2; return 1; }
-  curl -fsSL "${REGISTRY_SCHEME:-http}://$registry/v2/$repo/blobs/$cfg" | jq -c '.config.Labels // {}'
+  curl -fsSL "${REGISTRY_SCHEME:-http}://$resolve/v2/$repo/blobs/$cfg" | jq -c '.config.Labels // {}'
 }
 
 # require_min_image_build_for <service> <digest-pinned image> — the gate for one pair.

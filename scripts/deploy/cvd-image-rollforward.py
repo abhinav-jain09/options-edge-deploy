@@ -20,7 +20,11 @@ BINDINGS = {
     'amt-order-bridge': ('amt-order-bridge','amt-order-bridge','options-edge-amt-order-bridge'),
 }
 TARGETS = {
-    'dev': {'registry':'host.docker.internal:5001','http':'http://127.0.0.1:5001','platform':'linux/arm64',
+    # registry is the image NAME embedded in manifests (resolved by kubelet ON the dev host, where
+    # host.docker.internal -> the local registry). http is the endpoint THIS tool (which may run on a
+    # remote Jenkins agent) curls to resolve/copy manifests, so it is the dev box's LAN IP, not a
+    # host-relative name: host.docker.internal/127.0.0.1 would resolve to the agent itself.
+    'dev': {'registry':'host.docker.internal:5001','http':'http://192.168.100.102:5001','platform':'linux/arm64',
             'kubeconfig':'/Users/abhinav/.kube/jenkins-deployer-dev.kubeconfig','uid':'55dcf4ed-9a04-40c4-aeba-039e998c6241','tag':''},
     'production': {'registry':'192.168.100.252:5000','http':'http://192.168.100.252:5000','platform':'linux/amd64',
             'kubeconfig':'/Users/abhinav/.kube/jenkins-deployer-prod.kubeconfig','uid':'c62ee606-688d-4373-a889-a52c8b919e73','tag':'prod'},

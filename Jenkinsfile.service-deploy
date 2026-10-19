@@ -558,11 +558,17 @@ PYEOF
         sh '''
           set -euo pipefail
           export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
-          # The registry this environment's pods use, from the deployed configuration (never a literal here):
-          # docker-desktop's host.docker.internal is this Jenkins host itself.
+          # The schema registry the pods use, read from the deployed configmap (never a literal here).
+          # The pod-facing value is host.docker.internal:8082 (dev) — correct for the pods, which run on
+          # the dev Docker host. But the Jenkins AGENT may be a REMOTE machine, and host.docker.internal
+          # is Docker-Desktop magic DNS that resolves to 127.0.0.1 on whatever host the agent runs on, so
+          # the agent must not use it. Rewrite it to the dev box's LAN IP: on the dev host itself that IP
+          # is still locally reachable (the broker/registry/SR bind 0.0.0.0), and on a remote agent it is
+          # the dev box over the LAN. (The previous ->localhost rewrite assumed the agent WAS the dev host
+          # and broke a remote deploy.) Override with DEV_HOST_IP for a one-off.
           SR=$(kubectl -n options-edge get configmap options-edge-config -o jsonpath='{.data.SCHEMA_REGISTRY_URL}' 2>/dev/null || true)
           : "${SR:?SCHEMA_REGISTRY_URL not readable from the options-edge-config configmap — refusing to guess the registry}"
-          SR="${SR/host.docker.internal/localhost}"
+          SR="${SR/host.docker.internal/${DEV_HOST_IP:-192.168.100.102}}"
           echo "registry for ${ENVIRONMENT}: $SR"
           SCHEMA_REGISTRY_URL="$SR" SCHEMAS_DIR=".jenkins-tmp/contracts/schemas-registry/indicators" \
             DEPLOY_DRY_RUN="${DEPLOY_DRY_RUN:-false}" bash scripts/kafka/ensure-indicator-schemas.sh
@@ -1082,7 +1088,7 @@ PYEOF
         sh '''
           set -euo pipefail
           if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
-            WEB_PUBLIC_URL="${WEB_PUBLIC_URL:-http://localhost:8090}" \
+            WEB_PUBLIC_URL="${WEB_PUBLIC_URL:-http://${DEV_HOST_IP:-192.168.100.102}:8090}" \
               scripts/smoke/check-options-edge-web.sh
           else
             WEB_PUBLIC_URL="${PROD_WEB_PUBLIC_URL:-http://192.168.100.252:8094}" \
