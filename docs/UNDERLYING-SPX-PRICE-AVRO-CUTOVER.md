@@ -158,3 +158,18 @@ No change needed: option-price-behavior (names the topic in an env var no code r
   replay-scoped topic names; they are not part of the live path and must be converted before they are run against a converted topic.
 * Components that still write other JSON topics (the services touched here keep their own JSON outputs) remain on the rule's
   52-component backlog; this change converts one topic.
+
+## Execution record (2026-10-19)
+* **dev** (2026-10-18/19): subject id 2056; Avro feed rolled first, topic wiped and recreated under its own name (id XN3PL_… -> gdTU84w…), 17 readers rolled.
+* **production** (2026-10-19, before the US session): subject registered (id 2045, FULL). The prod topic was `cleanup.policy=delete`, 1 partition, `retention.ms=-1`, `segment.bytes=1073741824`, RF 1,
+  `min.insync.replicas=1`. A JSON feed image had written ~5.5k JSON records into it before the Avro feed image rolled, so it was deleted and recreated with the same shape
+  (TopicId GzbDxB_… -> 00xQIW3…) with the Avro feed live; `roll-forward-underlying-spx-price.sh` still refuses `--cluster production` (the shape was applied by hand with the
+  same checks: pre-cutover id verified immediately before the delete, shape and first record verified after). Then the prod readers were rolled (vol-premium, context-tape,
+  databento-gex, reversal-confirmation, indicator-service, strike-intelligence, strike-invasion, strike-liquidity-heatmap, spot-vol-regime, greek-move-authenticity,
+  market-commentary, multileg-structure, signal-follower, feed-gateway). Afterwards every prod reader group sat at the log end and no reader logged a decode error.
+* **archive**: the prod `*/10` spot cron sets `OE_SPOT_AVRO_TOPICS="underlying.spx.price"` (archive-scripts-deploy #45).
+* **mirrors**: `spx-price-reencoder` created in Jenkins (copied from the `es-indicator-mirror` job definition) and installed for TARGET=es4 (es4 topic wiped and recreated, bridge retired as
+  `com.optionsedge.spx-es4-bridge.plist.retired-20261019`) and TARGET=mac74 (the `.74` topic wiped and recreated; the `underlying.spx.price` entry removed from
+  `~/oe-ops/dl-mirror-dev-to-mac74/run-mirror.sh`, backup `run-mirror.sh.pre-spx-avro-20261019`). Both reported FLOWING.
+* Not rolled: services at 0 replicas on prod (hedging-pressure, spread-skew, dealer-ledger scorer, drop-classifier, strike-flow-classifier-databento at the time) still carry the old image; they
+  must be rolled before anyone scales them up.
