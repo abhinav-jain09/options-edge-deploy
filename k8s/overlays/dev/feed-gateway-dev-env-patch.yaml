@@ -138,3 +138,25 @@ spec:
             # service:consumer-group:input-topics — lag is computed ONLY for allowlisted services.
             - name: OE_SYSTEM_STATUS_LAG_REGISTRY
               value: "databento-gex-service:databento-gex-service:options.databento.raw;strike-intelligence-service:strike-intelligence-service:options.databento.gex.strike;delta-flow-service:delta-flow-service:options.opra.tcbbo"
+            # DEV-ONLY, TEMPORARY — REVERT once the dev gateway image carries the Extended binding.
+            #
+            # es-spx-align writes ALIGNED_GEX_BOOK_EXTENDED to options.es-gex-spx-aligned. The dev
+            # gateway image (sha256:88536d76) predates gateway PR #237 and still binds the
+            # non-Extended ALIGNED_GEX_BOOK, so every poll that reaches a record on that topic throws
+            # "Canonical released schema mismatch before payload decoding". That kills the WHOLE
+            # state-live consumer, not just this one topic — it carries every panel's data and
+            # restarts every 30 s, so the dev board showed NOTHING while gamma was flowing on Kafka
+            # the entire time (4 restarts in 12 minutes, measured).
+            #
+            # The image fix is already on gateway main and already on production. It cannot be built
+            # for dev right now: scripts/jenkins/test-on-es4.sh refuses the gateway test stage
+            # between 08:30 and 16:00 America/New_York, because that suite runs on the live es4 box.
+            # So the image lands after the close, and this flag is what gets the dev board back
+            # during the session.
+            #
+            # WHAT THIS COSTS: the es-gex panel is dark on dev. It is ALREADY dark — the gateway
+            # cannot decode a single record from that topic — so nothing that works today is lost.
+            # The flag's code default is false; dev is the environment that turned it on. Removing
+            # this block is the whole revert.
+            - name: GATEWAY_ES_GEX_ENABLED
+              value: "false"
