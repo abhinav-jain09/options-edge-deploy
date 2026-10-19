@@ -18,7 +18,7 @@ import hashlib, json, os, sys, urllib.error, urllib.request
 # file is ever sent: when a canonical schema changes, its hash changes in the same deploy change
 # (tests/fixtures/multileg/*.avsc are the pinned copies, hash-checked by the test).
 CANONICAL = {
-    "MultilegObservation": ("com.optionsedge.contracts.multileg.MultilegObservation", "d07bc7608e7bf2dbb45a74d4526fd235fffe4cbbff93f3cd119161b6f8b39f56"),
+    "MultilegObservation": ("com.optionsedge.contracts.multileg.MultilegObservation", "18e91d1625eaecbfd7d3937a70472ab5a21bea7396e70b92afada56a12147146"),
     "MultilegWindowStatus": ("com.optionsedge.contracts.multileg.MultilegWindowStatus", "1cadeb3e7c7f882a849ac132768e2fe3219e7cf984b3a9e9e38c98f2a959b32d"),
     "MultilegSrLevels": ("com.optionsedge.contracts.multileg.MultilegSrLevels", "8ac64689699371012fc8fef2077cb7b6b319aa5af400e91b6de5c7cb1241c2ee"),
 }

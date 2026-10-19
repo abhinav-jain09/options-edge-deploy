@@ -2,7 +2,7 @@
   "type": "record",
   "name": "MultilegObservation",
   "namespace": "com.optionsedge.contracts.multileg",
-  "doc": "One options.multileg.observations record, published by multileg-structure-service. Until the cutover this topic carried hand-built JSON (MultilegServiceMain.toJson(Observation)); the topic is wiped and recreated under its OWN name carrying Avro. The record reproduces that JSON FIELD FOR FIELD AND NAME FOR NAME, in the same order. Kafka key = observationId. The four score fields are present only when measurementState is MEASURED (null otherwise: a score that could not be computed is absent, never a fabricated zero). Strikes are decimal(38,18); every score, surprisal, effort and size-weighted price keeps the finite double the JSON carried. Registry subject = the record full name (RecordNameStrategy).",
+  "doc": "One options.multileg.observations record, published by multileg-structure-service. Until the cutover this topic carried hand-built JSON (MultilegServiceMain.toJson(Observation)); the topic is wiped and recreated under its OWN name carrying Avro. The record reproduces that JSON FIELD FOR FIELD AND NAME FOR NAME, in the same order. Kafka key = observationId. The four score fields are present only when measurementState is MEASURED (null otherwise: a score that could not be computed is absent, never a fabricated zero). Strikes and the size-weighted average price are decimal(38,18); every score, surprisal and effort (derived statistics, not prices) keeps the finite double the JSON carried. Registry subject = the record full name (RecordNameStrategy).",
   "fields": [
     {"name": "schemaVersion", "type": "int", "doc": "Wire revision; 2 today."},
     {"name": "observationId", "type": "string", "doc": "Content-derived stable id; consumers dedupe on it (delivery is at-least-once)."},
@@ -40,7 +40,7 @@
         {"name": "strike", "type": {"type": "bytes", "logicalType": "decimal", "precision": 38, "scale": 18}},
         {"name": "right", "type": "string", "doc": "CALL or PUT."},
         {"name": "aggregatedSize", "type": "long"},
-        {"name": "avgPrice", "type": "double", "doc": "Size-weighted average price (a computed statistic, finite double as the JSON carried)."},
+        {"name": "avgPrice", "type": {"type": "bytes", "logicalType": "decimal", "precision": 38, "scale": 18}, "doc": "Size-weighted average price: a price, so decimal(38,18) (shortest round-trip text of the engine double, HALF_EVEN beyond 18 places)."},
         {"name": "printCount", "type": "long"},
         {"name": "qty", "type": "int"},
         {"name": "canonicalGeometryCoefficient", "type": "int", "doc": "The template's canonical orientation (+1/-1), NOT an observed traded direction."},
