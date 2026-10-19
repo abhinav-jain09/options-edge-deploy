@@ -42,15 +42,25 @@ def to_mib(value):
     return number * scale / (1024 ** 2)
 
 
-def xmx_mib(container):
-    """The -Xmx of this container, from any env value that carries one (JAVA_TOOL_OPTIONS,
-    JAVA_OPTS, JDK_JAVA_OPTIONS, a bespoke name — the flag is what matters, not the variable)."""
+def _xmx_mib(digits, unit):
+    n, unit = int(digits), unit.lower()
+    return n * 1024 if unit == "g" else (n / 1024 if unit == "k" else n)
+
+
+def xmx_declarations(container):
+    """Every env variable of this container that pins a heap, as (name, effective MiB).
+
+    The flag is what matters, not the variable: JAVA_TOOL_OPTIONS, JAVA_OPTS, JDK_JAVA_OPTIONS or
+    anything bespoke. Within ONE options string the JVM applies the LAST -Xmx, so that is the
+    effective value here — reading the first instead lets "-Xmx512m ... -Xmx2g" be checked as
+    512Mi while the JVM runs with 2g, which is precisely the container this gate exists to catch.
+    """
+    found = []
     for entry in container.get("env") or []:
-        m = re.search(r"-Xmx(\d+)([kKmMgG])", str(entry.get("value") or ""))
-        if m:
-            n, unit = int(m.group(1)), m.group(2).lower()
-            return n * 1024 if unit == "g" else (n // 1024 if unit == "k" else n)
-    return None
+        matches = re.findall(r"-Xmx(\d+)([kKmMgG])", str(entry.get("value") or ""))
+        if matches:
+            found.append((entry.get("name"), _xmx_mib(*matches[-1])))
+    return found
 
 
 def containers(doc):
@@ -80,12 +90,22 @@ def main():
             docs = [d for d in yaml.safe_load_all(fh) if isinstance(d, dict)]
         for doc in docs:
             for c in containers(doc):
-                heap = xmx_mib(c)
-                if heap is None:
+                declarations = xmx_declarations(c)
+                if not declarations:
                     continue
+                heap = max(mib for _, mib in declarations)
                 limit_raw = ((c.get("resources") or {}).get("limits") or {}).get("memory")
                 where = (f"{path}: {doc.get('kind')}/"
                          f"{(doc.get('metadata') or {}).get('name')} container {c.get('name')}")
+                if len(declarations) > 1:
+                    # Which -Xmx wins across SEPARATE variables depends on how the launcher
+                    # orders them, so this gate will not guess. Two variables pinning a heap is
+                    # itself the defect to fix.
+                    names = ", ".join(f"{n}={mib:.0f}Mi" for n, mib in declarations)
+                    failures.append(
+                        f"{where} pins a heap in more than one env variable ({names}). Which one "
+                        f"the JVM applies depends on launcher ordering — declare -Xmx once.")
+                    continue
                 if limit_raw is None:
                     failures.append(
                         f"{where} pins -Xmx{heap}Mi with NO memory limit — an unbounded container "
