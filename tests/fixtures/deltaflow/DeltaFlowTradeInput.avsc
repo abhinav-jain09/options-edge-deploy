@@ -1,0 +1,224 @@
+{
+  "type": "record",
+  "name": "DeltaFlowTradeInput",
+  "namespace": "com.optionsedge.contracts.deltaflow",
+  "doc": "A PRIVATE image of delta-flow-service (a Kafka Streams state-store value / its compacted changelog, or an internal repartition topic), not a topic contract: it exists as a released .avsc only so the serde has a registered schema (RecordNameStrategy, auto.register.schemas=false), FULL compatibility. Until the Avro cutover these values were hand-built JSON text; the changelogs and repartition topics are DELETED at the cutover (retained JSON is never read). Prices (strike, trade price, bid, ask, spot) are decimal(38,18); every derived statistic keeps its double. The trades-by-symbol repartition topic value: one OPRA/GLBX trade print parsed ONCE at the re-key stage from the options.opra.tcbbo JSON input (written by another component and read as JSON there) into typed fields, together with the canonical feed-action decode, so no JSON text is ever written to Kafka. Unparseable prints never reach the topic (the re-key stage counts them as INVALID_TRADE rejections).",
+  "fields": [
+    {
+      "name": "eventId",
+      "type": "string"
+    },
+    {
+      "name": "symbol",
+      "type": "string"
+    },
+    {
+      "name": "expiry",
+      "type": "string"
+    },
+    {
+      "name": "strike",
+      "type": {
+        "type": "bytes",
+        "logicalType": "decimal",
+        "precision": 38,
+        "scale": 18
+      }
+    },
+    {
+      "name": "optionType",
+      "type": "string"
+    },
+    {
+      "name": "tradingDate",
+      "type": "string"
+    },
+    {
+      "name": "tradePrice",
+      "type": [
+        "null",
+        {
+          "type": "bytes",
+          "logicalType": "decimal",
+          "precision": 38,
+          "scale": 18
+        }
+      ],
+      "default": null
+    },
+    {
+      "name": "contracts",
+      "type": "long"
+    },
+    {
+      "name": "tradeTimeMs",
+      "type": "long"
+    },
+    {
+      "name": "contractMultiplier",
+      "type": "int"
+    },
+    {
+      "name": "contractMultiplierFallbackUsed",
+      "type": "boolean"
+    },
+    {
+      "name": "source",
+      "type": "string"
+    },
+    {
+      "name": "dataset",
+      "type": "string"
+    },
+    {
+      "name": "sourceSchema",
+      "type": "string"
+    },
+    {
+      "name": "instrumentId",
+      "type": "string"
+    },
+    {
+      "name": "sequence",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    },
+    {
+      "name": "inlineQuote",
+      "type": [
+        "null",
+        {
+          "type": "record",
+          "name": "DeltaFlowQuoteState",
+          "namespace": "com.optionsedge.contracts.deltaflow",
+          "doc": "A PRIVATE image of delta-flow-service (a Kafka Streams state-store value / its compacted changelog, or an internal repartition topic), not a topic contract: it exists as a released .avsc only so the serde has a registered schema (RecordNameStrategy, auto.register.schemas=false), FULL compatibility. Until the Avro cutover these values were hand-built JSON text; the changelogs and repartition topics are DELETED at the cutover (retained JSON is never read). Prices (strike, trade price, bid, ask, spot) are decimal(38,18); every derived statistic keeps its double. Latest NBBO of one option contract (latest-quote-store value, quote repartition value, and the inline quote of a trade). bid/ask are null where the feed carried none (the JSON era held NaN).",
+          "fields": [
+            {
+              "name": "symbol",
+              "type": "string"
+            },
+            {
+              "name": "expiry",
+              "type": "string"
+            },
+            {
+              "name": "strike",
+              "type": {
+                "type": "bytes",
+                "logicalType": "decimal",
+                "precision": 38,
+                "scale": 18
+              }
+            },
+            {
+              "name": "optionType",
+              "type": "string"
+            },
+            {
+              "name": "bid",
+              "type": [
+                "null",
+                {
+                  "type": "bytes",
+                  "logicalType": "decimal",
+                  "precision": 38,
+                  "scale": 18
+                }
+              ],
+              "default": null
+            },
+            {
+              "name": "ask",
+              "type": [
+                "null",
+                {
+                  "type": "bytes",
+                  "logicalType": "decimal",
+                  "precision": 38,
+                  "scale": 18
+                }
+              ],
+              "default": null
+            },
+            {
+              "name": "quoteTimeMs",
+              "type": "long"
+            },
+            {
+              "name": "bidSize",
+              "type": [
+                "null",
+                "long"
+              ],
+              "default": null
+            },
+            {
+              "name": "askSize",
+              "type": [
+                "null",
+                "long"
+              ],
+              "default": null
+            },
+            {
+              "name": "source",
+              "type": "string"
+            }
+          ]
+        }
+      ],
+      "default": null
+    },
+    {
+      "name": "actionType",
+      "type": "string",
+      "doc": "NEW, CANCEL, CORRECTION or UNKNOWN (FeedActionDecoder.ActionType)."
+    },
+    {
+      "name": "addressability",
+      "type": "string",
+      "doc": "ADDRESSABLE, NON_ADDRESSABLE or UNKNOWN."
+    },
+    {
+      "name": "complexLinkageId",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "actionConfidence",
+      "type": "string",
+      "doc": "FULL, DEGRADED or UNKNOWN."
+    },
+    {
+      "name": "nativeSide",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "complexFlag",
+      "type": "boolean"
+    },
+    {
+      "name": "rawCondition",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "actionReason",
+      "type": "string",
+      "doc": "FeedActionDecoder.Reason constant name."
+    }
+  ]
+}

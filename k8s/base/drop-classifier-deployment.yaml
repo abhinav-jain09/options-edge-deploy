@@ -51,6 +51,11 @@ spec:
               value: 192.168.100.4:9092
             - name: DROP_FLOW_TOPIC
               value: es.delta-flow-by-trade
+            # es.delta-flow-by-trade is Avro (DeltaFlowEvent, Kafka Serialization Rule): its schema ids are assigned by the
+            # registry of the cluster the topic lives on, the es4 registry - NOT the prod registry (SCHEMA_REGISTRY_URL) the
+            # gamma/spot readers use.
+            - name: DROP_FLOW_SCHEMA_REGISTRY_URL
+              value: http://192.168.100.4:8081
             # outputs live on the PROD broker: the es4 broker (.4) is wiped
             # nightly by the es4 clean-reset BY DESIGN — no corpus survives
             # there (learned 2026-08-12: a week of es.drop.* and even

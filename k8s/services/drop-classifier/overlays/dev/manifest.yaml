@@ -66,6 +66,8 @@ spec:
               value: host.docker.internal:19092
             - name: DROP_FLOW_TOPIC
               value: delta-flow-by-trade
+            - name: DROP_FLOW_SCHEMA_REGISTRY_URL
+              value: ""
             - name: DROP_OUTPUT_BOOTSTRAP
               value: host.docker.internal:19092
             - name: DROP_GAMMA_BOOTSTRAP

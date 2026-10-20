@@ -1,0 +1,132 @@
+{
+  "type": "record",
+  "name": "DeltaFlowPositioningSnapshot",
+  "namespace": "com.optionsedge.contracts.deltaflow",
+  "doc": "Per-contract open-interest positioning estimate (requirement R1), published on delta-flow-positioning when an OI input is configured. Kafka key = symbol|tradingDate|expiry|strike|optionType. The JSON era wrote this record with Jackson from the contracts record of the same name; this schema reproduces that JSON FIELD FOR FIELD, NAME FOR NAME, IN THE SAME ORDER (DeltaFlowJson renders it back byte-for-byte). Prices (strike, trade price, bid, ask) are decimal(38,18) = the shortest round-trip text of the engine double; a value needing more than 18 fractional digits, non-finite, -0.0 or out of range is REFUSED, never rounded. Every derived statistic (share-delta flow, delta, gamma, iv, ages) keeps the double the JSON carried. Enumerations are written as their constant names (strings) so a new constant is not a schema change. Registry subject = the record full name (RecordNameStrategy), compatibility FULL.",
+  "fields": [
+    {
+      "name": "symbol",
+      "type": "string"
+    },
+    {
+      "name": "tradingDate",
+      "type": "string"
+    },
+    {
+      "name": "expiry",
+      "type": "string"
+    },
+    {
+      "name": "strike",
+      "type": {
+        "type": "bytes",
+        "logicalType": "decimal",
+        "precision": 38,
+        "scale": 18
+      },
+      "doc": "Strike, a price: decimal(38,18)."
+    },
+    {
+      "name": "optionType",
+      "type": "string"
+    },
+    {
+      "name": "asOfEventTimeMs",
+      "type": "long"
+    },
+    {
+      "name": "sessionVolumeContracts",
+      "type": "double"
+    },
+    {
+      "name": "startOpenInterest",
+      "type": "double",
+      "doc": "NaN when no session-open OI exists."
+    },
+    {
+      "name": "endOpenInterest",
+      "type": "double",
+      "doc": "NaN when no OI exists."
+    },
+    {
+      "name": "openingContractsLowerBound",
+      "type": "double"
+    },
+    {
+      "name": "openingContractsUpperBound",
+      "type": "double"
+    },
+    {
+      "name": "closingContractsLowerBound",
+      "type": "double"
+    },
+    {
+      "name": "closingContractsUpperBound",
+      "type": "double"
+    },
+    {
+      "name": "openingFractionMid",
+      "type": "double"
+    },
+    {
+      "name": "sessionNetDeltaFlow",
+      "type": "double"
+    },
+    {
+      "name": "positioningEstimate",
+      "type": "double"
+    },
+    {
+      "name": "positioningLowerBound",
+      "type": "double"
+    },
+    {
+      "name": "positioningUpperBound",
+      "type": "double"
+    },
+    {
+      "name": "uncertaintyBand",
+      "type": "double"
+    },
+    {
+      "name": "positioningQuality",
+      "type": "string",
+      "doc": "FINAL, PROVISIONAL or UNKNOWN."
+    },
+    {
+      "name": "outputMeta",
+      "type": {
+        "type": "record",
+        "name": "DeltaFlowOutputMeta",
+        "namespace": "com.optionsedge.contracts.deltaflow",
+        "doc": "R10 per-output provenance: quality (FULL, DEGRADED, UNKNOWN, BROKEN), reconciliationStatus (RECONCILED, FAILED, PENDING, UNRECONCILED), the fraction of required inputs present (RATIO, 0..1), the calibration dataset id (none when uncalibrated), the model version and the threshold set id in force.",
+        "fields": [
+          {
+            "name": "quality",
+            "type": "string"
+          },
+          {
+            "name": "reconciliationStatus",
+            "type": "string"
+          },
+          {
+            "name": "sourceCompleteness",
+            "type": "double"
+          },
+          {
+            "name": "calibrationDatasetId",
+            "type": "string"
+          },
+          {
+            "name": "modelVersion",
+            "type": "string"
+          },
+          {
+            "name": "thresholdSetId",
+            "type": "string"
+          }
+        ]
+      }
+    }
+  ]
+}

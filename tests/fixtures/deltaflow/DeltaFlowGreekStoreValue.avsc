@@ -1,0 +1,114 @@
+{
+  "type": "record",
+  "name": "DeltaFlowGreekStoreValue",
+  "namespace": "com.optionsedge.contracts.deltaflow",
+  "doc": "A PRIVATE image of delta-flow-service (a Kafka Streams state-store value / its compacted changelog, or an internal repartition topic), not a topic contract: it exists as a released .avsc only so the serde has a registered schema (RecordNameStrategy, auto.register.schemas=false), FULL compatibility. Until the Avro cutover these values were hand-built JSON text; the changelogs and repartition topics are DELETED at the cutover (retained JSON is never read). Prices (strike, trade price, bid, ask, spot) are decimal(38,18); every derived statistic keeps its double. Value of the global latest-greek store (no changelog; rebuilt from options.databento.gex.strike): a per-contract greek (key symbol|expiry|strike|TYPE) or the newest per-symbol spot (key with the spot prefix). Exactly one field is set.",
+  "fields": [
+    {
+      "name": "greek",
+      "type": [
+        "null",
+        {
+          "type": "record",
+          "name": "DeltaFlowGreekState",
+          "namespace": "com.optionsedge.contracts.deltaflow",
+          "doc": "Latest greeks of one option contract.",
+          "fields": [
+            {
+              "name": "symbol",
+              "type": "string"
+            },
+            {
+              "name": "expiry",
+              "type": "string"
+            },
+            {
+              "name": "strike",
+              "type": {
+                "type": "bytes",
+                "logicalType": "decimal",
+                "precision": 38,
+                "scale": 18
+              }
+            },
+            {
+              "name": "optionType",
+              "type": "string"
+            },
+            {
+              "name": "delta",
+              "type": "double"
+            },
+            {
+              "name": "gamma",
+              "type": "double"
+            },
+            {
+              "name": "iv",
+              "type": "double"
+            },
+            {
+              "name": "greekTimeMs",
+              "type": "long"
+            },
+            {
+              "name": "staleAfterMs",
+              "type": "long"
+            },
+            {
+              "name": "source",
+              "type": "string"
+            },
+            {
+              "name": "modelVersion",
+              "type": "string"
+            },
+            {
+              "name": "surfaceSpot",
+              "type": [
+                "null",
+                {
+                  "type": "bytes",
+                  "logicalType": "decimal",
+                  "precision": 38,
+                  "scale": 18
+                }
+              ],
+              "doc": "Underlying spot the surface was struck at; null when the GEX record carried no usable spot (the JSON era held NaN).",
+              "default": null
+            }
+          ]
+        }
+      ],
+      "default": null
+    },
+    {
+      "name": "spot",
+      "type": [
+        "null",
+        {
+          "type": "record",
+          "name": "DeltaFlowSpotState",
+          "namespace": "com.optionsedge.contracts.deltaflow",
+          "doc": "Newest underlying spot observed for a symbol.",
+          "fields": [
+            {
+              "name": "spot",
+              "type": {
+                "type": "bytes",
+                "logicalType": "decimal",
+                "precision": 38,
+                "scale": 18
+              }
+            },
+            {
+              "name": "eventTimeMs",
+              "type": "long"
+            }
+          ]
+        }
+      ],
+      "default": null
+    }
+  ]
+}
