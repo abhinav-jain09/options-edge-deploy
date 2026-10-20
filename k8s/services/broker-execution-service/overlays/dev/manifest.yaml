@@ -93,7 +93,7 @@ spec:
             - name: BROKER_LIVE_EXECUTION_CLIENT_BASE
               value: "31001"
             - name: BROKER_EXECUTION_MAX_QUANTITY
-              value: "10"
+              value: "1000"
             - name: BROKER_LIVE_EXECUTION_MAX_QUANTITY
               value: "1"
             - name: BROKER_PAPER_BALANCE_ENABLED
