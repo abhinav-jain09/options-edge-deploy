@@ -41,10 +41,14 @@ options.indicators.repartition|4|delete|
 options.indicators.bootstrap.control|1|compact,delete|-1
 options.indicators.signals.current|1|compact,delete|604800000
 options.indicators.signals.events|1|delete|3888000000
+options.indicators.studies.bars|8|delete|3888000000
+options.indicators.studies.current|1|compact,delete|604800000
 "
 # signals.current / signals.events: SIGNALS_V1 (indicator-service spec rev 13 §3) — the same
 # producer, the same deploy path, the same two failure modes as snapshot.current/bars above; the
 # shapes are the topics.env declarations (1 partition each, exact-partition; 7 d / 45 d).
+# studies.bars / studies.current: STUDIES_V1 (Phase A, PHASE-A-INDICATORS-REQUIREMENT.md A-R10.1/A-R10.4) — written only with
+# INDICATOR_STUDIES_ENABLED=true, declared and reconciled unconditionally so the flag flip is a one-variable change.
 
 # ---- --recreate: the Avro cutover (INDICATOR-AVRO-CONVERSION-PLAN.md section 5) -------------------------
 # Deletes and recreates, EMPTY, exactly the per-environment allow-list below at the shape topics.env declares,

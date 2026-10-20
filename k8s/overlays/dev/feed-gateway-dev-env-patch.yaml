@@ -50,6 +50,11 @@ spec:
               value: "true"
             - name: KAFKA_MARKET_STRUCTURE_PATTERNS_TOPIC
               value: options.spx.market-structure.patterns
+            # Phase A studies relay (frames indicator-studies / indicator-studies-current and the hello's studies fields):
+            # OFF, explicitly. The producer flag INDICATOR_STUDIES_ENABLED is also false; turn this one on first (the
+            # gateway then waits for records), the producer second.
+            - name: GATEWAY_STUDIES_ENABLED
+              value: "false"
             # Early-auction verdict ledger relay (the read-only /early-auction panel + the home-page
             # strip behind GET /api/early-auction/events). ON since 2026-10-13 (owner: "flip the
             # relay flag when rollout lands") — DEV ONLY; production stays off with the shadow

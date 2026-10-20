@@ -1,5 +1,5 @@
 """scripts/kafka/ensure-indicator-schemas.sh against a stand-in registry (tests/stub_schema_registry.py): the
-seven fixed ids are imported under FULL, re-runs are no-ops that still enforce FULL, collisions fail, the mode a
+ten fixed ids are imported under FULL, re-runs are no-ops that still enforce FULL, collisions fail, the mode a
 subject had is restored its own way (an override by PUT, an inherited mode by DELETE), and a registry that
 forbids subject-level IMPORT is refused by the probe before any subject is touched."""
 from __future__ import annotations
@@ -17,8 +17,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/kafka/ensure-indicator-schemas.sh"
 PARITY = ROOT / "scripts/kafka/assert-indicator-schema-parity.sh"
 NAMES = ["IndicatorSnapshot", "IndicatorBar", "BackfillManifest", "IndicatorSignals", "SignalEvent", "SpotTick",
-         "IndicatorStateImage"]
-IDS = dict(zip(NAMES, range(2001, 2008)))
+         "IndicatorStateImage", "StudyBar", "StudiesCurrent", "StudyEngineImage"]
+IDS = dict(zip(NAMES, range(2001, 2011)))
 NS = "com.optionsedge.contracts.indicators.avro."
 
 
@@ -38,7 +38,7 @@ def run(url: str, dry: bool = False, env: dict | None = None):
 
 
 class EnsureIndicatorSchemas(unittest.TestCase):
-    def test_fresh_registry_gets_the_seven_fixed_ids_under_full_and_no_mode_left_behind(self):
+    def test_fresh_registry_gets_the_ten_fixed_ids_under_full_and_no_mode_left_behind(self):
         reg = Registry()
         server, url = serve(reg)
         try:
@@ -68,7 +68,7 @@ class EnsureIndicatorSchemas(unittest.TestCase):
             self.assertIn("compatibility set to FULL and read back", out)
             self.assertFalse(any(c.startswith("POST /subjects/") and c.endswith("/versions {schema…}") for c in reg.calls[calls_before:]),
                              "nothing was re-imported")
-            self.assertEqual(len([s for s in reg.subjects.values() for _ in s]), 7)
+            self.assertEqual(len([s for s in reg.subjects.values() for _ in s]), 10)
         finally:
             server.shutdown()
 
@@ -152,7 +152,7 @@ class EnsureIndicatorSchemas(unittest.TestCase):
             self.assertEqual(run(ub)[0], 0)
             r = subprocess.run(["bash", str(PARITY), ua, ub], capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-            self.assertIn("ids 2001-2007 identical", r.stdout)
+            self.assertIn("ids 2001-2010 identical", r.stdout)
             b.by_id[2005] = json.dumps({"type": "record", "name": "SignalEvent", "namespace": NS[:-1], "fields": [{"name": "y", "type": "int"}]})
             r = subprocess.run(["bash", str(PARITY), ua, ub], capture_output=True, text=True)
             self.assertEqual(r.returncode, 1)

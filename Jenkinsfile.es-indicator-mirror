@@ -35,7 +35,7 @@ pipeline {
     string(name: 'SOURCE_PORT',          defaultValue: '9092',          description: 'Source Kafka port.')
     string(name: 'TARGET_SPX_CLUSTER_IP',defaultValue: '127.0.0.1',     description: 'Target env broker IP (dev = 127.0.0.1, prod = 192.168.100.252).')
     string(name: 'TARGET_PORT',          defaultValue: '19092',         description: 'Target Kafka port (dev = 19092, prod = 9092).')
-    choice(name: 'TOPIC', choices: ['es.options.indicators.snapshot.current', 'es.options.indicators.bars', 'es.options.indicators.signals.current', 'es.options.indicators.signals.events'], description: 'Indicator topic to mirror (frozen allow-list — the shape contract below is per-topic).')
+    choice(name: 'TOPIC', choices: ['es.options.indicators.snapshot.current', 'es.options.indicators.bars', 'es.options.indicators.signals.current', 'es.options.indicators.signals.events', 'es.options.indicators.studies.bars', 'es.options.indicators.studies.current'], description: 'Indicator topic to mirror (frozen allow-list — the shape contract below is per-topic).')
     choice(name: 'ACTION', choices: ['install', 'teardown'], description: 'install = create+run the mirror; teardown = stop+remove it.')
   }
   // 45 minutes, not 15: every shape assertion is a kafka-topics/kafka-configs round trip, and on the
@@ -174,6 +174,8 @@ pipeline {
           #                      of record and the daily archiver needs every record, so the consumer reads the LATEST
           #                      record per key within the 7 d window, never a compacted tail)
           #   signals.events   : 1 partition,  delete,         retention 45 d (SIGNALS_V1 lifecycle events; 20 sessions)
+          #   studies.bars     : 8 partitions, delete,         retention 45 d (STUDIES_V1 StudyBar history, key symbol|tf)
+          #   studies.current  : 1 partition,  delete,         retention 7 d  (STUDIES_V1 StudiesCurrent, key = symbol; plain delete on every target)
           # The TOPIC parameter is a choice list, but re-assert here fail-closed so a job-config
           # drift can never mirror an unknown topic with a guessed shape.
           case "$TOPIC" in
@@ -181,11 +183,13 @@ pipeline {
             es.options.indicators.bars)             PARTS=8; POLICY=delete;         RET=3888000000 ;;
             es.options.indicators.signals.current)  PARTS=1; POLICY=delete; RET=604800000 ;;
             es.options.indicators.signals.events)   PARTS=1; POLICY=delete;         RET=3888000000 ;;
+            es.options.indicators.studies.bars)     PARTS=8; POLICY=delete;         RET=3888000000 ;;
+            es.options.indicators.studies.current)  PARTS=1; POLICY=delete; RET=604800000 ;;
             *) echo "FAIL: topic $TOPIC not in the indicator-mirror allow-list"; exit 1 ;;
           esac
 
           # Kafka Serialization Rule / plan section 4: the four mirrored topics carry Confluent-framed Avro whose
-          # schema ids must resolve to the SAME schema on the target registry. Assert ids 2001-2007 are identical
+          # schema ids must resolve to the SAME schema on the target registry. Assert ids 2001-2010 are identical
           # on source and target BEFORE any byte is copied; a differing or absent id fails the install.
           bash scripts/kafka/assert-indicator-schema-parity.sh "$SRC_REGISTRY" "$TGT_REGISTRY"
 

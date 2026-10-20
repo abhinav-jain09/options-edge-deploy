@@ -58,6 +58,11 @@ spec:
               value: "true"
             - name: KAFKA_MARKET_STRUCTURE_PATTERNS_TOPIC
               value: options.spx.market-structure.patterns
+            # Phase A studies relay (frames indicator-studies / indicator-studies-current and the hello's studies fields):
+            # OFF, explicitly. The producer flag INDICATOR_STUDIES_ENABLED is also false; turn this one on first (the
+            # gateway then waits for records), the producer second.
+            - name: GATEWAY_STUDIES_ENABLED
+              value: "false"
             # MARKET COMMENTARY relay: the per-minute records of market-commentary-service, polled by the read-only
             # /market-commentary panel through GET /api/market-commentary/state (a REST view, no WebSocket event). The topic is the
             # code default; declared in scripts/kafka/topics.env and created by ensure-market-commentary-topics.sh. Applying
