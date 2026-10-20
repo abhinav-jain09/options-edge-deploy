@@ -1,0 +1,193 @@
+---
+# Copy this file to a private vars file, then pass it with:
+# ansible-playbook ansible/replay-stack.yml -e @/secure/path/replay-stack.yml
+
+deploy_environment: dev
+app_profile: dev
+
+# Keep replay separate from the live namespace by default. Set
+# allow_same_namespace=true only for a throwaway local cluster.
+live_namespace: options-edge
+replay_namespace: options-edge-replay
+allow_same_namespace: false
+
+kubeconfig: "{{ lookup('env', 'KUBECONFIG') | default('', true) }}"
+
+# Dev/local registry: host.docker.internal:5001
+# Production registry: 192.168.100.252:5000
+image_registry: host.docker.internal:5001
+image_tag: dev
+image_pull_policy: Always
+
+kafka_bootstrap_servers: "192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096"
+schema_registry_url: "http://192.168.100.252:8082"
+
+# Replay must never use the live topic namespace or live state directories.
+replay_topic_prefix: "dev.replay."
+replay_app_id_suffix: "-replay-dev"
+replay_state_dir: /var/lib/options-edge/kafka-streams/replay
+replay_replicas: 1
+
+# Local/dev Kafka often has one broker. Keep this explicit per environment.
+kafka_topic_replication_factor: "1"
+kafka_topic_min_in_sync_replicas: "1"
+kafka_streams_num_standby_replicas: "0"
+
+# Gateway is exposed separately so the UI can point to replay without
+# touching the live gateway.
+replay_gateway_port: 18092
+replay_gateway_service_port: 8092
+replay_gateway_node_port: 30098
+live_gateway_node_port: 30097
+
+# Replay should not write to live Postgres by accident. Leave disabled unless
+# you provide a replay-only database and secret.
+postgres_enabled: "false"
+postgres_jdbc_url: ""
+postgres_user: ""
+postgres_secret_name: ""
+
+# Optional Kubernetes image pull secret.
+image_pull_secret_name: ""
+
+# Services in the second backend plane. Each name becomes <name>-replay.
+replay_services:
+  - name: feed-gateway-service
+    image_name: options-edge-feed-gateway
+    container_name: feed-gateway
+    port_name: http
+    container_port: "{{ replay_gateway_port }}"
+    service:
+      type: NodePort
+      port: "{{ replay_gateway_service_port }}"
+      node_port: "{{ replay_gateway_node_port }}"
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: /metrics
+        prometheus.io/port: "{{ replay_gateway_service_port }}"
+    env:
+      APP_WEB_PORT: "{{ replay_gateway_port }}"
+      APP_FEED_GATEWAY_ENABLED: "true"
+      GATEWAY_KAFKA_MAX_POLL_RECORDS: "100"
+      GATEWAY_KAFKA_FETCH_MAX_BYTES: "4194304"
+      GATEWAY_KAFKA_MAX_PARTITION_FETCH_BYTES: "524288"
+      GATEWAY_KAFKA_RECEIVE_BUFFER_BYTES: "524288"
+      JAVA_TOOL_OPTIONS: "-Xms256m -Xmx1536m"
+
+  - name: databento-volume-aggregator
+    image_name: options-edge-databento-volume-aggregator
+    env:
+      KAFKA_DATABENTO_VOLUME_AGGREGATOR_APP_ID: options-flow-databento-volume-aggregator-v1
+      KAFKA_DATABENTO_VOLUME_AGGREGATOR_STREAMS_NUM_THREADS: "2"
+      KAFKA_DATABENTO_VOLUME_AGGREGATOR_CACHE_MAX_BYTES_BUFFERING: "0"
+      KAFKA_DATABENTO_VOLUME_AGGREGATOR_PROCESSING_GUARANTEE: exactly_once_v2
+      JAVA_TOOL_OPTIONS: "-Xmx1536m"
+
+  - name: raw-to-display-databento-service
+    image_name: options-edge-raw-to-display
+    container_name: raw-to-display
+    env:
+      KAFKA_DISPLAY_STREAMS_APP_ID: options-flow-display-streams-v8-databento
+      KAFKA_DISPLAY_STREAMS_NUM_THREADS: "2"
+      KAFKA_DISPLAY_STREAMS_CACHE_MAX_BYTES_BUFFERING: "0"
+      JAVA_TOOL_OPTIONS: "-Xmx1536m"
+
+  - name: volume-pace-databento-service
+    image_name: options-edge-volume-pace
+    container_name: volume-pace
+    env:
+      KAFKA_PACE_STREAMS_APP_ID: options-flow-pace-streams-v8-databento
+      KAFKA_PACE_STREAMS_NUM_THREADS: "2"
+      JAVA_TOOL_OPTIONS: "-Xmx1536m"
+
+  - name: directional-pressure-databento-service
+    image_name: options-edge-directional-pressure
+    container_name: directional-pressure
+    env:
+      KAFKA_DIRECTIONAL_PRESSURE_STREAMS_APP_ID: options-flow-directional-pressure-streams-v8-databento
+      JAVA_TOOL_OPTIONS: "-Xmx1536m"
+
+  - name: strike-flow-classifier-service
+    image_name: options-edge-strike-flow-classifier
+    container_name: strike-flow-classifier
+    port_name: http
+    container_port: 8097
+    env:
+      KAFKA_STRIKE_FLOW_STREAMS_APP_ID: options-edge-databento-strike-flow-classifier-v2
+      KAFKA_STRIKE_FLOW_STREAMS_NUM_THREADS: "2"
+      JAVA_TOOL_OPTIONS: "-Xmx1536m"
+
+  - name: volume-sandwich-databento-service
+    image_name: options-edge-volume-sandwich
+    container_name: volume-sandwich
+    env:
+      KAFKA_VOLUME_SANDWICH_STREAMS_APP_ID: options-flow-volume-sandwich-streams-v8-databento
+      JAVA_TOOL_OPTIONS: "-Xmx1536m"
+
+  - name: databento-mission-pace-service
+    image_name: options-edge-databento-mission-pace
+    container_name: databento-mission-pace
+    port_name: http
+    container_port: 8097
+    env:
+      KAFKA_MISSION_PACE_STREAMS_APP_ID: options-edge-databento-mission-pace-v1
+      KAFKA_MISSION_PACE_STREAMS_NUM_THREADS: "2"
+      JAVA_TOOL_OPTIONS: "-Xmx1536m"
+
+  - name: databento-mission-pressure-service
+    image_name: options-edge-databento-mission-pressure
+    container_name: databento-mission-pressure
+    port_name: http
+    container_port: 8098
+    env:
+      KAFKA_MISSION_PRESSURE_STREAMS_APP_ID: options-edge-databento-mission-pressure-v1
+      KAFKA_MISSION_PRESSURE_STREAMS_NUM_THREADS: "2"
+      JAVA_TOOL_OPTIONS: "-Xmx1536m"
+
+  - name: databento-mission-sandwich-service
+    image_name: options-edge-databento-mission-sandwich
+    container_name: databento-mission-sandwich
+    port_name: http
+    container_port: 8099
+    env:
+      KAFKA_MISSION_SANDWICH_STREAMS_APP_ID: options-edge-databento-mission-sandwich-v1
+      KAFKA_MISSION_SANDWICH_STREAMS_NUM_THREADS: "2"
+      JAVA_TOOL_OPTIONS: "-Xmx1536m"
+
+  - name: spx-mission-control-service
+    image_name: options-edge-spx-mission-control
+    container_name: spx-mission-control
+    port_name: http
+    container_port: 8096
+    service:
+      type: ClusterIP
+      port: 8096
+    env:
+      HEALTH_PORT: "8096"
+      KAFKA_SPX_MISSION_STREAMS_APP_ID: options-edge-spx-mission-control-v2
+      KAFKA_SPX_MISSION_STREAMS_NUM_THREADS: "4"
+      SPX_MISSION_OUTPUT_INTERVAL_MS: "1000"
+      SPX_MISSION_STALE_AFTER_MS: "15000"
+      SPX_MISSION_ATM_DISTANCE_POINTS: "5.0"
+      SPX_MISSION_ALLOW_LEGACY_PACE: "false"
+      SPX_MISSION_ALLOW_LEGACY_PRESSURE: "false"
+      SPX_MISSION_ALLOW_LEGACY_SANDWICH: "false"
+      JAVA_TOOL_OPTIONS: "-Xmx1536m"
+
+  - name: hpsf-stage-a-service
+    image_name: options-edge-hpsf-processing
+    container_name: hpsf-stage-a
+    env:
+      HPSF_STAGE: A
+      HPSF_STREAMS_APP_ID: options-edge-hpsf-stage-a-v1
+      HPSF_TOPOLOGY_ENABLED: "true"
+      JAVA_TOOL_OPTIONS: "-Xmx1536m"
+
+  - name: hpsf-stage-b-service
+    image_name: options-edge-hpsf-processing
+    container_name: hpsf-stage-b
+    env:
+      HPSF_STAGE: B
+      HPSF_STREAMS_APP_ID: options-edge-hpsf-stage-b-v1
+      HPSF_TOPOLOGY_ENABLED: "true"
+      JAVA_TOOL_OPTIONS: "-Xmx1536m"

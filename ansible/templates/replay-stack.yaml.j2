@@ -1,0 +1,225 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ replay_namespace }}
+  labels:
+    app.kubernetes.io/part-of: options-edge
+    options-edge.io/plane: replay
+    options-edge.io/environment: {{ deploy_environment }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: options-edge-replay-config
+  namespace: {{ replay_namespace }}
+  labels:
+    app.kubernetes.io/name: options-edge-replay-config
+    app.kubernetes.io/part-of: options-edge
+    options-edge.io/plane: replay
+data:
+  APP_PROFILE: {{ app_profile | string | to_json }}
+  APP_MARKET_DATA_SOURCE: "DATABENTO"
+  REPLAY_MODE: "true"
+  LIVE_NAMESPACE: {{ live_namespace | string | to_json }}
+  REPLAY_NAMESPACE: {{ replay_namespace | string | to_json }}
+  TOPIC_PREFIX: {{ replay_topic_prefix | string | to_json }}
+  KAFKA_APPLICATION_ID_SUFFIX: {{ replay_app_id_suffix | string | to_json }}
+  KAFKA_BOOTSTRAP_SERVERS: {{ kafka_bootstrap_servers | string | to_json }}
+  KAFKA_SCHEMA_REGISTRY_URL: {{ schema_registry_url | string | to_json }}
+  SCHEMA_REGISTRY_URL: {{ schema_registry_url | string | to_json }}
+  KAFKA_TOPIC_REPLICATION_FACTOR: {{ kafka_topic_replication_factor | string | to_json }}
+  KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS: {{ kafka_topic_min_in_sync_replicas | string | to_json }}
+  KAFKA_STREAMS_NUM_STANDBY_REPLICAS: {{ kafka_streams_num_standby_replicas | string | to_json }}
+  KAFKA_STREAMS_STATE_DIR: {{ replay_state_dir | string | to_json }}
+  KAFKA_STREAMS_STORE_TYPE: "memory"
+  HPSF_STREAMS_STATE_DIR: "{{ replay_state_dir }}/hpsf"
+  POSTGRES_ENABLED: {{ postgres_enabled | string | to_json }}
+  POSTGRES_JDBC_URL: {{ postgres_jdbc_url | string | to_json }}
+  POSTGRES_USER: {{ postgres_user | string | to_json }}
+  POSTGRES_RAW_AUTO_OFFSET_RESET: "earliest"
+  POSTGRES_DIRECTIONAL_PRESSURE_AUTO_OFFSET_RESET: "earliest"
+  ORDER_PLACEMENT_ENABLED: "false"
+  HPSF_ORDER_PLACEMENT_ENABLED: "false"
+  UNUSUAL_WHALES_ENABLED: "false"
+  IBKR_VIX_PRICE_ENABLED: "false"
+  APP_FEED_GATEWAY_WS_URL: "ws://feed-gateway-service-replay.{{ replay_namespace }}.svc.cluster.local:{{ replay_gateway_service_port }}/ws/events"
+  GATEWAY_WS_URL: "ws://feed-gateway-service-replay.{{ replay_namespace }}.svc.cluster.local:{{ replay_gateway_service_port }}/ws/events"
+  WEB_BASE_URL: "http://feed-gateway-service-replay.{{ replay_namespace }}.svc.cluster.local:{{ replay_gateway_service_port }}"
+  KAFKA_DATABENTO_CONTROL_TOPIC: "{{ replay_topic_prefix }}options.databento.control"
+  KAFKA_DATABENTO_EVENTS_TOPIC: "{{ replay_topic_prefix }}options.databento.events.raw"
+  KAFKA_DATABENTO_SNAPSHOT_TOPIC: "{{ replay_topic_prefix }}options.databento.raw"
+  KAFKA_DATABENTO_NORMALIZED_TOPIC: "{{ replay_topic_prefix }}options.databento.normalized"
+  KAFKA_RAW_TOPIC: "{{ replay_topic_prefix }}options.databento.raw"
+  KAFKA_DISPLAY_TOPIC: "{{ replay_topic_prefix }}options.databento.display"
+  KAFKA_DISPLAY_VOLUME_TOPIC: "{{ replay_topic_prefix }}options.databento.display.volume.current"
+  KAFKA_GAMMA_HISTORY_TOPIC: "{{ replay_topic_prefix }}options.databento.display.gamma.history"
+  KAFKA_DATABENTO_DISPLAY_TOPIC: "{{ replay_topic_prefix }}options.databento.display"
+  KAFKA_DATABENTO_DISPLAY_VOLUME_TOPIC: "{{ replay_topic_prefix }}options.databento.display.volume.current"
+  KAFKA_DATABENTO_PACE_TOPIC: "{{ replay_topic_prefix }}options.databento.pace"
+  KAFKA_DATABENTO_DIRECTIONAL_PRESSURE_TOPIC: "{{ replay_topic_prefix }}options.databento.directional-pressure"
+  KAFKA_DATABENTO_VOLUME_SANDWICH_CURRENT_TOPIC: "{{ replay_topic_prefix }}options.databento.volume-sandwich.current"
+  KAFKA_DATABENTO_VOLUME_SANDWICH_ALERTS_TOPIC: "{{ replay_topic_prefix }}options.databento.volume-sandwich.alerts"
+  KAFKA_PACE_TOPIC: "{{ replay_topic_prefix }}options.databento.pace"
+  KAFKA_DIRECTIONAL_PRESSURE_TOPIC: "{{ replay_topic_prefix }}options.databento.directional-pressure"
+  KAFKA_VOLUME_SANDWICH_CURRENT_TOPIC: "{{ replay_topic_prefix }}options.databento.volume-sandwich.current"
+  KAFKA_VOLUME_SANDWICH_ALERTS_TOPIC: "{{ replay_topic_prefix }}options.databento.volume-sandwich.alerts"
+  KAFKA_STRIKE_FLOW_INPUT_TOPIC: "{{ replay_topic_prefix }}options.opra.tcbbo"
+  KAFKA_STRIKE_FLOW_OUTPUT_TOPIC: "{{ replay_topic_prefix }}options.databento.strike-flow"
+  KAFKA_DATABENTO_STRIKE_FLOW_TOPIC: "{{ replay_topic_prefix }}options.databento.strike-flow"
+  KAFKA_MARKET_DATA_SELECTION_TOPIC: "{{ replay_topic_prefix }}options.marketdata.selection"
+  KAFKA_MISSION_PACE_RAW_TOPIC: "{{ replay_topic_prefix }}options.databento.raw"
+  KAFKA_MISSION_PACE_STRIKE_FLOW_TOPIC: "{{ replay_topic_prefix }}options.databento.strike-flow"
+  KAFKA_MISSION_PACE_OUTPUT_TOPIC: "{{ replay_topic_prefix }}options.databento.pace.mission"
+  KAFKA_MISSION_PRESSURE_RAW_TOPIC: "{{ replay_topic_prefix }}options.databento.raw"
+  KAFKA_MISSION_PRESSURE_STRIKE_FLOW_TOPIC: "{{ replay_topic_prefix }}options.databento.strike-flow"
+  KAFKA_MISSION_PRESSURE_PACE_TOPIC: "{{ replay_topic_prefix }}options.databento.pace.mission"
+  KAFKA_MISSION_PRESSURE_OUTPUT_TOPIC: "{{ replay_topic_prefix }}options.databento.market-pressure.mission"
+  KAFKA_MISSION_SANDWICH_VOLUME_TOPIC: "{{ replay_topic_prefix }}options.databento.display.volume.current"
+  KAFKA_MISSION_SANDWICH_PACE_TOPIC: "{{ replay_topic_prefix }}options.databento.pace.mission"
+  KAFKA_MISSION_SANDWICH_PRESSURE_TOPIC: "{{ replay_topic_prefix }}options.databento.market-pressure.mission"
+  KAFKA_MISSION_SANDWICH_OUTPUT_TOPIC: "{{ replay_topic_prefix }}options.databento.sandwich.mission"
+  KAFKA_SPX_MISSION_STRIKE_FLOW_TOPIC: "{{ replay_topic_prefix }}options.databento.strike-flow"
+  KAFKA_SPX_MISSION_PACE_TOPIC: "{{ replay_topic_prefix }}options.databento.pace.mission"
+  KAFKA_SPX_MISSION_PRESSURE_TOPIC: "{{ replay_topic_prefix }}options.databento.market-pressure.mission"
+  KAFKA_SPX_MISSION_SANDWICH_TOPIC: "{{ replay_topic_prefix }}options.databento.sandwich.mission"
+  KAFKA_SPX_MISSION_PARTICIPANT_FLOW_TOPIC: "{{ replay_topic_prefix }}options.spx.participant-flow"
+  KAFKA_SPX_MISSION_OUTPUT_TOPIC: "{{ replay_topic_prefix }}options.spx.mission-control.current"
+  HPSF_ENABLED: "true"
+  HPSF_MODE: "REPLAY"
+  HPSF_TOPOLOGY_ENABLED: "true"
+  HPSF_TOPIC_OPRA_TCBBO: "{{ replay_topic_prefix }}options.opra.tcbbo"
+  HPSF_TOPIC_OPRA_TRADES: "{{ replay_topic_prefix }}options.opra.trades"
+  HPSF_TOPIC_OPRA_QUOTES: "{{ replay_topic_prefix }}options.opra.quotes"
+  HPSF_TOPIC_UNDERLYING_ES_TRADES: "{{ replay_topic_prefix }}underlying.es.trades"
+  HPSF_TOPIC_UNDERLYING_SPX_PRICE: "{{ replay_topic_prefix }}underlying.spx.price"
+  HPSF_TOPIC_UNDERLYING_STATE: "{{ replay_topic_prefix }}options.hpsf.underlying-state"
+  HPSF_TOPIC_MARKET_FLOW: "{{ replay_topic_prefix }}options.hpsf.market-flow"
+  HPSF_TOPIC_STRIKE_FLOW: "{{ replay_topic_prefix }}options.hpsf.strike-flow"
+  HPSF_TOPIC_STRIKE_SCORE: "{{ replay_topic_prefix }}options.hpsf.strike-score"
+  HPSF_TOPIC_LATEST_SIGNAL: "{{ replay_topic_prefix }}options.hpsf.latest-signal"
+  HPSF_TOPIC_SIGNAL: "{{ replay_topic_prefix }}options.hpsf.signal"
+  HPSF_TOPIC_AUDIT: "{{ replay_topic_prefix }}options.hpsf.audit"
+  HPSF_TOPIC_DLQ: "{{ replay_topic_prefix }}options.hpsf.dlq"
+  HPSF_TOPIC_WRITER_DLQ: "{{ replay_topic_prefix }}options.hpsf.writer-dlq"
+  HPSF_TOPIC_EXIT_SIGNAL: "{{ replay_topic_prefix }}options.hpsf.exit-signal"
+{% for key, value in replay_extra_config | default({}) | dictsort %}
+  {{ key }}: {{ value | string | to_json }}
+{% endfor %}
+{% for svc in replay_services %}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ svc.name }}-replay
+  namespace: {{ replay_namespace }}
+  labels:
+    app.kubernetes.io/name: {{ svc.name }}-replay
+    app.kubernetes.io/component: {{ svc.name }}
+    app.kubernetes.io/part-of: options-edge
+    options-edge.io/plane: replay
+    options-edge.io/environment: {{ deploy_environment }}
+spec:
+  replicas: {{ svc.replicas | default(replay_replicas) }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ svc.name }}-replay
+      options-edge.io/plane: replay
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ svc.name }}-replay
+        app.kubernetes.io/component: {{ svc.name }}
+        app.kubernetes.io/part-of: options-edge
+        options-edge.io/plane: replay
+        options-edge.io/environment: {{ deploy_environment }}
+    spec:
+{% if image_pull_secret_name | default('') | length > 0 %}
+      imagePullSecrets:
+        - name: {{ image_pull_secret_name }}
+{% endif %}
+      containers:
+        - name: {{ svc.container_name | default(svc.name) }}
+          image: {{ svc.image | default(image_registry ~ '/' ~ svc.image_name ~ ':' ~ image_tag) }}
+          imagePullPolicy: {{ svc.image_pull_policy | default(image_pull_policy) }}
+          envFrom:
+            - configMapRef:
+                name: options-edge-replay-config
+{% if postgres_secret_name | default('') | length > 0 %}
+            - secretRef:
+                name: {{ postgres_secret_name }}
+                optional: true
+{% endif %}
+          env:
+            - name: DEPLOYMENT_PLANE
+              value: replay
+            - name: SERVICE_NAME
+              value: {{ svc.name | string | to_json }}
+{% for key, value in svc.env | default({}) | dictsort %}
+            - name: {{ key }}
+{% if key.endswith('APP_ID') or key.endswith('GROUP_ID') %}
+              value: {{ (value | string ~ replay_app_id_suffix) | to_json }}
+{% else %}
+              value: {{ value | string | to_json }}
+{% endif %}
+{% endfor %}
+{% if svc.container_port is defined %}
+          ports:
+            - name: {{ svc.port_name | default('http') }}
+              containerPort: {{ svc.container_port }}
+          livenessProbe:
+            httpGet:
+              path: {{ svc.liveness_path | default('/health/live') }}
+              port: {{ svc.port_name | default('http') }}
+            initialDelaySeconds: {{ svc.liveness_initial_delay_seconds | default(30) }}
+            periodSeconds: {{ svc.liveness_period_seconds | default(15) }}
+          readinessProbe:
+            httpGet:
+              path: {{ svc.readiness_path | default('/health/ready') }}
+              port: {{ svc.port_name | default('http') }}
+            initialDelaySeconds: {{ svc.readiness_initial_delay_seconds | default(30) }}
+            periodSeconds: {{ svc.readiness_period_seconds | default(10) }}
+{% endif %}
+          volumeMounts:
+            - name: kafka-streams-state
+              mountPath: {{ replay_state_dir }}
+          resources:
+{{ svc.resources | default(replay_default_resources) | to_nice_yaml(indent=12) | indent(12, true) }}
+      volumes:
+        - name: kafka-streams-state
+          emptyDir: {}
+{% if svc.service is defined %}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ svc.name }}-replay
+  namespace: {{ replay_namespace }}
+  labels:
+    app.kubernetes.io/name: {{ svc.name }}-replay
+    app.kubernetes.io/component: {{ svc.name }}
+    app.kubernetes.io/part-of: options-edge
+    options-edge.io/plane: replay
+    options-edge.io/environment: {{ deploy_environment }}
+{% if svc.service.annotations is defined %}
+  annotations:
+{% for key, value in svc.service.annotations | dictsort %}
+    {{ key }}: {{ value | string | to_json }}
+{% endfor %}
+{% endif %}
+spec:
+  type: {{ svc.service.type | default('ClusterIP') }}
+  selector:
+    app.kubernetes.io/name: {{ svc.name }}-replay
+    options-edge.io/plane: replay
+  ports:
+    - name: {{ svc.port_name | default('http') }}
+      port: {{ svc.service.port }}
+      targetPort: {{ svc.port_name | default('http') }}
+{% if svc.service.node_port is defined %}
+      nodePort: {{ svc.service.node_port }}
+{% endif %}
+{% endif %}
+{% endfor %}
