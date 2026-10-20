@@ -59,6 +59,11 @@ spec:
               value: "true"
             - name: INDICATOR_STATE_DIR
               value: /home/options-edge/indicator-service/state
+            # STUDIES_V1 (Phase A studies, PHASE-A-INDICATORS-REQUIREMENT.md D-A4): OFF, explicitly. The code default is
+            # also off; the literal keeps the state visible in the render. Flipping it needs a restart, and the order is
+            # contracts 2008-2010 registered on EVERY registry (es4, dev, prod) -> topics ensured -> es mirrors installed -> gateway flag -> this flag.
+            - name: INDICATOR_STUDIES_ENABLED
+              value: "false"
             - name: JAVA_TOOL_OPTIONS
               value: "-Xms256m -Xmx1536m"
           volumeMounts:

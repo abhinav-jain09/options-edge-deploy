@@ -41,10 +41,14 @@ options.indicators.repartition|4|delete|
 options.indicators.bootstrap.control|1|compact,delete|-1
 options.indicators.signals.current|1|compact,delete|604800000
 options.indicators.signals.events|1|delete|3888000000
+options.indicators.studies.bars|8|delete|3888000000
+options.indicators.studies.current|1|compact,delete|604800000
 "
 # signals.current / signals.events: SIGNALS_V1 (indicator-service spec rev 13 §3) — the same
 # producer, the same deploy path, the same two failure modes as snapshot.current/bars above; the
 # shapes are the topics.env declarations (1 partition each, exact-partition; 7 d / 45 d).
+# studies.bars / studies.current: STUDIES_V1 (Phase A, PHASE-A-INDICATORS-REQUIREMENT.md A-R10.1/A-R10.4) — written only with
+# INDICATOR_STUDIES_ENABLED=true, declared and reconciled unconditionally so the flag flip is a one-variable change.
 
 # ---- --recreate: the Avro cutover (INDICATOR-AVRO-CONVERSION-PLAN.md section 5) -------------------------
 # Deletes and recreates, EMPTY, exactly the per-environment allow-list below at the shape topics.env declares,
@@ -55,6 +59,8 @@ options.indicators.signals.events|1|delete|3888000000
 #   dev / production:                 the six options.indicators.* base topics PLUS the four es.options.indicators.*
 #                                     mirror targets, which hold retained JSON copies and are recreated empty before
 #                                     any reader of them starts
+# The STUDIES_V1 topics (options.indicators.studies.*, es.options.indicators.studies.*) are deliberately NOT in this
+# allow-list: they never held JSON, so there is nothing to cut over, and a recreate would only destroy history.
 if [ "${1:-}" = "--recreate" ]; then
   : "${RECREATE_ENVIRONMENT:?RECREATE_ENVIRONMENT unset (dev|production|es4) — the allow-list is environment-qualified}"
   : "${KAFKA_TOPIC_REPLICATION_FACTOR:?KAFKA_TOPIC_REPLICATION_FACTOR unset — source scripts/kafka/load-kafka-settings.sh}"
