@@ -75,7 +75,10 @@ spec:
               cpu: 100m
               memory: 2Gi
             limits:
-              memory: 6Gi
+              memory: 7Gi   # 5g heap = 71% of this. The heap is deliberate restore
+              # capacity (tests/test_option_truth_memory.py), so the CONTAINER gets the
+              # headroom for RocksDB/metaspace/stacks rather than the heap being cut: at the
+              # old 6Gi this rendered 83%, outside the band every healthy workload sits in.
           volumeMounts:
             - name: kafka-streams-state
               mountPath: /var/lib/options-edge/kafka-streams

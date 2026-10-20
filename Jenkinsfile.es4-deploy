@@ -416,7 +416,7 @@ pipeline {
             : "${SUFFIX:?KAFKA_APPLICATION_ID_SUFFIX not readable from es4-common-env on es4 — refusing to guess the app id}"
             # the Kafka CLI is not installed on the es4 host: scripts/es4/kafka-cli-shim proxies each CLI into the
             # es4-kafka container (as create-es-topics.sh does), whose in-container listener is localhost:29092
-            ssh -o BatchMode=yes "$ES4_HOST" "set -e; cd /home/es4/repo; export PATH=/home/es4/repo/scripts/es4/kafka-cli-shim:\$PATH; \
+            ssh -o BatchMode=yes "$ES4_HOST" "set -e; cd /home/es4/repo; export PATH=/home/es4/repo/scripts/es4/kafka-cli-shim:\\$PATH; \
               export KAFKA_BOOTSTRAP_SERVERS=localhost:29092 INDICATOR_APP_ID=indicator-service${SUFFIX} INDICATOR_INPUT_TOPIC=es.underlying.es.trades \
                      DEPLOY_DRY_RUN=${DEPLOY_DRY_RUN:-false} RECREATE_ENVIRONMENT=es4 TOPIC_PREFIX=es. \
                      KAFKA_TOPIC_REPLICATION_FACTOR=1 KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS=1 KAFKA_TOPIC_RETENTION_MS=86400000; \
@@ -453,7 +453,7 @@ pipeline {
           # deploy-all always includes it. The Kafka CLI is not installed on the es4 host, so this
           # runs over ssh with the kafka-cli-shim on PATH, exactly as the indicator reset above does.
           ssh -o BatchMode=yes "$ES4_HOST" "set -e; cd /home/es4/repo; \
-            export PATH=/home/es4/repo/scripts/es4/kafka-cli-shim:\$PATH; \
+            export PATH=/home/es4/repo/scripts/es4/kafka-cli-shim:\\$PATH; \
             bash scripts/kafka/verify-avro-rollforward.sh --cluster es4 localhost:29092"
 
           kubectl apply $DRY -f k8s/es4/es4-base-env.yaml

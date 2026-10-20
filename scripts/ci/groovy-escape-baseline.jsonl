@@ -18,6 +18,4 @@
 {"path": "Jenkinsfile.opra-definition-enumeration-mirror", "escape": "\\n", "line": "printf 'build=%s started=%s restarts=%s pid=%s\\n' \"$BUILD_NUMBER\" \"$START1\" \"$RC1\" \"$PID1\" > \"$MDIR/container-liveness.txt\"", "count": 1}
 {"path": "Jenkinsfile.public-gate-evidence", "escape": "\\r", "line": "| tr -d '\\r' | awk '$1 == \"Docker-Content-Digest:\" || tolower($1) == \"docker-content-digest:\" {print $2}' | tail -1", "count": 1}
 {"path": "Jenkinsfile.service-deploy", "escape": "\\\"", "line": "echo \"{\\\"intentId\\\":\\\"$INTENT_ID\\\",\\\"winner\\\":$BN}\" > intent-dedup.json", "count": 12}
-{"path": "Jenkinsfile.service-deploy", "escape": "\\n", "line": "printf '%s\\n' \"$PREV\" > \"$MARK\"", "count": 1}
 {"path": "Jenkinsfile.service-deploy", "escape": "\\n", "line": "printf '%s\\n' \"$out\" \\", "count": 1}
-{"path": "templates/Jenkinsfile.new-service", "escape": "\\n", "line": "printf '[registry.\"%s\"]\\n  http = true\\n  insecure = true\\n' \"$IMAGE_REGISTRY\" > \"$BKCFG\"", "count": 3}

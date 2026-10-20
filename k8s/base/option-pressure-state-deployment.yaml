@@ -187,8 +187,17 @@ spec:
             # strike engine and 457.2593 for the symbol engine, the 99.5th percentiles of uncapped
             # block mass over the Databento SPXW year. They are code defaults, not env-readable, and
             # are named here only so an operator can see which values an image carries.
+              # SIZED FOR 32 INPUT PARTITIONS, not for the heap alone. This reads
+              # option-price-behavior-l1-contributions, which is 32 partitions in both
+              # environments, so Kafka Streams builds one RocksDB store per task and the
+              # OFF-heap footprint dominates. Measured on prod 2026-10-19: at a 1Gi limit it
+              # was OOMKilled (exit 137) with -Xmx1g AND again with -Xmx512m — lowering the
+              # heap alone was necessary but not sufficient, because the container itself was
+              # too small. 4Gi / -Xmx2g is what every other 32-partition Streams service here
+              # runs (strike-invasion, strike-intelligence, es-spx-align); option-price-behavior,
+              # one hop upstream on the same partition count, has 8Gi.
             - name: JAVA_TOOL_OPTIONS
-              value: "-Xms256m -Xmx1g"
+              value: "-Xms512m -Xmx2g"
           ports:
             - name: health
               containerPort: 8080
@@ -210,9 +219,9 @@ spec:
           resources:
             requests:
               cpu: 100m
-              memory: 384Mi
-            limits:
               memory: 1Gi
+            limits:
+              memory: 4Gi
       volumes:
         - name: kafka-streams-state
           # Both engines use persistent RocksDB stores, so local state must survive a pod

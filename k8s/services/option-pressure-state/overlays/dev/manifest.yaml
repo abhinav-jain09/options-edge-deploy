@@ -69,7 +69,7 @@ spec:
             - name: OPTION_PRESSURE_STATE_DIR
               value: /var/lib/options-edge/kafka-streams
             - name: JAVA_TOOL_OPTIONS
-              value: -Xms256m -Xmx1g
+              value: -Xms512m -Xmx2g
           envFrom:
             - configMapRef:
                 name: options-edge-config
@@ -95,10 +95,10 @@ spec:
             periodSeconds: 10
           resources:
             limits:
-              memory: 1Gi
+              memory: 4Gi
             requests:
               cpu: 100m
-              memory: 384Mi
+              memory: 1Gi
           volumeMounts:
             - mountPath: /var/lib/options-edge/kafka-streams
               name: kafka-streams-state

@@ -36,15 +36,21 @@ cat > "$WORK/bin/date" <<D
 # only the guard's form: date -j -f <fmt> <stamp> +%s
 cat "$WORK/pid_epoch"
 D
-# a GNU-only stat: `stat -f %m` fails, `stat -c %Y` works. The units run on this Mac, but this test
-# runs on a Linux runner too, and a silently-failing BSD form made every process look NEWER than its
-# files — the staleness case could not fail there however broken the script was.
+# A REAL GNU stat, which is not "BSD flags rejected". `-f` is a valid GNU option meaning
+# "display filesystem status", so `stat -f %m FILE` SUCCEEDS there and prints a multi-line
+# filesystem dump. The previous stub exited 1 for `-f`, encoding a rejection GNU never performs —
+# which is why this test passed on both platforms while the rendered script was broken on Linux:
+# the dump landed in an arithmetic test (`[: ...: integer expression expected`) and the CI runner
+# failed on a case this stub called ok. The stub now behaves like the real thing, so the ORDER of
+# the two forms in mirror-diff.sh.j2 — GNU first — is what this case actually proves.
 cat > "$WORK/bin/stat" <<T
 #!/usr/bin/env bash
 [ -e "$WORK/gnu_stat" ] || exec /usr/bin/stat "\$@"
 case "\$1" in
-  -f) exit 1 ;;                                  # the BSD form is what GNU coreutils rejects
-  -c) # answer the GNU form with GNU semantics, computed rather than delegated to the host's BSD stat
+  -f) # GNU: filesystem status. Succeeds, and prints nothing a number can be read from.
+      printf '  File: "%s"\\n    ID: 0 Namelen: 255 Type: ext2/ext3\\nBlock size: 4096\\n' "\$3"
+      exit 0 ;;
+  -c) # the GNU format form, computed rather than delegated to the host's BSD stat
       exec python3 -c 'import os,sys; print(int(os.stat(sys.argv[1]).st_mtime))' "\$3" ;;
 esac
 exit 1
