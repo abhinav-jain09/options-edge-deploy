@@ -141,17 +141,35 @@ class MirrorAndSchemaWiring(unittest.TestCase):
 
 
 class FlagsAreExplicitlyOff(unittest.TestCase):
-    """The producer flag and the gateway flag are literal 'false' in the sources and in every rendered manifest."""
+    """The producer flag and the gateway flag are literal 'false' in every source and every generated manifest that must carry them."""
 
-    def test_the_producer_and_gateway_flags_are_false_wherever_they_are_rendered(self):
-        rendered = 0
+    EXPECTED = {
+        "INDICATOR_STUDIES_ENABLED": ["k8s/base/indicator-service-deployment.yaml", "k8s/es4/services/indicator-service.yaml",
+                                      "k8s/services/indicator-service/overlays/dev/manifest.yaml",
+                                      "k8s/services/indicator-service/overlays/experiment/manifest.yaml",
+                                      "k8s/services/indicator-service/overlays/production/manifest.yaml"],
+        "GATEWAY_STUDIES_ENABLED": ["k8s/overlays/dev/feed-gateway-dev-env-patch.yaml", "k8s/overlays/production/feed-gateway-prod-env-patch.yaml",
+                                    "k8s/services/feed-gateway/overlays/dev/manifest.yaml",
+                                    "k8s/services/feed-gateway/overlays/production/manifest.yaml"],
+    }
+
+    def test_each_expected_source_and_generated_manifest_carries_its_flag_as_false(self):
+        for name, paths in self.EXPECTED.items():
+            for rel in paths:
+                found = re.findall(rf"name: {name}\n\s+value: (\S+)", (ROOT / rel).read_text())
+                self.assertEqual([v.strip("\"'") for v in found], ["false"], f"{rel}: {name}")
+
+    def test_no_manifest_anywhere_enables_either_flag(self):
         for path in (ROOT / "k8s").rglob("*.yaml"):
-            text = path.read_text()
-            for name in ("INDICATOR_STUDIES_ENABLED", "GATEWAY_STUDIES_ENABLED"):
-                for m in re.finditer(rf"name: {name}\n(\s+)value: (\S+)", text):
-                    rendered += 1
-                    self.assertEqual(m.group(2).strip('"\''), "false", f"{path}: {name}")
-        self.assertGreaterEqual(rendered, 2, "the flags must be present in the rendered manifests, not merely defaulted")
+            for name in self.EXPECTED:
+                for m in re.finditer(rf"name: {name}\n\s+value: (\S+)", path.read_text()):
+                    self.assertEqual(m.group(1).strip("\"'"), "false", f"{path}: {name}")
+
+    def test_the_destructive_recreate_allow_list_does_not_name_a_study_topic(self):
+        text = ENSURE.read_text()
+        allow = [line for line in text.splitlines() if line.lstrip().startswith(("BASE6=", "MIRROR4="))]
+        self.assertEqual(len(allow), 2)
+        self.assertFalse(any("studies" in line for line in allow))
 
 
 if __name__ == "__main__":

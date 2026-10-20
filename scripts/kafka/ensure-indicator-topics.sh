@@ -59,6 +59,8 @@ options.indicators.studies.current|1|compact,delete|604800000
 #   dev / production:                 the six options.indicators.* base topics PLUS the four es.options.indicators.*
 #                                     mirror targets, which hold retained JSON copies and are recreated empty before
 #                                     any reader of them starts
+# The STUDIES_V1 topics (options.indicators.studies.*, es.options.indicators.studies.*) are deliberately NOT in this
+# allow-list: they never held JSON, so there is nothing to cut over, and a recreate would only destroy history.
 if [ "${1:-}" = "--recreate" ]; then
   : "${RECREATE_ENVIRONMENT:?RECREATE_ENVIRONMENT unset (dev|production|es4) — the allow-list is environment-qualified}"
   : "${KAFKA_TOPIC_REPLICATION_FACTOR:?KAFKA_TOPIC_REPLICATION_FACTOR unset — source scripts/kafka/load-kafka-settings.sh}"
