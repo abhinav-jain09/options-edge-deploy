@@ -150,6 +150,10 @@ class FlagsAreExplicitlyOff(unittest.TestCase):
         "k8s/overlays/dev/feed-gateway-dev-env-patch.yaml",
         "k8s/services/feed-gateway/overlays/dev/manifest.yaml",
         "k8s/services/indicator-service/overlays/dev/manifest.yaml",
+        # PRODUCTION (owner 2026-10-21): the studies are ON in the production rendering too; experiment, es4 and the base stay false.
+        "k8s/overlays/production/feed-gateway-prod-env-patch.yaml",
+        "k8s/services/feed-gateway/overlays/production/manifest.yaml",
+        "k8s/services/indicator-service/overlays/production/manifest.yaml",
     }
     EXPECTED = {
         "INDICATOR_STUDIES_ENABLED": ["k8s/base/indicator-service-deployment.yaml", "k8s/es4/services/indicator-service.yaml",
@@ -189,16 +193,28 @@ class FlagsAreExplicitlyOff(unittest.TestCase):
             ("feed-gateway-service", "feed-gateway", "GATEWAY_STUDIES_ENABLED"): ["true"],
         })
 
-    def test_the_production_render_carries_both_flags_and_both_are_false(self):
+    def test_the_production_render_enables_exactly_the_producer_container_and_the_gateway(self):
         self.assertEqual(self.rendered_flags("production"), {
-            ("indicator-service", "indicator-service", "INDICATOR_STUDIES_ENABLED"): ["false"],
-            ("feed-gateway-service", "feed-gateway", "GATEWAY_STUDIES_ENABLED"): ["false"],
+            ("indicator-service", "indicator-service", "INDICATOR_STUDIES_ENABLED"): ["true"],
+            ("feed-gateway-service", "feed-gateway", "GATEWAY_STUDIES_ENABLED"): ["true"],
         })
 
-    def test_the_dev_patch_is_referenced_by_exactly_one_kustomization_the_dev_one(self):
-        refs = [str(p.relative_to(ROOT)) for p in (ROOT / "k8s").rglob("kustomization.y*ml")
-                for _ in range(p.read_text().count("indicator-studies-dev-enable-patch.yaml"))]
-        self.assertEqual(refs, ["k8s/overlays/dev/kustomization.yaml"])
+    def test_the_generated_production_slices_agree_with_the_production_render_in_both_flags(self):
+        """Parity of the independently deployable slices with the overlay render (enable AND rollback states are both checked by value)."""
+        rendered = self.rendered_flags("production")
+        for rel, key in (("k8s/services/indicator-service/overlays/production/manifest.yaml", ("indicator-service", "indicator-service", "INDICATOR_STUDIES_ENABLED")),
+                         ("k8s/services/feed-gateway/overlays/production/manifest.yaml", ("feed-gateway-service", "feed-gateway", "GATEWAY_STUDIES_ENABLED"))):
+            self.assertEqual([e[3] for e in self.flag_entries(ROOT / rel)], rendered[key], rel)
+
+    def test_the_experiment_render_keeps_the_producer_flag_false(self):
+        self.assertEqual(self.rendered_flags("experiment").get(("indicator-service", "indicator-service", "INDICATOR_STUDIES_ENABLED")), ["false"])
+
+    def test_each_enable_patch_is_referenced_by_exactly_one_kustomization_its_own(self):
+        for patch, owner in (("indicator-studies-dev-enable-patch.yaml", "k8s/overlays/dev/kustomization.yaml"),
+                             ("indicator-studies-prod-enable-patch.yaml", "k8s/overlays/production/kustomization.yaml")):
+            refs = [str(p.relative_to(ROOT)) for p in (ROOT / "k8s").rglob("kustomization.y*ml")
+                    for _ in range(p.read_text().count(patch))]
+            self.assertEqual(refs, [owner], patch)
 
     @staticmethod
     def flag_entries(path: Path) -> list:
@@ -220,13 +236,17 @@ class FlagsAreExplicitlyOff(unittest.TestCase):
             "k8s/services/feed-gateway/overlays/dev/manifest.yaml": [("feed-gateway-service", "feed-gateway", "GATEWAY_STUDIES_ENABLED", "true")],
             "k8s/overlays/dev/feed-gateway-dev-env-patch.yaml": [("feed-gateway-service", "feed-gateway", "GATEWAY_STUDIES_ENABLED", "true")],
             "k8s/overlays/dev/indicator-studies-dev-enable-patch.yaml": [("indicator-service", "indicator-service", "INDICATOR_STUDIES_ENABLED", "true")],
+            "k8s/services/indicator-service/overlays/production/manifest.yaml": [("indicator-service", "indicator-service", "INDICATOR_STUDIES_ENABLED", "true")],
+            "k8s/services/feed-gateway/overlays/production/manifest.yaml": [("feed-gateway-service", "feed-gateway", "GATEWAY_STUDIES_ENABLED", "true")],
+            "k8s/overlays/production/feed-gateway-prod-env-patch.yaml": [("feed-gateway-service", "feed-gateway", "GATEWAY_STUDIES_ENABLED", "true")],
+            "k8s/overlays/production/indicator-studies-prod-enable-patch.yaml": [("indicator-service", "indicator-service", "INDICATOR_STUDIES_ENABLED", "true")],
         }
         for rel, entries in want.items():
             self.assertEqual(self.flag_entries(ROOT / rel), entries, rel)
 
     def test_every_other_manifest_has_the_flags_false_and_an_unparseable_file_naming_a_flag_fails(self):
         import yaml
-        allowed = set(self.DEV_ON) | {"k8s/overlays/dev/indicator-studies-dev-enable-patch.yaml"}
+        allowed = set(self.DEV_ON) | {"k8s/overlays/dev/indicator-studies-dev-enable-patch.yaml", "k8s/overlays/production/indicator-studies-prod-enable-patch.yaml"}
         for path in sorted(p for p in (ROOT / "k8s").rglob("*") if p.is_file() and p.suffix in (".yaml", ".yml")):
             rel = str(path.relative_to(ROOT))
             if rel in allowed:

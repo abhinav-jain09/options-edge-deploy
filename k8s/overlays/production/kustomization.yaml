@@ -62,6 +62,8 @@ resources:
 # cached image (no pull, no throttle). Dev keeps Always so it always picks up a
 # freshly-built :dev image.
 patches:
+  # PRODUCTION: Phase A indicator studies ON for the indicator-service container (owner 2026-10-21).
+  - path: indicator-studies-prod-enable-patch.yaml
   # Production withdrawal (2026-10-16): keep the unqualified ES challenger out of runtime
   # until an independently frozen candidate clears the accuracy and coverage gates.
   - path: es-compression-expansion-prod-hold-patch.yaml
