@@ -17,6 +17,10 @@
 #   options.spx.market-structure.sequence  1 partition, delete, retention.ms=172800000 (2 sessions)
 #   options.spx.market-structure.dlq       1 partition, delete, retention.ms=604800000 (1 week)
 #   options.spx.market-structure.recovery  1 partition, compact, retention.ms=-1 (checkpoint state)
+#   options.spx.market-structure.patterns  1 partition, delete, retention.ms=172800000 (flag-gated output, ensured always)
+#   options.spx.market-structure.tools     1 partition, delete, retention.ms=172800000 (Phase B StructureToolsSet, Avro, B-R10.1)
+#   options.spx.market-structure.geometry  1 partition, delete, retention.ms=172800000 (Phase C GeometryAnnotationSet, Avro, C-R17.1)
+# All values are Avro (Kafka Serialization Rule): the topics are created EMPTY here and the producer writes Avro from its first byte.
 #
 # CREATE if absent, then VERIFY every topic — including one just created — and fail closed. Never alters an
 # existing topic's identity, policy or retention. Recovery compaction cadence is reconciled below. Every CLI call's status is checked explicitly: ensure() runs in an `if` context, where bash
@@ -29,6 +33,10 @@ DLQ_TOPIC="${KAFKA_MARKET_STRUCTURE_DLQ_TOPIC:-options.spx.market-structure.dlq}
 RECOVERY_TOPIC="${KAFKA_MARKET_STRUCTURE_RECOVERY_TOPIC:-options.spx.market-structure.recovery}"
 # Candlestick pattern annotations (flag-gated output; ensured unconditionally so the flag is a one-variable change).
 PATTERNS_TOPIC="${KAFKA_MARKET_STRUCTURE_PATTERNS_TOPIC:-options.spx.market-structure.patterns}"
+# Phase B structure tools (MARKET_STRUCTURE_TOOLS_ENABLED) and Phase C geometry (MARKET_STRUCTURE_GEOMETRY_ENABLED): both Avro, flag-gated
+# outputs; the service verifies each only while its flag is on, but they are ensured unconditionally so a flag flip is a one-variable change.
+TOOLS_TOPIC="${KAFKA_MARKET_STRUCTURE_TOOLS_TOPIC:-options.spx.market-structure.tools}"
+GEOMETRY_TOPIC="${KAFKA_MARKET_STRUCTURE_GEOMETRY_TOPIC:-options.spx.market-structure.geometry}"
 : "${KAFKA_BOOTSTRAP_SERVERS:?KAFKA_BOOTSTRAP_SERVERS unset — refusing to verify against an unknown cluster}"
 RF="${KAFKA_TOPIC_REPLICATION_FACTOR:-1}"
 # The two minima the SERVICE verifies, which its own deployment freezes (1 on this single-broker estate).
@@ -130,4 +138,6 @@ if ! ensure "$SEQUENCE_TOPIC" 172800000; then rc=1; fi
 if ! ensure "$DLQ_TOPIC" 604800000; then rc=1; fi
 if ! ensure "$RECOVERY_TOPIC" -1 compact; then rc=1; fi
 if ! ensure "$PATTERNS_TOPIC" 172800000; then rc=1; fi
+if ! ensure "$TOOLS_TOPIC" 172800000; then rc=1; fi
+if ! ensure "$GEOMETRY_TOPIC" 172800000; then rc=1; fi
 exit $rc

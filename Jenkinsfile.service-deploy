@@ -78,6 +78,12 @@ pipeline {
       // level-absorption: dev+prod EYEBALL phase, deployed HELD AT replicas 0 and unable to start until the owner supplies the
       // Phase 0 freeze file and the retention artifact. Publishes futures.level-absorption.{events,voice,closures}; single replica only.
       'level-absorption',
+      // es-trade-tools (Phase D): dev+prod, deployed HELD AT replicas 0 with TT_ENABLED and every family flag "false". Reads the linearized ES tape,
+      // publishes futures.pf.* / futures.volume-nodes / futures.flow.* / futures.tradetools.state (Avro); single replica only.
+      'es-trade-tools',
+      // wave-cycle (Phase E): dev+prod, deployed HELD AT replicas 0 with both publish flags "false". Reads options.indicators.bars, publishes
+      // options.spx.wave-cycle.{waves,cycles,recovery} (Avro); single replica only.
+      'wave-cycle',
       // stock-gex-close-scheduler: PRODUCTION only — the closing-board SCHEDULE, which now lives
       // inside the batch itself (USER 2026-09-01: "I don't want anything Jenkins-based, it should
       // run based on Spring Batch configuration"). This job DEPLOYS it; nothing here decides when
@@ -132,6 +138,20 @@ pipeline {
       description: 'Deployer kubeconfig on the Jenkins agent. Empty = oeProfile(ENVIRONMENT).kubeconfigDeployer.')
     booleanParam(name: 'REGISTER_INDICATOR_SCHEMAS', defaultValue: false,
       description: 'indicator-service only. true = before the rollout, register the indicator family\'s ten Avro schemas under their FIXED ids (2001-2007 and 2501-2503, subject compatibility FULL) on this environment\'s Schema Registry through scripts/kafka/ensure-indicator-schemas.sh (idempotent: a registry that already holds them is verified, a wiped one is re-imported). The schemas come from options-edge-contracts at CONTRACTS_PERMITTED_SHA, which is REQUIRED with this flag. INDICATOR-AVRO-CONVERSION-PLAN.md section 4.')
+    booleanParam(name: 'REGISTER_TA_SCHEMAS', defaultValue: false,
+      description: 'market-structure, es-trade-tools and wave-cycle only. true = before the rollout, register that service\'s Avro subjects under their FIXED ids (subject compatibility FULL, IMPORT mode, scripts/kafka/ensure-fixed-id-schemas.sh with scripts/kafka/schema-id-maps/<service>.map) on this environment\'s Schema Registry; idempotent, a collision fails. The schema files come from options-edge-contracts at CONTRACTS_PERMITTED_SHA, which is REQUIRED with this flag. docs/ta-books/DEPLOY-ROLLOUT.md.')
+    booleanParam(name: 'MARKET_STRUCTURE_IGNORE_RECOVERY_ROLLOVER', defaultValue: false,
+      description: 'market-structure only, W0 step 2. true = inject MARKET_STRUCTURE_IGNORE_RECOVERY=true into the RENDER for this one apply (never committed): the ms-runtime-5 image cannot read the ms-runtime-3 JSON checkpoint and its first start must rebuild the day from the retained inputs. Refused Mon-Fri 09:30-16:00 America/New_York with no override (service-deploy.sh RTH_ROLLOVER_GATE); deploy only between the 16:00 close and midnight on a trading day. The next ordinary deploy (step 5, FORCE_RESTART=true) carries no flag. W0-MARKET-STRUCTURE-AVRO-CUTOVER.md sections 5-6.')
+    booleanParam(name: 'W0_CUTOVER_WIPE', defaultValue: false,
+      description: 'market-structure only, DESTRUCTIVE, W0 step 4, a run of its own (never together with MARKET_STRUCTURE_IGNORE_RECOVERY_ROLLOVER): AFTER the rollout stage of this run (the Avro image already live and the Avro gateway rolled), delete and recreate EMPTY, under the same names, options.spx.market-structure.{ui,sequence,dlq,patterns,recovery} through scripts/kafka/roll-forward-market-structure.sh behind its fail-closed gates (outside the regular session, the W0 image digest only, a 3-minute quiescence proof, broker-side producer evidence, W0_PRODUCERS_ATTESTED). The input topic, the geometry topic and the tools topic are never touched. Needs W0_EXPECT_IMAGE_DIGEST, W0_EXPECT_GATEWAY_DIGEST and W0_PRE_CUTOVER_IDS. Every argument is validated before anything is deployed. DEPLOY_DRY_RUN runs the script with --gates-only: every gate and the quiescence proof are evaluated and reported, nothing is deleted.')
+    string(name: 'W0_EXPECT_IMAGE_DIGEST', defaultValue: '', trim: true,
+      description: 'W0_CUTOVER_WIPE only: the sha256:<64 hex> digest of the W0 market-structure image. Every pod running the market-structure image on the cluster must carry exactly this digest (a lingering JSON image would repopulate the recreated topics).')
+    string(name: 'W0_EXPECT_GATEWAY_DIGEST', defaultValue: '', trim: true,
+      description: 'W0_CUTOVER_WIPE only: the sha256:<64 hex> digest of the feed-gateway image that decodes Avro (W0 step 3). Every pod running the feed-gateway image on the cluster must carry exactly this digest and at least one must be Running in options-edge: the wipe never starts while a JSON-era gateway is the one serving.')
+    string(name: 'W0_PRE_CUTOVER_IDS', defaultValue: '', trim: true,
+      description: 'W0_CUTOVER_WIPE only: the topic ids read off the LIVE broker immediately before the wipe, ui=<id>,sequence=<id>,dlq=<id>,patterns=<id>,recovery=<id> (kafka-topics --describe). A topic whose id is anything else is not the topic that held the JSON and is refused.')
+    booleanParam(name: 'W0_PRODUCERS_ATTESTED', defaultValue: false,
+      description: 'W0_CUTOVER_WIPE only: the owner attests the verified maintenance stop of step 4(i): every host that can run a market-structure producer (the cluster, the workstation and laptop launchd units, Jenkins jobs, replay/timewarp tooling) was checked and stopped or attested absent. Kafka cannot prove a process silent.')
     booleanParam(name: 'RECREATE_INDICATOR_TOPICS', defaultValue: false,
       description: 'indicator-service only, DESTRUCTIVE, the Avro cutover (INDICATOR-AVRO-CONVERSION-PLAN.md section 5): scale indicator-service to 0, reset its consumer-group offsets on the retained input to 0, delete its state changelog, then delete and recreate EMPTY the ten indicator topics of this environment (six base topics plus the four es.* mirror targets) at the topics.env shape, verify each (partitions, policy, retention, end offset 0), and only then roll the producer. Every reader of these topics must be stopped first (the release train, section 6). DEPLOY_DRY_RUN reports and changes nothing.')
     booleanParam(name: 'FORCE_RESTART', defaultValue: false,
@@ -290,6 +310,33 @@ PYEOF
             bash scripts/ci/validate-dealer-ledger-fire-quality.sh
           fi
         '''
+      }
+    }
+    stage('Validate W0 cutover parameters') {
+      // Every W0-only constraint is judged BEFORE any stage mutates anything (the rollout stage below would otherwise deploy market-structure
+      // and only then reject a malformed wipe request).
+      when {
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && params.W0_CUTOVER_WIPE }
+      }
+      steps {
+        script {
+          if (params.SERVICE != 'market-structure') {
+            error("W0_CUTOVER_WIPE=true is for SERVICE=market-structure only (got '${params.SERVICE}').")
+          }
+          if (params.MARKET_STRUCTURE_IGNORE_RECOVERY_ROLLOVER) {
+            error('W0_CUTOVER_WIPE=true and MARKET_STRUCTURE_IGNORE_RECOVERY_ROLLOVER=true in one run: step 2 (the rollover deploy) and step 4 (the wipe) are separate runs, with the gateway roll (step 3) between them.')
+          }
+          if (!(params.W0_EXPECT_IMAGE_DIGEST ==~ /sha256:[0-9a-f]{64}/)) {
+            error("W0_CUTOVER_WIPE=true needs W0_EXPECT_IMAGE_DIGEST=sha256:<64 hex> (got '${params.W0_EXPECT_IMAGE_DIGEST}').")
+          }
+          if (!(params.W0_EXPECT_GATEWAY_DIGEST ==~ /sha256:[0-9a-f]{64}/)) {
+            error("W0_CUTOVER_WIPE=true needs W0_EXPECT_GATEWAY_DIGEST=sha256:<64 hex>, the Avro feed-gateway of step 3 (got '${params.W0_EXPECT_GATEWAY_DIGEST}').")
+          }
+          if (!(params.W0_PRE_CUTOVER_IDS ==~ /ui=[A-Za-z0-9_-]{22},sequence=[A-Za-z0-9_-]{22},dlq=[A-Za-z0-9_-]{22},patterns=[A-Za-z0-9_-]{22},recovery=[A-Za-z0-9_-]{22}/)) {
+            error('W0_CUTOVER_WIPE=true needs W0_PRE_CUTOVER_IDS exactly ui=<id>,sequence=<id>,dlq=<id>,patterns=<id>,recovery=<id> (22-character topic ids).')
+          }
+          if (!params.W0_PRODUCERS_ATTESTED) { error('W0_CUTOVER_WIPE=true needs W0_PRODUCERS_ATTESTED: the verified maintenance stop of step 4(i) is the owner\'s to attest.') }
+        }
       }
     }
     // ALL remaining stages share ONE agent and ONE workspace on the deploy host — the
@@ -587,6 +634,45 @@ PYEOF
         '''
       }
     }
+    stage('Register TA-books schemas') {
+      // The TA-books services (market-structure W0/B/C, es-trade-tools, wave-cycle) register their Avro subjects under FIXED ids, exactly as the
+      // indicator family does (stage above): idempotent, FULL, a collision fails and is never repaired. The service-specific map is
+      // scripts/kafka/schema-id-maps/<service>.map; the files are the contracts checkout's schemas directory at the permitted contracts commit.
+      // Before the rollout, so an image that holds schemas for fail-fast start-up (market-structure OutputCodec.warm, wave-cycle BrokerGuard,
+      // es-trade-tools preflight) finds them. A dry run reports and mutates nothing: ensure-fixed-id-schemas.sh honours DEPLOY_DRY_RUN.
+      when {
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.REGISTER_TA_SCHEMAS && (params.SERVICE == 'market-structure' || params.SERVICE == 'es-trade-tools' || params.SERVICE == 'wave-cycle')) }
+      }
+      steps {
+        script {
+          def csha = (params.CONTRACTS_PERMITTED_SHA ?: '').trim()
+          if (!(csha ==~ /[0-9a-f]{40}/)) {
+            error("REGISTER_TA_SCHEMAS=true needs CONTRACTS_PERMITTED_SHA: the full 40-character options-edge-contracts commit whose schemas are registered (got '${csha}').")
+          }
+        }
+        dir('.jenkins-tmp/contracts-ta') { deleteDir() }
+        sh '''
+          set -eu
+          git clone git@github.com:abhinav-jain09/options-edge-contracts.git .jenkins-tmp/contracts-ta
+          git -C .jenkins-tmp/contracts-ta checkout main
+        '''
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${CONTRACTS_PERMITTED_SHA:-}" bash scripts/jenkins/permitted-sha-guard.sh --dir .jenkins-tmp/contracts-ta --ref main'
+        }
+        sh '''
+          set -euo pipefail
+          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
+          # Same registry resolution as the indicator stage above: the configmap value the pods use, with the Docker-Desktop magic host rewritten
+          # to the dev box's LAN IP for a remote agent.
+          SR=$(kubectl -n options-edge get configmap options-edge-config -o jsonpath='{.data.SCHEMA_REGISTRY_URL}' 2>/dev/null || true)
+          : "${SR:?SCHEMA_REGISTRY_URL not readable from the options-edge-config configmap — refusing to guess the registry}"
+          SR="${SR/host.docker.internal/${DEV_HOST_IP:-192.168.100.102}}"
+          echo "registry for ${ENVIRONMENT}: $SR"
+          SCHEMA_REGISTRY_URL="$SR" SCHEMAS_DIR=".jenkins-tmp/contracts-ta/schemas-registry/ta" SCHEMA_ID_MAP="scripts/kafka/schema-id-maps/${SERVICE_PARAM}.map" \
+            DEPLOY_DRY_RUN="${DEPLOY_DRY_RUN:-false}" bash scripts/kafka/ensure-fixed-id-schemas.sh
+        '''
+      }
+    }
     stage('Recreate indicator topics (Avro cutover)') {
       // INDICATOR-AVRO-CONVERSION-PLAN.md section 5 and section 1 "State rotation at deploy", in this order:
       // the producer at 0 replicas (its local state is an emptyDir, gone with the pod) -> its consumer-group
@@ -764,6 +850,37 @@ PYEOF
           export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
           . scripts/kafka/load-kafka-settings.sh
           scripts/kafka/ensure-level-absorption-topics.sh
+        '''
+      }
+    }
+    stage('Verify es-trade-tools output topics') {
+      // BEFORE the rollout, same barrier as break-score above: the service creates an absent topic itself but dev's broker would auto-create
+      // the seven topics at 32 partitions first, and the service then refuses them for ever (FAILED_CONTRACT:OUTPUT_TOPIC_CONTRACT_VIOLATION).
+      // The service is held at replicas 0, but the topics must be right the day the owner scales it up; creating them here is idempotent.
+      when {
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'es-trade-tools' && !params.DEPLOY_DRY_RUN) }
+      }
+      steps {
+        sh '''
+          set -euo pipefail
+          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
+          . scripts/kafka/load-kafka-settings.sh
+          scripts/kafka/ensure-es-trade-tools-topics.sh
+        '''
+      }
+    }
+    stage('Verify wave-cycle output topics') {
+      // BEFORE the rollout, same barrier: waves and cycles are never created by the service and are verified at boot while the publish flag is on;
+      // recovery is created by the service but needs the compaction cadence of market-structure's recovery topic. Idempotent.
+      when {
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'wave-cycle' && !params.DEPLOY_DRY_RUN) }
+      }
+      steps {
+        sh '''
+          set -euo pipefail
+          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
+          . scripts/kafka/load-kafka-settings.sh
+          scripts/kafka/ensure-wave-cycle-topics.sh
         '''
       }
     }
@@ -1081,6 +1198,29 @@ os.rename(tmp,path)
 d=os.open(os.path.dirname(path),os.O_RDONLY); os.fsync(d); os.close(d)
 PYEOF
         ''' } }
+      }
+    }
+    stage('Roll forward market-structure topics (W0 step 4)') {
+      // W0-MARKET-STRUCTURE-AVRO-CUTOVER.md step 4, AFTER the rollout stage above (the Avro writer is live, the old JSON image is gone; the wipe is
+      // never run before it because a still-running JSON writer repopulates a recreated topic: the 2026-10-18 ibkr.gex.status incident). A run of its
+      // own: with MARKET_STRUCTURE_IGNORE_RECOVERY_ROLLOVER the same run would apply the flag and wipe in one step, collapsing steps 2-4. The script
+      // holds the gates (bootstrap = the named cluster, outside the regular session and after the close, the W0 digest is the only market-structure
+      // image on the cluster, producers attested, a 3-minute quiescence proof, broker-side producer evidence) and fails closed before the first delete.
+      when {
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'market-structure' && params.W0_CUTOVER_WIPE) }
+      }
+      steps {
+        // arguments were validated by 'Validate W0 cutover parameters', before the rollout; a DEPLOY_DRY_RUN evaluates every gate and deletes nothing
+        sh '''
+          set -euo pipefail
+          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
+          . scripts/kafka/load-kafka-settings.sh
+          scripts/kafka/roll-forward-market-structure.sh --recreate --cluster "$ENVIRONMENT" \
+            --expect-image-digest "$W0_EXPECT_IMAGE_DIGEST" --expect-gateway-digest "$W0_EXPECT_GATEWAY_DIGEST" \
+            --pre-cutover-ids "$W0_PRE_CUTOVER_IDS" --producers-attested \
+            $( [ "${DEPLOY_DRY_RUN_PARAM:-false}" = "true" ] && echo --gates-only ) \
+            "$KAFKA_BOOTSTRAP_SERVERS"
+        '''
       }
     }
     stage('Verify web UI (post-rollout)') {

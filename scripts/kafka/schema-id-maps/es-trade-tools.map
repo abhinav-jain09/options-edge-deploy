@@ -1,0 +1,19 @@
+# Fixed schema ids for es-trade-tools-service (Phase D, 15 closed record types, D-R14.1). FINAL: ta-books-catalog/08_SCHEMA_ID_MAP.md (contracts 0.31.0).
+# The service never registers (BrokerGuard.preflightRegistry uses getId) and refuses to start unless every subject below is registered with a schema equal
+# to its embedded copy, and TT_ENABLED=false builds nothing, so registration is needed before the FIRST enabled start, not before the held deploy.
+# File column: relative to the contracts checkout's `schemas-registry/ta` directory (SCHEMAS_DIR).
+com.optionsedge.contracts.tradetools.PfChartState|2301|PfChartState.avsc
+com.optionsedge.contracts.tradetools.PfColumn|2302|PfColumn.avsc
+com.optionsedge.contracts.tradetools.PfBreakEvent|2303|PfBreakEvent.avsc
+com.optionsedge.contracts.tradetools.PfLineEvent|2304|PfLineEvent.avsc
+com.optionsedge.contracts.tradetools.PfCountEvent|2305|PfCountEvent.avsc
+com.optionsedge.contracts.tradetools.PfMaCrossEvent|2306|PfMaCrossEvent.avsc
+com.optionsedge.contracts.tradetools.PfVolumeDivergenceEvent|2307|PfVolumeDivergenceEvent.avsc
+com.optionsedge.contracts.tradetools.PfMoneyFlowDivergenceEvent|2308|PfMoneyFlowDivergenceEvent.avsc
+com.optionsedge.contracts.tradetools.PfBreakVolumeCheck|2309|PfBreakVolumeCheck.avsc
+com.optionsedge.contracts.tradetools.VolumeNodeSet|2310|VolumeNodeSet.avsc
+com.optionsedge.contracts.tradetools.FlowBar|2311|FlowBar.avsc
+com.optionsedge.contracts.tradetools.ClimaxEvent|2312|ClimaxEvent.avsc
+com.optionsedge.contracts.tradetools.TtCheckpointManifest|2313|TtCheckpointManifest.avsc
+com.optionsedge.contracts.tradetools.TtCheckpointChunk|2314|TtCheckpointChunk.avsc
+com.optionsedge.contracts.tradetools.TtFamilyStatus|2315|TtFamilyStatus.avsc

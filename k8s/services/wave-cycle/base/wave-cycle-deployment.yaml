@@ -1,0 +1,98 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wave-cycle-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: wave-cycle-service
+    app.kubernetes.io/component: wave-cycle-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  # HELD AT 0 on every environment. E-R15 allows a "dark" run with both flags off (the fold runs and is checkpointed, nothing is published), but
+  # unlike market-structure this service REFUSES TO START without its five Avro subjects on the registry (BrokerGuard.schemaIds) even with the
+  # flags off, and a deploy that scales it to 1 before they are registered would crash-loop and trip the crash-loop sweepers. So the hold is the
+  # safe first state, and the dark run is the documented step that follows registration (docs/ta-books/DEPLOY-ROLLOUT.md section 5).
+  # It is named in every lifecycle list below: a held deployment is not an omitted one.
+  #
+  # TO START THE DARK RUN (the owner, in this order): (1) scripts/kafka/ensure-fixed-id-schemas.sh with schema-id-maps/wave-cycle.map on this
+  # environment's registry and ensure-wave-cycle-topics.sh (service-deploy runs the barrier); (2) options.indicators.bars is the Avro topic
+  # market-structure already reads; (3) set replicas to 1 with BOTH flags still "false" in a PER-ENVIRONMENT
+  # enable patch (k8s/overlays/<env>/wave-cycle-<env>-enable-patch.yaml registered in that overlay's kustomization.yaml, the pattern of
+  # option-pressure-state-dev-enable-patch.yaml), NEVER in this base, which dev and production share (editing it enables both); (4) regenerate the slices
+  # (scripts/deploy/generate-service-slices.sh); (5) remove wave-cycle-service from KEEP_DOWN in scripts/ops/morning-autostart.sh AND
+  # scripts/ops/oe-boot-bringup.sh (tests/test_keep_down_lists_agree.py) and from DISABLED_DEV in scripts/ops/dev-cleanup.sh; (6) service-deploy.
+  # Publishing is a later, separate change of WAVE_CYCLE_ENABLED (and the gateway flag GATEWAY_WAVE_CYCLE_ENABLED). SINGLE replica ONLY: the
+  # transactional.id is the fixed wave-cycle-SPX, a second instance fences the first.
+  replicas: 0
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: wave-cycle-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: wave-cycle-service
+        app.kubernetes.io/component: wave-cycle-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: wave-cycle
+          image: 192.168.100.252:5000/options-edge-wave-cycle:dev
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: options-edge-config              # KAFKA_BOOTSTRAP_SERVERS, SCHEMA_REGISTRY_URL, TOPIC_PREFIX and the runtime profile
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            # The two publish flags (E-R15), both the literal "false". With publishing off the fold still runs and is checkpointed. They are not
+            # part of parameterSetHash, so flipping one never starts a bootstrap.
+            - name: WAVE_CYCLE_ENABLED
+              value: "false"
+            - name: WAVE_CYCLE_SEASONALITY_ENABLED
+              value: "false"
+            # NEVER true in a committed manifest: it discards the saved checkpoint and rebuilds from the retained bars (the explicit rebuild).
+            - name: WAVE_CYCLE_IGNORE_CHECKPOINT
+              value: "false"
+            # Input: the Avro owner's SPX 1m/5m/15m/1h bars (IndicatorBar, fixed id 2002), read-only. Outputs and the recovery topic as in
+            # scripts/kafka/topics.env; BASE names, TOPIC_PREFIX is "" on dev and production.
+            - name: KAFKA_INDICATOR_BARS_TOPIC
+              value: options.indicators.bars
+            - name: KAFKA_WAVE_CYCLE_WAVES_TOPIC
+              value: options.spx.wave-cycle.waves
+            - name: KAFKA_WAVE_CYCLE_CYCLES_TOPIC
+              value: options.spx.wave-cycle.cycles
+            - name: KAFKA_WAVE_CYCLE_RECOVERY_TOPIC
+              value: options.spx.wave-cycle.recovery
+            - name: WC_HEALTH_PORT
+              value: "8161"
+            # The heap is fixed by the image: its ENTRYPOINT carries -Xmx256m -XX:+UseSerialGC, and a command-line -Xmx wins over
+            # JAVA_TOOL_OPTIONS, so this manifest declares none rather than a value the JVM would ignore. The limit leaves the other ~500Mi
+            # for the 64 MiB producer buffer, metaspace and stacks; revisit with a measured resident set at the dark run (no soak figure exists yet).
+          ports:
+            - name: health
+              containerPort: 8161
+          # /health/ready is 200 once the service is LIVE, which means "restored from a checkpoint or replayed to the log end read at start"; it does not
+          # depend on the tape being live, so it is the readiness probe.
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              memory: 768Mi

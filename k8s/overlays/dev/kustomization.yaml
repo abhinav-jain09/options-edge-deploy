@@ -26,6 +26,10 @@ resources:
   # and retention artifact exist. The owner turns each on later (docs/break-score/DEPLOY-WIRING.md, docs/level-absorption/DEPLOY-WIRING.md).
   - ../../services/break-score/base
   - ../../services/level-absorption/base
+  # es-trade-tools (Phase D) + wave-cycle (Phase E): HELD AT replicas 0 (base) on dev and production alike, every flag false; the owner turns
+  # each on later (docs/ta-books/DEPLOY-ROLLOUT.md sections 4 and 5).
+  - ../../services/es-trade-tools/base
+  - ../../services/wave-cycle/base
   # market-structure: RUNNING on dev and production (replicas 1 in the base). Reads
   # options.indicators.bars read-only and writes only options.spx.market-structure.{ui,sequence,dlq};
   # what a reader sees is gated on the gateway's own GATEWAY_MARKET_STRUCTURE_ENABLED.
@@ -1027,6 +1031,12 @@ images:
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-level-absorption
     newName: host.docker.internal:5001/options-edge-level-absorption
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-es-trade-tools
+    newName: host.docker.internal:5001/options-edge-es-trade-tools
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-wave-cycle
+    newName: host.docker.internal:5001/options-edge-wave-cycle
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-multileg-structure
     newName: host.docker.internal:5001/options-edge-multileg-structure

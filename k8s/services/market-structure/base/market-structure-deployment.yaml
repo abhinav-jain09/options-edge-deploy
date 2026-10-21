@@ -71,6 +71,16 @@ spec:
             # an empty topic, or a deliberately later bootstrap date, bootstraps from retained inputs instead (README).
             # Set the flag again only for the README's explicit rebuild; service-deploy.sh's RTH_ROLLOVER_GATE refuses to
             # apply it inside the New York regular session.
+            # Phase B structure tools and Phase C classical geometry (both Avro on their own new topics): OFF, explicitly. The code
+            # default is also off; the literal keeps the state visible in the render. Each flag is sampled once per schedule start and
+            # recorded in the recovery checkpoint when on, so flipping one needs a restart. Order for EACH, after the W0 cutover has
+            # completed (docs/ta-books/DEPLOY-ROLLOUT.md): subjects registered on every registry (scripts/kafka/ensure-fixed-id-schemas.sh)
+            # -> topic ensured (ensure-market-structure-topics.sh) -> gateway flag (GATEWAY_STRUCTURE_TOOLS_ENABLED / GATEWAY_GEOMETRY_ENABLED)
+            # -> THIS flag. The service refuses to start with the geometry flag on and a subject missing from the registry.
+            - name: MARKET_STRUCTURE_TOOLS_ENABLED
+              value: "false"
+            - name: MARKET_STRUCTURE_GEOMETRY_ENABLED
+              value: "false"
             - name: JAVA_TOOL_OPTIONS
               value: -Xms256m -Xmx640m
           ports:

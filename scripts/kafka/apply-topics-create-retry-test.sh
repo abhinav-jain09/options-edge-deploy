@@ -77,8 +77,16 @@ grep -q -- "--create .*--topic $REC .*--config segment.bytes=16777216 --config m
   && ok "recreated recovery topic has bounded compaction cadence" || bad "recovery create lacks compaction cadence"
 grep -q -- "--entity-name $REC --alter .*segment.bytes=16777216,max.compaction.lag.ms=300000" "$LOG" \
   && ok "global config apply restores recovery compaction cadence" || bad "recovery compaction cadence absent"
-# All other topics must keep their original configuration; the extra keys are specific to recovery.
-if grep 'segment.bytes=16777216' "$LOG" | grep -v "$REC" >/dev/null; then bad "compaction cadence leaked to another topic"; else ok "cadence applies only to recovery"; fi
+# wave-cycle-service's recovery log (PHASE-E E-R11.3) takes the same cadence: it is rewritten every fold with records of up to 960 KiB.
+WREC="options.spx.wave-cycle.recovery"
+run SIMULATE_CLIENT_RETRY=0 TOPICS_ABSENT_NAME="$WREC"
+[ "$RC" -eq 0 ] && ok "wave-cycle recovery reset reconciliation exits 0" || bad "wave-cycle recovery reset exit $RC"
+grep -q -- "--create .*--topic $WREC .*--config segment.bytes=16777216 --config max.compaction.lag.ms=300000" "$LOG" \
+  && ok "recreated wave-cycle recovery topic has bounded compaction cadence" || bad "wave-cycle recovery create lacks compaction cadence"
+grep -q -- "--entity-name $WREC --alter .*segment.bytes=16777216,max.compaction.lag.ms=300000" "$LOG" \
+  && ok "global config apply restores the wave-cycle recovery compaction cadence" || bad "wave-cycle recovery compaction cadence absent"
+# All other topics must keep their original configuration; the extra keys are specific to the two recovery logs.
+if grep 'segment.bytes=16777216' "$LOG" | grep -v -e "$REC" -e "$WREC" >/dev/null; then bad "compaction cadence leaked to another topic"; else ok "cadence applies only to the recovery logs"; fi
 
 echo
 [ "$fails" -eq 0 ] && { echo "=== apply-topics-create-retry: OK ==="; exit 0; }

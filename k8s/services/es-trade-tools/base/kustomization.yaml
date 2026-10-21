@@ -1,0 +1,10 @@
+# SERVICE SLICE — es-trade-tools (Phase D, TA books). Owns this service's Deployment only.
+#
+# Referenced from BOTH k8s/overlays/dev and k8s/overlays/production (NOT k8s/base), HELD AT replicas: 0 until the owner turns it on.
+# Single replica only. No Service object on purpose (the vol-state / es-compression-expansion / break-score shadow pattern): kubelet
+# probes reach the pod directly and a ClusterIP would make /metrics reachable in-cluster; nothing reads this service over HTTP.
+# No ConfigMap, Secret, PVC or hostPath: the checkpoint is a Kafka topic (futures.tradetools.state), not a local file.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - es-trade-tools-deployment.yaml

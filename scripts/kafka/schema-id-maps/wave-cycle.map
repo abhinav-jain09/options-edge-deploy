@@ -1,0 +1,9 @@
+# Fixed schema ids for wave-cycle-service (Phase E). FINAL: ta-books-catalog/08_SCHEMA_ID_MAP.md (contracts 0.31.0). The five top-level records the
+# service resolves at boot (BrokerGuard.schemaIds, Schemas.TOP) EVEN WITH BOTH FLAGS OFF: a registry that lacks one stops the process at start.
+# DailyBarHistory is an input snapshot FILE contract, not a topic value, and has no subject.
+# File column: relative to the contracts checkout's `schemas-registry/ta` directory (SCHEMAS_DIR).
+com.optionsedge.contracts.wavecycle.WaveSet|2401|WaveSet.avsc
+com.optionsedge.contracts.wavecycle.CycleSet|2402|CycleSet.avsc
+com.optionsedge.contracts.wavecycle.TimeframeCheckpoint|2403|TimeframeCheckpoint.avsc
+com.optionsedge.contracts.wavecycle.SeriesCheckpoint|2404|SeriesCheckpoint.avsc
+com.optionsedge.contracts.wavecycle.ControlCheckpoint|2405|ControlCheckpoint.avsc
