@@ -50,7 +50,16 @@ class FlagsAreLiterallyFalse(unittest.TestCase):
     DEV_GATEWAY_FILES = ["k8s/overlays/dev/feed-gateway-dev-env-patch.yaml", "k8s/services/feed-gateway/overlays/dev/manifest.yaml"]
     DEV_ON = ("GATEWAY_STRUCTURE_TOOLS_ENABLED", "GATEWAY_GEOMETRY_ENABLED", "GATEWAY_TRADE_TOOLS_ENABLED", "GATEWAY_WAVE_CYCLE_ENABLED")
 
+    # 2026-10-21 (owner: complete the production deployment, one layer at a time): PRODUCTION layer 2 = structure tools. Only the named flag in the
+    # named production files is "true"; every other flag in every other file stays "false".
+    PROD_ON = {
+        "GATEWAY_STRUCTURE_TOOLS_ENABLED": ("k8s/overlays/production/feed-gateway-prod-env-patch.yaml", "k8s/services/feed-gateway/overlays/production/manifest.yaml"),
+        "MARKET_STRUCTURE_TOOLS_ENABLED": ("k8s/overlays/production/market-structure-prod-env-patch.yaml", "k8s/services/market-structure/overlays/production/manifest.yaml"),
+    }
+
     def expected_value(self, rel, name):
+        if rel in self.PROD_ON.get(name, ()):
+            return "true"
         return "true" if name in self.DEV_ON and rel in self.DEV_GATEWAY_FILES else "false"
 
     def test_each_expected_source_and_generated_manifest_carries_its_flag_as_false(self):
@@ -64,10 +73,14 @@ class FlagsAreLiterallyFalse(unittest.TestCase):
                 for v in env_values(path, name):
                     self.assertEqual(v, self.expected_value(str(path.relative_to(ROOT)), name), f"{path}: {name}")
 
-    def test_production_keeps_all_four_gateway_flags_false(self):
+    def test_production_enables_only_the_structure_tools_layer(self):
         for rel in ("k8s/overlays/production/feed-gateway-prod-env-patch.yaml", "k8s/services/feed-gateway/overlays/production/manifest.yaml"):
             for name in self.DEV_ON:
-                self.assertEqual(env_values(ROOT / rel, name), ["false"], f"{rel}: {name}")
+                self.assertEqual(env_values(ROOT / rel, name), ["true" if name == "GATEWAY_STRUCTURE_TOOLS_ENABLED" else "false"], f"{rel}: {name}")
+        for rel in ("k8s/overlays/production/market-structure-prod-env-patch.yaml", "k8s/services/market-structure/overlays/production/manifest.yaml"):
+            self.assertEqual(env_values(ROOT / rel, "MARKET_STRUCTURE_TOOLS_ENABLED"), ["true"], rel)
+        self.assertEqual(env_values(ROOT / "k8s/services/market-structure/overlays/production/manifest.yaml", "MARKET_STRUCTURE_GEOMETRY_ENABLED"), ["false"])
+        self.assertEqual(env_values(ROOT / "k8s/services/market-structure/overlays/dev/manifest.yaml", "MARKET_STRUCTURE_TOOLS_ENABLED"), ["false"])
 
     def test_the_w0_recovery_rollover_flag_is_never_committed(self):
         for path in (ROOT / "k8s").rglob("*.yaml"):

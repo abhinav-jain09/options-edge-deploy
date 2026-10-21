@@ -70,8 +70,10 @@ spec:
             # such field). Each is an independent layer. Order for each: Avro subjects registered on EVERY registry the producer and gateway use ->
             # topic ensured -> producer image live -> THIS gateway flag (the gateway then waits for records) -> the producer flag.
             # CHART-STRUCTURE-TOOLS  options.spx.market-structure.tools
+            # ON in PRODUCTION (layer 2 of the production enable order: studies, tools, geometry; the producer flag is in market-structure-prod-env-patch.yaml).
+            # Rollback and order: see the header of market-structure-prod-env-patch.yaml.
             - name: GATEWAY_STRUCTURE_TOOLS_ENABLED
-              value: "false"
+              value: "true"
             # CLASSICAL-CHART-PATTERNS  options.spx.market-structure.geometry
             - name: GATEWAY_GEOMETRY_ENABLED
               value: "false"
