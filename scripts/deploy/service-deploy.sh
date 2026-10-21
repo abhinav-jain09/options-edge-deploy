@@ -328,6 +328,25 @@ if [ "$SERVICE" = "bleedingoptions-gamma-lab" ]; then
     || { echo "FATAL: the public Gamma Lab gate refused this deploy" >&2; exit 1; }
 fi
 
+# BEGIN MS_IGNORE_RECOVERY_ROLLOVER — scripts/deploy/service-deploy-ms-rollover-inject-test.sh extracts and runs this block
+# The W0 recovery-method rollover (docs/ta-books/W0-MARKET-STRUCTURE-AVRO-CUTOVER.md section 5, step 2): the ms-runtime-5 image cannot read the
+# ms-runtime-3 JSON checkpoint ("recovery checkpoint refused"), so its ONE first start must run with MARKET_STRUCTURE_IGNORE_RECOVERY=true and
+# rebuild the day from the retained inputs. The flag is injected into the RENDER here, from the Jenkins parameter, and is never committed to the
+# manifest: the next ordinary deploy of the same service (runbook step 5) has no flag and so removes it, with no second PR to forget (the
+# ms-runtime-3 rollover needed #1227 to add it and #1235 to remove it). The RTH_ROLLOVER_GATE below keys on the RENDER, so an injected flag
+# is refused inside Mon-Fri 09:30-16:00 America/New_York exactly like a committed one, with no override.
+if [ "${MARKET_STRUCTURE_IGNORE_RECOVERY_ROLLOVER:-false}" = "true" ]; then
+  [ "$SERVICE" = "market-structure" ] || { echo "FATAL: MARKET_STRUCTURE_IGNORE_RECOVERY_ROLLOVER=true is for SERVICE=market-structure only (got '$SERVICE'). Nothing was applied." >&2; exit 1; }
+  if [ -n "$(yq -r 'select(.kind == "Deployment" and .metadata.name == "market-structure-service") | .spec.template.spec.containers[0].env[]? | select(.name == "MARKET_STRUCTURE_IGNORE_RECOVERY") | .name' "$RENDER" | { grep -v '^---$' || true; })" ]; then
+    echo "FATAL: the rendered market-structure-service already sets MARKET_STRUCTURE_IGNORE_RECOVERY; the rollover parameter injects it and the manifest must not carry it. Nothing was applied." >&2; exit 1
+  fi
+  yq -i '(select(.kind == "Deployment" and .metadata.name == "market-structure-service") | .spec.template.spec.containers[0].env) += [{"name": "MARKET_STRUCTURE_IGNORE_RECOVERY", "value": "true"}]' "$RENDER"
+  [ "$(yq -r 'select(.kind == "Deployment" and .metadata.name == "market-structure-service") | .spec.template.spec.containers[0].env[] | select(.name == "MARKET_STRUCTURE_IGNORE_RECOVERY") | .value' "$RENDER" | { grep -v '^---$' || true; })" = "true" ] \
+    || { echo "FATAL: could not inject MARKET_STRUCTURE_IGNORE_RECOVERY=true into the render. Nothing was applied." >&2; exit 1; }
+  echo "ms rollover: MARKET_STRUCTURE_IGNORE_RECOVERY=true injected into the render for THIS apply only (not in git)"
+fi
+# END MS_IGNORE_RECOVERY_ROLLOVER
+
 # --- §13.2 record the CURRENT image for rollback BEFORE mutating -----------------------
 PREV_FILE="$WORK_DIR/${SERVICE}-${ENVIRONMENT}-previous.txt"; : >"$PREV_FILE"
 for dep in $DEPLOYMENTS; do

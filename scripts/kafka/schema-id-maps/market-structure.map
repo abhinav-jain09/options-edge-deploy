@@ -1,0 +1,17 @@
+# Fixed schema ids for market-structure-service (subject = record full name, RecordNameStrategy), for ensure-fixed-id-schemas.sh.
+# FINAL: copied from ta-books-catalog/08_SCHEMA_ID_MAP.md (contracts 0.31.0, options-edge-contracts com.optionsedge.contracts.ta.TaSchemas.SUBJECTS).
+# File column: relative to the contracts checkout's `schemas-registry/ta` directory (SCHEMAS_DIR), one flat <Record>.avsc per subject.
+# 2201-2208 are W0 (JSON -> Avro of ui/patterns/sequence/dlq/recovery, W0-MARKET-STRUCTURE-AVRO-CUTOVER.md section 2; 2208 is the documentation
+# subject of the recovery datum), 2211 Phase B tools, 2221-2222 Phase C geometry. 2001-2010 are the indicator family and are never reused here.
+# tests/test_ta_schema_registration.py pins this file against the contracts table row by row.
+com.optionsedge.contracts.marketstructure.ui.UiProjection|2201|UiProjection.avsc
+com.optionsedge.contracts.marketstructure.ui.UiUnavailable|2202|UiUnavailable.avsc
+com.optionsedge.contracts.marketstructure.patterns.PatternAnnotationSet|2203|PatternAnnotationSet.avsc
+com.optionsedge.contracts.marketstructure.patterns.PatternUnavailable|2204|PatternUnavailable.avsc
+com.optionsedge.contracts.marketstructure.sequence.SequenceRecord|2205|SequenceRecord.avsc
+com.optionsedge.contracts.marketstructure.dlq.DlqRecord|2206|DlqRecord.avsc
+com.optionsedge.contracts.marketstructure.recovery.RecoveryCheckpoint|2207|RecoveryCheckpoint.avsc
+com.optionsedge.contracts.marketstructure.recovery.RecoveryPayload|2208|RecoveryPayload.avsc
+com.optionsedge.contracts.marketstructure.tools.StructureToolsSet|2211|StructureToolsSet.avsc
+com.optionsedge.contracts.marketstructure.geometry.GeometryAnnotationSet|2221|GeometryAnnotationSet.avsc
+com.optionsedge.contracts.marketstructure.geometry.GeometryUnavailable|2222|GeometryUnavailable.avsc
