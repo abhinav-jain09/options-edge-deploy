@@ -50,8 +50,8 @@ class FlagsAreLiterallyFalse(unittest.TestCase):
     DEV_GATEWAY_FILES = ["k8s/overlays/dev/feed-gateway-dev-env-patch.yaml", "k8s/services/feed-gateway/overlays/dev/manifest.yaml"]
     DEV_ON = ("GATEWAY_STRUCTURE_TOOLS_ENABLED", "GATEWAY_GEOMETRY_ENABLED", "GATEWAY_TRADE_TOOLS_ENABLED", "GATEWAY_WAVE_CYCLE_ENABLED")
 
-    # 2026-10-21 (owner: complete the production deployment, one layer at a time): PRODUCTION layer 2 = structure tools. Only the named flag in the
-    # named production files is "true"; every other flag in every other file stays "false".
+    # 2026-10-21 (owner: complete the production deployment, one layer at a time): PRODUCTION layer 2 = structure tools. Among the TA-books layer flags
+    # (the names in EXPECTED), only those named here are "true", and only in the named production files; the rest stay "false" everywhere.
     PROD_ON = {
         "GATEWAY_STRUCTURE_TOOLS_ENABLED": ("k8s/overlays/production/feed-gateway-prod-env-patch.yaml", "k8s/services/feed-gateway/overlays/production/manifest.yaml"),
         "MARKET_STRUCTURE_TOOLS_ENABLED": ("k8s/overlays/production/market-structure-prod-env-patch.yaml", "k8s/services/market-structure/overlays/production/manifest.yaml"),
