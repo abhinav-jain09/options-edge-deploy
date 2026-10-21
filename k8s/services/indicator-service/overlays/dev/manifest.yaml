@@ -60,6 +60,59 @@ spec:
     spec:
       containers:
         - env:
+            - name: INDICATOR_STUDIES_ENABLED
+              value: "true"
+            - name: HEALTH_PORT
+              value: "8133"
+            - name: INDICATOR_SOURCE_MODE
+              value: SPX_PRICE
+            - name: LIVENESS_SESSION
+              value: rth
+            - name: INDICATOR_INPUT_PARTITIONS
+              value: "1"
+            - name: INDICATOR_COLD_BOOTSTRAP
+              value: "true"
+            - name: INDICATOR_EPOCH_GENESIS
+              value: "false"
+            - name: INDICATOR_SESSION_BACKFILL
+              value: "true"
+            - name: INDICATOR_STATE_DIR
+              value: /home/options-edge/indicator-service/state
+            - name: JAVA_TOOL_OPTIONS
+              value: -Xms256m -Xmx1536m
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
+          image: host.docker.internal:5001/options-edge-indicator-service:dev
+          imagePullPolicy: Always
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          name: indicator-service
+          ports:
+            - containerPort: 8133
+              name: health
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          resources:
+            limits:
+              memory: 2Gi
+            requests:
+              cpu: 200m
+              memory: 512Mi
+          volumeMounts:
+            - mountPath: /home/options-edge/indicator-service/state
+              name: state
+        - env:
             - name: INDICATOR_SOURCE_MODE
               value: SPX_GLOBEX_ESTIMATE
             - name: INDICATOR_ESTIMATE_ENABLED
@@ -96,59 +149,6 @@ spec:
             requests:
               cpu: 50m
               memory: 192Mi
-        - env:
-            - name: HEALTH_PORT
-              value: "8133"
-            - name: INDICATOR_SOURCE_MODE
-              value: SPX_PRICE
-            - name: LIVENESS_SESSION
-              value: rth
-            - name: INDICATOR_INPUT_PARTITIONS
-              value: "1"
-            - name: INDICATOR_COLD_BOOTSTRAP
-              value: "true"
-            - name: INDICATOR_EPOCH_GENESIS
-              value: "false"
-            - name: INDICATOR_SESSION_BACKFILL
-              value: "true"
-            - name: INDICATOR_STATE_DIR
-              value: /home/options-edge/indicator-service/state
-            - name: INDICATOR_STUDIES_ENABLED
-              value: "false"
-            - name: JAVA_TOOL_OPTIONS
-              value: -Xms256m -Xmx1536m
-          envFrom:
-            - configMapRef:
-                name: options-edge-config
-            - secretRef:
-                name: options-edge-runtime-secrets
-          image: host.docker.internal:5001/options-edge-indicator-service:dev
-          imagePullPolicy: Always
-          livenessProbe:
-            httpGet:
-              path: /health/live
-              port: health
-            initialDelaySeconds: 20
-            periodSeconds: 15
-          name: indicator-service
-          ports:
-            - containerPort: 8133
-              name: health
-          readinessProbe:
-            httpGet:
-              path: /health/ready
-              port: health
-            initialDelaySeconds: 30
-            periodSeconds: 10
-          resources:
-            limits:
-              memory: 2Gi
-            requests:
-              cpu: 200m
-              memory: 512Mi
-          volumeMounts:
-            - mountPath: /home/options-edge/indicator-service/state
-              name: state
       volumes:
         - emptyDir:
             sizeLimit: 5Gi

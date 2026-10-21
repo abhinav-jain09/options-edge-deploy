@@ -141,8 +141,14 @@ class MirrorAndSchemaWiring(unittest.TestCase):
 
 
 class FlagsAreExplicitlyOff(unittest.TestCase):
-    """The producer flag and the gateway flag are literal 'false' in every source and every generated manifest that must carry them."""
+    """The producer flag and the gateway flag are literal in every source and generated manifest that must carry them: "false" everywhere
+    except the DEV rendering (the dev overlay switches the studies on; production, experiment and the base stay false)."""
 
+    DEV_ON = {
+        "k8s/overlays/dev/feed-gateway-dev-env-patch.yaml",
+        "k8s/services/feed-gateway/overlays/dev/manifest.yaml",
+        "k8s/services/indicator-service/overlays/dev/manifest.yaml",
+    }
     EXPECTED = {
         "INDICATOR_STUDIES_ENABLED": ["k8s/base/indicator-service-deployment.yaml", "k8s/es4/services/indicator-service.yaml",
                                       "k8s/services/indicator-service/overlays/dev/manifest.yaml",
@@ -153,14 +159,25 @@ class FlagsAreExplicitlyOff(unittest.TestCase):
                                     "k8s/services/feed-gateway/overlays/production/manifest.yaml"],
     }
 
-    def test_each_expected_source_and_generated_manifest_carries_its_flag_as_false(self):
+    def test_each_expected_source_and_generated_manifest_carries_its_flag_with_the_expected_value(self):
         for name, paths in self.EXPECTED.items():
             for rel in paths:
                 found = re.findall(rf"name: {name}\n\s+value: (\S+)", (ROOT / rel).read_text())
-                self.assertEqual([v.strip("\"'") for v in found], ["false"], f"{rel}: {name}")
+                want = "true" if rel in self.DEV_ON else "false"
+                self.assertEqual([v.strip("\"'") for v in found], [want], f"{rel}: {name}")
 
-    def test_no_manifest_anywhere_enables_either_flag(self):
+    def test_the_dev_enable_patch_sets_only_the_producer_flag_on_the_indicator_service_container(self):
+        text = (ROOT / "k8s/overlays/dev/indicator-studies-dev-enable-patch.yaml").read_text()
+        self.assertIn("name: indicator-service\n          env:\n            - { name: INDICATOR_STUDIES_ENABLED, value: \"true\" }", text)
+        self.assertNotIn("indicator-estimate", text.split("containers:")[1])
+        self.assertIn("indicator-studies-dev-enable-patch.yaml", (ROOT / "k8s/overlays/dev/kustomization.yaml").read_text())
+        self.assertNotIn("indicator-studies", (ROOT / "k8s/overlays/production/kustomization.yaml").read_text())
+
+    def test_production_experiment_and_base_never_enable_either_flag(self):
         for path in (ROOT / "k8s").rglob("*.yaml"):
+            rel = str(path.relative_to(ROOT))
+            if "/dev/" in rel or rel in self.DEV_ON:
+                continue
             for name in self.EXPECTED:
                 for m in re.finditer(rf"name: {name}\n\s+value: (\S+)", path.read_text()):
                     self.assertEqual(m.group(1).strip("\"'"), "false", f"{path}: {name}")
