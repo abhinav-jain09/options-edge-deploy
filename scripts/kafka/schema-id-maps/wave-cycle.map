@@ -1,4 +1,4 @@
-# Fixed schema ids for wave-cycle-service (Phase E). FINAL: ta-books-catalog/08_SCHEMA_ID_MAP.md (contracts 0.31.0). The five top-level records the
+# Fixed schema ids for wave-cycle-service (ELLIOTT-FIB-CYCLE-TOOLS). FINAL: options-edge-processing docs/ta-books/catalog/SCHEMA-ID-MAP.md (contracts 0.31.0). The five top-level records the
 # service resolves at boot (BrokerGuard.schemaIds, Schemas.TOP) EVEN WITH BOTH FLAGS OFF: a registry that lacks one stops the process at start.
 # DailyBarHistory is an input snapshot FILE contract, not a topic value, and has no subject.
 # File column: relative to the contracts checkout's `schemas-registry/ta` directory (SCHEMAS_DIR).

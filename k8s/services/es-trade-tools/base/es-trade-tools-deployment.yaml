@@ -8,7 +8,7 @@ metadata:
     app.kubernetes.io/component: es-trade-tools-service
     app.kubernetes.io/part-of: options-edge
 spec:
-  # HELD AT 0 on every environment, and the reason is the requirement, not caution: PHASE-D-TRADE-LEVEL-TOOLS-REQUIREMENT.md D-R20.1 step 6 says
+  # HELD AT 0 on every environment, and the reason is the requirement, not caution: TICK-TRADE-TOOLS-REQUIREMENT.md D-R20.1 step 6 says
   # "deployment to dev at replicas 0, then enabled family by family; es4/prod only after the CODE gate AND step (4) [the calibration job]:
   # no environment beyond dev runs with SEED_UNCALIBRATED box sizes". With TT_ENABLED=false the process would only serve its health endpoints
   # (state DISABLED: no topic, no consumer, no producer), so replicas 1 would be harmless; it is still held at 0 because a pod that reports

@@ -3,7 +3,7 @@
 # service is scaled up (the same first-deploy barrier as ensure-market-structure-topics.sh).
 #
 # The service creates an absent topic itself and verifies an existing one, refusing to run (FAILED_CONTRACT:OUTPUT_TOPIC_CONTRACT_VIOLATION) on any
-# difference (PHASE-D D-R13; KafkaBrokerGuard.ensureOutputTopics). On dev the broker auto-creates at 32 partitions and a topic created there
+# difference (TICK-TRADE-TOOLS D-R13; KafkaBrokerGuard.ensureOutputTopics). On dev the broker auto-creates at 32 partitions and a topic created there
 # first is refused for ever, so the topics are ensured HERE, from the same declaration scripts/kafka/topics.env carries, before any scale-up.
 # One partition each; retention.ms is compared for EQUALITY by the service, so the compact topics are -1 and the 90-day ones 7776000000:
 #   futures.pf.columns           compact          -1            largest record 2 KiB

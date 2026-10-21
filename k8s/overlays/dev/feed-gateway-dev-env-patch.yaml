@@ -50,29 +50,29 @@ spec:
               value: "true"
             - name: KAFKA_MARKET_STRUCTURE_PATTERNS_TOPIC
               value: options.spx.market-structure.patterns
-            # Phase A studies relay (frames indicator-studies / indicator-studies-current and the hello's studies fields):
+            # INDICATOR-STUDIES studies relay (frames indicator-studies / indicator-studies-current and the hello's studies fields):
             # ON in DEV (production overlay: false). The producer flag INDICATOR_STUDIES_ENABLED is set true for dev by
             # indicator-studies-dev-enable-patch.yaml. Preconditions for dev (verified when this was enabled): schemas 2501-2503 registered
             # on the DEV registry and options.indicators.studies.bars/current ensured on the dev broker. The es4 registry, the es. mirrors and
             # production are NOT part of this change: ES studies need them first (schemas on es4 and prod, mirrors installed).
             - name: GATEWAY_STUDIES_ENABLED
               value: "true"
-            # TA-books relays (frame contracts 05/06/07 in ta-books-catalog). The names are GatewaySettings' (feat/ta-geometry-feed-gateway:
+            # TA-books relays (frame contracts GEOMETRY-/TRADE-TOOLS-/WAVES-FRAME-CONTRACT.md in options-edge-processing docs/ta-books/catalog). The names are GatewaySettings' (feat/ta-geometry-feed-gateway:
             # structureToolsEnabled / geometryEnabled / tradeToolsEnabled / waveCycleEnabled) and the topic variables it also reads
             # (KAFKA_MARKET_STRUCTURE_{TOOLS,GEOMETRY}_TOPIC, KAFKA_TT_*_TOPIC, KAFKA_WAVE_CYCLE_{WAVES,CYCLES}_TOPIC) default to exactly the topics
             # scripts/kafka/topics.env declares, so none is set here. All four OFF, explicitly (a flag off sends no frame and the hello carries no
             # such field). Each is an independent layer. Order for each: Avro subjects registered on EVERY registry the producer and gateway use ->
             # topic ensured -> producer image live -> THIS gateway flag (the gateway then waits for records) -> the producer flag.
-            # Phase B  options.spx.market-structure.tools
+            # CHART-STRUCTURE-TOOLS  options.spx.market-structure.tools
             - name: GATEWAY_STRUCTURE_TOOLS_ENABLED
               value: "false"
-            # Phase C  options.spx.market-structure.geometry
+            # CLASSICAL-CHART-PATTERNS  options.spx.market-structure.geometry
             - name: GATEWAY_GEOMETRY_ENABLED
               value: "false"
-            # Phase D  futures.pf.* / futures.volume-nodes / futures.flow.*
+            # TICK-TRADE-TOOLS  futures.pf.* / futures.volume-nodes / futures.flow.*
             - name: GATEWAY_TRADE_TOOLS_ENABLED
               value: "false"
-            # Phase E  options.spx.wave-cycle.{waves,cycles}
+            # ELLIOTT-FIB-CYCLE-TOOLS  options.spx.wave-cycle.{waves,cycles}
             - name: GATEWAY_WAVE_CYCLE_ENABLED
               value: "false"
             # Early-auction verdict ledger relay (the read-only /early-auction panel + the home-page

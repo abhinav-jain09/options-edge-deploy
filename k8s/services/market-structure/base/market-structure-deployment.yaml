@@ -71,7 +71,7 @@ spec:
             # an empty topic, or a deliberately later bootstrap date, bootstraps from retained inputs instead (README).
             # Set the flag again only for the README's explicit rebuild; service-deploy.sh's RTH_ROLLOVER_GATE refuses to
             # apply it inside the New York regular session.
-            # Phase B structure tools and Phase C classical geometry (both Avro on their own new topics): OFF, explicitly. The code
+            # CHART-STRUCTURE-TOOLS structure tools and CLASSICAL-CHART-PATTERNS classical geometry (both Avro on their own new topics): OFF, explicitly. The code
             # default is also off; the literal keeps the state visible in the render. Each flag is sampled once per schedule start and
             # recorded in the recovery checkpoint when on, so flipping one needs a restart. Order for EACH, after the W0 cutover has
             # completed (docs/ta-books/DEPLOY-ROLLOUT.md): subjects registered on every registry (scripts/kafka/ensure-fixed-id-schemas.sh)

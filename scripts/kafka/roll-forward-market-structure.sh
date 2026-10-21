@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # roll-forward-market-structure.sh — W0 step 4 and its verification: the DESTRUCTIVE half of the market-structure-service JSON -> Avro cutover.
-# Runbook: docs/ta-books/W0-MARKET-STRUCTURE-AVRO-CUTOVER.md (processing repository) sections 6 and 7; ordering and wiring: docs/ta-books/DEPLOY-ROLLOUT.md.
+# Runbook: docs/ta-books/MARKET-STRUCTURE-AVRO-CUTOVER.md (processing repository) sections 6 and 7; ordering and wiring: docs/ta-books/DEPLOY-ROLLOUT.md.
 #
 # WHAT IT DOES. options.spx.market-structure.{ui,sequence,dlq,patterns,recovery} carried JSON written by the previous image. The ms-runtime-5 image
 # writes Avro to the SAME names (owner 2026-10-17/18: no versioned names, always rolled forward). After that image is live (step 2) and the gateway that

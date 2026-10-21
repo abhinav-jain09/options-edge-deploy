@@ -115,7 +115,7 @@ mock "$ALL" 1 "$WEEK" "$TWO" "$WEEK" "" 1 "$(cfgline delete 172800000 delete 104
   && ok "patterns max.message.bytes one byte below a set's bound, everything else right → fail, naming the patterns topic" || { bad "patterns message bound"; cat "$T/out"; }
 mock "$ALL" 1 "$WEEK" "$TWO" "$WEEK" "" 1 "$(cfgline delete 999999999 delete)"; run; rc=$?
 [ $rc -eq 0 ] && ok "patterns retention above its floor → ok" || { bad "patterns above floor"; cat "$T/out"; }
-# The Phase B tools and Phase C geometry topics, each alone: every other topic right, only it drifted, and the output names it.
+# The CHART-STRUCTURE-TOOLS tools and CLASSICAL-CHART-PATTERNS geometry topics, each alone: every other topic right, only it drifted, and the output names it.
 for pair in "9:$TOOLS" "10:$GEO"; do
   idx="${pair%%:*}"; name="${pair#*:}"
   for variant in "below its floor|$(cfgline delete 172799999 delete)" "compacted|$(cfgline compact 172800000 delete)" \

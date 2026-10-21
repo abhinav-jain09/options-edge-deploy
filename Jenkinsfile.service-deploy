@@ -78,10 +78,10 @@ pipeline {
       // level-absorption: dev+prod EYEBALL phase, deployed HELD AT replicas 0 and unable to start until the owner supplies the
       // Phase 0 freeze file and the retention artifact. Publishes futures.level-absorption.{events,voice,closures}; single replica only.
       'level-absorption',
-      // es-trade-tools (Phase D): dev+prod, deployed HELD AT replicas 0 with TT_ENABLED and every family flag "false". Reads the linearized ES tape,
+      // es-trade-tools (TICK-TRADE-TOOLS): dev+prod, deployed HELD AT replicas 0 with TT_ENABLED and every family flag "false". Reads the linearized ES tape,
       // publishes futures.pf.* / futures.volume-nodes / futures.flow.* / futures.tradetools.state (Avro); single replica only.
       'es-trade-tools',
-      // wave-cycle (Phase E): dev+prod, deployed HELD AT replicas 0 with both publish flags "false". Reads options.indicators.bars, publishes
+      // wave-cycle (ELLIOTT-FIB-CYCLE-TOOLS): dev+prod, deployed HELD AT replicas 0 with both publish flags "false". Reads options.indicators.bars, publishes
       // options.spx.wave-cycle.{waves,cycles,recovery} (Avro); single replica only.
       'wave-cycle',
       // stock-gex-close-scheduler: PRODUCTION only — the closing-board SCHEDULE, which now lives
@@ -141,7 +141,7 @@ pipeline {
     booleanParam(name: 'REGISTER_TA_SCHEMAS', defaultValue: false,
       description: 'market-structure, es-trade-tools and wave-cycle only. true = before the rollout, register that service\'s Avro subjects under their FIXED ids (subject compatibility FULL, IMPORT mode, scripts/kafka/ensure-fixed-id-schemas.sh with scripts/kafka/schema-id-maps/<service>.map) on this environment\'s Schema Registry; idempotent, a collision fails. The schema files come from options-edge-contracts at CONTRACTS_PERMITTED_SHA, which is REQUIRED with this flag. docs/ta-books/DEPLOY-ROLLOUT.md.')
     booleanParam(name: 'MARKET_STRUCTURE_IGNORE_RECOVERY_ROLLOVER', defaultValue: false,
-      description: 'market-structure only, W0 step 2. true = inject MARKET_STRUCTURE_IGNORE_RECOVERY=true into the RENDER for this one apply (never committed): the ms-runtime-5 image cannot read the ms-runtime-3 JSON checkpoint and its first start must rebuild the day from the retained inputs. Refused Mon-Fri 09:30-16:00 America/New_York with no override (service-deploy.sh RTH_ROLLOVER_GATE); deploy only between the 16:00 close and midnight on a trading day. The next ordinary deploy (step 5, FORCE_RESTART=true) carries no flag. W0-MARKET-STRUCTURE-AVRO-CUTOVER.md sections 5-6.')
+      description: 'market-structure only, W0 step 2. true = inject MARKET_STRUCTURE_IGNORE_RECOVERY=true into the RENDER for this one apply (never committed): the ms-runtime-5 image cannot read the ms-runtime-3 JSON checkpoint and its first start must rebuild the day from the retained inputs. Refused Mon-Fri 09:30-16:00 America/New_York with no override (service-deploy.sh RTH_ROLLOVER_GATE); deploy only between the 16:00 close and midnight on a trading day. The next ordinary deploy (step 5, FORCE_RESTART=true) carries no flag. MARKET-STRUCTURE-AVRO-CUTOVER.md sections 5-6.')
     booleanParam(name: 'W0_CUTOVER_WIPE', defaultValue: false,
       description: 'market-structure only, DESTRUCTIVE, W0 step 4, a run of its own (never together with MARKET_STRUCTURE_IGNORE_RECOVERY_ROLLOVER): AFTER the rollout stage of this run (the Avro image already live and the Avro gateway rolled), delete and recreate EMPTY, under the same names, options.spx.market-structure.{ui,sequence,dlq,patterns,recovery} through scripts/kafka/roll-forward-market-structure.sh behind its fail-closed gates (outside the regular session, the W0 image digest only, a 3-minute quiescence proof, broker-side producer evidence, W0_PRODUCERS_ATTESTED). The input topic, the geometry topic and the tools topic are never touched. Needs W0_EXPECT_IMAGE_DIGEST, W0_EXPECT_GATEWAY_DIGEST and W0_PRE_CUTOVER_IDS. Every argument is validated before anything is deployed. DEPLOY_DRY_RUN runs the script with --gates-only: every gate and the quiescence proof are evaluated and reported, nothing is deleted.')
     string(name: 'W0_EXPECT_IMAGE_DIGEST', defaultValue: '', trim: true,
@@ -1201,7 +1201,7 @@ PYEOF
       }
     }
     stage('Roll forward market-structure topics (W0 step 4)') {
-      // W0-MARKET-STRUCTURE-AVRO-CUTOVER.md step 4, AFTER the rollout stage above (the Avro writer is live, the old JSON image is gone; the wipe is
+      // MARKET-STRUCTURE-AVRO-CUTOVER.md step 4, AFTER the rollout stage above (the Avro writer is live, the old JSON image is gone; the wipe is
       // never run before it because a still-running JSON writer repopulates a recreated topic: the 2026-10-18 ibkr.gex.status incident). A run of its
       // own: with MARKET_STRUCTURE_IGNORE_RECOVERY_ROLLOVER the same run would apply the flag and wipe in one step, collapsing steps 2-4. The script
       // holds the gates (bootstrap = the named cluster, outside the regular session and after the close, the W0 digest is the only market-structure

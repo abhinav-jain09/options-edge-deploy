@@ -35,7 +35,7 @@ resources:
   # break-score + level-absorption: HELD AT replicas 0 (base). See k8s/overlays/dev/kustomization.yaml.
   - ../../services/break-score/base
   - ../../services/level-absorption/base
-  # es-trade-tools (Phase D) + wave-cycle (Phase E): HELD AT replicas 0 (base). See k8s/overlays/dev/kustomization.yaml.
+  # es-trade-tools (TICK-TRADE-TOOLS) + wave-cycle (ELLIOTT-FIB-CYCLE-TOOLS): HELD AT replicas 0 (base). See k8s/overlays/dev/kustomization.yaml.
   - ../../services/es-trade-tools/base
   - ../../services/wave-cycle/base
   # market-structure: dev+prod at replicas 1. Reads options.indicators.bars read-only and publishes

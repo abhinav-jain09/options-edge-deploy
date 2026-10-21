@@ -77,7 +77,7 @@ grep -q -- "--create .*--topic $REC .*--config segment.bytes=16777216 --config m
   && ok "recreated recovery topic has bounded compaction cadence" || bad "recovery create lacks compaction cadence"
 grep -q -- "--entity-name $REC --alter .*segment.bytes=16777216,max.compaction.lag.ms=300000" "$LOG" \
   && ok "global config apply restores recovery compaction cadence" || bad "recovery compaction cadence absent"
-# wave-cycle-service's recovery log (PHASE-E E-R11.3) takes the same cadence: it is rewritten every fold with records of up to 960 KiB.
+# wave-cycle-service's recovery log (ELLIOTT-FIB-CYCLE-TOOLS E-R11.3) takes the same cadence: it is rewritten every fold with records of up to 960 KiB.
 WREC="options.spx.wave-cycle.recovery"
 run SIMULATE_CLIENT_RETRY=0 TOPICS_ABSENT_NAME="$WREC"
 [ "$RC" -eq 0 ] && ok "wave-cycle recovery reset reconciliation exits 0" || bad "wave-cycle recovery reset exit $RC"

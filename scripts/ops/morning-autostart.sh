@@ -76,7 +76,7 @@ CALENDAR_DIR="${CALENDAR_DIR:-$(cd "$SCRIPT_DIR/../jenkins" 2>/dev/null && pwd |
 #   every deployment at 0, is the script that needs it.
 #   hedging-pressure-service ADDED 2026-10-11: deployed held at replicas:0 (owner turns it on later); it DOES carry the
 #   part-of label, so this entry is what stops the 06:15 scale-to-1 from starting it. Same entry in oe-boot-bringup.sh.
-#   es-trade-tools-service (Phase D) and wave-cycle-service (Phase E) ADDED 2026-10-21 on the same terms: deployed held at replicas:0 (owner turns each on
+#   es-trade-tools-service (TICK-TRADE-TOOLS) and wave-cycle-service (ELLIOTT-FIB-CYCLE-TOOLS) ADDED 2026-10-21 on the same terms: deployed held at replicas:0 (owner turns each on
 #   later, docs/ta-books/DEPLOY-ROLLOUT.md); both carry the part-of label. Same entries in oe-boot-bringup.sh and DISABLED_DEV in dev-cleanup.sh.
 #   break-score-service and level-absorption-service ADDED 2026-10-17 on the same terms: deployed held at replicas:0 (owner
 #   turns each on later; level-absorption cannot start before its Phase 0 freeze file exists); both carry the part-of label.

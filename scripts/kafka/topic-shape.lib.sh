@@ -259,7 +259,7 @@ create_topic() {
 
 # The transactional recovery-checkpoint topics: a compacted log of large records that is rewritten every fold, which needs the small-segment
 # compaction cadence (16 MiB segments, 5 min max compaction lag) or the active 1 GiB segment is never cleaned. market-structure-service's
-# since its first deploy; wave-cycle-service's (PHASE-E E-R11.3) takes "the figure the structure service uses" and so the same cadence.
+# since its first deploy; wave-cycle-service's (ELLIOTT-FIB-CYCLE-TOOLS E-R11.3) takes "the figure the structure service uses" and so the same cadence.
 topic_is_recovery_checkpoint() {
   case "$1" in
     options.spx.market-structure.recovery|options.spx.wave-cycle.recovery) return 0 ;;

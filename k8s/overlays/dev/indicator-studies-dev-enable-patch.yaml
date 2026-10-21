@@ -1,4 +1,4 @@
-# DEV-ONLY: Phase A indicator studies (STUDIES_V1) switched ON for the dev indicator-service container.
+# DEV-ONLY: INDICATOR-STUDIES indicator studies (STUDIES_V1) switched ON for the dev indicator-service container.
 # The base manifest carries INDICATOR_STUDIES_ENABLED="false" (production and experiment keep it); this patch overrides it for dev only.
 # Writes options.indicators.studies.bars / .current (declared in scripts/kafka/topics.env; schema ids 2501-2503 registered on the dev
 # registry first). The indicator-estimate sidecar is a different container and is not touched. Rollback: delete this patch (or set

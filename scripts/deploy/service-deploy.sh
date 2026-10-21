@@ -329,7 +329,7 @@ if [ "$SERVICE" = "bleedingoptions-gamma-lab" ]; then
 fi
 
 # BEGIN MS_IGNORE_RECOVERY_ROLLOVER — scripts/deploy/service-deploy-ms-rollover-inject-test.sh extracts and runs this block
-# The W0 recovery-method rollover (docs/ta-books/W0-MARKET-STRUCTURE-AVRO-CUTOVER.md section 5, step 2): the ms-runtime-5 image cannot read the
+# The W0 recovery-method rollover (docs/ta-books/MARKET-STRUCTURE-AVRO-CUTOVER.md section 5, step 2): the ms-runtime-5 image cannot read the
 # ms-runtime-3 JSON checkpoint ("recovery checkpoint refused"), so its ONE first start must run with MARKET_STRUCTURE_IGNORE_RECOVERY=true and
 # rebuild the day from the retained inputs. The flag is injected into the RENDER here, from the Jenkins parameter, and is never committed to the
 # manifest: the next ordinary deploy of the same service (runbook step 5) has no flag and so removes it, with no second PR to forget (the
