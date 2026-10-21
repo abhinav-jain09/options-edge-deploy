@@ -115,7 +115,7 @@ class Registration(unittest.TestCase):
         finally:
             server.shutdown()
 
-    def test_a_fixed_id_held_by_another_schema_fails_and_nothing_after_it_is_imported(self):
+    def test_a_fixed_id_held_by_another_schema_fails_in_preflight_and_nothing_at_all_is_imported(self):
         rows = read_map("wave-cycle")
         reg = Registry()
         reg.register("some.other.Subject", json.dumps({"type": "string"}), id=rows[1][1], version=1)
@@ -124,7 +124,8 @@ class Registration(unittest.TestCase):
             rc, out = run("wave-cycle", url)
             self.assertEqual(rc, 1, out)
             self.assertIn(f"fixed id {rows[1][1]} is already held by another schema", out)
-            self.assertIn(rows[0][0], reg.subjects)
+            self.assertIn("nothing was changed", out)
+            self.assertNotIn(rows[0][0], reg.subjects)   # the collision on the LATER subject stopped the whole set before the first import
             self.assertNotIn(rows[1][0], reg.subjects)
         finally:
             server.shutdown()

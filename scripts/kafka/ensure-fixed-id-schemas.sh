@@ -19,7 +19,8 @@
 # not exactly that is a COLLISION and fails: a different schema under the subject, a later version, or the fixed id held by another
 # schema. This script never repairs a collision and never deletes a subject.
 #
-# Per subject: preflight (mode capture, disposable-subject IMPORT probe), idempotent verify, import, restore the mode in a trap on EVERY
+# A read-only PREFLIGHT pass judges every map line (collision = fail) BEFORE the apply pass imports anything: a collision on a later subject never leaves
+# the earlier ones imported. Per subject in the apply pass: (mode capture, disposable-subject IMPORT probe), idempotent verify, import, restore the mode in a trap on EVERY
 # exit (an original override by PUT, an inherited mode by DELETE), then FULL read back. See ensure-indicator-schemas.sh for the long form.
 set -euo pipefail
 : "${SCHEMA_REGISTRY_URL:?SCHEMA_REGISTRY_URL unset — refusing to reconcile an unknown registry}"
@@ -114,11 +115,12 @@ ensure_full() { # <subject>
 }
 
 fail=0
+for PASS in preflight apply; do
 while IFS='|' read -r subject id file; do
   [ -n "${subject:-}" ] || continue
   schema="$SCHEMAS_DIR/$file"
   [ -f "$schema" ] || { echo "FAIL: $schema missing"; fail=1; continue; }
-  echo "--- $subject (id $id)"
+  echo "--- [$PASS] $subject (id $id)"
   # the canonical text as the registry would normalize it: ask the registry whether THIS schema is already
   # registered under the subject (POST /subjects/<subject> returns the id/version it lives under, 404 if not)
   LOOKUP=$(http POST "/subjects/$subject" "$(reg_body "$schema")")
@@ -134,7 +136,7 @@ while IFS='|' read -r subject id file; do
           fail=1; continue
         fi
         echo "    registered: version 1, id $id (the only version)"
-        ensure_full "$subject" || fail=1
+        [ "$PASS" = apply ] && { ensure_full "$subject" || fail=1; }
         continue
       fi
       echo "FAIL: $subject holds the canonical schema under id $have_id version $have_v, not id $id version 1 — a collision this script never repairs"
@@ -154,6 +156,7 @@ while IFS='|' read -r subject id file; do
     echo "FAIL: fixed id $id is already held by another schema on $REG — a collision this script never repairs"
     fail=1; continue
   fi
+  if [ "$PASS" = preflight ]; then echo "    free: would import under id $id"; continue; fi
   if [ "$DRY" = true ]; then echo "    would import under id $id (DEPLOY_DRY_RUN=true)"; continue; fi
   # capture the mode, then import
   M=$(http GET "/mode/$subject")
@@ -175,6 +178,9 @@ while IFS='|' read -r subject id file; do
   echo "    imported: version 1, id $id"
   ensure_full "$subject" || fail=1
 done <<< "$FIXED"
+  # PREFLIGHT (read-only, every map line judged before any import): a collision on a LATER subject must not leave the earlier ones imported
+  if [ "$PASS" = preflight ] && [ "$fail" -ne 0 ]; then echo "=== ensure-fixed-id-schemas: FAILED in preflight — nothing was changed ==="; exit 1; fi
+done
 
 if [ "$fail" -ne 0 ]; then echo "=== ensure-fixed-id-schemas: FAILED ==="; exit 1; fi
 echo "=== ensure-fixed-id-schemas: OK ==="
