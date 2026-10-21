@@ -189,7 +189,7 @@ pipeline {
           esac
 
           # Kafka Serialization Rule / plan section 4: the four mirrored topics carry Confluent-framed Avro whose
-          # schema ids must resolve to the SAME schema on the target registry. Assert ids 2001-2010 are identical
+          # schema ids must resolve to the SAME schema on the target registry. Assert ids 2001-2007 and 2501-2503 are identical
           # on source and target BEFORE any byte is copied; a differing or absent id fails the install.
           bash scripts/kafka/assert-indicator-schema-parity.sh "$SRC_REGISTRY" "$TGT_REGISTRY"
 

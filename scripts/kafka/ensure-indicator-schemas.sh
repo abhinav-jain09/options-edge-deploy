@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ensure-indicator-schemas.sh — the indicator family's ten Avro schemas (seven + the Phase A studies' 2008-2010, contracts 0.30.0) exist on ONE Schema Registry under
+# ensure-indicator-schemas.sh — the indicator family's ten Avro schemas (seven + the Phase A studies' 2501-2503, contracts 0.30.0) exist on ONE Schema Registry under
 # their FIXED ids (INDICATOR-AVRO-CONVERSION-PLAN.md section 4), subject compatibility FULL, idempotently.
 #
 # WHY FIXED IDS: the es4 → dev/prod mirrors copy bytes, and a Confluent-framed Avro value names its schema
@@ -46,9 +46,9 @@ com.optionsedge.contracts.indicators.avro.IndicatorSignals|2004|IndicatorSignals
 com.optionsedge.contracts.indicators.avro.SignalEvent|2005|SignalEvent.avsc
 com.optionsedge.contracts.indicators.avro.SpotTick|2006|SpotTick.avsc
 com.optionsedge.contracts.indicators.avro.IndicatorStateImage|2007|IndicatorStateImage.avsc
-com.optionsedge.contracts.indicators.avro.StudyBar|2008|StudyBar.avsc
-com.optionsedge.contracts.indicators.avro.StudiesCurrent|2009|StudiesCurrent.avsc
-com.optionsedge.contracts.indicators.avro.StudyEngineImage|2010|StudyEngineImage.avsc
+com.optionsedge.contracts.indicators.avro.StudyBar|2501|StudyBar.avsc
+com.optionsedge.contracts.indicators.avro.StudiesCurrent|2502|StudiesCurrent.avsc
+com.optionsedge.contracts.indicators.avro.StudyEngineImage|2503|StudyEngineImage.avsc
 "
 COMPAT=FULL
 
