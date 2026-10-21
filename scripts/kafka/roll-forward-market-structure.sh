@@ -175,7 +175,10 @@ p = json.load(sys.stdin)
 s = [c for c in (p.get("status", {}).get("containerStatuses") or []) if c.get("name") == "market-structure"]
 if len(s) != 1:
     sys.exit(1)
-print("uid=%s restarts=%s ready=%s" % (p["metadata"].get("uid", ""), s[0].get("restartCount", ""), "true" if s[0].get("ready") else "false"))
+uid, rc = p["metadata"].get("uid", ""), s[0].get("restartCount")
+if not uid or not isinstance(rc, int) or isinstance(rc, bool) or rc < 0:
+    sys.exit(1)
+print("uid=%s restarts=%d ready=%s" % (uid, rc, "true" if s[0].get("ready") else "false"))
 ' || { echo "FATAL: pod $pod has no single market-structure container status" >&2; return 1; }
 }
 counters() { # the five producer counters of /metrics, sorted, or fails if any is missing

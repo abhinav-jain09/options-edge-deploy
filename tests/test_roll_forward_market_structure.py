@@ -206,6 +206,7 @@ class EveryGateRefusesBeforeTheFirstDelete(unittest.TestCase):
         self.assertEqual(c.deletes(), [])
         self.refused(lambda s: (s.update(proxy_forbidden=True), s["pods"]["items"][0]["status"]["containerStatuses"][0].update(ready=False)), "G3")
         self.refused(lambda s: s.update(proxy_forbidden=True), "16:05", now="3 1602 2026-10-21 16:02:00 EDT")   # inside the 5 minute margin after the close
+        self.refused(lambda s: (s.update(proxy_forbidden=True), s["pods"]["items"][0]["metadata"].update(uid="")), "single market-structure")   # an identity without a UID proves nothing
         self.refused(lambda s: s.update(service_state="forbidden pods/proxy"), "G3")                          # a workload body that merely says "forbidden" never selects the fallback
         self.refused(lambda s: (s.update(proxy_forbidden=True), s.update(bars_moves_per_read=1)), "G7")   # the end-offset proof still refuses on movement
 
