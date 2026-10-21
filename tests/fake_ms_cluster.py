@@ -117,6 +117,9 @@ if name == "kafka-transactions":
 if name == "kubectl":
     if argv[:1] == ["get"] and "--raw" in argv:
         path = argv[argv.index("--raw") + 1]
+        if state.get("proxy_forbidden"):
+            print('Error from server (Forbidden): pods "x:8080" is forbidden: User "system:serviceaccount:options-edge:jenkins-deployer" cannot get resource "pods/proxy" in API group "" in the namespace "options-edge"')
+            sys.exit(0)
         if path.endswith("/health/ready"):
             print(json.dumps({"state": state["service_state"], "error": ""}, separators=(",", ":")))
         elif path.endswith("/metrics"):
@@ -124,6 +127,9 @@ if name == "kubectl":
                 print(f"market_structure_{k} {v}")
             if state.get("metrics_move"):
                 state["metrics"]["records_consumed_total"] += 1; save()
+        sys.exit(0)
+    if "pod" in argv and "json" in argv and "-A" not in argv:
+        print(json.dumps(state["pods"]["items"][0]))
         sys.exit(0)
     if "-A" in argv:
         print(json.dumps(state["pods"]))
