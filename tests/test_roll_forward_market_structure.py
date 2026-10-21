@@ -158,7 +158,7 @@ class EveryGateRefusesBeforeTheFirstDelete(unittest.TestCase):
     def test_g4_g9_without_a_cluster_scope_pod_list_the_namespaces_are_read_one_by_one(self):
         """Production: the deployer SA has no cluster-scope pod list. The same gates are judged from per-namespace reads; system namespaces may be unreadable, a tenant namespace may not."""
         c = Cluster()
-        c.patch(lambda s: s.update(cluster_pods_forbidden=True, namespaces=["options-edge", "bleedingoptions", "kube-system"], unreadable_namespaces=["kube-system"]))
+        c.patch(lambda s: s.update(cluster_pods_forbidden=True, namespaces=["options-edge", "bleedingoptions", "kube-system", "loki", "default"], unreadable_namespaces=["kube-system", "loki", "default"]))
         rc, out = c.run(extra=["--gates-only"])
         self.assertEqual(rc, 0, out)
         self.assertIn("G4 ok", out)

@@ -232,7 +232,7 @@ gate_session_ended() { # G3
 }
 # all_pods_json: every pod of every namespace as one JSON List. Normally `get pods -A`. The production deployer service account has no cluster-scope pod list, only
 # namespaced pod reads; then the same answer is assembled namespace by namespace from `get ns` (which it may list). A namespace it cannot read is tolerated ONLY if it is a
-# Kubernetes system namespace (kube-system, kube-public, kube-node-lease, default): tenant workloads there are impossible for this estate's images, and the broker-side
+# Kubernetes system namespace or the log-stack namespace (kube-system, kube-public, kube-node-lease, default, loki): tenant workloads there are impossible for this estate's images, and the broker-side
 # producer evidence of G6 (no other producer id wrote the five topics) is the cross-namespace guard that does not depend on pod visibility. Any other unreadable namespace fails closed.
 all_pods_json() {
   local out nss ns o last parts=""
@@ -250,7 +250,7 @@ all_pods_json() {
       printf '%s\n' "$o" >>"$parts" || { rm -f "$parts"; printf 'cannot record the pod list of namespace %s' "$ns"; return 1; }
     else
       case "$ns" in
-        kube-system|kube-public|kube-node-lease|default)
+        kube-system|kube-public|kube-node-lease|default|loki)   # loki = the log-stack namespace (loki-deploy job); it runs no market-structure or gateway image
           # tolerated ONLY for kubectl's own authorization failure of the pod list; an API outage, an authentication error or a timeout is not tolerated
           # kubectl prints an EMPTY List on stdout and its authorization error as the LAST line on stderr; both must be present
           last="${o##*$'\n'}"
