@@ -78,7 +78,7 @@ spec:
             - name: GATEWAY_STRUCTURE_TOOLS_ENABLED
               value: "true"
             - name: GATEWAY_GEOMETRY_ENABLED
-              value: "false"
+              value: "true"
             - name: GATEWAY_TRADE_TOOLS_ENABLED
               value: "false"
             - name: GATEWAY_WAVE_CYCLE_ENABLED
