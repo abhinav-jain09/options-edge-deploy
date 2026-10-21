@@ -18,7 +18,7 @@ SCRIPT = ROOT / "scripts/kafka/ensure-indicator-schemas.sh"
 PARITY = ROOT / "scripts/kafka/assert-indicator-schema-parity.sh"
 NAMES = ["IndicatorSnapshot", "IndicatorBar", "BackfillManifest", "IndicatorSignals", "SignalEvent", "SpotTick",
          "IndicatorStateImage", "StudyBar", "StudiesCurrent", "StudyEngineImage"]
-IDS = dict(zip(NAMES, range(2001, 2011)))
+IDS = dict(zip(NAMES, [*range(2001, 2008), 2501, 2502, 2503]))
 NS = "com.optionsedge.contracts.indicators.avro."
 
 
@@ -152,7 +152,7 @@ class EnsureIndicatorSchemas(unittest.TestCase):
             self.assertEqual(run(ub)[0], 0)
             r = subprocess.run(["bash", str(PARITY), ua, ub], capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-            self.assertIn("ids 2001-2010 identical", r.stdout)
+            self.assertIn("ids 2001-2007 and 2501-2503 identical", r.stdout)
             b.by_id[2005] = json.dumps({"type": "record", "name": "SignalEvent", "namespace": NS[:-1], "fields": [{"name": "y", "type": "int"}]})
             r = subprocess.run(["bash", str(PARITY), ua, ub], capture_output=True, text=True)
             self.assertEqual(r.returncode, 1)

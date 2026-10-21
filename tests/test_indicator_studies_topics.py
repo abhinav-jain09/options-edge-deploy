@@ -1,6 +1,6 @@
 """STUDIES_V1 deploy wiring (Phase A, PHASE-A-INDICATORS-REQUIREMENT.md A-R10.1/A-R10.4/A-R10.5, tracked item T-2): the two study
 topics are declared in the REAL topics.env with the producer's shapes, ensure-indicator-topics.sh creates and reconciles them,
-the es4 mirror allow-list carries the es.* pair, the schema scripts know ids 2008-2010, and the producer / gateway flags are
+the es4 mirror allow-list carries the es.* pair, the schema scripts know ids 2501-2503, and the producer / gateway flags are
 explicitly false in every rendered manifest."""
 from __future__ import annotations
 
@@ -135,9 +135,9 @@ class MirrorAndSchemaWiring(unittest.TestCase):
 
     def test_schema_scripts_know_the_three_study_ids(self):
         fixed = (ROOT / "scripts/kafka/ensure-indicator-schemas.sh").read_text()
-        for name, id_ in (("StudyBar", 2008), ("StudiesCurrent", 2009), ("StudyEngineImage", 2010)):
+        for name, id_ in (("StudyBar", 2501), ("StudiesCurrent", 2502), ("StudyEngineImage", 2503)):
             self.assertIn(f"com.optionsedge.contracts.indicators.avro.{name}|{id_}|{name}.avsc", fixed)
-        self.assertIn("2008 2009 2010; do", (ROOT / "scripts/kafka/assert-indicator-schema-parity.sh").read_text())
+        self.assertIn("2501 2502 2503; do", (ROOT / "scripts/kafka/assert-indicator-schema-parity.sh").read_text())
 
 
 class FlagsAreExplicitlyOff(unittest.TestCase):
