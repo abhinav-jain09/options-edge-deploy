@@ -95,7 +95,7 @@ spec:
             - name: BROKER_EXECUTION_MAX_QUANTITY
               value: "1000"
             - name: BROKER_LIVE_EXECUTION_MAX_QUANTITY
-              value: "1"
+              value: "1000"
             - name: BROKER_PAPER_BALANCE_ENABLED
               value: "true"
             - name: BROKER_PAPER_BALANCE_CLIENT_ID
