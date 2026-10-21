@@ -46,8 +46,8 @@ def initial_state() -> dict:
     topics[P + "tools"] = topic(tid("Tools"), 1, {"cleanup.policy": "delete", "retention.ms": "172800000"}, end=7)
     topics[P + "geometry"] = topic(tid("Geom"), 1, {"cleanup.policy": "delete", "retention.ms": "172800000"}, end=9)
     ready = {"image": "192.168.100.252:5000/options-edge-market-structure:prod", "name": "market-structure"}
-    pod = {"metadata": {"name": "market-structure-service-abc", "namespace": "options-edge"}, "status": {"phase": "Running",
-           "containerStatuses": [{"name": "market-structure", "imageID": "192.168.100.252:5000/options-edge-market-structure@" + DIGEST}]},
+    pod = {"metadata": {"name": "market-structure-service-abc", "namespace": "options-edge", "uid": "uid-1"}, "status": {"phase": "Running",
+           "containerStatuses": [{"name": "market-structure", "ready": True, "restartCount": 0, "imageID": "192.168.100.252:5000/options-edge-market-structure@" + DIGEST}]},
            "spec": {"containers": [{"name": ready["name"], "image": ready["image"] + "@" + DIGEST}]}}
     gateway = {"metadata": {"name": "feed-gateway-service-xyz", "namespace": "options-edge"}, "status": {"phase": "Running",
                "containerStatuses": [{"name": "feed-gateway", "ready": True, "imageID": "192.168.100.252:5000/options-edge-feed-gateway@" + GW_DIGEST}]},
@@ -192,6 +192,23 @@ class EveryGateRefusesBeforeTheFirstDelete(unittest.TestCase):
 
     def test_g3_the_service_must_report_session_ended(self):
         self.refused(lambda s: s.update(service_state="LIVE"), "G3")
+
+    def test_g3_without_the_pod_proxy_a_ready_container_after_the_close_proves_session_ended(self):
+        """Production: the deployer SA cannot get pods/proxy. The gate (and the quiescence read) must work from `kubectl get pod`: Ready passes, not Ready refuses,
+        and the end-offset proof still refuses on movement."""
+        c = Cluster()
+        c.patch(lambda s: s.update(proxy_forbidden=True))
+        rc, out = c.run(extra=["--gates-only"])
+        self.assertEqual(rc, 0, out)
+        self.assertIn("pod proxy not permitted", out)
+        self.assertIn("uid=uid-1 restarts=0 ready=true", out)
+        self.assertIn("G7 ok", out)
+        self.assertEqual(c.deletes(), [])
+        self.refused(lambda s: (s.update(proxy_forbidden=True), s["pods"]["items"][0]["status"]["containerStatuses"][0].update(ready=False)), "G3")
+        self.refused(lambda s: s.update(proxy_forbidden=True), "16:05", now="3 1602 2026-10-21 16:02:00 EDT")   # inside the 5 minute margin after the close
+        self.refused(lambda s: (s.update(proxy_forbidden=True), s["pods"]["items"][0]["metadata"].update(uid="")), "single market-structure")   # an identity without a UID proves nothing
+        self.refused(lambda s: s.update(service_state="forbidden pods/proxy"), "G3")                          # a workload body that merely says "forbidden" never selects the fallback
+        self.refused(lambda s: (s.update(proxy_forbidden=True), s.update(bars_moves_per_read=1)), "G7")   # the end-offset proof still refuses on movement
 
     def test_g4_a_second_market_structure_pod_or_a_foreign_digest_refuses(self):
         def other_digest(s):
