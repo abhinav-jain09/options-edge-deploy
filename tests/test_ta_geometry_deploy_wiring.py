@@ -91,11 +91,13 @@ class FlagsAreLiterallyFalse(unittest.TestCase):
                 for e in doc["spec"]["template"]["spec"]["containers"][0].get("env", []):
                     if e["name"] in self.EXPECTED:
                         rendered[(doc["metadata"]["name"], e["name"])] = e.get("value")
-        for dep, rel in (("market-structure-service", "k8s/services/market-structure/overlays/production/manifest.yaml"),
-                         ("feed-gateway-service", "k8s/services/feed-gateway/overlays/production/manifest.yaml")):
-            for name in self.EXPECTED:
-                if (dep, name) in rendered:
-                    self.assertEqual(env_values(ROOT / rel, name), [rendered[(dep, name)]], f"{rel}: {name}")
+        want_keys = {("market-structure-service", "MARKET_STRUCTURE_TOOLS_ENABLED"), ("market-structure-service", "MARKET_STRUCTURE_GEOMETRY_ENABLED"),
+                     ("feed-gateway-service", "GATEWAY_STRUCTURE_TOOLS_ENABLED"), ("feed-gateway-service", "GATEWAY_GEOMETRY_ENABLED"),
+                     ("feed-gateway-service", "GATEWAY_TRADE_TOOLS_ENABLED"), ("feed-gateway-service", "GATEWAY_WAVE_CYCLE_ENABLED")}
+        self.assertEqual(set(rendered), want_keys)
+        for dep, name in sorted(want_keys):
+            rel = "k8s/services/market-structure/overlays/production/manifest.yaml" if dep == "market-structure-service" else "k8s/services/feed-gateway/overlays/production/manifest.yaml"
+            self.assertEqual(env_values(ROOT / rel, name), [rendered[(dep, name)]], f"{rel}: {name}")
         self.assertEqual(rendered[("market-structure-service", "MARKET_STRUCTURE_TOOLS_ENABLED")], "true")
         self.assertEqual(rendered[("market-structure-service", "MARKET_STRUCTURE_GEOMETRY_ENABLED")], "false")
 
