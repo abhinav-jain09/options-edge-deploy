@@ -219,7 +219,7 @@ gate_session_ended() { # G3
       if rbac_denied "$body"; then
         # Production deployer SA cannot get pods/proxy. Equivalent proof from the pod status alone: MarketStructureRunner.readyAt() returns true only when the state is LIVE or
         # SESSION_ENDED, the pod's trade date is today, and - once now is STRICTLY past the schedule's RTH close - only when the sequencer has ended the session. The fallback is used only
-        # from 16:05 ET on a weekday (a 5 minute margin over the 16:00 close; weekends and other trade dates are not Ready, so they fail closed here).
+        # from 16:05 ET on a weekday (a 5 minute margin over the 16:00 close; the readiness probe is periodSeconds=10 x failureThreshold=3, so a stale Ready is at most ~30 s old, and G7 then re-reads ready=true after the full 180 s observation, so the Ready it relies on was evaluated well after the close; weekends and other trade dates are not Ready, so they fail closed here).
         past_close_margin || { echo "FATAL (G3): the pod proxy is not permitted and it is not yet 16:05 ET on a weekday, so SESSION_ENDED cannot be proven from the pod status. Nothing was changed." >&2; return 1; }
         ident="$(pod_identity)" || return 1
         case "$ident" in
