@@ -14,8 +14,12 @@
 #   run every shell check under `set -euo pipefail` and treat a non-zero exit of kubectl/kcat/curl as a failed check.
 #   1 before the producer run, from the pinned healthy gateway pod (record its UID): capture the layer topic's partition->end-offset vector (these topics are
 #     exact 1-partition topics, so the vector is one entry; a different partition count, a leadership change or an end offset that went DOWN is an anomaly = abort) and the gateway counters.
-#   2 run the producer deployment; the deadline starts at the new pod's state.running.startedAt (10 minutes).
-#   3 correlation: the only producer that can write these topics is the single transactional id market-structure-service-production (Kafka cannot be written by this id from two pods;
+#   2 run the producer deployment under a hard 15-minute bound from the moment the run is triggered (the Jenkins run's own rollout/health gate plus this bound; a stalled rollout past it is ABORT-AND-ROLLBACK),
+#     and only AFTER the previous producer pod is gone (kubectl get pod shows no old pod: the Deployment is Recreate, so the old pod terminates before the new one starts, and the baseline is re-read once the new
+#     pod is Running); the 10-minute observation deadline starts at the new pod's state.running.startedAt.
+#   3 metrics: the gateway exposes one counter family PER LAYER on its single /metrics endpoint (http://192.168.100.252:8091/metrics: gateway_<layer>_accepted_total / _drops_total / _regressions_total,
+#     one series each, no labels); a pod restart resets them, which the UID pin detects. Log health uses the patterns ' ERROR ', ' FATAL ', 'Exception' and the pod's readiness together.
+#     Kafka leadership is sampled with `kcat -L -t <topic>`; any leader change during the window restarts the window once, a second change aborts. correlation: the only producer that can write these topics is the single transactional id market-structure-service-production (Kafka cannot be written by this id from two pods;
 #     the Deployment is Recreate, one replica); a record at offset >= the baseline whose decoded sessionDate/scheduleId is today's schedule and whose key is that schedule's key is this rollout's
 #     emission; the gateway counter must rise between the step-1 read and a final read taken from the SAME gateway pod UID.
 #   4 rollback assertion: after the layer is disabled and redeployed, the layer topic's end offset stays flat for a further 10 minutes and the gateway counter does not rise.
