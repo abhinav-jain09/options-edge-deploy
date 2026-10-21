@@ -166,21 +166,62 @@ class FlagsAreExplicitlyOff(unittest.TestCase):
                 want = "true" if rel in self.DEV_ON else "false"
                 self.assertEqual([v.strip("\"'") for v in found], [want], f"{rel}: {name}")
 
-    def test_the_dev_enable_patch_sets_only_the_producer_flag_on_the_indicator_service_container(self):
-        text = (ROOT / "k8s/overlays/dev/indicator-studies-dev-enable-patch.yaml").read_text()
-        self.assertIn("name: indicator-service\n          env:\n            - { name: INDICATOR_STUDIES_ENABLED, value: \"true\" }", text)
-        self.assertNotIn("indicator-estimate", text.split("containers:")[1])
-        self.assertIn("indicator-studies-dev-enable-patch.yaml", (ROOT / "k8s/overlays/dev/kustomization.yaml").read_text())
-        self.assertNotIn("indicator-studies", (ROOT / "k8s/overlays/production/kustomization.yaml").read_text())
+    @staticmethod
+    def rendered_flags(overlay: str) -> dict:
+        """kustomize-render an overlay and return {(deployment, container, flag): value} for the two study flags, structurally."""
+        import yaml
+        out = subprocess.run(["kubectl", "kustomize", str(ROOT / "k8s/overlays" / overlay)], capture_output=True, text=True, check=True).stdout
+        found = {}
+        for doc in yaml.safe_load_all(out):
+            if not isinstance(doc, dict) or doc.get("kind") != "Deployment":
+                continue
+            for c in doc["spec"]["template"]["spec"].get("containers", []):
+                for e in c.get("env", []) or []:
+                    if e.get("name") in ("INDICATOR_STUDIES_ENABLED", "GATEWAY_STUDIES_ENABLED"):
+                        found.setdefault((doc["metadata"]["name"], c["name"], e["name"]), []).append(str(e.get("value")))
+        return found
 
-    def test_production_experiment_and_base_never_enable_either_flag(self):
+    def test_the_dev_render_enables_exactly_the_producer_container_and_the_gateway(self):
+        self.assertEqual(self.rendered_flags("dev"), {
+            ("indicator-service", "indicator-service", "INDICATOR_STUDIES_ENABLED"): ["true"],
+            ("feed-gateway-service", "feed-gateway", "GATEWAY_STUDIES_ENABLED"): ["true"],
+        })
+
+    def test_the_production_render_carries_both_flags_and_both_are_false(self):
+        self.assertEqual(self.rendered_flags("production"), {
+            ("indicator-service", "indicator-service", "INDICATOR_STUDIES_ENABLED"): ["false"],
+            ("feed-gateway-service", "feed-gateway", "GATEWAY_STUDIES_ENABLED"): ["false"],
+        })
+
+    def test_the_dev_patch_is_referenced_by_the_dev_kustomization_only(self):
+        self.assertIn("\n  - path: indicator-studies-dev-enable-patch.yaml", (ROOT / "k8s/overlays/dev/kustomization.yaml").read_text())
+        for rel in ("k8s/overlays/production/kustomization.yaml", "k8s/overlays/experiment/kustomization.yaml"):
+            path = ROOT / rel
+            if path.exists():
+                self.assertNotIn("indicator-studies", path.read_text(), rel)
+
+    def test_every_non_dev_source_and_generated_manifest_has_the_flags_false_whatever_the_yaml_spelling(self):
+        import yaml
+        def walk(node, hits):
+            if isinstance(node, dict):
+                if node.get("name") in ("INDICATOR_STUDIES_ENABLED", "GATEWAY_STUDIES_ENABLED") and "value" in node:
+                    hits.append(str(node["value"]))
+                for v in node.values():
+                    walk(v, hits)
+            elif isinstance(node, list):
+                for v in node:
+                    walk(v, hits)
         for path in (ROOT / "k8s").rglob("*.yaml"):
             rel = str(path.relative_to(ROOT))
-            if "/dev/" in rel or rel in self.DEV_ON:
+            if rel in self.DEV_ON or rel == "k8s/overlays/dev/indicator-studies-dev-enable-patch.yaml":
                 continue
-            for name in self.EXPECTED:
-                for m in re.finditer(rf"name: {name}\n\s+value: (\S+)", path.read_text()):
-                    self.assertEqual(m.group(1).strip("\"'"), "false", f"{path}: {name}")
+            hits = []
+            try:
+                for doc in yaml.safe_load_all(path.read_text()):
+                    walk(doc, hits)
+            except yaml.YAMLError:
+                continue   # kustomization fragments that are not plain YAML documents carry no env entries
+            self.assertTrue(all(h == "false" for h in hits), f"{rel}: {hits}")
 
     def test_the_destructive_recreate_allow_list_does_not_name_a_study_topic(self):
         text = ENSURE.read_text()
