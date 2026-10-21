@@ -50,10 +50,19 @@ class FlagsAreLiterallyFalse(unittest.TestCase):
     DEV_GATEWAY_FILES = ["k8s/overlays/dev/feed-gateway-dev-env-patch.yaml", "k8s/services/feed-gateway/overlays/dev/manifest.yaml"]
     DEV_ON = ("GATEWAY_STRUCTURE_TOOLS_ENABLED", "GATEWAY_GEOMETRY_ENABLED", "GATEWAY_TRADE_TOOLS_ENABLED", "GATEWAY_WAVE_CYCLE_ENABLED")
 
+    # 2026-10-21 (owner: complete the production deployment, one layer at a time): PRODUCTION layer 2 = structure tools. Among the TA-books layer flags
+    # (the names in EXPECTED), only those named here are "true", and only in the named production files; the rest stay "false" everywhere.
+    PROD_ON = {
+        "GATEWAY_STRUCTURE_TOOLS_ENABLED": ("k8s/overlays/production/feed-gateway-prod-env-patch.yaml", "k8s/services/feed-gateway/overlays/production/manifest.yaml"),
+        "MARKET_STRUCTURE_TOOLS_ENABLED": ("k8s/overlays/production/market-structure-prod-env-patch.yaml", "k8s/services/market-structure/overlays/production/manifest.yaml"),
+    }
+
     def expected_value(self, rel, name):
+        if rel in self.PROD_ON.get(name, ()):
+            return "true"
         return "true" if name in self.DEV_ON and rel in self.DEV_GATEWAY_FILES else "false"
 
-    def test_each_expected_source_and_generated_manifest_carries_its_flag_as_false(self):
+    def test_each_expected_source_and_generated_manifest_carries_its_flag_with_the_expected_value(self):
         for name, paths in self.EXPECTED.items():
             for rel in (paths or self.GATEWAY_FILES):
                 self.assertEqual(env_values(ROOT / rel, name), [self.expected_value(rel, name)], f"{rel}: {name}")
@@ -64,10 +73,34 @@ class FlagsAreLiterallyFalse(unittest.TestCase):
                 for v in env_values(path, name):
                     self.assertEqual(v, self.expected_value(str(path.relative_to(ROOT)), name), f"{path}: {name}")
 
-    def test_production_keeps_all_four_gateway_flags_false(self):
+    def test_production_enables_only_the_structure_tools_layer(self):
         for rel in ("k8s/overlays/production/feed-gateway-prod-env-patch.yaml", "k8s/services/feed-gateway/overlays/production/manifest.yaml"):
             for name in self.DEV_ON:
-                self.assertEqual(env_values(ROOT / rel, name), ["false"], f"{rel}: {name}")
+                self.assertEqual(env_values(ROOT / rel, name), ["true" if name == "GATEWAY_STRUCTURE_TOOLS_ENABLED" else "false"], f"{rel}: {name}")
+        for rel in ("k8s/overlays/production/market-structure-prod-env-patch.yaml", "k8s/services/market-structure/overlays/production/manifest.yaml"):
+            self.assertEqual(env_values(ROOT / rel, "MARKET_STRUCTURE_TOOLS_ENABLED"), ["true"], rel)
+        self.assertEqual(env_values(ROOT / "k8s/services/market-structure/overlays/production/manifest.yaml", "MARKET_STRUCTURE_GEOMETRY_ENABLED"), ["false"])
+        self.assertEqual(env_values(ROOT / "k8s/services/market-structure/overlays/dev/manifest.yaml", "MARKET_STRUCTURE_TOOLS_ENABLED"), ["false"])
+
+    def test_the_committed_production_slices_equal_the_production_overlay_render_for_the_layer_flags(self):
+        """Source/generated consistency: kustomize-render the production overlay and compare the layer flags with the committed generated slices."""
+        out = subprocess.run(["kubectl", "kustomize", str(ROOT / "k8s/overlays/production")], capture_output=True, text=True, check=True, timeout=120).stdout
+        rendered = {}
+        for doc in yaml.safe_load_all(out):
+            if isinstance(doc, dict) and doc.get("kind") == "Deployment" and doc["metadata"]["name"] in ("market-structure-service", "feed-gateway-service"):
+                app = {"market-structure-service": "market-structure", "feed-gateway-service": "feed-gateway"}[doc["metadata"]["name"]]
+                for e in next(c for c in doc["spec"]["template"]["spec"]["containers"] if c["name"] == app).get("env", []):
+                    if e["name"] in self.EXPECTED:
+                        rendered[(doc["metadata"]["name"], e["name"])] = e.get("value")
+        want_keys = {("market-structure-service", "MARKET_STRUCTURE_TOOLS_ENABLED"), ("market-structure-service", "MARKET_STRUCTURE_GEOMETRY_ENABLED"),
+                     ("feed-gateway-service", "GATEWAY_STRUCTURE_TOOLS_ENABLED"), ("feed-gateway-service", "GATEWAY_GEOMETRY_ENABLED"),
+                     ("feed-gateway-service", "GATEWAY_TRADE_TOOLS_ENABLED"), ("feed-gateway-service", "GATEWAY_WAVE_CYCLE_ENABLED")}
+        self.assertEqual(set(rendered), want_keys)
+        for dep, name in sorted(want_keys):
+            rel = "k8s/services/market-structure/overlays/production/manifest.yaml" if dep == "market-structure-service" else "k8s/services/feed-gateway/overlays/production/manifest.yaml"
+            self.assertEqual(env_values(ROOT / rel, name), [rendered[(dep, name)]], f"{rel}: {name}")
+        self.assertEqual(rendered[("market-structure-service", "MARKET_STRUCTURE_TOOLS_ENABLED")], "true")
+        self.assertEqual(rendered[("market-structure-service", "MARKET_STRUCTURE_GEOMETRY_ENABLED")], "false")
 
     def test_the_w0_recovery_rollover_flag_is_never_committed(self):
         for path in (ROOT / "k8s").rglob("*.yaml"):
