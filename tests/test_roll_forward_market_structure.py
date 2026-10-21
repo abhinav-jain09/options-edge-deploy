@@ -164,6 +164,9 @@ class EveryGateRefusesBeforeTheFirstDelete(unittest.TestCase):
         self.assertIn("G4 ok", out)
         self.assertIn("G9 ok", out)
         self.refused(lambda s: s.update(cluster_pods_forbidden=True, namespaces=["options-edge", "bleedingoptions"], unreadable_namespaces=["bleedingoptions"]), "bleedingoptions")
+        # a tolerated (system) namespace failing for any reason other than kubectl's own Forbidden (outage, auth, timeout) fails closed
+        self.refused(lambda s: s.update(cluster_pods_forbidden=True, namespaces=["options-edge", "kube-system"], unreadable_namespaces=["kube-system"],
+                                        unreadable_message="Unable to connect to the server: net/http: TLS handshake timeout"), "non-authorization error")
         self.refused(lambda s: (s.update(cluster_pods_forbidden=True, namespaces=["options-edge"]), s["pods"]["items"][1]["status"]["containerStatuses"][0].update(imageID="x@sha256:" + "cd" * 32)), "G9")
         # a JSON-era market-structure pod in ANOTHER namespace is still seen
         def stray(s):

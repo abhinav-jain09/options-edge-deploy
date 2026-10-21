@@ -250,7 +250,12 @@ all_pods_json() {
       printf '%s\n' "$o" >>"$parts"
     else
       case "$ns" in
-        kube-system|kube-public|kube-node-lease|default) echo "note: namespace $ns is not readable by this service account (system namespace, tolerated)" >&2 ;;
+        kube-system|kube-public|kube-node-lease|default)
+          # tolerated ONLY for kubectl's own authorization failure of the pod list; an API outage, an authentication error or a timeout is not tolerated
+          case "$o" in
+            'Error from server (Forbidden): pods is forbidden: '*) echo "note: namespace $ns is not readable by this service account (system namespace, tolerated)" >&2 ;;
+            *) rm -f "$parts"; printf 'namespace %s failed with a non-authorization error: %s' "$ns" "$o"; return 1 ;;
+          esac ;;
         *) rm -f "$parts"; printf 'namespace %s is not readable: %s' "$ns" "$o"; return 1 ;;
       esac
     fi
