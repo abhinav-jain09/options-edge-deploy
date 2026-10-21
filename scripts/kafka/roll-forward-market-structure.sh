@@ -179,13 +179,16 @@ print("uid=%s restarts=%s ready=%s" % (p["metadata"].get("uid", ""), s[0].get("r
 ' || { echo "FATAL: pod $pod has no single market-structure container status" >&2; return 1; }
 }
 counters() { # the five producer counters of /metrics, sorted, or fails if any is missing
-  local m c out=""
+  local m c out="" ident
   m="$(pod_get /metrics)" || return 1
   if rbac_denied "$m"; then
       # No pod proxy for this service account: the quiescence proof rests on the END OFFSETS of the input and the five topics (offsets_snapshot, compared by the
       # caller; a producer that publishes moves them) plus the pod's identity: the same UID, the same restartCount, and ready=true at both reads.
-      pod_identity || return 1
-      return 0
+      ident="$(pod_identity)" || return 1
+      case "$ident" in
+        *ready=true*) printf '%s\n' "$ident"; return 0 ;;
+        *) echo "FATAL (G7): the pod proxy is not permitted and the market-structure container is not Ready ($ident); the quiescence proof requires ready=true at every read. Nothing was changed." >&2; return 1 ;;
+      esac
   fi
   for c in records_consumed_total projections_published_total sequence_published_total rejections_published_total pattern_sets_published_total; do
     v="$(printf '%s\n' "$m" | awk -v k="market_structure_$c" '$1 == k { print $2 }')"
