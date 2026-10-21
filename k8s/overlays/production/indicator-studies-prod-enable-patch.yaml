@@ -9,6 +9,9 @@
 # services and a check that the live pod environment reads false. The flag is read at start.
 # Enable order (operationally enforced: service-deploy rolls ONE service per Jenkins run, so the two applies are separate, ordered runs):
 # feed-gateway first (verify the pod's imageID and gateway_* metrics), indicator-service second (verify the pod and the studies topics).
+# Preflight (before the first run): feed-gateway and web run the studies-capable images; registry subjects 2501-2503 resolve; the two studies topics exist.
+# Abort criteria (either run): the deploy's health gate fails, the pod restarts, or its log shows a schema/serialization error - then roll the flag back FIRST.
+# Rollback order (reverse of enable): indicator-service (producer false) first, then feed-gateway (relay false); verify each live pod environment reads "false".
 apiVersion: apps/v1
 kind: Deployment
 metadata:
