@@ -235,7 +235,7 @@ gate_session_ended() { # G3
 # Kubernetes system namespace (kube-system, kube-public, kube-node-lease, default): tenant workloads there are impossible for this estate's images, and the broker-side
 # producer evidence of G6 (no other producer id wrote the five topics) is the cross-namespace guard that does not depend on pod visibility. Any other unreadable namespace fails closed.
 all_pods_json() {
-  local out nss ns o parts=""
+  local out nss ns o last parts=""
   if out="$("$KUBECTL" get pods -A -o json 2>&1)"; then printf '%s' "$out"; return 0; fi
   case "$out" in
     *'Error from server (Forbidden): pods is forbidden: '*'at the cluster scope'*) ;;
@@ -252,8 +252,12 @@ all_pods_json() {
       case "$ns" in
         kube-system|kube-public|kube-node-lease|default)
           # tolerated ONLY for kubectl's own authorization failure of the pod list; an API outage, an authentication error or a timeout is not tolerated
-          case "$o" in
-            'Error from server (Forbidden): pods is forbidden: '*) echo "note: namespace $ns is not readable by this service account (system namespace, tolerated)" >&2 ;;
+          # kubectl prints an EMPTY List on stdout and its authorization error as the LAST line on stderr; both must be present
+          last="${o##*$'\n'}"
+          case "$last" in
+            'Error from server (Forbidden): pods is forbidden: '*)
+              printf '%s' "$o" | tr -d ' \n' | grep -q '"items":\[\]' || { rm -f "$parts"; printf 'namespace %s answered Forbidden but with a non-empty list: %s' "$ns" "$o"; return 1; }
+              echo "note: namespace $ns is not readable by this service account (system namespace, tolerated)" >&2 ;;
             *) rm -f "$parts"; printf 'namespace %s failed with a non-authorization error: %s' "$ns" "$o"; return 1 ;;
           esac ;;
         *) rm -f "$parts"; printf 'namespace %s is not readable: %s' "$ns" "$o"; return 1 ;;
