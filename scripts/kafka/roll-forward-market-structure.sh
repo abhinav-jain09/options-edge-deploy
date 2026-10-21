@@ -176,14 +176,14 @@ gate_session_ended() { # G3
     *) echo "FATAL (G3): the service does not report SESSION_ENDED: $body. Nothing was changed." >&2; return 1 ;;
   esac
 }
-gate_images() { # G4 (market-structure: exactly one Running) and G9 (feed-gateway: at least one Running); $1 = gate, $2 = image name, $3 = digest, $4 = min Running, $5 = max Running, $6 = "ready" to count only pods whose matching REGULAR container is ready
+gate_images() { # G4 (market-structure: exactly one Running) and G9 (feed-gateway: at least one Running); $1 = gate, $2 = image name, $3 = digest, $4 = min Running, $5 = max Running (-1 = no maximum), $6 = "ready" to also require that many pods whose matching REGULAR container is ready
   local pods
   pods="$("$KUBECTL" get pods -A -o json 2>&1)" || { echo "FATAL (G4): cannot list pods cluster-wide: $pods" >&2; return 1; }
   printf '%s' "$pods" | python3 -I -c '
 import json, sys
 gate, image, want, lo, hi, need_ready = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4]), int(sys.argv[5]), sys.argv[6] == "ready"
 items = json.load(sys.stdin).get("items", [])
-seen, running_pods = [], set()
+seen, running_pods, ready_pods = [], set(), set()
 for p in items:
     ns, name, phase = p["metadata"].get("namespace"), p["metadata"]["name"], p.get("status", {}).get("phase")
     for c in (p["spec"].get("containers") or []) + (p["spec"].get("initContainers") or []):
@@ -193,13 +193,13 @@ for p in items:
         seen.append((ns, name, phase, c["image"], ids))
         if phase == "Running" and ns == "options-edge":
             regular = [s for s in (p.get("status", {}).get("containerStatuses") or []) if s.get("name") == c["name"]]
-            # a pod, however many matching containers it has; for a SERVING check the matching regular container itself must be ready
-            if not need_ready or (c in (p["spec"].get("containers") or []) and regular and all(s.get("ready") for s in regular)):
-                running_pods.add(name)
+            running_pods.add(name)   # a pod, however many matching containers it has
+            if c in (p["spec"].get("containers") or []) and regular and all(s.get("ready") for s in regular):
+                ready_pods.add(name)   # its matching REGULAR container (not an init container) is ready
 running = len(running_pods)
 bad = [s for s in seen if not s[4] or any(not i.endswith(want) for i in s[4])]
-if not seen or bad or not lo <= running <= hi:
-    print("FATAL (%s): the pods of image %s are not all at %s with %d..%d Running in options-edge: seen=%r bad=%r running=%d" % (gate, image, want, lo, hi, seen, bad, running), file=sys.stderr)
+if not seen or bad or running < lo or (hi >= 0 and running > hi) or (need_ready and len(ready_pods) < lo):
+    print("FATAL (%s): the pods of image %s are not all at %s with %d..%d Running (%d ready) in options-edge: seen=%r bad=%r running=%d" % (gate, image, want, lo, hi, len(ready_pods), seen, bad, running), file=sys.stderr)
     sys.exit(1)
 print("%s ok: %d %s pod(s) on the cluster, %d Running in options-edge, all at %s" % (gate, len(seen), image, running, want))
 ' "$1" "$2" "$3" "$4" "$5" "${6:-any}"
@@ -259,7 +259,7 @@ if [ "$PHASE" = "--recreate" ]; then
   gate_clock
   gate_session_ended
   gate_images G4 options-edge-market-structure "$DIGEST" 1 1
-  gate_images G9 options-edge-feed-gateway "$GW_DIGEST" 1 99 ready
+  gate_images G9 options-edge-feed-gateway "$GW_DIGEST" 1 -1 ready
   echo "G5 ok: --producers-attested (the owner's verified maintenance stop, runbook 4(i))"
   gate_producers
   QUIET_SNAPSHOT=""
@@ -283,7 +283,7 @@ if [ "$PHASE" = "--recreate" ]; then
   echo "G8 ok: every topic carries the id the operator read off the live broker (or the id of this run's earlier attempt)"
   # the image gates are time-of-check: the quiescence wait above took minutes, so they are judged AGAIN immediately before the first delete
   gate_images G4 options-edge-market-structure "$DIGEST" 1 1
-  gate_images G9 options-edge-feed-gateway "$GW_DIGEST" 1 99 ready
+  gate_images G9 options-edge-feed-gateway "$GW_DIGEST" 1 -1 ready
   if [ "$GATES_ONLY" = yes ]; then
     echo "--gates-only: every gate G1-G9 passed; nothing was deleted or created"
     exit 0
