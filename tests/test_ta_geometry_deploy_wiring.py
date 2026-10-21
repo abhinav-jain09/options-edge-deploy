@@ -62,7 +62,7 @@ class FlagsAreLiterallyFalse(unittest.TestCase):
             return "true"
         return "true" if name in self.DEV_ON and rel in self.DEV_GATEWAY_FILES else "false"
 
-    def test_each_expected_source_and_generated_manifest_carries_its_flag_as_false(self):
+    def test_each_expected_source_and_generated_manifest_carries_its_flag_with_the_expected_value(self):
         for name, paths in self.EXPECTED.items():
             for rel in (paths or self.GATEWAY_FILES):
                 self.assertEqual(env_values(ROOT / rel, name), [self.expected_value(rel, name)], f"{rel}: {name}")
@@ -88,7 +88,8 @@ class FlagsAreLiterallyFalse(unittest.TestCase):
         rendered = {}
         for doc in yaml.safe_load_all(out):
             if isinstance(doc, dict) and doc.get("kind") == "Deployment" and doc["metadata"]["name"] in ("market-structure-service", "feed-gateway-service"):
-                for e in doc["spec"]["template"]["spec"]["containers"][0].get("env", []):
+                app = {"market-structure-service": "market-structure", "feed-gateway-service": "feed-gateway"}[doc["metadata"]["name"]]
+                for e in next(c for c in doc["spec"]["template"]["spec"]["containers"] if c["name"] == app).get("env", []):
                     if e["name"] in self.EXPECTED:
                         rendered[(doc["metadata"]["name"], e["name"])] = e.get("value")
         want_keys = {("market-structure-service", "MARKET_STRUCTURE_TOOLS_ENABLED"), ("market-structure-service", "MARKET_STRUCTURE_GEOMETRY_ENABLED"),
