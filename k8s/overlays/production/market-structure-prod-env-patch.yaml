@@ -22,6 +22,12 @@
 #     Kafka leadership is sampled with `kcat -L -t <topic>`; any leader change during the window restarts the window once, a second change aborts. correlation: the only producer that can write these topics is the single transactional id market-structure-service-production (Kafka cannot be written by this id from two pods;
 #     the Deployment is Recreate, one replica); a record at offset >= the baseline whose decoded sessionDate/scheduleId is today's schedule and whose key is that schedule's key is this rollout's
 #     emission; the gateway counter must rise between the step-1 read and a final read taken from the SAME gateway pod UID.
+#   5 definitions that close the protocol: (a) the 15-minute bound is enforced by the operator: if the run has not finished with a passed health gate 15 minutes after its trigger the operator stops the Jenkins run and
+#     starts the rollback (the Deployment's progressDeadlineSeconds is 1200 s and the job's own rollout timeout is 600 s, so the tooling also fails the run). (b) QUALIFYING BASELINE = B1, the end offset read after the new pod is
+#     Running (the B0 read before the run is only the anomaly reference for "offset went down"); only a record at offset >= B1 counts. (c) a counter that DECREASES between two reads, or a gateway pod UID/restartCount change,
+#     voids the window. (d) on a leadership change ALL baselines are reacquired (offsets, counters, gateway UID/restartCount, deadline). (e) log health = zero matches of ' ERROR ', ' FATAL ' and 'Exception' in
+#     `kubectl logs --since=10m` of the new pod's market-structure container, and readiness 1/1. (f) "old pod gone" = the previous pod UID is absent from `kubectl get pod` and the Deployment's observedGeneration equals its
+#     generation; the new pod is identified by UID. (g) tools has the same proof-of-production rule: records at offset >= B1 on its topic decoding as id 2211 and gateway_structure_tools_accepted_total rising.
 #   4 rollback assertion: after the layer is disabled and redeployed, the layer topic's end offset stays flat for a further 10 minutes and the gateway counter does not rise.
 # MIRRORS k8s/services/market-structure/overlays/production — the slice generator renders it from here.
 apiVersion: apps/v1
