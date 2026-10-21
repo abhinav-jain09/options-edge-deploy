@@ -225,7 +225,7 @@ class FlagsAreExplicitlyOff(unittest.TestCase):
     def test_every_other_manifest_has_the_flags_false_and_an_unparseable_file_naming_a_flag_fails(self):
         import yaml
         allowed = set(self.DEV_ON) | {"k8s/overlays/dev/indicator-studies-dev-enable-patch.yaml"}
-        for path in (ROOT / "k8s").rglob("*.yaml"):
+        for path in sorted(p for p in (ROOT / "k8s").rglob("*") if p.is_file() and p.suffix in (".yaml", ".yml")):
             rel = str(path.relative_to(ROOT))
             if rel in allowed:
                 continue
