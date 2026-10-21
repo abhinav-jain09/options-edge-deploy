@@ -69,7 +69,7 @@ mirror_units:
         assert: { target: {parts: 1, not_compacted: true} }
       - name: es.options.indicators.signals.events
         assert: { target: {parts: 1, not_compacted: true} }
-      # STUDIES_V1 (Phase A): the same arms as bars / signals.current; plain delete on every mirror target.
+      # STUDIES_V1 (INDICATOR-STUDIES): the same arms as bars / signals.current; plain delete on every mirror target.
       - name: es.options.indicators.studies.bars
         assert: { target: {parts: 8, not_compacted: true} }
       - name: es.options.indicators.studies.current

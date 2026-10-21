@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ensure-wave-cycle-topics.sh — wave-cycle-service's three Avro topics must EXIST with their declared shape BEFORE the service is scaled up
-# (the same first-deploy barrier as ensure-market-structure-topics.sh; PHASE-E E-R9.2).
+# (the same first-deploy barrier as ensure-market-structure-topics.sh; ELLIOTT-FIB-CYCLE-TOOLS E-R9.2).
 #
 #   options.spx.wave-cycle.waves     1 partition, delete, retention.ms >= 172800000 (WaveSet, key <symbol>|<timeframe>)
 #   options.spx.wave-cycle.cycles    1 partition, delete, retention.ms >= 172800000 (CycleSet, same key)

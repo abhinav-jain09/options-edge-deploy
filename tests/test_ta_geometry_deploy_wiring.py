@@ -1,4 +1,4 @@
-"""Deploy wiring for the TA-books phases B, C, D, E and W0 (the Phase A precedent is tests/test_indicator_studies_topics.py): every producer and gateway
+"""Deploy wiring for the TA-books documents CHART-STRUCTURE-TOOLS, CLASSICAL-CHART-PATTERNS, TICK-TRADE-TOOLS, ELLIOTT-FIB-CYCLE-TOOLS and the market-structure Avro cutover (W0) (the INDICATOR-STUDIES precedent is tests/test_indicator_studies_topics.py): every producer and gateway
 flag is the literal "false" in every source and every GENERATED manifest, the two new services are registered everywhere a service must be (the five image
 lists, the Jenkins choices, the overlays, image-tags, the three lifecycle hold lists) and are HELD at replicas 0, the W0 rollover flag is never committed,
 the new topics are declared, and the destructive Jenkins stage keeps its gates."""

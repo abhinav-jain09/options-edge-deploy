@@ -20,7 +20,7 @@ MAPS = ROOT / "scripts/kafka/schema-id-maps"
 SERVICES = ("market-structure", "es-trade-tools", "wave-cycle")
 
 
-# The contracts release's table (ta-books-catalog/08_SCHEMA_ID_MAP.md, contracts 0.31.0, com.optionsedge.contracts.ta.TaSchemas.SUBJECTS), row by row.
+# The contracts release's table (options-edge-processing docs/ta-books/catalog/SCHEMA-ID-MAP.md, contracts 0.31.0, com.optionsedge.contracts.ta.TaSchemas.SUBJECTS), row by row.
 CONTRACTS_TABLE = [
     ("com.optionsedge.contracts.marketstructure.ui.UiProjection", 2201),
     ("com.optionsedge.contracts.marketstructure.ui.UiUnavailable", 2202),

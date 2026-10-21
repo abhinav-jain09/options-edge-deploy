@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ensure-indicator-schemas.sh — the indicator family's ten Avro schemas (seven + the Phase A studies' 2501-2503, contracts 0.30.1) exist on ONE Schema Registry under
+# ensure-indicator-schemas.sh — the indicator family's ten Avro schemas (seven + the INDICATOR-STUDIES studies' 2501-2503, contracts 0.30.1) exist on ONE Schema Registry under
 # their FIXED ids (INDICATOR-AVRO-CONVERSION-PLAN.md section 4), subject compatibility FULL, idempotently.
 #
 # WHY FIXED IDS: the es4 → dev/prod mirrors copy bytes, and a Confluent-framed Avro value names its schema

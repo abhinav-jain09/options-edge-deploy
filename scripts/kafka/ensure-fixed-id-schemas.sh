@@ -7,7 +7,7 @@
 # WHY FIXED IDS: a Confluent-framed Avro value names its schema by REGISTRY ID, and registries assign ids independently, so any
 # record that is mirrored or replayed across registries would resolve to a foreign schema. Subject-level IMPORT mode lets a schema
 # be registered under the id of our choosing; the id is then identical everywhere (INDICATOR-AVRO-CONVERSION-PLAN.md section 4; the
-# W0 runbook, docs/ta-books/W0-MARKET-STRUCTURE-AVRO-CUTOVER.md section 2, states the same rule for the market-structure subjects).
+# W0 runbook, docs/ta-books/MARKET-STRUCTURE-AVRO-CUTOVER.md section 2, states the same rule for the market-structure subjects).
 #
 # Inputs (environment):
 #   SCHEMA_REGISTRY_URL   the registry to reconcile (plain HTTP on the LAN; no credentials are configured)

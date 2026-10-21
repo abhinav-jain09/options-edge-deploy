@@ -1,4 +1,4 @@
-"""STUDIES_V1 deploy wiring (Phase A, PHASE-A-INDICATORS-REQUIREMENT.md A-R10.1/A-R10.4/A-R10.5, tracked item T-2): the two study
+"""STUDIES_V1 deploy wiring (INDICATOR-STUDIES, INDICATOR-STUDIES-REQUIREMENT.md A-R10.1/A-R10.4/A-R10.5, tracked item T-2): the two study
 topics are declared in the REAL topics.env with the producer's shapes, ensure-indicator-topics.sh creates and reconciles them,
 the es4 mirror allow-list carries the es.* pair, the schema scripts know ids 2501-2503, and the producer / gateway flags are
 explicitly false in every rendered manifest."""

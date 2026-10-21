@@ -85,8 +85,8 @@ pipeline {
     string(name: 'EARLY_AUCTION_VERDICT_IMAGE', defaultValue: '', description: 'early-auction-verdict service image (shadow, HELD at replicas 0)')
     string(name: 'BREAK_SCORE_IMAGE', defaultValue: '', description: 'break-score service image (dev+prod SHADOW, deployed held at replicas 0)')
     string(name: 'LEVEL_ABSORPTION_IMAGE', defaultValue: '', description: 'level-absorption service image (dev+prod EYEBALL phase, deployed held at replicas 0)')
-    string(name: 'ES_TRADE_TOOLS_IMAGE', defaultValue: '', description: 'es-trade-tools service image (Phase D, dev+prod, deployed held at replicas 0, every flag false)')
-    string(name: 'WAVE_CYCLE_IMAGE', defaultValue: '', description: 'wave-cycle service image (Phase E, dev+prod, deployed held at replicas 0, both publish flags false)')
+    string(name: 'ES_TRADE_TOOLS_IMAGE', defaultValue: '', description: 'es-trade-tools service image (TICK-TRADE-TOOLS, dev+prod, deployed held at replicas 0, every flag false)')
+    string(name: 'WAVE_CYCLE_IMAGE', defaultValue: '', description: 'wave-cycle service image (ELLIOTT-FIB-CYCLE-TOOLS, dev+prod, deployed held at replicas 0, both publish flags false)')
     string(name: 'SIGNAL_FOLLOWER_IMAGE', defaultValue: '', description: 'signal-follower image (dev+prod)')
     string(name: 'CONTEXT_TAPE_IMAGE', defaultValue: '', description: 'context-tape service image (dev+prod)')
     string(name: 'MULTILEG_STRUCTURE_IMAGE', defaultValue: '', description: 'multileg-structure service image (dev+prod)')
@@ -495,7 +495,7 @@ pipeline {
             // break-score + level-absorption: dev+prod standalone, held at replicas 0 (the image is still built and pinned).
             'BREAK_SCORE_IMAGE': 'break-score',
             'LEVEL_ABSORPTION_IMAGE': 'level-absorption',
-            // es-trade-tools (Phase D) + wave-cycle (Phase E): dev+prod standalone, held at replicas 0 (the image is still built and pinned).
+            // es-trade-tools (TICK-TRADE-TOOLS) + wave-cycle (ELLIOTT-FIB-CYCLE-TOOLS): dev+prod standalone, held at replicas 0 (the image is still built and pinned).
             'ES_TRADE_TOOLS_IMAGE': 'es-trade-tools',
             'WAVE_CYCLE_IMAGE': 'wave-cycle',
             // signal-follower: same dev+prod standalone pattern as short-premium-agent.

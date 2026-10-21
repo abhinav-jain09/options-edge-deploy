@@ -18,8 +18,8 @@
 #   options.spx.market-structure.dlq       1 partition, delete, retention.ms=604800000 (1 week)
 #   options.spx.market-structure.recovery  1 partition, compact, retention.ms=-1 (checkpoint state)
 #   options.spx.market-structure.patterns  1 partition, delete, retention.ms=172800000 (flag-gated output, ensured always)
-#   options.spx.market-structure.tools     1 partition, delete, retention.ms=172800000 (Phase B StructureToolsSet, Avro, B-R10.1)
-#   options.spx.market-structure.geometry  1 partition, delete, retention.ms=172800000 (Phase C GeometryAnnotationSet, Avro, C-R17.1)
+#   options.spx.market-structure.tools     1 partition, delete, retention.ms=172800000 (CHART-STRUCTURE-TOOLS StructureToolsSet, Avro, B-R10.1)
+#   options.spx.market-structure.geometry  1 partition, delete, retention.ms=172800000 (CLASSICAL-CHART-PATTERNS GeometryAnnotationSet, Avro, C-R17.1)
 # All values are Avro (Kafka Serialization Rule): the topics are created EMPTY here and the producer writes Avro from its first byte.
 #
 # CREATE if absent, then VERIFY every topic — including one just created — and fail closed. Never alters an
@@ -33,7 +33,7 @@ DLQ_TOPIC="${KAFKA_MARKET_STRUCTURE_DLQ_TOPIC:-options.spx.market-structure.dlq}
 RECOVERY_TOPIC="${KAFKA_MARKET_STRUCTURE_RECOVERY_TOPIC:-options.spx.market-structure.recovery}"
 # Candlestick pattern annotations (flag-gated output; ensured unconditionally so the flag is a one-variable change).
 PATTERNS_TOPIC="${KAFKA_MARKET_STRUCTURE_PATTERNS_TOPIC:-options.spx.market-structure.patterns}"
-# Phase B structure tools (MARKET_STRUCTURE_TOOLS_ENABLED) and Phase C geometry (MARKET_STRUCTURE_GEOMETRY_ENABLED): both Avro, flag-gated
+# CHART-STRUCTURE-TOOLS structure tools (MARKET_STRUCTURE_TOOLS_ENABLED) and CLASSICAL-CHART-PATTERNS geometry (MARKET_STRUCTURE_GEOMETRY_ENABLED): both Avro, flag-gated
 # outputs; the service verifies each only while its flag is on, but they are ensured unconditionally so a flag flip is a one-variable change.
 TOOLS_TOPIC="${KAFKA_MARKET_STRUCTURE_TOOLS_TOPIC:-options.spx.market-structure.tools}"
 GEOMETRY_TOPIC="${KAFKA_MARKET_STRUCTURE_GEOMETRY_TOPIC:-options.spx.market-structure.geometry}"

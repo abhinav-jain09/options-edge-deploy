@@ -228,13 +228,13 @@ services:
   # linearized ES tape, es.futures.footprint.bars, es.futures.auction and the manual-line topic; publishes futures.level-absorption.{events,
   # voice,closures}. Same hold-down paths as break-score. scripts/kafka/ensure-level-absorption-topics.sh is the first-deploy barrier.
   - { name: level-absorption,             managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-level-absorption,             deployments: [level-absorption-service] }
-  # es-trade-tools (Phase D, TA books): Point-and-Figure charts, volume nodes and flow bars from the linearized ES tape
+  # es-trade-tools (TICK-TRADE-TOOLS, TA books): Point-and-Figure charts, volume nodes and flow bars from the linearized ES tape
   # (underlying.es.trades.linearized), published as Avro on futures.pf.* / futures.volume-nodes / futures.flow.* / futures.tradetools.state.
   # DEPLOYED HELD AT replicas 0 on dev AND production with TT_ENABLED and all four family flags "false" (requirement D-R20.1: dev first, no
   # environment beyond dev before the calibration job). Held down by: replicas: 0 in the base, KEEP_DOWN in morning-autostart.sh +
   # oe-boot-bringup.sh, DISABLED_DEV in dev-cleanup.sh. scripts/kafka/ensure-es-trade-tools-topics.sh is the first-deploy barrier. No Service object.
   - { name: es-trade-tools,               managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-es-trade-tools,               deployments: [es-trade-tools-service] }
-  # wave-cycle (Phase E, TA books): Elliott waves, Fibonacci time and cycles for SPX from options.indicators.bars, Avro on
+  # wave-cycle (ELLIOTT-FIB-CYCLE-TOOLS, TA books): Elliott waves, Fibonacci time and cycles for SPX from options.indicators.bars, Avro on
   # options.spx.wave-cycle.{waves,cycles,recovery}. DEPLOYED HELD AT replicas 0 on dev AND production with WAVE_CYCLE_ENABLED and
   # WAVE_CYCLE_SEASONALITY_ENABLED "false"; it needs its five Avro subjects registered even with the flags off. Same hold-down paths as
   # es-trade-tools. scripts/kafka/ensure-wave-cycle-topics.sh is the first-deploy barrier. No Service object.

@@ -1,4 +1,4 @@
-# Fixed schema ids for es-trade-tools-service (Phase D, 15 closed record types, D-R14.1). FINAL: ta-books-catalog/08_SCHEMA_ID_MAP.md (contracts 0.31.0).
+# Fixed schema ids for es-trade-tools-service (TICK-TRADE-TOOLS, 15 closed record types, D-R14.1). FINAL: options-edge-processing docs/ta-books/catalog/SCHEMA-ID-MAP.md (contracts 0.31.0).
 # The service never registers (BrokerGuard.preflightRegistry uses getId) and refuses to start unless every subject below is registered with a schema equal
 # to its embedded copy, and TT_ENABLED=false builds nothing, so registration is needed before the FIRST enabled start, not before the held deploy.
 # File column: relative to the contracts checkout's `schemas-registry/ta` directory (SCHEMAS_DIR).

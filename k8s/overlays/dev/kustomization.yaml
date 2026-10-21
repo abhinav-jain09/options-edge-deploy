@@ -26,7 +26,7 @@ resources:
   # and retention artifact exist. The owner turns each on later (docs/break-score/DEPLOY-WIRING.md, docs/level-absorption/DEPLOY-WIRING.md).
   - ../../services/break-score/base
   - ../../services/level-absorption/base
-  # es-trade-tools (Phase D) + wave-cycle (Phase E): HELD AT replicas 0 (base) on dev and production alike, every flag false; the owner turns
+  # es-trade-tools (TICK-TRADE-TOOLS) + wave-cycle (ELLIOTT-FIB-CYCLE-TOOLS): HELD AT replicas 0 (base) on dev and production alike, every flag false; the owner turns
   # each on later (docs/ta-books/DEPLOY-ROLLOUT.md sections 4 and 5).
   - ../../services/es-trade-tools/base
   - ../../services/wave-cycle/base
@@ -376,7 +376,7 @@ patches:
   # DEV-ONLY: overnight ES-basis estimate bars — the indicator-estimate container and the Context Tape GLOBEX session +
   # estimate overlay (flags default off; production overlays untouched). See the two patch headers.
   - path: indicator-estimate-dev-patch.yaml
-  # DEV-ONLY: Phase A indicator studies ON for the indicator-service container (production overlays untouched).
+  # DEV-ONLY: INDICATOR-STUDIES indicator studies ON for the indicator-service container (production overlays untouched).
   - path: indicator-studies-dev-enable-patch.yaml
   - path: context-tape-estimate-bars-dev-patch.yaml
   # Dev gex settings. Created for the pre-open GEX pipeline, but that is NO LONGER what it does:

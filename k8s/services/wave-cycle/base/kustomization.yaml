@@ -1,4 +1,4 @@
-# SERVICE SLICE — wave-cycle (Phase E, TA books). Owns this service's Deployment only.
+# SERVICE SLICE — wave-cycle (ELLIOTT-FIB-CYCLE-TOOLS, TA books). Owns this service's Deployment only.
 #
 # Referenced from BOTH k8s/overlays/dev and k8s/overlays/production (NOT k8s/base), HELD AT replicas: 0 until the owner turns it on.
 # Single replica only. No Service object (the shadow-service pattern). No ConfigMap, Secret, PVC or hostPath: the checkpoint is a Kafka topic
