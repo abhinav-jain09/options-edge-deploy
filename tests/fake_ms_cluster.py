@@ -119,7 +119,7 @@ if name == "kubectl":
         path = argv[argv.index("--raw") + 1]
         if state.get("proxy_forbidden"):
             print('Error from server (Forbidden): pods "x:8080" is forbidden: User "system:serviceaccount:options-edge:jenkins-deployer" cannot get resource "pods/proxy" in API group "" in the namespace "options-edge"')
-            sys.exit(0)
+            sys.exit(1)
         if path.endswith("/health/ready"):
             print(json.dumps({"state": state["service_state"], "error": ""}, separators=(",", ":")))
         elif path.endswith("/metrics"):

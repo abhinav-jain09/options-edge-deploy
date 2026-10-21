@@ -148,6 +148,21 @@ pod_get() { # path -> body (a 503 body is data, not an error)
   local pod; pod="$(service_pod)" || return 1
   "$KUBECTL" get --raw "/api/v1/namespaces/$NS/pods/$pod:8080/proxy$1" 2>&1 || true
 }
+# rbac_denied: true only when the WHOLE body is kubectl's own authorization failure for the pod proxy (it starts with kubectl's "Error from server (Forbidden)" line and
+# names pods/proxy). A body produced by the workload (JSON from /health/ready, /metrics text) never begins that way, so a service response cannot select the fallback.
+rbac_denied() {
+  case "$1" in
+    "Error from server (Forbidden): "*pods/proxy*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+# past_close_margin: the fallback proof is only used from 16:05 ET on a weekday, so "now > rthCloseMs" (strict) holds with a 5 minute margin (G2 itself accepts 16:00:00).
+past_close_margin() {
+  local now dow hhmm
+  now="${MS_W0_NOW:-$(TZ=America/New_York date '+%u %H%M %Y-%m-%d %H:%M:%S %Z')}"
+  dow="${now%% *}"; hhmm="${now#* }"; hhmm="${hhmm%% *}"
+  (( 10#$dow >= 1 && 10#$dow <= 5 && 10#$hhmm >= 1605 ))
+}
 # pod_identity: "uid=<pod uid> restarts=<n> ready=<true|false>" of the market-structure container, read with `kubectl get pod` (a verb every deployer can use).
 # Used where the pod proxy (get pods/proxy) is not granted to the deployer service account (production): the production RBAC is NOT widened for this script.
 pod_identity() {
@@ -166,13 +181,12 @@ print("uid=%s restarts=%s ready=%s" % (p["metadata"].get("uid", ""), s[0].get("r
 counters() { # the five producer counters of /metrics, sorted, or fails if any is missing
   local m c out=""
   m="$(pod_get /metrics)" || return 1
-  case "$m" in
-    *[Ff]orbidden*)
+  if rbac_denied "$m"; then
       # No pod proxy for this service account: the quiescence proof rests on the END OFFSETS of the input and the five topics (offsets_snapshot, compared by the
       # caller; a producer that publishes moves them) plus the pod's identity: the same UID, the same restartCount, and ready=true at both reads.
       pod_identity || return 1
-      return 0 ;;
-  esac
+      return 0
+  fi
   for c in records_consumed_total projections_published_total sequence_published_total rejections_published_total pattern_sets_published_total; do
     v="$(printf '%s\n' "$m" | awk -v k="market_structure_$c" '$1 == k { print $2 }')"
     [[ "$v" =~ ^[0-9]+$ ]] || { echo "FATAL: /metrics has no numeric market_structure_$c (got '$v'); the quiescence proof is unreadable" >&2; return 1; }
@@ -195,16 +209,19 @@ gate_session_ended() { # G3
   local body ident; body="$(pod_get /health/ready)" || return 1
   case "$body" in
     *'"state":"SESSION_ENDED"'*) echo "G3 ok: the service reports SESSION_ENDED" ;;
-    *[Ff]orbidden*)
-      # Production deployer SA cannot get pods/proxy. Equivalent proof from the pod status alone: MarketStructureRunner.readyAt() returns true only when the state is LIVE or
-      # SESSION_ENDED, the pod's trade date is today, and - once now is past the schedule's RTH close - only when the sequencer has ended the session. G2 has already
-      # established that now is on a weekday at or after 16:00 ET (>= the 16:00 close; weekends and other trade dates are not ready, so they fail closed here).
-      ident="$(pod_identity)" || return 1
-      case "$ident" in
-        *ready=true*) echo "G3 ok (pod proxy not permitted; proven from the pod status: Ready after the 16:00 ET close implies SESSION_ENDED): $ident" ;;
-        *) echo "FATAL (G3): the pod proxy is not permitted and the market-structure container is not Ready ($ident), so SESSION_ENDED is not proven. Nothing was changed." >&2; return 1 ;;
-      esac ;;
-    *) echo "FATAL (G3): the service does not report SESSION_ENDED: $body. Nothing was changed." >&2; return 1 ;;
+    *)
+      if rbac_denied "$body"; then
+        # Production deployer SA cannot get pods/proxy. Equivalent proof from the pod status alone: MarketStructureRunner.readyAt() returns true only when the state is LIVE or
+        # SESSION_ENDED, the pod's trade date is today, and - once now is STRICTLY past the schedule's RTH close - only when the sequencer has ended the session. The fallback is used only
+        # from 16:05 ET on a weekday (a 5 minute margin over the 16:00 close; weekends and other trade dates are not Ready, so they fail closed here).
+        past_close_margin || { echo "FATAL (G3): the pod proxy is not permitted and it is not yet 16:05 ET on a weekday, so SESSION_ENDED cannot be proven from the pod status. Nothing was changed." >&2; return 1; }
+        ident="$(pod_identity)" || return 1
+        case "$ident" in
+          *ready=true*) echo "G3 ok (pod proxy not permitted; proven from the pod status: Ready after the 16:00 ET close implies SESSION_ENDED): $ident"; return 0 ;;
+          *) echo "FATAL (G3): the pod proxy is not permitted and the market-structure container is not Ready ($ident), so SESSION_ENDED is not proven. Nothing was changed." >&2; return 1 ;;
+        esac
+      fi
+      echo "FATAL (G3): the service does not report SESSION_ENDED: $body. Nothing was changed." >&2; return 1 ;;
   esac
 }
 gate_images() { # G4 (market-structure: exactly one Running) and G9 (feed-gateway: at least one Running); $1 = gate, $2 = image name, $3 = digest, $4 = min Running, $5 = max Running (-1 = no maximum), $6 = "ready" to also require that many pods whose matching REGULAR container is ready
