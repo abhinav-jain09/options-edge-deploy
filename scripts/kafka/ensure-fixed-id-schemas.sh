@@ -23,7 +23,7 @@
 # exit (an original override by PUT, an inherited mode by DELETE), then FULL read back. See ensure-indicator-schemas.sh for the long form.
 set -euo pipefail
 : "${SCHEMA_REGISTRY_URL:?SCHEMA_REGISTRY_URL unset — refusing to reconcile an unknown registry}"
-: "${SCHEMAS_DIR:?SCHEMAS_DIR unset — the contracts schemas directory the directory the map file column is relative to}"
+: "${SCHEMAS_DIR:?SCHEMAS_DIR unset — the directory the map file column is relative to (the contracts checkout schemas-registry/ta)}"
 : "${SCHEMA_ID_MAP:?SCHEMA_ID_MAP unset — the subject|id|file map file}"
 [ -f "$SCHEMA_ID_MAP" ] || { echo "FAIL: SCHEMA_ID_MAP $SCHEMA_ID_MAP is not a file"; exit 1; }
 DRY="${DEPLOY_DRY_RUN:-false}"
