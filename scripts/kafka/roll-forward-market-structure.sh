@@ -23,6 +23,8 @@
 #   G7 quiescence (4(b)): over QUIESCE seconds (default 180) the end offsets of options.indicators.bars (8 partitions) and of the five topics, and the five
 #      producer counters of /metrics, do not move.
 #   G8 each topic carries the id the operator read off the live broker (--pre-cutover-ids), twice (immediately before its delete).
+#   G9 (step 3, the gateway that decodes Avro): every pod on the cluster whose image is options-edge-feed-gateway carries --expect-gateway-digest and at least
+#      one of them is Running in options-edge: the wipe never starts while a gateway that cannot read the Avro the new image writes is the one serving.
 # AFTER the recreate: new id differs, shape equals the declaration, every end offset is 0, the bars did not move, ensure-market-structure-topics.sh passes,
 # and committed offsets of any group beyond the new log end are REPORTED (step 5 restarts the service and the gateway).
 #
@@ -32,7 +34,8 @@
 #
 # Usage:
 #   roll-forward-market-structure.sh --recreate|--verify --cluster dev|production --pre-cutover-ids ui=ID,sequence=ID,dlq=ID,patterns=ID,recovery=ID \
-#       [--expect-image-digest sha256:<64 hex> --producers-attested]   (both REQUIRED for --recreate) \
+#       [--expect-image-digest sha256:<64 hex> --expect-gateway-digest sha256:<64 hex> --producers-attested]   (all three REQUIRED for --recreate) \
+#       [--gates-only]   (a rehearsal for --recreate: evaluates every gate G1-G9, the quiescence proof and the topic ids, prints the result, deletes NOTHING) \
 #       [--topic-absent-after-failed-create]   (ONLY to finish a --recreate whose delete succeeded and whose create failed) \
 #       [--already-recreated name=NEWID,...]   (ONLY to resume a --recreate that stopped part-way: the topics an earlier attempt already recreated, with the
 #                                               NEW TOPIC ID it printed; each must still carry exactly that id, the declared shape and end offset 0) \
@@ -46,13 +49,15 @@ usage() {
 }
 PHASE="${1:-}"
 case "$PHASE" in --recreate|--verify) shift ;; *) usage ;; esac
-CLUSTER=""; PRE_IDS=""; DIGEST=""; ATTESTED=""; ABSENT_OK=""; RECREATED=""; POS=()
+CLUSTER=""; PRE_IDS=""; DIGEST=""; GW_DIGEST=""; ATTESTED=""; GATES_ONLY=""; ABSENT_OK=""; RECREATED=""; POS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --cluster) CLUSTER="${2:-}"; shift 2 ;;
     --pre-cutover-ids) PRE_IDS="${2:-}"; shift 2 ;;
     --expect-image-digest) DIGEST="${2:-}"; shift 2 ;;
+    --expect-gateway-digest) GW_DIGEST="${2:-}"; shift 2 ;;
     --producers-attested) ATTESTED=yes; shift ;;
+    --gates-only) GATES_ONLY=yes; shift ;;
     --topic-absent-after-failed-create) ABSENT_OK=yes; shift ;;
     --already-recreated) RECREATED="${2:-}"; shift 2 ;;
     *) POS+=("$1"); shift ;;
@@ -64,6 +69,7 @@ BS="${POS[0]:-}"; [ -n "$BS" ] || usage
 BIN="${POS[1]:-${KAFKA_BIN_DIR:-}}"
 if [ "$PHASE" = "--recreate" ]; then
   [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "FATAL: --recreate needs --expect-image-digest sha256:<64 hex> (G4); nothing was changed" >&2; exit 2; }
+  [[ "$GW_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "FATAL: --recreate needs --expect-gateway-digest sha256:<64 hex> (G9); nothing was changed" >&2; exit 2; }
   [ "$ATTESTED" = yes ] || { echo "FATAL: --recreate needs --producers-attested (G5): the verified maintenance stop of every host that can run a producer; nothing was changed" >&2; exit 2; }
 fi
 
@@ -169,29 +175,29 @@ gate_session_ended() { # G3
     *) echo "FATAL (G3): the service does not report SESSION_ENDED: $body. Nothing was changed." >&2; return 1 ;;
   esac
 }
-gate_images() { # G4
+gate_images() { # G4 (market-structure: exactly one Running) and G9 (feed-gateway: at least one Running); $1 = gate, $2 = image name, $3 = digest, $4 = min Running, $5 = max Running
   local pods
   pods="$("$KUBECTL" get pods -A -o json 2>&1)" || { echo "FATAL (G4): cannot list pods cluster-wide: $pods" >&2; return 1; }
   printf '%s' "$pods" | python3 -I -c '
 import json, sys
-want = sys.argv[1]
+gate, image, want, lo, hi = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4]), int(sys.argv[5])
 items = json.load(sys.stdin).get("items", [])
 seen, running = [], 0
 for p in items:
     ns, name, phase = p["metadata"].get("namespace"), p["metadata"]["name"], p.get("status", {}).get("phase")
     for c in (p["spec"].get("containers") or []) + (p["spec"].get("initContainers") or []):
-        if "options-edge-market-structure" not in (c.get("image") or ""):
+        if image not in (c.get("image") or ""):
             continue
         ids = [s.get("imageID", "") for s in (p.get("status", {}).get("containerStatuses") or []) + (p.get("status", {}).get("initContainerStatuses") or []) if s.get("name") == c["name"]]
         seen.append((ns, name, phase, c["image"], ids))
         if phase == "Running" and ns == "options-edge":
             running += 1
 bad = [s for s in seen if not s[4] or any(not i.endswith(want) for i in s[4])]
-if not seen or bad or running != 1:
-    print("FATAL (G4): the pods running the market-structure image are not exactly one Running pod at %s: seen=%r bad=%r running=%d" % (want, seen, bad, running), file=sys.stderr)
+if not seen or bad or not lo <= running <= hi:
+    print("FATAL (%s): the pods of image %s are not all at %s with %d..%d Running in options-edge: seen=%r bad=%r running=%d" % (gate, image, want, lo, hi, seen, bad, running), file=sys.stderr)
     sys.exit(1)
-print("G4 ok: %d market-structure pod(s) on the cluster, one Running, all at %s" % (len(seen), want))
-' "$DIGEST"
+print("%s ok: %d %s pod(s) on the cluster, %d Running in options-edge, all at %s" % (gate, len(seen), image, running, want))
+' "$1" "$2" "$3" "$4" "$5"
 }
 gate_producers() { # G6
   local KX now_ms recent own t out
@@ -247,7 +253,8 @@ if [ "$PHASE" = "--recreate" ]; then
   echo "=== W0 step 4: roll forward the market-structure topics on $BS (cluster $CLUSTER) ==="
   gate_clock
   gate_session_ended
-  gate_images
+  gate_images G4 options-edge-market-structure "$DIGEST" 1 1
+  gate_images G9 options-edge-feed-gateway "$GW_DIGEST" 1 99
   echo "G5 ok: --producers-attested (the owner's verified maintenance stop, runbook 4(i))"
   gate_producers
   QUIET_SNAPSHOT=""
@@ -269,6 +276,10 @@ if [ "$PHASE" = "--recreate" ]; then
     fi
   done <<<"$SPECS"
   echo "G8 ok: every topic carries the id the operator read off the live broker (or the id of this run's earlier attempt)"
+  if [ "$GATES_ONLY" = yes ]; then
+    echo "--gates-only: every gate G1-G9 passed; nothing was deleted or created"
+    exit 0
+  fi
   # the wipe, ONE TOPIC AT A TIME: a failure part-way leaves one topic absent, and the barrier names it. Re-runnable.
   while IFS='|' read -r name topic cfgs; do
     LIST="$(rf_list "$KT" "$BS")" || exit 1

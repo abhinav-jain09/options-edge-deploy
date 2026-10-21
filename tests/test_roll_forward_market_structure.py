@@ -19,6 +19,7 @@ P = "options.spx.market-structure."
 NAMES = {"ui": P + "ui", "sequence": P + "sequence", "dlq": P + "dlq", "patterns": P + "patterns", "recovery": P + "recovery"}
 UNTOUCHED = ["options.indicators.bars", P + "tools", P + "geometry"]
 DIGEST = "sha256:" + "ab" * 32
+GW_DIGEST = "sha256:" + "ef" * 32
 def tid(prefix: str) -> str:
     """A Kafka topic id is 22 base64url characters."""
     return (prefix + "x" * 22)[:22]
@@ -48,8 +49,11 @@ def initial_state() -> dict:
     pod = {"metadata": {"name": "market-structure-service-abc", "namespace": "options-edge"}, "status": {"phase": "Running",
            "containerStatuses": [{"name": "market-structure", "imageID": "192.168.100.252:5000/options-edge-market-structure@" + DIGEST}]},
            "spec": {"containers": [{"name": ready["name"], "image": ready["image"] + "@" + DIGEST}]}}
+    gateway = {"metadata": {"name": "feed-gateway-service-xyz", "namespace": "options-edge"}, "status": {"phase": "Running",
+               "containerStatuses": [{"name": "feed-gateway", "imageID": "192.168.100.252:5000/options-edge-feed-gateway@" + GW_DIGEST}]},
+               "spec": {"containers": [{"name": "feed-gateway", "image": "192.168.100.252:5000/options-edge-feed-gateway:prod@" + GW_DIGEST}]}}
     return {
-        "topics": topics, "service_state": "SESSION_ENDED", "running_pods": ["market-structure-service-abc"], "pods": {"items": [pod]},
+        "topics": topics, "service_state": "SESSION_ENDED", "running_pods": ["market-structure-service-abc"], "pods": {"items": [pod, gateway]},
         "metrics": {"records_consumed_total": 10, "projections_published_total": 20, "sequence_published_total": 30,
                     "rejections_published_total": 1, "pattern_sets_published_total": 40},
         "producers": {"own": 4001, "by_topic": {t: [[4001, NOW_MS - 60_000]] for t in NAMES.values()}}, "groups": [],
@@ -79,12 +83,14 @@ class Cluster:
         fn(s)
         self.state_path.write_text(json.dumps(s))
 
-    def run(self, phase="--recreate", cluster="dev", bs="localhost:19092", pre=None, digest=DIGEST, attested=True, extra=(), now=EVENING):
+    def run(self, phase="--recreate", cluster="dev", bs="localhost:19092", pre=None, digest=DIGEST, gateway_digest=GW_DIGEST, attested=True, extra=(), now=EVENING):
         pre = pre or ",".join(f"{n}={PRE[n]}" for n in NAMES)
         args = ["bash", str(SCRIPT), phase, "--cluster", cluster, "--pre-cutover-ids", pre]
         if phase == "--recreate":
             if digest:
                 args += ["--expect-image-digest", digest]
+            if gateway_digest:
+                args += ["--expect-gateway-digest", gateway_digest]
             if attested:
                 args += ["--producers-attested"]
         args += list(extra) + [bs, str(self.bin)]
@@ -148,6 +154,25 @@ class EveryGateRefusesBeforeTheFirstDelete(unittest.TestCase):
     def test_g2_inside_the_regular_session_or_before_the_close_on_a_trading_day(self):
         for now in ("2 1030 2026-10-20 10:30:00 EDT", "1 0930 2026-10-19 09:30:00 EDT", "5 1559 2026-10-16 15:59:59 EDT", "3 0715 2026-10-21 07:15:00 EDT"):
             self.refused(expect="G2", now=now)
+
+    def test_g9_the_gateway_must_be_the_expected_avro_gateway_and_running(self):
+        rc, out = Cluster().run(gateway_digest="")
+        self.assertNotEqual(rc, 0)
+        self.assertIn("G9", out)
+        self.refused(lambda s: s["pods"]["items"][1]["status"]["containerStatuses"][0].update(imageID="x@sha256:" + "cd" * 32), "G9")   # a JSON-era gateway
+        self.refused(lambda s: s["pods"]["items"][1]["status"].update(phase="Pending"), "G9")                                              # no gateway serving
+        self.refused(lambda s: s["pods"]["items"].pop(1), "G9")                                                                           # no gateway at all
+
+    def test_gates_only_evaluates_every_gate_and_deletes_nothing(self):
+        c = Cluster()
+        rc, out = c.run(extra=["--gates-only"])
+        self.assertEqual(rc, 0, out)
+        for g in ("G2 ok", "G3 ok", "G4 ok", "G9 ok", "G5 ok", "G6 ok", "G7 ok", "G8 ok", "--gates-only"):
+            self.assertIn(g, out)
+        self.assertEqual(c.deletes(), [])
+        for t, d in initial_state()["topics"].items():
+            self.assertEqual(c.state["topics"][t]["id"], d["id"], f"{t} untouched")
+        self.refused(lambda s: s.update(service_state="LIVE"), "G3", extra=["--gates-only"])   # a rehearsal refuses like the real run
 
     def test_g3_the_service_must_report_session_ended(self):
         self.refused(lambda s: s.update(service_state="LIVE"), "G3")

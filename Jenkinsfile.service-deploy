@@ -143,9 +143,11 @@ pipeline {
     booleanParam(name: 'MARKET_STRUCTURE_IGNORE_RECOVERY_ROLLOVER', defaultValue: false,
       description: 'market-structure only, W0 step 2. true = inject MARKET_STRUCTURE_IGNORE_RECOVERY=true into the RENDER for this one apply (never committed): the ms-runtime-5 image cannot read the ms-runtime-3 JSON checkpoint and its first start must rebuild the day from the retained inputs. Refused Mon-Fri 09:30-16:00 America/New_York with no override (service-deploy.sh RTH_ROLLOVER_GATE); deploy only between the 16:00 close and midnight on a trading day. The next ordinary deploy (step 5, FORCE_RESTART=true) carries no flag. W0-MARKET-STRUCTURE-AVRO-CUTOVER.md sections 5-6.')
     booleanParam(name: 'W0_CUTOVER_WIPE', defaultValue: false,
-      description: 'market-structure only, DESTRUCTIVE, W0 step 4, a run of its own (never together with MARKET_STRUCTURE_IGNORE_RECOVERY_ROLLOVER): AFTER the rollout stage of this run (the Avro image already live and the Avro gateway rolled), delete and recreate EMPTY, under the same names, options.spx.market-structure.{ui,sequence,dlq,patterns,recovery} through scripts/kafka/roll-forward-market-structure.sh behind its fail-closed gates (outside the regular session, the W0 image digest only, a 3-minute quiescence proof, broker-side producer evidence, W0_PRODUCERS_ATTESTED). The input topic, the geometry topic and the tools topic are never touched. Needs W0_EXPECT_IMAGE_DIGEST and W0_PRE_CUTOVER_IDS. DEPLOY_DRY_RUN reports and changes nothing.')
+      description: 'market-structure only, DESTRUCTIVE, W0 step 4, a run of its own (never together with MARKET_STRUCTURE_IGNORE_RECOVERY_ROLLOVER): AFTER the rollout stage of this run (the Avro image already live and the Avro gateway rolled), delete and recreate EMPTY, under the same names, options.spx.market-structure.{ui,sequence,dlq,patterns,recovery} through scripts/kafka/roll-forward-market-structure.sh behind its fail-closed gates (outside the regular session, the W0 image digest only, a 3-minute quiescence proof, broker-side producer evidence, W0_PRODUCERS_ATTESTED). The input topic, the geometry topic and the tools topic are never touched. Needs W0_EXPECT_IMAGE_DIGEST, W0_EXPECT_GATEWAY_DIGEST and W0_PRE_CUTOVER_IDS. Every argument is validated before anything is deployed. DEPLOY_DRY_RUN runs the script with --gates-only: every gate and the quiescence proof are evaluated and reported, nothing is deleted.')
     string(name: 'W0_EXPECT_IMAGE_DIGEST', defaultValue: '', trim: true,
       description: 'W0_CUTOVER_WIPE only: the sha256:<64 hex> digest of the W0 market-structure image. Every pod running the market-structure image on the cluster must carry exactly this digest (a lingering JSON image would repopulate the recreated topics).')
+    string(name: 'W0_EXPECT_GATEWAY_DIGEST', defaultValue: '', trim: true,
+      description: 'W0_CUTOVER_WIPE only: the sha256:<64 hex> digest of the feed-gateway image that decodes Avro (W0 step 3). Every pod running the feed-gateway image on the cluster must carry exactly this digest and at least one must be Running in options-edge: the wipe never starts while a JSON-era gateway is the one serving.')
     string(name: 'W0_PRE_CUTOVER_IDS', defaultValue: '', trim: true,
       description: 'W0_CUTOVER_WIPE only: the topic ids read off the LIVE broker immediately before the wipe, ui=<id>,sequence=<id>,dlq=<id>,patterns=<id>,recovery=<id> (kafka-topics --describe). A topic whose id is anything else is not the topic that held the JSON and is refused.')
     booleanParam(name: 'W0_PRODUCERS_ATTESTED', defaultValue: false,
@@ -308,6 +310,33 @@ PYEOF
             bash scripts/ci/validate-dealer-ledger-fire-quality.sh
           fi
         '''
+      }
+    }
+    stage('Validate W0 cutover parameters') {
+      // Every W0-only constraint is judged BEFORE any stage mutates anything (the rollout stage below would otherwise deploy market-structure
+      // and only then reject a malformed wipe request).
+      when {
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && params.W0_CUTOVER_WIPE }
+      }
+      steps {
+        script {
+          if (params.SERVICE != 'market-structure') {
+            error("W0_CUTOVER_WIPE=true is for SERVICE=market-structure only (got '${params.SERVICE}').")
+          }
+          if (params.MARKET_STRUCTURE_IGNORE_RECOVERY_ROLLOVER) {
+            error('W0_CUTOVER_WIPE=true and MARKET_STRUCTURE_IGNORE_RECOVERY_ROLLOVER=true in one run: step 2 (the rollover deploy) and step 4 (the wipe) are separate runs, with the gateway roll (step 3) between them.')
+          }
+          if (!(params.W0_EXPECT_IMAGE_DIGEST ==~ /sha256:[0-9a-f]{64}/)) {
+            error("W0_CUTOVER_WIPE=true needs W0_EXPECT_IMAGE_DIGEST=sha256:<64 hex> (got '${params.W0_EXPECT_IMAGE_DIGEST}').")
+          }
+          if (!(params.W0_EXPECT_GATEWAY_DIGEST ==~ /sha256:[0-9a-f]{64}/)) {
+            error("W0_CUTOVER_WIPE=true needs W0_EXPECT_GATEWAY_DIGEST=sha256:<64 hex>, the Avro feed-gateway of step 3 (got '${params.W0_EXPECT_GATEWAY_DIGEST}').")
+          }
+          if (!(params.W0_PRE_CUTOVER_IDS ==~ /ui=[A-Za-z0-9_-]{22},sequence=[A-Za-z0-9_-]{22},dlq=[A-Za-z0-9_-]{22},patterns=[A-Za-z0-9_-]{22},recovery=[A-Za-z0-9_-]{22}/)) {
+            error('W0_CUTOVER_WIPE=true needs W0_PRE_CUTOVER_IDS exactly ui=<id>,sequence=<id>,dlq=<id>,patterns=<id>,recovery=<id> (22-character topic ids).')
+          }
+          if (!params.W0_PRODUCERS_ATTESTED) { error('W0_CUTOVER_WIPE=true needs W0_PRODUCERS_ATTESTED: the verified maintenance stop of step 4(i) is the owner\'s to attest.') }
+        }
       }
     }
     // ALL remaining stages share ONE agent and ONE workspace on the deploy host — the
@@ -1178,25 +1207,18 @@ PYEOF
       // holds the gates (bootstrap = the named cluster, outside the regular session and after the close, the W0 digest is the only market-structure
       // image on the cluster, producers attested, a 3-minute quiescence proof, broker-side producer evidence) and fails closed before the first delete.
       when {
-        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'market-structure' && params.W0_CUTOVER_WIPE && !params.DEPLOY_DRY_RUN) }
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'market-structure' && params.W0_CUTOVER_WIPE) }
       }
       steps {
-        script {
-          if (params.MARKET_STRUCTURE_IGNORE_RECOVERY_ROLLOVER) {
-            error('W0_CUTOVER_WIPE=true and MARKET_STRUCTURE_IGNORE_RECOVERY_ROLLOVER=true in one run: step 2 (the rollover deploy) and step 4 (the wipe) are separate runs, with the gateway roll (step 3) between them.')
-          }
-          if (!(params.W0_EXPECT_IMAGE_DIGEST ==~ /sha256:[0-9a-f]{64}/)) {
-            error("W0_CUTOVER_WIPE=true needs W0_EXPECT_IMAGE_DIGEST=sha256:<64 hex> (got '${params.W0_EXPECT_IMAGE_DIGEST}').")
-          }
-          if (!params.W0_PRE_CUTOVER_IDS?.trim()) { error('W0_CUTOVER_WIPE=true needs W0_PRE_CUTOVER_IDS (ui=,sequence=,dlq=,patterns=,recovery=).') }
-          if (!params.W0_PRODUCERS_ATTESTED) { error('W0_CUTOVER_WIPE=true needs W0_PRODUCERS_ATTESTED: the verified maintenance stop of step 4(i) is the owner\'s to attest.') }
-        }
+        // arguments were validated by 'Validate W0 cutover parameters', before the rollout; a DEPLOY_DRY_RUN evaluates every gate and deletes nothing
         sh '''
           set -euo pipefail
           export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
           . scripts/kafka/load-kafka-settings.sh
           scripts/kafka/roll-forward-market-structure.sh --recreate --cluster "$ENVIRONMENT" \
-            --expect-image-digest "$W0_EXPECT_IMAGE_DIGEST" --pre-cutover-ids "$W0_PRE_CUTOVER_IDS" --producers-attested \
+            --expect-image-digest "$W0_EXPECT_IMAGE_DIGEST" --expect-gateway-digest "$W0_EXPECT_GATEWAY_DIGEST" \
+            --pre-cutover-ids "$W0_PRE_CUTOVER_IDS" --producers-attested \
+            $( [ "${DEPLOY_DRY_RUN_PARAM:-false}" = "true" ] && echo --gates-only ) \
             "$KAFKA_BOOTSTRAP_SERVERS"
         '''
       }

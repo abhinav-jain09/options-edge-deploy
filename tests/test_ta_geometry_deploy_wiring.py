@@ -145,9 +145,17 @@ class TopicsAndCutoverStage(unittest.TestCase):
         self.assertLess(text.index("stage('Deploy (service-scoped)')"), text.index("stage('Roll forward market-structure topics (W0 step 4)')"),
                         "the Avro writer is live BEFORE the wipe (the 2026-10-18 incident)")
         stage = text[text.index("stage('Roll forward market-structure topics (W0 step 4)')"):text.index("stage('Verify web UI (post-rollout)')")]
-        for must in ("params.W0_CUTOVER_WIPE", "!params.DEPLOY_DRY_RUN", "W0_EXPECT_IMAGE_DIGEST ==~ /sha256:[0-9a-f]{64}/", "W0_PRODUCERS_ATTESTED",
-                     "MARKET_STRUCTURE_IGNORE_RECOVERY_ROLLOVER", "--producers-attested", "--expect-image-digest", "roll-forward-market-structure.sh --recreate"):
+        for must in ("params.W0_CUTOVER_WIPE", "--producers-attested", "--expect-image-digest", "--expect-gateway-digest", "--gates-only",
+                     "roll-forward-market-structure.sh --recreate"):
             self.assertIn(must, stage)
+        # a dry run rehearses every gate (--gates-only) instead of skipping the stage
+        self.assertNotIn("!params.DEPLOY_DRY_RUN", stage)
+        # every W0-only argument is judged BEFORE the rollout stage can mutate anything
+        early = text[text.index("stage('Validate W0 cutover parameters')"):text.index("stage('Deploy path')")]
+        self.assertLess(text.index("stage('Validate W0 cutover parameters')"), text.index("stage('Deploy (service-scoped)')"))
+        for must in ("W0_EXPECT_IMAGE_DIGEST ==~ /sha256:[0-9a-f]{64}/", "W0_EXPECT_GATEWAY_DIGEST ==~ /sha256:[0-9a-f]{64}/", "W0_PRE_CUTOVER_IDS ==~",
+                     "W0_PRODUCERS_ATTESTED", "MARKET_STRUCTURE_IGNORE_RECOVERY_ROLLOVER", "SERVICE != 'market-structure'"):
+            self.assertIn(must, early)
         # the destructive script is reachable from nowhere else
         self.assertEqual(text.count("scripts/kafka/roll-forward-market-structure.sh --recreate"), 1)
 

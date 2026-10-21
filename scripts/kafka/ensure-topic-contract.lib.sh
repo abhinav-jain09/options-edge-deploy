@@ -57,7 +57,7 @@ ensure_topic() {
     return 1
   fi
   case "${retention:-}" in
-    ''|*[!0-9-]*) echo "FAIL: '$topic' reports retention.ms='${retention:-<unreadable>}', expected ${ret_mode} ${want_ret}."; return 1 ;;
+    ''|*[!0-9-]*|-|?*-*|-[!1]*|-1?*) echo "FAIL: '$topic' reports retention.ms='${retention:-<unreadable>}', expected ${ret_mode} ${want_ret}."; return 1 ;;
   esac
   if [ "$ret_mode" = any ]; then
     :
