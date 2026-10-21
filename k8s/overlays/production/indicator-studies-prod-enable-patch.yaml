@@ -1,0 +1,28 @@
+# PRODUCTION: Phase A indicator studies (STUDIES_V1) switched ON for the indicator-service container.
+# The base manifest carries INDICATOR_STUDIES_ENABLED="false" (experiment and base keep it); this patch overrides it for production only.
+# Writes options.indicators.studies.bars / .current (declared in scripts/kafka/topics.env; schema ids 2501-2503 registered on the prod
+# registry, topics ensured on the prod broker). The indicator-estimate sidecar is a different container and is not touched.
+# Rollback (complete): ONE PR that BOTH sets GATEWAY_STUDIES_ENABLED back to "false" in k8s/overlays/production/feed-gateway-prod-env-patch.yaml AND
+# sets this producer flag to "false" (or removes this patch AND reverts the gateway flag in the same PR - never one without the other),
+# then scripts/deploy/generate-service-slices.sh to regenerate k8s/services/{indicator-service,feed-gateway}/overlays/production/manifest.yaml
+# (CI's mirror rule and tests/test_indicator_studies_topics.py refuse a slice that disagrees with the overlay), then service-deploy of both
+# services and a check that the live pod environment reads false. The flag is read at start.
+# Enable order (operationally enforced: service-deploy rolls ONE service per Jenkins run, so the two applies are separate, ordered runs):
+# feed-gateway first (verify the pod's imageID and gateway_* metrics), indicator-service second (verify the pod and the studies topics).
+# Preflight (before the first run): the live indicator-service imageID is a build of options-edge-processing that contains the studies code (processing #1237/#1241 or later; read it with `kubectl get pod -o jsonpath` imageID and match the Jenkins build's pushed digest), feed-gateway and web run the studies-capable images; registry subjects 2501-2503 resolve; the two studies topics exist.
+# Validation signals after the producer run: options.indicators.studies.current end offset advances and a record decodes with subject id 2502; gateway_studies_* metrics show accepted > 0 and drops 0.
+# Provenance: the digest being activated is recorded in the rollout record before the run and compared with the live imageID after it. Soak (scoped to the NEWLY ROLLED pods only): over the 10 minutes after the pod is Ready, `kubectl -n options-edge get pod -l app.kubernetes.io/name=<service> -o jsonpath='{.items[*].status.containerStatuses[*].restartCount}'` is 0, `kubectl logs <that pod> --since=10m | grep -c ' ERROR '` is 0, and the gateway /metrics counters gateway_studies_accepted_total (rises) and gateway_studies_drops_total (unchanged from its value at the start of the window) are read at both ends of the window.
+# Abort criteria (either run): the deploy's health gate fails, the pod restarts, or its log shows a schema/serialization error - then roll the flag back FIRST.
+# Rollback order (reverse of enable): indicator-service (producer false) first, then feed-gateway (relay false); verify each live pod environment reads "false".
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: indicator-service
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: indicator-service
+          env:
+            - { name: INDICATOR_STUDIES_ENABLED, value: "true" }
