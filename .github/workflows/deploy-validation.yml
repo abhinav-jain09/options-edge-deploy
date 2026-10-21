@@ -201,6 +201,12 @@ jobs:
       - name: Boot bring-up and morning autostart hold down the same services
         run: python3 -m unittest -v tests.test_keep_down_lists_agree
 
+      # TA books (phases B, C, D, E and the W0 cutover): the producer / gateway flags are literal false in every manifest, the two new
+      # services are registered and HELD, the fixed-id schema maps register against a stand-in registry, the two topic barriers fail closed,
+      # and the destructive W0 roll-forward refuses behind every gate before its first delete. docs/ta-books/DEPLOY-ROLLOUT.md.
+      - name: TA-books deploy wiring, schema registration, topic barriers and the W0 roll-forward
+        run: python3 -m unittest -v tests.test_ta_geometry_deploy_wiring tests.test_ta_schema_registration tests.test_ta_service_topic_barriers tests.test_roll_forward_market_structure
+
       # The prevention half: every topic dev needs has ONE partition count and is created before any
       # service starts, and declarations match what owners create (2026-09-15 partition audit).
       - name: Partition-only topics + raised declarations
