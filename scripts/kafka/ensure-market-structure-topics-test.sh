@@ -19,7 +19,9 @@ SEQ=options.spx.market-structure.sequence
 DLQ=options.spx.market-structure.dlq
 REC=options.spx.market-structure.recovery
 PAT=options.spx.market-structure.patterns
-ALL="$UI $SEQ $DLQ $REC $PAT"
+TOOLS=options.spx.market-structure.tools
+GEO=options.spx.market-structure.geometry
+ALL="$UI $SEQ $DLQ $REC $PAT $TOOLS $GEO"
 
 # cfgline <policy> <retention> <broker default policy> [max.message.bytes] [min.insync.replicas]:
 # the real `kafka-configs --describe --all` shape, whose first key=value per line is the EFFECTIVE value.
@@ -32,13 +34,14 @@ cfgmissing() {
   printf 'All configs for topic x are:\n  cleanup.policy=delete sensitive=false synonyms={DYNAMIC_TOPIC_CONFIG:cleanup.policy=delete}\n  retention.ms=604800000 sensitive=false synonyms={DYNAMIC_TOPIC_CONFIG:retention.ms=604800000}\n'
 }
 
-# mock <list> <partitions> <ui cfg> <sequence cfg> <dlq cfg> [fail: list|create|describe|configs] [rf] [patterns cfg]
-# The patterns topic has its OWN fixture (the 8th argument) so a drift on it alone is testable; it defaults to the
-# sequence shape, which is the declared shape of both (delete, two sessions).
+# mock <list> <partitions> <ui cfg> <sequence cfg> <dlq cfg> [fail: list|create|describe|configs] [rf] [patterns cfg] [tools cfg] [geometry cfg]
+# The patterns, tools and geometry topics have their OWN fixtures (the 8th, 9th and 10th arguments) so a drift on one alone is
+# testable; each defaults to the sequence shape, which is the declared shape of all three (delete, two sessions).
 mock() {
   mkdir -p "$T/bin"; : > "$T/created"; : > "$T/altered"
   printf '%s\n' "$3" > "$T/cfg_ui"; printf '%s\n' "$4" > "$T/cfg_seq"; printf '%s\n' "$5" > "$T/cfg_dlq"
   printf '%s\n' "${8:-$4}" > "$T/cfg_patterns"
+  printf '%s\n' "${9:-$4}" > "$T/cfg_tools"; printf '%s\n' "${10:-$4}" > "$T/cfg_geometry"
   cfgline compact -1 delete > "$T/cfg_recovery"
   cat > "$T/bin/kafka-topics" <<M
 #!/usr/bin/env bash
@@ -60,6 +63,8 @@ case " \$* " in
   *"$SEQ"*) cat "$T/cfg_seq" ;;
   *"$REC"*) cat "$T/cfg_recovery" ;;
   *"$PAT"*) cat "$T/cfg_patterns" ;;
+  *"$TOOLS"*) cat "$T/cfg_tools" ;;
+  *"$GEO"*) cat "$T/cfg_geometry" ;;
   *) cat "$T/cfg_dlq" ;;
 esac
 M
@@ -77,8 +82,11 @@ mock "other.topic" 1 "$WEEK" "$TWO" "$WEEK"; run; rc=$?
   && grep -q "$DLQ.*cleanup.policy=delete.*retention.ms=604800000" "$T/created" \
   && grep -q "$REC.*cleanup.policy=compact.*retention.ms=-1" "$T/created" \
   && grep -q "$PAT.*cleanup.policy=delete.*retention.ms=172800000" "$T/created" \
-  && grep -q "ok: '$UI'" "$T/out" && grep -q "ok: '$PAT'" "$T/out"; } \
-  && ok "absent → all five created with the declared shape, then verified" || { bad "absent → create"; cat "$T/out"; }
+  && grep -q "$TOOLS.*cleanup.policy=delete.*retention.ms=172800000" "$T/created" \
+  && grep -q "$GEO.*cleanup.policy=delete.*retention.ms=172800000" "$T/created" \
+  && [ "$(grep -c -- '--partitions 1 ' "$T/created")" = 7 ] \
+  && grep -q "ok: '$UI'" "$T/out" && grep -q "ok: '$PAT'" "$T/out" && grep -q "ok: '$TOOLS'" "$T/out" && grep -q "ok: '$GEO'" "$T/out"; } \
+  && ok "absent → all seven created with the declared shape, then verified" || { bad "absent → create"; cat "$T/out"; }
 
 mock "$ALL" 1 "$WEEK" "$TWO" "$WEEK"; run; rc=$?
 { [ $rc -eq 0 ] && [ ! -s "$T/created" ]; } && ok "present + right shape → ok, nothing created" || { bad "present ok"; cat "$T/out"; }
@@ -107,6 +115,22 @@ mock "$ALL" 1 "$WEEK" "$TWO" "$WEEK" "" 1 "$(cfgline delete 172800000 delete 104
   && ok "patterns max.message.bytes one byte below a set's bound, everything else right → fail, naming the patterns topic" || { bad "patterns message bound"; cat "$T/out"; }
 mock "$ALL" 1 "$WEEK" "$TWO" "$WEEK" "" 1 "$(cfgline delete 999999999 delete)"; run; rc=$?
 [ $rc -eq 0 ] && ok "patterns retention above its floor → ok" || { bad "patterns above floor"; cat "$T/out"; }
+# The Phase B tools and Phase C geometry topics, each alone: every other topic right, only it drifted, and the output names it.
+for pair in "9:$TOOLS" "10:$GEO"; do
+  idx="${pair%%:*}"; name="${pair#*:}"
+  for variant in "below its floor|$(cfgline delete 172799999 delete)" "compacted|$(cfgline compact 172800000 delete)" \
+                 "message bound one byte short|$(cfgline delete 172800000 delete 1048575)" "compact,delete|$(cfgline compact,delete 172800000 delete)"; do
+    label="${variant%%|*}"; cfg="${variant#*|}"
+    args=("$ALL" 1 "$WEEK" "$TWO" "$WEEK" "" 1 "$TWO" "$TWO" "$TWO"); args[$((idx - 1))]="$cfg"
+    mock "${args[@]}"; run; rc=$?
+    { [ $rc -ne 0 ] && grep -q "FAIL" "$T/out" && ! grep -q "ok: '$name'" "$T/out" && grep -q "ok: '$SEQ'" "$T/out"; } \
+      && ok "$name $label, everything else right → fail, naming that topic" || { bad "$name $label"; cat "$T/out"; }
+  done
+  args=("$ALL" 1 "$WEEK" "$TWO" "$WEEK" "" 1 "$TWO" "$TWO" "$TWO"); args[$((idx - 1))]="$(cfgline delete 999999999 delete)"
+  mock "${args[@]}"; run; rc=$?
+  [ $rc -eq 0 ] && ok "$name retention above its floor → ok" || { bad "$name above floor"; cat "$T/out"; }
+  args=("$ALL" 32 "$WEEK" "$TWO" "$WEEK" "" 1 "$TWO" "$TWO" "$TWO")
+done
 mock "$ALL" 32 "$WEEK" "$TWO" "$WEEK";                             expect_fail "32 partitions (the dev auto-create default) → fail"
 mock "$ALL" 1 "$(cfgline compact 604800000 delete)" "$TWO" "$WEEK"; expect_fail "ui compacted → fail"
 mock "$ALL" 1 "$(cfgline compact,delete 604800000 delete)" "$TWO" "$WEEK"; expect_fail "ui compact,delete → fail"
