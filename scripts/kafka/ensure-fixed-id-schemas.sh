@@ -19,8 +19,9 @@
 # not exactly that is a COLLISION and fails: a different schema under the subject, a later version, or the fixed id held by another
 # schema. This script never repairs a collision and never deletes a subject.
 #
-# A read-only PREFLIGHT pass judges every map line (collision = fail) BEFORE the apply pass imports anything: a collision on a later subject never leaves
-# the earlier ones imported. Per subject in the apply pass: (mode capture, disposable-subject IMPORT probe), idempotent verify, import, restore the mode in a trap on EVERY
+# A read-only PREFLIGHT pass judges every map line (collision = fail) BEFORE the apply pass imports anything: a collision ALREADY PRESENT on a later subject
+# never leaves the earlier ones imported. (A writer racing the apply pass is outside that guarantee: registration is an operator-run
+# maintenance step on a registry nobody else writes to, and any collision it meets is still refused, never repaired.) Per subject in the apply pass: (mode capture, disposable-subject IMPORT probe), idempotent verify, import, restore the mode in a trap on EVERY
 # exit (an original override by PUT, an inherited mode by DELETE), then FULL read back. See ensure-indicator-schemas.sh for the long form.
 set -euo pipefail
 : "${SCHEMA_REGISTRY_URL:?SCHEMA_REGISTRY_URL unset — refusing to reconcile an unknown registry}"
@@ -178,7 +179,7 @@ while IFS='|' read -r subject id file; do
   echo "    imported: version 1, id $id"
   ensure_full "$subject" || fail=1
 done <<< "$FIXED"
-  # PREFLIGHT (read-only, every map line judged before any import): a collision on a LATER subject must not leave the earlier ones imported
+  # PREFLIGHT (read-only, every map line judged before any import): a collision already present on a LATER subject must not leave the earlier ones imported
   if [ "$PASS" = preflight ] && [ "$fail" -ne 0 ]; then echo "=== ensure-fixed-id-schemas: FAILED in preflight — nothing was changed ==="; exit 1; fi
 done
 
