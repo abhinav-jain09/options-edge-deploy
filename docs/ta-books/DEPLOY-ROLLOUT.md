@@ -64,8 +64,7 @@ Roll forward only; there is no rollback and no reader that accepts JSON.
 
 Order for EACH layer: subjects already registered (step 1) -> topic ensured (every market-structure service-deploy run does it) -> gateway image with the relay live (flag `false`) ->
 `GATEWAY_STRUCTURE_TOOLS_ENABLED` / `GATEWAY_GEOMETRY_ENABLED` true (the gateway waits for records, hello has the field) -> `MARKET_STRUCTURE_TOOLS_ENABLED` / `MARKET_STRUCTURE_GEOMETRY_ENABLED` true
-(a restart: the flag is sampled once per schedule and recorded in the checkpoint). Processing notes B/C say the flag-enabling change should bump `RecoveryCheckpoint.METHOD` (W0 took `ms-runtime-5`, `-4` is unused on purpose); if the
-image does, roll it with `MARKET_STRUCTURE_IGNORE_RECOVERY_ROLLOVER=true` exactly as in step 2. The web layer has no flag: the hello field is its gate. Flip one layer at a time, outside the session.
+(a restart: the flag is sampled once per schedule and recorded in the checkpoint). Processing notes B/C once said the flag-enabling change should bump `RecoveryCheckpoint.METHOD`; in this order it does not: the stack is merged W0, then B, then C, W0 took `ms-runtime-5`, Phase B's branch-local `ms-runtime-4` is dropped when B is rebased onto W0 (B publishes the tools state under the stack's METHOD, `-4` stays unused, one bump per release) and Phase C as built does not bump it. If a later image does bump it, roll it with `MARKET_STRUCTURE_IGNORE_RECOVERY_ROLLOVER=true` exactly as in step 2. The web layer has no flag: the hello field is its gate. Flip one layer at a time, outside the session.
 
 ## 5. Phase D `es-trade-tools`, Phase E `wave-cycle`
 
