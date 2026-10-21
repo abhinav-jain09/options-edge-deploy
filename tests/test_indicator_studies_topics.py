@@ -199,6 +199,13 @@ class FlagsAreExplicitlyOff(unittest.TestCase):
             ("feed-gateway-service", "feed-gateway", "GATEWAY_STUDIES_ENABLED"): ["true"],
         })
 
+    def test_the_generated_production_slices_agree_with_the_production_render_in_both_flags(self):
+        """Parity of the independently deployable slices with the overlay render (enable AND rollback states are both checked by value)."""
+        rendered = self.rendered_flags("production")
+        for rel, key in (("k8s/services/indicator-service/overlays/production/manifest.yaml", ("indicator-service", "indicator-service", "INDICATOR_STUDIES_ENABLED")),
+                         ("k8s/services/feed-gateway/overlays/production/manifest.yaml", ("feed-gateway-service", "feed-gateway", "GATEWAY_STUDIES_ENABLED"))):
+            self.assertEqual([e[3] for e in self.flag_entries(ROOT / rel)], rendered[key], rel)
+
     def test_the_experiment_render_keeps_the_producer_flag_false(self):
         self.assertEqual(self.rendered_flags("experiment").get(("indicator-service", "indicator-service", "INDICATOR_STUDIES_ENABLED")), ["false"])
 

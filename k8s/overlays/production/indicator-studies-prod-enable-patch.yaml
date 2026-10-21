@@ -2,7 +2,11 @@
 # The base manifest carries INDICATOR_STUDIES_ENABLED="false" (experiment and base keep it); this patch overrides it for production only.
 # Writes options.indicators.studies.bars / .current (declared in scripts/kafka/topics.env; schema ids 2501-2503 registered on the prod
 # registry, topics ensured on the prod broker). The indicator-estimate sidecar is a different container and is not touched.
-# Rollback: delete this patch (or set "false") and redeploy through service-deploy; the flag is read at start.
+# Rollback (complete): a PR that sets "false" here AND in k8s/overlays/production/feed-gateway-prod-env-patch.yaml (or removes this patch),
+# then scripts/deploy/generate-service-slices.sh to regenerate k8s/services/{indicator-service,feed-gateway}/overlays/production/manifest.yaml
+# (CI's mirror rule and tests/test_indicator_studies_topics.py refuse a slice that disagrees with the overlay), then service-deploy of both
+# services and a check that the live pod environment reads false. The flag is read at start.
+# Enable order: GATEWAY_STUDIES_ENABLED first (the gateway then waits for records), then this producer flag.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
