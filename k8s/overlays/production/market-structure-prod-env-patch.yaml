@@ -3,7 +3,12 @@
 # shared broker). The base carries the dev id.
 #
 # PRODUCTION layer flags (owner: complete the prod deployment, one layer at a time): MARKET_STRUCTURE_TOOLS_ENABLED is "true" here (CHART-STRUCTURE-TOOLS,
-# topic options.spx.market-structure.tools, Avro subject id 2211; the base carries "false"). MARKET_STRUCTURE_GEOMETRY_ENABLED stays "false" until its own PR.
+# topic options.spx.market-structure.tools, Avro subject id 2211; the base carries "false"). MARKET_STRUCTURE_GEOMETRY_ENABLED is "true" here since layer 3 (CLASSICAL-CHART-PATTERNS, topic options.spx.market-structure.geometry, schema ids 2221 GeometryAnnotationSet / 2222 GeometryUnavailable).
+# GEOMETRY layer addenda (same runbook as tools): preflight also needs schema ids 2221 and 2222 on the production registry and the geometry topic; the flag is sampled once per schedule and is recorded in the
+# restored checkpoint, so it takes effect only through a rebuild: service-deploy with MARKET_STRUCTURE_IGNORE_RECOVERY_ROLLOVER=true OUTSIDE the session (the deploy refuses it Mon-Fri 09:30-16:00 ET), then an ordinary
+# deploy to remove that flag once the newest recovery record is Avro. Validation: the geometry topic's end offset is read before the rebuild run (B0; outside the session the running pod publishes nothing, shown by a flat end offset
+# over the 2 minutes before the run); afterwards a record at offset >= B0 decodes with schema id 2221 or 2222 (2222 = the producer's explicit "unavailable" set, valid) and gateway_geometry_accepted_total rose with gateway_geometry_drops_total flat
+# (same gateway pod UID and restartCount at both reads; a decreasing counter voids the window). A layer may be rolled back alone by flipping only its own two flags.
 # Enable order (two ordered service-deploy runs; one service per run - service-deploy takes exactly one SERVICE and the Jenkins job is single-flight, so the two applies cannot be concurrent; never use the full-stack options-edge-deploy monolith for this flip): feed-gateway first (GATEWAY_STRUCTURE_TOOLS_ENABLED, the gateway then waits for records),
 # then market-structure (the flag is read once per schedule, so the rollout restarts the pod; the pod restores from its ms-runtime-5 checkpoint).
 # Preflight: the live gateway and market-structure imageIDs equal the digests recorded in the rollout record; subject 2211 resolves on the production registry;
@@ -25,4 +30,6 @@ spec:
             - name: MARKET_STRUCTURE_TRANSACTIONAL_ID
               value: market-structure-service-production
             - name: MARKET_STRUCTURE_TOOLS_ENABLED
+              value: "true"
+            - name: MARKET_STRUCTURE_GEOMETRY_ENABLED
               value: "true"
