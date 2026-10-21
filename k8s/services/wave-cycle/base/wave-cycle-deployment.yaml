@@ -16,7 +16,9 @@ spec:
   #
   # TO START THE DARK RUN (the owner, in this order): (1) scripts/kafka/ensure-fixed-id-schemas.sh with schema-id-maps/wave-cycle.map on this
   # environment's registry and ensure-wave-cycle-topics.sh (service-deploy runs the barrier); (2) options.indicators.bars is the Avro topic
-  # market-structure already reads; (3) set replicas to 1 here with BOTH flags still "false"; (4) regenerate the slices
+  # market-structure already reads; (3) set replicas to 1 with BOTH flags still "false" in a PER-ENVIRONMENT
+  # enable patch (k8s/overlays/<env>/wave-cycle-<env>-enable-patch.yaml registered in that overlay's kustomization.yaml, the pattern of
+  # option-pressure-state-dev-enable-patch.yaml), NEVER in this base, which dev and production share (editing it enables both); (4) regenerate the slices
   # (scripts/deploy/generate-service-slices.sh); (5) remove wave-cycle-service from KEEP_DOWN in scripts/ops/morning-autostart.sh AND
   # scripts/ops/oe-boot-bringup.sh (tests/test_keep_down_lists_agree.py) and from DISABLED_DEV in scripts/ops/dev-cleanup.sh; (6) service-deploy.
   # Publishing is a later, separate change of WAVE_CYCLE_ENABLED (and the gateway flag GATEWAY_WAVE_CYCLE_ENABLED). SINGLE replica ONLY: the

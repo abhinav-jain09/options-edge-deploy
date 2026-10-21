@@ -50,7 +50,7 @@ def initial_state() -> dict:
            "containerStatuses": [{"name": "market-structure", "imageID": "192.168.100.252:5000/options-edge-market-structure@" + DIGEST}]},
            "spec": {"containers": [{"name": ready["name"], "image": ready["image"] + "@" + DIGEST}]}}
     gateway = {"metadata": {"name": "feed-gateway-service-xyz", "namespace": "options-edge"}, "status": {"phase": "Running",
-               "containerStatuses": [{"name": "feed-gateway", "imageID": "192.168.100.252:5000/options-edge-feed-gateway@" + GW_DIGEST}]},
+               "containerStatuses": [{"name": "feed-gateway", "ready": True, "imageID": "192.168.100.252:5000/options-edge-feed-gateway@" + GW_DIGEST}]},
                "spec": {"containers": [{"name": "feed-gateway", "image": "192.168.100.252:5000/options-edge-feed-gateway:prod@" + GW_DIGEST}]}}
     return {
         "topics": topics, "service_state": "SESSION_ENDED", "running_pods": ["market-structure-service-abc"], "pods": {"items": [pod, gateway]},
@@ -162,6 +162,7 @@ class EveryGateRefusesBeforeTheFirstDelete(unittest.TestCase):
         self.refused(lambda s: s["pods"]["items"][1]["status"]["containerStatuses"][0].update(imageID="x@sha256:" + "cd" * 32), "G9")   # a JSON-era gateway
         self.refused(lambda s: s["pods"]["items"][1]["status"].update(phase="Pending"), "G9")                                              # no gateway serving
         self.refused(lambda s: s["pods"]["items"].pop(1), "G9")                                                                           # no gateway at all
+        self.refused(lambda s: s["pods"]["items"][1]["status"]["containerStatuses"][0].update(ready=False), "G9")                        # Running but not ready
 
     def test_gates_only_evaluates_every_gate_and_deletes_nothing(self):
         c = Cluster()

@@ -73,7 +73,7 @@ Registering the service in the estate (this PR, then): the processing repository
 
 1. `service-deploy SERVICE=<es-trade-tools|wave-cycle> BUILD_IMAGES=true REGISTER_TA_SCHEMAS=true CONTRACTS_PERMITTED_SHA=<sha>`: subjects registered, topics ensured by the barrier, image built and digest-pinned, the Deployment applied at **0 replicas**. Nothing runs.
 2. To enable (the owner; the manifest comment lists the same six edits): the precondition is met (D: the linearizer publishes `underlying.es.trades.linearized` on that environment, and production waits for the calibration job; E: bars are Avro) ->
-   set `replicas: 1` -> regenerate slices -> remove the service from the three lifecycle lists -> `service-deploy`.
+   set `replicas: 1` in a per-environment enable patch (`k8s/overlays/<env>/<service>-<env>-enable-patch.yaml`, registered in that overlay's kustomization; never in the shared base, which would enable dev and production together) -> regenerate slices -> remove the service from the three lifecycle lists -> `service-deploy`.
    D: also `TT_ENABLED=true` and ONE family flag at a time (`TT_PF_ENABLED`, `TT_VP_ENABLED`, `TT_FLOW_ENABLED`, then `TT_CLIMAX_ENABLED`, which needs FLOW), then `GATEWAY_TRADE_TOOLS_ENABLED`.
    E: first the **dark run** (replicas 1, both flags `false`; the fold runs and is checkpointed; `wave_cycle_*` metrics), then `WAVE_CYCLE_ENABLED` and `GATEWAY_WAVE_CYCLE_ENABLED`; `WAVE_CYCLE_IGNORE_CHECKPOINT` is never committed true.
 

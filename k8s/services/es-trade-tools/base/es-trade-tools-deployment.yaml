@@ -17,9 +17,11 @@ spec:
   #
   # TO TURN IT ON (the owner, in this order): (1) the Avro subjects are registered on this environment's registry
   # (scripts/kafka/ensure-fixed-id-schemas.sh with schema-id-maps/es-trade-tools.map) and the seven topics ensured (ensure-es-trade-tools-topics.sh,
-  # which service-deploy runs); (2) the linearizer is publishing underlying.es.trades.linearized on this environment; (3) set replicas to 1 here
-  # AND TT_ENABLED=true plus the family flag(s) to enable, one family at a time (PF, VP, FLOW, then CLIMAX, which needs FLOW); (4) regenerate the
-  # slices (scripts/deploy/generate-service-slices.sh); (5) remove es-trade-tools-service from KEEP_DOWN in scripts/ops/morning-autostart.sh AND
+  # which service-deploy runs); (2) the linearizer is publishing underlying.es.trades.linearized on this environment; (3) set replicas to 1 AND
+  # TT_ENABLED=true plus the family flag(s) to enable, one family at a time (PF, VP, FLOW, then CLIMAX, which needs FLOW), in a PER-ENVIRONMENT
+  # enable patch (k8s/overlays/<env>/es-trade-tools-<env>-enable-patch.yaml registered in that overlay's kustomization.yaml, the pattern of
+  # option-pressure-state-dev-enable-patch.yaml), NEVER in this base: the base is shared by dev and production, so editing it would enable
+  # production in the same commit, before the calibration job; (4) regenerate the slices (scripts/deploy/generate-service-slices.sh); (5) remove es-trade-tools-service from KEEP_DOWN in scripts/ops/morning-autostart.sh AND
   # scripts/ops/oe-boot-bringup.sh (tests/test_keep_down_lists_agree.py) and from DISABLED_DEV in scripts/ops/dev-cleanup.sh; (6) run service-deploy.
   # SINGLE replica ONLY: the producer is transactional with transactional.id es-trade-tools-<symbol>, a second instance fences the first.
   replicas: 0
