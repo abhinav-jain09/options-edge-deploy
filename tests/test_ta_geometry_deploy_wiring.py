@@ -84,7 +84,7 @@ class FlagsAreLiterallyFalse(unittest.TestCase):
 
     def test_the_committed_production_slices_equal_the_production_overlay_render_for_the_layer_flags(self):
         """Source/generated consistency: kustomize-render the production overlay and compare the layer flags with the committed generated slices."""
-        out = subprocess.run(["kubectl", "kustomize", str(ROOT / "k8s/overlays/production")], capture_output=True, text=True, check=True).stdout
+        out = subprocess.run(["kubectl", "kustomize", str(ROOT / "k8s/overlays/production")], capture_output=True, text=True, check=True, timeout=120).stdout
         rendered = {}
         for doc in yaml.safe_load_all(out):
             if isinstance(doc, dict) and doc.get("kind") == "Deployment" and doc["metadata"]["name"] in ("market-structure-service", "feed-gateway-service"):
