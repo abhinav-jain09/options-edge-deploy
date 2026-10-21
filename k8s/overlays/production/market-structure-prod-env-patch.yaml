@@ -9,7 +9,7 @@
 # Preflight: the live gateway and market-structure imageIDs equal the digests recorded in the rollout record; subject 2211 resolves on the production registry;
 # options.spx.market-structure.tools exists. Abort: the deploy's health gate fails, the restartCount of the container NAMED market-structure in the NEW pod (select it by name in status.containerStatuses; it must read 0 at first Running and is polled at least every 60 s through the whole 10-minute window that starts at state.running.startedAt; the planned rollout replacement itself is not a restart) rises above 0, `kubectl -n options-edge logs <new pod> -c market-structure --since=10m | grep -c ' ERROR '` is not 0, or the gateway's `gateway_structure_tools_drops_total` (single series, read from the one feed-gateway pod's /metrics at the start and end of the window; both samples are pinned to the same gateway pod UID; ANY change of that UID or of its restartCount between the samples voids the window and it is restarted from a fresh start sample) rises.
 # Rollback (reverse order, ONE PR): set MARKET_STRUCTURE_TOOLS_ENABLED and GATEWAY_STRUCTURE_TOOLS_ENABLED back to "false" in this file and in
-# feed-gateway-prod-env-patch.yaml, run scripts/deploy/generate-service-slices.sh, deploy market-structure first, then feed-gateway, and verify both live environments read "false".
+# feed-gateway-prod-env-patch.yaml, run `timeout 120 scripts/deploy/generate-service-slices.sh`, deploy market-structure first, then feed-gateway, and verify both live environments read "false".
 # MIRRORS k8s/services/market-structure/overlays/production — the slice generator renders it from here.
 apiVersion: apps/v1
 kind: Deployment
