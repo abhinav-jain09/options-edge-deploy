@@ -141,8 +141,14 @@ class MirrorAndSchemaWiring(unittest.TestCase):
 
 
 class FlagsAreExplicitlyOff(unittest.TestCase):
-    """The producer flag and the gateway flag are literal 'false' in every source and every generated manifest that must carry them."""
+    """The producer flag and the gateway flag are literal in every source and generated manifest that must carry them: "false" everywhere
+    except the DEV rendering (the dev overlay switches the studies on; production, experiment and the base stay false)."""
 
+    DEV_ON = {
+        "k8s/overlays/dev/feed-gateway-dev-env-patch.yaml",
+        "k8s/services/feed-gateway/overlays/dev/manifest.yaml",
+        "k8s/services/indicator-service/overlays/dev/manifest.yaml",
+    }
     EXPECTED = {
         "INDICATOR_STUDIES_ENABLED": ["k8s/base/indicator-service-deployment.yaml", "k8s/es4/services/indicator-service.yaml",
                                       "k8s/services/indicator-service/overlays/dev/manifest.yaml",
@@ -153,17 +159,87 @@ class FlagsAreExplicitlyOff(unittest.TestCase):
                                     "k8s/services/feed-gateway/overlays/production/manifest.yaml"],
     }
 
-    def test_each_expected_source_and_generated_manifest_carries_its_flag_as_false(self):
+    def test_each_expected_source_and_generated_manifest_carries_its_flag_with_the_expected_value(self):
         for name, paths in self.EXPECTED.items():
             for rel in paths:
                 found = re.findall(rf"name: {name}\n\s+value: (\S+)", (ROOT / rel).read_text())
-                self.assertEqual([v.strip("\"'") for v in found], ["false"], f"{rel}: {name}")
+                want = "true" if rel in self.DEV_ON else "false"
+                self.assertEqual([v.strip("\"'") for v in found], [want], f"{rel}: {name}")
 
-    def test_no_manifest_anywhere_enables_either_flag(self):
-        for path in (ROOT / "k8s").rglob("*.yaml"):
-            for name in self.EXPECTED:
-                for m in re.finditer(rf"name: {name}\n\s+value: (\S+)", path.read_text()):
-                    self.assertEqual(m.group(1).strip("\"'"), "false", f"{path}: {name}")
+    @staticmethod
+    def rendered_flags(overlay: str) -> dict:
+        """kustomize-render an overlay and return {(deployment, container, flag): value} for the two study flags, structurally."""
+        import yaml
+        out = subprocess.run(["kubectl", "kustomize", str(ROOT / "k8s/overlays" / overlay)], capture_output=True, text=True, check=True).stdout
+        found = {}
+        for doc in yaml.safe_load_all(out):
+            if not isinstance(doc, dict) or doc.get("kind") != "Deployment":
+                continue
+            for c in doc["spec"]["template"]["spec"].get("containers", []):
+                for e in c.get("env", []) or []:
+                    if e.get("name") in ("INDICATOR_STUDIES_ENABLED", "GATEWAY_STUDIES_ENABLED"):
+                        found.setdefault((doc["metadata"]["name"], c["name"], e["name"]), []).append(str(e.get("value")))
+        return found
+
+    def test_the_dev_render_enables_exactly_the_producer_container_and_the_gateway(self):
+        self.assertEqual(self.rendered_flags("dev"), {
+            ("indicator-service", "indicator-service", "INDICATOR_STUDIES_ENABLED"): ["true"],
+            ("feed-gateway-service", "feed-gateway", "GATEWAY_STUDIES_ENABLED"): ["true"],
+        })
+
+    def test_the_production_render_carries_both_flags_and_both_are_false(self):
+        self.assertEqual(self.rendered_flags("production"), {
+            ("indicator-service", "indicator-service", "INDICATOR_STUDIES_ENABLED"): ["false"],
+            ("feed-gateway-service", "feed-gateway", "GATEWAY_STUDIES_ENABLED"): ["false"],
+        })
+
+    def test_the_dev_patch_is_referenced_by_exactly_one_kustomization_the_dev_one(self):
+        refs = [str(p.relative_to(ROOT)) for p in (ROOT / "k8s").rglob("kustomization.y*ml")
+                for _ in range(p.read_text().count("indicator-studies-dev-enable-patch.yaml"))]
+        self.assertEqual(refs, ["k8s/overlays/dev/kustomization.yaml"])
+
+    @staticmethod
+    def flag_entries(path: Path) -> list:
+        """Every (deployment, container, flag, value) env entry of a manifest file, parsed (any YAML spelling)."""
+        import yaml
+        out = []
+        for doc in yaml.safe_load_all(path.read_text()):
+            if not isinstance(doc, dict) or doc.get("kind") != "Deployment":
+                continue
+            for c in (doc.get("spec", {}).get("template", {}).get("spec", {}).get("containers", []) or []):
+                for e in c.get("env", []) or []:
+                    if e.get("name") in ("INDICATOR_STUDIES_ENABLED", "GATEWAY_STUDIES_ENABLED"):
+                        out.append((doc["metadata"]["name"], c["name"], e["name"], str(e.get("value"))))
+        return out
+
+    def test_the_dev_generated_slices_and_patches_carry_exactly_these_enabled_entries(self):
+        want = {
+            "k8s/services/indicator-service/overlays/dev/manifest.yaml": [("indicator-service", "indicator-service", "INDICATOR_STUDIES_ENABLED", "true")],
+            "k8s/services/feed-gateway/overlays/dev/manifest.yaml": [("feed-gateway-service", "feed-gateway", "GATEWAY_STUDIES_ENABLED", "true")],
+            "k8s/overlays/dev/feed-gateway-dev-env-patch.yaml": [("feed-gateway-service", "feed-gateway", "GATEWAY_STUDIES_ENABLED", "true")],
+            "k8s/overlays/dev/indicator-studies-dev-enable-patch.yaml": [("indicator-service", "indicator-service", "INDICATOR_STUDIES_ENABLED", "true")],
+        }
+        for rel, entries in want.items():
+            self.assertEqual(self.flag_entries(ROOT / rel), entries, rel)
+
+    def test_every_other_manifest_has_the_flags_false_and_an_unparseable_file_naming_a_flag_fails(self):
+        import yaml
+        allowed = set(self.DEV_ON) | {"k8s/overlays/dev/indicator-studies-dev-enable-patch.yaml"}
+        for path in sorted(p for p in (ROOT / "k8s").rglob("*") if p.is_file() and p.suffix in (".yaml", ".yml")):
+            rel = str(path.relative_to(ROOT))
+            if rel in allowed:
+                continue
+            text = path.read_text()
+            if "INDICATOR_STUDIES_ENABLED" not in text and "GATEWAY_STUDIES_ENABLED" not in text:
+                continue
+            try:
+                entries = self.flag_entries(path)
+            except yaml.YAMLError as e:
+                self.fail(f"{rel} names a study flag but is not parseable YAML: {e}")
+            code = [ln.split(" #")[0] for ln in text.splitlines() if not ln.lstrip().startswith("#")]
+            textual = sum(ln.count(flag) for ln in code for flag in ("INDICATOR_STUDIES_ENABLED", "GATEWAY_STUDIES_ENABLED"))
+            self.assertEqual(len(entries), textual, f"{rel}: every non-comment occurrence of a flag must be a structural env entry")
+            self.assertTrue(all(v == "false" for (_, _, _, v) in entries), f"{rel}: {entries}")
 
     def test_the_destructive_recreate_allow_list_does_not_name_a_study_topic(self):
         text = ENSURE.read_text()

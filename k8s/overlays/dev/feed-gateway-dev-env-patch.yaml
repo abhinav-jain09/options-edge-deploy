@@ -51,10 +51,12 @@ spec:
             - name: KAFKA_MARKET_STRUCTURE_PATTERNS_TOPIC
               value: options.spx.market-structure.patterns
             # Phase A studies relay (frames indicator-studies / indicator-studies-current and the hello's studies fields):
-            # OFF, explicitly. The producer flag INDICATOR_STUDIES_ENABLED is also false. Order: schemas 2501-2503 on EVERY registry
-            # (es4, dev, prod) -> topics ensured -> es mirrors installed -> THIS flag (the gateway then waits for records) -> the producer flag.
+            # ON in DEV (production overlay: false). The producer flag INDICATOR_STUDIES_ENABLED is set true for dev by
+            # indicator-studies-dev-enable-patch.yaml. Preconditions for dev (verified when this was enabled): schemas 2501-2503 registered
+            # on the DEV registry and options.indicators.studies.bars/current ensured on the dev broker. The es4 registry, the es. mirrors and
+            # production are NOT part of this change: ES studies need them first (schemas on es4 and prod, mirrors installed).
             - name: GATEWAY_STUDIES_ENABLED
-              value: "false"
+              value: "true"
             # Early-auction verdict ledger relay (the read-only /early-auction panel + the home-page
             # strip behind GET /api/early-auction/events). ON since 2026-10-13 (owner: "flip the
             # relay flag when rollout lands") — DEV ONLY; production stays off with the shadow

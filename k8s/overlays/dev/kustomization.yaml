@@ -372,6 +372,8 @@ patches:
   # DEV-ONLY: overnight ES-basis estimate bars — the indicator-estimate container and the Context Tape GLOBEX session +
   # estimate overlay (flags default off; production overlays untouched). See the two patch headers.
   - path: indicator-estimate-dev-patch.yaml
+  # DEV-ONLY: Phase A indicator studies ON for the indicator-service container (production overlays untouched).
+  - path: indicator-studies-dev-enable-patch.yaml
   - path: context-tape-estimate-bars-dev-patch.yaml
   # Dev gex settings. Created for the pre-open GEX pipeline, but that is NO LONGER what it does:
   # the ibkr-preopen-gate patch below is applied AFTER it and sets PREOPEN_GEX_ENABLED back to
