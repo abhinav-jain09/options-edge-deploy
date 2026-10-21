@@ -82,6 +82,23 @@ class FlagsAreLiterallyFalse(unittest.TestCase):
         self.assertEqual(env_values(ROOT / "k8s/services/market-structure/overlays/production/manifest.yaml", "MARKET_STRUCTURE_GEOMETRY_ENABLED"), ["false"])
         self.assertEqual(env_values(ROOT / "k8s/services/market-structure/overlays/dev/manifest.yaml", "MARKET_STRUCTURE_TOOLS_ENABLED"), ["false"])
 
+    def test_the_committed_production_slices_equal_the_production_overlay_render_for_the_layer_flags(self):
+        """Source/generated consistency: kustomize-render the production overlay and compare the layer flags with the committed generated slices."""
+        out = subprocess.run(["kubectl", "kustomize", str(ROOT / "k8s/overlays/production")], capture_output=True, text=True, check=True).stdout
+        rendered = {}
+        for doc in yaml.safe_load_all(out):
+            if isinstance(doc, dict) and doc.get("kind") == "Deployment" and doc["metadata"]["name"] in ("market-structure-service", "feed-gateway-service"):
+                for e in doc["spec"]["template"]["spec"]["containers"][0].get("env", []):
+                    if e["name"] in self.EXPECTED:
+                        rendered[(doc["metadata"]["name"], e["name"])] = e.get("value")
+        for dep, rel in (("market-structure-service", "k8s/services/market-structure/overlays/production/manifest.yaml"),
+                         ("feed-gateway-service", "k8s/services/feed-gateway/overlays/production/manifest.yaml")):
+            for name in self.EXPECTED:
+                if (dep, name) in rendered:
+                    self.assertEqual(env_values(ROOT / rel, name), [rendered[(dep, name)]], f"{rel}: {name}")
+        self.assertEqual(rendered[("market-structure-service", "MARKET_STRUCTURE_TOOLS_ENABLED")], "true")
+        self.assertEqual(rendered[("market-structure-service", "MARKET_STRUCTURE_GEOMETRY_ENABLED")], "false")
+
     def test_the_w0_recovery_rollover_flag_is_never_committed(self):
         for path in (ROOT / "k8s").rglob("*.yaml"):
             self.assertNotIn("name: MARKET_STRUCTURE_IGNORE_RECOVERY", path.read_text(), str(path))
