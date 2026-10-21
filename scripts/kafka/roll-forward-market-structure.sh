@@ -247,7 +247,7 @@ all_pods_json() {
   for ns in $nss; do
     ns="${ns#namespace/}"
     if o="$("$KUBECTL" -n "$ns" get pods -o json 2>&1)"; then
-      printf '%s\n' "$o" >>"$parts"
+      printf '%s\n' "$o" >>"$parts" || { rm -f "$parts"; printf 'cannot record the pod list of namespace %s' "$ns"; return 1; }
     else
       case "$ns" in
         kube-system|kube-public|kube-node-lease|default)
