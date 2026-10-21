@@ -59,10 +59,11 @@ spec:
             - name: KAFKA_MARKET_STRUCTURE_PATTERNS_TOPIC
               value: options.spx.market-structure.patterns
             # INDICATOR-STUDIES studies relay (frames indicator-studies / indicator-studies-current and the hello's studies fields):
-            # OFF, explicitly. The producer flag INDICATOR_STUDIES_ENABLED is also false. Order: schemas 2501-2503 on EVERY registry
-            # (es4, dev, prod) -> topics ensured -> es mirrors installed -> THIS flag (the gateway then waits for records) -> the producer flag.
+            # ON in PRODUCTION since 2026-10-21 (owner: "complete prod deployment"). The producer flag INDICATOR_STUDIES_ENABLED is set true
+            # by indicator-studies-prod-enable-patch.yaml. Preconditions verified: schemas 2501-2503 on the PROD registry, options.indicators.studies.bars/current
+            # ensured on the prod broker, gateway e917ca23 and web live. The es4 registry/mirrors are NOT part of this change (ES studies need them first).
             - name: GATEWAY_STUDIES_ENABLED
-              value: "false"
+              value: "true"
             # TA-books relays (frame contracts GEOMETRY-/TRADE-TOOLS-/WAVES-FRAME-CONTRACT.md in options-edge-processing docs/ta-books/catalog). The names are GatewaySettings' (feat/ta-geometry-feed-gateway:
             # structureToolsEnabled / geometryEnabled / tradeToolsEnabled / waveCycleEnabled) and the topic variables it also reads
             # (KAFKA_MARKET_STRUCTURE_{TOOLS,GEOMETRY}_TOPIC, KAFKA_TT_*_TOPIC, KAFKA_WAVE_CYCLE_{WAVES,CYCLES}_TOPIC) default to exactly the topics

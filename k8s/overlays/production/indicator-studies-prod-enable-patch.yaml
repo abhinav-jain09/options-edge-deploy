@@ -1,0 +1,17 @@
+# PRODUCTION: Phase A indicator studies (STUDIES_V1) switched ON for the indicator-service container.
+# The base manifest carries INDICATOR_STUDIES_ENABLED="false" (experiment and base keep it); this patch overrides it for production only.
+# Writes options.indicators.studies.bars / .current (declared in scripts/kafka/topics.env; schema ids 2501-2503 registered on the prod
+# registry, topics ensured on the prod broker). The indicator-estimate sidecar is a different container and is not touched.
+# Rollback: delete this patch (or set "false") and redeploy through service-deploy; the flag is read at start.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: indicator-service
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: indicator-service
+          env:
+            - { name: INDICATOR_STUDIES_ENABLED, value: "true" }
