@@ -46,14 +46,13 @@ spec:
               value: "7496"
             - name: BROKER_LIVE_EXECUTION_CLIENT_BASE
               value: "31001"
-            # 2026-10-20, owner: Paper orders on dev must allow more than one spread. Live keeps its own cap of 1
-            # (BROKER_LIVE_EXECUTION_MAX_QUANTITY; without it Live would inherit the Paper limit), so this
-            # raises Paper only. The cap exists from processing PR "live-max-quantity-own-cap" onward: deploy that
-            # build before this value, or an older build would give Live the Paper limit.
+            # 2026-10-20, owner: Paper orders on dev must allow more than one spread.
+            # 2026-10-21, owner: the Live cap of 1 contract is removed; the size an order can take is what the funds and
+            # the spread's margin allow (the Order tab's Max). 1000 stays only as the fat-finger ceiling, the same as Paper.
             - name: BROKER_EXECUTION_MAX_QUANTITY
               value: "1000"
             - name: BROKER_LIVE_EXECUTION_MAX_QUANTITY
-              value: "1"
+              value: "1000"
             # Read-only Paper balance socket for the Order tab (own client id: not 31 nor the 32-50 fallbacks).
             - name: BROKER_PAPER_BALANCE_ENABLED
               value: "true"
