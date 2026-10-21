@@ -236,7 +236,9 @@ class FlagsAreExplicitlyOff(unittest.TestCase):
                 entries = self.flag_entries(path)
             except yaml.YAMLError as e:
                 self.fail(f"{rel} names a study flag but is not parseable YAML: {e}")
-            self.assertTrue(entries, f"{rel} names a flag in a form the structural scan does not see")
+            code = [ln.split(" #")[0] for ln in text.splitlines() if not ln.lstrip().startswith("#")]
+            textual = sum(ln.count(flag) for ln in code for flag in ("INDICATOR_STUDIES_ENABLED", "GATEWAY_STUDIES_ENABLED"))
+            self.assertEqual(len(entries), textual, f"{rel}: every non-comment occurrence of a flag must be a structural env entry")
             self.assertTrue(all(v == "false" for (_, _, _, v) in entries), f"{rel}: {entries}")
 
     def test_the_destructive_recreate_allow_list_does_not_name_a_study_topic(self):
