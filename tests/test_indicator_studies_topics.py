@@ -127,8 +127,10 @@ class MirrorAndSchemaWiring(unittest.TestCase):
     def test_mirror_job_allow_list_and_shape_contract_carry_the_es_pair(self):
         text = (ROOT / "Jenkinsfile.es-indicator-mirror").read_text()
         self.assertIn(f"'{ES_BARS}', '{ES_CURRENT}'", text)
-        self.assertIn(f"{ES_BARS})     PARTS=8; POLICY=delete;         RET={DAY45} ;;", text)
-        self.assertIn(f"{ES_CURRENT})  PARTS=1; POLICY=delete; RET={DAY7} ;;", text)
+        self.assertIn(f"{ES_BARS})     PARTS=8; POLICY=delete;         RET={DAY45}; IDS=\"2001 2002 2003 2004 2005 2006 2007 2501 2502 2503\" ;;", text)   # a studies mirror needs the study ids too
+        self.assertIn(f"{ES_CURRENT})  PARTS=1; POLICY=delete; RET={DAY7};  IDS=\"2001 2002 2003 2004 2005 2006 2007 2501 2502 2503\" ;;", text)
+        self.assertIn("es.options.indicators.bars)             PARTS=8; POLICY=delete;         RET=3888000000; IDS=\"2001 2002 2003 2004 2005 2006 2007\" ;;", text)   # an existing mirror is never blocked on the study ids
+        self.assertIn('schema-parity.sh "$SRC_REGISTRY" "$TGT_REGISTRY" "$IDS"', text)
         yml = (ROOT / "ansible/vars/es-mirrors.yml").read_text()
         self.assertIn(f"- name: {ES_BARS}\n        assert: {{ target: {{parts: 8, not_compacted: true}} }}", yml)
         self.assertIn(f"- name: {ES_CURRENT}\n        assert: {{ target: {{parts: 1, not_compacted: true}} }}", yml)
@@ -137,7 +139,7 @@ class MirrorAndSchemaWiring(unittest.TestCase):
         fixed = (ROOT / "scripts/kafka/ensure-indicator-schemas.sh").read_text()
         for name, id_ in (("StudyBar", 2501), ("StudiesCurrent", 2502), ("StudyEngineImage", 2503)):
             self.assertIn(f"com.optionsedge.contracts.indicators.avro.{name}|{id_}|{name}.avsc", fixed)
-        self.assertIn("2501 2502 2503; do", (ROOT / "scripts/kafka/assert-indicator-schema-parity.sh").read_text())
+        self.assertIn("2007 2501 2502 2503", (ROOT / "scripts/kafka/assert-indicator-schema-parity.sh").read_text())   # the default set still carries the study ids; a non-studies mirror passes its own subset
 
 
 class FlagsAreExplicitlyOff(unittest.TestCase):
