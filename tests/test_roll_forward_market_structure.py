@@ -155,6 +155,28 @@ class EveryGateRefusesBeforeTheFirstDelete(unittest.TestCase):
         for now in ("2 1030 2026-10-20 10:30:00 EDT", "1 0930 2026-10-19 09:30:00 EDT", "5 1559 2026-10-16 15:59:59 EDT", "3 0715 2026-10-21 07:15:00 EDT"):
             self.refused(expect="G2", now=now)
 
+    def test_g4_g9_without_a_cluster_scope_pod_list_the_namespaces_are_read_one_by_one(self):
+        """Production: the deployer SA has no cluster-scope pod list. The same gates are judged from per-namespace reads; system namespaces may be unreadable, a tenant namespace may not."""
+        c = Cluster()
+        c.patch(lambda s: s.update(cluster_pods_forbidden=True, namespaces=["options-edge", "bleedingoptions", "kube-system"], unreadable_namespaces=["kube-system"]))
+        rc, out = c.run(extra=["--gates-only"])
+        self.assertEqual(rc, 0, out)
+        self.assertIn("G4 ok", out)
+        self.assertIn("G9 ok", out)
+        self.refused(lambda s: s.update(cluster_pods_forbidden=True, namespaces=["options-edge", "bleedingoptions"], unreadable_namespaces=["bleedingoptions"]), "bleedingoptions")
+        # a tolerated (system) namespace failing for any reason other than kubectl's own Forbidden (outage, auth, timeout) fails closed
+        self.refused(lambda s: s.update(cluster_pods_forbidden=True, namespaces=["options-edge", "kube-system"], unreadable_namespaces=["kube-system"],
+                                        unreadable_message="Unable to connect to the server: net/http: TLS handshake timeout"), "non-authorization error")
+        self.refused(lambda s: (s.update(cluster_pods_forbidden=True, namespaces=["options-edge"]), s["pods"]["items"][1]["status"]["containerStatuses"][0].update(imageID="x@sha256:" + "cd" * 32)), "G9")
+        # a JSON-era market-structure pod in ANOTHER namespace is still seen
+        def stray(s):
+            s.update(cluster_pods_forbidden=True, namespaces=["options-edge", "other"])
+            pod = json.loads(json.dumps(s["pods"]["items"][0]))
+            pod["metadata"].update(namespace="other", name="ms-stray")
+            pod["status"]["containerStatuses"][0]["imageID"] = "x@sha256:" + "ee" * 32
+            s["pods"]["items"].append(pod)
+        self.refused(stray, "G4")
+
     def test_g9_the_gateway_must_be_the_expected_avro_gateway_and_running(self):
         rc, out = Cluster().run(gateway_digest="")
         self.assertNotEqual(rc, 0)

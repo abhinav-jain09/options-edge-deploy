@@ -131,6 +131,18 @@ if name == "kubectl":
     if "pod" in argv and "json" in argv and "-A" not in argv:
         print(json.dumps(state["pods"]["items"][0]))
         sys.exit(0)
+    if "-A" in argv and state.get("cluster_pods_forbidden"):
+        print('Error from server (Forbidden): pods is forbidden: User "system:serviceaccount:options-edge:jenkins-deployer" cannot list resource "pods" in API group "" at the cluster scope')
+        sys.exit(1)
+    if argv[:1] == ["get"] and "ns" in argv and "-o" in argv:
+        print("\n".join("namespace/" + n for n in state.get("namespaces", ["options-edge", "kube-system"])))
+        sys.exit(0)
+    if "-n" in argv and argv[argv.index("-n") + 1] in state.get("unreadable_namespaces", []) and "get" in argv:
+        print(state.get("unreadable_message") or 'Error from server (Forbidden): pods is forbidden: User "system:serviceaccount:options-edge:jenkins-deployer" cannot list resource "pods" in API group "" in the namespace "x"')
+        sys.exit(1)
+    if "pods" in argv and "json" in argv and "-A" not in argv and "-l" not in argv:
+        print(json.dumps({"apiVersion": "v1", "kind": "List", "items": [i for i in state["pods"]["items"] if i["metadata"]["namespace"] == argv[argv.index("-n") + 1]]}))
+        sys.exit(0)
     if "-A" in argv:
         print(json.dumps(state["pods"]))
         sys.exit(0)

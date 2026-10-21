@@ -230,9 +230,58 @@ gate_session_ended() { # G3
       echo "FATAL (G3): the service does not report SESSION_ENDED: $body. Nothing was changed." >&2; return 1 ;;
   esac
 }
+# all_pods_json: every pod of every namespace as one JSON List. Normally `get pods -A`. The production deployer service account has no cluster-scope pod list, only
+# namespaced pod reads; then the same answer is assembled namespace by namespace from `get ns` (which it may list). A namespace it cannot read is tolerated ONLY if it is a
+# Kubernetes system namespace (kube-system, kube-public, kube-node-lease, default): tenant workloads there are impossible for this estate's images, and the broker-side
+# producer evidence of G6 (no other producer id wrote the five topics) is the cross-namespace guard that does not depend on pod visibility. Any other unreadable namespace fails closed.
+all_pods_json() {
+  local out nss ns o parts=""
+  if out="$("$KUBECTL" get pods -A -o json 2>&1)"; then printf '%s' "$out"; return 0; fi
+  case "$out" in
+    *'Error from server (Forbidden): pods is forbidden: '*'at the cluster scope'*) ;;
+    *) printf '%s' "$out"; return 1 ;;
+  esac
+  nss="$("$KUBECTL" get ns -o name 2>&1)" || { printf '%s' "$nss"; return 1; }
+  [ -n "$nss" ] || { printf 'no namespaces listed'; return 1; }
+  parts="$(mktemp)"
+  for ns in $nss; do
+    ns="${ns#namespace/}"
+    if o="$("$KUBECTL" -n "$ns" get pods -o json 2>&1)"; then
+      printf '%s\n' "$o" >>"$parts" || { rm -f "$parts"; printf 'cannot record the pod list of namespace %s' "$ns"; return 1; }
+    else
+      case "$ns" in
+        kube-system|kube-public|kube-node-lease|default)
+          # tolerated ONLY for kubectl's own authorization failure of the pod list; an API outage, an authentication error or a timeout is not tolerated
+          case "$o" in
+            'Error from server (Forbidden): pods is forbidden: '*) echo "note: namespace $ns is not readable by this service account (system namespace, tolerated)" >&2 ;;
+            *) rm -f "$parts"; printf 'namespace %s failed with a non-authorization error: %s' "$ns" "$o"; return 1 ;;
+          esac ;;
+        *) rm -f "$parts"; printf 'namespace %s is not readable: %s' "$ns" "$o"; return 1 ;;
+      esac
+    fi
+  done
+  python3 -I -c '
+import json, sys
+items = []
+dec = json.JSONDecoder()
+text = open(sys.argv[1]).read()
+i = 0
+while i < len(text):
+    while i < len(text) and text[i].isspace():
+        i += 1
+    if i >= len(text):
+        break
+    obj, i = dec.raw_decode(text, i)
+    items += obj.get("items", [])
+print(json.dumps({"apiVersion": "v1", "kind": "List", "items": items}))
+' "$parts"
+  local rc=$?
+  rm -f "$parts"
+  return $rc
+}
 gate_images() { # G4 (market-structure: exactly one Running) and G9 (feed-gateway: at least one Running); $1 = gate, $2 = image name, $3 = digest, $4 = min Running, $5 = max Running (-1 = no maximum), $6 = "ready" to also require that many pods whose matching REGULAR container is ready
   local pods
-  pods="$("$KUBECTL" get pods -A -o json 2>&1)" || { echo "FATAL (G4): cannot list pods cluster-wide: $pods" >&2; return 1; }
+  pods="$(all_pods_json)" || { echo "FATAL (G4): cannot list pods cluster-wide: $pods" >&2; return 1; }
   printf '%s' "$pods" | python3 -I -c '
 import json, sys
 gate, image, want, lo, hi, need_ready = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4]), int(sys.argv[5]), sys.argv[6] == "ready"
