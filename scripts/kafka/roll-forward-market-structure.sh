@@ -64,6 +64,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 case "$CLUSTER" in dev|production) ;; *) usage ;; esac
+[ "$GATES_ONLY" != yes ] || [ "$PHASE" = "--recreate" ] || { echo "FATAL: --gates-only is a rehearsal of --recreate; --verify is already read-only" >&2; exit 2; }
 [ -n "$PRE_IDS" ] || usage
 BS="${POS[0]:-}"; [ -n "$BS" ] || usage
 BIN="${POS[1]:-${KAFKA_BIN_DIR:-}}"
@@ -182,7 +183,7 @@ gate_images() { # G4 (market-structure: exactly one Running) and G9 (feed-gatewa
 import json, sys
 gate, image, want, lo, hi = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4]), int(sys.argv[5])
 items = json.load(sys.stdin).get("items", [])
-seen, running = [], 0
+seen, running_pods = [], set()
 for p in items:
     ns, name, phase = p["metadata"].get("namespace"), p["metadata"]["name"], p.get("status", {}).get("phase")
     for c in (p["spec"].get("containers") or []) + (p["spec"].get("initContainers") or []):
@@ -191,7 +192,8 @@ for p in items:
         ids = [s.get("imageID", "") for s in (p.get("status", {}).get("containerStatuses") or []) + (p.get("status", {}).get("initContainerStatuses") or []) if s.get("name") == c["name"]]
         seen.append((ns, name, phase, c["image"], ids))
         if phase == "Running" and ns == "options-edge":
-            running += 1
+            running_pods.add(name)   # a pod, however many matching containers it has
+running = len(running_pods)
 bad = [s for s in seen if not s[4] or any(not i.endswith(want) for i in s[4])]
 if not seen or bad or not lo <= running <= hi:
     print("FATAL (%s): the pods of image %s are not all at %s with %d..%d Running in options-edge: seen=%r bad=%r running=%d" % (gate, image, want, lo, hi, seen, bad, running), file=sys.stderr)

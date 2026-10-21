@@ -174,6 +174,21 @@ class EveryGateRefusesBeforeTheFirstDelete(unittest.TestCase):
             self.assertEqual(c.state["topics"][t]["id"], d["id"], f"{t} untouched")
         self.refused(lambda s: s.update(service_state="LIVE"), "G3", extra=["--gates-only"])   # a rehearsal refuses like the real run
 
+    def test_a_pod_with_two_matching_containers_counts_once(self):
+        def sidecar(s):
+            pod = s["pods"]["items"][0]
+            pod["spec"]["containers"].append(dict(pod["spec"]["containers"][0], name="sidecar"))
+            pod["status"]["containerStatuses"].append(dict(pod["status"]["containerStatuses"][0], name="sidecar"))
+        c = Cluster()
+        c.patch(sidecar)
+        rc, out = c.run(extra=["--gates-only"])
+        self.assertEqual(rc, 0, out)
+
+    def test_gates_only_is_refused_for_verify(self):
+        rc, out = Cluster().run(phase="--verify", extra=["--gates-only"])
+        self.assertEqual(rc, 2, out)
+        self.assertIn("--gates-only", out)
+
     def test_g3_the_service_must_report_session_ended(self):
         self.refused(lambda s: s.update(service_state="LIVE"), "G3")
 
