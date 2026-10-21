@@ -1,0 +1,120 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: es-trade-tools-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: es-trade-tools-service
+    app.kubernetes.io/component: es-trade-tools-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  # HELD AT 0 on every environment, and the reason is the requirement, not caution: PHASE-D-TRADE-LEVEL-TOOLS-REQUIREMENT.md D-R20.1 step 6 says
+  # "deployment to dev at replicas 0, then enabled family by family; es4/prod only after the CODE gate AND step (4) [the calibration job]:
+  # no environment beyond dev runs with SEED_UNCALIBRATED box sizes". With TT_ENABLED=false the process would only serve its health endpoints
+  # (state DISABLED: no topic, no consumer, no producer), so replicas 1 would be harmless; it is still held at 0 because a pod that reports
+  # DISABLED is indistinguishable, to the two watchers, from a service that is meant to be on and is not working (mandatory-services-silently-at-zero).
+  # This is a HOLD, not an omission: it is named in every lifecycle list below, and docs/ta-books/DEPLOY-ROLLOUT.md section 4 says how to turn it on.
+  #
+  # TO TURN IT ON (the owner, in this order): (1) the Avro subjects are registered on this environment's registry
+  # (scripts/kafka/ensure-fixed-id-schemas.sh with schema-id-maps/es-trade-tools.map) and the seven topics ensured (ensure-es-trade-tools-topics.sh,
+  # which service-deploy runs); (2) the linearizer is publishing underlying.es.trades.linearized on this environment; (3) set replicas to 1 here
+  # AND TT_ENABLED=true plus the family flag(s) to enable, one family at a time (PF, VP, FLOW, then CLIMAX, which needs FLOW); (4) regenerate the
+  # slices (scripts/deploy/generate-service-slices.sh); (5) remove es-trade-tools-service from KEEP_DOWN in scripts/ops/morning-autostart.sh AND
+  # scripts/ops/oe-boot-bringup.sh (tests/test_keep_down_lists_agree.py) and from DISABLED_DEV in scripts/ops/dev-cleanup.sh; (6) run service-deploy.
+  # SINGLE replica ONLY: the producer is transactional with transactional.id es-trade-tools-<symbol>, a second instance fences the first.
+  replicas: 0
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: es-trade-tools-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: es-trade-tools-service
+        app.kubernetes.io/component: es-trade-tools-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: es-trade-tools
+          image: 192.168.100.252:5000/options-edge-es-trade-tools:dev
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: options-edge-config              # KAFKA_BOOTSTRAP_SERVERS, SCHEMA_REGISTRY_URL, TOPIC_PREFIX and the runtime profile
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            # Every flag is the literal string "false" (strict booleans: the service refuses any other spelling). The master flag builds nothing
+            # when false; the family flags are independent execution switches (PF = Point and Figure, VP = volume nodes, FLOW = flow bars,
+            # CLIMAX = climax events and requires FLOW). Display and analysis only: no decision service reads any output (D-D5).
+            - name: TT_ENABLED
+              value: "false"
+            - name: TT_PF_ENABLED
+              value: "false"
+            - name: TT_VP_ENABLED
+              value: "false"
+            - name: TT_FLOW_ENABLED
+              value: "false"
+            - name: TT_CLIMAX_ENABLED
+              value: "false"
+            # The tape: the single-partition linearized ES tape (D-D2), a BASE name that KafkaSettings.topicValue namespaces. TOPIC_PREFIX is ""
+            # on dev and production, so this is the literal topic there (es4 would read es.underlying.es.trades.linearized; es4 is not a target).
+            # The raw 32-partition underlying.es.trades is NOT read: Point and Figure is path dependent and only the linearizer's tape has one order.
+            - name: KAFKA_ES_TRADES_LINEARIZED_TOPIC
+              value: underlying.es.trades.linearized
+            # The seven Avro outputs (base names; shapes in scripts/kafka/topics.env, barrier in scripts/kafka/ensure-es-trade-tools-topics.sh).
+            - name: KAFKA_TT_PF_COLUMNS_TOPIC
+              value: futures.pf.columns
+            - name: KAFKA_TT_PF_CHART_TOPIC
+              value: futures.pf.chart
+            - name: KAFKA_TT_PF_EVENTS_TOPIC
+              value: futures.pf.events
+            - name: KAFKA_TT_VOLUME_NODES_TOPIC
+              value: futures.volume-nodes
+            - name: KAFKA_TT_FLOW_BARS_TOPIC
+              value: futures.flow.bars
+            - name: KAFKA_TT_FLOW_EVENTS_TOPIC
+              value: futures.flow.events
+            - name: KAFKA_TT_STATE_TOPIC
+              value: futures.tradetools.state
+            # No consumer group: the service assigns the tape partition itself, commits nothing to the broker and resumes from the offset in its
+            # own checkpoint (D-R1.1, auto.offset.reset=none). The producer's transactional.id is es-trade-tools-<TT_SYMBOL>; dev and production
+            # have separate brokers, so one value serves both.
+            - name: TT_SYMBOL
+              value: ES.v.0
+            - name: TT_HEALTH_PORT
+              value: "8153"
+            # D-R17.3 / D-R17.6: the peak live set is about 134 MB against -Xmx384m, and the benchmark ran with exactly these flags. The heap is 37% of
+            # the 1Gi limit, leaving room for metaspace, the 32 MiB producer buffer's native side and thread stacks (scripts/ci/heap_headroom.py).
+            - name: JAVA_TOOL_OPTIONS
+              value: -Xms384m -Xmx384m
+          ports:
+            - name: health
+              containerPort: 8153
+          # Process liveness is both probes (the es-compression-expansion / break-score rule, owner 2026-10-07): /health/ready is 200 only in LIVE
+          # with a record acknowledged, so on a dark tape (overnight, weekend, the 17:00-18:00 ET break) it would time out every deploy.
+          # /health/ready stays available to operators, and the state is in /metrics (tt_state).
+          readinessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            failureThreshold: 3
+          # D-R17.2: 2 600 records/s sustained at under half of one core; the request is that half-core, the limit is memory only (the fleet
+          # convention: no cpu limit).
+          resources:
+            requests:
+              cpu: 500m
+              memory: 768Mi
+            limits:
+              memory: 1Gi

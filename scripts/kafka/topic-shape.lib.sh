@@ -235,7 +235,7 @@ create_topic() {
   if [[ -n "$retention_bytes" ]]; then
     extra_configs+=(--config "retention.bytes=$retention_bytes")
   fi
-  if [[ "$topic" == "options.spx.market-structure.recovery" ]]; then
+  if topic_is_recovery_checkpoint "$topic"; then
     extra_configs+=(--config "segment.bytes=16777216" --config "max.compaction.lag.ms=300000")
   fi
   # --if-not-exists: CreateTopics is not idempotent on the CLIENT's own retry. The Kafka admin client retries a
@@ -255,6 +255,16 @@ create_topic() {
     --config "cleanup.policy=$cleanup_policy" \
     --config "min.insync.replicas=$MIN_ISR" \
     "${extra_configs[@]}"
+}
+
+# The transactional recovery-checkpoint topics: a compacted log of large records that is rewritten every fold, which needs the small-segment
+# compaction cadence (16 MiB segments, 5 min max compaction lag) or the active 1 GiB segment is never cleaned. market-structure-service's
+# since its first deploy; wave-cycle-service's (PHASE-E E-R11.3) takes "the figure the structure service uses" and so the same cadence.
+topic_is_recovery_checkpoint() {
+  case "$1" in
+    options.spx.market-structure.recovery|options.spx.wave-cycle.recovery) return 0 ;;
+  esac
+  return 1
 }
 
 topic_cleanup_policy() {
@@ -351,7 +361,7 @@ alter_topic_config() {
       --add-config "retention.ms=$(topic_retention_ms "$topic"),cleanup.policy=$(kafka_config_value "$cleanup_policy"),min.insync.replicas=$MIN_ISR$( \
         dr="$(topic_delete_retention_ms "$topic")"; [[ -n "$dr" ]] && echo ",delete.retention.ms=$dr")$( \
         rb="$(topic_retention_bytes "$topic")"; [[ -n "$rb" ]] && echo ",retention.bytes=$rb")$( \
-        [[ "$topic" == "options.spx.market-structure.recovery" ]] && echo ",segment.bytes=16777216,max.compaction.lag.ms=300000")"; then
+        topic_is_recovery_checkpoint "$topic" && echo ",segment.bytes=16777216,max.compaction.lag.ms=300000")"; then
       return 0
     fi
     sleep 1
