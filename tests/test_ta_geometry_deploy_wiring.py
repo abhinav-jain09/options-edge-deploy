@@ -46,16 +46,28 @@ class FlagsAreLiterallyFalse(unittest.TestCase):
     GATEWAY_FILES = ["k8s/overlays/dev/feed-gateway-dev-env-patch.yaml", "k8s/overlays/production/feed-gateway-prod-env-patch.yaml",
                      "k8s/services/feed-gateway/overlays/dev/manifest.yaml", "k8s/services/feed-gateway/overlays/production/manifest.yaml"]
 
+    # 2026-10-21 (owner): the four gateway relay flags are ON in DEV ONLY, for the Order tab analysis layers; production and everything else stays literally false.
+    DEV_GATEWAY_FILES = ["k8s/overlays/dev/feed-gateway-dev-env-patch.yaml", "k8s/services/feed-gateway/overlays/dev/manifest.yaml"]
+    DEV_ON = ("GATEWAY_STRUCTURE_TOOLS_ENABLED", "GATEWAY_GEOMETRY_ENABLED", "GATEWAY_TRADE_TOOLS_ENABLED", "GATEWAY_WAVE_CYCLE_ENABLED")
+
+    def expected_value(self, rel, name):
+        return "true" if name in self.DEV_ON and rel in self.DEV_GATEWAY_FILES else "false"
+
     def test_each_expected_source_and_generated_manifest_carries_its_flag_as_false(self):
         for name, paths in self.EXPECTED.items():
             for rel in (paths or self.GATEWAY_FILES):
-                self.assertEqual(env_values(ROOT / rel, name), ["false"], f"{rel}: {name}")
+                self.assertEqual(env_values(ROOT / rel, name), [self.expected_value(rel, name)], f"{rel}: {name}")
 
     def test_no_manifest_anywhere_sets_any_of_these_flags_to_anything_but_false(self):
         for path in (ROOT / "k8s").rglob("*.yaml"):
             for name in self.EXPECTED:
                 for v in env_values(path, name):
-                    self.assertEqual(v, "false", f"{path}: {name}")
+                    self.assertEqual(v, self.expected_value(str(path.relative_to(ROOT)), name), f"{path}: {name}")
+
+    def test_production_keeps_all_four_gateway_flags_false(self):
+        for rel in ("k8s/overlays/production/feed-gateway-prod-env-patch.yaml", "k8s/services/feed-gateway/overlays/production/manifest.yaml"):
+            for name in self.DEV_ON:
+                self.assertEqual(env_values(ROOT / rel, name), ["false"], f"{rel}: {name}")
 
     def test_the_w0_recovery_rollover_flag_is_never_committed(self):
         for path in (ROOT / "k8s").rglob("*.yaml"):
