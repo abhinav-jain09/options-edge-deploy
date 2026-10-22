@@ -80,9 +80,9 @@ spec:
             - name: GATEWAY_GEOMETRY_ENABLED
               value: "true"
             - name: GATEWAY_TRADE_TOOLS_ENABLED
-              value: "false"
+              value: "true"
             - name: GATEWAY_WAVE_CYCLE_ENABLED
-              value: "false"
+              value: "true"
             - name: GATEWAY_MARKET_COMMENTARY_ENABLED
               value: "true"
             - name: OE_WATCH_JDBC_URL
