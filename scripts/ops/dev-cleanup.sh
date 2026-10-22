@@ -476,6 +476,27 @@ ensure_partition_only_topics() {
 # still-running external producer can auto-create its topic at ANY point during it — including
 # after any snapshot taken at the start. The pass runs on every caller, not just the wipe, so a
 # transient failure is retried by the next start instead of surviving until someone notices.
+# DEV-ONLY overnight ES-basis ESTIMATE topics (indicator-estimate sidecar). They are NOT in the deploy repo's topics.env on purpose (the estimate is
+# dev-only; prod must not grow them), so a clean used to leave them for the sidecar to create AFTER context-tape-service had already started, and
+# context-tape then subscribed only to the forming topic: the Order tab drew ONE candle that was replaced every minute (2026-10-21 20:3x ET).
+# Pre-creating them here, before any service starts, removes the race at its source (context-tape also now picks a late topic up by itself).
+# Same shapes the sidecar creates: bars = 1 partition / delete / 3 d retention, bars.current = 1 partition / compact / 1 d retention.
+ensure_dev_only_estimate_topics() {
+  # Retried: a Kafka admin endpoint that is briefly unavailable right after a restart must not leave the race open. A final failure is a LOUD warning
+  # but NOT fatal: a failed ensure_topics would hold the es4 mirrors paused for an optional dev-only topic (context-tape also picks a late topic up by itself).
+  local name policy retention i ok
+  for spec in "options.indicators.estimate.bars delete 259200000" "options.indicators.estimate.bars.current compact 86400000"; do
+    set -- $spec; name=$1; policy=$2; retention=$3; ok=0
+    for i in 1 2 3; do
+      if $KT --bootstrap-server $BS --create --if-not-exists --topic "$name" --partitions 1 --replication-factor 1 \
+          --config cleanup.policy=$policy --config retention.ms=$retention >/dev/null 2>&1; then ok=1; break; fi
+      sleep 2
+    done
+    if [ $ok = 1 ]; then echo "  dev-only estimate topic ready: $name"
+    else echo "  WARNING: could not create $name after 3 tries — the Order tab may show one candle until context-tape-service is restarted"; fi
+  done
+}
+
 ensure_topics() {
   git -C "$DEPLOY_REPO" fetch -q origin main 2>/dev/null || true
   local tenv; tenv="$(git -C "$DEPLOY_REPO" show "$TOPICS_ENV_REF" 2>/dev/null)"
@@ -497,6 +518,7 @@ ensure_topics() {
     echo "Pre-created $n platform topics from deploy config ($TOPICS_ENV_REF); apps self-create the rest on startup."
     ensure_partition_only_topics
     reconcile_declared_topics
+    ensure_dev_only_estimate_topics
     echo "  topics present now: $($KT --bootstrap-server $BS --list 2>/dev/null | grep -vcE '^__|^_schemas')"
   else
     echo "  WARNING: could not read deploy topics.env ($DEPLOY_REPO $TOPICS_ENV_REF) — apps will create their topics on startup (slower to READY)."
