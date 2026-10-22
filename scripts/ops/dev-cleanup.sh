@@ -668,6 +668,28 @@ do_es_down() {
 }
 
 # ---------- FULL START: pre-create source topics, then scale ALL active apps up READY ----------
+
+# Count how many times the indicator-service container reports the "no epoch recovery copy" fatal, in its
+# CURRENT and its PREVIOUS container instance. Two traps, both seen on 2026-10-22:
+#  * the pod has TWO containers (indicator-estimate, indicator-service) and a bare `kubectl logs deploy/...`
+#    reads the FIRST, which never holds the exception - so the container is named;
+#  * after a restart the signature can be only in the terminated instance, so --previous is read too (it
+#    legitimately fails when there was no previous instance, which is not an error).
+# A failure to read the CURRENT container (a rename, a missing pod) is reported on stderr instead of reading as
+# "no failure", which is how this check went silently blind.
+indicator_epoch_fatal_count() {
+  local flag out rc n=0
+  for flag in "" "--previous"; do
+    out=$($KK logs deploy/indicator-service -c indicator-service $flag --tail=200 2>&1); rc=$?
+    if [ "$rc" -ne 0 ]; then
+      [ -z "$flag" ] && echo "  ⚠ cannot read the indicator-service container logs (rc=$rc): $(printf '%s' "$out" | head -1)" >&2
+      continue
+    fi
+    n=$((n + $(printf '%s\n' "$out" | grep -c "INDICATOR_EPOCH_GENESIS is not authorized")))
+  done
+  echo "$n"
+}
+
 do_start() {
   ensure_topics; resume_dev_mirrors_if_declared $?
   # Scale UP everything EXCEPT the DEV-disabled set. This is load-bearing: if we scaled ALL to 1 and
@@ -714,15 +736,14 @@ do_start() {
     # 2026-09-24 (2nd occurrence): checking immediately after the straggler restart above caught the
     # pod BEFORE it had reprocessed far enough to hit the exception again — a false negative, not a
     # fixed bug. Poll for up to ~30s for EITHER outcome (ready, or the fatal signature) before deciding.
-    # -c indicator-service: the pod has TWO containers (indicator-estimate + indicator-service) and a bare
-    # `kubectl logs deploy/...` reads the FIRST one, which never holds the EpochFatalException. Without -c this
-    # check counted 0 forever and the one-time genesis below silently never ran (2026-10-22: after a clean the
-    # indicator and market-structure stayed down until the container was named).
+    # indicator_epoch_fatal_count (above) names the container and reads --previous too: a bare
+    # `kubectl logs deploy/...` read the wrong container, counted 0 forever, and the one-time genesis below
+    # silently never ran (2026-10-22: after a clean the indicator and market-structure stayed down).
     epoch_fatal=0
     for i in $(seq 1 6); do
       rr=$($KK get deploy indicator-service -o jsonpath='{.status.readyReplicas}' 2>/dev/null)
       [ "${rr:-0}" -ge 1 ] && break
-      epoch_fatal=$($KK logs deploy/indicator-service -c indicator-service --tail=200 2>/dev/null | grep -c "INDICATOR_EPOCH_GENESIS is not authorized" || true)
+      epoch_fatal=$(indicator_epoch_fatal_count)
       [ "${epoch_fatal:-0}" -gt 0 ] && break
       sleep 5
     done
