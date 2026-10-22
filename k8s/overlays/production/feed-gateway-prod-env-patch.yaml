@@ -67,8 +67,8 @@ spec:
             # TA-books relays (frame contracts GEOMETRY-/TRADE-TOOLS-/WAVES-FRAME-CONTRACT.md in options-edge-processing docs/ta-books/catalog). The names are GatewaySettings' (feat/ta-geometry-feed-gateway:
             # structureToolsEnabled / geometryEnabled / tradeToolsEnabled / waveCycleEnabled) and the topic variables it also reads
             # (KAFKA_MARKET_STRUCTURE_{TOOLS,GEOMETRY}_TOPIC, KAFKA_TT_*_TOPIC, KAFKA_WAVE_CYCLE_{WAVES,CYCLES}_TOPIC) default to exactly the topics
-            # scripts/kafka/topics.env declares, so none is set here. All four OFF, explicitly (a flag off sends no frame and the hello carries no
-            # such field). Each is an independent layer. Order for each: Avro subjects registered on EVERY registry the producer and gateway use ->
+            # scripts/kafka/topics.env declares, so none is set here. Each flag is explicit (a flag off sends no frame and the hello carries no
+            # such field); in PRODUCTION all four are now ON, each documented at its own flag below. Each is an independent layer. Order for each: Avro subjects registered on EVERY registry the producer and gateway use ->
             # topic ensured -> producer image live -> THIS gateway flag (the gateway then waits for records) -> the producer flag.
             # CHART-STRUCTURE-TOOLS  options.spx.market-structure.tools
             # ON in PRODUCTION (layer 2 of the production enable order: studies, tools, geometry; the producer flag is in market-structure-prod-env-patch.yaml).
@@ -80,11 +80,17 @@ spec:
             - name: GATEWAY_GEOMETRY_ENABLED
               value: "true"
             # TICK-TRADE-TOOLS  futures.pf.* / futures.volume-nodes / futures.flow.*
+            # ON in PRODUCTION (calibrated release, owner standard 2026-10-22: live, no shadow). The producer es-trade-tools-service runs live through
+            # es-trade-tools-prod-enable-patch.yaml (rollback levels there). Prerequisites, all read before this change: the gateway runs the image built from feed-gateway #249/#250
+            # (relays the version-2 records, ids 2321-2332/2335, and the measured evidence block) and the web runs a build containing web #1106/#1109; the producer is live and its seven topics hold version-2 records.
+            # Rollback: set this flag back to "false" (the producer may keep running) in ONE PR, regenerate the slices, deploy feed-gateway; verify the live pod environment reads "false".
             - name: GATEWAY_TRADE_TOOLS_ENABLED
-              value: "false"
+              value: "true"
             # ELLIOTT-FIB-CYCLE-TOOLS  options.spx.wave-cycle.{waves,cycles}
+            # ON in PRODUCTION (same standard and prerequisites: wave-cycle-service live through wave-cycle-prod-enable-patch.yaml, WaveSet 2406 / CycleSet 2407 on the wire,
+            # gateway #249 and web #1106). Rollback: this flag back to "false" in ONE PR, regenerate the slices, deploy feed-gateway; verify the live pod environment.
             - name: GATEWAY_WAVE_CYCLE_ENABLED
-              value: "false"
+              value: "true"
             # MARKET COMMENTARY relay: the per-minute records of market-commentary-service, polled by the read-only
             # /market-commentary panel through GET /api/market-commentary/state (a REST view, no WebSocket event). The topic is the
             # code default; declared in scripts/kafka/topics.env and created by ensure-market-commentary-topics.sh. Applying
