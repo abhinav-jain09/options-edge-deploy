@@ -50,6 +50,8 @@ spec:
               value: futures.level-absorption.voice
             - name: KAFKA_LEVEL_ABSORPTION_CLOSURES_TOPIC
               value: futures.level-absorption.closures
+            - name: KAFKA_LEVEL_ABSORPTION_HOST_LEVELS_TOPIC
+              value: options.spx.market-structure.ui
             - name: LEVEL_ABSORPTION_CONSUMER_GROUP
               value: level-absorption-service
             - name: LEVEL_ABSORPTION_SYMBOL

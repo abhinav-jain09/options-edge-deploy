@@ -225,8 +225,9 @@ services:
   - { name: break-score,                  managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-break-score,                  deployments: [break-score-service] }
   # level-absorption: EYEBALL phase (status events, NO verdict). DEPLOYED HELD AT replicas 0 on dev AND production and unable to start
   # until the owner supplies the Phase 0 freeze file and the retention artifact (docs/level-absorption/DEPLOY-WIRING.md). Reads the
-  # linearized ES tape, es.futures.footprint.bars, es.futures.auction and the manual-line topic; publishes futures.level-absorption.{events,
-  # voice,closures}. Same hold-down paths as break-score. scripts/kafka/ensure-level-absorption-topics.sh is the first-deploy barrier.
+  # linearized ES tape, es.futures.footprint.bars, es.futures.auction, the manual-line topic and (version 2, host sites) the
+  # market-structure UiProjection topic options.spx.market-structure.ui; publishes futures.level-absorption.{events,voice,closures}.
+  # Same hold-down paths as break-score. scripts/kafka/ensure-level-absorption-topics.sh is the first-deploy barrier.
   - { name: level-absorption,             managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-level-absorption,             deployments: [level-absorption-service] }
   # es-trade-tools (TICK-TRADE-TOOLS, TA books): Point-and-Figure charts, volume nodes and flow bars from the linearized ES tape
   # (underlying.es.trades.linearized), published as Avro on futures.pf.* / futures.volume-nodes / futures.flow.* / futures.tradetools.state.

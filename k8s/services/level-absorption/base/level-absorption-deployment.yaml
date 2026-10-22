@@ -63,6 +63,12 @@ spec:
               value: futures.level-absorption.voice       # 1 partition, delete, 7 days
             - name: KAFKA_LEVEL_ABSORPTION_CLOSURES_TOPIC
               value: futures.level-absorption.closures    # 1 partition, delete, 7 days
+            # Version 2 (geometry sites, section 6.2): the market-structure host's UiProjection record is the HOST level source.
+            # The topic is created by scripts/kafka/ensure-market-structure-topics.sh (1 partition, delete, 7 days). The service
+            # requires it at startup only when a HOST site kind is enabled in the Phase 0 freeze (sitesEnabled); with the
+            # version-1 kinds (the default) it is read but not required.
+            - name: KAFKA_LEVEL_ABSORPTION_HOST_LEVELS_TOPIC
+              value: options.spx.market-structure.ui
             - name: LEVEL_ABSORPTION_CONSUMER_GROUP
               value: level-absorption-service
             - name: LEVEL_ABSORPTION_SYMBOL
