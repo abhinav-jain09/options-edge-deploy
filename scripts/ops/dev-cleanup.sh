@@ -680,12 +680,13 @@ do_es_down() {
 indicator_epoch_fatal_count() {
   local flag out rc n=0
   for flag in "" "--previous"; do
-    out=$($KK logs deploy/indicator-service -c indicator-service $flag --tail=200 2>&1); rc=$?
+    # `&& rc=0 || rc=$?` keeps an expected non-zero (no previous instance) from tripping errexit/inherit_errexit.
+    out=$($KK logs deploy/indicator-service -c indicator-service $flag --tail=200 2>&1) && rc=0 || rc=$?
     if [ "$rc" -ne 0 ]; then
       [ -z "$flag" ] && echo "  ⚠ cannot read the indicator-service container logs (rc=$rc): $(printf '%s' "$out" | head -1)" >&2
       continue
     fi
-    n=$((n + $(printf '%s\n' "$out" | grep -c "INDICATOR_EPOCH_GENESIS is not authorized")))
+    n=$((n + $(printf '%s\n' "$out" | grep -c "INDICATOR_EPOCH_GENESIS is not authorized" || true)))
   done
   echo "$n"
 }

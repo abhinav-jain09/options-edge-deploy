@@ -76,7 +76,14 @@ def extract_pieces():
 
 
 class EpochSelfHeal(unittest.TestCase):
-    def run_block(self, *flags, mutate_helper=None):
+    # dev-cleanup.sh runs with `set -uo pipefail` (no errexit). Tests default to exactly that mode. The key
+    # scenarios are ALSO run in the strictest shell: errexit in POSIX mode, where command substitutions INHERIT
+    # errexit (macOS bash 3.2 does not inherit it otherwise, so plain `set -e` would test nothing). The helper
+    # must not depend on errexit being off.
+    SCRIPT_MODE = "set -uo pipefail"
+    STRICT_MODE = "set -euo pipefail; set -o posix"
+
+    def run_block(self, *flags, mutate_helper=None, shell_opts=None):
         helper, block = extract_pieces()
         if mutate_helper:
             helper = mutate_helper(helper)
@@ -89,7 +96,7 @@ class EpochSelfHeal(unittest.TestCase):
                 (tmp / flag).touch()
             harness = tmp / "harness.sh"
             harness.write_text(
-                "set -u\n"
+                f"{shell_opts or self.SCRIPT_MODE}\n"
                 "sleep() { :; }\n"          # the real block polls every 5 s; the fake answers instantly
                 f'K="{fake}"; KK="{fake}"; DISABLED_DEV=""\n'
                 + helper
@@ -135,6 +142,24 @@ class EpochSelfHeal(unittest.TestCase):
         self.assertEqual(2, len(gen), gen)
         self.assertTrue(gen[0].endswith("=true") and gen[1].endswith("=false"), gen)
         self.assertIn("needs manual attention", done.stdout)
+
+    def test_the_key_scenarios_also_hold_under_strict_errexit(self):
+        # Expected non-zero outcomes (no previous instance, grep -c with zero matches) must not abort a
+        # strict shell. The fatal-current / no-previous case is the incident itself.
+        for flags, expect_genesis in (((), True), (("only_previous",), True), (("healthy",), False)):
+            with self.subTest(flags=flags):
+                done, calls = self.run_block(*flags, shell_opts=self.STRICT_MODE)
+                gen = self.genesis_calls(calls)
+                self.assertEqual(0, done.returncode, f"aborted under errexit: {done.stderr}\n{done.stdout}")
+                self.assertEqual(2 if expect_genesis else 0, len(gen), f"{flags}: {gen}")
+
+    def test_the_strict_mode_test_is_meaningful(self):
+        # The pre-fix helper (`out=$(...); rc=$?` and a bare `grep -c`) ABORTS under inherited errexit on the
+        # incident, before genesis is ever enabled. If this stops failing, the strict test above proves nothing.
+        unsafe = lambda h: h.replace(" && rc=0 || rc=$?", "; rc=$?").replace(" || true)))", ")))")
+        done, calls = self.run_block(mutate_helper=unsafe, shell_opts=self.STRICT_MODE)
+        self.assertNotEqual(0, done.returncode, "the unsafe helper no longer aborts: the strict test is vacuous")
+        self.assertEqual([], self.genesis_calls(calls))
 
     def test_the_original_bare_log_read_never_bootstraps(self):
         # The 2026-10-22 bug: without -c the default container is read, which never holds the exception.
