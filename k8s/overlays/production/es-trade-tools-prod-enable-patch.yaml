@@ -14,6 +14,14 @@
 # (scripts/deploy/generate-service-slices.sh) and is deployed with service-deploy SERVICE=es-trade-tools; verify the live Deployment reads replicas 0. Roll the flags back first when anything degrades.
 # SINGLE replica ONLY (strategy Recreate): the producer is transactional with transactional.id es-trade-tools-ES.v.0.
 # MUST MIRROR the standalone slice k8s/services/es-trade-tools/overlays/production (validate-services: mono==slice).
+# Provenance and preflight: the image activated is EXACTLY sha256:6f1bdcc14fb1ba78bac2039c3bdffe58825246f6714d66fee8d9f9c3f1319778 (options-edge-processing Jenkins build #2044, processing commit
+# 6c2105953e3d823ed82ebb4dcb8f89fa27778228, contracts 4ddf5a367bd5fa34b35d7c782e0529f79338eb0d, built with Jib for linux/amd64, :prod = that digest, registry index/children/blobs verified full length).
+# service-deploy pins the :prod tag to a digest at deploy time: compare the digest it prints with the line above BEFORE the apply, and the live imageID (the digest after '@' of the container NAMED es-trade-tools,
+# `kubectl -n options-edge get pod <pod> -o jsonpath='{.status.containerStatuses[?(@.name=="es-trade-tools")].imageID}'`) AFTER it; a different digest needs its own PR updating this line.
+# Verification after the run (pod UID and restartCount captured at first Running): restartCount 0 through 10 minutes, `kubectl logs --since=10m | grep -c ' ERROR '` = 0, tt_state LIVE and tt_replay_complete 1,
+# publish_errors 0; futures.pf.chart / futures.pf.columns / futures.volume-nodes / futures.flow.bars records decode as Avro with schema ids 2321, 2322, 2330, 2331 (version 2) and futures.tradetools.state carries 2335 and the
+# checkpoint chunks 2313/2314; the production broker's OutOfOrderSequenceException rate (pre-existing noise from other producers) is sampled before and after and must not rise.
+# Abort criteria: a restart, an ERROR or schema/serialization line, publish_errors > 0, or a measurable broker degradation: set the flags to "false" (or replicas 0) FIRST, then investigate.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

@@ -12,6 +12,14 @@
 # SERVICE=wave-cycle; verify the live Deployment reads replicas 0. Roll the flags back first when anything degrades.
 # SINGLE replica ONLY (strategy Recreate): transactional.id is the fixed wave-cycle-SPX.
 # MUST MIRROR the standalone slice k8s/services/wave-cycle/overlays/production (validate-services: mono==slice).
+# Provenance and preflight: the image activated is EXACTLY sha256:924b412cb64aa6b4f108fbe25f48d1d344c95ddcc9e5522e0f65e770f6aeb8f1 (options-edge-processing Jenkins build #2045, processing commit
+# 6c2105953e3d823ed82ebb4dcb8f89fa27778228, contracts 4ddf5a367bd5fa34b35d7c782e0529f79338eb0d, built with Jib for linux/amd64, :prod = that digest; entrypoint java -Xmx256m -XX:+UseSerialGC -jar /app/app.jar,
+# /app/release present, registry index/children/blobs verified full length). service-deploy pins the :prod tag to a digest at deploy time: compare the digest it prints with the line above BEFORE the apply, and the live imageID
+# (digest after '@' of the container NAMED wave-cycle) AFTER it; a different digest needs its own PR updating this line.
+# Verification after the run (pod UID and restartCount captured at first Running): restartCount 0 through 10 minutes, ERROR lines 0, "wave-cycle starting ... parameterSetHash=eb3864e0..." in the log,
+# fold_failed 0 and checkpoint_ignored 0; options.spx.wave-cycle.waves records decode as Avro schema id 2406, .cycles 2407, .recovery 2403/2404/2405; the waves records of the 5m/15m series carry calibration state CALIBRATED
+# once enough bars exist and the 1m series says NOT_CALIBRATED (by design); the production broker's OutOfOrderSequenceException rate is sampled before and after and must not rise.
+# Abort criteria: a restart, an ERROR or schema line, fold_failed > 0, or broker degradation: set WAVE_CYCLE_ENABLED false (or replicas 0) FIRST, then investigate.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
