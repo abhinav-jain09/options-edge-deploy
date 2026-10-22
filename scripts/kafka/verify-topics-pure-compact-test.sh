@@ -73,6 +73,8 @@ if [ -n "\$bytes" ]; then bytes_field=", retention.bytes=\$bytes sensitive=false
 maxmsg=\$(printf '%s' "$maxmsg_declarations" | tr ' ' '\\n' | awk -F= -v n="\$name" '\$1 == n {print \$2; exit}')
 case "$maxmsg_ov" in "\$name="*) maxmsg="${maxmsg_ov#*=}";; esac
 if [ -n "\$maxmsg" ]; then maxmsg_field=", max.message.bytes=\$maxmsg sensitive=false"; else maxmsg_field=""; fi
+# MAXMSG_INHERITED=1: the value is the broker's (inherited), so like the real tool it appears only under --all.
+case " \$* " in *" --all "*) ;; *) [ -n "\${MAXMSG_INHERITED:-}" ] && maxmsg_field="";; esac
 echo "Dynamic configs for topic \$name are: cleanup.policy=\$pol sensitive=false, retention.ms=\${ret:--1} sensitive=false\$bytes_field\$maxmsg_field"
 exit 0
 EOF
@@ -171,6 +173,7 @@ MAXMSG_OVERRIDE="options.spx.break-classification.checkpoint=1048576" \
   "options.spx.break-classification.checkpoint max.message.bytes='1048576' but the declaration says >= '9437184'"
 MAXMSG_OVERRIDE="options.spx.break-classification.checkpoint=16777216" \
   check "a checkpoint topic above the floor passes" 0 compact "max.message.bytes contract OK"
+MAXMSG_INHERITED=1 check "an inherited (effective-only) value is read with --all" 0 compact "max.message.bytes contract OK"
 MAXMSG_OVERRIDE="options.spx.break-classification.checkpoint=" \
   check "an UNREADABLE max.message.bytes fails (never assumed)" 1 compact \
   "options.spx.break-classification.checkpoint max.message.bytes could not be read"

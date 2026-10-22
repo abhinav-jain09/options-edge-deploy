@@ -180,8 +180,9 @@ maxmsg_fail=0
 for entry in $MAXMSG_LIST; do
   topic="${entry%%=*}"
   expected_max="${entry#*=}"
+  # --all: the EFFECTIVE value (what the service's own describeConfigs reads), dynamic override or inherited broker default alike.
   actual_max="$(kafka-configs --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --entity-type topics \
-      --entity-name "$topic" --describe 2>/dev/null | grep -oE '(^|[ ,])max\.message\.bytes=[0-9]+' | head -1 | sed 's/^[ ,]*//' | cut -d= -f2 || true)"
+      --entity-name "$topic" --describe --all 2>/dev/null | grep -oE '(^|[ ,])max\.message\.bytes=[0-9]+' | head -1 | sed 's/^[ ,]*//' | cut -d= -f2 || true)"
   if [ -z "$actual_max" ]; then
     echo "FAIL: topic $topic max.message.bytes could not be read (expected >= '$expected_max') — refusing to assume it" >&2
     maxmsg_fail=1

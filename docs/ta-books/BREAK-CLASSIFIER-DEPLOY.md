@@ -26,7 +26,7 @@ The service never creates a topic and verifies all six at every start. Avro subj
 ## What the barrier does (`scripts/kafka/ensure-break-classification-topics.sh`, service-deploy stage "Verify break-classification topics")
 
 1. Reads the effective `message.max.bytes` of every broker. Below 8 388 608 on any: raises the cluster-wide dynamic default to 9 437 184, idempotently, never lowering, and re-reads every broker. A failed alter, an unreadable value, or a per-broker override that keeps a broker below the bound fails the barrier before any topic is created.
-2. Creates each absent topic at the shape above (checkpoint with `max.message.bytes=9437184`) and verifies all four; an existing topic is never altered or recreated, any difference fails closed naming the topic.
+2. Creates each absent topic at the shape above (checkpoint with `max.message.bytes=9437184`) and verifies all four; an existing topic is never recreated and its verified shape is never altered, any difference fails closed naming the topic (the one change to an existing topic is the checkpoint's compaction cadence, next step).
 3. Gives the checkpoint the recovery-topic compaction cadence (16 MiB segments, 5 minute max compaction lag) after verification.
 
 `scripts/kafka/topics.env` declares the same four topics, with `OPTIONS_EDGE_TOPIC_MAX_MESSAGE_BYTES_OVERRIDES` as the per-topic `max.message.bytes` contract honoured by `topic-shape.lib.sh` (create and alter), `scripts/ops/dev-cleanup.sh` (create and reconcile) and `verify-topics.sh` (floor check), so a nightly dev wipe recreates the checkpoint at the bound. Reset class of the checkpoint: RESET_REBUILDABLE, reset together with its inputs and the output (justification in `topics.env`).
