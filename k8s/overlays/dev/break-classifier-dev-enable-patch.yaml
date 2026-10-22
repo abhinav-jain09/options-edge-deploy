@@ -1,0 +1,45 @@
+# DEV: break-classifier-service LIVE (replicas 1, BREAK_CLASSIFIER_ENABLED "true"), out of shadow, on dev like every service (owner standing goal 2026-10-22).
+# Release configuration: processing break-classifier-service (Phase F, processing 153dd3ce #1291). Behaviour is the embedded parameter set, there is no tuning variable; the only
+# environment inputs are the topic names in the shared base. The shared base (k8s/services/break-classifier/base) stays replicas 0 / BREAK_CLASSIFIER_ENABLED "false"; this patch
+# overrides it for dev only.
+# HONEST STATE (docs/ta-books/BREAK-CLASSIFIER-DEPLOY.md): (1) the producer's pre-registered validation FAILED (p=1681/2001 on the development fold), so every classification
+# it publishes is UNDECIDED(NO_MEASURED_EDGE) carrying the measured numbers; it never publishes a trap/real verdict. (2) The two parent inputs, BreakParentRecord on
+# options.spx.market-structure.break-events (X1) and SwingPivotRecord on options.spx.market-structure.swing-pivots (X2), have NO producer on main yet (market-structure-service does not
+# publish them). The live service therefore starts, publishes its STARTING/LIVE status and NO marks until a Phase B/C producer exists. That is a rollout blocker for marks, not for the service.
+# (3) X6 is a release SELF-attestation file baked into the image (/app/release/x6-attestation.txt); the service refuses to start if it does not name the embedded parameter-set hash.
+# Preconditions, all verified at service start (FAILED_CONTRACT otherwise): Avro subjects 2601-2606 registered on this registry (service-deploy SERVICE=break-classifier
+# REGISTER_TA_SCHEMAS=true CONTRACTS_PERMITTED_SHA=87511c9acb7a897850c2fa436d59c45eaef24481); the four topics the service-deploy barrier ensures
+# scripts/kafka/ensure-break-classification-topics.sh BEFORE the pod starts (that barrier also RAISES the broker's cluster-wide message.max.bytes to 9437184 when it is lower: the
+# service refuses a broker below 8 MiB); options.indicators.bars (8 partitions) and es.futures.footprint.bars exist. Reset class: the checkpoint topic is RESET_REBUILDABLE and is reset
+# TOGETHER with its inputs (DEPLOY-ROLLOUT.md section 5b).
+# Rollback (complete, two levels, both through ONE reviewed PR + service-deploy SERVICE=break-classifier; never kubectl):
+#  (1) service dark, durable: set BREAK_CLASSIFIER_ENABLED to "false" in this patch (replicas stays 1; health reads DISABLED, nothing is consumed or published), regenerate the slices
+#      (scripts/deploy/generate-service-slices.sh), deploy, and verify the live pod environment reads "false". Also set GATEWAY_BREAK_CLASSIFICATION_ENABLED "false" in the feed-gateway
+#      patch if the relay should stop.
+#  (2) scaled to zero, durable: ALSO set replicas to 0 here AND add break-classifier-service to KEEP_DOWN in BOTH scripts/ops/morning-autostart.sh and scripts/ops/oe-boot-bringup.sh
+#      (and DISABLED_DEV in scripts/ops/dev-cleanup.sh for dev) in the same PR (a KEEP_DOWN-free zero-replica Deployment is scaled back to 1 by the next boot or morning start, so replicas 0 alone
+#      is NOT a rollback); verify the live Deployment reads replicas 0 and the lists agree (tests/test_keep_down_lists_agree.py).
+# SINGLE replica ONLY (strategy Recreate): transactional.id is break-classifier-<ENVIRONMENT>.
+# MUST MIRROR the standalone slice k8s/services/break-classifier/overlays/dev (validate-services: mono==slice).
+# Image: options-edge-break-classifier:dev, pinned to a digest by service-deploy at deploy time (no digest is recorded here); compare the digest it prints with the processing build that
+# staged /app/release/x6-attestation.txt and verify the live imageID of the container NAMED break-classifier AFTER the apply.
+# Verification after the run (pod UID and restartCount captured at first Running): restartCount 0 through 10 minutes, ERROR lines 0, "break-classifier starting: enabled=true parameterSetHash=..." in the
+# log, /health/ready 200 (state LIVE); options.spx.break-classification carries BreakStatus records (Avro schema id 2603) and, until X1/X2 have a producer, no BreakMark (2601).
+# Abort criteria: a restart, an ERROR or FAILED_CONTRACT line, or broker degradation: set BREAK_CLASSIFIER_ENABLED false (or replicas 0) FIRST, then investigate.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: break-classifier-service
+  namespace: options-edge
+spec:
+  replicas: 1
+  template:
+    spec:
+      containers:
+        - name: break-classifier
+          env:
+            - name: BREAK_CLASSIFIER_ENABLED
+              value: "true"
+            # options-edge-config carries no ENVIRONMENT, and the service's default is "dev"; its transactional.id and consumer group are break-classifier-<ENVIRONMENT>.
+            - name: ENVIRONMENT
+              value: dev

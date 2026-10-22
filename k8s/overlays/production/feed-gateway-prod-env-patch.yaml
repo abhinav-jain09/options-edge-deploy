@@ -85,6 +85,11 @@ spec:
             # ELLIOTT-FIB-CYCLE-TOOLS  options.spx.wave-cycle.{waves,cycles}
             - name: GATEWAY_WAVE_CYCLE_ENABLED
               value: "false"
+            # Phase F BREAK CLASSIFICATION relay  options.spx.break-classification (BreakMark/BreakOutcome/BreakStatus). The topic variable KAFKA_BREAK_CLASSIFICATION_TOPIC defaults to exactly the topic
+            # scripts/kafka/topics.env declares, so none is set here. ON in dev and production (owner standing goal: every service out of shadow). Until a Phase B/C producer feeds
+            # break-classifier-service its parents the topic carries status records only (no marks).
+            - name: GATEWAY_BREAK_CLASSIFICATION_ENABLED
+              value: "true"
             # MARKET COMMENTARY relay: the per-minute records of market-commentary-service, polled by the read-only
             # /market-commentary panel through GET /api/market-commentary/state (a REST view, no WebSocket event). The topic is the
             # code default; declared in scripts/kafka/topics.env and created by ensure-market-commentary-topics.sh. Applying

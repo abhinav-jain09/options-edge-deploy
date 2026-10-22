@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ensure-fixed-id-schemas.sh — a declared set of Avro schemas exists on ONE Schema Registry under FIXED ids, subject
 # compatibility FULL, idempotently. The generic form of ensure-indicator-schemas.sh (same procedure, same registry calls, same
-# mode capture/restore), driven by a map file so each TA-books service family (market-structure W0/B/C, es-trade-tools, wave-cycle)
+# mode capture/restore), driven by a map file so each TA-books service family (market-structure W0/B/C, es-trade-tools, wave-cycle, break-classifier)
 # registers its own subjects without a copy of the script per family.
 #
 # WHY FIXED IDS: a Confluent-framed Avro value names its schema by REGISTRY ID, and registries assign ids independently, so any

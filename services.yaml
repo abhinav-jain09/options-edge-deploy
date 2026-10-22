@@ -240,6 +240,11 @@ services:
   # WAVE_CYCLE_SEASONALITY_ENABLED "false"; it needs its five Avro subjects registered even with the flags off. Same hold-down paths as
   # es-trade-tools. scripts/kafka/ensure-wave-cycle-topics.sh is the first-deploy barrier. No Service object.
   - { name: wave-cycle,                   managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-wave-cycle,                   deployments: [wave-cycle-service] }
+  # break-classifier (Phase F, TA books): classifies SPX/ES level breaks from options.indicators.bars, es.futures.footprint.bars and the Phase B/C parent and pivot topics (no producer of those two yet, so it
+  # publishes status and no marks), Avro on options.spx.break-classification{,.checkpoint}. Its pre-registered validation FAILED: every classification it publishes is UNDECIDED(NO_MEASURED_EDGE). LIVE (replicas 1, BREAK_CLASSIFIER_ENABLED true) on dev AND production through the per-environment enable patches
+  # (k8s/overlays/<env>/break-classifier-{dev,prod}-enable-patch.yaml); the shared base is replicas 0 / "false". Needs its six Avro subjects (2601-2606) and the barrier
+  # scripts/kafka/ensure-break-classification-topics.sh (which also raises the broker message.max.bytes to 9 MiB). Single replica; no Service object. NOT in KEEP_DOWN or DISABLED_DEV.
+  - { name: break-classifier,             managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-break-classifier,             deployments: [break-classifier-service] }
   # stock-gex: SPX-500 single-stock GEX (Databento equity options; NO Kafka). Its image builds in the
   # options-edge-databento-feed repo (Dockerfile.stockgex), like databento-sr3-feed — hence buildJob.
   # DEV-FIRST/on-demand: prod overlay holds it at replicas:0 until the nightly OI-index builder exists.

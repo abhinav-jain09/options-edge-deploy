@@ -1,0 +1,11 @@
+# Fixed schema ids for break-classifier-service (Phase F, trap versus real classification of level breaks). Contracts 0.37.0 (options-edge-contracts #128, 87511c9acb7a897850c2fa436d59c45eaef24481):
+# ids 2601-2606, all version 1, subject = the record full name (RecordNameStrategy), compatibility FULL. The service resolves every one of them at boot (BrokerGuard.schemaIds: the four records it writes and
+# the two parent-input records it reads) and refuses to start (FAILED_CONTRACT) if the registry lacks one or holds a different schema under the subject.
+# BreakParentRecord (X1) and SwingPivotRecord (X2) are PROPOSED input contracts: the service reads them but NO producer exists on main yet (Phase B/C); their subjects are still required to start.
+# File column: relative to the contracts checkout's `schemas-registry/ta` directory (SCHEMAS_DIR).
+com.optionsedge.contracts.breakclass.BreakMark|2601|BreakMark.avsc
+com.optionsedge.contracts.breakclass.BreakOutcome|2602|BreakOutcome.avsc
+com.optionsedge.contracts.breakclass.BreakStatus|2603|BreakStatus.avsc
+com.optionsedge.contracts.breakclass.BreakClassifierCheckpoint|2604|BreakClassifierCheckpoint.avsc
+com.optionsedge.contracts.breakclass.input.BreakParentRecord|2605|BreakParentRecord.avsc
+com.optionsedge.contracts.breakclass.input.SwingPivotRecord|2606|SwingPivotRecord.avsc

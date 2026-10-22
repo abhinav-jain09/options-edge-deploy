@@ -1,0 +1,9 @@
+# SERVICE SLICE — break-classifier (Phase F, TA books). Owns this service's Deployment only.
+#
+# Referenced from BOTH k8s/overlays/dev and k8s/overlays/production (NOT k8s/base). The base is replicas 0 / BREAK_CLASSIFIER_ENABLED "false"; each
+# environment turns the service on through its OWN enable patch (k8s/overlays/{dev,production}/break-classifier-{dev,prod}-enable-patch.yaml).
+# Single replica only. No Service object (the shadow-service pattern). No ConfigMap, Secret, PVC or hostPath: the checkpoint is a Kafka topic.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - break-classifier-deployment.yaml

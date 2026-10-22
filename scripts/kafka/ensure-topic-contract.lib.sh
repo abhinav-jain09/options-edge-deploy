@@ -2,12 +2,13 @@
 # ensure-topic-contract.lib.sh — the ONE create-then-verify routine behind ensure-es-trade-tools-topics.sh and ensure-wave-cycle-topics.sh
 # (the same barrier as ensure-market-structure-topics.sh, parameterised, so the two new services cannot drift from each other).
 #
-# ensure_topic <topic> <cleanup.policy> <retention-spec> <min max.message.bytes> [create-if-absent: yes|no]
+# ensure_topic <topic> <cleanup.policy> <retention-spec> <min max.message.bytes> [create-if-absent: yes|no] [create-time max.message.bytes, default 1048576]
 #   retention-spec   exact:<ms>   retention.ms must EQUAL <ms> (-1 included)       — es-trade-tools-service compares exactly
 #                    floor:<ms>   retention.ms must be >= <ms> (or -1)             — wave-cycle-service compares with >=
 #                    any:<ms>     retention.ms is only CREATED at <ms> and not judged on an existing topic (a compact-only topic: the service
 #                                 sets none and accepts the broker default, so a stricter barrier would block a deploy the service would run)
 #   cleanup.policy   compared as a SET of its comma-separated members ("compact,delete" == "delete,compact"), as the services do.
+# The optional 6th argument is the max.message.bytes an ABSENT topic is created with (break-classification's checkpoint needs 9437184); it never alters an existing topic.
 # Every value read is the EFFECTIVE one (`kafka-configs --describe --all`), which is what a service's own describeConfigs returns.
 # A topic that EXISTS is never altered, recreated or shrunk: any difference fails closed. A topic that is ABSENT is created with the
 # declared shape when create-if-absent is yes, and is then verified like any other. Needs KT/KC functions, LIST, RF, MIN_RF, MIN_ISR
@@ -17,7 +18,7 @@
 _policy_set() { printf '%s' "$1" | tr ',' '\n' | sort -u | tr '\n' ','; }
 
 ensure_topic() {
-  local topic="$1" want_policy="$2" ret_spec="$3" min_bytes="$4" create="${5:-yes}"
+  local topic="$1" want_policy="$2" ret_spec="$3" min_bytes="$4" create="${5:-yes}" create_bytes="${6:-1048576}"
   local ret_mode="${ret_spec%%:*}" want_ret="${ret_spec#*:}" out desc parts rf cfg policy retention maxBytes isr
   if ! grep -qxF "$topic" <<<"$LIST"; then
     if [ "$create" != yes ]; then
@@ -27,7 +28,7 @@ ensure_topic() {
     echo "creating '$topic' (1 partition, RF=$RF, cleanup.policy=$want_policy, retention.ms=$want_ret)"
     if ! out=$(kt --create --if-not-exists --topic "$topic" --partitions 1 --replication-factor "$RF" \
                   --config cleanup.policy="$want_policy" --config retention.ms="$want_ret" \
-                  --config max.message.bytes=1048576 --config min.insync.replicas="$MIN_ISR" 2>&1); then
+                  --config max.message.bytes="$create_bytes" --config min.insync.replicas="$MIN_ISR" 2>&1); then
       echo "FAIL: could not create '$topic':"; printf '%s\n' "$out"; return 1
     fi
   fi

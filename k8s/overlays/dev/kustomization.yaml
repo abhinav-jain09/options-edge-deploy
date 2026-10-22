@@ -30,6 +30,8 @@ resources:
   # each on later (docs/ta-books/DEPLOY-ROLLOUT.md sections 4 and 5).
   - ../../services/es-trade-tools/base
   - ../../services/wave-cycle/base
+  # break-classifier (Phase F): LIVE on dev and production through each environment's enable patch (replicas 1, flag true); the base is HELD at 0 / "false".
+  - ../../services/break-classifier/base
   # market-structure: RUNNING on dev and production (replicas 1 in the base). Reads
   # options.indicators.bars read-only and writes only options.spx.market-structure.{ui,sequence,dlq};
   # what a reader sees is gated on the gateway's own GATEWAY_MARKET_STRUCTURE_ENABLED.
@@ -417,6 +419,12 @@ patches:
     target:
       kind: Deployment
       name: option-pressure-state-service
+  # DEV: break-classifier-service LIVE (replicas 1, BREAK_CLASSIFIER_ENABLED true); the base stays replicas 0 / false (production has its own patch). MUST MIRROR the standalone slice
+  # k8s/services/break-classifier/overlays/dev (validate-services: mono==slice).
+  - path: break-classifier-dev-enable-patch.yaml
+    target:
+      kind: Deployment
+      name: break-classifier-service
   - path: breakout-sequencer-dev-enable-patch.yaml
     target:
       kind: Deployment
@@ -1037,6 +1045,9 @@ images:
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-wave-cycle
     newName: host.docker.internal:5001/options-edge-wave-cycle
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-break-classifier
+    newName: host.docker.internal:5001/options-edge-break-classifier
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-multileg-structure
     newName: host.docker.internal:5001/options-edge-multileg-structure

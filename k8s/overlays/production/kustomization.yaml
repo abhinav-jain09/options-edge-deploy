@@ -38,6 +38,8 @@ resources:
   # es-trade-tools (TICK-TRADE-TOOLS) + wave-cycle (ELLIOTT-FIB-CYCLE-TOOLS): the bases are HELD AT replicas 0; PRODUCTION enables both through the enable patches registered below.
   - ../../services/es-trade-tools/base
   - ../../services/wave-cycle/base
+  # break-classifier (Phase F): LIVE on dev and production through each environment's enable patch (replicas 1, flag true); the base is HELD at 0 / "false".
+  - ../../services/break-classifier/base
   # market-structure: dev+prod at replicas 1. Reads options.indicators.bars read-only and publishes
   # options.spx.market-structure.ui (the Context Tape projection), .sequence and .dlq. Single replica
   # only (per-environment transactional.id).
@@ -796,6 +798,12 @@ patches:
     target:
       kind: Deployment
       name: wave-cycle-service
+  # PROD: break-classifier-service LIVE (replicas 1, BREAK_CLASSIFIER_ENABLED true); the base stays replicas 0 / false. See the patch header for the honest state (validation failed, X1/X2 have
+  # no producer yet) and the rollback. MUST MIRROR the standalone slice k8s/services/break-classifier/overlays/production (validate-services: mono==slice).
+  - path: break-classifier-prod-enable-patch.yaml
+    target:
+      kind: Deployment
+      name: break-classifier-service
   # PROD: run the option pressure state READER, and only that one of this service's four writers.
   # See the patch header for why the other three are switched off rather than left to create a topic
   # and three tables as a side effect.
@@ -1113,6 +1121,8 @@ images:
   - name: 192.168.100.252:5000/options-edge-es-trade-tools
     newTag: prod
   - name: 192.168.100.252:5000/options-edge-wave-cycle
+    newTag: prod
+  - name: 192.168.100.252:5000/options-edge-break-classifier
     newTag: prod
   - name: 192.168.100.252:5000/options-edge-market-commentary
     newTag: prod

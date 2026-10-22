@@ -284,7 +284,7 @@ clean_logs() {
   fi
 }
 
-# topic_desired NAME -> sets DPOL/DPARTS/DRET/DDR from the eval'd topics.env lists. Globals, not an
+# topic_desired NAME -> sets DPOL/DPARTS/DRET/DDR/DMB from the eval'd topics.env lists. Globals, not an
 # associative array: this file's `#!/usr/bin/env bash` resolves against the INHERITED PATH (the
 # export at the top of this script runs too late to matter), so under launchd it can be /bin/bash
 # 3.2, which has neither `declare -A` nor namerefs. Mirrors apply-topics.sh's topic_cleanup_policy /
@@ -300,7 +300,7 @@ clean_logs() {
 # restored it — is therefore still invisible here and is repaired by the next real deploy.
 topic_desired() {
   local name="$1" spec entry
-  DPOL=delete; DPARTS=32; DRET=""; DDR=""
+  DPOL=delete; DPARTS=32; DRET=""; DDR=""; DMB=""
   for spec in $OPTIONS_EDGE_TOPICS; do
     [ "${spec%%:*}" = "$name" ] && [ -n "${spec##*:}" ] && DPARTS="${spec##*:}"
   done
@@ -320,6 +320,11 @@ topic_desired() {
   # silently stripped the 48h guarantee.
   for entry in ${OPTIONS_EDGE_TOPIC_DELETE_RETENTION_OVERRIDES:-}; do
     [ "${entry%%=*}" = "$name" ] && DDR="${entry#*=}"
+  done
+  # Per-topic max.message.bytes (break-classifier's checkpoint must accept >= 8 MiB records; the dev broker default is 1 MiB). Without it a wipe would rebuild that
+  # topic at the broker default and the service would refuse to start.
+  for entry in ${OPTIONS_EDGE_TOPIC_MAX_MESSAGE_BYTES_OVERRIDES:-}; do
+    [ "${entry%%=*}" = "$name" ] && DMB="${entry#*=}"
   done
 }
 
@@ -341,7 +346,7 @@ topic_desired() {
 # live data. It is reported loudly instead and left to apply-topics.sh, which fails closed on
 # OPTIONS_EDGE_EXACT_PARTITION_TOPICS and carries the gated destructive repair.
 reconcile_declared_topics() {
-  local desc line spec name cfg have_pol have_ret have_dr have_parts need polcfg fixed=0 drift=0
+  local desc line spec name cfg have_pol have_ret have_dr have_mb have_parts need polcfg fixed=0 drift=0
   desc="$($KT --bootstrap-server $BS --describe 2>/dev/null | grep '^Topic:')"
   if [ -z "$desc" ]; then
     echo "  WARNING: could not describe topics — declared shapes NOT verified this run."
@@ -368,6 +373,7 @@ reconcile_declared_topics() {
     cfg="$(printf '%s' "$line" | sed 's/delete\.retention\.ms/DELRET/g')"
     have_ret="$(printf '%s' "$cfg" | sed -n 's/.*[,: ]retention\.ms=\(-\{0,1\}[0-9]*\).*/\1/p')"
     have_dr="$(printf '%s' "$cfg" | sed -n 's/.*DELRET=\([0-9]*\).*/\1/p')"
+    have_mb="$(printf '%s' "$cfg" | sed -n 's/.*[,: ]max\.message\.bytes=\([0-9]*\).*/\1/p')"
     need=""
     case "$DPOL" in
       # A declared-plain topic that simply inherits the broker default is CORRECT — only an
@@ -381,6 +387,7 @@ reconcile_declared_topics() {
     esac
     [ -n "$DRET" ] && [ "$have_ret" != "$DRET" ] && need="$need${need:+,}retention.ms=$DRET"
     [ -n "$DDR" ]  && [ "$have_dr"  != "$DDR"  ] && need="$need${need:+,}delete.retention.ms=$DDR"
+    [ -n "$DMB" ]  && [ "$have_mb"  != "$DMB"  ] && need="$need${need:+,}max.message.bytes=$DMB"
     if [ -n "$need" ]; then
       # `--add-config` separates entries with commas, so a comma-BEARING value must be bracketed
       # (cleanup.policy=[compact,delete]) or the broker reads "delete" as a second, malformed entry.
@@ -501,7 +508,7 @@ ensure_topics() {
   git -C "$DEPLOY_REPO" fetch -q origin main 2>/dev/null || true
   local tenv; tenv="$(git -C "$DEPLOY_REPO" show "$TOPICS_ENV_REF" 2>/dev/null)"
   if [ -n "$tenv" ]; then
-    eval "$(printf '%s\n' "$tenv" | grep -E '^OPTIONS_EDGE_(TOPICS|COMPACTED_TOPICS|PURE_COMPACT_TOPICS|EXACT_PARTITION_TOPICS|TOPIC_RETENTION_OVERRIDES|TOPIC_DELETE_RETENTION_OVERRIDES|PARTITION_ONLY_TOPICS)=')"
+    eval "$(printf '%s\n' "$tenv" | grep -E '^OPTIONS_EDGE_(TOPICS|COMPACTED_TOPICS|PURE_COMPACT_TOPICS|EXACT_PARTITION_TOPICS|TOPIC_RETENTION_OVERRIDES|TOPIC_DELETE_RETENTION_OVERRIDES|TOPIC_MAX_MESSAGE_BYTES_OVERRIDES|PARTITION_ONLY_TOPICS)=')"
     local n=0 spec name extra rt existing missing=0
     # One --list, then create only what is missing (in parallel). A failed list falls back to creating every
     # declared topic: --if-not-exists makes that safe, only slower. Config of EXISTING topics is the
@@ -513,6 +520,7 @@ ensure_topics() {
       topic_desired "$name"
       extra=""; [ -n "$DDR" ]  && extra="--config delete.retention.ms=$DDR"
       rt="";    [ -n "$DRET" ] && rt="--config retention.ms=$DRET"
+      [ -n "$DMB" ] && extra="$extra --config max.message.bytes=$DMB"
       echo "--topic $name --partitions $DPARTS --replication-factor 1 --config cleanup.policy=$DPOL $extra $rt"
     done | create_topics_parallel)
     echo "Pre-created $n platform topics from deploy config ($TOPICS_ENV_REF); apps self-create the rest on startup."
