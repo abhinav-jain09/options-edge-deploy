@@ -400,6 +400,21 @@ class VersionTwoRegistration(unittest.TestCase):
         finally:
             server.shutdown()
 
+    def test_a_subject_already_in_import_mode_is_never_captured_as_the_original_mode(self):
+        reg = Registry()
+        seed_version_1(reg)
+        victim = TRADE_TOOLS_VERSION_2[0][0]
+        reg.subject_modes[victim] = "IMPORT"   # another run in flight
+        server, url = serve(reg)
+        try:
+            rc, out = run("es-trade-tools", url)
+            self.assertEqual(rc, 1, out)
+            self.assertIn("already in subject-level IMPORT mode", out)
+            self.assertEqual(reg.subject_modes, {victim: "IMPORT"}, "left exactly as found: this run neither restored nor cleared it")
+            self.assertEqual(len(reg.subjects[victim]), 1, "and did not import into it")
+        finally:
+            server.shutdown()
+
     def test_a_probe_mode_that_could_not_be_removed_is_removed_by_the_exit_trap(self):
         reg = Registry()
         reg.fail_next_mode_delete = 1   # the probe's DELETE fails once

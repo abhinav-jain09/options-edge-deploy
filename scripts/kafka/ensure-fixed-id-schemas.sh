@@ -209,7 +209,9 @@ while IFS='|' read -r subject id file version; do
   # capture the mode, then import
   M=$(http GET "/mode/$subject")
   case "$(status "$M")" in
-    200) CUR_HAD_OVERRIDE=true; CUR_MODE=$(json_field "$(body "$M")" mode) ;;
+    200) CUR_HAD_OVERRIDE=true; CUR_MODE=$(json_field "$(body "$M")" mode)
+         # IMPORT is this script's own transient mode: finding it means another run (or a failed one) is in flight on this subject, and restoring it later would pin it for good
+         [ "$CUR_MODE" != IMPORT ] || { echo "FAIL: $subject is already in subject-level IMPORT mode (another run in flight, or a failed one): resolve that deliberately, nothing was changed by this run"; fail=1; continue; } ;;
     404) CUR_HAD_OVERRIDE=false; CUR_MODE="$GLOBAL_MODE" ;;   # the registry's own "no subject mode" (40409): inherited
     *) echo "FAIL: cannot capture the mode of $subject (GET /mode/$subject -> $M) — a transient failure here would be restored as an inherited mode and delete a real override"; fail=1; continue ;;
   esac
