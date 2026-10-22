@@ -11,13 +11,16 @@
 #
 # Inputs (environment):
 #   SCHEMA_REGISTRY_URL   the registry to reconcile (plain HTTP on the LAN; no credentials are configured)
-#   SCHEMA_ID_MAP         the map file: one `subject|fixed id|file` per line (file relative to SCHEMAS_DIR); `#` lines and blanks ignored.
-#                         The maps live in scripts/kafka/schema-id-maps/.
+#   SCHEMA_ID_MAP         the map file: one `subject|fixed id|file[|version]` per line (file relative to SCHEMAS_DIR); `#` lines and blanks ignored.
+#                         The optional fourth column is the registry VERSION of that row (default 1). A subject with several versions has one row per
+#                         version, in order 1, 2, ... and EACH version has its OWN fixed id (a version of a subject cannot reuse the id of a different
+#                         schema); version N is imported with `version`: N only after versions 1..N-1 are present and the schema is FULL-compatible with
+#                         the latest version (read-only POST /compatibility). The maps live in scripts/kafka/schema-id-maps/.
 #   SCHEMAS_DIR           the contracts checkout's schemas directory the directory the map file column is relative to
 #   DEPLOY_DRY_RUN        true = report only, never mutate
-# Exit 0 only when every subject is registered under its fixed id at version 1 with compatibility FULL. Everything that exists and is
-# not exactly that is a COLLISION and fails: a different schema under the subject, a later version, or the fixed id held by another
-# schema. This script never repairs a collision and never deletes a subject.
+# Exit 0 only when every subject holds exactly the versions its map rows declare, each under its fixed id, with compatibility FULL. Everything
+# that exists and is not exactly that is a COLLISION and fails: a different schema under the subject or at a declared version, a version the
+# map does not declare, or a fixed id held by another schema. This script never repairs a collision and never deletes a subject.
 #
 # A read-only PREFLIGHT pass judges every map line (collision = fail) BEFORE the apply pass imports anything: a collision ALREADY PRESENT on a later subject
 # never leaves the earlier ones imported. (A writer racing the apply pass is outside that guarantee: registration is an operator-run
@@ -33,13 +36,20 @@ REG="${SCHEMA_REGISTRY_URL%/}"
 CT='Content-Type: application/vnd.schemaregistry.v1+json'
 PROBE_SUBJECT="${SCHEMA_PROBE_SUBJECT:-zz.ta.importmode.probe}"
 
-# subject|fixed id|file — read from the map; RecordNameStrategy subjects. A map that is empty, has a malformed line, repeats a subject
-# or repeats an id is refused before the registry is touched.
+# subject|fixed id|file[|version] — read from the map; RecordNameStrategy subjects. A map that is empty, has a malformed line, repeats a
+# subject version, repeats an id, or does not number a subject's versions 1, 2, 3 ... in order is refused before the registry is touched.
 FIXED="$(grep -v '^[[:space:]]*#' "$SCHEMA_ID_MAP" | grep -v '^[[:space:]]*$' || true)"
 [ -n "$FIXED" ] || { echo "FAIL: $SCHEMA_ID_MAP declares no subject"; exit 1; }
-if ! awk -F'|' 'NF != 3 || $1 == "" || $2 !~ /^[0-9]+$/ || $3 == "" || seen_s[$1]++ || seen_i[$2]++ { bad = 1 } END { exit bad }' <<<"$FIXED"; then
-  echo "FAIL: $SCHEMA_ID_MAP has a malformed line, a repeated subject or a repeated id"; exit 1
+if ! awk -F'|' '{ v = (NF == 4 ? $4 : 1) }
+  (NF != 3 && NF != 4) || $1 == "" || $2 !~ /^[0-9]+$/ || $3 == "" || (NF == 4 && $4 !~ /^[1-9][0-9]*$/) || seen_i[$2]++ || v != last[$1] + 1 { bad = 1 }
+  { last[$1] = v } END { exit bad }' <<<"$FIXED"; then
+  echo "FAIL: $SCHEMA_ID_MAP has a malformed line, a repeated subject version, a repeated id or a subject whose versions are not 1, 2, 3 ... in order"; exit 1
 fi
+# the highest version each subject's rows declare: a subject may hold 1..MAXV and nothing else
+maxv() { awk -F'|' -v s="$1" '$1 == s { v = (NF == 4 ? $4 : 1); if (v > m) m = v } END { print m + 0 }' <<<"$FIXED"; }
+# [1,2,...,K] as the registry lists the versions of a subject
+version_list() { local i out="1"; [ "$1" -ge 1 ] || { printf '[]'; return; }; for ((i = 2; i <= $1; i++)); do out="$out,$i"; done; printf '[%s]' "$out"; }
+PLANNED=" "   # "subject@version " of every row of this pass judged importable or already present: a later version of the same subject may follow it on a registry that lacks both
 COMPAT=FULL
 
 # http <method> <path> [json body]  -> prints "<status> <body>"
@@ -57,7 +67,7 @@ body()   { printf '%s' "$1" | cut -d' ' -f2-; }
 json_field() { python3 -c 'import json,sys; d=json.load(sys.stdin); v=d.get(sys.argv[1]); print("" if v is None else v)' "$2" <<<"$1"; }
 # the registration body: {"schema": "<escaped schema text>"[, "id": N, "version": 1]}
 reg_body() { python3 -c 'import json,sys; b={"schema": open(sys.argv[1]).read()}
-if len(sys.argv) > 2: b["id"] = int(sys.argv[2]); b["version"] = 1
+if len(sys.argv) > 2: b["id"] = int(sys.argv[2]); b["version"] = int(sys.argv[3])
 print(json.dumps(b))' "$@"; }
 
 echo "=== ensure-fixed-id-schemas: $REG (dry_run=$DRY) map=$SCHEMA_ID_MAP schemas=$SCHEMAS_DIR ==="
@@ -67,18 +77,24 @@ echo "global mode: $GLOBAL_MODE"
 
 # ---- the mutability probe: subject-level IMPORT must be allowed (mode.mutability=true), proven on a
 # disposable absent subject that is removed again, before any real subject is touched.
+# the exit trap exists BEFORE the first mutation: it removes a probe mode that a failed DELETE left behind and restores the mode of the subject in flight
+PROBE_SET=false; CUR_SUBJECT=""
+on_exit() { local rc=$?; if [ "$PROBE_SET" = true ]; then http DELETE "/mode/$PROBE_SUBJECT" >/dev/null 2>&1 || true; fi; restore_mode || rc=1; exit $rc; }
+trap on_exit EXIT
+
 PR=$(http GET "/mode/$PROBE_SUBJECT")
 [ "$(status "$PR")" = 404 ] || { echo "FAIL: probe subject $PROBE_SUBJECT already has a mode ($PR) — refusing to probe on a real subject"; exit 1; }
 if [ "$DRY" = true ]; then
   echo "probe: DEPLOY_DRY_RUN=true — not setting IMPORT on $PROBE_SUBJECT"
 else
+  PROBE_SET=true
   P1=$(http PUT "/mode/$PROBE_SUBJECT" '{"mode":"IMPORT"}')
   [ "$(status "$P1")" = 200 ] && [ "$(json_field "$(body "$P1")" mode)" = IMPORT ] \
     || { echo "FAIL: subject-level IMPORT is not allowed on this registry (mode.mutability=false?): PUT /mode/$PROBE_SUBJECT -> $P1"; exit 1; }
   P2=$(http DELETE "/mode/$PROBE_SUBJECT")
   [ "$(status "$P2")" = 200 ] || { echo "FAIL: could not remove the probe mode: DELETE /mode/$PROBE_SUBJECT -> $P2"; exit 1; }
   P3=$(http GET "/mode/$PROBE_SUBJECT")
-  [ "$(status "$P3")" = 404 ] || { echo "FAIL: probe mode still present after DELETE: $P3"; exit 1; }
+  [ "$(status "$P3")" = 404 ] && PROBE_SET=false || { echo "FAIL: probe mode still present after DELETE: $P3"; exit 1; }
   echo "probe: subject-level IMPORT allowed (set and removed on $PROBE_SUBJECT)"
 fi
 
@@ -100,9 +116,6 @@ restore_mode() {
   [ "$(json_field "$(body "$rr")" mode)" = "$CUR_MODE" ] || { echo "FAIL: effective mode of $s is not the captured $CUR_MODE: $rr"; return 1; }
   CUR_SUBJECT=""
 }
-on_exit() { local rc=$?; restore_mode || rc=1; exit $rc; }
-trap on_exit EXIT
-
 ensure_full() { # <subject>
   local s="$1" c cm
   c=$(http GET "/config/$s"); cm=$(json_field "$(body "$c")" compatibilityLevel)
@@ -117,66 +130,102 @@ ensure_full() { # <subject>
 
 fail=0
 for PASS in preflight apply; do
-while IFS='|' read -r subject id file; do
+PLANNED=" "
+while IFS='|' read -r subject id file version; do
   [ -n "${subject:-}" ] || continue
+  version="${version:-1}"
   schema="$SCHEMAS_DIR/$file"
   [ -f "$schema" ] || { echo "FAIL: $schema missing"; fail=1; continue; }
-  echo "--- [$PASS] $subject (id $id)"
+  echo "--- [$PASS] $subject version $version (id $id)"
+  top=$(maxv "$subject")
   # the canonical text as the registry would normalize it: ask the registry whether THIS schema is already
   # registered under the subject (POST /subjects/<subject> returns the id/version it lives under, 404 if not)
   LOOKUP=$(http POST "/subjects/$subject" "$(reg_body "$schema")")
   case "$(status "$LOOKUP")" in
     200)
       have_id=$(json_field "$(body "$LOOKUP")" id); have_v=$(json_field "$(body "$LOOKUP")" version)
-      if [ "$have_id" = "$id" ] && [ "$have_v" = 1 ]; then
-        # version 1 is canonical under the fixed id; the subject must hold NOTHING else — producers run with
-        # use.latest.version=true, so a later version would be what they resolve and frame under its own id
+      if [ "$have_id" = "$id" ] && [ "$have_v" = "$version" ]; then
+        # this version is canonical under its fixed id; the subject must hold the versions 1..K with version <= K <= the highest the map
+        # declares and NOTHING else — producers resolve the exact schema they embed, but a stray later version would still be a version
+        # this map never vetted
         V1=$(http GET "/subjects/$subject/versions")
-        if [ "$(status "$V1")" != 200 ] || [ "$(body "$V1" | tr -d ' ')" != "[1]" ]; then
-          echo "FAIL: $subject holds versions $(body "$V1") — only version 1 (the fixed id $id) is admissible; a later version would be the one producers resolve"
+        ok=false
+        if [ "$(status "$V1")" = 200 ]; then
+          have_list=$(body "$V1" | tr -d ' ')
+          for ((k = version; k <= top; k++)); do [ "$have_list" = "$(version_list "$k")" ] && ok=true; done
+        fi
+        if [ "$ok" != true ]; then
+          echo "FAIL: $subject holds versions $(body "$V1") — only $(version_list "$version") up to $(version_list "$top") is admissible (version $version is the fixed id $id); anything else was never vetted by this map"
           fail=1; continue
         fi
-        echo "    registered: version 1, id $id (the only version)"
+        echo "    registered: version $version, id $id (versions $(body "$V1" | tr -d ' '))"
+        PLANNED="$PLANNED$subject@$version "
         [ "$PASS" = apply ] && { ensure_full "$subject" || fail=1; }
         continue
       fi
-      echo "FAIL: $subject holds the canonical schema under id $have_id version $have_v, not id $id version 1 — a collision this script never repairs"
+      echo "FAIL: $subject holds the canonical schema under id $have_id version $have_v, not id $id version $version — a collision this script never repairs"
       fail=1; continue ;;
     404) ;;
     *) echo "FAIL: lookup POST /subjects/$subject -> $LOOKUP"; fail=1; continue ;;
   esac
-  # not registered under the subject: the subject must be absent (any other content is a collision) and
-  # the fixed id must be free
+  # not registered under the subject: the subject must hold exactly the versions 1..version-1 (absent for version 1; on a registry that
+  # lacks the earlier versions too, they are imported by the rows before this one) and the fixed id must be free
   V=$(http GET "/subjects/$subject/versions")
   if [ "$(status "$V")" = 200 ]; then
-    echo "FAIL: $subject exists with versions $(body "$V") but not the canonical schema — a collision this script never repairs"
-    fail=1; continue
+    if [ "$(body "$V" | tr -d ' ')" != "$(version_list $((version - 1)))" ]; then
+      echo "FAIL: $subject exists with versions $(body "$V") but not the canonical schema as version $version — a collision this script never repairs"
+      fail=1; continue
+    fi
+  elif [ "$version" -gt 1 ]; then
+    case "$PLANNED" in
+      *" $subject@$((version - 1)) "*) ;;
+      *) echo "FAIL: $subject is absent and the map does not import version $((version - 1)) before version $version"; fail=1; continue ;;
+    esac
   fi
   I=$(http GET "/schemas/ids/$id")
   if [ "$(status "$I")" = 200 ]; then
     echo "FAIL: fixed id $id is already held by another schema on $REG — a collision this script never repairs"
     fail=1; continue
   fi
-  if [ "$PASS" = preflight ]; then echo "    free: would import under id $id"; continue; fi
-  if [ "$DRY" = true ]; then echo "    would import under id $id (DEPLOY_DRY_RUN=true)"; continue; fi
+  if [ "$version" -gt 1 ] && [ "$(status "$V")" = 200 ]; then
+    # read-only: the registry judges compatibility under the SUBJECT'S configured level, and FULL is only enforced after an import, so a subject that is not
+    # at FULL now must be refused here: its verdict would not be the FULL one this script promises
+    CF=$(http GET "/config/$subject")
+    if [ "$(status "$CF")" != 200 ] || [ "$(json_field "$(body "$CF")" compatibilityLevel)" != "$COMPAT" ]; then
+      echo "FAIL: $subject is not at compatibility $COMPAT now ($CF): the registry's compatibility verdict for version $version would not be the $COMPAT one — set it deliberately first"
+      fail=1; continue
+    fi
+    # the registry's own verdict on the new version against the latest one, under the subject's compatibility
+    CK=$(http POST "/compatibility/subjects/$subject/versions/latest" "$(reg_body "$schema")")
+    if [ "$(status "$CK")" != 200 ] || [ "$(json_field "$(body "$CK")" is_compatible)" != True ]; then
+      echo "FAIL: version $version of $subject is not compatible with the latest registered version: $CK"
+      fail=1; continue
+    fi
+    echo "    compatible with the latest version"
+  fi
+  PLANNED="$PLANNED$subject@$version "
+  if [ "$PASS" = preflight ]; then echo "    free: would import as version $version under id $id"; continue; fi
+  if [ "$DRY" = true ]; then echo "    would import as version $version under id $id (DEPLOY_DRY_RUN=true)"; continue; fi
   # capture the mode, then import
   M=$(http GET "/mode/$subject")
   case "$(status "$M")" in
-    200) CUR_HAD_OVERRIDE=true; CUR_MODE=$(json_field "$(body "$M")" mode) ;;
+    200) CUR_HAD_OVERRIDE=true; CUR_MODE=$(json_field "$(body "$M")" mode)
+         # IMPORT is this script's own transient mode: finding it means another run (or a failed one) is in flight on this subject, and restoring it later would pin it for good
+         [ "$CUR_MODE" != IMPORT ] || { echo "FAIL: $subject is already in subject-level IMPORT mode (another run in flight, or a failed one): resolve that deliberately, nothing was changed by this run"; fail=1; continue; } ;;
     404) CUR_HAD_OVERRIDE=false; CUR_MODE="$GLOBAL_MODE" ;;   # the registry's own "no subject mode" (40409): inherited
     *) echo "FAIL: cannot capture the mode of $subject (GET /mode/$subject -> $M) — a transient failure here would be restored as an inherited mode and delete a real override"; fail=1; continue ;;
   esac
   CUR_SUBJECT="$subject"
   R=$(http PUT "/mode/$subject" '{"mode":"IMPORT"}')
   [ "$(status "$R")" = 200 ] || { echo "FAIL: PUT /mode/$subject IMPORT -> $R"; fail=1; restore_mode || true; continue; }
-  R=$(http POST "/subjects/$subject/versions" "$(reg_body "$schema" "$id")")
+  R=$(http POST "/subjects/$subject/versions" "$(reg_body "$schema" "$id" "$version")")
   [ "$(status "$R")" = 200 ] && [ "$(json_field "$(body "$R")" id)" = "$id" ] \
-    || { echo "FAIL: import of $subject under id $id -> $R"; fail=1; restore_mode || true; continue; }
-  R=$(http GET "/subjects/$subject/versions/1")
+    || { echo "FAIL: import of $subject version $version under id $id -> $R"; fail=1; restore_mode || true; continue; }
+  R=$(http GET "/subjects/$subject/versions/$version")
   [ "$(status "$R")" = 200 ] && [ "$(json_field "$(body "$R")" id)" = "$id" ] \
-    || { echo "FAIL: $subject version 1 does not carry id $id: $R"; fail=1; restore_mode || true; continue; }
+    || { echo "FAIL: $subject version $version does not carry id $id: $R"; fail=1; restore_mode || true; continue; }
   restore_mode || { fail=1; continue; }
-  echo "    imported: version 1, id $id"
+  echo "    imported: version $version, id $id"
   ensure_full "$subject" || fail=1
 done <<< "$FIXED"
   # PREFLIGHT (read-only, every map line judged before any import): a collision already present on a LATER subject must not leave the earlier ones imported
