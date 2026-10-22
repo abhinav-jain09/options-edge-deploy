@@ -108,7 +108,11 @@ class Handler(BaseHTTPRequestHandler):
         if p.startswith("/mode/"):
             if not r.mutable:
                 return self._send(422, {"error_code": 42205, "message": "Mode changes are not allowed"})
-            r.subject_modes[p[len("/mode/"):]] = body["mode"]
+            path, _, query = p[len("/mode/"):].partition("?")
+            # the real registry (7.3.1): IMPORT on a subject that already holds versions is refused unless ?force=true
+            if body.get("mode") == "IMPORT" and r.subjects.get(path) and "force=true" not in query.split("&"):
+                return self._send(422, {"error_code": 42205, "message": "Cannot import since found existing subjects"})
+            r.subject_modes[path] = body["mode"]
             return self._send(200, {"mode": body["mode"]})
         if p.startswith("/config/"):
             r.configs[p[len("/config/"):]] = body["compatibility"]

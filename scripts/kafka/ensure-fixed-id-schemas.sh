@@ -216,8 +216,10 @@ while IFS='|' read -r subject id file version; do
     *) echo "FAIL: cannot capture the mode of $subject (GET /mode/$subject -> $M) — a transient failure here would be restored as an inherited mode and delete a real override"; fail=1; continue ;;
   esac
   CUR_SUBJECT="$subject"
-  R=$(http PUT "/mode/$subject" '{"mode":"IMPORT"}')
-  [ "$(status "$R")" = 200 ] || { echo "FAIL: PUT /mode/$subject IMPORT -> $R"; fail=1; restore_mode || true; continue; }
+  # force=true: the registry (7.3.1) refuses IMPORT on a subject that already holds versions (422 42205 "Cannot import since found existing subjects") unless forced;
+  # every later version (version 2 of a registered subject) needs it. Safe here: the subject's mode is captured above and restored after the one import.
+  R=$(http PUT "/mode/$subject?force=true" '{"mode":"IMPORT"}')
+  [ "$(status "$R")" = 200 ] || { echo "FAIL: PUT /mode/$subject?force=true IMPORT -> $R"; fail=1; restore_mode || true; continue; }
   R=$(http POST "/subjects/$subject/versions" "$(reg_body "$schema" "$id" "$version")")
   [ "$(status "$R")" = 200 ] && [ "$(json_field "$(body "$R")" id)" = "$id" ] \
     || { echo "FAIL: import of $subject version $version under id $id -> $R"; fail=1; restore_mode || true; continue; }
