@@ -8,7 +8,7 @@
 # publish them). The live service therefore starts, publishes its STARTING/LIVE status and NO marks until a Phase B/C producer exists. That is a rollout blocker for marks, not for the service.
 # (3) X6 is a release SELF-attestation file baked into the image (/app/release/x6-attestation.txt); the service refuses to start if it does not name the embedded parameter-set hash.
 # Preconditions, all verified at service start (FAILED_CONTRACT otherwise): Avro subjects 2601-2606 registered on this registry (service-deploy SERVICE=break-classifier
-# REGISTER_TA_SCHEMAS=true CONTRACTS_PERMITTED_SHA=87511c9acb7a897850c2fa436d59c45eaef24481); the five topics ensured by the service-deploy barrier
+# REGISTER_TA_SCHEMAS=true CONTRACTS_PERMITTED_SHA=87511c9acb7a897850c2fa436d59c45eaef24481); the four topics the service-deploy barrier ensures
 # scripts/kafka/ensure-break-classification-topics.sh BEFORE the pod starts (that barrier also RAISES the broker's cluster-wide message.max.bytes to 9437184 when it is lower: the
 # service refuses a broker below 8 MiB); options.indicators.bars (8 partitions) and es.futures.footprint.bars exist. Reset class: the checkpoint topic is RESET_REBUILDABLE and is reset
 # TOGETHER with its inputs (DEPLOY-ROLLOUT.md section 5b).

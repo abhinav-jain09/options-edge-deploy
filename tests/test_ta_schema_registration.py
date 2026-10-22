@@ -1,6 +1,6 @@
-"""scripts/kafka/ensure-fixed-id-schemas.sh with the three TA-books maps (scripts/kafka/schema-id-maps/{market-structure,es-trade-tools,wave-cycle}.map)
+"""scripts/kafka/ensure-fixed-id-schemas.sh with the four TA-books maps (scripts/kafka/schema-id-maps/{market-structure,es-trade-tools,wave-cycle,break-classifier}.map)
 against the stand-in registry (tests/stub_schema_registry.py): every subject is imported under its fixed id with FULL, a re-run is a no-op that still
-enforces FULL, a collision fails without repair, a malformed or duplicated map is refused before the registry is touched, and the three maps agree
+enforces FULL, a collision fails without repair, a malformed or duplicated map is refused before the registry is touched, and the four maps agree
 with each other (no id reused, none inside the indicator family's 2001-2010) and with the services' own subject lists."""
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from tests.stub_schema_registry import Registry, serve
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/kafka/ensure-fixed-id-schemas.sh"
 MAPS = ROOT / "scripts/kafka/schema-id-maps"
-SERVICES = ("market-structure", "es-trade-tools", "wave-cycle")
+SERVICES = ("market-structure", "es-trade-tools", "wave-cycle", "break-classifier")
 
 
 # The contracts release's table (options-edge-processing docs/ta-books/catalog/SCHEMA-ID-MAP.md, contracts 0.31.0, com.optionsedge.contracts.ta.TaSchemas.SUBJECTS), row by row.
@@ -53,6 +53,13 @@ CONTRACTS_TABLE = [
     ("com.optionsedge.contracts.wavecycle.TimeframeCheckpoint", 2403),
     ("com.optionsedge.contracts.wavecycle.SeriesCheckpoint", 2404),
     ("com.optionsedge.contracts.wavecycle.ControlCheckpoint", 2405),
+    # contracts 0.37.0 (options-edge-contracts #128, Phase F): the break-classifier family, ids 2601-2606, all version 1
+    ("com.optionsedge.contracts.breakclass.BreakMark", 2601),
+    ("com.optionsedge.contracts.breakclass.BreakOutcome", 2602),
+    ("com.optionsedge.contracts.breakclass.BreakStatus", 2603),
+    ("com.optionsedge.contracts.breakclass.BreakClassifierCheckpoint", 2604),
+    ("com.optionsedge.contracts.breakclass.input.BreakParentRecord", 2605),
+    ("com.optionsedge.contracts.breakclass.input.SwingPivotRecord", 2606),
 ]
 
 
@@ -440,6 +447,55 @@ class VersionTwoRegistration(unittest.TestCase):
             server.shutdown()
 
 
+class BreakClassifierRegistration(unittest.TestCase):
+    """Phase F: the six subjects 2601-2606 (contracts 0.37.0), all version 1, through the same script the Jenkins stage runs with SCHEMA_ID_MAP=break-classifier.map."""
+
+    def with_registry(self, check, reg=None):
+        reg = reg or Registry()
+        server, url = serve(reg)
+        try:
+            check(reg, url)
+        finally:
+            server.shutdown()
+
+    def test_a_fresh_registry_gets_the_six_subjects_under_2601_to_2606_with_full_and_a_rerun_imports_nothing(self):
+        def check(reg, url):
+            rc, out = run("break-classifier", url)
+            self.assertEqual(rc, 0, out)
+            self.assertEqual({s: reg.subjects[s][0]["id"] for s in reg.subjects}, {s: i for s, i, _ in read_map("break-classifier")})
+            self.assertEqual(set(reg.configs.values()), {"FULL"})
+            calls = len(reg.calls)
+            rc, out = run("break-classifier", url)
+            self.assertEqual(rc, 0, out)
+            self.assertFalse(any(c.startswith("POST /subjects/") and c.endswith("/versions {schema…}") for c in reg.calls[calls:]), "nothing re-imported")
+        self.with_registry(check)
+
+    def test_a_dry_run_reports_would_import_six_times_and_mutates_nothing(self):
+        def check(reg, url):
+            rc, out = run("break-classifier", url, dry=True)
+            self.assertEqual(rc, 0, out)
+            self.assertEqual(out.count("would import as version 1 under id 26"), 12, "six in the preflight pass, six in the apply pass")
+            self.assertEqual((reg.subjects, reg.subject_modes), ({}, {}))
+        self.with_registry(check)
+
+    def test_an_id_held_by_another_schema_fails_in_preflight_with_nothing_imported(self):
+        def check(reg, url):
+            reg.register("some.other.Subject", json.dumps({"type": "string"}), id=2606, version=1)
+            rc, out = run("break-classifier", url)
+            self.assertEqual(rc, 1, out)
+            self.assertIn("fixed id 2606 is already held by another schema", out)
+            self.assertEqual(set(reg.subjects), {"some.other.Subject"}, "the collision on the LAST subject stopped the whole set before the first import")
+        self.with_registry(check)
+
+    def test_a_subject_holding_a_different_schema_is_a_collision_never_repaired(self):
+        def check(reg, url):
+            reg.register("com.optionsedge.contracts.breakclass.BreakMark", json.dumps({"type": "string"}), id=2601, version=1)
+            rc, out = run("break-classifier", url)
+            self.assertEqual(rc, 1, out)
+            self.assertEqual(len(reg.subjects["com.optionsedge.contracts.breakclass.BreakMark"]), 1)
+        self.with_registry(check)
+
+
 class MapValidation(unittest.TestCase):
     def refused(self, text: str):
         reg = Registry()
@@ -477,7 +533,7 @@ class MapsAgree(unittest.TestCase):
 
     def test_subjects_are_the_record_full_names_in_the_contracts_namespaces(self):
         ns = {"market-structure": "com.optionsedge.contracts.marketstructure.", "es-trade-tools": "com.optionsedge.contracts.tradetools.",
-              "wave-cycle": "com.optionsedge.contracts.wavecycle."}
+              "wave-cycle": "com.optionsedge.contracts.wavecycle.", "break-classifier": "com.optionsedge.contracts.breakclass."}
         for service in SERVICES:
             for subject, _, file, version in read_versioned(service):
                 self.assertTrue(subject.startswith(ns[service]), subject)
@@ -486,12 +542,12 @@ class MapsAgree(unittest.TestCase):
                 top = max(v for s_, _, _, v in read_versioned(service) if s_ == subject)
                 self.assertEqual(file, name if version == top else f"v{version}/{name}", "the highest version is the flat file, earlier ones live under v<N>/")
 
-    def test_the_three_maps_are_exactly_the_contracts_table_of_31_subjects_and_46_ids(self):
+    def test_the_maps_are_exactly_the_contracts_table_of_37_subjects_and_52_ids(self):
         union = {(subject, id_) for service in SERVICES for subject, id_, _ in read_map(service)}
-        self.assertEqual(len(CONTRACTS_TABLE), 31)
+        self.assertEqual(len(CONTRACTS_TABLE), 37)
         self.assertEqual(union, set(CONTRACTS_TABLE) | set(TRADE_TOOLS_VERSION_2) | set(WAVE_CYCLE_VERSION_2))
         self.assertEqual({s for s, _ in union}, {s for s, _ in CONTRACTS_TABLE})
-        self.assertEqual(len(union), 46)
+        self.assertEqual(len(union), 52)
         # version 2 of each of the thirteen two-version subjects = its version-1 id + 20 (contracts 0.33.0, TaSchemas.Subject.priorId)
         v1 = {s: i for s, i in CONTRACTS_TABLE}
         for subject, id_ in TRADE_TOOLS_VERSION_2:
@@ -517,6 +573,11 @@ class MapsAgree(unittest.TestCase):
     def test_the_wave_cycle_map_names_the_five_top_level_records_the_service_resolves_at_boot(self):
         names = {s.rsplit(".", 1)[1] for s, _, _ in read_map("wave-cycle")}
         self.assertEqual(names, {"WaveSet", "CycleSet", "TimeframeCheckpoint", "SeriesCheckpoint", "ControlCheckpoint"})
+
+    def test_the_break_classifier_map_names_the_six_records_the_service_resolves_at_boot(self):
+        names = {s.rsplit(".", 1)[1] for s, _, _ in read_map("break-classifier")}
+        self.assertEqual(names, {"BreakMark", "BreakOutcome", "BreakStatus", "BreakClassifierCheckpoint", "BreakParentRecord", "SwingPivotRecord"})
+        self.assertEqual([i for _, i, _ in read_map("break-classifier")], list(range(2601, 2607)))
 
     def test_the_jenkins_stage_picks_the_map_by_service_name(self):
         text = (ROOT / "Jenkinsfile.service-deploy").read_text()
