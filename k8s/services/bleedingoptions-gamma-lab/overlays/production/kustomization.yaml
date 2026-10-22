@@ -1,8 +1,12 @@
 # STANDALONE public Gamma Lab overlay — production.
 #
-# ⚠️ The Deployment ships at replicas: 0 and stays there until PGL-072's evidence exists for the
-# exact image digest (scripts/deploy/verify-public-gate.sh). Raising it is a reviewed change that
-# carries that evidence, not an edit made in passing.
+# ⚠️ THIS OVERLAY IS LIVE ON THE INTERNET. The Deployment runs at replicas 1 behind a Cloudflare
+# tunnel route for bleedingoptions.com. This header claimed "ships at replicas: 0 and stays there"
+# until 2026-10-22 — true when written, false for months (Codex round 5), and the most misleading
+# place in the repository for it to be false.
+#
+# What still holds: the DIGEST below moves only as a reviewed change carrying PGL-072's evidence for
+# that exact digest (scripts/deploy/verify-public-gate.sh), never as an edit made in passing.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
