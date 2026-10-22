@@ -39,6 +39,7 @@ Set in the manifest (`k8s/services/level-absorption/base/level-absorption-deploy
 | `KAFKA_LEVEL_ABSORPTION_EVENTS_TOPIC` | `futures.level-absorption.events` | same | |
 | `KAFKA_LEVEL_ABSORPTION_VOICE_TOPIC` | `futures.level-absorption.voice` | same | |
 | `KAFKA_LEVEL_ABSORPTION_CLOSURES_TOPIC` | `futures.level-absorption.closures` | same | |
+| `KAFKA_LEVEL_ABSORPTION_HOST_LEVELS_TOPIC` | `options.spx.market-structure.ui` | manifest base name | version 2 (geometry sites, section 6.2): the market-structure host's `UiProjection` record; created by `scripts/kafka/ensure-market-structure-topics.sh`; required at startup only when a HOST site kind is enabled in the Phase 0 freeze |
 | `KAFKA_LEVEL_ABSORPTION_FOOTPRINT_TOPIC` | `es.futures.footprint.bars` | manifest base `futures.footprint.bars` | dev and production carry the es4 output mirrored under `es.` while `TOPIC_PREFIX` is empty, so the full name is given (an override must end with the manifest's name) |
 | `KAFKA_LEVEL_ABSORPTION_AUCTION_TOPIC` | `es.futures.auction` | manifest base `futures.auction` | same reason |
 | `KAFKA_LEVEL_ABSORPTION_{TRADES,MANUAL_LINE}_TOPIC` | not set | manifest base names | `underlying.es.trades.linearized` (the linearizer's name on dev and production) and `futures.level-absorption.manual-line` |
