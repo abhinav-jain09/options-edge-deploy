@@ -714,11 +714,15 @@ do_start() {
     # 2026-09-24 (2nd occurrence): checking immediately after the straggler restart above caught the
     # pod BEFORE it had reprocessed far enough to hit the exception again — a false negative, not a
     # fixed bug. Poll for up to ~30s for EITHER outcome (ready, or the fatal signature) before deciding.
+    # -c indicator-service: the pod has TWO containers (indicator-estimate + indicator-service) and a bare
+    # `kubectl logs deploy/...` reads the FIRST one, which never holds the EpochFatalException. Without -c this
+    # check counted 0 forever and the one-time genesis below silently never ran (2026-10-22: after a clean the
+    # indicator and market-structure stayed down until the container was named).
     epoch_fatal=0
     for i in $(seq 1 6); do
       rr=$($KK get deploy indicator-service -o jsonpath='{.status.readyReplicas}' 2>/dev/null)
       [ "${rr:-0}" -ge 1 ] && break
-      epoch_fatal=$($KK logs deploy/indicator-service --tail=200 2>/dev/null | grep -c "INDICATOR_EPOCH_GENESIS is not authorized" || true)
+      epoch_fatal=$($KK logs deploy/indicator-service -c indicator-service --tail=200 2>/dev/null | grep -c "INDICATOR_EPOCH_GENESIS is not authorized" || true)
       [ "${epoch_fatal:-0}" -gt 0 ] && break
       sleep 5
     done
