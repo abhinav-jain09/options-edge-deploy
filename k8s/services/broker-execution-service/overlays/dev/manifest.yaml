@@ -100,6 +100,12 @@ spec:
               value: "true"
             - name: BROKER_PAPER_BALANCE_CLIENT_ID
               value: "51"
+            - name: BROKER_WHATIF_ENABLED
+              value: "true"
+            - name: BROKER_WHATIF_CLIENT_ID
+              value: "52"
+            - name: BROKER_LIVE_WHATIF_ENABLED
+              value: "true"
             - name: SERVER_PORT
               value: "8131"
             - name: JAVA_TOOL_OPTIONS
