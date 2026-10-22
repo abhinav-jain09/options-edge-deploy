@@ -482,10 +482,19 @@ ensure_partition_only_topics() {
 # Pre-creating them here, before any service starts, removes the race at its source (context-tape also now picks a late topic up by itself).
 # Same shapes the sidecar creates: bars = 1 partition / delete / 3 d retention, bars.current = 1 partition / compact / 1 d retention.
 ensure_dev_only_estimate_topics() {
-  $KT --bootstrap-server $BS --create --if-not-exists --topic options.indicators.estimate.bars --partitions 1 --replication-factor 1 \
-      --config cleanup.policy=delete --config retention.ms=259200000 >/dev/null 2>&1 && echo "  dev-only estimate topic ready: options.indicators.estimate.bars" || echo "  WARNING: could not create options.indicators.estimate.bars"
-  $KT --bootstrap-server $BS --create --if-not-exists --topic options.indicators.estimate.bars.current --partitions 1 --replication-factor 1 \
-      --config cleanup.policy=compact --config retention.ms=86400000 >/dev/null 2>&1 && echo "  dev-only estimate topic ready: options.indicators.estimate.bars.current" || echo "  WARNING: could not create options.indicators.estimate.bars.current"
+  # Retried: a Kafka admin endpoint that is briefly unavailable right after a restart must not leave the race open. A final failure is a LOUD warning
+  # but NOT fatal: a failed ensure_topics would hold the es4 mirrors paused for an optional dev-only topic (context-tape also picks a late topic up by itself).
+  local name policy retention i ok
+  for spec in "options.indicators.estimate.bars delete 259200000" "options.indicators.estimate.bars.current compact 86400000"; do
+    set -- $spec; name=$1; policy=$2; retention=$3; ok=0
+    for i in 1 2 3; do
+      if $KT --bootstrap-server $BS --create --if-not-exists --topic "$name" --partitions 1 --replication-factor 1 \
+          --config cleanup.policy=$policy --config retention.ms=$retention >/dev/null 2>&1; then ok=1; break; fi
+      sleep 2
+    done
+    if [ $ok = 1 ]; then echo "  dev-only estimate topic ready: $name"
+    else echo "  WARNING: could not create $name after 3 tries — the Order tab may show one candle until context-tape-service is restarted"; fi
+  done
 }
 
 ensure_topics() {

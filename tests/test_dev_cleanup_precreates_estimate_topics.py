@@ -15,10 +15,12 @@ TOPICS_ENV = (ROOT / "scripts/kafka/topics.env").read_text()
 class DevCleanEstimateTopics(unittest.TestCase):
     def test_function_creates_both_topics_with_the_sidecar_shapes(self):
         body = re.search(r"ensure_dev_only_estimate_topics\(\) \{(.*?)\n\}", SCRIPT, re.S).group(1)
-        self.assertIn("--create --if-not-exists --topic options.indicators.estimate.bars --partitions 1", body)
-        self.assertIn("cleanup.policy=delete --config retention.ms=259200000", body)
-        self.assertIn("--topic options.indicators.estimate.bars.current --partitions 1", body)
-        self.assertIn("cleanup.policy=compact --config retention.ms=86400000", body)
+        self.assertIn('"options.indicators.estimate.bars delete 259200000"', body)
+        self.assertIn('"options.indicators.estimate.bars.current compact 86400000"', body)
+        self.assertIn("--create --if-not-exists", body)
+        self.assertIn("--partitions 1 --replication-factor 1", body)
+        self.assertIn("for i in 1 2 3", body, "a transient admin failure is retried")
+        self.assertIn("WARNING: could not create", body, "a final failure is loud")
 
     def test_ensure_topics_calls_it_on_the_success_path(self):
         ensure = re.search(r"\nensure_topics\(\) \{(.*?)\n\}\n", SCRIPT, re.S).group(1)
