@@ -1,9 +1,16 @@
-# Fixed schema ids for wave-cycle-service (ELLIOTT-FIB-CYCLE-TOOLS). FINAL: options-edge-processing docs/ta-books/catalog/SCHEMA-ID-MAP.md (contracts 0.31.0). The five top-level records the
+# Fixed schema ids for wave-cycle-service (ELLIOTT-FIB-CYCLE-TOOLS). FINAL: options-edge-processing docs/ta-books/catalog/SCHEMA-ID-MAP.md (contracts 0.31.0, version 2 of WaveSet and CycleSet: 0.36.0). The five top-level records the
 # service resolves at boot (BrokerGuard.schemaIds, Schemas.TOP) EVEN WITH BOTH FLAGS OFF: a registry that lacks one stops the process at start.
 # DailyBarHistory is an input snapshot FILE contract, not a topic value, and has no subject.
 # File column: relative to the contracts checkout's `schemas-registry/ta` directory (SCHEMAS_DIR).
-com.optionsedge.contracts.wavecycle.WaveSet|2401|WaveSet.avsc
-com.optionsedge.contracts.wavecycle.CycleSet|2402|CycleSet.avsc
+# ELLIOTT-FIB-CYCLE-TOOLS revision 21 (contracts 0.36.0): WaveSet and CycleSet have TWO versions. Version 1 is the file under schemas-registry/ta/v1 (registered before revision 21 on dev and
+# production as ids 2401, 2402), version 2 the file under schemas-registry/ta with a NEW fixed id (2406, 2407; free on both registries): a version of a subject cannot reuse the id of a different
+# schema. The fourth column is the registry version (see es-trade-tools.map). On a registry that holds version 1 only the two version-2 rows import. The service resolves the id of its EMBEDDED
+# (version 2) schema at boot and refuses to start if it is not registered, so registration comes before the new image starts. The other three records are unchanged (one version).
+com.optionsedge.contracts.wavecycle.WaveSet|2401|v1/WaveSet.avsc|1
+com.optionsedge.contracts.wavecycle.CycleSet|2402|v1/CycleSet.avsc|1
 com.optionsedge.contracts.wavecycle.TimeframeCheckpoint|2403|TimeframeCheckpoint.avsc
 com.optionsedge.contracts.wavecycle.SeriesCheckpoint|2404|SeriesCheckpoint.avsc
 com.optionsedge.contracts.wavecycle.ControlCheckpoint|2405|ControlCheckpoint.avsc
+# Version-2 rows after all version-1 rows so the preflight pass can see the predecessor of every row.
+com.optionsedge.contracts.wavecycle.WaveSet|2406|WaveSet.avsc|2
+com.optionsedge.contracts.wavecycle.CycleSet|2407|CycleSet.avsc|2

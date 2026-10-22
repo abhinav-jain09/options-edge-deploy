@@ -63,6 +63,10 @@ TRADE_TOOLS_VERSION_2 = [(f"com.optionsedge.contracts.tradetools.{n}", i + 20) f
     ("ClimaxEvent", 2312), ("TtFamilyStatus", 2315))]
 
 
+# ELLIOTT-FIB-CYCLE-TOOLS revision 21 (contracts 0.36.0): version 2 of WaveSet and CycleSet under NEW ids (TaSchemas.Subject.priorId 2401, 2402).
+WAVE_CYCLE_VERSION_2 = [("com.optionsedge.contracts.wavecycle.WaveSet", 2406), ("com.optionsedge.contracts.wavecycle.CycleSet", 2407)]
+
+
 def read_versioned(service: str) -> list[tuple[str, int, str, int]]:
     """(subject, id, file, version) per map row; the optional fourth column defaults to version 1."""
     rows = []
@@ -208,6 +212,93 @@ def seed_version_1(reg: Registry) -> None:
             reg.configs[subject] = "FULL"
 
 
+def seed_wave_cycle_version_1(reg: Registry) -> None:
+    """The state of dev and production before contracts 0.36.0: the five wave-cycle subjects at version 1 under 2401-2405, compatibility FULL."""
+    for subject, id_, _, version in read_versioned("wave-cycle"):
+        if version == 1:
+            reg.register(subject, schema_text(subject, 1), id=id_, version=1)
+            reg.configs[subject] = "FULL"
+
+
+class WaveCycleVersionTwoRegistration(unittest.TestCase):
+    """ELLIOTT-FIB-CYCLE-TOOLS revision 21: WaveSet and CycleSet gain version 2 under ids 2406 and 2407 on a registry that already holds version 1."""
+
+    def test_a_registry_holding_version_1_receives_only_the_two_version_2_imports(self):
+        reg = Registry()
+        seed_wave_cycle_version_1(reg)
+        server, url = serve(reg)
+        try:
+            rc, out = run("wave-cycle", url, dry=True)
+            self.assertEqual(rc, 0, out)
+            self.assertIn("would import as version 2 under id 2406", out)
+            self.assertIn("would import as version 2 under id 2407", out)
+            self.assertNotIn("would import as version 1", out)
+            for id_ in (2401, 2402, 2403, 2404, 2405):
+                self.assertIn(f"registered: version 1, id {id_}", out)
+            self.assertFalse([c for c in reg.calls if c.startswith("POST /subjects/") and c.endswith("/versions {schema…}")], "a dry run imports nothing")
+            rc, out = run("wave-cycle", url)
+            self.assertEqual(rc, 0, out)
+            imports = [c for c in reg.calls if c.startswith("POST /subjects/") and c.endswith("/versions {schema…}")]
+            self.assertEqual(len(imports), 2, "only version 2 of the two subjects is imported")
+            for subject, id_ in WAVE_CYCLE_VERSION_2:
+                self.assertEqual([(v["version"], v["id"]) for v in reg.subjects[subject]], [(1, id_ - 5), (2, id_)], subject)
+                self.assertEqual(reg.configs[subject], "FULL")
+            for name in ("TimeframeCheckpoint", "SeriesCheckpoint", "ControlCheckpoint"):
+                self.assertEqual(len(reg.subjects[f"com.optionsedge.contracts.wavecycle.{name}"]), 1, name)
+            self.assertEqual(reg.subject_modes, {})
+            self.assertTrue(any(c.startswith("POST /compatibility/subjects/") for c in reg.calls), "the registry's own compatibility verdict is asked first")
+            calls = len(reg.calls)
+            rc, out = run("wave-cycle", url)   # idempotent
+            self.assertEqual(rc, 0, out)
+            self.assertFalse([c for c in reg.calls[calls:] if c.startswith("POST /subjects/") and c.endswith("/versions {schema…}")], "a re-run imports nothing")
+        finally:
+            server.shutdown()
+
+    def test_an_incompatible_wave_set_is_refused_in_preflight_and_nothing_at_all_is_imported(self):
+        reg = Registry()
+        seed_wave_cycle_version_1(reg)
+        reg.incompatible.add(WAVE_CYCLE_VERSION_2[1][0])   # the LATER row (CycleSet) fails: the first row must not have been imported either
+        server, url = serve(reg)
+        try:
+            rc, out = run("wave-cycle", url)
+            self.assertEqual(rc, 1, out)
+            self.assertIn("is not compatible with the latest registered version", out)
+            self.assertIn("nothing was changed", out)
+            for subject, _ in WAVE_CYCLE_VERSION_2:
+                self.assertEqual(len(reg.subjects[subject]), 1, subject)
+        finally:
+            server.shutdown()
+
+    def test_a_version_2_id_held_by_another_schema_fails_in_preflight_with_nothing_changed(self):
+        reg = Registry()
+        seed_wave_cycle_version_1(reg)
+        reg.register("some.other.Subject", json.dumps({"type": "string"}), id=2407, version=1)
+        server, url = serve(reg)
+        try:
+            rc, out = run("wave-cycle", url)
+            self.assertEqual(rc, 1, out)
+            self.assertIn("nothing was changed", out)
+            for subject, _ in WAVE_CYCLE_VERSION_2:
+                self.assertEqual(len(reg.subjects[subject]), 1, subject)
+        finally:
+            server.shutdown()
+
+    def test_a_fresh_registry_gets_all_five_subjects_and_both_versions_in_one_run(self):
+        reg = Registry()
+        server, url = serve(reg)
+        try:
+            rc, out = run("wave-cycle", url)
+            self.assertEqual(rc, 0, out)
+            self.assertEqual({s: [(v["version"], v["id"]) for v in rows] for s, rows in reg.subjects.items()},
+                             {"com.optionsedge.contracts.wavecycle.WaveSet": [(1, 2401), (2, 2406)],
+                              "com.optionsedge.contracts.wavecycle.CycleSet": [(1, 2402), (2, 2407)],
+                              "com.optionsedge.contracts.wavecycle.TimeframeCheckpoint": [(1, 2403)],
+                              "com.optionsedge.contracts.wavecycle.SeriesCheckpoint": [(1, 2404)],
+                              "com.optionsedge.contracts.wavecycle.ControlCheckpoint": [(1, 2405)]})
+        finally:
+            server.shutdown()
+
+
 class VersionTwoRegistration(unittest.TestCase):
     """TICK-TRADE-TOOLS revision 21: thirteen subjects gain version 2 under a NEW fixed id on a registry that already holds version 1."""
 
@@ -350,17 +441,21 @@ class MapsAgree(unittest.TestCase):
                 top = max(v for s_, _, _, v in read_versioned(service) if s_ == subject)
                 self.assertEqual(file, name if version == top else f"v{version}/{name}", "the highest version is the flat file, earlier ones live under v<N>/")
 
-    def test_the_three_maps_are_exactly_the_contracts_table_of_31_subjects_and_44_ids(self):
+    def test_the_three_maps_are_exactly_the_contracts_table_of_31_subjects_and_46_ids(self):
         union = {(subject, id_) for service in SERVICES for subject, id_, _ in read_map(service)}
         self.assertEqual(len(CONTRACTS_TABLE), 31)
-        self.assertEqual(union, set(CONTRACTS_TABLE) | set(TRADE_TOOLS_VERSION_2))
+        self.assertEqual(union, set(CONTRACTS_TABLE) | set(TRADE_TOOLS_VERSION_2) | set(WAVE_CYCLE_VERSION_2))
         self.assertEqual({s for s, _ in union}, {s for s, _ in CONTRACTS_TABLE})
-        self.assertEqual(len(union), 44)
+        self.assertEqual(len(union), 46)
         # version 2 of each of the thirteen two-version subjects = its version-1 id + 20 (contracts 0.33.0, TaSchemas.Subject.priorId)
         v1 = {s: i for s, i in CONTRACTS_TABLE}
         for subject, id_ in TRADE_TOOLS_VERSION_2:
             self.assertEqual(id_, v1[subject] + 20, subject)
         self.assertEqual(len(TRADE_TOOLS_VERSION_2), 13)
+        # WaveSet 2401 -> 2406 and CycleSet 2402 -> 2407 (contracts 0.36.0, TaSchemas.Subject.priorId); neither offset is the trade-tools +20
+        for subject, id_ in WAVE_CYCLE_VERSION_2:
+            self.assertEqual(id_, v1[subject] + 5, subject)
+        self.assertEqual(len(WAVE_CYCLE_VERSION_2), 2)
 
     def test_w0_ids_are_the_runbooks(self):
         rows = {s.rsplit(".", 1)[1]: i for s, i, _ in read_map("market-structure")}

@@ -13,7 +13,7 @@ destructive step runs from a merge. This file is the order to follow when the ow
 | CHART-STRUCTURE-TOOLS `options.spx.market-structure.tools` and CLASSICAL-CHART-PATTERNS `options.spx.market-structure.geometry` (Avro, 1 partition, delete, 172 800 000 ms, EXACT partitions, key `<scheduleId>\|<tf>`) | `scripts/kafka/topics.env`, `ensure-market-structure-topics.sh` (+ test) |
 | `MARKET_STRUCTURE_TOOLS_ENABLED`, `MARKET_STRUCTURE_GEOMETRY_ENABLED` = `false` | market-structure base deployment, two generated slices |
 | `GATEWAY_STRUCTURE_TOOLS_ENABLED`, `GATEWAY_GEOMETRY_ENABLED`, `GATEWAY_TRADE_TOOLS_ENABLED`, `GATEWAY_WAVE_CYCLE_ENABLED` = `false` (names are `GatewaySettings`'; its topic variables default to the declared topics) | feed-gateway dev and production env patches, two generated slices |
-| Fixed-id schema registration for 31 subjects (ids 2201-2405 plus version 2 of thirteen trade-tools subjects, 2321-2332 and 2335, section 3a; `options-edge-processing docs/ta-books/catalog/SCHEMA-ID-MAP.md`) | `scripts/kafka/ensure-fixed-id-schemas.sh`, `scripts/kafka/schema-id-maps/{market-structure,es-trade-tools,wave-cycle}.map`, service-deploy parameter `REGISTER_TA_SCHEMAS` |
+| Fixed-id schema registration for 31 subjects (ids 2201-2405 plus version 2 of thirteen trade-tools subjects, 2321-2332 and 2335, section 3a, and of WaveSet and CycleSet, 2406 and 2407, section 3b; `options-edge-processing docs/ta-books/catalog/SCHEMA-ID-MAP.md`) | `scripts/kafka/ensure-fixed-id-schemas.sh`, `scripts/kafka/schema-id-maps/{market-structure,es-trade-tools,wave-cycle}.map`, service-deploy parameter `REGISTER_TA_SCHEMAS` |
 | W0 rollover flag injection (never committed) | `scripts/deploy/service-deploy.sh` block `MS_IGNORE_RECOVERY_ROLLOVER`, parameter `MARKET_STRUCTURE_IGNORE_RECOVERY_ROLLOVER` |
 | W0 step 4 and 6 (wipe and recreate the five topics under their own names; verify) | `scripts/kafka/roll-forward-market-structure.sh`, service-deploy parameters `W0_CUTOVER_WIPE`, `W0_EXPECT_IMAGE_DIGEST`, `W0_EXPECT_GATEWAY_DIGEST`, `W0_PRE_CUTOVER_IDS`, `W0_PRODUCERS_ATTESTED` |
 | `es-trade-tools-service` (TICK-TRADE-TOOLS) | `k8s/services/es-trade-tools`, seven topics, `ensure-es-trade-tools-topics.sh`, `TT_*` flags `false` |
@@ -62,6 +62,21 @@ The change is FULL-compatible (checked read-only with `POST /compatibility/subje
   4. Only then roll the new es-trade-tools image: its start-up `getId(subject, embedded schema)` resolves each embedded (version-2) schema to its new id and refuses to start if one is missing.
 * **Order against the other pieces.** Registry first (step 1-3), then the producer image, then the gateway and web images (they read the writer schema by id from the registry; the old and the new gateway/web both decode either version, because FULL).
 * A registry that never saw the family (a rebuilt or new registry) takes both versions from the same map in one run; the ids are then identical to dev and production.
+
+## 3b. ELLIOTT-FIB-CYCLE-TOOLS revision 21: registering version 2 of WaveSet and CycleSet (contracts 0.36.0)
+
+Producer `wave-cycle-service` (processing #1283, 063897ee) publishes the measured validation result: `WaveCount.measurement`, `WaveSet.calibration`, `CycleSet.calibration` (all optional, default null, every vocabulary a string; `options-edge-processing docs/ta-books/catalog/ELLIOTT-FIB-CYCLE-TOOLS-SCHEMA-CHANGES.md`).
+`WaveSet` and `CycleSet` change; `TimeframeCheckpoint`, `SeriesCheckpoint`, `ControlCheckpoint` do not. FULL-compatible (read-only `POST /compatibility/subjects/<s>/versions/latest` on the dev registry 192.168.100.102:8082 and the production registry 192.168.100.252:8082: `is_compatible: true`; each subject holds version [1], config FULL). Ids 2406 and 2407 are free (404) on both.
+
+* **Ids.** Version 2 has its own fixed id (a registry id names one schema text): `WaveSet` 2406, `CycleSet` 2407 (version 1 stays under 2401 and 2402, never deleted). The offset is +5, not the +20 of section 3a.
+* **Files and map.** `schema-id-maps/wave-cycle.map` lists 5 version-1 rows (`WaveSet` and `CycleSet` point at the frozen `v1/<Record>.avsc` of the contracts checkout, the three checkpoint records at the flat files), then the two version-2 rows (flat `WaveSet.avsc`, `CycleSet.avsc`).
+  `ensure-fixed-id-schemas.sh` is unchanged by this section (it learned later versions in section 3a); contracts must be at `CONTRACTS_PERMITTED_SHA` >= the 0.36.0 merge.
+* **Procedure, per environment (dev first, then production), before the new wave-cycle image starts (the service resolves the id of its embedded schema at boot and refuses to start if it is missing):**
+  1. `service-deploy SERVICE=wave-cycle REGISTER_TA_SCHEMAS=true DEPLOY_DRY_RUN=true CONTRACTS_PERMITTED_SHA=<contracts 0.36.0 merge sha> BUILD_IMAGES=false`: expect `registered: version 1` for the five version-1 rows and, for WaveSet and CycleSet, `compatible with the latest version` + `would import as version 2 under id 2406` / `2407`, then `OK`.
+  2. The same run with `DEPLOY_DRY_RUN=false`: imports ONLY the two version-2 rows; a re-run is a no-op that re-asserts FULL.
+  3. Verify: `GET /subjects/com.optionsedge.contracts.wavecycle.WaveSet/versions` = `[1,2]`; version 2 has id 2406 and the schema of contracts `schemas-registry/ta/WaveSet.avsc` (SHA-256 `167d6adf36c95d1a58342c36b09fbd0297161fd9ac23acde1d67f12efb0aff33`); `CycleSet` version 2 is id 2407 (`00fd1f9fb68b9aca1ee0e7622ea5e26184d490d2df5377c84562721e74e9ef7b`).
+* **Order.** Registry, then the producer image, then the gateway and web images (both decode either version; FULL). Producers already running version 1 are unaffected.
+* **Release configuration of the new image** (the producer's document, section 6, for the deploy owner): the registered default parameter set (no tuning variable: another hash makes `calibration` null and the counts `NOT_CALIBRATED`), `WAVE_CYCLE_ENABLED=true`, `WAVE_CYCLE_SEASONALITY_ENABLED=true`, and the `WC_DAILY_SNAPSHOT_*` variables of the release snapshot. This change does not touch the manifests or flags.
 
 ## 3. W0, in the runbook's order (processing `MARKET-STRUCTURE-AVRO-CUTOVER.md` section 6)
 
