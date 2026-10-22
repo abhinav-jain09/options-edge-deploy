@@ -13,7 +13,7 @@ destructive step runs from a merge. This file is the order to follow when the ow
 | CHART-STRUCTURE-TOOLS `options.spx.market-structure.tools` and CLASSICAL-CHART-PATTERNS `options.spx.market-structure.geometry` (Avro, 1 partition, delete, 172 800 000 ms, EXACT partitions, key `<scheduleId>\|<tf>`) | `scripts/kafka/topics.env`, `ensure-market-structure-topics.sh` (+ test) |
 | `MARKET_STRUCTURE_TOOLS_ENABLED`, `MARKET_STRUCTURE_GEOMETRY_ENABLED` = `false` | market-structure base deployment, two generated slices |
 | `GATEWAY_STRUCTURE_TOOLS_ENABLED`, `GATEWAY_GEOMETRY_ENABLED`, `GATEWAY_TRADE_TOOLS_ENABLED`, `GATEWAY_WAVE_CYCLE_ENABLED` = `false` (names are `GatewaySettings`'; its topic variables default to the declared topics) | feed-gateway dev and production env patches, two generated slices |
-| Fixed-id schema registration for 31 subjects (ids 2201-2405, `options-edge-processing docs/ta-books/catalog/SCHEMA-ID-MAP.md`) | `scripts/kafka/ensure-fixed-id-schemas.sh`, `scripts/kafka/schema-id-maps/{market-structure,es-trade-tools,wave-cycle}.map`, service-deploy parameter `REGISTER_TA_SCHEMAS` |
+| Fixed-id schema registration for 31 subjects (ids 2201-2405 plus version 2 of thirteen trade-tools subjects, 2321-2332 and 2335, section 3a; `options-edge-processing docs/ta-books/catalog/SCHEMA-ID-MAP.md`) | `scripts/kafka/ensure-fixed-id-schemas.sh`, `scripts/kafka/schema-id-maps/{market-structure,es-trade-tools,wave-cycle}.map`, service-deploy parameter `REGISTER_TA_SCHEMAS` |
 | W0 rollover flag injection (never committed) | `scripts/deploy/service-deploy.sh` block `MS_IGNORE_RECOVERY_ROLLOVER`, parameter `MARKET_STRUCTURE_IGNORE_RECOVERY_ROLLOVER` |
 | W0 step 4 and 6 (wipe and recreate the five topics under their own names; verify) | `scripts/kafka/roll-forward-market-structure.sh`, service-deploy parameters `W0_CUTOVER_WIPE`, `W0_EXPECT_IMAGE_DIGEST`, `W0_EXPECT_GATEWAY_DIGEST`, `W0_PRE_CUTOVER_IDS`, `W0_PRODUCERS_ATTESTED` |
 | `es-trade-tools-service` (TICK-TRADE-TOOLS) | `k8s/services/es-trade-tools`, seven topics, `ensure-es-trade-tools-topics.sh`, `TT_*` flags `false` |
@@ -39,6 +39,29 @@ destructive step runs from a merge. This file is the order to follow when the ow
   E `wave-cycle-SPX` (dev and production have separate brokers); market-structure keeps its per-environment ids.
 * **Heap.** D: `-Xms384m -Xmx384m` (D-R17.3/6) in a 1Gi limit. E: the image's ENTRYPOINT fixes `-Xmx256m` and wins over `JAVA_TOOL_OPTIONS`, so the manifest declares none (a value would lie);
   512Mi/768Mi pending a measured resident set at the dark run.
+
+## 3a. TICK-TRADE-TOOLS revision 21: registering version 2 of thirteen trade-tools subjects (contracts 0.33.0)
+
+Producer `es-trade-tools-service` (processing #1281) writes `calibration=CALIBRATED`, `validation=MEASURED` and the nullable header field `evidence`. Thirteen subjects (every header-bearing record: PfChartState, PfColumn, PfBreakEvent,
+PfLineEvent, PfCountEvent, PfMaCrossEvent, PfVolumeDivergenceEvent, PfMoneyFlowDivergenceEvent, PfBreakVolumeCheck, VolumeNodeSet, FlowBar, ClimaxEvent, TtFamilyStatus) change; `TtCheckpointManifest` / `TtCheckpointChunk` do not.
+The change is FULL-compatible (checked read-only with `POST /compatibility/subjects/<s>/versions/latest` on the dev registry 192.168.100.102:8082 and the production registry 192.168.100.252:8082: `is_compatible: true`, subject config FULL, no 42201).
+
+* **A new schema VERSION of an existing subject gets its OWN fixed id.** A registry id names exactly one schema text, so version 2 cannot reuse the version-1 id. Version 2 of each subject is `version-1 id + 20`:
+  2321-2332 (PfChartState 2321 ... ClimaxEvent 2332) and 2335 (TtFamilyStatus). 2316-2340 were free on both registries. Version 1 stays registered under 2301-2312 / 2315 and is never deleted (records already on the topics are framed with those ids).
+* **What `ensure-fixed-id-schemas.sh` does now (changed by this PR).** Before this PR it admitted exactly one version per subject and would have stopped on the first of the thirteen ("holds versions [1] ... collision"). Map rows take an optional
+  fourth column, the registry version (default 1); a subject's rows must number 1, 2, ... in order, each with its own id. For a version N > 1 row the script: (1) accepts an already-canonical schema at (id, version N) when the subject holds exactly versions 1..K with N <= K <= the highest
+  version the map declares; (2) otherwise requires the subject to hold exactly versions 1..N-1 (or, on a registry that lacks them, the map's earlier rows to import them) and the id to be free; (3) asks the registry, read-only, whether the schema is compatible with the latest version
+  (`POST /compatibility/subjects/<s>/versions/latest`, under the subject's FULL); (4) imports it in subject-level IMPORT mode with `id` and `version` N and restores the mode; (5) reads back version N with the fixed id and sets/verifies FULL. The read-only PREFLIGHT pass judges every row (including the compatibility verdict) before the first import,
+  so one refusal changes nothing. A stray version or a different schema at a declared version is a collision and fails; nothing is repaired or deleted.
+* **Files.** `schema-id-maps/es-trade-tools.map` lists 15 version-1 rows (13 point at the frozen `v1/<Record>.avsc`, the two checkpoint records at the flat file) and then the 13 version-2 rows (flat `<Record>.avsc`, the contracts checkout's `schemas-registry/ta`).
+  Both directories come from options-edge-contracts at `CONTRACTS_PERMITTED_SHA` (>= the 0.33.0 merge).
+* **Procedure, per environment (dev registry first, then production), registry and Jenkins parameters only; nothing else is needed for registration:**
+  1. `service-deploy SERVICE=es-trade-tools REGISTER_TA_SCHEMAS=true DEPLOY_DRY_RUN=true CONTRACTS_PERMITTED_SHA=<contracts 0.33.0 merge sha> BUILD_IMAGES=false`: expect, per environment, `registered: version 1` for the 13 old rows and `free: would import as version 2 under id 23xx` + `compatible with the latest version` for the 13 new ones, `OK`.
+  2. The same run with `DEPLOY_DRY_RUN=false`: imports ONLY the 13 version-2 rows (dev and production already hold version 1 under 2301-2315); re-running is a no-op that re-asserts FULL.
+  3. Verify: `GET /subjects/com.optionsedge.contracts.tradetools.FlowBar/versions` = `[1,2]`; `GET /subjects/.../versions/2` has id 2331 and a schema equal to contracts `schemas-registry/ta/FlowBar.avsc`; `GET /subjects/.../versions/1` has id 2311.
+  4. Only then roll the new es-trade-tools image: its start-up `getId(subject, embedded schema)` resolves each embedded (version-2) schema to its new id and refuses to start if one is missing.
+* **Order against the other pieces.** Registry first (step 1-3), then the producer image, then the gateway and web images (they read the writer schema by id from the registry; the old and the new gateway/web both decode either version, because FULL).
+* A registry that never saw the family (a rebuilt or new registry) takes both versions from the same map in one run; the ids are then identical to dev and production.
 
 ## 3. W0, in the runbook's order (processing `MARKET-STRUCTURE-AVRO-CUTOVER.md` section 6)
 

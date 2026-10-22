@@ -2,18 +2,36 @@
 # The service never registers (BrokerGuard.preflightRegistry uses getId) and refuses to start unless every subject below is registered with a schema equal
 # to its embedded copy, and TT_ENABLED=false builds nothing, so registration is needed before the FIRST enabled start, not before the held deploy.
 # File column: relative to the contracts checkout's `schemas-registry/ta` directory (SCHEMAS_DIR).
-com.optionsedge.contracts.tradetools.PfChartState|2301|PfChartState.avsc
-com.optionsedge.contracts.tradetools.PfColumn|2302|PfColumn.avsc
-com.optionsedge.contracts.tradetools.PfBreakEvent|2303|PfBreakEvent.avsc
-com.optionsedge.contracts.tradetools.PfLineEvent|2304|PfLineEvent.avsc
-com.optionsedge.contracts.tradetools.PfCountEvent|2305|PfCountEvent.avsc
-com.optionsedge.contracts.tradetools.PfMaCrossEvent|2306|PfMaCrossEvent.avsc
-com.optionsedge.contracts.tradetools.PfVolumeDivergenceEvent|2307|PfVolumeDivergenceEvent.avsc
-com.optionsedge.contracts.tradetools.PfMoneyFlowDivergenceEvent|2308|PfMoneyFlowDivergenceEvent.avsc
-com.optionsedge.contracts.tradetools.PfBreakVolumeCheck|2309|PfBreakVolumeCheck.avsc
-com.optionsedge.contracts.tradetools.VolumeNodeSet|2310|VolumeNodeSet.avsc
-com.optionsedge.contracts.tradetools.FlowBar|2311|FlowBar.avsc
-com.optionsedge.contracts.tradetools.ClimaxEvent|2312|ClimaxEvent.avsc
+# TICK-TRADE-TOOLS revision 21 (contracts 0.33.0): thirteen subjects have TWO versions. Version 1 is the file under schemas-registry/ta/v1 (the id registered before
+# revision 21 on dev and production), version 2 the file under schemas-registry/ta with a NEW fixed id = the version-1 id + 20 (2321-2332, 2335): a version of a subject cannot reuse
+# the id of a different schema. The fourth column is the registry version. On a registry that already holds version 1 (dev, production) only the version-2 rows import;
+# on a registry that never saw the family both do, in this order. TtCheckpointManifest/Chunk are unchanged (one version).
+# Version-2 rows after all version-1 rows so the preflight pass can see the predecessor of every row.
+com.optionsedge.contracts.tradetools.PfChartState|2301|v1/PfChartState.avsc|1
+com.optionsedge.contracts.tradetools.PfColumn|2302|v1/PfColumn.avsc|1
+com.optionsedge.contracts.tradetools.PfBreakEvent|2303|v1/PfBreakEvent.avsc|1
+com.optionsedge.contracts.tradetools.PfLineEvent|2304|v1/PfLineEvent.avsc|1
+com.optionsedge.contracts.tradetools.PfCountEvent|2305|v1/PfCountEvent.avsc|1
+com.optionsedge.contracts.tradetools.PfMaCrossEvent|2306|v1/PfMaCrossEvent.avsc|1
+com.optionsedge.contracts.tradetools.PfVolumeDivergenceEvent|2307|v1/PfVolumeDivergenceEvent.avsc|1
+com.optionsedge.contracts.tradetools.PfMoneyFlowDivergenceEvent|2308|v1/PfMoneyFlowDivergenceEvent.avsc|1
+com.optionsedge.contracts.tradetools.PfBreakVolumeCheck|2309|v1/PfBreakVolumeCheck.avsc|1
+com.optionsedge.contracts.tradetools.VolumeNodeSet|2310|v1/VolumeNodeSet.avsc|1
+com.optionsedge.contracts.tradetools.FlowBar|2311|v1/FlowBar.avsc|1
+com.optionsedge.contracts.tradetools.ClimaxEvent|2312|v1/ClimaxEvent.avsc|1
 com.optionsedge.contracts.tradetools.TtCheckpointManifest|2313|TtCheckpointManifest.avsc
 com.optionsedge.contracts.tradetools.TtCheckpointChunk|2314|TtCheckpointChunk.avsc
-com.optionsedge.contracts.tradetools.TtFamilyStatus|2315|TtFamilyStatus.avsc
+com.optionsedge.contracts.tradetools.TtFamilyStatus|2315|v1/TtFamilyStatus.avsc|1
+com.optionsedge.contracts.tradetools.PfChartState|2321|PfChartState.avsc|2
+com.optionsedge.contracts.tradetools.PfColumn|2322|PfColumn.avsc|2
+com.optionsedge.contracts.tradetools.PfBreakEvent|2323|PfBreakEvent.avsc|2
+com.optionsedge.contracts.tradetools.PfLineEvent|2324|PfLineEvent.avsc|2
+com.optionsedge.contracts.tradetools.PfCountEvent|2325|PfCountEvent.avsc|2
+com.optionsedge.contracts.tradetools.PfMaCrossEvent|2326|PfMaCrossEvent.avsc|2
+com.optionsedge.contracts.tradetools.PfVolumeDivergenceEvent|2327|PfVolumeDivergenceEvent.avsc|2
+com.optionsedge.contracts.tradetools.PfMoneyFlowDivergenceEvent|2328|PfMoneyFlowDivergenceEvent.avsc|2
+com.optionsedge.contracts.tradetools.PfBreakVolumeCheck|2329|PfBreakVolumeCheck.avsc|2
+com.optionsedge.contracts.tradetools.VolumeNodeSet|2330|VolumeNodeSet.avsc|2
+com.optionsedge.contracts.tradetools.FlowBar|2331|FlowBar.avsc|2
+com.optionsedge.contracts.tradetools.ClimaxEvent|2332|ClimaxEvent.avsc|2
+com.optionsedge.contracts.tradetools.TtFamilyStatus|2335|TtFamilyStatus.avsc|2

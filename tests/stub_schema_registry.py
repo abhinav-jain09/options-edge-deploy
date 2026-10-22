@@ -18,6 +18,7 @@ class Registry:
         self.by_id: dict[int, str] = {}
         self.next_id = 100
         self.calls: list[str] = []
+        self.incompatible: set[str] = set()   # subjects whose NEW schema the compatibility endpoint refuses
 
     def register(self, subject: str, schema: str, id: int | None = None, version: int | None = None):
         if id is None:
@@ -141,6 +142,11 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 id, version = r.register(s, body["schema"])
             return self._send(200, {"id": id})
+        if p.startswith("/compatibility/subjects/") and p.endswith("/versions/latest"):
+            s = p[len("/compatibility/subjects/"):-len("/versions/latest")]
+            if s not in r.subjects:
+                return self._send(404, {"error_code": 40401, "message": "Subject not found"})
+            return self._send(200, {"is_compatible": s not in r.incompatible})
         if p.startswith("/subjects/"):
             s = p[len("/subjects/"):].split("?")[0]
             for row in r.subjects.get(s, []):
