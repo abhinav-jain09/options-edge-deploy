@@ -28,7 +28,8 @@ run() { # policy-for-basis-state -> exit status of verify-topics; output in $OUT
   # One "topic=value" knob per clause of the prod-only contract, so a negative case can break
   # exactly one of them at the mocked broker and leave the rest satisfied.
   local part_ov="${PART_OVERRIDE:-}" pol_ov="${POL_OVERRIDE:-}" ret_ov="${RET_OVERRIDE:-}"
-  local bytes_ov="${BYTES_OVERRIDE:-}"
+  local bytes_ov="${BYTES_OVERRIDE:-}" maxmsg_ov="${MAXMSG_OVERRIDE:-}"
+  local maxmsg_declarations="${OPTIONS_EDGE_TOPIC_MAX_MESSAGE_BYTES_OVERRIDES:-}"
   # The mock reports each topic at ITS SET's declared count: verify-topics now walks the es4 list under
   # SET=es4, and a few names are declared at different counts on the two clusters.
   local decl="$DECLARED"; [ "${SET:-}" = es4 ] && decl="$OPTIONS_EDGE_ES4_TOPICS"
@@ -68,7 +69,11 @@ bytes=\$(printf '%s' "$byte_declarations" | tr ' ' '\\n' | awk -F= -v n="\$name"
 bytes=\${bytes:--1}
 case "$bytes_ov" in "\$name="*) bytes="${bytes_ov#*=}";; esac
 if [ -n "\$bytes" ]; then bytes_field=", retention.bytes=\$bytes sensitive=false"; else bytes_field=""; fi
-echo "Dynamic configs for topic \$name are: cleanup.policy=\$pol sensitive=false, retention.ms=\${ret:--1} sensitive=false\$bytes_field"
+# max.message.bytes (the per-topic floor in OPTIONS_EDGE_TOPIC_MAX_MESSAGE_BYTES_OVERRIDES); MAXMSG_OVERRIDE=name=value overrides one topic, name= (empty) OMITS the field.
+maxmsg=\$(printf '%s' "$maxmsg_declarations" | tr ' ' '\\n' | awk -F= -v n="\$name" '\$1 == n {print \$2; exit}')
+case "$maxmsg_ov" in "\$name="*) maxmsg="${maxmsg_ov#*=}";; esac
+if [ -n "\$maxmsg" ]; then maxmsg_field=", max.message.bytes=\$maxmsg sensitive=false"; else maxmsg_field=""; fi
+echo "Dynamic configs for topic \$name are: cleanup.policy=\$pol sensitive=false, retention.ms=\${ret:--1} sensitive=false\$bytes_field\$maxmsg_field"
 exit 0
 EOF
   chmod +x "$tmp/kafka-topics" "$tmp/kafka-configs"
@@ -158,6 +163,19 @@ BYTES_OVERRIDE="es.futures.footprint.strike=" \
 SET=es4 BYTES_OVERRIDE="es.futures.footprint.strike=1073741824" \
   check "es4 verifies its OWN retention.bytes list" 1 delete \
   "es.futures.footprint.strike retention.bytes='1073741824'"
+
+# max.message.bytes (break-classifier's checkpoint): a per-topic FLOOR in topics.env. A topic that accepts less fails, more passes, unreadable fails, es4 never judges it.
+check "max.message.bytes contract passes when the broker matches declarations" 0 compact "max.message.bytes contract OK (1 topic(s)"
+MAXMSG_OVERRIDE="options.spx.break-classification.checkpoint=1048576" \
+  check "a checkpoint topic at the broker default fails" 1 compact \
+  "options.spx.break-classification.checkpoint max.message.bytes='1048576' but the declaration says >= '9437184'"
+MAXMSG_OVERRIDE="options.spx.break-classification.checkpoint=16777216" \
+  check "a checkpoint topic above the floor passes" 0 compact "max.message.bytes contract OK"
+MAXMSG_OVERRIDE="options.spx.break-classification.checkpoint=" \
+  check "an UNREADABLE max.message.bytes fails (never assumed)" 1 compact \
+  "options.spx.break-classification.checkpoint max.message.bytes could not be read"
+SET=es4 MAXMSG_OVERRIDE="options.spx.break-classification.checkpoint=1048576" \
+  check "es4 does not judge the SPX-side declaration" 0 delete "max.message.bytes contract OK (0 topic(s)"
 
 # EXACT-partition declarations are verified as exact (Codex, mirrored-contract review): the main loop
 # used to accept ANY wider count, so a widened record-copy mirror target passed here as "compatible".

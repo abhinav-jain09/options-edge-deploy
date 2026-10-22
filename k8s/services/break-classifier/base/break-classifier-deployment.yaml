@@ -1,0 +1,85 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: break-classifier-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: break-classifier-service
+    app.kubernetes.io/component: break-classifier-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  # The base is the INERT shape (replicas 0, BREAK_CLASSIFIER_ENABLED "false"), shared by dev and production. Both environments run the service live through
+  # their own enable patches (k8s/overlays/{dev,production}/break-classifier-{dev,prod}-enable-patch.yaml): NEVER edit this base to enable it, that enables both at once.
+  # Preconditions the enable patches' headers state (docs/ta-books/BREAK-CLASSIFIER-DEPLOY.md): the six Avro subjects 2601-2606 on the registry, the barrier
+  # scripts/kafka/ensure-break-classification-topics.sh (service-deploy runs it) and the image. With the flag "true" the service REFUSES TO START (FAILED_CONTRACT)
+  # unless every topic it names exists in its declared shape, the broker message.max.bytes is >= 8 MiB and the six subjects match its embedded schemas.
+  # SINGLE replica ONLY: the transactional.id is break-classifier-<ENVIRONMENT>, a second instance fences the first.
+  replicas: 0
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: break-classifier-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: break-classifier-service
+        app.kubernetes.io/component: break-classifier-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: break-classifier
+          image: 192.168.100.252:5000/options-edge-break-classifier:dev
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: options-edge-config              # KAFKA_BOOTSTRAP_SERVERS, SCHEMA_REGISTRY_URL, TOPIC_PREFIX and the runtime profile
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            # The one flag. "false" serves health and metrics and touches no broker (health DISABLED, which readiness accepts).
+            - name: BREAK_CLASSIFIER_ENABLED
+              value: "false"
+            # Inputs, read-only. options.indicators.bars has 8 partitions on dev AND production (the service verifies the count at boot); the ES footprint bars
+            # are the es4 output mirrored under the es. prefix on both (1 partition). The parent and pivot topics (X1, X2) are produced by Phase B/C, which is
+            # NOT on main: they exist empty (the barrier creates them). Outputs and the checkpoint are fixed by the service. BASE names, TOPIC_PREFIX is "".
+            - name: BREAK_SPX_BARS_PARTITIONS
+              value: "8"
+            - name: BREAK_ES_FOOTPRINT_TOPIC
+              value: es.futures.footprint.bars
+            - name: BREAK_PARENT_TOPIC
+              value: options.spx.market-structure.break-events
+            - name: BREAK_PIVOT_TOPIC
+              value: options.spx.market-structure.swing-pivots
+            # X6: a release self-attestation baked into the image (the file must name the embedded Phase B parameter-set hash or the service refuses to start).
+            - name: BREAK_X6_ATTESTATION_PATH
+              value: /app/release/x6-attestation.txt
+            - name: BREAK_HEALTH_PORT
+              value: "8171"
+            # The heap is fixed by the image: its ENTRYPOINT carries -Xmx256m -XX:+UseSerialGC, and a command-line -Xmx wins over JAVA_TOOL_OPTIONS, so this
+            # manifest declares none rather than a value the JVM would ignore. The limit leaves the other ~500Mi for the 64 MiB producer buffer, metaspace and stacks.
+          ports:
+            - name: health
+              containerPort: 8171
+          # /health/ready is 200 once the service is LIVE (or DISABLED with the flag off); it does not depend on the tape being live.
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              memory: 768Mi

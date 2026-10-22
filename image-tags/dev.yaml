@@ -84,6 +84,7 @@ images:
   level-absorption-service: 192.168.100.252:5000/options-edge-level-absorption:dev
   es-trade-tools-service: 192.168.100.252:5000/options-edge-es-trade-tools:dev
   wave-cycle-service: 192.168.100.252:5000/options-edge-wave-cycle:dev
+  break-classifier-service: 192.168.100.252:5000/options-edge-break-classifier:dev
   multileg-structure-service: 192.168.100.252:5000/options-edge-multileg-structure:dev
   reversal-postgres-writer: 192.168.100.252:5000/options-edge-reversal-postgres-writer:dev
   spread-skew-postgres-writer: 192.168.100.252:5000/options-edge-spread-skew-postgres-writer:dev

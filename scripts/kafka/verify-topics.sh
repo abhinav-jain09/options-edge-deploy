@@ -169,6 +169,33 @@ if [ "$bytes_fail" -ne 0 ]; then
 fi
 echo "[verify-topics] retention.bytes contract OK ($(echo $BYTES_LIST | wc -w | tr -d ' ') topic(s), TOPIC_SET='${TOPIC_SET:-default}')"
 
+# --- max.message.bytes contract (break-classifier's checkpoint topic) ---------------------------------------
+# Declared per topic in OPTIONS_EDGE_TOPIC_MAX_MESSAGE_BYTES_OVERRIDES; create_topic / alter_topic_config write it. The declaration is a FLOOR: break-classifier-service refuses to
+# start on a checkpoint topic below 8 MiB, so a topic that accepts less than declared is a failure and one that accepts more is not.
+case "${TOPIC_SET:-}" in
+  "")   MAXMSG_LIST="${OPTIONS_EDGE_TOPIC_MAX_MESSAGE_BYTES_OVERRIDES:-}" ;;
+  *)    MAXMSG_LIST="" ;;
+esac
+maxmsg_fail=0
+for entry in $MAXMSG_LIST; do
+  topic="${entry%%=*}"
+  expected_max="${entry#*=}"
+  actual_max="$(kafka-configs --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --entity-type topics \
+      --entity-name "$topic" --describe 2>/dev/null | grep -oE '(^|[ ,])max\.message\.bytes=[0-9]+' | head -1 | sed 's/^[ ,]*//' | cut -d= -f2 || true)"
+  if [ -z "$actual_max" ]; then
+    echo "FAIL: topic $topic max.message.bytes could not be read (expected >= '$expected_max') — refusing to assume it" >&2
+    maxmsg_fail=1
+  elif [ "$actual_max" -lt "$expected_max" ]; then
+    echo "FAIL: topic $topic max.message.bytes='$actual_max' but the declaration says >= '$expected_max'" >&2
+    maxmsg_fail=1
+  fi
+done
+if [ "$maxmsg_fail" -ne 0 ]; then
+  echo "[verify-topics] max.message.bytes contract FAILED" >&2
+  exit 1
+fi
+echo "[verify-topics] max.message.bytes contract OK ($(echo $MAXMSG_LIST | wc -w | tr -d ' ') topic(s), TOPIC_SET='${TOPIC_SET:-default}')"
+
 if [ "${ENVIRONMENT:-}" = "production" ] && [ -z "${TOPIC_SET:-}" ]; then
   _kept=""
   for _t in $COMPACTED_LIST; do

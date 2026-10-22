@@ -83,6 +83,8 @@ spec:
               value: "false"
             - name: GATEWAY_WAVE_CYCLE_ENABLED
               value: "false"
+            - name: GATEWAY_BREAK_CLASSIFICATION_ENABLED
+              value: "true"
             - name: GATEWAY_MARKET_COMMENTARY_ENABLED
               value: "true"
             - name: OE_WATCH_JDBC_URL

@@ -31,7 +31,7 @@ class FlagsAreLiterallyFalse(unittest.TestCase):
         "MARKET_STRUCTURE_GEOMETRY_ENABLED": ["k8s/services/market-structure/base/market-structure-deployment.yaml",
                                               "k8s/services/market-structure/overlays/dev/manifest.yaml",
                                               "k8s/services/market-structure/overlays/production/manifest.yaml"],
-        "GATEWAY_STRUCTURE_TOOLS_ENABLED": [], "GATEWAY_GEOMETRY_ENABLED": [], "GATEWAY_TRADE_TOOLS_ENABLED": [], "GATEWAY_WAVE_CYCLE_ENABLED": [],
+        "GATEWAY_STRUCTURE_TOOLS_ENABLED": [], "GATEWAY_GEOMETRY_ENABLED": [], "GATEWAY_TRADE_TOOLS_ENABLED": [], "GATEWAY_WAVE_CYCLE_ENABLED": [], "GATEWAY_BREAK_CLASSIFICATION_ENABLED": [],
         "TT_ENABLED": ["k8s/services/es-trade-tools/base/es-trade-tools-deployment.yaml", "k8s/services/es-trade-tools/overlays/dev/manifest.yaml",
                        "k8s/services/es-trade-tools/overlays/production/manifest.yaml",
                        "k8s/overlays/production/es-trade-tools-prod-enable-patch.yaml"],
@@ -50,7 +50,7 @@ class FlagsAreLiterallyFalse(unittest.TestCase):
 
     # 2026-10-21 (owner): the four gateway relay flags are ON in DEV ONLY, for the Order tab analysis layers; production and everything else stays literally false.
     DEV_GATEWAY_FILES = ["k8s/overlays/dev/feed-gateway-dev-env-patch.yaml", "k8s/services/feed-gateway/overlays/dev/manifest.yaml"]
-    DEV_ON = ("GATEWAY_STRUCTURE_TOOLS_ENABLED", "GATEWAY_GEOMETRY_ENABLED", "GATEWAY_TRADE_TOOLS_ENABLED", "GATEWAY_WAVE_CYCLE_ENABLED")
+    DEV_ON = ("GATEWAY_STRUCTURE_TOOLS_ENABLED", "GATEWAY_GEOMETRY_ENABLED", "GATEWAY_TRADE_TOOLS_ENABLED", "GATEWAY_WAVE_CYCLE_ENABLED", "GATEWAY_BREAK_CLASSIFICATION_ENABLED")
 
     # 2026-10-21 (owner: complete the production deployment, one layer at a time): PRODUCTION layers 2 and 3 = structure tools and geometry. Among the TA-books layer flags
     # (the names in EXPECTED), only those named here are "true", and only in the named production files; the rest stay "false" everywhere.
@@ -58,6 +58,8 @@ class FlagsAreLiterallyFalse(unittest.TestCase):
         "GATEWAY_STRUCTURE_TOOLS_ENABLED": ("k8s/overlays/production/feed-gateway-prod-env-patch.yaml", "k8s/services/feed-gateway/overlays/production/manifest.yaml"),
         "MARKET_STRUCTURE_TOOLS_ENABLED": ("k8s/overlays/production/market-structure-prod-env-patch.yaml", "k8s/services/market-structure/overlays/production/manifest.yaml"),
         "GATEWAY_GEOMETRY_ENABLED": ("k8s/overlays/production/feed-gateway-prod-env-patch.yaml", "k8s/services/feed-gateway/overlays/production/manifest.yaml"),
+        # 2026-10-22 (owner: every service out of shadow, live on dev and production): the break-classification relay (Phase F) is ON in production too.
+        "GATEWAY_BREAK_CLASSIFICATION_ENABLED": ("k8s/overlays/production/feed-gateway-prod-env-patch.yaml", "k8s/services/feed-gateway/overlays/production/manifest.yaml"),
         "MARKET_STRUCTURE_GEOMETRY_ENABLED": ("k8s/overlays/production/market-structure-prod-env-patch.yaml", "k8s/services/market-structure/overlays/production/manifest.yaml"),        # 2026-10-22 (owner: every service calibrated and live, never shadow): es-trade-tools (TICK-TRADE-TOOLS) and wave-cycle (ELLIOTT-FIB-CYCLE-TOOLS) run live in production.
         # The GATEWAY relay flags of those two layers stay "false" until the version-2 gateway and web are live (a later change).
         "TT_ENABLED": ("k8s/overlays/production/es-trade-tools-prod-enable-patch.yaml", "k8s/services/es-trade-tools/overlays/production/manifest.yaml"),
@@ -85,10 +87,10 @@ class FlagsAreLiterallyFalse(unittest.TestCase):
                 for v in env_values(path, name):
                     self.assertEqual(v, self.expected_value(str(path.relative_to(ROOT)), name), f"{path}: {name}")
 
-    def test_production_enables_only_the_structure_tools_and_geometry_layers(self):
+    def test_production_enables_only_the_structure_tools_geometry_and_break_classification_relays(self):
         for rel in ("k8s/overlays/production/feed-gateway-prod-env-patch.yaml", "k8s/services/feed-gateway/overlays/production/manifest.yaml"):
             for name in self.DEV_ON:
-                self.assertEqual(env_values(ROOT / rel, name), ["true" if name in ("GATEWAY_STRUCTURE_TOOLS_ENABLED", "GATEWAY_GEOMETRY_ENABLED") else "false"], f"{rel}: {name}")
+                self.assertEqual(env_values(ROOT / rel, name), ["true" if name in ("GATEWAY_STRUCTURE_TOOLS_ENABLED", "GATEWAY_GEOMETRY_ENABLED", "GATEWAY_BREAK_CLASSIFICATION_ENABLED") else "false"], f"{rel}: {name}")
         for rel in ("k8s/overlays/production/market-structure-prod-env-patch.yaml", "k8s/services/market-structure/overlays/production/manifest.yaml"):
             self.assertEqual(env_values(ROOT / rel, "MARKET_STRUCTURE_TOOLS_ENABLED"), ["true"], rel)
         self.assertEqual(env_values(ROOT / "k8s/services/market-structure/overlays/production/manifest.yaml", "MARKET_STRUCTURE_GEOMETRY_ENABLED"), ["true"])
@@ -106,7 +108,8 @@ class FlagsAreLiterallyFalse(unittest.TestCase):
                         rendered[(doc["metadata"]["name"], e["name"])] = e.get("value")
         want_keys = {("market-structure-service", "MARKET_STRUCTURE_TOOLS_ENABLED"), ("market-structure-service", "MARKET_STRUCTURE_GEOMETRY_ENABLED"),
                      ("feed-gateway-service", "GATEWAY_STRUCTURE_TOOLS_ENABLED"), ("feed-gateway-service", "GATEWAY_GEOMETRY_ENABLED"),
-                     ("feed-gateway-service", "GATEWAY_TRADE_TOOLS_ENABLED"), ("feed-gateway-service", "GATEWAY_WAVE_CYCLE_ENABLED")}
+                     ("feed-gateway-service", "GATEWAY_TRADE_TOOLS_ENABLED"), ("feed-gateway-service", "GATEWAY_WAVE_CYCLE_ENABLED"),
+                     ("feed-gateway-service", "GATEWAY_BREAK_CLASSIFICATION_ENABLED")}
         self.assertEqual(set(rendered), want_keys)
         for dep, name in sorted(want_keys):
             rel = "k8s/services/market-structure/overlays/production/manifest.yaml" if dep == "market-structure-service" else "k8s/services/feed-gateway/overlays/production/manifest.yaml"

@@ -57,6 +57,7 @@ images:
   level-absorption-service: 192.168.100.252:5000/options-edge-level-absorption:prod
   es-trade-tools-service: 192.168.100.252:5000/options-edge-es-trade-tools:prod
   wave-cycle-service: 192.168.100.252:5000/options-edge-wave-cycle:prod
+  break-classifier-service: 192.168.100.252:5000/options-edge-break-classifier:prod
   spot-vol-regime-service: 192.168.100.252:5000/options-edge-spot-vol-regime:prod
   vol-premium-service: 192.168.100.252:5000/options-edge-vol-premium:prod
   # Required even though prod holds stock-gex at replicas:0: without a production mapping the
