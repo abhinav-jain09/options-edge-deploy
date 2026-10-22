@@ -58,3 +58,11 @@ spec:
               value: "true"
             - name: BROKER_PAPER_BALANCE_CLIENT_ID
               value: "51"
+            # IBKR's own what-if margin for the Order tab's Max (read-only, never an order). Paper on its own client id; Live on the Live host
+            # with a client id of its own (the Live runtime's id + 3: 31004 / 31005, clear of 31001-31003).
+            - name: BROKER_WHATIF_ENABLED
+              value: "true"
+            - name: BROKER_WHATIF_CLIENT_ID
+              value: "52"
+            - name: BROKER_LIVE_WHATIF_ENABLED
+              value: "true"
