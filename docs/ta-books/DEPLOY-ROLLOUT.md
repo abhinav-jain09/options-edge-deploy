@@ -122,6 +122,7 @@ Owner standard: every service is calibrated on historical data first and then ru
 `k8s/overlays/production/es-trade-tools-prod-enable-patch.yaml` and `wave-cycle-prod-enable-patch.yaml` (replicas 1; D: `TT_ENABLED` and the four family flags; E: `WAVE_CYCLE_ENABLED`, `WAVE_CYCLE_SEASONALITY_ENABLED` and the hash-pinned daily snapshot variables), registered in the production overlay and mirrored in the regenerated slices. Both services are removed from
 `KEEP_DOWN` in `morning-autostart.sh` and `oe-boot-bringup.sh` (production-only lists) and stay in `DISABLED_DEV` (dev is handled separately). The shared bases remain replicas 0 / flags `false`. The gateway relay flags `GATEWAY_TRADE_TOOLS_ENABLED` and `GATEWAY_WAVE_CYCLE_ENABLED` are NOT part of this change: they follow once a gateway and web that understand the version-2 records are live on production.
 Order: registry (done) -> `service-deploy SERVICE=es-trade-tools` (topic barrier creates the seven topics, the Deployment starts at replicas 1) -> `service-deploy SERVICE=wave-cycle` -> gateway -> web -> gateway relay flags. There is no earlier checkpoint on production for either service, so no state-topic reset is involved.
+Rollback: flags `false` in the patch is the durable first level (the process idles); replicas 0 is durable only together with putting the service back on KEEP_DOWN in BOTH `morning-autostart.sh` and `oe-boot-bringup.sh`, because a KEEP_DOWN-free zero-replica Deployment is scaled back up by the next boot or morning start (see each patch header).
 
 ## 6. Not in this change
 
