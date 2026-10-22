@@ -77,18 +77,24 @@ echo "global mode: $GLOBAL_MODE"
 
 # ---- the mutability probe: subject-level IMPORT must be allowed (mode.mutability=true), proven on a
 # disposable absent subject that is removed again, before any real subject is touched.
+# the exit trap exists BEFORE the first mutation: it removes a probe mode that a failed DELETE left behind and restores the mode of the subject in flight
+PROBE_SET=false; CUR_SUBJECT=""
+on_exit() { local rc=$?; if [ "$PROBE_SET" = true ]; then http DELETE "/mode/$PROBE_SUBJECT" >/dev/null 2>&1 || true; fi; restore_mode || rc=1; exit $rc; }
+trap on_exit EXIT
+
 PR=$(http GET "/mode/$PROBE_SUBJECT")
 [ "$(status "$PR")" = 404 ] || { echo "FAIL: probe subject $PROBE_SUBJECT already has a mode ($PR) — refusing to probe on a real subject"; exit 1; }
 if [ "$DRY" = true ]; then
   echo "probe: DEPLOY_DRY_RUN=true — not setting IMPORT on $PROBE_SUBJECT"
 else
+  PROBE_SET=true
   P1=$(http PUT "/mode/$PROBE_SUBJECT" '{"mode":"IMPORT"}')
   [ "$(status "$P1")" = 200 ] && [ "$(json_field "$(body "$P1")" mode)" = IMPORT ] \
     || { echo "FAIL: subject-level IMPORT is not allowed on this registry (mode.mutability=false?): PUT /mode/$PROBE_SUBJECT -> $P1"; exit 1; }
   P2=$(http DELETE "/mode/$PROBE_SUBJECT")
   [ "$(status "$P2")" = 200 ] || { echo "FAIL: could not remove the probe mode: DELETE /mode/$PROBE_SUBJECT -> $P2"; exit 1; }
   P3=$(http GET "/mode/$PROBE_SUBJECT")
-  [ "$(status "$P3")" = 404 ] || { echo "FAIL: probe mode still present after DELETE: $P3"; exit 1; }
+  [ "$(status "$P3")" = 404 ] && PROBE_SET=false || { echo "FAIL: probe mode still present after DELETE: $P3"; exit 1; }
   echo "probe: subject-level IMPORT allowed (set and removed on $PROBE_SUBJECT)"
 fi
 
@@ -110,9 +116,6 @@ restore_mode() {
   [ "$(json_field "$(body "$rr")" mode)" = "$CUR_MODE" ] || { echo "FAIL: effective mode of $s is not the captured $CUR_MODE: $rr"; return 1; }
   CUR_SUBJECT=""
 }
-on_exit() { local rc=$?; restore_mode || rc=1; exit $rc; }
-trap on_exit EXIT
-
 ensure_full() { # <subject>
   local s="$1" c cm
   c=$(http GET "/config/$s"); cm=$(json_field "$(body "$c")" compatibilityLevel)
@@ -185,7 +188,14 @@ while IFS='|' read -r subject id file version; do
     fail=1; continue
   fi
   if [ "$version" -gt 1 ] && [ "$(status "$V")" = 200 ]; then
-    # read-only: the registry's own verdict on the new version against the latest one, under the subject's compatibility
+    # read-only: the registry judges compatibility under the SUBJECT'S configured level, and FULL is only enforced after an import, so a subject that is not
+    # at FULL now must be refused here: its verdict would not be the FULL one this script promises
+    CF=$(http GET "/config/$subject")
+    if [ "$(status "$CF")" != 200 ] || [ "$(json_field "$(body "$CF")" compatibilityLevel)" != "$COMPAT" ]; then
+      echo "FAIL: $subject is not at compatibility $COMPAT now ($CF): the registry's compatibility verdict for version $version would not be the $COMPAT one — set it deliberately first"
+      fail=1; continue
+    fi
+    # the registry's own verdict on the new version against the latest one, under the subject's compatibility
     CK=$(http POST "/compatibility/subjects/$subject/versions/latest" "$(reg_body "$schema")")
     if [ "$(status "$CK")" != 200 ] || [ "$(json_field "$(body "$CK")" is_compatible)" != True ]; then
       echo "FAIL: version $version of $subject is not compatible with the latest registered version: $CK"

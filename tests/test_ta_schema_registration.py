@@ -383,6 +383,36 @@ class VersionTwoRegistration(unittest.TestCase):
         finally:
             server.shutdown()
 
+    def test_a_subject_not_at_full_is_refused_in_preflight_because_the_registrys_verdict_would_not_be_the_full_one(self):
+        reg = Registry()
+        seed_version_1(reg)
+        victim = TRADE_TOOLS_VERSION_2[0][0]
+        reg.configs[victim] = "BACKWARD"
+        server, url = serve(reg)
+        try:
+            rc, out = run("es-trade-tools", url)
+            self.assertEqual(rc, 1, out)
+            self.assertIn("is not at compatibility FULL now", out)
+            self.assertIn("nothing was changed", out)
+            for subject, _ in TRADE_TOOLS_VERSION_2:
+                self.assertEqual(len(reg.subjects[subject]), 1, subject)
+            self.assertEqual(reg.configs[victim], "BACKWARD", "and nothing was repaired")
+        finally:
+            server.shutdown()
+
+    def test_a_probe_mode_that_could_not_be_removed_is_removed_by_the_exit_trap(self):
+        reg = Registry()
+        reg.fail_next_mode_delete = 1   # the probe's DELETE fails once
+        server, url = serve(reg)
+        try:
+            rc, out = run("wave-cycle", url)
+            self.assertEqual(rc, 1, out)
+            self.assertIn("could not remove the probe mode", out)
+            self.assertEqual(reg.subject_modes, {}, "the trap removed the leftover IMPORT mode of the probe subject")
+            self.assertEqual(reg.subjects, {}, "and no real subject was touched")
+        finally:
+            server.shutdown()
+
     def test_a_fresh_registry_gets_version_1_and_version_2_in_one_run(self):
         # covered by test_each_map_imports_every_subject...; here the preflight must accept version 2 rows whose version 1 is imported by an earlier row
         reg = Registry()

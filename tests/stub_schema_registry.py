@@ -18,6 +18,7 @@ class Registry:
         self.by_id: dict[int, str] = {}
         self.next_id = 100
         self.calls: list[str] = []
+        self.fail_next_mode_delete = 0   # DELETE /mode/<s> answers 500 this many times before it works (failure injection)
         self.incompatible: set[str] = set()   # subjects whose NEW schema the compatibility endpoint refuses
 
     def register(self, subject: str, schema: str, id: int | None = None, version: int | None = None):
@@ -120,6 +121,9 @@ class Handler(BaseHTTPRequestHandler):
         r.calls.append("DELETE " + p)
         if p.startswith("/mode/"):
             s = p[len("/mode/"):]
+            if r.fail_next_mode_delete > 0:
+                r.fail_next_mode_delete -= 1
+                return self._send(500, {"error_code": 50001, "message": "injected failure"})
             if s in r.subject_modes:
                 mode = r.subject_modes.pop(s)
                 return self._send(200, {"mode": mode})
