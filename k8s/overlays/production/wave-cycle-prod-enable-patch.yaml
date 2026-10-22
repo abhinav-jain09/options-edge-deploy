@@ -1,0 +1,40 @@
+# PRODUCTION: ELLIOTT-FIB-CYCLE-TOOLS wave-cycle-service LIVE with the calibrated release configuration (replicas 1, WAVE_CYCLE_ENABLED and WAVE_CYCLE_SEASONALITY_ENABLED "true",
+# the hash-pinned daily-bar snapshot). Release configuration source: processing docs/ta-books/catalog/ELLIOTT-FIB-CYCLE-TOOLS-SCHEMA-CHANGES.md section 6 (processing #1281 7b6294e0, #1283 063897ee).
+# The shared base (k8s/services/wave-cycle/base) stays replicas 0 / flags "false"; this production-only patch overrides it. No tuning variable is set: the registered defaults give
+# parameterSetHash eb3864e0d3e45adc52dafeb80f190a8ca623a61f030c3f250adb6387e677dd0a, and any other value makes the calibration null and the counts NOT_CALIBRATED.
+# WAVE_CYCLE_IGNORE_CHECKPOINT stays "false" (never committed true). The snapshot files are inside the image at /app/release/ (the Jib image stages wave-cycle-service/release there);
+# the service verifies the SHA-256 and the first/last/count before reading it, and only at a NEW bootstrap.
+# Preconditions: Avro subjects 2401-2405 (version 1) and WaveSet 2406 / CycleSet 2407 (version 2) registered on the production registry (10-22); options.indicators.bars exists and is
+# Avro (the indicator-service writer); the three output topics are ensured by the service-deploy barrier (scripts/kafka/ensure-wave-cycle-topics.sh) BEFORE the pod starts.
+# There is no earlier wave-cycle checkpoint on production (the Deployment did not exist). Reset class: options.spx.wave-cycle.recovery is RESET_REBUILDABLE (DEPLOY-ROLLOUT.md section 2).
+# Gateway relay (GATEWAY_WAVE_CYCLE_ENABLED) is a SEPARATE later change, after the version-2 gateway and web are live.
+# Rollback (complete): ONE PR that sets replicas to 0 (or removes this patch and its registration), regenerates the slices (scripts/deploy/generate-service-slices.sh), then service-deploy
+# SERVICE=wave-cycle; verify the live Deployment reads replicas 0. Roll the flags back first when anything degrades.
+# SINGLE replica ONLY (strategy Recreate): transactional.id is the fixed wave-cycle-SPX.
+# MUST MIRROR the standalone slice k8s/services/wave-cycle/overlays/production (validate-services: mono==slice).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wave-cycle-service
+  namespace: options-edge
+spec:
+  replicas: 1
+  template:
+    spec:
+      containers:
+        - name: wave-cycle
+          env:
+            - name: WAVE_CYCLE_ENABLED
+              value: "true"
+            - name: WAVE_CYCLE_SEASONALITY_ENABLED
+              value: "true"
+            - name: WC_DAILY_SNAPSHOT_PATH
+              value: /app/release/spx-daily-bar-history-20171002-20261009.avro
+            - name: WC_DAILY_SNAPSHOT_SHA256
+              value: 55d74b300e2cf7496740bfeada5de57db5f0d7f4e60b957064691e3c8e18a26c
+            - name: WC_DAILY_SNAPSHOT_FIRST
+              value: "2017-10-02"
+            - name: WC_DAILY_SNAPSHOT_LAST
+              value: "2026-10-09"
+            - name: WC_DAILY_SNAPSHOT_COUNT
+              value: "2268"

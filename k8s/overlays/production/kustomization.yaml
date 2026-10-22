@@ -35,7 +35,7 @@ resources:
   # break-score + level-absorption: HELD AT replicas 0 (base). See k8s/overlays/dev/kustomization.yaml.
   - ../../services/break-score/base
   - ../../services/level-absorption/base
-  # es-trade-tools (TICK-TRADE-TOOLS) + wave-cycle (ELLIOTT-FIB-CYCLE-TOOLS): HELD AT replicas 0 (base). See k8s/overlays/dev/kustomization.yaml.
+  # es-trade-tools (TICK-TRADE-TOOLS) + wave-cycle (ELLIOTT-FIB-CYCLE-TOOLS): the bases are HELD AT replicas 0; PRODUCTION enables both through the enable patches registered below.
   - ../../services/es-trade-tools/base
   - ../../services/wave-cycle/base
   # market-structure: dev+prod at replicas 1. Reads options.indicators.bars read-only and publishes
@@ -786,6 +786,16 @@ patches:
     target:
       kind: Deployment
       name: option-pressure-state-service
+  # PROD: es-trade-tools-service and wave-cycle-service LIVE with the calibrated release configuration (replicas 1, flags true). The bases stay replicas 0 / false.
+  # See each patch header. MUST MIRROR the standalone slices k8s/services/{es-trade-tools,wave-cycle}/overlays/production (validate-services: mono==slice).
+  - path: es-trade-tools-prod-enable-patch.yaml
+    target:
+      kind: Deployment
+      name: es-trade-tools-service
+  - path: wave-cycle-prod-enable-patch.yaml
+    target:
+      kind: Deployment
+      name: wave-cycle-service
   # PROD: run the option pressure state READER, and only that one of this service's four writers.
   # See the patch header for why the other three are switched off rather than left to create a topic
   # and three tables as a side effect.

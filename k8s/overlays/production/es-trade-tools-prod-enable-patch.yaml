@@ -1,0 +1,38 @@
+# PRODUCTION: TICK-TRADE-TOOLS es-trade-tools-service LIVE with the calibrated release configuration (replicas 1, TT_ENABLED and all four family flags "true").
+# The shared base (k8s/services/es-trade-tools/base) stays replicas 0 / flags "false" for dev and every other render; this production-only patch overrides it.
+# Owner standard 2026-10-22: every service is calibrated on historical data before it is deployed and runs live, never in shadow. The calibration
+# (processing docs/ta-books/catalog/TICK-TRADE-TOOLS-CALIBRATION-REPORT.md, merged with processing #1281 7b6294e0 and #1283 063897ee) is compiled INTO the image
+# (es-trade-tools-service/calibration, paramsVersion 2), so the release carries no tuning variable: set none.
+# Preconditions, all checked before the run (docs/ta-books/DEPLOY-ROLLOUT.md section 5): Avro subjects 2301-2315 (version 1) and 2321-2332 + 2335 (version 2) are registered on the
+# production registry (ensure-fixed-id-schemas.sh with the contracts 4ddf5a36 maps, 10-22); the input underlying.es.trades.linearized exists on the production broker (single partition,
+# written by es-trade-linearizer-service); the seven output topics are ensured by the service-deploy topic barrier (scripts/kafka/ensure-es-trade-tools-topics.sh) BEFORE the pod starts.
+# There is NO earlier es-trade-tools checkpoint on production (the Deployment did not exist), so the paramsVersion-2 image meets an empty state topic and builds from the retained tape.
+# Reset class: the four retention.ms=-1 topics (futures.pf.columns, futures.pf.chart, futures.volume-nodes, futures.tradetools.state) are RESET_REBUILDABLE in scripts/kafka/topics.env; a
+# premarket/clean reset deletes the set together and the service rebuilds from the retained linearized tape. Chart history older than the tape's retention is not rebuilt (DEPLOY-ROLLOUT.md section 2).
+# Gateway relay (GATEWAY_TRADE_TOOLS_ENABLED) is a SEPARATE later change: the gateway and web that understand the version-2 records are deployed first.
+# Rollback (complete): ONE PR that sets replicas to 0 (or removes this patch and its registration, which returns the base's replicas 0 and flags "false"), regenerates the slices
+# (scripts/deploy/generate-service-slices.sh) and is deployed with service-deploy SERVICE=es-trade-tools; verify the live Deployment reads replicas 0. Roll the flags back first when anything degrades.
+# SINGLE replica ONLY (strategy Recreate): the producer is transactional with transactional.id es-trade-tools-ES.v.0.
+# MUST MIRROR the standalone slice k8s/services/es-trade-tools/overlays/production (validate-services: mono==slice).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: es-trade-tools-service
+  namespace: options-edge
+spec:
+  replicas: 1
+  template:
+    spec:
+      containers:
+        - name: es-trade-tools
+          env:
+            - name: TT_ENABLED
+              value: "true"
+            - name: TT_PF_ENABLED
+              value: "true"
+            - name: TT_VP_ENABLED
+              value: "true"
+            - name: TT_FLOW_ENABLED
+              value: "true"
+            - name: TT_CLIMAX_ENABLED
+              value: "true"

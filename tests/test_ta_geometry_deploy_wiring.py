@@ -33,14 +33,16 @@ class FlagsAreLiterallyFalse(unittest.TestCase):
                                               "k8s/services/market-structure/overlays/production/manifest.yaml"],
         "GATEWAY_STRUCTURE_TOOLS_ENABLED": [], "GATEWAY_GEOMETRY_ENABLED": [], "GATEWAY_TRADE_TOOLS_ENABLED": [], "GATEWAY_WAVE_CYCLE_ENABLED": [],
         "TT_ENABLED": ["k8s/services/es-trade-tools/base/es-trade-tools-deployment.yaml", "k8s/services/es-trade-tools/overlays/dev/manifest.yaml",
-                       "k8s/services/es-trade-tools/overlays/production/manifest.yaml"],
-        "TT_PF_ENABLED": ["k8s/services/es-trade-tools/base/es-trade-tools-deployment.yaml"],
-        "TT_VP_ENABLED": ["k8s/services/es-trade-tools/base/es-trade-tools-deployment.yaml"],
-        "TT_FLOW_ENABLED": ["k8s/services/es-trade-tools/base/es-trade-tools-deployment.yaml"],
-        "TT_CLIMAX_ENABLED": ["k8s/services/es-trade-tools/base/es-trade-tools-deployment.yaml"],
+                       "k8s/services/es-trade-tools/overlays/production/manifest.yaml",
+                       "k8s/overlays/production/es-trade-tools-prod-enable-patch.yaml"],
+        "TT_PF_ENABLED": ["k8s/services/es-trade-tools/base/es-trade-tools-deployment.yaml", "k8s/overlays/production/es-trade-tools-prod-enable-patch.yaml", "k8s/services/es-trade-tools/overlays/production/manifest.yaml"],
+        "TT_VP_ENABLED": ["k8s/services/es-trade-tools/base/es-trade-tools-deployment.yaml", "k8s/overlays/production/es-trade-tools-prod-enable-patch.yaml", "k8s/services/es-trade-tools/overlays/production/manifest.yaml"],
+        "TT_FLOW_ENABLED": ["k8s/services/es-trade-tools/base/es-trade-tools-deployment.yaml", "k8s/overlays/production/es-trade-tools-prod-enable-patch.yaml", "k8s/services/es-trade-tools/overlays/production/manifest.yaml"],
+        "TT_CLIMAX_ENABLED": ["k8s/services/es-trade-tools/base/es-trade-tools-deployment.yaml", "k8s/overlays/production/es-trade-tools-prod-enable-patch.yaml", "k8s/services/es-trade-tools/overlays/production/manifest.yaml"],
         "WAVE_CYCLE_ENABLED": ["k8s/services/wave-cycle/base/wave-cycle-deployment.yaml", "k8s/services/wave-cycle/overlays/dev/manifest.yaml",
-                               "k8s/services/wave-cycle/overlays/production/manifest.yaml"],
-        "WAVE_CYCLE_SEASONALITY_ENABLED": ["k8s/services/wave-cycle/base/wave-cycle-deployment.yaml"],
+                               "k8s/services/wave-cycle/overlays/production/manifest.yaml",
+                               "k8s/overlays/production/wave-cycle-prod-enable-patch.yaml"],
+        "WAVE_CYCLE_SEASONALITY_ENABLED": ["k8s/services/wave-cycle/base/wave-cycle-deployment.yaml", "k8s/overlays/production/wave-cycle-prod-enable-patch.yaml", "k8s/services/wave-cycle/overlays/production/manifest.yaml"],
         "WAVE_CYCLE_IGNORE_CHECKPOINT": ["k8s/services/wave-cycle/base/wave-cycle-deployment.yaml"],
     }
     GATEWAY_FILES = ["k8s/overlays/dev/feed-gateway-dev-env-patch.yaml", "k8s/overlays/production/feed-gateway-prod-env-patch.yaml",
@@ -56,7 +58,15 @@ class FlagsAreLiterallyFalse(unittest.TestCase):
         "GATEWAY_STRUCTURE_TOOLS_ENABLED": ("k8s/overlays/production/feed-gateway-prod-env-patch.yaml", "k8s/services/feed-gateway/overlays/production/manifest.yaml"),
         "MARKET_STRUCTURE_TOOLS_ENABLED": ("k8s/overlays/production/market-structure-prod-env-patch.yaml", "k8s/services/market-structure/overlays/production/manifest.yaml"),
         "GATEWAY_GEOMETRY_ENABLED": ("k8s/overlays/production/feed-gateway-prod-env-patch.yaml", "k8s/services/feed-gateway/overlays/production/manifest.yaml"),
-        "MARKET_STRUCTURE_GEOMETRY_ENABLED": ("k8s/overlays/production/market-structure-prod-env-patch.yaml", "k8s/services/market-structure/overlays/production/manifest.yaml"),
+        "MARKET_STRUCTURE_GEOMETRY_ENABLED": ("k8s/overlays/production/market-structure-prod-env-patch.yaml", "k8s/services/market-structure/overlays/production/manifest.yaml"),        # 2026-10-22 (owner: every service calibrated and live, never shadow): es-trade-tools (TICK-TRADE-TOOLS) and wave-cycle (ELLIOTT-FIB-CYCLE-TOOLS) run live in production.
+        # The GATEWAY relay flags of those two layers stay "false" until the version-2 gateway and web are live (a later change).
+        "TT_ENABLED": ("k8s/overlays/production/es-trade-tools-prod-enable-patch.yaml", "k8s/services/es-trade-tools/overlays/production/manifest.yaml"),
+        "TT_PF_ENABLED": ("k8s/overlays/production/es-trade-tools-prod-enable-patch.yaml", "k8s/services/es-trade-tools/overlays/production/manifest.yaml"),
+        "TT_VP_ENABLED": ("k8s/overlays/production/es-trade-tools-prod-enable-patch.yaml", "k8s/services/es-trade-tools/overlays/production/manifest.yaml"),
+        "TT_FLOW_ENABLED": ("k8s/overlays/production/es-trade-tools-prod-enable-patch.yaml", "k8s/services/es-trade-tools/overlays/production/manifest.yaml"),
+        "TT_CLIMAX_ENABLED": ("k8s/overlays/production/es-trade-tools-prod-enable-patch.yaml", "k8s/services/es-trade-tools/overlays/production/manifest.yaml"),
+        "WAVE_CYCLE_ENABLED": ("k8s/overlays/production/wave-cycle-prod-enable-patch.yaml", "k8s/services/wave-cycle/overlays/production/manifest.yaml"),
+        "WAVE_CYCLE_SEASONALITY_ENABLED": ("k8s/overlays/production/wave-cycle-prod-enable-patch.yaml", "k8s/services/wave-cycle/overlays/production/manifest.yaml"),
     }
 
     def expected_value(self, rel, name):
@@ -117,14 +127,15 @@ class NewServicesAreHeldAndRegistered(unittest.TestCase):
     SERVICES = {"es-trade-tools": ("es-trade-tools-service", "ES_TRADE_TOOLS_IMAGE", "options-edge-es-trade-tools"),
                 "wave-cycle": ("wave-cycle-service", "WAVE_CYCLE_IMAGE", "options-edge-wave-cycle")}
 
-    def test_rendered_slices_are_one_deployment_at_replicas_zero_on_dev_and_production(self):
+    def test_rendered_slices_are_one_deployment_at_replicas_one_on_production_and_zero_on_dev(self):
         for svc, (dep, _, image) in self.SERVICES.items():
             for env in ("dev", "production"):
                 docs = [d for d in yaml.safe_load_all(read(f"k8s/services/{svc}/overlays/{env}/manifest.yaml")) if d]
                 self.assertEqual([d["kind"] for d in docs], ["Deployment"], f"{svc} {env}")
                 d = docs[0]
                 self.assertEqual(d["metadata"]["name"], dep)
-                self.assertEqual(d["spec"]["replicas"], 0, f"{svc} {env}: a new service is HELD, see docs/ta-books/DEPLOY-ROLLOUT.md")
+                # dev render stays HELD (dev is rolled by hand until its own enable change); production renders replicas 1 through its enable patch (2026-10-22)
+                self.assertEqual(d["spec"]["replicas"], 1 if env == "production" else 0, f"{svc} {env}: see docs/ta-books/DEPLOY-ROLLOUT.md")
                 self.assertEqual(d["spec"]["strategy"]["type"], "Recreate", "single replica, a second transactional.id instance would fence the first")
                 self.assertIn(image, d["spec"]["template"]["spec"]["containers"][0]["image"])
 
@@ -148,10 +159,13 @@ class NewServicesAreHeldAndRegistered(unittest.TestCase):
                 self.assertIn(f"../../services/{svc}/base", read(f"k8s/overlays/{env}/kustomization.yaml"))
             self.assertIn(f"newName: host.docker.internal:5001/{image}", read("k8s/overlays/dev/kustomization.yaml"))
 
-    def test_the_three_lifecycle_lists_name_both_so_no_reboot_or_morning_start_scales_them_up(self):
+    def test_the_production_lifecycle_lists_do_not_hold_either_down_and_the_dev_list_still_does(self):
+        # production runs both (2026-10-22): a KEEP_DOWN entry would scale them to 0 at the next reboot or morning start
         for dep, _, _ in self.SERVICES.values():
-            for rel in ("scripts/ops/oe-boot-bringup.sh", "scripts/ops/morning-autostart.sh", "scripts/ops/dev-cleanup.sh"):
-                self.assertRegex(read(rel), rf"(?<![\w-]){re.escape(dep)}(?![\w-])", f"{rel}: {dep}")
+            for rel in ("scripts/ops/oe-boot-bringup.sh", "scripts/ops/morning-autostart.sh"):
+                text = "\n".join(l for l in read(rel).splitlines() if re.match(r"\s*KEEP_DOWN=", l))
+                self.assertNotRegex(text, rf"(?<![\w-]){re.escape(dep)}(?![\w-])", f"{rel}: {dep} must not be held down on production")
+            self.assertRegex(read("scripts/ops/dev-cleanup.sh"), rf"(?<![\w-]){re.escape(dep)}(?![\w-])", f"dev-cleanup.sh: {dep}")
 
     def test_the_service_deploy_job_offers_both_and_runs_their_topic_barriers(self):
         text = read("Jenkinsfile.service-deploy")

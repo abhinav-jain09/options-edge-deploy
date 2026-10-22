@@ -116,6 +116,13 @@ Registering the service in the estate (this PR, then): the processing repository
    D: also `TT_ENABLED=true` and ONE family flag at a time (`TT_PF_ENABLED`, `TT_VP_ENABLED`, `TT_FLOW_ENABLED`, then `TT_CLIMAX_ENABLED`, which needs FLOW), then `GATEWAY_TRADE_TOOLS_ENABLED`.
    E: first the **dark run** (replicas 1, both flags `false`; the fold runs and is checkpointed; `wave_cycle_*` metrics), then `WAVE_CYCLE_ENABLED` and `GATEWAY_WAVE_CYCLE_ENABLED`; `WAVE_CYCLE_IGNORE_CHECKPOINT` is never committed true.
 
+## 5a. PRODUCTION runs both services live (2026-10-22)
+
+Owner standard: every service is calibrated on historical data first and then runs live, never in shadow. The calibrated releases (processing #1281, #1283; contracts 0.36.0 `4ddf5a36`; version-2 subjects registered on production 2026-10-22: trade tools 2321-2332 and 2335, WaveSet 2406, CycleSet 2407) are enabled in PRODUCTION ONLY by
+`k8s/overlays/production/es-trade-tools-prod-enable-patch.yaml` and `wave-cycle-prod-enable-patch.yaml` (replicas 1; D: `TT_ENABLED` and the four family flags; E: `WAVE_CYCLE_ENABLED`, `WAVE_CYCLE_SEASONALITY_ENABLED` and the hash-pinned daily snapshot variables), registered in the production overlay and mirrored in the regenerated slices. Both services are removed from
+`KEEP_DOWN` in `morning-autostart.sh` and `oe-boot-bringup.sh` (production-only lists) and stay in `DISABLED_DEV` (dev is handled separately). The shared bases remain replicas 0 / flags `false`. The gateway relay flags `GATEWAY_TRADE_TOOLS_ENABLED` and `GATEWAY_WAVE_CYCLE_ENABLED` are NOT part of this change: they follow once a gateway and web that understand the version-2 records are live on production.
+Order: registry (done) -> `service-deploy SERVICE=es-trade-tools` (topic barrier creates the seven topics, the Deployment starts at replicas 1) -> `service-deploy SERVICE=wave-cycle` -> gateway -> web -> gateway relay flags. There is no earlier checkpoint on production for either service, so no state-topic reset is involved.
+
 ## 6. Not in this change
 
 * The processing-side image build entries above, and the runbook section 7 full-decode verifier (a Java tool with the registry client; `--verify` here is a sample).
