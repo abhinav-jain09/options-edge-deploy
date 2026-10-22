@@ -85,8 +85,17 @@ grep -q -- "--create .*--topic $WREC .*--config segment.bytes=16777216 --config 
   && ok "recreated wave-cycle recovery topic has bounded compaction cadence" || bad "wave-cycle recovery create lacks compaction cadence"
 grep -q -- "--entity-name $WREC --alter .*segment.bytes=16777216,max.compaction.lag.ms=300000" "$LOG" \
   && ok "global config apply restores the wave-cycle recovery compaction cadence" || bad "wave-cycle recovery compaction cadence absent"
-# All other topics must keep their original configuration; the extra keys are specific to the two recovery logs.
-if grep 'segment.bytes=16777216' "$LOG" | grep -v -e "$REC" -e "$WREC" >/dev/null; then bad "compaction cadence leaked to another topic"; else ok "cadence applies only to the recovery logs"; fi
+# break-classifier-service's checkpoint (Phase F) takes the same cadence AND its declared max.message.bytes (OPTIONS_EDGE_TOPIC_MAX_MESSAGE_BYTES_OVERRIDES): it must accept >= 8 MiB records.
+CKPT="options.spx.break-classification.checkpoint"
+run SIMULATE_CLIENT_RETRY=0 TOPICS_ABSENT_NAME="$CKPT"
+[ "$RC" -eq 0 ] && ok "break-classification checkpoint reset reconciliation exits 0" || bad "break-classification checkpoint reset exit $RC"
+grep -q -- "--create .*--topic $CKPT .*--config max.message.bytes=9437184 --config segment.bytes=16777216 --config max.compaction.lag.ms=300000" "$LOG" \
+  && ok "recreated checkpoint has the declared message bound and the compaction cadence" || bad "checkpoint create lacks the message bound or the cadence"
+grep -q -- "--entity-name $CKPT --alter .*max.message.bytes=9437184,segment.bytes=16777216,max.compaction.lag.ms=300000" "$LOG" \
+  && ok "global config apply restores the checkpoint's message bound and cadence" || bad "checkpoint message bound or cadence absent from the alter"
+# The bound belongs to the declared topic only, and the cadence to the recovery logs and the checkpoint only.
+if grep 'max.message.bytes=' "$LOG" | grep -v -e "$CKPT" >/dev/null; then bad "max.message.bytes leaked to another topic"; else ok "the message bound applies only to the checkpoint"; fi
+if grep 'segment.bytes=16777216' "$LOG" | grep -v -e "$REC" -e "$WREC" -e "$CKPT" >/dev/null; then bad "compaction cadence leaked to another topic"; else ok "cadence applies only to the recovery logs and the checkpoint"; fi
 
 echo
 [ "$fails" -eq 0 ] && { echo "=== apply-topics-create-retry: OK ==="; exit 0; }

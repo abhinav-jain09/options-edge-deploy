@@ -50,6 +50,8 @@ spec:
     spec:
       containers:
       - env:
+        - name: INDICATOR_STUDIES_ENABLED
+          value: 'true'
         - name: HEALTH_PORT
           value: '8133'
         - name: INDICATOR_SOURCE_MODE
@@ -66,8 +68,6 @@ spec:
           value: 'true'
         - name: INDICATOR_STATE_DIR
           value: /home/options-edge/indicator-service/state
-        - name: INDICATOR_STUDIES_ENABLED
-          value: 'false'
         - name: JAVA_TOOL_OPTIONS
           value: -Xms256m -Xmx1536m
         - name: INDICATOR_ES_HEARTBEAT_LIVENESS
