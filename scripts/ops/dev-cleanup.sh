@@ -476,6 +476,18 @@ ensure_partition_only_topics() {
 # still-running external producer can auto-create its topic at ANY point during it — including
 # after any snapshot taken at the start. The pass runs on every caller, not just the wipe, so a
 # transient failure is retried by the next start instead of surviving until someone notices.
+# DEV-ONLY overnight ES-basis ESTIMATE topics (indicator-estimate sidecar). They are NOT in the deploy repo's topics.env on purpose (the estimate is
+# dev-only; prod must not grow them), so a clean used to leave them for the sidecar to create AFTER context-tape-service had already started, and
+# context-tape then subscribed only to the forming topic: the Order tab drew ONE candle that was replaced every minute (2026-10-21 20:3x ET).
+# Pre-creating them here, before any service starts, removes the race at its source (context-tape also now picks a late topic up by itself).
+# Same shapes the sidecar creates: bars = 1 partition / delete / 3 d retention, bars.current = 1 partition / compact / 1 d retention.
+ensure_dev_only_estimate_topics() {
+  $KT --bootstrap-server $BS --create --if-not-exists --topic options.indicators.estimate.bars --partitions 1 --replication-factor 1 \
+      --config cleanup.policy=delete --config retention.ms=259200000 >/dev/null 2>&1 && echo "  dev-only estimate topic ready: options.indicators.estimate.bars" || echo "  WARNING: could not create options.indicators.estimate.bars"
+  $KT --bootstrap-server $BS --create --if-not-exists --topic options.indicators.estimate.bars.current --partitions 1 --replication-factor 1 \
+      --config cleanup.policy=compact --config retention.ms=86400000 >/dev/null 2>&1 && echo "  dev-only estimate topic ready: options.indicators.estimate.bars.current" || echo "  WARNING: could not create options.indicators.estimate.bars.current"
+}
+
 ensure_topics() {
   git -C "$DEPLOY_REPO" fetch -q origin main 2>/dev/null || true
   local tenv; tenv="$(git -C "$DEPLOY_REPO" show "$TOPICS_ENV_REF" 2>/dev/null)"
@@ -497,6 +509,7 @@ ensure_topics() {
     echo "Pre-created $n platform topics from deploy config ($TOPICS_ENV_REF); apps self-create the rest on startup."
     ensure_partition_only_topics
     reconcile_declared_topics
+    ensure_dev_only_estimate_topics
     echo "  topics present now: $($KT --bootstrap-server $BS --list 2>/dev/null | grep -vcE '^__|^_schemas')"
   else
     echo "  WARNING: could not read deploy topics.env ($DEPLOY_REPO $TOPICS_ENV_REF) — apps will create their topics on startup (slower to READY)."
