@@ -55,6 +55,11 @@ spec:
             # actual login redirect target). If the Mac IP or hostname ever drifts again, re-add
             # VITE_AUTH_ENABLED=false + AUTH_ALLOW_DISABLED=true here to boot public. MUST MIRROR the
             # top-level k8s/overlays/dev/web-dev-env-patch.yaml (validate-services render equivalence).
+            # Shared dev broker is owner-only (Local Broker Step 0 / R23): only these Keycloak subjects pass
+            # /api/context-tape/orders/**. Absent or blank = the namespace denies everyone. Dev only; prod and
+            # experiment deliberately do not set it.
+            - name: CONTEXT_TAPE_ORDER_OWNER_SUBJECTS
+              value: "c7e72344-2b53-4435-b9d2-05b7ac17363b"
             - name: CONTEXT_TAPE_PUBLIC_ORIGINS
               value: "http://localhost:8090,http://127.0.0.1:8090,https://dev.bleadingoptions.com,https://dev-lan.bleadingoptions.com:8443"
             - name: VITE_AUTH_ISSUER
