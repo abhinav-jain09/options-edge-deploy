@@ -58,13 +58,11 @@ spec:
               value: "http://localhost:8090,http://127.0.0.1:8090,https://dev.bleadingoptions.com,https://dev-lan.bleadingoptions.com:8443"
             - name: VITE_AUTH_ISSUER
               value: "https://dev-auth.bleadingoptions.com/realms/optionsedge"
-            # The browser's live WS talks to the dev feed-gateway at localhost:8093 — the gateway that
-            # is actually serving live snapshots and accepts the localhost browser origin. The web SERVES
-            # this URL to the browser as config.feedGatewayWsUrl, so it MUST be browser-reachable.
-            # feedGatewayAvailable is computed by the web pod. Probe the gateway through Kubernetes
-            # Service DNS so this reflects the actual gateway without depending on a host hairpin.
+            # Both dev web origins use the existing authenticated dev stream ingress. The LAN TLS
+            # bridge forwards only to the web tier, so /ws/events cannot use that bridge's origin.
+            # Keep the server's health probe on Kubernetes Service DNS below.
             - name: APP_FEED_GATEWAY_WS_URL
-              value: "ws://localhost:8091/ws/events"
+              value: "wss://dev.bleadingoptions.com/ws/events"
             - name: APP_FEED_GATEWAY_HEALTH_URL
               value: "http://feed-gateway-service:8091/health"
             # Server-side history-backfill proxy target (GET /api/liquidity-history in
@@ -72,18 +70,13 @@ spec:
             - name: FEED_GATEWAY_REST_URL
               value: "http://feed-gateway-service:8091"
             - name: VITE_WS_URL
-              value: "ws://localhost:8091/ws/events"
-            # The web serves its own /api + /mission-control on the dev host port :8090. The same-origin
-            # ("blank") behaviour requires the #89 web image (RuntimeProfileConfig treats blank as
-            # window.location); the currently-deployed image is older and mis-defaults a BLANK
-            # VITE_API_BASE_URL to the container-internal :8080, which is NOT reachable from the Mac host
-            # — so the browser's /api/config 503s and the chain never loads. Set these EXPLICITLY to the
-            # host-reachable http://localhost:8090 so the browser hits the web's own origin regardless of
-            # image age. (Forward-compatible: once the #89 image lands, explicit :8090 still resolves.)
+              value: "wss://dev.bleadingoptions.com/ws/events"
+            # This deployment serves APIs from the origin root, including pages at /option-chain.
+            # An explicit / keeps each page route out of API and mission-control request paths.
             - name: VITE_API_BASE_URL
-              value: "http://localhost:8090"
+              value: "/"
             - name: VITE_MISSION_CONTROL_URL
-              value: "http://localhost:8090"
+              value: "/"
             - name: VITE_REPLAY_ORCHESTRATOR_URL
               value: "http://localhost:8095"
             # ES BOX layer on /context-tape (2026-10-07): the es-compression-expansion shadow view (dev runs it too).
