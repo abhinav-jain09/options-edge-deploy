@@ -58,6 +58,10 @@ spec:
               value: "http://localhost:8090,http://127.0.0.1:8090,https://dev.bleadingoptions.com,https://dev-lan.bleadingoptions.com:8443"
             - name: VITE_AUTH_ISSUER
               value: "https://dev-auth.bleadingoptions.com/realms/optionsedge"
+            # Fetch signing keys directly from the dev host, independently of Cloudflare.
+            # Token issuer, audience, expiry and signature validation remain enabled.
+            - name: AUTH_JWK_SET_URI
+              value: "http://host.docker.internal:8089/realms/optionsedge/protocol/openid-connect/certs"
             # Both dev web origins use the existing authenticated dev stream ingress. The LAN TLS
             # bridge forwards only to the web tier, so /ws/events cannot use that bridge's origin.
             # Keep the server's health probe on Kubernetes Service DNS below.
