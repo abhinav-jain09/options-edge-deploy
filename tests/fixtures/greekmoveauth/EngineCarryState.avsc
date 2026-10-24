@@ -1,0 +1,136 @@
+{
+  "type": "record",
+  "name": "EngineCarryState",
+  "namespace": "com.optionsedge.contracts.greekmoveauth",
+  "doc": "INTERNAL Kafka Streams gma-engine-state-store value: the per-symbol carry state between finalized frames. egWindow rows are [eventMs, proxyStep, thetaStep]. Not a topic contract; committed so the serde is never service-local. Spots and the reference strike are decimal(38,18).",
+  "fields": [
+    {
+      "name": "sessionDate",
+      "type": "string"
+    },
+    {
+      "name": "trail",
+      "type": {
+        "type": "array",
+        "items": {
+          "type": "record",
+          "name": "EngineTrailSample",
+          "namespace": "com.optionsedge.contracts.greekmoveauth",
+          "doc": "One trail point of the carried engine state.",
+          "fields": [
+            {
+              "name": "asOfEventMs",
+              "type": "long"
+            },
+            {
+              "name": "spot",
+              "type": {
+                "type": "bytes",
+                "logicalType": "decimal",
+                "precision": 38,
+                "scale": 18
+              }
+            },
+            {
+              "name": "authClass",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "egArmed",
+      "type": "boolean"
+    },
+    {
+      "name": "egFrozen",
+      "type": "boolean"
+    },
+    {
+      "name": "egFreezeMs",
+      "type": "long"
+    },
+    {
+      "name": "egEntryDir",
+      "type": "int"
+    },
+    {
+      "name": "egRefStrike",
+      "type": [
+        "null",
+        {
+          "type": "bytes",
+          "logicalType": "decimal",
+          "precision": 38,
+          "scale": 18
+        }
+      ],
+      "default": null
+    },
+    {
+      "name": "egFreezeSpot",
+      "type": [
+        "null",
+        {
+          "type": "bytes",
+          "logicalType": "decimal",
+          "precision": 38,
+          "scale": 18
+        }
+      ],
+      "default": null
+    },
+    {
+      "name": "egRefLeg",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "egSinceDeltaMoveProxy",
+      "type": "double"
+    },
+    {
+      "name": "egSinceThetaLoss",
+      "type": "double"
+    },
+    {
+      "name": "egQualRunStartMs",
+      "type": "long"
+    },
+    {
+      "name": "egLastSpot",
+      "type": [
+        "null",
+        {
+          "type": "bytes",
+          "logicalType": "decimal",
+          "precision": 38,
+          "scale": 18
+        }
+      ],
+      "default": null
+    },
+    {
+      "name": "egLastEventMs",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    },
+    {
+      "name": "egWindow",
+      "type": {
+        "type": "array",
+        "items": {
+          "type": "array",
+          "items": "double"
+        }
+      }
+    }
+  ]
+}
