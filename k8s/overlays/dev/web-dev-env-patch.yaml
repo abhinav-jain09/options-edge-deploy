@@ -59,6 +59,25 @@ spec:
             # experiment deliberately do not set it.
             - name: CONTEXT_TAPE_ORDER_OWNER_SUBJECTS
               value: "c7e72344-2b53-4435-b9d2-05b7ac17363b"
+            # Local Broker dev-side services (web PRs 1137-1146): off unless LOCAL_BROKER_ENABLED=true; the same switch
+            # publishes LOCAL_BROKER_ALLOWED on /env.js. The two introspection client secrets come from the
+            # `local-broker-keycloak` Secret (created out of band from the owner's file; never in git). The introspection
+            # URI uses the internal Keycloak address the pod already uses for AUTH_JWK_SET_URI (the public issuer host is
+            # not what this pod is proven to reach). Dev only: prod and experiment do not set any of these.
+            - name: LOCAL_BROKER_ENABLED
+              value: "true"
+            - name: LOCAL_BROKER_INTROSPECTION_URI
+              value: "http://host.docker.internal:8089/realms/optionsedge/protocol/openid-connect/token/introspect"
+            - name: LOCAL_BROKER_LEASE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: local-broker-keycloak
+                  key: LOCAL_BROKER_LEASE_CLIENT_SECRET
+            - name: LOCAL_BROKER_SPOT_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: local-broker-keycloak
+                  key: LOCAL_BROKER_SPOT_CLIENT_SECRET
             - name: CONTEXT_TAPE_PUBLIC_ORIGINS
               value: "http://localhost:8090,http://127.0.0.1:8090,https://dev.bleadingoptions.com,https://dev-lan.bleadingoptions.com:8443"
             - name: VITE_AUTH_ISSUER
