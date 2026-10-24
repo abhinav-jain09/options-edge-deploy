@@ -64,5 +64,9 @@ spec:
               value: "true"
             - name: BROKER_WHATIF_CLIENT_ID
               value: "52"
+            - name: SPREAD_FILL_ENABLED
+              value: "true"
+            - name: SPREAD_FILL_CLIENT_ID
+              value: "53"
             - name: BROKER_LIVE_WHATIF_ENABLED
               value: "true"
