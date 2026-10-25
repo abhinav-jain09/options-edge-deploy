@@ -45,6 +45,7 @@ BINDINGS = {
     'futures.level-absorption.voice':'cvd-related/LevelAbsorptionVoice.avsc',
     'futures.level-absorption.closures':'cvd-related/LevelAbsorptionClosure.avsc',
     'futures.level-absorption.manual-line':'cvd-related/LevelAbsorptionManualLine.avsc',
+    'context-tape.direction.candle-export':'cvd-related/CandleDirectionExportRecord.avsc',   # T-18 (contracts 0.43.0): the joined Candle Direction export, key barId
     'options.es-gex-spx-aligned':'cvd-related/AlignedGexBookExtended.avsc',
     'options.es-strike-intel-spx-aligned':'cvd-related/AlignedStrikeIntelligence.avsc',
     'options.short-premium.recommendation':'cvd-related/ShortPremiumRecommendation.avsc',

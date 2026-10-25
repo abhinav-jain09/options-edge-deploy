@@ -29,7 +29,7 @@ class Registry:
 
 class CvdSchemasTest(unittest.TestCase):
     def test_frozen_external_inventory_and_single_prefix(self):
-        self.assertEqual(32,len(m.BINDINGS));self.assertEqual(32,len(set(m.BINDINGS.values())))
+        self.assertEqual(33,len(m.BINDINGS));self.assertEqual(33,len(set(m.BINDINGS.values())))
         for topic,resource in m.BINDINGS.items():
             self.assertEqual(resource,m.binding(topic))
             if not topic.startswith('es.'):self.assertEqual(resource,m.binding('es.'+topic))
@@ -134,6 +134,7 @@ class EnvironmentSelection(unittest.TestCase):
         for topic in inv[0][2]:self.assertIsNotNone(m.binding(topic),topic)
         self.assertEqual('cvd-related/LevelAbsorptionEvent.avsc',m.binding('futures.level-absorption.events'))
         self.assertEqual('cvd-related/LevelAbsorptionManualLine.avsc',m.binding('futures.level-absorption.manual-line'))
+        self.assertEqual('cvd-related/CandleDirectionExportRecord.avsc',m.binding('context-tape.direction.candle-export'))   # T-18
 
     def test_default_reads_all_three_clusters(self):
         asked=[]

@@ -92,6 +92,8 @@ spec:
               value: context-tape.direction.alert
             - name: CONTEXT_TAPE_DIRECTION_SCORECARD_TOPIC
               value: context-tape.direction.scorecard
+            - name: CONTEXT_TAPE_DIRECTION_CANDLE_EXPORT_TOPIC
+              value: context-tape.direction.candle-export
             - name: CONTEXT_TAPE_DIRECTION_API_PORT
               value: "8136"
             - name: ZERO_DTE_COMPRESSION_ENABLED
