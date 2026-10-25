@@ -69,6 +69,8 @@ esac
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 . "$HERE/avro-rollforward.lib.sh"
+# every sampled record must be Avro under the ONE fixed contract id 2701 (0x00000a8d), not merely some Avro
+export RF_EXPECT_ID_HEX=00000a8d
 KT="$(rf_resolve_cli "$BIN")"
 KG="$(rf_resolve_cli_named kafka-consumer-groups "$BIN")"
 kt() { "$KT" --bootstrap-server "$BS" "$@"; }

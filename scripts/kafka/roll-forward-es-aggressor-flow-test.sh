@@ -55,7 +55,8 @@ for a in "$@"; do [ "$prev" = "--offset" ] && off="$a"; prev="$a"; done
 eval "specific=\${MOCK_WIRE_AT_${off}:-}"
 case "${specific:-${MOCK_WIRE:-avro}}" in
   unreadable) exit 0 ;;
-  avro) printf '\000\000\000\007\310some-avro' ;;
+  avro) printf '\000\000\000\012\215some-avro' ;;
+  foreignavro) printf '\000\000\000\007\310some-avro' ;;
   json) printf '{"symbol":"SPX"}' ;;
 esac
 exit 0
@@ -169,5 +170,8 @@ check "with --avro-feed-live, a reader offset INSIDE the new log is legitimate" 
 reset OLDID
 check "with --avro-feed-live, a reader offset BEYOND the new log end is reported (WARN), not fatal: step 7 gates each reader" "$(MOCK_END=12 MOCK_GROUPS='g es.futures.aggressor-flow 0 6505 12 0 - - -' run "${LARGS[@]}")" 0
 check "…and the WARN names the group" "$(grep -c 'WARN: consumer groups' "$TMP/out")" 1
+
+reset OLDID
+check "avro-live: Avro under a FOREIGN schema id fails (only id 2701 passes)" "$(MOCK_END=12 MOCK_WIRE=foreignavro run "${LARGS[@]}")" 1
 
 echo "passed=$pass failed=$fail"; [ "$fail" = 0 ]

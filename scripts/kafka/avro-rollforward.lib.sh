@@ -254,12 +254,20 @@ rf_wire_is_avro() {
   fi
   if [ ! -s "$tmp" ]; then rm -f "$tmp"; return 2; fi
   first="$(od -An -tx1 -N1 "$tmp" | tr -d ' \n')"
+  ids="$(od -An -tx1 -j1 -N4 "$tmp" | tr -d ' \n')"
   # A tombstone: the consumer renders a null value as its null literal on a line of its own.
   if [ "$(tr -d '\n\r' < "$tmp")" = "${RF_NULL_LITERAL:-null}" ]; then
     rm -f "$tmp"; return 0
   fi
   rm -f "$tmp"
-  [ "$first" = "00" ] && return 0
+  if [ "$first" = "00" ]; then
+    # Optional exact-id gate (a topic with ONE fixed contract): the four bytes after the magic must be the expected schema id.
+    if [ -n "${RF_EXPECT_ID_HEX:-}" ] && [ "$ids" != "$RF_EXPECT_ID_HEX" ]; then
+      echo "    value at offset $off is Avro under schema id 0x$ids, expected 0x$RF_EXPECT_ID_HEX (a foreign writer)" >&2
+      return 1
+    fi
+    return 0
+  fi
   echo "    value at offset $off starts 0x$first (Avro is 0x00, a tombstone renders as" >&2
   echo "    '${RF_NULL_LITERAL:-null}', hand-built JSON is 0x7b '{')" >&2
   return 1
