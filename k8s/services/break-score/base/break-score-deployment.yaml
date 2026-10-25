@@ -8,6 +8,8 @@ metadata:
     app.kubernetes.io/component: break-score-service
     app.kubernetes.io/part-of: options-edge
 spec:
+  # RETIRED 2026-10-25 (Break Score is retired as a predictor): replicas stays 0 on every environment and is not to be turned on;
+  # the turn-on recipe below is history. BREAK_SCORE_MODE=SHADOW below is retired with it.
   # HELD AT 0 on every environment (options-edge-processing docs/break-score/as-built/runtime-gaps.md section 3:
   # "deploy at replicas 0, then scale to 1 when the owner enables it"). Deploy = image built, pushed and pinned; scale is
   # the owner's. To turn it on: set replicas to 1 here, regenerate the slices (scripts/deploy/generate-service-slices.sh),

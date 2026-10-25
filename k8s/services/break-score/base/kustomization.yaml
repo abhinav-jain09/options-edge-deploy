@@ -1,7 +1,7 @@
 # SERVICE SLICE — break-score. Owns this service's Deployment, plus the ConfigMap it mounts.
 #
-# Referenced from BOTH k8s/overlays/dev and k8s/overlays/production (NOT k8s/base), HELD AT replicas: 0 until the owner
-# turns it on. Single replica only. SHADOW mode (no voice, no screen).
+# Referenced from BOTH k8s/overlays/dev and k8s/overlays/production (NOT k8s/base), HELD AT replicas: 0 on every environment.
+# RETIRED 2026-10-25 as a predictor (options-edge-processing docs/break-score/): not to be scaled up; there is no SHADOW mode to enable.
 #
 # No Service object on purpose (the vol-state / es-compression-expansion shadow pattern): kubelet probes reach the pod
 # directly and a ClusterIP would make /metrics reachable in-cluster. Nothing reads this service's output yet.

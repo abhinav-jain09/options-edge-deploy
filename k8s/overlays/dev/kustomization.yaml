@@ -21,8 +21,8 @@ resources:
   - ../../services/es-compression-expansion/base
   # hedging-pressure: HELD AT replicas 0 (base) on dev and production alike; the owner turns it on later.
   - ../../services/hedging-pressure/base
-  # break-score + level-absorption: both HELD AT replicas 0 (base) on production; break-score is SHADOW (scores level breaks off the
-  # linearized ES tape) and stays 0 on dev too; level-absorption RUNS on dev in EYEBALL phase through level-absorption-dev-enable-patch.yaml
+  # break-score + level-absorption: both HELD AT replicas 0 (base) on production; break-score is RETIRED (2026-10-25, held at 0 everywhere, never to be scaled up;
+  # there is no SHADOW mode to enable); level-absorption RUNS on dev in EYEBALL phase through level-absorption-dev-enable-patch.yaml
   # (docs/break-score/DEPLOY-WIRING.md, docs/level-absorption/DEPLOY-WIRING.md).
   - ../../services/break-score/base
   - ../../services/level-absorption/base

@@ -79,6 +79,17 @@ spec:
                 secretKeyRef:
                   name: local-broker-keycloak
                   key: LOCAL_BROKER_SPOT_CLIENT_SECRET
+            # Level Absorption dev visibility (2026-10-25, owner standing goal): turns on the web tier's level-absorption listener
+            # and the manual-line commands. The ack secret (16+ chars) is generated into the `level-absorption-web` Secret on the
+            # dev cluster out of band and referenced here; its value is never in git. Dev only: prod and experiment do not set either.
+            # MUST MIRROR the other dev web env patch (validate-services render equivalence).
+            - name: LEVEL_ABSORPTION_UI_ENABLED
+              value: "true"
+            - name: LEVEL_ABSORPTION_ACK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: level-absorption-web
+                  key: LEVEL_ABSORPTION_ACK_SECRET
             - name: CONTEXT_TAPE_PUBLIC_ORIGINS
               value: "http://localhost:8090,http://127.0.0.1:8090,https://dev.bleadingoptions.com,https://dev-lan.bleadingoptions.com:8443"
             - name: VITE_AUTH_ISSUER

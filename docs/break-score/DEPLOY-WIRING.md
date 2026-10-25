@@ -1,3 +1,5 @@
+> **RETIRED 2026-10-25.** Break Score was retired as a predictor (options-edge-processing `docs/break-score/`, decided by Claude under the owner's standing instruction; the owner may overrule). `break-score-service` was never deployed (no Deployment on dev or production) and stays held at `replicas: 0`; there is no SHADOW mode, no shadow period and no LIVE switch pending, and `BREAK_SCORE_MODE` is retired with the service. The wiring below is kept so the already-validated render, image lock and topic scripts keep validating; do not scale it up. Removing the wiring entirely is a separate cleanup that touches the image lock, topics.env preserved-topic checks and the keep-down lists.
+
 # Break Score — deploy wiring (options-edge-deploy)
 
 Service: `break-score-service` (options-edge-processing, module `break-score-service`, image `options-edge-break-score`, Jenkins

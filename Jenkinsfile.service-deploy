@@ -72,11 +72,11 @@ pipeline {
       'market-commentary',
       // early-auction-verdict: shadow, HELD at replicas 0; deploy = image pinned, scale is the owner's.
       'early-auction-verdict',
-      // break-score: dev+prod SHADOW, deployed HELD AT replicas 0 (the owner enables it). Reads the linearized ES tape, publishes
-      // futures.break-score.events; single replica only. Deploy = image pinned, scale is the owner's.
+      // break-score: RETIRED 2026-10-25 as a predictor (docs/break-score/DEPLOY-WIRING.md); held at replicas 0 everywhere and not to be
+      // scaled up. Kept in this list only so the retired wiring still validates; there is no SHADOW mode to enable.
       'break-score',
-      // level-absorption: dev+prod EYEBALL phase, deployed HELD AT replicas 0 and unable to start until the owner supplies the
-      // Phase 0 freeze file and the retention artifact. Publishes futures.level-absorption.{events,voice,closures}; single replica only.
+      // level-absorption: EYEBALL phase. DEV runs at replicas 1 (level-absorption-dev-enable-patch.yaml, 2026-10-25, with the config
+      // ConfigMap applied by the stage 'Apply level-absorption configuration'); production stays HELD AT replicas 0. Publishes futures.level-absorption.{events,voice,closures}; single replica only.
       'level-absorption',
       // es-trade-tools (TICK-TRADE-TOOLS): dev+prod, deployed HELD AT replicas 0 with TT_ENABLED and every family flag "false". Reads the linearized ES tape,
       // publishes futures.pf.* / futures.volume-nodes / futures.flow.* / futures.tradetools.state (Avro); single replica only.
