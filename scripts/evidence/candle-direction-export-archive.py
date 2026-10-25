@@ -95,15 +95,22 @@ def partitions(bootstrap, kc, topic, timeout_ms):
     raise SystemExit("topic %s is absent: nothing is archived and nothing is guessed" % topic)
 
 
-def read_topic(bootstrap, kc, topic, timeout_ms):
-    """-> (records [(partition, offset, key, value)], watermarks {partition: last offset at start})"""
-    recs, marks = [], {}
+def snapshot(bootstrap, kc, topic, timeout_ms):
+    """{partition: last record offset at this instant, -1 when empty}"""
+    marks = {}
     for p in partitions(bootstrap, kc, topic, timeout_ms):
         last = kcat(["-C", "-t", topic, "-p", str(p), "-o", "-1", "-c", "1", "-e", "-f", "%o\n"], bootstrap, kc, timeout_ms)
         txt = last.stdout.strip()
         if last.returncode != 0 and not txt:
             raise SystemExit("watermark read failed for %s/%d: %s" % (topic, p, last.stderr.strip()))
         marks[p] = int(txt) if txt else -1
+    return marks
+
+
+def read_topic(bootstrap, kc, topic, marks, timeout_ms):
+    """records [(partition, offset, key, value)] up to the snapshot watermarks"""
+    recs = []
+    for p in sorted(marks):
         if marks[p] < 0:
             continue
         r = kcat(["-C", "-t", topic, "-p", str(p), "-o", "beginning", "-e", "-J"], bootstrap, kc, timeout_ms)
@@ -119,23 +126,25 @@ def read_topic(bootstrap, kc, topic, timeout_ms):
         if got < marks[p]:
             # compaction leaves holes, so the LAST offset must be reached exactly
             raise SystemExit("%s/%d: read stopped at %d before the watermark %d; refusing a partial archive" % (topic, p, got, marks[p]))
-    return recs, marks
+    return recs
 
 
 def build(cur_recs, can_recs):
     """latest decision per barId (higher offset wins within a partition order), candle|barId records -> (rows, refused)"""
-    cur, can = {}, {}
+    cur, can, bad = {}, {}, []
     for _p, _o, k, v in cur_recs:
         if not v:   # a tombstone deletes the bar (the key is the bar id or ends with it); a deleted decision is never exported
             for b in [b for b in cur if k and (b == k or k.endswith("|" + b))]:
                 del cur[b]
             continue
         try:
-            d = json.loads(v) if v else None
+            d = json.loads(v)
         except ValueError:
-            continue
+            d = None
         if isinstance(d, dict) and isinstance(d.get("barId"), str):
             cur[d["barId"]] = d
+        else:
+            bad.append(("current:" + str(k), "unreadable decision record"))
     for _p, _o, k, v in can_recs:
         if not k or not k.startswith("candle|"):
             continue
@@ -143,12 +152,14 @@ def build(cur_recs, can_recs):
             can.pop(k[len("candle|"):], None)
             continue
         try:
-            d = json.loads(v) if v else None
+            d = json.loads(v)
         except ValueError:
-            continue
+            d = None
         if isinstance(d, dict):
             can[k[len("candle|"):]] = d
-    rows, refused = [], []
+        else:
+            bad.append((k, "unreadable candle record"))
+    rows, refused = [], list(bad)
     for bar in sorted(cur):
         if bar not in can:
             refused.append((bar, "no candle record for the bar"))
@@ -183,8 +194,10 @@ def main(argv=None):
     ap.add_argument("--candles", default="context-tape.direction.commissioning")
     ap.add_argument("--timeout-ms", type=int, default=15000)
     a = ap.parse_args(argv)
-    cur, mc = read_topic(a.bootstrap, a.kcat, a.current, a.timeout_ms)
-    can, mk = read_topic(a.bootstrap, a.kcat, a.candles, a.timeout_ms)
+    mc = snapshot(a.bootstrap, a.kcat, a.current, a.timeout_ms)   # BOTH snapshots before either read: one start instant
+    mk = snapshot(a.bootstrap, a.kcat, a.candles, a.timeout_ms)
+    cur = read_topic(a.bootstrap, a.kcat, a.current, mc, a.timeout_ms)
+    can = read_topic(a.bootstrap, a.kcat, a.candles, mk, a.timeout_ms)
     rows, refused = build(cur, can)
     man = write(a.out, rows, refused, {str(k): v for k, v in mc.items()}, {str(k): v for k, v in mk.items()}, [a.current, a.candles])
     print(json.dumps({k: man[k] for k in ("rows", "tsvSha256")}), "refused=%d" % len(refused))

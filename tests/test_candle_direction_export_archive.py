@@ -70,6 +70,10 @@ class Job(unittest.TestCase):
         rows, refused = m.build([(0, 0, "b1", json.dumps(CUR)), (0, 1, "b1", None)], [(0, 0, "candle|b1", json.dumps(CAN))])
         self.assertEqual(([], []), (rows, refused))
 
+    def test_an_unreadable_record_is_refused_not_dropped(self):
+        rows, refused = m.build([(0, 0, "bX", "{not json")], [(0, 0, "candle|bY", "[]")])
+        self.assertEqual(2, len(refused))
+
     def test_a_missing_topic_is_not_guessed(self):
         with self.assertRaises(SystemExit):
             self.run_job({})
