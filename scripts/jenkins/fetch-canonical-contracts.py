@@ -69,6 +69,35 @@ def fetch(base, build, commit, digest, version, destination):
         "sha256": digest, "version": version, "url": build_url}, indent=2) + "\n")
 
 
+def verify_package(body, source):
+    """Refuse unless every packaged schema/Python resource is this main checkout's literal bytes and every other entry is known."""
+    source=Path(source)
+    with zipfile.ZipFile(io.BytesIO(body)) as archive:
+        if len(archive.infolist())>16384 or len(set(archive.namelist()))!=len(archive.namelist()):
+            raise ValueError('Contracts package entry budget/uniqueness violation')
+        resources={p.relative_to(source/'schemas').as_posix():p for p in (source/'schemas').rglob('*.avsc')}
+        resources.update({p.relative_to(source/'python').as_posix():p for p in (source/'python/optionsedge_contracts').rglob('*.py')})
+        # The producer-authored registry files pom.xml packages under schemas-registry/ (the same include rules as the pom: three indicator
+        # studies files, ta/*.avsc and ta/v1/*.avsc, esflow/*.avsc), keyed by their path from the checkout root.
+        reg=source/'schemas-registry'
+        for rel in [reg/'indicators'/(n+'.avsc') for n in ('StudyBar','StudiesCurrent','StudyEngineImage')]+sorted((reg/'ta').glob('*.avsc'))+sorted((reg/'ta'/'v1').glob('*.avsc'))+sorted((reg/'esflow').glob('*.avsc')):
+            if not rel.is_file():raise ValueError('Packaged registry source missing in main: '+rel.relative_to(source).as_posix())
+            resources[rel.relative_to(source).as_posix()]=rel
+        actual={name for name in archive.namelist() if name.endswith('.avsc') or
+                name.startswith('optionsedge_contracts/') and name.endswith('.py')}
+        if not resources or actual!=set(resources):raise ValueError('Contracts package resource inventory differs from main')
+        metadata_files={'META-INF/MANIFEST.MF',
+                        'META-INF/maven/com.optionsedge/options-edge-contracts/pom.xml',
+                        'META-INF/maven/com.optionsedge/options-edge-contracts/pom.properties'}
+        for name in archive.namelist():
+            if name.endswith('/') or name in resources or name in metadata_files:continue
+            if name.startswith(('com/optionsedge/','app/')) and name.endswith('.class'):continue
+            raise ValueError('Unverified contracts package entry: '+name)
+        for name,path in resources.items():
+            if archive.getinfo(name).file_size>1024*1024 or archive.read(name)!=path.read_bytes():
+                raise ValueError('Contracts package resource differs from main: '+name)
+
+
 def latest(base, source, destination):
     """Resolve main once, require its newest CI build, then freeze this build's bytes."""
     source=Path(source)
@@ -97,30 +126,7 @@ def latest(base, source, destination):
     body=read(base.rstrip('/')+'/job/options-edge-contracts/'+build+'/artifact/'+artifact,16*1024*1024)
     # CI can retain old target JARs. Prove all packaged Python/schema resources are
     # this main checkout's literal bytes before importing any packaged code.
-    with zipfile.ZipFile(io.BytesIO(body)) as archive:
-        if len(archive.infolist())>16384 or len(set(archive.namelist()))!=len(archive.namelist()):
-            raise ValueError('Contracts package entry budget/uniqueness violation')
-        resources={p.relative_to(source/'schemas').as_posix():p for p in (source/'schemas').rglob('*.avsc')}
-        resources.update({p.relative_to(source/'python').as_posix():p for p in (source/'python/optionsedge_contracts').rglob('*.py')})
-        # The producer-authored registry files pom.xml packages under schemas-registry/ (the same include rules as the pom: three indicator
-        # studies files, ta/*.avsc and ta/v1/*.avsc, esflow/*.avsc), keyed by their path from the checkout root.
-        reg=source/'schemas-registry'
-        for rel in [reg/'indicators'/(n+'.avsc') for n in ('StudyBar','StudiesCurrent','StudyEngineImage')]+sorted((reg/'ta').glob('*.avsc'))+sorted((reg/'ta'/'v1').glob('*.avsc'))+sorted((reg/'esflow').glob('*.avsc')):
-            if not rel.is_file():raise ValueError('Packaged registry source missing in main: '+rel.relative_to(source).as_posix())
-            resources[rel.relative_to(source).as_posix()]=rel
-        actual={name for name in archive.namelist() if name.endswith('.avsc') or
-                name.startswith('optionsedge_contracts/') and name.endswith('.py')}
-        if not resources or actual!=set(resources):raise ValueError('Contracts package resource inventory differs from main')
-        metadata_files={'META-INF/MANIFEST.MF',
-                        'META-INF/maven/com.optionsedge/options-edge-contracts/pom.xml',
-                        'META-INF/maven/com.optionsedge/options-edge-contracts/pom.properties'}
-        for name in archive.namelist():
-            if name.endswith('/') or name in resources or name in metadata_files:continue
-            if name.startswith(('com/optionsedge/','app/')) and name.endswith('.class'):continue
-            raise ValueError('Unverified contracts package entry: '+name)
-        for name,path in resources.items():
-            if archive.getinfo(name).file_size>1024*1024 or archive.read(name)!=path.read_bytes():
-                raise ValueError('Contracts package resource differs from main: '+name)
+    verify_package(body, source)
     digest=hashlib.sha256(body).hexdigest()
     # Re-read the immutable numbered artifact in fetch and require exactly the
     # already-verified digest. Its second read also rechecks source/branch metadata.
