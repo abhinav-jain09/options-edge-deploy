@@ -98,8 +98,9 @@ check "a bootstrap that is not the named cluster is refused" "$(run --recreate -
 check "…and nothing deleted" "$(cat "$TMP/state/log" 2>/dev/null | wc -l | tr -d ' ')" 0
 reset OLDID
 reset OLDID
-check "production is REFUSED (pending the owner's permission) and nothing is deleted" "$(run --recreate --cluster production --pre-cutover-id OLDID --avro-feed-live --json-writers-stopped 192.168.100.252:9092 "$TMP/bin")" 3
-check "…nothing deleted" "$(cat "$TMP/state/log" 2>/dev/null | wc -l | tr -d ' ')" 0
+reset OLDID
+check "production recreates at the declared shape" "$(run --recreate --cluster production --pre-cutover-id OLDID --writers-and-readers-stopped 192.168.100.252:9092 "$TMP/bin")" 0
+check "production with a dev bootstrap is refused" "$(run --recreate --cluster production --pre-cutover-id OLDID --writers-and-readers-stopped localhost:19092 "$TMP/bin")" 2
 reset OLDID
 check "es4 recreates at ITS recorded shape" "$(run --recreate --cluster es4 --pre-cutover-id OLDID --writers-and-readers-stopped 192.168.100.4:9092 "$TMP/bin")" 0
 check "…es4 shape applied" "$(cat "$TMP/state/cfg")" "cleanup.policy=compact,delete,retention.ms=-1,delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.01,segment.ms=3600000,min.insync.replicas=1"

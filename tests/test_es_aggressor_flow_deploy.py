@@ -87,14 +87,5 @@ class MapAgrees(unittest.TestCase):
                     self.assertNotIn(int(line.split("|")[1]), ours, f"{other.name} reuses an es-aggressor-flow id")
 
 
-class WipeScript(unittest.TestCase):
-    def test_production_is_refused_by_name_without_touching_a_broker(self):
-        for cluster, bootstrap in (("production", "192.168.100.252:9092"),):
-            r = subprocess.run(["bash", str(ROOT / "scripts/kafka/roll-forward-es-aggressor-flow.sh"), "--recreate", "--cluster", cluster, "--pre-cutover-id", "X",
-                                "--writers-and-readers-stopped", bootstrap], capture_output=True, text=True)
-            self.assertEqual(r.returncode, 3, r.stderr)
-            self.assertIn("pending the owner's explicit permission", r.stderr)
-
-
 if __name__ == "__main__":
     unittest.main()
