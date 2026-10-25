@@ -1,0 +1,13 @@
+# Fixed schema ids for the geometry signal adapter (amt-order-bridge, LEVEL-ABSORPTION-GEOMETRY-SITES-REQUIREMENT LAG-R16.3 / 16.7). Contracts 0.41.0 (options-edge-contracts #134) ids 2801-2806
+# and 0.42.0 (options-edge-contracts #135) id 2807, all version 1, subject = the record full name (RecordNameStrategy), compatibility FULL. Production NEVER registers from the service:
+# the writer uses auto.register.schemas=false and the EXACT fixed ids, so a registry without them fails the service closed. Import with scripts/kafka/ensure-fixed-id-schemas.sh:
+#   SCHEMA_REGISTRY_URL=<registry> SCHEMAS_DIR=<contracts checkout>/schemas-registry/geometry SCHEMA_ID_MAP=scripts/kafka/schema-id-maps/geometry-signal-adapter.map DEPLOY_DRY_RUN=true scripts/kafka/ensure-fixed-id-schemas.sh
+# (dry run first). Not wired into any Jenkins stage: running it is an operator act on a chosen registry. GeometryCommand (2807) is the operator-command INPUT; the other six are outputs.
+# File column: relative to the contracts checkout's `schemas-registry/geometry` directory (SCHEMAS_DIR).
+com.optionsedge.contracts.geometry.GeometryEntry|2801|GeometryEntry.avsc
+com.optionsedge.contracts.geometry.GeometryExit|2802|GeometryExit.avsc
+com.optionsedge.contracts.geometry.GeometryCancelled|2803|GeometryCancelled.avsc
+com.optionsedge.contracts.geometry.GeometryStatus|2804|GeometryStatus.avsc
+com.optionsedge.contracts.geometry.GeometryIntent|2805|GeometryIntent.avsc
+com.optionsedge.contracts.geometry.GeometryWatermark|2806|GeometryWatermark.avsc
+com.optionsedge.contracts.geometry.GeometryCommand|2807|GeometryCommand.avsc
