@@ -13,7 +13,7 @@ try:
     import yaml
 except ImportError:
     sys.exit("FATAL: python3 yaml module required")
-cm = yaml.safe_load(pathlib.Path('k8s/services/level-absorption/base/level-absorption-config.yaml').read_text())
+cm = yaml.safe_load(pathlib.Path('k8s/overlays/dev/level-absorption-config.yaml').read_text())
 assert cm['kind'] == 'ConfigMap', 'not a ConfigMap'
 assert set(cm['data']) == {'frozen-configuration.json', 'retention-artifact.json'}, 'ConfigMap keys must be exactly the two files'
 art = json.loads(cm['data']['retention-artifact.json'])
@@ -49,7 +49,14 @@ if cm.get('immutable') is not True: err.append('the ConfigMap must be immutable:
 dep0 = pathlib.Path('k8s/services/level-absorption/base/level-absorption-deployment.yaml').read_text()
 if f'configMap:\n            name: {cm_name}\n' not in dep0: err.append(f'the Deployment must mount the ConfigMap {cm_name}')
 if 'level-absorption-config-sha256' in dep0: err.append('the obsolete digest annotation is still present')
-# the base must be the only place the ConfigMap lives: no generated slice may carry it (service-deploy.sh refuses ConfigMaps in a render)
+# production must render no level-absorption ConfigMap; the dev render carries exactly one
+import subprocess as _sp
+for envname, expect in (('production', 0), ('dev', 1)):
+    r = _sp.run(['kubectl', 'kustomize', f'k8s/overlays/{envname}'], capture_output=True, text=True)
+    if r.returncode != 0: err.append(f'kustomize {envname} failed: {r.stderr.strip()[:200]}'); continue
+    n = sum(1 for d in yaml.safe_load_all(r.stdout) if d and d.get('kind') == 'ConfigMap' and d['metadata']['name'].startswith('level-absorption-config'))
+    if n != expect: err.append(f'the {envname} render carries {n} level-absorption ConfigMap(s), expected {expect}')
+# no generated slice may carry the ConfigMap (service-deploy.sh refuses ConfigMaps in a render)
 for sl in pathlib.Path('k8s/services/level-absorption/overlays').glob('*/manifest.yaml'):
     if re.search(r'^kind:\s*ConfigMap\s*$', sl.read_text(), re.M): err.append(f'{sl} contains a ConfigMap')
 if 'EYEBALL-ONLY' not in cfg.get('phase0', {}).get('bootstrapGenerator', ''):

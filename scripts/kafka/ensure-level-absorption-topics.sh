@@ -12,7 +12,7 @@
 #
 # THE EVENTS TOPIC'S retention.bytes IS NEVER TYPED HERE. It is ceil(measuredBytesPerDay x retentionDays x safetyFactor) from the
 # retention artifact (docs/level-absorption/phase0/retention-artifact.json in options-edge-processing, copied into the ConfigMap
-# k8s/services/level-absorption/base/level-absorption-config.yaml; 21765840 since 2026-10-25) and the service refuses to start unless
+# k8s/overlays/dev/level-absorption-config.yaml; 21765840 since 2026-10-25) and the service refuses to start unless
 # the broker reports exactly that value. Jenkinsfile.service-deploy reads the integer out of the ConfigMap and passes it in as
 # LEVEL_ABSORPTION_EVENTS_RETENTION_BYTES with LEVEL_ABSORPTION_REQUIRE_EVENTS_TOPIC=1, so the file stays the one source. So:
 #   * events ABSENT and LEVEL_ABSORPTION_EVENTS_RETENTION_BYTES set (a positive whole number, the artifact's retentionBytes)

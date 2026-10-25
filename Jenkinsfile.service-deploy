@@ -843,19 +843,17 @@ PYEOF
       }
     }
     stage('Verify level-absorption output topics') {
-      // BEFORE the rollout, same barrier as early-auction-verdict above: the service never creates its topics and refuses to START unless voice, closures and events each have ONE partition, cleanup.policy=delete and no finite message.timestamp.before.max.ms, and the events topic matches the retention artifact exactly. Voice, closures and manual-line (7 days) are created here; the events topic is created with the artifact's retention.bytes, read out of the ConfigMap file (k8s/services/level-absorption/base/level-absorption-config.yaml, the one source) and required (LEVEL_ABSORPTION_REQUIRE_EVENTS_TOPIC=1) on dev only, because the service runs only on dev; any other environment keeps the earlier behaviour (a missing events topic is a warning).
+      // BEFORE the rollout, same barrier as early-auction-verdict above: the service never creates its topics and refuses to START unless voice, closures and events each have ONE partition, cleanup.policy=delete and no finite message.timestamp.before.max.ms, and the events topic matches the retention artifact exactly. Voice, closures and manual-line (7 days) are created here; the events topic is created with the artifact's retention.bytes, read out of the ConfigMap file (k8s/overlays/dev/level-absorption-config.yaml, the one source) and required (LEVEL_ABSORPTION_REQUIRE_EVENTS_TOPIC=1) the whole stage is DEV ONLY (production is untouched: its service is held at replicas 0 and nothing is created or altered there).
       when {
-        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'level-absorption' && !params.DEPLOY_DRY_RUN) }
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'level-absorption' && params.ENVIRONMENT == 'dev' && !params.DEPLOY_DRY_RUN) }
       }
       steps {
         sh '''
           set -euo pipefail
           export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
           . scripts/kafka/load-kafka-settings.sh
-          if [ "${ENVIRONMENT:-}" = "dev" ]; then
-            LEVEL_ABSORPTION_EVENTS_RETENTION_BYTES="$(bash scripts/ci/validate-level-absorption-config.sh --print-retention-bytes)"
-            export LEVEL_ABSORPTION_EVENTS_RETENTION_BYTES LEVEL_ABSORPTION_REQUIRE_EVENTS_TOPIC=1 LEVEL_ABSORPTION_ALIGN_EVENTS_RETENTION=1
-          fi
+          LEVEL_ABSORPTION_EVENTS_RETENTION_BYTES="$(bash scripts/ci/validate-level-absorption-config.sh --print-retention-bytes)"
+          export LEVEL_ABSORPTION_EVENTS_RETENTION_BYTES LEVEL_ABSORPTION_REQUIRE_EVENTS_TOPIC=1 LEVEL_ABSORPTION_ALIGN_EVENTS_RETENTION=1
           scripts/kafka/ensure-level-absorption-topics.sh
         '''
       }
@@ -875,7 +873,7 @@ PYEOF
           bash scripts/ci/validate-level-absorption-config.sh
           name="$(bash scripts/ci/validate-level-absorption-config.sh --print-config-name)"
           want="$(bash scripts/ci/validate-level-absorption-config.sh --print-data-digest)"
-          kubectl -n options-edge apply -f k8s/services/level-absorption/base/level-absorption-config.yaml
+          kubectl -n options-edge apply -f k8s/overlays/dev/level-absorption-config.yaml
           kubectl -n options-edge get configmap "$name" -o json | python3 -c '
 import sys, json, hashlib
 o = json.load(sys.stdin)

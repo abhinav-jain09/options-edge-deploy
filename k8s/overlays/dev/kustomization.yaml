@@ -26,6 +26,8 @@ resources:
   # (docs/break-score/DEPLOY-WIRING.md, docs/level-absorption/DEPLOY-WIRING.md).
   - ../../services/break-score/base
   - ../../services/level-absorption/base
+  # the immutable, content-named ConfigMap the dev level-absorption pod mounts (dev only; production renders none)
+  - level-absorption-config.yaml
   # es-trade-tools (TICK-TRADE-TOOLS) + wave-cycle (ELLIOTT-FIB-CYCLE-TOOLS): HELD AT replicas 0 (base) on dev and production alike, every flag false; the owner turns
   # each on later (docs/ta-books/DEPLOY-ROLLOUT.md sections 4 and 5).
   - ../../services/es-trade-tools/base

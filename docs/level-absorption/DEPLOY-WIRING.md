@@ -66,7 +66,7 @@ Decided by Claude under the owner's standing instruction (the owner may overrule
    `docs/level-absorption/phase0/`, PR 1344, README there). The comparison fold selected NO candidate (lower bound 4.09 points against
    the 15-point bar), so it is not a Phase 0 freeze, no verdict can ship, and the service refuses any phase but EYEBALL on it. It and the
    retention artifact are copied verbatim into an IMMUTABLE ConfigMap named by its content digest, `level-absorption-config-<first 12 hex of sha256(data)>`
-   (`k8s/services/level-absorption/base/level-absorption-config.yaml`; a changed configuration is a new object and a changed pod template, so the pod rolls), mounted read-only at `/home/options-edge/config/level-absorption` (no host path). The standalone slices carry Deployment/Service only,
+   (`k8s/overlays/dev/level-absorption-config.yaml`; a changed configuration is a new object and a changed pod template, so the pod rolls), mounted read-only at `/home/options-edge/config/level-absorption` (no host path). The standalone slices carry Deployment/Service only,
    so `Jenkinsfile.service-deploy` applies that one file in the stage `Apply level-absorption configuration` (DEV ONLY) and reads the live object back (immutable, exact keys, canonical digest).
 2. **The events topic** `futures.level-absorption.events` is declared in `topics.env`: 1 partition, delete, `retention.ms=-1`,
    `retention.bytes=21765840` = ceil(362,764 bytes/day x 30 days x 2) (362,764 = the largest of 158 measured calibration sessions with
