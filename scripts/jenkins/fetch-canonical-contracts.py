@@ -102,6 +102,12 @@ def latest(base, source, destination):
             raise ValueError('Contracts package entry budget/uniqueness violation')
         resources={p.relative_to(source/'schemas').as_posix():p for p in (source/'schemas').rglob('*.avsc')}
         resources.update({p.relative_to(source/'python').as_posix():p for p in (source/'python/optionsedge_contracts').rglob('*.py')})
+        # The producer-authored registry files pom.xml packages under schemas-registry/ (the same include rules as the pom: three indicator
+        # studies files, ta/*.avsc and ta/v1/*.avsc, esflow/*.avsc), keyed by their path from the checkout root.
+        reg=source/'schemas-registry'
+        for rel in [reg/'indicators'/(n+'.avsc') for n in ('StudyBar','StudiesCurrent','StudyEngineImage')]+sorted((reg/'ta').glob('*.avsc'))+sorted((reg/'ta'/'v1').glob('*.avsc'))+sorted((reg/'esflow').glob('*.avsc')):
+            if not rel.is_file():raise ValueError('Packaged registry source missing in main: '+rel.relative_to(source).as_posix())
+            resources[rel.relative_to(source).as_posix()]=rel
         actual={name for name in archive.namelist() if name.endswith('.avsc') or
                 name.startswith('optionsedge_contracts/') and name.endswith('.py')}
         if not resources or actual!=set(resources):raise ValueError('Contracts package resource inventory differs from main')

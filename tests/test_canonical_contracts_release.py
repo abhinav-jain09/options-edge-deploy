@@ -177,5 +177,13 @@ class ReleaseDownloadTest(unittest.TestCase):
                 finally:case.doCleanups()
 
 
+
+class RegistryResourceInventory(unittest.TestCase):
+    def test_latest_verifies_the_packaged_schemas_registry_files_against_main(self):
+        text=(ROOT/"scripts/jenkins/fetch-canonical-contracts.py").read_text()
+        for needle in ("reg/'indicators'/(n+'.avsc')","(reg/'ta').glob('*.avsc')","(reg/'ta'/'v1').glob('*.avsc')","(reg/'esflow').glob('*.avsc')",
+                       "('StudyBar','StudiesCurrent','StudyEngineImage')","Packaged registry source missing in main"):
+            self.assertIn(needle,text)
+
 if __name__ == "__main__":
     unittest.main()
