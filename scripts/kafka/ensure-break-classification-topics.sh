@@ -12,6 +12,8 @@
 #                                                existing topic; gets the recovery-topic compaction cadence after verification (it is rewritten in every transaction)
 #   options.spx.market-structure.break-events    1 partition, delete, retention.ms >= 172800000 (X1 BreakParentRecord): created EMPTY, NO producer on main yet (Phase B/C)
 #   options.spx.market-structure.swing-pivots    1 partition, delete, retention.ms >= 172800000 (X2 SwingPivotRecord): created EMPTY, NO producer on main yet (Phase B/C)
+#   options.spx.market-structure.equal-levels    1 partition, delete, retention.ms >= 172800000 (EqualLevelRecord, contracts 0.44.0; T-5): written by the service ONLY while BREAK_EQUAL_LEVELS_PUBLISH
+#                                                is true (off by default); the service verifies it at boot only then. Created here so turning the flag on needs no second barrier.
 # The two input topics the service also verifies (options.indicators.bars with BREAK_SPX_BARS_PARTITIONS partitions, es.futures.footprint.bars with 1) belong to other
 # services and are not created here. No tombstones, no versioned names.
 set -euo pipefail
@@ -77,6 +79,7 @@ ensure_topic "${KAFKA_BREAK_CLASSIFICATION_TOPIC:-options.spx.break-classificati
 ensure_topic "$CHECKPOINT"                                                               compact any:-1           8388608 yes "$RAISE_BROKER_BYTES" || rc=1
 ensure_topic "${BREAK_PARENT_TOPIC:-options.spx.market-structure.break-events}"          delete  floor:172800000  1048576 || rc=1
 ensure_topic "${BREAK_PIVOT_TOPIC:-options.spx.market-structure.swing-pivots}"           delete  floor:172800000  1048576 || rc=1
+ensure_topic "${BREAK_EQUAL_LEVELS_TOPIC:-options.spx.market-structure.equal-levels}"      delete  floor:172800000  1048576 || rc=1
 # The checkpoint is rewritten in every transaction: the small-segment compaction cadence of the other recovery topics (topic-shape.lib.sh topic_is_recovery_checkpoint),
 # reconciled after verification because a topic the service or a reset created has the broker defaults (1 GiB segments, which compaction never cleans while active).
 if [ "$rc" -eq 0 ]; then

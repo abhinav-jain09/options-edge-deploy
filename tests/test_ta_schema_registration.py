@@ -60,6 +60,8 @@ CONTRACTS_TABLE = [
     ("com.optionsedge.contracts.breakclass.BreakClassifierCheckpoint", 2604),
     ("com.optionsedge.contracts.breakclass.input.BreakParentRecord", 2605),
     ("com.optionsedge.contracts.breakclass.input.SwingPivotRecord", 2606),
+    # contracts 0.44.0 (T-5, Level Absorption v2 section 6.9): the standing equal-level set, id 2607, version 1
+    ("com.optionsedge.contracts.breakclass.EqualLevelRecord", 2607),
 ]
 
 
@@ -448,7 +450,7 @@ class VersionTwoRegistration(unittest.TestCase):
 
 
 class BreakClassifierRegistration(unittest.TestCase):
-    """Phase F: the six subjects 2601-2606 (contracts 0.37.0), all version 1, through the same script the Jenkins stage runs with SCHEMA_ID_MAP=break-classifier.map."""
+    """Phase F: the seven subjects 2601-2607 (contracts 0.37.0 and 0.44.0), all version 1, through the same script the Jenkins stage runs with SCHEMA_ID_MAP=break-classifier.map."""
 
     def with_registry(self, check, reg=None):
         reg = reg or Registry()
@@ -458,7 +460,7 @@ class BreakClassifierRegistration(unittest.TestCase):
         finally:
             server.shutdown()
 
-    def test_a_fresh_registry_gets_the_six_subjects_under_2601_to_2606_with_full_and_a_rerun_imports_nothing(self):
+    def test_a_fresh_registry_gets_the_seven_subjects_under_2601_to_2607_with_full_and_a_rerun_imports_nothing(self):
         def check(reg, url):
             rc, out = run("break-classifier", url)
             self.assertEqual(rc, 0, out)
@@ -470,20 +472,20 @@ class BreakClassifierRegistration(unittest.TestCase):
             self.assertFalse(any(c.startswith("POST /subjects/") and c.endswith("/versions {schema…}") for c in reg.calls[calls:]), "nothing re-imported")
         self.with_registry(check)
 
-    def test_a_dry_run_reports_would_import_six_times_and_mutates_nothing(self):
+    def test_a_dry_run_reports_would_import_seven_times_and_mutates_nothing(self):
         def check(reg, url):
             rc, out = run("break-classifier", url, dry=True)
             self.assertEqual(rc, 0, out)
-            self.assertEqual(out.count("would import as version 1 under id 26"), 12, "six in the preflight pass, six in the apply pass")
+            self.assertEqual(out.count("would import as version 1 under id 26"), 14, "seven in the preflight pass, seven in the apply pass")
             self.assertEqual((reg.subjects, reg.subject_modes), ({}, {}))
         self.with_registry(check)
 
     def test_an_id_held_by_another_schema_fails_in_preflight_with_nothing_imported(self):
         def check(reg, url):
-            reg.register("some.other.Subject", json.dumps({"type": "string"}), id=2606, version=1)
+            reg.register("some.other.Subject", json.dumps({"type": "string"}), id=2607, version=1)
             rc, out = run("break-classifier", url)
             self.assertEqual(rc, 1, out)
-            self.assertIn("fixed id 2606 is already held by another schema", out)
+            self.assertIn("fixed id 2607 is already held by another schema", out)
             self.assertEqual(set(reg.subjects), {"some.other.Subject"}, "the collision on the LAST subject stopped the whole set before the first import")
         self.with_registry(check)
 
@@ -542,12 +544,12 @@ class MapsAgree(unittest.TestCase):
                 top = max(v for s_, _, _, v in read_versioned(service) if s_ == subject)
                 self.assertEqual(file, name if version == top else f"v{version}/{name}", "the highest version is the flat file, earlier ones live under v<N>/")
 
-    def test_the_maps_are_exactly_the_contracts_table_of_37_subjects_and_52_ids(self):
+    def test_the_maps_are_exactly_the_contracts_table_of_38_subjects_and_53_ids(self):
         union = {(subject, id_) for service in SERVICES for subject, id_, _ in read_map(service)}
-        self.assertEqual(len(CONTRACTS_TABLE), 37)
+        self.assertEqual(len(CONTRACTS_TABLE), 38)
         self.assertEqual(union, set(CONTRACTS_TABLE) | set(TRADE_TOOLS_VERSION_2) | set(WAVE_CYCLE_VERSION_2))
         self.assertEqual({s for s, _ in union}, {s for s, _ in CONTRACTS_TABLE})
-        self.assertEqual(len(union), 52)
+        self.assertEqual(len(union), 53)
         # version 2 of each of the thirteen two-version subjects = its version-1 id + 20 (contracts 0.33.0, TaSchemas.Subject.priorId)
         v1 = {s: i for s, i in CONTRACTS_TABLE}
         for subject, id_ in TRADE_TOOLS_VERSION_2:
@@ -574,10 +576,10 @@ class MapsAgree(unittest.TestCase):
         names = {s.rsplit(".", 1)[1] for s, _, _ in read_map("wave-cycle")}
         self.assertEqual(names, {"WaveSet", "CycleSet", "TimeframeCheckpoint", "SeriesCheckpoint", "ControlCheckpoint"})
 
-    def test_the_break_classifier_map_names_the_six_records_the_service_resolves_at_boot(self):
+    def test_the_break_classifier_map_names_the_seven_records_the_service_resolves_at_boot(self):
         names = {s.rsplit(".", 1)[1] for s, _, _ in read_map("break-classifier")}
-        self.assertEqual(names, {"BreakMark", "BreakOutcome", "BreakStatus", "BreakClassifierCheckpoint", "BreakParentRecord", "SwingPivotRecord"})
-        self.assertEqual([i for _, i, _ in read_map("break-classifier")], list(range(2601, 2607)))
+        self.assertEqual(names, {"BreakMark", "BreakOutcome", "BreakStatus", "BreakClassifierCheckpoint", "BreakParentRecord", "SwingPivotRecord", "EqualLevelRecord"})
+        self.assertEqual([i for _, i, _ in read_map("break-classifier")], list(range(2601, 2608)))
 
     def test_the_jenkins_stage_picks_the_map_by_service_name(self):
         text = (ROOT / "Jenkinsfile.service-deploy").read_text()
