@@ -97,7 +97,7 @@ spec:
           readinessProbe:
             failureThreshold: 3
             httpGet:
-              path: /health/live
+              path: /health/deployment-ready
               port: health
             initialDelaySeconds: 30
             periodSeconds: 10

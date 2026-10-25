@@ -80,3 +80,7 @@ Decided by Claude under the owner's standing instruction (the owner may overrule
    stays 200). The input topics must exist, otherwise the service refuses to start naming the missing topic.
 5. **A new Phase 0** (a longer corpus) replaces the ConfigMap content and the cap in ONE change; the validator keeps them together.
 
+
+## Friday timing and readiness repair, 2026-10-25
+
+The dev-only enable patch now probes `/health/deployment-ready` from the companion processing fix: it accepts expected closed-market idleness after catch-up, but rejects an in-session stale level source or silent tape, and never masks a halted engine or wedged loop. Liveness stays `/health/live`; production remains at zero replicas with its existing probe. The generated dev slice mirrors the patch. Deploy this change together with the processing image implementing the endpoint; an older image correctly fails the new probe instead of silently claiming readiness. The processing manifest gives finalized mirrored footprints 15000 ms and cold restarts include the last regular session. EYEBALL and the publication gate stay in place. Rollout must use the Jenkins service-deploy path, after the companion image is available. The linearizer source already requests one dev replica; restore the observed zero-replica runtime through its existing Jenkins service job, rather than adding a competing scale mechanism.
