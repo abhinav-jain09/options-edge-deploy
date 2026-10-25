@@ -124,6 +124,23 @@ class EnvironmentSelection(unittest.TestCase):
         for bad in ['','prod','dev,dev','dev,','es4,qa']:
             with self.subTest(bad=bad),self.assertRaises(ValueError):m.selected_endpoints(bad)
 
+    def test_only_the_selected_cluster_is_read_and_it_carries_the_dev_only_bindings(self):
+        asked=[]
+        def fake(bootstrap,directory):asked.append(bootstrap);return ['futures.level-absorption.events','futures.level-absorption.manual-line']
+        with tempfile.TemporaryDirectory() as d:
+            inv=m.build_inventory(Path(d),'dev',fake)
+        self.assertEqual(['192.168.100.102:19092'],asked)
+        self.assertEqual(['dev'],[e[0] for e in inv])
+        for topic in inv[0][2]:self.assertIsNotNone(m.binding(topic),topic)
+        self.assertEqual('cvd-related/LevelAbsorptionEvent.avsc',m.binding('futures.level-absorption.events'))
+        self.assertEqual('cvd-related/LevelAbsorptionManualLine.avsc',m.binding('futures.level-absorption.manual-line'))
+
+    def test_default_reads_all_three_clusters(self):
+        asked=[]
+        with tempfile.TemporaryDirectory() as d:
+            m.build_inventory(Path(d),'es4,dev,production',lambda b,_:asked.append(b) or [])
+        self.assertEqual(['192.168.100.4:9092','192.168.100.102:19092','192.168.100.252:9092'],asked)
+
     def test_the_job_defaults_to_all_three_and_the_script_reads_the_variable(self):
         jf=(ROOT/'Jenkinsfile.es4-deploy').read_text()
         self.assertIn("name: 'CVD_SCHEMA_ENVIRONMENTS', defaultValue: 'es4,dev,production'",jf)

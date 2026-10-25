@@ -139,6 +139,16 @@ def reconcile(url, topic, text, apply, call=http):
             'schemaSha256':hashlib.sha256(text.encode()).hexdigest()}
 
 
+def build_inventory(root, spec, read=None):
+    """Preflight metadata of ONLY the selected registries' clusters; nothing is read from, or later written to, an unselected one."""
+    read=read or metadata
+    inventory=[]
+    for environment,bootstrap,url in selected_endpoints(spec):
+        directory=root/environment;directory.mkdir()
+        inventory.append((environment,url,read(bootstrap,directory)))
+    return inventory
+
+
 def main():
     if not os.environ.get('JENKINS_URL') or os.environ.get('PERMITTED_SHA_GUARD')!='PASSED':raise ValueError('Guarded Jenkins required')
     dry=os.environ.get('DEPLOY_DRY_RUN')
@@ -164,10 +174,7 @@ def main():
         parsed=json.loads(text)
         if not isinstance(parsed,dict) or parsed.get('type')!='record':raise ValueError('Released named record required')
     # Preflight ALL clusters and schema resources before the first registration.
-    inventory=[]
-    for environment,bootstrap,url in selected_endpoints(os.environ.get('CVD_SCHEMA_ENVIRONMENTS','es4,dev,production')):
-        directory=root/environment;directory.mkdir()
-        inventory.append((environment,url,metadata(bootstrap,directory)))
+    inventory=build_inventory(root,os.environ.get('CVD_SCHEMA_ENVIRONMENTS','es4,dev,production'))
     receipt={'source':os.environ['PERMITTED_SHA'],'contracts':proof,'dryRun':dry=='true','clusters':[],
              'scope':'Exact released external schemas for existing topics only; no Kafka/group/offset/config/mode changes; inactive internal state schemas are outside this action'}
     file=root/'receipt.json'
