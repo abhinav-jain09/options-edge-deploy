@@ -177,5 +177,65 @@ class ReleaseDownloadTest(unittest.TestCase):
                 finally:case.doCleanups()
 
 
+
+class RegistryResourceInventory(unittest.TestCase):
+    """verify_package against a fixture checkout and in-memory jars: the schemas-registry files pom.xml packages are inventoried and compared byte for byte."""
+    INDICATORS = ("StudyBar", "StudiesCurrent", "StudyEngineImage")
+
+    def source(self):
+        root = Path(tempfile.mkdtemp(prefix="cvd-contracts-source-"))
+        files = {"schemas/cvd/A.avsc": b'{"a":1}', "python/optionsedge_contracts/m.py": b"x=1\n"}
+        for n in self.INDICATORS:
+            files["schemas-registry/indicators/%s.avsc" % n] = n.encode()
+        files.update({"schemas-registry/ta/W.avsc": b"w", "schemas-registry/ta/v1/V.avsc": b"v", "schemas-registry/esflow/E.avsc": b"e"})
+        for name, data in files.items():
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        return root, files
+
+    def jar(self, files, extra=None, replace=None):
+        entries = {("cvd/A.avsc" if k == "schemas/cvd/A.avsc" else "optionsedge_contracts/m.py" if k.startswith("python/") else k): v for k, v in files.items()}
+        entries.update(replace or {})
+        entries.update(extra or {})
+        entries["META-INF/MANIFEST.MF"] = b"m"
+        entries["com/optionsedge/contracts/X.class"] = b"c"
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            for name, data in entries.items():
+                archive.writestr(name, data)
+        return buffer.getvalue()
+
+    def test_a_jar_with_exactly_the_packaged_registry_files_is_accepted(self):
+        root, files = self.source()
+        release.verify_package(self.jar(files), root)
+
+    def test_a_registry_file_that_differs_from_main_is_refused(self):
+        root, files = self.source()
+        with self.assertRaisesRegex(ValueError, "differs from main: schemas-registry/ta/W.avsc"):
+            release.verify_package(self.jar(files, replace={"schemas-registry/ta/W.avsc": b"tampered"}), root)
+
+    def test_an_unlisted_registry_file_in_the_jar_is_refused(self):
+        root, files = self.source()
+        with self.assertRaisesRegex(ValueError, "inventory differs from main"):
+            release.verify_package(self.jar(files, extra={"schemas-registry/ta/Extra.avsc": b"x"}), root)
+
+    def test_a_packaged_registry_file_missing_from_the_jar_is_refused(self):
+        root, files = self.source()
+        smaller = {k: v for k, v in files.items() if k != "schemas-registry/esflow/E.avsc"}
+        with self.assertRaisesRegex(ValueError, "inventory differs from main"):
+            release.verify_package(self.jar(smaller), root)
+
+    def test_a_required_indicator_source_missing_in_main_is_refused(self):
+        root, files = self.source()
+        (root / "schemas-registry/indicators/StudyBar.avsc").unlink()
+        with self.assertRaisesRegex(ValueError, "Packaged registry source missing in main: schemas-registry/indicators/StudyBar.avsc"):
+            release.verify_package(self.jar(files), root)
+
+    def test_an_unknown_non_class_entry_is_refused(self):
+        root, files = self.source()
+        with self.assertRaisesRegex(ValueError, "Unverified contracts package entry: evil.txt"):
+            release.verify_package(self.jar(files, extra={"evil.txt": b"x"}), root)
+
 if __name__ == "__main__":
     unittest.main()
