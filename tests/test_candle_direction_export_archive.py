@@ -67,7 +67,7 @@ class Job(unittest.TestCase):
         self.assertEqual(2, len(lines)); self.assertTrue(lines[1].startswith("b1\t2026-10-26\t1000000\t1000060\tLONG_DELTA\tTREND\ttrue"))
 
     def test_a_missing_topic_is_not_guessed(self):
-        with self.assertRaises(Exception):
+        with self.assertRaises(SystemExit):
             self.run_job({})
 
 
