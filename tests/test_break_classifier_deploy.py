@@ -22,10 +22,11 @@ BARRIER = ROOT / "scripts/kafka/ensure-break-classification-topics.sh"
 SVC, DEP, IMG, VAR = "break-classifier", "break-classifier-service", "options-edge-break-classifier", "BREAK_CLASSIFIER_IMAGE"
 OUT, CP = "options.spx.break-classification", "options.spx.break-classification.checkpoint"
 X1, X2 = "options.spx.market-structure.break-events", "options.spx.market-structure.swing-pivots"
-TOPICS = (OUT, CP, X1, X2)
+E = "options.spx.market-structure.equal-levels"   # T-5: EqualLevelRecord, written only while BREAK_EQUAL_LEVELS_PUBLISH is true
+TOPICS = (OUT, CP, X1, X2, E)
 DAYS90, TWO_SESSIONS, EIGHT_MIB, NINE_MIB, ONE_MIB, STOCK_BROKER = "7776000000", "172800000", 8388608, 9437184, 1048576, 1048588
 # topic -> (policy, retention.ms)
-SHAPES = {OUT: ("delete", DAYS90), CP: ("compact", "-1"), X1: ("delete", TWO_SESSIONS), X2: ("delete", TWO_SESSIONS)}
+SHAPES = {OUT: ("delete", DAYS90), CP: ("compact", "-1"), X1: ("delete", TWO_SESSIONS), X2: ("delete", TWO_SESSIONS), E: ("delete", TWO_SESSIONS)}
 
 
 def read(rel: str) -> str:
@@ -457,12 +458,13 @@ class SchemaMap(unittest.TestCase):
             ("com.optionsedge.contracts.breakclass.BreakStatus", 2603, "BreakStatus.avsc"),
             ("com.optionsedge.contracts.breakclass.BreakClassifierCheckpoint", 2604, "BreakClassifierCheckpoint.avsc"),
             ("com.optionsedge.contracts.breakclass.input.BreakParentRecord", 2605, "BreakParentRecord.avsc"),
-            ("com.optionsedge.contracts.breakclass.input.SwingPivotRecord", 2606, "SwingPivotRecord.avsc")]
+            ("com.optionsedge.contracts.breakclass.input.SwingPivotRecord", 2606, "SwingPivotRecord.avsc"),
+            ("com.optionsedge.contracts.breakclass.EqualLevelRecord", 2607, "EqualLevelRecord.avsc")]
 
     def rows(self):
         return [tuple(l.split("|")) for l in self.MAP.read_text().splitlines() if l.strip() and not l.lstrip().startswith("#")]
 
-    def test_the_map_is_exactly_the_six_subjects_of_contracts_0_37_0_with_version_1(self):
+    def test_the_map_is_exactly_the_six_subjects_of_contracts_0_37_0_and_the_equal_level_record_of_0_44_0_with_version_1(self):
         self.assertEqual([(s, int(i), f) for s, i, f in self.rows()], self.ROWS)
 
     def test_the_rows_match_a_contracts_checkout_when_one_is_available(self):
