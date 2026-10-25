@@ -31,8 +31,6 @@ spec:
     type: Recreate
   template:
     metadata:
-      annotations:
-        options-edge.io/level-absorption-config-sha256: 1207235809ea755af4973f5291949a6620a1d990a9dd380506282bffd6802f37
       labels:
         app.kubernetes.io/component: level-absorption-service
         app.kubernetes.io/name: level-absorption-service
@@ -118,7 +116,7 @@ spec:
       terminationGracePeriodSeconds: 60
       volumes:
         - configMap:
-            name: level-absorption-config
+            name: level-absorption-config-1207235809ea
           name: level-absorption-config
         - hostPath:
             path: /home/options-edge/data/level-absorption

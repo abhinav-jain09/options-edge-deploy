@@ -14,7 +14,7 @@ try:
 except ImportError:
     sys.exit("FATAL: python3 yaml module required")
 cm = yaml.safe_load(pathlib.Path('k8s/services/level-absorption/base/level-absorption-config.yaml').read_text())
-assert cm['kind'] == 'ConfigMap' and cm['metadata']['name'] == 'level-absorption-config', 'wrong ConfigMap'
+assert cm['kind'] == 'ConfigMap', 'not a ConfigMap'
 assert set(cm['data']) == {'frozen-configuration.json', 'retention-artifact.json'}, 'ConfigMap keys must be exactly the two files'
 art = json.loads(cm['data']['retention-artifact.json'])
 cfg = json.loads(cm['data']['frozen-configuration.json'])
@@ -43,25 +43,35 @@ for k, want in PIN.items():
     got = hashlib.sha256(cm['data'][k].encode()).hexdigest()
     if got != want: err.append(f'{k} differs from the pinned Phase 0 artifact: sha256 {got}')
 digest = hashlib.sha256(json.dumps(cm['data'], sort_keys=True).encode()).hexdigest()
+cm_name = 'level-absorption-config-' + digest[:12]
+if cm['metadata']['name'] != cm_name: err.append(f"the ConfigMap must be named {cm_name} (content-named), it is {cm['metadata']['name']}")
+if cm.get('immutable') is not True: err.append('the ConfigMap must be immutable: true')
 dep0 = pathlib.Path('k8s/services/level-absorption/base/level-absorption-deployment.yaml').read_text()
-if f'options-edge.io/level-absorption-config-sha256: "{digest}"' not in dep0:
-    err.append(f'the pod template annotation options-edge.io/level-absorption-config-sha256 must be "{digest}" so a configuration change rolls the pod')
+if f'configMap:\n            name: {cm_name}\n' not in dep0: err.append(f'the Deployment must mount the ConfigMap {cm_name}')
+if 'level-absorption-config-sha256' in dep0: err.append('the obsolete digest annotation is still present')
 # the base must be the only place the ConfigMap lives: no generated slice may carry it (service-deploy.sh refuses ConfigMaps in a render)
 for sl in pathlib.Path('k8s/services/level-absorption/overlays').glob('*/manifest.yaml'):
     if re.search(r'^kind:\s*ConfigMap\s*$', sl.read_text(), re.M): err.append(f'{sl} contains a ConfigMap')
 if 'EYEBALL-ONLY' not in cfg.get('phase0', {}).get('bootstrapGenerator', ''):
     err.append('the shipped configuration is not marked EYEBALL-ONLY PROVISIONAL: a real Phase 0 freeze needs its own reviewed change to this validator')
-topics = pathlib.Path('scripts/kafka/topics.env').read_text()
-m = re.search(r'^OPTIONS_EDGE_TOPIC_RETENTION_BYTES_OVERRIDES="\$OPTIONS_EDGE_TOPIC_RETENTION_BYTES_OVERRIDES[^"]*\bfutures\.level-absorption\.events=(\d+)', topics, re.M)
-if not m: err.append('topics.env does not declare futures.level-absorption.events in OPTIONS_EDGE_TOPIC_RETENTION_BYTES_OVERRIDES')
-elif int(m.group(1)) != art['retentionBytes']: err.append(f"topics.env cap {m.group(1)} != artifact {art['retentionBytes']}")
-if not re.search(r'^OPTIONS_EDGE_RESET_PRESERVED_TOPICS="[^"]*\bfutures\.level-absorption\.events\b', topics, re.M): err.append('events topic not in OPTIONS_EDGE_RESET_PRESERVED_TOPICS')
-if not re.search(r'futures\.level-absorption\.events=-1', topics): err.append('events retention.ms override -1 missing')
+import subprocess
+ev = 'futures.level-absorption.events'
+def effective(var):
+    out = subprocess.run(['bash', '-c', 'set -u; OPTIONS_EDGE_TOPICS=""; OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES=""; OPTIONS_EDGE_TOPIC_RETENTION_BYTES_OVERRIDES=""; '
+                          'OPTIONS_EDGE_EXACT_PARTITION_TOPICS=""; source scripts/kafka/topics.env; printf "%s" "${' + var + '}"'], capture_output=True, text=True)
+    if out.returncode != 0: err.append(f'topics.env does not source cleanly: {out.stderr.strip()}'); return []
+    return out.stdout.split()
+byt = [w for w in effective('OPTIONS_EDGE_TOPIC_RETENTION_BYTES_OVERRIDES') if w.split('=')[0] == ev]
+if byt != [f"{ev}={art['retentionBytes']}"]: err.append(f'topics.env retention.bytes entries for the events topic are {byt}, expected exactly one {ev}={art["retentionBytes"]}')
+ms = [w for w in effective('OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES') if w.split('=')[0] == ev]
+if ms != [f'{ev}=-1']: err.append(f'topics.env retention.ms entries for the events topic are {ms}, expected exactly one {ev}=-1')
+if [w for w in effective('OPTIONS_EDGE_RESET_PRESERVED_TOPICS') if w == ev] != [ev]: err.append('events topic not exactly once in OPTIONS_EDGE_RESET_PRESERVED_TOPICS')
+if [w for w in effective('OPTIONS_EDGE_TOPICS') if w.split(':')[0] == ev] != [ev + ':1']: err.append('events topic not exactly once, with 1 partition, in OPTIONS_EDGE_TOPICS')
+if [w for w in effective('OPTIONS_EDGE_EXACT_PARTITION_TOPICS') if w == ev] != [ev]: err.append('events topic not exactly once in OPTIONS_EDGE_EXACT_PARTITION_TOPICS')
 # the Deployment must mount the ConfigMap and point the two env vars at keys of it
 dep = pathlib.Path('k8s/services/level-absorption/base/level-absorption-deployment.yaml').read_text()
 for k in ('frozen-configuration.json', 'retention-artifact.json'):
     if f'/home/options-edge/config/level-absorption/{k}' not in dep: err.append(f'deployment does not point at {k}')
-if 'configMap:\n            name: level-absorption-config' not in dep: err.append('deployment does not mount the ConfigMap')
 if 'value: EYEBALL' not in dep: err.append('phase is not EYEBALL')
 # LA-050 (lineage): the footprint bars and the linearized tape must be built from the SAME raw print stream, and level-absorption must read the
 # names those two producers publish. Parsed from the manifests (every Deployment doc, env name -> literal value), not scanned as text.
@@ -96,6 +106,10 @@ if err:
     sys.exit(1)
 if '--print-retention-bytes' in sys.argv[1:]:
     print(art['retentionBytes'])
+elif '--print-config-name' in sys.argv[1:]:
+    print(cm_name)
+elif '--print-data-digest' in sys.argv[1:]:
+    print(digest)
 else:
     print('ok: level-absorption configuration, retention cap', art['retentionBytes'], 'and LA-050 topic names agree')
 PY

@@ -10,7 +10,7 @@ metadata:
 spec:
   # HELD AT 0 in this shared base (production stays at 0: it is untouched); DEV runs it through
   # k8s/overlays/dev/level-absorption-dev-enable-patch.yaml (replicas 1, EYEBALL phase, owner standing goal 2026-10-25). The two files
-  # it reads at start are the ConfigMap level-absorption-config (level-absorption-config.yaml, copied verbatim from
+  # it reads at start are the immutable, content-named ConfigMap level-absorption-config-<digest12> (level-absorption-config.yaml, copied verbatim from
   # options-edge-processing docs/level-absorption/phase0/): an EYEBALL-ONLY PROVISIONAL configuration (the Phase 0 comparison fold
   # selected NO candidate, so no verdict can ship) and the retention artifact. Jenkinsfile.service-deploy applies the ConfigMap in
   # the stage 'Apply level-absorption configuration' and the topic barrier creates the events topic from the artifact's integer.
@@ -27,11 +27,6 @@ spec:
         app.kubernetes.io/name: level-absorption-service
         app.kubernetes.io/component: level-absorption-service
         app.kubernetes.io/part-of: options-edge
-      annotations:
-        # sha256 of the ConfigMap level-absorption-config's data (json.dumps(sort_keys=True)). The service reads both files once at start and a
-        # ConfigMap update alone rolls nothing, so a configuration change must change this value: scripts/ci/validate-level-absorption-config.sh
-        # computes it and fails CI on a stale one, and the changed pod template makes service-deploy roll the pod.
-        options-edge.io/level-absorption-config-sha256: "1207235809ea755af4973f5291949a6620a1d990a9dd380506282bffd6802f37"
     spec:
       terminationGracePeriodSeconds: 60
       containers:
@@ -139,7 +134,7 @@ spec:
       volumes:
         - name: level-absorption-config
           configMap:
-            name: level-absorption-config
+            name: level-absorption-config-1207235809ea
         - name: level-absorption-data
           hostPath:
             path: /home/options-edge/data/level-absorption

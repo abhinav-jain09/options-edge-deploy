@@ -65,13 +65,13 @@ Decided by Claude under the owner's standing instruction (the owner may overrule
 1. **The configuration** is the EYEBALL-ONLY PROVISIONAL file of the Phase 0 run of 2026-10-25 (options-edge-processing
    `docs/level-absorption/phase0/`, PR 1344, README there). The comparison fold selected NO candidate (lower bound 4.09 points against
    the 15-point bar), so it is not a Phase 0 freeze, no verdict can ship, and the service refuses any phase but EYEBALL on it. It and the
-   retention artifact are copied verbatim into the ConfigMap `level-absorption-config` (`k8s/services/level-absorption/base/level-absorption-config.yaml`),
-   mounted read-only at `/home/options-edge/config/level-absorption` (no host path). The standalone slices carry Deployment/Service only,
-   so `Jenkinsfile.service-deploy` applies that one file in the stage `Apply level-absorption configuration`.
+   retention artifact are copied verbatim into an IMMUTABLE ConfigMap named by its content digest, `level-absorption-config-<first 12 hex of sha256(data)>`
+   (`k8s/services/level-absorption/base/level-absorption-config.yaml`; a changed configuration is a new object and a changed pod template, so the pod rolls), mounted read-only at `/home/options-edge/config/level-absorption` (no host path). The standalone slices carry Deployment/Service only,
+   so `Jenkinsfile.service-deploy` applies that one file in the stage `Apply level-absorption configuration` (DEV ONLY) and reads the live object back (immutable, exact keys, canonical digest).
 2. **The events topic** `futures.level-absorption.events` is declared in `topics.env`: 1 partition, delete, `retention.ms=-1`,
    `retention.bytes=21765840` = ceil(362,764 bytes/day x 30 days x 2) (362,764 = the largest of 158 measured calibration sessions with
    every verdict class publishing; mean 61,793; 30 and 2 are the document's starting values). It is RESET-PRESERVED
-   (`OPTIONS_EDGE_RESET_PRESERVED_TOPICS` and `premarket-reset.sh`). The barrier reads the integer out of the ConfigMap file and requires the topic.
+   (`OPTIONS_EDGE_RESET_PRESERVED_TOPICS` and `premarket-reset.sh`). The barrier (dev) reads the integer out of the ConfigMap file, requires the topic and RAISES an existing lower cap to it (never lowers: a lower target is refused).
    `scripts/ci/validate-level-absorption-config.sh` (wired into `validate-services.sh`) fails when the artifact, its arithmetic, the topics.env
    cap, the Deployment's paths or the LA-050 input topic names (footprint `es.futures.footprint.bars`, tape `underlying.es.trades.linearized`) disagree.
 3. **Dev runs it** (`k8s/overlays/dev/level-absorption-dev-enable-patch.yaml`, replicas 1; removed from `DISABLED_DEV`). The shared base and

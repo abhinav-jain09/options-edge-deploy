@@ -1,3 +1,8 @@
+# IMMUTABLE and NAMED BY ITS CONTENT: the name suffix is the first 12 hex digits of sha256(json.dumps(data, sort_keys=True)); the Deployment
+# references this exact name, so a changed configuration is a NEW object and a changed pod template (the pod rolls), a pod can only ever
+# mount the content its template names, and an out-of-band edit is refused by the API server. Old objects are left in place (a rollback
+# re-points to one). scripts/ci/validate-level-absorption-config.sh computes the name and fails CI on any disagreement.
+#
 # The Level Absorption configuration the pod mounts at /home/options-edge/config/level-absorption (read-only).
 #
 # SOURCE OF TRUTH: options-edge-processing docs/level-absorption/phase0/ (README.md there), copied VERBATIM from origin/main
@@ -12,11 +17,12 @@
 #
 # The standalone slices carry Deployment/Service only, so service-deploy does not create this ConfigMap: Jenkinsfile.service-deploy
 # applies this one file in the stage 'Apply level-absorption configuration' (the same kind of service-owned step as the
-# feed-gateway ConfigMap reconcile). A change needs a pod restart (the service reads both files once at start).
+# feed-gateway ConfigMap reconcile). The service reads both files once at start.
 apiVersion: v1
 kind: ConfigMap
+immutable: true
 metadata:
-  name: level-absorption-config
+  name: level-absorption-config-1207235809ea
   namespace: options-edge
   labels:
     app.kubernetes.io/name: level-absorption-service
