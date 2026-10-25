@@ -36,9 +36,9 @@ else:
     for k in ('minimumEffort', 'flatRatioCutoff'):
         if not isinstance(pr.get(k), (int, float)) or pr[k] <= 0: err.append(f'configuration parameter {k} must be a positive number (no code default exists)')
     if not isinstance(pr.get('minimumBarImbalanceBps'), (int, float)) or pr['minimumBarImbalanceBps'] < 0: err.append('configuration parameter minimumBarImbalanceBps must be a non-negative number')
-# verbatim pin: these are the bytes of options-edge-processing docs/level-absorption/phase0/{eyeball-configuration,retention-artifact}.json at f4affb218.
-# A new Phase 0 replaces the content AND these two digests in the same reviewed change.
-PIN = {'frozen-configuration.json': '0c7f34f7e7c351f5947d3f00e68adc3f428ad39186a33bf95bf7a289c90280e4', 'retention-artifact.json': '320695baad8e6afe4875f88783a20849878f2e87b54b05874eaa685da5230cc9'}
+# Verbatim pin: processing docs/level-absorption/phase0/indicator-{eyeball-configuration,retention-artifact}.json.
+# Indicator enablement pins the explicit EYEBALL configuration and one-Friday retention artifact from processing PR #1414.
+PIN = {'frozen-configuration.json': '48f6d1b72e5c93f2d6b602b09f3bd2d27c4032f3bc38f7b6d9eb400a29ea11fa', 'retention-artifact.json': '4eb96950e2a385b20c0e25f0c9d68934f64bf862aa3e7fbc35365a56dc73c2ef'}
 for k, want in PIN.items():
     got = hashlib.sha256(cm['data'][k].encode()).hexdigest()
     if got != want: err.append(f'{k} differs from the pinned Phase 0 artifact: sha256 {got}')
