@@ -134,7 +134,7 @@ spec:
       volumes:
         - name: level-absorption-config
           configMap:
-            name: level-absorption-config-78633ca3d390
+            name: level-absorption-config-fea5644b7c51
         - name: level-absorption-data
           hostPath:
             path: /home/options-edge/data/level-absorption

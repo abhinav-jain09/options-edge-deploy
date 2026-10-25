@@ -36,9 +36,9 @@ else:
     for k in ('minimumEffort', 'flatRatioCutoff'):
         if not isinstance(pr.get(k), (int, float)) or pr[k] <= 0: err.append(f'configuration parameter {k} must be a positive number (no code default exists)')
     if not isinstance(pr.get('minimumBarImbalanceBps'), (int, float)) or pr['minimumBarImbalanceBps'] < 0: err.append('configuration parameter minimumBarImbalanceBps must be a non-negative number')
-# Verbatim pin: processing docs/level-absorption/phase0/market-structure-{eyeball-configuration,retention-artifact}.json.
-# Persistent host mode pins the explicit EYEBALL configuration and one-Friday retention artifact from processing PR #1414.
-PIN = {'frozen-configuration.json': '24dfa34790f5f75f09ac82959cc673d56eb9dfe98e76fbaef5e9fb41362fa316', 'retention-artifact.json': 'b53d677e337957e8c17ec5e638a78eb9b28e2325373ea9e00710d8483765f426'}
+# Verbatim pins: processing phase0/market-structure-eyeball-configuration.json and two-sided-host-retention-artifact.json.
+# Two-sided host mode pins the explicit EYEBALL configuration and one-Friday retention artifact from processing PR #1414.
+PIN = {'frozen-configuration.json': '24dfa34790f5f75f09ac82959cc673d56eb9dfe98e76fbaef5e9fb41362fa316', 'retention-artifact.json': '074fd6155cd1d9351aa6d82518b045dd8b78a9e857c857a763f65669230fd023'}
 for k, want in PIN.items():
     got = hashlib.sha256(cm['data'][k].encode()).hexdigest()
     if got != want: err.append(f'{k} differs from the pinned Phase 0 artifact: sha256 {got}')
@@ -102,6 +102,8 @@ for envname in ('dev', 'production'):
     if lin.get('KAFKA_ES_TRADES_TOPIC') != raw:
         err.append(f"LA-050: {envname} linearizer reads {lin.get('KAFKA_ES_TRADES_TOPIC')!r} but es-cvd (the footprint producer) reads {raw!r}: not one print stream")
     la = env_of(f'k8s/services/level-absorption/overlays/{envname}/manifest.yaml', 'level-absorption-service')
+    if la.get('LEVEL_ABSORPTION_TWO_SIDED_HOST', 'false') != ('true' if envname == 'dev' else 'false'):
+        err.append(f'{envname} two-sided host diagnostics must be enabled only in dev')
     if la.get('KAFKA_LEVEL_ABSORPTION_FOOTPRINT_TOPIC') != (es4_prefix or '') + (bars or ''):
         err.append(f"LA-050: {envname} level-absorption reads footprint {la.get('KAFKA_LEVEL_ABSORPTION_FOOTPRINT_TOPIC')!r}, the es4 producer publishes {(es4_prefix or '') + (bars or '')!r}")
     if 'KAFKA_LEVEL_ABSORPTION_TRADES_TOPIC' in la:

@@ -19,6 +19,9 @@ spec:
     spec:
       containers:
         - name: level-absorption
+          env:
+            - name: LEVEL_ABSORPTION_TWO_SIDED_HOST
+              value: "true"
           readinessProbe:
             httpGet:
               path: /health/deployment-ready

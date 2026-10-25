@@ -5,11 +5,11 @@
 #
 # The Level Absorption configuration the pod mounts at /home/options-edge/config/level-absorption (read-only).
 #
-# SOURCE OF TRUTH: processing PR #1414, phase0/market-structure-{eyeball-configuration,retention-artifact}.json.
-# Enable market-structure swing/range/opening-range support and resistance, with the existing persistent classifier.
-# Indicator study kinds are disabled. Host mode suppresses one-bar OBSERVATION output; only confirmed states establish absorption.
+# SOURCE OF TRUTH: processing PR #1414, phase0/market-structure-eyeball-configuration.json and two-sided-host-retention-artifact.json.
+# Enable market-structure swing/range/opening-range support and resistance, with opt-in two-sided gross effort diagnostics.
+# Indicator study kinds are disabled. Host mode suppresses one-bar OBSERVATION output; gross-side reward thresholds are provisional and never authorize LIVE.
 # EYEBALL ONLY: provisional thresholds and the NO_CANDIDATE/publication gate remain. This is not a Phase 0 selection.
-# Retention: one Friday diagnostic session (including the missing-bar tail), 1344189 bytes/day x 30 x 2 = 80651340 bytes.
+# Retention: one Friday diagnostic session (including the missing-bar tail), 1361259 bytes/day x 30 x 2 = 81675540 bytes.
 # Deploy only with the companion native host enum/decimal decoder and persistence-mode observation suppression.
 #
 # The standalone slices carry Deployment/Service only, so service-deploy does not create this ConfigMap: Jenkinsfile.service-deploy
@@ -19,7 +19,7 @@ apiVersion: v1
 kind: ConfigMap
 immutable: true
 metadata:
-  name: level-absorption-config-78633ca3d390
+  name: level-absorption-config-fea5644b7c51
   namespace: options-edge
   labels:
     app.kubernetes.io/name: level-absorption-service
@@ -74,4 +74,4 @@ data:
       }
     }
   retention-artifact.json: |
-    {"formatVersion":1,"kind":"level-absorption.retention-artifact","topic":"futures.level-absorption.events","retentionMs":-1,"measuredBytesPerDay":1344189,"measurementSessions":1,"retentionDays":30,"safetyFactor":2,"retentionBytes":80651340}
+    {"formatVersion":1,"kind":"level-absorption.retention-artifact","topic":"futures.level-absorption.events","retentionMs":-1,"measuredBytesPerDay":1361259,"measurementSessions":1,"retentionDays":30,"safetyFactor":2,"retentionBytes":81675540}
