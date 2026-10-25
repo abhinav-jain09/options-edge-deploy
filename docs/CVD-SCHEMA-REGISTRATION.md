@@ -7,11 +7,11 @@ successful Jenkins artifact, with no version selector or older-release fallback
 (`scripts/jenkins/fetch-canonical-contracts.py:72`). It verifies packaged resources
 against that checkout before importing the package.
 
-The explicit31-entry inventory in `scripts/kafka/register-cvd-schemas.py:23` covers
+The explicit inventory in `scripts/kafka/register-cvd-schemas.py` (`BINDINGS`) covers
 CVD/footprint, strike, Direction, regime, Open Direction, aligned levels/GEX/strike,
-compression/expansion, absorption, EAV and Short Premium external outputs. It admits
+compression/expansion, absorption (events, voice, closures and, since contracts 0.39.0, the chart's manual-line command), EAV and Short Premium external outputs. It admits
 the exact default name or one existing es4 prefix. Kafka metadata selects only
-existing topics; progress/manual-line and unrelated Home GEX are excluded. Missing
+existing topics; progress and unrelated Home GEX are excluded. Missing
 Kafka topics are not created. Inactive Align internal state schemas are outside
 this action and must be registered before any future activation of that service.
 

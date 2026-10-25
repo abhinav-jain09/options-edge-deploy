@@ -35,6 +35,7 @@ BINDINGS = {
     'futures.level-absorption.events':'cvd-related/LevelAbsorptionEvent.avsc',
     'futures.level-absorption.voice':'cvd-related/LevelAbsorptionVoice.avsc',
     'futures.level-absorption.closures':'cvd-related/LevelAbsorptionClosure.avsc',
+    'futures.level-absorption.manual-line':'cvd-related/LevelAbsorptionManualLine.avsc',
     'options.es-gex-spx-aligned':'cvd-related/AlignedGexBookExtended.avsc',
     'options.es-strike-intel-spx-aligned':'cvd-related/AlignedStrikeIntelligence.avsc',
     'options.short-premium.recommendation':'cvd-related/ShortPremiumRecommendation.avsc',
