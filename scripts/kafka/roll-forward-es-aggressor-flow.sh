@@ -6,9 +6,8 @@
 # and no dual-publish window. The retained JSON is deleted, never read by an Avro reader. Runbook: docs/ES-AGGRESSOR-FLOW-AVRO-CUTOVER.md (order of
 # every step; this script is the wipe step only). Copied from roll-forward-underlying-spx-price.sh, same guards, same two attestation modes.
 #
-# ONLY --cluster dev IS EXECUTABLE. es4 and production are PENDING THE OWNER'S EXPLICIT PERMISSION (no es4 or production topic wipe without it): the script
-# refuses them by name, so there is no flag an operator can add by habit. When the owner permits one, the change is a reviewed edit of the cluster case
-# below (its recorded shape and bootstrap), never an override.
+# --cluster dev and es4 are executable (es4 enabled 2026-10-25 on the owner's confirmation). production is still refused by name until the owner's
+# permission is recorded here with its shape and bootstrap: a reviewed edit of the cluster case, never an override.
 #
 # THE OPERATOR ASSERTS EXCLUSION. Nothing in Kafka proves a writer is absent, so --writers-and-readers-stopped (strict) or --avro-feed-live
 # --json-writers-stopped must be passed by the operator. On dev the only JSON writer was the es4 -> dev MM1 mirror (Jenkinsfile.es-futures-flow-mirror);
@@ -45,8 +44,8 @@ while [ $# -gt 0 ]; do
   esac
 done
 case "$CLUSTER" in
-  dev) ;;
-  es4|production) echo "REFUSED: $CLUSTER is pending the owner's explicit permission (no es4/production topic wipe without it). Nothing was changed. See docs/ES-AGGRESSOR-FLOW-AVRO-CUTOVER.md, pending steps." >&2; exit 3 ;;
+  dev|es4) ;;
+  production) echo "REFUSED: $CLUSTER is pending the owner's explicit permission (no es4/production topic wipe without it). Nothing was changed. See docs/ES-AGGRESSOR-FLOW-AVRO-CUTOVER.md, pending steps." >&2; exit 3 ;;
   *) usage ;;
 esac
 [ -n "$PRE_ID" ] || usage
@@ -63,6 +62,7 @@ BIN="${POS[1]:-${KAFKA_BIN_DIR:-}}"
 TOPIC_NAME=es.futures.aggressor-flow
 case "$CLUSTER:$BS" in
   dev:localhost:19092|dev:127.0.0.1:19092|dev:host.docker.internal:19092|dev:192.168.100.102:19092) ;;
+  es4:192.168.100.4:9092) ;;
   *) echo "FATAL: bootstrap '$BS' is not the $CLUSTER cluster's broker; refusing (nothing was changed)" >&2; exit 2 ;;
 esac
 
