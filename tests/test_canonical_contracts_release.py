@@ -187,7 +187,7 @@ class RegistryResourceInventory(unittest.TestCase):
         files = {"schemas/cvd/A.avsc": b'{"a":1}', "python/optionsedge_contracts/m.py": b"x=1\n"}
         for n in self.INDICATORS:
             files["schemas-registry/indicators/%s.avsc" % n] = n.encode()
-        files.update({"schemas-registry/ta/W.avsc": b"w", "schemas-registry/ta/v1/V.avsc": b"v", "schemas-registry/esflow/E.avsc": b"e"})
+        files.update({"schemas-registry/ta/W.avsc": b"w", "schemas-registry/ta/v1/V.avsc": b"v", "schemas-registry/esflow/E.avsc": b"e", "schemas-registry/geometry/G.avsc": b"g"})
         for name, data in files.items():
             path = root / name
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -223,6 +223,12 @@ class RegistryResourceInventory(unittest.TestCase):
     def test_a_packaged_registry_file_missing_from_the_jar_is_refused(self):
         root, files = self.source()
         smaller = {k: v for k, v in files.items() if k != "schemas-registry/esflow/E.avsc"}
+        with self.assertRaisesRegex(ValueError, "inventory differs from main"):
+            release.verify_package(self.jar(smaller), root)
+
+    def test_the_geometry_registry_files_are_part_of_the_inventory(self):
+        root, files = self.source()
+        smaller = {k: v for k, v in files.items() if k != "schemas-registry/geometry/G.avsc"}
         with self.assertRaisesRegex(ValueError, "inventory differs from main"):
             release.verify_package(self.jar(smaller), root)
 

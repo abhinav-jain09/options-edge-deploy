@@ -78,9 +78,9 @@ def verify_package(body, source):
         resources={p.relative_to(source/'schemas').as_posix():p for p in (source/'schemas').rglob('*.avsc')}
         resources.update({p.relative_to(source/'python').as_posix():p for p in (source/'python/optionsedge_contracts').rglob('*.py')})
         # The producer-authored registry files pom.xml packages under schemas-registry/ (the same include rules as the pom: three indicator
-        # studies files, ta/*.avsc and ta/v1/*.avsc, esflow/*.avsc), keyed by their path from the checkout root.
+        # studies files, ta/*.avsc and ta/v1/*.avsc, esflow/*.avsc, geometry/*.avsc since contracts 0.41.0), keyed by their path from the checkout root.
         reg=source/'schemas-registry'
-        for rel in [reg/'indicators'/(n+'.avsc') for n in ('StudyBar','StudiesCurrent','StudyEngineImage')]+sorted((reg/'ta').glob('*.avsc'))+sorted((reg/'ta'/'v1').glob('*.avsc'))+sorted((reg/'esflow').glob('*.avsc')):
+        for rel in [reg/'indicators'/(n+'.avsc') for n in ('StudyBar','StudiesCurrent','StudyEngineImage')]+sorted((reg/'ta').glob('*.avsc'))+sorted((reg/'ta'/'v1').glob('*.avsc'))+sorted((reg/'esflow').glob('*.avsc'))+sorted((reg/'geometry').glob('*.avsc')):
             if rel.is_file():resources[rel.relative_to(source).as_posix()]=rel   # a file main lacks is simply not expected: a jar that carries it fails the inventory check
         actual={name for name in archive.namelist() if name.endswith('.avsc') or
                 name.startswith('optionsedge_contracts/') and name.endswith('.py')}
