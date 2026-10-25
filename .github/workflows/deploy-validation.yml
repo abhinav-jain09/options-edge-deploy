@@ -93,6 +93,17 @@ jobs:
       # them. The init container and the service must agree on image and on every value that decides
       # the subject names, and the rollout must roll BOTH to the same image — none of which is visible
       # from one manifest, so a drift would only show as a crash-loop whose subjects look registered.
+      # Keycloak's --import-realm parser REJECTS unknown fields, so one commentary key in a realm JSON
+      # stops the server booting — and oe-keycloak is on the prod mandatory list, so that is a platform
+      # auth outage. This guard has existed since the SECOND occurrence and catches the defect exactly,
+      # but nothing ran it: on 2026-10-25 a "//" key shipped a THIRD time and oe-keycloak crash-looped
+      # 32 times until the ConfigMap was fixed by hand. Unwired guards do not guard.
+      - name: Keycloak realm imports carry no commentary keys
+        run: bash scripts/keycloak/validate-realm-configmaps.sh
+
+      - name: Keycloak realm guard refuses its own violations (mutation test)
+        run: bash scripts/keycloak/validate-realm-configmaps-test.sh
+
       - name: es-spx-align schema provisioning agrees with the service it provisions for
         run: bash scripts/ci/validate-align-schema-provisioning.sh
 

@@ -192,22 +192,30 @@ spec:
               containerPort: 9000
             - name: jgroups
               containerPort: 7800
+          # timeoutSeconds is stated on every probe because the Kubernetes DEFAULT is 1s, and a 1s
+          # budget against a JVM that is importing a realm, starting Infinispan or in a GC pause fails
+          # on latency alone — restarting a healthy server and, on liveness, taking auth down for the
+          # whole platform. Keycloak's /health endpoints answer in single-digit ms when it is well, so
+          # 5s costs nothing and only forgives stalls.
           startupProbe:
             httpGet:
               path: /health/started
               port: 9000
             failureThreshold: 30
             periodSeconds: 5
+            timeoutSeconds: 5
           readinessProbe:
             httpGet:
               path: /health/ready
               port: 9000
             periodSeconds: 10
+            timeoutSeconds: 5
           livenessProbe:
             httpGet:
               path: /health/live
               port: 9000
             periodSeconds: 20
+            timeoutSeconds: 5
           volumeMounts:
             - name: realm-import
               mountPath: /opt/keycloak/data/import
