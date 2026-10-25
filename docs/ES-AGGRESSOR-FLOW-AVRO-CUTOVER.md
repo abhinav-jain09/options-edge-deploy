@@ -56,12 +56,16 @@ Registered id 2701 on the dev registry; topic recreated with the script; gateway
 and the es4 producer must not be touched, the verification writer was the real `EsAggressorFlowRuntime` run on the MacBook against the dev broker
 (not on 102), stopped afterwards. See the report of the session for build numbers and the byte checks.
 
-## PENDING the owner's explicit permission (nothing below has been done)
+## es4 and production (owner confirmed 2026-10-25)
 
-* **es4:** register 2701 on `http://192.168.100.4:8081`; stop the (already idle) es-aggressor-flow-service; wipe/recreate `es.futures.aggressor-flow`
-  (`roll-forward-es-aggressor-flow.sh` refuses `--cluster es4` until the owner permits and the cluster case is reviewed); deploy the es-aggressor-flow image
-  built with contracts 0.38.0 and the es4 gateway (`es-feed-gateway`) with the Avro binding; verify 0x00 at the source.
-* **production:** register 2701 on the production registry; tear down the production mirror unit; wipe/recreate the production topic; roll the
-  production gateway and reversal-confirmation; reinstall the mirror (`Jenkinsfile.es-futures-flow-mirror`, TARGET 192.168.100.252:9092).
-  **Until then never build a production image of the gateway or reversal-confirmation from main:** they read Avro only and would meet the live JSON mirror.
-* **dev mirror:** after the es4 writer is Avro, re-install the dev mirror unit (`Jenkinsfile.es-futures-flow-mirror`, TARGET 127.0.0.1:19092) so the card has live data again.
+* **es4: done.** 2701 registered on `192.168.100.4:8081`; topic wiped and recreated (id `jMIBzAg7So6iWplS-5nXtg`, shape reconciled to `compact,delete`, retention -1);
+  wire verified `00 00 00 0a 8d` at the source with the real producer jar run from the MacBook (25 stand-in `NO_DATA` records remain until the es4 producer writes).
+  es4 `es-aggressor-flow-service` and `es-feed-gateway` are at 0 replicas.
+* **production: topic wiped** (id `KACaPQdnTKesrys7RNGY8A`, 111,381 retained JSON snapshots deleted). **Registration of 2701 on the production registry is NOT done**:
+  the production registry (`192.168.100.252:8081/8082`) and the image registry (`:5000`) were down (production host shut down). Run, when it is up:
+  `SCHEMA_REGISTRY_URL=http://192.168.100.252:8082 SCHEMAS_DIR=<contracts>/schemas-registry/esflow SCHEMA_ID_MAP=scripts/kafka/schema-id-maps/es-aggressor-flow.map bash scripts/kafka/ensure-fixed-id-schemas.sh`.
+* **Not done, blocked on the production host (image registry down):** Avro images for `es-aggressor-flow-service` (es4), the gateway (es4 `es-feed-gateway` and production) and
+  `reversal-confirmation` (production) must be built and pinned BEFORE anything is started; the pinned `:prod` images still write/read JSON. The three services are at 0 replicas
+  on es4 and production, so nothing breaks until someone starts them with the old pins.
+* **Mirrors (dev and production) not reinstalled:** no es4 writer exists yet; reinstall with `Jenkinsfile.es-futures-flow-mirror` (TARGET 127.0.0.1:19092 / 192.168.100.252:9092)
+  after the es4 producer runs Avro. The dev unit lives on the dev Mac (102); the 201 Jenkins would install it on the laptop, so decide the host first.
