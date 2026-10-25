@@ -355,6 +355,12 @@ patches:
   # DEV-ONLY: give the k8s feed-gateway the dev WS auth/origins/replay config the retired host :8093
   # gateway had, so the browser's live WS connects to the Jenkins-owned k8s gateway (:8091).
   - path: feed-gateway-dev-env-patch.yaml
+  # DEV-ONLY: market-structure's structure tools, classical geometry and X2 swing pivots flags (see the patch header).
+  # MIRRORS k8s/services/market-structure/overlays/dev — the slice generator renders it from here.
+  - path: market-structure-dev-env-patch.yaml
+    target:
+      kind: Deployment
+      name: market-structure-service
   # DEV-ONLY: feed publish interval 5s, same as prod (code default 250ms) — see the patch header.
   - path: raw-postgres-writer-dev-patch.yaml
   - path: databento-feed-dev-patch.yaml

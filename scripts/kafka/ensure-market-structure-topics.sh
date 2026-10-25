@@ -20,6 +20,7 @@
 #   options.spx.market-structure.patterns  1 partition, delete, retention.ms=172800000 (flag-gated output, ensured always)
 #   options.spx.market-structure.tools     1 partition, delete, retention.ms=172800000 (CHART-STRUCTURE-TOOLS StructureToolsSet, Avro, B-R10.1)
 #   options.spx.market-structure.geometry  1 partition, delete, retention.ms=172800000 (CLASSICAL-CHART-PATTERNS GeometryAnnotationSet, Avro, C-R17.1)
+#   options.spx.market-structure.swing-pivots  1 partition, delete, retention.ms=172800000 (X2 SwingPivotRecord, Avro; flag MARKET_STRUCTURE_SWING_PIVOTS_ENABLED; also ensured by ensure-break-classification-topics.sh)
 # All values are Avro (Kafka Serialization Rule): the topics are created EMPTY here and the producer writes Avro from its first byte.
 #
 # CREATE if absent, then VERIFY every topic — including one just created — and fail closed. Never alters an
@@ -37,6 +38,7 @@ PATTERNS_TOPIC="${KAFKA_MARKET_STRUCTURE_PATTERNS_TOPIC:-options.spx.market-stru
 # outputs; the service verifies each only while its flag is on, but they are ensured unconditionally so a flag flip is a one-variable change.
 TOOLS_TOPIC="${KAFKA_MARKET_STRUCTURE_TOOLS_TOPIC:-options.spx.market-structure.tools}"
 GEOMETRY_TOPIC="${KAFKA_MARKET_STRUCTURE_GEOMETRY_TOPIC:-options.spx.market-structure.geometry}"
+SWING_PIVOTS_TOPIC="${KAFKA_MARKET_STRUCTURE_SWING_PIVOTS_TOPIC:-options.spx.market-structure.swing-pivots}"
 : "${KAFKA_BOOTSTRAP_SERVERS:?KAFKA_BOOTSTRAP_SERVERS unset — refusing to verify against an unknown cluster}"
 RF="${KAFKA_TOPIC_REPLICATION_FACTOR:-1}"
 # The two minima the SERVICE verifies, which its own deployment freezes (1 on this single-broker estate).
@@ -140,4 +142,5 @@ if ! ensure "$RECOVERY_TOPIC" -1 compact; then rc=1; fi
 if ! ensure "$PATTERNS_TOPIC" 172800000; then rc=1; fi
 if ! ensure "$TOOLS_TOPIC" 172800000; then rc=1; fi
 if ! ensure "$GEOMETRY_TOPIC" 172800000; then rc=1; fi
+if ! ensure "$SWING_PIVOTS_TOPIC" 172800000; then rc=1; fi
 exit $rc

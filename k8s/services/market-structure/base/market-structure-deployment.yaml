@@ -81,6 +81,13 @@ spec:
               value: "false"
             - name: MARKET_STRUCTURE_GEOMETRY_ENABLED
               value: "false"
+            # X2 swing pivots (processing BREAKOUT-TRAP-VS-REAL-REQUIREMENT.md X2): the degree-2 swing points of the structure-tools fold, published as Avro SwingPivotRecord (subject id 2606,
+            # registered with the break-classifier subjects) on options.spx.market-structure.swing-pivots (1 partition, ensured by scripts/kafka/ensure-market-structure-topics.sh), the input the
+            # break-classifier-service reads. OFF here and in production (decision made by Claude under the owner's standing instruction, the owner may overrule); the dev overlay turns it on.
+            # Effective only while MARKET_STRUCTURE_TOOLS_ENABLED is on for the session (the swing series lives in the tools fold); it gates publication only, the fold and the recovery
+            # fingerprint are unchanged. Off: no record, no topic verification.
+            - name: MARKET_STRUCTURE_SWING_PIVOTS_ENABLED
+              value: "false"
             - name: JAVA_TOOL_OPTIONS
               value: -Xms256m -Xmx640m
           ports:

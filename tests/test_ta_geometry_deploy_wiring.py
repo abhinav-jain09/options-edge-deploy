@@ -31,6 +31,10 @@ class FlagsAreLiterallyFalse(unittest.TestCase):
         "MARKET_STRUCTURE_GEOMETRY_ENABLED": ["k8s/services/market-structure/base/market-structure-deployment.yaml",
                                               "k8s/services/market-structure/overlays/dev/manifest.yaml",
                                               "k8s/services/market-structure/overlays/production/manifest.yaml"],
+        # X2 swing pivots (task T-5 of the level-absorption closure): off in the base and in production, on in dev only.
+        "MARKET_STRUCTURE_SWING_PIVOTS_ENABLED": ["k8s/services/market-structure/base/market-structure-deployment.yaml",
+                                                  "k8s/services/market-structure/overlays/dev/manifest.yaml",
+                                                  "k8s/services/market-structure/overlays/production/manifest.yaml"],
         "GATEWAY_STRUCTURE_TOOLS_ENABLED": [], "GATEWAY_GEOMETRY_ENABLED": [], "GATEWAY_TRADE_TOOLS_ENABLED": [], "GATEWAY_WAVE_CYCLE_ENABLED": [], "GATEWAY_BREAK_CLASSIFICATION_ENABLED": [],
         "TT_ENABLED": ["k8s/services/es-trade-tools/base/es-trade-tools-deployment.yaml", "k8s/services/es-trade-tools/overlays/dev/manifest.yaml",
                        "k8s/services/es-trade-tools/overlays/production/manifest.yaml",
@@ -71,7 +75,14 @@ class FlagsAreLiterallyFalse(unittest.TestCase):
         "WAVE_CYCLE_SEASONALITY_ENABLED": ("k8s/overlays/production/wave-cycle-prod-enable-patch.yaml", "k8s/services/wave-cycle/overlays/production/manifest.yaml"),
     }
 
+    # market-structure in DEV: structure tools and geometry are "true" because the running dev Deployment already reads them (the manifest had said "false", which a service-deploy would have applied);
+    # swing pivots (X2) are on in dev only. See k8s/overlays/dev/market-structure-dev-env-patch.yaml.
+    DEV_MS_FILES = ["k8s/overlays/dev/market-structure-dev-env-patch.yaml", "k8s/services/market-structure/overlays/dev/manifest.yaml"]
+    DEV_MS_ON = ("MARKET_STRUCTURE_TOOLS_ENABLED", "MARKET_STRUCTURE_GEOMETRY_ENABLED", "MARKET_STRUCTURE_SWING_PIVOTS_ENABLED")
+
     def expected_value(self, rel, name):
+        if name in self.DEV_MS_ON and rel in self.DEV_MS_FILES:
+            return "true"
         if rel in self.PROD_ON.get(name, ()):
             return "true"
         return "true" if name in self.DEV_ON and rel in self.DEV_GATEWAY_FILES else "false"
@@ -94,7 +105,8 @@ class FlagsAreLiterallyFalse(unittest.TestCase):
         for rel in ("k8s/overlays/production/market-structure-prod-env-patch.yaml", "k8s/services/market-structure/overlays/production/manifest.yaml"):
             self.assertEqual(env_values(ROOT / rel, "MARKET_STRUCTURE_TOOLS_ENABLED"), ["true"], rel)
         self.assertEqual(env_values(ROOT / "k8s/services/market-structure/overlays/production/manifest.yaml", "MARKET_STRUCTURE_GEOMETRY_ENABLED"), ["true"])
-        self.assertEqual(env_values(ROOT / "k8s/services/market-structure/overlays/dev/manifest.yaml", "MARKET_STRUCTURE_TOOLS_ENABLED"), ["false"])
+        self.assertEqual(env_values(ROOT / "k8s/services/market-structure/overlays/dev/manifest.yaml", "MARKET_STRUCTURE_TOOLS_ENABLED"), ["true"])
+        self.assertEqual(env_values(ROOT / "k8s/services/market-structure/overlays/production/manifest.yaml", "MARKET_STRUCTURE_SWING_PIVOTS_ENABLED"), ["false"])
 
     def test_the_committed_production_slices_equal_the_production_overlay_render_for_the_layer_flags(self):
         """Source/generated consistency: kustomize-render the production overlay and compare the layer flags with the committed generated slices."""
@@ -106,7 +118,7 @@ class FlagsAreLiterallyFalse(unittest.TestCase):
                 for e in next(c for c in doc["spec"]["template"]["spec"]["containers"] if c["name"] == app).get("env", []):
                     if e["name"] in self.EXPECTED:
                         rendered[(doc["metadata"]["name"], e["name"])] = e.get("value")
-        want_keys = {("market-structure-service", "MARKET_STRUCTURE_TOOLS_ENABLED"), ("market-structure-service", "MARKET_STRUCTURE_GEOMETRY_ENABLED"),
+        want_keys = {("market-structure-service", "MARKET_STRUCTURE_SWING_PIVOTS_ENABLED"), ("market-structure-service", "MARKET_STRUCTURE_TOOLS_ENABLED"), ("market-structure-service", "MARKET_STRUCTURE_GEOMETRY_ENABLED"),
                      ("feed-gateway-service", "GATEWAY_STRUCTURE_TOOLS_ENABLED"), ("feed-gateway-service", "GATEWAY_GEOMETRY_ENABLED"),
                      ("feed-gateway-service", "GATEWAY_TRADE_TOOLS_ENABLED"), ("feed-gateway-service", "GATEWAY_WAVE_CYCLE_ENABLED"),
                      ("feed-gateway-service", "GATEWAY_BREAK_CLASSIFICATION_ENABLED")}
@@ -203,6 +215,7 @@ class TopicsAndCutoverStage(unittest.TestCase):
         text = read("scripts/kafka/ensure-market-structure-topics.sh")
         self.assertIn('ensure "$TOOLS_TOPIC" 172800000', text)
         self.assertIn('ensure "$GEOMETRY_TOPIC" 172800000', text)
+        self.assertIn('ensure "$SWING_PIVOTS_TOPIC" 172800000', text)
 
     def test_the_wipe_stage_runs_after_the_rollout_and_keeps_its_gates(self):
         text = read("Jenkinsfile.service-deploy")
