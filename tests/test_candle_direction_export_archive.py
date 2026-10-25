@@ -66,6 +66,10 @@ class Job(unittest.TestCase):
         lines = open(os.path.join(out, "candle-direction-export.tsv")).read().splitlines()
         self.assertEqual(2, len(lines)); self.assertTrue(lines[1].startswith("b1\t2026-10-26\t1000000\t1000060\tLONG_DELTA\tTREND\ttrue"))
 
+    def test_a_tombstone_removes_the_bar(self):
+        rows, refused = m.build([(0, 0, "b1", json.dumps(CUR)), (0, 1, "b1", None)], [(0, 0, "candle|b1", json.dumps(CAN))])
+        self.assertEqual(([], []), (rows, refused))
+
     def test_a_missing_topic_is_not_guessed(self):
         with self.assertRaises(SystemExit):
             self.run_job({})

@@ -125,7 +125,11 @@ def read_topic(bootstrap, kc, topic, timeout_ms):
 def build(cur_recs, can_recs):
     """latest decision per barId (higher offset wins within a partition order), candle|barId records -> (rows, refused)"""
     cur, can = {}, {}
-    for _p, _o, _k, v in cur_recs:
+    for _p, _o, k, v in cur_recs:
+        if not v:   # a tombstone deletes the bar (the key is the bar id or ends with it); a deleted decision is never exported
+            for b in [b for b in cur if k and (b == k or k.endswith("|" + b))]:
+                del cur[b]
+            continue
         try:
             d = json.loads(v) if v else None
         except ValueError:
@@ -134,6 +138,9 @@ def build(cur_recs, can_recs):
             cur[d["barId"]] = d
     for _p, _o, k, v in can_recs:
         if not k or not k.startswith("candle|"):
+            continue
+        if not v:
+            can.pop(k[len("candle|"):], None)
             continue
         try:
             d = json.loads(v) if v else None
