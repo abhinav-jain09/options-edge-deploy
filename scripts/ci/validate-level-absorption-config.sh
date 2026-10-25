@@ -36,9 +36,9 @@ else:
     for k in ('minimumEffort', 'flatRatioCutoff'):
         if not isinstance(pr.get(k), (int, float)) or pr[k] <= 0: err.append(f'configuration parameter {k} must be a positive number (no code default exists)')
     if not isinstance(pr.get('minimumBarImbalanceBps'), (int, float)) or pr['minimumBarImbalanceBps'] < 0: err.append('configuration parameter minimumBarImbalanceBps must be a non-negative number')
-# Verbatim pin: processing docs/level-absorption/phase0/indicator-{eyeball-configuration,retention-artifact}.json.
-# Indicator enablement pins the explicit EYEBALL configuration and one-Friday retention artifact from processing PR #1414.
-PIN = {'frozen-configuration.json': '48f6d1b72e5c93f2d6b602b09f3bd2d27c4032f3bc38f7b6d9eb400a29ea11fa', 'retention-artifact.json': '4eb96950e2a385b20c0e25f0c9d68934f64bf862aa3e7fbc35365a56dc73c2ef'}
+# Verbatim pin: processing docs/level-absorption/phase0/market-structure-{eyeball-configuration,retention-artifact}.json.
+# Persistent host mode pins the explicit EYEBALL configuration and one-Friday retention artifact from processing PR #1414.
+PIN = {'frozen-configuration.json': '24dfa34790f5f75f09ac82959cc673d56eb9dfe98e76fbaef5e9fb41362fa316', 'retention-artifact.json': 'b53d677e337957e8c17ec5e638a78eb9b28e2325373ea9e00710d8483765f426'}
 for k, want in PIN.items():
     got = hashlib.sha256(cm['data'][k].encode()).hexdigest()
     if got != want: err.append(f'{k} differs from the pinned Phase 0 artifact: sha256 {got}')
