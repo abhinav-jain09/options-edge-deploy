@@ -173,7 +173,7 @@ def main():
     for text in schemas.values():
         parsed=json.loads(text)
         if not isinstance(parsed,dict) or parsed.get('type')!='record':raise ValueError('Released named record required')
-    # Preflight ALL clusters and schema resources before the first registration.
+    # Preflight ALL SELECTED clusters and schema resources before the first registration.
     inventory=build_inventory(root,os.environ.get('CVD_SCHEMA_ENVIRONMENTS','es4,dev,production'))
     receipt={'source':os.environ['PERMITTED_SHA'],'contracts':proof,'dryRun':dry=='true','clusters':[],
              'scope':'Exact released external schemas for existing topics only; no Kafka/group/offset/config/mode changes; inactive internal state schemas are outside this action'}
