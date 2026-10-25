@@ -1,0 +1,5 @@
+# Fixed schema id for es.futures.aggressor-flow (JSON -> Avro, 2026-10-25). Contracts 0.38.0 (options-edge-contracts #129):
+# id 2701, version 1, subject = the record full name (RecordNameStrategy), compatibility FULL. The id is identical on EVERY registry (es4, dev, production),
+# which is what lets the es4 -> dev/production MM1 byte-copy mirror carry the frames unchanged. Ids 2701+ are the "ES flow" block; no other map uses them.
+# File column: relative to the contracts checkout's `schemas-registry/esflow` directory (SCHEMAS_DIR).
+com.optionsedge.contracts.esflow.EsAggressorFlowSnapshot|2701|EsAggressorFlowSnapshot.avsc
