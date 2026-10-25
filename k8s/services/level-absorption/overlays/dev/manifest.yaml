@@ -31,6 +31,8 @@ spec:
     type: Recreate
   template:
     metadata:
+      annotations:
+        options-edge.io/level-absorption-config-sha256: 1207235809ea755af4973f5291949a6620a1d990a9dd380506282bffd6802f37
       labels:
         app.kubernetes.io/component: level-absorption-service
         app.kubernetes.io/name: level-absorption-service

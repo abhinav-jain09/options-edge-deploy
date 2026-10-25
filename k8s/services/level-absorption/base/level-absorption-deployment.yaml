@@ -27,6 +27,11 @@ spec:
         app.kubernetes.io/name: level-absorption-service
         app.kubernetes.io/component: level-absorption-service
         app.kubernetes.io/part-of: options-edge
+      annotations:
+        # sha256 of the ConfigMap level-absorption-config's data (json.dumps(sort_keys=True)). The service reads both files once at start and a
+        # ConfigMap update alone rolls nothing, so a configuration change must change this value: scripts/ci/validate-level-absorption-config.sh
+        # computes it and fails CI on a stale one, and the changed pod template makes service-deploy roll the pod.
+        options-edge.io/level-absorption-config-sha256: "1207235809ea755af4973f5291949a6620a1d990a9dd380506282bffd6802f37"
     spec:
       terminationGracePeriodSeconds: 60
       containers:

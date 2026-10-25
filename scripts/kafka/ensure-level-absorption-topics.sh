@@ -20,7 +20,9 @@
 #   * events ABSENT and the variable unset -> a WARNING and the topic is skipped (a production-style deploy of the service held at
 #       replicas 0; its own startup check is the hard gate). LEVEL_ABSORPTION_REQUIRE_EVENTS_TOPIC=1 turns the warning into a
 #       failure; the service-deploy stage sets it;
-#   * events EXISTS -> never altered; verified (and, when the variable is set, its retention.bytes must equal it exactly).
+#   * events EXISTS -> verified (and, when the variable is set, its retention.bytes must equal it exactly). Only with
+#       LEVEL_ABSORPTION_ALIGN_EVENTS_RETENTION=1 is a LOWER existing cap RAISED to the artifact's integer (a new Phase 0 artifact); a HIGHER
+#       existing cap is refused (lowering can delete evidence).
 # Voice, closures and manual-line are created when absent. Every CLI call's status is checked explicitly: ensure_*() runs in an `if`
 # context where bash ignores `set -e`, so nothing here relies on errexit.
 set -euo pipefail
@@ -161,6 +163,27 @@ ensure_events() {
       echo "      scripts/kafka/apply-level-absorption-topics.sh --retention-artifact <file>, or re-run this barrier with LEVEL_ABSORPTION_EVENTS_RETENTION_BYTES set."
       return 0
     fi
+  fi
+  # A NEW retention artifact (a new Phase 0) changes the cap the service demands. RAISING an existing events topic's cap is safe and is done
+  # here when LEVEL_ABSORPTION_ALIGN_EVENTS_RETENTION=1 (the Jenkins stage sets it); LOWERING it could delete evidence the cap used to keep,
+  # so it is refused and left to a separate, reviewed operation.
+  if [ "${LEVEL_ABSORPTION_ALIGN_EVENTS_RETENTION:-0}" = "1" ] && [ -n "$EVENTS_BYTES" ]; then
+    local cur out
+    if ! out=$(kc --entity-type topics --entity-name "$topic" --describe --all 2>&1); then
+      echo "FAIL: could not read the config of '$topic':"; printf '%s\n' "$out"; return 1
+    fi
+    cur=$(extract 'retention\.bytes' "$out")
+    case "${cur:-}" in ''|*[!0-9]*) ;; *)
+      if [ "$cur" -lt "$EVENTS_BYTES" ]; then
+        echo "raising '$topic' retention.bytes $cur -> $EVENTS_BYTES (never lowered)"
+        if ! out=$(kc --entity-type topics --entity-name "$topic" --alter --add-config "retention.bytes=$EVENTS_BYTES" 2>&1); then
+          echo "FAIL: could not raise retention.bytes of '$topic':"; printf '%s\n' "$out"; return 1
+        fi
+      elif [ "$cur" -gt "$EVENTS_BYTES" ]; then
+        echo "FAIL: '$topic' has retention.bytes=$cur, above the artifact's $EVENTS_BYTES; lowering a cap can delete evidence and is a separate reviewed operation, not done here."
+        return 1
+      fi ;;
+    esac
   fi
   verify "$topic" events
 }

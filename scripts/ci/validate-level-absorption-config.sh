@@ -8,7 +8,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 python3 - "$@" <<'PY'
-import json, re, sys, pathlib, math
+import json, re, sys, pathlib, math, hashlib
 try:
     import yaml
 except ImportError:
@@ -24,7 +24,31 @@ if art.get('topic') != 'futures.level-absorption.events': err.append('artifact t
 if art.get('retentionMs') != -1: err.append('artifact retentionMs must be -1')
 need = math.ceil(art['measuredBytesPerDay'] * art['retentionDays'] * art['safetyFactor'])
 if art.get('retentionBytes') != need: err.append(f"retentionBytes {art.get('retentionBytes')} != ceil(bytes/day x days x factor) = {need}")
-if cfg.get('kind') != 'level-absorption.frozen-configuration': err.append('configuration kind')
+if cfg.get('kind') != 'level-absorption.frozen-configuration' or cfg.get('formatVersion') != 2: err.append('configuration kind/formatVersion (the service reads formatVersion 2)')
+ph = cfg.get('phase0', {})
+for k in ('freezeCommit', 'candidatePercentile', 'bootstrapGenerator', 'bootstrapSeed'):
+    if k not in ph: err.append(f'configuration phase0.{k} missing')
+pr = cfg.get('parameters', {})
+if not isinstance(pr, dict) or not pr: err.append('configuration parameters missing')
+else:
+    for k, v in pr.items():
+        if isinstance(v, bool) or not isinstance(v, (int, float, str)): err.append(f'configuration parameter {k} has an unsupported type')
+    for k in ('minimumEffort', 'flatRatioCutoff'):
+        if not isinstance(pr.get(k), (int, float)) or pr[k] <= 0: err.append(f'configuration parameter {k} must be a positive number (no code default exists)')
+    if not isinstance(pr.get('minimumBarImbalanceBps'), (int, float)) or pr['minimumBarImbalanceBps'] < 0: err.append('configuration parameter minimumBarImbalanceBps must be a non-negative number')
+# verbatim pin: these are the bytes of options-edge-processing docs/level-absorption/phase0/{eyeball-configuration,retention-artifact}.json at f4affb218.
+# A new Phase 0 replaces the content AND these two digests in the same reviewed change.
+PIN = {'frozen-configuration.json': '0c7f34f7e7c351f5947d3f00e68adc3f428ad39186a33bf95bf7a289c90280e4', 'retention-artifact.json': '320695baad8e6afe4875f88783a20849878f2e87b54b05874eaa685da5230cc9'}
+for k, want in PIN.items():
+    got = hashlib.sha256(cm['data'][k].encode()).hexdigest()
+    if got != want: err.append(f'{k} differs from the pinned Phase 0 artifact: sha256 {got}')
+digest = hashlib.sha256(json.dumps(cm['data'], sort_keys=True).encode()).hexdigest()
+dep0 = pathlib.Path('k8s/services/level-absorption/base/level-absorption-deployment.yaml').read_text()
+if f'options-edge.io/level-absorption-config-sha256: "{digest}"' not in dep0:
+    err.append(f'the pod template annotation options-edge.io/level-absorption-config-sha256 must be "{digest}" so a configuration change rolls the pod')
+# the base must be the only place the ConfigMap lives: no generated slice may carry it (service-deploy.sh refuses ConfigMaps in a render)
+for sl in pathlib.Path('k8s/services/level-absorption/overlays').glob('*/manifest.yaml'):
+    if re.search(r'^kind:\s*ConfigMap\s*$', sl.read_text(), re.M): err.append(f'{sl} contains a ConfigMap')
 if 'EYEBALL-ONLY' not in cfg.get('phase0', {}).get('bootstrapGenerator', ''):
     err.append('the shipped configuration is not marked EYEBALL-ONLY PROVISIONAL: a real Phase 0 freeze needs its own reviewed change to this validator')
 topics = pathlib.Path('scripts/kafka/topics.env').read_text()
@@ -39,16 +63,34 @@ for k in ('frozen-configuration.json', 'retention-artifact.json'):
     if f'/home/options-edge/config/level-absorption/{k}' not in dep: err.append(f'deployment does not point at {k}')
 if 'configMap:\n            name: level-absorption-config' not in dep: err.append('deployment does not mount the ConfigMap')
 if 'value: EYEBALL' not in dep: err.append('phase is not EYEBALL')
-# LA-050: footprint bars and linearized tape names, as every manifest spells them
-tape = set(); foot = set()
-for p in pathlib.Path('k8s/services').glob('*/base/*-deployment.yaml'):
-    t = p.read_text()
-    for m2 in re.finditer(r'value:\s*((?:es\.)?(?:underlying\.es\.trades\.linearized|futures\.footprint\.bars))\s*(?:#.*)?$', t, re.M):
-        (tape if 'linearized' in m2.group(1) else foot).add(m2.group(1))
-if tape - {'underlying.es.trades.linearized'}: err.append(f'linearized tape named inconsistently: {sorted(tape)}')
-if foot - {'es.futures.footprint.bars'}: err.append(f'footprint bars named inconsistently: {sorted(foot)}')
-if 'es.futures.footprint.bars' not in foot: err.append('LA-050: no manifest names es.futures.footprint.bars')
-if 'underlying.es.trades.linearized' not in tape: err.append('LA-050: no manifest names underlying.es.trades.linearized')
+# LA-050 (lineage): the footprint bars and the linearized tape must be built from the SAME raw print stream, and level-absorption must read the
+# names those two producers publish. Parsed from the manifests (every Deployment doc, env name -> literal value), not scanned as text.
+def env_of(path, deployment):
+    out = {}
+    for doc in yaml.safe_load_all(pathlib.Path(path).read_text()):
+        if doc and doc.get('kind') == 'Deployment' and doc['metadata']['name'] == deployment:
+            for c in doc['spec']['template']['spec']['containers']:
+                for e in c.get('env', []):
+                    if 'value' in e: out[e['name']] = e['value']
+            return out
+    err.append(f'LA-050: {deployment} not found in {path}')
+    return out
+cvd = env_of('k8s/es4/services/es-cvd.yaml', 'es-cvd-service')
+common = yaml.safe_load(pathlib.Path('k8s/es4/es4-common-env.yaml').read_text())
+es4_prefix = (common.get('data') or {}).get('TOPIC_PREFIX')
+raw = cvd.get('KAFKA_ES_TRADES_TOPIC'); bars = cvd.get('KAFKA_ES_FOOTPRINT_BARS_TOPIC')
+if not raw or not bars or not es4_prefix: err.append(f'LA-050: es-cvd raw trades {raw!r}, footprint bars {bars!r} or the es4 TOPIC_PREFIX {es4_prefix!r} unreadable')
+for envname in ('dev', 'production'):
+    lin = env_of(f'k8s/services/es-trade-linearizer/overlays/{envname}/manifest.yaml', 'es-trade-linearizer-service')
+    if lin.get('KAFKA_ES_TRADES_TOPIC') != raw:
+        err.append(f"LA-050: {envname} linearizer reads {lin.get('KAFKA_ES_TRADES_TOPIC')!r} but es-cvd (the footprint producer) reads {raw!r}: not one print stream")
+    la = env_of(f'k8s/services/level-absorption/overlays/{envname}/manifest.yaml', 'level-absorption-service')
+    if la.get('KAFKA_LEVEL_ABSORPTION_FOOTPRINT_TOPIC') != (es4_prefix or '') + (bars or ''):
+        err.append(f"LA-050: {envname} level-absorption reads footprint {la.get('KAFKA_LEVEL_ABSORPTION_FOOTPRINT_TOPIC')!r}, the es4 producer publishes {(es4_prefix or '') + (bars or '')!r}")
+    if 'KAFKA_LEVEL_ABSORPTION_TRADES_TOPIC' in la:
+        err.append('LA-050: level-absorption overrides the trades topic; it must read the linearizer output named by its manifest')
+    if lin.get('KAFKA_ES_TRADES_LINEARIZED_TOPIC') != 'underlying.es.trades.linearized':
+        err.append(f"LA-050: {envname} linearizer publishes {lin.get('KAFKA_ES_TRADES_LINEARIZED_TOPIC')!r}, level-absorption's manifest reads underlying.es.trades.linearized")
 if err:
     for e in err: print('FAIL:', e, file=sys.stderr)
     sys.exit(1)
