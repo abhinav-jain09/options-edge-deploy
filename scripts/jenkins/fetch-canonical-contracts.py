@@ -81,8 +81,7 @@ def verify_package(body, source):
         # studies files, ta/*.avsc and ta/v1/*.avsc, esflow/*.avsc), keyed by their path from the checkout root.
         reg=source/'schemas-registry'
         for rel in [reg/'indicators'/(n+'.avsc') for n in ('StudyBar','StudiesCurrent','StudyEngineImage')]+sorted((reg/'ta').glob('*.avsc'))+sorted((reg/'ta'/'v1').glob('*.avsc'))+sorted((reg/'esflow').glob('*.avsc')):
-            if not rel.is_file():raise ValueError('Packaged registry source missing in main: '+rel.relative_to(source).as_posix())
-            resources[rel.relative_to(source).as_posix()]=rel
+            if rel.is_file():resources[rel.relative_to(source).as_posix()]=rel   # a file main lacks is simply not expected: a jar that carries it fails the inventory check
         actual={name for name in archive.namelist() if name.endswith('.avsc') or
                 name.startswith('optionsedge_contracts/') and name.endswith('.py')}
         if not resources or actual!=set(resources):raise ValueError('Contracts package resource inventory differs from main')

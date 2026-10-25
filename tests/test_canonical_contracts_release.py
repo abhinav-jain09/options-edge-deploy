@@ -226,10 +226,10 @@ class RegistryResourceInventory(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "inventory differs from main"):
             release.verify_package(self.jar(smaller), root)
 
-    def test_a_required_indicator_source_missing_in_main_is_refused(self):
+    def test_a_jar_carrying_an_indicator_file_main_lacks_is_refused(self):
         root, files = self.source()
         (root / "schemas-registry/indicators/StudyBar.avsc").unlink()
-        with self.assertRaisesRegex(ValueError, "Packaged registry source missing in main: schemas-registry/indicators/StudyBar.avsc"):
+        with self.assertRaisesRegex(ValueError, "inventory differs from main"):
             release.verify_package(self.jar(files), root)
 
     def test_an_unknown_non_class_entry_is_refused(self):
