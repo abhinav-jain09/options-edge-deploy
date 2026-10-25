@@ -62,6 +62,8 @@ pipeline {
       description: 'deploy-service of indicator-service only, DESTRUCTIVE, the Avro cutover (plan section 5): indicator-service to 0 replicas, its consumer-group offsets on es.underlying.es.trades reset to 0, its changelog deleted, the six es.options.indicators.* topics deleted and recreated EMPTY at the topics.env shape and verified, then the rollout. Every mirror of these topics must be torn down first (plan section 6).')
     booleanParam(name: 'CVD_READER_CLOSURE_CONFIRMED', defaultValue: false,
       description: 'update-image only: acknowledge that schema registration, all affected readers and native runtime qualification are complete. Required for a real image update of any active CVD workload; dry runs and existing zero holds need no acknowledgement.')
+    string(name: 'CVD_SCHEMA_ENVIRONMENTS', defaultValue: 'es4,dev,production', trim: true,
+      description: 'register-cvd-schemas / clean-reset only: the comma list of registries to preflight and register on (es4, dev, production). Default all three. Use dev alone to register the subjects of a dev-only service without touching the others.')
     booleanParam(name: 'DEPLOY_DRY_RUN', defaultValue: false,
       description: 'true = render + digest-pin + kubectl apply --dry-run=server only.')
     booleanParam(name: 'ACCEPT_UNARCHIVED_STRIKE_LOSS', defaultValue: false,

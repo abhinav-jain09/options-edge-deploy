@@ -20,6 +20,15 @@ ENDPOINTS = [('es4','192.168.100.4:9092','http://192.168.100.4:8081'),
              ('production','192.168.100.252:9092','http://192.168.100.252:8082')]
 MAX_METADATA_BYTES=8<<20
 
+
+def selected_endpoints(spec):
+    """CVD_SCHEMA_ENVIRONMENTS: a comma list of es4, dev, production (default: all three, as before). An unknown, repeated or empty name is refused."""
+    names=[n.strip() for n in spec.split(',')]
+    known=[e[0] for e in ENDPOINTS]
+    if not names or any(n not in known for n in names) or len(set(names))!=len(names):
+        raise ValueError('CVD_SCHEMA_ENVIRONMENTS must be a comma list of distinct names from '+','.join(known))
+    return [e for e in ENDPOINTS if e[0] in names]
+
 BINDINGS = {
     'futures.cvd':'cvd/CvdSnapshot.avsc', 'futures.cvd.bars':'cvd/CvdBarEnvelope.avsc',
     'futures.cvd.levels':'cvd/CvdLevelsSnapshot.avsc', 'futures.footprint':'cvd/FootprintSnapshot.avsc',
@@ -156,7 +165,7 @@ def main():
         if not isinstance(parsed,dict) or parsed.get('type')!='record':raise ValueError('Released named record required')
     # Preflight ALL clusters and schema resources before the first registration.
     inventory=[]
-    for environment,bootstrap,url in ENDPOINTS:
+    for environment,bootstrap,url in selected_endpoints(os.environ.get('CVD_SCHEMA_ENVIRONMENTS','es4,dev,production')):
         directory=root/environment;directory.mkdir()
         inventory.append((environment,url,metadata(bootstrap,directory)))
     receipt={'source':os.environ['PERMITTED_SHA'],'contracts':proof,'dryRun':dry=='true','clusters':[],
