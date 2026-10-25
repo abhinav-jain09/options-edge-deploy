@@ -21,9 +21,9 @@ resources:
   - ../../services/es-compression-expansion/base
   # hedging-pressure: HELD AT replicas 0 (base) on dev and production alike; the owner turns it on later.
   - ../../services/hedging-pressure/base
-  # break-score + level-absorption: both HELD AT replicas 0 (base) on dev and production alike. break-score is SHADOW (scores
-  # level breaks off the linearized ES tape); level-absorption is EYEBALL phase and cannot start until its Phase 0 freeze file
-  # and retention artifact exist. The owner turns each on later (docs/break-score/DEPLOY-WIRING.md, docs/level-absorption/DEPLOY-WIRING.md).
+  # break-score + level-absorption: both HELD AT replicas 0 (base) on production; break-score is SHADOW (scores level breaks off the
+  # linearized ES tape) and stays 0 on dev too; level-absorption RUNS on dev in EYEBALL phase through level-absorption-dev-enable-patch.yaml
+  # (docs/break-score/DEPLOY-WIRING.md, docs/level-absorption/DEPLOY-WIRING.md).
   - ../../services/break-score/base
   - ../../services/level-absorption/base
   # es-trade-tools (TICK-TRADE-TOOLS) + wave-cycle (ELLIOTT-FIB-CYCLE-TOOLS): HELD AT replicas 0 (base) on dev and production alike, every flag false; the owner turns
@@ -425,6 +425,12 @@ patches:
     target:
       kind: Deployment
       name: break-classifier-service
+  # DEV: level-absorption-service RUNNING (replicas 1, EYEBALL); the base and production stay at 0. MUST MIRROR the standalone slice
+  # k8s/services/level-absorption/overlays/dev (validate-services: mono==slice).
+  - path: level-absorption-dev-enable-patch.yaml
+    target:
+      kind: Deployment
+      name: level-absorption-service
   - path: breakout-sequencer-dev-enable-patch.yaml
     target:
       kind: Deployment

@@ -1,7 +1,8 @@
 # SERVICE SLICE — level-absorption. Owns ONLY this service's Deployment.
 #
-# Referenced from BOTH k8s/overlays/dev and k8s/overlays/production (NOT k8s/base), HELD AT replicas: 0: the Phase 0 freeze file and
-# the retention artifact it requires at start do not exist yet. EYEBALL phase only (no verdict is published). Single replica only.
+# Referenced from BOTH k8s/overlays/dev and k8s/overlays/production (NOT k8s/base). The base is HELD AT replicas: 0 (production stays
+# there); dev runs it through k8s/overlays/dev/level-absorption-dev-enable-patch.yaml. EYEBALL phase only (no verdict is published).
+# Single replica only. The ConfigMap is part of the monolithic render only (the slices are Deployment/Service only).
 #
 # No Service object on purpose (the vol-state / es-compression-expansion shadow pattern): kubelet probes reach the pod
 # directly and a ClusterIP would make /metrics reachable in-cluster.
@@ -9,3 +10,4 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
   - level-absorption-deployment.yaml
+  - level-absorption-config.yaml

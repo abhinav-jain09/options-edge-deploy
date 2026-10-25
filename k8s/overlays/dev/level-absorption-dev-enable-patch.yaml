@@ -1,0 +1,16 @@
+# DEV: level-absorption-service RUNNING (replicas 1), EYEBALL phase (status events, NO verdict), owner standing goal 2026-10-25.
+# The shared base (k8s/services/level-absorption/base) stays replicas 0 and production is untouched at 0; this patch lifts dev only.
+# HONEST STATE: Phase 0 on the real corpus ended NO_CANDIDATE (options-edge-processing docs/level-absorption/phase0/README.md), so the
+# configuration it runs on is EYEBALL-ONLY PROVISIONAL and the service refuses LIVE on it; no verdict is ever published. Its inputs
+# (es.futures.footprint.bars, es.futures.auction mirrored from es4, underlying.es.trades.linearized) may be silent while es4 is off:
+# the service then sits in its documented waiting state; /health/live stays 200.
+# Rollback (durable, one reviewed PR + service-deploy SERVICE=level-absorption; never kubectl): set replicas to 0 here and in
+# and restore level-absorption-service to DISABLED_DEV in scripts/ops/dev-cleanup.sh.
+# MUST MIRROR the standalone slice k8s/services/level-absorption/overlays/dev (validate-services: mono==slice).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: level-absorption-service
+  namespace: options-edge
+spec:
+  replicas: 1

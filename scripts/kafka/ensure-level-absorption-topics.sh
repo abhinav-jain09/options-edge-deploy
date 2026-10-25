@@ -11,13 +11,15 @@
 # to start on either. The service also needs every one of these (and the three input topics) to keep at least 7 days or forever.
 #
 # THE EVENTS TOPIC'S retention.bytes IS NEVER TYPED HERE. It is ceil(measuredBytesPerDay x retentionDays x safetyFactor) from the
-# retention artifact (a measured session; the artifact does not exist yet) and the service refuses to start unless the broker reports
-# exactly that value. So:
+# retention artifact (docs/level-absorption/phase0/retention-artifact.json in options-edge-processing, copied into the ConfigMap
+# k8s/services/level-absorption/base/level-absorption-config.yaml; 21765840 since 2026-10-25) and the service refuses to start unless
+# the broker reports exactly that value. Jenkinsfile.service-deploy reads the integer out of the ConfigMap and passes it in as
+# LEVEL_ABSORPTION_EVENTS_RETENTION_BYTES with LEVEL_ABSORPTION_REQUIRE_EVENTS_TOPIC=1, so the file stays the one source. So:
 #   * events ABSENT and LEVEL_ABSORPTION_EVENTS_RETENTION_BYTES set (a positive whole number, the artifact's retentionBytes)
 #       -> created with it, then verified;
-#   * events ABSENT and the variable unset -> a WARNING and the topic is skipped, because the service is HELD AT replicas 0 and cannot
-#       start without the artifact anyway (its own startup check is the hard gate). LEVEL_ABSORPTION_REQUIRE_EVENTS_TOPIC=1 turns the
-#       warning into a failure; use it on the deploy that scales the service up;
+#   * events ABSENT and the variable unset -> a WARNING and the topic is skipped (a production-style deploy of the service held at
+#       replicas 0; its own startup check is the hard gate). LEVEL_ABSORPTION_REQUIRE_EVENTS_TOPIC=1 turns the warning into a
+#       failure; the service-deploy stage sets it;
 #   * events EXISTS -> never altered; verified (and, when the variable is set, its retention.bytes must equal it exactly).
 # Voice, closures and manual-line are created when absent. Every CLI call's status is checked explicitly: ensure_*() runs in an `if`
 # context where bash ignores `set -e`, so nothing here relies on errexit.

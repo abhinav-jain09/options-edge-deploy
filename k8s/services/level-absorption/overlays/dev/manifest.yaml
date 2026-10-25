@@ -23,7 +23,7 @@ metadata:
   namespace: options-edge
 spec:
   progressDeadlineSeconds: 1200
-  replicas: 0
+  replicas: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: level-absorption-service
@@ -115,9 +115,8 @@ spec:
               name: level-absorption-data
       terminationGracePeriodSeconds: 60
       volumes:
-        - hostPath:
-            path: /home/options-edge/config/level-absorption
-            type: DirectoryOrCreate
+        - configMap:
+            name: level-absorption-config
           name: level-absorption-config
         - hostPath:
             path: /home/options-edge/data/level-absorption

@@ -843,7 +843,7 @@ PYEOF
       }
     }
     stage('Verify level-absorption output topics') {
-      // BEFORE the rollout, same barrier as early-auction-verdict above: the service never creates its topics and refuses to START unless voice, closures and events each have ONE partition, cleanup.policy=delete and no finite message.timestamp.before.max.ms, and the events topic matches the retention artifact exactly. Voice and closures (7 days) are created here; the events topic needs the artifact's retention.bytes (LEVEL_ABSORPTION_EVENTS_RETENTION_BYTES), which does not exist yet, so while it is absent this stage WARNS and passes (the service is held at replicas 0 and its own startup check is the hard gate).
+      // BEFORE the rollout, same barrier as early-auction-verdict above: the service never creates its topics and refuses to START unless voice, closures and events each have ONE partition, cleanup.policy=delete and no finite message.timestamp.before.max.ms, and the events topic matches the retention artifact exactly. Voice, closures and manual-line (7 days) are created here; the events topic is created with the artifact's retention.bytes, read out of the ConfigMap file (k8s/services/level-absorption/base/level-absorption-config.yaml, the one source) and required (LEVEL_ABSORPTION_REQUIRE_EVENTS_TOPIC=1) because the service now runs on dev.
       when {
         expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'level-absorption' && !params.DEPLOY_DRY_RUN) }
       }
@@ -852,7 +852,27 @@ PYEOF
           set -euo pipefail
           export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
           . scripts/kafka/load-kafka-settings.sh
+          LEVEL_ABSORPTION_EVENTS_RETENTION_BYTES="$(bash scripts/ci/validate-level-absorption-config.sh --print-retention-bytes)"
+          export LEVEL_ABSORPTION_EVENTS_RETENTION_BYTES LEVEL_ABSORPTION_REQUIRE_EVENTS_TOPIC=1
           scripts/kafka/ensure-level-absorption-topics.sh
+        '''
+      }
+    }
+    stage('Apply level-absorption configuration') {
+      // The standalone slices carry Deployment/Service only, so service-deploy never creates the ConfigMap the pod mounts (the EYEBALL-only
+      // configuration and the retention artifact). Apply exactly that one repo file, after the validator proved it consistent with
+      // topics.env, BEFORE the rollout (the pod mounts it with optional: false). Same kind of service-owned step as the feed-gateway
+      // ConfigMap reconcile above; a dry run only validates against the server.
+      when {
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'level-absorption' && !params.DEPLOY_DRY_RUN) }
+      }
+      steps {
+        sh '''
+          set -euo pipefail
+          bash scripts/ci/validate-level-absorption-config.sh
+          kubectl -n options-edge apply -f k8s/services/level-absorption/base/level-absorption-config.yaml
+          want="$(bash scripts/ci/validate-level-absorption-config.sh --print-retention-bytes)"
+          kubectl -n options-edge get configmap level-absorption-config -o jsonpath='{.data.retention-artifact\\.json}' | grep -q "\"retentionBytes\":${want}"
         '''
       }
     }
