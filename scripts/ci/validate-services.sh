@@ -194,6 +194,9 @@ echo "=== 6) durable topics are preserved by the destructive resets ==="
 # make that drift unmergeable rather than discoverable at 09:00 ET.
 bash scripts/ci/validate-durable-topic-preservation.sh
 
+# Level Absorption: the ConfigMap (configuration + retention artifact), the events topic's byte cap and the LA-050 topic names agree.
+bash scripts/ci/validate-level-absorption-config.sh
+
 # The OI anchor topic barrier: its parser, and the shipped script end to end against mocked CLIs.
 # Wired here because a regression test nothing runs is not a test -- and this particular parser has
 # already shipped one hole (it accepted "compact,delete", the exact policy it exists to reject).

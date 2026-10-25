@@ -223,8 +223,8 @@ services:
   # Held down by: replicas: 0 in the base, KEEP_DOWN in morning-autostart.sh + oe-boot-bringup.sh, DISABLED_DEV in dev-cleanup.sh.
   # scripts/kafka/ensure-break-score-topics.sh is the first-deploy barrier. No Service object.
   - { name: break-score,                  managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-break-score,                  deployments: [break-score-service] }
-  # level-absorption: EYEBALL phase (status events, NO verdict). DEPLOYED HELD AT replicas 0 on dev AND production and unable to start
-  # until the owner supplies the Phase 0 freeze file and the retention artifact (docs/level-absorption/DEPLOY-WIRING.md). Reads the
+  # level-absorption: EYEBALL phase (status events, NO verdict). RUNS ON DEV (replicas 1 through k8s/overlays/dev/level-absorption-dev-enable-patch.yaml since 2026-10-25),
+  # held at replicas 0 on production (docs/level-absorption/DEPLOY-WIRING.md). Reads the
   # linearized ES tape, es.futures.footprint.bars, es.futures.auction, the manual-line topic and (version 2, host sites) the
   # market-structure UiProjection topic options.spx.market-structure.ui; publishes futures.level-absorption.{events,voice,closures}.
   # Same hold-down paths as break-score. scripts/kafka/ensure-level-absorption-topics.sh is the first-deploy barrier.

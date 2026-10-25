@@ -8,14 +8,12 @@ metadata:
     app.kubernetes.io/component: level-absorption-service
     app.kubernetes.io/part-of: options-edge
 spec:
-  # HELD AT 0 on every environment, and it CANNOT start yet on any: two of its required input files do not exist and cannot be
-  # invented here. LEVEL_ABSORPTION_FROZEN_CONFIGURATION is the Phase 0 freeze file (minimumEffort, minimumBarImbalanceBps and
-  # flatRatioCutoff have no code default anywhere) and LEVEL_ABSORPTION_RETENTION_ARTIFACT records a measured session's event
-  # size. Deploy = image built, pushed and pinned. To turn it on: place both files under /home/options-edge/config/level-absorption
-  # on the host (docs/level-absorption/DEPLOY-WIRING.md), create futures.level-absorption.events with the artifact's
-  # retention.bytes, set replicas to 1 here, regenerate the slices (scripts/deploy/generate-service-slices.sh), remove
-  # level-absorption-service from KEEP_DOWN in scripts/ops/morning-autostart.sh AND scripts/ops/oe-boot-bringup.sh
-  # (tests/test_keep_down_lists_agree.py) and from DISABLED_DEV in scripts/ops/dev-cleanup.sh, then run service-deploy.
+  # HELD AT 0 in this shared base (production stays at 0: it is untouched); DEV runs it through
+  # k8s/overlays/dev/level-absorption-dev-enable-patch.yaml (replicas 1, EYEBALL phase, owner standing goal 2026-10-25). The two files
+  # it reads at start are the immutable, content-named ConfigMap level-absorption-config-<digest12> (level-absorption-config.yaml, copied verbatim from
+  # options-edge-processing docs/level-absorption/phase0/): an EYEBALL-ONLY PROVISIONAL configuration (the Phase 0 comparison fold
+  # selected NO candidate, so no verdict can ship) and the retention artifact. Jenkinsfile.service-deploy applies the ConfigMap in
+  # the stage 'Apply level-absorption configuration' and the topic barrier creates the events topic from the artifact's integer.
   # SINGLE replica ONLY (the engine is single-threaded state per session).
   replicas: 0
   strategy:
@@ -73,9 +71,10 @@ spec:
               value: level-absorption-service
             - name: LEVEL_ABSORPTION_SYMBOL
               value: ES.v.0
-            # Owner-supplied files on the host, read-only (see the volumes): the Phase 0 freeze and the retention artifact.
-            # The mount path equals the host path, so the Home Directory Storage Rule check (the REAL path must lie under
-            # /home/options-edge) passes with no LEVEL_ABSORPTION_CONTAINER_PATH_PREFIX.
+            # The ConfigMap level-absorption-config, read-only (see the volumes): the EYEBALL-only configuration and the retention
+            # artifact. The mount path lies under /home/options-edge, so the Home Directory Storage Rule check (the REAL path of each
+            # file, through the kubelet's ..data symlink, must lie under /home/options-edge) passes with no
+            # LEVEL_ABSORPTION_CONTAINER_PATH_PREFIX.
             - name: LEVEL_ABSORPTION_FROZEN_CONFIGURATION
               value: /home/options-edge/config/level-absorption/frozen-configuration.json
             - name: LEVEL_ABSORPTION_RETENTION_ARTIFACT
@@ -134,9 +133,8 @@ spec:
               mountPath: /home/options-edge/data/level-absorption
       volumes:
         - name: level-absorption-config
-          hostPath:
-            path: /home/options-edge/config/level-absorption
-            type: DirectoryOrCreate
+          configMap:
+            name: level-absorption-config-1207235809ea
         - name: level-absorption-data
           hostPath:
             path: /home/options-edge/data/level-absorption

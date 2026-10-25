@@ -1,9 +1,9 @@
 # Level Absorption — deploy wiring (options-edge-deploy)
 
 Service: `level-absorption-service` (options-edge-processing, module `level-absorption-service`, image `options-edge-level-absorption`,
-Jenkins `BUILD_TARGET=options-edge-level-absorption`). Wired for **dev and production**, phase **EYEBALL** (status events, NO verdict),
-**held at `replicas: 0` everywhere**. **It cannot start yet**, on any environment: two required input files do not exist and cannot
-be invented (below). Deploy is done when the image is built, pushed and digest-pinned.
+Jenkins `BUILD_TARGET=options-edge-level-absorption`). Wired for **dev and production**, phase **EYEBALL** (status events, NO verdict).
+**Dev runs it (replicas 1) since 2026-10-25; production is held at `replicas: 0`.** See the section "State since 2026-10-25" at the end for the
+configuration, the events topic cap and the validator; the older table below describes the original wiring.
 
 Sources read: `runtime/RuntimeSettings.java`, `StartupChecks.java`, `FrozenConfigurationFile.java`, `LevelAbsorptionServiceMain.java`,
 `level-absorption-input-contract-manifest.json`, `scripts/kafka/apply-level-absorption-topics.sh`,
@@ -58,57 +58,25 @@ Set in the manifest (`k8s/services/level-absorption/base/level-absorption-deploy
 **Storage.** hostPaths `/home/options-edge/config/level-absorption` (read-only mount) and `/home/options-edge/data/level-absorption`
 (read-write), mounted at the same paths in the container.
 
-## Why it cannot start yet (inputs that cannot be invented, so no ConfigMap was made)
+## State since 2026-10-25: RUNS ON DEV (EYEBALL), held at replicas 0 on production
 
-1. **Phase 0 freeze file** `frozen-configuration.json`: `formatVersion 1`, `kind level-absorption.frozen-configuration`, a `phase0` block
-   (freeze commit, candidate percentile, bootstrap generator and seed) and every parameter of section 9. `minimumEffort`,
-   `minimumBarImbalanceBps` and `flatRatioCutoff` have **no code default anywhere**: the calibration tools write them once at the Phase 0
-   commit. A documented minimal valid content does not exist, so none was made.
-2. **Retention artifact** `retention-artifact.json`: built from one measured session's events with
-   `RetentionMeasurement` (`java -cp <jar> ...runtime.RetentionMeasurement events.tsv 1 30 2 <events topic> retention.json`); it holds
-   `retentionBytes = ceil(measuredBytesPerDay x retentionDays x safetyFactor)`, and the service refuses to start unless the broker reports
-   exactly that value on the events topic.
-3. **The events topic** `futures.level-absorption.events` (1 partition, delete, `retention.ms=-1`, `retention.bytes` = the artifact's
-   integer). It is therefore **not declared in `topics.env`**, and the barrier creates it only when `LEVEL_ABSORPTION_EVENTS_RETENTION_BYTES`
-   is supplied; otherwise it WARNS and passes (the service is held at 0; set `LEVEL_ABSORPTION_REQUIRE_EVENTS_TOPIC=1` on the scale-up
-   deploy to make it fatal). When the artifact exists: declare the topic in `topics.env` with that cap and classify it in
-   `OPTIONS_EDGE_RESET_PRESERVED_TOPICS` in the same change.
-4. **Input topics** (`es.futures.footprint.bars`, `es.futures.auction`, `underlying.es.trades.linearized`, one partition each, each keeping at
-   least 7 days or forever; `topics.env` declares `-1`, 7 days and 7 days) must exist and be fed where the service runs. They are declared
-   in `topics.env`, but whether the es4 mirrors feed them on dev was not verified here; the service refuses to start naming the missing topic.
+Decided by Claude under the owner's standing instruction (the owner may overrule any of it):
 
-No secret is needed.
+1. **The configuration** is the EYEBALL-ONLY PROVISIONAL file of the Phase 0 run of 2026-10-25 (options-edge-processing
+   `docs/level-absorption/phase0/`, PR 1344, README there). The comparison fold selected NO candidate (lower bound 4.09 points against
+   the 15-point bar), so it is not a Phase 0 freeze, no verdict can ship, and the service refuses any phase but EYEBALL on it. It and the
+   retention artifact are copied verbatim into an IMMUTABLE ConfigMap named by its content digest, `level-absorption-config-<first 12 hex of sha256(data)>`
+   (`k8s/overlays/dev/level-absorption-config.yaml`; a changed configuration is a new object and a changed pod template, so the pod rolls), mounted read-only at `/home/options-edge/config/level-absorption` (no host path). The standalone slices carry Deployment/Service only,
+   so `Jenkinsfile.service-deploy` applies that one file in the stage `Apply level-absorption configuration` (DEV ONLY) and reads the live object back (immutable, exact keys, canonical digest).
+2. **The events topic** `futures.level-absorption.events` is declared in `topics.env`: 1 partition, delete, `retention.ms=-1`,
+   `retention.bytes=21765840` = ceil(362,764 bytes/day x 30 days x 2) (362,764 = the largest of 158 measured calibration sessions with
+   every verdict class publishing; mean 61,793; 30 and 2 are the document's starting values). It is RESET-PRESERVED
+   (`OPTIONS_EDGE_RESET_PRESERVED_TOPICS` and `premarket-reset.sh`). The barrier (dev) reads the integer out of the ConfigMap file, requires the topic and RAISES an existing lower cap to it (never lowers: a lower target is refused).
+   `scripts/ci/validate-level-absorption-config.sh` (wired into `validate-services.sh`) fails when the artifact, its arithmetic, the topics.env
+   cap, the Deployment's paths or the LA-050 input topic names (footprint `es.futures.footprint.bars`, tape `underlying.es.trades.linearized`) disagree.
+3. **Dev runs it** (`k8s/overlays/dev/level-absorption-dev-enable-patch.yaml`, replicas 1; removed from `DISABLED_DEV`). The shared base and
+   **production stay at replicas 0** and in the production KEEP_DOWN lists. The production slice now names the ConfigMap volume but nothing is deployed there.
+4. **Inputs on dev**: the footprint and auction topics are the es4 mirrors; while es4 is off they are silent and the service waits (live
+   stays 200). The input topics must exist, otherwise the service refuses to start naming the missing topic.
+5. **A new Phase 0** (a longer corpus) replaces the ConfigMap content and the cap in ONE change; the validator keeps them together.
 
-## Choices recorded
-
-- **Held at 0 in the base** (as `hedging-pressure`, `early-auction-verdict`); no production hold patch (that exists for
-  `es-compression-expansion` only because its base runs at 1).
-- **Readiness probe = `/health/live`** (the es-compression-expansion rule, owner 2026-10-07): `/health/ready` is 503 until caught up and
-  while the level-source record is stale, which would time out rollouts outside the session. `/health/ready` stays for operators.
-- **Topic barrier reuses the semantics of `apply-level-absorption-topics.sh`** (same shapes and retentions) but never types the events
-  cap; the apply script (in options-edge-processing, needs the artifact file) remains the way to create the events topic.
-- Voice, closures and manual-line are declared in `topics.env` at 7 days exactly (the apply script's value; the service accepts >= 7 days).
-
-## Still needs the owner
-
-- The Phase 0 freeze file and the retention artifact on the host under `/home/options-edge/config/level-absorption/`.
-- The events topic with the artifact's cap, plus its `topics.env` declaration and reset classification.
-- The enable: `replicas: 1`, regenerate slices, remove the name from both `KEEP_DOWN` lists and `DISABLED_DEV` (steps at the top of the
-  base Deployment). `LIVE` additionally needs the publication table and a deploy change.
-
-## Jenkins: deploying to dev later (the owner's act under the Deployment Permission Rule; nothing here deploys)
-
-Job `service-deploy` (`Jenkinsfile.service-deploy`):
-
-| Parameter | Value |
-|---|---|
-| `SERVICE` | `level-absorption` |
-| `ENVIRONMENT` | `dev` |
-| `BUILD_IMAGES` | `true` (builds `options-edge-level-absorption` with `BUILD_TARGET=options-edge-level-absorption`) |
-| `PROCESSING_PERMITTED_SHA` | the 40-character commit of options-edge-processing to build |
-| `CONTRACTS_PERMITTED_SHA` | the 40-character commit of options-edge-contracts the build installs |
-| `PERMITTED_SHA` | the 40-character commit of this repository (options-edge-deploy) containing this wiring, after it is merged |
-| `DEPLOY_DRY_RUN` | `false` (set `true` first for a rehearsal) |
-
-Result: image built, pushed, digest-pinned; Deployment applied at `replicas: 0`; voice, closures and manual-line created/verified; events
-verified if it exists. Production uses `ENVIRONMENT=production`.

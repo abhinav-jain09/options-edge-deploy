@@ -843,16 +843,46 @@ PYEOF
       }
     }
     stage('Verify level-absorption output topics') {
-      // BEFORE the rollout, same barrier as early-auction-verdict above: the service never creates its topics and refuses to START unless voice, closures and events each have ONE partition, cleanup.policy=delete and no finite message.timestamp.before.max.ms, and the events topic matches the retention artifact exactly. Voice and closures (7 days) are created here; the events topic needs the artifact's retention.bytes (LEVEL_ABSORPTION_EVENTS_RETENTION_BYTES), which does not exist yet, so while it is absent this stage WARNS and passes (the service is held at replicas 0 and its own startup check is the hard gate).
+      // BEFORE the rollout, same barrier as early-auction-verdict above: the service never creates its topics and refuses to START unless voice, closures and events each have ONE partition, cleanup.policy=delete and no finite message.timestamp.before.max.ms, and the events topic matches the retention artifact exactly. Voice, closures and manual-line (7 days) are created here; the events topic is created with the artifact's retention.bytes, read out of the ConfigMap file (k8s/overlays/dev/level-absorption-config.yaml, the one source) and required (LEVEL_ABSORPTION_REQUIRE_EVENTS_TOPIC=1) the whole stage is DEV ONLY (production is untouched: its service is held at replicas 0 and nothing is created or altered there).
       when {
-        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'level-absorption' && !params.DEPLOY_DRY_RUN) }
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'level-absorption' && params.ENVIRONMENT == 'dev' && !params.DEPLOY_DRY_RUN) }
       }
       steps {
         sh '''
           set -euo pipefail
           export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
           . scripts/kafka/load-kafka-settings.sh
+          LEVEL_ABSORPTION_EVENTS_RETENTION_BYTES="$(bash scripts/ci/validate-level-absorption-config.sh --print-retention-bytes)"
+          export LEVEL_ABSORPTION_EVENTS_RETENTION_BYTES LEVEL_ABSORPTION_REQUIRE_EVENTS_TOPIC=1 LEVEL_ABSORPTION_ALIGN_EVENTS_RETENTION=1
           scripts/kafka/ensure-level-absorption-topics.sh
+        '''
+      }
+    }
+    stage('Apply level-absorption configuration') {
+      // DEV ONLY (production is untouched: its Deployment is held at replicas 0 and this stage never runs there). The standalone slices carry
+      // Deployment/Service only, so service-deploy never creates the ConfigMap the pod mounts (the EYEBALL-only configuration and the
+      // retention artifact). Apply exactly that one repo file BEFORE the rollout (the pod mounts it with optional: false), then read the LIVE object back
+      // and compare its name, immutability, exact key set and canonical data digest with the repository's. The ConfigMap is immutable and
+      // named by its content digest and the Deployment names it, so a pod can only mount what its template names. Skipped in a dry run.
+      when {
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'level-absorption' && params.ENVIRONMENT == 'dev' && !params.DEPLOY_DRY_RUN) }
+      }
+      steps {
+        sh '''
+          set -euo pipefail
+          bash scripts/ci/validate-level-absorption-config.sh
+          name="$(bash scripts/ci/validate-level-absorption-config.sh --print-config-name)"
+          want="$(bash scripts/ci/validate-level-absorption-config.sh --print-data-digest)"
+          kubectl -n options-edge apply -f k8s/overlays/dev/level-absorption-config.yaml
+          kubectl -n options-edge get configmap "$name" -o json | python3 -c '
+import sys, json, hashlib
+o = json.load(sys.stdin)
+assert o.get("immutable") is True, "live ConfigMap is not immutable"
+assert sorted(o["data"]) == ["frozen-configuration.json", "retention-artifact.json"], "live ConfigMap keys differ"
+got = hashlib.sha256(json.dumps(o["data"], sort_keys=True).encode()).hexdigest()
+assert got == sys.argv[1], "live ConfigMap digest %s != repository %s" % (got, sys.argv[1])
+print("live ConfigMap", o["metadata"]["name"], "matches the repository digest", got)
+' "$want"
         '''
       }
     }

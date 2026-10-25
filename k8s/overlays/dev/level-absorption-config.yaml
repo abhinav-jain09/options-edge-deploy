@@ -1,0 +1,80 @@
+# IMMUTABLE and NAMED BY ITS CONTENT: the name suffix is the first 12 hex digits of sha256(json.dumps(data, sort_keys=True)); the Deployment
+# references this exact name, so a changed configuration is a NEW object and a changed pod template (the pod rolls), a pod can only ever
+# mount the content its template names, and an out-of-band edit is refused by the API server. Old objects are left in place (a rollback
+# re-points to one). scripts/ci/validate-level-absorption-config.sh computes the name and fails CI on any disagreement.
+#
+# The Level Absorption configuration the pod mounts at /home/options-edge/config/level-absorption (read-only).
+#
+# SOURCE OF TRUTH: options-edge-processing docs/level-absorption/phase0/ (README.md there), copied VERBATIM from origin/main
+# f4affb218 (PR 1344). Both files were produced by the Phase 0 run of 2026-10-25 by Claude under the owner's standing instruction
+# (the owner may overrule); scripts/ci/validate-level-absorption-config.sh pins the copies and the events topic's byte cap together.
+#
+# frozen-configuration.json is the EYEBALL-ONLY PROVISIONAL configuration (eyeball-configuration.json there): the comparison fold
+# selected NO candidate, so this is NOT a Phase 0 freeze, no verdict may be published on it, and the service refuses to start in any
+# phase but EYEBALL with it (StartupChecks.requireSelectionForPhase). A new Phase 0 on a longer corpus replaces it; the replacement
+# is a change to THIS file and to topics.env's retention bytes in one PR.
+# retention-artifact.json: retentionBytes 21765840 = ceil(362,764 B/day (largest measured day of 158) x 30 days x 2).
+#
+# The standalone slices carry Deployment/Service only, so service-deploy does not create this ConfigMap: Jenkinsfile.service-deploy
+# applies this one file in the stage 'Apply level-absorption configuration' (the same kind of service-owned step as the
+# feed-gateway ConfigMap reconcile). The service reads both files once at start.
+apiVersion: v1
+kind: ConfigMap
+immutable: true
+metadata:
+  name: level-absorption-config-1207235809ea
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: level-absorption-service
+    app.kubernetes.io/part-of: options-edge
+data:
+  frozen-configuration.json: |
+    {
+      "formatVersion" : 2,
+      "kind" : "level-absorption.frozen-configuration",
+      "phase0" : {
+        "freezeCommit" : "078474ce324250a9e256ec19a8c4305357a09b30",
+        "candidatePercentile" : 75.0,
+        "bootstrapGenerator" : "SplitMix64 EYEBALL-ONLY PROVISIONAL (no selection)",
+        "bootstrapSeed" : 20261025
+      },
+      "parameters" : {
+        "armDistancePoints" : 2.0,
+        "disarmDistancePoints" : 5.0,
+        "retreatBars" : 2,
+        "retreatPoints" : 1.0,
+        "barLengthSeconds" : 30,
+        "windowLength" : 4,
+        "persistenceK" : 3,
+        "minimumEffort" : 461.0,
+        "minimumBarImbalanceBps" : 736.0,
+        "flatRatioCutoff" : 2.2686025408348454,
+        "comparisonDomain" : "ES",
+        "voiceRepeatBars" : "off",
+        "labelTolerancePoints" : 5.0,
+        "labelReentryTolerancePoints" : 1.0,
+        "lookaheadMinutes" : 15,
+        "lateSessionStartEastern" : "15:00",
+        "unknownShareMaximum" : 0.05,
+        "feedGapThresholdMillis" : 2000,
+        "candidateThresholdSets" : 5,
+        "sitesEnabled" : "MANUAL_LINE,POINT_OF_CONTROL,VALUE_AREA_HIGH,VALUE_AREA_LOW",
+        "producerMovePoints" : 1.0,
+        "trapPokePoints" : 2.0,
+        "retestAwayPoints" : 6.0,
+        "retestLifetimeBars" : 150,
+        "retestMaxReturns" : 3,
+        "nextLevelMinPoints" : 4.0,
+        "candleLookbackBars" : 3,
+        "candleEvidenceTimeframe" : "5m",
+        "candleProximityPoints" : 4.0,
+        "candleExitStrength" : "MAJOR",
+        "studyTimeframes" : "5m",
+        "structureTimeframes" : "5m,15m",
+        "maxConsumedBreaks" : 4096,
+        "maxSites" : 256,
+        "maxEpisodes" : 32
+      }
+    }
+  retention-artifact.json: |
+    {"formatVersion":1,"kind":"level-absorption.retention-artifact","topic":"futures.level-absorption.events","retentionMs":-1,"measuredBytesPerDay":362764,"measurementSessions":158,"retentionDays":30,"safetyFactor":2,"retentionBytes":21765840}

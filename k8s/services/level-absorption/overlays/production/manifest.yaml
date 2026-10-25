@@ -115,9 +115,8 @@ spec:
               name: level-absorption-data
       terminationGracePeriodSeconds: 60
       volumes:
-        - hostPath:
-            path: /home/options-edge/config/level-absorption
-            type: DirectoryOrCreate
+        - configMap:
+            name: level-absorption-config-1207235809ea
           name: level-absorption-config
         - hostPath:
             path: /home/options-edge/data/level-absorption
