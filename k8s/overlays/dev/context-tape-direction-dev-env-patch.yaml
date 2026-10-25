@@ -31,8 +31,9 @@ spec:
             - { name: CONTEXT_TAPE_DIRECTION_ALERT_TOPIC, value: "context-tape.direction.alert" }
             - { name: CONTEXT_TAPE_DIRECTION_SCORECARD_TOPIC, value: "context-tape.direction.scorecard" }
             # T-18 (LEVEL-ABSORPTION-GEOMETRY-SITES-REQUIREMENT): the joined Candle Direction export (Avro CandleDirectionExportRecord, key barId) on its own topic. DEV ONLY: unset
-            # everywhere else = OFF (the service default). The subject must be registered first (register-cvd-schemas, CVD_SCHEMA_ENVIRONMENTS=dev); until then the export is a
-            # counted init failure and the decision outputs are untouched. Made by Claude under the owner's standing instruction; the owner may overrule.
+            # everywhere else = OFF (the service default). ORDER on a fresh registry: roll the service first (it creates the topic, then
+            # retries its registry check every 30 s), then run register-cvd-schemas with CVD_SCHEMA_ENVIRONMENTS=dev (it registers only topics that exist); until the subject is
+            # registered the export is a counted init failure and the decision outputs are untouched, and it recovers by itself within 30 s of the registration. Made by Claude under the owner's standing instruction; the owner may overrule.
             - { name: CONTEXT_TAPE_DIRECTION_CANDLE_EXPORT_TOPIC, value: "context-tape.direction.candle-export" }
             - { name: CONTEXT_TAPE_DIRECTION_API_PORT, value: "8136" }
             # ZDCE-113/114 prototype remains OFF until the authoritative calendar and untouched
