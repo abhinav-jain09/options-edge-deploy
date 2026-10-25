@@ -29,11 +29,11 @@ class Registry:
 
 class CvdSchemasTest(unittest.TestCase):
     def test_frozen_external_inventory_and_single_prefix(self):
-        self.assertEqual(31,len(m.BINDINGS));self.assertEqual(31,len(set(m.BINDINGS.values())))
+        self.assertEqual(32,len(m.BINDINGS));self.assertEqual(32,len(set(m.BINDINGS.values())))
         for topic,resource in m.BINDINGS.items():
             self.assertEqual(resource,m.binding(topic))
             if not topic.startswith('es.'):self.assertEqual(resource,m.binding('es.'+topic))
-        for unknown in ['context-tape.direction.progress','futures.level-absorption.manual-line','es.es.futures.cvd','es.es.open-direction.forecast','options.databento.gex.strike','es.futures.cvd.avro']:
+        for unknown in ['context-tape.direction.progress','es.es.futures.cvd','es.es.open-direction.forecast','options.databento.gex.strike','es.futures.cvd.avro']:
             self.assertIsNone(m.binding(unknown))
     def test_dry_missing_performs_lookup_only(self):
         r=Registry();result=m.reconcile('http://registry','es.futures.cvd',TEXT,False,r)
@@ -111,5 +111,39 @@ class CvdSchemasTest(unittest.TestCase):
         with patch.dict(os.environ,{},clear=True),patch.object(m.subprocess,'Popen') as child,patch.object(m.Path,'mkdir') as mkdir,patch.object(m.urllib.request,'urlopen') as http:
             with self.assertRaisesRegex(ValueError,'Guarded Jenkins'):m.main()
             child.assert_not_called();mkdir.assert_not_called();http.assert_not_called()
+
+
+class EnvironmentSelection(unittest.TestCase):
+    def test_default_is_all_three_in_order(self):
+        self.assertEqual(['es4','dev','production'],[e[0] for e in m.selected_endpoints('es4,dev,production')])
+
+    def test_dev_alone_selects_only_the_dev_registry(self):
+        self.assertEqual([('dev','192.168.100.102:19092','http://192.168.100.102:8082')],m.selected_endpoints('dev'))
+
+    def test_unknown_repeated_or_empty_names_are_refused(self):
+        for bad in ['','prod','dev,dev','dev,','es4,qa']:
+            with self.subTest(bad=bad),self.assertRaises(ValueError):m.selected_endpoints(bad)
+
+    def test_only_the_selected_cluster_is_read_and_it_carries_the_dev_only_bindings(self):
+        asked=[]
+        def fake(bootstrap,directory):asked.append(bootstrap);return ['futures.level-absorption.events','futures.level-absorption.manual-line']
+        with tempfile.TemporaryDirectory() as d:
+            inv=m.build_inventory(Path(d),'dev',fake)
+        self.assertEqual(['192.168.100.102:19092'],asked)
+        self.assertEqual(['dev'],[e[0] for e in inv])
+        for topic in inv[0][2]:self.assertIsNotNone(m.binding(topic),topic)
+        self.assertEqual('cvd-related/LevelAbsorptionEvent.avsc',m.binding('futures.level-absorption.events'))
+        self.assertEqual('cvd-related/LevelAbsorptionManualLine.avsc',m.binding('futures.level-absorption.manual-line'))
+
+    def test_default_reads_all_three_clusters(self):
+        asked=[]
+        with tempfile.TemporaryDirectory() as d:
+            m.build_inventory(Path(d),'es4,dev,production',lambda b,_:asked.append(b) or [])
+        self.assertEqual(['192.168.100.4:9092','192.168.100.102:19092','192.168.100.252:9092'],asked)
+
+    def test_the_job_defaults_to_all_three_and_the_script_reads_the_variable(self):
+        jf=(ROOT/'Jenkinsfile.es4-deploy').read_text()
+        self.assertIn("name: 'CVD_SCHEMA_ENVIRONMENTS', defaultValue: 'es4,dev,production'",jf)
+        self.assertIn("os.environ.get('CVD_SCHEMA_ENVIRONMENTS','es4,dev,production')",(ROOT/'scripts/kafka/register-cvd-schemas.py').read_text())
 
 if __name__=='__main__':unittest.main()
