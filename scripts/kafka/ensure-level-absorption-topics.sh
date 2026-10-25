@@ -5,7 +5,7 @@
 #   futures.level-absorption.events       1 partition, delete, retention.ms=-1, retention.bytes = the retention artifact's integer
 #   futures.level-absorption.voice        1 partition, delete, retention.ms=7 days
 #   futures.level-absorption.closures     1 partition, delete, retention.ms=7 days (decisions only time could make, replayed on restart)
-#   futures.level-absorption.manual-line  1 partition, delete, retention.ms=7 days (the chart's drawn-line commands, Avro; the producer is built, options-edge PR 1172, so the service requires this topic at start)
+#   futures.level-absorption.manual-line  1 partition, delete, retention.ms=7 days (the chart's drawn-line commands, Avro; the producer is built, options-edge PR 1172; the service's input-contract manifest declares it built (processing PR 1354), and startup therefore requires this topic)
 # None may be compacted, and the three OUTPUT topics (events, voice, closures) may carry no finite message.timestamp.before.max.ms
 # (a restart republishes old timestamps) and no message.timestamp.after.max.ms below the one-hour broker default: the service refuses
 # to start on either. The service also needs every one of these (and the three input topics) to keep at least 7 days or forever.
