@@ -44,7 +44,7 @@ unchanged: no decode and re-encode job is needed (unlike `underlying.spx.price`,
 2. Stop every JSON writer of the cluster's topic: the mirror unit for dev/production (`Jenkinsfile.es-futures-flow-mirror` ACTION=teardown), the JSON
    producer on es4.
 3. Wipe and recreate: `scripts/kafka/roll-forward-es-aggressor-flow.sh --recreate --cluster <c> --pre-cutover-id <id> --writers-and-readers-stopped|--avro-feed-live --json-writers-stopped <bootstrap>`,
-   then `--verify --new-topic-id <id>`. Recreated with `cleanup.policy=delete, retention.ms=-1` (the shape es4 and production carry).
+   then `--verify --new-topic-id <id>`. Recreated with the cluster's recorded shape: dev `compact,delete` + `retention.ms=-1` (mirror target contract), es4/production `delete` + `retention.ms=-1` as measured; the es4/production shape is re-read off the broker at the time and recorded in the script before it is allowed to run there.
 4. Roll the Avro readers (gateway, reversal-confirmation). They refuse any value that is not framed as id 2701, so they must not meet retained JSON; the
    gateway treats the topic as tolerant and drops a stray value instead of stalling the shared Avro consumer.
 5. Start the Avro writer (es4 service image with contracts 0.38.0). Then re-install the mirror unit(s) for dev/production.

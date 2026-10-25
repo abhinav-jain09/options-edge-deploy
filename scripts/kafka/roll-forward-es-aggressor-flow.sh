@@ -75,13 +75,16 @@ KT="$(rf_resolve_cli "$BIN")"
 KG="$(rf_resolve_cli_named kafka-consumer-groups "$BIN")"
 kt() { "$KT" --bootstrap-server "$BS" "$@"; }
 
-# The shape es4 and production carry (read off both brokers 2026-10-25: delete, retention.ms=-1, one partition, RF 1). The dev topic carried the broker's
-# default retention until now (24 h would sweep it, see the 10-25 retention incident), so the recreated dev topic is pinned to the eternal retention.
+# The shape the dev topic carries after the reconciler (apply-topics.sh / the mirror contract asserts the TARGET is compacted): compact,delete,
+# retention -1, the same keyed-snapshot shape as underlying.spx.price on dev. (Read off the live dev broker 2026-10-25 after the recreate: the first
+# declaration here, plain delete, was what es4 and production carry, and the reconciler changed the recreated topic to this.)
 TOPIC=es.futures.aggressor-flow
 PARTITIONS=1
 REPLICATION_FACTOR=1
-CONFIGS="cleanup.policy=delete,retention.ms=-1,min.insync.replicas=1"
-CONFIG_ARGS=(--config cleanup.policy=delete --config retention.ms=-1 --config min.insync.replicas=1)
+CONFIGS="cleanup.policy=compact,delete,retention.ms=-1,delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.01,segment.ms=3600000,min.insync.replicas=1"
+# cleanup.policy carries a comma of its own, so the --config flags are spelled out rather than split from CONFIGS.
+CONFIG_ARGS=(--config "cleanup.policy=compact,delete" --config retention.ms=-1 --config delete.retention.ms=3600000
+             --config min.cleanable.dirty.ratio=0.01 --config segment.ms=3600000 --config min.insync.replicas=1)
 
 if [ "$PHASE" = "--recreate" ]; then
   echo "=== roll forward $TOPIC on $BS (cluster $CLUSTER) ==="
