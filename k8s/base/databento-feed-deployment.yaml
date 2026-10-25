@@ -65,6 +65,11 @@ spec:
           # check always passes (never restart-loops nights/weekends/holidays). With the feed's 15s
           # in-app stale window, 2 x 15s here => a stalled feed restarts ~45s after data stops (fast
           # recovery) while initialDelaySeconds 45 + 30s still comfortably clears a normal boot+seed.
+          # timeoutSeconds is stated because the Kubernetes DEFAULT is 1s: with failureThreshold 2 this
+          # feed is killed after just two 1s overruns 15s apart, so a GC pause or a busy first seed can
+          # restart a feed that is perfectly healthy. 5s still restarts a genuinely stalled feed inside
+          # the ~45s the comment above promises (45 initial + 2 x 15s), it only stops counting latency
+          # as death.
           livenessProbe:
             httpGet:
               path: /health/live
@@ -72,6 +77,7 @@ spec:
             initialDelaySeconds: 45
             periodSeconds: 15
             failureThreshold: 2
+            timeoutSeconds: 5
           # Readiness stays on /metrics (process-up): a stale-data window should NOT flap readiness;
           # only liveness (restart) reacts to staleness.
           readinessProbe:
