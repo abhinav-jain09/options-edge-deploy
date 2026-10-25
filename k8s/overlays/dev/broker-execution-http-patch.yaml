@@ -39,7 +39,7 @@ spec:
             # Owner-authorized UI Paper/Live selection; account choice remains explicit in the service.
             # This does not submit an order, change quantity/money limits or start a production broker.
             - name: BROKER_LIVE_EXECUTION_ENABLED
-              value: "true"
+              value: "false"
             - name: BROKER_LIVE_EXECUTION_HOST
               value: host.docker.internal
             - name: BROKER_LIVE_EXECUTION_PORT

@@ -85,7 +85,7 @@ spec:
             - name: AUTH_ISSUER_URI
               value: https://dev-auth.bleadingoptions.com/realms/optionsedge
             - name: BROKER_LIVE_EXECUTION_ENABLED
-              value: "true"
+              value: "false"
             - name: BROKER_LIVE_EXECUTION_HOST
               value: host.docker.internal
             - name: BROKER_LIVE_EXECUTION_PORT
