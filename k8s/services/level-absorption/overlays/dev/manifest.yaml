@@ -38,6 +38,8 @@ spec:
     spec:
       containers:
         - env:
+            - name: LEVEL_ABSORPTION_PATH_CONFIGURATION
+              value: /home/options-edge/config/level-absorption/path-configuration.json
             - name: LEVEL_ABSORPTION_TWO_SIDED_HOST
               value: "true"
             - name: LEVEL_ABSORPTION_PHASE
@@ -118,7 +120,7 @@ spec:
       terminationGracePeriodSeconds: 60
       volumes:
         - configMap:
-            name: level-absorption-config-fea5644b7c51
+            name: level-absorption-config-27f159bc7562
           name: level-absorption-config
         - hostPath:
             path: /home/options-edge/data/level-absorption

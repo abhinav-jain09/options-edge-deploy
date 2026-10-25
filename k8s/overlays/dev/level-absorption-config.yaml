@@ -19,7 +19,7 @@ apiVersion: v1
 kind: ConfigMap
 immutable: true
 metadata:
-  name: level-absorption-config-fea5644b7c51
+  name: level-absorption-config-27f159bc7562
   namespace: options-edge
   labels:
     app.kubernetes.io/name: level-absorption-service
@@ -75,3 +75,5 @@ data:
     }
   retention-artifact.json: |
     {"formatVersion":1,"kind":"level-absorption.retention-artifact","topic":"futures.level-absorption.events","retentionMs":-1,"measuredBytesPerDay":1361259,"measurementSessions":1,"retentionDays":30,"safetyFactor":2,"retentionBytes":81675540}
+  path-configuration.json: |
+    {"id":"spx-path-v1-eyeball-provisional","windowBars":6,"minimumSideBars":3,"minimumSideContracts":500,"intervalStepPoints":5.0,"rewardCutoffPointsPerThousand":0.5,"minimumRetainedFraction":0.6,"staleAfterMillis":90000,"maximumIntervals":256}

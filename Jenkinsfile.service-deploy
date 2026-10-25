@@ -894,6 +894,7 @@ PYEOF
           LEVEL_ABSORPTION_EVENTS_RETENTION_BYTES="$(bash scripts/ci/validate-level-absorption-config.sh --print-retention-bytes)"
           export LEVEL_ABSORPTION_EVENTS_RETENTION_BYTES LEVEL_ABSORPTION_REQUIRE_EVENTS_TOPIC=1 LEVEL_ABSORPTION_ALIGN_EVENTS_RETENTION=1
           scripts/kafka/ensure-level-absorption-topics.sh
+          scripts/kafka/ensure-absorption-path-topic.sh
         '''
       }
     }

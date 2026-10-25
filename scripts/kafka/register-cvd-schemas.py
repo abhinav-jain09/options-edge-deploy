@@ -41,6 +41,7 @@ BINDINGS = {
     'options.es-cvd-spx-levels':'cvd-related/AlignedCvdLevelsEnvelope.avsc',
     'es.futures.compression-expansion.current':'cvd-related/EscxCurrent.avsc',
     'es.futures.compression-expansion.events':'cvd-related/EscxEvent.avsc',
+    'futures.level-absorption.path':'cvd-related/AbsorptionPathSnapshot.avsc',
     'futures.level-absorption.events':'cvd-related/LevelAbsorptionEvent.avsc',
     'futures.level-absorption.voice':'cvd-related/LevelAbsorptionVoice.avsc',
     'futures.level-absorption.closures':'cvd-related/LevelAbsorptionClosure.avsc',
