@@ -100,7 +100,10 @@ reset OLDID
 reset OLDID
 check "production is REFUSED (pending the owner's permission) and nothing is deleted" "$(run --recreate --cluster production --pre-cutover-id OLDID --avro-feed-live --json-writers-stopped 192.168.100.252:9092 "$TMP/bin")" 3
 check "…nothing deleted" "$(cat "$TMP/state/log" 2>/dev/null | wc -l | tr -d ' ')" 0
-check "es4 is REFUSED too" "$(run --recreate --cluster es4 --pre-cutover-id OLDID --writers-and-readers-stopped 192.168.100.4:9092 "$TMP/bin")" 3
+reset OLDID
+check "es4 recreates at ITS recorded shape" "$(run --recreate --cluster es4 --pre-cutover-id OLDID --writers-and-readers-stopped 192.168.100.4:9092 "$TMP/bin")" 0
+check "…es4 shape applied" "$(cat "$TMP/state/cfg")" "cleanup.policy=compact,delete,retention.ms=-1,delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.01,segment.ms=3600000,min.insync.replicas=1"
+check "es4 with a dev bootstrap is refused" "$(run --recreate --cluster es4 --pre-cutover-id OLDID --writers-and-readers-stopped localhost:19092 "$TMP/bin")" 2
 
 reset OLDID
 check "a group still holding an offset for the topic fails the run" "$(MOCK_GROUPS='vol-premium es.futures.aggressor-flow 0 6505 6505 0 - - -' run "${ARGS[@]}")" 1

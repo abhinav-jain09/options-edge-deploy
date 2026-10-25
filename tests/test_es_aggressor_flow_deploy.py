@@ -88,8 +88,8 @@ class MapAgrees(unittest.TestCase):
 
 
 class WipeScript(unittest.TestCase):
-    def test_es4_and_production_are_refused_by_name_without_touching_a_broker(self):
-        for cluster, bootstrap in (("es4", "192.168.100.4:9092"), ("production", "192.168.100.252:9092")):
+    def test_production_is_refused_by_name_without_touching_a_broker(self):
+        for cluster, bootstrap in (("production", "192.168.100.252:9092"),):
             r = subprocess.run(["bash", str(ROOT / "scripts/kafka/roll-forward-es-aggressor-flow.sh"), "--recreate", "--cluster", cluster, "--pre-cutover-id", "X",
                                 "--writers-and-readers-stopped", bootstrap], capture_output=True, text=True)
             self.assertEqual(r.returncode, 3, r.stderr)
