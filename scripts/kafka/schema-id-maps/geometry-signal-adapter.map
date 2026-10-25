@@ -2,7 +2,7 @@
 # and 0.42.0 (options-edge-contracts #135) id 2807, all version 1, subject = the record full name (RecordNameStrategy), compatibility FULL. Production NEVER registers from the service:
 # the writer uses auto.register.schemas=false and the EXACT fixed ids, so a registry without them fails the service closed. Import with scripts/kafka/ensure-fixed-id-schemas.sh:
 #   SCHEMA_REGISTRY_URL=<registry> SCHEMAS_DIR=<contracts checkout>/schemas-registry/geometry SCHEMA_ID_MAP=scripts/kafka/schema-id-maps/geometry-signal-adapter.map DEPLOY_DRY_RUN=true scripts/kafka/ensure-fixed-id-schemas.sh
-# (dry run first). Not wired into any Jenkins stage: running it is an operator act on a chosen registry. GeometryCommand (2807) is the operator-command INPUT; the other six are outputs.
+# (dry run first). Jenkinsfile.service-deploy stage 'Register geometry schemas (dev only)' (REGISTER_GEOMETRY_SCHEMAS, SERVICE=amt-order-bridge, ENVIRONMENT=dev) runs it for the dev registry; production stays an operator act. GeometryCommand (2807) is the operator-command INPUT; the other six are outputs.
 # File column: relative to the contracts checkout's `schemas-registry/geometry` directory (SCHEMAS_DIR).
 com.optionsedge.contracts.geometry.GeometryEntry|2801|GeometryEntry.avsc
 com.optionsedge.contracts.geometry.GeometryExit|2802|GeometryExit.avsc

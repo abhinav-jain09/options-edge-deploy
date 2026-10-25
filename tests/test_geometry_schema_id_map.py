@@ -27,6 +27,16 @@ class GeometrySchemaIdMap(unittest.TestCase):
             schema = json.loads((pathlib.Path(d) / "schemas-registry/geometry" / f).read_text())
             self.assertEqual(subject, schema["namespace"] + "." + schema["name"])
 
+    def test_the_jenkins_stage_is_dev_only_and_uses_this_map(self):
+        j = (pathlib.Path(__file__).resolve().parents[1] / "Jenkinsfile.service-deploy").read_text()
+        i = j.index("stage('Register geometry schemas (dev only)')")
+        stage = j[i:j.index("stage('Recreate indicator topics", i)]
+        self.assertIn("params.SERVICE == 'amt-order-bridge'", stage)
+        self.assertIn("params.ENVIRONMENT != 'dev'", stage)
+        self.assertIn("geometry-signal-adapter.map", stage)
+        self.assertIn("schemas-registry/geometry", stage)
+        self.assertIn("REGISTER_GEOMETRY_SCHEMAS", j[:i])
+
 
 if __name__ == "__main__":
     unittest.main()
