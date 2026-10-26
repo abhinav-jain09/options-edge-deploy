@@ -5,6 +5,15 @@
 #    draws those bars, labelled ES ESTIMATE, in [Globex open, 09:30 ET). Native SPX bars take over at the cash open.
 #  - CONTEXT_TAPE_MAX_SNAPSHOT_BYTES=4194304: the GLOBEX cap in code (a ~23 hour session exceeds the 1 MiB RTH cap and would
 #    be served as SNAPSHOT_TOO_LARGE, blanking the page instead of drawing the bars).
+#  - CONTEXT_TAPE_SPOT_TOPIC=underlying.spx.price: the tape's spot must come from the FEED'S CASCADE, not the raw IBKR
+#    index feed. The base (and the dev/production slices) point this key at underlying.spx.index.price, whose records are
+#    IBKR_OPTION_MODEL / OPTION_MODEL_UNDERLYING. That bypasses the calendar-driven cascade, whose whole job is to pick
+#    ES_BASIS outside the cash session (DATABENTO_CASCADE_OFF_HOURS_TIER_ORDER) and publish its choice to
+#    underlying.spx.price as ES_BASIS_DERIVED / LIVE_ES_BASIS. Measured 2026-10-26 overnight: the cascade said 7625.20
+#    (ES_BASIS_DERIVED) while the raw index feed said 7633.25 (IBKR_OPTION_MODEL) — 8.05 points apart, so the tape showed
+#    a spot 8 points away from the very bars it was drawing (those come from the ES-basis estimate path above). es4
+#    ALREADY overrides this key to underlying.spx.price for exactly this reason; dev running the GLOBEX overnight session
+#    needs the same source or its spot and its candles describe different markets.
 # Both default off in code and the production overlay is untouched. env merges by name over the base.
 apiVersion: apps/v1
 kind: Deployment
@@ -21,3 +30,4 @@ spec:
             - { name: CONTEXT_TAPE_MAX_SNAPSHOT_BYTES, value: "4194304" }
             - { name: CONTEXT_TAPE_ESTIMATE_BARS_ENABLED, value: "true" }
             - { name: CONTEXT_TAPE_ESTIMATE_BARS_TOPIC, value: "options.indicators.estimate.bars" }
+            - { name: CONTEXT_TAPE_SPOT_TOPIC, value: "underlying.spx.price" }
