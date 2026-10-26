@@ -57,6 +57,8 @@ spec:
         - env:
             - name: ES_LINEARIZER_BOOTSTRAP_SERVERS
               value: host.docker.internal:19092
+            - name: ES_LINEARIZER_GRACE_MS
+              value: "120000"
             - name: ES_LINEARIZER_HEALTH_PORT
               value: "8152"
             - name: KAFKA_ES_TRADES_TOPIC
@@ -67,8 +69,6 @@ spec:
               value: "true"
             - name: ES_LINEARIZER_LATE_POLICY
               value: APPEND
-            - name: ES_LINEARIZER_GRACE_MS
-              value: "5000"
             - name: ES_LINEARIZER_FRESH_START_LOOKBACK_HOURS
               value: "24"
             - name: ES_LINEARIZER_TRANSACTIONAL_ID
