@@ -36,6 +36,15 @@ class ReleaseDownloadTest(unittest.TestCase):
             release.fetch("http://jenkins.invalid/", "83", self.commit, digest or self.digest, self.version, self.destination)
             return read
 
+    def test_latest_requires_the_explicitly_permitted_main_commit_before_fetch(self):
+        with self.assertRaisesRegex(ValueError,'explicitly permitted commit'):
+            self.latest(expected_commit='b'*40)
+        self.assertFalse(self.destination.exists())
+
+    def test_latest_accepts_the_exact_permitted_main_commit(self):
+        self.latest(expected_commit=self.commit)
+        self.assertTrue(self.destination.exists())
+
     def test_qualified_exact_artifact_is_verified_before_installation(self):
         read = self.fetch()
         self.assertEqual(self.jar, self.destination.read_bytes())
@@ -90,7 +99,7 @@ class ReleaseDownloadTest(unittest.TestCase):
                 release.read("http://jenkins.invalid/test", 128)
             self.assertEqual(15, request.call_args.kwargs["timeout"])
 
-    def latest(self, metadata=None, corrupt=False, extra=None):
+    def latest(self, metadata=None, corrupt=False, extra=None, expected_commit=None):
         source=Path(self.directory.name)/'main'
         def clone(*args,**kwargs):
             source.mkdir()
@@ -112,7 +121,7 @@ class ReleaseDownloadTest(unittest.TestCase):
         with patch.object(release.subprocess,'run',side_effect=clone) as run, \
              patch.object(release.subprocess,'check_output',return_value=self.commit+'\n') as revision, \
              patch.object(release,'read',side_effect=[response,body,response,body]) as reads:
-            release.latest('http://jenkins.invalid',source,self.destination)
+            release.latest('http://jenkins.invalid',source,self.destination,expected_commit=expected_commit)
             self.assertEqual(['git','clone','--depth','1','--single-branch','--branch','main',
                               'git@github.com:abhinav-jain09/options-edge-contracts.git',str(source)],run.call_args.args[0])
             self.assertEqual((True,120),(run.call_args.kwargs['check'],run.call_args.kwargs['timeout']))

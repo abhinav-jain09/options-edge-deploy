@@ -151,6 +151,15 @@ def build_inventory(root, spec, read=None):
     return inventory
 
 
+def selected_topics(topics, spec):
+    if not spec:
+        return topics
+    wanted = [name.strip() for name in spec.split(',')]
+    if not wanted or len(set(wanted)) != len(wanted) or any(not binding(name) or name not in topics for name in wanted):
+        raise ValueError('CVD_SCHEMA_TOPICS must name distinct existing bound topics')
+    return sorted(wanted)
+
+
 def main():
     if not os.environ.get('JENKINS_URL') or os.environ.get('PERMITTED_SHA_GUARD')!='PASSED':raise ValueError('Guarded Jenkins required')
     dry=os.environ.get('DEPLOY_DRY_RUN')
@@ -163,7 +172,11 @@ def main():
     root=parent/('cvd-schemas-'+build);root.mkdir()  # Refuse stale output.
     spec=importlib.util.spec_from_file_location('released_contracts',Path(__file__).parents[1]/'jenkins/fetch-canonical-contracts.py')
     release=importlib.util.module_from_spec(spec);spec.loader.exec_module(release)
-    release.latest(os.environ['JENKINS_URL'],root/'contracts-source',root/'contracts.jar')
+    topics_spec=os.environ.get('CVD_SCHEMA_TOPICS','')
+    expected_commit=os.environ.get('CONTRACTS_PERMITTED_SHA') or None
+    if topics_spec and (expected_commit is None or not re.fullmatch(r'[0-9a-f]{40}',expected_commit)):
+        raise ValueError('Selective schema registration requires CONTRACTS_PERMITTED_SHA')
+    release.latest(os.environ['JENKINS_URL'],root/'contracts-source',root/'contracts.jar',expected_commit=expected_commit)
     proof=json.loads((root/'contracts.release.json').read_text())
     # The tests use this verified SDK's actual schema identity, not a substitute parser.
     subprocess.run([sys.executable,'-B','-m','unittest','tests.test_register_cvd_schemas','tests.test_canonical_contracts_release'],
@@ -177,6 +190,7 @@ def main():
         if not isinstance(parsed,dict) or parsed.get('type')!='record':raise ValueError('Released named record required')
     # Preflight ALL SELECTED clusters and schema resources before the first registration.
     inventory=build_inventory(root,os.environ.get('CVD_SCHEMA_ENVIRONMENTS','es4,dev,production'))
+    inventory=[(environment,url,selected_topics(topics,topics_spec)) for environment,url,topics in inventory]
     receipt={'source':os.environ['PERMITTED_SHA'],'contracts':proof,'dryRun':dry=='true','clusters':[],
              'scope':'Exact released external schemas for existing topics only; no Kafka/group/offset/config/mode changes; inactive internal state schemas are outside this action'}
     file=root/'receipt.json'

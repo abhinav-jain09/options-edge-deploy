@@ -28,8 +28,22 @@ class Registry:
         return {'id':42,'schemaType':'AVRO','schema':json.dumps(self.schema)} if self.present else None
 
 class CvdSchemasTest(unittest.TestCase):
+    def test_selective_registration_touches_only_the_requested_existing_topic(self):
+        names=['futures.cvd','futures.level-absorption.path']
+        self.assertEqual(names,m.selected_topics(names,''))
+        self.assertEqual(['futures.level-absorption.path'],m.selected_topics(names,'futures.level-absorption.path'))
+        for spec in ['missing','futures.level-absorption.path,futures.level-absorption.path','futures.footprint']:
+            with self.assertRaises(ValueError):m.selected_topics(names,spec)
+
+    def test_absorption_topic_is_created_then_registered_before_rollout(self):
+        pipeline=(ROOT/'Jenkinsfile.service-deploy').read_text()
+        created=pipeline.index('          scripts/kafka/ensure-absorption-path-topic.sh')
+        registered=pipeline.index('CVD_SCHEMA_TOPICS=futures.level-absorption.path',created)
+        configured=pipeline.index("stage('Apply level-absorption configuration')",registered)
+        self.assertLess(created,registered);self.assertLess(registered,configured)
+
     def test_frozen_external_inventory_and_single_prefix(self):
-        self.assertEqual(33,len(m.BINDINGS));self.assertEqual(33,len(set(m.BINDINGS.values())))
+        self.assertEqual(34,len(m.BINDINGS));self.assertEqual(34,len(set(m.BINDINGS.values())))
         for topic,resource in m.BINDINGS.items():
             self.assertEqual(resource,m.binding(topic))
             if not topic.startswith('es.'):self.assertEqual(resource,m.binding('es.'+topic))
