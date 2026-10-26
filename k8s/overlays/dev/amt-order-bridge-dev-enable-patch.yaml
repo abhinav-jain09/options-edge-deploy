@@ -1,4 +1,4 @@
-# DEV-ONLY: turn the auction-to-intent bridge ON.
+# DEV: the auction-to-intent bridge is now OFF (owner 2026-10-26: no AMT orders at all; the dev Gateway carries the live login). The rest of this file is history of when it was ON.
 #
 # The base ships AMT_BRIDGE_ENABLED=false — it reads the desk and publishes nothing. Dev enables it so
 # an auction market theory signal becomes a trading.order.intent, which broker-execution-service then
@@ -41,7 +41,7 @@ spec:
         - name: amt-order-bridge
           env:
             - name: AMT_BRIDGE_ENABLED
-              value: "true"
+              value: "false"   # OWNER 2026-10-26: the AMT bridge sends NO orders (the dev Gateway is about to carry the LIVE login); re-enable only on the owner's word
             - name: AMT_BRIDGE_EXIT_ENABLED
               value: "false"
             # DEV-ONLY (owner, 2026-10-14: "we have to built now real applicaiotn not shadow"):
@@ -55,4 +55,4 @@ spec:
             # there is the owner's explicit word. The executor's allowlist is the second half,
             # in broker-execution-dev-eav-sources-patch.yaml; neither alone places an order.
             - name: EAV_BRIDGE_ENABLED
-              value: "true"
+              value: "false"   # OWNER 2026-10-26: same, the early-auction-verdict bridge is off too
