@@ -14,6 +14,14 @@
 #    a spot 8 points away from the very bars it was drawing (those come from the ES-basis estimate path above). es4
 #    ALREADY overrides this key to underlying.spx.price for exactly this reason; dev running the GLOBEX overnight session
 #    needs the same source or its spot and its candles describe different markets.
+#  - CONTEXT_TAPE_SPOT_FIELD_FILTER=ANY and CONTEXT_TAPE_SPOT_SOURCE_FILTER=ANY: BOTH are required by the topic switch
+#    above and both default to the JSON index topic's shape (SOURCE_FILTER=IBKR_INDEX, FIELD_FILTER=LAST in
+#    ContextTapeSettings). Leaving FIELD_FILTER=LAST fail-closes the service outright —
+#    'CONTEXT_TAPE_SPOT_FIELD_FILTER=LAST cannot be honoured on the Avro topic underlying.spx.price (it carries no
+#    priceField): set ANY' — which is exactly how dev's tape crashlooped when the topic was switched without them.
+#    SOURCE_FILTER must be ANY rather than pinned to ES_BASIS_DERIVED: the cascade publishes WHICHEVER tier is active to
+#    this one topic, so the source changes to the native index at the 09:30 cash open, and a pinned filter would reject
+#    every in-session record. ANY means 'trust the cascade's choice', which is the entire point of reading its output.
 # Both default off in code and the production overlay is untouched. env merges by name over the base.
 apiVersion: apps/v1
 kind: Deployment
@@ -31,3 +39,5 @@ spec:
             - { name: CONTEXT_TAPE_ESTIMATE_BARS_ENABLED, value: "true" }
             - { name: CONTEXT_TAPE_ESTIMATE_BARS_TOPIC, value: "options.indicators.estimate.bars" }
             - { name: CONTEXT_TAPE_SPOT_TOPIC, value: "underlying.spx.price" }
+            - { name: CONTEXT_TAPE_SPOT_FIELD_FILTER, value: "ANY" }
+            - { name: CONTEXT_TAPE_SPOT_SOURCE_FILTER, value: "ANY" }

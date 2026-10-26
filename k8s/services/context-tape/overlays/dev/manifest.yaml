@@ -76,6 +76,10 @@ spec:
               value: options.indicators.estimate.bars
             - name: CONTEXT_TAPE_SPOT_TOPIC
               value: underlying.spx.price
+            - name: CONTEXT_TAPE_SPOT_FIELD_FILTER
+              value: ANY
+            - name: CONTEXT_TAPE_SPOT_SOURCE_FILTER
+              value: ANY
             - name: CONTEXT_TAPE_DIRECTION_ENABLED
               value: "true"
             - name: CONTEXT_TAPE_DIRECTION_SPOT_TOPIC
