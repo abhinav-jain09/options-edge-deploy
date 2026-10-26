@@ -20,6 +20,8 @@ spec:
       containers:
         - name: level-absorption
           env:
+            - name: LEVEL_ABSORPTION_PATH_SESSION
+              value: GLOBEX
             - name: LEVEL_ABSORPTION_PATH_CONFIGURATION
               value: /home/options-edge/config/level-absorption/path-configuration.json
             - name: LEVEL_ABSORPTION_TWO_SIDED_HOST
