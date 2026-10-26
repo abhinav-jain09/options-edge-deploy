@@ -39,11 +39,11 @@ spec:
       containers:
         - env:
             - name: AMT_BRIDGE_ENABLED
-              value: "true"
+              value: "false"
             - name: AMT_BRIDGE_EXIT_ENABLED
               value: "false"
             - name: EAV_BRIDGE_ENABLED
-              value: "true"
+              value: "false"
             - name: HEALTH_PORT
               value: "8132"
             - name: AMT_BRIDGE_AUCTION_TOPIC
