@@ -1,0 +1,7 @@
+# Dev ladder trade delay repair
+
+Requirement LAG-1 — IMPLEMENTING, owner Codex, 2026-10-26. Keep the Order-page SPX R/D ladder supplied with trades before its completed-bar deadline. Restore only dev ES_LINEARIZER_GRACE_MS from 120000 to the existing base 5000, retaining APPEND and all source offsets. Production is unchanged. The absorption consumer fix in processing PR1441 handles unfinished-bar lin-v2 inversions and explicitly drops closed-bar late inputs with partial coverage. Do not claim that a 5-second grace guarantees complete tape ordering or coverage.
+
+Measured incident: linearizer metrics report grace120000, fresh commits and zero transaction errors; absorption receives trades about120seconds behind native SPX, reports BASIS_UNAVAILABLE, more than104000 late inputs, and has no ready replica. Its bar deadline is15000 plus5000 silent-tape grace. The 120-second dev override in deploy PR1417 addressed the prior ordering crash but now prevents current ladder admission even with the fixed consumer. Keep explicit partial coverage for exceptional mirror catch-up bursts; do not substitute the tape projected SPX scale or change gamma/UI.
+
+Validation required: render committed service manifests and assert dev5000, APPEND retained, no production diff; exact-head Codex approval; Jenkins existing-image dev-only linearizer rollout; then observe native-SPX pairing advancement, absorption readiness and fresh typed R/D snapshots. No manual runtime patch, Kafka writes or image build bypass. Requirement remains IMPLEMENTING until live validation succeeds.

@@ -16,25 +16,10 @@ spec:
           env:
             - name: ES_LINEARIZER_BOOTSTRAP_SERVERS
               value: host.docker.internal:19092
-            # DEV-ONLY reorder window. The base sets 5000 and production inherits it, which is correct where
-            # underlying.es.trades is produced locally. On dev that topic is MirrorMaker-copied from es4
-            # partition-by-partition (32 partitions) and merged into the 1-partition linearized tape, so
-            # cross-partition skew is far larger than 5 s. Measured 2026-10-26:
-            #   es_linearizer_late_appended_total         829   (of 289,516 received, 0.29%)
-            #   es_linearizer_late_appended_max_behind_ms 66765
-            #   es_linearizer_late_reordered_total         13   (the in-grace path works)
-            # Every late APPEND lands behind the head of a topic its consumers are told is 'a single partition
-            # in total order', and level-absorption's GlobexPath fail-closes on the first one
-            # (ContractViolation GLOBEX_PATH_TAPE_ORDER_VIOLATED, 21 crash-restarts in 90 min). 120 s puts the
-            # window clear of the observed 66.8 s so those records are REORDERED in the buffer instead. This
-            # fixes the INPUT rather than weakening the consumer's contract.
-            # COST, accepted for dev: the linearized tape now lags real time by up to 120 s, and every dev
-            # consumer of it sees that delay - break-score, es-compression-expansion, es-trade-tools and
-            # level-absorption. All are dev shadow/eyeball services.
-            # LIMIT, stated honestly: this REDUCES out-of-order emissions, it does not make them impossible. A
-            # skew above 120 s would still produce one and GlobexPath would still fail-closed. The guaranteed
-            # fix is for the consumer to treat an out-of-order print as late - which GlobexPath already does
-            # one line earlier for prints behind the bar boundary - and that is the owning service's call, not
-            # a deploy-config decision.
+            # LAG-1: restore the base latency budget after processing PR1441 added explicit
+            # lin-v2 APPEND admission. A 120s hold exceeds the ladder 15s+5s bar deadline,
+            # making every current trade late and starving canonical SPX pairing.
+            # Mirror catch-up bursts may still arrive late; the consumer exposes partial
+            # coverage instead of claiming strict global event order. Dev only.
             - name: ES_LINEARIZER_GRACE_MS
-              value: "120000"
+              value: "5000"

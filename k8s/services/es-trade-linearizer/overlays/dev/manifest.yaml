@@ -58,7 +58,7 @@ spec:
             - name: ES_LINEARIZER_BOOTSTRAP_SERVERS
               value: host.docker.internal:19092
             - name: ES_LINEARIZER_GRACE_MS
-              value: "120000"
+              value: "5000"
             - name: ES_LINEARIZER_HEALTH_PORT
               value: "8152"
             - name: KAFKA_ES_TRADES_TOPIC
