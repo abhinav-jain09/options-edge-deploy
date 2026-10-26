@@ -131,6 +131,10 @@ is_strict_topic() { case " $OE_STRICT_TOPICS " in *" $1 "*) return 0 ;; *) retur
 # (options.spx.vol-premium.calendar is not listed: since 2026-09-13 the calendar ledger is a Postgres table, not a topic.)
 OE_VOL_PREMIUM_TRANSACTIONAL_TOPICS="options.spx.vol-premium.ivrv options.spx.vol-premium.events options.spx.vol-premium.warnings options.spx.vol-premium.current options.spx.vol-premium.dlq options.spx.vol-premium.baseline"
 OE_COMMITTED_READ_TOPICS="${OE_COMMITTED_READ_TOPICS:-es.futures.footprint.strike $OE_VOL_PREMIUM_TRANSACTIONAL_TOPICS}"
+if [ "$ENV_NAME" = dev ]; then
+  # These compacted JSON streams also need position-bounded reads while live.
+  OE_COMMITTED_READ_TOPICS="$OE_COMMITTED_READ_TOPICS underlying.spx.index.price spx.basis.state"
+fi
 # Canonical archive inputs cannot be opted back into the binary-unsafe console path.
 OE_CANONICAL_ARCHIVE_TOPICS="es.futures.cvd.bars es.futures.footprint.bars es.futures.footprint.outcomes es.futures.footprint.strike context-tape.direction.ledger"
 is_canonical_archive_topic() { case " $OE_CANONICAL_ARCHIVE_TOPICS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
@@ -444,9 +448,9 @@ fi
 # --- fail-loud destination guards (an unmounted NAS must never look like success) ----------
 [ -d "$ARCHIVE_DIR" ] || die "ARCHIVE_DIR '$ARCHIVE_DIR' does not exist (NAS not mounted?) — refusing"
 probe="$ARCHIVE_DIR/.oe_write_test.$$"
-touch "$probe" 2>/dev/null && rm -f "$probe" || die "ARCHIVE_DIR '$ARCHIVE_DIR' is not writable — refusing"
+touch "$probe" && rm -f "$probe" || die "ARCHIVE_DIR '$ARCHIVE_DIR' is not writable — refusing"
 case "$ARCHIVE_DIR" in
-  /mnt/nas/*|/Volumes/nas/*) : ;;
+  /mnt/nas/*|/Volumes/nas/*|/Volumes/database/*) : ;;
   *) [ "$ALLOW_NON_NAS" = "true" ] || die "'$ARCHIVE_DIR' is not a NAS path. Set ALLOW_NON_NAS=true to stage locally on purpose." ;;
 esac
 
@@ -457,7 +461,7 @@ esac
 # back through a live mount. 2026-08-08, after Codex flagged exactly this false-mount-success.
 SENTINEL="${SENTINEL:-$ARCHIVE_DIR/.oe_nas_sentinel}"
 case "$ARCHIVE_DIR" in
-  /mnt/nas/*|/Volumes/nas/*)
+  /mnt/nas/*|/Volumes/nas/*|/Volumes/database/*)
     [ -s "$SENTINEL" ] || die "'$ARCHIVE_DIR' looks like a NAS path but the sentinel '$SENTINEL' is missing — the share is NOT mounted. Refusing to write to what is really local disk."
     ;;
 esac
@@ -533,7 +537,7 @@ log "archiving env=$ENV_NAME job=$ARCHIVE_JOB bootstrap=$BOOTSTRAP -> $ROOT (fre
 # %s. Event-time bounds are the field that makes a mislabelled dt= folder detectable, so they have
 # to survive intact.
 scan_archive_file() {   # $1=path -> "records min_ms max_ms schema_versions_csv"
-  LC_ALL=C zcat "$1" 2>/dev/null | LC_ALL=C awk '
+  LC_ALL=C gzip -dc "$1" 2>/dev/null | LC_ALL=C awk '
     BEGIN { FS="\t"; n=0; mn=""; mx="" }
     {
       n++
