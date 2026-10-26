@@ -361,6 +361,12 @@ patches:
     target:
       kind: Deployment
       name: market-structure-service
+  # DEV-ONLY: the market-structure-estimate container (candlestick patterns on the pre-market estimate candles); see the patch header.
+  # Production overlays do not reference it.
+  - path: market-structure-estimate-dev-patch.yaml
+    target:
+      kind: Deployment
+      name: market-structure-service
   # DEV-ONLY: feed publish interval 5s, same as prod (code default 250ms) — see the patch header.
   - path: raw-postgres-writer-dev-patch.yaml
   - path: databento-feed-dev-patch.yaml
