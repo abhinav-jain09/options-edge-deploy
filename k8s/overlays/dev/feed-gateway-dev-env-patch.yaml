@@ -50,6 +50,12 @@ spec:
               value: "true"
             - name: KAFKA_MARKET_STRUCTURE_PATTERNS_TOPIC
               value: options.spx.market-structure.patterns
+            # DEV-ONLY: the pre-market ESTIMATE pattern sets (processing market-structure-service PREMARKET-ESTIMATE-CANDLESTICK-PATTERNS-REQUIREMENT.md
+            # P6): the same sets built on the ES estimate candles, from options.spx.market-structure.estimate.patterns (written by the
+            # market-structure-estimate container). They join the SAME per-timeframe retention and the SAME frame, newest asOfMs wins, so the
+            # regular sets replace them at the cash open. Production's patch does not carry this variable (the code default is off).
+            - name: GATEWAY_MARKET_STRUCTURE_ESTIMATE_PATTERNS_ENABLED
+              value: "true"
             # INDICATOR-STUDIES studies relay (frames indicator-studies / indicator-studies-current and the hello's studies fields):
             # ON in DEV (production overlay: false). The producer flag INDICATOR_STUDIES_ENABLED is set true for dev by
             # indicator-studies-dev-enable-patch.yaml. Preconditions for dev (verified when this was enabled): schemas 2501-2503 registered

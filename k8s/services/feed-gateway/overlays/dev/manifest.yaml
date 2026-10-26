@@ -71,6 +71,8 @@ spec:
               value: "true"
             - name: KAFKA_MARKET_STRUCTURE_PATTERNS_TOPIC
               value: options.spx.market-structure.patterns
+            - name: GATEWAY_MARKET_STRUCTURE_ESTIMATE_PATTERNS_ENABLED
+              value: "true"
             - name: GATEWAY_STUDIES_ENABLED
               value: "true"
             - name: GATEWAY_STRUCTURE_TOOLS_ENABLED
