@@ -3,7 +3,8 @@
 # HONEST STATE: Phase 0 on the real corpus ended NO_CANDIDATE (options-edge-processing docs/level-absorption/phase0/README.md), so the
 # configuration it runs on is EYEBALL-ONLY PROVISIONAL and the service refuses LIVE on it; no verdict is ever published. Its inputs
 # (es.futures.footprint.bars, es.futures.auction mirrored from es4, underlying.es.trades.linearized) may be silent while es4 is off:
-# the service then sits in its documented waiting state; /health/live stays 200.
+# the service then sits in its documented waiting state. Deployment readiness tolerates a closed market,
+# but rejects stale input or a silent tape during the regular session; liveness remains separate.
 # Rollback (durable, one reviewed PR + service-deploy SERVICE=level-absorption; never kubectl): set replicas to 0 here and in
 # and restore level-absorption-service to DISABLED_DEV in scripts/ops/dev-cleanup.sh.
 # MUST MIRROR the standalone slice k8s/services/level-absorption/overlays/dev (validate-services: mono==slice).
@@ -14,3 +15,16 @@ metadata:
   namespace: options-edge
 spec:
   replicas: 1
+  template:
+    spec:
+      containers:
+        - name: level-absorption
+          env:
+            - name: LEVEL_ABSORPTION_PATH_CONFIGURATION
+              value: /home/options-edge/config/level-absorption/path-configuration.json
+            - name: LEVEL_ABSORPTION_TWO_SIDED_HOST
+              value: "true"
+          readinessProbe:
+            httpGet:
+              path: /health/deployment-ready
+              port: health

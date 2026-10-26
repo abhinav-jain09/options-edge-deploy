@@ -132,7 +132,7 @@ pipeline {
     string(name: 'PROCESSING_PERMITTED_SHA', defaultValue: '', trim: true,
       description: 'REQUIRED when BUILD_IMAGES=true — Deployment Permission Rule. The full 40-character commit id of options-edge-processing permitted for the image build this job triggers. Forwarded to that job as its PERMITTED_SHA, where ITS guard refuses unless the source it checks out is exactly this commit; the image THAT build recorded (digest, from its image lock) is then the one this job deploys. Empty or malformed values stop this job before the downstream build is triggered.')
     string(name: 'CONTRACTS_PERMITTED_SHA', defaultValue: '', trim: true,
-      description: 'REQUIRED when BUILD_IMAGES=true — Deployment Permission Rule. The full 40-character commit id of options-edge-contracts permitted for the image build: the processing job clones and installs contracts from main before building, and that source is compiled into the image. Forwarded to that job as CONTRACTS_PERMITTED_SHA, where its guard refuses unless the contracts checkout is exactly this commit on main; the child\'s image lock must record it. Empty or malformed values stop this job before the downstream build is triggered.')
+      description: 'REQUIRED when BUILD_IMAGES=true and for level-absorption dev schema registration — Deployment Permission Rule. The full 40-character commit id of options-edge-contracts permitted for the image build: the processing job clones and installs contracts from main before building, and that source is compiled into the image. Forwarded to that job as CONTRACTS_PERMITTED_SHA, where its guard refuses unless the contracts checkout is exactly this commit on main; the child\'s image lock must record it. Empty or malformed values stop this job before the downstream build is triggered.')
     string(name: 'REQUIRED_IMAGE', defaultValue: '', trim: true,
       description: 'Set ONLY by a guarded image job that triggers this job after pushing (BUILD_IMAGES=false): the digest-pinned reference <registry>/<image>:<tag>@sha256:<64 hex> of the image it just built, from its own image lock. This job then deploys exactly that digest, never the mutable tag. Mutually exclusive with BUILD_IMAGES=true (whose child build supplies the digest itself). Empty = resolve the tag (deploy-repository binding only).')
     booleanParam(name: 'DEPLOY_DRY_RUN', defaultValue: false,
@@ -891,9 +891,15 @@ PYEOF
           set -euo pipefail
           export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
           . scripts/kafka/load-kafka-settings.sh
+          [[ "${CONTRACTS_PERMITTED_SHA:-}" =~ ^[0-9a-f]{40}$ ]] || { echo "FAIL: level-absorption registration requires CONTRACTS_PERMITTED_SHA"; exit 1; }
           LEVEL_ABSORPTION_EVENTS_RETENTION_BYTES="$(bash scripts/ci/validate-level-absorption-config.sh --print-retention-bytes)"
           export LEVEL_ABSORPTION_EVENTS_RETENTION_BYTES LEVEL_ABSORPTION_REQUIRE_EVENTS_TOPIC=1 LEVEL_ABSORPTION_ALIGN_EVENTS_RETENTION=1
           scripts/kafka/ensure-level-absorption-topics.sh
+          scripts/kafka/ensure-absorption-path-topic.sh
+          # The snapshot producer never auto-registers. Register only this new topic before rollout,
+          # bound to the same contracts main SHA as the service image build.
+          CVD_SCHEMA_ENVIRONMENTS=dev CVD_SCHEMA_TOPICS=futures.level-absorption.path \
+            DEPLOY_DRY_RUN=false PYTHONDONTWRITEBYTECODE=1 python3 scripts/kafka/register-cvd-schemas.py
         '''
       }
     }
@@ -913,15 +919,7 @@ PYEOF
           name="$(bash scripts/ci/validate-level-absorption-config.sh --print-config-name)"
           want="$(bash scripts/ci/validate-level-absorption-config.sh --print-data-digest)"
           kubectl -n options-edge apply -f k8s/overlays/dev/level-absorption-config.yaml
-          kubectl -n options-edge get configmap "$name" -o json | python3 -c '
-import sys, json, hashlib
-o = json.load(sys.stdin)
-assert o.get("immutable") is True, "live ConfigMap is not immutable"
-assert sorted(o["data"]) == ["frozen-configuration.json", "retention-artifact.json"], "live ConfigMap keys differ"
-got = hashlib.sha256(json.dumps(o["data"], sort_keys=True).encode()).hexdigest()
-assert got == sys.argv[1], "live ConfigMap digest %s != repository %s" % (got, sys.argv[1])
-print("live ConfigMap", o["metadata"]["name"], "matches the repository digest", got)
-' "$want"
+          kubectl -n options-edge get configmap "$name" -o json | python3 scripts/ci/verify-level-absorption-live-config.py "$name" "$want"
         '''
       }
     }

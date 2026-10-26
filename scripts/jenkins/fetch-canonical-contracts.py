@@ -97,7 +97,7 @@ def verify_package(body, source):
                 raise ValueError('Contracts package resource differs from main: '+name)
 
 
-def latest(base, source, destination):
+def latest(base, source, destination, expected_commit=None):
     """Resolve main once, require its newest CI build, then freeze this build's bytes."""
     source=Path(source)
     if source.exists():raise ValueError('Fresh contracts source directory required')
@@ -106,6 +106,8 @@ def latest(base, source, destination):
                    check=True,timeout=120,env={**os.environ,'GIT_TERMINAL_PROMPT':'0',
                                              'GIT_SSH_COMMAND':'ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=yes'})
     commit=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],timeout=10,text=True).strip()
+    if expected_commit is not None and (not re.fullmatch(r'[0-9a-f]{40}',expected_commit) or commit!=expected_commit):
+        raise ValueError('Contracts main does not match the explicitly permitted commit')
     version=ET.parse(source/'pom.xml').getroot().findtext('{http://maven.apache.org/POM/4.0.0}version')
     # Resolve the moving pointer once. An incomplete/failed latest build is a refusal,
     # never a reason to fall back to an older successful image or contracts package.

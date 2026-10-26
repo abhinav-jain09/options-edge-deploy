@@ -15,7 +15,7 @@ except ImportError:
     sys.exit("FATAL: python3 yaml module required")
 cm = yaml.safe_load(pathlib.Path('k8s/overlays/dev/level-absorption-config.yaml').read_text())
 assert cm['kind'] == 'ConfigMap', 'not a ConfigMap'
-assert set(cm['data']) == {'frozen-configuration.json', 'retention-artifact.json'}, 'ConfigMap keys must be exactly the two files'
+assert set(cm['data']) == {'frozen-configuration.json', 'retention-artifact.json', 'path-configuration.json'}, 'ConfigMap keys must be exactly the three files'
 art = json.loads(cm['data']['retention-artifact.json'])
 cfg = json.loads(cm['data']['frozen-configuration.json'])
 err = []
@@ -36,9 +36,9 @@ else:
     for k in ('minimumEffort', 'flatRatioCutoff'):
         if not isinstance(pr.get(k), (int, float)) or pr[k] <= 0: err.append(f'configuration parameter {k} must be a positive number (no code default exists)')
     if not isinstance(pr.get('minimumBarImbalanceBps'), (int, float)) or pr['minimumBarImbalanceBps'] < 0: err.append('configuration parameter minimumBarImbalanceBps must be a non-negative number')
-# verbatim pin: these are the bytes of options-edge-processing docs/level-absorption/phase0/{eyeball-configuration,retention-artifact}.json at f4affb218.
-# A new Phase 0 replaces the content AND these two digests in the same reviewed change.
-PIN = {'frozen-configuration.json': '0c7f34f7e7c351f5947d3f00e68adc3f428ad39186a33bf95bf7a289c90280e4', 'retention-artifact.json': '320695baad8e6afe4875f88783a20849878f2e87b54b05874eaa685da5230cc9'}
+# Verbatim pins: processing phase0/market-structure-eyeball-configuration.json and two-sided-host-retention-artifact.json.
+# Two-sided host mode pins the explicit EYEBALL configuration and one-Friday retention artifact from processing PR #1414.
+PIN = {'path-configuration.json': '6b0d4f2280dc13d5a3d4b504df024138678fe6cc4ab72483e3578f69c738b022', 'frozen-configuration.json': '24dfa34790f5f75f09ac82959cc673d56eb9dfe98e76fbaef5e9fb41362fa316', 'retention-artifact.json': '074fd6155cd1d9351aa6d82518b045dd8b78a9e857c857a763f65669230fd023'}
 for k, want in PIN.items():
     got = hashlib.sha256(cm['data'][k].encode()).hexdigest()
     if got != want: err.append(f'{k} differs from the pinned Phase 0 artifact: sha256 {got}')
@@ -102,6 +102,11 @@ for envname in ('dev', 'production'):
     if lin.get('KAFKA_ES_TRADES_TOPIC') != raw:
         err.append(f"LA-050: {envname} linearizer reads {lin.get('KAFKA_ES_TRADES_TOPIC')!r} but es-cvd (the footprint producer) reads {raw!r}: not one print stream")
     la = env_of(f'k8s/services/level-absorption/overlays/{envname}/manifest.yaml', 'level-absorption-service')
+    if la.get('LEVEL_ABSORPTION_TWO_SIDED_HOST', 'false') != ('true' if envname == 'dev' else 'false'):
+        err.append(f'{envname} two-sided host diagnostics must be enabled only in dev')
+    expected_path = '/home/options-edge/config/level-absorption/path-configuration.json' if envname == 'dev' else None
+    if la.get('LEVEL_ABSORPTION_PATH_CONFIGURATION') != expected_path:
+        err.append(f'{envname} path configuration must be enabled only in dev')
     if la.get('KAFKA_LEVEL_ABSORPTION_FOOTPRINT_TOPIC') != (es4_prefix or '') + (bars or ''):
         err.append(f"LA-050: {envname} level-absorption reads footprint {la.get('KAFKA_LEVEL_ABSORPTION_FOOTPRINT_TOPIC')!r}, the es4 producer publishes {(es4_prefix or '') + (bars or '')!r}")
     if 'KAFKA_LEVEL_ABSORPTION_TRADES_TOPIC' in la:

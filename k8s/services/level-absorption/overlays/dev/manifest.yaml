@@ -38,6 +38,10 @@ spec:
     spec:
       containers:
         - env:
+            - name: LEVEL_ABSORPTION_PATH_CONFIGURATION
+              value: /home/options-edge/config/level-absorption/path-configuration.json
+            - name: LEVEL_ABSORPTION_TWO_SIDED_HOST
+              value: "true"
             - name: LEVEL_ABSORPTION_PHASE
               value: EYEBALL
             - name: KAFKA_LEVEL_ABSORPTION_FOOTPRINT_TOPIC
@@ -97,7 +101,7 @@ spec:
           readinessProbe:
             failureThreshold: 3
             httpGet:
-              path: /health/live
+              path: /health/deployment-ready
               port: health
             initialDelaySeconds: 30
             periodSeconds: 10
@@ -116,7 +120,7 @@ spec:
       terminationGracePeriodSeconds: 60
       volumes:
         - configMap:
-            name: level-absorption-config-1207235809ea
+            name: level-absorption-config-27f159bc7562
           name: level-absorption-config
         - hostPath:
             path: /home/options-edge/data/level-absorption
