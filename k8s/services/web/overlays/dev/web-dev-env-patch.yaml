@@ -83,6 +83,8 @@ spec:
             # and the manual-line commands. The ack secret (16+ chars) is generated into the `level-absorption-web` Secret on the
             # dev cluster out of band and referenced here; its value is never in git. Dev only: prod and experiment do not set either.
             # MUST MIRROR the other dev web env patch (validate-services render equivalence).
+            - name: LEVEL_ABSORPTION_PATH_UI_ENABLED
+              value: "true"
             - name: LEVEL_ABSORPTION_UI_ENABLED
               value: "true"
             - name: LEVEL_ABSORPTION_ACK_SECRET
