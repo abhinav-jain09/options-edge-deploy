@@ -121,14 +121,38 @@ def verify_schema(response, text):
     if actual!=expected:raise ValueError('Registered schema graph differs from released contract')
 
 
+def verify_path_session_evolution(url, topic, text, versions, call):
+    """Only the reviewed path-session extension may advance existing subject history."""
+    suffix=[{'name':'sessionKind','type':'string','default':'CASH'},
+            {'name':'sessionStartMs','type':'long','default':0},
+            {'name':'sessionEndMs','type':'long','default':0}]
+    target=json.loads(text)
+    if (topic not in ('futures.level-absorption.path','es.futures.level-absorption.path')
+            or target.get('type')!='record' or target.get('name')!='AbsorptionPathSnapshot'
+            or target.get('fields',[])[-3:]!=suffix):
+        raise ValueError('Existing subject history conflicts with the released schema')
+    if (not isinstance(versions,list) or not 1<=len(versions)<=16
+            or any(type(v) is not int or v<=0 for v in versions)
+            or versions!=sorted(set(versions))):
+        raise ValueError('Invalid path schema history')
+    predecessor={**target,'fields':target['fields'][:-3]}
+    subject=urllib.parse.quote(topic+'-value',safe='')
+    body={'schemaType':'AVRO','schema':text}
+    for version in versions:
+        # Deleted/foreign history, transforms and any other field change remain a refusal.
+        verify_schema(call(url,'/subjects/'+subject+'/versions/'+str(version)),json.dumps(predecessor))
+        result=call(url,'/compatibility/subjects/'+subject+'/versions/'+str(version)+'?verbose=true',body)
+        if result.get('is_compatible') is not True:raise ValueError('Path session extension is not registry-compatible')
+
+
 def reconcile(url, topic, text, apply, call=http):
     subject=urllib.parse.quote(topic+'-value',safe='');body={'schemaType':'AVRO','schema':text}
     lookup=call(url,'/subjects/'+subject,body,missing=True)
     created=False
     if lookup is None:
         versions=call(url,'/subjects/'+subject+'/versions?deleted=true',missing=True)
-        if versions is not None and versions!=[]:raise ValueError('Existing subject history conflicts with the released schema')
-        if not apply:return {'topic':topic,'registered':False,'action':'missing; dry run only'}
+        if versions is not None and versions!=[]:verify_path_session_evolution(url,topic,text,versions,call)
+        if not apply:return {'topic':topic,'registered':False,'action':'compatible evolution; dry run only' if versions else 'missing; dry run only'}
         registered=call(url,'/subjects/'+subject+'/versions',body)
         expected_id=registered['id'];created=True
         lookup=call(url,'/subjects/'+subject,body)
