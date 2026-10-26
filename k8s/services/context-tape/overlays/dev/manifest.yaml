@@ -74,6 +74,8 @@ spec:
               value: "true"
             - name: CONTEXT_TAPE_ESTIMATE_BARS_TOPIC
               value: options.indicators.estimate.bars
+            - name: CONTEXT_TAPE_SPOT_TOPIC
+              value: underlying.spx.price
             - name: CONTEXT_TAPE_DIRECTION_ENABLED
               value: "true"
             - name: CONTEXT_TAPE_DIRECTION_SPOT_TOPIC
@@ -130,8 +132,6 @@ spec:
               value: 2026-07-02,2026-11-27,2026-12-24
             - name: HEALTH_PORT
               value: "8135"
-            - name: CONTEXT_TAPE_SPOT_TOPIC
-              value: underlying.spx.index.price
             - name: CONTEXT_TAPE_GEX_HISTORY_TOPIC
               value: options.databento.gex.strike.history
             - name: CONTEXT_TAPE_ES_TRADES_TOPIC
