@@ -18,6 +18,13 @@ FILES = ('dev-archive.py', 'oe-archive-kafka.sh', 'oe-archive-verify.sh',
          'CanonicalArchiveDecoder.java', 'options-edge-contracts.jar', 'canonical-archive-reader.jar')
 
 
+
+def verify_target():
+    host = subprocess.check_output(['/bin/hostname'], text=True).strip()
+    interfaces = subprocess.check_output(['/sbin/ifconfig'], text=True)
+    if host != 'MacBook-Pro-2.local' or 'inet 192.168.100.102 ' not in interfaces:
+        raise RuntimeError('Refusing archive operation: target must be MacBook-Pro-2.local / 192.168.100.102')
+
 def main():
     for name in FILES:
         if not ((SOURCE / name) if name != 'market_calendar.py' else SOURCE.parents[1] / 'jenkins/market_calendar.py').is_file():
@@ -99,4 +106,5 @@ def main():
 
 
 if __name__ == '__main__':
+    verify_target()
     main()

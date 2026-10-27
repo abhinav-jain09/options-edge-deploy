@@ -14,6 +14,13 @@ NAS = Path('/Volumes/database/optionsedge')
 BASH = '/opt/homebrew/bin/bash'
 
 
+
+def verify_target():
+    host = subprocess.check_output(['/bin/hostname'], text=True).strip()
+    interfaces = subprocess.check_output(['/sbin/ifconfig'], text=True)
+    if host != 'MacBook-Pro-2.local' or 'inet 192.168.100.102 ' not in interfaces:
+        raise RuntimeError('Refusing archive operation: target must be MacBook-Pro-2.local / 192.168.100.102')
+
 def environment():
     env = os.environ.copy()
     # Do not inherit production broker, topic, reader, or output overrides.
@@ -99,6 +106,7 @@ def serve():
 
 
 if __name__ == '__main__':
+    verify_target()
     if sys.argv[1] == '--serve':
         serve()
     else:
