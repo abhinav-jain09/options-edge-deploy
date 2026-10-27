@@ -96,6 +96,38 @@ data:
   KAFKA_HPSF_ES_TRADES_TOPIC: underlying.es.trades
   DATABENTO_HPSF_SPX_PRICE_ENABLED: "true"
   KAFKA_HPSF_SPX_PRICE_TOPIC: underlying.spx.price
+  # ES->SPX CARRY for the cascade's ES_BASIS tier (rust/src/spot.rs, TIER_ES_BASIS):
+  #     spx = es - es * (RATE - DIV_YIELD) * dte/365
+  # The code defaults are 0.053 / 0.013 = 4.00%, and that is what every environment ran until
+  # 2026-10-26. The market was pricing 3.40%. Measured, not guessed: pairing 12,849 ES prints
+  # against the SPX cash index over the final RTH minutes of 2026-10-26 gives a true ES-SPX basis
+  # of 37.38 pts, i.e. an implied (r-q) of 3.401% (median) / 3.402% (mean) at 52 days to the Dec
+  # expiry. At 4.00% the formula charged 44.04 pts of carry instead, so the published overnight
+  # spot on underlying.spx.price was a FLAT ~7.3 pts BELOW the truth -- verified on 24 consecutive
+  # samples over 39 minutes (-7.24 .. -8.10, mean -7.34), tracking ES tick-for-tick. The error
+  # decays ~0.14 pt/day toward expiry and jumps back up at every quarterly roll.
+  #
+  # The same feed process already KNOWS the right answer: its basis engine serves a measured level
+  # (~36.75-36.88) and stamps spxBasis / spxEquivalent on every ES trade, within ~0.6 pt of the
+  # 12,849-print measurement. Two conversions in one process, disagreeing by 7.3 pts. The durable
+  # fix is for the ES_BASIS tier to consume that served level (EsSpxBasisEngine::serve) and keep
+  # this formula only as the cold-start fallback; that is a Rust change and is NOT done. These two
+  # keys close the gap to <1 pt in the meantime, which is the difference between a spot a human
+  # can trade off and one that is visibly wrong against every quote screen.
+  #
+  # Being config, this is a SNAPSHOT of the market's carry and it will drift as rates and
+  # dividends move. Re-measure it rather than trusting it: pair underlying.es.trades.linearized
+  # against underlying.spx.index.price (priceField=LAST) during RTH and recompute basis/(es*dte/365).
+  # market-carry-service already publishes a live SOFR-derived carry on
+  # market.spx.market-carry-service.current, which databento-gex-service consumes via
+  # DATABENTO_GEX_DYNAMIC_CARRY_ENABLED -- that is the surface the tier should eventually read.
+  #
+  # SHARED BY THREE ENVIRONMENTS (dev, production, experiment), like the flag above, because the
+  # wrong default was shared by all three. And like the flag above: `envFrom` is captured at pod
+  # creation, so applying this configmap changes NOTHING until the feed pod is restarted. Verify on
+  # the wire afterwards -- (es price - published spot) should read ~37, not ~44.
+  DATABENTO_ES_ANNUAL_RATE: "0.047"
+  DATABENTO_ES_ANNUAL_DIV_YIELD: "0.013"
   HPSF_SPX_SPOT_SOURCE: SYNTHETIC_OPTION_SPOT
   HPSF_SPX_SPOT_QUALITY: SYNTHETIC
   METRICS_ENABLED: "true"
