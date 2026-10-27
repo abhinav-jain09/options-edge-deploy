@@ -19,6 +19,8 @@ resources:
   # recorded (the shadow commit flips it); image reuse (options-edge-databento-feed) with
   # a `command` override selecting the vix role — no new images entry needed.
   - ../../services/databento-vix-feed/base
+  # Unified SR shadow: production-only, held at zero until the scheduled validation run.
+  - ../../services/unified-sr-shadow/base
   # es-aggressor-flow: PROD-ONLY, and prod-only for a reason — dev is SPX-only and has no ES
   # feed. It runs here with the legacy absorption snapshot DISABLED, publishing only the
   # Kyle-style signed-flow response slope (a neutral observability measurement, not a signal).

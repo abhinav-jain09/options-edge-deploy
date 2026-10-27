@@ -354,6 +354,7 @@ services:
   - { name: strike-flow-classifier,       managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-strike-flow-classifier,       deployments: [strike-flow-classifier-databento] }
   - { name: strike-flow-avro-adapter,     managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-strike-flow-avro-adapter,     deployments: [strike-flow-avro-adapter] }
   - { name: unified-sr,                   managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-unified-sr,                   deployments: [unified-sr-service] }
+  - { name: unified-sr-shadow,            managedBy: standalone, sliceGenerated: true, envs: [production],      image: options-edge-unified-sr,                   deployments: [unified-sr-shadow-service] }
   - { name: gex-delta-redis-writer,       managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-gex-delta-redis-writer,       deployments: [gex-delta-redis-writer] }
   - { name: raw-postgres-writer,          managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-raw-postgres-writer,          deployments: [raw-postgres-writer] }
   - { name: pin-postgres-writer,          managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-pin-postgres-writer,          deployments: [pin-postgres-writer] }
