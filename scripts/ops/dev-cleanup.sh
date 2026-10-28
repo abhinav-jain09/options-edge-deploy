@@ -51,10 +51,20 @@ KEEP='keycloak'                                          # deployments to leave 
 # ledger. Lifting replicas WITHOUT this edit would have them come up and be pinned straight
 # back to 0 by the scale-up loop below, which is #1034's lesson about closing only some of
 # the hold paths.
+# USER 2026-10-26: corridor-gauge-service is OFF PERMANENTLY on dev and production. It has no *_ENABLED flag, so
+# replicas IS the switch and k8s/base/corridor-gauge-deployment.yaml sets 0 — but that base alone is NOT enough,
+# because do_start below scales every deployment NOT named here to 1 regardless of what the manifest says. The
+# name was added to the operational copy on .102 and never to this versioned one, so the two lists diverged and a
+# repo-driven start would have switched the service back on against the decision. trade-evidence-api has no
+# manifest in this repo at all; do_start would otherwise lift an unmanaged deployment, so it is held here too.
+# 2026-10-28: thetadata-feed-service and level-absorption-service were on the .102 copy and are deliberately NOT
+# here. thetadata-feed runs at 1 on dev (owner decision 2026-09-19, dev is the data source for prod); the
+# level-absorption crashloop that justified holding it was fixed and it is ready and emitting. The .102 copy is
+# re-synced from this file, which is the single source of truth.
 # USER 2026-10-14: zerodte-research-writer is deployed DARK (Stage-B: its zerodte-writer-identity config map is created
 # only by the provisioning job, not yet run), so it can only crash with CreateContainerConfigError. The start script used to scale it to 1 on
 # every start and the partition doctor then reported it INCONCLUSIVE (exit 5). Hold it at 0 until the provisioning job has run.
-DISABLED_DEV='hpsf-stage-a-service|hpsf-stage-b-service|volume-pace-service|volume-pace-databento-service|volume-sandwich-service|volume-sandwich-databento-service|databento-timewarp-snapshot-replay|strike-flow-classifier-ibkr|options-edge-integration-test|databento-mission-pressure-service|databento-mission-pace-service|spx-mission-control-service|short-premium-agent-service|spread-skew-service|spread-skew-postgres-writer|directional-pressure-databento-service|databento-maxpain-service|databento-mission-sandwich-service|directional-pressure-service|option-truth-engine-service|stock-gex-service|dealer-ledger-service|dealer-ledger-calibration-scorer|dealer-ledger-calibration-accumulator|vix-option-inteligence-service|hedging-pressure-service|zerodte-research-writer|break-score-service|es-trade-tools-service|wave-cycle-service'
+DISABLED_DEV='hpsf-stage-a-service|hpsf-stage-b-service|volume-pace-service|volume-pace-databento-service|volume-sandwich-service|volume-sandwich-databento-service|databento-timewarp-snapshot-replay|strike-flow-classifier-ibkr|options-edge-integration-test|databento-mission-pressure-service|databento-mission-pace-service|spx-mission-control-service|short-premium-agent-service|spread-skew-service|spread-skew-postgres-writer|directional-pressure-databento-service|databento-maxpain-service|databento-mission-sandwich-service|directional-pressure-service|option-truth-engine-service|stock-gex-service|dealer-ledger-service|dealer-ledger-calibration-scorer|dealer-ledger-calibration-accumulator|vix-option-inteligence-service|hedging-pressure-service|zerodte-research-writer|corridor-gauge-service|trade-evidence-api|break-score-service|es-trade-tools-service|wave-cycle-service'
 # OVERNIGHT ES-tracking set — the ONLY services brought up right after the (17:20 ET, trading days) clean,
 # so ES futures are tracked overnight. Everything else stays at 0 until the 06:15 ET full start. (2026-08-03: was 07:30)
 # databento-feed + databento-gex-service are kept alive overnight so the pre-market LIVE OI path runs before
