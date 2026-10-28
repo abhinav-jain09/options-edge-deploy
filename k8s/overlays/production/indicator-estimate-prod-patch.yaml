@@ -1,0 +1,51 @@
+# PRODUCTION: overnight (Globex) ES-basis estimate bars (owner 2026-10-28: "it should be working for global hours also" — the production
+# Order and context pages showed no candles outside the cash session). A SECOND container in the indicator-service pod runs the same image with
+# INDICATOR_SOURCE_MODE=SPX_GLOBEX_ESTIMATE. It builds SPX-equivalent bars from the ES-basis-derived spot tier (the feed cascade's output on
+# underlying.spx.price) over the Globex hours until the 09:30 ET cash open and writes them to ITS OWN topics options.indicators.estimate.bars and
+# options.indicators.estimate.bars.current. It never writes options.indicators.bars (validated in code), so market-structure, reversal
+# confirmation and every other production consumer of the native bars cannot see an estimate. The code refuses a production runtime profile
+# unless INDICATOR_ESTIMATE_ALLOW_PRODUCTION=true, which this patch sets for this container only (processing PR 1472).
+# Isolation: the container has no readiness probe and the entrypoint halts the JVM when its loop fails, so kubelet restarts ONLY this
+# container; while it restarts the pod's ContainersReady is briefly false (the single indicator-service endpoint leaves its Service; nothing
+# in production reads that Service). The native indicator container keeps running. Roll back = remove this patch.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: indicator-service
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: indicator-estimate
+          image: 192.168.100.252:5000/options-edge-indicator-service:prod
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            - { name: INDICATOR_SOURCE_MODE, value: "SPX_GLOBEX_ESTIMATE" }
+            - { name: INDICATOR_ESTIMATE_ENABLED, value: "true" }
+            - { name: INDICATOR_ESTIMATE_ALLOW_PRODUCTION, value: "true" }
+            - { name: INDICATOR_INPUT_TOPIC, value: "underlying.spx.price" }
+            - { name: INDICATOR_BARS_TOPIC, value: "options.indicators.estimate.bars" }
+            - { name: HEALTH_PORT, value: "8139" }
+            - { name: JAVA_TOOL_OPTIONS, value: "-Xms64m -Xmx256m" }
+          ports:
+            - name: estimate
+              containerPort: 8139
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: estimate
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            failureThreshold: 4
+          resources:
+            requests:
+              cpu: 50m
+              memory: 192Mi
+            limits:
+              memory: 512Mi
