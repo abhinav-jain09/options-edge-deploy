@@ -66,6 +66,20 @@ spec:
     spec:
       containers:
         - env:
+            - name: CONTEXT_TAPE_SESSION_MODE
+              value: GLOBEX
+            - name: CONTEXT_TAPE_MAX_SNAPSHOT_BYTES
+              value: "4194304"
+            - name: CONTEXT_TAPE_ESTIMATE_BARS_ENABLED
+              value: "true"
+            - name: CONTEXT_TAPE_ESTIMATE_BARS_TOPIC
+              value: options.indicators.estimate.bars
+            - name: CONTEXT_TAPE_SPOT_TOPIC
+              value: underlying.spx.price
+            - name: CONTEXT_TAPE_SPOT_FIELD_FILTER
+              value: ANY
+            - name: CONTEXT_TAPE_SPOT_SOURCE_FILTER
+              value: ANY
             - name: CONTEXT_TAPE_DIRECTION_ENABLED
               value: "true"
             - name: CONTEXT_TAPE_DIRECTION_SPOT_TOPIC
@@ -120,18 +134,12 @@ spec:
               value: 2026-07-02,2026-11-27,2026-12-24
             - name: HEALTH_PORT
               value: "8135"
-            - name: CONTEXT_TAPE_SPOT_TOPIC
-              value: underlying.spx.index.price
             - name: CONTEXT_TAPE_GEX_HISTORY_TOPIC
               value: options.databento.gex.strike.history
             - name: CONTEXT_TAPE_ES_TRADES_TOPIC
               value: underlying.es.trades
-            - name: CONTEXT_TAPE_SESSION_MODE
-              value: NYSE_RTH
             - name: CONTEXT_TAPE_PRE_OPEN_ET
               value: "07:00"
-            - name: CONTEXT_TAPE_MAX_SNAPSHOT_BYTES
-              value: "1048576"
             - name: JAVA_TOOL_OPTIONS
               value: -Xms256m -Xmx1536m
           envFrom:

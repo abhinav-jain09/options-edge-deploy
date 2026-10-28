@@ -1,0 +1,24 @@
+# PRODUCTION: the Context Tape and the Order tab draw overnight (Globex) bars (owner 2026-10-28). Same keys and the same reasons as the dev patch
+# (k8s/overlays/dev/context-tape-estimate-bars-dev-patch.yaml, es4 runs the same): GLOBEX session mode (the session opens at the prior evening's
+# 18:00 ET reopen), estimate bars read from options.indicators.estimate.bars (the new indicator-estimate container) and drawn, labelled ES ESTIMATE,
+# in [Globex open, 09:30 ET) with the native bars taking over at the cash open, the GLOBEX snapshot cap (4 MiB), and the spot read from the feed's
+# CASCADE (underlying.spx.price, filters ANY): the raw IBKR index topic is quiet outside the cash session. The native RTH candles are unchanged.
+# Roll back = remove this patch (and indicator-estimate-prod-patch.yaml). env merges by name over the base.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: context-tape-service
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: context-tape
+          env:
+            - { name: CONTEXT_TAPE_SESSION_MODE, value: "GLOBEX" }
+            - { name: CONTEXT_TAPE_MAX_SNAPSHOT_BYTES, value: "4194304" }
+            - { name: CONTEXT_TAPE_ESTIMATE_BARS_ENABLED, value: "true" }
+            - { name: CONTEXT_TAPE_ESTIMATE_BARS_TOPIC, value: "options.indicators.estimate.bars" }
+            - { name: CONTEXT_TAPE_SPOT_TOPIC, value: "underlying.spx.price" }
+            - { name: CONTEXT_TAPE_SPOT_FIELD_FILTER, value: "ANY" }
+            - { name: CONTEXT_TAPE_SPOT_SOURCE_FILTER, value: "ANY" }
