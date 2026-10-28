@@ -1,0 +1,14 @@
+#!/bin/sh
+# Restart a registry that was manually or cleanly stopped, but never churn it while Kafka is down.
+set -eu
+
+if ! systemctl is-active --quiet kafka.service; then
+    exit 0
+fi
+
+if systemctl is-active --quiet schema-registry.service \
+        && curl --fail --silent --show-error --max-time 3 http://127.0.0.1:8082/subjects >/dev/null; then
+    exit 0
+fi
+
+systemctl restart schema-registry.service

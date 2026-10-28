@@ -1,0 +1,7 @@
+[Unit]
+Description=OptionsEdge Schema Registry availability check
+After=kafka.service schema-registry.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/oe-schema-registry-healthcheck
