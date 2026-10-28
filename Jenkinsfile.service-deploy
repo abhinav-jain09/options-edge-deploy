@@ -321,7 +321,7 @@ PYEOF
       // Every W0-only constraint is judged BEFORE any stage mutates anything (the rollout stage below would otherwise deploy market-structure
       // and only then reject a malformed wipe request).
       when {
-        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && params.W0_CUTOVER_WIPE }
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.W0_CUTOVER_WIPE) }
       }
       steps {
         script {
@@ -682,7 +682,7 @@ PYEOF
       // LAG-R16.7: the geometry signal adapter writes with auto.register.schemas=false and the EXACT fixed ids 2801-2807, so the dev registry must hold them
       // before the bridge starts. Same procedure as the TA stage above; dev only, production is refused here (a production import stays an operator act).
       when {
-        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && params.REGISTER_GEOMETRY_SCHEMAS && params.SERVICE == 'amt-order-bridge' }
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.REGISTER_GEOMETRY_SCHEMAS && params.SERVICE == 'amt-order-bridge') }
       }
       steps {
         script {
