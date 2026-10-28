@@ -56,6 +56,11 @@ spec:
             # regular sets replace them at the cash open. Production's patch does not carry this variable (the code default is off).
             - name: GATEWAY_MARKET_STRUCTURE_ESTIMATE_PATTERNS_ENABLED
               value: "true"
+            # DEV-ONLY: the pre-market ESTIMATE structure record (levels, trend, selection) from options.spx.market-structure.estimate.ui, written by
+            # the same market-structure-estimate container. It joins the SAME retention and the SAME market-structure frame, newest asOfMs wins,
+            # so the regular record replaces it at the cash open. Production's patch does not carry this variable (the code default is off).
+            - name: GATEWAY_MARKET_STRUCTURE_ESTIMATE_ENABLED
+              value: "true"
             # INDICATOR-STUDIES studies relay (frames indicator-studies / indicator-studies-current and the hello's studies fields):
             # ON in DEV (production overlay: false). The producer flag INDICATOR_STUDIES_ENABLED is set true for dev by
             # indicator-studies-dev-enable-patch.yaml. Preconditions for dev (verified when this was enabled): schemas 2501-2503 registered
