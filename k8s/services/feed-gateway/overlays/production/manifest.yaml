@@ -63,6 +63,10 @@ spec:
               value: "true"
             - name: GATEWAY_IBKR_PREOPEN_GEX_ARBITRATION_ENABLED
               value: "false"
+            - name: GATEWAY_MARKET_STRUCTURE_ESTIMATE_PATTERNS_ENABLED
+              value: "true"
+            - name: GATEWAY_MARKET_STRUCTURE_ESTIMATE_ENABLED
+              value: "true"
             - name: GATEWAY_PARTITION_REFRESH_METADATA_TIMEOUT_MS
               value: "5000"
             - name: GATEWAY_MARKET_STRUCTURE_ENABLED

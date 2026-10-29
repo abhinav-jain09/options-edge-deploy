@@ -60,45 +60,8 @@ spec:
     spec:
       containers:
         - env:
-            - name: INDICATOR_SOURCE_MODE
-              value: SPX_GLOBEX_ESTIMATE
-            - name: INDICATOR_ESTIMATE_ENABLED
-              value: "true"
-            - name: INDICATOR_ESTIMATE_ALLOW_PRODUCTION
-              value: "true"
-            - name: INDICATOR_INPUT_TOPIC
-              value: underlying.spx.price
-            - name: INDICATOR_BARS_TOPIC
-              value: options.indicators.estimate.bars
-            - name: HEALTH_PORT
-              value: "8139"
-            - name: JAVA_TOOL_OPTIONS
-              value: -Xms64m -Xmx256m
-          envFrom:
-            - configMapRef:
-                name: options-edge-config
-            - secretRef:
-                name: options-edge-runtime-secrets
-          image: 192.168.100.252:5000/options-edge-indicator-service:prod
-          imagePullPolicy: IfNotPresent
-          livenessProbe:
-            failureThreshold: 4
-            httpGet:
-              path: /health/live
-              port: estimate
-            initialDelaySeconds: 60
-            periodSeconds: 30
-          name: indicator-estimate
-          ports:
-            - containerPort: 8139
-              name: estimate
-          resources:
-            limits:
-              memory: 512Mi
-            requests:
-              cpu: 50m
-              memory: 192Mi
-        - env:
+            - name: KAFKA_APPLICATION_ID_SUFFIX
+              value: -prod-b
             - name: INDICATOR_STUDIES_ENABLED
               value: "true"
             - name: HEALTH_PORT
@@ -151,6 +114,45 @@ spec:
           volumeMounts:
             - mountPath: /home/options-edge/indicator-service/state
               name: state
+        - env:
+            - name: INDICATOR_SOURCE_MODE
+              value: SPX_GLOBEX_ESTIMATE
+            - name: INDICATOR_ESTIMATE_ENABLED
+              value: "true"
+            - name: INDICATOR_ESTIMATE_ALLOW_PRODUCTION
+              value: "true"
+            - name: INDICATOR_INPUT_TOPIC
+              value: underlying.spx.price
+            - name: INDICATOR_BARS_TOPIC
+              value: options.indicators.estimate.bars
+            - name: HEALTH_PORT
+              value: "8139"
+            - name: JAVA_TOOL_OPTIONS
+              value: -Xms64m -Xmx256m
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
+          image: 192.168.100.252:5000/options-edge-indicator-service:prod
+          imagePullPolicy: IfNotPresent
+          livenessProbe:
+            failureThreshold: 4
+            httpGet:
+              path: /health/live
+              port: estimate
+            initialDelaySeconds: 60
+            periodSeconds: 30
+          name: indicator-estimate
+          ports:
+            - containerPort: 8139
+              name: estimate
+          resources:
+            limits:
+              memory: 512Mi
+            requests:
+              cpu: 50m
+              memory: 192Mi
       volumes:
         - emptyDir:
             sizeLimit: 5Gi

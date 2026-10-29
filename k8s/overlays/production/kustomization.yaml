@@ -836,6 +836,13 @@ patches:
   # See the two patch headers. Roll back = remove both lines.
   - path: indicator-estimate-prod-patch.yaml
   - path: context-tape-globex-prod-env-patch.yaml
+  # PRODUCTION (owner 2026-10-29): Globex-hours candle patterns (market-structure-estimate container + the gateway relay) and the declared indicator application id.
+  - path: market-structure-estimate-prod-patch.yaml
+    target:
+      kind: Deployment
+      name: market-structure-service
+  - path: feed-gateway-estimate-prod-env-patch.yaml
+  - path: indicator-appid-prod-patch.yaml
   # Pre-open IBKR GEX production gate (gamma) — OVERNIGHT-IBKR-GEX rev13+D15. These three land
   # together and must not be split: the gate turns the publisher on, the gateway relays the status
   # plane that keeps the values honestly labelled, and the hold stops the D15 fan-out from waking
