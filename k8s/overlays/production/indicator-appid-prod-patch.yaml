@@ -1,0 +1,18 @@
+# PRODUCTION: the indicator-service Kafka Streams application id suffix is "-prod-b" (set live on 2026-10-28 and now declared here).
+# The group "indicator-service-prod" carried unstable (pending transactional) offsets on underlying.spx.price that made the task's committed() call time out
+# for 60 s on every start, so the service never became ready; a NEW application id (new consumer group, new <id>-indicator-state-changelog) started
+# cleanly. The shared configmap value (-prod) is left alone: it is read by every service. Changing this value again = a new state changelog and a replay of
+# the retained input from the earliest offset (the epoch GENESIS flag then has to be set once, see dev-cleanup.sh). Roll back = remove this patch
+# (and expect the old group's stuck offsets).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: indicator-service
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: indicator-service
+          env:
+            - { name: KAFKA_APPLICATION_ID_SUFFIX, value: "-prod-b" }

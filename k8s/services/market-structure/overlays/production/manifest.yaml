@@ -38,6 +38,43 @@ spec:
     spec:
       containers:
         - env:
+            - name: MARKET_STRUCTURE_SESSION_PROFILE
+              value: PREMARKET_ESTIMATE
+            - name: MARKET_STRUCTURE_ESTIMATE_ENABLED
+              value: "true"
+            - name: MARKET_STRUCTURE_ESTIMATE_ALLOW_PRODUCTION
+              value: "true"
+            - name: MARKET_STRUCTURE_PATTERNS_ENABLED
+              value: "true"
+            - name: MARKET_STRUCTURE_HEALTH_PORT
+              value: "8082"
+            - name: JAVA_TOOL_OPTIONS
+              value: -Xms128m -Xmx384m
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
+          image: 192.168.100.252:5000/options-edge-market-structure:prod
+          imagePullPolicy: IfNotPresent
+          livenessProbe:
+            failureThreshold: 4
+            httpGet:
+              path: /health/live
+              port: estimate
+            initialDelaySeconds: 60
+            periodSeconds: 30
+          name: market-structure-estimate
+          ports:
+            - containerPort: 8082
+              name: estimate
+          resources:
+            limits:
+              memory: 768Mi
+            requests:
+              cpu: 100m
+              memory: 384Mi
+        - env:
             - name: MARKET_STRUCTURE_TRANSACTIONAL_ID
               value: market-structure-service-production
             - name: MARKET_STRUCTURE_TOOLS_ENABLED

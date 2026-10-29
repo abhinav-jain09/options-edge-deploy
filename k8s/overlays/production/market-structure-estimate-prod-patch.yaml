@@ -1,0 +1,48 @@
+# PRODUCTION: candle patterns through the Globex hours (owner 2026-10-29: the production page showed candles overnight but no pattern overlays).
+# A SECOND container in the production market-structure pod runs the same image with MARKET_STRUCTURE_SESSION_PROFILE=PREMARKET_ESTIMATE: it reads
+# options.indicators.estimate.bars (the indicator-estimate container's bars, see indicator-estimate-prod-patch.yaml) and writes ONLY its own topics
+# options.spx.market-structure.estimate.{ui,sequence,dlq,recovery,patterns}, which it creates itself; names fixed in code, a generic override is refused,
+# so it cannot write a regular topic or share the regular transactional id. The code refuses a production runtime profile unless
+# MARKET_STRUCTURE_ESTIMATE_ALLOW_PRODUCTION=true, set here for this container only (processing market-structure change of 2026-10-29).
+# Isolation: no readiness probe (its /health/ready is red outside the session by design); liveness covers a hung loop; a restart of this container
+# briefly makes the pod's ContainersReady false. The regular container is untouched. Roll back = remove this patch.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: market-structure-service
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: market-structure-estimate
+          image: 192.168.100.252:5000/options-edge-market-structure:prod
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            - { name: MARKET_STRUCTURE_SESSION_PROFILE, value: "PREMARKET_ESTIMATE" }
+            - { name: MARKET_STRUCTURE_ESTIMATE_ENABLED, value: "true" }
+            - { name: MARKET_STRUCTURE_ESTIMATE_ALLOW_PRODUCTION, value: "true" }
+            - { name: MARKET_STRUCTURE_PATTERNS_ENABLED, value: "true" }
+            - { name: MARKET_STRUCTURE_HEALTH_PORT, value: "8082" }
+            - { name: JAVA_TOOL_OPTIONS, value: "-Xms128m -Xmx384m" }
+          ports:
+            - name: estimate
+              containerPort: 8082
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: estimate
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            failureThreshold: 4
+          resources:
+            requests:
+              cpu: 100m
+              memory: 384Mi
+            limits:
+              memory: 768Mi

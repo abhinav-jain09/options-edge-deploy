@@ -1,0 +1,16 @@
+# PRODUCTION: relay the Globex ESTIMATE pattern sets and structure record to the page (owner 2026-10-29), written by the market-structure-estimate
+# container (market-structure-estimate-prod-patch.yaml). They join the SAME per-timeframe retention and the SAME frame as the regular ones, newest asOfMs
+# wins, so the regular sets replace them at the cash open. Same two flags the dev patch sets. Roll back = remove this patch.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: feed-gateway-service
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: feed-gateway
+          env:
+            - { name: GATEWAY_MARKET_STRUCTURE_ESTIMATE_PATTERNS_ENABLED, value: "true" }
+            - { name: GATEWAY_MARKET_STRUCTURE_ESTIMATE_ENABLED, value: "true" }
