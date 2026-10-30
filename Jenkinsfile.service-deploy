@@ -956,8 +956,8 @@ PYEOF
     }
     stage('Verify break-classification topics') {
       // BEFORE the rollout, same barrier: the service never creates a topic and its boot verification refuses to start unless the output, checkpoint, parent and pivot topics exist in their
-      // declared shape AND the broker's message.max.bytes is >= 8 MiB. This barrier creates the absent ones, verifies every one, and RAISES the cluster-wide dynamic default
-      // message.max.bytes to 9437184 when the broker is below it (never lowers; idempotent; fails closed). It is the one environment-level effect of this rollout.
+      // declared shape AND the checkpoint topic's own effective max.message.bytes is >= 8 MiB. This barrier creates the absent ones, verifies every one and pins a topic-level
+      // max.message.bytes of 9437184 on the checkpoint topic (raise only; idempotent; fails closed). It changes NO broker config (the earlier cluster-wide raise crash-looped the dev feed gateway and was removed).
       when {
         expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'break-classifier' && !params.DEPLOY_DRY_RUN) }
       }
