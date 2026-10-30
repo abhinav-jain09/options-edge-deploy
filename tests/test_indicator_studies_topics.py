@@ -127,8 +127,8 @@ class MirrorAndSchemaWiring(unittest.TestCase):
     def test_mirror_job_allow_list_and_shape_contract_carry_the_es_pair(self):
         text = (ROOT / "Jenkinsfile.es-indicator-mirror").read_text()
         self.assertIn(f"'{ES_BARS}', '{ES_CURRENT}'", text)
-        self.assertIn(f"{ES_BARS})     PARTS=8; POLICY=delete;         RET={DAY45}; IDS=\"2001 2002 2003 2004 2005 2006 2007 2501 2502 2503\" ;;", text)   # a studies mirror needs the study ids too
-        self.assertIn(f"{ES_CURRENT})  PARTS=1; POLICY=delete; RET={DAY7};  IDS=\"2001 2002 2003 2004 2005 2006 2007 2501 2502 2503\" ;;", text)
+        self.assertIn(f"{ES_BARS})     PARTS=8; POLICY=delete;         RET={DAY45}; IDS=\"2001 2002 2003 2004 2005 2006 2007 2501 2502 2503 2505 2506\" ;;", text)   # a studies mirror needs the study ids too
+        self.assertIn(f"{ES_CURRENT})  PARTS=1; POLICY=delete; RET={DAY7};  IDS=\"2001 2002 2003 2004 2005 2006 2007 2501 2502 2503 2505 2506\" ;;", text)
         self.assertIn("es.options.indicators.bars)             PARTS=8; POLICY=delete;         RET=3888000000; IDS=\"2001 2002 2003 2004 2005 2006 2007\" ;;", text)   # an existing mirror is never blocked on the study ids
         self.assertIn('schema-parity.sh "$SRC_REGISTRY" "$TGT_REGISTRY" "$IDS"', text)
         yml = (ROOT / "ansible/vars/es-mirrors.yml").read_text()
@@ -137,8 +137,15 @@ class MirrorAndSchemaWiring(unittest.TestCase):
 
     def test_schema_scripts_know_the_three_study_ids(self):
         fixed = (ROOT / "scripts/kafka/ensure-indicator-schemas.sh").read_text()
-        for name, id_ in (("StudyBar", 2501), ("StudiesCurrent", 2502), ("StudyEngineImage", 2503)):
-            self.assertIn(f"com.optionsedge.contracts.indicators.avro.{name}|{id_}|{name}.avsc", fixed)
+        for name, id_, file in (("StudyBar", 2501, "v1/StudyBar.avsc|2505"), ("StudiesCurrent", 2502, "v1/StudiesCurrent.avsc|2506"), ("StudyEngineImage", 2503, "StudyEngineImage.avsc")):
+            self.assertIn(f"com.optionsedge.contracts.indicators.avro.{name}|{id_}|{file}", fixed)   # version 1 only here; version 2 (2505, 2506) comes from indicator-studies.map
+        studies_map = (ROOT / "scripts/kafka/schema-id-maps/indicator-studies.map").read_text()
+        for row in ("StudyBar|2505|StudyBar.avsc|2", "StudiesCurrent|2506|StudiesCurrent.avsc|2"):
+            self.assertIn(row, studies_map)
+        for path in ("Jenkinsfile.service-deploy", "Jenkinsfile.es4-deploy", "scripts/es4/cleanup-es4.sh"):
+            text = (ROOT / path).read_text()
+            self.assertIn("indicator-studies.map", text, path)
+            self.assertLess(text.index("ensure-indicator-schemas.sh"), text.index("indicator-studies.map"), path)
         self.assertIn("2007 2501 2502 2503", (ROOT / "scripts/kafka/assert-indicator-schema-parity.sh").read_text())   # the default set still carries the study ids; a non-studies mirror passes its own subset
 
 
