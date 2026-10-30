@@ -87,10 +87,11 @@ spec:
             - name: GATEWAY_WAVE_CYCLE_ENABLED
               value: "true"
             # Phase F BREAK CLASSIFICATION relay  options.spx.break-classification (BreakMark/BreakOutcome/BreakStatus). The topic variable KAFKA_BREAK_CLASSIFICATION_TOPIC defaults to exactly the topic
-            # scripts/kafka/topics.env declares, so none is set here. Preserve the current dev runtime
-            # default (off) during this routing-only rollout; relay activation is a separate deployment.
+            # scripts/kafka/topics.env declares, so none is set here. ON in dev and production (owner standing goal: every service out of shadow); dev has run it ON since the
+            # 2026-10-30 Phase F rollout, and this file said "false" until then, which the next gateway deploy would have reverted. Until a Phase B/C producer feeds
+            # break-classifier-service its parents the topic carries status records only (no marks).
             - name: GATEWAY_BREAK_CLASSIFICATION_ENABLED
-              value: "false"
+              value: "true"
             # Early-auction verdict ledger relay (the read-only /early-auction panel + the home-page
             # strip behind GET /api/early-auction/events). ON since 2026-10-13 (owner: "flip the
             # relay flag when rollout lands") — DEV ONLY; production stays off with the shadow
