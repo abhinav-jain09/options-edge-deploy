@@ -1,6 +1,6 @@
 """Deploy wiring of break-classifier-service (Phase F), live on dev AND production through per-environment enable patches.
 
-Covers: the broker + topic barrier (scripts/kafka/ensure-break-classification-topics.sh) against the stateful stand-in (tests/fake_kafka_cli.py), the topics.env
+Covers: the topic barrier (no broker-wide change) (scripts/kafka/ensure-break-classification-topics.sh) against the stateful stand-in (tests/fake_kafka_cli.py), the topics.env
 declarations, the per-topic max.message.bytes mechanism (topic-shape.lib.sh, dev-cleanup.sh), the registration of the service everywhere a service must be, the
 flag/replica contract (base 0 / "false", literal "true" only in the two enable patches and their generated slices), the lifecycle lists and the fixed-id schema map."""
 from __future__ import annotations
@@ -53,95 +53,108 @@ def right_topics() -> dict:
 
 
 def cli_dir(tmp: Path) -> Path:
+    """kafka-topics and kafka-configs only: the barrier must not need (or call) kafka-broker-api-versions any more."""
     bin_dir = tmp / "bin"
     bin_dir.mkdir()
-    for n in ["kafka-topics", "kafka-configs", "kafka-broker-api-versions"]:
+    for n in ["kafka-topics", "kafka-configs"]:
         shutil.copy(FAKE, bin_dir / n)
         (bin_dir / n).chmod(0o755)
     return bin_dir
 
 
-def run_barrier(topics: dict, brokers: dict | None = None, pinned: list[str] | None = None, alter_fails: bool = False):
+def run_barrier(topics: dict, topic_alter_fails: bool = False):
     tmp = Path(tempfile.mkdtemp())
     state, calls = tmp / "state.json", tmp / "calls"
-    state.write_text(json.dumps({"topics": topics, "brokers": brokers if brokers is not None else {"1": {"message.max.bytes": str(STOCK_BROKER)}},
-                                 "broker_pinned": pinned or []}))
+    state.write_text(json.dumps({"topics": topics}))
     calls.touch()
     env = dict(os.environ, PATH=f"{cli_dir(tmp)}:{os.environ['PATH']}", FAKE_KAFKA_STATE=str(state), FAKE_KAFKA_CALLS=str(calls),
                KAFKA_BOOTSTRAP_SERVERS="b:1", KAFKA_TOPIC_REPLICATION_FACTOR="1")
-    if alter_fails:
-        env["FAKE_KAFKA_BROKER_ALTER_FAILS"] = "1"
+    if topic_alter_fails:
+        env["FAKE_KAFKA_TOPIC_MAXBYTES_ALTER_FAILS"] = "1"
     r = subprocess.run(["bash", str(BARRIER)], capture_output=True, text=True, env=env)
     final = json.loads(state.read_text())
     return r.returncode, r.stdout + r.stderr, calls.read_text().splitlines(), final
 
 
-def broker_alters(calls: list[str]) -> list[str]:
-    return [c for c in calls if "--entity-type brokers" in c and "--alter" in c]
+def broker_touches(calls: list[str]) -> list[str]:
+    """Any call that reads or writes a BROKER config or lists brokers. The barrier makes none."""
+    return [c for c in calls if "--entity-type brokers" in c or "kafka-broker-api-versions" in c or "--entity-default" in c]
+
+
+def checkpoint_pins(calls: list[str]) -> list[str]:
+    return [c for c in calls if "--entity-type topics" in c and "--alter" in c and "max.message.bytes" in c]
 
 
 class Barrier(unittest.TestCase):
-    def test_a_fresh_cluster_gets_the_broker_raise_and_the_four_topics_at_their_shapes(self):
+    def test_a_fresh_cluster_gets_the_five_topics_at_their_shapes_and_no_broker_is_touched(self):
         rc, out, calls, state = run_barrier({})
         self.assertEqual(rc, 0, out)
-        self.assertEqual(len(broker_alters(calls)), 1)
-        self.assertIn("kafka-configs --bootstrap-server b:1 --entity-type brokers --entity-default --alter --add-config message.max.bytes=9437184", calls)
-        self.assertEqual(state["brokers"]["1"]["message.max.bytes"], str(NINE_MIB))
+        self.assertEqual(broker_touches(calls), [], "the barrier makes no broker-wide change and does not even read a broker config")
+        self.assertNotIn("message.max.bytes", " ".join(calls), "the cluster-wide setting is never named in a command")
         for t, (policy, ret) in SHAPES.items():
             cfg = state["topics"][t]["configs"]
             self.assertEqual((state["topics"][t]["partitions"], cfg["cleanup.policy"], cfg["retention.ms"]), (1, policy, ret), t)
-        self.assertEqual(state["topics"][CP]["configs"]["max.message.bytes"], str(NINE_MIB))
+        self.assertEqual(state["topics"][CP]["configs"]["max.message.bytes"], str(NINE_MIB), "the TOPIC-level limit on the checkpoint")
         for t in (OUT, X1, X2):
             self.assertEqual(state["topics"][t]["configs"]["max.message.bytes"], str(ONE_MIB), t)
         cp = state["topics"][CP]["configs"]
         self.assertEqual((cp["segment.bytes"], cp["max.compaction.lag.ms"]), ("16777216", "300000"))
+        self.assertEqual(checkpoint_pins(calls), [], "a created checkpoint is born at 9437184: no separate pin")
         self.assertIn("=== ensure-break-classification-topics OK ===", out)
 
-    def test_a_second_run_changes_nothing(self):
+    def test_a_second_run_changes_nothing_about_the_limit(self):
         rc, out, _, state = run_barrier({})
         self.assertEqual(rc, 0, out)
-        rc2, out2, calls2, _ = run_barrier(state["topics"], state["brokers"])
+        rc2, out2, calls2, state2 = run_barrier(state["topics"])
         self.assertEqual(rc2, 0, out2)
-        self.assertEqual(broker_alters(calls2), [], "an adequate broker is never altered again")
+        self.assertEqual(checkpoint_pins(calls2), [])
+        self.assertEqual(broker_touches(calls2), [])
         self.assertFalse(any("--create" in c or "--delete" in c for c in calls2))
-        self.assertIn("nothing changed", out2)
+        self.assertEqual(state2["topics"][CP]["configs"]["max.message.bytes"], str(NINE_MIB))
 
-    def test_a_broker_at_or_above_8_mib_is_left_alone_and_never_lowered(self):
-        for value in (EIGHT_MIB, 10 * ONE_MIB, 64 * ONE_MIB):
-            rc, out, calls, state = run_barrier(right_topics(), {"1": {"message.max.bytes": str(value)}})
+    def test_an_existing_checkpoint_without_its_own_limit_is_pinned_on_that_topic_only(self):
+        """The dev state that caused the outage: the checkpoint inherited the (raised) broker default and had no topic-level value."""
+        for label, mutate in (("no topic-level value", lambda c: c.pop("max.message.bytes")), ("topic-level at the 1 MiB default", lambda c: c.update({"max.message.bytes": str(STOCK_BROKER)})),
+                              ("one byte under 8 MiB", lambda c: c.update({"max.message.bytes": str(EIGHT_MIB - 1)}))):
+            existing = right_topics()
+            mutate(existing[CP]["configs"])
+            rc, out, calls, state = run_barrier(existing)
+            self.assertEqual(rc, 0, f"{label}: {out}")
+            self.assertEqual(len(checkpoint_pins(calls)), 1, label)
+            self.assertIn(f"--entity-name {CP} --alter --add-config max.message.bytes={NINE_MIB}", checkpoint_pins(calls)[0], label)
+            self.assertEqual(state["topics"][CP]["configs"]["max.message.bytes"], str(NINE_MIB), label)
+            self.assertEqual(broker_touches(calls), [], label)
+            for t in (OUT, X1, X2, E):
+                self.assertFalse(any(f"--entity-name {t} " in c and "--alter" in c for c in calls), f"{label}: {t} is never altered")
+
+    def test_a_checkpoint_limit_at_or_above_8_mib_is_left_alone_and_never_lowered(self):
+        for value in (EIGHT_MIB, NINE_MIB, 64 * ONE_MIB):
+            existing = right_topics()
+            existing[CP]["configs"]["max.message.bytes"] = str(value)
+            rc, out, calls, state = run_barrier(existing)
             self.assertEqual(rc, 0, out)
-            self.assertEqual(broker_alters(calls), [], str(value))
-            self.assertEqual(state["brokers"]["1"]["message.max.bytes"], str(value))
+            self.assertEqual(checkpoint_pins(calls), [], str(value))
+            self.assertEqual(state["topics"][CP]["configs"]["max.message.bytes"], str(value))
 
-    def test_one_byte_below_the_bound_is_raised(self):
-        rc, out, calls, state = run_barrier(right_topics(), {"1": {"message.max.bytes": str(EIGHT_MIB - 1)}})
-        self.assertEqual(rc, 0, out)
-        self.assertEqual(len(broker_alters(calls)), 1)
-        self.assertEqual(state["brokers"]["1"]["message.max.bytes"], str(NINE_MIB))
-
-    def test_every_broker_is_judged_and_the_raise_covers_all_of_them(self):
-        rc, out, calls, state = run_barrier(right_topics(), {"1": {"message.max.bytes": str(NINE_MIB)}, "2": {"message.max.bytes": str(STOCK_BROKER)}})
-        self.assertEqual(rc, 0, out)
-        self.assertEqual({b["message.max.bytes"] for b in state["brokers"].values()}, {str(NINE_MIB)})
-
-    def test_a_failed_alter_fails_closed_before_any_topic_is_created(self):
-        rc, out, calls, state = run_barrier({}, alter_fails=True)
+    def test_a_failed_checkpoint_pin_fails_closed(self):
+        existing = right_topics()
+        existing[CP]["configs"].pop("max.message.bytes")
+        rc, out, _, state = run_barrier(existing, topic_alter_fails=True)
         self.assertEqual(rc, 1, out)
-        self.assertIn("could not raise message.max.bytes", out)
-        self.assertEqual(state["topics"], {}, "nothing was created")
-        self.assertFalse(any("--create" in c for c in calls))
+        self.assertIn("could not set max.message.bytes", out)
+        self.assertIn("FAILED", out)
         self.assertNotIn("OK ===", out)
+        self.assertNotIn("max.message.bytes", state["topics"][CP]["configs"])
 
-    def test_a_per_broker_override_that_survives_the_raise_fails_closed(self):
-        rc, out, _, _ = run_barrier(right_topics(), {"1": {"message.max.bytes": str(STOCK_BROKER)}}, pinned=["1"])
+    def test_a_failed_pin_stops_before_any_other_topic_is_created_or_altered(self):
+        existing = right_topics()
+        existing[CP]["configs"].pop("max.message.bytes")
+        del existing[X2]          # another topic is absent: it must NOT be created after the failed pin
+        rc, out, calls, state = run_barrier(existing, topic_alter_fails=True)
         self.assertEqual(rc, 1, out)
-        self.assertIn("still below", out)
-
-    def test_an_unreadable_broker_value_fails_closed_and_is_never_assumed_adequate(self):
-        rc, out, calls, _ = run_barrier(right_topics(), {"1": {}})
-        self.assertEqual(rc, 1, out)
-        self.assertIn("message.max.bytes='<unreadable>'", out)
-        self.assertEqual(broker_alters(calls), [])
+        self.assertNotIn(X2, state["topics"], "no topic is created after the failed pin")
+        self.assertFalse(any("--create" in c for c in calls))
+        self.assertFalse(any("--alter" in c and "segment.bytes" in c for c in calls), "no reconciliation after the failure")
 
     def test_every_difference_the_service_refuses_fails_closed_names_the_topic_and_alters_nothing(self):
         cases = {
@@ -150,8 +163,6 @@ class Barrier(unittest.TestCase):
             "output compacted": (OUT, lambda d: d["configs"].update({"cleanup.policy": "compact,delete"})),
             "output 32 partitions": (OUT, lambda d: d.update(partitions=32)),
             "checkpoint delete": (CP, lambda d: d["configs"].update({"cleanup.policy": "delete"})),
-            "checkpoint at the 1 MiB default": (CP, lambda d: d["configs"].update({"max.message.bytes": str(ONE_MIB)})),
-            "checkpoint one byte under 8 MiB": (CP, lambda d: d["configs"].update({"max.message.bytes": str(EIGHT_MIB - 1)})),
             "checkpoint 32 partitions": (CP, lambda d: d.update(partitions=32)),
             "parents below the floor": (X1, lambda d: d["configs"].update({"retention.ms": "172799999"})),
             "parents compacted": (X1, lambda d: d["configs"].update({"cleanup.policy": "compact"})),
@@ -161,7 +172,7 @@ class Barrier(unittest.TestCase):
         for label, (topic, mutate) in cases.items():
             existing = right_topics()
             mutate(existing[topic])
-            rc, out, calls, state = run_barrier(existing, {"1": {"message.max.bytes": str(NINE_MIB)}})
+            rc, out, calls, state = run_barrier(existing)
             self.assertEqual(rc, 1, f"{label}: {out}")
             self.assertIn(f"'{topic}'", out, label)
             self.assertNotIn(f"ok: '{topic}'", out, label)
@@ -172,13 +183,13 @@ class Barrier(unittest.TestCase):
     def test_a_reordered_policy_set_and_a_longer_parent_retention_pass(self):
         existing = right_topics()
         existing[X1]["configs"]["retention.ms"] = "999999999999"
-        rc, out, _, _ = run_barrier(existing, {"1": {"message.max.bytes": str(NINE_MIB)}})
+        rc, out, _, _ = run_barrier(existing)
         self.assertEqual(rc, 0, out)
 
     def test_the_checkpoints_own_retention_is_not_judged(self):
         existing = right_topics()
         existing[CP]["configs"]["retention.ms"] = "604800000"
-        rc, out, _, _ = run_barrier(existing, {"1": {"message.max.bytes": str(NINE_MIB)}})
+        rc, out, _, _ = run_barrier(existing)
         self.assertEqual(rc, 0, out)
 
     def test_the_shared_create_routine_keeps_the_1_mib_default_for_every_existing_caller(self):
@@ -202,7 +213,7 @@ class TopicsEnv(unittest.TestCase):
                               "OPTIONS_EDGE_EXACT_PARTITION_TOPICS", "OPTIONS_EDGE_RESET_REBUILDABLE_TOPICS", "OPTIONS_EDGE_RESET_PRESERVED_TOPICS",
                               "OPTIONS_EDGE_TOPIC_MAX_MESSAGE_BYTES_OVERRIDES", "OPTIONS_EDGE_ES4_TOPICS"])
 
-    def test_the_four_topics_are_declared_one_partition_exact_with_the_barriers_shape(self):
+    def test_the_five_topics_are_declared_one_partition_exact_with_the_barriers_shape(self):
         retention = dict(x.split("=", 1) for x in self.d["OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES"] if "=" in x)
         for t, (policy, ret) in SHAPES.items():
             self.assertIn(f"{t}:1", self.d["OPTIONS_EDGE_TOPICS"], t)
@@ -270,7 +281,7 @@ class MaxMessageBytesMechanism(unittest.TestCase):
 
 
 class DevCleanReconcilesTheBound(unittest.TestCase):
-    """scripts/ops/dev-cleanup.sh: the create pass and the reconcile pass carry max.message.bytes, driven by the real topics.env declarations of the four topics."""
+    """scripts/ops/dev-cleanup.sh: the create pass and the reconcile pass carry max.message.bytes, driven by the real topics.env declarations of the five topics."""
 
     @staticmethod
     def function(name: str) -> str:
@@ -443,10 +454,10 @@ class FlagsAndReplicas(unittest.TestCase):
         self.assertEqual(docs[0]["spec"]["replicas"], 1)
         self.assertEqual(docs[0], self.deployment(f"k8s/services/{SVC}/overlays/production/manifest.yaml"))
 
-    def test_the_patch_headers_state_the_honest_state_and_the_broker_change(self):
+    def test_the_patch_headers_state_the_honest_state_and_that_no_broker_is_changed(self):
         for rel in self.ENABLE.values():
             text = read(rel)
-            for must in ("p=1681/2001", "NO_MEASURED_EDGE", "NO producer on main", "87511c9acb7a897850c2fa436d59c45eaef24481", "message.max.bytes to 9437184", "KEEP_DOWN",
+            for must in ("p=1681/2001", "NO_MEASURED_EDGE", "NO producer on main", "87511c9acb7a897850c2fa436d59c45eaef24481", "KEEP_DOWN",
                          "no digest is recorded here"):
                 self.assertIn(must, text, f"{rel}: {must}")
             self.assertNotRegex(text, r"sha256:[0-9a-f]{64}", "an image digest is pinned at deploy time, never invented")

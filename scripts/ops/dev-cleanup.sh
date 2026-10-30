@@ -331,7 +331,7 @@ topic_desired() {
   for entry in ${OPTIONS_EDGE_TOPIC_DELETE_RETENTION_OVERRIDES:-}; do
     [ "${entry%%=*}" = "$name" ] && DDR="${entry#*=}"
   done
-  # Per-topic max.message.bytes (break-classifier's checkpoint must accept >= 8 MiB records; the dev broker default is 1 MiB). Without it a wipe would rebuild that
+  # Per-topic max.message.bytes (break-classifier's checkpoint must accept >= 8 MiB records; the dev broker default is 1 MiB and stays 1 MiB: the limit is topic-level). Without it a wipe would rebuild that
   # topic at the broker default and the service would refuse to start.
   for entry in ${OPTIONS_EDGE_TOPIC_MAX_MESSAGE_BYTES_OVERRIDES:-}; do
     [ "${entry%%=*}" = "$name" ] && DMB="${entry#*=}"
