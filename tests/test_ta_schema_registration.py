@@ -76,6 +76,14 @@ TRADE_TOOLS_VERSION_2 = [(f"com.optionsedge.contracts.tradetools.{n}", i + 20) f
 WAVE_CYCLE_VERSION_2 = [("com.optionsedge.contracts.wavecycle.WaveSet", 2406), ("com.optionsedge.contracts.wavecycle.CycleSet", 2407)]
 
 
+# CHART-STRUCTURE-TOOLS and CLASSICAL-CHART-PATTERNS calibrated release (contracts 0.49.0): version 2 of StructureToolsSet and GeometryAnnotationSet under NEW ids (priorId 2211, 2221).
+MARKET_STRUCTURE_VERSION_2 = [("com.optionsedge.contracts.marketstructure.tools.StructureToolsSet", 2212), ("com.optionsedge.contracts.marketstructure.geometry.GeometryAnnotationSet", 2223)]
+MARKET_STRUCTURE_VERSION_2_SHA256 = {"StructureToolsSet": "1ea12cb68be4e18d420dcd1f9bad0fd35111ec9ca5a7a286e5b47e2dd7119422",
+                                     "GeometryAnnotationSet": "4263cc10c517fcf92989fbf773f5e208a2be37fe7dd2f181c4146d73a9baad3c"}
+MARKET_STRUCTURE_VERSION_1_SHA256 = {"StructureToolsSet": "d7b13694069d53b46ce7aa91c1f6c484f379f2daf777f55417834f6208cf9a6e",
+                                     "GeometryAnnotationSet": "7df6d75aab13cfa943ef3b7cd10a7fc3da78f7e54c24dcedba4664fec2b023a8"}
+
+
 def read_versioned(service: str) -> list[tuple[str, int, str, int]]:
     """(subject, id, file, version) per map row; the optional fourth column defaults to version 1."""
     rows = []
@@ -306,6 +314,103 @@ class WaveCycleVersionTwoRegistration(unittest.TestCase):
                               "com.optionsedge.contracts.wavecycle.ControlCheckpoint": [(1, 2405)]})
         finally:
             server.shutdown()
+
+
+def seed_market_structure_version_1(reg: Registry) -> None:
+    """The state of dev and production before contracts 0.49.0: the eleven market-structure subjects at version 1 under 2201-2208, 2211, 2221, 2222, compatibility FULL."""
+    for subject, id_, _, version in read_versioned("market-structure"):
+        if version == 1:
+            reg.register(subject, schema_text(subject, 1), id=id_, version=1)
+            reg.configs[subject] = "FULL"
+
+
+class MarketStructureVersionTwoRegistration(unittest.TestCase):
+    """The calibrated release: StructureToolsSet and GeometryAnnotationSet gain version 2 under ids 2212 and 2223 on a registry that already holds version 1."""
+
+    def test_a_registry_holding_version_1_receives_only_the_two_version_2_imports(self):
+        reg = Registry()
+        seed_market_structure_version_1(reg)
+        server, url = serve(reg)
+        try:
+            rc, out = run("market-structure", url, dry=True)
+            self.assertEqual(rc, 0, out)
+            self.assertIn("would import as version 2 under id 2212", out)
+            self.assertIn("would import as version 2 under id 2223", out)
+            self.assertNotIn("would import as version 1", out)
+            self.assertFalse([c for c in reg.calls if c.startswith("POST /subjects/") and c.endswith("/versions {schema…}")], "a dry run imports nothing")
+            rc, out = run("market-structure", url)
+            self.assertEqual(rc, 0, out)
+            imports = [c for c in reg.calls if c.startswith("POST /subjects/") and c.endswith("/versions {schema…}")]
+            self.assertEqual(len(imports), 2, "only version 2 of the two subjects is imported")
+            for subject, id_ in MARKET_STRUCTURE_VERSION_2:
+                self.assertEqual([(v["version"], v["id"]) for v in reg.subjects[subject]], [(1, {2212: 2211, 2223: 2221}[id_]), (2, id_)], subject)
+                self.assertEqual(reg.configs[subject], "FULL")
+            self.assertEqual(len(reg.subjects["com.optionsedge.contracts.marketstructure.geometry.GeometryUnavailable"]), 1)
+            self.assertEqual(reg.subject_modes, {})
+            self.assertTrue(any(c.startswith("POST /compatibility/subjects/") for c in reg.calls), "the registry's own compatibility verdict is asked first")
+            calls = len(reg.calls)
+            rc, out = run("market-structure", url)   # idempotent
+            self.assertEqual(rc, 0, out)
+            self.assertFalse([c for c in reg.calls[calls:] if c.startswith("POST /subjects/") and c.endswith("/versions {schema…}")], "a re-run imports nothing")
+        finally:
+            server.shutdown()
+
+    def test_an_incompatible_geometry_set_is_refused_in_preflight_and_nothing_at_all_is_imported(self):
+        reg = Registry()
+        seed_market_structure_version_1(reg)
+        reg.incompatible.add(MARKET_STRUCTURE_VERSION_2[1][0])   # the LATER row fails: the first row must not have been imported either
+        server, url = serve(reg)
+        try:
+            rc, out = run("market-structure", url)
+            self.assertEqual(rc, 1, out)
+            self.assertIn("is not compatible with the latest registered version", out)
+            self.assertIn("nothing was changed", out)
+            for subject, _ in MARKET_STRUCTURE_VERSION_2:
+                self.assertEqual(len(reg.subjects[subject]), 1, subject)
+        finally:
+            server.shutdown()
+
+    def test_a_version_2_id_held_by_another_schema_fails_in_preflight_with_nothing_changed(self):
+        reg = Registry()
+        seed_market_structure_version_1(reg)
+        reg.register("some.other.Subject", json.dumps({"type": "string"}), id=2223, version=1)
+        server, url = serve(reg)
+        try:
+            rc, out = run("market-structure", url)
+            self.assertEqual(rc, 1, out)
+            self.assertIn("nothing was changed", out)
+            for subject, _ in MARKET_STRUCTURE_VERSION_2:
+                self.assertEqual(len(reg.subjects[subject]), 1, subject)
+        finally:
+            server.shutdown()
+
+    def test_a_fresh_registry_gets_all_eleven_subjects_and_both_versions_in_one_run(self):
+        reg = Registry()
+        server, url = serve(reg)
+        try:
+            rc, out = run("market-structure", url)
+            self.assertEqual(rc, 0, out)
+            got = {s: [(v["version"], v["id"]) for v in rows] for s, rows in reg.subjects.items()}
+            self.assertEqual(len(got), 11)
+            self.assertEqual(got["com.optionsedge.contracts.marketstructure.tools.StructureToolsSet"], [(1, 2211), (2, 2212)])
+            self.assertEqual(got["com.optionsedge.contracts.marketstructure.geometry.GeometryAnnotationSet"], [(1, 2221), (2, 2223)])
+        finally:
+            server.shutdown()
+
+    def test_the_rows_match_a_contracts_checkout_when_one_is_available(self):
+        """CONTRACTS_SCHEMAS_DIR (a checkout's schemas-registry/ta at >= 0.49.0) or the sibling checkout; absent in CI, where the stand-in registry tests above cover the map."""
+        candidates = [os.environ.get("CONTRACTS_SCHEMAS_DIR", ""), str(ROOT.parent / "options-edge-contracts/schemas-registry/ta")]
+        base = next((Path(c) for c in candidates if c and (Path(c) / "v1/StructureToolsSet.avsc").is_file()), None)
+        if base is None:
+            self.skipTest("no contracts checkout at 0.49.0 or later")
+        import hashlib
+        for subject, id_, file, version in read_versioned("market-structure"):
+            name = subject.rsplit(".", 1)[1]
+            if name in MARKET_STRUCTURE_VERSION_2_SHA256:
+                want = (MARKET_STRUCTURE_VERSION_2_SHA256 if version == 2 else MARKET_STRUCTURE_VERSION_1_SHA256)[name]
+                self.assertEqual(hashlib.sha256((base / file).read_bytes()).hexdigest(), want, f"{name} version {version}")
+            schema = json.loads((base / file).read_text())
+            self.assertEqual(f"{schema['namespace']}.{schema['name']}", subject)
 
 
 class VersionTwoRegistration(unittest.TestCase):
@@ -544,12 +649,12 @@ class MapsAgree(unittest.TestCase):
                 top = max(v for s_, _, _, v in read_versioned(service) if s_ == subject)
                 self.assertEqual(file, name if version == top else f"v{version}/{name}", "the highest version is the flat file, earlier ones live under v<N>/")
 
-    def test_the_maps_are_exactly_the_contracts_table_of_38_subjects_and_53_ids(self):
+    def test_the_maps_are_exactly_the_contracts_table_of_38_subjects_and_55_ids(self):
         union = {(subject, id_) for service in SERVICES for subject, id_, _ in read_map(service)}
         self.assertEqual(len(CONTRACTS_TABLE), 38)
-        self.assertEqual(union, set(CONTRACTS_TABLE) | set(TRADE_TOOLS_VERSION_2) | set(WAVE_CYCLE_VERSION_2))
+        self.assertEqual(union, set(CONTRACTS_TABLE) | set(TRADE_TOOLS_VERSION_2) | set(WAVE_CYCLE_VERSION_2) | set(MARKET_STRUCTURE_VERSION_2))
         self.assertEqual({s for s, _ in union}, {s for s, _ in CONTRACTS_TABLE})
-        self.assertEqual(len(union), 53)
+        self.assertEqual(len(union), 55)
         # version 2 of each of the thirteen two-version subjects = its version-1 id + 20 (contracts 0.33.0, TaSchemas.Subject.priorId)
         v1 = {s: i for s, i in CONTRACTS_TABLE}
         for subject, id_ in TRADE_TOOLS_VERSION_2:
@@ -559,6 +664,10 @@ class MapsAgree(unittest.TestCase):
         for subject, id_ in WAVE_CYCLE_VERSION_2:
             self.assertEqual(id_, v1[subject] + 5, subject)
         self.assertEqual(len(WAVE_CYCLE_VERSION_2), 2)
+        # StructureToolsSet 2211 -> 2212 and GeometryAnnotationSet 2221 -> 2223 (contracts 0.49.0, TaSchemas.Subject.priorId)
+        for subject, id_ in MARKET_STRUCTURE_VERSION_2:
+            self.assertEqual(id_, v1[subject] + (1 if subject.endswith('StructureToolsSet') else 2), subject)
+        self.assertEqual(len(MARKET_STRUCTURE_VERSION_2), 2)
 
     def test_w0_ids_are_the_runbooks(self):
         rows = {s.rsplit(".", 1)[1]: i for s, i, _ in read_map("market-structure")}

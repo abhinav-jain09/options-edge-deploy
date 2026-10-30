@@ -196,6 +196,7 @@ class RegistryResourceInventory(unittest.TestCase):
         files = {"schemas/cvd/A.avsc": b'{"a":1}', "python/optionsedge_contracts/m.py": b"x=1\n"}
         for n in self.INDICATORS:
             files["schemas-registry/indicators/%s.avsc" % n] = n.encode()
+        files.update({"schemas-registry/indicators/v1/StudyBar.avsc": b"v1-bar", "schemas-registry/indicators/v1/StudiesCurrent.avsc": b"v1-current"})
         files.update({"schemas-registry/ta/W.avsc": b"w", "schemas-registry/ta/v1/V.avsc": b"v", "schemas-registry/esflow/E.avsc": b"e", "schemas-registry/geometry/G.avsc": b"g"})
         for name, data in files.items():
             path = root / name
@@ -218,6 +219,14 @@ class RegistryResourceInventory(unittest.TestCase):
     def test_a_jar_with_exactly_the_packaged_registry_files_is_accepted(self):
         root, files = self.source()
         release.verify_package(self.jar(files), root)
+
+    def test_a_version_1_study_file_that_differs_from_main_or_is_missing_from_the_jar_is_refused(self):
+        root, files = self.source()
+        with self.assertRaisesRegex(ValueError, "differs from main: schemas-registry/indicators/v1/StudyBar.avsc"):
+            release.verify_package(self.jar(files, replace={"schemas-registry/indicators/v1/StudyBar.avsc": b"tampered"}), root)
+        short = {k: v for k, v in files.items() if k != "schemas-registry/indicators/v1/StudiesCurrent.avsc"}
+        with self.assertRaisesRegex(ValueError, "inventory differs from main"):
+            release.verify_package(self.jar(short), root)
 
     def test_a_registry_file_that_differs_from_main_is_refused(self):
         root, files = self.source()

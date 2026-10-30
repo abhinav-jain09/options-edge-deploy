@@ -2,7 +2,11 @@
 # FINAL: copied from options-edge-processing docs/ta-books/catalog/SCHEMA-ID-MAP.md (contracts 0.31.0, options-edge-contracts com.optionsedge.contracts.ta.TaSchemas.SUBJECTS).
 # File column: relative to the contracts checkout's `schemas-registry/ta` directory (SCHEMAS_DIR), one flat <Record>.avsc per subject.
 # 2201-2208 are W0 (JSON -> Avro of ui/patterns/sequence/dlq/recovery, MARKET-STRUCTURE-AVRO-CUTOVER.md section 2; 2208 is the documentation
-# subject of the recovery datum), 2211 CHART-STRUCTURE-TOOLS tools, 2221-2222 CLASSICAL-CHART-PATTERNS geometry. 2001-2010 are the indicator family and are never reused here.
+# subject of the recovery datum), 2211 CHART-STRUCTURE-TOOLS tools, 2221-2222 CLASSICAL-CHART-PATTERNS geometry.
+# CALIBRATED release (contracts 0.49.0; processing #1298 and #1294): StructureToolsSet and GeometryAnnotationSet have TWO versions. Version 1 is the frozen file under schemas-registry/ta/v1 (registered
+# before as ids 2211, 2221 on dev and production), version 2 the flat file under schemas-registry/ta with a NEW fixed id (2212, 2223; free on dev and es4 when checked): a version of a subject cannot reuse the id of a
+# different schema. The fourth column is the registry version (see es-trade-tools.map). On a registry that holds version 1 only the two version-2 rows import. The service resolves the id of its embedded (version 2)
+# schema at boot (ToolsAvroEncoder#warm, GeometryAvroEncoder#warm), so registration comes before the new image starts. 2001-2010 are the indicator family and are never reused here.
 # tests/test_ta_schema_registration.py pins this file against the contracts table row by row.
 com.optionsedge.contracts.marketstructure.ui.UiProjection|2201|UiProjection.avsc
 com.optionsedge.contracts.marketstructure.ui.UiUnavailable|2202|UiUnavailable.avsc
@@ -12,6 +16,9 @@ com.optionsedge.contracts.marketstructure.sequence.SequenceRecord|2205|SequenceR
 com.optionsedge.contracts.marketstructure.dlq.DlqRecord|2206|DlqRecord.avsc
 com.optionsedge.contracts.marketstructure.recovery.RecoveryCheckpoint|2207|RecoveryCheckpoint.avsc
 com.optionsedge.contracts.marketstructure.recovery.RecoveryPayload|2208|RecoveryPayload.avsc
-com.optionsedge.contracts.marketstructure.tools.StructureToolsSet|2211|StructureToolsSet.avsc
-com.optionsedge.contracts.marketstructure.geometry.GeometryAnnotationSet|2221|GeometryAnnotationSet.avsc
+com.optionsedge.contracts.marketstructure.tools.StructureToolsSet|2211|v1/StructureToolsSet.avsc|1
+com.optionsedge.contracts.marketstructure.geometry.GeometryAnnotationSet|2221|v1/GeometryAnnotationSet.avsc|1
 com.optionsedge.contracts.marketstructure.geometry.GeometryUnavailable|2222|GeometryUnavailable.avsc
+# Version-2 rows after all version-1 rows so the preflight pass can see the predecessor of every row.
+com.optionsedge.contracts.marketstructure.tools.StructureToolsSet|2212|StructureToolsSet.avsc|2
+com.optionsedge.contracts.marketstructure.geometry.GeometryAnnotationSet|2223|GeometryAnnotationSet.avsc|2

@@ -636,6 +636,9 @@ PYEOF
           echo "registry for ${ENVIRONMENT}: $SR"
           SCHEMA_REGISTRY_URL="$SR" SCHEMAS_DIR=".jenkins-tmp/contracts/schemas-registry/indicators" \
             DEPLOY_DRY_RUN="${DEPLOY_DRY_RUN:-false}" bash scripts/kafka/ensure-indicator-schemas.sh
+          # INDICATOR-STUDIES calibrated release (contracts 0.50.0): version 2 of StudyBar (2505) and StudiesCurrent (2506), after version 1 above, FULL-checked first, before the new image starts.
+          SCHEMA_REGISTRY_URL="$SR" SCHEMAS_DIR=".jenkins-tmp/contracts/schemas-registry/indicators" SCHEMA_ID_MAP="scripts/kafka/schema-id-maps/indicator-studies.map" \
+            DEPLOY_DRY_RUN="${DEPLOY_DRY_RUN:-false}" bash scripts/kafka/ensure-fixed-id-schemas.sh
         '''
       }
     }
