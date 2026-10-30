@@ -213,7 +213,7 @@ class TopicsEnv(unittest.TestCase):
                               "OPTIONS_EDGE_EXACT_PARTITION_TOPICS", "OPTIONS_EDGE_RESET_REBUILDABLE_TOPICS", "OPTIONS_EDGE_RESET_PRESERVED_TOPICS",
                               "OPTIONS_EDGE_TOPIC_MAX_MESSAGE_BYTES_OVERRIDES", "OPTIONS_EDGE_ES4_TOPICS"])
 
-    def test_the_four_topics_are_declared_one_partition_exact_with_the_barriers_shape(self):
+    def test_the_five_topics_are_declared_one_partition_exact_with_the_barriers_shape(self):
         retention = dict(x.split("=", 1) for x in self.d["OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES"] if "=" in x)
         for t, (policy, ret) in SHAPES.items():
             self.assertIn(f"{t}:1", self.d["OPTIONS_EDGE_TOPICS"], t)
@@ -281,7 +281,7 @@ class MaxMessageBytesMechanism(unittest.TestCase):
 
 
 class DevCleanReconcilesTheBound(unittest.TestCase):
-    """scripts/ops/dev-cleanup.sh: the create pass and the reconcile pass carry max.message.bytes, driven by the real topics.env declarations of the four topics."""
+    """scripts/ops/dev-cleanup.sh: the create pass and the reconcile pass carry max.message.bytes, driven by the real topics.env declarations of the five topics."""
 
     @staticmethod
     def function(name: str) -> str:
