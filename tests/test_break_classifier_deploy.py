@@ -146,6 +146,16 @@ class Barrier(unittest.TestCase):
         self.assertNotIn("OK ===", out)
         self.assertNotIn("max.message.bytes", state["topics"][CP]["configs"])
 
+    def test_a_failed_pin_stops_before_any_other_topic_is_created_or_altered(self):
+        existing = right_topics()
+        existing[CP]["configs"].pop("max.message.bytes")
+        del existing[X2]          # another topic is absent: it must NOT be created after the failed pin
+        rc, out, calls, state = run_barrier(existing, topic_alter_fails=True)
+        self.assertEqual(rc, 1, out)
+        self.assertNotIn(X2, state["topics"], "no topic is created after the failed pin")
+        self.assertFalse(any("--create" in c for c in calls))
+        self.assertFalse(any("--alter" in c and "segment.bytes" in c for c in calls), "no reconciliation after the failure")
+
     def test_every_difference_the_service_refuses_fails_closed_names_the_topic_and_alters_nothing(self):
         cases = {
             "output retention one over (the service compares for equality)": (OUT, lambda d: d["configs"].update({"retention.ms": "7776000001"})),

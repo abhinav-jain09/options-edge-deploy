@@ -57,6 +57,10 @@ if grep -qxF "$CHECKPOINT" <<<"$LIST"; then
       fi
     fi
   fi
+  if [ "$rc" -ne 0 ]; then   # fail-stop: nothing else is created or altered after a failed read/pin of the checkpoint limit
+    echo "=== ensure-break-classification-topics FAILED — the service must not be scaled up ==="
+    exit 1
+  fi
 fi
 ensure_topic "${KAFKA_BREAK_CLASSIFICATION_TOPIC:-options.spx.break-classification}"      delete  exact:7776000000 1048576 || rc=1
 ensure_topic "$CHECKPOINT"                                                               compact any:-1           "$MIN_CHECKPOINT_BYTES" yes "$CHECKPOINT_BYTES" || rc=1
