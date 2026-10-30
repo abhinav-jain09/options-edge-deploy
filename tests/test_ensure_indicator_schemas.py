@@ -125,7 +125,8 @@ class StudiesVersionTwo(unittest.TestCase):
                                 [NS + "StudyBar", "2505", "StudyBar.avsc", "2"], [NS + "StudiesCurrent", "2506", "StudiesCurrent.avsc", "2"]])
         text = (ROOT / "Jenkinsfile.service-deploy").read_text()
         self.assertIn('SCHEMA_ID_MAP="scripts/kafka/schema-id-maps/indicator-studies.map"', text)
-        self.assertLess(text.index("bash scripts/kafka/ensure-indicator-schemas.sh"), text.index("indicator-studies.map"))
+        first = text.index("bash scripts/kafka/ensure-indicator-schemas.sh")
+        self.assertGreater(text.find("indicator-studies.map", first), first, "the stage runs the version-2 map AFTER the version-1 script (the parameter description above it names the map too)")
 
 
 class EnsureIndicatorSchemas(unittest.TestCase):

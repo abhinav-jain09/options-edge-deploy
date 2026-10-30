@@ -145,7 +145,8 @@ class MirrorAndSchemaWiring(unittest.TestCase):
         for path in ("Jenkinsfile.service-deploy", "Jenkinsfile.es4-deploy", "scripts/es4/cleanup-es4.sh"):
             text = (ROOT / path).read_text()
             self.assertIn("indicator-studies.map", text, path)
-            self.assertLess(text.index("ensure-indicator-schemas.sh"), text.index("indicator-studies.map"), path)
+            first = text.index("ensure-indicator-schemas.sh")
+            self.assertGreater(text.find("indicator-studies.map", first), first, path)   # the version-2 map runs AFTER the version-1 script (a description above may name the map too)
         self.assertIn("2007 2501 2502 2503", (ROOT / "scripts/kafka/assert-indicator-schema-parity.sh").read_text())   # the default set still carries the study ids; a non-studies mirror passes its own subset
 
 
