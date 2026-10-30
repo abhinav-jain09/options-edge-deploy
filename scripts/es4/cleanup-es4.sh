@@ -417,6 +417,8 @@ if [ "$DRY" != "true" ]; then
   [ "$subjects" = "[]" ] || die "schema registry /subjects is not empty after the wipe ($subjects) — the registry did not restart on the empty store"
 fi
 run "SCHEMA_REGISTRY_URL=http://localhost:8081 SCHEMAS_DIR='$SCRIPT_DIR/../../schemas-registry/indicators' DEPLOY_DRY_RUN=$DRY bash '$SCRIPT_DIR/../kafka/ensure-indicator-schemas.sh'"
+log "registering version 2 of the study subjects (ensure-fixed-id-schemas.sh, indicator-studies.map)"
+run "SCHEMA_REGISTRY_URL=http://localhost:8081 SCHEMAS_DIR='$SCRIPT_DIR/../../schemas-registry/indicators' SCHEMA_ID_MAP='$SCRIPT_DIR/../kafka/schema-id-maps/indicator-studies.map' DEPLOY_DRY_RUN=$DRY bash '$SCRIPT_DIR/../kafka/ensure-fixed-id-schemas.sh'"
 log "reconciling required core es.* topic contracts (create-es-topics.sh)"
 # A clean-reset IS the "approved destructive cleanup deployment" that
   # KAFKA_RECREATE_MISMATCHED_TOPICS gates: the wipe just deleted every topic, so anything

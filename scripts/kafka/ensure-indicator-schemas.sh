@@ -37,7 +37,9 @@ REG="${SCHEMA_REGISTRY_URL%/}"
 CT='Content-Type: application/vnd.schemaregistry.v1+json'
 PROBE_SUBJECT="${INDICATOR_SCHEMA_PROBE_SUBJECT:-zz.indicator.importmode.probe}"
 
-# subject|fixed id|file — the plan's table (section 4); RecordNameStrategy subjects.
+# subject|fixed id|file[|later id] — the plan's table (section 4); RecordNameStrategy subjects. INDICATOR-STUDIES calibrated release (contracts 0.50.0): StudyBar and StudiesCurrent have
+# TWO versions; THIS script owns version 1 only (the frozen file under v1/, ids 2501 and 2502) and tolerates a version 2 that carries the fourth column's id (2505, 2506); version 2 is
+# imported by scripts/kafka/ensure-fixed-id-schemas.sh with schema-id-maps/indicator-studies.map (which also re-asserts version 1), not here.
 FIXED="
 com.optionsedge.contracts.indicators.avro.IndicatorSnapshot|2001|IndicatorSnapshot.avsc
 com.optionsedge.contracts.indicators.avro.IndicatorBar|2002|IndicatorBar.avsc
@@ -46,8 +48,8 @@ com.optionsedge.contracts.indicators.avro.IndicatorSignals|2004|IndicatorSignals
 com.optionsedge.contracts.indicators.avro.SignalEvent|2005|SignalEvent.avsc
 com.optionsedge.contracts.indicators.avro.SpotTick|2006|SpotTick.avsc
 com.optionsedge.contracts.indicators.avro.IndicatorStateImage|2007|IndicatorStateImage.avsc
-com.optionsedge.contracts.indicators.avro.StudyBar|2501|StudyBar.avsc
-com.optionsedge.contracts.indicators.avro.StudiesCurrent|2502|StudiesCurrent.avsc
+com.optionsedge.contracts.indicators.avro.StudyBar|2501|v1/StudyBar.avsc|2505
+com.optionsedge.contracts.indicators.avro.StudiesCurrent|2502|v1/StudiesCurrent.avsc|2506
 com.optionsedge.contracts.indicators.avro.StudyEngineImage|2503|StudyEngineImage.avsc
 "
 COMPAT=FULL
@@ -126,7 +128,7 @@ ensure_full() { # <subject>
 }
 
 fail=0
-while IFS='|' read -r subject id file; do
+while IFS='|' read -r subject id file later; do
   [ -n "${subject:-}" ] || continue
   schema="$SCHEMAS_DIR/$file"
   [ -f "$schema" ] || { echo "FAIL: $schema missing"; fail=1; continue; }
@@ -141,11 +143,21 @@ while IFS='|' read -r subject id file; do
         # version 1 is canonical under the fixed id; the subject must hold NOTHING else — producers run with
         # use.latest.version=true, so a later version would be what they resolve and frame under its own id
         V1=$(http GET "/subjects/$subject/versions")
-        if [ "$(status "$V1")" != 200 ] || [ "$(body "$V1" | tr -d ' ')" != "[1]" ]; then
-          echo "FAIL: $subject holds versions $(body "$V1") — only version 1 (the fixed id $id) is admissible; a later version would be the one producers resolve"
+        vers=$(body "$V1" | tr -d ' ')
+        if [ "$(status "$V1")" = 200 ] && [ -n "${later:-}" ] && [ "$vers" = "[1,2]" ]; then
+          # a two-version subject (the calibrated studies release): version 2 must be the one schema under the declared later id; anything else is a stray version
+          V2=$(http GET "/subjects/$subject/versions/2")
+          if [ "$(status "$V2")" != 200 ] || [ "$(json_field "$(body "$V2")" id)" != "$later" ]; then
+            echo "FAIL: $subject holds versions [1,2] but version 2 is not under the declared later id $later ($V2) — a collision this script never repairs"
+            fail=1; continue
+          fi
+          echo "    registered: version 1, id $id; version 2, id $later (imported by ensure-fixed-id-schemas.sh)"
+        elif [ "$(status "$V1")" != 200 ] || [ "$vers" != "[1]" ]; then
+          echo "FAIL: $subject holds versions $(body "$V1") — only version 1 (the fixed id $id)${later:+ and, once imported, version 2 (id $later)} is admissible; a later version would be the one producers resolve"
           fail=1; continue
+        else
+          echo "    registered: version 1, id $id (the only version)"
         fi
-        echo "    registered: version 1, id $id (the only version)"
         ensure_full "$subject" || fail=1
         continue
       fi

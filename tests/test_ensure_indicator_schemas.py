@@ -24,9 +24,15 @@ NS = "com.optionsedge.contracts.indicators.avro."
 
 def schemas_dir() -> Path:
     d = Path(tempfile.mkdtemp())
+    (d / "v1").mkdir()
     for n in NAMES:
-        (d / f"{n}.avsc").write_text(json.dumps({"type": "record", "name": n, "namespace": NS[:-1],
-                                                 "doc": "fixture", "fields": [{"name": "x", "type": "string"}]}))
+        # the calibrated studies release: StudyBar and StudiesCurrent are two-version subjects; the flat file is version 2 (one more optional field), version 1 is under v1/
+        two = n in ("StudyBar", "StudiesCurrent")
+        fields = [{"name": "x", "type": "string"}] + ([{"name": "added2", "type": ["null", "string"], "default": None}] if two else [])
+        (d / f"{n}.avsc").write_text(json.dumps({"type": "record", "name": n, "namespace": NS[:-1], "doc": "fixture", "fields": fields}))
+        if two:
+            (d / "v1" / f"{n}.avsc").write_text(json.dumps({"type": "record", "name": n, "namespace": NS[:-1], "doc": "fixture",
+                                                           "fields": [{"name": "x", "type": "string"}]}))
     return d
 
 
@@ -35,6 +41,92 @@ def run(url: str, dry: bool = False, env: dict | None = None):
     e.update(env or {})
     r = subprocess.run(["bash", str(SCRIPT)], capture_output=True, text=True, env=e)
     return r.returncode, r.stdout + r.stderr
+
+
+MAP = ROOT / "scripts/kafka/schema-id-maps/indicator-studies.map"
+FIXED_ID = ROOT / "scripts/kafka/ensure-fixed-id-schemas.sh"
+
+
+def run_map(url: str, dry: bool = False):
+    e = dict(os.environ, SCHEMA_REGISTRY_URL=url, SCHEMAS_DIR=str(schemas_dir()), SCHEMA_ID_MAP=str(MAP), DEPLOY_DRY_RUN="true" if dry else "false")
+    r = subprocess.run(["bash", str(FIXED_ID)], capture_output=True, text=True, env=e)
+    return r.returncode, r.stdout + r.stderr
+
+
+class StudiesVersionTwo(unittest.TestCase):
+    """INDICATOR-STUDIES calibrated release (contracts 0.50.0): version 1 by ensure-indicator-schemas.sh, version 2 (2505, 2506) by ensure-fixed-id-schemas.sh with indicator-studies.map."""
+
+    def test_a_registry_holding_version_1_receives_only_the_two_version_2_imports_and_the_first_script_still_passes(self):
+        reg = Registry()
+        server, url = serve(reg)
+        try:
+            self.assertEqual(run(url)[0], 0)
+            rc, out = run_map(url, dry=True)
+            self.assertEqual(rc, 0, out)
+            self.assertIn("would import as version 2 under id 2505", out)
+            self.assertIn("would import as version 2 under id 2506", out)
+            self.assertEqual(len(reg.subjects[NS + "StudyBar"]), 1, "a dry run imports nothing")
+            rc, out = run_map(url)
+            self.assertEqual(rc, 0, out)
+            for n, (v1, v2) in {"StudyBar": (2501, 2505), "StudiesCurrent": (2502, 2506)}.items():
+                self.assertEqual([(v["version"], v["id"]) for v in reg.subjects[NS + n]], [(1, v1), (2, v2)], n)
+                self.assertEqual(reg.configs[NS + n], "FULL")
+            self.assertEqual(len(reg.subjects[NS + "StudyEngineImage"]), 1)
+            self.assertEqual(reg.subject_modes, {})
+            # the first script, re-run on the upgraded registry, accepts version 2 under the declared later id
+            rc, out = run(url)
+            self.assertEqual(rc, 0, out)
+            self.assertIn("version 2, id 2505", out)
+            calls = len(reg.calls)
+            self.assertEqual(run_map(url)[0], 0)   # idempotent
+            self.assertFalse([c for c in reg.calls[calls:] if c.startswith("POST /subjects/") and c.endswith("/versions {schema…}")])
+        finally:
+            server.shutdown()
+
+    def test_a_fresh_registry_gets_both_versions_through_the_two_scripts_in_order(self):
+        reg = Registry()
+        server, url = serve(reg)
+        try:
+            self.assertEqual(run(url)[0], 0)
+            self.assertEqual(run_map(url)[0], 0)
+            self.assertEqual({n: [(v["version"], v["id"]) for v in reg.subjects[NS + n]] for n in ("StudyBar", "StudiesCurrent", "StudyEngineImage")},
+                             {"StudyBar": [(1, 2501), (2, 2505)], "StudiesCurrent": [(1, 2502), (2, 2506)], "StudyEngineImage": [(1, 2503)]})
+        finally:
+            server.shutdown()
+
+    def test_a_version_2_under_another_id_is_refused_by_the_first_script(self):
+        reg = Registry()
+        server, url = serve(reg)
+        try:
+            self.assertEqual(run(url)[0], 0)
+            reg.register(NS + "StudyBar", json.dumps({"type": "record", "name": "StudyBar", "namespace": NS[:-1], "fields": [{"name": "x", "type": "string"}, {"name": "y", "type": ["null", "string"], "default": None}]}))
+            rc, out = run(url)
+            self.assertEqual(rc, 1, out)
+            self.assertIn("version 2 is not under the declared later id 2505", out)
+        finally:
+            server.shutdown()
+
+    def test_a_third_version_is_refused_by_the_first_script(self):
+        reg = Registry()
+        server, url = serve(reg)
+        try:
+            self.assertEqual(run(url)[0], 0)
+            self.assertEqual(run_map(url)[0], 0)
+            reg.register(NS + "StudyBar", json.dumps({"type": "record", "name": "StudyBar", "namespace": NS[:-1], "fields": []}))
+            rc, out = run(url)
+            self.assertEqual(rc, 1, out)
+            self.assertIn("is admissible", out)
+        finally:
+            server.shutdown()
+
+    def test_the_map_is_exactly_the_four_rows_and_matches_the_contracts_table(self):
+        rows = [l.split("|") for l in MAP.read_text().splitlines() if l.strip() and not l.startswith("#")]
+        self.assertEqual(rows, [[NS + "StudyBar", "2501", "v1/StudyBar.avsc", "1"], [NS + "StudiesCurrent", "2502", "v1/StudiesCurrent.avsc", "1"],
+                                [NS + "StudyBar", "2505", "StudyBar.avsc", "2"], [NS + "StudiesCurrent", "2506", "StudiesCurrent.avsc", "2"]])
+        text = (ROOT / "Jenkinsfile.service-deploy").read_text()
+        self.assertIn('SCHEMA_ID_MAP="scripts/kafka/schema-id-maps/indicator-studies.map"', text)
+        first = text.index("bash scripts/kafka/ensure-indicator-schemas.sh")
+        self.assertGreater(text.find("indicator-studies.map", first), first, "the stage runs the version-2 map AFTER the version-1 script (the parameter description above it names the map too)")
 
 
 class EnsureIndicatorSchemas(unittest.TestCase):

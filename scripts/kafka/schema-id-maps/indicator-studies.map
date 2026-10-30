@@ -1,0 +1,12 @@
+# Fixed schema ids for the INDICATOR-STUDIES studies subjects of indicator-service (subject = record full name, RecordNameStrategy), for ensure-fixed-id-schemas.sh.
+# Calibrated release (contracts 0.50.0; processing #1487 89664fa1d): StudyBar and StudiesCurrent have TWO versions. Version 1 is the frozen file under schemas-registry/indicators/v1 (registered
+# before as ids 2501, 2502 by ensure-indicator-schemas.sh), version 2 the flat file under schemas-registry/indicators with a NEW fixed id (2505, 2506; free on dev and es4 when checked): a version of a
+# subject cannot reuse the id of a different schema. The fourth column is the registry version (see es-trade-tools.map). On a registry that holds version 1 only the two version-2 rows import.
+# StudyEngineImage (2503) is unchanged and stays in ensure-indicator-schemas.sh. The service resolves the id of its embedded (version 2) schemas at boot (use.latest.version=true,
+# auto.register.schemas=false), so registration comes before the new indicator-service image starts.
+# File column: relative to the contracts checkout's `schemas-registry/indicators` directory (SCHEMAS_DIR).
+com.optionsedge.contracts.indicators.avro.StudyBar|2501|v1/StudyBar.avsc|1
+com.optionsedge.contracts.indicators.avro.StudiesCurrent|2502|v1/StudiesCurrent.avsc|1
+# Version-2 rows after all version-1 rows so the preflight pass can see the predecessor of every row.
+com.optionsedge.contracts.indicators.avro.StudyBar|2505|StudyBar.avsc|2
+com.optionsedge.contracts.indicators.avro.StudiesCurrent|2506|StudiesCurrent.avsc|2
