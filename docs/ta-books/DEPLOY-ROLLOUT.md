@@ -18,7 +18,7 @@ destructive step runs from a merge. This file is the order to follow when the ow
 | W0 step 4 and 6 (wipe and recreate the five topics under their own names; verify) | `scripts/kafka/roll-forward-market-structure.sh`, service-deploy parameters `W0_CUTOVER_WIPE`, `W0_EXPECT_IMAGE_DIGEST`, `W0_EXPECT_GATEWAY_DIGEST`, `W0_PRE_CUTOVER_IDS`, `W0_PRODUCERS_ATTESTED` |
 | `es-trade-tools-service` (TICK-TRADE-TOOLS) | `k8s/services/es-trade-tools`, seven topics, `ensure-es-trade-tools-topics.sh`, `TT_*` flags `false` |
 | `wave-cycle-service` (ELLIOTT-FIB-CYCLE-TOOLS) | `k8s/services/wave-cycle`, three topics, `ensure-wave-cycle-topics.sh`, `WAVE_CYCLE_*` flags `false` |
-| `break-classifier-service` (Phase F) | LIVE on dev and production, see section 5b and `BREAK-CLASSIFIER-DEPLOY.md`: `k8s/services/break-classifier`, four topics, `ensure-break-classification-topics.sh`, `schema-id-maps/break-classifier.map` |
+| `break-classifier-service` (Phase F) | LIVE on dev and production, see section 5b and `BREAK-CLASSIFIER-DEPLOY.md`: `k8s/services/break-classifier`, five topics, `ensure-break-classification-topics.sh`, `schema-id-maps/break-classifier.map` |
 
 ## 2. Decisions taken (and why), so nobody has to ask
 
