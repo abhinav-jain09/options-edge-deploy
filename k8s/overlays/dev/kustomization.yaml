@@ -184,6 +184,11 @@ patches:
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value:
+          name: REVERSAL_TOP_CANDIDATE_ENABLED
+          value: "true"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
           name: REVERSAL_HUNT_MIN_DECLINE_TICKS
           value: "28"
       - op: add
