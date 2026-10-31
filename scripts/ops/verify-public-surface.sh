@@ -12,11 +12,15 @@
 # So they are written down as commands rather than as prose in a runbook. This can be re-run after
 # any change to the tunnel, the realm, the NetworkPolicies or the image, and it answers in seconds.
 #
-# ⚠️ NOTHING HERE HAS BEEN RUN YET. At the time of writing the public deployment sits at zero replicas
-# with no DNS record and no tunnel route (PGL-072), so every check below would fail to connect. That
-# is the correct state — this script is the harness the proofs will run in, not evidence that they
-# passed. Do not cite it as proof of anything until it has actually executed green against the
-# deployed surface, and record that run.
+# ⚠️ THE DEPLOYMENT THIS CHECKS IS LIVE ON THE INTERNET: replicas 1, a Cloudflare tunnel route for
+# bleedingoptions.com and a DNS record. This header said the opposite until 2026-10-22 — "NOTHING
+# HERE HAS BEEN RUN YET", "zero replicas with no DNS record and no tunnel route" — which was true
+# when it was written and has not been for months (Codex round 3 found it while reviewing PGL-100).
+# An operator who believes it would read every connection failure below as "expected, nothing is
+# deployed" instead of as an outage.
+#
+# What remains true: a RUN of this script is evidence only of the moment it ran. Record the run with
+# the image digest it ran against; do not cite the script's existence as proof of anything.
 #
 # USAGE
 #   verify-public-surface.sh --token-approved <jwt> --token-pending <jwt> --token-internal <jwt>
@@ -69,9 +73,56 @@ expect_denied() {
   esac
 }
 
-echo "=== PGL-040: the public host serves the Gamma Lab and NOTHING else ==="
-expect "gamma-lab shell is served" 200 "$(status "$PUBLIC_HOST/gamma-lab")"
-expect "apex redirects to the lab"  302 "$(status "$PUBLIC_HOST/")"
+echo "=== PGL-040/PGL-100: the public host serves the LOGIN GATE and nothing else anonymously ==="
+# The assertions that INVERTED on 2026-10-22. They used to read "gamma-lab shell is served 200" and
+# "apex redirects to the lab 302" — both were statements that the page was readable by anyone, which
+# is what the owner asked to end. Kept as explicit checks rather than deleted: an accidental revert
+# (a path re-added to the anonymous allowlist, an older image rolled forward) would otherwise show
+# up as a site that works perfectly.
+expect "the apex serves the login gate" 200 "$(status "$PUBLIC_HOST/")"
+expect "the signup link serves the gate" 200 "$(status "$PUBLIC_HOST/register")"
+expect "the gate's script is served" 200 "$(status "$PUBLIC_HOST/login.js")"
+# A navigation gets sent to the gate; a fetch gets the JSON envelope. Both are denials.
+expect "the lab PAGE is not served anonymously" 302 \
+  "$(status "$PUBLIC_HOST/gamma-lab" -H 'Accept: text/html')"
+expect "the lab's script is not served anonymously" 401 "$(status "$PUBLIC_HOST/gamma-lab.js")"
+expect "the lab's stylesheet is not served anonymously" 401 "$(status "$PUBLIC_HOST/gamma-lab.css")"
+expect "the browser env payload is not served anonymously" 401 "$(status "$PUBLIC_HOST/env.js")"
+expect_denied "the near-flip page" "$(status "$PUBLIC_HOST/flips")"
+expect_denied "the pressure board shell" "$(status "$PUBLIC_HOST/nifty-pressure")"
+# PGL-058 + the tunnel rule: the probe path exists for the kubelet and not for the internet.
+expect "the probe path is edge-404" 404 "$(status "$PUBLIC_HOST/healthz")"
+
+# THE DEPLOYED GATE SCRIPT STILL CARRIES THE MECHANISM (PGL-100B, Codex round 4).
+#
+# Everything else here presents credentials the way curl can: a header, or a cookie this script
+# writes itself. Both prove the SERVER accepts the token; neither proves the shipped /login.js still
+# WRITES the cookie. A stale or broken login script would leave every real browser bouncing back to
+# the gate while every assertion above stayed green — the surface would be "verified" and unusable.
+#
+# This is not a browser test and does not pretend to be one: it asserts that the artifact the
+# browser is about to execute still contains the four things the flow depends on. Only a real
+# browser can prove the cookie is retained; what this catches is the regression that actually
+# happens, which is the script changing.
+gate_js="$(curl -s --max-time 20 "$PUBLIC_HOST/login.js" 2>/dev/null)"
+# VITE_PUBLIC_SURFACE = true is in this list because it is the single point of failure for
+# REACHABILITY (Codex round 6): the client writes the cookie only when that flag is true, so losing
+# it leaves every browser at the gate while all the other needles below are still present and every
+# token check above still passes.
+for needle in "bo_at" "SameSite=Lax" "writeCookie(json.access_token" "cookiePresent" \
+              "VITE_PUBLIC_SURFACE = true"; do
+  if grep -qF -- "$needle" <<<"$gate_js"; then
+    pass "the deployed gate script still carries: $needle"
+  else
+    fail "the deployed /login.js is missing '$needle' — browsers will bounce at the gate while every token check here passes"
+  fi
+done
+# The gate must also still tell the client where to land, or the flow completes and goes nowhere.
+if grep -qF 'data-auth-return="/gamma-lab"' <<<"$(curl -s --max-time 20 "$PUBLIC_HOST/")"; then
+  pass "the gate page still carries its landing path"
+else
+  fail "the gate page has no data-auth-return — a reader signs in and stays on the gate"
+fi
 for path in /option-chain /greeks /system-status /paper-trades /stock-gex /context-tape /zones \
             /indicators /delta-flow /reversal /mission-control; do
   expect_denied "internal board $path" "$(status "$PUBLIC_HOST$path")"
@@ -164,6 +215,21 @@ else
   skip "PGL-042 (pending): register an account, do NOT approve it, pass --token-pending"
 fi
 if [[ -n "$TOKEN_APPROVED" ]]; then
+  expect "an approved account IS served the page itself" 200 \
+    "$(status "$PUBLIC_HOST/gamma-lab" -H "Authorization: Bearer $TOKEN_APPROVED" -H 'Accept: text/html')"
+  expect "an approved account IS served the page's script" 200 \
+    "$(status "$PUBLIC_HOST/gamma-lab.js" -H "Authorization: Bearer $TOKEN_APPROVED")"
+  # The mechanism a BROWSER actually uses (PGL-100): a navigation carries no Authorization header,
+  # only the cookie the gate wrote. The two checks above prove the chain accepts the token; this one
+  # proves it accepts it the way a reader's browser presents it. Without this, the surface could be
+  # green here and blank for every human being.
+  expect "a page load authenticates by COOKIE, as a browser does" 200 \
+    "$(status "$PUBLIC_HOST/gamma-lab" -H "Cookie: bo_at=$TOKEN_APPROVED" -H 'Accept: text/html')"
+  expect "the page's script authenticates by cookie too" 200 \
+    "$(status "$PUBLIC_HOST/gamma-lab.js" -H "Cookie: bo_at=$TOKEN_APPROVED")"
+  # ...and the limit that keeps the cookie from being a CSRF hole: it is never honoured on data.
+  expect "the cookie does NOT authenticate a data route" 401 \
+    "$(status "$PUBLIC_HOST/api/stock-gex/board?symbol=$SYMBOL" -H "Cookie: bo_at=$TOKEN_APPROVED")"
   expect "an approved account is served" 200 \
     "$(status "$PUBLIC_HOST/api/stock-gex/board?symbol=$SYMBOL" -H "Authorization: Bearer $TOKEN_APPROVED")"
 else

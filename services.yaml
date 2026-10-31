@@ -46,9 +46,12 @@ services:
   # The `namespace` field routes this away from options-edge; without it the deploy would default
   # there and the render/registry guard would refuse it.
   #
-  # ⚠️ Ships at replicas: 0. scripts/deploy/verify-public-gate.sh runs on this service's apply path
-  # (service-deploy.sh) and refuses a scale-up without PGL-050/051/052 evidence for the exact image
-  # digest. Same image as `web` — one codebase, one image, one PUBLIC_SURFACE switch.
+  # ⚠️ LIVE ON THE INTERNET: replicas 1, a Cloudflare tunnel route for bleedingoptions.com and a
+  # DNS record. This said "Ships at replicas: 0" until 2026-10-22, which was true when written and
+  # has not been for months (Codex round 5). scripts/deploy/verify-public-gate.sh runs on this
+  # service's apply path (service-deploy.sh) and refuses a DIGEST change without PGL-050/051/052
+  # evidence for that exact digest. Same image as `web` — one codebase, one image, one
+  # PUBLIC_SURFACE switch.
   - name: bleedingoptions-gamma-lab
     managedBy: standalone
     namespace: bleedingoptions
