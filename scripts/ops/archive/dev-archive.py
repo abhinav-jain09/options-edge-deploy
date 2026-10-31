@@ -6,7 +6,6 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-import time
 from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parent
@@ -37,7 +36,7 @@ def environment():
                KAFKA_BIN=str(ROOT / 'kafka/bin'),
                CONFLUENT_HOME='/Users/abhinav/development/confluent-7.3.1',
                JAVA_HOME='/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home',
-               PATH='/opt/homebrew/opt/coreutils/libexec/gnubin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin')
+               PATH=str(ROOT / 'bin') + ':/opt/homebrew/opt/coreutils/libexec/gnubin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin')
     return env
 
 
@@ -84,30 +83,7 @@ def main(mode):
         return rc
 
 
-def serve():
-    running = {}
-    due = {}
-    while True:
-        now = time.monotonic()
-        for mode in ('spot', 'daily', 'verify'):
-            child = running.get(mode)
-            if child is not None and child.poll() is not None:
-                due[mode] = now + (30 if child.returncode else 600)
-                del running[mode]
-                child = None
-            if child is None and now >= due.get(mode, 0):
-                log = (ROOT / (mode + '.log')).open('a')
-                try:
-                    running[mode] = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), mode],
-                                                      stdout=log, stderr=log)
-                finally:
-                    log.close()
-        time.sleep(5)
-
 
 if __name__ == '__main__':
     verify_target()
-    if sys.argv[1] == '--serve':
-        serve()
-    else:
-        sys.exit(main(sys.argv[1]))
+    sys.exit(main(sys.argv[1]))
