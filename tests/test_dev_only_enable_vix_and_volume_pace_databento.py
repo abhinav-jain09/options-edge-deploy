@@ -32,8 +32,10 @@ def deployment(slug, env, name):
 def assignment(rel, var):
     """The text of the single-line VAR='...' / VAR="..." assignment, so a name in a comment never counts as being in the list."""
     lines = [l for l in read(rel).splitlines() if re.match(rf"\s*{var}=", l)]
-    assert lines, f"{rel}: no {var}= assignment found"
-    return "\n".join(lines)
+    # Exactly one: with several, a stale earlier assignment that still names the service would satisfy a membership check
+    # while a later, effective one did not (or the reverse).
+    assert len(lines) == 1, f"{rel}: expected exactly one {var}= assignment, found {len(lines)}"
+    return lines[0]
 
 
 def names(text, name):
@@ -64,6 +66,17 @@ class DevOnlyEnable(unittest.TestCase):
         self.assertIs(type(entries[0]["value"]), str)
         self.assertEqual(entries[0]["value"], "false")
         self.assertNotIn("valueFrom", entries[0])
+
+
+class ProductionReadinessGate(unittest.TestCase):
+    def test_the_production_premarket_gate_does_not_require_either_service(self):
+        # premarket-readiness.sh runs on the PROD host and hard-FAILs any PIPELINE_SERVICES entry that is at 0 desired replicas. Production still
+        # holds both at 0, so listing either would turn the prod readiness card red every morning. Re-add them there only when PRODUCTION runs them.
+        text = read("scripts/ops/premarket-readiness.sh")
+        block = re.search(r'PIPELINE_SERVICES="\$\{PIPELINE_SERVICES:-\\\n(.*?)\}"', text, re.S)
+        self.assertIsNotNone(block, "PIPELINE_SERVICES default block not found")
+        for name in SERVICES.values():
+            self.assertFalse(names(block.group(1), name), f"premarket-readiness PIPELINE_SERVICES names {name}, which production holds at 0")
 
 
 if __name__ == "__main__":

@@ -2,7 +2,8 @@
 # The base (k8s/base/volume-pace-databento-deployment.yaml) stays replicas 0, and PRODUCTION stays held (KEEP_DOWN in morning-autostart.sh and oe-boot-bringup.sh, untouched). The service is also
 # removed from DISABLED_DEV in scripts/ops/dev-cleanup.sh, so `dev-cleanup start` raises it with everything else.
 # No environment is changed: the base already declares the topics (options.databento.normalized in, options.databento.pace out) and a Kafka Streams app reads Avro and writes Avro (GenericAvroSerde).
-# Resources are the base's: requests 250m / 2Gi, memory limit 9Gi, a large limit for one dev service; check dev headroom before adding more.
+# Resources are not changed here. The base file declares requests 250m / 2Gi and a memory limit of 8Gi, and the rendered dev Deployment carries a memory limit of 9Gi, a large limit for one dev service;
+# check dev headroom before adding more.
 # Rollback (ONE reviewed PR; never a bare kubectl): set replicas to 0 here AND re-add volume-pace-databento-service to DISABLED_DEV in scripts/ops/dev-cleanup.sh (replicas 0 alone is NOT a
 # rollback: the next `dev-cleanup start` would raise it again).
 # SINGLE replica ONLY. MUST MIRROR the standalone slice k8s/services/volume-pace/overlays/dev (validate-services: mono==slice).
