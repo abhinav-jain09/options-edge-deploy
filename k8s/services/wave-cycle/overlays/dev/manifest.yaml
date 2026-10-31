@@ -23,7 +23,7 @@ metadata:
   namespace: options-edge
 spec:
   progressDeadlineSeconds: 1200
-  replicas: 0
+  replicas: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: wave-cycle-service
@@ -39,9 +39,19 @@ spec:
       containers:
         - env:
             - name: WAVE_CYCLE_ENABLED
-              value: "false"
+              value: "true"
             - name: WAVE_CYCLE_SEASONALITY_ENABLED
-              value: "false"
+              value: "true"
+            - name: WC_DAILY_SNAPSHOT_PATH
+              value: /app/release/spx-daily-bar-history-20171002-20261009.avro
+            - name: WC_DAILY_SNAPSHOT_SHA256
+              value: 55d74b300e2cf7496740bfeada5de57db5f0d7f4e60b957064691e3c8e18a26c
+            - name: WC_DAILY_SNAPSHOT_FIRST
+              value: "2017-10-02"
+            - name: WC_DAILY_SNAPSHOT_LAST
+              value: "2026-10-09"
+            - name: WC_DAILY_SNAPSHOT_COUNT
+              value: "2268"
             - name: WAVE_CYCLE_IGNORE_CHECKPOINT
               value: "false"
             - name: KAFKA_INDICATOR_BARS_TOPIC
