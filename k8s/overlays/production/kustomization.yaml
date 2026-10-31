@@ -961,10 +961,12 @@ patches:
       - op: replace
         path: /spec/replicas
         value: 1
-  # spread-skew-service + spread-skew-postgres-writer: RETIRED all envs (USER 2026-07-24 — the
+  # spread-skew-service + spread-skew-postgres-writer: RETIRED in production (USER 2026-07-24 — the
   # mirrored-pair strike/Mid coloring feature is not wanted). Base replicas:0 renders as-is; the
   # standalone slices mirror it (validate-services: mono==slice) and both are in morning-autostart
-  # KEEP_DOWN + dev-cleanup DISABLED_DEV so the daily lifecycle never re-ups them.
+  # KEEP_DOWN so the daily lifecycle never re-ups them. 2026-10-31: the owner lifted the hold for DEV
+  # only (dev overlay replicas 1, spread-skew-service out of dev-cleanup DISABLED_DEV); production stays
+  # held at 0, and the writer stays held everywhere.
   # unified-sr + strike-flow-avro-adapter are now promoted to main and built for prod, so they render and
   # deploy on production too (experiment-only exclusions removed). Prod image build/pin must produce both
   # images (UNIFIED_SR_IMAGE / STRIKE_FLOW_AVRO_ADAPTER_IMAGE) or the digest-pin guard will fail-closed.
