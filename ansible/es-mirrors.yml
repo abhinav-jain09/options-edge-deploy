@@ -13,17 +13,46 @@
 # and auction/tape-zones rows, the target only for indicator, and nothing at all for strike-intel
 # (ansible/vars/es-mirrors.yml records each one) — is a FAILURE here, never something to fix in passing.
 #
+#   # THE ENTRY POINT — same arguments, plus the two guarantees described below.
+#   scripts/ops/install-es-mirrors.sh [-e ...]
+#
 #   # plan only — renders every unit under ansible/.ansible-rendered/ and reports, per file,
 #   # whether installing would change the live copy. It reads brokers and never writes a unit.
-#   ansible-playbook ansible/es-mirrors.yml
+#   scripts/ops/install-es-mirrors.sh
 #   # dev
-#   ansible-playbook ansible/es-mirrors.yml -e confirm_mirror_install=true
+#   scripts/ops/install-es-mirrors.sh -e confirm_mirror_install=true
 #   # prod — needs the permitted commit, the same rule Jenkins enforces: this checkout must be on
 #   # origin/main and HEAD must be exactly that commit
-#   ansible-playbook ansible/es-mirrors.yml -e mirror_target_ip=192.168.100.252 -e mirror_target_port=9092 \
+#   scripts/ops/install-es-mirrors.sh \
+#       -e mirror_target_ip=192.168.100.252 -e mirror_target_port=9092 \
 #       -e confirm_mirror_install=true -e permitted_sha=$(git rev-parse origin/main)
 #   # one topic
-#   ansible-playbook ansible/es-mirrors.yml -e only_topics=es.futures.footprint.bars -e confirm_mirror_install=true
+#   scripts/ops/install-es-mirrors.sh -e only_topics=es.futures.footprint.bars -e confirm_mirror_install=true
+#
+# A bare `ansible-playbook ansible/es-mirrors.yml` still PLANS, and that is fine — a plan writes no
+# unit, so a plan that quietly did nothing costs nothing. A production INSTALL that way is refused:
+# see "Refuse a PRODUCTION install that did not come through the wrapper" below.
+#   # the dealer-ledger leg, which runs ON .74 — PLAN ONLY, and it cannot be anything else yet:
+#   # installing it needs confluent-7.3.x kafka-mirror-maker on .74 AND a proven way to run the
+#   # permitted-commit guard there (see "Refuse a PRODUCTION install from a run host..." below).
+#   scripts/ops/install-es-mirrors.sh -e mirror_run_host=mac74 \
+#       -e mirror_target_ip=192.168.100.252 -e mirror_target_port=9092
+#
+# ⚠ RUN IT THROUGH scripts/ops/install-es-mirrors.sh, which is the only invocation that can tell
+# you a unit was installed. Every command above works, and each of them can also be made to exit 0
+# having done nothing — ansible-playbook exits 0 for a play that matched no host AND for one whose
+# every task was selected away, and no task in this file can defend against a flag that stops that
+# task from running. Reproduced on #1166: --limit excluding the play (r3), --tags <anything unused>,
+# --skip-tags all, --skip-tags always, --list-hosts and --check (all r4). This file refuses --limit
+# and tags its own refusals `always`, which closes the first two, but `--skip-tags always` defeats
+# even that. The wrapper refuses those flags in argv and in the environment, and then requires the
+# RECEIPT this play writes in its last task — positive evidence of work, rather than an enumeration
+# of the ways a run can do nothing. scripts/ci/mirror-install-wrapper-test.sh tests both halves.
+#
+# AN INVENTORY MUST BE IN PLAY, through -i, ANSIBLE_INVENTORY or an ansible.cfg `inventory =` —
+# earlier wording here said "-i is required", which is not literally true (Codex r4, MINOR). The
+# table declares a run_host other than localhost, and a run_host Ansible cannot resolve is never
+# installed by any play while reporting as a deferral, so no-inventory-anywhere fails loudly.
 #
 # WHERE THE PRODUCTION LOCK ACTUALLY IS. In Ansible an extra var outranks every var, fact and
 # register, so a play-level condition is advisory: `-e oe_prod_permitted=true` defeated the first
@@ -42,9 +71,122 @@
 # in a live mirror), the bytes of log4j.properties/run-mirror.sh/the plist, that the runner is still
 # executable, an absent file, an absent process, or a process OLDER than any of those files — MirrorMaker reads its
 # config once, at startup, so a rewritten file under an older process still runs the old settings.
-- name: Install the es4 -> environment MirrorMaker-1 units
-  hosts: localhost
+# ⚠ THIS PLAY EXISTS BECAUSE A BAD mirror_run_host IS OTHERWISE SILENT (Codex r2 on #1166, P0).
+# `hosts:` below is a variable, and Ansible treats a pattern matching no host as "skipping: no hosts
+# matched" with an EMPTY recap and exit 0 — so `-e mirror_run_host=mac47` reported success having
+# installed nothing, and the row validation inside that play never ran because the play never ran.
+# A typo is indistinguishable from a completed run, which is the worst possible failure for a tool
+# whose whole job is making mirror state visible.
+#
+# So the requested host is validated HERE, in a play that cannot be selected away. hostvars is the
+# oracle rather than groups['all']: Ansible's IMPLICIT localhost is not a member of any inventory
+# group, so groups['all'] rejected a perfectly good default invocation (Codex r2, P1) while hostvars
+# contains every host Ansible knows about, implicit or not.
+#
+# ⚠ `hosts: localhost` was NOT enough, and the claim that it "always matches" was false (Codex r3 on
+# #1166, P0). --limit applies to EVERY play, this one included, so it could silence the validation
+# and the install together: measured, `-l localhost -e mirror_run_host=mac74` validated mac74 and
+# then limited the install away — rc=0, empty work, "All assertions passed" — and `-l mac74 -e
+# mirror_run_host=mac47` skipped BOTH plays for rc=0 with a completely empty recap. Two defences,
+# because one of them has to survive the limit that hides the other:
+#   1. the pattern is `localhost:all`, so this play matches whenever ANY host survives the limit —
+#      under `-l mac74` it runs ON mac74 (measured) instead of being skipped. A limit matching no
+#      host at all is Ansible's own rc=1 ("leaves us with no hosts to target"), never silence.
+#   2. --limit is then REFUSED outright. It has no legitimate use here: the run host is chosen with
+#      -e mirror_run_host, which this play validates, and a limit can only ever disagree with it.
+# ansible_limit is UNDEFINED when no limit was passed (measured) — hence the default.
+- name: Validate the requested run host before any host selection
+  hosts: localhost:all
   connection: local
+  gather_facts: false
+  vars:
+    # ⚠ hostvars AND groups['all'] are BOTH empty on an inventory-less run — measured: hostvars=[],
+    # groups={'all': [], 'ungrouped': []} — because Ansible's implicit localhost is a member of
+    # neither. Codex r2 flagged groups['all'] for this; my first fix swapped in hostvars, which has
+    # the identical hole and rejected the default `mirror_run_host=localhost` outright. The oracle is
+    # therefore the union with localhost, which is always a legal run host.
+    oe_known_hosts: "{{ (hostvars.keys() | list) | union(['localhost']) }}"
+  tasks:
+    - name: Refuse --limit, which can silence the install play and this check with it
+      # tags: always — `--tags zzz` skips every untagged task, so this refusal could be
+      # selected away exactly like --limit selected it away (Codex r4). `--skip-tags always`
+      # still defeats it, which is why scripts/ops/install-es-mirrors.sh refuses these flags and
+      # requires a receipt: a task cannot defend against a flag that stops it running.
+      tags: always
+      # Defence 1 above puts this play in front of any limit; this is defence 2. Checked BEFORE the
+      # host oracle, because a limit can make the oracle's answer irrelevant.
+      run_once: true
+      ansible.builtin.assert:
+        that:
+          - ((ansible_limit | default('')) | string | trim) | length == 0
+        fail_msg: >-
+          --limit/-l is refused by this playbook; got --limit={{ ansible_limit | default('') }}.
+          The run host is chosen with -e mirror_run_host (validated here), so a limit can only
+          disagree with it — and a limit that excludes the install play makes Ansible skip it with
+          exit 0, reporting success having installed nothing. Drop the limit.
+
+    - name: Refuse a mirror_run_host that is pattern syntax rather than one host name
+      # tags: always — `--tags zzz` skips every untagged task, so this refusal could be
+      # selected away exactly like --limit selected it away (Codex r4). `--skip-tags always`
+      # still defeats it, which is why scripts/ops/install-es-mirrors.sh refuses these flags and
+      # requires a receipt: a task cannot defend against a flag that stops it running.
+      tags: always
+      # A host PATTERN in run_host is not a run host: `mac*`, `all`, `a:b`, `!x` can each resolve to
+      # several hosts or to a different host than the name suggests, and the table's rows are matched
+      # against this value as a literal. Refused by shape so the message names the real problem
+      # instead of the oracle reporting "not a host Ansible knows".
+      run_once: true
+      ansible.builtin.assert:
+        that:
+          - (mirror_run_host | default('localhost')) is match('^[A-Za-z0-9._-]+$')
+        fail_msg: >-
+          mirror_run_host={{ mirror_run_host | default('localhost') }} must be a single host name
+          ([A-Za-z0-9._-]), not an Ansible host pattern.
+
+    - name: Refuse a mirror_run_host that names a GROUP
+      # tags: always — `--tags zzz` skips every untagged task, so this refusal could be
+      # selected away exactly like --limit selected it away (Codex r4). `--skip-tags always`
+      # still defeats it, which is why scripts/ops/install-es-mirrors.sh refuses these flags and
+      # requires a receipt: a task cannot defend against a flag that stops it running.
+      tags: always
+      # The union oracle below accepts the literal 'localhost' unconditionally, which is right for
+      # Ansible's implicit localhost but leaves one collision: an inventory GROUP named localhost
+      # would be accepted here and then resolved as a group by `hosts:` (Codex r3 on #1166, PROCESS).
+      # Ordinary group names are already refused — they are absent from hostvars — so this closes the
+      # reserved-name case specifically, and any future group that shadows a host name with it.
+      run_once: true
+      ansible.builtin.assert:
+        that:
+          - (mirror_run_host | default('localhost')) not in ((groups | default({})).keys() | list)
+        fail_msg: >-
+          mirror_run_host={{ mirror_run_host | default('localhost') }} is the name of a GROUP in
+          this inventory, not a host. A group can resolve to several hosts, or to a host other than
+          the one the name suggests; name the host.
+
+    - name: Refuse a mirror_run_host that is not a host Ansible knows
+      # tags: always — `--tags zzz` skips every untagged task, so this refusal could be
+      # selected away exactly like --limit selected it away (Codex r4). `--skip-tags always`
+      # still defeats it, which is why scripts/ops/install-es-mirrors.sh refuses these flags and
+      # requires a receipt: a task cannot defend against a flag that stops it running.
+      tags: always
+      run_once: true
+      ansible.builtin.assert:
+        that:
+          - (mirror_run_host | default('localhost')) in oe_known_hosts
+        fail_msg: >-
+          mirror_run_host={{ mirror_run_host | default('localhost') }} is not a host in this
+          inventory. Known: {{ oe_known_hosts }}. A pattern matching no host makes Ansible
+          skip the play and exit 0, so this would have reported success while installing nothing.
+          Pass -i ansible/inventory/oe-mirror-hosts.yml, or fix the name.
+
+- name: Install the es4 -> environment MirrorMaker-1 units
+  # ⚠ hosts is the RUN HOST, not always localhost (Codex on #1166, P0). Until this was a variable the
+  # play was `hosts: localhost, connection: local` and `mirror_run_host` only SELECTED rows while
+  # Ansible still executed here — so a row declaring run_host: mac74 could never be installed on .74
+  # and the "installs only from a play running ON its run_host" claim was false. The connection comes
+  # from the inventory now (localhost carries ansible_connection: local) rather than being pinned
+  # here, which is what let the play claim a remote target it could not reach.
+  hosts: "{{ mirror_run_host | default('localhost') }}"
   gather_facts: false
 
   vars_files:
@@ -55,9 +197,14 @@
     oe_source_port: "{{ mirror_source_port | default('9092') }}"
     oe_target_ip: "{{ mirror_target_ip | default('127.0.0.1') }}"
     oe_target_port: "{{ mirror_target_port | default('19092') }}"
-    oe_kbin: "{{ kafka_bin | default('/Users/abhinav/development/confluent-7.3.1/bin') }}"
-    oe_ops: "{{ ops_dir | default(lookup('env', 'HOME') ~ '/oe-ops') }}"
-    oe_agents: "{{ launch_agents_dir | default(lookup('env', 'HOME') ~ '/Library/LaunchAgents') }}"
+    # lookup('env','HOME') reads the CONTROLLER's environment even when the play targets another
+    # machine, so every unit path would have been written with /Users/abhinav on a host whose home is
+    # /Users/rajuljain. The inventory carries oe_home per host; the lookup remains the fallback, which
+    # is correct for localhost and is what every existing es4 row still resolves through.
+    oe_home: "{{ hostvars[inventory_hostname].oe_home | default(lookup('env', 'HOME')) }}"
+    oe_kbin: "{{ kafka_bin | default(hostvars[inventory_hostname].oe_kafka_bin | default('/Users/abhinav/development/confluent-7.3.1/bin')) }}"
+    oe_ops: "{{ ops_dir | default(oe_home ~ '/oe-ops') }}"
+    oe_agents: "{{ launch_agents_dir | default(oe_home ~ '/Library/LaunchAgents') }}"
     oe_confirm: "{{ confirm_mirror_install | default(false) | bool }}"
     oe_allow_new_group: "{{ allow_new_consumer_group | default(false) | bool }}"
     oe_only: "{{ (only_topics | default('')) | trim }}"
@@ -71,14 +218,44 @@
     # extra var (-e) outranks every var, fact and register in the play: with the decision taken
     # through these names, `-e oe_prod_target=127.0.0.1:19092` would make the real production broker
     # pass the allow-list, skip the permitted-commit guard and set the permission true.
+    oe_run_host: "{{ mirror_run_host | default('localhost') }}"
+    # Same union as the validation play above, and for the same measured reason: the implicit
+    # localhost is in neither hostvars nor groups['all'].
+    oe_known_hosts: "{{ (hostvars.keys() | list) | union(['localhost']) }}"
     oe_prod_target: "192.168.100.252:9092"
     oe_dev_target: "127.0.0.1:19092"
-    oe_rendered_dir: "{{ playbook_dir }}/.ansible-rendered/es-mirrors"
+    # On the controller this stays exactly where it was. On a REMOTE run host it cannot: the modules
+    # create this directory on the TARGET, and playbook_dir is the controller checkout's absolute
+    # path, which does not exist there (Codex r2 on #1166, P1). The live unit paths already derive
+    # from oe_home; this one did not.
+    # The transport, not just the name: an inventory may call a REMOTE host `localhost`, and the
+    # controller's playbook_dir does not exist there. Same reserved-name collision as the oracle, and
+    # EXPLICITLY local for the same reason as the refusal below — an absent connection is remote.
+    oe_rendered_dir: >-
+      {{ (playbook_dir ~ '/.ansible-rendered/es-mirrors')
+         if (inventory_hostname == 'localhost'
+             and (hostvars[inventory_hostname].ansible_connection | default('')) == 'local')
+         else (oe_home ~ '/.ansible-rendered/es-mirrors') }}
     # -e dump_rows=<path> writes the rows this run WOULD act on and stops before touching a broker.
     # It exists so scripts/ci/validate-ansible-mirror-naming.sh can test the group.id and unit-name
     # generation in this file — the parity gate reads the table and the templates, and could not see
     # a change to the Jinja that composes them.
     oe_dump: "{{ dump_rows | default('') }}"
+    # Refused unless ABSOLUTE and OUTSIDE this repository. `-e dump_rows=true` — me meaning the flag
+    # as a boolean when it takes a path — wrote a 12 KB JSON file named `ansible/true` into the
+    # repository and I committed it (Codex r3 on #1166, P2); requiring an absolute path only changed
+    # the SPELLING of that mistake, and `-e dump_rows=$PWD/ansible/x.json` still left an untracked
+    # artifact in the tree (Codex r4, reproduced). The containment check is what actually prevents
+    # it, so that is what this asserts. KNOWN LIMIT, stated rather than papered over: realpath
+    # resolves symlinks but not every mount alias, so a bind mount or a second mount of the same
+    # filesystem under a different path is not recognised as this repository (Codex r5, MINOR). This
+    # stops the mistake that actually happened, and every symlinked and /tmp->/private spelling of
+    # it — not a deliberately constructed alias.
+    # The charset is no longer a shell control either: oe_dump is
+    # used once, as a module `dest:`, and is never rendered into run-mirror.sh — so ordinary POSIX
+    # path characters are allowed and only quoting/expansion metacharacters are refused.
+    oe_repo_root: "{{ (playbook_dir ~ '/..') | realpath }}"
+    oe_dump_dir: "{{ (oe_dump | default('') | dirname | realpath) if (oe_dump | default('')) | length > 0 else '' }}"
     # Deployment Permission Rule (options-edge rule.md): a PRODUCTION effect runs only under a commit
     # Abhinav permitted, on main, proven inside the checkout the effect comes from. Jenkins enforces
     # it per job; this playbook can reload a production unit from a laptop, so it enforces the same
@@ -90,6 +267,35 @@
     # scripts/ci/validate-ansible-prod-permission.sh asserts both literals against the Jenkinsfiles.
 
   tasks:
+    - name: Refuse an OE_MIRROR_RECEIPT path that is not a plain absolute path
+      # Its own task, NOT a line inside the dump_rows assert: that task is gated on
+      # `when: oe_dump | length > 0`, so the receipt path would have been validated only on a run
+      # that also asked for a dump — a check that does not run is not a check.
+      # Read from the environment inline, like the receipt write itself: an extra var must not be
+      # able to point this at one path while the write goes to another.
+      when: lookup('env', 'OE_MIRROR_RECEIPT') | length > 0
+      tags: always
+      ansible.builtin.assert:
+        that:
+          - lookup('env', 'OE_MIRROR_RECEIPT') is match('^/[A-Za-z0-9._/+=@:,-]*$')
+        fail_msg: >-
+          OE_MIRROR_RECEIPT must be a plain absolute path; got
+          "{{ lookup('env', 'OE_MIRROR_RECEIPT') }}".
+
+    - name: Refuse a dump_rows destination that is not an absolute path outside this repository
+      when: oe_dump | length > 0
+      ansible.builtin.assert:
+        that:
+          - oe_dump is match('^/[A-Za-z0-9._/+=@:,-]*$')
+          - oe_dump_dir != oe_repo_root
+          - not (oe_dump_dir ~ '/') is match('^' ~ (oe_repo_root | regex_escape) ~ '/')
+        fail_msg: >-
+          dump_rows takes an absolute PATH, outside this repository, to write the planned rows to —
+          not a flag and not a location in the tree; got "{{ oe_dump }}" (resolving to
+          {{ oe_dump_dir }}, repository {{ oe_repo_root }}). `-e dump_rows=true` created
+          ansible/true, a generated artifact that then got committed, and an absolute path inside
+          the tree is the same mistake spelled differently. Write it under a temp directory.
+
     - name: Validate the broker pair, fail-closed
       # The target is an ALLOW-LIST, not a free string: these units are per (target, topic) and a
       # typo'd broker would install a unit nothing reads, under a group nothing commits.
@@ -101,6 +307,26 @@
         fail_msg: >-
           source must be es4 (192.168.100.4:9092) and target must be dev ({{ oe_dev_target }})
           or prod ({{ oe_prod_target }}); got source={{ oe_source }} target={{ oe_target }}.
+
+    - name: Refuse a run_host that is not a host in the inventory
+      tags: always
+      # The other half of the P0 above. `run_host` was a free label: a row saying `mac47` deferred
+      # forever under a SUCCESSFUL plan, so a typo looked like a deliberate deferral and the unit was
+      # never installed by anything. Checking it against the inventory turns that into a build
+      # failure naming the row. Note this also means a row for a host the caller did not supply an
+      # inventory for fails loudly rather than deferring into silence — which is the point.
+      # hostvars, not groups['all']: the implicit localhost belongs to no group, so groups['all']
+      # rejected the documented inventory-less invocation outright (Codex r2 on #1166, P1).
+      ansible.builtin.assert:
+        that:
+          - (mirror_units | map(attribute='run_host') | map('default', 'localhost') | unique | reject('in', oe_known_hosts) | list) | length == 0
+        fail_msg: >-
+          ansible/vars/es-mirrors.yml declares run_host value(s) that are not hosts in this
+          inventory: {{ mirror_units | map(attribute='run_host') | map('default', 'localhost')
+          | unique | reject('in', oe_known_hosts) | list }}. Known hosts: {{ oe_known_hosts }}.
+          A run_host that resolves to nothing is never installed by any play and reports as a
+          deferral, so a typo is indistinguishable from a decision. Pass
+          -i ansible/inventory/oe-mirror-hosts.yml, or fix the row.
 
     - name: Refuse a path that could carry shell
       # ops_dir, launch_agents_dir and kafka_bin are operator-supplied, and they are written into
@@ -119,7 +345,88 @@
           ([A-Za-z0-9._/-]); got ops_dir={{ oe_ops }} launch_agents_dir={{ oe_agents }}
           kafka_bin={{ oe_kbin }} rendered={{ oe_rendered_dir }}.
 
+    - name: Refuse an install that did not come through the wrapper
+      # A PRODUCTION install must be an invocation whose completion can be PROVEN, and only
+      # scripts/ops/install-es-mirrors.sh can prove it: it refuses the selection flags, requires the
+      # receipt this play writes on the work path, and cross-checks Ansible's own task banners and
+      # recap. Codex r5's point stands that calling it "THE entry point" does not force it, and that
+      # a documented bare ansible-playbook production install is a mutation path with no completion
+      # evidence at all. So the production path now requires the wrapper's receipt variable.
+      #
+      # ⚠ WHAT THIS IS AND IS NOT. OE_MIRROR_RECEIPT is an environment variable, so an operator can
+      # export it by hand and run ansible-playbook directly. That is deliberate and it is the same
+      # standard as everything else in this file: it makes ACCIDENTAL bypass impossible — a bare
+      # production install now fails with an instruction rather than mutating units unprovably — and
+      # makes deliberate bypass an explicit, nameable act rather than the default spelling in the
+      # header. It is not a security boundary. The permitted-commit guard is the security boundary,
+      # it is enforced separately in mirror-stop.sh.j2/mirror-start.sh.j2 and the write step, and
+      # none of this weakens it.
+      #
+      # A PLAN is untouched: it writes no unit, so a plan that quietly did nothing costs nothing.
+      when: oe_confirm
+      tags: always
+      ansible.builtin.assert:
+        that:
+          - lookup('env', 'OE_MIRROR_RECEIPT') | length > 0
+        fail_msg: >-
+          An install must run through scripts/ops/install-es-mirrors.sh, which is the only
+          invocation that can prove it completed — it refuses the flags that make ansible-playbook
+          exit 0 having done nothing, and requires the receipt this play writes on the work path.
+          A PLAN needs nothing: drop -e confirm_mirror_install=true to plan.
+          This task is the EARLY, readable refusal; the binding one is in
+          ansible/templates/mirror-stop.sh.j2 and its two siblings, because `--skip-tags always`
+          skips exactly the always-tagged tasks like this one.
+
+    - name: Refuse a PRODUCTION install from a run host that is not the controller
+      # ⚠ The production lock is a script that runs INSIDE this checkout, and this checkout exists
+      # only on the controller (Codex r3 on #1166, P1). Every site that enforces it — the task below,
+      # ansible/templates/mirror-stop.sh.j2, mirror-start.sh.j2 and the write step in
+      # ansible/tasks/es-mirror-unit.yml — renders `REPO={{ '{{' }} playbook_dir {{ '}}' }}/..` and
+      # `cd`s there, but those scripts EXECUTE ON THE TARGET. On .74 that /private/tmp/... path does
+      # not exist, so the `cd` fails and the guard reports "the permitted-commit guard REFUSED this
+      # PRODUCTION unit" — which fails CLOSED (verified: cd failing makes the `&&` subshell non-zero
+      # and the `if !` take the FAIL branch), but says the commit was refused when the truth is that
+      # the guard could not run. Per unit, late, and misleading.
+      #
+      # So it is refused here instead, once and early. I am NOT provisioning a remote checkout to
+      # make this pass: playbook_dir is a magic variable that -e cannot override, and that is the
+      # whole reason the lock holds from a laptop. Any operator-settable repo path — including one
+      # read from the inventory, since extra vars land in hostvars too — would let
+      # `-e <repo>=<a clean clone at the permitted sha>` satisfy the guard while the units installed
+      # come from THIS tree. A weaker lock is a worse answer than a refusal.
+      #
+      # What this means for the dl-mirror row: it plans on .74 (a plan takes no production effect, so
+      # this is scoped to oe_confirm) and installs nowhere until .74 has BOTH confluent-7.3.x
+      # kafka-mirror-maker AND a proven model for running the permitted-commit guard against a
+      # checkout provisioned on .74. Neither exists today; leg 2 of the offload lane does not exist.
+      #
+      # The name alone is not the test. `localhost` is a name an inventory may give to a REMOTE host
+      # (`localhost: {ansible_host: 192.168.100.74}`) — the same reserved-name collision r3 found in
+      # the union oracle — so the transport is checked too: only a host Ansible executes LOCALLY is
+      # the controller. `-e ansible_connection=local` does not defeat this; it makes execution
+      # genuinely local, which is the case the guard already handles.
+      #
+      # ⚠ The connection must be EXPLICITLY local, with no default. My first version wrote
+      # `| default('local')`, which treats an ABSENT connection as local — and a host named
+      # `localhost` carrying `ansible_host: <remote>` and no ansible_connection uses Ansible's
+      # default REMOTE transport, so it passed (Codex r4). Nothing legitimate is lost by dropping the
+      # default: measured, ansible_connection resolves to 'local' for the implicit localhost on an
+      # inventory-less run as well as for this inventory's explicit entry.
+      when: oe_confirm and (oe_target_ip == '192.168.100.252') and (oe_target_port == '9092')
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname == 'localhost'
+          - (hostvars[inventory_hostname].ansible_connection | default('')) == 'local'
+        fail_msg: >-
+          A PRODUCTION install must run on the controller, and this run targets
+          {{ inventory_hostname }}. The permitted-commit guard runs inside this checkout
+          ({{ playbook_dir }}/..), which does not exist on {{ inventory_hostname }} — the guard
+          would fail to start and every unit would report the commit as refused. Installing the
+          .74 -> prod leg needs confluent-7.3.x kafka-mirror-maker on .74 and a proven way to run
+          the guard there; until then this plays (plan only) and installs nothing.
+
     - name: Enforce the permitted commit before any PRODUCTION effect
+      # Runs on the controller — guaranteed by the refusal above, which this depends on.
       # The guard refuses: a checkout that is not on origin/main, a missing/short/malformed
       # PERMITTED_SHA (nothing is substituted for it), and a HEAD that is not exactly that commit.
       # Only a production INSTALL goes through it — a plan reads brokers and writes nothing, and dev
@@ -171,15 +478,22 @@
         label: "{{ item.0.pipeline }}/{{ item.1.name }}"
       vars:
         slug: >-
-          {{ (oe_target_ip ~ '-' ~ oe_target_port ~ (('-' ~ item.1.name) if item.0.slug_with_topic else ''))
+          {{ ((item.0.target_ip | default(oe_target_ip)) ~ '-' ~ (item.0.target_port | default(oe_target_port)) ~ (('-' ~ item.1.name) if item.0.slug_with_topic else ''))
              | regex_replace('[^A-Za-z0-9-]', '-') }}
         row:
           pipeline: "{{ item.0.pipeline }}"
           topic: "{{ item.1.name }}"
           # the group.id the pipeline writes, from the RAW ip/port/topic (dots kept) — never the slug
+          # The ROW's target, not the global one (Codex on #1166, P1). This expression read
+          # oe_target_ip/oe_target_port, so dl-mirror rendered a producer for .252 while its group id
+          # said 127.0.0.1-19092 — and the group id is where the committed offsets live, so a wrong
+          # one is a NEW consumer group and an offset reset, not a cosmetic mismatch. Every es4 row is
+          # unchanged: its target_ip/target_port default to exactly these globals.
           group_id: >-
             {{ item.0.pipeline ~ '-' ~ (item.0.group_parts
-               | map('extract', {'ip': oe_target_ip, 'port': oe_target_port, 'topic': item.1.name})
+               | map('extract', {'ip': (item.0.target_ip | default(oe_target_ip)),
+                                 'port': (item.0.target_port | default(oe_target_port)),
+                                 'topic': item.1.name})
                | join('-')) }}
           offset_reset: "{{ item.0.offset_reset }}"
           commit_interval: "{{ item.0.commit_interval_ms | default('') }}"
@@ -190,8 +504,12 @@
           mdir: "{{ oe_ops }}/{{ item.0.pipeline }}-{{ slug }}"
           label: "com.optionsedge.{{ item.0.pipeline }}-{{ slug }}"
           plist: "{{ oe_agents }}/com.optionsedge.{{ item.0.pipeline }}-{{ slug }}.plist"
-          source: "{{ oe_source_ip }}:{{ oe_source_port }}"
-          target: "{{ oe_target_ip }}:{{ oe_target_port }}"
+          # Per-row source/target, DEFAULTING to the globals so every es4 row renders exactly as it
+          # did before this field existed. Only a row that declares its own (the dealer-ledger
+          # offload leg, whose source is .74 and target is prod) differs.
+          source: "{{ item.0.source_ip | default(oe_source_ip) }}:{{ item.0.source_port | default(oe_source_port) }}"
+          target: "{{ item.0.target_ip | default(oe_target_ip) }}:{{ item.0.target_port | default(oe_target_port) }}"
+          run_host: "{{ item.0.run_host | default('localhost') }}"
 
     - name: Select the units this run covers
       ansible.builtin.set_fact:
@@ -211,12 +529,31 @@
       # resource must stay ABSENT. Skipped here, not failed, so a dev run of the whole table works.
       ansible.builtin.set_fact:
         oe_held: "{{ oe_selected | selectattr('prod_only') | map(attribute='topic') | list if ((oe_target_ip ~ ':' ~ oe_target_port) != '192.168.100.252:9092') else [] }}"
-        oe_plan: "{{ oe_selected | rejectattr('prod_only') | list if ((oe_target_ip ~ ':' ~ oe_target_port) != '192.168.100.252:9092') else oe_selected }}"
+        oe_env_plan: "{{ oe_selected | rejectattr('prod_only') | list if ((oe_target_ip ~ ':' ~ oe_target_port) != '192.168.100.252:9092') else oe_selected }}"
+
+    # A SEPARATE task, not two more keys above: within one set_fact, Ansible resolves every key
+    # against the facts as they were BEFORE the task, so `oe_plan: "{{ oe_env_plan | ... }}"` beside
+    # its own producer fails with "'oe_env_plan' is undefined" — which is exactly how I broke this
+    # play on the first attempt.
+    - name: Keep only the units this host installs, and name the ones it defers
+      # A unit is installed only by a play running ON its run_host — a single play cannot install
+      # some units on .102 and others on .74. The rest are REPORTED as deferred, never dropped: a row
+      # silently missing from a plan is how a mirror goes unnoticed, which is the failure this whole
+      # table exists to prevent.
+      ansible.builtin.set_fact:
+        # inventory_hostname — the host this play is ACTUALLY executing on — not the operator's
+        # mirror_run_host string (Codex on #1166, P0). With the string, `-e mirror_run_host=mac47`
+        # selected a typo'd row and installed it on localhost while reporting mac47 as its
+        # destination. Resolving `hosts:` through the inventory makes a typo fail to resolve a host
+        # instead, and this comparison then cannot disagree with where the files are being written.
+        oe_plan: "{{ oe_env_plan | selectattr('run_host', 'equalto', inventory_hostname) | list }}"
+        oe_deferred: "{{ oe_env_plan | rejectattr('run_host', 'equalto', inventory_hostname) | list }}"
 
     - name: Report the plan
       ansible.builtin.debug:
         msg: >-
-          {{ oe_source }} -> {{ oe_target }} | {{ oe_plan | length }} unit(s)
+          {{ oe_source }} -> {{ oe_target }} | {{ oe_plan | length }} unit(s) on {{ inventory_hostname }}{{
+          (", " ~ (oe_deferred | length | string) ~ " deferred to another run_host: " ~ (oe_deferred | map(attribute='label') | join(', '))) if (oe_deferred | length > 0) else "" }}
           {{ '(PLAN ONLY — pass -e confirm_mirror_install=true to install)' if not oe_confirm else '(INSTALLING)' }}
           {{ ('| held back as production-only: ' ~ (oe_held | join(', '))) if (oe_held | length > 0) else '' }}
 
@@ -231,6 +568,53 @@
       when: oe_dump | length > 0
       ansible.builtin.meta: end_play
 
+    - name: Find the units whose source and target partition counts differ
+      # ⚠ NOT a selectattr chain. `selectattr('assert_source.parts', 'ne', 'assert_target.parts')`
+      # compares the attribute against the literal STRING 'assert_target.parts', so it is true for
+      # every row and my first version of this gate selected all 15 units — it would have refused to
+      # install every es4 mirror. Jinja's selectattr cannot compare one attribute to another; `when`
+      # can, so the list is built here and the assert below only counts it.
+      ansible.builtin.set_fact:
+        oe_asym: "{{ (oe_asym | default([])) + [item.label] }}"
+      loop: "{{ oe_plan }}"
+      loop_control:
+        label: "{{ item.label }}"
+      when:
+        - item.assert_source.parts is defined
+        - item.assert_target.parts is defined
+        - item.assert_target.parts != 'source'
+        - (item.assert_source.parts | string) != (item.assert_target.parts | string)
+
+    - name: Refuse to INSTALL a unit whose source and target partition counts differ
+      # Codex on #1166, P1: "partition asymmetry must be demonstrated before carrying production
+      # traffic". MM1's byte-array producer plus the default partitioner remaps a NON-NULL key
+      # deterministically, so 8->32 does not inherently break per-key ordering — but that is not a
+      # safety claim: a null key, a changed key serialization or a custom partitioner each void the
+      # premise, Kafka gives no ordering across topics regardless of co-partitioning, and nothing
+      # here demonstrates that all four mirrored topics' PRODUCERS key on symbol|expiry.
+      #
+      # PLACED HERE, after the plan is computed and before anything is installed: oe_asym reads
+      # oe_plan, and my first attempt put this task near the other refusals at the top of the play
+      # where oe_plan does not exist yet — the same undefined-fact mistake I had already made once
+      # in this file.
+      #
+      # So the asymmetry cannot be enabled by prose. A plan always renders and reports it; an
+      # INSTALL of such a unit is refused until someone passes
+      # -e partition_asymmetry_demonstrated=<evidence reference>, which is a deliberate act that
+      # names where the evidence is. This is the only gate in this play that exists because a claim is
+      # unproven rather than because a value is wrong.
+      ansible.builtin.assert:
+        that:
+          - ((oe_asym | default([])) | length == 0) or ((partition_asymmetry_demonstrated | default('')) | trim | length > 0)
+        fail_msg: >-
+          refusing to install {{ (oe_asym | default([])) | length }} unit(s) whose source and target
+          partition counts differ: {{ (oe_asym | default([])) | join(', ') }}. MirrorMaker re-partitions by key, so records
+          co-partitioned at the source are redistributed at the target. That is believed harmless for
+          these topics and is NOT demonstrated. Pass
+          -e partition_asymmetry_demonstrated='<where the keyed-record evidence is>' to proceed, or
+          align the partition counts first. Planning (without confirm_mirror_install) is unaffected.
+      when: oe_confirm
+
     - name: Install each unit
       ansible.builtin.include_tasks: tasks/es-mirror-unit.yml
       loop: "{{ oe_plan }}"
@@ -242,17 +626,91 @@
       ansible.builtin.debug:
         msg: "{{ oe_report | default([]) }}"
 
-    - name: Fail when any unit was not installable or did not reload
-      # Reported per unit above, and fatal here: a run that could not install part of the table, or
-      # whose reload did not prove a replacement, has not done what it was asked, and a green exit
-      # would say it had. A failed RELOAD is the more serious of the two — that unit's files are new
-      # on disk while its process may still be the old one.
-      ansible.builtin.assert:
-        that:
-          - (oe_failed | default([])) | length == 0
-          - (oe_reload_failed | default([])) | length == 0
-        fail_msg: >-
-          {{ ('not installable: ' ~ (oe_failed | default([]) | join(', '))) if (oe_failed | default([]) | length > 0) else '' }}
-          {{ ('reload did not prove a replacement: ' ~ (oe_reload_failed | default([]) | join(', '))) if (oe_reload_failed | default([]) | length > 0) else '' }}
-          — see the Summary above for each reason.
-        success_msg: "{{ oe_plan | length }} unit(s) accounted for{{ ' (plan only)' if not oe_confirm else '' }}."
+    # ⚠⚠ THE RECEIPT IS EVIDENCE PRODUCED BY THE WORK, AND IT IS DELIBERATELY NOT `tags: always`.
+    # My first version was exactly backwards and Codex r5 broke it in one command:
+    #   ANSIBLE_RUN_TAGS=always scripts/ops/install-es-mirrors.sh -e confirm_mirror_install=true
+    # exited 0 with a receipt reading confirm=True and EVERY COUNT ZERO. `tags: always` guarantees
+    # the receipt task runs under a narrowed tag selection — which is the opposite of proving the
+    # work ran. An always-tagged terminal task cannot be evidence of anything.
+    #
+    # So: no `always` tag here. Any tag or limit selection that skips the real work skips this too,
+    # there is no receipt, and scripts/ops/install-es-mirrors.sh fails. The refusals at the top of
+    # the playbook keep their `always` tag, because a REFUSAL should survive selection; evidence
+    # must not.
+    #
+    # The path comes from the ENVIRONMENT, read inline at the point of use and never through a
+    # variable name. `-e install_receipt=<elsewhere>` and `-e oe_receipt=<elsewhere>` both outranked
+    # a play var, which let a caller redirect or suppress the receipt AFTER a real install and hand
+    # the wrapper an exit 3 — "it failed, run it again" against production (Codex r5). An extra var
+    # cannot override a lookup that is never bound to a name.
+    #
+    # block/always, so the receipt is written whether or not the terminal assertion passes and is
+    # genuinely the last thing to happen. Described as "the last task" before, it in fact ran BEFORE
+    # the assertion and could report units_failed=0 while the run then failed on oe_reload_failed,
+    # which it did not record at all (Codex r5, MAJOR).
+    # ⚠ `always:` is NOT "every failure mode" — a correction to what I wrote last round. It runs when
+    # execution REACHES this block; it cannot run after an unreachable host, a controller kill, a
+    # connection lost during a remote mutating command, or a fatal earlier in the play. So a remote
+    # write CAN happen with no receipt, and the wrapper will then report failure for a run that
+    # mutated something. Re-run through the wrapper: its verifying re-plan reports what is actually
+    # pending, which is the only way to tell that case from a run that did nothing.
+    - name: Account for the run, and write the receipt last whatever the outcome
+      block:
+        - name: Fail when any unit was not installable or did not reload
+          # Reported per unit above, and fatal here: a run that could not install part of the table,
+          # or whose reload did not prove a replacement, has not done what it was asked, and a green
+          # exit would say it had. A failed RELOAD is the more serious of the two — that unit's files
+          # are new on disk while its process may still be the old one.
+          #
+          # ⚠ NOT BINDING AGAINST A FORGED RUN, and this used to read as though it were. Both lists
+          # come from set_fact and the per-unit tasks are `failed_when: false`, so `-e oe_failed=[]
+          # -e oe_reload_failed=[]` outranks them and makes this assertion pass over real failures
+          # without touching Ansible's own failed= count (Codex r6). Same shape as the production
+          # lock, which is why that one lives in the rendered scripts and not in a variable.
+          # The check that a forged value cannot satisfy is the wrapper's verifying re-plan: it
+          # re-reads the unit files and live processes afterwards and refuses when any unit would
+          # still change. A caller can make this play claim success; they cannot make the units on
+          # disk match a table they do not match.
+          ansible.builtin.assert:
+            that:
+              - (oe_failed | default([])) | length == 0
+              - (oe_reload_failed | default([])) | length == 0
+            fail_msg: >-
+              {{ ('not installable: ' ~ (oe_failed | default([]) | join(', '))) if (oe_failed | default([]) | length > 0) else '' }}
+              {{ ('reload did not prove a replacement: ' ~ (oe_reload_failed | default([]) | join(', '))) if (oe_reload_failed | default([]) | length > 0) else '' }}
+              — see the Summary above for each reason.
+            success_msg: "{{ oe_plan | length }} unit(s) accounted for{{ ' (plan only)' if not oe_confirm else '' }}."
+      always:
+        - name: Write the run receipt
+          # ⚠ THESE NUMBERS ARE A REPORT, NOT PROOF, and the earlier comment here claiming the
+          # wrapper could cross-check them against Ansible's own output was wrong: task names are
+          # playbook-controlled and all task output shares one pipe, so a 12-line play forges both
+          # the banners and a plausible receipt (Codex r6, measured). Every counter comes from a
+          # set_fact and `-e oe_failed=[]` outranks a set_fact, so a determined caller can make
+          # these say anything.
+          # What the receipt is actually for: it carries the wrapper's per-run NONCE, so the wrapper
+          # can tell "this task ran in THIS invocation" from "OE_MIRROR_RECEIPT was already exported
+          # in someone's shell". The real post-install check is the wrapper's verifying re-plan,
+          # which reads the unit files and live processes instead of any text this play prints.
+          when: lookup('env', 'OE_MIRROR_RECEIPT') | length > 0
+          ansible.builtin.copy:
+            dest: "{{ lookup('env', 'OE_MIRROR_RECEIPT') }}"
+            mode: "0644"
+            content: |
+              nonce={{ lookup('env', 'OE_MIRROR_NONCE') }}
+              host={{ inventory_hostname }}
+              connection={{ hostvars[inventory_hostname].ansible_connection | default('') }}
+              target={{ oe_target }}
+              confirm={{ oe_confirm }}
+              units_in_table={{ (oe_units | default([])) | length }}
+              units_selected={{ (oe_selected | default([])) | length }}
+              units_held_prod_only={{ (oe_held | default([])) | length }}
+              units_deferred_other_run_host={{ ((oe_env_plan | default([])) | length) - ((oe_plan | default([])) | length) }}
+              units_on_this_host={{ (oe_plan | default([])) | length }}
+              units_failed={{ (oe_failed | default([])) | length }}
+              units_reload_failed={{ (oe_reload_failed | default([])) | length }}
+              only_topics={{ oe_only }}
+              # SELECTED = held + deferred + on_this_host; in_table >= selected, and they differ
+              # exactly when -e only_topics narrowed the run, which is why only_topics is recorded
+              # rather than left to be inferred from a gap. Measured on a full dev plan:
+              # 18 in table, 18 selected = 1 held prod-only + 4 deferred to mac74 + 13 here.
