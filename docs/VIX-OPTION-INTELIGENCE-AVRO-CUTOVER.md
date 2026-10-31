@@ -32,13 +32,16 @@ enabled on dev and was found to publish JSON).
    (dev registry `http://192.168.100.102:8082`, production `http://192.168.100.252:8082`, es4 `http://192.168.100.4:8081`).
 2. Roll the Avro writer (vix-option-inteligence image built with contracts 0.53.0). From this moment nothing writes JSON.
 3. Roll the Avro reader (feed gateway). It treats the topic as tolerant: a retained JSON value is counted and dropped, it never stalls the shared Avro consumer.
-4. Wipe and recreate, with the Avro writer live:
+4. Wipe and recreate (dev: strict mode, see below; the live-writer form is):
    `roll-forward-vix-option-inteligence.sh --recreate --cluster <c> --pre-cutover-id <TopicId> --avro-feed-live --json-writers-stopped <bootstrap> [kafka-bin-dir]`,
    then `--verify --new-topic-id <id>`. The script refuses unless every non-empty partition starts and ends with a Confluent frame under id 3001 (or a tombstone).
 5. Verify the wire: `kcat -b <broker> -C -t <topic> -p <partition> -o -1 -c1 -e -f '%S\n' | xxd | head -1` starts `00 00 00 0b b9` (magic 0, id 3001 = 0x0bb9), and the gateway
    frame still carries `atmIv`, `marketDirection`, `prediction` for the page.
 
-Strict alternative: scale the writer to zero, wipe with `--writers-and-readers-stopped`, then start the Avro writer.
+**Dev and any broker with topic auto-creation on: use the STRICT mode, not `--avro-feed-live`** (Codex review). A live producer retries into a topic that was just
+deleted and the broker can auto-create it first with its defaults (1 partition or 32, not compacted), before the script's own create. So: roll the Avro image (step 2),
+scale `vix-option-inteligence` to 0, wipe with `--writers-and-readers-stopped`, `--verify` (partition count and `cleanup.policy=compact` are checked from the broker),
+scale it back to 1. `--avro-feed-live` is only for a cluster with auto-creation disabled.
 
 ## Pre-cutover facts (measured 2026-10-31)
 
