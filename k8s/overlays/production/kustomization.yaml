@@ -961,7 +961,7 @@ patches:
       - op: replace
         path: /spec/replicas
         value: 1
-  # spread-skew-service + spread-skew-postgres-writer: RETIRED all envs (USER 2026-07-24 — the
+  # spread-skew-service + spread-skew-postgres-writer: RETIRED in production (USER 2026-07-24 — the
   # mirrored-pair strike/Mid coloring feature is not wanted). Base replicas:0 renders as-is; the
   # standalone slices mirror it (validate-services: mono==slice) and both are in morning-autostart
   # KEEP_DOWN so the daily lifecycle never re-ups them. 2026-10-31: the owner lifted the hold for DEV
