@@ -145,6 +145,8 @@ pipeline {
       description: 'market-structure, es-trade-tools, wave-cycle and break-classifier only. true = before the rollout, register that service\'s Avro subjects under their FIXED ids (subject compatibility FULL, IMPORT mode, scripts/kafka/ensure-fixed-id-schemas.sh with scripts/kafka/schema-id-maps/<service>.map) on this environment\'s Schema Registry; idempotent, a collision fails. The schema files come from options-edge-contracts at CONTRACTS_PERMITTED_SHA, which is REQUIRED with this flag. docs/ta-books/DEPLOY-ROLLOUT.md.')
     booleanParam(name: 'REGISTER_GEOMETRY_SCHEMAS', defaultValue: false,
       description: 'amt-order-bridge on ENVIRONMENT=dev ONLY (production is refused by the stage). true = before the rollout, register the geometry signal adapter\'s seven Avro subjects (ids 2801-2807, FULL, IMPORT mode, scripts/kafka/ensure-fixed-id-schemas.sh with scripts/kafka/schema-id-maps/geometry-signal-adapter.map) on the dev Schema Registry; idempotent, a collision fails. Schemas come from options-edge-contracts schemas-registry/geometry at CONTRACTS_PERMITTED_SHA, which is REQUIRED with this flag. LAG-R16.7.')
+    booleanParam(name: 'REGISTER_REVERSAL_TOP_SCHEMA', defaultValue: false,
+      description: 'reversal-confirmation dev only. Register the top-candidate Avro subject under fixed id 2901 with FULL compatibility before enabling its producer. Requires CONTRACTS_PERMITTED_SHA.')
     booleanParam(name: 'MARKET_STRUCTURE_IGNORE_RECOVERY_ROLLOVER', defaultValue: false,
       description: 'market-structure only, W0 step 2. true = inject MARKET_STRUCTURE_IGNORE_RECOVERY=true into the RENDER for this one apply (never committed): the ms-runtime-5 image cannot read the ms-runtime-3 JSON checkpoint and its first start must rebuild the day from the retained inputs. Refused Mon-Fri 09:30-16:00 America/New_York with no override (service-deploy.sh RTH_ROLLOVER_GATE); deploy only between the 16:00 close and midnight on a trading day. The next ordinary deploy (step 5, FORCE_RESTART=true) carries no flag. MARKET-STRUCTURE-AVRO-CUTOVER.md sections 5-6.')
     booleanParam(name: 'W0_CUTOVER_WIPE', defaultValue: false,
@@ -714,6 +716,35 @@ PYEOF
           SR="${SR/host.docker.internal/${DEV_HOST_IP:-192.168.100.102}}"
           echo "registry for ${ENVIRONMENT}: $SR"
           SCHEMA_REGISTRY_URL="$SR" SCHEMAS_DIR=".jenkins-tmp/contracts-geometry/schemas-registry/geometry" SCHEMA_ID_MAP="scripts/kafka/schema-id-maps/geometry-signal-adapter.map" \
+            DEPLOY_DRY_RUN="${DEPLOY_DRY_RUN:-false}" bash scripts/kafka/ensure-fixed-id-schemas.sh
+        '''
+      }
+    }
+    stage('Register reversal top schema (dev only)') {
+      when {
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && params.REGISTER_REVERSAL_TOP_SCHEMA && params.SERVICE == 'reversal-confirmation' }
+      }
+      steps {
+        script {
+          if (params.ENVIRONMENT != 'dev') error('REGISTER_REVERSAL_TOP_SCHEMA is dev only')
+          def csha = (params.CONTRACTS_PERMITTED_SHA ?: '').trim()
+          if (!(csha ==~ /[0-9a-f]{40}/)) error('REGISTER_REVERSAL_TOP_SCHEMA requires CONTRACTS_PERMITTED_SHA')
+        }
+        dir('.jenkins-tmp/contracts-reversal') { deleteDir() }
+        sh '''
+          set -eu
+          git clone git@github.com:abhinav-jain09/options-edge-contracts.git .jenkins-tmp/contracts-reversal
+          git -C .jenkins-tmp/contracts-reversal checkout main
+        '''
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${CONTRACTS_PERMITTED_SHA:-}" bash scripts/jenkins/permitted-sha-guard.sh --dir .jenkins-tmp/contracts-reversal --ref main'
+        }
+        sh '''
+          set -euo pipefail
+          SR=$(kubectl -n options-edge get configmap options-edge-config -o jsonpath='{.data.SCHEMA_REGISTRY_URL}')
+          SR="${SR/host.docker.internal/${DEV_HOST_IP:-192.168.100.102}}"
+          SCHEMA_REGISTRY_URL="$SR" SCHEMAS_DIR=".jenkins-tmp/contracts-reversal/schemas/reversal-candidate" \
+            SCHEMA_ID_MAP="scripts/kafka/schema-id-maps/reversal-top-candidate.map" \
             DEPLOY_DRY_RUN="${DEPLOY_DRY_RUN:-false}" bash scripts/kafka/ensure-fixed-id-schemas.sh
         '''
       }
