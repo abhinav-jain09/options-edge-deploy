@@ -1,0 +1,35 @@
+# DEV: es-trade-tools-service LIVE with the calibrated release configuration (replicas 1, TT_ENABLED and all four family flags "true"), exactly as production runs it.
+# The shared base (k8s/services/es-trade-tools/base) stays replicas 0 / flags "false"; this dev-only patch overrides it. The owner removed it from the permanent-down path on dev
+# (2026-10-31): it is no longer in DISABLED_DEV (scripts/ops/dev-cleanup.sh), so `dev-cleanup start` raises it with everything else.
+# Release configuration: the calibration is compiled INTO the image (es-trade-tools-service/calibration, paramsVersion 2), so there is no tuning variable: set none.
+# Preconditions, verified on the dev registry and broker before this patch was written: Avro subjects 2301-2315 (v1) and 2321-2332 + 2335 (v2) are registered; the input
+# underlying.es.trades.linearized exists (single partition); the seven output topics are ensured by the service-deploy barrier (scripts/kafka/ensure-es-trade-tools-topics.sh) before the pod starts.
+# Rollback (both through ONE reviewed PR; never a bare kubectl):
+#  (1) flags off, durable: set TT_ENABLED and the four family flags to "false" here (replicas stays 1; the process then only serves health, state DISABLED), regenerate the slices
+#      (scripts/deploy/generate-service-slices.sh), deploy, and verify the live pod environment reads "false".
+#  (2) scaled to zero, durable: ALSO set replicas to 0 here AND re-add es-trade-tools-service to DISABLED_DEV in scripts/ops/dev-cleanup.sh in the same PR (a hold-free zero-replica Deployment
+#      is scaled back to 1 by the next `dev-cleanup start`, so replicas 0 alone is NOT a rollback).
+# SINGLE replica ONLY (strategy Recreate): the producer is transactional with transactional.id es-trade-tools-ES.v.0.
+# MUST MIRROR the standalone slice k8s/services/es-trade-tools/overlays/dev (validate-services: mono==slice).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: es-trade-tools-service
+  namespace: options-edge
+spec:
+  replicas: 1
+  template:
+    spec:
+      containers:
+        - name: es-trade-tools
+          env:
+            - name: TT_ENABLED
+              value: "true"
+            - name: TT_PF_ENABLED
+              value: "true"
+            - name: TT_VP_ENABLED
+              value: "true"
+            - name: TT_FLOW_ENABLED
+              value: "true"
+            - name: TT_CLIMAX_ENABLED
+              value: "true"

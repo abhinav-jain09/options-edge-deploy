@@ -23,7 +23,7 @@ metadata:
   namespace: options-edge
 spec:
   progressDeadlineSeconds: 1200
-  replicas: 0
+  replicas: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: es-trade-tools-service
@@ -39,15 +39,15 @@ spec:
       containers:
         - env:
             - name: TT_ENABLED
-              value: "false"
+              value: "true"
             - name: TT_PF_ENABLED
-              value: "false"
+              value: "true"
             - name: TT_VP_ENABLED
-              value: "false"
+              value: "true"
             - name: TT_FLOW_ENABLED
-              value: "false"
+              value: "true"
             - name: TT_CLIMAX_ENABLED
-              value: "false"
+              value: "true"
             - name: KAFKA_ES_TRADES_LINEARIZED_TOPIC
               value: underlying.es.trades.linearized
             - name: KAFKA_TT_PF_COLUMNS_TOPIC

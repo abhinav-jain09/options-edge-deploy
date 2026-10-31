@@ -28,8 +28,8 @@ resources:
   - ../../services/level-absorption/base
   # the immutable, content-named ConfigMap the dev level-absorption pod mounts (dev only; production renders none)
   - level-absorption-config.yaml
-  # es-trade-tools (TICK-TRADE-TOOLS) + wave-cycle (ELLIOTT-FIB-CYCLE-TOOLS): HELD AT replicas 0 (base) on dev and production alike, every flag false; the owner turns
-  # each on later (docs/ta-books/DEPLOY-ROLLOUT.md sections 4 and 5).
+  # es-trade-tools (TICK-TRADE-TOOLS) + wave-cycle (ELLIOTT-FIB-CYCLE-TOOLS): the base is HELD at replicas 0 / every flag false; BOTH run LIVE on dev (2026-10-31) and production
+  # through each environment's enable patch (docs/ta-books/DEPLOY-ROLLOUT.md sections 4 and 5).
   - ../../services/es-trade-tools/base
   - ../../services/wave-cycle/base
   # break-classifier (Phase F): LIVE on dev and production through each environment's enable patch (replicas 1, flag true); the base is HELD at 0 / "false".
@@ -439,6 +439,18 @@ patches:
     target:
       kind: Deployment
       name: break-classifier-service
+  # DEV: es-trade-tools-service LIVE (replicas 1, TT_ENABLED and the four family flags true); the base stays replicas 0 / false. MUST MIRROR the standalone slice
+  # k8s/services/es-trade-tools/overlays/dev (validate-services: mono==slice).
+  - path: es-trade-tools-dev-enable-patch.yaml
+    target:
+      kind: Deployment
+      name: es-trade-tools-service
+  # DEV: wave-cycle-service LIVE (replicas 1, WAVE_CYCLE_ENABLED and WAVE_CYCLE_SEASONALITY_ENABLED true, hash-pinned snapshot); the base stays replicas 0 / false. MUST MIRROR the standalone slice
+  # k8s/services/wave-cycle/overlays/dev (validate-services: mono==slice).
+  - path: wave-cycle-dev-enable-patch.yaml
+    target:
+      kind: Deployment
+      name: wave-cycle-service
   # DEV: level-absorption-service RUNNING (replicas 1, EYEBALL); the base and production stay at 0. MUST MIRROR the standalone slice
   # k8s/services/level-absorption/overlays/dev (validate-services: mono==slice).
   - path: level-absorption-dev-enable-patch.yaml

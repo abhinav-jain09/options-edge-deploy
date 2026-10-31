@@ -1,0 +1,38 @@
+# DEV: wave-cycle-service LIVE with the calibrated release configuration (replicas 1, WAVE_CYCLE_ENABLED and WAVE_CYCLE_SEASONALITY_ENABLED "true", the hash-pinned daily-bar snapshot), exactly as
+# production runs it. The shared base (k8s/services/wave-cycle/base) stays replicas 0 / flags "false"; this dev-only patch overrides it. The owner removed it from the permanent-down path on dev
+# (2026-10-31): it is no longer in DISABLED_DEV (scripts/ops/dev-cleanup.sh), so `dev-cleanup start` raises it with everything else.
+# No tuning variable is set: the registered defaults give the parameterSetHash the calibration is bound to, and any other value makes the calibration null and the counts NOT_CALIBRATED.
+# WAVE_CYCLE_IGNORE_CHECKPOINT stays "false" (never committed true). The snapshot files are inside the image at /app/release/; the service verifies the SHA-256 and the first/last/count before reading it.
+# Preconditions, verified on the dev registry and broker before this patch was written: Avro subjects 2401-2405 (v1) and WaveSet 2406 / CycleSet 2407 (v2) are registered; options.indicators.bars exists
+# (8 partitions); the three output topics are ensured by the service-deploy barrier (scripts/kafka/ensure-wave-cycle-topics.sh) before the pod starts.
+# Rollback (both through ONE reviewed PR; never a bare kubectl):
+#  (1) publication off, durable: set WAVE_CYCLE_ENABLED and WAVE_CYCLE_SEASONALITY_ENABLED to "false" here (replicas stays 1; the fold keeps running dark), regenerate the slices, deploy, and verify.
+#  (2) scaled to zero, durable: ALSO set replicas to 0 here AND re-add wave-cycle-service to DISABLED_DEV in scripts/ops/dev-cleanup.sh in the same PR (replicas 0 alone is NOT a rollback).
+# SINGLE replica ONLY (strategy Recreate): transactional.id is the fixed wave-cycle-SPX.
+# MUST MIRROR the standalone slice k8s/services/wave-cycle/overlays/dev (validate-services: mono==slice).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wave-cycle-service
+  namespace: options-edge
+spec:
+  replicas: 1
+  template:
+    spec:
+      containers:
+        - name: wave-cycle
+          env:
+            - name: WAVE_CYCLE_ENABLED
+              value: "true"
+            - name: WAVE_CYCLE_SEASONALITY_ENABLED
+              value: "true"
+            - name: WC_DAILY_SNAPSHOT_PATH
+              value: /app/release/spx-daily-bar-history-20171002-20261009.avro
+            - name: WC_DAILY_SNAPSHOT_SHA256
+              value: 55d74b300e2cf7496740bfeada5de57db5f0d7f4e60b957064691e3c8e18a26c
+            - name: WC_DAILY_SNAPSHOT_FIRST
+              value: "2017-10-02"
+            - name: WC_DAILY_SNAPSHOT_LAST
+              value: "2026-10-09"
+            - name: WC_DAILY_SNAPSHOT_COUNT
+              value: "2268"

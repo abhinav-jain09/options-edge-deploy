@@ -75,6 +75,20 @@ class FlagsAreLiterallyFalse(unittest.TestCase):
         "WAVE_CYCLE_SEASONALITY_ENABLED": ("k8s/overlays/production/wave-cycle-prod-enable-patch.yaml", "k8s/services/wave-cycle/overlays/production/manifest.yaml"),
     }
 
+    # 2026-10-31 (owner: remove es-trade-tools and wave-cycle from the permanent-down path on dev): both run LIVE on dev through their dev enable patches, with the same calibrated release
+    # configuration production runs. "true" only in these two named dev files per flag; every other file still has to say "false".
+    _TT_DEV = ("k8s/overlays/dev/es-trade-tools-dev-enable-patch.yaml", "k8s/services/es-trade-tools/overlays/dev/manifest.yaml")
+    _WC_DEV = ("k8s/overlays/dev/wave-cycle-dev-enable-patch.yaml", "k8s/services/wave-cycle/overlays/dev/manifest.yaml")
+    DEV_TA_ON = {
+        "TT_ENABLED": _TT_DEV, "TT_PF_ENABLED": _TT_DEV, "TT_VP_ENABLED": _TT_DEV, "TT_FLOW_ENABLED": _TT_DEV, "TT_CLIMAX_ENABLED": _TT_DEV,
+        "WAVE_CYCLE_ENABLED": _WC_DEV, "WAVE_CYCLE_SEASONALITY_ENABLED": _WC_DEV,
+    }
+    # The first test only inspects files listed in EXPECTED, so the dev files must be listed there or their "true" would never be checked. A plain loop: a comprehension in a class body cannot see these names.
+    for _name, _files in DEV_TA_ON.items():
+        for _f in _files:
+            if _f not in EXPECTED[_name]:
+                EXPECTED[_name].append(_f)
+
     # market-structure in DEV: structure tools and geometry are "true" because the running dev Deployment already reads them (the manifest had said "false", which a service-deploy would have applied);
     # swing pivots (X2) are on in dev only. See k8s/overlays/dev/market-structure-dev-env-patch.yaml.
     DEV_MS_FILES = ["k8s/overlays/dev/market-structure-dev-env-patch.yaml", "k8s/services/market-structure/overlays/dev/manifest.yaml"]
@@ -82,6 +96,8 @@ class FlagsAreLiterallyFalse(unittest.TestCase):
 
     def expected_value(self, rel, name):
         if name in self.DEV_MS_ON and rel in self.DEV_MS_FILES:
+            return "true"
+        if rel in self.DEV_TA_ON.get(name, ()):
             return "true"
         if rel in self.PROD_ON.get(name, ()):
             return "true"
@@ -142,15 +158,15 @@ class NewServicesAreHeldAndRegistered(unittest.TestCase):
     SERVICES = {"es-trade-tools": ("es-trade-tools-service", "ES_TRADE_TOOLS_IMAGE", "options-edge-es-trade-tools"),
                 "wave-cycle": ("wave-cycle-service", "WAVE_CYCLE_IMAGE", "options-edge-wave-cycle")}
 
-    def test_rendered_slices_are_one_deployment_at_replicas_one_on_production_and_zero_on_dev(self):
+    def test_rendered_slices_are_one_deployment_at_replicas_one_on_dev_and_production(self):
         for svc, (dep, _, image) in self.SERVICES.items():
             for env in ("dev", "production"):
                 docs = [d for d in yaml.safe_load_all(read(f"k8s/services/{svc}/overlays/{env}/manifest.yaml")) if d]
                 self.assertEqual([d["kind"] for d in docs], ["Deployment"], f"{svc} {env}")
                 d = docs[0]
                 self.assertEqual(d["metadata"]["name"], dep)
-                # dev render stays HELD (dev is rolled by hand until its own enable change); production renders replicas 1 through its enable patch (2026-10-22)
-                self.assertEqual(d["spec"]["replicas"], 1 if env == "production" else 0, f"{svc} {env}: see docs/ta-books/DEPLOY-ROLLOUT.md")
+                # both environments render replicas 1 through their own enable patch: production since 2026-10-22, dev since 2026-10-31 (owner: off the permanent-down path)
+                self.assertEqual(d["spec"]["replicas"], 1, f"{svc} {env}: see docs/ta-books/DEPLOY-ROLLOUT.md")
                 self.assertEqual(d["spec"]["strategy"]["type"], "Recreate", "single replica, a second transactional.id instance would fence the first")
                 self.assertIn(image, d["spec"]["template"]["spec"]["containers"][0]["image"])
 
@@ -174,13 +190,14 @@ class NewServicesAreHeldAndRegistered(unittest.TestCase):
                 self.assertIn(f"../../services/{svc}/base", read(f"k8s/overlays/{env}/kustomization.yaml"))
             self.assertIn(f"newName: host.docker.internal:5001/{image}", read("k8s/overlays/dev/kustomization.yaml"))
 
-    def test_the_production_lifecycle_lists_do_not_hold_either_down_and_the_dev_list_still_does(self):
-        # production runs both (2026-10-22): a KEEP_DOWN entry would scale them to 0 at the next reboot or morning start
+    def test_no_lifecycle_list_holds_either_service_down_on_production_or_dev(self):
+        # production runs both (2026-10-22): a KEEP_DOWN entry would scale them to 0 at the next reboot or morning start.
+        # dev runs both (2026-10-31): a DISABLED_DEV entry would hold them at 0 on every `dev-cleanup start`, whatever the manifest renders.
         for dep, _, _ in self.SERVICES.values():
             for rel in ("scripts/ops/oe-boot-bringup.sh", "scripts/ops/morning-autostart.sh"):
                 text = "\n".join(l for l in read(rel).splitlines() if re.match(r"\s*KEEP_DOWN=", l))
                 self.assertNotRegex(text, rf"(?<![\w-]){re.escape(dep)}(?![\w-])", f"{rel}: {dep} must not be held down on production")
-            self.assertRegex(read("scripts/ops/dev-cleanup.sh"), rf"(?<![\w-]){re.escape(dep)}(?![\w-])", f"dev-cleanup.sh: {dep}")
+            self.assertNotRegex(read("scripts/ops/dev-cleanup.sh"), rf"(?<![\w-]){re.escape(dep)}(?![\w-])", f"dev-cleanup.sh: {dep} must not be held down on dev")
 
     def test_the_service_deploy_job_offers_both_and_runs_their_topic_barriers(self):
         text = read("Jenkinsfile.service-deploy")
