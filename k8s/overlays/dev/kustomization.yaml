@@ -398,6 +398,11 @@ patches:
   # DEV-ONLY: the V1 compatibility release — the legacy research writer OFF as a literal, the dev research-store URL declared next to it
   # (the base carries no URL — see the patch header; increments 9a / 9c).
   - path: vix-option-inteligence-dev-patch.yaml
+  # DEV: volume-pace-databento-service RUNS (replicas 1); the base stays replicas 0 and production stays held. MUST MIRROR the standalone slice k8s/services/volume-pace/overlays/dev (validate-services: mono==slice).
+  - path: volume-pace-databento-dev-enable-patch.yaml
+    target:
+      kind: Deployment
+      name: volume-pace-databento-service
   # DEV-ONLY ONE-TIME (2026-08-12): epoch-genesis grant after the dev Kafka wipe (#801) —
   # mirrors the standalone overlay so both render identically. Revert BOTH once genesis'd.
   - path: dealer-ledger-dev-env-patch.yaml
