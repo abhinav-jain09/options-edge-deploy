@@ -403,6 +403,12 @@ patches:
     target:
       kind: Deployment
       name: volume-pace-databento-service
+  # DEV: unified-sr-service CPU request 500m (the shared base's 2 cores was sized for the 24-core prod host and left dev's 16-core node 98% reserved). MUST MIRROR the standalone slice
+  # k8s/services/unified-sr/overlays/dev (validate-services: mono==slice).
+  - path: unified-sr-dev-cpu-patch.yaml
+    target:
+      kind: Deployment
+      name: unified-sr-service
   # DEV-ONLY ONE-TIME (2026-08-12): epoch-genesis grant after the dev Kafka wipe (#801) —
   # mirrors the standalone overlay so both render identically. Revert BOTH once genesis'd.
   - path: dealer-ledger-dev-env-patch.yaml
