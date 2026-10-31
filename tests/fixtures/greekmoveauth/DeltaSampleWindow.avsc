@@ -1,0 +1,30 @@
+{
+  "type": "record",
+  "name": "DeltaSampleWindow",
+  "namespace": "com.optionsedge.contracts.greekmoveauth",
+  "doc": "INTERNAL Kafka Streams gma-delta-window-store value: the bounded per-symbol traded delta FLOW window (a derived statistic, double). Not a topic contract; committed so the serde is never service-local.",
+  "fields": [
+    {
+      "name": "samples",
+      "type": {
+        "type": "array",
+        "items": {
+          "type": "record",
+          "name": "DeltaWindowSample",
+          "namespace": "com.optionsedge.contracts.greekmoveauth",
+          "doc": "One (event time, delta flow) sample.",
+          "fields": [
+            {
+              "name": "t",
+              "type": "long"
+            },
+            {
+              "name": "v",
+              "type": "double"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,539 @@
+{
+  "type": "record",
+  "name": "MoveAuthenticityVerdict",
+  "namespace": "com.optionsedge.contracts.greekmoveauth",
+  "doc": "The move-authenticity verdict published by greek-move-authenticity-service on options.spx.greek-move-auth.current (compacted, key symbol) and options.spx.greek-move-auth.events (verdict transitions). Until the cutover these topics carried Jackson JSON of the Java record com.optionsedge.contracts.greekmoveauth.MoveAuthenticityVerdict; this record reproduces that JSON FIELD FOR FIELD AND NAME FOR NAME, in record order. Enum-typed fields are strings carrying the Java constant name. Prices (spots, strike) are decimal(38,18); derived statistics are doubles. Advisory only. One subject (the record full name, RecordNameStrategy) serves both topics and every environment.",
+  "fields": [
+    {
+      "name": "schemaVersion",
+      "type": "int",
+      "doc": "Wire revision of the verdict; 1 today."
+    },
+    {
+      "name": "snapshotId",
+      "type": "string",
+      "doc": "Deterministic SHA-256 hex over the semantic identity of the frame."
+    },
+    {
+      "name": "symbol",
+      "type": "string",
+      "doc": "Also the Kafka record key."
+    },
+    {
+      "name": "sessionDate",
+      "type": "string"
+    },
+    {
+      "name": "asOfEventTimeMs",
+      "type": "long"
+    },
+    {
+      "name": "windowMs",
+      "type": "long"
+    },
+    {
+      "name": "spotMove",
+      "type": "double",
+      "doc": "Computed spot difference over the window. A double because it is a derived value (a difference of two feed prices carries up to 40 fractional digits), not a quoted price; NaN when no spot reference exists."
+    },
+    {
+      "name": "moveDir",
+      "type": "int"
+    },
+    {
+      "name": "moveMag",
+      "type": "double",
+      "doc": "Magnitude of the move: a derived statistic, not a quoted price."
+    },
+    {
+      "name": "verdict",
+      "type": "string",
+      "doc": "A Verdict constant: REAL_UP, REAL_DOWN, FAKE, NO_MOVE, DATA_DEGRADED, UNKNOWN."
+    },
+    {
+      "name": "isReal",
+      "type": [
+        "null",
+        "boolean"
+      ],
+      "default": null,
+      "doc": "true for REAL_*, false for FAKE, null for NO_MOVE/DATA_DEGRADED/UNKNOWN. Derived from verdict by the contract record."
+    },
+    {
+      "name": "moveDirection",
+      "type": "string",
+      "doc": "A MoveDirection constant: UP, DOWN, NONE, UNKNOWN."
+    },
+    {
+      "name": "conviction",
+      "type": [
+        "null",
+        "double"
+      ],
+      "default": null,
+      "doc": "Null unless REAL_*."
+    },
+    {
+      "name": "convictionType",
+      "type": "string"
+    },
+    {
+      "name": "actionable",
+      "type": "boolean"
+    },
+    {
+      "name": "voters",
+      "type": {
+        "type": "array",
+        "items": {
+          "type": "record",
+          "name": "GreekVote",
+          "namespace": "com.optionsedge.contracts.greekmoveauth",
+          "doc": "One greek voter's authenticity-aligned vote. greek is a GreekName constant (DELTA, GAMMA, CHARM, UNKNOWN). vote is in [-1,+1]; an abstaining voter has abstained=true and is never counted as agreement.",
+          "fields": [
+            {
+              "name": "greek",
+              "type": "string"
+            },
+            {
+              "name": "vote",
+              "type": "double"
+            },
+            {
+              "name": "quality",
+              "type": "string"
+            },
+            {
+              "name": "abstained",
+              "type": "boolean"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "agreeCount",
+      "type": "int"
+    },
+    {
+      "name": "againstCount",
+      "type": "int"
+    },
+    {
+      "name": "requiredVoterCount",
+      "type": "int"
+    },
+    {
+      "name": "coverageComplete",
+      "type": "boolean"
+    },
+    {
+      "name": "thetaVerdict",
+      "type": "string",
+      "doc": "A ThetaVerdict constant: SUSTAIN, FAIL, PENDING, UNAVAILABLE, UNKNOWN."
+    },
+    {
+      "name": "thetaSustainable",
+      "type": [
+        "null",
+        "boolean"
+      ],
+      "default": null
+    },
+    {
+      "name": "compRatio",
+      "type": [
+        "null",
+        "double"
+      ],
+      "default": null
+    },
+    {
+      "name": "refExpiry",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "refStrike",
+      "type": [
+        "null",
+        {
+          "type": "bytes",
+          "logicalType": "decimal",
+          "precision": 38,
+          "scale": 18
+        }
+      ],
+      "default": null,
+      "doc": "Reference-leg strike; the service's double written as the decimal of its shortest round-trip text; a strike needing more than 18 fractional digits is refused (never rounded)."
+    },
+    {
+      "name": "refLeg",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null,
+      "doc": "CALL or PUT."
+    },
+    {
+      "name": "refSelectionPolicyVersion",
+      "type": "string"
+    },
+    {
+      "name": "refEventTimeMs",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    },
+    {
+      "name": "refDelta",
+      "type": [
+        "null",
+        "double"
+      ],
+      "default": null
+    },
+    {
+      "name": "refTheta",
+      "type": [
+        "null",
+        "double"
+      ],
+      "default": null
+    },
+    {
+      "name": "endgameActive",
+      "type": "boolean"
+    },
+    {
+      "name": "endgameMoveState",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null,
+      "doc": "An EndgameState constant: INACTIVE, ENDGAME_WARMUP, ENDGAME_PINNED, ENDGAME_SUSTAINING, ENDGAME_THETA_DOMINATED, ENDGAME_CONTESTED, UNKNOWN."
+    },
+    {
+      "name": "endgameEntryMs",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    },
+    {
+      "name": "freezeTimeMs",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    },
+    {
+      "name": "entryDir",
+      "type": [
+        "null",
+        "int"
+      ],
+      "default": null
+    },
+    {
+      "name": "sinceEntryDeltaMoveProxy",
+      "type": [
+        "null",
+        "double"
+      ],
+      "default": null
+    },
+    {
+      "name": "sinceEntryThetaLoss",
+      "type": [
+        "null",
+        "double"
+      ],
+      "default": null
+    },
+    {
+      "name": "windowDeltaMoveProxy",
+      "type": [
+        "null",
+        "double"
+      ],
+      "default": null
+    },
+    {
+      "name": "windowThetaLoss",
+      "type": [
+        "null",
+        "double"
+      ],
+      "default": null
+    },
+    {
+      "name": "compRatioWindow",
+      "type": [
+        "null",
+        "double"
+      ],
+      "default": null
+    },
+    {
+      "name": "dirConsistent",
+      "type": [
+        "null",
+        "boolean"
+      ],
+      "default": null
+    },
+    {
+      "name": "qualityStatus",
+      "type": "string"
+    },
+    {
+      "name": "qualityFlags",
+      "type": {
+        "type": "array",
+        "items": "string"
+      }
+    },
+    {
+      "name": "reasonCodes",
+      "type": {
+        "type": "array",
+        "items": "string"
+      }
+    },
+    {
+      "name": "sourceOffsetLedger",
+      "type": {
+        "type": "array",
+        "items": {
+          "type": "record",
+          "name": "SourceOffset",
+          "namespace": "com.optionsedge.contracts.greekmoveauth",
+          "doc": "One entry of the source offset ledger: the committed offset boundary of a source topic that entered a frame.",
+          "fields": [
+            {
+              "name": "topic",
+              "type": "string"
+            },
+            {
+              "name": "partition",
+              "type": "int"
+            },
+            {
+              "name": "offset",
+              "type": "long"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "moveTrail",
+      "type": {
+        "type": "array",
+        "items": {
+          "type": "record",
+          "name": "MoveTrailSample",
+          "namespace": "com.optionsedge.contracts.greekmoveauth",
+          "doc": "One placed point of the move-authenticity trail. authClass is an AuthClass constant (REAL, FAKE, NEUTRAL, UNKNOWN).",
+          "fields": [
+            {
+              "name": "asOfEventMs",
+              "type": "long"
+            },
+            {
+              "name": "spot",
+              "type": {
+                "type": "bytes",
+                "logicalType": "decimal",
+                "precision": 38,
+                "scale": 18
+              },
+              "doc": "The spot at the finalized frame. The service's double is written as the decimal of its shortest round-trip text, so BigDecimal.doubleValue() returns the identical double. A price needing more than 18 fractional digits, a non-finite price or negative zero is refused by the writer (never rounded)."
+            },
+            {
+              "name": "authClass",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "trackSegments",
+      "type": {
+        "type": "array",
+        "items": {
+          "type": "record",
+          "name": "MoveTrackSegment",
+          "namespace": "com.optionsedge.contracts.greekmoveauth",
+          "doc": "A coalesced run of the move trail sharing one colour class. authClass is an AuthClass constant.",
+          "fields": [
+            {
+              "name": "fromSpot",
+              "type": {
+                "type": "bytes",
+                "logicalType": "decimal",
+                "precision": 38,
+                "scale": 18
+              }
+            },
+            {
+              "name": "toSpot",
+              "type": {
+                "type": "bytes",
+                "logicalType": "decimal",
+                "precision": 38,
+                "scale": 18
+              }
+            },
+            {
+              "name": "fromEventMs",
+              "type": "long"
+            },
+            {
+              "name": "toEventMs",
+              "type": "long"
+            },
+            {
+              "name": "authClass",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "trackStartSpot",
+      "type": [
+        "null",
+        {
+          "type": "bytes",
+          "logicalType": "decimal",
+          "precision": 38,
+          "scale": 18
+        }
+      ],
+      "default": null
+    },
+    {
+      "name": "trackStartEventMs",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    },
+    {
+      "name": "trackNowSpot",
+      "type": [
+        "null",
+        {
+          "type": "bytes",
+          "logicalType": "decimal",
+          "precision": 38,
+          "scale": 18
+        }
+      ],
+      "default": null
+    },
+    {
+      "name": "trackNowEventMs",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    },
+    {
+      "name": "trackDir",
+      "type": [
+        "null",
+        "int"
+      ],
+      "default": null
+    },
+    {
+      "name": "trackTurnedRealMarkers",
+      "type": {
+        "type": "array",
+        "items": {
+          "type": "record",
+          "name": "TransitionMarker",
+          "namespace": "com.optionsedge.contracts.greekmoveauth",
+          "doc": "One FAKE/REAL transition boundary on the chain track, not deduplicated by spot.",
+          "fields": [
+            {
+              "name": "spot",
+              "type": {
+                "type": "bytes",
+                "logicalType": "decimal",
+                "precision": 38,
+                "scale": 18
+              }
+            },
+            {
+              "name": "eventTimeMs",
+              "type": "long"
+            }
+          ]
+        }
+      },
+      "doc": "FAKE to REAL, chronological."
+    },
+    {
+      "name": "trackTurnedFakeMarkers",
+      "type": {
+        "type": "array",
+        "items": "TransitionMarker"
+      },
+      "doc": "REAL to FAKE, chronological."
+    },
+    {
+      "name": "featureVersion",
+      "type": "string"
+    },
+    {
+      "name": "configHash",
+      "type": "string"
+    },
+    {
+      "name": "calendarVersion",
+      "type": "string"
+    },
+    {
+      "name": "codeVersion",
+      "type": "string"
+    },
+    {
+      "name": "producedAtMs",
+      "type": "long",
+      "doc": "Runtime provenance, excluded from the canonical projection."
+    },
+    {
+      "name": "frameAgeMs",
+      "type": "long"
+    },
+    {
+      "name": "runId",
+      "type": "string"
+    },
+    {
+      "name": "epochSeq",
+      "type": "long"
+    },
+    {
+      "name": "kafkaPublishedAtMs",
+      "type": "long"
+    }
+  ]
+}

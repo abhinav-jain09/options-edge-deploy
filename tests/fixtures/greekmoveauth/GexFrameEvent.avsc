@@ -1,0 +1,57 @@
+{
+  "type": "record",
+  "name": "GexFrameEvent",
+  "namespace": "com.optionsedge.contracts.greekmoveauth",
+  "doc": "INTERNAL Kafka Streams frame-rekey repartition record (and gma-gex-latest-store value) carrying one strike's gamma/charm exposure and reference-leg greeks. NaN marks an absent greek. Not a topic contract; committed so the serde is never service-local.",
+  "fields": [
+    {
+      "name": "symbol",
+      "type": "string"
+    },
+    {
+      "name": "strike",
+      "type": {
+        "type": "bytes",
+        "logicalType": "decimal",
+        "precision": 38,
+        "scale": 18
+      }
+    },
+    {
+      "name": "eventMs",
+      "type": "long"
+    },
+    {
+      "name": "netGex",
+      "type": "double"
+    },
+    {
+      "name": "netCharm",
+      "type": "double"
+    },
+    {
+      "name": "callDelta",
+      "type": "double"
+    },
+    {
+      "name": "putDelta",
+      "type": "double"
+    },
+    {
+      "name": "callTheta",
+      "type": "double"
+    },
+    {
+      "name": "putTheta",
+      "type": "double"
+    },
+    {
+      "name": "oiQuality",
+      "type": "string"
+    },
+    {
+      "name": "expiry",
+      "type": "string"
+    }
+  ]
+}
