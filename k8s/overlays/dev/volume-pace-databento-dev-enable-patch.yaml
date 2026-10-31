@@ -14,12 +14,3 @@ metadata:
   namespace: options-edge
 spec:
   replicas: 1
-  template:
-    spec:
-      containers:
-        - name: volume-pace
-          # DEV CPU REQUEST 100m (base 250m): the dev node had 15.8 of 16 cores reserved by requests (2026-10-31), so the base request left this service Unschedulable.
-          # A reservation only (no CPU limit). DEV ONLY - production and experiment keep the base value (see the test).
-          resources:
-            requests:
-              cpu: 100m

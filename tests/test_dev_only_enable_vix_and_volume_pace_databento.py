@@ -9,6 +9,7 @@ leave the services down on dev or switch them on where they must stay off, so ea
   4. the vix legacy research writer is still the literal STRING "false" on dev: enabling the service must not touch the schema-v7 interlock.
 """
 import re
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -69,34 +70,51 @@ class DevOnlyEnable(unittest.TestCase):
 
 
 class DevCpuRequests(unittest.TestCase):
-    """The dev node was 98% CPU-RESERVED (15.8 of 16 cores) when these were enabled, so the base requests left both Unschedulable. Dev lowers the REQUEST only."""
+    """The dev node was 98% CPU-RESERVED (15.8 of 16 cores) when these two were enabled, so both were Unschedulable ("Insufficient cpu").
 
-    # name -> (container, dev request, base request that production and experiment must keep)
-    CPU = {"vix-option-inteligence-service": ("vix-option-inteligence", "vix-option-inteligence", "50m", "500m"),
-           "volume-pace-databento-service": ("volume-pace", "volume-pace", "100m", "250m")}
+    The room comes from unified-sr-service, whose 2-core request was sized for the 24-core PRODUCTION host (PR #1234) and reached dev through the shared base. The new services keep their BASE
+    requests: the vix base records that a 100m request let CFS shares starve it at the open until its input fell ~84 minutes behind (2026-07-21), so lowering it on dev is not safe.
+    """
 
-    def request(self, slug, env, name, container):
-        c = [c for c in deployment(slug, env, name)["spec"]["template"]["spec"]["containers"] if c["name"] == container]
-        self.assertEqual(len(c), 1, f"{slug}/{env}: container {container}")
-        return c[0]["resources"]["requests"]["cpu"]
+    # (slug, deployment, container) -> (dev, production, experiment) CPU request
+    CPU = {
+        ("vix-option-inteligence", "vix-option-inteligence-service", "vix-option-inteligence"): ("500m", "500m", "500m"),
+        ("volume-pace", "volume-pace-databento-service", "volume-pace"): ("250m", "250m", "250m"),
+        ("unified-sr", "unified-sr-service", "unified-sr"): ("500m", "2", "2"),
+    }
+    ENVS = ("dev", "production", "experiment")
 
-    def test_dev_requests_the_reduced_cpu_and_production_and_experiment_keep_the_base_value(self):
-        slugs = {"vix-option-inteligence-service": "vix-option-inteligence", "volume-pace-databento-service": "volume-pace"}
-        for name, (container, _unused, dev, base) in self.CPU.items():
-            self.assertEqual(self.request(slugs[name], "dev", name, container), dev, f"{name} dev")
-            for env in ("production", "experiment"):
-                self.assertEqual(self.request(slugs[name], env, name, container), base, f"{name} {env} must keep the base request")
+    @staticmethod
+    def named(doc, container):
+        found = [c for c in doc["spec"]["template"]["spec"]["containers"] if c["name"] == container]
+        assert len(found) == 1, f"expected exactly one container named {container}, found {len(found)}"
+        return found[0]
 
-    def test_dev_memory_and_cpu_limits_are_not_touched(self):
-        # only the CPU REQUEST changes: the memory request/limit stay what the base declares, and no CPU limit is introduced
-        for name, slug in (("vix-option-inteligence-service", "vix-option-inteligence"), ("volume-pace-databento-service", "volume-pace")):
-            for env in ("dev", "production"):
-                r = deployment(slug, env, name)["spec"]["template"]["spec"]["containers"][0]["resources"]
-                self.assertNotIn("cpu", r.get("limits", {}), f"{name} {env}: a CPU limit would throttle the service")
-            dev_r = deployment(slug, "dev", name)["spec"]["template"]["spec"]["containers"][0]["resources"]
-            prod_r = deployment(slug, "production", name)["spec"]["template"]["spec"]["containers"][0]["resources"]
-            self.assertEqual(dev_r["limits"], prod_r["limits"], f"{name}: memory limit must match production")
-            self.assertEqual(dev_r["requests"]["memory"], prod_r["requests"]["memory"], f"{name}: memory request must match production")
+    def test_the_committed_slices_carry_the_expected_cpu_request_per_environment(self):
+        for (slug, name, container), wanted in self.CPU.items():
+            for env, want in zip(self.ENVS, wanted):
+                got = self.named(deployment(slug, env, name), container)["resources"]["requests"]["cpu"]
+                self.assertEqual(str(got), want, f"{name} {env}")
+
+    def test_the_source_overlays_render_the_same_requests(self):
+        # The slices are GENERATED; a mistake in the SOURCE patch or the kustomization wiring would pass a slice-only check as long as the stale slice still looked right.
+        # Render the real overlays (kubectl kustomize, as the other wiring tests do) and compare the same containers.
+        for env in self.ENVS:
+            out = subprocess.run(["kubectl", "kustomize", str(ROOT / f"k8s/overlays/{env}")], capture_output=True, text=True, check=True, timeout=180).stdout
+            docs = {d["metadata"]["name"]: d for d in yaml.safe_load_all(out) if d and d.get("kind") == "Deployment"}
+            for (slug, name, container), wanted in self.CPU.items():
+                got = self.named(docs[name], container)["resources"]["requests"]["cpu"]
+                self.assertEqual(str(got), wanted[self.ENVS.index(env)], f"{name} {env} (source overlay)")
+
+    def test_only_the_cpu_request_differs_between_dev_and_production(self):
+        # no CPU limit anywhere (a limit would throttle), and memory request/limit on the NAMED container are identical in dev and production
+        for (slug, name, container) in self.CPU:
+            dev = self.named(deployment(slug, "dev", name), container)["resources"]
+            prod = self.named(deployment(slug, "production", name), container)["resources"]
+            for label, r in (("dev", dev), ("production", prod)):
+                self.assertNotIn("cpu", r.get("limits", {}), f"{name} {label}: a CPU limit would throttle the service")
+            self.assertEqual(dev["limits"], prod["limits"], f"{name}: memory limit must match production")
+            self.assertEqual(dev["requests"]["memory"], prod["requests"]["memory"], f"{name}: memory request must match production")
 
 
 class ProductionReadinessGate(unittest.TestCase):
