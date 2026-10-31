@@ -68,6 +68,37 @@ class DevOnlyEnable(unittest.TestCase):
         self.assertNotIn("valueFrom", entries[0])
 
 
+class DevCpuRequests(unittest.TestCase):
+    """The dev node was 98% CPU-RESERVED (15.8 of 16 cores) when these were enabled, so the base requests left both Unschedulable. Dev lowers the REQUEST only."""
+
+    # name -> (container, dev request, base request that production and experiment must keep)
+    CPU = {"vix-option-inteligence-service": ("vix-option-inteligence", "vix-option-inteligence", "50m", "500m"),
+           "volume-pace-databento-service": ("volume-pace", "volume-pace", "100m", "250m")}
+
+    def request(self, slug, env, name, container):
+        c = [c for c in deployment(slug, env, name)["spec"]["template"]["spec"]["containers"] if c["name"] == container]
+        self.assertEqual(len(c), 1, f"{slug}/{env}: container {container}")
+        return c[0]["resources"]["requests"]["cpu"]
+
+    def test_dev_requests_the_reduced_cpu_and_production_and_experiment_keep_the_base_value(self):
+        slugs = {"vix-option-inteligence-service": "vix-option-inteligence", "volume-pace-databento-service": "volume-pace"}
+        for name, (container, _unused, dev, base) in self.CPU.items():
+            self.assertEqual(self.request(slugs[name], "dev", name, container), dev, f"{name} dev")
+            for env in ("production", "experiment"):
+                self.assertEqual(self.request(slugs[name], env, name, container), base, f"{name} {env} must keep the base request")
+
+    def test_dev_memory_and_cpu_limits_are_not_touched(self):
+        # only the CPU REQUEST changes: the memory request/limit stay what the base declares, and no CPU limit is introduced
+        for name, slug in (("vix-option-inteligence-service", "vix-option-inteligence"), ("volume-pace-databento-service", "volume-pace")):
+            for env in ("dev", "production"):
+                r = deployment(slug, env, name)["spec"]["template"]["spec"]["containers"][0]["resources"]
+                self.assertNotIn("cpu", r.get("limits", {}), f"{name} {env}: a CPU limit would throttle the service")
+            dev_r = deployment(slug, "dev", name)["spec"]["template"]["spec"]["containers"][0]["resources"]
+            prod_r = deployment(slug, "production", name)["spec"]["template"]["spec"]["containers"][0]["resources"]
+            self.assertEqual(dev_r["limits"], prod_r["limits"], f"{name}: memory limit must match production")
+            self.assertEqual(dev_r["requests"]["memory"], prod_r["requests"]["memory"], f"{name}: memory request must match production")
+
+
 class ProductionReadinessGate(unittest.TestCase):
     def test_the_production_premarket_gate_does_not_require_either_service(self):
         # premarket-readiness.sh runs on the PROD host and hard-FAILs any PIPELINE_SERVICES entry that is at 0 desired replicas. Production still

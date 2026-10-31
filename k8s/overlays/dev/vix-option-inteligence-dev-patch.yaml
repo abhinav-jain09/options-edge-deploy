@@ -31,6 +31,12 @@ spec:
     spec:
       containers:
         - name: vix-option-inteligence
+          # DEV CPU REQUEST 50m (base 500m). The dev node had 15.8 of its 16 cores RESERVED by requests (2026-10-31, 98%), so this service's 500m request left the
+          # pod Unschedulable ("Insufficient cpu") although it was enabled. Requests are scheduler reservations only: there is no CPU limit, so the service can still use idle CPU.
+          # DEV ONLY - production and experiment keep the base value (tests/test_dev_only_enable_vix_and_volume_pace_databento.py).
+          resources:
+            requests:
+              cpu: 50m
           env:
             # THE V1 COMPATIBILITY RELEASE (increment 9a / 9c, inc 9 consult Q3): the LEGACY in-process research writer is OFF — as a LITERAL,
             # because a running pod's flag is knowable only from its own spec (scripts/ops/zerodte-quiescence.py). The migration to schema v7
