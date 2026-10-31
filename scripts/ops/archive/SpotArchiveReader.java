@@ -209,21 +209,24 @@ public class SpotArchiveReader {
         p.put(ConsumerConfig.CLIENT_ID_CONFIG, "oe-spot-archive-reader");
         TopicPartition tp = new TopicPartition(o.topic, o.partition);
         long read = 0;
+        long endOffset = Math.addExact(o.from, o.count);
         try (KafkaConsumer<byte[], byte[]> c = new KafkaConsumer<>(p)) {
             c.assign(Collections.singletonList(tp));
             c.seek(tp, o.from);
             long idleSince = System.currentTimeMillis();
-            while (read < o.count) {
+            // The archive passes an offset span, not a readable-record count. Compaction can
+            // remove records within that span; never wait for live ticks beyond its boundary.
+            while (c.position(tp) < endOffset) {
                 ConsumerRecords<byte[], byte[]> rs = c.poll(Duration.ofMillis(500));
                 if (rs.isEmpty()) {
                     if (System.currentTimeMillis() - idleSince >= o.timeoutMs) {
-                        break;
+                        throw new java.io.IOException("spot archive did not reach offset " + endOffset);
                     }
                     continue;
                 }
                 idleSince = System.currentTimeMillis();
                 for (ConsumerRecord<byte[], byte[]> r : rs) {
-                    if (read >= o.count) {
+                    if (r.offset() >= endOffset) {
                         break;
                     }
                     // a tombstone (null value) is archived exactly as the console consumer archived it — the value text

@@ -15,7 +15,7 @@
 # only on a cronie host, or convert the schedule first. test-archive-reset.sh §15 asserts that every ET
 # entry sits below this line.
 CRON_TZ=America/New_York
-10 17 * * 1-5 /home/abhinav/oe-ops/oe-archive-daily.sh >> /home/abhinav/oe-ops/archive-daily.cron.log 2>&1
+# Disabled by owner: archive moves to dev. 10 17 * * 1-5 /home/abhinav/oe-ops/oe-archive-daily.sh >> /home/abhinav/oe-ops/archive-daily.cron.log 2>&1
 # Spot ticks must be archived FAR more often than once a day. underlying.spx.price is
 # cleanup.policy=compact,delete with min.cleanable.dirty.ratio=0.01 and segment.ms=1h, so a
 # closed segment is compacted almost at once: on 2026-08-03 only 3,306 of 804,629 offsets were
@@ -28,7 +28,7 @@ CRON_TZ=America/New_York
 # exited 0 having archived nothing, every weekday from 08-10. The job name is half the lock key now,
 # and the topic list here must stay DISJOINT from OE_HEAVY_TOPICS_prod in oe-topics.env — the list
 # below is exactly OE_SPOT_TOPICS.
-*/10 * * * * TOPICS="underlying.spx.price underlying.spx.index.price underlying.es.price spx.basis.state" OE_SPOT_AVRO_TOPICS="underlying.spx.price" ARCHIVE_DIR=/mnt/nas/optionsedge ENV=prod ARCHIVE_JOB=spot JAVA_HOME=$(ls -d /usr/lib/jvm/*jre-17* 2>/dev/null|head -1) /home/abhinav/oe-ops/oe-archive-kafka.sh >> /home/abhinav/oe-ops/archive-spot.log 2>&1
+# Disabled by owner: archive moves to dev. */10 * * * * TOPICS="underlying.spx.price underlying.spx.index.price underlying.es.price spx.basis.state" OE_SPOT_AVRO_TOPICS="underlying.spx.price" ARCHIVE_DIR=/mnt/nas/optionsedge ENV=prod ARCHIVE_JOB=spot JAVA_HOME=$(ls -d /usr/lib/jvm/*jre-17* 2>/dev/null|head -1) /home/abhinav/oe-ops/oe-archive-kafka.sh >> /home/abhinav/oe-ops/archive-spot.log 2>&1
 # dev dealer-ledger evidence every 2h: dev signal-fired has a 24h retention the service re-stamps,
 # so a once-daily capture is one missed run from losing a session permanently. 2026-08-08.
 # DISABLED 2026-09-17 (owner: only ibkr + spot + databento raw are backed up) — dev 2-hourly archive
@@ -45,7 +45,7 @@ CRON_TZ=America/New_York
 # NO TOPICS override here, deliberately (2026-08-15): the es4 set is OE_ES4_TOPICS in
 # oe-topics.env — one definition, every caller — and the archiver REQUIRES it. A list pasted
 # here is how es.futures.cvd.bars went unarchived while three gates shipped against it.
-1 17 * * 1-5 ARCHIVE_DIR=/mnt/nas/optionsedge ENV=es4 ARCHIVE_JOB=es4 BOOTSTRAP=192.168.100.4:9092 JAVA_HOME=$(ls -d /usr/lib/jvm/*jre-17* 2>/dev/null|head -1) /home/abhinav/oe-ops/oe-archive-kafka.sh >> /home/abhinav/oe-ops/archive-es4.log 2>&1
+# Disabled by owner: archive moves to dev. 1 17 * * 1-5 ARCHIVE_DIR=/mnt/nas/optionsedge ENV=es4 ARCHIVE_JOB=es4 BOOTSTRAP=192.168.100.4:9092 JAVA_HOME=$(ls -d /usr/lib/jvm/*jre-17* 2>/dev/null|head -1) /home/abhinav/oe-ops/oe-archive-kafka.sh >> /home/abhinav/oe-ops/archive-es4.log 2>&1
 # Completeness check — THE safety net, and deliberately its own cron entry rather than a step at
 # the end of the nightly job. The 2026-08-10..08-11 loss was invisible precisely because every
 # piece of evidence came from the job that was failing: its exit status, its log, its own
@@ -60,14 +60,14 @@ CRON_TZ=America/New_York
 # an alarm people learn to ignore is worse than no alarm. If the nightly run ever grows past this
 # margin, move THIS entry later — do not shorten the consumer timeout, because an early timeout is
 # indistinguishable from a clean read and would checkpoint over a short read silently.
-0 20 * * 1-5 ENV=prod ARCHIVE_DIR=/mnt/nas/optionsedge /home/abhinav/oe-ops/oe-archive-verify.sh >> /home/abhinav/oe-ops/archive-verify.cron.log 2>&1
+# Disabled by owner: archive moves to dev. 0 20 * * 1-5 ENV=prod ARCHIVE_DIR=/mnt/nas/optionsedge /home/abhinav/oe-ops/oe-archive-verify.sh >> /home/abhinav/oe-ops/archive-verify.cron.log 2>&1
 # es4 completeness, 20:05 ET — its own entry for the reason given above: it reads what is on the NAS,
 # not what the 17:01 es4 job said about itself. Until 2026-09-11 nothing verified es4 at all: the
 # floors in oe-topics.env (the strike presence floor among them) were declared and never checked,
 # because the verifier requires OE_ALL_TOPICS_es4 and it did not exist (deploy Codex final review,
 # finding 3). The verifier delivers its own alert on MISSING / PARTIAL / CORRUPT or on being unable to
 # run, exactly as the prod entry does. Five minutes after prod so the two runs never interleave.
-5 20 * * 1-5 ENV=es4 ARCHIVE_DIR=/mnt/nas/optionsedge LOG=/home/abhinav/oe-ops/archive-verify-es4.log /home/abhinav/oe-ops/oe-archive-verify.sh >> /home/abhinav/oe-ops/archive-verify-es4.cron.log 2>&1
+# Disabled by owner: archive moves to dev. 5 20 * * 1-5 ENV=es4 ARCHIVE_DIR=/mnt/nas/optionsedge LOG=/home/abhinav/oe-ops/archive-verify-es4.log /home/abhinav/oe-ops/oe-archive-verify.sh >> /home/abhinav/oe-ops/archive-verify-es4.cron.log 2>&1
 
 # --- A5: the calibration corpus ------------------------------------------------------------------
 # SECOND archive pass, 20:45 ET. The 17:10 run can legitimately precede the session seal: a call
@@ -82,7 +82,7 @@ CRON_TZ=America/New_York
 # for env=prod" on every weekday run since 2026-09-18, through the 09-22 engine fix that this whole
 # corpus exists to evaluate. The topic's retention is -1 (infinite, verified 2026-10-05, offset 8300
 # and rising) — nothing is lost, and this pass backfills the entire gap the moment it runs.
-45 20 * * 1-5 ENV=prod ARCHIVE_DIR=/mnt/nas/optionsedge ARCHIVE_JOB=seal ON_LOCK_BUSY=fail TOPICS=context-tape.direction.ledger JAVA_HOME=$(ls -d /usr/lib/jvm/*jre-17* 2>/dev/null|head -1) /home/abhinav/oe-ops/oe-archive-kafka.sh >> /home/abhinav/oe-ops/archive-seal.cron.log 2>&1
+# Disabled by owner: archive moves to dev. 45 20 * * 1-5 ENV=prod ARCHIVE_DIR=/mnt/nas/optionsedge ARCHIVE_JOB=seal ON_LOCK_BUSY=fail TOPICS=context-tape.direction.ledger JAVA_HOME=$(ls -d /usr/lib/jvm/*jre-17* 2>/dev/null|head -1) /home/abhinav/oe-ops/oe-archive-kafka.sh >> /home/abhinav/oe-ops/archive-seal.cron.log 2>&1
 
 # Calibration progress, 21:00 ET — AFTER the second archive pass, so it reads a corpus that can
 # actually contain today's seal. It answers one question and writes it where a human can read it:
@@ -91,13 +91,13 @@ CRON_TZ=America/New_York
 # BOOTSTRAP is set because the record is DELIVERED as well as written: A5.7 publishes the same record to
 # context-tape.direction.progress, which is the panel's only way to see it. With BOOTSTRAP unset the run
 # would write the NAS copy and say so, and a reader could mistake that silence for a successful publish.
-30,40,50 20 * * 1-5 ENV=prod ARCHIVE_DIR=/mnt/nas/optionsedge BOOTSTRAP=localhost:9092 /home/abhinav/oe-ops/oe-calibration-progress.sh >> /home/abhinav/oe-ops/calibration-progress.cron.log 2>&1
-0 21 * * 1-5 ENV=prod ARCHIVE_DIR=/mnt/nas/optionsedge BOOTSTRAP=localhost:9092 /home/abhinav/oe-ops/oe-calibration-progress.sh >> /home/abhinav/oe-ops/calibration-progress.cron.log 2>&1
+# Disabled by owner: archive moves to dev. 30,40,50 20 * * 1-5 ENV=prod ARCHIVE_DIR=/mnt/nas/optionsedge BOOTSTRAP=localhost:9092 /home/abhinav/oe-ops/oe-calibration-progress.sh >> /home/abhinav/oe-ops/calibration-progress.cron.log 2>&1
+# Disabled by owner: archive moves to dev. 0 21 * * 1-5 ENV=prod ARCHIVE_DIR=/mnt/nas/optionsedge BOOTSTRAP=localhost:9092 /home/abhinav/oe-ops/oe-calibration-progress.sh >> /home/abhinav/oe-ops/calibration-progress.cron.log 2>&1
 # DEV, at 21:05 — after the 2-hourly dev archive has had its 20:05 run. calibration-targets.env
 # declares a dev cohort and the gateway relays a dev progress record; without this entry both were
 # describing something nobody ever produced (r12 #4). No BOOTSTRAP: the dev broker is not on this host,
 # so the record is written to the NAS only, and the run says so rather than implying it published.
-5 21 * * 1-5 ENV=dev ARCHIVE_DIR=/mnt/nas/optionsedge /home/abhinav/oe-ops/oe-calibration-progress.sh >> /home/abhinav/oe-ops/calibration-progress-dev.cron.log 2>&1
+# Disabled by owner: archive moves to dev. 5 21 * * 1-5 ENV=dev ARCHIVE_DIR=/mnt/nas/optionsedge /home/abhinav/oe-ops/oe-calibration-progress.sh >> /home/abhinav/oe-ops/calibration-progress-dev.cron.log 2>&1
 #
 # The WATCHDOG is deliberately NOT here. It must run on a different host and a different schedule
 # than the reporter, or it shares the reporter's failure: a box that is down reports nothing and
@@ -125,5 +125,5 @@ CRON_TZ=America/New_York
 # must not be delayed or failed by a research capture, and this one must run AFTER it.
 #
 # The >=55 bar is counted over <ledger>/accepted/. The script logs the count on every run.
-30 17 * * 1-5 ENV=prod ARCHIVE_DIR=/mnt/nas/optionsedge /home/abhinav/oe-ops/oe-vol-premium-open-capture.sh >> /home/abhinav/oe-ops/vol-premium-open-capture.cron.log 2>&1
-0 21 * * 1-5 ENV=prod ARCHIVE_DIR=/mnt/nas/optionsedge /home/abhinav/oe-ops/oe-vol-premium-open-capture.sh >> /home/abhinav/oe-ops/vol-premium-open-capture.cron.log 2>&1
+# Disabled by owner: archive moves to dev. 30 17 * * 1-5 ENV=prod ARCHIVE_DIR=/mnt/nas/optionsedge /home/abhinav/oe-ops/oe-vol-premium-open-capture.sh >> /home/abhinav/oe-ops/vol-premium-open-capture.cron.log 2>&1
+# Disabled by owner: archive moves to dev. 0 21 * * 1-5 ENV=prod ARCHIVE_DIR=/mnt/nas/optionsedge /home/abhinav/oe-ops/oe-vol-premium-open-capture.sh >> /home/abhinav/oe-ops/vol-premium-open-capture.cron.log 2>&1
