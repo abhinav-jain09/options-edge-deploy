@@ -122,6 +122,8 @@ spec:
               value: "true"
             - name: REVERSAL_HUNT_AUTO_ARM
               value: "true"
+            - name: REVERSAL_BOTTOM_CANDIDATE_ENABLED
+              value: "true"
             - name: REVERSAL_HUNT_MIN_DECLINE_TICKS
               value: "28"
             - name: REVERSAL_HUNT_MIN_DECLINE_BUCKETS
