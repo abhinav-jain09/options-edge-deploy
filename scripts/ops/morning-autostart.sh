@@ -49,7 +49,8 @@ CALENDAR_DIR="${CALENDAR_DIR:-$(cd "$SCRIPT_DIR/../jenkins" 2>/dev/null && pwd |
 #   index source for BOTH envs (IBKR-SPX-INDEX-PRIORITY-SPOT-REQUIREMENT §3/§12) — the
 #   single IB client on dev fans out to both clusters, so autostart MUST bring it up.
 #   spread-skew-service + spread-skew-postgres-writer (2026-07-26 USER hold:
-#   disabled in every environment until further notice).
+#   disabled in every environment until further notice). 2026-10-31: the owner lifted the hold for DEV
+#   only (dev-cleanup.sh no longer lists spread-skew-service); PROD stays held, so it stays in KEEP_DOWN.
 #   databento-vix-feed (VIX feed separation PR-2): pre-evidence default; the shadow
 #   commit removes this — replicas:1 and a KEEP_DOWN entry are mutually exclusive
 #   (autostart would scale the shadow to 0 at 06:15 mid-session; design §5).

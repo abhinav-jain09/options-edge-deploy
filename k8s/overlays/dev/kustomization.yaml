@@ -123,6 +123,17 @@ patches:
       - op: replace
         path: /spec/replicas
         value: 1
+  # spread-skew-service: RUNNING on DEV ONLY. The owner lifted the 2026-07-26 hold for dev on 2026-10-31
+  # ("yes do that on dev") because market-commentary reports INCOMPLETE_INPUT:I2 while nothing produces
+  # options.spx.spread-skew.current. Production stays at the base's replicas 0. spread-skew-postgres-writer
+  # stays held at 0 (base). Removed from dev-cleanup.sh DISABLED_DEV in the same commit.
+  - target:
+      kind: Deployment
+      name: spread-skew-service
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
   # The ENABLE is a separate NAME-KEYED strategic merge, never an env/N json6902 index: an index patch
   # lands on whichever variable has drifted into that position, and this repository already has the
   # dealer-ledger heap landing on QUOTE_STALE_MS to show for exactly that.
