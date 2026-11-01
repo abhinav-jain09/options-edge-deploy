@@ -117,6 +117,30 @@ rf_dynamic_configs() { # <topic> -> sorted key=value lines of the topic's dynami
 # a value may itself contain " sensitive=false synonyms={". The delimiter is the ONE candidate whose synonym list starts with SRC:key=<the
 # candidate value> followed by "," or "}". Zero or several consistent candidates, or any line off-grammar => an ERR: line (fail closed).
 function fail(m) { print "ERR: " m ": " $0; bad = 1 }
+# the position of the next ", SRC:key=" entry separator in rem (0 when none)
+function nextsep(rem, key,    i, t) {
+  for (i = 1; i < length(rem); i++) if (substr(rem, i, 2) == ", ") {
+    t = substr(rem, i + 2)
+    if (match(t, /^[A-Z_]+:/) && substr(t, RLENGTH + 1, length(key) + 1) == key "=") return i
+  }
+  return 0
+}
+# everything after the first synonym must be zero or more ", SRC:key=value" entries (same key, no "}" inside a value) and then the final "}"
+function tail_ok(rem, key,    j, v) {
+  while (rem != "}") {
+    if (substr(rem, 1, 2) != ", ") return 0
+    rem = substr(rem, 3)
+    if (!match(rem, /^[A-Z_]+:/)) return 0
+    rem = substr(rem, RLENGTH + 1)
+    if (substr(rem, 1, length(key) + 1) != key "=") return 0
+    rem = substr(rem, length(key) + 2)
+    j = nextsep(rem, key)
+    if (j > 0) { v = substr(rem, 1, j - 1); rem = substr(rem, j) }
+    else { if (substr(rem, length(rem)) != "}") return 0; v = substr(rem, 1, length(rem) - 1); rem = "}" }
+    if (index(v, "}") > 0) return 0
+  }
+  return 1
+}
 NR == 1 { next }
 /^[ \t]*$/ { next }
 {
@@ -135,7 +159,7 @@ NR == 1 { next }
     c = index(after, ":"); s = substr(after, 1, c - 1)
     if (c > 1 && s ~ /^[A-Z_]+$/) {
       want = s ":" key "=" val
-      if (substr(after, 1, length(want)) == want && (substr(after, length(want) + 1, 1) == "," || substr(after, length(want) + 1, 1) == "}")) { n++; chosen = val; src = s }
+      if (substr(after, 1, length(want)) == want && tail_ok(substr(after, length(want) + 1), key)) { n++; chosen = val; src = s }
     }
     off = abs; tmp = substr(rest, off + 1)
   }

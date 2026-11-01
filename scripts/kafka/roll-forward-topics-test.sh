@@ -40,7 +40,8 @@ name=""; prev=""; for a in "$@"; do [ "$prev" = "--entity-name" ] && name="$a"; 
 echo $(( $(cat "$MOCK_DIR/cnt.kc" 2>/dev/null || echo 0) + 1 )) > "$MOCK_DIR/cnt.kc"
 echo "Dynamic configs for topic $name are:"
 while IFS= read -r l; do [ -n "$l" ] || continue; l="$(printf '%s' "$l" | sed 's/=\[\(.*\)\]$/=\1/')"
-  printf '  %s sensitive=false synonyms={DYNAMIC_TOPIC_CONFIG:%s}\n' "$l" "$l"; done < "$MOCK_DIR/$name/cfg"
+  tail=""; [ "${MOCK_SYN_TOPIC:-}" = "$name" ] && tail="$(printf '%s' "$MOCK_SYN_TAIL" | sed "s/KEY/${l%%=*}/g")"
+  printf '  %s sensitive=false synonyms={DYNAMIC_TOPIC_CONFIG:%s%s}\n' "$l" "$l" "$tail"; done < "$MOCK_DIR/$name/cfg"
 [ "${MOCK_KC_JUNK:-}" = "$name" ] && echo "  this line is not in the grammar"
 printf '  broker.default=1 sensitive=false synonyms={STATIC_BROKER_CONFIG:broker.default=1}\n'
 MOCK
@@ -356,6 +357,20 @@ two
 check "a committed offset appearing AFTER the delete => no create (normal path)" "$(MOCK_GROUPS2_FROM=3 MOCK_GROUPS2='g a.one 0 5 5 0 - - -' run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
 check "…a.one was deleted but NOT created" "$(grep -c '^deleted:a.one' "$TMP/state/log")$(grep -c '^created:a.one' "$TMP/state/log")" 10
 check "…b.two untouched" "$(grep -c 'b.two' "$TMP/state/log")" 0
+
+# --- round-11: the WHOLE synonym tail is validated
+two
+check "a valid multi-synonym tail is accepted" "$(MOCK_SYN_TOPIC=b.two MOCK_SYN_TAIL=', DEFAULT_CONFIG:KEY=zzz, STATIC_BROKER_CONFIG:KEY=1' run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 0
+two
+check "a malformed SECOND synonym refuses before any delete" "$(MOCK_SYN_TOPIC=b.two MOCK_SYN_TAIL=', garbage' run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
+check "…nothing deleted" "$(logn)" 0
+two
+check "a second synonym for a DIFFERENT key refuses" "$(MOCK_SYN_TOPIC=b.two MOCK_SYN_TAIL=', DEFAULT_CONFIG:other.key=1' run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
+check "…nothing deleted (other key)" "$(logn)" 0
+two
+check "trailing junk after the final entry refuses before any delete" "$(MOCK_SYN_TOPIC=b.two MOCK_SYN_TAIL='}junk' run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
+check "…nothing deleted (junk)" "$(logn)" 0
+check "…the refusal names the ambiguity (junk)" "$(grep -c 'ambiguous kafka-configs output for' "$TMP/out")" 1
 
 echo "passed=$pass failed=$fail"
 [ "$fail" = 0 ]
