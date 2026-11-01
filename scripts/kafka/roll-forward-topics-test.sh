@@ -48,9 +48,12 @@ MOCK
 cat > "$TMP/bin/kafka-consumer-groups.sh" <<'MOCK'
 #!/usr/bin/env bash
 [ "${MOCK_GROUPS_RC:-0}" = 0 ] || { echo "coordinator down" >&2; exit 1; }
+case " $* " in *" --list "*) [ "${MOCK_LIST_RC2:-0}" = 0 ] || exit 1; printf '%s' "${MOCK_LIST_GROUPS:-}"; exit 0 ;; esac
 n=$(( $(cat "$MOCK_DIR/cnt.groups" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$MOCK_DIR/cnt.groups"
 rows="${MOCK_GROUPS:-}"; [ -z "${MOCK_GROUPS2_FROM:-}" ] || [ "$n" -lt "${MOCK_GROUPS2_FROM:-0}" ] || rows="$MOCK_GROUPS2"
-printf 'GROUP TOPIC PARTITION CURRENT-OFFSET LOG-END-OFFSET LAG CONSUMER-ID HOST CLIENT-ID\n%s\n' "$rows"
+[ -z "${MOCK_DESCRIBE_EMPTY:-}" ] || exit 0
+[ -n "${MOCK_NOHEADER:-}" ] || printf 'GROUP TOPIC PARTITION CURRENT-OFFSET LOG-END-OFFSET LAG CONSUMER-ID HOST CLIENT-ID\n'
+printf '%s\n' "$rows"
 MOCK
 cat > "$TMP/bin/kafka-get-offsets.sh" <<'MOCK'
 #!/usr/bin/env bash
@@ -371,6 +374,25 @@ two
 check "trailing junk after the final entry refuses before any delete" "$(MOCK_SYN_TOPIC=b.two MOCK_SYN_TAIL='}junk' run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
 check "…nothing deleted (junk)" "$(logn)" 0
 check "…the refusal names the ambiguity (junk)" "$(grep -c 'ambiguous kafka-configs output for' "$TMP/out")" 1
+
+# --- round-12
+reset; mk g.brace OLDG 1 1 "x.odd=a}"
+check "a '}' inside the first synonym's value refuses before any delete" "$(run --recreate --cluster dev --topics g.brace --pre-cutover-id g.brace=OLDG "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
+check "…nothing deleted (brace)" "$(logn)" 0
+two
+check "exit-0 EMPTY describe with a non-empty --list refuses before any delete" "$(MOCK_DESCRIBE_EMPTY=1 MOCK_LIST_GROUPS=$'g1\ng2\n' run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
+check "…nothing deleted (empty describe)" "$(logn)" 0
+two
+check "empty describe AND empty --list is a genuinely group-less broker: OK" "$(MOCK_DESCRIBE_EMPTY=1 run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 0
+two
+check "empty describe whose --list FAILS refuses" "$(MOCK_DESCRIBE_EMPTY=1 MOCK_LIST_RC2=1 run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
+check "…nothing deleted (list failed)" "$(logn)" 0
+two
+check "a short row for ANOTHER topic's group (truncated output) refuses" "$(MOCK_GROUPS='g other 0' run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
+check "…nothing deleted (truncated)" "$(logn)" 0
+two
+check "a data row with no header block refuses" "$(MOCK_NOHEADER=1 MOCK_GROUPS='g other 0 5 5 0 - - -' run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
+check "…nothing deleted (headerless)" "$(logn)" 0
 
 echo "passed=$pass failed=$fail"
 [ "$fail" = 0 ]

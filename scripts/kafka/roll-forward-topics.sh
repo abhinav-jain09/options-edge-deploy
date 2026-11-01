@@ -159,7 +159,7 @@ NR == 1 { next }
     c = index(after, ":"); s = substr(after, 1, c - 1)
     if (c > 1 && s ~ /^[A-Z_]+$/) {
       want = s ":" key "=" val
-      if (substr(after, 1, length(want)) == want && tail_ok(substr(after, length(want) + 1), key)) { n++; chosen = val; src = s }
+      if (index(val, "}") == 0 && substr(after, 1, length(want)) == want && tail_ok(substr(after, length(want) + 1), key)) { n++; chosen = val; src = s }
     }
     off = abs; tmp = substr(rest, off + 1)
   }
@@ -224,6 +224,24 @@ group_rows_valid() { # <topic> <describe-all-groups output>
 group_stale_rows() { # <topic> <describe-all-groups output>
   printf '%s\n' "$2" | awk -v t="$1" -v live="$AVRO_LIVE" '$2 == t && $4 ~ /^[0-9]+$/ && $5 ~ /^[0-9]+$/ && (live != "yes" || $4 + 0 > $5 + 0) {print $1 ":" $3 "@" $4 " (log end " $5 ")"}'
 }
+# Reads ALL consumer groups into GRP_OUT, fail closed on anything not recognisably complete. A non-empty answer must be made of
+# `GROUP TOPIC PARTITION CURRENT-OFFSET LOG-END-OFFSET ...` header lines, "Consumer group ... has no active members" notes and data rows of
+# >= 5 fields that FOLLOW a header (a headerless or short row is truncated output). An empty answer is accepted only when
+# `kafka-consumer-groups --list` also succeeds and is empty (an exit-0 empty describe over a broker that has groups is a blind gate).
+read_groups() {
+  local bad listed
+  GRP_OUT="$("$KG" --bootstrap-server "$BS" --describe --all-groups 2>&1)" || { echo "FAIL: cannot read consumer groups on $BS: $GRP_OUT" >&2; return 1; }
+  bad="$(printf '%s\n' "$GRP_OUT" | awk '
+    /^[ \t]*$/ { next }
+    /^GROUP[ \t]+TOPIC[ \t]+PARTITION[ \t]+CURRENT-OFFSET[ \t]+LOG-END-OFFSET/ { hdr = 1; next }
+    /^Consumer group .* has no active members/ { next }
+    !hdr || NF < 5 || $1 == "Error" || $1 == "Error:" { print }')"
+  [ -z "$bad" ] || { echo "FAIL: consumer-group output on $BS is not recognisably complete (headerless or short row, or an error line):" >&2; printf '%s\n' "$bad" >&2; return 1; }
+  if [ -z "$(printf '%s' "$GRP_OUT" | tr -d '[:space:]')" ]; then
+    listed="$("$KG" --bootstrap-server "$BS" --list 2>&1)" || { echo "FAIL: describe was empty and --list failed: $listed" >&2; return 1; }
+    [ -z "$(printf '%s' "$listed" | tr -d '[:space:]')" ] || { echo "FAIL: --describe --all-groups returned nothing but --list shows groups: $(echo $listed)" >&2; return 1; }
+  fi
+}
 # BOTH group gates in one place (preflight, absent-recovery, and the last look before each delete/create): rows parseable and, in strict
 # mode, no committed offset on the topic (the post-check's own predicate).
 groups_gate() { # <topic> <describe-all-groups output>
@@ -273,7 +291,8 @@ post_checks() { # <topic> <pre-id> <want-new-id|"">
                      <(printf '%s\n' "$late"  | awk -F: -v t="$topic" '$1 == t {print $2 ":" $3}' | sort -t: -k1,1n) | awk -F: '{print $1 ":" $2 ":" $4}')
   # stale committed offsets survive a topic delete (they are keyed by NAME): verified, not assumed
   local groups stale
-  groups="$("$KG" --bootstrap-server "$BS" --describe --all-groups 2>&1)" || { echo "FAIL: cannot read consumer groups on $BS: $groups" >&2; return 1; }
+  read_groups || return 1
+  groups="$GRP_OUT"
   group_rows_valid "$topic" "$groups" || return 1
   stale="$(group_stale_rows "$topic" "$groups")"
   if [ -n "$stale" ] && [ "$AVRO_LIVE" = yes ]; then
@@ -312,7 +331,8 @@ fi
 # PREFLIGHT, all topics, before anything is deleted: the topic list is readable, each topic is present with its pre-cutover id (or absent
 # with the explicit flag and a captured shape), and the live shape is captured to the state dir. One bad topic means NOTHING is deleted.
 LIST="$(rf_list "$KT" "$BS")" || exit 1
-GRP_TXT="$("$KG" --bootstrap-server "$BS" --describe --all-groups 2>&1)" || { echo "FAIL: cannot read consumer groups on $BS; the stale-offset post-check would be blind. NOTHING was deleted." >&2; exit 1; }
+read_groups || { echo "The stale-offset gate would be blind. NOTHING was deleted." >&2; exit 1; }
+GRP_TXT="$GRP_OUT"
 PRESENT=$'\n'
 for t in "${TOPICS[@]}"; do
   pre="$(id_of "$PRE_IDS" "$t")"
@@ -350,7 +370,8 @@ for t in "${TOPICS[@]}"; do
       && [ "$(describe_field "$look" ReplicationFactor)" = "$(shape_get "$STATE/$t.shape" rf)" ] \
       && [ "$(describe_field "$look" Configs)" = "$(shape_get "$STATE/$t.shape" rawcfg)" ] \
       || { echo "FAIL: the shape of $t changed since preflight; nothing deleted. captured: $(tr '\n' ' ' < "$STATE/$t.shape") now: $look" >&2; fail_run "$t" "topic administration is not frozen; re-run to capture the new shape."; }
-    LASTG="$("$KG" --bootstrap-server "$BS" --describe --all-groups 2>&1)" || fail_run "$t" "cannot read consumer groups; nothing deleted."
+    read_groups || fail_run "$t" "consumer groups unreadable or incomplete; nothing deleted."
+    LASTG="$GRP_OUT"
     groups_gate "$t" "$LASTG" || fail_run "$t" "consumer-group gate failed at the last look; nothing deleted."
     echo "-- delete $t (id $again)"
     kt --delete --topic "$t" || fail_run "$t" "delete failed; nothing created."
@@ -367,7 +388,8 @@ for t in "${TOPICS[@]}"; do
     esac
   fi
   # EVERY create (normal delete/recreate and absent-recovery) is preceded by a FRESH group read and both group gates
-  LASTG="$("$KG" --bootstrap-server "$BS" --describe --all-groups 2>&1)" || fail_run "$t" "cannot read consumer groups; nothing created."
+  read_groups || fail_run "$t" "consumer groups unreadable or incomplete; nothing created."
+  LASTG="$GRP_OUT"
   groups_gate "$t" "$LASTG" || fail_run "$t" "consumer-group gate failed before create; nothing created (if $t was already deleted it is ABSENT: clear the offsets, then re-run with --topic-absent-after-failed-create)."
   parts="$(shape_get "$STATE/$t.shape" partitions)"; rf="$(shape_get "$STATE/$t.shape" rf)"
   args=(--create --topic "$t" --partitions "$parts" --replication-factor "$rf")
