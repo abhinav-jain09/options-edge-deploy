@@ -2,7 +2,7 @@
 
 Topics keep their own names; they are wiped and recreated carrying Avro. Contracts 0.34.0.
 
-**Dependency: this runbook REQUIRES options-edge-deploy PR #1320 (`scripts/kafka/roll-forward-topics.sh`,
+**Dependency (now merged on main): this runbook uses options-edge-deploy PR #1320 (`scripts/kafka/roll-forward-topics.sh`,
 `scripts/kafka/avro-rollforward.lib.sh`, `docs/KAFKA-AVRO-TOPIC-ROLL-FORWARD.md`) to be merged first. Do not run the cutover from a
 tree that lacks it.** Wire types: `avgPrice`, `strike` and `spot` are decimal(38,18) (the shortest round-trip text of the double; a value needing more than 18 places, non-finite, -0.0 or beyond 38 digits is REFUSED, never rounded - the service counts and logs such a record as a dropped encode, `multileg_encode_refused_total`; an unencodable levels snapshot is replaced for that tick by the empty-levels retraction record, so consumers never keep stale levels); scores, surprisal, effort and level rates/distances
 are derived statistics and stay double.
@@ -51,7 +51,7 @@ refuses a bootstrap that is not the named `--cluster`'s broker. Prerequisite: PR
    run in a safe order (register every absent subject at version 1, THEN set FULL on every subject) and a failure part-way (registry
    outage or a refused write) leaves only canonical version-1 registrations and/or FULL configs - idempotent state, never a wrong
    schema - which a re-run completes. The sequence is NOT atomic across subjects. `DEPLOY_DRY_RUN=true` runs phase 1 only and reports
-   what would be done. Decoders pin the canonical shape: a reader accepts a record only when its writer schema EQUALS the canonical schema (fields, order, types), so a later FULL-compatible registration (extra or reordered fields) is refused by readers until the canonical contract is updated and rolled. This step is non-destructive and runs before anything is wiped.
+   what would be done. Each producer serializer is bound to its topic's canonical schema (a record of any other schema, even another canonical one, is refused before the registry). Decoders pin the canonical shape: a reader accepts a record only when its writer schema EQUALS the canonical schema (fields, order, types), so a later FULL-compatible registration (extra or reordered fields) is refused by readers until the canonical contract is updated and rolled. This step is non-destructive and runs before anything is wiped.
 3. Stop non-Kubernetes JSON writers/copiers of these topics: none exist (see the evidence above); nothing to stop.
 4. Avro writer first: roll the new multileg image (workloads are Jenkins-only; scaling to zero is not available, so the wipe happens
    with the Avro writer live). Prove the OLD JSON writer pod is gone: exactly one `multileg-structure-service` pod, on the new digest.

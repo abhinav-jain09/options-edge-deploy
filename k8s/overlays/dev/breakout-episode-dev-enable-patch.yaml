@@ -31,3 +31,7 @@ spec:
               value: dev-unsecured
             - name: BREAKOUT_EP_CREATE_TOPICS
               value: "true"
+            # The strike topic publishes the 0DTE chain under symbol "SPX" (expiry = the session date); "SPXW" never occurs, so the
+            # code default accepted none of 668,000 rows on the first live session (every approach was NO_SNAPSHOT).
+            - name: BREAKOUT_EP_SYMBOLS
+              value: SPX

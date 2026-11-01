@@ -74,6 +74,12 @@ spec:
               value: "true"
             - name: CONTEXT_TAPE_ESTIMATE_BARS_TOPIC
               value: options.indicators.estimate.bars
+            - name: CONTEXT_TAPE_SPOT_TOPIC
+              value: underlying.spx.price
+            - name: CONTEXT_TAPE_SPOT_FIELD_FILTER
+              value: ANY
+            - name: CONTEXT_TAPE_SPOT_SOURCE_FILTER
+              value: ANY
             - name: CONTEXT_TAPE_DIRECTION_ENABLED
               value: "true"
             - name: CONTEXT_TAPE_DIRECTION_SPOT_TOPIC
@@ -92,6 +98,8 @@ spec:
               value: context-tape.direction.alert
             - name: CONTEXT_TAPE_DIRECTION_SCORECARD_TOPIC
               value: context-tape.direction.scorecard
+            - name: CONTEXT_TAPE_DIRECTION_CANDLE_EXPORT_TOPIC
+              value: context-tape.direction.candle-export
             - name: CONTEXT_TAPE_DIRECTION_API_PORT
               value: "8136"
             - name: ZERO_DTE_COMPRESSION_ENABLED
@@ -128,8 +136,6 @@ spec:
               value: 2026-07-02,2026-11-27,2026-12-24
             - name: HEALTH_PORT
               value: "8135"
-            - name: CONTEXT_TAPE_SPOT_TOPIC
-              value: underlying.spx.index.price
             - name: CONTEXT_TAPE_GEX_HISTORY_TOPIC
               value: options.databento.gex.strike.history
             - name: CONTEXT_TAPE_ES_TRADES_TOPIC

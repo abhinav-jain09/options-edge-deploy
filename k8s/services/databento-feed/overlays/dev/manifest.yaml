@@ -96,6 +96,7 @@ spec:
               port: metrics
             initialDelaySeconds: 45
             periodSeconds: 15
+            timeoutSeconds: 5
           name: databento-feed
           ports:
             - containerPort: 8010

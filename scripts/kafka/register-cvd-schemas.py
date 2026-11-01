@@ -20,6 +20,15 @@ ENDPOINTS = [('es4','192.168.100.4:9092','http://192.168.100.4:8081'),
              ('production','192.168.100.252:9092','http://192.168.100.252:8082')]
 MAX_METADATA_BYTES=8<<20
 
+
+def selected_endpoints(spec):
+    """CVD_SCHEMA_ENVIRONMENTS: a comma list of es4, dev, production (default: all three, as before). An unknown, repeated or empty name is refused."""
+    names=[n.strip() for n in spec.split(',')]
+    known=[e[0] for e in ENDPOINTS]
+    if not names or any(n not in known for n in names) or len(set(names))!=len(names):
+        raise ValueError('CVD_SCHEMA_ENVIRONMENTS must be a comma list of distinct names from '+','.join(known))
+    return [e for e in ENDPOINTS if e[0] in names]
+
 BINDINGS = {
     'futures.cvd':'cvd/CvdSnapshot.avsc', 'futures.cvd.bars':'cvd/CvdBarEnvelope.avsc',
     'futures.cvd.levels':'cvd/CvdLevelsSnapshot.avsc', 'futures.footprint':'cvd/FootprintSnapshot.avsc',
@@ -32,9 +41,12 @@ BINDINGS = {
     'options.es-cvd-spx-levels':'cvd-related/AlignedCvdLevelsEnvelope.avsc',
     'es.futures.compression-expansion.current':'cvd-related/EscxCurrent.avsc',
     'es.futures.compression-expansion.events':'cvd-related/EscxEvent.avsc',
+    'futures.level-absorption.path':'cvd-related/AbsorptionPathSnapshot.avsc',
     'futures.level-absorption.events':'cvd-related/LevelAbsorptionEvent.avsc',
     'futures.level-absorption.voice':'cvd-related/LevelAbsorptionVoice.avsc',
     'futures.level-absorption.closures':'cvd-related/LevelAbsorptionClosure.avsc',
+    'futures.level-absorption.manual-line':'cvd-related/LevelAbsorptionManualLine.avsc',
+    'context-tape.direction.candle-export':'cvd-related/CandleDirectionExportRecord.avsc',   # T-18 (contracts 0.43.0): the joined Candle Direction export, key barId
     'options.es-gex-spx-aligned':'cvd-related/AlignedGexBookExtended.avsc',
     'options.es-strike-intel-spx-aligned':'cvd-related/AlignedStrikeIntelligence.avsc',
     'options.short-premium.recommendation':'cvd-related/ShortPremiumRecommendation.avsc',
@@ -109,14 +121,38 @@ def verify_schema(response, text):
     if actual!=expected:raise ValueError('Registered schema graph differs from released contract')
 
 
+def verify_path_session_evolution(url, topic, text, versions, call):
+    """Only the reviewed path-session extension may advance existing subject history."""
+    suffix=[{'name':'sessionKind','type':'string','default':'CASH'},
+            {'name':'sessionStartMs','type':'long','default':0},
+            {'name':'sessionEndMs','type':'long','default':0}]
+    target=json.loads(text)
+    if (topic not in ('futures.level-absorption.path','es.futures.level-absorption.path')
+            or target.get('type')!='record' or target.get('name')!='AbsorptionPathSnapshot'
+            or target.get('fields',[])[-3:]!=suffix):
+        raise ValueError('Existing subject history conflicts with the released schema')
+    if (not isinstance(versions,list) or not 1<=len(versions)<=16
+            or any(type(v) is not int or v<=0 for v in versions)
+            or versions!=sorted(set(versions))):
+        raise ValueError('Invalid path schema history')
+    predecessor={**target,'fields':target['fields'][:-3]}
+    subject=urllib.parse.quote(topic+'-value',safe='')
+    body={'schemaType':'AVRO','schema':text}
+    for version in versions:
+        # Deleted/foreign history, transforms and any other field change remain a refusal.
+        verify_schema(call(url,'/subjects/'+subject+'/versions/'+str(version)),json.dumps(predecessor))
+        result=call(url,'/compatibility/subjects/'+subject+'/versions/'+str(version)+'?verbose=true',body)
+        if result.get('is_compatible') is not True:raise ValueError('Path session extension is not registry-compatible')
+
+
 def reconcile(url, topic, text, apply, call=http):
     subject=urllib.parse.quote(topic+'-value',safe='');body={'schemaType':'AVRO','schema':text}
     lookup=call(url,'/subjects/'+subject,body,missing=True)
     created=False
     if lookup is None:
         versions=call(url,'/subjects/'+subject+'/versions?deleted=true',missing=True)
-        if versions is not None and versions!=[]:raise ValueError('Existing subject history conflicts with the released schema')
-        if not apply:return {'topic':topic,'registered':False,'action':'missing; dry run only'}
+        if versions is not None and versions!=[]:verify_path_session_evolution(url,topic,text,versions,call)
+        if not apply:return {'topic':topic,'registered':False,'action':'compatible evolution; dry run only' if versions else 'missing; dry run only'}
         registered=call(url,'/subjects/'+subject+'/versions',body)
         expected_id=registered['id'];created=True
         lookup=call(url,'/subjects/'+subject,body)
@@ -127,6 +163,25 @@ def reconcile(url, topic, text, apply, call=http):
     verify_schema(call(url,'/schemas/ids/'+str(schema_id)),text)
     return {'topic':topic,'registered':True,'schemaId':schema_id,'created':created,
             'schemaSha256':hashlib.sha256(text.encode()).hexdigest()}
+
+
+def build_inventory(root, spec, read=None):
+    """Preflight metadata of ONLY the selected registries' clusters; nothing is read from, or later written to, an unselected one."""
+    read=read or metadata
+    inventory=[]
+    for environment,bootstrap,url in selected_endpoints(spec):
+        directory=root/environment;directory.mkdir()
+        inventory.append((environment,url,read(bootstrap,directory)))
+    return inventory
+
+
+def selected_topics(topics, spec):
+    if not spec:
+        return topics
+    wanted = [name.strip() for name in spec.split(',')]
+    if not wanted or len(set(wanted)) != len(wanted) or any(not binding(name) or name not in topics for name in wanted):
+        raise ValueError('CVD_SCHEMA_TOPICS must name distinct existing bound topics')
+    return sorted(wanted)
 
 
 def main():
@@ -141,7 +196,11 @@ def main():
     root=parent/('cvd-schemas-'+build);root.mkdir()  # Refuse stale output.
     spec=importlib.util.spec_from_file_location('released_contracts',Path(__file__).parents[1]/'jenkins/fetch-canonical-contracts.py')
     release=importlib.util.module_from_spec(spec);spec.loader.exec_module(release)
-    release.latest(os.environ['JENKINS_URL'],root/'contracts-source',root/'contracts.jar')
+    topics_spec=os.environ.get('CVD_SCHEMA_TOPICS','')
+    expected_commit=os.environ.get('CONTRACTS_PERMITTED_SHA') or None
+    if topics_spec and (expected_commit is None or not re.fullmatch(r'[0-9a-f]{40}',expected_commit)):
+        raise ValueError('Selective schema registration requires CONTRACTS_PERMITTED_SHA')
+    release.latest(os.environ['JENKINS_URL'],root/'contracts-source',root/'contracts.jar',expected_commit=expected_commit)
     proof=json.loads((root/'contracts.release.json').read_text())
     # The tests use this verified SDK's actual schema identity, not a substitute parser.
     subprocess.run([sys.executable,'-B','-m','unittest','tests.test_register_cvd_schemas','tests.test_canonical_contracts_release'],
@@ -153,11 +212,9 @@ def main():
     for text in schemas.values():
         parsed=json.loads(text)
         if not isinstance(parsed,dict) or parsed.get('type')!='record':raise ValueError('Released named record required')
-    # Preflight ALL clusters and schema resources before the first registration.
-    inventory=[]
-    for environment,bootstrap,url in ENDPOINTS:
-        directory=root/environment;directory.mkdir()
-        inventory.append((environment,url,metadata(bootstrap,directory)))
+    # Preflight ALL SELECTED clusters and schema resources before the first registration.
+    inventory=build_inventory(root,os.environ.get('CVD_SCHEMA_ENVIRONMENTS','es4,dev,production'))
+    inventory=[(environment,url,selected_topics(topics,topics_spec)) for environment,url,topics in inventory]
     receipt={'source':os.environ['PERMITTED_SHA'],'contracts':proof,'dryRun':dry=='true','clusters':[],
              'scope':'Exact released external schemas for existing topics only; no Kafka/group/offset/config/mode changes; inactive internal state schemas are outside this action'}
     file=root/'receipt.json'

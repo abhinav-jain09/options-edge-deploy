@@ -48,8 +48,9 @@ CALENDAR_DIR="${CALENDAR_DIR:-$(cd "$SCRIPT_DIR/../jenkins" 2>/dev/null && pwd |
 #   ibkr-feed-service REMOVED from KEEP_DOWN 2026-07-29: it is now the priority-1 SPX+VIX
 #   index source for BOTH envs (IBKR-SPX-INDEX-PRIORITY-SPOT-REQUIREMENT §3/§12) — the
 #   single IB client on dev fans out to both clusters, so autostart MUST bring it up.
-#   spread-skew-service + spread-skew-postgres-writer (2026-07-26 USER hold:
-#   disabled in every environment until further notice).
+#   spread-skew-service + spread-skew-postgres-writer (held since 2026-07-26 by the USER).
+#   2026-10-31: the owner lifted the hold for DEV only (dev-cleanup.sh no longer lists
+#   spread-skew-service); PROD stays held, so both stay in KEEP_DOWN.
 #   databento-vix-feed (VIX feed separation PR-2): pre-evidence default; the shadow
 #   commit removes this — replicas:1 and a KEEP_DOWN entry are mutually exclusive
 #   (autostart would scale the shadow to 0 at 06:15 mid-session; design §5).
@@ -76,9 +77,12 @@ CALENDAR_DIR="${CALENDAR_DIR:-$(cd "$SCRIPT_DIR/../jenkins" 2>/dev/null && pwd |
 #   every deployment at 0, is the script that needs it.
 #   hedging-pressure-service ADDED 2026-10-11: deployed held at replicas:0 (owner turns it on later); it DOES carry the
 #   part-of label, so this entry is what stops the 06:15 scale-to-1 from starting it. Same entry in oe-boot-bringup.sh.
+#   es-trade-tools-service (TICK-TRADE-TOOLS) and wave-cycle-service (ELLIOTT-FIB-CYCLE-TOOLS) were ADDED 2026-10-21 (held at replicas:0) and REMOVED 2026-10-22 for PRODUCTION: the owner's standard
+#   is that every service runs live once calibrated, and the production overlay now renders both at replicas 1 (k8s/overlays/production/{es-trade-tools,wave-cycle}-prod-enable-patch.yaml).
+#   Left on this list they would be scaled to 0 by a reboot; removed, the morning start and the boot bring-up keep them up. Both carry the part-of label. DEV followed on 2026-10-31 (owner: remove them from the permanent-down path): both were removed from DISABLED_DEV in dev-cleanup.sh and k8s/overlays/dev/{es-trade-tools,wave-cycle}-dev-enable-patch.yaml now render replicas 1, so no lifecycle list holds either one down in any environment.
 #   break-score-service and level-absorption-service ADDED 2026-10-17 on the same terms: deployed held at replicas:0 (owner
 #   turns each on later; level-absorption cannot start before its Phase 0 freeze file exists); both carry the part-of label.
-KEEP_DOWN="${KEEP_DOWN:-hpsf-stage-a-service hpsf-stage-b-service volume-sandwich-service volume-sandwich-databento-service volume-pace-service volume-pace-databento-service strike-flow-classifier-ibkr options-edge-integration-test spx-mission-control-service short-premium-agent-service spread-skew-service spread-skew-postgres-writer directional-pressure-databento-service databento-mission-sandwich-service directional-pressure-service option-truth-engine-service ibkr-feed-service oi-shadow-service raw-to-display-service dealer-ledger-service dealer-ledger-calibration-scorer dealer-ledger-calibration-accumulator vix-option-inteligence-service broker-execution-service amt-order-bridge prod-pgadmin zerodte-research-writer hedging-pressure-service break-score-service level-absorption-service breakout-sequencer-service breakout-episode-service}"
+KEEP_DOWN="${KEEP_DOWN:-corridor-gauge-service hpsf-stage-a-service hpsf-stage-b-service volume-sandwich-service volume-sandwich-databento-service volume-pace-service volume-pace-databento-service strike-flow-classifier-ibkr options-edge-integration-test spx-mission-control-service short-premium-agent-service spread-skew-service spread-skew-postgres-writer directional-pressure-databento-service databento-mission-sandwich-service directional-pressure-service option-truth-engine-service ibkr-feed-service oi-shadow-service raw-to-display-service dealer-ledger-service dealer-ledger-calibration-scorer dealer-ledger-calibration-accumulator vix-option-inteligence-service broker-execution-service amt-order-bridge prod-pgadmin zerodte-research-writer hedging-pressure-service break-score-service level-absorption-service breakout-sequencer-service breakout-episode-service}"
 
 kc()  { kubectl -n "$NS" --as="$KUBECTL_AS" "$@"; }   # impersonated (scale ops are policy-gated)
 kcr() { kubectl -n "$NS" "$@"; }                       # read-only
