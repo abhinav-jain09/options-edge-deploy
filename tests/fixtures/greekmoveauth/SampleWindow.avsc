@@ -1,0 +1,35 @@
+{
+  "type": "record",
+  "name": "SampleWindow",
+  "namespace": "com.optionsedge.contracts.greekmoveauth",
+  "doc": "INTERNAL Kafka Streams gma-spot-window-store value: the bounded per-symbol SPOT price window; v is decimal(38,18). Not a topic contract; committed so the serde is never service-local.",
+  "fields": [
+    {
+      "name": "samples",
+      "type": {
+        "type": "array",
+        "items": {
+          "type": "record",
+          "name": "SpotWindowSample",
+          "namespace": "com.optionsedge.contracts.greekmoveauth",
+          "doc": "One (event time, spot price) sample.",
+          "fields": [
+            {
+              "name": "t",
+              "type": "long"
+            },
+            {
+              "name": "v",
+              "type": {
+                "type": "bytes",
+                "logicalType": "decimal",
+                "precision": 38,
+                "scale": 18
+              }
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

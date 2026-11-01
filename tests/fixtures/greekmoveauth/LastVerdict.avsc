@@ -1,0 +1,16 @@
+{
+  "type": "record",
+  "name": "LastVerdict",
+  "namespace": "com.optionsedge.contracts.greekmoveauth",
+  "doc": "INTERNAL Kafka Streams gma-last-verdict-store value: the last emitted verdict name and its frame event time. Not a topic contract; committed so the serde is never service-local.",
+  "fields": [
+    {
+      "name": "verdict",
+      "type": "string"
+    },
+    {
+      "name": "frameEventMs",
+      "type": "long"
+    }
+  ]
+}

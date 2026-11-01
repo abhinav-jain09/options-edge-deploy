@@ -1,0 +1,20 @@
+{
+  "type": "record",
+  "name": "DeltaFrameEvent",
+  "namespace": "com.optionsedge.contracts.greekmoveauth",
+  "doc": "INTERNAL Kafka Streams frame-rekey repartition record carrying one traded delta flow sample. Not a topic contract; committed so the serde is never service-local.",
+  "fields": [
+    {
+      "name": "symbol",
+      "type": "string"
+    },
+    {
+      "name": "net",
+      "type": "double"
+    },
+    {
+      "name": "eventMs",
+      "type": "long"
+    }
+  ]
+}
