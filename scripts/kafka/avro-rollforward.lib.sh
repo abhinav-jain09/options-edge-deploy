@@ -241,22 +241,25 @@ rf_nonempty_partitions() {
 # those cannot see — a stale image still running at wipe time — and the two ends of the log are where
 # that shows up: the start if it was writing when the topic was recreated, the end if it still is.
 rf_wire_is_avro() {
-  local cli="$1" bs="$2" topic="$3" part="$4" off="$5" tmp first
+  local cli="$1" bs="$2" topic="$3" part="$4" off="$5" tomb="${6:-}" tmp first lit="${RF_NULL_LITERAL:-null}" extra=()
+  # tomb=sentinel: ask the consumer to render a null value as a unique sentinel, so a JSON value that is the text "null" is not a tombstone
+  if [ "$tomb" = sentinel ]; then lit="__OE_TOMBSTONE__"; extra=(--property "null.literal=$lit"); fi
   tmp="$(mktemp)"
   # < /dev/null is REQUIRED, not hygiene: kafka-console-consumer reads stdin, and without this it
   # swallows the caller's `while read ... <<<` herestring — the outer topic loop then silently
   # processes one topic and stops, which looks exactly like a clean pass.
   if ! "$cli" --bootstrap-server "$bs" --topic "$topic" --partition "$part" \
-        --offset "$off" --max-messages 1 --timeout-ms "${RF_WIRE_TIMEOUT_MS:-15000}" \
+        --offset "$off" --max-messages 1 --timeout-ms "${RF_WIRE_TIMEOUT_MS:-15000}" ${extra[@]+"${extra[@]}"} \
         > "$tmp" 2>/dev/null < /dev/null; then
     # A compacted-away offset reads as empty rather than as a failure; treat unreadable as unknown.
     if [ ! -s "$tmp" ]; then rm -f "$tmp"; return 2; fi
   fi
+  # ZERO bytes is NEVER evidence of a tombstone: a timeout, a compacted-away offset and a dead consumer all look like this.
   if [ ! -s "$tmp" ]; then rm -f "$tmp"; return 2; fi
   first="$(od -An -tx1 -N1 "$tmp" | tr -d ' \n')"
   ids="$(od -An -tx1 -j1 -N4 "$tmp" | tr -d ' \n')"
   # A tombstone: the consumer renders a null value as its null literal on a line of its own.
-  if [ "$(tr -d '\n\r' < "$tmp")" = "${RF_NULL_LITERAL:-null}" ]; then
+  if [ "$(tr -d '\n\r' < "$tmp")" = "$lit" ]; then
     rm -f "$tmp"; return 0
   fi
   rm -f "$tmp"
@@ -269,7 +272,7 @@ rf_wire_is_avro() {
     return 0
   fi
   echo "    value at offset $off starts 0x$first (Avro is 0x00, a tombstone renders as" >&2
-  echo "    '${RF_NULL_LITERAL:-null}', hand-built JSON is 0x7b '{')" >&2
+  echo "    '$lit', hand-built JSON is 0x7b '{')" >&2
   return 1
 }
 
