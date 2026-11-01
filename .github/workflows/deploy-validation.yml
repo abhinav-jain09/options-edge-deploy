@@ -93,6 +93,17 @@ jobs:
       # them. The init container and the service must agree on image and on every value that decides
       # the subject names, and the rollout must roll BOTH to the same image — none of which is visible
       # from one manifest, so a drift would only show as a crash-loop whose subjects look registered.
+      # Keycloak's --import-realm parser REJECTS unknown fields, so one commentary key in a realm JSON
+      # stops the server booting — and oe-keycloak is on the prod mandatory list, so that is a platform
+      # auth outage. This guard has existed since the SECOND occurrence and catches the defect exactly,
+      # but nothing ran it: on 2026-10-25 a "//" key shipped a THIRD time and oe-keycloak crash-looped
+      # 32 times until the ConfigMap was fixed by hand. Unwired guards do not guard.
+      - name: Keycloak realm imports carry no commentary keys
+        run: bash scripts/keycloak/validate-realm-configmaps.sh
+
+      - name: Keycloak realm guard refuses its own violations (mutation test)
+        run: bash scripts/keycloak/validate-realm-configmaps-test.sh
+
       - name: es-spx-align schema provisioning agrees with the service it provisions for
         run: bash scripts/ci/validate-align-schema-provisioning.sh
 
@@ -156,6 +167,15 @@ jobs:
       - name: Test files are collectable by unittest (no silently-empty suites)
         run: bash scripts/ci/validate-tests-are-collectable.sh
 
+      # A container whose -Xmx equals its memory limit is OOMKilled (exit 137) before the JVM
+      # reaches its own ceiling, so there is no OutOfMemoryError and no heap dump to read — prod
+      # option-pressure-state-service died that way on 2026-10-19, and two more services carried
+      # the identical 100% setting untriggered. The per-overlay fix applied to
+      # option-price-behavior months earlier left its base at 100%, which is how the experiment
+      # overlay kept rendering the fault: a gate on the RENDER is the only thing that sees it.
+      - name: JVM heap leaves the container room for what is not heap
+        run: bash scripts/ci/validate-heap-leaves-container-headroom.sh
+
       # The es4 topic contract: topics.env is the single source of truth for the es4 broker, and
       # these two modules are what hold it to that. Both were among the uncollectable files above,
       # so neither had ever run here.
@@ -191,6 +211,12 @@ jobs:
       # reboot — a shorter boot list took production down twice (2026-08-24).
       - name: Boot bring-up and morning autostart hold down the same services
         run: python3 -m unittest -v tests.test_keep_down_lists_agree
+
+      # TA books (phases B, C, D, E and the W0 cutover): the producer / gateway flags are literal false in every manifest, the two new
+      # services are registered and HELD, the fixed-id schema maps register against a stand-in registry, the two topic barriers fail closed,
+      # and the destructive W0 roll-forward refuses behind every gate before its first delete. docs/ta-books/DEPLOY-ROLLOUT.md.
+      - name: TA-books deploy wiring, schema registration, topic barriers and the W0 roll-forward
+        run: python3 -m unittest -v tests.test_ta_geometry_deploy_wiring tests.test_ta_schema_registration tests.test_ta_service_topic_barriers tests.test_roll_forward_market_structure
 
       # The prevention half: every topic dev needs has ONE partition count and is created before any
       # service starts, and declarations match what owners create (2026-09-15 partition audit).

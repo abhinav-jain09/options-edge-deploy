@@ -26,6 +26,7 @@ topic_shape_resolve_declarations() {
       OPTIONS_EDGE_EXACT_PARTITION_TOPICS="${OPTIONS_EDGE_ES4_EXACT_PARTITION_TOPICS:-}"
       OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES="${OPTIONS_EDGE_ES4_TOPIC_RETENTION_OVERRIDES:-}"
       OPTIONS_EDGE_TOPIC_RETENTION_BYTES_OVERRIDES="${OPTIONS_EDGE_ES4_TOPIC_RETENTION_BYTES_OVERRIDES:-}"
+      OPTIONS_EDGE_TOPIC_MAX_MESSAGE_BYTES_OVERRIDES=""
       ;;
     *)
       echo "Unknown TOPIC_SET '$TOPIC_SET' (expected empty for dev/prod, or 'es4')" >&2
@@ -235,7 +236,12 @@ create_topic() {
   if [[ -n "$retention_bytes" ]]; then
     extra_configs+=(--config "retention.bytes=$retention_bytes")
   fi
-  if [[ "$topic" == "options.spx.market-structure.recovery" ]]; then
+  local max_message_bytes
+  max_message_bytes="$(topic_max_message_bytes "$topic")"
+  if [[ -n "$max_message_bytes" ]]; then
+    extra_configs+=(--config "max.message.bytes=$max_message_bytes")
+  fi
+  if topic_is_recovery_checkpoint "$topic"; then
     extra_configs+=(--config "segment.bytes=16777216" --config "max.compaction.lag.ms=300000")
   fi
   # --if-not-exists: CreateTopics is not idempotent on the CLIENT's own retry. The Kafka admin client retries a
@@ -255,6 +261,16 @@ create_topic() {
     --config "cleanup.policy=$cleanup_policy" \
     --config "min.insync.replicas=$MIN_ISR" \
     "${extra_configs[@]}"
+}
+
+# The transactional recovery-checkpoint topics: a compacted log of large records that is rewritten every fold, which needs the small-segment
+# compaction cadence (16 MiB segments, 5 min max compaction lag) or the active 1 GiB segment is never cleaned. market-structure-service's
+# since its first deploy; wave-cycle-service's (ELLIOTT-FIB-CYCLE-TOOLS E-R11.3) takes "the figure the structure service uses" and so the same cadence.
+topic_is_recovery_checkpoint() {
+  case "$1" in
+    options.spx.market-structure.recovery|options.spx.wave-cycle.recovery|options.spx.break-classification.checkpoint) return 0 ;;
+  esac
+  return 1
 }
 
 topic_cleanup_policy() {
@@ -317,6 +333,19 @@ topic_retention_bytes() {
   echo ""
 }
 
+# Per-topic max.message.bytes override, e.g. "options.spx.break-classification.checkpoint=9437184". Empty for unlisted topics (broker default). break-classifier-service
+# refuses to start unless its checkpoint topic accepts records of at least 8 MiB, so a wipe must recreate that topic at the declared bound, not at the broker default.
+topic_max_message_bytes() {
+  local topic="$1" entry
+  for entry in ${OPTIONS_EDGE_TOPIC_MAX_MESSAGE_BYTES_OVERRIDES:-}; do
+    if [[ "${entry%%=*}" == "$topic" ]]; then
+      echo "${entry#*=}"
+      return
+    fi
+  done
+  echo ""
+}
+
 # Per-topic retention override (ms), e.g. "spx.basis.state=-1". Unlisted topics use $RETENTION_MS.
 topic_retention_ms() {
   local topic="$1" entry
@@ -351,7 +380,8 @@ alter_topic_config() {
       --add-config "retention.ms=$(topic_retention_ms "$topic"),cleanup.policy=$(kafka_config_value "$cleanup_policy"),min.insync.replicas=$MIN_ISR$( \
         dr="$(topic_delete_retention_ms "$topic")"; [[ -n "$dr" ]] && echo ",delete.retention.ms=$dr")$( \
         rb="$(topic_retention_bytes "$topic")"; [[ -n "$rb" ]] && echo ",retention.bytes=$rb")$( \
-        [[ "$topic" == "options.spx.market-structure.recovery" ]] && echo ",segment.bytes=16777216,max.compaction.lag.ms=300000")"; then
+        mb="$(topic_max_message_bytes "$topic")"; [[ -n "$mb" ]] && echo ",max.message.bytes=$mb")$( \
+        topic_is_recovery_checkpoint "$topic" && echo ",segment.bytes=16777216,max.compaction.lag.ms=300000")"; then
       return 0
     fi
     sleep 1

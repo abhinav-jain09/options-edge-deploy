@@ -60,6 +60,17 @@ NAMESPACE="$(yq -r ".services[] | select(.name == \"$SERVICE\") | .namespace // 
 [ -n "$NAMESPACE" ] || { echo "FATAL: $SERVICE is not registered in services.yaml — register it before deploying" >&2; exit 1; }
 echo "=== service-deploy: $SERVICE -> namespace $NAMESPACE (env=$ENVIRONMENT) ==="
 
+# Fail CLOSED on an unset/empty/unreadable KUBECONFIG before touching any cluster. Jenkins DROPS
+# environment{} entries whose value is the empty string, so a deployer kubeconfig that failed to
+# resolve (e.g. oeProfile evaluated in the pipeline-level environment{} WITHOUT a node returns "")
+# leaves KUBECONFIG unset — and `kubectl` then silently falls back to the agent's DEFAULT cluster.
+# On a build host that deploys to dev (.102) / prod (.252) / es, that default is the WRONG cluster;
+# that is exactly how a web deploy hit the laptop's local docker-desktop (no options-edge) and failed
+# late. Refuse here instead of deploying somewhere unintended.
+: "${KUBECONFIG:?FATAL: KUBECONFIG is unset/empty — refusing to deploy via the agent default cluster. The Jenkins job must set it from oeProfile(ENVIRONMENT).kubeconfigDeployer (or pass KUBECONFIG_FILE).}"
+[ -r "$KUBECONFIG" ] || { echo "FATAL: KUBECONFIG='$KUBECONFIG' is not a readable file — refusing to deploy." >&2; exit 1; }
+echo "deployer kubeconfig: $KUBECONFIG (server $(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null || echo '?'))"
+
 # The namespace must already exist. Creating one is a platform action with its own job and
 # its own credential (see k8s/tenants/<tenant>/bootstrap), never a side effect of a service
 # deploy — otherwise a typo in the registry silently creates a namespace and deploys into it.
@@ -242,6 +253,10 @@ for _claim in $(yq -r 'select(.kind == "Deployment") | .spec.template.spec.volum
 done
 
 # --- §13.7 digest-pin the image (fail-closed via the shared resolver) -----------------
+# The dev images are named host.docker.internal:5001/... (resolved by kubelet ON the dev host). On a REMOTE
+# Jenkins agent that name is the agent's own loopback, so read the digest over the LAN at the dev box's IP
+# (same default as apply.sh; override with DEV_HOST_IP or REGISTRY_RESOLVE_HOST).
+if [ "${ENVIRONMENT:-dev}" = "dev" ]; then export REGISTRY_RESOLVE_HOST="${REGISTRY_RESOLVE_HOST:-${DEV_HOST_IP:-192.168.100.102}:5001}"; else unset REGISTRY_RESOLVE_HOST; fi
 . scripts/deploy/pin-image.sh
 PINNED_IMAGE="$(pin_ref "$MUTABLE_IMAGE")" || {
   echo "FATAL: cannot resolve registry digest for $MUTABLE_IMAGE (is the image built + pushed for $ENVIRONMENT?)" >&2
@@ -312,6 +327,25 @@ if [ "$SERVICE" = "bleedingoptions-gamma-lab" ]; then
   bash "$(dirname "$0")/verify-public-gate.sh" --rendered "$RENDER" \
     || { echo "FATAL: the public Gamma Lab gate refused this deploy" >&2; exit 1; }
 fi
+
+# BEGIN MS_IGNORE_RECOVERY_ROLLOVER — scripts/deploy/service-deploy-ms-rollover-inject-test.sh extracts and runs this block
+# The W0 recovery-method rollover (docs/ta-books/MARKET-STRUCTURE-AVRO-CUTOVER.md section 5, step 2): the ms-runtime-5 image cannot read the
+# ms-runtime-3 JSON checkpoint ("recovery checkpoint refused"), so its ONE first start must run with MARKET_STRUCTURE_IGNORE_RECOVERY=true and
+# rebuild the day from the retained inputs. The flag is injected into the RENDER here, from the Jenkins parameter, and is never committed to the
+# manifest: the next ordinary deploy of the same service (runbook step 5) has no flag and so removes it, with no second PR to forget (the
+# ms-runtime-3 rollover needed #1227 to add it and #1235 to remove it). The RTH_ROLLOVER_GATE below keys on the RENDER, so an injected flag
+# is refused inside Mon-Fri 09:30-16:00 America/New_York exactly like a committed one, with no override.
+if [ "${MARKET_STRUCTURE_IGNORE_RECOVERY_ROLLOVER:-false}" = "true" ]; then
+  [ "$SERVICE" = "market-structure" ] || { echo "FATAL: MARKET_STRUCTURE_IGNORE_RECOVERY_ROLLOVER=true is for SERVICE=market-structure only (got '$SERVICE'). Nothing was applied." >&2; exit 1; }
+  if [ -n "$(yq -r 'select(.kind == "Deployment" and .metadata.name == "market-structure-service") | .spec.template.spec.containers[0].env[]? | select(.name == "MARKET_STRUCTURE_IGNORE_RECOVERY") | .name' "$RENDER" | { grep -v '^---$' || true; })" ]; then
+    echo "FATAL: the rendered market-structure-service already sets MARKET_STRUCTURE_IGNORE_RECOVERY; the rollover parameter injects it and the manifest must not carry it. Nothing was applied." >&2; exit 1
+  fi
+  yq -i '(select(.kind == "Deployment" and .metadata.name == "market-structure-service") | .spec.template.spec.containers[0].env) += [{"name": "MARKET_STRUCTURE_IGNORE_RECOVERY", "value": "true"}]' "$RENDER"
+  [ "$(yq -r 'select(.kind == "Deployment" and .metadata.name == "market-structure-service") | .spec.template.spec.containers[0].env[] | select(.name == "MARKET_STRUCTURE_IGNORE_RECOVERY") | .value' "$RENDER" | { grep -v '^---$' || true; })" = "true" ] \
+    || { echo "FATAL: could not inject MARKET_STRUCTURE_IGNORE_RECOVERY=true into the render. Nothing was applied." >&2; exit 1; }
+  echo "ms rollover: MARKET_STRUCTURE_IGNORE_RECOVERY=true injected into the render for THIS apply only (not in git)"
+fi
+# END MS_IGNORE_RECOVERY_ROLLOVER
 
 # --- §13.2 record the CURRENT image for rollback BEFORE mutating -----------------------
 PREV_FILE="$WORK_DIR/${SERVICE}-${ENVIRONMENT}-previous.txt"; : >"$PREV_FILE"

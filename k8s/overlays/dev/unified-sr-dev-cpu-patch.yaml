@@ -1,0 +1,20 @@
+# DEV: unified-sr-service CPU REQUEST 500m (shared base 2 cores). DEV ONLY - production and experiment keep the base value.
+# The base request was raised from 250m to 2 cores on 2026-10-16 (PR #1234) for PRODUCTION: it was measured on the 24-core prod host sustaining 155-197% CPU while working through a
+# 24M-record backlog, and a 250m weight made it yield to every other service when that host was oversubscribed. That change lives in the SHARED base, so dev inherited it, and dev is a 16-core node:
+# on 2026-10-31 its requests had RESERVED 15.8 cores (98%), and two newly enabled services (vix-option-inteligence 500m, volume-pace-databento 250m) were Unschedulable ("Insufficient cpu").
+# Dev ran unified-sr at 250m for months before #1234 with no recorded lag, and has no multi-million-record backlog, so dev gets 500m: double its pre-#1234 weight, 1.5 cores less reserved.
+# A REQUEST is a scheduler reservation and a share weight, not a cap: there is no CPU limit, so catch-up on dev can still burst. Memory is untouched.
+# If dev's unified-sr ever falls behind under real contention, raise THIS value, not the base.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: unified-sr-service
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: unified-sr
+          resources:
+            requests:
+              cpu: 500m

@@ -28,12 +28,26 @@ class Registry:
         return {'id':42,'schemaType':'AVRO','schema':json.dumps(self.schema)} if self.present else None
 
 class CvdSchemasTest(unittest.TestCase):
+    def test_selective_registration_touches_only_the_requested_existing_topic(self):
+        names=['futures.cvd','futures.level-absorption.path']
+        self.assertEqual(names,m.selected_topics(names,''))
+        self.assertEqual(['futures.level-absorption.path'],m.selected_topics(names,'futures.level-absorption.path'))
+        for spec in ['missing','futures.level-absorption.path,futures.level-absorption.path','futures.footprint']:
+            with self.assertRaises(ValueError):m.selected_topics(names,spec)
+
+    def test_absorption_topic_is_created_then_registered_before_rollout(self):
+        pipeline=(ROOT/'Jenkinsfile.service-deploy').read_text()
+        created=pipeline.index('          scripts/kafka/ensure-absorption-path-topic.sh')
+        registered=pipeline.index('CVD_SCHEMA_TOPICS=futures.level-absorption.path',created)
+        configured=pipeline.index("stage('Apply level-absorption configuration')",registered)
+        self.assertLess(created,registered);self.assertLess(registered,configured)
+
     def test_frozen_external_inventory_and_single_prefix(self):
-        self.assertEqual(31,len(m.BINDINGS));self.assertEqual(31,len(set(m.BINDINGS.values())))
+        self.assertEqual(34,len(m.BINDINGS));self.assertEqual(34,len(set(m.BINDINGS.values())))
         for topic,resource in m.BINDINGS.items():
             self.assertEqual(resource,m.binding(topic))
             if not topic.startswith('es.'):self.assertEqual(resource,m.binding('es.'+topic))
-        for unknown in ['context-tape.direction.progress','futures.level-absorption.manual-line','es.es.futures.cvd','es.es.open-direction.forecast','options.databento.gex.strike','es.futures.cvd.avro']:
+        for unknown in ['context-tape.direction.progress','es.es.futures.cvd','es.es.open-direction.forecast','options.databento.gex.strike','es.futures.cvd.avro']:
             self.assertIsNone(m.binding(unknown))
     def test_dry_missing_performs_lookup_only(self):
         r=Registry();result=m.reconcile('http://registry','es.futures.cvd',TEXT,False,r)
@@ -111,5 +125,94 @@ class CvdSchemasTest(unittest.TestCase):
         with patch.dict(os.environ,{},clear=True),patch.object(m.subprocess,'Popen') as child,patch.object(m.Path,'mkdir') as mkdir,patch.object(m.urllib.request,'urlopen') as http:
             with self.assertRaisesRegex(ValueError,'Guarded Jenkins'):m.main()
             child.assert_not_called();mkdir.assert_not_called();http.assert_not_called()
+
+
+class PathSessionEvolution(unittest.TestCase):
+    def target(self):
+        import zipfile
+        with zipfile.ZipFile(os.environ['CANONICAL_PACKAGED_ARTIFACT']) as jar:
+            return jar.read('cvd-related/AbsorptionPathSnapshot.avsc').decode()
+    def registry(self,text,change=None):
+        target=json.loads(text);old={**target,'fields':target['fields'][:-3]};calls=[]
+        if change:change(old)
+        def call(url,path,body=None,missing=False):
+            calls.append((path,body))
+            if path.endswith('/versions?deleted=true'):return [1]
+            if '/compatibility/' in path:return {'is_compatible':True}
+            if path.endswith('/versions/1'):return {'id':41,'schema':json.dumps(old)}
+            if path.endswith('/versions'):return {'id':42}
+            if path.startswith('/schemas/ids/'):return {'schema':text}
+            if any(p.endswith('/versions') for p,b in calls):return {'id':42,'schema':text}
+            return None
+        return calls,call
+    def test_exact_released_predecessor_dry_run_then_register_and_verify(self):
+        text=self.target()
+        for topic in ['futures.level-absorption.path','es.futures.level-absorption.path']:
+            for apply in [False,True]:
+                calls,call=self.registry(text);result=m.reconcile('http://registry',topic,text,apply,call)
+                self.assertEqual(apply,result['registered'])
+                self.assertEqual(apply,any(p.endswith('/versions') and b for p,b in calls))
+                self.assertTrue(any('/compatibility/' in p for p,b in calls))
+    def test_foreign_predecessor_and_behavioral_changes_refuse_without_write(self):
+        for change in [lambda n:n.update(name='Other'),lambda n:n['fields'][0].update(type='string'),lambda n:n['fields'].pop()]:
+            text=self.target();calls,call=self.registry(text,change)
+            with self.assertRaises(ValueError):m.reconcile('http://registry','futures.level-absorption.path',text,True,call)
+            self.assertFalse(any(p.endswith('/versions') and b for p,b in calls))
+    def test_any_other_topic_or_target_extension_is_not_an_evolution_exception(self):
+        text=self.target();n=json.loads(text);n['fields'][-1]['default']=1
+        for topic,target in [('futures.cvd',text),('es.es.futures.level-absorption.path',text),('futures.level-absorption.path',json.dumps(n))]:
+            calls,call=self.registry(target)
+            with self.assertRaisesRegex(ValueError,'history conflicts'):m.reconcile('http://registry',topic,target,True,call)
+            self.assertFalse(any(p.endswith('/versions') and b for p,b in calls))
+    def test_incompatible_deleted_and_invalid_history_fail_closed(self):
+        text=self.target()
+        for mode in ['incompatible','deleted','metadata','oversize','duplicate','boolean']:
+            calls,original=self.registry(text)
+            def call(url,path,body=None,missing=False):
+                if mode=='deleted' and path.endswith('/versions/1'):raise ValueError('deleted version')
+                if mode=='metadata' and path.endswith('/versions/1'):return {'schema':text,'metadata':{'x':'y'}}
+                if mode=='incompatible' and '/compatibility/' in path:return {'is_compatible':False}
+                if path.endswith('/versions?deleted=true'):
+                    if mode=='oversize':return list(range(1,18))
+                    if mode=='duplicate':return [1,1]
+                    if mode=='boolean':return [True]
+                return original(url,path,body,missing)
+            with self.subTest(mode=mode),self.assertRaises(ValueError):m.reconcile('http://registry','futures.level-absorption.path',text,True,call)
+            self.assertFalse(any(p.endswith('/versions') and b for p,b in calls))
+
+
+class EnvironmentSelection(unittest.TestCase):
+    def test_default_is_all_three_in_order(self):
+        self.assertEqual(['es4','dev','production'],[e[0] for e in m.selected_endpoints('es4,dev,production')])
+
+    def test_dev_alone_selects_only_the_dev_registry(self):
+        self.assertEqual([('dev','192.168.100.102:19092','http://192.168.100.102:8082')],m.selected_endpoints('dev'))
+
+    def test_unknown_repeated_or_empty_names_are_refused(self):
+        for bad in ['','prod','dev,dev','dev,','es4,qa']:
+            with self.subTest(bad=bad),self.assertRaises(ValueError):m.selected_endpoints(bad)
+
+    def test_only_the_selected_cluster_is_read_and_it_carries_the_dev_only_bindings(self):
+        asked=[]
+        def fake(bootstrap,directory):asked.append(bootstrap);return ['futures.level-absorption.events','futures.level-absorption.manual-line']
+        with tempfile.TemporaryDirectory() as d:
+            inv=m.build_inventory(Path(d),'dev',fake)
+        self.assertEqual(['192.168.100.102:19092'],asked)
+        self.assertEqual(['dev'],[e[0] for e in inv])
+        for topic in inv[0][2]:self.assertIsNotNone(m.binding(topic),topic)
+        self.assertEqual('cvd-related/LevelAbsorptionEvent.avsc',m.binding('futures.level-absorption.events'))
+        self.assertEqual('cvd-related/LevelAbsorptionManualLine.avsc',m.binding('futures.level-absorption.manual-line'))
+        self.assertEqual('cvd-related/CandleDirectionExportRecord.avsc',m.binding('context-tape.direction.candle-export'))   # T-18
+
+    def test_default_reads_all_three_clusters(self):
+        asked=[]
+        with tempfile.TemporaryDirectory() as d:
+            m.build_inventory(Path(d),'es4,dev,production',lambda b,_:asked.append(b) or [])
+        self.assertEqual(['192.168.100.4:9092','192.168.100.102:19092','192.168.100.252:9092'],asked)
+
+    def test_the_job_defaults_to_all_three_and_the_script_reads_the_variable(self):
+        jf=(ROOT/'Jenkinsfile.es4-deploy').read_text()
+        self.assertIn("name: 'CVD_SCHEMA_ENVIRONMENTS', defaultValue: 'es4,dev,production'",jf)
+        self.assertIn("os.environ.get('CVD_SCHEMA_ENVIRONMENTS','es4,dev,production')",(ROOT/'scripts/kafka/register-cvd-schemas.py').read_text())
 
 if __name__=='__main__':unittest.main()

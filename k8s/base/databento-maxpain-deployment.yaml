@@ -64,8 +64,14 @@ spec:
               value: "16:00"
             - name: KAFKA_STREAMS_STATE_DIR
               value: /var/lib/options-edge/kafka-streams
+              # The heap must leave the container room for what is NOT heap: RocksDB,
+              # metaspace, thread stacks, code cache and direct buffers. -Xmx set to the
+              # container limit is OOMKilled (exit 137) before the JVM ever reaches its own
+              # ceiling, so there is no OutOfMemoryError to read — prod
+              # option-pressure-state-service died that way on 2026-10-19. 50% of the limit
+              # is this fleet's modal ratio (see validate-heap-leaves-container-headroom.sh).
             - name: JAVA_TOOL_OPTIONS
-              value: "-Xms512m -Xmx2g"
+              value: "-Xms512m -Xmx1024m"
           ports:
             - name: health
               containerPort: 8101

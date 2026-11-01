@@ -51,10 +51,23 @@ KEEP='keycloak'                                          # deployments to leave 
 # ledger. Lifting replicas WITHOUT this edit would have them come up and be pinned straight
 # back to 0 by the scale-up loop below, which is #1034's lesson about closing only some of
 # the hold paths.
+# USER 2026-10-26: corridor-gauge-service is OFF PERMANENTLY on dev and production. It has no *_ENABLED flag, so
+# replicas IS the switch and k8s/base/corridor-gauge-deployment.yaml sets 0 — but that base alone is NOT enough,
+# because do_start below scales every deployment NOT named here to 1 regardless of what the manifest says. The
+# name was added to the operational copy on .102 and never to this versioned one, so the two lists diverged and a
+# repo-driven start would have switched the service back on against the decision. trade-evidence-api has no
+# manifest in this repo at all; do_start would otherwise lift an unmanaged deployment, so it is held here too.
+# 2026-10-31: spread-skew-service REMOVED from this list (owner lifted the hold for DEV only: market-commentary
+# needs options.spx.spread-skew.current). Production stays held, so morning-autostart.sh and oe-boot-bringup.sh
+# KEEP_DOWN (prod scripts) keep it. spread-skew-postgres-writer stays held here.
+# 2026-10-28: thetadata-feed-service and level-absorption-service were on the .102 copy and are deliberately NOT
+# here. thetadata-feed runs at 1 on dev (owner decision 2026-09-19, dev is the data source for prod); the
+# level-absorption crashloop that justified holding it was fixed and it is ready and emitting. The .102 copy is
+# re-synced from this file, which is the single source of truth.
 # USER 2026-10-14: zerodte-research-writer is deployed DARK (Stage-B: its zerodte-writer-identity config map is created
 # only by the provisioning job, not yet run), so it can only crash with CreateContainerConfigError. The start script used to scale it to 1 on
 # every start and the partition doctor then reported it INCONCLUSIVE (exit 5). Hold it at 0 until the provisioning job has run.
-DISABLED_DEV='hpsf-stage-a-service|hpsf-stage-b-service|volume-pace-service|volume-pace-databento-service|volume-sandwich-service|volume-sandwich-databento-service|databento-timewarp-snapshot-replay|strike-flow-classifier-ibkr|options-edge-integration-test|databento-mission-pressure-service|databento-mission-pace-service|spx-mission-control-service|short-premium-agent-service|spread-skew-service|spread-skew-postgres-writer|directional-pressure-databento-service|databento-maxpain-service|databento-mission-sandwich-service|directional-pressure-service|option-truth-engine-service|stock-gex-service|dealer-ledger-service|dealer-ledger-calibration-scorer|dealer-ledger-calibration-accumulator|vix-option-inteligence-service|hedging-pressure-service|zerodte-research-writer|break-score-service|level-absorption-service'
+DISABLED_DEV='hpsf-stage-a-service|hpsf-stage-b-service|volume-pace-service|volume-sandwich-service|volume-sandwich-databento-service|databento-timewarp-snapshot-replay|strike-flow-classifier-ibkr|options-edge-integration-test|databento-mission-pressure-service|databento-mission-pace-service|spx-mission-control-service|short-premium-agent-service|spread-skew-postgres-writer|directional-pressure-databento-service|databento-maxpain-service|databento-mission-sandwich-service|directional-pressure-service|option-truth-engine-service|stock-gex-service|dealer-ledger-service|dealer-ledger-calibration-scorer|dealer-ledger-calibration-accumulator|hedging-pressure-service|zerodte-research-writer|corridor-gauge-service|trade-evidence-api|break-score-service'
 # OVERNIGHT ES-tracking set — the ONLY services brought up right after the (17:20 ET, trading days) clean,
 # so ES futures are tracked overnight. Everything else stays at 0 until the 06:15 ET full start. (2026-08-03: was 07:30)
 # databento-feed + databento-gex-service are kept alive overnight so the pre-market LIVE OI path runs before
@@ -284,7 +297,7 @@ clean_logs() {
   fi
 }
 
-# topic_desired NAME -> sets DPOL/DPARTS/DRET/DDR from the eval'd topics.env lists. Globals, not an
+# topic_desired NAME -> sets DPOL/DPARTS/DRET/DDR/DMB from the eval'd topics.env lists. Globals, not an
 # associative array: this file's `#!/usr/bin/env bash` resolves against the INHERITED PATH (the
 # export at the top of this script runs too late to matter), so under launchd it can be /bin/bash
 # 3.2, which has neither `declare -A` nor namerefs. Mirrors apply-topics.sh's topic_cleanup_policy /
@@ -300,7 +313,7 @@ clean_logs() {
 # restored it — is therefore still invisible here and is repaired by the next real deploy.
 topic_desired() {
   local name="$1" spec entry
-  DPOL=delete; DPARTS=32; DRET=""; DDR=""
+  DPOL=delete; DPARTS=32; DRET=""; DDR=""; DMB=""
   for spec in $OPTIONS_EDGE_TOPICS; do
     [ "${spec%%:*}" = "$name" ] && [ -n "${spec##*:}" ] && DPARTS="${spec##*:}"
   done
@@ -320,6 +333,11 @@ topic_desired() {
   # silently stripped the 48h guarantee.
   for entry in ${OPTIONS_EDGE_TOPIC_DELETE_RETENTION_OVERRIDES:-}; do
     [ "${entry%%=*}" = "$name" ] && DDR="${entry#*=}"
+  done
+  # Per-topic max.message.bytes (break-classifier's checkpoint must accept >= 8 MiB records; the dev broker default is 1 MiB and stays 1 MiB: the limit is topic-level). Without it a wipe would rebuild that
+  # topic at the broker default and the service would refuse to start.
+  for entry in ${OPTIONS_EDGE_TOPIC_MAX_MESSAGE_BYTES_OVERRIDES:-}; do
+    [ "${entry%%=*}" = "$name" ] && DMB="${entry#*=}"
   done
 }
 
@@ -341,7 +359,7 @@ topic_desired() {
 # live data. It is reported loudly instead and left to apply-topics.sh, which fails closed on
 # OPTIONS_EDGE_EXACT_PARTITION_TOPICS and carries the gated destructive repair.
 reconcile_declared_topics() {
-  local desc line spec name cfg have_pol have_ret have_dr have_parts need polcfg fixed=0 drift=0
+  local desc line spec name cfg have_pol have_ret have_dr have_mb have_parts need polcfg fixed=0 drift=0
   desc="$($KT --bootstrap-server $BS --describe 2>/dev/null | grep '^Topic:')"
   if [ -z "$desc" ]; then
     echo "  WARNING: could not describe topics — declared shapes NOT verified this run."
@@ -368,6 +386,7 @@ reconcile_declared_topics() {
     cfg="$(printf '%s' "$line" | sed 's/delete\.retention\.ms/DELRET/g')"
     have_ret="$(printf '%s' "$cfg" | sed -n 's/.*[,: ]retention\.ms=\(-\{0,1\}[0-9]*\).*/\1/p')"
     have_dr="$(printf '%s' "$cfg" | sed -n 's/.*DELRET=\([0-9]*\).*/\1/p')"
+    have_mb="$(printf '%s' "$cfg" | sed -n 's/.*[,: ]max\.message\.bytes=\([0-9]*\).*/\1/p')"
     need=""
     case "$DPOL" in
       # A declared-plain topic that simply inherits the broker default is CORRECT — only an
@@ -381,6 +400,7 @@ reconcile_declared_topics() {
     esac
     [ -n "$DRET" ] && [ "$have_ret" != "$DRET" ] && need="$need${need:+,}retention.ms=$DRET"
     [ -n "$DDR" ]  && [ "$have_dr"  != "$DDR"  ] && need="$need${need:+,}delete.retention.ms=$DDR"
+    [ -n "$DMB" ]  && [ "$have_mb"  != "$DMB"  ] && need="$need${need:+,}max.message.bytes=$DMB"
     if [ -n "$need" ]; then
       # `--add-config` separates entries with commas, so a comma-BEARING value must be bracketed
       # (cleanup.policy=[compact,delete]) or the broker reads "delete" as a second, malformed entry.
@@ -476,11 +496,32 @@ ensure_partition_only_topics() {
 # still-running external producer can auto-create its topic at ANY point during it — including
 # after any snapshot taken at the start. The pass runs on every caller, not just the wipe, so a
 # transient failure is retried by the next start instead of surviving until someone notices.
+# DEV-ONLY overnight ES-basis ESTIMATE topics (indicator-estimate sidecar). They are NOT in the deploy repo's topics.env on purpose (the estimate is
+# dev-only; prod must not grow them), so a clean used to leave them for the sidecar to create AFTER context-tape-service had already started, and
+# context-tape then subscribed only to the forming topic: the Order tab drew ONE candle that was replaced every minute (2026-10-21 20:3x ET).
+# Pre-creating them here, before any service starts, removes the race at its source (context-tape also now picks a late topic up by itself).
+# Same shapes the sidecar creates: bars = 1 partition / delete / 3 d retention, bars.current = 1 partition / compact / 1 d retention.
+ensure_dev_only_estimate_topics() {
+  # Retried: a Kafka admin endpoint that is briefly unavailable right after a restart must not leave the race open. A final failure is a LOUD warning
+  # but NOT fatal: a failed ensure_topics would hold the es4 mirrors paused for an optional dev-only topic (context-tape also picks a late topic up by itself).
+  local name policy retention i ok
+  for spec in "options.indicators.estimate.bars delete 259200000" "options.indicators.estimate.bars.current compact 86400000"; do
+    set -- $spec; name=$1; policy=$2; retention=$3; ok=0
+    for i in 1 2 3; do
+      if $KT --bootstrap-server $BS --create --if-not-exists --topic "$name" --partitions 1 --replication-factor 1 \
+          --config cleanup.policy=$policy --config retention.ms=$retention >/dev/null 2>&1; then ok=1; break; fi
+      sleep 2
+    done
+    if [ $ok = 1 ]; then echo "  dev-only estimate topic ready: $name"
+    else echo "  WARNING: could not create $name after 3 tries — the Order tab may show one candle until context-tape-service is restarted"; fi
+  done
+}
+
 ensure_topics() {
   git -C "$DEPLOY_REPO" fetch -q origin main 2>/dev/null || true
   local tenv; tenv="$(git -C "$DEPLOY_REPO" show "$TOPICS_ENV_REF" 2>/dev/null)"
   if [ -n "$tenv" ]; then
-    eval "$(printf '%s\n' "$tenv" | grep -E '^OPTIONS_EDGE_(TOPICS|COMPACTED_TOPICS|PURE_COMPACT_TOPICS|EXACT_PARTITION_TOPICS|TOPIC_RETENTION_OVERRIDES|TOPIC_DELETE_RETENTION_OVERRIDES|PARTITION_ONLY_TOPICS)=')"
+    eval "$(printf '%s\n' "$tenv" | grep -E '^OPTIONS_EDGE_(TOPICS|COMPACTED_TOPICS|PURE_COMPACT_TOPICS|EXACT_PARTITION_TOPICS|TOPIC_RETENTION_OVERRIDES|TOPIC_DELETE_RETENTION_OVERRIDES|TOPIC_MAX_MESSAGE_BYTES_OVERRIDES|PARTITION_ONLY_TOPICS)=')"
     local n=0 spec name extra rt existing missing=0
     # One --list, then create only what is missing (in parallel). A failed list falls back to creating every
     # declared topic: --if-not-exists makes that safe, only slower. Config of EXISTING topics is the
@@ -492,11 +533,13 @@ ensure_topics() {
       topic_desired "$name"
       extra=""; [ -n "$DDR" ]  && extra="--config delete.retention.ms=$DDR"
       rt="";    [ -n "$DRET" ] && rt="--config retention.ms=$DRET"
+      [ -n "$DMB" ] && extra="$extra --config max.message.bytes=$DMB"
       echo "--topic $name --partitions $DPARTS --replication-factor 1 --config cleanup.policy=$DPOL $extra $rt"
     done | create_topics_parallel)
     echo "Pre-created $n platform topics from deploy config ($TOPICS_ENV_REF); apps self-create the rest on startup."
     ensure_partition_only_topics
     reconcile_declared_topics
+    ensure_dev_only_estimate_topics
     echo "  topics present now: $($KT --bootstrap-server $BS --list 2>/dev/null | grep -vcE '^__|^_schemas')"
   else
     echo "  WARNING: could not read deploy topics.env ($DEPLOY_REPO $TOPICS_ENV_REF) — apps will create their topics on startup (slower to READY)."
@@ -668,6 +711,29 @@ do_es_down() {
 }
 
 # ---------- FULL START: pre-create source topics, then scale ALL active apps up READY ----------
+
+# Count how many times the indicator-service container reports the "no epoch recovery copy" fatal, in its
+# CURRENT and its PREVIOUS container instance. Two traps, both seen on 2026-10-22:
+#  * the pod has TWO containers (indicator-estimate, indicator-service) and a bare `kubectl logs deploy/...`
+#    reads the FIRST, which never holds the exception - so the container is named;
+#  * after a restart the signature can be only in the terminated instance, so --previous is read too (it
+#    legitimately fails when there was no previous instance, which is not an error).
+# A failure to read the CURRENT container (a rename, a missing pod) is reported on stderr instead of reading as
+# "no failure", which is how this check went silently blind.
+indicator_epoch_fatal_count() {
+  local flag out rc n=0
+  for flag in "" "--previous"; do
+    # `&& rc=0 || rc=$?` keeps an expected non-zero (no previous instance) from tripping errexit/inherit_errexit.
+    out=$($KK logs deploy/indicator-service -c indicator-service $flag --tail=200 2>&1) && rc=0 || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      [ -z "$flag" ] && echo "  ⚠ cannot read the indicator-service container logs (rc=$rc): $(printf '%s' "$out" | head -1)" >&2
+      continue
+    fi
+    n=$((n + $(printf '%s\n' "$out" | grep -c "INDICATOR_EPOCH_GENESIS is not authorized" || true)))
+  done
+  echo "$n"
+}
+
 do_start() {
   ensure_topics; resume_dev_mirrors_if_declared $?
   # Scale UP everything EXCEPT the DEV-disabled set. This is load-bearing: if we scaled ALL to 1 and
@@ -714,11 +780,14 @@ do_start() {
     # 2026-09-24 (2nd occurrence): checking immediately after the straggler restart above caught the
     # pod BEFORE it had reprocessed far enough to hit the exception again — a false negative, not a
     # fixed bug. Poll for up to ~30s for EITHER outcome (ready, or the fatal signature) before deciding.
+    # indicator_epoch_fatal_count (above) names the container and reads --previous too: a bare
+    # `kubectl logs deploy/...` read the wrong container, counted 0 forever, and the one-time genesis below
+    # silently never ran (2026-10-22: after a clean the indicator and market-structure stayed down).
     epoch_fatal=0
     for i in $(seq 1 6); do
       rr=$($KK get deploy indicator-service -o jsonpath='{.status.readyReplicas}' 2>/dev/null)
       [ "${rr:-0}" -ge 1 ] && break
-      epoch_fatal=$($KK logs deploy/indicator-service --tail=200 2>/dev/null | grep -c "INDICATOR_EPOCH_GENESIS is not authorized" || true)
+      epoch_fatal=$(indicator_epoch_fatal_count)
       [ "${epoch_fatal:-0}" -gt 0 ] && break
       sleep 5
     done

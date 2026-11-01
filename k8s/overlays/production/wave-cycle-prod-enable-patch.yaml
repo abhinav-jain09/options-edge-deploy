@@ -1,0 +1,51 @@
+# PRODUCTION: ELLIOTT-FIB-CYCLE-TOOLS wave-cycle-service LIVE with the calibrated release configuration (replicas 1, WAVE_CYCLE_ENABLED and WAVE_CYCLE_SEASONALITY_ENABLED "true",
+# the hash-pinned daily-bar snapshot). Release configuration source: processing docs/ta-books/catalog/ELLIOTT-FIB-CYCLE-TOOLS-SCHEMA-CHANGES.md section 6 (processing #1281 7b6294e0, #1283 063897ee).
+# The shared base (k8s/services/wave-cycle/base) stays replicas 0 / flags "false"; this production-only patch overrides it. No tuning variable is set: the registered defaults give
+# parameterSetHash eb3864e0d3e45adc52dafeb80f190a8ca623a61f030c3f250adb6387e677dd0a, and any other value makes the calibration null and the counts NOT_CALIBRATED.
+# WAVE_CYCLE_IGNORE_CHECKPOINT stays "false" (never committed true). The snapshot files are inside the image at /app/release/ (the Jib image stages wave-cycle-service/release there);
+# the service verifies the SHA-256 and the first/last/count before reading it, and only at a NEW bootstrap.
+# Preconditions: Avro subjects 2401-2405 (version 1) and WaveSet 2406 / CycleSet 2407 (version 2) registered on the production registry (10-22); options.indicators.bars exists and is
+# Avro (the indicator-service writer); the three output topics are ensured by the service-deploy barrier (scripts/kafka/ensure-wave-cycle-topics.sh) BEFORE the pod starts.
+# There is no earlier wave-cycle checkpoint on production (the Deployment did not exist). Reset class: options.spx.wave-cycle.recovery is RESET_REBUILDABLE (DEPLOY-ROLLOUT.md section 2).
+# Gateway relay (GATEWAY_WAVE_CYCLE_ENABLED) is a SEPARATE later change, after the version-2 gateway and web are live.
+# Rollback (complete, two levels, both through ONE reviewed PR + service-deploy SERVICE=wave-cycle; never kubectl on production):
+#  (1) publication off, durable: set WAVE_CYCLE_ENABLED and WAVE_CYCLE_SEASONALITY_ENABLED to "false" in this patch (replicas stays 1; the fold keeps running dark and is checkpointed, nothing is published), regenerate the
+#      slices (scripts/deploy/generate-service-slices.sh), deploy, and verify the live pod environment reads "false".
+#  (2) scaled to zero, durable: ALSO set replicas to 0 here AND re-add wave-cycle-service to KEEP_DOWN in BOTH scripts/ops/morning-autostart.sh and scripts/ops/oe-boot-bringup.sh in the same PR (a KEEP_DOWN-free
+#      zero-replica Deployment is scaled back to 1 by the next boot or morning start, so replicas 0 alone is NOT a rollback); verify the live Deployment reads replicas 0 and the lists agree (tests/test_keep_down_lists_agree.py).
+# SINGLE replica ONLY (strategy Recreate): transactional.id is the fixed wave-cycle-SPX.
+# MUST MIRROR the standalone slice k8s/services/wave-cycle/overlays/production (validate-services: mono==slice).
+# Provenance and preflight: the image activated is EXACTLY sha256:924b412cb64aa6b4f108fbe25f48d1d344c95ddcc9e5522e0f65e770f6aeb8f1 (options-edge-processing Jenkins build #2045, processing commit
+# 6c2105953e3d823ed82ebb4dcb8f89fa27778228, contracts 4ddf5a367bd5fa34b35d7c782e0529f79338eb0d, built with Jib for linux/amd64, :prod = that digest; entrypoint java -Xmx256m -XX:+UseSerialGC -jar /app/app.jar,
+# /app/release present, registry index/children/blobs verified full length). service-deploy pins the :prod tag to a digest at deploy time: compare the digest it prints with the line above BEFORE the apply, and the live imageID
+# (digest after '@' of the container NAMED wave-cycle) AFTER it; a different digest needs its own PR updating this line.
+# Verification after the run (pod UID and restartCount captured at first Running): restartCount 0 through 10 minutes, ERROR lines 0, "wave-cycle starting ... parameterSetHash=eb3864e0..." in the log,
+# fold_failed 0 and checkpoint_ignored 0; options.spx.wave-cycle.waves records decode as Avro schema id 2406, .cycles 2407, .recovery 2403/2404/2405; the waves records of the 5m/15m series carry calibration state CALIBRATED
+# once enough bars exist and the 1m series says NOT_CALIBRATED (by design); the production broker's OutOfOrderSequenceException rate is sampled before and after and must not rise.
+# Abort criteria: a restart, an ERROR or schema line, fold_failed > 0, or broker degradation: set WAVE_CYCLE_ENABLED false (or replicas 0) FIRST, then investigate.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wave-cycle-service
+  namespace: options-edge
+spec:
+  replicas: 1
+  template:
+    spec:
+      containers:
+        - name: wave-cycle
+          env:
+            - name: WAVE_CYCLE_ENABLED
+              value: "true"
+            - name: WAVE_CYCLE_SEASONALITY_ENABLED
+              value: "true"
+            - name: WC_DAILY_SNAPSHOT_PATH
+              value: /app/release/spx-daily-bar-history-20171002-20261009.avro
+            - name: WC_DAILY_SNAPSHOT_SHA256
+              value: 55d74b300e2cf7496740bfeada5de57db5f0d7f4e60b957064691e3c8e18a26c
+            - name: WC_DAILY_SNAPSHOT_FIRST
+              value: "2017-10-02"
+            - name: WC_DAILY_SNAPSHOT_LAST
+              value: "2026-10-09"
+            - name: WC_DAILY_SNAPSHOT_COUNT
+              value: "2268"

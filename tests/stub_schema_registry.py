@@ -18,10 +18,8 @@ class Registry:
         self.by_id: dict[int, str] = {}
         self.next_id = 100
         self.calls: list[str] = []
-        self.fail: list[tuple[str, str]] = []   # (METHOD, path-prefix) -> answer 500 (failure injection)
-
-    def injected(self, method: str, path: str) -> bool:
-        return any(method == m and path.startswith(p) for m, p in self.fail)
+        self.fail_next_mode_delete = 0   # DELETE /mode/<s> answers 500 this many times before it works (failure injection)
+        self.incompatible: set[str] = set()   # subjects whose NEW schema the compatibility endpoint refuses
 
     def register(self, subject: str, schema: str, id: int | None = None, version: int | None = None):
         if id is None:
@@ -60,8 +58,6 @@ class Handler(BaseHTTPRequestHandler):
         r = self.registry
         p = self.path
         r.calls.append("GET " + p)
-        if r.injected("GET", p):
-            return self._send(500, {"error_code": 500, "message": "injected"})
         if p == "/mode":
             return self._send(200, {"mode": r.global_mode})
         if p.startswith("/mode/"):
@@ -109,12 +105,14 @@ class Handler(BaseHTTPRequestHandler):
         p = self.path
         body = self._body()
         r.calls.append(f"PUT {p} {json.dumps(body)}")
-        if r.injected("PUT", p):
-            return self._send(500, {"error_code": 500, "message": "injected"})
         if p.startswith("/mode/"):
             if not r.mutable:
                 return self._send(422, {"error_code": 42205, "message": "Mode changes are not allowed"})
-            r.subject_modes[p[len("/mode/"):]] = body["mode"]
+            path, _, query = p[len("/mode/"):].partition("?")
+            # the real registry (7.3.1): IMPORT on a subject that already holds versions is refused unless ?force=true
+            if body.get("mode") == "IMPORT" and r.subjects.get(path) and "force=true" not in query.split("&"):
+                return self._send(422, {"error_code": 42205, "message": "Cannot import since found existing subjects"})
+            r.subject_modes[path] = body["mode"]
             return self._send(200, {"mode": body["mode"]})
         if p.startswith("/config/"):
             r.configs[p[len("/config/"):]] = body["compatibility"]
@@ -127,6 +125,9 @@ class Handler(BaseHTTPRequestHandler):
         r.calls.append("DELETE " + p)
         if p.startswith("/mode/"):
             s = p[len("/mode/"):]
+            if r.fail_next_mode_delete > 0:
+                r.fail_next_mode_delete -= 1
+                return self._send(500, {"error_code": 50001, "message": "injected failure"})
             if s in r.subject_modes:
                 mode = r.subject_modes.pop(s)
                 return self._send(200, {"mode": mode})
@@ -138,8 +139,6 @@ class Handler(BaseHTTPRequestHandler):
         p = self.path
         body = self._body()
         r.calls.append(f"POST {p} " + ("{schema…}" if "schema" in body else json.dumps(body)))
-        if r.injected("POST", p):
-            return self._send(500, {"error_code": 500, "message": "injected"})
         if p.startswith("/subjects/") and p.endswith("/versions"):
             s = p[len("/subjects/"):-len("/versions")]
             if "id" in body:
@@ -151,6 +150,11 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 id, version = r.register(s, body["schema"])
             return self._send(200, {"id": id})
+        if p.startswith("/compatibility/subjects/") and p.endswith("/versions/latest"):
+            s = p[len("/compatibility/subjects/"):-len("/versions/latest")]
+            if s not in r.subjects:
+                return self._send(404, {"error_code": 40401, "message": "Subject not found"})
+            return self._send(200, {"is_compatible": s not in r.incompatible})
         if p.startswith("/subjects/"):
             s = p[len("/subjects/"):].split("?")[0]
             for row in r.subjects.get(s, []):

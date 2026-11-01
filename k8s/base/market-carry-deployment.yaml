@@ -58,6 +58,29 @@ spec:
             # (gex: DATABENTO_GEX_DYNAMIC_CARRY_MAX_AGE_MS=660000).
             - name: MARKET_CARRY_MIN_PUBLISH_INTERVAL_MS
               value: "300000"
+            # COMMIT INTERVAL BACK TO 100 ms — the code default of 1000 (processing #1193) was
+            # MEASURED WORSE on production and is held off here until the real cause is fixed.
+            #
+            # The reasoning for 1000 was sound on paper: at 100 ms this service opens ~600
+            # transactions a minute to publish two records every 300 s, and every commit writes
+            # markers. What that reasoning missed is that a longer commit cycle holds a transaction
+            # open longer, and the production node is at 98% CPU — so the cycle stretched past
+            # transaction.timeout.ms (10 s), the broker fenced the producer, and Streams saw
+            # InvalidProducerEpochException -> TaskMigratedException and re-initialised the task,
+            # over and over.
+            #
+            # Measured on 2026-10-19 at an IDENTICAL 10,752 raw records/min on both sides:
+            #     100 ms   1.43 warnings per 1000 records,  16.2/min,   0 errors, raw lag single digits
+            #   1,000 ms  12.00 warnings per 1000 records, 111.8/min,  45 errors, raw lag 33,592
+            # Dev stayed on 100 ms throughout and had no lag at the same volume, which is what
+            # isolates this to the interval rather than to the hour or the data.
+            #
+            # So: the transaction churn is real and still worth removing, but not by this knob alone
+            # on a saturated box. Raising transaction.timeout.ms alongside it, or giving production
+            # back some CPU headroom, has to come first — and the next attempt gets measured on
+            # dev before production, which this one was not.
+            - name: MARKET_CARRY_STREAMS_COMMIT_INTERVAL_MS
+              value: "100"
             - name: KAFKA_STREAMS_STATE_DIR
               value: /var/lib/options-edge/kafka-streams
             - name: JAVA_TOOL_OPTIONS

@@ -194,6 +194,9 @@ echo "=== 6) durable topics are preserved by the destructive resets ==="
 # make that drift unmergeable rather than discoverable at 09:00 ET.
 bash scripts/ci/validate-durable-topic-preservation.sh
 
+# Level Absorption: the ConfigMap (configuration + retention artifact), the events topic's byte cap and the LA-050 topic names agree.
+bash scripts/ci/validate-level-absorption-config.sh
+
 # The OI anchor topic barrier: its parser, and the shipped script end to end against mocked CLIs.
 # Wired here because a regression test nothing runs is not a test -- and this particular parser has
 # already shipped one hole (it accepted "compact,delete", the exact policy it exists to reject).
@@ -205,6 +208,7 @@ for t in scripts/kafka/ensure-oi-anchor-topic-parse-test.sh scripts/kafka/ensure
          scripts/kafka/ensure-break-score-topics-test.sh \
          scripts/kafka/ensure-level-absorption-topics-test.sh \
          scripts/kafka/ensure-market-structure-topics-test.sh \
+         scripts/deploy/service-deploy-ms-rollover-inject-test.sh \
          scripts/kafka/ensure-market-commentary-topics-test.sh \
          scripts/kafka/ensure-early-auction-verdict-topics-test.sh \
          scripts/kafka/ensure-zero-dte-compression-topics-test.sh \
@@ -314,6 +318,14 @@ cvd_only_on "$TMP/mono-production.yaml" CVD_LEVELS_UI_STALE_MS options-edge-web
 [ "$SRC_STALE" -gt "$((HB + 2000))" ] || { echo "FAIL: CVD_LEVELS_SOURCE_STALE_MS ($SRC_STALE) must exceed CVD_LEVELS_HEARTBEAT_MS ($HB) + 2000"; exit 1; }
 [ "$UI_STALE" -gt "$((ALIGN_HB + 7000))" ] || { echo "FAIL: CVD_LEVELS_UI_STALE_MS ($UI_STALE) must exceed CVD_LEVELS_ALIGN_HEARTBEAT_MS ($ALIGN_HB) + 7000 (5s skew + 2s margin)"; exit 1; }
 echo "cvd-levels timing: SOURCE_STALE=$SRC_STALE > HB=$HB+2000; UI_STALE=$UI_STALE > ALIGN_HB=$ALIGN_HB+7000 (structural, owner-scoped)"
+# TEMPORARY (2026-10-22, see k8s/overlays/production/es-spx-align-prod-env-patch.yaml): while the stop-gap is in force the
+# production render carries ALIGN_CVD_LEVELS_ENABLED=false on es-spx-align ONLY. The change that removes the env removes
+# this assertion with it, in the same change set that deploys the processing#1290 image.
+cvd_only_on "$TMP/mono-production.yaml" ALIGN_CVD_LEVELS_ENABLED es-spx-align-service
+ALIGN_OFF="$(yq -r 'select(.kind=="Deployment" and .metadata.name=="es-spx-align-service")
+    | .spec.template.spec.containers[] | select(.name=="es-spx-align") | .env[]? | select(.name=="ALIGN_CVD_LEVELS_ENABLED") | .value' "$TMP/mono-production.yaml")"
+[ "$ALIGN_OFF" = "false" ] || { echo "FAIL: production es-spx-align must carry ALIGN_CVD_LEVELS_ENABLED=false while the stop-gap is in force (got '${ALIGN_OFF:-absent}')"; exit 1; }
+echo "cvd-levels aligner: ALIGN_CVD_LEVELS_ENABLED=false on production es-spx-align (temporary stop-gap, pinned)"
 
 echo "=== 9) every registered service is SELECTABLE in service-deploy's SERVICE choice list ==="
 # WHY THIS EXISTS. broker-execution-service and amt-order-bridge were registered in services.yaml
@@ -327,9 +339,8 @@ echo "=== 9) every registered service is SELECTABLE in service-deploy's SERVICE 
 # exemption list is checked in BOTH directions: an exemption that is now selectable, or that names
 # something that is not a registered slice, fails too, so it cannot quietly rot.
 SERVICE_CHOICES_EXEMPT=(
-  # 2026-07-26 operator hold: deliberately not deployable from this job. Also stated in the SERVICE
+  # 2026-07-26 operator hold (spread-skew-service itself was lifted for dev 2026-10-31): deliberately not deployable from this job. Also stated in the SERVICE
   # parameter's own description in Jenkinsfile.service-deploy.
-  spread-skew
   spread-skew-postgres-writer
 )
 python3 - "${SERVICE_CHOICES_EXEMPT[@]}" <<'PYCHK' || fail=1

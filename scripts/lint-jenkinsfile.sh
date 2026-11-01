@@ -74,7 +74,7 @@ fi
 rc=0
 for f in "${files[@]}"; do
   echo "=== $f ==="
-  sed '1s|^@Library.*|// @Library stripped for offline parse|' "$f" > "$WORK/candidate.groovy"
+  sed 's|^@Library.*|// @Library stripped for offline parse|' "$f" > "$WORK/candidate.groovy"
   java -cp "$CP" groovy.ui.GroovyMain "$WORK/ParseCheck.groovy" "$WORK/candidate.groovy" || rc=1
 done
 exit $rc

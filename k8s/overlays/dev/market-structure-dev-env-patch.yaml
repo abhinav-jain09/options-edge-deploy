@@ -1,0 +1,26 @@
+# DEV-ONLY market-structure flags. The shared base carries every layer flag "false"; production's patch (market-structure-prod-env-patch.yaml) turns tools and geometry on.
+# MARKET_STRUCTURE_TOOLS_ENABLED and MARKET_STRUCTURE_GEOMETRY_ENABLED are "true" here because that is what the running dev Deployment already reads (the feed-gateway dev patch has the matching
+# GATEWAY_STRUCTURE_TOOLS_ENABLED / GATEWAY_GEOMETRY_ENABLED "true"); the manifest said "false", so a service-deploy of the base would have switched both layers off on dev. Recording the live
+# state here is not a new rollout. Both are sampled once per schedule start and recorded in the recovery checkpoint (processing docs/ta-books/DEPLOY-ROLLOUT.md).
+# MARKET_STRUCTURE_SWING_PIVOTS_ENABLED is "true" on dev only (X2, task T-5 of the level-absorption closure; decision made by Claude under the owner's standing instruction, the owner may overrule):
+# the degree-2 swing points of the tools fold are published as Avro SwingPivotRecord (subject id 2606) on options.spx.market-structure.swing-pivots. Preconditions: subject 2606 on the dev registry
+# (registered by service-deploy SERVICE=break-classifier REGISTER_TA_SCHEMAS=true; the service logs "swing-pivot publication off, schema not obtainable" and stays off for the schedule when it is
+# missing) and the topic (ensure-market-structure-topics.sh, which the service-deploy barrier runs). Rollback: set it back to "false" here, regenerate the slices, deploy market-structure.
+# MIRRORS k8s/services/market-structure/overlays/dev — the slice generator renders it from here.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: market-structure-service
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: market-structure
+          env:
+            - name: MARKET_STRUCTURE_TOOLS_ENABLED
+              value: "true"
+            - name: MARKET_STRUCTURE_GEOMETRY_ENABLED
+              value: "true"
+            - name: MARKET_STRUCTURE_SWING_PIVOTS_ENABLED
+              value: "true"
