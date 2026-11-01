@@ -14,10 +14,10 @@ full worked example is `docs/UNDERLYING-SPX-PRICE-AVRO-CUTOVER.md`.
 5. **Read the TopicIds** off the live broker (`kafka-topics --describe --topic <t>`), same `<bootstrap>` as step 6, and freeze topic
    administration (Kafka's delete takes a name, not an id).
 6. **Wipe and recreate**:
-   `roll-forward-topics.sh --recreate --cluster dev|production --topics t1,t2 --pre-cutover-id t1=<id> --pre-cutover-id t2=<id> --avro-writer-live --json-writers-stopped <bootstrap> [bin-dir]`
+   `roll-forward-topics.sh --recreate --cluster dev|production|es4 --topics t1,t2 --pre-cutover-id t1=<id> --pre-cutover-id t2=<id> --avro-writer-live --json-writers-stopped <bootstrap> [bin-dir]`
    (everything stopped: `--writers-and-readers-stopped` instead; then the topic must be empty and no group may hold an offset).
    Also required: `--registry <url> --subject <topic>=<record.full.Name>` per topic. Before any change the script verifies each subject exists with FULL compatibility; in live mode each sampled record's schema id must be registered under that topic's subject.
-   Bootstrap is bound to the cluster (dev `localhost:19092`, `host.docker.internal:19092`, `192.168.100.102:19092`; production `192.168.100.252:9092`).
+   Bootstrap is bound to the cluster (dev `localhost:19092`, `host.docker.internal:19092`, `192.168.100.102:19092`; production `192.168.100.252:9092`; es4 `192.168.100.4:9092`).
 7. **Roll the Avro readers**, then **verify the wire** (registry subjects, a decoded record per topic, reader group lag).
 
 ## What the script does
