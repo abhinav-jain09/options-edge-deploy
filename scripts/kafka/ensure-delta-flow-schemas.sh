@@ -45,6 +45,42 @@ CANONICAL = {
 url, directory, dry = sys.argv[1].rstrip("/"), sys.argv[2], sys.argv[3] == "true"
 HDR = {"Content-Type": "application/vnd.schemaregistry.v1+json"}
 
+
+PRIMITIVES = {"null", "boolean", "int", "long", "float", "double", "bytes", "string"}
+
+
+def norm(s, ns=""):
+    """Name-normalised form of an Avro schema for comparing OUR canonical bytes with what the registry hands back. The registry
+    re-serialises a schema: it drops a nested record's redundant "namespace" key and writes a reference to a named type by its short
+    name where the enclosing namespace makes that identical (Avro name resolution). Both are the SAME schema, so a plain dict
+    equality reported a false mismatch on any schema with a nested named type. This resolves every defined name and every reference
+    to its full name and removes the "namespace" key; everything else (field order, defaults, docs, logicalType, precision, scale,
+    symbols, sizes) is kept and still compared, so it is stricter than Avro Parsing Canonical Form, which would drop the logical types."""
+    if isinstance(s, str):
+        return s if s in PRIMITIVES or "." in s or not ns else ns + "." + s
+    if isinstance(s, list):
+        return [norm(x, ns) for x in s]
+    if not isinstance(s, dict):
+        return s
+    t = s.get("type")
+    if t in ("record", "error", "enum", "fixed"):
+        name = s["name"]
+        if "." in name:
+            full, inner = name, name.rsplit(".", 1)[0]
+        else:
+            inner = s.get("namespace", ns)
+            full = inner + "." + name if inner else name
+        out = {k: v for k, v in s.items() if k not in ("namespace", "name", "fields")}
+        out["name"] = full
+        if "fields" in s:
+            out["fields"] = [dict(f, type=norm(f["type"], inner)) for f in s["fields"]]
+        return out
+    out = dict(s)
+    for key in ("type", "items", "values"):
+        if key in out:
+            out[key] = norm(out[key], ns)
+    return out
+
 loaded = {}
 for name, (subject, sha) in CANONICAL.items():
     path = os.path.join(directory, name + ".avsc")
@@ -73,7 +109,7 @@ plan = {}
 for subject, schema in loaded.items():
     s, latest = call("GET", f"/subjects/{subject}/versions/latest")
     if s == 200:
-        if json.loads(latest["schema"]) != json.loads(schema):
+        if norm(json.loads(latest["schema"])) != norm(json.loads(schema)):
             sys.exit(f"FATAL: the latest version of {subject} is not the canonical schema (nothing was changed): {latest.get('version')} id={latest.get('id')}")
         plan[subject] = "present"
         s, b = call("GET", f"/config/{subject}")
@@ -117,7 +153,7 @@ for subject, schema in loaded.items():
         sys.exit(f"FATAL: {subject} compatibility is not FULL: {s} {b}")
     print(f"compatibility: {subject} FULL")
     s, latest = call("GET", f"/subjects/{subject}/versions/latest")
-    if s != 200 or json.loads(latest["schema"]) != json.loads(schema):
+    if s != 200 or norm(json.loads(latest["schema"])) != norm(json.loads(schema)):
         sys.exit(f"FATAL: the latest version of {subject} is not the canonical schema: {s} {latest}")
     print(f"latest: {subject} version={latest['version']} id={latest['id']} is the canonical schema")
 PY

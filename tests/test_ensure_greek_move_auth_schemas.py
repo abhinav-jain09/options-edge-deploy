@@ -19,6 +19,7 @@ SCRIPT = ROOT / "scripts/kafka/ensure-greek-move-auth-schemas.sh"
 FIXTURES = ROOT / "tests/fixtures/greekmoveauth"
 NAMES = sorted(p.stem for p in FIXTURES.glob("*.avsc"))
 SUBJECTS = [f"com.optionsedge.contracts.greekmoveauth.{n}" for n in NAMES]
+OTHER_SCHEMA = (FIXTURES / "LastVerdict.avsc").read_text()
 
 
 def run(url: str, directory: str, dry: bool = False):
@@ -120,6 +121,36 @@ class EnsureGreekMoveAuthSchemas(unittest.TestCase):
             self.assertIn("DRY RUN", out)
             self.assertEqual(reg.subjects, {})
             self.assertEqual(reg.configs, {})
+        finally:
+            server.shutdown()
+
+    def test_a_registry_that_reserialises_nested_names_still_reads_back_as_canonical(self):
+        # The real registry drops a nested record's redundant "namespace" and writes same-namespace references by short name; the
+        # read-back (phase 1 on a re-run, phase 3) must compare the NAMES resolved, not the text (it failed on DeltaSampleWindow).
+        reg = Registry()
+        reg.renormalise = True
+        server, url = serve(reg)
+        try:
+            rc, out = run(url, str(FIXTURES))
+            self.assertEqual(rc, 0, out)
+            rc, out = run(url, str(FIXTURES))      # phase 1 of a re-run reads the stored latest back, too
+            self.assertEqual(rc, 0, out)
+            for s in SUBJECTS:
+                self.assertEqual(len(reg.subjects[s]), 1, "no second version")
+                self.assertEqual(reg.configs[s], "FULL")
+        finally:
+            server.shutdown()
+
+    def test_the_name_normalised_comparison_still_refuses_a_different_schema(self):
+        reg = Registry()
+        reg.renormalise = True
+        server, url = serve(reg)
+        try:
+            self.assertEqual(run(url, str(FIXTURES))[0], 0)
+            reg.register(SUBJECTS[0], OTHER_SCHEMA)
+            rc, out = run(url, str(FIXTURES))
+            self.assertNotEqual(rc, 0)
+            self.assertIn("latest version", out)
         finally:
             server.shutdown()
 
