@@ -1,0 +1,26 @@
+{
+  "type": "record",
+  "name": "MultilegWindowStatus",
+  "namespace": "com.optionsedge.contracts.multileg",
+  "doc": "One options.multileg.window.status record, published by multileg-structure-service for every closed window or contiguous range of windows. Until the cutover this topic carried hand-built JSON (MultilegServiceMain.toJson(WindowStatus)); the topic is wiped and recreated under its OWN name carrying Avro. Field for field and name for name, in the same order. Kafka key = sessionId + underlying (all statuses of a session share one partition so next.windowIndex == previous.windowIndexTo + 1 is checkable within a runEpoch). Registry subject = the record full name (RecordNameStrategy).",
+  "fields": [
+    {"name": "schemaVersion", "type": "int", "doc": "Wire revision; 2 today."},
+    {"name": "recordType", "type": "string", "doc": "WINDOW_STATUS."},
+    {"name": "sessionId", "type": "string"},
+    {"name": "underlying", "type": "string"},
+    {"name": "windowIndex", "type": "long", "doc": "FIRST window index this record covers."},
+    {"name": "windowIndexTo", "type": "long", "doc": "LAST window index this record covers."},
+    {"name": "windowCount", "type": "long", "doc": "windowIndexTo - windowIndex + 1."},
+    {"name": "windowStartMs", "type": "long"},
+    {"name": "windowEndMs", "type": "long"},
+    {"name": "state", "type": "string"},
+    {"name": "runEpoch", "type": "string"},
+    {"name": "deliveryIsAtLeastOnce", "type": "boolean"},
+    {"name": "hypothesesEvaluated", "type": "long"},
+    {"name": "workUnits", "type": "long"},
+    {"name": "workBudget", "type": "long"},
+    {"name": "legCandidates", "type": "int"},
+    {"name": "idlePartitionsExcluded", "type": "int"},
+    {"name": "observations", "type": "int"}
+  ]
+}

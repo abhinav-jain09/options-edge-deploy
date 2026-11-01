@@ -121,6 +121,11 @@ check "…nothing deleted" "$(logn)" 0
 check "unknown cluster is a usage error" "$(run --recreate --cluster staging --topics a.one --pre-cutover-id a.one=OLDA "${STOP[@]}" localhost:19092 "$TMP/bin")" 2
 check "a bootstrap that is not the named cluster's is refused (dev vs prod)" "$(run "${RA[@]}" "${STOP[@]}" 192.168.100.252:9092 "$TMP/bin")" 2
 check "production with a dev bootstrap is refused" "$(run --recreate --cluster production --topics a.one --pre-cutover-id a.one=OLDA "${STOP[@]}" localhost:19092 "$TMP/bin")" 2
+check "es4 with the production bootstrap is refused" "$(run --recreate --cluster es4 --topics a.one --pre-cutover-id a.one=OLDA "${STOP[@]}" 192.168.100.252:9092 "$TMP/bin")" 2
+check "es4 with a dev bootstrap is refused" "$(run --recreate --cluster es4 --topics a.one --pre-cutover-id a.one=OLDA "${STOP[@]}" localhost:19092 "$TMP/bin")" 2
+check "dev with the es4 bootstrap is refused" "$(run "${RA[@]}" "${STOP[@]}" 192.168.100.4:9092 "$TMP/bin")" 2
+check "production with the es4 bootstrap is refused" "$(run --recreate --cluster production --topics a.one --pre-cutover-id a.one=OLDA "${STOP[@]}" 192.168.100.4:9092 "$TMP/bin")" 2
+check "…nothing deleted by the refused es4 runs" "$(logn)" 0
 check "a missing --pre-cutover-id is a usage error" "$(run --recreate --cluster dev --topics a.one,b.two --pre-cutover-id a.one=OLDA "${STOP[@]}" localhost:19092 "$TMP/bin")" 2
 check "a --pre-cutover-id for a topic not in --topics is refused" "$(run "${RA[@]}" --pre-cutover-id z=Q "${STOP[@]}" localhost:19092 "$TMP/bin")" 2
 check "a repeated --pre-cutover-id for one topic is refused" "$(run "${RA[@]}" --pre-cutover-id a.one=OTHER "${STOP[@]}" localhost:19092 "$TMP/bin")" 2
@@ -128,6 +133,11 @@ check "a duplicate topic is refused" "$(run --recreate --cluster dev --topics a.
 check "an invalid topic name is refused" "$(run --recreate --cluster dev --topics 'a one' --pre-cutover-id 'a one=X' "${STOP[@]}" localhost:19092 "$TMP/bin")" 2
 check "--new-topic-id with --recreate is a usage error" "$(run "${RA[@]}" --new-topic-id a.one=N "${STOP[@]}" localhost:19092 "$TMP/bin")" 2
 check "…still nothing deleted" "$(logn)" 0
+
+two
+check "es4: recreates a topic on the es4 broker (shape copied, new id)" "$(run --recreate --cluster es4 --topics a.one --pre-cutover-id a.one=OLDA "${STOP[@]}" 192.168.100.4:9092 "$TMP/bin")" 0
+check "es4: a.one has a new id" "$([ "$(cat "$TMP/state/a.one/id")" != OLDA ] && echo yes)" yes
+check "es4: the shape is bound to the es4 cluster" "$(grep -c '^cluster=es4$' "$TMP/shapes/es4/a.one.shape")" 1
 
 two
 check "recreates both topics" "$(run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 0

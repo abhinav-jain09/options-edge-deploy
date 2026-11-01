@@ -1,0 +1,136 @@
+{
+  "type": "record",
+  "name": "DeltaFlowIntradayState",
+  "namespace": "com.optionsedge.contracts.deltaflow",
+  "doc": "A PRIVATE image of delta-flow-service (a Kafka Streams state-store value / its compacted changelog, or an internal repartition topic), not a topic contract: it exists as a released .avsc only so the serde has a registered schema (RecordNameStrategy, auto.register.schemas=false), FULL compatibility. Until the Avro cutover these values were hand-built JSON text; the changelogs and repartition topics are DELETED at the cutover (retained JSON is never read). Prices (strike, trade price, bid, ask, spot) are decimal(38,18); every derived statistic keeps its double. Per-(symbol, session) cumulative accumulator (cumulative-store value). The three per-dimension maps the JSON image carried were always discarded at parse (the strike store is the source of truth) and are not part of this image.",
+  "fields": [
+    {
+      "name": "symbol",
+      "type": "string"
+    },
+    {
+      "name": "tradingDate",
+      "type": "string"
+    },
+    {
+      "name": "asOfEventTimeMs",
+      "type": "long"
+    },
+    {
+      "name": "sessionObservedFromMs",
+      "type": "long"
+    },
+    {
+      "name": "cumulativeNetDeltaFlow",
+      "type": "double"
+    },
+    {
+      "name": "lastDashboardEmitEventTimeMs",
+      "type": "long"
+    },
+    {
+      "name": "lastDashboardEmitSign",
+      "type": "int"
+    },
+    {
+      "name": "buyerContracts",
+      "type": "long"
+    },
+    {
+      "name": "sellerContracts",
+      "type": "long"
+    },
+    {
+      "name": "highConfidenceTradeCount",
+      "type": "long"
+    },
+    {
+      "name": "mediumConfidenceTradeCount",
+      "type": "long"
+    },
+    {
+      "name": "lowConfidenceTradeCount",
+      "type": "long"
+    },
+    {
+      "name": "noConfidenceTradeCount",
+      "type": "long"
+    },
+    {
+      "name": "unknownClassificationCount",
+      "type": "long"
+    },
+    {
+      "name": "acceptedTradeCount",
+      "type": "long"
+    },
+    {
+      "name": "rejectedTradeCount",
+      "type": "long"
+    },
+    {
+      "name": "staleQuoteCount",
+      "type": "long"
+    },
+    {
+      "name": "staleGreekCount",
+      "type": "long"
+    },
+    {
+      "name": "missingQuoteCount",
+      "type": "long"
+    },
+    {
+      "name": "missingGreekCount",
+      "type": "long"
+    },
+    {
+      "name": "invalidSpreadCount",
+      "type": "long"
+    },
+    {
+      "name": "duplicateTradeCount",
+      "type": "long"
+    },
+    {
+      "name": "duplicateProtectionUnavailableCount",
+      "type": "long"
+    },
+    {
+      "name": "contractMultiplierFallbackCount",
+      "type": "long"
+    },
+    {
+      "name": "highConfidenceNetDeltaFlow",
+      "type": "double"
+    },
+    {
+      "name": "confidenceWeightedNetDeltaFlow",
+      "type": "double"
+    },
+    {
+      "name": "callBoughtDeltaFlow",
+      "type": "double"
+    },
+    {
+      "name": "callSoldDeltaFlow",
+      "type": "double"
+    },
+    {
+      "name": "putBoughtDeltaFlow",
+      "type": "double"
+    },
+    {
+      "name": "putSoldDeltaFlow",
+      "type": "double"
+    },
+    {
+      "name": "weightedExposed",
+      "type": "boolean"
+    },
+    {
+      "name": "calibrationEpoch",
+      "type": "int"
+    }
+  ]
+}
