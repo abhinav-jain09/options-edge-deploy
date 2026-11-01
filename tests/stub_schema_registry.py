@@ -21,6 +21,10 @@ class Registry:
         self.fail: list[tuple[str, str]] = []   # (METHOD, path-prefix) -> answer 500 (failure injection)
         self.fail_next_mode_delete = 0   # DELETE /mode/<s> answers 500 this many times before it works (failure injection)
         self.incompatible: set[str] = set()   # subjects whose NEW schema the compatibility endpoint refuses
+        self.fail: list[tuple[str, str]] = []   # (METHOD, path-prefix) -> answer 500 (failure injection)
+
+    def injected(self, method: str, path: str) -> bool:
+        return any(method == m and path.startswith(p) for m, p in self.fail)
 
     def injected(self, method: str, path: str) -> bool:
         return any(method == m and path.startswith(p) for m, p in self.fail)
