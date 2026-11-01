@@ -37,6 +37,7 @@ cat > "$TMP/bin/kafka-configs.sh" <<'MOCK'
 # like kafka-configs --describe: dynamic topic overrides, one per line, list values printed WITHOUT brackets
 name=""; prev=""; for a in "$@"; do [ "$prev" = "--entity-name" ] && name="$a"; prev="$a"; done
 [ -f "$MOCK_DIR/$name/id" ] || { echo "no such topic" >&2; exit 1; }
+echo $(( $(cat "$MOCK_DIR/cnt.kc" 2>/dev/null || echo 0) + 1 )) > "$MOCK_DIR/cnt.kc"
 echo "Dynamic configs for topic $name are:"
 while IFS= read -r l; do [ -n "$l" ] || continue; l="$(printf '%s' "$l" | sed 's/=\[\(.*\)\]$/=\1/')"
   printf '  %s sensitive=false synonyms={DYNAMIC_TOPIC_CONFIG:%s}\n' "$l" "$l"; done < "$MOCK_DIR/$name/cfg"
@@ -332,6 +333,12 @@ check "ID-only replacement (same shape, new TopicId) at the last look => no dele
 check "…b.two was not deleted (id)" "$(grep -c '^deleted:b.two' "$TMP/state/log")" 0
 check "…the replacement is still there" "$(cat "$TMP/state/b.two/id")" REPLACED
 check "…the refusal names the id change" "$(grep -c 'b.two changed id to REPLACED' "$TMP/out")" 1
+
+# --- round-9: the last look reads topic state ONCE (one describe); no kafka-configs read follows it
+two
+check "configs-only replacement at the last look => no delete" "$(MOCK_MUT=b.two:2:cfg:segment.bytes=9 run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
+check "…b.two not deleted (configs only, same id)" "$(grep -c '^deleted:b.two' "$TMP/state/log")" 0
+check "…kafka-configs was read only in preflight (2 topics) and a.one's post-check, never at the last look" "$(cat "$TMP/state/cnt.kc")" 3
 
 echo "passed=$pass failed=$fail"
 [ "$fail" = 0 ]

@@ -122,6 +122,7 @@ capture_shape() { # <describe-line> <file> <topic-id> <topic>
   case "$rf" in ''|*[!0-9]*) echo "FATAL: cannot read ReplicationFactor from: $desc" >&2; return 1 ;; esac
   cfg="$(rf_dynamic_configs "$4")" || return 1
   { echo "cluster=$CLUSTER"; echo "topicid=$3"; echo "partitions=$parts"; echo "rf=$rf"
+    echo "rawcfg=$(describe_field "$desc" Configs)"   # the describe response's own Configs text: compared as an opaque string at the last look
     [ -z "$cfg" ] || printf '%s\n' "$cfg" | sed 's/^/config./'; } > "$file.tmp" && mv "$file.tmp" "$file" \
     || { echo "FATAL: cannot write $file" >&2; return 1; }
 }
@@ -289,8 +290,11 @@ for t in "${TOPICS[@]}"; do
     look="$(rf_describe "$KT" "$BS" "$t")" || fail_run "$t" "cannot re-describe the topic; nothing deleted."
     again="$(rf_topic_id "$look" "$t")" || fail_run "$t" "cannot re-read the topic id."
     [ "$again" = "$pre" ] || { echo "FAIL: $t changed id to $again while checking; nothing deleted." >&2; fail_run "$t" "topic administration is not frozen."; }
-    capture_shape "$look" "$STATE/$t.lastlook" "$again" "$t" || fail_run "$t" "cannot capture the shape; nothing deleted."
-    cmp -s "$STATE/$t.lastlook" "$STATE/$t.shape" || { echo "FAIL: the shape of $t changed since preflight; nothing deleted. captured: $(tr '\n' ' ' < "$STATE/$t.shape") now: $(tr '\n' ' ' < "$STATE/$t.lastlook")" >&2; fail_run "$t" "topic administration is not frozen; re-run to capture the new shape."; }
+    # every compared field comes from THIS one describe response (id above; partitions, RF and the raw Configs text here): no further read of topic state
+    [ "$(describe_field "$look" PartitionCount)" = "$(shape_get "$STATE/$t.shape" partitions)" ] \
+      && [ "$(describe_field "$look" ReplicationFactor)" = "$(shape_get "$STATE/$t.shape" rf)" ] \
+      && [ "$(describe_field "$look" Configs)" = "$(shape_get "$STATE/$t.shape" rawcfg)" ] \
+      || { echo "FAIL: the shape of $t changed since preflight; nothing deleted. captured: $(tr '\n' ' ' < "$STATE/$t.shape") now: $look" >&2; fail_run "$t" "topic administration is not frozen; re-run to capture the new shape."; }
     LASTG="$("$KG" --bootstrap-server "$BS" --describe --all-groups 2>&1)" || fail_run "$t" "cannot read consumer groups; nothing deleted."
     groups_gate "$t" "$LASTG" || fail_run "$t" "consumer-group gate failed at the last look; nothing deleted."
     echo "-- delete $t (id $again)"
