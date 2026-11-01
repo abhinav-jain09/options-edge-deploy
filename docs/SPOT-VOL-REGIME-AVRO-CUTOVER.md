@@ -1,7 +1,7 @@
 # spot-vol-regime-service Avro cutover (options.spx.spot-vol-regime.current / .events and the two state stores)
 
 Rule: Kafka Serialization Rule + owner ruling of 2026-10-18 (no versioned topic names; delete and recreate under the own name; retained
-JSON is deleted, never read). Contracts 0.31.0 (PR options-edge-contracts#119), processing #1179, feed-gateway #241. Generic wipe tool:
+JSON is deleted, never read). Contracts 0.56.0 (PR options-edge-contracts#119), processing #1179, feed-gateway #241. Generic wipe tool:
 `scripts/kafka/roll-forward-topics.sh` (deploy PR 1320, docs/KAFKA-AVRO-TOPIC-ROLL-FORWARD.md). Registration tool: this PR.
 
 ## HARD PREREQUISITE (blocks step 5; nothing below may start without it)
@@ -38,7 +38,7 @@ done
   `.events` has no reader anywhere.
 
 ## Cutover order (everything that can fail non-destructively runs BEFORE any destruction)
-1. Merge contracts 0.31.0, then processing and gateway; build both images against 0.31.0 and confirm the resolved digests. Build no prod image of either until this
+1. Contracts 0.56.0 (released in the 0.56.0 .. 0.58.0 artifacts), processing #1179 and gateway #241 are already merged; build both images from main and confirm the resolved digests. Build no prod image of either until this
    environment's cutover (a prod image of the gateway would read Avro against the still-JSON prod topic).
 2. **Register (before the wipe)** on the target registry; a refusal here leaves production untouched:
    `SCHEMA_REGISTRY_URL=<registry> SCHEMAS_DIR=<contracts>/schemas/spotvolregime scripts/kafka/ensure-spot-vol-regime-schemas.sh` (sha256-pinned bytes, FULL by
