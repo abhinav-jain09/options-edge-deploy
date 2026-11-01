@@ -378,8 +378,12 @@ two
 check "a malformed SECOND synonym refuses before any delete" "$(MOCK_SYN_TOPIC=b.two MOCK_SYN_TAIL=', garbage' run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
 check "…nothing deleted" "$(logn)" 0
 two
-check "a second synonym for a DIFFERENT key refuses" "$(MOCK_SYN_TOPIC=b.two MOCK_SYN_TAIL=', DEFAULT_CONFIG:other.key=1' run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
-check "…nothing deleted (other key)" "$(logn)" 0
+# a REAL broker prints the default under its broker-level name (DEFAULT_CONFIG:log.cleanup.policy=delete, DYNAMIC_DEFAULT_BROKER_CONFIG:message.max.bytes=...):
+# the first live run on the dev broker refused every topic on exactly this, so it must be accepted, and the capture must be the topic override only
+check "the real-broker tail (broker-level alias keys) is accepted" "$(MOCK_SYN_TOPIC=b.two MOCK_SYN_TAIL=', DYNAMIC_DEFAULT_BROKER_CONFIG:log.KEY=1, DEFAULT_CONFIG:log.KEY=delete' run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 0
+two
+check "a second synonym with a malformed name still refuses" "$(MOCK_SYN_TOPIC=b.two MOCK_SYN_TAIL=', DEFAULT_CONFIG:=1' run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
+check "…nothing deleted (bad name)" "$(logn)" 0
 two
 check "trailing junk after the final entry refuses before any delete" "$(MOCK_SYN_TOPIC=b.two MOCK_SYN_TAIL='}junk' run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
 check "…nothing deleted (junk)" "$(logn)" 0
