@@ -56,11 +56,16 @@ done
 if [ ! -e "$PL" ]; then WHY="$WHY plist=absent"
 elif ! diff -q "$R/plist.xml" "$PL" >/dev/null 2>&1; then WHY="$WHY plist=bytes-differ"
 fi
-# BSD first, GNU second: the unit runs on this Mac, but this script is also driven by
-# scripts/ci/mirror-diff-guard-test.sh on a Linux runner, where `stat -f %m` fails and silently
-# produced 0 — which made every process look NEWER than its files, so the staleness case could
-# not fail there however broken this script was.
-mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
+# GNU FIRST, BSD SECOND — the order is the whole correctness of this line, and the previous
+# comment here asserted a mechanism that does not exist. `stat -f` is not an unsupported BSD
+# flag on GNU: it means "display filesystem status", so `stat -f %m FILE` SUCCEEDS on Linux and
+# prints a multi-line filesystem dump ("File: ... ID: ... Namelen: ... Block size: ..."). A
+# `||` can never reach the GNU form after that, and the dump lands in an arithmetic test:
+# `[: ...: integer expression expected`, which is exactly what the Linux runner printed.
+# The reverse order is safe because `stat -c` really is unsupported on BSD and really does fail,
+# so the fallback fires. scripts/es4/tape-preserve.sh and scripts/ops/archive/ibkr-raw-retention.sh
+# already do it this way; this line was the odd one out.
+mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo 0; }
 epoch_of() { date -j -f '%a %b %e %T %Y' "$1" +%s 2>/dev/null || date -d "$1" +%s 2>/dev/null || echo 0; }
 # An unreadable job table is not an absent process: reporting it as absent said something false and
 # would have driven a stop/start on a unit whose state was never read. It fails closed instead.

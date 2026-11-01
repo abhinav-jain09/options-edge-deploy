@@ -23,7 +23,7 @@ metadata:
   namespace: options-edge
 spec:
   progressDeadlineSeconds: 1200
-  replicas: 0
+  replicas: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: level-absorption-service
@@ -38,6 +38,12 @@ spec:
     spec:
       containers:
         - env:
+            - name: LEVEL_ABSORPTION_PATH_SESSION
+              value: GLOBEX
+            - name: LEVEL_ABSORPTION_PATH_CONFIGURATION
+              value: /home/options-edge/config/level-absorption/path-configuration.json
+            - name: LEVEL_ABSORPTION_TWO_SIDED_HOST
+              value: "true"
             - name: LEVEL_ABSORPTION_PHASE
               value: EYEBALL
             - name: KAFKA_LEVEL_ABSORPTION_FOOTPRINT_TOPIC
@@ -50,6 +56,8 @@ spec:
               value: futures.level-absorption.voice
             - name: KAFKA_LEVEL_ABSORPTION_CLOSURES_TOPIC
               value: futures.level-absorption.closures
+            - name: KAFKA_LEVEL_ABSORPTION_HOST_LEVELS_TOPIC
+              value: options.spx.market-structure.ui
             - name: LEVEL_ABSORPTION_CONSUMER_GROUP
               value: level-absorption-service
             - name: LEVEL_ABSORPTION_SYMBOL
@@ -95,7 +103,7 @@ spec:
           readinessProbe:
             failureThreshold: 3
             httpGet:
-              path: /health/live
+              path: /health/deployment-ready
               port: health
             initialDelaySeconds: 30
             periodSeconds: 10
@@ -113,9 +121,8 @@ spec:
               name: level-absorption-data
       terminationGracePeriodSeconds: 60
       volumes:
-        - hostPath:
-            path: /home/options-edge/config/level-absorption
-            type: DirectoryOrCreate
+        - configMap:
+            name: level-absorption-config-27f159bc7562
           name: level-absorption-config
         - hostPath:
             path: /home/options-edge/data/level-absorption

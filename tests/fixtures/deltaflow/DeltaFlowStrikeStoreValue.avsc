@@ -1,0 +1,134 @@
+{
+  "type": "record",
+  "name": "DeltaFlowStrikeStoreValue",
+  "namespace": "com.optionsedge.contracts.deltaflow",
+  "doc": "A PRIVATE image of delta-flow-service (a Kafka Streams state-store value / its compacted changelog, or an internal repartition topic), not a topic contract: it exists as a released .avsc only so the serde has a registered schema (RecordNameStrategy, auto.register.schemas=false), FULL compatibility. Until the Avro cutover these values were hand-built JSON text; the changelogs and repartition topics are DELETED at the cutover (retained JSON is never read). Prices (strike, trade price, bid, ask, spot) are decimal(38,18); every derived statistic keeps its double. Value of the strike store, which holds two kinds of entry under distinct key shapes: a per-strike accumulator (key symbol|date|expiry|strike -> dimension) and a running expiry/option-side total (key ...|EXPIRY|x or ...|OPTION_SIDE|x -> total). Exactly one of the two fields is set.",
+  "fields": [
+    {
+      "name": "dimension",
+      "type": [
+        "null",
+        {
+          "type": "record",
+          "name": "DeltaFlowDimensionState",
+          "namespace": "com.optionsedge.contracts.deltaflow",
+          "doc": "Per-strike session accumulator.",
+          "fields": [
+            {
+              "name": "key",
+              "type": "string"
+            },
+            {
+              "name": "symbol",
+              "type": "string"
+            },
+            {
+              "name": "tradingDate",
+              "type": "string"
+            },
+            {
+              "name": "expiry",
+              "type": "string"
+            },
+            {
+              "name": "strike",
+              "type": {
+                "type": "bytes",
+                "logicalType": "decimal",
+                "precision": 38,
+                "scale": 18
+              }
+            },
+            {
+              "name": "asOfEventTimeMs",
+              "type": "long"
+            },
+            {
+              "name": "netDeltaFlow",
+              "type": "double"
+            },
+            {
+              "name": "buckets",
+              "type": {
+                "type": "array",
+                "items": {
+                  "type": "record",
+                  "name": "DeltaFlowDimensionBucket",
+                  "namespace": "com.optionsedge.contracts.deltaflow",
+                  "doc": "One second bucket of a per-strike dimension.",
+                  "fields": [
+                    {
+                      "name": "epochSecond",
+                      "type": "long"
+                    },
+                    {
+                      "name": "netDeltaFlow",
+                      "type": "double"
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "name": "buyerContracts",
+              "type": "long"
+            },
+            {
+              "name": "sellerContracts",
+              "type": "long"
+            },
+            {
+              "name": "highConfidenceTradeCount",
+              "type": "long"
+            },
+            {
+              "name": "mediumConfidenceTradeCount",
+              "type": "long"
+            },
+            {
+              "name": "lowConfidenceTradeCount",
+              "type": "long"
+            },
+            {
+              "name": "noConfidenceTradeCount",
+              "type": "long"
+            },
+            {
+              "name": "callBuyDeltaFlow",
+              "type": "double"
+            },
+            {
+              "name": "callSellDeltaFlow",
+              "type": "double"
+            },
+            {
+              "name": "putBuyDeltaFlow",
+              "type": "double"
+            },
+            {
+              "name": "putSellDeltaFlow",
+              "type": "double"
+            },
+            {
+              "name": "highConfidenceNetDeltaFlow",
+              "type": "double"
+            },
+            {
+              "name": "confidenceWeightedNetDeltaFlow",
+              "type": "double"
+            }
+          ]
+        }
+      ],
+      "default": null
+    },
+    {
+      "name": "total",
+      "type": [
+        "null",
+        "double"
+      ],
+      "default": null
+    }
+  ]
+}

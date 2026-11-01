@@ -145,6 +145,20 @@ pipeline {
         '''
       }
     }
+    // oe-keycloak is on the prod mandatory list and `start --import-realm` REFUSES to boot on an
+    // unknown field, so one commentary key in a realm JSON is a platform auth outage. The guard for it
+    // has existed since the second occurrence, but no pipeline ran it and a "//" key shipped a THIRD
+    // time on 2026-10-25 (32 crash-loops until the ConfigMap was corrected by hand). It runs BEFORE
+    // Render/Apply so a bad realm is refused rather than applied; it reads files only.
+    stage('Keycloak realm imports are importable') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (!params.CONTEXT_TAPE_AUTH_ONLY && !params.CONTEXT_TAPE_ORDER_INIT_ONLY) } }
+      steps {
+        sh '''
+          set -euo pipefail
+          bash scripts/keycloak/validate-realm-configmaps.sh
+        '''
+      }
+    }
     stage('Render + Diff (always)') {
       when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (!params.CONTEXT_TAPE_AUTH_ONLY && !params.CONTEXT_TAPE_ORDER_INIT_ONLY) } }
       steps {

@@ -28,6 +28,9 @@ LOAD_WAIT_SECONDS="${LOAD_WAIT_SECONDS:-600}"
 # Wave 1: the data path everything else consumes. Nothing downstream can be healthy
 # before these are, so they go first and alone.
 WAVE1='options-edge-databento-feed feed-gateway-service options-edge-web'
+# USER 2026-10-26: corridor-gauge-service is OFF PERMANENTLY on dev AND production. It carries no *_ENABLED
+# flag, so replicas is the switch; k8s/base sets 0, but this boot script lifts anything not named here, so
+# the base alone would not have held it across a reboot. Same omission as the dev list (dev-cleanup.sh).
 # Held down by explicit USER decision — never started here.
 # 2026-08-24: this list was SHORTER than the declared policy in scripts/ops/morning-autostart.sh
 # and therefore would resurrect, on the next reboot, services the USER ordered held down
@@ -37,7 +40,7 @@ WAVE1='options-edge-databento-feed feed-gateway-service options-edge-web'
 # 2026-09-15: it had drifted again — oi-shadow-service and raw-to-display-service (both USER holds
 # since 2026-08-10) were held down only by morning-autostart.sh. tests/test_keep_down_lists_agree.py
 # now fails CI whenever the two sets differ.
-KEEP_DOWN='broker-execution-service|amt-order-bridge|directional-pressure-databento-service|hpsf-stage-a-service|hpsf-stage-b-service|volume-sandwich-service|volume-sandwich-databento-service|volume-pace-service|volume-pace-databento-service|strike-flow-classifier-ibkr|options-edge-integration-test|spx-mission-control-service|short-premium-agent-service|spread-skew-service|spread-skew-postgres-writer|databento-mission-sandwich-service|directional-pressure-service|option-truth-engine-service|ibkr-feed-service|prod-pgadmin|dealer-ledger-service|dealer-ledger-calibration-scorer|dealer-ledger-calibration-accumulator|vix-option-inteligence-service|oi-shadow-service|raw-to-display-service|zerodte-research-writer|hedging-pressure-service|break-score-service|level-absorption-service|breakout-sequencer-service|breakout-episode-service'
+KEEP_DOWN='corridor-gauge-service|broker-execution-service|amt-order-bridge|directional-pressure-databento-service|hpsf-stage-a-service|hpsf-stage-b-service|volume-sandwich-service|volume-sandwich-databento-service|volume-pace-service|volume-pace-databento-service|strike-flow-classifier-ibkr|options-edge-integration-test|spx-mission-control-service|short-premium-agent-service|spread-skew-service|spread-skew-postgres-writer|databento-mission-sandwich-service|directional-pressure-service|option-truth-engine-service|ibkr-feed-service|prod-pgadmin|dealer-ledger-service|dealer-ledger-calibration-scorer|dealer-ledger-calibration-accumulator|vix-option-inteligence-service|oi-shadow-service|raw-to-display-service|zerodte-research-writer|hedging-pressure-service|break-score-service|level-absorption-service|breakout-sequencer-service|breakout-episode-service'
 
 log() { printf '[%s] %s\n' "$(date '+%F %T %Z')" "$*" | tee -a "$LOG"; }
 die() { log "FAIL: $*"; exit 1; }

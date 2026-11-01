@@ -1,0 +1,24 @@
+{
+  "type": "record",
+  "name": "DeltaFlowCalibrationRecord",
+  "namespace": "com.optionsedge.contracts.deltaflow",
+  "doc": "One delta-flow-service instance's cumulative side-accuracy counts (requirement R14), published on the compacted calibration topic keyed by instanceId (latest wins); every instance reads all of them into a global store and sums them. Registry subject = the record full name (RecordNameStrategy), compatibility FULL.",
+  "fields": [
+    {
+      "name": "instanceId",
+      "type": "string"
+    },
+    {
+      "name": "comparable",
+      "type": "long"
+    },
+    {
+      "name": "agreed",
+      "type": "long"
+    },
+    {
+      "name": "asOfMs",
+      "type": "long"
+    }
+  ]
+}

@@ -53,7 +53,7 @@ spec:
         - name: HEALTH_PORT
           value: '8130'
         - name: JAVA_TOOL_OPTIONS
-          value: -Xms256m -Xmx1024m
+          value: -Xms256m -Xmx512m
         - name: GREEK_MOVE_AUTH_SYMBOL
           value: ES
         - name: GREEK_MOVE_AUTH_INPUT_SPOT_TOPIC

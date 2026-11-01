@@ -75,7 +75,7 @@ spec:
             - name: KAFKA_STREAMS_STATE_DIR
               value: /var/lib/options-edge/kafka-streams
             - name: JAVA_TOOL_OPTIONS
-              value: -Xms512m -Xmx2g
+              value: -Xms512m -Xmx1024m
           envFrom:
             - configMapRef:
                 name: options-edge-config

@@ -1,0 +1,248 @@
+{
+  "type": "record",
+  "name": "DeltaFlowEvent",
+  "namespace": "com.optionsedge.contracts.deltaflow",
+  "doc": "One signed delta-flow trade event, published by delta-flow-service on delta-flow-by-trade (accepted prints) and delta-flow-diagnostics (excluded prints and applied cancels/corrections). Kafka key = optionKey. The JSON era wrote this record with Jackson from the contracts record of the same name; this schema reproduces that JSON FIELD FOR FIELD, NAME FOR NAME, IN THE SAME ORDER (DeltaFlowJson renders it back byte-for-byte). Prices (strike, trade price, bid, ask) are decimal(38,18) = the shortest round-trip text of the engine double; a value needing more than 18 fractional digits, non-finite, -0.0 or out of range is REFUSED, never rounded. Every derived statistic (share-delta flow, delta, gamma, iv, ages) keeps the double the JSON carried. Enumerations are written as their constant names (strings) so a new constant is not a schema change. Registry subject = the record full name (RecordNameStrategy), compatibility FULL.",
+  "fields": [
+    {
+      "name": "optionKey",
+      "type": "string",
+      "doc": "Kafka key: symbol|expiry|strike|CALL or PUT."
+    },
+    {
+      "name": "eventId",
+      "type": [
+        "null",
+        "string"
+      ],
+      "doc": "Feed trade id; null only if the feed sent none (the JSON era wrote null).",
+      "default": null
+    },
+    {
+      "name": "symbol",
+      "type": "string"
+    },
+    {
+      "name": "expiry",
+      "type": "string"
+    },
+    {
+      "name": "strike",
+      "type": {
+        "type": "bytes",
+        "logicalType": "decimal",
+        "precision": 38,
+        "scale": 18
+      },
+      "doc": "Strike, a price: decimal(38,18)."
+    },
+    {
+      "name": "optionType",
+      "type": "string",
+      "doc": "CALL or PUT."
+    },
+    {
+      "name": "tradePrice",
+      "type": [
+        "null",
+        {
+          "type": "bytes",
+          "logicalType": "decimal",
+          "precision": 38,
+          "scale": 18
+        }
+      ],
+      "doc": "Trade price: decimal(38,18); null where the feed carried none (the JSON era wrote NaN; DeltaFlowJson renders null back as NaN).",
+      "default": null,
+      "jsonNullAs": "NaN"
+    },
+    {
+      "name": "contracts",
+      "type": "long"
+    },
+    {
+      "name": "tradeTimeMs",
+      "type": "long"
+    },
+    {
+      "name": "contractMultiplier",
+      "type": "int"
+    },
+    {
+      "name": "contractMultiplierFallbackUsed",
+      "type": "boolean"
+    },
+    {
+      "name": "bid",
+      "type": [
+        "null",
+        {
+          "type": "bytes",
+          "logicalType": "decimal",
+          "precision": 38,
+          "scale": 18
+        }
+      ],
+      "doc": "Quote bid: decimal(38,18); null when no quote was available (the JSON era wrote NaN).",
+      "default": null,
+      "jsonNullAs": "NaN"
+    },
+    {
+      "name": "ask",
+      "type": [
+        "null",
+        {
+          "type": "bytes",
+          "logicalType": "decimal",
+          "precision": 38,
+          "scale": 18
+        }
+      ],
+      "doc": "Quote ask: decimal(38,18); null when no quote was available (the JSON era wrote NaN).",
+      "default": null,
+      "jsonNullAs": "NaN"
+    },
+    {
+      "name": "quoteTimeMs",
+      "type": "long"
+    },
+    {
+      "name": "delta",
+      "type": "double",
+      "doc": "Provider signed delta; NaN when no greek was available."
+    },
+    {
+      "name": "gamma",
+      "type": "double"
+    },
+    {
+      "name": "iv",
+      "type": "double"
+    },
+    {
+      "name": "greekTimeMs",
+      "type": "long"
+    },
+    {
+      "name": "aggressor",
+      "type": "string",
+      "doc": "BUYER, SELLER or UNKNOWN."
+    },
+    {
+      "name": "sharedAggressor",
+      "type": "string",
+      "doc": "BUY_AGGRESSOR, SELL_AGGRESSOR, LIKELY_BUY, LIKELY_SELL or UNKNOWN."
+    },
+    {
+      "name": "aggressorConfidence",
+      "type": "string",
+      "doc": "HIGH, MEDIUM, LOW or NONE."
+    },
+    {
+      "name": "classificationReason",
+      "type": "string"
+    },
+    {
+      "name": "freshnessStatus",
+      "type": "string"
+    },
+    {
+      "name": "quoteAgeMs",
+      "type": "long"
+    },
+    {
+      "name": "greekAgeMs",
+      "type": "long"
+    },
+    {
+      "name": "signedDeltaFlow",
+      "type": "double",
+      "doc": "SHARE_DELTA: sign(aggressor) x delta x contracts x multiplier."
+    },
+    {
+      "name": "duplicateProtectionAvailable",
+      "type": "boolean"
+    },
+    {
+      "name": "includedInPrimaryTotals",
+      "type": "boolean"
+    },
+    {
+      "name": "rejectReason",
+      "type": [
+        "null",
+        "string"
+      ],
+      "doc": "Reject reason; empty string when accepted; null only if absent.",
+      "default": null
+    },
+    {
+      "name": "publishedAtMs",
+      "type": "long"
+    },
+    {
+      "name": "highConfidenceSignedDeltaFlow",
+      "type": "double"
+    },
+    {
+      "name": "confidenceWeightedSignedDeltaFlow",
+      "type": "double"
+    },
+    {
+      "name": "confidenceWeightQuality",
+      "type": "string"
+    },
+    {
+      "name": "surfaceAgeMs",
+      "type": "long"
+    },
+    {
+      "name": "deltaSensitivityEstimate",
+      "type": "double"
+    },
+    {
+      "name": "spotMoveSinceSurface",
+      "type": "double",
+      "doc": "NaN when no spot was available."
+    },
+    {
+      "name": "surfaceQuality",
+      "type": "string"
+    },
+    {
+      "name": "outputMeta",
+      "type": {
+        "type": "record",
+        "name": "DeltaFlowOutputMeta",
+        "namespace": "com.optionsedge.contracts.deltaflow",
+        "doc": "R10 per-output provenance: quality (FULL, DEGRADED, UNKNOWN, BROKEN), reconciliationStatus (RECONCILED, FAILED, PENDING, UNRECONCILED), the fraction of required inputs present (RATIO, 0..1), the calibration dataset id (none when uncalibrated), the model version and the threshold set id in force.",
+        "fields": [
+          {
+            "name": "quality",
+            "type": "string"
+          },
+          {
+            "name": "reconciliationStatus",
+            "type": "string"
+          },
+          {
+            "name": "sourceCompleteness",
+            "type": "double"
+          },
+          {
+            "name": "calibrationDatasetId",
+            "type": "string"
+          },
+          {
+            "name": "modelVersion",
+            "type": "string"
+          },
+          {
+            "name": "thresholdSetId",
+            "type": "string"
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -60,6 +60,8 @@ spec:
               value: dev-unsecured
             - name: BREAKOUT_EP_CREATE_TOPICS
               value: "true"
+            - name: BREAKOUT_EP_SYMBOLS
+              value: SPX
             - name: BREAKOUT_EP_MODE
               value: SHADOW
             - name: BREAKOUT_EP_SEQUENCED_TOPIC

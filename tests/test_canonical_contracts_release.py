@@ -36,6 +36,15 @@ class ReleaseDownloadTest(unittest.TestCase):
             release.fetch("http://jenkins.invalid/", "83", self.commit, digest or self.digest, self.version, self.destination)
             return read
 
+    def test_latest_requires_the_explicitly_permitted_main_commit_before_fetch(self):
+        with self.assertRaisesRegex(ValueError,'explicitly permitted commit'):
+            self.latest(expected_commit='b'*40)
+        self.assertFalse(self.destination.exists())
+
+    def test_latest_accepts_the_exact_permitted_main_commit(self):
+        self.latest(expected_commit=self.commit)
+        self.assertTrue(self.destination.exists())
+
     def test_qualified_exact_artifact_is_verified_before_installation(self):
         read = self.fetch()
         self.assertEqual(self.jar, self.destination.read_bytes())
@@ -90,7 +99,7 @@ class ReleaseDownloadTest(unittest.TestCase):
                 release.read("http://jenkins.invalid/test", 128)
             self.assertEqual(15, request.call_args.kwargs["timeout"])
 
-    def latest(self, metadata=None, corrupt=False, extra=None):
+    def latest(self, metadata=None, corrupt=False, extra=None, expected_commit=None):
         source=Path(self.directory.name)/'main'
         def clone(*args,**kwargs):
             source.mkdir()
@@ -112,7 +121,7 @@ class ReleaseDownloadTest(unittest.TestCase):
         with patch.object(release.subprocess,'run',side_effect=clone) as run, \
              patch.object(release.subprocess,'check_output',return_value=self.commit+'\n') as revision, \
              patch.object(release,'read',side_effect=[response,body,response,body]) as reads:
-            release.latest('http://jenkins.invalid',source,self.destination)
+            release.latest('http://jenkins.invalid',source,self.destination,expected_commit=expected_commit)
             self.assertEqual(['git','clone','--depth','1','--single-branch','--branch','main',
                               'git@github.com:abhinav-jain09/options-edge-contracts.git',str(source)],run.call_args.args[0])
             self.assertEqual((True,120),(run.call_args.kwargs['check'],run.call_args.kwargs['timeout']))
@@ -176,6 +185,81 @@ class ReleaseDownloadTest(unittest.TestCase):
                     self.assertFalse(case.destination.exists())
                 finally:case.doCleanups()
 
+
+
+class RegistryResourceInventory(unittest.TestCase):
+    """verify_package against a fixture checkout and in-memory jars: the schemas-registry files pom.xml packages are inventoried and compared byte for byte."""
+    INDICATORS = ("StudyBar", "StudiesCurrent", "StudyEngineImage")
+
+    def source(self):
+        root = Path(tempfile.mkdtemp(prefix="cvd-contracts-source-"))
+        files = {"schemas/cvd/A.avsc": b'{"a":1}', "python/optionsedge_contracts/m.py": b"x=1\n"}
+        for n in self.INDICATORS:
+            files["schemas-registry/indicators/%s.avsc" % n] = n.encode()
+        files.update({"schemas-registry/indicators/v1/StudyBar.avsc": b"v1-bar", "schemas-registry/indicators/v1/StudiesCurrent.avsc": b"v1-current"})
+        files.update({"schemas-registry/ta/W.avsc": b"w", "schemas-registry/ta/v1/V.avsc": b"v", "schemas-registry/esflow/E.avsc": b"e", "schemas-registry/geometry/G.avsc": b"g"})
+        for name, data in files.items():
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        return root, files
+
+    def jar(self, files, extra=None, replace=None):
+        entries = {("cvd/A.avsc" if k == "schemas/cvd/A.avsc" else "optionsedge_contracts/m.py" if k.startswith("python/") else k): v for k, v in files.items()}
+        entries.update(replace or {})
+        entries.update(extra or {})
+        entries["META-INF/MANIFEST.MF"] = b"m"
+        entries["com/optionsedge/contracts/X.class"] = b"c"
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            for name, data in entries.items():
+                archive.writestr(name, data)
+        return buffer.getvalue()
+
+    def test_a_jar_with_exactly_the_packaged_registry_files_is_accepted(self):
+        root, files = self.source()
+        release.verify_package(self.jar(files), root)
+
+    def test_a_version_1_study_file_that_differs_from_main_or_is_missing_from_the_jar_is_refused(self):
+        root, files = self.source()
+        with self.assertRaisesRegex(ValueError, "differs from main: schemas-registry/indicators/v1/StudyBar.avsc"):
+            release.verify_package(self.jar(files, replace={"schemas-registry/indicators/v1/StudyBar.avsc": b"tampered"}), root)
+        short = {k: v for k, v in files.items() if k != "schemas-registry/indicators/v1/StudiesCurrent.avsc"}
+        with self.assertRaisesRegex(ValueError, "inventory differs from main"):
+            release.verify_package(self.jar(short), root)
+
+    def test_a_registry_file_that_differs_from_main_is_refused(self):
+        root, files = self.source()
+        with self.assertRaisesRegex(ValueError, "differs from main: schemas-registry/ta/W.avsc"):
+            release.verify_package(self.jar(files, replace={"schemas-registry/ta/W.avsc": b"tampered"}), root)
+
+    def test_an_unlisted_registry_file_in_the_jar_is_refused(self):
+        root, files = self.source()
+        with self.assertRaisesRegex(ValueError, "inventory differs from main"):
+            release.verify_package(self.jar(files, extra={"schemas-registry/ta/Extra.avsc": b"x"}), root)
+
+    def test_a_packaged_registry_file_missing_from_the_jar_is_refused(self):
+        root, files = self.source()
+        smaller = {k: v for k, v in files.items() if k != "schemas-registry/esflow/E.avsc"}
+        with self.assertRaisesRegex(ValueError, "inventory differs from main"):
+            release.verify_package(self.jar(smaller), root)
+
+    def test_the_geometry_registry_files_are_part_of_the_inventory(self):
+        root, files = self.source()
+        smaller = {k: v for k, v in files.items() if k != "schemas-registry/geometry/G.avsc"}
+        with self.assertRaisesRegex(ValueError, "inventory differs from main"):
+            release.verify_package(self.jar(smaller), root)
+
+    def test_a_jar_carrying_an_indicator_file_main_lacks_is_refused(self):
+        root, files = self.source()
+        (root / "schemas-registry/indicators/StudyBar.avsc").unlink()
+        with self.assertRaisesRegex(ValueError, "inventory differs from main"):
+            release.verify_package(self.jar(files), root)
+
+    def test_an_unknown_non_class_entry_is_refused(self):
+        root, files = self.source()
+        with self.assertRaisesRegex(ValueError, "Unverified contracts package entry: evil.txt"):
+            release.verify_package(self.jar(files, extra={"evil.txt": b"x"}), root)
 
 if __name__ == "__main__":
     unittest.main()

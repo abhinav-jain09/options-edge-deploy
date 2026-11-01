@@ -51,6 +51,7 @@ M
 T="$T"
 [ "\$(cat "\$T/fail")" = configs ] && { echo "Error: TimeoutException" >&2; exit 1; }
 name=\$(sed -E 's/.*--entity-name ([^ ]+).*/\1/' <<<"\$*")
+case " \$* " in *" --alter "*) echo "\$*" >> "\$T/altered"; nb=\$(sed -E 's/.*retention\\.bytes=([0-9]+).*/\1/' <<<"\$*"); sed -i.bak -E "s/retention\\.bytes=[-0-9]+/retention.bytes=\$nb/" "\$T/topics/\$name.cfg"; echo "Completed updating config"; exit 0 ;; esac
 cat "\$T/topics/\$name.cfg"
 M
   chmod +x "$T/bin/kafka-topics" "$T/bin/kafka-configs"; rm -f "$T/rf"
@@ -90,6 +91,17 @@ all_good; expect_ok "events cap equal to the given integer → ok" LEVEL_ABSORPT
 all_good; expect_fail "events cap different from the given integer → fail (the service refuses any other value)" LEVEL_ABSORPTION_EVENTS_RETENTION_BYTES=16777216
 all_good; topic $VO 1 delete -1 -1; expect_ok "voice kept forever (-1) → ok"
 all_good; topic $VO 1 delete 604800000 -1; expect_ok "voice at exactly 7 days → ok"
+
+# --- a new retention artifact: raise yes (only when asked), lower never --------------------------------------------------------
+all_good; : > "$T/altered"; runenv LEVEL_ABSORPTION_EVENTS_RETENTION_BYTES=3000000 LEVEL_ABSORPTION_ALIGN_EVENTS_RETENTION=1; rc=$?
+{ [ $rc -eq 0 ] && grep -q -- "--alter --add-config retention.bytes=3000000" "$T/altered" && grep -q "ok: '$EV'.*retention.bytes=3000000" "$T/out"; } \
+  && ok "existing cap below the artifact + ALIGN=1 → raised to the artifact's integer, then verified" || { bad "raise"; cat "$T/out"; }
+all_good; : > "$T/altered"; expect_fail "existing cap below the artifact, ALIGN unset → fail, nothing altered" LEVEL_ABSORPTION_EVENTS_RETENTION_BYTES=3000000
+[ ! -s "$T/altered" ] && ok "…and nothing was altered" || bad "altered without ALIGN"
+all_good; : > "$T/altered"; expect_fail "existing cap ABOVE the artifact + ALIGN=1 → refused (lowering can delete evidence)" LEVEL_ABSORPTION_EVENTS_RETENTION_BYTES=1000000 LEVEL_ABSORPTION_ALIGN_EVENTS_RETENTION=1
+[ ! -s "$T/altered" ] && ok "…and nothing was altered" || bad "lowered"
+all_good; : > "$T/altered"; expect_ok "existing cap equal + ALIGN=1 → ok, nothing altered" LEVEL_ABSORPTION_EVENTS_RETENTION_BYTES=2152919 LEVEL_ABSORPTION_ALIGN_EVENTS_RETENTION=1
+[ ! -s "$T/altered" ] && ok "…and nothing was altered" || bad "altered when equal"
 
 # --- the events topic ------------------------------------------------------------------------------------------------------
 all_good; topic $EV 1 delete -1 -1;               expect_fail "events retention.bytes unlimited → fail"

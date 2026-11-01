@@ -71,6 +71,23 @@ spec:
             # an empty topic, or a deliberately later bootstrap date, bootstraps from retained inputs instead (README).
             # Set the flag again only for the README's explicit rebuild; service-deploy.sh's RTH_ROLLOVER_GATE refuses to
             # apply it inside the New York regular session.
+            # CHART-STRUCTURE-TOOLS structure tools and CLASSICAL-CHART-PATTERNS classical geometry (both Avro on their own new topics): OFF, explicitly. The code
+            # default is also off; the literal keeps the state visible in the render. Each flag is sampled once per schedule start and
+            # recorded in the recovery checkpoint when on, so flipping one needs a restart. Order for EACH, after the W0 cutover has
+            # completed (docs/ta-books/DEPLOY-ROLLOUT.md): subjects registered on every registry (scripts/kafka/ensure-fixed-id-schemas.sh)
+            # -> topic ensured (ensure-market-structure-topics.sh) -> gateway flag (GATEWAY_STRUCTURE_TOOLS_ENABLED / GATEWAY_GEOMETRY_ENABLED)
+            # -> THIS flag. The service refuses to start with the geometry flag on and a subject missing from the registry.
+            - name: MARKET_STRUCTURE_TOOLS_ENABLED
+              value: "false"
+            - name: MARKET_STRUCTURE_GEOMETRY_ENABLED
+              value: "false"
+            # X2 swing pivots (processing BREAKOUT-TRAP-VS-REAL-REQUIREMENT.md X2): the degree-2 swing points of the structure-tools fold, published as Avro SwingPivotRecord (subject id 2606,
+            # registered with the break-classifier subjects) on options.spx.market-structure.swing-pivots (1 partition, ensured by scripts/kafka/ensure-market-structure-topics.sh), the input the
+            # break-classifier-service reads. OFF here and in production (decision made by Claude under the owner's standing instruction, the owner may overrule); the dev overlay turns it on.
+            # Effective only while MARKET_STRUCTURE_TOOLS_ENABLED is on for the session (the swing series lives in the tools fold); it gates publication only, the fold and the recovery
+            # fingerprint are unchanged. Off: no record, no topic verification.
+            - name: MARKET_STRUCTURE_SWING_PIVOTS_ENABLED
+              value: "false"
             - name: JAVA_TOOL_OPTIONS
               value: -Xms256m -Xmx640m
           ports:

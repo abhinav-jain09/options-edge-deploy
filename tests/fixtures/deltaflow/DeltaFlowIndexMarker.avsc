@@ -1,0 +1,12 @@
+{
+  "type": "record",
+  "name": "DeltaFlowIndexMarker",
+  "namespace": "com.optionsedge.contracts.deltaflow",
+  "doc": "A PRIVATE image of delta-flow-service (a Kafka Streams state-store value / its compacted changelog, or an internal repartition topic), not a topic contract: it exists as a released .avsc only so the serde has a registered schema (RecordNameStrategy, auto.register.schemas=false), FULL compatibility. Until the Avro cutover these values were hand-built JSON text; the changelogs and repartition topics are DELETED at the cutover (retained JSON is never read). Prices (strike, trade price, bid, ask, spot) are decimal(38,18); every derived statistic keeps its double. Presence marker of the trading-date index store (the JSON-era value was the text 1); only the key carries information.",
+  "fields": [
+    {
+      "name": "marker",
+      "type": "int"
+    }
+  ]
+}
