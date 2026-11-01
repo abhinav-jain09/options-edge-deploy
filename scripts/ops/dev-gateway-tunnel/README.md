@@ -15,8 +15,9 @@ so Gateway/TWS can keep "allow connections from localhost only".
 ## Behaviour (all tested 2026-11-01)
 
 - **Restart-proof:** `com.optionsedge.ib-gateway-reverse-tunnel` LaunchAgent (`RunAtLoad`, `KeepAlive`), wrapped in `caffeinate -i` so an idle Mac does not sleep. It starts at login; kill -9 of the supervisor or of ssh brings it back within seconds.
-- **Outage-proof:** ssh keepalives (dead link noticed in ~30 s), a loop that reconnects with a capped 2-30 s backoff, and a pre-connect cleanup of a stale remote `sshd` that still holds the ports after an ungraceful drop (only a listener owned by `sshd` is ever killed).
-- **Route:** home network `192.168.100.102` whenever its ssh port answers, else Tailscale `100.117.21.102`. While on Tailscale it re-checks the LAN every 5 s and moves back as soon as it answers; on the LAN, 3 failed 5 s checks fail over to Tailscale. A LAN address that answers but is another machine fails the pinned host key (`HostKeyAlias dev-oe.tail4fa2fd.ts.net`, `StrictHostKeyChecking yes`) and is skipped for 60 s.
+- **Immediate:** with no route it probes both addresses every second and connects the moment one answers (0.4 s measured); a tunnel that was up reconnects at once, one that fails fast retries after 1, 2, 3, 4, 5 s and never waits longer. The dev feed retries its own connection every 3 s, so data resumes within about 3 s of the Gateway being up. (The dev broker's own retry delay grows from 1 s to 60 s after a long outage.)
+- **Outage-proof:** ssh keepalives (dead peer noticed in ~10 s), route checks every 2 s, and a pre-connect cleanup of a stale remote `sshd` that still holds the ports after an ungraceful drop (only a listener owned by `sshd` is ever killed).
+- **Route:** home network `192.168.100.102` whenever its ssh port answers, else Tailscale `100.117.21.102`. While on Tailscale it re-checks the LAN every 2 s and moves back as soon as it answers; on the LAN, 2 failed 2 s checks fail over to Tailscale (3.7 s measured), and the switch back to the LAN took 4.2 s. A LAN address that answers but is another machine fails the pinned host key (`HostKeyAlias dev-oe.tail4fa2fd.ts.net`, `StrictHostKeyChecking yes`) and is skipped for 60 s.
 - **Force Tailscale** (also the test hook): `touch ~/Library/dev-gateway-tunnel/state.lan-down`; remove the file to go back.
 
 ## Install / operate
