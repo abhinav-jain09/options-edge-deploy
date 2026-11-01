@@ -1,0 +1,18 @@
+{
+  "type": "record",
+  "name": "SpotVolRegimeWindowState",
+  "namespace": "com.optionsedge.contracts.spotvolregime",
+  "doc": "Value of the svr-window-store state store (and so of its compacted changelog) of spot-vol-regime-service: the rolling sample buffer of ONE leg, keyed SPX or VIX. Private to the service, not a topic contract; it lives here only so the Avro serde has a released, registered schema. Until the 2026-10-19 conversion the value was the JSON text {\"v\":N,\"s\":[[ts,price,straddleMid|null],...]}. Price slots are decimal(38,18) like every canonical price.",
+  "fields": [
+    {"name": "v", "type": "int", "doc": "Store layout version; any other value is corruption (the service self-heals with WINDOW_STATE_RESET)."},
+    {"name": "samples", "type": {"type": "array", "items": {
+      "type": "record",
+      "name": "SpotVolRegimeSample",
+      "fields": [
+        {"name": "ts", "type": "long", "doc": "Event time of the sample, epoch milliseconds; strictly increasing within the buffer."},
+        {"name": "price", "type": {"type": "bytes", "logicalType": "decimal", "precision": 38, "scale": 18}, "doc": "Price, decimal(38,18) of the double's shortest round-trip text (never rounded; the service drops a value it cannot encode before it is buffered); finite, positive."},
+        {"name": "straddleMid", "type": ["null", {"type": "bytes", "logicalType": "decimal", "precision": 38, "scale": 18}], "default": null, "doc": "ATM straddle mid; null = no option evidence. Finite and positive when present."}
+      ]
+    }}}
+  ]
+}

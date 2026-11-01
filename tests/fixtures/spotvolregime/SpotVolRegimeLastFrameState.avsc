@@ -1,0 +1,40 @@
+{
+  "type": "record",
+  "name": "SpotVolRegimeLastFrameState",
+  "namespace": "com.optionsedge.contracts.spotvolregime",
+  "doc": "Value of the svr-last-frame-store state store (and so of its compacted changelog) of spot-vol-regime-service: the durable frontier record, keyed SPX. Private to the service, not a topic contract; it lives here only so the Avro serde has a released, registered schema. Until the 2026-10-19 conversion the value was a hand-built JSON object with these same names. The band travels INSIDE this record so it advances in one atomic put with the sequence.",
+  "fields": [
+    {"name": "v", "type": "int", "doc": "Store layout version; any other value is corruption (the service self-heals with SEQ_RESET)."},
+    {"name": "frameMs", "type": "long", "doc": "Newest PUBLISHED grid point, -1 before the first frame."},
+    {"name": "regime", "type": "string", "doc": "The DECLARED regime name (what the transition edge fires on)."},
+    {"name": "seq", "type": "long", "doc": "Monotonic output sequence."},
+    {"name": "pendingFrameMs", "type": "long", "doc": "Grid point attempted but NOT published, -1 when none."},
+    {"name": "pendingAttempts", "type": "long", "doc": "Consecutive failures on pendingFrameMs, 0 when none."},
+    {"name": "prunedThroughMs", "type": "long", "doc": "Newest timestamp pruning has ever discarded, -1 when nothing was."},
+    {"name": "declaredSinceMs", "type": "long", "doc": "When the run behind regime began, -1 while UNKNOWN."},
+    {"name": "candidateRegime", "type": "string", "doc": "The reading currently challenging regime, empty string when none."},
+    {"name": "candidateSinceMs", "type": "long", "doc": "When that challenge began, -1 when there is no candidate."},
+    {"name": "band", "type": ["null", {
+      "type": "record",
+      "name": "SpotVolRegimeBandState",
+      "doc": "The durable strike-band state of ONE session.",
+      "fields": [
+        {"name": "sessionDate", "type": "string", "doc": "ISO ET trading date this state belongs to."},
+        {"name": "suppressed", "type": "boolean", "doc": "Traversal history provably incomplete: emit no band for the rest of the session."},
+        {"name": "limitExceeded", "type": "boolean", "doc": "The resolved marking outgrew StrikeBand.MAX_MARKS."},
+        {"name": "episodeRegime", "type": "string", "doc": "Regime of the episode currently extending the band, empty string when none."},
+        {"name": "episodeLo", "type": "int", "doc": "Lowest strike this episode has reached, -1 when none."},
+        {"name": "episodeHi", "type": "int", "doc": "Highest strike this episode has reached, -1 when none."},
+        {"name": "marks", "type": {"type": "array", "items": {
+          "type": "record",
+          "name": "SpotVolRegimeBandMark",
+          "fields": [
+            {"name": "strike", "type": "int"},
+            {"name": "regime", "type": "string"},
+            {"name": "markedAtEventTimeMs", "type": "long"}
+          ]
+        }}, "doc": "The RESOLVED marking, ascending by strike, at most one entry per strike."}
+      ]
+    }], "default": null, "doc": "Null before the first frame of a session and after any reset."}
+  ]
+}
