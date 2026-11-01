@@ -146,5 +146,66 @@ class Declarations(unittest.TestCase):
             self.assertFalse(re.search(rf"(^|\s)(es\.)?{re.escape(t)}(:|\s|$)", preserved), t)
 
 
+DOC = ROOT / "docs/DELTA-FLOW-AVRO-CUTOVER.md"
+NS = "com.optionsedge.contracts.deltaflow."
+EXPECTED_SUBJECT = {"delta-flow-by-trade": "DeltaFlowEvent", "delta-flow-diagnostics": "DeltaFlowEvent", "delta-flow-by-strike": "DeltaFlowStrikeSnapshot",
+                    "delta-flow-corrections": "DeltaFlowCorrectionEvent", **{f"delta-flow-{w}": "DeltaFlowSnapshot" for w in ("10s", "30s", "1m", "5m", "15m", "session", "dashboard")}}
+
+
+def lint_blocks():
+    """(marker, text) of every fenced block in the runbook that starts with a `# runbook-lint:<kind> ...` line, in document order."""
+    text = DOC.read_text()
+    return [(m.group(1).strip(), m.group(0)) for m in re.finditer(r"```text\n# runbook-lint:([^\n]*)\n.*?```", text, re.S)]
+
+
+class RunbookLint(unittest.TestCase):
+    """The commands in the runbook are exact and match the harness: one --pre-cutover-id and one --subject per topic (the harness takes
+    `--subject <topic>=<record.full.Name>` once per topic, no globbing/alternation), the topic list is the declared one, and every consumer
+    group holding an offset is deleted BEFORE the strict wipe (the harness preflight refuses a committed offset)."""
+
+    def roll_forward(self, cluster):
+        blocks = [t for m, t in lint_blocks() if m.startswith("roll-forward") and (cluster in m)]
+        self.assertEqual(len(blocks), 1, cluster)
+        return blocks[0]
+
+    def check(self, block, prefix, declared):
+        text = block.replace("\\\n", " ")
+        topics = re.search(r"--topics (\S+)", text).group(1).split(",")
+        self.assertEqual(sorted(t[len(prefix):] for t in topics), sorted(EXPECTED_SUBJECT))
+        self.assertEqual(len(set(topics)), len(topics))
+        self.assertTrue(all(t.startswith(prefix) and re.fullmatch(r"[A-Za-z0-9._-]+", t) for t in topics))
+        pre = re.findall(r"--pre-cutover-id (\S+?)=", text)
+        self.assertEqual(sorted(pre), sorted(topics), "one --pre-cutover-id per topic")
+        subj = dict(re.findall(r"--subject (\S+?)=(\S+)", text))
+        self.assertEqual(sorted(subj), sorted(topics), "one --subject per topic")
+        self.assertEqual(len(re.findall(r"--subject ", text)), len(topics))
+        self.assertNotIn("|", "".join(re.findall(r"--subject \S+", text)))
+        for t, name in subj.items():
+            self.assertEqual(name, NS + EXPECTED_SUBJECT[t[len(prefix):]], t)
+            self.assertTrue((ROOT / "tests/fixtures/deltaflow" / (name[len(NS):] + ".avsc")).is_file(), name)
+        for t in topics:
+            self.assertIn(f"{t}:32", declared, t)
+        self.assertEqual(len(re.findall(r"--registry \S+", text)), 1)
+        self.assertIn("--writers-and-readers-stopped", text)
+
+    def test_dev_production_command(self):
+        self.check(self.roll_forward("<dev|production>"), "", var("OPTIONS_EDGE_TOPICS"))
+
+    def test_es4_command(self):
+        block = self.roll_forward("es4")
+        self.check(block, "es.", var("OPTIONS_EDGE_ES4_TOPICS"))
+        self.assertIn("--cluster es4", block)
+        self.assertIn("192.168.100.4:9092", block)
+        self.assertIn("--registry http://192.168.100.4:8081", block)
+
+    def test_groups_are_deleted_before_each_strict_wipe(self):
+        kinds = [m.split()[0] if m.startswith("delete-groups") else "wipe" for m, _ in lint_blocks()]
+        self.assertEqual(kinds, ["delete-groups", "wipe", "delete-groups", "wipe"])
+        for m, t in lint_blocks():
+            if m.startswith("delete-groups"):
+                self.assertIn("--delete --group", t)
+                self.assertIn("must print 0", t)
+
+
 if __name__ == "__main__":
     unittest.main()

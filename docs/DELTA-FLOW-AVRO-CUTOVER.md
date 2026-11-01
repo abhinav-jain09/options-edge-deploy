@@ -6,11 +6,11 @@ name** (no `.vN`/`.avro` sibling, no dual publish, no rollback). Contracts 0.35.
 Processing: producer `delta-flow-service` and the readers below in one change set; feed-gateway, options-edge (web monolith), short-premium-agent:
 one PR each. Generic wipe tool: `scripts/kafka/roll-forward-topics.sh` (deploy PR 1320, `docs/KAFKA-AVRO-TOPIC-ROLL-FORWARD.md`).
 
-## HARD PREREQUISITE (blocks step 5; nothing below may start without it)
-**Merge options-edge-deploy#1320 (`scripts/kafka/roll-forward-topics.sh`) FIRST.** The destructive wipe in step 5 is performed ONLY by that merged script;
+## HARD PREREQUISITE (blocks step 5b; nothing below may start without it)
+**Merge options-edge-deploy#1320 (`scripts/kafka/roll-forward-topics.sh`) FIRST.** The destructive wipe in step 5b is performed ONLY by that merged script;
 this runbook neither contains nor copies it. At cutover record here, in the cutover change, the merge commit sha of #1320 that the operator ran:
 `roll-forward-topics.sh merge commit sha: ____________` and run the script from a checkout at (or after) that sha. Steps 1-4 and the two scripts of this PR
-(`ensure-delta-flow-schemas.sh`, `reset-delta-flow-state.sh`) do not need it; step 5 and everything after it do. If #1320 is not merged, STOP at the end of step 4.
+(`ensure-delta-flow-schemas.sh`, `reset-delta-flow-state.sh`) do not need it; step 5b and everything after it do. If #1320 is not merged, STOP at the end of step 5.
 `roll-forward-topics.sh --cluster` accepts `dev|production|es4` (the `es4` binding is added by this PR; see "es4" below).
 
 ## What is converted
@@ -80,18 +80,48 @@ Kafka readers (all converted to Avro-only in this change set unless marked):
    global store restored to its LATEST value, so every replayed trade older than `DELTA_FLOW_GREEK_MAX_AGE_MS` is rejected as `LOOKAHEAD_GREEK`/`STALE_GREEK` (zero lookahead tolerance), producing mass diagnostics and no flow.
    After the cutover the session aggregates therefore restart from the first accepted print (`sessionObservedFromMs` on session/dashboard/by-strike marks the partial session, as for any mid-day cold start).
    Also empty the pod's `kafka-streams-state` (an `emptyDir`: lost with the pod).
-5. **Delete and recreate the public topics** with the generic roll-forward tool. **HARD PREREQUISITE: options-edge-deploy#1320 is merged first; record its merge sha above and run the script from that sha.**
-   Read each TopicId first (`kafka-topics --describe --topic <t>`) and freeze topic administration, then, everything stopped:
-   `scripts/kafka/roll-forward-topics.sh --recreate --cluster dev|production --topics delta-flow-by-trade,delta-flow-by-strike,delta-flow-10s,delta-flow-30s,delta-flow-1m,delta-flow-5m,delta-flow-15m,delta-flow-session,delta-flow-dashboard,delta-flow-diagnostics,delta-flow-corrections
-   --pre-cutover-id <topic>=<id> (one per topic) --registry <url>
-   --subject delta-flow-by-trade=com.optionsedge.contracts.deltaflow.DeltaFlowEvent --subject delta-flow-diagnostics=com.optionsedge.contracts.deltaflow.DeltaFlowEvent
-   --subject delta-flow-10s|30s|1m|5m|15m|session|dashboard=com.optionsedge.contracts.deltaflow.DeltaFlowSnapshot
-   --subject delta-flow-by-strike=com.optionsedge.contracts.deltaflow.DeltaFlowStrikeSnapshot --subject delta-flow-corrections=com.optionsedge.contracts.deltaflow.DeltaFlowCorrectionEvent
-   --writers-and-readers-stopped <bootstrap> [kafka-bin-dir]` (strict mode: every topic must come back EMPTY at 32 partitions; the shape is copied from the live topic).
-   Then verify partitions=32, cleanup policy, retention and end offset 0, and delete every reader group that kept offsets on these topics
-   (`kafka-consumer-groups --delete --group <g>`; committed offsets survive a topic delete): the gateway groups `options-edge-feed-gateway-*`, `strike-intelligence`, `hedging-pressure`,
-   `dealer-ledger`, `drop-classifier`/`reversal-confirmation` client groups (assign-mode, none expected), `trade-evidence-api`, greek-move-authenticity, strike-invasion.
-   Do NOT use `apply-topics.sh` to recreate the topics ad hoc.
+5. **Delete every consumer group that holds an offset on these topics, THEN wipe.** The wipe harness's strict preflight REFUSES any committed offset on a topic it is about to delete
+   (committed offsets survive a topic delete, keyed by topic name), so the groups go first. Everything stopped, then:
+```text
+# runbook-lint:delete-groups
+kafka-consumer-groups --bootstrap-server <bootstrap> --describe --all-groups | awk '$2 ~ /^delta-flow-/ {print $1}' | sort -u   # every group with a committed offset on a delta-flow topic
+kafka-consumer-groups --bootstrap-server <bootstrap> --delete --group <g>                                                   # each one; a non-Empty group refuses: stop its readers first
+kafka-consumer-groups --bootstrap-server <bootstrap> --describe --all-groups | awk '$2 ~ /^delta-flow-/' | wc -l                      # must print 0
+```
+   Expect the gateway groups `options-edge-feed-gateway-*`, `strike-intelligence`, `hedging-pressure`, `dealer-ledger`, `trade-evidence-api`, greek-move-authenticity and strike-invasion (names as listed by the first command);
+   the monolith listener, drop-classifier and reversal-confirmation are assign-mode (no group). The last command must print 0 before the next step.
+5b. **Delete and recreate the public topics** with the generic roll-forward tool. **HARD PREREQUISITE: options-edge-deploy#1320 is merged first; record its merge sha above and run the script from that sha.**
+   Read each TopicId first (`kafka-topics --bootstrap-server <bootstrap> --describe --topic <t>`, the id is on the first line) and freeze topic administration. The harness takes one `--pre-cutover-id <topic>=<id>` and one
+   `--subject <topic>=<record.full.Name>` argument PER TOPIC (no globbing, no alternation); `<cluster>` is `dev` or `production` and `<bootstrap>` that cluster's broker as bound in the script:
+```text
+# runbook-lint:roll-forward <dev|production>
+scripts/kafka/roll-forward-topics.sh --recreate --cluster <dev|production> --topics delta-flow-by-trade,delta-flow-by-strike,delta-flow-10s,delta-flow-30s,delta-flow-1m,delta-flow-5m,delta-flow-15m,delta-flow-session,delta-flow-dashboard,delta-flow-diagnostics,delta-flow-corrections \
+  --pre-cutover-id delta-flow-by-trade=<TopicId read in the previous step> \
+  --pre-cutover-id delta-flow-by-strike=<TopicId read in the previous step> \
+  --pre-cutover-id delta-flow-10s=<TopicId read in the previous step> \
+  --pre-cutover-id delta-flow-30s=<TopicId read in the previous step> \
+  --pre-cutover-id delta-flow-1m=<TopicId read in the previous step> \
+  --pre-cutover-id delta-flow-5m=<TopicId read in the previous step> \
+  --pre-cutover-id delta-flow-15m=<TopicId read in the previous step> \
+  --pre-cutover-id delta-flow-session=<TopicId read in the previous step> \
+  --pre-cutover-id delta-flow-dashboard=<TopicId read in the previous step> \
+  --pre-cutover-id delta-flow-diagnostics=<TopicId read in the previous step> \
+  --pre-cutover-id delta-flow-corrections=<TopicId read in the previous step> \
+  --registry <registry-url> \
+  --subject delta-flow-by-trade=com.optionsedge.contracts.deltaflow.DeltaFlowEvent \
+  --subject delta-flow-by-strike=com.optionsedge.contracts.deltaflow.DeltaFlowStrikeSnapshot \
+  --subject delta-flow-10s=com.optionsedge.contracts.deltaflow.DeltaFlowSnapshot \
+  --subject delta-flow-30s=com.optionsedge.contracts.deltaflow.DeltaFlowSnapshot \
+  --subject delta-flow-1m=com.optionsedge.contracts.deltaflow.DeltaFlowSnapshot \
+  --subject delta-flow-5m=com.optionsedge.contracts.deltaflow.DeltaFlowSnapshot \
+  --subject delta-flow-15m=com.optionsedge.contracts.deltaflow.DeltaFlowSnapshot \
+  --subject delta-flow-session=com.optionsedge.contracts.deltaflow.DeltaFlowSnapshot \
+  --subject delta-flow-dashboard=com.optionsedge.contracts.deltaflow.DeltaFlowSnapshot \
+  --subject delta-flow-diagnostics=com.optionsedge.contracts.deltaflow.DeltaFlowEvent \
+  --subject delta-flow-corrections=com.optionsedge.contracts.deltaflow.DeltaFlowCorrectionEvent \
+  --writers-and-readers-stopped <bootstrap> [kafka-bin-dir]
+```
+   Strict mode: every topic must come back EMPTY at 32 partitions; the shape is copied from the live topic. Then verify partitions=32, cleanup policy, retention and end offset 0. Do NOT use `apply-topics.sh` to recreate the topics ad hoc.
 6. **Deploy the Avro readers** (all of the above except delta-flow-service) and verify each Ready with zero records consumed (they must never meet retained JSON).
 7. **Deploy the Avro producer** (`delta-flow-service`, image built from the merged tree); verify its first records on every output topic: the first byte is `00` and the 4-byte id resolves
    (`/schemas/ids/<id>/versions`) to the subject of the table above (`kafka-avro-console-consumer --topic delta-flow-by-strike --property schema.registry.url=<registry> --max-messages 1`);
@@ -109,16 +139,46 @@ Prod's drop-classifier and reversal-confirmation read these topics, so the es4 c
    and the PROD drop-classifier and reversal-confirmation (`es.delta-flow-by-trade`, cross-broker; assign-mode consumers with no committed group).
 3. `KAFKA_BOOTSTRAP_SERVERS=192.168.100.4:9092 DELTA_FLOW_APP_ID=options-edge-delta-flow-service-es4-r2 scripts/kafka/reset-delta-flow-state.sh` (group + 2 repartition + 8 changelog topics).
 4. Read each TopicId: `for t in es.delta-flow-by-trade es.delta-flow-by-strike es.delta-flow-10s es.delta-flow-30s es.delta-flow-1m es.delta-flow-5m es.delta-flow-15m es.delta-flow-session es.delta-flow-dashboard es.delta-flow-diagnostics es.delta-flow-corrections; do kafka-topics --bootstrap-server 192.168.100.4:9092 --describe --topic $t | head -1; done`, and freeze es4 topic administration (the es4 clean must not run meanwhile).
-5. Wipe and recreate (everything stopped, so strict mode: every topic must come back EMPTY, i.e. end offset 0 on every partition, and no consumer group may hold an offset):
-   `scripts/kafka/roll-forward-topics.sh --recreate --cluster es4 --topics es.delta-flow-by-trade,...,es.delta-flow-corrections (the 11 above)
-   --pre-cutover-id <topic>=<id> (one per topic) --registry http://192.168.100.4:8081 --subject es.delta-flow-by-trade=com.optionsedge.contracts.deltaflow.DeltaFlowEvent
-   --subject es.delta-flow-diagnostics=...DeltaFlowEvent --subject es.delta-flow-10s|30s|1m|5m|15m|session|dashboard=...DeltaFlowSnapshot --subject es.delta-flow-by-strike=...DeltaFlowStrikeSnapshot
-   --subject es.delta-flow-corrections=...DeltaFlowCorrectionEvent --writers-and-readers-stopped 192.168.100.4:9092 [kafka-bin-dir]`.
+5. Delete every consumer group that holds an offset on an `es.delta-flow-*` topic BEFORE the wipe (strict mode refuses any committed offset on a topic it deletes): the es4 dealer-ledger, strike-intelligence and feed-gateway groups.
+   Prod drop-classifier / reversal-confirmation are assign-mode: nothing to delete.
+```text
+# runbook-lint:delete-groups
+kafka-consumer-groups --bootstrap-server 192.168.100.4:9092 --describe --all-groups | awk '$2 ~ /^es\.delta-flow-/ {print $1}' | sort -u   # every group with a committed offset on a delta-flow topic
+kafka-consumer-groups --bootstrap-server 192.168.100.4:9092 --delete --group <g>                                                   # each one; a non-Empty group refuses: stop its readers first
+kafka-consumer-groups --bootstrap-server 192.168.100.4:9092 --describe --all-groups | awk '$2 ~ /^es\.delta-flow-/' | wc -l                      # must print 0
+```
+6. Wipe and recreate (everything stopped, strict mode: every topic must come back EMPTY, i.e. end offset 0 on every partition, and no group may hold an offset, which step 5 guaranteed), one `--pre-cutover-id` and one `--subject` argument per topic:
+```text
+# runbook-lint:roll-forward es4
+scripts/kafka/roll-forward-topics.sh --recreate --cluster es4 --topics es.delta-flow-by-trade,es.delta-flow-by-strike,es.delta-flow-10s,es.delta-flow-30s,es.delta-flow-1m,es.delta-flow-5m,es.delta-flow-15m,es.delta-flow-session,es.delta-flow-dashboard,es.delta-flow-diagnostics,es.delta-flow-corrections \
+  --pre-cutover-id es.delta-flow-by-trade=<TopicId read in the previous step> \
+  --pre-cutover-id es.delta-flow-by-strike=<TopicId read in the previous step> \
+  --pre-cutover-id es.delta-flow-10s=<TopicId read in the previous step> \
+  --pre-cutover-id es.delta-flow-30s=<TopicId read in the previous step> \
+  --pre-cutover-id es.delta-flow-1m=<TopicId read in the previous step> \
+  --pre-cutover-id es.delta-flow-5m=<TopicId read in the previous step> \
+  --pre-cutover-id es.delta-flow-15m=<TopicId read in the previous step> \
+  --pre-cutover-id es.delta-flow-session=<TopicId read in the previous step> \
+  --pre-cutover-id es.delta-flow-dashboard=<TopicId read in the previous step> \
+  --pre-cutover-id es.delta-flow-diagnostics=<TopicId read in the previous step> \
+  --pre-cutover-id es.delta-flow-corrections=<TopicId read in the previous step> \
+  --registry http://192.168.100.4:8081 \
+  --subject es.delta-flow-by-trade=com.optionsedge.contracts.deltaflow.DeltaFlowEvent \
+  --subject es.delta-flow-by-strike=com.optionsedge.contracts.deltaflow.DeltaFlowStrikeSnapshot \
+  --subject es.delta-flow-10s=com.optionsedge.contracts.deltaflow.DeltaFlowSnapshot \
+  --subject es.delta-flow-30s=com.optionsedge.contracts.deltaflow.DeltaFlowSnapshot \
+  --subject es.delta-flow-1m=com.optionsedge.contracts.deltaflow.DeltaFlowSnapshot \
+  --subject es.delta-flow-5m=com.optionsedge.contracts.deltaflow.DeltaFlowSnapshot \
+  --subject es.delta-flow-15m=com.optionsedge.contracts.deltaflow.DeltaFlowSnapshot \
+  --subject es.delta-flow-session=com.optionsedge.contracts.deltaflow.DeltaFlowSnapshot \
+  --subject es.delta-flow-dashboard=com.optionsedge.contracts.deltaflow.DeltaFlowSnapshot \
+  --subject es.delta-flow-diagnostics=com.optionsedge.contracts.deltaflow.DeltaFlowEvent \
+  --subject es.delta-flow-corrections=com.optionsedge.contracts.deltaflow.DeltaFlowCorrectionEvent \
+  --writers-and-readers-stopped 192.168.100.4:9092 [kafka-bin-dir]
+```
    Its post-checks verify new id, partitions (32), RF and every config equal to the captured live shape, readable offsets on every partition and EMPTY; a topic whose id differs from `--pre-cutover-id` refuses the whole run before any delete.
-6. Reader groups: committed offsets survive a topic delete. Delete the groups of the es4 readers that kept offsets (`kafka-consumer-groups --bootstrap-server 192.168.100.4:9092 --list`, then `--delete --group <g>` for the dealer-ledger,
-   strike-intelligence and feed-gateway groups); the harness's strict mode fails on any leftover offset on these topics. Prod drop-classifier / reversal-confirmation are assign-mode: nothing to delete.
 7. Deploy the Avro readers (es4 services; prod drop-classifier / reversal-confirmation with the es4 registry env), verify Ready with zero records consumed, then the es4 producer; verify as in step 7 above against the es4 registry.
 
 ## Rollback
-There is none by decision (roll forward only). Before step 3 nothing has changed (registration is additive under FULL). After step 5 the topics are empty by design; a failure is
+There is none by decision (roll forward only). Before step 3 nothing has changed (registration is additive under FULL). After step 5b the topics are empty by design; a failure is
 fixed forward by `--verify --new-topic-id ...` or, if JSON appears, by stopping the JSON writer and wiping again as the generic tool describes.
