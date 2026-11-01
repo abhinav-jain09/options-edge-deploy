@@ -35,7 +35,7 @@ abort() { echo "ABORT: $* — do NOT enable strike-invasion; fix and re-run '$0 
 group_must_be_idle() {
   local rc=0 out
   out=$("$KCG" --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --describe --group "$APP" --state 2>&1) || rc=$?
-  if printf '%s' "$out" | grep -qiE "Consumer group '$APP' does not exist"; then GSTATE=absent
+  if printf '%s' "$out" | grep -qiE "Consumer group '$APP' does not exist|GroupIdNotFoundException|Group $APP not found"; then GSTATE=absent
   elif [ "$rc" -ne 0 ]; then abort "cannot describe group $APP (rc=$rc)"
   else GSTATE=$(printf '%s\n' "$out" | awk -v g="$APP" '$1 == g {print $(NF-1)}' | head -1); fi
   case "$GSTATE" in absent|Empty) ;; *) abort "group $APP is '${GSTATE:-unknown}', only absent/Empty may be pinned or verified" ;; esac
