@@ -112,8 +112,39 @@ rf_dynamic_configs() { # <topic> -> sorted key=value lines of the topic's dynami
     || { echo "FATAL: cannot read the configs of $1: $out" >&2; return 1; }
   printf '%s\n' "$out" | grep -q "^Dynamic configs for topic $1 are:" \
     || { echo "FATAL: unrecognised kafka-configs output for $1: $out" >&2; return 1; }
-  printf '%s\n' "$out" | awk '/^[ \t]+[^ \t=]+=/ && / sensitive=(true|false) synonyms=\{DYNAMIC_TOPIC_CONFIG:/ {
-    sub(/^[ \t]+/, ""); sub(/ sensitive=(true|false) synonyms=\{.*$/, ""); print }' | LC_ALL=C sort
+  local parsed
+  parsed="$(printf '%s\n' "$out" | awk '# Parses `kafka-configs --describe` lines `  key=value sensitive=(true|false) synonyms={SRC:key=value[, ...]}` DELIMITER-SAFELY:
+# a value may itself contain " sensitive=false synonyms={". The delimiter is the ONE candidate whose synonym list starts with SRC:key=<the
+# candidate value> followed by "," or "}". Zero or several consistent candidates, or any line off-grammar => an ERR: line (fail closed).
+function fail(m) { print "ERR: " m ": " $0; bad = 1 }
+NR == 1 { next }
+/^[ \t]*$/ { next }
+{
+  line = $0
+  if (line !~ /^[ \t]+[^ \t=][^ \t=]*=/ || substr(line, length(line)) != "}") { fail("line does not match the kafka-configs grammar"); next }
+  body = line; sub(/^[ \t]+/, "", body)
+  eq = index(body, "="); key = substr(body, 1, eq - 1); rest = substr(body, eq + 1)
+  n = 0; off = 0; tmp = rest; chosen = ""; src = ""
+  while (1) {
+    t = tmp; p1 = index(t, " sensitive=true synonyms={"); p2 = index(t, " sensitive=false synonyms={")
+    p = (p1 == 0 || (p2 != 0 && p2 < p1)) ? p2 : p1
+    if (p == 0) break
+    abs = off + p
+    val = substr(rest, 1, abs - 1)
+    after = substr(rest, abs); sub(/^ sensitive=(true|false) synonyms=\{/, "", after)
+    c = index(after, ":"); s = substr(after, 1, c - 1)
+    if (c > 1 && s ~ /^[A-Z_]+$/) {
+      want = s ":" key "=" val
+      if (substr(after, 1, length(want)) == want && (substr(after, length(want) + 1, 1) == "," || substr(after, length(want) + 1, 1) == "}")) { n++; chosen = val; src = s }
+    }
+    off = abs; tmp = substr(rest, off + 1)
+  }
+  if (n != 1) { fail("ambiguous or inconsistent value/synonym split (" n " candidates)"); next }
+  if (src == "DYNAMIC_TOPIC_CONFIG") print key "=" chosen
+}
+END { exit 0 }')" || { echo "FATAL: cannot parse the configs of $1" >&2; return 1; }
+  case "$parsed" in *ERR:*) printf '%s\n' "$parsed" | grep '^ERR:' >&2; echo "FATAL: ambiguous kafka-configs output for $1; refusing (nothing was changed)" >&2; return 1 ;; esac
+  printf '%s\n' "$parsed" | grep -v '^$' | LC_ALL=C sort || true
 }
 capture_shape() { # <describe-line> <file> <topic-id> <topic>
   local desc="$1" file="$2" parts rf cfg
@@ -311,10 +342,9 @@ for t in "${TOPICS[@]}"; do
       *$'\n'"$t"$'\n'*) fail_run "$t" "$t was present at preflight but is ABSENT at its turn (deleted by someone else, or an earlier part of this run?). Refusing to recreate it blind; find out why, then re-run with --topic-absent-after-failed-create." ;;
     esac
   fi
-  if ! printf '%s\n' "$LIST" | grep -qx "$t"; then   # recovery of an absent topic: the group gates apply before --create too
-    LASTG="$("$KG" --bootstrap-server "$BS" --describe --all-groups 2>&1)" || fail_run "$t" "cannot read consumer groups; nothing created."
-    groups_gate "$t" "$LASTG" || fail_run "$t" "consumer-group gate failed before create; nothing created."
-  fi
+  # EVERY create (normal delete/recreate and absent-recovery) is preceded by a FRESH group read and both group gates
+  LASTG="$("$KG" --bootstrap-server "$BS" --describe --all-groups 2>&1)" || fail_run "$t" "cannot read consumer groups; nothing created."
+  groups_gate "$t" "$LASTG" || fail_run "$t" "consumer-group gate failed before create; nothing created (if $t was already deleted it is ABSENT: clear the offsets, then re-run with --topic-absent-after-failed-create)."
   parts="$(shape_get "$STATE/$t.shape" partitions)"; rf="$(shape_get "$STATE/$t.shape" rf)"
   args=(--create --topic "$t" --partitions "$parts" --replication-factor "$rf")
   while IFS='=' read -r k v; do

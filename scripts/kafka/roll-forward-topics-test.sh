@@ -41,6 +41,7 @@ echo $(( $(cat "$MOCK_DIR/cnt.kc" 2>/dev/null || echo 0) + 1 )) > "$MOCK_DIR/cnt
 echo "Dynamic configs for topic $name are:"
 while IFS= read -r l; do [ -n "$l" ] || continue; l="$(printf '%s' "$l" | sed 's/=\[\(.*\)\]$/=\1/')"
   printf '  %s sensitive=false synonyms={DYNAMIC_TOPIC_CONFIG:%s}\n' "$l" "$l"; done < "$MOCK_DIR/$name/cfg"
+[ "${MOCK_KC_JUNK:-}" = "$name" ] && echo "  this line is not in the grammar"
 printf '  broker.default=1 sensitive=false synonyms={STATIC_BROKER_CONFIG:broker.default=1}\n'
 MOCK
 cat > "$TMP/bin/kafka-consumer-groups.sh" <<'MOCK'
@@ -323,7 +324,7 @@ two
 check "a config changed between preflight and last look => no delete" "$(MOCK_MUT=b.two:2:cfg:segment.bytes=7 run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
 check "…b.two was not deleted (config)" "$(grep -c '^deleted:b.two' "$TMP/state/log")" 0
 two
-check "a stale committed offset appearing after preflight => no delete of that topic" "$(MOCK_GROUPS2_FROM=4 MOCK_GROUPS2='g b.two 0 5 5 0 - - -' run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
+check "a stale committed offset appearing after preflight => no delete of that topic" "$(MOCK_GROUPS2_FROM=5 MOCK_GROUPS2='g b.two 0 5 5 0 - - -' run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
 check "…b.two was not deleted (groups)" "$(grep -c '^deleted:b.two' "$TMP/state/log")" 0
 check "…a.one (before the change) was completed" "$(grep -c '^created:a.one' "$TMP/state/log")" 1
 
@@ -339,6 +340,22 @@ two
 check "configs-only replacement at the last look => no delete" "$(MOCK_MUT=b.two:2:cfg:segment.bytes=9 run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
 check "…b.two not deleted (configs only, same id)" "$(grep -c '^deleted:b.two' "$TMP/state/log")" 0
 check "…kafka-configs was read only in preflight (2 topics) and a.one's post-check, never at the last look" "$(cat "$TMP/state/cnt.kc")" 3
+
+# --- round-10: delimiter-safe config parse; fresh group gate before EVERY create
+reset; mk f.val OLDF 1 1 "x.odd=a sensitive=false synonyms={b" "retention.ms=7"
+check "a value containing ' sensitive=false synonyms={' survives capture + recreate verbatim" "$(run --recreate --cluster dev --topics f.val --pre-cutover-id f.val=OLDF "${STOP[@]}" localhost:19092 "$TMP/bin")" 0
+check "…the recreated config is byte-identical" "$(grep -c '^x.odd=a sensitive=false synonyms={b$' "$TMP/state/f.val/cfg")" 1
+reset; mk f.val OLDF 1 1 "x.odd=v1 sensitive=false synonyms={DYNAMIC_TOPIC_CONFIG:x.odd=v1" "retention.ms=7"
+check "a value that mimics the whole delimiter+synonym text is still captured exactly" "$(run --recreate --cluster dev --topics f.val --pre-cutover-id f.val=OLDF "${STOP[@]}" localhost:19092 "$TMP/bin")" 0
+check "…byte-identical (mimic)" "$(grep -c '^x.odd=v1 sensitive=false synonyms={DYNAMIC_TOPIC_CONFIG:x.odd=v1$' "$TMP/state/f.val/cfg")" 1
+two
+check "an unparseable kafka-configs line refuses the run before any delete" "$(MOCK_KC_JUNK=b.two run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
+check "…nothing deleted" "$(logn)" 0
+check "…the refusal names the ambiguity" "$(grep -c 'ambiguous kafka-configs output for b.two' "$TMP/out")" 1
+two
+check "a committed offset appearing AFTER the delete => no create (normal path)" "$(MOCK_GROUPS2_FROM=3 MOCK_GROUPS2='g a.one 0 5 5 0 - - -' run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
+check "…a.one was deleted but NOT created" "$(grep -c '^deleted:a.one' "$TMP/state/log")$(grep -c '^created:a.one' "$TMP/state/log")" 10
+check "…b.two untouched" "$(grep -c 'b.two' "$TMP/state/log")" 0
 
 echo "passed=$pass failed=$fail"
 [ "$fail" = 0 ]
