@@ -142,6 +142,27 @@ check_schema_id() { # <topic> <partition> <offset>
   printf '%s' "$out" | jq -e --arg s "$subj" 'type == "array" and any(.[]; type == "object" and .subject == $s)' >/dev/null 2>&1 || { echo "FAIL: schema id $id of $topic:$p@$off is not registered under subject $subj: $out" >&2; return 1; }
 }
 
+# earliest (-2) and latest (-1) offset snapshots of ONE topic, fully validated: every line is `topic:partition:offset` with integer
+# fields, each partition 0..parts-1 exactly once, nothing else. Sets OFF_EARLY / OFF_LATE.
+offsets_snapshots() { # <topic> <expected-partition-count>
+  local topic="$1" parts="$2" snap want_p got_p bad
+  OFF_EARLY="$("$GO" --bootstrap-server "$BS" --topic "$topic" --time -2 2>&1)" || { echo "FAIL: cannot read earliest offsets of $topic: $OFF_EARLY" >&2; return 1; }
+  OFF_LATE="$("$GO" --bootstrap-server "$BS" --topic "$topic" --time -1 2>&1)" || { echo "FAIL: cannot read end offsets of $topic: $OFF_LATE" >&2; return 1; }
+  want_p="$(seq 0 $((parts - 1)) | paste -sd, -)"
+  for snap in "$OFF_EARLY" "$OFF_LATE"; do
+    bad="$(printf '%s\n' "$snap" | awk -F: -v t="$topic" 'NF == 0 {next} !($1 == t && NF == 3 && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/) {print}')"
+    [ -z "$bad" ] || { echo "FAIL: malformed offset line(s) for $topic (expected $topic:<partition>:<offset>): $bad" >&2; return 1; }
+    got_p="$(printf '%s\n' "$snap" | awk -F: -v t="$topic" '$1 == t {print $2}' | sort -n | paste -sd, -)"
+    [ "$got_p" = "$want_p" ] || { echo "FAIL: offsets of $topic must name each partition 0..$((parts - 1)) exactly once, got [$got_p]: $snap" >&2; return 1; }
+  done
+}
+# consumer-group rows that name <topic> must be parseable: >= 5 fields, current offset an integer or "-", log-end an integer
+group_rows_valid() { # <topic> <describe-all-groups output>
+  local bad
+  bad="$(printf '%s\n' "$2" | awk -v t="$1" '$2 == t && !(NF >= 5 && ($4 ~ /^[0-9]+$/ || $4 == "-") && $5 ~ /^[0-9]+$/) {print}')"
+  [ -z "$bad" ] || { echo "FAIL: unparseable consumer-group row(s) for $1 (cannot judge stale offsets):" >&2; printf '%s\n' "$bad" >&2; return 1; }
+}
+
 # post-checks of ONE topic, from the broker; prints the new id first so a later failure is recoverable with --verify.
 post_checks() { # <topic> <pre-id> <want-new-id|"">
   local topic="$1" pre="$2" want="$3" shape="$STATE/$1.shape" desc found parts rf
@@ -162,15 +183,8 @@ post_checks() { # <topic> <pre-id> <want-new-id|"">
   want_cfg="$({ grep '^config\.' "$shape" || true; } | sed 's/^config\.//' | LC_ALL=C sort)"
   [ "$live_cfg" = "$want_cfg" ] || { echo "FAIL: $topic configs differ from the captured live set. broker: [$(echo $live_cfg)] captured: [$(echo $want_cfg)]. The topic exists EMPTY with wrong config: fix it with kafka-configs --alter (captured set: $shape), then run --verify --new-topic-id $topic=$found" >&2; return 1; }
   local early late
-  early="$("$GO" --bootstrap-server "$BS" --topic "$topic" --time -2 2>&1)" || { echo "FAIL: cannot read earliest offsets of $topic: $early" >&2; return 1; }
-  late="$("$GO" --bootstrap-server "$BS" --topic "$topic" --time -1 2>&1)" || { echo "FAIL: cannot read end offsets of $topic: $late" >&2; return 1; }
-  # partial answers are not authoritative: both snapshots must name every partition exactly once
-  local want_p snap got_p
-  want_p="$(seq 0 $((parts - 1)) | paste -sd, -)"
-  for snap in "$early" "$late"; do
-    got_p="$(printf '%s\n' "$snap" | awk -F: -v t="$topic" '$1 == t {print $2}' | sort -n | paste -sd, -)"
-    [ "$got_p" = "$want_p" ] || { echo "FAIL: offsets of $topic must name each partition 0..$((parts - 1)) exactly once, got [$got_p]: $snap" >&2; return 1; }
-  done
+  offsets_snapshots "$topic" "$parts" || return 1
+  early="$OFF_EARLY"; late="$OFF_LATE"
   local p e l off rc
   while IFS=: read -r p e l; do
     case "$e$l" in ''|*[!0-9]*) echo "FAIL: unreadable offsets for $topic partition $p" >&2; return 1 ;; esac
@@ -189,10 +203,7 @@ post_checks() { # <topic> <pre-id> <want-new-id|"">
   # stale committed offsets survive a topic delete (they are keyed by NAME): verified, not assumed
   local groups stale
   groups="$("$KG" --bootstrap-server "$BS" --describe --all-groups 2>&1)" || { echo "FAIL: cannot read consumer groups on $BS: $groups" >&2; return 1; }
-  # a row for this topic whose current or log-end offset is not an integer ("-", missing) cannot be judged: fail closed
-  local badrow
-  badrow="$(printf '%s\n' "$groups" | awk -v t="$topic" '$2 == t && $4 != "-" && ($4 !~ /^[0-9]+$/ || $5 !~ /^[0-9]+$/) {print}')"
-  [ -z "$badrow" ] || { echo "FAIL: consumer-group rows for $topic with an unreadable log-end offset (cannot judge staleness):" >&2; printf '%s\n' "$badrow" >&2; return 1; }
+  group_rows_valid "$topic" "$groups" || return 1
   stale="$(printf '%s\n' "$groups" | awk -v t="$topic" -v live="$AVRO_LIVE" '$2 == t && $4 ~ /^[0-9]+$/ && $5 ~ /^[0-9]+$/ && (live != "yes" || $4 + 0 > $5 + 0) {print $1 ":" $3 "@" $4 " (log end " $5 ")"}')"
   if [ -n "$stale" ] && [ "$AVRO_LIVE" = yes ]; then
     echo "WARN: consumer groups with a committed offset BEYOND the new log end of $topic (group:partition@offset); they reset on first poll, the per-reader gate decides:" >&2
@@ -230,7 +241,7 @@ fi
 # PREFLIGHT, all topics, before anything is deleted: the topic list is readable, each topic is present with its pre-cutover id (or absent
 # with the explicit flag and a captured shape), and the live shape is captured to the state dir. One bad topic means NOTHING is deleted.
 LIST="$(rf_list "$KT" "$BS")" || exit 1
-"$KG" --bootstrap-server "$BS" --describe --all-groups >/dev/null 2>&1 || { echo "FAIL: cannot read consumer groups on $BS; the stale-offset post-check would be blind. NOTHING was deleted." >&2; exit 1; }
+GRP_TXT="$("$KG" --bootstrap-server "$BS" --describe --all-groups 2>&1)" || { echo "FAIL: cannot read consumer groups on $BS; the stale-offset post-check would be blind. NOTHING was deleted." >&2; exit 1; }
 PRESENT=$'\n'
 for t in "${TOPICS[@]}"; do
   pre="$(id_of "$PRE_IDS" "$t")"
@@ -240,8 +251,9 @@ for t in "${TOPICS[@]}"; do
     cur="$(rf_topic_id "$desc" "$t")" || exit 1
     [ "$cur" = "$pre" ] || { echo "FAIL: $t carries id $cur, not the pre-cutover id $pre. It was already recreated and may hold live Avro; refusing. NOTHING was deleted." >&2; exit 1; }
     capture_shape "$desc" "$STATE/$t.shape" "$cur" "$t" || exit 1
-    # every read-only tool the post-checks need must work NOW, for every topic, before the first delete
-    "$GO" --bootstrap-server "$BS" --topic "$t" --time -1 >/dev/null 2>&1 || { echo "FAIL: cannot read offsets of $t; the post-checks would be blind. NOTHING was deleted." >&2; exit 1; }
+    # every read-only input of the post-checks must be readable AND well-formed NOW, for every topic, before the first delete
+    offsets_snapshots "$t" "$(shape_get "$STATE/$t.shape" partitions)" || { echo "NOTHING was deleted." >&2; exit 1; }
+    group_rows_valid "$t" "$GRP_TXT" || { echo "NOTHING was deleted." >&2; exit 1; }
     echo "-- $t id $cur: shape captured -> $(tr '\n' ' ' < "$STATE/$t.shape")"
   else
     [ "$ABSENT_OK" = yes ] || { echo "FAIL: $t does not exist. If a previous run deleted it and failed to create it, re-run with --topic-absent-after-failed-create; otherwise find out who deleted it. NOTHING was deleted." >&2; exit 1; }

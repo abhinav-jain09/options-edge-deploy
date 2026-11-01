@@ -49,6 +49,7 @@ cat > "$TMP/bin/kafka-get-offsets.sh" <<'MOCK'
 # every topic's partition count comes from the mock state; MOCK_END_<topic with . as _> overrides MOCK_END for one topic
 topic=""; prev=""; time=""
 for a in "$@"; do [ "$prev" = "--topic" ] && topic="$a"; [ "$prev" = "--time" ] && time="$a"; prev="$a"; done
+[ "${MOCK_OFFSETS_JUNK:-}" = "$topic" ] && { echo "$topic:0:abc"; echo "$topic:1:"; exit 0; }
 n="$(cat "$MOCK_DIR/$topic/parts")"; v="MOCK_END_${topic//[.-]/_}"; end="${!v:-${MOCK_END:-0}}"
 [ "${MOCK_OFFSETS_PARTIAL:-}" = "$topic" ] && n=$((n - 1))
 [ "${MOCK_OFFSETS_DUP:-}" = "$topic" ] && { for ((p = 0; p < n - 1; p++)); do echo "$topic:$p:${MOCK_END:-0}"; done; echo "$topic:0:${MOCK_END:-0}"; exit 0; }
@@ -268,6 +269,26 @@ two
 check "a group row with a non-numeric log-end offset fails closed" "$(MOCK_GROUPS='g a.one 0 5 - - - - -' run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
 two
 check "a group row with a missing log-end offset fails closed" "$(MOCK_GROUPS='g a.one 0 5' run "${RA[@]}" "${LV[@]}" localhost:19092 "$TMP/bin")" 1
+
+# --- round-5: every topic's offsets and group rows are validated BEFORE the first delete
+two
+check "preflight: PARTIAL offsets of the SECOND topic refuse with zero deletes" "$(MOCK_OFFSETS_PARTIAL=b.two run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
+check "…nothing deleted (even the first, healthy topic)" "$(logn)" 0
+two
+check "preflight: DUPLICATE partition lines refuse with zero deletes" "$(MOCK_OFFSETS_DUP=b.two run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
+check "…nothing deleted" "$(logn)" 0
+two
+check "preflight: MALFORMED offset lines refuse with zero deletes" "$(MOCK_OFFSETS_JUNK=b.two run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
+check "…nothing deleted" "$(logn)" 0
+check "…the refusal names the malformed lines" "$(grep -c 'malformed offset line' "$TMP/out")" 1
+two
+check "preflight: a malformed group row for the SECOND topic refuses with zero deletes" "$(MOCK_GROUPS='g b.two 0 5 - - - - -' run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
+check "…nothing deleted" "$(logn)" 0
+two
+check "preflight: a truncated group row refuses with zero deletes" "$(MOCK_GROUPS='g a.one 0 5' run "${RA[@]}" "${LV[@]}" localhost:19092 "$TMP/bin")" 1
+check "…nothing deleted" "$(logn)" 0
+two
+check "a well-formed row with no committed offset (-) is fine" "$(MOCK_GROUPS='g a.one 0 - 0 - - - -' run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 0
 
 echo "passed=$pass failed=$fail"
 [ "$fail" = 0 ]
