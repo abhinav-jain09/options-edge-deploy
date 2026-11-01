@@ -32,7 +32,7 @@ echo "=== reset-strike-invasion-state: group=$APP on $KAFKA_BOOTSTRAP_SERVERS (d
 
 group_state() {
   DRC=0; DESC=$("$KCG" --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --describe --group "$APP" --state 2>&1) || DRC=$?
-  if printf '%s' "$DESC" | grep -qiE "Consumer group '$APP' does not exist"; then
+  if printf '%s' "$DESC" | grep -qiE "Consumer group '$APP' does not exist|GroupIdNotFoundException|Group $APP not found"; then
     STATE=absent
   elif [ "$DRC" -ne 0 ]; then
     STATE="describe-failed(rc=$DRC)"

@@ -192,7 +192,7 @@ class ResetState(unittest.TestCase):
 SRC = ["t.a", "t.b"]
 
 
-def gate(mode, group_state="Empty", committed=None, ends=None, env=None):
+def gate(mode, group_state="Empty", committed=None, ends=None, env=None, absent_msg=None):
     """pin/verify against stub kafka-consumer-groups and kafka-get-offsets."""
     tmp = Path(tempfile.mkdtemp())
     calls = tmp / "calls"
@@ -207,7 +207,7 @@ def gate(mode, group_state="Empty", committed=None, ends=None, env=None):
     kcg = tmp / "kafka-consumer-groups"
     kcg.write_text(
         "#!/bin/bash\n" f'echo "KCG $*" >> "{calls}"\n' 'case " $* " in\n'
-        f'  *" --state "*) if [ "{group_state}" = absent ]; then echo "Consumer group \'{APP}\' does not exist."; exit 1; fi;'
+        f'  *" --state "*) if [ "{group_state}" = absent ]; then echo "{absent_msg or "Consumer group \'" + APP + "\' does not exist."}"; exit 1; fi;'
         f' printf "GROUP  COORDINATOR  ASSIGNMENT-STRATEGY  STATE  #MEMBERS\\n{APP}  b:1 (1)  range  {group_state}  0\\n"; exit 0 ;;\n'
         f'  *" --offsets "*) printf "GROUP TOPIC PARTITION CURRENT-OFFSET LOG-END-OFFSET LAG\\n{desc}"; exit 0 ;;\n'
         '  *" --reset-offsets "*) exit 0 ;;\nesac\nexit 1\n')
@@ -225,6 +225,13 @@ class StartOffsetGate(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         self.assertEqual(sorted(state.read_text().split()), ["t.a:0:10", "t.a:1:20", "t.b:0:5"])
         self.assertTrue(any("--reset-offsets" in c and "--from-file" in c and "--execute" in c for c in calls), calls)
+
+    def test_pin_accepts_the_kafka_4x_absent_group_message(self):
+        # Kafka 4.x CLI: "GroupIdNotFoundException: Group <id> not found" (not the 2.x/3.x "does not exist"); the first live pin aborted on it
+        rc, out, calls, state = gate("pin", group_state="absent",
+                                     absent_msg=f"Error: Executing consumer group command failed due to org.apache.kafka.common.errors.GroupIdNotFoundException: Group {APP} not found.")
+        self.assertEqual(rc, 0, out)
+        self.assertTrue(any("--reset-offsets" in c for c in calls), calls)
 
     def test_pin_refuses_a_running_group_an_unreadable_topic_and_a_partitionless_answer(self):
         rc, out, calls, _ = gate("pin", group_state="Stable")
