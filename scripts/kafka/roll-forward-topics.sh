@@ -11,7 +11,7 @@
 # stopped) OR --avro-writer-live --json-writers-stopped (the Avro writer is running, no JSON writer is).
 #
 # usage:
-#   roll-forward-topics.sh --recreate|--verify --cluster dev|production --topics t1,t2,... \
+#   roll-forward-topics.sh --recreate|--verify --cluster dev|production|es4 --topics t1,t2,... \
 #       --pre-cutover-id t1=<TopicId> [--pre-cutover-id t2=<TopicId> ...]            (one per topic, read off the live broker)
 #       [--new-topic-id t1=<id> ...]                                                  (--verify only: the ids --recreate printed)
 #       --registry <schema-registry-url> --subject t1=<record.full.Name> [--subject t2=... ]   (RecordNameStrategy subject per topic)
@@ -47,7 +47,7 @@ while [ $# -gt 0 ]; do
     *) POS+=("$1"); shift ;;
   esac
 done
-case "$CLUSTER" in dev|production) ;; *) usage ;; esac
+case "$CLUSTER" in dev|production|es4) ;; *) usage ;; esac
 [ -n "$TOPICS_CSV" ] || usage
 if [ "$AVRO_LIVE" = yes ]; then [ "$JSON_STOPPED" = yes ] && [ "$STOPPED" != yes ] || usage; else [ "$STOPPED" = yes ] && [ "$JSON_STOPPED" != yes ] || usage; fi
 [ "${#POS[@]}" -ge 1 ] && [ "${#POS[@]}" -le 2 ] || usage
@@ -59,6 +59,7 @@ BIN="${POS[1]:-${KAFKA_BIN_DIR:-}}"
 case "$CLUSTER:$BS" in
   dev:localhost:19092|dev:host.docker.internal:19092|dev:192.168.100.102:19092) ;;
   production:192.168.100.252:9092) ;;
+  es4:192.168.100.4:9092) ;;   # the self-contained ES-0DTE box (own broker and registry; topics carry the es. prefix)
   *) echo "FATAL: bootstrap '$BS' is not the $CLUSTER cluster's broker; refusing (nothing was changed)" >&2; exit 2 ;;
 esac
 

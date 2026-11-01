@@ -66,6 +66,8 @@ spec:
               value: es.underlying.es.trades
             - name: REVERSAL_DELTA_FLOW_TOPIC
               value: es.delta-flow-by-trade
+            - name: REVERSAL_DELTA_FLOW_SCHEMA_REGISTRY_URL
+              value: http://192.168.100.4:8081
             - name: REVERSAL_VIX_TOPIC
               value: underlying.vix.price
             - name: REVERSAL_VERDICTS_TOPIC

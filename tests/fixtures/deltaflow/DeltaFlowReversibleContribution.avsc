@@ -1,0 +1,81 @@
+{
+  "type": "record",
+  "name": "DeltaFlowReversibleContribution",
+  "namespace": "com.optionsedge.contracts.deltaflow",
+  "doc": "A PRIVATE image of delta-flow-service (a Kafka Streams state-store value / its compacted changelog, or an internal repartition topic), not a topic contract: it exists as a released .avsc only so the serde has a registered schema (RecordNameStrategy, auto.register.schemas=false), FULL compatibility. Until the Avro cutover these values were hand-built JSON text; the changelogs and repartition topics are DELETED at the cutover (retained JSON is never read). Prices (strike, trade price, bid, ask, spot) are decimal(38,18); every derived statistic keeps its double. The reversible essence of an accepted trade (duplicate-store value): lets a later CANCEL/CORRECTION back the exact trade out; state is ACCEPTED or CANCELLED (tombstone).",
+  "fields": [
+    {
+      "name": "state",
+      "type": "string"
+    },
+    {
+      "name": "optionKey",
+      "type": "string"
+    },
+    {
+      "name": "eventId",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "symbol",
+      "type": "string"
+    },
+    {
+      "name": "tradingDate",
+      "type": "string"
+    },
+    {
+      "name": "expiry",
+      "type": "string"
+    },
+    {
+      "name": "strike",
+      "type": {
+        "type": "bytes",
+        "logicalType": "decimal",
+        "precision": 38,
+        "scale": 18
+      }
+    },
+    {
+      "name": "optionType",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "contracts",
+      "type": "long"
+    },
+    {
+      "name": "tradeTimeMs",
+      "type": "long"
+    },
+    {
+      "name": "aggressor",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "confidence",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "signedDeltaFlow",
+      "type": "double"
+    }
+  ]
+}

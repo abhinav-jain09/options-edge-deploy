@@ -1,0 +1,286 @@
+{
+  "type": "record",
+  "name": "DeltaFlowSnapshot",
+  "namespace": "com.optionsedge.contracts.deltaflow",
+  "doc": "One delta-flow window/session/dashboard snapshot, published by delta-flow-service on delta-flow-10s, -30s, -1m, -5m, -15m, delta-flow-session and delta-flow-dashboard (one record type, discriminated by window). Kafka key = symbol|tradingDate. The JSON era wrote this record with Jackson from the contracts record of the same name; this schema reproduces that JSON FIELD FOR FIELD, NAME FOR NAME, IN THE SAME ORDER (DeltaFlowJson renders it back byte-for-byte). Prices (strike, trade price, bid, ask) are decimal(38,18) = the shortest round-trip text of the engine double; a value needing more than 18 fractional digits, non-finite, -0.0 or out of range is REFUSED, never rounded. Every derived statistic (share-delta flow, delta, gamma, iv, ages) keeps the double the JSON carried. Enumerations are written as their constant names (strings) so a new constant is not a schema change. Registry subject = the record full name (RecordNameStrategy), compatibility FULL.",
+  "fields": [
+    {
+      "name": "symbol",
+      "type": "string"
+    },
+    {
+      "name": "tradingDate",
+      "type": "string"
+    },
+    {
+      "name": "window",
+      "type": "string",
+      "doc": "10S, 30S, 1M, 5M, 15M, SESSION or DASHBOARD."
+    },
+    {
+      "name": "asOfEventTimeMs",
+      "type": "long"
+    },
+    {
+      "name": "netDeltaFlow",
+      "type": "double"
+    },
+    {
+      "name": "previousNetDeltaFlow",
+      "type": "double"
+    },
+    {
+      "name": "deltaFlowVelocity",
+      "type": "double"
+    },
+    {
+      "name": "cumulativeIntradayNetDeltaFlow",
+      "type": "double"
+    },
+    {
+      "name": "netDeltaFlowByStrike",
+      "type": {
+        "type": "array",
+        "items": {
+          "type": "record",
+          "name": "DeltaFlowKeyedFlow",
+          "namespace": "com.optionsedge.contracts.deltaflow",
+          "doc": "One entry of an insertion-ordered string-keyed map of share-delta flows (the JSON era wrote a JSON object whose key order was the service's insertion order; an Avro map would lose that order, so the entries are an ordered array and DeltaFlowJson renders them back as the object).",
+          "fields": [
+            {
+              "name": "key",
+              "type": "string"
+            },
+            {
+              "name": "value",
+              "type": "double"
+            }
+          ]
+        }
+      },
+      "doc": "expiry|strike -> net share-delta, insertion order.",
+      "jsonAs": "object"
+    },
+    {
+      "name": "netDeltaFlowByStrikeCall",
+      "type": {
+        "type": "array",
+        "items": "com.optionsedge.contracts.deltaflow.DeltaFlowKeyedFlow"
+      },
+      "doc": "expiry|strike -> call net share-delta.",
+      "jsonAs": "object"
+    },
+    {
+      "name": "netDeltaFlowByStrikePut",
+      "type": {
+        "type": "array",
+        "items": "com.optionsedge.contracts.deltaflow.DeltaFlowKeyedFlow"
+      },
+      "doc": "expiry|strike -> put net share-delta.",
+      "jsonAs": "object"
+    },
+    {
+      "name": "netDeltaFlowByExpiry",
+      "type": {
+        "type": "array",
+        "items": "com.optionsedge.contracts.deltaflow.DeltaFlowKeyedFlow"
+      },
+      "doc": "expiry -> net share-delta.",
+      "jsonAs": "object"
+    },
+    {
+      "name": "netDeltaFlowByOptionSide",
+      "type": {
+        "type": "array",
+        "items": "com.optionsedge.contracts.deltaflow.DeltaFlowKeyedFlow"
+      },
+      "doc": "CALL/PUT -> net share-delta.",
+      "jsonAs": "object"
+    },
+    {
+      "name": "buyerContracts",
+      "type": "long"
+    },
+    {
+      "name": "sellerContracts",
+      "type": "long"
+    },
+    {
+      "name": "highConfidenceTradeCount",
+      "type": "long"
+    },
+    {
+      "name": "mediumConfidenceTradeCount",
+      "type": "long"
+    },
+    {
+      "name": "lowConfidenceTradeCount",
+      "type": "long"
+    },
+    {
+      "name": "noConfidenceTradeCount",
+      "type": "long"
+    },
+    {
+      "name": "unknownClassificationCount",
+      "type": "long"
+    },
+    {
+      "name": "acceptedTradeCount",
+      "type": "long"
+    },
+    {
+      "name": "rejectedTradeCount",
+      "type": "long"
+    },
+    {
+      "name": "staleQuoteCount",
+      "type": "long"
+    },
+    {
+      "name": "staleGreekCount",
+      "type": "long"
+    },
+    {
+      "name": "missingQuoteCount",
+      "type": "long"
+    },
+    {
+      "name": "missingGreekCount",
+      "type": "long"
+    },
+    {
+      "name": "invalidSpreadCount",
+      "type": "long"
+    },
+    {
+      "name": "duplicateTradeCount",
+      "type": "long"
+    },
+    {
+      "name": "duplicateProtectionUnavailableCount",
+      "type": "long"
+    },
+    {
+      "name": "contractMultiplierFallbackCount",
+      "type": "long"
+    },
+    {
+      "name": "rolling10sDeltaFlow",
+      "type": "double"
+    },
+    {
+      "name": "callBoughtDeltaFlow",
+      "type": "double"
+    },
+    {
+      "name": "callSoldDeltaFlow",
+      "type": "double"
+    },
+    {
+      "name": "putBoughtDeltaFlow",
+      "type": "double"
+    },
+    {
+      "name": "putSoldDeltaFlow",
+      "type": "double"
+    },
+    {
+      "name": "highConfidenceSignedDeltaFlow",
+      "type": "double"
+    },
+    {
+      "name": "confidenceWeightedSignedDeltaFlow",
+      "type": "double"
+    },
+    {
+      "name": "confidenceWeightQuality",
+      "type": "string"
+    },
+    {
+      "name": "outputMeta",
+      "type": {
+        "type": "record",
+        "name": "DeltaFlowOutputMeta",
+        "namespace": "com.optionsedge.contracts.deltaflow",
+        "doc": "R10 per-output provenance: quality (FULL, DEGRADED, UNKNOWN, BROKEN), reconciliationStatus (RECONCILED, FAILED, PENDING, UNRECONCILED), the fraction of required inputs present (RATIO, 0..1), the calibration dataset id (none when uncalibrated), the model version and the threshold set id in force.",
+        "fields": [
+          {
+            "name": "quality",
+            "type": "string"
+          },
+          {
+            "name": "reconciliationStatus",
+            "type": "string"
+          },
+          {
+            "name": "sourceCompleteness",
+            "type": "double"
+          },
+          {
+            "name": "calibrationDatasetId",
+            "type": "string"
+          },
+          {
+            "name": "modelVersion",
+            "type": "string"
+          },
+          {
+            "name": "thresholdSetId",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "topCallSoldStrike",
+      "type": [
+        "null",
+        "string"
+      ],
+      "doc": "Top SELL-side call strike key (session-cumulative); absent (null) when no reconciled sell-side flow exists. The JSON era OMITTED the field then.",
+      "default": null,
+      "jsonOmitWhenNull": "true"
+    },
+    {
+      "name": "topCallSoldDeltaFlow",
+      "type": [
+        "null",
+        "double"
+      ],
+      "doc": "Share-delta of the top sold call strike; absent with its strike.",
+      "default": null,
+      "jsonOmitWhenNull": "true"
+    },
+    {
+      "name": "topPutSoldStrike",
+      "type": [
+        "null",
+        "string"
+      ],
+      "doc": "Top SELL-side put strike key; absent when none.",
+      "default": null,
+      "jsonOmitWhenNull": "true"
+    },
+    {
+      "name": "topPutSoldDeltaFlow",
+      "type": [
+        "null",
+        "double"
+      ],
+      "doc": "Share-delta of the top sold put strike; absent with its strike.",
+      "default": null,
+      "jsonOmitWhenNull": "true"
+    },
+    {
+      "name": "sessionObservedFromMs",
+      "type": [
+        "null",
+        "long"
+      ],
+      "doc": "Earliest event time the session has observed; stamped on SESSION and DASHBOARD records when positive (the JSON era appended it as the LAST field); absent otherwise.",
+      "default": null,
+      "jsonOmitWhenNull": "true"
+    }
+  ]
+}
