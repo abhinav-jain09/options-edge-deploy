@@ -1,7 +1,7 @@
 # delta-flow-service JSON -> Avro: cutover runbook
 
 Kafka Serialization Rule (rule.md): JSON on Kafka is prohibited; a topic that changes serialization is **wiped and recreated under its own
-name** (no `.vN`/`.avro` sibling, no dual publish, no rollback). Contracts 0.35.0 (`schemas/deltaflow/*.avsc`, `DeltaFlowAvro`, `DeltaFlowStateAvro`,
+name** (no `.vN`/`.avro` sibling, no dual publish, no rollback). Contracts 0.54.0 (`schemas/deltaflow/*.avsc`, `DeltaFlowAvro`, `DeltaFlowStateAvro`,
 `DeltaFlowJson`): Confluent framing, RecordNameStrategy (subject = record full name, one subject per registry), FULL, `auto.register=false`.
 Processing: producer `delta-flow-service` and the readers below in one change set; feed-gateway, options-edge (web monolith), short-premium-agent:
 one PR each. Generic wipe tool: `scripts/kafka/roll-forward-topics.sh` (deploy PR 1320, `docs/KAFKA-AVRO-TOPIC-ROLL-FORWARD.md`).
@@ -62,7 +62,7 @@ Kafka readers (all converted to Avro-only in this change set unless marked):
 `http://192.168.100.4:8081` in the base manifests and the regenerated slices. The es4 subjects must therefore be registered on **that** registry too (step 2).
 
 ## Order (rule step 4; one environment at a time, off-hours, topic administration frozen)
-1. Merge contracts 0.35.0, then processing (producer + readers), feed-gateway, options-edge, short-premium-agent and the greek-move / strike-invasion reader changes, then this change.
+1. Merge contracts 0.54.0, then processing (producer + readers), feed-gateway, options-edge, short-premium-agent and the greek-move / strike-invasion reader changes, then this change.
    From the first merge on, an image built from main for any converted service reads or writes Avro: build **no prod image** of delta-flow-service, the gateway, the web monolith,
    strike-intelligence, hedging-pressure, dealer-ledger, drop-classifier, reversal-confirmation, greek-move-authenticity or strike-invasion before this environment's cutover.
 2. **Register** the 17 subjects on the environment's registry, and on the **es4 registry** (`http://192.168.100.4:8081`) as well for the prod cross-broker readers:
