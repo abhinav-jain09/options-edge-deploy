@@ -1,6 +1,6 @@
 # multileg-structure-service Avro cutover (options.multileg.observations / .window.status / .sr.levels)
 
-Topics keep their own names; they are wiped and recreated carrying Avro. Contracts 0.34.0.
+Topics keep their own names; they are wiped and recreated carrying Avro. Contracts 0.58.0.
 
 **Dependency (now merged on main): this runbook uses options-edge-deploy PR #1320 (`scripts/kafka/roll-forward-topics.sh`,
 `scripts/kafka/avro-rollforward.lib.sh`, `docs/KAFKA-AVRO-TOPIC-ROLL-FORWARD.md`) to be merged first. Do not run the cutover from a
@@ -41,13 +41,13 @@ service, not one of its outputs, and is out of scope.
 Per environment; `<bootstrap>` is `192.168.100.102:19092` (dev; or `localhost:19092`) or `192.168.100.252:9092` (production) and the script
 refuses a bootstrap that is not the named `--cluster`'s broker. Prerequisite: PR #1320 merged.
 
-1. Merge contracts (0.34.0), then processing; build the multileg image against 0.34.0 and confirm its resolved digest (not the deploy's
+1. Merge contracts (0.58.0), then processing; build the multileg image against 0.58.0 and confirm its resolved digest (not the deploy's
    SUCCESS). Build no prod image of this service for an environment before its cutover step 6 completes.
 2. REGISTRY PREPARATION - register and verify all three subjects on the TARGET registry:
    `SCHEMA_REGISTRY_URL=<registry> SCHEMAS_DIR=<contracts>/schemas/multileg scripts/kafka/ensure-multileg-schemas.sh`
    Phase 1 reads and validates EVERY subject before any write (latest version byte-equal to the canonical schema, readable config,
    subject mode READWRITE) and refuses with the registry untouched on any of those. The script hash-pins the exact bytes of the three
-   canonical files, so the contracts 0.34.0 tree must be the one passed in `SCHEMAS_DIR`. What holds exactly: after phase 1, the writes
+   canonical files, so the contracts 0.58.0 tree must be the one passed in `SCHEMAS_DIR`. What holds exactly: after phase 1, the writes
    run in a safe order (register every absent subject at version 1, THEN set FULL on every subject) and a failure part-way (registry
    outage or a refused write) leaves only canonical version-1 registrations and/or FULL configs - idempotent state, never a wrong
    schema - which a re-run completes. The sequence is NOT atomic across subjects. `DEPLOY_DRY_RUN=true` runs phase 1 only and reports
