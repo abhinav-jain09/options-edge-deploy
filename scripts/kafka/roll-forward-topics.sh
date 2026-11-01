@@ -168,6 +168,16 @@ group_rows_valid() { # <topic> <describe-all-groups output>
 group_stale_rows() { # <topic> <describe-all-groups output>
   printf '%s\n' "$2" | awk -v t="$1" -v live="$AVRO_LIVE" '$2 == t && $4 ~ /^[0-9]+$/ && $5 ~ /^[0-9]+$/ && (live != "yes" || $4 + 0 > $5 + 0) {print $1 ":" $3 "@" $4 " (log end " $5 ")"}'
 }
+# BOTH group gates in one place (preflight, absent-recovery, and the last look before each delete/create): rows parseable and, in strict
+# mode, no committed offset on the topic (the post-check's own predicate).
+groups_gate() { # <topic> <describe-all-groups output>
+  local stale_pre
+  group_rows_valid "$1" "$2" || return 1
+  if [ "$AVRO_LIVE" != yes ]; then
+    stale_pre="$(group_stale_rows "$1" "$2")"
+    [ -z "$stale_pre" ] || { echo "FAIL: consumer groups hold committed offsets for $1 (group:partition@offset); they survive the delete and the post-check would reject them. DELETE them first (kafka-consumer-groups --delete-offsets --group <g> --topic $1, or delete the stopped group):" >&2; printf '%s\n' "$stale_pre" >&2; return 1; }
+  fi
+}
 # post-checks of ONE topic, from the broker; prints the new id first so a later failure is recoverable with --verify.
 post_checks() { # <topic> <pre-id> <want-new-id|"">
   local topic="$1" pre="$2" want="$3" shape="$STATE/$1.shape" desc found parts rf
@@ -258,17 +268,14 @@ for t in "${TOPICS[@]}"; do
     capture_shape "$desc" "$STATE/$t.shape" "$cur" "$t" || exit 1
     # every read-only input of the post-checks must be readable AND well-formed NOW, for every topic, before the first delete
     offsets_snapshots "$t" "$(shape_get "$STATE/$t.shape" partitions)" || { echo "NOTHING was deleted." >&2; exit 1; }
-    group_rows_valid "$t" "$GRP_TXT" || { echo "NOTHING was deleted." >&2; exit 1; }
-    if [ "$AVRO_LIVE" != yes ]; then   # strict mode: the post-check would reject these AFTER the irreversible delete, so refuse now
-      stale_pre="$(group_stale_rows "$t" "$GRP_TXT")"
-      [ -z "$stale_pre" ] || { echo "FAIL: consumer groups hold committed offsets for $t (group:partition@offset); they survive the delete and the post-check would reject them. DELETE them first (kafka-consumer-groups --delete-offsets --group <g> --topic $t, or delete the stopped group). NOTHING was deleted:" >&2; printf '%s\n' "$stale_pre" >&2; exit 1; }
-    fi
+    groups_gate "$t" "$GRP_TXT" || { echo "NOTHING was deleted." >&2; exit 1; }
     echo "-- $t id $cur: shape captured -> $(tr '\n' ' ' < "$STATE/$t.shape")"
   else
     [ "$ABSENT_OK" = yes ] || { echo "FAIL: $t does not exist. If a previous run deleted it and failed to create it, re-run with --topic-absent-after-failed-create; otherwise find out who deleted it. NOTHING was deleted." >&2; exit 1; }
     [ -f "$STATE/$t.shape" ] || { echo "FAIL: $t is absent and no captured shape exists at $STATE/$t.shape; the live shape is lost, create it by hand then --verify. NOTHING was deleted." >&2; exit 1; }
     [ "$(shape_get "$STATE/$t.shape" topicid)" = "$pre" ] && [ "$(shape_get "$STATE/$t.shape" cluster)" = "$CLUSTER" ] \
       || { echo "FAIL: the shape at $STATE/$t.shape was not captured from $t id $pre on cluster $CLUSTER (stale or foreign). NOTHING was deleted." >&2; exit 1; }
+    groups_gate "$t" "$GRP_TXT" || { echo "NOTHING was created." >&2; exit 1; }
     echo "-- $t absent (recovering a failed create); captured shape $(tr '\n' ' ' < "$STATE/$t.shape")"
   fi
 done
@@ -280,6 +287,11 @@ for t in "${TOPICS[@]}"; do
     # last look: Kafka's delete takes a NAME, not a TopicId
     again="$(rf_topic_id "$(rf_describe "$KT" "$BS" "$t")" "$t")" || fail_run "$t" "cannot re-read the topic id."
     [ "$again" = "$pre" ] || { echo "FAIL: $t changed id to $again while checking; nothing deleted." >&2; fail_run "$t" "topic administration is not frozen."; }
+    # the FULL shape and the group gates are re-checked now: anything may have changed since the all-topics preflight
+    capture_shape "$(rf_describe "$KT" "$BS" "$t")" "$STATE/$t.lastlook" "$again" "$t" || fail_run "$t" "cannot re-capture the shape; nothing deleted."
+    cmp -s "$STATE/$t.lastlook" "$STATE/$t.shape" || { echo "FAIL: the shape of $t changed since preflight; nothing deleted. captured: $(tr '\n' ' ' < "$STATE/$t.shape") now: $(tr '\n' ' ' < "$STATE/$t.lastlook")" >&2; fail_run "$t" "topic administration is not frozen; re-run to capture the new shape."; }
+    LASTG="$("$KG" --bootstrap-server "$BS" --describe --all-groups 2>&1)" || fail_run "$t" "cannot read consumer groups; nothing deleted."
+    groups_gate "$t" "$LASTG" || fail_run "$t" "consumer-group gate failed at the last look; nothing deleted."
     echo "-- delete $t (id $again)"
     kt --delete --topic "$t" || fail_run "$t" "delete failed; nothing created."
     settled=0
@@ -293,6 +305,10 @@ for t in "${TOPICS[@]}"; do
     case "$PRESENT" in
       *$'\n'"$t"$'\n'*) fail_run "$t" "$t was present at preflight but is ABSENT at its turn (deleted by someone else, or an earlier part of this run?). Refusing to recreate it blind; find out why, then re-run with --topic-absent-after-failed-create." ;;
     esac
+  fi
+  if ! printf '%s\n' "$LIST" | grep -qx "$t"; then   # recovery of an absent topic: the group gates apply before --create too
+    LASTG="$("$KG" --bootstrap-server "$BS" --describe --all-groups 2>&1)" || fail_run "$t" "cannot read consumer groups; nothing created."
+    groups_gate "$t" "$LASTG" || fail_run "$t" "consumer-group gate failed before create; nothing created."
   fi
   parts="$(shape_get "$STATE/$t.shape" partitions)"; rf="$(shape_get "$STATE/$t.shape" rf)"
   args=(--create --topic "$t" --partitions "$parts" --replication-factor "$rf")

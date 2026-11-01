@@ -19,6 +19,9 @@ d="$MOCK_DIR/$topic"
 case "$mode" in
   list) for t in "$MOCK_DIR"/*/; do [ -f "$t/id" ] && basename "$t"; done; exit 0 ;;
   describe) [ -f "$d/id" ] || exit 1
+    if [ -n "${MOCK_MUT:-}" ]; then IFS=: read -r mt mc mf mv <<< "$MOCK_MUT"
+      if [ "$mt" = "$topic" ]; then n=$(( $(cat "$MOCK_DIR/cnt.$topic" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$MOCK_DIR/cnt.$topic"
+        if [ "$n" = "$mc" ]; then if [ "$mf" = parts ]; then echo "$mv" > "$d/parts"; else echo "$mv" >> "$d/cfg"; fi; fi; fi; fi
     # like a broker: list values print WITHOUT brackets, joined by commas
     cfg="$(sed 's/\[\(.*\)\]/\1/' "$d/cfg" 2>/dev/null | paste -sd, -)"
     printf 'Topic: %s\tTopicId: %s\tPartitionCount: %s\tReplicationFactor: %s\tConfigs: %s\n' "$topic" "$(cat "$d/id")" "$(cat "$d/parts")" "$(cat "$d/rf")" "$cfg"; exit 0 ;;
@@ -42,7 +45,9 @@ MOCK
 cat > "$TMP/bin/kafka-consumer-groups.sh" <<'MOCK'
 #!/usr/bin/env bash
 [ "${MOCK_GROUPS_RC:-0}" = 0 ] || { echo "coordinator down" >&2; exit 1; }
-printf 'GROUP TOPIC PARTITION CURRENT-OFFSET LOG-END-OFFSET LAG CONSUMER-ID HOST CLIENT-ID\n%s\n' "${MOCK_GROUPS:-}"
+n=$(( $(cat "$MOCK_DIR/cnt.groups" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$MOCK_DIR/cnt.groups"
+rows="${MOCK_GROUPS:-}"; [ -z "${MOCK_GROUPS2_FROM:-}" ] || [ "$n" -lt "${MOCK_GROUPS2_FROM:-0}" ] || rows="$MOCK_GROUPS2"
+printf 'GROUP TOPIC PARTITION CURRENT-OFFSET LOG-END-OFFSET LAG CONSUMER-ID HOST CLIENT-ID\n%s\n' "$rows"
 MOCK
 cat > "$TMP/bin/kafka-get-offsets.sh" <<'MOCK'
 #!/usr/bin/env bash
@@ -297,6 +302,29 @@ check "…nothing deleted (even the healthy first topic)" "$(logn)" 0
 check "…the refusal names the group offset" "$(grep -c 'g:0@6505' "$TMP/out")" 1
 two
 check "live mode: a committed offset is not a preflight refusal (judged against the new log)" "$(MOCK_END=12 MOCK_GROUPS='g b.two 0 7 12 5 - - -' run "${RA[@]}" "${LV[@]}" localhost:19092 "$TMP/bin")" 0
+
+# --- round-7: absent-recovery gates, and a full last look before each delete
+# list: `two` creates state under $TMP/state; the mock counters live there too, so every case starts from `two`
+two
+MOCK_CREATE_FAIL=b.two run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin" >/dev/null
+REC=(--recreate --cluster dev --topics b.two --pre-cutover-id b.two=OLDB --topic-absent-after-failed-create)
+check "recovery: a stale committed offset refuses and issues NO create" "$(MOCK_GROUPS='g b.two 0 5 5 0 - - -' run "${REC[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
+check "…b.two still absent" "$([ -f "$TMP/state/b.two/id" ] && echo present || echo absent)" absent
+check "recovery: a malformed group row refuses and issues NO create" "$(MOCK_GROUPS='g b.two 0 5' run "${REC[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
+check "…b.two still absent (malformed)" "$([ -f "$TMP/state/b.two/id" ] && echo present || echo absent)" absent
+check "recovery with clean groups still works" "$(run "${REC[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 0
+two
+check "partition count changed between preflight and last look => no delete of that topic" "$(MOCK_MUT=b.two:3:parts:5 run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
+check "…b.two was not deleted" "$(grep -c '^deleted:b.two' "$TMP/state/log")" 0
+check "…the earlier topic a.one was completed" "$(grep -c '^created:a.one' "$TMP/state/log")" 1
+check "…the refusal says the shape changed" "$(grep -c 'shape of b.two changed since preflight' "$TMP/out")" 1
+two
+check "a config changed between preflight and last look => no delete" "$(MOCK_MUT=b.two:3:cfg:segment.bytes=7 run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
+check "…b.two was not deleted (config)" "$(grep -c '^deleted:b.two' "$TMP/state/log")" 0
+two
+check "a stale committed offset appearing after preflight => no delete of that topic" "$(MOCK_GROUPS2_FROM=4 MOCK_GROUPS2='g b.two 0 5 5 0 - - -' run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
+check "…b.two was not deleted (groups)" "$(grep -c '^deleted:b.two' "$TMP/state/log")" 0
+check "…a.one (before the change) was completed" "$(grep -c '^created:a.one' "$TMP/state/log")" 1
 
 echo "passed=$pass failed=$fail"
 [ "$fail" = 0 ]
