@@ -7,11 +7,13 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-from stub_schema_registry import Registry, serve
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from stub_schema_registry import Registry, serve  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 ENSURE = ROOT / "scripts/kafka/ensure-strike-invasion-schemas.sh"

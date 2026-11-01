@@ -1,7 +1,7 @@
 # strike-invasion JSON -> Avro: cutover runbook
 
 Kafka Serialization Rule (rule.md): JSON on Kafka is prohibited; a topic that changes serialization is **wiped and recreated under its own
-name** (no `.vN`/`.avro` sibling, no dual publish, no rollback). Contracts 0.33.0 (`schemas/strikeinvasion/*.avsc`, `StrikeInvasionAvro`,
+name** (no `.vN`/`.avro` sibling, no dual publish, no rollback). Contracts 0.57.0 (`schemas/strikeinvasion/*.avsc`, `StrikeInvasionAvro`,
 `StrikeInvasionJson`): Confluent framing, RecordNameStrategy (subject = record full name, one subject per environment), FULL, `auto.register=false`.
 
 ## Subjects (23, `com.optionsedge.contracts.strikeinvasion.` + name)
@@ -32,12 +32,12 @@ refused and counted, never read). Therefore:
   recreated topic would see Confluent Avro; an Avro-only reader of the still-JSON topic counts every record as a deserialization failure and sees no flow evidence);
 * the `DeltaFlowStrikeSnapshot` subject must be **registered before this service starts** (it is registered by the delta-flow cutover's schema step; this runbook's
   `ensure-strike-invasion-schemas.sh` registers only the 23 strike-invasion subjects). Verify it: `curl <registry>/subjects/com.optionsedge.contracts.deltaflow.DeltaFlowStrikeSnapshot/versions/latest`;
-* contracts: this service needs the strike-invasion classes (contracts#117, 0.33.0) AND `DeltaFlowAvro` (contracts#120, 0.35.0). #120 was cut from 0.29.0 and does not contain #117,
-  so the merge order is #117 first, then #120 rebased/renumbered on top (the single released artifact must contain both); processing#1177 pins `contracts.version` 0.35.0 and
-  cannot build until that combined artifact exists. Nothing here renumbers either PR.
+* contracts: this service needs the strike-invasion classes (contracts#117, released as 0.57.0) AND `DeltaFlowAvro` (contracts#120, released as 0.54.0). Both are merged on
+  contracts main (merge train: delta-flow 0.54.0, greek-move 0.55.0, spot-vol-regime 0.56.0, strike-invasion 0.57.0, multileg 0.58.0), so any artifact from 0.57.0 on contains both;
+  processing#1177 pins `contracts.version` 0.57.0.
 
 ## Order (rule step 4; one environment at a time, off-hours, topic administration frozen)
-1. Merge contracts 0.33.0, the processing PRs (service, postgres writer, mission control, EAV), feed-gateway, trading-journal/python readers, then this change.
+1. Merge contracts 0.57.0 (already on main), the processing PRs (service, postgres writer, mission control, EAV), feed-gateway, trading-journal/python readers, then this change.
    From the first merge on, an image built from main for any converted service reads Avro: build no prod image before the prod cutover.
 2. **Register** the 23 subjects (above) on the environment's registry.
 3. **Stop** (service-deploy paths; no `kubectl scale`): feed-gateway strike-invasion consumer path, `invasion-postgres-writer` (first confirm its lag on `current`
@@ -66,5 +66,5 @@ refused and counted, never read). Therefore:
    and the first byte `00` + 4-byte id resolving to a `...strikeinvasion.StrikeInvasion*` subject; browser `strike-invasion` payload unchanged.
 8. **NAS archive switch** (prod): set `OE_INVASION_AVRO_TOPICS="options.spx.strike-invasion.events"` on the events archive cron line and resume it. The reader
    `StrikeInvasionEventsArchiveReader.java` writes the JSON-era line (`StrikeInvasionJson.eventJson`); the archive unit ships it with the contracts jar
-   (Jenkinsfile.archive-scripts-deploy builds from guarded latest main, so contracts 0.33.0 must be merged first). Old archived files stay JSON-era lines.
+   (Jenkinsfile.archive-scripts-deploy builds from guarded latest main, so contracts 0.57.0 must be merged first). Old archived files stay JSON-era lines.
 9. Full clean-slate flows (`dev-cleanup.sh`, `prod-clean-slate.sh`) already delete every non-preserved topic, including all of the above, and recreate the declared set.
