@@ -48,8 +48,8 @@ refused and counted, never read). Therefore:
 4b. **Pin the start offsets** (service still at 0): `KAFKA_BOOTSTRAP_SERVERS=<bootstrap> STRIKE_INVASION_APP_ID=<app> STRIKE_INVASION_SOURCE_TOPICS="<the seven
    source topics of this environment, TOPIC_PREFIX and *_INPUT_*_TOPIC overrides applied>" scripts/kafka/strike-invasion-start-offsets.sh pin`. It captures the end offset of every
    source partition, commits exactly those offsets for the Streams group and records them, so the restart position is a fact and not `auto.offset.reset=latest`.
-5. **Delete and recreate `current` and `events`** with the generic roll-forward tool. **HARD PREREQUISITE: options-edge-deploy#1320 (`scripts/kafka/roll-forward-topics.sh`,
-   `docs/KAFKA-AVRO-TOPIC-ROLL-FORWARD.md`) is merged first; record its merge sha in the cutover log at cutover time and run it from that sha.** Read each TopicId first
+5. **Delete and recreate `current` and `events`** with the generic roll-forward tool. **Prerequisite, MERGED: options-edge-deploy#1320 (`scripts/kafka/roll-forward-topics.sh`,
+   `docs/KAFKA-AVRO-TOPIC-ROLL-FORWARD.md`), merge sha `8d7f4c657098fd41cc617bea172f67ccb454d900`; run the tool from a checkout containing that sha.** Read each TopicId first
    (`kafka-topics --describe --topic <t>`) and freeze topic administration, then, everything stopped:
    `scripts/kafka/roll-forward-topics.sh --recreate --cluster dev|production --topics options.spx.strike-invasion.current,options.spx.strike-invasion.events
    --pre-cutover-id <current>=<id> --pre-cutover-id <events>=<id> --registry <url> --subject options.spx.strike-invasion.current=com.optionsedge.contracts.strikeinvasion.StrikeInvasionSnapshot
