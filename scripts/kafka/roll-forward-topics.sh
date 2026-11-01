@@ -396,13 +396,21 @@ for t in "${TOPICS[@]}"; do
   groups_gate "$t" "$LASTG" || fail_run "$t" "consumer-group gate failed before create; nothing created (if $t was already deleted it is ABSENT: clear the offsets, then re-run with --topic-absent-after-failed-create)."
   parts="$(shape_get "$STATE/$t.shape" partitions)"; rf="$(shape_get "$STATE/$t.shape" rf)"
   args=(--create --topic "$t" --partitions "$parts" --replication-factor "$rf")
+  lists=()
   while IFS='=' read -r k v; do
     k="${k#config.}"
-    case "$RF_LIST_KEYS" in *" $k "*) case "$v" in *,*) v="[$v]" ;; esac ;; esac   # only LIST-typed configs take the bracket form; the rest verbatim
+    # only LIST-typed configs with a comma take the bracket form, the rest verbatim. kafka-topics --create REFUSES the bracket form on a
+    # Kafka 4.x CLI ("Invalid value [compact for configuration cleanup.policy": it splits at the comma), so those are set right after the
+    # create with kafka-configs --alter, which takes it; the post-checks below still compare the final config set exactly.
+    case "$RF_LIST_KEYS" in *" $k "*) case "$v" in *,*) lists+=("$k=[$v]"); continue ;; esac ;; esac
     args+=(--config "$k=$v")
   done < <(grep '^config\.' "$STATE/$t.shape" || true)
   echo "-- create $t (${parts} partitions, RF $rf, $(grep -c '^config\.' "$STATE/$t.shape") configs)"
   kt "${args[@]}" || fail_run "$t" "$t was deleted but could not be created; it is ABSENT. Re-run with --topic-absent-after-failed-create."
+  for kv in ${lists[@]+"${lists[@]}"}; do
+    "$KC" --bootstrap-server "$BS" --entity-type topics --entity-name "$t" --alter --add-config "$kv" >/dev/null \
+      || fail_run "$t" "$t was created but its list config '$kv' could not be set (it exists WITHOUT it). Fix with: kafka-configs --alter --add-config '$kv', then --verify --new-topic-id $t=<printed id>."
+  done
   post_checks "$t" "$pre" "" || fail_run "$t" "created, but a post-check failed. If no JSON was found run --verify --new-topic-id $t=<printed id>; if JSON was found re-run --recreate with --pre-cutover-id $t=<printed id>."
 done
 echo "=== DONE: ${TOPICS[*]} recreated. Next: deploy the Avro readers, then run the wire verification ==="

@@ -27,6 +27,8 @@ case "$mode" in
     printf 'Topic: %s\tTopicId: %s\tPartitionCount: %s\tReplicationFactor: %s\tConfigs: %s\n' "$topic" "$(cat "$d/id")" "$(cat "$d/parts")" "$(cat "$d/rf")" "$cfg"; exit 0 ;;
   delete) [ -z "${MOCK_DELETE_ALSO:-}" ] || rm -f "$MOCK_DIR/$MOCK_DELETE_ALSO/id"; rm -f "$d/id" "$d/cfg" "$d/parts" "$d/rf"; echo "deleted:$topic" >> "$MOCK_DIR/log"; exit 0 ;;
   create) [ "${MOCK_CREATE_FAIL:-}" = "$topic" ] && { echo "create refused" >&2; exit 1; }
+    # a Kafka 4.x kafka-topics --create REFUSES the bracket form of a list config (it splits at the comma): list configs go through kafka-configs --alter
+    for c in "${configs[@]:-}"; do case "$c" in *\[*) echo "Invalid value [${c#*[} for configuration ${c%%=*}: String must be one of: compact, delete" >&2; exit 1 ;; esac; done
     mkdir -p "$d"; echo "newid-$RANDOM" > "$d/id"; echo "$parts" > "$d/parts"; echo "$rf" > "$d/rf"
     printf '%s\n' "${configs[@]}" > "$d/cfg"; [ -z "${MOCK_CREATE_MUTATE:-}" ] || sed -i.bak "s/^${MOCK_CREATE_MUTATE}=.*/${MOCK_CREATE_MUTATE}=mutated/" "$d/cfg"; echo "created:$topic" >> "$MOCK_DIR/log"; exit 0 ;;
 esac
@@ -37,6 +39,8 @@ cat > "$TMP/bin/kafka-configs.sh" <<'MOCK'
 # like kafka-configs --describe: dynamic topic overrides, one per line, list values printed WITHOUT brackets
 name=""; prev=""; for a in "$@"; do [ "$prev" = "--entity-name" ] && name="$a"; prev="$a"; done
 [ -f "$MOCK_DIR/$name/id" ] || { echo "no such topic" >&2; exit 1; }
+prev=""; alter=""; addcfg=""; for a in "$@"; do [ "$prev" = "--add-config" ] && addcfg="$a"; [ "$a" = "--alter" ] && alter=1; prev="$a"; done
+if [ -n "$alter" ]; then k="${addcfg%%=*}"; grep -v "^${k}=" "$MOCK_DIR/$name/cfg" > "$MOCK_DIR/$name/cfg.new" || true; echo "$addcfg" >> "$MOCK_DIR/$name/cfg.new"; mv "$MOCK_DIR/$name/cfg.new" "$MOCK_DIR/$name/cfg"; echo "altered:$name:$k" >> "$MOCK_DIR/log"; exit 0; fi
 echo $(( $(cat "$MOCK_DIR/cnt.kc" 2>/dev/null || echo 0) + 1 )) > "$MOCK_DIR/cnt.kc"
 echo "Dynamic configs for topic $name are:"
 while IFS= read -r l; do [ -n "$l" ] || continue; l="$(printf '%s' "$l" | sed 's/=\[\(.*\)\]$/=\1/')"
@@ -147,6 +151,7 @@ check "c.three (not listed) untouched" "$(cat "$TMP/state/c.three/id")" OLDC
 check "live partition count copied (32)" "$(cat "$TMP/state/b.two/parts")" 32
 check "live configs copied" "$(paste -sd, - < "$TMP/state/b.two/cfg")" "cleanup.policy=delete,retention.ms=86400000"
 check "a comma-valued cleanup.policy is created in bracket form" "$(grep -c '^cleanup.policy=\[compact,delete\]$' "$TMP/state/a.one/cfg")" 1
+check "…set by kafka-configs --alter after the create (kafka-topics --create refuses the bracket form on a Kafka 4.x CLI)" "$(grep -c '^altered:a.one:cleanup.policy$' "$TMP/state/log")" 1
 check "…and every other config of the live topic came with it" "$(grep -c 'retention.ms=-1\|min.insync.replicas=1' "$TMP/state/a.one/cfg")" 2
 check "new ids printed for both" "$(grep -c '^NEW TOPIC ID: ' "$TMP/out")" 2
 
