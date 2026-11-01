@@ -21,6 +21,7 @@ class Registry:
         self.fail: list[tuple[str, str]] = []   # (METHOD, path-prefix) -> answer 500 (failure injection)
         self.fail_next_mode_delete = 0   # DELETE /mode/<s> answers 500 this many times before it works (failure injection)
         self.incompatible: set[str] = set()   # subjects whose NEW schema the compatibility endpoint refuses
+        self.renormalise = False   # GET .../versions/<v> hands back the schema the way the real registry re-serialises it (see _registry_form)
         self.fail: list[tuple[str, str]] = []   # (METHOD, path-prefix) -> answer 500 (failure injection)
 
     def injected(self, method: str, path: str) -> bool:
@@ -42,6 +43,32 @@ class Registry:
 
 def _canon(schema: str) -> str:
     return json.dumps(json.loads(schema), sort_keys=True, separators=(",", ":"))
+
+
+def _registry_form(schema: str) -> str:
+    """The real Confluent registry re-serialises a schema it stores: a nested named type loses its redundant "namespace" key and a
+    reference to a named type of the enclosing namespace is written by its short name. Same schema, different text."""
+    def walk(node, ns):
+        if isinstance(node, list):
+            return [walk(x, ns) for x in node]
+        if isinstance(node, str):
+            return node[len(ns) + 1:] if ns and node.startswith(ns + ".") and node.count(".") == ns.count(".") + 1 else node
+        if not isinstance(node, dict):
+            return node
+        out = dict(node)
+        inner = ns
+        if node.get("type") in ("record", "enum", "fixed") and "name" in node:
+            inner = node.get("namespace", ns)
+            if ns is not None and node.get("namespace") == ns:
+                out.pop("namespace")
+        if "fields" in out:
+            out["fields"] = [dict(f, type=walk(f["type"], inner)) for f in out["fields"]]
+        for key in ("items", "values"):
+            if key in out:
+                out[key] = walk(out[key], inner)
+        return out
+    parsed = json.loads(schema)
+    return json.dumps(walk(parsed, None), separators=(",", ":"))
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -106,7 +133,8 @@ class Handler(BaseHTTPRequestHandler):
                 v = str(r.subjects[s][-1]["version"])
             for row in r.subjects.get(s, []):
                 if str(row["version"]) == v:
-                    return self._send(200, {"subject": s, "version": row["version"], "id": row["id"], "schema": row["schema"]})
+                    return self._send(200, {"subject": s, "version": row["version"], "id": row["id"],
+                                            "schema": _registry_form(row["schema"]) if r.renormalise else row["schema"]})
             return self._send(404, {"error_code": 40402, "message": "Version not found"})
         return self._send(404, {"error_code": 404, "message": "no route " + p})
 
