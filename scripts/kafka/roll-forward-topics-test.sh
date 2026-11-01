@@ -21,7 +21,7 @@ case "$mode" in
   describe) [ -f "$d/id" ] || exit 1
     if [ -n "${MOCK_MUT:-}" ]; then IFS=: read -r mt mc mf mv <<< "$MOCK_MUT"
       if [ "$mt" = "$topic" ]; then n=$(( $(cat "$MOCK_DIR/cnt.$topic" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$MOCK_DIR/cnt.$topic"
-        if [ "$n" = "$mc" ]; then if [ "$mf" = parts ]; then echo "$mv" > "$d/parts"; else echo "$mv" >> "$d/cfg"; fi; fi; fi; fi
+        if [ "$n" = "$mc" ]; then if [ "$mf" = parts ]; then echo "$mv" > "$d/parts"; elif [ "$mf" = id ]; then echo "$mv" > "$d/id"; else echo "$mv" >> "$d/cfg"; fi; fi; fi; fi
     # like a broker: list values print WITHOUT brackets, joined by commas
     cfg="$(sed 's/\[\(.*\)\]/\1/' "$d/cfg" 2>/dev/null | paste -sd, -)"
     printf 'Topic: %s\tTopicId: %s\tPartitionCount: %s\tReplicationFactor: %s\tConfigs: %s\n' "$topic" "$(cat "$d/id")" "$(cat "$d/parts")" "$(cat "$d/rf")" "$cfg"; exit 0 ;;
@@ -314,17 +314,24 @@ check "recovery: a malformed group row refuses and issues NO create" "$(MOCK_GRO
 check "…b.two still absent (malformed)" "$([ -f "$TMP/state/b.two/id" ] && echo present || echo absent)" absent
 check "recovery with clean groups still works" "$(run "${REC[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 0
 two
-check "partition count changed between preflight and last look => no delete of that topic" "$(MOCK_MUT=b.two:3:parts:5 run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
+check "partition count changed between preflight and last look => no delete of that topic" "$(MOCK_MUT=b.two:2:parts:5 run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
 check "…b.two was not deleted" "$(grep -c '^deleted:b.two' "$TMP/state/log")" 0
 check "…the earlier topic a.one was completed" "$(grep -c '^created:a.one' "$TMP/state/log")" 1
 check "…the refusal says the shape changed" "$(grep -c 'shape of b.two changed since preflight' "$TMP/out")" 1
 two
-check "a config changed between preflight and last look => no delete" "$(MOCK_MUT=b.two:3:cfg:segment.bytes=7 run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
+check "a config changed between preflight and last look => no delete" "$(MOCK_MUT=b.two:2:cfg:segment.bytes=7 run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
 check "…b.two was not deleted (config)" "$(grep -c '^deleted:b.two' "$TMP/state/log")" 0
 two
 check "a stale committed offset appearing after preflight => no delete of that topic" "$(MOCK_GROUPS2_FROM=4 MOCK_GROUPS2='g b.two 0 5 5 0 - - -' run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
 check "…b.two was not deleted (groups)" "$(grep -c '^deleted:b.two' "$TMP/state/log")" 0
 check "…a.one (before the change) was completed" "$(grep -c '^created:a.one' "$TMP/state/log")" 1
+
+# --- round-8: an identical-shape replacement under a NEW TopicId between preflight and the last look is not deleted
+two
+check "ID-only replacement (same shape, new TopicId) at the last look => no delete" "$(MOCK_MUT=b.two:2:id:REPLACED run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
+check "…b.two was not deleted (id)" "$(grep -c '^deleted:b.two' "$TMP/state/log")" 0
+check "…the replacement is still there" "$(cat "$TMP/state/b.two/id")" REPLACED
+check "…the refusal names the id change" "$(grep -c 'b.two changed id to REPLACED' "$TMP/out")" 1
 
 echo "passed=$pass failed=$fail"
 [ "$fail" = 0 ]

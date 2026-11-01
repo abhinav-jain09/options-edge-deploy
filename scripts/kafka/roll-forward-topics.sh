@@ -284,11 +284,12 @@ for t in "${TOPICS[@]}"; do
   pre="$(id_of "$PRE_IDS" "$t")"
   LIST="$(rf_list "$KT" "$BS")" || fail_run "$t" "broker unreadable."
   if printf '%s\n' "$LIST" | grep -qx "$t"; then
-    # last look: Kafka's delete takes a NAME, not a TopicId
-    again="$(rf_topic_id "$(rf_describe "$KT" "$BS" "$t")" "$t")" || fail_run "$t" "cannot re-read the topic id."
+    # last look: Kafka's delete takes a NAME, not a TopicId. ONE describe supplies BOTH the id and the shape compared with the
+    # preflight capture, so a same-shape replacement under a new id cannot slip between two reads.
+    look="$(rf_describe "$KT" "$BS" "$t")" || fail_run "$t" "cannot re-describe the topic; nothing deleted."
+    again="$(rf_topic_id "$look" "$t")" || fail_run "$t" "cannot re-read the topic id."
     [ "$again" = "$pre" ] || { echo "FAIL: $t changed id to $again while checking; nothing deleted." >&2; fail_run "$t" "topic administration is not frozen."; }
-    # the FULL shape and the group gates are re-checked now: anything may have changed since the all-topics preflight
-    capture_shape "$(rf_describe "$KT" "$BS" "$t")" "$STATE/$t.lastlook" "$again" "$t" || fail_run "$t" "cannot re-capture the shape; nothing deleted."
+    capture_shape "$look" "$STATE/$t.lastlook" "$again" "$t" || fail_run "$t" "cannot capture the shape; nothing deleted."
     cmp -s "$STATE/$t.lastlook" "$STATE/$t.shape" || { echo "FAIL: the shape of $t changed since preflight; nothing deleted. captured: $(tr '\n' ' ' < "$STATE/$t.shape") now: $(tr '\n' ' ' < "$STATE/$t.lastlook")" >&2; fail_run "$t" "topic administration is not frozen; re-run to capture the new shape."; }
     LASTG="$("$KG" --bootstrap-server "$BS" --describe --all-groups 2>&1)" || fail_run "$t" "cannot read consumer groups; nothing deleted."
     groups_gate "$t" "$LASTG" || fail_run "$t" "consumer-group gate failed at the last look; nothing deleted."
