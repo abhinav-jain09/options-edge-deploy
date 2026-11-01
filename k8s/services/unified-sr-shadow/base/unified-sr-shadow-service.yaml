@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: unified-sr-shadow-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: unified-sr-shadow-service
+    app.kubernetes.io/part-of: options-edge
+    options-edge.io/mode: shadow
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/path: /metrics
+    prometheus.io/port: "8108"
+spec:
+  selector:
+    app.kubernetes.io/name: unified-sr-shadow-service
+  ports:
+    - name: health
+      port: 8108
+      targetPort: health

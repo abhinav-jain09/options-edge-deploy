@@ -241,26 +241,88 @@ rf_nonempty_partitions() {
 # those cannot see — a stale image still running at wipe time — and the two ends of the log are where
 # that shows up: the start if it was writing when the topic was recreated, the end if it still is.
 rf_wire_is_avro() {
-  local cli="$1" bs="$2" topic="$3" part="$4" off="$5" tmp first
+  local cli="$1" bs="$2" topic="$3" part="$4" off="$5" tomb="${6:-}" tmp first lit="${RF_NULL_LITERAL:-null}" extra=()
+  # tomb=sentinel: ask the consumer to render a null value as a unique sentinel, so a JSON value that is the text "null" is not a tombstone
+  if [ "$tomb" = sentinel ]; then lit="__OE_TOMBSTONE__"; extra=(--property "null.literal=$lit"); fi
   tmp="$(mktemp)"
   # < /dev/null is REQUIRED, not hygiene: kafka-console-consumer reads stdin, and without this it
   # swallows the caller's `while read ... <<<` herestring — the outer topic loop then silently
   # processes one topic and stops, which looks exactly like a clean pass.
   if ! "$cli" --bootstrap-server "$bs" --topic "$topic" --partition "$part" \
-        --offset "$off" --max-messages 1 --timeout-ms "${RF_WIRE_TIMEOUT_MS:-15000}" \
+        --offset "$off" --max-messages 1 --timeout-ms "${RF_WIRE_TIMEOUT_MS:-15000}" ${extra[@]+"${extra[@]}"} \
         > "$tmp" 2>/dev/null < /dev/null; then
     # A compacted-away offset reads as empty rather than as a failure; treat unreadable as unknown.
     if [ ! -s "$tmp" ]; then rm -f "$tmp"; return 2; fi
   fi
+  # ZERO bytes is NEVER evidence of a tombstone: a timeout, a compacted-away offset and a dead consumer all look like this.
   if [ ! -s "$tmp" ]; then rm -f "$tmp"; return 2; fi
   first="$(od -An -tx1 -N1 "$tmp" | tr -d ' \n')"
+  ids="$(od -An -tx1 -j1 -N4 "$tmp" | tr -d ' \n')"
   # A tombstone: the consumer renders a null value as its null literal on a line of its own.
-  if [ "$(tr -d '\n\r' < "$tmp")" = "${RF_NULL_LITERAL:-null}" ]; then
+  if [ "$(tr -d '\n\r' < "$tmp")" = "$lit" ]; then
     rm -f "$tmp"; return 0
   fi
   rm -f "$tmp"
-  [ "$first" = "00" ] && return 0
+  if [ "$first" = "00" ]; then
+    # Optional exact-id gate (a topic with ONE fixed contract): the four bytes after the magic must be the expected schema id.
+    if [ -n "${RF_EXPECT_ID_HEX:-}" ] && [ "$ids" != "$RF_EXPECT_ID_HEX" ]; then
+      echo "    value at offset $off is Avro under schema id 0x$ids, expected 0x$RF_EXPECT_ID_HEX (a foreign writer)" >&2
+      return 1
+    fi
+    return 0
+  fi
   echo "    value at offset $off starts 0x$first (Avro is 0x00, a tombstone renders as" >&2
-  echo "    '${RF_NULL_LITERAL:-null}', hand-built JSON is 0x7b '{')" >&2
+  echo "    '$lit', hand-built JSON is 0x7b '{')" >&2
   return 1
+}
+
+# rf_wire_is_avro_at_log_end <cli> <bs> <topic> <partition> <latest-offset> <earliest-offset>
+#   -> 0 / 1 / 2 with the same meaning as rf_wire_is_avro, but for the last DELIVERED record of a
+#      partition rather than for one fixed offset.
+#
+# WHY A PLAIN READ AT high-watermark-1 IS NOT THAT RECORD. On a topic written under exactly-once
+# semantics the offset below the high watermark is very often a transaction CONTROL record — a
+# commit or abort marker. A marker occupies an offset in the log but is delivered to a consumer in
+# NEITHER isolation level, so a read at that offset returns nothing and rf_wire_is_avro reports 2,
+# "nothing could be read". The barrier then failed the topic for being unverifiable.
+#
+# That is not hypothetical: it blocked the 19 Oct production gamma rollout twice. Partition 0 of
+# options.ibkr.gex.status ended on a commit marker (offset 319 on the first attempt, 657 on the
+# second), the gate printed "could not be read at its latest offset", every later stage including
+# Deploy was skipped — on a topic whose every value was correct Avro. A gate that refuses a correct
+# topic is not strictness, it is an outage with a reassuring message.
+#
+# So walk BACK from the end over offsets that deliver nothing, and judge the first record that does
+# arrive. Each step is its own single-record read, so this still never scans binary values
+# line-by-line — that remains unsound, because Avro bodies contain newlines.
+#
+# WHAT STEPPING BACK DOES NOT WEAKEN: the walk stops at the FIRST offset that delivers, so a
+# contaminated record at the log end is still met and still fails. Nothing is skipped over except
+# offsets that deliver no record at all, which carry no wire format to check. What it does change is
+# that the record judged may sit a few offsets below the high watermark — and when every offset
+# above it is a marker, that record IS the most recent record the partition has.
+#
+# The window is bounded rather than open: consecutive transactions each leave their own marker, so
+# the bound cannot be 1, but a partition whose last RF_LOG_END_PROBE_BACK offsets ALL deliver
+# nothing is still refused, not assumed Avro. The walk also never crosses below the partition's
+# earliest offset, so a short partition cannot be probed into negative offsets.
+rf_wire_is_avro_at_log_end() {
+  local cli="$1" bs="$2" topic="$3" part="$4" latest="$5" earliest="$6"
+  local floor off rc
+  floor=$((latest - ${RF_LOG_END_PROBE_BACK:-8}))
+  [ "$floor" -lt "$earliest" ] && floor="$earliest"
+  off="$latest"
+  while [ "$off" -ge "$floor" ]; do
+    rc=0
+    rf_wire_is_avro "$cli" "$bs" "$topic" "$part" "$off" || rc=$?
+    if [ "$rc" -ne 2 ]; then
+      if [ "$off" != "$latest" ]; then
+        echo "    (last delivered record is at offset $off; offsets $((off + 1))-$latest deliver" >&2
+        echo "     nothing, which is what a transaction commit/abort marker reads as)" >&2
+      fi
+      return "$rc"
+    fi
+    off=$((off - 1))
+  done
+  return 2
 }

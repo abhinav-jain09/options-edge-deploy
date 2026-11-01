@@ -13,12 +13,20 @@
 # overrides it. Keeping the dev database URL in the same file as the flag means a future change that turns a writer on in dev cannot
 # drift apart from the statement of WHICH database, across separate reviews. The URL below is the same value the dev configmap patch
 # carries; if they ever disagree, this one wins. The shadow-model and environment settings are retained for the fail-fast pair.
+#
+# RUNS ON DEV (owner instruction 2026-10-31): replicas 1 here, and the service is no longer in DISABLED_DEV (scripts/ops/dev-cleanup.sh). The base stays replicas 0 and PRODUCTION stays
+# held (KEEP_DOWN in morning-autostart.sh and oe-boot-bringup.sh, untouched). This is a DEV-ONLY change: the legacy research writer above stays OFF as the literal "false", so enabling the
+# service does not touch the schema-v7 interlock. A bare `kubectl scale` must NOT be used to raise it: a long-lived dev Deployment can carry a hand-set ZERODTE_RESEARCH_ENABLED=true that this
+# manifest does not (the live dev spec did, 2026-10-31); a service-deploy re-applies the literal first.
+# NOTE: the service reads and WRITES JSON on Kafka (options.spx.vix-option-inteligence-service.current is written with a StringSerializer from JSON.writeValueAsString) - the Avro-only rule
+# applies to it; it has no Avro code at all.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: vix-option-inteligence-service
   namespace: options-edge
 spec:
+  replicas: 1
   template:
     spec:
       containers:

@@ -51,6 +51,8 @@ spec:
               value: "true"
             - name: TRIGGER_ORDERS_ENABLED
               value: "true"
+            - name: STANDING_ORDERS_ENABLED
+              value: "true"
             - name: ORDER_MID_PRICING_ENABLED
               value: "true"
             - name: BRACKET_ORDERS_ENABLED

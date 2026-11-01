@@ -209,6 +209,55 @@ MOCK_LIST="$T" MOCK_DESCRIBE="$(desc NEWIDxxxxxxxxxxxxxxxxx 32 "$GOOD_CFG")" \
   MOCK_EARLIEST="$SNAP_EARLY" MOCK_LATEST="$SNAP_LATE" MOCK_WIRE=tombstone \
   run "a TOMBSTONE passes (null value is valid, not malformed)" 0
 
+# THE TRANSACTION MARKER AT THE LOG END, which failed a correct topic twice on 19 Oct and skipped
+# the production Deploy stage both times. The offset below the high watermark was a commit marker:
+# it occupies an offset but is delivered in neither isolation level, so the fixed read there
+# returned nothing and the gate called the topic unverifiable. The walk-back judges the last record
+# that actually delivers.
+snap 5
+MOCK_LIST="$T" MOCK_DESCRIBE="$(desc NEWIDxxxxxxxxxxxxxxxxx 32 "$GOOD_CFG")" \
+  MOCK_EARLIEST="$SNAP_EARLY" MOCK_LATEST="$SNAP_LATE" MOCK_WIRE=avro MOCK_WIRE_AT_4=empty \
+  run "a transaction MARKER at the log end passes on the Avro record below it" 0
+
+# More than one marker at the end: consecutive transactions each leave their own, so the walk is not
+# a single step back.
+snap 5
+MOCK_LIST="$T" MOCK_DESCRIBE="$(desc NEWIDxxxxxxxxxxxxxxxxx 32 "$GOOD_CFG")" \
+  MOCK_EARLIEST="$SNAP_EARLY" MOCK_LATEST="$SNAP_LATE" MOCK_WIRE=avro \
+  MOCK_WIRE_AT_4=empty MOCK_WIRE_AT_3=empty \
+  run "SEVERAL markers at the log end pass on the Avro record below them" 0
+
+# THE CASE THAT MUST NOT BE WEAKENED BY THE WALK-BACK: markers at the end and retained JSON under
+# them. The walk stops at the first offset that DELIVERS, so the JSON is still met and still fails.
+# If this ever passes, the fix has become a way to hide contamination behind a marker.
+snap 5
+MOCK_LIST="$T" MOCK_DESCRIBE="$(desc NEWIDxxxxxxxxxxxxxxxxx 32 "$GOOD_CFG")" \
+  MOCK_EARLIEST="$SNAP_EARLY" MOCK_LATEST="$SNAP_LATE" MOCK_WIRE=avro \
+  MOCK_WIRE_AT_4=empty MOCK_WIRE_AT_3=json \
+  run "a marker at the end over retained JSON is still REFUSED" 1
+
+# The walk is BOUNDED. A partition whose last RF_LOG_END_PROBE_BACK offsets all deliver nothing is
+# refused, not walked down the whole log until something passes: here the only readable record sits
+# below the window, so the log end stays unverified.
+snap 20
+MOCK_LIST="$T" MOCK_DESCRIBE="$(desc NEWIDxxxxxxxxxxxxxxxxx 32 "$GOOD_CFG")" \
+  MOCK_EARLIEST="$SNAP_EARLY" MOCK_LATEST="$SNAP_LATE" MOCK_WIRE=empty MOCK_WIRE_AT_10=avro \
+  run "a record BELOW the probe window does not rescue the log end" 1
+
+# And the same record, once the window is widened to reach it, does.
+snap 20
+RF_LOG_END_PROBE_BACK=9 \
+  MOCK_LIST="$T" MOCK_DESCRIBE="$(desc NEWIDxxxxxxxxxxxxxxxxx 32 "$GOOD_CFG")" \
+  MOCK_EARLIEST="$SNAP_EARLY" MOCK_LATEST="$SNAP_LATE" MOCK_WIRE=empty MOCK_WIRE_AT_10=avro \
+  run "RF_LOG_END_PROBE_BACK widens the window to that record" 0
+
+# The walk never probes below the partition's EARLIEST offset, so a partition shorter than the
+# window cannot be read at a negative offset.
+snap 2
+MOCK_LIST="$T" MOCK_DESCRIBE="$(desc NEWIDxxxxxxxxxxxxxxxxx 32 "$GOOD_CFG")" \
+  MOCK_EARLIEST="$SNAP_EARLY" MOCK_LATEST="$SNAP_LATE" MOCK_WIRE=empty \
+  run "a partition shorter than the probe window is refused, not probed below earliest" 1
+
 # A PARTIAL offsets response must not read as authoritative: it would omit a contaminated partition.
 MOCK_LIST="$T" MOCK_DESCRIBE="$(desc NEWIDxxxxxxxxxxxxxxxxx 32 "$GOOD_CFG")" \
   MOCK_EARLIEST="$T:0:0

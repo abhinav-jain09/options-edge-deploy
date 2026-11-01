@@ -3,7 +3,7 @@ must be on both, in the same shape, while the ids are free to differ."""
 import json, os, subprocess, unittest
 from pathlib import Path
 
-from stub_schema_registry import Registry, serve
+from tests.stub_schema_registry import Registry, serve
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/kafka/spx-price-mirror/assert-subject-parity.sh"

@@ -21,11 +21,19 @@ resources:
   - ../../services/es-compression-expansion/base
   # hedging-pressure: HELD AT replicas 0 (base) on dev and production alike; the owner turns it on later.
   - ../../services/hedging-pressure/base
-  # break-score + level-absorption: both HELD AT replicas 0 (base) on dev and production alike. break-score is SHADOW (scores
-  # level breaks off the linearized ES tape); level-absorption is EYEBALL phase and cannot start until its Phase 0 freeze file
-  # and retention artifact exist. The owner turns each on later (docs/break-score/DEPLOY-WIRING.md, docs/level-absorption/DEPLOY-WIRING.md).
+  # break-score + level-absorption: both HELD AT replicas 0 (base) on production; break-score is RETIRED (2026-10-25, held at 0 everywhere, never to be scaled up;
+  # there is no SHADOW mode to enable); level-absorption RUNS on dev in EYEBALL phase through level-absorption-dev-enable-patch.yaml
+  # (docs/break-score/DEPLOY-WIRING.md, docs/level-absorption/DEPLOY-WIRING.md).
   - ../../services/break-score/base
   - ../../services/level-absorption/base
+  # the immutable, content-named ConfigMap the dev level-absorption pod mounts (dev only; production renders none)
+  - level-absorption-config.yaml
+  # es-trade-tools (TICK-TRADE-TOOLS) + wave-cycle (ELLIOTT-FIB-CYCLE-TOOLS): the base is HELD at replicas 0 / every flag false; BOTH run LIVE on dev (2026-10-31) and production
+  # through each environment's enable patch (docs/ta-books/DEPLOY-ROLLOUT.md sections 4 and 5).
+  - ../../services/es-trade-tools/base
+  - ../../services/wave-cycle/base
+  # break-classifier (Phase F): LIVE on dev and production through each environment's enable patch (replicas 1, flag true); the base is HELD at 0 / "false".
+  - ../../services/break-classifier/base
   # market-structure: RUNNING on dev and production (replicas 1 in the base). Reads
   # options.indicators.bars read-only and writes only options.spx.market-structure.{ui,sequence,dlq};
   # what a reader sees is gated on the gateway's own GATEWAY_MARKET_STRUCTURE_ENABLED.
@@ -115,6 +123,17 @@ patches:
       - op: replace
         path: /spec/replicas
         value: 1
+  # spread-skew-service: RUNNING on DEV ONLY. The owner lifted the 2026-07-26 hold for dev on 2026-10-31
+  # ("yes do that on dev") because market-commentary reports INCOMPLETE_INPUT:I2 while nothing produces
+  # options.spx.spread-skew.current. Production stays at the base's replicas 0. spread-skew-postgres-writer
+  # stays held at 0 (base). Removed from dev-cleanup.sh DISABLED_DEV in the same commit.
+  - target:
+      kind: Deployment
+      name: spread-skew-service
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
   # The ENABLE is a separate NAME-KEYED strategic merge, never an env/N json6902 index: an index patch
   # lands on whichever variable has drifted into that position, and this repository already has the
   # dealer-ledger heap landing on QUOTE_STALE_MS to show for exactly that.
@@ -167,6 +186,16 @@ patches:
         path: /spec/template/spec/containers/0/env/-
         value:
           name: REVERSAL_HUNT_AUTO_ARM
+          value: "true"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: REVERSAL_BOTTOM_CANDIDATE_ENABLED
+          value: "true"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: REVERSAL_TOP_CANDIDATE_ENABLED
           value: "true"
       - op: add
         path: /spec/template/spec/containers/0/env/-
@@ -347,6 +376,18 @@ patches:
   # DEV-ONLY: give the k8s feed-gateway the dev WS auth/origins/replay config the retired host :8093
   # gateway had, so the browser's live WS connects to the Jenkins-owned k8s gateway (:8091).
   - path: feed-gateway-dev-env-patch.yaml
+  # DEV-ONLY: market-structure's structure tools, classical geometry and X2 swing pivots flags (see the patch header).
+  # MIRRORS k8s/services/market-structure/overlays/dev — the slice generator renders it from here.
+  - path: market-structure-dev-env-patch.yaml
+    target:
+      kind: Deployment
+      name: market-structure-service
+  # DEV-ONLY: the market-structure-estimate container (candlestick patterns on the pre-market estimate candles); see the patch header.
+  # Production overlays do not reference it.
+  - path: market-structure-estimate-dev-patch.yaml
+    target:
+      kind: Deployment
+      name: market-structure-service
   # DEV-ONLY: feed publish interval 5s, same as prod (code default 250ms) — see the patch header.
   - path: raw-postgres-writer-dev-patch.yaml
   - path: databento-feed-dev-patch.yaml
@@ -357,6 +398,17 @@ patches:
   # DEV-ONLY: the V1 compatibility release — the legacy research writer OFF as a literal, the dev research-store URL declared next to it
   # (the base carries no URL — see the patch header; increments 9a / 9c).
   - path: vix-option-inteligence-dev-patch.yaml
+  # DEV: volume-pace-databento-service RUNS (replicas 1); the base stays replicas 0 and production stays held. MUST MIRROR the standalone slice k8s/services/volume-pace/overlays/dev (validate-services: mono==slice).
+  - path: volume-pace-databento-dev-enable-patch.yaml
+    target:
+      kind: Deployment
+      name: volume-pace-databento-service
+  # DEV: unified-sr-service CPU request 500m (the shared base's 2 cores was sized for the 24-core prod host and left dev's 16-core node 98% reserved). MUST MIRROR the standalone slice
+  # k8s/services/unified-sr/overlays/dev (validate-services: mono==slice).
+  - path: unified-sr-dev-cpu-patch.yaml
+    target:
+      kind: Deployment
+      name: unified-sr-service
   # DEV-ONLY ONE-TIME (2026-08-12): epoch-genesis grant after the dev Kafka wipe (#801) —
   # mirrors the standalone overlay so both render identically. Revert BOTH once genesis'd.
   - path: dealer-ledger-dev-env-patch.yaml
@@ -372,6 +424,8 @@ patches:
   # DEV-ONLY: overnight ES-basis estimate bars — the indicator-estimate container and the Context Tape GLOBEX session +
   # estimate overlay (flags default off; production overlays untouched). See the two patch headers.
   - path: indicator-estimate-dev-patch.yaml
+  # DEV-ONLY: INDICATOR-STUDIES indicator studies ON for the indicator-service container (production overlays untouched).
+  - path: indicator-studies-dev-enable-patch.yaml
   - path: context-tape-estimate-bars-dev-patch.yaml
   # Dev gex settings. Created for the pre-open GEX pipeline, but that is NO LONGER what it does:
   # the ibkr-preopen-gate patch below is applied AFTER it and sets PREOPEN_GEX_ENABLED back to
@@ -411,6 +465,30 @@ patches:
     target:
       kind: Deployment
       name: option-pressure-state-service
+  # DEV: break-classifier-service LIVE (replicas 1, BREAK_CLASSIFIER_ENABLED true); the base stays replicas 0 / false (production has its own patch). MUST MIRROR the standalone slice
+  # k8s/services/break-classifier/overlays/dev (validate-services: mono==slice).
+  - path: break-classifier-dev-enable-patch.yaml
+    target:
+      kind: Deployment
+      name: break-classifier-service
+  # DEV: es-trade-tools-service LIVE (replicas 1, TT_ENABLED and the four family flags true); the base stays replicas 0 / false. MUST MIRROR the standalone slice
+  # k8s/services/es-trade-tools/overlays/dev (validate-services: mono==slice).
+  - path: es-trade-tools-dev-enable-patch.yaml
+    target:
+      kind: Deployment
+      name: es-trade-tools-service
+  # DEV: wave-cycle-service LIVE (replicas 1, WAVE_CYCLE_ENABLED and WAVE_CYCLE_SEASONALITY_ENABLED true, hash-pinned snapshot); the base stays replicas 0 / false. MUST MIRROR the standalone slice
+  # k8s/services/wave-cycle/overlays/dev (validate-services: mono==slice).
+  - path: wave-cycle-dev-enable-patch.yaml
+    target:
+      kind: Deployment
+      name: wave-cycle-service
+  # DEV: level-absorption-service RUNNING (replicas 1, EYEBALL); the base and production stay at 0. MUST MIRROR the standalone slice
+  # k8s/services/level-absorption/overlays/dev (validate-services: mono==slice).
+  - path: level-absorption-dev-enable-patch.yaml
+    target:
+      kind: Deployment
+      name: level-absorption-service
   - path: breakout-sequencer-dev-enable-patch.yaml
     target:
       kind: Deployment
@@ -1025,6 +1103,15 @@ images:
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-level-absorption
     newName: host.docker.internal:5001/options-edge-level-absorption
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-es-trade-tools
+    newName: host.docker.internal:5001/options-edge-es-trade-tools
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-wave-cycle
+    newName: host.docker.internal:5001/options-edge-wave-cycle
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-break-classifier
+    newName: host.docker.internal:5001/options-edge-break-classifier
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-multileg-structure
     newName: host.docker.internal:5001/options-edge-multileg-structure

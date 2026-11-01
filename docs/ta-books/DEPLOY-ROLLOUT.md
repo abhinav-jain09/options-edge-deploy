@@ -1,0 +1,168 @@
+# TA books: deploy wiring and rollout order (CHART-STRUCTURE-TOOLS, CLASSICAL-CHART-PATTERNS, TICK-TRADE-TOOLS, ELLIOTT-FIB-CYCLE-TOOLS and the market-structure Avro cutover)
+
+Formerly titled by phase letters (phases B, C, D, E and the W0 cutover); the letters map to the processing documents as B = CHART-STRUCTURE-TOOLS, C = CLASSICAL-CHART-PATTERNS, D = TICK-TRADE-TOOLS, E = ELLIOTT-FIB-CYCLE-TOOLS, W0 = MARKET-STRUCTURE-AVRO-CUTOVER (requirement ids B-R*, C-R*, D-R*, E-R* unchanged).
+
+Branch `feat/ta-geometry-deploy`. Nothing here is applied: every flag is the literal `"false"`, both new services are held at `replicas: 0`, and no
+destructive step runs from a merge. This file is the order to follow when the owner turns each piece on. Producer, gateway and web are other repositories
+(processing `feat/ta-phase-{w0,b,c,d,e}`, gateway `feat/ta-geometry-feed-gateway`, web `feat/ta-*-web`, contracts 0.31.0).
+
+## 1. What this change adds
+
+| piece | where |
+|---|---|
+| CHART-STRUCTURE-TOOLS `options.spx.market-structure.tools` and CLASSICAL-CHART-PATTERNS `options.spx.market-structure.geometry` (Avro, 1 partition, delete, 172 800 000 ms, EXACT partitions, key `<scheduleId>\|<tf>`) | `scripts/kafka/topics.env`, `ensure-market-structure-topics.sh` (+ test) |
+| `MARKET_STRUCTURE_TOOLS_ENABLED`, `MARKET_STRUCTURE_GEOMETRY_ENABLED` = `false` | market-structure base deployment, two generated slices |
+| `GATEWAY_STRUCTURE_TOOLS_ENABLED`, `GATEWAY_GEOMETRY_ENABLED`, `GATEWAY_TRADE_TOOLS_ENABLED`, `GATEWAY_WAVE_CYCLE_ENABLED` = `false` (names are `GatewaySettings`'; its topic variables default to the declared topics) | feed-gateway dev and production env patches, two generated slices |
+| Fixed-id schema registration for 31 subjects (ids 2201-2405 plus version 2 of thirteen trade-tools subjects, 2321-2332 and 2335, section 3a, and of WaveSet and CycleSet, 2406 and 2407, section 3b; `options-edge-processing docs/ta-books/catalog/SCHEMA-ID-MAP.md`) | `scripts/kafka/ensure-fixed-id-schemas.sh`, `scripts/kafka/schema-id-maps/{market-structure,es-trade-tools,wave-cycle}.map`, service-deploy parameter `REGISTER_TA_SCHEMAS` |
+| W0 rollover flag injection (never committed) | `scripts/deploy/service-deploy.sh` block `MS_IGNORE_RECOVERY_ROLLOVER`, parameter `MARKET_STRUCTURE_IGNORE_RECOVERY_ROLLOVER` |
+| W0 step 4 and 6 (wipe and recreate the five topics under their own names; verify) | `scripts/kafka/roll-forward-market-structure.sh`, service-deploy parameters `W0_CUTOVER_WIPE`, `W0_EXPECT_IMAGE_DIGEST`, `W0_EXPECT_GATEWAY_DIGEST`, `W0_PRE_CUTOVER_IDS`, `W0_PRODUCERS_ATTESTED` |
+| `es-trade-tools-service` (TICK-TRADE-TOOLS) | `k8s/services/es-trade-tools`, seven topics, `ensure-es-trade-tools-topics.sh`, `TT_*` flags `false` |
+| `wave-cycle-service` (ELLIOTT-FIB-CYCLE-TOOLS) | `k8s/services/wave-cycle`, three topics, `ensure-wave-cycle-topics.sh`, `WAVE_CYCLE_*` flags `false` |
+| `break-classifier-service` (Phase F) | LIVE on dev and production, see section 5b and `BREAK-CLASSIFIER-DEPLOY.md`: `k8s/services/break-classifier`, five topics, `ensure-break-classification-topics.sh`, `schema-id-maps/break-classifier.map` |
+
+## 2. Decisions taken (and why), so nobody has to ask
+
+* **Both new services are HELD at replicas 0, named in all three lifecycle lists** (`oe-boot-bringup.sh` KEEP_DOWN, `morning-autostart.sh` KEEP_DOWN,
+  `dev-cleanup.sh` DISABLED_DEV). A held deployment is not an omitted one (`mandatory-services-silently-at-zero`): neither is in `prod-mandatory-services.conf`
+  and the manifest comments say how to turn each on. Reasons. D: its requirement D-R20.1 step 6 says "dev at replicas 0, then family by family; no
+  environment beyond dev before the calibration job", and with `TT_ENABLED=false` it only serves health (state DISABLED, readiness 503 by design).
+  E: even with both flags off it resolves its five Avro subjects at boot and halts without them, so scaling it to 1 before registration would crash-loop.
+  The dark run (E-R15) is the step after registration.
+* **Reset class.** The four retention.ms=-1 D topics and E's recovery topic are `RESET_REBUILDABLE` (the service rebuilds from the retained tape/bars; a reset
+  deletes the set together, so no checkpoint outlives its source). The honest cost, recorded in `topics.env`: chart history older than the 7-day tape retention
+  is not rebuilt. Moving them to `RESET_PRESERVED` is a three-place change (`topics.env`, a byte contract, `PRESERVE_TOPICS_REGEX`) the owner can make at enablement.
+* **The W0 rollover flag is injected at render time, not committed.** The ms-runtime-3 rollover needed a PR to add the flag and a second to remove it.
+  Here the Jenkins parameter adds `MARKET_STRUCTURE_IGNORE_RECOVERY=true` to the rendered Deployment for one apply; the next ordinary deploy carries none.
+  `RTH_ROLLOVER_GATE` keys on the render, so it refuses the injected flag Mon-Fri 09:30-16:00 America/New_York with no override. A test pins that no committed manifest carries the flag.
+* **The tape.** The brief named `es.underlying.es.trades`; the service reads `underlying.es.trades.linearized` (D-D2, the 1-partition total-order tape of
+  `es-trade-linearizer`, already EXACT in `topics.env`), a base name `KafkaSettings.topicValue` prefixes (`es.` on es4, empty on dev and production). es4 is not a target.
+* **No consumer group** for D or E: both assign partitions themselves and keep their resume offset in their own checkpoint. Transactional ids: D `es-trade-tools-ES.v.0`,
+  E `wave-cycle-SPX` (dev and production have separate brokers); market-structure keeps its per-environment ids.
+* **Heap.** D: `-Xms384m -Xmx384m` (D-R17.3/6) in a 1Gi limit. E: the image's ENTRYPOINT fixes `-Xmx256m` and wins over `JAVA_TOOL_OPTIONS`, so the manifest declares none (a value would lie);
+  512Mi/768Mi pending a measured resident set at the dark run.
+
+## 3a. TICK-TRADE-TOOLS revision 21: registering version 2 of thirteen trade-tools subjects (contracts 0.33.0)
+
+Producer `es-trade-tools-service` (processing #1281) writes `calibration=CALIBRATED`, `validation=MEASURED` and the nullable header field `evidence`. Thirteen subjects (every header-bearing record: PfChartState, PfColumn, PfBreakEvent,
+PfLineEvent, PfCountEvent, PfMaCrossEvent, PfVolumeDivergenceEvent, PfMoneyFlowDivergenceEvent, PfBreakVolumeCheck, VolumeNodeSet, FlowBar, ClimaxEvent, TtFamilyStatus) change; `TtCheckpointManifest` / `TtCheckpointChunk` do not.
+The change is FULL-compatible (checked read-only with `POST /compatibility/subjects/<s>/versions/latest` on the dev registry 192.168.100.102:8082 and the production registry 192.168.100.252:8082: `is_compatible: true`, subject config FULL, no 42201).
+
+* **A new schema VERSION of an existing subject gets its OWN fixed id.** A registry id names exactly one schema text, so version 2 cannot reuse the version-1 id. Version 2 of each subject is `version-1 id + 20`:
+  2321-2332 (PfChartState 2321 ... ClimaxEvent 2332) and 2335 (TtFamilyStatus). 2316-2340 were free on both registries. Version 1 stays registered under 2301-2312 / 2315 and is never deleted (records already on the topics are framed with those ids).
+* **What `ensure-fixed-id-schemas.sh` does now (changed by this PR).** Before this PR it admitted exactly one version per subject and would have stopped on the first of the thirteen ("holds versions [1] ... collision"). Map rows take an optional
+  fourth column, the registry version (default 1); a subject's rows must number 1, 2, ... in order, each with its own id. For a version N > 1 row the script: (1) accepts an already-canonical schema at (id, version N) when the subject holds exactly versions 1..K with N <= K <= the highest
+  version the map declares; (2) otherwise requires the subject to hold exactly versions 1..N-1 (or, on a registry that lacks them, the map's earlier rows to import them) and the id to be free; (3) asks the registry, read-only, whether the schema is compatible with the latest version
+  (`POST /compatibility/subjects/<s>/versions/latest`, under the subject's FULL); (4) imports it in subject-level IMPORT mode with `id` and `version` N and restores the mode; (5) reads back version N with the fixed id and sets/verifies FULL. The read-only PREFLIGHT pass judges every row before the first import, so one refusal changes nothing; for a subject that already holds version 1 (dev, production) that includes the registry's compatibility verdict, and the subject must be at compatibility FULL already (the verdict is given under the subject's own level). On a registry that never saw the subject, version 1 is imported first and the version-2 verdict is asked right after it. A stray version or a different schema at a declared version is a collision and fails; nothing is repaired or deleted.
+* **Files.** `schema-id-maps/es-trade-tools.map` lists 15 version-1 rows (13 point at the frozen `v1/<Record>.avsc`, the two checkpoint records at the flat file) and then the 13 version-2 rows (flat `<Record>.avsc`, the contracts checkout's `schemas-registry/ta`).
+  Both directories come from options-edge-contracts at `CONTRACTS_PERMITTED_SHA` (>= the 0.33.0 merge).
+* **Procedure, per environment (dev registry first, then production), registry and Jenkins parameters only; nothing else is needed for registration:**
+  1. `service-deploy SERVICE=es-trade-tools REGISTER_TA_SCHEMAS=true DEPLOY_DRY_RUN=true CONTRACTS_PERMITTED_SHA=<contracts 0.33.0 merge sha> BUILD_IMAGES=false`: expect, per environment, `registered: version 1` for the 13 old rows and `free: would import as version 2 under id 23xx` + `compatible with the latest version` for the 13 new ones, `OK`.
+  2. The same run with `DEPLOY_DRY_RUN=false`: imports ONLY the 13 version-2 rows (dev and production already hold version 1 under 2301-2315); re-running is a no-op that re-asserts FULL.
+  3. Verify: `GET /subjects/com.optionsedge.contracts.tradetools.FlowBar/versions` = `[1,2]`; `GET /subjects/.../versions/2` has id 2331 and a schema equal to contracts `schemas-registry/ta/FlowBar.avsc`; `GET /subjects/.../versions/1` has id 2311.
+  4. Only then roll the new es-trade-tools image: its start-up `getId(subject, embedded schema)` resolves each embedded (version-2) schema to its new id and refuses to start if one is missing.
+* **Order against the other pieces.** Registry first (step 1-3), then the producer image, then the gateway and web images (they read the writer schema by id from the registry; the old and the new gateway/web both decode either version, because FULL).
+* A registry that never saw the family (a rebuilt or new registry) takes both versions from the same map in one run; the ids are then identical to dev and production.
+
+## 3b. ELLIOTT-FIB-CYCLE-TOOLS revision 21: registering version 2 of WaveSet and CycleSet (contracts 0.36.0)
+
+Producer `wave-cycle-service` (processing #1283, 063897ee) publishes the measured validation result: `WaveCount.measurement`, `WaveSet.calibration`, `CycleSet.calibration` (all optional, default null, every vocabulary a string; `options-edge-processing docs/ta-books/catalog/ELLIOTT-FIB-CYCLE-TOOLS-SCHEMA-CHANGES.md`).
+`WaveSet` and `CycleSet` change; `TimeframeCheckpoint`, `SeriesCheckpoint`, `ControlCheckpoint` do not. FULL-compatible (read-only `POST /compatibility/subjects/<s>/versions/latest` on the dev registry 192.168.100.102:8082 and the production registry 192.168.100.252:8082: `is_compatible: true`; each subject holds version [1], config FULL). Ids 2406 and 2407 are free (404) on both.
+
+* **Ids.** Version 2 has its own fixed id (a registry id names one schema text): `WaveSet` 2406, `CycleSet` 2407 (version 1 stays under 2401 and 2402, never deleted). The offset is +5, not the +20 of section 3a.
+* **Files and map.** `schema-id-maps/wave-cycle.map` lists 5 version-1 rows (`WaveSet` and `CycleSet` point at the frozen `v1/<Record>.avsc` of the contracts checkout, the three checkpoint records at the flat files), then the two version-2 rows (flat `WaveSet.avsc`, `CycleSet.avsc`).
+  `ensure-fixed-id-schemas.sh` is unchanged by this section (it learned later versions in section 3a); contracts must be at `CONTRACTS_PERMITTED_SHA` >= the 0.36.0 merge.
+* **Procedure, per environment (dev first, then production), before the new wave-cycle image starts (the service resolves the id of its embedded schema at boot and refuses to start if it is missing):**
+  1. `service-deploy SERVICE=wave-cycle REGISTER_TA_SCHEMAS=true DEPLOY_DRY_RUN=true CONTRACTS_PERMITTED_SHA=<contracts 0.36.0 merge sha> BUILD_IMAGES=false`: expect `registered: version 1` for the five version-1 rows and, for WaveSet and CycleSet, `compatible with the latest version` + `would import as version 2 under id 2406` / `2407`, then `OK`.
+  2. The same run with `DEPLOY_DRY_RUN=false`: imports ONLY the two version-2 rows; a re-run is a no-op that re-asserts FULL.
+  3. Verify: `GET /subjects/com.optionsedge.contracts.wavecycle.WaveSet/versions` = `[1,2]`; version 2 has id 2406 and the schema of contracts `schemas-registry/ta/WaveSet.avsc` (SHA-256 `167d6adf36c95d1a58342c36b09fbd0297161fd9ac23acde1d67f12efb0aff33`); `CycleSet` version 2 is id 2407 (`00fd1f9fb68b9aca1ee0e7622ea5e26184d490d2df5377c84562721e74e9ef7b`).
+* **Order.** Registry, then the producer image, then the gateway and web images (both decode either version; FULL). Producers already running version 1 are unaffected.
+* **Release configuration of the new image** (the producer's document, section 6, for the deploy owner): the registered default parameter set (no tuning variable: another hash makes `calibration` null and the counts `NOT_CALIBRATED`), `WAVE_CYCLE_ENABLED=true`, `WAVE_CYCLE_SEASONALITY_ENABLED=true`, and the `WC_DAILY_SNAPSHOT_*` variables of the release snapshot. This change does not touch the manifests or flags.
+
+## 3c. CHART-STRUCTURE-TOOLS and CLASSICAL-CHART-PATTERNS calibrated release: registering version 2 of StructureToolsSet and GeometryAnnotationSet (contracts 0.49.0)
+
+Producer `market-structure-service` (processing #1298 `1fe3b6372` structure tools, #1294 `fd201987` classical patterns; documents `CHART-STRUCTURE-TOOLS-SCHEMA-CHANGES.md` and `CLASSICAL-PATTERNS-CALIBRATION-SCHEMA-CHANGES.md` in options-edge-processing `docs/ta-books/catalog`). Only optional fields and one `Evidence` record per subject are added; no enum symbol; FULL-compatible (read-only `POST /compatibility/subjects/<s>/versions/latest`: `is_compatible: true` on the dev registry 192.168.100.102:8082 and es4 192.168.100.4:8081 on 2026-10-30; production 192.168.100.252:8082 was unreachable that day, so repeat the dry run there).
+
+* **Ids.** `StructureToolsSet` version 2 = 2212, `GeometryAnnotationSet` version 2 = 2223 (version 1 stays 2211 and 2221, never deleted). Both returned 404 (free) on dev and es4 on 2026-10-30.
+* **Files and map.** `schema-id-maps/market-structure.map` lists the 11 version-1 rows (the two subjects point at the frozen `v1/<Record>.avsc` of the contracts checkout) then the two version-2 rows (flat `StructureToolsSet.avsc`, `GeometryAnnotationSet.avsc`; SHA-256 `1ea12cb68be4e18d420dcd1f9bad0fd35111ec9ca5a7a286e5b47e2dd7119422` and `4263cc10c517fcf92989fbf773f5e208a2be37fe7dd2f181c4146d73a9baad3c`). `ensure-fixed-id-schemas.sh` is unchanged; contracts must be at `CONTRACTS_PERMITTED_SHA` >= the 0.49.0 merge.
+* **Procedure, per environment (dev first, then es4, then production), BEFORE the new market-structure image starts (`ToolsAvroEncoder#warm` and `GeometryAvroEncoder#warm` refuse to enable publishing when the registry cannot supply the version-2 subject):**
+  1. `service-deploy SERVICE=market-structure REGISTER_TA_SCHEMAS=true DEPLOY_DRY_RUN=true CONTRACTS_PERMITTED_SHA=<contracts 0.49.0 merge sha> BUILD_IMAGES=false`: expect `registered: version 1` for the eleven version-1 rows and, for the two subjects, `compatible with the latest version` + `would import as version 2 under id 2212` / `2223`, then `OK`.
+  2. The same run with `DEPLOY_DRY_RUN=false`: imports ONLY the two version-2 rows; a re-run is a no-op that re-asserts FULL.
+  3. Verify: `GET /subjects/com.optionsedge.contracts.marketstructure.tools.StructureToolsSet/versions` = `[1,2]`, version 2 has id 2212; `...geometry.GeometryAnnotationSet/versions` = `[1,2]`, version 2 has id 2223.
+* **Order.** Registry, then the producer image, then the gateway and web images (both decode either version; FULL). The tools fingerprint of the recovery view changes (the flag `PROVISIONAL_SCALE` is gone, a measured tool is `VALIDATED`): roll outside regular trading hours after the new session's first input, or set `MARKET_STRUCTURE_IGNORE_RECOVERY` for the one roll. The geometry fingerprint is unchanged. Parameter sets, scale and topics are unchanged; set no tuning variable (another `parameterSetHash` makes every record `NOT_CALIBRATED` and removes the evidence).
+* The web change (same window) must be live before or with the producer: the old web rejects `calibration=VALIDATED` and would hide the whole tools layer.
+
+## 3d. INDICATOR-STUDIES calibrated release: registering version 2 of StudyBar and StudiesCurrent (contracts 0.50.0)
+
+Producer `indicator-service` (processing #1487 `89664fa1d`; `INDICATOR-STUDIES-SCHEMA-CHANGES.md` in options-edge-processing `docs/ta-books/catalog`). `StudyBar.validationResultId` and `StudiesCurrent.calibrationSummary` (with the records `StudyCalibrationSummary` and `StudyFamilyResult`) are optional, appended last, default null; no enum symbol; `StudyEngineImage` is unchanged. FULL-compatible (read-only `POST /compatibility/subjects/<s>/versions/latest`: `is_compatible: true` on the dev registry 192.168.100.102:8082 on 2026-10-30, each subject holding `[1]` under FULL; production 192.168.100.252:8082 was unreachable that day, so repeat the dry run there; the es4 registry holds none of the study subjects).
+
+* **Ids.** `StudyBar` version 2 = 2505, `StudiesCurrent` version 2 = 2506 (version 1 stays 2501 and 2502, never deleted). Both free (404) on dev and es4 on 2026-10-30.
+* **Files and maps.** Contracts `schemas-registry/indicators`: the flat `StudyBar.avsc` / `StudiesCurrent.avsc` are version 2 (SHA-256 `4b82149a178b183d6c8bf0e8b3ea04d6f8126ca63025a9b006d4d852f291bc62`, `201326479bb90f21fb9a779946cf9753fa14d80e9481afd04e40192f170167b4`), the frozen version 1 files are under `v1/`. `ensure-indicator-schemas.sh` now reads the two version-1 files from `v1/` and tolerates a version 2 under the declared later id (it never imports it); `schema-id-maps/indicator-studies.map` (`ensure-fixed-id-schemas.sh`) re-asserts version 1 and imports version 2. `Jenkinsfile.service-deploy`'s indicator-service register stage runs both, in that order. `scripts/jenkins/fetch-canonical-contracts.py` inventories the two `indicators/v1` files.
+* **Procedure, per environment (dev first, then production), BEFORE the new indicator-service image starts (the producer uses `use.latest.version=true`, `auto.register.schemas=false`):** `service-deploy SERVICE=indicator-service REGISTER_INDICATOR_SCHEMAS=true DEPLOY_DRY_RUN=true CONTRACTS_PERMITTED_SHA=<contracts 0.50.0 merge sha> BUILD_IMAGES=false`: expect `registered: version 1, id 2501/2502` and `would import as version 2 under id 2505` / `2506`; then the same run with `DEPLOY_DRY_RUN=false`; verify `GET /subjects/com.optionsedge.contracts.indicators.avro.StudyBar/versions` = `[1,2]`, version 2 has id 2505 (`StudiesCurrent`: 2506).
+* **Order and release.** Registry, then the indicator-service image, then gateway and web. The release changes the studies `parameterSetHash` (`f8efa7e7...`, from `6b7ec219...`): stored `studies|<symbol>` images under the old hash are ignored, so the chains start cold and warm up again.
+* **es4 and the mirrors.** The ES studies are computed on es4 and mirrored to dev and production, so es4's registry needs version 2 as well: `Jenkinsfile.es4-deploy` (the topic-creation path and the `REGISTER_INDICATOR_SCHEMAS` path) and `scripts/es4/cleanup-es4.sh` run the same `indicator-studies.map` after `ensure-indicator-schemas.sh`. The two studies mirrors of `Jenkinsfile.es-indicator-mirror` now assert ids 2501-2503 AND 2505-2506 identical on source and target before copying a byte (a mirror installed before version 2 exists on both registries fails closed; the non-studies mirrors are unchanged). `assert-indicator-schema-parity.sh` keeps its default list.
+
+## 3. W0, in the runbook's order (processing `MARKET-STRUCTURE-AVRO-CUTOVER.md` section 6)
+
+Always dev first, production after; each step after the 16:00 ET close on a trading day. Production images are built with `ENVIRONMENT=production BUILD_IMAGES=true`
+(`environment-dev-builds-only-the-dev-image-tag`: a production roll after a dev-only build silently redeploys the OLD `:prod` image) and the digest rolled is compared with `W0_EXPECT_IMAGE_DIGEST`.
+
+1. **Contracts and registry.** Contracts 0.31.0 merged. `service-deploy SERVICE=market-structure REGISTER_TA_SCHEMAS=true CONTRACTS_PERMITTED_SHA=<sha>` (dry run first) registers the 11
+   market-structure subjects (W0 2201-2208, tools 2211, geometry 2221-2222) under fixed ids, IMPORT mode, FULL, on that environment's registry; a collision fails and is never repaired.
+   Run it BEFORE any W0 image is built, with `BUILD_IMAGES=false`: the run re-applies the manifest, which adds the two `false` flag env vars and so restarts the OLD image once, harmlessly.
+2. **Processing image.** W0 merged first (CHART-STRUCTURE-TOOLS and CLASSICAL-CHART-PATTERNS are stacked on it); `service-deploy SERVICE=market-structure BUILD_IMAGES=true MARKET_STRUCTURE_IGNORE_RECOVERY_ROLLOVER=true`. Verify
+   `market_structure_topics_verified 1`, `market_structure_recovery_ignored 1`, restarts 0, the day re-emitted as Avro.
+3. **Gateway image** that decodes Avro (`feed-gateway-deploy` build, then `service-deploy SERVICE=feed-gateway`); the four new gateway flags stay `false`. Applying feed-gateway rolls the gateway pod.
+4. **Wipe and recreate**, a run of its own: `service-deploy SERVICE=market-structure BUILD_IMAGES=false W0_CUTOVER_WIPE=true W0_EXPECT_IMAGE_DIGEST=sha256:... W0_EXPECT_GATEWAY_DIGEST=sha256:... W0_PRE_CUTOVER_IDS='ui=..,sequence=..,dlq=..,patterns=..,recovery=..' W0_PRODUCERS_ATTESTED=true`
+   (ids read off the LIVE broker with `kafka-topics --describe` immediately before). The run's Deploy stage first re-applies the manifest WITHOUT the rollover flag, which restarts the pod
+   (expected); then `roll-forward-market-structure.sh --recreate` runs behind gates G1-G9 (bootstrap is the named cluster; after the close; service `SESSION_ENDED`; the W0 digest is the only market-structure image on
+   the cluster and one pod is Running; the Avro feed-gateway digest `W0_EXPECT_GATEWAY_DIGEST` is the only gateway image on the cluster (G9); the owner's maintenance-stop attestation; broker-side producer evidence; a 3-minute proof that the input and the five topics and the five producer counters did not move; every topic carries its
+   pre-cutover id). If G3 refuses right after the roll, re-run the same job (nothing changes, so nothing restarts). A part-way failure is resumed with `--already-recreated name=NEWID,...`. `DEPLOY_DRY_RUN=true` passes `--gates-only`: every gate and the quiescence proof run and report, nothing is deleted. All W0 arguments are validated before the rollout stage.
+   The input topic, the tools topic and the geometry topic are never named by the script.
+5. **Restart once more**: `service-deploy SERVICE=market-structure FORCE_RESTART=true BUILD_IMAGES=false` (no rollover parameter), and the gateway if its consumers hold positions past the new log ends (the script lists them).
+6. **Verify**: `roll-forward-market-structure.sh --verify` (ids, shape, first and last record of every non-empty partition is Avro), then the runbook section 7 **full-decode verifier** and the gateway frame proof. CHART-STRUCTURE-TOOLS and CLASSICAL-CHART-PATTERNS may deploy only after this passes.
+
+Roll forward only; there is no rollback and no reader that accepts JSON.
+
+## 4. CHART-STRUCTURE-TOOLS tools, then CLASSICAL-CHART-PATTERNS geometry (each, after step 6)
+
+Order for EACH layer: subjects already registered (step 1) -> topic ensured (every market-structure service-deploy run does it) -> gateway image with the relay live (flag `false`) ->
+`GATEWAY_STRUCTURE_TOOLS_ENABLED` / `GATEWAY_GEOMETRY_ENABLED` true (the gateway waits for records, hello has the field) -> `MARKET_STRUCTURE_TOOLS_ENABLED` / `MARKET_STRUCTURE_GEOMETRY_ENABLED` true
+(a restart: the flag is sampled once per schedule and recorded in the checkpoint). Processing notes B/C once said the flag-enabling change should bump `RecoveryCheckpoint.METHOD`; in this order it does not: the stack is merged W0, then B, then C, W0 took `ms-runtime-5`, CHART-STRUCTURE-TOOLS's branch-local `ms-runtime-4` is dropped when B is rebased onto W0 (B publishes the tools state under the stack's METHOD, `-4` stays unused, one bump per release) and CLASSICAL-CHART-PATTERNS as built does not bump it. If a later image does bump it, roll it with `MARKET_STRUCTURE_IGNORE_RECOVERY_ROLLOVER=true` exactly as in step 2. The web layer has no flag: the hello field is its gate. Flip one layer at a time, outside the session.
+
+## 5. TICK-TRADE-TOOLS `es-trade-tools`, ELLIOTT-FIB-CYCLE-TOOLS `wave-cycle`
+
+Registering the service in the estate (this PR, then): the processing repository must also carry the image build (its root `Jenkinsfile` BUILD_TARGET map and `build_image` call and
+`EXPECTED_PROCESSING_IMAGES`; the two modules have a Dockerfile and nothing else), otherwise `BUILD_IMAGES=true` fails with `Unknown BUILD_TARGET`. Then, per environment, dev first:
+
+1. `service-deploy SERVICE=<es-trade-tools|wave-cycle> BUILD_IMAGES=true REGISTER_TA_SCHEMAS=true CONTRACTS_PERMITTED_SHA=<sha>`: subjects registered, topics ensured by the barrier, image built and digest-pinned, the Deployment applied at **0 replicas**. Nothing runs.
+2. To enable (the owner; the manifest comment lists the same six edits): the precondition is met (D: the linearizer publishes `underlying.es.trades.linearized` on that environment, and production waits for the calibration job; E: bars are Avro) ->
+   set `replicas: 1` in a per-environment enable patch (`k8s/overlays/<env>/<service>-<env>-enable-patch.yaml`, registered in that overlay's kustomization; never in the shared base, which would enable dev and production together) -> regenerate slices -> remove the service from the three lifecycle lists -> `service-deploy`.
+   D: also `TT_ENABLED=true` and ONE family flag at a time (`TT_PF_ENABLED`, `TT_VP_ENABLED`, `TT_FLOW_ENABLED`, then `TT_CLIMAX_ENABLED`, which needs FLOW), then `GATEWAY_TRADE_TOOLS_ENABLED`.
+   E: first the **dark run** (replicas 1, both flags `false`; the fold runs and is checkpointed; `wave_cycle_*` metrics), then `WAVE_CYCLE_ENABLED` and `GATEWAY_WAVE_CYCLE_ENABLED`; `WAVE_CYCLE_IGNORE_CHECKPOINT` is never committed true.
+
+## 5a. PRODUCTION runs both services live (2026-10-22)
+
+Owner standard: every service is calibrated on historical data first and then runs live, never in shadow. The calibrated releases (processing #1281, #1283; contracts 0.36.0 `4ddf5a36`; version-2 subjects registered on production 2026-10-22: trade tools 2321-2332 and 2335, WaveSet 2406, CycleSet 2407) are enabled in PRODUCTION ONLY by
+`k8s/overlays/production/es-trade-tools-prod-enable-patch.yaml` and `wave-cycle-prod-enable-patch.yaml` (replicas 1; D: `TT_ENABLED` and the four family flags; E: `WAVE_CYCLE_ENABLED`, `WAVE_CYCLE_SEASONALITY_ENABLED` and the hash-pinned daily snapshot variables), registered in the production overlay and mirrored in the regenerated slices. Both services are removed from
+`KEEP_DOWN` in `morning-autostart.sh` and `oe-boot-bringup.sh` (production-only lists) and stay in `DISABLED_DEV` (dev is handled separately). The shared bases remain replicas 0 / flags `false`. The gateway relay flags `GATEWAY_TRADE_TOOLS_ENABLED` and `GATEWAY_WAVE_CYCLE_ENABLED` are NOT part of this change: they follow once a gateway and web that understand the version-2 records are live on production.
+Order: registry (done) -> `service-deploy SERVICE=es-trade-tools` (topic barrier creates the seven topics, the Deployment starts at replicas 1) -> `service-deploy SERVICE=wave-cycle` -> gateway -> web -> gateway relay flags. There is no earlier checkpoint on production for either service, so no state-topic reset is involved.
+Rollback: flags `false` in the patch is the durable first level (the process idles); replicas 0 is durable only together with putting the service back on KEEP_DOWN in BOTH `morning-autostart.sh` and `oe-boot-bringup.sh`, because a KEEP_DOWN-free zero-replica Deployment is scaled back up by the next boot or morning start (see each patch header).
+
+## 5b. `break-classifier-service` (Phase F) runs live on DEV AND PRODUCTION (2026-10-22)
+
+Owner standard: no shadow, every service live on dev and production. `k8s/services/break-classifier/base` stays replicas 0 / `BREAK_CLASSIFIER_ENABLED` `"false"`; `k8s/overlays/dev/break-classifier-dev-enable-patch.yaml` and `k8s/overlays/production/break-classifier-prod-enable-patch.yaml` turn it on (replicas 1, flag `"true"`, `ENVIRONMENT` set because `options-edge-config` carries none and the service's default `dev` would name production's transactional id wrongly). Not in `KEEP_DOWN` (both lists) nor `DISABLED_DEV`. `GATEWAY_BREAK_CLASSIFICATION_ENABLED` is `"true"` in both feed-gateway env patches. Full detail, inputs table and parameters: `docs/ta-books/BREAK-CLASSIFIER-DEPLOY.md`.
+
+**Honest state, stated here so nobody reads more into "live" than exists.** (1) The producer's pre-registered validation FAILED (p=1681/2001, development fold): every classification it publishes is `UNDECIDED(NO_MEASURED_EDGE)` carrying the measured numbers; it never says trap or real. (2) Its two parent inputs, `BreakParentRecord` on `options.spx.market-structure.break-events` (X1) and `SwingPivotRecord` on `options.spx.market-structure.swing-pivots` (X2), have NO producer on main (market-structure-service does not publish them). The barrier creates both topics EMPTY so the service's boot verification passes; the live service starts, publishes `BreakStatus` and NO marks until a Phase B/C producer exists. That is a rollout blocker for marks and is reported, not papered over. (3) X6 is a release self-attestation file baked into the image (`/app/release/x6-attestation.txt`).
+
+**No broker-wide change (revision 2026-10-30).** The service needs a checkpoint topic whose own effective `max.message.bytes` is at least 8 MiB; it does not read or require the broker's `message.max.bytes` (dev `192.168.100.102:19092` and production `192.168.100.252:9092` read 1048588 and stay there). `ensure-break-classification-topics.sh` creates the checkpoint with a topic-level `max.message.bytes=9437184` (and pins it on an existing checkpoint that only inherits the broker default), changes no broker config, and fails closed if the topic alter or the verification fails. An earlier version RAISED the cluster-wide default; on dev that crash-looped the feed gateway (its 1 MiB ceiling check on the five `es.futures.footprint*` topics that inherit the default) and was removed.
+
+Reset class: the checkpoint topic is RESET_REBUILDABLE and is reset TOGETHER with its inputs (`options.indicators.bars`, `es.futures.footprint.bars`, which every reset path also wipes) and the output: the service refuses to start on a checkpoint whose offsets lie outside the retained input logs or whose output exists without it. `OPTIONS_EDGE_TOPIC_MAX_MESSAGE_BYTES_OVERRIDES` makes a wipe recreate the checkpoint at 9437184 (`topic-shape.lib.sh`, `dev-cleanup.sh`, `verify-topics.sh`). Known operational limit: a service stopped longer than the input retention (`options.indicators.bars` 45 days) needs its checkpoint and output reset together with the inputs.
+
+Order (each service-deploy run is dev first, then production; `PERMITTED_SHA` is always the deploy repo's `origin/main` at run time): (0) dry run per environment (`DEPLOY_DRY_RUN=true`, reports `would import` x6, nothing changes); (1) the processing image (`BUILD_TARGET=options-edge-break-classifier`, `BREAK_CLASSIFIER_IMAGE`) exists as `:dev` and `:prod`; (2) `service-deploy SERVICE=break-classifier REGISTER_TA_SCHEMAS=true CONTRACTS_PERMITTED_SHA=87511c9acb7a897850c2fa436d59c45eaef24481` registers the six subjects 2601-2606, then the stage "Verify break-classification topics" ensures the five topics (no broker change; the checkpoint carries its own topic-level limit), then the rollout pins the image digest and starts the Deployment; (3) the feed-gateway with the relay flag; (4) web. Image digests are pinned by service-deploy at deploy time; none is recorded in the repository.
+Rollback: the two levels in each enable patch header (flag `"false"`; replicas 0 together with `KEEP_DOWN` in both ops scripts and, on dev, `DISABLED_DEV`). Neither is needed to undo a broker change (there is none); the registered subjects are additive.
+
+## 6. Not in this change
+
+* The processing-side image build entries above, and the runbook section 7 full-decode verifier (a Java tool with the registry client; `--verify` here is a sample).
+* The web and gateway flags' final values: all `false` until the owner enables a layer. The gateway relay and the web layer are in their own branches.
+* Applying anything: no Jenkins job was run, no topic touched, no image built, nothing started.

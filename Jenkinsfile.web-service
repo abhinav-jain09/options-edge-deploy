@@ -55,7 +55,10 @@ pipeline {
     timeout(time: 120, unit: 'MINUTES')
   }
   environment {
-    KUBECONFIG  = "${params.KUBECONFIG_FILE ?: oeProfile(params.ENVIRONMENT).kubeconfigDeployer}"
+    // KUBECONFIG is deliberately NOT resolved here: under `agent none` this block runs with no node,
+    // so oeProfile() returns "" and Jenkins drops the empty entry — leaving KUBECONFIG unset and
+    // kubectl falling back to the agent's default cluster. It is set in the 'Deploy path' stage
+    // environment{} below (that stage has an agent, so oeProfile resolves in node context).
     ENVIRONMENT = "${params.ENVIRONMENT}"
     // Per-env web URL matrix (kept in sync with Jenkinsfile.bring-up-all). NOTE: these are
     // BUILD-time image defaults/documentation only — the deployed truth is the k8s runtime env
@@ -118,6 +121,14 @@ pipeline {
         }
         sh '''
           set -euo pipefail
+          # SCOPED validation (mirrors Jenkinsfile.service-deploy): this job deploys ONLY the web
+          # service to ONE env, so validate exactly that — its slice structure, blast radius, image
+          # name and the mirror rule for THIS service/env. The whole-fleet drift sweep + global
+          # invariants (§1,5-8) render ~every overlay × 3 envs and are the slow part (~15 min measured
+          # above); they run in full-fleet mode on CI / manual validate-services.sh, not on each web
+          # deploy. Without this scope the web deploy validated the entire fleet every time.
+          export VALIDATE_ONLY_SERVICE="web"
+          export VALIDATE_ONLY_ENV="$ENVIRONMENT"
           bash scripts/ci/validate-services.sh
         '''
       }
@@ -127,6 +138,13 @@ pipeline {
     stage('Deploy path') {
       when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
       agent { label 'hpsf-replay-mac' }
+      // Resolve the deployer kubeconfig on THIS agent: a stage-level environment{} on an agent-bearing
+      // stage evaluates in node context (where oeProfile() can read deploy-profiles.yaml) and
+      // propagates to every nested stage below. The pipeline-level environment{} could not do this
+      // under `agent none` (returned "" -> dropped -> kubectl used the agent default cluster).
+      environment {
+        KUBECONFIG = "${params.KUBECONFIG_FILE ?: oeProfile(params.ENVIRONMENT).kubeconfigDeployer}"
+      }
       stages {
     stage('Permitted commit guard (deploy workspace)') {
       when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }

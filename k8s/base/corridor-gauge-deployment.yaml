@@ -7,7 +7,13 @@ metadata:
     app.kubernetes.io/name: corridor-gauge-service
     app.kubernetes.io/part-of: options-edge
 spec:
-  replicas: 1
+  # OFF PERMANENTLY on dev and production (owner decision 2026-10-26: "Corridor Gauge service on
+  # production and dev put permanent off"). There is no *_ENABLED flag on this service, so replicas
+  # IS the switch, and setting it in the BASE keeps every generated overlay slice at 0 instead of
+  # relying on each env to remember. Paired with adding corridor-gauge-service to DISABLED_DEV in
+  # ~/oe-ops/dev-cleanup.sh: do_start scales everything NOT in that set to --replicas=1 regardless of
+  # the manifest, so the repo change alone would be undone by the next dev bring-up.
+  replicas: 0
   selector:
     matchLabels:
       app.kubernetes.io/name: corridor-gauge-service

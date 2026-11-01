@@ -1,0 +1,79 @@
+# IMMUTABLE and NAMED BY ITS CONTENT: the name suffix is the first 12 hex digits of sha256(json.dumps(data, sort_keys=True)); the Deployment
+# references this exact name, so a changed configuration is a NEW object and a changed pod template (the pod rolls), a pod can only ever
+# mount the content its template names, and an out-of-band edit is refused by the API server. Old objects are left in place (a rollback
+# re-points to one). scripts/ci/validate-level-absorption-config.sh computes the name and fails CI on any disagreement.
+#
+# The Level Absorption configuration the pod mounts at /home/options-edge/config/level-absorption (read-only).
+#
+# SOURCE OF TRUTH: processing PR #1414, phase0/market-structure-eyeball-configuration.json and two-sided-host-retention-artifact.json.
+# Enable market-structure swing/range/opening-range support and resistance, with opt-in two-sided gross effort diagnostics.
+# Indicator study kinds are disabled. Host mode suppresses one-bar OBSERVATION output; gross-side reward thresholds are provisional and never authorize LIVE.
+# EYEBALL ONLY: provisional thresholds and the NO_CANDIDATE/publication gate remain. This is not a Phase 0 selection.
+# Retention: one Friday diagnostic session (including the missing-bar tail), 1361259 bytes/day x 30 x 2 = 81675540 bytes.
+# Deploy only with the companion native host enum/decimal decoder and persistence-mode observation suppression.
+#
+# The standalone slices carry Deployment/Service only, so service-deploy does not create this ConfigMap: Jenkinsfile.service-deploy
+# applies this one file in the stage 'Apply level-absorption configuration' (the same kind of service-owned step as the
+# feed-gateway ConfigMap reconcile). The service reads both files once at start.
+apiVersion: v1
+kind: ConfigMap
+immutable: true
+metadata:
+  name: level-absorption-config-27f159bc7562
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: level-absorption-service
+    app.kubernetes.io/part-of: options-edge
+data:
+  frozen-configuration.json: |
+    {
+      "formatVersion": 2,
+      "kind": "level-absorption.frozen-configuration",
+      "phase0": {
+        "freezeCommit": "078474ce324250a9e256ec19a8c4305357a09b30",
+        "candidatePercentile": 75.0,
+        "bootstrapGenerator": "SplitMix64 EYEBALL-ONLY PROVISIONAL (no selection)",
+        "bootstrapSeed": 20261025
+      },
+      "parameters": {
+        "armDistancePoints": 2.0,
+        "disarmDistancePoints": 5.0,
+        "retreatBars": 2,
+        "retreatPoints": 1.0,
+        "barLengthSeconds": 30,
+        "windowLength": 4,
+        "persistenceK": 3,
+        "minimumEffort": 461.0,
+        "minimumBarImbalanceBps": 736.0,
+        "flatRatioCutoff": 2.2686025408348454,
+        "comparisonDomain": "ES",
+        "voiceRepeatBars": "off",
+        "labelTolerancePoints": 5.0,
+        "labelReentryTolerancePoints": 1.0,
+        "lookaheadMinutes": 15,
+        "lateSessionStartEastern": "15:00",
+        "unknownShareMaximum": 0.05,
+        "feedGapThresholdMillis": 2000,
+        "candidateThresholdSets": 5,
+        "sitesEnabled": "MANUAL_LINE,POINT_OF_CONTROL,VALUE_AREA_HIGH,VALUE_AREA_LOW,HOST_SWING,HOST_RANGE_EDGE,OPENING_RANGE_EDGE",
+        "producerMovePoints": 1.0,
+        "trapPokePoints": 2.0,
+        "retestAwayPoints": 6.0,
+        "retestLifetimeBars": 150,
+        "retestMaxReturns": 3,
+        "nextLevelMinPoints": 4.0,
+        "candleLookbackBars": 3,
+        "candleEvidenceTimeframe": "5m",
+        "candleProximityPoints": 4.0,
+        "candleExitStrength": "MAJOR",
+        "studyTimeframes": "5m",
+        "structureTimeframes": "1m,5m,15m",
+        "maxConsumedBreaks": 4096,
+        "maxSites": 256,
+        "maxEpisodes": 32
+      }
+    }
+  retention-artifact.json: |
+    {"formatVersion":1,"kind":"level-absorption.retention-artifact","topic":"futures.level-absorption.events","retentionMs":-1,"measuredBytesPerDay":1361259,"measurementSessions":1,"retentionDays":30,"safetyFactor":2,"retentionBytes":81675540}
+  path-configuration.json: |
+    {"id":"spx-path-v1-eyeball-provisional","windowBars":6,"minimumSideBars":3,"minimumSideContracts":500,"intervalStepPoints":5.0,"rewardCutoffPointsPerThousand":0.5,"minimumRetainedFraction":0.6,"staleAfterMillis":90000,"maximumIntervals":256}

@@ -71,14 +71,32 @@ spec:
               value: "true"
             - name: KAFKA_MARKET_STRUCTURE_PATTERNS_TOPIC
               value: options.spx.market-structure.patterns
+            - name: GATEWAY_MARKET_STRUCTURE_ESTIMATE_PATTERNS_ENABLED
+              value: "true"
+            - name: GATEWAY_MARKET_STRUCTURE_ESTIMATE_ENABLED
+              value: "true"
+            - name: GATEWAY_STUDIES_ENABLED
+              value: "true"
+            - name: GATEWAY_STRUCTURE_TOOLS_ENABLED
+              value: "true"
+            - name: GATEWAY_GEOMETRY_ENABLED
+              value: "true"
+            - name: GATEWAY_TRADE_TOOLS_ENABLED
+              value: "true"
+            - name: GATEWAY_WAVE_CYCLE_ENABLED
+              value: "true"
+            - name: GATEWAY_BREAK_CLASSIFICATION_ENABLED
+              value: "true"
             - name: GATEWAY_EARLY_AUCTION_VERDICT_ENABLED
               value: "true"
             - name: GATEWAY_MARKET_COMMENTARY_ENABLED
               value: "true"
             - name: WS_ALLOWED_ORIGINS
-              value: http://localhost:8090
+              value: http://localhost:8090,https://dev.bleadingoptions.com,https://dev-lan.bleadingoptions.com:8443
             - name: WS_AUTH_ISSUER_URI
               value: https://dev-auth.bleadingoptions.com/realms/optionsedge
+            - name: GATEWAY_KEYCLOAK_JWKS_URL
+              value: http://host.docker.internal:8089/realms/optionsedge/protocol/openid-connect/certs
             - name: GATEWAY_KEYCLOAK_ISSUER
               value: https://dev-auth.bleadingoptions.com/realms/optionsedge
             - name: GATEWAY_KEYCLOAK_CLIENT_ID
