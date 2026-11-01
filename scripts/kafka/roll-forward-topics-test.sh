@@ -290,5 +290,13 @@ check "…nothing deleted" "$(logn)" 0
 two
 check "a well-formed row with no committed offset (-) is fine" "$(MOCK_GROUPS='g a.one 0 - 0 - - - -' run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 0
 
+# --- round-6: a valid stale committed offset is refused in PREFLIGHT (strict mode), before any delete
+two
+check "strict preflight: a valid committed offset on the SECOND topic refuses" "$(MOCK_GROUPS='g b.two 0 6505 6505 0 - - -' run "${RA[@]}" "${STOP[@]}" localhost:19092 "$TMP/bin")" 1
+check "…nothing deleted (even the healthy first topic)" "$(logn)" 0
+check "…the refusal names the group offset" "$(grep -c 'g:0@6505' "$TMP/out")" 1
+two
+check "live mode: a committed offset is not a preflight refusal (judged against the new log)" "$(MOCK_END=12 MOCK_GROUPS='g b.two 0 7 12 5 - - -' run "${RA[@]}" "${LV[@]}" localhost:19092 "$TMP/bin")" 0
+
 echo "passed=$pass failed=$fail"
 [ "$fail" = 0 ]

@@ -163,6 +163,11 @@ group_rows_valid() { # <topic> <describe-all-groups output>
   [ -z "$bad" ] || { echo "FAIL: unparseable consumer-group row(s) for $1 (cannot judge stale offsets):" >&2; printf '%s\n' "$bad" >&2; return 1; }
 }
 
+# committed offsets that the post-recreate gate rejects (ONE predicate, used by preflight and post-check): strict mode = ANY committed
+# offset on the topic; live mode = only an offset beyond the log end (a WARN, judged against the NEW log, so not knowable before the delete).
+group_stale_rows() { # <topic> <describe-all-groups output>
+  printf '%s\n' "$2" | awk -v t="$1" -v live="$AVRO_LIVE" '$2 == t && $4 ~ /^[0-9]+$/ && $5 ~ /^[0-9]+$/ && (live != "yes" || $4 + 0 > $5 + 0) {print $1 ":" $3 "@" $4 " (log end " $5 ")"}'
+}
 # post-checks of ONE topic, from the broker; prints the new id first so a later failure is recoverable with --verify.
 post_checks() { # <topic> <pre-id> <want-new-id|"">
   local topic="$1" pre="$2" want="$3" shape="$STATE/$1.shape" desc found parts rf
@@ -204,7 +209,7 @@ post_checks() { # <topic> <pre-id> <want-new-id|"">
   local groups stale
   groups="$("$KG" --bootstrap-server "$BS" --describe --all-groups 2>&1)" || { echo "FAIL: cannot read consumer groups on $BS: $groups" >&2; return 1; }
   group_rows_valid "$topic" "$groups" || return 1
-  stale="$(printf '%s\n' "$groups" | awk -v t="$topic" -v live="$AVRO_LIVE" '$2 == t && $4 ~ /^[0-9]+$/ && $5 ~ /^[0-9]+$/ && (live != "yes" || $4 + 0 > $5 + 0) {print $1 ":" $3 "@" $4 " (log end " $5 ")"}')"
+  stale="$(group_stale_rows "$topic" "$groups")"
   if [ -n "$stale" ] && [ "$AVRO_LIVE" = yes ]; then
     echo "WARN: consumer groups with a committed offset BEYOND the new log end of $topic (group:partition@offset); they reset on first poll, the per-reader gate decides:" >&2
     printf '%s\n' "$stale" >&2
@@ -254,6 +259,10 @@ for t in "${TOPICS[@]}"; do
     # every read-only input of the post-checks must be readable AND well-formed NOW, for every topic, before the first delete
     offsets_snapshots "$t" "$(shape_get "$STATE/$t.shape" partitions)" || { echo "NOTHING was deleted." >&2; exit 1; }
     group_rows_valid "$t" "$GRP_TXT" || { echo "NOTHING was deleted." >&2; exit 1; }
+    if [ "$AVRO_LIVE" != yes ]; then   # strict mode: the post-check would reject these AFTER the irreversible delete, so refuse now
+      stale_pre="$(group_stale_rows "$t" "$GRP_TXT")"
+      [ -z "$stale_pre" ] || { echo "FAIL: consumer groups hold committed offsets for $t (group:partition@offset); they survive the delete and the post-check would reject them. DELETE them first (kafka-consumer-groups --delete-offsets --group <g> --topic $t, or delete the stopped group). NOTHING was deleted:" >&2; printf '%s\n' "$stale_pre" >&2; exit 1; }
+    fi
     echo "-- $t id $cur: shape captured -> $(tr '\n' ' ' < "$STATE/$t.shape")"
   else
     [ "$ABSENT_OK" = yes ] || { echo "FAIL: $t does not exist. If a previous run deleted it and failed to create it, re-run with --topic-absent-after-failed-create; otherwise find out who deleted it. NOTHING was deleted." >&2; exit 1; }
