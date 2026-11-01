@@ -11,8 +11,7 @@ one PR each. Generic wipe tool: `scripts/kafka/roll-forward-topics.sh` (deploy P
 this runbook neither contains nor copies it. At cutover record here, in the cutover change, the merge commit sha of #1320 that the operator ran:
 `roll-forward-topics.sh merge commit sha: ____________` and run the script from a checkout at (or after) that sha. Steps 1-4 and the two scripts of this PR
 (`ensure-delta-flow-schemas.sh`, `reset-delta-flow-state.sh`) do not need it; step 5 and everything after it do. If #1320 is not merged, STOP at the end of step 4.
-`roll-forward-topics.sh --cluster` accepts `dev|production` only: the **es4** environment (own broker and registry on 192.168.100.4) is NOT covered by it,
-see "es4" below.
+`roll-forward-topics.sh --cluster` accepts `dev|production|es4` (the `es4` binding is added by this PR; see "es4" below).
 
 ## What is converted
 | Item | Shape (scripts/kafka/topics.env) | Subject (`com.optionsedge.contracts.deltaflow.` + name) |
@@ -101,10 +100,24 @@ Kafka readers (all converted to Avro-only in this change set unless marked):
 8. Full clean-slate flows (`dev-cleanup.sh`, `prod-clean-slate.sh`, the es4 clean) already delete every non-preserved topic, including all of the above, and recreate the declared set (`scripts/kafka/topics.env`).
 
 ## es4 (`es.delta-flow-*`, application id `options-edge-delta-flow-service-es4-r2`)
-Same service image, `TOPIC_PREFIX=es.`, own broker and registry (192.168.100.4:9092 / :8081). `roll-forward-topics.sh` does not take an `es4` cluster, so its wipe is **not** covered by
-this runbook's step 5: register the 17 subjects on the es4 registry, run `reset-delta-flow-state.sh` with the es4 app id, and recreate the `es.delta-flow-*` topics with the es4 clean procedure
-(they are declared in `OPTIONS_EDGE_ES4_TOPICS` at 32 partitions) before the es4 readers (dealer-ledger, strike-intelligence, drop-classifier and reversal-confirmation read es4 topics) and the producer start.
-This is an open point for the operator: confirm the es4 wipe path before the cutover.
+Same service image, `TOPIC_PREFIX=es.`, own broker and registry (the self-contained ES box: broker `192.168.100.4:9092`, registry `http://192.168.100.4:8081`). The generic harness
+now takes it: `roll-forward-topics.sh --cluster es4` (this PR adds the `es4:192.168.100.4:9092` bootstrap binding next to dev/production, with tests in `roll-forward-topics-test.sh`:
+es4 refuses the production and dev bootstraps and they refuse the es4 one; a recreate on the es4 bootstrap copies the live shape and binds the shape file to cluster `es4`).
+Prod's drop-classifier and reversal-confirmation read these topics, so the es4 conversion is a prerequisite of theirs. Order (same as steps 2-7, es4 objects):
+1. Register the 17 subjects on the es4 registry: `SCHEMA_REGISTRY_URL=http://192.168.100.4:8081 SCHEMAS_DIR=<contracts>/schemas/deltaflow scripts/kafka/ensure-delta-flow-schemas.sh`.
+2. Stop the es4 delta-flow-service (es4 deploy path, `Jenkinsfile.es4-deploy`) and every reader of `es.delta-flow-*`: es4 dealer-ledger (session), es4 strike-intelligence (by-strike), es4 feed-gateway (by-strike),
+   and the PROD drop-classifier and reversal-confirmation (`es.delta-flow-by-trade`, cross-broker; assign-mode consumers with no committed group).
+3. `KAFKA_BOOTSTRAP_SERVERS=192.168.100.4:9092 DELTA_FLOW_APP_ID=options-edge-delta-flow-service-es4-r2 scripts/kafka/reset-delta-flow-state.sh` (group + 2 repartition + 8 changelog topics).
+4. Read each TopicId: `for t in es.delta-flow-by-trade es.delta-flow-by-strike es.delta-flow-10s es.delta-flow-30s es.delta-flow-1m es.delta-flow-5m es.delta-flow-15m es.delta-flow-session es.delta-flow-dashboard es.delta-flow-diagnostics es.delta-flow-corrections; do kafka-topics --bootstrap-server 192.168.100.4:9092 --describe --topic $t | head -1; done`, and freeze es4 topic administration (the es4 clean must not run meanwhile).
+5. Wipe and recreate (everything stopped, so strict mode: every topic must come back EMPTY, i.e. end offset 0 on every partition, and no consumer group may hold an offset):
+   `scripts/kafka/roll-forward-topics.sh --recreate --cluster es4 --topics es.delta-flow-by-trade,...,es.delta-flow-corrections (the 11 above)
+   --pre-cutover-id <topic>=<id> (one per topic) --registry http://192.168.100.4:8081 --subject es.delta-flow-by-trade=com.optionsedge.contracts.deltaflow.DeltaFlowEvent
+   --subject es.delta-flow-diagnostics=...DeltaFlowEvent --subject es.delta-flow-10s|30s|1m|5m|15m|session|dashboard=...DeltaFlowSnapshot --subject es.delta-flow-by-strike=...DeltaFlowStrikeSnapshot
+   --subject es.delta-flow-corrections=...DeltaFlowCorrectionEvent --writers-and-readers-stopped 192.168.100.4:9092 [kafka-bin-dir]`.
+   Its post-checks verify new id, partitions (32), RF and every config equal to the captured live shape, readable offsets on every partition and EMPTY; a topic whose id differs from `--pre-cutover-id` refuses the whole run before any delete.
+6. Reader groups: committed offsets survive a topic delete. Delete the groups of the es4 readers that kept offsets (`kafka-consumer-groups --bootstrap-server 192.168.100.4:9092 --list`, then `--delete --group <g>` for the dealer-ledger,
+   strike-intelligence and feed-gateway groups); the harness's strict mode fails on any leftover offset on these topics. Prod drop-classifier / reversal-confirmation are assign-mode: nothing to delete.
+7. Deploy the Avro readers (es4 services; prod drop-classifier / reversal-confirmation with the es4 registry env), verify Ready with zero records consumed, then the es4 producer; verify as in step 7 above against the es4 registry.
 
 ## Rollback
 There is none by decision (roll forward only). Before step 3 nothing has changed (registration is additive under FULL). After step 5 the topics are empty by design; a failure is
