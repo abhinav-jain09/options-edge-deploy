@@ -6,11 +6,13 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-from stub_schema_registry import Registry, serve
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from stub_schema_registry import Registry, serve  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/kafka/ensure-greek-move-auth-schemas.sh"
@@ -27,7 +29,7 @@ def run(url: str, directory: str, dry: bool = False):
 
 class EnsureGreekMoveAuthSchemas(unittest.TestCase):
     def test_every_fixture_is_the_byte_identical_canonical_schema_the_script_pins(self):
-        # Canonical = contracts 0.32.0 schemas/greekmoveauth/*.avsc (PR options-edge-contracts#118); the script pins their sha256.
+        # Canonical = contracts 0.55.0 schemas/greekmoveauth/*.avsc (PR options-edge-contracts#118); the script pins their sha256.
         import hashlib
         import re
         pins = dict(re.findall(r'"(\w+)": \("[\w.]+", "([0-9a-f]{64})"\)', SCRIPT.read_text()))

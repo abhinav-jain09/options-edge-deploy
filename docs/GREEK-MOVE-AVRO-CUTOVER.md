@@ -1,10 +1,10 @@
 # greek-move-authenticity-service Avro cutover
 
 Topics keep their own names and are wiped and recreated carrying Avro (no versioned sibling, roll forward only).
-Contracts >= 0.36.0 (`schemas/greekmoveauth/`; contracts PR 118), processing PR 1175, feed-gateway PR 239.
-Contracts PR 118 was renumbered 0.32.0 -> 0.36.0 because it MERGES the delta-flow content of contracts PR 120 (0.35.0, `DeltaFlowAvro`): the service
-reads `delta-flow-by-strike` as Avro AND writes greek-move-auth as Avro from ONE coordinate. Merge PR 120 first; if main has moved, renumber 118 at merge
-(the processing `contracts.version` must name a release that contains both `GreekMoveAuthAvro` and `DeltaFlowAvro`).
+Contracts >= 0.55.0 (`schemas/greekmoveauth/`; contracts PR 118, released as 0.55.0), processing PR 1175, feed-gateway PR 239.
+Merge train (all on contracts main): delta-flow (PR 120) 0.54.0, greek-move (PR 118) 0.55.0, spot-vol-regime 0.56.0, strike-invasion 0.57.0, multileg 0.58.0; the artifacts are
+cumulative, so 0.55.0 and later contain both `GreekMoveAuthAvro` and `DeltaFlowAvro`: the service reads `delta-flow-by-strike` as Avro AND writes greek-move-auth as Avro
+from ONE coordinate (the processing `contracts.version` for PR 1175 is 0.55.0).
 
 ## Topics and subjects
 
@@ -47,11 +47,11 @@ This cutover is ordered with, and after the registration step of, the delta-flow
   service that still reads JSON would read Avro bytes as text and silently drop every record. This reader (processing PR 1175, `AvroDeltaFlowReader`) is merged and its
   image built BEFORE the by-strike topic is recreated, and the service stays at 0 replicas across the recreate (the delta-flow runbook step 3 already stops it). Never run
   an image built before PR 1175 against an Avro by-strike topic, nor one built from PR 1175 against a JSON by-strike topic.
-* Contracts >= 0.36.0 is required (PR 118 contains PR 120's content: merge 120 first or renumber).
+* Contracts >= 0.55.0 is required (0.54.0 is delta-flow, 0.55.0 adds greek-move; the released artifacts are cumulative).
 
 ## Order (one environment at a time, off-hours, topic administration frozen)
 
-1. Merge contracts PR 120, then contracts PR 118 (>= 0.36.0), processing PR 1175, feed-gateway PR 239, then this change; build the service and gateway images against that release.
+1. Contracts PR 120 (0.54.0) and PR 118 (0.55.0) are already merged; merge processing PR 1175, feed-gateway PR 239, then this change; build the service and gateway images against that release.
 2. Register the subjects (read-all-then-mutate, sha256-pinned; add `DEPLOY_DRY_RUN=true` first). Registries: dev `http://host.docker.internal:8082`, production `http://192.168.100.252:8082`:
    `SCHEMA_REGISTRY_URL=<registry> SCHEMAS_DIR=<contracts>/schemas/greekmoveauth scripts/kafka/ensure-greek-move-auth-schemas.sh`
    and, from deploy PR 1324, `SCHEMA_REGISTRY_URL=<registry> SCHEMAS_DIR=<contracts>/schemas/deltaflow scripts/kafka/ensure-delta-flow-schemas.sh` (before step 6).
