@@ -258,6 +258,8 @@ pipeline {
           set -euo pipefail
           # Plan section 4: the fixed-id registration runs inside every path that creates topics; idempotent.
           ssh -o BatchMode=yes "$ES4_HOST" 'SCHEMA_REGISTRY_URL=http://localhost:8081 SCHEMAS_DIR=/home/es4/repo/schemas-registry/indicators bash /home/es4/repo/scripts/kafka/ensure-indicator-schemas.sh'
+          # INDICATOR-STUDIES calibrated release: version 2 of StudyBar (2505) and StudiesCurrent (2506) after version 1, before any producer of the new image starts
+          ssh -o BatchMode=yes "$ES4_HOST" 'SCHEMA_REGISTRY_URL=http://localhost:8081 SCHEMAS_DIR=/home/es4/repo/schemas-registry/indicators SCHEMA_ID_MAP=/home/es4/repo/scripts/kafka/schema-id-maps/indicator-studies.map bash /home/es4/repo/scripts/kafka/ensure-fixed-id-schemas.sh'
           ssh -o BatchMode=yes "$ES4_HOST" 'bash /home/es4/repo/scripts/es4/create-es-topics.sh'
           # STEADY-state audit: this action runs against a LIVE es4, so every owner has already
           # applied its own topic contract and the broker supplies the numbers. For the es4 set
@@ -399,6 +401,8 @@ pipeline {
           if [ "${REGISTER_INDICATOR_SCHEMAS:-false}" = true ]; then
             SCHEMA_REGISTRY_URL="$ES4_REGISTRY" SCHEMAS_DIR=".jenkins-tmp/contracts/schemas-registry/indicators" \
               DEPLOY_DRY_RUN="${DEPLOY_DRY_RUN:-false}" bash scripts/kafka/ensure-indicator-schemas.sh
+            SCHEMA_REGISTRY_URL="$ES4_REGISTRY" SCHEMAS_DIR=".jenkins-tmp/contracts/schemas-registry/indicators" SCHEMA_ID_MAP="scripts/kafka/schema-id-maps/indicator-studies.map" \
+              DEPLOY_DRY_RUN="${DEPLOY_DRY_RUN:-false}" bash scripts/kafka/ensure-fixed-id-schemas.sh
           fi
           if [ "${RECREATE_INDICATOR_TOPICS:-false}" = true ]; then
             [ "${SERVICE:-}" = indicator-service ] && [ "${ACTION:-}" = deploy-service ] \

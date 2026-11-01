@@ -339,9 +339,8 @@ echo "=== 9) every registered service is SELECTABLE in service-deploy's SERVICE 
 # exemption list is checked in BOTH directions: an exemption that is now selectable, or that names
 # something that is not a registered slice, fails too, so it cannot quietly rot.
 SERVICE_CHOICES_EXEMPT=(
-  # 2026-07-26 operator hold: deliberately not deployable from this job. Also stated in the SERVICE
+  # 2026-07-26 operator hold (spread-skew-service itself was lifted for dev 2026-10-31): deliberately not deployable from this job. Also stated in the SERVICE
   # parameter's own description in Jenkinsfile.service-deploy.
-  spread-skew
   spread-skew-postgres-writer
 )
 python3 - "${SERVICE_CHOICES_EXEMPT[@]}" <<'PYCHK' || fail=1

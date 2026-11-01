@@ -183,13 +183,13 @@ pipeline {
             es.options.indicators.bars)             PARTS=8; POLICY=delete;         RET=3888000000; IDS="2001 2002 2003 2004 2005 2006 2007" ;;
             es.options.indicators.signals.current)  PARTS=1; POLICY=delete; RET=604800000;  IDS="2001 2002 2003 2004 2005 2006 2007" ;;
             es.options.indicators.signals.events)   PARTS=1; POLICY=delete;         RET=3888000000; IDS="2001 2002 2003 2004 2005 2006 2007" ;;
-            es.options.indicators.studies.bars)     PARTS=8; POLICY=delete;         RET=3888000000; IDS="2001 2002 2003 2004 2005 2006 2007 2501 2502 2503" ;;
-            es.options.indicators.studies.current)  PARTS=1; POLICY=delete; RET=604800000;  IDS="2001 2002 2003 2004 2005 2006 2007 2501 2502 2503" ;;
+            es.options.indicators.studies.bars)     PARTS=8; POLICY=delete;         RET=3888000000; IDS="2001 2002 2003 2004 2005 2006 2007 2501 2502 2503 2505 2506" ;;
+            es.options.indicators.studies.current)  PARTS=1; POLICY=delete; RET=604800000;  IDS="2001 2002 2003 2004 2005 2006 2007 2501 2502 2503 2505 2506" ;;
             *) echo "FAIL: topic $TOPIC not in the indicator-mirror allow-list"; exit 1 ;;
           esac
 
           # Kafka Serialization Rule / plan section 4: the four mirrored topics carry Confluent-framed Avro whose
-          # schema ids must resolve to the SAME schema on the target registry. Assert ids 2001-2007 and 2501-2503 are identical
+          # schema ids must resolve to the SAME schema on the target registry. Assert ids 2001-2007, 2501-2503 and (the calibrated release) 2505-2506 are identical
           # on source and target BEFORE any byte is copied; a differing or absent id fails the install.
           bash scripts/kafka/assert-indicator-schema-parity.sh "$SRC_REGISTRY" "$TGT_REGISTRY" "$IDS"
 

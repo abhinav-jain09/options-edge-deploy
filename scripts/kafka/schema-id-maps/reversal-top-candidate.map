@@ -1,0 +1,2 @@
+# Reversal top-candidate canonical Avro record. Fixed identically on every registry; FULL compatibility.
+com.optionsedge.contracts.reversalcandidate.ReversalTopCandidate|2901|ReversalTopCandidate.avsc

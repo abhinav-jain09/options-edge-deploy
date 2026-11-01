@@ -73,6 +73,8 @@ spec:
               value: options.spx.market-structure.patterns
             - name: GATEWAY_MARKET_STRUCTURE_ESTIMATE_PATTERNS_ENABLED
               value: "true"
+            - name: GATEWAY_MARKET_STRUCTURE_ESTIMATE_ENABLED
+              value: "true"
             - name: GATEWAY_STUDIES_ENABLED
               value: "true"
             - name: GATEWAY_STRUCTURE_TOOLS_ENABLED
@@ -84,7 +86,7 @@ spec:
             - name: GATEWAY_WAVE_CYCLE_ENABLED
               value: "true"
             - name: GATEWAY_BREAK_CLASSIFICATION_ENABLED
-              value: "false"
+              value: "true"
             - name: GATEWAY_EARLY_AUCTION_VERDICT_ENABLED
               value: "true"
             - name: GATEWAY_MARKET_COMMENTARY_ENABLED

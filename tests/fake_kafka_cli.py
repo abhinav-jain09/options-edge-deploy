@@ -78,6 +78,9 @@ if name == "kafka-configs":
         print("  " + " ".join(f"{k}={v}" for k, v in cfg.items()))
     elif "--alter" in argv:
         add = arg("--add-config")
+        if os.environ.get("FAKE_KAFKA_TOPIC_MAXBYTES_ALTER_FAILS") and "max.message.bytes" in add:
+            print("topic alter refused", file=sys.stderr)
+            sys.exit(1)
         # split on commas outside [brackets]
         parts, depth, cur = [], 0, ""
         for ch in add:

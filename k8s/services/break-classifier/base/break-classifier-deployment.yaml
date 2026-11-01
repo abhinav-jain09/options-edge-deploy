@@ -12,7 +12,7 @@ spec:
   # their own enable patches (k8s/overlays/{dev,production}/break-classifier-{dev,prod}-enable-patch.yaml): NEVER edit this base to enable it, that enables both at once.
   # Preconditions the enable patches' headers state (docs/ta-books/BREAK-CLASSIFIER-DEPLOY.md): the six Avro subjects 2601-2606 on the registry, the barrier
   # scripts/kafka/ensure-break-classification-topics.sh (service-deploy runs it) and the image. With the flag "true" the service REFUSES TO START (FAILED_CONTRACT)
-  # unless every topic it names exists in its declared shape, the broker message.max.bytes is >= 8 MiB and the six subjects match its embedded schemas.
+  # unless every topic it names exists in its declared shape, the checkpoint topic's own effective max.message.bytes is >= 8 MiB and the six subjects match its embedded schemas.
   # SINGLE replica ONLY: the transactional.id is break-classifier-<ENVIRONMENT>, a second instance fences the first.
   replicas: 0
   strategy:

@@ -832,6 +832,17 @@ patches:
   # Candle Direction commissioning shadow inside context-tape-service (design A3 + A4, Codex Gate-2 r9/r10; owner 2026-09-07):
   # every record actionable=false; own :8136 projection port; host API/readiness untouched. Rollback = remove this patch.
   - path: context-tape-direction-prod-env-patch.yaml
+  # PRODUCTION (owner 2026-10-28): Globex-hours candles — the indicator-estimate container and the Context Tape GLOBEX session + estimate bars.
+  # See the two patch headers. Roll back = remove both lines.
+  - path: indicator-estimate-prod-patch.yaml
+  - path: context-tape-globex-prod-env-patch.yaml
+  # PRODUCTION (owner 2026-10-29): Globex-hours candle patterns (market-structure-estimate container + the gateway relay) and the declared indicator application id.
+  - path: market-structure-estimate-prod-patch.yaml
+    target:
+      kind: Deployment
+      name: market-structure-service
+  - path: feed-gateway-estimate-prod-env-patch.yaml
+  - path: indicator-appid-prod-patch.yaml
   # Pre-open IBKR GEX production gate (gamma) — OVERNIGHT-IBKR-GEX rev13+D15. These three land
   # together and must not be split: the gate turns the publisher on, the gateway relays the status
   # plane that keeps the values honestly labelled, and the hold stops the D15 fan-out from waking
@@ -950,10 +961,12 @@ patches:
       - op: replace
         path: /spec/replicas
         value: 1
-  # spread-skew-service + spread-skew-postgres-writer: RETIRED all envs (USER 2026-07-24 — the
+  # spread-skew-service + spread-skew-postgres-writer: RETIRED in production (USER 2026-07-24 — the
   # mirrored-pair strike/Mid coloring feature is not wanted). Base replicas:0 renders as-is; the
   # standalone slices mirror it (validate-services: mono==slice) and both are in morning-autostart
-  # KEEP_DOWN + dev-cleanup DISABLED_DEV so the daily lifecycle never re-ups them.
+  # KEEP_DOWN so the daily lifecycle never re-ups them. 2026-10-31: the owner lifted the hold for DEV
+  # only (dev overlay replicas 1, spread-skew-service out of dev-cleanup DISABLED_DEV); production stays
+  # held at 0, and the writer stays held everywhere.
   # unified-sr + strike-flow-avro-adapter are now promoted to main and built for prod, so they render and
   # deploy on production too (experiment-only exclusions removed). Prod image build/pin must produce both
   # images (UNIFIED_SR_IMAGE / STRIKE_FLOW_AVRO_ADAPTER_IMAGE) or the digest-pin guard will fail-closed.

@@ -67,6 +67,8 @@ pipeline {
       // market-structure: dev+prod at replicas 1. Reads options.indicators.bars read-only and publishes
       // options.spx.market-structure.{ui,sequence,dlq,recovery}; single replica only (per-environment transactional.id).
       'market-structure',
+      // spread-skew: DEV only at replicas 1 (owner lifted the hold for dev 2026-10-31); production stays at replicas 0 in the base.
+      'spread-skew',
       // market-commentary: DEV only, replicas 1 (shadow). Reads futures.auction, the spread-skew snapshot, SPX spot and option quotes
       // read-only and publishes options.spx.market-commentary.{minute,current,events,rejections}; single replica only.
       'market-commentary',
@@ -124,7 +126,7 @@ pipeline {
       // the exact digest before it will scale it to one replica, it does not create or build anything
       // itself. Selecting it here deploys it inert; activation is the separate job's job.
       'zerodte-research-writer'
-    ], description: 'Which service to deploy (dir under k8s/services; spread-skew and its writer are intentionally unavailable under the 2026-07-26 operator hold).')
+    ], description: 'Which service to deploy (dir under k8s/services; spread-skew runs on dev only since 2026-10-31; its postgres writer stays unavailable under the 2026-07-26 operator hold).')
     choice(name: 'ENVIRONMENT', choices: ['dev', 'production'],
       description: 'Target environment — selects the overlay + deployer kubeconfig (oeProfile).')
     booleanParam(name: 'BUILD_IMAGES', defaultValue: false,
@@ -140,11 +142,13 @@ pipeline {
     string(name: 'KUBECONFIG_FILE', defaultValue: '',
       description: 'Deployer kubeconfig on the Jenkins agent. Empty = oeProfile(ENVIRONMENT).kubeconfigDeployer.')
     booleanParam(name: 'REGISTER_INDICATOR_SCHEMAS', defaultValue: false,
-      description: 'indicator-service only. true = before the rollout, register the indicator family\'s ten Avro schemas under their FIXED ids (2001-2007 and 2501-2503, subject compatibility FULL) on this environment\'s Schema Registry through scripts/kafka/ensure-indicator-schemas.sh (idempotent: a registry that already holds them is verified, a wiped one is re-imported). The schemas come from options-edge-contracts at CONTRACTS_PERMITTED_SHA, which is REQUIRED with this flag. INDICATOR-AVRO-CONVERSION-PLAN.md section 4.')
+      description: 'indicator-service only. true = before the rollout, register the indicator family\'s ten Avro schemas under their FIXED ids (2001-2007 and 2501-2503, subject compatibility FULL) on this environment\'s Schema Registry through scripts/kafka/ensure-indicator-schemas.sh, then version 2 of StudyBar (2505) and StudiesCurrent (2506) through scripts/kafka/ensure-fixed-id-schemas.sh with schema-id-maps/indicator-studies.map (the INDICATOR-STUDIES calibrated release) (idempotent: a registry that already holds them is verified, a wiped one is re-imported). The schemas come from options-edge-contracts at CONTRACTS_PERMITTED_SHA, which is REQUIRED with this flag. INDICATOR-AVRO-CONVERSION-PLAN.md section 4.')
     booleanParam(name: 'REGISTER_TA_SCHEMAS', defaultValue: false,
       description: 'market-structure, es-trade-tools, wave-cycle and break-classifier only. true = before the rollout, register that service\'s Avro subjects under their FIXED ids (subject compatibility FULL, IMPORT mode, scripts/kafka/ensure-fixed-id-schemas.sh with scripts/kafka/schema-id-maps/<service>.map) on this environment\'s Schema Registry; idempotent, a collision fails. The schema files come from options-edge-contracts at CONTRACTS_PERMITTED_SHA, which is REQUIRED with this flag. docs/ta-books/DEPLOY-ROLLOUT.md.')
     booleanParam(name: 'REGISTER_GEOMETRY_SCHEMAS', defaultValue: false,
       description: 'amt-order-bridge on ENVIRONMENT=dev ONLY (production is refused by the stage). true = before the rollout, register the geometry signal adapter\'s seven Avro subjects (ids 2801-2807, FULL, IMPORT mode, scripts/kafka/ensure-fixed-id-schemas.sh with scripts/kafka/schema-id-maps/geometry-signal-adapter.map) on the dev Schema Registry; idempotent, a collision fails. Schemas come from options-edge-contracts schemas-registry/geometry at CONTRACTS_PERMITTED_SHA, which is REQUIRED with this flag. LAG-R16.7.')
+    booleanParam(name: 'REGISTER_REVERSAL_TOP_SCHEMA', defaultValue: false,
+      description: 'reversal-confirmation dev only. Register the top-candidate Avro subject under fixed id 2901 with FULL compatibility before enabling its producer. Requires CONTRACTS_PERMITTED_SHA.')
     booleanParam(name: 'MARKET_STRUCTURE_IGNORE_RECOVERY_ROLLOVER', defaultValue: false,
       description: 'market-structure only, W0 step 2. true = inject MARKET_STRUCTURE_IGNORE_RECOVERY=true into the RENDER for this one apply (never committed): the ms-runtime-5 image cannot read the ms-runtime-3 JSON checkpoint and its first start must rebuild the day from the retained inputs. Refused Mon-Fri 09:30-16:00 America/New_York with no override (service-deploy.sh RTH_ROLLOVER_GATE); deploy only between the 16:00 close and midnight on a trading day. The next ordinary deploy (step 5, FORCE_RESTART=true) carries no flag. MARKET-STRUCTURE-AVRO-CUTOVER.md sections 5-6.')
     booleanParam(name: 'W0_CUTOVER_WIPE', defaultValue: false,
@@ -321,7 +325,7 @@ PYEOF
       // Every W0-only constraint is judged BEFORE any stage mutates anything (the rollout stage below would otherwise deploy market-structure
       // and only then reject a malformed wipe request).
       when {
-        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && params.W0_CUTOVER_WIPE }
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.W0_CUTOVER_WIPE) }
       }
       steps {
         script {
@@ -636,6 +640,9 @@ PYEOF
           echo "registry for ${ENVIRONMENT}: $SR"
           SCHEMA_REGISTRY_URL="$SR" SCHEMAS_DIR=".jenkins-tmp/contracts/schemas-registry/indicators" \
             DEPLOY_DRY_RUN="${DEPLOY_DRY_RUN:-false}" bash scripts/kafka/ensure-indicator-schemas.sh
+          # INDICATOR-STUDIES calibrated release (contracts 0.50.0): version 2 of StudyBar (2505) and StudiesCurrent (2506), after version 1 above, FULL-checked first, before the new image starts.
+          SCHEMA_REGISTRY_URL="$SR" SCHEMAS_DIR=".jenkins-tmp/contracts/schemas-registry/indicators" SCHEMA_ID_MAP="scripts/kafka/schema-id-maps/indicator-studies.map" \
+            DEPLOY_DRY_RUN="${DEPLOY_DRY_RUN:-false}" bash scripts/kafka/ensure-fixed-id-schemas.sh
         '''
       }
     }
@@ -682,7 +689,7 @@ PYEOF
       // LAG-R16.7: the geometry signal adapter writes with auto.register.schemas=false and the EXACT fixed ids 2801-2807, so the dev registry must hold them
       // before the bridge starts. Same procedure as the TA stage above; dev only, production is refused here (a production import stays an operator act).
       when {
-        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && params.REGISTER_GEOMETRY_SCHEMAS && params.SERVICE == 'amt-order-bridge' }
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.REGISTER_GEOMETRY_SCHEMAS && params.SERVICE == 'amt-order-bridge') }
       }
       steps {
         script {
@@ -711,6 +718,35 @@ PYEOF
           SR="${SR/host.docker.internal/${DEV_HOST_IP:-192.168.100.102}}"
           echo "registry for ${ENVIRONMENT}: $SR"
           SCHEMA_REGISTRY_URL="$SR" SCHEMAS_DIR=".jenkins-tmp/contracts-geometry/schemas-registry/geometry" SCHEMA_ID_MAP="scripts/kafka/schema-id-maps/geometry-signal-adapter.map" \
+            DEPLOY_DRY_RUN="${DEPLOY_DRY_RUN:-false}" bash scripts/kafka/ensure-fixed-id-schemas.sh
+        '''
+      }
+    }
+    stage('Register reversal top schema (dev only)') {
+      when {
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && params.REGISTER_REVERSAL_TOP_SCHEMA && params.SERVICE == 'reversal-confirmation' }
+      }
+      steps {
+        script {
+          if (params.ENVIRONMENT != 'dev') error('REGISTER_REVERSAL_TOP_SCHEMA is dev only')
+          def csha = (params.CONTRACTS_PERMITTED_SHA ?: '').trim()
+          if (!(csha ==~ /[0-9a-f]{40}/)) error('REGISTER_REVERSAL_TOP_SCHEMA requires CONTRACTS_PERMITTED_SHA')
+        }
+        dir('.jenkins-tmp/contracts-reversal') { deleteDir() }
+        sh '''
+          set -eu
+          git clone git@github.com:abhinav-jain09/options-edge-contracts.git .jenkins-tmp/contracts-reversal
+          git -C .jenkins-tmp/contracts-reversal checkout main
+        '''
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${CONTRACTS_PERMITTED_SHA:-}" bash scripts/jenkins/permitted-sha-guard.sh --dir .jenkins-tmp/contracts-reversal --ref main'
+        }
+        sh '''
+          set -euo pipefail
+          SR=$(kubectl -n options-edge get configmap options-edge-config -o jsonpath='{.data.SCHEMA_REGISTRY_URL}')
+          SR="${SR/host.docker.internal/${DEV_HOST_IP:-192.168.100.102}}"
+          SCHEMA_REGISTRY_URL="$SR" SCHEMAS_DIR=".jenkins-tmp/contracts-reversal/schemas/reversal-candidate" \
+            SCHEMA_ID_MAP="scripts/kafka/schema-id-maps/reversal-top-candidate.map" \
             DEPLOY_DRY_RUN="${DEPLOY_DRY_RUN:-false}" bash scripts/kafka/ensure-fixed-id-schemas.sh
         '''
       }
@@ -956,8 +992,8 @@ PYEOF
     }
     stage('Verify break-classification topics') {
       // BEFORE the rollout, same barrier: the service never creates a topic and its boot verification refuses to start unless the output, checkpoint, parent and pivot topics exist in their
-      // declared shape AND the broker's message.max.bytes is >= 8 MiB. This barrier creates the absent ones, verifies every one, and RAISES the cluster-wide dynamic default
-      // message.max.bytes to 9437184 when the broker is below it (never lowers; idempotent; fails closed). It is the one environment-level effect of this rollout.
+      // declared shape AND the checkpoint topic's own effective max.message.bytes is >= 8 MiB. This barrier creates the absent ones, verifies every one and pins a topic-level
+      // max.message.bytes of 9437184 on the checkpoint topic (raise only; idempotent; fails closed). It changes NO broker config (the earlier cluster-wide raise crash-looped the dev feed gateway and was removed).
       when {
         expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'break-classifier' && !params.DEPLOY_DRY_RUN) }
       }
