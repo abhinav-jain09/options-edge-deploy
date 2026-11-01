@@ -62,6 +62,8 @@ pipeline {
       description: 'deploy-service of indicator-service only, DESTRUCTIVE, the Avro cutover (plan section 5): indicator-service to 0 replicas, its consumer-group offsets on es.underlying.es.trades reset to 0, its changelog deleted, the six es.options.indicators.* topics deleted and recreated EMPTY at the topics.env shape and verified, then the rollout. Every mirror of these topics must be torn down first (plan section 6).')
     booleanParam(name: 'CVD_READER_CLOSURE_CONFIRMED', defaultValue: false,
       description: 'update-image only: acknowledge that schema registration, all affected readers and native runtime qualification are complete. Required for a real image update of any active CVD workload; dry runs and existing zero holds need no acknowledgement.')
+    string(name: 'CVD_SCHEMA_ENVIRONMENTS', defaultValue: 'es4,dev,production', trim: true,
+      description: 'register-cvd-schemas / clean-reset only: the comma list of registries to preflight and register on (es4, dev, production). Default all three. The order given is not meaningful (registries are always processed es4, dev, production). Use dev alone to register the subjects of a dev-only service without touching the others.')
     booleanParam(name: 'DEPLOY_DRY_RUN', defaultValue: false,
       description: 'true = render + digest-pin + kubectl apply --dry-run=server only.')
     booleanParam(name: 'ACCEPT_UNARCHIVED_STRIKE_LOSS', defaultValue: false,
@@ -256,6 +258,8 @@ pipeline {
           set -euo pipefail
           # Plan section 4: the fixed-id registration runs inside every path that creates topics; idempotent.
           ssh -o BatchMode=yes "$ES4_HOST" 'SCHEMA_REGISTRY_URL=http://localhost:8081 SCHEMAS_DIR=/home/es4/repo/schemas-registry/indicators bash /home/es4/repo/scripts/kafka/ensure-indicator-schemas.sh'
+          # INDICATOR-STUDIES calibrated release: version 2 of StudyBar (2505) and StudiesCurrent (2506) after version 1, before any producer of the new image starts
+          ssh -o BatchMode=yes "$ES4_HOST" 'SCHEMA_REGISTRY_URL=http://localhost:8081 SCHEMAS_DIR=/home/es4/repo/schemas-registry/indicators SCHEMA_ID_MAP=/home/es4/repo/scripts/kafka/schema-id-maps/indicator-studies.map bash /home/es4/repo/scripts/kafka/ensure-fixed-id-schemas.sh'
           ssh -o BatchMode=yes "$ES4_HOST" 'bash /home/es4/repo/scripts/es4/create-es-topics.sh'
           # STEADY-state audit: this action runs against a LIVE es4, so every owner has already
           # applied its own topic contract and the broker supplies the numbers. For the es4 set
@@ -341,8 +345,8 @@ pipeline {
       // rollout. The on-box cleanup restores Deployments at the end of its own run, so an affected
       // pod may crash-loop for the seconds until this stage lands and then recover on its own
       // backoff -- a bounded self-healing window, not the permanent failure it replaces.
-      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED'
-        && (params.ACTION == 'register-cvd-schemas' || params.ACTION == 'clean-reset') } }
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' &&
+        (params.ACTION == 'register-cvd-schemas' || params.ACTION == 'clean-reset') } }
       options { timeout(time: 20, unit: 'MINUTES') }
       steps {
         timeout(time: 10, unit: 'MINUTES') {
@@ -397,6 +401,8 @@ pipeline {
           if [ "${REGISTER_INDICATOR_SCHEMAS:-false}" = true ]; then
             SCHEMA_REGISTRY_URL="$ES4_REGISTRY" SCHEMAS_DIR=".jenkins-tmp/contracts/schemas-registry/indicators" \
               DEPLOY_DRY_RUN="${DEPLOY_DRY_RUN:-false}" bash scripts/kafka/ensure-indicator-schemas.sh
+            SCHEMA_REGISTRY_URL="$ES4_REGISTRY" SCHEMAS_DIR=".jenkins-tmp/contracts/schemas-registry/indicators" SCHEMA_ID_MAP="scripts/kafka/schema-id-maps/indicator-studies.map" \
+              DEPLOY_DRY_RUN="${DEPLOY_DRY_RUN:-false}" bash scripts/kafka/ensure-fixed-id-schemas.sh
           fi
           if [ "${RECREATE_INDICATOR_TOPICS:-false}" = true ]; then
             [ "${SERVICE:-}" = indicator-service ] && [ "${ACTION:-}" = deploy-service ] \
@@ -416,7 +422,7 @@ pipeline {
             : "${SUFFIX:?KAFKA_APPLICATION_ID_SUFFIX not readable from es4-common-env on es4 — refusing to guess the app id}"
             # the Kafka CLI is not installed on the es4 host: scripts/es4/kafka-cli-shim proxies each CLI into the
             # es4-kafka container (as create-es-topics.sh does), whose in-container listener is localhost:29092
-            ssh -o BatchMode=yes "$ES4_HOST" "set -e; cd /home/es4/repo; export PATH=/home/es4/repo/scripts/es4/kafka-cli-shim:\$PATH; \
+            ssh -o BatchMode=yes "$ES4_HOST" "set -e; cd /home/es4/repo; export PATH=/home/es4/repo/scripts/es4/kafka-cli-shim:\\$PATH; \
               export KAFKA_BOOTSTRAP_SERVERS=localhost:29092 INDICATOR_APP_ID=indicator-service${SUFFIX} INDICATOR_INPUT_TOPIC=es.underlying.es.trades \
                      DEPLOY_DRY_RUN=${DEPLOY_DRY_RUN:-false} RECREATE_ENVIRONMENT=es4 TOPIC_PREFIX=es. \
                      KAFKA_TOPIC_REPLICATION_FACTOR=1 KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS=1 KAFKA_TOPIC_RETENTION_MS=86400000; \
@@ -453,7 +459,7 @@ pipeline {
           # deploy-all always includes it. The Kafka CLI is not installed on the es4 host, so this
           # runs over ssh with the kafka-cli-shim on PATH, exactly as the indicator reset above does.
           ssh -o BatchMode=yes "$ES4_HOST" "set -e; cd /home/es4/repo; \
-            export PATH=/home/es4/repo/scripts/es4/kafka-cli-shim:\$PATH; \
+            export PATH=/home/es4/repo/scripts/es4/kafka-cli-shim:\\$PATH; \
             bash scripts/kafka/verify-avro-rollforward.sh --cluster es4 localhost:29092"
 
           kubectl apply $DRY -f k8s/es4/es4-base-env.yaml

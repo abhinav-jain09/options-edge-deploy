@@ -26,6 +26,10 @@ topics = state["topics"]
 if name == "kafka-topics":
     if "--list" in argv:
         print("\n".join(sorted(topics)))
+    elif "--describe" in argv and "--topic" not in argv:
+        for t, d in sorted(topics.items()):
+            cfg = ",".join(f"{k}={v}" for k, v in d["configs"].items())
+            print(f"Topic: {t}\tTopicId: x\tPartitionCount: {d['partitions']}\tReplicationFactor: {d['rf']}\tConfigs: {cfg}")
     elif "--describe" in argv:
         t = arg("--topic")
         if t in topics:
@@ -44,6 +48,28 @@ if name == "kafka-topics":
         topics[t] = {"partitions": int(arg("--partitions")), "rf": int(arg("--replication-factor")), "configs": cfg, "end": 0}
         save()
     sys.exit(0)
+if name == "kafka-configs" and arg("--entity-type") == "brokers":
+    # state["brokers"] = {id: {config: value}} (effective values); state["broker_pinned"] = [ids whose own dynamic override wins over a cluster default];
+    # FAKE_KAFKA_BROKER_ALTER_FAILS=1 makes the cluster-default alter fail.
+    brokers = state.setdefault("brokers", {})
+    if "--describe" in argv:
+        b = brokers.get(arg("--entity-name"))
+        if b is None:
+            print("Broker not found", file=sys.stderr)
+            sys.exit(1)
+        print(f"All configs for broker {arg('--entity-name')} are:")
+        for k, v in b.items():
+            print(f"  {k}={v} sensitive=false synonyms={{DYNAMIC_DEFAULT_BROKER_CONFIG:{k}={v}}}")
+    elif "--alter" in argv and "--entity-default" in argv:
+        if os.environ.get("FAKE_KAFKA_BROKER_ALTER_FAILS"):
+            print("alter refused", file=sys.stderr)
+            sys.exit(1)
+        k, _, v = arg("--add-config").partition("=")
+        for bid, b in brokers.items():
+            if bid not in state.get("broker_pinned", []):
+                b[k] = v
+        save()
+    sys.exit(0)
 if name == "kafka-configs":
     t = arg("--entity-name")
     if "--describe" in argv:
@@ -52,6 +78,9 @@ if name == "kafka-configs":
         print("  " + " ".join(f"{k}={v}" for k, v in cfg.items()))
     elif "--alter" in argv:
         add = arg("--add-config")
+        if os.environ.get("FAKE_KAFKA_TOPIC_MAXBYTES_ALTER_FAILS") and "max.message.bytes" in add:
+            print("topic alter refused", file=sys.stderr)
+            sys.exit(1)
         # split on commas outside [brackets]
         parts, depth, cur = [], 0, ""
         for ch in add:
@@ -76,6 +105,7 @@ if name == "kafka-get-offsets":
         print(f"{t}:{p}:{topics[t]['end']}")
     sys.exit(0)
 if name == "kafka-broker-api-versions":
-    print("b:1 (id: 1 rack: null) -> (")
+    for bid in state.get("brokers", {"1": {}}):
+        print(f"b:{bid} (id: {bid} rack: null) -> (")
     sys.exit(0)
 sys.exit(1)

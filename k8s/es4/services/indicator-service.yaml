@@ -66,6 +66,8 @@ spec:
           value: 'true'
         - name: INDICATOR_STATE_DIR
           value: /home/options-edge/indicator-service/state
+        - name: INDICATOR_STUDIES_ENABLED
+          value: 'false'
         - name: JAVA_TOOL_OPTIONS
           value: -Xms256m -Xmx1536m
         - name: INDICATOR_ES_HEARTBEAT_LIVENESS

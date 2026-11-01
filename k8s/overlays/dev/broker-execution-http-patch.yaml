@@ -24,6 +24,8 @@ spec:
               value: "true"
             - name: TRIGGER_ORDERS_ENABLED
               value: "true"
+            - name: STANDING_ORDERS_ENABLED
+              value: "true"
             - name: ORDER_MID_PRICING_ENABLED
               value: "true"
             - name: BRACKET_ORDERS_ENABLED
@@ -37,10 +39,34 @@ spec:
             # Owner-authorized UI Paper/Live selection; account choice remains explicit in the service.
             # This does not submit an order, change quantity/money limits or start a production broker.
             - name: BROKER_LIVE_EXECUTION_ENABLED
-              value: "true"
+              value: "false"
             - name: BROKER_LIVE_EXECUTION_HOST
               value: host.docker.internal
             - name: BROKER_LIVE_EXECUTION_PORT
               value: "7496"
             - name: BROKER_LIVE_EXECUTION_CLIENT_BASE
               value: "31001"
+            # 2026-10-20, owner: Paper orders on dev must allow more than one spread.
+            # 2026-10-21, owner: the Live cap of 1 contract is removed; the size an order can take is what the funds and
+            # the spread's margin allow (the Order tab's Max). 1000 stays only as the fat-finger ceiling, the same as Paper.
+            - name: BROKER_EXECUTION_MAX_QUANTITY
+              value: "1000"
+            - name: BROKER_LIVE_EXECUTION_MAX_QUANTITY
+              value: "1000"
+            # Read-only Paper balance socket for the Order tab (own client id: not 31 nor the 32-50 fallbacks).
+            - name: BROKER_PAPER_BALANCE_ENABLED
+              value: "true"
+            - name: BROKER_PAPER_BALANCE_CLIENT_ID
+              value: "51"
+            # IBKR's own what-if margin for the Order tab's Max (read-only, never an order). Paper on its own client id; Live on the Live host
+            # with a client id of its own (the Live runtime's id + 3: 31004 / 31005, clear of 31001-31003).
+            - name: BROKER_WHATIF_ENABLED
+              value: "true"
+            - name: BROKER_WHATIF_CLIENT_ID
+              value: "52"
+            - name: SPREAD_FILL_ENABLED
+              value: "true"
+            - name: SPREAD_FILL_CLIENT_ID
+              value: "53"
+            - name: BROKER_LIVE_WHATIF_ENABLED
+              value: "true"

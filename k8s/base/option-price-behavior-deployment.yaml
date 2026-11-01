@@ -127,7 +127,11 @@ spec:
             - name: OPB_MAX_FORWARD_AGE_MS
               value: "30000"
             - name: JAVA_TOOL_OPTIONS
-              value: "-Xms512m -Xmx2g"
+              # 50% of this manifest's own 2Gi limit. The dev and production overlays raise
+              # BOTH heap and limit; the base must still be correct on its own, because the
+              # experiment overlay inherits it verbatim and rendered a 100% container for as
+              # long as this said -Xmx2g.
+              value: "-Xms512m -Xmx1024m"
           ports:
             - name: health
               containerPort: 8080

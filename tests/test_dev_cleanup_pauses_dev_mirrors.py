@@ -37,7 +37,34 @@ FAKE_LAUNCHCTL = textwrap.dedent(
         grep -qx "$label" "$loaded" && exit 37
         echo "$label" >> "$loaded" ;;
       list)
-        grep -qx "$2" "$loaded" ;;
+        # mirror_agent_pid() runs `launchctl list` with NO label and reads the PID COLUMN, so this
+        # fake has to emit the real three-column table (PID Status Label). The previous version only
+        # set an exit code for `list <label>` -- the OLD contract, from before the script was
+        # changed to require a running pid -- so every lookup came back empty, every resume waited
+        # out DEV_MIRROR_WAIT_S and reported FAIL, and five tests errored. The pid states that
+        # matter are modelled rather than assumed:
+        #   $FAKE_STATE/nopid    loaded but NOT running -> '-' in the pid column, the state
+        #                        measured on this Mac (agents registered with no pid at all)
+        #   $FAKE_STATE/respawn  a NEW pid on every call -> a KeepAlive restart loop, which is
+        #                        exactly what the settle check exists to catch
+        if [ "$#" -ge 2 ]; then
+          grep -qx "$2" "$loaded"
+        else
+          n=0
+          while read -r label; do
+            [ -n "$label" ] || continue
+            n=$((n + 1))
+            if grep -qx "$label" "$FAKE_STATE/nopid" 2>/dev/null; then
+              printf -- '-\t0\t%s\n' "$label"
+            elif grep -qx "$label" "$FAKE_STATE/respawn" 2>/dev/null; then
+              c=$(cat "$FAKE_STATE/respawn.count" 2>/dev/null || echo 0)
+              c=$((c + 1)); echo "$c" > "$FAKE_STATE/respawn.count"
+              printf '%s\t0\t%s\n' "$((9000 + c))" "$label"
+            else
+              printf '%s\t0\t%s\n' "$((1000 + n))" "$label"
+            fi
+          done < "$loaded"
+        fi ;;
     esac
     """
 )
@@ -127,12 +154,23 @@ class DevCleanupPausesDevMirrorsTest(unittest.TestCase):
     def paused_labels(self):
         return sorted(line.split()[0] for line in self.paused.read_text().splitlines())
 
-    def run_script(self, script, cwd=None, path_prefix=None):
+    def run_script(self, script, cwd=None, path_prefix=None, expect_rc=0):
+        # The real defaults are a 60s wait and a 5s settle PER AGENT, which the production
+        # comment justifies for 14 JVMs on a loaded Mac. Both are overridable precisely so this
+        # gate does not spend minutes per case.
         env = dict(os.environ, LAUNCH_AGENTS_DIR=str(self.agents), LAUNCHCTL=str(self.launchctl),
-                   DEV_MIRRORS_PAUSED=str(self.paused), FAKE_STATE=str(self.state))
+                   DEV_MIRRORS_PAUSED=str(self.paused), FAKE_STATE=str(self.state),
+                   DEV_MIRROR_WAIT_S="4", DEV_MIRROR_SETTLE_S="0")
         if path_prefix:
             env["PATH"] = f"{path_prefix}:{env['PATH']}"
-        return subprocess.run([BASH, "-c", script], env=env, text=True, capture_output=True, check=True, cwd=cwd).stdout
+        r = subprocess.run([BASH, "-c", script], env=env, text=True, capture_output=True, cwd=cwd)
+        # The exit code is part of the contract, not noise: resume_dev_mirrors RETURNS its verdict
+        # ("this function used to end on an echo, so it ALWAYS returned 0 and a total failure to
+        # resume was indistinguishable from success"). check=True turned that verdict into a
+        # harness crash, so the expected code is asserted instead.
+        self.assertEqual(r.returncode, expect_rc,
+                         f"exit {r.returncode}, expected {expect_rc}\nstdout:\n{r.stdout}\nstderr:\n{r.stderr}")
+        return r.stdout
 
     def run_fn(self, fn, **kw):
         return self.run_script(helper_block().replace("sleep 3", ":") + f"\n{fn}\n", **kw)
@@ -196,13 +234,41 @@ class DevCleanupPausesDevMirrorsTest(unittest.TestCase):
     def test_failed_reload_keeps_the_list_for_the_next_start(self):
         self.run_fn("pause_dev_mirrors")
         (self.state / "refuse").write_text(f"{DEV_GEX}\n")
-        out = self.run_fn("resume_dev_mirrors")
-        self.assertIn(f"WARN: mirror agent {DEV_GEX} did not load", out)
-        self.assertTrue(self.paused.exists())
+        # An agent that will not bootstrap never reaches a pid, so the verdict is NOT RUNNING and
+        # resume returns non-zero. The old expectation ("WARN: ... did not load") predates the
+        # change to pid-based liveness, and nothing caught that because this whole step has not
+        # executed in CI since the collectability gate started failing ahead of it.
+        out = self.run_fn("resume_dev_mirrors", expect_rc=1)
+        self.assertIn(f"FAIL: mirror agent {DEV_GEX} is NOT RUNNING", out)
+        self.assertIn("1 NOT RUNNING", out)
+        self.assertTrue(self.paused.exists(), "the list must survive for the next start")
         (self.state / "refuse").unlink()
         self.run_fn("resume_dev_mirrors")
         self.assertIn(DEV_GEX, self.loaded())
         self.assertFalse(self.paused.exists())
+
+    def test_an_agent_registered_with_no_pid_is_not_counted_as_resumed(self):
+        # The outage this check exists for: `launchctl list <label>` exits 0 for a job that is
+        # merely REGISTERED, so a registration-based check deleted the pause list while all 14
+        # mirrors were down. A '-' in the pid column is the only thing that distinguishes them.
+        self.run_fn("pause_dev_mirrors")
+        (self.state / "nopid").write_text(f"{DEV_GEX}\n")
+        out = self.run_fn("resume_dev_mirrors", expect_rc=1)
+        self.assertIn(f"FAIL: mirror agent {DEV_GEX} is NOT RUNNING", out)
+        self.assertIn("resumed 2 es4->dev mirror agent(s), 1 NOT RUNNING", out)
+        self.assertTrue(self.paused.exists())
+        self.assertIn(DEV_GEX, self.loaded(), "it IS loaded — that is exactly the trap")
+
+    def test_a_respawn_loop_does_not_pass_as_running(self):
+        # A JVM that gets a pid and dies in a KeepAlive loop passes a point-in-time check on its
+        # brief pid window. Requiring the SAME pid after a settle is what rejects it, because each
+        # restart issues a new one.
+        self.run_fn("pause_dev_mirrors")
+        (self.state / "respawn").write_text(f"{DEV_CVD}\n")
+        out = self.run_fn("resume_dev_mirrors", expect_rc=1)
+        self.assertIn(f"FAIL: mirror agent {DEV_CVD} is NOT RUNNING stably", out)
+        self.assertIn("restart loop", out)
+        self.assertTrue(self.paused.exists())
 
     def test_agent_that_will_not_unload_is_reported(self):
         (self.state / "stuck").write_text(f"{DEV_GEX}\n")

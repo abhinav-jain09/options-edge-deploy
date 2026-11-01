@@ -1,0 +1,5 @@
+# Fixed schema id for options.spx.vix-option-inteligence-service.current (JSON -> Avro, 2026-10-31). Contracts 0.53.0 (options-edge-contracts #145):
+# id 3001, version 1, subject = the record full name (RecordNameStrategy), compatibility FULL. The id is identical on EVERY registry (es4, dev, production).
+# Ids 3001+ are the "zero-DTE intelligence" block; no other map uses them.
+# File column: relative to the contracts checkout's `schemas-registry/zerodte` directory (SCHEMAS_DIR).
+com.optionsedge.contracts.zerodte.ZeroDteIntelligenceSnapshot|3001|ZeroDteIntelligenceSnapshot.avsc

@@ -1,0 +1,49 @@
+# PRODUCTION: TICK-TRADE-TOOLS es-trade-tools-service LIVE with the calibrated release configuration (replicas 1, TT_ENABLED and all four family flags "true").
+# The shared base (k8s/services/es-trade-tools/base) stays replicas 0 / flags "false" for dev and every other render; this production-only patch overrides it.
+# Owner standard 2026-10-22: every service is calibrated on historical data before it is deployed and runs live, never in shadow. The calibration
+# (processing docs/ta-books/catalog/TICK-TRADE-TOOLS-CALIBRATION-REPORT.md, merged with processing #1281 7b6294e0 and #1283 063897ee) is compiled INTO the image
+# (es-trade-tools-service/calibration, paramsVersion 2), so the release carries no tuning variable: set none.
+# Preconditions, all checked before the run (docs/ta-books/DEPLOY-ROLLOUT.md section 5): Avro subjects 2301-2315 (version 1) and 2321-2332 + 2335 (version 2) are registered on the
+# production registry (ensure-fixed-id-schemas.sh with the contracts 4ddf5a36 maps, 10-22); the input underlying.es.trades.linearized exists on the production broker (single partition,
+# written by es-trade-linearizer-service); the seven output topics are ensured by the service-deploy topic barrier (scripts/kafka/ensure-es-trade-tools-topics.sh) BEFORE the pod starts.
+# There is NO earlier es-trade-tools checkpoint on production (the Deployment did not exist), so the paramsVersion-2 image meets an empty state topic and builds from the retained tape.
+# Reset class: the four retention.ms=-1 topics (futures.pf.columns, futures.pf.chart, futures.volume-nodes, futures.tradetools.state) are RESET_REBUILDABLE in scripts/kafka/topics.env; a
+# premarket/clean reset deletes the set together and the service rebuilds from the retained linearized tape. Chart history older than the tape's retention is not rebuilt (DEPLOY-ROLLOUT.md section 2).
+# Gateway relay (GATEWAY_TRADE_TOOLS_ENABLED) is a SEPARATE later change: the gateway and web that understand the version-2 records are deployed first.
+# Rollback (complete, two levels, both through ONE reviewed PR + service-deploy SERVICE=es-trade-tools; never kubectl on production):
+#  (1) flags off, durable: set TT_ENABLED and the four family flags to "false" in this patch (replicas stays 1; the process then only serves health, state DISABLED, no topic read or written), regenerate the slices
+#      (scripts/deploy/generate-service-slices.sh), deploy, and verify the live pod environment reads "false".
+#  (2) scaled to zero, durable: ALSO set replicas to 0 here AND re-add es-trade-tools-service to KEEP_DOWN in BOTH scripts/ops/morning-autostart.sh and scripts/ops/oe-boot-bringup.sh in the same PR (a KEEP_DOWN-free
+#      zero-replica Deployment is scaled back to 1 by the next boot or morning start, so replicas 0 alone is NOT a rollback); verify the live Deployment reads replicas 0 and the lists agree (tests/test_keep_down_lists_agree.py).
+# SINGLE replica ONLY (strategy Recreate): the producer is transactional with transactional.id es-trade-tools-ES.v.0.
+# MUST MIRROR the standalone slice k8s/services/es-trade-tools/overlays/production (validate-services: mono==slice).
+# Provenance and preflight: the image activated is EXACTLY sha256:6f1bdcc14fb1ba78bac2039c3bdffe58825246f6714d66fee8d9f9c3f1319778 (options-edge-processing Jenkins build #2044, processing commit
+# 6c2105953e3d823ed82ebb4dcb8f89fa27778228, contracts 4ddf5a367bd5fa34b35d7c782e0529f79338eb0d, built with Jib for linux/amd64, :prod = that digest, registry index/children/blobs verified full length).
+# service-deploy pins the :prod tag to a digest at deploy time: compare the digest it prints with the line above BEFORE the apply, and the live imageID (the digest after '@' of the container NAMED es-trade-tools,
+# `kubectl -n options-edge get pod <pod> -o jsonpath='{.status.containerStatuses[?(@.name=="es-trade-tools")].imageID}'`) AFTER it; a different digest needs its own PR updating this line.
+# Verification after the run (pod UID and restartCount captured at first Running): restartCount 0 through 10 minutes, `kubectl logs --since=10m | grep -c ' ERROR '` = 0, tt_state LIVE and tt_replay_complete 1,
+# publish_errors 0; futures.pf.chart / futures.pf.columns / futures.volume-nodes / futures.flow.bars records decode as Avro with schema ids 2321, 2322, 2330, 2331 (version 2) and futures.tradetools.state carries 2335 and the
+# checkpoint chunks 2313/2314; the production broker's OutOfOrderSequenceException rate (pre-existing noise from other producers) is sampled before and after and must not rise.
+# Abort criteria: a restart, an ERROR or schema/serialization line, publish_errors > 0, or a measurable broker degradation: set the flags to "false" (or replicas 0) FIRST, then investigate.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: es-trade-tools-service
+  namespace: options-edge
+spec:
+  replicas: 1
+  template:
+    spec:
+      containers:
+        - name: es-trade-tools
+          env:
+            - name: TT_ENABLED
+              value: "true"
+            - name: TT_PF_ENABLED
+              value: "true"
+            - name: TT_VP_ENABLED
+              value: "true"
+            - name: TT_FLOW_ENABLED
+              value: "true"
+            - name: TT_CLIMAX_ENABLED
+              value: "true"

@@ -19,6 +19,8 @@ resources:
   # recorded (the shadow commit flips it); image reuse (options-edge-databento-feed) with
   # a `command` override selecting the vix role — no new images entry needed.
   - ../../services/databento-vix-feed/base
+  # Unified SR shadow: production-only, held at zero until the scheduled validation run.
+  - ../../services/unified-sr-shadow/base
   # es-aggressor-flow: PROD-ONLY, and prod-only for a reason — dev is SPX-only and has no ES
   # feed. It runs here with the legacy absorption snapshot DISABLED, publishing only the
   # Kyle-style signed-flow response slope (a neutral observability measurement, not a signal).
@@ -35,6 +37,11 @@ resources:
   # break-score + level-absorption: HELD AT replicas 0 (base). See k8s/overlays/dev/kustomization.yaml.
   - ../../services/break-score/base
   - ../../services/level-absorption/base
+  # es-trade-tools (TICK-TRADE-TOOLS) + wave-cycle (ELLIOTT-FIB-CYCLE-TOOLS): the bases are HELD AT replicas 0; PRODUCTION enables both through the enable patches registered below.
+  - ../../services/es-trade-tools/base
+  - ../../services/wave-cycle/base
+  # break-classifier (Phase F): LIVE on dev and production through each environment's enable patch (replicas 1, flag true); the base is HELD at 0 / "false".
+  - ../../services/break-classifier/base
   # market-structure: dev+prod at replicas 1. Reads options.indicators.bars read-only and publishes
   # options.spx.market-structure.ui (the Context Tape projection), .sequence and .dlq. Single replica
   # only (per-environment transactional.id).
@@ -59,6 +66,8 @@ resources:
 # cached image (no pull, no throttle). Dev keeps Always so it always picks up a
 # freshly-built :dev image.
 patches:
+  # PRODUCTION: Phase A indicator studies ON for the indicator-service container (owner 2026-10-21).
+  - path: indicator-studies-prod-enable-patch.yaml
   # Production withdrawal (2026-10-16): keep the unqualified ES challenger out of runtime
   # until an independently frozen candidate clears the accuracy and coverage gates.
   - path: es-compression-expansion-prod-hold-patch.yaml
@@ -781,6 +790,22 @@ patches:
     target:
       kind: Deployment
       name: option-pressure-state-service
+  # PROD: es-trade-tools-service and wave-cycle-service LIVE with the calibrated release configuration (replicas 1, flags true). The bases stay replicas 0 / false.
+  # See each patch header. MUST MIRROR the standalone slices k8s/services/{es-trade-tools,wave-cycle}/overlays/production (validate-services: mono==slice).
+  - path: es-trade-tools-prod-enable-patch.yaml
+    target:
+      kind: Deployment
+      name: es-trade-tools-service
+  - path: wave-cycle-prod-enable-patch.yaml
+    target:
+      kind: Deployment
+      name: wave-cycle-service
+  # PROD: break-classifier-service LIVE (replicas 1, BREAK_CLASSIFIER_ENABLED true); the base stays replicas 0 / false. See the patch header for the honest state (validation failed, X1/X2 have
+  # no producer yet) and the rollback. MUST MIRROR the standalone slice k8s/services/break-classifier/overlays/production (validate-services: mono==slice).
+  - path: break-classifier-prod-enable-patch.yaml
+    target:
+      kind: Deployment
+      name: break-classifier-service
   # PROD: run the option pressure state READER, and only that one of this service's four writers.
   # See the patch header for why the other three are switched off rather than left to create a topic
   # and three tables as a side effect.
@@ -807,6 +832,17 @@ patches:
   # Candle Direction commissioning shadow inside context-tape-service (design A3 + A4, Codex Gate-2 r9/r10; owner 2026-09-07):
   # every record actionable=false; own :8136 projection port; host API/readiness untouched. Rollback = remove this patch.
   - path: context-tape-direction-prod-env-patch.yaml
+  # PRODUCTION (owner 2026-10-28): Globex-hours candles — the indicator-estimate container and the Context Tape GLOBEX session + estimate bars.
+  # See the two patch headers. Roll back = remove both lines.
+  - path: indicator-estimate-prod-patch.yaml
+  - path: context-tape-globex-prod-env-patch.yaml
+  # PRODUCTION (owner 2026-10-29): Globex-hours candle patterns (market-structure-estimate container + the gateway relay) and the declared indicator application id.
+  - path: market-structure-estimate-prod-patch.yaml
+    target:
+      kind: Deployment
+      name: market-structure-service
+  - path: feed-gateway-estimate-prod-env-patch.yaml
+  - path: indicator-appid-prod-patch.yaml
   # Pre-open IBKR GEX production gate (gamma) — OVERNIGHT-IBKR-GEX rev13+D15. These three land
   # together and must not be split: the gate turns the publisher on, the gateway relays the status
   # plane that keeps the values honestly labelled, and the hold stops the D15 fan-out from waking
@@ -925,10 +961,12 @@ patches:
       - op: replace
         path: /spec/replicas
         value: 1
-  # spread-skew-service + spread-skew-postgres-writer: RETIRED all envs (USER 2026-07-24 — the
+  # spread-skew-service + spread-skew-postgres-writer: RETIRED in production (USER 2026-07-24 — the
   # mirrored-pair strike/Mid coloring feature is not wanted). Base replicas:0 renders as-is; the
   # standalone slices mirror it (validate-services: mono==slice) and both are in morning-autostart
-  # KEEP_DOWN + dev-cleanup DISABLED_DEV so the daily lifecycle never re-ups them.
+  # KEEP_DOWN so the daily lifecycle never re-ups them. 2026-10-31: the owner lifted the hold for DEV
+  # only (dev overlay replicas 1, spread-skew-service out of dev-cleanup DISABLED_DEV); production stays
+  # held at 0, and the writer stays held everywhere.
   # unified-sr + strike-flow-avro-adapter are now promoted to main and built for prod, so they render and
   # deploy on production too (experiment-only exclusions removed). Prod image build/pin must produce both
   # images (UNIFIED_SR_IMAGE / STRIKE_FLOW_AVRO_ADAPTER_IMAGE) or the digest-pin guard will fail-closed.
@@ -1094,6 +1132,12 @@ images:
   - name: 192.168.100.252:5000/options-edge-invasion-postgres-writer
     newTag: prod
   - name: 192.168.100.252:5000/options-edge-level-absorption
+    newTag: prod
+  - name: 192.168.100.252:5000/options-edge-es-trade-tools
+    newTag: prod
+  - name: 192.168.100.252:5000/options-edge-wave-cycle
+    newTag: prod
+  - name: 192.168.100.252:5000/options-edge-break-classifier
     newTag: prod
   - name: 192.168.100.252:5000/options-edge-market-commentary
     newTag: prod

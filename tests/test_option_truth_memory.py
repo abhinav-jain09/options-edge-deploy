@@ -18,8 +18,13 @@ class OptionTruthMemoryTest(unittest.TestCase):
         for manifest in manifests:
             with self.subTest(manifest=manifest.relative_to(ROOT)):
                 rendered = manifest.read_text()
+                # The 5g heap is the restore capacity this test exists to pin, so it stays.
+                # The LIMIT moved 6Gi -> 7Gi (2026-10-19): at 6Gi the heap was 83% of the
+                # container, outside the band every healthy workload in this fleet sits in, and
+                # scripts/ci/validate-heap-leaves-container-headroom.sh now enforces that. The
+                # headroom came from the container, not from the heap.
                 self.assertIn("value: -Xms1g -Xmx5g", rendered)
-                self.assertIn("memory: 6Gi", rendered)
+                self.assertIn("memory: 7Gi", rendered)
                 self.assertIn("memory: 2Gi", rendered)
 
 

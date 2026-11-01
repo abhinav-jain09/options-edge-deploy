@@ -217,17 +217,34 @@ services:
   # boot), and EAV-R17's emission floor blocks any non-dev enable. Reads the auction + witness
   # topics read-only; writes only early-auction.verdicts.shadow (1 partition, retention -1).
   - { name: early-auction-verdict,        managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-early-auction-verdict,        deployments: [early-auction-verdict-service] }
-  # break-score: SHADOW (version 1: no voice, no screen). Scores a break of a level from the linearized ES tape
+  # break-score: RETIRED 2026-10-25 as a predictor (never deployed; held at 0 everywhere; BREAK_SCORE_MODE and the SHADOW mode are retired with it). Scored a break of a level from the linearized ES tape
   # (underlying.es.trades.linearized) and publishes futures.break-score.events (1 partition, delete, retention.ms=-1,
-  # retention.bytes=16777216). DEPLOYED HELD AT replicas 0 on dev AND production: the owner enables it. Single replica only.
+  # retention.bytes=16777216). Held at replicas 0 on dev AND production and not to be enabled.
   # Held down by: replicas: 0 in the base, KEEP_DOWN in morning-autostart.sh + oe-boot-bringup.sh, DISABLED_DEV in dev-cleanup.sh.
   # scripts/kafka/ensure-break-score-topics.sh is the first-deploy barrier. No Service object.
   - { name: break-score,                  managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-break-score,                  deployments: [break-score-service] }
-  # level-absorption: EYEBALL phase (status events, NO verdict). DEPLOYED HELD AT replicas 0 on dev AND production and unable to start
-  # until the owner supplies the Phase 0 freeze file and the retention artifact (docs/level-absorption/DEPLOY-WIRING.md). Reads the
-  # linearized ES tape, es.futures.footprint.bars, es.futures.auction and the manual-line topic; publishes futures.level-absorption.{events,
-  # voice,closures}. Same hold-down paths as break-score. scripts/kafka/ensure-level-absorption-topics.sh is the first-deploy barrier.
+  # level-absorption: EYEBALL phase (status events, NO verdict). RUNS ON DEV (replicas 1 through k8s/overlays/dev/level-absorption-dev-enable-patch.yaml since 2026-10-25),
+  # held at replicas 0 on production (docs/level-absorption/DEPLOY-WIRING.md). Reads the
+  # linearized ES tape, es.futures.footprint.bars, es.futures.auction, the manual-line topic and (version 2, host sites) the
+  # market-structure UiProjection topic options.spx.market-structure.ui; publishes futures.level-absorption.{events,voice,closures}.
+  # Production: same hold-down paths as the retired break-score; DEV runs it at replicas 1 (EYEBALL). scripts/kafka/ensure-level-absorption-topics.sh is the first-deploy barrier.
   - { name: level-absorption,             managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-level-absorption,             deployments: [level-absorption-service] }
+  # es-trade-tools (TICK-TRADE-TOOLS, TA books): Point-and-Figure charts, volume nodes and flow bars from the linearized ES tape
+  # (underlying.es.trades.linearized), published as Avro on futures.pf.* / futures.volume-nodes / futures.flow.* / futures.tradetools.state.
+  # DEPLOYED HELD AT replicas 0 on dev AND production with TT_ENABLED and all four family flags "false" (requirement D-R20.1: dev first, no
+  # environment beyond dev before the calibration job). Held down by: replicas: 0 in the base, KEEP_DOWN in morning-autostart.sh +
+  # oe-boot-bringup.sh, DISABLED_DEV in dev-cleanup.sh. scripts/kafka/ensure-es-trade-tools-topics.sh is the first-deploy barrier. No Service object.
+  - { name: es-trade-tools,               managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-es-trade-tools,               deployments: [es-trade-tools-service] }
+  # wave-cycle (ELLIOTT-FIB-CYCLE-TOOLS, TA books): Elliott waves, Fibonacci time and cycles for SPX from options.indicators.bars, Avro on
+  # options.spx.wave-cycle.{waves,cycles,recovery}. DEPLOYED HELD AT replicas 0 on dev AND production with WAVE_CYCLE_ENABLED and
+  # WAVE_CYCLE_SEASONALITY_ENABLED "false"; it needs its five Avro subjects registered even with the flags off. Same hold-down paths as
+  # es-trade-tools. scripts/kafka/ensure-wave-cycle-topics.sh is the first-deploy barrier. No Service object.
+  - { name: wave-cycle,                   managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-wave-cycle,                   deployments: [wave-cycle-service] }
+  # break-classifier (Phase F, TA books): classifies SPX/ES level breaks from options.indicators.bars, es.futures.footprint.bars and the Phase B/C parent and pivot topics (no producer of those two yet, so it
+  # publishes status and no marks), Avro on options.spx.break-classification{,.checkpoint}. Its pre-registered validation FAILED: every classification it publishes is UNDECIDED(NO_MEASURED_EDGE). LIVE (replicas 1, BREAK_CLASSIFIER_ENABLED true) on dev AND production through the per-environment enable patches
+  # (k8s/overlays/<env>/break-classifier-{dev,prod}-enable-patch.yaml); the shared base is replicas 0 / "false". Needs its six Avro subjects (2601-2606) and the barrier
+  # scripts/kafka/ensure-break-classification-topics.sh (topic-level checkpoint limit only; no broker-wide change). Single replica; no Service object. NOT in KEEP_DOWN or DISABLED_DEV.
+  - { name: break-classifier,             managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-break-classifier,             deployments: [break-classifier-service] }
   # stock-gex: SPX-500 single-stock GEX (Databento equity options; NO Kafka). Its image builds in the
   # options-edge-databento-feed repo (Dockerfile.stockgex), like databento-sr3-feed — hence buildJob.
   # DEV-FIRST/on-demand: prod overlay holds it at replicas:0 until the nightly OI-index builder exists.
@@ -337,6 +354,7 @@ services:
   - { name: strike-flow-classifier,       managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-strike-flow-classifier,       deployments: [strike-flow-classifier-databento] }
   - { name: strike-flow-avro-adapter,     managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-strike-flow-avro-adapter,     deployments: [strike-flow-avro-adapter] }
   - { name: unified-sr,                   managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-unified-sr,                   deployments: [unified-sr-service] }
+  - { name: unified-sr-shadow,            managedBy: standalone, sliceGenerated: true, envs: [production],      image: options-edge-unified-sr,                   deployments: [unified-sr-shadow-service] }
   - { name: gex-delta-redis-writer,       managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-gex-delta-redis-writer,       deployments: [gex-delta-redis-writer] }
   - { name: raw-postgres-writer,          managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-raw-postgres-writer,          deployments: [raw-postgres-writer] }
   - { name: pin-postgres-writer,          managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-pin-postgres-writer,          deployments: [pin-postgres-writer] }

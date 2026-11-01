@@ -8,9 +8,9 @@ metadata:
     app.kubernetes.io/component: spread-skew-service
     app.kubernetes.io/part-of: options-edge
 spec:
-  # OPERATOR HOLD 2026-07-26: disabled in every environment until explicitly
-  # re-approved. Keep this at 0 so monolithic and standalone deploys cannot
-  # recreate a running pod.
+  # OPERATOR HOLD 2026-07-26: disabled in production until explicitly re-approved
+  # (the owner lifted it for DEV only on 2026-10-31; the dev overlay sets 1). Keep this at 0 so
+  # production deploys cannot recreate a running pod.
   replicas: 0
   strategy:
     type: Recreate
