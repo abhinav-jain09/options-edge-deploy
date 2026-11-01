@@ -8,6 +8,9 @@
 # Route         : the home network (192.168.100.102) is used whenever it answers; otherwise Tailscale (100.117.21.102). While on
 #                 Tailscale it checks every 5 s and switches back to the LAN the moment the LAN is reachable again. A LAN address that
 #                 answers but is not the dev machine (another network) fails the pinned host key and is skipped for 60 s.
+# Market-aware: the tunnel only runs while the SPX/SPXW options session (the code's SpxSessionCalendar, see market.sh) is open, plus a
+# small lead/lag. Closed (nights between 16:00 and 20:15 ET, weekends, exchange holidays): no tunnel, nothing to connect to. The window
+# opening is acted on to the second. `touch <state>.force-on` keeps the tunnel up regardless; MARKET_AWARE=0 turns the calendar off.
 set -u
 LAN_HOST=${LAN_HOST:-192.168.100.102}
 TS_HOST=${TS_HOST:-100.117.21.102}
@@ -16,6 +19,9 @@ REMOTE_USER=${REMOTE_USER:-abhinav}
 PORTS=${PORTS:-"4001 4002 7496 7497"}
 LOG=${LOG:-$HOME/Library/Logs/ib-gateway-reverse-tunnel.log}
 STATE=${STATE:-$HOME/Library/dev-gateway-tunnel/state}
+MARKET_AWARE=${MARKET_AWARE:-1}
+. "$(cd "$(dirname "$0")" && pwd)/market.sh"
+now() { if [ -r "$STATE.now" ]; then cat "$STATE.now"; else date +%s; fi; }   # `<state>.now` holding an epoch overrides the clock (test hook)
 SSHOPTS=(-o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -o TCPKeepAlive=yes
          -o ExitOnForwardFailure=yes -o StrictHostKeyChecking=yes -o HostKeyAlias="$KEYALIAS" -o ControlMaster=no -o ControlPath=none)
 log() { echo "$(date '+%F %T') $*" >> "$LOG"; }
@@ -24,10 +30,28 @@ rports=(); for p in $PORTS; do rports+=(-R "127.0.0.1:$p:127.0.0.1:$p"); done
 clean_remote() {   # an ssh session that died without a goodbye keeps its listeners on the dev machine; only a listener owned by sshd is touched
   ssh "${SSHOPTS[@]}" "$REMOTE_USER@$1" "for p in $PORTS; do for pid in \$(/usr/sbin/lsof -nP -iTCP:\$p -sTCP:LISTEN -t 2>/dev/null); do case \"\$(/bin/ps -o comm= -p \$pid)\" in *sshd*) kill \$pid;; esac; done; done" >/dev/null 2>&1
 }
-backoff=1; lan_bad_until=0; noroute=''
+market_gate() {   # 0 = the tunnel may run now; 1 = the market is closed (MKT_NEXT = when the next window starts)
+  [ "$MARKET_AWARE" = 1 ] || { MKT_STATE=open; MKT_END=9999999999; return 0; }
+  if [ -e "$STATE.force-on" ]; then MKT_STATE=forced; MKT_END=9999999999; return 0; fi
+  market_eval "$(now)"; [ "$MKT_STATE" != closed ]
+}
+market_still_open() {   # cheap per-check: the calendar is re-read only when the window ended or the force file went away
+  [ "$MARKET_AWARE" = 1 ] || return 0
+  [ -e "$STATE.force-on" ] && return 0
+  if [ "$MKT_STATE" = forced ] || [ "$(now)" -ge "$MKT_END" ]; then market_gate; return $?; fi
+  return 0
+}
+backoff=1; lan_bad_until=0; noroute=''; mkt_closed_logged=''
 /usr/bin/pkill -u "$(id -u)" -f "ssh .* -N .*-R 127.0.0.1:${PORTS%% *}:127.0.0.1:" 2>/dev/null   # an orphan from a supervisor that died hard
+rm -f "$STATE"   # a marker left by a supervisor that was killed must not read as "up"
 log "supervisor start pid $$ ports: $PORTS lan=$LAN_HOST tailscale=$TS_HOST"
 while true; do
+  if ! market_gate; then
+    rm -f "$STATE"
+    if [ "$mkt_closed_logged" != "$MKT_NEXT" ]; then log "market closed: no tunnel until $(et_text "$MKT_NEXT") (SPX options session per SpxSessionCalendar; touch state.force-on to override)"; mkt_closed_logged=$MKT_NEXT; fi
+    w=$(( MKT_NEXT - $(now) )); [ "$w" -gt 30 ] && w=30; [ "$w" -lt 1 ] && w=1; sleep "$w"; continue
+  fi
+  if [ -n "$mkt_closed_logged" ]; then log "market window opened ($MKT_STATE): connecting"; mkt_closed_logged=''; fi
   host=""; route=""
   if [ "$(date +%s)" -ge "$lan_bad_until" ] && up "$LAN_HOST"; then host=$LAN_HOST; route=lan
   elif up "$TS_HOST"; then host=$TS_HOST; route=tailscale; fi
@@ -39,6 +63,7 @@ while true; do
   started=$SECONDS; echo "$route $host $(date +%s)" > "$STATE"; lanfail=0; tsfail=0
   while kill -0 "$spid" 2>/dev/null; do
     sleep 2
+    market_still_open || { log "market closed: dropping the tunnel (next window $(et_text "$MKT_NEXT"))"; kill "$spid" 2>/dev/null; break; }
     if [ "$route" = tailscale ]; then
       if [ "$(date +%s)" -ge "$lan_bad_until" ] && up "$LAN_HOST"; then log "LAN is reachable again: switching from Tailscale to LAN"; kill "$spid" 2>/dev/null; break; fi
       if up "$TS_HOST"; then tsfail=0; else tsfail=$((tsfail + 1)); if [ "$tsfail" -ge 2 ]; then log "Tailscale lost: dropping the tunnel to reconnect the moment a route answers"; kill "$spid" 2>/dev/null; break; fi; fi
