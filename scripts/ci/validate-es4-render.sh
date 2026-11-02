@@ -105,6 +105,7 @@ rendered = set(r.SERVICES)
 HAND_AUTHORED = {
     "es-feed",            # ES-0DTE Databento feed; owns a live session, excluded from deploy-all
     "es-feed-gateway",    # prod feed-gateway binary, env-only divergence
+    "es-web",             # prod web binary, env-only divergence; serves the ES UI (owner 2026-11-02: must stay whitelisted)
     "es-aggressor-flow",  # ES-only continuous futures aggressor analysis
     "es-cvd",             # ES-only session-anchored CVD; cross-env SPX wiring, no production slice
     "es-amt",             # ES-only SPX Auction Desk (futures.auction); same cross-env wiring as es-cvd

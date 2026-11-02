@@ -1,0 +1,138 @@
+# ES web UI on es4. Same options-edge-web binary as prod; env-only divergence — points at the ES
+# feed-gateway (NodePort 30091 on the .4 node) and the PRODUCTION Keycloak realm. Exposed on
+# NodePort 30080: open http://192.168.100.4:30080 on the LAN.
+# Deploy ONLY via Jenkinsfile.es4-deploy (digest-pins :prod before apply).
+apiVersion: v1
+kind: Service
+metadata:
+  name: es-web
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: es-web
+    app.kubernetes.io/part-of: options-edge
+spec:
+  type: NodePort
+  ports:
+  - name: http
+    port: 8080
+    targetPort: http
+    nodePort: 30080
+  selector:
+    app.kubernetes.io/name: es-web
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: es-web
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: es-web
+    app.kubernetes.io/part-of: options-edge
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: es-web
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: es-web
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      containers:
+      - name: web
+        image: 192.168.100.252:5000/options-edge-web:prod
+        ports:
+        - name: http
+          containerPort: 8080
+        env:
+        - name: APP_PROFILE
+          value: "prod"
+        - name: APP_WEB_PORT
+          value: "8080"
+        - name: APP_MARKET_DATA_SOURCE
+          value: "DATABENTO"
+        # es4 UI defaults to the ES symbol (AppConfig reads IB_SYMBOL, default SPX) so the chain
+        # selects ES and matches the gateway's ES selection.
+        - name: IB_SYMBOL
+          value: "ES"
+        # Roll the UI's default 0DTE expiry to the next trade date at 17:30 ET, matching the feed +
+        # gateway (+ SPX). Without this the web app's currentSessionExpiry flips only at midnight ET,
+        # so after the roll the UI defaults the Expiry picker to the just-expired contract and fresh
+        # browser loads show an empty chain all evening (options-edge PR#258). SPX now aligns to 17:30.
+        - name: IB_EXPIRY_ROLL_AFTER
+          value: "17:30"
+        # GexStrikeTopicListener does not apply TOPIC_PREFIX to its app default. Bind the ES topic
+        # explicitly so /api/greeks consumes the live ES per-strike snapshots.
+        - name: KAFKA_GEX_STRIKE_TOPIC
+          value: es.options.databento.gex.strike
+        - name: DEALER_LEDGER_UI_VISIBLE
+          value: "true"
+        # PRODUCTION Keycloak auth (same realm + client + audience as prod).
+        - name: VITE_AUTH_ENABLED
+          value: "true"
+        - name: VITE_AUTH_ISSUER
+          value: "https://auth.bleadingoptions.com/realms/optionsedge"
+        - name: VITE_AUTH_CLIENT_ID
+          value: "options-edge-web"
+        - name: VITE_AUTH_AUDIENCE
+          value: "options-edge-web"
+        - name: AUTH_AUDIENCE
+          value: "options-edge-web"
+        # Browser-facing URLs go through the public edge (Cloudflare -> cloudflared -> ES svcs on .4),
+        # so they are https/wss on es.bleadingoptions.com. TLS terminates at Cloudflare; the tunnel forwards
+        # /ws/events -> ES gateway and everything else -> ES web.
+        - name: APP_FEED_GATEWAY_WS_URL
+          value: "wss://es.bleadingoptions.com/ws/events"
+        - name: VITE_WS_URL
+          value: "wss://es.bleadingoptions.com/ws/events"
+        # Server-to-server health uses Kubernetes Service DNS. Avoid the node NodePort hairpin: a brief
+        # 500 ms failure there falsely returned feedGatewayAvailable=false and reset the browser board.
+        - name: APP_FEED_GATEWAY_HEALTH_URL
+          value: "http://es-feed-gateway:18091/health"
+        - name: VITE_API_BASE_URL
+          value: "https://es.bleadingoptions.com"
+        # Required-in-prod by RuntimeProfileConfig.validate(). No mission-control/replay backend runs
+        # on es4, so these point at the UI's own https origin to satisfy validation (features inert).
+        - name: VITE_MISSION_CONTROL_URL
+          value: "https://es.bleadingoptions.com"
+        - name: VITE_REPLAY_ORCHESTRATOR_URL
+          value: "https://es.bleadingoptions.com"
+        # WebNav's compiled default still points at the OLD es domain; mandatory from Phase 2 on
+        # (the acceptance gate checks it on this deployment too).
+        - name: APP_ES_OPTIONS_URL
+          value: "https://es.bleadingoptions.com"
+        # Per-strike delta-flow freshness TTL (ms). ES 0DTE overnight trades VERY sparsely (~a few prints
+        # per strike per session), so a short TTL blanks strikes between prints even though sessionNetDeltaFlow
+        # is a cumulative session total that stays valid all session. Raise to 4h so a strike's session flow
+        # stays visible through the long overnight gaps (10min was still too short). SPX keeps the 90s default
+        # (this env is es-web-only; SPX prod web never sets it).
+        - name: DELTA_FLOW_STALE_MS
+          value: "14400000"
+        # Risk Reversal page reference line: ES prior settle via Yahoo ES=F (SPX default is ^GSPC).
+        - name: PRIOR_CLOSE_YAHOO_SYMBOL
+          value: "ES=F"
+        # Globex session rolls at 18:00 ET — the cached prior close invalidates at the reopen.
+        - name: PRIOR_CLOSE_SESSION_ROLL_HOUR_ET
+          value: "18"
+        envFrom:
+        - configMapRef:
+            name: es4-base-env
+        - configMapRef:
+            name: es4-common-env
+        - secretRef:
+            name: es4-runtime-secrets
+        readinessProbe:
+          httpGet:
+            path: /
+            port: http
+          initialDelaySeconds: 20
+          periodSeconds: 10
+        resources:
+          requests:
+            cpu: "250m"
+            memory: "512Mi"
+          limits:
+            memory: "2Gi"
