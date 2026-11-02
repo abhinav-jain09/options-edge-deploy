@@ -105,17 +105,20 @@ patches:
   # bridge is also ENABLED here rather than in the base for the same reason as the replicas — an armed
   # bridge in production would start producing intents the moment anything scaled it.
   #
-  # ⚠ scripts/ops/dev-cleanup.sh pins the DISABLED_DEV set to 0 on every clean, so lifting replicas
-  # here WITHOUT removing both names there would have them come up and be put straight back down at
-  # the next clean. Both are removed from that list in the same commit (#1034's lesson: closing fewer
-  # than all of the hold paths is worse than closing none).
+  # ⚠ scripts/ops/dev-cleanup.sh do_start holds the DISABLED_DEV set at 0 (never scales it up), so a replica lift here
+  # needs the name OUT of that list in the same commit, and a hold needs it IN (#1034's lesson: closing
+  # fewer than all of the hold paths is worse than closing none). amt-order-bridge is out of the list
+  # and lifted; broker-execution-service is in the list and held (see the 2026-11-02 note below).
+  # OWNER 2026-11-02: the shared dev broker is NOT wanted any more -- the Order tab uses the broker
+  # on the owner's own Mac ("this 201 will have broker"). Held at 0 here AND in dev-cleanup.sh
+  # DISABLED_DEV (both halves, per #1034). amt-order-bridge below is unchanged.
   - target:
       kind: Deployment
       name: broker-execution-service
     patch: |-
       - op: replace
         path: /spec/replicas
-        value: 1
+        value: 0
   - target:
       kind: Deployment
       name: amt-order-bridge

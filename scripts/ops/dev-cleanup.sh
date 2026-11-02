@@ -44,13 +44,11 @@ KEEP='keycloak'                                          # deployments to leave 
 # stock-gex-service is PROD-ONLY (USER 2026-08-18): the public Gamma Lab page reads it there,
 # and it pulls straight from Databento (billed) rather than from Kafka — a dev copy spends
 # money serving a page dev does not host, and it was sitting at 0/1 on dev anyway.
-# 2026-10-11: broker-execution-service and amt-order-bridge REMOVED from this set so the
-# auction-to-paper-order chain survives a clean. They are lifted to 1 replica in the DEV
-# OVERLAY (k8s/overlays/dev/kustomization.yaml), not in the shared base — production keeps 0
-# because it shares dev's one gateway and one pinned paper account with a separate intent
-# ledger. Lifting replicas WITHOUT this edit would have them come up and be pinned straight
-# back to 0 by the scale-up loop below, which is #1034's lesson about closing only some of
-# the hold paths.
+# 2026-10-11: broker-execution-service and amt-order-bridge were REMOVED from this set so the
+# auction-to-paper-order chain survived a clean (both lifted to 1 in the DEV OVERLAY, not the shared base).
+# 2026-11-02 (owner): broker-execution-service is back IN this set and at replicas 0 in the dev overlay -- the Order
+# tab uses the broker on the owner's Mac, there is no shared dev broker. Both halves are needed (#1034's lesson):
+# replicas alone would be lifted by the scale-up loop below. amt-order-bridge was NOT changed and stays at 1.
 # USER 2026-10-26: corridor-gauge-service is OFF PERMANENTLY on dev and production. It has no *_ENABLED flag, so
 # replicas IS the switch and k8s/base/corridor-gauge-deployment.yaml sets 0 — but that base alone is NOT enough,
 # because do_start below scales every deployment NOT named here to 1 regardless of what the manifest says. The
@@ -67,7 +65,7 @@ KEEP='keycloak'                                          # deployments to leave 
 # USER 2026-10-14: zerodte-research-writer is deployed DARK (Stage-B: its zerodte-writer-identity config map is created
 # only by the provisioning job, not yet run), so it can only crash with CreateContainerConfigError. The start script used to scale it to 1 on
 # every start and the partition doctor then reported it INCONCLUSIVE (exit 5). Hold it at 0 until the provisioning job has run.
-DISABLED_DEV='hpsf-stage-a-service|hpsf-stage-b-service|volume-pace-service|volume-sandwich-service|volume-sandwich-databento-service|databento-timewarp-snapshot-replay|strike-flow-classifier-ibkr|options-edge-integration-test|databento-mission-pressure-service|databento-mission-pace-service|spx-mission-control-service|short-premium-agent-service|spread-skew-postgres-writer|directional-pressure-databento-service|databento-maxpain-service|databento-mission-sandwich-service|directional-pressure-service|option-truth-engine-service|stock-gex-service|dealer-ledger-service|dealer-ledger-calibration-scorer|dealer-ledger-calibration-accumulator|hedging-pressure-service|zerodte-research-writer|corridor-gauge-service|trade-evidence-api|break-score-service'
+DISABLED_DEV='hpsf-stage-a-service|hpsf-stage-b-service|volume-pace-service|volume-sandwich-service|volume-sandwich-databento-service|databento-timewarp-snapshot-replay|strike-flow-classifier-ibkr|options-edge-integration-test|databento-mission-pressure-service|databento-mission-pace-service|spx-mission-control-service|short-premium-agent-service|spread-skew-postgres-writer|directional-pressure-databento-service|databento-maxpain-service|databento-mission-sandwich-service|directional-pressure-service|option-truth-engine-service|stock-gex-service|dealer-ledger-service|dealer-ledger-calibration-scorer|dealer-ledger-calibration-accumulator|hedging-pressure-service|zerodte-research-writer|corridor-gauge-service|trade-evidence-api|break-score-service|broker-execution-service'
 # OVERNIGHT ES-tracking set — the ONLY services brought up right after the (17:20 ET, trading days) clean,
 # so ES futures are tracked overnight. Everything else stays at 0 until the 06:15 ET full start. (2026-08-03: was 07:30)
 # databento-feed + databento-gex-service are kept alive overnight so the pre-market LIVE OI path runs before
