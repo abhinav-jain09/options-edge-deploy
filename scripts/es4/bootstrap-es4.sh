@@ -125,6 +125,9 @@ bash "$SCRIPT_DIR/create-es-topics.sh"
 # ------------------------------------------- 5. namespace + pg secret in k3s
 log "ensuring options-edge namespace + es4-runtime-secrets"
 sudo /usr/local/bin/k3s kubectl get ns options-edge >/dev/null 2>&1 || sudo /usr/local/bin/k3s kubectl create ns options-edge
+# es4 workload whitelist (owner 2026-11-02): cluster-scoped ValidatingAdmissionPolicy, so a rebuilt es4 gets it.
+log "applying the es4 workload whitelist admission policy"
+sudo /usr/local/bin/k3s kubectl apply -f "$SCRIPT_DIR/../../k8s/es4/policy/workload-whitelist-admission.yaml"
 PGPW=$(grep '^ES4_POSTGRES_PASSWORD=' "$INFRA_DIR/.env" | cut -d= -f2)
 # name MUST match the manifests' envFrom secretRef (render_es4_manifests.py)
 # OE_WATCH_DB_PASSWORD: read-only oe_watch_reader on the SHARED ledger (.252/options_flow) for the

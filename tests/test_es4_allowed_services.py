@@ -2,6 +2,7 @@
 import re
 import subprocess
 import unittest
+import yaml
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -50,6 +51,28 @@ class Es4AllowedServices(unittest.TestCase):
         for n in sorted(allowed()):
             self.assertEqual(subprocess.run(["bash", str(SCRIPT), "service", n]).returncode, 0, n)
         self.assertEqual(subprocess.run(["bash", str(SCRIPT), "manifests"]).returncode, 0)
+
+    def test_k8s_whitelist_policy_matches_data_and_manifests(self):
+        wl = {l.strip() for l in (ROOT / "k8s/es4/policy/allowed-workloads").read_text().splitlines()
+              if l.strip() and not l.lstrip().startswith("#")}
+        declared = set()
+        for p in (ROOT / "k8s/es4/services").glob("*.yaml"):
+            for d in yaml.safe_load_all(p.read_text()):
+                if d and d["kind"] in ("Deployment", "StatefulSet", "DaemonSet", "CronJob", "Job", "Pod"):
+                    declared.add(d["metadata"]["name"])
+        self.assertEqual(wl, declared)
+        r = subprocess.run(["python3", str(ROOT / "scripts/es4/render-workload-whitelist-policy.py"), "--stdout"],
+                           capture_output=True, text=True, check=True)
+        self.assertEqual(r.stdout, (ROOT / "k8s/es4/policy/workload-whitelist-admission.yaml").read_text(),
+                         "policy drifted from allowed-workloads: run scripts/es4/render-workload-whitelist-policy.py")
+        policy = list(yaml.safe_load_all(r.stdout))
+        self.assertIn("Deny", policy[1]["spec"]["validationActions"])
+        for n in REMOVED:
+            self.assertNotIn(f"'{n}'", r.stdout)
+
+    def test_bootstrap_applies_the_policy(self):
+        self.assertIn("workload-whitelist-admission.yaml", (ROOT / "scripts/es4/bootstrap-es4.sh").read_text())
+        self.assertIn("k8s/es4/policy", (ROOT / "Jenkinsfile.es4-deploy").read_text())
 
 
 if __name__ == "__main__":

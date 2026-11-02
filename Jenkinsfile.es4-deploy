@@ -185,7 +185,7 @@ pipeline {
         // /home is root-owned on the box — create the es4 home via passwordless sudo, owned by the deploy user
         sh '''
           set -euo pipefail
-          ssh -o BatchMode=yes "$ES4_HOST" 'sudo install -d -o "$(id -un)" -g "$(id -gn)" /home/es4 /home/es4/repo /home/es4/repo/infra /home/es4/repo/scripts'
+          ssh -o BatchMode=yes "$ES4_HOST" 'sudo install -d -o "$(id -un)" -g "$(id -gn)" /home/es4 /home/es4/repo /home/es4/repo/infra /home/es4/repo/scripts /home/es4/repo/k8s /home/es4/repo/k8s/es4'
         '''
         // PROVENANCE (Deployment Permission Rule, validator rule 9b): every ship of the source tree is a DEDICATED step whose
         // whole shell body is the one rsync command, immediately preceded by the verify of the checkout it ships — nothing
@@ -200,6 +200,11 @@ pipeline {
           sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp'
         }
         sh 'rsync -az --delete scripts/ "${ES4_HOST}:/home/es4/repo/scripts/"'
+        // The es4 workload whitelist admission policy (bootstrap-es4.sh applies it) ships the same way.
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp'
+        }
+        sh 'rsync -az --delete k8s/es4/policy "${ES4_HOST}:/home/es4/repo/k8s/es4/"'
         sh '''
           set -euo pipefail
           ssh -o BatchMode=yes "$ES4_HOST" 'bash /home/es4/repo/scripts/es4/bootstrap-es4.sh'
