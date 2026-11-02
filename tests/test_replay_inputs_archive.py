@@ -309,6 +309,19 @@ class Decode(unittest.TestCase):
             rc, out = run(ria.check, root=str(root), dt="2026-11-02", broker=False, bootstrap="x")
             self.assertEqual(rc, 1, out)
 
+    def test_show_renders_tombstones_and_refuses_empty_day(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            ddir, ent = write_day(root, n=1)
+            with gzip.open(ddir / ent["path"], "wt", encoding="ascii") as f:
+                f.write(json.dumps({"p": 0, "o": 0, "ts": 1, "tt": 1, "k": None, "v": None, "h": []}) + "\n")
+            rc, out = run(ria.show, root=str(root), dt="2026-11-02", topic="t.topic", n=5)
+            self.assertEqual(rc, 0)
+            self.assertIn('"value": null', out)
+            (ddir / "_manifest.jsonl").write_text("")
+            rc, _ = run(ria.show, root=str(root), dt="2026-11-02", topic="t.topic", n=5)
+            self.assertEqual(rc, 2)
+
     def test_nested_references_load_dependency_first(self):
         inner = {"type": "record", "name": "Inner", "namespace": "t", "fields": [{"name": "a", "type": "long"}]}
         mid = {"type": "record", "name": "Mid", "namespace": "t", "fields": [{"name": "i", "type": "t.Inner"}]}

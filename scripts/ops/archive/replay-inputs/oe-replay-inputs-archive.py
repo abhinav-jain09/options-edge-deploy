@@ -727,11 +727,15 @@ def show(args) -> int:
     ddir = root / f"dt={day}"
     parsed = load_schemas(ddir)
     n = 0
-    for e in day_entries(root, day):
+    ents = day_entries(root, day)
+    if not ents:
+        print(f"show {day}: NO manifest entries under {ddir}")
+        return 2
+    for e in ents:
         if e["topic"] != args.topic:
             continue
         for r in iter_records(ddir / e["path"]):
-            _, val = decode_value(parsed, base64.b64decode(r["v"]))
+            val = None if r["v"] is None else decode_value(parsed, base64.b64decode(r["v"]))[1]
             print(json.dumps({"p": r["p"], "o": r["o"], "ts": r["ts"], "value": val}, default=str)[:1500])
             n += 1
             if n >= args.n:
