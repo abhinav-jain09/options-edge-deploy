@@ -28,6 +28,15 @@
 # Still monolith-only: feeds, gateway, integration-test, redis (other repos / infra).
 
 services:
+  - name: rithmic-depth-bridge
+    managedBy: es4
+    image: rithmic-depth-bridge
+    deployments: [rithmic-depth-bridge, rithmic-depth-mirror-dev, rithmic-depth-mirror-production]
+    sourceRepo: rithmic-depth-bridge
+    buildJob: es4-deploy
+    envs: [es4]
+    consumedTopics: []
+    producedTopics: [es.rithmic.depth]
   # --- standalone (per-service fast path) ---------------------------------------------
   - name: web
     managedBy: standalone

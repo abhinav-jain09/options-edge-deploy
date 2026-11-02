@@ -96,6 +96,8 @@ rules:
       # pods/attach:create, `kubectl run -i` fails after the pod
       # successfully starts.
       - pods/attach
+      # Rithmic collector readiness and read-only cross-cluster Avro payload proof.
+      - pods/exec
     verbs: ["create"]
   - apiGroups: [""]
     resources:

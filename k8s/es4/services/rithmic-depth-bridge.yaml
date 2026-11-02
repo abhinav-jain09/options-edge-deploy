@@ -1,0 +1,281 @@
+# ES4-only Rithmic Test collector and identity Kafka mirrors. Managed by es4-deploy.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rithmic-depth-bridge
+  namespace: options-edge
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rithmic-depth-bridge
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rithmic-depth-bridge
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 20
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: collector
+        image: RITHMIC_IMAGE_PLACEHOLDER
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: RITHMIC_USER
+          valueFrom:
+            secretKeyRef:
+              name: rithmic-depth-bridge
+              key: username
+        - name: RITHMIC_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: rithmic-depth-bridge
+              key: password
+        - name: KAFKA_BOOTSTRAP_SERVERS
+          value: 192.168.100.4:9092
+        - name: KAFKA_SCHEMA_REGISTRY_URL
+          value: http://192.168.100.4:8081
+        resources:
+          requests:
+            cpu: 250m
+            memory: 256Mi
+          limits:
+            cpu: '2'
+            memory: 512Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        readinessProbe:
+          exec:
+            command:
+            - python3
+            - /app/probe.py
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        startupProbe:
+          exec:
+            command:
+            - python3
+            - /app/probe.py
+            - --alive
+          periodSeconds: 5
+          failureThreshold: 24
+        livenessProbe:
+          exec:
+            command:
+            - python3
+            - /app/probe.py
+            - --alive
+          periodSeconds: 10
+          failureThreshold: 3
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+      volumes:
+      - name: tmp
+        emptyDir:
+          sizeLimit: 32Mi
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rithmic-depth-bridge
+  namespace: options-edge
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: rithmic-depth-bridge
+  policyTypes:
+  - Ingress
+  ingress: []
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rithmic-depth-mirror-dev
+  namespace: options-edge
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rithmic-depth-mirror-dev
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rithmic-depth-mirror-dev
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 40
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      hostAliases:
+      - ip: 192.168.100.102
+        hostnames:
+        - host.docker.internal
+      containers:
+      - name: mirror
+        image: RITHMIC_IMAGE_PLACEHOLDER
+        command:
+        - python3
+        - /app/depth-mirror.py
+        env:
+        - name: RITHMIC_MIRROR_TARGET
+          value: dev
+        resources:
+          requests:
+            cpu: 50m
+            memory: 96Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        readinessProbe:
+          exec:
+            command:
+            - python3
+            - -c
+            - import json,time; assert 0 <= time.time()*1000-json.load(open('/tmp/mirror-health.json'))['verifiedAtMs']
+              < 30000
+          periodSeconds: 5
+        livenessProbe:
+          exec:
+            command:
+            - python3
+            - -c
+            - import json,time; assert 0 <= time.time()*1000-json.load(open('/tmp/mirror-health.json'))['verifiedAtMs']
+              < 45000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+      volumes:
+      - name: tmp
+        emptyDir:
+          sizeLimit: 16Mi
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rithmic-depth-mirror-dev
+  namespace: options-edge
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: rithmic-depth-mirror-dev
+  policyTypes:
+  - Ingress
+  ingress: []
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rithmic-depth-mirror-production
+  namespace: options-edge
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rithmic-depth-mirror-production
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rithmic-depth-mirror-production
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 40
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      hostAliases:
+      - ip: 192.168.100.102
+        hostnames:
+        - host.docker.internal
+      containers:
+      - name: mirror
+        image: RITHMIC_IMAGE_PLACEHOLDER
+        command:
+        - python3
+        - /app/depth-mirror.py
+        env:
+        - name: RITHMIC_MIRROR_TARGET
+          value: production
+        resources:
+          requests:
+            cpu: 50m
+            memory: 96Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        readinessProbe:
+          exec:
+            command:
+            - python3
+            - -c
+            - import json,time; assert 0 <= time.time()*1000-json.load(open('/tmp/mirror-health.json'))['verifiedAtMs']
+              < 30000
+          periodSeconds: 5
+        livenessProbe:
+          exec:
+            command:
+            - python3
+            - -c
+            - import json,time; assert 0 <= time.time()*1000-json.load(open('/tmp/mirror-health.json'))['verifiedAtMs']
+              < 45000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+      volumes:
+      - name: tmp
+        emptyDir:
+          sizeLimit: 16Mi
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rithmic-depth-mirror-production
+  namespace: options-edge
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: rithmic-depth-mirror-production
+  policyTypes:
+  - Ingress
+  ingress: []
