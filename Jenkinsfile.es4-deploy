@@ -250,6 +250,12 @@ pipeline {
           sh 'PERMITTED_SHA="${CONTRACTS_PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir .jenkins-tmp/contracts'
         }
         sh 'rsync -az --delete .jenkins-tmp/contracts/schemas-registry/indicators/ "${ES4_HOST}:/home/es4/repo/schemas-registry/indicators/"'
+        sh 'ssh -o BatchMode=yes "${ES4_HOST}" mkdir -p /home/es4/repo/schemas-registry/rithmic'
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${CONTRACTS_PERMITTED_SHA:?}" bash scripts/jenkins/verify-permitted-tree.sh --dir .jenkins-tmp/contracts'
+        }
+        sh 'rsync -az --delete .jenkins-tmp/contracts/schemas/rithmic/ "${ES4_HOST}:/home/es4/repo/schemas-registry/rithmic/"'
+
       }
     }
     stage('Create topics') {
@@ -417,6 +423,8 @@ pipeline {
           RITHMIC_TEST_SCHEMA="$WORKSPACE/.jenkins-tmp/rithmic-contracts/target/classes/rithmic/RithmicDepthFrame.avsc" .jenkins-tmp/rithmic-venv/bin/python -m unittest discover -s .jenkins-tmp/rithmic-source/tests -v
           # Reconcile only the reviewed named-service whitelist using the established bootstrap identity.
           bash scripts/es4/assert-cluster-identity.sh /Users/abhinav/.kube/es4.kubeconfig es4 "$ES4_NS_UID"
+          KUBECONFIG=/Users/abhinav/.kube/es4.kubeconfig kubectl apply -f k8s/es4/security/jenkins-deployer-rbac.yaml
+          KUBECONFIG="$ES4_KUBECONFIG" kubectl -n options-edge auth can-i create pods/exec | grep -qx yes
           KUBECONFIG=/Users/abhinav/.kube/es4.kubeconfig kubectl apply -f k8s/es4/policy/workload-whitelist-admission.yaml
           cd .jenkins-tmp/rithmic-source
           "$WORKSPACE/.jenkins-tmp/rithmic-venv/bin/python" scripts/deploy-kubernetes.py --sha "$RITHMIC_PERMITTED_SHA" --sdk-zip "$RITHMIC_SDK_ZIP" --contracts-sha "$CONTRACTS_PERMITTED_SHA" --contracts-jar "$WORKSPACE/.jenkins-tmp/rithmic-contracts/target/options-edge-contracts-0.63.0.jar" --manifest "$WORKSPACE/k8s/es4/services/rithmic-depth-bridge.yaml"

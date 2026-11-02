@@ -47,6 +47,11 @@ run()  { if [ "$DRY" = "true" ]; then echo "DRY: $*"; else eval "$*"; fi; }
 
 # ------------------------------------------------------------ 0. PREFLIGHT (before any mutation)
 log "preflight (no mutation happens unless every check passes)"
+# New source producers cannot auto-register after the wipe: require the release input first.
+if [ "$DRY" != "true" ]; then
+  [ -s "$SCRIPT_DIR/../../schemas-registry/rithmic/RithmicDepthFrame.avsc" ] || die "Rithmic released schema missing before reset; run through es4-deploy with CONTRACTS_PERMITTED_SHA"
+fi
+
 # ⚠️ THIS is the cluster that actually gets wiped. The Jenkins stage verifies its ES4_KUBECONFIG,
 # but the destructive work runs HERE over SSH against the host's own k3s context — a different
 # credential entirely. Verifying the Jenkins-side kubeconfig therefore proves nothing about the
@@ -419,6 +424,8 @@ fi
 run "SCHEMA_REGISTRY_URL=http://localhost:8081 SCHEMAS_DIR='$SCRIPT_DIR/../../schemas-registry/indicators' DEPLOY_DRY_RUN=$DRY bash '$SCRIPT_DIR/../kafka/ensure-indicator-schemas.sh'"
 log "registering version 2 of the study subjects (ensure-fixed-id-schemas.sh, indicator-studies.map)"
 run "SCHEMA_REGISTRY_URL=http://localhost:8081 SCHEMAS_DIR='$SCRIPT_DIR/../../schemas-registry/indicators' SCHEMA_ID_MAP='$SCRIPT_DIR/../kafka/schema-id-maps/indicator-studies.map' DEPLOY_DRY_RUN=$DRY bash '$SCRIPT_DIR/../kafka/ensure-fixed-id-schemas.sh'"
+log "restoring Rithmic fixed-id schema before any producer or mirror restarts"
+run "SCHEMA_REGISTRY_URL=http://localhost:8081 SCHEMAS_DIR='$SCRIPT_DIR/../../schemas-registry/rithmic' SCHEMA_ID_MAP='$SCRIPT_DIR/../kafka/schema-id-maps/rithmic-depth.map' DEPLOY_DRY_RUN=$DRY bash '$SCRIPT_DIR/../kafka/ensure-fixed-id-schemas.sh'"
 log "reconciling required core es.* topic contracts (create-es-topics.sh)"
 # A clean-reset IS the "approved destructive cleanup deployment" that
   # KAFKA_RECREATE_MISMATCHED_TOPICS gates: the wipe just deleted every topic, so anything
