@@ -15,8 +15,7 @@ spec:
   # and scripts/ops/dev-cleanup.sh lists it in DISABLED_DEV, so dev's full start leaves it at 0. The Order tab
   # uses the broker on the owner's own machine.
   # The lists below are the PRODUCTION paths (morning-autostart.sh, oe-boot-bringup.sh) and production
-  # stays down. Note dev's post-clean OVERNIGHT_SET still excludes it, so after a clean it returns at
-  # the 06:15 full start rather than overnight.
+  # stays down.
   # replicas 0 — but the hold that MATTERS is the entry in the three ops lists, because a replica count
   # in a manifest is not a hold by itself. All three list this service, and each reaches it by its own
   # route — do not assume one shape covers all three:
