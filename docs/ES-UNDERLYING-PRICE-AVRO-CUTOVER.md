@@ -31,19 +31,26 @@ Workloads change only through Jenkins (admission policy), so readers cannot be s
    `SCHEMA_REGISTRY_URL=http://192.168.100.4:8081 SCHEMA_FILE=<contracts>/schemas/hpsf/EsUnderlyingPrice.avsc scripts/kafka/ensure-es-underlying-price-schema.sh`
    (sha256-pinned bytes, FULL by read-back, the canonical schema must be the latest version). After ANY es4 `clean-reset` (which wipes the
    registry) run it again BEFORE `activate-es-feed`, or the feed fails closed at start.
-3. **Roll the Avro writer.** `es-feed` deploys at replicas 0 by design: `es4-deploy ACTION=deploy-service SERVICE=es-feed`, then
-   `ACTION=activate-es-feed` (with its acknowledgements). Prove the OLD (JSON) pod is gone: exactly one `es-feed` pod, new image digest.
+3. **Take the JSON writer away without starting an Avro one.** `es-feed` deploys at replicas 0 by design, so
+   `es4-deploy ACTION=deploy-service SERVICE=es-feed` (the new, digest-pinned image) removes the JSON pod and starts nothing. Prove it:
+   zero `es-feed` pods. From here until step 5 NO process writes `es.underlying.es.price`, so Avro and retained JSON can never meet in
+   the topic: the order is writer absent -> wipe -> Avro writer, not Avro writer -> wipe.
 4. **Wipe and recreate** with the harness (same `<bootstrap>` for describe and recreate; freeze topic administration for the window):
    `kafka-topics --bootstrap-server 192.168.100.4:9092 --describe --topic es.underlying.es.price` -> note the TopicId, then
-   `scripts/kafka/roll-forward-topics.sh --recreate --cluster es4 --topics es.underlying.es.price --pre-cutover-id es.underlying.es.price=<TopicId> --registry http://192.168.100.4:8081 --subject es.underlying.es.price=com.optionsedge.contracts.hpsf.EsUnderlyingPrice --avro-writer-live --json-writers-stopped 192.168.100.4:9092 <kafka-bin-dir>`.
-   The compacted spot topic holds one record per key, each superseding the last, so a reader that resumes a few records late loses nothing.
-5. **Roll the readers** (`greek-move-authenticity`, `strike-intelligence`, `gamma-ladder-path`: `es4-deploy ACTION=deploy-service`). They
-   start on a topic that holds only Avro. A Streams global store checkpoint that names the old end offset is discarded by the reader or
+   `scripts/kafka/roll-forward-topics.sh --recreate --cluster es4 --topics es.underlying.es.price --pre-cutover-id es.underlying.es.price=<TopicId> --registry http://192.168.100.4:8081 --subject es.underlying.es.price=com.optionsedge.contracts.hpsf.EsUnderlyingPrice --avro-writer-live --json-writers-stopped 192.168.100.4:9092 <kafka-bin-dir>`
+   (`--json-writers-stopped` is the attestation that no JSON writer exists; the Avro writer is not up yet, so the post-check finds an empty topic and
+   passes). Strict mode (`--writers-and-readers-stopped`) is impossible: the readers cannot be stopped (Jenkins-only), and their committed
+   offsets survive the delete (the harness reports any beyond the new log end; a regular consumer resets on its first poll).
+5. **Start the Avro writer:** `es4-deploy ACTION=activate-es-feed` (`ES_FEED_LOCATION=es4`, with its acknowledgements). The topic holds
+   only Avro from its first record. Check the pod is the new image digest.
+6. **Roll the readers** (`greek-move-authenticity`, `strike-intelligence`, `gamma-ladder-path`: `es4-deploy ACTION=deploy-service`). They
+   start on a topic that holds only Avro (the old gamma-ladder-path image, which still parses JSON text, reads Avro bytes as junk until it rolls). A Streams global store checkpoint that names the old end offset is discarded by the reader or
    its emptyDir is lost with the pod (strike-intelligence's spot store is an emptyDir).
-6. **Verify the wire:** magic byte `0` and the registered id on the first and last record; `greek-move-authenticity` and
+7. **Verify the wire:** magic byte `0` and the registered id on the first and last record; `greek-move-authenticity` and
    `strike-intelligence` no longer log skipped/undecodable ES price records; restarts 0; the registry subject has exactly one version.
 
 ## Production (not done by this change)
+On 2026-11-02 production's workloads are all at 0 replicas (its Kafka broker is up, its schema registry is not), so no production JSON writer exists today.
 Production's `underlying.es.price` keeps JSON writers and readers until its own cutover, which needs, before the feed rolls: the subject
 registered on production's registry (`SCHEMA_REGISTRY_URL=http://192.168.100.252:8082`), `es-spx-align` (basis global store and the CVD
 levels aligner), the web `IndicatorVwapService` basis reader, `trade-evidence-api` and the NAS spot archive (`oe-archive-kafka.sh`
