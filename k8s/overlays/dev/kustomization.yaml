@@ -79,6 +79,9 @@ resources:
   # held down by name (DISABLED_DEV + both KEEP_DOWN lists). Referenced here only (NOT in k8s/base, NOT in the production/experiment overlays). No patches here or in the standalone
   # overlay (k8s/services/line-acceptance/overlays/dev) — mirror rule holds trivially; the dev image remap below is what the slice mirrors.
   - ../../services/line-acceptance/base
+  # es-amt: DEV-ONLY (services.yaml envs: [dev]), replicas 1: the dev-owned Avro WRITER of es.futures.auction (docs/ES-AMT-AVRO-CUTOVER.md). Referenced here only (NOT in k8s/base, production or experiment).
+  # No patches here or in the standalone overlay (k8s/services/es-amt/overlays/dev); the dev image remap below is what the slice mirrors.
+  - ../../services/es-amt/base
   # NOTE: the databento timewarp replay Job + snapshot-replay Deployment used to live
   # here. They moved to k8s/replay/dev and now deploy on-demand via the dedicated
   # `replay-deploy` job (Jenkinsfile.replay) — OUT of the dev/prod bring-up path. A Job's
@@ -958,6 +961,9 @@ images:
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-line-acceptance
     newName: host.docker.internal:5001/options-edge-line-acceptance
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-es-amt
+    newName: host.docker.internal:5001/options-edge-es-amt
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-oi-next-publication
     newName: host.docker.internal:5001/options-edge-oi-next-publication

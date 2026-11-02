@@ -84,6 +84,7 @@ OI_NEXT_PUBLICATION_POSTGRES_WRITER_IMAGE=$registry/options-edge-oi-next-publica
 VOL_STATE_IMAGE=$registry/options-edge-vol-state:$image_tag
 ZN_GEX_IMAGE=$registry/options-edge-zn-gex:$image_tag
 LINE_ACCEPTANCE_IMAGE=$registry/options-edge-line-acceptance:$image_tag
+ES_AMT_IMAGE=$registry/options-edge-es-amt:$image_tag
 EOF
             fi
             # short-premium-agent renders in dev+production (a standalone service that runs on prod too),
@@ -180,6 +181,7 @@ OI_NEXT_PUBLICATION_POSTGRES_WRITER_IMAGE=${OI_NEXT_PUBLICATION_POSTGRES_WRITER_
 VOL_STATE_IMAGE=${VOL_STATE_IMAGE:-$registry/options-edge-vol-state:dev}
 ZN_GEX_IMAGE=${ZN_GEX_IMAGE:-$registry/options-edge-zn-gex:dev}
 LINE_ACCEPTANCE_IMAGE=${LINE_ACCEPTANCE_IMAGE:-$registry/options-edge-line-acceptance:dev}
+ES_AMT_IMAGE=${ES_AMT_IMAGE:-$registry/options-edge-es-amt:dev}
 EOF
             fi
             # short-premium-agent renders in dev+production; on the promoted/branch-2 path (prod) its
