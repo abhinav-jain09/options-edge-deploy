@@ -1,0 +1,17 @@
+# PROD: broker-execution-service is REMOVED from production (owner 2026-11-02: "we don't need broker on prod").
+# The shared k8s/base still carries it because DEV renders it (held at 0 there); this overlay deletes it from the
+# production render so nothing recreates it. The live Deployment/Service were deleted by hand -- kubectl apply
+# does not prune. options-edge-web's CONTEXT_TAPE_EXECUTION_URL still names it and now has no upstream.
+$patch: delete
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: broker-execution-service
+  namespace: options-edge
+---
+$patch: delete
+apiVersion: v1
+kind: Service
+metadata:
+  name: broker-execution-service
+  namespace: options-edge

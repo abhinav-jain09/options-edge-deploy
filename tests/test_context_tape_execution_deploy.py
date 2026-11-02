@@ -79,8 +79,14 @@ else: sys.exit('unexpected mutation')
     def test_rendered_web_and_broker_share_issuer_credential_and_private_port(self):
         for environment in ['dev','production']:
             render = subprocess.check_output(['kubectl','kustomize',str(ROOT/'k8s/overlays'/environment)],text=True)
+            def render_has(text,name):
+                return '' if 'name: '+name+'\n' not in text else 'present'
             def select(expression):
                 return json.loads(subprocess.check_output(['yq','-o=json',expression],input=render,text=True))
+            if environment=='production':
+                # Owner 2026-11-02: no broker on production. The web still names the URL (not changed here).
+                self.assertEqual('',render_has(render,'broker-execution-service'))
+                continue
             broker=select('select(.kind == "Deployment" and .metadata.name == "broker-execution-service") | .spec.template.spec.containers[0]')
             web=select('select(.kind == "Deployment" and .metadata.name == "options-edge-web") | .spec.template.spec.containers[0]')
             broker_env={x['name']:x for x in broker['env']}
