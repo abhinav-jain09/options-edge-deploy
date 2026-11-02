@@ -1,0 +1,8 @@
+# SERVICE SLICE — es-amt (the SPX Auction Desk) on DEV. Owns ONLY this service's Deployment.
+#
+# DEV-ONLY: referenced from k8s/overlays/dev (NOT k8s/base, NOT production or experiment); services.yaml declares envs: [dev]. es4 runs its own copy from
+# k8s/es4/services/es-amt.yaml and production receives the topic by mirror. No Service object: kubelet probes reach the pod directly.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - es-amt-deployment.yaml

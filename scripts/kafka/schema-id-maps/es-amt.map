@@ -1,0 +1,5 @@
+# Fixed schema id for es.futures.auction (the SPX Auction Desk minute record, JSON -> Avro, 2026-11-02). Contracts (options-edge-contracts, EsAuctionAvro):
+# id 3201, version 1, subject = the record full name (RecordNameStrategy), compatibility FULL. The id is identical on EVERY registry (es4, dev, production), which is
+# what will let es4's byte mirror carry the frames unchanged when es4 and production are cut over. Ids 3201+ are the "auction desk" block; no other map uses them.
+# File column: relative to the contracts checkout's `schemas-registry/esamt` directory (SCHEMAS_DIR).
+com.optionsedge.contracts.esamt.EsAuctionMinute|3201|EsAuctionMinute.avsc

@@ -92,6 +92,9 @@ pipeline {
       // line-acceptance (VWAP-ACCEPTANCE-REJECTION P0): DEV ONLY (services.yaml envs: [dev]) and DARK: replicas 0, LINE_ACCEPTANCE_ENABLED "false", held down by name. There is no production overlay for it, so
       // ENVIRONMENT=production fails at the overlay lookup; nothing in this file authorises a production roll. Six single-partition topics (barrier below) and Avro ids 3101-3111 (REGISTER_TA_SCHEMAS).
       'line-acceptance',
+      // es-amt (the SPX Auction Desk engine): DEV ONLY (services.yaml envs: [dev]), replicas 1: the dev-owned Avro WRITER of es.futures.auction (contracts id 3201; docs/ES-AMT-AVRO-CUTOVER.md). es4 and production are not rendered
+      // from this repo's overlays and stay on the JSON writer/mirror until their own cutover; ENVIRONMENT=production fails at the overlay lookup. Single replica only.
+      'es-amt',
       // stock-gex-close-scheduler: PRODUCTION only — the closing-board SCHEDULE, which now lives
       // inside the batch itself (USER 2026-09-01: "I don't want anything Jenkins-based, it should
       // run based on Spring Batch configuration"). This job DEPLOYS it; nothing here decides when

@@ -253,6 +253,9 @@ services:
   # topics options.spx.line-acceptance{,.monitor,.status,.checkpoint,.journal,.dlq} (Avro, ids 3101-3111, scripts/kafka/schema-id-maps/line-acceptance.map; barrier
   # scripts/kafka/ensure-line-acceptance-topics.sh). Single replica only (transactional.id line-acceptance-<ENVIRONMENT>). No Service object. docs/line-acceptance/LINE-ACCEPTANCE-DEPLOY.md.
   - { name: line-acceptance,              managedBy: standalone, sliceGenerated: true, envs: [dev], image: options-edge-line-acceptance,              deployments: [line-acceptance-service] }
+  # es-amt: DEV ONLY. The SPX Auction Desk engine; on dev it is the WRITER of es.futures.auction (Avro, contracts id 3201, docs/ES-AMT-AVRO-CUTOVER.md). es4 runs its own copy from k8s/es4/services/es-amt.yaml
+  # (JSON until its own cutover) and production receives the topic by byte mirror, so neither is listed. Single replica only (transactional.id es-amt-service-auction). No Service object.
+  - { name: es-amt,                       managedBy: standalone, sliceGenerated: true, envs: [dev], image: options-edge-es-amt,                       deployments: [es-amt-service] }
   # stock-gex: SPX-500 single-stock GEX (Databento equity options; NO Kafka). Its image builds in the
   # options-edge-databento-feed repo (Dockerfile.stockgex), like databento-sr3-feed — hence buildJob.
   # DEV-FIRST/on-demand: prod overlay holds it at replicas:0 until the nightly OI-index builder exists.

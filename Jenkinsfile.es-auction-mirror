@@ -201,6 +201,16 @@ pipeline {
             [ "$pv" -ge 1 ] && [ "$pv" -le 65535 ] || { echo "FAIL: $portvar='$pv' out of range"; exit 1; }
           done
 
+          # DEV OWNS ITS WRITER (JSON -> Avro cutover, docs/ES-AMT-AVRO-CUTOVER.md). Since that cutover dev's es.futures.auction is written by dev's own es-amt-service in
+          # Confluent Avro (contracts id 3201). This job is a VERBATIM byte copy of es4's topic, which is still JSON, so installing it against any dev broker would put JSON
+          # records into an Avro topic that every dev reader refuses. An install therefore runs ONLY es4 -> production (the one mirror this job still owns, source AND target pinned: a dev-sourced Avro copy into production's JSON topic is as wrong); every other
+          # target, whatever its spelling (127.0.0.1:19092, the Mac's LAN address 192.168.100.102:19092, ...), is refused before anything is generated or installed.
+          # teardown and status stay available for every target.
+          if [ "$TARGET_SPX_CLUSTER_IP:$TARGET_PORT" != "192.168.100.252:9092" ] || [ "$SOURCE_ES_CLUSTER_IP:$SOURCE_PORT" != "192.168.100.4:9092" ]; then
+            echo "FAIL: DEV OWNS ITS WRITER: es.futures.auction on dev is Avro (id 3201) written by dev's es-amt-service; a byte mirror of es4's JSON into it is refused. An install is allowed only es4 (192.168.100.4:9092) -> production (192.168.100.252:9092); got $SOURCE_ES_CLUSTER_IP:$SOURCE_PORT -> $TARGET_SPX_CLUSTER_IP:$TARGET_PORT. Use ACTION=teardown or status."
+            exit 1
+          fi
+
           # SAFETY: source and target must be different clusters. Spelling is checked first (cheap),
           # then CLUSTER IDENTITY -- two different listeners of the SAME Kafka cluster spell
           # differently but would make this job mirror a topic onto itself.
