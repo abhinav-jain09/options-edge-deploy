@@ -8,6 +8,8 @@ metadata:
     app.kubernetes.io/component: es-amt-service
     app.kubernetes.io/part-of: options-edge
 spec:
+  # Applied before the cutover (a full dev deploy, a dev-cleanup start) it writes NOTHING: at start it refuses unless id 3201 and the EsAuctionMinute subject are on the registry and unless every retained record of es.futures.auction is
+  # Confluent Avro under 3201 (ES_AMT_SCHEMA_ID_ABSENT / ES_AMT_PUBLISHED_SCAN_LEGACY_VALUE), so against the still-JSON topic it crash-loops harmlessly (docs/ES-AMT-AVRO-CUTOVER.md).
   # SINGLE replica ONLY (strategy Recreate): the producer's transactional.id is es-amt-service-auction, a second pod fences the first, and two writers of one
   # per-minute ledger is not an outcome anything downstream can use. `kubectl scale` above 1 has no valid result.
   replicas: 1

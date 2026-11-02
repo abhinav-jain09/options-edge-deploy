@@ -25,8 +25,15 @@ untouched). Their cutover is the owner's call; the wipe script refuses `es4` and
 * **Readers (all Avro-only after this change, no JSON fallback):** feed-gateway-service (event `es-auction`), amt-order-bridge, early-auction-verdict-service,
   es-compression-expansion-service, level-absorption-service, market-commentary-service. `trade-evidence-api` (held at 0 on dev) and the offline tools (eav-backtest, market-commentary proof
   scripts) are NOT part of the dev roll.
-* **Mirror:** the dev mirror is removed and `Jenkinsfile.es-auction-mirror` now refuses `ACTION=install` for the dev target (a byte copy of es4's JSON would put JSON into the Avro topic).
-  The production target is unchanged.
+* **Mirror:** the dev mirror is removed and `Jenkinsfile.es-auction-mirror` now allows `ACTION=install` only for the production target 192.168.100.252:9092 (a byte copy of es4's JSON would put JSON
+  into the Avro topic, whichever way the dev broker is spelled). `teardown` and `status` work for every target. The production mirror is unchanged.
+
+## Why merging/applying this early cannot start a mixed-wire topic (fail-closed in the service, not a hold flag)
+
+`es-amt-service` is `replicas: 1` in the dev overlay, so a full dev deploy or a `dev-cleanup start` that happens BEFORE the cutover would start it. That is harmless by construction: at start it
+(1) refuses unless id 3201 and the `EsAuctionMinute` subject on the registry carry the packaged schema (`ES_AMT_SCHEMA_ID_ABSENT` / `_MISMATCH`), and (2) scans the retained keys of `es.futures.auction`
+and refuses with `ES_AMT_PUBLISHED_SCAN_LEGACY_VALUE` if ANY retained record is not Confluent Avro under 3201. Both checks run before the topic is touched, the producer is fenced or anything is written. So before the
+wipe it crash-loops with those messages and writes nothing; after the wipe (topic empty or Avro only) it starts. Do not read a crash-looping `es-amt-service` before step 5 as a defect.
 
 ## What the dev record lacks, and why it is acceptable
 
@@ -49,17 +56,21 @@ Prerequisites (done earlier, no dev effect): contracts with `EsAuctionAvro` merg
 2. Record the pre-cutover TopicId: `kafka-topics --bootstrap-server 127.0.0.1:19092 --describe --topic es.futures.auction` (2026-11-02: `iPGdV7d8RsGZ6Tv2lYnIjA`).
 3. Tear down the dev mirror, the only JSON writer: Jenkins `es-auction-mirror` with `TARGET_SPX_CLUSTER_IP=127.0.0.1 TARGET_PORT=19092 ACTION=teardown PERMITTED_SHA=<main>`. Prove it: `launchctl list | grep es-auction-mirror-127-0-0-1` prints nothing,
    the plist is gone, and `kafka-consumer-groups --describe --group es-auction-mirror-127-0-0-1-19092-es-futures-auction` (on the es4 broker 192.168.100.4:9092) shows no member. Leave the `192-168-100-252-9092` (production) mirror alone.
-4. Stop every reader (strict mode; dev has topic auto-creation on): scale to 0 `feed-gateway-service amt-order-bridge early-auction-verdict-service es-compression-expansion-service level-absorption-service market-commentary-service`.
-   (`es-amt-service` does not exist on dev yet.) This is a stop, not a bring-up: they come back through `service-deploy` below, not through a scale loop.
+4. Stop every reader (strict mode; dev has topic auto-creation on). FIRST record each one's live replica count (`kubectl get deploy -o custom-columns=NAME:.metadata.name,R:.spec.replicas`; all six were 1/1 on 2026-11-02),
+   then `kubectl scale --replicas=0` exactly these six by name: `feed-gateway-service amt-order-bridge early-auction-verdict-service es-compression-expansion-service level-absorption-service market-commentary-service`.
+   If `es-amt-service` already exists on dev (a pre-cutover deploy), scale it to 0 too. This is a stop, not a bring-up; no scale loop.
 5. Wipe: `PATH=/Users/abhinav/development/confluent-7.3.1/bin:$PATH scripts/kafka/roll-forward-es-amt-auction.sh --recreate --cluster dev --pre-cutover-id <TopicId> --writers-and-readers-stopped 127.0.0.1:19092`.
    If it fails on committed offsets, delete those groups (`kafka-consumer-groups --delete-offsets --group <g> --topic es.futures.auction`, or `--delete --group <g>` for a stopped group) and run `--verify --new-topic-id <printed id>`.
-6. Roll the readers on their new Avro images, one `service-deploy` each (`ENVIRONMENT=dev BUILD_IMAGES=true`): feed-gateway, amt-order-bridge, early-auction-verdict (before 18:00 ET), es-compression-expansion, level-absorption, market-commentary. They start on an EMPTY topic, so no retained JSON can reach them.
+6. Roll the readers on their new Avro images, one `service-deploy` each (`ENVIRONMENT=dev BUILD_IMAGES=true`): feed-gateway, amt-order-bridge, es-compression-expansion, level-absorption, market-commentary. They start on an EMPTY topic, so no retained JSON can reach them.
+   Each comes up at the replica count its manifest declares; compare with the counts recorded in step 4 and restore any that differ. **early-auction-verdict-service is the exception: its manifest is declaratively `replicas: 0`
+   (owner-gated shadow) while the live dev deployment is 1 (hand-set), so `service-deploy` would leave it at 0.** Roll it by image only, before 18:00 ET: build/push its image with Jib, `kubectl set image` to the new digest on the stopped deployment, then
+   `kubectl scale --replicas=<recorded count>` for that one name, and check the pod reaches READY with its lock ConfigMap intact. Never in 18:01-09:30 ET.
 7. Roll the writer: `service-deploy SERVICE=es-amt ENVIRONMENT=dev BUILD_IMAGES=true`. Its start-up check requires id 3201 (step 1), then it replays the 34 h tape window and publishes every Globex minute of trade date Tue.
 8. Verify the wire at both ends of partition 0: `kcat -b 127.0.0.1:19092 -C -t es.futures.auction -p 0 -o beginning -c1 -e -f '%S\n' | xxd | head -1` and the same with `-o -1` both start `00 00 00 0c 81`; decode one record with `kcat -s value=avro`
    or the registry (`curl http://192.168.100.102:8082/schemas/ids/3201`); the gateway `es-auction` frame on https://dev.bleadingoptions.com still carries `levels`, `profile`, `humps`, `call`; `es_amt_avro_refused` stays 0 on the writer's `/metrics`.
 9. Re-run step 2's describe: the TopicId differs from the pre-cutover one, 1 partition, `cleanup.policy=delete`, `retention.ms=604800000`.
 
-`dev-cleanup.sh` needs nothing: it recreates the topic from `topics.env` at the same shape (plain delete, 7 days, EXACT 1 partition), `es-amt-service` is not in `DISABLED_DEV`/`KEEP_DOWN` (it must run), and the torn-down mirror has no plist
+After the cutover `dev-cleanup.sh` needs nothing: it recreates the topic from `topics.env` at the same shape (plain delete, 7 days, EXACT 1 partition), `es-amt-service` is not in `DISABLED_DEV`/`KEEP_DOWN` (it must run), and the torn-down mirror has no plist
 left for the mirror resume list.
 
 ## Not done here (owner's decision)

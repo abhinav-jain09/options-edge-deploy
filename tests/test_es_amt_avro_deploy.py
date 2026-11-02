@@ -149,9 +149,11 @@ class MirrorJobRefusesTheDevTarget(unittest.TestCase):
 
     JOB = (ROOT / "Jenkinsfile.es-auction-mirror").read_text()
 
-    def test_install_refuses_the_dev_target(self):
+    def test_install_is_allowed_only_for_the_production_target(self):
         self.assertIn("DEV OWNS ITS WRITER", self.JOB)
-        self.assertIn('"$TARGET_SPX_CLUSTER_IP:$TARGET_PORT" = "127.0.0.1:19092"', self.JOB)
+        self.assertIn('"$TARGET_SPX_CLUSTER_IP:$TARGET_PORT" != "192.168.100.252:9092"', self.JOB)
+        # no spelling of a dev broker can be positively allowed
+        self.assertNotIn('= "127.0.0.1:19092" ]', self.JOB.split("DEV OWNS ITS WRITER")[1].split("fi\n")[0])
 
     def test_teardown_and_status_are_not_gated(self):
         pre = self.JOB.index("stage('Preflight (fail-closed)')")
