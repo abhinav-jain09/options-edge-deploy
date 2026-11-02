@@ -32,3 +32,8 @@ class RithmicEs4Service(unittest.TestCase):
         self.assertLess(stage.index('auth can-i create pods/exec'),stage.index('python" scripts/deploy-kubernetes.py'))
         role=list(yaml.safe_load_all((ROOT/'k8s/es4/security/jenkins-deployer-rbac.yaml').read_text()))
         self.assertTrue(any('pods/exec' in rule.get('resources',[]) and 'create' in rule['verbs'] for d in role for rule in d.get('rules',[])))
+
+    def test_dev_clean_keeps_the_externally_mirrored_raw_topic(self):
+        import subprocess
+        value=subprocess.check_output(['bash','-c','source scripts/kafka/topics.env; printf "%s" "$OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS"'],cwd=ROOT,text=True)
+        self.assertIn('es.rithmic.depth',value.split())
