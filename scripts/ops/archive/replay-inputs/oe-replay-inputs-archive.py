@@ -692,15 +692,15 @@ def broker_compare(args, ents: list[dict], root: Path, day: str) -> int:
         es.sort(key=lambda e: e["offset_first"])
         lo, hi = cons.get_watermark_offsets(TopicPartition(t, p), timeout=10)
         first, last = es[0]["offset_first"], es[-1]["offset_last"]
-        if first < lo or last >= hi:
-            print(f"    {t} p{p}: range [{first},{last}] no longer fully on the broker (log [{lo},{hi})) - skipped")
+        if last < lo or first >= hi:
+            print(f"    {t} p{p}: range [{first},{last}] entirely gone from the broker (log [{lo},{hi})) - nothing to compare")
             continue
         arch: dict[int, bytes] = {}             # exact offsets: another ET day's records may sit between them
         for e in es:
             for r in iter_records(ddir / e["path"]):
                 arch[r["o"]] = base64.b64decode(r["v"]) if r["v"] else b""
         seen: dict[int, bytes] = {}
-        cons.assign([TopicPartition(t, p, first)])
+        cons.assign([TopicPartition(t, p, max(first, lo))])
         done = False
         while not done:
             for m in cons.consume(num_messages=1000, timeout=1.0):
