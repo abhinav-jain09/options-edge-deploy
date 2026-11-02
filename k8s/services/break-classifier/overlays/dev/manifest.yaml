@@ -40,6 +40,8 @@ spec:
         - env:
             - name: BREAK_CLASSIFIER_ENABLED
               value: "true"
+            - name: BREAK_EQUAL_LEVELS_PUBLISH
+              value: "true"
             - name: ENVIRONMENT
               value: dev
             - name: BREAK_SPX_BARS_PARTITIONS

@@ -40,6 +40,10 @@ spec:
           env:
             - name: BREAK_CLASSIFIER_ENABLED
               value: "true"
+            # Equal-level publisher (T-5, contracts 0.44.0 id 2607): ON for dev so options.spx.market-structure.equal-levels carries the standing EQUAL_LEVEL sets (it was empty
+            # because this flag defaulted to false). The service then also requires the topic (delete, retention.ms >= 172800000) and subject 2607 at boot (FAILED_CONTRACT otherwise).
+            - name: BREAK_EQUAL_LEVELS_PUBLISH
+              value: "true"
             # options-edge-config carries no ENVIRONMENT, and the service's default is "dev"; its transactional.id and consumer group are break-classifier-<ENVIRONMENT>.
             - name: ENVIRONMENT
               value: dev
