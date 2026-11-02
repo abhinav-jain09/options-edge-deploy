@@ -16,7 +16,7 @@ images:
   oi-shadow-service: host.docker.internal:5001/options-edge-oi-shadow:dev
   oi-next-publication-service: host.docker.internal:5001/options-edge-oi-next-publication:dev
   oi-next-publication-postgres-writer: host.docker.internal:5001/options-edge-oi-next-publication-postgres-writer:dev
-  # DEV-ONLY and DARK (VWAP-ACCEPTANCE-REJECTION P0): no production mapping exists, by design.
+  # DEV-ONLY, LIVE and UNVALIDATED (VWAP-ACCEPTANCE-REJECTION): no production mapping exists, by design.
   line-acceptance-service: host.docker.internal:5001/options-edge-line-acceptance:dev
   # DEV-ONLY: the dev-owned Avro writer of es.futures.auction; es4 and production images are a different (JSON) pin.
   es-amt-service: host.docker.internal:5001/options-edge-es-amt:dev

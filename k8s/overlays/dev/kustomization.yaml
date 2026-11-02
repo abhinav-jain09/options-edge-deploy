@@ -75,8 +75,8 @@ resources:
   # standalone overlay (k8s/services/zn-gex/overlays/dev) — mirror rule holds trivially;
   # the dev image remap below (mirrored in that slice) is what the mirror rule compares.
   - ../../services/zn-gex/base
-  # line-acceptance is DEV-ONLY and DARK (VWAP-ACCEPTANCE-REJECTION P0; services.yaml envs: [dev]): replicas 0 / LINE_ACCEPTANCE_ENABLED "false" in the base, NO enable patch, and
-  # held down by name (DISABLED_DEV + both KEEP_DOWN lists). Referenced here only (NOT in k8s/base, NOT in the production/experiment overlays). No patches here or in the standalone
+  # line-acceptance is DEV-ONLY and LIVE (UNVALIDATED, owner 2026-11-02; services.yaml envs: [dev]): replicas 1 / LINE_ACCEPTANCE_ENABLED "true" and its gates are set in the BASE (the one environment that renders it), so there is
+  # no enable patch. NOT held down (not in DISABLED_DEV or either KEEP_DOWN). Referenced here only (NOT in k8s/base, NOT in the production/experiment overlays). No patches here or in the standalone
   # overlay (k8s/services/line-acceptance/overlays/dev) — mirror rule holds trivially; the dev image remap below is what the slice mirrors.
   - ../../services/line-acceptance/base
   # es-amt: DEV-ONLY (services.yaml envs: [dev]), replicas 1: the dev-owned Avro WRITER of es.futures.auction (docs/ES-AMT-AVRO-CUTOVER.md). Referenced here only (NOT in k8s/base, production or experiment).
