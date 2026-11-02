@@ -21,15 +21,28 @@ def command(*args,timeout=30):
     return subprocess.check_output(list(args),text=True,stderr=subprocess.PIPE,timeout=timeout)
 
 def bounded_step(args,root,name,timeout,env=None):
-    log=root/(name+'.log')
-    def limit():resource.setrlimit(resource.RLIMIT_FSIZE,(8<<20,8<<20))
+    """Run one build step with a finite deadline and an 8 MiB log. The log is bounded by this reader, not by RLIMIT_FSIZE: that limit is inherited
+    by the child and made pip fail with EFBIG while writing a >8 MiB wheel."""
+    import threading
+    log=root/(name+'.log');limit=8<<20;state={'over':False}
     with log.open('xb') as output:
-        result=subprocess.run(args,stdout=output,stderr=subprocess.STDOUT,timeout=timeout,preexec_fn=limit,env=env)
-    if log.stat().st_size>=8<<20:raise ValueError('Bounded build step log budget exceeded')
+        process=subprocess.Popen(args,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,env=env)
+        def pump():
+            written=0
+            for chunk in iter(lambda:process.stdout.read(65536),b''):
+                output.write(chunk[:limit-written]);written+=len(chunk)
+                if written>=limit:
+                    state['over']=True;process.kill();break
+        reader=threading.Thread(target=pump,daemon=True);reader.start()
+        try:returncode=process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            process.kill();process.wait();reader.join(10);raise
+        reader.join(30)
+    if state['over'] or log.stat().st_size>=limit:raise ValueError('Bounded build step log budget exceeded')
     with log.open('rb') as output:
         output.seek(max(0,log.stat().st_size-4096));tail=output.read(4096).decode(errors='replace')
     print(tail)
-    if result.returncode:raise ValueError('Bounded build step '+name+' failed with status '+str(result.returncode))
+    if returncode:raise ValueError('Bounded build step '+name+' failed with status '+str(returncode))
 
 
 def current():

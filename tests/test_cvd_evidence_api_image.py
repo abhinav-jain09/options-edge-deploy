@@ -117,6 +117,11 @@ class ApiImageTest(unittest.TestCase):
         with patch('sys.stdout',new=io.StringIO()),self.assertRaisesRegex(ValueError,'log budget exceeded'):
             m.bounded_step([sys.executable,'-c','import os; os.write(1,b"x"*(9<<20))'],self.root,'excess',10)
         self.assertLessEqual((self.root/'excess.log').stat().st_size,8<<20)
+    def test_a_child_may_write_a_large_file_while_its_log_stays_bounded(self):
+        import sys
+        target=self.root/'wheel.bin'
+        with patch('sys.stdout',new=io.StringIO()):m.bounded_step([sys.executable,'-c','open(%r,"wb").write(b"x"*(12<<20)); print("done")'%str(target)],self.root,'large',20)
+        self.assertEqual(12<<20,target.stat().st_size)
     def test_staging_is_fresh_bounded_and_never_cleans_an_old_build(self):
         root=m.staging('17');(root/'owned-proof').write_text('preserved')
         with self.assertRaises(FileExistsError):m.staging('17')
