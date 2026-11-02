@@ -121,6 +121,14 @@ class ApiImageTest(unittest.TestCase):
         root=m.staging('17');(root/'owned-proof').write_text('preserved')
         with self.assertRaises(FileExistsError):m.staging('17')
         self.assertEqual('preserved',(root/'owned-proof').read_text())
+    def test_only_the_local_jenkins_build_macs_are_accepted(self):
+        for address,allowed in (('192.168.100.102',True),('192.168.100.201',True),('192.168.100.77',False),('192.168.100.2010',False)):
+            with self.subTest(address=address),patch.dict(os.environ,{**self.env,'ACTION':'build'},clear=True),patch.object(m.sys,'platform','darwin'),patch.object(m,'command',return_value='inet '+address+' netmask'),patch.object(m,'load') as load:
+                if allowed:
+                    load.return_value=SimpleNamespace(TARGETS={}) ;
+                    with patch.object(m,'build_image') as build:m.main();build.assert_called_once()
+                else:
+                    with self.assertRaisesRegex(ValueError,'Primary build Mac'):m.main()
     def test_the_image_path_never_invokes_docker(self):
         import re
         self.assertIsNone(re.search(r"'docker'|buildx|docker\s+(build|run|save|image)",(ROOT/'scripts/deploy/cvd-evidence-api-image.py').read_text()))

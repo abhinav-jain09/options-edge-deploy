@@ -166,7 +166,7 @@ def roll_image(environment,reader):
 
 def main():
     if not os.environ.get('JENKINS_URL') or os.environ.get('PERMITTED_SHA_GUARD')!='PASSED':raise ValueError('Guarded Jenkins required')
-    if sys.platform!='darwin' or not re.search(r'\binet 192\.168\.100\.102\b',command('/sbin/ifconfig','-a')):raise ValueError('Primary build Mac only')
+    if sys.platform!='darwin' or not re.search(r'\binet 192\.168\.100\.(102|201)\b',command('/sbin/ifconfig','-a')):raise ValueError('Primary build Mac only (the Mac running the local Jenkins agent: .102 or .201)')
     if not re.fullmatch('[0-9a-f]{40}',os.environ.get('PERMITTED_SHA','')):raise ValueError('Exact deploy main required')
     environment=os.environ['ENVIRONMENT'];build=os.environ['BUILD_NUMBER'];action=os.environ['ACTION']
     if environment not in ['dev','production'] or not re.fullmatch('[1-9][0-9]{0,9}',build) or action not in ['build','roll-forward']:raise ValueError('Derived build/environment/action required')
