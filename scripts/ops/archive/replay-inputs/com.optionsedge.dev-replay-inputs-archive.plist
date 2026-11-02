@@ -13,14 +13,21 @@
 <plist version="1.0">
 <dict>
   <key>Label</key><string>com.optionsedge.dev-replay-inputs-archive</string>
+  <!--
+    Same launch shape as the dev-nas-archive agents: /opt/homebrew/bin/bash is the process macOS lets write
+    to the NAS volume. Launching the venv python directly fails with "Operation not permitted" on the
+    NAS (seen 2026-11-02). The homebrew python3 is the venv's base interpreter, so PYTHONPATH points at the
+    venv site-packages for confluent_kafka and fastavro.
+  -->
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/abhinav/oe-ops/venv/bin/python</string>
-    <string>/Users/abhinav/Library/Application Support/OptionsEdge/dev-replay-inputs/oe-replay-inputs-archive.py</string>
-    <string>capture</string>
-    <string>--root</string><string>/Volumes/database/optionsedge/replay-inputs/dev</string>
-    <string>--topics</string><string>/Users/abhinav/Library/Application Support/OptionsEdge/dev-replay-inputs/replay-inputs-topics.conf</string>
-    <string>--nas-guard</string>
+    <string>/opt/homebrew/bin/bash</string>
+    <string>-c</string>
+    <string>D="$HOME/Library/Application Support/OptionsEdge/dev-replay-inputs"
+trap 'kill -TERM "$w" 2&gt;/dev/null; wait "$w"; exit 143' TERM INT
+PYTHONPATH="$HOME/oe-ops/venv/lib/python3.14/site-packages" /opt/homebrew/bin/python3 "$D/oe-replay-inputs-archive.py" capture --root /Volumes/database/optionsedge/replay-inputs/dev --topics "$D/replay-inputs-topics.conf" --nas-guard &amp;
+w=$!
+wait "$w"</string>
   </array>
   <key>StartInterval</key><integer>300</integer>
   <key>RunAtLoad</key><true/>

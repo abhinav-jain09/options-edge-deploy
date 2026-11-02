@@ -24,7 +24,7 @@ run install -m 0644 "$SRC/oe-replay-inputs-archive.py" "$SRC/replay-inputs-topic
 run install -m 0644 "$SRC/$LABEL.plist" "$AGENTS/$LABEL.plist"
 if ! $DRY; then
   # Prove it starts BEFORE the agent is trusted: one real capture, then a verify of today's ET date.
-  "$PY" "$DEST/oe-replay-inputs-archive.py" capture --root /Volumes/database/optionsedge/replay-inputs/dev \
+  PYTHONPATH="$HOME/oe-ops/venv/lib/python3.14/site-packages" /opt/homebrew/bin/python3 "$DEST/oe-replay-inputs-archive.py" capture --root /Volumes/database/optionsedge/replay-inputs/dev \
         --topics "$DEST/replay-inputs-topics.conf" --nas-guard --verbose
   launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
   launchctl bootstrap "gui/$(id -u)" "$AGENTS/$LABEL.plist"
