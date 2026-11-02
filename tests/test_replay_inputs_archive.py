@@ -263,6 +263,17 @@ class Verify(unittest.TestCase):
         self.assertEqual(rc, 2)
         self.assertIn("torn line", out)
 
+    def test_check_refuses_a_torn_or_empty_manifest(self):
+        ddir, _ = write_day(self.root)
+        with (ddir / "_manifest.jsonl").open("a") as f:
+            f.write('{"path":"t.top')
+        with self.assertRaises(SystemExit):
+            ria.day_entries(self.root, "2026-11-02")
+        (ddir / "_manifest.jsonl").write_text("")
+        if fastavro:
+            rc, out = run(ria.check, root=str(self.root), dt="2026-11-02", broker=False, bootstrap="x")
+            self.assertEqual(rc, 2)
+
     def test_stale_manifest_file_is_caught(self):
         ddir, _ = write_day(self.root)
         (ddir / "MANIFEST.sha256").write_text("")

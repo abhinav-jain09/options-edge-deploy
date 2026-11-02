@@ -525,7 +525,10 @@ def iter_records(path: Path):
 
 
 def day_entries(root: Path, day: str) -> list[dict]:
-    return read_jsonl(root / f"dt={day}" / "_manifest.jsonl")[0]
+    ents, torn = read_jsonl(root / f"dt={day}" / "_manifest.jsonl")
+    if torn:
+        raise SystemExit(f"FATAL: dt={day}/_manifest.jsonl ends in a torn line; run capture to recover, then retry")
+    return ents
 
 
 def verify(args) -> int:
@@ -638,6 +641,9 @@ def check(args) -> int:
     ents = day_entries(root, day)
     stats: dict[str, dict] = {}
     rc = 0
+    if not ents:
+        print(f"check {day}: NO manifest entries under {ddir}")
+        return 2
     for e in ents:
         s = stats.setdefault(e["topic"], {"records": 0, "decoded": 0, "failed": 0, "avro": 0, "json": 0, "null": 0,
                                           "sids": set(), "first_err": None})
