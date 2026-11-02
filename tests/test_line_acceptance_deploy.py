@@ -313,6 +313,48 @@ class SchemaMap(unittest.TestCase):
                          [(f"com.optionsedge.contracts.lineacc.{n}", i, f"{n}.avsc") for n, i in IDS.items()])
 
 
+def sourced(environment: str | None) -> dict[str, list[str]]:
+    """Every OPTIONS_EDGE_* variable of a real `source topics.env` (bash) that mentions a line-acceptance topic, as its line-acceptance tokens."""
+    env = {k: v for k, v in os.environ.items() if k != "ENVIRONMENT"}
+    if environment is not None:
+        env["ENVIRONMENT"] = environment
+    script = (f'source "{ROOT}/scripts/kafka/topics.env"; for v in $(compgen -v OPTIONS_EDGE_); do '
+              'case "${!v}" in *line-acceptance*) echo "$v=$(printf "%s\\n" ${!v} | grep line-acceptance | tr "\\n" " ")";; esac; done')
+    out = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=True, env=env).stdout
+    return {l.split("=", 1)[0]: l.split("=", 1)[1].split() for l in out.splitlines()}
+
+
+class ProductionDeclaresNoTopic(unittest.TestCase):
+    def test_an_explicit_production_source_declares_nothing_about_the_six_topics_anywhere(self):
+        self.assertEqual(sourced("production"), {})
+
+    def test_dev_and_unset_declare_all_six_with_the_same_shapes(self):
+        for environment in ("dev", None):
+            got = sourced(environment)
+            self.assertEqual(sorted(got["OPTIONS_EDGE_TOPICS"]), sorted(f"{t}:1" for t in TOPICS), environment)
+            self.assertEqual(sorted(got["OPTIONS_EDGE_EXACT_PARTITION_TOPICS"]), sorted(TOPICS), environment)
+            self.assertEqual(sorted(got["OPTIONS_EDGE_PURE_COMPACT_TOPICS"]), sorted([MON, CP]), environment)
+            ret = dict(x.split("=") for x in got["OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES"])
+            self.assertEqual(ret, {t: SHAPES[t][1] for t in TOPICS}, environment)
+            self.assertEqual(got["OPTIONS_EDGE_TOPIC_RETENTION_BYTES_OVERRIDES"], [f"{STATUS}=-1"], environment)
+            self.assertEqual(sorted(got["OPTIONS_EDGE_TOPIC_MAX_MESSAGE_BYTES_OVERRIDES"]), sorted([f"{CP}=9437184", f"{JOURNAL}=9437184"]), environment)
+            self.assertEqual(got["OPTIONS_EDGE_RESET_PRESERVED_TOPICS"], [STATUS], environment)
+            self.assertEqual(sorted(got["OPTIONS_EDGE_RESET_REBUILDABLE_TOPICS"]), sorted([MON, CP]), environment)
+
+    def test_other_environments_are_not_treated_as_production(self):
+        self.assertIn("OPTIONS_EDGE_TOPICS", sourced("Production "), "only the exact string 'production' strips (the PROD_ONLY predicate, inverted)")
+
+    def test_production_keeps_every_other_declaration(self):
+        def count(environment):
+            env = {k: v for k, v in os.environ.items() if k != "ENVIRONMENT"}
+            env["ENVIRONMENT"] = environment
+            out = subprocess.run(["bash", "-c", f'source "{ROOT}/scripts/kafka/topics.env"; echo $(echo $OPTIONS_EDGE_TOPICS | wc -w) $(echo $OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES | wc -w)'],
+                                 capture_output=True, text=True, check=True, env=env).stdout.split()
+            return [int(x) for x in out]
+        dev, prod = count("dev"), count("production")
+        self.assertEqual((dev[0] - prod[0], dev[1] - prod[1]), (6, 6))
+
+
 class NoProductionWiring(unittest.TestCase):
     def test_no_production_file_names_the_service_its_image_or_its_topics(self):
         needles = (SVC, "LINE_ACCEPTANCE", "line-acceptance", "LINE_ACC_")

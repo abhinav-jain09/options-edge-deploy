@@ -19,8 +19,7 @@ Design: options-edge-documents `VWAP-ACCEPTANCE-REJECTION-DESIGN.md` sections 9.
 | Production | none: no overlay, slice, image tag, gateway flag; the deploy job refuses `ENVIRONMENT=production` |
 
 Topic shapes: `options.spx.line-acceptance` delete 7 d; `.monitor` compact; `.status` delete, `retention.ms=-1`, `retention.bytes=-1`, **not compacted** (RESET-PRESERVED: every `CalibrationStatus` version survives);
-`.checkpoint` compact with a topic-level `max.message.bytes` 9437184; `.journal` delete 7 d with the same topic-level limit; `.dlq` delete 7 d. `topics.env` is shared with production, so a production topic
-reconcile would create the six empty, unused topics there too (same position as `options.spx.oi.next-publication`); nothing on production reads or writes them.
+`.checkpoint` compact with a topic-level `max.message.bytes` 9437184; `.journal` delete 7 d with the same topic-level limit; `.dlq` delete 7 d. `topics.env` is shared with production, so a guard at its end strips every `options.spx.line-acceptance*` token from every `OPTIONS_EDGE_*` variable when `ENVIRONMENT` is the explicit string `production`: a production source declares none of the six topics and no production script creates, configures or expects them (dev and unset still declare them). The names stay in the static text of the RESET_PRESERVED / REBUILDABLE assignments (parsers and the validator need them there); that can only spare a topic.
 
 `dev-cleanup.sh` recreates the six topics from `topics.env` but does **not** run the barrier (the clean never runs per-service barriers): run the deploy barrier before raising the service after a wipe.
 
