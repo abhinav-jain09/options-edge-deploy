@@ -58,8 +58,8 @@ if [ "$PHASE" = "--verify" ]; then [ -n "$NEW_ID" ] || usage; elif [ -n "$NEW_ID
 BS="${POS[0]:-}"; [ -n "$BS" ] || usage
 BIN="${POS[1]:-${KAFKA_BIN_DIR:-}}"
 
-# CLUSTER IDENTITY. The bootstrap allowlist below stops the usual mistake (a production address under --cluster dev). What stops a FORWARDED address (a port-forward, a reassigned LAN address)
-# is the topic id: --pre-cutover-id is the TopicId read off the dev broker on the cutover day, a UUID that exists on exactly one cluster, and --recreate refuses (nothing deleted) unless the
+# CLUSTER IDENTITY. The bootstrap allowlist below stops the usual mistake (a production address under --cluster dev). A FORWARDED address (a port-forward, a reassigned LAN address) is stopped by the pinned
+# Kafka cluster id check right after the allowlist, and independently by the topic id: --pre-cutover-id is the TopicId read off the dev broker on the cutover day, a UUID that exists on exactly one cluster, and --recreate refuses (nothing deleted) unless the
 # live topic carries it, re-checked immediately before the delete. A production or es4 es.futures.auction has a different TopicId, so the wipe cannot touch it (tested: "refuses a topic that
 # is not the pre-cutover one").
 # --cluster is not a label: the bootstrap server must BE that cluster's broker, or a destructive command declared "dev" could
@@ -73,6 +73,14 @@ esac
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 . "$HERE/avro-rollforward.lib.sh"
+# BROKER IDENTITY, pinned. An address allowlist cannot tell the dev broker from a port-forward or a reassigned listener that reaches es4 or production, and a TopicId proves the topic, not the cluster. So
+# before ANYTHING is changed the broker must report the dev Kafka cluster id below (read off 127.0.0.1:19092 with `kafka-cluster cluster-id`, 2026-11-02). There is no override: if the dev broker is ever
+# re-formatted, this constant is changed in a reviewed PR.
+DEV_CLUSTER_ID=ST9UcaxwRHWefoBXRdjTXg
+KC_CLI="$(rf_resolve_cli_named kafka-cluster "$BIN")" || exit 1
+CID_OUT="$("$KC_CLI" cluster-id --bootstrap-server "$BS" 2>&1)" || { echo "FATAL: cannot read the cluster id of $BS; refusing (nothing was changed): $CID_OUT" >&2; exit 2; }
+LIVE_CID="$(printf '%s\n' "$CID_OUT" | awk '/^Cluster ID:/ {print $3}' | tail -1)"
+[ "$LIVE_CID" = "$DEV_CLUSTER_ID" ] || { echo "FATAL: $BS reports Kafka cluster id '${LIVE_CID:-unreadable}', not the dev cluster $DEV_CLUSTER_ID; refusing (nothing was changed)" >&2; exit 2; }
 # every sampled record must be Avro under the ONE fixed contract id 3201 (0x00000c81), not merely some Avro
 export RF_EXPECT_ID_HEX=00000c81
 KT="$(rf_resolve_cli "$BIN")"

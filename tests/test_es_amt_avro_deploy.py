@@ -108,6 +108,11 @@ class WipeScriptGuards(unittest.TestCase):
         self.assertNotIn("production:192.168.100.252:9092) ;;", self.SCRIPT)
         self.assertIn("es4|production) echo \"FATAL:", self.SCRIPT)
 
+    def test_the_dev_cluster_id_is_pinned_and_checked_before_anything_is_changed(self):
+        self.assertIn("DEV_CLUSTER_ID=ST9UcaxwRHWefoBXRdjTXg", self.SCRIPT)
+        self.assertLess(self.SCRIPT.index("DEV_CLUSTER_ID=ST9UcaxwRHWefoBXRdjTXg"), self.SCRIPT.index('kt --delete'))
+        self.assertLess(self.SCRIPT.index("cluster-id --bootstrap-server"), self.SCRIPT.index('kt --delete'))
+
     def test_the_mock_test_passes(self):
         r = subprocess.run(["bash", str(ROOT / "scripts/kafka/roll-forward-es-amt-auction-test.sh")], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stdout[-2000:] + r.stderr[-2000:])

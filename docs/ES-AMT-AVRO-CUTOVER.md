@@ -61,6 +61,8 @@ topic (including the one this cutover has just converted), scales every Kafka cl
 
 Prerequisites (done earlier, no dev effect): contracts with `EsAuctionAvro` merged; processing (es-amt-service and the readers) and gateway merged; this deploy PR merged; dev has a free `192.168.100.102` registry port 8082.
 
+0. Install and verify the dev-cleanup live copy (any time after this PR is merged and before step 3; needed so an overnight start brings `es-amt-service` up): `scripts/ops/install-dev-cleanup.sh --check` (expect DRIFT: the live copy was last synced
+   before several reviewed changes), then `scripts/ops/install-dev-cleanup.sh`, then `--check` again must print `OK: live dev-cleanup.sh == repo`, and `grep '^OVERNIGHT_SET=' ~/oe-ops/dev-cleanup.sh` must end in `es-amt-service`. Do this before 17:15 ET.
 1. Register the subject (idempotent, collision-fails, FULL):
    `SCHEMA_REGISTRY_URL=http://192.168.100.102:8082 SCHEMAS_DIR=<contracts>/schemas-registry/esamt SCHEMA_ID_MAP=scripts/kafka/schema-id-maps/es-amt.map bash scripts/kafka/ensure-fixed-id-schemas.sh`
 2. Record the pre-cutover TopicId: `kafka-topics --bootstrap-server 127.0.0.1:19092 --describe --topic es.futures.auction` (2026-11-02: `iPGdV7d8RsGZ6Tv2lYnIjA`).
@@ -69,7 +71,7 @@ Prerequisites (done earlier, no dev effect): contracts with `EsAuctionAvro` merg
 4. Stop every reader (strict mode; dev has topic auto-creation on). FIRST record each one's live replica count (`kubectl get deploy -o custom-columns=NAME:.metadata.name,R:.spec.replicas`; all six were 1/1 on 2026-11-02),
    then `kubectl scale --replicas=0` exactly these six by name: `feed-gateway-service amt-order-bridge early-auction-verdict-service es-compression-expansion-service level-absorption-service market-commentary-service`.
    If `es-amt-service` already exists on dev (a pre-cutover deploy), scale it to 0 too. This is a stop, not a bring-up; no scale loop.
-5. Wipe: `PATH=/Users/abhinav/development/confluent-7.3.1/bin:$PATH scripts/kafka/roll-forward-es-amt-auction.sh --recreate --cluster dev --pre-cutover-id <TopicId> --writers-and-readers-stopped 127.0.0.1:19092`.
+5. Wipe (it first requires the broker to report the dev Kafka cluster id `ST9UcaxwRHWefoBXRdjTXg`, then the pre-cutover TopicId; either mismatch refuses with nothing changed): `PATH=/Users/abhinav/development/confluent-7.3.1/bin:$PATH scripts/kafka/roll-forward-es-amt-auction.sh --recreate --cluster dev --pre-cutover-id <TopicId> --writers-and-readers-stopped 127.0.0.1:19092`.
    If it fails on committed offsets, delete those groups (`kafka-consumer-groups --delete-offsets --group <g> --topic es.futures.auction`, or `--delete --group <g>` for a stopped group) and run `--verify --new-topic-id <printed id>`.
 6. Roll the readers on their new Avro images. They start on an EMPTY topic, so no retained JSON can reach them. Each comes up at the replica count its manifest declares; compare with the counts recorded in step 4 and restore any that differ.
    * amt-order-bridge, es-compression-expansion, level-absorption, market-commentary: one `service-deploy` each (`SERVICE=<name> ENVIRONMENT=dev BUILD_IMAGES=true`).

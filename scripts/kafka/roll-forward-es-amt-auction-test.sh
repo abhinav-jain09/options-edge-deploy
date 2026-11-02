@@ -63,6 +63,13 @@ exit 0
 MOCK
 chmod +x "$TMP/bin/kafka-console-consumer.sh"
 
+cat > "$TMP/bin/kafka-cluster.sh" <<'MOCK'
+#!/usr/bin/env bash
+[ "${MOCK_CLUSTER_RC:-0}" = 0 ] || { echo "no broker" >&2; exit 1; }
+echo "Cluster ID: ${MOCK_CLUSTER_ID:-ST9UcaxwRHWefoBXRdjTXg}"
+MOCK
+chmod +x "$TMP/bin/kafka-cluster.sh"
+
 pass=0; fail=0
 check() { if [ "$2" = "$3" ]; then pass=$((pass+1)); echo "ok    $1"; else fail=$((fail+1)); echo "FAIL  $1: expected '$3' got '$2'"; fi; }
 run() { MOCK_DIR="$TMP/state" PATH="$TMP/bin:$PATH" bash "$HERE/roll-forward-es-amt-auction.sh" "$@" >"$TMP/out" 2>&1; echo $?; }
@@ -91,6 +98,13 @@ check "an absent topic is created only with --topic-absent-after-failed-create" 
 reset OLDID
 check "an unlistable broker aborts before any delete" "$(MOCK_LIST_RC=1 run "${ARGS[@]}")" 1
 check "…nothing deleted" "$(cat "$TMP/state/log" 2>/dev/null | wc -l | tr -d ' ')" 0
+reset OLDID
+check "a dev-spelled address that reaches another cluster (foreign cluster id) is refused" "$(MOCK_CLUSTER_ID=SomeOtherClusterId run "${ARGS[@]}")" 2
+check "…and nothing deleted" "$(cat "$TMP/state/log" 2>/dev/null | wc -l | tr -d ' ')" 0
+check "…the topic itself is untouched" "$(cat "$TMP/state/topic")" OLDID
+check "an unreadable cluster id refuses too" "$(MOCK_CLUSTER_RC=1 run "${ARGS[@]}")" 2
+check "…and nothing deleted when the cluster id is unreadable" "$(cat "$TMP/state/log" 2>/dev/null | wc -l | tr -d ' ')" 0
+check "--verify refuses a foreign cluster id as well" "$(reset RECREATED; MOCK_CLUSTER_ID=Other run --verify --cluster dev --pre-cutover-id OLDID --new-topic-id RECREATED --writers-and-readers-stopped localhost:19092 "$TMP/bin")" 2
 check "an unknown cluster name is a usage error" "$(reset OLDID; run --recreate --cluster staging --pre-cutover-id OLDID --writers-and-readers-stopped localhost:19092 "$TMP/bin")" 2
 
 reset OLDID
