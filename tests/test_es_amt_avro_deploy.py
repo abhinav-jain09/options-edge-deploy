@@ -152,6 +152,23 @@ class DevOnlyWiring(unittest.TestCase):
                     self.assertNotIn("es-amt-service", line, f)
 
 
+class RunbookNamesTheRealRolloutPaths(unittest.TestCase):
+    """The runbook must not prescribe a step the deploy job refuses (Codex round 4): feed-gateway is built by its own job; EAV is held at 0 declaratively."""
+
+    DOC = (ROOT / "docs/ES-AMT-AVRO-CUTOVER.md").read_text()
+    DEPLOY = (ROOT / "Jenkinsfile.service-deploy").read_text()
+
+    def test_the_gateway_path_matches_what_service_deploy_enforces(self):
+        self.assertIn("'feed-gateway'      : 'feed-gateway-deploy'", self.DEPLOY)
+        self.assertIn("feed-gateway-deploy", self.DOC)
+        self.assertIn("BUILD_IMAGES=false REQUIRED_IMAGE=", self.DOC)
+
+    def test_eav_is_rolled_by_image_not_by_service_deploy(self):
+        self.assertIn("replicas: 0", (ROOT / "k8s/services/early-auction-verdict/base/early-auction-verdict-deployment.yaml").read_text())
+        self.assertIn("early-auction-verdict-service is an exception", self.DOC)
+        self.assertIn("kubectl set image", self.DOC)
+
+
 class MirrorJobRefusesTheDevTarget(unittest.TestCase):
     """Once dev owns the Avro writer, a byte mirror of es4's JSON into dev would put JSON in an Avro topic: the job's install refuses 127.0.0.1:19092."""
 
