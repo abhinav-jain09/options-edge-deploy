@@ -70,7 +70,7 @@ spec:
               value: "true"
             # DEV-ONLY: the line acceptance / rejection relay (VWAP-ACCEPTANCE-REJECTION P5; gateway PR 274): the gateway reads options.spx.line-acceptance and serves the page's "Line tests" lens.
             # It was set on the live dev gateway by `kubectl set env`, which a Jenkins apply would reset, so it is declared here. Production's patch and the base do not carry it (code default off).
-            # The producer, line-acceptance-service, stays at replicas 0 and LINE_ACCEPTANCE_ENABLED "false" until the design's backtest report exists (design section 15), so the lens says the service has sent nothing.
+            # The producer, line-acceptance-service, runs on dev since 2026-11-02 (replicas 1, LINE_ACCEPTANCE_ENABLED "true", UNVALIDATED by owner override of design K9), so the lens shows its status/monitor records, all labelled UNVALIDATED.
             - name: GATEWAY_LINE_ACCEPTANCE_ENABLED
               value: "true"
             # TA-books relays (frame contracts GEOMETRY-/TRADE-TOOLS-/WAVES-FRAME-CONTRACT.md in options-edge-processing docs/ta-books/catalog). The names are GatewaySettings' (feat/ta-geometry-feed-gateway:

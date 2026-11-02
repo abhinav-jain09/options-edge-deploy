@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ensure-line-acceptance-topics.sh — line-acceptance-service's six topics must be right BEFORE the service is ever raised (VWAP-ACCEPTANCE-REJECTION design sections 9.1 and 15;
-# the same first-deploy barrier as ensure-break-classification-topics.sh). DEV ONLY and DARK: the service is held at replicas 0 and this barrier runs from service-deploy
+# the same first-deploy barrier as ensure-break-classification-topics.sh). DEV ONLY (the service is LIVE on dev, UNVALIDATED, since 2026-11-02): this barrier runs from service-deploy
 # SERVICE=line-acceptance; it refuses to run unless ENVIRONMENT is exactly "dev" (Jenkinsfile.service-deploy exports the job parameter).
 #
 #   NO BROKER-WIDE CHANGE. This barrier never reads or alters a broker config. The checkpoint and journal topics carry their own TOPIC-LEVEL max.message.bytes of 9437184.
