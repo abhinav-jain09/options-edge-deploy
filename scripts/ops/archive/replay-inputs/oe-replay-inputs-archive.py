@@ -692,7 +692,12 @@ def broker_compare(args, ents: list[dict], root: Path, day: str) -> int:
         es.sort(key=lambda e: e["offset_first"])
         lo, hi = cons.get_watermark_offsets(TopicPartition(t, p), timeout=10)
         first, last = es[0]["offset_first"], es[-1]["offset_last"]
-        if last < lo or first >= hi:
+        if first >= hi:
+            print(f"    {t} p{p}: archived range [{first},{last}] is ABOVE the broker log [{lo},{hi}) - topic recreated or "
+                  f"regressed; cannot compare (run check without --broker)")
+            rc = 1
+            continue
+        if last < lo:
             print(f"    {t} p{p}: range [{first},{last}] entirely gone from the broker (log [{lo},{hi})) - nothing to compare")
             continue
         arch: dict[int, bytes] = {}             # exact offsets: another ET day's records may sit between them
