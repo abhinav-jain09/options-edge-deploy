@@ -245,12 +245,11 @@ services:
   # (k8s/overlays/<env>/break-classifier-{dev,prod}-enable-patch.yaml); the shared base is replicas 0 / "false". Needs its six Avro subjects (2601-2606) and the barrier
   # scripts/kafka/ensure-break-classification-topics.sh (topic-level checkpoint limit only; no broker-wide change). Single replica; no Service object. NOT in KEEP_DOWN or DISABLED_DEV.
   - { name: break-classifier,             managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-break-classifier,             deployments: [break-classifier-service] }
-  # line-acceptance (VWAP-ACCEPTANCE-REJECTION, design section 15, stage 0 / phase P0): line and zone acceptance / rejection episodes for SPX (VWAP first). DARK: replicas 0 in the base and in the dev
-  # overlay, LINE_ACCEPTANCE_ENABLED "false", DEV ONLY (envs: [dev]; no production overlay entry, image, topic or gateway flag exists or is authorised: production needs its own reviewed design).
-  # HELD DOWN by name: line-acceptance-service is in DISABLED_DEV (dev-cleanup.sh) and in KEEP_DOWN of morning-autostart.sh and oe-boot-bringup.sh, so no cleanup or boot script raises it (the keep-down
-  # lists must agree: tests/test_keep_down_lists_agree.py). P0 SKELETON: the manifest carries only the flag, the health port (8172) and ENVIRONMENT; the input topic names are the service's own defaults.
-  # Reads options.indicators.bars, es.options.indicators.snapshot.current, es.futures.footprint.bars and options.spx.market-structure.{tools,geometry,patterns,break-events}; writes six single-partition
-  # topics options.spx.line-acceptance{,.monitor,.status,.checkpoint,.journal,.dlq} (Avro, ids 3101-3111, scripts/kafka/schema-id-maps/line-acceptance.map; barrier
+  # line-acceptance (VWAP-ACCEPTANCE-REJECTION): line and zone acceptance / rejection episodes for SPX (VWAP first). LIVE ON DEV since 2026-11-02, UNVALIDATED (owner override of design K9; alerts off): replicas 1,
+  # LINE_ACCEPTANCE_ENABLED "true" and the gates GATE_{STRUCTURE,GEOMETRY,VWAP,FOOTPRINT,CANDLES}_ENABLED true (GATE_PHASEF_EVIDENCE false) in the base. DEV ONLY (envs: [dev]; no production overlay entry, image,
+  # topic or gateway flag exists or is authorised: production needs its own reviewed design). NOT held down: absent from DISABLED_DEV (dev-cleanup.sh) and from KEEP_DOWN of morning-autostart.sh / oe-boot-bringup.sh.
+  # Reads options.indicators.bars, es.options.indicators.snapshot.current, underlying.es.price, es.futures.footprint.bars and options.spx.market-structure.{tools,geometry,equal-levels,patterns,break-events};
+  # writes six single-partition topics options.spx.line-acceptance{,.monitor,.status,.checkpoint,.journal,.dlq} (Avro, ids 3101-3111, scripts/kafka/schema-id-maps/line-acceptance.map; barrier
   # scripts/kafka/ensure-line-acceptance-topics.sh). Single replica only (transactional.id line-acceptance-<ENVIRONMENT>). No Service object. docs/line-acceptance/LINE-ACCEPTANCE-DEPLOY.md.
   - { name: line-acceptance,              managedBy: standalone, sliceGenerated: true, envs: [dev], image: options-edge-line-acceptance,              deployments: [line-acceptance-service] }
   # es-amt: DEV ONLY. The SPX Auction Desk engine; on dev it is the WRITER of es.futures.auction (Avro, contracts id 3201, docs/ES-AMT-AVRO-CUTOVER.md). es4 runs its own copy from k8s/es4/services/es-amt.yaml
