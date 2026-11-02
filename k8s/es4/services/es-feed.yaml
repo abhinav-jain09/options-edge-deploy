@@ -215,15 +215,17 @@ spec:
             # Keys are UNPREFIXED (config.py), like the ES_TRADES_SOURCE_* family.
             - name: ES_BASIS_REFERENCE_ENABLED
               value: "true"
+            # The reference is the DEV feed's enriched underlying.es.price while production is down, re-encoded onto es4's OWN broker and
+            # registry by the Jenkins-owned mirror Jenkinsfile.es-price-basisref-mirror (it replaced the 2026-10-27 text bridge). The topic is
+            # Avro (subject com.optionsedge.contracts.hpsf.EsUnderlyingPrice) with es4's schema ids, so the decoder resolves them at es4's
+            # registry. When production returns, point BOOTSTRAP/TOPIC at 192.168.100.252:9092 / underlying.es.price and the registry at
+            # http://192.168.100.252:8082 (ids are per registry) and tear the mirror down.
             - name: ES_BASIS_REFERENCE_BOOTSTRAP
-              value: "192.168.100.252:9092"
+              value: "192.168.100.4:9092"
             - name: ES_BASIS_REFERENCE_TOPIC
-              value: "underlying.es.price"
-            # The reference topic is Avro (subject com.optionsedge.contracts.hpsf.EsUnderlyingPrice) and schema ids are
-            # PER REGISTRY, so the decoder resolves writer schemas at the registry of the cluster the topic lives on
-            # (production's), not this feed's own es4 registry.
+              value: "es.underlying.es.price.basis-reference"
             - name: ES_BASIS_REFERENCE_SCHEMA_REGISTRY_URL
-              value: "http://192.168.100.252:8082"
+              value: "http://192.168.100.4:8081"
             # ---- misc ------------------------------------------------------------
             - name: APP_PROFILE
               value: "prod"

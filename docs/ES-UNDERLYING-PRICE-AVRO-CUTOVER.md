@@ -49,6 +49,20 @@ Workloads change only through Jenkins (admission policy), so readers cannot be s
 7. **Verify the wire:** magic byte `0` and the registered id on the first and last record; `greek-move-authenticity` and
    `strike-intelligence` no longer log skipped/undecodable ES price records; restarts 0; the registry subject has exactly one version.
 
+## The dev source and the basis-reference mirror
+While production is down, the es4 `es-feed` takes its ES->SPX basis from the DEV feed's enriched `underlying.es.price` (dev
+`ES_PRICE_ENABLED=true`, same Rust writer), carried onto es4 as `es.underlying.es.price.basis-reference` (es4 broker, es4 schema ids).
+The 2026-10-27 text bridge that did this (`com.optionsedge.es-price-basisref-bridge-192-168-100-4-9092` on the dev Mac) cannot carry
+Avro and is replaced by `Jenkinsfile.es-price-basisref-mirror` (decode with the dev registry, re-encode with es4's, same subject, durable
+group `es-price-mirror-es4`; its install retires the old bridge). Avro end to end therefore also needs, in this order:
+1. Register the subject on the DEV registry (`SCHEMA_REGISTRY_URL=http://192.168.100.102:8082 ... ensure-es-underlying-price-schema.sh`).
+2. Roll the DEV feed to an image carrying the Avro writer (the dev cluster is arm64; the remote `.252` build host is amd64).
+3. Wipe dev `underlying.es.price` (`roll-forward-topics.sh --cluster dev ... 192.168.100.102:19092`) once no JSON writer exists.
+4. Wipe es4 `es.underlying.es.price.basis-reference` (`--cluster es4`), then install the mirror.
+5. Dev readers of `underlying.es.price` (gamma-ladder-path; the web `IndicatorVwapService`) must read Avro before they roll.
+The es4 `es-feed` must not be rolled before step 2-4 are done: its Avro-only reference reader would refuse the old text bridge's JSON and the
+basis would be absent (es-amt excludes RTH prints without it).
+
 ## Production (not done by this change)
 On 2026-11-02 production's workloads are all at 0 replicas (its Kafka broker is up, its schema registry is not), so no production JSON writer exists today.
 Production's `underlying.es.price` keeps JSON writers and readers until its own cutover, which needs, before the feed rolls: the subject
