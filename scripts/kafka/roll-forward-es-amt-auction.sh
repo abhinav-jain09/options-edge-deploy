@@ -58,6 +58,10 @@ if [ "$PHASE" = "--verify" ]; then [ -n "$NEW_ID" ] || usage; elif [ -n "$NEW_ID
 BS="${POS[0]:-}"; [ -n "$BS" ] || usage
 BIN="${POS[1]:-${KAFKA_BIN_DIR:-}}"
 
+# CLUSTER IDENTITY. The bootstrap allowlist below stops the usual mistake (a production address under --cluster dev). What stops a FORWARDED address (a port-forward, a reassigned LAN address)
+# is the topic id: --pre-cutover-id is the TopicId read off the dev broker on the cutover day, a UUID that exists on exactly one cluster, and --recreate refuses (nothing deleted) unless the
+# live topic carries it, re-checked immediately before the delete. A production or es4 es.futures.auction has a different TopicId, so the wipe cannot touch it (tested: "refuses a topic that
+# is not the pre-cutover one").
 # --cluster is not a label: the bootstrap server must BE that cluster's broker, or a destructive command declared "dev" could
 # wipe production (and the reverse). dev: the local broker (what pods dial) or the Mac's LAN address; production: the prod host.
 TOPIC_NAME=es.futures.auction
