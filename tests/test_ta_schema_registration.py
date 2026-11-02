@@ -17,7 +17,7 @@ from tests.stub_schema_registry import Registry, serve
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/kafka/ensure-fixed-id-schemas.sh"
 MAPS = ROOT / "scripts/kafka/schema-id-maps"
-SERVICES = ("market-structure", "es-trade-tools", "wave-cycle", "break-classifier")
+SERVICES = ("market-structure", "es-trade-tools", "wave-cycle", "break-classifier", "line-acceptance")
 
 
 # The contracts release's table (options-edge-processing docs/ta-books/catalog/SCHEMA-ID-MAP.md, contracts 0.31.0, com.optionsedge.contracts.ta.TaSchemas.SUBJECTS), row by row.
@@ -62,6 +62,18 @@ CONTRACTS_TABLE = [
     ("com.optionsedge.contracts.breakclass.input.SwingPivotRecord", 2606),
     # contracts 0.44.0 (T-5, Level Absorption v2 section 6.9): the standing equal-level set, id 2607, version 1
     ("com.optionsedge.contracts.breakclass.EqualLevelRecord", 2607),
+    # contracts options-edge-contracts #149 (VWAP-ACCEPTANCE-REJECTION P0): the line-acceptance family, ids 3101-3111, all version 1
+    ("com.optionsedge.contracts.lineacc.LineEpisodeCore", 3101),
+    ("com.optionsedge.contracts.lineacc.LineEpisodeEvidence", 3102),
+    ("com.optionsedge.contracts.lineacc.LineEpisodeOutcome", 3103),
+    ("com.optionsedge.contracts.lineacc.LineEpisodeIntegrity", 3104),
+    ("com.optionsedge.contracts.lineacc.LeanEvent", 3105),
+    ("com.optionsedge.contracts.lineacc.SessionCoverage", 3106),
+    ("com.optionsedge.contracts.lineacc.LineMonitorStatus", 3107),
+    ("com.optionsedge.contracts.lineacc.CalibrationStatus", 3108),
+    ("com.optionsedge.contracts.lineacc.LineAcceptanceCheckpoint", 3109),
+    ("com.optionsedge.contracts.lineacc.IngressBatch", 3110),
+    ("com.optionsedge.contracts.lineacc.LineAcceptanceDlq", 3111),
 ]
 
 
@@ -603,6 +615,59 @@ class BreakClassifierRegistration(unittest.TestCase):
         self.with_registry(check)
 
 
+class LineAcceptanceRegistration(unittest.TestCase):
+    """VWAP-ACCEPTANCE-REJECTION P0: the eleven subjects 3101-3111 (contracts #149), all version 1, through the same script the Jenkins stage runs with SCHEMA_ID_MAP=line-acceptance.map."""
+
+    def test_a_fresh_registry_gets_the_eleven_subjects_under_3101_to_3111_with_full_and_a_rerun_imports_nothing(self):
+        reg = Registry()
+        server, url = serve(reg)
+        try:
+            rc, out = run("line-acceptance", url)
+            self.assertEqual(rc, 0, out)
+            self.assertEqual({s: reg.subjects[s][0]["id"] for s in reg.subjects}, {s: i for s, i, _ in read_map("line-acceptance")})
+            self.assertEqual(len(reg.subjects), 11)
+            self.assertEqual(set(reg.configs.values()), {"FULL"})
+            self.assertEqual(reg.subject_modes, {})
+            calls = len(reg.calls)
+            rc, out = run("line-acceptance", url)
+            self.assertEqual(rc, 0, out)
+            self.assertFalse(any(c.startswith("POST /subjects/") and c.endswith("/versions {schema…}") for c in reg.calls[calls:]), "nothing re-imported")
+        finally:
+            server.shutdown()
+
+    def test_an_id_held_by_another_schema_fails_in_preflight_with_nothing_imported(self):
+        reg = Registry()
+        reg.register("some.other.Subject", json.dumps({"type": "string"}), id=3111, version=1)
+        server, url = serve(reg)
+        try:
+            rc, out = run("line-acceptance", url)
+            self.assertEqual(rc, 1, out)
+            self.assertIn("fixed id 3111 is already held by another schema", out)
+            self.assertEqual(set(reg.subjects), {"some.other.Subject"}, "the collision on the LAST subject stopped the whole set before the first import")
+        finally:
+            server.shutdown()
+
+    def test_the_map_is_the_eleven_records_in_the_lineacc_namespace_with_the_ids_the_design_fixes(self):
+        rows = read_map("line-acceptance")
+        self.assertEqual([i for _, i, _ in rows], list(range(3101, 3112)))
+        self.assertEqual([s.rsplit(".", 1)[1] for s, _, _ in rows],
+                         ["LineEpisodeCore", "LineEpisodeEvidence", "LineEpisodeOutcome", "LineEpisodeIntegrity", "LeanEvent", "SessionCoverage", "LineMonitorStatus",
+                          "CalibrationStatus", "LineAcceptanceCheckpoint", "IngressBatch", "LineAcceptanceDlq"])
+        for s, _, f in rows:
+            self.assertEqual(f, s.rsplit(".", 1)[1] + ".avsc")
+            self.assertTrue(s.startswith("com.optionsedge.contracts.lineacc."))
+
+    def test_the_rows_match_a_contracts_checkout_when_one_is_available(self):
+        """CONTRACTS_SCHEMAS_DIR (a checkout's schemas-registry/ta at the line-acceptance schemas) or the sibling checkout; absent in CI."""
+        candidates = [os.environ.get("CONTRACTS_SCHEMAS_DIR", ""), str(ROOT.parent / "options-edge-contracts/schemas-registry/ta")]
+        base = next((Path(c) for c in candidates if c and (Path(c) / "LineEpisodeCore.avsc").is_file()), None)
+        if base is None:
+            self.skipTest("no contracts checkout carrying the line-acceptance schemas")
+        for subject, _, file in read_map("line-acceptance"):
+            schema = json.loads((base / file).read_text())
+            self.assertEqual(f"{schema['namespace']}.{schema['name']}", subject)
+
+
 class MapValidation(unittest.TestCase):
     def refused(self, text: str):
         reg = Registry()
@@ -640,7 +705,8 @@ class MapsAgree(unittest.TestCase):
 
     def test_subjects_are_the_record_full_names_in_the_contracts_namespaces(self):
         ns = {"market-structure": "com.optionsedge.contracts.marketstructure.", "es-trade-tools": "com.optionsedge.contracts.tradetools.",
-              "wave-cycle": "com.optionsedge.contracts.wavecycle.", "break-classifier": "com.optionsedge.contracts.breakclass."}
+              "wave-cycle": "com.optionsedge.contracts.wavecycle.", "break-classifier": "com.optionsedge.contracts.breakclass.",
+              "line-acceptance": "com.optionsedge.contracts.lineacc."}
         for service in SERVICES:
             for subject, _, file, version in read_versioned(service):
                 self.assertTrue(subject.startswith(ns[service]), subject)
@@ -649,12 +715,12 @@ class MapsAgree(unittest.TestCase):
                 top = max(v for s_, _, _, v in read_versioned(service) if s_ == subject)
                 self.assertEqual(file, name if version == top else f"v{version}/{name}", "the highest version is the flat file, earlier ones live under v<N>/")
 
-    def test_the_maps_are_exactly_the_contracts_table_of_38_subjects_and_55_ids(self):
+    def test_the_maps_are_exactly_the_contracts_table_of_49_subjects_and_66_ids(self):
         union = {(subject, id_) for service in SERVICES for subject, id_, _ in read_map(service)}
-        self.assertEqual(len(CONTRACTS_TABLE), 38)
+        self.assertEqual(len(CONTRACTS_TABLE), 49)
         self.assertEqual(union, set(CONTRACTS_TABLE) | set(TRADE_TOOLS_VERSION_2) | set(WAVE_CYCLE_VERSION_2) | set(MARKET_STRUCTURE_VERSION_2))
         self.assertEqual({s for s, _ in union}, {s for s, _ in CONTRACTS_TABLE})
-        self.assertEqual(len(union), 55)
+        self.assertEqual(len(union), 66)
         # version 2 of each of the thirteen two-version subjects = its version-1 id + 20 (contracts 0.33.0, TaSchemas.Subject.priorId)
         v1 = {s: i for s, i in CONTRACTS_TABLE}
         for subject, id_ in TRADE_TOOLS_VERSION_2:

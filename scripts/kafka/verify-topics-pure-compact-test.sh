@@ -167,10 +167,17 @@ SET=es4 BYTES_OVERRIDE="es.futures.footprint.strike=1073741824" \
   "es.futures.footprint.strike retention.bytes='1073741824'"
 
 # max.message.bytes (break-classifier's checkpoint): a per-topic FLOOR in topics.env. A topic that accepts less fails, more passes, unreadable fails, es4 never judges it.
-check "max.message.bytes contract passes when the broker matches declarations" 0 compact "max.message.bytes contract OK (1 topic(s)"
+check "max.message.bytes contract passes when the broker matches declarations" 0 compact "max.message.bytes contract OK (3 topic(s)"
 MAXMSG_OVERRIDE="options.spx.break-classification.checkpoint=1048576" \
   check "a checkpoint topic at the broker default fails" 1 compact \
   "options.spx.break-classification.checkpoint max.message.bytes='1048576' but the declaration says >= '9437184'"
+# line-acceptance (VWAP-ACCEPTANCE-REJECTION P0): its checkpoint and journal topics carry the same floor.
+MAXMSG_OVERRIDE="options.spx.line-acceptance.journal=1048576" \
+  check "a line-acceptance journal topic at the broker default fails" 1 compact \
+  "options.spx.line-acceptance.journal max.message.bytes='1048576' but the declaration says >= '9437184'"
+MAXMSG_OVERRIDE="options.spx.line-acceptance.checkpoint=1048576" \
+  check "a line-acceptance checkpoint topic at the broker default fails" 1 compact \
+  "options.spx.line-acceptance.checkpoint max.message.bytes='1048576' but the declaration says >= '9437184'"
 MAXMSG_OVERRIDE="options.spx.break-classification.checkpoint=16777216" \
   check "a checkpoint topic above the floor passes" 0 compact "max.message.bytes contract OK"
 MAXMSG_INHERITED=1 check "an inherited (effective-only) value is read with --all" 0 compact "max.message.bytes contract OK"

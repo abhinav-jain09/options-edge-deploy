@@ -1,0 +1,16 @@
+# Fixed schema ids for line-acceptance-service (VWAP-ACCEPTANCE-REJECTION, line and zone acceptance / rejection; design section 9.1). Contracts options-edge-contracts #149
+# (branch feat/line-acceptance-schemas): ids 3101-3111, all version 1, namespace com.optionsedge.contracts.lineacc, subject = the record full name (RecordNameStrategy), compatibility FULL.
+# One topic carries several record types, ONE Avro record TYPE per shape (Avro JSON has no union tagging): options.spx.line-acceptance carries 3101-3106, .monitor 3107, .status 3108,
+# .checkpoint 3109, .journal 3110, .dlq 3111. The service writes with auto.register.schemas=false and resolves every one of them at boot. Dev only; nothing is registered on production.
+# File column: relative to the contracts checkout's `schemas-registry/ta` directory (SCHEMAS_DIR).
+com.optionsedge.contracts.lineacc.LineEpisodeCore|3101|LineEpisodeCore.avsc
+com.optionsedge.contracts.lineacc.LineEpisodeEvidence|3102|LineEpisodeEvidence.avsc
+com.optionsedge.contracts.lineacc.LineEpisodeOutcome|3103|LineEpisodeOutcome.avsc
+com.optionsedge.contracts.lineacc.LineEpisodeIntegrity|3104|LineEpisodeIntegrity.avsc
+com.optionsedge.contracts.lineacc.LeanEvent|3105|LeanEvent.avsc
+com.optionsedge.contracts.lineacc.SessionCoverage|3106|SessionCoverage.avsc
+com.optionsedge.contracts.lineacc.LineMonitorStatus|3107|LineMonitorStatus.avsc
+com.optionsedge.contracts.lineacc.CalibrationStatus|3108|CalibrationStatus.avsc
+com.optionsedge.contracts.lineacc.LineAcceptanceCheckpoint|3109|LineAcceptanceCheckpoint.avsc
+com.optionsedge.contracts.lineacc.IngressBatch|3110|IngressBatch.avsc
+com.optionsedge.contracts.lineacc.LineAcceptanceDlq|3111|LineAcceptanceDlq.avsc

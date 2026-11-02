@@ -268,7 +268,7 @@ create_topic() {
 # since its first deploy; wave-cycle-service's (ELLIOTT-FIB-CYCLE-TOOLS E-R11.3) takes "the figure the structure service uses" and so the same cadence.
 topic_is_recovery_checkpoint() {
   case "$1" in
-    options.spx.market-structure.recovery|options.spx.wave-cycle.recovery|options.spx.break-classification.checkpoint) return 0 ;;
+    options.spx.market-structure.recovery|options.spx.wave-cycle.recovery|options.spx.break-classification.checkpoint|options.spx.line-acceptance.checkpoint) return 0 ;;
   esac
   return 1
 }

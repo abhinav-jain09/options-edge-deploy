@@ -234,7 +234,8 @@ class TopicsEnv(unittest.TestCase):
             self.assertIsNone(re.search(regex, t), f"premarket-reset must wipe {t} together with its inputs")
 
     def test_only_the_checkpoint_carries_a_max_message_bytes_contract_at_the_barriers_value(self):
-        self.assertEqual(self.d["OPTIONS_EDGE_TOPIC_MAX_MESSAGE_BYTES_OVERRIDES"], [f"{CP}=9437184"])
+        # other services (line-acceptance, VWAP-ACCEPTANCE-REJECTION P0) append their own entries to the same declaration: judge break-classifier's by prefix
+        self.assertEqual([x for x in self.d["OPTIONS_EDGE_TOPIC_MAX_MESSAGE_BYTES_OVERRIDES"] if x.startswith("options.spx.break-classification")], [f"{CP}=9437184"])
 
     def test_the_inputs_have_the_partition_counts_the_manifest_declares(self):
         self.assertIn("options.indicators.bars:8", self.d["OPTIONS_EDGE_TOPICS"])
@@ -379,8 +380,8 @@ class Registered(unittest.TestCase):
         self.assertIn(f"'{SVC}',", text)
         register = text[text.index("stage('Register TA-books schemas')"):text.index("stage('Recreate indicator topics (Avro cutover)')")]
         self.assertIn("params.REGISTER_TA_SCHEMAS && (params.SERVICE == 'market-structure'", register)
-        self.assertIn("params.SERVICE == 'break-classifier'))", register)
-        stage = text[text.index("stage('Verify break-classification topics')"):text.index("stage('Verify market-structure output topics')")]
+        self.assertIn("params.SERVICE == 'break-classifier' ||", register)   # line-acceptance follows it in the same condition
+        stage = text[text.index("stage('Verify break-classification topics')"):text.index("stage('Verify line-acceptance topics')")]
         self.assertIn("params.SERVICE == 'break-classifier' && !params.DEPLOY_DRY_RUN", stage)
         self.assertIn("scripts/kafka/ensure-break-classification-topics.sh", stage)
         self.assertLess(text.index("stage('Verify break-classification topics')"), text.index("stage('Deploy (service-scoped)')"), "the barrier precedes the rollout")
