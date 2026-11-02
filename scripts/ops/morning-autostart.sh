@@ -84,6 +84,14 @@ CALENDAR_DIR="${CALENDAR_DIR:-$(cd "$SCRIPT_DIR/../jenkins" 2>/dev/null && pwd |
 #   turns each on later; level-absorption cannot start before its Phase 0 freeze file exists); both carry the part-of label.
 KEEP_DOWN="${KEEP_DOWN:-corridor-gauge-service hpsf-stage-a-service hpsf-stage-b-service volume-sandwich-service volume-sandwich-databento-service volume-pace-service volume-pace-databento-service strike-flow-classifier-ibkr options-edge-integration-test spx-mission-control-service short-premium-agent-service spread-skew-service spread-skew-postgres-writer directional-pressure-databento-service databento-mission-sandwich-service directional-pressure-service option-truth-engine-service ibkr-feed-service oi-shadow-service raw-to-display-service dealer-ledger-service dealer-ledger-calibration-scorer dealer-ledger-calibration-accumulator vix-option-inteligence-service broker-execution-service amt-order-bridge prod-pgadmin zerodte-research-writer hedging-pressure-service break-score-service level-absorption-service breakout-sequencer-service breakout-episode-service}"
 
+# Fail-closed pre-start prerequisites (prod-start-prereqs.sh): a service whose registry subject is missing stays at 0.
+if [ -f "$SCRIPT_DIR/prod-start-prereqs.sh" ]; then
+  PREREQ_HOLD="$(bash "$SCRIPT_DIR/prod-start-prereqs.sh" 2>>"${LOG_FILE:-/dev/stderr}")" || PREREQ_HOLD=""
+else
+  PREREQ_HOLD="reversal-confirmation-service"   # helper missing: fail closed for the one dependent service
+fi
+HOLD_NOW="$KEEP_DOWN $PREREQ_HOLD"   # KEEP_DOWN stays the single declared list; this is that plus the prerequisite holds
+
 kc()  { kubectl -n "$NS" --as="$KUBECTL_AS" "$@"; }   # impersonated (scale ops are policy-gated)
 kcr() { kubectl -n "$NS" "$@"; }                       # read-only
 
@@ -141,7 +149,7 @@ ALL=$(kcr get deploy -l "$SELECTOR" -o jsonpath='{range .items[*]}{.metadata.nam
 up=0; kept=0; failed=0; UPLIST=""
 for name in $ALL; do
   target=1
-  for k in $KEEP_DOWN; do [ "$name" = "$k" ] && { target=0; break; }; done
+  for k in $HOLD_NOW; do [ "$name" = "$k" ] && { target=0; break; }; done
   if [ "$ENABLED" = "true" ]; then
     if kc scale deploy "$name" --replicas="$target" >/dev/null 2>&1; then
       if [ "$target" = 1 ]; then up=$((up+1)); UPLIST="$UPLIST $name"; else kept=$((kept+1)); fi
@@ -178,7 +186,7 @@ if [ "$ENABLED" = "true" ] && [ "$up" -gt 0 ]; then
   healed=0
   for d in $(kcr get deploy -l "$SELECTOR" -o name 2>/dev/null | sed 's#.*/##'); do
     skip=0
-    for k in $KEEP_DOWN; do [ "$d" = "$k" ] && skip=1 && break; done
+    for k in $HOLD_NOW; do [ "$d" = "$k" ] && skip=1 && break; done
     [ "$skip" = 1 ] && continue
     des=$(kcr get deploy "$d" -o jsonpath='{.spec.replicas}' 2>/dev/null)
     rr=$(kcr get deploy "$d" -o jsonpath='{.status.readyReplicas}' 2>/dev/null)

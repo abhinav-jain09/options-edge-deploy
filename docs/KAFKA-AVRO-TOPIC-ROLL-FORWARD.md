@@ -49,3 +49,11 @@ full worked example is `docs/UNDERLYING-SPX-PRICE-AVRO-CUTOVER.md`.
   rotate or rebuild it. A topic recreated while a stale JSON image still runs gets JSON again within seconds: a new TopicId does not prove no JSON since.
 
 The test suite uses CLI mocks (no real broker or registry); run a dry rehearsal on a scratch topic on dev before first production use.
+
+## Pending PRODUCTION pre-start steps after the 2026-11-02 wave-1 cutover (prod was left shut down)
+Prod topics are Avro, the prod deployments pin the Avro digests at replicas 0, and the prod schema registry was stopped. Before the registry/services are started:
+1. **Register `ReversalTopCandidate` under fixed id 2901** (a reversal-confirmation image built before processing b447a71c8 crash-loops without it; the current one needs the subject):
+   `SCHEMA_REGISTRY_URL=http://192.168.100.252:8082 SCHEMAS_DIR=<contracts>/schemas/reversal-candidate SCHEMA_ID_MAP=scripts/kafka/schema-id-maps/reversal-top-candidate.map bash scripts/kafka/ensure-fixed-id-schemas.sh`
+   Enforced: `scripts/ops/prod-start-prereqs.sh` (called by `morning-autostart.sh`) keeps reversal-confirmation-service at 0 while the subject is absent, under another id, or the registry is unreachable. `oe-boot-bringup.sh` is installed as a single root-owned file and does NOT call it: after a reboot, scale reversal-confirmation back to 0 until step 1 is done.
+2. **short-premium-agent**: roll to the Avro image (dev `27-59602c227bbc`, prod `28-59602c227bbc`) once the prod registry is up for the qualification; move native Agent A off avro-releases/build-15 with `ENVIRONMENT=production QUALIFICATION_ONLY=true DEPLOY_NATIVE_A=true`. The prod deployment still pins the pre-Avro digest `sha256:184e03c77a7c...`.
+3. **trade-evidence-api**: the prod deployment now pins `prod-15-512d8881d0bb` (`sha256:77599700...`); confirm it is the Avro build (its collector must refuse JSON on the converted topics) before it is started.
