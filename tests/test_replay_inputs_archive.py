@@ -248,6 +248,14 @@ class Verify(unittest.TestCase):
         rc, out = self.v()
         self.assertEqual(rc, 0, out)
 
+    def test_verify_fails_on_a_torn_manifest_tail(self):
+        ddir, _ = write_day(self.root)
+        with (ddir / "_manifest.jsonl").open("a") as f:
+            f.write('{"path":"t.top')
+        rc, out = self.v()
+        self.assertEqual(rc, 1)
+        self.assertIn("torn line", out)
+
     def test_stale_manifest_file_is_caught(self):
         ddir, _ = write_day(self.root)
         (ddir / "MANIFEST.sha256").write_text("")

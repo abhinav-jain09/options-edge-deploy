@@ -531,8 +531,10 @@ def day_entries(root: Path, day: str) -> list[dict]:
 def verify(args) -> int:
     root, day = Path(args.root), args.dt
     ddir = root / f"dt={day}"
-    ents = day_entries(root, day)
+    ents, torn = read_jsonl(ddir / "_manifest.jsonl")
     problems: list[str] = []
+    if torn:
+        problems.append("day _manifest.jsonl ends in a torn line (run capture to recover, then verify again)")
     if not ents:
         print(f"verify {day}: NO manifest entries under {ddir}")
         return 2
