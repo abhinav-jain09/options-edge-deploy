@@ -114,7 +114,12 @@ def build_image(environment,build,reader):
         pom=checkout/'trade-evidence-api/ci/jib-image/pom.xml'
         if not helper.is_file() or not pom.is_file():raise ValueError('Same-source Docker-free image recipe required')
         env=tool_environment()
-        bounded_step(['python3.14','-B',str(helper),'test','--venv',str(root/'test-venv'),'--contracts',str(contracts)],root,'tests',600,env=env)
+        # The venv lives OUTSIDE the workspace tree: python3.14 names a venv launcher with a non-ASCII filename, which the permitted-tree verifier
+        # cannot declare, so a venv left in the workspace would refuse every later build.
+        import shutil,tempfile
+        venv=tempfile.mkdtemp(prefix='cvd-api-test-venv-')
+        try:bounded_step(['python3.14','-B',str(helper),'test','--venv',str(Path(venv)/'venv'),'--contracts',str(contracts)],root,'tests',600,env=env)
+        finally:shutil.rmtree(venv,ignore_errors=True)
         receipt['status']='TESTS_PASSED';save()
         stage=root/'image';rootfs=stage/'rootfs'
         bounded_step(['python3.14','-B',str(helper),'stage','--dest',str(rootfs),'--platform',target['platform'],'--contracts',str(contracts)],root,'stage',900,env=env)
