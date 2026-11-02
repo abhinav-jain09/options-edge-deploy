@@ -695,14 +695,11 @@ def broker_compare(args, ents: list[dict], root: Path, day: str) -> int:
         if first < lo or last >= hi:
             print(f"    {t} p{p}: range [{first},{last}] no longer fully on the broker (log [{lo},{hi})) - skipped")
             continue
-        arch_h, arch_n = hashlib.sha256(), 0
-        arch_offsets: set[int] = set()          # exact offsets: another ET day's records may sit between them
+        arch: dict[int, bytes] = {}             # exact offsets: another ET day's records may sit between them
         for e in es:
             for r in iter_records(ddir / e["path"]):
-                arch_offsets.add(r["o"])
-                arch_h.update(f"{r['o']}:".encode() + (base64.b64decode(r["v"]) if r["v"] else b"") + b"\n")
-                arch_n += 1
-        brk_h, brk_n = hashlib.sha256(), 0
+                arch[r["o"]] = base64.b64decode(r["v"]) if r["v"] else b""
+        seen: dict[int, bytes] = {}
         cons.assign([TopicPartition(t, p, first)])
         done = False
         while not done:
@@ -714,11 +711,19 @@ def broker_compare(args, ents: list[dict], root: Path, day: str) -> int:
                 if m.offset() > last:
                     done = True
                     break
-                if m.offset() in arch_offsets:
-                    brk_h.update(f"{m.offset()}:".encode() + (m.value() or b"") + b"\n")
-                    brk_n += 1
-        ok = (arch_n, arch_h.hexdigest()) == (brk_n, brk_h.hexdigest())
-        print(f"    {t} p{p}: archived={arch_n} broker={brk_n} sha256 {'MATCH' if ok else 'DIFFER'}")
+                if m.offset() in arch:
+                    seen[m.offset()] = m.value() or b""
+        # Every archived offset still on the broker must hold the same bytes. An archived offset the broker no
+        # longer has was compacted/removed AFTER capture (expected on compacted topics): reported, not a failure.
+        diff = [o for o, v in seen.items() if v != arch[o]]
+        h_a, h_b = hashlib.sha256(), hashlib.sha256()
+        for o in sorted(seen):
+            h_a.update(f"{o}:".encode() + arch[o] + b"\n")
+            h_b.update(f"{o}:".encode() + seen[o] + b"\n")
+        gone = len(arch) - len(seen)
+        ok = not diff and h_a.hexdigest() == h_b.hexdigest()
+        print(f"    {t} p{p}: archived={len(arch)} on_broker={len(seen)} compacted_away_since={gone} "
+              f"sha256 {'MATCH' if ok else 'DIFFER'}")
         rc = rc or (0 if ok else 1)
     cons.close()
     return rc
