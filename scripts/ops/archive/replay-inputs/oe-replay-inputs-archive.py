@@ -150,14 +150,28 @@ def fetch_schema(registry: str, sid: int) -> dict:
 
 # ---------------------------------------------------------------- state
 
-def load_runs(root: Path) -> list[dict]:
+def load_runs(root: Path, repair: bool = False) -> list[dict]:
+    """Read the checkpoint. An INVALID final line with no newline is an interrupted append: it was never
+    committed, so it is ignored (and, with repair=True, cut off). Any other malformed line is fatal."""
     p = root / "_runs.jsonl"
     if not p.exists():
         return []
+    raw = p.read_text()
+    lines = raw.split("\n")
     out = []
-    for line in p.read_text().splitlines():
-        if line.strip():
+    for i, line in enumerate(lines):
+        if not line.strip():
+            continue
+        try:
             out.append(json.loads(line))
+        except json.JSONDecodeError:
+            if i == len(lines) - 1 and not raw.endswith("\n"):
+                if repair:
+                    with p.open("r+") as f:
+                        f.truncate(len(raw.encode("utf-8")) - len(line.encode("utf-8")))   # keep everything up to the last newline
+                    log("repaired _runs.jsonl: cut an interrupted final append")
+                break
+            raise SystemExit(f"FATAL: _runs.jsonl line {i + 1} is corrupt; refusing to guess the checkpoint")
     return out
 
 
@@ -190,7 +204,7 @@ def recover(root: Path, runs: list[dict]) -> None:
         mf = ddir / "_manifest.jsonl"
         ents = [json.loads(x) for x in mf.read_text().splitlines() if x.strip()] if mf.exists() else []
         keep = [e for e in ents if (day, e["path"]) in committed]
-        kept = {e["path"] for e in keep}
+        kept = {e["path"] for e in keep} | {path for (d, path) in committed if d == day}   # never delete committed data
         dropped = 0
         for sub in ddir.iterdir():
             if sub.is_dir() and not sub.name.startswith("_"):
@@ -306,7 +320,7 @@ def capture(args) -> int:
         return 0
 
     topics = read_topics(Path(args.topics))
-    runs = load_runs(root)
+    runs = load_runs(root, repair=True)
     recover(root, runs)
     state = last_state(runs)
     archived_at = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -604,13 +618,13 @@ def check(args) -> int:
                                           "sids": set(), "first_err": None})
         for r in iter_records(ddir / e["path"]):
             s["records"] += 1
-            if r["v"] is None:
-                s["null"] += 1
-                continue
             try:
                 ksid = schema_id_of(base64.b64decode(r["k"])) if r["k"] else None
                 if ksid is not None and ksid in parsed:       # framed key with an archived schema: it must decode too
                     decode_value(parsed, base64.b64decode(r["k"]))
+                if r["v"] is None:
+                    s["null"] += 1
+                    continue
                 kind, _ = decode_value(parsed, base64.b64decode(r["v"]))
                 s["decoded"] += 1
                 s["avro" if kind != "json" else "json"] += 1

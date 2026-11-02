@@ -209,6 +209,27 @@ class Verify(unittest.TestCase):
         rc, out = self.v()
         self.assertEqual(rc, 0, out)
 
+    def test_recover_never_deletes_committed_data_missing_from_the_manifest(self):
+        ddir, ent = write_day(self.root)
+        (ddir / "_manifest.jsonl").write_text("")
+        (self.root / "_state" / "tmp").mkdir(parents=True)
+        ria.recover(self.root, ria.load_runs(self.root))
+        self.assertTrue((ddir / ent["path"]).exists())
+        rc, out = self.v()
+        self.assertEqual(rc, 2)        # no manifest entries: flagged, not destroyed
+
+    def test_truncated_final_checkpoint_line_is_cut_and_earlier_corruption_is_fatal(self):
+        write_day(self.root)
+        p = self.root / "_runs.jsonl"
+        good = p.read_text()
+        p.write_text(good + '{"topic":"t.to')
+        self.assertEqual(len(ria.load_runs(self.root)), 1)
+        self.assertEqual(len(ria.load_runs(self.root, repair=True)), 1)
+        self.assertEqual(p.read_text(), good)
+        p.write_text('{bad}\n' + good)
+        with self.assertRaises(SystemExit):
+            ria.load_runs(self.root)
+
     def test_stale_manifest_file_is_caught(self):
         ddir, _ = write_day(self.root)
         (ddir / "MANIFEST.sha256").write_text("")
@@ -230,6 +251,19 @@ class Decode(unittest.TestCase):
             rc, out = run(ria.check, root=str(root), dt="2026-11-02", broker=False, bootstrap="x")
             self.assertEqual(rc, 1)
             self.assertIn("not archived", out)
+
+    def test_tombstone_with_undecodable_framed_key_fails_check(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            ddir, ent = write_day(root, n=1, sid=7)
+            doc = json.loads((ddir / "_schemas" / "7.json").read_text())
+            p = ddir / ent["path"]
+            bad_key = base64.b64encode(b"\x00\x00\x00\x00\x07").decode()   # framed with schema 7, empty body
+            line = json.dumps({"p": 0, "o": 0, "ts": 1, "tt": 1, "k": bad_key, "v": None, "h": []}) + "\n"
+            with gzip.open(p, "wt", encoding="ascii") as f:
+                f.write(line)
+            rc, out = run(ria.check, root=str(root), dt="2026-11-02", broker=False, bootstrap="x")
+            self.assertEqual(rc, 1, out)
 
     def test_nested_references_load_dependency_first(self):
         inner = {"type": "record", "name": "Inner", "namespace": "t", "fields": [{"name": "a", "type": "long"}]}
