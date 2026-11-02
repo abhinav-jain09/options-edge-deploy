@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: line-acceptance-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: line-acceptance-service
+    app.kubernetes.io/component: line-acceptance-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  # DARK: replicas 0 and LINE_ACCEPTANCE_ENABLED "false", on dev (the only environment that renders this service) in the base AND in the overlay. Held down by NAME so no script raises it:
+  # DISABLED_DEV in scripts/ops/dev-cleanup.sh and KEEP_DOWN in scripts/ops/morning-autostart.sh and scripts/ops/oe-boot-bringup.sh (tests/test_keep_down_lists_agree.py). Replicas 0 alone is
+  # NOT a hold: do_start scales every deployment not named there to 1. Raising it is a reviewed, owner-visible event (design section 15, Stage B), never a side effect of a clean or a boot.
+  # SINGLE replica ONLY: the transactional.id is line-acceptance-<ENVIRONMENT>, a second instance fences the first.
+  replicas: 0
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: line-acceptance-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: line-acceptance-service
+        app.kubernetes.io/component: line-acceptance-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: line-acceptance
+          image: 192.168.100.252:5000/options-edge-line-acceptance:dev
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: options-edge-config              # KAFKA_BOOTSTRAP_SERVERS, SCHEMA_REGISTRY_URL, TOPIC_PREFIX and the runtime profile
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            # The one flag. "false" serves health and metrics and touches no broker.
+            - name: LINE_ACCEPTANCE_ENABLED
+              value: "false"
+            # options-edge-config carries no ENVIRONMENT; the service's transactional.id and consumer group are line-acceptance-<ENVIRONMENT>.
+            - name: ENVIRONMENT
+              value: dev
+            # 8171 belongs to break-classifier.
+            - name: LINE_ACC_HEALTH_PORT
+              value: "8172"
+          ports:
+            - name: health
+              containerPort: 8172
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              memory: 768Mi

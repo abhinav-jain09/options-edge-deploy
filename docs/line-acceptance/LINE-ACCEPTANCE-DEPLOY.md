@@ -1,0 +1,36 @@
+# line-acceptance-service: deploy wiring (VWAP-ACCEPTANCE-REJECTION, phase P0)
+
+Design: options-edge-documents `VWAP-ACCEPTANCE-REJECTION-DESIGN.md` sections 9.1 and 15 (stage 0). Nothing runs: this is the wiring of a **dark, dev-only** service.
+
+## Deploy facts
+
+| | |
+|---|---|
+| Registry entry | `services.yaml` `line-acceptance` (standalone, `envs: [dev]`, `sliceGenerated`) |
+| Deployment / container | `line-acceptance-service` / `line-acceptance` |
+| Image | `options-edge-line-acceptance`, tag `dev`; variable `LINE_ACCEPTANCE_IMAGE` (dev-only lists in `apply.sh`, `image-lock.sh`, `resolve-images.sh`, `verify-running-images.sh`; `image-tags/dev.yaml`) |
+| Replicas / flag | `0` and `LINE_ACCEPTANCE_ENABLED "false"` in the base **and** the dev overlay (no enable patch exists) |
+| Env | `LINE_ACCEPTANCE_ENABLED`, `LINE_ACC_HEALTH_PORT=8172`, `ENVIRONMENT=dev`; input topic names are the service's own defaults |
+| Health | port `8172` (`8171` is break-classifier), `/health/ready`, `/health/live` |
+| Single replica | `Recreate`; `transactional.id = line-acceptance-<ENVIRONMENT>`; a second instance fences the first |
+| Held down | `line-acceptance-service` is in `DISABLED_DEV` (`dev-cleanup.sh`) and `KEEP_DOWN` of `morning-autostart.sh` and `oe-boot-bringup.sh`; `tests/test_keep_down_lists_agree.py` |
+| Topics | six, 1 partition each, in `scripts/kafka/topics.env`; barrier `scripts/kafka/ensure-line-acceptance-topics.sh` (dev only, fails closed) |
+| Schemas | `scripts/kafka/schema-id-maps/line-acceptance.map`, ids 3101-3111 (contracts #149), `service-deploy SERVICE=line-acceptance REGISTER_TA_SCHEMAS=true CONTRACTS_PERMITTED_SHA=<sha>` |
+| Production | none: no overlay, slice, image tag, gateway flag; the deploy job refuses `ENVIRONMENT=production` |
+
+Topic shapes: `options.spx.line-acceptance` delete 7 d; `.monitor` compact; `.status` delete, `retention.ms=-1`, `retention.bytes=-1`, **not compacted** (RESET-PRESERVED: every `CalibrationStatus` version survives);
+`.checkpoint` compact with a topic-level `max.message.bytes` 9437184; `.journal` delete 7 d with the same topic-level limit; `.dlq` delete 7 d. `topics.env` is shared with production, so a production topic
+reconcile would create the six empty, unused topics there too (same position as `options.spx.oi.next-publication`); nothing on production reads or writes them.
+
+`dev-cleanup.sh` recreates the six topics from `topics.env` but does **not** run the barrier (the clean never runs per-service barriers): run the deploy barrier before raising the service after a wipe.
+
+## Rollback
+
+Already zero. There is nothing to roll back: the Deployment is at replicas 0 with the flag `"false"`, and no script raises it.
+
+## How P1+ enables it (a reviewed, owner-visible change, never a side effect)
+
+1. Contracts #149 merged; register the subjects (`REGISTER_TA_SCHEMAS`) and run the barrier (`service-deploy SERVICE=line-acceptance`), build the image.
+2. One PR: replicas 1 and `LINE_ACCEPTANCE_ENABLED "true"` in a dev enable patch (and the gate flags the design stages one at a time), **and** remove the name from `DISABLED_DEV` and both `KEEP_DOWN` lists (the three lists and the manifest must change together;
+   `tests/test_line_acceptance_deploy.py` pins the dark state and is updated in that PR). Deployments are by hand on dev per the owner rule.
+3. Production needs its own separately reviewed design; nothing here authorises it.

@@ -1,0 +1,9 @@
+# SERVICE SLICE — line-acceptance (VWAP-ACCEPTANCE-REJECTION, phase P0). Owns this service's Deployment only.
+#
+# Referenced from the DEV overlay (k8s/overlays/dev) ONLY — NOT from k8s/base, NOT from k8s/overlays/production or experiment, so no environment other than dev
+# renders it. services.yaml declares envs: [dev] to match. The base is replicas 0 / LINE_ACCEPTANCE_ENABLED "false" and there is NO enable patch: the service is DARK
+# and held down by name (DISABLED_DEV, KEEP_DOWN). Single replica only. No Service object. No ConfigMap, Secret, PVC or hostPath: its checkpoint is a Kafka topic.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - line-acceptance-deployment.yaml

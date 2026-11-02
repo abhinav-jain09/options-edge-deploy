@@ -75,6 +75,10 @@ resources:
   # standalone overlay (k8s/services/zn-gex/overlays/dev) — mirror rule holds trivially;
   # the dev image remap below (mirrored in that slice) is what the mirror rule compares.
   - ../../services/zn-gex/base
+  # line-acceptance is DEV-ONLY and DARK (VWAP-ACCEPTANCE-REJECTION P0; services.yaml envs: [dev]): replicas 0 / LINE_ACCEPTANCE_ENABLED "false" in the base, NO enable patch, and
+  # held down by name (DISABLED_DEV + both KEEP_DOWN lists). Referenced here only (NOT in k8s/base, NOT in the production/experiment overlays). No patches here or in the standalone
+  # overlay (k8s/services/line-acceptance/overlays/dev) — mirror rule holds trivially; the dev image remap below is what the slice mirrors.
+  - ../../services/line-acceptance/base
   # NOTE: the databento timewarp replay Job + snapshot-replay Deployment used to live
   # here. They moved to k8s/replay/dev and now deploy on-demand via the dedicated
   # `replay-deploy` job (Jenkinsfile.replay) — OUT of the dev/prod bring-up path. A Job's
@@ -951,6 +955,9 @@ images:
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-zn-gex
     newName: host.docker.internal:5001/options-edge-zn-gex
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-line-acceptance
+    newName: host.docker.internal:5001/options-edge-line-acceptance
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-oi-next-publication
     newName: host.docker.internal:5001/options-edge-oi-next-publication
