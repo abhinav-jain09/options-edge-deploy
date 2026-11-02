@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  DEV replay-inputs archive: every 5 minutes, all day, every day (the broker is read, never changed,
+  and a quiet run moves nothing). Continuous on purpose: it is the ORDERING against the dev clean.
+  The clean (dev-cleanup now, or the kafka-truncate-to-today script) is manual, and its guard refuses
+  09:30-17:20 ET on a trading day; RTH inputs are therefore on the NAS at least ~1 h before the
+  earliest clean that can touch them, instead of racing a once-a-day job that starts at 17:10 and was
+  still working through options.ibkr.raw an hour later.
+
+  Install: bash scripts/ops/archive/replay-inputs/install-dev.sh   (host action, dev Mac only).
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.optionsedge.dev-replay-inputs-archive</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/abhinav/oe-ops/venv/bin/python</string>
+    <string>/Users/abhinav/Library/Application Support/OptionsEdge/dev-replay-inputs/oe-replay-inputs-archive.py</string>
+    <string>capture</string>
+    <string>--root</string><string>/Volumes/database/optionsedge/replay-inputs/dev</string>
+    <string>--topics</string><string>/Users/abhinav/Library/Application Support/OptionsEdge/dev-replay-inputs/replay-inputs-topics.conf</string>
+    <string>--nas-guard</string>
+  </array>
+  <key>StartInterval</key><integer>300</integer>
+  <key>RunAtLoad</key><true/>
+  <key>ThrottleInterval</key><integer>30</integer>
+  <key>StandardOutPath</key><string>/Users/abhinav/Library/Application Support/OptionsEdge/dev-replay-inputs/capture.log</string>
+  <key>StandardErrorPath</key><string>/Users/abhinav/Library/Application Support/OptionsEdge/dev-replay-inputs/capture.log</string>
+</dict>
+</plist>
