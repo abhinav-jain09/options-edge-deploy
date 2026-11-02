@@ -87,7 +87,7 @@ chmod +x "$TMP/bin/kafka-console-consumer.sh"
 
 PRE_ID=Etuw6A2-RZiWnbq4oPLHLw            # the es4 pre-cutover id, from avro-rollforward.lib.sh
 T=es.options.databento.gex.oi-status
-GOOD_CFG='min.insync.replicas=1,cleanup.policy=delete,segment.bytes=268435456,retention.ms=43200000'
+GOOD_CFG='min.insync.replicas=1,cleanup.policy=delete,segment.bytes=268435456,retention.ms=-1'
 desc() { printf '%s=Topic: %s\tTopicId: %s\tPartitionCount: %s\tReplicationFactor: 1\tConfigs: %s\n' "$T" "$T" "$1" "$2" "$3"; }
 
 # snap <records-in-partition-0> -> full 32-partition earliest/latest snapshots, exported as
@@ -156,10 +156,14 @@ MOCK_LIST="$T" MOCK_DESCRIBE="$(desc NEWIDxxxxxxxxxxxxxxxxx 32 'min.insync.repli
   run "the wrong RETENTION is refused" 1
 
 # The PREFIX traps: an unanchored substring grep would accept every one of these.
-MOCK_LIST="$T" MOCK_DESCRIBE="$(desc NEWIDxxxxxxxxxxxxxxxxx 32 'min.insync.replicas=1,cleanup.policy=delete,segment.bytes=268435456,retention.ms=432000000')" \
-  run "retention.ms=432000000 is refused where 43200000 is declared (prefix trap)" 1
+MOCK_LIST="$T" MOCK_DESCRIBE="$(desc NEWIDxxxxxxxxxxxxxxxxx 32 'min.insync.replicas=1,cleanup.policy=delete,segment.bytes=268435456,retention.ms=-10')" \
+  run "retention.ms=-10 is refused where -1 is declared (prefix trap)" 1
 
-MOCK_LIST="$T" MOCK_DESCRIBE="$(desc NEWIDxxxxxxxxxxxxxxxxx 32 'min.insync.replicas=10,cleanup.policy=delete,segment.bytes=268435456,retention.ms=43200000')" \
+# The es4 host's retention timer holds application topics at -1, so the old 12 h declaration must not pass.
+MOCK_LIST="$T" MOCK_DESCRIBE="$(desc NEWIDxxxxxxxxxxxxxxxxx 32 'min.insync.replicas=1,cleanup.policy=delete,segment.bytes=268435456,retention.ms=43200000')" \
+  run "retention.ms=43200000 (12 h) is refused where -1 is declared" 1
+
+MOCK_LIST="$T" MOCK_DESCRIBE="$(desc NEWIDxxxxxxxxxxxxxxxxx 32 'min.insync.replicas=10,cleanup.policy=delete,segment.bytes=268435456,retention.ms=-1')" \
   run "min.insync.replicas=10 is refused where 1 is declared (prefix trap)" 1
 
 # cleanup.policy=compact,delete must NOT satisfy a declared cleanup.policy=delete: the comma makes

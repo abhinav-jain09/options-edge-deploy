@@ -37,10 +37,12 @@ rates.databento.zn.options.gex.strike|1|cleanup.policy=delete,retention.ms=86400
 SPECS
       ;;
     es4)
-      # 12 h retention, not -1: es4 applies the org delete-cleanup default to every such topic
-      # (scripts/es4/create-es-topics.sh RETENTION_MS), and topics.env declares no es4 override here.
+      # retention.ms=-1, not 12 h: the es4 host runs es4-kafka-retention.timer (every 15 min,
+      # /usr/local/sbin/es4-kafka-retention, "enforce ES4 unlimited time and size retention on application
+      # Kafka topics"), which sets -1 on every application topic. A declaration of 12 h can therefore never
+      # hold: it was reset to -1 within minutes of an alter, and it made every es4-deploy fail this barrier.
       cat <<'SPECS'
-es.options.databento.gex.oi-status|32|cleanup.policy=delete,retention.ms=43200000,min.insync.replicas=1|Etuw6A2-RZiWnbq4oPLHLw
+es.options.databento.gex.oi-status|32|cleanup.policy=delete,retention.ms=-1,min.insync.replicas=1|Etuw6A2-RZiWnbq4oPLHLw
 SPECS
       ;;
     *) echo "FATAL: unknown cluster '$1' (expected dev, production or es4)" >&2; return 1 ;;
