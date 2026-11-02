@@ -38,6 +38,8 @@ spec:
     spec:
       containers:
         - env:
+            - name: ES_SPX_ALIGN_RITHMIC_DEPTH_ENABLED
+              value: "true"
             - name: ES_SPX_ALIGN_ENABLED
               value: "true"
             - name: HEALTH_PORT
@@ -96,6 +98,8 @@ spec:
             - /app/app.jar
             - com.optionsedge.processing.esspxalign.AlignSchemaProvisioner
           env:
+            - name: ES_SPX_ALIGN_RITHMIC_DEPTH_ENABLED
+              value: "true"
             - name: ES_SPX_ALIGN_ENABLED
               value: "true"
             - name: KAFKA_ES_GEX_SPX_ALIGNED_TOPIC

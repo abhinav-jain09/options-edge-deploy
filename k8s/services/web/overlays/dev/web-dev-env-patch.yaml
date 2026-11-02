@@ -41,13 +41,6 @@ spec:
         - name: web
           env:
             # Read-only Rithmic Test depth, supplied by the owner's loopback collector/private tunnel.
-            - name: RITHMIC_DEPTH_URL
-              value: "http://host.docker.internal:17432/depth"
-            - name: RITHMIC_DEPTH_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: rithmic-depth-bridge
-                  key: token
             - name: APP_PROFILE
               value: "dev"
             # Auth ON in dev (mirrors prod). Keycloak's OWN configured hostname is dev-auth.bleadingoptions.com

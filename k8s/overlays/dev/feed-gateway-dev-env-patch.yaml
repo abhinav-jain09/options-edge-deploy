@@ -20,6 +20,8 @@ spec:
         - name: feed-gateway
           # env merges by name: these override the base prod WS values and add the dev GATEWAY_* keys.
           env:
+            - name: GATEWAY_RITHMIC_DEPTH_ENABLED
+              value: "true"
             # MARKET STRUCTURE relay (gateway #194): the latest market-structure record is retained and
             # replayed to the Context Tape page as the `market-structure` frame, which draws the STRUCTURE
             # layer. The topic is market-structure-service's UI projection — the namespace R13 of
