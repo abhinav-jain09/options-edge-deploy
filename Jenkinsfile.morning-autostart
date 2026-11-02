@@ -56,6 +56,7 @@ pipeline {
             set -euo pipefail
             ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "${PROD_HOST}" 'mkdir -p ~/autostart/jenkins ~/autostart/ops'
             scp -o BatchMode=yes scripts/ops/morning-autostart.sh   "${PROD_HOST}:/home/abhinav/autostart/ops/morning-autostart.sh"
+            scp -o BatchMode=yes scripts/ops/prod-start-prereqs.sh  "${PROD_HOST}:/home/abhinav/autostart/ops/prod-start-prereqs.sh"
             scp -o BatchMode=yes scripts/jenkins/market_calendar.py "${PROD_HOST}:/home/abhinav/autostart/jenkins/market_calendar.py"
             echo "Running morning autostart on ${PROD_HOST} (ENABLED=${ENABLED})"
             ssh -o BatchMode=yes "${PROD_HOST}" \
