@@ -719,13 +719,27 @@ do_es_down() {
 # with EVERY container ready. The containers are named by the pod, never read through `kubectl logs deploy/...`
 # (a bare deploy log read picks the FIRST container).
 pod_ready_report() {
-  local name=$1 line ready total
-  line=$($KK get pods -l "app.kubernetes.io/name=$name" \
-    -o jsonpath='{range .items[*]}{.status.containerStatuses[*].ready}{"\n"}{end}' 2>/dev/null | head -1)
-  total=$(printf '%s\n' "$line" | wc -w | tr -d ' ')
-  ready=$(printf '%s\n' "$line" | tr ' ' '\n' | grep -c '^true$' || true)
-  echo "$name $ready/$total containers ready"
-  [ "$total" -gt 0 ] && [ "$ready" -eq "$total" ]
+  local name=$1 lines line ts flags pods=0 bad=0 ready=0 total=0 f
+  # one line per pod: "<deletionTimestamp>|<ready flag per container>". A TERMINATING pod (deletionTimestamp set) is
+  # a rollout leftover and is ignored; EVERY remaining pod must have every container ready, so an old ready pod can
+  # never vouch for a new one that is not (and a pod with no container statuses yet counts as not ready).
+  lines=$($KK get pods -l "app.kubernetes.io/name=$name" \
+    -o jsonpath='{range .items[*]}{.metadata.deletionTimestamp}{"|"}{.status.containerStatuses[*].ready}{"\n"}{end}' 2>/dev/null)
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    ts=${line%%|*}; flags=${line#*|}
+    [ -n "$ts" ] && continue
+    pods=$((pods + 1))
+    [ -n "$flags" ] || bad=1
+    for f in $flags; do
+      total=$((total + 1))
+      if [ "$f" = true ]; then ready=$((ready + 1)); else bad=1; fi
+    done
+  done <<EOF2
+$lines
+EOF2
+  echo "$name $ready/$total containers ready ($pods pod(s))"
+  [ "$pods" -gt 0 ] && [ "$bad" -eq 0 ]
 }
 
 # verify_start_readiness: indicator-service must reach all containers ready (2/2: indicator-estimate +
@@ -887,8 +901,14 @@ PY
 # commits behind. FAILS (non-zero, nothing printed) unless exactly one non-empty declaration exists, and the caller
 # REFUSES the wipe then: an unreadable keep list must stop a destructive clean, not mean "keep nothing".
 dev_clean_preserved_topics() {
-  git -C "$DEPLOY_REPO" fetch -q origin main 2>/dev/null || true
-  local env n val
+  # The fetch MUST succeed: a stale origin/main could lack a newly required keep entry, and this list guards a
+  # destructive wipe. Retried; a final failure refuses the wipe (the caller says why).
+  local env n val try fetched=0
+  for try in 1 2 3; do
+    git -C "$DEPLOY_REPO" fetch -q origin main 2>/dev/null && { fetched=1; break; }
+    sleep 2
+  done
+  [ "$fetched" = 1 ] || return 1
   env="$(git -C "$DEPLOY_REPO" show "$TOPICS_ENV_REF" 2>/dev/null)" || return 1
   n=$(printf '%s\n' "$env" | grep -cE '^OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS="' || true)
   [ "${n:-0}" -eq 1 ] || return 1

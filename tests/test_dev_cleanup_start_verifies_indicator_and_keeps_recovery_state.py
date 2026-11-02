@@ -54,9 +54,11 @@ class Readiness(unittest.TestCase):
             k = tmp / "kubectl"
             k.write_text(FAKE_KUBECTL)
             k.chmod(k.stat().st_mode | stat.S_IXUSR)
+            def lines(spec):   # "true true" or "true true;|false true" (several pods, "ts|flags")
+                return "\n".join(x if "|" in x else "|" + x for x in spec.split(";")) + "\n"
             if indicator is not None:
-                (tmp / "indicator-service").write_text(indicator + "\n")
-            (tmp / "market-structure-service").write_text(market + "\n")
+                (tmp / "indicator-service").write_text(lines(indicator))
+            (tmp / "market-structure-service").write_text(lines(market))
             h = tmp / "h.sh"
             h.write_text(
                 "set -uo pipefail\nsleep() { :; }\n"
@@ -93,6 +95,19 @@ class Readiness(unittest.TestCase):
         self.assertEqual(0, d.returncode)
         self.assertIn("readiness check skipped", d.stdout)
 
+    def test_an_old_ready_pod_cannot_vouch_for_a_new_unready_one(self):
+        d = self.run_verify("true true;false true")      # rollout: old pod ready, NEW pod 1/2
+        self.assertEqual(1, d.returncode)
+        self.assertIn("FAILED", d.stderr)
+
+    def test_a_terminating_unready_pod_is_ignored(self):
+        d = self.run_verify("2026-11-02T01:00:00Z|false false;true true")
+        self.assertEqual(0, d.returncode, d.stderr)
+        self.assertIn("indicator-service 2/2 containers ready (1 pod(s))", d.stdout)
+
+    def test_a_pod_without_container_statuses_is_not_ready(self):
+        self.assertEqual(1, self.run_verify("|").returncode)
+
     def test_do_start_returns_the_verdict(self):
         self.assertRegex(TEXT, r"verify_start_readiness \|\| verify_rc=\$\?")
         self.assertRegex(TEXT, r"return \$verify_rc")
@@ -124,11 +139,12 @@ class KeepList(unittest.TestCase):
             (repo / "scripts/kafka").mkdir(parents=True)
             (repo / "scripts/kafka/topics.env").write_text(topics_env_text)
             for c in (["init", "-q", "-b", "main"], ["add", "-A"],
-                      ["-c", "user.email=a@b", "-c", "user.name=t", "commit", "-qm", "x"]):
+                      ["-c", "user.email=a@b", "-c", "user.name=t", "commit", "-qm", "x"],
+                      ["remote", "add", "origin", str(repo)]):     # fetches from itself: the fetch must SUCCEED
                 subprocess.run(["git", "-C", str(repo)] + c, check=True, capture_output=True)
             h = tmp / "h.sh"
             h.write_text(
-                f'DEPLOY_REPO="{repo}"; TOPICS_ENV_REF="main:scripts/kafka/topics.env"\n'
+                f'DEPLOY_REPO="{repo}"; TOPICS_ENV_REF="main:scripts/kafka/topics.env"\nsleep() {{ :; }}\n'
                 + func("dev_clean_preserved_topics") + "dev_clean_preserved_topics\n"
             )
             return subprocess.run([BASH, str(h)], capture_output=True, text=True, timeout=30)
@@ -143,6 +159,25 @@ class KeepList(unittest.TestCase):
         self.assertEqual(sorted(ESTIMATE_KEEP), sorted(m.group(1).split()))
         self.assertNotIn("DEV_ONLY_ESTIMATE_KEEP", TOPICS_ENV.read_text())
         self.assertIn('DEV_KEEP="$DEV_KEEP $DEV_ONLY_ESTIMATE_KEEP"', TEXT)
+
+    def test_a_failed_fetch_refuses_instead_of_trusting_a_stale_ref(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            repo = tmp / "r"
+            (repo / "scripts/kafka").mkdir(parents=True)
+            (repo / "scripts/kafka/topics.env").write_text(TOPICS_ENV.read_text())
+            for c in (["init", "-q", "-b", "main"], ["add", "-A"],
+                      ["-c", "user.email=a@b", "-c", "user.name=t", "commit", "-qm", "x"],
+                      ["remote", "add", "origin", str(tmp / "does-not-exist")],
+                      ["update-ref", "refs/remotes/origin/main", "HEAD"]):
+                subprocess.run(["git", "-C", str(repo)] + c, check=True, capture_output=True)
+            h = tmp / "h.sh"
+            h.write_text(
+                f'DEPLOY_REPO="{repo}"; TOPICS_ENV_REF="origin/main:scripts/kafka/topics.env"\nsleep() {{ :; }}\n'
+                + func("dev_clean_preserved_topics") + "dev_clean_preserved_topics\n")
+            d = subprocess.run([BASH, str(h)], capture_output=True, text=True, timeout=30)
+        self.assertNotEqual(0, d.returncode, "a stale origin/main must not be trusted when the fetch fails")
+        self.assertEqual("", d.stdout.strip())
 
     def test_missing_declaration_refuses(self):
         self.assertNotEqual(0, self.call('OTHER="x"\n').returncode)
