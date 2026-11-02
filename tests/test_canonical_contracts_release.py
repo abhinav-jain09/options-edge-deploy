@@ -238,6 +238,14 @@ class RegistryResourceInventory(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "inventory differs from main"):
             release.verify_package(self.jar(files, extra={"schemas-registry/ta/Extra.avsc": b"x"}), root)
 
+    def test_a_registry_file_beyond_the_old_allow_list_is_accepted_only_when_byte_identical_to_main(self):
+        root, files = self.source()
+        (root / "schemas-registry/multileg").mkdir()
+        (root / "schemas-registry/multileg/M.avsc").write_bytes(b"m")
+        release.verify_package(self.jar(files, extra={"schemas-registry/multileg/M.avsc": b"m"}), root)
+        with self.assertRaisesRegex(ValueError, "differs from main: schemas-registry/multileg/M.avsc"):
+            release.verify_package(self.jar(files, extra={"schemas-registry/multileg/M.avsc": b"tampered"}), root)
+
     def test_a_packaged_registry_file_missing_from_the_jar_is_refused(self):
         root, files = self.source()
         smaller = {k: v for k, v in files.items() if k != "schemas-registry/esflow/E.avsc"}
