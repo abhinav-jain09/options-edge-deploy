@@ -68,6 +68,11 @@ spec:
             # production are NOT part of this change: ES studies need them first (schemas on es4 and prod, mirrors installed).
             - name: GATEWAY_STUDIES_ENABLED
               value: "true"
+            # DEV-ONLY: the line acceptance / rejection relay (VWAP-ACCEPTANCE-REJECTION P5; gateway PR 274): the gateway reads options.spx.line-acceptance and serves the page's "Line tests" lens.
+            # It was set on the live dev gateway by `kubectl set env`, which a Jenkins apply would reset, so it is declared here. Production's patch and the base do not carry it (code default off).
+            # The producer, line-acceptance-service, stays at replicas 0 and LINE_ACCEPTANCE_ENABLED "false" until the design's backtest report exists (design section 15), so the lens says the service has sent nothing.
+            - name: GATEWAY_LINE_ACCEPTANCE_ENABLED
+              value: "true"
             # TA-books relays (frame contracts GEOMETRY-/TRADE-TOOLS-/WAVES-FRAME-CONTRACT.md in options-edge-processing docs/ta-books/catalog). The names are GatewaySettings' (feat/ta-geometry-feed-gateway:
             # structureToolsEnabled / geometryEnabled / tradeToolsEnabled / waveCycleEnabled) and the topic variables it also reads
             # (KAFKA_MARKET_STRUCTURE_{TOOLS,GEOMETRY}_TOPIC, KAFKA_TT_*_TOPIC, KAFKA_WAVE_CYCLE_{WAVES,CYCLES}_TOPIC) default to exactly the topics

@@ -77,6 +77,8 @@ spec:
               value: "true"
             - name: GATEWAY_STUDIES_ENABLED
               value: "true"
+            - name: GATEWAY_LINE_ACCEPTANCE_ENABLED
+              value: "true"
             - name: GATEWAY_STRUCTURE_TOOLS_ENABLED
               value: "true"
             - name: GATEWAY_GEOMETRY_ENABLED
