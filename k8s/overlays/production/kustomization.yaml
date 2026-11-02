@@ -859,6 +859,19 @@ patches:
       - op: replace
         path: /spec/template/spec/containers/0/resources/requests/cpu
         value: 750m
+  # PROD-ONLY: strike-flow-classifier CPU request 1 -> 4. The prod node (24 cores) runs at load ~44; the classifier is its
+  # largest consumer (~2 cores) and its hot partition (strike-flow-by-market-repartition-17: every SPX trade of the market
+  # lands in ONE partition, so ONE stream thread) ran ~1,000 records / ~2 minutes behind all session on 2026-11-02 while dev
+  # (same code, same config, same input) was real time. At request 1 its cgroup weight (cpu.weight 39) lost the CFS contest.
+  # Same remedy and reasoning as strike-liquidity-heatmap above; the CPU limit stays absent (no-throttle discipline).
+  # MUST MIRROR the standalone slice k8s/services/strike-flow-classifier/overlays/production (validate-services: mono==slice).
+  - target:
+      kind: Deployment
+      name: strike-flow-classifier-databento
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: "4"
   # spx-mission-control is kept OFF (replicas:0) in prod (USER 2026-07-09). MUST MIRROR the standalone
   # slice k8s/services/spx-mission-control/overlays/production (validate-services: mono==slice). Re-enable
   # by removing this patch AND setting the slice back to replicas:1.
