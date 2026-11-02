@@ -31,7 +31,7 @@ KTOPICS="sudo -n docker exec es4-kafka kafka-topics --bootstrap-server localhost
 KOFFSETS="sudo -n docker exec es4-kafka kafka-get-offsets --bootstrap-server localhost:9092"
 
 # Services whose CONSUMER can die while the pod stays Running. Extend as new ones appear.
-LOG_SERVICES="${ES4_LOG_SERVICES:-es-feed-gateway es-feed es-web}"
+LOG_SERVICES="${ES4_LOG_SERVICES:-es-feed-gateway es-feed}"
 # Topics that must advance for the chain to be considered alive.
 # display + gex.strike producers were removed from es4 2026-11-02; ES trades are what the remaining chain consumes.
 FLOW_TOPICS="${ES4_FLOW_TOPICS:-es.underlying.es.trades}"

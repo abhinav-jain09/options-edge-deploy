@@ -10,7 +10,7 @@ REMOVED = {
     "databento-gex", "databento-gex-history", "databento-maxpain", "databento-volume-aggregator",
     "strike-flow-classifier", "strike-flow-avro-adapter", "raw-to-display", "delta-flow",
     "gamma-migration", "gex-delta-redis-writer", "strike-liquidity-heatmap", "option-price-behavior",
-    "vix-option-inteligence", "pin-postgres-writer", "pressure-postgres-writer",
+    "es-web", "vix-option-inteligence", "pin-postgres-writer", "pressure-postgres-writer",
 }
 SCRIPT = ROOT / "scripts/es4/assert-allowed-services.sh"
 
