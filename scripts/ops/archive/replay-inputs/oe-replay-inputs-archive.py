@@ -190,6 +190,26 @@ def append_line(path: Path, obj: dict) -> None:
         os.fsync(f.fileno())
 
 
+def read_jsonl(path: Path) -> tuple[list[dict], bool]:
+    """(entries, tail_was_torn). An invalid, unterminated FINAL line is a torn append (never committed);
+    any other corrupt line is fatal."""
+    if not path.exists():
+        return [], False
+    raw = path.read_text()
+    lines = raw.split("\n")
+    out: list[dict] = []
+    for i, line in enumerate(lines):
+        if not line.strip():
+            continue
+        try:
+            out.append(json.loads(line))
+        except json.JSONDecodeError:
+            if i == len(lines) - 1 and not raw.endswith("\n"):
+                return out, True
+            raise SystemExit(f"FATAL: {path} line {i + 1} is corrupt; refusing to guess") from None
+    return out, False
+
+
 def committed_files(runs: list[dict]) -> set[tuple[str, str]]:
     return {(f["dt"], f["path"]) for r in runs for f in r["files"]}
 
@@ -202,7 +222,7 @@ def recover(root: Path, runs: list[dict]) -> None:
     for ddir in sorted(root.glob("dt=*")):
         day = ddir.name[3:]
         mf = ddir / "_manifest.jsonl"
-        ents = [json.loads(x) for x in mf.read_text().splitlines() if x.strip()] if mf.exists() else []
+        ents, torn = read_jsonl(mf)
         keep = [e for e in ents if (day, e["path"]) in committed]
         kept = {e["path"] for e in keep} | {path for (d, path) in committed if d == day}   # never delete committed data
         dropped = 0
@@ -212,13 +232,13 @@ def recover(root: Path, runs: list[dict]) -> None:
                     if f"{sub.name}/{f.name}" not in kept:
                         f.unlink()
                         dropped += 1
-        if len(keep) != len(ents) or dropped:
+        if len(keep) != len(ents) or dropped or torn:
             tmp = mf.with_suffix(".tmp")
             tmp.write_text("".join(json.dumps(e, separators=(",", ":")) + "\n" for e in keep))
             os.replace(tmp, mf)
         if mf.exists():
             write_day_manifests(ddir)       # sidecars are derived: always rebuild, a crash may have skipped them
-        if len(keep) != len(ents) or dropped:
+        if len(keep) != len(ents) or dropped or torn:
             log(f"recovered {ddir.name}: dropped {len(ents) - len(keep)} uncommitted manifest line(s), {dropped} file(s)")
     for f in (root / "_state" / "tmp").glob("*.tmp"):
         f.unlink()
@@ -505,8 +525,7 @@ def iter_records(path: Path):
 
 
 def day_entries(root: Path, day: str) -> list[dict]:
-    mf = root / f"dt={day}" / "_manifest.jsonl"
-    return [json.loads(x) for x in mf.read_text().splitlines() if x.strip()] if mf.exists() else []
+    return read_jsonl(root / f"dt={day}" / "_manifest.jsonl")[0]
 
 
 def verify(args) -> int:

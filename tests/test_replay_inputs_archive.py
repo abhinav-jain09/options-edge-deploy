@@ -239,6 +239,15 @@ class Verify(unittest.TestCase):
         rc, out = self.v()
         self.assertEqual(rc, 0, out)
 
+    def test_recover_survives_a_torn_day_manifest_line(self):
+        ddir, _ = write_day(self.root)
+        with (ddir / "_manifest.jsonl").open("a") as f:
+            f.write('{"path":"t.top')
+        (self.root / "_state" / "tmp").mkdir(parents=True)
+        ria.recover(self.root, ria.load_runs(self.root))
+        rc, out = self.v()
+        self.assertEqual(rc, 0, out)
+
     def test_stale_manifest_file_is_caught(self):
         ddir, _ = write_day(self.root)
         (ddir / "MANIFEST.sha256").write_text("")
