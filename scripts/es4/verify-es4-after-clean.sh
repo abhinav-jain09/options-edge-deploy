@@ -31,7 +31,7 @@ KTOPICS="sudo -n docker exec es4-kafka kafka-topics --bootstrap-server localhost
 KOFFSETS="sudo -n docker exec es4-kafka kafka-get-offsets --bootstrap-server localhost:9092"
 
 # Services whose CONSUMER can die while the pod stays Running. Extend as new ones appear.
-LOG_SERVICES="${ES4_LOG_SERVICES:-es-feed-gateway es-feed es-web}"
+LOG_SERVICES="${ES4_LOG_SERVICES:-es-feed-gateway es-feed}"
 # Topics that must advance for the chain to be considered alive.
 FLOW_TOPICS="${ES4_FLOW_TOPICS:-es.options.databento.display es.options.databento.gex.strike}"
 FLOW_WINDOW_SECONDS="${ES4_FLOW_WINDOW_SECONDS:-75}"

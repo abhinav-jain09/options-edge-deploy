@@ -53,7 +53,6 @@ class OptionPriceBehaviorDeployTest(unittest.TestCase):
         overlay_root = ROOT / "k8s" / "services" / "option-price-behavior" / "overlays"
         surfaces = {
             "base deployment": deployment,
-            "es4 manifest": (ROOT / "k8s" / "es4" / "services" / "option-price-behavior.yaml").read_text(),
             "topics.env": (ROOT / "scripts" / "kafka" / "topics.env").read_text(),
         }
         for env_name in ("dev", "experiment", "production"):

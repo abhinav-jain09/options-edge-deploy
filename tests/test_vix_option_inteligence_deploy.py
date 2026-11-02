@@ -33,7 +33,6 @@ class VixOptionInteligenceStageBEnvironmentTest(unittest.TestCase):
     DECLARATIONS = {
         "dev": "k8s/services/vix-option-inteligence/overlays/dev/manifest.yaml",
         "production": "k8s/services/vix-option-inteligence/overlays/production/manifest.yaml",
-        "es4": "k8s/es4/services/vix-option-inteligence.yaml",
     }
 
     def overlay(self, env):
@@ -81,10 +80,11 @@ class VixOptionInteligenceStageBEnvironmentTest(unittest.TestCase):
         # The set is the DATA CONTRACT (PayloadV2.FrameContext.ENVIRONMENTS). A name in it with no
         # declaring manifest is a deployment that cannot boot Stage-B, and es4 was exactly that.
         self.assertEqual(
-            sorted(ZERODTE_ENVIRONMENTS), sorted(self.DECLARATIONS),
-            "every environment in the closed set needs a manifest that declares its own name here",
+            sorted(e for e in ZERODTE_ENVIRONMENTS if e != "es4"), sorted(self.DECLARATIONS),
+            "every environment in the closed set needs a manifest that declares its own name here "
+            "(es4 has none: vix-option-inteligence was removed from es4 2026-11-02, see k8s/es4/allowed-services.txt)",
         )
-        for env in ZERODTE_ENVIRONMENTS:
+        for env in self.DECLARATIONS:
             path = ROOT / self.DECLARATIONS[env]
             self.assertTrue(path.is_file(), f"{path} is missing, so '{env}' declares nothing")
             value = self.env_value(self.declaration(env), "ZERODTE_RESEARCH_ENVIRONMENT")
@@ -95,60 +95,10 @@ class VixOptionInteligenceStageBEnvironmentTest(unittest.TestCase):
                 "every frame and research row that deployment produces",
             )
 
-    def test_lifting_the_es4_hold_is_a_TWO_part_change_and_es4_is_declared_for_both_states(self):
-        """es4 has two states, and the operand must be declared for each.
-
-        HELD (today): "vix-option-inteligence" is absent from the renderer's SERVICES list -- it fell out in
-        c12e87c -- and the name is quarantined in validate-es4-render.sh's KNOWN_STALE. The renderer iterates
-        SERVICES only, so it does not produce this manifest, and k8s/es4/services/vix-option-inteligence.yaml
-        is es4's source of authority; the closed-set test above is what holds that file to 'es4'.
-
-        RENDERED: whoever lifts the hold must do BOTH halves -- add the name to SERVICES and drop it from
-        KNOWN_STALE. Codex r12 MAJOR: this test and the manifest header previously said emptying KNOWN_STALE
-        made the renderer take over, which is false; dropping it from KNOWN_STALE alone only makes the
-        committed file unaccounted-for. validate-es4-render.sh refuses each half on its own, so the two-part
-        change is enforced there. What is enforced NOWHERE else is that es4 keeps its own environment name
-        through the transition, which is what this test is for: the ES_ENV _override is INERT TODAY, and it
-        exists so a future re-render cannot inherit ZERODTE_RESEARCH_ENVIRONMENT=production from the overlay
-        it derives from -- a relabelling of every es4 frame and research row, not a boot failure, so nothing
-        else would catch it.
-        """
-        renderer = (ROOT / "scripts/es4/render_es4_manifests.py").read_text()
-        validator = (ROOT / "scripts/ci/validate-es4-render.sh").read_text()
-
-        services = renderer.split("SERVICES = [", 1)[1].split("\n]", 1)[0]
-        in_services = '"vix-option-inteligence"' in services
-        # KNOWN_STALE is a set literal: `{ ... }` while something is quarantined, or `set()` once the
-        # list is emptied. Parse either form — the name is only "in" it when the braces form holds it.
-        ks_decl = validator.split("KNOWN_STALE = ", 1)[1].lstrip()
-        known_stale = ks_decl.split("}", 1)[0] if ks_decl.startswith("{") else ""
-        in_known_stale = '"vix-option-inteligence"' in known_stale
-
-        # The hold is CONSISTENT: held means absent from SERVICES and quarantined. Half a transition is a
-        # state in which nobody can say which file is the authority.
-        self.assertEqual(
-            not in_services, in_known_stale,
-            "es4's vix-option-inteligence hold is half-lifted: it is "
-            + ("in" if in_services else "absent from") + " the renderer's SERVICES and "
-            + ("in" if in_known_stale else "not in") + " KNOWN_STALE. Lifting the hold is BOTH edits -- add it "
-            "to SERVICES and drop it from KNOWN_STALE -- and then reconcile the capacity divergence that is "
-            "why the hold exists (the production CPU request, 100m -> 500m)",
-        )
-
-        block = renderer.split('"vix-option-inteligence": [', 1)
-        self.assertEqual(2, len(block), "the renderer no longer has a vix-option-inteligence ES_ENV block")
-        block = block[1].split("],", 1)[0]
-        self.assertIn(
-            '{"name": "ZERODTE_RESEARCH_ENVIRONMENT", "value": "es4", "_override": True}', block,
-            "the es4 ES_ENV must OVERRIDE the environment it derives from production. It is inert while the "
-            "name is out of SERVICES; it is here so that whoever lifts the hold cannot silently relabel every "
-            "es4 frame and research row as having come from production",
-        )
-
     def test_the_value_is_never_overridden_a_second_time_in_the_same_overlay(self):
         # One authoritative value per overlay: a second entry would make the effective one depend on
         # ordering, and Kubernetes takes the LAST, so a stale first entry would read as correct.
-        for env in ZERODTE_ENVIRONMENTS:
+        for env in self.DECLARATIONS:
             text = self.declaration(env)
             self.assertEqual(
                 1, text.count("- name: ZERODTE_RESEARCH_ENVIRONMENT"),
@@ -156,7 +106,7 @@ class VixOptionInteligenceStageBEnvironmentTest(unittest.TestCase):
             )
 
     def test_no_second_name_is_invented_for_the_same_fact(self):
-        for env in ZERODTE_ENVIRONMENTS:
+        for env in self.DECLARATIONS:
             self.assertNotIn(
                 "ZERO_DTE_ENVIRONMENT\n", self.declaration(env),
                 f"{self.DECLARATIONS[env]} invents a second name for the environment; "
@@ -167,7 +117,7 @@ class VixOptionInteligenceStageBEnvironmentTest(unittest.TestCase):
         # §14's dark cutover: V1 is the DEFAULT, so an overlay that does not mention the mode runs v1 and
         # rolling the image is not a cutover. An overlay that sets STAGE_B has made a decision, and this test
         # is where that decision becomes visible rather than arriving with an image.
-        for env in ZERODTE_ENVIRONMENTS:
+        for env in self.DECLARATIONS:
             self.assertIsNone(
                 self.env_value(self.declaration(env), "ZERO_DTE_RUNTIME_MODE"),
                 f"{self.DECLARATIONS[env]} selects a Stage-B runtime mode; that is a switchover, not a deploy",
@@ -208,9 +158,7 @@ class VixOptionInteligenceDeployTest(unittest.TestCase):
         self.assertNotIn("options.spx.0dte.intelligence.current", topics + deployment + gateway)
 
     def test_es4_uses_es_symbol_and_mirrors_vix(self):
-        manifest = (ROOT / "k8s/es4/services/vix-option-inteligence.yaml").read_text()
-        self.assertIn("name: ZERO_DTE_SYMBOL", manifest)
-        self.assertIn("value: ES", manifest)
+        self.assertFalse((ROOT / "k8s/es4/services/vix-option-inteligence.yaml").exists())
         mm2 = (ROOT / "infra/es4/mm2/mm2.properties").read_text()
         # This mirror is VIX-ONLY since DBP-R32 (2026-07-26). It used to also carry
         # underlying.es.trades prod->es4, but the ES-futures subscription moved to es4, so es4
@@ -255,7 +203,7 @@ class VixOptionInteligenceDeployTest(unittest.TestCase):
         service_job = (ROOT / "Jenkinsfile.service-deploy").read_text()
         es_job = (ROOT / "Jenkinsfile.es4-deploy").read_text()
         self.assertIn("'vix-option-inteligence'", service_job)
-        self.assertIn("'vix-option-inteligence'", es_job)
+        self.assertNotIn("'vix-option-inteligence'", es_job)  # removed from es4 2026-11-02
 
     def test_both_callers_invoke_the_single_prune_implementation(self):
         # Zero-orphan rule: ONE implementation (the lib) with fail-closed discovery,
@@ -289,8 +237,7 @@ class VixOptionInteligenceDeployTest(unittest.TestCase):
     def test_rename_removes_legacy_workload_only_after_replacement(self):
         scoped = (ROOT / "scripts/deploy/service-deploy.sh").read_text()
         monolith = (ROOT / "scripts/deploy/apply.sh").read_text()
-        es_job = (ROOT / "Jenkinsfile.es4-deploy").read_text()
-        for deployment_path in (scoped, monolith, es_job):
+        for deployment_path in (scoped, monolith):  # es4 no longer runs the service (removed 2026-11-02)
             self.assertIn("delete deployment zero-dte-intelligence-service --ignore-not-found", deployment_path)
             self.assertIn("delete service zero-dte-intelligence-service --ignore-not-found", deployment_path)
 

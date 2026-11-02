@@ -84,13 +84,13 @@ grep -q '^      force_held_zero$' "$C" && ok "the RESTORED resume path calls for
 [ "$(grep -c 'if held_zero "\$name"; then' "$C")" -ge 1 ] && ok "restore loop uses held_zero" || bad "restore loop does not use held_zero"
 [ "$(grep -c 'if held_zero "\$name"; then reps=0; fi' "$C")" = 2 ] && ok "verification and readiness loops use held_zero" || bad "verification/readiness loops do not both use held_zero"
 if grep -n 'if \[ "\$name" = "es-feed" \]; then' "$C" | grep -v "^$" >/dev/null; then bad "a bare es-feed-only check is still in a restore loop"; else ok "no es-feed-only check left in the restore loops"; fi
-python3 - "$HERE/render_es4_manifests.py" <<'PY' && ok "strike-liquidity-heatmap-service is an actual member of ES4_KEEP_DOWN (parsed, not grepped)" || bad "not a member of ES4_KEEP_DOWN"
+python3 - "$HERE/render_es4_manifests.py" <<'PY' && ok "strike-liquidity-heatmap-service is no longer an es4 service (removed 2026-11-02; HELD_AT_ZERO keeps a stale snapshot from ever raising it)" || bad "strike-liquidity-heatmap is still in SERVICES"
 import ast, sys
 tree = ast.parse(open(sys.argv[1]).read())
 for n in tree.body:
-    if isinstance(n, ast.Assign) and any(getattr(t, "id", "") == "ES4_KEEP_DOWN" for t in n.targets):
+    if isinstance(n, ast.Assign) and any(getattr(t, "id", "") == "SERVICES" for t in n.targets):
         names = {e.value for e in n.value.elts}
-        sys.exit(0 if "strike-liquidity-heatmap-service" in names else 1)
+        sys.exit(0 if "strike-liquidity-heatmap" not in names else 1)
 sys.exit(1)
 PY
 echo
