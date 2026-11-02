@@ -1,6 +1,7 @@
-"""Deploy wiring of line-acceptance-service (VWAP-ACCEPTANCE-REJECTION P0): DEV ONLY, DARK (replicas 0, LINE_ACCEPTANCE_ENABLED "false"), HELD DOWN by name.
+"""Deploy wiring of line-acceptance-service (VWAP-ACCEPTANCE-REJECTION): DEV ONLY, LIVE and UNVALIDATED since 2026-11-02 (owner override of design K9): replicas 1, LINE_ACCEPTANCE_ENABLED "true",
+five evidence/line gates true and GATE_PHASEF_EVIDENCE false, NOT held down by any lifecycle list.
 
-Covers: the base and the dev overlay (source render, committed slice) at replicas 0 / flag "false" / health port 8172, the three lifecycle hold-down lists, the six topics' declared policies
+Covers: the base and the dev overlay (source render, committed slice) at replicas 1 / flag "true" / the gates / health port 8172, the absence of the name from the three lifecycle lists, the six topics' declared policies
 in topics.env (status NOT compacted and retention -1), the topic barrier (scripts/kafka/ensure-line-acceptance-topics.sh) against the stateful stand-in tests/fake_kafka_cli.py, the
 fixed-id schema map, the registration of the service everywhere a service must be, and the absence of any production wiring."""
 from __future__ import annotations
@@ -205,68 +206,83 @@ def deployment(rel: str) -> dict:
     return docs[0]
 
 
-class DarkAtZeroReplicas(unittest.TestCase):
+GATES = {"GATE_STRUCTURE_ENABLED": "true", "GATE_GEOMETRY_ENABLED": "true", "GATE_VWAP_ENABLED": "true", "GATE_FOOTPRINT_ENABLED": "true", "GATE_CANDLES_ENABLED": "true",
+         "GATE_PHASEF_EVIDENCE": "false"}
+
+
+class LiveOnDev(unittest.TestCase):
     BASE = f"k8s/services/{SVC}/base/line-acceptance-deployment.yaml"
     SLICE = f"k8s/services/{SVC}/overlays/dev/manifest.yaml"
 
     def check(self, d: dict, label: str):
-        self.assertEqual((d["metadata"]["name"], d["spec"]["replicas"], d["spec"]["strategy"]["type"]), (DEP, 0, "Recreate"), label)
+        self.assertEqual((d["metadata"]["name"], d["spec"]["replicas"], d["spec"]["strategy"]["type"]), (DEP, 1, "Recreate"), label)
         c = d["spec"]["template"]["spec"]["containers"][0]
         self.assertEqual(c["name"], CONTAINER, label)
         self.assertIn(IMG, c["image"], label)
         env = {e["name"]: e.get("value") for e in c["env"]}
-        self.assertEqual(env["LINE_ACCEPTANCE_ENABLED"], "false", label)
+        self.assertEqual(env["LINE_ACCEPTANCE_ENABLED"], "true", label)
         self.assertEqual(env["ENVIRONMENT"], "dev", label)
         self.assertEqual(env["LINE_ACC_HEALTH_PORT"], "8172", label)
+        for name, value in GATES.items():
+            self.assertEqual(env[name], value, f"{label}: {name}")
+        self.assertNotIn("GATE_VWAP_ANALYSIS", env, label)   # the service refuses to start with it true; its default (false) is the only value
         self.assertEqual([p["containerPort"] for p in c["ports"]], [8172], label)
         self.assertEqual((c["readinessProbe"]["httpGet"]["path"], c["livenessProbe"]["httpGet"]["path"]), ("/health/ready", "/health/live"), label)
 
-    def test_the_base_is_dark_at_zero_replicas(self):
+    def test_the_base_is_live(self):
         self.check(deployment(self.BASE), "base")
-        self.assertEqual(env_values(ROOT / self.BASE, "LINE_ACCEPTANCE_ENABLED"), ["false"])
+        self.assertEqual(env_values(ROOT / self.BASE, "LINE_ACCEPTANCE_ENABLED"), ["true"])
 
-    def test_the_dev_slice_is_dark_at_zero_replicas(self):
+    def test_the_dev_slice_is_live(self):
         self.check(deployment(self.SLICE), "dev slice")
-        self.assertEqual(env_values(ROOT / self.SLICE, "LINE_ACCEPTANCE_ENABLED"), ["false"])
+        self.assertEqual(env_values(ROOT / self.SLICE, "LINE_ACCEPTANCE_ENABLED"), ["true"])
 
-    def test_the_rendered_dev_overlay_equals_the_committed_slice_and_is_at_zero_replicas(self):
+    def test_the_rendered_dev_overlay_equals_the_committed_slice_and_is_live(self):
         out = subprocess.run(["kubectl", "kustomize", str(ROOT / "k8s/overlays/dev")], capture_output=True, text=True, check=True, timeout=180).stdout
         docs = [d for d in yaml.safe_load_all(out) if isinstance(d, dict) and d.get("kind") == "Deployment" and d["metadata"]["name"] == DEP]
         self.assertEqual(len(docs), 1)
         self.check(docs[0], "dev render")
         self.assertEqual(docs[0], deployment(self.SLICE))
 
-    def test_the_flag_is_true_nowhere_in_the_repository(self):
+    def test_production_and_experiment_never_render_it(self):
+        for env in ("production", "experiment"):
+            out = subprocess.run(["kubectl", "kustomize", str(ROOT / "k8s/overlays" / env)], capture_output=True, text=True, check=True, timeout=180).stdout
+            self.assertNotIn(DEP, out, env)
+            self.assertNotIn("LINE_ACCEPTANCE", out, env)
+
+    def test_the_flag_is_true_only_in_the_dev_only_base_and_slice(self):
         for path in list((ROOT / "k8s").rglob("*.yaml")):
             for v in env_values(path, "LINE_ACCEPTANCE_ENABLED"):
-                self.assertEqual(v, "false", str(path.relative_to(ROOT)))
+                self.assertEqual(str(path.relative_to(ROOT)) in (self.BASE, self.SLICE), v == "true", str(path.relative_to(ROOT)))
 
     def test_health_port_8172_is_not_shared_with_another_service(self):
         owners = [str(p.relative_to(ROOT)) for p in (ROOT / "k8s/services").glob("*/base/*.yaml") if re.search(r"containerPort: 8172\b", p.read_text())]
         self.assertEqual(owners, [self.BASE])
 
 
-class HeldDown(unittest.TestCase):
+class NotHeldDown(unittest.TestCase):
+    """The owner switched it on for dev (2026-11-02): no lifecycle list may name it, or a start / boot would put it back to 0 (and a stale entry would be a hold nobody intended)."""
     pattern = rf"(?<![\w-]){re.escape(DEP)}(?![\w-])"
 
-    def test_it_is_in_disabled_dev_and_both_keep_down_lists_and_they_agree(self):
-        dev = re.search(r"^DISABLED_DEV='([^']*)'$", read("scripts/ops/dev-cleanup.sh"), re.M).group(1).split("|")
-        boot = re.search(r"^KEEP_DOWN='([^']*)'$", read("scripts/ops/oe-boot-bringup.sh"), re.M).group(1).split("|")
-        morning = re.search(r'^KEEP_DOWN="\$\{KEEP_DOWN:-([^}]*)\}"$', read("scripts/ops/morning-autostart.sh"), re.M).group(1).split()
-        for name, entries in (("DISABLED_DEV", dev), ("boot KEEP_DOWN", boot), ("morning KEEP_DOWN", morning)):
-            self.assertEqual(entries.count(DEP), 1, name)
-        self.assertEqual(set(boot), set(morning), "tests/test_keep_down_lists_agree.py")
+    def lists(self):
+        return (("DISABLED_DEV", re.search(r"^DISABLED_DEV='([^']*)'$", read("scripts/ops/dev-cleanup.sh"), re.M).group(1).split("|")),
+                ("boot KEEP_DOWN", re.search(r"^KEEP_DOWN='([^']*)'$", read("scripts/ops/oe-boot-bringup.sh"), re.M).group(1).split("|")),
+                ("morning KEEP_DOWN", re.search(r'^KEEP_DOWN="\$\{KEEP_DOWN:-([^}]*)\}"$', read("scripts/ops/morning-autostart.sh"), re.M).group(1).split()))
 
-    def test_every_list_that_holds_corridor_gauge_down_also_holds_this_service(self):
-        for rel, rx in (("scripts/ops/dev-cleanup.sh", r"^DISABLED_DEV='([^']*)'$"), ("scripts/ops/oe-boot-bringup.sh", r"^KEEP_DOWN='([^']*)'$"),
-                        ("scripts/ops/morning-autostart.sh", r'^KEEP_DOWN="\$\{KEEP_DOWN:-([^}]*)\}"$')):
-            text = re.search(rx, read(rel), re.M).group(1)
-            self.assertRegex(text, r"(?<![\w-])corridor-gauge-service(?![\w-])", rel)
-            self.assertRegex(text, self.pattern, rel)
+    def test_it_is_in_none_of_the_three_lists_and_the_prod_lists_agree(self):
+        lists = self.lists()
+        for name, entries in lists:
+            self.assertEqual(entries.count(DEP), 0, name)
+        self.assertEqual(set(lists[1][1]), set(lists[2][1]), "tests/test_keep_down_lists_agree.py")
+
+    def test_the_other_holds_are_untouched(self):
+        for name, entries in self.lists():
+            self.assertIn("corridor-gauge-service", entries, name)
+            self.assertIn("break-score-service", entries, name)
 
     def test_dev_cleanup_documents_that_it_does_not_run_the_barrier(self):
         text = read("scripts/ops/dev-cleanup.sh")
-        self.assertIn("does NOT run", text[text.index("line-acceptance-service is deployed DARK"):])
+        self.assertIn("does NOT run", text[text.index("line-acceptance-service was held here by name"):])
         self.assertNotIn("ensure-line-acceptance-topics.sh", "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("#")))
 
 

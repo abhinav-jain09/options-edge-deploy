@@ -89,7 +89,7 @@ pipeline {
       // break-classifier (Phase F): dev+prod LIVE (replicas 1, BREAK_CLASSIFIER_ENABLED true via the per-environment enable patches). Reads options.indicators.bars, es.futures.footprint.bars and the
       // Phase B/C break-events / swing-pivots topics (no producer yet), publishes options.spx.break-classification{,.checkpoint} (Avro); single replica only.
       'break-classifier',
-      // line-acceptance (VWAP-ACCEPTANCE-REJECTION P0): DEV ONLY (services.yaml envs: [dev]) and DARK: replicas 0, LINE_ACCEPTANCE_ENABLED "false", held down by name. There is no production overlay for it, so
+      // line-acceptance (VWAP-ACCEPTANCE-REJECTION): DEV ONLY (services.yaml envs: [dev]), LIVE and UNVALIDATED since 2026-11-02 (owner override of design K9): replicas 1, LINE_ACCEPTANCE_ENABLED "true", not held down. There is no production overlay for it, so
       // ENVIRONMENT=production fails at the overlay lookup; nothing in this file authorises a production roll. Six single-partition topics (barrier below) and Avro ids 3101-3111 (REGISTER_TA_SCHEMAS).
       'line-acceptance',
       // es-amt (the SPX Auction Desk engine): DEV ONLY (services.yaml envs: [dev]), replicas 1: the dev-owned Avro WRITER of es.futures.auction (contracts id 3201; docs/ES-AMT-AVRO-CUTOVER.md). es4 and production are not rendered
@@ -1017,8 +1017,8 @@ PYEOF
     }
     stage('Verify line-acceptance topics') {
       // BEFORE any rollout of this service, same barrier as break-classifier: creates the absent topics, verifies every one (six topics, one partition each, the declared cleanup policy and retention,
-      // topic-level max.message.bytes 9437184 on the checkpoint and journal topics) and changes NO broker config. Idempotent; fails closed. The service is DARK (replicas 0), so this runs ahead of
-      // the day it is raised (design section 15, Stage B); it is NOT run by dev-cleanup.sh, whose topic pass recreates the declared shapes from topics.env instead.
+      // topic-level max.message.bytes 9437184 on the checkpoint and journal topics) and changes NO broker config. Idempotent; fails closed. The service is LIVE on dev (UNVALIDATED), so a re-deploy of it runs this first and a wipe
+      // must be followed by this barrier before the service is relied on; it is NOT run by dev-cleanup.sh, whose topic pass recreates the declared shapes from topics.env instead.
       when {
         expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'line-acceptance' && !params.DEPLOY_DRY_RUN) }
       }

@@ -1,6 +1,6 @@
-# line-acceptance-service: deploy wiring (VWAP-ACCEPTANCE-REJECTION, phase P0)
+# line-acceptance-service: deploy wiring (VWAP-ACCEPTANCE-REJECTION)
 
-Design: options-edge-documents `VWAP-ACCEPTANCE-REJECTION-DESIGN.md` sections 9.1 and 15 (stage 0). Nothing runs: this is the wiring of a **dark, dev-only** service.
+Design: options-edge-documents `VWAP-ACCEPTANCE-REJECTION-DESIGN.md` sections 9.1 and 15. **Status since 2026-11-02: LIVE on dev, UNVALIDATED.** The owner explicitly overrode design K9 (no run before the backtest report) and switched the service on for dev, every output labelled UNVALIDATED, alerts OFF (a per-viewer opt-in on the page). It was first deployed dark (stage 0); production is untouched and not authorised.
 
 ## Deploy facts
 
@@ -9,11 +9,12 @@ Design: options-edge-documents `VWAP-ACCEPTANCE-REJECTION-DESIGN.md` sections 9.
 | Registry entry | `services.yaml` `line-acceptance` (standalone, `envs: [dev]`, `sliceGenerated`) |
 | Deployment / container | `line-acceptance-service` / `line-acceptance` |
 | Image | `options-edge-line-acceptance`, tag `dev`; variable `LINE_ACCEPTANCE_IMAGE` (dev-only lists in `apply.sh`, `image-lock.sh`, `resolve-images.sh`, `verify-running-images.sh`; `image-tags/dev.yaml`) |
-| Replicas / flag | `0` and `LINE_ACCEPTANCE_ENABLED "false"` in the base **and** the dev overlay (no enable patch exists) |
+| Replicas / flag | `1` and `LINE_ACCEPTANCE_ENABLED "true"` in the base (the only environment that renders it is dev, so there is no enable patch) and therefore in the dev slice |
+| Gates | `GATE_STRUCTURE_ENABLED`, `GATE_GEOMETRY_ENABLED`, `GATE_VWAP_ENABLED`, `GATE_FOOTPRINT_ENABLED`, `GATE_CANDLES_ENABLED` = `true` (enabled one at a time, in that order, each verified before the next); `GATE_PHASEF_EVIDENCE` = `false`; `GATE_BASIS_SERIES` default `ES_PRICE_AVRO` (Avro `underlying.es.price`); `GATE_VWAP_ANALYSIS` must stay unset (the service refuses to start with it true) |
 | Env | `LINE_ACCEPTANCE_ENABLED`, `LINE_ACC_HEALTH_PORT=8172`, `ENVIRONMENT=dev`; input topic names are the service's own defaults |
 | Health | port `8172` (`8171` is break-classifier), `/health/ready`, `/health/live` |
 | Single replica | `Recreate`; `transactional.id = line-acceptance-<ENVIRONMENT>`; a second instance fences the first |
-| Held down | `line-acceptance-service` is in `DISABLED_DEV` (`dev-cleanup.sh`) and `KEEP_DOWN` of `morning-autostart.sh` and `oe-boot-bringup.sh`; `tests/test_keep_down_lists_agree.py` |
+| Held down | **No longer.** Removed from `DISABLED_DEV` (`dev-cleanup.sh`) and from `KEEP_DOWN` of `morning-autostart.sh` and `oe-boot-bringup.sh` on 2026-11-02 (`tests/test_line_acceptance_deploy.py` pins the absence; `tests/test_keep_down_lists_agree.py`) |
 | Topics | six, 1 partition each, in `scripts/kafka/topics.env`; barrier `scripts/kafka/ensure-line-acceptance-topics.sh` (dev only, fails closed) |
 | Schemas | `scripts/kafka/schema-id-maps/line-acceptance.map`, ids 3101-3111 (contracts #149), `service-deploy SERVICE=line-acceptance REGISTER_TA_SCHEMAS=true CONTRACTS_PERMITTED_SHA=<sha>` |
 | Production | none: no overlay, slice, image tag, gateway flag; the deploy job refuses `ENVIRONMENT=production` |
@@ -25,11 +26,8 @@ Topic shapes: `options.spx.line-acceptance` delete 7 d; `.monitor` compact; `.st
 
 ## Rollback
 
-Already zero. There is nothing to roll back: the Deployment is at replicas 0 with the flag `"false"`, and no script raises it.
+One reviewed change, all of it together: in `k8s/services/line-acceptance/base/line-acceptance-deployment.yaml` set `LINE_ACCEPTANCE_ENABLED` back to `"false"` (health reads DISABLED, nothing is consumed or published) and, to stop the pod, replicas to `0`; put `line-acceptance-service` back into `DISABLED_DEV` and both `KEEP_DOWN` lists (replicas 0 alone is lifted by the next start / boot); run `scripts/deploy/generate-service-slices.sh`; update `tests/test_line_acceptance_deploy.py`; deploy. Immediate hand rollback on dev: `kubectl -n options-edge scale deploy/line-acceptance-service --replicas=0` (as `jenkins-deployer`). The six topics keep their records (status is retention -1 and RESET-PRESERVED).
 
-## How P1+ enables it (a reviewed, owner-visible change, never a side effect)
+## History: how stage 0 was meant to be left (superseded)
 
-1. Contracts #149 merged; register the subjects (`REGISTER_TA_SCHEMAS`) and run the barrier (`service-deploy SERVICE=line-acceptance`), build the image.
-2. One PR: replicas 1 and `LINE_ACCEPTANCE_ENABLED "true"` in a dev enable patch (and the gate flags the design stages one at a time), **and** remove the name from `DISABLED_DEV` and both `KEEP_DOWN` lists (the three lists and the manifest must change together;
-   `tests/test_line_acceptance_deploy.py` pins the dark state and is updated in that PR). Deployments are by hand on dev per the owner rule.
-3. Production needs its own separately reviewed design; nothing here authorises it.
+The original plan (design section 15 stage B) was to enable it only after the backtest report. The owner overrode that on 2026-11-02; the enablement ladder (structure, geometry, VWAP, footprint, candles) was still taken one gate at a time. Production needs its own separately reviewed design; nothing here authorises it.

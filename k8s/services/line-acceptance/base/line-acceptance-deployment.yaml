@@ -8,11 +8,13 @@ metadata:
     app.kubernetes.io/component: line-acceptance-service
     app.kubernetes.io/part-of: options-edge
 spec:
-  # DARK: replicas 0 and LINE_ACCEPTANCE_ENABLED "false", on dev (the only environment that renders this service) in the base AND in the overlay. Held down by NAME so no script raises it:
-  # DISABLED_DEV in scripts/ops/dev-cleanup.sh and KEEP_DOWN in scripts/ops/morning-autostart.sh and scripts/ops/oe-boot-bringup.sh (tests/test_keep_down_lists_agree.py). Replicas 0 alone is
-  # NOT a hold: do_start scales every deployment not named there to 1. Raising it is a reviewed, owner-visible event (design section 15, Stage B), never a side effect of a clean or a boot.
+  # LIVE ON DEV, UNVALIDATED (owner 2026-11-02, overriding design K9 / section 15 "nothing runs before the backtest report"): replicas 1 and LINE_ACCEPTANCE_ENABLED "true" on dev, the only
+  # environment that renders this service. Every record it publishes is labelled UNVALIDATED; alerts stay OFF (a per-viewer opt-in on the page); production is untouched (no overlay, image, topic or
+  # gateway flag exists there). It is NOT held down any more: it is absent from DISABLED_DEV (dev-cleanup.sh) and from KEEP_DOWN of morning-autostart.sh and oe-boot-bringup.sh, so a start raises it
+  # to 1 like every other dev service (tests/test_keep_down_lists_agree.py keeps the two prod lists in step). Rollback: set the flag back to "false" and replicas to 0 here, put the name back in
+  # all three lists in the SAME change, regenerate the slice, deploy.
   # SINGLE replica ONLY: the transactional.id is line-acceptance-<ENVIRONMENT>, a second instance fences the first.
-  replicas: 0
+  replicas: 1
   strategy:
     type: Recreate
   selector:
@@ -36,15 +38,29 @@ spec:
             - secretRef:
                 name: options-edge-runtime-secrets
           env:
-            # The one flag. "false" serves health and metrics and touches no broker.
+            # The one flag. "false" serves health and metrics and touches no broker; "true" runs the engine.
             - name: LINE_ACCEPTANCE_ENABLED
-              value: "false"
+              value: "true"
             # options-edge-config carries no ENVIRONMENT; the service's transactional.id and consumer group are line-acceptance-<ENVIRONMENT>.
             - name: ENVIRONMENT
               value: dev
             # 8171 belongs to break-classifier.
             - name: LINE_ACC_HEALTH_PORT
               value: "8172"
+            # The evidence/line-class gates (design 3, 15.3), default false in the service, enabled ONE AT A TIME on dev in this order: structure -> geometry -> vwap -> footprint -> candles.
+            # GATE_PHASEF_EVIDENCE stays false (no Phase F join contract yet, DT-PF). GATE_BASIS_SERIES keeps its default ES_PRICE_AVRO (the Avro underlying.es.price, amendment A1).
+            - name: GATE_STRUCTURE_ENABLED
+              value: "true"
+            - name: GATE_GEOMETRY_ENABLED
+              value: "true"
+            - name: GATE_VWAP_ENABLED
+              value: "true"
+            - name: GATE_FOOTPRINT_ENABLED
+              value: "true"
+            - name: GATE_CANDLES_ENABLED
+              value: "true"
+            - name: GATE_PHASEF_EVIDENCE
+              value: "false"
           ports:
             - name: health
               containerPort: 8172

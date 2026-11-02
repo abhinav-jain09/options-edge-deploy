@@ -23,7 +23,7 @@ metadata:
   namespace: options-edge
 spec:
   progressDeadlineSeconds: 1200
-  replicas: 0
+  replicas: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: line-acceptance-service
@@ -39,11 +39,23 @@ spec:
       containers:
         - env:
             - name: LINE_ACCEPTANCE_ENABLED
-              value: "false"
+              value: "true"
             - name: ENVIRONMENT
               value: dev
             - name: LINE_ACC_HEALTH_PORT
               value: "8172"
+            - name: GATE_STRUCTURE_ENABLED
+              value: "true"
+            - name: GATE_GEOMETRY_ENABLED
+              value: "true"
+            - name: GATE_VWAP_ENABLED
+              value: "true"
+            - name: GATE_FOOTPRINT_ENABLED
+              value: "true"
+            - name: GATE_CANDLES_ENABLED
+              value: "true"
+            - name: GATE_PHASEF_EVIDENCE
+              value: "false"
           envFrom:
             - configMapRef:
                 name: options-edge-config
