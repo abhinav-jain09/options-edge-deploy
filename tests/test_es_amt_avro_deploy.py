@@ -76,6 +76,30 @@ class Registration(unittest.TestCase):
         self.with_registry(check)
 
 
+class ContractBacked(unittest.TestCase):
+    """The map names a real contracts schema. Needs a contracts checkout: set OE_CONTRACTS_DIR (its schemas-registry/esamt is read); skipped without one (CI of this repo has no contracts clone)."""
+
+    @unittest.skipUnless(os.environ.get("OE_CONTRACTS_DIR"), "OE_CONTRACTS_DIR not set")
+    def test_the_real_schema_is_the_record_the_map_registers_under_3201(self):
+        d = Path(os.environ["OE_CONTRACTS_DIR"]) / "schemas-registry/esamt"
+        (subject, ident, fname), = rows()
+        doc = json.loads((d / fname).read_text())
+        self.assertEqual(doc["type"], "record")
+        self.assertEqual(doc["namespace"] + "." + doc["name"], subject)
+        self.assertEqual(ident, "3201")
+        # and the registration script really imports exactly that file under 3201 on a registry
+        reg = Registry()
+        server, url = serve(reg)
+        try:
+            env = dict(os.environ, SCHEMA_REGISTRY_URL=url, SCHEMAS_DIR=str(d), SCHEMA_ID_MAP=str(MAP), DEPLOY_DRY_RUN="false")
+            r = subprocess.run(["bash", str(SCRIPT)], capture_output=True, text=True, env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertEqual(reg.subjects[subject][0]["id"], 3201)
+            self.assertEqual(json.loads(reg.subjects[subject][0]["schema"]), doc)
+        finally:
+            server.shutdown()
+
+
 class MapAgrees(unittest.TestCase):
     def test_no_id_is_shared_with_any_other_map_and_none_is_in_a_used_block(self):
         ours = {int(r[1]) for r in rows()}
