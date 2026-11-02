@@ -361,7 +361,8 @@ services:
   - { name: pressure-postgres-writer,     managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-pressure-postgres-writer,     deployments: [pressure-postgres-writer] }
   - { name: spx-mission-control,          managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-spx-mission-control,          deployments: [spx-mission-control-service] }
   # amt-order-bridge: DEPLOYED INERT (AMT_BRIDGE_ENABLED "false", replicas:0 in k8s/base).
-  # broker-execution-service: ARMED 2026-10-11 at the account owner's instruction — PAPER + ENABLED
+  # broker-execution-service: DEV ONLY since 2026-11-02 (owner removed it from production; dev holds it at 0).
+  # History: ARMED 2026-10-11 at the account owner's instruction — PAPER + ENABLED
   # + TRANSMIT in dev and production, so it places paper orders with no human pressing Transmit. It
   # is STILL replicas:0 in k8s/base and still in both production hold-down lists, so arming is
   # configuration and not execution: nothing is placed until the owner scales it up. It cannot reach
@@ -384,7 +385,7 @@ services:
   # IfNotPresent). The replica count and every *_ENABLED value come from k8s/base in both, which is
   # why the inertness lives there and not here. Verified by diffing the two rendered slices.
   - { name: amt-order-bridge,             managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-amt-order-bridge,             deployments: [amt-order-bridge] }
-  - { name: broker-execution-service,     managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-broker-execution,             deployments: [broker-execution-service] }
+  - { name: broker-execution-service,     managedBy: standalone, sliceGenerated: true, envs: [dev], image: options-edge-broker-execution,             deployments: [broker-execution-service] }
   - { name: redis,                        managedBy: monolith, image: redis,                                     deployments: [options-edge-redis] }
 
 # Infra workloads (Keycloak etc.) are owned by common-infra (k8s/infra), not listed here.

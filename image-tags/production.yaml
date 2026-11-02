@@ -87,5 +87,4 @@ images:
   # warning but a hard stop — service-deploy.sh fails closed ("no entry in image-tags/production.yaml")
   # because the render carries the base dev ref and deploying it would be the dev-image-in-production
   # bug. Section 10 of validate-services.sh now fails when a production-declaring service has no entry.
-  broker-execution-service: 192.168.100.252:5000/options-edge-broker-execution:prod
   amt-order-bridge: 192.168.100.252:5000/options-edge-amt-order-bridge:prod
