@@ -25,3 +25,4 @@ spread-skew
 strike-intelligence
 tape-zones
 volume-pace
+rithmic-depth-bridge

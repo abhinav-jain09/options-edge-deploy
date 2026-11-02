@@ -103,6 +103,7 @@ rendered = set(r.SERVICES)
 # carry their own explanatory headers rather than the GENERATED banner. Legitimately outside
 # the renderer; still deployed by deploy-all, so they are declared here rather than tolerated.
 HAND_AUTHORED = {
+    "rithmic-depth-bridge", # ES4 native SDK collector and dev/prod identity mirrors
     "es-feed",            # ES-0DTE Databento feed; owns a live session, excluded from deploy-all
     "es-feed-gateway",    # prod feed-gateway binary, env-only divergence
     "es-aggressor-flow",  # ES-only continuous futures aggressor analysis
