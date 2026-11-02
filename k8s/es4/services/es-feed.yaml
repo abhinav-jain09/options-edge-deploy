@@ -219,6 +219,11 @@ spec:
               value: "192.168.100.252:9092"
             - name: ES_BASIS_REFERENCE_TOPIC
               value: "underlying.es.price"
+            # The reference topic is Avro (subject com.optionsedge.contracts.hpsf.EsUnderlyingPrice) and schema ids are
+            # PER REGISTRY, so the decoder resolves writer schemas at the registry of the cluster the topic lives on
+            # (production's), not this feed's own es4 registry.
+            - name: ES_BASIS_REFERENCE_SCHEMA_REGISTRY_URL
+              value: "http://192.168.100.252:8082"
             # ---- misc ------------------------------------------------------------
             - name: APP_PROFILE
               value: "prod"
