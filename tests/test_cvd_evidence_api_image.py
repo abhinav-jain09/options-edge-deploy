@@ -134,6 +134,9 @@ class ApiImageTest(unittest.TestCase):
                     with patch.object(m,'build_image') as build:m.main();build.assert_called_once()
                 else:
                     with self.assertRaisesRegex(ValueError,'Primary build Mac'):m.main()
+    def test_the_test_venv_is_created_outside_the_workspace_and_removed(self):
+        self.build();args=self.steps[0][1];venv=Path(args[args.index('--venv')+1])
+        self.assertFalse(str(venv).startswith(str(self.root)));self.assertFalse(venv.parent.exists())
     def test_the_image_path_never_invokes_docker(self):
         import re
         self.assertIsNone(re.search(r"'docker'|buildx|docker\s+(build|run|save|image)",(ROOT/'scripts/deploy/cvd-evidence-api-image.py').read_text()))
