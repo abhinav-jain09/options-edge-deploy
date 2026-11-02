@@ -11,8 +11,9 @@ spec:
   # Deployed INERT. BROKER_EXECUTION_MODE=SHADOW places nothing and connects to no broker; ENABLED=false
   # refuses every intent. Turning this into something that trades is three values below, set by the account
   # owner — not by this manifest landing.
-  # DEV IS NO LONGER HELD DOWN (2026-10-11): the dev overlay lifts this to 1 replica and
-  # scripts/ops/dev-cleanup.sh no longer lists it in DISABLED_DEV, so dev's full start brings it up.
+  # DEV IS HELD DOWN AGAIN (owner 2026-11-02; it was lifted to 1 on 2026-10-11): the dev overlay sets 0 replicas
+  # and scripts/ops/dev-cleanup.sh lists it in DISABLED_DEV, so dev's full start leaves it at 0. The Order tab
+  # uses the broker on the owner's own machine.
   # The lists below are the PRODUCTION paths (morning-autostart.sh, oe-boot-bringup.sh) and production
   # stays down. Note dev's post-clean OVERNIGHT_SET still excludes it, so after a clean it returns at
   # the 06:15 full start rather than overnight.
