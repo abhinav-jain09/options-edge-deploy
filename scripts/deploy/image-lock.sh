@@ -83,7 +83,7 @@ AMT_ORDER_BRIDGE_IMAGE
 BROKER_EXECUTION_IMAGE
 EOF
   fi
-  # approach-monitor, oi-next-publication, vol-state and zn-gex are DEV-ONLY (services.yaml envs:
+  # approach-monitor, oi-next-publication, vol-state, zn-gex and line-acceptance are DEV-ONLY (services.yaml envs:
   # [dev]); production and experiment never render them, so requiring their lock entries there
   # would fail on an image that is never rendered.
   if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
@@ -94,6 +94,7 @@ OI_NEXT_PUBLICATION_IMAGE
 OI_NEXT_PUBLICATION_POSTGRES_WRITER_IMAGE
 VOL_STATE_IMAGE
 ZN_GEX_IMAGE
+LINE_ACCEPTANCE_IMAGE
 EOF
   fi
 }

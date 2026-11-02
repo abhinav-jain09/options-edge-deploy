@@ -93,9 +93,20 @@ grep -q -- "--create .*--topic $CKPT .*--config max.message.bytes=9437184 --conf
   && ok "recreated checkpoint has the declared message bound and the compaction cadence" || bad "checkpoint create lacks the message bound or the cadence"
 grep -q -- "--entity-name $CKPT --alter .*max.message.bytes=9437184,segment.bytes=16777216,max.compaction.lag.ms=300000" "$LOG" \
   && ok "global config apply restores the checkpoint's message bound and cadence" || bad "checkpoint message bound or cadence absent from the alter"
-# The bound belongs to the declared topic only, and the cadence to the recovery logs and the checkpoint only.
-if grep 'max.message.bytes=' "$LOG" | grep -v -e "$CKPT" >/dev/null; then bad "max.message.bytes leaked to another topic"; else ok "the message bound applies only to the checkpoint"; fi
-if grep 'segment.bytes=16777216' "$LOG" | grep -v -e "$REC" -e "$WREC" -e "$CKPT" >/dev/null; then bad "compaction cadence leaked to another topic"; else ok "cadence applies only to the recovery logs and the checkpoint"; fi
+# line-acceptance-service's checkpoint (VWAP-ACCEPTANCE-REJECTION P0) takes the same message bound and cadence; its journal takes the message bound only (no cadence).
+LCKPT="options.spx.line-acceptance.checkpoint"
+run SIMULATE_CLIENT_RETRY=0 TOPICS_ABSENT_NAME="$LCKPT"
+[ "$RC" -eq 0 ] && ok "line-acceptance checkpoint reset reconciliation exits 0" || bad "line-acceptance checkpoint reset exit $RC"
+grep -q -- "--create .*--topic $LCKPT .*--config max.message.bytes=9437184 --config segment.bytes=16777216 --config max.compaction.lag.ms=300000" "$LOG" \
+  && ok "recreated line-acceptance checkpoint has the declared message bound and the compaction cadence" || bad "line-acceptance checkpoint create lacks the message bound or the cadence"
+LJRN="options.spx.line-acceptance.journal"
+run SIMULATE_CLIENT_RETRY=0 TOPICS_ABSENT_NAME="$LJRN"
+[ "$RC" -eq 0 ] && ok "line-acceptance journal reset reconciliation exits 0" || bad "line-acceptance journal reset exit $RC"
+grep -q -- "--create .*--topic $LJRN .*--config max.message.bytes=9437184" "$LOG" \
+  && ok "recreated line-acceptance journal has the declared message bound" || bad "line-acceptance journal create lacks the message bound"
+# The bound belongs to the declared topics only (both checkpoints and the line-acceptance journal), and the cadence to the recovery logs and the two checkpoints only.
+if grep 'max.message.bytes=' "$LOG" | grep -v -e "$CKPT" -e "$LCKPT" -e "$LJRN" >/dev/null; then bad "max.message.bytes leaked to another topic"; else ok "the message bound applies only to the declared topics"; fi
+if grep 'segment.bytes=16777216' "$LOG" | grep -v -e "$REC" -e "$WREC" -e "$CKPT" -e "$LCKPT" >/dev/null; then bad "compaction cadence leaked to another topic"; else ok "cadence applies only to the recovery logs and the checkpoints"; fi
 
 echo
 [ "$fails" -eq 0 ] && { echo "=== apply-topics-create-retry: OK ==="; exit 0; }

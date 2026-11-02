@@ -87,6 +87,7 @@ IMAGE_MAP = {
     ("oi-next-publication-postgres-writer", "oi-next-publication-postgres-writer"): "OI_NEXT_PUBLICATION_POSTGRES_WRITER_IMAGE",
     ("vol-state-service", "vol-state"): "VOL_STATE_IMAGE",
     ("zn-gex-service", "zn-gex"): "ZN_GEX_IMAGE",
+    ("line-acceptance-service", "line-acceptance"): "LINE_ACCEPTANCE_IMAGE",
     ("reversal-postgres-writer", "reversal-postgres-writer"): "REVERSAL_POSTGRES_WRITER_IMAGE",
 }
 

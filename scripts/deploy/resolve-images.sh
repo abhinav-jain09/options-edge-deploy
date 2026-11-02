@@ -69,7 +69,7 @@ STOCK_GEX_IMAGE=$registry/options-edge-stock-gex:$image_tag
 OI_SHADOW_IMAGE=$registry/options-edge-oi-shadow:$image_tag
 REVERSAL_POSTGRES_WRITER_IMAGE=$registry/options-edge-reversal-postgres-writer:$image_tag
 EOF
-            # approach-monitor, oi-next-publication, vol-state and zn-gex are DEV-ONLY (services.yaml
+            # approach-monitor, oi-next-publication, vol-state, zn-gex and line-acceptance are DEV-ONLY (services.yaml
             # envs: [dev]); the production and experiment overlays never render them (approach-monitor
             # is deleted there; the others are referenced only from the dev overlay). Emitting their vars
             # for dev and never for production is also what marks them dev-only to
@@ -83,6 +83,7 @@ OI_NEXT_PUBLICATION_IMAGE=$registry/options-edge-oi-next-publication:$image_tag
 OI_NEXT_PUBLICATION_POSTGRES_WRITER_IMAGE=$registry/options-edge-oi-next-publication-postgres-writer:$image_tag
 VOL_STATE_IMAGE=$registry/options-edge-vol-state:$image_tag
 ZN_GEX_IMAGE=$registry/options-edge-zn-gex:$image_tag
+LINE_ACCEPTANCE_IMAGE=$registry/options-edge-line-acceptance:$image_tag
 EOF
             fi
             # short-premium-agent renders in dev+production (a standalone service that runs on prod too),
@@ -168,7 +169,7 @@ DROP_CLASSIFIER_IMAGE=$DROP_CLASSIFIER_IMAGE
 OI_SHADOW_IMAGE=$OI_SHADOW_IMAGE
 REVERSAL_POSTGRES_WRITER_IMAGE=$REVERSAL_POSTGRES_WRITER_IMAGE
 EOF
-            # approach-monitor, oi-next-publication, vol-state and zn-gex are dev-only; on the
+            # approach-monitor, oi-next-publication, vol-state, zn-gex and line-acceptance are dev-only; on the
             # promoted path emit them for dev alone.
             if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
               cat >>"$JENKINS_WORK_DIR/options-edge-images.env" <<EOF
@@ -178,6 +179,7 @@ OI_NEXT_PUBLICATION_IMAGE=${OI_NEXT_PUBLICATION_IMAGE:-$registry/options-edge-oi
 OI_NEXT_PUBLICATION_POSTGRES_WRITER_IMAGE=${OI_NEXT_PUBLICATION_POSTGRES_WRITER_IMAGE:-$registry/options-edge-oi-next-publication-postgres-writer:dev}
 VOL_STATE_IMAGE=${VOL_STATE_IMAGE:-$registry/options-edge-vol-state:dev}
 ZN_GEX_IMAGE=${ZN_GEX_IMAGE:-$registry/options-edge-zn-gex:dev}
+LINE_ACCEPTANCE_IMAGE=${LINE_ACCEPTANCE_IMAGE:-$registry/options-edge-line-acceptance:dev}
 EOF
             fi
             # short-premium-agent renders in dev+production; on the promoted/branch-2 path (prod) its
