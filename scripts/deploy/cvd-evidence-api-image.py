@@ -20,16 +20,16 @@ def load(name,path):
 def command(*args,timeout=30):
     return subprocess.check_output(list(args),text=True,stderr=subprocess.PIPE,timeout=timeout)
 
-def docker_step(args,root,name,timeout):
+def bounded_step(args,root,name,timeout,env=None):
     log=root/(name+'.log')
     def limit():resource.setrlimit(resource.RLIMIT_FSIZE,(8<<20,8<<20))
     with log.open('xb') as output:
-        result=subprocess.run(args,stdout=output,stderr=subprocess.STDOUT,timeout=timeout,preexec_fn=limit)
-    if log.stat().st_size>=8<<20:raise ValueError('Bounded Docker log budget exceeded')
+        result=subprocess.run(args,stdout=output,stderr=subprocess.STDOUT,timeout=timeout,preexec_fn=limit,env=env)
+    if log.stat().st_size>=8<<20:raise ValueError('Bounded build step log budget exceeded')
     with log.open('rb') as output:
         output.seek(max(0,log.stat().st_size-4096));tail=output.read(4096).decode(errors='replace')
     print(tail)
-    if result.returncode:raise ValueError('Bounded Docker '+name+' failed with status '+str(result.returncode))
+    if result.returncode:raise ValueError('Bounded build step '+name+' failed with status '+str(result.returncode))
 
 
 def current():
@@ -65,16 +65,21 @@ def prepare_source(root,source):
     return checkout
 
 
-def cleanup_test(name,owner):
-    template='{{.Id}}|{{index .Config.Labels "com.optionsedge.cvd-evidence-api-test"}}'
-    try:value=command('docker','container','inspect','--format',template,name,timeout=10).strip()
-    except subprocess.CalledProcessError as error:
-        text=(error.stderr or '').lower()
-        if ('no such container: '+name in text) or ('no such object: '+name in text):return
-        raise
-    fields=value.split('|')
-    if len(fields)!=2 or not re.fullmatch('[0-9a-f]{64}',fields[0]) or fields[1]!=owner:raise ValueError('Refusing cleanup of a foreign test container')
-    command('docker','kill',fields[0],timeout=10)
+def tree_digest(path):
+    """Content digest of a staged tree (relative names, modes and bytes): the tested sources must be exactly what is published."""
+    import hashlib
+    h=hashlib.sha256()
+    for item in sorted(Path(path).rglob('*')):
+        if item.is_symlink():raise ValueError('Symbolic staged entry refused')
+        if item.is_file():
+            h.update(item.relative_to(path).as_posix().encode()+b'\0'+oct(item.stat().st_mode&0o777).encode()+b'\0')
+            with item.open('rb') as stream:
+                for block in iter(lambda:stream.read(1<<20),b''):h.update(block)
+    return h.hexdigest()
+
+
+def tool_environment():
+    return {**os.environ,'PATH':'/opt/homebrew/bin:/usr/local/bin:'+os.environ.get('PATH','/usr/bin:/bin'),'PYTHONDONTWRITEBYTECODE':'1'}
 
 
 def build_image(environment,build,reader):
@@ -91,34 +96,29 @@ def build_image(environment,build,reader):
         tag=('dev' if environment=='dev' else 'prod')+'-'+build+'-'+source[:12]
         push_registry='192.168.100.102:5001' if environment=='dev' else '192.168.100.252:5000'
         image=push_registry+'/'+REPO+':'+tag
-        command('docker','buildx','inspect','options-edge-builder')
-        args=['docker','buildx','build','--builder','options-edge-builder','--platform',target['platform'],'--provenance=false',
-              '--build-context','contracts='+str(contracts),'--build-arg','CONTRACTS_VERSION='+release['version'],
-              '--build-arg','CONTRACTS_SHA256='+release['sha256'],'--build-arg','SOURCE_REVISION='+source,'-t',image]
-        context=str(checkout/'trade-evidence-api')
-        docker_step([*args,'--load',context],root,'build',900)
-        receipt['status']='IMAGE_BUILT';save()
-        test_name='cvd-evidence-api-test-'+environment+'-'+build
-        owner=os.environ['PERMITTED_SHA']+'-'+environment+'-'+build
-        if command('docker','container','ls','--all','--filter','name=^/'+test_name+'$','--format','{{.Names}}').strip():raise ValueError('Test container name already exists')
-        tools=checkout/'trade-evidence-api/tools'
-        if not tools.is_dir() or tools.is_symlink():raise ValueError('Same-source API test tools required')
-        controller='import subprocess,sys; sys.exit(subprocess.run([sys.executable,"-m","pytest","-q","tests","-p","no:cacheprovider"],timeout=110).returncode)'
-        try:
-            docker_step(['docker','run','--rm','--pull=never','--name',test_name,'--label','com.optionsedge.cvd-evidence-api-test='+owner,
-                '--platform',target['platform'],'--memory=512m','--memory-swap=512m','--cpus=1','--pids-limit=128',
-                '--mount','type=bind,source='+str(tools.resolve())+',target=/app/tools,readonly',
-                '-e','TRADE_API_TEST=1','-e','TRADE_API_AUTH_REQUIRED=false',image,'python','-c',controller],root,'tests',120)
-        except BaseException:
-            cleanup_test(test_name,owner)
-            raise
-        tested=command('docker','image','inspect',image,'--format','{{.Id}}').strip()
-        if not re.fullmatch('sha256:[0-9a-f]{64}',tested):raise ValueError('Tested image config digest missing')
+        # Docker-free: the suite runs on the host from the same hash-pinned lock and the very sources that are staged next; Jib pushes.
+        helper=checkout/'trade-evidence-api/deploy/image_stage.py'
+        pom=checkout/'trade-evidence-api/ci/jib-image/pom.xml'
+        if not helper.is_file() or not pom.is_file():raise ValueError('Same-source Docker-free image recipe required')
+        env=tool_environment()
+        bounded_step(['python3.14','-B',str(helper),'test','--venv',str(root/'test-venv'),'--contracts',str(contracts)],root,'tests',600,env=env)
+        receipt['status']='TESTS_PASSED';save()
+        stage=root/'image';rootfs=stage/'rootfs'
+        bounded_step(['python3.14','-B',str(helper),'stage','--dest',str(rootfs),'--platform',target['platform'],'--contracts',str(contracts)],root,'stage',900,env=env)
+        (stage/'target/classes').mkdir(parents=True);(stage/'pom.xml').write_bytes(pom.read_bytes())
+        tested_tree=tree_digest(rootfs)
         if current()!=source or reader.sdk_main()!=release['source']:raise ValueError('Source main changed before publication')
-        receipt['status']='TESTS_PASSED';save();metadata=root/'publish.json'
-        docker_step([*args,'--output','type=image,push=true,registry.insecure=true','--metadata-file',str(metadata),context],root,'publish',900)
-        published=json.loads(metadata.read_text());digest=published.get('containerimage.digest','')
-        if published.get('containerimage.config.digest')!=tested or not re.fullmatch('sha256:[0-9a-f]{64}',digest):raise ValueError('Published image differs from the tested image')
+        container_env=','.join(['PYTHONUNBUFFERED=1','PYTHONDONTWRITEBYTECODE=1','TRADE_API_RUNTIME_DIR=/data','TRADE_API_AUTH_REQUIRED=true',
+            'PYTHONPATH=/app:/app/site-packages:/app/contracts.jar','OPTIONS_EDGE_CONTRACTS_JAR=/app/contracts.jar',
+            'OPTIONS_EDGE_CONTRACTS_VERSION='+release['version'],'OPTIONS_EDGE_CONTRACTS_SHA256='+release['sha256'],'TRADE_API_REVISION='+source])
+        bounded_step(['mvn','-B','-q','-f',str(stage/'pom.xml'),'package','-Pjib-image','-Djib.extraDirectories.paths='+str(rootfs.resolve()),
+            '-Djib.from.platforms='+target['platform'],'-Djib.to.image='+image,'-Djib.container.environment='+container_env,
+            '-Djib.container.labels=org.opencontainers.image.source=https://github.com/abhinav-jain09/options-edge-processing,org.opencontainers.image.revision='+source],
+            root,'publish',900,env=env)
+        digest=(stage/'target/jib-image.digest').read_text().strip();pushed_config=(stage/'target/jib-image.id').read_text().strip()
+        if tree_digest(rootfs)!=tested_tree:raise ValueError('Published image differs from the tested image')
+        if not re.fullmatch('sha256:[0-9a-f]{64}',digest) or not re.fullmatch('sha256:[0-9a-f]{64}',pushed_config):raise ValueError('Jib reported no exact image digest')
+        tested=pushed_config
         receipt.update(status='PASS',format=1,platform=target['platform'],image=target['registry']+'/'+REPO+':'+tag+'@'+digest,
                        contractsSource=release['source'],contractsJarSha256=release['sha256'],testedConfigDigest=tested,guardVersion=GUARD)
         save();(root/'release.json').write_text(json.dumps(receipt,indent=2)+'\n');print(json.dumps(receipt))

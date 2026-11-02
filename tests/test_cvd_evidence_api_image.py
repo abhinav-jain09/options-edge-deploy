@@ -21,51 +21,67 @@ class ApiImageTest(unittest.TestCase):
         self.root=Path(tempfile.mkdtemp(prefix='cvd-api-images-'));self.previous=Path.cwd();os.chdir(self.root);self.addCleanup(os.chdir,self.previous)
         self.env={'JENKINS_URL':'http://jenkins/','PERMITTED_SHA_GUARD':'PASSED','PERMITTED_SHA':DEPLOY,'BUILD_NUMBER':'17','ENVIRONMENT':'dev','ACTION':'build'}
         self.reader=SimpleNamespace(TARGETS=copy.deepcopy(w.TARGETS),sdk_main=lambda:SDK);self.steps=[];self.commands=[];self.cleanups=[]
-    def build(self,environment='dev',test_failure=False,publish_drift=False,moved=False,test_timeout=False,test_overflow=False):
+    def build(self,environment='dev',test_failure=False,publish_drift=False,moved=False,test_timeout=False,test_overflow=False,missing_recipe=False,bad_digest=False):
         def sdk_latest(base,source,destination):
             destination.write_bytes(b'official SDK fixture');destination.with_suffix('.release.json').write_text(json.dumps({'source':SDK,'sha256':'f'*64,'version':'0.23.0'}))
         def command(*args,**kwargs):
             self.commands.append(args)
-            if args[:2]==('git','clone'):(Path(args[-1])/'trade-evidence-api/tools').mkdir(parents=True);return ''
+            if args[:2]==('git','clone'):
+                checkout=Path(args[-1]);(checkout/'trade-evidence-api/deploy').mkdir(parents=True);(checkout/'trade-evidence-api/ci/jib-image').mkdir(parents=True)
+                if not missing_recipe:
+                    (checkout/'trade-evidence-api/deploy/image_stage.py').write_text('# fixture');(checkout/'trade-evidence-api/ci/jib-image/pom.xml').write_text('<project/>')
+                return ''
             if 'rev-parse' in args:return SOURCE+'\n'
-            if args[:3]==('docker','image','inspect'):return CONFIG+'\n'
             return ''
-        def docker(args,root,name,timeout):
+        def step(args,root,name,timeout,env=None):
             self.steps.append((name,args,timeout))
             if name=='tests' and test_failure:raise ValueError('test failure fixture')
-            if name=='tests' and test_timeout:raise m.subprocess.TimeoutExpired(['docker'],120)
-            if name=='tests' and test_overflow:raise ValueError('Bounded Docker log budget exceeded')
-            if name=='publish':Path(args[args.index('--metadata-file')+1]).write_text(json.dumps({'containerimage.digest':DIGEST,'containerimage.config.digest':'sha256:'+'0'*64 if publish_drift else CONFIG}))
-        with patch.dict(os.environ,self.env,clear=True),patch.object(m,'current',side_effect=[SOURCE,'0'*40] if moved else lambda:SOURCE),patch.object(m,'command',side_effect=command),patch.object(m,'docker_step',side_effect=docker),patch.object(m,'cleanup_test',side_effect=lambda name,owner:self.cleanups.append((name,owner))),patch.object(m,'load',return_value=SimpleNamespace(latest=sdk_latest)),patch('sys.stdout',new=io.StringIO()):m.build_image(environment,'17',self.reader)
+            if name=='tests' and test_timeout:raise m.subprocess.TimeoutExpired(['python3.14'],600)
+            if name=='tests' and test_overflow:raise ValueError('Bounded build step log budget exceeded')
+            if name=='stage':
+                rootfs=Path(args[args.index('--dest')+1]);(rootfs/'app').mkdir(parents=True);(rootfs/'app/app.py').write_text('tested sources')
+            if name=='publish':
+                target=Path(args[args.index('-f')+1]).parent/'target';target.mkdir(exist_ok=True)
+                (target/'jib-image.digest').write_text('not-a-digest' if bad_digest else DIGEST);(target/'jib-image.id').write_text(CONFIG)
+                if publish_drift:(Path(args[args.index('-f')+1]).parent/'rootfs/app/app.py').write_text('changed after the tests')
+        with patch.dict(os.environ,self.env,clear=True),patch.object(m,'current',side_effect=[SOURCE,'0'*40] if moved else lambda:SOURCE),patch.object(m,'command',side_effect=command),patch.object(m,'bounded_step',side_effect=step),patch.object(m,'load',return_value=SimpleNamespace(latest=sdk_latest)),patch('sys.stdout',new=io.StringIO()):m.build_image(environment,'17',self.reader)
         return json.loads((self.root/'.jenkins-tmp/evidence-api-17/release.json').read_text())
     def row(self,number=17,result='SUCCESS',building=False,environment='dev',action='build'):
         return {'number':number,'result':result,'building':building,'actions':[{'parameters':[{'name':'ENVIRONMENT','value':environment},{'name':'ACTION','value':action},{'name':'PERMITTED_SHA','value':DEPLOY}]}]}
     def select(self,proof,rows=None,environment='dev'):
         with patch.dict(os.environ,self.env,clear=True):return m.select_release(environment,rows or [self.row()],lambda url,limit:json.dumps(proof),self.reader)
     def test_both_architectures_publish_only_after_their_own_tests(self):
-        proof=self.build();self.assertEqual(['build','tests','publish'],[x[0] for x in self.steps]);self.assertEqual('PASS',proof['status']);self.assertFalse(proof['runtimeDeployed']);self.assertEqual(SOURCE,proof['processingSource']);self.assertEqual(SDK,proof['contractsSource']);self.assertIn('host.docker.internal:5001/',proof['image']);self.assertEqual('linux/arm64',proof['platform'])
-        test=self.steps[1][1];self.assertIn('--memory=512m',test);self.assertIn('--cpus=1',test);self.assertIn('TRADE_API_TEST=1',test);self.assertNotIn('-p',test[:test.index('python')]);self.assertEqual(120,self.steps[1][2])
-        self.assertTrue(self.steps[-1][1][self.steps[-1][1].index('-t')+1].startswith('192.168.100.102:5001/'));self.assertIn('--name',test);self.assertIn('timeout=110',test[-1]);mount=test[test.index('--mount')+1];self.assertTrue(mount.startswith('type=bind,source='+str(self.root.resolve())));self.assertTrue(mount.endswith('/trade-evidence-api/tools,target=/app/tools,readonly'))
-        self.assertFalse(any(x[0] in ['kubectl','launchctl','ssh'] for x in self.commands))
+        proof=self.build();self.assertEqual(['tests','stage','publish'],[x[0] for x in self.steps]);self.assertEqual('PASS',proof['status']);self.assertFalse(proof['runtimeDeployed']);self.assertEqual(SOURCE,proof['processingSource']);self.assertEqual(SDK,proof['contractsSource']);self.assertIn('host.docker.internal:5001/',proof['image']);self.assertEqual('linux/arm64',proof['platform'])
+        stage=self.steps[1][1];self.assertEqual('linux/arm64',stage[stage.index('--platform')+1])
+        publish=self.steps[2][1];self.assertEqual('mvn',publish[0]);self.assertIn('-Pjib-image',publish);self.assertIn('-Djib.from.platforms=linux/arm64',publish)
+        self.assertTrue(next(a for a in publish if a.startswith('-Djib.to.image=')).startswith('-Djib.to.image=192.168.100.102:5001/'))
+        self.assertEqual(CONFIG,proof['testedConfigDigest']);self.assertTrue(proof['image'].endswith('@'+DIGEST))
+        self.assertFalse(any(x[0] in ['kubectl','launchctl','ssh','docker'] for x in self.commands));self.assertFalse(any(a[0]=='docker' for _,a,_ in self.steps))
         image,meta=self.select(proof);self.assertEqual(proof['image'],image);self.assertEqual(SOURCE,meta['processingSource'])
     def test_production_uses_only_the_production_architecture_and_registry(self):
         proof=self.build('production');self.assertEqual('linux/amd64',proof['platform']);self.assertTrue(proof['image'].startswith('192.168.100.252:5000/'));self.assertEqual(3,len(self.steps))
-        for name,args,timeout in self.steps:self.assertEqual('linux/amd64',args[args.index('--platform')+1])
-    def test_failed_final_image_tests_cannot_publish_or_create_a_release(self):
+        self.assertIn('-Djib.from.platforms=linux/amd64',self.steps[2][1]);self.assertEqual('linux/amd64',self.steps[1][1][self.steps[1][1].index('--platform')+1])
+    def test_failed_tests_cannot_stage_publish_or_create_a_release(self):
         with self.assertRaisesRegex(ValueError,'test failure'):self.build(test_failure=True)
-        self.assertEqual(['build','tests'],[x[0] for x in self.steps]);self.assertEqual([('cvd-evidence-api-test-dev-17',DEPLOY+'-dev-17')],self.cleanups);self.assertFalse((self.root/'.jenkins-tmp/evidence-api-17/release.json').exists())
-    def test_timed_out_test_cleans_only_the_named_owned_container(self):
+        self.assertEqual(['tests'],[x[0] for x in self.steps]);self.assertFalse((self.root/'.jenkins-tmp/evidence-api-17/release.json').exists())
+    def test_timed_out_tests_stop_before_staging(self):
         with self.assertRaises(m.subprocess.TimeoutExpired):self.build(test_timeout=True)
-        self.assertEqual([('cvd-evidence-api-test-dev-17',DEPLOY+'-dev-17')],self.cleanups);self.assertEqual(['build','tests'],[x[0] for x in self.steps]);self.assertFalse((self.root/'.jenkins-tmp/evidence-api-17/release.json').exists())
-    def test_log_limited_test_cleans_only_the_named_owned_container(self):
+        self.assertEqual(['tests'],[x[0] for x in self.steps])
+    def test_log_limited_tests_stop_before_staging(self):
         with self.assertRaisesRegex(ValueError,'log budget'):self.build(test_overflow=True)
-        self.assertEqual([('cvd-evidence-api-test-dev-17',DEPLOY+'-dev-17')],self.cleanups);self.assertEqual(['build','tests'],[x[0] for x in self.steps])
-    def test_publication_config_drift_has_no_deployable_receipt(self):
+        self.assertEqual(['tests'],[x[0] for x in self.steps])
+    def test_staged_tree_changed_after_the_tests_has_no_deployable_receipt(self):
         with self.assertRaisesRegex(ValueError,'differs from the tested'):self.build(publish_drift=True)
         self.assertFalse((self.root/'.jenkins-tmp/evidence-api-17/release.json').exists());receipt=json.loads((self.root/'.jenkins-tmp/evidence-api-17/build-receipt.json').read_text());self.assertEqual('TESTS_PASSED',receipt['status'])
+    def test_push_without_an_exact_digest_has_no_deployable_receipt(self):
+        with self.assertRaisesRegex(ValueError,'no exact image digest'):self.build(bad_digest=True)
+        self.assertFalse((self.root/'.jenkins-tmp/evidence-api-17/release.json').exists())
+    def test_missing_same_source_recipe_refuses_before_any_build_step(self):
+        with self.assertRaisesRegex(ValueError,'recipe required'):self.build(missing_recipe=True)
+        self.assertEqual([],self.steps)
     def test_new_source_before_publication_refuses_without_pushing(self):
         with self.assertRaisesRegex(ValueError,'changed before publication'):self.build(moved=True)
-        self.assertEqual(['build','tests'],[x[0] for x in self.steps])
+        self.assertEqual(['tests','stage'],[x[0] for x in self.steps])
     def test_newest_build_never_falls_back_and_rollout_runs_are_not_image_builds(self):
         proof=self.build()
         for row in [self.row(18,'FAILURE'),self.row(18,None,True)]:
@@ -86,17 +102,6 @@ class ApiImageTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'stopped hold'):core.patch_for('trade-evidence-api',{**live,'spec':{**live['spec'],'replicas':1}},image)
             self.assertEqual(w.TARGETS['dev']['uid'],os.environ['ES4_NS_UID']);self.assertEqual(w.TARGETS['dev']['kubeconfig'],os.environ['ES4_KUBECONFIG'])
         with patch.dict(os.environ,self.env,clear=True),patch.object(m,'load',return_value=core),patch.object(core,'main',side_effect=main):m.roll_image('dev',w)
-    def test_cleanup_kills_only_the_owned_container_id_and_treats_absence_as_clean(self):
-        identity='1'*64;name='cvd-evidence-api-test-dev-17';owner=DEPLOY+'-dev-17';calls=[]
-        def command(*args,**kwargs):
-            calls.append(args)
-            return identity+'|'+owner if args[1]=='container' else ''
-        with patch.object(m,'command',side_effect=command):m.cleanup_test(name,owner)
-        self.assertEqual(('docker','kill',identity),calls[-1])
-        with patch.object(m,'command',return_value=identity+'|foreign') as call:
-            with self.assertRaisesRegex(ValueError,'foreign'):m.cleanup_test(name,owner)
-            self.assertEqual(1,call.call_count)
-        with patch.object(m,'command',side_effect=m.subprocess.CalledProcessError(1,['docker'],stderr='Error: No such container: '+name)) as call:m.cleanup_test(name,owner);self.assertEqual(1,call.call_count)
     def test_sparse_source_capture_excludes_unrelated_tracked_links(self):
         import subprocess
         source=self.root/'source';source.mkdir()
@@ -107,15 +112,18 @@ class ApiImageTest(unittest.TestCase):
 
     def test_log_file_budget_is_enforced_by_a_real_small_child(self):
         import sys
-        with patch('sys.stdout',new=io.StringIO()):m.docker_step([sys.executable,'-c','print("bounded log")'],self.root,'small',10)
+        with patch('sys.stdout',new=io.StringIO()):m.bounded_step([sys.executable,'-c','print("bounded log")'],self.root,'small',10)
         self.assertEqual('bounded log\n',(self.root/'small.log').read_text())
         with patch('sys.stdout',new=io.StringIO()),self.assertRaisesRegex(ValueError,'log budget exceeded'):
-            m.docker_step([sys.executable,'-c','import os; os.write(1,b"x"*(9<<20))'],self.root,'excess',10)
+            m.bounded_step([sys.executable,'-c','import os; os.write(1,b"x"*(9<<20))'],self.root,'excess',10)
         self.assertLessEqual((self.root/'excess.log').stat().st_size,8<<20)
     def test_staging_is_fresh_bounded_and_never_cleans_an_old_build(self):
         root=m.staging('17');(root/'owned-proof').write_text('preserved')
         with self.assertRaises(FileExistsError):m.staging('17')
         self.assertEqual('preserved',(root/'owned-proof').read_text())
+    def test_the_image_path_never_invokes_docker(self):
+        import re
+        self.assertIsNone(re.search(r"'docker'|buildx|docker\s+(build|run|save|image)",(ROOT/'scripts/deploy/cvd-evidence-api-image.py').read_text()))
     def test_without_jenkins_guard_nothing_is_inspected(self):
         with patch.dict(os.environ,{},clear=True),patch.object(m,'command') as command:
             with self.assertRaisesRegex(ValueError,'Guarded Jenkins'):m.main()

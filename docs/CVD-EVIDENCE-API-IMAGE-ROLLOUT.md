@@ -3,16 +3,12 @@
 `cvd-evidence-api-images` builds the existing API from current processing main
 and the newest successful current-main contracts release, using one fixed dev
 or production architecture and registry. There is no version or source selector.
-The ordinary Python suite runs inside the final image before publication, with
-same-source test-control helpers mounted read-only at `/app/tools`,
-512 MiB, no extra swap, one CPU, 128 tasks and a two-minute client limit. A 110-second controller inside the named test
-container bounds the test even if its client disappears. Failed, timed out or
-log-limited tests trigger a bounded ownership-label check and kill only that
-exact container ID. The shared builder is never stopped or removed. Build and
-publish clients have finite deadlines and 8 MiB log limits. Publication must
-produce the exact image configuration tested; the immutable digest and source
-provenance are archived only after that check. Failed or running latest builds
-never fall back to a previous release.
+The image is built Docker-free. The ordinary Python suite runs on the build Mac from the service's hash-pinned lock and the very
+sources that are staged next (`trade-evidence-api/deploy/image_stage.py test`), bounded by a 10-minute deadline and an 8 MiB log limit.
+The target-architecture wheels and sources are then staged and Jib (`trade-evidence-api/ci/jib-image/pom.xml`) pushes the image. The
+staged tree is content-hashed before and after the push: any difference refuses the receipt. The immutable digest and Jib's image
+configuration id are archived only after that check. No Docker daemon, Docker Desktop or buildx is involved. Failed or running latest
+builds never fall back to a previous release.
 
 The separate `roll-forward` action defaults to server dry run. It reuses the
 CVD image-only CAS updater with the fixed target namespace/deployer, architecture
