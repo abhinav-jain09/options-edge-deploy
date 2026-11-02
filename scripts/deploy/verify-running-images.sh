@@ -88,6 +88,7 @@ IMAGE_MAP = {
     ("vol-state-service", "vol-state"): "VOL_STATE_IMAGE",
     ("zn-gex-service", "zn-gex"): "ZN_GEX_IMAGE",
     ("line-acceptance-service", "line-acceptance"): "LINE_ACCEPTANCE_IMAGE",
+    ("es-amt-service", "es-amt"): "ES_AMT_IMAGE",
     ("reversal-postgres-writer", "reversal-postgres-writer"): "REVERSAL_POSTGRES_WRITER_IMAGE",
 }
 

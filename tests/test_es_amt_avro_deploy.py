@@ -1,0 +1,164 @@
+"""es.futures.auction Avro on dev (fixed id 3201, contracts EsAuctionAvro): scripts/kafka/ensure-fixed-id-schemas.sh with schema-id-maps/es-amt.map against the
+stand-in registry (tests/stub_schema_registry.py), the map's agreement with the other maps, and the wipe script's cluster guard."""
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+
+from tests.stub_schema_registry import Registry, serve
+
+ROOT = Path(__file__).resolve().parent.parent
+SCRIPT = ROOT / "scripts/kafka/ensure-fixed-id-schemas.sh"
+MAPS = ROOT / "scripts/kafka/schema-id-maps"
+MAP = MAPS / "es-amt.map"
+SUBJECT = "com.optionsedge.contracts.esamt.EsAuctionMinute"
+
+
+def rows():
+    out = []
+    for line in MAP.read_text().splitlines():
+        if line.strip() and not line.lstrip().startswith("#"):
+            out.append(line.split("|"))
+    return out
+
+
+def run(url: str, dry: bool = False):
+    d = Path(tempfile.mkdtemp())
+    (d / "EsAuctionMinute.avsc").write_text(json.dumps(
+        {"type": "record", "name": "EsAuctionMinute", "namespace": "com.optionsedge.contracts.esamt", "doc": "fixture", "fields": [{"name": "x", "type": "string"}]}))
+    env = dict(os.environ, SCHEMA_REGISTRY_URL=url, SCHEMAS_DIR=str(d), SCHEMA_ID_MAP=str(MAP), DEPLOY_DRY_RUN="true" if dry else "false")
+    r = subprocess.run(["bash", str(SCRIPT)], capture_output=True, text=True, env=env)
+    return r.returncode, r.stdout + r.stderr
+
+
+class Registration(unittest.TestCase):
+    def with_registry(self, check):
+        reg = Registry()
+        server, url = serve(reg)
+        try:
+            check(reg, url)
+        finally:
+            server.shutdown()
+
+    def test_the_map_declares_exactly_one_subject_under_3201(self):
+        self.assertEqual(rows(), [[SUBJECT, "3201", "EsAuctionMinute.avsc"]])
+
+    def test_a_fresh_registry_gets_the_subject_under_3201_with_full_and_a_rerun_changes_nothing(self):
+        def check(reg, url):
+            rc, out = run(url)
+            self.assertEqual(rc, 0, out)
+            self.assertEqual(reg.subjects[SUBJECT][0]["id"], 3201)
+            self.assertEqual(set(reg.configs.values()), {"FULL"})
+            calls = len(reg.calls)
+            rc, out = run(url)
+            self.assertEqual(rc, 0, out)
+            self.assertFalse(any(c.startswith("POST /subjects/") and c.endswith("/versions {schema…}") for c in reg.calls[calls:]), "nothing re-imported")
+        self.with_registry(check)
+
+    def test_a_dry_run_mutates_nothing(self):
+        def check(reg, url):
+            rc, out = run(url, dry=True)
+            self.assertEqual(rc, 0, out)
+            self.assertEqual((reg.subjects, reg.subject_modes), ({}, {}))
+        self.with_registry(check)
+
+    def test_the_id_held_by_another_schema_is_a_collision_never_repaired(self):
+        def check(reg, url):
+            reg.register("some.other.Subject", json.dumps({"type": "string"}), id=3201, version=1)
+            rc, out = run(url)
+            self.assertEqual(rc, 1, out)
+            self.assertIn("fixed id 3201 is already held by another schema", out)
+            self.assertEqual(set(reg.subjects), {"some.other.Subject"})
+        self.with_registry(check)
+
+
+class MapAgrees(unittest.TestCase):
+    def test_no_id_is_shared_with_any_other_map_and_none_is_in_a_used_block(self):
+        ours = {int(r[1]) for r in rows()}
+        for other in MAPS.glob("*.map"):
+            if other == MAP:
+                continue
+            for line in other.read_text().splitlines():
+                if line.strip() and not line.lstrip().startswith("#"):
+                    self.assertNotIn(int(line.split("|")[1]), ours, f"{other.name} reuses an es-amt id")
+
+
+class WipeScriptGuards(unittest.TestCase):
+    """The destructive script is bound to this topic's wire contract and shape (its mock test, roll-forward-es-amt-auction-test.sh, runs the behaviours)."""
+
+    SCRIPT = (ROOT / "scripts/kafka/roll-forward-es-amt-auction.sh").read_text()
+
+    def test_it_expects_exactly_the_fixed_id_in_hex(self):
+        self.assertIn("RF_EXPECT_ID_HEX=00000c81", self.SCRIPT)  # 3201 = 0x0c81
+
+    def test_it_recreates_the_topic_at_the_declared_shape(self):
+        topics = (ROOT / "scripts/kafka/topics.env").read_text()
+        self.assertIn("OPTIONS_EDGE_TOPICS=\"$OPTIONS_EDGE_TOPICS es.futures.auction:1\"", topics)
+        self.assertIn("PARTITIONS=1", self.SCRIPT)
+        self.assertIn('CONFIGS="cleanup.policy=delete,retention.ms=604800000"', self.SCRIPT)
+        self.assertIn("RETENTION 604800000", topics)
+
+    def test_only_dev_is_executable_and_es4_and_production_are_refused_by_name(self):
+        self.assertIn("dev:localhost:19092", self.SCRIPT)
+        self.assertNotIn("es4:192.168.100.4:9092) ;;", self.SCRIPT)
+        self.assertNotIn("production:192.168.100.252:9092) ;;", self.SCRIPT)
+        self.assertIn("es4|production) echo \"FATAL:", self.SCRIPT)
+
+    def test_the_mock_test_passes(self):
+        r = subprocess.run(["bash", str(ROOT / "scripts/kafka/roll-forward-es-amt-auction-test.sh")], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stdout[-2000:] + r.stderr[-2000:])
+
+
+class DevOnlyWiring(unittest.TestCase):
+    """es-amt-service is the dev-owned Avro writer: registered for dev only, running (replicas 1), never rendered for production or experiment."""
+
+    def test_registered_for_dev_only(self):
+        import yaml
+        svc = [x for x in yaml.safe_load((ROOT / "services.yaml").read_text())["services"] if x["name"] == "es-amt"]
+        self.assertEqual(len(svc), 1)
+        self.assertEqual(svc[0]["envs"], ["dev"])
+        self.assertEqual(svc[0]["deployments"], ["es-amt-service"])
+
+    def test_the_dev_slice_runs_one_replica_and_names_the_dev_topics(self):
+        base = (ROOT / "k8s/services/es-amt/base/es-amt-deployment.yaml").read_text()
+        self.assertIn("replicas: 1", base)
+        self.assertIn("type: Recreate", base)
+        for needle in ("name: KAFKA_ES_AUCTION_TOPIC\n              value: es.futures.auction", "name: KAFKA_ES_TRADES_TOPIC\n              value: underlying.es.trades",
+                       "value: host.docker.internal:19092", "name: ES_AMT_TOPIC_RETENTION_MS\n              value: \"604800000\""):
+            self.assertIn(needle, base)
+
+    def test_no_other_environment_renders_it(self):
+        for env in ("production", "experiment"):
+            self.assertFalse((ROOT / f"k8s/services/es-amt/overlays/{env}").exists(), env)
+            kz = (ROOT / f"k8s/overlays/{env}/kustomization.yaml").read_text()
+            self.assertNotIn("services/es-amt/", kz, env)
+
+    def test_it_is_not_held_down_by_any_script(self):
+        for f in ("scripts/ops/dev-cleanup.sh", "scripts/ops/morning-autostart.sh", "scripts/ops/oe-boot-bringup.sh"):
+            for line in (ROOT / f).read_text().splitlines():
+                if line.startswith(("DISABLED_DEV=", "KEEP_DOWN=")):
+                    self.assertNotIn("es-amt-service", line, f)
+
+
+class MirrorJobRefusesTheDevTarget(unittest.TestCase):
+    """Once dev owns the Avro writer, a byte mirror of es4's JSON into dev would put JSON in an Avro topic: the job's install refuses 127.0.0.1:19092."""
+
+    JOB = (ROOT / "Jenkinsfile.es-auction-mirror").read_text()
+
+    def test_install_refuses_the_dev_target(self):
+        self.assertIn("DEV OWNS ITS WRITER", self.JOB)
+        self.assertIn('"$TARGET_SPX_CLUSTER_IP:$TARGET_PORT" = "127.0.0.1:19092"', self.JOB)
+
+    def test_teardown_and_status_are_not_gated(self):
+        pre = self.JOB.index("stage('Preflight (fail-closed)')")
+        self.assertLess(self.JOB.index("stage('Teardown')"), pre)
+        self.assertLess(self.JOB.index("stage('Status')"), pre)
+        self.assertGreater(self.JOB.index("DEV OWNS ITS WRITER"), pre)
+
+
+if __name__ == "__main__":
+    unittest.main()

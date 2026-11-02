@@ -1,0 +1,88 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: es-amt-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: es-amt-service
+    app.kubernetes.io/component: es-amt-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  # SINGLE replica ONLY (strategy Recreate): the producer's transactional.id is es-amt-service-auction, a second pod fences the first, and two writers of one
+  # per-minute ledger is not an outcome anything downstream can use. `kubectl scale` above 1 has no valid result.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: es-amt-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: es-amt-service
+        app.kubernetes.io/component: es-amt-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: es-amt
+          image: 192.168.100.252:5000/options-edge-es-amt:dev
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: options-edge-config              # SCHEMA_REGISTRY_URL (fixed id 3201 is read from it at start), TOPIC_PREFIX="" and the runtime profile
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            # DEV-OWNED WRITER of es.futures.auction (JSON -> Avro, contracts id 3201, docs/ES-AMT-AVRO-CUTOVER.md). Until the cutover dev's copy of this topic was a byte
+            # mirror of es4's JSON; the mirror is torn down and this service writes the topic itself, from dev's own ES tape. es4 and production keep their JSON writer/mirror
+            # until their own cutover. DEV ONLY (services.yaml envs: [dev]); there is no production or experiment render.
+            - name: HEALTH_PORT
+              value: "8142"
+            # The shared options-edge-config KAFKA_BOOTSTRAP_SERVERS is host.docker.internal:19092 on dev; the service's own default (127.0.0.1) would be the pod itself.
+            - name: ES_AMT_BOOTSTRAP_SERVERS
+              value: host.docker.internal:19092
+            - name: ES_AMT_SPX_BOOTSTRAP_SERVERS
+              value: host.docker.internal:19092
+            # LOCAL topics take TOPIC_PREFIX (empty on dev), so the names are spelled in full: the auction topic MUST be es.futures.auction, the name every dev reader uses.
+            - name: KAFKA_ES_TRADES_TOPIC
+              value: underlying.es.trades
+            - name: KAFKA_ES_AUCTION_TOPIC
+              value: es.futures.auction
+            # FOREIGN (literal) topic, Avro only: the dev SPX price feed. Best effort and display only; it never gates a minute.
+            - name: KAFKA_SPX_INDEX_PRICE_TOPIC
+              value: underlying.spx.price
+            - name: ES_AMT_GROUP_ID
+              value: es-amt-service
+            # Shape the service restamps only when it has to CREATE the topic; apply-topics owns it (1 partition, plain delete, 7 calendar days).
+            - name: ES_AMT_TOPIC_RETENTION_MS
+              value: "604800000"
+            # 34h = the previous RTH session plus the overnight Globex session from a cold start (the seek is also floored at that session's 09:30 ET).
+            - name: ES_AMT_REPLAY_LOOKBACK_HOURS
+              value: "34"
+            # The options tape (what is LISTED for today's expiry): dev has the SPX feed's enumeration topic, same as es4.
+            - name: ES_AMT_DEFINITION_ENUMERATION_ENABLED
+              value: "true"
+            - name: JAVA_TOOL_OPTIONS
+              value: -Xms128m -Xmx768m
+          ports:
+            - name: health
+              containerPort: 8142
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 15
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
