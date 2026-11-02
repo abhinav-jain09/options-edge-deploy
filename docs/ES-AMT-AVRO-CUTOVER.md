@@ -42,12 +42,18 @@ VA/POC, humps of the prior session, the O2/O3 gap and open-type observations) th
 
 * trade date **Mon 2026-11-02** (already closed): prior session = Fri, absent -> degraded (`AmtPriorSessionMissingTest`: the prior blocks are withheld rather than invented, the desk stands aside, today's own profile is published).
 * trade date **Tue 2026-11-03** (cutover day, 16:05 ET onward): prior session = Mon 11-02 RTH, which is on the dev tape -> full record. The cutover is scheduled so the first Avro minutes are Tuesday's.
-* Every later dev clean (`dev-cleanup.sh` wipes `underlying.es.trades`, ES_CLEAN_TOPICS) degrades the **next** trade date's prior blocks the same way. This is a property of dev's tape retention, not of the cutover.
+* While dev-cleanup's daily cycle is running, the ES tape does not survive it: the 17:20 clean wipes `underlying.es.trades` and the 09:17 ESDOWN slot cleans it again (ES_CLEAN_TOPICS). Dev's prior-session coverage is then
+  always short, so dev's prior-session blocks stay withheld every day (the desk stands aside, today's own profile and levels are still published), unlike the previous byte mirror of es4, which keeps its tape (`scripts/es4/tape-preserve.sh`).
+  Fixing that means preserving the dev tape across the clean, a separate decision (it changes what dev keeps); it is the one real quality difference between a dev-owned writer and the old mirror.
 * The history of the old topic is gone by design (the retained JSON is deleted): Monday's JSON minutes are not carried into the Avro topic.
 
-## Order (the whole thing is one window: Tue 11-03 after 16:05 ET and before 18:00 ET)
+## Order (one window: Tue 11-03 after the 16:00 ET close, finished BEFORE 17:15 ET, or the daily clean has to be accounted for)
 
-EAV must not be redeployed between 18:01 and 09:30 ET (its Globex night is in memory), and the market-hours readers are not rolled 09:30-16:00 ET. So: after the 16:00 ET close, and finished before 18:00.
+Constraints on the window: the market-hours readers are not rolled 09:30-16:00 ET; EAV must not be redeployed 18:01-09:30 ET (its Globex night is in memory); and `dev-cleanup.sh` has an automatic 17:20 ET clean that wipes every non-system
+topic (including the one this cutover has just converted), scales every Kafka client to zero and brings up only `OVERNIGHT_SET` (es-amt-service is now in it). Check first whether that automatic clean is active: on this Mac
+`~/Library/LaunchAgents/com.optionsedge.dev-cleanup.plist` is disabled (`.disabled-20260721`) and `launchctl list | grep dev-cleanup` is empty (2026-11-02), but the live copy on 192.168.100.102 was not confirmable from here.
+**If the 17:20 clean is active, finish steps 1-9 before 17:15 ET** (about 70 minutes from 16:05; the six reader rolls dominate), or skip the day. If a clean does run after the cutover the system self-heals (topic recreated empty at the declared shape,
+`es-amt-service` and the readers re-started by the overnight/06:15 starts, the writer replays its tape window), but the tape-dependent blocks are degraded (see the section above).
 
 Prerequisites (done earlier, no dev effect): contracts with `EsAuctionAvro` merged; processing (es-amt-service and the readers) and gateway merged; this deploy PR merged; dev has a free `192.168.100.102` registry port 8082.
 
@@ -70,8 +76,10 @@ Prerequisites (done earlier, no dev effect): contracts with `EsAuctionAvro` merg
    or the registry (`curl http://192.168.100.102:8082/schemas/ids/3201`); the gateway `es-auction` frame on https://dev.bleadingoptions.com still carries `levels`, `profile`, `humps`, `call`; `es_amt_avro_refused` stays 0 on the writer's `/metrics`.
 9. Re-run step 2's describe: the TopicId differs from the pre-cutover one, 1 partition, `cleanup.policy=delete`, `retention.ms=604800000`.
 
-After the cutover `dev-cleanup.sh` needs nothing: it recreates the topic from `topics.env` at the same shape (plain delete, 7 days, EXACT 1 partition), `es-amt-service` is not in `DISABLED_DEV`/`KEEP_DOWN` (it must run), and the torn-down mirror has no plist
-left for the mirror resume list.
+After the cutover `dev-cleanup.sh` needs one change, made in this PR: `es-amt-service` is in `OVERNIGHT_SET` (up from the 18:00 ET Globex open, not only from the 06:15 full start) and deliberately NOT in `ES_DOWN_SET`
+(it publishes the RTH minutes until 16:00 ET). The clean recreates the topic from `topics.env` at the same shape (plain delete, 7 days, EXACT 1 partition); `es-amt-service` is in neither `DISABLED_DEV` nor `KEEP_DOWN`; the torn-down mirror
+leaves no plist for the mirror resume list. The live copy `~/oe-ops/dev-cleanup.sh` is installed from the repo by `scripts/ops/install-dev-cleanup.sh` (run `--check` first: the two already differ); until it is installed the overnight start would
+leave es-amt-service down from 17:20 to 06:15.
 
 ## Not done here (owner's decision)
 

@@ -80,7 +80,9 @@ DISABLED_DEV='hpsf-stage-a-service|hpsf-stage-b-service|volume-pace-service|volu
 # raw-postgres-writer is kept alive overnight so it is CONSUMING options.databento.raw before 06:30 and
 # persists the feed's live-OI capture into Postgres the moment it publishes — without it up at 06:30, the
 # pre-open board() has no OI and pre-open GEX cannot compute until the ~07:00 historical fetch. (2026-08-26)
-OVERNIGHT_SET='es-open-direction-service es-open-direction-postgres-writer feed-gateway-service options-edge-web options-edge-databento-feed databento-gex-service raw-postgres-writer'
+# es-amt-service (2026-11-02, es.futures.auction Avro cutover, docs/ES-AMT-AVRO-CUTOVER.md): dev's OWN writer of the Globex/RTH auction minutes, so it must be up from the 18:00 ET Globex open (18:01 is the first
+# minute label), not from the 06:15 full start. It is NOT in ES_DOWN_SET: it publishes the RTH minutes until 16:00 ET. Absent on a dev that has not been cut over yet: do_start_overnight skips an absent deployment.
+OVERNIGHT_SET='es-open-direction-service es-open-direction-postgres-writer feed-gateway-service options-edge-web options-edge-databento-feed databento-gex-service raw-postgres-writer es-amt-service'
 # ES overnight-tracking services that SHUT DOWN at ~09:17 ET (before the 09:30 SPX open): the overnight ES
 # session is over, so these scale to 0. feed-gateway-service + options-edge-web STAY UP (they serve the
 # SPX day session). Fired by the ESDOWN calendar slot below.

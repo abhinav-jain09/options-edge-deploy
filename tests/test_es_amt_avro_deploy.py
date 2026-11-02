@@ -137,6 +137,14 @@ class DevOnlyWiring(unittest.TestCase):
             kz = (ROOT / f"k8s/overlays/{env}/kustomization.yaml").read_text()
             self.assertNotIn("services/es-amt/", kz, env)
 
+    def test_it_comes_up_with_the_overnight_set_and_does_not_go_down_with_the_es_down_set(self):
+        t = (ROOT / "scripts/ops/dev-cleanup.sh").read_text()
+        overnight = [l for l in t.splitlines() if l.startswith("OVERNIGHT_SET=")]
+        down = [l for l in t.splitlines() if l.startswith("ES_DOWN_SET=")]
+        self.assertEqual(len(overnight), 1)
+        self.assertIn("es-amt-service", overnight[0])
+        self.assertNotIn("es-amt-service", down[0])
+
     def test_it_is_not_held_down_by_any_script(self):
         for f in ("scripts/ops/dev-cleanup.sh", "scripts/ops/morning-autostart.sh", "scripts/ops/oe-boot-bringup.sh"):
             for line in (ROOT / f).read_text().splitlines():
@@ -152,6 +160,7 @@ class MirrorJobRefusesTheDevTarget(unittest.TestCase):
     def test_install_is_allowed_only_for_the_production_target(self):
         self.assertIn("DEV OWNS ITS WRITER", self.JOB)
         self.assertIn('"$TARGET_SPX_CLUSTER_IP:$TARGET_PORT" != "192.168.100.252:9092"', self.JOB)
+        self.assertIn('"$SOURCE_ES_CLUSTER_IP:$SOURCE_PORT" != "192.168.100.4:9092"', self.JOB)
         # no spelling of a dev broker can be positively allowed
         self.assertNotIn('= "127.0.0.1:19092" ]', self.JOB.split("DEV OWNS ITS WRITER")[1].split("fi\n")[0])
 
