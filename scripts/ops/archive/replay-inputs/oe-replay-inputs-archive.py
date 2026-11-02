@@ -537,6 +537,8 @@ def verify(args) -> int:
         problems.append("day _manifest.jsonl ends in a torn line (run capture to recover, then verify again)")
     if not ents:
         print(f"verify {day}: NO manifest entries under {ddir}")
+        for x in problems:
+            print("  PROBLEM:", x)
         return 2
     listed = set()
     per_topic: dict[str, int] = {}
