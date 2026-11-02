@@ -696,8 +696,10 @@ def broker_compare(args, ents: list[dict], root: Path, day: str) -> int:
             print(f"    {t} p{p}: range [{first},{last}] no longer fully on the broker (log [{lo},{hi})) - skipped")
             continue
         arch_h, arch_n = hashlib.sha256(), 0
+        arch_offsets: set[int] = set()          # exact offsets: another ET day's records may sit between them
         for e in es:
             for r in iter_records(ddir / e["path"]):
+                arch_offsets.add(r["o"])
                 arch_h.update(f"{r['o']}:".encode() + (base64.b64decode(r["v"]) if r["v"] else b"") + b"\n")
                 arch_n += 1
         brk_h, brk_n = hashlib.sha256(), 0
@@ -712,7 +714,7 @@ def broker_compare(args, ents: list[dict], root: Path, day: str) -> int:
                 if m.offset() > last:
                     done = True
                     break
-                if any(e["offset_first"] <= m.offset() <= e["offset_last"] for e in es):
+                if m.offset() in arch_offsets:
                     brk_h.update(f"{m.offset()}:".encode() + (m.value() or b"") + b"\n")
                     brk_n += 1
         ok = (arch_n, arch_h.hexdigest()) == (brk_n, brk_h.hexdigest())
