@@ -35,6 +35,10 @@ untouched). Their cutover is the owner's call; the wipe script refuses `es4` and
 and refuses with `ES_AMT_PUBLISHED_SCAN_LEGACY_VALUE` if ANY retained record is not Confluent Avro under 3201. Both checks run before the topic is touched, the producer is fenced or anything is written. So before the
 wipe it crash-loops with those messages and writes nothing; after the wipe (topic empty or Avro only) it starts. Do not read a crash-looping `es-amt-service` before step 5 as a defect.
 
+The same holds if a `dev-cleanup` clean runs between merging this and step 3: the clean pauses and then RESUMES the dev auction mirror (it resumes every mirror plist that was loaded), so the JSON mirror refills the recreated dev topic exactly as it does
+today, and `es-amt-service` keeps refusing to start against it; no Avro record is ever written into a JSON-bearing topic, because the Avro writer is the one that checks. The teardown in step 3 removes the plist (`launchctl unload` + `rm` of the plist, proven gone),
+so a clean after step 3 has no dev auction mirror to pause or resume (an absent plist is reported "agent removed, skipped").
+
 ## What the dev record lacks, and why it is acceptable
 
 Dev's ES tape starts at the dev Kafka clean of 2026-11-01 (first print Sun 17:00 ET), so dev has **no Friday session**. The engine's prior-session blocks (references from the prior RTH session, prior
