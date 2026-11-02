@@ -710,26 +710,46 @@ do_es_down() {
 
 # ---------- FULL START: pre-create source topics, then scale ALL active apps up READY ----------
 
-# Count how many times the indicator-service container reports the "no epoch recovery copy" fatal, in its
-# CURRENT and its PREVIOUS container instance. Two traps, both seen on 2026-10-22:
-#  * the pod has TWO containers (indicator-estimate, indicator-service) and a bare `kubectl logs deploy/...`
-#    reads the FIRST, which never holds the exception - so the container is named;
-#  * after a restart the signature can be only in the terminated instance, so --previous is read too (it
-#    legitimately fails when there was no previous instance, which is not an error).
-# A failure to read the CURRENT container (a rename, a missing pod) is reported on stderr instead of reading as
-# "no failure", which is how this check went silently blind.
-indicator_epoch_fatal_count() {
-  local flag out rc n=0
-  for flag in "" "--previous"; do
-    # `&& rc=0 || rc=$?` keeps an expected non-zero (no previous instance) from tripping errexit/inherit_errexit.
-    out=$($KK logs deploy/indicator-service -c indicator-service $flag --tail=200 2>&1) && rc=0 || rc=$?
-    if [ "$rc" -ne 0 ]; then
-      [ -z "$flag" ] && echo "  ⚠ cannot read the indicator-service container logs (rc=$rc): $(printf '%s' "$out" | head -1)" >&2
-      continue
+# indicator-service owns its own epoch recovery: on a non-prod profile whose durable state topics were never
+# written (a wipe), the service mints the epoch itself and logs "EPOCH GENESIS SELF-AUTHORIZED". This script no
+# longer toggles the epoch-genesis env flag and no external helper job exists (2026-11-02: the old toggle and its
+# launchd job both read the wrong container and never fired, leaving dev without bars for ~7 h).
+#
+# pod_ready_report NAME -> prints "NAME ready/total containers" for its pod and returns 0 only when a pod exists
+# with EVERY container ready. The containers are named by the pod, never read through `kubectl logs deploy/...`
+# (a bare deploy log read picks the FIRST container).
+pod_ready_report() {
+  local name=$1 line ready total
+  line=$($KK get pods -l "app.kubernetes.io/name=$name" \
+    -o jsonpath='{range .items[*]}{.status.containerStatuses[*].ready}{"\n"}{end}' 2>/dev/null | head -1)
+  total=$(printf '%s\n' "$line" | wc -w | tr -d ' ')
+  ready=$(printf '%s\n' "$line" | tr ' ' '\n' | grep -c '^true$' || true)
+  echo "$name $ready/$total containers ready"
+  [ "$total" -gt 0 ] && [ "$ready" -eq "$total" ]
+}
+
+# verify_start_readiness: indicator-service must reach all containers ready (2/2: indicator-estimate +
+# indicator-service) or `start` FAILS LOUDLY (non-zero). market-structure-service readiness is only REPORTED:
+# it can legitimately wait for its schedule outside the session, so it is not a failure by itself.
+verify_start_readiness() {
+  local i rep rc=0
+  if echo "$DISABLED_DEV" | grep -qxE "indicator-service" 2>/dev/null; then
+    echo "  indicator-service is in the held-down set: readiness check skipped"
+  else
+    for i in $(seq 1 "${INDICATOR_READY_POLLS:-60}"); do
+      rep=$(pod_ready_report indicator-service) && break
+      sleep "${INDICATOR_READY_SLEEP:-5}"
+    done
+    if pod_ready_report indicator-service >/dev/null; then
+      echo "  OK  $(pod_ready_report indicator-service)"
+    else
+      echo "  ##### FAILED: indicator-service did NOT become fully ready: $(pod_ready_report indicator-service) #####" >&2
+      echo "  It owns its epoch recovery; read the container: kubectl -n options-edge logs deploy/indicator-service -c indicator-service --tail=100" >&2
+      rc=1
     fi
-    n=$((n + $(printf '%s\n' "$out" | grep -c "INDICATOR_EPOCH_GENESIS is not authorized" || true)))
-  done
-  echo "$n"
+  fi
+  echo "  INFO $(pod_ready_report market-structure-service || true)  (reported only)"
+  return $rc
 }
 
 do_start() {
@@ -766,52 +786,6 @@ do_start() {
   done
   echo "  self-heal restarted $healed straggler(s)"
 
-  # indicator-service epoch self-heal: after a topic wipe it has no epoch recovery copy to read, and
-  # its EpochMachine refuses to bootstrap a fresh one unless INDICATOR_EPOCH_GENESIS=true is explicitly
-  # set (rev 14 §3.1) — a plain restart (the straggler pass above) just repeats the same
-  # EpochFatalException forever, since the guard is deliberate, not transient. Detect that exact
-  # signature, toggle the flag on long enough for ONE fresh genesis write, then flip it back off so a
-  # later restart can never re-run genesis over live state. 2026-09-24: this used to be a manual step
-  # ("set INDICATOR_EPOCH_GENESIS=true, wait for 1/1, set it back to false") that a wipe silently
-  # needed every time and nothing enforced — folded in here so it can't be forgotten again.
-  if ! echo "$DISABLED_DEV" | grep -qx "indicator-service" 2>/dev/null; then
-    # 2026-09-24 (2nd occurrence): checking immediately after the straggler restart above caught the
-    # pod BEFORE it had reprocessed far enough to hit the exception again — a false negative, not a
-    # fixed bug. Poll for up to ~30s for EITHER outcome (ready, or the fatal signature) before deciding.
-    # indicator_epoch_fatal_count (above) names the container and reads --previous too: a bare
-    # `kubectl logs deploy/...` read the wrong container, counted 0 forever, and the one-time genesis below
-    # silently never ran (2026-10-22: after a clean the indicator and market-structure stayed down).
-    epoch_fatal=0
-    for i in $(seq 1 6); do
-      rr=$($KK get deploy indicator-service -o jsonpath='{.status.readyReplicas}' 2>/dev/null)
-      [ "${rr:-0}" -ge 1 ] && break
-      epoch_fatal=$(indicator_epoch_fatal_count)
-      [ "${epoch_fatal:-0}" -gt 0 ] && break
-      sleep 5
-    done
-    if [ "${epoch_fatal:-0}" -gt 0 ]; then
-      echo "  ⚠ indicator-service: no epoch recovery copy — running one-time GENESIS bootstrap"
-      $K set env deploy/indicator-service INDICATOR_EPOCH_GENESIS=true >/dev/null 2>&1
-      genesis_ok=0
-      for i in $(seq 1 24); do
-        rr=$($KK get deploy indicator-service -o jsonpath='{.status.readyReplicas}' 2>/dev/null)
-        [ "${rr:-0}" -ge 1 ] && { genesis_ok=1; break; }
-        sleep 5
-      done
-      $K set env deploy/indicator-service INDICATOR_EPOCH_GENESIS=false >/dev/null 2>&1
-      for i in $(seq 1 24); do
-        rr=$($KK get deploy indicator-service -o jsonpath='{.status.readyReplicas}' 2>/dev/null)
-        [ "${rr:-0}" -ge 1 ] && break
-        sleep 5
-      done
-      if [ "$genesis_ok" = 1 ]; then
-        echo "  indicator-service epoch self-heal done (genesis written, flag reset to false)"
-      else
-        echo "  ⚠ indicator-service did not reach 1/1 during GENESIS bootstrap — needs manual attention"
-      fi
-    fi
-  fi
-
   # Schema self-heal: all Schema-Registry schemas live in the compacted _schemas topic; if it gets
   # wiped (the known dev SR-wipe → gateway-wedge, dev-schema-registry-wipe-gateway-wedge), producers
   # emit records with dead CACHED schema IDs and the gateway can't deserialize them (Schema N not
@@ -827,7 +801,7 @@ do_start() {
   /Users/abhinav/kafka-4.3.0/bin/kafka-configs.sh --bootstrap-server "$BS" --alter --entity-type topics \
     --entity-name _schemas --add-config "retention.ms=-1,cleanup.policy=compact" >/dev/null 2>&1 || true
   apply_internal_topic_configs
-  local gwerr; gwerr=$($KK logs deploy/feed-gateway-service --since=60s 2>/dev/null | grep -cE '40403|Schema .* not found' || true)
+  local gwerr; gwerr=$($KK logs deploy/feed-gateway-service -c feed-gateway --since=60s 2>/dev/null | grep -cE '40403|Schema .* not found' || true)
   if [ "${gwerr:-0}" -gt 0 ]; then
     echo "  ⚠ gateway has $gwerr schema-deserialization errors — SR lost schemas; re-registering producers"
     local d2
@@ -845,7 +819,11 @@ do_start() {
     echo "  Schema Registry / gateway OK (no schema errors)"
   fi
   run_partition_doctor
+  echo "Verifying indicator-service / market-structure-service readiness ..."
+  local verify_rc=0
+  verify_start_readiness || verify_rc=$?
   echo "Done — source topics exist; active apps reach RUNNING, disabled set held at 0 (no replay injection)."
+  return $verify_rc
 }
 
 # ---------- FULL CLEAN: LOGS + DATA, leave dev down ----------
@@ -904,9 +882,37 @@ PY
   esac
 }
 
+# dev_clean_preserved_topics -> the OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS keep list (see topics.env) read from the
+# SAME ref ensure_topics reads (origin/main), never from the working tree: the clone on the dev host can be many
+# commits behind. FAILS (non-zero, nothing printed) unless exactly one non-empty declaration exists, and the caller
+# REFUSES the wipe then: an unreadable keep list must stop a destructive clean, not mean "keep nothing".
+dev_clean_preserved_topics() {
+  git -C "$DEPLOY_REPO" fetch -q origin main 2>/dev/null || true
+  local env n val
+  env="$(git -C "$DEPLOY_REPO" show "$TOPICS_ENV_REF" 2>/dev/null)" || return 1
+  n=$(printf '%s\n' "$env" | grep -cE '^OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS="' || true)
+  [ "${n:-0}" -eq 1 ] || return 1
+  val=$(printf '%s\n' "$env" | sed -nE 's/^OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS="(.*)"$/\1/p')
+  [ -n "${val// /}" ] || return 1
+  printf '%s\n' "$val"
+}
+
+# DEV-ONLY overnight estimate topics the wipe must also keep (their owners: the indicator-estimate and
+# market-structure-estimate sidecars). They are not in the shared topics.env on purpose (prod must not grow them),
+# so their names live here, next to ensure_dev_only_estimate_topics.
+DEV_ONLY_ESTIMATE_KEEP="options.indicators.estimate.bars options.indicators.estimate.bars.current options.spx.market-structure.estimate.recovery options.spx.market-structure.estimate.patterns options.spx.market-structure.estimate.ui options.spx.market-structure.estimate.sequence"
+
 do_clean() {
   clean_guard || return 1
   echo "=== dev FULL clean (logs + data)  $(date) ==="
+  local DEV_KEEP=""
+  if [ "$WIPE_KAFKA" = true ]; then
+    DEV_KEEP="$(dev_clean_preserved_topics)" || {
+      echo "REFUSING the wipe: cannot read OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS from $TOPICS_ENV_REF (exactly one non-empty declaration required)." >&2
+      return 1; }
+    DEV_KEEP="$DEV_KEEP $DEV_ONLY_ESTIMATE_KEEP"
+    echo "dev-clean keep list: $DEV_KEEP"
+  fi
   clean_logs
   local BEFORE AFTER APPS LIST NEWMAN d i up
   BEFORE=$(du -sh "$KAFKA_DATA" 2>/dev/null | awk '{print $1}')
@@ -964,8 +970,8 @@ for p in json.load(sys.stdin)["items"]:
     # two environments stop being comparable, which is the whole reason the evidence is split by env.
     # shellcheck source=/dev/null
     . "$DEPLOY_REPO/scripts/kafka/reset-preserved-topics.sh" 2>/dev/null || RESET_PRESERVED_TOPICS=""
-    PRESERVE_RE="$(printf '%s\n' $RESET_PRESERVED_TOPICS | sed 's/[.[\*^$()+?{|]/\\&/g' | paste -sd'|' -)"
-    [ -n "$PRESERVE_RE" ] && echo "   preserving (reset-preserved): $RESET_PRESERVED_TOPICS"
+    PRESERVE_RE="$(printf '%s\n' $RESET_PRESERVED_TOPICS $DEV_KEEP | sed 's/[.[\*^$()+?{|]/\\&/g' | paste -sd'|' -)"
+    [ -n "$PRESERVE_RE" ] && echo "   preserving (reset-preserved + dev-clean keep list): $RESET_PRESERVED_TOPICS $DEV_KEEP"
     $KT --bootstrap-server $BS --list 2>/dev/null | grep -vE '^__|^_schemas' \
       | { [ -n "$PRESERVE_RE" ] && grep -vxE "$PRESERVE_RE" || cat; } \
       | xargs -P 8 -I{} $KT --bootstrap-server $BS --delete --topic {} >/dev/null 2>&1
@@ -1005,7 +1011,8 @@ for p in json.load(sys.stdin)["items"]:
   echo "  streams-state PVCs:  reset to empty"
   echo "  logs:                trimmed"
   echo "  disk after thin:     ${DFREE:-?}"
-  echo "  apps: LEFT DOWN — 'dev-cleanup start' to bring dev back up"
+  echo "  apps: LEFT DOWN — 'dev-cleanup.sh start' is REQUIRED to bring dev back up (until then there are no bars,"
+  echo "        no market structure and no Order-page chart). It verifies indicator-service comes up fully ready."
   echo "DONE $(date)"
 }
 
