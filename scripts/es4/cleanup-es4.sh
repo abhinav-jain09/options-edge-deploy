@@ -167,8 +167,8 @@ fi
 REPS() { tail -n +2 "$STATE" | awk 'NF >= 2'; } # replica lines (skip phase header)
 # Deployments a reset must NEVER raise, whatever the (durable) snapshot captured:
 #   es-feed                          - owns a Databento session on a shared key; only ACTION=activate-es-feed starts it (DBP-R22)
-#   strike-liquidity-heatmap-service - owner hold 2026-10-11: its Streams repartition topic (retention.ms=-1) filled
-#                                      es4 /home on 2026-10-08. Keep in step with ES4_KEEP_DOWN in render_es4_manifests.py.
+#   strike-liquidity-heatmap-service - REMOVED from es4 2026-11-02 (not in k8s/es4/allowed-services.txt); kept here only so a
+#                                      stale snapshot taken while it ran can never raise it again.
 # A snapshot taken while one of them ran would otherwise be restored as 1 and undo the hold.
 HELD_AT_ZERO=" es-feed strike-liquidity-heatmap-service "
 held_zero() { case "$HELD_AT_ZERO" in *" $1 "*) return 0 ;; esac; return 1; }

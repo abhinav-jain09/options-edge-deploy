@@ -1,0 +1,27 @@
+# ES4 SERVICE ALLOWLIST - the ONLY services allowed on the es4 cluster (192.168.100.4).
+# Owner decision 2026-11-02: "not every service has to run on es4, only ES related services
+# should run there". One name per line = the basename of k8s/es4/services/<name>.yaml.
+# Enforced by scripts/es4/assert-allowed-services.sh (Jenkinsfile.es4-deploy refuses any
+# deploy of a name not listed here) and tests/test_es4_allowed_services.py (CI: the manifest
+# directory must equal this list). Adding a service here is an owner decision, not housekeeping.
+close-direction
+context-tape
+databento-mission-sandwich
+dealer-ledger-calibration
+dealer-ledger
+directional-pressure
+es-aggressor-flow
+es-amt
+es-cvd
+es-feed-gateway
+es-feed
+es-footprint-strike
+gamma-ladder-path
+greek-move-authenticity
+indicator-service
+option-truth-engine
+spread-skew-postgres-writer
+spread-skew
+strike-intelligence
+tape-zones
+volume-pace

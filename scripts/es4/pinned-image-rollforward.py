@@ -22,7 +22,6 @@ SERVICES = {
     'es-feed-gateway': ('es-feed-gateway', 'feed-gateway', 'options-edge-feed-gateway'),
     'es-cvd': ('es-cvd-service', 'es-cvd', 'options-edge-es-cvd'),
     'es-footprint-strike': ('es-footprint-strike-service', 'es-footprint-strike', 'options-edge-es-footprint-strike'),
-    'gamma-migration': ('gamma-migration-service', 'gamma-migration', 'options-edge-gamma-migration'),
     'context-tape': ('context-tape-service', 'context-tape', 'options-edge-context-tape'),
     'close-direction': ('close-direction-service', 'close-direction', 'options-edge-close-direction'),
 }

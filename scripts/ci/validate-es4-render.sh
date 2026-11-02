@@ -105,7 +105,6 @@ rendered = set(r.SERVICES)
 HAND_AUTHORED = {
     "es-feed",            # ES-0DTE Databento feed; owns a live session, excluded from deploy-all
     "es-feed-gateway",    # prod feed-gateway binary, env-only divergence
-    "es-web",             # prod web binary, env-only divergence
     "es-aggressor-flow",  # ES-only continuous futures aggressor analysis
     "es-cvd",             # ES-only session-anchored CVD; cross-env SPX wiring, no production slice
     "es-amt",             # ES-only SPX Auction Desk (futures.auction); same cross-env wiring as es-cvd
@@ -207,7 +206,7 @@ for n in sorted(HAND_AUTHORED & rendered):
           file=sys.stderr)
 
 # PRESENCE, not just permission. Without this the allowlist is one-directional: a committed
-# deletion of es-web.yaml leaves the worktree clean, so check A sees nothing, and check B would
+# deletion of es-feed-gateway.yaml leaves the worktree clean, so check A sees nothing, and check B would
 # happily report "4 hand-authored" while counting files that are gone. These are deploy-all
 # inputs; losing one silently is the same class of miss as gaining one.
 for n in sorted(HAND_AUTHORED - on_disk):

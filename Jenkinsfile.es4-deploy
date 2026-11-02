@@ -42,12 +42,9 @@ pipeline {
       description: 'What to do (see header).')
     choice(name: 'SERVICE', choices: [
       'close-direction',
-      'databento-gex', 'databento-gex-history', 'databento-maxpain', 'databento-mission-sandwich',
-      'databento-volume-aggregator', 'dealer-ledger', 'dealer-ledger-calibration', 'delta-flow',
-      'directional-pressure', 'gex-delta-redis-writer', 'option-price-behavior', 'option-truth-engine', 'pin-postgres-writer',
-      'pressure-postgres-writer', 'raw-to-display', 'strike-flow-avro-adapter', 'strike-flow-classifier',
-      'strike-liquidity-heatmap', 'volume-pace',
-      'strike-intelligence', 'vix-option-inteligence', 'greek-move-authenticity', 'gamma-migration', 'gamma-ladder-path', 'indicator-service', 'context-tape', 'tape-zones', 'es-aggressor-flow', 'es-cvd', 'es-footprint-strike', 'es-amt', 'es-feed-gateway', 'es-web',
+      'databento-mission-sandwich',
+      'dealer-ledger', 'dealer-ledger-calibration', 'directional-pressure', 'option-truth-engine', 'volume-pace',
+      'strike-intelligence', 'greek-move-authenticity', 'gamma-ladder-path', 'indicator-service', 'context-tape', 'tape-zones', 'es-aggressor-flow', 'es-cvd', 'es-footprint-strike', 'es-amt', 'es-feed-gateway',
       'es-feed',
       // The held spread-skew stack is deploy-service-only ON PURPOSE: deploy-all excludes it, so the
       // ONLY sanctioned way to reconcile the ES4_KEEP_DOWN replicas:0 hold onto live pods (or to ever
@@ -188,7 +185,7 @@ pipeline {
         // /home is root-owned on the box — create the es4 home via passwordless sudo, owned by the deploy user
         sh '''
           set -euo pipefail
-          ssh -o BatchMode=yes "$ES4_HOST" 'sudo install -d -o "$(id -un)" -g "$(id -gn)" /home/es4 /home/es4/repo /home/es4/repo/infra /home/es4/repo/scripts'
+          ssh -o BatchMode=yes "$ES4_HOST" 'sudo install -d -o "$(id -un)" -g "$(id -gn)" /home/es4 /home/es4/repo /home/es4/repo/infra /home/es4/repo/scripts /home/es4/repo/k8s /home/es4/repo/k8s/es4'
         '''
         // PROVENANCE (Deployment Permission Rule, validator rule 9b): every ship of the source tree is a DEDICATED step whose
         // whole shell body is the one rsync command, immediately preceded by the verify of the checkout it ships — nothing
@@ -203,6 +200,11 @@ pipeline {
           sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp'
         }
         sh 'rsync -az --delete scripts/ "${ES4_HOST}:/home/es4/repo/scripts/"'
+        // The es4 workload whitelist admission policy (bootstrap-es4.sh applies it) ships the same way.
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp'
+        }
+        sh 'rsync -az --delete k8s/es4/policy "${ES4_HOST}:/home/es4/repo/k8s/es4/"'
         sh '''
           set -euo pipefail
           ssh -o BatchMode=yes "$ES4_HOST" 'bash /home/es4/repo/scripts/es4/bootstrap-es4.sh'
@@ -391,6 +393,10 @@ pipeline {
           bash scripts/es4/assert-cluster-identity.sh "$KUBECONFIG"      es4  "$ES4_NS_UID"
           bash scripts/es4/assert-cluster-identity.sh "$PROD_KUBECONFIG" prod "$PROD_NS_UID"
 
+          # ES-only allowlist (owner 2026-11-02): nothing outside k8s/es4/allowed-services.txt is ever applied to es4.
+          if [ "$ACTION" = "deploy-all" ]; then bash scripts/es4/assert-allowed-services.sh manifests
+          else bash scripts/es4/assert-allowed-services.sh service "$SERVICE"; fi
+
           # INDICATOR-AVRO-CONVERSION-PLAN.md sections 4 and 5 on es4 (the source of the mirrored family):
           # the fixed-id registration (idempotent) and, on request, the destructive cutover — producer at 0,
           # group offsets to 0, changelog deleted, the six es.options.indicators.* topics recreated empty and
@@ -513,12 +519,6 @@ pipeline {
           for f in $FILES; do
             bash scripts/es4/pin-and-apply.sh "$f" "$REGISTRY" "$DRY"
           done
-          if [ -z "$DRY" ] && { [ "$ACTION" = "deploy-all" ] || [ "$SERVICE" = "vix-option-inteligence" ]; }; then
-            # Remove the legacy identity only after pin-and-apply has completed the replacement
-            # rollout, avoiding duplicate consumers on the isolated ES broker.
-            kubectl -n options-edge delete deployment zero-dte-intelligence-service --ignore-not-found
-            kubectl -n options-edge delete service zero-dte-intelligence-service --ignore-not-found
-          fi
           # es-feed is NEVER started by a deploy: the manifest always carries replicas 0 and this
           # path performs no scaling at all — activation is its own ACTION (requirement DBP-R22).
           if [ "$ACTION" = "deploy-service" ] && [ "$SERVICE" = "es-feed" ]; then
