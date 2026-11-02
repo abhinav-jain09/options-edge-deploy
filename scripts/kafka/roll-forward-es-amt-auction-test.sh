@@ -171,7 +171,11 @@ check "avro-live: Avro first / JSON LAST fails (the last endpoint is checked)" "
 reset OLDID
 check "avro-live: JSON FIRST / Avro last fails (the first endpoint is checked)" "$(MOCK_END=12 MOCK_WIRE_AT_0=json run "${LARGS[@]}")" 1
 reset OLDID
-check "avro-live: an unreadable endpoint fails closed" "$(MOCK_END=12 MOCK_WIRE_AT_11=unreadable run "${LARGS[@]}")" 1
+check "avro-live: a transaction marker at the log end is walked back over (the last delivered record is Avro)" "$(MOCK_END=12 MOCK_WIRE_AT_11=unreadable run "${LARGS[@]}")" 0
+reset OLDID
+check "avro-live: markers all the way down the probe window fail closed" "$(RF_LOG_END_PROBE_BACK=1 MOCK_END=12 MOCK_WIRE_AT_11=unreadable MOCK_WIRE_AT_10=unreadable run "${LARGS[@]}")" 1
+reset OLDID
+check "avro-live: an unreadable FIRST record fails closed" "$(MOCK_START=0 MOCK_END=12 MOCK_WIRE_AT_0=unreadable run "${LARGS[@]}")" 1
 reset OLDID
 check "avro-live reads the EARLIEST retained offset, not 0 (a compacted-away 0 must not matter)" "$(MOCK_START=5 MOCK_END=12 MOCK_WIRE_AT_0=json run "${LARGS[@]}")" 0
 reset OLDID
@@ -188,5 +192,12 @@ check "…and the WARN names the group" "$(grep -c 'WARN: consumer groups' "$TMP
 
 reset OLDID
 check "avro-live: Avro under a FOREIGN schema id fails (only id 3201 passes)" "$(MOCK_END=12 MOCK_WIRE=foreignavro run "${LARGS[@]}")" 1
+
+# recovery of a contaminated NEW topic: the failure message names the new id, and --recreate bound to THAT id deletes and recreates it
+reset OLDID; MOCK_END=5 run "${ARGS[@]}" >/dev/null
+NEWID="$(cat "$TMP/state/topic")"
+check "the not-empty failure names the recovery with the NEW topic id" "$(grep -c "with --pre-cutover-id $NEWID" "$TMP/out")" 1
+check "recovery: --recreate bound to the contaminated topic's id succeeds once the writer is stopped" "$(MOCK_DIR="$TMP/state" PATH="$TMP/bin:$PATH" bash "$HERE/roll-forward-es-amt-auction.sh" --recreate --cluster dev --pre-cutover-id "$NEWID" --writers-and-readers-stopped localhost:19092 "$TMP/bin" >/dev/null 2>&1; echo $?)" 0
+check "…and the second topic has yet another id" "$([ "$(cat "$TMP/state/topic")" != "$NEWID" ] && echo yes)" yes
 
 echo "passed=$pass failed=$fail"; [ "$fail" = 0 ]

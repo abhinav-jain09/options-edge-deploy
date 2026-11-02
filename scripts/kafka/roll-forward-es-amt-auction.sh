@@ -137,6 +137,7 @@ fi
 # Verify what was created, from the broker, not from the create command's exit code.
 DESC="$(rf_describe "$KT" "$BS" "$TOPIC")" || exit 1
 FOUND_ID="$(rf_topic_id "$DESC" "$TOPIC")" || exit 1
+RECOVER="Stop the writer, then run --recreate AGAIN with --pre-cutover-id $FOUND_ID (the id of THIS now-contaminated topic: a second recreate is bound to the topic it is about to delete)."
 echo "NEW TOPIC ID: $FOUND_ID (was $PRE_ID)"   # printed before any further check so a later failure can still be recovered with --verify
 [ "$FOUND_ID" != "$PRE_ID" ] || { echo "FAIL: $TOPIC still has the pre-cutover id $PRE_ID" >&2; exit 1; }
 [ -z "$NEW_ID" ] || [ "$FOUND_ID" = "$NEW_ID" ] || { echo "FAIL: $TOPIC has id $FOUND_ID, not the recreated topic $NEW_ID that --recreate reported" >&2; exit 1; }
@@ -160,14 +161,15 @@ if [ "$AVRO_LIVE" = yes ]; then
     CC="$(rf_resolve_cli_named kafka-console-consumer "$BIN")"
     EARLIEST="$("$GO" --bootstrap-server "$BS" --topic "$TOPIC" --time -2 2>&1 | awk -F: -v t="$TOPIC" '$1 == t {e = $3} END {print e}')"
     case "$EARLIEST" in ''|*[!0-9]*) echo "FAIL: cannot read the earliest offset of $TOPIC" >&2; exit 1 ;; esac
-    for off in "$EARLIEST" "$((END_OFFSET - 1))"; do
-      rc=0; rf_wire_is_avro "$CC" "$BS" "$TOPIC" 0 "$off" || rc=$?
-      # fail CLOSED: only an explicit Avro (or tombstone) verdict passes; "not Avro" and "could not be read" both stop the run
-      [ "$rc" -eq 0 ] || { echo "FAIL: the record at offset $off of $TOPIC is not verifiably Avro (verdict $rc: 1 = not Avro, a JSON writer is live; 2 = unreadable). Resolve it and run --recreate again." >&2; exit 1; }
-    done
+    # first retained record: a plain read; last record: walk BACK over transaction commit/abort markers (es-amt-service is a transactional writer: the offset below the high watermark is
+    # normally a marker, which no consumer is handed). Fail CLOSED on anything not verifiably Avro under 3201.
+    rc=0; rf_wire_is_avro "$CC" "$BS" "$TOPIC" 0 "$EARLIEST" || rc=$?
+    [ "$rc" -eq 0 ] || { echo "FAIL: the first record (offset $EARLIEST) of $TOPIC is not verifiably Avro (verdict $rc: 1 = not Avro, a JSON writer is live; 2 = unreadable). $RECOVER" >&2; exit 1; }
+    rc=0; rf_wire_is_avro_at_log_end "$CC" "$BS" "$TOPIC" 0 "$((END_OFFSET - 1))" "$EARLIEST" || rc=$?
+    [ "$rc" -eq 0 ] || { echo "FAIL: the last delivered record of $TOPIC is not verifiably Avro (verdict $rc: 1 = not Avro, a JSON writer is live; 2 = nothing readable near the log end). $RECOVER" >&2; exit 1; }
   fi
 elif [ "$END_OFFSET" != 0 ]; then
-  echo "FAIL: $TOPIC is not empty (end offset $END_OFFSET): a writer is live; stop it and run --recreate again (or, if the AVRO feed is the live writer, pass --avro-feed-live)" >&2
+  echo "FAIL: $TOPIC is not empty (end offset $END_OFFSET): a writer is live. $RECOVER" >&2
   exit 1
 fi
 
