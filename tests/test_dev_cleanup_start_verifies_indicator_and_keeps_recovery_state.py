@@ -179,6 +179,28 @@ class KeepList(unittest.TestCase):
         self.assertNotEqual(0, d.returncode, "a stale origin/main must not be trusted when the fetch fails")
         self.assertEqual("", d.stdout.strip())
 
+    def test_a_successful_fetch_reads_the_NEW_origin_main_not_a_stale_ref(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            origin, clone = tmp / "origin", tmp / "clone"
+            def git(repo, *a):
+                subprocess.run(["git", "-C", str(repo), "-c", "user.email=a@b", "-c", "user.name=t"] + list(a),
+                               check=True, capture_output=True)
+            (origin / "scripts/kafka").mkdir(parents=True)
+            subprocess.run(["git", "init", "-q", "-b", "main", str(origin)], check=True)
+            env = origin / "scripts/kafka/topics.env"
+            env.write_text('OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS="old.topic"\n')
+            git(origin, "add", "-A"); git(origin, "commit", "-qm", "1")
+            subprocess.run(["git", "clone", "-q", str(origin), str(clone)], check=True)
+            env.write_text('OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS="old.topic new.topic"\n')
+            git(origin, "commit", "-qam", "2")                       # origin moves on; the clone's origin/main is STALE
+            h = tmp / "h.sh"
+            h.write_text(f'DEPLOY_REPO="{clone}"; TOPICS_ENV_REF="origin/main:scripts/kafka/topics.env"\nsleep() {{ :; }}\n'
+                         + func("dev_clean_preserved_topics") + "dev_clean_preserved_topics\n")
+            d = subprocess.run([BASH, str(h)], capture_output=True, text=True, timeout=30)
+        self.assertEqual(0, d.returncode, d.stderr)
+        self.assertEqual(["old.topic", "new.topic"], d.stdout.split())
+
     def test_missing_declaration_refuses(self):
         self.assertNotEqual(0, self.call('OTHER="x"\n').returncode)
 

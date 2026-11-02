@@ -905,7 +905,7 @@ dev_clean_preserved_topics() {
   # destructive wipe. Retried; a final failure refuses the wipe (the caller says why).
   local env n val try fetched=0
   for try in 1 2 3; do
-    git -C "$DEPLOY_REPO" fetch -q origin main 2>/dev/null && { fetched=1; break; }
+    git -C "$DEPLOY_REPO" fetch -q origin '+refs/heads/main:refs/remotes/origin/main' 2>/dev/null && { fetched=1; break; }
     sleep 2
   done
   [ "$fetched" = 1 ] || return 1
