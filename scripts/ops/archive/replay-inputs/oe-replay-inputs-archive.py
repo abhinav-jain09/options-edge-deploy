@@ -216,7 +216,9 @@ def recover(root: Path, runs: list[dict]) -> None:
             tmp = mf.with_suffix(".tmp")
             tmp.write_text("".join(json.dumps(e, separators=(",", ":")) + "\n" for e in keep))
             os.replace(tmp, mf)
-            write_day_manifests(ddir)
+        if mf.exists():
+            write_day_manifests(ddir)       # sidecars are derived: always rebuild, a crash may have skipped them
+        if len(keep) != len(ents) or dropped:
             log(f"recovered {ddir.name}: dropped {len(ents) - len(keep)} uncommitted manifest line(s), {dropped} file(s)")
     for f in (root / "_state" / "tmp").glob("*.tmp"):
         f.unlink()

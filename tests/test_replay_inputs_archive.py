@@ -230,6 +230,15 @@ class Verify(unittest.TestCase):
         with self.assertRaises(SystemExit):
             ria.load_runs(self.root)
 
+    def test_recover_rebuilds_sidecar_manifests_after_a_crash_past_the_commit(self):
+        ddir, _ = write_day(self.root)
+        (ddir / "MANIFEST.sha256").unlink()
+        (ddir / "MANIFEST.md5").write_text("stale\n")
+        (self.root / "_state" / "tmp").mkdir(parents=True)
+        ria.recover(self.root, ria.load_runs(self.root))
+        rc, out = self.v()
+        self.assertEqual(rc, 0, out)
+
     def test_stale_manifest_file_is_caught(self):
         ddir, _ = write_day(self.root)
         (ddir / "MANIFEST.sha256").write_text("")
