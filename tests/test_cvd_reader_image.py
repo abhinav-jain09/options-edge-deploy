@@ -23,7 +23,7 @@ class ReaderImageTest(unittest.TestCase):
             image,proof=p.qualified_image('context-tape',[row],lambda n:text)
             self.assertTrue(image.startswith('host.docker.internal:5001/options-edge-context-tape:'))
             self.assertEqual('/Users/abhinav/.kube/jenkins-deployer-dev.kubeconfig',os.environ['ES4_KUBECONFIG'])
-            self.assertEqual('55dcf4ed-9a04-40c4-aeba-039e998c6241',os.environ['ES4_NS_UID']);self.assertEqual('http://127.0.0.1:5001',p.REGISTRY_HTTP)
+            self.assertEqual('55dcf4ed-9a04-40c4-aeba-039e998c6241',os.environ['ES4_NS_UID']);self.assertEqual('http://192.168.100.102:5001',p.REGISTRY_HTTP)
             with self.assertRaisesRegex(ValueError,'platform'):p.qualified_image('context-tape',[row],lambda n:text.replace('linux/arm64','linux/amd64'))
             with self.assertRaisesRegex(ValueError,'one exact'):p.qualified_image('context-tape',[row],lambda n:text.replace('host.docker.internal:5001','192.168.100.252:5000'))
             with self.assertRaisesRegex(ValueError,'no recent'):p.qualified_image('context-tape',[build()],lambda n:text)
