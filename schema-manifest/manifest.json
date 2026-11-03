@@ -2506,7 +2506,17 @@
     }
    ],
    "producers": [],
-   "consumers": [],
+   "consumers": [
+    {
+     "service": "line-acceptance",
+     "accepts": [
+      2607
+     ],
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -2534,7 +2544,17 @@
     }
    ],
    "producers": [],
-   "consumers": [],
+   "consumers": [
+    {
+     "service": "line-acceptance",
+     "accepts": [
+      2605
+     ],
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -2629,8 +2649,27 @@
      "kind": "data"
     }
    ],
-   "producers": [],
-   "consumers": [],
+   "producers": [
+    {
+     "service": "delta-flow",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "delta-flow",
+     "accepts": [
+      3004
+     ],
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -2697,7 +2736,15 @@
      "kind": "data"
     }
    ],
-   "producers": [],
+   "producers": [
+    {
+     "service": "delta-flow",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "consumers": [],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
@@ -2731,8 +2778,27 @@
      "kind": "data"
     }
    ],
-   "producers": [],
-   "consumers": [],
+   "producers": [
+    {
+     "service": "delta-flow",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "drop-classifier",
+     "accepts": [
+      3007
+     ],
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -2799,8 +2865,27 @@
      "kind": "data"
     }
    ],
-   "producers": [],
-   "consumers": [],
+   "producers": [
+    {
+     "service": "delta-flow",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "delta-flow",
+     "accepts": [
+      3009
+     ],
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -2833,8 +2918,27 @@
      "kind": "data"
     }
    ],
-   "producers": [],
-   "consumers": [],
+   "producers": [
+    {
+     "service": "delta-flow",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "delta-flow",
+     "accepts": [
+      3010
+     ],
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -2969,8 +3073,27 @@
      "kind": "data"
     }
    ],
-   "producers": [],
-   "consumers": [],
+   "producers": [
+    {
+     "service": "delta-flow",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "delta-flow",
+     "accepts": [
+      3014
+     ],
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -3003,8 +3126,27 @@
      "kind": "data"
     }
    ],
-   "producers": [],
-   "consumers": [],
+   "producers": [
+    {
+     "service": "delta-flow",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "delta-flow",
+     "accepts": [
+      3015
+     ],
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -3037,8 +3179,27 @@
      "kind": "data"
     }
    ],
-   "producers": [],
-   "consumers": [],
+   "producers": [
+    {
+     "service": "delta-flow",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "delta-flow",
+     "accepts": [
+      3016
+     ],
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -3071,8 +3232,28 @@
      "kind": "data"
     }
    ],
-   "producers": [],
-   "consumers": [],
+   "producers": [
+    {
+     "service": "delta-flow",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "dealer-ledger",
+     "accepts": [
+      3017
+     ],
+     "environments": [
+      "dev",
+      "prod",
+      "es4"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -3105,8 +3286,48 @@
      "kind": "data"
     }
    ],
-   "producers": [],
-   "consumers": [],
+   "producers": [
+    {
+     "service": "delta-flow",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "greek-move-authenticity",
+     "accepts": [
+      3018
+     ],
+     "environments": [
+      "dev",
+      "prod",
+      "es4"
+     ]
+    },
+    {
+     "service": "hedging-pressure",
+     "accepts": [
+      3018
+     ],
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    },
+    {
+     "service": "strike-invasion",
+     "accepts": [
+      3018
+     ],
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -3139,8 +3360,27 @@
      "kind": "data"
     }
    ],
-   "producers": [],
-   "consumers": [],
+   "producers": [
+    {
+     "service": "delta-flow",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "delta-flow",
+     "accepts": [
+      3019
+     ],
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -3173,8 +3413,27 @@
      "kind": "data"
     }
    ],
-   "producers": [],
-   "consumers": [],
+   "producers": [
+    {
+     "service": "delta-flow",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "delta-flow",
+     "accepts": [
+      3020
+     ],
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -3460,8 +3719,29 @@
      "kind": "data"
     }
    ],
-   "producers": [],
-   "consumers": [],
+   "producers": [
+    {
+     "service": "greek-move-authenticity",
+     "environments": [
+      "dev",
+      "prod",
+      "es4"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "greek-move-authenticity",
+     "accepts": [
+      3021
+     ],
+     "environments": [
+      "dev",
+      "prod",
+      "es4"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -3494,8 +3774,29 @@
      "kind": "data"
     }
    ],
-   "producers": [],
-   "consumers": [],
+   "producers": [
+    {
+     "service": "greek-move-authenticity",
+     "environments": [
+      "dev",
+      "prod",
+      "es4"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "greek-move-authenticity",
+     "accepts": [
+      3022
+     ],
+     "environments": [
+      "dev",
+      "prod",
+      "es4"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -3528,8 +3829,29 @@
      "kind": "data"
     }
    ],
-   "producers": [],
-   "consumers": [],
+   "producers": [
+    {
+     "service": "greek-move-authenticity",
+     "environments": [
+      "dev",
+      "prod",
+      "es4"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "greek-move-authenticity",
+     "accepts": [
+      3023
+     ],
+     "environments": [
+      "dev",
+      "prod",
+      "es4"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -3562,8 +3884,29 @@
      "kind": "data"
     }
    ],
-   "producers": [],
-   "consumers": [],
+   "producers": [
+    {
+     "service": "greek-move-authenticity",
+     "environments": [
+      "dev",
+      "prod",
+      "es4"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "greek-move-authenticity",
+     "accepts": [
+      3053
+     ],
+     "environments": [
+      "dev",
+      "prod",
+      "es4"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -3596,8 +3939,29 @@
      "kind": "data"
     }
    ],
-   "producers": [],
-   "consumers": [],
+   "producers": [
+    {
+     "service": "greek-move-authenticity",
+     "environments": [
+      "dev",
+      "prod",
+      "es4"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "greek-move-authenticity",
+     "accepts": [
+      3054
+     ],
+     "environments": [
+      "dev",
+      "prod",
+      "es4"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -3630,8 +3994,29 @@
      "kind": "data"
     }
    ],
-   "producers": [],
-   "consumers": [],
+   "producers": [
+    {
+     "service": "greek-move-authenticity",
+     "environments": [
+      "dev",
+      "prod",
+      "es4"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "greek-move-authenticity",
+     "accepts": [
+      3055
+     ],
+     "environments": [
+      "dev",
+      "prod",
+      "es4"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -3664,7 +4049,16 @@
      "kind": "data"
     }
    ],
-   "producers": [],
+   "producers": [
+    {
+     "service": "greek-move-authenticity",
+     "environments": [
+      "dev",
+      "prod",
+      "es4"
+     ]
+    }
+   ],
    "consumers": [],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
@@ -3698,8 +4092,29 @@
      "kind": "data"
     }
    ],
-   "producers": [],
-   "consumers": [],
+   "producers": [
+    {
+     "service": "greek-move-authenticity",
+     "environments": [
+      "dev",
+      "prod",
+      "es4"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "greek-move-authenticity",
+     "accepts": [
+      3057
+     ],
+     "environments": [
+      "dev",
+      "prod",
+      "es4"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -3732,8 +4147,29 @@
      "kind": "data"
     }
    ],
-   "producers": [],
-   "consumers": [],
+   "producers": [
+    {
+     "service": "greek-move-authenticity",
+     "environments": [
+      "dev",
+      "prod",
+      "es4"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "greek-move-authenticity",
+     "accepts": [
+      3058
+     ],
+     "environments": [
+      "dev",
+      "prod",
+      "es4"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -3765,7 +4201,17 @@
     }
    ],
    "producers": [],
-   "consumers": [],
+   "consumers": [
+    {
+     "service": "line-acceptance",
+     "accepts": [
+      3060
+     ],
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -3799,7 +4245,118 @@
     }
    ],
    "producers": [],
-   "consumers": [],
+   "consumers": [
+    {
+     "service": "dealer-ledger-calibration",
+     "accepts": [
+      2056
+     ],
+     "environments": [
+      "dev",
+      "prod",
+      "es4"
+     ]
+    },
+    {
+     "service": "es-cvd",
+     "accepts": [
+      2056
+     ],
+     "environments": [
+      "es4"
+     ]
+    },
+    {
+     "service": "hedging-pressure",
+     "accepts": [
+      2056
+     ],
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    },
+    {
+     "service": "market-commentary",
+     "accepts": [
+      2056
+     ],
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    },
+    {
+     "service": "multileg-structure",
+     "accepts": [
+      2056
+     ],
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    },
+    {
+     "service": "signal-follower",
+     "accepts": [
+      2056
+     ],
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    },
+    {
+     "service": "spot-vol-regime",
+     "accepts": [
+      2056
+     ],
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    },
+    {
+     "service": "strike-flow-classifier",
+     "accepts": [
+      2056
+     ],
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    },
+    {
+     "service": "strike-invasion",
+     "accepts": [
+      2056
+     ],
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    },
+    {
+     "service": "strike-liquidity-heatmap",
+     "accepts": [
+      2056
+     ],
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    },
+    {
+     "service": "vol-premium",
+     "accepts": [
+      2056
+     ],
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -3859,7 +4416,18 @@
     }
    ],
    "producers": [],
-   "consumers": [],
+   "consumers": [
+    {
+     "service": "line-acceptance",
+     "accepts": [
+      2002,
+      2508
+     ],
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -3887,7 +4455,18 @@
     }
    ],
    "producers": [],
-   "consumers": [],
+   "consumers": [
+    {
+     "service": "line-acceptance",
+     "accepts": [
+      2002,
+      2508
+     ],
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -3947,7 +4526,18 @@
     }
    ],
    "producers": [],
-   "consumers": [],
+   "consumers": [
+    {
+     "service": "line-acceptance",
+     "accepts": [
+      2001,
+      2507
+     ],
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -3975,7 +4565,18 @@
     }
    ],
    "producers": [],
-   "consumers": [],
+   "consumers": [
+    {
+     "service": "line-acceptance",
+     "accepts": [
+      2001,
+      2507
+     ],
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -4264,7 +4865,17 @@
     }
    ],
    "producers": [],
-   "consumers": [],
+   "consumers": [
+    {
+     "service": "line-acceptance",
+     "accepts": [
+      3108
+     ],
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -4291,8 +4902,25 @@
      "kind": "data"
     }
    ],
-   "producers": [],
-   "consumers": [],
+   "producers": [
+    {
+     "service": "line-acceptance",
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "line-acceptance",
+     "accepts": [
+      3110
+     ],
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -4319,7 +4947,14 @@
      "kind": "data"
     }
    ],
-   "producers": [],
+   "producers": [
+    {
+     "service": "line-acceptance",
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
    "consumers": [],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
@@ -4347,8 +4982,25 @@
      "kind": "data"
     }
    ],
-   "producers": [],
-   "consumers": [],
+   "producers": [
+    {
+     "service": "line-acceptance",
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "line-acceptance",
+     "accepts": [
+      3109
+     ],
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -4375,7 +5027,14 @@
      "kind": "data"
     }
    ],
-   "producers": [],
+   "producers": [
+    {
+     "service": "line-acceptance",
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
    "consumers": [],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
@@ -4403,7 +5062,14 @@
      "kind": "data"
     }
    ],
-   "producers": [],
+   "producers": [
+    {
+     "service": "line-acceptance",
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
    "consumers": [],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
@@ -4431,7 +5097,14 @@
      "kind": "data"
     }
    ],
-   "producers": [],
+   "producers": [
+    {
+     "service": "line-acceptance",
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
    "consumers": [],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
@@ -4459,7 +5132,14 @@
      "kind": "data"
     }
    ],
-   "producers": [],
+   "producers": [
+    {
+     "service": "line-acceptance",
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
    "consumers": [],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
@@ -4487,7 +5167,14 @@
      "kind": "data"
     }
    ],
-   "producers": [],
+   "producers": [
+    {
+     "service": "line-acceptance",
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
    "consumers": [],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
@@ -4515,7 +5202,14 @@
      "kind": "data"
     }
    ],
-   "producers": [],
+   "producers": [
+    {
+     "service": "line-acceptance",
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
    "consumers": [],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
@@ -4543,7 +5237,14 @@
      "kind": "data"
     }
    ],
-   "producers": [],
+   "producers": [
+    {
+     "service": "line-acceptance",
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
    "consumers": [],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
@@ -4630,7 +5331,17 @@
     }
    ],
    "producers": [],
-   "consumers": [],
+   "consumers": [
+    {
+     "service": "line-acceptance",
+     "accepts": [
+      2223
+     ],
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -4659,7 +5370,17 @@
     }
    ],
    "producers": [],
-   "consumers": [],
+   "consumers": [
+    {
+     "service": "line-acceptance",
+     "accepts": [
+      2222
+     ],
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -4688,7 +5409,17 @@
     }
    ],
    "producers": [],
-   "consumers": [],
+   "consumers": [
+    {
+     "service": "line-acceptance",
+     "accepts": [
+      2203
+     ],
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -4717,7 +5448,17 @@
     }
    ],
    "producers": [],
-   "consumers": [],
+   "consumers": [
+    {
+     "service": "line-acceptance",
+     "accepts": [
+      2204
+     ],
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -4861,7 +5602,17 @@
     }
    ],
    "producers": [],
-   "consumers": [],
+   "consumers": [
+    {
+     "service": "line-acceptance",
+     "accepts": [
+      2212
+     ],
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -4950,7 +5701,15 @@
      "kind": "data"
     }
    ],
-   "producers": [],
+   "producers": [
+    {
+     "service": "multileg-structure",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "consumers": [],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
@@ -4982,7 +5741,15 @@
      "kind": "data"
     }
    ],
-   "producers": [],
+   "producers": [
+    {
+     "service": "multileg-structure",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "consumers": [],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
@@ -5014,7 +5781,15 @@
      "kind": "data"
     }
    ],
-   "producers": [],
+   "producers": [
+    {
+     "service": "multileg-structure",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "consumers": [],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
@@ -5046,8 +5821,27 @@
      "kind": "data"
     }
    ],
-   "producers": [],
-   "consumers": [],
+   "producers": [
+    {
+     "service": "option-pressure-state",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "option-pressure-state",
+     "accepts": [
+      2047
+     ],
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -5078,8 +5872,27 @@
      "kind": "data"
     }
    ],
-   "producers": [],
-   "consumers": [],
+   "producers": [
+    {
+     "service": "option-pressure-state",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "pressure-postgres-writer",
+     "accepts": [
+      2046
+     ],
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -5138,8 +5951,27 @@
      "kind": "data"
     }
    ],
-   "producers": [],
-   "consumers": [],
+   "producers": [
+    {
+     "service": "spot-vol-regime",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "spot-vol-regime",
+     "accepts": [
+      3049
+     ],
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -5170,7 +6002,15 @@
      "kind": "data"
     }
    ],
-   "producers": [],
+   "producers": [
+    {
+     "service": "spot-vol-regime",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "consumers": [],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
@@ -5202,8 +6042,27 @@
      "kind": "data"
     }
    ],
-   "producers": [],
-   "consumers": [],
+   "producers": [
+    {
+     "service": "spot-vol-regime",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "spot-vol-regime",
+     "accepts": [
+      3048
+     ],
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -5236,8 +6095,27 @@
      "kind": "data"
     }
    ],
-   "producers": [],
-   "consumers": [],
+   "producers": [
+    {
+     "service": "strike-invasion",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "strike-invasion",
+     "accepts": [
+      3041
+     ],
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -5270,7 +6148,15 @@
      "kind": "data"
     }
    ],
-   "producers": [],
+   "producers": [
+    {
+     "service": "strike-invasion",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "consumers": [],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
@@ -5304,7 +6190,15 @@
      "kind": "data"
     }
    ],
-   "producers": [],
+   "producers": [
+    {
+     "service": "strike-invasion",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "consumers": [],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
@@ -5338,7 +6232,15 @@
      "kind": "data"
     }
    ],
-   "producers": [],
+   "producers": [
+    {
+     "service": "strike-invasion",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "consumers": [],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
@@ -5372,7 +6274,15 @@
      "kind": "data"
     }
    ],
-   "producers": [],
+   "producers": [
+    {
+     "service": "strike-invasion",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "consumers": [],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
@@ -5406,7 +6316,15 @@
      "kind": "data"
     }
    ],
-   "producers": [],
+   "producers": [
+    {
+     "service": "strike-invasion",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "consumers": [],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
@@ -5440,7 +6358,15 @@
      "kind": "data"
     }
    ],
-   "producers": [],
+   "producers": [
+    {
+     "service": "strike-invasion",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "consumers": [],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
@@ -5474,7 +6400,15 @@
      "kind": "data"
     }
    ],
-   "producers": [],
+   "producers": [
+    {
+     "service": "strike-invasion",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "consumers": [],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
@@ -5508,7 +6442,15 @@
      "kind": "data"
     }
    ],
-   "producers": [],
+   "producers": [
+    {
+     "service": "strike-invasion",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "consumers": [],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
@@ -5542,7 +6484,15 @@
      "kind": "data"
     }
    ],
-   "producers": [],
+   "producers": [
+    {
+     "service": "strike-invasion",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "consumers": [],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
@@ -5576,7 +6526,15 @@
      "kind": "data"
     }
    ],
-   "producers": [],
+   "producers": [
+    {
+     "service": "strike-invasion",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "consumers": [],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
@@ -5610,7 +6568,15 @@
      "kind": "data"
     }
    ],
-   "producers": [],
+   "producers": [
+    {
+     "service": "strike-invasion",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "consumers": [],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
@@ -5644,7 +6610,15 @@
      "kind": "data"
     }
    ],
-   "producers": [],
+   "producers": [
+    {
+     "service": "strike-invasion",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "consumers": [],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
@@ -5678,8 +6652,27 @@
      "kind": "data"
     }
    ],
-   "producers": [],
-   "consumers": [],
+   "producers": [
+    {
+     "service": "strike-invasion",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "strike-invasion",
+     "accepts": [
+      3040
+     ],
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -5712,8 +6705,27 @@
      "kind": "data"
     }
    ],
-   "producers": [],
-   "consumers": [],
+   "producers": [
+    {
+     "service": "strike-invasion",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "strike-invasion",
+     "accepts": [
+      3039
+     ],
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -5746,8 +6758,27 @@
      "kind": "data"
     }
    ],
-   "producers": [],
-   "consumers": [],
+   "producers": [
+    {
+     "service": "strike-invasion",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "strike-invasion",
+     "accepts": [
+      3042
+     ],
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -5780,8 +6811,27 @@
      "kind": "data"
     }
    ],
-   "producers": [],
-   "consumers": [],
+   "producers": [
+    {
+     "service": "strike-invasion",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "strike-invasion",
+     "accepts": [
+      3043
+     ],
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -5814,8 +6864,37 @@
      "kind": "data"
     }
    ],
-   "producers": [],
-   "consumers": [],
+   "producers": [
+    {
+     "service": "strike-invasion",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "invasion-postgres-writer",
+     "accepts": [
+      3024
+     ],
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    },
+    {
+     "service": "spx-mission-control",
+     "accepts": [
+      3024
+     ],
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -5848,8 +6927,27 @@
      "kind": "data"
     }
    ],
-   "producers": [],
-   "consumers": [],
+   "producers": [
+    {
+     "service": "strike-invasion",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "strike-invasion",
+     "accepts": [
+      3037
+     ],
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -5882,8 +6980,27 @@
      "kind": "data"
     }
    ],
-   "producers": [],
-   "consumers": [],
+   "producers": [
+    {
+     "service": "strike-invasion",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "strike-invasion",
+     "accepts": [
+      3038
+     ],
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -5916,8 +7033,27 @@
      "kind": "data"
     }
    ],
-   "producers": [],
-   "consumers": [],
+   "producers": [
+    {
+     "service": "strike-invasion",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "strike-invasion",
+     "accepts": [
+      3044
+     ],
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -7898,8 +9034,45 @@
      "kind": "data"
     }
    ],
-   "producers": [],
-   "consumers": [],
+   "producers": [
+    {
+     "service": "es-cvd",
+     "environments": [
+      "es4"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "es-cvd",
+     "accepts": [
+      2030
+     ],
+     "environments": [
+      "es4"
+     ]
+    },
+    {
+     "service": "es-open-direction",
+     "accepts": [
+      2030
+     ],
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    },
+    {
+     "service": "gamma-migration",
+     "accepts": [
+      2030
+     ],
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -7932,8 +9105,26 @@
      "kind": "data"
     }
    ],
-   "producers": [],
-   "consumers": [],
+   "producers": [
+    {
+     "service": "es-cvd",
+     "environments": [
+      "es4"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "es-open-direction",
+     "accepts": [
+      2031
+     ],
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -7966,8 +9157,25 @@
      "kind": "data"
     }
    ],
-   "producers": [],
-   "consumers": [],
+   "producers": [
+    {
+     "service": "es-cvd",
+     "environments": [
+      "es4"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "es-cvd",
+     "accepts": [
+      2032
+     ],
+     "environments": [
+      "es4"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -8000,7 +9208,14 @@
      "kind": "data"
     }
    ],
-   "producers": [],
+   "producers": [
+    {
+     "service": "es-cvd",
+     "environments": [
+      "es4"
+     ]
+    }
+   ],
    "consumers": [],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
@@ -8034,8 +9249,34 @@
      "kind": "data"
     }
    ],
-   "producers": [],
-   "consumers": [],
+   "producers": [
+    {
+     "service": "es-cvd",
+     "environments": [
+      "es4"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "es-footprint-strike",
+     "accepts": [
+      2034
+     ],
+     "environments": [
+      "es4"
+     ]
+    },
+    {
+     "service": "line-acceptance",
+     "accepts": [
+      2034
+     ],
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -8068,7 +9309,14 @@
      "kind": "data"
     }
    ],
-   "producers": [],
+   "producers": [
+    {
+     "service": "es-cvd",
+     "environments": [
+      "es4"
+     ]
+    }
+   ],
    "consumers": [],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
@@ -8102,7 +9350,14 @@
      "kind": "data"
     }
    ],
-   "producers": [],
+   "producers": [
+    {
+     "service": "es-cvd",
+     "environments": [
+      "es4"
+     ]
+    }
+   ],
    "consumers": [],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
@@ -8136,8 +9391,25 @@
      "kind": "data"
     }
    ],
-   "producers": [],
-   "consumers": [],
+   "producers": [
+    {
+     "service": "es-footprint-strike",
+     "environments": [
+      "es4"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "es-footprint-strike",
+     "accepts": [
+      2037
+     ],
+     "environments": [
+      "es4"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -8170,8 +9442,27 @@
      "kind": "data"
     }
    ],
-   "producers": [],
-   "consumers": [],
+   "producers": [
+    {
+     "service": "es-open-direction",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "es-open-direction-postgres-writer",
+     "accepts": [
+      2038
+     ],
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -8204,8 +9495,27 @@
      "kind": "data"
     }
    ],
-   "producers": [],
-   "consumers": [],
+   "producers": [
+    {
+     "service": "es-open-direction",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "es-open-direction-postgres-writer",
+     "accepts": [
+      2039
+     ],
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -8238,7 +9548,15 @@
      "kind": "data"
     }
    ],
-   "producers": [],
+   "producers": [
+    {
+     "service": "es-open-direction",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "consumers": [],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
@@ -8648,7 +9966,15 @@
      "kind": "data"
     }
    ],
-   "producers": [],
+   "producers": [
+    {
+     "service": "es-spx-align",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "consumers": [],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
@@ -8680,7 +10006,15 @@
      "kind": "data"
     }
    ],
-   "producers": [],
+   "producers": [
+    {
+     "service": "es-spx-align",
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
    "consumers": [],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
