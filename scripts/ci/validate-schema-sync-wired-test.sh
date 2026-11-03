@@ -34,6 +34,10 @@ fresh; printf 'kubectl apply -f x.yaml\n' > "$T/r/Jenkinsfile.newroute"; sed -i.
 fresh; printf '// kubectl apply -f x.yaml (only a comment)\npipeline { }\n' > "$T/r/Jenkinsfile.commentonly"; expect "a mention inside a comment proves nothing and needs no entry" pass
 fresh; printf 'def note = "scripts/deploy/service-deploy.sh"\npipeline { stages { stage("x") { steps { sh "kubectl apply -f x.yaml" } } } }\n' > "$T/r/Jenkinsfile.decoy"; expect "service-deploy.sh named only in a string literal does not cover a direct kubectl apply" "Jenkinsfile.decoy"
 fresh; printf 'pipeline { stages { stage("x") { steps { sh """ bash scripts/deploy/service-deploy.sh """ } } } }\n' > "$T/r/Jenkinsfile.viasd"; expect "an sh step that really calls service-deploy.sh is covered" pass
-fresh; echo 'Jenkinsfile.ghost|a file that does not exist' >> "$T/r/scripts/ci/schema-sync-coverage-allowlist.txt"; expect "a stale allow-list entry" "stale"
-fresh; echo 'Jenkinsfile.hpsf-ops|' > "$T/r/scripts/ci/schema-sync-coverage-allowlist.txt"; expect "an allow-list entry without a reason" "has no reason"
+fresh; echo 'Jenkinsfile.ghost|ungated|a file that does not exist' >> "$T/r/scripts/ci/schema-sync-coverage-allowlist.txt"; expect "a stale allow-list entry" "stale"
+fresh; echo 'Jenkinsfile.hpsf-ops|ungated|' > "$T/r/scripts/ci/schema-sync-coverage-allowlist.txt"; expect "an allow-list entry without a reason" "needs <file>|<kind>|<reason>"
+fresh; printf 'pipeline { stages { stage("x") { steps { sh "kubectl apply -f x.yaml; echo scripts/deploy/service-deploy.sh" } } } }\n' > "$T/r/Jenkinsfile.echodecoy"; expect "service-deploy.sh only echoed in the same sh step as a direct kubectl apply" "Jenkinsfile.echodecoy"
+fresh; printf '\nsh "kubectl scale deployment/x --replicas=3"\n' >> "$T/r/Jenkinsfile.web-service"; expect "a new direct workload command in a gated Jenkinsfile" "direct workload command"
+fresh; sed -i.bak 's/via:direct=5/via:direct=4/' "$T/r/scripts/ci/schema-sync-coverage-allowlist.txt"; expect "a stale direct-command count" "via:direct=4"
+fresh; echo 'Jenkinsfile.hpsf-ops|bogus|reason' >> "$T/r/scripts/ci/schema-sync-coverage-allowlist.txt"; expect "an unknown allow-list kind" "unknown kind"
 exit $fail

@@ -12,7 +12,10 @@ import hashlib, os, re, sys
 
 ROOT = sys.argv[1] if len(sys.argv) > 1 else os.getcwd()
 WORKLOAD = re.compile(r"\bkubectl\s+(?:-\S+\s+\S+\s+)*(apply|set\s+image|rollout|scale|delete|patch|replace|create)\b|\bapply\.sh\b|\bcleanup-es4\.sh\b|\bservice-deploy\.sh\b")
-VIA = re.compile(r"\bservice-deploy\.sh\b")
+# service-deploy.sh counts as REALLY invoked only as a command: at the start of a line or after ; && || | ( , with optional VAR=value
+# prefixes and an optional `bash`/`sh`. An echo, a variable assignment or a string argument is not an invocation.
+VIA = re.compile(r"(?:^|[;&|(]|\n)[ \t]*(?:[A-Za-z_][A-Za-z0-9_]*=(?:\"[^\"]*\"|'[^']*'|\S*)[ \t]+)*(?:bash|sh)[ \t]+(?:\./)?scripts/deploy/service-deploy\.sh\b")
+DIRECT = re.compile(r"\bkubectl\s+(?:-\S+\s+\S+\s+)*(?:apply|set\s+image|rollout|scale|delete|patch|replace|create)\b|\bapply\.sh\b|\bcleanup-es4\.sh\b")
 
 
 def strip(text):
@@ -86,21 +89,33 @@ with open(os.path.join(ROOT, "tools/schema-governance/schema-governance-tool.jar
     if hashlib.sha256(f.read()).hexdigest() != pin.group(1): fail("the committed tool jar does not match tools/schema-governance/PIN")
 
 # 2. Jenkinsfile coverage
-allow = {}
+allow, via_cap = {}, {}
 for l in read("scripts/ci/schema-sync-coverage-allowlist.txt").split("\n"):
     l = l.strip()
     if l and not l.startswith("#"):
-        name, _, reason = l.partition("|")
-        if not reason.strip(): fail("allow-list entry '%s' has no reason" % name)
-        allow[name.strip()] = reason.strip()
+        parts = [x.strip() for x in l.split("|")]
+        if len(parts) < 3 or not parts[2]: fail("allow-list entry '%s' needs <file>|<kind>|<reason>" % (parts[0] if parts else l))
+        name, kind, reason = parts[0], parts[1], "|".join(parts[2:])
+        if kind == "ungated": allow[name] = reason
+        elif re.fullmatch(r"via:direct=\d+", kind): via_cap[name] = int(kind.split("=")[1])
+        else: fail("allow-list entry '%s' has unknown kind '%s' (ungated | via:direct=N)" % (name, kind))
 seen = set()
 for fn in sorted(os.listdir(ROOT)):
     if not fn.startswith("Jenkinsfile"): continue
     code = strip(read(fn))
-    if not WORKLOAD.search(code): continue
+    bodies = sh_bodies(code)
+    direct_here = bodies
+    via = VIA.search(bodies) is not None
+    direct = len(DIRECT.findall(VIA.sub(" ", bodies)))
+    if not (WORKLOAD.search(code) or via): continue
     seen.add(fn)
-    if VIA.search(sh_bodies(code)): continue
-    if fn not in allow: fail("%s changes workloads without service-deploy.sh and is not in scripts/ci/schema-sync-coverage-allowlist.txt" % fn)
-stale = sorted(set(allow) - seen)
+    if via:
+        cap = via_cap.get(fn)
+        if direct and cap is None: fail("%s calls service-deploy.sh but also has %d direct workload command(s) in sh steps; list it as 'via:direct=%d' with a reason after review" % (fn, direct, direct))
+        if cap is not None and direct != cap: fail("%s has %d direct workload command(s) in sh steps but the allow-list says via:direct=%d (a new direct command must be reviewed; a removed one must lower the count)" % (fn, direct, cap))
+        continue
+    if fn in via_cap: fail("%s is listed as via but does not execute service-deploy.sh" % fn)
+    if fn not in allow: fail("%s changes workloads without really executing service-deploy.sh and is not listed 'ungated' in scripts/ci/schema-sync-coverage-allowlist.txt" % fn)
+stale = sorted((set(allow) | set(via_cap)) - seen)
 if stale: fail("allow-list names Jenkinsfiles with no workload-changing step (stale): %s" % ", ".join(stale))
-print("schema-sync wiring OK: service-deploy.sh gates before its first apply; %d Jenkinsfile(s) outside it are listed with a reason" % len(allow))
+print("schema-sync wiring OK: service-deploy.sh gates before its first apply; %d Jenkinsfile(s) go through it, %d outside it are listed 'ungated' with a reason" % (len([f for f in seen if f not in allow]), len(allow)))
