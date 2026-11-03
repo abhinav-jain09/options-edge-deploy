@@ -4,7 +4,7 @@
 #                    the count is a ratchet: a new direct command fails the check until it is reviewed and the number raised
 # A new route fails scripts/ci/validate-schema-sync-wired.py until it is gated or listed here with a reason. Remove a line when gated.
 Jenkinsfile.service-deploy|via:direct=16222ee54ba9,5a6b053a876e,5f19b20500ae,655ec1951e67,a8b158a53136|ancillary only, none rolls an image or scales anything up: configmap patch (config), scale indicator-service and "$DEP" to 0 during topic recreation, rollout status wait, apply of k8s/overlays/dev/level-absorption-config.yaml (ConfigMap)
-Jenkinsfile.es4-deploy|ungated|es4 deploy and clean-reset - NOT GATED yet (R11/R11b: sync inside cleanup-es4.sh between registry-wiped and restore-boundary)
+Jenkinsfile.es4-deploy|ungated|es4: clean-reset is GATED (Ship schema bundle stage -> cleanup-es4.sh verifies it in preflight and registers it between the registry-wiped and restore-boundary markers; coverage rules in validate-schema-sync-wired.py) and the deploy loop calls schema-sync-all.sh es4 before pin-and-apply.sh (checked textually). Listed ungated only because its other actions (infra-sync, topic and service operations) are not schema-gated and its direct kubectl set is not fingerprint-pinned yet
 Jenkinsfile.experiment-deploy|ungated|experiment environment has no schema-sync mapping - NOT GATED (a covered service is refused there by schema-sync.sh)
 Jenkinsfile.hpsf-ops|ungated|operational set-image/rollout actions - NOT GATED, to be classified (R11a)
 Jenkinsfile.gateway-nightly-restart|ungated|restart only, no image or spec change - NOT GATED

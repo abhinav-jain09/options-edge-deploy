@@ -5,7 +5,7 @@ cd "$(dirname "$0")/../.."
 CHECK=scripts/ci/validate-schema-sync-wired.py
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 fresh() { rm -rf "$T/r"; mkdir -p "$T/r/scripts/deploy" "$T/r/scripts/ci" "$T/r/tools/schema-governance"
-  cp scripts/deploy/service-deploy.sh scripts/deploy/apply.sh "$T/r/scripts/deploy/"; cp scripts/ci/schema-sync-coverage-allowlist.txt "$T/r/scripts/ci/"
+  mkdir -p "$T/r/scripts/es4"; cp scripts/es4/cleanup-es4.sh "$T/r/scripts/es4/"; cp scripts/deploy/service-deploy.sh scripts/deploy/apply.sh "$T/r/scripts/deploy/"; cp scripts/ci/schema-sync-coverage-allowlist.txt "$T/r/scripts/ci/"
   cp tools/schema-governance/PIN tools/schema-governance/schema-governance-tool.jar "$T/r/tools/schema-governance/"
   for f in Jenkinsfile*; do cp "$f" "$T/r/"; done; }
 fail=0
@@ -57,4 +57,30 @@ blk=t[i:j]; t=t[:i]+t[j:]; k=t.index("kubectl apply"); s=t.rfind("\n",0,k)+1
 open(p,"w").write(t[:s]+blk+t[s:] if False else t[:s]+"kubectl -n options-edge delete deployment/x\n"+blk+t[s:])
 PY
 expect "a kubectl mutation in apply.sh before the schema-sync-all call" "BEFORE its schema-sync-all.sh call"
+fresh; sed -i.bak '/^# schema-governance: registry-wiped$/d' "$T/r/scripts/es4/cleanup-es4.sh"; expect "cleanup-es4.sh without the registry-wiped marker" "marker lines"
+fresh; sed -i.bak '/^# schema-governance: restore-boundary$/d' "$T/r/scripts/es4/cleanup-es4.sh"; expect "cleanup-es4.sh without the restore-boundary marker" "marker lines"
+fresh; python3 - "$T/r/scripts/es4/cleanup-es4.sh" <<'PY'
+import sys; p=sys.argv[1]; t=open(p).read()
+a="# schema-governance: registry-wiped\n"; b="# schema-governance: restore-boundary\n"
+t=t.replace(a,"@@A@@",1).replace(b,a,1).replace("@@A@@",b,1); open(p,"w").write(t)
+PY
+expect "cleanup-es4.sh markers in the wrong order" "AFTER the restore-boundary"
+fresh; sed -i.bak "s#schema-sync-es4-host.sh' apply#schema-sync-es4-host.sh' applyX#" "$T/r/scripts/es4/cleanup-es4.sh"; expect "cleanup-es4.sh never applies the bundle" "never runs schema-sync-es4-host.sh apply"
+fresh; python3 - "$T/r/scripts/es4/cleanup-es4.sh" <<'PY'
+import sys,re; p=sys.argv[1]; t=open(p).read()
+# move the registry-wiped marker AFTER the apply call: the sync is then outside the window
+m="# schema-governance: registry-wiped\n"; t=t.replace(m,"",1); i=t.index("# schema-governance: restore-boundary"); t=t[:i]+m+t[i:]; open(p,"w").write(t)
+PY
+expect "the bundle apply outside the wiped..boundary window" "not between"
+fresh; sed -i.bak 's#scale "deploy/$name" --replicas=0 >/dev/null || die "scale-to-0 failed#scale "deploy/$name" --replicas=2 >/dev/null || die "scale-to-0 failed#' "$T/r/scripts/es4/cleanup-es4.sh"; expect "a scale-up before the restore boundary" "non-zero count"
+fresh; python3 - "$T/r/scripts/es4/cleanup-es4.sh" <<'PY'
+import sys,re; p=sys.argv[1]; t=open(p).read()
+t=re.sub(r'\n  bash "\$SCRIPT_DIR/\.\./ci/schema-sync-es4-host\.sh" verify[^\n]*\n','\n',t,count=1); open(p,"w").write(t)
+PY
+expect "no preflight bundle verification" "never runs schema-sync-es4-host.sh verify"
+fresh; python3 - "$T/r/Jenkinsfile.es4-deploy" <<'PY'
+import sys; p=sys.argv[1]; t=open(p).read(); t=t.replace("stage('Ship schema bundle')","stage('Ship nothing')",1); open(p,"w").write(t)
+PY
+expect "the es4 Jenkinsfile without a Ship schema bundle stage" "no 'Ship schema bundle' stage"
+fresh; sed -i.bak 's#schema-sync-all.sh es4 ||#true es4 ||#' "$T/r/Jenkinsfile.es4-deploy"; expect "the es4 deploy loop without its schema-sync-all call" "schema-sync-all.sh es4' must run before"
 exit $fail

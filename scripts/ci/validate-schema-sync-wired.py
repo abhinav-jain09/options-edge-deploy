@@ -102,6 +102,37 @@ mc = CALL_ALL.search(ap)
 if not mc: fail("scripts/deploy/apply.sh does not EXECUTE scripts/ci/schema-sync-all.sh fail-closed (bash ... || { ...; exit 1; })")
 m_mut = re.search(r"\bkubectl\b[^;&|\n]*?\s(?:apply|delete|patch|replace|create|scale|rollout|set\s+image)\b", ap)
 if m_mut and m_mut.start() < mc.start(): fail("scripts/deploy/apply.sh runs a kubectl mutation BEFORE its schema-sync-all.sh call")
+# 1c. scripts/es4/cleanup-es4.sh (R11a script rules): the bundle is VERIFIED in the preflight, before the first scale-down; the whole-set sync runs
+# BETWEEN the registry-wiped and restore-boundary markers; and nothing scales a Deployment to a non-zero count before the restore boundary.
+cl = read("scripts/es4/cleanup-es4.sh")
+cl_code = "\n".join(l for l in cl.split("\n") if not l.lstrip().startswith("#") or "schema-governance:" in l)
+cl_code = re.sub(r"\\\n", " ", cl_code)
+def at(pat, flags=0):
+    m = re.search(pat, cl_code, flags); return m.start() if m else -1
+m_wiped, m_bound = at(r"^# schema-governance: registry-wiped$", re.M), at(r"^# schema-governance: restore-boundary$", re.M)
+if m_wiped < 0 or m_bound < 0: fail("scripts/es4/cleanup-es4.sh lacks the '# schema-governance: registry-wiped' / 'restore-boundary' marker lines")
+if m_wiped > m_bound: fail("cleanup-es4.sh: the registry-wiped marker comes AFTER the restore-boundary marker")
+verify_at = at(r"schema-sync-es4-host\.sh\"?\s+verify\b")
+apply_at = at(r"^run\s+\"[^\n]*schema-sync-es4-host\.sh'?\s+apply\b", re.M)
+first_scale = at(r"\$KC\s+scale\b")
+if verify_at < 0: fail("cleanup-es4.sh never runs schema-sync-es4-host.sh verify (the bundle must be checked before the wipe)")
+if first_scale >= 0 and verify_at > first_scale: fail("cleanup-es4.sh verifies the schema bundle AFTER its first scale command (before the wipe is required)")
+if apply_at < 0: fail("cleanup-es4.sh never runs schema-sync-es4-host.sh apply")
+if not (m_wiped < apply_at < m_bound): fail("cleanup-es4.sh: the schema bundle apply is not between the registry-wiped and restore-boundary markers")
+if not re.search(r"schema-sync-es4-host\.sh'?\s+apply[^\n]*\n?[^\n]*\|\|\s*die\b", cl_code): fail("cleanup-es4.sh: the schema bundle apply is not fail-closed (|| die ...)")
+for m in re.finditer(r"\$KC\s+scale\b[^\n]*--replicas=(\S+)", cl_code):
+    if m.group(1).strip("\"'") != "0" and m.start() < m_bound: fail("cleanup-es4.sh scales to a non-zero count (--replicas=%s) before the restore-boundary marker" % m.group(1))
+# Jenkinsfile.es4-deploy: a `Ship schema bundle` stage must precede the clean-reset stage and cover clean-reset
+es4 = strip(read("Jenkinsfile.es4-deploy"))
+i_ship, i_clean = es4.find("stage('Ship schema bundle')"), es4.find("stage('Clean reset")
+if i_ship < 0 or i_clean < 0 or i_ship > i_clean: fail("Jenkinsfile.es4-deploy has no 'Ship schema bundle' stage before the 'Clean reset' stage")
+ship_when = es4[i_ship:es4.find("steps", i_ship)]
+if "params.ACTION == 'clean-reset'" not in ship_when: fail("the 'Ship schema bundle' stage does not run for ACTION=clean-reset")
+i_loop, i_pin = es4.find("schema-sync-all.sh es4"), es4.find("pin-and-apply.sh")
+if i_pin < 0 or i_loop < 0 or i_loop > i_pin: fail("Jenkinsfile.es4-deploy: 'bash scripts/ci/schema-sync-all.sh es4' must run before pin-and-apply.sh")
+if not re.search(r"schema-sync-all\.sh es4 \|\|\s*\{[^\n]*exit 1", es4): fail("Jenkinsfile.es4-deploy: the es4 schema-sync-all call is not fail-closed (|| { ...; exit 1; })")
+if "schema-bundle.sh" not in es4[i_ship:i_clean]: fail("the 'Ship schema bundle' stage does not build the bundle with schema-bundle.sh")
+
 pin = re.search(r"^sha256=([0-9a-f]{64})$", read("tools/schema-governance/PIN"), re.M)
 if not pin: fail("tools/schema-governance/PIN has no sha256= line")
 with open(os.path.join(ROOT, "tools/schema-governance/schema-governance-tool.jar"), "rb") as f:

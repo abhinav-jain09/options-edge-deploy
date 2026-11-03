@@ -129,6 +129,12 @@ jobs:
       - name: Schema drift check negative controls (mock registry)
         run: bash scripts/ci/schema-drift-test.sh
 
+      - name: Schema manifest generator negative controls
+        run: bash scripts/ci/schema-manifest-init-test.sh
+
+      - name: Schema sync es4 host script negative controls
+        run: bash scripts/ci/schema-sync-es4-host-test.sh
+
       - name: Schema sync gate negative controls (mock registry, real tool jar)
         run: SCHEMA_GOV_JAR="$PWD/tools/schema-governance/schema-governance-tool.jar" bash scripts/ci/schema-sync-test.sh
 
