@@ -2,14 +2,27 @@
 
 Generated with the baseline inventory (`scripts/ci/schema-manifest-init.py`) from the live dev, prod and es4 registries.
 
-## Subjects whose id differs between registries (87)
+## Subjects whose id differs between registries (87) — now MIRRORED with per-environment ids (R3f)
 
-Each holds the SAME schema content in every registry that has it but a DIFFERENT registry id. They are classified `ENV_LOCAL` in the manifest
-(not `MIRRORED`) because a MIRRORED subject must hold one id everywhere (R3a) or declare mirror domains (R3f, not built yet). A record framed with
-one registry's id and read through another registry's id would decode against the wrong schema, so for any of these whose topic is copied
-between registries (MirrorMaker, the dev mirror jobs) the divergence is a live hazard; this inventory does not decide which topics are copied.
-Next step per subject: name its topic(s), check them against the mirror configuration (`infra/es4/mm2/mm2.properties`, the dev mirror scripts),
-then either give the subject fixed ids everywhere (-> MIRRORED) or record that nothing crosses (-> keep ENV_LOCAL with that reason).
+Each holds the SAME schema content in every registry that has it but a DIFFERENT registry id. They were `ENV_LOCAL` until the mirror rule (R3f)
+existed; they are now `MIRRORED` with the dev id as the manifest id and `idByEnvironment` for every registry whose id differs, so sync and the
+drift check use the id each registry really holds. That is safe only while no byte-copying mirror carries one of these subjects between
+registries whose ids differ: the validator checks it against `activeMirrors` (generated from the mirror jobs by `scripts/ci/schema-mirrors-generate.py`)
+and `scripts/ci/schema-mirror-evidence.py` samples the live topics nightly. The table is the history of the divergence, kept for the record.
+
+### Mirror findings (measured 2026-11-03)
+
+| mirror | transport | payload | note |
+|---|---|---|---|
+| CVD + footprint (8 topics, es4 -> dev, es4 -> prod) | reencode | Avro | all 15 running launchd units use the canonical registry-aware jar; the legacy byte-copy `install` of `Jenkinsfile.es-cvd-mirror` is now refused, because ids differ (cvd-value dev 2030 / prod 2027 / es4 2015) |
+| es.futures.aggressor-flow (es4 -> dev, es4 -> prod) | bytes | Avro id 2701 `EsAggressorFlowSnapshot` | **FINDING, fixed here:** prod's registry did not hold id 2701 (404), so the prod mirror's frames named an id prod could not resolve. The manifest now lists prod for it; the prod registration is done through the governed engine after merge |
+| es.options.indicators.* (6 topics, es4 -> dev/prod) | bytes | Avro 2001-2007, 2501-2506 | the install asserts identical ids on both registries; snapshot.current showed 2001 when sampled, the others had no record, and the two studies topics do not exist on es4 (reported ABSENT; no studies mirror unit runs here) |
+| es.tape-zones.board, es.underlying.es.trades, prod underlying.vix.price, options.databento.opra.definition.enumeration | bytes | JSON (record starts `{"schemaVers`) | declared unframed; sampled |
+| es.futures.auction (es4 -> prod only), es.strike-intelligence-by-strike | bytes | JSON per the job text / not registry-framed | declared unframed; UNMEASURED (no record on es4 today) |
+| underlying.es.price, underlying.spx.price paths | reencode | Avro | `mac74` (dev -> .74) is not a governed registry and is listed as `ungovernedPaths` |
+
+What this does not prove: the subjects of a mirror are declared in its job header and sampled by the newest record only; a copier outside the
+deploy repo's mirror jobs is not seen (spec R3f).
 
 | subject | versions | dev | prod | es4 |
 |---|---|---|---|---|

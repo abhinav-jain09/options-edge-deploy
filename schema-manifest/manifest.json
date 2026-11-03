@@ -28,6 +28,70 @@
    [
     2077,
     2077
+   ],
+   [
+    2008,
+    2008
+   ],
+   [
+    2010,
+    2010
+   ],
+   [
+    2011,
+    2011
+   ],
+   [
+    2012,
+    2012
+   ],
+   [
+    2013,
+    2013
+   ],
+   [
+    2014,
+    2014
+   ],
+   [
+    2015,
+    2015
+   ],
+   [
+    2016,
+    2016
+   ],
+   [
+    2067,
+    2067
+   ],
+   [
+    2068,
+    2068
+   ],
+   [
+    2069,
+    2069
+   ],
+   [
+    2070,
+    2070
+   ],
+   [
+    2072,
+    2072
+   ],
+   [
+    2073,
+    2073
+   ],
+   [
+    2074,
+    2074
+   ],
+   [
+    2076,
+    2076
    ]
   ],
   "breakout": [
@@ -548,6 +612,90 @@
    [
     3301,
     3301
+   ],
+   [
+    2028,
+    2028
+   ],
+   [
+    2029,
+    2029
+   ],
+   [
+    2030,
+    2030
+   ],
+   [
+    2031,
+    2031
+   ],
+   [
+    2032,
+    2032
+   ],
+   [
+    2033,
+    2033
+   ],
+   [
+    2034,
+    2034
+   ],
+   [
+    2035,
+    2035
+   ],
+   [
+    2036,
+    2036
+   ],
+   [
+    2037,
+    2037
+   ],
+   [
+    2038,
+    2038
+   ],
+   [
+    2039,
+    2039
+   ],
+   [
+    2040,
+    2040
+   ],
+   [
+    9000,
+    9000
+   ],
+   [
+    9001,
+    9001
+   ],
+   [
+    9002,
+    9002
+   ],
+   [
+    9003,
+    9003
+   ],
+   [
+    9004,
+    9004
+   ],
+   [
+    9005,
+    9005
+   ],
+   [
+    9006,
+    9006
+   ],
+   [
+    9007,
+    9007
    ]
   ],
   "futures": [
@@ -580,12 +728,292 @@
    [
     2045,
     2045
+   ],
+   [
+    2043,
+    2043
+   ],
+   [
+    2044,
+    2044
+   ],
+   [
+    2071,
+    2071
    ]
   ],
   "scratch": [
    [
     2066,
     2066
+   ]
+  ],
+  "deltaflow": [
+   [
+    3004,
+    3004
+   ],
+   [
+    3005,
+    3005
+   ],
+   [
+    3006,
+    3006
+   ],
+   [
+    3007,
+    3007
+   ],
+   [
+    3008,
+    3008
+   ],
+   [
+    3009,
+    3009
+   ],
+   [
+    3010,
+    3010
+   ],
+   [
+    3011,
+    3011
+   ],
+   [
+    3012,
+    3012
+   ],
+   [
+    3013,
+    3013
+   ],
+   [
+    3014,
+    3014
+   ],
+   [
+    3015,
+    3015
+   ],
+   [
+    3016,
+    3016
+   ],
+   [
+    3017,
+    3017
+   ],
+   [
+    3018,
+    3018
+   ],
+   [
+    3019,
+    3019
+   ],
+   [
+    3020,
+    3020
+   ]
+  ],
+  "greekmoveauth": [
+   [
+    3021,
+    3021
+   ],
+   [
+    3022,
+    3022
+   ],
+   [
+    3023,
+    3023
+   ],
+   [
+    3053,
+    3053
+   ],
+   [
+    3054,
+    3054
+   ],
+   [
+    3055,
+    3055
+   ],
+   [
+    3056,
+    3056
+   ],
+   [
+    3057,
+    3057
+   ],
+   [
+    3058,
+    3058
+   ]
+  ],
+  "hpsf": [
+   [
+    2056,
+    2056
+   ],
+   [
+    3060,
+    3060
+   ]
+  ],
+  "multileg": [
+   [
+    3050,
+    3050
+   ],
+   [
+    3051,
+    3051
+   ],
+   [
+    3052,
+    3052
+   ]
+  ],
+  "optionpressure": [
+   [
+    2046,
+    2046
+   ],
+   [
+    2047,
+    2047
+   ]
+  ],
+  "spotvolregime": [
+   [
+    3047,
+    3047
+   ],
+   [
+    3048,
+    3048
+   ],
+   [
+    3049,
+    3049
+   ]
+  ],
+  "strikeinvasion": [
+   [
+    3024,
+    3024
+   ],
+   [
+    3025,
+    3025
+   ],
+   [
+    3026,
+    3026
+   ],
+   [
+    3027,
+    3027
+   ],
+   [
+    3028,
+    3028
+   ],
+   [
+    3029,
+    3029
+   ],
+   [
+    3030,
+    3030
+   ],
+   [
+    3031,
+    3031
+   ],
+   [
+    3032,
+    3032
+   ],
+   [
+    3033,
+    3033
+   ],
+   [
+    3034,
+    3034
+   ],
+   [
+    3035,
+    3035
+   ],
+   [
+    3036,
+    3036
+   ],
+   [
+    3037,
+    3037
+   ],
+   [
+    3038,
+    3038
+   ],
+   [
+    3039,
+    3039
+   ],
+   [
+    3040,
+    3040
+   ],
+   [
+    3041,
+    3041
+   ],
+   [
+    3042,
+    3042
+   ],
+   [
+    3043,
+    3043
+   ],
+   [
+    3044,
+    3044
+   ],
+   [
+    3045,
+    3045
+   ],
+   [
+    3046,
+    3046
+   ]
+  ],
+  "esspxalign": [
+   [
+    2059,
+    2059
+   ],
+   [
+    2060,
+    2060
+   ],
+   [
+    2061,
+    2061
+   ],
+   [
+    2062,
+    2062
    ]
   ]
  },
@@ -799,16 +1227,68 @@
    "reason": "content-divergent: the same version number holds a different schema in different registries"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "app.options.ibkr.gex.IbkrPreOpenBaseline",
+   "version": 1,
+   "id": 2008,
+   "family": "app",
+   "schemaFile": "app.options.ibkr.gex.IbkrPreOpenBaseline/v1.avsc",
+   "schemaHash": "8f31a3d433236be3818d5214e26f4fffc4a6100fab4d80639775c5bbbe5272dc",
    "environments": [
     "dev",
     "prod"
    ],
-   "family": "app",
+   "source": {
+    "kind": "ARCHIVAL",
+    "capturedFrom": {
+     "env": "dev",
+     "id": 2008
+    },
+    "reason": "inventory baseline 2026-11-03: no .avsc in the contracts or processing repos hashes to this schema (code-defined or registry-only)"
+   },
+   "topics": [
+    {
+     "name": "record-name:app.options.ibkr.gex.IbkrPreOpenBaseline",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
+  },
+  {
+   "kind": "MIRRORED",
    "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "subject": "app.options.ibkr.gex.IbkrPreOpenBaseline",
+   "version": 2,
+   "id": 2074,
+   "family": "app",
+   "idByEnvironment": {
+    "prod": 2058
+   },
+   "schemaFile": "app.options.ibkr.gex.IbkrPreOpenBaseline/v2.avsc",
+   "schemaHash": "8964fe186813c5a97f3f9aaa4f1b32e8a8345c0cf603c040cfe9451e65389741",
+   "environments": [
+    "dev",
+    "prod"
+   ],
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/ibkr-preopen-baseline.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:app.options.ibkr.gex.IbkrPreOpenBaseline",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
    "kind": "MIRRORED",
@@ -871,88 +1351,455 @@
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "app.options.ibkr.gex.IbkrPreOpenGeneration",
+   "version": 1,
+   "id": 2010,
+   "family": "app",
+   "schemaFile": "app.options.ibkr.gex.IbkrPreOpenGeneration/v1.avsc",
+   "schemaHash": "d568ada931159f4acefe2be293ab465780df58348b5e1efbc9cdc75951748d2d",
    "environments": [
     "dev",
     "prod"
    ],
-   "family": "app",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "ARCHIVAL",
+    "capturedFrom": {
+     "env": "dev",
+     "id": 2010
+    },
+    "reason": "inventory baseline 2026-11-03: no .avsc in the contracts or processing repos hashes to this schema (code-defined or registry-only)"
+   },
+   "topics": [
+    {
+     "name": "record-name:app.options.ibkr.gex.IbkrPreOpenGeneration",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
+   "subject": "app.options.ibkr.gex.IbkrPreOpenGeneration",
+   "version": 2,
+   "id": 2068,
+   "family": "app",
+   "idByEnvironment": {
+    "prod": 2047
+   },
+   "schemaFile": "app.options.ibkr.gex.IbkrPreOpenGeneration/v2.avsc",
+   "schemaHash": "8f69fd31bb0da504ebdf5f4970bbc51301f8b514b58f9bf990fa557acac2ed3e",
+   "environments": [
+    "dev",
+    "prod"
+   ],
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/ibkr-preopen-generation.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:app.options.ibkr.gex.IbkrPreOpenGeneration",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
+  },
+  {
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "app.options.ibkr.gex.IbkrPreOpenHeartbeat",
+   "version": 1,
+   "id": 2011,
+   "family": "app",
+   "schemaFile": "app.options.ibkr.gex.IbkrPreOpenHeartbeat/v1.avsc",
+   "schemaHash": "7ab9c106aab3623c31745713b86da2b6277bc7c10e89c47321bd214a4d7f0b11",
    "environments": [
     "dev",
     "prod"
    ],
-   "family": "app",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "ARCHIVAL",
+    "capturedFrom": {
+     "env": "dev",
+     "id": 2011
+    },
+    "reason": "inventory baseline 2026-11-03: no .avsc in the contracts or processing repos hashes to this schema (code-defined or registry-only)"
+   },
+   "topics": [
+    {
+     "name": "record-name:app.options.ibkr.gex.IbkrPreOpenHeartbeat",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
+   "subject": "app.options.ibkr.gex.IbkrPreOpenHeartbeat",
+   "version": 2,
+   "id": 2070,
+   "family": "app",
+   "idByEnvironment": {
+    "prod": 2049
+   },
+   "schemaFile": "app.options.ibkr.gex.IbkrPreOpenHeartbeat/v2.avsc",
+   "schemaHash": "a965f8cbcab1ef7d4329dc1ffb358e3ca36d577fb97fa5d7f84d4b50b58b2df4",
+   "environments": [
+    "dev",
+    "prod"
+   ],
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/ibkr-preopen-heartbeat.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:app.options.ibkr.gex.IbkrPreOpenHeartbeat",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
+  },
+  {
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "app.options.ibkr.gex.IbkrPreOpenManifest",
+   "version": 1,
+   "id": 2012,
+   "family": "app",
+   "schemaFile": "app.options.ibkr.gex.IbkrPreOpenManifest/v1.avsc",
+   "schemaHash": "dca17c5dba5fb829c8a462af0f05af3e9bfea450fedc9068751c3a4d7090fe92",
    "environments": [
     "dev",
     "prod"
    ],
-   "family": "app",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "ARCHIVAL",
+    "capturedFrom": {
+     "env": "dev",
+     "id": 2012
+    },
+    "reason": "inventory baseline 2026-11-03: no .avsc in the contracts or processing repos hashes to this schema (code-defined or registry-only)"
+   },
+   "topics": [
+    {
+     "name": "record-name:app.options.ibkr.gex.IbkrPreOpenManifest",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
+   "subject": "app.options.ibkr.gex.IbkrPreOpenManifest",
+   "version": 2,
+   "id": 2072,
+   "family": "app",
+   "idByEnvironment": {
+    "prod": 2056
+   },
+   "schemaFile": "app.options.ibkr.gex.IbkrPreOpenManifest/v2.avsc",
+   "schemaHash": "1a134ea9605b61b1947091b688890d6c3cfcf6da786f4bd605c3f5924ee79e10",
+   "environments": [
+    "dev",
+    "prod"
+   ],
+   "source": {
+    "kind": "ARCHIVAL",
+    "capturedFrom": {
+     "env": "dev",
+     "id": 2072
+    },
+    "reason": "inventory baseline 2026-11-03: no .avsc in the contracts or processing repos hashes to this schema (code-defined or registry-only)"
+   },
+   "topics": [
+    {
+     "name": "record-name:app.options.ibkr.gex.IbkrPreOpenManifest",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
+  },
+  {
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "app.options.ibkr.gex.IbkrPreOpenOwnership",
+   "version": 1,
+   "id": 2013,
+   "family": "app",
+   "schemaFile": "app.options.ibkr.gex.IbkrPreOpenOwnership/v1.avsc",
+   "schemaHash": "a3231eb2ee4b2faca30d361fad0948b81acff49d6a367304588b90a175b01a27",
    "environments": [
     "dev",
     "prod"
    ],
-   "family": "app",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "ARCHIVAL",
+    "capturedFrom": {
+     "env": "dev",
+     "id": 2013
+    },
+    "reason": "inventory baseline 2026-11-03: no .avsc in the contracts or processing repos hashes to this schema (code-defined or registry-only)"
+   },
+   "topics": [
+    {
+     "name": "record-name:app.options.ibkr.gex.IbkrPreOpenOwnership",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
+   "subject": "app.options.ibkr.gex.IbkrPreOpenOwnership",
+   "version": 2,
+   "id": 2067,
+   "family": "app",
+   "idByEnvironment": {
+    "prod": 2046
+   },
+   "schemaFile": "app.options.ibkr.gex.IbkrPreOpenOwnership/v2.avsc",
+   "schemaHash": "d35cabf344e8a03469f1ba9bbfcb664d1999ae383f7208ff73244ac544bec8fa",
+   "environments": [
+    "dev",
+    "prod"
+   ],
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/ibkr-preopen-ownership.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:app.options.ibkr.gex.IbkrPreOpenOwnership",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
+  },
+  {
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "app.options.ibkr.gex.IbkrPreOpenPathFreeze",
+   "version": 1,
+   "id": 2014,
+   "family": "app",
+   "schemaFile": "app.options.ibkr.gex.IbkrPreOpenPathFreeze/v1.avsc",
+   "schemaHash": "e6b783e5d1fa40f9ef98c20fe03021c0ef5a2b3964beab527fdb80b7e11a336e",
    "environments": [
     "dev",
     "prod"
    ],
-   "family": "app",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "ARCHIVAL",
+    "capturedFrom": {
+     "env": "dev",
+     "id": 2014
+    },
+    "reason": "inventory baseline 2026-11-03: no .avsc in the contracts or processing repos hashes to this schema (code-defined or registry-only)"
+   },
+   "topics": [
+    {
+     "name": "record-name:app.options.ibkr.gex.IbkrPreOpenPathFreeze",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
+   "subject": "app.options.ibkr.gex.IbkrPreOpenPathFreeze",
+   "version": 2,
+   "id": 2076,
+   "family": "app",
+   "idByEnvironment": {
+    "prod": 2059
+   },
+   "schemaFile": "app.options.ibkr.gex.IbkrPreOpenPathFreeze/v2.avsc",
+   "schemaHash": "93459ef5d72452a73fdea2f0b8e64656ce3c7e8d9b6add6627d44bc71bde4dd4",
+   "environments": [
+    "dev",
+    "prod"
+   ],
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/ibkr-preopen-path-freeze.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:app.options.ibkr.gex.IbkrPreOpenPathFreeze",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
+  },
+  {
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "app.options.ibkr.gex.IbkrPreOpenPathStatus",
+   "version": 1,
+   "id": 2015,
+   "family": "app",
+   "schemaFile": "app.options.ibkr.gex.IbkrPreOpenPathStatus/v1.avsc",
+   "schemaHash": "63be0c59fb2baea3b30678366df9e9406133b7be2818038724d386d11de19a94",
    "environments": [
     "dev",
     "prod"
    ],
-   "family": "app",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "ARCHIVAL",
+    "capturedFrom": {
+     "env": "dev",
+     "id": 2015
+    },
+    "reason": "inventory baseline 2026-11-03: no .avsc in the contracts or processing repos hashes to this schema (code-defined or registry-only)"
+   },
+   "topics": [
+    {
+     "name": "record-name:app.options.ibkr.gex.IbkrPreOpenPathStatus",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
-   "subject": "app.options.ibkr.gex.IbkrPreOpenStrikeStatus",
+   "kind": "MIRRORED",
+   "baseline": true,
+   "subject": "app.options.ibkr.gex.IbkrPreOpenPathStatus",
+   "version": 2,
+   "id": 2069,
+   "family": "app",
+   "idByEnvironment": {
+    "prod": 2048
+   },
+   "schemaFile": "app.options.ibkr.gex.IbkrPreOpenPathStatus/v2.avsc",
+   "schemaHash": "ebc5226362d100130283672ae290bdec260d49cbb3e4b04e45e406da7d3a4233",
    "environments": [
     "dev",
     "prod"
    ],
-   "family": "app",
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/ibkr-preopen-path-status.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:app.options.ibkr.gex.IbkrPreOpenPathStatus",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
+  },
+  {
+   "kind": "MIRRORED",
    "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "subject": "app.options.ibkr.gex.IbkrPreOpenStrikeStatus",
+   "version": 1,
+   "id": 2016,
+   "family": "app",
+   "schemaFile": "app.options.ibkr.gex.IbkrPreOpenStrikeStatus/v1.avsc",
+   "schemaHash": "c1d7cd6e4a4e4bdf8834bb758a4bfb776e5ab874237560cb789ec1853361dc33",
+   "environments": [
+    "dev",
+    "prod"
+   ],
+   "source": {
+    "kind": "ARCHIVAL",
+    "capturedFrom": {
+     "env": "dev",
+     "id": 2016
+    },
+    "reason": "inventory baseline 2026-11-03: no .avsc in the contracts or processing repos hashes to this schema (code-defined or registry-only)"
+   },
+   "topics": [
+    {
+     "name": "record-name:app.options.ibkr.gex.IbkrPreOpenStrikeStatus",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
+  },
+  {
+   "kind": "MIRRORED",
+   "baseline": true,
+   "subject": "app.options.ibkr.gex.IbkrPreOpenStrikeStatus",
+   "version": 2,
+   "id": 2073,
+   "family": "app",
+   "idByEnvironment": {
+    "prod": 2057
+   },
+   "schemaFile": "app.options.ibkr.gex.IbkrPreOpenStrikeStatus/v2.avsc",
+   "schemaHash": "0a6005a9299f750a69e6a200ce4fc4b2d5445725b58464b4c2ff7a4e18671401",
+   "environments": [
+    "dev",
+    "prod"
+   ],
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/ibkr-preopen-strike-status.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:app.options.ibkr.gex.IbkrPreOpenStrikeStatus",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
    "kind": "ENV_LOCAL",
@@ -1716,225 +2563,582 @@
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.deltaflow.DeltaFlowAcceptedWatermark",
+   "version": 1,
+   "id": 3004,
+   "family": "deltaflow",
+   "idByEnvironment": {
+    "prod": 2504,
+    "es4": 2703
+   },
+   "schemaFile": "com.optionsedge.contracts.deltaflow.DeltaFlowAcceptedWatermark/v1.avsc",
+   "schemaHash": "a0ec0d64ad1a55073b96f4e3cc53257572c80c49c9344aa0921ddd94be21d6b5",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "deltaflow",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/deltaflow/DeltaFlowAcceptedWatermark.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.deltaflow.DeltaFlowAcceptedWatermark",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.deltaflow.DeltaFlowCalibrationRecord",
+   "version": 1,
+   "id": 3005,
+   "family": "deltaflow",
+   "idByEnvironment": {
+    "prod": 2505,
+    "es4": 2704
+   },
+   "schemaFile": "com.optionsedge.contracts.deltaflow.DeltaFlowCalibrationRecord/v1.avsc",
+   "schemaHash": "9ce583eed0c3397b17735e1f15be87d7142b121edc985cc0be0c45bc0a9c5b79",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "deltaflow",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/deltaflow/DeltaFlowCalibrationRecord.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.deltaflow.DeltaFlowCalibrationRecord",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.deltaflow.DeltaFlowCorrectionEvent",
+   "version": 1,
+   "id": 3006,
+   "family": "deltaflow",
+   "idByEnvironment": {
+    "prod": 2506,
+    "es4": 2705
+   },
+   "schemaFile": "com.optionsedge.contracts.deltaflow.DeltaFlowCorrectionEvent/v1.avsc",
+   "schemaHash": "3f06ee19941db986a46cf7366670a158dfb542ead0c8043724a3fd9b1cdc1608",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "deltaflow",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/deltaflow/DeltaFlowCorrectionEvent.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.deltaflow.DeltaFlowCorrectionEvent",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.deltaflow.DeltaFlowEvent",
+   "version": 1,
+   "id": 3007,
+   "family": "deltaflow",
+   "idByEnvironment": {
+    "prod": 2507,
+    "es4": 2706
+   },
+   "schemaFile": "com.optionsedge.contracts.deltaflow.DeltaFlowEvent/v1.avsc",
+   "schemaHash": "61fc243898ea7a9f3d2a8085c3a8233dc64d373b0aa1e534b87214fd841790ee",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "deltaflow",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/deltaflow/DeltaFlowEvent.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.deltaflow.DeltaFlowEvent",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.deltaflow.DeltaFlowGreekStoreValue",
+   "version": 1,
+   "id": 3008,
+   "family": "deltaflow",
+   "idByEnvironment": {
+    "prod": 2508,
+    "es4": 2707
+   },
+   "schemaFile": "com.optionsedge.contracts.deltaflow.DeltaFlowGreekStoreValue/v1.avsc",
+   "schemaHash": "9c86862ba489b10bb78694e19e07612d0cdf7a29af74dbb7f87628f0f5628805",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "deltaflow",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/deltaflow/DeltaFlowGreekStoreValue.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.deltaflow.DeltaFlowGreekStoreValue",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.deltaflow.DeltaFlowIndexMarker",
+   "version": 1,
+   "id": 3009,
+   "family": "deltaflow",
+   "idByEnvironment": {
+    "prod": 2509,
+    "es4": 2708
+   },
+   "schemaFile": "com.optionsedge.contracts.deltaflow.DeltaFlowIndexMarker/v1.avsc",
+   "schemaHash": "9fcf09c3db72307a86fe601dd206ba651ac53468c53519b0d59fd9b0ef15ef0c",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "deltaflow",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/deltaflow/DeltaFlowIndexMarker.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.deltaflow.DeltaFlowIndexMarker",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.deltaflow.DeltaFlowIntradayState",
+   "version": 1,
+   "id": 3010,
+   "family": "deltaflow",
+   "idByEnvironment": {
+    "prod": 2510,
+    "es4": 2709
+   },
+   "schemaFile": "com.optionsedge.contracts.deltaflow.DeltaFlowIntradayState/v1.avsc",
+   "schemaHash": "7dc02592a06e5c9ac781e2a6b2631897af040f024ea26455166064cc546c3b15",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "deltaflow",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/deltaflow/DeltaFlowIntradayState.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.deltaflow.DeltaFlowIntradayState",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.deltaflow.DeltaFlowOiState",
+   "version": 1,
+   "id": 3011,
+   "family": "deltaflow",
+   "idByEnvironment": {
+    "prod": 2511,
+    "es4": 2710
+   },
+   "schemaFile": "com.optionsedge.contracts.deltaflow.DeltaFlowOiState/v1.avsc",
+   "schemaHash": "30389a51dc0bf59b56a39d04cbb08576366b0dc4036359ed43f2af4702c3ea44",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "deltaflow",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/deltaflow/DeltaFlowOiState.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.deltaflow.DeltaFlowOiState",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.deltaflow.DeltaFlowPositioningSnapshot",
+   "version": 1,
+   "id": 3012,
+   "family": "deltaflow",
+   "idByEnvironment": {
+    "prod": 2512,
+    "es4": 2711
+   },
+   "schemaFile": "com.optionsedge.contracts.deltaflow.DeltaFlowPositioningSnapshot/v1.avsc",
+   "schemaHash": "23446c5c2f3b260aae28ac6563ccc5b69d9955cbfc600c02d8981f121bec7857",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "deltaflow",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/deltaflow/DeltaFlowPositioningSnapshot.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.deltaflow.DeltaFlowPositioningSnapshot",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.deltaflow.DeltaFlowPositioningState",
+   "version": 1,
+   "id": 3013,
+   "family": "deltaflow",
+   "idByEnvironment": {
+    "prod": 2513,
+    "es4": 2712
+   },
+   "schemaFile": "com.optionsedge.contracts.deltaflow.DeltaFlowPositioningState/v1.avsc",
+   "schemaHash": "d806f9f76f7458e0ff37be7fc81c310f64038d3cabd8424f01735ba7028d61c0",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "deltaflow",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/deltaflow/DeltaFlowPositioningState.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.deltaflow.DeltaFlowPositioningState",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.deltaflow.DeltaFlowQuoteState",
+   "version": 1,
+   "id": 3014,
+   "family": "deltaflow",
+   "idByEnvironment": {
+    "prod": 2514,
+    "es4": 2713
+   },
+   "schemaFile": "com.optionsedge.contracts.deltaflow.DeltaFlowQuoteState/v1.avsc",
+   "schemaHash": "cfd2ed35104e2699a87b2c2cef185e40403d4ab23834f3de86af62b12bc52eab",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "deltaflow",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/deltaflow/DeltaFlowQuoteState.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.deltaflow.DeltaFlowQuoteState",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.deltaflow.DeltaFlowReversibleContribution",
+   "version": 1,
+   "id": 3015,
+   "family": "deltaflow",
+   "idByEnvironment": {
+    "prod": 2515,
+    "es4": 2714
+   },
+   "schemaFile": "com.optionsedge.contracts.deltaflow.DeltaFlowReversibleContribution/v1.avsc",
+   "schemaHash": "150853337612da139b44693fadd46526d9f2b49683f54a186c9373d6bd4b0bb7",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "deltaflow",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/deltaflow/DeltaFlowReversibleContribution.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.deltaflow.DeltaFlowReversibleContribution",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.deltaflow.DeltaFlowRollingState",
+   "version": 1,
+   "id": 3016,
+   "family": "deltaflow",
+   "idByEnvironment": {
+    "prod": 2516,
+    "es4": 2715
+   },
+   "schemaFile": "com.optionsedge.contracts.deltaflow.DeltaFlowRollingState/v1.avsc",
+   "schemaHash": "a6d62a0b99f4bcb341e54717e1ec527369bc80f610c78d016b42cafeca1b8f8f",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "deltaflow",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/deltaflow/DeltaFlowRollingState.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.deltaflow.DeltaFlowRollingState",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.deltaflow.DeltaFlowSnapshot",
+   "version": 1,
+   "id": 3017,
+   "family": "deltaflow",
+   "idByEnvironment": {
+    "prod": 2517,
+    "es4": 2716
+   },
+   "schemaFile": "com.optionsedge.contracts.deltaflow.DeltaFlowSnapshot/v1.avsc",
+   "schemaHash": "56c4bb1ea095423a7603928b7bd9a4df5a3b3102410cc4f3c80e8f36407c635f",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "deltaflow",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/deltaflow/DeltaFlowSnapshot.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.deltaflow.DeltaFlowSnapshot",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.deltaflow.DeltaFlowStrikeSnapshot",
+   "version": 1,
+   "id": 3018,
+   "family": "deltaflow",
+   "idByEnvironment": {
+    "prod": 2518,
+    "es4": 2717
+   },
+   "schemaFile": "com.optionsedge.contracts.deltaflow.DeltaFlowStrikeSnapshot/v1.avsc",
+   "schemaHash": "455200ad08e847ed8d2e4fb43564442d889f9b0be1b1bcea0fcb291f23de4b56",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "deltaflow",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/deltaflow/DeltaFlowStrikeSnapshot.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.deltaflow.DeltaFlowStrikeSnapshot",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.deltaflow.DeltaFlowStrikeStoreValue",
+   "version": 1,
+   "id": 3019,
+   "family": "deltaflow",
+   "idByEnvironment": {
+    "prod": 2519,
+    "es4": 2718
+   },
+   "schemaFile": "com.optionsedge.contracts.deltaflow.DeltaFlowStrikeStoreValue/v1.avsc",
+   "schemaHash": "408587f6973ad3d74aa41457ab7ebde91604217e757efcd6c6071fd4d74df03f",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "deltaflow",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/deltaflow/DeltaFlowStrikeStoreValue.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.deltaflow.DeltaFlowStrikeStoreValue",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.deltaflow.DeltaFlowTradeInput",
+   "version": 1,
+   "id": 3020,
+   "family": "deltaflow",
+   "idByEnvironment": {
+    "prod": 2520,
+    "es4": 2719
+   },
+   "schemaFile": "com.optionsedge.contracts.deltaflow.DeltaFlowTradeInput/v1.avsc",
+   "schemaHash": "112ad4529d4bab346c74a9d564c43166c80feb29a27324ef960e7149f9923a00",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "deltaflow",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/deltaflow/DeltaFlowTradeInput.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.deltaflow.DeltaFlowTradeInput",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
    "kind": "MIRRORED",
@@ -1966,7 +3170,6 @@
   },
   {
    "kind": "MIRRORED",
-   "baseline": true,
    "subject": "com.optionsedge.contracts.esflow.EsAggressorFlowSnapshot",
    "version": 1,
    "id": 2701,
@@ -1975,6 +3178,7 @@
    "schemaHash": "ff84bd97a77c72c0cddfa974fbec325a08a89f11608369e2962d7a4f087fa4ac",
    "environments": [
     "dev",
+    "prod",
     "es4"
    ],
    "source": {
@@ -1991,7 +3195,7 @@
    "producers": [],
    "consumers": [],
    "retained": true,
-   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
+   "retainedReason": "es.futures.aggressor-flow is byte-copied es4->dev and es4->prod (Jenkinsfile.es-futures-flow-mirror) carrying this schema (id 2701, measured on es4 2026-11-03); prod's registry did not hold it (404), so the prod mirror's frames named an id prod could not resolve (R3f). Curated, not baseline: the inventory would drop prod again."
   },
   {
    "kind": "MIRRORED",
@@ -2190,146 +3394,376 @@
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.greekmoveauth.BaselineState",
+   "version": 1,
+   "id": 3021,
+   "family": "greekmoveauth",
+   "idByEnvironment": {
+    "prod": 2521,
+    "es4": 2720
+   },
+   "schemaFile": "com.optionsedge.contracts.greekmoveauth.BaselineState/v1.avsc",
+   "schemaHash": "31f810195aba75c63d45c446da8e8f92f26550f9033d6d672f8a46fc434bf39d",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "greekmoveauth",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/greekmoveauth/BaselineState.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.greekmoveauth.BaselineState",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.greekmoveauth.DeltaFrameEvent",
+   "version": 1,
+   "id": 3022,
+   "family": "greekmoveauth",
+   "idByEnvironment": {
+    "prod": 2522,
+    "es4": 2721
+   },
+   "schemaFile": "com.optionsedge.contracts.greekmoveauth.DeltaFrameEvent/v1.avsc",
+   "schemaHash": "fe723dceb8bafe59039a51985cdf17d28a9398e3ead483746a59ce9bf2f17ec4",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "greekmoveauth",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/greekmoveauth/DeltaFrameEvent.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.greekmoveauth.DeltaFrameEvent",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.greekmoveauth.DeltaSampleWindow",
+   "version": 1,
+   "id": 3023,
+   "family": "greekmoveauth",
+   "idByEnvironment": {
+    "prod": 2523,
+    "es4": 2722
+   },
+   "schemaFile": "com.optionsedge.contracts.greekmoveauth.DeltaSampleWindow/v1.avsc",
+   "schemaHash": "f7a135743e22f94ecea780a9b0284bd2b7e9a7b709bd138d001020aacaa420d6",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "greekmoveauth",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/greekmoveauth/DeltaSampleWindow.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.greekmoveauth.DeltaSampleWindow",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.greekmoveauth.EngineCarryState",
+   "version": 1,
+   "id": 3053,
+   "family": "greekmoveauth",
+   "idByEnvironment": {
+    "prod": 2524,
+    "es4": 2723
+   },
+   "schemaFile": "com.optionsedge.contracts.greekmoveauth.EngineCarryState/v1.avsc",
+   "schemaHash": "801e1908a93dd83c35cbccd31be5c1fd2d8d33254b918ac1d0003906b61406d0",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "greekmoveauth",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/greekmoveauth/EngineCarryState.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.greekmoveauth.EngineCarryState",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.greekmoveauth.GexFrameEvent",
+   "version": 1,
+   "id": 3054,
+   "family": "greekmoveauth",
+   "idByEnvironment": {
+    "prod": 2525,
+    "es4": 2724
+   },
+   "schemaFile": "com.optionsedge.contracts.greekmoveauth.GexFrameEvent/v1.avsc",
+   "schemaHash": "f0cff4c415f7dc56a5cdfc702623794a8755abf0b2c18e6d6e31b9394cc2ba29",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "greekmoveauth",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/greekmoveauth/GexFrameEvent.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.greekmoveauth.GexFrameEvent",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.greekmoveauth.LastVerdict",
+   "version": 1,
+   "id": 3055,
+   "family": "greekmoveauth",
+   "idByEnvironment": {
+    "prod": 2526,
+    "es4": 2725
+   },
+   "schemaFile": "com.optionsedge.contracts.greekmoveauth.LastVerdict/v1.avsc",
+   "schemaHash": "b9b0161b4c119b8b70c9419969410688c9cea4b250b130656a9d7e0891e721f0",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "greekmoveauth",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/greekmoveauth/LastVerdict.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.greekmoveauth.LastVerdict",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.greekmoveauth.MoveAuthenticityVerdict",
+   "version": 1,
+   "id": 3056,
+   "family": "greekmoveauth",
+   "idByEnvironment": {
+    "prod": 2527,
+    "es4": 2726
+   },
+   "schemaFile": "com.optionsedge.contracts.greekmoveauth.MoveAuthenticityVerdict/v1.avsc",
+   "schemaHash": "2886a20039fdbb19b1a25cacb22573a76adad22d755978eda52aef80bd020b03",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "greekmoveauth",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/greekmoveauth/MoveAuthenticityVerdict.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.greekmoveauth.MoveAuthenticityVerdict",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.greekmoveauth.SampleWindow",
+   "version": 1,
+   "id": 3057,
+   "family": "greekmoveauth",
+   "idByEnvironment": {
+    "prod": 2528,
+    "es4": 2727
+   },
+   "schemaFile": "com.optionsedge.contracts.greekmoveauth.SampleWindow/v1.avsc",
+   "schemaHash": "678454ce50199ec5759df84734871e5bdcd48bcd623e80b7dbc5e7c5dd755e18",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "greekmoveauth",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/greekmoveauth/SampleWindow.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.greekmoveauth.SampleWindow",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.greekmoveauth.SpotFrameEvent",
-   "environments": [
-    "dev",
-    "prod",
-    "es4"
-   ],
+   "version": 1,
+   "id": 3058,
    "family": "greekmoveauth",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
-  },
-  {
-   "kind": "ENV_LOCAL",
-   "subject": "com.optionsedge.contracts.hpsf.EsUnderlyingPrice",
-   "environments": [
-    "dev",
-    "es4"
-   ],
-   "family": "hpsf",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
-  },
-  {
-   "kind": "ENV_LOCAL",
-   "subject": "com.optionsedge.contracts.hpsf.UnderlyingPrice",
+   "idByEnvironment": {
+    "prod": 2529,
+    "es4": 2728
+   },
+   "schemaFile": "com.optionsedge.contracts.greekmoveauth.SpotFrameEvent/v1.avsc",
+   "schemaHash": "887982796c4c67ffaf74cd840bfb6fd1f80af6955926a08893ce6a86b61ba8ce",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "hpsf",
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/greekmoveauth/SpotFrameEvent.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.greekmoveauth.SpotFrameEvent",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
+  },
+  {
+   "kind": "MIRRORED",
    "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "subject": "com.optionsedge.contracts.hpsf.EsUnderlyingPrice",
+   "version": 1,
+   "id": 3060,
+   "family": "hpsf",
+   "idByEnvironment": {
+    "es4": 2752
+   },
+   "schemaFile": "com.optionsedge.contracts.hpsf.EsUnderlyingPrice/v1.avsc",
+   "schemaHash": "2a9dfc3558eae0724336f10b1d5a741b7b764514a9ee2dabd09b6f8ad0072411",
+   "environments": [
+    "dev",
+    "es4"
+   ],
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/hpsf/EsUnderlyingPrice.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.hpsf.EsUnderlyingPrice",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
+  },
+  {
+   "kind": "MIRRORED",
+   "baseline": true,
+   "subject": "com.optionsedge.contracts.hpsf.UnderlyingPrice",
+   "version": 1,
+   "id": 2056,
+   "family": "hpsf",
+   "idByEnvironment": {
+    "prod": 2045,
+    "es4": 2029
+   },
+   "schemaFile": "com.optionsedge.contracts.hpsf.UnderlyingPrice/v1.avsc",
+   "schemaHash": "7c62d409b8f3ae8c6e85f83fb0eeefc774537d866701fb2bc6c66337b10ee909",
+   "environments": [
+    "dev",
+    "prod",
+    "es4"
+   ],
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/hpsf/UnderlyingPrice.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.hpsf.UnderlyingPrice",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
    "kind": "MIRRORED",
@@ -3452,64 +4886,164 @@
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.multileg.MultilegObservation",
+   "version": 1,
+   "id": 3050,
+   "family": "multileg",
+   "idByEnvironment": {
+    "prod": 2556
+   },
+   "schemaFile": "com.optionsedge.contracts.multileg.MultilegObservation/v1.avsc",
+   "schemaHash": "60ab2f3163c89f338e25e0b04dd94399306977d8a26f2303f7f4f0ba2ccb3ee2",
    "environments": [
     "dev",
     "prod"
    ],
-   "family": "multileg",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/multileg/MultilegObservation.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.multileg.MultilegObservation",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.multileg.MultilegSrLevels",
+   "version": 1,
+   "id": 3052,
+   "family": "multileg",
+   "idByEnvironment": {
+    "prod": 2558
+   },
+   "schemaFile": "com.optionsedge.contracts.multileg.MultilegSrLevels/v1.avsc",
+   "schemaHash": "72d5235df5ee2829ba7aeb349cec969e5a4721a3b61cbe02c0199f3c57030eff",
    "environments": [
     "dev",
     "prod"
    ],
-   "family": "multileg",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/multileg/MultilegSrLevels.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.multileg.MultilegSrLevels",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.multileg.MultilegWindowStatus",
-   "environments": [
-    "dev",
-    "prod"
-   ],
+   "version": 1,
+   "id": 3051,
    "family": "multileg",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "idByEnvironment": {
+    "prod": 2557
+   },
+   "schemaFile": "com.optionsedge.contracts.multileg.MultilegWindowStatus/v1.avsc",
+   "schemaHash": "9758520d7ba6cbe193dec8f5351ebd3cd5eba19fad30ad865ca5f7fea4bf61ef",
+   "environments": [
+    "dev",
+    "prod"
+   ],
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/multileg/MultilegWindowStatus.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.multileg.MultilegWindowStatus",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.optionpressure.L1Contribution",
+   "version": 1,
+   "id": 2047,
+   "family": "optionpressure",
+   "idByEnvironment": {
+    "prod": 2055
+   },
+   "schemaFile": "com.optionsedge.contracts.optionpressure.L1Contribution/v1.avsc",
+   "schemaHash": "d1c8fc33f343aa3887acb785dc4698eb91cf2200d8d4eb357733c57f94f4656a",
    "environments": [
     "dev",
     "prod"
    ],
-   "family": "optionpressure",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/optionpressure/L1Contribution.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.optionpressure.L1Contribution",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.optionpressure.PressureFrame",
+   "version": 1,
+   "id": 2046,
+   "family": "optionpressure",
+   "idByEnvironment": {
+    "prod": 2054
+   },
+   "schemaFile": "com.optionsedge.contracts.optionpressure.PressureFrame/v1.avsc",
+   "schemaHash": "798d6252ad5e5ca9f8d6a741b953aed019c18aef3a2164a1fbe0ae643c52919a",
    "environments": [
     "dev",
     "prod"
    ],
-   "family": "optionpressure",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/optionpressure/PressureFrame.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.optionpressure.PressureFrame",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
    "kind": "MIRRORED",
@@ -3540,339 +5074,882 @@
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.spotvolregime.SpotVolRegimeLastFrameState",
+   "version": 1,
+   "id": 3049,
+   "family": "spotvolregime",
+   "idByEnvironment": {
+    "prod": 2555
+   },
+   "schemaFile": "com.optionsedge.contracts.spotvolregime.SpotVolRegimeLastFrameState/v1.avsc",
+   "schemaHash": "a79f7133a89f6c4de6b4308107513c420264f84a1393a29ab21ea3114b02609b",
    "environments": [
     "dev",
     "prod"
    ],
-   "family": "spotvolregime",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/spotvolregime/SpotVolRegimeLastFrameState.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.spotvolregime.SpotVolRegimeLastFrameState",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.spotvolregime.SpotVolRegimeSnapshot",
+   "version": 1,
+   "id": 3047,
+   "family": "spotvolregime",
+   "idByEnvironment": {
+    "prod": 2553
+   },
+   "schemaFile": "com.optionsedge.contracts.spotvolregime.SpotVolRegimeSnapshot/v1.avsc",
+   "schemaHash": "bb704c9a430799f157961f1f006cf7d71b3e0695800a4b1b45c9fa582a1eefe1",
    "environments": [
     "dev",
     "prod"
    ],
-   "family": "spotvolregime",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/spotvolregime/SpotVolRegimeSnapshot.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.spotvolregime.SpotVolRegimeSnapshot",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.spotvolregime.SpotVolRegimeWindowState",
+   "version": 1,
+   "id": 3048,
+   "family": "spotvolregime",
+   "idByEnvironment": {
+    "prod": 2554
+   },
+   "schemaFile": "com.optionsedge.contracts.spotvolregime.SpotVolRegimeWindowState/v1.avsc",
+   "schemaHash": "c70d4e3ac03852091991eee9cc50ed2245ca5fbc5583c53fe046a3c72bad6536",
    "environments": [
     "dev",
     "prod"
    ],
-   "family": "spotvolregime",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/spotvolregime/SpotVolRegimeWindowState.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.spotvolregime.SpotVolRegimeWindowState",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionBehaviorEvidence",
+   "version": 1,
+   "id": 3041,
+   "family": "strikeinvasion",
+   "idByEnvironment": {
+    "prod": 2547,
+    "es4": 2746
+   },
+   "schemaFile": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionBehaviorEvidence/v1.avsc",
+   "schemaHash": "3940facd5e5a2d609693702c3b2569691564e6c41ec83fc505a2d81ce62c611e",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "strikeinvasion",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/strikeinvasion/StrikeInvasionBehaviorEvidence.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.strikeinvasion.StrikeInvasionBehaviorEvidence",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionEventCandidateInvalidated",
+   "version": 1,
+   "id": 3029,
+   "family": "strikeinvasion",
+   "idByEnvironment": {
+    "prod": 2535,
+    "es4": 2734
+   },
+   "schemaFile": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionEventCandidateInvalidated/v1.avsc",
+   "schemaHash": "281a574dd53244d0dc94fc08a8ac8467f0f24423bb85ab6f3c62a07ab466e567",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "strikeinvasion",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/strikeinvasion/StrikeInvasionEventCandidateInvalidated.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.strikeinvasion.StrikeInvasionEventCandidateInvalidated",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionEventDefenseBroken",
+   "version": 1,
+   "id": 3035,
+   "family": "strikeinvasion",
+   "idByEnvironment": {
+    "prod": 2541,
+    "es4": 2740
+   },
+   "schemaFile": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionEventDefenseBroken/v1.avsc",
+   "schemaHash": "9d3e41fa90f7a9f3c8b62323c578db26813b0859f020aed01c3966e1e54e5a51",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "strikeinvasion",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/strikeinvasion/StrikeInvasionEventDefenseBroken.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.strikeinvasion.StrikeInvasionEventDefenseBroken",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionEventInvasion",
+   "version": 1,
+   "id": 3033,
+   "family": "strikeinvasion",
+   "idByEnvironment": {
+    "prod": 2539,
+    "es4": 2738
+   },
+   "schemaFile": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionEventInvasion/v1.avsc",
+   "schemaHash": "d0c40c9bcbd2902a67f7437cd64532c89e50df8e154265e88ce0b72d3459904a",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "strikeinvasion",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/strikeinvasion/StrikeInvasionEventInvasion.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.strikeinvasion.StrikeInvasionEventInvasion",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionEventNonFiniteSpotDropped",
+   "version": 1,
+   "id": 3025,
+   "family": "strikeinvasion",
+   "idByEnvironment": {
+    "prod": 2531,
+    "es4": 2730
+   },
+   "schemaFile": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionEventNonFiniteSpotDropped/v1.avsc",
+   "schemaHash": "84a5e7ac1a80385621a617164ea24d233dfaefb1a533c66988f245748f6db3e8",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "strikeinvasion",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/strikeinvasion/StrikeInvasionEventNonFiniteSpotDropped.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.strikeinvasion.StrikeInvasionEventNonFiniteSpotDropped",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionEventNonFiniteStrikeDropped",
+   "version": 1,
+   "id": 3027,
+   "family": "strikeinvasion",
+   "idByEnvironment": {
+    "prod": 2533,
+    "es4": 2732
+   },
+   "schemaFile": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionEventNonFiniteStrikeDropped/v1.avsc",
+   "schemaHash": "78c5893a3e4ae9aa3125bd796f7aedfa75f860ab94a662f5cb5e70a0f764fc6a",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "strikeinvasion",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/strikeinvasion/StrikeInvasionEventNonFiniteStrikeDropped.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.strikeinvasion.StrikeInvasionEventNonFiniteStrikeDropped",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionEventOutOfOrderSpotDropped",
+   "version": 1,
+   "id": 3026,
+   "family": "strikeinvasion",
+   "idByEnvironment": {
+    "prod": 2532,
+    "es4": 2731
+   },
+   "schemaFile": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionEventOutOfOrderSpotDropped/v1.avsc",
+   "schemaHash": "110eaee774419c20f5d101d84ef4a03909eeac29960b2948a8a313ad0fde45ed",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "strikeinvasion",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/strikeinvasion/StrikeInvasionEventOutOfOrderSpotDropped.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.strikeinvasion.StrikeInvasionEventOutOfOrderSpotDropped",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionEventSessionReset",
+   "version": 1,
+   "id": 3028,
+   "family": "strikeinvasion",
+   "idByEnvironment": {
+    "prod": 2534,
+    "es4": 2733
+   },
+   "schemaFile": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionEventSessionReset/v1.avsc",
+   "schemaHash": "d41e1673f928511300eaff73ca8e4751429f562376a6385c8c8fa7f5a423d380",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "strikeinvasion",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/strikeinvasion/StrikeInvasionEventSessionReset.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.strikeinvasion.StrikeInvasionEventSessionReset",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionEventStage1",
+   "version": 1,
+   "id": 3032,
+   "family": "strikeinvasion",
+   "idByEnvironment": {
+    "prod": 2538,
+    "es4": 2737
+   },
+   "schemaFile": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionEventStage1/v1.avsc",
+   "schemaHash": "1511aec5982dc2dcba56f7de55e7a35ed1f19119a9d392d1b3eb96fcda5c5b7e",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "strikeinvasion",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/strikeinvasion/StrikeInvasionEventStage1.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.strikeinvasion.StrikeInvasionEventStage1",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionEventStage1Retired",
+   "version": 1,
+   "id": 3030,
+   "family": "strikeinvasion",
+   "idByEnvironment": {
+    "prod": 2536,
+    "es4": 2735
+   },
+   "schemaFile": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionEventStage1Retired/v1.avsc",
+   "schemaHash": "c89ec32d7bb2d4e82f73c12f209553b1972f1868a6ba9f54b56ce3c0d692d502",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "strikeinvasion",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/strikeinvasion/StrikeInvasionEventStage1Retired.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.strikeinvasion.StrikeInvasionEventStage1Retired",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionEventStage2Timeout",
+   "version": 1,
+   "id": 3034,
+   "family": "strikeinvasion",
+   "idByEnvironment": {
+    "prod": 2540,
+    "es4": 2739
+   },
+   "schemaFile": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionEventStage2Timeout/v1.avsc",
+   "schemaHash": "00b81e17b69309f8e8eb07f084e9f81cb8f6f675e749b1902fed9db9e4a7607c",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "strikeinvasion",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/strikeinvasion/StrikeInvasionEventStage2Timeout.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.strikeinvasion.StrikeInvasionEventStage2Timeout",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionEventStage2Verdict",
+   "version": 1,
+   "id": 3036,
+   "family": "strikeinvasion",
+   "idByEnvironment": {
+    "prod": 2542,
+    "es4": 2741
+   },
+   "schemaFile": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionEventStage2Verdict/v1.avsc",
+   "schemaHash": "ad42d3c0f08fc3bcbd66913deb15cb2936aed816f6901fdc5fbb9bd31d25eb10",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "strikeinvasion",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/strikeinvasion/StrikeInvasionEventStage2Verdict.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.strikeinvasion.StrikeInvasionEventStage2Verdict",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionEventState",
+   "version": 1,
+   "id": 3031,
+   "family": "strikeinvasion",
+   "idByEnvironment": {
+    "prod": 2537,
+    "es4": 2736
+   },
+   "schemaFile": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionEventState/v1.avsc",
+   "schemaHash": "2345e19d0297be3f54cadad3621085d00f1b03109827beca613448655ebc0e22",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "strikeinvasion",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/strikeinvasion/StrikeInvasionEventState.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.strikeinvasion.StrikeInvasionEventState",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionFlowEvidence",
+   "version": 1,
+   "id": 3040,
+   "family": "strikeinvasion",
+   "idByEnvironment": {
+    "prod": 2546,
+    "es4": 2745
+   },
+   "schemaFile": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionFlowEvidence/v1.avsc",
+   "schemaHash": "b9c9c36412ebf42cfde7499d8457b1e58c245e0ea402c9accda066ddad256b7e",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "strikeinvasion",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/strikeinvasion/StrikeInvasionFlowEvidence.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.strikeinvasion.StrikeInvasionFlowEvidence",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionGexEvidence",
+   "version": 1,
+   "id": 3039,
+   "family": "strikeinvasion",
+   "idByEnvironment": {
+    "prod": 2545,
+    "es4": 2744
+   },
+   "schemaFile": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionGexEvidence/v1.avsc",
+   "schemaHash": "e3763fb5f2658a5b6419a631e054506ac4979af6d95ba6a9224796e34998c13c",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "strikeinvasion",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/strikeinvasion/StrikeInvasionGexEvidence.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.strikeinvasion.StrikeInvasionGexEvidence",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionPaceEvidence",
+   "version": 1,
+   "id": 3042,
+   "family": "strikeinvasion",
+   "idByEnvironment": {
+    "prod": 2548,
+    "es4": 2747
+   },
+   "schemaFile": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionPaceEvidence/v1.avsc",
+   "schemaHash": "3ff764cf636d4abd3645643ae394128d5477cb8dacdbea2ca0f2843bcd595e84",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "strikeinvasion",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/strikeinvasion/StrikeInvasionPaceEvidence.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.strikeinvasion.StrikeInvasionPaceEvidence",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionPaceFrame",
+   "version": 1,
+   "id": 3043,
+   "family": "strikeinvasion",
+   "idByEnvironment": {
+    "prod": 2549,
+    "es4": 2748
+   },
+   "schemaFile": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionPaceFrame/v1.avsc",
+   "schemaHash": "e133fc4764094f29564af8617506b5fab65c62794744a4c4d465916e36fd4159",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "strikeinvasion",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/strikeinvasion/StrikeInvasionPaceFrame.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.strikeinvasion.StrikeInvasionPaceFrame",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionSnapshot",
+   "version": 1,
+   "id": 3024,
+   "family": "strikeinvasion",
+   "idByEnvironment": {
+    "prod": 2530,
+    "es4": 2729
+   },
+   "schemaFile": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionSnapshot/v1.avsc",
+   "schemaHash": "362d65e56606e67993eb7c6df4eb22576b0702fa2397251b37e4e624563112b2",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "strikeinvasion",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/strikeinvasion/StrikeInvasionSnapshot.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.strikeinvasion.StrikeInvasionSnapshot",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionSpotEvidence",
+   "version": 1,
+   "id": 3037,
+   "family": "strikeinvasion",
+   "idByEnvironment": {
+    "prod": 2543,
+    "es4": 2742
+   },
+   "schemaFile": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionSpotEvidence/v1.avsc",
+   "schemaHash": "d289457836e37fd05db6288051315ea75d2f9820ace288faf162924a3401b1d9",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "strikeinvasion",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/strikeinvasion/StrikeInvasionSpotEvidence.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.strikeinvasion.StrikeInvasionSpotEvidence",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionSrEvidence",
+   "version": 1,
+   "id": 3038,
+   "family": "strikeinvasion",
+   "idByEnvironment": {
+    "prod": 2544,
+    "es4": 2743
+   },
+   "schemaFile": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionSrEvidence/v1.avsc",
+   "schemaHash": "96d727ca16a1015b43f113bc664bfba69675c8d6a3375f49496f951592eaf1a9",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "strikeinvasion",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/strikeinvasion/StrikeInvasionSrEvidence.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.strikeinvasion.StrikeInvasionSrEvidence",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionWallFrame",
+   "version": 1,
+   "id": 3044,
+   "family": "strikeinvasion",
+   "idByEnvironment": {
+    "prod": 2550,
+    "es4": 2749
+   },
+   "schemaFile": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionWallFrame/v1.avsc",
+   "schemaHash": "1862923c653870de3284a93af2a93166534fd0f2dc57451c92829a264892f9ec",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "strikeinvasion",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/strikeinvasion/StrikeInvasionWallFrame.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.strikeinvasion.StrikeInvasionWallFrame",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionWallMeta",
+   "version": 1,
+   "id": 3046,
+   "family": "strikeinvasion",
+   "idByEnvironment": {
+    "prod": 2552,
+    "es4": 2751
+   },
+   "schemaFile": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionWallMeta/v1.avsc",
+   "schemaHash": "47f61dd158bf4c1af11af4ae0d7698b7e2f6850188072a0076481fb10f5ad182",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "strikeinvasion",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/strikeinvasion/StrikeInvasionWallMeta.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.strikeinvasion.StrikeInvasionWallMeta",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionWallRow",
+   "version": 1,
+   "id": 3045,
+   "family": "strikeinvasion",
+   "idByEnvironment": {
+    "prod": 2551,
+    "es4": 2750
+   },
+   "schemaFile": "com.optionsedge.contracts.strikeinvasion.StrikeInvasionWallRow/v1.avsc",
+   "schemaHash": "f4ee9e3c697976d02ac0bc531679efaaa14d73622d6e9e36d9eca8d8a32f5362",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "strikeinvasion",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/strikeinvasion/StrikeInvasionWallRow.avsc"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.contracts.strikeinvasion.StrikeInvasionWallRow",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
    "kind": "MIRRORED",
@@ -4918,52 +6995,144 @@
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.processing.esspxalign.state.Basis",
+   "version": 1,
+   "id": 2059,
+   "family": "esspxalign",
+   "idByEnvironment": {
+    "prod": 2041
+   },
+   "schemaFile": "com.optionsedge.processing.esspxalign.state.Basis/v1.avsc",
+   "schemaHash": "f09a2284c2e22cfe786c14259be9ca8ec94d0ad77611498da64e997fabe20bfd",
    "environments": [
     "dev",
     "prod"
    ],
-   "family": "esspxalign",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "ARCHIVAL",
+    "capturedFrom": {
+     "env": "dev",
+     "id": 2059
+    },
+    "reason": "inventory baseline 2026-11-03: no .avsc in the contracts or processing repos hashes to this schema (code-defined or registry-only)"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.processing.esspxalign.state.Basis",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.processing.esspxalign.state.Book",
+   "version": 1,
+   "id": 2060,
+   "family": "esspxalign",
+   "idByEnvironment": {
+    "prod": 2042
+   },
+   "schemaFile": "com.optionsedge.processing.esspxalign.state.Book/v1.avsc",
+   "schemaHash": "d2b305a8b25fe7423f90d598af5ebfa7080992fb3551470a4b49e1ea12e972be",
    "environments": [
     "dev",
     "prod"
    ],
-   "family": "esspxalign",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "ARCHIVAL",
+    "capturedFrom": {
+     "env": "dev",
+     "id": 2060
+    },
+    "reason": "inventory baseline 2026-11-03: no .avsc in the contracts or processing repos hashes to this schema (code-defined or registry-only)"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.processing.esspxalign.state.Book",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.processing.esspxalign.state.Bridge",
+   "version": 1,
+   "id": 2061,
+   "family": "esspxalign",
+   "idByEnvironment": {
+    "prod": 2043
+   },
+   "schemaFile": "com.optionsedge.processing.esspxalign.state.Bridge/v1.avsc",
+   "schemaHash": "df510b01f0b681ad5b7c7bb9a2574ed7f6fe3222ba5cc02e6b79878fef427ce5",
    "environments": [
     "dev",
     "prod"
    ],
-   "family": "esspxalign",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "ARCHIVAL",
+    "capturedFrom": {
+     "env": "dev",
+     "id": 2061
+    },
+    "reason": "inventory baseline 2026-11-03: no .avsc in the contracts or processing repos hashes to this schema (code-defined or registry-only)"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.processing.esspxalign.state.Bridge",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "com.optionsedge.processing.esspxalign.state.Emitted",
+   "version": 1,
+   "id": 2062,
+   "family": "esspxalign",
+   "idByEnvironment": {
+    "prod": 2044
+   },
+   "schemaFile": "com.optionsedge.processing.esspxalign.state.Emitted/v1.avsc",
+   "schemaHash": "849355875e7305c78dd330fa3c52187fc081efda057c1dd9a1ce3e4af8ca6cdf",
    "environments": [
     "dev",
     "prod"
    ],
-   "family": "esspxalign",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "ARCHIVAL",
+    "capturedFrom": {
+     "env": "dev",
+     "id": 2062
+    },
+    "reason": "inventory baseline 2026-11-03: no .avsc in the contracts or processing repos hashes to this schema (code-defined or registry-only)"
+   },
+   "topics": [
+    {
+     "name": "record-name:com.optionsedge.processing.esspxalign.state.Emitted",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
    "kind": "MIRRORED",
@@ -5386,8 +7555,11 @@
    "baseline": true,
    "subject": "es.context-tape.direction.alert-value",
    "version": 1,
-   "id": 2008,
+   "id": 9000,
    "family": "es",
+   "idByEnvironment": {
+    "es4": 2008
+   },
    "schemaFile": "es.context-tape.direction.alert-value/v1.avsc",
    "schemaHash": "5f0e601cb978d280aabdb520c98bebfa48bf1b4e061ada557c69c2dfa3d1da96",
    "environments": [
@@ -5410,23 +7582,46 @@
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "es.context-tape.direction.checkpoint-value",
+   "version": 1,
+   "id": 9001,
+   "family": "es",
+   "idByEnvironment": {
+    "es4": 2009
+   },
+   "schemaFile": "es.context-tape.direction.checkpoint-value/v1.avsc",
+   "schemaHash": "d72e5df459f8ff750165e55a17d6f88106de136dfdad668221298ff210518277",
    "environments": [
     "es4"
    ],
-   "family": "es",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "shares id 2009 with app.options.ibkr.gex.IbkrPreOpenBaselineRevocation (debug/scratch alias or duplicate registration)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/cvd-related/DirectionCheckpoint.avsc"
+   },
+   "topics": [
+    {
+     "name": "es.context-tape.direction.checkpoint",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
    "kind": "MIRRORED",
    "baseline": true,
    "subject": "es.context-tape.direction.commissioning-value",
    "version": 1,
-   "id": 2010,
+   "id": 9002,
    "family": "es",
+   "idByEnvironment": {
+    "es4": 2010
+   },
    "schemaFile": "es.context-tape.direction.commissioning-value/v1.avsc",
    "schemaHash": "10fa5dc4e4ec829c45df078ccb06a67789caa1777179407acfbb173389367414",
    "environments": [
@@ -5453,8 +7648,11 @@
    "baseline": true,
    "subject": "es.context-tape.direction.current-value",
    "version": 1,
-   "id": 2011,
+   "id": 9003,
    "family": "es",
+   "idByEnvironment": {
+    "es4": 2011
+   },
    "schemaFile": "es.context-tape.direction.current-value/v1.avsc",
    "schemaHash": "e9615db50f2b432412d0b526c97f42662e7ab64399e690d1a7ee6cbf9378ebc8",
    "environments": [
@@ -5481,8 +7679,11 @@
    "baseline": true,
    "subject": "es.context-tape.direction.ledger-value",
    "version": 1,
-   "id": 2012,
+   "id": 9004,
    "family": "es",
+   "idByEnvironment": {
+    "es4": 2012
+   },
    "schemaFile": "es.context-tape.direction.ledger-value/v1.avsc",
    "schemaHash": "63d4725e00f8eedbb841490452acf777751f28fb915565140a914a064a1c554f",
    "environments": [
@@ -5509,8 +7710,11 @@
    "baseline": true,
    "subject": "es.context-tape.direction.push-value",
    "version": 1,
-   "id": 2013,
+   "id": 9005,
    "family": "es",
+   "idByEnvironment": {
+    "es4": 2013
+   },
    "schemaFile": "es.context-tape.direction.push-value/v1.avsc",
    "schemaHash": "cd185c20a1b84116b1c15ef989a484f4a89c7abb29b87c72e38870496a9d7b6c",
    "environments": [
@@ -5537,8 +7741,11 @@
    "baseline": true,
    "subject": "es.context-tape.direction.scorecard-value",
    "version": 1,
-   "id": 2014,
+   "id": 9006,
    "family": "es",
+   "idByEnvironment": {
+    "es4": 2014
+   },
    "schemaFile": "es.context-tape.direction.scorecard-value/v1.avsc",
    "schemaHash": "2998b30f8156927f9b14c8981d5fc56d43ed9c190ef3f0f2108572dc35a3db9b",
    "environments": [
@@ -5561,182 +7768,476 @@
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "es.futures.compression-expansion.current-value",
+   "version": 1,
+   "id": 2028,
+   "family": "es",
+   "idByEnvironment": {
+    "prod": 2050
+   },
+   "schemaFile": "es.futures.compression-expansion.current-value/v1.avsc",
+   "schemaHash": "ef9275ceb1ad30fa5032c989acd2fa3d10f68cbddbfc6e1dc1c3e0e871fca596",
    "environments": [
     "dev",
     "prod"
    ],
-   "family": "es",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/cvd-related/EscxCurrent.avsc"
+   },
+   "topics": [
+    {
+     "name": "es.futures.compression-expansion.current",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "es.futures.compression-expansion.events-value",
+   "version": 1,
+   "id": 2029,
+   "family": "es",
+   "idByEnvironment": {
+    "prod": 2051
+   },
+   "schemaFile": "es.futures.compression-expansion.events-value/v1.avsc",
+   "schemaHash": "22a8f49e0284f38c84c22fc714b4a40f1802a150f5c87eb2ab80d354c653b289",
    "environments": [
     "dev",
     "prod"
    ],
-   "family": "es",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/cvd-related/EscxEvent.avsc"
+   },
+   "topics": [
+    {
+     "name": "es.futures.compression-expansion.events",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "es.futures.cvd-value",
+   "version": 1,
+   "id": 2030,
+   "family": "es",
+   "idByEnvironment": {
+    "prod": 2027,
+    "es4": 2015
+   },
+   "schemaFile": "es.futures.cvd-value/v1.avsc",
+   "schemaHash": "240d852e15a4488ec21ca3df69128906b6da28b1a8150c11d1b24a77bca99e5c",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "es",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/cvd/CvdSnapshot.avsc"
+   },
+   "topics": [
+    {
+     "name": "es.futures.cvd",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "es.futures.cvd.bars-value",
+   "version": 1,
+   "id": 2031,
+   "family": "es",
+   "idByEnvironment": {
+    "prod": 2028,
+    "es4": 2016
+   },
+   "schemaFile": "es.futures.cvd.bars-value/v1.avsc",
+   "schemaHash": "f287469ab4fe75d29eabb5c6c03d97b2310824254c23c575ae2ea3f67477f210",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "es",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/cvd/CvdBarEnvelope.avsc"
+   },
+   "topics": [
+    {
+     "name": "es.futures.cvd.bars",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "es.futures.cvd.levels-value",
+   "version": 1,
+   "id": 2032,
+   "family": "es",
+   "idByEnvironment": {
+    "prod": 2029,
+    "es4": 2017
+   },
+   "schemaFile": "es.futures.cvd.levels-value/v1.avsc",
+   "schemaHash": "112f0a8a0964fffed91581f173a697e89f8273e0f94f2196fd99f5e0f7ae2da2",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "es",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/cvd/CvdLevelsSnapshot.avsc"
+   },
+   "topics": [
+    {
+     "name": "es.futures.cvd.levels",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "es.futures.footprint-value",
+   "version": 1,
+   "id": 2033,
+   "family": "es",
+   "idByEnvironment": {
+    "prod": 2030,
+    "es4": 2018
+   },
+   "schemaFile": "es.futures.footprint-value/v1.avsc",
+   "schemaHash": "a26e9095e6d176c6d162e91cc823fc9197ed11a48da88126397f54cbc0ba0b31",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "es",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/cvd/FootprintSnapshot.avsc"
+   },
+   "topics": [
+    {
+     "name": "es.futures.footprint",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "es.futures.footprint.bars-value",
+   "version": 1,
+   "id": 2034,
+   "family": "es",
+   "idByEnvironment": {
+    "prod": 2031,
+    "es4": 2019
+   },
+   "schemaFile": "es.futures.footprint.bars-value/v1.avsc",
+   "schemaHash": "450cb24452a44055c77ea18992901dd74b814bc7406dee8ea303ee601021c1d7",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "es",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/cvd/FootprintBarEnvelope.avsc"
+   },
+   "topics": [
+    {
+     "name": "es.futures.footprint.bars",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "es.futures.footprint.evidence-value",
+   "version": 1,
+   "id": 2035,
+   "family": "es",
+   "idByEnvironment": {
+    "prod": 2032,
+    "es4": 2020
+   },
+   "schemaFile": "es.futures.footprint.evidence-value/v1.avsc",
+   "schemaHash": "9726a569d99549695562cc9ff8874ec1514868f4672df1d129f892a5d10b90e8",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "es",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/cvd/FootprintEvidenceSnapshot.avsc"
+   },
+   "topics": [
+    {
+     "name": "es.futures.footprint.evidence",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "es.futures.footprint.outcomes-value",
+   "version": 1,
+   "id": 2036,
+   "family": "es",
+   "idByEnvironment": {
+    "prod": 2033,
+    "es4": 2021
+   },
+   "schemaFile": "es.futures.footprint.outcomes-value/v1.avsc",
+   "schemaHash": "7d2e0b538c41605ee9cd10fff5ae6b0db62b0b57d4962bf9c2b2da63e3c830fb",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "es",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/cvd/FootprintOutcome.avsc"
+   },
+   "topics": [
+    {
+     "name": "es.futures.footprint.outcomes",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "es.futures.footprint.strike-value",
+   "version": 1,
+   "id": 2037,
+   "family": "es",
+   "idByEnvironment": {
+    "prod": 2034,
+    "es4": 2022
+   },
+   "schemaFile": "es.futures.footprint.strike-value/v1.avsc",
+   "schemaHash": "e3f6ce307b41c432a55d1ad9cc17bd1b3d223fac1709a8be012ae681f6ba1428",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "es",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/cvd-related/FootprintStrikeEnvelope.avsc"
+   },
+   "topics": [
+    {
+     "name": "es.futures.footprint.strike",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "es.open-direction.forecast-value",
+   "version": 1,
+   "id": 2038,
+   "family": "es",
+   "idByEnvironment": {
+    "prod": 2035,
+    "es4": 2023
+   },
+   "schemaFile": "es.open-direction.forecast-value/v1.avsc",
+   "schemaHash": "69a826c4b88ec0d7124c23472789ed97f956004dbd499936d24f97070d9cc760",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "es",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/cvd-related/OpenDirectionForecastEnvelope.avsc"
+   },
+   "topics": [
+    {
+     "name": "es.open-direction.forecast",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "es.open-direction.outcome-value",
+   "version": 1,
+   "id": 2039,
+   "family": "es",
+   "idByEnvironment": {
+    "prod": 2036,
+    "es4": 2024
+   },
+   "schemaFile": "es.open-direction.outcome-value/v1.avsc",
+   "schemaHash": "f7a703d72a7e8ab04846ebf39b9afc838b9276ae2508fb7a75cfb2043cc799ab",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "es",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/cvd-related/OpenDirectionOutcomeEnvelope.avsc"
+   },
+   "topics": [
+    {
+     "name": "es.open-direction.outcome",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "es.open-direction.status-value",
+   "version": 1,
+   "id": 2040,
+   "family": "es",
+   "idByEnvironment": {
+    "prod": 2037,
+    "es4": 2025
+   },
+   "schemaFile": "es.open-direction.status-value/v1.avsc",
+   "schemaHash": "b61b59f9f75119d84ab3d4a69738c03c5f5bcd87531fb6086b1c03f8b2499436",
    "environments": [
     "dev",
     "prod",
     "es4"
    ],
-   "family": "es",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/cvd-related/OpenDirectionStatus.avsc"
+   },
+   "topics": [
+    {
+     "name": "es.open-direction.status",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "es.options.databento.raw-value",
+   "version": 1,
+   "id": 9007,
+   "family": "es",
+   "idByEnvironment": {
+    "es4": 2026
+   },
+   "schemaFile": "es.options.databento.raw-value/v1.avsc",
+   "schemaHash": "540a122bd33bea196982c9c9c44ff29275b86f4dab34fbbbf71dd4b4da46a79e",
    "environments": [
     "es4"
    ],
-   "family": "es",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "shares id 2026 with context-tape.direction.scorecard-value (debug/scratch alias or duplicate registration)"
+   "source": {
+    "kind": "ARCHIVAL",
+    "capturedFrom": {
+     "env": "es4",
+     "id": 2026
+    },
+    "reason": "inventory baseline 2026-11-03: no .avsc in the contracts or processing repos hashes to this schema (code-defined or registry-only)"
+   },
+   "topics": [
+    {
+     "name": "es.options.databento.raw",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
    "kind": "MIRRORED",
@@ -6051,40 +8552,100 @@
    "reason": "auto-assigned: at least one version has a registry-assigned id below 2000 (not a fixed id, so not mirror-safe by construction)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "options.es-cvd-spx-levels-value",
+   "version": 1,
+   "id": 2071,
+   "family": "options",
+   "idByEnvironment": {
+    "prod": 2038
+   },
+   "schemaFile": "options.es-cvd-spx-levels-value/v1.avsc",
+   "schemaHash": "64cc9291eb03388e532daf005049b36c52fdfba7d518f0259021de82c2f7f00c",
    "environments": [
     "dev",
     "prod"
    ],
-   "family": "options",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/cvd-related/AlignedCvdLevelsEnvelope.avsc"
+   },
+   "topics": [
+    {
+     "name": "options.es-cvd-spx-levels",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "options.es-gex-spx-aligned-value",
+   "version": 1,
+   "id": 2043,
+   "family": "options",
+   "idByEnvironment": {
+    "prod": 2039
+   },
+   "schemaFile": "options.es-gex-spx-aligned-value/v1.avsc",
+   "schemaHash": "51fe68f982998ffcb22149b04efdfc11f082289cd1833c50f78cb2d0e1f70843",
    "environments": [
     "dev",
     "prod"
    ],
-   "family": "options",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/cvd-related/AlignedGexBookExtended.avsc"
+   },
+   "topics": [
+    {
+     "name": "options.es-gex-spx-aligned",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
-   "kind": "ENV_LOCAL",
+   "kind": "MIRRORED",
+   "baseline": true,
    "subject": "options.es-strike-intel-spx-aligned-value",
+   "version": 1,
+   "id": 2044,
+   "family": "options",
+   "idByEnvironment": {
+    "prod": 2040
+   },
+   "schemaFile": "options.es-strike-intel-spx-aligned-value/v1.avsc",
+   "schemaHash": "f1e2352eee2e74d7b435a0a5ec2b5910d165ce730ce51470d1892e0161d575d5",
    "environments": [
     "dev",
     "prod"
    ],
-   "family": "options",
-   "baseline": true,
-   "registeredBy": "unknown (inventory baseline 2026-11-03)",
-   "reason": "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)"
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/cvd-related/AlignedStrikeIntelligence.avsc"
+   },
+   "topics": [
+    {
+     "name": "options.es-strike-intel-spx-aligned",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
   {
    "kind": "ENV_LOCAL",
@@ -6270,5 +8831,263 @@
   "es4": [
    "es.options.hpsf.dlq"
   ]
- }
+ },
+ "activeMirrors": [
+  {
+   "job": "Jenkinsfile.es-auction-mirror",
+   "from": "es4",
+   "to": "prod",
+   "transport": "bytes",
+   "topics": [
+    "es.futures.auction"
+   ],
+   "subjects": [],
+   "unframed": true
+  },
+  {
+   "job": "Jenkinsfile.es-cvd-mirror",
+   "from": "es4",
+   "to": "dev",
+   "transport": "reencode",
+   "topics": [
+    "es.futures.cvd",
+    "es.futures.cvd.bars",
+    "es.futures.cvd.levels",
+    "es.futures.footprint",
+    "es.futures.footprint.bars",
+    "es.futures.footprint.evidence",
+    "es.futures.footprint.outcomes",
+    "es.futures.footprint.strike"
+   ],
+   "subjects": [
+    "es.futures.cvd-value",
+    "es.futures.cvd.bars-value",
+    "es.futures.cvd.levels-value",
+    "es.futures.footprint-value",
+    "es.futures.footprint.bars-value",
+    "es.futures.footprint.evidence-value",
+    "es.futures.footprint.outcomes-value",
+    "es.futures.footprint.strike-value"
+   ]
+  },
+  {
+   "job": "Jenkinsfile.es-cvd-mirror",
+   "from": "es4",
+   "to": "prod",
+   "transport": "reencode",
+   "topics": [
+    "es.futures.cvd",
+    "es.futures.cvd.bars",
+    "es.futures.cvd.levels",
+    "es.futures.footprint",
+    "es.futures.footprint.bars",
+    "es.futures.footprint.evidence",
+    "es.futures.footprint.outcomes",
+    "es.futures.footprint.strike"
+   ],
+   "subjects": [
+    "es.futures.cvd-value",
+    "es.futures.cvd.bars-value",
+    "es.futures.cvd.levels-value",
+    "es.futures.footprint-value",
+    "es.futures.footprint.bars-value",
+    "es.futures.footprint.evidence-value",
+    "es.futures.footprint.outcomes-value",
+    "es.futures.footprint.strike-value"
+   ]
+  },
+  {
+   "job": "Jenkinsfile.es-futures-flow-mirror",
+   "from": "es4",
+   "to": "dev",
+   "transport": "bytes",
+   "topics": [
+    "es.futures.aggressor-flow"
+   ],
+   "subjects": [
+    "com.optionsedge.contracts.esflow.EsAggressorFlowSnapshot"
+   ]
+  },
+  {
+   "job": "Jenkinsfile.es-futures-flow-mirror",
+   "from": "es4",
+   "to": "prod",
+   "transport": "bytes",
+   "topics": [
+    "es.futures.aggressor-flow"
+   ],
+   "subjects": [
+    "com.optionsedge.contracts.esflow.EsAggressorFlowSnapshot"
+   ]
+  },
+  {
+   "job": "Jenkinsfile.es-indicator-mirror",
+   "from": "es4",
+   "to": "dev",
+   "transport": "bytes",
+   "topics": [
+    "es.options.indicators.bars",
+    "es.options.indicators.signals.current",
+    "es.options.indicators.signals.events",
+    "es.options.indicators.snapshot.current",
+    "es.options.indicators.studies.bars",
+    "es.options.indicators.studies.current"
+   ],
+   "subjects": [
+    "com.optionsedge.contracts.indicators.avro.BackfillManifest",
+    "com.optionsedge.contracts.indicators.avro.IndicatorBar",
+    "com.optionsedge.contracts.indicators.avro.IndicatorSignals",
+    "com.optionsedge.contracts.indicators.avro.IndicatorSnapshot",
+    "com.optionsedge.contracts.indicators.avro.IndicatorStateImage",
+    "com.optionsedge.contracts.indicators.avro.SignalEvent",
+    "com.optionsedge.contracts.indicators.avro.SpotTick",
+    "com.optionsedge.contracts.indicators.avro.StudiesCurrent",
+    "com.optionsedge.contracts.indicators.avro.StudyBar",
+    "com.optionsedge.contracts.indicators.avro.StudyEngineImage"
+   ]
+  },
+  {
+   "job": "Jenkinsfile.es-indicator-mirror",
+   "from": "es4",
+   "to": "prod",
+   "transport": "bytes",
+   "topics": [
+    "es.options.indicators.bars",
+    "es.options.indicators.signals.current",
+    "es.options.indicators.signals.events",
+    "es.options.indicators.snapshot.current",
+    "es.options.indicators.studies.bars",
+    "es.options.indicators.studies.current"
+   ],
+   "subjects": [
+    "com.optionsedge.contracts.indicators.avro.BackfillManifest",
+    "com.optionsedge.contracts.indicators.avro.IndicatorBar",
+    "com.optionsedge.contracts.indicators.avro.IndicatorSignals",
+    "com.optionsedge.contracts.indicators.avro.IndicatorSnapshot",
+    "com.optionsedge.contracts.indicators.avro.IndicatorStateImage",
+    "com.optionsedge.contracts.indicators.avro.SignalEvent",
+    "com.optionsedge.contracts.indicators.avro.SpotTick",
+    "com.optionsedge.contracts.indicators.avro.StudiesCurrent",
+    "com.optionsedge.contracts.indicators.avro.StudyBar",
+    "com.optionsedge.contracts.indicators.avro.StudyEngineImage"
+   ]
+  },
+  {
+   "job": "Jenkinsfile.es-price-basisref-mirror",
+   "from": "dev",
+   "to": "es4",
+   "transport": "reencode",
+   "topics": [
+    "es.underlying.es.price.basis-reference",
+    "underlying.es.price"
+   ],
+   "subjects": [
+    "com.optionsedge.contracts.hpsf.EsUnderlyingPrice"
+   ]
+  },
+  {
+   "job": "Jenkinsfile.es-strike-intel-mirror",
+   "from": "es4",
+   "to": "dev",
+   "transport": "bytes",
+   "topics": [
+    "es.strike-intelligence-by-strike"
+   ],
+   "subjects": [],
+   "unframed": true
+  },
+  {
+   "job": "Jenkinsfile.es-strike-intel-mirror",
+   "from": "es4",
+   "to": "prod",
+   "transport": "bytes",
+   "topics": [
+    "es.strike-intelligence-by-strike"
+   ],
+   "subjects": [],
+   "unframed": true
+  },
+  {
+   "job": "Jenkinsfile.es-tape-zones-mirror",
+   "from": "es4",
+   "to": "dev",
+   "transport": "bytes",
+   "topics": [
+    "es.tape-zones.board"
+   ],
+   "subjects": [],
+   "unframed": true
+  },
+  {
+   "job": "Jenkinsfile.es-tape-zones-mirror",
+   "from": "es4",
+   "to": "prod",
+   "transport": "bytes",
+   "topics": [
+    "es.tape-zones.board"
+   ],
+   "subjects": [],
+   "unframed": true
+  },
+  {
+   "job": "Jenkinsfile.es-trades-bridge",
+   "from": "es4",
+   "to": "prod",
+   "transport": "bytes",
+   "topics": [
+    "es.underlying.es.trades"
+   ],
+   "subjects": [],
+   "unframed": true
+  },
+  {
+   "job": "Jenkinsfile.opra-definition-enumeration-mirror",
+   "from": "dev",
+   "to": "es4",
+   "transport": "bytes",
+   "topics": [
+    "options.databento.opra.definition.enumeration"
+   ],
+   "subjects": [],
+   "unframed": true
+  },
+  {
+   "job": "Jenkinsfile.opra-definition-enumeration-mirror",
+   "from": "prod",
+   "to": "es4",
+   "transport": "bytes",
+   "topics": [
+    "options.databento.opra.definition.enumeration"
+   ],
+   "subjects": [],
+   "unframed": true
+  },
+  {
+   "job": "Jenkinsfile.spx-price-reencoder",
+   "from": "prod",
+   "to": "es4",
+   "transport": "reencode",
+   "topics": [
+    "es.underlying.spx.price",
+    "underlying.spx.price"
+   ],
+   "subjects": [
+    "com.optionsedge.contracts.hpsf.UnderlyingPrice"
+   ],
+   "ungovernedPaths": [
+    "dev->mac74"
+   ]
+  },
+  {
+   "job": "mm2.properties",
+   "from": "prod",
+   "to": "es4",
+   "transport": "bytes",
+   "topics": [
+    "underlying.vix.price"
+   ],
+   "subjects": [],
+   "unframed": true
+  }
+ ]
 }

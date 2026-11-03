@@ -31,6 +31,11 @@
 //
 // The job runs on the 'local-mac' agent (the dev Mac, which IS the target for dev). It generates
 // the config + installs a KeepAlive launchd unit; NOTHING is hand-edited.
+// MIRROR-TRANSPORT: reencode
+// MIRROR-TOPICS: @choice(TOPIC)
+// MIRROR-SUBJECTS: es.futures.cvd.bars-value,es.futures.cvd-value,es.futures.cvd.levels-value,es.futures.footprint.bars-value,es.futures.footprint.outcomes-value,es.futures.footprint-value,es.futures.footprint.strike-value,es.futures.footprint.evidence-value
+// MIRROR-LEGACY-INSTALL: retired
+// (schema-governance R3f, read by scripts/ci/schema-mirrors-generate.py. All 15 running units use the canonical registry-aware jar; the legacy byte-copy install is refused by the retired-install stage.)
 pipeline {
   agent { label 'local-mac' }
   parameters {
@@ -90,6 +95,17 @@ pipeline {
           }
           env.PERMITTED_SHA_GUARD = 'PASSED'
         }
+      }
+    }
+
+    // schema-governance R3f: the legacy `install` below is a MirrorMaker-1 BYTE copy. A framed value names its schema by the SOURCE registry's
+    // id, and the CVD/footprint subjects hold different ids per registry (es.futures.cvd-value: dev 2030, prod 2027, es4 2015), so a byte
+    // copy decodes under another schema or none. Every running unit is the canonical registry-aware mirror (roll-forward). The install
+    // stages are kept only so the shape tests keep covering the topic contract; they can no longer be reached.
+    stage('Legacy byte-copy install is retired (schema-governance R3f)') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.ACTION == 'install') } }
+      steps {
+        error('ACTION=install is retired: it byte-copies framed Avro between registries whose ids differ. Use ACTION=roll-forward (canonical, registry-aware) on an existing unit. See docs/schema-governance R3f.')
       }
     }
 

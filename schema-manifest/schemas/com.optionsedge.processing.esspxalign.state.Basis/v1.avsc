@@ -1,0 +1,1 @@
+{"type":"record","name":"Basis","namespace":"com.optionsedge.processing.esspxalign.state","fields":[{"name":"basisCents","type":"long"},{"name":"state","type":"string"},{"name":"measuredAtMs","type":"long"},{"name":"basisEventTimeMs","type":"long"}]}

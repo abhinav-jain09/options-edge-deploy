@@ -34,6 +34,11 @@
 //   gap-free bridge needs a small custom consumer that commits only after producer.flush();
 //   that is deliberately NOT done here (see the report on this change) because it would leave
 //   the launchd/JVM-CLI envelope that is the only thing proven to work on this host.
+// MIRROR-TRANSPORT: bytes
+// MIRROR-TOPICS: es.underlying.es.trades
+// MIRROR-SUBJECTS: none
+// MIRROR-PATHS: es4->prod
+// (topics are the SOURCE-cluster names; the renamed prod topic is underlying.es.trades. schema-governance R3f, read by scripts/ci/schema-mirrors-generate.py. JSON, measured on es4 2026-11-03.)
 pipeline {
   agent { label 'local-mac' }
   parameters {

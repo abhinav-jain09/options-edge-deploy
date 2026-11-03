@@ -6,9 +6,11 @@ dev, prod and es4 and (re)writes the BASELINE part of schema-manifest/manifest.j
       --schema-text-dir DIR   (DIR/<env>/<subject>/v<N>.avsc, written by the same run that produced the inventories)
 
 Classification (stated so a reviewer can disagree with it):
-  MIRRORED   EVERY version's id >= 2000 AND, for every version number present in more than one registry, id and schemaHash agree.
-  ENV_LOCAL  everything else, each with the reason it is local: ids differ between registries ("id-divergent"), schema content differs
-             per environment ("content-divergent"), or every id is a low auto-assigned one ("auto-assigned").
+  MIRRORED   EVERY version's id >= 2000 AND, for every version number present in more than one registry, schemaHash agrees. When the id
+             differs between registries the manifest id is the first registry's (dev, prod, es4) and the others are `idByEnvironment`
+             (R3f); that is safe only while no byte-copying mirror carries the subject, which the validator checks (activeMirrors).
+  ENV_LOCAL  everything else, each with the reason it is local: schema content differs per environment ("content-divergent"), or an id
+             is a low auto-assigned one ("auto-assigned").
 Baseline MIRRORED entries are `retained` (participants are the R5/R6 backlog) and take their source from the matching contracts or
 processing .avsc when one exists (FILE) and otherwise ARCHIVAL (captured from the registry). A subject whose id is shared with another
 subject is ENV_LOCAL ("shares id") so that no two entries share a manifest id (R3a).
@@ -53,8 +55,7 @@ for s in subjects:
     id_div = any(len({per[s][e][v]["id"] for e in ENVS if v in per[s][e]}) > 1 for v in vers)
     if content_div: plan[s] = ("ENV_LOCAL", "content-divergent: the same version number holds a different schema in different registries")
     elif any(i < 2000 for i in ids): plan[s] = ("ENV_LOCAL", "auto-assigned: at least one version has a registry-assigned id below 2000 (not a fixed id, so not mirror-safe by construction)")
-    elif id_div: plan[s] = ("ENV_LOCAL", "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)")
-    else: plan[s] = ("MIRRORED", "")
+    else: plan[s] = ("MIRRORED", "")  # id-divergent subjects too (R3f): the dev id is the manifest id, the others are idByEnvironment
 # two VERSIONS of one subject may not share an id either (R3a is per (subject, version))
 for s in subjects:
     if plan.get(s, ("",))[0] != "MIRRORED": continue
@@ -63,13 +64,26 @@ for s in subjects:
         for v, r in per[s][e].items():
             if seen_ids.setdefault(r["id"], v) != v:
                 plan[s] = ("ENV_LOCAL", "two versions of this subject share id %d (R3a)" % r["id"])
-# a manifest id may belong to ONE entry (R3a): later holders become ENV_LOCAL aliases
+# a manifest id may belong to ONE entry (R3a). Subjects present in MORE registries claim their id first; a later holder that lives in a
+# single registry keeps its real id as `idByEnvironment` and takes an unused manifest id from the ALIAS block (the manifest id is then only a
+# label), and a later holder in several registries becomes ENV_LOCAL.
+ALIAS_START = 9000
+canon = {}
+envs_of = {x: {e for e in ENVS if per[x][e]} for x in subjects}
 owner = {e["id"]: e["subject"] for e in kept if e.get("kind") == "MIRRORED"}
-for s in subjects:
+envs_of.update({e["subject"]: set(e["environments"]) for e in kept})
+used_alias = set()
+for s in sorted(subjects, key=lambda x: (-sum(1 for e in ENVS if per[x][e]), x)):
     if plan.get(s, ("",))[0] != "MIRRORED": continue
+    single = sum(1 for e in ENVS if per[s][e]) == 1
     for v in sorted({v for e in ENVS for v in per[s][e]}):
         i = next(per[s][e][v]["id"] for e in ENVS if v in per[s][e])
         if owner.get(i, s) != s:
+            if single and not (envs_of[owner[i]] & envs_of[s]):  # same registry = the same schema registered twice (an alias), not a collision
+                j = ALIAS_START
+                while j in owner or j in used_alias: j += 1
+                used_alias.add(j); owner[j] = s; canon[(s, v)] = j
+                continue
             plan[s] = ("ENV_LOCAL", "shares id %d with %s (debug/scratch alias or duplicate registration)" % (i, owner[i])); break
         owner[i] = s
 
@@ -115,9 +129,12 @@ for s in subjects:
         else:
             source = {"kind": "ARCHIVAL", "capturedFrom": {"env": have[0], "id": r["id"]},
                       "reason": "inventory baseline 2026-11-03: no .avsc in the contracts or processing repos hashes to this schema (code-defined or registry-only)"}
-        fam = family(s); fam_ids[fam].add(r["id"])
+        cid = canon.get((s, v), r["id"])
+        fam = family(s); fam_ids[fam].add(cid)
         t = topic_of(s)
-        entries.append({"kind": "MIRRORED", "baseline": True, "subject": s, "version": v, "id": r["id"], "family": fam,
+        override = {e: per[s][e][v]["id"] for e in have if per[s][e][v]["id"] != cid}
+        entries.append({"kind": "MIRRORED", "baseline": True, "subject": s, "version": v, "id": cid, "family": fam,
+                        **({"idByEnvironment": override} if override else {}),
                         "schemaFile": rel, "schemaHash": r["schemaHash"], "environments": have, "source": source,
                         "topics": [{"name": t if t else "record-name:" + s, "kind": "dlq" if t and "dlq" in t else "data"}],
                         "producers": [], "consumers": [], "retained": True,

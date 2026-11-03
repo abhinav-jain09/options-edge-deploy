@@ -54,6 +54,13 @@ PY
 H2=$(sync DEPLOY_DRY_RUN=true | sed -n 's/^PLAN_SHA256=//p'); cp "$T/v2.bak" "$T/repo/schema-manifest/schemas/early-auction.verdicts.shadow-value/v2.avsc"
 if [ -z "$H2" ]; then echo "ok     a snapshot edit that breaks its manifest hash is refused (validate fails)"; elif [ "$H2" != "$HASH" ]; then echo "ok     snapshot bytes change the plan hash"; else echo "NOT-OK plan hash ignores snapshot bytes"; fail=1; fi
 
+# whole-environment mode (R3f): plans every MIRRORED entry listed for the environment, takes no image, and a production write still needs the reviewed hash
+expect_pass  "SERVICE=@all plans the whole environment" SERVICE=@all DEPLOY_DRY_RUN=true
+expect_fail  "SERVICE=@all with an image ref is refused" "takes no SCHEMA_IMAGE_REF" SERVICE=@all DEPLOY_DRY_RUN=true SCHEMA_IMAGE_REF=127.0.0.1:1/x@sha256:00
+expect_fail  "SERVICE=@all prod write without PLAN_SHA256 is refused" "PLAN_SHA256\|git checkout\|uncommitted" SERVICE=@all DEPLOY_DRY_RUN=false
+n_all=$(sync SERVICE=@all DEPLOY_DRY_RUN=true | grep -c '^subject=') ; n_one=$(sync DEPLOY_DRY_RUN=true | grep -c '^subject=')
+[ "$n_all" -gt "$n_one" ] && echo "ok     @all plans more rows ($n_all) than one service ($n_one)" || { echo "NOT-OK @all plan not larger ($n_all vs $n_one)"; fail=1; }
+
 run_mock 500 404
 expect_fail  "unreadable id lookup (500) is not 'free' (R15)" "cannot read /schemas/ids" DEPLOY_DRY_RUN=true
 run_mock 404 500
