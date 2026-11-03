@@ -1,0 +1,29 @@
+@Library('oe') _
+
+// Scheduled schema drift check (docs/schema-governance R14, R14b). READ-ONLY: it compares each Schema Registry (dev, prod, es4) with
+// schema-manifest/manifest.json and fails the build on MISSING / DIFFERENT / EXTRA_VERSION / UNMANIFESTED, or when a registry is unreachable.
+// A red build is the alert (the cluster's admission policy denies native CronJobs, and no Kafka/registry exporter is scraped, so a Jenkins
+// cron job is the trigger that can run). It writes nothing to any registry and changes no workload.
+//
+// WHEN: 03:30 America/New_York daily (outside market hours; scripts/ci/schema-drift.sh also skips 09:00-16:15 ET weekdays).
+pipeline {
+  agent { label 'hpsf-replay-mac' }
+  parameters {
+    string(name: 'ENVS', defaultValue: 'dev prod es4', description: 'Space-separated environments to check (dev, prod, es4).')
+  }
+  triggers {
+    cron('''TZ=America/New_York
+30 3 * * *''')
+  }
+  options {
+    disableConcurrentBuilds()
+    timeout(time: 15, unit: 'MINUTES')
+  }
+  stages {
+    stage('Drift') {
+      steps {
+        sh 'bash scripts/ci/schema-drift.sh ${ENVS}'
+      }
+    }
+  }
+}
