@@ -83,6 +83,10 @@ spec:
               value: "true"
             - name: MARKET_STRUCTURE_SWING_PIVOTS_ENABLED
               value: "true"
+            - name: MARKET_STRUCTURE_BREAK_EVENTS_ENABLED
+              value: "true"
+            - name: MARKET_STRUCTURE_BREAK_COMPLETENESS_ENABLED
+              value: "true"
             - name: MARKET_STRUCTURE_TRANSACTIONAL_ID
               value: market-structure-service-dev
             - name: MARKET_STRUCTURE_HEALTH_PORT

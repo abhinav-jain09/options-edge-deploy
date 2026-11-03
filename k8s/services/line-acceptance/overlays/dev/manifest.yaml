@@ -56,6 +56,8 @@ spec:
               value: "true"
             - name: GATE_PHASEF_EVIDENCE
               value: "false"
+            - name: GATE_HOST_COMPLETENESS
+              value: BAR_MARKER
           envFrom:
             - configMapRef:
                 name: options-edge-config
