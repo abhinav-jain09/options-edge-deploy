@@ -241,6 +241,9 @@ create_topic() {
   if [[ -n "$max_message_bytes" ]]; then
     extra_configs+=(--config "max.message.bytes=$max_message_bytes")
   fi
+  if topic_is_indicator_display "$topic"; then
+    extra_configs+=(--config "segment.ms=600000" --config "min.cleanable.dirty.ratio=0.01")
+  fi
   if topic_is_recovery_checkpoint "$topic"; then
     extra_configs+=(--config "segment.bytes=16777216" --config "max.compaction.lag.ms=300000")
   fi
@@ -266,6 +269,11 @@ create_topic() {
 # The transactional recovery-checkpoint topics: a compacted log of large records that is rewritten every fold, which needs the small-segment
 # compaction cadence (16 MiB segments, 5 min max compaction lag) or the active 1 GiB segment is never cleaned. market-structure-service's
 # since its first deploy; wave-cycle-service's (ELLIOTT-FIB-CYCLE-TOOLS E-R11.3) takes "the figure the structure service uses" and so the same cadence.
+topic_is_indicator_display() {
+  case "$1" in options.indicators.bars.current|es.options.indicators.bars.current) return 0 ;; esac
+  return 1
+}
+
 topic_is_recovery_checkpoint() {
   case "$1" in
     options.spx.market-structure.recovery|options.spx.wave-cycle.recovery|options.spx.break-classification.checkpoint|options.spx.line-acceptance.checkpoint) return 0 ;;
@@ -381,7 +389,8 @@ alter_topic_config() {
         dr="$(topic_delete_retention_ms "$topic")"; [[ -n "$dr" ]] && echo ",delete.retention.ms=$dr")$( \
         rb="$(topic_retention_bytes "$topic")"; [[ -n "$rb" ]] && echo ",retention.bytes=$rb")$( \
         mb="$(topic_max_message_bytes "$topic")"; [[ -n "$mb" ]] && echo ",max.message.bytes=$mb")$( \
-        topic_is_recovery_checkpoint "$topic" && echo ",segment.bytes=16777216,max.compaction.lag.ms=300000")"; then
+        topic_is_recovery_checkpoint "$topic" && echo ",segment.bytes=16777216,max.compaction.lag.ms=300000")$( \
+        topic_is_indicator_display "$topic" && echo ",segment.ms=600000,min.cleanable.dirty.ratio=0.01")"; then
       return 0
     fi
     sleep 1

@@ -81,6 +81,33 @@ class DisplayTopicBarrierTest(unittest.TestCase):
     def test_dry_run_does_not_create_or_alter(self):
         result,state=self.run_ensure(dry=True);self.assertEqual(result.returncode,0,result.stdout)
         self.assertNotIn(NATIVE,state['topics']);self.assertEqual(state['calls'],[])
+    def test_fleet_create_and_reconcile_keep_the_same_native_shape(self):
+        for topic in [NATIVE,'es.'+NATIVE]:
+            with self.subTest(topic=topic), tempfile.TemporaryDirectory(prefix='display-fleet-test-') as folder:
+                root=Path(folder);state=root/'state.json';state.write_text(json.dumps({'topics':{},'calls':[]}))
+                for name in ['kafka-topics','kafka-configs']:
+                    stub=root/name;stub.write_text(STUB);stub.chmod(0o700)
+                script=root/'run.sh'
+                script.write_text('set -euo pipefail\nsource "$TOPIC_DECLARATIONS"\nsource "$TOPIC_LIBRARY"\n'
+                    'topic_shape_resolve_declarations\ncreate_topic "$DISPLAY_TOPIC" 1\nalter_topic_config "$DISPLAY_TOPIC" "$(topic_cleanup_policy "$DISPLAY_TOPIC")"\n')
+                env={**os.environ,'PATH':str(root)+os.pathsep+os.environ['PATH'],'OE_DISPLAY_TEST_STATE':str(state),
+                     'TOPIC_DECLARATIONS':str(HERE/'topics.env'),'TOPIC_LIBRARY':str(HERE/'topic-shape.lib.sh'),
+                     'DISPLAY_TOPIC':topic,'KAFKA_BOOTSTRAP_SERVERS':'mock.invalid:9092','REPLICATION_FACTOR':'1',
+                     'MIN_ISR':'1','RETENTION_MS':'604800000','CLEANUP_POLICY':'delete','KAFKA_TOPIC_CONFIG_RETRY_ATTEMPTS':'1','ENVIRONMENT':'dev','TOPIC_SET':'es4' if topic.startswith('es.') else ''}
+                result=subprocess.run(['bash',str(script)],env=env,text=True,capture_output=True,timeout=15)
+                self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+                actual=json.loads(state.read_text());self.assertEqual(list(actual['topics']),[topic])
+                cfg=actual['topics'][topic]['cfg']
+                self.assertEqual(cfg['segment.ms'],'600000');self.assertEqual(cfg['min.cleanable.dirty.ratio'],'0.01')
+                self.assertEqual(cfg['cleanup.policy'],'compact,delete');self.assertEqual(cfg['retention.ms'],'604800000')
+                # Reconcile a wrong existing config through the SAME fleet function; no recreate is involved.
+                actual['topics'][topic]['cfg']['segment.ms']='999';actual['topics'][topic]['cfg']['min.cleanable.dirty.ratio']='.5'
+                state.write_text(json.dumps(actual));script.write_text('set -euo pipefail\nsource "$TOPIC_DECLARATIONS"\nsource "$TOPIC_LIBRARY"\ntopic_shape_resolve_declarations\nalter_topic_config "$DISPLAY_TOPIC" "$(topic_cleanup_policy "$DISPLAY_TOPIC")"\n')
+                result=subprocess.run(['bash',str(script)],env=env,text=True,capture_output=True,timeout=15)
+                self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+                actual=json.loads(state.read_text());self.assertEqual(actual['topics'][topic]['cfg']['segment.ms'],'600000')
+                self.assertEqual(actual['topics'][topic]['cfg']['min.cleanable.dirty.ratio'],'0.01')
+                self.assertEqual(sum(c[0]=='create' for c in actual['calls']),1)
     def test_negative_control_detects_an_ensure_script_missing_the_new_contract(self):
         result,state=self.run_ensure(remove_contract=True)
         with self.assertRaisesRegex(AssertionError,'actually provisioned'):self.assert_created(result,state)
