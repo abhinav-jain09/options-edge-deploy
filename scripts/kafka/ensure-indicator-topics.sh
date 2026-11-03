@@ -37,6 +37,7 @@ kc() { "${KAFKA_CONFIGS_CMD:-kafka-configs}" --bootstrap-server "$KAFKA_BOOTSTRA
 CONTRACT="
 options.indicators.snapshot.current|1|compact,delete|604800000
 options.indicators.bars|8|delete|3888000000
+options.indicators.bars.current|1|compact,delete|604800000
 options.indicators.repartition|4|delete|
 options.indicators.bootstrap.control|1|compact,delete|-1
 options.indicators.signals.current|1|compact,delete|604800000
@@ -186,6 +187,13 @@ while IFS='|' read -r base parts policy retention; do
   if [ -n "$retention" ] && [ "$cur_ret" != "$retention" ]; then
     [ -n "$add" ] && add="$add,"
     add="${add}retention.ms=$retention"
+  fi
+
+  if [ "$base" = "options.indicators.bars.current" ]; then
+    segment=$(printf '%s' "$CFG" | tr ' ' '\n' | sed -n 's/^segment\.ms=\(.*\)$/\1/p' | head -1)
+    ratio=$(printf '%s' "$CFG" | tr ' ' '\n' | sed -n 's/^min\.cleanable\.dirty\.ratio=\(.*\)$/\1/p' | head -1)
+    if [ "$segment" != "600000" ]; then add="${add:+$add,}segment.ms=600000"; fi
+    if [ "$ratio" != "0.01" ]; then add="${add:+$add,}min.cleanable.dirty.ratio=0.01"; fi
   fi
 
   if [ -z "$add" ]; then
