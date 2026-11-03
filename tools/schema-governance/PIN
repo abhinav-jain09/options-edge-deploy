@@ -1,6 +1,6 @@
 # The committed schema-governance tool jar. service-deploy.sh refuses to run any other bytes.
-# Built from options-edge-processing e7f88bdc4cb2af4881ce85d628547fba961f8e6a (schema-governance-tool/, standalone, reproducible:
+# Built from options-edge-processing 979436a3d95a2b688821fd71a22f7b706940801b (schema-governance-tool/, standalone, reproducible:
 # project.build.outputTimestamp is fixed, so rebuilding that commit yields the same sha256).
 # To update: rebuild from a merged processing commit, replace the jar, update both lines below in the same change.
-sha256=18054633c09220364c32c95edbf625c64ab4f5f00e3e9d209d6a53b79729f313
-processing_commit=e7f88bdc4cb2af4881ce85d628547fba961f8e6a
+sha256=69a7797c530e97c2f70084fc06eca1d95a519535a8f5ad3e26ea2a48143b7da0
+processing_commit=979436a3d95a2b688821fd71a22f7b706940801b
