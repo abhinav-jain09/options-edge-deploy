@@ -9035,8 +9035,7 @@
    "to": "prod",
    "transport": "bytes",
    "topics": [
-    "es.underlying.es.trades",
-    "underlying.es.trades"
+    "es.underlying.es.trades"
    ],
    "subjects": [],
    "unframed": true

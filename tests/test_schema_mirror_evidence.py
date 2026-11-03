@@ -24,5 +24,24 @@ class Evidence(unittest.TestCase):
         self.assertEqual(ev.classify(b'{"a":1}', {"com.x.Flow"}, False, LOOK)[0], "FAIL")
 
 
+class Sampling(unittest.TestCase):
+    class R:
+        def __init__(self, rc, out=b"", err=b""): self.returncode, self.stdout, self.stderr = rc, out, err
+
+    def test_a_failed_read_is_an_error_never_an_empty_sample(self):
+        calls = iter([self.R(0), self.R(1, b"", b"Broker: Unknown topic or partition")])
+        with self.assertRaises(RuntimeError) as c:
+            ev.sample("b:9092", "t", runner=lambda argv, t: next(calls))
+        self.assertIn("Unknown topic", str(c.exception))
+
+    def test_an_unreachable_broker_is_an_error(self):
+        with self.assertRaises(RuntimeError):
+            ev.sample("b:9092", "t", runner=lambda argv, t: self.R(1, b"", b"transport failure"))
+
+    def test_a_successful_empty_read_is_an_empty_sample_and_a_record_is_returned(self):
+        self.assertEqual(ev.sample("b", "t", runner=lambda argv, t: self.R(0, b"")), b"")
+        self.assertEqual(ev.sample("b", "t", runner=lambda argv, t: self.R(0, b"\x00abcdefghijklmnopqrstuv")), b"\x00abcdefghijklmno")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -42,14 +42,20 @@ def make_lookup(registry):
     return lookup
 
 
-def sample(bootstrap, topic):
-    meta = subprocess.run(["kcat", "-b", bootstrap, "-L", "-t", topic, "-m", "10"], capture_output=True, timeout=40)
+def run(argv, timeout):
+    return subprocess.run(argv, capture_output=True, timeout=timeout)
+
+
+def sample(bootstrap, topic, runner=run):
+    meta = runner(["kcat", "-b", bootstrap, "-L", "-t", topic, "-m", "10"], 40)
     if meta.returncode != 0:
         raise RuntimeError("broker %s unreachable: %s" % (bootstrap, meta.stderr.decode(errors="replace")[:200]))
     try:
-        out = subprocess.run(["kcat", "-b", bootstrap, "-t", topic, "-C", "-o", "-1", "-c", "1", "-e", "-q", "-f", "%s"], capture_output=True, timeout=45)
+        out = runner(["kcat", "-b", bootstrap, "-t", topic, "-C", "-o", "-1", "-c", "1", "-e", "-q", "-f", "%s"], 45)
     except subprocess.TimeoutExpired:
         return None
+    if out.returncode != 0:  # an empty topic exits 0; any error (unknown topic, auth, broker failure) exits non-zero and must never read as "no record"
+        raise RuntimeError("reading %s on %s failed (rc=%d): %s" % (topic, bootstrap, out.returncode, out.stderr.decode(errors="replace")[:200]))
     return out.stdout[:16]
 
 
