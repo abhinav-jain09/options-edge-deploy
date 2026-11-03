@@ -5,7 +5,7 @@ cd "$(dirname "$0")/../.."
 CHECK=scripts/ci/validate-schema-sync-wired.py
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 fresh() { rm -rf "$T/r"; mkdir -p "$T/r/scripts/deploy" "$T/r/scripts/ci" "$T/r/tools/schema-governance"
-  cp scripts/deploy/service-deploy.sh "$T/r/scripts/deploy/"; cp scripts/ci/schema-sync-coverage-allowlist.txt "$T/r/scripts/ci/"
+  cp scripts/deploy/service-deploy.sh scripts/deploy/apply.sh "$T/r/scripts/deploy/"; cp scripts/ci/schema-sync-coverage-allowlist.txt "$T/r/scripts/ci/"
   cp tools/schema-governance/PIN tools/schema-governance/schema-governance-tool.jar "$T/r/tools/schema-governance/"
   for f in Jenkinsfile*; do cp "$f" "$T/r/"; done; }
 fail=0
@@ -49,4 +49,12 @@ fresh; echo 'Jenkinsfile.hpsf-ops|bogus|reason' >> "$T/r/scripts/ci/schema-sync-
 fresh; printf 'pipeline { stages { stage("x") { steps { sh "kubectl --namespace=options-edge apply -f x.yaml" } } } }\n' > "$T/r/Jenkinsfile.flagform"; expect "kubectl --flag=value apply is a workload command" "Jenkinsfile.flagform"
 fresh; printf 'pipeline { stages { stage("x") { steps { sh "kubectl -n options-edge \\\n  --context prod \\\n  rollout restart deploy/x" } } } }\n' > "$T/r/Jenkinsfile.continued"; expect "a kubectl command continued over lines is still seen" "Jenkinsfile.continued"
 fresh; printf 'pipeline { stages { stage("x") { steps { sh "$KC scale deploy/x --replicas=2" } } } }\n' > "$T/r/Jenkinsfile.alias"; expect "a \$KC alias for kubectl is still seen" "Jenkinsfile.alias"
+fresh; sed -i.bak 's#bash scripts/ci/schema-sync-all.sh#bash scripts/ci/removed.sh#' "$T/r/scripts/deploy/apply.sh"; expect "apply.sh without its schema-sync-all call" "apply.sh does not EXECUTE"
+fresh; python3 - "$T/r/scripts/deploy/apply.sh" <<'PY'
+import sys; p=sys.argv[1]; t=open(p).read()
+i=t.index("          # --- Schema sync"); j=t.index("exit 1; }\n", i)+len("exit 1; }\n")
+blk=t[i:j]; t=t[:i]+t[j:]; k=t.index("kubectl apply"); s=t.rfind("\n",0,k)+1
+open(p,"w").write(t[:s]+blk+t[s:] if False else t[:s]+"kubectl -n options-edge delete deployment/x\n"+blk+t[s:])
+PY
+expect "a kubectl mutation in apply.sh before the schema-sync-all call" "BEFORE its schema-sync-all.sh call"
 exit $fail

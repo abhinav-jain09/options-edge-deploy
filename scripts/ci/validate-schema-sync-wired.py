@@ -24,7 +24,7 @@ _KCMD = _KUBECTL + r"[^;&|\n]*?\s" + _VERB + r"\b"
 WORKLOAD = re.compile(_KCMD + r"|\bapply\.sh\b|\bcleanup-es4\.sh\b|\bservice-deploy\.sh\b")
 # service-deploy.sh counts as REALLY invoked only as a command: at the start of a line or after ; && || | ( , with optional VAR=value
 # prefixes and an optional `bash`/`sh`. An echo, a variable assignment or a string argument is not an invocation.
-VIA = re.compile(r"(?:^|[;&|(]|\n)[ \t]*(?:[A-Za-z_][A-Za-z0-9_]*=(?:\"[^\"]*\"|'[^']*'|\S*)[ \t]+)*(?:bash|sh)[ \t]+(?:\./)?scripts/deploy/service-deploy\.sh\b")
+VIA = re.compile(r"(?:^|[;&|(]|\n)[ \t]*(?:[A-Za-z_][A-Za-z0-9_]*=(?:\"[^\"]*\"|'[^']*'|\S*)[ \t]+)*(?:bash|sh)[ \t]+(?:-\S+[ \t]+)*(?:\./)?scripts/deploy/(?:service-deploy|apply)\.sh\b")
 DIRECT = re.compile(_KCMD + r"|\bapply\.sh\b|\bcleanup-es4\.sh\b")
 
 
@@ -94,6 +94,14 @@ apply_at = sd.find("kubectl apply")
 if sync_at < 0: fail("scripts/deploy/service-deploy.sh does not EXECUTE scripts/ci/schema-sync.sh fail-closed (bash ... || { ...; exit 1; })")
 if apply_at < 0: fail("scripts/deploy/service-deploy.sh has no kubectl apply - this check cannot place the gate")
 if sync_at > apply_at: fail("scripts/deploy/service-deploy.sh calls schema-sync.sh AFTER its first kubectl apply")
+# 1b. scripts/deploy/apply.sh (the monolithic full deploy) must EXECUTE schema-sync-all.sh, fail-closed, before its first workload mutation
+ap = "\n".join(l for l in read("scripts/deploy/apply.sh").split("\n") if not l.lstrip().startswith("#"))
+ap = re.sub(r"\\\n", " ", ap)
+CALL_ALL = re.compile(r"^[ \t]*bash[ \t]+scripts/ci/schema-sync-all\.sh[^\n|]*\|\|[ \t]*\{[^\n]*?\bexit[ \t]+1\b", re.M)
+mc = CALL_ALL.search(ap)
+if not mc: fail("scripts/deploy/apply.sh does not EXECUTE scripts/ci/schema-sync-all.sh fail-closed (bash ... || { ...; exit 1; })")
+m_mut = re.search(r"\bkubectl\b[^;&|\n]*?\s(?:apply|delete|patch|replace|create|scale|rollout|set\s+image)\b", ap)
+if m_mut and m_mut.start() < mc.start(): fail("scripts/deploy/apply.sh runs a kubectl mutation BEFORE its schema-sync-all.sh call")
 pin = re.search(r"^sha256=([0-9a-f]{64})$", read("tools/schema-governance/PIN"), re.M)
 if not pin: fail("tools/schema-governance/PIN has no sha256= line")
 with open(os.path.join(ROOT, "tools/schema-governance/schema-governance-tool.jar"), "rb") as f:
@@ -122,6 +130,7 @@ for fn in sorted(os.listdir(ROOT)):
     direct = len(direct_fps)
     if not (WORKLOAD.search(code) or via): continue
     seen.add(fn)
+    if fn in allow: continue              # listed ungated with a reason: the reason is the review
     if via:
         cap = via_cap.get(fn)
         if direct and cap is None: fail("%s calls service-deploy.sh but also has %d direct workload command(s) in sh steps; review them and list it as 'via:direct=%s' with a reason" % (fn, direct, ",".join(direct_fps)))
