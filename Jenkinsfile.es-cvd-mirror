@@ -31,6 +31,11 @@
 //
 // The job runs on the 'local-mac' agent (the dev Mac, which IS the target for dev). It generates
 // the config + installs a KeepAlive launchd unit; NOTHING is hand-edited.
+// MIRROR-TRANSPORT: reencode
+// MIRROR-TOPICS: @choice(TOPIC)
+// MIRROR-SUBJECTS: es.futures.cvd.bars-value,es.futures.cvd-value,es.futures.cvd.levels-value,es.futures.footprint.bars-value,es.futures.footprint.outcomes-value,es.futures.footprint-value,es.futures.footprint.strike-value,es.futures.footprint.evidence-value
+// MIRROR-LEGACY-INSTALL: retired
+// (schema-governance R3f, read by scripts/ci/schema-mirrors-generate.py. All 15 running units use the canonical registry-aware jar; the legacy byte-copy install is refused by the retired-install stage.)
 pipeline {
   agent { label 'local-mac' }
   parameters {

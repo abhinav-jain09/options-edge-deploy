@@ -42,6 +42,11 @@
 //
 // The job runs on the 'local-mac' agent (the dev Mac, which IS the target for dev). It generates
 // the config + installs a KeepAlive launchd unit; NOTHING is hand-edited.
+// MIRROR-TRANSPORT: bytes
+// MIRROR-TOPICS: @choice(TOPIC)
+// MIRROR-SUBJECTS: none
+// MIRROR-PATHS: es4->prod
+// (schema-governance R3f, read by scripts/ci/schema-mirrors-generate.py. JSON on es4 (the job refuses any dev install, see its DEV OWNS ITS WRITER check); es4 is the source.)
 pipeline {
   agent { label 'local-mac' }
   parameters {

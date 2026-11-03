@@ -13,6 +13,11 @@
 // headers and source timestamp. Offsets are committed only after the producer flushed. JSON, non-Avro bytes or a foreign record STOP the
 // mirror; there is no skip and no fallback. It runs on the 'local-mac' agent, which reaches the dev broker/registry (127.0.0.1:19092 and
 // :8082, the published listener) and es4 (192.168.100.4) over the LAN. Nothing is hand-edited: the config and the launchd unit are generated.
+// MIRROR-TRANSPORT: reencode
+// MIRROR-TOPICS: underlying.es.price, es.underlying.es.price.basis-reference
+// MIRROR-SUBJECTS: com.optionsedge.contracts.hpsf.EsUnderlyingPrice
+// MIRROR-PATHS: dev->es4
+// (schema-governance R3f, read by scripts/ci/schema-mirrors-generate.py. Decodes with the dev registry and re-encodes with es4's (EsPriceAvroMirror).)
 pipeline {
   agent { label 'local-mac' }
   parameters {

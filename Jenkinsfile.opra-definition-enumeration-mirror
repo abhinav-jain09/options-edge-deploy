@@ -68,6 +68,10 @@
 // stale COMPLETE after a fresh one.
 //
 // It generates the config + installs the unit; NOTHING is hand-edited.
+// MIRROR-TRANSPORT: bytes
+// MIRROR-TOPICS: @choice(TOPIC)
+// MIRROR-SUBJECTS: none
+// (schema-governance R3f, read by scripts/ci/schema-mirrors-generate.py. JSON, measured on prod 2026-11-03.)
 pipeline {
   agent { label 'local-mac' }
   parameters {

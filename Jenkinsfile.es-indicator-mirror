@@ -24,6 +24,10 @@
 //
 // The job runs on the 'local-mac' agent (the dev Mac, which IS the target for dev). It generates
 // the config + installs a KeepAlive launchd unit; NOTHING is hand-edited.
+// MIRROR-TRANSPORT: bytes
+// MIRROR-TOPICS: @choice(TOPIC)
+// MIRROR-SUBJECTS: com.optionsedge.contracts.indicators.avro.BackfillManifest,com.optionsedge.contracts.indicators.avro.IndicatorBar,com.optionsedge.contracts.indicators.avro.IndicatorSignals,com.optionsedge.contracts.indicators.avro.IndicatorSnapshot,com.optionsedge.contracts.indicators.avro.IndicatorStateImage,com.optionsedge.contracts.indicators.avro.SignalEvent,com.optionsedge.contracts.indicators.avro.SpotTick,com.optionsedge.contracts.indicators.avro.StudiesCurrent,com.optionsedge.contracts.indicators.avro.StudyBar,com.optionsedge.contracts.indicators.avro.StudyEngineImage
+// (schema-governance R3f, read by scripts/ci/schema-mirrors-generate.py. Avro; the install asserts the same ids on both registries (assert-indicator-schema-parity.sh).)
 pipeline {
   agent { label 'local-mac' }
   parameters {
