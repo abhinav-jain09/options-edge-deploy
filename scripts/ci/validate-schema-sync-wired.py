@@ -39,6 +39,27 @@ def strip(text):
     return "\n".join(lines)
 
 
+SH_OPEN = re.compile(r"""\bsh\s*\(?\s*(?:script\s*:\s*)?('\'\'|\"\"\"|'|")""")
+
+
+def sh_bodies(code):
+    """Text of every `sh` step body (single, double or triple quoted). A string elsewhere in the file is not an invocation."""
+    bodies, pos = [], 0
+    while True:
+        m = SH_OPEN.search(code, pos)
+        if not m: return "\n".join(bodies)
+        q, i = m.group(1), m.end()
+        if len(q) == 3:
+            j = code.find(q, i)
+        else:
+            j = i
+            while j < len(code) and code[j] != q:
+                j += 2 if code[j] == "\\" else 1
+            j = j if j < len(code) else -1
+        if j < 0: fail("unterminated sh step body - cannot place the gate")
+        bodies.append(code[i:j]); pos = j + len(q)
+
+
 def fail(msg):
     print("FAIL: " + msg); sys.exit(1)
 
@@ -73,7 +94,7 @@ for fn in sorted(os.listdir(ROOT)):
     code = strip(read(fn))
     if not WORKLOAD.search(code): continue
     seen.add(fn)
-    if VIA.search(code): continue
+    if VIA.search(sh_bodies(code)): continue
     if fn not in allow: fail("%s changes workloads without service-deploy.sh and is not in scripts/ci/schema-sync-coverage-allowlist.txt" % fn)
 stale = sorted(set(allow) - seen)
 if stale: fail("allow-list names Jenkinsfiles with no workload-changing step (stale): %s" % ", ".join(stale))

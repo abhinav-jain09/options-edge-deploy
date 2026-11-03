@@ -22,6 +22,8 @@ expect "schema-sync call moved after the first kubectl apply" "AFTER its first k
 fresh; printf 'x' >> "$T/r/tools/schema-governance/schema-governance-tool.jar"; expect "a jar that differs from the PIN" "does not match tools/schema-governance/PIN"
 fresh; printf 'kubectl apply -f x.yaml\n' > "$T/r/Jenkinsfile.newroute"; sed -i.bak 's#^#pipeline { sh "#; s#$#" }#' "$T/r/Jenkinsfile.newroute"; expect "a new deploy route with no gate and no allow-list entry" "Jenkinsfile.newroute"
 fresh; printf '// kubectl apply -f x.yaml (only a comment)\npipeline { }\n' > "$T/r/Jenkinsfile.commentonly"; expect "a mention inside a comment proves nothing and needs no entry" pass
+fresh; printf 'def note = "scripts/deploy/service-deploy.sh"\npipeline { stages { stage("x") { steps { sh "kubectl apply -f x.yaml" } } } }\n' > "$T/r/Jenkinsfile.decoy"; expect "service-deploy.sh named only in a string literal does not cover a direct kubectl apply" "Jenkinsfile.decoy"
+fresh; printf 'pipeline { stages { stage("x") { steps { sh """ bash scripts/deploy/service-deploy.sh """ } } } }\n' > "$T/r/Jenkinsfile.viasd"; expect "an sh step that really calls service-deploy.sh is covered" pass
 fresh; echo 'Jenkinsfile.ghost|a file that does not exist' >> "$T/r/scripts/ci/schema-sync-coverage-allowlist.txt"; expect "a stale allow-list entry" "stale"
 fresh; echo 'Jenkinsfile.hpsf-ops|' > "$T/r/scripts/ci/schema-sync-coverage-allowlist.txt"; expect "an allow-list entry without a reason" "has no reason"
 exit $fail
