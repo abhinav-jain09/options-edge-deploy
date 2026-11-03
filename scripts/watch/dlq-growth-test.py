@@ -32,4 +32,7 @@ run(["b.dlq"], {"b.dlq": 7}, "s6"); rc, out = run(["b.dlq"], {}, "s6")   # offse
 expect("a failed offsets read exits non-zero", (rc, out), rc, "") if False else None
 good = rc != 0; print(("ok     " if good else "NOT-OK ") + "a failed offsets read is not success"); fail |= 0 if good else 1
 rc2, out2 = run(["b.dlq"], {"b.dlq": 8}, "s6"); good = rc2 == 1 and "+1" in out2; print(("ok     " if good else "NOT-OK ") + "the baseline survived the failed run"); fail |= 0 if good else 1
+# a DLQ that vanishes from one listing and returns bigger must still be caught
+run(["c.dlq", "x"], {"c.dlq": 10}, "s7"); expect("a topic absent from one listing does not lose its baseline", run(["x", "y.dlq"], {"y.dlq": 1}, "s7"), 0, "1 DLQ topic")
+expect("...and growth after it returns is still detected", run(["c.dlq", "x"], {"c.dlq": 15}, "s7"), 1, "+5 dead letters")
 sys.exit(fail)

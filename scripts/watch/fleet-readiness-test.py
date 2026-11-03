@@ -38,4 +38,17 @@ expect("no conditions: falls back to creation time, long ago -> stuck", 1, "STUC
 expect("an empty answer is an error, not 'all healthy'", 2, "ERROR", [])
 expect("garbage input is an error", 2, "ERROR", raw="not json")
 expect("an object with no status is an error", 2, "ERROR", [{"kind": "Deployment", "metadata": {"name": "x"}, "spec": {"replicas": 1}}])
+def rollout(name, want, updated, prog_status, prog_reason, last="2026-11-03T05:00:00Z", gen=3, observed=3):
+    d = dep(name, want, want, since="2026-11-03T01:00:00Z")
+    d["metadata"]["generation"] = gen
+    d["status"].update({"updatedReplicas": updated, "observedGeneration": observed})
+    d["status"]["conditions"].append({"type": "Progressing", "status": prog_status, "reason": prog_reason, "lastUpdateTime": last, "lastTransitionTime": last})
+    return d
+
+
+expect("old pods still serving, rollout failed (ProgressDeadlineExceeded): STUCK", 1, "rollout failed", [rollout("bad", 1, 0, "False", "ProgressDeadlineExceeded")])
+expect("old pods serving, new generation 0 of 1 updated for hours: STUCK", 1, "rollout not completing", [rollout("slow", 1, 0, "True", "ReplicaSetUpdated")])
+expect("a rollout in progress for under the threshold is tolerated", 0, "0 stuck", [rollout("fresh", 1, 0, "True", "ReplicaSetUpdated", last="2026-11-03T11:50:00Z")])
+expect("the new generation unobserved for hours is stuck", 1, "rollout not completing", [rollout("unobs", 1, 1, "True", "NewReplicaSetAvailable", gen=4, observed=3)])
+expect("a completed rollout (updated == desired, generation observed) is healthy", 0, "1 healthy", [rollout("done", 2, 2, "True", "NewReplicaSetAvailable")])
 sys.exit(fail)

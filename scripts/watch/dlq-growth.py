@@ -82,6 +82,9 @@ for t, n in sorted(now.items()):
     if before is not None and t in before and n > before[t]: grew.append((t, before[t], n))
 for t, b, n in grew: print("GROWTH %s: %d -> %d (+%d dead letters since the last run)" % (t, b, n, n - b))
 for t in missing: print("MISSING_DLQ %s (named by the manifest, not in the cluster)" % t)
-json.dump(now, open(sp, "w"))   # only reached after every read succeeded
+# MERGE, never overwrite: a topic missing from this (successful) listing keeps its baseline, so if it was only transiently invisible and comes back
+# with more records, that growth is still detected instead of being read as "first sight".
+merged = dict(before or {}); merged.update(now)
+json.dump(merged, open(sp, "w"))   # only reached after every read succeeded
 print("dlq-growth %s: %d DLQ topic(s)%s, %d grew" % (a.env, len(dlqs), "" if before is not None else " (first run: baseline recorded)", len(grew)))
 sys.exit(1 if grew else 0)

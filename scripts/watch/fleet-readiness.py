@@ -38,6 +38,19 @@ for it in items:
     if want == 0:
         held += 1; continue
     have = st.get("availableReplicas", st.get("readyReplicas", 0)) or 0
+    # A ROLLOUT that is not completing hides behind the old pods: the old ReplicaSet keeps `available` at the desired count while the new one crash-loops.
+    # So a Deployment is also stuck when its Progressing condition says the deadline passed, or when the new generation has not been observed / is not fully
+    # updated for longer than the threshold (counted from the Progressing condition's last update).
+    if kind == "Deployment" and have >= want:
+        conds = st.get("conditions") or []
+        prog = next((c for c in conds if c.get("type") == "Progressing"), None)
+        lag = (st.get("updatedReplicas", 0) or 0) < want or (st.get("observedGeneration", 0) or 0) < it.get("metadata", {}).get("generation", 0)
+        if prog and prog.get("status") == "False" and prog.get("reason") == "ProgressDeadlineExceeded":
+            stuck.append((kind, name, want, have, -1)); continue
+        if lag and prog and (prog.get("lastUpdateTime") or prog.get("lastTransitionTime")):
+            mins_lag = (now - ts(prog.get("lastUpdateTime") or prog["lastTransitionTime"])).total_seconds() / 60
+            if mins_lag > a.minutes:
+                stuck.append((kind, name, want, have, int(mins_lag))); continue
     if have >= want:
         ok += 1; continue
     # how long has it been short? the Available condition's transition time (Deployments), else the newest condition, else creation
@@ -54,6 +67,8 @@ for it in items:
     if mins > a.minutes:
         stuck.append((kind, name, want, have, int(mins)))
 for kind, name, want, have, mins in sorted(stuck):
-    print("STUCK %s/%s wants %d, %d available, short for %d min" % (kind, name, want, have, mins))
+    if mins < 0: print("STUCK %s/%s: the rollout failed (ProgressDeadlineExceeded) while %d of %d old pods keep serving" % (kind, name, have, want))
+    elif have >= want: print("STUCK %s/%s: rollout not completing for %d min (new generation not fully updated) while %d old pods keep serving" % (kind, name, mins, have))
+    else: print("STUCK %s/%s wants %d, %d available, short for %d min" % (kind, name, want, have, mins))
 print("fleet-readiness: %d healthy, %d held at 0, %d stuck (> %d min)" % (ok, held, len(stuck), a.minutes))
 sys.exit(1 if stuck else 0)
