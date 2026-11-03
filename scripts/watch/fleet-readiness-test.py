@@ -126,4 +126,6 @@ expect_run("a pod that merely REFERENCES the ReplicaSet (controller not true) is
 expect_run("an OLD ReplicaSet kept during a rollout (other revision) cannot stand in for the current one", 1, "STUCK Deployment/vix", [unready, rset(rev="2"), pod("vix")], expected=exp)
 expect_run("two ReplicaSets claiming the current revision: ambiguous, no exemption", 1, "STUCK Deployment/vix", [unready, rset(), rset(uid="rs2"), pod("vix")], expected=exp)
 expect_run("the current ReplicaSet scaled differently from the Deployment: no exemption", 1, "STUCK Deployment/vix", [unready, rset(replicas=2), pod("vix")], expected=exp)
+term = pod("vix"); term["metadata"]["deletionTimestamp"] = "2026-11-03T11:59:00Z"
+expect_run("a TERMINATING pod (still phase Running) does not satisfy the exemption", 1, "STUCK Deployment/vix", [unready, rset(), term], expected=exp)
 sys.exit(fail)

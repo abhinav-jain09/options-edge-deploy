@@ -79,6 +79,7 @@ def pods_healthy(workload, want):
     mine = [p for p in mine if all(p.get("metadata", {}).get("labels", {}).get(k) == v for k, v in sel["matchLabels"].items())]
     if len(mine) != want: return False
     for p in mine:
+        if p.get("metadata", {}).get("deletionTimestamp"): return False      # a terminating pod stays Running while it shuts down; it is not the workload's healthy pod
         if p.get("status", {}).get("phase") != "Running": return False
         cs = p.get("status", {}).get("containerStatuses") or []
         if not cs: return False
