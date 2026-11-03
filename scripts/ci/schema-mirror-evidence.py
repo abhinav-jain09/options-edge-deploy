@@ -11,7 +11,7 @@ disappear unnoticed), and a listed one that now exists FAILS until removed (the 
 error, an unreachable broker or an unreachable registry is a FAILURE. Proves the newest record only.
   python3 scripts/ci/schema-mirror-evidence.py [--root .]      exit 1 on any FAIL
 """
-import argparse, json, os, subprocess, sys, urllib.request
+import argparse, json, os, subprocess, sys, urllib.error, urllib.request
 
 
 def classify(sample, declared, unframed, lookup):
@@ -39,7 +39,9 @@ def make_lookup(registry):
         full = (schema.get("namespace", "") + "." if schema.get("namespace") else "") + schema.get("name", "")
         try:
             subjects = [x["subject"] for x in get("/schemas/ids/%d/versions" % sid)]
-        except Exception:
+        except urllib.error.HTTPError as e:
+            if e.code != 404:  # 404 = the id belongs to no live subject; anything else is an unreadable registry, never "no subjects"
+                raise
             subjects = []
         return full, subjects
     return lookup
@@ -55,6 +57,8 @@ def run(argv, timeout):
 
 def sample(bootstrap, topic, runner=run):
     meta = runner(["kcat", "-b", bootstrap, "-L", "-t", topic, "-m", "10"], 40)
+    if meta.returncode != 0 and b"Unknown topic or partition" in meta.stderr:
+        raise TopicAbsent("topic does not exist on %s" % bootstrap)
     if meta.returncode != 0:
         raise RuntimeError("broker %s unreachable: %s" % (bootstrap, meta.stderr.decode(errors="replace")[:200]))
     try:

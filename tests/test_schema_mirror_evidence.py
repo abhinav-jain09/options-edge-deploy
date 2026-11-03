@@ -43,6 +43,33 @@ class Sampling(unittest.TestCase):
             ev.sample("b:9092", "t", runner=lambda argv, t: next(calls))
         self.assertNotIsInstance(c.exception, ev.TopicAbsent)
 
+    def test_an_unknown_topic_at_the_metadata_probe_is_also_absent(self):
+        with self.assertRaises(ev.TopicAbsent):
+            ev.sample("b:9092", "t", runner=lambda argv, t: self.R(1, b"", b"% ERROR: Topic t error: Broker: Unknown topic or partition"))
+
+    def test_a_registry_error_other_than_404_is_not_read_as_no_subjects(self):
+        import io, json as _j, urllib.error
+        responses = {"/schemas/ids/7": _j.dumps({"schema": _j.dumps({"type": "record", "name": "Flow", "namespace": "com.x"})})}
+        class Resp(io.BytesIO):
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+        def fake(code):
+            def urlopen(url, timeout=15):
+                path = url.split("//", 1)[1].split("/", 1)[1]
+                if path.endswith("/versions"):
+                    raise urllib.error.HTTPError(url, code, "x", {}, None)
+                return Resp(responses["/" + path].encode())
+            return urlopen
+        real = ev.urllib.request.urlopen
+        try:
+            ev.urllib.request.urlopen = fake(500)
+            with self.assertRaises(urllib.error.HTTPError):
+                ev.make_lookup("http://reg")(7)
+            ev.urllib.request.urlopen = fake(404)
+            self.assertEqual(ev.make_lookup("http://reg")(7), ("com.x.Flow", []))
+        finally:
+            ev.urllib.request.urlopen = real
+
     def test_an_unreachable_broker_is_an_error(self):
         with self.assertRaises(RuntimeError):
             ev.sample("b:9092", "t", runner=lambda argv, t: self.R(1, b"", b"transport failure"))
