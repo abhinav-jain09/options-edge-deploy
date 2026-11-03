@@ -7,6 +7,7 @@
 # before as ids 2211, 2221 on dev and production), version 2 the flat file under schemas-registry/ta with a NEW fixed id (2212, 2223; free on dev and es4 when checked): a version of a subject cannot reuse the id of a
 # different schema. The fourth column is the registry version (see es-trade-tools.map). On a registry that holds version 1 only the two version-2 rows import. The service resolves the id of its embedded (version 2)
 # schema at boot (ToolsAvroEncoder#warm, GeometryAvroEncoder#warm), so registration comes before the new image starts. 2001-2010 are the indicator family and are never reused here.
+# contracts 0.65.0: 2608 BreakCompletenessMarker, the per-bar completeness marker market-structure-service publishes on options.spx.market-structure.break-events beside BreakParentRecord 2605 (market-structure-service/docs/BREAK-COMPLETENESS-MARKER-REQUIREMENT.md); published only behind MARKET_STRUCTURE_BREAK_COMPLETENESS_ENABLED (default false), which the service checks at schedule start (BreakCompletenessAvroEncoder#warm).
 # tests/test_ta_schema_registration.py pins this file against the contracts table row by row.
 com.optionsedge.contracts.marketstructure.ui.UiProjection|2201|UiProjection.avsc
 com.optionsedge.contracts.marketstructure.ui.UiUnavailable|2202|UiUnavailable.avsc
@@ -22,3 +23,4 @@ com.optionsedge.contracts.marketstructure.geometry.GeometryUnavailable|2222|Geom
 # Version-2 rows after all version-1 rows so the preflight pass can see the predecessor of every row.
 com.optionsedge.contracts.marketstructure.tools.StructureToolsSet|2212|StructureToolsSet.avsc|2
 com.optionsedge.contracts.marketstructure.geometry.GeometryAnnotationSet|2223|GeometryAnnotationSet.avsc|2
+com.optionsedge.contracts.breakclass.input.BreakCompletenessMarker|2608|BreakCompletenessMarker.avsc
