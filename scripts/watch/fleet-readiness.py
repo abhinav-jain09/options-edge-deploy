@@ -7,12 +7,13 @@ available for longer than the threshold is a failure. Workloads held at 0 replic
 Fail closed: unparsable input, an object without a status, or no workloads at all is an error, not 'all healthy'.
 Exit 0 = healthy, 1 = at least one stuck workload, 2 = the check itself could not run.
 """
-import argparse, datetime as dt, json, sys
+import argparse, datetime as dt, json, os, sys
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--input", required=True)
 ap.add_argument("--now", default=None)
 ap.add_argument("--minutes", type=int, default=30)
+ap.add_argument("--state", default=None, help="file remembering when an un-timestamped rollout (a StatefulSet's) was first seen incomplete; without it such a rollout fails closed")
 a = ap.parse_args()
 
 
@@ -28,6 +29,11 @@ except Exception as e:  # noqa: BLE001
 if not items:
     print("ERROR: no Deployments or StatefulSets in the input - refusing to report 'healthy' on an empty answer"); sys.exit(2)
 now = ts(a.now) if a.now else dt.datetime.now(dt.timezone.utc)
+seen = {}
+if a.state and os.path.exists(a.state):
+    try: seen = json.load(open(a.state))
+    except Exception: seen = {}
+new_seen = {}
 stuck, held, ok = [], 0, 0
 for it in items:
     kind, name = it.get("kind"), it.get("metadata", {}).get("name", "?")
@@ -59,6 +65,25 @@ for it in items:
             mins_lag = (now - ts(when)).total_seconds() / 60
             if mins_lag > a.minutes:
                 stuck.append((kind, name, want, have, int(mins_lag))); continue
+    if kind == "StatefulSet" and have >= want:
+        # A StatefulSet carries no Progressing condition, so a rollout cannot be aged from the object: it is complete when its generation is observed and every
+        # pod is at the update revision (or the update strategy is OnDelete / a partition, where a partial state is the design). An incomplete one is aged
+        # from the first run that saw it incomplete (--state); with no state it cannot be aged and fails closed.
+        spec = it.get("spec", {})
+        strat = spec.get("updateStrategy", {})
+        partial_by_design = strat.get("type") == "OnDelete" or ((strat.get("rollingUpdate") or {}).get("partition", 0) or 0) > 0
+        observed = (st.get("observedGeneration", 0) or 0) >= it.get("metadata", {}).get("generation", 0)
+        at_update = (st.get("updatedReplicas", 0) or 0) >= want or (st.get("currentRevision") and st.get("currentRevision") == st.get("updateRevision"))
+        if not (observed and (at_update or partial_by_design)):
+            if not a.state:
+                stuck.append((kind, name, want, have, -2)); continue
+            key = "%s/%s@%s" % (kind, name, it.get("metadata", {}).get("generation", 0))
+            first = ts(seen[key]) if key in seen else now
+            new_seen[key] = first.strftime("%Y-%m-%dT%H:%M:%SZ")
+            mins_lag = (now - first).total_seconds() / 60
+            if mins_lag > a.minutes:
+                stuck.append((kind, name, want, have, int(mins_lag))); continue
+            ok += 1; continue
     if have >= want:
         ok += 1; continue
     # how long has it been short? the Available condition's transition time (Deployments), else the newest condition, else creation
@@ -74,6 +99,9 @@ for it in items:
     mins = (now - since).total_seconds() / 60
     if mins > a.minutes:
         stuck.append((kind, name, want, have, int(mins)))
+if a.state:
+    os.makedirs(os.path.dirname(os.path.abspath(a.state)), exist_ok=True)
+    json.dump(new_seen, open(a.state, "w"))   # only the still-incomplete ones survive: a completed rollout forgets its clock
 for kind, name, want, have, mins in sorted(stuck):
     if mins == -2: print("STUCK %s/%s: the new generation is not fully rolled out and there is no Progressing timestamp to age it (%d old pods serving)" % (kind, name, have))
     elif mins < 0: print("STUCK %s/%s: the rollout failed (ProgressDeadlineExceeded) while %d of %d old pods keep serving" % (kind, name, have, want))

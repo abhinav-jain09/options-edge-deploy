@@ -44,7 +44,8 @@ pipeline {
               out="\$(mktemp)"
               KUBECONFIG='${kubeconfigFor(profile)}' kubectl -n options-edge get deploy,statefulset -o json > "\$out" || { echo 'ERROR: kubectl get failed for ${profile}'; exit 2; }
               echo '=== ${profile} ==='
-              python3 scripts/watch/fleet-readiness.py --input "\$out" --minutes ${params.STUCK_MINUTES}
+              mkdir -p "\$HOME/.oe-watch"
+              python3 scripts/watch/fleet-readiness.py --input "\$out" --minutes ${params.STUCK_MINUTES} --state "\$HOME/.oe-watch/fleet-${profile}.json"
             """)
             if (rc != 0) { bad << "${profile} (rc=${rc})" }
           }

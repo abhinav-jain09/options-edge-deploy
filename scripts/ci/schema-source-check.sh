@@ -26,6 +26,21 @@ for e in json.load(open("schema-manifest/manifest.json"))["entries"]:
         print("|".join([e["subject"], str(e["version"]), e["source"]["path"], e["schemaHash"]]))
 PY
 )
+# `pending` (manifest-first, dev-only) is NOT a way to stop a file from being checked: it only tolerates a file that has not landed yet. A pending entry whose
+# path EXISTS is refused - if the file hashes to the entry the version has landed and `pending` must go; if it hashes to something else the entry is shadowing a
+# real file.
+while IFS='|' read -r subject version path hash; do
+  [ -f "$C/$path" ] || continue
+  have="$(java -jar "$JAR" hash "$C/$path" 2>/dev/null || echo unparsable)"
+  if [ "$have" = "$hash" ]; then echo "PENDING_LANDED $subject v$version: $path now exists and matches - remove \"pending\" from the entry"; else echo "PENDING_SHADOWS_FILE $subject v$version: $path exists and hashes to $have, not $hash - a pending entry may not name an existing file"; fi
+  rc=1
+done < <(python3 - <<'PY'
+import json
+for e in json.load(open("schema-manifest/manifest.json"))["entries"]:
+    if e.get("kind") == "MIRRORED" and e["source"]["kind"] == "FILE" and e["source"]["repo"] == "contracts" and e.get("pending"):
+        print("|".join([e["subject"], str(e["version"]), e["source"]["path"], e["schemaHash"]]))
+PY
+)
 # (2) ratchet on unnamed files
 python3 - "$C" "$LIST" <<'PY' || rc=1
 import json, os, sys

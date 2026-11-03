@@ -26,4 +26,14 @@ setup; printf '%s' "$S1" | sed 's/"A"/"C"/' > "$T/c/schemas/x/C.avsc"; expect "a
 setup; rm "$T/c/schemas/x/B.avsc"; expect "a baseline file that is gone is stale" "STALE_BASELINE schemas/x/B.avsc"
 setup; printf 'schemas/x/B.avsc\nschemas/x/A.avsc\n' > "$T/r/schema-manifest/ungoverned-contracts-files.txt"; expect "a baseline file that is now named is stale" "STALE_BASELINE schemas/x/A.avsc"
 setup; printf 'not avro' > "$T/c/schemas/x/A.avsc"; expect "a governed file that is no longer valid Avro" "not valid Avro"
+pend() { python3 - "$T/r/schema-manifest/manifest.json" "$1" "$2" <<'PY'
+import json,sys
+p,path,h=sys.argv[1:4]; m=json.load(open(p))
+m["entries"].append({"kind":"MIRRORED","subject":"p-value","version":1,"id":2101,"schemaHash":h,"pending":True,"source":{"kind":"FILE","repo":"contracts","path":path}})
+json.dump(m,open(p,"w"))
+PY
+}
+setup; pend schemas/x/Future.avsc 0000000000000000000000000000000000000000000000000000000000000000; expect "a pending entry whose file has not landed is tolerated" ok
+setup; pend schemas/x/B.avsc 0000000000000000000000000000000000000000000000000000000000000000; expect "a pending entry that names an existing file with another hash is refused (it could hide a change)" "PENDING_SHADOWS_FILE"
+setup; HB="$(java -jar "$JAR" hash "$T/c/schemas/x/B.avsc" 2>/dev/null)"; pend schemas/x/B.avsc "$HB"; expect "a pending entry whose file has landed must drop pending" "PENDING_LANDED"
 exit $fail

@@ -15,10 +15,10 @@ def dep(name, want, have, since="2026-11-03T10:00:00Z", kind="Deployment", conds
     return {"kind": kind, "metadata": {"name": name, "generation": 1, "creationTimestamp": "2026-10-01T00:00:00Z"}, "spec": {"replicas": want}, "status": st}
 
 
-def run(items, raw=None, minutes=30):
+def run(items, raw=None, minutes=30, state=None, now=NOW):
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
         f.write(raw if raw is not None else json.dumps({"items": items}))
-    r = subprocess.run([sys.executable, CHECK, "--input", f.name, "--now", NOW, "--minutes", str(minutes)], capture_output=True, text=True)
+    r = subprocess.run([sys.executable, CHECK, "--input", f.name, "--now", now, "--minutes", str(minutes)] + (["--state", state] if state else []), capture_output=True, text=True)
     os.unlink(f.name); return r.returncode, r.stdout
 
 
@@ -60,4 +60,24 @@ expect("new pods updated == desired but never Ready, old pods still serving, Rep
 expect("the same state for under the threshold is a rollout in flight", 0, "0 stuck", [rollout("surge2", 2, 2, "True", "ReplicaSetUpdated", last="2026-11-03T11:55:00Z")])
 nop = rollout("noprog", 1, 0, "True", "x"); nop["status"]["conditions"] = [c for c in nop["status"]["conditions"] if c["type"] != "Progressing"]
 expect("lagging rollout with no Progressing condition fails closed", 1, "no Progressing timestamp", [nop])
+def sts(name, want, ready, updated, gen=2, observed=2, cur="a", upd="b", strat=None):
+    s = {"kind": "StatefulSet", "metadata": {"name": name, "generation": gen, "creationTimestamp": "2026-10-01T00:00:00Z"},
+         "spec": {"replicas": want, "updateStrategy": strat or {"type": "RollingUpdate"}},
+         "status": {"readyReplicas": ready, "availableReplicas": ready, "updatedReplicas": updated, "observedGeneration": observed, "currentRevision": cur, "updateRevision": upd}}
+    return s
+
+
+st_file = os.path.join(tempfile.mkdtemp(), "state.json")
+def expect_run(name, rc_want, has, items, **kw):
+    global fail
+    rc, out = run(items, **kw); good = rc == rc_want and has in out
+    print(("ok     " if good else "NOT-OK ") + name + ("" if good else " (rc=%d out=%r)" % (rc, out))); fail |= 0 if good else 1
+
+
+expect("a StatefulSet with old pods Ready and the new generation unrolled, with no state to age it, fails closed", 1, "no Progressing timestamp", [sts("db", 1, 1, 0)])
+expect_run("first sight of an incomplete StatefulSet rollout is tolerated (clock starts)", 0, "0 stuck", [sts("db", 1, 1, 0)], state=st_file, now="2026-11-03T12:00:00Z")
+expect_run("...still tolerated 20 minutes later", 0, "0 stuck", [sts("db", 1, 1, 0)], state=st_file, now="2026-11-03T12:20:00Z")
+expect_run("...stuck once it has been incomplete for more than the threshold", 1, "StatefulSet/db", [sts("db", 1, 1, 0)], state=st_file, now="2026-11-03T12:45:00Z")
+expect_run("a completed StatefulSet rollout is healthy and forgets its clock", 0, "1 healthy", [sts("db", 1, 1, 1, cur="b", upd="b")], state=st_file, now="2026-11-03T13:00:00Z")
+expect("a StatefulSet on OnDelete is partial by design, not stuck", 0, "1 healthy", [sts("od", 1, 1, 0, strat={"type": "OnDelete"})])
 sys.exit(fail)
