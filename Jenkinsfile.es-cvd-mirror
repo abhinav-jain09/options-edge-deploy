@@ -98,6 +98,17 @@ pipeline {
       }
     }
 
+    // schema-governance R3f: the legacy `install` below is a MirrorMaker-1 BYTE copy. A framed value names its schema by the SOURCE registry's
+    // id, and the CVD/footprint subjects hold different ids per registry (es.futures.cvd-value: dev 2030, prod 2027, es4 2015), so a byte
+    // copy decodes under another schema or none. Every running unit is the canonical registry-aware mirror (roll-forward). The install
+    // stages are kept only so the shape tests keep covering the topic contract; they can no longer be reached.
+    stage('Legacy byte-copy install is retired (schema-governance R3f)') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.ACTION == 'install') } }
+      steps {
+        error('ACTION=install is retired: it byte-copies framed Avro between registries whose ids differ. Use ACTION=roll-forward (canonical, registry-aware) on an existing unit. See docs/schema-governance R3f.')
+      }
+    }
+
     stage('Roll forward existing canonical mirror') {
       when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.ACTION == 'roll-forward') } }
       steps {

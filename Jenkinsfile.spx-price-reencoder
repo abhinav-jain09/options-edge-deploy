@@ -23,6 +23,7 @@
 // Nothing is hand-edited: the config and the launchd unit are generated here.
 // MIRROR-TRANSPORT: reencode
 // MIRROR-TOPICS: underlying.spx.price, es.underlying.spx.price
+// MIRROR-INSTALL: reencodes
 // MIRROR-SUBJECTS: com.optionsedge.contracts.hpsf.UnderlyingPrice
 // MIRROR-PATHS: prod->es4; dev->mac74
 // (schema-governance R3f, read by scripts/ci/schema-mirrors-generate.py. Decodes with the source registry and re-encodes with the target's (SpxPriceAvroMirror); mac74 is not a governed registry.)

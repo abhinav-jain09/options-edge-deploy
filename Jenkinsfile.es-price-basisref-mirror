@@ -15,6 +15,7 @@
 // :8082, the published listener) and es4 (192.168.100.4) over the LAN. Nothing is hand-edited: the config and the launchd unit are generated.
 // MIRROR-TRANSPORT: reencode
 // MIRROR-TOPICS: underlying.es.price, es.underlying.es.price.basis-reference
+// MIRROR-INSTALL: reencodes
 // MIRROR-SUBJECTS: com.optionsedge.contracts.hpsf.EsUnderlyingPrice
 // MIRROR-PATHS: dev->es4
 // (schema-governance R3f, read by scripts/ci/schema-mirrors-generate.py. Decodes with the dev registry and re-encodes with es4's (EsPriceAvroMirror).)

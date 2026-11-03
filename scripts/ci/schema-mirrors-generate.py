@@ -15,8 +15,9 @@ Every mirror job states how it moves records in header comments the generator re
   MIRROR-PATHS:     es4->prod; dev->mac74   optional; otherwise derived from the job's existing MIRROR-DIRECTION marker
                                           (es4->default = es4->dev + es4->prod, default->es4 = dev->es4 + prod->es4). An endpoint that
                                           is not a governed registry (dev, prod, es4) is listed under ungovernedPaths, never dropped.
-  MIRROR-LEGACY-INSTALL: retired          required on a `reencode` job that still has an `install` ACTION: the byte-copy install it
-                                          predates must be refused by a stage named in the file, so "reencode" is true of every path.
+  MIRROR-INSTALL: reencodes               required on a `reencode` job that has an `install` ACTION, unless the next marker applies:
+  MIRROR-LEGACY-INSTALL: retired          the job's install predates the canonical mirror and byte-copies; it must be refused by a stage
+                                          named 'Legacy byte-copy install is retired' in the file, so "reencode" is true of every path.
 
 A Jenkinsfile that looks like a mirror (*mirror*, *bridge*, *reencoder*) or carries any of these markers, and infra/es4/mm2/mm2.properties,
 but declares no MIRROR-TRANSPORT FAILS the generator: a mirror cannot be added without saying how it moves records.
@@ -89,8 +90,14 @@ def job_mirrors(path, root):
     else:
         raise ValueError("%s: needs MIRROR-PATHS or MIRROR-DIRECTION" % name)
     if transport == "reencode" and re.search(r"choice\(\s*name:\s*'ACTION'\s*,\s*choices:\s*\[[^\]]*'install'", text):
-        if mk.get("MIRROR-LEGACY-INSTALL") != "retired" or RETIRE_STAGE not in text:
-            raise ValueError("%s: a reencode job with an install ACTION must carry 'MIRROR-LEGACY-INSTALL: retired' and a stage named '%s' (R3f)" % (name, RETIRE_STAGE))
+        kind = mk.get("MIRROR-INSTALL")
+        if kind == "reencodes":
+            pass
+        elif mk.get("MIRROR-LEGACY-INSTALL") == "retired":
+            if RETIRE_STAGE not in text:
+                raise ValueError("%s: MIRROR-LEGACY-INSTALL is 'retired' but no stage named '%s' exists (R3f)" % (name, RETIRE_STAGE))
+        else:
+            raise ValueError("%s: a reencode job with an install ACTION must say either 'MIRROR-INSTALL: reencodes' (every action re-encodes) or 'MIRROR-LEGACY-INSTALL: retired' plus a stage named '%s' (R3f)" % (name, RETIRE_STAGE))
     governed = [(a, b) for a, b in pairs if a in GOVERNED and b in GOVERNED]
     ungoverned = ["%s->%s" % (a, b) for a, b in pairs if (a, b) not in governed]
     out = []

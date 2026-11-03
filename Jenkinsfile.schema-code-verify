@@ -4,7 +4,8 @@
 // scripts/ci/schema-code-verify.sh: every module's schema-requirements.json must agree with the manifest's bindings, and the module's own schema tests must
 // pass against the manifest. A processing change that alters a producer schema without a manifest change turns this red the next night (and is stopped at
 // rollout by the image-label gate in any case). It ALSO clones options-edge-contracts main and runs scripts/ci/schema-source-check.sh (R8a/R14b): a contracts
-// schema file that changed without a manifest change, or a NEW contracts schema nobody governs, turns it red. It writes nothing to any registry, cluster or repository. A red build is the alert.
+// schema file that changed without a manifest change, or a NEW contracts schema nobody governs, turns it red. A third stage samples every byte-copied mirror topic
+// on its source cluster and checks the newest record against the mirror's declaration (scripts/ci/schema-mirror-evidence.py, R3f); it only reads. It writes nothing to any registry, cluster or repository. A red build is the alert.
 pipeline {
   agent { label 'hpsf-replay-mac' }
   triggers {
@@ -22,6 +23,11 @@ pipeline {
         sh 'bash scripts/ci/schema-code-verify.sh .jenkins-tmp/processing-main'
         sh 'rm -rf .jenkins-tmp/contracts-main && git clone --depth 1 --branch main git@github.com:abhinav-jain09/options-edge-contracts.git .jenkins-tmp/contracts-main'
         sh 'bash scripts/ci/schema-source-check.sh .jenkins-tmp/contracts-main'
+      }
+    }
+    stage('Mirror evidence') {
+      steps {
+        sh 'PATH=/opt/homebrew/bin:$PATH python3 scripts/ci/schema-mirror-evidence.py'
       }
     }
   }
