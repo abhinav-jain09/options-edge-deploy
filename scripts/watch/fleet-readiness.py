@@ -14,7 +14,7 @@ ap.add_argument("--input", required=True)
 ap.add_argument("--now", default=None)
 ap.add_argument("--minutes", type=int, default=30)
 ap.add_argument("--expected-unready", default=None, help="JSON list of {kind,name,reason}: workloads whose readiness is false BY DESIGN at times. They are exempt only while every pod "
-                "of the workload (label app.kubernetes.io/name) is Running with every container running and few restarts - a crash loop or an image pull failure is still reported")
+                "of the workload (resolved through controller ownership) is Running with every container running and few restarts - a crash loop or an image pull failure is still reported")
 ap.add_argument("--state", default=None, help="file remembering when an un-timestamped rollout (a StatefulSet's) was first seen incomplete; without it such a rollout fails closed")
 a = ap.parse_args()
 
@@ -53,11 +53,26 @@ if not [it for it in items if it.get("kind") in ("Deployment", "StatefulSet")]:
     print("ERROR: the input holds no Deployment or StatefulSet (only %d other object(s)) - refusing to report 'healthy'" % len(items)); sys.exit(2)
 
 
+rsets = [it for it in items if it.get("kind") == "ReplicaSet"]
+
+
+def owned_by(obj, uid):
+    return any(o.get("uid") == uid for o in obj.get("metadata", {}).get("ownerReferences") or [])
+
+
 def pods_healthy(workload, want):
-    """The workload's OWN pods, bound by its spec.selector.matchLabels (all labels must match), account for every desired replica and are all really running."""
-    sel = ((workload.get("spec", {}).get("selector") or {}).get("matchLabels")) or {}
-    if not sel: return False
-    mine = [p for p in pods if all(p.get("metadata", {}).get("labels", {}).get(k) == v for k, v in sel.items())]
+    """The workload's OWN pods - resolved through controller ownership (Deployment -> its non-empty ReplicaSets -> Pods; StatefulSet -> Pods), not by labels
+    alone, and only when its selector is plain matchLabels that the pod also satisfies - account for every desired replica and are all really running."""
+    uid = workload.get("metadata", {}).get("uid")
+    sel = workload.get("spec", {}).get("selector") or {}
+    if not uid or not sel.get("matchLabels") or sel.get("matchExpressions"): return False     # fail closed on anything this cannot resolve exactly
+    if workload.get("kind") == "Deployment":
+        owners = {rs["metadata"]["uid"] for rs in rsets if owned_by(rs, uid) and (rs.get("spec", {}).get("replicas", 0) or 0) > 0 and rs.get("metadata", {}).get("uid")}
+        if not owners: return False
+        mine = [p for p in pods if any(owned_by(p, ou) for ou in owners)]
+    else:
+        mine = [p for p in pods if owned_by(p, uid)]
+    mine = [p for p in mine if all(p.get("metadata", {}).get("labels", {}).get(k) == v for k, v in sel["matchLabels"].items())]
     if len(mine) != want: return False
     for p in mine:
         if p.get("status", {}).get("phase") != "Running": return False
@@ -69,7 +84,7 @@ def pods_healthy(workload, want):
 
 
 for it in items:
-    if it.get("kind") == "Pod": continue
+    if it.get("kind") in ("Pod", "ReplicaSet"): continue
     kind, name = it.get("kind"), it.get("metadata", {}).get("name", "?")
     want = it.get("spec", {}).get("replicas")
     st = it.get("status")
