@@ -30,8 +30,9 @@ if not items:
     print("ERROR: no Deployments or StatefulSets in the input - refusing to report 'healthy' on an empty answer"); sys.exit(2)
 now = ts(a.now) if a.now else dt.datetime.now(dt.timezone.utc)
 seen = {}
-if a.state and os.path.exists(a.state):
+if a.state and os.path.lexists(a.state):      # lexists: a dangling symlink EXISTS and is unreadable, it is not "no state yet"
     try:
+        if not os.path.isfile(a.state): raise ValueError("not a readable regular file")
         seen = json.load(open(a.state))
         if not isinstance(seen, dict): raise ValueError("not an object")
     except Exception as e:  # noqa: BLE001

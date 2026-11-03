@@ -84,7 +84,8 @@ now = {t: end_sum(t) for t in dlqs}
 os.makedirs(a.state, exist_ok=True)
 sp = os.path.join(a.state, a.env + ".json")
 try:
-    before = json.load(open(sp)) if os.path.exists(sp) else None
+    if os.path.lexists(sp) and not os.path.isfile(sp): raise ValueError("not a readable regular file (a dangling symlink counts as existing)")
+    before = json.load(open(sp)) if os.path.lexists(sp) else None
     if before is not None and not isinstance(before, dict): raise ValueError("not an object")
 except Exception as e: die("the baseline file %s is unreadable (%s) - refusing to treat every DLQ as first sight; fix or remove it deliberately" % (sp, e))
 grew = []

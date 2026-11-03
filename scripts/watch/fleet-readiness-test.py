@@ -82,4 +82,6 @@ expect_run("a completed StatefulSet rollout is healthy and forgets its clock", 0
 expect("a StatefulSet on OnDelete is partial by design, not stuck", 0, "1 healthy", [sts("od", 1, 1, 0, strat={"type": "OnDelete"})])
 bad_state = os.path.join(tempfile.mkdtemp(), "bad.json"); open(bad_state, "w").write('{"StatefulSet/db@2": "2026-11-03T1')   # truncated write
 expect_run("a corrupt state file fails closed instead of restarting every clock", 2, "unreadable", [sts("db", 1, 1, 0)], state=bad_state)
+dang = os.path.join(tempfile.mkdtemp(), "dangling.json"); os.symlink("/nonexistent/target.json", dang)
+expect_run("a dangling-symlink state path fails closed instead of reading as 'no state'", 2, "unreadable", [sts("db", 1, 1, 0)], state=dang)
 sys.exit(fail)

@@ -38,4 +38,6 @@ run(["c.dlq", "x"], {"c.dlq": 10}, "s7"); expect("a topic absent from one listin
 expect("...and growth after it returns is still detected", run(["c.dlq", "x"], {"c.dlq": 15}, "s7"), 1, "+5 dead letters")
 os.makedirs(os.path.join(T, "s9"), exist_ok=True); open(os.path.join(T, "s9", "prod.json"), "w").write('{"a.dlq": 5')
 expect("a corrupt baseline fails closed instead of reading every DLQ as first sight", run(["a.dlq", "x"], {"a.dlq": 9}, "s9"), 2, "unreadable")
+os.makedirs(os.path.join(T, "s10"), exist_ok=True); os.symlink("/nonexistent/baseline.json", os.path.join(T, "s10", "prod.json"))
+expect("a dangling-symlink baseline fails closed instead of reading as first sight", run(["a.dlq", "x"], {"a.dlq": 9}, "s10"), 2, "unreadable")
 sys.exit(fail)
