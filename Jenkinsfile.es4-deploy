@@ -395,6 +395,10 @@ pipeline {
           bash scripts/es4/assert-cluster-identity.sh "$ES4_KUBECONFIG" es4 "$ES4_NS_UID"
           bash scripts/es4/assert-cluster-identity.sh "$PROD_KUBECONFIG" prod "$PROD_NS_UID"
         '''
+        // Remove only the legacy generated virtualenv; keep source verification unchanged.
+        dir('.jenkins-tmp/rithmic-venv') { deleteDir() }
+        script { env.RITHMIC_VENV_DIR = "${pwd(tmp: true)}/rithmic-venv" }
+        dir(env.RITHMIC_VENV_DIR) { deleteDir() }
         sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp'
         dir('.jenkins-tmp/rithmic-source') {
           deleteDir()
@@ -418,16 +422,16 @@ pipeline {
           '''
         }
         sh '''set -euo pipefail
-          python3 -m venv .jenkins-tmp/rithmic-venv
-          .jenkins-tmp/rithmic-venv/bin/pip -q install -r .jenkins-tmp/rithmic-source/requirements.txt
-          RITHMIC_TEST_SCHEMA="$WORKSPACE/.jenkins-tmp/rithmic-contracts/target/classes/rithmic/RithmicDepthFrame.avsc" .jenkins-tmp/rithmic-venv/bin/python -m unittest discover -s .jenkins-tmp/rithmic-source/tests -v
+          python3 -m venv "$RITHMIC_VENV_DIR"
+          "$RITHMIC_VENV_DIR/bin/pip" -q install -r .jenkins-tmp/rithmic-source/requirements.txt
+          RITHMIC_TEST_SCHEMA="$WORKSPACE/.jenkins-tmp/rithmic-contracts/target/classes/rithmic/RithmicDepthFrame.avsc" "$RITHMIC_VENV_DIR/bin/python" -m unittest discover -s .jenkins-tmp/rithmic-source/tests -v
           # Reconcile only the reviewed named-service whitelist using the established bootstrap identity.
           bash scripts/es4/assert-cluster-identity.sh /Users/abhinav/.kube/es4.kubeconfig es4 "$ES4_NS_UID"
           KUBECONFIG=/Users/abhinav/.kube/es4.kubeconfig kubectl apply -f k8s/es4/security/jenkins-deployer-rbac.yaml
           KUBECONFIG="$ES4_KUBECONFIG" kubectl -n options-edge auth can-i create pods/exec | grep -qx yes
           KUBECONFIG=/Users/abhinav/.kube/es4.kubeconfig kubectl apply -f k8s/es4/policy/workload-whitelist-admission.yaml
           cd .jenkins-tmp/rithmic-source
-          "$WORKSPACE/.jenkins-tmp/rithmic-venv/bin/python" scripts/deploy-kubernetes.py --sha "$RITHMIC_PERMITTED_SHA" --sdk-zip "$RITHMIC_SDK_ZIP" --contracts-sha "$CONTRACTS_PERMITTED_SHA" --contracts-jar "$WORKSPACE/.jenkins-tmp/rithmic-contracts/target/options-edge-contracts-0.63.0.jar" --manifest "$WORKSPACE/k8s/es4/services/rithmic-depth-bridge.yaml"
+          "$RITHMIC_VENV_DIR/bin/python" scripts/deploy-kubernetes.py --sha "$RITHMIC_PERMITTED_SHA" --sdk-zip "$RITHMIC_SDK_ZIP" --contracts-sha "$CONTRACTS_PERMITTED_SHA" --contracts-jar "$WORKSPACE/.jenkins-tmp/rithmic-contracts/target/options-edge-contracts-0.63.0.jar" --manifest "$WORKSPACE/k8s/es4/services/rithmic-depth-bridge.yaml"
         '''
       }
     }

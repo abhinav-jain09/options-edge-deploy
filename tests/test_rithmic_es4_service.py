@@ -37,3 +37,20 @@ class RithmicEs4Service(unittest.TestCase):
         import subprocess
         value=subprocess.check_output(['bash','-c','source scripts/kafka/topics.env; printf "%s" "$OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS"'],cwd=ROOT,text=True)
         self.assertIn('es.rithmic.depth',value.split())
+
+    def test_unicode_virtualenv_outside_checkout_preserves_strict_source_guard(self):
+        import tempfile,subprocess,os
+        with tempfile.TemporaryDirectory() as temporary:
+            parent=Path(temporary);repo=parent/'checkout';repo.mkdir()
+            def git(*args):return subprocess.check_output(['git',*args],cwd=repo,text=True).strip()
+            git('init','-q','--initial-branch=main');git('config','core.quotePath','true')
+            (repo/'.gitignore').write_text('.jenkins-tmp/\n');(repo/'source.txt').write_text('reviewed\n')
+            git('add','.');git('-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-qm','fixture')
+            revision=git('rev-parse','HEAD');venv=repo/'.jenkins-tmp/rithmic-venv';(venv/'bin').mkdir(parents=True)
+            (venv/'bin/𝜋thon').write_text('generated test tool\n')
+            def guard():return subprocess.run(['bash',str(ROOT/'scripts/jenkins/verify-permitted-tree.sh'),'--dir',str(repo),'--allow-ignored','.jenkins-tmp'],env={**os.environ,'PERMITTED_SHA':revision},capture_output=True,text=True)
+            rejected=guard();self.assertNotEqual(rejected.returncode,0);self.assertIn('REFUSED',rejected.stdout+rejected.stderr)
+            venv.rename(parent/'jenkins-test-venv')
+            accepted=guard();self.assertEqual(accepted.returncode,0,accepted.stdout+accepted.stderr)
+            (repo/'source.txt').write_text('unreviewed\n')
+            self.assertNotEqual(guard().returncode,0)
