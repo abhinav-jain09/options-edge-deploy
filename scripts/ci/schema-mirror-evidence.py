@@ -5,7 +5,9 @@ For every BYTES mirror path the newest record of each topic is read on the mirro
   unframed topic   the record must NOT start with the Confluent magic byte 0x00
   framed topic     the record must start with 0x00 + a 4-byte schema id; the id is resolved in the source registry and the record name (or one
                    of the id's subjects) must be a declared subject
-A topic with no record is UNMEASURED and a topic that does not exist on the source is ABSENT (both reported, neither passed: nothing was proven). Any other read
+A topic with no record is UNMEASURED and a topic that does not exist on the source is ABSENT (neither is a pass: nothing was proven). ABSENT is tolerated ONLY for a
+(environment, topic) listed with a reason in schema-manifest/mirror-evidence-absent.txt; an unlisted one FAILS (a declared source topic must not
+disappear unnoticed), and a listed one that now exists FAILS until removed (the list stays true). Any other read
 error, an unreachable broker or an unreachable registry is a FAILURE. Proves the newest record only.
   python3 scripts/ci/schema-mirror-evidence.py [--root .]      exit 1 on any FAIL
 """
@@ -66,11 +68,34 @@ def sample(bootstrap, topic, runner=run):
     return out.stdout[:16]
 
 
+def evaluate(mir, topic, allowed, sampler, lookup_factory, bootstrap):
+    """One mirror topic -> (status, detail); every error path is a FAIL except an explicitly listed ABSENT."""
+    listed = (mir["from"], topic) in allowed
+    try:
+        status, detail = classify(sampler(bootstrap, topic), set(mir["subjects"]), bool(mir.get("unframed")), lookup_factory())
+    except TopicAbsent as e:
+        if listed:
+            return "ABSENT", "%s (listed in mirror-evidence-absent.txt)" % e
+        return "FAIL", "%s and is not listed in schema-manifest/mirror-evidence-absent.txt" % e
+    except Exception as e:
+        return "FAIL", "%s" % e
+    if listed and status != "FAIL":
+        return "FAIL", "listed as ABSENT in mirror-evidence-absent.txt but the topic exists now (%s); remove it from the list" % detail
+    return status, detail
+
+
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("--root", default="."); a = ap.parse_args()
     m = json.load(open(os.path.join(a.root, "schema-manifest/manifest.json")))
     kafka = json.load(open(os.path.join(a.root, "schema-manifest/kafka.json")))
     regs = json.load(open(os.path.join(a.root, "schema-manifest/registries.json")))
+    allowed = set()
+    ap_path = os.path.join(a.root, "schema-manifest/mirror-evidence-absent.txt")
+    for line in open(ap_path):
+        line = line.split("#")[0].strip()
+        if line:
+            env, topic = line.split()
+            allowed.add((env, topic))
     seen, fails, counts = set(), 0, {"PASS": 0, "UNMEASURED": 0, "ABSENT": 0, "FAIL": 0}
     for mir in m["activeMirrors"]:
         if mir["transport"] != "bytes":
@@ -80,12 +105,7 @@ def main():
             if key in seen:
                 continue
             seen.add(key)
-            try:
-                status, detail = classify(sample(kafka[mir["from"]], topic), set(mir["subjects"]), bool(mir.get("unframed")), make_lookup(regs[mir["from"]]))
-            except TopicAbsent as e:
-                status, detail = "ABSENT", "%s" % e
-            except Exception as e:
-                status, detail = "FAIL", "%s" % e
+            status, detail = evaluate(mir, topic, allowed, sample, lambda: make_lookup(regs[mir["from"]]), kafka[mir["from"]])
             counts[status] += 1
             print("%-10s %s %s: %s" % (status, mir["from"], topic, detail))
     print("mirror evidence: %d pass, %d unmeasured, %d absent, %d fail" % (counts["PASS"], counts["UNMEASURED"], counts["ABSENT"], counts["FAIL"]))

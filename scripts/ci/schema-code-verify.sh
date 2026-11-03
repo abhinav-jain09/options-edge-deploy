@@ -8,7 +8,7 @@
 # Needs Maven (offline-capable) and the pinned tool jar. Exits non-zero on the first disagreement; finding NO requirements file at all is an error.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
-P="${1:?usage: schema-code-verify.sh <options-edge-processing checkout>}"
+P="${1:?usage: schema-code-verify.sh <options-edge-processing checkout> [r6-backlog-file: tests only; the Jenkinsfile never passes it]}"
 JAR="${SCHEMA_GOV_JAR:-tools/schema-governance/schema-governance-tool.jar}"
 PIN="$(sed -n 's/^sha256=//p' tools/schema-governance/PIN)"
 [ -f "$JAR" ] && [ "$(shasum -a 256 "$JAR" | cut -d' ' -f1)" = "$PIN" ] || { echo "FATAL: $JAR is missing or does not match tools/schema-governance/PIN" >&2; exit 1; }
@@ -38,5 +38,5 @@ PY
     && echo "  module tests passed against the manifest" || { echo "FAIL: $module's schema-requirements tests failed against the manifest"; rc=1; }
 done
 # R6 ratchet: every Avro-using module without a requirements file must be on the committed backlog, and the backlog may only shrink.
-python3 scripts/ci/schema-r6-backlog.py "$P" --backlog "${SCHEMA_R6_BACKLOG:-schema-manifest/r6-backlog.txt}" || rc=1
+python3 scripts/ci/schema-r6-backlog.py "$P" --backlog "${2:-schema-manifest/r6-backlog.txt}" || rc=1
 exit $rc

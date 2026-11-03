@@ -52,5 +52,24 @@ class Sampling(unittest.TestCase):
         self.assertEqual(ev.sample("b", "t", runner=lambda argv, t: self.R(0, b"\x00abcdefghijklmnopqrstuv")), b"\x00abcdefghijklmno")
 
 
+class Evaluate(unittest.TestCase):
+    MIR = {"from": "es4", "subjects": [], "unframed": True}
+
+    def absent(self, b, t): raise ev.TopicAbsent("gone")
+
+    def test_an_absent_topic_fails_unless_listed(self):
+        self.assertEqual(ev.evaluate(self.MIR, "t", set(), self.absent, lambda: None, "b")[0], "FAIL")
+        self.assertEqual(ev.evaluate(self.MIR, "t", {("es4", "t")}, self.absent, lambda: None, "b")[0], "ABSENT")
+
+    def test_a_listed_topic_that_exists_again_fails_until_removed(self):
+        s, d = ev.evaluate(self.MIR, "t", {("es4", "t")}, lambda b, t: b'{"a":1}', lambda: None, "b")
+        self.assertEqual(s, "FAIL"); self.assertIn("remove it from the list", d)
+        self.assertEqual(ev.evaluate(self.MIR, "t", set(), lambda b, t: b'{"a":1}', lambda: None, "b")[0], "PASS")
+
+    def test_a_read_error_fails_even_when_listed(self):
+        def boom(b, t): raise RuntimeError("timed out")
+        self.assertEqual(ev.evaluate(self.MIR, "t", {("es4", "t")}, boom, lambda: None, "b")[0], "FAIL")
+
+
 if __name__ == "__main__":
     unittest.main()
