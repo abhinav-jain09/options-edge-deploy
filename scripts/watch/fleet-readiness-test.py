@@ -87,18 +87,29 @@ expect_run("a dangling-symlink state path fails closed instead of reading as 'no
 lowav = dep("lowav", 2, 1, since="2026-11-03T11:50:00Z")
 lowav["status"]["conditions"].append({"type": "Progressing", "status": "False", "reason": "ProgressDeadlineExceeded", "lastUpdateTime": "2026-11-03T11:50:00Z", "lastTransitionTime": "2026-11-03T11:50:00Z"})
 expect("ProgressDeadlineExceeded is STUCK at once even when availability has already fallen below desired", 1, "rollout failed", [lowav])
-def pod(app, phase="Running", running=True, restarts=0):
-    return {"kind": "Pod", "metadata": {"name": app + "-x", "labels": {"app.kubernetes.io/name": app}}, "status": {"phase": phase,
+def pod(app, phase="Running", running=True, restarts=0, n=1):
+    return {"kind": "Pod", "metadata": {"name": "%s-%d" % (app, n), "labels": {"app.kubernetes.io/name": app}}, "status": {"phase": phase,
             "containerStatuses": [{"restartCount": restarts, "state": {"running": {}} if running else {"waiting": {"reason": "CrashLoopBackOff"}}}]}}
 
 
 exp = os.path.join(tempfile.mkdtemp(), "exp.json"); json.dump([{"kind": "Deployment", "name": "vix", "reason": "session window"}], open(exp, "w"))
-unready = dep("vix", 1, 0, since="2026-11-03T05:00:00Z")
+def withsel(d, app):
+    d["spec"]["selector"] = {"matchLabels": {"app.kubernetes.io/name": app}}; return d
+
+
+unready = withsel(dep("vix", 1, 0, since="2026-11-03T05:00:00Z"), "vix")
 expect_run("a by-design unready workload whose pod is Running is EXPECTED_UNREADY, not stuck", 0, "EXPECTED_UNREADY Deployment/vix", [unready, pod("vix")], expected=exp)
 expect_run("...but a CrashLoopBackOff pod is still STUCK", 1, "STUCK Deployment/vix", [unready, pod("vix", running=False)], expected=exp)
 expect_run("...and a restarting pod (3 restarts) is still STUCK", 1, "STUCK Deployment/vix", [unready, pod("vix", restarts=3)], expected=exp)
 expect_run("...and a workload with no pods at all is still STUCK", 1, "STUCK Deployment/vix", [unready], expected=exp)
-expect_run("a workload NOT on the list gets no exemption even with healthy pods", 1, "STUCK Deployment/other", [dep("other", 1, 0, since="2026-11-03T05:00:00Z"), pod("other")], expected=exp)
+expect_run("a workload NOT on the list gets no exemption even with healthy pods", 1, "STUCK Deployment/other", [withsel(dep("other", 1, 0, since="2026-11-03T05:00:00Z"), "other"), pod("other")], expected=exp)
 bad_exp = os.path.join(tempfile.mkdtemp(), "bad.json"); open(bad_exp, "w").write("[{not json")
 expect_run("an unreadable expected-unready list fails closed", 2, "cannot read", [unready, pod("vix")], expected=bad_exp)
+two = withsel(dep("vix", 2, 0, since="2026-11-03T05:00:00Z"), "vix")
+expect_run("2 replicas wanted but only 1 healthy pod exists: the missing replica is not hidden by the exemption", 1, "STUCK Deployment/vix", [two, pod("vix", n=1)], expected=exp)
+expect_run("2 replicas wanted and 2 healthy pods: expected-unready", 0, "EXPECTED_UNREADY", [two, pod("vix", n=1), pod("vix", n=2)], expected=exp)
+other_wl = withsel(dep("vix", 1, 0, since="2026-11-03T05:00:00Z"), "vix"); other_wl["spec"]["selector"]["matchLabels"]["component"] = "feed"
+expect_run("a healthy pod that only shares the app label does not satisfy the workload's own selector", 1, "STUCK Deployment/vix", [other_wl, pod("vix")], expected=exp)
+expect_run("no selector on the workload: nothing to bind pods to, so no exemption", 1, "STUCK Deployment/vix", [dep("vix", 1, 0, since="2026-11-03T05:00:00Z"), pod("vix")], expected=exp)
+expect_run("an input of only Pods is an error, not 'healthy'", 2, "no Deployment or StatefulSet", [pod("vix")], expected=exp)
 sys.exit(fail)

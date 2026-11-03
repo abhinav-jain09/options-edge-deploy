@@ -48,23 +48,24 @@ if a.expected_unready:
         for e in json.load(open(a.expected_unready)): expected[(e["kind"], e["name"])] = e["reason"]
     except Exception as e:  # noqa: BLE001
         print("ERROR: cannot read the expected-unready list %s: %s" % (a.expected_unready, e)); sys.exit(2)
-pods_by_app = {}
-for it in items:
-    if it.get("kind") == "Pod":
-        pods_by_app.setdefault(it.get("metadata", {}).get("labels", {}).get("app.kubernetes.io/name"), []).append(it)
+pods = [it for it in items if it.get("kind") == "Pod"]
+if not [it for it in items if it.get("kind") in ("Deployment", "StatefulSet")]:
+    print("ERROR: the input holds no Deployment or StatefulSet (only %d other object(s)) - refusing to report 'healthy'" % len(items)); sys.exit(2)
 
 
-def pods_healthy(app):
-    ps = pods_by_app.get(app) or []
-    if not ps: return False
-    for p in ps:
+def pods_healthy(workload, want):
+    """The workload's OWN pods, bound by its spec.selector.matchLabels (all labels must match), account for every desired replica and are all really running."""
+    sel = ((workload.get("spec", {}).get("selector") or {}).get("matchLabels")) or {}
+    if not sel: return False
+    mine = [p for p in pods if all(p.get("metadata", {}).get("labels", {}).get(k) == v for k, v in sel.items())]
+    if len(mine) != want: return False
+    for p in mine:
         if p.get("status", {}).get("phase") != "Running": return False
         cs = p.get("status", {}).get("containerStatuses") or []
         if not cs: return False
         for c in cs:
             if "running" not in (c.get("state") or {}) or (c.get("restartCount", 0) or 0) >= 3: return False
     return True
-
 
 
 for it in items:
@@ -124,7 +125,7 @@ for it in items:
             ok += 1; continue
     if have >= want:
         ok += 1; continue
-    if (kind, name) in expected and pods_healthy(name):
+    if (kind, name) in expected and pods_healthy(it, want):
         exempt.append((kind, name, expected[(kind, name)])); continue
     # how long has it been short? the Available condition's transition time (Deployments), else the newest condition, else creation
     conds = st.get("conditions") or []
