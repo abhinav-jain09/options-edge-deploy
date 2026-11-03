@@ -38,7 +38,13 @@ fresh; echo 'Jenkinsfile.ghost|ungated|a file that does not exist' >> "$T/r/scri
 fresh; echo 'Jenkinsfile.hpsf-ops|ungated|' > "$T/r/scripts/ci/schema-sync-coverage-allowlist.txt"; expect "an allow-list entry without a reason" "needs <file>|<kind>|<reason>"
 fresh; printf 'pipeline { stages { stage("x") { steps { sh "kubectl apply -f x.yaml; echo scripts/deploy/service-deploy.sh" } } } }\n' > "$T/r/Jenkinsfile.echodecoy"; expect "service-deploy.sh only echoed in the same sh step as a direct kubectl apply" "Jenkinsfile.echodecoy"
 fresh; printf '\nsh "kubectl scale deployment/x --replicas=3"\n' >> "$T/r/Jenkinsfile.web-service"; expect "a new direct workload command in a gated Jenkinsfile" "direct workload command"
-fresh; sed -i.bak 's/via:direct=5/via:direct=4/' "$T/r/scripts/ci/schema-sync-coverage-allowlist.txt"; expect "a stale direct-command count" "via:direct=4"
+fresh; sed -i.bak 's/scale "$DEP" --replicas=0/scale "$DEP" --replicas=2/' "$T/r/Jenkinsfile.service-deploy"; expect "an ancillary scale-to-0 edited into a scale-up changes its fingerprint" "direct workload commands in its sh steps changed"
+fresh; python3 - "$T/r/Jenkinsfile.service-deploy" <<'PY'
+import sys; p=sys.argv[1]; t=open(p).read()
+old='kubectl -n options-edge rollout status deployment indicator-service --timeout=180s || true'
+assert old in t; open(p,"w").write(t.replace(old,'kubectl -n options-edge apply -f k8s/overlays/dev/x.yaml || true',1))
+PY
+expect "swapping an approved ancillary command for a direct apply keeps the count but fails" "direct workload commands in its sh steps changed"
 fresh; echo 'Jenkinsfile.hpsf-ops|bogus|reason' >> "$T/r/scripts/ci/schema-sync-coverage-allowlist.txt"; expect "an unknown allow-list kind" "unknown kind"
 fresh; printf 'pipeline { stages { stage("x") { steps { sh "kubectl --namespace=options-edge apply -f x.yaml" } } } }\n' > "$T/r/Jenkinsfile.flagform"; expect "kubectl --flag=value apply is a workload command" "Jenkinsfile.flagform"
 fresh; printf 'pipeline { stages { stage("x") { steps { sh "kubectl -n options-edge \\\n  --context prod \\\n  rollout restart deploy/x" } } } }\n' > "$T/r/Jenkinsfile.continued"; expect "a kubectl command continued over lines is still seen" "Jenkinsfile.continued"

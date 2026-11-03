@@ -6,6 +6,11 @@
 2. Every Jenkinsfile that changes workloads must either go through service-deploy.sh (so it inherits 1) or be named in
    scripts/ci/schema-sync-coverage-allowlist.txt with a reason. An unlisted path fails: a new deploy route cannot appear silently.
 Comments are stripped before matching (Groovy // and /* */, shell full-line #), so a mention in a comment proves nothing.
+THREAT MODEL (honest scope): this is a ratchet against ACCIDENTAL drift - a new deploy route, a removed or reordered gate call, a new
+direct kubectl command, a swapped ancillary command - in files that are themselves code-reviewed. It is a text scan, not a
+reachability analysis: a deliberately obfuscated change (dead branch around the call, a command built at run time) is not detected and
+remains the job of review of any change to these files. Ancillary direct commands are pinned by FINGERPRINT (sha256 of the normalised
+statement), not by count, so replacing one with a different command fails.
 Slice 1: a text scan of `sh` bodies; the full tokeniser of R11a (ssh payload recursion, alias resolution) is a later slice.
 """
 import hashlib, os, re, sys
@@ -103,8 +108,8 @@ for l in read("scripts/ci/schema-sync-coverage-allowlist.txt").split("\n"):
         if len(parts) < 3 or not parts[2]: fail("allow-list entry '%s' needs <file>|<kind>|<reason>" % (parts[0] if parts else l))
         name, kind, reason = parts[0], parts[1], "|".join(parts[2:])
         if kind == "ungated": allow[name] = reason
-        elif re.fullmatch(r"via:direct=\d+", kind): via_cap[name] = int(kind.split("=")[1])
-        else: fail("allow-list entry '%s' has unknown kind '%s' (ungated | via:direct=N)" % (name, kind))
+        elif re.fullmatch(r"via:direct=(?:[0-9a-f]{12}(?:,[0-9a-f]{12})*)?", kind): via_cap[name] = sorted(x for x in kind.split("=", 1)[1].split(",") if x)
+        else: fail("allow-list entry '%s' has unknown kind '%s' (ungated | via:direct=<12-hex fingerprints, comma separated>)" % (name, kind))
 seen = set()
 for fn in sorted(os.listdir(ROOT)):
     if not fn.startswith("Jenkinsfile"): continue
@@ -112,13 +117,16 @@ for fn in sorted(os.listdir(ROOT)):
     bodies = sh_bodies(code)
     direct_here = bodies
     via = VIA.search(bodies) is not None
-    direct = len(DIRECT.findall(VIA.sub(" ", bodies)))
+    direct_stmts = [re.sub(r"\s+", " ", m.group(0)).strip() for m in re.finditer(r"(?:" + DIRECT.pattern + r")[^;&|\n]*", VIA.sub(" ", bodies))]
+    direct_fps = sorted(hashlib.sha256(s.encode()).hexdigest()[:12] for s in direct_stmts)
+    direct = len(direct_fps)
     if not (WORKLOAD.search(code) or via): continue
     seen.add(fn)
     if via:
         cap = via_cap.get(fn)
-        if direct and cap is None: fail("%s calls service-deploy.sh but also has %d direct workload command(s) in sh steps; list it as 'via:direct=%d' with a reason after review" % (fn, direct, direct))
-        if cap is not None and direct != cap: fail("%s has %d direct workload command(s) in sh steps but the allow-list says via:direct=%d (a new direct command must be reviewed; a removed one must lower the count)" % (fn, direct, cap))
+        if direct and cap is None: fail("%s calls service-deploy.sh but also has %d direct workload command(s) in sh steps; review them and list it as 'via:direct=%s' with a reason" % (fn, direct, ",".join(direct_fps)))
+        if cap is not None and direct_fps != cap:
+            fail("%s: the direct workload commands in its sh steps changed. allow-list pins %s, found %s. Review each new or changed command (it must not roll an image or scale up), then update the fingerprints; the statements are: %s" % (fn, ",".join(cap) or "none", ",".join(direct_fps) or "none", " || ".join(direct_stmts)))
         continue
     if fn in via_cap: fail("%s is listed as via but does not execute service-deploy.sh" % fn)
     if fn not in allow: fail("%s changes workloads without really executing service-deploy.sh and is not listed 'ungated' in scripts/ci/schema-sync-coverage-allowlist.txt" % fn)
