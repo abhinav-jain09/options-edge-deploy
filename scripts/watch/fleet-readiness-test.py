@@ -46,6 +46,7 @@ def rollout(name, want, updated, prog_status, prog_reason, last="2026-11-03T05:0
     d = dep(name, want, want, since="2026-11-03T01:00:00Z")
     d["metadata"]["generation"] = gen
     d["status"].update({"updatedReplicas": updated, "observedGeneration": observed})
+    d["status"]["conditions"] = [c for c in d["status"]["conditions"] if c["type"] != "Progressing"]   # this helper supplies its own
     d["status"]["conditions"].append({"type": "Progressing", "status": prog_status, "reason": prog_reason, "lastUpdateTime": last, "lastTransitionTime": last})
     return d
 
