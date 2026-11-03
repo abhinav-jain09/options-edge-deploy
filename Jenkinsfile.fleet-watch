@@ -33,6 +33,10 @@ pipeline {
   triggers {
     cron('*/15 * * * *')
   }
+  environment {
+    // The Kafka CLI on THIS agent (the /home/confluent path other jobs use exists only on the Linux hosts); dlq-growth.py reads KAFKA_BIN.
+    KAFKA_BIN = '/Users/abhinav/development/confluent-7.3.1/bin'
+  }
   options {
     disableConcurrentBuilds()
     timeout(time: 10, unit: 'MINUTES')
