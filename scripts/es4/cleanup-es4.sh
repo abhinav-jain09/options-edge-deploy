@@ -80,10 +80,10 @@ fi
 # Jenkins `Ship schema bundle` stage built it from (passed on the ssh command line).
 ES4_SCHEMA_BUNDLE="${ES4_SCHEMA_BUNDLE:-$ES4_HOME/repo/schema-bundle}"
 if [ "$DRY" != "true" ]; then
-  [ -n "${ES4_SCHEMA_BUNDLE_COMMIT:-}" ] || die "ES4_SCHEMA_BUNDLE_COMMIT not supplied - the clean-reset must be bound to the schema bundle it registers after the wipe"
+  [ -n "${ES4_SCHEMA_BUNDLE_COMMIT:-}" ] && [ -n "${ES4_SCHEMA_BUNDLE_DIGEST:-}" ] || die "ES4_SCHEMA_BUNDLE_COMMIT and ES4_SCHEMA_BUNDLE_DIGEST not supplied - the clean-reset must be bound to the schema bundle it registers after the wipe"
 fi
 if [ -n "${ES4_SCHEMA_BUNDLE_COMMIT:-}" ]; then
-  bash "$SCRIPT_DIR/../ci/schema-sync-es4-host.sh" verify "$ES4_SCHEMA_BUNDLE" "$ES4_SCHEMA_BUNDLE_COMMIT" || die "schema bundle verification failed - nothing was changed"
+  bash "$SCRIPT_DIR/../ci/schema-sync-es4-host.sh" verify "$ES4_SCHEMA_BUNDLE" "$ES4_SCHEMA_BUNDLE_COMMIT" "${ES4_SCHEMA_BUNDLE_DIGEST:-}" || die "schema bundle verification failed - nothing was changed"
 fi
 [ -d "$INFRA_DIR" ] || die "no $INFRA_DIR — run bootstrap-es4.sh (infra-sync) first"
 [ -f "$INFRA_DIR/docker-compose.yml" ] || die "no compose file in $INFRA_DIR"
@@ -439,7 +439,7 @@ run "SCHEMA_REGISTRY_URL=http://localhost:8081 SCHEMAS_DIR='$SCRIPT_DIR/../../sc
 # schema-governance: registry-wiped
 # (the registry above is healthy again on an EMPTY store: this is the first point at which a registration can survive the wipe)
 log "registering the manifest's whole es4 schema set from the shipped bundle (schema-sync-es4-host.sh) - before any topic exists and before any app is restored"
-run "SCHEMA_REGISTRY_URL=http://localhost:8081 DEPLOY_DRY_RUN=$DRY bash '$SCRIPT_DIR/../ci/schema-sync-es4-host.sh' apply '$ES4_SCHEMA_BUNDLE' ${ES4_SCHEMA_BUNDLE_COMMIT:-}" \
+run "SCHEMA_REGISTRY_URL=http://localhost:8081 DEPLOY_DRY_RUN=$DRY bash '$SCRIPT_DIR/../ci/schema-sync-es4-host.sh' apply '$ES4_SCHEMA_BUNDLE' ${ES4_SCHEMA_BUNDLE_COMMIT:-} ${ES4_SCHEMA_BUNDLE_DIGEST:-}" \
   || die "the manifest's es4 schemas could not be registered - app left down (rerun resumes from $STATE)"
 log "reconciling required core es.* topic contracts (create-es-topics.sh)"
 # A clean-reset IS the "approved destructive cleanup deployment" that

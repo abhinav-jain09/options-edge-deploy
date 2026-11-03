@@ -355,14 +355,16 @@ pipeline {
 
           BUNDLE_COMMIT="$(tr -d '[:space:]' < .jenkins-tmp/schema-bundle/manifest.commit)"
           [ -n "$BUNDLE_COMMIT" ] || { echo "FATAL: no schema bundle commit - the Ship schema bundle stage did not run"; exit 1; }
+          # Jenkins' OWN digest of the checksum list, handed over on the ssh command line: the host compares it with the shipped list.
+          BUNDLE_DIGEST="$(shasum -a 256 .jenkins-tmp/schema-bundle/SHA256SUMS | cut -d' ' -f1)"
           if [ "${DEPLOY_DRY_RUN}" = "true" ]; then
             echo "DRY: would run the on-box wipe (no prod es-feed to fence — retired per DBP-R33)"
-            ssh -o BatchMode=yes "$ES4_HOST" "DEPLOY_DRY_RUN=true ES4_SCHEMA_BUNDLE_COMMIT=$BUNDLE_COMMIT ES4_FEED_FENCED=1 ES4_EXPECTED_NS_UID=$ES4_NS_UID ES4_STRIKE_ARCHIVE_INTERLOCK=$STRIKE_INTERLOCK bash /home/es4/repo/scripts/es4/cleanup-es4.sh"
+            ssh -o BatchMode=yes "$ES4_HOST" "DEPLOY_DRY_RUN=true ES4_SCHEMA_BUNDLE_COMMIT=$BUNDLE_COMMIT ES4_SCHEMA_BUNDLE_DIGEST=$BUNDLE_DIGEST ES4_FEED_FENCED=1 ES4_EXPECTED_NS_UID=$ES4_NS_UID ES4_STRIKE_ARCHIVE_INTERLOCK=$STRIKE_INTERLOCK bash /home/es4/repo/scripts/es4/cleanup-es4.sh"
             exit 0
           fi
 
           echo "=== running on-box atomic wipe ==="
-          ssh -o BatchMode=yes "$ES4_HOST" "DEPLOY_DRY_RUN=false ES4_SCHEMA_BUNDLE_COMMIT=$BUNDLE_COMMIT ES4_FEED_FENCED=1 ES4_EXPECTED_NS_UID=$ES4_NS_UID ES4_STRIKE_ARCHIVE_INTERLOCK=$STRIKE_INTERLOCK bash /home/es4/repo/scripts/es4/cleanup-es4.sh"
+          ssh -o BatchMode=yes "$ES4_HOST" "DEPLOY_DRY_RUN=false ES4_SCHEMA_BUNDLE_COMMIT=$BUNDLE_COMMIT ES4_SCHEMA_BUNDLE_DIGEST=$BUNDLE_DIGEST ES4_FEED_FENCED=1 ES4_EXPECTED_NS_UID=$ES4_NS_UID ES4_STRIKE_ARCHIVE_INTERLOCK=$STRIKE_INTERLOCK bash /home/es4/repo/scripts/es4/cleanup-es4.sh"
         '''
       }
     }

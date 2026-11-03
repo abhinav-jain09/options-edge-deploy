@@ -135,6 +135,11 @@ jobs:
       - name: Schema sync es4 host script negative controls
         run: bash scripts/ci/schema-sync-es4-host-test.sh
 
+      - name: Fleet readiness and DLQ growth negative controls
+        run: |
+          python3 scripts/watch/fleet-readiness-test.py
+          python3 scripts/watch/dlq-growth-test.py
+
       - name: Schema sync gate negative controls (mock registry, real tool jar)
         run: SCHEMA_GOV_JAR="$PWD/tools/schema-governance/schema-governance-tool.jar" bash scripts/ci/schema-sync-test.sh
 

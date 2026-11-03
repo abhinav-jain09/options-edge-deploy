@@ -37,4 +37,11 @@ mkbundle; printf 's-value|2100|s-value/ghost.avsc|1\n' > "$T/b/plan.map"; ( cd "
 expect "no bundle directory at all" "missing or incomplete" bash "$H" verify "$T/nope" c0ffee
 mkbundle; expect "apply (dry run) registers the plan through the engine" ok env SCHEMA_REGISTRY_URL="http://127.0.0.1:$PORT" DEPLOY_DRY_RUN=true bash "$H" apply "$T/b" c0ffee
 mkbundle; printf 'x' >> "$T/b/plan.map"; expect "apply refuses a bundle that fails verification" "SHA256SUMS" env SCHEMA_REGISTRY_URL="http://127.0.0.1:$PORT" DEPLOY_DRY_RUN=true bash "$H" apply "$T/b" c0ffee
+dg() { shasum -a 256 "$T/b/SHA256SUMS" | cut -d' ' -f1; }
+mkbundle; expect "the right digest verifies" ok bash "$H" verify "$T/b" c0ffee "$(dg)"
+mkbundle; D="$(dg)"; : > "$T/b/SHA256SUMS"; expect "a checksum list emptied by an attacker no longer matches Jenkins' digest" "was altered or regenerated" bash "$H" verify "$T/b" c0ffee "$D"
+mkbundle; D="$(dg)"; ( cd "$T/b" && sed -i.bak '/schemas/d' SHA256SUMS && rm SHA256SUMS.bak ); expect "a schema entry deleted from the list is caught by the digest" "was altered or regenerated" bash "$H" verify "$T/b" c0ffee "$D"
+mkbundle; OLDD="$(dg)"; printf 'x' >> "$T/b/schemas/s-value/v1.avsc"; ( cd "$T/b" && { shasum -a 256 plan.map manifest.commit; find schemas -type f | sort | xargs shasum -a 256; } > SHA256SUMS ); expect "regenerating the list after tampering is caught by Jenkins' digest" "was altered or regenerated" bash "$H" verify "$T/b" c0ffee "$OLDD"
+mkbundle; D="$(dg)"; echo extra > "$T/b/schemas/extra.avsc"; expect "an unlisted extra file in the bundle" "disagree about which files exist" bash "$H" verify "$T/b" c0ffee "$D"
+mkbundle; expect "an unknown mode is refused, not treated as verify" "unknown mode" bash "$H" check "$T/b" c0ffee
 exit $fail
