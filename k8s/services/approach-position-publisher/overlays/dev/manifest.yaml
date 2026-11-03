@@ -44,7 +44,7 @@ spec:
             - name: IB_HOST
               value: host.docker.internal
             - name: IB_PORT
-              value: "4002"
+              value: "4001"
             - name: IBKR_APPROACH_CLIENT_ID
               value: "951"
             - name: TRANSACTIONAL_ID

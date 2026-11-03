@@ -648,10 +648,15 @@ patches:
       kind: Deployment
       name: approach-position-publisher
     patch: |-
-      # Same gateway story as ibkr-feed: on the dev Mac there is no in-cluster :4001 and no
-      # control-plane label, so the pod reaches IB Gateway through host.docker.internal on the
-      # PAPER listener 4002. The shared configmap's IB_PORT=4001 is the LIVE port and stays for
-      # prod, which this service does not run in.
+      # Same gateway story as ibkr-feed: on the dev machine there is no in-cluster :4001 and no
+      # control-plane label, so the pod reaches IB Gateway through host.docker.internal. The Gateway
+      # runs on the owner's Mac ("201") and listens on 4001 ONLY; the reverse tunnel
+      # (com.optionsedge.ib-gateway-reverse-tunnel) forwards the same port numbers to the dev machine.
+      # It used to dial 4002, which the tunnel forwards to a port nothing listens on on that Mac
+      # ("could not connect to IBKR at host.docker.internal:4002"), so this service and approach-monitor
+      # (which reads its registry) stayed unready. Dial the port the Gateway actually listens on, exactly
+      # as ibkr-feed does. No mode is inferred from the port number; the account the Gateway reports is
+      # the only source of truth.
       - op: remove
         path: /spec/template/spec/nodeSelector
       - op: remove
@@ -667,7 +672,7 @@ patches:
         path: /spec/template/spec/containers/0/env/2
         value:
           name: IB_PORT
-          value: "4002"
+          value: "4001"
   - target:
       kind: Deployment
       name: ibkr-feed-service
