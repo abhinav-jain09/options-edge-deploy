@@ -28,6 +28,10 @@ spec:
             - { name: MARKET_STRUCTURE_ESTIMATE_ENABLED, value: "true" }
             - { name: MARKET_STRUCTURE_ESTIMATE_ALLOW_PRODUCTION, value: "true" }
             - { name: MARKET_STRUCTURE_PATTERNS_ENABLED, value: "true" }
+            # GTH-STRUCTURE-OUTPUTS (dev only): the overnight tools and geometry folds are OFF here, explicitly (this container takes envFrom the shared config and the
+            # regular container's patch sets both flags true, so an absent variable would not be a guarantee).
+            - { name: MARKET_STRUCTURE_TOOLS_ENABLED, value: "false" }
+            - { name: MARKET_STRUCTURE_GEOMETRY_ENABLED, value: "false" }
             - { name: MARKET_STRUCTURE_HEALTH_PORT, value: "8082" }
             - { name: JAVA_TOOL_OPTIONS, value: "-Xms128m -Xmx384m" }
           ports:

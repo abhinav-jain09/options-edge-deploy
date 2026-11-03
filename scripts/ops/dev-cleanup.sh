@@ -926,7 +926,7 @@ dev_clean_preserved_topics() {
 # DEV-ONLY overnight estimate topics the wipe must also keep (their owners: the indicator-estimate and
 # market-structure-estimate sidecars). They are not in the shared topics.env on purpose (prod must not grow them),
 # so their names live here, next to ensure_dev_only_estimate_topics.
-DEV_ONLY_ESTIMATE_KEEP="options.indicators.estimate.bars options.indicators.estimate.bars.current options.spx.market-structure.estimate.recovery options.spx.market-structure.estimate.patterns options.spx.market-structure.estimate.ui options.spx.market-structure.estimate.sequence"
+DEV_ONLY_ESTIMATE_KEEP="options.indicators.estimate.bars options.indicators.estimate.bars.current options.spx.market-structure.estimate.recovery options.spx.market-structure.estimate.patterns options.spx.market-structure.estimate.ui options.spx.market-structure.estimate.sequence options.spx.market-structure.estimate.tools options.spx.market-structure.estimate.geometry"
 
 do_clean() {
   clean_guard || return 1

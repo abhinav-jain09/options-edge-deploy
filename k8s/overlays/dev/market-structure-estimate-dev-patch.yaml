@@ -31,6 +31,10 @@ spec:
             - { name: MARKET_STRUCTURE_SESSION_PROFILE, value: "PREMARKET_ESTIMATE" }
             - { name: MARKET_STRUCTURE_ESTIMATE_ENABLED, value: "true" }
             - { name: MARKET_STRUCTURE_PATTERNS_ENABLED, value: "true" }
+            # GTH-STRUCTURE-OUTPUTS (processing market-structure-service/docs, 2026-11-03): the overnight session also folds the structure tools and the classical
+            # geometry, written to options.spx.market-structure.estimate.{tools,geometry} (fixed in code). Swing pivots and break events stay off for this profile in code.
+            - { name: MARKET_STRUCTURE_TOOLS_ENABLED, value: "true" }
+            - { name: MARKET_STRUCTURE_GEOMETRY_ENABLED, value: "true" }
             - { name: MARKET_STRUCTURE_HEALTH_PORT, value: "8082" }
             - { name: JAVA_TOOL_OPTIONS, value: "-Xms128m -Xmx384m" }
           ports:
