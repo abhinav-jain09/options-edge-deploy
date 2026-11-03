@@ -138,6 +138,9 @@ jobs:
       - name: Schema code-vs-manifest verifier negative controls
         run: bash scripts/ci/schema-code-verify-test.sh
 
+      - name: Schema source-drift check negative controls
+        run: bash scripts/ci/schema-source-check-test.sh
+
       - name: Fleet readiness and DLQ growth negative controls
         run: |
           python3 scripts/watch/fleet-readiness-test.py
