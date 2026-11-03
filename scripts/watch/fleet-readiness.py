@@ -57,19 +57,23 @@ rsets = [it for it in items if it.get("kind") == "ReplicaSet"]
 
 
 def owned_by(obj, uid):
-    return any(o.get("uid") == uid for o in obj.get("metadata", {}).get("ownerReferences") or [])
+    """True only for the CONTROLLING owner reference (controller: true) with this uid: a bare reference does not make a pod this workload's."""
+    return any(o.get("uid") == uid and o.get("controller") is True for o in obj.get("metadata", {}).get("ownerReferences") or [])
 
 
 def pods_healthy(workload, want):
-    """The workload's OWN pods - resolved through controller ownership (Deployment -> its non-empty ReplicaSets -> Pods; StatefulSet -> Pods), not by labels
+    """The workload's OWN pods - resolved through controller ownership (Deployment -> its CURRENT ReplicaSet -> Pods; StatefulSet -> Pods), not by labels
     alone, and only when its selector is plain matchLabels that the pod also satisfies - account for every desired replica and are all really running."""
     uid = workload.get("metadata", {}).get("uid")
     sel = workload.get("spec", {}).get("selector") or {}
     if not uid or not sel.get("matchLabels") or sel.get("matchExpressions"): return False     # fail closed on anything this cannot resolve exactly
     if workload.get("kind") == "Deployment":
-        owners = {rs["metadata"]["uid"] for rs in rsets if owned_by(rs, uid) and (rs.get("spec", {}).get("replicas", 0) or 0) > 0 and rs.get("metadata", {}).get("uid")}
-        if not owners: return False
-        mine = [p for p in pods if any(owned_by(p, ou) for ou in owners)]
+        rev = (workload.get("metadata", {}).get("annotations") or {}).get("deployment.kubernetes.io/revision")
+        if not rev: return False
+        # the CURRENT ReplicaSet only (its revision annotation equals the Deployment's): an old one kept during a rollout must not stand in for it
+        cur = [rs for rs in rsets if owned_by(rs, uid) and (rs.get("metadata", {}).get("annotations") or {}).get("deployment.kubernetes.io/revision") == rev and rs.get("metadata", {}).get("uid")]
+        if len(cur) != 1 or (cur[0].get("spec", {}).get("replicas", 0) or 0) != want: return False
+        mine = [p for p in pods if owned_by(p, cur[0]["metadata"]["uid"])]
     else:
         mine = [p for p in pods if owned_by(p, uid)]
     mine = [p for p in mine if all(p.get("metadata", {}).get("labels", {}).get(k) == v for k, v in sel["matchLabels"].items())]

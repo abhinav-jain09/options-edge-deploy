@@ -88,17 +88,18 @@ lowav = dep("lowav", 2, 1, since="2026-11-03T11:50:00Z")
 lowav["status"]["conditions"].append({"type": "Progressing", "status": "False", "reason": "ProgressDeadlineExceeded", "lastUpdateTime": "2026-11-03T11:50:00Z", "lastTransitionTime": "2026-11-03T11:50:00Z"})
 expect("ProgressDeadlineExceeded is STUCK at once even when availability has already fallen below desired", 1, "rollout failed", [lowav])
 def pod(app, phase="Running", running=True, restarts=0, n=1, owner="rs-vix-uid", labels=None):
-    return {"kind": "Pod", "metadata": {"name": "%s-%d" % (app, n), "labels": labels or {"app.kubernetes.io/name": app}, "ownerReferences": [{"uid": owner}]},
+    return {"kind": "Pod", "metadata": {"name": "%s-%d" % (app, n), "labels": labels or {"app.kubernetes.io/name": app}, "ownerReferences": [{"uid": owner, "controller": True}]},
             "status": {"phase": phase, "containerStatuses": [{"restartCount": restarts, "state": {"running": {}} if running else {"waiting": {"reason": "CrashLoopBackOff"}}}]}}
 
 
-def rset(uid="rs-vix-uid", owner="dep-vix-uid", replicas=1):
-    return {"kind": "ReplicaSet", "metadata": {"name": "rs", "uid": uid, "ownerReferences": [{"uid": owner}]}, "spec": {"replicas": replicas}}
+def rset(uid="rs-vix-uid", owner="dep-vix-uid", replicas=1, rev="3"):
+    return {"kind": "ReplicaSet", "metadata": {"name": "rs", "uid": uid, "annotations": {"deployment.kubernetes.io/revision": rev}, "ownerReferences": [{"uid": owner, "controller": True}]}, "spec": {"replicas": replicas}}
 
 
 exp = os.path.join(tempfile.mkdtemp(), "exp.json"); json.dump([{"kind": "Deployment", "name": "vix", "reason": "session window"}], open(exp, "w"))
 def withsel(d, app):
-    d["spec"]["selector"] = {"matchLabels": {"app.kubernetes.io/name": app}}; d["metadata"]["uid"] = "dep-%s-uid" % app; return d
+    d["spec"]["selector"] = {"matchLabels": {"app.kubernetes.io/name": app}}; d["metadata"]["uid"] = "dep-%s-uid" % app
+    d["metadata"].setdefault("annotations", {})["deployment.kubernetes.io/revision"] = "3"; return d
 
 
 unready = withsel(dep("vix", 1, 0, since="2026-11-03T05:00:00Z"), "vix")
@@ -120,4 +121,9 @@ expect_run("a healthy pod with the right labels but owned by a Job/manual contro
 expr = withsel(dep("vix", 1, 0, since="2026-11-03T05:00:00Z"), "vix"); expr["spec"]["selector"]["matchExpressions"] = [{"key": "track", "operator": "In", "values": ["stable"]}]
 expect_run("a selector with matchExpressions cannot be resolved exactly: no exemption (fail closed)", 1, "STUCK Deployment/vix", [expr, rset(), pod("vix")], expected=exp)
 expect_run("only an EMPTY (replicas 0) ReplicaSet owns the pod: not the current rollout", 1, "STUCK Deployment/vix", [unready, rset(replicas=0), pod("vix")], expected=exp)
+p_ref = pod("vix"); p_ref["metadata"]["ownerReferences"] = [{"uid": "rs-vix-uid"}]    # a bare reference, not the controller
+expect_run("a pod that merely REFERENCES the ReplicaSet (controller not true) is not its pod", 1, "STUCK Deployment/vix", [unready, rset(), p_ref], expected=exp)
+expect_run("an OLD ReplicaSet kept during a rollout (other revision) cannot stand in for the current one", 1, "STUCK Deployment/vix", [unready, rset(rev="2"), pod("vix")], expected=exp)
+expect_run("two ReplicaSets claiming the current revision: ambiguous, no exemption", 1, "STUCK Deployment/vix", [unready, rset(), rset(uid="rs2"), pod("vix")], expected=exp)
+expect_run("the current ReplicaSet scaled differently from the Deployment: no exemption", 1, "STUCK Deployment/vix", [unready, rset(replicas=2), pod("vix")], expected=exp)
 sys.exit(fail)
