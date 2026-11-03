@@ -44,14 +44,18 @@ for it in items:
     if kind == "Deployment" and have >= want:
         conds = st.get("conditions") or []
         prog = next((c for c in conds if c.get("type") == "Progressing"), None)
-        lag = (st.get("updatedReplicas", 0) or 0) < want or (st.get("observedGeneration", 0) or 0) < it.get("metadata", {}).get("generation", 0)
+        updated_all = (st.get("updatedReplicas", 0) or 0) >= want
+        observed = (st.get("observedGeneration", 0) or 0) >= it.get("metadata", {}).get("generation", 0)
+        # A rollout is COMPLETE only when Kubernetes says so: Progressing=True with reason NewReplicaSetAvailable, every replica updated, the generation observed.
+        # Anything else is a rollout in flight, and it is aged from the Progressing condition: old pods keeping `available` at the desired count must not
+        # make a half-done (or stuck, e.g. new pods updated but never Ready) rollout look healthy for as long as the progress deadline allows.
+        complete = bool(prog) and prog.get("status") == "True" and prog.get("reason") == "NewReplicaSetAvailable" and updated_all and observed
         if prog and prog.get("status") == "False" and prog.get("reason") == "ProgressDeadlineExceeded":
             stuck.append((kind, name, want, have, -1)); continue
-        if lag:
+        if not complete:
             when = (prog.get("lastUpdateTime") or prog.get("lastTransitionTime")) if prog else None
             if when is None:
-                # a rollout that has not caught up and carries NO progress timestamp cannot be aged, so it cannot be called healthy (fail closed)
-                stuck.append((kind, name, want, have, -2)); continue
+                stuck.append((kind, name, want, have, -2)); continue      # cannot be aged, so cannot be called healthy (fail closed)
             mins_lag = (now - ts(when)).total_seconds() / 60
             if mins_lag > a.minutes:
                 stuck.append((kind, name, want, have, int(mins_lag))); continue

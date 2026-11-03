@@ -7,7 +7,11 @@ NOW = "2026-11-03T12:00:00Z"
 
 def dep(name, want, have, since="2026-11-03T10:00:00Z", kind="Deployment", conds=True):
     st = {"availableReplicas": have, "updatedReplicas": want, "observedGeneration": 1} if have is not None else {}
-    if conds: st["conditions"] = [{"type": "Available", "status": "True" if have and have >= want else "False", "lastTransitionTime": since}]
+    if conds:
+        st["conditions"] = [{"type": "Available", "status": "True" if have and have >= want else "False", "lastTransitionTime": since}]
+        if kind == "Deployment" and have and have >= want:
+            # what a real, finished rollout carries
+            st["conditions"].append({"type": "Progressing", "status": "True", "reason": "NewReplicaSetAvailable", "lastUpdateTime": since, "lastTransitionTime": since})
     return {"kind": kind, "metadata": {"name": name, "generation": 1, "creationTimestamp": "2026-10-01T00:00:00Z"}, "spec": {"replicas": want}, "status": st}
 
 
@@ -51,6 +55,8 @@ expect("old pods serving, new generation 0 of 1 updated for hours: STUCK", 1, "r
 expect("a rollout in progress for under the threshold is tolerated", 0, "0 stuck", [rollout("fresh", 1, 0, "True", "ReplicaSetUpdated", last="2026-11-03T11:50:00Z")])
 expect("the new generation unobserved for hours is stuck", 1, "rollout not completing", [rollout("unobs", 1, 1, "True", "NewReplicaSetAvailable", gen=4, observed=3)])
 expect("a completed rollout (updated == desired, generation observed) is healthy", 0, "1 healthy", [rollout("done", 2, 2, "True", "NewReplicaSetAvailable")])
+expect("new pods updated == desired but never Ready, old pods still serving, ReplicaSetUpdated for hours: STUCK", 1, "rollout not completing", [rollout("surge", 2, 2, "True", "ReplicaSetUpdated")])
+expect("the same state for under the threshold is a rollout in flight", 0, "0 stuck", [rollout("surge2", 2, 2, "True", "ReplicaSetUpdated", last="2026-11-03T11:55:00Z")])
 nop = rollout("noprog", 1, 0, "True", "x"); nop["status"]["conditions"] = [c for c in nop["status"]["conditions"] if c["type"] != "Progressing"]
 expect("lagging rollout with no Progressing condition fails closed", 1, "no Progressing timestamp", [nop])
 sys.exit(fail)
