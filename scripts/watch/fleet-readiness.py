@@ -52,6 +52,11 @@ for it in items:
     # A ROLLOUT that is not completing hides behind the old pods: the old ReplicaSet keeps `available` at the desired count while the new one crash-loops.
     # So a Deployment is also stuck when its Progressing condition says the deadline passed, or when the new generation has not been observed / is not fully
     # updated for longer than the threshold (counted from the Progressing condition's last update).
+    if kind == "Deployment":
+        # a terminal rollout failure declared by Kubernetes itself is never "temporarily healthy", whatever the availability is right now
+        _p = next((c for c in (st.get("conditions") or []) if c.get("type") == "Progressing"), None)
+        if _p and _p.get("status") == "False" and _p.get("reason") == "ProgressDeadlineExceeded":
+            stuck.append((kind, name, want, have, -1)); continue
     if kind == "Deployment" and have >= want:
         conds = st.get("conditions") or []
         prog = next((c for c in conds if c.get("type") == "Progressing"), None)

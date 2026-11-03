@@ -84,4 +84,7 @@ bad_state = os.path.join(tempfile.mkdtemp(), "bad.json"); open(bad_state, "w").w
 expect_run("a corrupt state file fails closed instead of restarting every clock", 2, "unreadable", [sts("db", 1, 1, 0)], state=bad_state)
 dang = os.path.join(tempfile.mkdtemp(), "dangling.json"); os.symlink("/nonexistent/target.json", dang)
 expect_run("a dangling-symlink state path fails closed instead of reading as 'no state'", 2, "unreadable", [sts("db", 1, 1, 0)], state=dang)
+lowav = dep("lowav", 2, 1, since="2026-11-03T11:50:00Z")
+lowav["status"]["conditions"].append({"type": "Progressing", "status": "False", "reason": "ProgressDeadlineExceeded", "lastUpdateTime": "2026-11-03T11:50:00Z", "lastTransitionTime": "2026-11-03T11:50:00Z"})
+expect("ProgressDeadlineExceeded is STUCK at once even when availability has already fallen below desired", 1, "rollout failed", [lowav])
 sys.exit(fail)
