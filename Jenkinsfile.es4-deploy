@@ -421,6 +421,15 @@ pipeline {
             mvn -q -Dtest=RithmicSchemasTest package
           '''
         }
+        script {
+          env.RITHMIC_CONTRACTS_VERSION = sh(returnStdout: true, script: '''python3 - <<'PY_VERSION'
+import re,xml.etree.ElementTree as E
+version=E.parse('.jenkins-tmp/rithmic-contracts/pom.xml').getroot().findtext('{http://maven.apache.org/POM/4.0.0}version')
+if not version or not re.fullmatch(r'[0-9]+[.][0-9]+[.][0-9]+',version):raise SystemExit('Released contracts version required')
+print(version)
+PY_VERSION
+''').trim()
+        }
         sh '''set -euo pipefail
           python3 -m venv "$RITHMIC_VENV_DIR"
           "$RITHMIC_VENV_DIR/bin/pip" -q install -r .jenkins-tmp/rithmic-source/requirements.txt
@@ -431,7 +440,7 @@ pipeline {
           KUBECONFIG="$ES4_KUBECONFIG" kubectl -n options-edge auth can-i create pods/exec | grep -qx yes
           KUBECONFIG=/Users/abhinav/.kube/es4.kubeconfig kubectl apply -f k8s/es4/policy/workload-whitelist-admission.yaml
           cd .jenkins-tmp/rithmic-source
-          "$RITHMIC_VENV_DIR/bin/python" scripts/deploy-kubernetes.py --sha "$RITHMIC_PERMITTED_SHA" --sdk-zip "$RITHMIC_SDK_ZIP" --contracts-sha "$CONTRACTS_PERMITTED_SHA" --contracts-jar "$WORKSPACE/.jenkins-tmp/rithmic-contracts/target/options-edge-contracts-0.63.0.jar" --manifest "$WORKSPACE/k8s/es4/services/rithmic-depth-bridge.yaml"
+          "$RITHMIC_VENV_DIR/bin/python" scripts/deploy-kubernetes.py --sha "$RITHMIC_PERMITTED_SHA" --sdk-zip "$RITHMIC_SDK_ZIP" --contracts-sha "$CONTRACTS_PERMITTED_SHA" --contracts-jar "$WORKSPACE/.jenkins-tmp/rithmic-contracts/target/options-edge-contracts-${RITHMIC_CONTRACTS_VERSION}.jar" --contracts-version "$RITHMIC_CONTRACTS_VERSION" --manifest "$WORKSPACE/k8s/es4/services/rithmic-depth-bridge.yaml"
         '''
       }
     }
