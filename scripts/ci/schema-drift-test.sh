@@ -21,6 +21,11 @@ for e in M["entries"]:
     if e["kind"] == "ENV_LOCAL" and "prod" in e["environments"]: subjects.setdefault(e["subject"], {1: (1, '{"type":"record","name":"X","fields":[]}')})
 if MODE == "extra": subjects["early-auction.verdicts.shadow-value"][3] = (3059, "{}")
 if MODE == "missing": subjects.pop("early-auction.verdicts.shadow-value", None)
+if MODE == "diffid": i, tx = subjects["early-auction.verdicts.shadow-value"][2]; subjects["early-auction.verdicts.shadow-value"][2] = (i + 1, tx)
+if MODE == "difftext": i, tx = subjects["early-auction.verdicts.shadow-value"][2]; subjects["early-auction.verdicts.shadow-value"][2] = (i, tx.replace('"name":"EarlyAuctionVerdictLedger"', '"name":"EarlyAuctionVerdictLedgerX"', 1))
+if MODE == "absentlocal":
+    for e in M["entries"]:
+        if e["kind"] == "ENV_LOCAL" and "prod" in e["environments"]: subjects.pop(e["subject"], None)
 if MODE == "unmanifested": subjects["stranger"] = {1: (9, '{"type":"record","name":"S","fields":[]}')}
 class H(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a): pass
@@ -50,6 +55,16 @@ check() { local name="$1" want="$2" out rc=0; out=$(cd "$T/repo" && SCHEMA_DRIFT
 run clean;        check "a registry equal to the manifest is clean" ok
 run extra;        check "a dev-only version found on prod (EXTRA_VERSION)" "EXTRA_VERSION"
 run missing;      check "the early-auction subject missing (MISSING)" "MISSING"
+run diffid;       check "same version, wrong registry id (DIFFERENT)" "DIFFERENT"
+run difftext;     check "same id, different schema text (DIFFERENT)" "DIFFERENT"
+run absentlocal;  check "an absent ENV_LOCAL subject is the one tolerated absence (ABSENT_OK)" ok
 run unmanifested; check "a subject the manifest never named (UNMANIFESTED)" "UNMANIFESTED"
 run down;         check "an unreachable registry is a failure, not zero drift" "DRIFT"
+# a flaky registry must not turn a failing drift into OK: ONE drift query decides (the earlier two-query form could contradict itself)
+run clean; python3 - "$T/repo/scripts/ci/schema-drift.sh" <<'PY'
+import sys; t=open(sys.argv[1]).read(); assert t.count(' drift --manifest') == 1, "schema-drift.sh must query drift exactly once per environment"
+PY
+echo "ok     schema-drift.sh queries drift exactly once per environment"
+(cd "$T/repo" && SCHEMA_DRIFT_ANYTIME=true bash scripts/ci/schema-drift.sh 'prod;touch /tmp/pwned' >/dev/null 2>&1) && { echo "NOT-OK an injected environment word was accepted"; fail=1; } || echo "ok     an environment word that is not dev, prod or es4 is refused"
+[ ! -e /tmp/pwned ] && echo "ok     nothing in the environment word was executed" || { echo "NOT-OK injected command ran"; fail=1; }
 exit $fail

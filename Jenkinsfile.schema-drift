@@ -22,7 +22,9 @@ pipeline {
   stages {
     stage('Drift') {
       steps {
-        sh 'bash scripts/ci/schema-drift.sh ${ENVS}'
+        // ENVS reaches the shell only as an environment variable (Groovy does not interpolate it into the command), and
+        // schema-drift.sh accepts nothing but dev, prod or es4 per word.
+        sh 'bash scripts/ci/schema-drift.sh $ENVS'
       }
     }
   }

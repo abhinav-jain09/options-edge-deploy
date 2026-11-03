@@ -18,6 +18,7 @@ import argparse, collections, json, os, re, sys
 ap = argparse.ArgumentParser()
 for e in ("dev", "prod", "es4"): ap.add_argument("--" + e, required=True)
 ap.add_argument("--schema-text-dir", required=True)
+ap.add_argument("--jar", default="tools/schema-governance/schema-governance-tool.jar", help="the tool jar: schemaHash is recomputed from the copied text")
 ap.add_argument("--manifest", default="schema-manifest/manifest.json")
 ap.add_argument("--snapshots", default="schema-manifest/schemas")
 a = ap.parse_args()
@@ -53,6 +54,14 @@ for s in subjects:
     elif any(i < 2000 for i in ids): plan[s] = ("ENV_LOCAL", "auto-assigned: at least one version has a registry-assigned id below 2000 (not a fixed id, so not mirror-safe by construction)")
     elif id_div: plan[s] = ("ENV_LOCAL", "id-divergent: same schema but different ids in different registries (see INVENTORY-FINDINGS)")
     else: plan[s] = ("MIRRORED", "")
+# two VERSIONS of one subject may not share an id either (R3a is per (subject, version))
+for s in subjects:
+    if plan.get(s, ("",))[0] != "MIRRORED": continue
+    seen_ids = {}
+    for e in ENVS:
+        for v, r in per[s][e].items():
+            if seen_ids.setdefault(r["id"], v) != v:
+                plan[s] = ("ENV_LOCAL", "two versions of this subject share id %d (R3a)" % r["id"])
 # a manifest id may belong to ONE entry (R3a): later holders become ENV_LOCAL aliases
 owner = {e["id"]: e["subject"] for e in kept if e.get("kind") == "MIRRORED"}
 for s in subjects:
@@ -63,6 +72,22 @@ for s in subjects:
             plan[s] = ("ENV_LOCAL", "shares id %d with %s (debug/scratch alias or duplicate registration)" % (i, owner[i])); break
         owner[i] = s
 
+import subprocess
+
+
+def jar_hash(path):
+    return subprocess.check_output(["java", "-jar", a.jar, "hash", path], text=True, stderr=subprocess.DEVNULL).strip()
+
+
+# PRE-FLIGHT, before anything is written: every schema text the run will copy must hash to the inventory's schemaHash. A stale or
+# misrouted --schema-text-dir would otherwise generate snapshots whose text and recorded hash disagree.
+for s in subjects:
+    if s in curated or plan[s][0] != "MIRRORED": continue
+    for e in ENVS:
+        for v, r in per[s][e].items():
+            p = os.path.join(a.schema_text_dir, e, "%s/v%d.avsc" % (s, v))
+            if not os.path.exists(p): sys.exit("FAIL: no schema text for %s v%d in %s (%s)" % (s, v, e, p))
+            if jar_hash(p) != r["schemaHash"]: sys.exit("FAIL: %s v%d in %s: the schema text hashes to %s but the inventory says %s - refusing to write anything" % (s, v, e, jar_hash(p), r["schemaHash"]))
 entries = list(kept); fam_ids = collections.defaultdict(set)
 for s in subjects:
     if s in curated: continue

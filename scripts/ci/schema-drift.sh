@@ -15,11 +15,15 @@ if [ "${SCHEMA_DRIFT_ANYTIME:-false}" != "true" ]; then
 fi
 rc=0
 for env in "$@"; do
+  case "$env" in dev|prod|es4) ;; *) echo "FATAL: unknown environment '$env' (dev, prod or es4)"; rc=1; continue ;; esac
   url="$(python3 -c 'import json,sys; print(json.load(open("schema-manifest/registries.json"))[sys.argv[1]])' "$env")" || { echo "FATAL: no registry URL for $env"; rc=1; continue; }
   echo "=== schema-drift $env ($url) ==="
-  java -jar "$JAR" validate --manifest schema-manifest/manifest.json --snapshots schema-manifest/schemas 2>&1 | grep -v '^SLF4J' || rc=1
-  java -jar "$JAR" drift --manifest schema-manifest/manifest.json --env "$env" --registry "$url" 2> >(grep -v '^SLF4J' >&2) | grep -v -E '^(PRESENT|ABSENT_OK) ' || true
-  # the pipe hides the tool's exit code; ask again for the verdict, quietly
-  java -jar "$JAR" drift --manifest schema-manifest/manifest.json --env "$env" --registry "$url" >/dev/null 2>&1 && echo "schema-drift $env: OK" || { echo "schema-drift $env: DRIFT (or unreachable)"; rc=1; }
+  if ! java -jar "$JAR" validate --manifest schema-manifest/manifest.json --snapshots schema-manifest/schemas >/dev/null 2>&1; then
+    echo "schema-drift $env: the manifest itself does not validate"; java -jar "$JAR" validate --manifest schema-manifest/manifest.json --snapshots schema-manifest/schemas 2>&1 | grep -v '^SLF4J'; rc=1; continue
+  fi
+  # ONE invocation: its output is what is shown and its exit status is the verdict (no second query that could disagree).
+  out="$(java -jar "$JAR" drift --manifest schema-manifest/manifest.json --env "$env" --registry "$url" 2>&1)"; drc=$?
+  printf '%s\n' "$out" | grep -v -E '^(SLF4J|PRESENT |ABSENT_OK )' || true
+  if [ "$drc" = 0 ]; then echo "schema-drift $env: OK"; else echo "schema-drift $env: DRIFT (or unreachable)"; rc=1; fi
 done
 exit $rc
