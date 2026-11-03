@@ -15,6 +15,9 @@ class RithmicEs4Service(unittest.TestCase):
         job=(ROOT/'Jenkinsfile.es4-deploy').read_text()
         self.assertIn("params.SERVICE == 'rithmic-depth-bridge'",job)
         self.assertIn('RITHMIC_PERMITTED_SHA',job)
+        self.assertEqual(job.count("stage('Deploy to es4')"),1)
+        self.assertNotIn("stage('Deploy Rithmic service on ES4')",job)
+        self.assertIn("if (params.ACTION == 'deploy-service' && params.SERVICE == 'rithmic-depth-bridge')",job)
         self.assertIn('es-feed|rithmic-depth-bridge|spread-skew',job)
         registry=yaml.safe_load((ROOT/'services.yaml').read_text())
         service=next(s for s in registry['services'] if s['name']=='rithmic-depth-bridge')
@@ -28,7 +31,7 @@ class RithmicEs4Service(unittest.TestCase):
         self.assertIn('contracts/schemas/rithmic/',job)
         self.assertIn('es.rithmic.depth-value|3301|RithmicDepthFrame.avsc|1',(ROOT/'scripts/kafka/schema-id-maps/rithmic-depth.map').read_text())
     def test_exec_permission_is_provisioned_before_workload_effects(self):
-        job=(ROOT/'Jenkinsfile.es4-deploy').read_text();stage=job[job.index("stage('Deploy Rithmic service on ES4')"):]
+        job=(ROOT/'Jenkinsfile.es4-deploy').read_text();stage=job[job.index("stage('Deploy to es4')"):]
         self.assertLess(stage.index('auth can-i create pods/exec'),stage.index('python" scripts/deploy-kubernetes.py'))
         role=list(yaml.safe_load_all((ROOT/'k8s/es4/security/jenkins-deployer-rbac.yaml').read_text()))
         self.assertTrue(any('pods/exec' in rule.get('resources',[]) and 'create' in rule['verbs'] for d in role for rule in d.get('rules',[])))

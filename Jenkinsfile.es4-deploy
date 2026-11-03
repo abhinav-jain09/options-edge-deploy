@@ -404,9 +404,11 @@ pipeline {
         sh 'python3 scripts/es4/pinned-image-rollforward.py'
       }
     }
-    stage('Deploy Rithmic service on ES4') {
-      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && params.ACTION == 'deploy-service' && params.SERVICE == 'rithmic-depth-bridge' } }
+    stage('Deploy to es4') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.ACTION == 'deploy-service' || params.ACTION == 'deploy-all') } }
       steps {
+        script {
+          if (params.ACTION == 'deploy-service' && params.SERVICE == 'rithmic-depth-bridge') {
         script {
           if (!(params.RITHMIC_PERMITTED_SHA ==~ /[0-9a-f]{40}/)) error('Exact Rithmic main revision required')
           if (!(params.CONTRACTS_PERMITTED_SHA ==~ /[0-9a-f]{40}/)) error('Exact contracts main revision required')
@@ -464,11 +466,7 @@ PY_VERSION
           cd .jenkins-tmp/rithmic-source
           "$RITHMIC_VENV_DIR/bin/python" scripts/deploy-kubernetes.py --sha "$RITHMIC_PERMITTED_SHA" --sdk-zip "$RITHMIC_SDK_ZIP" --contracts-sha "$CONTRACTS_PERMITTED_SHA" --contracts-jar "$WORKSPACE/.jenkins-tmp/rithmic-contracts/target/options-edge-contracts-${RITHMIC_CONTRACTS_VERSION}.jar" --contracts-version "$RITHMIC_CONTRACTS_VERSION" --manifest "$WORKSPACE/k8s/es4/services/rithmic-depth-bridge.yaml"
         '''
-      }
-    }
-    stage('Deploy to es4') {
-      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && ((params.ACTION == 'deploy-service' && params.SERVICE != 'rithmic-depth-bridge') || params.ACTION == 'deploy-all') } }
-      steps {
+          } else {
         // The on-box scripts this path runs over ssh (the indicator state rotation and recreate, plan section 5) are
         // the committed scripts/ tree: ship it first, as the create-topics path does — a dedicated rsync right after
         // the verify of the tree it ships (Deployment Permission Rule, validator rule 9b). es4-deploy #783 ran the
@@ -622,6 +620,8 @@ PY_VERSION
           fi
           [ -n "$DRY" ] || kubectl -n options-edge get pods -o wide
         '''
+          }
+        }
       }
     }
     stage('Activate es-feed (separate authorized action)') {
