@@ -61,6 +61,10 @@ spec:
               value: "true"
             - name: GATE_PHASEF_EVIDENCE
               value: "false"
+            # The semantic gate of host completeness (VWAP-ACCEPTANCE-REJECTION-DESIGN.md DN7, 6.3 revision 2): BAR_MARKER reads the per-bar BreakCompletenessMarker that market-structure-service publishes on
+            # break-events; the default NONE evaluates no host-associated episode. DEV ONLY: the service refuses BAR_MARKER when ENVIRONMENT is prod, and this base renders on dev only.
+            - name: GATE_HOST_COMPLETENESS
+              value: BAR_MARKER
           ports:
             - name: health
               containerPort: 8172

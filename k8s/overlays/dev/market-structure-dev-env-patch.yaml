@@ -6,6 +6,10 @@
 # the degree-2 swing points of the tools fold are published as Avro SwingPivotRecord (subject id 2606) on options.spx.market-structure.swing-pivots. Preconditions: subject 2606 on the dev registry
 # (registered by service-deploy SERVICE=break-classifier REGISTER_TA_SCHEMAS=true; the service logs "swing-pivot publication off, schema not obtainable" and stays off for the schedule when it is
 # missing) and the topic (ensure-market-structure-topics.sh, which the service-deploy barrier runs). Rollback: set it back to "false" here, regenerate the slices, deploy market-structure.
+# MARKET_STRUCTURE_BREAK_EVENTS_ENABLED and MARKET_STRUCTURE_BREAK_COMPLETENESS_ENABLED are "true" on dev only, on the REGULAR container only (the estimate container does not publish break events; P1 of the
+# producer requirement: at most one publisher of options.spx.market-structure.break-events per trade date). They were set by hand on the running dev Deployment on 2026-11-03 (processing PR 1592: the break events
+# and the per-bar BreakCompletenessMarker, schema id 2608, which line-acceptance-service reads under GATE_HOST_COMPLETENESS=BAR_MARKER); a service-deploy of the base would have dropped them. Recording the live state
+# here is not a new rollout. Production is untouched. MARKET_STRUCTURE_IGNORE_RECOVERY is deliberately NOT here (the W0 rollover flag is never committed; tests/test_ta_geometry_deploy_wiring.py pins that).
 # MIRRORS k8s/services/market-structure/overlays/dev — the slice generator renders it from here.
 apiVersion: apps/v1
 kind: Deployment
@@ -23,4 +27,8 @@ spec:
             - name: MARKET_STRUCTURE_GEOMETRY_ENABLED
               value: "true"
             - name: MARKET_STRUCTURE_SWING_PIVOTS_ENABLED
+              value: "true"
+            - name: MARKET_STRUCTURE_BREAK_EVENTS_ENABLED
+              value: "true"
+            - name: MARKET_STRUCTURE_BREAK_COMPLETENESS_ENABLED
               value: "true"

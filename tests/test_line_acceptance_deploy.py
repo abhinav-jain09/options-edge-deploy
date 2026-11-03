@@ -207,7 +207,7 @@ def deployment(rel: str) -> dict:
 
 
 GATES = {"GATE_STRUCTURE_ENABLED": "true", "GATE_GEOMETRY_ENABLED": "true", "GATE_VWAP_ENABLED": "true", "GATE_FOOTPRINT_ENABLED": "true", "GATE_CANDLES_ENABLED": "true",
-         "GATE_PHASEF_EVIDENCE": "false"}
+         "GATE_PHASEF_EVIDENCE": "false", "GATE_HOST_COMPLETENESS": "BAR_MARKER"}
 
 
 class LiveOnDev(unittest.TestCase):
