@@ -1,0 +1,1 @@
+{"type":"record","name":"TtCheckpointChunk","namespace":"com.optionsedge.contracts.tradetools","fields":[{"name":"runId","type":"string"},{"name":"component","type":{"type":"enum","name":"Component","symbols":["COMMON","DEDUP","PF","FLOW","PROFILE","CLIMAX","LEGS","UNKNOWN"],"default":"UNKNOWN"}},{"name":"index","type":"int"},{"name":"payload","type":"bytes"}]}

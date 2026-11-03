@@ -1,0 +1,1 @@
+{"type":"record","name":"LevelAbsorptionClosure","namespace":"com.optionsedge.contracts.cvdrelated","fields":[{"name":"kind","type":"string"},{"name":"tradeDate","type":"string"},{"name":"barStartEpochMillis","type":"long"},{"name":"inputOffset","type":"long"},{"name":"decidedAtEpochMillis","type":"long"}]}

@@ -1,0 +1,1 @@
+{"type":"record","name":"GeometryWatermark","namespace":"com.optionsedge.contracts.geometry","doc":"LAG-R16.7 the watermark: ONE live record per logical identity on a compacted single-partition topic; key = identity, value = (session, W).","fields":[{"name":"identity","type":"string"},{"name":"session","type":"string"},{"name":"admissionSeq","type":"long"}]}
