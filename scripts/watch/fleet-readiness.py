@@ -76,7 +76,9 @@ def pods_healthy(workload, want):
         mine = [p for p in pods if owned_by(p, cur[0]["metadata"]["uid"])]
     else:
         mine = [p for p in pods if owned_by(p, uid)]
-    mine = [p for p in mine if all(p.get("metadata", {}).get("labels", {}).get(k) == v for k, v in sel["matchLabels"].items())]
+    # EVERY controller-owned pod counts, and every one must satisfy the selector: a pod the controller owns whose labels drifted is a defect to report, not a
+    # pod to drop from the count (dropping it would let a healthy replacement make the numbers add up while a broken extra pod hides).
+    if not all(all(p.get("metadata", {}).get("labels", {}).get(k) == v for k, v in sel["matchLabels"].items()) for p in mine): return False
     if len(mine) != want: return False
     for p in mine:
         if p.get("metadata", {}).get("deletionTimestamp"): return False      # a terminating pod stays Running while it shuts down; it is not the workload's healthy pod

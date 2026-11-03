@@ -128,4 +128,9 @@ expect_run("two ReplicaSets claiming the current revision: ambiguous, no exempti
 expect_run("the current ReplicaSet scaled differently from the Deployment: no exemption", 1, "STUCK Deployment/vix", [unready, rset(replicas=2), pod("vix")], expected=exp)
 term = pod("vix"); term["metadata"]["deletionTimestamp"] = "2026-11-03T11:59:00Z"
 expect_run("a TERMINATING pod (still phase Running) does not satisfy the exemption", 1, "STUCK Deployment/vix", [unready, rset(), term], expected=exp)
+drift = pod("vix", n=2, running=False); drift["metadata"]["labels"] = {"app.kubernetes.io/name": "vix", "component": "drifted"}
+sel2 = withsel(dep("vix", 1, 0, since="2026-11-03T05:00:00Z"), "vix"); sel2["spec"]["selector"]["matchLabels"]["component"] = "feed"
+ok_pod = pod("vix", n=1); ok_pod["metadata"]["labels"] = {"app.kubernetes.io/name": "vix", "component": "feed"}
+expect_run("a controller-owned crash-looping pod whose labels drifted is NOT dropped from the count (it makes the exemption fail)", 1, "STUCK Deployment/vix", [sel2, rset(), ok_pod, drift], expected=exp)
+expect_run("the same workload with only its correctly-labelled healthy pod is expected-unready", 0, "EXPECTED_UNREADY", [sel2, rset(), ok_pod], expected=exp)
 sys.exit(fail)
