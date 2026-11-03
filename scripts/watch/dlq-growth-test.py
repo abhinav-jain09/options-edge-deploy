@@ -36,4 +36,6 @@ rc2, out2 = run(["b.dlq"], {"b.dlq": 8}, "s6"); good = rc2 == 1 and "+1" in out2
 # a DLQ that vanishes from one listing and returns bigger must still be caught
 run(["c.dlq", "x"], {"c.dlq": 10}, "s7"); expect("a topic absent from one listing does not lose its baseline", run(["x", "y.dlq"], {"y.dlq": 1}, "s7"), 0, "1 DLQ topic")
 expect("...and growth after it returns is still detected", run(["c.dlq", "x"], {"c.dlq": 15}, "s7"), 1, "+5 dead letters")
+os.makedirs(os.path.join(T, "s9"), exist_ok=True); open(os.path.join(T, "s9", "prod.json"), "w").write('{"a.dlq": 5')
+expect("a corrupt baseline fails closed instead of reading every DLQ as first sight", run(["a.dlq", "x"], {"a.dlq": 9}, "s9"), 2, "unreadable")
 sys.exit(fail)

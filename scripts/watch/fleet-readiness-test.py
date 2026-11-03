@@ -80,4 +80,6 @@ expect_run("...still tolerated 20 minutes later", 0, "0 stuck", [sts("db", 1, 1,
 expect_run("...stuck once it has been incomplete for more than the threshold", 1, "StatefulSet/db", [sts("db", 1, 1, 0)], state=st_file, now="2026-11-03T12:45:00Z")
 expect_run("a completed StatefulSet rollout is healthy and forgets its clock", 0, "1 healthy", [sts("db", 1, 1, 1, cur="b", upd="b")], state=st_file, now="2026-11-03T13:00:00Z")
 expect("a StatefulSet on OnDelete is partial by design, not stuck", 0, "1 healthy", [sts("od", 1, 1, 0, strat={"type": "OnDelete"})])
+bad_state = os.path.join(tempfile.mkdtemp(), "bad.json"); open(bad_state, "w").write('{"StatefulSet/db@2": "2026-11-03T1')   # truncated write
+expect_run("a corrupt state file fails closed instead of restarting every clock", 2, "unreadable", [sts("db", 1, 1, 0)], state=bad_state)
 sys.exit(fail)

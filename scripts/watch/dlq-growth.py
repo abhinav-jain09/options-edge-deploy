@@ -83,7 +83,10 @@ def end_sum(topic):
 now = {t: end_sum(t) for t in dlqs}
 os.makedirs(a.state, exist_ok=True)
 sp = os.path.join(a.state, a.env + ".json")
-before = json.load(open(sp)) if os.path.exists(sp) else None
+try:
+    before = json.load(open(sp)) if os.path.exists(sp) else None
+    if before is not None and not isinstance(before, dict): raise ValueError("not an object")
+except Exception as e: die("the baseline file %s is unreadable (%s) - refusing to treat every DLQ as first sight; fix or remove it deliberately" % (sp, e))
 grew = []
 for t, n in sorted(now.items()):
     if before is not None and t in before and n > before[t]: grew.append((t, before[t], n))
@@ -93,6 +96,7 @@ for t in missing: print("MISSING_DLQ %s (named by the manifest, not in the clust
 # MERGE, never overwrite: a topic missing from this (successful) listing keeps its baseline, so if it was only transiently invisible and comes back
 # with more records, that growth is still detected instead of being read as "first sight".
 merged = dict(before or {}); merged.update(now)
-json.dump(merged, open(sp, "w"))   # only reached after every read succeeded
+with open(sp + ".tmp", "w") as fh: json.dump(merged, fh)
+os.replace(sp + ".tmp", sp)   # atomic; only reached after every read succeeded
 print("dlq-growth %s: %d DLQ topic(s)%s, %d grew, %d undeclared" % (a.env, len(dlqs), "" if before is not None else " (first run: baseline recorded)", len(grew), len(undeclared)))
 sys.exit(1 if (grew or undeclared) else 0)

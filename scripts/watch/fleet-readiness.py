@@ -31,8 +31,12 @@ if not items:
 now = ts(a.now) if a.now else dt.datetime.now(dt.timezone.utc)
 seen = {}
 if a.state and os.path.exists(a.state):
-    try: seen = json.load(open(a.state))
-    except Exception: seen = {}
+    try:
+        seen = json.load(open(a.state))
+        if not isinstance(seen, dict): raise ValueError("not an object")
+    except Exception as e:  # noqa: BLE001
+        # A corrupt clock must not be read as "first sight": that would hide a rollout that has already been incomplete. Fail closed (exit 2).
+        print("ERROR: the state file %s is unreadable (%s) - refusing to restart every rollout clock; fix or remove it deliberately" % (a.state, e)); sys.exit(2)
 new_seen = {}
 stuck, held, ok = [], 0, 0
 for it in items:
@@ -101,7 +105,9 @@ for it in items:
         stuck.append((kind, name, want, have, int(mins)))
 if a.state:
     os.makedirs(os.path.dirname(os.path.abspath(a.state)), exist_ok=True)
-    json.dump(new_seen, open(a.state, "w"))   # only the still-incomplete ones survive: a completed rollout forgets its clock
+    tmp = a.state + ".tmp"
+    with open(tmp, "w") as fh: json.dump(new_seen, fh)
+    os.replace(tmp, a.state)   # atomic: an interrupted write can never leave a truncated clock; only the still-incomplete rollouts survive
 for kind, name, want, have, mins in sorted(stuck):
     if mins == -2: print("STUCK %s/%s: the new generation is not fully rolled out and there is no Progressing timestamp to age it (%d old pods serving)" % (kind, name, have))
     elif mins < 0: print("STUCK %s/%s: the rollout failed (ProgressDeadlineExceeded) while %d of %d old pods keep serving" % (kind, name, have, want))
