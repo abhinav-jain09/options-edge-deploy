@@ -15,10 +15,10 @@ def dep(name, want, have, since="2026-11-03T10:00:00Z", kind="Deployment", conds
     return {"kind": kind, "metadata": {"name": name, "generation": 1, "creationTimestamp": "2026-10-01T00:00:00Z"}, "spec": {"replicas": want}, "status": st}
 
 
-def run(items, raw=None, minutes=30, state=None, now=NOW):
+def run(items, raw=None, minutes=30, state=None, now=NOW, expected=None):
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
         f.write(raw if raw is not None else json.dumps({"items": items}))
-    r = subprocess.run([sys.executable, CHECK, "--input", f.name, "--now", now, "--minutes", str(minutes)] + (["--state", state] if state else []), capture_output=True, text=True)
+    r = subprocess.run([sys.executable, CHECK, "--input", f.name, "--now", now, "--minutes", str(minutes)] + (["--state", state] if state else []) + (["--expected-unready", expected] if expected else []), capture_output=True, text=True)
     os.unlink(f.name); return r.returncode, r.stdout
 
 
@@ -87,4 +87,18 @@ expect_run("a dangling-symlink state path fails closed instead of reading as 'no
 lowav = dep("lowav", 2, 1, since="2026-11-03T11:50:00Z")
 lowav["status"]["conditions"].append({"type": "Progressing", "status": "False", "reason": "ProgressDeadlineExceeded", "lastUpdateTime": "2026-11-03T11:50:00Z", "lastTransitionTime": "2026-11-03T11:50:00Z"})
 expect("ProgressDeadlineExceeded is STUCK at once even when availability has already fallen below desired", 1, "rollout failed", [lowav])
+def pod(app, phase="Running", running=True, restarts=0):
+    return {"kind": "Pod", "metadata": {"name": app + "-x", "labels": {"app.kubernetes.io/name": app}}, "status": {"phase": phase,
+            "containerStatuses": [{"restartCount": restarts, "state": {"running": {}} if running else {"waiting": {"reason": "CrashLoopBackOff"}}}]}}
+
+
+exp = os.path.join(tempfile.mkdtemp(), "exp.json"); json.dump([{"kind": "Deployment", "name": "vix", "reason": "session window"}], open(exp, "w"))
+unready = dep("vix", 1, 0, since="2026-11-03T05:00:00Z")
+expect_run("a by-design unready workload whose pod is Running is EXPECTED_UNREADY, not stuck", 0, "EXPECTED_UNREADY Deployment/vix", [unready, pod("vix")], expected=exp)
+expect_run("...but a CrashLoopBackOff pod is still STUCK", 1, "STUCK Deployment/vix", [unready, pod("vix", running=False)], expected=exp)
+expect_run("...and a restarting pod (3 restarts) is still STUCK", 1, "STUCK Deployment/vix", [unready, pod("vix", restarts=3)], expected=exp)
+expect_run("...and a workload with no pods at all is still STUCK", 1, "STUCK Deployment/vix", [unready], expected=exp)
+expect_run("a workload NOT on the list gets no exemption even with healthy pods", 1, "STUCK Deployment/other", [dep("other", 1, 0, since="2026-11-03T05:00:00Z"), pod("other")], expected=exp)
+bad_exp = os.path.join(tempfile.mkdtemp(), "bad.json"); open(bad_exp, "w").write("[{not json")
+expect_run("an unreadable expected-unready list fails closed", 2, "cannot read", [unready, pod("vix")], expected=bad_exp)
 sys.exit(fail)

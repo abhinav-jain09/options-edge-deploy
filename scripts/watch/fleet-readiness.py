@@ -13,6 +13,8 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--input", required=True)
 ap.add_argument("--now", default=None)
 ap.add_argument("--minutes", type=int, default=30)
+ap.add_argument("--expected-unready", default=None, help="JSON list of {kind,name,reason}: workloads whose readiness is false BY DESIGN at times. They are exempt only while every pod "
+                "of the workload (label app.kubernetes.io/name) is Running with every container running and few restarts - a crash loop or an image pull failure is still reported")
 ap.add_argument("--state", default=None, help="file remembering when an un-timestamped rollout (a StatefulSet's) was first seen incomplete; without it such a rollout fails closed")
 a = ap.parse_args()
 
@@ -39,8 +41,34 @@ if a.state and os.path.lexists(a.state):      # lexists: a dangling symlink EXIS
         # A corrupt clock must not be read as "first sight": that would hide a rollout that has already been incomplete. Fail closed (exit 2).
         print("ERROR: the state file %s is unreadable (%s) - refusing to restart every rollout clock; fix or remove it deliberately" % (a.state, e)); sys.exit(2)
 new_seen = {}
-stuck, held, ok = [], 0, 0
+stuck, held, ok, exempt = [], 0, 0, []
+expected = {}
+if a.expected_unready:
+    try:
+        for e in json.load(open(a.expected_unready)): expected[(e["kind"], e["name"])] = e["reason"]
+    except Exception as e:  # noqa: BLE001
+        print("ERROR: cannot read the expected-unready list %s: %s" % (a.expected_unready, e)); sys.exit(2)
+pods_by_app = {}
 for it in items:
+    if it.get("kind") == "Pod":
+        pods_by_app.setdefault(it.get("metadata", {}).get("labels", {}).get("app.kubernetes.io/name"), []).append(it)
+
+
+def pods_healthy(app):
+    ps = pods_by_app.get(app) or []
+    if not ps: return False
+    for p in ps:
+        if p.get("status", {}).get("phase") != "Running": return False
+        cs = p.get("status", {}).get("containerStatuses") or []
+        if not cs: return False
+        for c in cs:
+            if "running" not in (c.get("state") or {}) or (c.get("restartCount", 0) or 0) >= 3: return False
+    return True
+
+
+
+for it in items:
+    if it.get("kind") == "Pod": continue
     kind, name = it.get("kind"), it.get("metadata", {}).get("name", "?")
     want = it.get("spec", {}).get("replicas")
     st = it.get("status")
@@ -96,6 +124,8 @@ for it in items:
             ok += 1; continue
     if have >= want:
         ok += 1; continue
+    if (kind, name) in expected and pods_healthy(name):
+        exempt.append((kind, name, expected[(kind, name)])); continue
     # how long has it been short? the Available condition's transition time (Deployments), else the newest condition, else creation
     conds = st.get("conditions") or []
     since = None
@@ -119,5 +149,7 @@ for kind, name, want, have, mins in sorted(stuck):
     elif mins < 0: print("STUCK %s/%s: the rollout failed (ProgressDeadlineExceeded) while %d of %d old pods keep serving" % (kind, name, have, want))
     elif have >= want: print("STUCK %s/%s: rollout not completing for %d min (new generation not fully updated) while %d old pods keep serving" % (kind, name, mins, have))
     else: print("STUCK %s/%s wants %d, %d available, short for %d min" % (kind, name, want, have, mins))
-print("fleet-readiness: %d healthy, %d held at 0, %d stuck (> %d min)" % (ok, held, len(stuck), a.minutes))
+for kind, name, why in sorted(exempt):
+    print("EXPECTED_UNREADY %s/%s (pods Running, not crash-looping): %s" % (kind, name, why[:140]))
+print("fleet-readiness: %d healthy, %d held at 0, %d expected-unready, %d stuck (> %d min)" % (ok, held, len(exempt), len(stuck), a.minutes))
 sys.exit(1 if stuck else 0)
