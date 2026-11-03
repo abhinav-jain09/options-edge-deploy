@@ -62,6 +62,8 @@ CONTRACTS_TABLE = [
     ("com.optionsedge.contracts.breakclass.input.SwingPivotRecord", 2606),
     # contracts 0.44.0 (T-5, Level Absorption v2 section 6.9): the standing equal-level set, id 2607, version 1
     ("com.optionsedge.contracts.breakclass.EqualLevelRecord", 2607),
+    # contracts 0.65.0: the per-bar host completeness marker of the break-events stream, id 2608, version 1 (registered through the MARKET-STRUCTURE map: its producer)
+    ("com.optionsedge.contracts.breakclass.input.BreakCompletenessMarker", 2608),
     # contracts options-edge-contracts #149 (VWAP-ACCEPTANCE-REJECTION P0): the line-acceptance family, ids 3101-3111, all version 1
     ("com.optionsedge.contracts.lineacc.LineEpisodeCore", 3101),
     ("com.optionsedge.contracts.lineacc.LineEpisodeEvidence", 3102),
@@ -396,14 +398,15 @@ class MarketStructureVersionTwoRegistration(unittest.TestCase):
         finally:
             server.shutdown()
 
-    def test_a_fresh_registry_gets_all_eleven_subjects_and_both_versions_in_one_run(self):
+    def test_a_fresh_registry_gets_all_twelve_subjects_and_both_versions_in_one_run(self):
         reg = Registry()
         server, url = serve(reg)
         try:
             rc, out = run("market-structure", url)
             self.assertEqual(rc, 0, out)
             got = {s: [(v["version"], v["id"]) for v in rows] for s, rows in reg.subjects.items()}
-            self.assertEqual(len(got), 11)
+            self.assertEqual(len(got), 12, "the eleven market-structure subjects and the completeness marker 2608")
+            self.assertEqual(got["com.optionsedge.contracts.breakclass.input.BreakCompletenessMarker"], [(1, 2608)])
             self.assertEqual(got["com.optionsedge.contracts.marketstructure.tools.StructureToolsSet"], [(1, 2211), (2, 2212)])
             self.assertEqual(got["com.optionsedge.contracts.marketstructure.geometry.GeometryAnnotationSet"], [(1, 2221), (2, 2223)])
         finally:
@@ -707,20 +710,22 @@ class MapsAgree(unittest.TestCase):
         ns = {"market-structure": "com.optionsedge.contracts.marketstructure.", "es-trade-tools": "com.optionsedge.contracts.tradetools.",
               "wave-cycle": "com.optionsedge.contracts.wavecycle.", "break-classifier": "com.optionsedge.contracts.breakclass.",
               "line-acceptance": "com.optionsedge.contracts.lineacc."}
+        # contracts 0.65.0: the completeness marker lives in the break-class input namespace but is registered through its PRODUCER's (market-structure) map
+        extra = {("market-structure", "com.optionsedge.contracts.breakclass.input.BreakCompletenessMarker")}
         for service in SERVICES:
             for subject, _, file, version in read_versioned(service):
-                self.assertTrue(subject.startswith(ns[service]), subject)
+                self.assertTrue(subject.startswith(ns[service]) or (service, subject) in extra, subject)
                 name = subject.rsplit(".", 1)[1] + ".avsc"
                 # the current (highest) version is the flat file; version 1 of a two-version subject is the frozen copy under v1/
                 top = max(v for s_, _, _, v in read_versioned(service) if s_ == subject)
                 self.assertEqual(file, name if version == top else f"v{version}/{name}", "the highest version is the flat file, earlier ones live under v<N>/")
 
-    def test_the_maps_are_exactly_the_contracts_table_of_49_subjects_and_66_ids(self):
+    def test_the_maps_are_exactly_the_contracts_table_of_50_subjects_and_67_ids(self):
         union = {(subject, id_) for service in SERVICES for subject, id_, _ in read_map(service)}
-        self.assertEqual(len(CONTRACTS_TABLE), 49)
+        self.assertEqual(len(CONTRACTS_TABLE), 50)
         self.assertEqual(union, set(CONTRACTS_TABLE) | set(TRADE_TOOLS_VERSION_2) | set(WAVE_CYCLE_VERSION_2) | set(MARKET_STRUCTURE_VERSION_2))
         self.assertEqual({s for s, _ in union}, {s for s, _ in CONTRACTS_TABLE})
-        self.assertEqual(len(union), 66)
+        self.assertEqual(len(union), 67)
         # version 2 of each of the thirteen two-version subjects = its version-1 id + 20 (contracts 0.33.0, TaSchemas.Subject.priorId)
         v1 = {s: i for s, i in CONTRACTS_TABLE}
         for subject, id_ in TRADE_TOOLS_VERSION_2:

@@ -176,6 +176,10 @@
    [
     2607,
     2607
+   ],
+   [
+    2608,
+    2608
    ]
   ],
   "esamt": [
@@ -2533,6 +2537,40 @@
    "consumers": [],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
+  },
+  {
+   "kind": "MIRRORED",
+   "subject": "com.optionsedge.contracts.breakclass.input.BreakCompletenessMarker",
+   "version": 1,
+   "id": 2608,
+   "family": "breakclass",
+   "schemaFile": "com.optionsedge.contracts.breakclass.input.BreakCompletenessMarker/v1.avsc",
+   "schemaHash": "bb83da757f1fc6492f87632f6f6cc11581e3fdd55ebaeac9f574dba8797a1aa6",
+   "environments": [
+    "dev"
+   ],
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas-registry/ta/BreakCompletenessMarker.avsc"
+   },
+   "topics": [
+    {
+     "name": "options.spx.market-structure.break-events",
+     "kind": "data"
+    }
+   ],
+   "producers": [
+    {
+     "service": "market-structure",
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "curated, not baseline: the per-bar host completeness marker published by market-structure-service beside BreakParentRecord (contracts 0.65.0; options-edge-processing market-structure-service/docs/BREAK-COMPLETENESS-MARKER-REQUIREMENT.md). Dev only; the readers (line-acceptance, break-classifier) skip it by its id until line-acceptance consumes it."
   },
   {
    "kind": "MIRRORED",
