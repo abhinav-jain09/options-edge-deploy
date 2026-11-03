@@ -37,4 +37,6 @@ PY
   (cd "$P" && mvn -B -o -q -pl "$module" -am test -DfailIfNoTests=false -Dsurefire.failIfNoSpecifiedTests=false -DargLine="-Dschemagov.manifest=$MANIFEST" -Dtest='*SchemaRequirements*') \
     && echo "  module tests passed against the manifest" || { echo "FAIL: $module's schema-requirements tests failed against the manifest"; rc=1; }
 done
+# R6 ratchet: every Avro-using module without a requirements file must be on the committed backlog, and the backlog may only shrink.
+python3 scripts/ci/schema-r6-backlog.py "$P" --backlog "${SCHEMA_R6_BACKLOG:-schema-manifest/r6-backlog.txt}" || rc=1
 exit $rc

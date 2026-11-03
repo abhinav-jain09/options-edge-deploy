@@ -15,6 +15,7 @@ HASH="$(python3 -c 'import json;print(next(e["schemaHash"] for e in json.load(op
 mk() { rm -rf "$T/p"; mkdir -p "$T/p/$1/src/main/resources"; printf '%s' "$2" > "$T/p/$1/src/main/resources/schema-requirements.json"; }
 GOOD='{"produces":[{"subject":"early-auction.verdicts.shadow-value","id":2811,"schemaHash":"'"$HASH"'"}],"consumes":[]}'
 fail=0
+: > "$T/empty-backlog"; export SCHEMA_R6_BACKLOG="$T/empty-backlog"   # the stub checkouts are not the real tree; the real ratchet has its own tests
 expect() { local name="$1" want="$2" out rc=0; shift 2; out=$("$@" 2>&1) || rc=$?
   if [ "$want" = ok ]; then [ "$rc" = 0 ] && echo "ok     $name" || { echo "NOT-OK $name: must pass"; echo "$out" | tail -4; fail=1; }
   else [ "$rc" != 0 ] && printf '%s' "$out" | grep -q "$want" && echo "ok     $name" || { echo "NOT-OK $name: expected failure '$want' (rc=$rc)"; echo "$out" | tail -4; fail=1; }; fi; }

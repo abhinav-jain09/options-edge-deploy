@@ -126,7 +126,7 @@ jobs:
       - name: Mirror list in the manifest equals the mirror jobs' own declarations (docs/schema-governance R3f)
         run: python3 scripts/ci/schema-mirrors-generate.py --check
       - name: Mirror list generator and live-evidence classifier refuse their own violations
-        run: python3 -m unittest tests.test_schema_mirrors_generate tests.test_schema_mirror_evidence
+        run: python3 -m unittest tests.test_schema_mirrors_generate tests.test_schema_mirror_evidence tests.test_schema_r6_backlog
       - name: Schema manifest is valid (docs/schema-governance R1-R5)
         run: java -jar tools/schema-governance/schema-governance-tool.jar validate --manifest schema-manifest/manifest.json --snapshots schema-manifest/schemas
 
