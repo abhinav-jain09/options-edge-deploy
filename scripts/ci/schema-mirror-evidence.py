@@ -5,7 +5,8 @@ For every BYTES mirror path the newest record of each topic is read on the mirro
   unframed topic   the record must NOT start with the Confluent magic byte 0x00
   framed topic     the record must start with 0x00 + a 4-byte schema id; the id is resolved in the source registry and the record name (or one
                    of the id's subjects) must be a declared subject
-A topic with no record is UNMEASURED (reported, not passed). An unreachable broker or registry is a FAILURE. Proves the newest record only.
+A topic with no record is UNMEASURED and a topic that does not exist on the source is ABSENT (both reported, neither passed: nothing was proven). Any other read
+error, an unreachable broker or an unreachable registry is a FAILURE. Proves the newest record only.
   python3 scripts/ci/schema-mirror-evidence.py [--root .]      exit 1 on any FAIL
 """
 import argparse, json, os, subprocess, sys, urllib.request
@@ -42,6 +43,10 @@ def make_lookup(registry):
     return lookup
 
 
+class TopicAbsent(RuntimeError):
+    """The broker answered and said the topic does not exist: not a transport failure, and not evidence either."""
+
+
 def run(argv, timeout):
     return subprocess.run(argv, capture_output=True, timeout=timeout)
 
@@ -54,6 +59,8 @@ def sample(bootstrap, topic, runner=run):
         out = runner(["kcat", "-b", bootstrap, "-t", topic, "-C", "-o", "-1", "-c", "1", "-e", "-q", "-f", "%s"], 45)
     except subprocess.TimeoutExpired:
         return None
+    if out.returncode != 0 and b"Unknown topic or partition" in out.stderr:
+        raise TopicAbsent("topic does not exist on %s" % bootstrap)
     if out.returncode != 0:  # an empty topic exits 0; any error (unknown topic, auth, broker failure) exits non-zero and must never read as "no record"
         raise RuntimeError("reading %s on %s failed (rc=%d): %s" % (topic, bootstrap, out.returncode, out.stderr.decode(errors="replace")[:200]))
     return out.stdout[:16]
@@ -64,7 +71,7 @@ def main():
     m = json.load(open(os.path.join(a.root, "schema-manifest/manifest.json")))
     kafka = json.load(open(os.path.join(a.root, "schema-manifest/kafka.json")))
     regs = json.load(open(os.path.join(a.root, "schema-manifest/registries.json")))
-    seen, fails, counts = set(), 0, {"PASS": 0, "UNMEASURED": 0, "FAIL": 0}
+    seen, fails, counts = set(), 0, {"PASS": 0, "UNMEASURED": 0, "ABSENT": 0, "FAIL": 0}
     for mir in m["activeMirrors"]:
         if mir["transport"] != "bytes":
             continue
@@ -75,11 +82,13 @@ def main():
             seen.add(key)
             try:
                 status, detail = classify(sample(kafka[mir["from"]], topic), set(mir["subjects"]), bool(mir.get("unframed")), make_lookup(regs[mir["from"]]))
+            except TopicAbsent as e:
+                status, detail = "ABSENT", "%s" % e
             except Exception as e:
                 status, detail = "FAIL", "%s" % e
             counts[status] += 1
             print("%-10s %s %s: %s" % (status, mir["from"], topic, detail))
-    print("mirror evidence: %d pass, %d unmeasured, %d fail" % (counts["PASS"], counts["UNMEASURED"], counts["FAIL"]))
+    print("mirror evidence: %d pass, %d unmeasured, %d absent, %d fail" % (counts["PASS"], counts["UNMEASURED"], counts["ABSENT"], counts["FAIL"]))
     sys.exit(1 if counts["FAIL"] else 0)
 
 

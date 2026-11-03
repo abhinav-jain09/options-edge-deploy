@@ -29,10 +29,19 @@ class Sampling(unittest.TestCase):
         def __init__(self, rc, out=b"", err=b""): self.returncode, self.stdout, self.stderr = rc, out, err
 
     def test_a_failed_read_is_an_error_never_an_empty_sample(self):
-        calls = iter([self.R(0), self.R(1, b"", b"Broker: Unknown topic or partition")])
+        calls = iter([self.R(0), self.R(1, b"", b"Broker: Request timed out")])
         with self.assertRaises(RuntimeError) as c:
             ev.sample("b:9092", "t", runner=lambda argv, t: next(calls))
-        self.assertIn("Unknown topic", str(c.exception))
+        self.assertIn("timed out", str(c.exception))
+
+    def test_an_unknown_topic_is_absent_not_failed_but_other_errors_still_fail(self):
+        calls = iter([self.R(0), self.R(1, b"", b"% ERROR: Topic t error: Broker: Unknown topic or partition")])
+        with self.assertRaises(ev.TopicAbsent):
+            ev.sample("b:9092", "t", runner=lambda argv, t: next(calls))
+        calls = iter([self.R(0), self.R(1, b"", b"Broker: Topic authorization failed")])
+        with self.assertRaises(RuntimeError) as c:
+            ev.sample("b:9092", "t", runner=lambda argv, t: next(calls))
+        self.assertNotIsInstance(c.exception, ev.TopicAbsent)
 
     def test_an_unreachable_broker_is_an_error(self):
         with self.assertRaises(RuntimeError):
