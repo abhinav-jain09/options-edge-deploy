@@ -1,0 +1,7 @@
+[
+  {
+    "kind": "Deployment",
+    "name": "databento-vix-feed",
+    "reason": "its /health/ready answers 'not ready: session_window_closed' by design while the VIX session window is closed (read from the dev pod on 2026-11-03 through a port-forward: HTTP 503); the pod is Running and logs 'vix chain committed'. It is Ready only inside the session window."
+  }
+]

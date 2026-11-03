@@ -54,10 +54,10 @@ pipeline {
             def rc = sh(returnStatus: true, script: """
               set -uo pipefail
               out="\$(mktemp)"
-              KUBECONFIG='${kubeconfigFor(profile)}' kubectl -n options-edge get deploy,statefulset -o json > "\$out" || { echo 'ERROR: kubectl get failed for ${profile}'; exit 2; }
+              KUBECONFIG='${kubeconfigFor(profile)}' kubectl -n options-edge get deploy,statefulset,rs,pods -o json > "\$out" || { echo 'ERROR: kubectl get failed for ${profile}'; exit 2; }
               echo '=== ${profile} ==='
               STATE="\$(dirname "\$WORKSPACE")/.oe-watch"; mkdir -p "\$STATE" || { echo "ERROR: cannot create the state directory \$STATE"; exit 2; }
-              python3 scripts/watch/fleet-readiness.py --input "\$out" --minutes ${params.STUCK_MINUTES} --state "\$STATE/fleet-${profile}.json"
+              python3 scripts/watch/fleet-readiness.py --input "\$out" --minutes ${params.STUCK_MINUTES} --state "\$STATE/fleet-${profile}.json" --expected-unready scripts/watch/expected-unready.json
             """)
             if (rc != 0) { bad << "${profile} (rc=${rc})" }
           }

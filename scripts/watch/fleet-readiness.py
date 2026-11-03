@@ -13,6 +13,8 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--input", required=True)
 ap.add_argument("--now", default=None)
 ap.add_argument("--minutes", type=int, default=30)
+ap.add_argument("--expected-unready", default=None, help="JSON list of {kind,name,reason}: workloads whose readiness is false BY DESIGN at times. They are exempt only while every pod "
+                "of the workload (resolved through controller ownership) is Running with every container running and few restarts - a crash loop or an image pull failure is still reported")
 ap.add_argument("--state", default=None, help="file remembering when an un-timestamped rollout (a StatefulSet's) was first seen incomplete; without it such a rollout fails closed")
 a = ap.parse_args()
 
@@ -39,8 +41,58 @@ if a.state and os.path.lexists(a.state):      # lexists: a dangling symlink EXIS
         # A corrupt clock must not be read as "first sight": that would hide a rollout that has already been incomplete. Fail closed (exit 2).
         print("ERROR: the state file %s is unreadable (%s) - refusing to restart every rollout clock; fix or remove it deliberately" % (a.state, e)); sys.exit(2)
 new_seen = {}
-stuck, held, ok = [], 0, 0
+stuck, held, ok, exempt = [], 0, 0, []
+expected = {}
+if a.expected_unready:
+    try:
+        for e in json.load(open(a.expected_unready)): expected[(e["kind"], e["name"])] = e["reason"]
+    except Exception as e:  # noqa: BLE001
+        print("ERROR: cannot read the expected-unready list %s: %s" % (a.expected_unready, e)); sys.exit(2)
+pods = [it for it in items if it.get("kind") == "Pod"]
+if not [it for it in items if it.get("kind") in ("Deployment", "StatefulSet")]:
+    print("ERROR: the input holds no Deployment or StatefulSet (only %d other object(s)) - refusing to report 'healthy'" % len(items)); sys.exit(2)
+
+
+rsets = [it for it in items if it.get("kind") == "ReplicaSet"]
+
+
+def owned_by(obj, uid):
+    """True only for the CONTROLLING owner reference (controller: true) with this uid: a bare reference does not make a pod this workload's."""
+    return any(o.get("uid") == uid and o.get("controller") is True for o in obj.get("metadata", {}).get("ownerReferences") or [])
+
+
+def pods_healthy(workload, want):
+    """The workload's OWN pods - resolved through controller ownership (Deployment -> its CURRENT ReplicaSet -> Pods; StatefulSet -> Pods), not by labels
+    alone, and only when its selector is plain matchLabels that the pod also satisfies - account for every desired replica and are all really running."""
+    uid = workload.get("metadata", {}).get("uid")
+    sel = workload.get("spec", {}).get("selector") or {}
+    if workload.get("metadata", {}).get("deletionTimestamp"): return False          # a controller being torn down is not "unready by design"
+    if not uid or not sel.get("matchLabels") or sel.get("matchExpressions"): return False     # fail closed on anything this cannot resolve exactly
+    if workload.get("kind") == "Deployment":
+        rev = (workload.get("metadata", {}).get("annotations") or {}).get("deployment.kubernetes.io/revision")
+        if not rev: return False
+        # the CURRENT ReplicaSet only (its revision annotation equals the Deployment's): an old one kept during a rollout must not stand in for it
+        cur = [rs for rs in rsets if owned_by(rs, uid) and not rs.get("metadata", {}).get("deletionTimestamp") and (rs.get("metadata", {}).get("annotations") or {}).get("deployment.kubernetes.io/revision") == rev and rs.get("metadata", {}).get("uid")]
+        if len(cur) != 1 or (cur[0].get("spec", {}).get("replicas", 0) or 0) != want: return False
+        mine = [p for p in pods if owned_by(p, cur[0]["metadata"]["uid"])]
+    else:
+        mine = [p for p in pods if owned_by(p, uid)]
+    # EVERY controller-owned pod counts, and every one must satisfy the selector: a pod the controller owns whose labels drifted is a defect to report, not a
+    # pod to drop from the count (dropping it would let a healthy replacement make the numbers add up while a broken extra pod hides).
+    if not all(all(p.get("metadata", {}).get("labels", {}).get(k) == v for k, v in sel["matchLabels"].items()) for p in mine): return False
+    if len(mine) != want: return False
+    for p in mine:
+        if p.get("metadata", {}).get("deletionTimestamp"): return False      # a terminating pod stays Running while it shuts down; it is not the workload's healthy pod
+        if p.get("status", {}).get("phase") != "Running": return False
+        cs = p.get("status", {}).get("containerStatuses") or []
+        if not cs: return False
+        for c in cs:
+            if "running" not in (c.get("state") or {}) or (c.get("restartCount", 0) or 0) >= 3: return False
+    return True
+
+
 for it in items:
+    if it.get("kind") in ("Pod", "ReplicaSet"): continue
     kind, name = it.get("kind"), it.get("metadata", {}).get("name", "?")
     want = it.get("spec", {}).get("replicas")
     st = it.get("status")
@@ -96,6 +148,8 @@ for it in items:
             ok += 1; continue
     if have >= want:
         ok += 1; continue
+    if (kind, name) in expected and pods_healthy(it, want):
+        exempt.append((kind, name, expected[(kind, name)])); continue
     # how long has it been short? the Available condition's transition time (Deployments), else the newest condition, else creation
     conds = st.get("conditions") or []
     since = None
@@ -119,5 +173,7 @@ for kind, name, want, have, mins in sorted(stuck):
     elif mins < 0: print("STUCK %s/%s: the rollout failed (ProgressDeadlineExceeded) while %d of %d old pods keep serving" % (kind, name, have, want))
     elif have >= want: print("STUCK %s/%s: rollout not completing for %d min (new generation not fully updated) while %d old pods keep serving" % (kind, name, mins, have))
     else: print("STUCK %s/%s wants %d, %d available, short for %d min" % (kind, name, want, have, mins))
-print("fleet-readiness: %d healthy, %d held at 0, %d stuck (> %d min)" % (ok, held, len(stuck), a.minutes))
+for kind, name, why in sorted(exempt):
+    print("EXPECTED_UNREADY %s/%s (pods Running, not crash-looping): %s" % (kind, name, why[:140]))
+print("fleet-readiness: %d healthy, %d held at 0, %d expected-unready, %d stuck (> %d min)" % (ok, held, len(exempt), len(stuck), a.minutes))
 sys.exit(1 if stuck else 0)
