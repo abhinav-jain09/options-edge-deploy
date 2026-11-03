@@ -5,12 +5,17 @@
 //      completing while old pods keep it "available" (scripts/watch/fleet-readiness.py). Workloads held at 0 replicas are never reported. This is the check
 //      that would have caught the 9-hour early-auction crash-loop.
 //   2. DEAD LETTERS: any `*.dlq` topic whose end offsets grew since the previous run, and any `.dlq` topic the manifest does not declare
-//      (scripts/watch/dlq-growth.py; baselines kept per environment under $HOME/.oe-watch on the agent, merged and written only after a fully successful read).
+//      (scripts/watch/dlq-growth.py; baselines kept per environment under <agent workspace root>/.oe-watch (a sibling of the job workspaces, so it survives between builds and is writable by the agent user), merged and written only after a fully successful read).
 // A red build is the alert: native k8s CronJobs are denied by the cluster's admission policy and no Kafka or registry exporter is scraped, so a Jenkins
 // cron job is the trigger that can run. It changes nothing in any cluster, registry or topic.
 def PROFILES = ['production', 'dev', 'es4']
+// Explicit deployer kubeconfigs on the agent: oeProfile('dev') resolves to the LOCAL docker-desktop cluster on this agent (connection refused), while the dev
+// cluster is the remote one reached through the "-remote" kubeconfig. Same files service-deploy uses.
 def kubeconfigFor(String profile) {
-  return profile == 'es4' ? '/Users/abhinav/.kube/es4-jenkins-deployer.kubeconfig' : oeProfile(profile).kubeconfigDeployer
+  def m = [production: '/Users/abhinav/.kube/jenkins-deployer-prod.kubeconfig',
+           dev       : '/Users/abhinav/.kube/jenkins-deployer-dev-remote.kubeconfig',
+           es4       : '/Users/abhinav/.kube/es4-jenkins-deployer.kubeconfig']
+  return m[profile]
 }
 // Validated at the top of EVERY stage that uses the parameter: "restart from stage" can enter a pipeline mid-way and skip an earlier check.
 def watchedProfiles(String raw, List allowed) {
@@ -44,8 +49,8 @@ pipeline {
               out="\$(mktemp)"
               KUBECONFIG='${kubeconfigFor(profile)}' kubectl -n options-edge get deploy,statefulset -o json > "\$out" || { echo 'ERROR: kubectl get failed for ${profile}'; exit 2; }
               echo '=== ${profile} ==='
-              mkdir -p "\$HOME/.oe-watch"
-              python3 scripts/watch/fleet-readiness.py --input "\$out" --minutes ${params.STUCK_MINUTES} --state "\$HOME/.oe-watch/fleet-${profile}.json"
+              STATE="\$(dirname "\$WORKSPACE")/.oe-watch"; mkdir -p "\$STATE" || { echo "ERROR: cannot create the state directory \$STATE"; exit 2; }
+              python3 scripts/watch/fleet-readiness.py --input "\$out" --minutes ${params.STUCK_MINUTES} --state "\$STATE/fleet-${profile}.json"
             """)
             if (rc != 0) { bad << "${profile} (rc=${rc})" }
           }
@@ -59,7 +64,7 @@ pipeline {
           def bad = []
           watchedProfiles(params.ENVS, PROFILES).each { profile ->
             def envName = profile == 'production' ? 'prod' : profile
-            def rc = sh(returnStatus: true, script: "mkdir -p \"\$HOME/.oe-watch\" && python3 scripts/watch/dlq-growth.py --env ${envName} --state \"\$HOME/.oe-watch\"")
+            def rc = sh(returnStatus: true, script: "STATE=\"\$(dirname \"\$WORKSPACE\")/.oe-watch\"; mkdir -p \"\$STATE\" || exit 2; python3 scripts/watch/dlq-growth.py --env ${envName} --state \"\$STATE\"")
             if (rc != 0) { bad << "${envName} (rc=${rc})" }
           }
           if (bad) { error("dead-letter check failed: ${bad.join(', ')}") }
