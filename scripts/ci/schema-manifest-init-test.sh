@@ -3,7 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
-JAR="${SCHEMA_GOV_JAR:-tools/schema-governance/schema-governance-tool.jar}"
+JAR="${SCHEMA_GOV_JAR:-tools/schema-governance/schema-governance-tool.jar}"; JAR="$(cd "$(dirname "$JAR")" && pwd)/$(basename "$JAR")"; REPO="$PWD"
 S1='{"type":"record","name":"A","fields":[{"name":"a","type":"int","default":1}]}'
 S2='{"type":"record","name":"B","fields":[{"name":"b","type":"int","default":2}]}'
 h() { printf '%s' "$1" > "$T/x.avsc"; java -jar "$JAR" hash "$T/x.avsc" 2>/dev/null; }
@@ -20,7 +20,7 @@ setup() { rm -rf "$T/w"; mkdir -p "$T/w/schema-manifest/schemas" "$T/w/text/dev/
   echo '{"manifestVersion":1,"familyBlocks":{},"entries":[]}' > "$T/w/schema-manifest/manifest.json"
   for e in dev prod es4; do printf '%s' "$S1" > "$T/w/text/$e/s-value/v1.avsc"; printf '%s' "$S2" > "$T/w/text/$e/s-value/v2.avsc"; done
   for e in dev prod es4; do echo '{"entries":[]}' > "$T/w/inv-$e.json"; done; }
-run() { ( cd "$T/w" && python3 "$OLDPWD/scripts/ci/schema-manifest-init.py" --jar "$OLDPWD/$JAR" --dev inv-dev.json --prod inv-prod.json --es4 inv-es4.json --schema-text-dir text 2>&1 ); }
+run() { ( cd "$T/w" && python3 "$REPO/scripts/ci/schema-manifest-init.py" --jar "$JAR" --dev inv-dev.json --prod inv-prod.json --es4 inv-es4.json --schema-text-dir text 2>&1 ); }
 fail=0
 ok() { echo "ok     $1"; }; bad() { echo "NOT-OK $1"; fail=1; }
 
