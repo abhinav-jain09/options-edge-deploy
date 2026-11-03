@@ -11,11 +11,16 @@ Slice 1: a text scan of `sh` bodies; the full tokeniser of R11a (ssh payload rec
 import hashlib, os, re, sys
 
 ROOT = sys.argv[1] if len(sys.argv) > 1 else os.getcwd()
-WORKLOAD = re.compile(r"\bkubectl\s+(?:-\S+\s+\S+\s+)*(apply|set\s+image|rollout|scale|delete|patch|replace|create)\b|\bapply\.sh\b|\bcleanup-es4\.sh\b|\bservice-deploy\.sh\b")
+# kubectl (or a conventional variable holding it: $KC, ${KUBECTL}) followed, within the same statement, by a workload-changing verb, in
+# ANY flag form (`-n ns`, `--namespace=ns`, `--kubeconfig f`). Statements end at ; & | or a newline not escaped by a backslash.
+_KUBECTL = r"(?:\bkubectl\b|\$\{?[A-Za-z_]*(?:KC|KUBECTL)[A-Za-z_]*\}?)"
+_VERB = r"(?:apply|set\s+image|rollout|scale|delete|patch|replace|create)"
+_KCMD = _KUBECTL + r"[^;&|\n]*?\s" + _VERB + r"\b"
+WORKLOAD = re.compile(_KCMD + r"|\bapply\.sh\b|\bcleanup-es4\.sh\b|\bservice-deploy\.sh\b")
 # service-deploy.sh counts as REALLY invoked only as a command: at the start of a line or after ; && || | ( , with optional VAR=value
 # prefixes and an optional `bash`/`sh`. An echo, a variable assignment or a string argument is not an invocation.
 VIA = re.compile(r"(?:^|[;&|(]|\n)[ \t]*(?:[A-Za-z_][A-Za-z0-9_]*=(?:\"[^\"]*\"|'[^']*'|\S*)[ \t]+)*(?:bash|sh)[ \t]+(?:\./)?scripts/deploy/service-deploy\.sh\b")
-DIRECT = re.compile(r"\bkubectl\s+(?:-\S+\s+\S+\s+)*(?:apply|set\s+image|rollout|scale|delete|patch|replace|create)\b|\bapply\.sh\b|\bcleanup-es4\.sh\b")
+DIRECT = re.compile(_KCMD + r"|\bapply\.sh\b|\bcleanup-es4\.sh\b")
 
 
 def strip(text):
@@ -38,7 +43,8 @@ def strip(text):
         if text.startswith("/*", i):
             j = text.find("*/", i + 2); i = n if j < 0 else j + 2; continue
         out.append(c); i += 1
-    lines = [l for l in "".join(out).split("\n") if not l.lstrip().startswith("#")]
+    joined = re.sub(r"\\\n", " ", "".join(out))      # a backslash-newline continues the statement
+    lines = [l for l in joined.split("\n") if not l.lstrip().startswith("#")]
     return "\n".join(lines)
 
 

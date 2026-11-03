@@ -40,4 +40,7 @@ fresh; printf 'pipeline { stages { stage("x") { steps { sh "kubectl apply -f x.y
 fresh; printf '\nsh "kubectl scale deployment/x --replicas=3"\n' >> "$T/r/Jenkinsfile.web-service"; expect "a new direct workload command in a gated Jenkinsfile" "direct workload command"
 fresh; sed -i.bak 's/via:direct=5/via:direct=4/' "$T/r/scripts/ci/schema-sync-coverage-allowlist.txt"; expect "a stale direct-command count" "via:direct=4"
 fresh; echo 'Jenkinsfile.hpsf-ops|bogus|reason' >> "$T/r/scripts/ci/schema-sync-coverage-allowlist.txt"; expect "an unknown allow-list kind" "unknown kind"
+fresh; printf 'pipeline { stages { stage("x") { steps { sh "kubectl --namespace=options-edge apply -f x.yaml" } } } }\n' > "$T/r/Jenkinsfile.flagform"; expect "kubectl --flag=value apply is a workload command" "Jenkinsfile.flagform"
+fresh; printf 'pipeline { stages { stage("x") { steps { sh "kubectl -n options-edge \\\n  --context prod \\\n  rollout restart deploy/x" } } } }\n' > "$T/r/Jenkinsfile.continued"; expect "a kubectl command continued over lines is still seen" "Jenkinsfile.continued"
+fresh; printf 'pipeline { stages { stage("x") { steps { sh "$KC scale deploy/x --replicas=2" } } } }\n' > "$T/r/Jenkinsfile.alias"; expect "a \$KC alias for kubectl is still seen" "Jenkinsfile.alias"
 exit $fail
