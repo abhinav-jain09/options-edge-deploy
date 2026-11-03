@@ -70,9 +70,14 @@ def read(rel):
 
 # 1. service-deploy.sh order + jar pin
 sd = "\n".join(l for l in read("scripts/deploy/service-deploy.sh").split("\n") if not l.lstrip().startswith("#"))
-sync_at = sd.find("scripts/ci/schema-sync.sh")
+# An EXECUTABLE, FAIL-CLOSED call: `bash scripts/ci/schema-sync.sh` as a command at the start of a line (after the env-var
+# continuation lines), followed by `|| { ... exit 1; }`. The text appearing in an echo, a `:` no-op, a comment or after `|| true`
+# is not a call and does not count.
+CALL = re.compile(r"^[ \t]*bash[ \t]+scripts/ci/schema-sync\.sh[ \t]*\\?\n[ \t]*\|\|[ \t]*\{[^}]*\bexit[ \t]+1\b", re.M)
+m_call = CALL.search(sd)
+sync_at = m_call.start() if m_call else -1
 apply_at = sd.find("kubectl apply")
-if sync_at < 0: fail("scripts/deploy/service-deploy.sh does not call scripts/ci/schema-sync.sh")
+if sync_at < 0: fail("scripts/deploy/service-deploy.sh does not EXECUTE scripts/ci/schema-sync.sh fail-closed (bash ... || { ...; exit 1; })")
 if apply_at < 0: fail("scripts/deploy/service-deploy.sh has no kubectl apply - this check cannot place the gate")
 if sync_at > apply_at: fail("scripts/deploy/service-deploy.sh calls schema-sync.sh AFTER its first kubectl apply")
 pin = re.search(r"^sha256=([0-9a-f]{64})$", read("tools/schema-governance/PIN"), re.M)

@@ -13,7 +13,17 @@ expect() { local name="$1" want="$2" out rc=0; out=$(python3 "$CHECK" "$T/r" 2>&
   if [ "$want" = pass ]; then [ "$rc" = 0 ] && echo "ok     $name" || { echo "NOT-OK $name: must pass"; echo "$out"; fail=1; }
   else [ "$rc" != 0 ] && printf '%s' "$out" | grep -q "$want" && echo "ok     $name" || { echo "NOT-OK $name: expected failure matching '$want' (rc=$rc)"; echo "$out"; fail=1; }; fi; }
 fresh; expect "the repository as committed passes" pass
-fresh; sed -i.bak 's#scripts/ci/schema-sync.sh#scripts/ci/removed.sh#g' "$T/r/scripts/deploy/service-deploy.sh"; expect "no schema-sync call in service-deploy.sh" "does not call"
+fresh; sed -i.bak 's#scripts/ci/schema-sync.sh#scripts/ci/removed.sh#g' "$T/r/scripts/deploy/service-deploy.sh"; expect "no schema-sync call in service-deploy.sh" "does not EXECUTE"
+fresh; python3 - "$T/r/scripts/deploy/service-deploy.sh" <<'PY'
+import sys,re; p=sys.argv[1]; t=open(p).read()
+t=re.sub(r"bash scripts/ci/schema-sync\.sh \\\n\s*\|\| \{[^}]*\}", "echo bash scripts/ci/schema-sync.sh", t, count=1); open(p,"w").write(t)
+PY
+expect "the text only echoed, not executed" "does not EXECUTE"
+fresh; python3 - "$T/r/scripts/deploy/service-deploy.sh" <<'PY'
+import sys,re; p=sys.argv[1]; t=open(p).read()
+t=re.sub(r"(bash scripts/ci/schema-sync\.sh \\\n\s*)\|\| \{[^}]*\}", r"\1|| true", t, count=1); open(p,"w").write(t)
+PY
+expect "the call made non-fatal with || true" "does not EXECUTE"
 fresh; python3 - "$T/r/scripts/deploy/service-deploy.sh" <<'PY'
 import sys; p=sys.argv[1]; t=open(p).read(); i=t.index("# --- Schema sync"); j=t.index("if [ \"$DEPLOY_DRY_RUN\" = \"true\" ]; then\n  echo \"=== DEPLOY_DRY_RUN=true")
 blk=t[i:j]; t=t[:i]+t[j:]; k=t.rindex("kubectl apply"); open(p,"w").write(t[:k]+blk.replace("\n","\n")+t[k:])
