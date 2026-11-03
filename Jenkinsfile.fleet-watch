@@ -38,8 +38,11 @@ pipeline {
     timeout(time: 10, unit: 'MINUTES')
   }
   stages {
+    // Each check is its own verdict: a red Readiness must not hide the Dead letters check (a failing stage skips the rest by default), so both run and the
+    // build ends red if either failed.
     stage('Readiness') {
       steps {
+        catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
         script {
           if (!(params.STUCK_MINUTES ==~ /[0-9]{1,4}/)) { error("STUCK_MINUTES must be a number of minutes (got '${params.STUCK_MINUTES}')") }
           def bad = []
@@ -56,10 +59,12 @@ pipeline {
           }
           if (bad) { error("readiness check failed: ${bad.join(', ')}") }
         }
+        }
       }
     }
     stage('Dead letters') {
       steps {
+        catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
         script {
           def bad = []
           watchedProfiles(params.ENVS, PROFILES).each { profile ->
@@ -68,6 +73,7 @@ pipeline {
             if (rc != 0) { bad << "${envName} (rc=${rc})" }
           }
           if (bad) { error("dead-letter check failed: ${bad.join(', ')}") }
+        }
         }
       }
     }
