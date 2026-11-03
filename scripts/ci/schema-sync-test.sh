@@ -44,7 +44,7 @@ run_mock 404 404
 expect_pass  "clean registry, dry run" DEPLOY_DRY_RUN=true
 HASH=$(sync DEPLOY_DRY_RUN=true | sed -n 's/^PLAN_SHA256=//p')
 [ -n "$HASH" ] && echo "ok     dry run prints PLAN_SHA256" || { echo "NOT-OK no PLAN_SHA256"; fail=1; }
-expect_fail  "prod apply without PLAN_SHA256 is refused" "PLAN_SHA256\|git checkout\|uncommitted" DEPLOY_DRY_RUN=false
+expect_fail  "prod write without PLAN_SHA256 is refused" "PLAN_SHA256\|git checkout\|uncommitted" DEPLOY_DRY_RUN=false
 expect_fail  "tag instead of digest is refused" "could not read the image label" DEPLOY_DRY_RUN=true SCHEMA_IMAGE_REF=127.0.0.1:1/x:prod
 # editing a snapshot AND its manifest hash must change the plan hash (R13a): rows alone would not
 cp "$T/repo/schema-manifest/schemas/early-auction.verdicts.shadow-value/v2.avsc" "$T/v2.bak"
