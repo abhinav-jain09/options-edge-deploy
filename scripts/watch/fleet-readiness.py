@@ -66,12 +66,13 @@ def pods_healthy(workload, want):
     alone, and only when its selector is plain matchLabels that the pod also satisfies - account for every desired replica and are all really running."""
     uid = workload.get("metadata", {}).get("uid")
     sel = workload.get("spec", {}).get("selector") or {}
+    if workload.get("metadata", {}).get("deletionTimestamp"): return False          # a controller being torn down is not "unready by design"
     if not uid or not sel.get("matchLabels") or sel.get("matchExpressions"): return False     # fail closed on anything this cannot resolve exactly
     if workload.get("kind") == "Deployment":
         rev = (workload.get("metadata", {}).get("annotations") or {}).get("deployment.kubernetes.io/revision")
         if not rev: return False
         # the CURRENT ReplicaSet only (its revision annotation equals the Deployment's): an old one kept during a rollout must not stand in for it
-        cur = [rs for rs in rsets if owned_by(rs, uid) and (rs.get("metadata", {}).get("annotations") or {}).get("deployment.kubernetes.io/revision") == rev and rs.get("metadata", {}).get("uid")]
+        cur = [rs for rs in rsets if owned_by(rs, uid) and not rs.get("metadata", {}).get("deletionTimestamp") and (rs.get("metadata", {}).get("annotations") or {}).get("deployment.kubernetes.io/revision") == rev and rs.get("metadata", {}).get("uid")]
         if len(cur) != 1 or (cur[0].get("spec", {}).get("replicas", 0) or 0) != want: return False
         mine = [p for p in pods if owned_by(p, cur[0]["metadata"]["uid"])]
     else:

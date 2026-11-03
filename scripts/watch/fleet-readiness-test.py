@@ -133,4 +133,11 @@ sel2 = withsel(dep("vix", 1, 0, since="2026-11-03T05:00:00Z"), "vix"); sel2["spe
 ok_pod = pod("vix", n=1); ok_pod["metadata"]["labels"] = {"app.kubernetes.io/name": "vix", "component": "feed"}
 expect_run("a controller-owned crash-looping pod whose labels drifted is NOT dropped from the count (it makes the exemption fail)", 1, "STUCK Deployment/vix", [sel2, rset(), ok_pod, drift], expected=exp)
 expect_run("the same workload with only its correctly-labelled healthy pod is expected-unready", 0, "EXPECTED_UNREADY", [sel2, rset(), ok_pod], expected=exp)
+gone = withsel(dep("vix", 1, 0, since="2026-11-03T05:00:00Z"), "vix"); gone["metadata"]["deletionTimestamp"] = "2026-11-03T11:00:00Z"
+expect_run("a Deployment being deleted is not 'unready by design'", 1, "STUCK Deployment/vix", [gone, rset(), pod("vix")], expected=exp)
+rs_gone = rset(); rs_gone["metadata"]["deletionTimestamp"] = "2026-11-03T11:00:00Z"
+expect_run("a ReplicaSet being deleted is not the current ReplicaSet", 1, "STUCK Deployment/vix", [unready, rs_gone, pod("vix")], expected=exp)
+sts_gone = sts("db", 1, 0, 0); sts_gone["metadata"].update({"uid": "sts-db-uid", "deletionTimestamp": "2026-11-03T11:00:00Z"}); sts_gone["spec"]["selector"] = {"matchLabels": {"app": "db"}}
+json.dump([{"kind": "StatefulSet", "name": "db", "reason": "x"}], open(exp, "w"))
+expect_run("a StatefulSet being deleted is not 'unready by design' either", 1, "STUCK StatefulSet/db", [sts_gone], expected=exp)
 sys.exit(fail)
