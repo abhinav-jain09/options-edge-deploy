@@ -3,7 +3,7 @@
 import json, os, subprocess, sys, tempfile
 HERE = os.path.dirname(os.path.abspath(__file__)); CHECK = os.path.join(HERE, "dlq-growth.py")
 T = tempfile.mkdtemp(); fail = 0
-MAN = os.path.join(T, "manifest.json"); json.dump({"entries": [{"kind": "MIRRORED", "environments": ["prod"], "topics": [{"name": "named.dlq.topic", "kind": "dlq"}]}]}, open(MAN, "w"))
+MAN = os.path.join(T, "manifest.json"); json.dump({"dlqTopics": {"prod": ["a.dlq", "b.dlq", "c.dlq", "y.dlq"]}, "entries": [{"kind": "MIRRORED", "environments": ["prod"], "topics": [{"name": "named.dlq.topic", "kind": "dlq"}]}]}, open(MAN, "w"))
 
 
 def run(topics, offs, state="s", env="prod", fixture_ok=True):
@@ -25,6 +25,7 @@ expect("a drop (topic recreated by a clean) is not an alert", run(["a.dlq", "x"]
 expect("growth after a drop is measured from the dropped baseline", run(["a.dlq", "x"], {"a.dlq": 3}, "s1"), 1, "+3")
 expect("a topic named by the manifest is watched even without the .dlq suffix", run(["named.dlq.topic"], {"named.dlq.topic": 1}, "s2"), 0, "1 DLQ topic")
 expect("a manifest DLQ missing from the cluster is reported, not failed", run(["other"], {}, "s3"), 0, "MISSING_DLQ named.dlq.topic")
+expect("a .dlq topic the manifest does not declare is a failure", run(["rogue.dlq", "a.dlq"], {"rogue.dlq": 1, "a.dlq": 0}, "s8"), 1, "UNDECLARED_DLQ rogue.dlq")
 expect("an empty topic list is an error, not 'no dead letters'", run([], {}, "s4"), 2, "ERROR")
 expect("unknown environment is an error", run(["a.dlq"], {"a.dlq": 1}, "s5", env="staging"), 2, "ERROR")
 # a failed read must not erase the baseline

@@ -54,13 +54,20 @@ try:
 except SystemExit: raise
 except Exception as e: die("cannot list topics: %s" % e)
 if not all_topics: die("the topic list is empty - refusing to read it as 'no dead letters'")
+# The manifest DECLARES the DLQ topics of each environment (top-level dlqTopics, plus any MIRRORED entry topic with kind dlq). That declared set is
+# authoritative: a cluster topic that ends in .dlq but is not declared is itself a failure (UNDECLARED_DLQ) - a new dead-letter topic must be named in the
+# manifest so it is watched on purpose, not by accident.
 named = set()
 try:
-    for e in json.load(open(a.manifest))["entries"]:
+    man = json.load(open(a.manifest))
+    named |= set(man.get("dlqTopics", {}).get(a.env, []))
+    for e in man["entries"]:
         if e.get("kind") == "MIRRORED" and a.env in e.get("environments", []):
             named |= {t["name"] for t in e.get("topics", []) if t.get("kind") == "dlq" and not t["name"].startswith("record-name:")}
 except Exception as e: die("cannot read the manifest: %s" % e)
-dlqs = sorted({t for t in all_topics if t.endswith(".dlq")} | (named & set(all_topics)))
+suffix = {t for t in all_topics if t.endswith(".dlq")}
+undeclared = sorted(suffix - named)
+dlqs = sorted(suffix | (named & set(all_topics)))
 missing = sorted(named - set(all_topics))
 
 
@@ -81,10 +88,11 @@ grew = []
 for t, n in sorted(now.items()):
     if before is not None and t in before and n > before[t]: grew.append((t, before[t], n))
 for t, b, n in grew: print("GROWTH %s: %d -> %d (+%d dead letters since the last run)" % (t, b, n, n - b))
+for t in undeclared: print("UNDECLARED_DLQ %s (a .dlq topic the manifest does not declare: add it to dlqTopics.%s)" % (t, a.env))
 for t in missing: print("MISSING_DLQ %s (named by the manifest, not in the cluster)" % t)
 # MERGE, never overwrite: a topic missing from this (successful) listing keeps its baseline, so if it was only transiently invisible and comes back
 # with more records, that growth is still detected instead of being read as "first sight".
 merged = dict(before or {}); merged.update(now)
 json.dump(merged, open(sp, "w"))   # only reached after every read succeeded
-print("dlq-growth %s: %d DLQ topic(s)%s, %d grew" % (a.env, len(dlqs), "" if before is not None else " (first run: baseline recorded)", len(grew)))
-sys.exit(1 if grew else 0)
+print("dlq-growth %s: %d DLQ topic(s)%s, %d grew, %d undeclared" % (a.env, len(dlqs), "" if before is not None else " (first run: baseline recorded)", len(grew), len(undeclared)))
+sys.exit(1 if (grew or undeclared) else 0)

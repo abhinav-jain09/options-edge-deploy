@@ -47,8 +47,12 @@ for it in items:
         lag = (st.get("updatedReplicas", 0) or 0) < want or (st.get("observedGeneration", 0) or 0) < it.get("metadata", {}).get("generation", 0)
         if prog and prog.get("status") == "False" and prog.get("reason") == "ProgressDeadlineExceeded":
             stuck.append((kind, name, want, have, -1)); continue
-        if lag and prog and (prog.get("lastUpdateTime") or prog.get("lastTransitionTime")):
-            mins_lag = (now - ts(prog.get("lastUpdateTime") or prog["lastTransitionTime"])).total_seconds() / 60
+        if lag:
+            when = (prog.get("lastUpdateTime") or prog.get("lastTransitionTime")) if prog else None
+            if when is None:
+                # a rollout that has not caught up and carries NO progress timestamp cannot be aged, so it cannot be called healthy (fail closed)
+                stuck.append((kind, name, want, have, -2)); continue
+            mins_lag = (now - ts(when)).total_seconds() / 60
             if mins_lag > a.minutes:
                 stuck.append((kind, name, want, have, int(mins_lag))); continue
     if have >= want:
@@ -67,7 +71,8 @@ for it in items:
     if mins > a.minutes:
         stuck.append((kind, name, want, have, int(mins)))
 for kind, name, want, have, mins in sorted(stuck):
-    if mins < 0: print("STUCK %s/%s: the rollout failed (ProgressDeadlineExceeded) while %d of %d old pods keep serving" % (kind, name, have, want))
+    if mins == -2: print("STUCK %s/%s: the new generation is not fully rolled out and there is no Progressing timestamp to age it (%d old pods serving)" % (kind, name, have))
+    elif mins < 0: print("STUCK %s/%s: the rollout failed (ProgressDeadlineExceeded) while %d of %d old pods keep serving" % (kind, name, have, want))
     elif have >= want: print("STUCK %s/%s: rollout not completing for %d min (new generation not fully updated) while %d old pods keep serving" % (kind, name, mins, have))
     else: print("STUCK %s/%s wants %d, %d available, short for %d min" % (kind, name, want, have, mins))
 print("fleet-readiness: %d healthy, %d held at 0, %d stuck (> %d min)" % (ok, held, len(stuck), a.minutes))

@@ -6,9 +6,9 @@ NOW = "2026-11-03T12:00:00Z"
 
 
 def dep(name, want, have, since="2026-11-03T10:00:00Z", kind="Deployment", conds=True):
-    st = {"availableReplicas": have} if have is not None else {}
+    st = {"availableReplicas": have, "updatedReplicas": want, "observedGeneration": 1} if have is not None else {}
     if conds: st["conditions"] = [{"type": "Available", "status": "True" if have and have >= want else "False", "lastTransitionTime": since}]
-    return {"kind": kind, "metadata": {"name": name, "creationTimestamp": "2026-10-01T00:00:00Z"}, "spec": {"replicas": want}, "status": st}
+    return {"kind": kind, "metadata": {"name": name, "generation": 1, "creationTimestamp": "2026-10-01T00:00:00Z"}, "spec": {"replicas": want}, "status": st}
 
 
 def run(items, raw=None, minutes=30):
@@ -51,4 +51,6 @@ expect("old pods serving, new generation 0 of 1 updated for hours: STUCK", 1, "r
 expect("a rollout in progress for under the threshold is tolerated", 0, "0 stuck", [rollout("fresh", 1, 0, "True", "ReplicaSetUpdated", last="2026-11-03T11:50:00Z")])
 expect("the new generation unobserved for hours is stuck", 1, "rollout not completing", [rollout("unobs", 1, 1, "True", "NewReplicaSetAvailable", gen=4, observed=3)])
 expect("a completed rollout (updated == desired, generation observed) is healthy", 0, "1 healthy", [rollout("done", 2, 2, "True", "NewReplicaSetAvailable")])
+nop = rollout("noprog", 1, 0, "True", "x"); nop["status"]["conditions"] = [c for c in nop["status"]["conditions"] if c["type"] != "Progressing"]
+expect("lagging rollout with no Progressing condition fails closed", 1, "no Progressing timestamp", [nop])
 sys.exit(fail)

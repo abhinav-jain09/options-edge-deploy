@@ -857,7 +857,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ibkr-preopen-baseline-revocation.avsc"
+    "path": "schemas/ibkr-preopen-baseline-revocation.avsc"
    },
    "topics": [
     {
@@ -1444,7 +1444,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "breakout/SequencedPayload.avsc"
+    "path": "schemas/breakout/SequencedPayload.avsc"
    },
    "topics": [
     {
@@ -1534,7 +1534,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/BreakClassifierCheckpoint.avsc"
+    "path": "schemas-registry/ta/BreakClassifierCheckpoint.avsc"
    },
    "topics": [
     {
@@ -1562,7 +1562,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/BreakMark.avsc"
+    "path": "schemas-registry/ta/BreakMark.avsc"
    },
    "topics": [
     {
@@ -1590,7 +1590,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/BreakOutcome.avsc"
+    "path": "schemas-registry/ta/BreakOutcome.avsc"
    },
    "topics": [
     {
@@ -1618,7 +1618,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/BreakStatus.avsc"
+    "path": "schemas-registry/ta/BreakStatus.avsc"
    },
    "topics": [
     {
@@ -1646,7 +1646,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/EqualLevelRecord.avsc"
+    "path": "schemas-registry/ta/EqualLevelRecord.avsc"
    },
    "topics": [
     {
@@ -1674,7 +1674,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/BreakParentRecord.avsc"
+    "path": "schemas-registry/ta/BreakParentRecord.avsc"
    },
    "topics": [
     {
@@ -1702,7 +1702,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/SwingPivotRecord.avsc"
+    "path": "schemas-registry/ta/SwingPivotRecord.avsc"
    },
    "topics": [
     {
@@ -1951,7 +1951,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "esamt/EsAuctionMinute.avsc"
+    "path": "schemas-registry/esamt/EsAuctionMinute.avsc"
    },
    "topics": [
     {
@@ -1980,7 +1980,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "esflow/EsAggressorFlowSnapshot.avsc"
+    "path": "schemas-registry/esflow/EsAggressorFlowSnapshot.avsc"
    },
    "topics": [
     {
@@ -2008,7 +2008,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "geometry/GeometryCancelled.avsc"
+    "path": "schemas-registry/geometry/GeometryCancelled.avsc"
    },
    "topics": [
     {
@@ -2036,7 +2036,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "geometry/GeometryCommand.avsc"
+    "path": "schemas-registry/geometry/GeometryCommand.avsc"
    },
    "topics": [
     {
@@ -2064,7 +2064,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "geometry/GeometryEntry.avsc"
+    "path": "schemas-registry/geometry/GeometryEntry.avsc"
    },
    "topics": [
     {
@@ -2092,7 +2092,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "geometry/GeometryExit.avsc"
+    "path": "schemas-registry/geometry/GeometryExit.avsc"
    },
    "topics": [
     {
@@ -2120,7 +2120,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "geometry/GeometryIntent.avsc"
+    "path": "schemas-registry/geometry/GeometryIntent.avsc"
    },
    "topics": [
     {
@@ -2148,7 +2148,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "geometry/GeometryStatus.avsc"
+    "path": "schemas-registry/geometry/GeometryStatus.avsc"
    },
    "topics": [
     {
@@ -2176,7 +2176,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "geometry/GeometryWatermark.avsc"
+    "path": "schemas-registry/geometry/GeometryWatermark.avsc"
    },
    "topics": [
     {
@@ -2348,7 +2348,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "indicators/BackfillManifest.avsc"
+    "path": "schemas-registry/indicators/BackfillManifest.avsc"
    },
    "topics": [
     {
@@ -2378,7 +2378,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "indicators/v1/IndicatorBar.avsc"
+    "path": "schemas-registry/indicators/v1/IndicatorBar.avsc"
    },
    "topics": [
     {
@@ -2406,7 +2406,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "indicators/IndicatorBar.avsc"
+    "path": "schemas-registry/indicators/IndicatorBar.avsc"
    },
    "topics": [
     {
@@ -2436,7 +2436,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "indicators/IndicatorSignals.avsc"
+    "path": "schemas-registry/indicators/IndicatorSignals.avsc"
    },
    "topics": [
     {
@@ -2466,7 +2466,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "indicators/v1/IndicatorSnapshot.avsc"
+    "path": "schemas-registry/indicators/v1/IndicatorSnapshot.avsc"
    },
    "topics": [
     {
@@ -2494,7 +2494,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "indicators/IndicatorSnapshot.avsc"
+    "path": "schemas-registry/indicators/IndicatorSnapshot.avsc"
    },
    "topics": [
     {
@@ -2524,7 +2524,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "indicators/v1/IndicatorStateImage.avsc"
+    "path": "schemas-registry/indicators/v1/IndicatorStateImage.avsc"
    },
    "topics": [
     {
@@ -2552,7 +2552,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "indicators/IndicatorStateImage.avsc"
+    "path": "schemas-registry/indicators/IndicatorStateImage.avsc"
    },
    "topics": [
     {
@@ -2582,7 +2582,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "indicators/SignalEvent.avsc"
+    "path": "schemas-registry/indicators/SignalEvent.avsc"
    },
    "topics": [
     {
@@ -2612,7 +2612,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "indicators/SpotTick.avsc"
+    "path": "schemas-registry/indicators/SpotTick.avsc"
    },
    "topics": [
     {
@@ -2641,7 +2641,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "indicators/v1/StudiesCurrent.avsc"
+    "path": "schemas-registry/indicators/v1/StudiesCurrent.avsc"
    },
    "topics": [
     {
@@ -2669,7 +2669,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "indicators/StudiesCurrent.avsc"
+    "path": "schemas-registry/indicators/StudiesCurrent.avsc"
    },
    "topics": [
     {
@@ -2698,7 +2698,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "indicators/v1/StudyBar.avsc"
+    "path": "schemas-registry/indicators/v1/StudyBar.avsc"
    },
    "topics": [
     {
@@ -2726,7 +2726,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "indicators/StudyBar.avsc"
+    "path": "schemas-registry/indicators/StudyBar.avsc"
    },
    "topics": [
     {
@@ -2755,7 +2755,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "indicators/StudyEngineImage.avsc"
+    "path": "schemas-registry/indicators/StudyEngineImage.avsc"
    },
    "topics": [
     {
@@ -2783,7 +2783,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/CalibrationStatus.avsc"
+    "path": "schemas-registry/ta/CalibrationStatus.avsc"
    },
    "topics": [
     {
@@ -2811,7 +2811,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/IngressBatch.avsc"
+    "path": "schemas-registry/ta/IngressBatch.avsc"
    },
    "topics": [
     {
@@ -2839,7 +2839,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/LeanEvent.avsc"
+    "path": "schemas-registry/ta/LeanEvent.avsc"
    },
    "topics": [
     {
@@ -2867,7 +2867,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/LineAcceptanceCheckpoint.avsc"
+    "path": "schemas-registry/ta/LineAcceptanceCheckpoint.avsc"
    },
    "topics": [
     {
@@ -2895,7 +2895,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/LineAcceptanceDlq.avsc"
+    "path": "schemas-registry/ta/LineAcceptanceDlq.avsc"
    },
    "topics": [
     {
@@ -2923,7 +2923,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/LineEpisodeCore.avsc"
+    "path": "schemas-registry/ta/LineEpisodeCore.avsc"
    },
    "topics": [
     {
@@ -2951,7 +2951,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/LineEpisodeEvidence.avsc"
+    "path": "schemas-registry/ta/LineEpisodeEvidence.avsc"
    },
    "topics": [
     {
@@ -2979,7 +2979,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/LineEpisodeIntegrity.avsc"
+    "path": "schemas-registry/ta/LineEpisodeIntegrity.avsc"
    },
    "topics": [
     {
@@ -3007,7 +3007,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/LineEpisodeOutcome.avsc"
+    "path": "schemas-registry/ta/LineEpisodeOutcome.avsc"
    },
    "topics": [
     {
@@ -3035,7 +3035,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/LineMonitorStatus.avsc"
+    "path": "schemas-registry/ta/LineMonitorStatus.avsc"
    },
    "topics": [
     {
@@ -3063,7 +3063,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/SessionCoverage.avsc"
+    "path": "schemas-registry/ta/SessionCoverage.avsc"
    },
    "topics": [
     {
@@ -3092,7 +3092,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/DlqRecord.avsc"
+    "path": "schemas-registry/ta/DlqRecord.avsc"
    },
    "topics": [
     {
@@ -3121,7 +3121,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/v1/GeometryAnnotationSet.avsc"
+    "path": "schemas-registry/ta/v1/GeometryAnnotationSet.avsc"
    },
    "topics": [
     {
@@ -3149,7 +3149,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/GeometryAnnotationSet.avsc"
+    "path": "schemas-registry/ta/GeometryAnnotationSet.avsc"
    },
    "topics": [
     {
@@ -3178,7 +3178,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/GeometryUnavailable.avsc"
+    "path": "schemas-registry/ta/GeometryUnavailable.avsc"
    },
    "topics": [
     {
@@ -3207,7 +3207,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/PatternAnnotationSet.avsc"
+    "path": "schemas-registry/ta/PatternAnnotationSet.avsc"
    },
    "topics": [
     {
@@ -3236,7 +3236,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/PatternUnavailable.avsc"
+    "path": "schemas-registry/ta/PatternUnavailable.avsc"
    },
    "topics": [
     {
@@ -3265,7 +3265,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/RecoveryCheckpoint.avsc"
+    "path": "schemas-registry/ta/RecoveryCheckpoint.avsc"
    },
    "topics": [
     {
@@ -3294,7 +3294,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/RecoveryPayload.avsc"
+    "path": "schemas-registry/ta/RecoveryPayload.avsc"
    },
    "topics": [
     {
@@ -3323,7 +3323,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/SequenceRecord.avsc"
+    "path": "schemas-registry/ta/SequenceRecord.avsc"
    },
    "topics": [
     {
@@ -3352,7 +3352,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/v1/StructureToolsSet.avsc"
+    "path": "schemas-registry/ta/v1/StructureToolsSet.avsc"
    },
    "topics": [
     {
@@ -3380,7 +3380,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/StructureToolsSet.avsc"
+    "path": "schemas-registry/ta/StructureToolsSet.avsc"
    },
    "topics": [
     {
@@ -3409,7 +3409,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/UiProjection.avsc"
+    "path": "schemas-registry/ta/UiProjection.avsc"
    },
    "topics": [
     {
@@ -3438,7 +3438,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/UiUnavailable.avsc"
+    "path": "schemas-registry/ta/UiUnavailable.avsc"
    },
    "topics": [
     {
@@ -3526,7 +3526,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "reversal-candidate/ReversalTopCandidate.avsc"
+    "path": "schemas/reversal-candidate/ReversalTopCandidate.avsc"
    },
    "topics": [
     {
@@ -3890,7 +3890,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/v1/ClimaxEvent.avsc"
+    "path": "schemas-registry/ta/v1/ClimaxEvent.avsc"
    },
    "topics": [
     {
@@ -3919,7 +3919,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/ClimaxEvent.avsc"
+    "path": "schemas-registry/ta/ClimaxEvent.avsc"
    },
    "topics": [
     {
@@ -3948,7 +3948,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/v1/FlowBar.avsc"
+    "path": "schemas-registry/ta/v1/FlowBar.avsc"
    },
    "topics": [
     {
@@ -3977,7 +3977,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/FlowBar.avsc"
+    "path": "schemas-registry/ta/FlowBar.avsc"
    },
    "topics": [
     {
@@ -4006,7 +4006,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/v1/PfBreakEvent.avsc"
+    "path": "schemas-registry/ta/v1/PfBreakEvent.avsc"
    },
    "topics": [
     {
@@ -4035,7 +4035,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/PfBreakEvent.avsc"
+    "path": "schemas-registry/ta/PfBreakEvent.avsc"
    },
    "topics": [
     {
@@ -4064,7 +4064,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/v1/PfBreakVolumeCheck.avsc"
+    "path": "schemas-registry/ta/v1/PfBreakVolumeCheck.avsc"
    },
    "topics": [
     {
@@ -4093,7 +4093,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/PfBreakVolumeCheck.avsc"
+    "path": "schemas-registry/ta/PfBreakVolumeCheck.avsc"
    },
    "topics": [
     {
@@ -4122,7 +4122,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/v1/PfChartState.avsc"
+    "path": "schemas-registry/ta/v1/PfChartState.avsc"
    },
    "topics": [
     {
@@ -4151,7 +4151,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/PfChartState.avsc"
+    "path": "schemas-registry/ta/PfChartState.avsc"
    },
    "topics": [
     {
@@ -4180,7 +4180,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/v1/PfColumn.avsc"
+    "path": "schemas-registry/ta/v1/PfColumn.avsc"
    },
    "topics": [
     {
@@ -4209,7 +4209,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/PfColumn.avsc"
+    "path": "schemas-registry/ta/PfColumn.avsc"
    },
    "topics": [
     {
@@ -4238,7 +4238,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/v1/PfCountEvent.avsc"
+    "path": "schemas-registry/ta/v1/PfCountEvent.avsc"
    },
    "topics": [
     {
@@ -4267,7 +4267,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/PfCountEvent.avsc"
+    "path": "schemas-registry/ta/PfCountEvent.avsc"
    },
    "topics": [
     {
@@ -4296,7 +4296,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/v1/PfLineEvent.avsc"
+    "path": "schemas-registry/ta/v1/PfLineEvent.avsc"
    },
    "topics": [
     {
@@ -4325,7 +4325,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/PfLineEvent.avsc"
+    "path": "schemas-registry/ta/PfLineEvent.avsc"
    },
    "topics": [
     {
@@ -4354,7 +4354,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/v1/PfMaCrossEvent.avsc"
+    "path": "schemas-registry/ta/v1/PfMaCrossEvent.avsc"
    },
    "topics": [
     {
@@ -4383,7 +4383,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/PfMaCrossEvent.avsc"
+    "path": "schemas-registry/ta/PfMaCrossEvent.avsc"
    },
    "topics": [
     {
@@ -4412,7 +4412,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/v1/PfMoneyFlowDivergenceEvent.avsc"
+    "path": "schemas-registry/ta/v1/PfMoneyFlowDivergenceEvent.avsc"
    },
    "topics": [
     {
@@ -4441,7 +4441,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/PfMoneyFlowDivergenceEvent.avsc"
+    "path": "schemas-registry/ta/PfMoneyFlowDivergenceEvent.avsc"
    },
    "topics": [
     {
@@ -4470,7 +4470,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/v1/PfVolumeDivergenceEvent.avsc"
+    "path": "schemas-registry/ta/v1/PfVolumeDivergenceEvent.avsc"
    },
    "topics": [
     {
@@ -4499,7 +4499,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/PfVolumeDivergenceEvent.avsc"
+    "path": "schemas-registry/ta/PfVolumeDivergenceEvent.avsc"
    },
    "topics": [
     {
@@ -4528,7 +4528,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/TtCheckpointChunk.avsc"
+    "path": "schemas-registry/ta/TtCheckpointChunk.avsc"
    },
    "topics": [
     {
@@ -4557,7 +4557,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/TtCheckpointManifest.avsc"
+    "path": "schemas-registry/ta/TtCheckpointManifest.avsc"
    },
    "topics": [
     {
@@ -4586,7 +4586,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/v1/TtFamilyStatus.avsc"
+    "path": "schemas-registry/ta/v1/TtFamilyStatus.avsc"
    },
    "topics": [
     {
@@ -4615,7 +4615,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/TtFamilyStatus.avsc"
+    "path": "schemas-registry/ta/TtFamilyStatus.avsc"
    },
    "topics": [
     {
@@ -4644,7 +4644,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/v1/VolumeNodeSet.avsc"
+    "path": "schemas-registry/ta/v1/VolumeNodeSet.avsc"
    },
    "topics": [
     {
@@ -4673,7 +4673,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/VolumeNodeSet.avsc"
+    "path": "schemas-registry/ta/VolumeNodeSet.avsc"
    },
    "topics": [
     {
@@ -4702,7 +4702,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/ControlCheckpoint.avsc"
+    "path": "schemas-registry/ta/ControlCheckpoint.avsc"
    },
    "topics": [
     {
@@ -4731,7 +4731,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/v1/CycleSet.avsc"
+    "path": "schemas-registry/ta/v1/CycleSet.avsc"
    },
    "topics": [
     {
@@ -4760,7 +4760,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/CycleSet.avsc"
+    "path": "schemas-registry/ta/CycleSet.avsc"
    },
    "topics": [
     {
@@ -4789,7 +4789,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/SeriesCheckpoint.avsc"
+    "path": "schemas-registry/ta/SeriesCheckpoint.avsc"
    },
    "topics": [
     {
@@ -4818,7 +4818,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/TimeframeCheckpoint.avsc"
+    "path": "schemas-registry/ta/TimeframeCheckpoint.avsc"
    },
    "topics": [
     {
@@ -4847,7 +4847,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/v1/WaveSet.avsc"
+    "path": "schemas-registry/ta/v1/WaveSet.avsc"
    },
    "topics": [
     {
@@ -4876,7 +4876,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "ta/WaveSet.avsc"
+    "path": "schemas-registry/ta/WaveSet.avsc"
    },
    "topics": [
     {
@@ -4904,7 +4904,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "zerodte/ZeroDteIntelligenceSnapshot.avsc"
+    "path": "schemas-registry/zerodte/ZeroDteIntelligenceSnapshot.avsc"
    },
    "topics": [
     {
@@ -4981,7 +4981,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "cvd-related/RegimeCheckpoint.avsc"
+    "path": "schemas/cvd-related/RegimeCheckpoint.avsc"
    },
    "topics": [
     {
@@ -5010,7 +5010,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "cvd-related/RegimeCurrent.avsc"
+    "path": "schemas/cvd-related/RegimeCurrent.avsc"
    },
    "topics": [
     {
@@ -5039,7 +5039,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "cvd-related/RegimeStatePoint.avsc"
+    "path": "schemas/cvd-related/RegimeStatePoint.avsc"
    },
    "topics": [
     {
@@ -5068,7 +5068,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "cvd-related/DirectionAlert.avsc"
+    "path": "schemas/cvd-related/DirectionAlert.avsc"
    },
    "topics": [
     {
@@ -5096,7 +5096,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "cvd-related/CandleDirectionExportRecord.avsc"
+    "path": "schemas/cvd-related/CandleDirectionExportRecord.avsc"
    },
    "topics": [
     {
@@ -5125,7 +5125,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "cvd-related/DirectionCheckpoint.avsc"
+    "path": "schemas/cvd-related/DirectionCheckpoint.avsc"
    },
    "topics": [
     {
@@ -5154,7 +5154,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "cvd-related/DirectionCommissioning.avsc"
+    "path": "schemas/cvd-related/DirectionCommissioning.avsc"
    },
    "topics": [
     {
@@ -5183,7 +5183,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "cvd-related/DirectionCurrent.avsc"
+    "path": "schemas/cvd-related/DirectionCurrent.avsc"
    },
    "topics": [
     {
@@ -5212,7 +5212,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "cvd-related/DirectionLedger.avsc"
+    "path": "schemas/cvd-related/DirectionLedger.avsc"
    },
    "topics": [
     {
@@ -5241,7 +5241,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "cvd-related/DirectionPush.avsc"
+    "path": "schemas/cvd-related/DirectionPush.avsc"
    },
    "topics": [
     {
@@ -5270,7 +5270,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "cvd-related/DirectionScorecard.avsc"
+    "path": "schemas/cvd-related/DirectionScorecard.avsc"
    },
    "topics": [
     {
@@ -5340,12 +5340,11 @@
     "repo": "contracts",
     "path": "schemas/cvd-related/EarlyAuctionVerdictLedger.avsc"
    },
-   "retained": true,
-   "retainedReason": "dev history; the prod image is built against this version",
    "producers": [
     {
      "service": "early-auction-verdict",
      "environments": [
+      "dev",
       "prod"
      ]
     }
@@ -5370,20 +5369,17 @@
     }
    ],
    "source": {
-    "kind": "FILE",
-    "repo": "contracts",
-    "path": "schemas/cvd-related/EarlyAuctionVerdictLedger.avsc"
+    "kind": "ARCHIVAL",
+    "capturedFrom": {
+     "env": "dev",
+     "id": 3059
+    },
+    "reason": "registered on dev by an image built against a contracts branch jar (hash 91bef8ae...); no file in the contracts repo or processing resource hashes to it and no current producer writes it"
    },
-   "pending": true,
-   "producers": [
-    {
-     "service": "early-auction-verdict",
-     "environments": [
-      "dev"
-     ]
-    }
-   ],
-   "consumers": []
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "already registered on dev; kept so the dev registry matches the manifest (no producer in this commit writes it)"
   },
   {
    "kind": "MIRRORED",
@@ -5400,7 +5396,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "cvd-related/DirectionAlert.avsc"
+    "path": "schemas/cvd-related/DirectionAlert.avsc"
    },
    "topics": [
     {
@@ -5439,7 +5435,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "cvd-related/DirectionCommissioning.avsc"
+    "path": "schemas/cvd-related/DirectionCommissioning.avsc"
    },
    "topics": [
     {
@@ -5467,7 +5463,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "cvd-related/DirectionCurrent.avsc"
+    "path": "schemas/cvd-related/DirectionCurrent.avsc"
    },
    "topics": [
     {
@@ -5495,7 +5491,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "cvd-related/DirectionLedger.avsc"
+    "path": "schemas/cvd-related/DirectionLedger.avsc"
    },
    "topics": [
     {
@@ -5523,7 +5519,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "cvd-related/DirectionPush.avsc"
+    "path": "schemas/cvd-related/DirectionPush.avsc"
    },
    "topics": [
     {
@@ -5551,7 +5547,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "cvd-related/DirectionScorecard.avsc"
+    "path": "schemas/cvd-related/DirectionScorecard.avsc"
    },
    "topics": [
     {
@@ -5759,7 +5755,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "rithmic/RithmicDepthFrame.avsc"
+    "path": "schemas/rithmic/RithmicDepthFrame.avsc"
    },
    "topics": [
     {
@@ -5787,7 +5783,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "cvd-related/LevelAbsorptionClosure.avsc"
+    "path": "schemas/cvd-related/LevelAbsorptionClosure.avsc"
    },
    "topics": [
     {
@@ -5815,7 +5811,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "cvd-related/LevelAbsorptionEvent.avsc"
+    "path": "schemas/cvd-related/LevelAbsorptionEvent.avsc"
    },
    "topics": [
     {
@@ -5843,7 +5839,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "cvd-related/LevelAbsorptionManualLine.avsc"
+    "path": "schemas/cvd-related/LevelAbsorptionManualLine.avsc"
    },
    "topics": [
     {
@@ -5902,7 +5898,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "cvd-related/AbsorptionPathSnapshot.avsc"
+    "path": "schemas/cvd-related/AbsorptionPathSnapshot.avsc"
    },
    "topics": [
     {
@@ -5930,7 +5926,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "cvd-related/LevelAbsorptionVoice.avsc"
+    "path": "schemas/cvd-related/LevelAbsorptionVoice.avsc"
    },
    "topics": [
     {
@@ -6130,7 +6126,7 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
-    "path": "cvd-related/ShortPremiumRecommendation.avsc"
+    "path": "schemas/cvd-related/ShortPremiumRecommendation.avsc"
    },
    "topics": [
     {
@@ -6254,5 +6250,25 @@
    "registeredBy": "unknown (inventory baseline 2026-11-03)",
    "reason": "auto-assigned: at least one version has a registry-assigned id below 2000 (not a fixed id, so not mirror-safe by construction)"
   }
- ]
+ ],
+ "dlqTopics": {
+  "dev": [
+   "options.hpsf.dlq",
+   "options.spx.line-acceptance.dlq",
+   "options.spx.market-structure.dlq",
+   "options.spx.market-structure.estimate.dlq",
+   "options.spx.mission-control.current.dlq",
+   "options.spx.vol-premium.dlq"
+  ],
+  "prod": [
+   "options.hpsf.dlq",
+   "options.spx.market-structure.dlq",
+   "options.spx.market-structure.estimate.dlq",
+   "options.spx.mission-control.current.dlq",
+   "options.spx.vol-premium.dlq"
+  ],
+  "es4": [
+   "es.options.hpsf.dlq"
+  ]
+ }
 }

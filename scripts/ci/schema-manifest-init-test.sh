@@ -16,11 +16,11 @@ if len(sys.argv)>4: es.append({"subject":"s-value","version":2,"id":int(sys.argv
 json.dump({"entries":es},open(f,"w"))
 PY
 }
-setup() { rm -rf "$T/w"; mkdir -p "$T/w/schema-manifest/schemas" "$T/w/text/dev/s-value" "$T/w/text/prod/s-value" "$T/w/text/es4/s-value"
+setup() { rm -rf "$T/w"; mkdir -p "$T/w/contracts/schemas" "$T/w/schema-manifest/schemas" "$T/w/text/dev/s-value" "$T/w/text/prod/s-value" "$T/w/text/es4/s-value"
   echo '{"manifestVersion":1,"familyBlocks":{},"entries":[]}' > "$T/w/schema-manifest/manifest.json"
   for e in dev prod es4; do printf '%s' "$S1" > "$T/w/text/$e/s-value/v1.avsc"; printf '%s' "$S2" > "$T/w/text/$e/s-value/v2.avsc"; done
   for e in dev prod es4; do echo '{"entries":[]}' > "$T/w/inv-$e.json"; done; }
-run() { ( cd "$T/w" && python3 "$REPO/scripts/ci/schema-manifest-init.py" --jar "$JAR" --dev inv-dev.json --prod inv-prod.json --es4 inv-es4.json --schema-text-dir text 2>&1 ); }
+run() { ( cd "$T/w" && python3 "$REPO/scripts/ci/schema-manifest-init.py" --jar "$JAR" --dev inv-dev.json --prod inv-prod.json --es4 inv-es4.json --schema-text-dir text --contracts-root contracts 2>&1 ); }
 fail=0
 ok() { echo "ok     $1"; }; bad() { echo "NOT-OK $1"; fail=1; }
 
@@ -32,4 +32,8 @@ setup; inv "$T/w/inv-dev.json" 2100 "$H2"; if out=$(run); then bad "a schema tex
 
 setup; inv "$T/w/inv-dev.json" 2100 "$H1" 2100 "$H2"; out=$(run) || true
 grep -q "two versions of this subject share id 2100" "$T/w/schema-manifest/manifest.json" && ok "two versions of one subject sharing an id become ENV_LOCAL (R3a)" || bad "same-subject duplicate id slipped through"
+setup; python3 - "$T/w/inv-dev.json" "$H1" <<'PY'
+import json,sys; json.dump({"entries":[{"subject":"s-value","version":1,"id":2100,"schemaHash":sys.argv[2],"schemaFile":"cvd-related/Gone.avsc"}]},open(sys.argv[1],"w"))
+PY
+if out=$(run); then bad "a FILE match with no such file in the contracts checkout was accepted"; else printf '%s' "$out" | grep -q "no file under" && ok "a FILE source that is not really in the contracts checkout is refused" || bad "refused for the wrong reason: $out"; fi
 exit $fail

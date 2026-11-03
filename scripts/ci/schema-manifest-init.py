@@ -19,6 +19,7 @@ ap = argparse.ArgumentParser()
 for e in ("dev", "prod", "es4"): ap.add_argument("--" + e, required=True)
 ap.add_argument("--schema-text-dir", required=True)
 ap.add_argument("--jar", default="tools/schema-governance/schema-governance-tool.jar", help="the tool jar: schemaHash is recomputed from the copied text")
+ap.add_argument("--contracts-root", required=True, help="checkout of options-edge-contracts: FILE sources are recorded with their REPO-RELATIVE path and verified to hash to the entry")
 ap.add_argument("--manifest", default="schema-manifest/manifest.json")
 ap.add_argument("--snapshots", default="schema-manifest/schemas")
 a = ap.parse_args()
@@ -105,8 +106,12 @@ for s in subjects:
         text = open(os.path.join(a.schema_text_dir, have[0], rel)).read()
         open(os.path.join(a.snapshots, rel), "w").write(text)
         if r["schemaFile"]:
-            repo = "processing" if "/" in r["schemaFile"] and r["schemaFile"].startswith(("market-structure", "line-acceptance", "wave-cycle")) else "contracts"
-            source = {"kind": "FILE", "repo": repo, "path": r["schemaFile"]}
+            # the inventory path is relative to the directory it was found under (schemas/ or schemas-registry/); record the REPO-relative path and
+            # prove the file is really there and hashes to this entry (requirement R8a)
+            cands = [os.path.join(d, r["schemaFile"]) for d in ("schemas", "schemas-registry")]
+            found = [c for c in cands if os.path.exists(os.path.join(a.contracts_root, c)) and jar_hash(os.path.join(a.contracts_root, c)) == r["schemaHash"]]
+            if not found: sys.exit("FAIL: %s v%d: the inventory matched %s but no file under %s/{schemas,schemas-registry} hashes to %s" % (s, v, r["schemaFile"], a.contracts_root, r["schemaHash"]))
+            source = {"kind": "FILE", "repo": "contracts", "path": found[0]}
         else:
             source = {"kind": "ARCHIVAL", "capturedFrom": {"env": have[0], "id": r["id"]},
                       "reason": "inventory baseline 2026-11-03: no .avsc in the contracts or processing repos hashes to this schema (code-defined or registry-only)"}

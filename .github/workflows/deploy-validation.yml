@@ -135,6 +135,9 @@ jobs:
       - name: Schema sync es4 host script negative controls
         run: bash scripts/ci/schema-sync-es4-host-test.sh
 
+      - name: Schema code-vs-manifest verifier negative controls
+        run: bash scripts/ci/schema-code-verify-test.sh
+
       - name: Fleet readiness and DLQ growth negative controls
         run: |
           python3 scripts/watch/fleet-readiness-test.py
