@@ -43,28 +43,37 @@ gov() { java -jar "$JAR" "$@" 2> >(grep -v '^SLF4J' >&2); }
 echo "schema-sync: service=$SERVICE environment=$ENVN registry=$REG dry_run=$DRY"
 gov validate --manifest "$MANIFEST" --snapshots "$SNAP"
 
-# R5e: the label comes from the selected image, by digest, never from a caller-supplied file.
 LABEL_ARGS=()
-if [ -n "${SCHEMA_IMAGE_REF:-}" ]; then
-  rc=0
-  gov image-label --image "$SCHEMA_IMAGE_REF" --platform "${SCHEMA_IMAGE_PLATFORM:-linux/amd64}" > "$WORK/label.json" || rc=$?
-  case "$rc" in
-    0) LABEL_ARGS=(--label "$WORK/label.json"); echo "schema-sync: image label read from $SCHEMA_IMAGE_REF" ;;
-    3) if gov declared --manifest "$MANIFEST" --service "$SERVICE"; then
-         echo "schema-sync: UNVERIFIED image - $SERVICE has no baked label and is declaredByManifest (R5e transition)"
-       else
-         echo "FAIL: image $SCHEMA_IMAGE_REF has no options-edge.schema-requirements label and $SERVICE is not declaredByManifest (R5e)"; exit 1
-       fi ;;
-    *) echo "FAIL: could not read the image label from $SCHEMA_IMAGE_REF (rc=$rc)"; exit 1 ;;
-  esac
+if [ "$SERVICE" = "@all" ]; then
+  # Whole-environment mode (R3f): every MIRRORED entry the manifest lists for this environment, bound to no service and so to no image label.
+  # It is how a registry gets a schema that a byte-copy mirror carries but no deployed service owns (the es4->prod aggressor-flow case). Same
+  # validate, same read-only pre-pass, same PLAN_SHA256 requirement for a production write; the engine still refuses any collision.
+  [ -z "${SCHEMA_IMAGE_REF:-}" ] || { echo "FAIL: SERVICE=@all takes no SCHEMA_IMAGE_REF"; exit 1; }
+  echo "schema-sync: whole-environment plan for $ENVN (no service, no image label)"
+  gov plan --all --manifest "$MANIFEST" --env "$ENVN" --out "$WORK"
 else
-  if gov declared --manifest "$MANIFEST" --service "$SERVICE"; then
-    echo "schema-sync: UNVERIFIED image - no SCHEMA_IMAGE_REF and $SERVICE is declaredByManifest (R5e transition)"
+  # R5e: the label comes from the selected image, by digest, never from a caller-supplied file.
+  if [ -n "${SCHEMA_IMAGE_REF:-}" ]; then
+    rc=0
+    gov image-label --image "$SCHEMA_IMAGE_REF" --platform "${SCHEMA_IMAGE_PLATFORM:-linux/amd64}" > "$WORK/label.json" || rc=$?
+    case "$rc" in
+      0) LABEL_ARGS=(--label "$WORK/label.json"); echo "schema-sync: image label read from $SCHEMA_IMAGE_REF" ;;
+      3) if gov declared --manifest "$MANIFEST" --service "$SERVICE"; then
+           echo "schema-sync: UNVERIFIED image - $SERVICE has no baked label and is declaredByManifest (R5e transition)"
+         else
+           echo "FAIL: image $SCHEMA_IMAGE_REF has no options-edge.schema-requirements label and $SERVICE is not declaredByManifest (R5e)"; exit 1
+         fi ;;
+      *) echo "FAIL: could not read the image label from $SCHEMA_IMAGE_REF (rc=$rc)"; exit 1 ;;
+    esac
   else
-    echo "FAIL: SCHEMA_IMAGE_REF (digest-pinned) is required: $SERVICE is not declaredByManifest, so its image label must be read and matched (R5e)"; exit 1
+    if gov declared --manifest "$MANIFEST" --service "$SERVICE"; then
+      echo "schema-sync: UNVERIFIED image - no SCHEMA_IMAGE_REF and $SERVICE is declaredByManifest (R5e transition)"
+    else
+      echo "FAIL: SCHEMA_IMAGE_REF (digest-pinned) is required: $SERVICE is not declaredByManifest, so its image label must be read and matched (R5e)"; exit 1
+    fi
   fi
+  gov plan --manifest "$MANIFEST" --env "$ENVN" --service "$SERVICE" --out "$WORK" "${LABEL_ARGS[@]}"
 fi
-gov plan --manifest "$MANIFEST" --env "$ENVN" --service "$SERVICE" --out "$WORK" "${LABEL_ARGS[@]}"
 
 # Read-only registry state recorded with the plan (R13a step 2). An unreadable registry is a failure, not an empty answer.
 MODE="$(curl -sS -m 15 --fail "${REG%/}/mode")" || { echo "FAIL: registry $REG unreachable"; exit 1; }
