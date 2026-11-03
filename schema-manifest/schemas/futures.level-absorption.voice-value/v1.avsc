@@ -1,0 +1,1 @@
+{"type":"record","name":"LevelAbsorptionVoice","namespace":"com.optionsedge.contracts.cvdrelated","fields":[{"name":"timestamp","type":"long"},{"name":"episodeId","type":"string"},{"name":"verdictId","type":"string"},{"name":"text","type":"string"},{"name":"repeat","type":"boolean"}]}

@@ -24,6 +24,10 @@
           fi
           export REGISTRY_SCHEME="${REGISTRY_SCHEME:-http}"
           command -v yq >/dev/null 2>&1 || { echo "FATAL: yq is required to digest-pin the kustomize overlay; aborting before any kubectl mutation." >&2; exit 1; }
+          # --- Schema sync (docs/schema-governance R11): every manifest-covered service's schemas must be in this environment's registry BEFORE any
+          # kubectl mutation below (targeted applies, deletes, the full overlay apply, set image). Runs in DEPLOY_DRY_RUN too (read-only there).
+          bash scripts/ci/schema-sync-all.sh "${ENVIRONMENT:-dev}" \
+            || { echo "FATAL: schema sync refused this deploy in ${ENVIRONMENT:-dev}. Nothing was applied." >&2; exit 1; }
           . scripts/deploy/pin-image.sh
           . scripts/deploy/image-lock.sh
           # Minimum image build (scripts/deploy/min-image-build.sh): a service that declares

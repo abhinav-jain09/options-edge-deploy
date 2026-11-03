@@ -1,0 +1,28 @@
+@Library('oe') _
+
+// Nightly code-vs-manifest check (docs/schema-governance R5b half B, R5e). READ-ONLY. Clones options-edge-processing main (read-only) and runs
+// scripts/ci/schema-code-verify.sh: every module's schema-requirements.json must agree with the manifest's bindings, and the module's own schema tests must
+// pass against the manifest. A processing change that alters a producer schema without a manifest change turns this red the next night (and is stopped at
+// rollout by the image-label gate in any case). It ALSO clones options-edge-contracts main and runs scripts/ci/schema-source-check.sh (R8a/R14b): a contracts
+// schema file that changed without a manifest change, or a NEW contracts schema nobody governs, turns it red. It writes nothing to any registry, cluster or repository. A red build is the alert.
+pipeline {
+  agent { label 'hpsf-replay-mac' }
+  triggers {
+    cron('''TZ=America/New_York
+50 3 * * *''')
+  }
+  options {
+    disableConcurrentBuilds()
+    timeout(time: 30, unit: 'MINUTES')
+  }
+  stages {
+    stage('Verify') {
+      steps {
+        sh 'rm -rf .jenkins-tmp/processing-main && mkdir -p .jenkins-tmp && git clone --depth 1 --branch main git@github.com:abhinav-jain09/options-edge-processing.git .jenkins-tmp/processing-main'
+        sh 'bash scripts/ci/schema-code-verify.sh .jenkins-tmp/processing-main'
+        sh 'rm -rf .jenkins-tmp/contracts-main && git clone --depth 1 --branch main git@github.com:abhinav-jain09/options-edge-contracts.git .jenkins-tmp/contracts-main'
+        sh 'bash scripts/ci/schema-source-check.sh .jenkins-tmp/contracts-main'
+      }
+    }
+  }
+}

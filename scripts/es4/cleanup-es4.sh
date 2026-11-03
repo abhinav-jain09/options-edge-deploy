@@ -75,6 +75,16 @@ elif [ "$DRY" != "true" ]; then
 fi
 [ "${ES4_FEED_FENCED:-0}" = "1" ] || [ "$DRY" = "true" ] || \
   die "external prod es-feed not proven absent (ES4_FEED_FENCED!=1) — the Jenkins clean-reset stage must run scripts/es4/assert-prod-es-feed-absent.sh first (DBP-R33 deleted the prod es-feed; it is no longer scaled and restored), else a surviving external producer re-pollutes the fresh cluster with cached schema ids"
+# --- schema governance (docs/schema-governance R11b): the manifest's es4 schema set arrives as a SHIPPED BUNDLE and is verified here, BEFORE
+# the wipe, so a missing, stale or altered bundle can never leave an empty registry. ES4_SCHEMA_BUNDLE_COMMIT is the deploy commit the
+# Jenkins `Ship schema bundle` stage built it from (passed on the ssh command line).
+ES4_SCHEMA_BUNDLE="${ES4_SCHEMA_BUNDLE:-$ES4_HOME/repo/schema-bundle}"
+if [ "$DRY" != "true" ]; then
+  [ -n "${ES4_SCHEMA_BUNDLE_COMMIT:-}" ] && [ -n "${ES4_SCHEMA_BUNDLE_DIGEST:-}" ] || die "ES4_SCHEMA_BUNDLE_COMMIT and ES4_SCHEMA_BUNDLE_DIGEST not supplied - the clean-reset must be bound to the schema bundle it registers after the wipe"
+fi
+if [ -n "${ES4_SCHEMA_BUNDLE_COMMIT:-}" ]; then
+  bash "$SCRIPT_DIR/../ci/schema-sync-es4-host.sh" verify "$ES4_SCHEMA_BUNDLE" "$ES4_SCHEMA_BUNDLE_COMMIT" "${ES4_SCHEMA_BUNDLE_DIGEST:-}" || die "schema bundle verification failed - nothing was changed"
+fi
 [ -d "$INFRA_DIR" ] || die "no $INFRA_DIR — run bootstrap-es4.sh (infra-sync) first"
 [ -f "$INFRA_DIR/docker-compose.yml" ] || die "no compose file in $INFRA_DIR"
 
@@ -426,6 +436,11 @@ log "registering version 2 of the study subjects (ensure-fixed-id-schemas.sh, in
 run "SCHEMA_REGISTRY_URL=http://localhost:8081 SCHEMAS_DIR='$SCRIPT_DIR/../../schemas-registry/indicators' SCHEMA_ID_MAP='$SCRIPT_DIR/../kafka/schema-id-maps/indicator-studies.map' DEPLOY_DRY_RUN=$DRY bash '$SCRIPT_DIR/../kafka/ensure-fixed-id-schemas.sh'"
 log "restoring Rithmic fixed-id schema before any producer or mirror restarts"
 run "SCHEMA_REGISTRY_URL=http://localhost:8081 SCHEMAS_DIR='$SCRIPT_DIR/../../schemas-registry/rithmic' SCHEMA_ID_MAP='$SCRIPT_DIR/../kafka/schema-id-maps/rithmic-depth.map' DEPLOY_DRY_RUN=$DRY bash '$SCRIPT_DIR/../kafka/ensure-fixed-id-schemas.sh'"
+# schema-governance: registry-wiped
+# (the registry above is healthy again on an EMPTY store: this is the first point at which a registration can survive the wipe)
+log "registering the manifest's whole es4 schema set from the shipped bundle (schema-sync-es4-host.sh) - before any topic exists and before any app is restored"
+run "SCHEMA_REGISTRY_URL=http://localhost:8081 DEPLOY_DRY_RUN=$DRY bash '$SCRIPT_DIR/../ci/schema-sync-es4-host.sh' apply '$ES4_SCHEMA_BUNDLE' ${ES4_SCHEMA_BUNDLE_COMMIT:-} ${ES4_SCHEMA_BUNDLE_DIGEST:-}" \
+  || die "the manifest's es4 schemas could not be registered - app left down (rerun resumes from $STATE)"
 log "reconciling required core es.* topic contracts (create-es-topics.sh)"
 # A clean-reset IS the "approved destructive cleanup deployment" that
   # KAFKA_RECREATE_MISMATCHED_TOPICS gates: the wipe just deleted every topic, so anything
@@ -460,6 +475,7 @@ tape_preserve_import && tp_rc=0 || tp_rc=$?
 log "docker compose up -d (start mm2 + any remaining infra now that topics exist)"
 run "(cd '$INFRA_DIR' && docker compose up -d)"
 
+# schema-governance: restore-boundary
 # ------------------------------------------------- 5. restore app (verified) then clear state
 # Marks the start of the window the post-restore wedge scan reads logs over. SECONDS is bash's own
 # monotonic counter since this shell started — no clock, timezone or container-TZ arithmetic.

@@ -123,6 +123,28 @@ jobs:
 
       - name: Schema sync wiring negative controls
         run: bash scripts/ci/validate-schema-sync-wired-test.sh
+      - name: Schema manifest is valid (docs/schema-governance R1-R5)
+        run: java -jar tools/schema-governance/schema-governance-tool.jar validate --manifest schema-manifest/manifest.json --snapshots schema-manifest/schemas
+
+      - name: Schema drift check negative controls (mock registry)
+        run: bash scripts/ci/schema-drift-test.sh
+
+      - name: Schema manifest generator negative controls
+        run: bash scripts/ci/schema-manifest-init-test.sh
+
+      - name: Schema sync es4 host script negative controls
+        run: bash scripts/ci/schema-sync-es4-host-test.sh
+
+      - name: Schema code-vs-manifest verifier negative controls
+        run: bash scripts/ci/schema-code-verify-test.sh
+
+      - name: Schema source-drift check negative controls
+        run: bash scripts/ci/schema-source-check-test.sh
+
+      - name: Fleet readiness and DLQ growth negative controls
+        run: |
+          python3 scripts/watch/fleet-readiness-test.py
+          python3 scripts/watch/dlq-growth-test.py
 
       - name: Schema sync gate negative controls (mock registry, real tool jar)
         run: SCHEMA_GOV_JAR="$PWD/tools/schema-governance/schema-governance-tool.jar" bash scripts/ci/schema-sync-test.sh

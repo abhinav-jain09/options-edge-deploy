@@ -1,0 +1,70 @@
+@Library('oe') _
+
+// Fleet watch (docs/schema-governance R16, R18(b)). READ-ONLY. Every 15 minutes, for production, dev and es4:
+//   1. READINESS: any Deployment or StatefulSet that WANTS replicas but has had fewer available for more than 30 minutes, or whose rollout is not
+//      completing while old pods keep it "available" (scripts/watch/fleet-readiness.py). Workloads held at 0 replicas are never reported. This is the check
+//      that would have caught the 9-hour early-auction crash-loop.
+//   2. DEAD LETTERS: any `*.dlq` topic whose end offsets grew since the previous run, and any `.dlq` topic the manifest does not declare
+//      (scripts/watch/dlq-growth.py; baselines kept per environment under $HOME/.oe-watch on the agent, merged and written only after a fully successful read).
+// A red build is the alert: native k8s CronJobs are denied by the cluster's admission policy and no Kafka or registry exporter is scraped, so a Jenkins
+// cron job is the trigger that can run. It changes nothing in any cluster, registry or topic.
+def PROFILES = ['production', 'dev', 'es4']
+def kubeconfigFor(String profile) {
+  return profile == 'es4' ? '/Users/abhinav/.kube/es4-jenkins-deployer.kubeconfig' : oeProfile(profile).kubeconfigDeployer
+}
+// Validated at the top of EVERY stage that uses the parameter: "restart from stage" can enter a pipeline mid-way and skip an earlier check.
+def watchedProfiles(String raw, List allowed) {
+  def out = raw.trim().split(/\s+/).toList()
+  out.each { p -> if (!allowed.contains(p)) { error("unknown profile '${p}' (allowed: ${allowed.join(', ')})") } }
+  if (out.isEmpty() || out == ['']) { error('ENVS is empty') }
+  return out
+}
+pipeline {
+  agent { label 'hpsf-replay-mac' }
+  parameters {
+    string(name: 'ENVS', defaultValue: 'production dev es4', description: 'Space-separated profiles to watch (production, dev, es4).')
+    string(name: 'STUCK_MINUTES', defaultValue: '30', description: 'A wanted-but-unavailable workload is reported after this many minutes.')
+  }
+  triggers {
+    cron('*/15 * * * *')
+  }
+  options {
+    disableConcurrentBuilds()
+    timeout(time: 10, unit: 'MINUTES')
+  }
+  stages {
+    stage('Readiness') {
+      steps {
+        script {
+          if (!(params.STUCK_MINUTES ==~ /[0-9]{1,4}/)) { error("STUCK_MINUTES must be a number of minutes (got '${params.STUCK_MINUTES}')") }
+          def bad = []
+          watchedProfiles(params.ENVS, PROFILES).each { profile ->
+            def rc = sh(returnStatus: true, script: """
+              set -uo pipefail
+              out="\$(mktemp)"
+              KUBECONFIG='${kubeconfigFor(profile)}' kubectl -n options-edge get deploy,statefulset -o json > "\$out" || { echo 'ERROR: kubectl get failed for ${profile}'; exit 2; }
+              echo '=== ${profile} ==='
+              mkdir -p "\$HOME/.oe-watch"
+              python3 scripts/watch/fleet-readiness.py --input "\$out" --minutes ${params.STUCK_MINUTES} --state "\$HOME/.oe-watch/fleet-${profile}.json"
+            """)
+            if (rc != 0) { bad << "${profile} (rc=${rc})" }
+          }
+          if (bad) { error("readiness check failed: ${bad.join(', ')}") }
+        }
+      }
+    }
+    stage('Dead letters') {
+      steps {
+        script {
+          def bad = []
+          watchedProfiles(params.ENVS, PROFILES).each { profile ->
+            def envName = profile == 'production' ? 'prod' : profile
+            def rc = sh(returnStatus: true, script: "mkdir -p \"\$HOME/.oe-watch\" && python3 scripts/watch/dlq-growth.py --env ${envName} --state \"\$HOME/.oe-watch\"")
+            if (rc != 0) { bad << "${envName} (rc=${rc})" }
+          }
+          if (bad) { error("dead-letter check failed: ${bad.join(', ')}") }
+        }
+      }
+    }
+  }
+}

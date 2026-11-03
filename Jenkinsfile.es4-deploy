@@ -283,6 +283,24 @@ pipeline {
         '''
       }
     }
+    stage('Ship schema bundle') {
+      // docs/schema-governance R11b. The clean-reset wipes the Schema Registry, and cleanup-es4.sh re-registers the manifest's whole es4 schema
+      // set AFTER the wipe and BEFORE any app is restored. The es4 host cannot see this repository, so the set travels as a bundle built from
+      // THIS build's commit (plan.map + every snapshot + SHA256SUMS + manifest.commit). The bundle is verified on the host in cleanup-es4.sh's
+      // PREFLIGHT, before any mutation, so a missing, stale or altered bundle aborts with the registry untouched. Same-build on purpose: it
+      // never relies on a bundle left by an earlier infra-sync.
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.ACTION == 'clean-reset') } }
+      steps {
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp'
+        }
+        sh 'bash scripts/ci/schema-bundle.sh es4 .jenkins-tmp/schema-bundle'
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp'
+        }
+        sh 'rsync -az --delete .jenkins-tmp/schema-bundle/ "${ES4_HOST}:/home/es4/repo/schema-bundle/"'
+      }
+    }
     stage('Clean reset (atomic Kafka + Schema Registry wipe)') {
       // Wipe Kafka data (all topics + _schemas) TOGETHER so no message can outlive its schema
       // id — the fix for the dead-schema-id poison ("Malformed data. Length is negative") that
@@ -335,14 +353,18 @@ pipeline {
           STRIKE_INTERLOCK=on
           if [ "${ACCEPT_UNARCHIVED_STRIKE_LOSS:-false}" = "true" ]; then STRIKE_INTERLOCK=off; fi
 
+          BUNDLE_COMMIT="$(tr -d '[:space:]' < .jenkins-tmp/schema-bundle/manifest.commit)"
+          [ -n "$BUNDLE_COMMIT" ] || { echo "FATAL: no schema bundle commit - the Ship schema bundle stage did not run"; exit 1; }
+          # Jenkins' OWN digest of the checksum list, handed over on the ssh command line: the host compares it with the shipped list.
+          BUNDLE_DIGEST="$(shasum -a 256 .jenkins-tmp/schema-bundle/SHA256SUMS | cut -d' ' -f1)"
           if [ "${DEPLOY_DRY_RUN}" = "true" ]; then
             echo "DRY: would run the on-box wipe (no prod es-feed to fence — retired per DBP-R33)"
-            ssh -o BatchMode=yes "$ES4_HOST" "DEPLOY_DRY_RUN=true ES4_FEED_FENCED=1 ES4_EXPECTED_NS_UID=$ES4_NS_UID ES4_STRIKE_ARCHIVE_INTERLOCK=$STRIKE_INTERLOCK bash /home/es4/repo/scripts/es4/cleanup-es4.sh"
+            ssh -o BatchMode=yes "$ES4_HOST" "DEPLOY_DRY_RUN=true ES4_SCHEMA_BUNDLE_COMMIT=$BUNDLE_COMMIT ES4_SCHEMA_BUNDLE_DIGEST=$BUNDLE_DIGEST ES4_FEED_FENCED=1 ES4_EXPECTED_NS_UID=$ES4_NS_UID ES4_STRIKE_ARCHIVE_INTERLOCK=$STRIKE_INTERLOCK bash /home/es4/repo/scripts/es4/cleanup-es4.sh"
             exit 0
           fi
 
           echo "=== running on-box atomic wipe ==="
-          ssh -o BatchMode=yes "$ES4_HOST" "DEPLOY_DRY_RUN=false ES4_FEED_FENCED=1 ES4_EXPECTED_NS_UID=$ES4_NS_UID ES4_STRIKE_ARCHIVE_INTERLOCK=$STRIKE_INTERLOCK bash /home/es4/repo/scripts/es4/cleanup-es4.sh"
+          ssh -o BatchMode=yes "$ES4_HOST" "DEPLOY_DRY_RUN=false ES4_SCHEMA_BUNDLE_COMMIT=$BUNDLE_COMMIT ES4_SCHEMA_BUNDLE_DIGEST=$BUNDLE_DIGEST ES4_FEED_FENCED=1 ES4_EXPECTED_NS_UID=$ES4_NS_UID ES4_STRIKE_ARCHIVE_INTERLOCK=$STRIKE_INTERLOCK bash /home/es4/repo/scripts/es4/cleanup-es4.sh"
         '''
       }
     }
@@ -587,6 +609,9 @@ PY_VERSION
           else
             FILES="k8s/es4/services/${SERVICE}.yaml"
           fi
+          # docs/schema-governance R11: every service the manifest binds to es4 must find its schemas in the es4 registry BEFORE any manifest is
+          # applied (read-only under DRY). Nothing is bound to es4 yet -> "nothing to gate"; the first participant makes this load-bearing.
+          DEPLOY_DRY_RUN="$DRY" bash scripts/ci/schema-sync-all.sh es4 || { echo "FATAL: schema sync refused this es4 deploy. Nothing was applied." >&2; exit 1; }
           for f in $FILES; do
             bash scripts/es4/pin-and-apply.sh "$f" "$REGISTRY" "$DRY"
           done
