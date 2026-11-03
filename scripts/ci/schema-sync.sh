@@ -74,11 +74,6 @@ echo "schema-sync: registry mode=$MODE config=$CONF"
 # The plan hash binds registry URL, the rows, EVERY snapshot byte that would be registered, and the deploy commit (R13a), so a
 # snapshot or manifest edited after review changes it even if the rows look the same.
 DEPLOY_HEAD="$(git rev-parse HEAD 2>/dev/null || true)"
-if [ "$DRY" != "true" ] && [ "$ENVN" = "prod" ]; then
-  [ -n "$DEPLOY_HEAD" ] || { echo "FAIL: not a git checkout - a production apply must be bound to a deploy commit"; exit 1; }
-  [ -z "$(git status --porcelain -- schema-manifest scripts/kafka/ensure-fixed-id-schemas.sh scripts/ci/schema-sync.sh)" ] \
-    || { echo "FAIL: the manifest, snapshots or sync scripts have uncommitted changes - a production apply needs a clean checkout"; exit 1; }
-fi
 PLAN_SHA="$( {
   printf 'registry=%s\ncommit=%s\n' "${REG%/}" "$DEPLOY_HEAD"
   cat "$WORK/plan.map"
@@ -87,7 +82,18 @@ PLAN_SHA="$( {
 } | shasum -a 256 | cut -d' ' -f1)"
 echo "PLAN_SHA256=$PLAN_SHA"
 
-if [ "$DRY" != "true" ] && [ "$ENVN" = "prod" ]; then
+# A production apply that would WRITE needs the reviewed plan hash; a steady-state deploy (everything already registered) writes
+# nothing, so it is not held up by it. "Would write" is judged by the engine's own read-only pass, never guessed here.
+NEEDS_WRITE=false
+if [ "$ENVN" = "prod" ] && [ "$DRY" != "true" ]; then
+  PRE="$(SCHEMA_REGISTRY_URL="$REG" SCHEMAS_DIR="$SNAP" SCHEMA_ID_MAP="$WORK/plan.map" DEPLOY_DRY_RUN=true bash scripts/kafka/ensure-fixed-id-schemas.sh 2>&1)" \
+    || { printf '%s\n' "$PRE"; echo "FAIL: the read-only pre-pass refused this plan"; exit 1; }
+  printf '%s' "$PRE" | grep -q "would import" && NEEDS_WRITE=true
+fi
+if [ "$NEEDS_WRITE" = "true" ]; then
+  [ -n "$DEPLOY_HEAD" ] || { echo "FAIL: not a git checkout - a production write must be bound to a deploy commit"; exit 1; }
+  [ -z "$(git status --porcelain -- schema-manifest scripts/kafka/ensure-fixed-id-schemas.sh scripts/ci/schema-sync.sh)" ] \
+    || { echo "FAIL: the manifest, snapshots or sync scripts have uncommitted changes - a production write needs a clean checkout"; exit 1; }
   [ "${PLAN_SHA256:-}" = "$PLAN_SHA" ] \
     || { echo "FAIL: production apply needs PLAN_SHA256=$PLAN_SHA from a reviewed dry run of this exact commit, manifest and registry (got '${PLAN_SHA256:-}')"; exit 1; }
 fi

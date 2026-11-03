@@ -363,6 +363,33 @@ for dep in $DEPLOYMENTS; do
   fi
 done
 
+# --- Schema sync (docs/schema-governance R11, R5e): the registry must hold this service's schemas BEFORE any workload change ---
+# WHY HERE: this is on the workload's actual apply path and runs after the image is digest-pinned, so the gate judges the exact
+# artifact that will roll (its options-edge.schema-requirements label), and it precedes BOTH the dry-run apply and the real one.
+# A service whose Avro subject is absent from the registry crash-loops on a 40401 while the build reports success (2026-11-03).
+# Coverage ratchet: only services the manifest names are gated today (schema-manifest/manifest.json); the rest say NOT GATED
+# out loud until the inventory (R4) covers them. The tool is the committed jar whose sha256 is pinned in tools/schema-governance/PIN.
+SCHEMA_JAR="tools/schema-governance/schema-governance-tool.jar"
+SCHEMA_PIN="$(sed -n 's/^sha256=//p' tools/schema-governance/PIN)"
+SCHEMA_COVERED="$(yq -r "[.entries[] | (.producers[]?, .consumers[]?) | select(.service == \"$SERVICE\")] | length" schema-manifest/manifest.json)" \
+  || { echo "FATAL: cannot read schema-manifest/manifest.json - refusing to deploy without knowing whether $SERVICE is schema-gated" >&2; exit 1; }
+if [ "$SCHEMA_COVERED" = "0" ]; then
+  echo "schema-sync: $SERVICE is not in the schema manifest - NOT GATED (coverage ratchet, docs/schema-governance R4/R6)"
+else
+  [ -f "$SCHEMA_JAR" ] && [ "$(shasum -a 256 "$SCHEMA_JAR" | cut -d' ' -f1)" = "$SCHEMA_PIN" ] \
+    || { echo "FATAL: $SCHEMA_JAR is missing or does not match the sha256 pinned in tools/schema-governance/PIN - refusing to run an unpinned gate" >&2; exit 1; }
+  SCHEMA_REG="$(kubectl -n options-edge get configmap options-edge-config -o jsonpath='{.data.SCHEMA_REGISTRY_URL}' 2>/dev/null || true)"
+  [ -n "$SCHEMA_REG" ] || { echo "FATAL: SCHEMA_REGISTRY_URL is not readable from the options-edge-config configmap - refusing to guess the registry" >&2; exit 1; }
+  SCHEMA_REG="${SCHEMA_REG/host.docker.internal/${DEV_HOST_IP:-192.168.100.102}}"
+  SCHEMA_REF="$PINNED_IMAGE"
+  [ -z "${REGISTRY_RESOLVE_HOST:-}" ] || SCHEMA_REF="${REGISTRY_RESOLVE_HOST}/${PINNED_IMAGE#*/}"
+  echo "=== service-deploy: schema sync ($SERVICE, $ENVIRONMENT, image $SCHEMA_REF) ==="
+  SERVICE="$SERVICE" ENVIRONMENT="$ENVIRONMENT" SCHEMA_REGISTRY_URL="$SCHEMA_REG" SCHEMA_GOV_JAR="$SCHEMA_JAR" \
+    SCHEMA_IMAGE_REF="$SCHEMA_REF" SCHEMA_IMAGE_PLATFORM="$DEPLOY_PLATFORM" DEPLOY_DRY_RUN="$DEPLOY_DRY_RUN" \
+    bash scripts/ci/schema-sync.sh \
+    || { echo "FATAL: schema sync refused $SERVICE in $ENVIRONMENT. Nothing was applied." >&2; exit 1; }
+fi
+
 if [ "$DEPLOY_DRY_RUN" = "true" ]; then
   echo "=== DEPLOY_DRY_RUN=true: server-side validation only ==="
   kubectl apply --dry-run=server -f "$RENDER"

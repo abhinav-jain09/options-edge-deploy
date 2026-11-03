@@ -118,6 +118,14 @@ jobs:
 
       - name: clean-reset schema-registration guard refuses its own violations (mutation test)
         run: bash scripts/ci/validate-clean-reset-registers-schemas-test.sh
+      - name: Schema sync is wired before the first apply (docs/schema-governance R11a)
+        run: python3 scripts/ci/validate-schema-sync-wired.py .
+
+      - name: Schema sync wiring negative controls
+        run: bash scripts/ci/validate-schema-sync-wired-test.sh
+
+      - name: Schema sync gate negative controls (mock registry, real tool jar)
+        run: SCHEMA_GOV_JAR="$PWD/tools/schema-governance/schema-governance-tool.jar" bash scripts/ci/schema-sync-test.sh
 
       # ES Footprint G-R8: the record ceiling is ONE value across two manifests, and the relay's
       # working set lives outside the heap. Neither fact is visible from either manifest alone,

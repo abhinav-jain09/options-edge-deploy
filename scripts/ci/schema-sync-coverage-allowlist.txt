@@ -1,0 +1,14 @@
+# Jenkinsfiles that change workloads WITHOUT going through scripts/deploy/service-deploy.sh, and therefore are NOT schema-gated.
+# Each line: <Jenkinsfile>|<reason>. This list is the honest map of the gap (docs/schema-governance R11/R11a); a new route fails
+# scripts/ci/validate-schema-sync-wired.py until it is gated or listed here with a reason. Remove a line when the file is gated.
+Jenkinsfile|monolithic full deploy via apply.sh - NOT GATED yet (R11: apply.sh must call schema-sync for every service it rolls)
+Jenkinsfile.es4-deploy|es4 deploy and clean-reset - NOT GATED yet (R11/R11b: sync inside cleanup-es4.sh between registry-wiped and restore-boundary)
+Jenkinsfile.experiment-deploy|experiment environment has no schema-sync mapping - NOT GATED (a covered service is refused there by schema-sync.sh)
+Jenkinsfile.hpsf-ops|operational set-image/rollout actions - NOT GATED, to be classified (R11a)
+Jenkinsfile.gateway-nightly-restart|restart only, no image or spec change - NOT GATED
+Jenkinsfile.databento-rewind-deploy|databento rewind job deploy - NOT GATED, to be classified
+Jenkinsfile.hpsf-replay-gate|replay gate jobs - NOT GATED, to be classified
+Jenkinsfile.replay|replay job apply - NOT GATED, to be classified
+Jenkinsfile.kafka-cleanup|topic cleanup, no service rollout - NOT GATED
+Jenkinsfile.bleedingoptions-secrets|secrets only - no schema-bearing workload
+Jenkinsfile.secrets-sync|secrets only - no schema-bearing workload
