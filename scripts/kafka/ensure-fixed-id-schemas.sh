@@ -176,6 +176,10 @@ while IFS='|' read -r subject id file version; do
       echo "FAIL: $subject exists with versions $(body "$V") but not the canonical schema as version $version — a collision this script never repairs"
       fail=1; continue
     fi
+  elif [ "$(status "$V")" != 404 ]; then
+    # only a confirmed 404 means the subject is absent; a 401/403/429/5xx is an unreadable registry and must never read as "absent" (R15)
+    echo "FAIL: cannot read /subjects/$subject/versions on $REG ($(status "$V")): not treating an unreadable answer as an absent subject"
+    fail=1; continue
   elif [ "$version" -gt 1 ]; then
     case "$PLANNED" in
       *" $subject@$((version - 1)) "*) ;;
@@ -185,6 +189,11 @@ while IFS='|' read -r subject id file version; do
   I=$(http GET "/schemas/ids/$id")
   if [ "$(status "$I")" = 200 ]; then
     echo "FAIL: fixed id $id is already held by another schema on $REG — a collision this script never repairs"
+    fail=1; continue
+  fi
+  if [ "$(status "$I")" != 404 ]; then
+    # only a confirmed 404 means the id is free; anything else (401/403/429/5xx) is an unreadable registry (R15)
+    echo "FAIL: cannot read /schemas/ids/$id on $REG ($(status "$I")): not treating an unreadable answer as a free id"
     fail=1; continue
   fi
   if [ "$version" -gt 1 ] && [ "$(status "$V")" = 200 ]; then

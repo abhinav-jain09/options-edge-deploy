@@ -1,0 +1,127 @@
+{
+  "manifestVersion": 1,
+  "note": "Slice 1: early-auction only. Full inventory is phase P1 (SCHEMA-GOVERNANCE-REQUIREMENT.md R4).",
+  "familyBlocks": {
+    "early-auction": [
+      [
+        2027,
+        2027
+      ],
+      [
+        2811,
+        2811
+      ],
+      [
+        3059,
+        3059
+      ]
+    ]
+  },
+  "declaredByManifest": [
+    "early-auction-verdict"
+  ],
+  "entries": [
+    {
+      "kind": "MIRRORED",
+      "subject": "early-auction.verdicts.shadow-value",
+      "version": 1,
+      "id": 2027,
+      "family": "early-auction",
+      "schemaFile": "early-auction.verdicts.shadow-value/v1.avsc",
+      "schemaHash": "61e2e71bae38c9746cc49b7656b86b6eb575c33861b838266f81fe84065a1c50",
+      "environments": [
+        "dev",
+        "prod"
+      ],
+      "topics": [
+        {
+          "name": "early-auction.verdicts.shadow",
+          "kind": "data"
+        }
+      ],
+      "retained": true,
+      "retainedReason": "v1 must exist before v2 can be created (registry versions are contiguous, R5d); data written with v1 may remain on the topic",
+      "source": {
+        "kind": "ARCHIVAL",
+        "capturedFrom": {
+          "env": "dev",
+          "id": 2027
+        },
+        "reason": "registry-only history; the contracts file has moved to v2"
+      },
+      "producers": [],
+      "consumers": [],
+      "idByEnvironment": {
+        "prod": 3070
+      }
+    },
+    {
+      "kind": "MIRRORED",
+      "subject": "early-auction.verdicts.shadow-value",
+      "version": 2,
+      "id": 2811,
+      "family": "early-auction",
+      "schemaFile": "early-auction.verdicts.shadow-value/v2.avsc",
+      "schemaHash": "7d98b4b23e0733d48caaa1db75029398381f82237df97fc6a3112bf0c34bf3c3",
+      "environments": [
+        "dev",
+        "prod"
+      ],
+      "topics": [
+        {
+          "name": "early-auction.verdicts.shadow",
+          "kind": "data"
+        }
+      ],
+      "source": {
+        "kind": "FILE",
+        "repo": "contracts",
+        "path": "schemas/cvd-related/EarlyAuctionVerdictLedger.avsc"
+      },
+      "retained": true,
+      "retainedReason": "dev history; the prod image is built against this version",
+      "producers": [
+        {
+          "service": "early-auction-verdict",
+          "environments": [
+            "prod"
+          ]
+        }
+      ],
+      "consumers": []
+    },
+    {
+      "kind": "MIRRORED",
+      "subject": "early-auction.verdicts.shadow-value",
+      "version": 3,
+      "id": 3059,
+      "family": "early-auction",
+      "schemaFile": "early-auction.verdicts.shadow-value/v3.avsc",
+      "schemaHash": "91bef8ae78acfaa117afdfea886b0601ea5744aadf3681455158c3b71a87ebd6",
+      "environments": [
+        "dev"
+      ],
+      "topics": [
+        {
+          "name": "early-auction.verdicts.shadow",
+          "kind": "data"
+        }
+      ],
+      "source": {
+        "kind": "FILE",
+        "repo": "contracts",
+        "path": "schemas/cvd-related/EarlyAuctionVerdictLedger.avsc"
+      },
+      "pending": true,
+      "producers": [
+        {
+          "service": "early-auction-verdict",
+          "environments": [
+            "dev"
+          ]
+        }
+      ],
+      "consumers": []
+    }
+  ]
+}
