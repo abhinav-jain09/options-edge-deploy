@@ -1036,7 +1036,8 @@
   ]
  },
  "declaredByManifest": [
-  "early-auction-verdict"
+  "early-auction-verdict",
+  "feed-gateway"
  ],
  "entries": [
   {
