@@ -390,6 +390,14 @@
    [
     2223,
     2223
+   ],
+   [
+    2224,
+    2224
+   ],
+   [
+    2225,
+    2225
    ]
   ],
   "reversalcandidate": [
@@ -5492,6 +5500,100 @@
    "consumers": [],
    "retained": true,
    "retainedReason": "curated, not baseline: es-liquidity-wall-service (NEW, dev only; contracts 0.66.0 schemas-registry/liquiditywall) writes it on futures.liquidity-wall.voice under RecordNameStrategy with auto.register.schemas=false (its schema-requirements.json names this id and hash). Dev only; nothing is registered on production or es4."
+  },
+  {
+   "kind": "MIRRORED",
+   "subject": "com.optionsedge.contracts.marketstructure.alerts.PatternAlertEvent",
+   "version": 1,
+   "id": 2224,
+   "family": "marketstructure",
+   "schemaFile": "com.optionsedge.contracts.marketstructure.alerts.PatternAlertEvent/v1.avsc",
+   "schemaHash": "41e7ea72ceaa29e74615ee9d5a6dce1b462d2d37d1c3ff6b629bab151a162984",
+   "environments": [
+    "dev"
+   ],
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas-registry/ta/PatternAlertEvent.avsc"
+   },
+   "topics": [
+    {
+     "name": "options.spx.market-structure.pattern-alerts",
+     "kind": "data"
+    },
+    {
+     "name": "options.spx.market-structure.estimate.pattern-alerts",
+     "kind": "data"
+    }
+   ],
+   "producers": [
+    {
+     "service": "market-structure",
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "feed-gateway",
+     "accepts": [
+      2224,
+      2225
+     ],
+     "environments": [
+      "dev"
+     ]
+    }
+   ]
+  },
+  {
+   "kind": "MIRRORED",
+   "subject": "com.optionsedge.contracts.marketstructure.alerts.PatternAlertWatermark",
+   "version": 1,
+   "id": 2225,
+   "family": "marketstructure",
+   "schemaFile": "com.optionsedge.contracts.marketstructure.alerts.PatternAlertWatermark/v1.avsc",
+   "schemaHash": "7e9746b005c8360d15014bb41bf38c7e23f0d2285692290b3c2448023b514be5",
+   "environments": [
+    "dev"
+   ],
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas-registry/ta/PatternAlertWatermark.avsc"
+   },
+   "topics": [
+    {
+     "name": "options.spx.market-structure.pattern-alerts",
+     "kind": "data"
+    },
+    {
+     "name": "options.spx.market-structure.estimate.pattern-alerts",
+     "kind": "data"
+    }
+   ],
+   "producers": [
+    {
+     "service": "market-structure",
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "feed-gateway",
+     "accepts": [
+      2224,
+      2225
+     ],
+     "environments": [
+      "dev"
+     ]
+    }
+   ]
   },
   {
    "kind": "MIRRORED",

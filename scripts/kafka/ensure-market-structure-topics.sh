@@ -21,6 +21,11 @@
 #   options.spx.market-structure.tools     1 partition, delete, retention.ms=172800000 (CHART-STRUCTURE-TOOLS StructureToolsSet, Avro, B-R10.1)
 #   options.spx.market-structure.geometry  1 partition, delete, retention.ms=172800000 (CLASSICAL-CHART-PATTERNS GeometryAnnotationSet, Avro, C-R17.1)
 #   options.spx.market-structure.swing-pivots  1 partition, delete, retention.ms=172800000 (X2 SwingPivotRecord, Avro; flag MARKET_STRUCTURE_SWING_PIVOTS_ENABLED; also ensured by ensure-break-classification-topics.sh)
+#   options.spx.market-structure.pattern-alerts           1 partition, delete, retention.ms=604800000 (1 week, owner D2) PatternAlertEvent 2224 / PatternAlertWatermark 2225, Avro, flag MARKET_STRUCTURE_PATTERN_ALERTS_ENABLED; DEV ONLY
+#   options.spx.market-structure.estimate.pattern-alerts  1 partition, delete, retention.ms=604800000 (1 week)  the Globex estimate profile's own twin (it never writes the regular topic); DEV ONLY
+# The two pattern-alert topics are ensured ONLY when ENVIRONMENT is exactly "dev" (Jenkinsfile.service-deploy exports the job parameter; load-kafka-settings.sh defaults an unset
+# ENVIRONMENT to production): on any other value they are NOT created, NOT verified, and the script says so (owner: nothing alert-related on production). The service itself checks
+# them at boot (PatternAlertTopicCheck, retention floor exactly 604800000) and, on a miss, only stops publishing alerts; it never creates or alters them.
 # All values are Avro (Kafka Serialization Rule): the topics are created EMPTY here and the producer writes Avro from its first byte.
 #
 # CREATE if absent, then VERIFY every topic — including one just created — and fail closed. Never alters an
@@ -39,6 +44,10 @@ PATTERNS_TOPIC="${KAFKA_MARKET_STRUCTURE_PATTERNS_TOPIC:-options.spx.market-stru
 TOOLS_TOPIC="${KAFKA_MARKET_STRUCTURE_TOOLS_TOPIC:-options.spx.market-structure.tools}"
 GEOMETRY_TOPIC="${KAFKA_MARKET_STRUCTURE_GEOMETRY_TOPIC:-options.spx.market-structure.geometry}"
 SWING_PIVOTS_TOPIC="${KAFKA_MARKET_STRUCTURE_SWING_PIVOTS_TOPIC:-options.spx.market-structure.swing-pivots}"
+# Server-side pattern break alerts (dev only, see the header). Names fixed in code (a generic override is refused), so they are fixed here too.
+PATTERN_ALERTS_TOPIC="options.spx.market-structure.pattern-alerts"
+PATTERN_ALERTS_ESTIMATE_TOPIC="options.spx.market-structure.estimate.pattern-alerts"
+PATTERN_ALERTS_RETENTION_FLOOR=604800000
 : "${KAFKA_BOOTSTRAP_SERVERS:?KAFKA_BOOTSTRAP_SERVERS unset — refusing to verify against an unknown cluster}"
 RF="${KAFKA_TOPIC_REPLICATION_FACTOR:-1}"
 # The two minima the SERVICE verifies, which its own deployment freezes (1 on this single-broker estate).
@@ -143,4 +152,10 @@ if ! ensure "$PATTERNS_TOPIC" 172800000; then rc=1; fi
 if ! ensure "$TOOLS_TOPIC" 172800000; then rc=1; fi
 if ! ensure "$GEOMETRY_TOPIC" 172800000; then rc=1; fi
 if ! ensure "$SWING_PIVOTS_TOPIC" 172800000; then rc=1; fi
+if [ "${ENVIRONMENT:-}" = "dev" ]; then
+  if ! ensure "$PATTERN_ALERTS_TOPIC" "$PATTERN_ALERTS_RETENTION_FLOOR"; then rc=1; fi
+  if ! ensure "$PATTERN_ALERTS_ESTIMATE_TOPIC" "$PATTERN_ALERTS_RETENTION_FLOOR"; then rc=1; fi
+else
+  echo "skip: pattern-alert topics are DEV ONLY and ENVIRONMENT is '${ENVIRONMENT:-<unset>}' - '$PATTERN_ALERTS_TOPIC' and '$PATTERN_ALERTS_ESTIMATE_TOPIC' are neither created nor verified"
+fi
 exit $rc

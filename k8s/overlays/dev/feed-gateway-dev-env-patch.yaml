@@ -92,6 +92,11 @@ spec:
             # CLASSICAL-CHART-PATTERNS  options.spx.market-structure.geometry
             - name: GATEWAY_GEOMETRY_ENABLED
               value: "true"
+            # Server-side pattern break alerts  options.spx.market-structure.pattern-alerts + options.spx.market-structure.estimate.pattern-alerts (PatternAlertEvent 2224 / PatternAlertWatermark 2225; PATTERN-ALERTS-SERVER-SIDE-DESIGN.md
+            # sections 6 and 8, requirement AL-19). ON in DEV ONLY; the production overlays do not carry it (default false: no relay, no `alerts` hello part, no audit read). An image without the feature ignores the variable.
+            # Order: subjects registered (schema-sync), topics ensured, producer image live -> THIS flag -> the producer flag.
+            - name: GATEWAY_PATTERN_ALERTS_ENABLED
+              value: "true"
             # TICK-TRADE-TOOLS  futures.pf.* / futures.volume-nodes / futures.flow.*
             - name: GATEWAY_TRADE_TOOLS_ENABLED
               value: "true"

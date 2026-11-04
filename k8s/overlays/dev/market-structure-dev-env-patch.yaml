@@ -10,6 +10,11 @@
 # producer requirement: at most one publisher of options.spx.market-structure.break-events per trade date). They were set by hand on the running dev Deployment on 2026-11-03 (processing PR 1592: the break events
 # and the per-bar BreakCompletenessMarker, schema id 2608, which line-acceptance-service reads under GATE_HOST_COMPLETENESS=BAR_MARKER); a service-deploy of the base would have dropped them. Recording the live state
 # here is not a new rollout. Production is untouched. MARKET_STRUCTURE_IGNORE_RECOVERY is deliberately NOT here (the W0 rollover flag is never committed; tests/test_ta_geometry_deploy_wiring.py pins that).
+# MARKET_STRUCTURE_PATTERN_ALERTS_ENABLED is "true" on dev only (server-side pattern break alerts, processing market-structure-service/docs/PATTERN-ALERTS-SERVER-SIDE-DESIGN.md sections 4 and 8, requirement AL-19):
+# PatternAlertEvent (id 2224) and PatternAlertWatermark (id 2225) on options.spx.market-structure.pattern-alerts (this container) and options.spx.market-structure.estimate.pattern-alerts (the estimate container, set in
+# market-structure-estimate-dev-patch.yaml). It needs MARKET_STRUCTURE_GEOMETRY_ENABLED (true above). Preconditions, in this order: subjects 2224/2225 on the dev registry (schema-sync, manifest entries), the two topics
+# (ensure-market-structure-topics.sh with ENVIRONMENT=dev), the image that reads the flag. The service checks the topics at boot (PatternAlertTopicCheck) and, on a miss, only stops publishing alerts; the host fold is untouched.
+# An image without the feature ignores the variable. Production overlays are not edited by this work (the flag is absent there, default false). Rollback: "false" here, regenerate the slices, deploy market-structure.
 # MIRRORS k8s/services/market-structure/overlays/dev — the slice generator renders it from here.
 apiVersion: apps/v1
 kind: Deployment
@@ -31,4 +36,6 @@ spec:
             - name: MARKET_STRUCTURE_BREAK_EVENTS_ENABLED
               value: "true"
             - name: MARKET_STRUCTURE_BREAK_COMPLETENESS_ENABLED
+              value: "true"
+            - name: MARKET_STRUCTURE_PATTERN_ALERTS_ENABLED
               value: "true"

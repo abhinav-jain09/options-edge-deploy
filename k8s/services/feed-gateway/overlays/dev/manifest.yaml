@@ -87,6 +87,8 @@ spec:
               value: "true"
             - name: GATEWAY_GEOMETRY_ENABLED
               value: "true"
+            - name: GATEWAY_PATTERN_ALERTS_ENABLED
+              value: "true"
             - name: GATEWAY_TRADE_TOOLS_ENABLED
               value: "true"
             - name: GATEWAY_WAVE_CYCLE_ENABLED

@@ -1,0 +1,298 @@
+{
+  "type": "record",
+  "name": "PatternAlertEvent",
+  "namespace": "com.optionsedge.contracts.marketstructure.alerts",
+  "doc": "One derived pattern-break event (BREAK, RETURN or FAILED) with its disposition, published once per eventId on options.spx.market-structure.pattern-alerts in the transaction of the fold that derived it. market-structure-service/docs/PATTERN-ALERTS-SERVER-SIDE-REQUIREMENT.md and -DESIGN.md. Prices are integer ticks (SPX tick = 1 cent).",
+  "fields": [
+    {
+      "name": "schemaVersion",
+      "type": "int"
+    },
+    {
+      "name": "service",
+      "type": "string"
+    },
+    {
+      "name": "sessionDate",
+      "type": "string"
+    },
+    {
+      "name": "scheduleId",
+      "type": "string"
+    },
+    {
+      "name": "eventId",
+      "type": "string",
+      "doc": "<sessionDate>|<annotationId>|KIND|ordinal[|direction]"
+    },
+    {
+      "name": "eventSeq",
+      "type": "long",
+      "doc": "Consecutive from 1 per session date, assigned at publication."
+    },
+    {
+      "name": "kind",
+      "type": {
+        "type": "enum",
+        "name": "AlertKind",
+        "namespace": "com.optionsedge.contracts.marketstructure.alerts",
+        "symbols": [
+          "UNKNOWN",
+          "BREAK",
+          "RETURN",
+          "FAILED"
+        ],
+        "default": "UNKNOWN"
+      }
+    },
+    {
+      "name": "disposition",
+      "type": {
+        "type": "enum",
+        "name": "AlertDisposition",
+        "namespace": "com.optionsedge.contracts.marketstructure.alerts",
+        "symbols": [
+          "UNKNOWN",
+          "RAISED",
+          "SUPPRESSED_SELF_CHECK",
+          "SUPPRESSED_REPLAY",
+          "SUPPRESSED_STALE"
+        ],
+        "default": "UNKNOWN"
+      }
+    },
+    {
+      "name": "suppressDetail",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null,
+      "doc": "Closed vocabulary, set when suppressed."
+    },
+    {
+      "name": "timeframe",
+      "type": {
+        "type": "enum",
+        "name": "AlertTimeframe",
+        "namespace": "com.optionsedge.contracts.marketstructure.alerts",
+        "symbols": [
+          "UNKNOWN",
+          "TF_1M",
+          "TF_5M",
+          "TF_15M"
+        ],
+        "default": "UNKNOWN"
+      }
+    },
+    {
+      "name": "annotationId",
+      "type": "string"
+    },
+    {
+      "name": "patternId",
+      "type": "string"
+    },
+    {
+      "name": "patternFamily",
+      "type": "string"
+    },
+    {
+      "name": "label",
+      "type": "string"
+    },
+    {
+      "name": "bias",
+      "type": {
+        "type": "enum",
+        "name": "AlertBias",
+        "namespace": "com.optionsedge.contracts.marketstructure.alerts",
+        "symbols": [
+          "UNKNOWN",
+          "BULLISH",
+          "BEARISH",
+          "NEUTRAL"
+        ],
+        "default": "UNKNOWN"
+      }
+    },
+    {
+      "name": "direction",
+      "type": {
+        "type": "enum",
+        "name": "AlertDirection",
+        "namespace": "com.optionsedge.contracts.marketstructure.alerts",
+        "symbols": [
+          "UNKNOWN",
+          "UP",
+          "DOWN"
+        ],
+        "default": "UNKNOWN"
+      }
+    },
+    {
+      "name": "stance",
+      "type": {
+        "type": "enum",
+        "name": "AlertStance",
+        "namespace": "com.optionsedge.contracts.marketstructure.alerts",
+        "symbols": [
+          "UNKNOWN",
+          "WITH",
+          "AGAINST",
+          "NEUTRAL"
+        ],
+        "default": "UNKNOWN"
+      }
+    },
+    {
+      "name": "acceptedVia",
+      "type": [
+        "null",
+        {
+          "type": "enum",
+          "name": "AlertVia",
+          "namespace": "com.optionsedge.contracts.marketstructure.alerts",
+          "symbols": [
+            "UNKNOWN",
+            "TIME",
+            "FILTER"
+          ],
+          "default": "UNKNOWN"
+        }
+      ],
+      "default": null
+    },
+    {
+      "name": "edge",
+      "type": {
+        "type": "enum",
+        "name": "AlertEdge",
+        "namespace": "com.optionsedge.contracts.marketstructure.alerts",
+        "symbols": [
+          "UNKNOWN",
+          "NONE",
+          "POSITIVE",
+          "NOT_TESTABLE",
+          "EXACT_CONSTRUCT",
+          "NOT_MEASURED"
+        ],
+        "default": "UNKNOWN"
+      }
+    },
+    {
+      "name": "ordinal",
+      "type": "int",
+      "doc": "The identity ordinal."
+    },
+    {
+      "name": "breakOrdinal",
+      "type": "int"
+    },
+    {
+      "name": "confirmOrdinal",
+      "type": "int"
+    },
+    {
+      "name": "priceTicks",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null,
+      "doc": "Event price in ticks; null only for a self-check suppression without the anchor."
+    },
+    {
+      "name": "eventMs",
+      "type": "long"
+    },
+    {
+      "name": "breakBarEndMs",
+      "type": "long"
+    },
+    {
+      "name": "acceptedMs",
+      "type": "long"
+    },
+    {
+      "name": "availableMs",
+      "type": "long"
+    },
+    {
+      "name": "speakUntilMs",
+      "type": "long",
+      "doc": "availableMs + the catch-up window."
+    },
+    {
+      "name": "asOfMs",
+      "type": "long"
+    },
+    {
+      "name": "decisionOrdinal",
+      "type": "int"
+    },
+    {
+      "name": "publishedAtMs",
+      "type": "long"
+    },
+    {
+      "name": "lagMs",
+      "type": "long"
+    },
+    {
+      "name": "textVersion",
+      "type": "int"
+    },
+    {
+      "name": "line",
+      "type": "string"
+    },
+    {
+      "name": "detail",
+      "type": "string"
+    },
+    {
+      "name": "tip",
+      "type": "string"
+    },
+    {
+      "name": "speech",
+      "type": "string"
+    },
+    {
+      "name": "nav",
+      "type": {
+        "type": "record",
+        "name": "AlertNav",
+        "namespace": "com.optionsedge.contracts.marketstructure.alerts",
+        "doc": "Chart-navigation box copied from the annotation.",
+        "fields": [
+          {
+            "name": "firstOrdinal",
+            "type": "int"
+          },
+          {
+            "name": "lastOrdinal",
+            "type": "int"
+          },
+          {
+            "name": "rthOpenMs",
+            "type": "long"
+          },
+          {
+            "name": "slotMs",
+            "type": "long"
+          },
+          {
+            "name": "priceHigh",
+            "type": "long"
+          },
+          {
+            "name": "priceLow",
+            "type": "long"
+          }
+        ]
+      }
+    }
+  ]
+}

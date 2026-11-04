@@ -21,7 +21,10 @@ REC=options.spx.market-structure.recovery
 PAT=options.spx.market-structure.patterns
 TOOLS=options.spx.market-structure.tools
 GEO=options.spx.market-structure.geometry
-ALL="$UI $SEQ $DLQ $REC $PAT $TOOLS $GEO"
+PA=options.spx.market-structure.pattern-alerts
+PAE=options.spx.market-structure.estimate.pattern-alerts
+SWP=options.spx.market-structure.swing-pivots
+ALL="$UI $SEQ $DLQ $REC $PAT $TOOLS $GEO $SWP"
 
 # cfgline <policy> <retention> <broker default policy> [max.message.bytes] [min.insync.replicas]:
 # the real `kafka-configs --describe --all` shape, whose first key=value per line is the EFFECTIVE value.
@@ -43,6 +46,7 @@ mock() {
   printf '%s\n' "${8:-$4}" > "$T/cfg_patterns"
   printf '%s\n' "${9:-$4}" > "$T/cfg_tools"; printf '%s\n' "${10:-$4}" > "$T/cfg_geometry"
   cfgline compact -1 delete > "$T/cfg_recovery"
+  cfgline delete 604800000 delete > "$T/cfg_pa"; cfgline delete 604800000 delete > "$T/cfg_pae"
   cat > "$T/bin/kafka-topics" <<M
 #!/usr/bin/env bash
 case " \$* " in
@@ -65,6 +69,8 @@ case " \$* " in
   *"$PAT"*) cat "$T/cfg_patterns" ;;
   *"$TOOLS"*) cat "$T/cfg_tools" ;;
   *"$GEO"*) cat "$T/cfg_geometry" ;;
+  *"$PAE"*) cat "$T/cfg_pae" ;;
+  *"$PA"*) cat "$T/cfg_pa" ;;
   *) cat "$T/cfg_dlq" ;;
 esac
 M
@@ -84,9 +90,10 @@ mock "other.topic" 1 "$WEEK" "$TWO" "$WEEK"; run; rc=$?
   && grep -q "$PAT.*cleanup.policy=delete.*retention.ms=172800000" "$T/created" \
   && grep -q "$TOOLS.*cleanup.policy=delete.*retention.ms=172800000" "$T/created" \
   && grep -q "$GEO.*cleanup.policy=delete.*retention.ms=172800000" "$T/created" \
-  && [ "$(grep -c -- '--partitions 1 ' "$T/created")" = 7 ] \
+  && grep -q "$SWP.*cleanup.policy=delete.*retention.ms=172800000" "$T/created" \
+  && [ "$(grep -c -- '--partitions 1 ' "$T/created")" = 8 ] \
   && grep -q "ok: '$UI'" "$T/out" && grep -q "ok: '$PAT'" "$T/out" && grep -q "ok: '$TOOLS'" "$T/out" && grep -q "ok: '$GEO'" "$T/out"; } \
-  && ok "absent → all seven created with the declared shape, then verified" || { bad "absent → create"; cat "$T/out"; }
+  && ok "absent → all eight created with the declared shape, then verified" || { bad "absent → create"; cat "$T/out"; }
 
 mock "$ALL" 1 "$WEEK" "$TWO" "$WEEK"; run; rc=$?
 { [ $rc -eq 0 ] && [ ! -s "$T/created" ]; } && ok "present + right shape → ok, nothing created" || { bad "present ok"; cat "$T/out"; }
@@ -168,5 +175,46 @@ mock "$ALL" 1 "$WEEK" "$TWO" "$WEEK"; run
 if grep -q "$REC.*segment.bytes=16777216,max.compaction.lag.ms=300000" "$T/altered" && [ "$(wc -l < "$T/altered" | tr -d ' ')" = 1 ]; then
   ok "recovery cadence reconciled after reset; other topics never altered"
 else bad "recovery cadence reconciliation"; cat "$T/altered"; fi
+
+
+# --- server-side pattern break alerts (dev only): the two topics, retention floor exactly one week -----------------------------------
+# With ENVIRONMENT unset or anything but "dev" they are neither created nor verified (nothing alert-related reaches production), even when absent or drifted.
+ALLPA="$ALL $PA $PAE"
+runenv() { PATH="$T/bin:$PATH" KAFKA_BOOTSTRAP_SERVERS=mock:9092 ENVIRONMENT="$1" bash "$HERE/ensure-market-structure-topics.sh" > "$T/out" 2>&1; }
+for envv in production es4 ""; do
+  mock "$ALL" 1 "$WEEK" "$TWO" "$WEEK"; runenv "$envv"; rc=$?
+  { [ $rc -eq 0 ] && ! grep -q "$PA" "$T/created" && grep -q "^skip: pattern-alert topics are DEV ONLY" "$T/out" && ! grep -q "ok: '$PA" "$T/out"; } \
+    && ok "ENVIRONMENT='$envv': pattern-alert topics skipped (not created, not verified)" || { bad "alerts skipped under '$envv'"; cat "$T/out"; }
+done
+mock "$ALL" 1 "$WEEK" "$TWO" "$WEEK"; printf '%s\n' "$(cfgline compact 1 delete)" > "$T/cfg_pa"; runenv production; rc=$?
+[ $rc -eq 0 ] && ok "production: a drifted pattern-alerts topic is not even looked at" || { bad "production ignores alerts"; cat "$T/out"; }
+
+mock "$ALL" 1 "$WEEK" "$TWO" "$WEEK"; runenv dev; rc=$?
+{ [ $rc -eq 0 ] && grep -q "$PA.*--partitions 1 .*cleanup.policy=delete.*retention.ms=604800000" "$T/created" \
+  && grep -q "$PAE.*--partitions 1 .*cleanup.policy=delete.*retention.ms=604800000" "$T/created" \
+  && grep -q "ok: '$PA' " "$T/out" && grep -q "ok: '$PAE' " "$T/out"; } \
+  && ok "dev, alert topics absent → both created (1 partition, delete, one week), then verified" || { bad "dev create alerts"; cat "$T/out"; }
+mock "$ALLPA" 1 "$WEEK" "$TWO" "$WEEK"; runenv dev; rc=$?
+{ [ $rc -eq 0 ] && [ ! -s "$T/created" ] && [ "$(wc -l < "$T/altered" | tr -d ' ')" = 1 ] && grep -q "$REC" "$T/altered"; } && ok "dev, alert topics present and right → ok, nothing created, only the recovery cadence altered (alert topics never altered)" || { bad "dev alerts present"; cat "$T/out"; }
+for pair in "$PA:cfg_pa" "$PAE:cfg_pae"; do
+  name="${pair%%:*}"; f="${pair#*:}"
+  for variant in "one ms below the week|$(cfgline delete 604799999 delete)" "172800000 (the two-session default)|$(cfgline delete 172800000 delete)" "compacted|$(cfgline compact 604800000 delete)" \
+                 "compact,delete|$(cfgline compact,delete 604800000 delete)" "message bound one byte short|$(cfgline delete 604800000 delete 1048575)" "min.insync.replicas 0|$(cfgline delete 604800000 delete 1048588 0)" "configs unreadable|$(cfgmissing)"; do
+    label="${variant%%|*}"; cfg="${variant#*|}"
+    mock "$ALLPA" 1 "$WEEK" "$TWO" "$WEEK"; printf '%s\n' "$cfg" > "$T/$f"; runenv dev; rc=$?
+    { [ $rc -ne 0 ] && grep -q "^FAIL" "$T/out" && ! grep -q "ok: '$name' " "$T/out" && grep -q "ok: '$SEQ'" "$T/out"; } \
+      && ok "dev: $name $label → fail (fail closed), naming that topic" || { bad "$name $label"; cat "$T/out"; }
+  done
+  mock "$ALLPA" 1 "$WEEK" "$TWO" "$WEEK"; printf '%s\n' "$(cfgline delete -1 delete)" > "$T/$f"; runenv dev; rc=$?
+  [ $rc -eq 0 ] && ok "dev: $name infinite retention → ok (-1 satisfies the floor)" || { bad "$name infinite"; cat "$T/out"; }
+  mock "$ALLPA" 1 "$WEEK" "$TWO" "$WEEK"; printf '%s\n' "$(cfgline delete 999999999 delete)" > "$T/$f"; runenv dev; rc=$?
+  [ $rc -eq 0 ] && ok "dev: $name retention above the week → ok" || { bad "$name above floor"; cat "$T/out"; }
+done
+mock "$ALLPA" 32 "$WEEK" "$TWO" "$WEEK"; runenv dev; rc=$?
+{ [ $rc -ne 0 ] && grep -q "'$PA' has PartitionCount=32" "$T/out" && grep -q "'$PAE' has PartitionCount=32" "$T/out"; } && ok "dev: 32 partitions on the alert topics → fail" || { bad "alerts 32 partitions"; cat "$T/out"; }
+mock "$ALLPA" 1 "$WEEK" "$TWO" "$WEEK" create; runenv dev; rc=$?
+[ $rc -eq 0 ] && ok "dev: nothing to create when present (create failure irrelevant)" || { bad "present, create mocked failing"; cat "$T/out"; }
+mock "$ALL" 1 "$WEEK" "$TWO" "$WEEK" create; runenv dev; rc=$?
+{ [ $rc -ne 0 ] && grep -q "FAIL: could not create '$PA'" "$T/out" && grep -q "FAIL: could not create '$PAE'" "$T/out"; } && ok "dev: creating an absent alert topic fails closed when the broker refuses" || { bad "alerts create refused"; cat "$T/out"; }
 
 echo "passed=$pass failed=$fail"; [ $fail -eq 0 ]
