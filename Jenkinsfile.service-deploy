@@ -739,7 +739,7 @@ PYEOF
     }
     stage('Register reversal top schema (dev only)') {
       when {
-        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && params.REGISTER_REVERSAL_TOP_SCHEMA && params.SERVICE == 'reversal-confirmation' }
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.REGISTER_REVERSAL_TOP_SCHEMA && params.SERVICE == 'reversal-confirmation') }
       }
       steps {
         script {
