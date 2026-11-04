@@ -317,7 +317,7 @@ clean_logs() {
 # restored it — is therefore still invisible here and is repaired by the next real deploy.
 topic_desired() {
   local name="$1" spec entry
-  DPOL=delete; DPARTS=32; DRET=""; DDR=""; DMB=""
+  DPOL=delete; DPARTS=32; DRET=""; DDR=""; DMB=""; DRB=""
   for spec in $OPTIONS_EDGE_TOPICS; do
     [ "${spec%%:*}" = "$name" ] && [ -n "${spec##*:}" ] && DPARTS="${spec##*:}"
   done
@@ -343,6 +343,14 @@ topic_desired() {
   for entry in ${OPTIONS_EDGE_TOPIC_MAX_MESSAGE_BYTES_OVERRIDES:-}; do
     [ "${entry%%=*}" = "$name" ] && DMB="${entry#*=}"
   done
+  # Per-topic retention.bytes cap. topics.env has declared these since 2026-10-25 (futures.level-absorption.events=81675540, es.tape-zones.board,
+  # early-auction.verdicts.shadow, futures.break-score.events, futures.liquidity-wall.events, trading.order.*), but this script never read the list, so
+  # every clean rebuilt each of those topics UNCAPPED. level-absorption-service refuses to start unless the broker reports exactly its artifact's
+  # integer (EVENTS_TOPIC_RETENTION_MISMATCH), so it crashlooped after every clean and was fixed by hand each time. -1 is the broker default
+  # (unlimited): a topic that inherits it already satisfies a declared -1 (see reconcile_declared_topics).
+  for entry in ${OPTIONS_EDGE_TOPIC_RETENTION_BYTES_OVERRIDES:-}; do
+    [ "${entry%%=*}" = "$name" ] && DRB="${entry#*=}"
+  done
 }
 
 # reconcile_declared_topics: ONE bulk describe, then fix only the SCOPED fields that differ
@@ -363,7 +371,7 @@ topic_desired() {
 # live data. It is reported loudly instead and left to apply-topics.sh, which fails closed on
 # OPTIONS_EDGE_EXACT_PARTITION_TOPICS and carries the gated destructive repair.
 reconcile_declared_topics() {
-  local desc line spec name cfg have_pol have_ret have_dr have_mb have_parts need polcfg fixed=0 drift=0
+  local desc line spec name cfg have_pol have_ret have_dr have_mb have_rb have_parts need polcfg fixed=0 drift=0
   desc="$($KT --bootstrap-server $BS --describe 2>/dev/null | grep '^Topic:')"
   if [ -z "$desc" ]; then
     echo "  WARNING: could not describe topics — declared shapes NOT verified this run."
@@ -391,6 +399,7 @@ reconcile_declared_topics() {
     have_ret="$(printf '%s' "$cfg" | sed -n 's/.*[,: ]retention\.ms=\(-\{0,1\}[0-9]*\).*/\1/p')"
     have_dr="$(printf '%s' "$cfg" | sed -n 's/.*DELRET=\([0-9]*\).*/\1/p')"
     have_mb="$(printf '%s' "$cfg" | sed -n 's/.*[,: ]max\.message\.bytes=\([0-9]*\).*/\1/p')"
+    have_rb="$(printf '%s' "$cfg" | sed -n 's/.*[,: ]retention\.bytes=\(-\{0,1\}[0-9]*\).*/\1/p')"
     need=""
     case "$DPOL" in
       # A declared-plain topic that simply inherits the broker default is CORRECT — only an
@@ -405,6 +414,11 @@ reconcile_declared_topics() {
     [ -n "$DRET" ] && [ "$have_ret" != "$DRET" ] && need="$need${need:+,}retention.ms=$DRET"
     [ -n "$DDR" ]  && [ "$have_dr"  != "$DDR"  ] && need="$need${need:+,}delete.retention.ms=$DDR"
     [ -n "$DMB" ]  && [ "$have_mb"  != "$DMB"  ] && need="$need${need:+,}max.message.bytes=$DMB"
+    # A declared -1 is the broker default, so a topic with no retention.bytes override already satisfies it (without this the pass would
+    # rewrite every unlimited-by-declaration topic on every run). A finite cap that differs, or an explicit different value, is drift.
+    if [ -n "$DRB" ] && [ "$have_rb" != "$DRB" ] && ! { [ "$DRB" = -1 ] && [ -z "$have_rb" ]; }; then
+      need="$need${need:+,}retention.bytes=$DRB"
+    fi
     if [ -n "$need" ]; then
       # `--add-config` separates entries with commas, so a comma-BEARING value must be bracketed
       # (cleanup.policy=[compact,delete]) or the broker reads "delete" as a second, malformed entry.
@@ -525,7 +539,7 @@ ensure_topics() {
   git -C "$DEPLOY_REPO" fetch -q origin main 2>/dev/null || true
   local tenv; tenv="$(git -C "$DEPLOY_REPO" show "$TOPICS_ENV_REF" 2>/dev/null)"
   if [ -n "$tenv" ]; then
-    eval "$(printf '%s\n' "$tenv" | grep -E '^OPTIONS_EDGE_(TOPICS|COMPACTED_TOPICS|PURE_COMPACT_TOPICS|EXACT_PARTITION_TOPICS|TOPIC_RETENTION_OVERRIDES|TOPIC_DELETE_RETENTION_OVERRIDES|TOPIC_MAX_MESSAGE_BYTES_OVERRIDES|PARTITION_ONLY_TOPICS)=')"
+    eval "$(printf '%s\n' "$tenv" | grep -E '^OPTIONS_EDGE_(TOPICS|COMPACTED_TOPICS|PURE_COMPACT_TOPICS|EXACT_PARTITION_TOPICS|TOPIC_RETENTION_OVERRIDES|TOPIC_DELETE_RETENTION_OVERRIDES|TOPIC_MAX_MESSAGE_BYTES_OVERRIDES|TOPIC_RETENTION_BYTES_OVERRIDES|PARTITION_ONLY_TOPICS)=')"
     local n=0 spec name extra rt existing missing=0
     # One --list, then create only what is missing (in parallel). A failed list falls back to creating every
     # declared topic: --if-not-exists makes that safe, only slower. Config of EXISTING topics is the
@@ -538,6 +552,7 @@ ensure_topics() {
       extra=""; [ -n "$DDR" ]  && extra="--config delete.retention.ms=$DDR"
       rt="";    [ -n "$DRET" ] && rt="--config retention.ms=$DRET"
       [ -n "$DMB" ] && extra="$extra --config max.message.bytes=$DMB"
+      [ -n "$DRB" ] && extra="$extra --config retention.bytes=$DRB"
       echo "--topic $name --partitions $DPARTS --replication-factor 1 --config cleanup.policy=$DPOL $extra $rt"
     done | create_topics_parallel)
     echo "Pre-created $n platform topics from deploy config ($TOPICS_ENV_REF); apps self-create the rest on startup."
