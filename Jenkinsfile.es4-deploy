@@ -52,7 +52,7 @@ pipeline {
       // deliberately re-apply the stack) is an explicit per-service run of each of these two.
       'spread-skew', 'spread-skew-postgres-writer'
     ], description: 'Service (deploy-service or update-image). NOTE: es-feed is the RELOCATED ES options feed now running on the es4 cluster; it always deploys at replicas 0 — starting it is a separate ACTION=activate-es-feed.')
-    booleanParam(name: 'RITHMIC_DEV_ONLY', defaultValue: false, description: 'Release the ES4 Rithmic collector and dev mirror only. Production broker, registry and mirror resources are excluded.')
+    booleanParam(name: 'RITHMIC_DEV_ONLY', defaultValue: false, description: 'Release the ES4 Rithmic collector and dev mirror only. Skip production Kafka/Schema Registry provisioning and mirror rollout/proof. Existing production mirror may resume forwarding later; image still uses the required prod registry.')
     string(name: 'RITHMIC_PERMITTED_SHA', defaultValue: '', trim: true, description: 'Exact collector main revision for SERVICE=rithmic-depth-bridge; service job owns build, registry publication, ES4 collector and dev/prod identity mirrors.')
     string(name: 'RITHMIC_SDK_ZIP', defaultValue: '', description: 'Licensed R API+ 13.7.0.0 SDK archive on the Jenkins node; never committed.')
     string(name: 'CONTRACTS_PERMITTED_SHA', defaultValue: '', trim: true,
