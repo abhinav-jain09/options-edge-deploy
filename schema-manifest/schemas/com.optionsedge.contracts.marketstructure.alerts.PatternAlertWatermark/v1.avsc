@@ -1,0 +1,73 @@
+{
+  "type": "record",
+  "name": "PatternAlertWatermark",
+  "namespace": "com.optionsedge.contracts.marketstructure.alerts",
+  "doc": "Proof that the alert evaluator ran for one timeframe of one 1m decision fold; the previousDecisionOrdinal chain shows holes.",
+  "fields": [
+    {
+      "name": "schemaVersion",
+      "type": "int"
+    },
+    {
+      "name": "service",
+      "type": "string"
+    },
+    {
+      "name": "sessionDate",
+      "type": "string"
+    },
+    {
+      "name": "scheduleId",
+      "type": "string"
+    },
+    {
+      "name": "timeframe",
+      "type": {
+        "type": "enum",
+        "name": "AlertTimeframe",
+        "namespace": "com.optionsedge.contracts.marketstructure.alerts",
+        "symbols": [
+          "UNKNOWN",
+          "TF_1M",
+          "TF_5M",
+          "TF_15M"
+        ],
+        "default": "UNKNOWN"
+      }
+    },
+    {
+      "name": "decisionOrdinal",
+      "type": "int"
+    },
+    {
+      "name": "previousDecisionOrdinal",
+      "type": "int",
+      "doc": "-1 for the first of the session."
+    },
+    {
+      "name": "asOfMs",
+      "type": "long"
+    },
+    {
+      "name": "evaluated",
+      "type": "boolean"
+    },
+    {
+      "name": "unavailableReason",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "eventsThroughSeq",
+      "type": "long",
+      "doc": "Highest eventSeq published up to and including this fold, 0 when none."
+    },
+    {
+      "name": "publishedAtMs",
+      "type": "long"
+    }
+  ]
+}
