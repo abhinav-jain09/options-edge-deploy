@@ -51,19 +51,18 @@ spec:
             # A fresh application id (or a wiped group) starts from the live book, not from 12 h of retained depth.
             - name: ES_LIQUIDITY_WALL_STREAMS_AUTO_OFFSET_RESET
               value: latest
-            # Layer A: the depth admission literal. Dev's es.rithmic.depth is the "Rithmic Test" mirror of es4, admitted only because ALLOW_TEST is true here.
+            # Layer A: the depth admission literal. Since 2026-11-04 (owner cutover) the collector is on the live Rithmic system and stamps "Rithmic Paper Trading";
+            # a frame carrying any other literal (the old "Rithmic Test") is refused ENVIRONMENT. ALLOW_TEST is off: the test literal is never admitted again.
             - name: ES_LIQUIDITY_WALL_DEPTH_TOPIC
               value: es.rithmic.depth
             - name: ES_LIQUIDITY_WALL_DEPTH_ENVIRONMENT
-              value: "Rithmic Test"
+              value: "Rithmic Paper Trading"
             - name: ES_LIQUIDITY_WALL_DEPTH_ALLOW_TEST
-              value: "true"
-            # Layer B's live literal: REQUIRED and refused when blank or "Rithmic Test" (document D section 7). Layer B runs only while the admitted frames carry exactly this value.
-            # The collector (rithmic-depth-bridge src/depth-publisher.py) hard-codes "Rithmic Test" today, which never equals it, so on dev Layer B is off and turns on, without a
-            # redeploy here, the moment the collector stamps this literal. "Rithmic 01" is the Rithmic live system's name: when the collector moves to the live system its
-            # environment literal must be set to exactly this value in the same change (document A's cutover rule), or the wall service stays Layer-B-off silently.
+              value: "false"
+            # Layer B's live literal: REQUIRED and refused when blank or "Rithmic Test" (document D section 7). Layer B runs only while the admitted frames carry exactly this value,
+            # which is the literal the live collector stamps since the 2026-11-04 cutover (measured on es.rithmic.depth: environment "Rithmic Paper Trading", a full book).
             - name: ES_LIQUIDITY_WALL_LIVE_ENVIRONMENT
-              value: "Rithmic 01"
+              value: "Rithmic Paper Trading"
             # <date>=<contract>: the front ES contract the depth is read for, from that date. Roll it with the quarterly roll.
             - name: ES_LIQUIDITY_WALL_CONTRACT_TABLE
               value: 2026-09-14=ESZ6

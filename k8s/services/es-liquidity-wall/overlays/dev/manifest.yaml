@@ -51,11 +51,11 @@ spec:
             - name: ES_LIQUIDITY_WALL_DEPTH_TOPIC
               value: es.rithmic.depth
             - name: ES_LIQUIDITY_WALL_DEPTH_ENVIRONMENT
-              value: Rithmic Test
+              value: Rithmic Paper Trading
             - name: ES_LIQUIDITY_WALL_DEPTH_ALLOW_TEST
-              value: "true"
+              value: "false"
             - name: ES_LIQUIDITY_WALL_LIVE_ENVIRONMENT
-              value: Rithmic 01
+              value: Rithmic Paper Trading
             - name: ES_LIQUIDITY_WALL_CONTRACT_TABLE
               value: 2026-09-14=ESZ6
             - name: ES_LIQUIDITY_WALL_WALL_MIN_FLOOR
