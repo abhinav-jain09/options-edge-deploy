@@ -34,7 +34,8 @@
 #   TOPICS="a b c" ARCHIVE_DIR=... ./oe-archive-kafka.sh                       # explicit topic list
 #
 # KNOBS
-#   ARCHIVE_JOB     job identity, and half the lock key. daily|spot|dev|es4|adhoc. Default: adhoc.
+#   ARCHIVE_JOB     job identity, and half the lock key. daily|spot|dev|es4|depth|adhoc. Default: adhoc.
+#                   depth = the dev depth archive (oe-archive-depth.sh, TOPICS="$OE_DEPTH_TOPICS_dev").
 #   ON_LOCK_BUSY    skip (default) | fail. See LOCKING.
 #   SESSION_DATE    override the dt= folder, for backfills.
 #   UNTIL_TS        epoch MILLISECONDS. Stop each partition at the first offset at-or-after this
@@ -91,18 +92,25 @@ OE_TOPICS_ENV="${OE_TOPICS_ENV:-$(dirname "$0")/oe-topics.env}"
 # below and let a caller archive a different set behind the canonical file's back — equality by
 # luck, not by construction. Require the file, then discard anything inherited.
 [ -r "$OE_TOPICS_ENV" ] || { echo "FATAL: '$OE_TOPICS_ENV' missing or unreadable — refusing to archive an unknown evidence set" >&2; exit 1; }
-unset DEALER_LEDGER_EVIDENCE OE_SPOT_TOPICS OE_HEAVY_TOPICS_prod OE_ALL_TOPICS_prod OE_ES4_TOPICS
+unset DEALER_LEDGER_EVIDENCE OE_SPOT_TOPICS OE_HEAVY_TOPICS_prod OE_ALL_TOPICS_prod OE_ES4_TOPICS OE_DEPTH_TOPICS_dev
 # shellcheck source=/dev/null
 . "$OE_TOPICS_ENV"
 : "${DEALER_LEDGER_EVIDENCE:?oe-topics.env did not define DEALER_LEDGER_EVIDENCE}"
 : "${OE_ALL_TOPICS_prod:?oe-topics.env did not define OE_ALL_TOPICS_prod}"
 : "${OE_ES4_TOPICS:?oe-topics.env did not define OE_ES4_TOPICS}"
+# The dev depth set (document A section 9, item 1): declared and validated like the two above — from the file,
+# never inherited — and read through a dedicated invocation, ENV=dev TOPICS="$OE_DEPTH_TOPICS_dev", by
+# oe-archive-depth.sh. There is deliberately no DEFAULT_TOPICS_dev entry for it: ENV=dev keeps the prod default.
+: "${OE_DEPTH_TOPICS_dev:?oe-topics.env did not define OE_DEPTH_TOPICS_dev}"
 
 # A5: topics whose ARCHIVE IS EVIDENCE. For an ordinary topic a quiet day, a compacted short read or
 # a recreated log are all normal and the run continues. For these the same events mean the corpus has
 # a hole, and a hole that is not reported is worse than one that is: the reader would count a smaller
 # population as complete. Every check below that says "strict" is gated on this list and nothing else.
-OE_STRICT_TOPICS="${OE_STRICT_TOPICS:-context-tape.direction.ledger}"
+# underlying.es.trades.linearized joined 2026-11-04 (document D section 8): the linearized ES tape is one of the
+# three inputs of the dev depth archive, and a depth session without its tape replays nothing, so an absent or
+# short tape is a hole to report, not a quiet day.
+OE_STRICT_TOPICS="${OE_STRICT_TOPICS:-context-tape.direction.ledger underlying.es.trades.linearized}"
 is_strict_topic() { case " $OE_STRICT_TOPICS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 # Topics read COMMITTED-ONLY, through StrikeArchiveReader.java instead of kafka-console-consumer.
 # See the capture block below for why this is a list and not the default: every topic NOT named here
@@ -130,9 +138,19 @@ is_strict_topic() { case " $OE_STRICT_TOPICS " in *" $1 "*) return 0 ;; *) retur
 # and .dlq remain archived by no job; routing them here costs nothing and keeps the classification whole.
 # (options.spx.vol-premium.calendar is not listed: since 2026-09-13 the calendar ledger is a Postgres table, not a topic.)
 OE_VOL_PREMIUM_TRANSACTIONAL_TOPICS="options.spx.vol-premium.ivrv options.spx.vol-premium.events options.spx.vol-premium.warnings options.spx.vol-premium.current options.spx.vol-premium.dlq options.spx.vol-premium.baseline"
-OE_COMMITTED_READ_TOPICS="${OE_COMMITTED_READ_TOPICS:-es.futures.footprint.strike $OE_VOL_PREMIUM_TRANSACTIONAL_TOPICS}"
+# underlying.es.trades.linearized (2026-11-04, document D section 8): es-trade-linearizer-service writes the
+# linearized ES tape with a transactional producer (TRANSACTIONAL_ID_CONFIG), so the console consumer would file
+# an aborted batch as prints the tape never carried; the committed reader bounds the capture at the stable
+# boundary. The value bytes are the source tape's own (ByteArraySerializer: the JSON es.underlying.es.trades
+# carries), so the proven five-field layout applies and it is NOT in OE_COMMITTED_READ_AS_WRITTEN_TOPICS.
+OE_COMMITTED_READ_TOPICS="${OE_COMMITTED_READ_TOPICS:-es.futures.footprint.strike underlying.es.trades.linearized $OE_VOL_PREMIUM_TRANSACTIONAL_TOPICS}"
 # Canonical archive inputs cannot be opted back into the binary-unsafe console path.
-OE_CANONICAL_ARCHIVE_TOPICS="es.futures.cvd.bars es.futures.footprint.bars es.futures.footprint.outcomes es.futures.footprint.strike context-tape.direction.ledger"
+# es.rithmic.depth (RithmicDepthFrame, fixed id 3301) and futures.liquidity-wall.closures (LiquidityWallClosure,
+# fixed id 3401) joined 2026-11-04 (document A section 9 items 2-3, document D section 8): both are Avro on the
+# wire, both are bound in CanonicalArchiveDecoder.java under their released schemas, and a record whose Confluent
+# framing does not carry the fixed id fails the capture without advancing the checkpoint. Members of the dev depth
+# set OE_DEPTH_TOPICS_dev (oe-topics.env); archived on dev only.
+OE_CANONICAL_ARCHIVE_TOPICS="es.futures.cvd.bars es.futures.footprint.bars es.futures.footprint.outcomes es.futures.footprint.strike context-tape.direction.ledger es.rithmic.depth futures.liquidity-wall.closures"
 is_canonical_archive_topic() { case " $OE_CANONICAL_ARCHIVE_TOPICS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 is_committed_read_topic() { is_canonical_archive_topic "$1" || case " $OE_COMMITTED_READ_TOPICS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 # Topics that are AVRO on the wire (Kafka Serialization Rule) and are captured through IndicatorArchiveReader.java,

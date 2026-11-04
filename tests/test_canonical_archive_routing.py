@@ -66,14 +66,37 @@ class CanonicalArchiveRoutingTest(unittest.TestCase):
     def commands(self):
         return [json.loads(row) for row in self.capture.read_text().splitlines()] if self.capture.exists() else []
 
-    def test_all_five_bindings_force_committed_read_even_when_the_old_list_is_overridden(self):
+    def test_all_seven_bindings_force_committed_read_even_when_the_old_list_is_overridden(self):
         helper = (ROOT / 'scripts/ops/archive/CanonicalArchiveDecoder.java').read_text()
-        bindings = re.findall(r'"([a-z][a-z.\-]+)",Cvd', helper)
+        bindings = re.findall(r'"([a-z][a-z.\-]+)",(?:Cvd|LiquidityWall)', helper)
+        # es.rithmic.depth is bound by the contracts' own constant for the topic name, not a literal.
+        self.assertIn('RithmicSchemas.RAW_TOPIC,RithmicSchemas.FRAME', helper)
+        bindings.append('es.rithmic.depth')
         self.assertEqual(set(TOPICS), set(bindings))
-        self.assertEqual(len(TOPICS), 5)
+        self.assertEqual(len(TOPICS), 7)
         for topic in TOPICS:
             self.assertEqual(self.run_shell(f'is_committed_read_topic "{topic}"').returncode, 0, topic)
         self.assertEqual(self.run_shell('is_committed_read_topic unknown').returncode, 1)
+
+    def test_the_depth_set_members_take_the_canonical_helper_path(self):
+        # The two Avro members of OE_DEPTH_TOPICS_dev go through the tested helper jar with the registry derived
+        # from the DEV broker; the tape is committed-read but not canonical, so it keeps the raw source-launched
+        # reader on the inherited JDK — three topics, two paths, decided by the sets and nothing else.
+        for topic in ['es.rithmic.depth', 'futures.liquidity-wall.closures']:
+            r = self.run_shell(f'run_strike_reader 10 --topic {topic} --partition 0', BOOTSTRAP='192.168.100.102:19092')
+            self.assertEqual(r.returncode, 0, r.stderr)
+            command = self.commands()[-1]
+            self.assertEqual(command['binary'], str(self.java26), topic)
+            args = command['args']
+            self.assertEqual(args[args.index('--canonical-registry') + 1], 'http://192.168.100.102:8082')
+            self.assertEqual(args[args.index('-cp') + 1], str(self.dir / 'canonical-archive-reader.jar'))
+        r = self.run_shell('run_strike_reader 10 --topic underlying.es.trades.linearized --partition 0',
+                           BOOTSTRAP='192.168.100.102:19092', OE_COMMITTED_READ_TOPICS='underlying.es.trades.linearized')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        command = self.commands()[-1]
+        self.assertEqual(command['binary'], str(self.java17))
+        self.assertNotIn('--canonical-registry', command['args'])
+        self.assertEqual(self.run_shell('is_canonical_archive_topic underlying.es.trades.linearized').returncode, 1)
 
     def test_registry_follows_the_read_broker_and_a_distinct_override(self):
         for bootstrap, registry in [('192.168.100.4:9092', 'http://192.168.100.4:8081'),

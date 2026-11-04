@@ -264,6 +264,11 @@ services:
   # es-amt: DEV ONLY. The SPX Auction Desk engine; on dev it is the WRITER of es.futures.auction (Avro, contracts id 3201, docs/ES-AMT-AVRO-CUTOVER.md). es4 runs its own copy from k8s/es4/services/es-amt.yaml
   # (JSON until its own cutover) and production receives the topic by byte mirror, so neither is listed. Single replica only (transactional.id es-amt-service-auction). No Service object.
   - { name: es-amt,                       managedBy: standalone, sliceGenerated: true, envs: [dev], image: options-edge-es-amt,                       deployments: [es-amt-service] }
+  # es-liquidity-wall: DEV ONLY (envs: [dev]). NEW service: ES book liquidity walls (Kafka Streams). Reads es.rithmic.depth (Avro, id 3301, the "Rithmic Test" depth) and the linearized ES tape
+  # underlying.es.trades.linearized (JSON); publishes the seven single-partition Avro topics futures.liquidity-wall.{closures,buckets,dashboard,events,state,snapshot,voice} (ids 3401-3407,
+  # scripts/kafka/schema-id-maps/es-liquidity-wall.map; schema-manifest family liquiditywall). scripts/kafka/ensure-es-liquidity-wall-topics.sh is the first-deploy barrier (service-deploy, dev only).
+  # Streams state on an emptyDir (as zn-gex). Single replica only (Streams app id options-edge-es-liquidity-wall). No Service object; no production or es4 entry, image, topic or overlay exists.
+  - { name: es-liquidity-wall,            managedBy: standalone, sliceGenerated: true, envs: [dev], image: options-edge-es-liquidity-wall,            deployments: [es-liquidity-wall-service] }
   # stock-gex: SPX-500 single-stock GEX (Databento equity options; NO Kafka). Its image builds in the
   # options-edge-databento-feed repo (Dockerfile.stockgex), like databento-sr3-feed — hence buildJob.
   # DEV-FIRST/on-demand: prod overlay holds it at replicas:0 until the nightly OI-index builder exists.

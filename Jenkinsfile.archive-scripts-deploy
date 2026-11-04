@@ -239,13 +239,20 @@ pipeline {
           # the script sources is left behind, and that the plist no longer pins an archive root
           # (BZ 360) — the defect that would have made the agent alert MISSING every single day.
           bash scripts/ci/validate-dev-mac-watchdog.sh
+
+          # The DEV depth archive (oe-archive-depth.sh, launchd/oe-archive-depth.plist) is exempted from the
+          # completeness check for the same reason — it belongs on the DEV MAC, four times a day against
+          # es.rithmic.depth's 12-hour retention — and bound by this: the set and its classification in the
+          # policy, the wrapper's dedicated invocation, the install path, the 02/08/14/20 ET schedule, dev-only
+          # registration, and an installer that refuses a broken install.
+          bash scripts/ci/validate-dev-mac-depth-archive.sh
         '''
       }
     }
 
     stage('Canonical archive routing') {
       when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
-      steps { sh 'PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests.test_canonical_archive_routing' }
+      steps { sh 'PYTHONDONTWRITEBYTECODE=1 python3 -m unittest tests.test_canonical_archive_routing tests.test_depth_archive_wiring' }
     }
 
     stage('Build canonical archive helper') {

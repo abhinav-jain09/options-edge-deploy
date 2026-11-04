@@ -1,0 +1,9 @@
+# SERVICE SLICE — es-liquidity-wall (ES book liquidity walls) on DEV. Owns ONLY this service's Deployment.
+#
+# DEV-ONLY: referenced from k8s/overlays/dev (NOT k8s/base, NOT production or experiment); services.yaml declares envs: [dev]. A NEW Kafka Streams service: reads es.rithmic.depth
+# (Avro, id 3301) and underlying.es.trades.linearized (JSON), publishes the seven futures.liquidity-wall.* Avro topics (ids 3401-3407). No Service object: kubelet probes reach the pod
+# directly. No ConfigMap, Secret or PVC of its own: Streams state lives on an emptyDir (as zn-gex), rebuilt from the topics on every pod start.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - es-liquidity-wall-deployment.yaml

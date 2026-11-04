@@ -82,6 +82,10 @@ resources:
   # es-amt: DEV-ONLY (services.yaml envs: [dev]), replicas 1: the dev-owned Avro WRITER of es.futures.auction (docs/ES-AMT-AVRO-CUTOVER.md). Referenced here only (NOT in k8s/base, production or experiment).
   # No patches here or in the standalone overlay (k8s/services/es-amt/overlays/dev); the dev image remap below is what the slice mirrors.
   - ../../services/es-amt/base
+  # es-liquidity-wall: DEV-ONLY (services.yaml envs: [dev]), replicas 1: NEW Kafka Streams service, ES book liquidity walls from es.rithmic.depth + the linearized ES tape; writes the seven
+  # futures.liquidity-wall.* Avro topics (ids 3401-3407). Referenced here only (NOT in k8s/base, production or experiment). No patches here or in the standalone overlay
+  # (k8s/services/es-liquidity-wall/overlays/dev); the dev image remap below is what the slice mirrors.
+  - ../../services/es-liquidity-wall/base
   # NOTE: the databento timewarp replay Job + snapshot-replay Deployment used to live
   # here. They moved to k8s/replay/dev and now deploy on-demand via the dedicated
   # `replay-deploy` job (Jenkinsfile.replay) — OUT of the dev/prod bring-up path. A Job's
@@ -970,6 +974,9 @@ images:
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-es-amt
     newName: host.docker.internal:5001/options-edge-es-amt
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-es-liquidity-wall
+    newName: host.docker.internal:5001/options-edge-es-liquidity-wall
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-oi-next-publication
     newName: host.docker.internal:5001/options-edge-oi-next-publication

@@ -6,6 +6,9 @@ import com.optionsedge.contracts.avro.CanonicalAvroSerializer;
 import com.optionsedge.contracts.avro.CanonicalJsonAvro;
 import com.optionsedge.contracts.cvd.CvdRelatedSchemas;
 import com.optionsedge.contracts.cvd.CvdSchemas;
+import com.optionsedge.contracts.liquiditywall.LiquidityWallSchemas;
+import com.optionsedge.contracts.rithmic.RithmicSchemas;
+import io.confluent.kafka.schemaregistry.avro.AvroSchema;
 import io.confluent.kafka.schemaregistry.testutil.MockSchemaRegistry;
 import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
@@ -72,29 +75,56 @@ public class CanonicalArchiveDecoderTest {
         var config=new HashMap<String,Object>();props.forEach((k,v)->config.put((String)k,v));
         var bindings=Map.of("es.futures.cvd.bars",CvdSchemas.BAR,"es.futures.footprint.bars",CvdSchemas.FOOTPRINT_BAR,
                 "es.futures.footprint.outcomes",CvdSchemas.FOOTPRINT_OUTCOME,"es.futures.footprint.strike",CvdRelatedSchemas.FOOTPRINT_STRIKE,
-                "context-tape.direction.ledger",CvdRelatedSchemas.directionLedger());
+                "context-tape.direction.ledger",CvdRelatedSchemas.directionLedger(),
+                RithmicSchemas.RAW_TOPIC,RithmicSchemas.FRAME,"futures.liquidity-wall.closures",LiquidityWallSchemas.CLOSURE.schema());
+        // The dev depth set's two Avro members carry FIXED registry ids (RithmicDepthFrame 3301 under
+        // TopicNameStrategy, LiquidityWallClosure 3401 under RecordNameStrategy), and the decoder checks the frame's
+        // id against them before decoding: the mock registry must therefore hold them under those ids, and a
+        // JSON value — accepted as retained JSON on the five roll-forward bindings — is refused on these two.
+        var fixedIds=Map.of(RithmicSchemas.RAW_TOPIC,3301,"futures.liquidity-wall.closures",LiquidityWallSchemas.CLOSURE.id());
+        // The closure is registered under its RecordNameStrategy subject as production does, AND under the
+        // topic-name subject the test's serializer resolves ids through; both carry the one fixed id.
+        check(registry.register(LiquidityWallSchemas.CLOSURE.name(),new AvroSchema(LiquidityWallSchemas.CLOSURE.schema()),1,LiquidityWallSchemas.CLOSURE.id())==LiquidityWallSchemas.CLOSURE.id(),"closure record-name registration");
         var outputs=new HashMap<String,JsonNode>();Path cvd=source.resolve("src/test/resources/cvd/producer-23866b17.json");
         outputs.put("es.futures.cvd.bars",cut(cvd,"CvdBarEnvelope","value"));
         outputs.put("es.futures.footprint.bars",cut(cvd,"FootprintBarEnvelope","value"));
         outputs.put("es.futures.footprint.outcomes",cut(cvd,"FootprintOutcome","value"));
         outputs.put("context-tape.direction.ledger",cut(source.resolve("src/test/resources/cvd/direction-output-renderer-models.json"),"DirectionLedger","model"));
         outputs.put("es.futures.footprint.strike",minimal(CvdRelatedSchemas.FOOTPRINT_STRIKE));
+        outputs.put(RithmicSchemas.RAW_TOPIC,minimal(RithmicSchemas.FRAME));
+        outputs.put("futures.liquidity-wall.closures",minimal(LiquidityWallSchemas.CLOSURE.schema()));
         int assertions=0;
         try(var writer=new CanonicalAvroSerializer()) {
             writer.configure(config,false);
             for(var entry:bindings.entrySet()) {
-                String topic=entry.getKey();Schema schema=entry.getValue();registry.register(topic+"-value",schema);
+                String topic=entry.getKey();Schema schema=entry.getValue();Integer fixedId=fixedIds.get(topic);
+                if(fixedId==null)registry.register(topic+"-value",schema);
+                else check(registry.register(topic+"-value",new AvroSchema(schema),1,fixedId)==fixedId,"fixed id registration: "+topic);
                 byte[] old=outputs.get(topic).toString().getBytes(StandardCharsets.UTF_8);
                 byte[] framed=writer.serialize(topic,CanonicalJsonAvro.record(schema,outputs.get(topic)));
                 try(var decoder=new CanonicalArchiveDecoder(topic,"mock://"+scope)) {
-                    check(decoder.deserialize(topic,old)==old,"Retained JSON must stay byte-identical");assertions++;
+                    if(fixedId==null) {check(decoder.deserialize(topic,old)==old,"Retained JSON must stay byte-identical");assertions++;}
+                    else {
+                        check(ByteBuffer.wrap(framed,1,4).getInt()==fixedId,"The writer must frame the record under the fixed id: "+topic);
+                        refuses(()->decoder.deserialize(topic,old),"A JSON value on a fixed-id topic must refuse, never pass as retained JSON: "+topic);
+                        assertions++;
+                    }
                     byte[] decoded=decoder.deserialize(topic,framed);
                     check(decoded.length>0&&decoded[0]=='{',"Framed input must project to an API object, not binary archive text");
                     check(JSON.readTree(old).equals(JSON.readTree(decoded)),"Decoded API values must match the input model: "+topic);
                     if(topic.endsWith(".strike")||topic.endsWith(".ledger"))
                         check(java.util.Arrays.equals(old,decoded),"Recovery-sensitive API text/order must be exact: "+topic);
                     assertions++;
-                    check(java.util.Arrays.equals(old,decoder.deserialize(topic,old)),"Interleaved JSON remains accepted after Avro");assertions++;
+                    if(fixedId==null) {check(java.util.Arrays.equals(old,decoder.deserialize(topic,old)),"Interleaved JSON remains accepted after Avro");assertions++;}
+                    else {
+                        byte[] foreign=framed.clone();ByteBuffer.wrap(foreign,1,4).putInt(fixedId+1);
+                        refuses(()->decoder.deserialize(topic,foreign),"A frame under any other id must refuse before decoding: "+topic);
+                        try {decoder.deserialize(topic,foreign);throw new AssertionError("foreign id accepted");}
+                        catch(org.apache.kafka.common.errors.SerializationException expected) {
+                            check(expected.getMessage().contains("expected the fixed id "+fixedId),"The refusal must name the fixed id: "+expected.getMessage());
+                        }
+                        assertions++;
+                    }
                     var headers=new RecordHeaders().add("trace",new byte[]{7});byte[] key="key".getBytes(StandardCharsets.UTF_8);
                     var record=new ConsumerRecord<byte[],byte[]>(topic,0,17,123456789L,TimestampType.CREATE_TIME,key.length,framed.length,key,framed,headers,java.util.Optional.empty());
                     var opts=new StrikeArchiveReader.Opts();opts.topic=topic;var summary=new StrikeArchiveReader.Summary(opts,0);
