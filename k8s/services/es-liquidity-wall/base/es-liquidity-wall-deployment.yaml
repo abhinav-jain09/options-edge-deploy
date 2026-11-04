@@ -78,6 +78,15 @@ spec:
               value: "1.460"
             - name: ES_LIQUIDITY_WALL_FLIP_LEAN_THRESHOLD
               value: "0.100"
+            # DEV OPERATIONAL OVERRIDE of document D section 10's structural starting value 3,000 ms, with the owner's decision to run walls live on dev: the tape this
+            # service reads, underlying.es.trades.linearized, is emitted by es-trade-linearizer-service only after ITS reorder grace ES_LINEARIZER_GRACE_MS=5000
+            # (k8s/overlays/dev/es-trade-linearizer-dev-patch.yaml; production the same), so a print reaches the broker 4.1-7.7 s after its exchange time (ten samples,
+            # 2026-11-04 15:10 ET; the depth feed is within a second). With 3,000 ms the wall-clock timer closed 445 of 500 buckets DEGRADED and only 52 LIVE (counters
+            # buckets.DEGRADED 445, buckets.LIVE 52, prints.late 967), so no cluster could persist. 10,000 ms = the linearizer's 5 s grace + its emission latency + margin;
+            # buckets then close WATERMARK about 7-12 s behind real time. The value is part of the configuration fingerprint: the first restart on it retires every live wall
+            # with reason CONFIG (document D section 7), which is the documented effect of a configuration change. Not a calibration; re-measure if the linearizer's grace changes.
+            - name: ES_LIQUIDITY_WALL_BUCKET_GRACE_MS
+              value: "10000"
             - name: JAVA_TOOL_OPTIONS
               value: -Xms256m -Xmx1024m
           ports:
