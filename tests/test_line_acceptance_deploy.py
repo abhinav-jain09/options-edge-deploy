@@ -361,14 +361,18 @@ class ProductionDeclaresNoTopic(unittest.TestCase):
         self.assertIn("OPTIONS_EDGE_TOPICS", sourced("Production "), "only the exact string 'production' strips (the PROD_ONLY predicate, inverted)")
 
     def test_production_keeps_every_other_declaration(self):
-        def count(environment):
+        def tokens(environment):
             env = {k: v for k, v in os.environ.items() if k != "ENVIRONMENT"}
             env["ENVIRONMENT"] = environment
-            out = subprocess.run(["bash", "-c", f'source "{ROOT}/scripts/kafka/topics.env"; echo $(echo $OPTIONS_EDGE_TOPICS | wc -w) $(echo $OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES | wc -w)'],
-                                 capture_output=True, text=True, check=True, env=env).stdout.split()
-            return [int(x) for x in out]
-        dev, prod = count("dev"), count("production")
-        self.assertEqual((dev[0] - prod[0], dev[1] - prod[1]), (6, 6))
+            out = subprocess.run(["bash", "-c", f'source "{ROOT}/scripts/kafka/topics.env"; echo "$OPTIONS_EDGE_TOPICS"; echo "$OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES"'],
+                                 capture_output=True, text=True, check=True, env=env).stdout.splitlines()
+            return [line.split() for line in out]
+        dev, prod = tokens("dev"), tokens("production")
+        for d, p in zip(dev, prod):
+            self.assertEqual(sorted(x for x in d if x.startswith(P)).__len__(), 6)
+            self.assertEqual([x for x in p if x.startswith(P)], [])
+            # every declaration that is not line-acceptance's survives; the other dev-only family (es-liquidity-wall, futures.liquidity-wall*) is stripped by its own guard, its own test's business
+            self.assertEqual([x for x in d if not x.startswith(P) and not x.startswith("futures.liquidity-wall")], [x for x in p if not x.startswith(P)])
 
 
 class NoProductionWiring(unittest.TestCase):

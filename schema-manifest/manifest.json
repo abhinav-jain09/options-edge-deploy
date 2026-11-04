@@ -332,6 +332,12 @@
     3111
    ]
   ],
+  "liquiditywall": [
+   [
+    3401,
+    3407
+   ]
+  ],
   "marketstructure": [
    [
     2201,
@@ -5251,6 +5257,244 @@
   },
   {
    "kind": "MIRRORED",
+   "subject": "com.optionsedge.contracts.liquiditywall.LiquidityWallClosure",
+   "version": 1,
+   "id": 3401,
+   "family": "liquiditywall",
+   "schemaFile": "com.optionsedge.contracts.liquiditywall.LiquidityWallClosure/v1.avsc",
+   "schemaHash": "1b70690cc90ca0b4ad08d228a29f76d24b3a5aa7a81b9a9225d033955d7dabd2",
+   "environments": [
+    "dev"
+   ],
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas-registry/liquiditywall/LiquidityWallClosure.avsc"
+   },
+   "topics": [
+    {
+     "name": "futures.liquidity-wall.closures",
+     "kind": "data"
+    }
+   ],
+   "producers": [
+    {
+     "service": "es-liquidity-wall",
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "curated, not baseline: es-liquidity-wall-service (NEW, dev only; contracts 0.66.0 schemas-registry/liquiditywall) writes it on futures.liquidity-wall.closures under RecordNameStrategy with auto.register.schemas=false (its schema-requirements.json names this id and hash). Dev only; nothing is registered on production or es4."
+  },
+  {
+   "kind": "MIRRORED",
+   "subject": "com.optionsedge.contracts.liquiditywall.LiquidityWallBucket",
+   "version": 1,
+   "id": 3402,
+   "family": "liquiditywall",
+   "schemaFile": "com.optionsedge.contracts.liquiditywall.LiquidityWallBucket/v1.avsc",
+   "schemaHash": "83d31cbed7c128b768f0a046bf12c047346ccf7e77b67e56fee0c293832189ca",
+   "environments": [
+    "dev"
+   ],
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas-registry/liquiditywall/LiquidityWallBucket.avsc"
+   },
+   "topics": [
+    {
+     "name": "futures.liquidity-wall.buckets",
+     "kind": "data"
+    }
+   ],
+   "producers": [
+    {
+     "service": "es-liquidity-wall",
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "curated, not baseline: es-liquidity-wall-service (NEW, dev only; contracts 0.66.0 schemas-registry/liquiditywall) writes it on futures.liquidity-wall.buckets under RecordNameStrategy with auto.register.schemas=false (its schema-requirements.json names this id and hash). Dev only; nothing is registered on production or es4."
+  },
+  {
+   "kind": "MIRRORED",
+   "subject": "com.optionsedge.contracts.liquiditywall.LiquidityWallDashboard",
+   "version": 1,
+   "id": 3403,
+   "family": "liquiditywall",
+   "schemaFile": "com.optionsedge.contracts.liquiditywall.LiquidityWallDashboard/v1.avsc",
+   "schemaHash": "4ea5d424d2d8ef0507ad6d48807c4755896632fd8888b8f3bd167177de17565b",
+   "environments": [
+    "dev"
+   ],
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas-registry/liquiditywall/LiquidityWallDashboard.avsc"
+   },
+   "topics": [
+    {
+     "name": "futures.liquidity-wall.dashboard",
+     "kind": "data"
+    }
+   ],
+   "producers": [
+    {
+     "service": "es-liquidity-wall",
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "curated, not baseline: es-liquidity-wall-service (NEW, dev only; contracts 0.66.0 schemas-registry/liquiditywall) writes it on futures.liquidity-wall.dashboard under RecordNameStrategy with auto.register.schemas=false (its schema-requirements.json names this id and hash). Dev only; nothing is registered on production or es4."
+  },
+  {
+   "kind": "MIRRORED",
+   "subject": "com.optionsedge.contracts.liquiditywall.LiquidityWallEvent",
+   "version": 1,
+   "id": 3404,
+   "family": "liquiditywall",
+   "schemaFile": "com.optionsedge.contracts.liquiditywall.LiquidityWallEvent/v1.avsc",
+   "schemaHash": "15d686de1dae16de4530d05df4575e42efcab5285affbd3f004c0f574fc4d4a3",
+   "environments": [
+    "dev"
+   ],
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas-registry/liquiditywall/LiquidityWallEvent.avsc"
+   },
+   "topics": [
+    {
+     "name": "futures.liquidity-wall.events",
+     "kind": "data"
+    }
+   ],
+   "producers": [
+    {
+     "service": "es-liquidity-wall",
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "curated, not baseline: es-liquidity-wall-service (NEW, dev only; contracts 0.66.0 schemas-registry/liquiditywall) writes it on futures.liquidity-wall.events under RecordNameStrategy with auto.register.schemas=false (its schema-requirements.json names this id and hash). Dev only; nothing is registered on production or es4."
+  },
+  {
+   "kind": "MIRRORED",
+   "subject": "com.optionsedge.contracts.liquiditywall.LiquidityWallState",
+   "version": 1,
+   "id": 3405,
+   "family": "liquiditywall",
+   "schemaFile": "com.optionsedge.contracts.liquiditywall.LiquidityWallState/v1.avsc",
+   "schemaHash": "58ac90819586d71195bc8ba07bd77db878e78a265b185f2da73b5d9ea469cb7f",
+   "environments": [
+    "dev"
+   ],
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas-registry/liquiditywall/LiquidityWallState.avsc"
+   },
+   "topics": [
+    {
+     "name": "futures.liquidity-wall.state",
+     "kind": "data"
+    }
+   ],
+   "producers": [
+    {
+     "service": "es-liquidity-wall",
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "curated, not baseline: es-liquidity-wall-service (NEW, dev only; contracts 0.66.0 schemas-registry/liquiditywall) writes it on futures.liquidity-wall.state under RecordNameStrategy with auto.register.schemas=false (its schema-requirements.json names this id and hash). Dev only; nothing is registered on production or es4."
+  },
+  {
+   "kind": "MIRRORED",
+   "subject": "com.optionsedge.contracts.liquiditywall.LiquidityWallSnapshot",
+   "version": 1,
+   "id": 3406,
+   "family": "liquiditywall",
+   "schemaFile": "com.optionsedge.contracts.liquiditywall.LiquidityWallSnapshot/v1.avsc",
+   "schemaHash": "a7566ab6cef3da5f8f77d7009bbb65e5f93b7754c260da053984deb403bbfe46",
+   "environments": [
+    "dev"
+   ],
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas-registry/liquiditywall/LiquidityWallSnapshot.avsc"
+   },
+   "topics": [
+    {
+     "name": "futures.liquidity-wall.snapshot",
+     "kind": "data"
+    }
+   ],
+   "producers": [
+    {
+     "service": "es-liquidity-wall",
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "curated, not baseline: es-liquidity-wall-service (NEW, dev only; contracts 0.66.0 schemas-registry/liquiditywall) writes it on futures.liquidity-wall.snapshot under RecordNameStrategy with auto.register.schemas=false (its schema-requirements.json names this id and hash). Dev only; nothing is registered on production or es4."
+  },
+  {
+   "kind": "MIRRORED",
+   "subject": "com.optionsedge.contracts.liquiditywall.LiquidityWallVoice",
+   "version": 1,
+   "id": 3407,
+   "family": "liquiditywall",
+   "schemaFile": "com.optionsedge.contracts.liquiditywall.LiquidityWallVoice/v1.avsc",
+   "schemaHash": "3a6699cc1016274ab096bd6efce506737ac4bd225379ce4eb5a40b805ec03166",
+   "environments": [
+    "dev"
+   ],
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas-registry/liquiditywall/LiquidityWallVoice.avsc"
+   },
+   "topics": [
+    {
+     "name": "futures.liquidity-wall.voice",
+     "kind": "data"
+    }
+   ],
+   "producers": [
+    {
+     "service": "es-liquidity-wall",
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "curated, not baseline: es-liquidity-wall-service (NEW, dev only; contracts 0.66.0 schemas-registry/liquiditywall) writes it on futures.liquidity-wall.voice under RecordNameStrategy with auto.register.schemas=false (its schema-requirements.json names this id and hash). Dev only; nothing is registered on production or es4."
+  },
+  {
+   "kind": "MIRRORED",
    "baseline": true,
    "subject": "com.optionsedge.contracts.marketstructure.dlq.DlqRecord",
    "version": 1,
@@ -9621,7 +9865,17 @@
     }
    ],
    "producers": [],
-   "consumers": [],
+   "consumers": [
+    {
+     "service": "es-liquidity-wall",
+     "accepts": [
+      3301
+     ],
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
