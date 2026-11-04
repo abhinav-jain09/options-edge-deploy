@@ -52,12 +52,20 @@ sourced="$(printf '%s\n' $sourced $java_named $java_present | awk 'NF' | sort -u
 #                                 scripts/ci/validate-dev-mac-watchdog.sh, and the deploy job runs it.
 #   install-dev-mac-watchdog.sh   the installer for the above, and equally a dev-Mac host action
 #   install-dev-mac-watchdog-test.sh  its test; runs in CI, never on .252
-EXEMPT="oe-ops.env calibration-progress-watch.sh install-dev-mac-watchdog.sh install-dev-mac-watchdog-test.sh"
+#   oe-archive-depth.sh           the DEV depth archive wrapper (ES Level Absorption Requirements section 9
+#                                 item 6): a dedicated launchd job on the DEV MAC, four times a day against
+#                                 es.rithmic.depth's 12-hour retention, deliberately apart from the .252
+#                                 crontab's nightly run. Same obligation as the watchdog: its install path,
+#                                 plist, schedule and the policy it reads are asserted by
+#                                 scripts/ci/validate-dev-mac-depth-archive.sh, and the deploy job runs it.
+#   install-dev-mac-depth-archive.sh      its installer, a dev-Mac host action
+#   install-dev-mac-depth-archive-test.sh its test; runs in CI, never on .252
+EXEMPT="oe-ops.env calibration-progress-watch.sh install-dev-mac-watchdog.sh install-dev-mac-watchdog-test.sh oe-archive-depth.sh install-dev-mac-depth-archive.sh install-dev-mac-depth-archive-test.sh"
 
 # An exemption that no other guard picks up is a hole with a comment on it. Assert the successor
 # exists, here, where the excuse is made.
-for _guard in scripts/ci/validate-dev-mac-watchdog.sh scripts/ci/verify-archive-unit-staged.sh; do
-  [ -f "$_guard" ] || { echo "MISSING GUARD: $_guard — calibration-progress-watch.sh is exempted here on the promise that $_guard checks it" >&2; exit 1; }
+for _guard in scripts/ci/validate-dev-mac-watchdog.sh scripts/ci/validate-dev-mac-depth-archive.sh scripts/ci/verify-archive-unit-staged.sh; do
+  [ -f "$_guard" ] || { echo "MISSING GUARD: $_guard — calibration-progress-watch.sh and oe-archive-depth.sh are exempted here on the promise that $_guard checks them" >&2; exit 1; }
 done
 
 # AN EXEMPTION THAT NO OTHER GUARD PICKS UP IS A HOLE WITH A COMMENT ON IT, and the same applies to

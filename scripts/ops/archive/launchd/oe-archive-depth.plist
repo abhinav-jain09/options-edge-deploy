@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The DEV depth archive (ES Level Absorption Requirements section 9, items 1 and 6; ES Book Liquidity Walls
+  Requirements rev 11 section 8): oe-archive-depth.sh runs oe-archive-kafka.sh with ENV=dev and
+  TOPICS="$OE_DEPTH_TOPICS_dev" (oe-topics.env: es.rithmic.depth, underlying.es.trades.linearized,
+  futures.liquidity-wall.closures) against the dev broker and the dev schema registry, four times a day.
+
+  WHY FOUR TIMES, AND WHY HERE. es.rithmic.depth carries a 12-hour retention on dev, so a once-a-day pass
+  loses half of every session; every six hours, one missed run costs nothing. It is a dedicated job on the
+  dev Mac, separate from the nightly 17:10 ET run on .252 (document A section 9 item 6), and it is registered
+  for DEV ONLY — nothing here reads prod or es4.
+
+  THE SCHEDULE IS IN THE HOST'S LOCAL TIME. launchd has no CRON_TZ; StartCalendarInterval fires at the wall
+  clock of the Mac it runs on. The dev Mac runs on America/New_York, which is the same assumption the
+  watchdog beside this file makes for its 07:00 ET, so the four entries below are 02:00, 08:00, 14:00 and
+  20:00 ET. If the host's zone ever changes, these drift with it — convert them, or pin the host to New York.
+  Ordinary daylight-saving switches are harmless: launchd follows the local clock, so 02:00 stays 02:00 ET.
+
+  Install: run scripts/ops/archive/install-dev-mac-depth-archive.sh. Do NOT copy files by hand — the installer
+  owns the list of files the wrapper and the archiver read from beside themselves, refuses to install while the
+  canonical archive helper jar and the contracts jar are not beside them (the Avro depth and closure topics cannot
+  be captured without them), verifies the staged copy under launchd's own environment, and fails unless exactly
+  one agent registers. The dry-run flag is spelled out in the installer's header.
+
+  scripts/ci/validate-dev-mac-depth-archive.sh checks that this file, the installer and the wrapper still agree.
+
+  ARCHIVE_DIR is deliberately NOT set here (BZ 360, as for the watchdog): the wrapper resolves the root from
+  ARCHIVE_ROOT_CANDIDATES and requires the NAS sentinel in it. Set it here only to override that on a host
+  where the candidates are wrong.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.optionsedge.oe-archive-depth</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/bash</string>
+    <string>/Users/abhinav/oe-ops/oe-archive-depth.sh</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Hour</key><integer>2</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Hour</key><integer>8</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Hour</key><integer>14</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Hour</key><integer>20</integer><key>Minute</key><integer>0</integer></dict>
+  </array>
+  <key>StandardOutPath</key><string>/Users/abhinav/oe-ops/archive-depth.launchd.log</string>
+  <key>StandardErrorPath</key><string>/Users/abhinav/oe-ops/archive-depth.launchd.err.log</string>
+  <key>RunAtLoad</key><false/>
+</dict>
+</plist>

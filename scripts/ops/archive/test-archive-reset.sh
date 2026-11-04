@@ -431,8 +431,30 @@ missing_rc=$?
 want "a policy file without OE_ES4_TOPICS is refused" 1 "$([ "$missing_rc" -ne 0 ]; echo $((1-$?)))"
 has  "  and says why" "OE_ES4_TOPICS" "$missing_out"
 
+# 2026-11-04: the DEV depth set, same chain (ES Level Absorption Requirements section 9 item 1; ES Book
+# Liquidity Walls Requirements rev 11 section 8). The env file defines OE_DEPTH_TOPICS_dev, the archiver
+# refuses to run without it, and the dedicated invocation ENV=dev TOPICS="$OE_DEPTH_TOPICS_dev" derives
+# exactly that set — while ENV=dev WITHOUT the override does not, which is why the launchd wrapper's TOPICS
+# override is load-bearing. It is scheduled on the dev Mac (launchd), so the .252 crontab must not name it.
+depth_expected=$(. "$OE/oe-topics.env"; printf '%s' "$OE_DEPTH_TOPICS_dev")
+want "oe-topics.env defines the dev depth set" "es.rithmic.depth underlying.es.trades.linearized futures.liquidity-wall.closures" "$depth_expected"
+depth_derived=$(ARCHIVE_DIR="$T" ENV=dev TOPICS="$depth_expected" PRINT_TOPICS=true KAFKA_BIN="$BIN" bash "$ARCH" 2>/dev/null)
+want "ENV=dev TOPICS=\$OE_DEPTH_TOPICS_dev derives exactly the depth set" "$depth_expected" "$depth_derived"
+dev_default=$(ARCHIVE_DIR="$T" ENV=dev PRINT_TOPICS=true KAFKA_BIN="$BIN" bash "$ARCH" 2>/dev/null)
+want "ENV=dev without the override is NOT the depth set (the wrapper's TOPICS override is load-bearing)" 1 "$([ "$dev_default" != "$depth_expected" ]; echo $((1-$?)))"
+stripped_depth="$T/topics-no-depth.env"
+grep -v '^OE_DEPTH_TOPICS_dev=' "$OE/oe-topics.env" > "$stripped_depth"
+missing_depth_out=$(ARCHIVE_DIR="$T" ENV=dev TOPICS="$depth_expected" PRINT_TOPICS=true KAFKA_BIN="$BIN" OE_TOPICS_ENV="$stripped_depth" OE_DEPTH_TOPICS_dev="$depth_expected" bash "$ARCH" 2>&1)
+missing_depth_rc=$?
+want "a policy file without OE_DEPTH_TOPICS_dev is refused, even with the value inherited" 1 "$([ "$missing_depth_rc" -ne 0 ]; echo $((1-$?)))"
+has  "  and says why" "OE_DEPTH_TOPICS_dev" "$missing_depth_out"
+for _t in es.rithmic.depth futures.liquidity-wall.closures; do
+  hasnt "  $_t is in no es4 set" " $_t " " $es4_expected "
+done
+
 crontab_file="$OE/oe-archive.crontab"
 want "the repo-managed crontab exists" 0 "$([ -f "$crontab_file" ]; echo $?)"
+hasnt "the .252 crontab does not name the dev depth archive (it is the dev Mac's launchd job)" "oe-archive-depth" "$(cat "$crontab_file")"
 es4_line=$(grep -c '^1 17 \* \* 1-5 .*ENV=es4 .*oe-archive-kafka\.sh' "$crontab_file")
 want "exactly one scheduled es4 archiver entry" 1 "$es4_line"
 es4_entry=$(grep '^1 17 \* \* 1-5 .*ENV=es4' "$crontab_file")
