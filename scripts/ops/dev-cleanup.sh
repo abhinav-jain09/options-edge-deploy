@@ -371,7 +371,7 @@ topic_desired() {
 # live data. It is reported loudly instead and left to apply-topics.sh, which fails closed on
 # OPTIONS_EDGE_EXACT_PARTITION_TOPICS and carries the gated destructive repair.
 reconcile_declared_topics() {
-  local desc line spec name cfg have_pol have_ret have_dr have_mb have_rb have_parts need polcfg fixed=0 drift=0
+  local desc line spec name cfg have_pol have_ret have_dr have_mb have_rb have_parts need polcfg lowers fixed=0 drift=0
   desc="$($KT --bootstrap-server $BS --describe 2>/dev/null | grep '^Topic:')"
   if [ -z "$desc" ]; then
     echo "  WARNING: could not describe topics — declared shapes NOT verified this run."
@@ -414,10 +414,25 @@ reconcile_declared_topics() {
     [ -n "$DRET" ] && [ "$have_ret" != "$DRET" ] && need="$need${need:+,}retention.ms=$DRET"
     [ -n "$DDR" ]  && [ "$have_dr"  != "$DDR"  ] && need="$need${need:+,}delete.retention.ms=$DDR"
     [ -n "$DMB" ]  && [ "$have_mb"  != "$DMB"  ] && need="$need${need:+,}max.message.bytes=$DMB"
-    # A declared -1 is the broker default, so a topic with no retention.bytes override already satisfies it (without this the pass would
-    # rewrite every unlimited-by-declaration topic on every run). A finite cap that differs, or an explicit different value, is drift.
+    # retention.bytes is reconciled NON-DESTRUCTIVELY. ensure_topics also runs from start/overnight/topics on a live, shared dev, and lowering an
+    # existing cap (or capping an unlimited topic) makes the broker delete retained records, which the retention.ms note above does not cover and which the
+    # topics' own barriers refuse (ensure-level-absorption-topics.sh never lowers; ensure-es-liquidity-wall-topics.sh never alters an existing cap). So:
+    #   * a declared -1 that the topic inherits is satisfied (no per-run rewrite of the unlimited topics);
+    #   * a topic with a finite cap BELOW the declaration is raised, and an explicit finite cap on a declared -1 topic is lifted (neither can delete);
+    #   * a topic that is uncapped or capped ABOVE the declaration is only REPORTED, unless DEV_CLEANUP_LOWER_RETENTION_BYTES=1.
+    # The wipe does not depend on this pass: a recreated topic gets its cap from the create above.
     if [ -n "$DRB" ] && [ "$have_rb" != "$DRB" ] && ! { [ "$DRB" = -1 ] && [ -z "$have_rb" ]; }; then
-      need="$need${need:+,}retention.bytes=$DRB"
+      lowers=0
+      if [ "$DRB" != -1 ]; then
+        if [ -z "$have_rb" ] || [ "$have_rb" = -1 ]; then lowers=1
+        elif [ "$have_rb" -gt "$DRB" ] 2>/dev/null; then lowers=1; fi
+      fi
+      if [ "$lowers" = 0 ] || [ "${DEV_CLEANUP_LOWER_RETENTION_BYTES:-0}" = 1 ]; then
+        need="$need${need:+,}retention.bytes=$DRB"
+      else
+        echo "  WARNING: $name has retention.bytes=${have_rb:-unlimited}, declared $DRB — NOT lowered (the broker would delete retained records). A recreate applies it; to lower in place run with DEV_CLEANUP_LOWER_RETENTION_BYTES=1."
+        drift=$((drift+1))
+      fi
     fi
     if [ -n "$need" ]; then
       # `--add-config` separates entries with commas, so a comma-BEARING value must be bracketed
