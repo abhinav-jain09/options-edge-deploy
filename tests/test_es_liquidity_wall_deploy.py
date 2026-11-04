@@ -285,11 +285,13 @@ class Registered(unittest.TestCase):
     def test_the_service_deploy_job_offers_it_and_runs_its_dev_only_barrier_before_the_rollout(self):
         text = read("Jenkinsfile.service-deploy")
         self.assertIn(f"'{SVC}',", text)
-        stage = text[text.index("stage('Verify es-liquidity-wall topics')"):text.index("stage('Verify market-structure output topics')")]
-        self.assertIn("params.SERVICE == 'es-liquidity-wall' && !params.DEPLOY_DRY_RUN", stage)
+        # the barrier shares the line-acceptance stage (the pipeline's CPS method is at the JVM's 64 KB limit; a separate stage failed to compile, build #3006)
+        stage = text[text.index("stage('Verify line-acceptance topics')"):text.index("stage('Verify market-structure output topics')")]
+        self.assertIn("(params.SERVICE == 'line-acceptance' || params.SERVICE == 'es-liquidity-wall') && !params.DEPLOY_DRY_RUN", stage)
         self.assertIn("params.ENVIRONMENT != 'dev'", stage)
         self.assertIn("scripts/kafka/ensure-es-liquidity-wall-topics.sh", stage)
-        self.assertLess(text.index("stage('Verify es-liquidity-wall topics')"), text.index("stage('Deploy (service-scoped)')"), "the barrier precedes the rollout")
+        self.assertIn("params.SERVICE == 'es-liquidity-wall'", stage)
+        self.assertLess(text.index("stage('Verify line-acceptance topics')"), text.index("stage('Deploy (service-scoped)')"), "the barrier precedes the rollout")
 
 
 class SchemaMapAndManifest(unittest.TestCase):
