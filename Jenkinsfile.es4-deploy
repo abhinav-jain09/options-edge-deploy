@@ -52,6 +52,7 @@ pipeline {
       // deliberately re-apply the stack) is an explicit per-service run of each of these two.
       'spread-skew', 'spread-skew-postgres-writer'
     ], description: 'Service (deploy-service or update-image). NOTE: es-feed is the RELOCATED ES options feed now running on the es4 cluster; it always deploys at replicas 0 — starting it is a separate ACTION=activate-es-feed.')
+    booleanParam(name: 'RITHMIC_DEV_ONLY', defaultValue: false, description: 'Release the ES4 Rithmic collector and dev mirror only. Production broker, registry and mirror resources are excluded.')
     string(name: 'RITHMIC_PERMITTED_SHA', defaultValue: '', trim: true, description: 'Exact collector main revision for SERVICE=rithmic-depth-bridge; service job owns build, registry publication, ES4 collector and dev/prod identity mirrors.')
     string(name: 'RITHMIC_SDK_ZIP', defaultValue: '', description: 'Licensed R API+ 13.7.0.0 SDK archive on the Jenkins node; never committed.')
     string(name: 'CONTRACTS_PERMITTED_SHA', defaultValue: '', trim: true,
@@ -464,7 +465,9 @@ PY_VERSION
           KUBECONFIG="$ES4_KUBECONFIG" kubectl -n options-edge auth can-i create pods/exec | grep -qx yes
           KUBECONFIG=/Users/abhinav/.kube/es4.kubeconfig kubectl apply -f k8s/es4/policy/workload-whitelist-admission.yaml
           cd .jenkins-tmp/rithmic-source
-          "$RITHMIC_VENV_DIR/bin/python" scripts/deploy-kubernetes.py --sha "$RITHMIC_PERMITTED_SHA" --sdk-zip "$RITHMIC_SDK_ZIP" --contracts-sha "$CONTRACTS_PERMITTED_SHA" --contracts-jar "$WORKSPACE/.jenkins-tmp/rithmic-contracts/target/options-edge-contracts-${RITHMIC_CONTRACTS_VERSION}.jar" --contracts-version "$RITHMIC_CONTRACTS_VERSION" --manifest "$WORKSPACE/k8s/es4/services/rithmic-depth-bridge.yaml"
+          RITHMIC_RELEASE_SCOPE=""
+          if [ "${RITHMIC_DEV_ONLY:-false}" = "true" ]; then RITHMIC_RELEASE_SCOPE="--dev-only"; fi
+          "$RITHMIC_VENV_DIR/bin/python" scripts/deploy-kubernetes.py $RITHMIC_RELEASE_SCOPE --sha "$RITHMIC_PERMITTED_SHA" --sdk-zip "$RITHMIC_SDK_ZIP" --contracts-sha "$CONTRACTS_PERMITTED_SHA" --contracts-jar "$WORKSPACE/.jenkins-tmp/rithmic-contracts/target/options-edge-contracts-${RITHMIC_CONTRACTS_VERSION}.jar" --contracts-version "$RITHMIC_CONTRACTS_VERSION" --manifest "$WORKSPACE/k8s/es4/services/rithmic-depth-bridge.yaml"
         '''
           } else {
         // The on-box scripts this path runs over ssh (the indicator state rotation and recreate, plan section 5) are
