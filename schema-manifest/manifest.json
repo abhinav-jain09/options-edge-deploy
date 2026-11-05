@@ -1055,6 +1055,12 @@
     3506,
     3506
    ]
+  ],
+  "liquidityvalidator": [
+   [
+    3601,
+    3603
+   ]
   ]
  },
  "declaredByManifest": [
@@ -3536,7 +3542,17 @@
     }
    ],
    "producers": [],
-   "consumers": [],
+   "consumers": [
+    {
+     "service": "liquidity-validator",
+     "accepts": [
+      2701
+     ],
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "es.futures.aggressor-flow is byte-copied es4->dev and es4->prod (Jenkinsfile.es-futures-flow-mirror) carrying this schema (id 2701, measured on es4 2026-11-03); prod's registry did not hold it (404), so the prod mirror's frames named an id prod could not resolve (R3f). Curated, not baseline: the inventory would drop prod again."
   },
@@ -5681,6 +5697,108 @@
   },
   {
    "kind": "MIRRORED",
+   "subject": "com.optionsedge.contracts.liquidityvalidator.LiquidityValidatorEvaluation",
+   "version": 1,
+   "id": 3601,
+   "family": "liquidityvalidator",
+   "schemaFile": "com.optionsedge.contracts.liquidityvalidator.LiquidityValidatorEvaluation/v1.avsc",
+   "schemaHash": "f0e3983abd3ecabea934e88b5d5a56753b7979e4788171ece9ef254049a53109",
+   "environments": [
+    "dev"
+   ],
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas-registry/liquidityvalidator/LiquidityValidatorEvaluation.avsc"
+   },
+   "topics": [
+    {
+     "name": "futures.liquidity-validator.evaluations",
+     "kind": "data"
+    }
+   ],
+   "producers": [
+    {
+     "service": "liquidity-validator",
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "curated, not baseline: liquidity-validator-service (NEW, dev only; contracts 0.73.0 schemas-registry/liquidityvalidator) writes it on futures.liquidity-validator.evaluations under RecordNameStrategy with auto.register.schemas=false (its schema-requirements.json names this id and hash). A research record: no decision path reads it. Dev only; nothing is registered on production or es4."
+  },
+  {
+   "kind": "MIRRORED",
+   "subject": "com.optionsedge.contracts.liquidityvalidator.LiquidityValidatorDataGap",
+   "version": 1,
+   "id": 3602,
+   "family": "liquidityvalidator",
+   "schemaFile": "com.optionsedge.contracts.liquidityvalidator.LiquidityValidatorDataGap/v1.avsc",
+   "schemaHash": "1cee2cc7056b05adcf88c3269733fa3b5f4e3cc92d210c9c4ea525d7ca276c19",
+   "environments": [
+    "dev"
+   ],
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas-registry/liquidityvalidator/LiquidityValidatorDataGap.avsc"
+   },
+   "topics": [
+    {
+     "name": "futures.liquidity-validator.data-gaps",
+     "kind": "data"
+    }
+   ],
+   "producers": [
+    {
+     "service": "liquidity-validator",
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "curated, not baseline: liquidity-validator-service (NEW, dev only; contracts 0.73.0 schemas-registry/liquidityvalidator) writes it on futures.liquidity-validator.data-gaps under RecordNameStrategy with auto.register.schemas=false (its schema-requirements.json names this id and hash). A research record: no decision path reads it. Dev only; nothing is registered on production or es4."
+  },
+  {
+   "kind": "MIRRORED",
+   "subject": "com.optionsedge.contracts.liquidityvalidator.LiquidityValidatorDaily",
+   "version": 1,
+   "id": 3603,
+   "family": "liquidityvalidator",
+   "schemaFile": "com.optionsedge.contracts.liquidityvalidator.LiquidityValidatorDaily/v1.avsc",
+   "schemaHash": "67133b02ac0e888719f2358d306d06d9b40735c99fa93e1ad51096f3e55457a3",
+   "environments": [
+    "dev"
+   ],
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas-registry/liquidityvalidator/LiquidityValidatorDaily.avsc"
+   },
+   "topics": [
+    {
+     "name": "futures.liquidity-validator.daily",
+     "kind": "data"
+    }
+   ],
+   "producers": [
+    {
+     "service": "liquidity-validator",
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "curated, not baseline: liquidity-validator-service (NEW, dev only; contracts 0.73.0 schemas-registry/liquidityvalidator) writes it on futures.liquidity-validator.daily under RecordNameStrategy with auto.register.schemas=false (its schema-requirements.json names this id and hash). A research record: no decision path reads it. Dev only; nothing is registered on production or es4."
+  },
+  {
+   "kind": "MIRRORED",
    "subject": "com.optionsedge.contracts.marketstructure.alerts.PatternAlertEvent",
    "version": 1,
    "id": 2224,
@@ -5827,7 +5945,17 @@
     }
    ],
    "producers": [],
-   "consumers": [],
+   "consumers": [
+    {
+     "service": "liquidity-validator",
+     "accepts": [
+      2221
+     ],
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -5858,6 +5986,15 @@
    "consumers": [
     {
      "service": "line-acceptance",
+     "accepts": [
+      2223
+     ],
+     "environments": [
+      "dev"
+     ]
+    },
+    {
+     "service": "liquidity-validator",
      "accepts": [
       2223
      ],
@@ -9800,6 +9937,15 @@
      "environments": [
       "dev"
      ]
+    },
+    {
+     "service": "liquidity-validator",
+     "accepts": [
+      2034
+     ],
+     "environments": [
+      "dev"
+     ]
     }
    ],
    "retained": true,
@@ -10270,7 +10416,17 @@
     }
    ],
    "producers": [],
-   "consumers": [],
+   "consumers": [
+    {
+     "service": "liquidity-validator",
+     "accepts": [
+      2702
+     ],
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },

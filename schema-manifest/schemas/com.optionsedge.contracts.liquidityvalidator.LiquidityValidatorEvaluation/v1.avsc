@@ -1,0 +1,223 @@
+{
+  "type": "record",
+  "name": "LiquidityValidatorEvaluation",
+  "namespace": "com.optionsedge.contracts.liquidityvalidator",
+  "doc": "liquidity validator service requirement section 3: one research record per geometry release. It never trades and no decision path reads it.",
+  "fields": [
+    {
+      "name": "schemaVersion",
+      "type": "int",
+      "doc": "1 for this revision"
+    },
+    {
+      "name": "evaluationId",
+      "type": "string",
+      "doc": "annotationId at the release; key is tradeDate|evaluationId"
+    },
+    {
+      "name": "tradeDate",
+      "type": "string"
+    },
+    {
+      "name": "annotationId",
+      "type": "string"
+    },
+    {
+      "name": "patternId",
+      "type": "string"
+    },
+    {
+      "name": "timeframe",
+      "type": "string",
+      "doc": "1m, 5m or 15m"
+    },
+    {
+      "name": "direction",
+      "type": "string",
+      "doc": "UP or DOWN"
+    },
+    {
+      "name": "releaseVisibleAtMs",
+      "type": "long",
+      "doc": "R: the broker record timestamp of the first geometry record carrying the S1 conditions"
+    },
+    {
+      "name": "result",
+      "type": "string",
+      "doc": "the Section 4.2 entry-time result, or UNCERTAIN / LATE_SIGNAL; a research record, not an instruction"
+    },
+    {
+      "name": "resultReasons",
+      "type": {
+        "type": "array",
+        "items": "string"
+      },
+      "doc": "closed reasons of the validator note, fixed order"
+    },
+    {
+      "name": "state",
+      "type": [
+        "null",
+        "string"
+      ]
+    },
+    {
+      "name": "verdict",
+      "type": [
+        "null",
+        "string"
+      ]
+    },
+    {
+      "name": "coveringSiteId",
+      "type": [
+        "null",
+        "string"
+      ]
+    },
+    {
+      "name": "boundaryEsTicks",
+      "type": [
+        "null",
+        "long"
+      ],
+      "doc": "the broken boundary in ES quarter-point ticks, from the admissible level-absorption event"
+    },
+    {
+      "name": "boundaryAgeMs",
+      "type": [
+        "null",
+        "long"
+      ],
+      "doc": "how old that event was at R"
+    },
+    {
+      "name": "priceAtReleaseEsTicks",
+      "type": [
+        "null",
+        "long"
+      ]
+    },
+    {
+      "name": "extensionTicks",
+      "type": [
+        "null",
+        "long"
+      ]
+    },
+    {
+      "name": "lateExtension",
+      "type": "boolean"
+    },
+    {
+      "name": "lateTargetPassed",
+      "type": "boolean"
+    },
+    {
+      "name": "wallEvidence",
+      "type": "string",
+      "doc": "NOT_USABLE:LAYER_B_OFF in this revision"
+    },
+    {
+      "name": "filters",
+      "type": {
+        "type": "array",
+        "items": {
+          "type": "record",
+          "name": "LiquidityValidatorEntry",
+          "doc": "a closed-vocabulary name and its value",
+          "fields": [
+            {
+              "name": "name",
+              "type": "string"
+            },
+            {
+              "name": "value",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "doc": "LG-0, LG-1, LG-2, LG-6, LG-7: TRUE, FALSE or UNCERTAIN(reason)"
+    },
+    {
+      "name": "fakeSuspicion",
+      "type": {
+        "type": "array",
+        "items": "LiquidityValidatorEntry"
+      },
+      "doc": "FK-1 and FK-6 in the same shape; suspicions, never verdicts"
+    },
+    {
+      "name": "fp4",
+      "type": "string",
+      "doc": "footprint row FP-4 result"
+    },
+    {
+      "name": "messageTrustStatus",
+      "type": "string",
+      "doc": "TRUSTED or UNTRUSTED"
+    },
+    {
+      "name": "messageTrustReasons",
+      "type": {
+        "type": "array",
+        "items": "string"
+      }
+    },
+    {
+      "name": "trustByInput",
+      "type": {
+        "type": "array",
+        "items": {
+          "type": "record",
+          "name": "LiquidityValidatorInputTrust",
+          "doc": "UNTRUSTED reasons carried by one input",
+          "fields": [
+            {
+              "name": "input",
+              "type": "string"
+            },
+            {
+              "name": "reasons",
+              "type": {
+                "type": "array",
+                "items": "string"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "scope",
+      "type": "string",
+      "doc": "ENTRY_TIME_EVIDENCE_ONLY"
+    },
+    {
+      "name": "paramsSha256",
+      "type": "string"
+    },
+    {
+      "name": "evaluatorVersion",
+      "type": "string"
+    },
+    {
+      "name": "evaluatedAtWallMs",
+      "type": "long"
+    },
+    {
+      "name": "graceExpired",
+      "type": "boolean",
+      "doc": "the evaluation ran on the timer, not on the watermark"
+    },
+    {
+      "name": "pendingInputs",
+      "type": {
+        "type": "array",
+        "items": "string"
+      },
+      "doc": "inputs whose watermark had not passed R when the evaluation ran (informational)"
+    }
+  ]
+}

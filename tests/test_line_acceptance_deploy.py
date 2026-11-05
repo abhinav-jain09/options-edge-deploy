@@ -315,7 +315,7 @@ class Registered(unittest.TestCase):
         self.assertIn("params.SERVICE == 'line-acceptance'))", register)
         self.assertIn("params.SERVICE == 'line-acceptance' && params.ENVIRONMENT != 'dev'", register)
         stage = text[text.index("stage('Verify line-acceptance topics')"):text.index("stage('Verify market-structure output topics')")]
-        self.assertIn("(params.SERVICE == 'line-acceptance' || params.SERVICE == 'es-liquidity-wall' || params.SERVICE == 'es-liquidity-engine') && !params.DEPLOY_DRY_RUN", stage)
+        self.assertIn("(params.SERVICE == 'line-acceptance' || params.SERVICE == 'es-liquidity-wall' || params.SERVICE == 'es-liquidity-engine' || params.SERVICE == 'liquidity-validator') && !params.DEPLOY_DRY_RUN", stage)
         self.assertIn("params.ENVIRONMENT != 'dev'", stage)
         self.assertIn("scripts/kafka/ensure-line-acceptance-topics.sh", stage)
         self.assertLess(text.index("stage('Register TA-books schemas')"), text.index("stage('Verify line-acceptance topics')"))

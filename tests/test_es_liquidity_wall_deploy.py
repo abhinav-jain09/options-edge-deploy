@@ -287,7 +287,7 @@ class Registered(unittest.TestCase):
         self.assertIn(f"'{SVC}',", text)
         # the barrier shares the line-acceptance stage (the pipeline's CPS method is at the JVM's 64 KB limit; a separate stage failed to compile, build #3006)
         stage = text[text.index("stage('Verify line-acceptance topics')"):text.index("stage('Verify market-structure output topics')")]
-        self.assertIn("(params.SERVICE == 'line-acceptance' || params.SERVICE == 'es-liquidity-wall' || params.SERVICE == 'es-liquidity-engine') && !params.DEPLOY_DRY_RUN", stage)
+        self.assertIn("(params.SERVICE == 'line-acceptance' || params.SERVICE == 'es-liquidity-wall' || params.SERVICE == 'es-liquidity-engine' || params.SERVICE == 'liquidity-validator') && !params.DEPLOY_DRY_RUN", stage)
         self.assertIn("params.ENVIRONMENT != 'dev'", stage)
         self.assertIn("scripts/kafka/ensure-es-liquidity-wall-topics.sh", stage)
         self.assertIn("params.SERVICE == 'es-liquidity-wall'", stage)
