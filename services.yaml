@@ -277,7 +277,7 @@ services:
   - { name: drop-classifier-ref,          managedBy: standalone, sliceGenerated: true, envs: [dev], image: options-edge-drop-classifier,              deployments: [drop-classifier-ref-service] }
   # liquidity-validator: DEV ONLY (envs: [dev]). NEW service: the live, READ-ONLY liquidity validator (design: options-edge-documents design/geometry-trade-rules/LIQUIDITY-VALIDATOR-SERVICE-REQUIREMENT.md). It reads
   # the geometry, level-absorption, aggressor-flow, footprint and raw ES tape topics without a consumer group and publishes research records to three Avro topics futures.liquidity-validator.{evaluations,
-  # data-gaps,daily} (ids 3601-3603, scripts/kafka/schema-id-maps/liquidity-validator.map; schema-manifest family liquidityvalidator). It NEVER trades and no decision path reads its topics.
+  # data-gaps,daily} (ids 3601-3603, scripts/kafka/schema-id-maps/liquidity-validator.map; schema-manifest family liquidityvalidator). It NEVER trades (a requirement and code constraint); this deployment adds no decision consumer of its topics.
   # scripts/kafka/ensure-liquidity-validator-topics.sh is the first-deploy barrier (service-deploy, dev only). Plain consumer loops, no Kafka Streams, no state volume. Single replica only.
   # No Service object; no production or es4 entry, image, topic or overlay exists.
   - { name: liquidity-validator,          managedBy: standalone, sliceGenerated: true, envs: [dev], image: options-edge-liquidity-validator,          deployments: [liquidity-validator-service] }

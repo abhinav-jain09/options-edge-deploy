@@ -372,7 +372,7 @@ class ProductionDeclaresNoTopic(unittest.TestCase):
             self.assertEqual(sorted(x for x in d if x.startswith(P)).__len__(), 6)
             self.assertEqual([x for x in p if x.startswith(P)], [])
             # every declaration that is not line-acceptance's survives; the other dev-only family (es-liquidity-wall, futures.liquidity-wall*) is stripped by its own guard, its own test's business
-            self.assertEqual([x for x in d if not x.startswith(P) and not x.startswith("futures.liquidity-wall") and not x.startswith("es.mbo.")], [x for x in p if not x.startswith(P)])
+            self.assertEqual([x for x in d if not x.startswith(P) and not x.startswith("futures.liquidity-wall") and not x.startswith("es.mbo.") and not x.startswith("futures.liquidity-validator")], [x for x in p if not x.startswith(P)])
 
 
 class NoProductionWiring(unittest.TestCase):

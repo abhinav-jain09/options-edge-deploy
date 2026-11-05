@@ -9,7 +9,7 @@ metadata:
     app.kubernetes.io/part-of: options-edge
 spec:
   # DEV ONLY (services.yaml envs: [dev]). The live READ-ONLY liquidity validator: for every geometry release it publishes what the liquidity inputs said at that instant (research records on three
-  # Avro topics). It NEVER trades, sizes or sends an order; no decision path reads its topics. Design: options-edge-documents design/geometry-trade-rules/LIQUIDITY-VALIDATOR-SERVICE-REQUIREMENT.md.
+  # Avro topics). It NEVER trades, sizes or sends an order (a requirement and code constraint); this deployment adds no decision consumer of its topics. Design: options-edge-documents design/geometry-trade-rules/LIQUIDITY-VALIDATOR-SERVICE-REQUIREMENT.md.
   # SINGLE replica (strategy Recreate): one validator owns the three output topics.
   replicas: 1
   strategy:
@@ -46,8 +46,9 @@ spec:
               value: host.docker.internal:19092
             - name: HEALTH_PORT
               value: "8080"
-            # The five INPUT topics, all read-only, no consumer group, no offset commit. Dev names (verified on the dev broker 2026-11-05): the geometry set is Avro id 2223 on a transactional
-            # producer, level-absorption events 2702, aggressor flow 2701 and footprint bars 2034 are mirrored/dev-local Avro, and the RAW ES tape (NOT .linearized) is JSON on 32 partitions.
+            # The five INPUT topics, all read-only, no consumer group, no offset commit. Dev names and schema ids as OBSERVED on the dev broker on 2026-11-05 (topic describe and record frames): the
+            # geometry set is Avro id 2223 (the producer CODE is transactional; that is not observed on the broker), level-absorption events 2702, aggressor flow 2701 and footprint bars 2034 are
+            # mirrored/dev-local Avro, and the RAW ES tape (NOT .linearized) is JSON on 32 partitions.
             - name: LIQUIDITY_VALIDATOR_GEOMETRY_TOPIC
               value: options.spx.market-structure.geometry
             - name: LIQUIDITY_VALIDATOR_EVENTS_TOPIC
@@ -58,7 +59,7 @@ spec:
               value: es.futures.footprint.bars
             - name: LIQUIDITY_VALIDATOR_TAPE_TOPIC
               value: underlying.es.trades
-            # Live timing (requirement Section 4): an evaluation waits GRACE_MS of wall time after the geometry record was consumed (or fires when every input watermark has passed R).
+            # Live timing (requirement Section 4): an evaluation happens only GRACE_MS of wall time after the geometry record was consumed.
             # GRACE_MS must exceed the producers' hold time; LOOKBACK_MS is the restart rebuild window; PRINT_RING_MS bounds the tape buffer (only the last print by order key at R is needed).
             - name: GRACE_MS
               value: "10000"

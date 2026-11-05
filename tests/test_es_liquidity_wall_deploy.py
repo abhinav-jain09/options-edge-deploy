@@ -187,7 +187,7 @@ class TopicsEnv(unittest.TestCase):
             self.assertEqual(got, self.d, environment)
         prod = declarations(self.VARS, "production")
         ours = lambda tokens: sorted(x for x in tokens if x.startswith(P))                                                      # noqa: E731
-        others = lambda tokens: sorted(x for x in tokens if not x.startswith(P) and not x.startswith("options.spx.line-acceptance") and not x.startswith("es.mbo."))  # noqa: E731
+        others = lambda tokens: sorted(x for x in tokens if not x.startswith(P) and not x.startswith("options.spx.line-acceptance") and not x.startswith("es.mbo.") and not x.startswith("futures.liquidity-validator"))  # noqa: E731
         for v in self.VARS:
             self.assertEqual(ours(prod[v]), [], v)
             # production keeps every other declaration (line-acceptance's own dev-only guard strips its six the same way; that is its test's business)

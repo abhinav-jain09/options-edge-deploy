@@ -189,13 +189,15 @@ class Topics(unittest.TestCase):
             self.assertIsNotNone(re.search(regex, t), f"the pre-market reset must spare {t}")
         self.assertIsNone(re.search(regex, "futures.liquidity-validator.other"))
 
-    def test_dev_and_unset_declare_them_and_an_explicit_production_declares_none(self):
+    def test_dev_and_unset_declare_them_and_every_other_environment_declares_none(self):
         base = declarations(self.VARS)
         self.assertEqual(declarations(self.VARS, "dev"), base)
-        prod = declarations(self.VARS, "production")
-        for v in self.VARS:
-            for t in TOPICS:
-                self.assertFalse(any(x == t or x.startswith(t + ":") or x.startswith(t + "=") for x in prod[v]), f"{v} declares {t} on production")
+        for environment in ("production", "experiment", "es4", "staging"):
+            other = declarations(self.VARS, environment)
+            for v in self.VARS:
+                for t in TOPICS:
+                    self.assertFalse(any(x == t or x.startswith(t + ":") or x.startswith(t + "=") for x in other[v]), f"{v} declares {t} on {environment}")
+            self.assertFalse([x for v in self.VARS for x in other[v] if "liquidity-validator" in x], environment)
 
 
 class Barrier(unittest.TestCase):
@@ -264,7 +266,7 @@ class Schemas(unittest.TestCase):
             e = by[f"{NS}.{n}"]
             self.assertEqual((e["id"], e["version"], e["family"], e["environments"]), (i, 1, "liquidityvalidator", ["dev"]))
             self.assertEqual(e["producers"], [{"service": SVC, "environments": ["dev"]}])
-            self.assertEqual(e["consumers"], [], "no decision path reads the research topics")
+            self.assertEqual(e["consumers"], [], "this deployment adds no decision consumer of the research topics (a requirement constraint, not proved here)")
             snap = ROOT / "schema-manifest/schemas" / e["subject"] / "v1.avsc"
             out = subprocess.run(["java", "-jar", str(JAR), "hash", str(snap)], capture_output=True, text=True, check=True).stdout.strip().splitlines()[-1]
             self.assertEqual(out, e["schemaHash"], n)
