@@ -1,0 +1,5 @@
+# SERVICE SLICE — drop-classifier-ref on DEV. TEMPORARY: the reference side of the G3b parity gate. DEV-ONLY (services.yaml envs: [dev]); removed when G3b passes.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - drop-classifier-ref-deployment.yaml

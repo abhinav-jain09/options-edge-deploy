@@ -99,6 +99,9 @@ pipeline {
       // publishes the seven single-partition Avro topics futures.liquidity-wall.* (ids 3401-3407; barrier below). There is no production overlay for it, so ENVIRONMENT=production fails at the overlay
       // lookup; nothing in this file authorises a production roll. Single replica only.
       'es-liquidity-wall',
+      // es-liquidity-engine (the ES MBO liquidity engine): DEV ONLY, replicas 1; the drop engine creates its own es.drop.* topics, so no barrier yet. drop-classifier-ref: temporary G3b reference, dev only.
+      'es-liquidity-engine',
+      'drop-classifier-ref',
       // stock-gex-close-scheduler: PRODUCTION only — the closing-board SCHEDULE, which now lives
       // inside the batch itself (USER 2026-09-01: "I don't want anything Jenkins-based, it should
       // run based on Spring Batch configuration"). This job DEPLOYS it; nothing here decides when

@@ -269,6 +269,12 @@ services:
   # scripts/kafka/schema-id-maps/es-liquidity-wall.map; schema-manifest family liquiditywall). scripts/kafka/ensure-es-liquidity-wall-topics.sh is the first-deploy barrier (service-deploy, dev only).
   # Streams state on an emptyDir (as zn-gex). Single replica only (Streams app id options-edge-es-liquidity-wall). No Service object; no production or es4 entry, image, topic or overlay exists.
   - { name: es-liquidity-wall,            managedBy: standalone, sliceGenerated: true, envs: [dev], image: options-edge-es-liquidity-wall,            deployments: [es-liquidity-wall-service] }
+  # es-liquidity-engine: DEV ONLY (envs: [dev]). NEW service: the ES MBO liquidity engine. One JVM with a supervisor over (1) the byte-identical drop-classifier engine in ES_TRADES mode (publishes es.drop.*; it
+  # creates its own output topics) and (2) the MBO engine (later phases). Plain consumer loops, no Kafka Streams, no state volume. Single replica only. No Service object; no production or es4 entry exists.
+  - { name: es-liquidity-engine,          managedBy: standalone, sliceGenerated: true, envs: [dev], image: options-edge-es-liquidity-engine,          deployments: [es-liquidity-engine-service] }
+  # drop-classifier-ref: DEV ONLY, TEMPORARY. A second dev deployment of the RETAINED drop-classifier image in ES_TRADES mode on the same dev inputs, writing es.drop.ref.* : the reference side of the
+  # G3b parity gate against es-liquidity-engine (which writes es.drop.*). Removed when G3b passes. Same image as drop-classifier, so DROP_CLASSIFIER_IMAGE pins it.
+  - { name: drop-classifier-ref,          managedBy: standalone, sliceGenerated: true, envs: [dev], image: options-edge-drop-classifier,              deployments: [drop-classifier-ref-service] }
   # stock-gex: SPX-500 single-stock GEX (Databento equity options; NO Kafka). Its image builds in the
   # options-edge-databento-feed repo (Dockerfile.stockgex), like databento-sr3-feed — hence buildJob.
   # DEV-FIRST/on-demand: prod overlay holds it at replicas:0 until the nightly OI-index builder exists.
