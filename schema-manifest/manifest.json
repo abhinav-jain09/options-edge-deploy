@@ -714,6 +714,10 @@
    [
     9007,
     9007
+   ],
+   [
+    3302,
+    3302
    ]
   ],
   "futures": [
@@ -9981,6 +9985,34 @@
    ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
+  },
+  {
+   "kind": "MIRRORED",
+   "subject": "es.rithmic.mbo-value",
+   "version": 1,
+   "id": 3302,
+   "family": "es",
+   "schemaFile": "es.rithmic.mbo-value/v1.avsc",
+   "schemaHash": "5c3d9e5c5f53e7ade5b3cef3e7382876515b0946672ea07b426995c027a600af",
+   "environments": [
+    "dev"
+   ],
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/rithmic/RithmicMboEvent.avsc"
+   },
+   "topics": [
+    {
+     "name": "es.rithmic.mbo",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "pending": true,
+   "retained": true,
+   "retainedReason": "Manifest-first reservation for the new raw MBO contract; no source or producer rollout until activation."
   },
   {
    "kind": "MIRRORED",

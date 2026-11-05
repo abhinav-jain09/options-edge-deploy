@@ -1,0 +1,172 @@
+{
+  "type": "record",
+  "name": "RithmicMboEvent",
+  "namespace": "com.optionsedge.contracts.rithmic",
+  "doc": "Raw ordered SDK DBO callbacks and lifecycle boundaries. No sampling; sequence is collector-local, not an exchange sequence.",
+  "fields": [
+    {
+      "name": "schemaVersion",
+      "type": "int"
+    },
+    {
+      "name": "environment",
+      "type": "string"
+    },
+    {
+      "name": "exchange",
+      "type": "string"
+    },
+    {
+      "name": "contract",
+      "type": "string"
+    },
+    {
+      "name": "streamId",
+      "type": "string"
+    },
+    {
+      "name": "sequence",
+      "type": "long"
+    },
+    {
+      "name": "receivedAtMs",
+      "type": "long"
+    },
+    {
+      "name": "emittedAtMs",
+      "type": "long"
+    },
+    {
+      "name": "eventType",
+      "type": "string"
+    },
+    {
+      "name": "sdkType",
+      "type": [
+        "null",
+        "int"
+      ],
+      "default": null
+    },
+    {
+      "name": "updateType",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "orderId",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "priority",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "side",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "esPriceTicks",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    },
+    {
+      "name": "previousEsPriceTicks",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    },
+    {
+      "name": "quantity",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    },
+    {
+      "name": "sourceSeconds",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    },
+    {
+      "name": "sourceMicroseconds",
+      "type": [
+        "null",
+        "int"
+      ],
+      "default": null
+    },
+    {
+      "name": "sourceNanoseconds",
+      "type": [
+        "null",
+        "int"
+      ],
+      "default": null
+    },
+    {
+      "name": "jopSeconds",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    },
+    {
+      "name": "jopNanoseconds",
+      "type": [
+        "null",
+        "int"
+      ],
+      "default": null
+    },
+    {
+      "name": "sdkSeconds",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    },
+    {
+      "name": "sdkMicroseconds",
+      "type": [
+        "null",
+        "int"
+      ],
+      "default": null
+    },
+    {
+      "name": "responseCode",
+      "type": [
+        "null",
+        "int"
+      ],
+      "default": null
+    }
+  ]
+}
