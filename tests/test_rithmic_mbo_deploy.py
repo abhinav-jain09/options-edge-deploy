@@ -23,3 +23,21 @@ class RithmicMboDeployTest(unittest.TestCase):
   cleanup=(ROOT/'scripts/es4/cleanup-es4.sh').read_text()
   self.assertIn('RithmicMboEvent.avsc',cleanup[:cleanup.index('# ------------------------------------------------------------ 1.')])
   self.assertIn('es.rithmic.mbo-value|3302|RithmicMboEvent.avsc|1',(ROOT/'scripts/kafka/schema-id-maps/rithmic-depth.map').read_text())
+
+ def test_production_fleet_lists_exclude_mbo_but_keep_existing_depth(self):
+  import os
+  script='source scripts/kafka/topics.env; printf "%s\\n%s\\n%s\\n" "$OPTIONS_EDGE_TOPICS" "$OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES" "$OPTIONS_EDGE_ES4_TOPICS"'
+  out=subprocess.check_output(['bash','-c',script],cwd=ROOT,env={**os.environ,'ENVIRONMENT':'production'},text=True).splitlines()
+  self.assertNotIn('es.rithmic.mbo:1',out[0].split());self.assertIn('es.rithmic.depth:1',out[0].split())
+  self.assertNotIn('es.rithmic.mbo=43200000',out[1].split());self.assertIn('es.rithmic.depth=43200000',out[1].split())
+  self.assertIn('es.rithmic.mbo:1',out[2].split(),'ES4 source remains declared independently of fleet target')
+
+ def test_schema_governance_covers_fixed_id_and_dev_only_byte_mirror(self):
+  import json
+  manifest=json.loads((ROOT/'schema-manifest/manifest.json').read_text())
+  e=next(e for e in manifest['entries'] if e.get('subject')=='es.rithmic.mbo-value')
+  self.assertEqual(e['id'],3302);self.assertEqual(e['version'],1);self.assertEqual(set(e['environments']),{'dev','es4'});self.assertFalse(e.get('pending',False))
+  self.assertEqual(e['source'],{'kind':'FILE','repo':'contracts','path':'schemas/rithmic/RithmicMboEvent.avsc'})
+  self.assertTrue((ROOT/'schema-manifest/schemas'/e['schemaFile']).is_file())
+  mirrors=[m for m in manifest['activeMirrors'] if 'es.rithmic.mbo' in m['topics']]
+  self.assertEqual(len(mirrors),1);self.assertEqual((mirrors[0]['from'],mirrors[0]['to'],mirrors[0]['transport']),('es4','dev','bytes'))

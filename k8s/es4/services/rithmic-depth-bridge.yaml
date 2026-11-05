@@ -1,4 +1,4 @@
-# ES4-only Rithmic Test collector and identity Kafka mirrors. Managed by es4-deploy.
+# ES4-only Rithmic market-data collector and identity Kafka mirrors. Managed by es4-deploy.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

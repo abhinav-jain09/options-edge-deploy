@@ -714,6 +714,10 @@
    [
     9007,
     9007
+   ],
+   [
+    3302,
+    3302
    ]
   ],
   "futures": [
@@ -9984,6 +9988,55 @@
   },
   {
    "kind": "MIRRORED",
+   "subject": "es.rithmic.mbo-value",
+   "version": 1,
+   "id": 3302,
+   "family": "es",
+   "schemaFile": "es.rithmic.mbo-value/v1.avsc",
+   "schemaHash": "5c3d9e5c5f53e7ade5b3cef3e7382876515b0946672ea07b426995c027a600af",
+   "environments": [
+    "dev",
+    "es4"
+   ],
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/rithmic/RithmicMboEvent.avsc"
+   },
+   "topics": [
+    {
+     "name": "es.rithmic.mbo",
+     "kind": "data"
+    }
+   ],
+   "producers": [
+    {
+     "service": "rithmic-depth-bridge",
+     "environments": [
+      "es4"
+     ]
+    },
+    {
+     "service": "rithmic-mbo-mirror-dev",
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "rithmic-mbo-mirror-dev",
+     "accepts": [
+      3302
+     ],
+     "environments": [
+      "es4"
+     ]
+    }
+   ]
+  },
+  {
+   "kind": "MIRRORED",
    "baseline": true,
    "subject": "futures.level-absorption.closures-value",
    "version": 1,
@@ -10768,6 +10821,18 @@
    ],
    "subjects": [],
    "unframed": true
+  },
+  {
+   "job": "Jenkinsfile.es4-deploy",
+   "from": "es4",
+   "to": "dev",
+   "transport": "bytes",
+   "topics": [
+    "es.rithmic.mbo"
+   ],
+   "subjects": [
+    "es.rithmic.mbo-value"
+   ]
   },
   {
    "job": "Jenkinsfile.opra-definition-enumeration-mirror",
