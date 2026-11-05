@@ -1,0 +1,7 @@
+# Fixed schema ids for es-liquidity-engine-service (the ES MBO liquidity engine; NEW, dev only). Contracts options-edge-contracts 0.70.0 (schemas-registry/esmbo):
+# ids 3502 and 3504, version 1, namespace com.optionsedge.contracts.esmbo, subject = the record full name (RecordNameStrategy), compatibility FULL. One record TYPE per topic:
+# es.mbo.level-flow 3502, es.mbo.health 3504. Ids 3501, 3503 and 3505 of the design are free (closure, event, snapshot records are later pull requests). The service writes with
+# auto.register.schemas=false (src/main/resources/schema-requirements.json names these ids and hashes). Dev only; nothing is registered on production or es4.
+# File column: relative to the contracts checkout's `schemas-registry/esmbo` directory (SCHEMAS_DIR).
+com.optionsedge.contracts.esmbo.EsMboLevelFlow|3502|EsMboLevelFlow.avsc
+com.optionsedge.contracts.esmbo.EsMboHealth|3504|EsMboHealth.avsc

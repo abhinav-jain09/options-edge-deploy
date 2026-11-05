@@ -1,0 +1,130 @@
+{
+  "type": "record",
+  "name": "EsMboLevelFlow",
+  "namespace": "com.optionsedge.contracts.esmbo",
+  "doc": "es-liquidity-engine G 7.2 / 5.5: order-level flow of one (side, tick) level in one 1 s bucket, PROVISIONAL (before tape attribution). Quantities in contracts, ticks in ES quarter-point ticks, ratios in thousandths.",
+  "fields": [
+    {
+      "name": "schemaVersion",
+      "type": "int",
+      "doc": "1 for this revision"
+    },
+    {
+      "name": "environment",
+      "type": "string",
+      "doc": "the environment literal of the admitted MBO records, e.g. Rithmic Paper Trading"
+    },
+    {
+      "name": "contract",
+      "type": "string",
+      "doc": "the contract table's row for the trade date, e.g. ESZ6"
+    },
+    {
+      "name": "bucketEnd",
+      "type": "long",
+      "doc": "bucket end on the collector clock (receivedAtMs), epoch ms; 1000 ms grid, bucket (end-1000, end]"
+    },
+    {
+      "name": "configFingerprint",
+      "type": "string",
+      "doc": "SHA-256 over the sorted name=value configuration lines plus the engine's logic version"
+    },
+    {
+      "name": "side",
+      "type": "string",
+      "doc": "B (bid) or S (ask)"
+    },
+    {
+      "name": "tick",
+      "type": "long",
+      "doc": "ES quarter-point price ticks"
+    },
+    {
+      "name": "attributionStatus",
+      "type": "string",
+      "doc": "PROVISIONAL (the only value before the tape stage exists)"
+    },
+    {
+      "name": "epochStatus",
+      "type": "string",
+      "doc": "LIVE, DEGRADED, SNAPSHOTTING, UNAVAILABLE or AWAITING_IMAGE at the bucket close"
+    },
+    {
+      "name": "availability",
+      "type": "string",
+      "doc": "AVAILABLE, or UNAVAILABLE when the epoch is not LIVE (the quantities are then not published as facts)"
+    },
+    {
+      "name": "addCount",
+      "type": "long",
+      "doc": "orders added at this level in the bucket"
+    },
+    {
+      "name": "addQty",
+      "type": "long",
+      "doc": "contracts added by those orders"
+    },
+    {
+      "name": "reductionQty",
+      "type": "long",
+      "doc": "gross contracts removed (size reductions plus deletes), cause not attributed"
+    },
+    {
+      "name": "increaseQty",
+      "type": "long",
+      "doc": "contracts added to existing orders"
+    },
+    {
+      "name": "moveInQty",
+      "type": "long",
+      "doc": "contracts moved IN to this level (quantity after the move)"
+    },
+    {
+      "name": "moveOutQty",
+      "type": "long",
+      "doc": "contracts moved OUT of this level (quantity before the move)"
+    },
+    {
+      "name": "restingQty",
+      "type": "long",
+      "doc": "resting contracts at the bucket close"
+    },
+    {
+      "name": "orderCount",
+      "type": "long",
+      "doc": "resting orders at the bucket close"
+    },
+    {
+      "name": "maxOrderQty",
+      "type": "long",
+      "doc": "largest resting order at the bucket close"
+    },
+    {
+      "name": "meanOrderQtyMilli",
+      "type": [
+        "null",
+        "long"
+      ],
+      "doc": "mean resting order size in thousandths (restingQty*1000/orderCount); null when the level is empty",
+      "default": null
+    },
+    {
+      "name": "largestShareMilli",
+      "type": [
+        "null",
+        "long"
+      ],
+      "doc": "maxOrderQty*1000/restingQty; null when the level is empty",
+      "default": null
+    },
+    {
+      "name": "oldestAgeMs",
+      "type": [
+        "null",
+        "long"
+      ],
+      "doc": "bucketEnd minus the birth receivedAtMs of the oldest resting order; null when the level is empty",
+      "default": null
+    }
+  ]
+}

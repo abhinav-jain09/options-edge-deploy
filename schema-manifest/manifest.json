@@ -1037,6 +1037,16 @@
     2062,
     2062
    ]
+  ],
+  "esmbo": [
+   [
+    3502,
+    3502
+   ],
+   [
+    3504,
+    3504
+   ]
   ]
  },
  "declaredByManifest": [
@@ -5505,6 +5515,74 @@
    "consumers": [],
    "retained": true,
    "retainedReason": "curated, not baseline: es-liquidity-wall-service (NEW, dev only; contracts 0.66.0 schemas-registry/liquiditywall) writes it on futures.liquidity-wall.voice under RecordNameStrategy with auto.register.schemas=false (its schema-requirements.json names this id and hash). Dev only; nothing is registered on production or es4."
+  },
+  {
+   "kind": "MIRRORED",
+   "subject": "com.optionsedge.contracts.esmbo.EsMboLevelFlow",
+   "version": 1,
+   "id": 3502,
+   "family": "esmbo",
+   "schemaFile": "com.optionsedge.contracts.esmbo.EsMboLevelFlow/v1.avsc",
+   "schemaHash": "ce9a4475cc08314f9ab328a0de9e41843aaf72d6c79c82f5869ea69ef4134ffd",
+   "environments": [
+    "dev"
+   ],
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas-registry/esmbo/EsMboLevelFlow.avsc"
+   },
+   "topics": [
+    {
+     "name": "es.mbo.level-flow",
+     "kind": "data"
+    }
+   ],
+   "producers": [
+    {
+     "service": "es-liquidity-engine",
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "curated, not baseline: es-liquidity-engine-service (NEW, dev only; contracts 0.70.0 schemas-registry/esmbo) writes it on es.mbo.level-flow under RecordNameStrategy with auto.register.schemas=false (its schema-requirements.json names this id and hash). Dev only; nothing is registered on production or es4."
+  },
+  {
+   "kind": "MIRRORED",
+   "subject": "com.optionsedge.contracts.esmbo.EsMboHealth",
+   "version": 1,
+   "id": 3504,
+   "family": "esmbo",
+   "schemaFile": "com.optionsedge.contracts.esmbo.EsMboHealth/v1.avsc",
+   "schemaHash": "938fa4d6631df496e7244ad9b76a0c5961c7c2ab5e05a0c0ca66b65def580101",
+   "environments": [
+    "dev"
+   ],
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas-registry/esmbo/EsMboHealth.avsc"
+   },
+   "topics": [
+    {
+     "name": "es.mbo.health",
+     "kind": "data"
+    }
+   ],
+   "producers": [
+    {
+     "service": "es-liquidity-engine",
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "curated, not baseline: es-liquidity-engine-service (NEW, dev only; contracts 0.70.0 schemas-registry/esmbo) writes it on es.mbo.health under RecordNameStrategy with auto.register.schemas=false (its schema-requirements.json names this id and hash). Dev only; nothing is registered on production or es4."
   },
   {
    "kind": "MIRRORED",
@@ -10032,6 +10110,15 @@
      ],
      "environments": [
       "es4"
+     ]
+    },
+    {
+     "service": "es-liquidity-engine",
+     "accepts": [
+      3302
+     ],
+     "environments": [
+      "dev"
      ]
     }
    ]

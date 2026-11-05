@@ -1,0 +1,145 @@
+{
+  "type": "record",
+  "name": "EsMboHealth",
+  "namespace": "com.optionsedge.contracts.esmbo",
+  "doc": "es-liquidity-engine G 7.2: the MBO engine's health, once per closed bucket",
+  "fields": [
+    {
+      "name": "schemaVersion",
+      "type": "int",
+      "doc": "1 for this revision"
+    },
+    {
+      "name": "environment",
+      "type": "string",
+      "doc": "the environment literal of the admitted MBO records, e.g. Rithmic Paper Trading"
+    },
+    {
+      "name": "contract",
+      "type": "string",
+      "doc": "the contract table's row for the trade date, e.g. ESZ6"
+    },
+    {
+      "name": "bucketEnd",
+      "type": "long",
+      "doc": "bucket end on the collector clock (receivedAtMs), epoch ms; 1000 ms grid, bucket (end-1000, end]"
+    },
+    {
+      "name": "configFingerprint",
+      "type": "string",
+      "doc": "SHA-256 over the sorted name=value configuration lines plus the engine's logic version"
+    },
+    {
+      "name": "epochId",
+      "type": "long",
+      "doc": "increments at every START or SNAPSHOT_BEGIN"
+    },
+    {
+      "name": "epochStatus",
+      "type": "string",
+      "doc": "AWAITING_IMAGE, SNAPSHOTTING, LIVE, DEGRADED or UNAVAILABLE"
+    },
+    {
+      "name": "degradedReason",
+      "type": [
+        "null",
+        "string"
+      ],
+      "doc": "the reason that made the epoch DEGRADED (KNOWN_ORDER_NEW, UNKNOWN_ORDER, PREVIOUS_TICK_MISMATCH, D_QTY_MISMATCH, SEQUENCE_GAP); null otherwise",
+      "default": null
+    },
+    {
+      "name": "admittedTotal",
+      "type": "long",
+      "doc": "records admitted since the process started"
+    },
+    {
+      "name": "refusedByReason",
+      "type": {
+        "type": "array",
+        "items": {
+          "type": "record",
+          "name": "EsMboRefusal",
+          "namespace": "com.optionsedge.contracts.esmbo",
+          "doc": "one admission refusal reason and its running count",
+          "fields": [
+            {
+              "name": "reason",
+              "type": "string",
+              "doc": "SCHEMA_VERSION, SOURCE, ENVIRONMENT, CONTRACT, CLOCK, STALE_STREAM, SEQUENCE_REGRESSION, TIME_REGRESSION or MALFORMED"
+            },
+            {
+              "name": "count",
+              "type": "long",
+              "doc": "records refused for this reason since the process started"
+            }
+          ]
+        }
+      },
+      "doc": "refusals per reason, ascending by reason; empty when none"
+    },
+    {
+      "name": "sequenceGaps",
+      "type": "long",
+      "doc": "sequence gaps seen on the current stream"
+    },
+    {
+      "name": "streamChanges",
+      "type": "long",
+      "doc": "stream id changes admitted"
+    },
+    {
+      "name": "bookOrderCount",
+      "type": "long",
+      "doc": "orders in the book"
+    },
+    {
+      "name": "bookBidLevels",
+      "type": "long",
+      "doc": "bid levels in the book"
+    },
+    {
+      "name": "bookAskLevels",
+      "type": "long",
+      "doc": "ask levels in the book"
+    },
+    {
+      "name": "bestBidTick",
+      "type": [
+        "null",
+        "long"
+      ],
+      "doc": "best bid, null when no bid",
+      "default": null
+    },
+    {
+      "name": "bestAskTick",
+      "type": [
+        "null",
+        "long"
+      ],
+      "doc": "best ask, null when no ask",
+      "default": null
+    },
+    {
+      "name": "lastReceivedAtMs",
+      "type": "long",
+      "doc": "book clock: receivedAtMs of the latest admitted record"
+    },
+    {
+      "name": "bucketsClosed",
+      "type": "long",
+      "doc": "buckets closed since the process started"
+    },
+    {
+      "name": "bucketsDegraded",
+      "type": "long",
+      "doc": "buckets closed by the wall-clock timer instead of the book clock"
+    },
+    {
+      "name": "gapBucketsSkipped",
+      "type": "long",
+      "doc": "buckets skipped because the gap exceeded the maximum age"
+    }
+  ]
+}
