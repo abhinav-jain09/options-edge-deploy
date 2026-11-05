@@ -5702,7 +5702,7 @@
    "id": 3601,
    "family": "liquidityvalidator",
    "schemaFile": "com.optionsedge.contracts.liquidityvalidator.LiquidityValidatorEvaluation/v1.avsc",
-   "schemaHash": "f0e3983abd3ecabea934e88b5d5a56753b7979e4788171ece9ef254049a53109",
+   "schemaHash": "63417b91cc89fb021f4dc35547074073f92da2b3e13b8f4fe3e6425559918c3e",
    "environments": [
     "dev"
    ],
@@ -5770,7 +5770,7 @@
    "id": 3603,
    "family": "liquidityvalidator",
    "schemaFile": "com.optionsedge.contracts.liquidityvalidator.LiquidityValidatorDaily/v1.avsc",
-   "schemaHash": "67133b02ac0e888719f2358d306d06d9b40735c99fa93e1ad51096f3e55457a3",
+   "schemaHash": "4cca96308c1444922c4ee123c358ff920cc4b553afddf3c41885b0d5de4721e2",
    "environments": [
     "dev"
    ],

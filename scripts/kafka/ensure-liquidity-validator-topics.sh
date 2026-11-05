@@ -3,8 +3,8 @@
 # ensure-es-liquidity-engine-topics.sh). DEV ONLY: the service renders on dev alone (services.yaml envs [dev]); refuses to run unless ENVIRONMENT is exactly "dev".
 #
 #   NO BROKER-WIDE CHANGE. The shapes are the ones scripts/kafka/topics.env declares (one partition each, exact):
-#   futures.liquidity-validator.evaluations  1 partition, delete,  retention.ms EXACTLY -1, retention.bytes EXACTLY 268435456 (256 MiB cap, a FIRST cap pending a measured day)
-#   futures.liquidity-validator.data-gaps    1 partition, delete,  retention.ms EXACTLY -1, retention.bytes EXACTLY 134217728 (128 MiB cap, a FIRST cap pending a measured day)
+#   futures.liquidity-validator.evaluations  1 partition, compact, retention.ms EXACTLY -1, retention.bytes EXACTLY -1 (pure compact)
+#   futures.liquidity-validator.data-gaps    1 partition, compact, retention.ms EXACTLY -1, retention.bytes EXACTLY -1 (pure compact)
 #   futures.liquidity-validator.daily        1 partition, compact, retention.ms EXACTLY -1, retention.bytes EXACTLY -1 (pure compact)
 # An existing topic is never recreated, altered or shrunk: any difference fails closed. The five INPUT topics belong to other owners and are not created here.
 # dev-cleanup.sh does NOT run this barrier: its topic pass recreates the shapes declared in scripts/kafka/topics.env.
@@ -18,8 +18,6 @@ fi
 RF="${KAFKA_TOPIC_REPLICATION_FACTOR:-1}"
 MIN_RF="${LIQUIDITY_VALIDATOR_MIN_REPLICATION_FACTOR:-1}"
 MIN_ISR="${LIQUIDITY_VALIDATOR_MIN_INSYNC_REPLICAS:-1}"
-EVALUATIONS_BYTES=268435456
-GAPS_BYTES=134217728
 kt() { kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" "$@"; }
 kc() { kafka-configs --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" "$@"; }
 HERE="$(dirname "${BASH_SOURCE[0]}")"
@@ -54,7 +52,7 @@ check_retention_bytes() { # <topic> <exact retention.bytes>
   echo "ok: '$topic' — retention.bytes=$bytes"
 }
 
-# The evaluations and data-gaps topics carry a DECLARED retention.bytes (the cap), which the shared routine does not create. It is created here WITH it, the way ensure-level-absorption-topics.sh creates
+# All three topics are pure compact: retention.bytes (-1) is not part of the shared routine's contract, so it is created and compared here. It is created here WITH it, the way ensure-level-absorption-topics.sh creates
 # its events topic, then verified by the shared routine with create-if-absent=no (so it can never create one at the default shape) and its retention.bytes compared exactly.
 ensure_with_bytes() { # <topic> <cleanup.policy> <retention.ms> <retention.bytes>
   local topic="$1" policy="$2" ms="$3" bytes="$4" out
@@ -72,8 +70,8 @@ ensure_with_bytes() { # <topic> <cleanup.policy> <retention.ms> <retention.bytes
 }
 
 rc=0
-ensure_with_bytes "$EVALUATIONS" delete -1 "$EVALUATIONS_BYTES" || rc=1
-ensure_with_bytes "$GAPS" delete -1 "$GAPS_BYTES" || rc=1
+ensure_with_bytes "$EVALUATIONS" compact -1 -1 || rc=1
+ensure_with_bytes "$GAPS" compact -1 -1 || rc=1
 ensure_with_bytes "$DAILY" compact -1 -1 || rc=1
 if [ "$rc" -ne 0 ]; then
   echo "=== ensure-liquidity-validator-topics FAILED - the liquidity validator must not publish ==="

@@ -22,7 +22,6 @@ BARRIER = ROOT / "scripts/kafka/ensure-liquidity-validator-topics.sh"
 SVC = "liquidity-validator"
 EVALUATIONS, GAPS, DAILY = "futures.liquidity-validator.evaluations", "futures.liquidity-validator.data-gaps", "futures.liquidity-validator.daily"
 TOPICS = (EVALUATIONS, GAPS, DAILY)
-EVAL_CAP, GAP_CAP = "268435456", "134217728"
 JAR = ROOT / "tools/schema-governance/schema-governance-tool.jar"
 NS = "com.optionsedge.contracts.liquidityvalidator"
 IDS = {"LiquidityValidatorEvaluation": 3601, "LiquidityValidatorDataGap": 3602, "LiquidityValidatorDaily": 3603}
@@ -162,26 +161,23 @@ def run_barrier(topics, environment="dev"):
 
 
 def right_topics():
-    return {EVALUATIONS: shaped("delete", "-1", EVAL_CAP), GAPS: shaped("delete", "-1", GAP_CAP), DAILY: shaped("compact", "-1", "-1")}
+    return {t: shaped("compact", "-1", "-1") for t in TOPICS}
 
 
 class Topics(unittest.TestCase):
     VARS = ["OPTIONS_EDGE_TOPICS", "OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES", "OPTIONS_EDGE_TOPIC_RETENTION_BYTES_OVERRIDES", "OPTIONS_EDGE_EXACT_PARTITION_TOPICS",
             "OPTIONS_EDGE_PURE_COMPACT_TOPICS", "OPTIONS_EDGE_ES4_TOPICS", "OPTIONS_EDGE_RESET_PRESERVED_TOPICS", "OPTIONS_EDGE_RESET_REBUILDABLE_TOPICS"]
 
-    def test_the_three_topics_are_declared_one_partition_exact_with_the_declared_retention_and_bytes(self):
+    def test_the_three_topics_are_declared_one_partition_exact_pure_compact_with_no_byte_cap(self):
         d = declarations(self.VARS)
         retention = dict(x.split("=", 1) for x in d["OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES"] if "=" in x)
         bytes_ = dict(x.split("=", 1) for x in d["OPTIONS_EDGE_TOPIC_RETENTION_BYTES_OVERRIDES"] if "=" in x)
         for t in TOPICS:
             self.assertIn(f"{t}:1", d["OPTIONS_EDGE_TOPICS"])
             self.assertIn(t, d["OPTIONS_EDGE_EXACT_PARTITION_TOPICS"])
-            self.assertEqual(retention[t], "-1", t)
+            self.assertIn(t, d["OPTIONS_EDGE_PURE_COMPACT_TOPICS"], t)
+            self.assertEqual((retention[t], bytes_[t]), ("-1", "-1"), t)
             self.assertNotIn(t, d["OPTIONS_EDGE_ES4_TOPICS"])
-        self.assertEqual((bytes_[EVALUATIONS], bytes_[GAPS], bytes_[DAILY]), (EVAL_CAP, GAP_CAP, "-1"))
-        self.assertIn(DAILY, d["OPTIONS_EDGE_PURE_COMPACT_TOPICS"])
-        self.assertNotIn(EVALUATIONS, d["OPTIONS_EDGE_PURE_COMPACT_TOPICS"])
-        self.assertNotIn(GAPS, d["OPTIONS_EDGE_PURE_COMPACT_TOPICS"])
 
     def test_every_retention_minus_one_topic_has_exactly_one_reset_class_and_the_premarket_reset_spares_all_three(self):
         d = declarations(self.VARS)
@@ -208,9 +204,9 @@ class Barrier(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         self.assertEqual([c for c in calls if "--entity-type brokers" in c or "--entity-default" in c], [], "no broker-wide change")
         self.assertFalse(any("--alter" in c or "--delete" in c for c in calls))
-        for t, policy, b in ((EVALUATIONS, "delete", EVAL_CAP), (GAPS, "delete", GAP_CAP), (DAILY, "compact", "-1")):
+        for t in TOPICS:
             d = state["topics"][t]
-            self.assertEqual((d["partitions"], d["configs"]["cleanup.policy"], d["configs"]["retention.ms"], d["configs"]["retention.bytes"]), (1, policy, "-1", b), t)
+            self.assertEqual((d["partitions"], d["configs"]["cleanup.policy"], d["configs"]["retention.ms"], d["configs"]["retention.bytes"]), (1, "compact", "-1", "-1"), t)
         self.assertIn("=== ensure-liquidity-validator-topics OK ===", out)
 
     def test_it_is_dev_only_and_fails_closed_before_touching_anything(self):
@@ -228,21 +224,13 @@ class Barrier(unittest.TestCase):
         self.assertFalse(any("--create" in c or "--delete" in c or "--alter" in c for c in calls))
 
     def test_every_difference_fails_closed_names_the_topic_and_alters_nothing(self):
-        cases = {
-            "evaluations finite retention": (EVALUATIONS, lambda d: d["configs"].update({"retention.ms": "86400000"})),
-            "evaluations compacted": (EVALUATIONS, lambda d: d["configs"].update({"cleanup.policy": "compact"})),
-            "evaluations uncapped": (EVALUATIONS, lambda d: d["configs"].update({"retention.bytes": "-1"})),
-            "evaluations another cap": (EVALUATIONS, lambda d: d["configs"].update({"retention.bytes": GAP_CAP})),
-            "evaluations 4 partitions": (EVALUATIONS, lambda d: d.update(partitions=4)),
-            "gaps finite retention": (GAPS, lambda d: d["configs"].update({"retention.ms": "604800000"})),
-            "gaps uncapped": (GAPS, lambda d: d["configs"].update({"retention.bytes": "-1"})),
-            "gaps another cap": (GAPS, lambda d: d["configs"].update({"retention.bytes": EVAL_CAP})),
-            "gaps 32 partitions": (GAPS, lambda d: d.update(partitions=32)),
-            "daily delete": (DAILY, lambda d: d["configs"].update({"cleanup.policy": "delete"})),
-            "daily finite retention": (DAILY, lambda d: d["configs"].update({"retention.ms": "86400000"})),
-            "daily byte-capped": (DAILY, lambda d: d["configs"].update({"retention.bytes": EVAL_CAP})),
-            "daily 4 partitions": (DAILY, lambda d: d.update(partitions=4)),
-        }
+        cases = {}
+        for name, t in (("evaluations", EVALUATIONS), ("gaps", GAPS), ("daily", DAILY)):
+            cases[f"{name} delete policy"] = (t, lambda d: d["configs"].update({"cleanup.policy": "delete"}))
+            cases[f"{name} finite retention"] = (t, lambda d: d["configs"].update({"retention.ms": "86400000"}))
+            cases[f"{name} byte-capped"] = (t, lambda d: d["configs"].update({"retention.bytes": "268435456"}))
+            cases[f"{name} 4 partitions"] = (t, lambda d: d.update(partitions=4))
+            cases[f"{name} compact,delete"] = (t, lambda d: d["configs"].update({"cleanup.policy": "compact,delete"}))
         for label, (topic, mutate) in cases.items():
             existing = right_topics()
             mutate(existing[topic])

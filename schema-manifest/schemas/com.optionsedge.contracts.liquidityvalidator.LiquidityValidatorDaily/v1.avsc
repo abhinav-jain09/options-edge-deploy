@@ -113,8 +113,14 @@
       "doc": "undecodable records per input topic"
     },
     {
-      "name": "graceExpired",
-      "type": "long"
+      "name": "outputFailures",
+      "type": "long",
+      "doc": "output sends that failed after the bounded retries"
+    },
+    {
+      "name": "overflowEvents",
+      "type": "long",
+      "doc": "times a bounded queue overflowed and publishing stopped"
     },
     {
       "name": "paramsSha256",
