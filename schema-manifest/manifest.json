@@ -5793,7 +5793,17 @@
      ]
     }
    ],
-   "consumers": [],
+   "consumers": [
+    {
+     "service": "liquidity-validator",
+     "accepts": [
+      3603
+     ],
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "curated, not baseline: liquidity-validator-service (NEW, dev only; contracts 0.73.0 schemas-registry/liquidityvalidator) writes it on futures.liquidity-validator.daily under RecordNameStrategy with auto.register.schemas=false (its schema-requirements.json names this id and hash). A research record; this deployment adds no decision consumer of it (a requirement constraint, not proved by the manifest). Dev only; nothing is registered on production or es4."
   },
