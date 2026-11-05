@@ -2826,6 +2826,15 @@
       "dev",
       "prod"
      ]
+    },
+    {
+     "service": "es-liquidity-engine",
+     "accepts": [
+      3007
+     ],
+     "environments": [
+      "dev"
+     ]
     }
    ],
    "retained": true,
