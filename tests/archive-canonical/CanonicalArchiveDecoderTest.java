@@ -79,10 +79,10 @@ public class CanonicalArchiveDecoderTest {
                 "context-tape.direction.ledger",CvdRelatedSchemas.directionLedger(),
                 RithmicSchemas.RAW_TOPIC,RithmicSchemas.FRAME,"futures.liquidity-wall.closures",LiquidityWallSchemas.CLOSURE.schema(),
                 RithmicMboSchemas.TOPIC,RithmicMboSchemas.EVENT);
-        // The dev depth set's two Avro members carry FIXED registry ids (RithmicDepthFrame 3301 under
-        // TopicNameStrategy, LiquidityWallClosure 3401 under RecordNameStrategy), and the decoder checks the frame's
+        // The dev depth set's three Avro members carry FIXED registry ids (RithmicDepthFrame 3301 and
+        // RithmicMboEvent 3302 under TopicNameStrategy, LiquidityWallClosure 3401 under RecordNameStrategy), and the decoder checks the frame's
         // id against them before decoding: the mock registry must therefore hold them under those ids, and a
-        // JSON value — accepted as retained JSON on the five roll-forward bindings — is refused on these two.
+        // JSON value — accepted as retained JSON on the five roll-forward bindings — is refused on these three.
         var fixedIds=Map.of(RithmicSchemas.RAW_TOPIC,3301,"futures.liquidity-wall.closures",LiquidityWallSchemas.CLOSURE.id(),
                 RithmicMboSchemas.TOPIC,RithmicMboSchemas.SCHEMA_ID);
         // The closure is registered under its RecordNameStrategy subject as production does, AND under the

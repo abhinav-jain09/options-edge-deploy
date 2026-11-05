@@ -3,8 +3,8 @@
 ES Level Absorption Requirements section 9 (document A, capture items 1-6) and ES Book Liquidity Walls
 Requirements rev 11 section 8 (document D) specify: the set OE_DEPTH_TOPICS_dev in oe-topics.env, declared
 and validated by oe-archive-kafka.sh exactly as OE_ES4_TOPICS is and read through the dedicated invocation
-ENV=dev TOPICS="$OE_DEPTH_TOPICS_dev"; es.rithmic.depth and futures.liquidity-wall.closures canonical Avro
-(CanonicalArchiveDecoder bindings under ids 3301 and 3401); underlying.es.trades.linearized committed-read
+ENV=dev TOPICS="$OE_DEPTH_TOPICS_dev"; es.rithmic.depth, futures.liquidity-wall.closures and (2026-11-05) es.rithmic.mbo
+canonical Avro (CanonicalArchiveDecoder bindings under ids 3301, 3401 and 3302); underlying.es.trades.linearized committed-read
 and strict; a launchd agent at 02:00, 08:00, 14:00 and 20:00 ET; dev only.
 """
 import os

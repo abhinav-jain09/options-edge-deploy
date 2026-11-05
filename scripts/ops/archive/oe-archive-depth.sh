@@ -19,7 +19,7 @@
 #
 # WHAT THE ARCHIVER DOES WITH THEM (oe-archive-kafka.sh): es.rithmic.depth, es.rithmic.mbo and futures.liquidity-wall.closures
 # are OE_CANONICAL_ARCHIVE_TOPICS, read committed through CanonicalArchiveDecoder.java under their released
-# schemas (RithmicDepthFrame id 3301, LiquidityWallClosure id 3401; a frame under any other id fails the capture
+# schemas (RithmicDepthFrame id 3301, RithmicMboEvent id 3302, LiquidityWallClosure id 3401; a frame under any other id fails the capture
 # with the checkpoint untouched); underlying.es.trades.linearized is a committed-read, STRICT topic (an absent
 # tape is a FAILED capture, never a quiet SKIP). The canonical path needs the JDK 21+ helper jar and the
 # contracts jar beside the archiver — install-dev-mac-depth-archive.sh refuses to install without them.

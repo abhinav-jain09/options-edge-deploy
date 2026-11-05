@@ -26,7 +26,7 @@ done
 [ -x "$INST" ] || note "$INST is not executable, so the documented install command would not run"
 [ -x "$WRAP" ] || note "$WRAP is not executable"
 
-# 1. THE SET: exactly the three members document D section 8 names, defined once, in the policy file.
+# 1. THE SET: exactly the four members (the three of document D section 8 plus es.rithmic.mbo, 2026-11-05), defined once, in the policy file.
 want_set="es.rithmic.depth underlying.es.trades.linearized futures.liquidity-wall.closures es.rithmic.mbo"
 got_set="$(unset OE_DEPTH_TOPICS_dev; . "$TOPICS_ENV" >/dev/null 2>&1; printf '%s' "${OE_DEPTH_TOPICS_dev:-}")"
 [ "$got_set" = "$want_set" ] || note "$TOPICS_ENV defines OE_DEPTH_TOPICS_dev=\"${got_set:-<unset>}\", expected \"$want_set\""
@@ -34,7 +34,7 @@ got_set="$(unset OE_DEPTH_TOPICS_dev; . "$TOPICS_ENV" >/dev/null 2>&1; printf '%
 # 2. THE ARCHIVER declares and validates it like OE_ES4_TOPICS: unset, sourced, required.
 grep -qE '^unset .*\bOE_DEPTH_TOPICS_dev\b' "$ARCH" || note "$ARCH does not unset OE_DEPTH_TOPICS_dev before sourcing the policy file (an inherited value would pass the check)"
 grep -qF ': "${OE_DEPTH_TOPICS_dev:?' "$ARCH" || note "$ARCH does not require OE_DEPTH_TOPICS_dev from the policy file"
-# 3. THE CLASSIFICATION the documents specify: the two Avro topics canonical, the tape committed-read and strict.
+# 3. THE CLASSIFICATION the documents specify: the three Avro topics canonical, the tape committed-read and strict.
 canon="$(grep -m1 '^OE_CANONICAL_ARCHIVE_TOPICS=' "$ARCH" | sed 's/^[^"]*"//; s/"$//')"
 for t in es.rithmic.depth futures.liquidity-wall.closures es.rithmic.mbo; do
   case " $canon " in *" $t "*) : ;; *) note "$t is not in OE_CANONICAL_ARCHIVE_TOPICS ($ARCH) — it would take the binary-unsafe console path" ;; esac

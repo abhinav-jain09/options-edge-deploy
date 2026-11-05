@@ -32,12 +32,13 @@ public final class CanonicalArchiveDecoder implements Deserializer<byte[]> {
             RithmicMboSchemas.TOPIC,RithmicMboSchemas.EVENT);
     // RithmicDepthFrame carries fixed schema id 3301 on every registry (options-edge-contracts
     // schemas/rithmic/README.md); the contracts expose no constant for it, so it is stated here beside the
-    // closure's, which the contracts do expose (LiquidityWallSchemas.CLOSURE, id 3401).
+    // closure's (LiquidityWallSchemas.CLOSURE, id 3401) and the MBO event's (RithmicMboSchemas.SCHEMA_ID, id 3302),
+    // which the contracts do expose.
     static final int RITHMIC_DEPTH_FRAME_ID=3301;
-    // THE FIXED-ID HEADER CHECK, for the depth set only. The SDK's same-topic roll-forward profile (the only
+    // THE FIXED-ID HEADER CHECK, for the three Avro members of the depth set only. The SDK's same-topic roll-forward profile (the only
     // consumer profile that accepts a topic name without the .avro suffix) admits a retained JSON value on
     // every bound topic, and compares the writer schema it resolves from the frame's id with the released
-    // schema rather than the id itself. Document A section 9 item 2 asks for more on these two topics: a
+    // schema rather than the id itself. Document A section 9 item 2 asks for more on these topics (the MBO event joined them 2026-11-05): a
     // record whose Confluent framing does not carry the fixed id fails the capture, and the reader turns the
     // exception into a FAILED summary that leaves the checkpoint where it was. So the header is read here,
     // before any decoding: magic byte 0 and the four big-endian id bytes must be the fixed id — a JSON
