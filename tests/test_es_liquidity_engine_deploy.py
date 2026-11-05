@@ -258,6 +258,16 @@ class Schemas(unittest.TestCase):
         mbo = by["es.rithmic.mbo-value"]
         self.assertIn({"service": "es-liquidity-engine", "accepts": [3302], "environments": ["dev"]}, mbo["consumers"])
 
+    def test_registration_rides_the_schema_sync_gate_on_the_apply_path_not_a_stage_list(self):
+        """service-deploy.sh gates every service the manifest names (producer or consumer) with scripts/ci/schema-sync.sh against the digest-pinned image's
+        options-edge.schema-requirements label, before any workload change, and that gate registers the manifest's absent ids; es-liquidity-engine is named, so it is gated."""
+        m = json.loads(read("schema-manifest/manifest.json"))
+        named = {x["service"] for e in m["entries"] for x in (e.get("producers", []) + e.get("consumers", []))}
+        self.assertIn("es-liquidity-engine", named)
+        sh = read("scripts/deploy/service-deploy.sh")
+        self.assertIn("bash scripts/ci/schema-sync.sh", sh)
+        self.assertIn("select(.service == \"$SERVICE\")", sh)
+
     def test_the_manifest_validates_with_the_governance_tool(self):
         r = subprocess.run(["java", "-jar", str(JAR), "validate", "--manifest", str(ROOT / "schema-manifest/manifest.json"), "--snapshots", str(ROOT / "schema-manifest/schemas")],
                            capture_output=True, text=True)
