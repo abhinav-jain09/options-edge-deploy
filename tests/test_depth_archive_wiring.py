@@ -26,7 +26,8 @@ SOURCE = ARCHIVER.read_text()
 DEPTH = 'es.rithmic.depth'
 TAPE = 'underlying.es.trades.linearized'
 CLOSURES = 'futures.liquidity-wall.closures'
-SET = f'{DEPTH} {TAPE} {CLOSURES}'
+MBO = 'es.rithmic.mbo'
+SET = f'{DEPTH} {TAPE} {CLOSURES} {MBO}'
 
 
 def shell_value(env_file, name):
@@ -54,7 +55,7 @@ def declaration(name):
 class DepthSetPolicyTest(unittest.TestCase):
     """The set, where it is defined, and how the archiver derives it."""
 
-    def test_the_policy_file_defines_exactly_the_three_members_in_order(self):
+    def test_the_policy_file_defines_exactly_the_four_members_in_order(self):
         self.assertEqual(shell_value(TOPICS_ENV, 'OE_DEPTH_TOPICS_dev'), SET)
         line = re.search(r'^OE_DEPTH_TOPICS_dev="([^"]*)"$', TOPICS_ENV.read_text(), re.M)
         self.assertIsNotNone(line, 'the set must be a plain double-quoted declaration, one definition')
@@ -113,12 +114,12 @@ class DepthClassificationTest(unittest.TestCase):
                               text=True, capture_output=True, timeout=10).returncode == 0
 
     def test_the_two_avro_topics_are_canonical_and_therefore_committed_read(self):
-        for topic in (DEPTH, CLOSURES):
+        for topic in (DEPTH, CLOSURES, MBO):
             self.assertTrue(self.predicate('is_canonical_archive_topic', topic), topic)
             self.assertTrue(self.predicate('is_committed_read_topic', topic), topic)
             self.assertFalse(self.predicate('is_as_written_topic', topic), topic)
         canonical = re.search(r'^OE_CANONICAL_ARCHIVE_TOPICS="([^"]+)"$', SOURCE, re.M).group(1).split()
-        self.assertEqual(canonical[-2:], [DEPTH, CLOSURES], 'appended to the canonical set, the five older members untouched')
+        self.assertEqual(canonical[-3:], [DEPTH, CLOSURES, MBO], 'appended to the canonical set, the five older members untouched')
 
     def test_the_tape_is_committed_read_and_strict_but_not_canonical_or_as_written(self):
         self.assertTrue(self.predicate('is_committed_read_topic', TAPE))
@@ -291,7 +292,7 @@ class WrapperInvocationTest(unittest.TestCase):
 class DevOnlyAndGuardsTest(unittest.TestCase):
     """Nothing for prod or es4; the exemption from the unit check is bound by its own guard; CI runs both."""
 
-    def test_the_three_topics_are_in_no_prod_or_es4_set(self):
+    def test_the_four_topics_are_in_no_prod_or_es4_set(self):
         for name in ('OE_ES4_TOPICS', 'OE_ALL_TOPICS_prod', 'OE_HEAVY_TOPICS_prod', 'OE_SPOT_TOPICS'):
             members = shell_value(TOPICS_ENV, name).split()
             for topic in SET.split():

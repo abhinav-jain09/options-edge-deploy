@@ -27,7 +27,7 @@ done
 [ -x "$WRAP" ] || note "$WRAP is not executable"
 
 # 1. THE SET: exactly the three members document D section 8 names, defined once, in the policy file.
-want_set="es.rithmic.depth underlying.es.trades.linearized futures.liquidity-wall.closures"
+want_set="es.rithmic.depth underlying.es.trades.linearized futures.liquidity-wall.closures es.rithmic.mbo"
 got_set="$(unset OE_DEPTH_TOPICS_dev; . "$TOPICS_ENV" >/dev/null 2>&1; printf '%s' "${OE_DEPTH_TOPICS_dev:-}")"
 [ "$got_set" = "$want_set" ] || note "$TOPICS_ENV defines OE_DEPTH_TOPICS_dev=\"${got_set:-<unset>}\", expected \"$want_set\""
 
@@ -36,9 +36,10 @@ grep -qE '^unset .*\bOE_DEPTH_TOPICS_dev\b' "$ARCH" || note "$ARCH does not unse
 grep -qF ': "${OE_DEPTH_TOPICS_dev:?' "$ARCH" || note "$ARCH does not require OE_DEPTH_TOPICS_dev from the policy file"
 # 3. THE CLASSIFICATION the documents specify: the two Avro topics canonical, the tape committed-read and strict.
 canon="$(grep -m1 '^OE_CANONICAL_ARCHIVE_TOPICS=' "$ARCH" | sed 's/^[^"]*"//; s/"$//')"
-for t in es.rithmic.depth futures.liquidity-wall.closures; do
+for t in es.rithmic.depth futures.liquidity-wall.closures es.rithmic.mbo; do
   case " $canon " in *" $t "*) : ;; *) note "$t is not in OE_CANONICAL_ARCHIVE_TOPICS ($ARCH) — it would take the binary-unsafe console path" ;; esac
   grep -qF "\"$t\"" "$DECODER" || { [ "$t" = es.rithmic.depth ] && grep -qF 'RithmicSchemas.RAW_TOPIC' "$DECODER"; } \
+    || { [ "$t" = es.rithmic.mbo ] && grep -qF 'RithmicMboSchemas.TOPIC,RithmicMboSchemas.EVENT' "$DECODER"; } \
     || note "$DECODER binds nothing for $t"
 done
 grep -qF 'LiquidityWallSchemas.CLOSURE' "$DECODER" || note "$DECODER does not bind LiquidityWallClosure"

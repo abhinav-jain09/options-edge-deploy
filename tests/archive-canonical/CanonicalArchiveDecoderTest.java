@@ -7,6 +7,7 @@ import com.optionsedge.contracts.avro.CanonicalJsonAvro;
 import com.optionsedge.contracts.cvd.CvdRelatedSchemas;
 import com.optionsedge.contracts.cvd.CvdSchemas;
 import com.optionsedge.contracts.liquiditywall.LiquidityWallSchemas;
+import com.optionsedge.contracts.rithmic.RithmicMboSchemas;
 import com.optionsedge.contracts.rithmic.RithmicSchemas;
 import io.confluent.kafka.schemaregistry.avro.AvroSchema;
 import io.confluent.kafka.schemaregistry.testutil.MockSchemaRegistry;
@@ -76,12 +77,14 @@ public class CanonicalArchiveDecoderTest {
         var bindings=Map.of("es.futures.cvd.bars",CvdSchemas.BAR,"es.futures.footprint.bars",CvdSchemas.FOOTPRINT_BAR,
                 "es.futures.footprint.outcomes",CvdSchemas.FOOTPRINT_OUTCOME,"es.futures.footprint.strike",CvdRelatedSchemas.FOOTPRINT_STRIKE,
                 "context-tape.direction.ledger",CvdRelatedSchemas.directionLedger(),
-                RithmicSchemas.RAW_TOPIC,RithmicSchemas.FRAME,"futures.liquidity-wall.closures",LiquidityWallSchemas.CLOSURE.schema());
+                RithmicSchemas.RAW_TOPIC,RithmicSchemas.FRAME,"futures.liquidity-wall.closures",LiquidityWallSchemas.CLOSURE.schema(),
+                RithmicMboSchemas.TOPIC,RithmicMboSchemas.EVENT);
         // The dev depth set's two Avro members carry FIXED registry ids (RithmicDepthFrame 3301 under
         // TopicNameStrategy, LiquidityWallClosure 3401 under RecordNameStrategy), and the decoder checks the frame's
         // id against them before decoding: the mock registry must therefore hold them under those ids, and a
         // JSON value — accepted as retained JSON on the five roll-forward bindings — is refused on these two.
-        var fixedIds=Map.of(RithmicSchemas.RAW_TOPIC,3301,"futures.liquidity-wall.closures",LiquidityWallSchemas.CLOSURE.id());
+        var fixedIds=Map.of(RithmicSchemas.RAW_TOPIC,3301,"futures.liquidity-wall.closures",LiquidityWallSchemas.CLOSURE.id(),
+                RithmicMboSchemas.TOPIC,RithmicMboSchemas.SCHEMA_ID);
         // The closure is registered under its RecordNameStrategy subject as production does, AND under the
         // topic-name subject the test's serializer resolves ids through; both carry the one fixed id.
         check(registry.register(LiquidityWallSchemas.CLOSURE.name(),new AvroSchema(LiquidityWallSchemas.CLOSURE.schema()),1,LiquidityWallSchemas.CLOSURE.id())==LiquidityWallSchemas.CLOSURE.id(),"closure record-name registration");
@@ -93,6 +96,7 @@ public class CanonicalArchiveDecoderTest {
         outputs.put("es.futures.footprint.strike",minimal(CvdRelatedSchemas.FOOTPRINT_STRIKE));
         outputs.put(RithmicSchemas.RAW_TOPIC,minimal(RithmicSchemas.FRAME));
         outputs.put("futures.liquidity-wall.closures",minimal(LiquidityWallSchemas.CLOSURE.schema()));
+        outputs.put(RithmicMboSchemas.TOPIC,minimal(RithmicMboSchemas.EVENT));
         int assertions=0;
         try(var writer=new CanonicalAvroSerializer()) {
             writer.configure(config,false);

@@ -3,7 +3,7 @@
   The DEV depth archive (ES Level Absorption Requirements section 9, items 1 and 6; ES Book Liquidity Walls
   Requirements rev 11 section 8): oe-archive-depth.sh runs oe-archive-kafka.sh with ENV=dev and
   TOPICS="$OE_DEPTH_TOPICS_dev" (oe-topics.env: es.rithmic.depth, underlying.es.trades.linearized,
-  futures.liquidity-wall.closures) against the dev broker and the dev schema registry, four times a day.
+  futures.liquidity-wall.closures, es.rithmic.mbo) against the dev broker and the dev schema registry, four times a day.
 
   WHY FOUR TIMES, AND WHY HERE. es.rithmic.depth carries a 12-hour retention on dev, so a once-a-day pass
   loses half of every session; every six hours, one missed run costs nothing. It is a dedicated job on the

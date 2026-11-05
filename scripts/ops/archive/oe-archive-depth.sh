@@ -11,13 +11,13 @@
 # it apart from the nightly run; item 1 names the invocation: ENV=dev TOPICS="$OE_DEPTH_TOPICS_dev" against the
 # dev broker and the dev schema registry.
 #
-# ONE DEFINITION OF THE SET. The three topics are OE_DEPTH_TOPICS_dev in oe-topics.env and nowhere else: this
+# ONE DEFINITION OF THE SET. The four topics (es.rithmic.mbo joined 2026-11-05) are OE_DEPTH_TOPICS_dev in oe-topics.env and nowhere else: this
 # wrapper sources that file, refuses to run without the variable, and passes it as the archiver's TOPICS
 # override. The override is load-bearing — ENV=dev has no depth default in oe-archive-kafka.sh, so a wrapper that
 # forgot it would archive the prod default set against the dev broker and report success. The archiver itself
 # requires the variable too (unset, sourced, non-empty), exactly as it requires OE_ES4_TOPICS.
 #
-# WHAT THE ARCHIVER DOES WITH THEM (oe-archive-kafka.sh): es.rithmic.depth and futures.liquidity-wall.closures
+# WHAT THE ARCHIVER DOES WITH THEM (oe-archive-kafka.sh): es.rithmic.depth, es.rithmic.mbo and futures.liquidity-wall.closures
 # are OE_CANONICAL_ARCHIVE_TOPICS, read committed through CanonicalArchiveDecoder.java under their released
 # schemas (RithmicDepthFrame id 3301, LiquidityWallClosure id 3401; a frame under any other id fails the capture
 # with the checkpoint untouched); underlying.es.trades.linearized is a committed-read, STRICT topic (an absent
