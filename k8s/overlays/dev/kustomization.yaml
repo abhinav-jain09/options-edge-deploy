@@ -349,7 +349,7 @@ patches:
                     memory: 5Gi
   - path: streams-processing-guarantee-dev-patch.yaml
   - path: web-dev-env-patch.yaml
-  # Single-node dev has 100m spare CPU; retain overlap/readiness during web rolls.
+  # Use a smaller dev surge reservation; verify current capacity before rolling.
   - path: web-dev-resources-patch.yaml
   # GRACEFUL LIVENESS (2026-08-31) — DEV. The gateway was in a restart loop that its own
   # recovery caused: rebuilding the state cache across hundreds of partitions makes /health

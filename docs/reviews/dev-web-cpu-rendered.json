@@ -1,0 +1,38 @@
+{
+  "dev": {
+    "strategy": {
+      "rollingUpdate": {
+        "maxSurge": 1,
+        "maxUnavailable": 0
+      },
+      "type": "RollingUpdate"
+    },
+    "resources": {
+      "limits": {
+        "memory": "4Gi"
+      },
+      "requests": {
+        "cpu": "100m",
+        "memory": "768Mi"
+      }
+    }
+  },
+  "production": {
+    "strategy": {
+      "rollingUpdate": {
+        "maxSurge": 1,
+        "maxUnavailable": 0
+      },
+      "type": "RollingUpdate"
+    },
+    "resources": {
+      "limits": {
+        "memory": "4Gi"
+      },
+      "requests": {
+        "cpu": "200m",
+        "memory": "768Mi"
+      }
+    }
+  }
+}
