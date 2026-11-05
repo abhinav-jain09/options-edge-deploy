@@ -5,3 +5,4 @@
 # File column: relative to the contracts checkout's `schemas-registry/esmbo` directory (SCHEMAS_DIR).
 com.optionsedge.contracts.esmbo.EsMboLevelFlow|3502|EsMboLevelFlow.avsc
 com.optionsedge.contracts.esmbo.EsMboHealth|3504|EsMboHealth.avsc
+com.optionsedge.contracts.esmbo.EsMboLevelFlowFinal|3506|EsMboLevelFlowFinal.avsc

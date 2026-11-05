@@ -83,6 +83,15 @@ spec:
             # <date>=<contract>: the front ES contract from that trade date. Roll it with the quarterly roll.
             - name: ES_MBO_CONTRACT_TABLE
               value: 2026-09-14=ESZ6
+            # The FINAL fill/cancel attribution stage runs only when BOTH ledger values are set. DESCRIPTIVE starting values from the 2026-11-05 dev measurement
+            # (es-liquidity-engine-service/docs/measurements/fill-window-2026-11-05.md): the delete-vs-print delta peaks in [0,10) ms with its sharp part within +-50 ms, so W=100 ms;
+            # the trade-order bound is a conservative 2 s over the ~90 ms Kafka transport delay measured on 2026-11-05. Not calibrated; the Phase 3 corpus run sets the ledger.
+            - name: ES_MBO_FILL_WINDOW_MS
+              value: "100"
+            - name: ES_MBO_TRADE_ORDER_MS
+              value: "2000"
+            - name: ES_MBO_TAPE_TOPIC
+              value: underlying.es.trades
             - name: JAVA_TOOL_OPTIONS
               value: -Xms256m -Xmx1024m
           ports:
