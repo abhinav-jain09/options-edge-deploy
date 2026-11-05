@@ -69,7 +69,7 @@ STOCK_GEX_IMAGE=$registry/options-edge-stock-gex:$image_tag
 OI_SHADOW_IMAGE=$registry/options-edge-oi-shadow:$image_tag
 REVERSAL_POSTGRES_WRITER_IMAGE=$registry/options-edge-reversal-postgres-writer:$image_tag
 EOF
-            # approach-monitor, oi-next-publication, vol-state, zn-gex, line-acceptance, es-amt and es-liquidity-wall are DEV-ONLY (services.yaml
+            # approach-monitor, oi-next-publication, vol-state, zn-gex, line-acceptance, es-amt, es-liquidity-wall and es-liquidity-engine are DEV-ONLY (services.yaml
             # envs: [dev]); the production and experiment overlays never render them (approach-monitor
             # is deleted there; the others are referenced only from the dev overlay). Emitting their vars
             # for dev and never for production is also what marks them dev-only to
@@ -86,6 +86,7 @@ ZN_GEX_IMAGE=$registry/options-edge-zn-gex:$image_tag
 LINE_ACCEPTANCE_IMAGE=$registry/options-edge-line-acceptance:$image_tag
 ES_AMT_IMAGE=$registry/options-edge-es-amt:$image_tag
 ES_LIQUIDITY_WALL_IMAGE=$registry/options-edge-es-liquidity-wall:$image_tag
+ES_LIQUIDITY_ENGINE_IMAGE=$registry/options-edge-es-liquidity-engine:$image_tag
 EOF
             fi
             # short-premium-agent renders in dev+production (a standalone service that runs on prod too),
@@ -171,7 +172,7 @@ DROP_CLASSIFIER_IMAGE=$DROP_CLASSIFIER_IMAGE
 OI_SHADOW_IMAGE=$OI_SHADOW_IMAGE
 REVERSAL_POSTGRES_WRITER_IMAGE=$REVERSAL_POSTGRES_WRITER_IMAGE
 EOF
-            # approach-monitor, oi-next-publication, vol-state, zn-gex, line-acceptance, es-amt and es-liquidity-wall are dev-only; on the
+            # approach-monitor, oi-next-publication, vol-state, zn-gex, line-acceptance, es-amt, es-liquidity-wall and es-liquidity-engine are dev-only; on the
             # promoted path emit them for dev alone.
             if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
               cat >>"$JENKINS_WORK_DIR/options-edge-images.env" <<EOF
@@ -184,6 +185,7 @@ ZN_GEX_IMAGE=${ZN_GEX_IMAGE:-$registry/options-edge-zn-gex:dev}
 LINE_ACCEPTANCE_IMAGE=${LINE_ACCEPTANCE_IMAGE:-$registry/options-edge-line-acceptance:dev}
 ES_AMT_IMAGE=${ES_AMT_IMAGE:-$registry/options-edge-es-amt:dev}
 ES_LIQUIDITY_WALL_IMAGE=${ES_LIQUIDITY_WALL_IMAGE:-$registry/options-edge-es-liquidity-wall:dev}
+ES_LIQUIDITY_ENGINE_IMAGE=${ES_LIQUIDITY_ENGINE_IMAGE:-$registry/options-edge-es-liquidity-engine:dev}
 EOF
             fi
             # short-premium-agent renders in dev+production; on the promoted/branch-2 path (prod) its

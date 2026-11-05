@@ -86,6 +86,11 @@ resources:
   # futures.liquidity-wall.* Avro topics (ids 3401-3407). Referenced here only (NOT in k8s/base, production or experiment). No patches here or in the standalone overlay
   # (k8s/services/es-liquidity-wall/overlays/dev); the dev image remap below is what the slice mirrors.
   - ../../services/es-liquidity-wall/base
+  # es-liquidity-engine: DEV-ONLY (services.yaml envs: [dev]), replicas 1: the ES MBO liquidity engine (supervisor over the drop-classifier engine in ES_TRADES mode, writing es.drop.*, and the MBO engine).
+  # Referenced here only (NOT in k8s/base, production or experiment). No patches here or in the standalone slice (k8s/services/es-liquidity-engine/overlays/dev); the dev image remap below is what the slice mirrors.
+  - ../../services/es-liquidity-engine/base
+  # drop-classifier-ref: DEV-ONLY and TEMPORARY (services.yaml envs: [dev]): the retained drop-classifier image in ES_TRADES mode writing es.drop.ref.* , the reference side of the G3b parity gate. Removed when G3b passes.
+  - ../../services/drop-classifier-ref/base
   # NOTE: the databento timewarp replay Job + snapshot-replay Deployment used to live
   # here. They moved to k8s/replay/dev and now deploy on-demand via the dedicated
   # `replay-deploy` job (Jenkinsfile.replay) — OUT of the dev/prod bring-up path. A Job's
@@ -977,6 +982,9 @@ images:
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-es-liquidity-wall
     newName: host.docker.internal:5001/options-edge-es-liquidity-wall
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-es-liquidity-engine
+    newName: host.docker.internal:5001/options-edge-es-liquidity-engine
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-oi-next-publication
     newName: host.docker.internal:5001/options-edge-oi-next-publication

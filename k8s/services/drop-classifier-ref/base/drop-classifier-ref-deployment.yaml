@@ -1,0 +1,96 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: drop-classifier-ref-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: drop-classifier-ref-service
+    app.kubernetes.io/component: drop-classifier-ref-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  # DEV ONLY, TEMPORARY: the RETAINED drop-classifier image in ES_TRADES mode on the same dev inputs, writing es.drop.ref.* - the reference side of the G3b parity gate against es-liquidity-engine.
+  # Removed when G3b passes. Single replica (strategy Recreate).
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: drop-classifier-ref-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: drop-classifier-ref-service
+        app.kubernetes.io/component: drop-classifier-ref-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: drop-classifier-ref
+          image: 192.168.100.252:5000/options-edge-drop-classifier:dev
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            - name: DROP_OUTPUT_PREFIX
+              value: es.drop.ref
+            - name: ENGINE_MODE
+              value: SHADOW
+            - name: HEALTH_PORT
+              value: "8080"
+            # The drop engine's inputs and outputs: every broker is the dev broker; ES_TRADES mode on the dev ES tape. Outputs es.drop.ref.* (DROP_OUTPUT_PREFIX).
+            - name: DROP_UNDERLYING_MODE
+              value: ES_TRADES
+            - name: DROP_UNDERLYING_BOOTSTRAP
+              value: host.docker.internal:19092
+            - name: DROP_UNDERLYING_TOPIC
+              value: underlying.es.trades
+            - name: DROP_FLOW_BOOTSTRAP
+              value: host.docker.internal:19092
+            - name: DROP_FLOW_TOPIC
+              value: delta-flow-by-trade
+            - name: DROP_FLOW_SCHEMA_REGISTRY_URL
+              value: ""
+            - name: DROP_OUTPUT_BOOTSTRAP
+              value: host.docker.internal:19092
+            - name: DROP_NOWCAST_RETENTION_MS
+              value: "604800000"
+            - name: DROP_GAMMA_BOOTSTRAP
+              value: host.docker.internal:19092
+            - name: DROP_GAMMA_TOPIC
+              value: options.spx.gamma-migration.current
+            - name: DROP_VIX_BOOTSTRAP
+              value: ""
+            - name: DROP_VIX_TOPIC
+              value: underlying.vix.price
+            - name: DROP_LOOKBACK_MINUTES
+              value: "30"
+            - name: DROP_SR_BOOTSTRAP
+              value: ""
+            - name: JAVA_TOOL_OPTIONS
+              value: -Xms256m -Xmx1024m
+          ports:
+            - name: health
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 200m
+              memory: 1Gi
+            limits:
+              memory: 2Gi

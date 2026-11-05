@@ -1,0 +1,94 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: es-liquidity-engine-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: es-liquidity-engine-service
+    app.kubernetes.io/component: es-liquidity-engine-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  # DEV ONLY (services.yaml envs: [dev]). The ES MBO liquidity engine: a supervisor over the byte-identical drop-classifier engine (ES_TRADES, writes es.drop.*) and, in later phases, the MBO engine.
+  # SINGLE replica (strategy Recreate): one engine owns the es.drop.* outputs.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: es-liquidity-engine-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: es-liquidity-engine-service
+        app.kubernetes.io/component: es-liquidity-engine-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: es-liquidity-engine
+          image: 192.168.100.252:5000/options-edge-es-liquidity-engine:dev
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            - name: ENGINE_MODE
+              value: SHADOW
+            - name: HEALTH_PORT
+              value: "8080"
+            # The drop engine's inputs and outputs: every broker is the dev broker; ES_TRADES mode on the dev ES tape. Outputs es.drop.* (the prefix default in ES_TRADES mode).
+            - name: DROP_UNDERLYING_MODE
+              value: ES_TRADES
+            - name: DROP_UNDERLYING_BOOTSTRAP
+              value: host.docker.internal:19092
+            - name: DROP_UNDERLYING_TOPIC
+              value: underlying.es.trades
+            - name: DROP_FLOW_BOOTSTRAP
+              value: host.docker.internal:19092
+            - name: DROP_FLOW_TOPIC
+              value: delta-flow-by-trade
+            - name: DROP_FLOW_SCHEMA_REGISTRY_URL
+              value: ""
+            - name: DROP_OUTPUT_BOOTSTRAP
+              value: host.docker.internal:19092
+            - name: DROP_NOWCAST_RETENTION_MS
+              value: "604800000"
+            - name: DROP_GAMMA_BOOTSTRAP
+              value: host.docker.internal:19092
+            - name: DROP_GAMMA_TOPIC
+              value: options.spx.gamma-migration.current
+            - name: DROP_VIX_BOOTSTRAP
+              value: ""
+            - name: DROP_VIX_TOPIC
+              value: underlying.vix.price
+            - name: DROP_LOOKBACK_MINUTES
+              value: "30"
+            - name: DROP_SR_BOOTSTRAP
+              value: ""
+            - name: JAVA_TOOL_OPTIONS
+              value: -Xms256m -Xmx1024m
+          ports:
+            - name: health
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 200m
+              memory: 1Gi
+            limits:
+              memory: 2Gi
