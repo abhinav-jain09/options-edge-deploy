@@ -6,7 +6,7 @@
   "fields": [
     {
       "name": "schemaVersion",
-      "type": "int"
+      "type": "long"
     },
     {
       "name": "tradeDate",
@@ -31,7 +31,8 @@
         "null",
         "long"
       ],
-      "doc": "always travels with its counts"
+      "doc": "always travels with its counts",
+      "default": null
     },
     {
       "name": "minutesWithNoRecordPerInput",
@@ -88,7 +89,8 @@
               "type": [
                 "null",
                 "string"
-              ]
+              ],
+              "default": null
             }
           ]
         }

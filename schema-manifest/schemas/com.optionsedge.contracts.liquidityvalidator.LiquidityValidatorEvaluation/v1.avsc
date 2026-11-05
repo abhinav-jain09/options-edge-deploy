@@ -6,13 +6,13 @@
   "fields": [
     {
       "name": "schemaVersion",
-      "type": "int",
+      "type": "long",
       "doc": "1 for this revision"
     },
     {
       "name": "evaluationId",
       "type": "string",
-      "doc": "annotationId at the release; key is tradeDate|evaluationId"
+      "doc": "<scheduleId>|<annotationId>, both immutable source fields; the output key is <tradeDate>|<evaluationId>"
     },
     {
       "name": "tradeDate",
@@ -59,21 +59,24 @@
       "type": [
         "null",
         "string"
-      ]
+      ],
+      "default": null
     },
     {
       "name": "verdict",
       "type": [
         "null",
         "string"
-      ]
+      ],
+      "default": null
     },
     {
       "name": "coveringSiteId",
       "type": [
         "null",
         "string"
-      ]
+      ],
+      "default": null
     },
     {
       "name": "boundaryEsTicks",
@@ -81,7 +84,8 @@
         "null",
         "long"
       ],
-      "doc": "the broken boundary in ES quarter-point ticks, from the admissible level-absorption event"
+      "doc": "the broken boundary in ES quarter-point ticks, from the admissible level-absorption event",
+      "default": null
     },
     {
       "name": "boundaryAgeMs",
@@ -89,7 +93,8 @@
         "null",
         "long"
       ],
-      "doc": "how old that event was at R"
+      "doc": "how old that event was at R",
+      "default": null
     },
     {
       "name": "sourceObjectId",
@@ -97,7 +102,8 @@
         "null",
         "string"
       ],
-      "doc": "the selected site event's sourceObjectId (the annotation id)"
+      "doc": "the selected site event's sourceObjectId (the annotation id)",
+      "default": null
     },
     {
       "name": "sourceRevision",
@@ -105,7 +111,8 @@
         "null",
         "string"
       ],
-      "doc": "lastEndMs#lastOrdinal of the annotation as the site event carried it"
+      "doc": "lastEndMs#lastOrdinal of the annotation as the site event carried it",
+      "default": null
     },
     {
       "name": "boundaryEventTimestampMs",
@@ -113,7 +120,8 @@
         "null",
         "long"
       ],
-      "doc": "the selected level-absorption event's timestamp"
+      "doc": "the selected level-absorption event's timestamp",
+      "default": null
     },
     {
       "name": "boundaryLevelPriceEsDecimal",
@@ -121,21 +129,24 @@
         "null",
         "string"
       ],
-      "doc": "the event's levelPriceEs exactly as decoded, before conversion to ticks"
+      "doc": "the event's levelPriceEs exactly as decoded, before conversion to ticks",
+      "default": null
     },
     {
       "name": "priceAtReleaseEsTicks",
       "type": [
         "null",
         "long"
-      ]
+      ],
+      "default": null
     },
     {
       "name": "extensionTicks",
       "type": [
         "null",
         "long"
-      ]
+      ],
+      "default": null
     },
     {
       "name": "lateExtension",
@@ -249,7 +260,7 @@
         "type": "array",
         "items": "string"
       },
-      "doc": "inputs whose watermark had not passed R when the evaluation ran (informational)"
+      "doc": "input topics with no record whose timestamp is greater than R among the records read up to the recorded cut (informational; sparse topics are often pending)"
     },
     {
       "name": "historyStartMs",

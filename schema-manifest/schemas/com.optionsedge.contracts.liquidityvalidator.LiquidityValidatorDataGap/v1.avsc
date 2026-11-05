@@ -6,7 +6,7 @@
   "fields": [
     {
       "name": "schemaVersion",
-      "type": "int"
+      "type": "long"
     },
     {
       "name": "key",
@@ -35,21 +35,24 @@
       "type": [
         "null",
         "long"
-      ]
+      ],
+      "default": null
     },
     {
       "name": "judgedBoundarySpxCents",
       "type": [
         "null",
         "long"
-      ]
+      ],
+      "default": null
     },
     {
       "name": "judgedCoveringSiteId",
       "type": [
         "null",
         "string"
-      ]
+      ],
+      "default": null
     },
     {
       "name": "missing",
@@ -83,21 +86,24 @@
               "type": [
                 "null",
                 "long"
-              ]
+              ],
+              "default": null
             },
             {
               "name": "ageMs",
               "type": [
                 "null",
                 "long"
-              ]
+              ],
+              "default": null
             },
             {
               "name": "limitMs",
               "type": [
                 "null",
                 "long"
-              ]
+              ],
+              "default": null
             },
             {
               "name": "limitSource",
