@@ -100,7 +100,7 @@ PY
 [ "$(printf '%s\n' "$sched" | sed -n 3p)" = "Label=com.optionsedge.oe-archive-depth" ] || note "$PLIST label is not com.optionsedge.oe-archive-depth"
 plutil -lint "$PLIST" >/dev/null 2>&1 || python3 -c 'import plistlib,sys; plistlib.load(open(sys.argv[1],"rb"))' "$PLIST" 2>/dev/null || note "$PLIST does not parse"
 
-# 7. DEV ONLY. Nothing scheduled on .252 for it, and none of the three topics in a prod or es4 set.
+# 7. DEV ONLY. Nothing scheduled on .252 for it, and none of the four topics in a prod or es4 set.
 grep -q 'oe-archive-depth' "$D/oe-archive.crontab" && note "the .252 crontab names the depth archive — it belongs to the dev Mac's launchd, not to .252"
 for v in OE_ES4_TOPICS OE_ALL_TOPICS_prod; do
   members="$(unset "$v"; . "$TOPICS_ENV" >/dev/null 2>&1; eval "printf '%s' \"\${$v:-}\"")"

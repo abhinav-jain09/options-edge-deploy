@@ -84,7 +84,7 @@ class CanonicalArchiveRoutingTest(unittest.TestCase):
     def test_the_depth_set_members_take_the_canonical_helper_path(self):
         # The three Avro members of OE_DEPTH_TOPICS_dev go through the tested helper jar with the registry derived
         # from the DEV broker; the tape is committed-read but not canonical, so it keeps the raw source-launched
-        # reader on the inherited JDK — three topics, two paths, decided by the sets and nothing else.
+        # reader on the inherited JDK — four topics, two paths, decided by the sets and nothing else.
         for topic in ['es.rithmic.depth', 'futures.liquidity-wall.closures', 'es.rithmic.mbo']:
             r = self.run_shell(f'run_strike_reader 10 --topic {topic} --partition 0', BOOTSTRAP='192.168.100.102:19092')
             self.assertEqual(r.returncode, 0, r.stderr)

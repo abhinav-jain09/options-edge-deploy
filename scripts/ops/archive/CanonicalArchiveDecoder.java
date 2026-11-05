@@ -18,7 +18,7 @@ import org.apache.kafka.common.serialization.Deserializer;
 public final class CanonicalArchiveDecoder implements Deserializer<byte[]> {
     // Intersection of this migration's outputs with the committed archive topic policy:
     // four es4 evidence topics, the dev Direction ledger, and (2026-11-04, ES Level Absorption Requirements
-    // section 9 item 2 / ES Book Liquidity Walls Requirements rev 11 section 8) the two Avro members of the
+    // section 9 item 2 / ES Book Liquidity Walls Requirements rev 11 section 8) the first two Avro members of the
     // dev depth set OE_DEPTH_TOPICS_dev, plus (2026-11-05, ES MBO Liquidity Engine requirement F, Phase 0)
     // es.rithmic.mbo (RithmicMboEvent, fixed id 3302 = RithmicMboSchemas.SCHEMA_ID). New topics require an explicit binding.
     private static final Map<String,Schema> BINDINGS=Map.of(

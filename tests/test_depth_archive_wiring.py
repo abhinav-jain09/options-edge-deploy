@@ -113,7 +113,7 @@ class DepthClassificationTest(unittest.TestCase):
         return subprocess.run(['bash', '-c', self.prelude + f'{name} "{topic}"'], env=self.env,
                               text=True, capture_output=True, timeout=10).returncode == 0
 
-    def test_the_two_avro_topics_are_canonical_and_therefore_committed_read(self):
+    def test_the_three_avro_topics_are_canonical_and_therefore_committed_read(self):
         for topic in (DEPTH, CLOSURES, MBO):
             self.assertTrue(self.predicate('is_canonical_archive_topic', topic), topic)
             self.assertTrue(self.predicate('is_committed_read_topic', topic), topic)
@@ -143,19 +143,21 @@ class DepthClassificationTest(unittest.TestCase):
 
 
 class DecoderBindingTest(unittest.TestCase):
-    """The decoder source binds both records under their released schemas and refuses a foreign id."""
+    """The decoder source binds all three records (depth frame, MBO event, wall closure) under their released schemas and refuses a foreign id."""
 
-    def test_both_records_are_bound_beside_the_five_older_bindings(self):
+    def test_all_three_records_are_bound_beside_the_five_older_bindings(self):
         text = DECODER.read_text()
         bindings = text[text.index('BINDINGS=Map.of('):text.index(');', text.index('BINDINGS=Map.of('))]
         self.assertIn('RithmicSchemas.RAW_TOPIC,RithmicSchemas.FRAME', bindings)
         self.assertIn('"futures.liquidity-wall.closures",LiquidityWallSchemas.CLOSURE.schema()', bindings)
+        self.assertIn('RithmicMboSchemas.TOPIC,RithmicMboSchemas.EVENT', bindings)
         for older in ('"es.futures.cvd.bars",CvdSchemas.BAR', '"es.futures.footprint.bars",CvdSchemas.FOOTPRINT_BAR',
                       '"es.futures.footprint.outcomes",CvdSchemas.FOOTPRINT_OUTCOME',
                       '"es.futures.footprint.strike",CvdRelatedSchemas.FOOTPRINT_STRIKE',
                       '"context-tape.direction.ledger",CvdRelatedSchemas.directionLedger()'):
             self.assertIn(older, bindings)
         self.assertIn('import com.optionsedge.contracts.rithmic.RithmicSchemas;', text)
+        self.assertIn('import com.optionsedge.contracts.rithmic.RithmicMboSchemas;', text)
         self.assertIn('import com.optionsedge.contracts.liquiditywall.LiquidityWallSchemas;', text)
 
     def test_the_fixed_ids_are_the_registered_ones_and_checked_before_decoding(self):
@@ -164,6 +166,7 @@ class DecoderBindingTest(unittest.TestCase):
         fixed = text[text.index('FIXED_IDS=Map.of('):text.index(');', text.index('FIXED_IDS=Map.of('))]
         self.assertIn('RithmicSchemas.RAW_TOPIC,RITHMIC_DEPTH_FRAME_ID', fixed)
         self.assertIn('"futures.liquidity-wall.closures",LiquidityWallSchemas.CLOSURE.id()', fixed)
+        self.assertIn('RithmicMboSchemas.TOPIC,RithmicMboSchemas.SCHEMA_ID', fixed)
         deserialize = text[text.index('public byte[] deserialize(String topic,Headers headers,byte[] value)'):]
         self.assertLess(deserialize.index('framedId(value,fixedId,topic)'), deserialize.index('return values.deserialize(topic,headers,value);'),
                         'the header check runs before the SDK decode, so a foreign id never reaches it')
@@ -183,9 +186,11 @@ class DecoderBindingTest(unittest.TestCase):
         for candidate in (ROOT / '.jenkins-tmp/contracts', ROOT.parent / 'contracts-work'):
             holder = candidate / 'src/main/java/com/optionsedge/contracts/liquiditywall/LiquidityWallSchemas.java'
             readme = candidate / 'schemas/rithmic/README.md'
-            if holder.exists() and readme.exists():
+            mbo = candidate / 'src/main/java/com/optionsedge/contracts/rithmic/RithmicMboSchemas.java'
+            if holder.exists() and readme.exists() and mbo.exists():
                 self.assertIn('new Subject("LiquidityWallClosure", 3401)', holder.read_text())
                 self.assertIn('fixed schema ID 3301', readme.read_text())
+                self.assertIn('SCHEMA_ID=3302', mbo.read_text())
                 return
         self.skipTest('no contracts checkout beside the repo')
 
