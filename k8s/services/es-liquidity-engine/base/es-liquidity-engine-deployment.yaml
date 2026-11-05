@@ -90,6 +90,9 @@ spec:
               value: "100"
             - name: ES_MBO_TRADE_ORDER_MS
               value: "2000"
+            # Restart source: the engine snapshots every 60 closed buckets to the compacted es.mbo.snapshot and restarts from it (0 turns it off).
+            - name: ES_MBO_SNAPSHOT_INTERVAL_BUCKETS
+              value: "60"
             - name: ES_MBO_TAPE_TOPIC
               value: underlying.es.trades
             - name: JAVA_TOOL_OPTIONS

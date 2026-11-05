@@ -1,0 +1,73 @@
+{
+  "type": "record",
+  "name": "EsMboSnapshot",
+  "namespace": "com.optionsedge.contracts.esmbo",
+  "doc": "es-liquidity-engine G 4.7: the restart source of the MBO engine. The typed fields let a restart read the position and the identity without decoding the blob; the blob is the engine's own versioned binary state.",
+  "fields": [
+    {
+      "name": "schemaVersion",
+      "type": "int",
+      "doc": "1 for this revision"
+    },
+    {
+      "name": "environment",
+      "type": "string",
+      "doc": "the environment literal of the admitted MBO records, e.g. Rithmic Paper Trading"
+    },
+    {
+      "name": "contract",
+      "type": "string",
+      "doc": "the contract table's row for the trade date, e.g. ESZ6"
+    },
+    {
+      "name": "bucketEnd",
+      "type": "long",
+      "doc": "bucket end on the collector clock (receivedAtMs), epoch ms; 1000 ms grid, bucket (end-1000, end]"
+    },
+    {
+      "name": "configFingerprint",
+      "type": "string",
+      "doc": "SHA-256 over the sorted name=value configuration lines plus the engine's logic version"
+    },
+    {
+      "name": "stateVersion",
+      "type": "int",
+      "doc": "version of the binary form in state"
+    },
+    {
+      "name": "epochId",
+      "type": "long",
+      "doc": "the epoch at the snapshot"
+    },
+    {
+      "name": "epochStatus",
+      "type": "string",
+      "doc": "the epoch status at the snapshot"
+    },
+    {
+      "name": "mboNext",
+      "type": "long",
+      "doc": "exclusive next offset of the MBO partition: the first record NOT in the state"
+    },
+    {
+      "name": "lastReceivedAtMs",
+      "type": "long",
+      "doc": "book clock at the snapshot"
+    },
+    {
+      "name": "bucketsClosed",
+      "type": "long",
+      "doc": "buckets closed at the snapshot"
+    },
+    {
+      "name": "stateSha256",
+      "type": "string",
+      "doc": "hex SHA-256 of state, checked before it is decoded"
+    },
+    {
+      "name": "state",
+      "type": "bytes",
+      "doc": "the engine state (versioned binary form)"
+    }
+  ]
+}
