@@ -5945,17 +5945,7 @@
     }
    ],
    "producers": [],
-   "consumers": [
-    {
-     "service": "liquidity-validator",
-     "accepts": [
-      2221
-     ],
-     "environments": [
-      "dev"
-     ]
-    }
-   ],
+   "consumers": [],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },

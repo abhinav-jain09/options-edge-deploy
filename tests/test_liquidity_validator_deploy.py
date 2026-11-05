@@ -271,7 +271,7 @@ class Schemas(unittest.TestCase):
             out = subprocess.run(["java", "-jar", str(JAR), "hash", str(snap)], capture_output=True, text=True, check=True).stdout.strip().splitlines()[-1]
             self.assertEqual(out, e["schemaHash"], n)
         self.assertEqual(m["familyBlocks"]["liquidityvalidator"], [[3601, 3603]])
-        wanted = {2221: "GeometryAnnotationSet", 2223: "GeometryAnnotationSet", 2702: "futures.level-absorption.events-value", 2701: "EsAggressorFlowSnapshot", 2034: "es.futures.footprint.bars-value"}
+        wanted = {2223: "GeometryAnnotationSet", 2702: "futures.level-absorption.events-value", 2701: "EsAggressorFlowSnapshot", 2034: "es.futures.footprint.bars-value"}
         bound = {e["id"]: e for e in m["entries"] if e.get("kind") == "MIRRORED" and e.get("id") in wanted and wanted[e["id"]] in e["subject"]}
         self.assertEqual(sorted(bound), sorted(wanted))
         for i, e in bound.items():
