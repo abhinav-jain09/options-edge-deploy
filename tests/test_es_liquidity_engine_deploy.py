@@ -255,6 +255,8 @@ class Schemas(unittest.TestCase):
             out = subprocess.run(["java", "-jar", str(JAR), "hash", str(snap)], capture_output=True, text=True, check=True).stdout.strip().splitlines()[-1]
             self.assertEqual(out, e["schemaHash"], n)
         self.assertEqual(m["familyBlocks"]["esmbo"], [[3502, 3502], [3504, 3504]])
+        flow = by["com.optionsedge.contracts.deltaflow.DeltaFlowEvent"]
+        self.assertIn({"service": "es-liquidity-engine", "accepts": [3007], "environments": ["dev"]}, flow["consumers"], "the drop engine inside the service reads the delta flow (dev id 3007)")
         mbo = by["es.rithmic.mbo-value"]
         self.assertIn({"service": "es-liquidity-engine", "accepts": [3302], "environments": ["dev"]}, mbo["consumers"])
 
