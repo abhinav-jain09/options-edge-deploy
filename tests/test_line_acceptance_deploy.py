@@ -315,7 +315,7 @@ class Registered(unittest.TestCase):
         self.assertIn("params.SERVICE == 'line-acceptance'))", register)
         self.assertIn("params.SERVICE == 'line-acceptance' && params.ENVIRONMENT != 'dev'", register)
         stage = text[text.index("stage('Verify line-acceptance topics')"):text.index("stage('Verify market-structure output topics')")]
-        self.assertIn("(params.SERVICE == 'line-acceptance' || params.SERVICE == 'es-liquidity-wall') && !params.DEPLOY_DRY_RUN", stage)
+        self.assertIn("(params.SERVICE == 'line-acceptance' || params.SERVICE == 'es-liquidity-wall' || params.SERVICE == 'es-liquidity-engine') && !params.DEPLOY_DRY_RUN", stage)
         self.assertIn("params.ENVIRONMENT != 'dev'", stage)
         self.assertIn("scripts/kafka/ensure-line-acceptance-topics.sh", stage)
         self.assertLess(text.index("stage('Register TA-books schemas')"), text.index("stage('Verify line-acceptance topics')"))
@@ -372,7 +372,7 @@ class ProductionDeclaresNoTopic(unittest.TestCase):
             self.assertEqual(sorted(x for x in d if x.startswith(P)).__len__(), 6)
             self.assertEqual([x for x in p if x.startswith(P)], [])
             # every declaration that is not line-acceptance's survives; the other dev-only family (es-liquidity-wall, futures.liquidity-wall*) is stripped by its own guard, its own test's business
-            self.assertEqual([x for x in d if not x.startswith(P) and not x.startswith("futures.liquidity-wall")], [x for x in p if not x.startswith(P)])
+            self.assertEqual([x for x in d if not x.startswith(P) and not x.startswith("futures.liquidity-wall") and not x.startswith("es.mbo.")], [x for x in p if not x.startswith(P)])
 
 
 class NoProductionWiring(unittest.TestCase):

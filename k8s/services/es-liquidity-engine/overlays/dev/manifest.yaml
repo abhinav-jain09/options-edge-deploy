@@ -70,6 +70,18 @@ spec:
               value: "30"
             - name: DROP_SR_BOOTSTRAP
               value: ""
+            - name: ES_MBO_ENABLED
+              value: "true"
+            - name: ES_MBO_BOOTSTRAP
+              value: host.docker.internal:19092
+            - name: ES_MBO_OUTPUT_BOOTSTRAP
+              value: host.docker.internal:19092
+            - name: ES_MBO_ENVIRONMENT
+              value: Rithmic Paper Trading
+            - name: ES_MBO_ALLOW_TEST
+              value: "false"
+            - name: ES_MBO_CONTRACT_TABLE
+              value: 2026-09-14=ESZ6
             - name: JAVA_TOOL_OPTIONS
               value: -Xms256m -Xmx1024m
           envFrom:
