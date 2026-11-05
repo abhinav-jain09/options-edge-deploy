@@ -9030,6 +9030,37 @@
     }
    ],
    "source": {
+    "kind": "ARCHIVAL",
+    "capturedFrom": {
+     "env": "dev",
+     "id": 2811
+    },
+    "reason": "registry-only history; the contracts file has moved to v3 (EAV ledger rev 20 adds segment and overnightDisposition)"
+   },
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "v2 must exist before v3 can be created (registry versions are contiguous, R5d); data written with v2 may remain on the topic"
+  },
+  {
+   "kind": "MIRRORED",
+   "subject": "early-auction.verdicts.shadow-value",
+   "version": 3,
+   "id": 3059,
+   "family": "early-auction",
+   "schemaFile": "early-auction.verdicts.shadow-value/v3.avsc",
+   "schemaHash": "91bef8ae78acfaa117afdfea886b0601ea5744aadf3681455158c3b71a87ebd6",
+   "environments": [
+    "dev",
+    "prod"
+   ],
+   "topics": [
+    {
+     "name": "early-auction.verdicts.shadow",
+     "kind": "data"
+    }
+   ],
+   "source": {
     "kind": "FILE",
     "repo": "contracts",
     "path": "schemas/cvd-related/EarlyAuctionVerdictLedger.avsc"
@@ -9044,36 +9075,6 @@
     }
    ],
    "consumers": []
-  },
-  {
-   "kind": "MIRRORED",
-   "subject": "early-auction.verdicts.shadow-value",
-   "version": 3,
-   "id": 3059,
-   "family": "early-auction",
-   "schemaFile": "early-auction.verdicts.shadow-value/v3.avsc",
-   "schemaHash": "91bef8ae78acfaa117afdfea886b0601ea5744aadf3681455158c3b71a87ebd6",
-   "environments": [
-    "dev"
-   ],
-   "topics": [
-    {
-     "name": "early-auction.verdicts.shadow",
-     "kind": "data"
-    }
-   ],
-   "source": {
-    "kind": "ARCHIVAL",
-    "capturedFrom": {
-     "env": "dev",
-     "id": 3059
-    },
-    "reason": "registered on dev by an image built against a contracts branch jar (hash 91bef8ae...); no file in the contracts repo or processing resource hashes to it and no current producer writes it"
-   },
-   "producers": [],
-   "consumers": [],
-   "retained": true,
-   "retainedReason": "already registered on dev; kept so the dev registry matches the manifest (no producer in this commit writes it)"
   },
   {
    "kind": "MIRRORED",
