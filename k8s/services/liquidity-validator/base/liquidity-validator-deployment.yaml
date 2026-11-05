@@ -33,40 +33,32 @@ spec:
           imagePullPolicy: Always
           envFrom:
             - configMapRef:
-                name: options-edge-config              # SCHEMA_REGISTRY_URL (ids 3601-3603 and the five input ids are resolved from it) and the rest of the shared platform config
+                name: options-edge-config              # the shared platform config (the service reads only the six variables listed under env below)
             - secretRef:
                 name: options-edge-runtime-secrets
           env:
-            # The environment guard is code (Config.fromEnv): the service refuses to start unless this is exactly "dev" AND KAFKA_BOOTSTRAP_SERVERS equals the broker declared below.
+            # The service reads EXACTLY these six variables (Config.ENV_VARS) plus the JVM's JAVA_TOOL_OPTIONS. The dev broker, the dev schema registry and the five INPUT topic names are COMPILED IN
+            # (Config), so nothing in this manifest can point the service at another broker, registry or topic, and there are no topic overrides. The input topics (read-only, no consumer group, no
+            # offset commit) are, as OBSERVED on the dev broker on 2026-11-05: options.spx.market-structure.geometry (Avro id 2223; the producer CODE is transactional, not observed on the broker),
+            # futures.level-absorption.events (2702), es.futures.aggressor-flow (2701), es.futures.footprint.bars (2034), and the RAW ES tape underlying.es.trades (NOT .linearized; JSON, 32 partitions).
+            #
+            # The environment guard: the service refuses to start unless this is exactly "dev".
             - name: LIQUIDITY_VALIDATOR_ENVIRONMENT
               value: dev
-            - name: LIQUIDITY_VALIDATOR_DEV_BOOTSTRAP
-              value: host.docker.internal:19092
+            # KAFKA_BOOTSTRAP_SERVERS and SCHEMA_REGISTRY_URL are only VALIDATED by the service (it refuses to start unless each equals the pinned dev value). They are set explicitly here, to exactly the
+            # pinned values, so the roll does not depend on options-edge-config keeping that spelling (the dev render of options-edge-config carries the same two values; tests/test_liquidity_validator_deploy.py).
             - name: KAFKA_BOOTSTRAP_SERVERS
               value: host.docker.internal:19092
-            - name: HEALTH_PORT
-              value: "8080"
-            # The five INPUT topics, all read-only, no consumer group, no offset commit. Dev names and schema ids as OBSERVED on the dev broker on 2026-11-05 (topic describe and record frames): the
-            # geometry set is Avro id 2223 (the producer CODE is transactional; that is not observed on the broker), level-absorption events 2702, aggressor flow 2701 and footprint bars 2034 are
-            # mirrored/dev-local Avro, and the RAW ES tape (NOT .linearized) is JSON on 32 partitions.
-            - name: LIQUIDITY_VALIDATOR_GEOMETRY_TOPIC
-              value: options.spx.market-structure.geometry
-            - name: LIQUIDITY_VALIDATOR_EVENTS_TOPIC
-              value: futures.level-absorption.events
-            - name: LIQUIDITY_VALIDATOR_AGGRESSOR_TOPIC
-              value: es.futures.aggressor-flow
-            - name: LIQUIDITY_VALIDATOR_FOOTPRINT_TOPIC
-              value: es.futures.footprint.bars
-            - name: LIQUIDITY_VALIDATOR_TAPE_TOPIC
-              value: underlying.es.trades
-            # Live timing (requirement Section 4): an evaluation happens only GRACE_MS of wall time after the geometry record was consumed.
-            # GRACE_MS must exceed the producers' hold time; LOOKBACK_MS is the restart rebuild window; PRINT_RING_MS bounds the tape buffer (only the last print by order key at R is needed).
+            - name: SCHEMA_REGISTRY_URL
+              value: http://host.docker.internal:8082
+            # Live timing (requirement Section 4): an evaluation happens only GRACE_MS of wall time after the geometry record was consumed. GRACE_MS must exceed the producers' hold time;
+            # PRINT_RING_MS bounds the tape buffer (only the last print by order key at R is needed). The restart lookback is compiled in.
             - name: GRACE_MS
               value: "10000"
-            - name: LOOKBACK_MS
-              value: "10800000"
             - name: PRINT_RING_MS
               value: "120000"
+            - name: HEALTH_PORT
+              value: "8080"
             - name: JAVA_TOOL_OPTIONS
               value: -Xms256m -Xmx768m
           ports:

@@ -27,13 +27,9 @@ NS = "com.optionsedge.contracts.liquidityvalidator"
 IDS = {"LiquidityValidatorEvaluation": 3601, "LiquidityValidatorDataGap": 3602, "LiquidityValidatorDaily": 3603}
 BASE = f"k8s/services/{SVC}/base/{SVC}-deployment.yaml"
 SLICE = f"k8s/services/{SVC}/overlays/dev/manifest.yaml"
-INPUTS = {
-    "LIQUIDITY_VALIDATOR_GEOMETRY_TOPIC": "options.spx.market-structure.geometry",
-    "LIQUIDITY_VALIDATOR_EVENTS_TOPIC": "futures.level-absorption.events",
-    "LIQUIDITY_VALIDATOR_AGGRESSOR_TOPIC": "es.futures.aggressor-flow",
-    "LIQUIDITY_VALIDATOR_FOOTPRINT_TOPIC": "es.futures.footprint.bars",
-    "LIQUIDITY_VALIDATOR_TAPE_TOPIC": "underlying.es.trades",
-}
+PINNED_BOOTSTRAP, PINNED_REGISTRY = "host.docker.internal:19092", "http://host.docker.internal:8082"
+# Config.ENV_VARS of the processing module (final): the six variables the service reads. JAVA_TOOL_OPTIONS is the JVM's, not the service's.
+SERVICE_ENV = {"LIQUIDITY_VALIDATOR_ENVIRONMENT", "KAFKA_BOOTSTRAP_SERVERS", "SCHEMA_REGISTRY_URL", "GRACE_MS", "PRINT_RING_MS", "HEALTH_PORT"}
 
 
 def read(rel: str) -> str:
@@ -66,23 +62,30 @@ class Manifests(unittest.TestCase):
             self.assertEqual(e["LIQUIDITY_VALIDATOR_ENVIRONMENT"], "dev", rel)
             self.assertEqual(e["HEALTH_PORT"], "8080", rel)
             self.assertEqual(e["JAVA_TOOL_OPTIONS"], "-Xms256m -Xmx768m", rel)
-            for k in ("KAFKA_BOOTSTRAP_SERVERS", "LIQUIDITY_VALIDATOR_DEV_BOOTSTRAP"):
-                self.assertEqual(e[k], "host.docker.internal:19092", f"{rel} {k}: the dev broker, never a production or es4 address")
-            self.assertEqual(e["KAFKA_BOOTSTRAP_SERVERS"], e["LIQUIDITY_VALIDATOR_DEV_BOOTSTRAP"], rel)
+            self.assertEqual(e["KAFKA_BOOTSTRAP_SERVERS"], PINNED_BOOTSTRAP, f"{rel}: the dev broker, never a production or es4 address")
+            self.assertEqual(e["SCHEMA_REGISTRY_URL"], PINNED_REGISTRY, f"{rel}: the dev registry")
+            self.assertEqual((e["GRACE_MS"], e["PRINT_RING_MS"]), ("10000", "120000"), rel)
 
-    def test_the_five_inputs_are_the_dev_topics_and_the_raw_tape_is_not_the_linearized_one(self):
+    def test_the_container_env_is_exactly_the_six_service_variables_plus_the_jvm_option(self):
+        """The input topic names, the broker pair, the registry choice beyond the pinned value and the lookback are COMPILED IN (Config): no override variable may exist in the manifest."""
         for rel in (BASE, SLICE):
-            e = env_of(deployment(rel))
-            for k, v in INPUTS.items():
-                self.assertEqual(e[k], v, f"{rel} {k}")
-            self.assertNotIn("linearized", e["LIQUIDITY_VALIDATOR_TAPE_TOPIC"])
-            self.assertEqual((e["GRACE_MS"], e["LOOKBACK_MS"], e["PRINT_RING_MS"]), ("10000", "10800000", "120000"), rel)
+            self.assertEqual(set(env_of(deployment(rel))), SERVICE_ENV | {"JAVA_TOOL_OPTIONS"}, rel)
+            text = read(rel)
+            for gone in ("LIQUIDITY_VALIDATOR_DEV_BOOTSTRAP", "LIQUIDITY_VALIDATOR_GEOMETRY_TOPIC", "LIQUIDITY_VALIDATOR_EVENTS_TOPIC", "LIQUIDITY_VALIDATOR_AGGRESSOR_TOPIC",
+                         "LIQUIDITY_VALIDATOR_FOOTPRINT_TOPIC", "LIQUIDITY_VALIDATOR_TAPE_TOPIC", "LOOKBACK_MS"):
+                self.assertNotIn(gone, text, f"{rel}: {gone} no longer exists")
+
+    def test_the_shared_dev_config_resolves_to_the_same_pinned_values(self):
+        """envFrom options-edge-config is still attached; its dev render must carry the very values the service pins, so a drift is caught here and not at pod start."""
+        out = subprocess.run(["kubectl", "kustomize", str(ROOT / "k8s/overlays/dev")], capture_output=True, text=True, check=True).stdout
+        cm = next(d for d in yaml.safe_load_all(out) if d and d.get("kind") == "ConfigMap" and d["metadata"]["name"] == "options-edge-config")
+        self.assertEqual((cm["data"]["KAFKA_BOOTSTRAP_SERVERS"], cm["data"]["SCHEMA_REGISTRY_URL"]), (PINNED_BOOTSTRAP, PINNED_REGISTRY))
 
     def test_no_output_topic_or_order_path_setting_is_configurable_from_the_deployment(self):
         """The three output topics are compiled in (Config), so a deploy cannot redirect the writer; nothing here names an order, broker or account setting."""
         e = env_of(deployment(BASE))
-        for forbidden in ("EVALUATIONS", "DATA_GAPS", "DAILY", "ORDER", "ACCOUNT", "BROKER", "QUANTITY", "LIMIT"):
-            self.assertFalse([k for k in e if forbidden in k.upper().replace("LIQUIDITY_VALIDATOR_DEV_BOOTSTRAP", "")], forbidden)
+        for forbidden in ("EVALUATIONS", "DATA_GAPS", "DAILY", "ORDER", "ACCOUNT", "BROKER", "QUANTITY", "LIMIT", "TOPIC"):
+            self.assertFalse([k for k in e if forbidden in k.upper().replace("KAFKA_BOOTSTRAP_SERVERS", "")], forbidden)
 
     def test_no_service_object_and_no_production_or_experiment_reference(self):
         self.assertFalse(any(d and d.get("kind") == "Service" for d in yaml.safe_load_all(read(SLICE))))
@@ -271,7 +274,7 @@ class Schemas(unittest.TestCase):
             out = subprocess.run(["java", "-jar", str(JAR), "hash", str(snap)], capture_output=True, text=True, check=True).stdout.strip().splitlines()[-1]
             self.assertEqual(out, e["schemaHash"], n)
         self.assertEqual(m["familyBlocks"]["liquidityvalidator"], [[3601, 3603]])
-        wanted = {2223: "GeometryAnnotationSet", 2702: "futures.level-absorption.events-value", 2701: "EsAggressorFlowSnapshot", 2034: "es.futures.footprint.bars-value"}
+        wanted = {2222: "GeometryUnavailable", 2223: "GeometryAnnotationSet", 2702: "futures.level-absorption.events-value", 2701: "EsAggressorFlowSnapshot", 2034: "es.futures.footprint.bars-value"}
         bound = {e["id"]: e for e in m["entries"] if e.get("kind") == "MIRRORED" and e.get("id") in wanted and wanted[e["id"]] in e["subject"]}
         self.assertEqual(sorted(bound), sorted(wanted))
         for i, e in bound.items():

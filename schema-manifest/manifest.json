@@ -6030,6 +6030,15 @@
      "environments": [
       "dev"
      ]
+    },
+    {
+     "service": "liquidity-validator",
+     "accepts": [
+      2222
+     ],
+     "environments": [
+      "dev"
+     ]
     }
    ],
    "retained": true,

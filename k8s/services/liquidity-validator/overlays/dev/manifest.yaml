@@ -40,28 +40,16 @@ spec:
         - env:
             - name: LIQUIDITY_VALIDATOR_ENVIRONMENT
               value: dev
-            - name: LIQUIDITY_VALIDATOR_DEV_BOOTSTRAP
-              value: host.docker.internal:19092
             - name: KAFKA_BOOTSTRAP_SERVERS
               value: host.docker.internal:19092
-            - name: HEALTH_PORT
-              value: "8080"
-            - name: LIQUIDITY_VALIDATOR_GEOMETRY_TOPIC
-              value: options.spx.market-structure.geometry
-            - name: LIQUIDITY_VALIDATOR_EVENTS_TOPIC
-              value: futures.level-absorption.events
-            - name: LIQUIDITY_VALIDATOR_AGGRESSOR_TOPIC
-              value: es.futures.aggressor-flow
-            - name: LIQUIDITY_VALIDATOR_FOOTPRINT_TOPIC
-              value: es.futures.footprint.bars
-            - name: LIQUIDITY_VALIDATOR_TAPE_TOPIC
-              value: underlying.es.trades
+            - name: SCHEMA_REGISTRY_URL
+              value: http://host.docker.internal:8082
             - name: GRACE_MS
               value: "10000"
-            - name: LOOKBACK_MS
-              value: "10800000"
             - name: PRINT_RING_MS
               value: "120000"
+            - name: HEALTH_PORT
+              value: "8080"
             - name: JAVA_TOOL_OPTIONS
               value: -Xms256m -Xmx768m
           envFrom:
