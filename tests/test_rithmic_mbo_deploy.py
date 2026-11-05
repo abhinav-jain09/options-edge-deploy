@@ -18,3 +18,8 @@ class RithmicMboDeployTest(unittest.TestCase):
   self.assertEqual(out[0].split().count('es.rithmic.mbo:1'),1)
   self.assertEqual(out[1].split().count('es.rithmic.mbo=43200000'),1)
   self.assertIn('es.rithmic.mbo',out[2].split())
+
+ def test_reset_requires_and_restores_mbo_schema_before_any_wipe(self):
+  cleanup=(ROOT/'scripts/es4/cleanup-es4.sh').read_text()
+  self.assertIn('RithmicMboEvent.avsc',cleanup[:cleanup.index('# ------------------------------------------------------------ 1.')])
+  self.assertIn('es.rithmic.mbo-value|3302|RithmicMboEvent.avsc|1',(ROOT/'scripts/kafka/schema-id-maps/rithmic-depth.map').read_text())

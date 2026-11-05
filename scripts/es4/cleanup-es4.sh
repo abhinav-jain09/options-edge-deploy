@@ -50,6 +50,7 @@ log "preflight (no mutation happens unless every check passes)"
 # New source producers cannot auto-register after the wipe: require the release input first.
 if [ "$DRY" != "true" ]; then
   [ -s "$SCRIPT_DIR/../../schemas-registry/rithmic/RithmicDepthFrame.avsc" ] || die "Rithmic released schema missing before reset; run through es4-deploy with CONTRACTS_PERMITTED_SHA"
+  [ -s "$SCRIPT_DIR/../../schemas-registry/rithmic/RithmicMboEvent.avsc" ] || die "Rithmic MBO released schema missing before reset; use contracts 0.68.0 or later"
 fi
 
 # ⚠️ THIS is the cluster that actually gets wiped. The Jenkins stage verifies its ES4_KUBECONFIG,
