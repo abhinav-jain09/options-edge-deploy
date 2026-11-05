@@ -9995,7 +9995,8 @@
    "schemaFile": "es.rithmic.mbo-value/v1.avsc",
    "schemaHash": "5c3d9e5c5f53e7ade5b3cef3e7382876515b0946672ea07b426995c027a600af",
    "environments": [
-    "dev"
+    "dev",
+    "es4"
    ],
    "source": {
     "kind": "FILE",
@@ -10008,11 +10009,31 @@
      "kind": "data"
     }
    ],
-   "producers": [],
-   "consumers": [],
-   "pending": true,
-   "retained": true,
-   "retainedReason": "Manifest-first reservation for the new raw MBO contract; no source or producer rollout until activation."
+   "producers": [
+    {
+     "service": "rithmic-depth-bridge",
+     "environments": [
+      "es4"
+     ]
+    },
+    {
+     "service": "rithmic-mbo-mirror-dev",
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "rithmic-mbo-mirror-dev",
+     "accepts": [
+      3302
+     ],
+     "environments": [
+      "es4"
+     ]
+    }
+   ]
   },
   {
    "kind": "MIRRORED",
@@ -10800,6 +10821,18 @@
    ],
    "subjects": [],
    "unframed": true
+  },
+  {
+   "job": "Jenkinsfile.es4-deploy",
+   "from": "es4",
+   "to": "dev",
+   "transport": "bytes",
+   "topics": [
+    "es.rithmic.mbo"
+   ],
+   "subjects": [
+    "es.rithmic.mbo-value"
+   ]
   },
   {
    "job": "Jenkinsfile.opra-definition-enumeration-mirror",

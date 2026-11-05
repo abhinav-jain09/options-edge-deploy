@@ -1,3 +1,4 @@
 # Source ES4 raw subject; display subject is needed only in dev/prod (not the ES4 collector).
 # Canonical file shipped from the exact contracts main revision schemas/rithmic directory.
 es.rithmic.depth-value|3301|RithmicDepthFrame.avsc|1
+es.rithmic.mbo-value|3302|RithmicMboEvent.avsc|1

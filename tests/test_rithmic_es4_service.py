@@ -5,7 +5,7 @@ class RithmicEs4Service(unittest.TestCase):
     def test_mirrors_have_no_credentials_and_correct_dev_listener_alias(self):
         docs=list(yaml.safe_load_all((ROOT/'k8s/es4/services/rithmic-depth-bridge.yaml').read_text()))
         deployments={d['metadata']['name']:d for d in docs if d['kind']=='Deployment'}
-        self.assertEqual(set(deployments),{'rithmic-depth-bridge','rithmic-depth-mirror-dev','rithmic-depth-mirror-production'})
+        self.assertEqual(set(deployments),{'rithmic-depth-bridge','rithmic-depth-mirror-dev','rithmic-depth-mirror-production','rithmic-mbo-mirror-dev'})
         for name,d in deployments.items():
             pod=d['spec']['template']['spec'];self.assertFalse(pod['automountServiceAccountToken'])
             if name!='rithmic-depth-bridge':
