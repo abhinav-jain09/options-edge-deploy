@@ -7,3 +7,4 @@ com.optionsedge.contracts.esmbo.EsMboLevelFlow|3502|EsMboLevelFlow.avsc
 com.optionsedge.contracts.esmbo.EsMboHealth|3504|EsMboHealth.avsc
 com.optionsedge.contracts.esmbo.EsMboLevelFlowFinal|3506|EsMboLevelFlowFinal.avsc
 com.optionsedge.contracts.esmbo.EsMboSnapshot|3505|EsMboSnapshot.avsc
+com.optionsedge.contracts.esmbo.EsMboEvent|3503|EsMboEvent.avsc

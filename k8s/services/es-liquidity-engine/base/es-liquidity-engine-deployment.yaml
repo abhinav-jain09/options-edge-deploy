@@ -93,6 +93,15 @@ spec:
             # Restart source: the engine snapshots every 60 closed buckets to the compacted es.mbo.snapshot and restarts from it (0 turns it off).
             - name: ES_MBO_SNAPSHOT_INTERVAL_BUCKETS
               value: "60"
+            # The liquidity vacuum detector (SHADOW): DESCRIPTIVE bounds from the 2026-11-06 corpus measurement (es-liquidity-engine-service/docs/measurements/vacuum-depth-2026-11-06.md):
+            # fewer than 398 contracts on the next 10 ticks beyond the inside (the 5th percentile of regular hours, the smaller of 409 above and 398 below); the empty-run rule
+            # measured degenerate (0 at the 99th percentile) so it is 0. Not calibrated; unset (negative) disables the detector.
+            - name: ES_MBO_VACUUM_DEPTH_TICKS
+              value: "10"
+            - name: ES_MBO_VACUUM_DEPTH_BELOW
+              value: "398"
+            - name: ES_MBO_VACUUM_RUN_AT_LEAST
+              value: "0"
             - name: ES_MBO_TAPE_TOPIC
               value: underlying.es.trades
             - name: JAVA_TOOL_OPTIONS

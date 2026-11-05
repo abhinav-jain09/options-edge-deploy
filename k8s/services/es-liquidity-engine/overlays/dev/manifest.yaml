@@ -88,6 +88,12 @@ spec:
               value: "2000"
             - name: ES_MBO_SNAPSHOT_INTERVAL_BUCKETS
               value: "60"
+            - name: ES_MBO_VACUUM_DEPTH_TICKS
+              value: "10"
+            - name: ES_MBO_VACUUM_DEPTH_BELOW
+              value: "398"
+            - name: ES_MBO_VACUUM_RUN_AT_LEAST
+              value: "0"
             - name: ES_MBO_TAPE_TOPIC
               value: underlying.es.trades
             - name: JAVA_TOOL_OPTIONS
