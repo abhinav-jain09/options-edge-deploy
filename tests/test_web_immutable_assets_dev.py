@@ -43,15 +43,24 @@ class WebImmutableAssetsDevTest(unittest.TestCase):
         self.assertEqual('false', next(e['value'] for e in app['env'] if e['name'] == 'CONTEXT_TAPE_COMPILED_ASSETS'))
         self.assertTrue(next(v for v in app['volumeMounts'] if v['name'] == 'public-assets')['readOnly'])
         self.assertEqual('10m', init['resources']['requests']['cpu'])
+        self.assertEqual('Always', init['imagePullPolicy'])
+        self.assertFalse(next(v for v in init['volumeMounts'] if v['name']=='public-assets').get('readOnly',False))
+        app_root=next(e['value'] for e in app['env'] if e['name']=='CONTEXT_TAPE_ASSET_ROOT')
+        init_root=next(e['value'] for e in init['env'] if e['name']=='CONTEXT_TAPE_ASSET_ROOT')
+        self.assertEqual(app_root,init_root)
+        self.assertEqual(app_root,next(v['mountPath'] for v in app['volumeMounts'] if v['name']=='public-assets'))
+        self.assertEqual(init_root,next(v['mountPath'] for v in init['volumeMounts'] if v['name']=='public-assets'))
+        self.assertEqual({'runAsUser':0,'runAsGroup':0},init['securityContext'])
         self.assertEqual('100m', app['resources']['requests']['cpu'])
         self.assertEqual('web-immutable-assets', next(v for v in pod['volumes'] if v['name'] == 'public-assets')['persistentVolumeClaim']['claimName'])
 
     def test_production_and_experiment_gain_no_publisher_or_claim(self):
         for env in ['production', 'experiment']:
-            items = render('k8s/services/web/overlays/' + env)
+            items = render('k8s/overlays/' + env) + render('k8s/infra/overlays/' + env) + render('k8s/services/web/overlays/' + env)
             pod = resource(items, 'Deployment', 'options-edge-web')['spec']['template']['spec']
             self.assertFalse(any(c['name'] == 'publish-public-assets' for c in pod.get('initContainers', [])))
-            self.assertFalse(any(e['name'].startswith('CONTEXT_TAPE_COMPILED_') for c in pod['containers'] for e in c.get('env', [])))
+            self.assertFalse(any(e['name'].startswith('CONTEXT_TAPE_COMPILED_') or e['name']=='CONTEXT_TAPE_ASSET_ROOT' for c in pod['containers'] for e in c.get('env', [])))
+            self.assertFalse(any(item['kind']=='PersistentVolumeClaim' and item['metadata']['name']=='web-immutable-assets' for item in items))
             self.assertFalse(any(v.get('persistentVolumeClaim', {}).get('claimName') == 'web-immutable-assets' for v in pod.get('volumes', [])))
 
 

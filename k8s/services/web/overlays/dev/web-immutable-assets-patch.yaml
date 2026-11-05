@@ -15,7 +15,12 @@ spec:
           imagePullPolicy: Always
           # Verified against the existing Jib image config and its argument file; no app.Main startup.
           command: [java, -cp, '@/app/jib-classpath-file', app.web.ContextTapeAssetPublisher]
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
           env:
+            - name: JAVA_TOOL_OPTIONS
+              value: '-Xmx128m -XX:-UsePerfData'
             - name: CONTEXT_TAPE_ASSET_ROOT
               value: /var/run/context-tape-assets
           resources:
