@@ -1048,6 +1048,10 @@
     3504
    ],
    [
+    3505,
+    3505
+   ],
+   [
     3506,
     3506
    ]
@@ -5630,6 +5634,50 @@
    "consumers": [],
    "retained": true,
    "retainedReason": "curated, not baseline: es-liquidity-engine-service (NEW, dev only; contracts 0.71.0 schemas-registry/esmbo) writes it on es.mbo.level-flow-final under RecordNameStrategy with auto.register.schemas=false (its schema-requirements.json names this id and hash). Dev only; nothing is registered on production or es4."
+  },
+  {
+   "kind": "MIRRORED",
+   "subject": "com.optionsedge.contracts.esmbo.EsMboSnapshot",
+   "version": 1,
+   "id": 3505,
+   "family": "esmbo",
+   "schemaFile": "com.optionsedge.contracts.esmbo.EsMboSnapshot/v1.avsc",
+   "schemaHash": "a9045fa943d39ce2557fc59c229bee2ee5c166445a5b4b92715d0076c1829552",
+   "environments": [
+    "dev"
+   ],
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas-registry/esmbo/EsMboSnapshot.avsc"
+   },
+   "topics": [
+    {
+     "name": "es.mbo.snapshot",
+     "kind": "data"
+    }
+   ],
+   "producers": [
+    {
+     "service": "es-liquidity-engine",
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "es-liquidity-engine",
+     "accepts": [
+      3505
+     ],
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
+   "retained": true,
+   "retainedReason": "curated, not baseline: es-liquidity-engine-service (NEW, dev only; contracts 0.72.0 schemas-registry/esmbo) writes and reads it on es.mbo.snapshot (compacted restart source) under RecordNameStrategy with auto.register.schemas=false. Dev only; nothing is registered on production or es4."
   },
   {
    "kind": "MIRRORED",
