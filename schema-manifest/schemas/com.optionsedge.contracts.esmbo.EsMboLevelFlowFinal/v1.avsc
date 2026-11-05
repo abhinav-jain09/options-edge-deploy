@@ -1,0 +1,83 @@
+{
+  "type": "record",
+  "name": "EsMboLevelFlowFinal",
+  "namespace": "com.optionsedge.contracts.esmbo",
+  "doc": "es-liquidity-engine G 5.4/5.5: the FINAL attribution of the gross reductions of one (side, tick) level in one 1 s bucket, after the trade tape has been released past the bucket. Rows exist only for levels with a reduction.",
+  "fields": [
+    {
+      "name": "schemaVersion",
+      "type": "int",
+      "doc": "1 for this revision"
+    },
+    {
+      "name": "environment",
+      "type": "string",
+      "doc": "the environment literal of the admitted MBO records, e.g. Rithmic Paper Trading"
+    },
+    {
+      "name": "contract",
+      "type": "string",
+      "doc": "the contract table's row for the trade date, e.g. ESZ6"
+    },
+    {
+      "name": "bucketEnd",
+      "type": "long",
+      "doc": "bucket end on the collector clock (receivedAtMs), epoch ms; 1000 ms grid, bucket (end-1000, end]"
+    },
+    {
+      "name": "configFingerprint",
+      "type": "string",
+      "doc": "SHA-256 over the sorted name=value configuration lines plus the engine's logic version"
+    },
+    {
+      "name": "side",
+      "type": "string",
+      "doc": "B (bid) or S (ask)"
+    },
+    {
+      "name": "tick",
+      "type": "long",
+      "doc": "ES quarter-point price ticks"
+    },
+    {
+      "name": "attributionStatus",
+      "type": "string",
+      "doc": "FINAL"
+    },
+    {
+      "name": "epochStatus",
+      "type": "string",
+      "doc": "the epoch status at the bucket's BOOK close (LIVE for a published row)"
+    },
+    {
+      "name": "windowMs",
+      "type": "long",
+      "doc": "the fill-matching window W the attribution used (a ledger value)"
+    },
+    {
+      "name": "reductionQty",
+      "type": "long",
+      "doc": "gross contracts removed in the bucket at this level"
+    },
+    {
+      "name": "fillQty",
+      "type": "long",
+      "doc": "contracts matched to trade prints"
+    },
+    {
+      "name": "cancelQty",
+      "type": "long",
+      "doc": "contracts not matched to any print"
+    },
+    {
+      "name": "unclassifiedQty",
+      "type": "long",
+      "doc": "contracts of reductions with no exchange time or a suspect clock"
+    },
+    {
+      "name": "reductionCount",
+      "type": "long",
+      "doc": "number of reductions attributed"
+    }
+  ]
+}

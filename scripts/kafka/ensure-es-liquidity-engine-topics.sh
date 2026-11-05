@@ -5,6 +5,7 @@
 #   NO BROKER-WIDE CHANGE. The shapes are the ones scripts/kafka/topics.env declares (one partition each, exact):
 #   es.mbo.level-flow   1 partition, delete, retention.ms EXACTLY 86400000 (1 day), retention.bytes EXACTLY 268435456 (256 MiB cap: ~22 rows a second)
 #   es.mbo.health       1 partition, delete, retention.ms EXACTLY 86400000 (1 day)
+#   es.mbo.level-flow-final 1 partition, delete, retention.ms EXACTLY 86400000 (1 day), retention.bytes EXACTLY 268435456
 # An existing topic is never recreated, altered or shrunk: any difference fails closed. The input topic es.rithmic.mbo and the drop engine's es.drop.* topics belong to other
 # owners and are not created here (the drop runtime creates its own outputs at start). dev-cleanup.sh does NOT run this barrier: its topic pass recreates the shapes
 # declared in scripts/kafka/topics.env.
@@ -35,6 +36,7 @@ fi
 
 LEVEL_FLOW="${KAFKA_ES_MBO_LEVEL_FLOW_TOPIC:-es.mbo.level-flow}"
 HEALTH="${KAFKA_ES_MBO_HEALTH_TOPIC:-es.mbo.health}"
+FINAL="${KAFKA_ES_MBO_FINAL_TOPIC:-es.mbo.level-flow-final}"
 
 # retention.bytes is not part of the shared routine's contract: read the EFFECTIVE value (--all, what the service's own describeConfigs sees) and compare exactly. Never altered here.
 check_retention_bytes() { # <topic> <exact retention.bytes>
@@ -72,6 +74,7 @@ ensure_with_bytes() { # <topic> <cleanup.policy> <retention.ms> <retention.bytes
 
 rc=0
 ensure_with_bytes "$LEVEL_FLOW" delete "$ONE_DAY_MS" "$LEVEL_FLOW_BYTES" || rc=1
+ensure_with_bytes "$FINAL" delete "$ONE_DAY_MS" "$LEVEL_FLOW_BYTES" || rc=1
 ensure_topic "$HEALTH" delete "exact:$ONE_DAY_MS" 1048576 || rc=1
 if [ "$rc" -ne 0 ]; then
   echo "=== ensure-es-liquidity-engine-topics FAILED - the MBO engine must not publish ==="
