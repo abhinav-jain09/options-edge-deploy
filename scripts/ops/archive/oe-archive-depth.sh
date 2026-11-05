@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# oe-archive-depth.sh — the DEV depth archive: es.rithmic.depth, the linearized ES tape and the liquidity-wall
-# closures, captured to the NAS every six hours from the dev Mac (launchd/oe-archive-depth.plist: 02:00, 08:00,
+# oe-archive-depth.sh — the DEV depth archive: es.rithmic.depth, the linearized ES tape, the liquidity-wall
+# closures and the Rithmic MBO order events (es.rithmic.mbo), captured to the NAS every six hours from the dev Mac (launchd/oe-archive-depth.plist: 02:00, 08:00,
 # 14:00 and 20:00 ET).
 #
 # WHY A SEPARATE JOB, ON A SEPARATE SCHEDULE. es.rithmic.depth carries a 12-HOUR retention on dev (ES Level
