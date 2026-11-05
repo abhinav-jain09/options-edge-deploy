@@ -266,7 +266,7 @@ class Schemas(unittest.TestCase):
         self.assertIn("es-liquidity-engine", named)
         sh = read("scripts/deploy/service-deploy.sh")
         self.assertIn("bash scripts/ci/schema-sync.sh", sh)
-        self.assertIn("select(.service == \"$SERVICE\")", sh)
+        self.assertRegex(sh, r'select\(\.service == \\"\$SERVICE\\"\)')
 
     def test_the_manifest_validates_with_the_governance_tool(self):
         r = subprocess.run(["java", "-jar", str(JAR), "validate", "--manifest", str(ROOT / "schema-manifest/manifest.json"), "--snapshots", str(ROOT / "schema-manifest/schemas")],
