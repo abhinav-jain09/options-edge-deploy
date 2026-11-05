@@ -66,23 +66,26 @@ class CanonicalArchiveRoutingTest(unittest.TestCase):
     def commands(self):
         return [json.loads(row) for row in self.capture.read_text().splitlines()] if self.capture.exists() else []
 
-    def test_all_seven_bindings_force_committed_read_even_when_the_old_list_is_overridden(self):
+    def test_all_eight_bindings_force_committed_read_even_when_the_old_list_is_overridden(self):
         helper = (ROOT / 'scripts/ops/archive/CanonicalArchiveDecoder.java').read_text()
         bindings = re.findall(r'"([a-z][a-z.\-]+)",(?:Cvd|LiquidityWall)', helper)
         # es.rithmic.depth is bound by the contracts' own constant for the topic name, not a literal.
         self.assertIn('RithmicSchemas.RAW_TOPIC,RithmicSchemas.FRAME', helper)
         bindings.append('es.rithmic.depth')
+        # es.rithmic.mbo is bound by the contracts' own constants as well.
+        self.assertIn('RithmicMboSchemas.TOPIC,RithmicMboSchemas.EVENT', helper)
+        bindings.append('es.rithmic.mbo')
         self.assertEqual(set(TOPICS), set(bindings))
-        self.assertEqual(len(TOPICS), 7)
+        self.assertEqual(len(TOPICS), 8)
         for topic in TOPICS:
             self.assertEqual(self.run_shell(f'is_committed_read_topic "{topic}"').returncode, 0, topic)
         self.assertEqual(self.run_shell('is_committed_read_topic unknown').returncode, 1)
 
     def test_the_depth_set_members_take_the_canonical_helper_path(self):
-        # The two Avro members of OE_DEPTH_TOPICS_dev go through the tested helper jar with the registry derived
+        # The three Avro members of OE_DEPTH_TOPICS_dev go through the tested helper jar with the registry derived
         # from the DEV broker; the tape is committed-read but not canonical, so it keeps the raw source-launched
-        # reader on the inherited JDK — three topics, two paths, decided by the sets and nothing else.
-        for topic in ['es.rithmic.depth', 'futures.liquidity-wall.closures']:
+        # reader on the inherited JDK — four topics, two paths, decided by the sets and nothing else.
+        for topic in ['es.rithmic.depth', 'futures.liquidity-wall.closures', 'es.rithmic.mbo']:
             r = self.run_shell(f'run_strike_reader 10 --topic {topic} --partition 0', BOOTSTRAP='192.168.100.102:19092')
             self.assertEqual(r.returncode, 0, r.stderr)
             command = self.commands()[-1]

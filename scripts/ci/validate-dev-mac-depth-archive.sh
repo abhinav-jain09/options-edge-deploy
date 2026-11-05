@@ -26,19 +26,20 @@ done
 [ -x "$INST" ] || note "$INST is not executable, so the documented install command would not run"
 [ -x "$WRAP" ] || note "$WRAP is not executable"
 
-# 1. THE SET: exactly the three members document D section 8 names, defined once, in the policy file.
-want_set="es.rithmic.depth underlying.es.trades.linearized futures.liquidity-wall.closures"
+# 1. THE SET: exactly the four members (the three of document D section 8 plus es.rithmic.mbo, 2026-11-05), defined once, in the policy file.
+want_set="es.rithmic.depth underlying.es.trades.linearized futures.liquidity-wall.closures es.rithmic.mbo"
 got_set="$(unset OE_DEPTH_TOPICS_dev; . "$TOPICS_ENV" >/dev/null 2>&1; printf '%s' "${OE_DEPTH_TOPICS_dev:-}")"
 [ "$got_set" = "$want_set" ] || note "$TOPICS_ENV defines OE_DEPTH_TOPICS_dev=\"${got_set:-<unset>}\", expected \"$want_set\""
 
 # 2. THE ARCHIVER declares and validates it like OE_ES4_TOPICS: unset, sourced, required.
 grep -qE '^unset .*\bOE_DEPTH_TOPICS_dev\b' "$ARCH" || note "$ARCH does not unset OE_DEPTH_TOPICS_dev before sourcing the policy file (an inherited value would pass the check)"
 grep -qF ': "${OE_DEPTH_TOPICS_dev:?' "$ARCH" || note "$ARCH does not require OE_DEPTH_TOPICS_dev from the policy file"
-# 3. THE CLASSIFICATION the documents specify: the two Avro topics canonical, the tape committed-read and strict.
+# 3. THE CLASSIFICATION the documents specify: the three Avro topics canonical, the tape committed-read and strict.
 canon="$(grep -m1 '^OE_CANONICAL_ARCHIVE_TOPICS=' "$ARCH" | sed 's/^[^"]*"//; s/"$//')"
-for t in es.rithmic.depth futures.liquidity-wall.closures; do
+for t in es.rithmic.depth futures.liquidity-wall.closures es.rithmic.mbo; do
   case " $canon " in *" $t "*) : ;; *) note "$t is not in OE_CANONICAL_ARCHIVE_TOPICS ($ARCH) — it would take the binary-unsafe console path" ;; esac
   grep -qF "\"$t\"" "$DECODER" || { [ "$t" = es.rithmic.depth ] && grep -qF 'RithmicSchemas.RAW_TOPIC' "$DECODER"; } \
+    || { [ "$t" = es.rithmic.mbo ] && grep -qF 'RithmicMboSchemas.TOPIC,RithmicMboSchemas.EVENT' "$DECODER"; } \
     || note "$DECODER binds nothing for $t"
 done
 grep -qF 'LiquidityWallSchemas.CLOSURE' "$DECODER" || note "$DECODER does not bind LiquidityWallClosure"
@@ -99,7 +100,7 @@ PY
 [ "$(printf '%s\n' "$sched" | sed -n 3p)" = "Label=com.optionsedge.oe-archive-depth" ] || note "$PLIST label is not com.optionsedge.oe-archive-depth"
 plutil -lint "$PLIST" >/dev/null 2>&1 || python3 -c 'import plistlib,sys; plistlib.load(open(sys.argv[1],"rb"))' "$PLIST" 2>/dev/null || note "$PLIST does not parse"
 
-# 7. DEV ONLY. Nothing scheduled on .252 for it, and none of the three topics in a prod or es4 set.
+# 7. DEV ONLY. Nothing scheduled on .252 for it, and none of the four topics in a prod or es4 set.
 grep -q 'oe-archive-depth' "$D/oe-archive.crontab" && note "the .252 crontab names the depth archive — it belongs to the dev Mac's launchd, not to .252"
 for v in OE_ES4_TOPICS OE_ALL_TOPICS_prod; do
   members="$(unset "$v"; . "$TOPICS_ENV" >/dev/null 2>&1; eval "printf '%s' \"\${$v:-}\"")"

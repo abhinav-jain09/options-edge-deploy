@@ -4,6 +4,7 @@ import com.optionsedge.contracts.avro.CanonicalModelBytesDeserializer;
 import com.optionsedge.contracts.cvd.CvdRelatedSchemas;
 import com.optionsedge.contracts.cvd.CvdSchemas;
 import com.optionsedge.contracts.liquiditywall.LiquidityWallSchemas;
+import com.optionsedge.contracts.rithmic.RithmicMboSchemas;
 import com.optionsedge.contracts.rithmic.RithmicSchemas;
 import java.util.HashMap;
 import java.util.Map;
@@ -17,8 +18,9 @@ import org.apache.kafka.common.serialization.Deserializer;
 public final class CanonicalArchiveDecoder implements Deserializer<byte[]> {
     // Intersection of this migration's outputs with the committed archive topic policy:
     // four es4 evidence topics, the dev Direction ledger, and (2026-11-04, ES Level Absorption Requirements
-    // section 9 item 2 / ES Book Liquidity Walls Requirements rev 11 section 8) the two Avro members of the
-    // dev depth set OE_DEPTH_TOPICS_dev. New topics require an explicit binding.
+    // section 9 item 2 / ES Book Liquidity Walls Requirements rev 11 section 8) the first two Avro members of the
+    // dev depth set OE_DEPTH_TOPICS_dev, plus (2026-11-05, ES MBO Liquidity Engine requirement F, Phase 0)
+    // es.rithmic.mbo (RithmicMboEvent, fixed id 3302 = RithmicMboSchemas.SCHEMA_ID). New topics require an explicit binding.
     private static final Map<String,Schema> BINDINGS=Map.of(
             "es.futures.cvd.bars",CvdSchemas.BAR,
             "es.futures.footprint.bars",CvdSchemas.FOOTPRINT_BAR,
@@ -26,15 +28,17 @@ public final class CanonicalArchiveDecoder implements Deserializer<byte[]> {
             "es.futures.footprint.strike",CvdRelatedSchemas.FOOTPRINT_STRIKE,
             "context-tape.direction.ledger",CvdRelatedSchemas.directionLedger(),
             RithmicSchemas.RAW_TOPIC,RithmicSchemas.FRAME,
-            "futures.liquidity-wall.closures",LiquidityWallSchemas.CLOSURE.schema());
+            "futures.liquidity-wall.closures",LiquidityWallSchemas.CLOSURE.schema(),
+            RithmicMboSchemas.TOPIC,RithmicMboSchemas.EVENT);
     // RithmicDepthFrame carries fixed schema id 3301 on every registry (options-edge-contracts
     // schemas/rithmic/README.md); the contracts expose no constant for it, so it is stated here beside the
-    // closure's, which the contracts do expose (LiquidityWallSchemas.CLOSURE, id 3401).
+    // closure's (LiquidityWallSchemas.CLOSURE, id 3401) and the MBO event's (RithmicMboSchemas.SCHEMA_ID, id 3302),
+    // which the contracts do expose.
     static final int RITHMIC_DEPTH_FRAME_ID=3301;
-    // THE FIXED-ID HEADER CHECK, for the depth set only. The SDK's same-topic roll-forward profile (the only
+    // THE FIXED-ID HEADER CHECK, for the three Avro members of the depth set only. The SDK's same-topic roll-forward profile (the only
     // consumer profile that accepts a topic name without the .avro suffix) admits a retained JSON value on
     // every bound topic, and compares the writer schema it resolves from the frame's id with the released
-    // schema rather than the id itself. Document A section 9 item 2 asks for more on these two topics: a
+    // schema rather than the id itself. Document A section 9 item 2 asks for more on these topics (the MBO event joined them 2026-11-05): a
     // record whose Confluent framing does not carry the fixed id fails the capture, and the reader turns the
     // exception into a FAILED summary that leaves the checkpoint where it was. So the header is read here,
     // before any decoding: magic byte 0 and the four big-endian id bytes must be the fixed id — a JSON
@@ -42,7 +46,8 @@ public final class CanonicalArchiveDecoder implements Deserializer<byte[]> {
     // The five older bindings keep their roll-forward semantics exactly as before.
     private static final Map<String,Integer> FIXED_IDS=Map.of(
             RithmicSchemas.RAW_TOPIC,RITHMIC_DEPTH_FRAME_ID,
-            "futures.liquidity-wall.closures",LiquidityWallSchemas.CLOSURE.id());
+            "futures.liquidity-wall.closures",LiquidityWallSchemas.CLOSURE.id(),
+            RithmicMboSchemas.TOPIC,RithmicMboSchemas.SCHEMA_ID);
     private final CanonicalModelBytesDeserializer values=new CanonicalModelBytesDeserializer();
     private final String topic;
     private final Integer fixedId;

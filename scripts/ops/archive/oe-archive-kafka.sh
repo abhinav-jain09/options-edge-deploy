@@ -146,11 +146,12 @@ OE_VOL_PREMIUM_TRANSACTIONAL_TOPICS="options.spx.vol-premium.ivrv options.spx.vo
 OE_COMMITTED_READ_TOPICS="${OE_COMMITTED_READ_TOPICS:-es.futures.footprint.strike underlying.es.trades.linearized $OE_VOL_PREMIUM_TRANSACTIONAL_TOPICS}"
 # Canonical archive inputs cannot be opted back into the binary-unsafe console path.
 # es.rithmic.depth (RithmicDepthFrame, fixed id 3301) and futures.liquidity-wall.closures (LiquidityWallClosure,
-# fixed id 3401) joined 2026-11-04 (document A section 9 items 2-3, document D section 8): both are Avro on the
+# fixed id 3401) joined 2026-11-04 (document A section 9 items 2-3, document D section 8): the pair are Avro on the
 # wire, both are bound in CanonicalArchiveDecoder.java under their released schemas, and a record whose Confluent
 # framing does not carry the fixed id fails the capture without advancing the checkpoint. Members of the dev depth
-# set OE_DEPTH_TOPICS_dev (oe-topics.env); archived on dev only.
-OE_CANONICAL_ARCHIVE_TOPICS="es.futures.cvd.bars es.futures.footprint.bars es.futures.footprint.outcomes es.futures.footprint.strike context-tape.direction.ledger es.rithmic.depth futures.liquidity-wall.closures"
+# set OE_DEPTH_TOPICS_dev (oe-topics.env); archived on dev only. es.rithmic.mbo (RithmicMboEvent, fixed id 3302)
+# joined 2026-11-05 under the same rules (ES MBO Liquidity Engine requirement F, Phase 0).
+OE_CANONICAL_ARCHIVE_TOPICS="es.futures.cvd.bars es.futures.footprint.bars es.futures.footprint.outcomes es.futures.footprint.strike context-tape.direction.ledger es.rithmic.depth futures.liquidity-wall.closures es.rithmic.mbo"
 is_canonical_archive_topic() { case " $OE_CANONICAL_ARCHIVE_TOPICS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 is_committed_read_topic() { is_canonical_archive_topic "$1" || case " $OE_COMMITTED_READ_TOPICS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 # Topics that are AVRO on the wire (Kafka Serialization Rule) and are captured through IndicatorArchiveReader.java,

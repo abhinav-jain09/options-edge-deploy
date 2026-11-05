@@ -3,8 +3,8 @@
 ES Level Absorption Requirements section 9 (document A, capture items 1-6) and ES Book Liquidity Walls
 Requirements rev 11 section 8 (document D) specify: the set OE_DEPTH_TOPICS_dev in oe-topics.env, declared
 and validated by oe-archive-kafka.sh exactly as OE_ES4_TOPICS is and read through the dedicated invocation
-ENV=dev TOPICS="$OE_DEPTH_TOPICS_dev"; es.rithmic.depth and futures.liquidity-wall.closures canonical Avro
-(CanonicalArchiveDecoder bindings under ids 3301 and 3401); underlying.es.trades.linearized committed-read
+ENV=dev TOPICS="$OE_DEPTH_TOPICS_dev"; es.rithmic.depth, futures.liquidity-wall.closures and (2026-11-05) es.rithmic.mbo
+canonical Avro (CanonicalArchiveDecoder bindings under ids 3301, 3401 and 3302); underlying.es.trades.linearized committed-read
 and strict; a launchd agent at 02:00, 08:00, 14:00 and 20:00 ET; dev only.
 """
 import os
@@ -26,7 +26,8 @@ SOURCE = ARCHIVER.read_text()
 DEPTH = 'es.rithmic.depth'
 TAPE = 'underlying.es.trades.linearized'
 CLOSURES = 'futures.liquidity-wall.closures'
-SET = f'{DEPTH} {TAPE} {CLOSURES}'
+MBO = 'es.rithmic.mbo'
+SET = f'{DEPTH} {TAPE} {CLOSURES} {MBO}'
 
 
 def shell_value(env_file, name):
@@ -54,7 +55,7 @@ def declaration(name):
 class DepthSetPolicyTest(unittest.TestCase):
     """The set, where it is defined, and how the archiver derives it."""
 
-    def test_the_policy_file_defines_exactly_the_three_members_in_order(self):
+    def test_the_policy_file_defines_exactly_the_four_members_in_order(self):
         self.assertEqual(shell_value(TOPICS_ENV, 'OE_DEPTH_TOPICS_dev'), SET)
         line = re.search(r'^OE_DEPTH_TOPICS_dev="([^"]*)"$', TOPICS_ENV.read_text(), re.M)
         self.assertIsNotNone(line, 'the set must be a plain double-quoted declaration, one definition')
@@ -112,13 +113,13 @@ class DepthClassificationTest(unittest.TestCase):
         return subprocess.run(['bash', '-c', self.prelude + f'{name} "{topic}"'], env=self.env,
                               text=True, capture_output=True, timeout=10).returncode == 0
 
-    def test_the_two_avro_topics_are_canonical_and_therefore_committed_read(self):
-        for topic in (DEPTH, CLOSURES):
+    def test_the_three_avro_topics_are_canonical_and_therefore_committed_read(self):
+        for topic in (DEPTH, CLOSURES, MBO):
             self.assertTrue(self.predicate('is_canonical_archive_topic', topic), topic)
             self.assertTrue(self.predicate('is_committed_read_topic', topic), topic)
             self.assertFalse(self.predicate('is_as_written_topic', topic), topic)
         canonical = re.search(r'^OE_CANONICAL_ARCHIVE_TOPICS="([^"]+)"$', SOURCE, re.M).group(1).split()
-        self.assertEqual(canonical[-2:], [DEPTH, CLOSURES], 'appended to the canonical set, the five older members untouched')
+        self.assertEqual(canonical[-3:], [DEPTH, CLOSURES, MBO], 'appended to the canonical set, the five older members untouched')
 
     def test_the_tape_is_committed_read_and_strict_but_not_canonical_or_as_written(self):
         self.assertTrue(self.predicate('is_committed_read_topic', TAPE))
@@ -142,19 +143,21 @@ class DepthClassificationTest(unittest.TestCase):
 
 
 class DecoderBindingTest(unittest.TestCase):
-    """The decoder source binds both records under their released schemas and refuses a foreign id."""
+    """The decoder source binds all three records (depth frame, MBO event, wall closure) under their released schemas and refuses a foreign id."""
 
-    def test_both_records_are_bound_beside_the_five_older_bindings(self):
+    def test_all_three_records_are_bound_beside_the_five_older_bindings(self):
         text = DECODER.read_text()
         bindings = text[text.index('BINDINGS=Map.of('):text.index(');', text.index('BINDINGS=Map.of('))]
         self.assertIn('RithmicSchemas.RAW_TOPIC,RithmicSchemas.FRAME', bindings)
         self.assertIn('"futures.liquidity-wall.closures",LiquidityWallSchemas.CLOSURE.schema()', bindings)
+        self.assertIn('RithmicMboSchemas.TOPIC,RithmicMboSchemas.EVENT', bindings)
         for older in ('"es.futures.cvd.bars",CvdSchemas.BAR', '"es.futures.footprint.bars",CvdSchemas.FOOTPRINT_BAR',
                       '"es.futures.footprint.outcomes",CvdSchemas.FOOTPRINT_OUTCOME',
                       '"es.futures.footprint.strike",CvdRelatedSchemas.FOOTPRINT_STRIKE',
                       '"context-tape.direction.ledger",CvdRelatedSchemas.directionLedger()'):
             self.assertIn(older, bindings)
         self.assertIn('import com.optionsedge.contracts.rithmic.RithmicSchemas;', text)
+        self.assertIn('import com.optionsedge.contracts.rithmic.RithmicMboSchemas;', text)
         self.assertIn('import com.optionsedge.contracts.liquiditywall.LiquidityWallSchemas;', text)
 
     def test_the_fixed_ids_are_the_registered_ones_and_checked_before_decoding(self):
@@ -163,6 +166,7 @@ class DecoderBindingTest(unittest.TestCase):
         fixed = text[text.index('FIXED_IDS=Map.of('):text.index(');', text.index('FIXED_IDS=Map.of('))]
         self.assertIn('RithmicSchemas.RAW_TOPIC,RITHMIC_DEPTH_FRAME_ID', fixed)
         self.assertIn('"futures.liquidity-wall.closures",LiquidityWallSchemas.CLOSURE.id()', fixed)
+        self.assertIn('RithmicMboSchemas.TOPIC,RithmicMboSchemas.SCHEMA_ID', fixed)
         deserialize = text[text.index('public byte[] deserialize(String topic,Headers headers,byte[] value)'):]
         self.assertLess(deserialize.index('framedId(value,fixedId,topic)'), deserialize.index('return values.deserialize(topic,headers,value);'),
                         'the header check runs before the SDK decode, so a foreign id never reaches it')
@@ -182,9 +186,11 @@ class DecoderBindingTest(unittest.TestCase):
         for candidate in (ROOT / '.jenkins-tmp/contracts', ROOT.parent / 'contracts-work'):
             holder = candidate / 'src/main/java/com/optionsedge/contracts/liquiditywall/LiquidityWallSchemas.java'
             readme = candidate / 'schemas/rithmic/README.md'
-            if holder.exists() and readme.exists():
+            mbo = candidate / 'src/main/java/com/optionsedge/contracts/rithmic/RithmicMboSchemas.java'
+            if holder.exists() and readme.exists() and mbo.exists():
                 self.assertIn('new Subject("LiquidityWallClosure", 3401)', holder.read_text())
                 self.assertIn('fixed schema ID 3301', readme.read_text())
+                self.assertIn('SCHEMA_ID=3302', mbo.read_text())
                 return
         self.skipTest('no contracts checkout beside the repo')
 
@@ -291,7 +297,7 @@ class WrapperInvocationTest(unittest.TestCase):
 class DevOnlyAndGuardsTest(unittest.TestCase):
     """Nothing for prod or es4; the exemption from the unit check is bound by its own guard; CI runs both."""
 
-    def test_the_three_topics_are_in_no_prod_or_es4_set(self):
+    def test_the_four_topics_are_in_no_prod_or_es4_set(self):
         for name in ('OE_ES4_TOPICS', 'OE_ALL_TOPICS_prod', 'OE_HEAVY_TOPICS_prod', 'OE_SPOT_TOPICS'):
             members = shell_value(TOPICS_ENV, name).split()
             for topic in SET.split():

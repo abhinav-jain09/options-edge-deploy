@@ -24,7 +24,7 @@ DRY=false; [ "${1:-}" = "--dry-run" ] && DRY=true
 # EVERY committed file the wrapper and the archiver read from beside themselves for THIS set. The wrapper
 # sources oe-topics.env (the set) and oe-alert.sh (delivery) and runs oe-archive-kafka.sh; the archiver reads
 # oe-topics.env and oe-alert.sh beside itself too, and for the depth set's committed reads it runs
-# StrikeArchiveReader.java — from source for the tape, and from the helper jar for the two canonical Avro topics,
+# StrikeArchiveReader.java — from source for the tape, and from the helper jar for the three canonical Avro topics,
 # whose decoder source CanonicalArchiveDecoder.java is compiled into that jar and shipped beside the archiver as
 # the record of what the jar holds. validate-dev-mac-depth-archive.sh asserts this list against the scripts.
 FILES="oe-archive-depth.sh oe-archive-kafka.sh oe-topics.env oe-alert.sh StrikeArchiveReader.java CanonicalArchiveDecoder.java"
@@ -32,7 +32,7 @@ FILES="oe-archive-depth.sh oe-archive-kafka.sh oe-topics.env oe-alert.sh StrikeA
 # compiled against the contracts) and the contracts jar. Jenkins archive-scripts-deploy builds both from the
 # permitted contracts commit and ships them to .252's oe-ops; the same two files must be placed in $DEST on this
 # host (copied from that build, or from .252:/home/abhinav/oe-ops) BEFORE this installer runs. Without them the
-# archiver refuses every es.rithmic.depth and futures.liquidity-wall.closures capture ("canonical archive
+# archiver refuses every es.rithmic.depth, es.rithmic.mbo and futures.liquidity-wall.closures capture ("canonical archive
 # SDK/helper missing"), so installing without them would schedule a job that fails four times a day.
 SIDECARS="canonical-archive-reader.jar options-edge-contracts.jar"
 
@@ -96,7 +96,7 @@ fi
 for j in $SIDECARS; do
   [ -f "$DEST/$j" ] && [ ! -L "$DEST/$j" ] || {
     echo "REFUSING: $DEST/$j is missing (or not a plain file). The archiver refuses every canonical Avro capture" >&2
-    echo "          (es.rithmic.depth, futures.liquidity-wall.closures) without it. Copy the build Jenkins" >&2
+    echo "          (es.rithmic.depth, es.rithmic.mbo, futures.liquidity-wall.closures) without it. Copy the build Jenkins" >&2
     echo "          archive-scripts-deploy shipped (.252:/home/abhinav/oe-ops/$j) into $DEST first." >&2
     exit 1; }
 done

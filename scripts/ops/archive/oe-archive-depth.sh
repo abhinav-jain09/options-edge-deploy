@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# oe-archive-depth.sh — the DEV depth archive: es.rithmic.depth, the linearized ES tape and the liquidity-wall
-# closures, captured to the NAS every six hours from the dev Mac (launchd/oe-archive-depth.plist: 02:00, 08:00,
+# oe-archive-depth.sh — the DEV depth archive: es.rithmic.depth, the linearized ES tape, the liquidity-wall
+# closures and the Rithmic MBO order events (es.rithmic.mbo), captured to the NAS every six hours from the dev Mac (launchd/oe-archive-depth.plist: 02:00, 08:00,
 # 14:00 and 20:00 ET).
 #
 # WHY A SEPARATE JOB, ON A SEPARATE SCHEDULE. es.rithmic.depth carries a 12-HOUR retention on dev (ES Level
@@ -11,15 +11,15 @@
 # it apart from the nightly run; item 1 names the invocation: ENV=dev TOPICS="$OE_DEPTH_TOPICS_dev" against the
 # dev broker and the dev schema registry.
 #
-# ONE DEFINITION OF THE SET. The three topics are OE_DEPTH_TOPICS_dev in oe-topics.env and nowhere else: this
+# ONE DEFINITION OF THE SET. The four topics (es.rithmic.mbo joined 2026-11-05) are OE_DEPTH_TOPICS_dev in oe-topics.env and nowhere else: this
 # wrapper sources that file, refuses to run without the variable, and passes it as the archiver's TOPICS
 # override. The override is load-bearing — ENV=dev has no depth default in oe-archive-kafka.sh, so a wrapper that
 # forgot it would archive the prod default set against the dev broker and report success. The archiver itself
 # requires the variable too (unset, sourced, non-empty), exactly as it requires OE_ES4_TOPICS.
 #
-# WHAT THE ARCHIVER DOES WITH THEM (oe-archive-kafka.sh): es.rithmic.depth and futures.liquidity-wall.closures
+# WHAT THE ARCHIVER DOES WITH THEM (oe-archive-kafka.sh): es.rithmic.depth, es.rithmic.mbo and futures.liquidity-wall.closures
 # are OE_CANONICAL_ARCHIVE_TOPICS, read committed through CanonicalArchiveDecoder.java under their released
-# schemas (RithmicDepthFrame id 3301, LiquidityWallClosure id 3401; a frame under any other id fails the capture
+# schemas (RithmicDepthFrame id 3301, RithmicMboEvent id 3302, LiquidityWallClosure id 3401; a frame under any other id fails the capture
 # with the checkpoint untouched); underlying.es.trades.linearized is a committed-read, STRICT topic (an absent
 # tape is a FAILED capture, never a quiet SKIP). The canonical path needs the JDK 21+ helper jar and the
 # contracts jar beside the archiver — install-dev-mac-depth-archive.sh refuses to install without them.
