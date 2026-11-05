@@ -1,0 +1,93 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: liquidity-validator-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: liquidity-validator-service
+    app.kubernetes.io/component: liquidity-validator-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  # DEV ONLY (services.yaml envs: [dev]). The live READ-ONLY liquidity validator: for every geometry release it publishes what the liquidity inputs said at that instant (research records on three
+  # Avro topics). It NEVER trades, sizes or sends an order; no decision path reads its topics. Design: options-edge-documents design/geometry-trade-rules/LIQUIDITY-VALIDATOR-SERVICE-REQUIREMENT.md.
+  # SINGLE replica (strategy Recreate): one validator owns the three output topics.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: liquidity-validator-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: liquidity-validator-service
+        app.kubernetes.io/component: liquidity-validator-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: liquidity-validator
+          # Base-registry name, like every other base manifest: the dev overlays (monolith AND the standalone slice) remap it to host.docker.internal:5001 via `images:`, and apply.sh's
+          # digest-pin loop keys its rewrite on exactly this `<base registry>/<image>` name.
+          image: 192.168.100.252:5000/options-edge-liquidity-validator:dev
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: options-edge-config              # SCHEMA_REGISTRY_URL (ids 3601-3603 and the five input ids are resolved from it) and the rest of the shared platform config
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            # The environment guard is code (Config.fromEnv): the service refuses to start unless this is exactly "dev" AND KAFKA_BOOTSTRAP_SERVERS equals the broker declared below.
+            - name: LIQUIDITY_VALIDATOR_ENVIRONMENT
+              value: dev
+            - name: LIQUIDITY_VALIDATOR_DEV_BOOTSTRAP
+              value: host.docker.internal:19092
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: host.docker.internal:19092
+            - name: HEALTH_PORT
+              value: "8080"
+            # The five INPUT topics, all read-only, no consumer group, no offset commit. Dev names (verified on the dev broker 2026-11-05): the geometry set is Avro id 2223 on a transactional
+            # producer, level-absorption events 2702, aggressor flow 2701 and footprint bars 2034 are mirrored/dev-local Avro, and the RAW ES tape (NOT .linearized) is JSON on 32 partitions.
+            - name: LIQUIDITY_VALIDATOR_GEOMETRY_TOPIC
+              value: options.spx.market-structure.geometry
+            - name: LIQUIDITY_VALIDATOR_EVENTS_TOPIC
+              value: futures.level-absorption.events
+            - name: LIQUIDITY_VALIDATOR_AGGRESSOR_TOPIC
+              value: es.futures.aggressor-flow
+            - name: LIQUIDITY_VALIDATOR_FOOTPRINT_TOPIC
+              value: es.futures.footprint.bars
+            - name: LIQUIDITY_VALIDATOR_TAPE_TOPIC
+              value: underlying.es.trades
+            # Live timing (requirement Section 4): an evaluation waits GRACE_MS of wall time after the geometry record was consumed (or fires when every input watermark has passed R).
+            # GRACE_MS must exceed the producers' hold time; LOOKBACK_MS is the restart rebuild window; PRINT_RING_MS bounds the tape buffer (only the last print by order key at R is needed).
+            - name: GRACE_MS
+              value: "10000"
+            - name: LOOKBACK_MS
+              value: "10800000"
+            - name: PRINT_RING_MS
+              value: "120000"
+            - name: JAVA_TOOL_OPTIONS
+              value: -Xms256m -Xmx768m
+          ports:
+            - name: health
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              memory: 1Gi
