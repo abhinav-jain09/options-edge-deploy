@@ -229,20 +229,80 @@ if [ -f "$TOPICS_ENV_REAL" ]; then
     # style - it can only refuse to let that style through unnoticed.
     { if ($0 ~ /^[[:space:]]*#/ || $0 ~ /^[[:space:]]*$/) next }            # comment / blank: window survives
     known_gate($0) { gate = $0; gate_line = FNR; next }                      # a whitelisted gate opens it
-    /^[[:space:]]+OPTIONS_EDGE_(TOPICS|COMPACTED_TOPICS|PURE_COMPACT_TOPICS|EXACT_PARTITION_TOPICS|TOPIC_RETENTION_OVERRIDES|TOPIC_DELETE_RETENTION_OVERRIDES|TOPIC_MAX_MESSAGE_BYTES_OVERRIDES|TOPIC_RETENTION_BYTES_OVERRIDES|PARTITION_ONLY_TOPICS|DEV_CLEAN_PRESERVED_TOPICS|RESET_PRESERVED_TOPICS)=/ {
+    # EVERY declaration the readers can consume, indented or NOT: their own anchor is `[[:space:]]*`, so a
+    # declaration at column 0 inside a gate is read exactly like an indented one. Checking only indented lines
+    # left that shape unreported - it closed the window silently and was still applied by the readers.
+    /^[[:space:]]*OPTIONS_EDGE_(TOPICS|COMPACTED_TOPICS|PURE_COMPACT_TOPICS|EXACT_PARTITION_TOPICS|TOPIC_RETENTION_OVERRIDES|TOPIC_DELETE_RETENTION_OVERRIDES|TOPIC_MAX_MESSAGE_BYTES_OVERRIDES|TOPIC_RETENTION_BYTES_OVERRIDES|PARTITION_ONLY_TOPICS|DEV_CLEAN_PRESERVED_TOPICS|RESET_PRESERVED_TOPICS)=/ {
       split($0, p, "=")
       var = p[1]; sub(/^[[:space:]]+/, "", var)
-      if (gate == "")          { print FNR ": REFUSED no whitelisted dev gate is open here: " $0; next }
+      indented = ($0 ~ /^[[:space:]]+/)
+      if (gate == "") {
+        # No gate open. An unindented line here is an ordinary top-level declaration, which every environment
+        # reads and which needs no gate; an indented one is a conditional declaration whose gate is not one we
+        # accept, or is not there at all.
+        if (indented) { print FNR ": REFUSED no whitelisted dev gate is open here: " $0 }
+        next
+      }
+      if (!indented)           { print FNR ": REFUSED declaration inside a dev gate is at column 0, so it reads as unconditional: " $0; gate = ""; next }
       if (!append_ok($0, var)) { print FNR ": REFUSED not a plain " var "=\"$" var " tokens\" append: " $0; gate = ""; next }
       next                                                                   # an accepted declaration keeps the window open
     }
     { gate = "" }                                                            # anything else closes it
   ' "$TOPICS_ENV_REAL")"
-  [ -z "$leak" ] \
-    && ok "every indented declaration in topics.env is a whitelisted dev-gated APPEND" \
-    || bad "an indented declaration in topics.env is not a whitelisted dev-gated append, so these readers would
-apply it anyway:
-$leak"
+  # THE SEMANTIC HALF, and the one that does not depend on recognising shell shapes at all. Ask BASH what the
+  # file assigns in each environment, and compare that with what these text readers see:
+  #   LEAKED  = a token the readers see that bash assigns ONLY under ENVIRONMENT=production
+  #             -> a production-only declaration the dev clean would act on. This is the hazard itself, caught
+  #                whatever shape hides it: a column-0 declaration inside a production gate, an elif, a case
+  #                branch - none of which a pattern rule reliably sees.
+  #   UNREAL  = a token the readers see that bash assigns in NEITHER environment
+  #             -> text that only looks like a declaration, e.g. a line inside a here-doc or a quoted string.
+  # The convention check above is still worth having: it refuses styles that bash and the readers AGREE on but
+  # that nobody should write (a replacement or a ${VAR%...} shrink inside a dev gate). Neither half alone is
+  # enough; together they cover "the readers disagree with bash" and "the file is written in a style this
+  # convention does not allow".
+  env_tokens() { # <ENVIRONMENT value> -> every token bash assigns to the read variables, one per line
+    ( set +u
+      ENVIRONMENT="$1"
+      . "$TOPICS_ENV_REAL" >/dev/null 2>&1 || true
+      printf '%s %s %s %s %s %s %s %s %s %s %s\n' \
+        "${OPTIONS_EDGE_TOPICS:-}" "${OPTIONS_EDGE_COMPACTED_TOPICS:-}" "${OPTIONS_EDGE_PURE_COMPACT_TOPICS:-}" \
+        "${OPTIONS_EDGE_EXACT_PARTITION_TOPICS:-}" "${OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES:-}" \
+        "${OPTIONS_EDGE_TOPIC_DELETE_RETENTION_OVERRIDES:-}" "${OPTIONS_EDGE_TOPIC_MAX_MESSAGE_BYTES_OVERRIDES:-}" \
+        "${OPTIONS_EDGE_TOPIC_RETENTION_BYTES_OVERRIDES:-}" "${OPTIONS_EDGE_PARTITION_ONLY_TOPICS:-}" \
+        "${OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS:-}" "${OPTIONS_EDGE_RESET_PRESERVED_TOPICS:-}"
+    ) | tr ' ' '\n' | grep -v '^$' | sort -u
+  }
+  reader_tokens() { # what the readers see: the same text extraction they do, eval'd in file order
+    ( set +u
+      eval "$(grep -E '^[[:space:]]*OPTIONS_EDGE_(TOPICS|COMPACTED_TOPICS|PURE_COMPACT_TOPICS|EXACT_PARTITION_TOPICS|TOPIC_RETENTION_OVERRIDES|TOPIC_DELETE_RETENTION_OVERRIDES|TOPIC_MAX_MESSAGE_BYTES_OVERRIDES|TOPIC_RETENTION_BYTES_OVERRIDES|PARTITION_ONLY_TOPICS|DEV_CLEAN_PRESERVED_TOPICS|RESET_PRESERVED_TOPICS)=' "$TOPICS_ENV_REAL")" 2>/dev/null
+      printf '%s %s %s %s %s %s %s %s %s %s %s\n' \
+        "${OPTIONS_EDGE_TOPICS:-}" "${OPTIONS_EDGE_COMPACTED_TOPICS:-}" "${OPTIONS_EDGE_PURE_COMPACT_TOPICS:-}" \
+        "${OPTIONS_EDGE_EXACT_PARTITION_TOPICS:-}" "${OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES:-}" \
+        "${OPTIONS_EDGE_TOPIC_DELETE_RETENTION_OVERRIDES:-}" "${OPTIONS_EDGE_TOPIC_MAX_MESSAGE_BYTES_OVERRIDES:-}" \
+        "${OPTIONS_EDGE_TOPIC_RETENTION_BYTES_OVERRIDES:-}" "${OPTIONS_EDGE_PARTITION_ONLY_TOPICS:-}" \
+        "${OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS:-}" "${OPTIONS_EDGE_RESET_PRESERVED_TOPICS:-}"
+    ) | tr ' ' '\n' | grep -v '^$' | sort -u
+  }
+  env_tokens dev        > "$WORK/tok.dev"
+  env_tokens production > "$WORK/tok.prod"
+  reader_tokens         > "$WORK/tok.readers"
+  comm -23 "$WORK/tok.prod" "$WORK/tok.dev" > "$WORK/tok.prodonly"
+  leaked="$(comm -12 "$WORK/tok.readers" "$WORK/tok.prodonly")"
+  sort -u "$WORK/tok.dev" "$WORK/tok.prod" > "$WORK/tok.any"
+  unreal="$(comm -23 "$WORK/tok.readers" "$WORK/tok.any")"
+
+  if [ -z "$leak" ] && [ -z "$leaked" ] && [ -z "$unreal" ]; then
+    ok "topics.env declaration check: clean (convention held; nothing production-only or unreal reaches the readers)"
+  else
+    bad "topics.env declaration check: REFUSED
+convention:
+${leak:-  (none)}
+production-only tokens the dev readers would act on:
+${leaked:-  (none)}
+tokens the readers see that bash assigns in no environment:
+${unreal:-  (none)}"
+  fi
 else
   bad "topics.env not found at $TOPICS_ENV_REAL"
 fi

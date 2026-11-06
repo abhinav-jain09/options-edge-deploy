@@ -123,6 +123,15 @@ if [ "${ENVIRONMENT:-}" != "production" ]; then
   # an ordinary comment between the gate and the declaration, which must stay legal
   OPTIONS_EDGE_TOPICS="$OPTIONS_EDGE_TOPICS t.dev:1"
 fi'
+# A declaration at COLUMN 0 inside a gate: the readers anchor on [[:space:]]* and consume it exactly like an
+# indented one, so it must be refused rather than silently closing the window (review round 4).
+mk unindented_in_gate 'OPTIONS_EDGE_TOPICS="t.base:1"
+if [ "${ENVIRONMENT:-}" = "production" ]; then
+OPTIONS_EDGE_TOPICS="$OPTIONS_EDGE_TOPICS t.prod:1"
+fi'
+# CRLF: the whole-line gate regex cannot match a line ending in \r, so the declaration after it is refused.
+# Fail-closed, and pinned here so the behaviour is deliberate rather than discovered.
+mk crlf "$(printf 'OPTIONS_EDGE_TOPICS="t.base:1"\r\nif [ \"${ENVIRONMENT:-}\" != \"production\" ]; then\r\n  OPTIONS_EDGE_TOPICS=\"$OPTIONS_EDGE_TOPICS t.dev:1\"\r\nfi\r\n')"
 mk casegate 'OPTIONS_EDGE_TOPICS="t.base:1"
 case "${ENVIRONMENT:-}" in
   production)
@@ -130,8 +139,8 @@ case "${ENVIRONMENT:-}" in
   ;;
 esac'
 
-ACCEPTED='every indented declaration in topics.env is a whitelisted dev-gated APPEND'
-REFUSED='is not a whitelisted dev-gated append'
+ACCEPTED='topics.env declaration check: clean'
+REFUSED='topics.env declaration check: REFUSED'
 
 check() { # <fixture> <accept|refuse>
   local name="$1" want="$2" out verdict
@@ -176,6 +185,8 @@ check heredoc          refuse
 check multiline_string refuse
 check continuation     refuse
 check control_comment  accept
+check unindented_in_gate refuse
+check crlf             refuse
 
 printf 'dev-cleanup-indented-declaration-mutation-test: %d ok, %d FAILED\n' "$pass" "$fail"
 [ "$fail" = 0 ]
