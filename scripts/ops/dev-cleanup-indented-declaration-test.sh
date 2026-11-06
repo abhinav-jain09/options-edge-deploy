@@ -198,22 +198,38 @@ if [ -f "$TOPICS_ENV_REAL" ]; then
       return l ~ /^[[:space:]]*if[[:space:]]+\[[[:space:]]+"\$\{ENVIRONMENT:-\}"[[:space:]]+!=[[:space:]]+"production"[[:space:]]+\][[:space:]]*;[[:space:]]*then[[:space:]]*$/ ||
              l ~ /^[[:space:]]*if[[:space:]]+\[[[:space:]]+"\$\{ENVIRONMENT:-dev\}"[[:space:]]+=[[:space:]]+"dev"[[:space:]]+\][[:space:]]*;[[:space:]]*then[[:space:]]*$/
     }
-    # Any block opener other than an accepted gate poisons the block it opens, and so does else/elif.
-    /^[[:space:]]*(if|case|while|until|for)[[:space:]]/ {
-      depth++
-      gate_ok[depth] = known_gate($0) ? 1 : 0
-      gate_line[depth] = FNR
-      next
+    # The accepted assignment, as a WHOLE-LINE grammar rather than "a self-reference appears somewhere":
+    #   VAR="$VAR tok tok ..."   (or "${VAR} ...") and nothing else on the line.
+    # A self-reference test alone accepts `VAR="${VAR% tok}"` (which SHRINKS the list), a single-quoted
+    # a single-quoted assignment (no expansion at all, so the literal text becomes the value) and
+    # VAR="$VAR a"; VAR="replaced" (a replacement hidden after a valid-looking append on the same line).
+    # Only this shape can grow a list and nothing else.
+    # NOTE: no apostrophe may appear anywhere in this awk program - it is single-quoted in the shell, and one
+    # stray quote closes it early and silently leaves awk with a truncated program that flags nothing.
+    function append_ok(l, var,   re) {
+      re = "^[[:space:]]*" var "=\"\\$(" var "|\\{" var "\\})([[:space:]]+[A-Za-z0-9._:=-]+)+\"[[:space:]]*$"
+      return l ~ re
     }
-    /^[[:space:]]*(fi|esac|done)[[:space:]]*$/ { if (depth > 0) { gate_ok[depth] = 0; depth-- } next }
-    /^[[:space:]]*(else|elif)([[:space:]]|$)/  { if (depth > 0) gate_ok[depth] = 0; next }
+    # NO depth counting. Counting blocks means enumerating every shell form that opens or closes one, and a form
+    # missed is a hole: a first attempt counted if/case/while/until/for and silently approved a declaration
+    # inside a subshell, while on the real 1900-line file its arithmetic drifted and it refused the very
+    # declarations this fix restores. Instead: a declaration is accepted only when the NEAREST PRECEDING
+    # structural line is a whitelisted gate. Structure is anything that opens, closes or branches a block, and
+    # the list is deliberately broad - an unrecognised structural line simply is not a whitelisted gate, so the
+    # declaration after it is refused. Consecutive declarations inside one gate are all accepted, because a
+    # declaration is not structural; a declaration after a nested block has that block as its nearest structure
+    # and is refused, which is conservative and fail-closed.
+    /^[[:space:]]*(if|elif|else|fi|case|esac|while|until|for|do|done|function)([[:space:]]|$)/ ||
+    /^[[:space:]]*[\(\{][[:space:]]*$/ || /\(\)[[:space:]]*\{/ || /^[[:space:]]*[\)\}]/ ||
+    /;;[[:space:]]*$/ || /^[[:space:]]*[A-Za-z0-9_*\|]+\)[[:space:]]*$/ {
+      last_struct = $0; last_struct_line = FNR; next
+    }
     /^[[:space:]]+OPTIONS_EDGE_(TOPICS|COMPACTED_TOPICS|PURE_COMPACT_TOPICS|EXACT_PARTITION_TOPICS|TOPIC_RETENTION_OVERRIDES|TOPIC_DELETE_RETENTION_OVERRIDES|TOPIC_MAX_MESSAGE_BYTES_OVERRIDES|TOPIC_RETENTION_BYTES_OVERRIDES|PARTITION_ONLY_TOPICS|DEV_CLEAN_PRESERVED_TOPICS|RESET_PRESERVED_TOPICS)=/ {
       split($0, p, "=")
       var = p[1]; sub(/^[[:space:]]+/, "", var)
-      if (depth == 0)            { print FNR ": indented declaration outside any block: " $0; next }
-      if (!gate_ok[depth])       { print FNR ": not directly inside a whitelisted dev gate (block opened at line " gate_line[depth] "): " $0; next }
-      if (index($0, "$" var) == 0 && index($0, "${" var "}") == 0) {
-                                   print FNR ": REPLACES " var " instead of appending to it: " $0 }
+      if (last_struct == "")        { print FNR ": REFUSED indented declaration with no enclosing block: " $0; next }
+      if (!known_gate(last_struct)) { print FNR ": REFUSED nearest enclosing structure (line " last_struct_line ") is not a whitelisted dev gate: " last_struct; next }
+      if (!append_ok($0, var))      { print FNR ": REFUSED not a plain " var "=\"$" var " tokens\" append: " $0 }
     }
   ' "$TOPICS_ENV_REAL")"
   [ -z "$leak" ] \
