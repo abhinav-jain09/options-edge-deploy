@@ -46,8 +46,84 @@ fail=0
 # "do not age this out by time" versus "this cannot be rebuilt" -- and the previous rule conflated
 # them, which would have force-preserved options.spx.spot-vol-regime.current on dev the moment it
 # got the retention=-1 it genuinely needs.
+# EVERY `$` TOKEN IN topics.env MUST BE A SELF-REFERENCE, and this is checked BEFORE anything is read.
+#
+# The readers below strip a `$VAR` token, because an append opens with the variable's own name and that
+# is not a topic. The first version of that strip dropped ANY token beginning with `$`, in BOTH engines
+# identically — so a cross-reference, `OPTIONS_EDGE_RESET_PRESERVED_TOPICS="$SOME_OTHER_LIST t.a"`,
+# would be discarded by both, they would AGREE on their counts, and the validator would exit OK while
+# every topic that other list contributes went unexamined. The commit claimed that case produced a loud
+# HARNESS FAILURE. It did not (Codex). A guard whose comment promises what its mechanism cannot deliver
+# is worse than no guard: a reader who believes it stops looking for the hole.
+#
+# So the promise is made true HERE instead of being withdrawn. A `$X`/`${X}` token inside a quoted
+# declaration is accepted ONLY when X is the variable that declaration assigns. Anything else exits 3 —
+# a harness failure, in the same terms as the extraction cross-check below, because it means topics.env
+# composes its lists in a way these readers do not expand and cannot be trusted to have read.
+#
+# Scoped to assignments whose NAME contains TOPIC, i.e. exactly the declarations these reads select; a
+# `$HOME` in some unrelated variable is not this validator's business. Checked once, over the whole
+# file, rather than per read: a cross-reference is a fact about the FILE, and a per-read check would
+# have to be repeated correctly six times.
+_assert_only_self_references() {
+  local bad
+  bad="$(python3 - "$TOPICS_ENV" <<'PYEOF'
+import re, sys
+s = open(sys.argv[1]).read()
+out, seen, refs = [], 0, 0
+for m in re.finditer(r'^[ \t]*([A-Za-z0-9_]*TOPIC[A-Za-z0-9_]*)="(.*)"$', s, re.M):
+    seen += 1
+    var, val = m.group(1), m.group(2)
+    for tok in val.split():
+        if not tok.startswith("$"):
+            continue
+        refs += 1
+        name = tok[1:]
+        if name.startswith("{") and name.endswith("}"):
+            name = name[1:-1]
+        if name != var:
+            out.append("  %s declares %s" % (var, tok))
+# NON-VACUITY, on its own stderr+status (Codex r3). A selector that matches nothing reports no
+# cross-reference, which is indistinguishable from "there are none" -- the exact shape this whole
+# change is about. topics.env has ~hundreds of *TOPIC* assignments and ~176 self-references; zero of
+# either means the selector, not the file, changed.
+if seen == 0 or refs == 0:
+    sys.stderr.write("scanned %d *TOPIC* assignment(s) and %d variable reference(s) in %s; "
+                     "expected many of each\n" % (seen, refs, sys.argv[1]))
+    sys.exit(2)
+print("\n".join(out))
+PYEOF
+)" || { echo "HARNESS FAILURE: could not scan $TOPICS_ENV for variable references — the scan found" >&2
+        echo "                 nothing to inspect, so 'no cross-reference' would be a statement about" >&2
+        echo "                 the scanner rather than about the file." >&2; exit 3; }
+  if [ -n "$bad" ]; then
+    echo "HARNESS FAILURE: $TOPICS_ENV refers to a variable OTHER than the one being declared:" >&2
+    printf '%s\n' "$bad" >&2
+    echo "                 These readers PARSE this file, they do not expand it, so every topic that" >&2
+    echo "                 referenced list contributes would be invisible here — and the \$VAR strip" >&2
+    echo "                 below would hide it in BOTH engines at once, so the cross-check could not" >&2
+    echo "                 catch it either. Declare the topics inline, or teach both readers to" >&2
+    echo "                 expand the reference and extend this check." >&2
+    exit 3
+  fi
+}
+_assert_only_self_references
+
+# INDENT-TOLERANT, and a `$VAR` token is dropped. topics.env declares an environment-specific topic by
+# APPENDING inside `if [ "${ENVIRONMENT:-}" != "production" ]`, which makes the assignment INDENTED and
+# makes its first token the variable's own `$NAME`, not a topic. Dropping EVERY `$` token is sound only
+# because _assert_only_self_references above has already refused any token that is not the
+# declaration's own name; without that assert this strip would silently swallow a cross-reference.
+#
+# This validator was the FOURTH reader anchored at column 0. The 2026-11-06 wipe that deleted
+# es.rithmic.mbo and futures.liquidity-validator.{evaluations,data-gaps,daily} was traced to three
+# readers of topics.env (deploy #1534) -- and this one was missed, so the GATE that exists to catch an
+# undeclared or unpreserved durable topic could not see those three at all: it reported "checked 37
+# durable topic(s)" where the file declares 40. It did not fail; it looked clean while not looking.
+# Both engines below are widened, each in its own dialect, so the cross-check can still catch one of
+# them regressing (see _recount).
 list_of() { # variable-name-suffix -> whitespace-split values
-  { sed -nE "s/^OPTIONS_EDGE_(PROD_ONLY_)?$1=\"(.*)\"$/\\2/p" "$TOPICS_ENV" | tr ' ' '\n' | grep -v '^$' || true; } | sort -u
+  { sed -nE "s/^[[:space:]]*OPTIONS_EDGE_(PROD_ONLY_)?$1=\"(.*)\"$/\\2/p" "$TOPICS_ENV" | tr ' ' '\n' | grep -v '^$' | grep -v '^[$]' || true; } | sort -u
 }
 PRESERVED=$(list_of RESET_PRESERVED_TOPICS)
 REBUILDABLE=$(list_of RESET_REBUILDABLE_TOPICS)
@@ -55,7 +131,7 @@ REBUILDABLE=$(list_of RESET_REBUILDABLE_TOPICS)
 # es.options.indicators.bootstrap.control — declared retention.ms=-1 only in the es4 overrides — was
 # invisible to this validator and the classify-or-fail rule never applied to it. Found by adding the
 # extraction cross-check below, which is the whole argument for having one.
-MINUS_ONE=$( { sed -nE 's/^[A-Z0-9_]*TOPIC_RETENTION_OVERRIDES="(.*)"$/\1/p' "$TOPICS_ENV" \
+MINUS_ONE=$( { sed -nE 's/^[[:space:]]*[A-Z0-9_]*TOPIC_RETENTION_OVERRIDES="(.*)"$/\1/p' "$TOPICS_ENV" \
   | tr ' ' '\n' | grep -- '=-1$' || true; } | cut -d= -f1 | sort -u)
 
 in_list() { case " $(printf '%s' "$2" | tr '\n' ' ') " in *" $1 "*) return 0 ;; esac; return 1; }
@@ -72,7 +148,13 @@ in_list() { case " $(printf '%s' "$2" | tr '\n' ' ') " in *" $1 "*) return 0 ;; 
 #
 # So each extracted list is cross-checked against an independently-computed count before use. A
 # mismatch is a HARNESS failure, said in those words, and nothing downstream runs.
-# Independently computed by a DIFFERENT ENGINE, scoped identically to list_of/MINUS_ONE. Two shell
+# Independently computed by a DIFFERENT ENGINE, scoped identically to list_of/MINUS_ONE -- INCLUDING
+# the 2026-11-06 indent tolerance and the `$VAR` drop. Reached differently on purpose: the sed side
+# strips leading whitespace with [[:space:]]* and drops a token matching ^[$], the python side with
+# [ \t]* and `not t.startswith("$")`. What the cross-check catches is one ENGINE regressing -- a read
+# narrowed back to column 0, or truncated some other way -- which shows up as a count mismatch. It does
+# NOT catch a cross-reference: both engines drop `$` tokens the same way, so they would agree. That
+# case is refused earlier, by _assert_only_self_references, which is the only place it CAN be refused. Two shell
 # pipelines drift on regex dialects and quoting — a first attempt counted "retention.ms=-1" out of the
 # prose, a second lost the first entry on each line to the opening quote, and both would have failed
 # this validator on a perfectly correct file. The cross-check exists only to catch a TRUNCATED or
@@ -89,13 +171,13 @@ import re, sys
 s, which = open(sys.argv[1]).read(), sys.argv[2]
 out = set()
 if which == "MINUS_ONE":
-    for m in re.finditer(r'^[A-Z0-9_]*TOPIC_RETENTION_OVERRIDES="(.*)"$', s, re.M):
+    for m in re.finditer(r'^[ \t]*[A-Z0-9_]*TOPIC_RETENTION_OVERRIDES="(.*)"$', s, re.M):
         for tok in m.group(1).split():
             if tok.endswith("=-1"):
                 out.add(tok.split("=")[0])
 else:
-    for m in re.finditer(r'^OPTIONS_EDGE_(?:PROD_ONLY_)?%s="(.*)"$' % re.escape(which), s, re.M):
-        out.update(m.group(1).split())
+    for m in re.finditer(r'^[ \t]*OPTIONS_EDGE_(?:PROD_ONLY_)?%s="(.*)"$' % re.escape(which), s, re.M):
+        out.update(t for t in m.group(1).split() if not t.startswith("$"))
 print(len(out))
 PYEOF
 }
@@ -120,7 +202,7 @@ REBUILDABLE=$(list_of RESET_REBUILDABLE_TOPICS)
 # es.options.indicators.bootstrap.control — declared retention.ms=-1 only in the es4 overrides — was
 # invisible to this validator and the classify-or-fail rule never applied to it. Found by adding the
 # extraction cross-check below, which is the whole argument for having one.
-MINUS_ONE=$( { sed -nE 's/^[A-Z0-9_]*TOPIC_RETENTION_OVERRIDES="(.*)"$/\1/p' "$TOPICS_ENV" \
+MINUS_ONE=$( { sed -nE 's/^[[:space:]]*[A-Z0-9_]*TOPIC_RETENTION_OVERRIDES="(.*)"$/\1/p' "$TOPICS_ENV" \
   | tr ' ' '\n' | grep -- '=-1$' || true; } | cut -d= -f1 | sort -u)
 
 in_list() { case " $(printf '%s' "$2" | tr '\n' ' ') " in *" $1 "*) return 0 ;; esac; return 1; }
@@ -202,7 +284,7 @@ done
 #
 # Digits matter in this pattern: [A-Z_]* silently skips every OPTIONS_EDGE_ES4_* list, which made a
 # first draft of this check report five false positives. [A-Z0-9_]*.
-DECLARED=$( { sed -nE 's/^[A-Z0-9_]*TOPICS[A-Z0-9_]*="(.*)"$/\1/p' "$TOPICS_ENV" \
+DECLARED=$( { sed -nE 's/^[[:space:]]*[A-Z0-9_]*TOPICS[A-Z0-9_]*="(.*)"$/\1/p' "$TOPICS_ENV" \
   | tr ' ' '\n' | grep -E '^[^:[:space:]]+:[0-9]+$' || true; } | sed 's/:[0-9]*$//' | sort -u)
 
 # Pre-existing, and deliberately NOT fixed here: both are live with cleanup.policy=compact and are
@@ -496,7 +578,7 @@ spx.drop.final-summary spx.drop.outcome underlying.vix.price"   # BZ 363, latent
 # far above the measured volume) is a disk decision per topic, and the disk cannot grow (owner,
 # 2026-10-13). Requiring -1 here would have forbidden the only shape that protects the broker from a
 # producer fault.
-BYTES_DECLARED=$( { sed -nE 's/^[A-Z0-9_]*TOPIC_RETENTION_BYTES_OVERRIDES="(.*)"$/\1/p' "$TOPICS_ENV" \
+BYTES_DECLARED=$( { sed -nE 's/^[[:space:]]*[A-Z0-9_]*TOPIC_RETENTION_BYTES_OVERRIDES="(.*)"$/\1/p' "$TOPICS_ENV" \
   | tr ' ' '\n' | grep -E '=-?[0-9]+$' || true; } | cut -d= -f1 | sort -u)
 _bytes_exempt_n=0
 for topic in $PRESERVED; do

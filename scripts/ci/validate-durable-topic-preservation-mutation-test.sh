@@ -72,8 +72,14 @@ expect "unmutated tree passes" 0 "validate-durable-topic-preservation: OK"
 sed -i.bak 's/^OPTIONS_EDGE_RESET_PRESERVED_TOPICS="spx.basis.state /OPTIONS_EDGE_RESET_PRESERVED_TOPICS="/' "$TOPICS"
 expect "one declaration deleted" 1 "appears in NEITHER"
 
-sed -i.bak 's/^OPTIONS_EDGE_RESET_PRESERVED_TOPICS=.*/OPTIONS_EDGE_RESET_PRESERVED_TOPICS=""/' "$TOPICS"
-sed -i.bak 's/^OPTIONS_EDGE_PROD_ONLY_RESET_PRESERVED_TOPICS=.*/OPTIONS_EDGE_PROD_ONLY_RESET_PRESERVED_TOPICS=""/' "$TOPICS"
+# INDENT-TOLERANT seds, since 2026-11-06. These two claim to empty EVERY preserved declaration, and
+# the readers now see indented appends -- so a column-0 sed left the three
+# futures.liquidity-validator.* entries declared and the case measured something else entirely
+# ("emptiness instead of counts" got exit 1, a real classification finding, instead of the exit 3
+# harness failure it exists to assert). A mutation that no longer creates its own scenario is a case
+# that tests nothing while reporting on it.
+sed -i.bak 's/^[[:space:]]*OPTIONS_EDGE_RESET_PRESERVED_TOPICS=.*/OPTIONS_EDGE_RESET_PRESERVED_TOPICS=""/' "$TOPICS"
+sed -i.bak 's/^[[:space:]]*OPTIONS_EDGE_PROD_ONLY_RESET_PRESERVED_TOPICS=.*/OPTIONS_EDGE_PROD_ONLY_RESET_PRESERVED_TOPICS=""/' "$TOPICS"
 expect "ALL preserved declarations deleted" 1 "appears in NEITHER"
 
 sed -i.bak 's/^OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES="/OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES="brand.new.topic=-1 /' "$TOPICS"
@@ -95,8 +101,13 @@ expect "rebuildable entry without retention=-1" 1 "no retention.ms=-1 override"
 # python cross-check — so both narrowed together, agreed with each other, and the mutation SURVIVED
 # while looking like it had been applied. A mutation that changes both sides of a comparison tests
 # nothing.
-sed -i.bak '/MINUS_ONE=\$( { sed -nE/s/\^\[A-Z0-9_\]\*TOPIC_RETENTION_OVERRIDES/^[A-Z_]*TOPIC_RETENTION_OVERRIDES/' "$VALIDATOR"
-grep -q "sed -nE 's/\^\[A-Z_\]\*TOPIC_RETENTION_OVERRIDES" "$VALIDATOR" \
+# 2026-11-06: this sed used to search for `^[A-Z0-9_]*TOPIC_RETENTION_OVERRIDES`, anchored. Making the
+# extraction indent-tolerant turned the real text into `^[[:space:]]*[A-Z0-9_]*TOPIC...`, so the search
+# stopped matching and the mutation became a silent no-op — the case would have passed while testing
+# nothing. The guard below is what said so, which is the argument for having one on every mutation: a
+# change to the code under test can disarm its own test, and only the vacuity check notices.
+sed -i.bak '/MINUS_ONE=\$( { sed -nE/s/\[A-Z0-9_\]\*TOPIC_RETENTION_OVERRIDES/[A-Z_]*TOPIC_RETENTION_OVERRIDES/' "$VALIDATOR"
+grep -q "\[A-Z_\]\*TOPIC_RETENTION_OVERRIDES" "$VALIDATOR" \
   || { echo "  FAIL ES4 mutation did not apply — the case below would pass vacuously"; fail=1; }
 expect "ES4 retention declarations skipped" 3 "independent read"
 
@@ -104,8 +115,8 @@ expect "ES4 retention declarations skipped" 3 "independent read"
 # ("ALL preserved declarations deleted") into a harness complaint under a different exit code, hiding
 # a real finding behind a complaint about the reader.
 sed -i.bak 's/if \[ "\$got" -ne "\$want" \]; then/if [ "$got" -eq 0 ] || [ "$got" -ne "$want" ]; then/' "$VALIDATOR"
-sed -i.bak 's/^OPTIONS_EDGE_RESET_PRESERVED_TOPICS=.*/OPTIONS_EDGE_RESET_PRESERVED_TOPICS=""/' "$TOPICS"
-sed -i.bak 's/^OPTIONS_EDGE_PROD_ONLY_RESET_PRESERVED_TOPICS=.*/OPTIONS_EDGE_PROD_ONLY_RESET_PRESERVED_TOPICS=""/' "$TOPICS"
+sed -i.bak 's/^[[:space:]]*OPTIONS_EDGE_RESET_PRESERVED_TOPICS=.*/OPTIONS_EDGE_RESET_PRESERVED_TOPICS=""/' "$TOPICS"
+sed -i.bak 's/^[[:space:]]*OPTIONS_EDGE_PROD_ONLY_RESET_PRESERVED_TOPICS=.*/OPTIONS_EDGE_PROD_ONLY_RESET_PRESERVED_TOPICS=""/' "$TOPICS"
 expect "emptiness instead of counts hides a real finding" 3 "independent read"
 
 # The bypasses Codex actually performed: delete the LIVE call but leave the function and its
@@ -156,5 +167,71 @@ sed -i.bak "s/^ES_CLEAN_TOPICS='/ES_CLEAN_TOPICS_RENAMED='/" "$DEVCLEAN"
 grep -q "^ES_CLEAN_TOPICS='" "$DEVCLEAN" \
   && { echo "  FAIL ES_CLEAN_TOPICS rename did not apply — the case below would pass vacuously"; fail=1; }
 expect "ES_CLEAN_TOPICS unreadable" 1 "could not read ES_CLEAN_TOPICS"
+
+# THE COLUMN-0 ANCHOR, on each engine in turn. Until 2026-11-06 both list_of and the python recount
+# were anchored at ^OPTIONS_EDGE_, so the three futures.liquidity-validator.* topics -- declared
+# RESET-PRESERVED by an INDENTED append -- were invisible to this validator, which then reported
+# "checked 37 durable topic(s)" on a file declaring 40 and exited OK. It looked clean while not
+# looking, which is the one failure mode a gate must not have.
+#
+# ONE ENGINE AT A TIME, never both: narrowing both would make them agree with each other again and the
+# mutation would SURVIVE while appearing to have been applied -- the lesson already recorded for the
+# ES4 case above, and the reason the cross-check exists at all.
+#
+# python, not sed: the python side's anchor holds a literal backslash-t inside a bracket expression,
+# and expressing that through sed or perl quoting produced a pattern matching nothing. A mutation that
+# does not apply is a case that passes while testing nothing, which is what the "did not apply" guards
+# below exist to catch -- and they caught exactly that while this was being written.
+python3 - "$VALIDATOR" <<'PYEOF'
+import sys
+p = sys.argv[1]; s = open(p).read()
+old = '  { sed -nE "s/^[[:space:]]*OPTIONS_EDGE_'
+new = '  { sed -nE "s/^OPTIONS_EDGE_'
+assert s.count(old) == 1, s.count(old)
+open(p, "w").write(s.replace(old, new))
+PYEOF
+grep -q 'sed -nE "s/\^OPTIONS_EDGE_' "$VALIDATOR" \
+  || { echo "  FAIL list_of re-anchor did not apply — the case below would pass vacuously"; fail=1; }
+expect "list_of blind to an indented declaration" 3 "independent read"
+
+# And the other way round: the python recount narrowed while the sed side stays indent-tolerant.
+python3 - "$VALIDATOR" <<'PYEOF'
+import sys
+p = sys.argv[1]; s = open(p).read()
+old = "r'^[ \\t]*OPTIONS_EDGE_(?:PROD_ONLY_)?%s="
+new = "r'^OPTIONS_EDGE_(?:PROD_ONLY_)?%s="
+assert s.count(old) == 1, s.count(old)
+open(p, "w").write(s.replace(old, new))
+PYEOF
+grep -q "r'\^OPTIONS_EDGE_(?:PROD_ONLY_)?%s=" "$VALIDATOR" \
+  || { echo "  FAIL recount re-anchor did not apply — the case below would pass vacuously"; fail=1; }
+expect "the recount blind to an indented declaration" 3 "independent read"
+
+# A CROSS-REFERENCE, the case the first version of the $VAR strip swallowed in both engines at once.
+# Neither the strip nor the extraction cross-check can catch it -- both readers discard a `$` token the
+# same way, so they AGREE -- which is why _assert_only_self_references refuses it before any read.
+# Asserted here because a guard nobody mutates is a guard nobody has tested: the first version's
+# comment claimed this very case produced a harness failure while the code exited OK.
+sed -i.bak 's/^OPTIONS_EDGE_RESET_PRESERVED_TOPICS="/OPTIONS_EDGE_RESET_PRESERVED_TOPICS="$SOME_OTHER_LIST /' "$TOPICS"
+grep -q 'OPTIONS_EDGE_RESET_PRESERVED_TOPICS="\$SOME_OTHER_LIST ' "$TOPICS" \
+  || { echo "  FAIL cross-reference mutation did not apply — the case below would pass vacuously"; fail=1; }
+expect "a cross-reference to another list" 3 "refers to a variable OTHER than the one being declared"
+
+# ...and the self-reference scanner must not be able to match ZERO. A selector that selects nothing
+# reports no cross-reference, which reads identically to "there are none" -- the same shape as the
+# column-0 anchor this whole change is about, one level up, in the guard added to fix it (Codex r3).
+# The selector is narrowed to a name no declaration has; the non-vacuity check must turn that into a
+# harness failure rather than a clean pass.
+python3 - "$VALIDATOR" <<'PYEOF'
+import sys
+p = sys.argv[1]; s = open(p).read()
+old = "([A-Za-z0-9_]*TOPIC[A-Za-z0-9_]*)"
+new = "(ZZ_NO_SUCH_DECLARATION)"
+assert s.count(old) == 1, s.count(old)
+open(p, "w").write(s.replace(old, new))
+PYEOF
+grep -q 'ZZ_NO_SUCH_DECLARATION' "$VALIDATOR" \
+  || { echo "  FAIL scanner-selector mutation did not apply — the case below would pass vacuously"; fail=1; }
+expect "the self-reference scanner matching nothing" 3 "found"
 
 [ $fail -eq 0 ] && echo "=== validate-durable-topic-preservation-mutation-test: OK ===" || { echo "=== validate-durable-topic-preservation-mutation-test: FAILED ==="; exit 1; }
