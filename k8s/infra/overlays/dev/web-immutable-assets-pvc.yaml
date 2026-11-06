@@ -1,0 +1,12 @@
+# Public immutable code only. Retain this claim across releases; no market/account data.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: web-immutable-assets
+  namespace: options-edge
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: standard
+  resources:
+    requests:
+      storage: 2Gi

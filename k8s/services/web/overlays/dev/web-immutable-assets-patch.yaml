@@ -1,0 +1,46 @@
+# Stage1: prepare every dev pod before a later reviewed activation of hashed shell URLs.
+# Dev standard is rancher/local-path on the single node; this is not an NFS lock contract.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: options-edge-web
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      initContainers:
+        - name: publish-public-assets
+          # Existing service-deploy digest pinning covers initContainers too.
+          image: 192.168.100.252:5000/options-edge-web:dev
+          imagePullPolicy: Always
+          # Verified against the existing Jib image config and its argument file; no app.Main startup.
+          command: [java, -cp, '@/app/jib-classpath-file', app.web.ContextTapeAssetPublisher]
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+          env:
+            - name: JAVA_TOOL_OPTIONS
+              value: '-Xmx128m -XX:-UsePerfData'
+            - name: CONTEXT_TAPE_ASSET_ROOT
+              value: /var/run/context-tape-assets
+          resources:
+            requests: {cpu: 10m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+          volumeMounts:
+            - name: public-assets
+              mountPath: /var/run/context-tape-assets
+      containers:
+        - name: web
+          env:
+            - name: CONTEXT_TAPE_ASSET_ROOT
+              value: /var/run/context-tape-assets
+            - name: CONTEXT_TAPE_COMPILED_ASSETS
+              value: 'false'
+          volumeMounts:
+            - name: public-assets
+              mountPath: /var/run/context-tape-assets
+              readOnly: true
+      volumes:
+        - name: public-assets
+          persistentVolumeClaim:
+            claimName: web-immutable-assets
