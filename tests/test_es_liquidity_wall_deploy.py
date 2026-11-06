@@ -379,6 +379,29 @@ class SchemaMapAndManifest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
 
+class GatewayFreshness(unittest.TestCase):
+    """The dev gateway's dashboard freshness bound sits above the wall service's publication lag (design rev 9 section 6): measured 8.0 to 12.2 s after the bucket end on 2026-11-06."""
+
+    @staticmethod
+    def env(rel: str) -> dict[str, str]:
+        out = {}
+        for doc in yaml.safe_load_all(read(rel)):
+            if doc and doc.get("kind") == "Deployment" and doc["metadata"]["name"] == "feed-gateway-service":
+                for c in doc["spec"]["template"]["spec"]["containers"]:
+                    out.update({e["name"]: e.get("value") for e in c.get("env", [])})
+        return out
+
+    def test_the_dev_slice_sets_a_bound_above_the_measured_lag_and_no_other_environment_sets_it(self):
+        dev = self.env("k8s/services/feed-gateway/overlays/dev/manifest.yaml")
+        self.assertEqual(dev.get("ES_LIQUIDITY_WALL_RELAY_ENABLED"), "true")
+        self.assertGreaterEqual(int(dev["ES_LIQUIDITY_WALL_FRESH_MS"]), 12_200 + 5_000, "above the measured maximum lag plus a margin; the service's own grace is 10000")
+        for other in ("production", "experiment"):
+            rel = f"k8s/services/feed-gateway/overlays/{other}/manifest.yaml"
+            if (ROOT / rel).is_file():
+                self.assertNotIn("ES_LIQUIDITY_WALL_FRESH_MS", self.env(rel), other)
+        self.assertIn("ES_LIQUIDITY_WALL_FRESH_MS", read("k8s/overlays/dev/feed-gateway-dev-env-patch.yaml"), "the source patch the slice is generated from")
+
+
 class NoProductionWiring(unittest.TestCase):
     def test_no_production_file_names_the_service_its_image_or_its_topics(self):
         needles = (SVC, "ES_LIQUIDITY_WALL", "liquidity-wall")

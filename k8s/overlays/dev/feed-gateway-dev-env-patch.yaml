@@ -22,11 +22,18 @@ spec:
           env:
             - name: GATEWAY_RITHMIC_DEPTH_ENABLED
               value: "true"
-            # ES liquidity wall relays (gateway feat/es-liquidity-wall-relays): futures.liquidity-wall.{dashboard,events,voice,buckets} (ids 3403/3404/3407/3402, dev only)
+            # ES liquidity wall relays (gateway feat/es-liquidity-wall-relays): futures.liquidity-wall.{dashboard,events,voice,buckets} (ids 3408 (3403 archival version 1 is accepted too)/3404/3407/3402, dev only)
             # -> websocket events es-liquidity-heatmap / es-liquidity-wall / es-liquidity-voice and GET /api/es-liquidity-history (the 60-s projection). The producer
             # es-liquidity-wall-service runs on dev only; the relay is off everywhere else (default false).
             - name: ES_LIQUIDITY_WALL_RELAY_ENABLED
               value: "true"
+            # Freshness bound of a dashboard frame (order page liquidity walls, design rev 9 section 6, requirement OW-X-8). The gateway broadcasts a dashboard frame live only while its
+            # bucketEnd is within this many ms of now; the default is 5000. The wall service closes each second only after its grace (10000 ms on dev) and was MEASURED on 2026-11-06
+            # (a consumer on futures.liquidity-wall.dashboard, wall clock minus the record's bucket end, 40 consecutive records) publishing 8.0 to 12.2 s after the bucket end; the gateway
+            # counted every dashboard frame stale (gateway_es_liquidity_wall_stale_frames_total = dashboard_accepted_total = 23596) so none was ever broadcast. A consumer's
+            # wall-clock bound must exceed its producer's hold time: 20000 = the measured maximum plus a margin. Dev only (the relay is off everywhere else).
+            - name: ES_LIQUIDITY_WALL_FRESH_MS
+              value: "20000"
             # Liquidity-validator label relay (gateway LiquidityValidatorRelay; design/geometry-trade-rules/VALIDATOR-LABEL-ON-ORDER-PAGE-REQUIREMENT.md): futures.liquidity-validator.evaluations
             # (id 3604, dev only) -> the websocket event liquidity-validator, a label + spoken sentence beside each geometry signal on the Order page. Display only. The producer
             # liquidity-validator-service runs on dev only; the relay is off everywhere else (default false).
