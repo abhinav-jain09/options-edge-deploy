@@ -1,0 +1,144 @@
+{
+  "type": "record",
+  "name": "LiquidityValidatorDaily",
+  "namespace": "com.optionsedge.contracts.liquidityvalidator",
+  "doc": "liquidity validator service requirement section 3: the day's summary, rewritten never appended; a day with no evaluations still has one",
+  "fields": [
+    {
+      "name": "schemaVersion",
+      "type": "long"
+    },
+    {
+      "name": "tradeDate",
+      "type": "string"
+    },
+    {
+      "name": "status",
+      "type": "string",
+      "doc": "PROVISIONAL, FINAL or REPLAY"
+    },
+    {
+      "name": "evaluations",
+      "type": "long"
+    },
+    {
+      "name": "uncertain",
+      "type": "long"
+    },
+    {
+      "name": "uncertainShareBps",
+      "type": [
+        "null",
+        "long"
+      ],
+      "doc": "always travels with its counts",
+      "default": null
+    },
+    {
+      "name": "minutesWithNoRecordPerInput",
+      "type": {
+        "type": "array",
+        "items": {
+          "type": "record",
+          "name": "LiquidityValidatorCount",
+          "doc": "a name and a count",
+          "fields": [
+            {
+              "name": "name",
+              "type": "string"
+            },
+            {
+              "name": "count",
+              "type": "long"
+            }
+          ]
+        }
+      },
+      "doc": "minutes in 09:30-16:00 ET with no visible record, per input"
+    },
+    {
+      "name": "gapCountByReason",
+      "type": {
+        "type": "array",
+        "items": "LiquidityValidatorCount"
+      }
+    },
+    {
+      "name": "filters",
+      "type": {
+        "type": "array",
+        "items": {
+          "type": "record",
+          "name": "LiquidityValidatorFilterDay",
+          "doc": "per filter or flag: evaluable and not evaluable counts",
+          "fields": [
+            {
+              "name": "name",
+              "type": "string"
+            },
+            {
+              "name": "evaluable",
+              "type": "long"
+            },
+            {
+              "name": "notEvaluable",
+              "type": "long"
+            },
+            {
+              "name": "dominantReason",
+              "type": [
+                "null",
+                "string"
+              ],
+              "default": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "skippedBeforeStart",
+      "type": "long",
+      "doc": "releases consumed in the restart lookback and not evaluated"
+    },
+    {
+      "name": "lateArrivals",
+      "type": "long",
+      "doc": "records with timestamp <= R that arrived after an evaluation and were not folded in"
+    },
+    {
+      "name": "undecodable",
+      "type": {
+        "type": "array",
+        "items": "LiquidityValidatorCount"
+      },
+      "doc": "undecodable records per input topic"
+    },
+    {
+      "name": "outputFailures",
+      "type": "long",
+      "doc": "output sends that failed after the bounded retries"
+    },
+    {
+      "name": "overflowEvents",
+      "type": "long",
+      "doc": "times a bounded queue overflowed and publishing stopped"
+    },
+    {
+      "name": "paramsSha256",
+      "type": "string"
+    },
+    {
+      "name": "scope",
+      "type": "string"
+    },
+    {
+      "name": "evaluatorVersion",
+      "type": "string"
+    },
+    {
+      "name": "asOfWallMs",
+      "type": "long"
+    }
+  ]
+}

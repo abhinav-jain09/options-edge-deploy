@@ -187,7 +187,7 @@ class TopicsEnv(unittest.TestCase):
             self.assertEqual(got, self.d, environment)
         prod = declarations(self.VARS, "production")
         ours = lambda tokens: sorted(x for x in tokens if x.startswith(P))                                                      # noqa: E731
-        others = lambda tokens: sorted(x for x in tokens if not x.startswith(P) and not x.startswith("options.spx.line-acceptance") and not x.startswith("es.mbo."))  # noqa: E731
+        others = lambda tokens: sorted(x for x in tokens if not x.startswith(P) and not x.startswith("options.spx.line-acceptance") and not x.startswith("es.mbo.") and not x.startswith("futures.liquidity-validator"))  # noqa: E731
         for v in self.VARS:
             self.assertEqual(ours(prod[v]), [], v)
             # production keeps every other declaration (line-acceptance's own dev-only guard strips its six the same way; that is its test's business)
@@ -287,7 +287,7 @@ class Registered(unittest.TestCase):
         self.assertIn(f"'{SVC}',", text)
         # the barrier shares the line-acceptance stage (the pipeline's CPS method is at the JVM's 64 KB limit; a separate stage failed to compile, build #3006)
         stage = text[text.index("stage('Verify line-acceptance topics')"):text.index("stage('Verify market-structure output topics')")]
-        self.assertIn("(params.SERVICE == 'line-acceptance' || params.SERVICE == 'es-liquidity-wall' || params.SERVICE == 'es-liquidity-engine') && !params.DEPLOY_DRY_RUN", stage)
+        self.assertIn("(params.SERVICE == 'line-acceptance' || params.SERVICE == 'es-liquidity-wall' || params.SERVICE == 'es-liquidity-engine' || params.SERVICE == 'liquidity-validator') && !params.DEPLOY_DRY_RUN", stage)
         self.assertIn("params.ENVIRONMENT != 'dev'", stage)
         self.assertIn("scripts/kafka/ensure-es-liquidity-wall-topics.sh", stage)
         self.assertIn("params.SERVICE == 'es-liquidity-wall'", stage)

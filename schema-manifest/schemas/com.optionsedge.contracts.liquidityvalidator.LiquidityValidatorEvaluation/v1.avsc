@@ -1,0 +1,297 @@
+{
+  "type": "record",
+  "name": "LiquidityValidatorEvaluation",
+  "namespace": "com.optionsedge.contracts.liquidityvalidator",
+  "doc": "liquidity validator service requirement section 3: one research record per geometry release. It never trades and no decision path reads it.",
+  "fields": [
+    {
+      "name": "schemaVersion",
+      "type": "long",
+      "doc": "1 for this revision"
+    },
+    {
+      "name": "evaluationId",
+      "type": "string",
+      "doc": "<scheduleId>|<annotationId>, both immutable source fields; the output key is <tradeDate>|<evaluationId>"
+    },
+    {
+      "name": "tradeDate",
+      "type": "string"
+    },
+    {
+      "name": "annotationId",
+      "type": "string"
+    },
+    {
+      "name": "patternId",
+      "type": "string"
+    },
+    {
+      "name": "timeframe",
+      "type": "string",
+      "doc": "1m, 5m or 15m"
+    },
+    {
+      "name": "direction",
+      "type": "string",
+      "doc": "UP or DOWN"
+    },
+    {
+      "name": "releaseVisibleAtMs",
+      "type": "long",
+      "doc": "R: the broker record timestamp of the first geometry record carrying the S1 conditions"
+    },
+    {
+      "name": "result",
+      "type": "string",
+      "doc": "the Section 4.2 entry-time result, or UNCERTAIN / LATE_SIGNAL; a research record, not an instruction"
+    },
+    {
+      "name": "resultReasons",
+      "type": {
+        "type": "array",
+        "items": "string"
+      },
+      "doc": "closed reasons of the validator note, fixed order"
+    },
+    {
+      "name": "state",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "verdict",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "coveringSiteId",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "boundaryEsTicks",
+      "type": [
+        "null",
+        "long"
+      ],
+      "doc": "the broken boundary in ES quarter-point ticks, from the admissible level-absorption event",
+      "default": null
+    },
+    {
+      "name": "boundaryAgeMs",
+      "type": [
+        "null",
+        "long"
+      ],
+      "doc": "how old that event was at R",
+      "default": null
+    },
+    {
+      "name": "sourceObjectId",
+      "type": [
+        "null",
+        "string"
+      ],
+      "doc": "the selected site event's sourceObjectId (the annotation id)",
+      "default": null
+    },
+    {
+      "name": "sourceRevision",
+      "type": [
+        "null",
+        "string"
+      ],
+      "doc": "lastEndMs#lastOrdinal of the annotation as the site event carried it",
+      "default": null
+    },
+    {
+      "name": "boundaryEventTimestampMs",
+      "type": [
+        "null",
+        "long"
+      ],
+      "doc": "the selected level-absorption event's timestamp",
+      "default": null
+    },
+    {
+      "name": "boundaryLevelPriceEsDecimal",
+      "type": [
+        "null",
+        "string"
+      ],
+      "doc": "the event's levelPriceEs exactly as decoded, before conversion to ticks",
+      "default": null
+    },
+    {
+      "name": "priceAtReleaseEsTicks",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    },
+    {
+      "name": "extensionTicks",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    },
+    {
+      "name": "lateExtension",
+      "type": "boolean"
+    },
+    {
+      "name": "lateTargetPassed",
+      "type": "boolean"
+    },
+    {
+      "name": "wallEvidence",
+      "type": "string",
+      "doc": "NOT_USABLE:LAYER_B_OFF in this revision"
+    },
+    {
+      "name": "filters",
+      "type": {
+        "type": "array",
+        "items": {
+          "type": "record",
+          "name": "LiquidityValidatorEntry",
+          "doc": "a closed-vocabulary name and its value",
+          "fields": [
+            {
+              "name": "name",
+              "type": "string"
+            },
+            {
+              "name": "value",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "doc": "LG-0, LG-1, LG-2, LG-6, LG-7: TRUE, FALSE or UNCERTAIN(reason)"
+    },
+    {
+      "name": "fakeSuspicion",
+      "type": {
+        "type": "array",
+        "items": "LiquidityValidatorEntry"
+      },
+      "doc": "FK-1 and FK-6 in the same shape; suspicions, never verdicts"
+    },
+    {
+      "name": "fp4",
+      "type": "string",
+      "doc": "footprint row FP-4 result"
+    },
+    {
+      "name": "messageTrustStatus",
+      "type": "string",
+      "doc": "TRUSTED or UNTRUSTED"
+    },
+    {
+      "name": "messageTrustReasons",
+      "type": {
+        "type": "array",
+        "items": "string"
+      }
+    },
+    {
+      "name": "trustByInput",
+      "type": {
+        "type": "array",
+        "items": {
+          "type": "record",
+          "name": "LiquidityValidatorInputTrust",
+          "doc": "UNTRUSTED reasons carried by one input",
+          "fields": [
+            {
+              "name": "input",
+              "type": "string"
+            },
+            {
+              "name": "reasons",
+              "type": {
+                "type": "array",
+                "items": "string"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "scope",
+      "type": "string",
+      "doc": "ENTRY_TIME_EVIDENCE_ONLY"
+    },
+    {
+      "name": "paramsSha256",
+      "type": "string"
+    },
+    {
+      "name": "evaluatorVersion",
+      "type": "string"
+    },
+    {
+      "name": "evaluatedAtWallMs",
+      "type": "long"
+    },
+    {
+      "name": "evaluatedOnTimer",
+      "type": "boolean",
+      "doc": "always true in this revision: the evaluation ran GRACE_MS after the geometry record was consumed, not on a watermark"
+    },
+    {
+      "name": "pendingInputs",
+      "type": {
+        "type": "array",
+        "items": "string"
+      },
+      "doc": "input topics with no record whose timestamp is greater than R among the records read up to the recorded cut (informational; sparse topics are often pending)"
+    },
+    {
+      "name": "historyStartMs",
+      "type": "long",
+      "doc": "start of the buffers this evaluation could read (the rebuilt trade-date start)"
+    },
+    {
+      "name": "inputCuts",
+      "type": {
+        "type": "array",
+        "items": {
+          "type": "record",
+          "name": "LiquidityValidatorInputCut",
+          "doc": "the next offset the service would read on one input partition at the instant of evaluation",
+          "fields": [
+            {
+              "name": "topic",
+              "type": "string"
+            },
+            {
+              "name": "partition",
+              "type": "long"
+            },
+            {
+              "name": "nextOffset",
+              "type": "long"
+            }
+          ]
+        }
+      },
+      "doc": "the exact cut: replaying the archived topics only up to these offsets reproduces the evaluation"
+    }
+  ]
+}

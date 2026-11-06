@@ -1,0 +1,132 @@
+{
+  "type": "record",
+  "name": "LiquidityValidatorDataGap",
+  "namespace": "com.optionsedge.contracts.liquidityvalidator",
+  "doc": "liquidity validator service requirement section 3: one record per evaluation that ends UNCERTAIN, naming what was missing",
+  "fields": [
+    {
+      "name": "schemaVersion",
+      "type": "long"
+    },
+    {
+      "name": "key",
+      "type": "string",
+      "doc": "tradeDate|evaluationId"
+    },
+    {
+      "name": "tradeDate",
+      "type": "string"
+    },
+    {
+      "name": "evaluatedAtMs",
+      "type": "long",
+      "doc": "R, so a replay is deterministic"
+    },
+    {
+      "name": "judgedAnnotationId",
+      "type": "string"
+    },
+    {
+      "name": "judgedLevelKind",
+      "type": "string"
+    },
+    {
+      "name": "judgedBoundaryEsTicks",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    },
+    {
+      "name": "judgedBoundarySpxCents",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    },
+    {
+      "name": "judgedCoveringSiteId",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "missing",
+      "type": {
+        "type": "array",
+        "items": {
+          "type": "record",
+          "name": "LiquidityValidatorMissing",
+          "doc": "one missing or untrusted input",
+          "fields": [
+            {
+              "name": "input",
+              "type": "string",
+              "doc": "LEVEL, TAPE, AGGRESSOR, FOOTPRINT, BASIS, VISIBILITY_CLOCK"
+            },
+            {
+              "name": "producer",
+              "type": "string"
+            },
+            {
+              "name": "topic",
+              "type": "string"
+            },
+            {
+              "name": "reason",
+              "type": "string",
+              "doc": "closed list of the validator note Section 7"
+            },
+            {
+              "name": "lastGoodVisibleAtMs",
+              "type": [
+                "null",
+                "long"
+              ],
+              "default": null
+            },
+            {
+              "name": "ageMs",
+              "type": [
+                "null",
+                "long"
+              ],
+              "default": null
+            },
+            {
+              "name": "limitMs",
+              "type": [
+                "null",
+                "long"
+              ],
+              "default": null
+            },
+            {
+              "name": "limitSource",
+              "type": "string"
+            },
+            {
+              "name": "blocks",
+              "type": {
+                "type": "array",
+                "items": "string"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "paramsSha256",
+      "type": "string"
+    },
+    {
+      "name": "scope",
+      "type": "string"
+    }
+  ]
+}

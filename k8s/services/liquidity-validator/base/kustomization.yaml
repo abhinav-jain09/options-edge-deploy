@@ -1,0 +1,8 @@
+# SERVICE SLICE — liquidity-validator (the live READ-ONLY liquidity validator) on DEV. Owns ONLY this service's Deployment.
+#
+# DEV-ONLY: referenced from k8s/overlays/dev (NOT k8s/base, NOT production or experiment); services.yaml declares envs: [dev]. One JVM, plain consumer loops (no Kafka Streams), no state volume.
+# No Service object: kubelet probes reach the pod directly. No ConfigMap, Secret or PVC of its own.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - liquidity-validator-deployment.yaml

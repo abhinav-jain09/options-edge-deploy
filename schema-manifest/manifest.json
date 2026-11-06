@@ -1043,6 +1043,12 @@
     3502,
     3506
    ]
+  ],
+  "liquidityvalidator": [
+   [
+    3601,
+    3603
+   ]
   ]
  },
  "declaredByManifest": [
@@ -3524,7 +3530,17 @@
     }
    ],
    "producers": [],
-   "consumers": [],
+   "consumers": [
+    {
+     "service": "liquidity-validator",
+     "accepts": [
+      2701
+     ],
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "es.futures.aggressor-flow is byte-copied es4->dev and es4->prod (Jenkinsfile.es-futures-flow-mirror) carrying this schema (id 2701, measured on es4 2026-11-03); prod's registry did not hold it (404), so the prod mirror's frames named an id prod could not resolve (R3f). Curated, not baseline: the inventory would drop prod again."
   },
@@ -5886,6 +5902,15 @@
      "environments": [
       "dev"
      ]
+    },
+    {
+     "service": "liquidity-validator",
+     "accepts": [
+      2223
+     ],
+     "environments": [
+      "dev"
+     ]
     }
    ],
    "retained": true,
@@ -5919,6 +5944,15 @@
    "consumers": [
     {
      "service": "line-acceptance",
+     "accepts": [
+      2222
+     ],
+     "environments": [
+      "dev"
+     ]
+    },
+    {
+     "service": "liquidity-validator",
      "accepts": [
       2222
      ],
@@ -9822,6 +9856,15 @@
      "environments": [
       "dev"
      ]
+    },
+    {
+     "service": "liquidity-validator",
+     "accepts": [
+      2034
+     ],
+     "environments": [
+      "dev"
+     ]
     }
    ],
    "retained": true,
@@ -10292,7 +10335,17 @@
     }
    ],
    "producers": [],
-   "consumers": [],
+   "consumers": [
+    {
+     "service": "liquidity-validator",
+     "accepts": [
+      2702
+     ],
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
    "retained": true,
    "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
   },
@@ -10797,6 +10850,118 @@
    "baseline": true,
    "registeredBy": "unknown (inventory baseline 2026-11-03)",
    "reason": "auto-assigned: at least one version has a registry-assigned id below 2000 (not a fixed id, so not mirror-safe by construction)"
+  },
+  {
+   "kind": "MIRRORED",
+   "subject": "com.optionsedge.contracts.liquidityvalidator.LiquidityValidatorEvaluation",
+   "version": 1,
+   "id": 3601,
+   "family": "liquidityvalidator",
+   "schemaFile": "com.optionsedge.contracts.liquidityvalidator.LiquidityValidatorEvaluation/v1.avsc",
+   "schemaHash": "04540d975e6ca4a16b97d2abb3ddbe5649d775105f071481ab1f4aaabf7ba823",
+   "environments": [
+    "dev"
+   ],
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas-registry/liquidityvalidator/LiquidityValidatorEvaluation.avsc"
+   },
+   "topics": [
+    {
+     "name": "futures.liquidity-validator.evaluations",
+     "kind": "data"
+    }
+   ],
+   "producers": [
+    {
+     "service": "liquidity-validator",
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "curated, not baseline: liquidity-validator-service (NEW, dev only; contracts 0.73.0 schemas-registry/liquidityvalidator) writes it on futures.liquidity-validator.evaluations under RecordNameStrategy with auto.register.schemas=false (its schema-requirements.json names this id and hash). A research record; this deployment adds no decision consumer of it (a requirement constraint, not proved by the manifest). Dev only; nothing is registered on production or es4."
+  },
+  {
+   "kind": "MIRRORED",
+   "subject": "com.optionsedge.contracts.liquidityvalidator.LiquidityValidatorDataGap",
+   "version": 1,
+   "id": 3602,
+   "family": "liquidityvalidator",
+   "schemaFile": "com.optionsedge.contracts.liquidityvalidator.LiquidityValidatorDataGap/v1.avsc",
+   "schemaHash": "9eee754a65bb192c7c48025d9d9b4aacfa0f2ef1438aaf80f7a306dc2bd88d33",
+   "environments": [
+    "dev"
+   ],
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas-registry/liquidityvalidator/LiquidityValidatorDataGap.avsc"
+   },
+   "topics": [
+    {
+     "name": "futures.liquidity-validator.data-gaps",
+     "kind": "data"
+    }
+   ],
+   "producers": [
+    {
+     "service": "liquidity-validator",
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "curated, not baseline: liquidity-validator-service (NEW, dev only; contracts 0.73.0 schemas-registry/liquidityvalidator) writes it on futures.liquidity-validator.data-gaps under RecordNameStrategy with auto.register.schemas=false (its schema-requirements.json names this id and hash). A research record; this deployment adds no decision consumer of it (a requirement constraint, not proved by the manifest). Dev only; nothing is registered on production or es4."
+  },
+  {
+   "kind": "MIRRORED",
+   "subject": "com.optionsedge.contracts.liquidityvalidator.LiquidityValidatorDaily",
+   "version": 1,
+   "id": 3603,
+   "family": "liquidityvalidator",
+   "schemaFile": "com.optionsedge.contracts.liquidityvalidator.LiquidityValidatorDaily/v1.avsc",
+   "schemaHash": "8ecc493083ecd3a326071427abab6a49c760e49177da28e5150d00e42ca5393e",
+   "environments": [
+    "dev"
+   ],
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas-registry/liquidityvalidator/LiquidityValidatorDaily.avsc"
+   },
+   "topics": [
+    {
+     "name": "futures.liquidity-validator.daily",
+     "kind": "data"
+    }
+   ],
+   "producers": [
+    {
+     "service": "liquidity-validator",
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
+   "consumers": [
+    {
+     "service": "liquidity-validator",
+     "accepts": [
+      3603
+     ],
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
+   "retained": true,
+   "retainedReason": "curated, not baseline: liquidity-validator-service (NEW, dev only; contracts 0.73.0 schemas-registry/liquidityvalidator) writes it on futures.liquidity-validator.daily under RecordNameStrategy with auto.register.schemas=false (its schema-requirements.json names this id and hash). A research record; this deployment adds no decision consumer of it (a requirement constraint, not proved by the manifest). Dev only; nothing is registered on production or es4."
   }
  ],
  "dlqTopics": {
