@@ -34,13 +34,13 @@ class WebImmutableAssetsDevTest(unittest.TestCase):
         self.assertEqual(['ReadWriteOnce'], claim['spec']['accessModes'])
         self.assertEqual('2Gi', claim['spec']['resources']['requests']['storage'])
 
-    def test_preparation_stays_disabled_and_app_volume_is_read_only(self):
+    def test_activation_enabled_and_app_volume_is_read_only(self):
         pod = resource(self.web, 'Deployment', 'options-edge-web')['spec']['template']['spec']
         app = next(c for c in pod['containers'] if c['name'] == 'web')
         init = next(c for c in pod['initContainers'] if c['name'] == 'publish-public-assets')
         self.assertEqual(app['image'], init['image'], 'existing digest pinning must resolve one identical image')
         self.assertEqual(['java', '-cp', '@/app/jib-classpath-file', 'app.web.ContextTapeAssetPublisher'], init['command'])
-        self.assertEqual('false', next(e['value'] for e in app['env'] if e['name'] == 'CONTEXT_TAPE_COMPILED_ASSETS'))
+        self.assertEqual('true', next(e['value'] for e in app['env'] if e['name'] == 'CONTEXT_TAPE_COMPILED_ASSETS'))
         self.assertTrue(next(v for v in app['volumeMounts'] if v['name'] == 'public-assets')['readOnly'])
         self.assertEqual('10m', init['resources']['requests']['cpu'])
         self.assertEqual('Always', init['imagePullPolicy'])

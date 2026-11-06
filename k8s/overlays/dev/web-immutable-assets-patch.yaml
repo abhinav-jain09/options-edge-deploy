@@ -1,4 +1,4 @@
-# Stage1: prepare every dev pod before a later reviewed activation of hashed shell URLs.
+# Activate the reviewed compiled asset graph; native liquidity remains separately gated.
 # Dev standard is rancher/local-path on the single node; this is not an NFS lock contract.
 apiVersion: apps/v1
 kind: Deployment
@@ -35,7 +35,7 @@ spec:
             - name: CONTEXT_TAPE_ASSET_ROOT
               value: /var/run/context-tape-assets
             - name: CONTEXT_TAPE_COMPILED_ASSETS
-              value: 'false'
+              value: 'true'
           volumeMounts:
             - name: public-assets
               mountPath: /var/run/context-tape-assets
