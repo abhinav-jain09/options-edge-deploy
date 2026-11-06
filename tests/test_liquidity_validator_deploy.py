@@ -1,7 +1,7 @@
 """Deploy wiring of liquidity-validator-service (the live READ-ONLY liquidity validator).
 
 DEV ONLY, single replica, strategy Recreate, health port 8080 (/healthz, /readyz). It reads five existing topics without a consumer group and publishes three single-partition Avro topics
-(futures.liquidity-validator.{evaluations,data-gaps,daily}, ids 3601-3603). It never trades. Covers the base, the dev overlay slice, the registration everywhere a dev-only service must be,
+(futures.liquidity-validator.{evaluations,data-gaps,daily}, ids 3604 (evaluation v2), 3602, 3603; 3601 is the archival evaluation v1). It never trades. Covers the base, the dev overlay slice, the registration everywhere a dev-only service must be,
 the topics and their barrier, the schema map and manifest, and the absence of any production wiring."""
 from __future__ import annotations
 
@@ -24,7 +24,8 @@ EVALUATIONS, GAPS, DAILY = "futures.liquidity-validator.evaluations", "futures.l
 TOPICS = (EVALUATIONS, GAPS, DAILY)
 JAR = ROOT / "tools/schema-governance/schema-governance-tool.jar"
 NS = "com.optionsedge.contracts.liquidityvalidator"
-IDS = {"LiquidityValidatorEvaluation": 3601, "LiquidityValidatorDataGap": 3602, "LiquidityValidatorDaily": 3603}
+IDS = {"LiquidityValidatorEvaluation": 3604, "LiquidityValidatorDataGap": 3602, "LiquidityValidatorDaily": 3603}
+ARCHIVAL_EVALUATION_V1 = 3601   # registered on dev by the first roll; a registered id never changes content, so the evaluation became version 2 under 3604
 BASE = f"k8s/services/{SVC}/base/{SVC}-deployment.yaml"
 SLICE = f"k8s/services/{SVC}/overlays/dev/manifest.yaml"
 PINNED_BOOTSTRAP, PINNED_REGISTRY = "host.docker.internal:19092", "http://host.docker.internal:8082"
@@ -254,12 +255,14 @@ class Barrier(unittest.TestCase):
 class Schemas(unittest.TestCase):
     def test_the_map_names_exactly_the_three_fixed_ids_and_no_other_map_uses_them(self):
         rows = [l.split("|") for l in read("scripts/kafka/schema-id-maps/liquidity-validator.map").splitlines() if l and not l.startswith("#")]
-        self.assertEqual({r[0]: int(r[1]) for r in rows}, {f"{NS}.{n}": i for n, i in IDS.items()})
+        self.assertEqual(sorted((r[0], int(r[1])) for r in rows), sorted([(f"{NS}.{n}", i) for n, i in IDS.items()] + [(f"{NS}.LiquidityValidatorEvaluation", ARCHIVAL_EVALUATION_V1)]))
+        # the fourth column is the registry version: v1 (archival 3601) first, then v2 (3604)
+        self.assertEqual([(int(r[1]), r[3]) for r in rows if r[0].endswith("LiquidityValidatorEvaluation")], [(3601, "1"), (3604, "2")])
         for other in (ROOT / "scripts/kafka/schema-id-maps").glob("*.map"):
             if other.name == "liquidity-validator.map":
                 continue
             text = other.read_text()
-            for i in IDS.values():
+            for i in list(IDS.values()) + [ARCHIVAL_EVALUATION_V1]:
                 self.assertNotRegex(text, rf"\|{i}\|", f"{other.name} uses {i}")
 
     def test_the_manifest_governs_the_three_subjects_with_hashes_equal_to_the_snapshots_and_the_five_input_consumer_bindings(self):
@@ -267,16 +270,22 @@ class Schemas(unittest.TestCase):
         by = {e["subject"]: e for e in m["entries"] if e.get("kind") == "MIRRORED"}
         for n, i in IDS.items():
             e = by[f"{NS}.{n}"]
-            self.assertEqual((e["id"], e["version"], e["family"], e["environments"]), (i, 1, "liquidityvalidator", ["dev"]))
+            self.assertEqual((e["id"], e["version"], e["family"], e["environments"]), (i, 2 if i == 3604 else 1, "liquidityvalidator", ["dev"]))
             self.assertEqual(e["producers"], [{"service": SVC, "environments": ["dev"]}])
             # The service READS its own daily topic at start (its schema-requirements.json consumes 3603): that self-consumer is expected and is the ONLY one. The evaluations and data-gaps
             # topics have none, and this deployment adds no decision consumer of any of the three (a requirement constraint, not proved here).
             expected = [{"service": SVC, "accepts": [3603], "environments": ["dev"]}] if i == 3603 else []
             self.assertEqual(e["consumers"], expected, f"{n}: consumers")
-            snap = ROOT / "schema-manifest/schemas" / e["subject"] / "v1.avsc"
+            snap = ROOT / "schema-manifest/schemas" / e["subject"] / ("v2.avsc" if i == 3604 else "v1.avsc")
             out = subprocess.run(["java", "-jar", str(JAR), "hash", str(snap)], capture_output=True, text=True, check=True).stdout.strip().splitlines()[-1]
             self.assertEqual(out, e["schemaHash"], n)
-        self.assertEqual(m["familyBlocks"]["liquidityvalidator"], [[3601, 3603]])
+        self.assertEqual(m["familyBlocks"]["liquidityvalidator"], [[3601, 3604]])
+        # the archival evaluation v1: id 3601, version 1, no producer, no consumer, its own snapshot and hash
+        arch = [e for e in m["entries"] if e.get("id") == ARCHIVAL_EVALUATION_V1][0]
+        self.assertEqual((arch["version"], arch["producers"], arch["consumers"], arch["subject"]), (1, [], [], f"{NS}.LiquidityValidatorEvaluation"))
+        snap1 = ROOT / "schema-manifest/schemas" / arch["subject"] / "v1.avsc"
+        out1 = subprocess.run(["java", "-jar", str(JAR), "hash", str(snap1)], capture_output=True, text=True, check=True).stdout.strip().splitlines()[-1]
+        self.assertEqual(out1, arch["schemaHash"])
         wanted = {2222: "GeometryUnavailable", 2223: "GeometryAnnotationSet", 2702: "futures.level-absorption.events-value", 2701: "EsAggressorFlowSnapshot", 2034: "es.futures.footprint.bars-value"}
         bound = {e["id"]: e for e in m["entries"] if e.get("kind") == "MIRRORED" and e.get("id") in wanted and wanted[e["id"]] in e["subject"]}
         self.assertEqual(sorted(bound), sorted(wanted))

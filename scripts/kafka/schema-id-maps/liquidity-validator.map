@@ -1,8 +1,9 @@
 # Fixed schema ids for liquidity-validator-service (the live READ-ONLY liquidity validator; NEW, dev only). Contracts options-edge-contracts 0.73.0 (schemas-registry/liquidityvalidator):
-# ids 3601-3603, version 1, namespace com.optionsedge.contracts.liquidityvalidator, subject = the record full name (RecordNameStrategy), compatibility FULL. One record TYPE per topic:
-# futures.liquidity-validator.evaluations 3601, futures.liquidity-validator.data-gaps 3602, futures.liquidity-validator.daily 3603. The service writes with auto.register.schemas=false
+# ids 3601-3604 (3601 = version 1 of the evaluation subject, ARCHIVAL since contracts 0.76.0; 3604 = version 2, the formation reading; a registered id never changes content), version 1 except 3604 (see the fourth column, es-trade-tools.map), namespace com.optionsedge.contracts.liquidityvalidator, subject = the record full name (RecordNameStrategy), compatibility FULL. One record TYPE per topic:
+# futures.liquidity-validator.evaluations 3604 (3601 archival), futures.liquidity-validator.data-gaps 3602, futures.liquidity-validator.daily 3603. The service writes with auto.register.schemas=false
 # (src/main/resources/schema-requirements.json names these ids and hashes). Dev only; nothing is registered on production or es4.
 # File column: relative to the contracts checkout's `schemas-registry/liquidityvalidator` directory (SCHEMAS_DIR).
-com.optionsedge.contracts.liquidityvalidator.LiquidityValidatorEvaluation|3601|LiquidityValidatorEvaluation.avsc
+com.optionsedge.contracts.liquidityvalidator.LiquidityValidatorEvaluation|3601|v1/LiquidityValidatorEvaluation.avsc|1
+com.optionsedge.contracts.liquidityvalidator.LiquidityValidatorEvaluation|3604|LiquidityValidatorEvaluation.avsc|2
 com.optionsedge.contracts.liquidityvalidator.LiquidityValidatorDataGap|3602|LiquidityValidatorDataGap.avsc
 com.optionsedge.contracts.liquidityvalidator.LiquidityValidatorDaily|3603|LiquidityValidatorDaily.avsc

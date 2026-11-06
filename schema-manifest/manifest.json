@@ -1051,7 +1051,7 @@
   "liquidityvalidator": [
    [
     3601,
-    3603
+    3604
    ]
   ]
  },
@@ -10913,6 +10913,33 @@
    "source": {
     "kind": "FILE",
     "repo": "contracts",
+    "path": "schemas-registry/liquidityvalidator/v1/LiquidityValidatorEvaluation.avsc"
+   },
+   "topics": [
+    {
+     "name": "futures.liquidity-validator.evaluations",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "curated, not baseline: ARCHIVAL version 1 of the liquidity validator evaluation subject (contracts 0.73.0), registered on dev by the first roll under id 3601; superseded by version 2 id 3604. Nothing writes it any more; kept so a registry import stays reproducible. Dev only."
+  },
+  {
+   "kind": "MIRRORED",
+   "subject": "com.optionsedge.contracts.liquidityvalidator.LiquidityValidatorEvaluation",
+   "version": 2,
+   "id": 3604,
+   "family": "liquidityvalidator",
+   "schemaFile": "com.optionsedge.contracts.liquidityvalidator.LiquidityValidatorEvaluation/v2.avsc",
+   "schemaHash": "276a0d2ff75606e22a904387cb36a34b3bf27ff4cd41cb0a2a6863e5aa416a52",
+   "environments": [
+    "dev"
+   ],
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
     "path": "schemas-registry/liquidityvalidator/LiquidityValidatorEvaluation.avsc"
    },
    "topics": [
@@ -10931,7 +10958,7 @@
    ],
    "consumers": [],
    "retained": true,
-   "retainedReason": "curated, not baseline: liquidity-validator-service (NEW, dev only; contracts 0.73.0 schemas-registry/liquidityvalidator) writes it on futures.liquidity-validator.evaluations under RecordNameStrategy with auto.register.schemas=false (its schema-requirements.json names this id and hash). A research record; this deployment adds no decision consumer of it (a requirement constraint, not proved by the manifest). Dev only; nothing is registered on production or es4."
+   "retainedReason": "curated, not baseline: liquidity-validator-service (NEW, dev only; contracts 0.76.0 schemas-registry/liquidityvalidator) writes it on futures.liquidity-validator.evaluations under RecordNameStrategy with auto.register.schemas=false: VERSION 2 under the new fixed id 3604 (adds the formation reading as six nullable default-null fields); its schema-requirements.json names this id and hash. Dev only; nothing is registered on production or es4."
   },
   {
    "kind": "MIRRORED",
