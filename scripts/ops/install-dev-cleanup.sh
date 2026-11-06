@@ -20,7 +20,8 @@ if [ "${1:-}" = "--check" ]; then
     echo "OK: live dev-cleanup.sh == repo ($(sha "$SRC" | cut -c1-12))"; exit 0
   fi
   echo "DRIFT: $DST differs from $SRC — the clean that runs is not the one reviewed:"
-  diff "$SRC" "$DST" | head -20 | sed 's/^/  /'
+  # diff exits 1 on a difference: under set -e and pipefail that alone would end the script, so the exit status of a drift must not depend on it
+  { diff "$SRC" "$DST" | head -20 | sed 's/^/  /'; } || true
   exit 1
 fi
 bash -n "$SRC"
