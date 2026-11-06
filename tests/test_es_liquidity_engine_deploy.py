@@ -228,7 +228,7 @@ class Barrier(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         self.assertEqual([c for c in calls if "--entity-type brokers" in c or "--entity-default" in c], [], "no broker-wide change")
         self.assertFalse(any("--alter" in c or "--delete" in c for c in calls))
-        for t, ret, b in ((LEVEL_FLOW, ONE_DAY, CAP), (FINAL, ONE_DAY, CAP), (HEALTH, ONE_DAY, None)):
+        for t, ret, b in ((LEVEL_FLOW, ONE_DAY, CAP), (FINAL, ONE_DAY, CAP), (HEALTH, ONE_DAY, None), (EVENTS, "-1", EVENTS_CAP)):
             d = state["topics"][t]
             self.assertEqual((d["partitions"], d["configs"]["cleanup.policy"], d["configs"]["retention.ms"]), (1, "delete", ret), t)
             if b:
@@ -263,6 +263,7 @@ class Barrier(unittest.TestCase):
             "snapshot finite retention": (SNAPSHOT, lambda d: d["configs"].update({"retention.ms": ONE_DAY})),
             "snapshot byte-capped": (SNAPSHOT, lambda d: d["configs"].update({"retention.bytes": CAP})),
             "snapshot 4 partitions": (SNAPSHOT, lambda d: d.update(partitions=4)),
+            "events 4 partitions": (EVENTS, lambda d: d.update(partitions=4)),
             "events compacted": (EVENTS, lambda d: d["configs"].update({"cleanup.policy": "compact"})),
             "events finite retention": (EVENTS, lambda d: d["configs"].update({"retention.ms": ONE_DAY})),
             "events uncapped": (EVENTS, lambda d: d["configs"].update({"retention.bytes": "-1"})),
