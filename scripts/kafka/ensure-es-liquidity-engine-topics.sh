@@ -8,6 +8,7 @@
 #   es.mbo.closures     1 partition, compact, retention.ms EXACTLY -1, retention.bytes EXACTLY -1 (pure compact)
 #   es.mbo.snapshot     1 partition, compact, retention.ms EXACTLY -1, retention.bytes EXACTLY -1 (pure compact)
 #   es.mbo.health       1 partition, delete, retention.ms EXACTLY 86400000 (1 day)
+#   es.mbo.level-base 1 partition, delete, retention.ms EXACTLY 86400000 (1 day), retention.bytes EXACTLY 268435456
 #   es.mbo.level-flow-final 1 partition, delete, retention.ms EXACTLY 86400000 (1 day), retention.bytes EXACTLY 268435456
 # An existing topic is never recreated, altered or shrunk: any difference fails closed. The input topic es.rithmic.mbo and the drop engine's es.drop.* topics belong to other
 # owners and are not created here (the drop runtime creates its own outputs at start). dev-cleanup.sh does NOT run this barrier: its topic pass recreates the shapes
@@ -40,6 +41,7 @@ fi
 LEVEL_FLOW="${KAFKA_ES_MBO_LEVEL_FLOW_TOPIC:-es.mbo.level-flow}"
 HEALTH="${KAFKA_ES_MBO_HEALTH_TOPIC:-es.mbo.health}"
 FINAL="${KAFKA_ES_MBO_FINAL_TOPIC:-es.mbo.level-flow-final}"
+BASE="${KAFKA_ES_MBO_LEVEL_BASE_TOPIC:-es.mbo.level-base}"
 SNAPSHOT="${KAFKA_ES_MBO_SNAPSHOT_TOPIC:-es.mbo.snapshot}"
 CLOSURES="${KAFKA_ES_MBO_CLOSURE_TOPIC:-es.mbo.closures}"
 EVENTS="${KAFKA_ES_MBO_EVENT_TOPIC:-es.mbo.liquidity-events}"
@@ -85,6 +87,7 @@ ensure_with_bytes "$SNAPSHOT" compact -1 -1 || rc=1
 ensure_with_bytes "$CLOSURES" compact -1 -1 || rc=1
 ensure_with_bytes "$EVENTS" delete -1 "$EVENTS_BYTES" || rc=1
 ensure_with_bytes "$FINAL" delete "$ONE_DAY_MS" "$LEVEL_FLOW_BYTES" || rc=1
+ensure_with_bytes "$BASE" delete "$ONE_DAY_MS" "$LEVEL_FLOW_BYTES" || rc=1
 ensure_topic "$HEALTH" delete "exact:$ONE_DAY_MS" 1048576 || rc=1
 if [ "$rc" -ne 0 ]; then
   echo "=== ensure-es-liquidity-engine-topics FAILED - the MBO engine must not publish ==="

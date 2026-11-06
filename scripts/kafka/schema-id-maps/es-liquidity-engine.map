@@ -9,3 +9,4 @@ com.optionsedge.contracts.esmbo.EsMboLevelFlowFinal|3506|EsMboLevelFlowFinal.avs
 com.optionsedge.contracts.esmbo.EsMboSnapshot|3505|EsMboSnapshot.avsc
 com.optionsedge.contracts.esmbo.EsMboEvent|3503|EsMboEvent.avsc
 com.optionsedge.contracts.esmbo.EsMboClosure|3501|EsMboClosure.avsc
+com.optionsedge.contracts.esmbo.EsMboLevelBase|3507|EsMboLevelBase.avsc

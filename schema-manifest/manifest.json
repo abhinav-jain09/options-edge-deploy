@@ -1045,7 +1045,7 @@
   "esmbo": [
    [
     3501,
-    3506
+    3507
    ]
   ],
   "liquidityvalidator": [
@@ -5662,6 +5662,40 @@
    "consumers": [],
    "retained": true,
    "retainedReason": "curated, not baseline: es-liquidity-engine-service (NEW, dev only; contracts 0.71.0 schemas-registry/esmbo) writes it on es.mbo.level-flow-final under RecordNameStrategy with auto.register.schemas=false (its schema-requirements.json names this id and hash). Dev only; nothing is registered on production or es4."
+  },
+  {
+   "kind": "MIRRORED",
+   "subject": "com.optionsedge.contracts.esmbo.EsMboLevelBase",
+   "version": 1,
+   "id": 3507,
+   "family": "esmbo",
+   "schemaFile": "com.optionsedge.contracts.esmbo.EsMboLevelBase/v1.avsc",
+   "schemaHash": "45e6678a0685bb57aedb7fd85dc1b009caa3d8ef265de5afeb8b23faf3a3a8b8",
+   "environments": [
+    "dev"
+   ],
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas-registry/esmbo/EsMboLevelBase.avsc"
+   },
+   "topics": [
+    {
+     "name": "es.mbo.level-base",
+     "kind": "data"
+    }
+   ],
+   "producers": [
+    {
+     "service": "es-liquidity-engine",
+     "environments": [
+      "dev"
+     ]
+    }
+   ],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "curated, not baseline: es-liquidity-engine-service (NEW, dev only; contracts 0.77.0 schemas-registry/esmbo) writes it on es.mbo.level-base under RecordNameStrategy with auto.register.schemas=false (its schema-requirements.json names this id and hash). Dev only; nothing is registered on production or es4."
   },
   {
    "kind": "MIRRORED",

@@ -18,12 +18,13 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 FAKE = ROOT / "tests/fake_kafka_cli.py"
 BARRIER = ROOT / "scripts/kafka/ensure-es-liquidity-engine-topics.sh"
+BASE = "es.mbo.level-base"
 LEVEL_FLOW, HEALTH, FINAL, SNAPSHOT, EVENTS, CLOSURES = "es.mbo.level-flow", "es.mbo.health", "es.mbo.level-flow-final", "es.mbo.snapshot", "es.mbo.liquidity-events", "es.mbo.closures"
 EVENTS_CAP = "134217728"
 ONE_DAY, CAP = "86400000", "268435456"
 JAR = ROOT / "tools/schema-governance/schema-governance-tool.jar"
 NS = "com.optionsedge.contracts.esmbo"
-IDS = {"EsMboClosure": 3501, "EsMboLevelFlow": 3502, "EsMboEvent": 3503, "EsMboHealth": 3504, "EsMboSnapshot": 3505, "EsMboLevelFlowFinal": 3506}
+IDS = {"EsMboClosure": 3501, "EsMboLevelFlow": 3502, "EsMboEvent": 3503, "EsMboHealth": 3504, "EsMboSnapshot": 3505, "EsMboLevelFlowFinal": 3506, "EsMboLevelBase": 3507}
 
 
 def read(rel: str) -> str:
@@ -102,7 +103,7 @@ class Manifests(unittest.TestCase):
         import re
         regex = re.search(r"^PRESERVE_TOPICS_REGEX='(.*)'$", read("scripts/ops/premarket-reset.sh"), re.M).group(1)
         self.assertIsNotNone(re.search(regex, EVENTS))
-        for other in (LEVEL_FLOW, HEALTH, FINAL, SNAPSHOT):
+        for other in (LEVEL_FLOW, HEALTH, FINAL, BASE, SNAPSHOT):
             self.assertIsNone(re.search(regex, other), other)
 
     def test_the_vacuum_detector_runs_with_the_measured_descriptive_bounds(self):
@@ -192,7 +193,7 @@ def run_barrier(topics, environment="dev"):
 
 
 def right_topics():
-    return {LEVEL_FLOW: shaped("delete", ONE_DAY, CAP), FINAL: shaped("delete", ONE_DAY, CAP), HEALTH: shaped("delete", ONE_DAY), SNAPSHOT: shaped("compact", "-1", "-1"), EVENTS: shaped("delete", "-1", EVENTS_CAP), CLOSURES: shaped("compact", "-1", "-1")}
+    return {LEVEL_FLOW: shaped("delete", ONE_DAY, CAP), FINAL: shaped("delete", ONE_DAY, CAP), BASE: shaped("delete", ONE_DAY, CAP), HEALTH: shaped("delete", ONE_DAY), SNAPSHOT: shaped("compact", "-1", "-1"), EVENTS: shaped("delete", "-1", EVENTS_CAP), CLOSURES: shaped("compact", "-1", "-1")}
 
 
 class Topics(unittest.TestCase):
@@ -203,7 +204,7 @@ class Topics(unittest.TestCase):
         d = declarations(self.VARS)
         retention = dict(x.split("=", 1) for x in d["OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES"] if "=" in x)
         bytes_ = dict(x.split("=", 1) for x in d["OPTIONS_EDGE_TOPIC_RETENTION_BYTES_OVERRIDES"] if "=" in x)
-        for t in (LEVEL_FLOW, HEALTH, FINAL):
+        for t in (LEVEL_FLOW, HEALTH, FINAL, BASE):
             self.assertIn(f"{t}:1", d["OPTIONS_EDGE_TOPICS"])
             self.assertIn(t, d["OPTIONS_EDGE_EXACT_PARTITION_TOPICS"])
             self.assertEqual(retention[t], ONE_DAY)
@@ -211,6 +212,7 @@ class Topics(unittest.TestCase):
             self.assertNotIn(t, d["OPTIONS_EDGE_ES4_TOPICS"])
         self.assertEqual(bytes_.get(LEVEL_FLOW), CAP)
         self.assertEqual(bytes_.get(FINAL), CAP)
+        self.assertEqual(bytes_.get(BASE), CAP)
         self.assertNotIn(HEALTH, bytes_)
 
     def test_the_closure_topic_is_pure_compact_and_rebuildable(self):
@@ -241,7 +243,7 @@ class Topics(unittest.TestCase):
         self.assertEqual(declarations(self.VARS, "dev"), base)
         prod = declarations(self.VARS, "production")
         for v in self.VARS:
-            for t in (LEVEL_FLOW, HEALTH, FINAL):
+            for t in (LEVEL_FLOW, HEALTH, FINAL, BASE):
                 self.assertFalse(any(x == t or x.startswith(t + ":") or x.startswith(t + "=") for x in prod[v]), f"{v} declares {t} on production")
 
 
@@ -251,7 +253,7 @@ class Barrier(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         self.assertEqual([c for c in calls if "--entity-type brokers" in c or "--entity-default" in c], [], "no broker-wide change")
         self.assertFalse(any("--alter" in c or "--delete" in c for c in calls))
-        for t, policy, ret, b in ((LEVEL_FLOW, "delete", ONE_DAY, CAP), (FINAL, "delete", ONE_DAY, CAP), (HEALTH, "delete", ONE_DAY, None), (EVENTS, "delete", "-1", EVENTS_CAP),
+        for t, policy, ret, b in ((LEVEL_FLOW, "delete", ONE_DAY, CAP), (FINAL, "delete", ONE_DAY, CAP), (BASE, "delete", ONE_DAY, CAP), (HEALTH, "delete", ONE_DAY, None), (EVENTS, "delete", "-1", EVENTS_CAP),
                                   (CLOSURES, "compact", "-1", "-1"), (SNAPSHOT, "compact", "-1", "-1")):
             d = state["topics"][t]
             self.assertEqual((d["partitions"], d["configs"]["cleanup.policy"], d["configs"]["retention.ms"]), (1, policy, ret), t)
@@ -339,7 +341,7 @@ class Schemas(unittest.TestCase):
             snap = ROOT / "schema-manifest/schemas" / e["subject"] / "v1.avsc"
             out = subprocess.run(["java", "-jar", str(JAR), "hash", str(snap)], capture_output=True, text=True, check=True).stdout.strip().splitlines()[-1]
             self.assertEqual(out, e["schemaHash"], n)
-        self.assertEqual(m["familyBlocks"]["esmbo"], [[3501, 3506]])
+        self.assertEqual(m["familyBlocks"]["esmbo"], [[3501, 3507]])
         flow = by["com.optionsedge.contracts.deltaflow.DeltaFlowEvent"]
         self.assertIn({"service": "es-liquidity-engine", "accepts": [3007], "environments": ["dev"]}, flow["consumers"], "the drop engine inside the service reads the delta flow (dev id 3007)")
         mbo = by["es.rithmic.mbo-value"]
