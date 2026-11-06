@@ -666,7 +666,26 @@ ensure_topics() {
   git -C "$DEPLOY_REPO" fetch -q origin main 2>/dev/null || true
   local tenv; tenv="$(git -C "$DEPLOY_REPO" show "$TOPICS_ENV_REF" 2>/dev/null)"
   if [ -n "$tenv" ]; then
-    eval "$(printf '%s\n' "$tenv" | grep -E '^OPTIONS_EDGE_(TOPICS|COMPACTED_TOPICS|PURE_COMPACT_TOPICS|EXACT_PARTITION_TOPICS|TOPIC_RETENTION_OVERRIDES|TOPIC_DELETE_RETENTION_OVERRIDES|TOPIC_MAX_MESSAGE_BYTES_OVERRIDES|TOPIC_RETENTION_BYTES_OVERRIDES|PARTITION_ONLY_TOPICS)=')"
+    # INDENT-TOLERANT on purpose. A dev-only topic is declared in topics.env by APPENDING inside
+    # `if [ "${ENVIRONMENT:-}" != "production" ]`, so its assignment is INDENTED; this grep was anchored at
+    # column 0 and could not see one. On 2026-11-06 that left es.rithmic.mbo and
+    # futures.liquidity-validator.{evaluations,data-gaps,daily} un-created after the wipe, and
+    # es-liquidity-engine-service crash-looped on "es.rithmic.mbo must have exactly one partition, found 0"
+    # until they were created by hand. The matched lines are eval'd in file order and each append reads the
+    # variable it extends, so taking the indented ones too builds the value the file means.
+    # THE LIMIT OF THIS, STATED PLAINLY: the `if` lines are not matched, so this eval applies an indented
+    # declaration whatever its gate - a declaration inside `if ... = "production"` would be applied on dev, and
+    # an indented REPLACEMENT assignment (one that does not read the variable it sets) could even shrink a list.
+    # Nothing in this script can prevent that: it parses the file, it does not interpret it.
+    # What guards it is a CONVENTION CHECK that runs on every PR (deploy-validation.yml ->
+    # dev-cleanup-indented-declaration-test.sh section 4, with -mutation-test.sh holding it to 23 committed shapes - coverage of the shapes we know of, not a proof of impossibility):
+    # an indented declaration is accepted only inside one of the two gate forms topics.env uses for a dev-only
+    # block, with only comments, blanks and other accepted declarations between gate and declaration, and only
+    # as a plain `VAR="$VAR tokens"` append. Everything else - a production gate, else/elif, a nested block, a
+    # here-doc body, a continuation, a replacement or a shrink - fails that job. It is a convention check, not a
+    # shell parser: it cannot prove what this eval does with a file written in some other style, it can only
+    # stop that style landing unnoticed.
+    eval "$(printf '%s\n' "$tenv" | grep -E '^[[:space:]]*OPTIONS_EDGE_(TOPICS|COMPACTED_TOPICS|PURE_COMPACT_TOPICS|EXACT_PARTITION_TOPICS|TOPIC_RETENTION_OVERRIDES|TOPIC_DELETE_RETENTION_OVERRIDES|TOPIC_MAX_MESSAGE_BYTES_OVERRIDES|TOPIC_RETENTION_BYTES_OVERRIDES|PARTITION_ONLY_TOPICS)=')"
     local n=0 spec name extra rt existing missing=0
     # One --list, then create only what is missing (in parallel). A failed list falls back to creating every
     # declared topic: --if-not-exists makes that safe, only slower. Config of EXISTING topics is the
@@ -1052,8 +1071,10 @@ PY
 
 # dev_clean_preserved_topics -> the OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS keep list (see topics.env) read from the
 # SAME ref ensure_topics reads (origin/main), never from the working tree: the clone on the dev host can be many
-# commits behind. FAILS (non-zero, nothing printed) unless exactly one non-empty declaration exists, and the caller
-# REFUSES the wipe then: an unreadable keep list must stop a destructive clean, not mean "keep nothing".
+# commits behind. FAILS (non-zero, nothing printed) unless AT LEAST ONE declaration exists and the concatenated
+# value is non-empty, and the caller REFUSES the wipe then: an unreadable keep list must stop a destructive clean,
+# not mean "keep nothing". It was "exactly one" until 2026-11-06, which is what made every APPENDED declaration
+# invisible while still reporting success.
 dev_clean_preserved_topics() {
   # The fetch MUST succeed: a stale origin/main could lack a newly required keep entry, and this list guards a
   # destructive wipe. Retried; a final failure refuses the wipe (the caller says why).
@@ -1064,9 +1085,16 @@ dev_clean_preserved_topics() {
   done
   [ "$fetched" = 1 ] || return 1
   env="$(git -C "$DEPLOY_REPO" show "$TOPICS_ENV_REF" 2>/dev/null)" || return 1
-  n=$(printf '%s\n' "$env" | grep -cE '^OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS="' || true)
-  [ "${n:-0}" -eq 1 ] || return 1
-  val=$(printf '%s\n' "$env" | sed -nE 's/^OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS="(.*)"$/\1/p')
+  # INDENT-TOLERANT, and EVERY assignment is concatenated rather than exactly one: an entry added to this
+  # keep-list by appending inside `if [ "${ENVIRONMENT:-}" != "production" ]` is INDENTED, so the column-0
+  # anchor could not see it while the "exactly one" check still passed on the base declaration alone.
+  # es.rithmic.mbo is declared DEV_CLEAN_PRESERVED exactly that way and the 2026-11-06 wipe deleted it.
+  # The `$VAR` self-reference an append opens with is dropped; this keep-list may only ever grow.
+  n=$(printf '%s\n' "$env" | grep -cE '^[[:space:]]*OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS="' || true)
+  [ "${n:-0}" -ge 1 ] || return 1
+  val=$(printf '%s\n' "$env" | sed -nE 's/^[[:space:]]*OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS="(.*)"$/\1/p' \
+        | sed -e 's/\${OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS}//g' -e 's/\$OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS//g' \
+        | tr '\n' ' ' | tr -s ' ' | sed -e 's/^ *//' -e 's/ *$//')
   [ -n "${val// /}" ] || return 1
   printf '%s\n' "$val"
 }
@@ -1083,7 +1111,7 @@ do_clean() {
   local DEV_KEEP=""
   if [ "$WIPE_KAFKA" = true ]; then
     DEV_KEEP="$(dev_clean_preserved_topics)" || {
-      echo "REFUSING the wipe: cannot read OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS from $TOPICS_ENV_REF (exactly one non-empty declaration required)." >&2
+      echo "REFUSING the wipe: cannot read OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS from $TOPICS_ENV_REF (at least one declaration, non-empty once concatenated, is required)." >&2
       return 1; }
     DEV_KEEP="$DEV_KEEP $DEV_ONLY_ESTIMATE_KEEP"
     echo "dev-clean keep list: $DEV_KEEP"

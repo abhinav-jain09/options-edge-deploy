@@ -513,6 +513,18 @@ jobs:
         run: bash scripts/ops/dev-cleanup-retention-bytes-test.sh
       - name: dev-cleanup finds the Kafka CLI or stops loudly
         run: bash scripts/ops/dev-cleanup-kafka-cli-test.sh
+      # topics.env declares a dev-only topic by APPENDING inside an `if`, so the assignment is INDENTED. The
+      # readers that parse that file were anchored at column 0 and dropped every such declaration while still
+      # reporting success: on 2026-11-06 the dev clean deleted es.rithmic.mbo and the three
+      # futures.liquidity-validator.* topics, all of which topics.env declares preserved. The first of these two
+      # runs the readers and compares what they see against what bash actually assigns per environment; the
+      # second holds the convention half to 23 committed shapes, which is coverage of the shapes we know of, not
+      # a proof of impossibility. Both must run HERE, on every PR - a convention the readers do not themselves
+      # enforce is only as good as the job that checks it.
+      - name: topics.env indented (appended) declarations are read, and the convention holds
+        run: bash scripts/ops/dev-cleanup-indented-declaration-test.sh
+      - name: that convention check refuses every shape it must
+        run: bash scripts/ops/dev-cleanup-indented-declaration-mutation-test.sh
 
       # A production reset runs the files in ITS checkout, not the ones in main. On 2026-10-13 a clean
       # slate ran from a tree whose apply-topics.sh had uncommitted edits and was 89 lines behind main,
