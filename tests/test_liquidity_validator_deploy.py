@@ -282,6 +282,14 @@ class Schemas(unittest.TestCase):
         self.assertEqual(sorted(bound), sorted(wanted))
         for i, e in bound.items():
             self.assertIn({"service": SVC, "accepts": [i], "environments": ["dev"]}, e["consumers"], f"the validator reads id {i}")
+        # The COMPLETE set: every manifest entry that lists the validator as a consumer, and exactly which ids it accepts. An extra binding (for example a re-introduced geometry
+        # 2221) or a missing one fails here. 3603 is the service's own daily subject (it reads its own daily topic at start).
+        accepted = {}
+        for e in m["entries"]:
+            for c in e.get("consumers", []) or []:
+                if c["service"] == SVC:
+                    accepted.setdefault(e["id"], []).extend(c["accepts"])
+        self.assertEqual(accepted, {2223: [2223], 2222: [2222], 2702: [2702], 2701: [2701], 2034: [2034], 3603: [3603]})
 
     def test_registration_rides_the_schema_sync_gate_on_the_apply_path_not_a_stage_list(self):
         m = json.loads(read("schema-manifest/manifest.json"))
