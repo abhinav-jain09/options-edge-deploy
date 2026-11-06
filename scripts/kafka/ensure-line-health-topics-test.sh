@@ -147,6 +147,43 @@ printf '#!/usr/bin/env bash\nfor a in "$@"; do [ "$a" = "--alter" ] && exit 0; d
 expect_fail "an alter reported successful that changed nothing → the read-back fails"
 grep -q "'$SPOT' has min.compaction.lag.ms=0, expected at least $SEVEN" "$T/out" && ok "…names the topic and both values" || bad "…message"
 cp "$FAKE" "$T/bin/kafka-configs"; chmod +x "$T/bin/kafka-configs"
+# real broker output: every entry is "  key=value sensitive=false synonyms={DYNAMIC_TOPIC_CONFIG:key=value, DEFAULT_CONFIG:log.cleaner.key=0}" (the synonym carries the same key with a prefix)
+mkdir -p "$T/real"; cp "$FAKE" "$T/real/kafka-configs"
+cat > "$T/real/realformat.py" <<'PY'
+import sys
+mode = sys.argv[1]
+for line in sys.stdin:
+    if not line.startswith("  "):
+        print(line, end="")
+        continue
+    for tok in line.split():
+        k, _, v = tok.partition("=")
+        if mode == "nonnumeric" and k == "min.compaction.lag.ms":
+            v = "abc"
+        print("  %s=%s sensitive=false synonyms={DYNAMIC_TOPIC_CONFIG:%s=%s, DEFAULT_CONFIG:log.cleaner.%s=0}" % (k, v, k, v, k))
+PY
+wrap() { # <mode>: realformat | nonnumeric | describefail
+  cat > "$T/bin/kafka-configs" <<SH
+#!/usr/bin/env bash
+for a in "\$@"; do [ "\$a" = "--describe" ] && D=1; done
+[ -z "\${D:-}" ] && exec "$T/real/kafka-configs" "\$@"
+[ "$1" = describefail ] && { echo "describe refused" >&2; exit 1; }
+"$T/real/kafka-configs" "\$@" | python3 "$T/real/realformat.py" "$1"
+SH
+  chmod +x "$T/bin/kafka-configs"
+}
+all_good; intopic $SPOT compact,delete 0; wrap realformat
+expect_ok "real broker output format (sensitive=, synonyms={...log.cleaner.min.compaction.lag.ms=0}) → the lag is parsed, set and read back"
+[ "$(lagof $SPOT)" = "$SEVEN" ] && ok "…spx.price lag set under the real output format" || bad "…lag $(lagof $SPOT)"
+all_good; intopic $SPOT compact,delete 0; wrap nonnumeric
+expect_fail "a non-numeric reported lag → fail"
+grep -q "'$SPOT' reports min.compaction.lag.ms='abc'" "$T/out" && ok "…names the topic and the value" || { bad "…message"; cat "$T/out"; }
+all_good; intopic $SPOT compact,delete 0; wrap describefail
+expect_fail "a describe the broker refuses → fail closed"
+cp "$FAKE" "$T/bin/kafka-configs"; chmod +x "$T/bin/kafka-configs"
+fresh; run ENVIRONMENT=dev
+[ "$(lagof $UL)" = "$SEVEN" ] && ok "user-lines is CREATED with min.compaction.lag.ms=7 days (design 3.3)" || bad "created user-lines lag: $(lagof $UL)"
+grep -q -- "--create --if-not-exists --topic $UL .*min.compaction.lag.ms=$SEVEN" "$T/calls" && ok "…the create carries the lag" || bad "…the create lacks the lag"
 # the list can be overridden and a missing input is skipped, not an error
 all_good; expect_ok "no input topic exists → ok"
 grep -q "compacted replayed inputs checked: 1" "$T/out" && ok "…checked 1 (user-lines only; sentinel)" || bad "…checked count with none present"
