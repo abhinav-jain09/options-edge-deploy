@@ -371,10 +371,12 @@ done
 # out loud until the inventory (R4) covers them. The tool is the committed jar whose sha256 is pinned in tools/schema-governance/PIN.
 SCHEMA_JAR="tools/schema-governance/schema-governance-tool.jar"
 SCHEMA_PIN="$(sed -n 's/^sha256=//p' tools/schema-governance/PIN)"
-SCHEMA_COVERED="$(yq -r "[.entries[] | (.producers[]?, .consumers[]?) | select(.service == \"$SERVICE\")] | length" schema-manifest/manifest.json)" \
-  || { echo "FATAL: cannot read schema-manifest/manifest.json - refusing to deploy without knowing whether $SERVICE is schema-gated" >&2; exit 1; }
-if [ "$SCHEMA_COVERED" = "0" ]; then
+SCHEMA_SCOPE="$(bash scripts/ci/schema-sync-scope.sh "$SERVICE" "$ENVIRONMENT")" \
+  || { echo "FATAL: cannot decide whether $SERVICE is schema-gated in $ENVIRONMENT (schema-manifest/manifest.json, scripts/ci/schema-sync-environment-exemptions.txt) - refusing to deploy" >&2; exit 1; }
+if [ "$SCHEMA_SCOPE" = "NOT_GATED_UNCOVERED" ]; then
   echo "schema-sync: $SERVICE is not in the schema manifest - NOT GATED (coverage ratchet, docs/schema-governance R4/R6)"
+elif [ "${SCHEMA_SCOPE#EXEMPT: }" != "$SCHEMA_SCOPE" ]; then
+  echo "schema-sync: $SERVICE in $ENVIRONMENT - NOT GATED by declared exemption (${SCHEMA_SCOPE#EXEMPT: })"
 else
   [ -f "$SCHEMA_JAR" ] && [ "$(shasum -a 256 "$SCHEMA_JAR" | cut -d' ' -f1)" = "$SCHEMA_PIN" ] \
     || { echo "FATAL: $SCHEMA_JAR is missing or does not match the sha256 pinned in tools/schema-governance/PIN - refusing to run an unpinned gate" >&2; exit 1; }
