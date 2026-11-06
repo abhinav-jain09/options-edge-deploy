@@ -159,6 +159,12 @@ echo "O. an unset HOME does not crash the candidate list under set -u"
 R="$(env -i PATH="$PATH" bash -c 'set -u; . "'"$WORK"'/functions.sh"; kafka_cli_candidates | head -3; echo "rc=$?"' 2>&1)"
 case "$R" in *"unbound variable"*) bad "an unset HOME broke the candidate list: $R" ;; *"rc=0"*) ok "HOME unset: candidates listed, no unbound variable" ;; *) bad "HOME unset: $R" ;; esac
 
+R="$(env -i PATH="$PATH" bash -c 'set -u; eval "$(grep -m1 "^LAUNCH_AGENTS_DIR=" "'"$SRC"'")"; echo "dir=$LAUNCH_AGENTS_DIR rc=$?"' 2>&1)"
+case "$R" in *"unbound variable"*) bad "an unset HOME broke the LaunchAgents default: $R" ;; "dir=/var/empty/Library/LaunchAgents rc=0") ok "HOME unset: the LaunchAgents default does not crash" ;; *) bad "LaunchAgents default: $R" ;; esac
+fn kafka_cli_java | grep -q 'local -a jdks=()' && fn kafka_cli_java | grep -q 'for j in \${jdks\[@\]+' && ok "the default JDK list is an array (a path containing a space stays one candidate)" || bad "the JDK list is not an array again"
+R="$(env -i PATH="$PATH" HOME="$WORK/home" DEV_CLEANUP_JDK_SEARCH="   " bash -c 'set -u; . "'"$WORK"'/functions.sh"; kafka_cli_java; echo "rc=$?"' 2>&1)"
+case "$R" in *"unbound variable"*) bad "an empty JDK search crashed under set -u: $R" ;; *) ok "an empty (whitespace) JDK search override is handled under set -u" ;; esac
+
 echo "P. the installer's --check fails on a missing live copy and on drift, and passes on an identical copy"
 REPO="$(cd "$HERE/../.." && pwd)"
 LIVE="$WORK/live/dev-cleanup.sh"; mkdir -p "$WORK/live"

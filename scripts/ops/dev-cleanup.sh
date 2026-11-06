@@ -55,11 +55,12 @@ kafka_cli_candidates() {
 kafka_cli_java() {
   if [ -n "${JAVA_HOME:-}" ] && [ -x "$JAVA_HOME/bin/java" ]; then return 0; fi
   local j
-  # The candidate homes are $DEV_CLEANUP_JDK_SEARCH (whitespace separated) when set, for the test.
-  local jdks
-  if [ -n "${DEV_CLEANUP_JDK_SEARCH:-}" ]; then jdks="$DEV_CLEANUP_JDK_SEARCH"
-  else jdks="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home $(printf '%s ' /opt/homebrew/Cellar/openjdk@21/*/libexec/openjdk.jdk/Contents/Home) $(/usr/libexec/java_home 2>/dev/null)"; fi
-  for j in $jdks; do
+  # The candidate homes are $DEV_CLEANUP_JDK_SEARCH (whitespace separated) when set, for the test. The default list is an ARRAY so every
+  # entry stays one candidate (a Cellar glob match or a java_home answer may contain a space); the glob expands in place as before.
+  local -a jdks=()
+  if [ -n "${DEV_CLEANUP_JDK_SEARCH:-}" ]; then read -r -a jdks <<< "$DEV_CLEANUP_JDK_SEARCH"
+  else jdks=(/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home /opt/homebrew/Cellar/openjdk@21/*/libexec/openjdk.jdk/Contents/Home "$(/usr/libexec/java_home 2>/dev/null)"); fi
+  for j in ${jdks[@]+"${jdks[@]}"}; do
     if [ -n "$j" ] && [ -x "$j/bin/java" ]; then JAVA_HOME="$j"; export JAVA_HOME; return 0; fi
   done
   return 1
