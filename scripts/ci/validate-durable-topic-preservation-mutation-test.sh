@@ -157,4 +157,43 @@ grep -q "^ES_CLEAN_TOPICS='" "$DEVCLEAN" \
   && { echo "  FAIL ES_CLEAN_TOPICS rename did not apply — the case below would pass vacuously"; fail=1; }
 expect "ES_CLEAN_TOPICS unreadable" 1 "could not read ES_CLEAN_TOPICS"
 
+# THE COLUMN-0 ANCHOR, on each engine in turn. Until 2026-11-06 both list_of and the python recount
+# were anchored at ^OPTIONS_EDGE_, so the three futures.liquidity-validator.* topics -- declared
+# RESET-PRESERVED by an INDENTED append -- were invisible to this validator, which then reported
+# "checked 37 durable topic(s)" on a file declaring 40 and exited OK. It looked clean while not
+# looking, which is the one failure mode a gate must not have.
+#
+# ONE ENGINE AT A TIME, never both: narrowing both would make them agree with each other again and the
+# mutation would SURVIVE while appearing to have been applied -- the lesson already recorded for the
+# ES4 case above, and the reason the cross-check exists at all.
+#
+# python, not sed: the python side's anchor holds a literal backslash-t inside a bracket expression,
+# and expressing that through sed or perl quoting produced a pattern matching nothing. A mutation that
+# does not apply is a case that passes while testing nothing, which is what the "did not apply" guards
+# below exist to catch -- and they caught exactly that while this was being written.
+python3 - "$VALIDATOR" <<'PYEOF'
+import sys
+p = sys.argv[1]; s = open(p).read()
+old = '  { sed -nE "s/^[[:space:]]*OPTIONS_EDGE_'
+new = '  { sed -nE "s/^OPTIONS_EDGE_'
+assert s.count(old) == 1, s.count(old)
+open(p, "w").write(s.replace(old, new))
+PYEOF
+grep -q 'sed -nE "s/\^OPTIONS_EDGE_' "$VALIDATOR" \
+  || { echo "  FAIL list_of re-anchor did not apply — the case below would pass vacuously"; fail=1; }
+expect "list_of blind to an indented declaration" 3 "independent read"
+
+# And the other way round: the python recount narrowed while the sed side stays indent-tolerant.
+python3 - "$VALIDATOR" <<'PYEOF'
+import sys
+p = sys.argv[1]; s = open(p).read()
+old = "r'^[ \\t]*OPTIONS_EDGE_(?:PROD_ONLY_)?%s="
+new = "r'^OPTIONS_EDGE_(?:PROD_ONLY_)?%s="
+assert s.count(old) == 1, s.count(old)
+open(p, "w").write(s.replace(old, new))
+PYEOF
+grep -q "r'\^OPTIONS_EDGE_(?:PROD_ONLY_)?%s=" "$VALIDATOR" \
+  || { echo "  FAIL recount re-anchor did not apply — the case below would pass vacuously"; fail=1; }
+expect "the recount blind to an indented declaration" 3 "independent read"
+
 [ $fail -eq 0 ] && echo "=== validate-durable-topic-preservation-mutation-test: OK ===" || { echo "=== validate-durable-topic-preservation-mutation-test: FAILED ==="; exit 1; }

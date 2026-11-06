@@ -46,8 +46,19 @@ fail=0
 # "do not age this out by time" versus "this cannot be rebuilt" -- and the previous rule conflated
 # them, which would have force-preserved options.spx.spot-vol-regime.current on dev the moment it
 # got the retention=-1 it genuinely needs.
+# INDENT-TOLERANT, and a `$VAR` token is dropped. topics.env declares an environment-specific topic by
+# APPENDING inside `if [ "${ENVIRONMENT:-}" != "production" ]`, which makes the assignment INDENTED and
+# makes its first token the variable's own `$NAME`, not a topic.
+#
+# This validator was the FOURTH reader anchored at column 0. The 2026-11-06 wipe that deleted
+# es.rithmic.mbo and futures.liquidity-validator.{evaluations,data-gaps,daily} was traced to three
+# readers of topics.env (deploy #1534) -- and this one was missed, so the GATE that exists to catch an
+# undeclared or unpreserved durable topic could not see those three at all: it reported "checked 37
+# durable topic(s)" where the file declares 40. It did not fail; it looked clean while not looking.
+# Both engines below are widened, each in its own dialect, so the cross-check can still catch one of
+# them regressing (see _recount).
 list_of() { # variable-name-suffix -> whitespace-split values
-  { sed -nE "s/^OPTIONS_EDGE_(PROD_ONLY_)?$1=\"(.*)\"$/\\2/p" "$TOPICS_ENV" | tr ' ' '\n' | grep -v '^$' || true; } | sort -u
+  { sed -nE "s/^[[:space:]]*OPTIONS_EDGE_(PROD_ONLY_)?$1=\"(.*)\"$/\\2/p" "$TOPICS_ENV" | tr ' ' '\n' | grep -v '^$' | grep -v '^[$]' || true; } | sort -u
 }
 PRESERVED=$(list_of RESET_PRESERVED_TOPICS)
 REBUILDABLE=$(list_of RESET_REBUILDABLE_TOPICS)
@@ -55,7 +66,7 @@ REBUILDABLE=$(list_of RESET_REBUILDABLE_TOPICS)
 # es.options.indicators.bootstrap.control — declared retention.ms=-1 only in the es4 overrides — was
 # invisible to this validator and the classify-or-fail rule never applied to it. Found by adding the
 # extraction cross-check below, which is the whole argument for having one.
-MINUS_ONE=$( { sed -nE 's/^[A-Z0-9_]*TOPIC_RETENTION_OVERRIDES="(.*)"$/\1/p' "$TOPICS_ENV" \
+MINUS_ONE=$( { sed -nE 's/^[[:space:]]*[A-Z0-9_]*TOPIC_RETENTION_OVERRIDES="(.*)"$/\1/p' "$TOPICS_ENV" \
   | tr ' ' '\n' | grep -- '=-1$' || true; } | cut -d= -f1 | sort -u)
 
 in_list() { case " $(printf '%s' "$2" | tr '\n' ' ') " in *" $1 "*) return 0 ;; esac; return 1; }
@@ -72,7 +83,12 @@ in_list() { case " $(printf '%s' "$2" | tr '\n' ' ') " in *" $1 "*) return 0 ;; 
 #
 # So each extracted list is cross-checked against an independently-computed count before use. A
 # mismatch is a HARNESS failure, said in those words, and nothing downstream runs.
-# Independently computed by a DIFFERENT ENGINE, scoped identically to list_of/MINUS_ONE. Two shell
+# Independently computed by a DIFFERENT ENGINE, scoped identically to list_of/MINUS_ONE -- INCLUDING
+# the 2026-11-06 indent tolerance and the `$VAR` drop. Reached differently on purpose: the sed side
+# strips leading whitespace with [[:space:]]* and drops a token matching ^[$], the python side with
+# [ \t]* and `not t.startswith("$")`. If a cross-reference to some OTHER variable ever appears in a
+# declaration the two would disagree about it -- and that disagreement is a loud HARNESS FAILURE, which
+# is the right answer for a file doing something neither reader models. Two shell
 # pipelines drift on regex dialects and quoting — a first attempt counted "retention.ms=-1" out of the
 # prose, a second lost the first entry on each line to the opening quote, and both would have failed
 # this validator on a perfectly correct file. The cross-check exists only to catch a TRUNCATED or
@@ -89,13 +105,13 @@ import re, sys
 s, which = open(sys.argv[1]).read(), sys.argv[2]
 out = set()
 if which == "MINUS_ONE":
-    for m in re.finditer(r'^[A-Z0-9_]*TOPIC_RETENTION_OVERRIDES="(.*)"$', s, re.M):
+    for m in re.finditer(r'^[ \t]*[A-Z0-9_]*TOPIC_RETENTION_OVERRIDES="(.*)"$', s, re.M):
         for tok in m.group(1).split():
             if tok.endswith("=-1"):
                 out.add(tok.split("=")[0])
 else:
-    for m in re.finditer(r'^OPTIONS_EDGE_(?:PROD_ONLY_)?%s="(.*)"$' % re.escape(which), s, re.M):
-        out.update(m.group(1).split())
+    for m in re.finditer(r'^[ \t]*OPTIONS_EDGE_(?:PROD_ONLY_)?%s="(.*)"$' % re.escape(which), s, re.M):
+        out.update(t for t in m.group(1).split() if not t.startswith("$"))
 print(len(out))
 PYEOF
 }
@@ -120,7 +136,7 @@ REBUILDABLE=$(list_of RESET_REBUILDABLE_TOPICS)
 # es.options.indicators.bootstrap.control — declared retention.ms=-1 only in the es4 overrides — was
 # invisible to this validator and the classify-or-fail rule never applied to it. Found by adding the
 # extraction cross-check below, which is the whole argument for having one.
-MINUS_ONE=$( { sed -nE 's/^[A-Z0-9_]*TOPIC_RETENTION_OVERRIDES="(.*)"$/\1/p' "$TOPICS_ENV" \
+MINUS_ONE=$( { sed -nE 's/^[[:space:]]*[A-Z0-9_]*TOPIC_RETENTION_OVERRIDES="(.*)"$/\1/p' "$TOPICS_ENV" \
   | tr ' ' '\n' | grep -- '=-1$' || true; } | cut -d= -f1 | sort -u)
 
 in_list() { case " $(printf '%s' "$2" | tr '\n' ' ') " in *" $1 "*) return 0 ;; esac; return 1; }
@@ -202,7 +218,7 @@ done
 #
 # Digits matter in this pattern: [A-Z_]* silently skips every OPTIONS_EDGE_ES4_* list, which made a
 # first draft of this check report five false positives. [A-Z0-9_]*.
-DECLARED=$( { sed -nE 's/^[A-Z0-9_]*TOPICS[A-Z0-9_]*="(.*)"$/\1/p' "$TOPICS_ENV" \
+DECLARED=$( { sed -nE 's/^[[:space:]]*[A-Z0-9_]*TOPICS[A-Z0-9_]*="(.*)"$/\1/p' "$TOPICS_ENV" \
   | tr ' ' '\n' | grep -E '^[^:[:space:]]+:[0-9]+$' || true; } | sed 's/:[0-9]*$//' | sort -u)
 
 # Pre-existing, and deliberately NOT fixed here: both are live with cleanup.policy=compact and are
@@ -496,7 +512,7 @@ spx.drop.final-summary spx.drop.outcome underlying.vix.price"   # BZ 363, latent
 # far above the measured volume) is a disk decision per topic, and the disk cannot grow (owner,
 # 2026-10-13). Requiring -1 here would have forbidden the only shape that protects the broker from a
 # producer fault.
-BYTES_DECLARED=$( { sed -nE 's/^[A-Z0-9_]*TOPIC_RETENTION_BYTES_OVERRIDES="(.*)"$/\1/p' "$TOPICS_ENV" \
+BYTES_DECLARED=$( { sed -nE 's/^[[:space:]]*[A-Z0-9_]*TOPIC_RETENTION_BYTES_OVERRIDES="(.*)"$/\1/p' "$TOPICS_ENV" \
   | tr ' ' '\n' | grep -E '=-?[0-9]+$' || true; } | cut -d= -f1 | sort -u)
 _bytes_exempt_n=0
 for topic in $PRESERVED; do
