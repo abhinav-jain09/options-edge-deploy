@@ -39,7 +39,7 @@ Workloads change only through Jenkins on es4 and prod; on dev a hand `kubectl se
      and `sed -n 22p ~/oe-ops/dl-mirror-dev-to-mac74/run-mirror.sh | tr '|' '\n' | grep -c 'underlying\\.vix\\.price$'` = 0;
    * the es4 end offsets of `es.underlying.vix.price` do not move over a minute (its only writer is the MM2 copy from production, which is down). The es4 -> mac74 MM1 consumer group `oe-mac74-input-from-es4` (on 192.168.100.74) READS the es4 topic and keeps working across the wipe; it is not a writer to either topic here.
 4. **Roll the Avro writer** (dev: the digest-pinned feed image with the Avro writer, `databento-vix-feed`); prove ONE pod on the new digest and, because the IBKR hop topic may be silent off-hours, that it started (subject found) and has 0 restarts.
-5. Read the TopicId off the broker (`kafka-topics --describe`), delete the consumer groups that hold offsets on the topic (`kafka-consumer-groups --delete-offsets`; the rolled readers keep no committed offset).
+5. Read the TopicId off the broker (`kafka-topics --describe`). Consumer groups that are INACTIVE and hold offsets on the topic are cleared with `kafka-consumer-groups --delete-offsets`; a group with a live member (the running old readers, the es4 -> mac74 MM1) cannot be cleared and is left: its offset becomes beyond-the-log-end after the recreate, the harness (live mode) only WARNs, and the rolled reader resets on its first poll (`auto.offset.reset`).
 6. **Wipe and recreate** with the harness:
    `scripts/kafka/roll-forward-topics.sh --recreate --cluster dev|es4 --topics <t> --pre-cutover-id <t>=<TopicId> --registry <url> --subject <t>=com.optionsedge.contracts.hpsf.VixUnderlyingPrice --avro-writer-live --json-writers-stopped <bootstrap> <kafka-bin-dir>`
    (the writer is idle off-hours, so the topic is empty after the recreate: the post-check passes on an empty topic).
@@ -48,6 +48,8 @@ Workloads change only through Jenkins on es4 and prod; on dev a hand `kubectl se
 The manifest entry already lists `prod` (one fixed id everywhere is what makes the MM2 copy sound). That does NOT register anything on production by itself: a production write by `schema-sync.sh` /
 `schema-sync-all.sh` requires `PLAN_SHA256` from a dry run of the same commit (R13a), i.e. an explicit, authorized production cutover; until then a production deploy of spot-vol-regime also refuses an image whose label names a
 subject production's registry lacks. Nothing in this change runs against production.
+
+The production RENDER of `databento-vix-feed` still says `replicas: 1` (unchanged by this change; live production holds it at 0 through `morning-autostart` KEEP_DOWN, checked 2026-11-06: 0/0). No production apply is part of this change, and a production start of the feed without the registry env exits at boot.
 
 ## Production (NOT done by this change: prod stays shut down, its registry stopped)
 Pending steps, in order, before production's `databento-vix-feed`, spot-vol-regime, reversal-confirmation, vix-option-inteligence, drop-classifier or the gateway are started:
