@@ -167,7 +167,29 @@ SET=es4 BYTES_OVERRIDE="es.futures.footprint.strike=1073741824" \
   "es.futures.footprint.strike retention.bytes='1073741824'"
 
 # max.message.bytes (break-classifier's checkpoint): a per-topic FLOOR in topics.env. A topic that accepts less fails, more passes, unreadable fails, es4 never judges it.
-check "max.message.bytes contract passes when the broker matches declarations" 0 compact "max.message.bytes contract OK (3 topic(s)"
+#
+# The expected COUNT is derived from the declaration, not written here. It was the literal "3", and it
+# went stale the moment futures.line-health.snapshot was declared (topics.env now names four topics) --
+# so this case failed on a correct file, and said so in terms that sound like a contract violation
+# rather than a stale test. Nothing reported it for weeks because deploy-validation has been red at an
+# EARLIER step since 2026-10-16 and every later step is skipped: a hardcoded count in a test nobody can
+# run is a trap armed for whoever finally runs it.
+#
+# Counted by a different mechanism than verify-topics.sh uses (`printf | grep -c` here, `echo | wc -w`
+# there), and refused when it is zero: an empty declaration would make this case assert
+# "contract OK (0 topic(s)" and pass while verifying nothing.
+# `|| true` because `grep -c .` EXITS 1 on empty input, and under `set -e` that would end the script
+# here -- before the diagnostic three lines down could say WHY. The first version of this claimed a
+# message it could never print (Codex): with an empty declaration the script simply died. It still
+# failed safely, but a comment describing output that cannot appear is the same false-safety shape this
+# file's own notes keep warning about, so the status is taken and the diagnostic is reached.
+MAXMSG_DECLARED=$(printf '%s\n' $OPTIONS_EDGE_TOPIC_MAX_MESSAGE_BYTES_OVERRIDES | grep -c . || true)
+if [ "${MAXMSG_DECLARED:-0}" -lt 1 ]; then
+  printf '  FAIL %-46s topics.env declares no max.message.bytes override, so this case would assert nothing\n' \
+    "max.message.bytes declaration is non-empty"; fail=1
+fi
+check "max.message.bytes contract passes when the broker matches declarations" 0 compact \
+  "max.message.bytes contract OK ($MAXMSG_DECLARED topic(s)"
 MAXMSG_OVERRIDE="options.spx.break-classification.checkpoint=1048576" \
   check "a checkpoint topic at the broker default fails" 1 compact \
   "options.spx.break-classification.checkpoint max.message.bytes='1048576' but the declaration says >= '9437184'"
@@ -178,6 +200,12 @@ MAXMSG_OVERRIDE="options.spx.line-acceptance.journal=1048576" \
 MAXMSG_OVERRIDE="options.spx.line-acceptance.checkpoint=1048576" \
   check "a line-acceptance checkpoint topic at the broker default fails" 1 compact \
   "options.spx.line-acceptance.checkpoint max.message.bytes='1048576' but the declaration says >= '9437184'"
+# The FOURTH declared topic, which had no under-floor case of its own: the count check alone cannot
+# catch a regression that skips only futures.line-health.snapshot while still printing the
+# declaration-list count (Codex). Each declared topic needs a case that only IT can satisfy.
+MAXMSG_OVERRIDE="futures.line-health.snapshot=1048576" \
+  check "a line-health snapshot topic at the broker default fails" 1 compact \
+  "futures.line-health.snapshot max.message.bytes='1048576' but the declaration says >= '9437184'"
 MAXMSG_OVERRIDE="options.spx.break-classification.checkpoint=16777216" \
   check "a checkpoint topic above the floor passes" 0 compact "max.message.bytes contract OK"
 MAXMSG_INHERITED=1 check "an inherited (effective-only) value is read with --all" 0 compact "max.message.bytes contract OK"
