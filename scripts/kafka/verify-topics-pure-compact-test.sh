@@ -167,7 +167,24 @@ SET=es4 BYTES_OVERRIDE="es.futures.footprint.strike=1073741824" \
   "es.futures.footprint.strike retention.bytes='1073741824'"
 
 # max.message.bytes (break-classifier's checkpoint): a per-topic FLOOR in topics.env. A topic that accepts less fails, more passes, unreadable fails, es4 never judges it.
-check "max.message.bytes contract passes when the broker matches declarations" 0 compact "max.message.bytes contract OK (3 topic(s)"
+#
+# The expected COUNT is derived from the declaration, not written here. It was the literal "3", and it
+# went stale the moment futures.line-health.snapshot was declared (topics.env now names four topics) --
+# so this case failed on a correct file, and said so in terms that sound like a contract violation
+# rather than a stale test. Nothing reported it for weeks because deploy-validation has been red at an
+# EARLIER step since 2026-10-16 and every later step is skipped: a hardcoded count in a test nobody can
+# run is a trap armed for whoever finally runs it.
+#
+# Counted by a different mechanism than verify-topics.sh uses (`printf | grep -c` here, `echo | wc -w`
+# there), and refused when it is zero: an empty declaration would make this case assert
+# "contract OK (0 topic(s)" and pass while verifying nothing.
+MAXMSG_DECLARED=$(printf '%s\n' $OPTIONS_EDGE_TOPIC_MAX_MESSAGE_BYTES_OVERRIDES | grep -c .)
+if [ "${MAXMSG_DECLARED:-0}" -lt 1 ]; then
+  printf '  FAIL %-46s topics.env declares no max.message.bytes override, so this case would assert nothing\n' \
+    "max.message.bytes declaration is non-empty"; fail=1
+fi
+check "max.message.bytes contract passes when the broker matches declarations" 0 compact \
+  "max.message.bytes contract OK ($MAXMSG_DECLARED topic(s)"
 MAXMSG_OVERRIDE="options.spx.break-classification.checkpoint=1048576" \
   check "a checkpoint topic at the broker default fails" 1 compact \
   "options.spx.break-classification.checkpoint max.message.bytes='1048576' but the declaration says >= '9437184'"
