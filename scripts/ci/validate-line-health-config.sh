@@ -23,9 +23,12 @@ rollbackShareMilli reclaimTicks reclaimSeconds heldOutSeconds beyondTicks absorb
 guardClearSeconds fitConfirmSeconds tapeSilentSeconds inputCompletionGraceSeconds displayStaleSeconds retiredDisplayMinutes tickSpacingPixels tickMinHeightPixels
 tickMaxHeightPixels tickLabelClearancePixels labelInsetPixels labelOffsetPixels labelRowPixels labelCharWidthPixels labelPaddingPixels labelFontPixels compactFontPixels
 legendFontPixels compactRowPixels compactPitchPixels basisBracketMillis basisFreshMillis basisCapacity leaderThresholdPixels markerSizePixels unknownDotTenthsPixels
-userLinePublishDebounceMillis snapshotSeconds stateRefreshMinutes labelFloorFontPixels labelFloorRowPixels provisional""".split()
-TEXT_KEYS = {'lineHealthKinds', 'depthEnvironment'}
-BOOL_KEYS = {'clockUnfit', 'provisional'}
+userLinePublishDebounceMillis snapshotSeconds stateRefreshMinutes labelFloorFontPixels labelFloorRowPixels provisional
+movePaceFullMilliPointsPerMinute moveWeightPushMilli moveWeightPaceMilli moveWeightHoldMilli moveWeightBookBeyondMilli moveWeightAbsorptionMilli moveReadSeconds returnHorizonSeconds
+moveScoreReportDigest drawProducers drawTimeframes drawUserLines""".split()
+TEXT_KEYS = {'lineHealthKinds', 'depthEnvironment', 'moveScoreReportDigest', 'drawProducers', 'drawTimeframes'}
+BOOL_KEYS = {'clockUnfit', 'provisional', 'drawUserLines'}
+PRODUCER_WORDS = {'DESK', 'HOST', 'OWN', 'CANDLESTICK', 'PHASE_A', 'PHASE_B', 'PHASE_C', 'PHASE_D', 'PHASE_E', 'PHASE_F'}
 FILE_KEY = 'line-health-configuration.txt'
 MOUNT = '/home/options-edge/config/line-health'
 PREFIX = 'level-absorption-line-health-config-'
@@ -65,6 +68,14 @@ for k, v in pairs:
     elif k == 'lineHealthKinds':
         if v != 'DEFAULT' and (not re.fullmatch(r'[A-Z][A-Z0-9_]*(,[A-Z][A-Z0-9_]*)*', v) or v.split(',') != sorted(set(v.split(',')))):
             err.append('lineHealthKinds must be DEFAULT or a sorted comma-separated list of kind names without duplicates')
+    elif k == 'moveScoreReportDigest':
+        if v != '' and not re.fullmatch(r'[0-9a-f]{64}', v): err.append('moveScoreReportDigest must be empty (no test report yet) or 64 lower-case hexadecimal digits')
+    elif k == 'drawProducers':
+        words = v.split(',')
+        if v != 'NONE' and (not set(words) <= PRODUCER_WORDS or words != sorted(set(words))): err.append('drawProducers must be NONE or a sorted comma-separated list of producer words without duplicates')
+    elif k == 'drawTimeframes':
+        words = v.split(',')
+        if v != 'NONE' and (not set(words) <= {'1m', '5m', '15m'} or words != sorted(set(words), key=['1m', '5m', '15m'].index)): err.append('drawTimeframes must be NONE or a comma-separated list from 1m, 5m, 15m without duplicates')
     elif k in BOOL_KEYS:
         if v not in ('true', 'false'): err.append(f'{k} must be true or false')
     elif not re.fullmatch(r'(0|[1-9][0-9]*)', v):

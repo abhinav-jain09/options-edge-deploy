@@ -11156,6 +11156,33 @@
       "source": {
         "kind": "FILE",
         "repo": "contracts",
+        "path": "schemas-registry/linehealth/v1/LineHealthState.avsc"
+      },
+      "topics": [
+        {
+          "name": "futures.line-health.state",
+          "kind": "data"
+        }
+      ],
+      "producers": [],
+      "consumers": [],
+      "retained": true,
+      "retainedReason": "curated, not baseline: ARCHIVAL version 1 of the line health LineHealthState subject (contracts 0.78.0 to 0.81.0), registered on dev under id 3701; superseded by version 2 id 3708 (contracts 0.82.0: drawOnChart, hostTimeframe and the move score). Nothing writes it any more; the feed gateway relay and the level absorption loop still READ it (the compacted topics and the old tails hold version-1 records until every line is republished). Kept so a registry import stays reproducible. Dev only."
+    },
+    {
+      "kind": "MIRRORED",
+      "subject": "com.optionsedge.contracts.linehealth.LineHealthState",
+      "version": 2,
+      "id": 3708,
+      "family": "linehealth",
+      "schemaFile": "com.optionsedge.contracts.linehealth.LineHealthState/v2.avsc",
+      "schemaHash": "bce510e6c3924006f194fb8463fae6d1b942c04cef4348b370171c6702e6efbb",
+      "environments": [
+        "dev"
+      ],
+      "source": {
+        "kind": "FILE",
+        "repo": "contracts",
         "path": "schemas-registry/linehealth/LineHealthState.avsc"
       },
       "topics": [
@@ -11174,7 +11201,7 @@
       ],
       "consumers": [],
       "retained": true,
-      "retainedReason": "curated, not baseline: the Line health feature (requirement rev 25 LH-O-1, design 3.2a; contracts 0.79.0 schemas-registry/linehealth), written by the line-health loop of level-absorption-service (milestone M1, not built at M0) on futures.line-health.state under RecordNameStrategy with auto.register.schemas=false. Producer and consumer bindings are added by the milestone that builds each side together with its image label, so no existing service becomes schema-gated at M0. Dev only; nothing is registered on production or es4."
+      "retainedReason": "curated, not baseline: the Line health feature (requirement rev 42 LH-O-1, LH-O-3, design rev 56 3.2a; contracts 0.82.0 schemas-registry/linehealth), written by the line-health loop of level-absorption-service on futures.line-health.state under RecordNameStrategy with auto.register.schemas=false: VERSION 2 under the new fixed id 3708 (adds drawOnChart, hostTimeframe, moveScore, movePushMilli, movePaceMilli, moveHoldMilli and moveScoreShadow, all nullable with default null); its schema-requirements.json names this id and hash. Dev only; nothing is registered on production or es4."
     },
     {
       "kind": "MIRRORED",
@@ -11184,6 +11211,33 @@
       "family": "linehealth",
       "schemaFile": "com.optionsedge.contracts.linehealth.LineHealthEvent/v1.avsc",
       "schemaHash": "11cf7e56d3f066a19357ee1e103ea6c72eeddab47125da94d377df1a8c766ed4",
+      "environments": [
+        "dev"
+      ],
+      "source": {
+        "kind": "FILE",
+        "repo": "contracts",
+        "path": "schemas-registry/linehealth/v1/LineHealthEvent.avsc"
+      },
+      "topics": [
+        {
+          "name": "futures.line-health.events",
+          "kind": "data"
+        }
+      ],
+      "producers": [],
+      "consumers": [],
+      "retained": true,
+      "retainedReason": "curated, not baseline: ARCHIVAL version 1 of the line health LineHealthEvent subject (contracts 0.78.0 to 0.81.0), registered on dev under id 3702; superseded by version 2 id 3709 (contracts 0.82.0: drawOnChart, hostTimeframe and the move score). Nothing writes it any more; the feed gateway relay and the level absorption loop still READ it (the compacted topics and the old tails hold version-1 records until every line is republished). Kept so a registry import stays reproducible. Dev only."
+    },
+    {
+      "kind": "MIRRORED",
+      "subject": "com.optionsedge.contracts.linehealth.LineHealthEvent",
+      "version": 2,
+      "id": 3709,
+      "family": "linehealth",
+      "schemaFile": "com.optionsedge.contracts.linehealth.LineHealthEvent/v2.avsc",
+      "schemaHash": "43eb8f2824296395787a7c01d431a21bed9c36bab54700d7b2760e11c88fb680",
       "environments": [
         "dev"
       ],
@@ -11208,7 +11262,7 @@
       ],
       "consumers": [],
       "retained": true,
-      "retainedReason": "curated, not baseline: the Line health feature (requirement rev 25 LH-O-1, design 3.2a; contracts 0.79.0 schemas-registry/linehealth), written by the line-health loop of level-absorption-service (milestone M1, not built at M0) on futures.line-health.events under RecordNameStrategy with auto.register.schemas=false. Producer and consumer bindings are added by the milestone that builds each side together with its image label, so no existing service becomes schema-gated at M0. Dev only; nothing is registered on production or es4."
+      "retainedReason": "curated, not baseline: the Line health feature (requirement rev 42 LH-O-1, LH-O-3, design rev 56 3.2a; contracts 0.82.0 schemas-registry/linehealth), written by the line-health loop of level-absorption-service on futures.line-health.events under RecordNameStrategy with auto.register.schemas=false: VERSION 2 under the new fixed id 3709 (adds drawOnChart, hostTimeframe, moveScore, movePushMilli, movePaceMilli, moveHoldMilli and moveScoreShadow, all nullable with default null; the nested LineHealthStateBody gains the same seven fields); its schema-requirements.json names this id and hash. Dev only; nothing is registered on production or es4."
     },
     {
       "kind": "MIRRORED",
@@ -11285,6 +11339,33 @@
       "source": {
         "kind": "FILE",
         "repo": "contracts",
+        "path": "schemas-registry/linehealth/v1/LineHealthStatus.avsc"
+      },
+      "topics": [
+        {
+          "name": "futures.line-health.status",
+          "kind": "data"
+        }
+      ],
+      "producers": [],
+      "consumers": [],
+      "retained": true,
+      "retainedReason": "curated, not baseline: ARCHIVAL version 1 of the line health LineHealthStatus subject (contracts 0.78.0 to 0.81.0), registered on dev under id 3705; superseded by version 2 id 3710 (contracts 0.82.0: drawOnChart, hostTimeframe and the move score). Nothing writes it any more; the feed gateway relay and the level absorption loop still READ it (the compacted topics and the old tails hold version-1 records until every line is republished). Kept so a registry import stays reproducible. Dev only."
+    },
+    {
+      "kind": "MIRRORED",
+      "subject": "com.optionsedge.contracts.linehealth.LineHealthStatus",
+      "version": 2,
+      "id": 3710,
+      "family": "linehealth",
+      "schemaFile": "com.optionsedge.contracts.linehealth.LineHealthStatus/v2.avsc",
+      "schemaHash": "6e0e57d8f31345ee69ce21563305f29938d584c2bbdd1942500f7270c95a1f20",
+      "environments": [
+        "dev"
+      ],
+      "source": {
+        "kind": "FILE",
+        "repo": "contracts",
         "path": "schemas-registry/linehealth/LineHealthStatus.avsc"
       },
       "topics": [
@@ -11303,7 +11384,7 @@
       ],
       "consumers": [],
       "retained": true,
-      "retainedReason": "curated, not baseline: the Line health feature (requirement rev 25 LH-O-1, design 3.2a; contracts 0.79.0 schemas-registry/linehealth), written by the line-health loop of level-absorption-service (milestone M1, not built at M0) on futures.line-health.status under RecordNameStrategy with auto.register.schemas=false. Producer and consumer bindings are added by the milestone that builds each side together with its image label, so no existing service becomes schema-gated at M0. Dev only; nothing is registered on production or es4."
+      "retainedReason": "curated, not baseline: the Line health feature (requirement rev 42 LH-O-1, LH-O-3, design rev 56 3.2a; contracts 0.82.0 schemas-registry/linehealth), written by the line-health loop of level-absorption-service on futures.line-health.status under RecordNameStrategy with auto.register.schemas=false: VERSION 2 under the new fixed id 3710 (adds moveScoreReportDigest); its schema-requirements.json names this id and hash. Dev only; nothing is registered on production or es4."
     },
     {
       "kind": "MIRRORED",

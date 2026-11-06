@@ -1,11 +1,18 @@
-# Fixed schema ids for the Line health feature (requirement rev 25 LH-O-1, design 3.2a; NEW, dev only). Contracts options-edge-contracts 0.78.0 (schemas-registry/linehealth): ids 3701-3707, all
-# version 1, namespace com.optionsedge.contracts.linehealth, subject = the record full name (RecordNameStrategy), compatibility FULL. One record TYPE per topic:
-# futures.line-health.state 3701, .events 3702, .voice 3703, .user-lines 3704, .status 3705, .closures 3706, .snapshot 3707. Ids 3701-3710 are the line health family block (3708-3710 free for growth);
-# no other map uses them. Dev only; nothing is registered on production or es4. File column: relative to the contracts checkout's `schemas-registry/linehealth` directory (SCHEMAS_DIR).
-com.optionsedge.contracts.linehealth.LineHealthState|3701|LineHealthState.avsc
-com.optionsedge.contracts.linehealth.LineHealthEvent|3702|LineHealthEvent.avsc
+# Fixed schema ids for the Line health feature (requirement rev 42 LH-O-1, design rev 56 3.2a; NEW, dev only). Contracts options-edge-contracts 0.82.0 (schemas-registry/linehealth): ids 3701-3710,
+# version 1 except 3708, 3709 and 3710 (see the fourth column, es-trade-tools.map), namespace com.optionsedge.contracts.linehealth, subject = the record full name (RecordNameStrategy), compatibility FULL.
+# One record TYPE per topic: futures.line-health.state 3708 (3701 archival), .events 3709 (3702 archival), .voice 3703, .user-lines 3704, .status 3710 (3705 archival), .closures 3706, .snapshot 3707.
+# Version 2 of the state, event and status subjects adds optional fields (drawOnChart, hostTimeframe, the move score; moveScoreReportDigest on the status): a registered id never changes content, so each is a
+# new version under a new id of the family block 3701-3710, which is now full. The version-1 files are the frozen ones under schemas-registry/linehealth/v1; on a registry that already holds version 1 (dev) only
+# the three version-2 rows import. REGISTER THE VERSION-2 ROWS BEFORE the level-absorption image of contracts 0.82.0 starts: the loop refuses to start when its ids are not in the registry (LineHealthRegistryCheck).
+# No other map uses these ids. Dev only; nothing is registered on production or es4. File column: relative to the contracts checkout's `schemas-registry/linehealth` directory (SCHEMAS_DIR).
+com.optionsedge.contracts.linehealth.LineHealthState|3701|v1/LineHealthState.avsc|1
+com.optionsedge.contracts.linehealth.LineHealthEvent|3702|v1/LineHealthEvent.avsc|1
 com.optionsedge.contracts.linehealth.LineHealthVoice|3703|LineHealthVoice.avsc
 com.optionsedge.contracts.linehealth.LineHealthUserLine|3704|LineHealthUserLine.avsc
-com.optionsedge.contracts.linehealth.LineHealthStatus|3705|LineHealthStatus.avsc
+com.optionsedge.contracts.linehealth.LineHealthStatus|3705|v1/LineHealthStatus.avsc|1
 com.optionsedge.contracts.linehealth.LineHealthClosure|3706|LineHealthClosure.avsc
 com.optionsedge.contracts.linehealth.LineHealthSnapshot|3707|LineHealthSnapshot.avsc
+# Version-2 rows after all version-1 rows so the preflight pass can see the predecessor of every row.
+com.optionsedge.contracts.linehealth.LineHealthState|3708|LineHealthState.avsc|2
+com.optionsedge.contracts.linehealth.LineHealthEvent|3709|LineHealthEvent.avsc|2
+com.optionsedge.contracts.linehealth.LineHealthStatus|3710|LineHealthStatus.avsc|2

@@ -27,8 +27,10 @@ SHAPES = {STATE: ("compact,delete", SEVEN_DAYS, "-1", 1048576), EVENTS: ("delete
           USER_LINES: ("compact,delete", SEVEN_DAYS, "-1", 1048576), STATUS: ("compact", "-1", "-1", 1048576), CLOSURES: ("delete", SEVEN_DAYS, "-1", 1048576),
           SNAPSHOT: ("compact", "-1", "-1", 9437184)}
 NS = "com.optionsedge.contracts.linehealth"
-IDS = {"LineHealthState": 3701, "LineHealthEvent": 3702, "LineHealthVoice": 3703, "LineHealthUserLine": 3704, "LineHealthStatus": 3705, "LineHealthClosure": 3706,
+# the CURRENT ids (what the loop writes). The state, event and status subjects are VERSION 2 since contracts 0.82.0 (a registered id never changes content): their version-1 ids stay as archival.
+IDS = {"LineHealthState": 3708, "LineHealthEvent": 3709, "LineHealthVoice": 3703, "LineHealthUserLine": 3704, "LineHealthStatus": 3710, "LineHealthClosure": 3706,
        "LineHealthSnapshot": 3707}
+ARCHIVAL_V1 = {"LineHealthState": 3701, "LineHealthEvent": 3702, "LineHealthStatus": 3705}
 TOPIC_OF = dict(zip(IDS, TOPICS))
 JAR = ROOT / "tools/schema-governance/schema-governance-tool.jar"
 VARS = ["OPTIONS_EDGE_TOPICS", "OPTIONS_EDGE_PURE_COMPACT_TOPICS", "OPTIONS_EDGE_COMPACTED_TOPICS", "OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES",
@@ -200,8 +202,24 @@ class SchemaMapAndManifest(unittest.TestCase):
     def rows(self):
         return [tuple(l.split("|")) for l in self.MAP.read_text().splitlines() if l.strip() and not l.lstrip().startswith("#")]
 
-    def test_the_map_is_exactly_the_seven_records_and_ids(self):
-        self.assertEqual([(s, int(i), f) for s, i, f in self.rows()], [(f"{NS}.{n}", i, f"{n}.avsc") for n, i in IDS.items()])
+    def test_the_map_is_exactly_the_seven_records_and_the_three_version_two_rows(self):
+        rows = self.rows()
+        # version 1 (ids 3701-3707, the state, event and status files under v1/) first, then the three version-2 rows, each with the registry version in the fourth column
+        expected = []
+        for n, i in ARCHIVAL_V1.items():
+            expected.append((f"{NS}.{n}", i, f"v1/{n}.avsc", "1"))
+        for n in ("LineHealthVoice", "LineHealthUserLine", "LineHealthClosure", "LineHealthSnapshot"):
+            expected.append((f"{NS}.{n}", IDS[n], f"{n}.avsc"))
+        for n in ARCHIVAL_V1:
+            expected.append((f"{NS}.{n}", IDS[n], f"{n}.avsc", "2"))
+        key = lambda r: (r[1] if len(r) > 1 else "")
+        self.assertEqual(sorted(((r[0], int(r[1])) + tuple(r[2:]) for r in rows), key=lambda r: r[1]), sorted(((e[0], e[1]) + tuple(e[2:]) for e in expected), key=lambda r: r[1]))
+        versions = [r for r in rows if len(r) == 4]
+        v1_positions = [i for i, r in enumerate(rows) if len(r) == 4 and r[3] == "1"]
+        v2_positions = [i for i, r in enumerate(rows) if len(r) == 4 and r[3] == "2"]
+        self.assertTrue(max(v1_positions) < min(v2_positions), "version-2 rows after all version-1 rows, so the preflight pass can see the predecessor of every row")
+        self.assertEqual(len(versions), 6)
+        self.assertEqual(sorted(int(r[1]) for r in rows), list(range(3701, 3711)), "the family block 3701-3710 is full and each id appears once")
 
     def test_no_id_is_shared_with_any_other_map(self):
         ours = {int(r[1]) for r in self.rows()}
@@ -222,10 +240,16 @@ class SchemaMapAndManifest(unittest.TestCase):
         used = {e["id"] for e in m["entries"] if e.get("family") != "linehealth" and "id" in e}
         self.assertFalse(used & set(range(3701, 3711)), "no other manifest entry sits in the block")
         mine = [e for e in m["entries"] if e.get("family") == "linehealth"]
-        self.assertEqual(sorted(e["id"] for e in mine), sorted(IDS.values()))
+        self.assertEqual(sorted(e["id"] for e in mine), sorted(list(IDS.values()) + list(ARCHIVAL_V1.values())))
+        for name, old in ARCHIVAL_V1.items():
+            a = next(x for x in mine if x["id"] == old)
+            self.assertEqual((a["kind"], a["version"], a["subject"], a["environments"], a["producers"], a["consumers"]), ("MIRRORED", 1, f"{NS}.{name}", ["dev"], [], []), f"{name}: archival version 1, nobody writes it")
+            self.assertEqual(a["source"], {"kind": "FILE", "repo": "contracts", "path": f"schemas-registry/linehealth/v1/{name}.avsc"}, name)
+            self.assertEqual(a["schemaFile"], f"{NS}.{name}/v1.avsc")
         for name, sid in IDS.items():
-            e = next(x for x in mine if x["subject"] == f"{NS}.{name}")
-            self.assertEqual((e["kind"], e["version"], e["id"], e["environments"]), ("MIRRORED", 1, sid, ["dev"]), name)
+            e = next(x for x in mine if x["subject"] == f"{NS}.{name}" and x["id"] == sid)
+            two = name in ARCHIVAL_V1
+            self.assertEqual((e["kind"], e["version"], e["id"], e["environments"]), ("MIRRORED", 2 if two else 1, sid, ["dev"]), name)
             self.assertEqual(e["source"], {"kind": "FILE", "repo": "contracts", "path": f"schemas-registry/linehealth/{name}.avsc"}, name)
             self.assertEqual(e["topics"], [{"name": TOPIC_OF[name], "kind": "data"}], name)
             producers = [] if name == "LineHealthUserLine" else [{"service": "level-absorption", "environments": ["dev"]}]
@@ -245,7 +269,7 @@ class SchemaMapAndManifest(unittest.TestCase):
                 have = subprocess.run(["java", "-jar", str(JAR), "hash", str(ROOT / "schema-manifest/schemas" / e["schemaFile"])], capture_output=True, text=True, check=True).stdout.strip()
                 self.assertEqual(have, e["schemaHash"], e["subject"])
                 count += 1
-        self.assertEqual(count, 7)
+        self.assertEqual(count, 10, "seven current entries and the three archival version-1 entries")
         r = subprocess.run(["java", "-jar", str(JAR), "validate", "--manifest", str(ROOT / "schema-manifest/manifest.json"), "--snapshots", str(ROOT / "schema-manifest/schemas")],
                            capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
