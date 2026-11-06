@@ -32,6 +32,7 @@ PREFIX = 'level-absorption-line-health-config-'
 ENABLE = 'LEVEL_ABSORPTION_LINE_HEALTH_ENABLED'
 CONF = 'LEVEL_ABSORPTION_LINE_HEALTH_CONFIGURATION'
 BOOK = 'LEVEL_ABSORPTION_LINE_HEALTH_BOOK_ENABLED'
+USER = 'LINE_HEALTH_USER_LINES_ENABLED'
 err = []
 def read(p): return pathlib.Path(p).read_text()
 
@@ -75,6 +76,7 @@ ctr = patch['spec']['template']['spec']['containers'][0]
 env = {e['name']: e.get('value') for e in ctr.get('env', [])}
 if env.get(ENABLE) != 'true': err.append(f'the dev patch must set {ENABLE}=true')
 if env.get(BOOK) != 'true': err.append(f'the dev patch must set {BOOK}=true (line health M2, shadow book)')
+if env.get(USER) != 'true': err.append(f'the dev patch must set {USER}=true (line health M5, user lines)')
 if env.get(CONF) != f'{MOUNT}/{FILE_KEY}': err.append(f'the dev patch must set {CONF}={MOUNT}/{FILE_KEY}')
 vols = {v['name']: v for v in patch['spec']['template']['spec'].get('volumes', [])}
 v = vols.get('level-absorption-line-health-config')
@@ -95,7 +97,7 @@ for envname in ('production', 'experiment'):
     r = subprocess.run(['kubectl', 'kustomize', f'k8s/overlays/{envname}'], capture_output=True, text=True)
     if r.returncode != 0:
         err.append(f'kustomize {envname} failed: {r.stderr.strip()[:200]}'); continue
-    if ENABLE in r.stdout or BOOK in r.stdout or CONF in r.stdout or 'line-health-config' in r.stdout:
+    if ENABLE in r.stdout or BOOK in r.stdout or CONF in r.stdout or USER in r.stdout or 'line-health-config' in r.stdout:
         err.append(f'the {envname} render carries line-health configuration')
 if err:
     for e in err: print('FAIL:', e, file=sys.stderr)

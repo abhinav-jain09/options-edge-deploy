@@ -84,6 +84,10 @@ spec:
             # and the manual-line commands. The ack secret (16+ chars) is generated into the `level-absorption-web` Secret on the
             # dev cluster out of band and referenced here; its value is never in git. Dev only: prod and experiment do not set either.
             # MUST MIRROR the other dev web env patch (validate-services render equivalence).
+            # Line health user lines (requirement LH-U-2, M5; dev only): PUT/DELETE /api/line-health/user-lines/{lineId} publish the Order view's drawings to
+            # futures.line-health.user-lines (id 3704). Default false in the image (the endpoints answer 409); prod and experiment do not set it.
+            - name: LINE_HEALTH_USER_LINES_ENABLED
+              value: "true"
             - name: LEVEL_ABSORPTION_PATH_UI_ENABLED
               value: "true"
             - name: LEVEL_ABSORPTION_UI_ENABLED
