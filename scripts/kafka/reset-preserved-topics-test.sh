@@ -44,18 +44,46 @@ fi
 check "prod-only INCLUDED on production"      0 "$BOTH" production   "p.topic"
 
 # The partial-loss case: the combined result is still non-empty, so a naive emptiness check passes
-# while underlying.vix.price silently becomes purgeable on production.
+# while underlying.vix.price silently becomes purgeable on production. A declaration that is GONE
+# ENTIRELY still fails closed -- that is the half of the "exactly ONE" rule worth keeping, and the
+# message changed with it when the count became ">= 1" on 2026-11-06.
 check "base present, PROD declaration missing" 1 \
-  'OPTIONS_EDGE_RESET_PRESERVED_TOPICS="a.topic"' production "expected exactly ONE"
+  'OPTIONS_EDGE_RESET_PRESERVED_TOPICS="a.topic"' production "no OPTIONS_EDGE_PROD_ONLY_RESET_PRESERVED_TOPICS"
 check "prod present, BASE declaration missing" 1 \
-  'OPTIONS_EDGE_PROD_ONLY_RESET_PRESERVED_TOPICS="p.topic"' "" "expected exactly ONE"
+  'OPTIONS_EDGE_PROD_ONLY_RESET_PRESERVED_TOPICS="p.topic"' "" "no OPTIONS_EDGE_RESET_PRESERVED_TOPICS"
 check "base declared EMPTY" 1 \
   'OPTIONS_EDGE_RESET_PRESERVED_TOPICS=""
 OPTIONS_EDGE_PROD_ONLY_RESET_PRESERVED_TOPICS="p.topic"' "" "is empty"
-check "duplicate assignments are refused" 1 \
+
+# REPEATED assignments are now CONCATENATED, not refused -- the 2026-11-06 change, and the whole point
+# of it. topics.env declares an environment-specific topic by APPENDING inside
+# `if [ "${ENVIRONMENT:-}" != "production" ]`, so the second assignment is how
+# futures.liquidity-validator.{evaluations,data-gaps,daily} are declared preserved at all. The old
+# "exactly ONE" rule did not refuse them either: it matched the unindented base line, PASSED, and
+# returned a value missing every appended entry -- which is why the dev wipe deleted all three.
+#
+# This test asserted the OLD contract until now. It was changed with the parser in that fix and the
+# assertion was not, and nothing said so for a day because deploy-validation has been red at an
+# earlier step since 2026-10-16 and skips every later one. Both HALVES are asserted here: the status,
+# and that BOTH topics come back -- a parser that took only the first would still exit 0.
+check "repeated assignments are CONCATENATED" 0 \
   'OPTIONS_EDGE_RESET_PRESERVED_TOPICS="a.topic"
-OPTIONS_EDGE_RESET_PRESERVED_TOPICS="b.topic"
-OPTIONS_EDGE_PROD_ONLY_RESET_PRESERVED_TOPICS="p.topic"' "" "found 2"
+OPTIONS_EDGE_RESET_PRESERVED_TOPICS="$OPTIONS_EDGE_RESET_PRESERVED_TOPICS b.topic"
+OPTIONS_EDGE_PROD_ONLY_RESET_PRESERVED_TOPICS="p.topic"' "" "a.topic"
+if grep -q '^b\.topic$' "$work/out"; then printf '  ok   %-50s\n' "...and the APPENDED entry is in the list"
+else printf '  FAIL %-50s appended entry dropped: %s\n' "...and the APPENDED entry is in the list" "$(tr '\n' ' ' < "$work/out")"; fail=1; fi
+if grep -q '[$]OPTIONS_EDGE' "$work/out"; then
+  printf '  FAIL %-50s the $VAR self-reference came back as a topic name\n' "...and the \$VAR self-reference is not a topic"; fail=1
+else printf '  ok   %-50s\n' "...and the \$VAR self-reference is not a topic"; fi
+
+# INDENTED, which is how topics.env really writes an append: inside an environment gate. This is the
+# shape the column-0 anchor could not see while its "exactly ONE" check still succeeded.
+check "an INDENTED append is read" 0 \
+  'OPTIONS_EDGE_RESET_PRESERVED_TOPICS="a.topic"
+if [ "${ENVIRONMENT:-}" != "production" ]; then
+  OPTIONS_EDGE_RESET_PRESERVED_TOPICS="$OPTIONS_EDGE_RESET_PRESERVED_TOPICS dev.only.topic"
+fi
+OPTIONS_EDGE_PROD_ONLY_RESET_PRESERVED_TOPICS="p.topic"' "" "dev.only.topic"
 
 # Unreadable file must stop the purge, not preserve nothing.
 st=0; RPT_TOPICS_ENV="$work/does-not-exist" bash "$HELPER" > "$work/out" 2>&1 || st=$?
