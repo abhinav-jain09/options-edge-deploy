@@ -197,4 +197,14 @@ if [ "$rc" -ne 0 ]; then
   echo "=== ensure-level-absorption-topics FAILED — the rollout must not proceed ==="
   exit 1
 fi
+# The Line health feature (requirement LH-O-1) shares this barrier: its seven futures.line-health.* topics are ensured by ensure-line-health-topics.sh when ENVIRONMENT is exactly dev
+# (requirement LH-E-5: development only; the service is held at replicas 0 on production, which is not touched). Any other ENVIRONMENT says so out loud and creates nothing.
+if [ "${ENVIRONMENT:-}" = "dev" ]; then
+  if ! bash "$(dirname "${BASH_SOURCE[0]}")/ensure-line-health-topics.sh"; then
+    echo "=== ensure-level-absorption-topics FAILED — the line-health topics are wrong; the rollout must not proceed ==="
+    exit 1
+  fi
+else
+  echo "line-health topics: NOT ensured (ENVIRONMENT='${ENVIRONMENT:-<unset>}' is not 'dev'; line health is development only)"
+fi
 echo "=== ensure-level-absorption-topics OK ==="
