@@ -1,4 +1,4 @@
-# Native liquidity activation: requires the reviewed gateway and web images before rollout.
+# Stage1: prepare every dev pod before a later reviewed activation of hashed shell URLs.
 # Dev standard is rancher/local-path on the single node; this is not an NFS lock contract.
 apiVersion: apps/v1
 kind: Deployment
@@ -35,11 +35,7 @@ spec:
             - name: CONTEXT_TAPE_ASSET_ROOT
               value: /var/run/context-tape-assets
             - name: CONTEXT_TAPE_COMPILED_ASSETS
-              value: 'true'
-            - name: HEATMAP_NATIVE_HISTORY_ENABLED
-              value: 'true'
-            - name: HEATMAP_RITHMIC_SYSTEM
-              value: Rithmic Paper Trading
+              value: 'false'
           volumeMounts:
             - name: public-assets
               mountPath: /var/run/context-tape-assets
