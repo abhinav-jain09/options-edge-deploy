@@ -210,6 +210,30 @@ class ConfigurationValidator(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("render carries line-health configuration", r.stderr)
 
+    # line health M2: the shadow book flag
+    def test_the_dev_patch_must_turn_the_shadow_book_on(self):
+        self.edit(PATCH, lambda s: s.replace('LEVEL_ABSORPTION_LINE_HEALTH_BOOK_ENABLED\n              value: "true"', 'LEVEL_ABSORPTION_LINE_HEALTH_BOOK_ENABLED\n              value: "false"'))
+        self.assert_fails("LEVEL_ABSORPTION_LINE_HEALTH_BOOK_ENABLED=true")
+
+    def test_another_file_naming_the_book_flag_fails(self):
+        (self.work / "k8s/overlays/production/zz-book.yaml").write_text("# LEVEL_ABSORPTION_LINE_HEALTH_BOOK_ENABLED\n")
+        self.assert_fails("names LEVEL_ABSORPTION_LINE_HEALTH_BOOK_ENABLED")
+
+    def test_the_base_deployment_carrying_the_book_flag_reaches_production_and_fails(self):
+        self.edit("k8s/services/level-absorption/base/level-absorption-deployment.yaml",
+                  lambda s: s.replace("          env:\n", "          env:\n            - name: LEVEL_ABSORPTION_LINE_HEALTH_BOOK_ENABLED\n              value: \"true\"\n", 1))
+        r = self.run_validator()
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("render carries line-health configuration", r.stderr)
+
+    def test_the_dev_slice_carries_the_book_flag_exactly_as_the_patch_does(self):
+        text = (ROOT / "k8s/services/level-absorption/overlays/dev/manifest.yaml").read_text()
+        self.assertEqual(text.count("LEVEL_ABSORPTION_LINE_HEALTH_BOOK_ENABLED"), 1)
+        for env in ("production", "experiment"):
+            p = ROOT / "k8s/services/level-absorption/overlays" / env / "manifest.yaml"
+            if p.exists():
+                self.assertNotIn("LINE_HEALTH_BOOK", p.read_text())
+
 
 if __name__ == "__main__":
     unittest.main()

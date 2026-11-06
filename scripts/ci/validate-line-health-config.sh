@@ -31,6 +31,7 @@ MOUNT = '/home/options-edge/config/line-health'
 PREFIX = 'level-absorption-line-health-config-'
 ENABLE = 'LEVEL_ABSORPTION_LINE_HEALTH_ENABLED'
 CONF = 'LEVEL_ABSORPTION_LINE_HEALTH_CONFIGURATION'
+BOOK = 'LEVEL_ABSORPTION_LINE_HEALTH_BOOK_ENABLED'
 err = []
 def read(p): return pathlib.Path(p).read_text()
 
@@ -73,6 +74,7 @@ patch = yaml.safe_load(read('k8s/overlays/dev/level-absorption-dev-enable-patch.
 ctr = patch['spec']['template']['spec']['containers'][0]
 env = {e['name']: e.get('value') for e in ctr.get('env', [])}
 if env.get(ENABLE) != 'true': err.append(f'the dev patch must set {ENABLE}=true')
+if env.get(BOOK) != 'true': err.append(f'the dev patch must set {BOOK}=true (line health M2, shadow book)')
 if env.get(CONF) != f'{MOUNT}/{FILE_KEY}': err.append(f'the dev patch must set {CONF}={MOUNT}/{FILE_KEY}')
 vols = {v['name']: v for v in patch['spec']['template']['spec'].get('volumes', [])}
 v = vols.get('level-absorption-line-health-config')
@@ -88,11 +90,12 @@ for root in ('k8s', 'scripts/es4'):
     for p in pathlib.Path(root).rglob('*'):
         if p.is_file() and p.as_posix() not in allowed and p.suffix in ('.yaml', '.yml', '.sh', '.py', '.env', '.json'):
             if ENABLE in p.read_text(errors='ignore'): err.append(f'{p} names {ENABLE}; only the dev patch and its generated dev slice may')
+            if BOOK in p.read_text(errors='ignore'): err.append(f'{p} names {BOOK}; only the dev patch and its generated dev slice may')
 for envname in ('production', 'experiment'):
     r = subprocess.run(['kubectl', 'kustomize', f'k8s/overlays/{envname}'], capture_output=True, text=True)
     if r.returncode != 0:
         err.append(f'kustomize {envname} failed: {r.stderr.strip()[:200]}'); continue
-    if ENABLE in r.stdout or CONF in r.stdout or 'line-health-config' in r.stdout:
+    if ENABLE in r.stdout or BOOK in r.stdout or CONF in r.stdout or 'line-health-config' in r.stdout:
         err.append(f'the {envname} render carries line-health configuration')
 if err:
     for e in err: print('FAIL:', e, file=sys.stderr)
