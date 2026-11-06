@@ -1,0 +1,81 @@
+{
+  "type": "record",
+  "name": "EsMboLevelBase",
+  "namespace": "com.optionsedge.contracts.esmbo",
+  "doc": "es-liquidity-engine F 7.1 / G 5.5: the order-level base of one level in one bucket that the level-flow row (3502) does not carry: the resting quantity by order-age class (edges A1<A2<A3 of the ledger: ageQty0 below A1, ageQty1 A1 to A2, ageQty2 A2 to A3, ageQty3 at least A3; null while the edges are unset) and the same-size reload links (an ADD with the same side, tick and quantity as a REMOVE at that tick within the reload window; never an identity claim; null while the window is unset). Refill timing is carried by the queue measures (refillAfterClear).",
+  "fields": [
+    {
+      "name": "schemaVersion",
+      "type": "int",
+      "doc": "1 for this revision"
+    },
+    {
+      "name": "environment",
+      "type": "string"
+    },
+    {
+      "name": "contract",
+      "type": "string"
+    },
+    {
+      "name": "bucketEnd",
+      "type": "long"
+    },
+    {
+      "name": "configFingerprint",
+      "type": "string"
+    },
+    {
+      "name": "side",
+      "type": "string"
+    },
+    {
+      "name": "tick",
+      "type": "long"
+    },
+    {
+      "name": "epochStatus",
+      "type": "string"
+    },
+    {
+      "name": "ageQty0",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    },
+    {
+      "name": "ageQty1",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    },
+    {
+      "name": "ageQty2",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    },
+    {
+      "name": "ageQty3",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    },
+    {
+      "name": "reloadLinks",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    }
+  ]
+}
