@@ -289,6 +289,8 @@ class Barrier(unittest.TestCase):
             "snapshot 4 partitions": (SNAPSHOT, lambda d: d.update(partitions=4)),
             "closures delete": (CLOSURES, lambda d: d["configs"].update({"cleanup.policy": "delete"})),
             "closures finite retention": (CLOSURES, lambda d: d["configs"].update({"retention.ms": ONE_DAY})),
+            "closures byte-capped": (CLOSURES, lambda d: d["configs"].update({"retention.bytes": CAP})),
+            "snapshot byte-capped": (SNAPSHOT, lambda d: d["configs"].update({"retention.bytes": CAP})),
             "closures 4 partitions": (CLOSURES, lambda d: d.update(partitions=4)),
             "events 4 partitions": (EVENTS, lambda d: d.update(partitions=4)),
             "events compacted": (EVENTS, lambda d: d["configs"].update({"cleanup.policy": "compact"})),
