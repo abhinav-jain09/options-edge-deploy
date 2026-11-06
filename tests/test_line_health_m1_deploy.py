@@ -159,7 +159,7 @@ class ConfigurationValidator(unittest.TestCase):
     def test_the_repository_passes(self):
         r = subprocess.run(["bash", str(VALIDATOR)], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("68 keys", r.stdout)
+        self.assertIn("71 keys", r.stdout)
 
     def test_a_name_that_is_not_the_hash_fails(self):
         self.edit(CONFIG_FILE, lambda s: s.replace("tapeWindowSeconds=20", "tapeWindowSeconds=21"))

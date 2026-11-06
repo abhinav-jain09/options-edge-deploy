@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # validate-line-health-config.sh - the Line health configuration ConfigMap and the wiring that turns line health on (requirement LH-E-4, LH-E-5, design 4.6).
 #   1. The ConfigMap (the second document of k8s/overlays/dev/level-absorption-config.yaml) is immutable, holds one file, and is NAMED BY ITS CONTENT:
-#      level-absorption-line-health-config-<first 12 hex digits of the SHA-256 of the file text>. That SHA-256 is the configDigest the service writes into
-#      every line-health record, so the name can be compared with the digest in a live status record.
+#      level-absorption-line-health-config-<first 12 hex digits of the SHA-256 of the file text>. The service's own configDigest (written into every record) is a
+#      different number, the SHA-256 of the RESOLVED configuration (lineHealthKinds=DEFAULT expanded to the kinds the build can read), so it is NOT the name suffix;
+#      the running service reports the file's SHA-256 as configurationFileSha256 on /health/line-health, which is what the live check compares with the name.
 #   2. The file is in canonical form (keys sorted, one key=value per line, no whitespace around '=', newline-terminated, no key twice) and its key set is
 #      EXACTLY the set of design section 4.6a (an unknown or missing key is a failure, as the service itself refuses unknown keys).
 #   3. The development enable patch turns line health on, names that ConfigMap, mounts it read-only and points the configuration variable at the mounted file.
@@ -22,9 +23,9 @@ rollbackShareMilli reclaimTicks reclaimSeconds heldOutSeconds beyondTicks absorb
 guardClearSeconds fitConfirmSeconds tapeSilentSeconds inputCompletionGraceSeconds displayStaleSeconds retiredDisplayMinutes tickSpacingPixels tickMinHeightPixels
 tickMaxHeightPixels tickLabelClearancePixels labelInsetPixels labelOffsetPixels labelRowPixels labelCharWidthPixels labelPaddingPixels labelFontPixels compactFontPixels
 legendFontPixels compactRowPixels compactPitchPixels basisBracketMillis basisFreshMillis basisCapacity leaderThresholdPixels markerSizePixels unknownDotTenthsPixels
-userLinePublishDebounceMillis snapshotSeconds stateRefreshMinutes""".split()
+userLinePublishDebounceMillis snapshotSeconds stateRefreshMinutes labelFloorFontPixels labelFloorRowPixels provisional""".split()
 TEXT_KEYS = {'lineHealthKinds', 'depthEnvironment'}
-BOOL_KEYS = {'clockUnfit'}
+BOOL_KEYS = {'clockUnfit', 'provisional'}
 FILE_KEY = 'line-health-configuration.txt'
 MOUNT = '/home/options-edge/config/line-health'
 PREFIX = 'level-absorption-line-health-config-'
