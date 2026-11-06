@@ -678,7 +678,7 @@ ensure_topics() {
     # an indented REPLACEMENT assignment (one that does not read the variable it sets) could even shrink a list.
     # Nothing in this script can prevent that: it parses the file, it does not interpret it.
     # What guards it is a CONVENTION CHECK that runs on every PR (deploy-validation.yml ->
-    # dev-cleanup-indented-declaration-test.sh section 4, with -mutation-test.sh proving it cannot be fooled):
+    # dev-cleanup-indented-declaration-test.sh section 4, with -mutation-test.sh holding it to 23 committed shapes - coverage of the shapes we know of, not a proof of impossibility):
     # an indented declaration is accepted only inside one of the two gate forms topics.env uses for a dev-only
     # block, with only comments, blanks and other accepted declarations between gate and declaration, and only
     # as a plain `VAR="$VAR tokens"` append. Everything else - a production gate, else/elif, a nested block, a

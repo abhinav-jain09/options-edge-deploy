@@ -250,57 +250,74 @@ if [ -f "$TOPICS_ENV_REAL" ]; then
     { gate = "" }                                                            # anything else closes it
   ' "$TOPICS_ENV_REAL")"
   # THE SEMANTIC HALF, and the one that does not depend on recognising shell shapes at all. Ask BASH what the
-  # file assigns in each environment, and compare that with what these text readers see:
-  #   LEAKED  = a token the readers see that bash assigns ONLY under ENVIRONMENT=production
-  #             -> a production-only declaration the dev clean would act on. This is the hazard itself, caught
-  #                whatever shape hides it: a column-0 declaration inside a production gate, an elif, a case
-  #                branch - none of which a pattern rule reliably sees.
-  #   UNREAL  = a token the readers see that bash assigns in NEITHER environment
-  #             -> text that only looks like a declaration, e.g. a line inside a here-doc or a quoted string.
+  # file assigns in each environment, and compare that, PER VARIABLE, with what each reader of that variable
+  # sees:
+  #   LEAKED  = a (variable, token) pair a reader sees that bash assigns to THAT variable only under
+  #             ENVIRONMENT=production -> a production-only declaration the dev clean would act on. This is the
+  #             hazard itself, caught whatever shape hides it: a column-0 declaration inside a production gate,
+  #             an elif, a case branch - none of which a pattern rule reliably sees.
+  #   UNREAL  = a pair a reader sees that bash assigns to that variable in NEITHER environment -> text that only
+  #             looks like a declaration, e.g. a line inside a here-doc or a quoted string.
+  # PER VARIABLE, not one pooled set: pooling let a production-only token in one list be excused by the same
+  # token appearing in another list on dev, and it could not say which reader would act on it.
+  # Each variable is compared against the reader that really consumes it: the nine topic/config lists through
+  # the eval ensure_topics does, and the two keep-lists through their own concatenating text parse. The
+  # production-only reset list (OPTIONS_EDGE_PROD_ONLY_RESET_PRESERVED_TOPICS) is deliberately absent - no
+  # dev-cleanup reader consumes it, and this check is about the dev readers.
   # The convention check above is still worth having: it refuses styles that bash and the readers AGREE on but
-  # that nobody should write (a replacement or a ${VAR%...} shrink inside a dev gate). Neither half alone is
-  # enough; together they cover "the readers disagree with bash" and "the file is written in a style this
-  # convention does not allow".
-  env_tokens() { # <ENVIRONMENT value> -> every token bash assigns to the read variables, one per line
+  # that nobody should write (a replacement or a ${VAR%...} shrink inside a dev gate).
+  EVAL_VARS='OPTIONS_EDGE_TOPICS OPTIONS_EDGE_COMPACTED_TOPICS OPTIONS_EDGE_PURE_COMPACT_TOPICS OPTIONS_EDGE_EXACT_PARTITION_TOPICS OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES OPTIONS_EDGE_TOPIC_DELETE_RETENTION_OVERRIDES OPTIONS_EDGE_TOPIC_MAX_MESSAGE_BYTES_OVERRIDES OPTIONS_EDGE_TOPIC_RETENTION_BYTES_OVERRIDES OPTIONS_EDGE_PARTITION_ONLY_TOPICS'
+  TEXT_VARS='OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS OPTIONS_EDGE_RESET_PRESERVED_TOPICS'
+
+  # What BASH assigns. A source that FAILS fails this test: topics.env carries its own production guard that
+  # ends sourcing with a non-zero status when its token strip matches nothing, and swallowing that would leave
+  # an EMPTY production set, which reads as "nothing is production-only" - a false pass of exactly this check.
+  env_pairs() { # <ENVIRONMENT value> -> "VAR token" per line
     ( set +u
       ENVIRONMENT="$1"
-      . "$TOPICS_ENV_REAL" >/dev/null 2>&1 || true
-      printf '%s %s %s %s %s %s %s %s %s %s %s\n' \
-        "${OPTIONS_EDGE_TOPICS:-}" "${OPTIONS_EDGE_COMPACTED_TOPICS:-}" "${OPTIONS_EDGE_PURE_COMPACT_TOPICS:-}" \
-        "${OPTIONS_EDGE_EXACT_PARTITION_TOPICS:-}" "${OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES:-}" \
-        "${OPTIONS_EDGE_TOPIC_DELETE_RETENTION_OVERRIDES:-}" "${OPTIONS_EDGE_TOPIC_MAX_MESSAGE_BYTES_OVERRIDES:-}" \
-        "${OPTIONS_EDGE_TOPIC_RETENTION_BYTES_OVERRIDES:-}" "${OPTIONS_EDGE_PARTITION_ONLY_TOPICS:-}" \
-        "${OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS:-}" "${OPTIONS_EDGE_RESET_PRESERVED_TOPICS:-}"
-    ) | tr ' ' '\n' | grep -v '^$' | sort -u
+      . "$TOPICS_ENV_REAL" >/dev/null 2>&1 || exit 1
+      for v in $EVAL_VARS $TEXT_VARS; do
+        for t in ${!v}; do printf '%s %s\n' "$v" "$t"; done
+      done
+    ) | sort -u
   }
-  reader_tokens() { # what the readers see: the same text extraction they do, eval'd in file order
+  # What the READERS see, each through its own reader's semantics.
+  reader_pairs() {
     ( set +u
-      eval "$(grep -E '^[[:space:]]*OPTIONS_EDGE_(TOPICS|COMPACTED_TOPICS|PURE_COMPACT_TOPICS|EXACT_PARTITION_TOPICS|TOPIC_RETENTION_OVERRIDES|TOPIC_DELETE_RETENTION_OVERRIDES|TOPIC_MAX_MESSAGE_BYTES_OVERRIDES|TOPIC_RETENTION_BYTES_OVERRIDES|PARTITION_ONLY_TOPICS|DEV_CLEAN_PRESERVED_TOPICS|RESET_PRESERVED_TOPICS)=' "$TOPICS_ENV_REAL")" 2>/dev/null
-      printf '%s %s %s %s %s %s %s %s %s %s %s\n' \
-        "${OPTIONS_EDGE_TOPICS:-}" "${OPTIONS_EDGE_COMPACTED_TOPICS:-}" "${OPTIONS_EDGE_PURE_COMPACT_TOPICS:-}" \
-        "${OPTIONS_EDGE_EXACT_PARTITION_TOPICS:-}" "${OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES:-}" \
-        "${OPTIONS_EDGE_TOPIC_DELETE_RETENTION_OVERRIDES:-}" "${OPTIONS_EDGE_TOPIC_MAX_MESSAGE_BYTES_OVERRIDES:-}" \
-        "${OPTIONS_EDGE_TOPIC_RETENTION_BYTES_OVERRIDES:-}" "${OPTIONS_EDGE_PARTITION_ONLY_TOPICS:-}" \
-        "${OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS:-}" "${OPTIONS_EDGE_RESET_PRESERVED_TOPICS:-}"
-    ) | tr ' ' '\n' | grep -v '^$' | sort -u
+      lines="$(grep -E "^[[:space:]]*($(printf '%s' "$EVAL_VARS" | tr ' ' '|'))=" "$TOPICS_ENV_REAL")" || exit 1
+      eval "$lines" || exit 1                       # ensure_topics' model: eval the extracted lines in file order
+      for v in $EVAL_VARS; do
+        for t in ${!v}; do printf '%s %s\n' "$v" "$t"; done
+      done
+      for v in $TEXT_VARS; do                       # the keep-list readers' model: concatenate every assignment
+        val="$(sed -nE "s/^[[:space:]]*${v}=\"(.*)\"$/\1/p" "$TOPICS_ENV_REAL" \
+               | sed -e "s/\\\$${v}//g" -e "s/\\\${${v}}//g" | tr '\n' ' ')" || exit 1
+        for t in $val; do printf '%s %s\n' "$v" "$t"; done
+      done
+    ) | sort -u
   }
-  env_tokens dev        > "$WORK/tok.dev"
-  env_tokens production > "$WORK/tok.prod"
-  reader_tokens         > "$WORK/tok.readers"
-  comm -23 "$WORK/tok.prod" "$WORK/tok.dev" > "$WORK/tok.prodonly"
-  leaked="$(comm -12 "$WORK/tok.readers" "$WORK/tok.prodonly")"
-  sort -u "$WORK/tok.dev" "$WORK/tok.prod" > "$WORK/tok.any"
-  unreal="$(comm -23 "$WORK/tok.readers" "$WORK/tok.any")"
+  semantic_error=""
+  env_pairs dev        > "$WORK/pairs.dev"        || semantic_error="sourcing topics.env with ENVIRONMENT=dev FAILED"
+  env_pairs production > "$WORK/pairs.prod"       || semantic_error="sourcing topics.env with ENVIRONMENT=production FAILED (its own guard may have fired)"
+  reader_pairs         > "$WORK/pairs.readers"    || semantic_error="extracting/evaluating the readers' view of topics.env FAILED"
+  leaked=""; unreal=""
+  if [ -z "$semantic_error" ]; then
+    comm -23 "$WORK/pairs.prod" "$WORK/pairs.dev" > "$WORK/pairs.prodonly"
+    leaked="$(comm -12 "$WORK/pairs.readers" "$WORK/pairs.prodonly")"
+    sort -u "$WORK/pairs.dev" "$WORK/pairs.prod" > "$WORK/pairs.any"
+    unreal="$(comm -23 "$WORK/pairs.readers" "$WORK/pairs.any")"
+  fi
 
-  if [ -z "$leak" ] && [ -z "$leaked" ] && [ -z "$unreal" ]; then
-    ok "topics.env declaration check: clean (convention held; nothing production-only or unreal reaches the readers)"
+  if [ -z "$leak" ] && [ -z "$leaked" ] && [ -z "$unreal" ] && [ -z "$semantic_error" ]; then
+    ok "topics.env declaration check: clean ($(grep -c . < "$WORK/pairs.readers") reader-visible declarations, none production-only, none unreal; convention held)"
   else
     bad "topics.env declaration check: REFUSED
+${semantic_error:+could not measure: $semantic_error}
 convention:
 ${leak:-  (none)}
-production-only tokens the dev readers would act on:
+production-only (variable, token) pairs the dev readers would act on:
 ${leaked:-  (none)}
-tokens the readers see that bash assigns in no environment:
+pairs the readers see that bash assigns in no environment:
 ${unreal:-  (none)}"
   fi
 else
