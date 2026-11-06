@@ -261,7 +261,10 @@ if [ -f "$TOPICS_ENV_REAL" ]; then
   # PER VARIABLE, not one pooled set: pooling let a production-only token in one list be excused by the same
   # token appearing in another list on dev, and it could not say which reader would act on it.
   # Each variable is compared against the reader that really consumes it: the nine topic/config lists through
-  # the eval ensure_topics does, and the two keep-lists through their own concatenating text parse. The
+  # the eval ensure_topics does, and the two keep-lists through their own concatenating text parse. What is
+  # modelled is each reader EXTRACTION, not its fail-closed validation (a missing declaration, an empty value,
+  # the reset parser checking the prod-only list): those can only make a reader REFUSE, never make it act on a
+  # declaration this check passed. The
   # production-only reset list (OPTIONS_EDGE_PROD_ONLY_RESET_PRESERVED_TOPICS) is deliberately absent - no
   # dev-cleanup reader consumes it, and this check is about the dev readers.
   # The convention check above is still worth having: it refuses styles that bash and the readers AGREE on but
