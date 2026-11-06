@@ -1099,6 +1099,64 @@ dev_clean_preserved_topics() {
   printf '%s\n' "$val"
 }
 
+# reset_preserved_from_main -> the RESET-PRESERVED keep list, resolved from the SAME reviewed commit as
+# everything else this clean reads (TOPICS_ENV_REF, i.e. origin/main), NEVER from the working tree.
+#
+# Until 2026-11-06 the wipe sourced $DEPLOY_REPO/scripts/kafka/reset-preserved-topics.sh out of the
+# checkout, and that reader reads the topics.env BESIDE IT -- also the checkout's. The clone on the dev
+# host sits on whatever branch someone left it on: on 11-06 its topics.env was 376 lines behind main and
+# carried no es.rithmic.mbo at all, so installing a fixed script to ~/oe-ops changed nothing until the
+# working tree was updated too. A destructive wipe deciding what may be purged from an unreviewed,
+# arbitrarily stale file is the same defect class as the column-0 anchor it sat next to; the sibling
+# keep-list (dev_clean_preserved_topics) has read the ref, and refused when it could not, all along.
+#
+# The two files are materialised TOGETHER into one temp dir and the script is run FROM there. That is
+# deliberate: reset-preserved-topics.sh pins its declaration file to "the topics.env beside me" and
+# ignores RPT_TOPICS_ENV when sourced, on purpose -- an ambient override on a destructive path was
+# rejected in its own review -- so the pin is honoured rather than bypassed, and both halves come from
+# the same commit. It is the same bundle Jenkinsfile.kafka-reset and prod-clean-slate.sh ship to a host.
+#
+# EXECUTED, not sourced: the helper ends an unresolvable list with `exit 1`, which from a sourced file
+# kills dev-cleanup.sh itself, mid-clean, with its stderr suppressed by the old `2>/dev/null`. Executing
+# it in a command substitution turns that into an ordinary non-zero status this function can report.
+# RPT_TOPICS_ENV is stripped because executed mode honours it: with it set, a file somebody exported
+# hours ago would decide what the wipe may delete.
+#
+# ENVIRONMENT is passed through untouched. On a dev host it is not "production", so the prod-only list
+# is absent exactly as before; forcing a value here could only ever SHRINK the keep-list, which is the
+# one direction that destroys data.
+#
+# No fetch of its own: every caller is do_clean's WIPE_KAFKA branch, and dev_clean_preserved_topics has
+# already required a successful `git fetch origin main` (with retries) a few lines earlier, refusing the
+# wipe outright if it failed. A second fetch would add a way for this to disagree with that one.
+reset_preserved_from_main() {
+  local ref dir work f out rc
+  ref="${TOPICS_ENV_REF%%:*}"                      # origin/main
+  dir="$(dirname "${TOPICS_ENV_REF#*:}")"          # scripts/kafka
+  work="$(mktemp -d "${TMPDIR:-/tmp}/dev-cleanup-rpt.XXXXXX")" || {
+    echo "reset-preserved: cannot create a temp dir" >&2; return 1; }
+  for f in reset-preserved-topics.sh topics.env; do
+    if ! git -C "$DEPLOY_REPO" show "$ref:$dir/$f" > "$work/$f" 2>/dev/null || [ ! -s "$work/$f" ]; then
+      echo "reset-preserved: cannot read $ref:$dir/$f from $DEPLOY_REPO" >&2
+      rm -rf "$work"; return 1
+    fi
+  done
+  out="$(env -u RPT_TOPICS_ENV bash "$work/reset-preserved-topics.sh" 2>&1)"; rc=$?
+  rm -rf "$work"
+  if [ "$rc" -ne 0 ]; then
+    echo "reset-preserved: $ref:$dir/reset-preserved-topics.sh refused to resolve the list (rc=$rc):" >&2
+    printf '%s\n' "$out" | sed 's/^/  /' >&2
+    return 1
+  fi
+  # Non-empty is asserted HERE as well as inside the helper: rc=0 with nothing on stdout would otherwise
+  # hand the wipe an empty keep-list, which is precisely "keep nothing".
+  if [ -z "$(printf '%s' "$out" | tr -d '[:space:]')" ]; then
+    echo "reset-preserved: $ref:$dir resolved an EMPTY list" >&2
+    return 1
+  fi
+  printf '%s\n' $out
+}
+
 # DEV-ONLY overnight estimate topics the wipe must also keep (their owners: the indicator-estimate and
 # market-structure-estimate sidecars). They are not in the shared topics.env on purpose (prod must not grow them),
 # so their names live here, next to ensure_dev_only_estimate_topics.
@@ -1115,6 +1173,14 @@ do_clean() {
       return 1; }
     DEV_KEEP="$DEV_KEEP $DEV_ONLY_ESTIMATE_KEEP"
     echo "dev-clean keep list: $DEV_KEEP"
+    # BOTH keep-lists are resolved HERE, before clean_logs and before a single deployment is scaled
+    # down or a mirror paused, so a wipe that cannot say what it must keep refuses while dev is still
+    # whole. The reset-preserved read used to sit at step 4 instead -- after the scale-down and after
+    # pause_dev_mirrors -- where its failure left dev down with the mirrors held paused.
+    RESET_PRESERVED_TOPICS="$(reset_preserved_from_main)" || {
+      echo "REFUSING the wipe: cannot resolve the RESET-PRESERVED keep list from ${TOPICS_ENV_REF%%:*} (reason above). These topics hold data that by declaration cannot be rebuilt, so a wipe that does not know them must not run." >&2
+      return 1; }
+    echo "reset-preserved keep list (${TOPICS_ENV_REF%%:*}): $RESET_PRESERVED_TOPICS"
   fi
   clean_logs
   local BEFORE AFTER APPS LIST NEWMAN d i up
@@ -1171,8 +1237,9 @@ for p in json.load(sys.stdin)["items"]:
     # the A5 calibration ledger accrues until the archive carries it to the NAS, and a wipe before that
     # loses the day with no way to notice. dev and prod must agree on what "preserved" means, or the
     # two environments stop being comparable, which is the whole reason the evidence is split by env.
-    # shellcheck source=/dev/null
-    . "$DEPLOY_REPO/scripts/kafka/reset-preserved-topics.sh" 2>/dev/null || RESET_PRESERVED_TOPICS=""
+    # RESET_PRESERVED_TOPICS was resolved at the top of do_clean, from ${TOPICS_ENV_REF%%:*}, and the
+    # wipe was refused outright if it could not be. It is NOT re-read here: this point is past the
+    # scale-down and past pause_dev_mirrors, so there is no safe way to fail.
     PRESERVE_RE="$(printf '%s\n' $RESET_PRESERVED_TOPICS $DEV_KEEP | sed 's/[.[\*^$()+?{|]/\\&/g' | paste -sd'|' -)"
     [ -n "$PRESERVE_RE" ] && echo "   preserving (reset-preserved + dev-clean keep list): $RESET_PRESERVED_TOPICS $DEV_KEEP"
     local all_topics

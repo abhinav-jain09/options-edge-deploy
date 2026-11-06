@@ -345,6 +345,13 @@ fi
 #     would need the same treatment, and nothing here would catch it -- that is the known limit of this
 #     gate.
 #   * the rest are tests, one-off replay scripts and scripts/ops/archive/.
+#   * scripts/ops/dev-cleanup.sh IS an estate-wide reset by the criterion above, and it is checked
+#     separately a few lines below rather than in this loop: it does not SOURCE the helper. It runs it
+#     out of ${TOPICS_ENV_REF%%:*} (origin/main) instead of out of the checkout, because the clone on
+#     the dev host sits on whatever branch someone left it on -- on 2026-11-06 that working tree was
+#     376 lines behind main and its topics.env named none of the four topics the wipe then deleted.
+#     It also branches on a compiled PRESERVE_RE rather than on is_reset_preserved(), so neither loop
+#     here fits it.
 for caller in "$CLEANSLATE" scripts/kafka/cleanup-topics.sh scripts/kafka/run-dev-timewarp-replay.sh \
              scripts/ops/daily-kafka-reset.sh; do
   code=$(sed 's/#.*//' "$caller")
@@ -362,6 +369,42 @@ for caller in "$CLEANSLATE" scripts/kafka/run-dev-timewarp-replay.sh scripts/ops
     fail=1
   fi
 done
+
+# scripts/ops/dev-cleanup.sh: the dev wipe. Same hazard, different plumbing, so its own three checks.
+#
+# Until 2026-11-06 it SOURCED $DEPLOY_REPO/scripts/kafka/reset-preserved-topics.sh -- out of the working
+# tree -- and that reader reads the topics.env beside it, also the working tree's. So the file that
+# decided what a destructive wipe may purge was whatever happened to be checked out on the dev host, at
+# whatever commit, on whatever branch. It wiped es.rithmic.mbo and the three
+# futures.liquidity-validator.* topics, all four declared preserved on main.
+#
+# Checked, in order: it must not read the helper out of the checkout again; it must resolve the list
+# from the reviewed ref; and it must actually FILTER the delete list with what it resolved -- the third
+# is the one that makes the first two load-bearing, because a resolved-and-ignored list is no list.
+DEVCLEAN="scripts/ops/dev-cleanup.sh"
+if [ ! -r "$DEVCLEAN" ]; then
+  echo "FAIL: $DEVCLEAN not found — layout changed, update this validator"; fail=1
+else
+  devclean_code=$(sed 's/#.*//' "$DEVCLEAN")
+  if printf '%s' "$devclean_code" | grep -qE '(^|[^-[:alnum:]_/])\.[[:space:]]+"?\$(\{)?DEPLOY_REPO(\})?/scripts/kafka/reset-preserved-topics\.sh'; then
+    echo "FAIL: $DEVCLEAN sources $HELPER out of \$DEPLOY_REPO (the working tree). The keep-list that"
+    echo "      guards the wipe would again come from whatever commit the dev host has checked out."
+    fail=1
+  fi
+  # The CALL, not the name: deleting the live call while leaving the function definition (and its
+  # comment block) is the exact bypass that kept this gate green for is_reset_preserved — see the
+  # caller loops above, where the same lesson is already written down.
+  if ! printf '%s' "$devclean_code" | grep -qE 'RESET_PRESERVED_TOPICS="\$\(reset_preserved_from_main\)"'; then
+    echo "FAIL: $DEVCLEAN never CALLS reset_preserved_from_main to resolve the keep-list from the"
+    echo "      reviewed ref — its wipe would purge topics that by declaration cannot be rebuilt."
+    fail=1
+  fi
+  if ! printf '%s' "$devclean_code" | grep -qE 'grep -vxE "\$PRESERVE_RE"'; then
+    echo "FAIL: $DEVCLEAN resolves a keep-list but does not exclude it from the delete list"
+    echo "      (grep -vxE \"\$PRESERVE_RE\") — the list is loaded and then ignored."
+    fail=1
+  fi
+fi
 
 # THE DAILY RESET NEEDS BOTH MECHANISMS. Its disposable rule deletes *-changelog, and the preserved
 # Streams changelog (...gamma-migration-scorer-changelog) is protected only by PRESERVE_TOPICS_REGEX --

@@ -526,6 +526,17 @@ jobs:
       - name: that convention check refuses every shape it must
         run: bash scripts/ops/dev-cleanup-indented-declaration-mutation-test.sh
 
+      # Reading that file correctly is only half of it: the dev wipe was reading the WRONG COPY. It
+      # sourced scripts/kafka/reset-preserved-topics.sh out of $DEPLOY_REPO, and that reader reads the
+      # topics.env beside it, so a destructive wipe took its keep-list from whatever commit the dev host
+      # happened to have checked out -- on 2026-11-06, a branch 376 lines behind main that named none of
+      # the four topics it then deleted. The list now comes from TOPICS_ENV_REF's ref, like every other
+      # thing the clean reads. Driven over a real local git repository whose committed files and working
+      # tree DISAGREE, so a reader that falls back to the checkout cannot pass; its own second half
+      # mutates the function five ways and requires the test to fail each time.
+      - name: the dev wipe's keep-list comes from the reviewed ref, not the checkout
+        run: bash scripts/ops/dev-cleanup-reset-preserved-ref-test.sh
+
       # A production reset runs the files in ITS checkout, not the ones in main. On 2026-10-13 a clean
       # slate ran from a tree whose apply-topics.sh had uncommitted edits and was 89 lines behind main,
       # wiped production and took the pre-#1173 failure path. The guard compares every file the run uses
