@@ -251,20 +251,13 @@ class SchemaMapAndManifest(unittest.TestCase):
 
 
 class RegistrationWiring(unittest.TestCase):
-    def stage(self) -> str:
+    def test_the_jenkinsfile_is_not_grown_for_line_health(self):
+        """Jenkinsfile.service-deploy sits at the 64 KB method limit of the pipeline compiler: the M0 edit to the geometry stage made build 3107 fail with 'Method too large'
+        and was reverted. The line-health import must not touch this file."""
         text = read("Jenkinsfile.service-deploy")
-        a = text.index("stage('Register geometry schemas (dev only)')")
-        return text[a:text.index("stage('Register reversal top schema (dev only)')")]
-
-    def test_the_dev_registry_import_selects_the_line_health_map_for_level_absorption_and_is_dev_only(self):
-        s = self.stage()
-        self.assertIn("params.REGISTER_GEOMETRY_SCHEMAS && (params.SERVICE == 'amt-order-bridge' || params.SERVICE == 'level-absorption')", s)
-        self.assertIn("params.ENVIRONMENT != 'dev'", s)
-        self.assertIn("if [ \"$SERVICE_PARAM\" = level-absorption ]; then FAMILY=linehealth; MAP=line-health; fi", s)
-        self.assertNotIn('"$SERVICE" = level-absorption', s)
-        self.assertIn("FAMILY=geometry; MAP=geometry-signal-adapter", s)
-        self.assertIn("schemas-registry/$FAMILY", s)
-        self.assertIn("schema-id-maps/$MAP.map", s)
+        self.assertNotIn("line-health", text)
+        self.assertNotIn("linehealth", text)
+        self.assertIn("params.REGISTER_GEOMETRY_SCHEMAS && params.SERVICE == 'amt-order-bridge'", text)
 
     def test_the_topic_stage_runs_the_level_absorption_barrier_on_dev_only(self):
         text = read("Jenkinsfile.service-deploy")

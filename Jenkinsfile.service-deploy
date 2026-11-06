@@ -163,7 +163,7 @@ pipeline {
     booleanParam(name: 'REGISTER_TA_SCHEMAS', defaultValue: false,
       description: 'market-structure, es-trade-tools, wave-cycle, break-classifier and line-acceptance only. true = before the rollout, register that service\'s Avro subjects under their FIXED ids (subject compatibility FULL, IMPORT mode, scripts/kafka/ensure-fixed-id-schemas.sh with scripts/kafka/schema-id-maps/<service>.map) on this environment\'s Schema Registry; idempotent, a collision fails. The schema files come from options-edge-contracts at CONTRACTS_PERMITTED_SHA, which is REQUIRED with this flag. docs/ta-books/DEPLOY-ROLLOUT.md.')
     booleanParam(name: 'REGISTER_GEOMETRY_SCHEMAS', defaultValue: false,
-      description: 'amt-order-bridge or level-absorption on ENVIRONMENT=dev ONLY (production is refused by the stage). true = before the rollout, register that service\'s seven Avro subjects on the dev Schema Registry (FULL, IMPORT mode, scripts/kafka/ensure-fixed-id-schemas.sh): amt-order-bridge = the geometry signal adapter, ids 2801-2807, schema-id-maps/geometry-signal-adapter.map (LAG-R16.7); level-absorption = the Line health family, ids 3701-3707, schema-id-maps/line-health.map (requirement LH-O-1). Idempotent, a collision fails. Schemas come from options-edge-contracts schemas-registry/geometry or schemas-registry/linehealth at CONTRACTS_PERMITTED_SHA, which is REQUIRED with this flag.')
+      description: 'amt-order-bridge on ENVIRONMENT=dev ONLY (production is refused by the stage). true = before the rollout, register the geometry signal adapter\'s seven Avro subjects (ids 2801-2807, FULL, IMPORT mode, scripts/kafka/ensure-fixed-id-schemas.sh with scripts/kafka/schema-id-maps/geometry-signal-adapter.map) on the dev Schema Registry; idempotent, a collision fails. Schemas come from options-edge-contracts schemas-registry/geometry at CONTRACTS_PERMITTED_SHA, which is REQUIRED with this flag. LAG-R16.7.')
     booleanParam(name: 'REGISTER_REVERSAL_TOP_SCHEMA', defaultValue: false,
       description: 'reversal-confirmation dev only. Register the top-candidate Avro subject under fixed id 2901 with FULL compatibility before enabling its producer. Requires CONTRACTS_PERMITTED_SHA.')
     booleanParam(name: 'MARKET_STRUCTURE_IGNORE_RECOVERY_ROLLOVER', defaultValue: false,
@@ -708,9 +708,8 @@ PYEOF
     stage('Register geometry schemas (dev only)') {
       // LAG-R16.7: the geometry signal adapter writes with auto.register.schemas=false and the EXACT fixed ids 2801-2807, so the dev registry must hold them
       // before the bridge starts. Same procedure as the TA stage above; dev only, production is refused here (a production import stays an operator act).
-      // The Line health family (ids 3701-3707, SERVICE=level-absorption) shares this stage on purpose (the pipeline sits at the 64 KB method limit): the case below selects the map and directory.
       when {
-        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.REGISTER_GEOMETRY_SCHEMAS && (params.SERVICE == 'amt-order-bridge' || params.SERVICE == 'level-absorption')) }
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.REGISTER_GEOMETRY_SCHEMAS && params.SERVICE == 'amt-order-bridge') }
       }
       steps {
         script {
@@ -738,9 +737,7 @@ PYEOF
           : "${SR:?SCHEMA_REGISTRY_URL not readable from the options-edge-config configmap — refusing to guess the registry}"
           SR="${SR/host.docker.internal/${DEV_HOST_IP:-192.168.100.102}}"
           echo "registry for ${ENVIRONMENT}: $SR"
-          FAMILY=geometry; MAP=geometry-signal-adapter
-          if [ "$SERVICE_PARAM" = level-absorption ]; then FAMILY=linehealth; MAP=line-health; fi
-          SCHEMA_REGISTRY_URL="$SR" SCHEMAS_DIR=".jenkins-tmp/contracts-geometry/schemas-registry/$FAMILY" SCHEMA_ID_MAP="scripts/kafka/schema-id-maps/$MAP.map" \
+          SCHEMA_REGISTRY_URL="$SR" SCHEMAS_DIR=".jenkins-tmp/contracts-geometry/schemas-registry/geometry" SCHEMA_ID_MAP="scripts/kafka/schema-id-maps/geometry-signal-adapter.map" \
             DEPLOY_DRY_RUN="${DEPLOY_DRY_RUN:-false}" bash scripts/kafka/ensure-fixed-id-schemas.sh
         '''
       }
@@ -941,7 +938,6 @@ PYEOF
       }
     }
     stage('Verify level-absorption output topics') {
-      // (The Line health topics futures.line-health.* are ensured by the same script, scripts/kafka/ensure-level-absorption-topics.sh, through ensure-line-health-topics.sh when ENVIRONMENT=dev, which this stage is.)
       // BEFORE the rollout, same barrier as early-auction-verdict above: the service never creates its topics and refuses to START unless voice, closures and events each have ONE partition, cleanup.policy=delete and no finite message.timestamp.before.max.ms, and the events topic matches the retention artifact exactly. Voice, closures and manual-line (7 days) are created here; the events topic is created with the artifact's retention.bytes, read out of the ConfigMap file (k8s/overlays/dev/level-absorption-config.yaml, the one source) and required (LEVEL_ABSORPTION_REQUIRE_EVENTS_TOPIC=1) the whole stage is DEV ONLY (production is untouched: its service is held at replicas 0 and nothing is created or altered there).
       when {
         expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'level-absorption' && params.ENVIRONMENT == 'dev' && !params.DEPLOY_DRY_RUN) }
