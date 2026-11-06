@@ -95,8 +95,13 @@ expect "rebuildable entry without retention=-1" 1 "no retention.ms=-1 override"
 # python cross-check — so both narrowed together, agreed with each other, and the mutation SURVIVED
 # while looking like it had been applied. A mutation that changes both sides of a comparison tests
 # nothing.
-sed -i.bak '/MINUS_ONE=\$( { sed -nE/s/\^\[A-Z0-9_\]\*TOPIC_RETENTION_OVERRIDES/^[A-Z_]*TOPIC_RETENTION_OVERRIDES/' "$VALIDATOR"
-grep -q "sed -nE 's/\^\[A-Z_\]\*TOPIC_RETENTION_OVERRIDES" "$VALIDATOR" \
+# 2026-11-06: this sed used to search for `^[A-Z0-9_]*TOPIC_RETENTION_OVERRIDES`, anchored. Making the
+# extraction indent-tolerant turned the real text into `^[[:space:]]*[A-Z0-9_]*TOPIC...`, so the search
+# stopped matching and the mutation became a silent no-op — the case would have passed while testing
+# nothing. The guard below is what said so, which is the argument for having one on every mutation: a
+# change to the code under test can disarm its own test, and only the vacuity check notices.
+sed -i.bak '/MINUS_ONE=\$( { sed -nE/s/\[A-Z0-9_\]\*TOPIC_RETENTION_OVERRIDES/[A-Z_]*TOPIC_RETENTION_OVERRIDES/' "$VALIDATOR"
+grep -q "\[A-Z_\]\*TOPIC_RETENTION_OVERRIDES" "$VALIDATOR" \
   || { echo "  FAIL ES4 mutation did not apply — the case below would pass vacuously"; fail=1; }
 expect "ES4 retention declarations skipped" 3 "independent read"
 
