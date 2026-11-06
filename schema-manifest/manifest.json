@@ -11278,7 +11278,7 @@
       "id": 3705,
       "family": "linehealth",
       "schemaFile": "com.optionsedge.contracts.linehealth.LineHealthStatus/v1.avsc",
-      "schemaHash": "b3f5df4b1b394d6963c49ad1f8a3f7b33b4ae91948f00c5e61b8fc5043872832",
+      "schemaHash": "739d989411b010515ad8f984e3591abb666d98aa1c5f2097305d4381e417f772",
       "environments": [
         "dev"
       ],
