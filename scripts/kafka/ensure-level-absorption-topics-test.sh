@@ -61,7 +61,7 @@ all_good() { # the full cluster, every topic as the barrier wants it
   topic $EV 1 delete -1 2152919; topic $VO 1 delete 604800000 -1; topic $CL 1 delete 604800000 -1; topic $MA 1 delete 604800000 -1
 }
 run() { PATH="$T/bin:$PATH" KAFKA_BOOTSTRAP_SERVERS=mock:9092 "$@" bash "$HERE/ensure-level-absorption-topics.sh" > "$T/out" 2>&1; }
-runenv() { env PATH="$T/bin:$PATH" KAFKA_BOOTSTRAP_SERVERS=mock:9092 "$@" bash "$HERE/ensure-level-absorption-topics.sh" > "$T/out" 2>&1; }
+runenv() { env -u ENVIRONMENT PATH="$T/bin:$PATH" KAFKA_BOOTSTRAP_SERVERS=mock:9092 "$@" bash "$HERE/ensure-level-absorption-topics.sh" > "$T/out" 2>&1; }
 expect_fail() { local m="$1"; shift; runenv "$@"; if [ $? -ne 0 ]; then ok "$m"; else bad "$m"; cat "$T/out"; fi; }
 expect_ok() { local m="$1"; shift; runenv "$@"; if [ $? -eq 0 ]; then ok "$m"; else bad "$m"; cat "$T/out"; fi; }
 

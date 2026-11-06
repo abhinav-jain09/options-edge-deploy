@@ -1,0 +1,11 @@
+# Fixed schema ids for the Line health feature (requirement rev 25 LH-O-1, design 3.2a; NEW, dev only). Contracts options-edge-contracts 0.78.0 (schemas-registry/linehealth): ids 3701-3707, all
+# version 1, namespace com.optionsedge.contracts.linehealth, subject = the record full name (RecordNameStrategy), compatibility FULL. One record TYPE per topic:
+# futures.line-health.state 3701, .events 3702, .voice 3703, .user-lines 3704, .status 3705, .closures 3706, .snapshot 3707. Ids 3701-3710 are the line health family block (3708-3710 free for growth);
+# no other map uses them. Dev only; nothing is registered on production or es4. File column: relative to the contracts checkout's `schemas-registry/linehealth` directory (SCHEMAS_DIR).
+com.optionsedge.contracts.linehealth.LineHealthState|3701|LineHealthState.avsc
+com.optionsedge.contracts.linehealth.LineHealthEvent|3702|LineHealthEvent.avsc
+com.optionsedge.contracts.linehealth.LineHealthVoice|3703|LineHealthVoice.avsc
+com.optionsedge.contracts.linehealth.LineHealthUserLine|3704|LineHealthUserLine.avsc
+com.optionsedge.contracts.linehealth.LineHealthStatus|3705|LineHealthStatus.avsc
+com.optionsedge.contracts.linehealth.LineHealthClosure|3706|LineHealthClosure.avsc
+com.optionsedge.contracts.linehealth.LineHealthSnapshot|3707|LineHealthSnapshot.avsc

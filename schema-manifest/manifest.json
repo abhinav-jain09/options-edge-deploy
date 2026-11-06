@@ -1053,6 +1053,12 @@
     3601,
     3604
    ]
+  ],
+  "linehealth": [
+   [
+    3701,
+    3710
+   ]
   ]
  },
  "declaredByManifest": [
@@ -11135,6 +11141,195 @@
    ],
    "retained": true,
    "retainedReason": "curated, not baseline: underlying.vix.price (Avro since 2026-11-06) is written by the databento-vix-feed role of options-edge-databento-feed, a Rust service outside the governed producers (it reads this subject at start and never registers). The topic is BYTE-mirrored prod -> es4 by MirrorMaker 2 (infra/es4/mm2/mm2.properties), so ONE id (3061) must name the schema in every registry. Registered on dev and es4 on 2026-11-06; production's registry is registered by schema-sync at its own cutover (docs/KAFKA-AVRO-TOPIC-ROLL-FORWARD.md, pending production steps)."
+  },
+  {
+   "kind": "MIRRORED",
+   "subject": "com.optionsedge.contracts.linehealth.LineHealthState",
+   "version": 1,
+   "id": 3701,
+   "family": "linehealth",
+   "schemaFile": "com.optionsedge.contracts.linehealth.LineHealthState/v1.avsc",
+   "schemaHash": "da8f2a5c653380e9985e7fadc3e6fa3c82e25dbb4efda9ba9ac059db3d1c8d8f",
+   "environments": [
+    "dev"
+   ],
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas-registry/linehealth/LineHealthState.avsc"
+   },
+   "topics": [
+    {
+     "name": "futures.line-health.state",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "curated, not baseline: the Line health feature (requirement rev 25 LH-O-1, design 3.2a; contracts 0.78.0 schemas-registry/linehealth), written by the line-health loop of level-absorption-service (milestone M1, not built at M0) on futures.line-health.state under RecordNameStrategy with auto.register.schemas=false. Producer and consumer bindings are added by the milestone that builds each side together with its image label, so no existing service becomes schema-gated at M0. Dev only; nothing is registered on production or es4."
+  },
+  {
+   "kind": "MIRRORED",
+   "subject": "com.optionsedge.contracts.linehealth.LineHealthEvent",
+   "version": 1,
+   "id": 3702,
+   "family": "linehealth",
+   "schemaFile": "com.optionsedge.contracts.linehealth.LineHealthEvent/v1.avsc",
+   "schemaHash": "3c46cea8b03c874470509d04b0037d2147f674f45bf2d132bfb6d890f84b8d1c",
+   "environments": [
+    "dev"
+   ],
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas-registry/linehealth/LineHealthEvent.avsc"
+   },
+   "topics": [
+    {
+     "name": "futures.line-health.events",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "curated, not baseline: the Line health feature (requirement rev 25 LH-O-1, design 3.2a; contracts 0.78.0 schemas-registry/linehealth), written by the line-health loop of level-absorption-service (milestone M1, not built at M0) on futures.line-health.events under RecordNameStrategy with auto.register.schemas=false. Producer and consumer bindings are added by the milestone that builds each side together with its image label, so no existing service becomes schema-gated at M0. Dev only; nothing is registered on production or es4."
+  },
+  {
+   "kind": "MIRRORED",
+   "subject": "com.optionsedge.contracts.linehealth.LineHealthVoice",
+   "version": 1,
+   "id": 3703,
+   "family": "linehealth",
+   "schemaFile": "com.optionsedge.contracts.linehealth.LineHealthVoice/v1.avsc",
+   "schemaHash": "4e104a06ff62b87fb02708a539c64853a135c60889837eacabb92734ecabdca4",
+   "environments": [
+    "dev"
+   ],
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas-registry/linehealth/LineHealthVoice.avsc"
+   },
+   "topics": [
+    {
+     "name": "futures.line-health.voice",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "curated, not baseline: the Line health feature (requirement rev 25 LH-O-1, design 3.2a; contracts 0.78.0 schemas-registry/linehealth), written by the line-health loop of level-absorption-service (milestone M1, not built at M0) on futures.line-health.voice under RecordNameStrategy with auto.register.schemas=false. Producer and consumer bindings are added by the milestone that builds each side together with its image label, so no existing service becomes schema-gated at M0. Dev only; nothing is registered on production or es4."
+  },
+  {
+   "kind": "MIRRORED",
+   "subject": "com.optionsedge.contracts.linehealth.LineHealthUserLine",
+   "version": 1,
+   "id": 3704,
+   "family": "linehealth",
+   "schemaFile": "com.optionsedge.contracts.linehealth.LineHealthUserLine/v1.avsc",
+   "schemaHash": "e2d7494b4be0bc30c77853ef5ac07d7c311c4f87c8b9fa27c8e4ec9d11c1f906",
+   "environments": [
+    "dev"
+   ],
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas-registry/linehealth/LineHealthUserLine.avsc"
+   },
+   "topics": [
+    {
+     "name": "futures.line-health.user-lines",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "curated, not baseline: the Line health feature (requirement rev 25 LH-O-1, design 3.2a; contracts 0.78.0 schemas-registry/linehealth), written by the line-health loop of level-absorption-service (milestone M1, not built at M0) on futures.line-health.user-lines under RecordNameStrategy with auto.register.schemas=false. Producer and consumer bindings are added by the milestone that builds each side together with its image label, so no existing service becomes schema-gated at M0. Dev only; nothing is registered on production or es4."
+  },
+  {
+   "kind": "MIRRORED",
+   "subject": "com.optionsedge.contracts.linehealth.LineHealthStatus",
+   "version": 1,
+   "id": 3705,
+   "family": "linehealth",
+   "schemaFile": "com.optionsedge.contracts.linehealth.LineHealthStatus/v1.avsc",
+   "schemaHash": "ffddab1720e372c26be96234d62e42c250f14932c2d0921fdbff2295402e43dc",
+   "environments": [
+    "dev"
+   ],
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas-registry/linehealth/LineHealthStatus.avsc"
+   },
+   "topics": [
+    {
+     "name": "futures.line-health.status",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "curated, not baseline: the Line health feature (requirement rev 25 LH-O-1, design 3.2a; contracts 0.78.0 schemas-registry/linehealth), written by the line-health loop of level-absorption-service (milestone M1, not built at M0) on futures.line-health.status under RecordNameStrategy with auto.register.schemas=false. Producer and consumer bindings are added by the milestone that builds each side together with its image label, so no existing service becomes schema-gated at M0. Dev only; nothing is registered on production or es4."
+  },
+  {
+   "kind": "MIRRORED",
+   "subject": "com.optionsedge.contracts.linehealth.LineHealthClosure",
+   "version": 1,
+   "id": 3706,
+   "family": "linehealth",
+   "schemaFile": "com.optionsedge.contracts.linehealth.LineHealthClosure/v1.avsc",
+   "schemaHash": "5ef87f8cdbe829afc53f22dada21fb250fdc8b10fb44c41c451602e32168c19d",
+   "environments": [
+    "dev"
+   ],
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas-registry/linehealth/LineHealthClosure.avsc"
+   },
+   "topics": [
+    {
+     "name": "futures.line-health.closures",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "curated, not baseline: the Line health feature (requirement rev 25 LH-O-1, design 3.2a; contracts 0.78.0 schemas-registry/linehealth), written by the line-health loop of level-absorption-service (milestone M1, not built at M0) on futures.line-health.closures under RecordNameStrategy with auto.register.schemas=false. Producer and consumer bindings are added by the milestone that builds each side together with its image label, so no existing service becomes schema-gated at M0. Dev only; nothing is registered on production or es4."
+  },
+  {
+   "kind": "MIRRORED",
+   "subject": "com.optionsedge.contracts.linehealth.LineHealthSnapshot",
+   "version": 1,
+   "id": 3707,
+   "family": "linehealth",
+   "schemaFile": "com.optionsedge.contracts.linehealth.LineHealthSnapshot/v1.avsc",
+   "schemaHash": "f91827aec7bff829c12d3fba6b862c1db976a4574343b3694df5aa17b01bb5b9",
+   "environments": [
+    "dev"
+   ],
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas-registry/linehealth/LineHealthSnapshot.avsc"
+   },
+   "topics": [
+    {
+     "name": "futures.line-health.snapshot",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [],
+   "retained": true,
+   "retainedReason": "curated, not baseline: the Line health feature (requirement rev 25 LH-O-1, design 3.2a; contracts 0.78.0 schemas-registry/linehealth), written by the line-health loop of level-absorption-service (milestone M1, not built at M0) on futures.line-health.snapshot under RecordNameStrategy with auto.register.schemas=false. Producer and consumer bindings are added by the milestone that builds each side together with its image label, so no existing service becomes schema-gated at M0. Dev only; nothing is registered on production or es4."
   }
  ],
  "dlqTopics": {

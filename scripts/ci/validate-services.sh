@@ -208,6 +208,7 @@ for t in scripts/kafka/ensure-oi-anchor-topic-parse-test.sh scripts/kafka/ensure
          scripts/kafka/ensure-break-score-topics-test.sh \
          scripts/kafka/ensure-level-absorption-topics-test.sh \
          scripts/kafka/ensure-es-liquidity-wall-topics-test.sh \
+         scripts/kafka/ensure-line-health-topics-test.sh \
          scripts/kafka/ensure-market-structure-topics-test.sh \
          scripts/deploy/service-deploy-ms-rollover-inject-test.sh \
          scripts/kafka/ensure-market-commentary-topics-test.sh \
