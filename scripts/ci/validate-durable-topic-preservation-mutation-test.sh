@@ -196,4 +196,14 @@ grep -q "r'\^OPTIONS_EDGE_(?:PROD_ONLY_)?%s=" "$VALIDATOR" \
   || { echo "  FAIL recount re-anchor did not apply — the case below would pass vacuously"; fail=1; }
 expect "the recount blind to an indented declaration" 3 "independent read"
 
+# A CROSS-REFERENCE, the case the first version of the $VAR strip swallowed in both engines at once.
+# Neither the strip nor the extraction cross-check can catch it -- both readers discard a `$` token the
+# same way, so they AGREE -- which is why _assert_only_self_references refuses it before any read.
+# Asserted here because a guard nobody mutates is a guard nobody has tested: the first version's
+# comment claimed this very case produced a harness failure while the code exited OK.
+sed -i.bak 's/^OPTIONS_EDGE_RESET_PRESERVED_TOPICS="/OPTIONS_EDGE_RESET_PRESERVED_TOPICS="$SOME_OTHER_LIST /' "$TOPICS"
+grep -q 'OPTIONS_EDGE_RESET_PRESERVED_TOPICS="\$SOME_OTHER_LIST ' "$TOPICS" \
+  || { echo "  FAIL cross-reference mutation did not apply — the case below would pass vacuously"; fail=1; }
+expect "a cross-reference to another list" 3 "refers to a variable OTHER than the one being declared"
+
 [ $fail -eq 0 ] && echo "=== validate-durable-topic-preservation-mutation-test: OK ===" || { echo "=== validate-durable-topic-preservation-mutation-test: FAILED ==="; exit 1; }

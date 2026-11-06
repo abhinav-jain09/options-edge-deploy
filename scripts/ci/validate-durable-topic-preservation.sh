@@ -46,9 +46,62 @@ fail=0
 # "do not age this out by time" versus "this cannot be rebuilt" -- and the previous rule conflated
 # them, which would have force-preserved options.spx.spot-vol-regime.current on dev the moment it
 # got the retention=-1 it genuinely needs.
+# EVERY `$` TOKEN IN topics.env MUST BE A SELF-REFERENCE, and this is checked BEFORE anything is read.
+#
+# The readers below strip a `$VAR` token, because an append opens with the variable's own name and that
+# is not a topic. The first version of that strip dropped ANY token beginning with `$`, in BOTH engines
+# identically — so a cross-reference, `OPTIONS_EDGE_RESET_PRESERVED_TOPICS="$SOME_OTHER_LIST t.a"`,
+# would be discarded by both, they would AGREE on their counts, and the validator would exit OK while
+# every topic that other list contributes went unexamined. The commit claimed that case produced a loud
+# HARNESS FAILURE. It did not (Codex). A guard whose comment promises what its mechanism cannot deliver
+# is worse than no guard: a reader who believes it stops looking for the hole.
+#
+# So the promise is made true HERE instead of being withdrawn. A `$X`/`${X}` token inside a quoted
+# declaration is accepted ONLY when X is the variable that declaration assigns. Anything else exits 3 —
+# a harness failure, in the same terms as the extraction cross-check below, because it means topics.env
+# composes its lists in a way these readers do not expand and cannot be trusted to have read.
+#
+# Scoped to assignments whose NAME contains TOPIC, i.e. exactly the declarations these reads select; a
+# `$HOME` in some unrelated variable is not this validator's business. Checked once, over the whole
+# file, rather than per read: a cross-reference is a fact about the FILE, and a per-read check would
+# have to be repeated correctly six times.
+_assert_only_self_references() {
+  local bad
+  bad="$(python3 - "$TOPICS_ENV" <<'PYEOF'
+import re, sys
+s = open(sys.argv[1]).read()
+out = []
+for m in re.finditer(r'^[ \t]*([A-Za-z0-9_]*TOPIC[A-Za-z0-9_]*)="(.*)"$', s, re.M):
+    var, val = m.group(1), m.group(2)
+    for tok in val.split():
+        if not tok.startswith("$"):
+            continue
+        name = tok[1:]
+        if name.startswith("{") and name.endswith("}"):
+            name = name[1:-1]
+        if name != var:
+            out.append("  %s declares %s" % (var, tok))
+print("\n".join(out))
+PYEOF
+)" || { echo "HARNESS FAILURE: could not scan $TOPICS_ENV for variable references." >&2; exit 3; }
+  if [ -n "$bad" ]; then
+    echo "HARNESS FAILURE: $TOPICS_ENV refers to a variable OTHER than the one being declared:" >&2
+    printf '%s\n' "$bad" >&2
+    echo "                 These readers PARSE this file, they do not expand it, so every topic that" >&2
+    echo "                 referenced list contributes would be invisible here — and the \$VAR strip" >&2
+    echo "                 below would hide it in BOTH engines at once, so the cross-check could not" >&2
+    echo "                 catch it either. Declare the topics inline, or teach both readers to" >&2
+    echo "                 expand the reference and extend this check." >&2
+    exit 3
+  fi
+}
+_assert_only_self_references
+
 # INDENT-TOLERANT, and a `$VAR` token is dropped. topics.env declares an environment-specific topic by
 # APPENDING inside `if [ "${ENVIRONMENT:-}" != "production" ]`, which makes the assignment INDENTED and
-# makes its first token the variable's own `$NAME`, not a topic.
+# makes its first token the variable's own `$NAME`, not a topic. Dropping EVERY `$` token is sound only
+# because _assert_only_self_references above has already refused any token that is not the
+# declaration's own name; without that assert this strip would silently swallow a cross-reference.
 #
 # This validator was the FOURTH reader anchored at column 0. The 2026-11-06 wipe that deleted
 # es.rithmic.mbo and futures.liquidity-validator.{evaluations,data-gaps,daily} was traced to three
@@ -86,9 +139,10 @@ in_list() { case " $(printf '%s' "$2" | tr '\n' ' ') " in *" $1 "*) return 0 ;; 
 # Independently computed by a DIFFERENT ENGINE, scoped identically to list_of/MINUS_ONE -- INCLUDING
 # the 2026-11-06 indent tolerance and the `$VAR` drop. Reached differently on purpose: the sed side
 # strips leading whitespace with [[:space:]]* and drops a token matching ^[$], the python side with
-# [ \t]* and `not t.startswith("$")`. If a cross-reference to some OTHER variable ever appears in a
-# declaration the two would disagree about it -- and that disagreement is a loud HARNESS FAILURE, which
-# is the right answer for a file doing something neither reader models. Two shell
+# [ \t]* and `not t.startswith("$")`. What the cross-check catches is one ENGINE regressing -- a read
+# narrowed back to column 0, or truncated some other way -- which shows up as a count mismatch. It does
+# NOT catch a cross-reference: both engines drop `$` tokens the same way, so they would agree. That
+# case is refused earlier, by _assert_only_self_references, which is the only place it CAN be refused. Two shell
 # pipelines drift on regex dialects and quoting — a first attempt counted "retention.ms=-1" out of the
 # prose, a second lost the first entry on each line to the opening quote, and both would have failed
 # this validator on a perfectly correct file. The cross-check exists only to catch a TRUNCATED or
