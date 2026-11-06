@@ -1,12 +1,17 @@
-# Fixed schema ids for es-liquidity-wall-service (ES book liquidity walls; NEW, dev only). Contracts options-edge-contracts 0.66.0 (branch feat/liquidity-wall-contracts,
-# schemas-registry/liquiditywall): ids 3401-3407, all version 1, namespace com.optionsedge.contracts.liquiditywall, subject = the record full name (RecordNameStrategy), compatibility FULL.
-# One record TYPE per topic: futures.liquidity-wall.closures 3401, .buckets 3402, .dashboard 3403, .events 3404, .state 3405, .snapshot 3406, .voice 3407. The service writes with
-# auto.register.schemas=false (src/main/resources/schema-requirements.json names these ids and hashes). Ids 3401-3407 are the ES liquidity wall block; no other map uses them.
+# Fixed schema ids for es-liquidity-wall-service (ES book liquidity walls; NEW, dev only). Contracts options-edge-contracts 0.84.0 (schemas-registry/liquiditywall): ids 3401-3408,
+# version 1 except 3408 (see the fourth column, line-health.map), namespace com.optionsedge.contracts.liquiditywall, subject = the record full name (RecordNameStrategy), compatibility FULL.
+# One record TYPE per topic: futures.liquidity-wall.closures 3401, .buckets 3402, .dashboard 3408 (3403 archival), .events 3404, .state 3405, .snapshot 3406, .voice 3407. The service writes with
+# auto.register.schemas=false (src/main/resources/schema-requirements.json names these ids and hashes). Ids 3401-3408 are the ES liquidity wall block; no other map uses them.
+# Version 2 of the dashboard (order page liquidity walls, design rev 9 section 3) adds three optional wall fields (sizeNow, sizeTape, wordState): a registered id never changes content, so it is a new version under
+# the new id 3408 that extends the family block 3401-3407. The version-1 file is the frozen one under schemas-registry/liquiditywall/v1; on a registry that already holds version 1 (dev) only the 3408 row imports.
+# REGISTER 3408 BEFORE the wall service image of contracts 0.84.0 starts (the service refuses to start when its ids are not in the registry), and roll the feed gateway (accepts 3403 and 3408) before the service.
 # Dev only; nothing is registered on production or es4. File column: relative to the contracts checkout's `schemas-registry/liquiditywall` directory (SCHEMAS_DIR).
 com.optionsedge.contracts.liquiditywall.LiquidityWallClosure|3401|LiquidityWallClosure.avsc
 com.optionsedge.contracts.liquiditywall.LiquidityWallBucket|3402|LiquidityWallBucket.avsc
-com.optionsedge.contracts.liquiditywall.LiquidityWallDashboard|3403|LiquidityWallDashboard.avsc
+com.optionsedge.contracts.liquiditywall.LiquidityWallDashboard|3403|v1/LiquidityWallDashboard.avsc|1
 com.optionsedge.contracts.liquiditywall.LiquidityWallEvent|3404|LiquidityWallEvent.avsc
 com.optionsedge.contracts.liquiditywall.LiquidityWallState|3405|LiquidityWallState.avsc
 com.optionsedge.contracts.liquiditywall.LiquidityWallSnapshot|3406|LiquidityWallSnapshot.avsc
 com.optionsedge.contracts.liquiditywall.LiquidityWallVoice|3407|LiquidityWallVoice.avsc
+# Version-2 row after all version-1 rows so the preflight pass can see the predecessor of every row.
+com.optionsedge.contracts.liquiditywall.LiquidityWallDashboard|3408|LiquidityWallDashboard.avsc|2
