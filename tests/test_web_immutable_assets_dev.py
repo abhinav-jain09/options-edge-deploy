@@ -41,7 +41,7 @@ class WebImmutableAssetsDevTest(unittest.TestCase):
         init = next(c for c in pod['initContainers'] if c['name'] == 'publish-public-assets')
         self.assertEqual(app['image'], init['image'], 'existing digest pinning must resolve one identical image')
         self.assertEqual(['java', '-cp', '@/app/jib-classpath-file', 'app.web.ContextTapeAssetPublisher'], init['command'])
-        self.assertEqual('true', next(e['value'] for e in app['env'] if e['name'] == 'CONTEXT_TAPE_COMPILED_ASSETS'))
+        self.assertEqual('false', next(e['value'] for e in app['env'] if e['name'] == 'CONTEXT_TAPE_COMPILED_ASSETS'))
         self.assertTrue(next(v for v in app['volumeMounts'] if v['name'] == 'public-assets')['readOnly'])
         self.assertEqual('10m', init['resources']['requests']['cpu'])
         self.assertEqual('Always', init['imagePullPolicy'])
@@ -60,9 +60,9 @@ class WebImmutableAssetsDevTest(unittest.TestCase):
         webenv = {e['name']: e.get('value') for c in web if c['name'] == 'web' for e in c.get('env', [])}
         gateway = resource(self.mono, 'Deployment', 'feed-gateway-service')['spec']['template']['spec']['containers']
         gatewayenv = {e['name']: e.get('value') for c in gateway for e in c.get('env', [])}
-        self.assertEqual('true', webenv['HEATMAP_NATIVE_HISTORY_ENABLED'])
-        self.assertEqual('Rithmic Paper Trading', webenv['HEATMAP_RITHMIC_SYSTEM'])
-        self.assertEqual(webenv['HEATMAP_RITHMIC_SYSTEM'], gatewayenv['GATEWAY_RITHMIC_SYSTEM'])
+        self.assertNotIn('HEATMAP_NATIVE_HISTORY_ENABLED', webenv)
+        self.assertNotIn('HEATMAP_RITHMIC_SYSTEM', webenv)
+        self.assertEqual('Rithmic Paper Trading', gatewayenv['GATEWAY_RITHMIC_SYSTEM'])
         self.assertEqual(resource(self.gateway, 'Deployment', 'feed-gateway-service'), resource(self.mono, 'Deployment', 'feed-gateway-service'))
         self.assertEqual('true', gatewayenv['GATEWAY_AUTH_ENABLED'])
         self.assertEqual('options-edge-web', gatewayenv['GATEWAY_KEYCLOAK_AUDIENCE'])
