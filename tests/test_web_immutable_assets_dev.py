@@ -34,13 +34,13 @@ class WebImmutableAssetsDevTest(unittest.TestCase):
         self.assertEqual(['ReadWriteOnce'], claim['spec']['accessModes'])
         self.assertEqual('2Gi', claim['spec']['resources']['requests']['storage'])
 
-    def test_preparation_stays_disabled_and_app_volume_is_read_only(self):
+    def test_activation_is_explicit_and_app_volume_is_read_only(self):
         pod = resource(self.web, 'Deployment', 'options-edge-web')['spec']['template']['spec']
         app = next(c for c in pod['containers'] if c['name'] == 'web')
         init = next(c for c in pod['initContainers'] if c['name'] == 'publish-public-assets')
         self.assertEqual(app['image'], init['image'], 'existing digest pinning must resolve one identical image')
         self.assertEqual(['java', '-cp', '@/app/jib-classpath-file', 'app.web.ContextTapeAssetPublisher'], init['command'])
-        self.assertEqual('false', next(e['value'] for e in app['env'] if e['name'] == 'CONTEXT_TAPE_COMPILED_ASSETS'))
+        self.assertEqual('true', next(e['value'] for e in app['env'] if e['name'] == 'CONTEXT_TAPE_COMPILED_ASSETS'))
         self.assertTrue(next(v for v in app['volumeMounts'] if v['name'] == 'public-assets')['readOnly'])
         self.assertEqual('10m', init['resources']['requests']['cpu'])
         self.assertEqual('Always', init['imagePullPolicy'])
@@ -53,6 +53,18 @@ class WebImmutableAssetsDevTest(unittest.TestCase):
         self.assertEqual({'runAsUser':0,'runAsGroup':0},init['securityContext'])
         self.assertEqual('100m', app['resources']['requests']['cpu'])
         self.assertEqual('web-immutable-assets', next(v for v in pod['volumes'] if v['name'] == 'public-assets')['persistentVolumeClaim']['claimName'])
+
+    def test_native_flags_match_authorized_gateway_scope(self):
+        web = resource(self.web, 'Deployment', 'options-edge-web')['spec']['template']['spec']['containers']
+        webenv = {e['name']: e.get('value') for c in web if c['name'] == 'web' for e in c.get('env', [])}
+        gateway = resource(self.mono, 'Deployment', 'feed-gateway-service')['spec']['template']['spec']['containers']
+        gatewayenv = {e['name']: e.get('value') for c in gateway for e in c.get('env', [])}
+        self.assertEqual('true', webenv['HEATMAP_NATIVE_HISTORY_ENABLED'])
+        self.assertEqual('Rithmic Paper Trading', webenv['HEATMAP_RITHMIC_SYSTEM'])
+        self.assertEqual(webenv['HEATMAP_RITHMIC_SYSTEM'], gatewayenv['GATEWAY_RITHMIC_SYSTEM'])
+        self.assertEqual('true', gatewayenv['GATEWAY_AUTH_ENABLED'])
+        self.assertEqual('options-edge-web', gatewayenv['GATEWAY_KEYCLOAK_AUDIENCE'])
+        self.assertEqual('options-edge-web', gatewayenv['WS_AUTH_AUDIENCE'])
 
     def test_no_global_build_floor_is_added_for_dev_only_publisher(self):
         self.assertFalse((ROOT / 'k8s/services/web/MIN_IMAGE_BUILD').exists())
