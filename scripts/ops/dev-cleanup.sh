@@ -209,6 +209,10 @@ ES_CLEAN_TOPICS='es.open-direction.forecast es.open-direction.outcome es.open-di
 # self-creates its own output + Kafka-Streams internal topics on startup, exactly like prod.
 DEPLOY_REPO="${DEPLOY_REPO:-/Users/abhinav/development/workspace/options-edge-deploy}"
 TOPICS_ENV_REF="${TOPICS_ENV_REF:-origin/main:scripts/kafka/topics.env}"
+# Set by topics_ref_pin, and by nothing else. Initialised here rather than left to the environment: an
+# exported value would pin a destructive clean to a commit nobody in this run chose.
+TOPICS_ENV_SHA=""
+TOPICS_ENV_PINNED_REF=""
 # 2026-07-11: for OVERNIGHT ES-future tracking the nightly clean WIPES all topics (except the sacred
 # _schemas/__consumer_offsets/__transaction_state) and the overnight-start recreates them fresh. So
 # WIPE_KAFKA defaults to TRUE again. (The _schemas guard in do_start's schema self-heal + the grep
@@ -664,7 +668,11 @@ ensure_dev_only_estimate_topics() {
 ensure_topics() {
   [ -n "$KT" ] || require_kafka_cli
   git -C "$DEPLOY_REPO" fetch -q origin main 2>/dev/null || true
-  local tenv; tenv="$(git -C "$DEPLOY_REPO" show "$TOPICS_ENV_REF" 2>/dev/null)"
+  # Inside a clean, the PINNED commit: the topics recreated after the wipe must come from the commit the
+  # keep-lists were read from, and a push between the two would otherwise split them. Unset elsewhere
+  # (`dev-cleanup.sh start` or `topics` on their own), where the ref is the only thing there is.
+  local tref="${TOPICS_ENV_PINNED_REF:-$TOPICS_ENV_REF}"
+  local tenv; tenv="$(git -C "$DEPLOY_REPO" show "$tref" 2>/dev/null)"
   if [ -n "$tenv" ]; then
     # INDENT-TOLERANT on purpose. A dev-only topic is declared in topics.env by APPENDING inside
     # `if [ "${ENVIRONMENT:-}" != "production" ]`, so its assignment is INDENTED; this grep was anchored at
@@ -704,13 +712,13 @@ ensure_topics() {
       [ -n "$DRB" ] && extra="$extra --config retention.bytes=$DRB"
       echo "--topic $name --partitions $DPARTS --replication-factor 1 --config cleanup.policy=$DPOL $extra $rt"
     done | create_topics_parallel)
-    echo "Pre-created $n platform topics from deploy config ($TOPICS_ENV_REF); apps self-create the rest on startup."
+    echo "Pre-created $n platform topics from deploy config ($tref); apps self-create the rest on startup."
     ensure_partition_only_topics
     reconcile_declared_topics
     ensure_dev_only_estimate_topics
     echo "  topics present now: $(topic_count '^__|^_schemas' v)"
   else
-    echo "  WARNING: could not read deploy topics.env ($DEPLOY_REPO $TOPICS_ENV_REF) — apps will create their topics on startup (slower to READY)."
+    echo "  WARNING: could not read deploy topics.env ($DEPLOY_REPO $tref) — apps will create their topics on startup (slower to READY)."
     return 1   # resume_dev_mirrors_if_declared keeps the mirrors paused: nothing was created at its declared shape
   fi
 }
@@ -1069,22 +1077,44 @@ PY
   esac
 }
 
-# dev_clean_preserved_topics -> the OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS keep list (see topics.env) read from the
-# SAME ref ensure_topics reads (origin/main), never from the working tree: the clone on the dev host can be many
-# commits behind. FAILS (non-zero, nothing printed) unless AT LEAST ONE declaration exists and the concatenated
-# value is non-empty, and the caller REFUSES the wipe then: an unreadable keep list must stop a destructive clean,
-# not mean "keep nothing". It was "exactly one" until 2026-11-06, which is what made every APPENDED declaration
-# invisible while still reporting success.
-dev_clean_preserved_topics() {
-  # The fetch MUST succeed: a stale origin/main could lack a newly required keep entry, and this list guards a
-  # destructive wipe. Retried; a final failure refuses the wipe (the caller says why).
-  local env n val try fetched=0
+# topics_ref_pin: fetch, then resolve TOPICS_ENV_REF's ref to an IMMUTABLE COMMIT, once, and publish it
+# as $TOPICS_ENV_SHA / $TOPICS_ENV_PINNED_REF for everything the clean reads afterwards.
+#
+# A branch name is not a version. Each `git show origin/main:<path>` resolves the ref again, so two
+# reads a few seconds apart can come from two different commits if anything fetches in between -- and
+# this clean makes four of them: the dev-clean keep-list, then the two halves of the reset-preserved
+# bundle (a parser and the declarations it parses, which have to agree), then the shapes ensure_topics
+# recreates after the wipe. Pinning once means a mid-clean push cannot split them.
+#
+# The fetch MUST succeed: a stale origin/main could lack a newly required keep entry, and these lists
+# guard a destructive wipe. Retried; a final failure refuses the wipe (the caller says why).
+topics_ref_pin() {
+  local try fetched=0 sha
   for try in 1 2 3; do
     git -C "$DEPLOY_REPO" fetch -q origin '+refs/heads/main:refs/remotes/origin/main' 2>/dev/null && { fetched=1; break; }
     sleep 2
   done
   [ "$fetched" = 1 ] || return 1
-  env="$(git -C "$DEPLOY_REPO" show "$TOPICS_ENV_REF" 2>/dev/null)" || return 1
+  sha="$(git -C "$DEPLOY_REPO" rev-parse --verify "${TOPICS_ENV_REF%%:*}^{commit}" 2>/dev/null)" || return 1
+  # A full commit id, not whatever a stub or a broken rev-parse printed: an unverified value here would
+  # be pasted into every `git show` below and fail four reads with four different messages. 40 hex for
+  # sha1, 64 for a sha256 repository; an abbreviation is refused because it can become ambiguous.
+  case "$sha" in *[!0-9a-f]* | "") return 1 ;; esac
+  [ "${#sha}" -ge 40 ] || return 1
+  TOPICS_ENV_SHA="$sha"
+  TOPICS_ENV_PINNED_REF="$sha:${TOPICS_ENV_REF#*:}"
+}
+
+# dev_clean_preserved_topics -> the OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS keep list (see topics.env), read at
+# the commit topics_ref_pin resolved, never from the working tree: the clone on the dev host can be many commits
+# behind. FAILS (non-zero, nothing printed) unless AT LEAST ONE declaration exists and the concatenated
+# value is non-empty, and the caller REFUSES the wipe then: an unreadable keep list must stop a destructive clean,
+# not mean "keep nothing". It was "exactly one" until 2026-11-06, which is what made every APPENDED declaration
+# invisible while still reporting success.
+dev_clean_preserved_topics() {
+  local env n val
+  topics_ref_pin || return 1
+  env="$(git -C "$DEPLOY_REPO" show "$TOPICS_ENV_PINNED_REF" 2>/dev/null)" || return 1
   # INDENT-TOLERANT, and EVERY assignment is concatenated rather than exactly one: an entry added to this
   # keep-list by appending inside `if [ "${ENVIRONMENT:-}" != "production" ]` is INDENTED, so the column-0
   # anchor could not see it while the "exactly one" check still passed on the base declaration alone.
@@ -1097,6 +1127,76 @@ dev_clean_preserved_topics() {
         | tr '\n' ' ' | tr -s ' ' | sed -e 's/^ *//' -e 's/ *$//')
   [ -n "${val// /}" ] || return 1
   printf '%s\n' "$val"
+}
+
+# reset_preserved_from_main -> the RESET-PRESERVED keep list, resolved from the SAME reviewed commit as
+# everything else this clean reads (TOPICS_ENV_REF, i.e. origin/main), NEVER from the working tree.
+#
+# Until 2026-11-06 the wipe sourced $DEPLOY_REPO/scripts/kafka/reset-preserved-topics.sh out of the
+# checkout, and that reader reads the topics.env BESIDE IT -- also the checkout's. The clone on the dev
+# host sits on whatever branch someone left it on: on 11-06 its topics.env was 376 lines behind main and
+# carried no es.rithmic.mbo at all, so installing a fixed script to ~/oe-ops changed nothing until the
+# working tree was updated too. A destructive wipe deciding what may be purged from an unreviewed,
+# arbitrarily stale file is the same defect class as the column-0 anchor it sat next to; the sibling
+# keep-list (dev_clean_preserved_topics) has read the ref, and refused when it could not, all along.
+#
+# The two files are materialised TOGETHER into one temp dir and the script is run FROM there. That is
+# deliberate: reset-preserved-topics.sh pins its declaration file to "the topics.env beside me" and
+# ignores RPT_TOPICS_ENV when sourced, on purpose -- an ambient override on a destructive path was
+# rejected in its own review -- so the pin is honoured rather than bypassed, and both halves come from
+# the same commit. It is the same bundle Jenkinsfile.kafka-reset and prod-clean-slate.sh ship to a host.
+#
+# EXECUTED, not sourced: the helper ends an unresolvable list with `exit 1`, which from a sourced file
+# kills dev-cleanup.sh itself, mid-clean, with its stderr suppressed by the old `2>/dev/null`. Executing
+# it in a command substitution turns that into an ordinary non-zero status this function can report.
+# RPT_TOPICS_ENV is stripped because executed mode honours it: with it set, a file somebody exported
+# hours ago would decide what the wipe may delete.
+#
+# ENVIRONMENT is passed through untouched. On a dev host it is not "production", so the prod-only list
+# is absent exactly as before; forcing a value here could only ever SHRINK the keep-list, which is the
+# one direction that destroys data.
+#
+# No fetch of its own: every caller is do_clean's WIPE_KAFKA branch, where dev_clean_preserved_topics
+# has already run topics_ref_pin -- a successful fetch, with retries, and the commit id this function
+# then reads -- and refused the wipe outright if either failed. A second fetch would be a second
+# chance for the two keep-lists to come from different commits, which is what the pin exists to stop.
+reset_preserved_from_main() {
+  local ref dir work f out rc
+  # The PINNED commit, not the branch name: a parser and the declarations it parses must come from one
+  # commit, and `git show origin/main:<path>` resolves the ref afresh on every call. Required rather
+  # than defaulted -- a caller that has not pinned has not fetched either, and guessing which commit a
+  # destructive wipe should trust is the whole defect being fixed.
+  ref="${TOPICS_ENV_SHA:-}"
+  if [ -z "$ref" ]; then
+    echo "reset-preserved: TOPICS_ENV_SHA is not set — topics_ref_pin must run first" >&2
+    return 1
+  fi
+  dir="$(dirname "${TOPICS_ENV_REF#*:}")"          # scripts/kafka
+  work="$(mktemp -d "${TMPDIR:-/tmp}/dev-cleanup-rpt.XXXXXX")" || {
+    echo "reset-preserved: cannot create a temp dir" >&2; return 1; }
+  for f in reset-preserved-topics.sh topics.env; do
+    if ! git -C "$DEPLOY_REPO" show "$ref:$dir/$f" > "$work/$f" 2>/dev/null || [ ! -s "$work/$f" ]; then
+      echo "reset-preserved: cannot read $ref:$dir/$f from $DEPLOY_REPO" >&2
+      rm -rf "$work"; return 1
+    fi
+  done
+  # BASH_ENV is unset as well as RPT_TOPICS_ENV: non-interactive bash SOURCES $BASH_ENV before the
+  # script, so a file named there could export RPT_TOPICS_ENV back into the helper and hand the wipe a
+  # well-formed but incomplete keep-list -- `env -u RPT_TOPICS_ENV` alone did not close that (Codex r1).
+  out="$(env -u RPT_TOPICS_ENV -u BASH_ENV -u ENV bash "$work/reset-preserved-topics.sh" 2>&1)"; rc=$?
+  rm -rf "$work"
+  if [ "$rc" -ne 0 ]; then
+    echo "reset-preserved: $ref:$dir/reset-preserved-topics.sh refused to resolve the list (rc=$rc):" >&2
+    printf '%s\n' "$out" | sed 's/^/  /' >&2
+    return 1
+  fi
+  # Non-empty is asserted HERE as well as inside the helper: rc=0 with nothing on stdout would otherwise
+  # hand the wipe an empty keep-list, which is precisely "keep nothing".
+  if [ -z "$(printf '%s' "$out" | tr -d '[:space:]')" ]; then
+    echo "reset-preserved: $ref:$dir resolved an EMPTY list" >&2
+    return 1
+  fi
+  printf '%s\n' $out
 }
 
 # DEV-ONLY overnight estimate topics the wipe must also keep (their owners: the indicator-estimate and
@@ -1115,6 +1215,17 @@ do_clean() {
       return 1; }
     DEV_KEEP="$DEV_KEEP $DEV_ONLY_ESTIMATE_KEEP"
     echo "dev-clean keep list: $DEV_KEEP"
+    # BOTH keep-lists are resolved HERE, before clean_logs and before a single deployment is scaled
+    # down or a mirror paused, so a wipe that cannot say what it must keep refuses while dev is still
+    # whole. The reset-preserved read used to sit at step 4 instead -- after the scale-down and after
+    # pause_dev_mirrors -- where its failure left dev down with the mirrors held paused.
+    RESET_PRESERVED_TOPICS="$(reset_preserved_from_main)" || {
+      echo "REFUSING the wipe: cannot resolve the RESET-PRESERVED keep list from ${TOPICS_ENV_REF%%:*} at $TOPICS_ENV_SHA (reason above). These topics hold data that by declaration cannot be rebuilt, so a wipe that does not know them must not run." >&2
+      return 1; }
+    # The COMMIT is logged, not just the branch: a line saying "origin/main" does not say which
+    # origin/main, and this log is the only record of which declarations a given night's wipe obeyed.
+    echo "keep-lists resolved at ${TOPICS_ENV_REF%%:*} = $TOPICS_ENV_SHA"
+    echo "reset-preserved keep list: $RESET_PRESERVED_TOPICS"
   fi
   clean_logs
   local BEFORE AFTER APPS LIST NEWMAN d i up
@@ -1171,8 +1282,9 @@ for p in json.load(sys.stdin)["items"]:
     # the A5 calibration ledger accrues until the archive carries it to the NAS, and a wipe before that
     # loses the day with no way to notice. dev and prod must agree on what "preserved" means, or the
     # two environments stop being comparable, which is the whole reason the evidence is split by env.
-    # shellcheck source=/dev/null
-    . "$DEPLOY_REPO/scripts/kafka/reset-preserved-topics.sh" 2>/dev/null || RESET_PRESERVED_TOPICS=""
+    # RESET_PRESERVED_TOPICS was resolved at the top of do_clean, at the commit topics_ref_pin pinned,
+    # and the wipe was refused outright if it could not be. It is NOT re-read here: this point is past
+    # the scale-down and past pause_dev_mirrors, so there is no safe way to fail.
     PRESERVE_RE="$(printf '%s\n' $RESET_PRESERVED_TOPICS $DEV_KEEP | sed 's/[.[\*^$()+?{|]/\\&/g' | paste -sd'|' -)"
     [ -n "$PRESERVE_RE" ] && echo "   preserving (reset-preserved + dev-clean keep list): $RESET_PRESERVED_TOPICS $DEV_KEEP"
     local all_topics

@@ -41,11 +41,13 @@ printf '#!/usr/bin/env bash\necho "=== apply-topics-vol-premium-safety: stubbed 
 VALIDATOR="$REPO/scripts/ci/validate-durable-topic-preservation.sh"
 TOPICS="$REPO/scripts/kafka/topics.env"
 CLEANSLATE="$REPO/scripts/ops/offhours-clean-slate.sh"
+DEVCLEAN="$REPO/scripts/ops/dev-cleanup.sh"
 fail=0
 
 reset_copy() {
   cp "$SRC/scripts/kafka/topics.env" "$TOPICS"
   cp "$SRC/scripts/ops/offhours-clean-slate.sh" "$CLEANSLATE"
+  cp "$SRC/scripts/ops/dev-cleanup.sh" "$DEVCLEAN"
   # The VALIDATOR too. Every mutation until now edited only the declarations, so this was never
   # noticed — but a mutation that edits the validator would otherwise leak into every case after it,
   # and those cases would report on a script nobody wrote.
@@ -114,5 +116,45 @@ expect "live is_reset_preserved call deleted" 1 "never BRANCHES"
 
 perl -0pi -e 's/\n\. "\$SCRIPT_DIR\/\.\.\/kafka\/reset-preserved-topics\.sh"\n/\n/' "$CLEANSLATE"
 expect "reset script stops sourcing the helper" 1 "does not source"
+
+# The DEV wipe's three checks. dev-cleanup.sh is an estate-wide reset by the validator's own criterion
+# and was in neither caller loop until 2026-11-06, when it deleted four topics declared preserved
+# because it read its keep-list out of the working tree.
+#
+# Each case breaks ONE of the three independently, because they fail for different reasons and a single
+# mutation that trips all three would not show which one is load-bearing.
+perl -0pi -e 's/\n(\s*)RESET_PRESERVED_TOPICS="\$\(reset_preserved_from_main\)" \|\| \{\n(?:.*?\n)*?\s*return 1; \}\n/\n/' "$DEVCLEAN"
+grep -q 'RESET_PRESERVED_TOPICS="$(reset_preserved_from_main)"' "$DEVCLEAN" \
+  && { echo "  FAIL dev-clean resolve mutation did not apply — the case below would pass vacuously"; fail=1; }
+# The function DEFINITION is deliberately left in place: defined-but-never-called is the bypass this
+# check exists for, and a mutation that deleted the definition too would be caught by the name alone.
+expect "dev wipe stops calling the keep-list resolver" 1 "never CALLS reset_preserved_from_main"
+
+# The 11-06 code itself, restored: source the helper out of the checkout. The resolve call stays, so
+# this case is only caught by the check that looks for the working-tree read.
+perl -0pi -e 's/\n(\s*)PRESERVE_RE="/\n. "\$DEPLOY_REPO\/scripts\/kafka\/reset-preserved-topics.sh" 2>\/dev\/null || RESET_PRESERVED_TOPICS=""\n${1}PRESERVE_RE="/' "$DEVCLEAN"
+grep -q '^\. "\$DEPLOY_REPO/scripts/kafka/reset-preserved-topics.sh"' "$DEVCLEAN" \
+  || { echo "  FAIL dev-clean working-tree mutation did not apply — the case below would pass vacuously"; fail=1; }
+expect "dev wipe sources the helper from the checkout" 1 "out of \$DEPLOY_REPO (the working tree)"
+
+# Resolved and then ignored: the list is read from the right place and never excluded from the delete.
+perl -0pi -e 's/\| \{ \[ -n "\$PRESERVE_RE" \] && grep -vxE "\$PRESERVE_RE" \|\| cat; \}/| cat/' "$DEVCLEAN"
+grep -q 'grep -vxE "\$PRESERVE_RE"' "$DEVCLEAN" \
+  && { echo "  FAIL dev-clean filter mutation did not apply — the case below would pass vacuously"; fail=1; }
+expect "dev wipe ignores the keep-list it resolved" 1 "loaded and then ignored"
+
+# And the named ES delete, which consults no keep-list at all: a preserved topic added to that set is
+# deleted every morning with the declaration intact. spx.basis.state is RESET-PRESERVED on main.
+sed -i.bak "s/^ES_CLEAN_TOPICS='/ES_CLEAN_TOPICS='spx.basis.state /" "$DEVCLEAN"
+grep -q "^ES_CLEAN_TOPICS='spx.basis.state " "$DEVCLEAN" \
+  || { echo "  FAIL ES_CLEAN_TOPICS mutation did not apply — the case below would pass vacuously"; fail=1; }
+expect "a preserved topic inside ES_CLEAN_TOPICS" 1 "in ES_CLEAN_TOPICS, and it is declared preserved"
+
+# ...and the read of that set must FAIL CLOSED, not iterate nothing. Renaming the variable is the
+# cheapest way to make a check that greps for a name report "no finding" instead of "I could not look".
+sed -i.bak "s/^ES_CLEAN_TOPICS='/ES_CLEAN_TOPICS_RENAMED='/" "$DEVCLEAN"
+grep -q "^ES_CLEAN_TOPICS='" "$DEVCLEAN" \
+  && { echo "  FAIL ES_CLEAN_TOPICS rename did not apply — the case below would pass vacuously"; fail=1; }
+expect "ES_CLEAN_TOPICS unreadable" 1 "could not read ES_CLEAN_TOPICS"
 
 [ $fail -eq 0 ] && echo "=== validate-durable-topic-preservation-mutation-test: OK ===" || { echo "=== validate-durable-topic-preservation-mutation-test: FAILED ==="; exit 1; }
