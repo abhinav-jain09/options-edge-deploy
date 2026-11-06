@@ -507,6 +507,8 @@ jobs:
       # ten days, so level-absorption-service crashlooped (EVENTS_TOPIC_RETENTION_MISMATCH) after every clean.
       - name: dev-cleanup applies declared retention.bytes caps
         run: bash scripts/ops/dev-cleanup-retention-bytes-test.sh
+      - name: dev-cleanup finds the Kafka CLI or stops loudly
+        run: bash scripts/ops/dev-cleanup-kafka-cli-test.sh
 
       # A production reset runs the files in ITS checkout, not the ones in main. On 2026-10-13 a clean
       # slate ran from a tree whose apply-topics.sh had uncommitted edits and was 89 lines behind main,

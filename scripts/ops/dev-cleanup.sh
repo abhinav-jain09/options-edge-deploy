@@ -26,15 +26,120 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 
 K="kubectl --context docker-desktop -n options-edge --as=system:serviceaccount:options-edge:jenkins-deployer"
 KK="kubectl --context docker-desktop -n options-edge"
-KT=/Users/abhinav/kafka-4.3.0/bin/kafka-topics.sh
-# kafka-configs is the SIBLING of $KT on purpose: ensure_topics reconciles topic config with the
-# same CLI generation that creates the topics. `--alter --add-config` is INCREMENTAL here (Kafka
-# 2.3+ uses incrementalAlterConfigs for topic entities), so it merges rather than replacing the
-# config set — the legacy whole-set alter is what silently dropped cleanup.policy=compact off 12
-# dealer-ledger changelogs on 2026-08-08.
-KC="$(dirname "$KT")/kafka-configs.sh"
+# The Kafka CLI (kafka-topics.sh / kafka-configs.sh) is RESOLVED, not hard-coded: see resolve_kafka_cli below. KT and KC stay
+# empty until require_kafka_cli has found a usable distribution, and every path that touches Kafka calls it first.
+KT=""
+KC=""
 BS=localhost:19092
 KAFKA_DATA=/Users/abhinav/development/kafka-options-edge/data
+# ---------- the Kafka CLI ----------
+# Where the Kafka command-line tools live differs by machine, and a path that was right once goes stale: the dev broker's own host keeps
+# its distribution at /Users/abhinav/kafka-4.3.0, while the 201 Mac's copy was deleted on 2026-10-27 and left an EMPTY directory of the
+# same name. With a hard-coded path every `kafka-topics` call failed, and because they all run with 2>/dev/null the clean carried on: it
+# listed nothing, deleted nothing, and printed "changelog topics: 0 (0 = success)" -- a measurement that never happened, read as a good
+# one. So: search the known homes (or $KAFKA_CLI_DIR when the operator names one, which is then the ONLY candidate), accept a directory
+# only when its tools exist, run, and report a Kafka version, prove the broker answers, and otherwise STOP with every candidate and why.
+# The candidate list is $DEV_CLEANUP_KAFKA_CLI_SEARCH (whitespace separated) when set, for the test.
+kafka_cli_candidates() {
+  if [ -n "${KAFKA_CLI_DIR:-}" ]; then printf '%s\n' "$KAFKA_CLI_DIR"; return; fi
+  if [ -n "${DEV_CLEANUP_KAFKA_CLI_SEARCH:-}" ]; then printf '%s\n' $DEV_CLEANUP_KAFKA_CLI_SEARCH; return; fi
+  {
+    [ -z "${KAFKA_HOME:-}" ] || printf '%s\n' "$KAFKA_HOME/bin"
+    printf '%s\n' /Users/abhinav/kafka-4.3.0/bin "$HOME/kafka-4.3.0/bin" \
+      /Users/abhinav/development/kafka-options-edge/kafka_2.13-4.3.0/bin /opt/kafka/current/bin /opt/homebrew/opt/kafka/libexec/bin
+  } | awk '!seen[$0]++'
+}
+
+# The CLI scripts need a JDK. Under launchd JAVA_HOME is not inherited, and /usr/bin/java is a stub that fails without a registered JDK.
+kafka_cli_java() {
+  if [ -n "${JAVA_HOME:-}" ] && [ -x "$JAVA_HOME/bin/java" ]; then return 0; fi
+  local j
+  for j in /opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home /opt/homebrew/Cellar/openjdk@21/*/libexec/openjdk.jdk/Contents/Home "$(/usr/libexec/java_home 2>/dev/null)"; do
+    if [ -n "$j" ] && [ -x "$j/bin/java" ]; then JAVA_HOME="$j"; export JAVA_HOME; return 0; fi
+  done
+  return 1
+}
+
+# kafka_cli_usable <bin dir>: prints the Kafka version on stdout and returns 0; otherwise prints WHY on stdout and returns 1.
+kafka_cli_usable() {
+  local d="$1" v
+  [ -d "$d" ] || { echo "not a directory"; return 1; }
+  [ -x "$d/kafka-topics.sh" ] || { echo "no executable kafka-topics.sh in it (an empty or partial distribution)"; return 1; }
+  [ -x "$d/kafka-configs.sh" ] || { echo "no executable kafka-configs.sh beside kafka-topics.sh"; return 1; }
+  [ -f "$d/kafka-run-class.sh" ] || { echo "no kafka-run-class.sh beside kafka-topics.sh (the tools resolve it from their own directory)"; return 1; }
+  kafka_cli_java || { echo "no usable JDK (JAVA_HOME unset or invalid, no openjdk@21 under /opt/homebrew)"; return 1; }
+  v="$("$d/kafka-topics.sh" --version 2>&1)" || { echo "kafka-topics.sh --version failed: $(printf '%s' "$v" | head -1)"; return 1; }
+  printf '%s\n' "$v" | head -1 | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+' || { echo "kafka-topics.sh --version did not print a version: $(printf '%s' "$v" | head -1)"; return 1; }
+  # the tools must be of the broker's generation: incremental config alters, KRaft-only flags and the 4.x kafka-topics options are what this script is written against
+  local major="${v%%.*}"
+  [ "$major" = "${DEV_CLEANUP_KAFKA_MAJOR:-4}" ] || { echo "Kafka CLI version $(printf '%s' "$v" | head -1) is not the expected major ${DEV_CLEANUP_KAFKA_MAJOR:-4} (DEV_CLEANUP_KAFKA_MAJOR)"; return 1; }
+  printf '%s\n' "$v" | head -1
+}
+
+# Sets KT and KC to the first usable candidate. On failure prints every candidate with its reason and returns 1.
+resolve_kafka_cli() {
+  local d why tried="" ver
+  while IFS= read -r d; do
+    [ -n "$d" ] || continue
+    if ver="$(kafka_cli_usable "$d")"; then
+      KT="$d/kafka-topics.sh"; KC="$d/kafka-configs.sh"
+      echo "dev-cleanup: Kafka CLI $d (version ${ver%% *})"
+      return 0
+    fi
+    tried="$tried
+    $d -- $ver"
+  done <<EOF_CANDIDATES
+$(kafka_cli_candidates)
+EOF_CANDIDATES
+  echo "dev-cleanup: NO USABLE KAFKA CLI. Tried:$tried" >&2
+  echo "dev-cleanup: install a Kafka distribution on this machine or run this where the dev broker's CLI is, or set KAFKA_CLI_DIR to its bin directory." >&2
+  return 1
+}
+
+# The broker must answer too: an unreachable one (a dead tunnel to localhost:19092) answers --list with an error that the callers' 2>/dev/null
+# would read as "no topics". Bounded, so a dead tunnel costs seconds and not the client's default minute.
+kafka_broker_answers() {
+  local props rc
+  props="$(mktemp -t oe-kafka-props)" || return 1
+  printf 'request.timeout.ms=8000\ndefault.api.timeout.ms=15000\n' > "$props"
+  "$KT" --bootstrap-server "$BS" --command-config "$props" --list >/dev/null 2>&1; rc=$?
+  rm -f "$props"
+  return $rc
+}
+
+# Called first by every path that touches Kafka. Stops the whole script (exit 1) rather than let a clean run blind.
+require_kafka_cli() {
+  [ -z "$KT" ] || return 0
+  resolve_kafka_cli || exit 1
+  if ! kafka_broker_answers; then
+    echo "dev-cleanup: the Kafka broker at $BS does not answer kafka-topics --list (dead tunnel or broker down); refusing to run blind." >&2
+    KT=""; KC=""
+    exit 1
+  fi
+}
+
+# The live topic list, with retries: prints it and returns 0, or prints nothing and returns 1. An error and an empty answer are both failures (a broker
+# always holds __consumer_offsets and _schemas), so a caller never mistakes "could not list" for "no topics". A transient tunnel or broker hiccup after the
+# start-up check costs a few seconds, not a half-finished clean.
+kafka_list_topics() {
+  local n=0 tries="${DEV_CLEANUP_LIST_RETRIES:-3}" out
+  while [ "$n" -lt "$tries" ]; do
+    if out="$("$KT" --bootstrap-server "$BS" --list 2>/dev/null)" && [ -n "$out" ]; then printf '%s\n' "$out"; return 0; fi
+    n=$((n + 1))
+    [ "$n" -ge "$tries" ] || sleep "${DEV_CLEANUP_LIST_RETRY_SLEEP:-5}"
+  done
+  return 1
+}
+
+# Topics matching an ERE ($2 = "v" to count the others). Prints UNKNOWN instead of a number when the list itself could not be read: a broker
+# always holds __consumer_offsets and _schemas, so an error or an empty list is a failed measurement, never a count of zero.
+topic_count() {
+  local out
+  out="$("$KT" --bootstrap-server "$BS" --list 2>/dev/null)" || { echo "UNKNOWN (kafka-topics --list failed)"; return 1; }
+  [ -n "$out" ] || { echo "UNKNOWN (kafka-topics --list printed nothing)"; return 1; }
+  if [ "${2:-}" = v ]; then printf '%s\n' "$out" | grep -vcE "$1" || true; else printf '%s\n' "$out" | grep -cE "$1" || true; fi
+}
+
 KEEP='keycloak'                                          # deployments to leave running (regex)
 # ibkr-feed-service REMOVED 2026-07-29: now dev-only and REQUIRED up (SPX cash-index tier-1 source
 # for both envs, requirement rev4).
@@ -551,6 +656,7 @@ ensure_dev_only_estimate_topics() {
 }
 
 ensure_topics() {
+  [ -n "$KT" ] || require_kafka_cli
   git -C "$DEPLOY_REPO" fetch -q origin main 2>/dev/null || true
   local tenv; tenv="$(git -C "$DEPLOY_REPO" show "$TOPICS_ENV_REF" 2>/dev/null)"
   if [ -n "$tenv" ]; then
@@ -559,7 +665,10 @@ ensure_topics() {
     # One --list, then create only what is missing (in parallel). A failed list falls back to creating every
     # declared topic: --if-not-exists makes that safe, only slower. Config of EXISTING topics is the
     # reconcile pass's job below, exactly as before.
-    existing="$($KT --bootstrap-server $BS --list 2>/dev/null)" || existing=""
+    # A list that cannot be read is NOT "no topics": creating "everything" against a broker that did not answer would only hide that it did not.
+    existing="$(kafka_list_topics)" || {
+      echo "  ERROR: kafka-topics --list failed or printed nothing after retries ($BS); no topic was created or reconciled. The es4 mirrors stay paused and apps will create their topics on startup -- re-run 'dev-cleanup.sh topics' once the broker answers." >&2
+      return 1; }
     n=$(for spec in $OPTIONS_EDGE_TOPICS; do
       name="${spec%%:*}"
       printf '%s\n' "$existing" | grep -qxF "$name" && continue
@@ -574,7 +683,7 @@ ensure_topics() {
     ensure_partition_only_topics
     reconcile_declared_topics
     ensure_dev_only_estimate_topics
-    echo "  topics present now: $($KT --bootstrap-server $BS --list 2>/dev/null | grep -vcE '^__|^_schemas')"
+    echo "  topics present now: $(topic_count '^__|^_schemas' v)"
   else
     echo "  WARNING: could not read deploy topics.env ($DEPLOY_REPO $TOPICS_ENV_REF) — apps will create their topics on startup (slower to READY)."
     return 1   # resume_dev_mirrors_if_declared keeps the mirrors paused: nothing was created at its declared shape
@@ -706,6 +815,7 @@ apply_internal_topic_configs() {
 # service stays at 0 until the 06:15 ET full start. (These persist/serve ES — they need a producer for
 # live ES data; see the note where OVERNIGHT_SET is defined.)
 do_start_overnight() {
+  require_kafka_cli
   ensure_topics; resume_dev_mirrors_if_declared $?
   echo "Overnight start: ES-tracking set only ($OVERNIGHT_SET); all other services stay at 0 until 06:15 ET."
   local d
@@ -723,6 +833,7 @@ do_start_overnight() {
 # ---------- ES DOWN: at ~09:17 ET (before the 09:30 open) scale the overnight ES services to 0 ----------
 # The overnight ES session is over; feed-gateway + web stay up for the SPX day session (untouched here).
 do_es_down() {
+  require_kafka_cli
   echo "ES-down (pre-open): scaling overnight ES services to 0 ($ES_DOWN_SET) ..."
   local d
   for d in $ES_DOWN_SET; do
@@ -803,6 +914,7 @@ verify_start_readiness() {
 }
 
 do_start() {
+  require_kafka_cli
   ensure_topics; resume_dev_mirrors_if_declared $?
   # Scale UP everything EXCEPT the DEV-disabled set. This is load-bearing: if we scaled ALL to 1 and
   # re-zeroed the disabled ones afterwards, databento-timewarp-snapshot-replay would come up in the gap
@@ -848,7 +960,7 @@ do_start() {
   # Root-cause guard: _schemas (the Schema Registry backing store) must be compact + INFINITE retention.
   # A stray finite retention.ms on it is what silently ages out schemas → SR wipe → gateway 40403 →
   # blank UI (dev-schema-registry-wipe-gateway-wedge). Enforce compact + retention.ms=-1 every start.
-  /Users/abhinav/kafka-4.3.0/bin/kafka-configs.sh --bootstrap-server "$BS" --alter --entity-type topics \
+  "$KC" --bootstrap-server "$BS" --alter --entity-type topics \
     --entity-name _schemas --add-config "retention.ms=-1,cleanup.policy=compact" >/dev/null 2>&1 || true
   apply_internal_topic_configs
   local gwerr; gwerr=$($KK logs deploy/feed-gateway-service -c feed-gateway --since=60s 2>/dev/null | grep -cE '40403|Schema .* not found' || true)
@@ -960,6 +1072,7 @@ DEV_ONLY_ESTIMATE_KEEP="options.indicators.estimate.bars options.indicators.esti
 
 do_clean() {
   clean_guard || return 1
+  require_kafka_cli   # before anything is stopped or deleted: a clean must not run blind
   echo "=== dev FULL clean (logs + data)  $(date) ==="
   local DEV_KEEP=""
   if [ "$WIPE_KAFKA" = true ]; then
@@ -1028,7 +1141,12 @@ for p in json.load(sys.stdin)["items"]:
     . "$DEPLOY_REPO/scripts/kafka/reset-preserved-topics.sh" 2>/dev/null || RESET_PRESERVED_TOPICS=""
     PRESERVE_RE="$(printf '%s\n' $RESET_PRESERVED_TOPICS $DEV_KEEP | sed 's/[.[\*^$()+?{|]/\\&/g' | paste -sd'|' -)"
     [ -n "$PRESERVE_RE" ] && echo "   preserving (reset-preserved + dev-clean keep list): $RESET_PRESERVED_TOPICS $DEV_KEEP"
-    $KT --bootstrap-server $BS --list 2>/dev/null | grep -vE '^__|^_schemas' \
+    local all_topics
+    all_topics="$(kafka_list_topics)" || {
+      echo "REFUSING the wipe: kafka-topics --list failed or printed nothing after retries, so there is nothing to prove was deleted." >&2
+      echo "  State now: logs cleaned, apps scaled down, Kafka NOT wiped. 'dev-cleanup.sh start' brings dev back up; re-run 'dev-cleanup.sh now' once the broker answers." >&2
+      return 1; }
+    printf '%s\n' "$all_topics" | grep -vE '^__|^_schemas' \
       | { [ -n "$PRESERVE_RE" ] && grep -vxE "$PRESERVE_RE" || cat; } \
       | xargs -P 8 -I{} $KT --bootstrap-server $BS --delete --topic {} >/dev/null 2>&1
     sleep 8   # let the deletions settle before recreating (avoid create-vs-delete races)
@@ -1057,13 +1175,12 @@ for p in json.load(sys.stdin)["items"]:
 
   # 5. verify + report
   sleep 10
-  LIST=$($KT --bootstrap-server $BS --list 2>/dev/null)
   AFTER=$(du -sh "$KAFKA_DATA" 2>/dev/null | awk '{print $1}')
   DFREE=$(df -h /System/Volumes/Data 2>/dev/null | tail -1 | awk '{print $4" free ("$5" full)"}')
   echo "=== RESULT ==="
   echo "  Kafka data:         $BEFORE -> $AFTER   (data purged)"
-  echo "  changelog topics:   $(echo "$LIST" | grep -c changelog)   (0 = success)"
-  echo "  repartition topics: $(echo "$LIST" | grep -c repartition) (0 = success)"
+  echo "  changelog topics:   $(topic_count changelog)   (0 = success)"
+  echo "  repartition topics: $(topic_count repartition) (0 = success)"
   echo "  streams-state PVCs:  reset to empty"
   echo "  logs:                trimmed"
   echo "  disk after thin:     ${DFREE:-?}"
@@ -1202,6 +1319,7 @@ PY
     # older than delete.retention.ms, can legitimately lose it. So: safe for the declared contract,
     # not unconditionally safe for an arbitrary reader — check what reads a topic before widening
     # this to one whose history someone depends on.
+    require_kafka_cli
     ensure_topics; resume_dev_mirrors_if_declared $?
     ;;
   *) echo "usage: dev-cleanup [ | now | start | overnight | topics | logs ]  (no arg = calendar-gated auto for launchd)"; exit 2 ;;
