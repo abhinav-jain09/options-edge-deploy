@@ -19,7 +19,7 @@ WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 
 # fn <name> -> the function's text, from its "name() {" line to the first column-0 "}".
 fn() { awk -v n="$1" '$0 ~ "^"n"\\(\\) \\{" {p=1} p {print} p && /^\}/ {exit}' "$SRC"; }
-for f in topic_desired reconcile_declared_topics ensure_topics create_topics_parallel; do
+for f in topic_desired reconcile_declared_topics ensure_topics create_topics_parallel kafka_list_topics; do
   body="$(fn "$f")"
   [ -n "$body" ] || { echo "FAIL: function $f not found in $SRC" >&2; exit 1; }
   printf '%s\n' "$body"
@@ -50,7 +50,7 @@ OPTIONS_EDGE_TOPIC_RETENTION_BYTES_OVERRIDES="t.cap=81675540 t.unl=-1"'
 # run_case <existing topics, one per line> <describe lines> -> sets CREATED / ALTERED / OUT
 run_case() {
   export FAKE_DIR="$WORK/run.$RANDOM"; mkdir -p "$FAKE_DIR"
-  printf '%s\n' "$1" > "$FAKE_DIR/list"
+  printf '%s\n__consumer_offsets\n' "$1" > "$FAKE_DIR/list"   # a broker always holds its system topics, even when dev was just wiped
   printf '%s\n' "$2" > "$FAKE_DIR/describe"
   : > "$FAKE_DIR/created"; : > "$FAKE_DIR/altered"
   OUT="$(

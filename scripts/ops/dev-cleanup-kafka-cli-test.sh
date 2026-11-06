@@ -17,7 +17,7 @@ WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 [ -f "$SRC" ] || { echo "FAIL: $SRC missing" >&2; exit 1; }
 
 fn() { awk -v n="$1" '$0 ~ "^"n"\\(\\) \\{" {p=1} p {print} p && /^\}/ {exit}' "$SRC"; }
-for f in kafka_cli_candidates kafka_cli_java kafka_cli_usable resolve_kafka_cli kafka_broker_answers require_kafka_cli topic_count; do
+for f in kafka_cli_candidates kafka_cli_java kafka_cli_usable resolve_kafka_cli kafka_broker_answers require_kafka_cli kafka_list_topics topic_count; do
   body="$(fn "$f")"
   [ -n "$body" ] || { echo "FAIL: function $f not found in $SRC" >&2; exit 1; }
   printf '%s\n' "$body"
@@ -44,6 +44,7 @@ mkdir -p "$WORK/emptydir"                       # the 201 Mac: the directory exi
 mkdist "$WORK/noversion/bin" FAIL               # tools exist but do not run
 mkdist "$WORK/garbage/bin" "Error: no JDK"
 mkdist "$WORK/partial/bin"; rm -f "$WORK/partial/bin/kafka-run-class.sh"
+mkdist "$WORK/major3/bin" 3.9.0                 # a real, working CLI of another generation
 
 # run_case <env assignments...> -> OUT (stdout+stderr), RC, and KT/KC as seen after
 run_case() {
@@ -74,6 +75,13 @@ for want in "$WORK/emptydir -- no executable kafka-topics.sh" "$WORK/noversion/b
 done
 case "$OUT" in *"KT=$WORK"*) bad "KT was set anyway: $OUT" ;; *) ok "KT stays empty" ;; esac
 
+echo "2b. a working CLI of another Kafka generation is refused, with the reason (not accepted because --version prints a number)"
+run_case DEV_CLEANUP_KAFKA_CLI_SEARCH="$WORK/major3/bin"
+[ "$RC" != 0 ] && ok "refused" || bad "accepted a 3.x CLI: $OUT"
+case "$OUT" in *"is not the expected major 4"*) ok "names the expected major" ;; *) bad "no major message: $OUT" ;; esac
+run_case DEV_CLEANUP_KAFKA_CLI_SEARCH="$WORK/major3/bin" DEV_CLEANUP_KAFKA_MAJOR=3 LIST_OUT="a"
+[ "$RC" = 0 ] && ok "DEV_CLEANUP_KAFKA_MAJOR=3 accepts it deliberately" || bad "override not honoured: $OUT"
+
 echo "3. an explicit KAFKA_CLI_DIR is the ONLY candidate: a bad one is an error, never a silent fall-through to a good one"
 run_case KAFKA_CLI_DIR="$WORK/emptydir" DEV_CLEANUP_KAFKA_CLI_SEARCH="$WORK/good/bin"
 [ "$RC" != 0 ] && ok "refused" || bad "fell through: $OUT"
@@ -87,7 +95,7 @@ case "$OUT" in *"does not answer kafka-topics --list"*) ok "says the broker does
 
 echo "5. topic_count never turns a failed measurement into a 0"
 tc() { # <env assignments...> -- <topic_count args...>
-  local envs=() 
+  local envs=()
   while [ "$1" != -- ]; do envs+=("$1"); shift; done; shift
   env -i PATH="$PATH" HOME="$WORK/home" BS=fake:9092 KT="$WORK/good/bin/kafka-topics.sh" "${envs[@]}" bash -c '. "$1"; shift; topic_count "$@"; echo "rc=$?"' _ "$WORK/functions.sh" "$@" 2>&1
 }
@@ -102,6 +110,26 @@ case "$R" in "2"*"rc=0") ok "the inverted count (topics present now) excludes th
 R="$(tc LIST_OUT="__consumer_offsets x" -- changelog)"
 case "$R" in "0"*"rc=0") ok "a genuine zero (list read, none match) is still a 0" ;; *) bad "genuine zero: $R" ;; esac
 
+echo "5b. kafka_list_topics: retries a transient failure, and an error or an empty answer is never an empty list"
+fl() { env -i PATH="$PATH" HOME="$WORK/home" BS=fake:9092 KT="$WORK/good/bin/kafka-topics.sh" DEV_CLEANUP_LIST_RETRY_SLEEP=0 "$@" bash -c '. "$1"; kafka_list_topics; echo "rc=$?"' _ "$WORK/functions.sh" 2>&1; }
+R="$(fl LIST_OUT="__consumer_offsets a b")"
+case "$R" in *"a"*"rc=0") ok "a real list is returned, rc 0" ;; *) bad "list: $R" ;; esac
+R="$(fl LIST_RC=1)"
+case "$R" in "rc=1") ok "a failed list: nothing on stdout, rc 1" ;; *) bad "failed list: $R" ;; esac
+R="$(fl LIST_OUT=)"
+case "$R" in "rc=1") ok "an empty answer: nothing on stdout, rc 1" ;; *) bad "empty list: $R" ;; esac
+# a broker that fails the first two calls and answers the third
+mkdir -p "$WORK/flaky/bin"; cp "$WORK/good/bin/"* "$WORK/flaky/bin/"
+cat > "$WORK/flaky/bin/kafka-topics.sh" <<FLAKY
+#!/usr/bin/env bash
+n=\$(cat "$WORK/flaky/n" 2>/dev/null || echo 0); n=\$((n+1)); echo \$n > "$WORK/flaky/n"
+[ \$n -ge 3 ] || exit 1
+echo __consumer_offsets; echo t
+FLAKY
+chmod +x "$WORK/flaky/bin/kafka-topics.sh"
+R="$(env -i PATH="$PATH" HOME="$WORK/home" BS=fake:9092 KT="$WORK/flaky/bin/kafka-topics.sh" DEV_CLEANUP_LIST_RETRY_SLEEP=0 bash -c '. "$1"; kafka_list_topics; echo "rc=$?"' _ "$WORK/functions.sh" 2>&1)"
+case "$R" in *"t"*"rc=0") ok "two transient failures then an answer: returned after retries" ;; *) bad "flaky: $R" ;; esac
+
 echo "6. the script has no hard-coded CLI path left to go stale"
 hard="$(grep -n '/kafka-4\.3\.0/bin/kafka-[a-z-]*\.sh' "$SRC" | grep -v '^[0-9]*:[[:space:]]*#' | grep -v 'printf' || true)"
 [ -z "$hard" ] && ok "no command invokes a fixed /kafka-4.3.0/bin/kafka-*.sh" || bad "hard-coded: $hard"
@@ -110,5 +138,12 @@ for mode_fn in do_start do_start_overnight do_es_down do_clean; do
 done
 fn ensure_topics | grep -q 'require_kafka_cli' && ok "ensure_topics requires the CLI first" || bad "ensure_topics does not call require_kafka_cli"
 if sed -n '/^  topics)/,/^    ;;/p' "$SRC" | grep -q 'require_kafka_cli'; then ok "the topics mode requires the CLI first"; else bad "the topics mode does not call require_kafka_cli"; fi
+
+fn do_clean | grep -q 'kafka_list_topics' && ok "the wipe lists topics through kafka_list_topics (a failed list refuses the wipe)" || bad "do_clean does not use kafka_list_topics"
+if fn do_clean | grep -n -m1 'require_kafka_cli' | grep -q .; then
+  first_req="$(fn do_clean | grep -n 'require_kafka_cli' | head -1 | cut -d: -f1)"; first_stop="$(fn do_clean | grep -n . | grep -v 'require_kafka_cli' | grep -E '^[0-9]+:[[:space:]]*[^#[:space:]].*(scale|clean_logs|delete|rm -)' | head -1 | cut -d: -f1)"
+  { [ -z "$first_stop" ] || [ "$first_req" -lt "$first_stop" ]; } && ok "do_clean requires the CLI before its first scale/clean/delete step" || bad "require_kafka_cli (line $first_req) comes after a destructive step (line $first_stop)"
+fi
+fn ensure_topics | grep -q 'existing=""' && bad "ensure_topics still turns a failed list into an empty one" || ok "ensure_topics no longer reads a failed list as no topics"
 
 [ "$fails" = 0 ] && { echo "dev-cleanup-kafka-cli-test: all ok"; exit 0; } || { echo "dev-cleanup-kafka-cli-test: $fails FAILED"; exit 1; }

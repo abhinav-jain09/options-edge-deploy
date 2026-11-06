@@ -70,6 +70,9 @@ kafka_cli_usable() {
   kafka_cli_java || { echo "no usable JDK (JAVA_HOME unset or invalid, no openjdk@21 under /opt/homebrew)"; return 1; }
   v="$("$d/kafka-topics.sh" --version 2>&1)" || { echo "kafka-topics.sh --version failed: $(printf '%s' "$v" | head -1)"; return 1; }
   printf '%s\n' "$v" | head -1 | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+' || { echo "kafka-topics.sh --version did not print a version: $(printf '%s' "$v" | head -1)"; return 1; }
+  # the tools must be of the broker's generation: incremental config alters, KRaft-only flags and the 4.x kafka-topics options are what this script is written against
+  local major="${v%%.*}"
+  [ "$major" = "${DEV_CLEANUP_KAFKA_MAJOR:-4}" ] || { echo "Kafka CLI version $(printf '%s' "$v" | head -1) is not the expected major ${DEV_CLEANUP_KAFKA_MAJOR:-4} (DEV_CLEANUP_KAFKA_MAJOR)"; return 1; }
   printf '%s\n' "$v" | head -1
 }
 
@@ -113,6 +116,19 @@ require_kafka_cli() {
     KT=""; KC=""
     exit 1
   fi
+}
+
+# The live topic list, with retries: prints it and returns 0, or prints nothing and returns 1. An error and an empty answer are both failures (a broker
+# always holds __consumer_offsets and _schemas), so a caller never mistakes "could not list" for "no topics". A transient tunnel or broker hiccup after the
+# start-up check costs a few seconds, not a half-finished clean.
+kafka_list_topics() {
+  local n=0 tries="${DEV_CLEANUP_LIST_RETRIES:-3}" out
+  while [ "$n" -lt "$tries" ]; do
+    if out="$("$KT" --bootstrap-server "$BS" --list 2>/dev/null)" && [ -n "$out" ]; then printf '%s\n' "$out"; return 0; fi
+    n=$((n + 1))
+    [ "$n" -ge "$tries" ] || sleep "${DEV_CLEANUP_LIST_RETRY_SLEEP:-5}"
+  done
+  return 1
 }
 
 # Topics matching an ERE ($2 = "v" to count the others). Prints UNKNOWN instead of a number when the list itself could not be read: a broker
@@ -649,7 +665,10 @@ ensure_topics() {
     # One --list, then create only what is missing (in parallel). A failed list falls back to creating every
     # declared topic: --if-not-exists makes that safe, only slower. Config of EXISTING topics is the
     # reconcile pass's job below, exactly as before.
-    existing="$($KT --bootstrap-server $BS --list 2>/dev/null)" || existing=""
+    # A list that cannot be read is NOT "no topics": creating "everything" against a broker that did not answer would only hide that it did not.
+    existing="$(kafka_list_topics)" || {
+      echo "  ERROR: kafka-topics --list failed or printed nothing after retries ($BS); no topic was created or reconciled. The es4 mirrors stay paused and apps will create their topics on startup -- re-run 'dev-cleanup.sh topics' once the broker answers." >&2
+      return 1; }
     n=$(for spec in $OPTIONS_EDGE_TOPICS; do
       name="${spec%%:*}"
       printf '%s\n' "$existing" | grep -qxF "$name" && continue
@@ -1123,8 +1142,10 @@ for p in json.load(sys.stdin)["items"]:
     PRESERVE_RE="$(printf '%s\n' $RESET_PRESERVED_TOPICS $DEV_KEEP | sed 's/[.[\*^$()+?{|]/\\&/g' | paste -sd'|' -)"
     [ -n "$PRESERVE_RE" ] && echo "   preserving (reset-preserved + dev-clean keep list): $RESET_PRESERVED_TOPICS $DEV_KEEP"
     local all_topics
-    all_topics="$($KT --bootstrap-server $BS --list 2>/dev/null)" && [ -n "$all_topics" ] || {
-      echo "REFUSING the wipe: kafka-topics --list failed or printed nothing, so there is nothing to prove was deleted." >&2; return 1; }
+    all_topics="$(kafka_list_topics)" || {
+      echo "REFUSING the wipe: kafka-topics --list failed or printed nothing after retries, so there is nothing to prove was deleted." >&2
+      echo "  State now: logs cleaned, apps scaled down, Kafka NOT wiped. 'dev-cleanup.sh start' brings dev back up; re-run 'dev-cleanup.sh now' once the broker answers." >&2
+      return 1; }
     printf '%s\n' "$all_topics" | grep -vE '^__|^_schemas' \
       | { [ -n "$PRESERVE_RE" ] && grep -vxE "$PRESERVE_RE" || cat; } \
       | xargs -P 8 -I{} $KT --bootstrap-server $BS --delete --topic {} >/dev/null 2>&1
