@@ -2,7 +2,7 @@
 
 Covers: the base and the dev overlay (source render, committed slice) at replicas 1 / flag "true" / the declared env / health port 8080 / the emptyDir state mount, the seven topics' declared shapes
 in topics.env (reset classes, the events byte cap, the four pure-compact topics at -1/-1), the topic barrier (scripts/kafka/ensure-es-liquidity-wall-topics.sh) against the stateful stand-in
-tests/fake_kafka_cli.py, the fixed-id schema map (3401-3407, shared with no other map), the schema-manifest entries (family block, hashes equal to the snapshots, the depth consumer binding),
+tests/fake_kafka_cli.py, the fixed-id schema map (3401-3408: the dashboard has version 1 under 3403 and version 2 under 3408; shared with no other map), the schema-manifest entries (family block, hashes equal to the snapshots, the depth consumer binding),
 the registration of the service everywhere a dev-only service must be, and the absence of any production wiring."""
 from __future__ import annotations
 
@@ -30,9 +30,10 @@ SEVEN_DAYS, ONE_DAY, CAP = "604800000", "86400000", "268435456"
 SHAPES = {CLOSURES: ("delete", SEVEN_DAYS, None), BUCKETS: ("delete", ONE_DAY, None), DASHBOARD: ("compact", "-1", "-1"), EVENTS: ("delete", "-1", CAP),
           STATE: ("compact", "-1", "-1"), SNAPSHOT: ("compact", "-1", "-1"), VOICE: ("compact", "-1", "-1")}
 NS = "com.optionsedge.contracts.liquiditywall"
-IDS = {"LiquidityWallClosure": 3401, "LiquidityWallBucket": 3402, "LiquidityWallDashboard": 3403, "LiquidityWallEvent": 3404, "LiquidityWallState": 3405,
+IDS = {"LiquidityWallClosure": 3401, "LiquidityWallBucket": 3402, "LiquidityWallDashboard": 3408, "LiquidityWallEvent": 3404, "LiquidityWallState": 3405,
        "LiquidityWallSnapshot": 3406, "LiquidityWallVoice": 3407}
 TOPIC_OF = dict(zip(IDS, TOPICS))
+DASHBOARD_V1_ID, DASHBOARD_V2_ID = 3403, 3408
 JAR = ROOT / "tools/schema-governance/schema-governance-tool.jar"
 
 
@@ -300,9 +301,19 @@ class SchemaMapAndManifest(unittest.TestCase):
     def rows(self):
         return [tuple(l.split("|")) for l in self.MAP.read_text().splitlines() if l.strip() and not l.lstrip().startswith("#")]
 
-    def test_the_map_is_exactly_the_seven_records_and_ids(self):
-        self.assertEqual([(s, int(i), f) for s, i, f in self.rows()], [(f"{NS}.{n}", i, f"{n}.avsc") for n, i in IDS.items()])
-        self.assertIn("Ids 3401-3407 are the ES liquidity wall block", self.MAP.read_text())
+    def test_the_map_is_the_seven_records_and_ids_with_the_dashboard_in_two_versions(self):
+        rows = self.rows()
+        dash = f"{NS}.LiquidityWallDashboard"
+        # version 1 rows (the frozen archival file for 3403), then the version-2 row after all of them (the line-health.map format)
+        self.assertEqual([r for r in rows if len(r) == 3], [(f"{NS}.{n}", str(i), f"{n}.avsc") for n, i in IDS.items() if n != "LiquidityWallDashboard"])
+        self.assertEqual([r for r in rows if len(r) == 4],
+                         [(dash, str(DASHBOARD_V1_ID), "v1/LiquidityWallDashboard.avsc", "1"), (dash, str(DASHBOARD_V2_ID), "LiquidityWallDashboard.avsc", "2")])
+        self.assertEqual(rows[-1], (dash, str(DASHBOARD_V2_ID), "LiquidityWallDashboard.avsc", "2"), "the version-2 row follows every version-1 row")
+        self.assertEqual(rows.index((dash, "3403", "v1/LiquidityWallDashboard.avsc", "1")) < rows.index(rows[-1]), True)
+        text = self.MAP.read_text()
+        self.assertIn("Ids 3401-3408 are the ES liquidity wall block", text)
+        self.assertIn("REGISTER 3408 BEFORE the wall service image", text)
+        self.assertIn("LiquidityWallDashboard (3408; 3403 archival version 1)", read("scripts/kafka/topics.env"))
 
     def test_no_id_is_shared_with_any_other_map(self):
         ours = {int(r[1]) for r in self.rows()}
@@ -315,19 +326,25 @@ class SchemaMapAndManifest(unittest.TestCase):
 
     def test_the_manifest_carries_the_family_block_the_seven_dev_entries_and_the_depth_consumer_binding(self):
         m = json.loads(read("schema-manifest/manifest.json"))
-        self.assertEqual(m["familyBlocks"]["liquiditywall"], [[3401, 3407]])
+        self.assertEqual(m["familyBlocks"]["liquiditywall"], [[3401, 3408]])
         for fam, ranges in m["familyBlocks"].items():
             if fam != "liquiditywall":
                 for lo, hi in ranges:
-                    self.assertTrue(hi < 3401 or lo > 3407, f"{fam} overlaps the liquiditywall block")
-        by_subject = {e["subject"]: e for e in m["entries"] if e.get("kind") == "MIRRORED"}
+                    self.assertTrue(hi < 3401 or lo > 3408, f"{fam} overlaps the liquiditywall block")
+        by_subject = {e["subject"]: e for e in m["entries"] if e.get("kind") == "MIRRORED" and e.get("version", 1) == 1}
+        dash_v1 = by_subject[f"{NS}.LiquidityWallDashboard"]
+        dash_v2 = next(e for e in m["entries"] if e.get("id") == DASHBOARD_V2_ID)
+        gateway = [{"service": "feed-gateway", "accepts": [DASHBOARD_V1_ID, DASHBOARD_V2_ID], "environments": ["dev"]}]
         for name, sid in IDS.items():
-            e = by_subject[f"{NS}.{name}"]
-            self.assertEqual((e["version"], e["id"], e["family"], e["environments"]), (1, sid, "liquiditywall", ["dev"]), name)
+            e = by_subject[f"{NS}.{name}"] if name != "LiquidityWallDashboard" else dash_v2
+            version_one = name != "LiquidityWallDashboard"
+            self.assertEqual((e["version"], e["id"], e["family"], e["environments"]), (1 if version_one else 2, sid, "liquiditywall", ["dev"]), name)
             self.assertEqual(e["source"], {"kind": "FILE", "repo": "contracts", "path": f"schemas-registry/liquiditywall/{name}.avsc"}, name)
             self.assertEqual(e["topics"], [{"name": TOPIC_OF[name], "kind": "data"}], name)
             self.assertEqual(e["producers"], [{"service": SVC, "environments": ["dev"]}], name)
-            self.assertEqual(e["consumers"], [], name)
+            # the dashboard is read by the feed gateway (both ids); the other entries' consumer bindings (es-liquidity-engine reads events and state) belong to other changes
+            if name == "LiquidityWallDashboard":
+                self.assertEqual(e["consumers"], gateway, name)
             self.assertNotIn("pending", e, name)
             self.assertNotIn("baseline", e, name)
             snapshot = ROOT / "schema-manifest/schemas" / e["schemaFile"]
@@ -335,6 +352,17 @@ class SchemaMapAndManifest(unittest.TestCase):
             text = snapshot.read_text()
             self.assertEqual(text, json.dumps(json.loads(text), separators=(",", ":"), ensure_ascii=False), f"{name}: one-line compact JSON, no trailing newline")
             self.assertEqual(json.loads(text)["name"], name)
+        # the archival version 1 stays registered on dev under 3403: frozen file, superseded, nothing writes it, the gateway still reads it
+        self.assertEqual((dash_v1["version"], dash_v1["id"], dash_v1["schemaFile"]), (1, DASHBOARD_V1_ID, f"{NS}.LiquidityWallDashboard/v1.avsc"))
+        self.assertEqual(dash_v1["source"]["path"], "schemas-registry/liquiditywall/v1/LiquidityWallDashboard.avsc")
+        self.assertEqual((dash_v1["producers"], dash_v1["consumers"]), ([], gateway))
+        self.assertIn("superseded by version 2 id 3408", dash_v1["retainedReason"])
+        self.assertEqual(dash_v2["schemaFile"], f"{NS}.LiquidityWallDashboard/v2.avsc")
+        v1, v2 = (json.loads((ROOT / "schema-manifest/schemas" / e["schemaFile"]).read_text()) for e in (dash_v1, dash_v2))
+        wall = lambda sch: next(f for f in sch["fields"] if f["name"] == "walls")["type"]["items"]["fields"]
+        self.assertEqual([f["name"] for f in wall(v2)][-3:], ["sizeNow", "sizeTape", "wordState"])
+        self.assertEqual(wall(v2)[:-3], wall(v1), "version 2 only appends the three wall fields")
+        self.assertTrue(all(f["default"] is None for f in wall(v2)[-3:]))
         depth = by_subject["es.rithmic.depth-value"]
         self.assertEqual(depth["id"], 3301)
         self.assertIn({"service": SVC, "accepts": [3301], "environments": ["dev"]}, depth["consumers"])
