@@ -34,7 +34,7 @@ class WebImmutableAssetsDevTest(unittest.TestCase):
         self.assertEqual(['ReadWriteOnce'], claim['spec']['accessModes'])
         self.assertEqual('2Gi', claim['spec']['resources']['requests']['storage'])
 
-    def test_preparation_stays_disabled_and_app_volume_is_read_only(self):
+    def test_activation_enabled_and_app_volume_is_read_only(self):
         pod = resource(self.web, 'Deployment', 'options-edge-web')['spec']['template']['spec']
         app = next(c for c in pod['containers'] if c['name'] == 'web')
         init = next(c for c in pod['initContainers'] if c['name'] == 'publish-public-assets')
