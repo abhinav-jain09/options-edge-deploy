@@ -26,12 +26,12 @@ def scope(service, environment, manifest=None, exemptions=None):
 
 
 class StatusSnapshot(unittest.TestCase):
-    def test_the_status_snapshot_has_system_record_count_as_field_four(self):
+    def test_the_status_snapshot_follows_contracts_0_80_0_with_epoch_then_sequence_then_count(self):
         text = (ROOT / "schema-manifest/schemas/com.optionsedge.contracts.linehealth.LineHealthStatus/v1.avsc").read_text()
         fields = json.loads(text)["fields"]
-        self.assertEqual([f["name"] for f in fields[:5]], ["schemaVersion", "asOfMs", "stateSequence", "systemRecordCount", "lines"])
-        self.assertEqual(fields[3], {"name": "systemRecordCount", "type": ["null", "long"], "default": None})
-        self.assertEqual(len(fields), 25)
+        self.assertEqual([f["name"] for f in fields[:5]], ["schemaVersion", "asOfMs", "statusEpoch", "stateSequence", "systemRecordCount"])
+        self.assertEqual(fields[4], {"name": "systemRecordCount", "type": ["null", "long"], "default": None})
+        self.assertEqual(len(fields), 24)
 
 
 class SchemaGateScope(unittest.TestCase):
