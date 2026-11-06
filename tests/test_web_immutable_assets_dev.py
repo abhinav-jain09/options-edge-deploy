@@ -21,6 +21,7 @@ class WebImmutableAssetsDevTest(unittest.TestCase):
         cls.web = render('k8s/services/web/overlays/dev')
         cls.mono = render('k8s/overlays/dev')
         cls.infra = render('k8s/infra/overlays/dev')
+        cls.gateway = render('k8s/services/feed-gateway/overlays/dev')
 
     def test_web_mirrors_monolith_without_expanding_service_blast_radius(self):
         self.assertEqual({'Deployment', 'Service'}, {item['kind'] for item in self.web})
@@ -62,8 +63,10 @@ class WebImmutableAssetsDevTest(unittest.TestCase):
         self.assertEqual('true', webenv['HEATMAP_NATIVE_HISTORY_ENABLED'])
         self.assertEqual('Rithmic Paper Trading', webenv['HEATMAP_RITHMIC_SYSTEM'])
         self.assertEqual(webenv['HEATMAP_RITHMIC_SYSTEM'], gatewayenv['GATEWAY_RITHMIC_SYSTEM'])
+        self.assertEqual(resource(self.gateway, 'Deployment', 'feed-gateway-service'), resource(self.mono, 'Deployment', 'feed-gateway-service'))
         self.assertEqual('true', gatewayenv['GATEWAY_AUTH_ENABLED'])
         self.assertEqual('options-edge-web', gatewayenv['GATEWAY_KEYCLOAK_AUDIENCE'])
+        self.assertEqual(gatewayenv['GATEWAY_KEYCLOAK_CLIENT_ID'], gatewayenv['GATEWAY_KEYCLOAK_AUDIENCE'])
         self.assertEqual('options-edge-web', gatewayenv['WS_AUTH_AUDIENCE'])
 
     def test_no_global_build_floor_is_added_for_dev_only_publisher(self):
