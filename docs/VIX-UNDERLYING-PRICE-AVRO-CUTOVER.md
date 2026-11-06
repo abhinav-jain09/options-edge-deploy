@@ -17,6 +17,8 @@ changes serialization is **wiped and recreated under its own name** and every re
 * **One FIXED id, 3061, in every registry** (`schema-manifest`, family `hpsf`, `scripts/kafka/schema-id-maps/vix-underlying-price.map`). Unlike the SPX/ES price topics (each registry assigns its own id),
   this topic is byte-mirrored production -> es4, and a Confluent-framed value names its schema by registry id, so the id has to mean the same schema on both sides (schema governance R3f; the mirror header
   now declares the subject and the manifest entry has no `idByEnvironment`).
+* Governance bindings: only `spot-vol-regime` ships a `schema-requirements.json` that can name the subject (dev and production). reversal-confirmation and vix-option-inteligence are on the R6 backlog (`schema-manifest/r6-backlog.txt`, no label yet);
+  drop-classifier (and its es-liquidity-engine copy) read the topic only where `DROP_VIX_BOOTSTRAP` is set (none today), so by the module's own PARTIAL rule it is not declared; the gateway, agent, trade-evidence-api and hpsf are unlabelled readers.
 * Readers (all Avro only, no JSON fallback): spot-vol-regime, reversal-confirmation, vix-option-inteligence (live V1 runtime; the dark Stage-B parser decodes the frame as a pure function and requires id 3061),
   drop-classifier (and its copy inside es-liquidity-engine), hpsf-processing Stage B, the feed-gateway (browsers still receive the identical JSON), the trade-evidence-api collector, short-premium-agent.
 
