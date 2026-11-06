@@ -25,7 +25,8 @@ s = json.load(open(f)); s["topics"][name] = {"partitions": int(parts), "rf": 1, 
 json.dump(s, open(f, "w"))
 PY
 }
-all_good() { fresh; topic $ST 1 compact,delete $SEVEN -1; topic $EV 1 delete $SEVEN -1; topic $VO 1 delete $SEVEN -1; topic $UL 1 compact,delete $SEVEN -1; topic $SU 1 compact -1 -1; topic $CL 1 delete $SEVEN -1; topic $SN 1 compact -1 -1 $BIG; }
+setlag() { python3 -c 'import json,sys; f=sys.argv[1]; s=json.load(open(f)); s["topics"][sys.argv[2]]["configs"]["min.compaction.lag.ms"]=sys.argv[3]; json.dump(s,open(f,"w"))' "$T/state.json" "$1" "$2"; }
+all_good() { fresh; topic $ST 1 compact,delete $SEVEN -1; topic $EV 1 delete $SEVEN -1; topic $VO 1 delete $SEVEN -1; topic $UL 1 compact,delete $SEVEN -1; topic $SU 1 compact -1 -1; topic $CL 1 delete $SEVEN -1; topic $SN 1 compact -1 -1 $BIG; setlag $UL $SEVEN; }
 cfg() { python3 -c 'import json,sys; t=json.load(open(sys.argv[1]))["topics"].get(sys.argv[2]); print("" if t is None else str(t["partitions"])+" "+" ".join(t["configs"].get(k,"") for k in ("cleanup.policy","retention.ms","retention.bytes")))' "$T/state.json" "$1"; }
 run() { # [ENV=...] -> rc; output in $T/out, calls in $T/calls
   env -u ENVIRONMENT PATH="$T/bin:$PATH" FAKE_KAFKA_STATE="$T/state.json" FAKE_KAFKA_CALLS="$T/calls" KAFKA_BOOTSTRAP_SERVERS=mock:9092 KAFKA_TOPIC_REPLICATION_FACTOR=1 "$@" bash "$HERE/ensure-line-health-topics.sh" > "$T/out" 2>&1
@@ -106,6 +107,86 @@ n=$(python3 -c 'import json,sys; print(len([t for t in json.load(open(sys.argv[1
 { [ $rc -eq 0 ] && [ "$n" = 7 ] && grep -q "=== ensure-line-health-topics OK ===" "$T/out"; } && ok "level-absorption barrier on dev creates and verifies the seven line-health topics" || { bad "dev chain (rc $rc, $n topics)"; cat "$T/out"; }
 fresh; topic $P.closures 1 delete 1 -1; chain ENVIRONMENT=dev LEVEL_ABSORPTION_EVENTS_RETENTION_BYTES=2152919; rc=$?
 { [ $rc -ne 0 ] && grep -q "line-health topics are wrong" "$T/out"; } && ok "a wrong line-health topic fails the level-absorption barrier" || { bad "dev chain failure"; cat "$T/out"; }
+
+# --- the compacted input topics the loop replays get min.compaction.lag.ms of 7 days (found on dev: underlying.spx.price was compact,delete with lag 0, so a restart could not recover) -----
+SPOT=underlying.spx.price; UI=options.spx.market-structure.ui; PFC=futures.pf.chart
+intopic() { # <name> <policy> [min.compaction.lag.ms; "" = the key is absent from the describe output]
+  python3 - "$T/state.json" "$1" "$2" "${3-}" <<'PY'
+import json, sys
+f, name, policy, lag = sys.argv[1:5]
+s = json.load(open(f)); c = {"cleanup.policy": policy, "retention.ms": "-1"}
+if lag != "": c["min.compaction.lag.ms"] = lag
+s["topics"][name] = {"partitions": 1, "rf": 1, "end": 0, "configs": c}
+json.dump(s, open(f, "w"))
+PY
+}
+lagof() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["topics"][sys.argv[2]]["configs"].get("min.compaction.lag.ms","<absent>"))' "$T/state.json" "$1"; }
+all_good; intopic $SPOT compact,delete 0; intopic $UI delete 0; intopic $PFC compact 0
+expect_ok "compacted inputs with lag 0 → set and read back"
+[ "$(lagof $SPOT)" = "$SEVEN" ] && ok "underlying.spx.price (compact,delete) now has min.compaction.lag.ms=7 days" || bad "spx.price lag $(lagof $SPOT)"
+[ "$(lagof $PFC)" = "$SEVEN" ] && ok "futures.pf.chart (pure compact) now has 7 days" || bad "pf.chart lag $(lagof $PFC)"
+[ "$(lagof $UI)" = "0" ] && ok "a delete-only input is left alone" || bad "ui lag $(lagof $UI)"
+if grep -E -- "--alter" "$T/calls" | grep -q "$UI"; then bad "the delete-only topic was altered"; else ok "…no alter names the delete-only topic"; fi
+grep -q "compacted replayed inputs checked: 3" "$T/out" && ok "…the count of checked compacted inputs is 3 (spx.price, pf.chart, user-lines; a sentinel, not a default)" || bad "…checked count"
+: > "$T/calls"; expect_ok "second run on the result → ok"
+if grep -qE -- "--alter" "$T/calls"; then bad "second run altered again"; else ok "second run altered nothing"; fi
+all_good; intopic $SPOT compact,delete 1209600000; : > "$T/calls"; expect_ok "a larger lag (14 days) → ok"
+{ grep -qE -- "--alter" "$T/calls" || [ "$(lagof $SPOT)" != "1209600000" ]; } && bad "a larger lag was lowered" || ok "…a larger lag is never lowered"
+all_good; intopic $SPOT compact,delete; expect_fail "the lag key unreadable (absent from the describe output) → fail, never a pass"
+grep -q "'$SPOT' reports min.compaction.lag.ms='<unreadable>'" "$T/out" && ok "…says unreadable and names the topic" || { bad "…message"; cat "$T/out"; }
+all_good; intopic $SPOT compact,delete 0
+mkdir -p "$T/real"; cp "$T/bin/kafka-configs" "$T/real/kafka-configs"
+printf '#!/usr/bin/env bash\nfor a in "$@"; do [ "$a" = "min.compaction.lag.ms=604800000" ] && { echo "alter refused" >&2; exit 1; }; done\nexec "%s/real/kafka-configs" "$@"\n' "$T" > "$T/bin/kafka-configs"; chmod +x "$T/bin/kafka-configs"
+expect_fail "an alter the broker refuses → fail"
+grep -q "could not alter '$SPOT'" "$T/out" && ok "…names the topic" || bad "…message"
+cp "$FAKE" "$T/bin/kafka-configs"; chmod +x "$T/bin/kafka-configs"
+# an alter the broker ACCEPTS but does not apply: the read-back catches it
+all_good; intopic $SPOT compact,delete 0
+cp "$T/bin/kafka-configs" "$T/real/kafka-configs"
+printf '#!/usr/bin/env bash\nfor a in "$@"; do [ "$a" = "--alter" ] && exit 0; done\nexec "%s/real/kafka-configs" "$@"\n' "$T" > "$T/bin/kafka-configs"; chmod +x "$T/bin/kafka-configs"
+expect_fail "an alter reported successful that changed nothing → the read-back fails"
+grep -q "'$SPOT' has min.compaction.lag.ms=0, expected at least $SEVEN" "$T/out" && ok "…names the topic and both values" || bad "…message"
+cp "$FAKE" "$T/bin/kafka-configs"; chmod +x "$T/bin/kafka-configs"
+# real broker output: every entry is "  key=value sensitive=false synonyms={DYNAMIC_TOPIC_CONFIG:key=value, DEFAULT_CONFIG:log.cleaner.key=0}" (the synonym carries the same key with a prefix)
+mkdir -p "$T/real"; cp "$FAKE" "$T/real/kafka-configs"
+cat > "$T/real/realformat.py" <<'PY'
+import sys
+mode = sys.argv[1]
+for line in sys.stdin:
+    if not line.startswith("  "):
+        print(line, end="")
+        continue
+    for tok in line.split():
+        k, _, v = tok.partition("=")
+        if mode == "nonnumeric" and k == "min.compaction.lag.ms":
+            v = "abc"
+        print("  %s=%s sensitive=false synonyms={DYNAMIC_TOPIC_CONFIG:%s=%s, DEFAULT_CONFIG:log.cleaner.%s=0}" % (k, v, k, v, k))
+PY
+wrap() { # <mode>: realformat | nonnumeric | describefail
+  cat > "$T/bin/kafka-configs" <<SH
+#!/usr/bin/env bash
+for a in "\$@"; do [ "\$a" = "--describe" ] && D=1; done
+[ -z "\${D:-}" ] && exec "$T/real/kafka-configs" "\$@"
+[ "$1" = describefail ] && { echo "describe refused" >&2; exit 1; }
+"$T/real/kafka-configs" "\$@" | python3 "$T/real/realformat.py" "$1"
+SH
+  chmod +x "$T/bin/kafka-configs"
+}
+all_good; intopic $SPOT compact,delete 0; wrap realformat
+expect_ok "real broker output format (sensitive=, synonyms={...log.cleaner.min.compaction.lag.ms=0}) → the lag is parsed, set and read back"
+[ "$(lagof $SPOT)" = "$SEVEN" ] && ok "…spx.price lag set under the real output format" || bad "…lag $(lagof $SPOT)"
+all_good; intopic $SPOT compact,delete 0; wrap nonnumeric
+expect_fail "a non-numeric reported lag → fail"
+grep -q "'$SPOT' reports min.compaction.lag.ms='abc'" "$T/out" && ok "…names the topic and the value" || { bad "…message"; cat "$T/out"; }
+all_good; intopic $SPOT compact,delete 0; wrap describefail
+expect_fail "a describe the broker refuses → fail closed"
+cp "$FAKE" "$T/bin/kafka-configs"; chmod +x "$T/bin/kafka-configs"
+fresh; run ENVIRONMENT=dev
+[ "$(lagof $UL)" = "$SEVEN" ] && ok "user-lines is CREATED with min.compaction.lag.ms=7 days (design 3.3)" || bad "created user-lines lag: $(lagof $UL)"
+grep -q -- "--create --if-not-exists --topic $UL .*min.compaction.lag.ms=$SEVEN" "$T/calls" && ok "…the create carries the lag" || bad "…the create lacks the lag"
+# the list can be overridden and a missing input is skipped, not an error
+all_good; expect_ok "no input topic exists → ok"
+grep -q "compacted replayed inputs checked: 1" "$T/out" && ok "…checked 1 (user-lines only; sentinel)" || bad "…checked count with none present"
 
 # --- infrastructure failures are never success ------------------------------------------------------------------------------------------------
 all_good; rm "$T/bin/kafka-topics"; run ENVIRONMENT=dev; [ $? -ne 0 ] && ok "topic list unreadable → fail" || bad "list unreadable reported success"
