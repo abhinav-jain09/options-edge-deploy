@@ -24,7 +24,7 @@ EVENTS_CAP = "134217728"
 ONE_DAY, CAP = "86400000", "268435456"
 JAR = ROOT / "tools/schema-governance/schema-governance-tool.jar"
 NS = "com.optionsedge.contracts.esmbo"
-IDS = {"EsMboClosure": 3501, "EsMboLevelFlow": 3502, "EsMboEvent": 3503, "EsMboHealth": 3504, "EsMboSnapshot": 3505, "EsMboLevelFlowFinal": 3506, "EsMboLevelBase": 3507}
+IDS = {"EsMboClosure": 3501, "EsMboLevelFlow": 3502, "EsMboEvent": 3503, "EsMboHealth": 3504, "EsMboSnapshot": 3505, "EsMboLevelFlowFinal": 3506, "EsMboLevelBase": 3507, "EsMboClosureFinal": 3508}
 
 
 def read(rel: str) -> str:
@@ -341,7 +341,7 @@ class Schemas(unittest.TestCase):
             snap = ROOT / "schema-manifest/schemas" / e["subject"] / "v1.avsc"
             out = subprocess.run(["java", "-jar", str(JAR), "hash", str(snap)], capture_output=True, text=True, check=True).stdout.strip().splitlines()[-1]
             self.assertEqual(out, e["schemaHash"], n)
-        self.assertEqual(m["familyBlocks"]["esmbo"], [[3501, 3507]])
+        self.assertEqual(m["familyBlocks"]["esmbo"], [[3501, 3508]])
         flow = by["com.optionsedge.contracts.deltaflow.DeltaFlowEvent"]
         self.assertIn({"service": "es-liquidity-engine", "accepts": [3007], "environments": ["dev"]}, flow["consumers"], "the drop engine inside the service reads the delta flow (dev id 3007)")
         mbo = by["es.rithmic.mbo-value"]
