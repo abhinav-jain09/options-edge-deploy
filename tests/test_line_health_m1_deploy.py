@@ -77,6 +77,11 @@ class SchemaGateScope(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
         self.assertEqual(r.stdout.strip(), "")
 
+    def test_every_environment_service_deploy_supports_is_decided(self):
+        for environment in ("dev", "production", "experiment"):
+            self.assertEqual(self.run_scope("nobody", environment).returncode, 0, environment)
+        self.assertEqual(self.run_scope("level-absorption", "experiment").stdout.strip(), "GATE")
+
     def test_an_unknown_environment_or_missing_manifest_fails_closed(self):
         self.assertNotEqual(self.run_scope("level-absorption", "staging").returncode, 0)
         self.manifest.unlink()
@@ -90,6 +95,15 @@ class SchemaGateScope(unittest.TestCase):
         text = (ROOT / "scripts/deploy/service-deploy.sh").read_text()
         self.assertIn('bash scripts/ci/schema-sync-scope.sh "$SERVICE" "$ENVIRONMENT"', text)
         self.assertEqual(len([l for l in (ROOT / "scripts/ci/schema-sync-environment-exemptions.txt").read_text().splitlines() if l.strip() and not l.startswith("#")]), 1)
+
+
+class Wiring(unittest.TestCase):
+    def test_the_validator_and_these_tests_are_run_by_the_repository_checks(self):
+        self.assertIn("bash scripts/ci/validate-line-health-config.sh", (ROOT / "scripts/ci/validate-services.sh").read_text())
+        self.assertIn("tests.test_line_health_m1_deploy", (ROOT / ".github/workflows/deploy-validation.yml").read_text())
+
+    def test_the_jenkinsfile_is_untouched_by_this_change(self):
+        self.assertNotIn("line-health", (ROOT / "Jenkinsfile.service-deploy").read_text())
 
 
 class ConfigurationValidator(unittest.TestCase):

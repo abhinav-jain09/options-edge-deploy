@@ -8,7 +8,7 @@ SERVICE="${1:?service}"; ENVIRONMENT="${2:?environment}"
 cd "$(dirname "$0")/../.."
 MANIFEST="${SCHEMA_MANIFEST:-schema-manifest/manifest.json}"
 EXEMPTIONS="${SCHEMA_EXEMPTIONS:-scripts/ci/schema-sync-environment-exemptions.txt}"
-case "$ENVIRONMENT" in dev) ENVN=dev ;; production) ENVN=prod ;; es4) ENVN=es4 ;; *) echo "FAIL: unknown ENVIRONMENT '$ENVIRONMENT'" >&2; exit 1 ;; esac
+case "$ENVIRONMENT" in dev) ENVN=dev ;; production) ENVN=prod ;; es4) ENVN=es4 ;; experiment) ENVN=experiment ;; *) echo "FAIL: unknown ENVIRONMENT '$ENVIRONMENT'" >&2; exit 1 ;; esac
 [ -f "$MANIFEST" ] && [ -f "$EXEMPTIONS" ] || { echo "FAIL: manifest or exemption file missing" >&2; exit 1; }
 python3 -I - "$MANIFEST" "$EXEMPTIONS" "$SERVICE" "$ENVIRONMENT" "$ENVN" <<'PY'
 import json, sys
