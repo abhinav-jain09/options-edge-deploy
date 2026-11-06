@@ -19,7 +19,14 @@ spec:
     spec:
       containers:
         - name: level-absorption
+          resources:
+            limits:
+              memory: 4Gi
+          # Heap and memory limit for DEV only (the shared base keeps -Xmx1024m / 2Gi, production is held at 0). An empty start of the line-health loop reads every
+          # source input from the previous day's midnight (LineHealthMain.emptyStart); late in a session that is 200k+ records and overflowed 1 GiB (OutOfMemoryError, 2026-11-06).
           env:
+            - name: JAVA_TOOL_OPTIONS
+              value: -Xms256m -Xmx3072m
             - name: LEVEL_ABSORPTION_PATH_SESSION
               value: GLOBEX
             - name: LEVEL_ABSORPTION_PATH_CONFIGURATION

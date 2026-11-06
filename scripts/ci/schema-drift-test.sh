@@ -8,7 +8,10 @@ mkdir -p "$T/repo/scripts/ci" "$T/repo/tools/schema-governance"
 cp scripts/ci/schema-drift.sh "$T/repo/scripts/ci/"; cp tools/schema-governance/PIN "$JAR" "$T/repo/tools/schema-governance/"
 cp -R schema-manifest "$T/repo/schema-manifest"
 PORT=$((20000 + RANDOM % 20000)); SRV=
-# a registry that serves exactly early-auction v1,v2 (prod) as the manifest says, plus switchable defects
+# a registry that serves the MIRRORED prod entries exactly as the manifest says, plus switchable defects. Every defect is
+# DERIVED from the manifest, never a hardcoded version or id: the EXTRA_VERSION control named v3 by hand and went inert the
+# day the manifest grew a real prod v3 of that subject - the mode then OVERWROTE the listed version, so the tool reported
+# DIFFERENT (hash=UNPARSABLE) and the EXTRA_VERSION rule stopped being exercised at all.
 cat > "$T/mock.py" <<'PY'
 import http.server, json, os, sys, urllib.parse
 M = json.load(open(os.environ["MANIFEST"])); MODE = os.environ["MODE"]
@@ -19,10 +22,23 @@ subjects = {}
 for e in ents: subjects.setdefault(e["subject"], {})[e["version"]] = (e.get("idByEnvironment", {}).get("prod", e["id"]), text(e))
 for e in M["entries"]:
     if e["kind"] == "ENV_LOCAL" and "prod" in e["environments"]: subjects.setdefault(e["subject"], {1: (1, '{"type":"record","name":"X","fields":[]}')})
-if MODE == "extra": subjects["early-auction.verdicts.shadow-value"][3] = (3059, "{}")
-if MODE == "missing": subjects.pop("early-auction.verdicts.shadow-value", None)
-if MODE == "diffid": i, tx = subjects["early-auction.verdicts.shadow-value"][2]; subjects["early-auction.verdicts.shadow-value"][2] = (i + 1, tx)
-if MODE == "difftext": i, tx = subjects["early-auction.verdicts.shadow-value"][2]; subjects["early-auction.verdicts.shadow-value"][2] = (i, tx.replace('"name":"EarlyAuctionVerdictLedger"', '"name":"EarlyAuctionVerdictLedgerX"', 1))
+EA = "early-auction.verdicts.shadow-value"
+if MODE == "extra":                      # a version the manifest does not list FOR PROD -> EXTRA_VERSION on prod
+    s = subjects[EA]; before = len(s)
+    ids = {i for d in subjects.values() for i, _ in d.values()}          # ids the mock serves, plus every id the
+    for e in M["entries"]:                                              # manifest knows (an ENV_LOCAL entry has none)
+        if "id" in e: ids.add(e["id"])
+        ids.update(e.get("idByEnvironment", {}).values())
+    s[max(s) + 1] = (max(ids) + 1, '{"type":"record","name":"ExtraOnProd","fields":[]}')
+    assert len(s) == before + 1, "MODE=extra overwrote a listed version instead of ADDING one"
+if MODE == "missing": assert subjects.pop(EA, None) is not None, "MODE=missing removed no subject"
+if MODE == "diffid":                     # the subject's newest listed version, right text, wrong id -> DIFFERENT
+    s = subjects[EA]; v = max(s); i, tx = s[v]; s[v] = (i + 1, tx)
+if MODE == "difftext":                   # right id, a record name that cannot be the manifest's -> DIFFERENT by hash.
+    s = subjects[EA]; v = max(s); i, tx = s[v]   # renamed through the PARSED schema, so no literal can go stale and match nothing
+    o = json.loads(tx); o["name"] = o["name"] + "Drifted"; nx = json.dumps(o)
+    assert nx != tx, "MODE=difftext left the schema text unchanged"
+    s[v] = (i, nx)
 if MODE == "absentlocal":
     for e in M["entries"]:
         if e["kind"] == "ENV_LOCAL" and "prod" in e["environments"]: subjects.pop(e["subject"], None)
@@ -53,7 +69,7 @@ check() { local name="$1" want="$2" out rc=0; out=$(cd "$T/repo" && SCHEMA_DRIFT
   if [ "$want" = ok ]; then [ "$rc" = 0 ] && echo "ok     $name" || { echo "NOT-OK $name: must pass"; echo "$out" | tail -5; fail=1; }
   else [ "$rc" != 0 ] && printf '%s' "$out" | grep -q "$want" && echo "ok     $name" || { echo "NOT-OK $name: expected failure matching '$want' (rc=$rc)"; echo "$out" | tail -5; fail=1; }; fi; }
 run clean;        check "a registry equal to the manifest is clean" ok
-run extra;        check "a dev-only version found on prod (EXTRA_VERSION)" "EXTRA_VERSION"
+run extra;        check "a registry version the manifest does not list for prod (EXTRA_VERSION)" "EXTRA_VERSION"
 run missing;      check "the early-auction subject missing (MISSING)" "MISSING"
 run diffid;       check "same version, wrong registry id (DIFFERENT)" "DIFFERENT"
 run difftext;     check "same id, different schema text (DIFFERENT)" "DIFFERENT"

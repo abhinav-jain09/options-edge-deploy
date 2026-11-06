@@ -29,7 +29,7 @@ spec:
               value: "options-edge-web"
             - name: GATEWAY_RITHMIC_SYSTEM
               value: "Rithmic Paper Trading"
-            # ES liquidity wall relays (gateway feat/es-liquidity-wall-relays): futures.liquidity-wall.{dashboard,events,voice,buckets} (ids 3403/3404/3407/3402, dev only)
+            # ES liquidity wall relays (gateway feat/es-liquidity-wall-relays): futures.liquidity-wall.{dashboard,events,voice,buckets} (ids 3408 (3403 archival version 1 is accepted too)/3404/3407/3402, dev only)
             # -> websocket events es-liquidity-heatmap / es-liquidity-wall / es-liquidity-voice and GET /api/es-liquidity-history (the 60-s projection). The producer
             # es-liquidity-wall-service runs on dev only; the relay is off everywhere else (default false).
             - name: ES_LIQUIDITY_WALL_RELAY_ENABLED

@@ -335,7 +335,7 @@
     "liquiditywall": [
       [
         3401,
-        3407
+        3408
       ]
     ],
     "marketstructure": [
@@ -5391,6 +5391,44 @@
       "source": {
         "kind": "FILE",
         "repo": "contracts",
+        "path": "schemas-registry/liquiditywall/v1/LiquidityWallDashboard.avsc"
+      },
+      "topics": [
+        {
+          "name": "futures.liquidity-wall.dashboard",
+          "kind": "data"
+        }
+      ],
+      "producers": [],
+      "consumers": [
+        {
+          "service": "feed-gateway",
+          "accepts": [
+            3403,
+            3408
+          ],
+          "environments": [
+            "dev"
+          ]
+        }
+      ],
+      "retained": true,
+      "retainedReason": "curated, not baseline: ARCHIVAL version 1 of the LiquidityWallDashboard subject (contracts 0.66.0 to 0.83.0), registered on dev under id 3403; superseded by version 2 id 3408 (contracts 0.84.0: sizeNow, sizeTape and wordState on each wall). Nothing writes it any more; the feed gateway relay still READS it (the compacted topic futures.liquidity-wall.dashboard holds a version 1 record until the wall service writes its next one). Kept so a registry import stays reproducible. Dev only."
+    },
+    {
+      "kind": "MIRRORED",
+      "subject": "com.optionsedge.contracts.liquiditywall.LiquidityWallDashboard",
+      "version": 2,
+      "id": 3408,
+      "family": "liquiditywall",
+      "schemaFile": "com.optionsedge.contracts.liquiditywall.LiquidityWallDashboard/v2.avsc",
+      "schemaHash": "7bdcef5b2f3b3785b2dc41a36176655fa70f1017199ac3b1092f0d8d49cd3d17",
+      "environments": [
+        "dev"
+      ],
+      "source": {
+        "kind": "FILE",
+        "repo": "contracts",
         "path": "schemas-registry/liquiditywall/LiquidityWallDashboard.avsc"
       },
       "topics": [
@@ -5407,9 +5445,20 @@
           ]
         }
       ],
-      "consumers": [],
+      "consumers": [
+        {
+          "service": "feed-gateway",
+          "accepts": [
+            3403,
+            3408
+          ],
+          "environments": [
+            "dev"
+          ]
+        }
+      ],
       "retained": true,
-      "retainedReason": "curated, not baseline: es-liquidity-wall-service (NEW, dev only; contracts 0.66.0 schemas-registry/liquiditywall) writes it on futures.liquidity-wall.dashboard under RecordNameStrategy with auto.register.schemas=false (its schema-requirements.json names this id and hash). Dev only; nothing is registered on production or es4."
+      "retainedReason": "curated, not baseline: the order page liquidity walls (design rev 9 section 3, contracts 0.84.0 schemas-registry/liquiditywall), written by es-liquidity-wall-service on futures.liquidity-wall.dashboard under RecordNameStrategy with auto.register.schemas=false: VERSION 2 under the new fixed id 3408 (each wall gains sizeNow, sizeTape and wordState, all nullable with default null); its schema-requirements.json names this id and hash. The feed gateway reads both 3403 and 3408. Dev only; nothing is registered on production or es4."
     },
     {
       "kind": "MIRRORED",
