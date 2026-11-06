@@ -72,8 +72,14 @@ expect "unmutated tree passes" 0 "validate-durable-topic-preservation: OK"
 sed -i.bak 's/^OPTIONS_EDGE_RESET_PRESERVED_TOPICS="spx.basis.state /OPTIONS_EDGE_RESET_PRESERVED_TOPICS="/' "$TOPICS"
 expect "one declaration deleted" 1 "appears in NEITHER"
 
-sed -i.bak 's/^OPTIONS_EDGE_RESET_PRESERVED_TOPICS=.*/OPTIONS_EDGE_RESET_PRESERVED_TOPICS=""/' "$TOPICS"
-sed -i.bak 's/^OPTIONS_EDGE_PROD_ONLY_RESET_PRESERVED_TOPICS=.*/OPTIONS_EDGE_PROD_ONLY_RESET_PRESERVED_TOPICS=""/' "$TOPICS"
+# INDENT-TOLERANT seds, since 2026-11-06. These two claim to empty EVERY preserved declaration, and
+# the readers now see indented appends -- so a column-0 sed left the three
+# futures.liquidity-validator.* entries declared and the case measured something else entirely
+# ("emptiness instead of counts" got exit 1, a real classification finding, instead of the exit 3
+# harness failure it exists to assert). A mutation that no longer creates its own scenario is a case
+# that tests nothing while reporting on it.
+sed -i.bak 's/^[[:space:]]*OPTIONS_EDGE_RESET_PRESERVED_TOPICS=.*/OPTIONS_EDGE_RESET_PRESERVED_TOPICS=""/' "$TOPICS"
+sed -i.bak 's/^[[:space:]]*OPTIONS_EDGE_PROD_ONLY_RESET_PRESERVED_TOPICS=.*/OPTIONS_EDGE_PROD_ONLY_RESET_PRESERVED_TOPICS=""/' "$TOPICS"
 expect "ALL preserved declarations deleted" 1 "appears in NEITHER"
 
 sed -i.bak 's/^OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES="/OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES="brand.new.topic=-1 /' "$TOPICS"
@@ -109,8 +115,8 @@ expect "ES4 retention declarations skipped" 3 "independent read"
 # ("ALL preserved declarations deleted") into a harness complaint under a different exit code, hiding
 # a real finding behind a complaint about the reader.
 sed -i.bak 's/if \[ "\$got" -ne "\$want" \]; then/if [ "$got" -eq 0 ] || [ "$got" -ne "$want" ]; then/' "$VALIDATOR"
-sed -i.bak 's/^OPTIONS_EDGE_RESET_PRESERVED_TOPICS=.*/OPTIONS_EDGE_RESET_PRESERVED_TOPICS=""/' "$TOPICS"
-sed -i.bak 's/^OPTIONS_EDGE_PROD_ONLY_RESET_PRESERVED_TOPICS=.*/OPTIONS_EDGE_PROD_ONLY_RESET_PRESERVED_TOPICS=""/' "$TOPICS"
+sed -i.bak 's/^[[:space:]]*OPTIONS_EDGE_RESET_PRESERVED_TOPICS=.*/OPTIONS_EDGE_RESET_PRESERVED_TOPICS=""/' "$TOPICS"
+sed -i.bak 's/^[[:space:]]*OPTIONS_EDGE_PROD_ONLY_RESET_PRESERVED_TOPICS=.*/OPTIONS_EDGE_PROD_ONLY_RESET_PRESERVED_TOPICS=""/' "$TOPICS"
 expect "emptiness instead of counts hides a real finding" 3 "independent read"
 
 # The bypasses Codex actually performed: delete the LIVE call but leave the function and its
