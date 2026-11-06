@@ -82,6 +82,12 @@ class SchemaGateScope(unittest.TestCase):
             self.assertEqual(self.run_scope("nobody", environment).returncode, 0, environment)
         self.assertEqual(self.run_scope("level-absorption", "experiment").stdout.strip(), "GATE")
 
+    def test_experiment_behaviour_is_unchanged_and_level_absorption_has_no_experiment_overlay(self):
+        """schema-sync.sh has always refused experiment for a manifest-covered service (see scripts/ci/schema-sync-coverage-allowlist.txt); the scope script
+        keeps that (GATE) and does not invent an exemption. Level absorption has no experiment overlay, so its new dev binding changes nothing there."""
+        self.assertFalse((ROOT / "k8s/services/level-absorption/overlays/experiment").exists())
+        self.assertIn("a covered service is refused there by schema-sync.sh", (ROOT / "scripts/ci/schema-sync-coverage-allowlist.txt").read_text())
+
     def test_an_unknown_environment_or_missing_manifest_fails_closed(self):
         self.assertNotEqual(self.run_scope("level-absorption", "staging").returncode, 0)
         self.manifest.unlink()
