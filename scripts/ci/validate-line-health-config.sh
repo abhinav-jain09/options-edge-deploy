@@ -68,6 +68,12 @@ for k, v in pairs:
     elif k == 'lineHealthKinds':
         if v != 'DEFAULT' and (not re.fullmatch(r'[A-Z][A-Z0-9_]*(,[A-Z][A-Z0-9_]*)*', v) or v.split(',') != sorted(set(v.split(',')))):
             err.append('lineHealthKinds must be DEFAULT or a sorted comma-separated list of kind names without duplicates')
+    elif k == 'movePaceFullMilliPointsPerMinute':
+        if re.fullmatch(r'(0|[1-9][0-9]*)', v) and int(v) < 1: err.append('movePaceFullMilliPointsPerMinute must be at least 1 (it is a divisor)')
+        elif not re.fullmatch(r'(0|[1-9][0-9]*)', v): err.append(f'{k} must be a non-negative integer, it is {v!r}')
+    elif k in ('moveWeightPushMilli', 'moveWeightPaceMilli', 'moveWeightHoldMilli', 'moveWeightBookBeyondMilli', 'moveWeightAbsorptionMilli'):
+        if not re.fullmatch(r'(0|[1-9][0-9]*)', v): err.append(f'{k} must be a non-negative integer, it is {v!r}')
+        elif int(v) > 1000: err.append(f'{k} is a weight in thousandths, 0 to 1000, it is {v}')
     elif k == 'moveScoreReportDigest':
         if v != '' and not re.fullmatch(r'[0-9a-f]{64}', v): err.append('moveScoreReportDigest must be empty (no test report yet) or 64 lower-case hexadecimal digits')
     elif k == 'drawProducers':
@@ -80,6 +86,10 @@ for k, v in pairs:
         if v not in ('true', 'false'): err.append(f'{k} must be true or false')
     elif not re.fullmatch(r'(0|[1-9][0-9]*)', v):
         err.append(f'{k} must be a non-negative integer, it is {v!r}')
+
+_live = [dict(pairs).get(w, '') for w in ('moveWeightPushMilli', 'moveWeightPaceMilli', 'moveWeightHoldMilli')]
+if all(re.fullmatch(r'[0-9]+', w) for w in _live) and sum(int(w) for w in _live) == 0:
+    err.append('moveWeightPushMilli, moveWeightPaceMilli and moveWeightHoldMilli must not all be zero (their sum is a divisor)')
 
 # the development patch
 patch = yaml.safe_load(read('k8s/overlays/dev/level-absorption-dev-enable-patch.yaml'))

@@ -198,6 +198,20 @@ class ConfigurationValidator(unittest.TestCase):
         self.rename_to_hash()
         self.assert_fails("moveScoreReportDigest must be empty")
 
+    def test_the_move_score_domains_are_enforced(self):
+        self.edit(CONFIG_FILE, lambda s: s.replace("movePaceFullMilliPointsPerMinute=5000", "movePaceFullMilliPointsPerMinute=0"))
+        self.rename_to_hash()
+        self.assert_fails("movePaceFullMilliPointsPerMinute must be at least 1")
+        self.edit(CONFIG_FILE, lambda s: s.replace("movePaceFullMilliPointsPerMinute=0", "movePaceFullMilliPointsPerMinute=5000").replace("moveWeightBookBeyondMilli=200", "moveWeightBookBeyondMilli=1001"))
+        self.rename_to_hash()
+        self.assert_fails("moveWeightBookBeyondMilli is a weight in thousandths, 0 to 1000")
+        self.edit(CONFIG_FILE, lambda s: s.replace("moveWeightBookBeyondMilli=1001", "moveWeightBookBeyondMilli=200").replace("moveWeightPushMilli=400", "moveWeightPushMilli=0").replace("moveWeightPaceMilli=300", "moveWeightPaceMilli=0").replace("moveWeightHoldMilli=300", "moveWeightHoldMilli=0"))
+        self.rename_to_hash()
+        self.assert_fails("must not all be zero")
+        self.edit(CONFIG_FILE, lambda s: s.replace("moveWeightPushMilli=0", "moveWeightPushMilli=1"))
+        self.rename_to_hash()
+        self.assertNotIn("must not all be zero", self.run_validator().stderr)   # one positive weight is enough (the generated slice is not renamed in this copy, so only that complaint may remain)
+
     def test_unsorted_keys_fail(self):
         self.edit(CONFIG_FILE, lambda s: s.replace("    bandTicks=4\n    basisBracketMillis=2000\n", "    basisBracketMillis=2000\n    bandTicks=4\n"))
         self.rename_to_hash()
