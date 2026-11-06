@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -85,6 +86,17 @@ class Manifests(unittest.TestCase):
         prod = declarations(["OPTIONS_EDGE_TOPICS", "OPTIONS_EDGE_RESET_PRESERVED_TOPICS", "OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES"], "production")
         for v, tokens in prod.items():
             self.assertNotIn(EVENTS, [x.split(":")[0].split("=")[0] for x in tokens], f"{v} names the events topic on production")
+
+    def test_the_shared_reset_helper_preserves_the_events_log(self):
+        def preserved(env):
+            e = {k: v for k, v in os.environ.items() if k != "ENVIRONMENT"}
+            e["ENVIRONMENT"] = env
+            return subprocess.run(["bash", str(ROOT / "scripts/kafka/reset-preserved-topics.sh")], capture_output=True, text=True, env=e).stdout.split()
+        self.assertIn(EVENTS, preserved("dev"))   # the helper parses the literal assignment, as it does for the wall's events log: production safety is the topics.env strip guard (tested above)
+        text = read("scripts/kafka/topics.env")
+        self.assertEqual(len(re.findall(r'^OPTIONS_EDGE_RESET_PRESERVED_TOPICS="', text, re.M)), 1, "the helper requires exactly ONE assignment")
+        self.assertEqual(len(re.findall(r'^OPTIONS_EDGE_RESET_REBUILDABLE_TOPICS="', text, re.M)), 1)
+        self.assertIn(SNAPSHOT, re.search(r'^OPTIONS_EDGE_RESET_REBUILDABLE_TOPICS="([^"]*)"', text, re.M).group(1).split())
 
     def test_the_premarket_reset_spares_the_events_log_and_nothing_else_of_the_family(self):
         import re
