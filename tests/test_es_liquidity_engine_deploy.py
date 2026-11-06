@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -17,11 +18,12 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 FAKE = ROOT / "tests/fake_kafka_cli.py"
 BARRIER = ROOT / "scripts/kafka/ensure-es-liquidity-engine-topics.sh"
-LEVEL_FLOW, HEALTH, FINAL, SNAPSHOT = "es.mbo.level-flow", "es.mbo.health", "es.mbo.level-flow-final", "es.mbo.snapshot"
+LEVEL_FLOW, HEALTH, FINAL, SNAPSHOT, EVENTS = "es.mbo.level-flow", "es.mbo.health", "es.mbo.level-flow-final", "es.mbo.snapshot", "es.mbo.liquidity-events"
+EVENTS_CAP = "134217728"
 ONE_DAY, CAP = "86400000", "268435456"
 JAR = ROOT / "tools/schema-governance/schema-governance-tool.jar"
 NS = "com.optionsedge.contracts.esmbo"
-IDS = {"EsMboLevelFlow": 3502, "EsMboHealth": 3504, "EsMboSnapshot": 3505, "EsMboLevelFlowFinal": 3506}
+IDS = {"EsMboLevelFlow": 3502, "EsMboEvent": 3503, "EsMboHealth": 3504, "EsMboSnapshot": 3505, "EsMboLevelFlowFinal": 3506}
 
 
 def read(rel: str) -> str:
@@ -72,6 +74,40 @@ class Manifests(unittest.TestCase):
             self.assertEqual(e["ES_MBO_ALLOW_TEST"], "false", rel)
             self.assertRegex(e["ES_MBO_CONTRACT_TABLE"], r"^\d{4}-\d{2}-\d{2}=ES[HMUZ]\d$", rel)
         self.assertNotIn("ES_MBO_ENABLED", env_of(deployment("k8s/services/drop-classifier-ref/base/drop-classifier-ref-deployment.yaml")))
+
+    def test_the_events_topic_is_a_reset_preserved_uncompacted_log_capped_at_128_mib_and_dev_only(self):
+        d = declarations(Topics.VARS + ["OPTIONS_EDGE_RESET_REBUILDABLE_TOPICS", "OPTIONS_EDGE_RESET_PRESERVED_TOPICS"])
+        self.assertIn(f"{EVENTS}:1", d["OPTIONS_EDGE_TOPICS"])
+        self.assertNotIn(EVENTS, d["OPTIONS_EDGE_PURE_COMPACT_TOPICS"])
+        self.assertIn(EVENTS, d["OPTIONS_EDGE_RESET_PRESERVED_TOPICS"])
+        self.assertNotIn(EVENTS, d["OPTIONS_EDGE_RESET_REBUILDABLE_TOPICS"])
+        self.assertIn(f"{EVENTS}=-1", d["OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES"])
+        self.assertIn(f"{EVENTS}={EVENTS_CAP}", d["OPTIONS_EDGE_TOPIC_RETENTION_BYTES_OVERRIDES"])
+        prod = declarations(["OPTIONS_EDGE_TOPICS", "OPTIONS_EDGE_RESET_PRESERVED_TOPICS", "OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES"], "production")
+        for v, tokens in prod.items():
+            self.assertNotIn(EVENTS, [x.split(":")[0].split("=")[0] for x in tokens], f"{v} names the events topic on production")
+
+    def test_the_shared_reset_helper_preserves_the_events_log(self):
+        def preserved(env):
+            e = {k: v for k, v in os.environ.items() if k != "ENVIRONMENT"}
+            e["ENVIRONMENT"] = env
+            return subprocess.run(["bash", str(ROOT / "scripts/kafka/reset-preserved-topics.sh")], capture_output=True, text=True, env=e).stdout.split()
+        self.assertIn(EVENTS, preserved("dev"))   # the helper parses the literal assignment, as it does for the wall's events log: production safety is the topics.env strip guard (tested above)
+        text = read("scripts/kafka/topics.env")
+        self.assertEqual(len(re.findall(r'^OPTIONS_EDGE_RESET_PRESERVED_TOPICS="', text, re.M)), 1, "the helper requires exactly ONE assignment")
+        self.assertEqual(len(re.findall(r'^OPTIONS_EDGE_RESET_REBUILDABLE_TOPICS="', text, re.M)), 1)
+        self.assertIn(SNAPSHOT, re.search(r'^OPTIONS_EDGE_RESET_REBUILDABLE_TOPICS="([^"]*)"', text, re.M).group(1).split())
+
+    def test_the_premarket_reset_spares_the_events_log_and_nothing_else_of_the_family(self):
+        import re
+        regex = re.search(r"^PRESERVE_TOPICS_REGEX='(.*)'$", read("scripts/ops/premarket-reset.sh"), re.M).group(1)
+        self.assertIsNotNone(re.search(regex, EVENTS))
+        for other in (LEVEL_FLOW, HEALTH, FINAL, SNAPSHOT):
+            self.assertIsNone(re.search(regex, other), other)
+
+    def test_the_vacuum_detector_runs_with_the_measured_descriptive_bounds(self):
+        e = env_of(deployment("k8s/services/es-liquidity-engine/base/es-liquidity-engine-deployment.yaml"))
+        self.assertEqual((e["ES_MBO_VACUUM_DEPTH_TICKS"], e["ES_MBO_VACUUM_DEPTH_BELOW"], e["ES_MBO_VACUUM_RUN_AT_LEAST"]), ("10", "398", "0"))
 
     def test_the_engine_snapshots_every_sixty_buckets(self):
         self.assertEqual(env_of(deployment("k8s/services/es-liquidity-engine/base/es-liquidity-engine-deployment.yaml"))["ES_MBO_SNAPSHOT_INTERVAL_BUCKETS"], "60")
@@ -156,7 +192,7 @@ def run_barrier(topics, environment="dev"):
 
 
 def right_topics():
-    return {LEVEL_FLOW: shaped("delete", ONE_DAY, CAP), FINAL: shaped("delete", ONE_DAY, CAP), HEALTH: shaped("delete", ONE_DAY), SNAPSHOT: shaped("compact", "-1", "-1")}
+    return {LEVEL_FLOW: shaped("delete", ONE_DAY, CAP), FINAL: shaped("delete", ONE_DAY, CAP), HEALTH: shaped("delete", ONE_DAY), SNAPSHOT: shaped("compact", "-1", "-1"), EVENTS: shaped("delete", "-1", EVENTS_CAP)}
 
 
 class Topics(unittest.TestCase):
@@ -204,7 +240,7 @@ class Barrier(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         self.assertEqual([c for c in calls if "--entity-type brokers" in c or "--entity-default" in c], [], "no broker-wide change")
         self.assertFalse(any("--alter" in c or "--delete" in c for c in calls))
-        for t, ret, b in ((LEVEL_FLOW, ONE_DAY, CAP), (FINAL, ONE_DAY, CAP), (HEALTH, ONE_DAY, None)):
+        for t, ret, b in ((LEVEL_FLOW, ONE_DAY, CAP), (FINAL, ONE_DAY, CAP), (HEALTH, ONE_DAY, None), (EVENTS, "-1", EVENTS_CAP)):
             d = state["topics"][t]
             self.assertEqual((d["partitions"], d["configs"]["cleanup.policy"], d["configs"]["retention.ms"]), (1, "delete", ret), t)
             if b:
@@ -239,6 +275,11 @@ class Barrier(unittest.TestCase):
             "snapshot finite retention": (SNAPSHOT, lambda d: d["configs"].update({"retention.ms": ONE_DAY})),
             "snapshot byte-capped": (SNAPSHOT, lambda d: d["configs"].update({"retention.bytes": CAP})),
             "snapshot 4 partitions": (SNAPSHOT, lambda d: d.update(partitions=4)),
+            "events 4 partitions": (EVENTS, lambda d: d.update(partitions=4)),
+            "events compacted": (EVENTS, lambda d: d["configs"].update({"cleanup.policy": "compact"})),
+            "events finite retention": (EVENTS, lambda d: d["configs"].update({"retention.ms": ONE_DAY})),
+            "events uncapped": (EVENTS, lambda d: d["configs"].update({"retention.bytes": "-1"})),
+            "events another cap": (EVENTS, lambda d: d["configs"].update({"retention.bytes": CAP})),
             "final uncapped": (FINAL, lambda d: d["configs"].update({"retention.bytes": "-1"})),
             "final compacted": (FINAL, lambda d: d["configs"].update({"cleanup.policy": "compact"})),
         }
@@ -281,7 +322,7 @@ class Schemas(unittest.TestCase):
             snap = ROOT / "schema-manifest/schemas" / e["subject"] / "v1.avsc"
             out = subprocess.run(["java", "-jar", str(JAR), "hash", str(snap)], capture_output=True, text=True, check=True).stdout.strip().splitlines()[-1]
             self.assertEqual(out, e["schemaHash"], n)
-        self.assertEqual(m["familyBlocks"]["esmbo"], [[3502, 3502], [3504, 3504], [3505, 3505], [3506, 3506]])
+        self.assertEqual(m["familyBlocks"]["esmbo"], [[3502, 3506]])
         flow = by["com.optionsedge.contracts.deltaflow.DeltaFlowEvent"]
         self.assertIn({"service": "es-liquidity-engine", "accepts": [3007], "environments": ["dev"]}, flow["consumers"], "the drop engine inside the service reads the delta flow (dev id 3007)")
         mbo = by["es.rithmic.mbo-value"]
