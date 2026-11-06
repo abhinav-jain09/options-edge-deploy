@@ -70,13 +70,14 @@ check_retention_bytes() { # <topic> <exact retention.bytes>
 
 # Created WITH an explicit retention.bytes=-1 (the shared routine creates none), then verified by the shared routine with create-if-absent=no (so it can never create one at the default
 # shape) and its retention.bytes compared exactly.
-ensure_lh() { # <topic> <cleanup.policy> <retention.ms> <max.message.bytes>
-  local topic="$1" policy="$2" ms="$3" maxb="$4" out
+ensure_lh() { # <topic> <cleanup.policy> <retention.ms> <max.message.bytes> [extra --config value, e.g. min.compaction.lag.ms=604800000]
+  local topic="$1" policy="$2" ms="$3" maxb="$4" extra="${5:-}" out extra_args=()
+  [ -n "$extra" ] && extra_args=(--config "$extra")
   if ! grep -qxF "$topic" <<<"$LIST"; then
     echo "creating '$topic' (1 partition, RF=$RF, cleanup.policy=$policy, retention.ms=$ms, retention.bytes=-1, max.message.bytes=$maxb)"
     if ! out=$(kt --create --if-not-exists --topic "$topic" --partitions 1 --replication-factor "$RF" \
                   --config cleanup.policy="$policy" --config retention.ms="$ms" --config retention.bytes=-1 \
-                  --config max.message.bytes="$maxb" --config min.insync.replicas="$MIN_ISR" 2>&1); then
+                  --config max.message.bytes="$maxb" --config min.insync.replicas="$MIN_ISR" ${extra_args[@]+"${extra_args[@]}"} 2>&1); then
       echo "FAIL: could not create '$topic':"; printf '%s\n' "$out"; return 1
     fi
     LIST="$LIST"$'\n'"$topic"
@@ -89,12 +90,55 @@ rc=0
 ensure_lh "$STATE"      compact,delete "$SEVEN_DAYS_MS" "$DEFAULT_MAX_BYTES"  || rc=1
 ensure_lh "$EVENTS"     delete         "$SEVEN_DAYS_MS" "$DEFAULT_MAX_BYTES"  || rc=1
 ensure_lh "$VOICE"      delete         "$SEVEN_DAYS_MS" "$DEFAULT_MAX_BYTES"  || rc=1
-ensure_lh "$USER_LINES" compact,delete "$SEVEN_DAYS_MS" "$DEFAULT_MAX_BYTES"  || rc=1
+ensure_lh "$USER_LINES" compact,delete "$SEVEN_DAYS_MS" "$DEFAULT_MAX_BYTES" "min.compaction.lag.ms=$SEVEN_DAYS_MS" || rc=1   # design 3.3: nothing inside the recovery horizon is compacted away
 ensure_lh "$STATUS"     compact        -1               "$DEFAULT_MAX_BYTES"  || rc=1
 ensure_lh "$CLOSURES"   delete         "$SEVEN_DAYS_MS" "$DEFAULT_MAX_BYTES"  || rc=1
 ensure_lh "$SNAPSHOT"   compact        -1               "$SNAPSHOT_MAX_BYTES" || rc=1
 if [ "$rc" -ne 0 ]; then
   echo "=== ensure-line-health-topics FAILED — the line-health loop must not be raised ==="
+  exit 1
+fi
+
+# --- the compacted INPUT topics the loop replays -------------------------------------------------------------------------------------------------
+# Recovery re-reads every input from its recorded position (design 4.5). A compacted topic can only be replayed exactly if compaction cannot remove a record inside the recovery
+# horizon, i.e. its min.compaction.lag.ms is at least the horizon (7 days). The loop checks this at start and, when a compacted input does not have it, takes the empty-start path
+# (RECOVERY_UNAVAILABLE:INPUT_NOT_REPLAYABLE) instead of recovering: found on dev for underlying.spx.price (compact,delete, lag 0) and the compacted futures.pf.* / futures.volume-nodes
+# topics. This step sets min.compaction.lag.ms to 7 days on every compacted topic of the list that EXISTS (a delete-only topic is left alone; a topic with a larger lag is left alone),
+# then reads the effective value back and fails when it is missing, unreadable or lower: a read that cannot be parsed is a failure, never a pass. It changes nothing else about those
+# topics (they belong to other services) and only ever adds this one setting. Override the list with LINE_HEALTH_REPLAYED_INPUT_TOPICS (space separated).
+REPLAYED_INPUTS="${LINE_HEALTH_REPLAYED_INPUT_TOPICS:-underlying.es.trades.linearized underlying.spx.price es.futures.auction futures.auction options.spx.market-structure.ui futures.level-absorption.manual-line options.indicators.studies.current options.spx.market-structure.patterns options.spx.market-structure.tools options.spx.market-structure.geometry options.spx.market-structure.equal-levels futures.pf.columns futures.pf.events futures.pf.chart futures.volume-nodes futures.flow.events options.spx.wave-cycle.waves options.spx.wave-cycle.cycles futures.liquidity-wall.closures futures.liquidity-wall.buckets es.mbo.level-flow es.mbo.level-flow-final $USER_LINES}"
+effective() { # <topic> <key> -> the effective value, or nothing when unreadable
+  local cfg
+  cfg=$(kc --entity-type topics --entity-name "$1" --describe --all 2>&1) || return 1
+  extract "$(printf '%s' "$2" | sed 's/\./\\./g')" "$cfg"
+}
+lag_rc=0
+checked=0
+for t in $REPLAYED_INPUTS; do
+  grep -qxF "$t" <<<"$LIST" || { echo "input '$t' does not exist here: skipped"; continue; }
+  policy=$(effective "$t" cleanup.policy) || policy=""
+  if [ -z "$policy" ]; then echo "FAIL: could not read cleanup.policy of '$t'"; lag_rc=1; continue; fi
+  case "$policy" in
+    *compact*) ;;
+    *) echo "ok: '$t' is $policy (not compacted): replayable as it is"; continue ;;
+  esac
+  checked=$((checked + 1))
+  have=$(effective "$t" min.compaction.lag.ms) || have=""
+  case "$have" in ''|*[!0-9]*) echo "FAIL: '$t' reports min.compaction.lag.ms='${have:-<unreadable>}'"; lag_rc=1; continue ;; esac
+  if [ "$have" -lt "$SEVEN_DAYS_MS" ]; then
+    echo "setting min.compaction.lag.ms=$SEVEN_DAYS_MS on '$t' (was $have): the loop replays it"
+    if ! out=$(kc --entity-type topics --entity-name "$t" --alter --add-config "min.compaction.lag.ms=$SEVEN_DAYS_MS" 2>&1); then
+      echo "FAIL: could not alter '$t':"; printf '%s\n' "$out"; lag_rc=1; continue
+    fi
+    have=$(effective "$t" min.compaction.lag.ms) || have=""
+    case "$have" in ''|*[!0-9]*) echo "FAIL: '$t' read back min.compaction.lag.ms='${have:-<unreadable>}' after the alter"; lag_rc=1; continue ;; esac
+  fi
+  if [ "$have" -lt "$SEVEN_DAYS_MS" ]; then echo "FAIL: '$t' has min.compaction.lag.ms=$have, expected at least $SEVEN_DAYS_MS"; lag_rc=1; continue; fi
+  echo "ok: '$t' ($policy) — min.compaction.lag.ms=$have (read back)"
+done
+echo "compacted replayed inputs checked: $checked"
+if [ "$lag_rc" -ne 0 ]; then
+  echo "=== ensure-line-health-topics FAILED — a compacted input cannot be replayed ==="
   exit 1
 fi
 echo "=== ensure-line-health-topics OK ==="
