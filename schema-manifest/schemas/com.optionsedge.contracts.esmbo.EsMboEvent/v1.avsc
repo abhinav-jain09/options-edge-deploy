@@ -1,0 +1,124 @@
+{
+  "type": "record",
+  "name": "EsMboEvent",
+  "namespace": "com.optionsedge.contracts.esmbo",
+  "doc": "es-liquidity-engine G 5.6-5.12, 7.2: one liquidity event (vacuum, sweep, ...) of the MBO engine. A record with the same eventId and a higher revision supersedes an earlier one. Measurements are carried as named integers so a detector can add one without a schema change.",
+  "fields": [
+    {
+      "name": "schemaVersion",
+      "type": "int",
+      "doc": "1 for this revision"
+    },
+    {
+      "name": "environment",
+      "type": "string",
+      "doc": "the environment literal of the admitted MBO records, e.g. Rithmic Paper Trading"
+    },
+    {
+      "name": "contract",
+      "type": "string",
+      "doc": "the contract table's row for the trade date, e.g. ESZ6"
+    },
+    {
+      "name": "bucketEnd",
+      "type": "long",
+      "doc": "bucket end on the collector clock (receivedAtMs), epoch ms; 1000 ms grid, bucket (end-1000, end]"
+    },
+    {
+      "name": "configFingerprint",
+      "type": "string",
+      "doc": "SHA-256 over the sorted name=value configuration lines plus the engine's logic version"
+    },
+    {
+      "name": "eventId",
+      "type": "string",
+      "doc": "deterministic identity, e.g. VAC|ESZ6|ABOVE|<enterBucketEnd>"
+    },
+    {
+      "name": "revision",
+      "type": "int",
+      "doc": "0 for the first record of the event, +1 for each later record of the same event"
+    },
+    {
+      "name": "kind",
+      "type": "string",
+      "doc": "VACUUM_RAISED, VACUUM_CLEARED (later: BOOK_SWEEP_UP/DOWN, SPOOF_LIKE_PATTERN, MIGRATION, ROLE_REVERSAL, ACCELERATION)"
+    },
+    {
+      "name": "status",
+      "type": "string",
+      "doc": "PROVISIONAL (before the tape stage) or FINAL"
+    },
+    {
+      "name": "startMs",
+      "type": "long",
+      "doc": "event start, epoch ms (the bucket end that raised it)"
+    },
+    {
+      "name": "endMs",
+      "type": [
+        "null",
+        "long"
+      ],
+      "doc": "event end, epoch ms; null while it lasts",
+      "default": null
+    },
+    {
+      "name": "direction",
+      "type": [
+        "null",
+        "string"
+      ],
+      "doc": "ABOVE or BELOW (vacuum), UP or DOWN (sweep)",
+      "default": null
+    },
+    {
+      "name": "loTick",
+      "type": [
+        "null",
+        "long"
+      ],
+      "doc": "lowest tick of the event, null when not applicable",
+      "default": null
+    },
+    {
+      "name": "hiTick",
+      "type": [
+        "null",
+        "long"
+      ],
+      "doc": "highest tick of the event, null when not applicable",
+      "default": null
+    },
+    {
+      "name": "availability",
+      "type": "string",
+      "doc": "AVAILABLE, or UNAVAILABLE when a ledger value the event needs is not set"
+    },
+    {
+      "name": "values",
+      "type": {
+        "type": "array",
+        "items": {
+          "type": "record",
+          "name": "EsMboEventValue",
+          "namespace": "com.optionsedge.contracts.esmbo",
+          "doc": "one named integer measurement of an event",
+          "fields": [
+            {
+              "name": "name",
+              "type": "string",
+              "doc": "the measurement name, e.g. depthQty, emptyRun"
+            },
+            {
+              "name": "value",
+              "type": "long",
+              "doc": "its integer value (contracts, ticks, milliseconds or thousandths as the name says)"
+            }
+          ]
+        }
+      },
+      "doc": "named integer measurements of the event"
+    }
+  ]
+}
