@@ -59,6 +59,8 @@ spec:
               value: host.docker.internal:19092
             - name: VIX_FEED_RUNTIME_PROFILE
               value: dev
+            - name: KAFKA_SCHEMA_REGISTRY_URL
+              value: http://host.docker.internal:8082
             - name: VIX_INDEX_SOURCE_BOOTSTRAP
               value: host.docker.internal:19092
             - name: DATABENTO_DATASET

@@ -922,6 +922,13 @@ patches:
       - op: replace
         path: /spec/replicas
         value: 0
+      # Even at zero replicas the IBKR producer must name the HOP topic, never the canonical Avro underlying.vix.price (the shared
+      # options-edge-config value is for CONSUMERS; options-edge-ibkr-feed refuses the canonical name at boot as a second fence).
+      - op: add
+        path: /spec/template/spec/containers/0/env
+        value:
+          - name: KAFKA_IBKR_VIX_PRICE_TOPIC
+            value: underlying.vix.index.price
   # THE CLOSING-BOARD DATABASE SWITCH, production only.
   #
   # Adding this env var makes stock-gex-service read frozen boards from Postgres instead of the

@@ -1,0 +1,31 @@
+{
+  "type": "record",
+  "name": "VixUnderlyingPrice",
+  "namespace": "com.optionsedge.contracts.hpsf",
+  "doc": "One underlying.vix.price tick, published by the databento-vix-feed role of options-edge-databento-feed. Until the 2026-11-06 cutover this topic carried hand-built JSON; the topic was wiped and recreated under its own name carrying Avro. The record reproduces that JSON FIELD FOR FIELD AND NAME FOR NAME. Two sources share the topic: SYNTHETIC_OPTION_SPOT (quality SYNTHETIC, the OPRA monthly-parity estimate, carries the parity evidence block) and IBKR_INDEX (quality LIVE, a cash-index print, no option legs: every parity/evidence field is null). The registry subject is this record's FULL NAME (RecordNameStrategy), so one subject serves every environment whatever its TOPIC_PREFIX. Prices (price, the ATM strike, the four ATM quotes and the three spreads) are decimal(38,18) holding the exact shortest round-trip text of the feed's double; a value that is non-finite, -0.0, needs more than 18 fractional digits or exceeds the precision is REFUSED by the writer (a counted drop), never rounded.",
+  "fields": [
+    {"name": "schemaVersion", "type": "int", "doc": "Wire revision of the tick; 1 today."},
+    {"name": "symbol", "type": "string", "doc": "VIX. Also the Kafka record key."},
+    {"name": "price", "type": {"type": "bytes", "logicalType": "decimal", "precision": 38, "scale": 18}, "doc": "The VIX estimate, rounded by the feed to 2 decimal places before it is written. BigDecimal.doubleValue() returns the identical double."},
+    {"name": "eventTime", "type": "string", "doc": "ISO-8601 UTC event time to the millisecond exactly as the feed stamped it."},
+    {"name": "sourceEventTimeNs", "type": "long", "doc": "Source event clock, epoch nanoseconds: the newest option-leg event (SYNTHETIC_OPTION_SPOT) or the index print (IBKR_INDEX)."},
+    {"name": "expiry", "type": "string", "doc": "The VIX monthly expiry the estimate is built on, YYYYMMDD."},
+    {"name": "source", "type": "string", "doc": "Provenance token: SYNTHETIC_OPTION_SPOT or IBKR_INDEX."},
+    {"name": "quality", "type": "string", "doc": "SYNTHETIC or LIVE."},
+    {"name": "derivation", "type": "string", "doc": "VIX_MONTHLY_PARITY_NO_DF or IBKR_VIX_INDEX."},
+    {"name": "pairsUsed", "type": ["null", "long"], "default": null, "doc": "Call/put pairs behind the parity estimate; null on an IBKR_INDEX print."},
+    {"name": "dispersion", "type": ["null", "double"], "default": null, "doc": "Dispersion of the pair estimates (4 dp); null on an IBKR_INDEX print."},
+    {"name": "oldestLegAgeMs", "type": ["null", "long"], "default": null, "doc": "Age of the oldest leg in milliseconds; null on an IBKR_INDEX print."},
+    {"name": "parityDiscountErrorEstVolPts", "type": ["null", "double"], "default": null, "doc": "Growth-factor discount-error bound in vol points (6 dp); null on an IBKR_INDEX print."},
+    {"name": "atmStrike", "type": ["null", {"type": "bytes", "logicalType": "decimal", "precision": 38, "scale": 18}], "default": null, "doc": "ATM-by-parity strike; null unless the complete evidence set is present."},
+    {"name": "atmCallBid", "type": ["null", {"type": "bytes", "logicalType": "decimal", "precision": 38, "scale": 18}], "default": null, "doc": "ATM call bid at published (4 dp) precision; null unless the complete evidence set is present."},
+    {"name": "atmCallAsk", "type": ["null", {"type": "bytes", "logicalType": "decimal", "precision": 38, "scale": 18}], "default": null, "doc": "ATM call ask (4 dp); null unless the complete evidence set is present."},
+    {"name": "atmPutBid", "type": ["null", {"type": "bytes", "logicalType": "decimal", "precision": 38, "scale": 18}], "default": null, "doc": "ATM put bid (4 dp); null unless the complete evidence set is present."},
+    {"name": "atmPutAsk", "type": ["null", {"type": "bytes", "logicalType": "decimal", "precision": 38, "scale": 18}], "default": null, "doc": "ATM put ask (4 dp); null unless the complete evidence set is present."},
+    {"name": "atmCallSpread", "type": ["null", {"type": "bytes", "logicalType": "decimal", "precision": 38, "scale": 18}], "default": null, "doc": "ATM call ask minus bid of the PUBLISHED quotes (4 dp); null unless the complete evidence set is present."},
+    {"name": "atmPutSpread", "type": ["null", {"type": "bytes", "logicalType": "decimal", "precision": 38, "scale": 18}], "default": null, "doc": "ATM put ask minus bid of the PUBLISHED quotes (4 dp); null unless the complete evidence set is present."},
+    {"name": "maxLegSpread", "type": ["null", {"type": "bytes", "logicalType": "decimal", "precision": 38, "scale": 18}], "default": null, "doc": "Widest leg spread over every surviving pair (4 dp), at least both ATM spreads; null unless the complete evidence set is present."},
+    {"name": "feedEpochId", "type": "string", "doc": "Feed epoch identity (one per process)."},
+    {"name": "epochSeq", "type": "long", "doc": "Monotonic sequence within the feed epoch; VIX keeps its OWN, from 1."}
+  ]
+}
