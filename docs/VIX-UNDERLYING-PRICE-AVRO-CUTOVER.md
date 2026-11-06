@@ -45,6 +45,10 @@ Workloads change only through Jenkins on es4 and prod; on dev a hand `kubectl se
    (the writer is idle off-hours, so the topic is empty after the recreate: the post-check passes on an empty topic).
 7. **Roll the Avro readers**, then verify the wire: first byte `00` + id `3061` on the newest record (when the feed ticks), restarts 0, no `UNDECODABLE`/`DESERIALIZATION` lines.
 
+The manifest entry already lists `prod` (one fixed id everywhere is what makes the MM2 copy sound). That does NOT register anything on production by itself: a production write by `schema-sync.sh` /
+`schema-sync-all.sh` requires `PLAN_SHA256` from a dry run of the same commit (R13a), i.e. an explicit, authorized production cutover; until then a production deploy of spot-vol-regime also refuses an image whose label names a
+subject production's registry lacks. Nothing in this change runs against production.
+
 ## Production (NOT done by this change: prod stays shut down, its registry stopped)
 Pending steps, in order, before production's `databento-vix-feed`, spot-vol-regime, reversal-confirmation, vix-option-inteligence, drop-classifier or the gateway are started:
 0. In the SAME change that starts the production feed, add `KAFKA_SCHEMA_REGISTRY_URL=http://192.168.100.252:8082` to `k8s/services/databento-vix-feed/base/databento-vix-feed-deployment.yaml` (and regenerate the slices).
