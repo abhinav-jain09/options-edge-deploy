@@ -67,6 +67,7 @@ class WebImmutableAssetsDevTest(unittest.TestCase):
         self.assertEqual('Rithmic Paper Trading', webenv['HEATMAP_RITHMIC_SYSTEM'])
         self.assertEqual(webenv['HEATMAP_RITHMIC_SYSTEM'], gatewayenv['GATEWAY_RITHMIC_SYSTEM'])
         self.assertEqual(resource(self.gateway, 'Deployment', 'feed-gateway-service'), resource(self.mono, 'Deployment', 'feed-gateway-service'))
+        self.assertEqual('20000', gatewayenv['ES_LIQUIDITY_WALL_FRESH_MS'])
         self.assertEqual('true', gatewayenv['GATEWAY_AUTH_ENABLED'])
         self.assertEqual('options-edge-web', gatewayenv['GATEWAY_KEYCLOAK_AUDIENCE'])
         self.assertEqual(gatewayenv['GATEWAY_KEYCLOAK_CLIENT_ID'], gatewayenv['GATEWAY_KEYCLOAK_AUDIENCE'])

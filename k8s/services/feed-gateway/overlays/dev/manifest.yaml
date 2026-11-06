@@ -73,6 +73,8 @@ spec:
               value: Rithmic Paper Trading
             - name: ES_LIQUIDITY_WALL_RELAY_ENABLED
               value: "true"
+            - name: ES_LIQUIDITY_WALL_FRESH_MS
+              value: "20000"
             - name: LIQUIDITY_VALIDATOR_RELAY_ENABLED
               value: "true"
             - name: LINE_HEALTH_RELAY_ENABLED
