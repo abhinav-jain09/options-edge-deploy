@@ -72,7 +72,7 @@ spec:
             - name: LIQUIDITY_VALIDATOR_RELAY_ENABLED
               value: "true"
             - name: LINE_HEALTH_RELAY_ENABLED
-              value: "false"
+              value: "true"
             - name: GATEWAY_MARKET_STRUCTURE_ENABLED
               value: "true"
             - name: KAFKA_MARKET_STRUCTURE_TOPIC
