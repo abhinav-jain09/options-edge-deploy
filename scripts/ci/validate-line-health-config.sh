@@ -84,6 +84,12 @@ mounts = [m for m in ctr.get('volumeMounts', []) if m.get('name') == 'level-abso
 if len(mounts) != 1 or mounts[0].get('mountPath') != MOUNT or mounts[0].get('readOnly') is not True:
     err.append(f'the dev patch must mount that volume read-only at {MOUNT}')
 
+# the generated dev slice (what service-deploy applies) must mount exactly the same object as the patch
+slice_text = read('k8s/services/level-absorption/overlays/dev/manifest.yaml')
+named = sorted(set(re.findall(PREFIX + r'[0-9a-f]{12}', slice_text)))
+if named != [name]:
+    err.append(f'the generated dev slice must name exactly {name}, it names {named}')
+
 # nothing else turns it on
 allowed = {'k8s/overlays/dev/level-absorption-dev-enable-patch.yaml', 'k8s/services/level-absorption/overlays/dev/manifest.yaml'}
 for root in ('k8s', 'scripts/es4'):

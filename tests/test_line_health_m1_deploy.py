@@ -235,5 +235,19 @@ class ConfigurationValidator(unittest.TestCase):
                 self.assertNotIn("LINE_HEALTH_BOOK", p.read_text())
 
 
+    def test_the_dev_grace_is_ten_above_the_five_second_hold_of_the_linearized_tape(self):
+        import yaml
+        docs = [d for d in yaml.safe_load_all((ROOT / CONFIG_FILE).read_text()) if d]
+        text = [d for d in docs if d["metadata"]["name"].startswith("level-absorption-line-health-config-")][0]["data"]["line-health-configuration.txt"]
+        grace = int(dict(l.split("=", 1) for l in text.splitlines())["inputCompletionGraceSeconds"])
+        self.assertEqual(grace, 10, "the linearizer holds the tape about 5 s; a grace of 5 drops late prints (TAPE_TIMER); the dev value is 10")
+
+
+    def test_a_generated_dev_slice_naming_another_config_map_fails(self):
+        self.edit("k8s/services/level-absorption/overlays/dev/manifest.yaml",
+                  lambda s: re.sub(r"level-absorption-line-health-config-[0-9a-f]{12}", "level-absorption-line-health-config-90168d091843", s))
+        self.assert_fails("the generated dev slice must name exactly")
+
+
 if __name__ == "__main__":
     unittest.main()
