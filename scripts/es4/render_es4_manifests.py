@@ -96,12 +96,20 @@ ES_ENV = {
         # env-supplied topic), carrying source SYNTHETIC_OPTION_SPOT with NO priceField.
         # The prod slice sets the SPX index topic, so es4's value must win explicitly.
         {"name": "CONTEXT_TAPE_SPOT_TOPIC", "value": "underlying.spx.price", "_override": True},
-        # Not set in the prod slice (SPX defaults apply there); appended here. If prod ever
-        # starts setting them, assert_no_silent_prod_wins forces the decision explicitly.
-        {"name": "CONTEXT_TAPE_SPOT_SOURCE_FILTER", "value": "SYNTHETIC_OPTION_SPOT"},
+        # 2026-11-06: prod DOES set this now ("ANY", in the globex prod env patch), which is exactly
+        # the case the line below used to anticipate -- assert_no_silent_prod_wins demanded the explicit
+        # decision, and this is it. es4's value wins: es4's spot stream is the SYNTHETIC_OPTION_SPOT
+        # feed named two lines up, and the committed render (k8s/es4/services/context-tape.yaml) has
+        # carried SYNTHETIC_OPTION_SPOT all along, so _override changes the DECLARATION, not what es4
+        # runs. Prod's "ANY" is right for prod, whose spot is the SPX index stream.
+        # (Was: "Not set in the prod slice (SPX defaults apply there); appended here. If prod ever
+        # starts setting them, assert_no_silent_prod_wins forces the decision explicitly.")
+        {"name": "CONTEXT_TAPE_SPOT_SOURCE_FILTER", "value": "SYNTHETIC_OPTION_SPOT", "_override": True},
         # "ANY" sentinel, not "": KafkaSettings treats a blank env value as unset and
         # would silently restore the "LAST" fallback — the synthetic feed has no
-        # priceField at all, so the filter must be explicitly cleared.
+        # priceField at all, so the filter must be explicitly cleared. Prod sets this one too, to the
+        # SAME "ANY", so there is no collision to resolve and no _override is needed; if prod's value
+        # ever diverges, assert_no_silent_prod_wins will say so.
         {"name": "CONTEXT_TAPE_SPOT_FIELD_FILTER", "value": "ANY"},
         # es4's GEX history producer runs DATABENTO_SYMBOL=ES — the SPX default
         # would silently drop every record there.
