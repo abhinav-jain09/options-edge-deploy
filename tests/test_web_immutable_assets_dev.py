@@ -40,7 +40,7 @@ class WebImmutableAssetsDevTest(unittest.TestCase):
         init = next(c for c in pod['initContainers'] if c['name'] == 'publish-public-assets')
         self.assertEqual(app['image'], init['image'], 'existing digest pinning must resolve one identical image')
         self.assertEqual(['java', '-cp', '@/app/jib-classpath-file', 'app.web.ContextTapeAssetPublisher'], init['command'])
-        self.assertEqual('false', next(e['value'] for e in app['env'] if e['name'] == 'CONTEXT_TAPE_COMPILED_ASSETS'))
+        self.assertEqual('true', next(e['value'] for e in app['env'] if e['name'] == 'CONTEXT_TAPE_COMPILED_ASSETS'))
         self.assertTrue(next(v for v in app['volumeMounts'] if v['name'] == 'public-assets')['readOnly'])
         self.assertEqual('10m', init['resources']['requests']['cpu'])
         self.assertEqual('Always', init['imagePullPolicy'])
