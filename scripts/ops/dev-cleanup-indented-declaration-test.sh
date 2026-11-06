@@ -200,37 +200,43 @@ if [ -f "$TOPICS_ENV_REAL" ]; then
     }
     # The accepted assignment, as a WHOLE-LINE grammar rather than "a self-reference appears somewhere":
     #   VAR="$VAR tok tok ..."   (or "${VAR} ...") and nothing else on the line.
-    # A self-reference test alone accepts `VAR="${VAR% tok}"` (which SHRINKS the list), a single-quoted
-    # a single-quoted assignment (no expansion at all, so the literal text becomes the value) and
+    # A self-reference test alone accepts VAR="${VAR% tok}" (which SHRINKS the list), a single-quoted
+    # assignment (no expansion at all, so the literal text becomes the value) and
     # VAR="$VAR a"; VAR="replaced" (a replacement hidden after a valid-looking append on the same line).
-    # Only this shape can grow a list and nothing else.
+    # Within the declaration convention this file uses, this shape can only ADD tokens to a list.
+    # The token charset is this project convention, not Kafka topic syntax: every topic name, shape (name:1)
+    # and override (name=43200000) in topics.env today fits it. A future name needing another character has to
+    # widen it here - deliberately, rather than being waved through.
     # NOTE: no apostrophe may appear anywhere in this awk program - it is single-quoted in the shell, and one
     # stray quote closes it early and silently leaves awk with a truncated program that flags nothing.
     function append_ok(l, var,   re) {
       re = "^[[:space:]]*" var "=\"\\$(" var "|\\{" var "\\})([[:space:]]+[A-Za-z0-9._:=-]+)+\"[[:space:]]*$"
       return l ~ re
     }
-    # NO depth counting. Counting blocks means enumerating every shell form that opens or closes one, and a form
-    # missed is a hole: a first attempt counted if/case/while/until/for and silently approved a declaration
-    # inside a subshell, while on the real 1900-line file its arithmetic drifted and it refused the very
-    # declarations this fix restores. Instead: a declaration is accepted only when the NEAREST PRECEDING
-    # structural line is a whitelisted gate. Structure is anything that opens, closes or branches a block, and
-    # the list is deliberately broad - an unrecognised structural line simply is not a whitelisted gate, so the
-    # declaration after it is refused. Consecutive declarations inside one gate are all accepted, because a
-    # declaration is not structural; a declaration after a nested block has that block as its nearest structure
-    # and is refused, which is conservative and fail-closed.
-    /^[[:space:]]*(if|elif|else|fi|case|esac|while|until|for|do|done|function)([[:space:]]|$)/ ||
-    /^[[:space:]]*[\(\{][[:space:]]*$/ || /\(\)[[:space:]]*\{/ || /^[[:space:]]*[\)\}]/ ||
-    /;;[[:space:]]*$/ || /^[[:space:]]*[A-Za-z0-9_*\|]+\)[[:space:]]*$/ {
-      last_struct = $0; last_struct_line = FNR; next
-    }
+    # NO depth counting, and no list of structural forms to keep complete. Both were holes: counting missed
+    # subshells and brace groups, then drifted on the real 1900-line file and refused the very declarations this
+    # fix restores; a nearest-structural-line rule still let a here-doc body or a multiline quoted string sit
+    # between the gate and the declaration.
+    #
+    # So the window is a WHITELIST too: a whitelisted gate opens it, and the ONLY lines allowed to follow before
+    # a declaration are a comment, a blank line, or another accepted declaration. ANY other line - a here-doc
+    # body, a continuation, a nested opener, an else, a case label, ordinary code - closes the window, and a
+    # declaration after it is refused. Nothing has to be recognised as structural for that to hold: what is not
+    # explicitly permitted ends the window.
+    #
+    # LIMIT, stated rather than claimed away: this is a convention check over the simple declaration style
+    # topics.env uses, not a shell parser. It cannot prove what `eval` will do with a file written in some other
+    # style - it can only refuse to let that style through unnoticed.
+    { if ($0 ~ /^[[:space:]]*#/ || $0 ~ /^[[:space:]]*$/) next }            # comment / blank: window survives
+    known_gate($0) { gate = $0; gate_line = FNR; next }                      # a whitelisted gate opens it
     /^[[:space:]]+OPTIONS_EDGE_(TOPICS|COMPACTED_TOPICS|PURE_COMPACT_TOPICS|EXACT_PARTITION_TOPICS|TOPIC_RETENTION_OVERRIDES|TOPIC_DELETE_RETENTION_OVERRIDES|TOPIC_MAX_MESSAGE_BYTES_OVERRIDES|TOPIC_RETENTION_BYTES_OVERRIDES|PARTITION_ONLY_TOPICS|DEV_CLEAN_PRESERVED_TOPICS|RESET_PRESERVED_TOPICS)=/ {
       split($0, p, "=")
       var = p[1]; sub(/^[[:space:]]+/, "", var)
-      if (last_struct == "")        { print FNR ": REFUSED indented declaration with no enclosing block: " $0; next }
-      if (!known_gate(last_struct)) { print FNR ": REFUSED nearest enclosing structure (line " last_struct_line ") is not a whitelisted dev gate: " last_struct; next }
-      if (!append_ok($0, var))      { print FNR ": REFUSED not a plain " var "=\"$" var " tokens\" append: " $0 }
+      if (gate == "")          { print FNR ": REFUSED no whitelisted dev gate is open here: " $0; next }
+      if (!append_ok($0, var)) { print FNR ": REFUSED not a plain " var "=\"$" var " tokens\" append: " $0; gate = ""; next }
+      next                                                                   # an accepted declaration keeps the window open
     }
+    { gate = "" }                                                            # anything else closes it
   ' "$TOPICS_ENV_REAL")"
   [ -z "$leak" ] \
     && ok "every indented declaration in topics.env is a whitelisted dev-gated APPEND" \

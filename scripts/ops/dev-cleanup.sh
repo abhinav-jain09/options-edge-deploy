@@ -677,11 +677,14 @@ ensure_topics() {
     # declaration whatever its gate - a declaration inside `if ... = "production"` would be applied on dev, and
     # an indented REPLACEMENT assignment (one that does not read the variable it sets) could even shrink a list.
     # Nothing in this script can prevent that: it parses the file, it does not interpret it.
-    # What guards it is dev-cleanup-indented-declaration-test.sh section 4, and it guards by WHITELIST: every
-    # indented declaration in topics.env must sit directly inside one of the two gate forms the file uses for a
-    # dev-only block, with no else/elif/nesting around it, and must read the variable it extends. Any other
-    # shape - elif, else, a nested if, `[[`, `test`, a continued-line gate, a replacement assignment - fails the
-    # test rather than being quietly accepted. That is a fail-closed convention check, not a shell parser.
+    # What guards it is a CONVENTION CHECK that runs on every PR (deploy-validation.yml ->
+    # dev-cleanup-indented-declaration-test.sh section 4, with -mutation-test.sh proving it cannot be fooled):
+    # an indented declaration is accepted only inside one of the two gate forms topics.env uses for a dev-only
+    # block, with only comments, blanks and other accepted declarations between gate and declaration, and only
+    # as a plain `VAR="$VAR tokens"` append. Everything else - a production gate, else/elif, a nested block, a
+    # here-doc body, a continuation, a replacement or a shrink - fails that job. It is a convention check, not a
+    # shell parser: it cannot prove what this eval does with a file written in some other style, it can only
+    # stop that style landing unnoticed.
     eval "$(printf '%s\n' "$tenv" | grep -E '^[[:space:]]*OPTIONS_EDGE_(TOPICS|COMPACTED_TOPICS|PURE_COMPACT_TOPICS|EXACT_PARTITION_TOPICS|TOPIC_RETENTION_OVERRIDES|TOPIC_DELETE_RETENTION_OVERRIDES|TOPIC_MAX_MESSAGE_BYTES_OVERRIDES|TOPIC_RETENTION_BYTES_OVERRIDES|PARTITION_ONLY_TOPICS)=')"
     local n=0 spec name extra rt existing missing=0
     # One --list, then create only what is missing (in parallel). A failed list falls back to creating every

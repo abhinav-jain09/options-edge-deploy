@@ -101,6 +101,28 @@ mk trailing 'OPTIONS_EDGE_TOPICS="t.base:1"
 if [ "${ENVIRONMENT:-}" != "production" ]; then
   OPTIONS_EDGE_TOPICS="$OPTIONS_EDGE_TOPICS t.ok:1"; OPTIONS_EDGE_TOPICS="t.replaced:1"
 fi'
+mk heredoc 'OPTIONS_EDGE_TOPICS="t.base:1"
+if [ "${ENVIRONMENT:-}" != "production" ]; then
+cat <<EOF
+  OPTIONS_EDGE_TOPICS="$OPTIONS_EDGE_TOPICS t.inheredoc:1"
+EOF
+fi'
+mk multiline_string 'OPTIONS_EDGE_TOPICS="t.base:1"
+if [ "${ENVIRONMENT:-}" != "production" ]; then
+  SOME_TEXT="first line
+  OPTIONS_EDGE_TOPICS="$OPTIONS_EDGE_TOPICS t.instring:1"
+  last line"
+fi'
+mk continuation 'OPTIONS_EDGE_TOPICS="t.base:1"
+if [ "${ENVIRONMENT:-}" != "production" ]; then
+  some_command --flag \
+  OPTIONS_EDGE_TOPICS="$OPTIONS_EDGE_TOPICS t.aftercont:1"
+fi'
+mk control_comment 'OPTIONS_EDGE_TOPICS="t.base:1"
+if [ "${ENVIRONMENT:-}" != "production" ]; then
+  # an ordinary comment between the gate and the declaration, which must stay legal
+  OPTIONS_EDGE_TOPICS="$OPTIONS_EDGE_TOPICS t.dev:1"
+fi'
 mk casegate 'OPTIONS_EDGE_TOPICS="t.base:1"
 case "${ENVIRONMENT:-}" in
   production)
@@ -114,8 +136,13 @@ REFUSED='is not a whitelisted dev-gated append'
 check() { # <fixture> <accept|refuse>
   local name="$1" want="$2" out verdict
   out="$(TOPICS_ENV_REAL="$W/$name.env" bash "$T" 2>/dev/null)"
-  if printf '%s' "$out" | grep -qF "$ACCEPTED"; then verdict=accept
-  elif printf '%s' "$out" | grep -qF "$REFUSED"; then verdict=refuse
+  # EXACTLY ONE section-4 verdict, or the fixture proves nothing: a run that emits both phrases, or neither,
+  # is INDETERMINATE. Taking the first match would let a fixture that also failed elsewhere count as proof.
+  local na nr
+  na=$(printf '%s' "$out" | grep -cF "$ACCEPTED")
+  nr=$(printf '%s' "$out" | grep -cF "$REFUSED")
+  if [ "$na" = 1 ] && [ "$nr" = 0 ]; then verdict=accept
+  elif [ "$nr" = 1 ] && [ "$na" = 0 ]; then verdict=refuse
   else verdict=INDETERMINATE
   fi
   if [ "$verdict" = "$want" ]; then
@@ -145,6 +172,10 @@ check shrink           refuse
 check singlequoted     refuse
 check trailing         refuse
 check casegate         refuse
+check heredoc          refuse
+check multiline_string refuse
+check continuation     refuse
+check control_comment  accept
 
 printf 'dev-cleanup-indented-declaration-mutation-test: %d ok, %d FAILED\n' "$pass" "$fail"
 [ "$fail" = 0 ]
