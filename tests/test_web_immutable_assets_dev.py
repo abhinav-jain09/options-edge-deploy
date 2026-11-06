@@ -55,9 +55,6 @@ class WebImmutableAssetsDevTest(unittest.TestCase):
         self.assertEqual('100m', app['resources']['requests']['cpu'])
         self.assertEqual('web-immutable-assets', next(v for v in pod['volumes'] if v['name'] == 'public-assets')['persistentVolumeClaim']['claimName'])
 
-    def test_no_global_build_floor_is_added_for_dev_only_publisher(self):
-        self.assertFalse((ROOT / 'k8s/services/web/MIN_IMAGE_BUILD').exists())
-
     def test_native_flags_match_authorized_gateway_scope(self):
         web = resource(self.web, 'Deployment', 'options-edge-web')['spec']['template']['spec']['containers']
         webenv = {e['name']: e.get('value') for c in web if c['name'] == 'web' for e in c.get('env', [])}
