@@ -23,7 +23,7 @@ changes serialization is **wiped and recreated under its own name** and every re
 * The production render of `databento-vix-feed` is DELIBERATELY unchanged: `KAFKA_SCHEMA_REGISTRY_URL` is set only by the dev overlay. Without it the role exits at start, so a production start before
   its own cutover fails closed instead of reaching for production's registry.
 * The IBKR VIX source never writes this topic: the shared config still names `underlying.vix.price` for the CONSUMERS of `KAFKA_IBKR_VIX_PRICE_TOPIC` (the gateway), but the
-  ibkr-feed producer is pointed at the hop topic `underlying.vix.index.price` on dev, is at zero replicas on production, does not exist on es4, and `FeedConfig` refuses the canonical name at boot.
+  ibkr-feed producer is pointed at the hop topic `underlying.vix.index.price` on dev AND (explicit override, at zero replicas) on production, does not exist on es4, and `FeedConfig` refuses the canonical name at boot.
   `tests/test_vix_underlying_price_manifest.py` pins that.
 
 ## Order (one environment)
@@ -39,10 +39,13 @@ Workloads change only through Jenkins on es4 and prod; on dev a hand `kubectl se
      and `sed -n 22p ~/oe-ops/dl-mirror-dev-to-mac74/run-mirror.sh | tr '|' '\n' | grep -c 'underlying\\.vix\\.price$'` = 0;
    * the es4 end offsets of `es.underlying.vix.price` do not move over a minute (its only writer is the MM2 copy from production, which is down). The es4 -> mac74 MM1 consumer group `oe-mac74-input-from-es4` (on 192.168.100.74) READS the es4 topic and keeps working across the wipe; it is not a writer to either topic here.
 4. **Roll the Avro writer** (dev: the digest-pinned feed image with the Avro writer, `databento-vix-feed`); prove ONE pod on the new digest and, because the IBKR hop topic may be silent off-hours, that it started (subject found) and has 0 restarts.
-5. Read the TopicId off the broker (`kafka-topics --describe`). Consumer groups that are INACTIVE and hold offsets on the topic are cleared with `kafka-consumer-groups --delete-offsets`; a group with a live member (the running old readers, the es4 -> mac74 MM1) cannot be cleared and is left: its offset becomes beyond-the-log-end after the recreate, the harness (live mode) only WARNs, and the rolled reader resets on its first poll (`auto.offset.reset`).
+5. Read the TopicId off the broker (`kafka-topics --describe`). Consumer groups that are INACTIVE and hold offsets on the topic are cleared with `kafka-consumer-groups --bootstrap-server <bootstrap> --delete-offsets --execute --group <g> --topic <t>`; a group with a live member (the running old readers, the es4 -> mac74 MM1) cannot be cleared and is left: its offset becomes beyond-the-log-end after the recreate, the harness (live mode) only WARNs, and the rolled reader resets on its first poll (`auto.offset.reset`).
 6. **Wipe and recreate** with the harness:
    `scripts/kafka/roll-forward-topics.sh --recreate --cluster dev|es4 --topics <t> --pre-cutover-id <t>=<TopicId> --registry <url> --subject <t>=com.optionsedge.contracts.hpsf.VixUnderlyingPrice --avro-writer-live --json-writers-stopped <bootstrap> <kafka-bin-dir>`
    (the writer is idle off-hours, so the topic is empty after the recreate: the post-check passes on an empty topic).
+   **es4 rationale:** there the topic has NO live writer at all (its only writer is the MM2 copy from the shut-down production). `--avro-writer-live` is used only because strict `--writers-and-readers-stopped` is impossible
+   (the MM1 consumer group on 192.168.100.74 is a live reader holding offsets); it is the operator attestation the harness defines, backed here by the unchanged end offsets and the empty post-check. The first Avro record
+   on es4 will be a production-written one carrying id 3061.
 7. **Roll the Avro readers**, then verify the wire: first byte `00` + id `3061` on the newest record (when the feed ticks), restarts 0, no `UNDECODABLE`/`DESERIALIZATION` lines.
 
 The manifest entry already lists `prod` (one fixed id everywhere is what makes the MM2 copy sound). That does NOT register anything on production by itself: a production write by `schema-sync.sh` /

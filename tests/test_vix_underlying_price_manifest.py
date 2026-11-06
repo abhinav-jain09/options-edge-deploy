@@ -71,7 +71,7 @@ class VixUnderlyingPriceGovernance(unittest.TestCase):
             self.assertEqual(len(docs), 1, env)
             if expect == "off":
                 self.assertEqual(docs[0]["spec"]["replicas"], 0, env)
-            else:
+            if True:
                 env_map = {e["name"]: e.get("value") for e in docs[0]["spec"]["template"]["spec"]["containers"][0]["env"]}
                 self.assertEqual(env_map["KAFKA_IBKR_VIX_PRICE_TOPIC"], "underlying.vix.index.price")
         self.assertFalse(any("ibkr-feed" in str(p) for p in (ROOT / "k8s/es4/services").glob("*")), "no ibkr-feed on es4")

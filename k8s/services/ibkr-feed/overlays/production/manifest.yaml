@@ -55,7 +55,10 @@ spec:
         app.kubernetes.io/part-of: options-edge
     spec:
       containers:
-        - envFrom:
+        - env:
+            - name: KAFKA_IBKR_VIX_PRICE_TOPIC
+              value: underlying.vix.index.price
+          envFrom:
             - configMapRef:
                 name: options-edge-config
             - secretRef:
