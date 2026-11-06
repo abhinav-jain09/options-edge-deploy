@@ -146,4 +146,29 @@ if fn do_clean | grep -n -m1 'require_kafka_cli' | grep -q .; then
 fi
 fn ensure_topics | grep -q 'existing=""' && bad "ensure_topics still turns a failed list into an empty one" || ok "ensure_topics no longer reads a failed list as no topics"
 
+echo "N. a JDK is found by the fallback search when JAVA_HOME is unset or invalid, and its absence is reported"
+mkdir -p "$WORK/jdk2/bin"; printf '#!/bin/sh\nexit 0\n' > "$WORK/jdk2/bin/java"; chmod +x "$WORK/jdk2/bin/java"
+R="$(env -i PATH="$PATH" HOME="$WORK/home" JAVA_HOME="$WORK/not-a-jdk" DEV_CLEANUP_JDK_SEARCH="$WORK/nope $WORK/jdk2" bash -c '. "'"$WORK"'/functions.sh"; kafka_cli_java; echo "rc=$? JH=$JAVA_HOME"')"
+case "$R" in "rc=0 JH=$WORK/jdk2") ok "invalid JAVA_HOME -> the first usable search entry is used and exported" ;; *) bad "jdk fallback: $R" ;; esac
+R="$(env -i PATH="$PATH" HOME="$WORK/home" DEV_CLEANUP_JDK_SEARCH="$WORK/nope $WORK/nope2" bash -c '. "'"$WORK"'/functions.sh"; kafka_cli_java; echo "rc=$?"')"
+case "$R" in "rc=1") ok "no usable JDK anywhere -> return 1" ;; *) bad "no-jdk: $R" ;; esac
+run_case DEV_CLEANUP_KAFKA_CLI_SEARCH="$WORK/good/bin" JAVA_HOME="$WORK/not-a-jdk" DEV_CLEANUP_JDK_SEARCH="$WORK/nope" LIST_OUT="a"
+[ "$RC" != 0 ] && case "$OUT" in *"no usable JDK"*) ok "the resolver names the missing JDK" ;; *) bad "no JDK message: $OUT" ;; esac || bad "no JDK did not stop the resolver: $OUT"
+
+echo "O. an unset HOME does not crash the candidate list under set -u"
+R="$(env -i PATH="$PATH" bash -c 'set -u; . "'"$WORK"'/functions.sh"; kafka_cli_candidates | head -3; echo "rc=$?"' 2>&1)"
+case "$R" in *"unbound variable"*) bad "an unset HOME broke the candidate list: $R" ;; *"rc=0"*) ok "HOME unset: candidates listed, no unbound variable" ;; *) bad "HOME unset: $R" ;; esac
+
+echo "P. the installer's --check fails on a missing live copy and on drift, and passes on an identical copy"
+REPO="$(cd "$HERE/../.." && pwd)"
+LIVE="$WORK/live/dev-cleanup.sh"; mkdir -p "$WORK/live"
+OUT="$(DEV_CLEANUP_LIVE="$LIVE" bash "$REPO/scripts/ops/install-dev-cleanup.sh" --check 2>&1)"; RC=$?
+{ [ "$RC" = 1 ] && case "$OUT" in *"DRIFT: live copy"*"is missing"*) true ;; *) false ;; esac; } && ok "missing live copy -> DRIFT, exit 1" || bad "missing: rc=$RC $OUT"
+cp "$REPO/scripts/ops/dev-cleanup.sh" "$LIVE"; echo "# drift" >> "$LIVE"
+OUT="$(DEV_CLEANUP_LIVE="$LIVE" bash "$REPO/scripts/ops/install-dev-cleanup.sh" --check 2>&1)"; RC=$?
+{ [ "$RC" = 1 ] && case "$OUT" in *"DRIFT:"*"differs"*) true ;; *) false ;; esac; } && ok "a differing live copy -> DRIFT, exit 1" || bad "drift: rc=$RC $OUT"
+cp "$REPO/scripts/ops/dev-cleanup.sh" "$LIVE"
+OUT="$(DEV_CLEANUP_LIVE="$LIVE" bash "$REPO/scripts/ops/install-dev-cleanup.sh" --check 2>&1)"; RC=$?
+{ [ "$RC" = 0 ] && case "$OUT" in "OK: live dev-cleanup.sh == repo"*) true ;; *) false ;; esac; } && ok "an identical live copy -> OK, exit 0" || bad "identical: rc=$RC $OUT"
+
 [ "$fails" = 0 ] && { echo "dev-cleanup-kafka-cli-test: all ok"; exit 0; } || { echo "dev-cleanup-kafka-cli-test: $fails FAILED"; exit 1; }

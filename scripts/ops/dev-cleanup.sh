@@ -45,8 +45,9 @@ kafka_cli_candidates() {
   if [ -n "${DEV_CLEANUP_KAFKA_CLI_SEARCH:-}" ]; then printf '%s\n' $DEV_CLEANUP_KAFKA_CLI_SEARCH; return; fi
   {
     [ -z "${KAFKA_HOME:-}" ] || printf '%s\n' "$KAFKA_HOME/bin"
-    printf '%s\n' /Users/abhinav/kafka-4.3.0/bin "$HOME/kafka-4.3.0/bin" \
-      /Users/abhinav/development/kafka-options-edge/kafka_2.13-4.3.0/bin /opt/kafka/current/bin /opt/homebrew/opt/kafka/libexec/bin
+    printf '%s\n' /Users/abhinav/kafka-4.3.0/bin
+    [ -z "${HOME:-}" ] || printf '%s\n' "$HOME/kafka-4.3.0/bin"   # HOME is unset under some launchd/cron launches, and this script runs with set -u
+    printf '%s\n' /Users/abhinav/development/kafka-options-edge/kafka_2.13-4.3.0/bin /opt/kafka/current/bin /opt/homebrew/opt/kafka/libexec/bin
   } | awk '!seen[$0]++'
 }
 
@@ -54,7 +55,11 @@ kafka_cli_candidates() {
 kafka_cli_java() {
   if [ -n "${JAVA_HOME:-}" ] && [ -x "$JAVA_HOME/bin/java" ]; then return 0; fi
   local j
-  for j in /opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home /opt/homebrew/Cellar/openjdk@21/*/libexec/openjdk.jdk/Contents/Home "$(/usr/libexec/java_home 2>/dev/null)"; do
+  # The candidate homes are $DEV_CLEANUP_JDK_SEARCH (whitespace separated) when set, for the test.
+  local jdks
+  if [ -n "${DEV_CLEANUP_JDK_SEARCH:-}" ]; then jdks="$DEV_CLEANUP_JDK_SEARCH"
+  else jdks="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home $(printf '%s ' /opt/homebrew/Cellar/openjdk@21/*/libexec/openjdk.jdk/Contents/Home) $(/usr/libexec/java_home 2>/dev/null)"; fi
+  for j in $jdks; do
     if [ -n "$j" ] && [ -x "$j/bin/java" ]; then JAVA_HOME="$j"; export JAVA_HOME; return 0; fi
   done
   return 1
@@ -227,7 +232,7 @@ LOG=/Users/abhinav/oe-ops/dev-cleanup.log
 # targets at their declared shape. The paused list is a file so an interrupted clean is still resumed by
 # the next start/overnight run. MM1 commits on es4, so a resumed mirror continues from its committed
 # offset: the wiped history is NOT back-filled (unchanged behaviour, see topics.env).
-LAUNCH_AGENTS_DIR="${LAUNCH_AGENTS_DIR:-$HOME/Library/LaunchAgents}"
+LAUNCH_AGENTS_DIR="${LAUNCH_AGENTS_DIR:-${HOME:-/var/empty}/Library/LaunchAgents}"
 LAUNCHCTL="${LAUNCHCTL:-launchctl}"
 DEV_MIRRORS_PAUSED="${DEV_MIRRORS_PAUSED:-/Users/abhinav/oe-ops/.dev-mirrors-paused}"
 # How long a resumed mirror must hold the SAME pid before it counts as running.
