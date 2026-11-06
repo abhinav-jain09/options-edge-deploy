@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import pathlib
 import subprocess
 import tempfile
@@ -18,6 +19,11 @@ class PublicAssetsPvcScopeTest(unittest.TestCase):
             docs += [dict(CLAIM,metadata={'name':'other-claim','namespace':'options-edge'})]
             docs += [CLAIM] if claims is None else claims
             (tmp/'fixture.yaml').write_text(yaml.safe_dump_all(docs))
+            (tmp/'k8s/infra/overlays'/environment).mkdir(parents=True)
+            auth=tmp/'scripts/deploy/ensure-context-tape-execution-auth.sh'
+            auth.parent.mkdir(parents=True)
+            auth.write_text("""printf '{"args":["auth-ensure"],"body":"%s"}\\n' "$DEPLOY_DRY_RUN" >> "$SCOPE_FIXTURE/calls.jsonl"\n""")
+
             tool=tmp/'kubectl'
             tool.write_text('''#!/usr/bin/env python3
 import json,os,pathlib,sys
@@ -38,7 +44,7 @@ sys.exit(9)
             env=dict(os.environ,PATH=str(tmp)+':'+os.environ['PATH'],SCOPE_FIXTURE=str(tmp),EXISTING_CLASS=existing,ENVIRONMENT=environment,DEPLOY_DRY_RUN=str(dry).lower(),WORK_DIR=str(tmp/'work'))
             if scope is not None:env['WEB_PUBLIC_ASSETS_PVC_ONLY']=scope
             else:env.pop('WEB_PUBLIC_ASSETS_PVC_ONLY',None)
-            result=subprocess.run(['bash',str(ROOT/'scripts/deploy/common-infra.sh')],cwd=ROOT,env=env,text=True,capture_output=True,timeout=20)
+            result=subprocess.run(['bash',str(ROOT/'scripts/deploy/common-infra.sh')],cwd=tmp,env=env,text=True,capture_output=True,timeout=20)
             calls=[json.loads(line) for line in (tmp/'calls.jsonl').read_text().splitlines()] if (tmp/'calls.jsonl').exists() else []
             return result,calls
 
@@ -57,6 +63,7 @@ sys.exit(9)
             self.assertEqual(0,result.returncode,result.stdout+result.stderr)
             self.assert_only_target_creates(calls,dry)
             self.assertNotIn('unrelated-secret',result.stdout)
+            self.assertFalse(any(c['args'][0]=='auth-ensure' for c in calls))
 
     def test_existing_claim_is_never_patched_and_class_conflicts_refuse(self):
         result,calls=self.run_script(dry=False,existing='standard')
@@ -86,5 +93,21 @@ sys.exit(9)
         self.assertIn('unrelated-config',apply['body'])
         self.assertIn('--dry-run=server',apply['args'])
         self.assertEqual(2,sum(c['args'][0]=='create' for c in calls))
+
+    def test_omitted_flag_preserves_default_dev_credential_reconciliation(self):
+        result,calls=self.run_script(scope=None,environment='dev')
+        self.assertEqual(0,result.returncode,result.stdout+result.stderr)
+        self.assertEqual([{'args':['auth-ensure'],'body':'true'}],[c for c in calls if c['args'][0]=='auth-ensure'])
+        self.assertTrue(any(c['args'][0]=='diff' for c in calls))
+
+    def test_existing_job_default_passthrough_and_exclusive_dev_gate(self):
+        source=(ROOT/'Jenkinsfile.common-infra').read_text()
+        self.assertRegex(source,r"booleanParam\(name: 'WEB_PUBLIC_ASSETS_PVC_ONLY', defaultValue: false")
+        self.assertIn('params.WEB_PUBLIC_ASSETS_PVC_ONLY ?: false',source)
+        gate=source.split("stage('Validate preparation mode')",1)[1].split("stage(",1)[0]
+        self.assertIn("params.ENVIRONMENT != 'dev'",gate)
+        for name in ['CONTEXT_TAPE_AUTH_ONLY','CONTEXT_TAPE_ORDER_INIT_ONLY','CONTEXT_TAPE_DEV_FIXTURE_RECOVERY']:
+            self.assertIn('params.'+name,gate)
+        self.assertNotIn("stage('Public assets",source)
 
 if __name__=='__main__':unittest.main()
