@@ -36,6 +36,10 @@ spec:
             # gauge stays on the trades alone. Default false in the service; only this development patch sets it.
             - name: LEVEL_ABSORPTION_LINE_HEALTH_BOOK_ENABLED
               value: "true"
+            # Line health M5 (requirement LH-U-2, LH-U-13): also read the user-line topic futures.line-health.user-lines (id 3704, one partition). Default false in the
+            # service; only this development patch sets it.
+            - name: LINE_HEALTH_USER_LINES_ENABLED
+              value: "true"
           volumeMounts:
             - name: level-absorption-line-health-config
               mountPath: /home/options-edge/config/line-health
