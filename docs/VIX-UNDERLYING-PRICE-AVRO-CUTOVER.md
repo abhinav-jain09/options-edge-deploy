@@ -34,6 +34,7 @@ Workloads change only through Jenkins on es4 and prod; on dev a hand `kubectl se
    (dev `http://192.168.100.102:8082`, or the Tailscale address `100.117.21.102` when the LAN is unreachable; es4 `http://192.168.100.4:8081`; **never** production's registry from this change).
 3. **Take every non-Kubernetes JSON writer and byte copier away and prove it** (this is what `--json-writers-stopped` attests):
    * the prod -> dev `com.optionsedge.vixbridge` launchd bridge (`scripts/vix-bridge`, deleted by this change): `launchctl bootout gui/$(id -u)/com.optionsedge.vixbridge 2>/dev/null; mv ~/Library/LaunchAgents/com.optionsedge.vixbridge.plist{,.disabled-<date>}`;
+     the retired bridge also shipped a boot-level LaunchDaemon variant (`com.optionsedge.vixbridge.daemon.plist`): `sudo launchctl bootout system/com.optionsedge.vixbridge` and move `/Library/LaunchDaemons/com.optionsedge.vixbridge.plist` aside if it exists (checked 2026-11-06 on the dev Mac: absent, `launchctl print system/com.optionsedge.vixbridge` not found);
      verify `launchctl list | grep -c vixbridge` = 0 and `pgrep -fl 'vix_bridge.py|run-vix-bridge.sh'` prints nothing;
    * the dev -> mac74 MirrorMaker 1 whitelist: `underlying.vix.price` removed from `~/oe-ops/dl-mirror-dev-to-mac74/run-mirror.sh` (the IBKR hop topic `underlying.vix.index.price` stays); verify `launchctl list | grep -c dl-mirror` = 0
      and `sed -n 22p ~/oe-ops/dl-mirror-dev-to-mac74/run-mirror.sh | tr '|' '\n' | grep -c 'underlying\\.vix\\.price$'` = 0;
