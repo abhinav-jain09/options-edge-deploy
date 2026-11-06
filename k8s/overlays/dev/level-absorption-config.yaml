@@ -5,7 +5,9 @@
 #
 # The Level Absorption configuration the pod mounts at /home/options-edge/config/level-absorption (read-only).
 #
-# SOURCE OF TRUTH: processing PR #1414, phase0/market-structure-eyeball-configuration.json and two-sided-host-retention-artifact.json.
+# SOURCE OF TRUTH: processing phase0/desk-levels-eyeball-configuration.json (2026-11-06: the PR #1414 market-structure configuration with sitesEnabled
+# extended by the desk's PRIOR_HIGH, PRIOR_LOW, OVERNIGHT_HIGH, OVERNIGHT_LOW, IB_HIGH, IB_LOW and SESSION_EXTREME, dev only) and
+# two-sided-host-retention-artifact.json.
 # Enable market-structure swing/range/opening-range support and resistance, with opt-in two-sided gross effort diagnostics.
 # Indicator study kinds are disabled. Host mode suppresses one-bar OBSERVATION output; gross-side reward thresholds are provisional and never authorize LIVE.
 # EYEBALL ONLY: provisional thresholds and the NO_CANDIDATE/publication gate remain. This is not a Phase 0 selection.
@@ -19,7 +21,7 @@ apiVersion: v1
 kind: ConfigMap
 immutable: true
 metadata:
-  name: level-absorption-config-27f159bc7562
+  name: level-absorption-config-2eba92cfd6c6
   namespace: options-edge
   labels:
     app.kubernetes.io/name: level-absorption-service
@@ -55,7 +57,7 @@ data:
         "unknownShareMaximum": 0.05,
         "feedGapThresholdMillis": 2000,
         "candidateThresholdSets": 5,
-        "sitesEnabled": "MANUAL_LINE,POINT_OF_CONTROL,VALUE_AREA_HIGH,VALUE_AREA_LOW,HOST_SWING,HOST_RANGE_EDGE,OPENING_RANGE_EDGE",
+        "sitesEnabled": "MANUAL_LINE,POINT_OF_CONTROL,VALUE_AREA_HIGH,VALUE_AREA_LOW,PRIOR_HIGH,PRIOR_LOW,OVERNIGHT_HIGH,OVERNIGHT_LOW,IB_HIGH,IB_LOW,SESSION_EXTREME,HOST_SWING,HOST_RANGE_EDGE,OPENING_RANGE_EDGE",
         "producerMovePoints": 1.0,
         "trapPokePoints": 2.0,
         "retestAwayPoints": 6.0,

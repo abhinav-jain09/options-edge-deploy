@@ -36,9 +36,9 @@ else:
     for k in ('minimumEffort', 'flatRatioCutoff'):
         if not isinstance(pr.get(k), (int, float)) or pr[k] <= 0: err.append(f'configuration parameter {k} must be a positive number (no code default exists)')
     if not isinstance(pr.get('minimumBarImbalanceBps'), (int, float)) or pr['minimumBarImbalanceBps'] < 0: err.append('configuration parameter minimumBarImbalanceBps must be a non-negative number')
-# Verbatim pins: processing phase0/market-structure-eyeball-configuration.json and two-sided-host-retention-artifact.json.
+# Verbatim pins: processing phase0/desk-levels-eyeball-configuration.json and two-sided-host-retention-artifact.json.
 # Two-sided host mode pins the explicit EYEBALL configuration and one-Friday retention artifact from processing PR #1414.
-PIN = {'path-configuration.json': '6b0d4f2280dc13d5a3d4b504df024138678fe6cc4ab72483e3578f69c738b022', 'frozen-configuration.json': '24dfa34790f5f75f09ac82959cc673d56eb9dfe98e76fbaef5e9fb41362fa316', 'retention-artifact.json': '074fd6155cd1d9351aa6d82518b045dd8b78a9e857c857a763f65669230fd023'}
+PIN = {'path-configuration.json': '6b0d4f2280dc13d5a3d4b504df024138678fe6cc4ab72483e3578f69c738b022', 'frozen-configuration.json': 'cd6a6cab7de4a52240ae681dc706e01bc75c6aeda297134b4f88dadf33b8e91b', 'retention-artifact.json': '074fd6155cd1d9351aa6d82518b045dd8b78a9e857c857a763f65669230fd023'}
 for k, want in PIN.items():
     got = hashlib.sha256(cm['data'][k].encode()).hexdigest()
     if got != want: err.append(f'{k} differs from the pinned Phase 0 artifact: sha256 {got}')
