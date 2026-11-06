@@ -144,26 +144,82 @@ if [ -f "$RPT" ]; then
     *" t.base "*) ok "reset-preserved-topics.sh still reads the base entry" ;;
     *) bad "reset-preserved-topics.sh lost the base entry: [$RPT_OUT]" ;;
   esac
-  # The real file: the production list must never SHRINK because of this change.
-  before=$(ENVIRONMENT=production bash "$RPT" 2>/dev/null | tr ' ' '\n' | grep -c .)
-  [ "${before:-0}" -ge 36 ] && ok "the real production keep-list is not smaller than before ($before entries)" \
-    || bad "the real production keep-list shrank to $before entries"
+  # THE REAL FILE, by NAME not by count. A count proves nothing: 37 -> 36 would pass a `>= 36` threshold, and
+  # even an equal count could swap one protected topic for another. So: every topic the OLD column-0 read
+  # produced must still be produced, in BOTH environments. The old read is recomputed here from the real file,
+  # so this assertion keeps working as topics.env grows and needs no hand-maintained baseline.
+  old_read_list() { # <env> -> what the pre-2026-11-06 reader produced, one topic per line
+    local e="$1" base prod
+    base=$(sed -nE 's/^OPTIONS_EDGE_RESET_PRESERVED_TOPICS="(.*)"$/\1/p' "$TOPICS_ENV_REAL")
+    prod=$(sed -nE 's/^OPTIONS_EDGE_PROD_ONLY_RESET_PRESERVED_TOPICS="(.*)"$/\1/p' "$TOPICS_ENV_REAL")
+    if [ "$e" = production ]; then printf '%s %s\n' "$base" "$prod"; else printf '%s\n' "$base"; fi
+    }
+  for e in dev production; do
+    ENVIRONMENT="$e" bash "$RPT" 2>/dev/null | tr ' ' '\n' | grep -v '^$' | sort -u > "$WORK/new.$e"
+    old_read_list "$e" | tr ' ' '\n' | grep -v '^$' | sort -u > "$WORK/old.$e"
+    lost="$(comm -23 "$WORK/old.$e" "$WORK/new.$e")"
+    [ -z "$lost" ] \
+      && ok "real topics.env, ENVIRONMENT=$e: every topic the old reader kept is still kept ($(grep -c . < "$WORK/new.$e") now, $(grep -c . < "$WORK/old.$e") before)" \
+      || bad "real topics.env, ENVIRONMENT=$e: the keep-list LOST $(printf '%s' "$lost" | grep -c .) topic(s):
+$lost"
+  done
+  # And the four topics the 2026-11-06 clean actually destroyed must be declared preserved, by name: "at least
+  # one assignment exists" cannot notice an APPENDED declaration being deleted or renamed, so the members that
+  # loss cost are pinned here.
+  for t in futures.liquidity-validator.evaluations futures.liquidity-validator.data-gaps futures.liquidity-validator.daily; do
+    grep -q -F -- "$t" "$WORK/new.dev" \
+      && ok "RESET-PRESERVED still names $t" \
+      || bad "$t is no longer in the reset-preserved list -- the 2026-11-06 loss would repeat"
+  done
+  grep -qE '^[[:space:]]*OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS=.*es\.rithmic\.mbo' "$TOPICS_ENV_REAL" \
+    && ok "topics.env still declares es.rithmic.mbo DEV_CLEAN_PRESERVED" \
+    || bad "es.rithmic.mbo is no longer declared DEV_CLEAN_PRESERVED -- the 2026-11-06 loss would repeat"
 else
   bad "reset-preserved-topics.sh not found at $RPT"
 fi
 
-# ---------- 4. the risk this indent tolerance introduces, guarded ----------
-# The `if` lines are not matched by these readers, so an indented declaration gated on `= "production"` would be
-# applied on dev as well. topics.env has none; if one is ever added, this fails instead of silently leaking.
+# ---------- 4. the risk this indent tolerance introduces, guarded BY WHITELIST ----------
+# These readers parse topics.env, they do not interpret it: the `if` lines are not matched, so an indented
+# declaration is applied whatever its gate. A declaration inside `if ... = "production"` would reach the dev
+# clean, and an indented REPLACEMENT assignment (one that does not read the variable it sets) could even SHRINK
+# a list. No regex can decide that safely, so this does not try to detect the bad shapes - it WHITELISTS the
+# good one and fails on everything else:
+#   * the enclosing line must be one of the two gate forms topics.env uses for a dev-only block, matched whole;
+#   * the declaration must sit DIRECTLY inside it - any else/elif, or a nested if/case/while/for in between,
+#     fails;
+#   * it must APPEND (read the variable it assigns), so it can only grow a list, never replace one.
+# elif, else, nesting, `[[`, `test`, a continued-line gate, an unknown gate and a replacement assignment all
+# fail this, because none of them is the whitelisted shape. It is a convention check, not a shell parser, and
+# that is exactly what makes it fail closed.
 if [ -f "$TOPICS_ENV_REAL" ]; then
   leak="$(awk '
-    /^[[:space:]]*if[[:space:]]*\[/ { gate = ($0 ~ /[^!=]=[[:space:]]*"production"/) ? "prod" : "other" }
-    /^[[:space:]]*fi[[:space:]]*$/  { gate = "" }
+    # The ONLY accepted gates, matched as whole lines (leading blanks allowed).
+    function known_gate(l) {
+      return l ~ /^[[:space:]]*if[[:space:]]+\[[[:space:]]+"\$\{ENVIRONMENT:-\}"[[:space:]]+!=[[:space:]]+"production"[[:space:]]+\][[:space:]]*;[[:space:]]*then[[:space:]]*$/ ||
+             l ~ /^[[:space:]]*if[[:space:]]+\[[[:space:]]+"\$\{ENVIRONMENT:-dev\}"[[:space:]]+=[[:space:]]+"dev"[[:space:]]+\][[:space:]]*;[[:space:]]*then[[:space:]]*$/
+    }
+    # Any block opener other than an accepted gate poisons the block it opens, and so does else/elif.
+    /^[[:space:]]*(if|case|while|until|for)[[:space:]]/ {
+      depth++
+      gate_ok[depth] = known_gate($0) ? 1 : 0
+      gate_line[depth] = FNR
+      next
+    }
+    /^[[:space:]]*(fi|esac|done)[[:space:]]*$/ { if (depth > 0) { gate_ok[depth] = 0; depth-- } next }
+    /^[[:space:]]*(else|elif)([[:space:]]|$)/  { if (depth > 0) gate_ok[depth] = 0; next }
     /^[[:space:]]+OPTIONS_EDGE_(TOPICS|COMPACTED_TOPICS|PURE_COMPACT_TOPICS|EXACT_PARTITION_TOPICS|TOPIC_RETENTION_OVERRIDES|TOPIC_DELETE_RETENTION_OVERRIDES|TOPIC_MAX_MESSAGE_BYTES_OVERRIDES|TOPIC_RETENTION_BYTES_OVERRIDES|PARTITION_ONLY_TOPICS|DEV_CLEAN_PRESERVED_TOPICS|RESET_PRESERVED_TOPICS)=/ {
-      if (gate == "prod") print FILENAME ":" FNR ": " $0 }
+      split($0, p, "=")
+      var = p[1]; sub(/^[[:space:]]+/, "", var)
+      if (depth == 0)            { print FNR ": indented declaration outside any block: " $0; next }
+      if (!gate_ok[depth])       { print FNR ": not directly inside a whitelisted dev gate (block opened at line " gate_line[depth] "): " $0; next }
+      if (index($0, "$" var) == 0 && index($0, "${" var "}") == 0) {
+                                   print FNR ": REPLACES " var " instead of appending to it: " $0 }
+    }
   ' "$TOPICS_ENV_REAL")"
-  [ -z "$leak" ] && ok "no indented declaration in topics.env is gated on ENVIRONMENT = production" \
-    || bad "a production-gated indented declaration would now be applied on dev:
+  [ -z "$leak" ] \
+    && ok "every indented declaration in topics.env is a whitelisted dev-gated APPEND" \
+    || bad "an indented declaration in topics.env is not a whitelisted dev-gated append, so these readers would
+apply it anyway:
 $leak"
 else
   bad "topics.env not found at $TOPICS_ENV_REAL"

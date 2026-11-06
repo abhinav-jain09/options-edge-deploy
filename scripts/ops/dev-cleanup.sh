@@ -673,9 +673,15 @@ ensure_topics() {
     # es-liquidity-engine-service crash-looped on "es.rithmic.mbo must have exactly one partition, found 0"
     # until they were created by hand. The matched lines are eval'd in file order and each append reads the
     # variable it extends, so taking the indented ones too builds the value the file means.
-    # The `if` lines are not matched, so a declaration gated on `= "production"` would be applied here as
-    # well: topics.env has none today (its production-only sets are separate OPTIONS_EDGE_PROD_ONLY_*
-    # variables this script never reads), and dev-cleanup-indented-declaration-test.sh fails if one appears.
+    # THE LIMIT OF THIS, STATED PLAINLY: the `if` lines are not matched, so this eval applies an indented
+    # declaration whatever its gate - a declaration inside `if ... = "production"` would be applied on dev, and
+    # an indented REPLACEMENT assignment (one that does not read the variable it sets) could even shrink a list.
+    # Nothing in this script can prevent that: it parses the file, it does not interpret it.
+    # What guards it is dev-cleanup-indented-declaration-test.sh section 4, and it guards by WHITELIST: every
+    # indented declaration in topics.env must sit directly inside one of the two gate forms the file uses for a
+    # dev-only block, with no else/elif/nesting around it, and must read the variable it extends. Any other
+    # shape - elif, else, a nested if, `[[`, `test`, a continued-line gate, a replacement assignment - fails the
+    # test rather than being quietly accepted. That is a fail-closed convention check, not a shell parser.
     eval "$(printf '%s\n' "$tenv" | grep -E '^[[:space:]]*OPTIONS_EDGE_(TOPICS|COMPACTED_TOPICS|PURE_COMPACT_TOPICS|EXACT_PARTITION_TOPICS|TOPIC_RETENTION_OVERRIDES|TOPIC_DELETE_RETENTION_OVERRIDES|TOPIC_MAX_MESSAGE_BYTES_OVERRIDES|TOPIC_RETENTION_BYTES_OVERRIDES|PARTITION_ONLY_TOPICS)=')"
     local n=0 spec name extra rt existing missing=0
     # One --list, then create only what is missing (in parallel). A failed list falls back to creating every
@@ -1062,8 +1068,10 @@ PY
 
 # dev_clean_preserved_topics -> the OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS keep list (see topics.env) read from the
 # SAME ref ensure_topics reads (origin/main), never from the working tree: the clone on the dev host can be many
-# commits behind. FAILS (non-zero, nothing printed) unless exactly one non-empty declaration exists, and the caller
-# REFUSES the wipe then: an unreadable keep list must stop a destructive clean, not mean "keep nothing".
+# commits behind. FAILS (non-zero, nothing printed) unless AT LEAST ONE declaration exists and the concatenated
+# value is non-empty, and the caller REFUSES the wipe then: an unreadable keep list must stop a destructive clean,
+# not mean "keep nothing". It was "exactly one" until 2026-11-06, which is what made every APPENDED declaration
+# invisible while still reporting success.
 dev_clean_preserved_topics() {
   # The fetch MUST succeed: a stale origin/main could lack a newly required keep entry, and this list guards a
   # destructive wipe. Retried; a final failure refuses the wipe (the caller says why).
@@ -1082,7 +1090,7 @@ dev_clean_preserved_topics() {
   n=$(printf '%s\n' "$env" | grep -cE '^[[:space:]]*OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS="' || true)
   [ "${n:-0}" -ge 1 ] || return 1
   val=$(printf '%s\n' "$env" | sed -nE 's/^[[:space:]]*OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS="(.*)"$/\1/p' \
-        | sed -e 's/\$OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS//g' \
+        | sed -e 's/\${OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS}//g' -e 's/\$OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS//g' \
         | tr '\n' ' ' | tr -s ' ' | sed -e 's/^ *//' -e 's/ *$//')
   [ -n "${val// /}" ] || return 1
   printf '%s\n' "$val"
@@ -1100,7 +1108,7 @@ do_clean() {
   local DEV_KEEP=""
   if [ "$WIPE_KAFKA" = true ]; then
     DEV_KEEP="$(dev_clean_preserved_topics)" || {
-      echo "REFUSING the wipe: cannot read OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS from $TOPICS_ENV_REF (exactly one non-empty declaration required)." >&2
+      echo "REFUSING the wipe: cannot read OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS from $TOPICS_ENV_REF (at least one declaration, non-empty once concatenated, is required)." >&2
       return 1; }
     DEV_KEEP="$DEV_KEEP $DEV_ONLY_ESTIMATE_KEEP"
     echo "dev-clean keep list: $DEV_KEEP"
