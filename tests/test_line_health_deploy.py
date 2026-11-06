@@ -178,6 +178,21 @@ class TopicsEnv(unittest.TestCase):
         for k in VARS:
             self.assertTrue(set(self.prod[k]) <= set(self.dev[k]), f"{k}: production declares nothing dev does not")
 
+    def test_the_production_guard_fails_closed_when_it_matches_nothing(self):
+        text = read("scripts/kafka/topics.env")
+        a = text.index('if [ "${ENVIRONMENT:-}" = "production" ]; then\n  _lh_n=0')
+        block = text[a:text.index("# Rithmic Test ES depth: identity mirrored")]
+        base = {k: v for k, v in os.environ.items() if k != "ENVIRONMENT"}
+        empty = subprocess.run(["bash", "-c", f'ENVIRONMENT=production; OPTIONS_EDGE_TOPICS="a:1 b:1"; {block}'], capture_output=True, text=True, env=base)
+        self.assertNotEqual(empty.returncode, 0, "a guard that removes nothing must fail")
+        self.assertIn("removed no futures.line-health token", empty.stderr)
+        # a sourced file: the failure is the source's non-zero status
+        full = subprocess.run(["bash", "-c", f'ENVIRONMENT=production; OPTIONS_EDGE_TOPICS="a:1 futures.line-health.state:1 b:1"; {block} echo "$OPTIONS_EDGE_TOPICS"'],
+                              capture_output=True, text=True, env=base)
+        self.assertEqual((full.returncode, full.stdout.strip()), (0, "a:1 b:1"))
+        sourced = subprocess.run(["bash", "-c", f'source "{ROOT}/scripts/kafka/topics.env"'], capture_output=True, text=True, env={**base, "ENVIRONMENT": "production"})
+        self.assertEqual(sourced.returncode, 0, sourced.stderr)
+
 
 class SchemaMapAndManifest(unittest.TestCase):
     MAP = ROOT / "scripts/kafka/schema-id-maps/line-health.map"
@@ -245,7 +260,8 @@ class RegistrationWiring(unittest.TestCase):
         s = self.stage()
         self.assertIn("params.REGISTER_GEOMETRY_SCHEMAS && (params.SERVICE == 'amt-order-bridge' || params.SERVICE == 'level-absorption')", s)
         self.assertIn("params.ENVIRONMENT != 'dev'", s)
-        self.assertIn("if [ \"$SERVICE\" = level-absorption ]; then FAMILY=linehealth; MAP=line-health; fi", s)
+        self.assertIn("if [ \"$SERVICE_PARAM\" = level-absorption ]; then FAMILY=linehealth; MAP=line-health; fi", s)
+        self.assertNotIn('"$SERVICE" = level-absorption', s)
         self.assertIn("FAMILY=geometry; MAP=geometry-signal-adapter", s)
         self.assertIn("schemas-registry/$FAMILY", s)
         self.assertIn("schema-id-maps/$MAP.map", s)

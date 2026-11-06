@@ -739,7 +739,7 @@ PYEOF
           SR="${SR/host.docker.internal/${DEV_HOST_IP:-192.168.100.102}}"
           echo "registry for ${ENVIRONMENT}: $SR"
           FAMILY=geometry; MAP=geometry-signal-adapter
-          if [ "$SERVICE" = level-absorption ]; then FAMILY=linehealth; MAP=line-health; fi
+          if [ "$SERVICE_PARAM" = level-absorption ]; then FAMILY=linehealth; MAP=line-health; fi
           SCHEMA_REGISTRY_URL="$SR" SCHEMAS_DIR=".jenkins-tmp/contracts-geometry/schemas-registry/$FAMILY" SCHEMA_ID_MAP="scripts/kafka/schema-id-maps/$MAP.map" \
             DEPLOY_DRY_RUN="${DEPLOY_DRY_RUN:-false}" bash scripts/kafka/ensure-fixed-id-schemas.sh
         '''
