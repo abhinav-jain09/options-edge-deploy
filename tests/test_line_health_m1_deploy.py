@@ -182,13 +182,13 @@ class ConfigurationValidator(unittest.TestCase):
 
     def test_the_display_scope_and_move_score_keys_are_in_the_file_with_the_documents_starting_values(self):
         text = (self.work / CONFIG_FILE).read_text()
-        for line in ("drawProducers=CANDLESTICK,HOST,PHASE_A,PHASE_B,PHASE_C", "drawTimeframes=1m,5m", "drawUserLines=false", "movePaceFullMilliPointsPerMinute=5000",
+        for line in ("drawProducers=CANDLESTICK,HOST,PHASE_B,PHASE_C", "drawTimeframes=1m,5m", "drawUserLines=false", "movePaceFullMilliPointsPerMinute=5000",
                      "moveWeightPushMilli=400", "moveWeightPaceMilli=300", "moveWeightHoldMilli=300", "moveWeightBookBeyondMilli=200", "moveWeightAbsorptionMilli=100",
                      "moveReadSeconds=10", "returnHorizonSeconds=300", "moveScoreReportDigest=\n"):
             self.assertIn("    " + line, text)
 
     def test_an_unknown_producer_word_or_timeframe_or_a_bad_report_digest_fails(self):
-        self.edit(CONFIG_FILE, lambda s: s.replace("drawProducers=CANDLESTICK,HOST,PHASE_A,PHASE_B,PHASE_C", "drawProducers=CANDLESTICK,HOST,PHASE_Z"))
+        self.edit(CONFIG_FILE, lambda s: s.replace("drawProducers=CANDLESTICK,HOST,PHASE_B,PHASE_C", "drawProducers=CANDLESTICK,HOST,PHASE_Z"))
         self.rename_to_hash()
         self.assert_fails("drawProducers must be NONE or a sorted comma-separated list of producer words")
         self.edit(CONFIG_FILE, lambda s: s.replace("drawProducers=CANDLESTICK,HOST,PHASE_Z", "drawProducers=NONE").replace("drawTimeframes=1m,5m", "drawTimeframes=2m"))
