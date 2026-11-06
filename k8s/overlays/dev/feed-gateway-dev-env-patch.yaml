@@ -35,7 +35,7 @@ spec:
             # Line health relay (requirement LH-O-6, gateway LineHealthRelay): futures.line-health.{state,events,voice,status} (ids 3701/3702/3703/3705, dev only) -> websocket frames
             # line-health-state / -event / -voice / -status, the hello field lineHealth and the line-health-resume answer. The producer is the line-health loop of level-absorption-service; off everywhere else (default false).
             - name: LINE_HEALTH_RELAY_ENABLED
-              value: "true"
+              value: "false"
             # MARKET STRUCTURE relay (gateway #194): the latest market-structure record is retained and
             # replayed to the Context Tape page as the `market-structure` frame, which draws the STRUCTURE
             # layer. The topic is market-structure-service's UI projection — the namespace R13 of
