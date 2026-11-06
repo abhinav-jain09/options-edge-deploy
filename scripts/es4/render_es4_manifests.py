@@ -19,6 +19,8 @@ Transforms per manifest:
      moving tag production builds push to this registry (:dev entries are stale dev pushes).
   3. per-service ES env appended (q=r for gex; multiplier 50 for strike-flow /
      delta-flow; gex OI fetch disabled — the OPRA/OSI symbology doesn't apply to GLBX).
+  4b. per-service CONTAINERS dropped (ES4_DROP_CONTAINERS) — a prod sidecar on a workload es4 runs;
+      fails closed if a declared name matches nothing, so a rename cannot silently re-admit it
   4. per-service env families DROPPED (DROP_ENV_PREFIXES) — prod wiring for pipelines that do
      not exist on es4 and must not be carried in by a re-render.
 
@@ -79,6 +81,10 @@ ES_ENV = {
         {"name": "INDICATOR_ES_HEARTBEAT_LIVENESS", "value": "true", "_override": True},
         # The one stream a heartbeat may vouch for: es-feed's DATABENTO_HPSF_ES_SYMBOL (default).
         {"name": "INDICATOR_HEARTBEAT_SOURCE_STREAM", "value": "ES.v.0", "_override": True},
+        # 2026-11-06: prod turned studies ON. es4 was pinned false on 2026-10-21 and nothing has
+        # authorised study production on the ES pipeline, so es4 keeps false EXPLICITLY -- inheriting
+        # prod's value is how it would have flipped without a decision.
+        {"name": "INDICATOR_STUDIES_ENABLED", "value": "false", "_override": True},
         # NO control-topic entry here on purpose (PR #734): TOPIC_PREFIX=es. (es4-common-env)
         # prefixes the control-topic default at runtime — an explicit value would double-prefix.
     ],
@@ -96,12 +102,20 @@ ES_ENV = {
         # env-supplied topic), carrying source SYNTHETIC_OPTION_SPOT with NO priceField.
         # The prod slice sets the SPX index topic, so es4's value must win explicitly.
         {"name": "CONTEXT_TAPE_SPOT_TOPIC", "value": "underlying.spx.price", "_override": True},
-        # Not set in the prod slice (SPX defaults apply there); appended here. If prod ever
-        # starts setting them, assert_no_silent_prod_wins forces the decision explicitly.
-        {"name": "CONTEXT_TAPE_SPOT_SOURCE_FILTER", "value": "SYNTHETIC_OPTION_SPOT"},
+        # 2026-11-06: prod DOES set this now ("ANY", in the globex prod env patch), which is exactly
+        # the case the line below used to anticipate -- assert_no_silent_prod_wins demanded the explicit
+        # decision, and this is it. es4's value wins: es4's spot stream is the SYNTHETIC_OPTION_SPOT
+        # feed named two lines up, and the committed render (k8s/es4/services/context-tape.yaml) has
+        # carried SYNTHETIC_OPTION_SPOT all along, so _override changes the DECLARATION, not what es4
+        # runs. Prod's "ANY" is right for prod, whose spot is the SPX index stream.
+        # (Was: "Not set in the prod slice (SPX defaults apply there); appended here. If prod ever
+        # starts setting them, assert_no_silent_prod_wins forces the decision explicitly.")
+        {"name": "CONTEXT_TAPE_SPOT_SOURCE_FILTER", "value": "SYNTHETIC_OPTION_SPOT", "_override": True},
         # "ANY" sentinel, not "": KafkaSettings treats a blank env value as unset and
         # would silently restore the "LAST" fallback — the synthetic feed has no
-        # priceField at all, so the filter must be explicitly cleared.
+        # priceField at all, so the filter must be explicitly cleared. Prod sets this one too, to the
+        # SAME "ANY", so there is no collision to resolve and no _override is needed; if prod's value
+        # ever diverges, assert_no_silent_prod_wins will say so.
         {"name": "CONTEXT_TAPE_SPOT_FIELD_FILTER", "value": "ANY"},
         # es4's GEX history producer runs DATABENTO_SYMBOL=ES — the SPX default
         # would silently drop every record there.
@@ -196,7 +210,27 @@ DROP_ENV_PREFIXES = {
     # ZDCE-113/114 is calibrated and wired only for the SPX dev/prod source identities. The es4
     # renderer inherits the production Context Tape slice, but prefixing these Kafka topics would
     # silently create an unvalidated ES detector with the SPX artifact and the prod transaction id.
-    "context-tape": ("ZERO_DTE_",),
+    "context-tape": ("ZERO_DTE_",
+                     # 2026-11-06: the prod slice now wires the SPX indicator-ESTIMATE pipeline into
+                     # context-tape (CONTEXT_TAPE_ESTIMATE_BARS_ENABLED/_TOPIC, PR #1427 family). That
+                     # pipeline estimates bars from the SPX spot stream; es4's spot is the synthetic ES
+                     # feed, and no es4 decision declares the estimate valid for it. Inheriting it would
+                     # have es4's context-tape subscribe to a topic nothing on es4 produces. Prefixed,
+                     # not named, because prod is actively growing this family.
+                     "CONTEXT_TAPE_ESTIMATE_BARS_",),
+}
+
+# es4-ONLY container DROPS, keyed by SERVICE: a SIDECAR the prod slice bolts onto a workload es4 runs.
+# DROP_WORKLOADS removes a whole Deployment; this removes one container from one that stays.
+#
+# 2026-11-06, the indicator-estimate sidecar (prod PR #1427): mode SPX_GLOBEX_ESTIMATE, input
+# underlying.spx.price, INDICATOR_ESTIMATE_ALLOW_PRODUCTION=true -- a production feature, not an es4
+# decision. Worse on es4 than merely unwanted: ES_ENV and the drops are keyed by SERVICE and applied to
+# EVERY container, so the sidecar would also inherit es4's INDICATOR_SOURCE_MODE=ES_TRADES and
+# INDICATOR_INPUT_PARTITIONS=4 -- an SPX-estimate container pointed at the ES pipeline, which is no
+# configuration anyone chose.
+ES4_DROP_CONTAINERS = {
+    "indicator-service": ("indicator-estimate",),
 }
 
 # Rendered at replicas:0 on es4 ONLY — still defined, still deployable, just not running.
@@ -231,8 +265,15 @@ ES4_KEEP_UP = set()
 # es4-ONLY container CPU-request overrides, keyed by SERVICE (none today).
 ES4_CPU_REQUEST = {}
 
-# es4-ONLY exact env-NAME drops, keyed by SERVICE (none today).
-ES4_DROP_ENV_NAMES = {}
+# es4-ONLY exact env-NAME drops, keyed by SERVICE.
+ES4_DROP_ENV_NAMES = {
+    # 2026-11-06: the prod slice sets KAFKA_APPLICATION_ID_SUFFIX=-prod-b on indicator-service to
+    # escape a stuck PRODUCTION consumer group. es4's suffix is -es4, set once in es4-common-env; a
+    # per-container value OVERRIDES that configMap, so inheriting it would give es4's indicator a
+    # brand-new Streams identity -- a new consumer group replaying from scratch -- with no es4 state
+    # rotation behind it. A prod group's escape hatch is never an es4 identity.
+    "indicator-service": {"KAFKA_APPLICATION_ID_SUFFIX"},
+}
 
 HEADER = """\
 # GENERATED by scripts/es4/render_es4_manifests.py from {src} — DO NOT EDIT BY HAND.
@@ -283,6 +324,28 @@ def transform(svc, docs):
             pvc = v.get("persistentVolumeClaim", {}).get("claimName")
             if pvc:
                 claim_names.append(pvc)
+        # es4-only container drops: a prod sidecar bolted onto a workload es4 DOES run (see
+        # ES4_DROP_CONTAINERS). Done before the per-container pass so the dropped container never
+        # receives es4's ES_ENV -- which is keyed by service and would otherwise point a
+        # production SPX container at the ES pipeline.
+        #
+        # FAILS LOUDLY when a declared name matches nothing. A silent no-op here is the whole
+        # hazard: rename the sidecar upstream and the drop stops dropping while the render still
+        # succeeds, which is exactly how the sidecar would arrive on es4 unnoticed.
+        drop_containers = ES4_DROP_CONTAINERS.get(svc)
+        if drop_containers:
+            present = {c.get("name") for c in doc["spec"]["template"]["spec"]["containers"]}
+            missing = [n for n in drop_containers if n not in present]
+            if missing:
+                raise SystemExit(
+                    f"ES4_DROP_CONTAINERS[{svc!r}] names {missing}, which {doc['metadata']['name']} "
+                    f"does not have (it has {sorted(present)}). Either the prod slice renamed or "
+                    f"removed that container -- re-check whether it still has to be excluded from "
+                    f"es4 -- or this declaration is stale. Refusing to render a drop that drops "
+                    f"nothing.")
+            doc["spec"]["template"]["spec"]["containers"] = [
+                c for c in doc["spec"]["template"]["spec"]["containers"]
+                if c.get("name") not in drop_containers]
         for c in doc["spec"]["template"]["spec"]["containers"]:
             c["envFrom"] = transform_env_from(c.get("envFrom"))
             # drop the env families that have no place on es4 (see DROP_ENV_PREFIXES). Done
@@ -391,7 +454,12 @@ def assert_es4_overrides_are_coherent():
         sys.exit(f"ES4_KEEP_UP & ES4_KEEP_DOWN both list {sorted(both)} — a workload cannot be held "
                  f"down and forced up (KEEP_UP runs second and would silently scale a held one to 1).")
     svcset = set(SERVICES)
-    for name, m in (("ES4_CPU_REQUEST", ES4_CPU_REQUEST), ("ES4_DROP_ENV_NAMES", ES4_DROP_ENV_NAMES)):
+    # ES4_DROP_CONTAINERS belongs here too (Codex r2): its per-DEPLOYMENT check inside transform() only
+    # runs for a key that MATCHES a service, so "indicator-servcie" would never be looked up at all and
+    # the sidecar would render with no error -- the drop's own fail-closed check cannot catch a typo in
+    # the key that selects it.
+    for name, m in (("ES4_CPU_REQUEST", ES4_CPU_REQUEST), ("ES4_DROP_ENV_NAMES", ES4_DROP_ENV_NAMES),
+                    ("ES4_DROP_CONTAINERS", ES4_DROP_CONTAINERS)):
         stray = set(m) - svcset
         if stray:
             sys.exit(f"{name} keys not in SERVICES (so inert — typo?): {sorted(stray)}")
