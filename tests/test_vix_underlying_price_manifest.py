@@ -54,6 +54,22 @@ class VixUnderlyingPriceGovernance(unittest.TestCase):
         dev = (ROOT / "k8s/overlays/dev/databento-vix-feed-dev-patch.yaml").read_text()
         self.assertRegex(dev, r"KAFKA_SCHEMA_REGISTRY_URL\s*\n\s*value: http://host\.docker\.internal:8082")
 
+    def test_no_ibkr_feed_can_write_the_canonical_topic(self):
+        """The shared config still names the canonical topic for the CONSUMERS of KAFKA_IBKR_VIX_PRICE_TOPIC (gateway). The IBKR producer must never
+        write it: dev points it at the hop topic, production keeps it at zero replicas, and options-edge-ibkr-feed's FeedConfig refuses the canonical
+        name at boot (CANONICAL_VIX_PRICE_TOPIC)."""
+        import yaml
+        for env, expect in (("dev", "topic"), ("production", "off")):
+            docs = [d for d in yaml.safe_load_all((ROOT / f"k8s/services/ibkr-feed/overlays/{env}/manifest.yaml").read_text())
+                    if d and d.get("kind") == "Deployment" and d["metadata"]["name"] == "ibkr-feed-service"]
+            self.assertEqual(len(docs), 1, env)
+            if expect == "off":
+                self.assertEqual(docs[0]["spec"]["replicas"], 0, env)
+            else:
+                env_map = {e["name"]: e.get("value") for e in docs[0]["spec"]["template"]["spec"]["containers"][0]["env"]}
+                self.assertEqual(env_map["KAFKA_IBKR_VIX_PRICE_TOPIC"], "underlying.vix.index.price")
+        self.assertFalse(any("ibkr-feed" in str(p) for p in (ROOT / "k8s/es4/services").glob("*")), "no ibkr-feed on es4")
+
 
 if __name__ == "__main__":
     unittest.main()

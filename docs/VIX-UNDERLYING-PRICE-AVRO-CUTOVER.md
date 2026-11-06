@@ -20,6 +20,10 @@ changes serialization is **wiped and recreated under its own name** and every re
 * Readers (all Avro only, no JSON fallback): spot-vol-regime, reversal-confirmation, vix-option-inteligence (live V1 runtime; the dark Stage-B parser decodes the frame as a pure function and requires id 3061),
   drop-classifier (and its copy inside es-liquidity-engine), hpsf-processing Stage B, the feed-gateway (browsers still receive the identical JSON), the trade-evidence-api collector, short-premium-agent.
 
+* The IBKR VIX source never writes this topic: the shared config still names `underlying.vix.price` for the CONSUMERS of `KAFKA_IBKR_VIX_PRICE_TOPIC` (the gateway), but the
+  ibkr-feed producer is pointed at the hop topic `underlying.vix.index.price` on dev, is at zero replicas on production, does not exist on es4, and `FeedConfig` refuses the canonical name at boot.
+  `tests/test_vix_underlying_price_manifest.py` pins that.
+
 ## Order (one environment)
 Workloads change only through Jenkins on es4 and prod; on dev a hand `kubectl set image` of a digest-pinned image is accepted. Readers cannot be stopped first, so: Avro writer first, wipe, Avro readers.
 1. Merge contracts (#166), feed (#193), processing, gateway, short-premium-agent and this change. A PRODUCTION image of the feed built from main now writes Avro: build none before production's cutover.
