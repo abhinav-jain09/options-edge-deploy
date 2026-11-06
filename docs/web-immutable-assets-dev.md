@@ -1,8 +1,8 @@
-# Dev immutable public assets — preparation only
+# Dev immutable public assets — staged rollout
 
-Depends on options-edge PR1548 and an approved built image containing ContextTapeAssetPublisher. Do not apply these manifests with the earlier web image.
+Depends on merged options-edge PR1548 and packaging fix1551. Existing Jenkins web build1638 succeeded for691dc6b5c45823add496b21dd37a89941b2360b3. Digest sha256:7434c476020d1075ea51ddf1d8fd0322751a7810656395bfc5ad3d41233e8f3a is the candidate, not yet deployed. The web MIN_IMAGE_BUILD floor is1638; earlier images lack a verified publisher entrypoint.
 
-The dev web init container publishes verified public code to a2Gi standard rancher/local-path claim. The app mounts it read-only. Both containers use the same digest via the existing service-deploy pinning of containers and initContainers. The verified existing Jib image uses java -cp @/app/jib-classpath-file app.Main; the publisher substitutes only the main class. Verify the next actual image entrypoint/argument file before applying. CPU pod reservation remains max(web100m,init10m), so the init does not increase the100m pod request. No Kafka, schemas, account data or production changes.
+The dev web init container publishes verified public code to a2Gi standard rancher/local-path claim. The app mounts it read-only. Both containers use the same digest via the existing service-deploy pinning of containers and initContainers. The verified existing Jib image uses java -cp @/app/jib-classpath-file app.Main; the publisher substitutes only the main class. Registry inspection of actual build1638 verified this entrypoint and original thin jar containing both main classes and compiled assets. CPU pod reservation remains max(web100m,init10m), so the init does not increase the100m pod request. No Kafka, schemas, account data or production changes.
 
 PVC ownership remains with the existing common-infra Jenkins job. It creates the claim; service-deploy already refuses missing claims. Standalone web overlay contains only Deployment/Service, never a PVC. Dev monolith includes the same infra claim and the same web patch. Existing scoped service validation passes.
 
@@ -10,7 +10,7 @@ Two stages: first create-only dev infra PVC after a reviewed Jenkins dryrun, the
 
 Rollback keeps the PVC and older public identities. For stage2, disable the flag through Jenkins (stage1 already has itfalse). Rolling back to a pre-P5 image requires reverting the publisher init/mount manifest too; an image-only rollback would crash the init. Never delete or shrink the claim to roll back. Runtime publication refuses capacity overflow without evicting old releases. Locking contract is the observed single-node local filesystem, not NFS.
 
-This branch is not deployed and not approved. Phase5 and the six-phase programme remain incomplete until review, staged Jenkins rollout and deployed nativeEdge acceptance pass.
+This branch is not deployed and remains pending final review. Phase5 and the six-phase programme remain incomplete until review, staged Jenkins rollout and deployed nativeEdge acceptance pass.
 
 
 Claude R1 requested changes. This PR remains draft and MUST remain unmerged until a real P5 build passes app review and its build number is recorded in the existing web/MIN_IMAGE_BUILD guard. A guessed future build floor is unsafe because an intervening renderer/hover build could lack the publisher. No deployment from this draft is authorized by its preparation tests.
