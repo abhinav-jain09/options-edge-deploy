@@ -159,7 +159,7 @@ class ConfigurationValidator(unittest.TestCase):
     def test_the_repository_passes(self):
         r = subprocess.run(["bash", str(VALIDATOR)], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("71 keys", r.stdout)
+        self.assertIn("83 keys", r.stdout)
 
     def test_a_name_that_is_not_the_hash_fails(self):
         self.edit(CONFIG_FILE, lambda s: s.replace("tapeWindowSeconds=20", "tapeWindowSeconds=21"))
@@ -179,6 +179,38 @@ class ConfigurationValidator(unittest.TestCase):
         self.edit(CONFIG_FILE, lambda s: s.replace("bandTicks=4", "bandTicks=4.5"))
         self.rename_to_hash()
         self.assert_fails("bandTicks must be a non-negative integer")
+
+    def test_the_display_scope_and_move_score_keys_are_in_the_file_with_the_documents_starting_values(self):
+        text = (self.work / CONFIG_FILE).read_text()
+        for line in ("drawProducers=CANDLESTICK,HOST,PHASE_A,PHASE_B,PHASE_C", "drawTimeframes=1m,5m", "drawUserLines=false", "movePaceFullMilliPointsPerMinute=5000",
+                     "moveWeightPushMilli=400", "moveWeightPaceMilli=300", "moveWeightHoldMilli=300", "moveWeightBookBeyondMilli=200", "moveWeightAbsorptionMilli=100",
+                     "moveReadSeconds=10", "returnHorizonSeconds=300", "moveScoreReportDigest=\n"):
+            self.assertIn("    " + line, text)
+
+    def test_an_unknown_producer_word_or_timeframe_or_a_bad_report_digest_fails(self):
+        self.edit(CONFIG_FILE, lambda s: s.replace("drawProducers=CANDLESTICK,HOST,PHASE_A,PHASE_B,PHASE_C", "drawProducers=CANDLESTICK,HOST,PHASE_Z"))
+        self.rename_to_hash()
+        self.assert_fails("drawProducers must be NONE or a sorted comma-separated list of producer words")
+        self.edit(CONFIG_FILE, lambda s: s.replace("drawProducers=CANDLESTICK,HOST,PHASE_Z", "drawProducers=NONE").replace("drawTimeframes=1m,5m", "drawTimeframes=2m"))
+        self.rename_to_hash()
+        self.assert_fails("drawTimeframes must be NONE or a comma-separated list")
+        self.edit(CONFIG_FILE, lambda s: s.replace("drawTimeframes=2m", "drawTimeframes=NONE").replace("moveScoreReportDigest=\n", "moveScoreReportDigest=abc\n"))
+        self.rename_to_hash()
+        self.assert_fails("moveScoreReportDigest must be empty")
+
+    def test_the_move_score_domains_are_enforced(self):
+        self.edit(CONFIG_FILE, lambda s: s.replace("movePaceFullMilliPointsPerMinute=5000", "movePaceFullMilliPointsPerMinute=0"))
+        self.rename_to_hash()
+        self.assert_fails("movePaceFullMilliPointsPerMinute must be at least 1")
+        self.edit(CONFIG_FILE, lambda s: s.replace("movePaceFullMilliPointsPerMinute=0", "movePaceFullMilliPointsPerMinute=5000").replace("moveWeightBookBeyondMilli=200", "moveWeightBookBeyondMilli=1001"))
+        self.rename_to_hash()
+        self.assert_fails("moveWeightBookBeyondMilli is a weight in thousandths, 0 to 1000")
+        self.edit(CONFIG_FILE, lambda s: s.replace("moveWeightBookBeyondMilli=1001", "moveWeightBookBeyondMilli=200").replace("moveWeightPushMilli=400", "moveWeightPushMilli=0").replace("moveWeightPaceMilli=300", "moveWeightPaceMilli=0").replace("moveWeightHoldMilli=300", "moveWeightHoldMilli=0"))
+        self.rename_to_hash()
+        self.assert_fails("must not all be zero")
+        self.edit(CONFIG_FILE, lambda s: s.replace("moveWeightPushMilli=0", "moveWeightPushMilli=1"))
+        self.rename_to_hash()
+        self.assertNotIn("must not all be zero", self.run_validator().stderr)   # one positive weight is enough (the generated slice is not renamed in this copy, so only that complaint may remain)
 
     def test_unsorted_keys_fail(self):
         self.edit(CONFIG_FILE, lambda s: s.replace("    bandTicks=4\n    basisBracketMillis=2000\n", "    basisBracketMillis=2000\n    bandTicks=4\n"))
