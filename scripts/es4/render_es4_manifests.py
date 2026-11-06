@@ -454,7 +454,12 @@ def assert_es4_overrides_are_coherent():
         sys.exit(f"ES4_KEEP_UP & ES4_KEEP_DOWN both list {sorted(both)} — a workload cannot be held "
                  f"down and forced up (KEEP_UP runs second and would silently scale a held one to 1).")
     svcset = set(SERVICES)
-    for name, m in (("ES4_CPU_REQUEST", ES4_CPU_REQUEST), ("ES4_DROP_ENV_NAMES", ES4_DROP_ENV_NAMES)):
+    # ES4_DROP_CONTAINERS belongs here too (Codex r2): its per-DEPLOYMENT check inside transform() only
+    # runs for a key that MATCHES a service, so "indicator-servcie" would never be looked up at all and
+    # the sidecar would render with no error -- the drop's own fail-closed check cannot catch a typo in
+    # the key that selects it.
+    for name, m in (("ES4_CPU_REQUEST", ES4_CPU_REQUEST), ("ES4_DROP_ENV_NAMES", ES4_DROP_ENV_NAMES),
+                    ("ES4_DROP_CONTAINERS", ES4_DROP_CONTAINERS)):
         stray = set(m) - svcset
         if stray:
             sys.exit(f"{name} keys not in SERVICES (so inert — typo?): {sorted(stray)}")
