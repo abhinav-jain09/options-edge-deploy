@@ -16,6 +16,9 @@ spec:
               value: host.docker.internal:19092
             - name: VIX_FEED_RUNTIME_PROFILE
               value: dev
+            # the dev Schema Registry that holds the canonical VixUnderlyingPrice subject (id 3061)
+            - name: KAFKA_SCHEMA_REGISTRY_URL
+              value: http://host.docker.internal:8082
             # IBKR VIX hop topic lives on THIS env's local broker (ibkr-feed fans out
             # to both clusters) — same env-local rule as KAFKA_BOOTSTRAP_SERVERS.
             - name: VIX_INDEX_SOURCE_BOOTSTRAP

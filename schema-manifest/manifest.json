@@ -886,6 +886,10 @@
    [
     3060,
     3060
+   ],
+   [
+    3061,
+    3061
    ]
   ],
   "multileg": [
@@ -10962,6 +10966,50 @@
    ],
    "retained": true,
    "retainedReason": "curated, not baseline: liquidity-validator-service (NEW, dev only; contracts 0.73.0 schemas-registry/liquidityvalidator) writes it on futures.liquidity-validator.daily under RecordNameStrategy with auto.register.schemas=false (its schema-requirements.json names this id and hash). A research record; this deployment adds no decision consumer of it (a requirement constraint, not proved by the manifest). Dev only; nothing is registered on production or es4."
+  },
+  {
+   "kind": "MIRRORED",
+   "subject": "com.optionsedge.contracts.hpsf.VixUnderlyingPrice",
+   "version": 1,
+   "id": 3061,
+   "family": "hpsf",
+   "schemaFile": "com.optionsedge.contracts.hpsf.VixUnderlyingPrice/v1.avsc",
+   "schemaHash": "8a605ea9390bc10658b564bc17553375548eb37783e751658b8446772719917c",
+   "environments": [
+    "dev",
+    "prod",
+    "es4"
+   ],
+   "source": {
+    "kind": "FILE",
+    "repo": "contracts",
+    "path": "schemas/hpsf/VixUnderlyingPrice.avsc"
+   },
+   "topics": [
+    {
+     "name": "underlying.vix.price",
+     "kind": "data"
+    },
+    {
+     "name": "es.underlying.vix.price",
+     "kind": "data"
+    }
+   ],
+   "producers": [],
+   "consumers": [
+    {
+     "service": "spot-vol-regime",
+     "accepts": [
+      3061
+     ],
+     "environments": [
+      "dev",
+      "prod"
+     ]
+    }
+   ],
+   "retained": true,
+   "retainedReason": "curated, not baseline: underlying.vix.price (Avro since 2026-11-06) is written by the databento-vix-feed role of options-edge-databento-feed, a Rust service outside the governed producers (it reads this subject at start and never registers). The topic is BYTE-mirrored prod -> es4 by MirrorMaker 2 (infra/es4/mm2/mm2.properties), so ONE id (3061) must name the schema in every registry. Registered on dev and es4 on 2026-11-06; production's registry is registered by schema-sync at its own cutover (docs/KAFKA-AVRO-TOPIC-ROLL-FORWARD.md, pending production steps)."
   }
  ],
  "dlqTopics": {
@@ -11250,8 +11298,9 @@
    "topics": [
     "underlying.vix.price"
    ],
-   "subjects": [],
-   "unframed": true
+   "subjects": [
+    "com.optionsedge.contracts.hpsf.VixUnderlyingPrice"
+   ]
   }
  ]
 }

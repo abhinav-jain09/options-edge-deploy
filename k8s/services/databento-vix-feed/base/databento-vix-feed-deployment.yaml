@@ -94,6 +94,11 @@ spec:
             # where both owners are enabled.
             - name: KAFKA_VIX_PRICE_TOPIC
               value: "underlying.vix.price"
+            # Kafka Serialization Rule: underlying.vix.price is Avro (VixUnderlyingPrice, fixed id 3061). The role READS the canonical
+            # schema from this registry at start (never registers; fails closed when the subject is absent). The base is the production
+            # registry; the dev overlay points at the dev registry (ids are identical in every registry for this subject).
+            - name: KAFKA_SCHEMA_REGISTRY_URL
+              value: "http://192.168.100.252:8082"
             # broker-side attribution during the shadow phase (design §2)
             - name: VIX_FEED_KAFKA_CLIENT_ID
               value: "vix-feed"

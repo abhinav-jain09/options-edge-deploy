@@ -1,0 +1,7 @@
+# Fixed schema id for the underlying.vix.price value (VixUnderlyingPrice). Contracts options-edge-contracts 0.74.0 (schemas/hpsf/VixUnderlyingPrice.avsc): id 3061, version 1,
+# subject = the record full name (RecordNameStrategy), compatibility FULL. WHY FIXED: the topic is BYTE-mirrored production -> es4 by MirrorMaker 2
+# (infra/es4/mm2/mm2.properties, es.underlying.vix.price), and a Confluent-framed value names its schema by REGISTRY ID, so the id must be the same in every registry
+# (docs/schema-governance R3f). The writer (the databento-vix-feed role of options-edge-databento-feed) never registers: it reads the latest version of this subject at start.
+# Registered on dev and es4 on 2026-11-06; production's registry is left alone until its own cutover (docs/KAFKA-AVRO-TOPIC-ROLL-FORWARD.md, pending production steps).
+# File column: relative to the contracts checkout's `schemas/hpsf` directory (SCHEMAS_DIR).
+com.optionsedge.contracts.hpsf.VixUnderlyingPrice|3061|VixUnderlyingPrice.avsc
