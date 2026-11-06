@@ -51,5 +51,5 @@ spec:
       volumes:
         - name: level-absorption-line-health-config
           configMap:
-            name: level-absorption-line-health-config-761726bd11d6
+            name: level-absorption-line-health-config-42228ccde83b
             optional: false

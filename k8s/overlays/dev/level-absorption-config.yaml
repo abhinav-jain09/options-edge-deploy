@@ -90,13 +90,14 @@ data:
 # also the configDigest the service writes into every line-health record, so the live check is: the name's suffix equals the first 12 digits of
 # the digest in the status record. A changed value is a NEW object and a changed pod template. Mounted read-only at /home/options-edge/config/line-health,
 # development only (k8s/overlays/dev/level-absorption-dev-enable-patch.yaml); production renders none.
+# guardTicks=8 is EXPLORATORY (M6, decision made by Claude under the owner's standing instruction; the owner may overrule): candidate C2 of the guard search, chosen after the starting value 2 failed AC-8 on the 2026-11-05 windows (lag-free window active 0.84 of seconds) and scored on the same four windows, so it is NOT validated; `provisional` stays set. See options-edge-documents design/line-health/m6-results.md.
 # Every value is a starting value made by Claude under the owner's standing instruction (the owner may overrule); all are uncalibrated (requirement LH-L-2).
 # depthEnvironment is required and has no default: dev reads "Rithmic Paper Trading".
 # scripts/ci/validate-line-health-config.sh checks the key set, the name against the hash, the mount and that only dev turns line health on.
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: level-absorption-line-health-config-761726bd11d6
+  name: level-absorption-line-health-config-42228ccde83b
   namespace: options-edge
 immutable: true
 data:
@@ -125,7 +126,7 @@ data:
     givingWayWindowSeconds=10
     guardClearSeconds=10
     guardSecondsRequired=3
-    guardTicks=2
+    guardTicks=8
     guardWindowSeconds=10
     heldOutSeconds=30
     inputCompletionGraceSeconds=10
