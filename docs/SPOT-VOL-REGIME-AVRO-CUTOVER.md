@@ -19,7 +19,7 @@ of this PR do not need it; step 5 and everything after it do. If #1320 is not me
 | changelog `options-edge-spot-vol-regime-svr-last-frame-store-changelog` | Streams-internal, compacted | `...SpotVolRegimeLastFrameState` |
 
 (Application id and so the changelog names follow `SPOT_VOL_REGIME_STREAMS_APP_ID` / the session-scoped id; read the real names off the broker.)
-Not converted, not ours: `underlying.vix.price` is a JSON input written by another component.
+`underlying.vix.price` (the VIX input) was a JSON input written by another component at this cutover; it was converted to Avro on 2026-11-06, see `docs/VIX-UNDERLYING-PRICE-AVRO-CUTOVER.md` (the service reads it with `VixUnderlyingPriceAvro`, fixed id 3061).
 
 ## Reader-completeness evidence (origin/main, run 2026-10-19)
 ```text

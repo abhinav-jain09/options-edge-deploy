@@ -48,11 +48,17 @@ class VixUnderlyingPriceGovernance(unittest.TestCase):
         self.assertEqual(mirrors[0]["subjects"], [SUBJECT])
         self.assertNotIn("unframed", mirrors[0])
 
-    def test_the_feed_role_reads_the_registry_of_its_environment(self):
-        base = (ROOT / "k8s/services/databento-vix-feed/base/databento-vix-feed-deployment.yaml").read_text()
-        self.assertRegex(base, r"KAFKA_SCHEMA_REGISTRY_URL\s*\n\s*value: \"http://192\.168\.100\.252:8082\"")
+    def test_only_the_dev_overlay_gives_the_feed_role_a_registry(self):
+        """Production stays shut down with its registry untouched: the base/production render does NOT carry KAFKA_SCHEMA_REGISTRY_URL (the role exits
+        without it), the dev overlay carries the dev registry."""
+        for rel in ("k8s/services/databento-vix-feed/base/databento-vix-feed-deployment.yaml",
+                    "k8s/services/databento-vix-feed/overlays/production/manifest.yaml"):
+            text = (ROOT / rel).read_text()
+            self.assertNotRegex(text, r"name: KAFKA_SCHEMA_REGISTRY_URL", rel)
         dev = (ROOT / "k8s/overlays/dev/databento-vix-feed-dev-patch.yaml").read_text()
         self.assertRegex(dev, r"KAFKA_SCHEMA_REGISTRY_URL\s*\n\s*value: http://host\.docker\.internal:8082")
+        slice_dev = (ROOT / "k8s/services/databento-vix-feed/overlays/dev/manifest.yaml").read_text()
+        self.assertRegex(slice_dev, r"KAFKA_SCHEMA_REGISTRY_URL\s*\n\s*value: http://host\.docker\.internal:8082")
 
     def test_no_ibkr_feed_can_write_the_canonical_topic(self):
         """The shared config still names the canonical topic for the CONSUMERS of KAFKA_IBKR_VIX_PRICE_TOPIC (gateway). The IBKR producer must never

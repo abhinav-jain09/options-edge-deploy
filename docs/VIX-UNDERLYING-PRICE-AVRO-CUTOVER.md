@@ -20,6 +20,8 @@ changes serialization is **wiped and recreated under its own name** and every re
 * Readers (all Avro only, no JSON fallback): spot-vol-regime, reversal-confirmation, vix-option-inteligence (live V1 runtime; the dark Stage-B parser decodes the frame as a pure function and requires id 3061),
   drop-classifier (and its copy inside es-liquidity-engine), hpsf-processing Stage B, the feed-gateway (browsers still receive the identical JSON), the trade-evidence-api collector, short-premium-agent.
 
+* The production render of `databento-vix-feed` is DELIBERATELY unchanged: `KAFKA_SCHEMA_REGISTRY_URL` is set only by the dev overlay. Without it the role exits at start, so a production start before
+  its own cutover fails closed instead of reaching for production's registry.
 * The IBKR VIX source never writes this topic: the shared config still names `underlying.vix.price` for the CONSUMERS of `KAFKA_IBKR_VIX_PRICE_TOPIC` (the gateway), but the
   ibkr-feed producer is pointed at the hop topic `underlying.vix.index.price` on dev, is at zero replicas on production, does not exist on es4, and `FeedConfig` refuses the canonical name at boot.
   `tests/test_vix_underlying_price_manifest.py` pins that.
@@ -30,8 +32,12 @@ Workloads change only through Jenkins on es4 and prod; on dev a hand `kubectl se
 2. **Register** on the environment's registry before any producer (fixed id, FULL, read back):
    `SCHEMA_REGISTRY_URL=<registry> SCHEMAS_DIR=<contracts>/schemas/hpsf SCHEMA_ID_MAP=scripts/kafka/schema-id-maps/vix-underlying-price.map scripts/kafka/ensure-fixed-id-schemas.sh`
    (dev `http://192.168.100.102:8082`, or the Tailscale address `100.117.21.102` when the LAN is unreachable; es4 `http://192.168.100.4:8081`; **never** production's registry from this change).
-3. **Take every non-Kubernetes JSON writer and byte copier away and keep them away**: the prod -> dev `com.optionsedge.vixbridge` launchd bridge (`scripts/vix-bridge`, deleted here; the installed plist is renamed `.disabled-*`),
-   and `underlying.vix.price` in the dev -> mac74 MirrorMaker 1 whitelist (`~/oe-ops/dl-mirror-dev-to-mac74/run-mirror.sh`). On es4 the only writer is the MM2 copy from production, which is down.
+3. **Take every non-Kubernetes JSON writer and byte copier away and prove it** (this is what `--json-writers-stopped` attests):
+   * the prod -> dev `com.optionsedge.vixbridge` launchd bridge (`scripts/vix-bridge`, deleted by this change): `launchctl bootout gui/$(id -u)/com.optionsedge.vixbridge 2>/dev/null; mv ~/Library/LaunchAgents/com.optionsedge.vixbridge.plist{,.disabled-<date>}`;
+     verify `launchctl list | grep -c vixbridge` = 0 and `pgrep -fl 'vix_bridge.py|run-vix-bridge.sh'` prints nothing;
+   * the dev -> mac74 MirrorMaker 1 whitelist: `underlying.vix.price` removed from `~/oe-ops/dl-mirror-dev-to-mac74/run-mirror.sh` (the IBKR hop topic `underlying.vix.index.price` stays); verify `launchctl list | grep -c dl-mirror` = 0
+     and `sed -n 22p ~/oe-ops/dl-mirror-dev-to-mac74/run-mirror.sh | tr '|' '\n' | grep -c 'underlying\\.vix\\.price$'` = 0;
+   * the es4 end offsets of `es.underlying.vix.price` do not move over a minute (its only writer is the MM2 copy from production, which is down). The es4 -> mac74 MM1 consumer group `oe-mac74-input-from-es4` (on 192.168.100.74) READS the es4 topic and keeps working across the wipe; it is not a writer to either topic here.
 4. **Roll the Avro writer** (dev: the digest-pinned feed image with the Avro writer, `databento-vix-feed`); prove ONE pod on the new digest and, because the IBKR hop topic may be silent off-hours, that it started (subject found) and has 0 restarts.
 5. Read the TopicId off the broker (`kafka-topics --describe`), delete the consumer groups that hold offsets on the topic (`kafka-consumer-groups --delete-offsets`; the rolled readers keep no committed offset).
 6. **Wipe and recreate** with the harness:
@@ -41,6 +47,7 @@ Workloads change only through Jenkins on es4 and prod; on dev a hand `kubectl se
 
 ## Production (NOT done by this change: prod stays shut down, its registry stopped)
 Pending steps, in order, before production's `databento-vix-feed`, spot-vol-regime, reversal-confirmation, vix-option-inteligence, drop-classifier or the gateway are started:
+0. In the SAME change that starts the production feed, add `KAFKA_SCHEMA_REGISTRY_URL=http://192.168.100.252:8082` to `k8s/services/databento-vix-feed/base/databento-vix-feed-deployment.yaml` (and regenerate the slices).
 1. Start production's registry, then register the subject with the same map (`SCHEMA_REGISTRY_URL=http://192.168.100.252:8082 ... ensure-fixed-id-schemas.sh`); id 3061 must be free there (`schema-sync.sh SERVICE=@all ENVIRONMENT=production` plans it from the manifest entry, which already lists `prod`).
 2. Convert the leftovers that still read the JSON topic on production: `~/oe-ops/market-sentinel.py` (topic format `avro`), `oe-ops/freshness-topics.conf` is timestamp-only (no change).
 3. Then the same register -> feed (production image built only now) -> wipe (`--cluster production`, `192.168.100.252:9092`) -> readers sequence. MM2 resumes copying Avro bytes whose id 3061 resolves in the es4 registry; es4's retained `es.underlying.vix.price` was wiped and recreated empty on 2026-11-06.
