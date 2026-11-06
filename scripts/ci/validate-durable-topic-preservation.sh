@@ -70,20 +70,32 @@ _assert_only_self_references() {
   bad="$(python3 - "$TOPICS_ENV" <<'PYEOF'
 import re, sys
 s = open(sys.argv[1]).read()
-out = []
+out, seen, refs = [], 0, 0
 for m in re.finditer(r'^[ \t]*([A-Za-z0-9_]*TOPIC[A-Za-z0-9_]*)="(.*)"$', s, re.M):
+    seen += 1
     var, val = m.group(1), m.group(2)
     for tok in val.split():
         if not tok.startswith("$"):
             continue
+        refs += 1
         name = tok[1:]
         if name.startswith("{") and name.endswith("}"):
             name = name[1:-1]
         if name != var:
             out.append("  %s declares %s" % (var, tok))
+# NON-VACUITY, on its own stderr+status (Codex r3). A selector that matches nothing reports no
+# cross-reference, which is indistinguishable from "there are none" -- the exact shape this whole
+# change is about. topics.env has ~hundreds of *TOPIC* assignments and ~176 self-references; zero of
+# either means the selector, not the file, changed.
+if seen == 0 or refs == 0:
+    sys.stderr.write("scanned %d *TOPIC* assignment(s) and %d variable reference(s) in %s; "
+                     "expected many of each\n" % (seen, refs, sys.argv[1]))
+    sys.exit(2)
 print("\n".join(out))
 PYEOF
-)" || { echo "HARNESS FAILURE: could not scan $TOPICS_ENV for variable references." >&2; exit 3; }
+)" || { echo "HARNESS FAILURE: could not scan $TOPICS_ENV for variable references — the scan found" >&2
+        echo "                 nothing to inspect, so 'no cross-reference' would be a statement about" >&2
+        echo "                 the scanner rather than about the file." >&2; exit 3; }
   if [ -n "$bad" ]; then
     echo "HARNESS FAILURE: $TOPICS_ENV refers to a variable OTHER than the one being declared:" >&2
     printf '%s\n' "$bad" >&2

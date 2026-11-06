@@ -206,4 +206,21 @@ grep -q 'OPTIONS_EDGE_RESET_PRESERVED_TOPICS="\$SOME_OTHER_LIST ' "$TOPICS" \
   || { echo "  FAIL cross-reference mutation did not apply — the case below would pass vacuously"; fail=1; }
 expect "a cross-reference to another list" 3 "refers to a variable OTHER than the one being declared"
 
+# ...and the self-reference scanner must not be able to match ZERO. A selector that selects nothing
+# reports no cross-reference, which reads identically to "there are none" -- the same shape as the
+# column-0 anchor this whole change is about, one level up, in the guard added to fix it (Codex r3).
+# The selector is narrowed to a name no declaration has; the non-vacuity check must turn that into a
+# harness failure rather than a clean pass.
+python3 - "$VALIDATOR" <<'PYEOF'
+import sys
+p = sys.argv[1]; s = open(p).read()
+old = "([A-Za-z0-9_]*TOPIC[A-Za-z0-9_]*)"
+new = "(ZZ_NO_SUCH_DECLARATION)"
+assert s.count(old) == 1, s.count(old)
+open(p, "w").write(s.replace(old, new))
+PYEOF
+grep -q 'ZZ_NO_SUCH_DECLARATION' "$VALIDATOR" \
+  || { echo "  FAIL scanner-selector mutation did not apply — the case below would pass vacuously"; fail=1; }
+expect "the self-reference scanner matching nothing" 3 "found"
+
 [ $fail -eq 0 ] && echo "=== validate-durable-topic-preservation-mutation-test: OK ===" || { echo "=== validate-durable-topic-preservation-mutation-test: FAILED ==="; exit 1; }
