@@ -1045,7 +1045,7 @@
     "esmbo": [
       [
         3501,
-        3507
+        3508
       ]
     ],
     "liquidityvalidator": [
@@ -5824,6 +5824,40 @@
       ],
       "retained": true,
       "retainedReason": "curated, not baseline: es-liquidity-engine-service (NEW, dev only; contracts 0.74.0 schemas-registry/esmbo) writes and reads it on es.mbo.closures (compacted restart cutoff) under RecordNameStrategy with auto.register.schemas=false. Dev only; nothing is registered on production or es4."
+    },
+    {
+      "kind": "MIRRORED",
+      "subject": "com.optionsedge.contracts.esmbo.EsMboClosureFinal",
+      "version": 1,
+      "id": 3508,
+      "family": "esmbo",
+      "schemaFile": "com.optionsedge.contracts.esmbo.EsMboClosureFinal/v1.avsc",
+      "schemaHash": "6f6a16be84f186bbc6c78a9ac3392762bbe455760429a068dfb08bd05a85401d",
+      "environments": [
+        "dev"
+      ],
+      "source": {
+        "kind": "FILE",
+        "repo": "contracts",
+        "path": "schemas-registry/esmbo/EsMboClosureFinal.avsc"
+      },
+      "topics": [
+        {
+          "name": "es.mbo.closures",
+          "kind": "data"
+        }
+      ],
+      "producers": [
+        {
+          "service": "es-liquidity-engine",
+          "environments": [
+            "dev"
+          ]
+        }
+      ],
+      "consumers": [],
+      "retained": true,
+      "retainedReason": "curated, not baseline: es-liquidity-engine-service (NEW, dev only; contracts 0.83.0 schemas-registry/esmbo) writes it on es.mbo.closures under the per-bucket key CME|<contract>|FINAL|<bucketEnd> under RecordNameStrategy with auto.register.schemas=false. It records only; nothing reads it yet. Dev only; nothing is registered on production or es4."
     },
     {
       "kind": "MIRRORED",

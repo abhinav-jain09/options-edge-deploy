@@ -1,0 +1,135 @@
+{
+  "type": "record",
+  "name": "EsMboClosureFinal",
+  "namespace": "com.optionsedge.contracts.esmbo",
+  "doc": "es-liquidity-engine G 4.6: the FINAL closure of a bucket, the recorded wall-clock and source-position decisions of the tape stage (path WATERMARK or DEGRADED, the exclusive next offset of every tape partition and of the MBO and wall topics at the decision, the tape watermark, the idle advances applied since the previous FINAL closure, rolePath/wallWatermarkMs for role reversal). The BOOK closure stays EsMboClosure 3501.",
+  "fields": [
+    {
+      "name": "schemaVersion",
+      "type": "int"
+    },
+    {
+      "name": "environment",
+      "type": "string"
+    },
+    {
+      "name": "contract",
+      "type": "string"
+    },
+    {
+      "name": "bucketEnd",
+      "type": "long"
+    },
+    {
+      "name": "configFingerprint",
+      "type": "string"
+    },
+    {
+      "name": "path",
+      "type": "string"
+    },
+    {
+      "name": "rolePath",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "wallWatermarkMs",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    },
+    {
+      "name": "epochId",
+      "type": "long"
+    },
+    {
+      "name": "epochStatus",
+      "type": "string"
+    },
+    {
+      "name": "mboNext",
+      "type": "long"
+    },
+    {
+      "name": "wallEventsNext",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    },
+    {
+      "name": "wallStateNext",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    },
+    {
+      "name": "tapeNext",
+      "type": {
+        "type": "array",
+        "items": {
+          "type": "record",
+          "name": "EsMboTapePosition",
+          "fields": [
+            {
+              "name": "partition",
+              "type": "int"
+            },
+            {
+              "name": "next",
+              "type": "long"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "tapeWatermarkMs",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    },
+    {
+      "name": "idleAdvances",
+      "type": {
+        "type": "array",
+        "items": {
+          "type": "record",
+          "name": "EsMboIdleAdvance",
+          "fields": [
+            {
+              "name": "tapeNext",
+              "type": {
+                "type": "array",
+                "items": "EsMboTapePosition"
+              }
+            },
+            {
+              "name": "watermarkMs",
+              "type": "long"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "lastBookEnd",
+      "type": "long"
+    },
+    {
+      "name": "lastFinalEnd",
+      "type": "long"
+    }
+  ]
+}
