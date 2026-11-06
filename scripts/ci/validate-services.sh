@@ -196,6 +196,8 @@ bash scripts/ci/validate-durable-topic-preservation.sh
 
 # Level Absorption: the ConfigMap (configuration + retention artifact), the events topic's byte cap and the LA-050 topic names agree.
 bash scripts/ci/validate-level-absorption-config.sh
+# Line health: the second ConfigMap of that file (content-named, immutable, exact key set), the dev-only enable patch, and nothing else turning it on.
+bash scripts/ci/validate-line-health-config.sh
 
 # The OI anchor topic barrier: its parser, and the shipped script end to end against mocked CLIs.
 # Wired here because a regression test nothing runs is not a test -- and this particular parser has

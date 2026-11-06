@@ -11164,10 +11164,17 @@
           "kind": "data"
         }
       ],
-      "producers": [],
+      "producers": [
+        {
+          "service": "level-absorption",
+          "environments": [
+            "dev"
+          ]
+        }
+      ],
       "consumers": [],
       "retained": true,
-      "retainedReason": "curated, not baseline: the Line health feature (requirement rev 25 LH-O-1, design 3.2a; contracts 0.78.0 schemas-registry/linehealth), written by the line-health loop of level-absorption-service (milestone M1, not built at M0) on futures.line-health.state under RecordNameStrategy with auto.register.schemas=false. Producer and consumer bindings are added by the milestone that builds each side together with its image label, so no existing service becomes schema-gated at M0. Dev only; nothing is registered on production or es4."
+      "retainedReason": "curated, not baseline: the Line health feature (requirement rev 25 LH-O-1, design 3.2a; contracts 0.79.0 schemas-registry/linehealth), written by the line-health loop of level-absorption-service (milestone M1, not built at M0) on futures.line-health.state under RecordNameStrategy with auto.register.schemas=false. Producer and consumer bindings are added by the milestone that builds each side together with its image label, so no existing service becomes schema-gated at M0. Dev only; nothing is registered on production or es4."
     },
     {
       "kind": "MIRRORED",
@@ -11191,10 +11198,17 @@
           "kind": "data"
         }
       ],
-      "producers": [],
+      "producers": [
+        {
+          "service": "level-absorption",
+          "environments": [
+            "dev"
+          ]
+        }
+      ],
       "consumers": [],
       "retained": true,
-      "retainedReason": "curated, not baseline: the Line health feature (requirement rev 25 LH-O-1, design 3.2a; contracts 0.78.0 schemas-registry/linehealth), written by the line-health loop of level-absorption-service (milestone M1, not built at M0) on futures.line-health.events under RecordNameStrategy with auto.register.schemas=false. Producer and consumer bindings are added by the milestone that builds each side together with its image label, so no existing service becomes schema-gated at M0. Dev only; nothing is registered on production or es4."
+      "retainedReason": "curated, not baseline: the Line health feature (requirement rev 25 LH-O-1, design 3.2a; contracts 0.79.0 schemas-registry/linehealth), written by the line-health loop of level-absorption-service (milestone M1, not built at M0) on futures.line-health.events under RecordNameStrategy with auto.register.schemas=false. Producer and consumer bindings are added by the milestone that builds each side together with its image label, so no existing service becomes schema-gated at M0. Dev only; nothing is registered on production or es4."
     },
     {
       "kind": "MIRRORED",
@@ -11218,10 +11232,17 @@
           "kind": "data"
         }
       ],
-      "producers": [],
+      "producers": [
+        {
+          "service": "level-absorption",
+          "environments": [
+            "dev"
+          ]
+        }
+      ],
       "consumers": [],
       "retained": true,
-      "retainedReason": "curated, not baseline: the Line health feature (requirement rev 25 LH-O-1, design 3.2a; contracts 0.78.0 schemas-registry/linehealth), written by the line-health loop of level-absorption-service (milestone M1, not built at M0) on futures.line-health.voice under RecordNameStrategy with auto.register.schemas=false. Producer and consumer bindings are added by the milestone that builds each side together with its image label, so no existing service becomes schema-gated at M0. Dev only; nothing is registered on production or es4."
+      "retainedReason": "curated, not baseline: the Line health feature (requirement rev 25 LH-O-1, design 3.2a; contracts 0.79.0 schemas-registry/linehealth), written by the line-health loop of level-absorption-service (milestone M1, not built at M0) on futures.line-health.voice under RecordNameStrategy with auto.register.schemas=false. Producer and consumer bindings are added by the milestone that builds each side together with its image label, so no existing service becomes schema-gated at M0. Dev only; nothing is registered on production or es4."
     },
     {
       "kind": "MIRRORED",
@@ -11248,7 +11269,7 @@
       "producers": [],
       "consumers": [],
       "retained": true,
-      "retainedReason": "curated, not baseline: the Line health feature (requirement rev 25 LH-O-1, design 3.2a; contracts 0.78.0 schemas-registry/linehealth), written by the line-health loop of level-absorption-service (milestone M1, not built at M0) on futures.line-health.user-lines under RecordNameStrategy with auto.register.schemas=false. Producer and consumer bindings are added by the milestone that builds each side together with its image label, so no existing service becomes schema-gated at M0. Dev only; nothing is registered on production or es4."
+      "retainedReason": "curated, not baseline: the Line health feature (requirement rev 25 LH-O-1, design 3.2a; contracts 0.79.0 schemas-registry/linehealth), written by the line-health loop of level-absorption-service (milestone M1, not built at M0) on futures.line-health.user-lines under RecordNameStrategy with auto.register.schemas=false. Producer and consumer bindings are added by the milestone that builds each side together with its image label, so no existing service becomes schema-gated at M0. Dev only; nothing is registered on production or es4."
     },
     {
       "kind": "MIRRORED",
@@ -11257,7 +11278,7 @@
       "id": 3705,
       "family": "linehealth",
       "schemaFile": "com.optionsedge.contracts.linehealth.LineHealthStatus/v1.avsc",
-      "schemaHash": "ffddab1720e372c26be96234d62e42c250f14932c2d0921fdbff2295402e43dc",
+      "schemaHash": "88adf8a7e8da8a3e05255978daf8a1ebb478fc11325d5dd811edc992ab476577",
       "environments": [
         "dev"
       ],
@@ -11272,10 +11293,17 @@
           "kind": "data"
         }
       ],
-      "producers": [],
+      "producers": [
+        {
+          "service": "level-absorption",
+          "environments": [
+            "dev"
+          ]
+        }
+      ],
       "consumers": [],
       "retained": true,
-      "retainedReason": "curated, not baseline: the Line health feature (requirement rev 25 LH-O-1, design 3.2a; contracts 0.78.0 schemas-registry/linehealth), written by the line-health loop of level-absorption-service (milestone M1, not built at M0) on futures.line-health.status under RecordNameStrategy with auto.register.schemas=false. Producer and consumer bindings are added by the milestone that builds each side together with its image label, so no existing service becomes schema-gated at M0. Dev only; nothing is registered on production or es4."
+      "retainedReason": "curated, not baseline: the Line health feature (requirement rev 25 LH-O-1, design 3.2a; contracts 0.79.0 schemas-registry/linehealth), written by the line-health loop of level-absorption-service (milestone M1, not built at M0) on futures.line-health.status under RecordNameStrategy with auto.register.schemas=false. Producer and consumer bindings are added by the milestone that builds each side together with its image label, so no existing service becomes schema-gated at M0. Dev only; nothing is registered on production or es4."
     },
     {
       "kind": "MIRRORED",
@@ -11299,10 +11327,17 @@
           "kind": "data"
         }
       ],
-      "producers": [],
+      "producers": [
+        {
+          "service": "level-absorption",
+          "environments": [
+            "dev"
+          ]
+        }
+      ],
       "consumers": [],
       "retained": true,
-      "retainedReason": "curated, not baseline: the Line health feature (requirement rev 25 LH-O-1, design 3.2a; contracts 0.78.0 schemas-registry/linehealth), written by the line-health loop of level-absorption-service (milestone M1, not built at M0) on futures.line-health.closures under RecordNameStrategy with auto.register.schemas=false. Producer and consumer bindings are added by the milestone that builds each side together with its image label, so no existing service becomes schema-gated at M0. Dev only; nothing is registered on production or es4."
+      "retainedReason": "curated, not baseline: the Line health feature (requirement rev 25 LH-O-1, design 3.2a; contracts 0.79.0 schemas-registry/linehealth), written by the line-health loop of level-absorption-service (milestone M1, not built at M0) on futures.line-health.closures under RecordNameStrategy with auto.register.schemas=false. Producer and consumer bindings are added by the milestone that builds each side together with its image label, so no existing service becomes schema-gated at M0. Dev only; nothing is registered on production or es4."
     },
     {
       "kind": "MIRRORED",
@@ -11326,10 +11361,17 @@
           "kind": "data"
         }
       ],
-      "producers": [],
+      "producers": [
+        {
+          "service": "level-absorption",
+          "environments": [
+            "dev"
+          ]
+        }
+      ],
       "consumers": [],
       "retained": true,
-      "retainedReason": "curated, not baseline: the Line health feature (requirement rev 25 LH-O-1, design 3.2a; contracts 0.78.0 schemas-registry/linehealth), written by the line-health loop of level-absorption-service (milestone M1, not built at M0) on futures.line-health.snapshot under RecordNameStrategy with auto.register.schemas=false. Producer and consumer bindings are added by the milestone that builds each side together with its image label, so no existing service becomes schema-gated at M0. Dev only; nothing is registered on production or es4."
+      "retainedReason": "curated, not baseline: the Line health feature (requirement rev 25 LH-O-1, design 3.2a; contracts 0.79.0 schemas-registry/linehealth), written by the line-health loop of level-absorption-service (milestone M1, not built at M0) on futures.line-health.snapshot under RecordNameStrategy with auto.register.schemas=false. Producer and consumer bindings are added by the milestone that builds each side together with its image label, so no existing service becomes schema-gated at M0. Dev only; nothing is registered on production or es4."
     }
   ],
   "dlqTopics": {

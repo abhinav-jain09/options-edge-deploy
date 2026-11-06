@@ -79,3 +79,89 @@ data:
     {"formatVersion":1,"kind":"level-absorption.retention-artifact","topic":"futures.level-absorption.events","retentionMs":-1,"measuredBytesPerDay":1361259,"measurementSessions":1,"retentionDays":30,"safetyFactor":2,"retentionBytes":81675540}
   path-configuration.json: |
     {"id":"spx-path-v1-eyeball-provisional","windowBars":6,"minimumSideBars":3,"minimumSideContracts":500,"intervalStepPoints":5.0,"rewardCutoffPointsPerThousand":0.5,"minimumRetainedFraction":0.6,"staleAfterMillis":90000,"maximumIntervals":256}
+---
+# The Line health configuration (requirement rev 25 section 17, design 4.6a), a SECOND ConfigMap in this file so that the one existing apply
+# step ("Apply level-absorption configuration" in Jenkinsfile.service-deploy, which cannot grow) creates it. IMMUTABLE and NAMED BY ITS CONTENT:
+# the suffix is the first 12 hex digits of the SHA-256 of the file text below (keys sorted, one key=value per line, newline-terminated), which is
+# also the configDigest the service writes into every line-health record, so the live check is: the name's suffix equals the first 12 digits of
+# the digest in the status record. A changed value is a NEW object and a changed pod template. Mounted read-only at /home/options-edge/config/line-health,
+# development only (k8s/overlays/dev/level-absorption-dev-enable-patch.yaml); production renders none.
+# Every value is a starting value made by Claude under the owner's standing instruction (the owner may overrule); all are uncalibrated (requirement LH-L-2).
+# depthEnvironment is required and has no default: dev reads "Rithmic Paper Trading".
+# scripts/ci/validate-line-health-config.sh checks the key set, the name against the hash, the mount and that only dev turns line health on.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: level-absorption-line-health-config-0519483e5ff0
+  namespace: options-edge
+immutable: true
+data:
+  line-health-configuration.txt: |
+    absorbTicks=8
+    bandTicks=4
+    basisBracketMillis=2000
+    basisCapacity=4096
+    basisFreshMillis=90000
+    beyondTicks=20
+    clockUnfit=false
+    compactFontPixels=9
+    compactPitchPixels=21
+    compactRowPixels=11
+    crossConfirmSeconds=5
+    defendedConfirmSeconds=5
+    defendedMin=6
+    depthEnvironment=Rithmic Paper Trading
+    depthReferenceContracts=127
+    displayStaleSeconds=5
+    fitConfirmSeconds=10
+    followDistancePoints=10
+    followWindowSeconds=20
+    givingWayDrop=4
+    givingWayLevel=2
+    givingWayWindowSeconds=10
+    guardClearSeconds=10
+    guardSecondsRequired=3
+    guardTicks=2
+    guardWindowSeconds=10
+    heldOutSeconds=30
+    inputCompletionGraceSeconds=5
+    labelCharWidthPixels=7
+    labelFontPixels=11
+    labelInsetPixels=6
+    labelOffsetPixels=3
+    labelPaddingPixels=8
+    labelRowPixels=13
+    leaderThresholdPixels=3
+    legendFontPixels=10
+    lineHealthKinds=DEFAULT
+    markerSizePixels=5
+    mboMaxLagSeconds=15
+    mboWindowSeconds=20
+    minFollowSeconds=10
+    minMboFlow=25
+    minPushContracts=50
+    minTestedContracts=50
+    pullCutoffMilli=500
+    pushCutoffMilli=200
+    reclaimSeconds=10
+    reclaimTicks=4
+    retiredDisplayMinutes=10
+    rollbackShareMilli=400
+    snapshotSeconds=30
+    stallPaceMilliPointsPerMinute=500
+    stallSeconds=30
+    stateConfirmSeconds=3
+    stateRefreshMinutes=60
+    tapeSilentSeconds=30
+    tapeWindowSeconds=20
+    tickLabelClearancePixels=4
+    tickMaxHeightPixels=12
+    tickMinHeightPixels=3
+    tickSpacingPixels=11
+    touchExitPoints=3
+    unknownDotTenthsPixels=15
+    userLinePublishDebounceMillis=500
+    vacuumDepthContracts=398
+    wBookMilli=500
+    wMboMilli=200
+    wTapeMilli=300

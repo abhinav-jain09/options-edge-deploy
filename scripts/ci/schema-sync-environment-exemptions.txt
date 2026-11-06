@@ -1,0 +1,7 @@
+# Schema-sync environment exemptions (docs/schema-governance R4/R6 coverage ratchet). Each line: <service>|<ENVIRONMENT as service-deploy names it>|<reason>
+# WHAT: a service the manifest binds in SOME environment is gated in EVERY environment it deploys to, and the tool refuses it where it has no
+# binding ("not a participant of any manifest entry"). A line here says: this service is deliberately not schema-gated in this one environment.
+# SAFETY (enforced by scripts/ci/schema-sync-scope.sh, fail closed): the exemption holds ONLY while NO manifest binding of the service lists
+# that environment. The moment a binding is added for it, the exemption is ignored and the full gate runs. A service or environment that is
+# not listed here keeps today's behaviour exactly.
+level-absorption|production|line health (futures.line-health.*, ids 3701-3707) is development only for now: the manifest binds level-absorption on dev alone, so its production image roll has nothing to register; the verdict engine's own subjects were never gated and still are not

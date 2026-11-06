@@ -44,6 +44,10 @@ spec:
               value: /home/options-edge/config/level-absorption/path-configuration.json
             - name: LEVEL_ABSORPTION_TWO_SIDED_HOST
               value: "true"
+            - name: LEVEL_ABSORPTION_LINE_HEALTH_ENABLED
+              value: "true"
+            - name: LEVEL_ABSORPTION_LINE_HEALTH_CONFIGURATION
+              value: /home/options-edge/config/line-health/line-health-configuration.txt
             - name: LEVEL_ABSORPTION_PHASE
               value: EYEBALL
             - name: KAFKA_LEVEL_ABSORPTION_FOOTPRINT_TOPIC
@@ -114,6 +118,9 @@ spec:
               cpu: 200m
               memory: 1Gi
           volumeMounts:
+            - mountPath: /home/options-edge/config/line-health
+              name: level-absorption-line-health-config
+              readOnly: true
             - mountPath: /home/options-edge/config/level-absorption
               name: level-absorption-config
               readOnly: true
@@ -121,6 +128,10 @@ spec:
               name: level-absorption-data
       terminationGracePeriodSeconds: 60
       volumes:
+        - configMap:
+            name: level-absorption-line-health-config-0519483e5ff0
+            optional: false
+          name: level-absorption-line-health-config
         - configMap:
             name: level-absorption-config-2eba92cfd6c6
           name: level-absorption-config

@@ -13,7 +13,7 @@ module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
 
 class LiveConfigTest(unittest.TestCase):
     def setUp(self):
-        self.obj=yaml.safe_load((ROOT/'k8s/overlays/dev/level-absorption-config.yaml').read_text())
+        self.obj=[d for d in yaml.safe_load_all((ROOT/'k8s/overlays/dev/level-absorption-config.yaml').read_text()) if d][0]
         self.digest=hashlib.sha256(json.dumps(self.obj['data'],sort_keys=True).encode()).hexdigest()
         self.name=self.obj['metadata']['name']
     def test_actual_three_file_config_passes(self):

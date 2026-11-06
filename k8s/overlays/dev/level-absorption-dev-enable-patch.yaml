@@ -26,7 +26,22 @@ spec:
               value: /home/options-edge/config/level-absorption/path-configuration.json
             - name: LEVEL_ABSORPTION_TWO_SIDED_HOST
               value: "true"
+            # Line health (requirement rev 25; development only, LH-E-5): the second, independent loop of this image. Production and es4 set neither
+            # variable, and the flag defaults to false, so no line-health consumer is constructed there.
+            - name: LEVEL_ABSORPTION_LINE_HEALTH_ENABLED
+              value: "true"
+            - name: LEVEL_ABSORPTION_LINE_HEALTH_CONFIGURATION
+              value: /home/options-edge/config/line-health/line-health-configuration.txt
+          volumeMounts:
+            - name: level-absorption-line-health-config
+              mountPath: /home/options-edge/config/line-health
+              readOnly: true
           readinessProbe:
             httpGet:
               path: /health/deployment-ready
               port: health
+      volumes:
+        - name: level-absorption-line-health-config
+          configMap:
+            name: level-absorption-line-health-config-0519483e5ff0
+            optional: false

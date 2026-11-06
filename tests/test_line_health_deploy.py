@@ -212,7 +212,7 @@ class SchemaMapAndManifest(unittest.TestCase):
                 if line.strip() and not line.lstrip().startswith("#"):
                     self.assertNotIn(int(line.split("|")[1]), ours, f"{other.name} reuses a line-health id")
 
-    def test_the_manifest_carries_the_family_block_and_the_seven_dev_entries_without_bindings(self):
+    def test_the_manifest_carries_the_family_block_and_the_seven_dev_entries_bound_to_level_absorption_on_dev(self):
         m = json.loads(read("schema-manifest/manifest.json"))
         self.assertEqual(m["familyBlocks"]["linehealth"], [[3701, 3710]])
         for fam, ranges in m["familyBlocks"].items():
@@ -228,7 +228,8 @@ class SchemaMapAndManifest(unittest.TestCase):
             self.assertEqual((e["kind"], e["version"], e["id"], e["environments"]), ("MIRRORED", 1, sid, ["dev"]), name)
             self.assertEqual(e["source"], {"kind": "FILE", "repo": "contracts", "path": f"schemas-registry/linehealth/{name}.avsc"}, name)
             self.assertEqual(e["topics"], [{"name": TOPIC_OF[name], "kind": "data"}], name)
-            self.assertEqual((e["producers"], e["consumers"]), ([], []), f"{name}: no binding at M0, so no existing service becomes schema-gated")
+            producers = [] if name == "LineHealthUserLine" else [{"service": "level-absorption", "environments": ["dev"]}]
+            self.assertEqual((e["producers"], e["consumers"]), (producers, []), f"{name}: M1 binds level-absorption as producer on dev only (user lines are written by the web tier at M5)")
             snapshot = ROOT / "schema-manifest/schemas" / e["schemaFile"]
             text = snapshot.read_text()
             self.assertEqual(text, json.dumps(json.loads(text), separators=(",", ":"), ensure_ascii=False), f"{name}: one-line compact JSON, no trailing newline")

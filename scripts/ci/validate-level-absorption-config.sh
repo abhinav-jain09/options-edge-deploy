@@ -13,7 +13,10 @@ try:
     import yaml
 except ImportError:
     sys.exit("FATAL: python3 yaml module required")
-cm = yaml.safe_load(pathlib.Path('k8s/overlays/dev/level-absorption-config.yaml').read_text())
+# the file holds two ConfigMaps (the line-health one is validated by scripts/ci/validate-line-health-config.sh): this validator owns the first
+_docs = [d for d in yaml.safe_load_all(pathlib.Path('k8s/overlays/dev/level-absorption-config.yaml').read_text()) if d]
+assert _docs and _docs[0]['metadata']['name'].startswith('level-absorption-config-'), 'the verdict engine ConfigMap must be the first document'
+cm = _docs[0]
 assert cm['kind'] == 'ConfigMap', 'not a ConfigMap'
 assert set(cm['data']) == {'frozen-configuration.json', 'retention-artifact.json', 'path-configuration.json'}, 'ConfigMap keys must be exactly the three files'
 art = json.loads(cm['data']['retention-artifact.json'])
