@@ -11149,7 +11149,7 @@
       "id": 3701,
       "family": "linehealth",
       "schemaFile": "com.optionsedge.contracts.linehealth.LineHealthState/v1.avsc",
-      "schemaHash": "7f05530922ecfc18b0e85f13863e66d4ea56e4bbee4c36e2a9e6eb2da79378ad",
+      "schemaHash": "73725e269c12d83b5e6fbd0d3e1779d484cd89d85dbb475c970909408d999783",
       "environments": [
         "dev"
       ],
@@ -11183,7 +11183,7 @@
       "id": 3702,
       "family": "linehealth",
       "schemaFile": "com.optionsedge.contracts.linehealth.LineHealthEvent/v1.avsc",
-      "schemaHash": "4087720a6894aabfe97b3bd9d6d98236e542dbc74e74b24e71d3403b122f5013",
+      "schemaHash": "11cf7e56d3f066a19357ee1e103ea6c72eeddab47125da94d377df1a8c766ed4",
       "environments": [
         "dev"
       ],
@@ -11278,7 +11278,7 @@
       "id": 3705,
       "family": "linehealth",
       "schemaFile": "com.optionsedge.contracts.linehealth.LineHealthStatus/v1.avsc",
-      "schemaHash": "88adf8a7e8da8a3e05255978daf8a1ebb478fc11325d5dd811edc992ab476577",
+      "schemaHash": "b3f5df4b1b394d6963c49ad1f8a3f7b33b4ae91948f00c5e61b8fc5043872832",
       "environments": [
         "dev"
       ],
@@ -11346,7 +11346,7 @@
       "id": 3707,
       "family": "linehealth",
       "schemaFile": "com.optionsedge.contracts.linehealth.LineHealthSnapshot/v1.avsc",
-      "schemaHash": "f91827aec7bff829c12d3fba6b862c1db976a4574343b3694df5aa17b01bb5b9",
+      "schemaHash": "c77eeb96df0d6d3eec9406a615e2a51cd99196484d5735d4e50dc3cff66c54ad",
       "environments": [
         "dev"
       ],
