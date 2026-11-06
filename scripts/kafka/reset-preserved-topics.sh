@@ -13,14 +13,37 @@
 # ENVIRONMENT=production adds the prod-only list. Anywhere else it is deliberately absent: vix is
 # durable on production only.
 
-_rpt_one() { # variable name -> its value; fails unless EXACTLY ONE assignment exists
+# _rpt_one <var> <file> -> the variable's value: EVERY assignment of it, appended ones included.
+#
+# topics.env is parsed as TEXT here, not sourced ("the validators parse topics.env, they do not source it" --
+# topics.env's own es.mbo note), so this reader has to understand how the file really declares a topic. A
+# dev-only topic is declared by APPENDING, and an append sits inside `if [ "${ENVIRONMENT:-}" != "production" ]`,
+# which makes the assignment INDENTED.
+#
+# The 2026-11-06 loss this fixes: the read was `grep -cE "^${var}=\""` plus the matching sed, both anchored at
+# column 0. An indented assignment was invisible, the "exactly ONE" check still SUCCEEDED on the unindented base
+# declaration, and the value came back missing every appended entry. futures.liquidity-validator.{evaluations,
+# data-gaps,daily} are declared RESET-PRESERVED that way, under a comment promising "every reset path and the dev
+# clean keep them"; the dev clean deleted all three. The header above tells the same story about a MISSING
+# declaration making underlying.vix.price purgeable on production -- an APPENDED one is the same hole, and this
+# parser is shared by the destructive reset job, cleanup-topics.sh and CI.
+#
+# So: accept an indented assignment, and CONCATENATE every one of them instead of demanding exactly one. The
+# keep-list can then only grow, never shrink, which is the safe direction for a list that decides what may be
+# purged. The `$VAR` self-reference an append opens with is dropped: it is the variable's own text, not a topic.
+#
+# The structural check is KEPT, as "this declaration still exists" (>= 1): a variable with no assignment anywhere
+# still fails closed, which is what caught a vanished declaration before.
+_rpt_one() {
   local var="$1" file="$2" n
-  n=$(grep -cE "^${var}=\"" "$file" 2>/dev/null || true)
-  if [ "${n:-0}" -ne 1 ]; then
-    echo "FATAL: expected exactly ONE ${var}= assignment in $file, found ${n:-0}" >&2
+  n=$(grep -cE "^[[:space:]]*${var}=\"" "$file" 2>/dev/null || true)
+  if [ "${n:-0}" -lt 1 ]; then
+    echo "FATAL: no ${var}=\" assignment in $file" >&2
     return 1
   fi
-  sed -nE "s/^${var}=\"(.*)\"$/\\1/p" "$file"
+  sed -nE "s/^[[:space:]]*${var}=\"(.*)\"$/\1/p" "$file" \
+    | sed -e "s/\\\$${var}//g" -e "s/\\\${${var}}//g" \
+    | tr '\n' ' ' | tr -s ' ' | sed -e 's/^ *//' -e 's/ *$//'
 }
 
 rpt_resolve() { # topics.env path -> the resolved list on stdout
