@@ -1,0 +1,63 @@
+{
+  "type": "record",
+  "name": "EsMboClosure",
+  "namespace": "com.optionsedge.contracts.esmbo",
+  "doc": "es-liquidity-engine G 4.6: the recorded decision that closed one 1 s bucket of the book. A restart reads the latest one to know exactly which buckets the previous process had closed and where in the MBO input it stood.",
+  "fields": [
+    {
+      "name": "schemaVersion",
+      "type": "int",
+      "doc": "1 for this revision"
+    },
+    {
+      "name": "environment",
+      "type": "string",
+      "doc": "the environment literal of the admitted MBO records, e.g. Rithmic Paper Trading"
+    },
+    {
+      "name": "contract",
+      "type": "string",
+      "doc": "the contract table's row for the trade date, e.g. ESZ6"
+    },
+    {
+      "name": "bucketEnd",
+      "type": "long",
+      "doc": "bucket end on the collector clock (receivedAtMs), epoch ms; 1000 ms grid, bucket (end-1000, end]"
+    },
+    {
+      "name": "configFingerprint",
+      "type": "string",
+      "doc": "SHA-256 over the sorted name=value configuration lines plus the engine's logic version"
+    },
+    {
+      "name": "closureKind",
+      "type": "string",
+      "doc": "BOOK (the only kind so far; FINAL closures belong to the tape stage)"
+    },
+    {
+      "name": "path",
+      "type": "string",
+      "doc": "BOOK_CLOCK: closed by a record beyond the bucket; TIMER: closed by the dead-feed wall-clock timer"
+    },
+    {
+      "name": "epochId",
+      "type": "long",
+      "doc": "the epoch at the close"
+    },
+    {
+      "name": "epochStatus",
+      "type": "string",
+      "doc": "the epoch status at the close"
+    },
+    {
+      "name": "mboNext",
+      "type": "long",
+      "doc": "exclusive next offset of the MBO partition at the close: the first record NOT applied when the bucket closed"
+    },
+    {
+      "name": "lastBookEnd",
+      "type": "long",
+      "doc": "the bucket end that was closed (the high-water mark of closed buckets)"
+    }
+  ]
+}

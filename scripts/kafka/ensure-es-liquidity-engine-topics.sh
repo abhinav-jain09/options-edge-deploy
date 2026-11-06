@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# ensure-es-liquidity-engine-topics.sh - es-liquidity-engine-service's five MBO output topics must be right BEFORE the MBO engine publishes (the first-deploy barrier, as
+# ensure-es-liquidity-engine-topics.sh - es-liquidity-engine-service's six MBO output topics must be right BEFORE the MBO engine publishes (the first-deploy barrier, as
 # ensure-es-liquidity-wall-topics.sh). DEV ONLY: the service renders on dev alone (services.yaml envs [dev]); refuses to run unless ENVIRONMENT is exactly "dev".
 #
 #   NO BROKER-WIDE CHANGE. The shapes are the ones scripts/kafka/topics.env declares (one partition each, exact):
 #   es.mbo.level-flow   1 partition, delete, retention.ms EXACTLY 86400000 (1 day), retention.bytes EXACTLY 268435456 (256 MiB cap: ~22 rows a second)
 #   es.mbo.liquidity-events 1 partition, delete, retention.ms EXACTLY -1, retention.bytes EXACTLY 134217728 (128 MiB cap; NOT compacted: the event log)
+#   es.mbo.closures     1 partition, compact, retention.ms EXACTLY -1, retention.bytes EXACTLY -1 (pure compact)
 #   es.mbo.snapshot     1 partition, compact, retention.ms EXACTLY -1, retention.bytes EXACTLY -1 (pure compact)
 #   es.mbo.health       1 partition, delete, retention.ms EXACTLY 86400000 (1 day)
 #   es.mbo.level-flow-final 1 partition, delete, retention.ms EXACTLY 86400000 (1 day), retention.bytes EXACTLY 268435456
@@ -40,6 +41,7 @@ LEVEL_FLOW="${KAFKA_ES_MBO_LEVEL_FLOW_TOPIC:-es.mbo.level-flow}"
 HEALTH="${KAFKA_ES_MBO_HEALTH_TOPIC:-es.mbo.health}"
 FINAL="${KAFKA_ES_MBO_FINAL_TOPIC:-es.mbo.level-flow-final}"
 SNAPSHOT="${KAFKA_ES_MBO_SNAPSHOT_TOPIC:-es.mbo.snapshot}"
+CLOSURES="${KAFKA_ES_MBO_CLOSURE_TOPIC:-es.mbo.closures}"
 EVENTS="${KAFKA_ES_MBO_EVENT_TOPIC:-es.mbo.liquidity-events}"
 EVENTS_BYTES=134217728
 
@@ -80,6 +82,7 @@ ensure_with_bytes() { # <topic> <cleanup.policy> <retention.ms> <retention.bytes
 rc=0
 ensure_with_bytes "$LEVEL_FLOW" delete "$ONE_DAY_MS" "$LEVEL_FLOW_BYTES" || rc=1
 ensure_with_bytes "$SNAPSHOT" compact -1 -1 || rc=1
+ensure_with_bytes "$CLOSURES" compact -1 -1 || rc=1
 ensure_with_bytes "$EVENTS" delete -1 "$EVENTS_BYTES" || rc=1
 ensure_with_bytes "$FINAL" delete "$ONE_DAY_MS" "$LEVEL_FLOW_BYTES" || rc=1
 ensure_topic "$HEALTH" delete "exact:$ONE_DAY_MS" 1048576 || rc=1

@@ -18,12 +18,12 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 FAKE = ROOT / "tests/fake_kafka_cli.py"
 BARRIER = ROOT / "scripts/kafka/ensure-es-liquidity-engine-topics.sh"
-LEVEL_FLOW, HEALTH, FINAL, SNAPSHOT, EVENTS = "es.mbo.level-flow", "es.mbo.health", "es.mbo.level-flow-final", "es.mbo.snapshot", "es.mbo.liquidity-events"
+LEVEL_FLOW, HEALTH, FINAL, SNAPSHOT, EVENTS, CLOSURES = "es.mbo.level-flow", "es.mbo.health", "es.mbo.level-flow-final", "es.mbo.snapshot", "es.mbo.liquidity-events", "es.mbo.closures"
 EVENTS_CAP = "134217728"
 ONE_DAY, CAP = "86400000", "268435456"
 JAR = ROOT / "tools/schema-governance/schema-governance-tool.jar"
 NS = "com.optionsedge.contracts.esmbo"
-IDS = {"EsMboLevelFlow": 3502, "EsMboEvent": 3503, "EsMboHealth": 3504, "EsMboSnapshot": 3505, "EsMboLevelFlowFinal": 3506}
+IDS = {"EsMboClosure": 3501, "EsMboLevelFlow": 3502, "EsMboEvent": 3503, "EsMboHealth": 3504, "EsMboSnapshot": 3505, "EsMboLevelFlowFinal": 3506}
 
 
 def read(rel: str) -> str:
@@ -192,7 +192,7 @@ def run_barrier(topics, environment="dev"):
 
 
 def right_topics():
-    return {LEVEL_FLOW: shaped("delete", ONE_DAY, CAP), FINAL: shaped("delete", ONE_DAY, CAP), HEALTH: shaped("delete", ONE_DAY), SNAPSHOT: shaped("compact", "-1", "-1"), EVENTS: shaped("delete", "-1", EVENTS_CAP)}
+    return {LEVEL_FLOW: shaped("delete", ONE_DAY, CAP), FINAL: shaped("delete", ONE_DAY, CAP), HEALTH: shaped("delete", ONE_DAY), SNAPSHOT: shaped("compact", "-1", "-1"), EVENTS: shaped("delete", "-1", EVENTS_CAP), CLOSURES: shaped("compact", "-1", "-1")}
 
 
 class Topics(unittest.TestCase):
@@ -212,6 +212,17 @@ class Topics(unittest.TestCase):
         self.assertEqual(bytes_.get(LEVEL_FLOW), CAP)
         self.assertEqual(bytes_.get(FINAL), CAP)
         self.assertNotIn(HEALTH, bytes_)
+
+    def test_the_closure_topic_is_pure_compact_and_rebuildable(self):
+        d = declarations(Topics.VARS + ["OPTIONS_EDGE_RESET_REBUILDABLE_TOPICS", "OPTIONS_EDGE_RESET_PRESERVED_TOPICS"])
+        self.assertIn(f"{CLOSURES}:1", d["OPTIONS_EDGE_TOPICS"])
+        self.assertIn(CLOSURES, d["OPTIONS_EDGE_PURE_COMPACT_TOPICS"])
+        self.assertIn(CLOSURES, d["OPTIONS_EDGE_RESET_REBUILDABLE_TOPICS"])
+        self.assertNotIn(CLOSURES, d["OPTIONS_EDGE_RESET_PRESERVED_TOPICS"])
+        self.assertIn(f"{CLOSURES}=-1", d["OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES"])
+        prod = declarations(["OPTIONS_EDGE_TOPICS", "OPTIONS_EDGE_RESET_REBUILDABLE_TOPICS"], "production")
+        for v, tokens in prod.items():
+            self.assertNotIn(CLOSURES, [x.split(":")[0].split("=")[0] for x in tokens], v)
 
     def test_the_snapshot_topic_is_pure_compact_rebuildable_and_dev_only(self):
         d = declarations(self.VARS + ["OPTIONS_EDGE_RESET_REBUILDABLE_TOPICS", "OPTIONS_EDGE_RESET_PRESERVED_TOPICS"])
@@ -240,9 +251,10 @@ class Barrier(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         self.assertEqual([c for c in calls if "--entity-type brokers" in c or "--entity-default" in c], [], "no broker-wide change")
         self.assertFalse(any("--alter" in c or "--delete" in c for c in calls))
-        for t, ret, b in ((LEVEL_FLOW, ONE_DAY, CAP), (FINAL, ONE_DAY, CAP), (HEALTH, ONE_DAY, None), (EVENTS, "-1", EVENTS_CAP)):
+        for t, policy, ret, b in ((LEVEL_FLOW, "delete", ONE_DAY, CAP), (FINAL, "delete", ONE_DAY, CAP), (HEALTH, "delete", ONE_DAY, None), (EVENTS, "delete", "-1", EVENTS_CAP),
+                                  (CLOSURES, "compact", "-1", "-1"), (SNAPSHOT, "compact", "-1", "-1")):
             d = state["topics"][t]
-            self.assertEqual((d["partitions"], d["configs"]["cleanup.policy"], d["configs"]["retention.ms"]), (1, "delete", ret), t)
+            self.assertEqual((d["partitions"], d["configs"]["cleanup.policy"], d["configs"]["retention.ms"]), (1, policy, ret), t)
             if b:
                 self.assertEqual(d["configs"]["retention.bytes"], b)
         self.assertIn("=== ensure-es-liquidity-engine-topics OK ===", out)
@@ -275,6 +287,11 @@ class Barrier(unittest.TestCase):
             "snapshot finite retention": (SNAPSHOT, lambda d: d["configs"].update({"retention.ms": ONE_DAY})),
             "snapshot byte-capped": (SNAPSHOT, lambda d: d["configs"].update({"retention.bytes": CAP})),
             "snapshot 4 partitions": (SNAPSHOT, lambda d: d.update(partitions=4)),
+            "closures delete": (CLOSURES, lambda d: d["configs"].update({"cleanup.policy": "delete"})),
+            "closures finite retention": (CLOSURES, lambda d: d["configs"].update({"retention.ms": ONE_DAY})),
+            "closures byte-capped": (CLOSURES, lambda d: d["configs"].update({"retention.bytes": CAP})),
+            "snapshot byte-capped": (SNAPSHOT, lambda d: d["configs"].update({"retention.bytes": CAP})),
+            "closures 4 partitions": (CLOSURES, lambda d: d.update(partitions=4)),
             "events 4 partitions": (EVENTS, lambda d: d.update(partitions=4)),
             "events compacted": (EVENTS, lambda d: d["configs"].update({"cleanup.policy": "compact"})),
             "events finite retention": (EVENTS, lambda d: d["configs"].update({"retention.ms": ONE_DAY})),
@@ -322,7 +339,7 @@ class Schemas(unittest.TestCase):
             snap = ROOT / "schema-manifest/schemas" / e["subject"] / "v1.avsc"
             out = subprocess.run(["java", "-jar", str(JAR), "hash", str(snap)], capture_output=True, text=True, check=True).stdout.strip().splitlines()[-1]
             self.assertEqual(out, e["schemaHash"], n)
-        self.assertEqual(m["familyBlocks"]["esmbo"], [[3502, 3506]])
+        self.assertEqual(m["familyBlocks"]["esmbo"], [[3501, 3506]])
         flow = by["com.optionsedge.contracts.deltaflow.DeltaFlowEvent"]
         self.assertIn({"service": "es-liquidity-engine", "accepts": [3007], "environments": ["dev"]}, flow["consumers"], "the drop engine inside the service reads the delta flow (dev id 3007)")
         mbo = by["es.rithmic.mbo-value"]
