@@ -92,7 +92,7 @@ data:
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: level-absorption-line-health-config-0519483e5ff0
+  name: level-absorption-line-health-config-90168d091843
   namespace: options-edge
 immutable: true
 data:
@@ -126,6 +126,8 @@ data:
     heldOutSeconds=30
     inputCompletionGraceSeconds=5
     labelCharWidthPixels=7
+    labelFloorFontPixels=9
+    labelFloorRowPixels=11
     labelFontPixels=11
     labelInsetPixels=6
     labelOffsetPixels=3
@@ -141,6 +143,7 @@ data:
     minMboFlow=25
     minPushContracts=50
     minTestedContracts=50
+    provisional=true
     pullCutoffMilli=500
     pushCutoffMilli=200
     reclaimSeconds=10

@@ -26,12 +26,12 @@ def scope(service, environment, manifest=None, exemptions=None):
 
 
 class StatusSnapshot(unittest.TestCase):
-    def test_the_status_snapshot_follows_contracts_0_80_0_with_epoch_then_sequence_then_count(self):
+    def test_the_status_snapshot_follows_contracts_0_81_0_with_display_values_then_epoch_sequence_count(self):
         text = (ROOT / "schema-manifest/schemas/com.optionsedge.contracts.linehealth.LineHealthStatus/v1.avsc").read_text()
         fields = json.loads(text)["fields"]
-        self.assertEqual([f["name"] for f in fields[:5]], ["schemaVersion", "asOfMs", "statusEpoch", "stateSequence", "systemRecordCount"])
-        self.assertEqual(fields[4], {"name": "systemRecordCount", "type": ["null", "long"], "default": None})
-        self.assertEqual(len(fields), 24)
+        self.assertEqual([f["name"] for f in fields[:5]], ["schemaVersion", "asOfMs", "displayStaleSeconds", "retiredDisplayMinutes", "statusEpoch"])
+        self.assertEqual(fields[6], {"name": "systemRecordCount", "type": ["null", "long"], "default": None})
+        self.assertEqual(len(fields), 26)
 
 
 class SchemaGateScope(unittest.TestCase):
@@ -159,7 +159,7 @@ class ConfigurationValidator(unittest.TestCase):
     def test_the_repository_passes(self):
         r = subprocess.run(["bash", str(VALIDATOR)], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("68 keys", r.stdout)
+        self.assertIn("71 keys", r.stdout)
 
     def test_a_name_that_is_not_the_hash_fails(self):
         self.edit(CONFIG_FILE, lambda s: s.replace("tapeWindowSeconds=20", "tapeWindowSeconds=21"))
