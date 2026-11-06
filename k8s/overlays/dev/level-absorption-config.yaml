@@ -3,6 +3,10 @@
 # mount the content its template names, and an out-of-band edit is refused by the API server. Old objects are left in place (a rollback
 # re-points to one). scripts/ci/validate-level-absorption-config.sh computes the name and fails CI on any disagreement.
 #
+# LINE HEALTH CONFIGURATION (second document below): inputCompletionGraceSeconds is 10 on development (design starting value 5). The tape the loop reads,
+# underlying.es.trades.linearized, is held about 5 s by the linearizer (its reorder grace), so a second is complete at about 5.3 s after its end; with a grace of
+# 5 the loop took a TAPE_TIMER decision first and dropped the prints that arrived a moment later (measured on the live topic 2026-11-06: 141 prints dropped in
+# one minute). A consumer's wall-clock grace must exceed its producer's hold. Made by Claude under the owner's standing instruction; the owner may overrule.
 # The Level Absorption configuration the pod mounts at /home/options-edge/config/level-absorption (read-only).
 #
 # SOURCE OF TRUTH: processing phase0/desk-levels-eyeball-configuration.json (2026-11-06: the PR #1414 market-structure configuration with sitesEnabled
@@ -92,7 +96,7 @@ data:
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: level-absorption-line-health-config-90168d091843
+  name: level-absorption-line-health-config-761726bd11d6
   namespace: options-edge
 immutable: true
 data:
@@ -124,7 +128,7 @@ data:
     guardTicks=2
     guardWindowSeconds=10
     heldOutSeconds=30
-    inputCompletionGraceSeconds=5
+    inputCompletionGraceSeconds=10
     labelCharWidthPixels=7
     labelFloorFontPixels=9
     labelFloorRowPixels=11

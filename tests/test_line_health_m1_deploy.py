@@ -235,5 +235,13 @@ class ConfigurationValidator(unittest.TestCase):
                 self.assertNotIn("LINE_HEALTH_BOOK", p.read_text())
 
 
+    def test_the_dev_grace_exceeds_the_five_second_hold_of_the_linearized_tape(self):
+        import yaml
+        docs = [d for d in yaml.safe_load_all((ROOT / CONFIG_FILE).read_text()) if d]
+        text = [d for d in docs if d["metadata"]["name"].startswith("level-absorption-line-health-config-")][0]["data"]["line-health-configuration.txt"]
+        grace = int(dict(l.split("=", 1) for l in text.splitlines())["inputCompletionGraceSeconds"])
+        self.assertGreater(grace, 5, "the linearizer holds the tape about 5 s; a grace of 5 drops late prints (TAPE_TIMER)")
+
+
 if __name__ == "__main__":
     unittest.main()
