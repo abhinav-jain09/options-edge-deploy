@@ -238,6 +238,10 @@ class ConfigurationValidator(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("render carries line-health configuration", r.stderr)
 
+    def test_another_file_naming_the_user_lines_flag_fails(self):
+        (self.work / "k8s/overlays/production/zz-user-lines.yaml").write_text("# LINE_HEALTH_USER_LINES_ENABLED\n")
+        self.assert_fails("names LINE_HEALTH_USER_LINES_ENABLED")
+
     def test_the_two_dev_web_patches_and_the_dev_slice_all_carry_the_user_lines_flag(self):
         for rel in ("k8s/overlays/dev/web-dev-env-patch.yaml", "k8s/services/web/overlays/dev/web-dev-env-patch.yaml",
                     "k8s/services/level-absorption/overlays/dev/manifest.yaml", "k8s/overlays/dev/level-absorption-dev-enable-patch.yaml"):

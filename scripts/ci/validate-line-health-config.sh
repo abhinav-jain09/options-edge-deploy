@@ -87,12 +87,14 @@ if len(mounts) != 1 or mounts[0].get('mountPath') != MOUNT or mounts[0].get('rea
     err.append(f'the dev patch must mount that volume read-only at {MOUNT}')
 
 # nothing else turns it on
+USER_FILES = {'k8s/overlays/dev/web-dev-env-patch.yaml', 'k8s/services/web/overlays/dev/web-dev-env-patch.yaml', 'k8s/overlays/dev/level-absorption-dev-enable-patch.yaml', 'k8s/services/level-absorption/overlays/dev/manifest.yaml'}
 allowed = {'k8s/overlays/dev/level-absorption-dev-enable-patch.yaml', 'k8s/services/level-absorption/overlays/dev/manifest.yaml'}
 for root in ('k8s', 'scripts/es4'):
     for p in pathlib.Path(root).rglob('*'):
         if p.is_file() and p.as_posix() not in allowed and p.suffix in ('.yaml', '.yml', '.sh', '.py', '.env', '.json'):
             if ENABLE in p.read_text(errors='ignore'): err.append(f'{p} names {ENABLE}; only the dev patch and its generated dev slice may')
             if BOOK in p.read_text(errors='ignore'): err.append(f'{p} names {BOOK}; only the dev patch and its generated dev slice may')
+            if USER in p.read_text(errors='ignore') and p.as_posix() not in USER_FILES: err.append(f'{p} names {USER}; only the dev patches and their generated dev slices may')
 for envname in ('production', 'experiment'):
     r = subprocess.run(['kubectl', 'kustomize', f'k8s/overlays/{envname}'], capture_output=True, text=True)
     if r.returncode != 0:
