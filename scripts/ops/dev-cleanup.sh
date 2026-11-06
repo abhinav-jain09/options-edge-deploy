@@ -1220,9 +1220,12 @@ do_clean() {
     # whole. The reset-preserved read used to sit at step 4 instead -- after the scale-down and after
     # pause_dev_mirrors -- where its failure left dev down with the mirrors held paused.
     RESET_PRESERVED_TOPICS="$(reset_preserved_from_main)" || {
-      echo "REFUSING the wipe: cannot resolve the RESET-PRESERVED keep list from ${TOPICS_ENV_REF%%:*} (reason above). These topics hold data that by declaration cannot be rebuilt, so a wipe that does not know them must not run." >&2
+      echo "REFUSING the wipe: cannot resolve the RESET-PRESERVED keep list from ${TOPICS_ENV_REF%%:*} at $TOPICS_ENV_SHA (reason above). These topics hold data that by declaration cannot be rebuilt, so a wipe that does not know them must not run." >&2
       return 1; }
-    echo "reset-preserved keep list (${TOPICS_ENV_REF%%:*}): $RESET_PRESERVED_TOPICS"
+    # The COMMIT is logged, not just the branch: a line saying "origin/main" does not say which
+    # origin/main, and this log is the only record of which declarations a given night's wipe obeyed.
+    echo "keep-lists resolved at ${TOPICS_ENV_REF%%:*} = $TOPICS_ENV_SHA"
+    echo "reset-preserved keep list: $RESET_PRESERVED_TOPICS"
   fi
   clean_logs
   local BEFORE AFTER APPS LIST NEWMAN d i up
@@ -1279,9 +1282,9 @@ for p in json.load(sys.stdin)["items"]:
     # the A5 calibration ledger accrues until the archive carries it to the NAS, and a wipe before that
     # loses the day with no way to notice. dev and prod must agree on what "preserved" means, or the
     # two environments stop being comparable, which is the whole reason the evidence is split by env.
-    # RESET_PRESERVED_TOPICS was resolved at the top of do_clean, from ${TOPICS_ENV_REF%%:*}, and the
-    # wipe was refused outright if it could not be. It is NOT re-read here: this point is past the
-    # scale-down and past pause_dev_mirrors, so there is no safe way to fail.
+    # RESET_PRESERVED_TOPICS was resolved at the top of do_clean, at the commit topics_ref_pin pinned,
+    # and the wipe was refused outright if it could not be. It is NOT re-read here: this point is past
+    # the scale-down and past pause_dev_mirrors, so there is no safe way to fail.
     PRESERVE_RE="$(printf '%s\n' $RESET_PRESERVED_TOPICS $DEV_KEEP | sed 's/[.[\*^$()+?{|]/\\&/g' | paste -sd'|' -)"
     [ -n "$PRESERVE_RE" ] && echo "   preserving (reset-preserved + dev-clean keep list): $RESET_PRESERVED_TOPICS $DEV_KEEP"
     local all_topics
