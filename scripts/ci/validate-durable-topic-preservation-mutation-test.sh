@@ -143,4 +143,18 @@ grep -q 'grep -vxE "\$PRESERVE_RE"' "$DEVCLEAN" \
   && { echo "  FAIL dev-clean filter mutation did not apply — the case below would pass vacuously"; fail=1; }
 expect "dev wipe ignores the keep-list it resolved" 1 "loaded and then ignored"
 
+# And the named ES delete, which consults no keep-list at all: a preserved topic added to that set is
+# deleted every morning with the declaration intact. spx.basis.state is RESET-PRESERVED on main.
+sed -i.bak "s/^ES_CLEAN_TOPICS='/ES_CLEAN_TOPICS='spx.basis.state /" "$DEVCLEAN"
+grep -q "^ES_CLEAN_TOPICS='spx.basis.state " "$DEVCLEAN" \
+  || { echo "  FAIL ES_CLEAN_TOPICS mutation did not apply — the case below would pass vacuously"; fail=1; }
+expect "a preserved topic inside ES_CLEAN_TOPICS" 1 "in ES_CLEAN_TOPICS, and it is declared preserved"
+
+# ...and the read of that set must FAIL CLOSED, not iterate nothing. Renaming the variable is the
+# cheapest way to make a check that greps for a name report "no finding" instead of "I could not look".
+sed -i.bak "s/^ES_CLEAN_TOPICS='/ES_CLEAN_TOPICS_RENAMED='/" "$DEVCLEAN"
+grep -q "^ES_CLEAN_TOPICS='" "$DEVCLEAN" \
+  && { echo "  FAIL ES_CLEAN_TOPICS rename did not apply — the case below would pass vacuously"; fail=1; }
+expect "ES_CLEAN_TOPICS unreadable" 1 "could not read ES_CLEAN_TOPICS"
+
 [ $fail -eq 0 ] && echo "=== validate-durable-topic-preservation-mutation-test: OK ===" || { echo "=== validate-durable-topic-preservation-mutation-test: FAILED ==="; exit 1; }

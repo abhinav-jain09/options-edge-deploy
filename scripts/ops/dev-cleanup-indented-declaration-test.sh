@@ -24,7 +24,7 @@ WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 [ -f "$SRC" ] || { echo "FAIL: $SRC missing" >&2; exit 1; }
 
 fn() { awk -v n="$1" '$0 ~ "^"n"\\(\\) \\{" {p=1} p {print} p && /^\}/ {exit}' "$SRC"; }
-for f in dev_clean_preserved_topics topic_desired ensure_topics create_topics_parallel kafka_list_topics \
+for f in topics_ref_pin dev_clean_preserved_topics topic_desired ensure_topics create_topics_parallel kafka_list_topics \
          reconcile_declared_topics ensure_partition_only_topics ensure_dev_only_estimate_topics; do
   body="$(fn "$f")"
   [ -n "$body" ] || { echo "FAIL: function $f not found in $SRC" >&2; exit 1; }
@@ -58,7 +58,14 @@ EOF
 cat > "$WORK/keep-driver.sh" <<'EOF'
 set -uo pipefail
 DEPLOY_REPO=/nonexistent; TOPICS_ENV_REF=ref
-git() { case " $* " in *" fetch "*) return 0 ;; *" show "*) cat "$TOPICS_ENV_FILE" ;; esac; }
+# rev-parse too, since 2026-11-06: dev_clean_preserved_topics now pins the ref to a commit id through
+# topics_ref_pin before reading it, so a fake that answers only fetch and show makes the pin fail and
+# every assertion below vacuous. A real-looking 40-hex id, because the pin verifies the shape.
+git() { case " $* " in
+  *" fetch "*)     return 0 ;;
+  *" rev-parse "*) echo 0123456789abcdef0123456789abcdef01234567 ;;
+  *" show "*)      cat "$TOPICS_ENV_FILE" ;;
+esac; }
 . "$FUNCTIONS"
 dev_clean_preserved_topics
 EOF
@@ -109,7 +116,14 @@ KT="$FAKE_KT"; KC="$FAKE_KC"; BS=fake:9092
 DEPLOY_REPO=/nonexistent; TOPICS_ENV_REF=ref
 require_kafka_cli() { :; }
 topic_count() { echo 0; }
-git() { case " $* " in *" fetch "*) return 0 ;; *" show "*) cat "$TOPICS_ENV_FILE" ;; esac; }
+# rev-parse too, since 2026-11-06: dev_clean_preserved_topics now pins the ref to a commit id through
+# topics_ref_pin before reading it, so a fake that answers only fetch and show makes the pin fail and
+# every assertion below vacuous. A real-looking 40-hex id, because the pin verifies the shape.
+git() { case " $* " in
+  *" fetch "*)     return 0 ;;
+  *" rev-parse "*) echo 0123456789abcdef0123456789abcdef01234567 ;;
+  *" show "*)      cat "$TOPICS_ENV_FILE" ;;
+esac; }
 . "$FUNCTIONS"
 ensure_topics 2>&1
 EOF

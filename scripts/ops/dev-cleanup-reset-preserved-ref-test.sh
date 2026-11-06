@@ -29,9 +29,12 @@ for f in "$SRC" "$RPT_REAL" "$TOPICS_ENV_REAL"; do
 done
 
 fn() { awk -v n="$1" '$0 ~ "^"n"\\(\\) \\{" {p=1} p {print} p && /^\}/ {exit}' "$SRC"; }
-BODY="$(fn reset_preserved_from_main)"
-[ -n "$BODY" ] || { echo "FAIL: function reset_preserved_from_main not found in $SRC" >&2; exit 1; }
-printf '%s\n' "$BODY" > "$WORK/functions.sh"
+: > "$WORK/functions.sh"
+for _f in topics_ref_pin reset_preserved_from_main; do
+  BODY="$(fn "$_f")"
+  [ -n "$BODY" ] || { echo "FAIL: function $_f not found in $SRC" >&2; exit 1; }
+  printf '%s\n' "$BODY" >> "$WORK/functions.sh"
+done
 
 # ---------- a real git repo whose COMMITTED files differ from its WORKING TREE ----------
 # The difference is the whole point: every assertion below distinguishes the two, so a reader that
@@ -67,8 +70,15 @@ call() { # [env assignments...] -> stdout on fd 1, "rc=<n>" and "ALIVE" markers 
   # The caller's assignments come LAST so they OVERRIDE the defaults. They were first in the first
   # draft, so TOPICS_ENV_REF=no/such/ref was silently replaced by the good $REF and three failure
   # cases measured the success path instead -- a test that cannot fail reports what it never checked.
+  #
+  # topics_ref_pin runs FIRST, exactly as do_clean runs it, because reset_preserved_from_main now reads
+  # the pinned commit and refuses without one. The fixture repo has no remote, so `git fetch origin`
+  # fails there -- the pin is therefore given the fixture's own commit directly, and the pin function
+  # itself is exercised separately against the real repository below.
   env DEPLOY_REPO="$REPO" TOPICS_ENV_REF="$REF" FUNCTIONS="$WORK/functions.sh" "$@" \
-    bash -c '. "$FUNCTIONS"; out="$(reset_preserved_from_main)"; rc=$?; printf "%s\n" "$out"; echo "rc=$rc"; echo ALIVE' 2>/dev/null
+    bash -c '. "$FUNCTIONS"
+             : "${TOPICS_ENV_SHA:=$(git -C "$DEPLOY_REPO" rev-parse refs/remotes/origin/main 2>/dev/null)}"
+             out="$(reset_preserved_from_main)"; rc=$?; printf "%s\n" "$out"; echo "rc=$rc"; echo ALIVE' 2>/dev/null
 }
 got="$(call)"
 case " $(printf '%s' "$got" | tr '\n' ' ') " in
@@ -110,6 +120,40 @@ case " $(printf '%s' "$evil" | tr '\n' ' ') " in
   *) bad "the ref's list was lost when RPT_TOPICS_ENV was set: [$evil]" ;;
 esac
 
+# BASH_ENV is the hole `env -u RPT_TOPICS_ENV` left open (Codex r1): non-interactive bash SOURCES the
+# file named there before the script runs, so that file can export RPT_TOPICS_ENV straight back in.
+printf 'export RPT_TOPICS_ENV=%s\n' "$WORK/evil.env" > "$WORK/evil-bashenv.sh"
+benv="$(call BASH_ENV="$WORK/evil-bashenv.sh")"
+case "$benv" in
+  *t.bogus*) bad "BASH_ENV exported RPT_TOPICS_ENV back into the helper: [$benv]" ;;
+  *) ok "a BASH_ENV that re-exports RPT_TOPICS_ENV is ignored" ;;
+esac
+case " $(printf '%s' "$benv" | tr '\n' ' ') " in
+  *" t.committed "*) ok "...and the pinned commit's list is used instead" ;;
+  *) bad "the list was lost when BASH_ENV was set: [$benv]" ;;
+esac
+
+# THE PIN. A branch name is not a version: `git show origin/main:<path>` resolves afresh on every call,
+# so a push between the parser read and the declarations read can split the bundle. The function must
+# read the COMMIT do_clean pinned, even when the branch has since moved.
+cat > "$REPO/scripts/kafka/topics.env" <<'EOF'
+OPTIONS_EDGE_RESET_PRESERVED_TOPICS="t.moved"
+OPTIONS_EDGE_PROD_ONLY_RESET_PRESERVED_TOPICS="t.prodkeep"
+EOF
+PINNED="$(cd "$REPO" && git rev-parse refs/remotes/origin/main)"
+( cd "$REPO" && git -c user.email=t@t -c user.name=t add -A \
+  && git -c user.email=t@t -c user.name=t commit -qm moved && git update-ref refs/remotes/origin/main HEAD ) >/dev/null 2>&1
+pinned_out="$(call TOPICS_ENV_SHA="$PINNED")"
+case " $(printf '%s' "$pinned_out" | tr '\n' ' ') " in
+  *" t.committed "*) ok "the PINNED commit is read, not the branch (which has moved)" ;;
+  *) bad "the pinned commit was not read: [$pinned_out]" ;;
+esac
+case "$pinned_out" in
+  *t.moved*) bad "the moved branch tip was read instead of the pin: [$pinned_out]" ;;
+  *) ok "the branch's newer commit is NOT read once a commit is pinned" ;;
+esac
+( cd "$REPO" && git update-ref refs/remotes/origin/main "$PINNED" ) >/dev/null 2>&1
+
 # ---------- every way the read can fail must be NON-ZERO, EMPTY, and must not kill the caller ----------
 fail_case() { # description, [env assignments...]
   local desc="$1"; shift
@@ -127,7 +171,10 @@ fail_case() { # description, [env assignments...]
   if [ -n "$body" ]; then bad "$desc: printed a list while failing: [$body]"; return; fi
   ok "$desc: non-zero, nothing printed, caller alive"
 }
-fail_case "a ref that does not exist" TOPICS_ENV_REF=no/such/ref:scripts/kafka/topics.env
+fail_case "a path that does not exist at the commit" TOPICS_ENV_REF=origin/main:no/such/dir/topics.env
+# No pin at all. The function requires one rather than falling back to the branch: a caller that has
+# not pinned has not fetched either.
+fail_case "no commit pinned (TOPICS_ENV_SHA empty)" TOPICS_ENV_SHA=" "
 ( cd "$REPO" && git -c user.email=t@t -c user.name=t rm -q --cached scripts/kafka/reset-preserved-topics.sh \
   && git -c user.email=t@t -c user.name=t commit -qm nohelper && git update-ref refs/remotes/origin/main HEAD ) >/dev/null 2>&1
 fail_case "the helper absent at the ref"
@@ -154,7 +201,7 @@ fail_case "a helper that exits 0 printing nothing"
 # The two files are materialised into a temp dir on every call; a leak would fill /tmp on a host that
 # cleans nightly.
 before=$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'dev-cleanup-rpt.*' 2>/dev/null | grep -c .)
-call >/dev/null; call TOPICS_ENV_REF=no/such:scripts/kafka/topics.env >/dev/null
+call >/dev/null; call TOPICS_ENV_REF=origin/main:no/such/dir/topics.env >/dev/null
 after=$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'dev-cleanup-rpt.*' 2>/dev/null | grep -c .)
 if [ "$after" -le "$before" ]; then ok "no temp dir is left behind (success and failure paths)"
 else bad "leaked $((after-before)) temp dir(s) under ${TMPDIR:-/tmp}"; fi
@@ -164,8 +211,10 @@ else bad "leaked $((after-before)) temp dir(s) under ${TMPDIR:-/tmp}"; fi
 # shapes nobody writes, so the thing production reads is read once here too.
 REALREPO="$(cd "$HERE/../.." && pwd)"
 if [ -d "$REALREPO/.git" ] || [ -f "$REALREPO/.git" ]; then
+  # topics_ref_pin itself is not run here: it fetches origin, and a test must not reach the network.
+  # The pin it would produce is supplied directly from HEAD, which is what it resolves to on this repo.
   real="$(env DEPLOY_REPO="$REALREPO" TOPICS_ENV_REF="HEAD:scripts/kafka/topics.env" FUNCTIONS="$WORK/functions.sh" \
-          bash -c '. "$FUNCTIONS"; reset_preserved_from_main' 2>/dev/null)"
+          bash -c '. "$FUNCTIONS"; TOPICS_ENV_SHA="$(git -C "$DEPLOY_REPO" rev-parse HEAD)"; reset_preserved_from_main' 2>/dev/null)"
   realspaced=" $(printf '%s' "$real" | tr '\n' ' ') "
   if [ -z "${real// /}" ]; then bad "the real topics.env at HEAD resolved NOTHING -- every check below would pass vacuously"
   else
@@ -209,8 +258,8 @@ PYEOF
   cat > "$WORK/m2.py" <<'PYEOF'
 import sys
 p=sys.argv[1]; s=open(p).read()
-assert s.count('env -u RPT_TOPICS_ENV bash')==1
-open(p,'w').write(s.replace('env -u RPT_TOPICS_ENV bash','bash'))
+assert s.count('env -u RPT_TOPICS_ENV -u BASH_ENV -u ENV bash')==1
+open(p,'w').write(s.replace('env -u RPT_TOPICS_ENV -u BASH_ENV -u ENV bash','env -u BASH_ENV -u ENV bash'))
 PYEOF
   mutate ambient-rpt-topics-env "$WORK/m2.py"
   # M3: ignore a failed extraction (an unreadable ref then yields an empty keep-list, silently).
@@ -240,6 +289,23 @@ assert s.count(old)==1
 open(p,'w').write(s.replace(old,'  for f in reset-preserved-topics.sh; do'))
 PYEOF
   mutate helper-without-its-topics-env "$WORK/m5.py"
+  # M6: leave BASH_ENV in the environment of the helper.
+  cat > "$WORK/m6.py" <<'PYEOF'
+import sys
+p=sys.argv[1]; s=open(p).read()
+assert s.count('env -u RPT_TOPICS_ENV -u BASH_ENV -u ENV bash')==1
+open(p,'w').write(s.replace('env -u RPT_TOPICS_ENV -u BASH_ENV -u ENV bash','env -u RPT_TOPICS_ENV bash'))
+PYEOF
+  mutate bash-env-left-set "$WORK/m6.py"
+  # M7: read the branch name again instead of the commit do_clean pinned.
+  cat > "$WORK/m7.py" <<'PYEOF'
+import sys
+p=sys.argv[1]; s=open(p).read()
+old='  ref="${TOPICS_ENV_SHA:-}"'
+assert s.count(old)==1
+open(p,'w').write(s.replace(old,'  ref="${TOPICS_ENV_REF%%:*}"'))
+PYEOF
+  mutate reads-the-moving-branch "$WORK/m7.py"
 fi
 
 if [ "$fails" -eq 0 ]; then

@@ -370,7 +370,7 @@ for caller in "$CLEANSLATE" scripts/kafka/run-dev-timewarp-replay.sh scripts/ops
   fi
 done
 
-# scripts/ops/dev-cleanup.sh: the dev wipe. Same hazard, different plumbing, so its own three checks.
+# scripts/ops/dev-cleanup.sh: the dev wipe. Same hazard, different plumbing, so its own four checks.
 #
 # Until 2026-11-06 it SOURCED $DEPLOY_REPO/scripts/kafka/reset-preserved-topics.sh -- out of the working
 # tree -- and that reader reads the topics.env beside it, also the working tree's. So the file that
@@ -379,8 +379,9 @@ done
 # futures.liquidity-validator.* topics, all four declared preserved on main.
 #
 # Checked, in order: it must not read the helper out of the checkout again; it must resolve the list
-# from the reviewed ref; and it must actually FILTER the delete list with what it resolved -- the third
-# is the one that makes the first two load-bearing, because a resolved-and-ignored list is no list.
+# from the reviewed ref; it must actually FILTER the delete list with what it resolved -- the third is
+# what makes the first two load-bearing, because a resolved-and-ignored list is no list -- and its
+# second, keep-list-free delete must not name a preserved topic.
 DEVCLEAN="scripts/ops/dev-cleanup.sh"
 if [ ! -r "$DEVCLEAN" ]; then
   echo "FAIL: $DEVCLEAN not found — layout changed, update this validator"; fail=1
@@ -404,6 +405,26 @@ else
     echo "      (grep -vxE \"\$PRESERVE_RE\") — the list is loaded and then ignored."
     fail=1
   fi
+  # dev-cleanup has a SECOND delete: ES_CLEAN_TOPICS, a short named set it removes at the 09:17 ES-down
+  # slot. That one does not consult any keep-list, by design -- it deletes exactly the four names it
+  # lists. So the names are what has to be checked. None is preserved today; a preserved topic added to
+  # that set would be deleted every morning with every keep-list intact and nothing to show it.
+  _es_clean=$(printf '%s' "$devclean_code" | sed -nE "s/^ES_CLEAN_TOPICS='([^']*)'.*/\1/p")
+  # FAIL CLOSED on a read that finds nothing. Renaming the variable, or quoting it differently, would
+  # otherwise leave the loop below iterating over an empty list and reporting no finding -- a check that
+  # can silently match zero is worse than no check, because it is read as a clean result.
+  if [ -z "${_es_clean// /}" ]; then
+    echo "FAIL: could not read ES_CLEAN_TOPICS='...' from $DEVCLEAN. That set is deleted by name with no"
+    echo "      keep-list, so it cannot go unchecked — update this validator to match its new shape."
+    fail=1
+  fi
+  for _t in $_es_clean; do
+    if printf '%s\n' $PRESERVED | grep -qxF "$_t"; then
+      echo "FAIL: $DEVCLEAN deletes '$_t' by name in ES_CLEAN_TOPICS, and it is declared preserved."
+      echo "      That delete consults no keep-list, so the declaration would not save it."
+      fail=1
+    fi
+  done
 fi
 
 # THE DAILY RESET NEEDS BOTH MECHANISMS. Its disposable rule deletes *-changelog, and the preserved
