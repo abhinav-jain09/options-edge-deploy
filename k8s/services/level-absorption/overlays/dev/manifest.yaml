@@ -52,6 +52,12 @@ spec:
               value: /home/options-edge/config/line-health/line-health-configuration.txt
             - name: LEVEL_ABSORPTION_LINE_HEALTH_BOOK_ENABLED
               value: "true"
+            - name: LEVEL_ABSORPTION_BOOK_ENABLED
+              value: "false"
+            - name: LEVEL_ABSORPTION_BOOK_ENVIRONMENT
+              value: Rithmic Paper Trading
+            - name: LEVEL_ABSORPTION_BOOK_CONTRACTS
+              value: classpath:/book-contracts.txt
             - name: LINE_HEALTH_USER_LINES_ENABLED
               value: "true"
             - name: LEVEL_ABSORPTION_PHASE
