@@ -48,7 +48,8 @@ topic_shape_resolve_declarations
 ONLY="${APPLY_TOPICS_ONLY:-}"
 DRY_RUN="${APPLY_TOPICS_DRY_RUN:-false}"
 ONLY_REQUESTED=false
-[ -n "$ONLY" ] && ONLY_REQUESTED=true
+# SET counts as asked for, even when empty: an unset-looking empty variable must not become "all topics".
+[ "${APPLY_TOPICS_ONLY+set}" = "set" ] && ONLY_REQUESTED=true
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN=true ;;
@@ -58,7 +59,7 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
-ONLY="${ONLY//,/ }"
+ONLY="${ONLY//[[:space:],]/ }"
 # A filter that was ASKED FOR but names nothing (an empty interpolated variable, ",") must not fall through to the full run.
 if [ "$ONLY_REQUESTED" = "true" ] && [ -z "${ONLY// /}" ]; then
   echo "apply-topics.sh: REFUSED: a topic filter was requested but it names no topic (empty list); refusing to fall back to ALL topics." >&2

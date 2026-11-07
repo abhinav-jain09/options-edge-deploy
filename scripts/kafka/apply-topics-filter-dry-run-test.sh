@@ -72,6 +72,8 @@ grep -q "REFUSED: 'no.such.topic'" "$OUT" && ok "says why" || bad "no refusal te
 run --only ""; [ "$RC" -eq 2 ] && [ "$(mutations)" -eq 0 ] && ok "an empty --only is refused, not read as all topics" || bad "empty --only exit $RC"
 run --only ","; [ "$RC" -eq 2 ] && ok "a comma-only --only is refused" || bad "comma-only exit $RC"
 ENVX="APPLY_TOPICS_ONLY=," run; [ "$RC" -eq 2 ] && ok "APPLY_TOPICS_ONLY=, is refused" || bad "env comma-only exit $RC"; ENVX=""
+ENVX="APPLY_TOPICS_ONLY=" run; [ "$RC" -eq 2 ] && [ "$(mutations)" -eq 0 ] && ok "an EMPTY APPLY_TOPICS_ONLY is refused" || bad "empty env exit $RC"; ENVX=""
+run --only "$(printf '\t')"; [ "$RC" -eq 2 ] && ok "a tab-only --only is refused" || bad "tab-only exit $RC"
 run --bogus; [ "$RC" -eq 2 ] && ok "unknown argument exits 2" || bad "unknown argument exit $RC"
 
 echo "4. --dry-run sends no create/alter/delete"
