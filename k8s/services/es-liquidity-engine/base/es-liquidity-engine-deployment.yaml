@@ -67,7 +67,7 @@ spec:
               value: "30"
             - name: DROP_SR_BOOTSTRAP
               value: ""
-            # The MBO engine: reads es.rithmic.mbo (Avro id 3302, the dev mirror of the es4 collector) and writes es.mbo.level-flow (3502) and es.mbo.health (3504) on the dev broker.
+            # The MBO engine: reads es.rithmic.mbo (Avro id 3302, the dev mirror of the es4 collector) and writes es.mbo.level-flow (3502) and es.mbo.health (version 2, 3509) on the dev broker.
             # The topics are deploy-owned (scripts/kafka/ensure-es-liquidity-engine-topics.sh). The collector's literal since the 2026-11-04 cutover is "Rithmic Paper Trading";
             # ALLOW_TEST is off (the test literal is never admitted). SCHEMA_REGISTRY_URL comes from options-edge-config.
             - name: ES_MBO_ENABLED
@@ -102,6 +102,11 @@ spec:
               value: "398"
             - name: ES_MBO_VACUUM_RUN_AT_LEAST
               value: "0"
+            # The source-lag bound of document A revision 12 section 5.4 (work package K2): the health record of every bucket carries FRESH, LAGGING, SILENT or UNKNOWN judged against this
+            # many milliseconds on the engine's own clock (receipt time against exchange time of the admitted UPDATE records). 10 seconds is the owner's bound of 2026-11-06, the same as the
+            # collector's gate (rithmic-depth-bridge PR 16). A label, not a filter: the engine publishes its rows whatever the status.
+            - name: ES_MBO_SOURCE_LAG_BOUND_MILLIS
+              value: "10000"
             - name: ES_MBO_TAPE_TOPIC
               value: underlying.es.trades
             - name: JAVA_TOOL_OPTIONS

@@ -1,0 +1,226 @@
+{
+  "type": "record",
+  "name": "EsMboHealth",
+  "namespace": "com.optionsedge.contracts.esmbo",
+  "doc": "es-liquidity-engine G 7.2: the MBO engine's health, once per closed bucket. VERSION 2 (id 3509, document A revision 12 section 4.1): adds the bucket close path, the source-lag measurements and status, the update age, and the engine settings a book consumer tests",
+  "fields": [
+    {
+      "name": "schemaVersion",
+      "type": "int",
+      "doc": "2 for this revision (version 1 is the archival schema under id 3504)"
+    },
+    {
+      "name": "environment",
+      "type": "string",
+      "doc": "the environment literal of the admitted MBO records, e.g. Rithmic Paper Trading"
+    },
+    {
+      "name": "contract",
+      "type": "string",
+      "doc": "the contract table's row for the trade date, e.g. ESZ6"
+    },
+    {
+      "name": "bucketEnd",
+      "type": "long",
+      "doc": "bucket end on the collector clock (receivedAtMs), epoch ms; 1000 ms grid, bucket (end-1000, end]"
+    },
+    {
+      "name": "configFingerprint",
+      "type": "string",
+      "doc": "SHA-256 over the sorted name=value configuration lines plus the engine's logic version"
+    },
+    {
+      "name": "epochId",
+      "type": "long",
+      "doc": "increments at every START or SNAPSHOT_BEGIN"
+    },
+    {
+      "name": "epochStatus",
+      "type": "string",
+      "doc": "AWAITING_IMAGE, SNAPSHOTTING, LIVE, DEGRADED or UNAVAILABLE"
+    },
+    {
+      "name": "degradedReason",
+      "type": [
+        "null",
+        "string"
+      ],
+      "doc": "the reason that made the epoch DEGRADED (KNOWN_ORDER_NEW, UNKNOWN_ORDER, PREVIOUS_TICK_MISMATCH, D_QTY_MISMATCH, SEQUENCE_GAP); null otherwise",
+      "default": null
+    },
+    {
+      "name": "admittedTotal",
+      "type": "long",
+      "doc": "records admitted since the process started"
+    },
+    {
+      "name": "refusedByReason",
+      "type": {
+        "type": "array",
+        "items": {
+          "type": "record",
+          "name": "EsMboRefusal",
+          "namespace": "com.optionsedge.contracts.esmbo",
+          "doc": "one admission refusal reason and its running count",
+          "fields": [
+            {
+              "name": "reason",
+              "type": "string",
+              "doc": "SCHEMA_VERSION, SOURCE, ENVIRONMENT, CONTRACT, CLOCK, STALE_STREAM, SEQUENCE_REGRESSION, TIME_REGRESSION or MALFORMED"
+            },
+            {
+              "name": "count",
+              "type": "long",
+              "doc": "records refused for this reason since the process started"
+            }
+          ]
+        }
+      },
+      "doc": "refusals per reason, ascending by reason; empty when none"
+    },
+    {
+      "name": "sequenceGaps",
+      "type": "long",
+      "doc": "sequence gaps seen on the current stream"
+    },
+    {
+      "name": "streamChanges",
+      "type": "long",
+      "doc": "stream id changes admitted"
+    },
+    {
+      "name": "bookOrderCount",
+      "type": "long",
+      "doc": "orders in the book"
+    },
+    {
+      "name": "bookBidLevels",
+      "type": "long",
+      "doc": "bid levels in the book"
+    },
+    {
+      "name": "bookAskLevels",
+      "type": "long",
+      "doc": "ask levels in the book"
+    },
+    {
+      "name": "bestBidTick",
+      "type": [
+        "null",
+        "long"
+      ],
+      "doc": "best bid, null when no bid",
+      "default": null
+    },
+    {
+      "name": "bestAskTick",
+      "type": [
+        "null",
+        "long"
+      ],
+      "doc": "best ask, null when no ask",
+      "default": null
+    },
+    {
+      "name": "lastReceivedAtMs",
+      "type": "long",
+      "doc": "book clock: receivedAtMs of the latest admitted record"
+    },
+    {
+      "name": "bucketsClosed",
+      "type": "long",
+      "doc": "buckets closed since the process started"
+    },
+    {
+      "name": "bucketsDegraded",
+      "type": "long",
+      "doc": "buckets closed by the wall-clock timer instead of the book clock"
+    },
+    {
+      "name": "gapBucketsSkipped",
+      "type": "long",
+      "doc": "buckets skipped because the gap exceeded the maximum age"
+    },
+    {
+      "name": "closePath",
+      "type": [
+        "null",
+        "string"
+      ],
+      "doc": "BOOK_CLOCK when a record beyond the bucket closed it, TIMER when the dead-feed timer closed it; null on a record that does not know",
+      "default": null
+    },
+    {
+      "name": "updateSamples",
+      "type": [
+        "null",
+        "long"
+      ],
+      "doc": "number of UPDATE records with an exchange instant admitted in this bucket",
+      "default": null
+    },
+    {
+      "name": "sourceLagMs",
+      "type": [
+        "null",
+        "long"
+      ],
+      "doc": "receipt time minus exchange time of the admitted UPDATE with the greatest exchange time in the newest bucket of the current epoch that had any sample (this bucket or the latest earlier one); null before the first sample of the epoch; can be negative",
+      "default": null
+    },
+    {
+      "name": "sourceLagMaxMs",
+      "type": [
+        "null",
+        "long"
+      ],
+      "doc": "the largest receipt-minus-exchange value among this bucket's samples; null when the bucket has no sample",
+      "default": null
+    },
+    {
+      "name": "updateAgeMs",
+      "type": [
+        "null",
+        "long"
+      ],
+      "doc": "bucket end minus the receipt time of the newest admitted UPDATE with an exchange instant in the epoch; null before the first",
+      "default": null
+    },
+    {
+      "name": "sourceLagStatus",
+      "type": [
+        "null",
+        "string"
+      ],
+      "doc": "FRESH, LAGGING, SILENT or UNKNOWN (document A revision 12 section 5.4); null on a record that does not know",
+      "default": null
+    },
+    {
+      "name": "sourceLagBoundMs",
+      "type": [
+        "null",
+        "long"
+      ],
+      "doc": "the bound sourceLagStatus used (ES_MBO_SOURCE_LAG_BOUND_MILLIS)",
+      "default": null
+    },
+    {
+      "name": "attributionEnabled",
+      "type": [
+        "null",
+        "boolean"
+      ],
+      "doc": "true when the fill window and the trade-order bound are set, so FINAL rows can exist",
+      "default": null
+    },
+    {
+      "name": "bandTicks",
+      "type": [
+        "null",
+        "long"
+      ],
+      "doc": "the publication band of the level rows (ES_MBO_BAND_TICKS)",
+      "default": null
+    }
+  ]
+}
