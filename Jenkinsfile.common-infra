@@ -31,6 +31,8 @@ pipeline {
       description: 'Required for order initialization: exact current options-edge-contracts main SHA. Independently guarded before using its canonical schemas.')
     booleanParam(name: 'CONTEXT_TAPE_AUTH_ONLY', defaultValue: false,
       description: 'Only validate/create the shared private execution credential. No manifests, PVCs, realm configuration or workloads are applied in this mode.')
+    booleanParam(name: 'WEB_PUBLIC_ASSETS_PVC_ONLY', defaultValue: false,
+      description: 'Dev only: validate/create exactly the web public-assets PVC. No mutable infra, auth, Kafka or workloads. Uses the existing infra stages.')
     booleanParam(name: 'DEPLOY_DRY_RUN', defaultValue: true,
       description: 'true = render + diff + server-side validate only (DEFAULT). Set false to actually apply.')
     string(name: 'KUBECONFIG_FILE', defaultValue: '',
@@ -47,6 +49,7 @@ pipeline {
     KUBECONFIG     = "${params.KUBECONFIG_FILE ?: oeProfile(params.ENVIRONMENT).kubeconfigDeployer}"
     ENVIRONMENT    = "${params.ENVIRONMENT}"
     DEPLOY_DRY_RUN = "${params.DEPLOY_DRY_RUN}"
+    WEB_PUBLIC_ASSETS_PVC_ONLY = "${params.WEB_PUBLIC_ASSETS_PVC_ONLY ?: false}"
   }
   stages {
     // ---- Deployment Permission Rule (options-edge rule.md): Jenkins enforces the permitted commit ----
@@ -73,6 +76,9 @@ pipeline {
       when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
       steps {
         script {
+          if (params.WEB_PUBLIC_ASSETS_PVC_ONLY && (params.ENVIRONMENT != 'dev' || params.CONTEXT_TAPE_AUTH_ONLY || params.CONTEXT_TAPE_ORDER_INIT_ONLY || params.CONTEXT_TAPE_DEV_FIXTURE_RECOVERY)) {
+            error('Public-assets PVC scope requires dev and cannot combine with other preparation modes.')
+          }
           if (params.CONTEXT_TAPE_AUTH_ONLY && params.CONTEXT_TAPE_ORDER_INIT_ONLY) {
             error('Select only one Context Tape preparation mode.')
           }
