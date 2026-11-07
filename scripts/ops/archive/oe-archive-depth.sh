@@ -99,12 +99,16 @@ esac
 
 # JDK and Kafka CLI: the archiver finds its own JDK 21+ for the canonical path (CANONICAL_ARCHIVE_JAVA, then
 # JAVA_HOME, then PATH); on a Mac the JDK 17 fallback it also knows does not exist, so JAVA_HOME is resolved from
-# java_home when the caller set none. KAFKA_BIN defaults to the Homebrew kafka when present; the archiver refuses to
+# java_home when the caller set none. KAFKA_BIN defaults to the Homebrew kafka, then ~/kafka-4.3.0/bin, when present; the archiver refuses to
 # run without kafka-get-offsets.sh there, so a wrong path is loud, not silent.
 if [ -z "${JAVA_HOME:-}" ] && [ -x /usr/libexec/java_home ]; then
   JAVA_HOME="$(/usr/libexec/java_home -v 21 2>/dev/null || true)"
 fi
-if [ -z "${KAFKA_BIN:-}" ] && [ -d /opt/homebrew/opt/kafka/bin ]; then KAFKA_BIN=/opt/homebrew/opt/kafka/bin; fi
+if [ -z "${KAFKA_BIN:-}" ]; then
+  for _k in /opt/homebrew/opt/kafka/bin "$HOME/kafka-4.3.0/bin"; do   # Homebrew layout, then the Kafka 4.3.0 distribution the dev Mac keeps in $HOME
+    [ -x "$_k/kafka-get-offsets.sh" ] && { KAFKA_BIN="$_k"; break; }
+  done
+fi
 
 log "=== dev depth archive start (ET $(TZ=America/New_York date '+%a %Y-%m-%d %H:%M')) root=$ARCHIVE_DIR ($ROOT_SOURCE) topics=[$OE_DEPTH_TOPICS_dev] ==="
 rc=0

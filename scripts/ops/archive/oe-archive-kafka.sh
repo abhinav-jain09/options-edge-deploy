@@ -576,7 +576,9 @@ log "archiving env=$ENV_NAME job=$ARCHIVE_JOB bootstrap=$BOOTSTRAP -> $ROOT (fre
 # %s. Event-time bounds are the field that makes a mislabelled dt= folder detectable, so they have
 # to survive intact.
 scan_archive_file() {   # $1=path -> "records min_ms max_ms schema_versions_csv"
-  LC_ALL=C zcat "$1" 2>/dev/null | LC_ALL=C awk '
+  # zcat READS STDIN, not the name: BSD/macOS zcat appends ".Z" to a file argument and cannot open "x.jsonl.gz.partial"
+  # (the dev Mac's first depth capture, 2026-11-07, refused all eight topics with "the file holds 0 records").
+  LC_ALL=C zcat < "$1" 2>/dev/null | LC_ALL=C awk '
     BEGIN { FS="\t"; n=0; mn=""; mx="" }
     {
       n++
