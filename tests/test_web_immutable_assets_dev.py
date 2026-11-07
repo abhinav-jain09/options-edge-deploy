@@ -21,6 +21,7 @@ class WebImmutableAssetsDevTest(unittest.TestCase):
         cls.web = render('k8s/services/web/overlays/dev')
         cls.mono = render('k8s/overlays/dev')
         cls.infra = render('k8s/infra/overlays/dev')
+        cls.gateway = render('k8s/services/feed-gateway/overlays/dev')
 
     def test_web_mirrors_monolith_without_expanding_service_blast_radius(self):
         self.assertEqual({'Deployment', 'Service'}, {item['kind'] for item in self.web})
@@ -53,6 +54,22 @@ class WebImmutableAssetsDevTest(unittest.TestCase):
         self.assertEqual({'runAsUser':0,'runAsGroup':0},init['securityContext'])
         self.assertEqual('100m', app['resources']['requests']['cpu'])
         self.assertEqual('web-immutable-assets', next(v for v in pod['volumes'] if v['name'] == 'public-assets')['persistentVolumeClaim']['claimName'])
+
+    def test_gateway_authority_prepares_native_scope_without_enabling_web(self):
+        web = resource(self.web, 'Deployment', 'options-edge-web')['spec']['template']['spec']['containers']
+        webenv = {e['name']: e.get('value') for c in web if c['name'] == 'web' for e in c.get('env', [])}
+        gateway = resource(self.mono, 'Deployment', 'feed-gateway-service')['spec']['template']['spec']['containers']
+        gatewayenv = {e['name']: e.get('value') for c in gateway for e in c.get('env', [])}
+        self.assertEqual('false', webenv.get('HEATMAP_NATIVE_HISTORY_ENABLED', 'false'))
+        self.assertNotIn('HEATMAP_RITHMIC_SYSTEM', webenv)
+        self.assertEqual('Rithmic Paper Trading', gatewayenv['GATEWAY_RITHMIC_SYSTEM'])
+        self.assertEqual('false', gatewayenv['LINE_HEALTH_RELAY_ENABLED'])
+        self.assertEqual(resource(self.gateway, 'Deployment', 'feed-gateway-service'), resource(self.mono, 'Deployment', 'feed-gateway-service'))
+        self.assertEqual('20000', gatewayenv['ES_LIQUIDITY_WALL_FRESH_MS'])
+        self.assertEqual('true', gatewayenv['GATEWAY_AUTH_ENABLED'])
+        self.assertEqual('options-edge-web', gatewayenv['GATEWAY_KEYCLOAK_AUDIENCE'])
+        self.assertEqual(gatewayenv['GATEWAY_KEYCLOAK_CLIENT_ID'], gatewayenv['GATEWAY_KEYCLOAK_AUDIENCE'])
+        self.assertEqual('options-edge-web', gatewayenv['WS_AUTH_AUDIENCE'])
 
     def test_no_global_build_floor_is_added_for_dev_only_publisher(self):
         self.assertFalse((ROOT / 'k8s/services/web/MIN_IMAGE_BUILD').exists())
