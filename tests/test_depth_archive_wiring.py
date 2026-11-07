@@ -292,6 +292,7 @@ class WrapperInvocationTest(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         self.assertIn('FAILED', self.log.read_text())
         self.assertIn('24h', self.log.read_text())
+        self.assertIn('three more runs', self.log.read_text())
 
 
 class DevOnlyAndGuardsTest(unittest.TestCase):

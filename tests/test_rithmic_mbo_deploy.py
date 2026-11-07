@@ -16,7 +16,7 @@ class RithmicMboDeployTest(unittest.TestCase):
   script='source scripts/kafka/topics.env; printf "%s\\n%s\\n%s\\n" "$OPTIONS_EDGE_ES4_TOPICS" "$OPTIONS_EDGE_ES4_TOPIC_RETENTION_OVERRIDES" "$OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS"'
   out=subprocess.check_output(['bash','-c',script],cwd=ROOT,text=True).splitlines()
   self.assertEqual(out[0].split().count('es.rithmic.mbo:1'),1)
-  self.assertEqual(out[1].split().count('es.rithmic.mbo=86400000'),1)
+  self.assertEqual(out[1].split().count('es.rithmic.mbo=43200000'),1)  # ES4 source stays 12 h: the live es4 config is not ours to change
   self.assertIn('es.rithmic.mbo',out[2].split())
 
  def test_reset_requires_and_restores_mbo_schema_before_any_wipe(self):
