@@ -6,8 +6,17 @@
 //      that would have caught the 9-hour early-auction crash-loop.
 //   2. DEAD LETTERS: any `*.dlq` topic whose end offsets grew since the previous run, and any `.dlq` topic the manifest does not declare
 //      (scripts/watch/dlq-growth.py; baselines kept per environment under <agent workspace root>/.oe-watch (a sibling of the job workspaces, so it survives between builds and is writable by the agent user), merged and written only after a fully successful read).
-// A red build is the alert: native k8s CronJobs are denied by the cluster's admission policy and no Kafka or registry exporter is scraped, so a Jenkins
-// cron job is the trigger that can run. It changes nothing in any cluster, registry or topic.
+//   3. CRASH LOOPS: any pod whose container is in CrashLoopBackOff, cannot pull its image, or has restarted --restarts times inside --window
+//      (scripts/watch/crash-loop.py). Faster than the readiness check above, which only reports after STUCK_MINUTES.
+//   4. CONSUMER LAG: any group over --max-lag that is not draining materially, and any inactive group carrying a backlog (scripts/watch/kafka-lag.py).
+//   5. PARTITION BALANCE: a topic whose busiest partition took over --max-share of the interval's records, and a one-partition topic carrying real
+//      volume (scripts/watch/partition-balance.py). OBSERVATION-ONLY - a red build, no Discord - until its thresholds are calibrated against
+//      market-hours traffic and its exemption list reviewed; see FLEET-ALERT-DISCORD-REQUIREMENT R4i.
+// Checks 3-5 also DELIVER TO DISCORD, routed per environment: production to the prod group, dev AND es4 to the dev group (es4 is not production).
+// A red build remains an alert in its own right; the message is added to it, never substituted for it.
+// Native k8s CronJobs are denied by the cluster's admission policy and no Kafka or registry exporter is scraped, so a Jenkins cron job is the trigger
+// that can run. IT CHANGES NOTHING IN ANY CLUSTER, REGISTRY OR TOPIC - its only outbound effect is the Discord POST above, and it has no deployment
+// effect, which is why scripts/ci/jenkins-permitted-sha-scope.txt keeps it out of the permitted-commit guard.
 def PROFILES = ['production', 'dev', 'es4']
 // Explicit deployer kubeconfigs on the agent: oeProfile('dev') resolves to the LOCAL docker-desktop cluster on this agent (connection refused), while the dev
 // cluster is the remote one reached through the "-remote" kubeconfig. Same files service-deploy uses.
@@ -16,6 +25,11 @@ def kubeconfigFor(String profile) {
            dev       : '/Users/abhinav/.kube/jenkins-deployer-dev-remote.kubeconfig',
            es4       : '/Users/abhinav/.kube/es4-jenkins-deployer.kubeconfig']
   return m[profile]
+}
+// Discord routing (FLEET-ALERT-DISCORD-REQUIREMENT R1c). es4 goes to the DEV group by the owner's decision: es4 is not production. Both ids already
+// exist in Jenkins - Jenkinsfile.offhours-clean-slate binds the same pair - so no new credential is created here.
+def webhookFor(String profile) {
+  return profile == 'production' ? 'offhours-discord-webhook' : 'offhours-discord-webhook-dev'
 }
 // Validated at the top of EVERY stage that uses the parameter: "restart from stage" can enter a pipeline mid-way and skip an earlier check.
 def watchedProfiles(String raw, List allowed) {
@@ -62,6 +76,56 @@ pipeline {
             if (rc != 0) { bad << "${profile} (rc=${rc})" }
           }
           if (bad) { error("readiness check failed: ${bad.join(', ')}") }
+        }
+        }
+      }
+    }
+    stage('Crash loops') {
+      steps {
+        catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
+        script {
+          def bad = []
+          watchedProfiles(params.ENVS, PROFILES).each { profile ->
+            withCredentials([string(credentialsId: webhookFor(profile), variable: 'DISCORD_WEBHOOK_URL')]) {
+              def rc = sh(returnStatus: true, script: "KUBECONFIG='${kubeconfigFor(profile)}' FLEET_ENV=${profile} FLEET_CHECK=crash-loop FLEET_MODE=paging bash scripts/watch/fleet-alert-deliver.sh bash scripts/watch/crash-loop-run.sh")
+              if (rc != 0) { bad << "${profile} (rc=${rc})" }
+            }
+          }
+          if (bad) { error("crash-loop check failed: ${bad.join(', ')}") }
+        }
+        }
+      }
+    }
+    stage('Consumer lag') {
+      steps {
+        catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
+        script {
+          def bad = []
+          watchedProfiles(params.ENVS, PROFILES).each { profile ->
+            def envName = profile == 'production' ? 'prod' : profile
+            withCredentials([string(credentialsId: webhookFor(profile), variable: 'DISCORD_WEBHOOK_URL')]) {
+              def rc = sh(returnStatus: true, script: "FLEET_ENV=${envName} FLEET_CHECK=kafka-lag FLEET_MODE=paging bash scripts/watch/fleet-alert-deliver.sh bash scripts/watch/stateful-check-run.sh kafka-lag.py")
+              if (rc != 0) { bad << "${envName} (rc=${rc})" }
+            }
+          }
+          if (bad) { error("consumer-lag check failed: ${bad.join(', ')}") }
+        }
+        }
+      }
+    }
+    stage('Partition balance') {
+      steps {
+        catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
+        script {
+          def bad = []
+          watchedProfiles(params.ENVS, PROFILES).each { profile ->
+            def envName = profile == 'production' ? 'prod' : profile
+            withCredentials([string(credentialsId: webhookFor(profile), variable: 'DISCORD_WEBHOOK_URL')]) {
+              def rc = sh(returnStatus: true, script: "FLEET_ENV=${envName} FLEET_CHECK=partition-balance FLEET_MODE=observation-only bash scripts/watch/fleet-alert-deliver.sh bash scripts/watch/stateful-check-run.sh partition-balance.py")
+              if (rc != 0) { bad << "${envName} (rc=${rc})" }
+            }
+          }
+          if (bad) { error("partition-balance check failed: ${bad.join(', ')}") }
         }
         }
       }
