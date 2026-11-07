@@ -37,6 +37,58 @@ source "$SCRIPT_DIR/topics.env"
 source "$SCRIPT_DIR/topic-shape.lib.sh"
 topic_shape_resolve_declarations
 
+# --- OPTIONAL NARROWING (unset = today's behaviour, byte for byte) -----------------------------------------------------
+#   --only a,b,c  (or APPLY_TOPICS_ONLY="a b c")  reconcile ONLY the named declared topics. A name that is not in
+#                 the declared list for this set is REFUSED (exit 2) before anything is read or changed: a typo must not
+#                 read as "nothing to do". Every other declared topic is left exactly as it is on the broker.
+#   --dry-run     (or APPLY_TOPICS_DRY_RUN=true) log every alter/create/delete this run WOULD send ("[dry-run] WOULD ...")
+#                 and send none of them. Reads (describe/list) still happen, so the log is what a real run would do.
+# Why: the full run rewrites retention.ms, cleanup.policy and min.insync.replicas on EVERY declared topic, so a one-topic
+# retention change used to mean accepting every other drift on the broker, or an ad hoc kafka-configs by hand.
+ONLY="${APPLY_TOPICS_ONLY:-}"
+DRY_RUN="${APPLY_TOPICS_DRY_RUN:-false}"
+ONLY_REQUESTED=false
+# SET counts as asked for, even when empty: an unset-looking empty variable must not become "all topics".
+[ "${APPLY_TOPICS_ONLY+set}" = "set" ] && ONLY_REQUESTED=true
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --dry-run) DRY_RUN=true ;;
+    --only) [ "$#" -ge 2 ] || { echo "apply-topics.sh: --only needs a topic list" >&2; exit 2; }; ONLY="$2"; ONLY_REQUESTED=true; shift ;;
+    --only=*) ONLY="${1#--only=}"; ONLY_REQUESTED=true ;;
+    *) echo "apply-topics.sh: unknown argument '$1' (supported: --only <topics>, --dry-run)" >&2; exit 2 ;;
+  esac
+  shift
+done
+ONLY="${ONLY//[[:space:],]/ }"
+# A filter that was ASKED FOR but names nothing (an empty interpolated variable, ",") must not fall through to the full run.
+if [ "$ONLY_REQUESTED" = "true" ] && [ -z "${ONLY// /}" ]; then
+  echo "apply-topics.sh: REFUSED: a topic filter was requested but it names no topic (empty list); refusing to fall back to ALL topics." >&2
+  exit 2
+fi
+if [ -n "${ONLY// /}" ]; then
+  _declared_names=" $(for _e in $OPTIONS_EDGE_TOPICS; do printf '%s ' "${_e%%:*}"; done)"
+  for _t in $ONLY; do
+    case "$_declared_names" in
+      *" $_t "*) ;;
+      *) echo "apply-topics.sh: REFUSED: '$_t' is not a declared topic for this set (typo, or declared for another environment)." >&2; exit 2 ;;
+    esac
+  done
+  echo "apply-topics: RESTRICTED to: $ONLY (every other declared topic is left untouched)"
+  unset _declared_names _e _t
+else
+  ONLY=""
+fi
+if [ "$DRY_RUN" = "true" ]; then
+  echo "apply-topics: DRY RUN - mutating kafka calls are logged as '[dry-run] WOULD ...' and NOT sent"
+  # Shell functions win over PATH, so these catch every mutating call in this script AND topic-shape.lib.sh.
+  kafka-configs() { case " $* " in *" --alter "*) echo "[dry-run] WOULD kafka-configs $*"; return 0 ;; esac; command kafka-configs "$@"; }
+  kafka-topics() { case " $* " in *" --alter "*|*" --create "*|*" --delete "*) echo "[dry-run] WOULD kafka-topics $*"; return 0 ;; esac; command kafka-topics "$@"; }
+  # Nothing was created or recreated, so there is nothing to wait for.
+  wait_for_topic_shape() { :; }
+  wait_for_topic_absent() { :; }
+  reassign_topic_replication_factor() { echo "[dry-run] WOULD reassign replication factor of $1"; return 0; }
+fi
+
 SKIPPED_EXIT=9
 
 # One line, written only from the two endings at the bottom of this file. Truncating (>) rather than
@@ -54,6 +106,9 @@ SKIPPED_TOPICS=()
 for entry in $OPTIONS_EDGE_TOPICS; do
   topic="${entry%%:*}"
   partitions="${entry##*:}"
+  if [ -n "$ONLY" ]; then
+    case " $ONLY " in *" $topic "*) ;; *) continue ;; esac
+  fi
   cleanup_policy="$(topic_cleanup_policy "$topic")"
   description="$(describe_topic "$topic")"
   if [[ -n "$description" ]]; then

@@ -486,6 +486,10 @@ jobs:
       - name: apply-topics separates a skip from a failure
         run: bash scripts/kafka/apply-topics-skip-exit-test.sh
 
+      # apply-topics.sh --only <topics> narrows a run to named declared topics and --dry-run sends nothing.
+      - name: apply-topics filter and dry-run
+        run: bash scripts/kafka/apply-topics-filter-dry-run-test.sh
+
       # A create that the Kafka admin client retried must not fail the run (prod clean-slate 2026-10-13).
       - name: apply-topics survives the admin client's retry of a successful create
         run: bash scripts/kafka/apply-topics-create-retry-test.sh
