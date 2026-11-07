@@ -29,7 +29,10 @@ moveScoreReportDigest drawProducers drawTimeframes drawUserLines drawExcludeKind
 TEXT_KEYS = {'lineHealthKinds', 'depthEnvironment', 'moveScoreReportDigest', 'drawProducers', 'drawTimeframes', 'drawExcludeKinds'}
 BOOL_KEYS = {'clockUnfit', 'provisional', 'drawUserLines'}
 PRODUCER_WORDS = {'DESK', 'HOST', 'OWN', 'CANDLESTICK', 'PHASE_A', 'PHASE_B', 'PHASE_C', 'PHASE_D', 'PHASE_E', 'PHASE_F'}
+# the LevelKind names of processing level-absorption-service (engine/LevelKind.java, 83 kinds, read on 2026-11-07); drawExcludeKinds may name any of them
+LEVEL_KINDS = set("""VALUE_AREA_HIGH VALUE_AREA_LOW POINT_OF_CONTROL MANUAL_LINE PRIOR_HIGH PRIOR_LOW PRIOR_HALFBACK PRIOR_IB_HIGH PRIOR_IB_LOW PRIOR_TAIL_BASE PRIOR_SPIKE_BASE OVERNIGHT_HIGH OVERNIGHT_LOW OVERNIGHT_POC IB_HIGH IB_LOW DEVELOPING_VAH DEVELOPING_VAL DEVELOPING_POC SINGLE_PRINT_EDGE POOR_EXTREME SESSION_EXTREME TAIL_BASE SPIKE_BASE HOST_SWING HOST_RANGE_EDGE OPENING_RANGE_EDGE SESSION_OPEN PRIOR_CLOSE WINDOW_EDGE DOJI_LEVEL TWEEZERS_LEVEL BAND_EDGE_BB20 BAND_EDGE_BB10 BAND_EDGE_BB50 BAND_EDGE_ENV21 BAND_EDGE_KC BAND_EDGE_STARC DONCHIAN_EDGE DONCHIAN_EDGE_OTHER PARABOLIC_SAR MOVING_AVERAGE SWING_LEVEL DOW_LINE_EDGE DOW_SWING_TRIGGER RETRACEMENT_LEVEL RETRACEMENT_ZONE_EDGE SPEEDLINE FIB_FAN_RAY GANN_FAN_RAY FAN_LINE TRENDLINE CHANNEL_BASE CHANNEL_RETURN SR_ZONE_EDGE ROUND_NUMBER VOLUME_NODE_EDGE CONFLUENCE_EDGE FORMATION_TRIGGER FORMATION_EXTREME RECTANGLE_EDGE GAP_EDGE NECKLINE PATTERN_UPPER PATTERN_LOWER DIAMOND_RIGHT BROADENING_TRIGGER RIM_LEVEL CONGESTION_EDGE PF_COLUMN_LEVEL PF_45_LINE COMPOSITE_VAH COMPOSITE_VAL COMPOSITE_POC COMPOSITE_NODE_EDGE CLIMAX_EXTREME WAVE_REFUTATION WAVE_FOUR_REFERENCE WAVE_CHANNEL EQUAL_LEVEL MANUAL_RANGE RETEST LOCAL_ABSORPTION""".split())
 FILE_KEY = 'line-health-configuration.txt'
+
 MOUNT = '/home/options-edge/config/line-health'
 PREFIX = 'level-absorption-line-health-config-'
 ENABLE = 'LEVEL_ABSORPTION_LINE_HEALTH_ENABLED'
@@ -81,7 +84,7 @@ for k, v in pairs:
         if v != 'NONE' and (not set(words) <= PRODUCER_WORDS or words != sorted(set(words))): err.append('drawProducers must be NONE or a sorted comma-separated list of producer words without duplicates')
     elif k == 'drawExcludeKinds':
         words = v.split(',')
-        if v != 'NONE' and (not all(re.fullmatch(r'[A-Z][A-Z0-9_]*', w) for w in words) or words != sorted(set(words))): err.append('drawExcludeKinds must be NONE or a sorted comma-separated list of kind names without duplicates')
+        if v != 'NONE' and (not set(words) <= LEVEL_KINDS or words != sorted(set(words))): err.append('drawExcludeKinds must be NONE or a sorted comma-separated list of kind names without duplicates')
     elif k == 'drawTimeframes':
         words = v.split(',')
         if v != 'NONE' and (not set(words) <= {'1m', '5m', '15m'} or words != sorted(set(words), key=['1m', '5m', '15m'].index)): err.append('drawTimeframes must be NONE or a comma-separated list from 1m, 5m, 15m without duplicates')
