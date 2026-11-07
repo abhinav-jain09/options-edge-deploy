@@ -25,6 +25,22 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 fail=0
 PB=ansible/es-mirrors.yml
+# -i is REQUIRED: the table declares run_host mac74, which the playbook checks against the inventory,
+# so an inventory-less run is refused by that row check BEFORE the permitted-commit guard — which is
+# exactly what this gate asserts the refusal comes from. Without -i the gate failed while the lock it
+# tests was intact (Codex r3 on #1166). Nothing here connects to mac74.
+INV=ansible/inventory/oe-mirror-hosts.yml
+# An install now has to come through scripts/ops/install-es-mirrors.sh, and that refusal sits IN
+# FRONT of the permitted-commit guard — which is what this gate asserts the refusal comes from. So
+# the gate presents itself as a wrapper run.
+# ⚠ This gate EXPORTS the marker and does not ASSERT the requirement. I claimed in eaabbf72's
+# message that four gates assert it before exporting; two do — mirror-stop-start-guard-test and
+# mirror-install-rollback-test, which drive the rendered scripts and so can observe the refusal
+# (Codex r6). This gate cannot: it stops at dump_rows, before any unit task. The requirement is
+# covered there and in scripts/ci/mirror-install-wrapper-test.sh; it is not covered here, and the
+# export below is a precondition for reaching this gate's own subject, not evidence about the
+# requirement.
+export OE_MIRROR_RECEIPT=/tmp/oe-prod-permission-gate-receipt
 
 # ---- 1. the declared guard version ----
 # the hash must be a LITERAL at every invocation, in the playbook and in the binding script: as a
@@ -119,7 +135,7 @@ for v in oe_agents oe_kbin oe_rendered_dir; do
 done
 if command -v ansible-playbook >/dev/null; then
   hp=$(mktemp); set +e
-  ansible-playbook "$PB" -e mirror_target_ip=192.168.100.252 -e mirror_target_port=9092 \
+  ansible-playbook -i "$INV" "$PB" -e mirror_target_ip=192.168.100.252 -e mirror_target_port=9092 \
     -e only_topics=es.futures.cvd -e '{"ops_dir": "/tmp/x\"; touch /tmp/OE_PATH_GATE_INJECTED; #"}' >"$hp" 2>&1
   rc=$?; set -e
   [ "$rc" != 0 ] || { echo "FAIL: a hostile ops_dir did not stop the run"; fail=1; }
@@ -156,7 +172,7 @@ fi
 if command -v ansible-playbook >/dev/null; then
   log=$(mktemp); OUT_DUMP=$(mktemp); set +e
   # dump_rows ends the play before any unit task, so this gate cannot install anything
-  ansible-playbook "$PB" -e mirror_target_ip=192.168.100.252 -e mirror_target_port=9092 \
+  ansible-playbook -i "$INV" "$PB" -e mirror_target_ip=192.168.100.252 -e mirror_target_port=9092 \
     -e confirm_mirror_install=true -e permitted_sha=0000000000000000000000000000000000000000 \
     -e "dump_rows=$OUT_DUMP" >"$log" 2>&1
   rc=$?; set -e
@@ -167,7 +183,7 @@ if command -v ansible-playbook >/dev/null; then
     && { echo "FAIL: a refused production run still reached a unit task"; fail=1; }
   # the same run with the classification RENAMED: the literals must make this change nothing
   log2=$(mktemp); set +e
-  ansible-playbook "$PB" -e mirror_target_ip=192.168.100.252 -e mirror_target_port=9092 \
+  ansible-playbook -i "$INV" "$PB" -e mirror_target_ip=192.168.100.252 -e mirror_target_port=9092 \
     -e confirm_mirror_install=true -e permitted_sha=0000000000000000000000000000000000000000 \
     -e oe_prod_target=127.0.0.1:19092 -e oe_dev_target=192.168.100.252:9092 \
     -e oe_target=127.0.0.1:19092 \

@@ -24,6 +24,14 @@ REPO={{ (playbook_dir ~ "/..") | quote }}
 # oe_prod_permitted) can make this task's conditions true however the previous phase ended. Each
 # path that stops, WRITES or starts a unit therefore re-runs the repository's own permitted-commit
 # guard itself for the production target, with the version hash written out literally.
+# the wrapper requirement, for the reason the guard is here: a task cannot carry it, because
+# `--skip-tags always` skips exactly the always-tagged refusals. Every install, not just
+# production. See mirror-stop.sh.j2.
+if [ -z "${OE_MIRROR_RECEIPT:-}" ]; then
+  echo "FAIL: an install must run through scripts/ops/install-es-mirrors.sh — nothing has been loaded"
+  exit 1
+fi
+
 if [ "$TGT" = "192.168.100.252:9092" ]; then
   if ! ( cd "$REPO" && PERMITTED_SHA="${PERMITTED_SHA:-}" \
          PERMITTED_SHA_GUARD_VERSION="2f6fc2ab7aa51eb8a9e8aa350f2d774cd2fb7a253de2591e43645a19a9886b24" \

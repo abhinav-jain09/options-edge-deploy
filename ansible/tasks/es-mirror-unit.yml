@@ -153,6 +153,10 @@
   environment:
     # the production lock inside the script reads this from the environment; see mirror-stop.sh.j2
     PERMITTED_SHA: "{{ oe_permitted_sha }}"
+    # The wrapper requirement inside the script reads this. Read with an inline lookup, never
+    # through a play variable, because an extra var outranks a variable and this must not be
+    # forgeable; and passed per task because Ansible gives the script only this environment.
+    OE_MIRROR_RECEIPT: "{{ lookup('env', 'OE_MIRROR_RECEIPT') }}"
   register: oe_stop
   failed_when: false
 
@@ -182,6 +186,13 @@
       # oe_prod_permitted) can make this task's conditions true however the previous phase ended. Each
       # path that stops, WRITES or starts a unit therefore re-runs the repository's own permitted-commit
       # guard itself for the production target, with the version hash written out literally.
+      # the wrapper requirement, for the reason the guard is here: a task cannot carry it, because
+      # `--skip-tags always` skips exactly the always-tagged refusals. Every install, not just
+      # production. See ansible/templates/mirror-stop.sh.j2.
+      if [ -z "${OE_MIRROR_RECEIPT:-}" ]; then
+        echo "FAIL: an install must run through scripts/ops/install-es-mirrors.sh — nothing has been written"
+        exit 1
+      fi
       if [ "$TGT" = "192.168.100.252:9092" ]; then
         if ! ( cd "$REPO" && PERMITTED_SHA="${PERMITTED_SHA:-}" \
                PERMITTED_SHA_GUARD_VERSION="2f6fc2ab7aa51eb8a9e8aa350f2d774cd2fb7a253de2591e43645a19a9886b24" \
@@ -255,6 +266,10 @@
   environment:
     # the in-script production lock reads this; see the guard block at the top of the body
     PERMITTED_SHA: "{{ oe_permitted_sha }}"
+    # The wrapper requirement inside the script reads this. Read with an inline lookup, never
+    # through a play variable, because an extra var outranks a variable and this must not be
+    # forgeable; and passed per task because Ansible gives the script only this environment.
+    OE_MIRROR_RECEIPT: "{{ lookup('env', 'OE_MIRROR_RECEIPT') }}"
   register: oe_install
   failed_when: false
 
@@ -273,6 +288,10 @@
     cmd: "bash {{ oe_rendered_dir }}/{{ item.label }}/start.sh"
   environment:
     PERMITTED_SHA: "{{ oe_permitted_sha }}"
+    # The wrapper requirement inside the script reads this. Read with an inline lookup, never
+    # through a play variable, because an extra var outranks a variable and this must not be
+    # forgeable; and passed per task because Ansible gives the script only this environment.
+    OE_MIRROR_RECEIPT: "{{ lookup('env', 'OE_MIRROR_RECEIPT') }}"
     OE_OLD_PID: "{{ (oe_stop.stdout | default('')) | regex_search('was pid ([0-9]+)', '\\1') | first | default('', true) }}"
   register: oe_start
   failed_when: false
