@@ -437,7 +437,7 @@ has  "  and says why" "OE_ES4_TOPICS" "$missing_out"
 # exactly that set — while ENV=dev WITHOUT the override does not, which is why the launchd wrapper's TOPICS
 # override is load-bearing. It is scheduled on the dev Mac (launchd), so the .252 crontab must not name it.
 depth_expected=$(. "$OE/oe-topics.env"; printf '%s' "$OE_DEPTH_TOPICS_dev")
-want "oe-topics.env defines the dev depth set" "es.rithmic.depth underlying.es.trades.linearized futures.liquidity-wall.closures es.rithmic.mbo" "$depth_expected"
+want "oe-topics.env defines the dev depth set" "es.rithmic.depth underlying.es.trades.linearized futures.liquidity-wall.closures es.rithmic.mbo es.mbo.level-flow es.mbo.level-flow-final es.mbo.health es.mbo.closures" "$depth_expected"
 depth_derived=$(ARCHIVE_DIR="$T" ENV=dev TOPICS="$depth_expected" PRINT_TOPICS=true KAFKA_BIN="$BIN" bash "$ARCH" 2>/dev/null)
 want "ENV=dev TOPICS=\$OE_DEPTH_TOPICS_dev derives exactly the depth set" "$depth_expected" "$depth_derived"
 dev_default=$(ARCHIVE_DIR="$T" ENV=dev PRINT_TOPICS=true KAFKA_BIN="$BIN" bash "$ARCH" 2>/dev/null)
@@ -448,7 +448,7 @@ missing_depth_out=$(ARCHIVE_DIR="$T" ENV=dev TOPICS="$depth_expected" PRINT_TOPI
 missing_depth_rc=$?
 want "a policy file without OE_DEPTH_TOPICS_dev is refused, even with the value inherited" 1 "$([ "$missing_depth_rc" -ne 0 ]; echo $((1-$?)))"
 has  "  and says why" "OE_DEPTH_TOPICS_dev" "$missing_depth_out"
-for _t in es.rithmic.depth futures.liquidity-wall.closures es.rithmic.mbo; do
+for _t in es.rithmic.depth futures.liquidity-wall.closures es.rithmic.mbo es.mbo.level-flow es.mbo.level-flow-final es.mbo.health es.mbo.closures; do
   hasnt "  $_t is in no es4 set" " $_t " " $es4_expected "
 done
 

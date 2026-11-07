@@ -6,6 +6,7 @@ import com.optionsedge.contracts.avro.CanonicalAvroSerializer;
 import com.optionsedge.contracts.avro.CanonicalJsonAvro;
 import com.optionsedge.contracts.cvd.CvdRelatedSchemas;
 import com.optionsedge.contracts.cvd.CvdSchemas;
+import com.optionsedge.contracts.esmbo.EsMboSchemas;
 import com.optionsedge.contracts.liquiditywall.LiquidityWallSchemas;
 import com.optionsedge.contracts.rithmic.RithmicMboSchemas;
 import com.optionsedge.contracts.rithmic.RithmicSchemas;
@@ -56,6 +57,67 @@ public class CanonicalArchiveDecoderTest {
         for(var row:document.isArray()?document:document.path("models"))
             if(row.path("schema").asText().equals(schema))return row.get(member);
         throw new AssertionError("Missing actual source fixture "+schema);
+    }
+    /** A Confluent frame of {@code model} written with {@code schema} under the registry id {@code id}. */
+    static byte[] frame(int id,Schema schema,JsonNode model) throws Exception {
+        var out=new ByteArrayOutputStream();out.write(0);out.write(ByteBuffer.allocate(4).putInt(id).array());
+        var encoder=org.apache.avro.io.EncoderFactory.get().binaryEncoder(out,null);
+        new org.apache.avro.generic.GenericDatumWriter<Object>(schema).write(CanonicalJsonAvro.record(schema,model),encoder);encoder.flush();
+        return out.toByteArray();
+    }
+    /** The MBO engine's four book topics and the (fixed id, released schema) pairs each may carry (document A revision 12 section 10, capture item 2). */
+    static Map<String,Map<Integer,Schema>> mboTopics() {
+        return Map.of("es.mbo.level-flow",Map.of(3502,EsMboSchemas.LEVEL_FLOW.schema()),
+                "es.mbo.level-flow-final",Map.of(3506,EsMboSchemas.LEVEL_FLOW_FINAL.priorSchema(),3510,EsMboSchemas.LEVEL_FLOW_FINAL.schema()),
+                "es.mbo.health",Map.of(3504,EsMboSchemas.HEALTH.priorSchema(),3509,EsMboSchemas.HEALTH.schema()),
+                "es.mbo.closures",Map.of(3501,EsMboSchemas.CLOSURE.schema(),3508,EsMboSchemas.CLOSURE_FINAL.schema()));
+    }
+    static int mboAssertions() throws Exception {
+        String scope="archive-canonical-unit-mbo";int assertions=0;
+        var registry=MockSchemaRegistry.getClientForScope(scope);
+        try {
+            EsMboSchemas.register(registry);
+            for(var topicEntry:mboTopics().entrySet()) {
+                String topic=topicEntry.getKey();var accepted=topicEntry.getValue();
+                try(var decoder=new CanonicalArchiveDecoder(topic,"mock://"+scope)) {
+                    for(var one:accepted.entrySet()) {
+                        int id=one.getKey();Schema schema=one.getValue();JsonNode model=minimal(schema);
+                        byte[] framed=frame(id,schema,model);
+                        check(ByteBuffer.wrap(framed,1,4).getInt()==id,"The fixture must be framed under the registered id: "+topic+" "+id);
+                        byte[] decoded=decoder.deserialize(topic,framed);
+                        check(decoded.length>0&&decoded[0]=='{',"Framed input must project to an API object: "+topic+" "+id);
+                        check(JSON.readTree(model.toString()).equals(JSON.readTree(decoded)),"Decoded API value must match the input model: "+topic+" "+id);assertions+=2;
+                        var key="key".getBytes(StandardCharsets.UTF_8);var headers=new RecordHeaders().add("trace",new byte[]{7});
+                        var record=new ConsumerRecord<byte[],byte[]>(topic,0,17,123456789L,TimestampType.CREATE_TIME,key.length,framed.length,key,framed,headers,java.util.Optional.empty());
+                        var opts=new StrikeArchiveReader.Opts();opts.topic=topic;var summary=new StrikeArchiveReader.Summary(opts,0);var out=new ByteArrayOutputStream();
+                        StrikeArchiveReader.writeRecord(out,record,summary,decoder);
+                        check(out.toString(StandardCharsets.UTF_8).equals("CreateTime:123456789\tPartition:0\tOffset:17\tkey\t"+new String(decoded,StandardCharsets.UTF_8)+"\n"),"Line layout must be preserved: "+topic+" "+id);assertions++;
+                        byte[] json=model.toString().getBytes(StandardCharsets.UTF_8);
+                        refuses(()->decoder.deserialize(topic,json),"A JSON value on a fixed-id topic must refuse, never pass as retained JSON: "+topic);assertions++;
+                        // an id of another subject of the family, accepted on its own topic, must refuse here
+                        for(var other:mboTopics().entrySet()) {
+                            if(other.getKey().equals(topic))continue;
+                            for(var otherId:other.getValue().keySet()) {
+                                if(accepted.containsKey(otherId))continue;
+                                byte[] crossed=framed.clone();ByteBuffer.wrap(crossed,1,4).putInt(otherId);
+                                refuses(()->decoder.deserialize(topic,crossed),"A frame under the id of another topic's schema must refuse: "+topic+" <- "+otherId);assertions++;
+                            }
+                        }
+                        byte[] foreign=framed.clone();ByteBuffer.wrap(foreign,1,4).putInt(3599);
+                        try {decoder.deserialize(topic,foreign);throw new AssertionError("foreign id accepted on "+topic);}
+                        catch(org.apache.kafka.common.errors.SerializationException expected) {
+                            check(expected.getMessage().contains("one of the fixed ids "+new java.util.TreeSet<>(accepted.keySet())),"The refusal must name the accepted ids: "+expected.getMessage());
+                        }
+                        assertions++;
+                    }
+                    refuses(()->decoder.deserialize(topic,null),"Unexpected physical null must refuse");
+                    refuses(()->decoder.deserialize(topic,new byte[]{0,0,0}),"Short framed record must refuse, never JSON fallback");
+                    int firstId=accepted.keySet().iterator().next();Schema firstSchema=accepted.get(firstId);byte[] sample=frame(firstId,firstSchema,minimal(firstSchema));
+                    refuses(()->decoder.deserialize("unbound",sample),"Wrong topic must refuse");assertions+=3;
+                }
+            }
+        } finally {MockSchemaRegistry.dropScope(scope);}
+        return assertions;
     }
     public static void main(String[] args) throws Exception {
         if(args.length<1||args.length>2)throw new IllegalArgumentException("contracts source directory and optional tested helper jar required");
@@ -148,6 +210,7 @@ public class CanonicalArchiveDecoderTest {
                 }
             }
         } finally {MockSchemaRegistry.dropScope(scope);}
+        assertions+=mboAssertions();
         refuses(()->new CanonicalArchiveDecoder("unbound","mock://archive"),"Unbound startup must refuse");assertions++;
         System.out.println("Canonical archive finite codec/layout assertions PASS "+assertions);
     }
