@@ -16,7 +16,7 @@ class RithmicMboDeployTest(unittest.TestCase):
   script='source scripts/kafka/topics.env; printf "%s\\n%s\\n%s\\n" "$OPTIONS_EDGE_ES4_TOPICS" "$OPTIONS_EDGE_ES4_TOPIC_RETENTION_OVERRIDES" "$OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS"'
   out=subprocess.check_output(['bash','-c',script],cwd=ROOT,text=True).splitlines()
   self.assertEqual(out[0].split().count('es.rithmic.mbo:1'),1)
-  self.assertEqual(out[1].split().count('es.rithmic.mbo=43200000'),1)
+  self.assertEqual(out[1].split().count('es.rithmic.mbo=86400000'),1)
   self.assertIn('es.rithmic.mbo',out[2].split())
 
  def test_reset_requires_and_restores_mbo_schema_before_any_wipe(self):
@@ -29,7 +29,7 @@ class RithmicMboDeployTest(unittest.TestCase):
   script='source scripts/kafka/topics.env; printf "%s\\n%s\\n%s\\n" "$OPTIONS_EDGE_TOPICS" "$OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES" "$OPTIONS_EDGE_ES4_TOPICS"'
   out=subprocess.check_output(['bash','-c',script],cwd=ROOT,env={**os.environ,'ENVIRONMENT':'production'},text=True).splitlines()
   self.assertNotIn('es.rithmic.mbo:1',out[0].split());self.assertIn('es.rithmic.depth:1',out[0].split())
-  self.assertNotIn('es.rithmic.mbo=43200000',out[1].split());self.assertIn('es.rithmic.depth=43200000',out[1].split())
+  self.assertNotIn('es.rithmic.mbo=86400000',out[1].split());self.assertIn('es.rithmic.depth=86400000',out[1].split())
   self.assertIn('es.rithmic.mbo:1',out[2].split(),'ES4 source remains declared independently of fleet target')
 
  def test_schema_governance_covers_fixed_id_and_dev_only_byte_mirror(self):

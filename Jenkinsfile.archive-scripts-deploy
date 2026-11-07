@@ -242,7 +242,7 @@ pipeline {
 
           # The DEV depth archive (oe-archive-depth.sh, launchd/oe-archive-depth.plist) is exempted from the
           # completeness check for the same reason — it belongs on the DEV MAC, four times a day against
-          # es.rithmic.depth's 12-hour retention — and bound by this: the set and its classification in the
+          # es.rithmic.depth's 24-hour retention — and bound by this: the set and its classification in the
           # policy, the wrapper's dedicated invocation, the install path, the 02/08/14/20 ET schedule, dev-only
           # registration, and an installer that refuses a broken install.
           bash scripts/ci/validate-dev-mac-depth-archive.sh
