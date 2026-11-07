@@ -341,18 +341,107 @@ class ServiceIdentityUnversionedTest(unittest.TestCase):
         self.assertEqual({"suffix-versioned.yaml"}, flagged,
                          "a versioned id suffix must fail the guard; an environment suffix must not")
 
-    def test_real_suffix_values_are_pinned_environment_namespaces(self) -> None:
-        # This suffix renames EVERY Streams identity in its environment, so its permitted values are
-        # pinned exactly rather than merely checked for versions. A "not versioned" assertion alone
-        # would pass an empty suffix (which collapses prod and dev onto the SAME identity) or a
-        # renamed one. Changing this set is a deliberate, reviewed act — which is the point.
-        found = {value for _, key, value in identities(ROOT / "k8s") if key.endswith("_SUFFIX")}
+    def test_suffix_declarations_are_pinned_namespaces_or_approved_rotations(self) -> None:
+        # This suffix renames Streams identities, so every DECLARATION of it is pinned exactly rather
+        # than merely checked for versions: a "not versioned" assertion alone would pass an empty
+        # suffix (which collapses prod and dev onto the SAME identity) or a renamed one. Changing
+        # these pins is a deliberate, reviewed act - which is the point.
+        #
+        # There are TWO kinds of declaration and they are NOT interchangeable:
+        #
+        #   ENVIRONMENT NAMESPACE - one shared value per environment, read by every service in it.
+        #
+        #   SERVICE-SCOPED ROTATION - a narrowly approved, per-service escape from a wedged consumer
+        #     group, declared ONLY in that service's own overlay. "-prod-b" is one: indicator-service's
+        #     "indicator-service-prod" group carried unstable (pending transactional) offsets on
+        #     underlying.spx.price that made committed() time out for 60 s on every start, so the
+        #     service never became ready; a new application id started cleanly (bcfbf519, live
+        #     2026-10-28, rollback = remove the patch). es4 deliberately does not inherit it
+        #     (ES4_DROP_ENV_NAMES in scripts/es4/render_es4_manifests.py).
+        #
+        # A rotation is NOT an environment namespace and this test does not pretend it is - it is held
+        # to STRICTER rules below: it may not be declared in a shared carrier (which would rename every
+        # identity in the environment), it must extend exactly one environment namespace strictly (so it
+        # can neither be empty nor move a service into another environment's identity space), and the
+        # namespace it extends must still exist for everyone else.
+        ENV_NAMESPACES = {
+            ("k8s/es4/es4-common-env.yaml", "-es4"),
+            ("k8s/infra/base/configmap.yaml", "-prod"),
+            ("k8s/infra/overlays/dev/configmap-dev-local-patch.yaml", "-dev"),
+            ("k8s/infra/overlays/experiment/configmap-dev-local-patch.yaml", "-dev"),
+        }
+        SERVICE_ROTATIONS = {
+            ("k8s/overlays/production/indicator-appid-prod-patch.yaml", "-prod-b"),
+            ("k8s/services/indicator-service/overlays/production/manifest.yaml", "-prod-b"),
+        }
+        found = {
+            (path.relative_to(ROOT).as_posix(), value)
+            for path, key, value in identities(ROOT / "k8s")
+            if key.endswith("_SUFFIX")
+        }
+        # Pins emptied on both sides would "pass" while checking nothing.
+        self.assertTrue(ENV_NAMESPACES and found, "no id-composing suffix declaration was found at all")
         self.assertEqual(
-            {"-prod", "-dev", "-es4"}, found,
-            "the id-composing suffix values changed. Each one renames every Streams identity in its "
-            "environment: confirm the new value is an environment namespace (never a version, never "
-            "empty — an empty suffix merges environments onto one identity), then update this pin.",
+            ENV_NAMESPACES | SERVICE_ROTATIONS, found,
+            "the id-composing suffix declarations changed. Each value renames Streams identities: "
+            "confirm what the new one is (never a version, never empty - an empty suffix merges "
+            "environments onto one identity) and WHICH pin it belongs in - a shared environment "
+            "namespace, or a service-scoped rotation declared only in that service's own overlay - "
+            "then update that pin.",
         )
+
+        # The carriers whose SUFFIX VALUE every service in an environment inherits. This is about where a
+        # suffix is inherited FROM, not about kustomize sharing in general: k8s/overlays/production/ is
+        # shared composition infrastructure too, but the -prod-b patch there targets one workload by name.
+        # An ENVIRONMENT value belongs in an inherited carrier; a ROTATION written into one would rename
+        # every Streams identity in that environment.
+        SHARED_SUFFIX_CONFIG_CARRIERS = ("k8s/infra/", "k8s/es4/")
+        ns_sites = {site for site, _ in ENV_NAMESPACES}
+        ns_values = {value for _, value in ENV_NAMESPACES}
+        rot_sites = {site for site, _ in SERVICE_ROTATIONS}
+        rot_values = {value for _, value in SERVICE_ROTATIONS}
+        for site in ns_sites:
+            self.assertTrue(
+                site.startswith(SHARED_SUFFIX_CONFIG_CARRIERS),
+                "an environment namespace must be declared in an inherited suffix carrier "
+                + repr(SHARED_SUFFIX_CONFIG_CARRIERS)
+                + ", not in one service's overlay: " + site,
+            )
+        for site in rot_sites:
+            self.assertFalse(
+                site.startswith(SHARED_SUFFIX_CONFIG_CARRIERS),
+                "a service-scoped rotation must NOT be declared in an inherited suffix carrier - that "
+                "renames "
+                "every Streams identity in the environment: " + site,
+            )
+        self.assertEqual(
+            set(), ns_sites & rot_sites,
+            "a shared environment carrier cannot also declare a service-scoped rotation: that would "
+            "rename every Streams identity in the environment",
+        )
+        self.assertEqual(
+            set(), ns_values & rot_values,
+            "a rotation value must differ from every environment namespace, or it is not a rotation",
+        )
+        for value in ns_values | rot_values:
+            self.assertTrue(value, "an empty id suffix merges environments onto one identity")
+            self.assertNotRegex(
+                value, VERSIONED,
+                "a versioned id suffix versions every identity it composes, however clean each id "
+                "literal looks: " + value,
+            )
+        for value in rot_values:
+            extended = {ns for ns in ns_values if value != ns and value.startswith(ns)}
+            self.assertEqual(
+                1, len(extended),
+                "a service-scoped rotation must strictly extend exactly one environment namespace "
+                "(so it cannot be empty, and cannot move a service into another environment's "
+                "identity space); " + value + " extends " + repr(sorted(extended)),
+            )
+            self.assertIn(
+                extended.pop(), ns_values,
+                "the namespace a rotation extends must still be declared for every other service",
+            )
 
     def test_bulk_envfrom_sources_are_fail_closed(self) -> None:
         # envFrom is how the July 2026 stale-identity incident actually reached a workload: a shared

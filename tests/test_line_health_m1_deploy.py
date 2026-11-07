@@ -159,7 +159,7 @@ class ConfigurationValidator(unittest.TestCase):
     def test_the_repository_passes(self):
         r = subprocess.run(["bash", str(VALIDATOR)], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("83 keys", r.stdout)
+        self.assertIn("84 keys", r.stdout)
 
     def test_a_name_that_is_not_the_hash_fails(self):
         self.edit(CONFIG_FILE, lambda s: s.replace("tapeWindowSeconds=20", "tapeWindowSeconds=21"))
@@ -182,13 +182,13 @@ class ConfigurationValidator(unittest.TestCase):
 
     def test_the_display_scope_and_move_score_keys_are_in_the_file_with_the_documents_starting_values(self):
         text = (self.work / CONFIG_FILE).read_text()
-        for line in ("drawProducers=CANDLESTICK,HOST,PHASE_A,PHASE_B,PHASE_C", "drawTimeframes=1m,5m", "drawUserLines=false", "movePaceFullMilliPointsPerMinute=5000",
+        for line in ("drawProducers=CANDLESTICK,HOST,PHASE_B,PHASE_C", "drawTimeframes=1m,5m", "drawUserLines=false", "drawExcludeKinds=ROUND_NUMBER", "movePaceFullMilliPointsPerMinute=5000",
                      "moveWeightPushMilli=400", "moveWeightPaceMilli=300", "moveWeightHoldMilli=300", "moveWeightBookBeyondMilli=200", "moveWeightAbsorptionMilli=100",
                      "moveReadSeconds=10", "returnHorizonSeconds=300", "moveScoreReportDigest=\n"):
             self.assertIn("    " + line, text)
 
     def test_an_unknown_producer_word_or_timeframe_or_a_bad_report_digest_fails(self):
-        self.edit(CONFIG_FILE, lambda s: s.replace("drawProducers=CANDLESTICK,HOST,PHASE_A,PHASE_B,PHASE_C", "drawProducers=CANDLESTICK,HOST,PHASE_Z"))
+        self.edit(CONFIG_FILE, lambda s: s.replace("drawProducers=CANDLESTICK,HOST,PHASE_B,PHASE_C", "drawProducers=CANDLESTICK,HOST,PHASE_Z"))
         self.rename_to_hash()
         self.assert_fails("drawProducers must be NONE or a sorted comma-separated list of producer words")
         self.edit(CONFIG_FILE, lambda s: s.replace("drawProducers=CANDLESTICK,HOST,PHASE_Z", "drawProducers=NONE").replace("drawTimeframes=1m,5m", "drawTimeframes=2m"))
@@ -302,7 +302,11 @@ class ConfigurationValidator(unittest.TestCase):
                   lambda s: re.sub(r"level-absorption-line-health-config-[0-9a-f]{12}", "level-absorption-line-health-config-90168d091843", s))
         self.assert_fails("the generated dev slice must name exactly")
 
+    def test_a_malformed_draw_exclude_kinds_fails_and_none_passes(self):
+        self.edit(CONFIG_FILE, lambda s: s.replace("drawExcludeKinds=ROUND_NUMBER", "drawExcludeKinds=round_number"))
+        self.rename_to_hash()
+        self.assert_fails("drawExcludeKinds must be NONE or a sorted comma-separated list of kind names")
+
 
 if __name__ == "__main__":
     unittest.main()
-

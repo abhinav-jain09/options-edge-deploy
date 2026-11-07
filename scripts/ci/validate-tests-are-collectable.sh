@@ -27,8 +27,10 @@ for f in "${files[@]}"; do
   mod="tests.$(basename "$f" .py)"
   # Bare module-level test functions: pytest-style, invisible to unittest.
   if grep -qE '^def test_' "$f"; then
-    echo "FAIL: $f defines module-level 'def test_' functions. unittest cannot collect those, so"
-    echo "      the file runs as 0 tests and reports OK. Put them in a unittest.TestCase."
+    echo "FAIL: $f defines module-level 'def test_' functions. unittest collects TestCase methods"
+    echo "      only, so such a function runs ONLY if something calls it by hand: on its own the file"
+    echo "      reports 'Ran 0 tests ... OK', and beside a hand-written wrapper the next function"
+    echo "      added runs nowhere while the file still looks green. Put the bodies in a TestCase."
     fail=1
     continue
   fi

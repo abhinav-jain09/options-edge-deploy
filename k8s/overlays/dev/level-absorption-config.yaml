@@ -92,14 +92,15 @@ data:
 # development only (k8s/overlays/dev/level-absorption-dev-enable-patch.yaml); production renders none.
 # displayStaleSeconds=20 on development (M6, decision made by Claude under the owner's standing instruction; the owner may overrule): measured on dev 2026-11-06, status records reach the broker 5.7 to 9.3 s (median 6.85 s) after their second and consecutive status records are at most 3.2 s apart, because the tape the loop reads is held about 5 s by the linearizer; 5 s would show every line stale on a healthy pipeline. Requirement LH-N-2 does not hold on dev for the same reason (tracked deviation, see options-edge-documents design/line-health/m6-results.md).
 # guardTicks=8 is EXPLORATORY (M6, decision made by Claude under the owner's standing instruction; the owner may overrule): candidate C2 of the guard search, chosen after the starting value 2 failed AC-8 on the 2026-11-05 windows (lag-free window active 0.84 of seconds) and scored on the same four windows, so it is NOT validated; `provisional` stays set. See options-edge-documents design/line-health/m6-results.md.
-# Display scope and move score keys (processing PR for requirement rev 42 LH-D-12, LH-P2-10; design rev 56 4.6a), made by Claude under the owner's standing instruction, the owner may overrule: drawProducers (the market structure service and the indicator service), drawTimeframes 1m and 5m, drawUserLines false (open decision OD-6), the move score weights 400, 300, 300 and full-scale pace 5000, the shadow weights 200 and 100, the replay-only moveReadSeconds and returnHorizonSeconds, and moveScoreReportDigest empty (null: no test report exists yet, LH-V-12). All starting values of the documents; the owner's decision of 2026-11-06 is that study bands from the indicator service ARE drawn on 1m and 5m, so PHASE_A stays in drawProducers.
+# Display scope and move score keys (processing PR for requirement rev 42 LH-D-12, LH-P2-10; design rev 56 4.6a), made by Claude under the owner's standing instruction, the owner may overrule: drawProducers (the market structure service and the indicator service), drawTimeframes 1m and 5m, drawUserLines false (open decision OD-6), the move score weights 400, 300, 300 and full-scale pace 5000, the shadow weights 200 and 100, the replay-only moveReadSeconds and returnHorizonSeconds, and moveScoreReportDigest empty (null: no test report exists yet, LH-V-12). All starting values of the documents; the owner's decision of 2026-11-06 is that study bands from the indicator service ARE drawn on 1m and 5m, so PHASE_A stayed in drawProducers until 2026-11-07. 2026-11-07 (made by Claude on the owner's brief, the owner may overrule): the owner wants support and resistance lines from the market structure service on 1m and 5m and dislikes meshes of lines, and 58 of the 115 drawn lines were indicator study lines (bands, Donchian channels, moving averages, parabolic stop and reverse); PHASE_A is dropped from drawProducers on development, which leaves CANDLESTICK, HOST, PHASE_B and PHASE_C (all market structure service producers). Reverting is putting PHASE_A back into this key.
+# drawExcludeKinds=ROUND_NUMBER (requirement rev 43 LH-D-12, owner decision of 2026-11-07): a round-number line is a magnet price, not a support or a resistance, so the service sets drawOnChart false for it. NONE excludes nothing. The settings of the page (drawNearestPerSide) are a web display setting and are not here.
 # Every value is a starting value made by Claude under the owner's standing instruction (the owner may overrule); all are uncalibrated (requirement LH-L-2).
 # depthEnvironment is required and has no default: dev reads "Rithmic Paper Trading".
 # scripts/ci/validate-line-health-config.sh checks the key set, the name against the hash, the mount and that only dev turns line health on.
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: level-absorption-line-health-config-66c64e82ed4d
+  name: level-absorption-line-health-config-0c1fd6816e3e
   namespace: options-edge
 immutable: true
 data:
@@ -120,7 +121,8 @@ data:
     depthEnvironment=Rithmic Paper Trading
     depthReferenceContracts=127
     displayStaleSeconds=20
-    drawProducers=CANDLESTICK,HOST,PHASE_A,PHASE_B,PHASE_C
+    drawExcludeKinds=ROUND_NUMBER
+    drawProducers=CANDLESTICK,HOST,PHASE_B,PHASE_C
     drawTimeframes=1m,5m
     drawUserLines=false
     fitConfirmSeconds=10
