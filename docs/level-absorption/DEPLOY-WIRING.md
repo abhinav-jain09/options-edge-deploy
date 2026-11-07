@@ -104,3 +104,23 @@ Local validation: generated slices; exact config/lineage/cap/dev-only flags; dur
 `futures.level-absorption.events-value` has two versions: version 1 is the archival id 2702 (registered on dev, frozen; schema `schemas/cvd-related/v1/LevelAbsorptionEvent.avsc`) and version 2 is the new fixed id 2812 (`schemas/cvd-related/LevelAbsorptionEvent.avsc`: version 1 plus 42 optional `book*` fields, all nullable with default null, FULL compatible). The next integer after 2702 was not usable: 2703 is the manual line and 2703 to 2752 are held on the es4 registry by auto-assigned subjects. The manifest binds `level-absorption` as the producer of 2812 and `liquidity-validator` as a reader of both ids. Dev only; nothing is registered on production or es4.
 
 Rollout order (a registered id never changes content, and the producer looks the id up, it never registers): (1) every reader accepts both ids first: liquidity-validator (processing `LiveAvroDeserializer` and its `schema-requirements.json`), the web Now-card listener and the line health own-log reader (an exact-binding canonical reader admits ONE writer schema, so they use contracts `LevelAbsorptionEventModelDeserializer`); (2) the level-absorption roll runs schema-sync, which registers 2812 from the manifest before the image starts, and the image's `schema-requirements.json` must list `produces futures.level-absorption.events-value 2812` with the manifest hash; (3) only then does the service write version 2. The topic keeps version 1 frames until retention removes them, so both ids stay readable.
+
+## The book input (liquidity requirement A rev 12, work package K3), dev only
+
+The service can read the MBO engine's records (health version 2, level flow, FINAL rows version 2, FINAL closures) as a third evidence class and report it beside the lean in
+every status event (`book*` fields, event version 2, id 2812). It never arms, disarms, suspends or confirms anything.
+
+| Setting | Dev value | Meaning |
+| --- | --- | --- |
+| `LEVEL_ABSORPTION_BOOK_ENABLED` | `false` (current) | Off. The service refuses to start with it on while the engine's ids 3509 and 3510 are not registered. |
+| `LEVEL_ABSORPTION_BOOK_ENVIRONMENT` | `Rithmic Paper Trading` | The engine's `ES_MBO_ENVIRONMENT`; a record with another literal is refused. |
+| `LEVEL_ABSORPTION_BOOK_CONTRACTS` | `classpath:/book-contracts.txt` | The table committed in the image; it must equal the engine's `ES_MBO_CONTRACT_TABLE`. |
+
+Not set, on purpose: `LEVEL_ABSORPTION_BOOK_GATE` (the gate path is not built; the service refuses `true`), `LEVEL_ABSORPTION_BOOK_ALLOW_TEST`, and the five closed values
+(provisional labelled values apply). Production and es4 declare nothing.
+
+Roll order (nothing is rolled by the change that adds these lines): (1) the engine roll that registers health version 2 (3509) and FINAL rows version 2 (3510) and publishes them;
+(2) every reader of the events topic accepts both event ids (liquidity validator, the web Now card listener) and the schema-sync label of the level absorption image carries
+2812; (3) a reviewed change of `LEVEL_ABSORPTION_BOOK_ENABLED` to `"true"`; (4) one off-hours `service-deploy SERVICE=level-absorption` (the pod also runs line health: a restart
+re-reads the closures log and replays the session). Rollback: set the value back to `"false"` and roll, or roll the previous image digest.
+
