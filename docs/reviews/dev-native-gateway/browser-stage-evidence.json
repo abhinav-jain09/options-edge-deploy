@@ -1,0 +1,21 @@
+{
+  "scope": "Configuration stage evidence, not whole programme acceptance. AX text includes truncation; identity equality and receipt of hello/frames are visible; native hello environment was not retained in this capture. Gateway env supplies system separately.",
+  "files": [
+    {
+      "path": "service-3159-dryrun.json",
+      "sha256": "95088d1818f5334d3e1e8c6f956d99a2a0973e4e3f55868cdc2bafd6eada977b"
+    },
+    {
+      "path": "service-3160-apply.json",
+      "sha256": "ee52184bf9a887b39148c2085668eba6e0162c4106cccc9ebc5af325e9cedea1"
+    },
+    {
+      "path": "native-edge-reconnect-ax.json",
+      "sha256": "7ce56e1cb0227cd79eb506b0afa7bff3365508d8c229a33b7a5e03122da1ab54"
+    },
+    {
+      "path": "gateway-3160-runtime.json",
+      "sha256": "80930daaebec56fdac40ae6a72b9b3f3f8783bfe9472cf9363a6bbb01a40770c"
+    }
+  ]
+}

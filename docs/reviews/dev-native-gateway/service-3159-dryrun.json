@@ -1,0 +1,31 @@
+{
+  "parameters": {
+    "PERMITTED_SHA": "5beb0d0d994bb72cbd9361a106efc6b88e77c19d",
+    "PERMITTED_SHA_GUARD_VERSION": "2f6fc2ab7aa51eb8a9e8aa350f2d774cd2fb7a253de2591e43645a19a9886b24",
+    "INTENT_ID": "",
+    "SERVICE": "feed-gateway",
+    "ENVIRONMENT": "dev",
+    "BUILD_IMAGES": false,
+    "PROCESSING_PERMITTED_SHA": "",
+    "CONTRACTS_PERMITTED_SHA": "",
+    "REQUIRED_IMAGE": "host.docker.internal:5001/options-edge-feed-gateway:850-4a2c1c064c0d@sha256:dab69425cc6b9af64ea26d4635d0809503659d0bffd6962e8bdbea386bdada94",
+    "DEPLOY_DRY_RUN": true,
+    "KUBECONFIG_FILE": "/Users/abhinav/.kube/jenkins-deployer-dev-remote.kubeconfig",
+    "REGISTER_INDICATOR_SCHEMAS": false,
+    "REGISTER_TA_SCHEMAS": false,
+    "REGISTER_GEOMETRY_SCHEMAS": false,
+    "REGISTER_REVERSAL_TOP_SCHEMA": false,
+    "MARKET_STRUCTURE_IGNORE_RECOVERY_ROLLOVER": false,
+    "W0_CUTOVER_WIPE": false,
+    "W0_EXPECT_IMAGE_DIGEST": "",
+    "W0_EXPECT_GATEWAY_DIGEST": "",
+    "W0_PRE_CUTOVER_IDS": "",
+    "W0_PRODUCERS_ATTESTED": false,
+    "RECREATE_INDICATOR_TOPICS": false,
+    "FORCE_RESTART": false
+  },
+  "queue": "http://localhost:8085/queue/item/6191/",
+  "buildNumber": 3159,
+  "build": "http://localhost:8085/job/service-deploy/3159/",
+  "result": "SUCCESS"
+}
