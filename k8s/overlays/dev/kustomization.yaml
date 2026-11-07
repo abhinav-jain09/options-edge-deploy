@@ -438,6 +438,7 @@ patches:
   # DEV-ONLY ONE-TIME (2026-08-12): epoch-genesis grant after the dev Kafka wipe (#801) —
   # mirrors the standalone overlay so both render identically. Revert BOTH once genesis'd.
   - path: dealer-ledger-dev-env-patch.yaml
+  - path: dealer-ledger-dev-enable-patch.yaml
   # DEV-ONLY: delta-flow greek lookahead tolerance 3000ms (code default 0ms rejects 100% of trades
   # against dev's thin greek surface — see the patch header). Prod untouched.
   - path: delta-flow-dev-env-patch.yaml

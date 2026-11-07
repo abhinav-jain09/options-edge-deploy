@@ -114,6 +114,13 @@ target_image_vars() {
     strike-liquidity-heatmap-service)
       printf '%s\n' STRIKE_LIQUIDITY_HEATMAP_IMAGE
       ;;
+    dealer-ledger-service)
+      # BOTH images: this target deploys the ledger AND its calibration pair as one feedback loop
+      # (apply.sh), so a lock that covered only the ledger would leave the calibration image unenforced.
+      # The target had no case here at all before - it fell to the "Unsupported DEPLOY_TARGET" branch, so
+      # with a lock in force the deploy enforced NEITHER image. Found by Codex on the dev-enable review.
+      printf '%s\n' DEALER_LEDGER_IMAGE DEALER_LEDGER_CALIBRATION_IMAGE
+      ;;
     *)
       echo "Unsupported DEPLOY_TARGET: ${DEPLOY_TARGET}" >&2
       return 1
