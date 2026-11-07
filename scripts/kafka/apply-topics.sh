@@ -47,16 +47,23 @@ topic_shape_resolve_declarations
 # retention change used to mean accepting every other drift on the broker, or an ad hoc kafka-configs by hand.
 ONLY="${APPLY_TOPICS_ONLY:-}"
 DRY_RUN="${APPLY_TOPICS_DRY_RUN:-false}"
+ONLY_REQUESTED=false
+[ -n "$ONLY" ] && ONLY_REQUESTED=true
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN=true ;;
-    --only) [ "$#" -ge 2 ] || { echo "apply-topics.sh: --only needs a topic list" >&2; exit 2; }; ONLY="$2"; shift ;;
-    --only=*) ONLY="${1#--only=}" ;;
+    --only) [ "$#" -ge 2 ] || { echo "apply-topics.sh: --only needs a topic list" >&2; exit 2; }; ONLY="$2"; ONLY_REQUESTED=true; shift ;;
+    --only=*) ONLY="${1#--only=}"; ONLY_REQUESTED=true ;;
     *) echo "apply-topics.sh: unknown argument '$1' (supported: --only <topics>, --dry-run)" >&2; exit 2 ;;
   esac
   shift
 done
 ONLY="${ONLY//,/ }"
+# A filter that was ASKED FOR but names nothing (an empty interpolated variable, ",") must not fall through to the full run.
+if [ "$ONLY_REQUESTED" = "true" ] && [ -z "${ONLY// /}" ]; then
+  echo "apply-topics.sh: REFUSED: a topic filter was requested but it names no topic (empty list); refusing to fall back to ALL topics." >&2
+  exit 2
+fi
 if [ -n "${ONLY// /}" ]; then
   _declared_names=" $(for _e in $OPTIONS_EDGE_TOPICS; do printf '%s ' "${_e%%:*}"; done)"
   for _t in $ONLY; do
