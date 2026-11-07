@@ -1,13 +1,19 @@
-# Fixed schema ids for es-liquidity-engine-service (the ES MBO liquidity engine; NEW, dev only). Contracts options-edge-contracts 0.70.0 to 0.74.0 (schemas-registry/esmbo):
-# ids 3501, 3502, 3503, 3504, 3505 and 3506, version 1, namespace com.optionsedge.contracts.esmbo, subject = the record full name (RecordNameStrategy), compatibility FULL. One record TYPE per topic:
-# es.mbo.level-flow 3502, es.mbo.liquidity-events 3503, es.mbo.health 3504, es.mbo.snapshot 3505, es.mbo.level-flow-final 3506. es.mbo.closures 3501 (the recorded close of each bucket). The service writes with
+# Fixed schema ids for es-liquidity-engine-service (the ES MBO liquidity engine; NEW, dev only). Contracts options-edge-contracts 0.89.0 (schemas-registry/esmbo):
+# ids 3501 to 3510, version 1 except 3509 and 3510 (see the fourth column; es-liquidity-wall.map explains it), namespace com.optionsedge.contracts.esmbo, subject = the record full name (RecordNameStrategy), compatibility FULL. One record TYPE per topic:
+# es.mbo.level-flow 3502, es.mbo.liquidity-events 3503, es.mbo.health 3509 (3504 archival), es.mbo.snapshot 3505, es.mbo.level-flow-final 3510 (3506 archival). es.mbo.closures 3501 (the recorded close of each bucket). The service writes with
+# Version 2 of health and of the final rows (document A revision 12 sections 4.1 and 4.2, work package K2) adds nullable fields: a registered id never changes content, so each is a new version under a new id (3509, 3510). The
+# version-1 files are the frozen ones under schemas-registry/esmbo/v1; on a registry that already holds version 1 (dev) only the 3509 and 3510 rows import. REGISTER 3509 AND 3510 BEFORE the engine image of contracts 0.89.0 starts
+# (the service refuses to start when its ids are not in the registry), and roll the pinned readers (line health in level-absorption-service; the archive decoder) in the same change. The service writes with
 # auto.register.schemas=false (src/main/resources/schema-requirements.json names these ids and hashes). Dev only; nothing is registered on production or es4.
 # File column: relative to the contracts checkout's `schemas-registry/esmbo` directory (SCHEMAS_DIR).
 com.optionsedge.contracts.esmbo.EsMboLevelFlow|3502|EsMboLevelFlow.avsc
-com.optionsedge.contracts.esmbo.EsMboHealth|3504|EsMboHealth.avsc
-com.optionsedge.contracts.esmbo.EsMboLevelFlowFinal|3506|EsMboLevelFlowFinal.avsc
+com.optionsedge.contracts.esmbo.EsMboHealth|3504|v1/EsMboHealth.avsc|1
+com.optionsedge.contracts.esmbo.EsMboLevelFlowFinal|3506|v1/EsMboLevelFlowFinal.avsc|1
 com.optionsedge.contracts.esmbo.EsMboSnapshot|3505|EsMboSnapshot.avsc
 com.optionsedge.contracts.esmbo.EsMboEvent|3503|EsMboEvent.avsc
 com.optionsedge.contracts.esmbo.EsMboClosure|3501|EsMboClosure.avsc
 com.optionsedge.contracts.esmbo.EsMboLevelBase|3507|EsMboLevelBase.avsc
 com.optionsedge.contracts.esmbo.EsMboClosureFinal|3508|EsMboClosureFinal.avsc
+# Version-2 rows after all version-1 rows so the preflight pass can see the predecessor of every row.
+com.optionsedge.contracts.esmbo.EsMboHealth|3509|EsMboHealth.avsc|2
+com.optionsedge.contracts.esmbo.EsMboLevelFlowFinal|3510|EsMboLevelFlowFinal.avsc|2

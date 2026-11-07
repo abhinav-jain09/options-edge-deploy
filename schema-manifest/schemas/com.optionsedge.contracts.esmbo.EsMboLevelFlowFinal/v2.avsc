@@ -1,0 +1,92 @@
+{
+  "type": "record",
+  "name": "EsMboLevelFlowFinal",
+  "namespace": "com.optionsedge.contracts.esmbo",
+  "doc": "es-liquidity-engine G 5.4/5.5: the FINAL attribution of the gross reductions of one (side, tick) level in one 1 s bucket, after the trade tape has been released past the bucket. Rows exist only for levels with a reduction (version 2: or with a residual print). VERSION 2 (id 3510, document A revision 12 section 4.2): adds unattributedPrintQty.",
+  "fields": [
+    {
+      "name": "schemaVersion",
+      "type": "int",
+      "doc": "2 for this revision (version 1 is the archival schema under id 3506)"
+    },
+    {
+      "name": "environment",
+      "type": "string",
+      "doc": "the environment literal of the admitted MBO records, e.g. Rithmic Paper Trading"
+    },
+    {
+      "name": "contract",
+      "type": "string",
+      "doc": "the contract table's row for the trade date, e.g. ESZ6"
+    },
+    {
+      "name": "bucketEnd",
+      "type": "long",
+      "doc": "bucket end on the collector clock (receivedAtMs), epoch ms; 1000 ms grid, bucket (end-1000, end]"
+    },
+    {
+      "name": "configFingerprint",
+      "type": "string",
+      "doc": "SHA-256 over the sorted name=value configuration lines plus the engine's logic version"
+    },
+    {
+      "name": "side",
+      "type": "string",
+      "doc": "B (bid) or S (ask)"
+    },
+    {
+      "name": "tick",
+      "type": "long",
+      "doc": "ES quarter-point price ticks"
+    },
+    {
+      "name": "attributionStatus",
+      "type": "string",
+      "doc": "FINAL"
+    },
+    {
+      "name": "epochStatus",
+      "type": "string",
+      "doc": "the epoch status at the bucket's BOOK close (LIVE for a published row)"
+    },
+    {
+      "name": "windowMs",
+      "type": "long",
+      "doc": "the fill-matching window W the attribution used (a ledger value)"
+    },
+    {
+      "name": "reductionQty",
+      "type": "long",
+      "doc": "gross contracts removed in the bucket at this level"
+    },
+    {
+      "name": "fillQty",
+      "type": "long",
+      "doc": "contracts matched to trade prints"
+    },
+    {
+      "name": "cancelQty",
+      "type": "long",
+      "doc": "contracts not matched to any print"
+    },
+    {
+      "name": "unclassifiedQty",
+      "type": "long",
+      "doc": "contracts of reductions with no exchange time or a suspect clock"
+    },
+    {
+      "name": "reductionCount",
+      "type": "long",
+      "doc": "number of reductions attributed"
+    },
+    {
+      "name": "unattributedPrintQty",
+      "type": [
+        "null",
+        "long"
+      ],
+      "doc": "contracts of prints at this tick that no reduction matched, on the side of the book the print's aggressor hit (a buyer-aggressor print hits the ask side S, a seller-aggressor print the bid side B), reported in the FINAL row of the bucket in which the residual is determined; prints with an unknown aggressor are not reported; null on a record that does not know",
+      "default": null
+    }
+  ]
+}

@@ -24,7 +24,10 @@ EVENTS_CAP = "134217728"
 ONE_DAY, CAP = "86400000", "268435456"
 JAR = ROOT / "tools/schema-governance/schema-governance-tool.jar"
 NS = "com.optionsedge.contracts.esmbo"
-IDS = {"EsMboClosure": 3501, "EsMboLevelFlow": 3502, "EsMboEvent": 3503, "EsMboHealth": 3504, "EsMboSnapshot": 3505, "EsMboLevelFlowFinal": 3506, "EsMboLevelBase": 3507, "EsMboClosureFinal": 3508}
+# subject -> {version: id}. Health and the final rows have two versions (document A revision 12 sections 4.1 and 4.2, contracts 0.89.0): 3504 and 3506 are the frozen archival version 1.
+VERSIONS = {"EsMboClosure": {1: 3501}, "EsMboLevelFlow": {1: 3502}, "EsMboEvent": {1: 3503}, "EsMboHealth": {1: 3504, 2: 3509}, "EsMboSnapshot": {1: 3505},
+            "EsMboLevelFlowFinal": {1: 3506, 2: 3510}, "EsMboLevelBase": {1: 3507}, "EsMboClosureFinal": {1: 3508}}
+IDS = {n: max(v.values()) for n, v in VERSIONS.items()}   # the id the engine WRITES
 
 
 def read(rel: str) -> str:
@@ -321,27 +324,43 @@ class Barrier(unittest.TestCase):
 
 
 class Schemas(unittest.TestCase):
-    def test_the_map_names_exactly_the_two_fixed_ids_and_no_other_map_uses_them(self):
+    def test_the_map_names_exactly_the_fixed_ids_with_their_versions_and_no_other_map_uses_them(self):
         rows = [l.split("|") for l in read("scripts/kafka/schema-id-maps/es-liquidity-engine.map").splitlines() if l and not l.startswith("#")]
-        self.assertEqual({r[0]: int(r[1]) for r in rows}, {f"{NS}.{n}": i for n, i in IDS.items()})
+        self.assertEqual(sorted((r[0], int(r[1]), int(r[3]) if len(r) == 4 else 1) for r in rows),
+                         sorted((f"{NS}.{n}", i, v) for n, vs in VERSIONS.items() for v, i in vs.items()))
+        files = {(r[0], int(r[1])): r[2] for r in rows}
+        for n in ("EsMboHealth", "EsMboLevelFlowFinal"):
+            self.assertEqual(files[(f"{NS}.{n}", VERSIONS[n][1])], f"v1/{n}.avsc", "version 1 is the frozen archival file")
+            self.assertEqual(files[(f"{NS}.{n}", VERSIONS[n][2])], f"{n}.avsc", "version 2 is the current file")
+        order = [(r[0], int(r[3]) if len(r) == 4 else 1) for r in rows]
+        for n in ("EsMboHealth", "EsMboLevelFlowFinal"):
+            self.assertLess(order.index((f"{NS}.{n}", 1)), order.index((f"{NS}.{n}", 2)))
         for other in (ROOT / "scripts/kafka/schema-id-maps").glob("*.map"):
             if other.name == "es-liquidity-engine.map":
                 continue
             text = other.read_text()
-            for i in IDS.values():
-                self.assertNotRegex(text, rf"\|{i}\|", f"{other.name} uses {i}")
+            for vs in VERSIONS.values():
+                for i in vs.values():
+                    self.assertNotRegex(text, rf"\|{i}\|", f"{other.name} uses {i}")
 
     def test_the_manifest_governs_both_subjects_with_hashes_equal_to_the_snapshots_and_the_mbo_consumer_binding(self):
         m = json.loads(read("schema-manifest/manifest.json"))
-        by = {e["subject"]: e for e in m["entries"]}
-        for n, i in IDS.items():
-            e = by[f"{NS}.{n}"]
-            self.assertEqual((e["id"], e["version"], e["family"], e["environments"]), (i, 1, "esmbo", ["dev"]))
-            self.assertEqual(e["producers"], [{"service": "es-liquidity-engine", "environments": ["dev"]}])
-            snap = ROOT / "schema-manifest/schemas" / e["subject"] / "v1.avsc"
-            out = subprocess.run(["java", "-jar", str(JAR), "hash", str(snap)], capture_output=True, text=True, check=True).stdout.strip().splitlines()[-1]
-            self.assertEqual(out, e["schemaHash"], n)
-        self.assertEqual(m["familyBlocks"]["esmbo"], [[3501, 3508]])
+        by = {e["subject"]: e for e in m["entries"] if e.get("version") == 1}
+        for n, vs in VERSIONS.items():
+            for v, i in vs.items():
+                e = next(x for x in m["entries"] if x["subject"] == f"{NS}.{n}" and x["version"] == v)
+                self.assertEqual((e["id"], e["family"], e["environments"]), (i, "esmbo", ["dev"]))
+                current = v == max(vs)
+                self.assertEqual(e["producers"], [{"service": "es-liquidity-engine", "environments": ["dev"]}] if current else [], f"{n} v{v}: only the current version has a producer")
+                snap = ROOT / "schema-manifest/schemas" / e["subject"] / f"v{v}.avsc"
+                out = subprocess.run(["java", "-jar", str(JAR), "hash", str(snap)], capture_output=True, text=True, check=True).stdout.strip().splitlines()[-1]
+                self.assertEqual(out, e["schemaHash"], f"{n} v{v}")
+                self.assertEqual(e["source"]["path"], f"schemas-registry/esmbo/{'' if current or len(vs) == 1 else 'v1/'}{n}.avsc", f"{n} v{v}")
+        # line health (level-absorption) reads both versions of the final rows
+        for v, i in VERSIONS["EsMboLevelFlowFinal"].items():
+            e = next(x for x in m["entries"] if x["subject"] == f"{NS}.EsMboLevelFlowFinal" and x["version"] == v)
+            self.assertEqual(e["consumers"], [{"service": "level-absorption", "accepts": [3506, 3510], "environments": ["dev"]}])
+        self.assertEqual(m["familyBlocks"]["esmbo"], [[3501, 3510]])
         flow = by["com.optionsedge.contracts.deltaflow.DeltaFlowEvent"]
         self.assertIn({"service": "es-liquidity-engine", "accepts": [3007], "environments": ["dev"]}, flow["consumers"], "the drop engine inside the service reads the delta flow (dev id 3007)")
         mbo = by["es.rithmic.mbo-value"]
