@@ -200,7 +200,7 @@ class EnvironmentSelection(unittest.TestCase):
         self.assertEqual(['192.168.100.102:19092'],asked)
         self.assertEqual(['dev'],[e[0] for e in inv])
         for topic in inv[0][2]:self.assertIsNotNone(m.binding(topic),topic)
-        self.assertEqual('cvd-related/LevelAbsorptionEvent.avsc',m.binding('futures.level-absorption.events'))
+        self.assertEqual('cvd-related/v1/LevelAbsorptionEvent.avsc',m.binding('futures.level-absorption.events'))   # contracts 0.88.0: version 2 (id 2812) is registered by the manifest's schema-sync, never by this registrar
         self.assertEqual('cvd-related/LevelAbsorptionManualLine.avsc',m.binding('futures.level-absorption.manual-line'))
         self.assertEqual('cvd-related/CandleDirectionExportRecord.avsc',m.binding('context-tape.direction.candle-export'))   # T-18
 
