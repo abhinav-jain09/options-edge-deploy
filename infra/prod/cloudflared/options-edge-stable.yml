@@ -86,7 +86,18 @@ ingress:
   # should not interrupt it, and vice versa. Its DNS points at that tunnel, so this
   # route was dead weight — a hostname listed here that no request can ever reach
   # reads as working config and hides which tunnel actually serves the domain.
+  # The kubelet's probe path is NOT the internet's (PGL-058, PGL-100). /healthz exists because the
+  # public surface now requires a token for every page, so the probes could no longer dial
+  # /gamma-lab; it answers one word, and this rule means that word is unreachable from outside the
+  # cluster. Must precede the catch-all below, like every other path rule here.
+  - hostname: bleedingoptions.com
+    path: /healthz
+    service: http_status:404
   # PUBLIC GAMMA LAB homepage. Users open bleedingoptions.com; auth.bleedingoptions.com is the IdP.
+  # The apex serves the LOGIN GATE (PGL-100): the one document this surface hands to a reader who
+  # holds no token. Everything else behind this route — the page, its script, its stylesheet —
+  # answers only to a request carrying the token, in a cookie for a navigation or in the
+  # Authorization header for data.
   - hostname: bleedingoptions.com
     service: http://10.43.177.28:8080
     originRequest:
