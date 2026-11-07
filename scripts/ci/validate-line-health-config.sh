@@ -25,8 +25,8 @@ tickMaxHeightPixels tickLabelClearancePixels labelInsetPixels labelOffsetPixels 
 legendFontPixels compactRowPixels compactPitchPixels basisBracketMillis basisFreshMillis basisCapacity leaderThresholdPixels markerSizePixels unknownDotTenthsPixels
 userLinePublishDebounceMillis snapshotSeconds stateRefreshMinutes labelFloorFontPixels labelFloorRowPixels provisional
 movePaceFullMilliPointsPerMinute moveWeightPushMilli moveWeightPaceMilli moveWeightHoldMilli moveWeightBookBeyondMilli moveWeightAbsorptionMilli moveReadSeconds returnHorizonSeconds
-moveScoreReportDigest drawProducers drawTimeframes drawUserLines""".split()
-TEXT_KEYS = {'lineHealthKinds', 'depthEnvironment', 'moveScoreReportDigest', 'drawProducers', 'drawTimeframes'}
+moveScoreReportDigest drawProducers drawTimeframes drawUserLines drawExcludeKinds""".split()
+TEXT_KEYS = {'lineHealthKinds', 'depthEnvironment', 'moveScoreReportDigest', 'drawProducers', 'drawTimeframes', 'drawExcludeKinds'}
 BOOL_KEYS = {'clockUnfit', 'provisional', 'drawUserLines'}
 PRODUCER_WORDS = {'DESK', 'HOST', 'OWN', 'CANDLESTICK', 'PHASE_A', 'PHASE_B', 'PHASE_C', 'PHASE_D', 'PHASE_E', 'PHASE_F'}
 FILE_KEY = 'line-health-configuration.txt'
@@ -79,6 +79,9 @@ for k, v in pairs:
     elif k == 'drawProducers':
         words = v.split(',')
         if v != 'NONE' and (not set(words) <= PRODUCER_WORDS or words != sorted(set(words))): err.append('drawProducers must be NONE or a sorted comma-separated list of producer words without duplicates')
+    elif k == 'drawExcludeKinds':
+        words = v.split(',')
+        if v != 'NONE' and (not all(re.fullmatch(r'[A-Z][A-Z0-9_]*', w) for w in words) or words != sorted(set(words))): err.append('drawExcludeKinds must be NONE or a sorted comma-separated list of kind names without duplicates')
     elif k == 'drawTimeframes':
         words = v.split(',')
         if v != 'NONE' and (not set(words) <= {'1m', '5m', '15m'} or words != sorted(set(words), key=['1m', '5m', '15m'].index)): err.append('drawTimeframes must be NONE or a comma-separated list from 1m, 5m, 15m without duplicates')
