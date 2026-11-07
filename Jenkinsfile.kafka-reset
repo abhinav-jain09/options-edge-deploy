@@ -64,12 +64,6 @@ pipeline {
     stage('Run reset on prod') {
       when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
       steps {
-        // One scp + one ssh (minimise connections to avoid the prod SSH rate-limiter). The scp ships a file of the source
-        // tree, so it is a DEDICATED step (its whole body is the one command) right after the verify of that tree
-        // (Deployment Permission Rule, validator rule 9b): nothing can run between the verification and the copy.
-        timeout(time: 10, unit: 'MINUTES') {
-          sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp'
-        }
         // THE SCRIPT NO LONGER TRAVELS ALONE (2026-10-13). daily-kafka-reset.sh now consults the
         // RESET-PRESERVED keep-list before deleting anything, which means it sources
         // scripts/kafka/reset-preserved-topics.sh (which reads topics.env beside it) and reads
@@ -77,16 +71,31 @@ pipeline {
         // leave it refusing to run on the host -- it fails closed by design -- so the copy carries the
         // repo LAYOUT it resolves against: ~/oe-reset/{ops,kafka}, the same shape
         // scripts/ops/prod-clean-slate.sh ships for the off-hours clean slate.
+        //
+        // Four connections to the prod host: this mkdir, one scp per destination, then the run. Creating
+        // the layout is a PREPARATION, not an effect -- it consumes nothing from the source tree -- so it
+        // runs HERE, BEFORE the verify, and never between a verify and the copy it vouches for
+        // (Deployment Permission Rule, validator rule 9b; Jenkinsfile.archive-scripts-deploy stages its
+        // directory the same way). `mkdir -p` of two literal paths is idempotent, so a re-run costs nothing.
         sh '''
           set -euo pipefail
           ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "${PROD_HOST}" 'mkdir -p ~/oe-reset/ops ~/oe-reset/kafka'
-          scp -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-            scripts/ops/daily-kafka-reset.sh scripts/ops/premarket-reset.sh \
-            "${PROD_HOST}:oe-reset/ops/"
-          scp -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-            scripts/kafka/reset-preserved-topics.sh scripts/kafka/topics.env \
-            "${PROD_HOST}:oe-reset/kafka/"
         '''
+        // Each scp ships files of the source tree, so each is a DEDICATED step -- its whole body is the one
+        // command -- IMMEDIATELY after a verify of that tree: nothing can run between the verification and
+        // the copy, not even the other copy (validator rule 9b (i) and (ii)). Two remote destinations cannot
+        // be one scp, so this is two verify->copy pairs rather than one verify covering both; that is
+        // STRONGER than the single block it replaces, because the kafka/ copy ships against a tree re-proved
+        // after the ops/ copy instead of trusting one verification for both. It is also the same number of
+        // SSH connections as before the split, so the prod rate-limiter is unaffected.
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp'
+        }
+        sh 'scp -o BatchMode=yes -o StrictHostKeyChecking=accept-new scripts/ops/daily-kafka-reset.sh scripts/ops/premarket-reset.sh "${PROD_HOST}:oe-reset/ops/"'
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp'
+        }
+        sh 'scp -o BatchMode=yes -o StrictHostKeyChecking=accept-new scripts/kafka/reset-preserved-topics.sh scripts/kafka/topics.env "${PROD_HOST}:oe-reset/kafka/"'
         sh '''
           set -euo pipefail
           echo "Running daily-kafka-reset on ${PROD_HOST} (DRY_RUN=${DRY_RUN})"
