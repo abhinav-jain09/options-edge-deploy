@@ -66,7 +66,7 @@ class CanonicalArchiveRoutingTest(unittest.TestCase):
     def commands(self):
         return [json.loads(row) for row in self.capture.read_text().splitlines()] if self.capture.exists() else []
 
-    def test_all_eight_bindings_force_committed_read_even_when_the_old_list_is_overridden(self):
+    def test_all_twelve_bindings_force_committed_read_even_when_the_old_list_is_overridden(self):
         helper = (ROOT / 'scripts/ops/archive/CanonicalArchiveDecoder.java').read_text()
         bindings = re.findall(r'"([a-z][a-z.\-]+)",(?:Cvd|LiquidityWall)', helper)
         # es.rithmic.depth is bound by the contracts' own constant for the topic name, not a literal.
@@ -75,8 +75,13 @@ class CanonicalArchiveRoutingTest(unittest.TestCase):
         # es.rithmic.mbo is bound by the contracts' own constants as well.
         self.assertIn('RithmicMboSchemas.TOPIC,RithmicMboSchemas.EVENT', helper)
         bindings.append('es.rithmic.mbo')
+        # the MBO engine's four book topics carry several registered ids each: a topic is bound to the SET of its (fixed id, released schema) pairs
+        versioned = re.search(r'VERSIONED=Map\.of\((.*?)\);\n    private final', helper, re.S).group(1)
+        engine = re.findall(r'^\s*"(es\.mbo\.[a-z\-]+)",Map\.of', versioned, re.M)
+        self.assertEqual(engine, ['es.mbo.level-flow', 'es.mbo.level-flow-final', 'es.mbo.health', 'es.mbo.closures'])
+        bindings.extend(engine)
         self.assertEqual(set(TOPICS), set(bindings))
-        self.assertEqual(len(TOPICS), 8)
+        self.assertEqual(len(TOPICS), 12)
         for topic in TOPICS:
             self.assertEqual(self.run_shell(f'is_committed_read_topic "{topic}"').returncode, 0, topic)
         self.assertEqual(self.run_shell('is_committed_read_topic unknown').returncode, 1)
@@ -85,7 +90,7 @@ class CanonicalArchiveRoutingTest(unittest.TestCase):
         # The three Avro members of OE_DEPTH_TOPICS_dev go through the tested helper jar with the registry derived
         # from the DEV broker; the tape is committed-read but not canonical, so it keeps the raw source-launched
         # reader on the inherited JDK — four topics, two paths, decided by the sets and nothing else.
-        for topic in ['es.rithmic.depth', 'futures.liquidity-wall.closures', 'es.rithmic.mbo']:
+        for topic in ['es.rithmic.depth', 'futures.liquidity-wall.closures', 'es.rithmic.mbo', 'es.mbo.level-flow', 'es.mbo.level-flow-final', 'es.mbo.health', 'es.mbo.closures']:
             r = self.run_shell(f'run_strike_reader 10 --topic {topic} --partition 0', BOOTSTRAP='192.168.100.102:19092')
             self.assertEqual(r.returncode, 0, r.stderr)
             command = self.commands()[-1]

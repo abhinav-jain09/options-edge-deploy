@@ -3,11 +3,13 @@ import com.optionsedge.contracts.avro.CanonicalAvroKafka;
 import com.optionsedge.contracts.avro.CanonicalModelBytesDeserializer;
 import com.optionsedge.contracts.cvd.CvdRelatedSchemas;
 import com.optionsedge.contracts.cvd.CvdSchemas;
+import com.optionsedge.contracts.esmbo.EsMboSchemas;
 import com.optionsedge.contracts.liquiditywall.LiquidityWallSchemas;
 import com.optionsedge.contracts.rithmic.RithmicMboSchemas;
 import com.optionsedge.contracts.rithmic.RithmicSchemas;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.TreeMap;
 import java.util.Properties;
 import java.util.Set;
 import org.apache.avro.Schema;
@@ -48,18 +50,60 @@ public final class CanonicalArchiveDecoder implements Deserializer<byte[]> {
             RithmicSchemas.RAW_TOPIC,RITHMIC_DEPTH_FRAME_ID,
             "futures.liquidity-wall.closures",LiquidityWallSchemas.CLOSURE.id(),
             RithmicMboSchemas.TOPIC,RithmicMboSchemas.SCHEMA_ID);
-    private final CanonicalModelBytesDeserializer values=new CanonicalModelBytesDeserializer();
+    // THE MBO ENGINE'S FOUR BOOK TOPICS (2026-11-07, ES Level Absorption Requirements revision 12 section 10 capture items 1 and 2, work package K0): es.mbo.level-flow,
+    // es.mbo.level-flow-final, es.mbo.health and es.mbo.closures, written by es-liquidity-engine-service under RecordNameStrategy. Unlike every binding above, a topic here
+    // holds records of MORE THAN ONE registered schema, each under its own fixed id, so a topic is bound to the set of (fixed id, released schema) pairs it may carry:
+    //   es.mbo.level-flow        3502 (one version)
+    //   es.mbo.level-flow-final  3506 (version 1, archival) and 3510 (version 2, unattributedPrintQty)
+    //   es.mbo.health            3504 (version 1, archival) and 3509 (version 2, source-lag fields)
+    //   es.mbo.closures          3501 (the BOOK closure, one key, compacted) and 3508 (the FINAL closure, one key per bucket)
+    // The topics hold version 1 records for their one-day retention after the engine writes version 2, and the closure topic holds both kinds at all times, so a capture that
+    // admitted one id would fail on the other. A frame under any OTHER id, a JSON value or a short frame fails the capture with the checkpoint untouched, exactly as for the
+    // single-id members. Each accepted id is decoded by its own strict canonical decoder (writer schema equal to the released one), chosen by the frame's id.
+    private static final Map<String,Map<Integer,Schema>> VERSIONED=Map.of(
+            "es.mbo.level-flow",Map.of(EsMboSchemas.LEVEL_FLOW.id(),EsMboSchemas.LEVEL_FLOW.schema()),
+            "es.mbo.level-flow-final",Map.of(EsMboSchemas.LEVEL_FLOW_FINAL.priorId(),EsMboSchemas.LEVEL_FLOW_FINAL.priorSchema(),
+                    EsMboSchemas.LEVEL_FLOW_FINAL.id(),EsMboSchemas.LEVEL_FLOW_FINAL.schema()),
+            "es.mbo.health",Map.of(EsMboSchemas.HEALTH.priorId(),EsMboSchemas.HEALTH.priorSchema(),EsMboSchemas.HEALTH.id(),EsMboSchemas.HEALTH.schema()),
+            "es.mbo.closures",Map.of(EsMboSchemas.CLOSURE.id(),EsMboSchemas.CLOSURE.schema(),EsMboSchemas.CLOSURE_FINAL.id(),EsMboSchemas.CLOSURE_FINAL.schema()));
+    private final CanonicalModelBytesDeserializer values;
+    private final Map<Integer,CanonicalModelBytesDeserializer> versioned=new TreeMap<>();
     private final String topic;
     private final Integer fixedId;
 
     public CanonicalArchiveDecoder(String topic,String registry) {
         Schema schema=BINDINGS.get(topic);
-        if(schema==null||registry==null||registry.isBlank())throw new IllegalArgumentException("Explicit released archive topic and registry required");
-        this.topic=topic;this.fixedId=FIXED_IDS.get(topic);Properties p=new Properties();
+        Map<Integer,Schema> accepted=VERSIONED.get(topic);
+        if((schema==null&&accepted==null)||registry==null||registry.isBlank())throw new IllegalArgumentException("Explicit released archive topic and registry required");
+        this.topic=topic;this.fixedId=FIXED_IDS.get(topic);
+        if(accepted!=null) {
+            this.values=null;
+            for(var entry:accepted.entrySet()) {
+                var one=new CanonicalModelBytesDeserializer();
+                configure(one,topic,entry.getValue(),registry);
+                versioned.put(entry.getKey(),one);
+            }
+        } else {
+            this.values=new CanonicalModelBytesDeserializer();
+            configure(values,topic,schema,registry);
+        }
+    }
+
+    private static void configure(CanonicalModelBytesDeserializer decoder,String topic,Schema schema,String registry) {
+        Properties p=new Properties();
         CanonicalAvroKafka.rollForwardConsumer(p,registry,Map.of(topic,schema),
                 topic.equals("es.futures.footprint.strike")?Set.of(topic):Set.of());
         Map<String,Object> config=new HashMap<>();p.forEach((key,value)->config.put((String)key,value));
-        values.configure(config,false);
+        decoder.configure(config,false);
+    }
+
+    /** The accepted fixed ids of a versioned topic, ascending; a header whose id is none of them is refused before any decoding. */
+    static int framedOneOf(byte[] value,java.util.Set<Integer> ids,String topic) {
+        if(value==null||value.length<5||value[0]!=0)
+            throw new SerializationException("Expected a Confluent-framed Avro record under one of the fixed schema ids "+ids+" on "+topic+"; a value without that framing is refused, never archived as retained JSON");
+        int id=((value[1]&0xff)<<24)|((value[2]&0xff)<<16)|((value[3]&0xff)<<8)|(value[4]&0xff);
+        if(!ids.contains(id))throw new SerializationException("Value on "+topic+" carries schema id "+id+", expected one of the fixed ids "+ids+"; the capture fails and the checkpoint stays");
+        return id;
     }
 
     static int framedId(byte[] value,int expected,String topic) {
@@ -73,8 +117,12 @@ public final class CanonicalArchiveDecoder implements Deserializer<byte[]> {
     @Override public byte[] deserialize(String topic,byte[] value) {return deserialize(topic,null,value);}
     @Override public byte[] deserialize(String topic,Headers headers,byte[] value) {
         if(!this.topic.equals(topic))throw new IllegalArgumentException("Archive decoder topic mismatch");
+        if(!versioned.isEmpty())return versioned.get(framedOneOf(value,versioned.keySet(),topic)).deserialize(topic,headers,value);
         if(fixedId!=null)framedId(value,fixedId,topic);
         return values.deserialize(topic,headers,value);
     }
-    @Override public void close() {values.close();}
+    @Override public void close() {
+        if(values!=null)values.close();
+        versioned.values().forEach(CanonicalModelBytesDeserializer::close);
+    }
 }
