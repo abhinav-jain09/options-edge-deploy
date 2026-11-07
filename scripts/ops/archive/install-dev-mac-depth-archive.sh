@@ -32,7 +32,7 @@ FILES="oe-archive-depth.sh oe-archive-kafka.sh oe-topics.env oe-alert.sh StrikeA
 # compiled against the contracts) and the contracts jar. Jenkins archive-scripts-deploy builds both from the
 # permitted contracts commit and ships them to .252's oe-ops; the same two files must be placed in $DEST on this
 # host (copied from that build, or from .252:/home/abhinav/oe-ops) BEFORE this installer runs. Without them the
-# archiver refuses every es.rithmic.depth, es.rithmic.mbo and futures.liquidity-wall.closures capture ("canonical archive
+# archiver refuses every es.rithmic.depth, es.rithmic.mbo, futures.liquidity-wall.closures and es.mbo.* capture ("canonical archive
 # SDK/helper missing"), so installing without them would schedule a job that fails four times a day.
 SIDECARS="canonical-archive-reader.jar options-edge-contracts.jar"
 
@@ -96,7 +96,7 @@ fi
 for j in $SIDECARS; do
   [ -f "$DEST/$j" ] && [ ! -L "$DEST/$j" ] || {
     echo "REFUSING: $DEST/$j is missing (or not a plain file). The archiver refuses every canonical Avro capture" >&2
-    echo "          (es.rithmic.depth, es.rithmic.mbo, futures.liquidity-wall.closures) without it. Copy the build Jenkins" >&2
+    echo "          (es.rithmic.depth, es.rithmic.mbo, futures.liquidity-wall.closures, es.mbo.*) without it. Copy the build Jenkins" >&2
     echo "          archive-scripts-deploy shipped (.252:/home/abhinav/oe-ops/$j) into $DEST first." >&2
     exit 1; }
 done

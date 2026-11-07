@@ -27,7 +27,8 @@ DEPTH = 'es.rithmic.depth'
 TAPE = 'underlying.es.trades.linearized'
 CLOSURES = 'futures.liquidity-wall.closures'
 MBO = 'es.rithmic.mbo'
-SET = f'{DEPTH} {TAPE} {CLOSURES} {MBO}'
+ENGINE_TOPICS = ['es.mbo.level-flow', 'es.mbo.level-flow-final', 'es.mbo.health', 'es.mbo.closures']
+SET = f'{DEPTH} {TAPE} {CLOSURES} {MBO} ' + ' '.join(ENGINE_TOPICS)
 
 
 def shell_value(env_file, name):
@@ -55,7 +56,7 @@ def declaration(name):
 class DepthSetPolicyTest(unittest.TestCase):
     """The set, where it is defined, and how the archiver derives it."""
 
-    def test_the_policy_file_defines_exactly_the_four_members_in_order(self):
+    def test_the_policy_file_defines_exactly_the_eight_members_in_order(self):
         self.assertEqual(shell_value(TOPICS_ENV, 'OE_DEPTH_TOPICS_dev'), SET)
         line = re.search(r'^OE_DEPTH_TOPICS_dev="([^"]*)"$', TOPICS_ENV.read_text(), re.M)
         self.assertIsNotNone(line, 'the set must be a plain double-quoted declaration, one definition')
@@ -114,12 +115,12 @@ class DepthClassificationTest(unittest.TestCase):
                               text=True, capture_output=True, timeout=10).returncode == 0
 
     def test_the_three_avro_topics_are_canonical_and_therefore_committed_read(self):
-        for topic in (DEPTH, CLOSURES, MBO):
+        for topic in (DEPTH, CLOSURES, MBO, *ENGINE_TOPICS):
             self.assertTrue(self.predicate('is_canonical_archive_topic', topic), topic)
             self.assertTrue(self.predicate('is_committed_read_topic', topic), topic)
             self.assertFalse(self.predicate('is_as_written_topic', topic), topic)
         canonical = re.search(r'^OE_CANONICAL_ARCHIVE_TOPICS="([^"]+)"$', SOURCE, re.M).group(1).split()
-        self.assertEqual(canonical[-3:], [DEPTH, CLOSURES, MBO], 'appended to the canonical set, the five older members untouched')
+        self.assertEqual(canonical[-7:], [DEPTH, CLOSURES, MBO, *ENGINE_TOPICS], 'appended to the canonical set, the five older members untouched')
 
     def test_the_tape_is_committed_read_and_strict_but_not_canonical_or_as_written(self):
         self.assertTrue(self.predicate('is_committed_read_topic', TAPE))
@@ -170,6 +171,20 @@ class DecoderBindingTest(unittest.TestCase):
         deserialize = text[text.index('public byte[] deserialize(String topic,Headers headers,byte[] value)'):]
         self.assertLess(deserialize.index('framedId(value,fixedId,topic)'), deserialize.index('return values.deserialize(topic,headers,value);'),
                         'the header check runs before the SDK decode, so a foreign id never reaches it')
+
+    def test_the_engine_book_topics_are_bound_to_the_sets_of_ids_they_carry(self):
+        text = DECODER.read_text()
+        versioned = text[text.index('VERSIONED=Map.of('):text.index(');', text.index('VERSIONED=Map.of('))]
+        self.assertIn('import com.optionsedge.contracts.esmbo.EsMboSchemas;', text)
+        self.assertIn('"es.mbo.level-flow",Map.of(EsMboSchemas.LEVEL_FLOW.id(),EsMboSchemas.LEVEL_FLOW.schema())', versioned)
+        # both registered versions of the final rows and of health: version 1 stays readable for its one-day retention
+        for name in ('LEVEL_FLOW_FINAL', 'HEALTH'):
+            self.assertIn(f'EsMboSchemas.{name}.priorId(),EsMboSchemas.{name}.priorSchema(),EsMboSchemas.{name}.id(),EsMboSchemas.{name}.schema()', versioned.replace('\n', '').replace('  ', ''))
+        # both closure kinds live on the one compacted topic
+        self.assertIn('EsMboSchemas.CLOSURE.id(),EsMboSchemas.CLOSURE.schema(),EsMboSchemas.CLOSURE_FINAL.id(),EsMboSchemas.CLOSURE_FINAL.schema()', versioned.replace('\n', '').replace('  ', ''))
+        # a versioned topic is decoded by the strict decoder of the frame's own id, and an id outside the set is refused before any decoding
+        self.assertIn('framedOneOf(value,versioned.keySet(),topic)', text)
+        self.assertIn('expected one of the fixed ids', text)
 
     def test_the_negative_control_anchors_are_still_unique(self):
         # tests/archive-canonical/negative_controls.py mutates these exact lines; each must still occur once.
@@ -298,7 +313,7 @@ class WrapperInvocationTest(unittest.TestCase):
 class DevOnlyAndGuardsTest(unittest.TestCase):
     """Nothing for prod or es4; the exemption from the unit check is bound by its own guard; CI runs both."""
 
-    def test_the_four_topics_are_in_no_prod_or_es4_set(self):
+    def test_the_eight_topics_are_in_no_prod_or_es4_set(self):
         for name in ('OE_ES4_TOPICS', 'OE_ALL_TOPICS_prod', 'OE_HEAVY_TOPICS_prod', 'OE_SPOT_TOPICS'):
             members = shell_value(TOPICS_ENV, name).split()
             for topic in SET.split():
