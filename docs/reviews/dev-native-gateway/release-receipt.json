@@ -1,0 +1,109 @@
+{
+  "server": "https://192.168.100.102:6443",
+  "safeGatewayEnvironment": {
+    "WS_AUTH_ENABLED": "true",
+    "WS_AUTH_AUDIENCE": "options-edge-web",
+    "WS_AUTH_ISSUER_URI": "https://dev-auth.bleadingoptions.com/realms/optionsedge",
+    "GATEWAY_AUTH_ENABLED": "",
+    "GATEWAY_KEYCLOAK_AUDIENCE": "",
+    "GATEWAY_KEYCLOAK_ISSUER": "https://dev-auth.bleadingoptions.com/realms/optionsedge",
+    "GATEWAY_KEYCLOAK_JWKS_URL": "http://host.docker.internal:8089/realms/optionsedge/protocol/openid-connect/certs",
+    "GATEWAY_KEYCLOAK_CLIENT_ID": "options-edge-web",
+    "GATEWAY_APPROVAL_ROLE": "replay-admin",
+    "GATEWAY_ALLOW_INMEMORY_TICKETS": "true",
+    "GATEWAY_REPLAY_ORCHESTRATOR_URL": "http://host.docker.internal:8095",
+    "GATEWAY_RITHMIC_SYSTEM": "",
+    "LINE_HEALTH_RELAY_ENABLED": "false",
+    "ES_LIQUIDITY_WALL_FRESH_MS": "20000"
+  },
+  "publicAssetsKiB": 22552,
+  "images": {
+    "options-edge-feed-gateway": {
+      "digest": "sha256:dab69425cc6b9af64ea26d4635d0809503659d0bffd6962e8bdbea386bdada94",
+      "labels": {
+        "options-edge.source-revision": "4a2c1c064c0df7c5bd5d5103a16f6fcd9a42bb13",
+        "options-edge.jar-sha256": "5580c35fdbb8e231d900091b5c12148f23e667fe048450aa4d28780065e9066e",
+        "options-edge.contracts-revision": "594bf6928da276f3205daa95bbc593a51601e798",
+        "options-edge.guard-version": "2f6fc2ab7aa51eb8a9e8aa350f2d774cd2fb7a253de2591e43645a19a9886b24",
+        "options-edge.contracts-jar-sha256": "7e5f1d27913e1ab553fadc8ab0e36d04a4bcc03a4df0f2e89008c82499bbb2a1"
+      }
+    },
+    "options-edge-web": {
+      "digest": "sha256:592cd5129d18edc0ca098e1af6c176b06d48ca942bde5ac62854ca52af76c994",
+      "labels": {}
+    }
+  },
+  "baselineGateway": {
+    "digest": "sha256:0552b426dc83d36b7d2571269cf8914f5b7b02c7d79b01e8576b58a0dbdcd683",
+    "source": "2a97d779ec3eb4d0bdddab476a54335de5fcd84d",
+    "isAncestorOfCandidate": true
+  },
+  "sourceLineage": {
+    "gatewayPr302Merge": "c3a26584c4bf6b3ef68a073faa12cdf287a2c33c",
+    "gatewayCandidate": "4a2c1c064c0df7c5bd5d5103a16f6fcd9a42bb13",
+    "gatewayAncestorCheck": true,
+    "webPr1583Merge": "1364160280ba75baecefd18bd3f561670f0c0cc4",
+    "webCandidate": "b5f01d1d0b99730a71aeb4155e5f7f3c39e571aa",
+    "webAncestorCheck": true
+  },
+  "safeCurrentTokenClaims": {
+    "available": true,
+    "issuer": "https://dev-auth.bleadingoptions.com/realms/optionsedge",
+    "audience": [
+      "options-edge-web",
+      "options-edge-replay",
+      "realm-management",
+      "broker",
+      "account"
+    ],
+    "authorizedParty": "options-edge-web",
+    "expiresAt": "2026-11-13T14:30:57.000Z",
+    "replayAdmin": true,
+    "hasSubject": true,
+    "scope": "Only safe decoded claims were returned from native Edge; no token text or subject value recorded."
+  },
+  "orchestratorHealth": {
+    "url": "http://host.docker.internal:8095/health",
+    "httpCode": "000",
+    "curlExitCode": 7,
+    "scope": "Read-only probe from current gateway pod; no recovery or URL change. Run-backed replay remains unavailable."
+  },
+  "gatewayBuild": {
+    "job": "option-edge-feed-gateway",
+    "number": 850,
+    "result": "SUCCESS",
+    "linuxTests": 1928,
+    "linuxStatus": "PASS",
+    "campaignKilled": 49,
+    "campaignSurvived": 1,
+    "campaignScope": "The existing characterized survivor remains; do not describe the campaign as 50 killed."
+  },
+  "webBuild": {
+    "job": "options-edge-web-deploy",
+    "number": 1658,
+    "result": "SUCCESS",
+    "serviceApply": 3154,
+    "state": "Already deployed with native feature disabled."
+  },
+  "releaseScope": {
+    "gatewayOnly": true,
+    "webNativeEnabled": false,
+    "productionChanged": false,
+    "es4CollectorChanged": false,
+    "nativeAcceptance": "Pending after gateway rollout and subsequent separately reviewed web activation."
+  },
+  "evidenceFiles": [
+    {
+      "path": "docs/reviews/dev-native-gateway/jenkins-850-footprint-reverify.json",
+      "sha256": "4d39d48a55e88529e11944120378da6429bc4b2ed82679debb0db007616d8fd3"
+    },
+    {
+      "path": "docs/reviews/dev-native-gateway/jenkins-850-receipt.json",
+      "sha256": "596567090456a577c4bca2ba42b8e70d350a63181a9f448070f272785d1c1cf1"
+    },
+    {
+      "path": "docs/reviews/dev-native-gateway/web1658-asset-proof.json",
+      "sha256": "48ab20edf2edcbf5e45316fb49c2a797db9f99c85e746df52a70a116a57fc3f9"
+    }
+  ]
+}

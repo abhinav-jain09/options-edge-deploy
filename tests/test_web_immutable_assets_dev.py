@@ -55,14 +55,14 @@ class WebImmutableAssetsDevTest(unittest.TestCase):
         self.assertEqual('100m', app['resources']['requests']['cpu'])
         self.assertEqual('web-immutable-assets', next(v for v in pod['volumes'] if v['name'] == 'public-assets')['persistentVolumeClaim']['claimName'])
 
-    def test_native_flags_match_authorized_gateway_scope(self):
+    def test_gateway_authority_prepares_native_scope_without_enabling_web(self):
         web = resource(self.web, 'Deployment', 'options-edge-web')['spec']['template']['spec']['containers']
         webenv = {e['name']: e.get('value') for c in web if c['name'] == 'web' for e in c.get('env', [])}
         gateway = resource(self.mono, 'Deployment', 'feed-gateway-service')['spec']['template']['spec']['containers']
         gatewayenv = {e['name']: e.get('value') for c in gateway for e in c.get('env', [])}
-        self.assertEqual('true', webenv['HEATMAP_NATIVE_HISTORY_ENABLED'])
-        self.assertEqual('Rithmic Paper Trading', webenv['HEATMAP_RITHMIC_SYSTEM'])
-        self.assertEqual(webenv['HEATMAP_RITHMIC_SYSTEM'], gatewayenv['GATEWAY_RITHMIC_SYSTEM'])
+        self.assertNotEqual('true', webenv.get('HEATMAP_NATIVE_HISTORY_ENABLED'))
+        self.assertEqual('Rithmic Paper Trading', gatewayenv['GATEWAY_RITHMIC_SYSTEM'])
+        self.assertEqual('false', gatewayenv['LINE_HEALTH_RELAY_ENABLED'])
         self.assertEqual(resource(self.gateway, 'Deployment', 'feed-gateway-service'), resource(self.mono, 'Deployment', 'feed-gateway-service'))
         self.assertEqual('20000', gatewayenv['ES_LIQUIDITY_WALL_FRESH_MS'])
         self.assertEqual('true', gatewayenv['GATEWAY_AUTH_ENABLED'])

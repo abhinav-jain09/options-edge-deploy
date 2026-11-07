@@ -1,10 +1,5 @@
 # Dev immutable public asset storage
 
-Current activation is specified by [dev-native-liquidity-activation.md](dev-native-liquidity-activation.md). It supersedes the original flag-false preparation stage recorded below. The current candidate enables compiled assets with reviewed native application images, not historical build1638. Current tests require flagtrue and matching authenticated native scope. Exact source/digest receipts must be supplied before merge/deployment; historical evidence below is not a release identity for this activation.
-
-## Historical preparation evidence
-
-
 This PR covers the shared-storage and init-publication portion of OP-P5-01. The authoritative reconciliation is [options-edge PR1546](https://github.com/abhinav-jain09/options-edge/pull/1546). OP-P5-01 remains IMPLEMENTING: compiled-shell activation, deployed integrity checks, old-hash retention and native Edge acceptance are still required. No six-phase completion is claimed.
 
 The candidate is existing Jenkins web build 1638, source691dc6b5c45823add496b21dd37a89941b2360b3, digest sha256:7434c476020d1075ea51ddf1d8fd0322751a7810656395bfc5ad3d41233e8f3a. Registry-layer SHA checks confirm the original thin jar includes app.Main, app.web.ContextTapeAssetPublisher and81 compiled public entries. The image entrypoint is java -cp @/app/jib-classpath-file app.Main and its User is unset, hence root. No generic MIN_IMAGE_BUILD guard is added: the existing guard requires a Jenkins OCI label absent from this image and would affect other environments. This rollout instead requires the exact reviewed image digest through REQUIRED_IMAGE. The operator verifies its recorded Jenkins build/source/digest receipt before submission; service-deploy validates that digest in the registry but does not automatically verify the supplied image against an app build lock. This is an operational exact-digest constraint, not an automated source/build provenance guard.

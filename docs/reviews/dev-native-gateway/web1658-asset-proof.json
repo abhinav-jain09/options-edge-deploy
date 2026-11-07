@@ -1,0 +1,12 @@
+{
+  "jarSha256": "ea6da844268cebb6d692a219ac367bb3aabea12268d9943451ab4a38e93adf65",
+  "manifestPath": "app/web/context-tape/manifest.json",
+  "manifestSha256": "7d2edbc239ff820252d37a111244cdc777bc55b2a78de7034864202c27330c81",
+  "sourceSha": "b5f01d1d0b99730a71aeb4155e5f7f3c39e571aa",
+  "rawAssets": {
+    "context-tape-liquidity-worker-view.js": "e062d025807f4a3007ddef5904bc0af12701fba5cb2a9c654af0e29e735a7e8a",
+    "context-tape-liquidity-native-worker.js": "1c29259ca8918c2a6138f4ca0494f006b36e23684259b07048c90b3403fbb413",
+    "context-tape-rithmic-liquidity.js": "c39c0371573d7dfa2f7b15bf87040ec2401956835c4f052639fcfa8bd0442e96",
+    "context-tape-order-tab.js": "d49075e9227eef36118dc7bf08a998b654e05ddd893edcea20305120bce22ae2"
+  }
+}
