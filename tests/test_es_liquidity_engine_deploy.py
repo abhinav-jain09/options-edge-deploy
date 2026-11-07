@@ -24,7 +24,7 @@ EVENTS_CAP = "134217728"
 ONE_DAY, CAP = "86400000", "268435456"
 JAR = ROOT / "tools/schema-governance/schema-governance-tool.jar"
 NS = "com.optionsedge.contracts.esmbo"
-# subject -> {version: id}. Health and the final rows have two versions (document A revision 12 sections 4.1 and 4.2, contracts 0.87.0): 3504 and 3506 are the frozen archival version 1.
+# subject -> {version: id}. Health and the final rows have two versions (document A revision 12 sections 4.1 and 4.2, contracts 0.89.0): 3504 and 3506 are the frozen archival version 1.
 VERSIONS = {"EsMboClosure": {1: 3501}, "EsMboLevelFlow": {1: 3502}, "EsMboEvent": {1: 3503}, "EsMboHealth": {1: 3504, 2: 3509}, "EsMboSnapshot": {1: 3505},
             "EsMboLevelFlowFinal": {1: 3506, 2: 3510}, "EsMboLevelBase": {1: 3507}, "EsMboClosureFinal": {1: 3508}}
 IDS = {n: max(v.values()) for n, v in VERSIONS.items()}   # the id the engine WRITES

@@ -5675,7 +5675,7 @@
       "producers": [],
       "consumers": [],
       "retained": true,
-      "retainedReason": "curated, not baseline: ARCHIVAL version 1 of the EsMboHealth subject (contracts 0.70.0 to 0.86.0), registered on dev under id 3504; superseded by version 2 id 3509 (contracts 0.87.0). Nothing writes it any more; the topic es.mbo.health keeps version 1 records until their one-day retention ends. Kept so a registry import stays reproducible. Dev only."
+      "retainedReason": "curated, not baseline: ARCHIVAL version 1 of the EsMboHealth subject (contracts 0.70.0 to 0.86.0), registered on dev under id 3504; superseded by version 2 id 3509 (contracts 0.89.0). Nothing writes it any more; the topic es.mbo.health keeps version 1 records until their one-day retention ends. Kept so a registry import stays reproducible. Dev only."
     },
     {
       "kind": "MIRRORED",
@@ -5709,7 +5709,7 @@
       ],
       "consumers": [],
       "retained": true,
-      "retainedReason": "curated, not baseline: document A revision 12 section 4.1 (work package K2, contracts 0.87.0 schemas-registry/esmbo): es-liquidity-engine-service writes it on es.mbo.health under RecordNameStrategy with auto.register.schemas=false as VERSION 2 under the new fixed id 3509 (every version 1 field plus closePath, updateSamples, sourceLagMs, sourceLagMaxMs, updateAgeMs, sourceLagStatus, sourceLagBoundMs, attributionEnabled and bandTicks, all nullable with default null); its schema-requirements.json names this id and hash. The record of a bucket is published after the bucket's level-flow rows were acknowledged. Dev only; nothing is registered on production or es4."
+      "retainedReason": "curated, not baseline: document A revision 12 section 4.1 (work package K2, contracts 0.89.0 schemas-registry/esmbo): es-liquidity-engine-service writes it on es.mbo.health under RecordNameStrategy with auto.register.schemas=false as VERSION 2 under the new fixed id 3509 (every version 1 field plus closePath, updateSamples, sourceLagMs, sourceLagMaxMs, updateAgeMs, sourceLagStatus, sourceLagBoundMs, attributionEnabled and bandTicks, all nullable with default null); its schema-requirements.json names this id and hash. The record of a bucket is published after the bucket's level-flow rows were acknowledged. Dev only; nothing is registered on production or es4."
     },
     {
       "kind": "MIRRORED",
@@ -5747,7 +5747,7 @@
         }
       ],
       "retained": true,
-      "retainedReason": "curated, not baseline: ARCHIVAL version 1 of the EsMboLevelFlowFinal subject (contracts 0.71.0 to 0.86.0), registered on dev under id 3506; superseded by version 2 id 3510 (contracts 0.87.0: unattributedPrintQty). Nothing writes it any more; line health (level-absorption) and the archive decoder still READ it (the topic holds version 1 rows until their one-day retention ends). Kept so a registry import stays reproducible. Dev only."
+      "retainedReason": "curated, not baseline: ARCHIVAL version 1 of the EsMboLevelFlowFinal subject (contracts 0.71.0 to 0.86.0), registered on dev under id 3506; superseded by version 2 id 3510 (contracts 0.89.0: unattributedPrintQty). Nothing writes it any more; line health (level-absorption) and the archive decoder still READ it (the topic holds version 1 rows until their one-day retention ends). Kept so a registry import stays reproducible. Dev only."
     },
     {
       "kind": "MIRRORED",
@@ -5792,7 +5792,7 @@
         }
       ],
       "retained": true,
-      "retainedReason": "curated, not baseline: document A revision 12 section 4.2 (work package K2, contracts 0.87.0 schemas-registry/esmbo): es-liquidity-engine-service writes it on es.mbo.level-flow-final under RecordNameStrategy with auto.register.schemas=false as VERSION 2 under the new fixed id 3510 (every version 1 field plus unattributedPrintQty, nullable with default null; a level with a residual print and no reduction gets a row); its schema-requirements.json names this id and hash. Line health (level-absorption) reads both 3506 and 3510. Dev only; nothing is registered on production or es4."
+      "retainedReason": "curated, not baseline: document A revision 12 section 4.2 (work package K2, contracts 0.89.0 schemas-registry/esmbo): es-liquidity-engine-service writes it on es.mbo.level-flow-final under RecordNameStrategy with auto.register.schemas=false as VERSION 2 under the new fixed id 3510 (every version 1 field plus unattributedPrintQty, nullable with default null; a level with a residual print and no reduction gets a row); its schema-requirements.json names this id and hash. Line health (level-absorption) reads both 3506 and 3510. Dev only; nothing is registered on production or es4."
     },
     {
       "kind": "MIRRORED",
