@@ -744,6 +744,10 @@
       [
         2810,
         2810
+      ],
+      [
+        2812,
+        2812
       ]
     ],
     "options": [
@@ -10593,7 +10597,7 @@
       "source": {
         "kind": "FILE",
         "repo": "contracts",
-        "path": "schemas/cvd-related/LevelAbsorptionEvent.avsc"
+        "path": "schemas/cvd-related/v1/LevelAbsorptionEvent.avsc"
       },
       "topics": [
         {
@@ -10606,7 +10610,8 @@
         {
           "service": "liquidity-validator",
           "accepts": [
-            2702
+            2702,
+            2812
           ],
           "environments": [
             "dev"
@@ -10614,7 +10619,52 @@
         }
       ],
       "retained": true,
-      "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog)"
+      "retainedReason": "inventory baseline 2026-11-03: participants not yet declared (R5/R6 backlog); since contracts 0.88.0 this is the ARCHIVAL version 1 of the event (schemas/cvd-related/v1, frozen: a registered id never changes content), superseded by version 2 id 2812. Nothing writes it any more; the topic still holds version 1 frames until retention removes them, so every reader accepts both ids."
+    },
+    {
+      "kind": "MIRRORED",
+      "subject": "futures.level-absorption.events-value",
+      "version": 2,
+      "id": 2812,
+      "family": "futures",
+      "schemaFile": "futures.level-absorption.events-value/v2.avsc",
+      "schemaHash": "9cf7148f582d5d0fddb1ab8a8f124f4fccf0fe5628b64fc0dca8b706b55d6d88",
+      "environments": [
+        "dev"
+      ],
+      "source": {
+        "kind": "FILE",
+        "repo": "contracts",
+        "path": "schemas/cvd-related/LevelAbsorptionEvent.avsc"
+      },
+      "topics": [
+        {
+          "name": "futures.level-absorption.events",
+          "kind": "data"
+        }
+      ],
+      "producers": [
+        {
+          "service": "level-absorption",
+          "environments": [
+            "dev"
+          ]
+        }
+      ],
+      "consumers": [
+        {
+          "service": "liquidity-validator",
+          "accepts": [
+            2702,
+            2812
+          ],
+          "environments": [
+            "dev"
+          ]
+        }
+      ],
+      "retained": true,
+      "retainedReason": "curated, not baseline: the Level Absorption event with the optional book fields (liquidity requirement A rev 12 section 8, work package K3; contracts 0.88.0, schemas/cvd-related/LevelAbsorptionEvent.avsc, 42 added fields, all nullable with default null, FULL compatible): VERSION 2 under the new fixed id 2812 (2703 to 2752 are held on the es4 registry, so the next integer after 2702 was not free in every registry). Written by level-absorption-service on futures.level-absorption.events through CanonicalAvroKafka.producer (auto.register.schemas=false, the id is looked up under the topic value subject), so this id must be in the registry BEFORE the service image of contracts 0.88.0 starts; schema-sync registers it from this entry on a roll of level-absorption. Readers accept both 2702 and 2812. Dev only; nothing is registered on production or es4."
     },
     {
       "kind": "MIRRORED",

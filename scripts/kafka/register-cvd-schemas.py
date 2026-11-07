@@ -42,7 +42,10 @@ BINDINGS = {
     'es.futures.compression-expansion.current':'cvd-related/EscxCurrent.avsc',
     'es.futures.compression-expansion.events':'cvd-related/EscxEvent.avsc',
     'futures.level-absorption.path':'cvd-related/AbsorptionPathSnapshot.avsc',
-    'futures.level-absorption.events':'cvd-related/LevelAbsorptionEvent.avsc',
+    # Version 1 (id 2702, the schema registered on dev). Contracts 0.88.0 made cvd-related/LevelAbsorptionEvent.avsc VERSION 2 (id 2812), which this registrar must not
+    # attempt: it assigns no fixed id and refuses a subject whose history is not the path-session extension. Version 2 is registered under its fixed id by the manifest's
+    # schema-sync (schema-manifest, subject futures.level-absorption.events-value). Needs a contracts release of 0.88.0 or later (the v1 file is packaged from that release).
+    'futures.level-absorption.events':'cvd-related/v1/LevelAbsorptionEvent.avsc',
     'futures.level-absorption.voice':'cvd-related/LevelAbsorptionVoice.avsc',
     'futures.level-absorption.closures':'cvd-related/LevelAbsorptionClosure.avsc',
     'futures.level-absorption.manual-line':'cvd-related/LevelAbsorptionManualLine.avsc',

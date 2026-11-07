@@ -286,11 +286,13 @@ class Schemas(unittest.TestCase):
         snap1 = ROOT / "schema-manifest/schemas" / arch["subject"] / "v1.avsc"
         out1 = subprocess.run(["java", "-jar", str(JAR), "hash", str(snap1)], capture_output=True, text=True, check=True).stdout.strip().splitlines()[-1]
         self.assertEqual(out1, arch["schemaHash"])
-        wanted = {2222: "GeometryUnavailable", 2223: "GeometryAnnotationSet", 2702: "futures.level-absorption.events-value", 2701: "EsAggressorFlowSnapshot", 2034: "es.futures.footprint.bars-value"}
+        wanted = {2222: "GeometryUnavailable", 2223: "GeometryAnnotationSet", 2702: "futures.level-absorption.events-value", 2812: "futures.level-absorption.events-value", 2701: "EsAggressorFlowSnapshot", 2034: "es.futures.footprint.bars-value"}
         bound = {e["id"]: e for e in m["entries"] if e.get("kind") == "MIRRORED" and e.get("id") in wanted and wanted[e["id"]] in e["subject"]}
         self.assertEqual(sorted(bound), sorted(wanted))
         for i, e in bound.items():
-            self.assertIn({"service": SVC, "accepts": [i], "environments": ["dev"]}, e["consumers"], f"the validator reads id {i}")
+            # the level absorption events subject has TWO versions (2702 archival version 1, 2812 version 2 with the book fields): the validator accepts both on both entries
+            accepts = [2702, 2812] if i in (2702, 2812) else [i]
+            self.assertIn({"service": SVC, "accepts": accepts, "environments": ["dev"]}, e["consumers"], f"the validator reads id {i}")
         # The COMPLETE set: every manifest entry that lists the validator as a consumer, and exactly which ids it accepts. An extra binding (for example a re-introduced geometry
         # 2221) or a missing one fails here. 3603 is the service's own daily subject (it reads its own daily topic at start).
         accepted = {}
@@ -298,7 +300,7 @@ class Schemas(unittest.TestCase):
             for c in e.get("consumers", []) or []:
                 if c["service"] == SVC:
                     accepted.setdefault(e["id"], []).extend(c["accepts"])
-        self.assertEqual(accepted, {2223: [2223], 2222: [2222], 2702: [2702], 2701: [2701], 2034: [2034], 3603: [3603]})
+        self.assertEqual(accepted, {2223: [2223], 2222: [2222], 2702: [2702, 2812], 2812: [2702, 2812], 2701: [2701], 2034: [2034], 3603: [3603]})
 
     def test_registration_rides_the_schema_sync_gate_on_the_apply_path_not_a_stage_list(self):
         m = json.loads(read("schema-manifest/manifest.json"))

@@ -40,7 +40,7 @@ spec:
             # The service reads EXACTLY these six variables (Config.ENV_VARS) plus the JVM's JAVA_TOOL_OPTIONS. The dev broker, the dev schema registry and the five INPUT topic names are COMPILED IN
             # (Config), so nothing in this manifest can point the service at another broker, registry or topic, and there are no topic overrides. The input topics (read-only, no consumer group, no
             # offset commit) are, as OBSERVED on the dev broker on 2026-11-05: options.spx.market-structure.geometry (Avro id 2223; the producer CODE is transactional, not observed on the broker),
-            # futures.level-absorption.events (2702), es.futures.aggressor-flow (2701), es.futures.footprint.bars (2034), and the RAW ES tape underlying.es.trades (NOT .linearized; JSON, 32 partitions).
+            # futures.level-absorption.events (2702, and since contracts 0.88.0 also 2812: the event version 2 with the book fields), es.futures.aggressor-flow (2701), es.futures.footprint.bars (2034), and the RAW ES tape underlying.es.trades (NOT .linearized; JSON, 32 partitions).
             #
             # The environment guard: the service refuses to start unless this is exactly "dev".
             - name: LIQUIDITY_VALIDATOR_ENVIRONMENT
