@@ -112,7 +112,7 @@ every status event (`book*` fields, event version 2, id 2812). It never arms, di
 
 | Setting | Dev value | Meaning |
 | --- | --- | --- |
-| `LEVEL_ABSORPTION_BOOK_ENABLED` | `false` (current) | Off. The service refuses to start with it on while the engine's ids 3509 and 3510 are not registered. |
+| `LEVEL_ABSORPTION_BOOK_ENABLED` | `true` (current, dev) | On (eyeball, provisional values; the gate stays off). The service refuses to start with it on while the engine's ids 3509 and 3510 are not registered. |
 | `LEVEL_ABSORPTION_BOOK_ENVIRONMENT` | `Rithmic Paper Trading` | The engine's `ES_MBO_ENVIRONMENT`; a record with another literal is refused. |
 | `LEVEL_ABSORPTION_BOOK_CONTRACTS` | `classpath:/book-contracts.txt` | The table committed in the image; it must equal the engine's `ES_MBO_CONTRACT_TABLE`. |
 
