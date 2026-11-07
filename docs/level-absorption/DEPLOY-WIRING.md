@@ -119,8 +119,8 @@ every status event (`book*` fields, event version 2, id 2812). It never arms, di
 Not set, on purpose: `LEVEL_ABSORPTION_BOOK_GATE` (the gate path is not built; the service refuses `true`), `LEVEL_ABSORPTION_BOOK_ALLOW_TEST`, and the five closed values
 (provisional labelled values apply). Production and es4 declare nothing.
 
-Roll order (nothing is rolled by the change that adds these lines): (1) the engine roll that registers health version 2 (3509) and FINAL rows version 2 (3510) and publishes them;
+Roll order (steps 1 and 2 are done; step 3 is PR 1566; step 4 is the roll that follows it): (1) the engine roll that registers health version 2 (3509) and FINAL rows version 2 (3510) and publishes them;
 (2) every reader of the events topic accepts both event ids: the liquidity validator, the web Now card listener, and the readers inside this image itself (the service's own replay of its log, line health's own-log reader and the footprint vote all go through the same two-version deserializer of processing #1709, so they roll with the image) and the schema-sync label of the level absorption image carries
-2812; (3) a reviewed change of `LEVEL_ABSORPTION_BOOK_ENABLED` to `"true"`; (4) one off-hours `service-deploy SERVICE=level-absorption` (the pod also runs line health: a restart
+2812; (3) a reviewed change of `LEVEL_ABSORPTION_BOOK_ENABLED` to `"true"` (done for dev by PR 1566); (4) one off-hours `service-deploy SERVICE=level-absorption` (the pod also runs line health: a restart
 re-reads the closures log and replays the session). Rollback: set the value back to `"false"` and roll, or roll the previous image digest.
 
