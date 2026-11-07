@@ -1,0 +1,217 @@
+---
+- name: Deploy the OptionsEdge replay backend plane
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    repo_root: "{{ playbook_dir }}/.."
+    rendered_manifest_dir: "{{ repo_root }}/.ansible-rendered"
+    rendered_manifest_path: "{{ rendered_manifest_dir }}/replay-stack-{{ deploy_environment }}.yaml"
+    apply_replay_stack: true
+    confirm_replay_deploy: false
+    server_side_dry_run: true
+    wait_for_rollout: true
+    rollout_timeout: 240s
+    kubectl_environment: "{{ {'KUBECONFIG': kubeconfig} if (kubeconfig | default('') | length > 0) else {} }}"
+    replay_default_resources:
+      requests:
+        cpu: 100m
+        memory: 512Mi
+      limits:
+        cpu: "2"
+        memory: 2Gi
+
+  pre_tasks:
+    - name: Validate mandatory replay deployment variables
+      ansible.builtin.assert:
+        that:
+          - deploy_environment is defined
+          - app_profile is defined
+          - app_profile in ['dev', 'prod']
+          - live_namespace is defined
+          - replay_namespace is defined
+          - image_registry is defined
+          - image_registry | length > 0
+          - image_tag is defined
+          - image_tag | length > 0
+          - kafka_bootstrap_servers is defined
+          - kafka_bootstrap_servers | length > 0
+          - schema_registry_url is defined
+          - schema_registry_url | length > 0
+          - replay_topic_prefix is defined
+          - replay_topic_prefix | length > 0
+          - (replay_topic_prefix | lower | regex_search('replay')) is not none
+          - replay_app_id_suffix is defined
+          - replay_app_id_suffix | length > 0
+          - (replay_app_id_suffix | lower | regex_search('replay')) is not none
+          - replay_state_dir is defined
+          - (replay_state_dir | lower | regex_search('replay')) is not none
+          - replay_services is defined
+          - replay_services | length > 0
+        fail_msg: >-
+          Replay stack variables are incomplete or unsafe. Use
+          ansible/group_vars/replay_stack.example.yml as the starting point.
+
+    - name: Refuse to deploy replay into the live namespace unless explicitly allowed
+      ansible.builtin.assert:
+        that:
+          - allow_same_namespace | default(false) | bool or replay_namespace != live_namespace
+        fail_msg: >-
+          replay_namespace must be different from live_namespace. Set
+          allow_same_namespace=true only for a disposable local cluster.
+
+    - name: Validate replay gateway cannot collide with the live gateway
+      ansible.builtin.assert:
+        that:
+          - replay_gateway_node_port | string != live_gateway_node_port | string
+          - replay_gateway_service_port | string != '8091'
+        fail_msg: >-
+          Replay gateway ports must be distinct from the live gateway ports.
+
+    - name: Validate every replay service has an image source and a safe name
+      ansible.builtin.assert:
+        that:
+          - item.name is defined
+          - item.name | length > 0
+          - item.image is defined or item.image_name is defined
+          - (item.name | lower | regex_search('replay')) is none
+        fail_msg: >-
+          Replay service definitions use base service names only. The playbook
+          appends -replay so live and replay Kubernetes names cannot collide.
+      loop: "{{ replay_services }}"
+      loop_control:
+        label: "{{ item.name | default('missing-name') }}"
+
+    - name: Validate production replay cannot point to local infrastructure
+      ansible.builtin.assert:
+        that:
+          - (kafka_bootstrap_servers | lower | regex_search('localhost|127\\.0\\.0\\.1|0\\.0\\.0\\.0|\\[::1\\]|::1')) is none
+          - (schema_registry_url | lower | regex_search('localhost|127\\.0\\.0\\.1|0\\.0\\.0\\.0|\\[::1\\]|::1')) is none
+          - (postgres_jdbc_url | default('') | lower | regex_search('localhost|127\\.0\\.0\\.1|0\\.0\\.0\\.0|\\[::1\\]|::1')) is none
+          - (replay_topic_prefix | lower | regex_search('^dev\\.')) is none
+        fail_msg: >-
+          Production replay config cannot use localhost infrastructure or a dev
+          topic prefix.
+      when: app_profile == 'prod'
+
+    - name: Validate Postgres is replay-only when enabled
+      ansible.builtin.assert:
+        that:
+          - postgres_enabled | string | lower not in ['true', 'yes', '1'] or postgres_jdbc_url | default('') | length > 0
+          - postgres_enabled | string | lower not in ['true', 'yes', '1'] or (postgres_jdbc_url | lower | regex_search('replay|dev|test')) is not none
+        fail_msg: >-
+          POSTGRES_ENABLED=true requires a replay/dev/test database URL. Do not
+          send replay writers to the live options_flow database.
+
+  tasks:
+    - name: Check kubectl is available
+      ansible.builtin.command:
+        cmd: kubectl version --client=true
+      changed_when: false
+
+    - name: Create render directory
+      ansible.builtin.file:
+        path: "{{ rendered_manifest_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Render replay Kubernetes manifest
+      ansible.builtin.template:
+        src: replay-stack.yaml.j2
+        dest: "{{ rendered_manifest_path }}"
+        mode: "0644"
+
+    - name: Confirm rendered manifest uses replay namespace resources
+      ansible.builtin.command:
+        argv:
+          - grep
+          - -Eq
+          - "^  namespace: {{ replay_namespace }}$"
+          - "{{ rendered_manifest_path }}"
+      changed_when: false
+
+    - name: Refuse rendered manifest with live namespace resources
+      ansible.builtin.shell: |
+        set -eu
+        if grep -nE '^  namespace: {{ live_namespace }}$' {{ rendered_manifest_path | quote }}; then
+          exit 1
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
+      when: not (allow_same_namespace | default(false) | bool)
+
+    - name: Refuse rendered manifest without replay topic prefix
+      ansible.builtin.command:
+        argv:
+          - grep
+          - -q
+          - "{{ replay_topic_prefix }}"
+          - "{{ rendered_manifest_path }}"
+      changed_when: false
+
+    - name: Refuse rendered manifest if any deployment lost the -replay suffix
+      ansible.builtin.shell: |
+        set -eu
+        expected={{ replay_services | length }}
+        actual=$(grep -Ec '^  name: .*-replay$' {{ rendered_manifest_path | quote }})
+        test "$actual" -ge "$expected"
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Kubernetes server-side dry-run
+      ansible.builtin.command:
+        cmd: "kubectl apply --server-side --dry-run=server -f {{ rendered_manifest_path }}"
+      environment: "{{ kubectl_environment }}"
+      changed_when: false
+      when: server_side_dry_run | bool
+
+    - name: Show diff against the cluster
+      ansible.builtin.command:
+        cmd: "kubectl diff -f {{ rendered_manifest_path }}"
+      environment: "{{ kubectl_environment }}"
+      register: kubectl_diff
+      changed_when: kubectl_diff.rc == 1
+      failed_when: kubectl_diff.rc not in [0, 1]
+      when: server_side_dry_run | bool
+
+    - name: Stop before applying unless deployment was explicitly confirmed
+      ansible.builtin.fail:
+        msg: >-
+          Replay manifest rendered and validated at {{ rendered_manifest_path }}.
+          Pass -e confirm_replay_deploy=true to apply it to the cluster.
+      when:
+        - apply_replay_stack | bool
+        - not (confirm_replay_deploy | bool)
+
+    - name: Apply replay backend plane
+      ansible.builtin.command:
+        cmd: "kubectl apply -f {{ rendered_manifest_path }}"
+      environment: "{{ kubectl_environment }}"
+      when:
+        - apply_replay_stack | bool
+        - confirm_replay_deploy | bool
+
+    - name: Wait for replay deployments to roll out
+      ansible.builtin.command:
+        cmd: "kubectl -n {{ replay_namespace }} rollout status deployment/{{ item.name }}-replay --timeout={{ rollout_timeout }}"
+      environment: "{{ kubectl_environment }}"
+      changed_when: false
+      loop: "{{ replay_services }}"
+      loop_control:
+        label: "{{ item.name }}-replay"
+      when:
+        - apply_replay_stack | bool
+        - confirm_replay_deploy | bool
+        - wait_for_rollout | bool
+
+    - name: List replay pods
+      ansible.builtin.command:
+        cmd: "kubectl -n {{ replay_namespace }} get pods -l options-edge.io/plane=replay -o wide"
+      environment: "{{ kubectl_environment }}"
+      changed_when: false
+      when:
+        - apply_replay_stack | bool
+        - confirm_replay_deploy | bool
