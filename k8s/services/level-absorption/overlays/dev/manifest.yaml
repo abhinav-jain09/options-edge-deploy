@@ -53,7 +53,7 @@ spec:
             - name: LEVEL_ABSORPTION_LINE_HEALTH_BOOK_ENABLED
               value: "true"
             - name: LEVEL_ABSORPTION_BOOK_ENABLED
-              value: "true"
+              value: "false"
             - name: LEVEL_ABSORPTION_BOOK_ENVIRONMENT
               value: Rithmic Paper Trading
             - name: LEVEL_ABSORPTION_BOOK_CONTRACTS
