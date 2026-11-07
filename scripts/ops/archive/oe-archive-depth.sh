@@ -114,7 +114,7 @@ env ARCHIVE_DIR="$ARCHIVE_DIR" ENV=dev BOOTSTRAP="$DEV_BOOTSTRAP" TOPICS="$OE_DE
     bash "$ARCHIVER" 2>&1 | tee -a "$LOG"
 [ "${PIPESTATUS[0]}" -eq 0 ] || rc=1
 if [ "$rc" -ne 0 ]; then
-  log "ALERT: the dev depth archive run FAILED — es.rithmic.depth retention is 24h; at most three more scheduled runs can still capture this range"
+  log "ALERT: the dev depth archive run FAILED — es.rithmic.depth retention is 24h; three more runs can still capture this range"
   alert "dev depth archive FAILED on $(hostname) (ET $(TZ=America/New_York date '+%H:%M')). es.rithmic.depth retention is 24h: three more runs can still capture this range. Log $LOG"
 fi
 log "=== dev depth archive done rc=$rc ==="

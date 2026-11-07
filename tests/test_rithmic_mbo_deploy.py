@@ -41,3 +41,10 @@ class RithmicMboDeployTest(unittest.TestCase):
   self.assertTrue((ROOT/'schema-manifest/schemas'/e['schemaFile']).is_file())
   mirrors=[m for m in manifest['activeMirrors'] if 'es.rithmic.mbo' in m['topics']]
   self.assertEqual(len(mirrors),1);self.assertEqual((mirrors[0]['from'],mirrors[0]['to'],mirrors[0]['transport']),('es4','dev','bytes'))
+
+ def test_dev_retention_of_the_three_rithmic_book_topics_is_24_hours(self):
+  # dev/default list, including the INDENTED dev-only es.rithmic.mbo line; ES4 source lists stay as they are
+  script='source scripts/kafka/topics.env; printf "%s\\n" "$OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES"'
+  dev=subprocess.check_output(['bash','-c',script],cwd=ROOT,text=True).split()
+  for t in ('es.rithmic.depth','options.rithmic.es-depth-spx','es.rithmic.mbo'):
+   self.assertEqual([e for e in dev if e.split('=')[0]==t],[t+'=86400000'])
