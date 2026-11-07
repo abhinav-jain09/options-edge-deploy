@@ -291,7 +291,8 @@ class WrapperInvocationTest(unittest.TestCase):
         r = self.run_wrapper(ARCHIVE_DIR=str(self.nas), STUB_RC='3')
         self.assertEqual(r.returncode, 1)
         self.assertIn('FAILED', self.log.read_text())
-        self.assertIn('12h', self.log.read_text())
+        self.assertIn('24h', self.log.read_text())
+        self.assertIn('three more runs', self.log.read_text())
 
 
 class DevOnlyAndGuardsTest(unittest.TestCase):

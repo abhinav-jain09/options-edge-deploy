@@ -3,10 +3,10 @@
 # closures and the Rithmic MBO order events (es.rithmic.mbo), captured to the NAS every six hours from the dev Mac (launchd/oe-archive-depth.plist: 02:00, 08:00,
 # 14:00 and 20:00 ET).
 #
-# WHY A SEPARATE JOB, ON A SEPARATE SCHEDULE. es.rithmic.depth carries a 12-HOUR retention on dev (ES Level
+# WHY A SEPARATE JOB, ON A SEPARATE SCHEDULE. es.rithmic.depth carries a 24-HOUR retention on dev (raised from 12 on 2026-11-07, owner order) (ES Level
 # Absorption Requirements section 9, document A; ES Book Liquidity Walls Requirements rev 11 section 8,
 # document D). The nightly 17:10 ET pass and the 17:01 es4 pass both run once a day, so either would lose half of
-# every session; four captures a day against twelve hours of retention means one missed run costs nothing and
+# every session; four captures a day against twenty-four hours of retention means one missed run costs nothing and
 # two consecutive misses cost a known, reported range. Document A section 9 item 6 names this schedule and keeps
 # it apart from the nightly run; item 1 names the invocation: ENV=dev TOPICS="$OE_DEPTH_TOPICS_dev" against the
 # dev broker and the dev schema registry.
@@ -25,8 +25,8 @@
 # contracts jar beside the archiver — install-dev-mac-depth-archive.sh refuses to install without them.
 #
 # ON_LOCK_BUSY=fail, deliberately. The archiver's rule: a busy lock is only "exiting clean" for a job that
-# will retry inside its own data's retention window. Four runs a day against twelve hours leaves at most one
-# retry, so a run that cannot take its lock is a loud failure, not a deferral.
+# will retry inside its own data's retention window. The wrapper stays loud anyway (a run that cannot take its lock is a
+# failure, not a deferral); the 24-hour window only means a later run can still recover the range.
 #
 # THE ARCHIVE ROOT IS RESOLVED, NOT PINNED (BZ 360, the watchdog's lesson): the NAS is not mounted at the same
 # path on every host — on the dev Mac //192.168.100.100/database is on $HOME/nas-db, on .252 it is
@@ -82,13 +82,13 @@ if [ -z "${ARCHIVE_DIR:-}" ]; then
 fi
 if [ -z "${ARCHIVE_DIR:-}" ]; then
   log "FATAL: no archive root on this host (tried: $ARCHIVE_ROOT_CANDIDATES) — this is a MOUNT problem here; dev depth NOT archived"
-  alert "dev depth archive cannot run on $(hostname): no archive root (tried: $ARCHIVE_ROOT_CANDIDATES). es.rithmic.depth expires at 12h."
+  alert "dev depth archive cannot run on $(hostname): no archive root (tried: $ARCHIVE_ROOT_CANDIDATES). es.rithmic.depth expires at 24h."
   exit 1
 fi
 SENTINEL="${SENTINEL:-$ARCHIVE_DIR/.oe_nas_sentinel}"
 if [ ! -s "$SENTINEL" ]; then
   log "FATAL: '$ARCHIVE_DIR' ($ROOT_SOURCE) has no NAS sentinel '$SENTINEL' — the share is NOT mounted there; refusing to write what would really be local disk"
-  alert "dev depth archive refused on $(hostname): $ARCHIVE_DIR has no NAS sentinel (share not mounted). es.rithmic.depth expires at 12h."
+  alert "dev depth archive refused on $(hostname): $ARCHIVE_DIR has no NAS sentinel (share not mounted). es.rithmic.depth expires at 24h."
   exit 1
 fi
 NON_NAS=""
@@ -114,8 +114,8 @@ env ARCHIVE_DIR="$ARCHIVE_DIR" ENV=dev BOOTSTRAP="$DEV_BOOTSTRAP" TOPICS="$OE_DE
     bash "$ARCHIVER" 2>&1 | tee -a "$LOG"
 [ "${PIPESTATUS[0]}" -eq 0 ] || rc=1
 if [ "$rc" -ne 0 ]; then
-  log "ALERT: the dev depth archive run FAILED — es.rithmic.depth retention is 12h; at most one more scheduled run can still capture this range"
-  alert "dev depth archive FAILED on $(hostname) (ET $(TZ=America/New_York date '+%H:%M')). es.rithmic.depth retention is 12h: the next run is the last chance for this range. Log $LOG"
+  log "ALERT: the dev depth archive run FAILED — es.rithmic.depth retention is 24h; three more runs can still capture this range"
+  alert "dev depth archive FAILED on $(hostname) (ET $(TZ=America/New_York date '+%H:%M')). es.rithmic.depth retention is 24h: three more runs can still capture this range. Log $LOG"
 fi
 log "=== dev depth archive done rc=$rc ==="
 exit "$rc"

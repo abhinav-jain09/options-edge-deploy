@@ -54,7 +54,7 @@ sourced="$(printf '%s\n' $sourced $java_named $java_present | awk 'NF' | sort -u
 #   install-dev-mac-watchdog-test.sh  its test; runs in CI, never on .252
 #   oe-archive-depth.sh           the DEV depth archive wrapper (ES Level Absorption Requirements section 9
 #                                 item 6): a dedicated launchd job on the DEV MAC, four times a day against
-#                                 es.rithmic.depth's 12-hour retention, deliberately apart from the .252
+#                                 es.rithmic.depth's 24-hour retention, deliberately apart from the .252
 #                                 crontab's nightly run. Same obligation as the watchdog: its install path,
 #                                 plist, schedule and the policy it reads are asserted by
 #                                 scripts/ci/validate-dev-mac-depth-archive.sh, and the deploy job runs it.

@@ -5,8 +5,8 @@
   TOPICS="$OE_DEPTH_TOPICS_dev" (oe-topics.env: es.rithmic.depth, underlying.es.trades.linearized,
   futures.liquidity-wall.closures, es.rithmic.mbo) against the dev broker and the dev schema registry, four times a day.
 
-  WHY FOUR TIMES, AND WHY HERE. es.rithmic.depth carries a 12-hour retention on dev, so a once-a-day pass
-  loses half of every session; every six hours, one missed run costs nothing. It is a dedicated job on the
+  WHY FOUR TIMES, AND WHY HERE. es.rithmic.depth carries a 24-hour retention on dev (12 until 2026-11-07), so the 17:10 ET once-a-day pass
+  still misses the overnight start of a session; every six hours, one missed run costs nothing. It is a dedicated job on the
   dev Mac, separate from the nightly 17:10 ET run on .252 (document A section 9 item 6), and it is registered
   for DEV ONLY — nothing here reads prod or es4.
 
