@@ -23,6 +23,7 @@ class BookDeploy(unittest.TestCase):
             t = f.read_text()
             self.assertEqual(env(t, "LEVEL_ABSORPTION_BOOK_ENABLED"), "false", f)
             self.assertEqual(env(t, "LEVEL_ABSORPTION_BOOK_CONTRACTS"), "classpath:/book-contracts.txt", f)
+            self.assertEqual(env(t, "LEVEL_ABSORPTION_BOOK_ENVIRONMENT"), "Rithmic Paper Trading", f)
 
     def test_the_environment_literal_is_the_engines(self):
         self.assertEqual(env(PATCH.read_text(), "LEVEL_ABSORPTION_BOOK_ENVIRONMENT"), env(ENGINE.read_text(), "ES_MBO_ENVIRONMENT"))
@@ -32,10 +33,10 @@ class BookDeploy(unittest.TestCase):
             t = f.read_text()
             self.assertIsNone(re.search(r"- name: LEVEL_ABSORPTION_BOOK_(GATE|ALLOW_TEST)\b", t), f)
 
-    def test_production_and_experiment_declare_no_book_setting(self):
+    def test_production_declares_no_book_setting(self):
         for f in ROOT.glob("k8s/services/level-absorption/overlays/production/*.yaml"):
             self.assertIsNone(re.search(r"- name: LEVEL_ABSORPTION_BOOK", f.read_text()), f)
-        for f in ROOT.glob("k8s/overlays/production/**/*.yaml"):
+        for f in list(ROOT.glob("k8s/overlays/production/**/*.yaml")) + list(ROOT.glob("k8s/services/level-absorption/overlays/experiment/**/*.yaml")):
             self.assertIsNone(re.search(r"- name: LEVEL_ABSORPTION_BOOK", f.read_text()), f)
 
 
