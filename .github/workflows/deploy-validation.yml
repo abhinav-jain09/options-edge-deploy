@@ -150,6 +150,22 @@ jobs:
           python3 scripts/watch/fleet-readiness-test.py
           python3 scripts/watch/dlq-growth-test.py
 
+      # The three alert checks and the delivery path (FLEET-ALERT-DISCORD-REQUIREMENT R7a/R7b/R7d).
+      # The delivery test stands up a local HTTP endpoint and drives the real oe-alert.sh through it, so a
+      # webhook that would be logged as "delivered" on a non-2xx fails here rather than in the dev group.
+      - name: Fleet alert checks and delivery negative controls
+        run: |
+          python3 scripts/watch/crash-loop-test.py
+          python3 scripts/watch/kafka-lag-test.py
+          python3 scripts/watch/partition-balance-test.py
+          python3 scripts/watch/fleet-alert-test.py
+          bash scripts/watch/fleet-alert-deliver-test.sh
+
+      # Routing: production to the prod group, dev AND es4 to the dev group. Asserted against the
+      # Jenkinsfile's own text, because the failure mode is a production page in the wrong room (R7c).
+      - name: Fleet alert routing and wiring
+        run: python3 -m unittest -v tests.test_fleet_alerts_deploy
+
       - name: Schema sync gate negative controls (mock registry, real tool jar)
         run: SCHEMA_GOV_JAR="$PWD/tools/schema-governance/schema-governance-tool.jar" bash scripts/ci/schema-sync-test.sh
 
