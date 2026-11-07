@@ -60,7 +60,8 @@ class WebImmutableAssetsDevTest(unittest.TestCase):
         webenv = {e['name']: e.get('value') for c in web if c['name'] == 'web' for e in c.get('env', [])}
         gateway = resource(self.mono, 'Deployment', 'feed-gateway-service')['spec']['template']['spec']['containers']
         gatewayenv = {e['name']: e.get('value') for c in gateway for e in c.get('env', [])}
-        self.assertNotEqual('true', webenv.get('HEATMAP_NATIVE_HISTORY_ENABLED'))
+        self.assertEqual('false', webenv.get('HEATMAP_NATIVE_HISTORY_ENABLED', 'false'))
+        self.assertEqual('false', webenv.get('HEATMAP_NATIVE_WORKER_ENABLED', 'false'))
         self.assertEqual('Rithmic Paper Trading', gatewayenv['GATEWAY_RITHMIC_SYSTEM'])
         self.assertEqual('false', gatewayenv['LINE_HEALTH_RELAY_ENABLED'])
         self.assertEqual(resource(self.gateway, 'Deployment', 'feed-gateway-service'), resource(self.mono, 'Deployment', 'feed-gateway-service'))
