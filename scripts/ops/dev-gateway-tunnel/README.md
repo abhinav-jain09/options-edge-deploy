@@ -25,7 +25,9 @@ so Gateway/TWS can keep "allow connections from localhost only".
 ## Install / operate
 
 ```bash
-mkdir -p ~/Library/dev-gateway-tunnel && cp tunnel.sh status.sh ~/Library/dev-gateway-tunnel/ && chmod +x ~/Library/dev-gateway-tunnel/*.sh
+mkdir -p ~/Library/dev-gateway-tunnel \
+  && cp tunnel.sh status.sh market.sh market_cal.py spx-session-calendar.csv ~/Library/dev-gateway-tunnel/ \
+  && chmod +x ~/Library/dev-gateway-tunnel/*.sh
 sed "s#__HOME__#$HOME#g" com.optionsedge.ib-gateway-reverse-tunnel.plist.template > ~/Library/LaunchAgents/com.optionsedge.ib-gateway-reverse-tunnel.plist
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.optionsedge.ib-gateway-reverse-tunnel.plist
 ~/Library/dev-gateway-tunnel/status.sh          # route, reachability, last log lines   (log: ~/Library/Logs/ib-gateway-reverse-tunnel.log)

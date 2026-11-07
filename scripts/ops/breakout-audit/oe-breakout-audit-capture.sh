@@ -44,10 +44,25 @@ for t in $TOPICS; do
   fi
 done
 
-# stamp() prints the epoch milliseconds of a New York wall time on $DAY
-stamp() { echo $(( $(TZ=America/New_York date -j -f '%Y-%m-%d %H:%M:%S' "$DAY $1" +%s) * 1000 )); }
+# stamp() prints the epoch milliseconds of a New York wall time on $DAY. python3, not `date`: the BSD `-j`
+# parsing form this used is a hard error under GNU date, which is what killed the 2026-09-01 catch-up (see
+# scripts/ops/et_session.py), and tests/test_close_board_session_resolution.py forbids shell date arithmetic
+# for that reason. Reading the clock with `date +%s` is portable and stays.
+stamp() {
+  python3 -c 'import datetime, sys
+from zoneinfo import ZoneInfo
+print(int(datetime.datetime.strptime(sys.argv[1], "%Y-%m-%d %H:%M:%S")
+          .replace(tzinfo=ZoneInfo("America/New_York")).timestamp()) * 1000)' "$DAY $1"
+}
 FROM_TS="$(stamp 08:30:00)"; TO_TS="$(stamp 16:30:00)"
-if [ "$(( $(date +%s) * 1000 ))" -lt "$TO_TS" ]; then
+# An empty stamp used to reach `[ ... -lt "" ]`, which bash rejects as a non-integer and then took the ELSE
+# branch -- slicing with an empty --from-ts. Refuse the slices instead.
+case "${FROM_TS:-x}${TO_TS:-x}" in
+  *[!0-9]*) log "cannot compute the $DAY slice window (stamp failed: FROM_TS='$FROM_TS' TO_TS='$TO_TS'); skipping the ES slices"; fail=1; FROM_TS=; TO_TS=;;
+esac
+if [ -z "$FROM_TS" ] || [ -z "$TO_TS" ]; then
+  :
+elif [ "$(( $(date +%s) * 1000 ))" -lt "$TO_TS" ]; then
   log "slice window of $DAY still open; ES slices wait until 16:30 New York"
 else
   # outputs-first as well: the whole-topic slices first, the thinned book last
