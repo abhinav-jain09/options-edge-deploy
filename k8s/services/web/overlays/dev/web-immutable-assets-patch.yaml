@@ -36,6 +36,10 @@ spec:
               value: /var/run/context-tape-assets
             - name: CONTEXT_TAPE_COMPILED_ASSETS
               value: 'true'
+            - name: HEATMAP_NATIVE_HISTORY_ENABLED
+              value: 'true'
+            - name: HEATMAP_RITHMIC_SYSTEM
+              value: Rithmic Paper Trading
           volumeMounts:
             - name: public-assets
               mountPath: /var/run/context-tape-assets

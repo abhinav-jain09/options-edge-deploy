@@ -1,0 +1,13 @@
+{
+  "capturedAt": "2026-11-07T01:19:55.092426+00:00",
+  "server": "https://192.168.100.102:6443",
+  "image": "host.docker.internal:5001/options-edge-feed-gateway:dev@sha256:dab69425cc6b9af64ea26d4635d0809503659d0bffd6962e8bdbea386bdada94",
+  "readyReplicas": 1,
+  "updatedReplicas": 1,
+  "environment": {
+    "GATEWAY_AUTH_ENABLED": "true",
+    "GATEWAY_KEYCLOAK_AUDIENCE": "options-edge-web",
+    "GATEWAY_RITHMIC_SYSTEM": "Rithmic Paper Trading"
+  },
+  "scope": "Read-only selected deployment metadata; no secrets."
+}

@@ -1,6 +1,6 @@
-# Dev native gateway rollout; browser activation held
+# Historical dev gateway-only preparation (PR1545)
 
-PR1545 now prepares the gateway only. It adds `GATEWAY_AUTH_ENABLED=true`, audience `options-edge-web`, and system `Rithmic Paper Trading` to both dev gateway renders. It leaves the browser native flag disabled. No new Jenkins job or stage is introduced. Production, experiment, ES4 collectors and mirrors are untouched.
+At this historical stage, PR1545 prepared the gateway only. It adds `GATEWAY_AUTH_ENABLED=true`, audience `options-edge-web`, and system `Rithmic Paper Trading` to both dev gateway renders. It left the browser native flag disabled. The subsequent browser stage is documented in [dev-native-liquidity-browser-activation.md](dev-native-liquidity-browser-activation.md). No new Jenkins job or stage is introduced. Production, experiment, ES4 collectors and mirrors are untouched.
 
 This split prevents a concurrent web rollout from activating the native browser before gateway authorization is verified. After the gateway checks pass, a separate reviewed change can enable the two browser native keys through the same existing service job. Compiled assets are already enabled and remain enabled.
 
@@ -26,4 +26,4 @@ Whole-programme targets remain idle CPU below 2%, zero unchanged full scenes, SV
 
 Rollback must use reviewed configuration and exact images through the same existing Jenkins job. While the browser native flag is still off, gateway rollback is independent. Once the browser is enabled, disable native browser use and verify ordinary UI before restoring prior gateway authority. Keep compiled assets and published hashes available. The old draft rollback PR1548 was based on the former paired activation; reconcile and review it before use rather than applying it blindly.
 
-PR1545 stays draft until final reviews and scoped render validation pass. The release receipt records prerequisites, not a completed runtime activation.
+PR1545 passed final reviews and scoped validation, merged at 5beb0d0d and deployed through dry run3159/apply3160. The original release receipt remains a historical preflight snapshot; the browser-stage evidence index records subsequent observations.

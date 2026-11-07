@@ -55,13 +55,14 @@ class WebImmutableAssetsDevTest(unittest.TestCase):
         self.assertEqual('100m', app['resources']['requests']['cpu'])
         self.assertEqual('web-immutable-assets', next(v for v in pod['volumes'] if v['name'] == 'public-assets')['persistentVolumeClaim']['claimName'])
 
-    def test_gateway_authority_prepares_native_scope_without_enabling_web(self):
+    def test_gateway_authority_and_browser_share_native_scope(self):
         web = resource(self.web, 'Deployment', 'options-edge-web')['spec']['template']['spec']['containers']
         webenv = {e['name']: e.get('value') for c in web if c['name'] == 'web' for e in c.get('env', [])}
         gateway = resource(self.mono, 'Deployment', 'feed-gateway-service')['spec']['template']['spec']['containers']
         gatewayenv = {e['name']: e.get('value') for c in gateway for e in c.get('env', [])}
-        self.assertEqual('false', webenv.get('HEATMAP_NATIVE_HISTORY_ENABLED', 'false'))
-        self.assertNotIn('HEATMAP_RITHMIC_SYSTEM', webenv)
+        self.assertEqual('true', webenv['HEATMAP_NATIVE_HISTORY_ENABLED'])
+        self.assertEqual('Rithmic Paper Trading', webenv['HEATMAP_RITHMIC_SYSTEM'])
+        self.assertEqual('true', webenv['CONTEXT_TAPE_COMPILED_ASSETS'])
         self.assertEqual('Rithmic Paper Trading', gatewayenv['GATEWAY_RITHMIC_SYSTEM'])
         self.assertEqual('false', gatewayenv['LINE_HEALTH_RELAY_ENABLED'])
         self.assertEqual(resource(self.gateway, 'Deployment', 'feed-gateway-service'), resource(self.mono, 'Deployment', 'feed-gateway-service'))
