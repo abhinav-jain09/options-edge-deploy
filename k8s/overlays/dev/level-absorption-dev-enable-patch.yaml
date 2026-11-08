@@ -44,14 +44,14 @@ spec:
             - name: LEVEL_ABSORPTION_LINE_HEALTH_BOOK_ENABLED
               value: "true"
             # The BOOK input (document A revision 12, work package K3): the engine's resting-book records as a third evidence class, reported beside the lean in every status
-            # event and never an input to the verdict. DEFAULT false; CURRENT VALUE true on dev (the engine's ids are registered and rolled). The service refuses to start with the book on while the engine's health version 2 (id 3509)
+            # event and never an input to the verdict. DEFAULT AND CURRENT VALUE false: the service refuses to start with the book on while the engine's health version 2 (id 3509)
             # and FINAL rows version 2 (id 3510) are not registered, and a roll of this pod before the engine is upgraded must not crash-loop the pod that also runs line health.
             # Activation, in this order: (1) the engine roll (K2) is live and the two ids are registered; (2) a reviewed one-line change of the value below to "true";
             # (3) service-deploy SERVICE=level-absorption, off-hours (Saturday/Sunday before 18:00 ET), never during a session. The environment literal is the engine's
             # ES_MBO_ENVIRONMENT; the contract table is the one committed in the image (book-contracts.txt, equal to the engine's ES_MBO_CONTRACT_TABLE). Every other key keeps
             # its default (band 4 ticks, wait 7,000 ms, tolerance 2,000 ms, provisional labelled values); LEVEL_ABSORPTION_BOOK_GATE is never set (the gate path is not built).
             - name: LEVEL_ABSORPTION_BOOK_ENABLED
-              value: "true"
+              value: "false"
             - name: LEVEL_ABSORPTION_BOOK_ENVIRONMENT
               value: Rithmic Paper Trading
             - name: LEVEL_ABSORPTION_BOOK_CONTRACTS
