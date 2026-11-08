@@ -1,3 +1,12 @@
+# CI-COLLECT-ONLY
+#
+# NOT RUN BY CI TODAY. deploy-validation.yml names its test modules by hand and nothing discovers them, so
+# this module is only IMPORTED (by scripts/ci/validate-tests-are-collectable.sh, which catches an import
+# error) - none of its assertions execute. 112 of the 138 modules under tests/ were in this position when
+# the marker was introduced. The marker is not approval of that: it is the classification that makes the
+# dormancy visible and, because every module must carry exactly one marker, stops a NEW module from
+# becoming an orphan silently. To promote this module, wire it into a step and change the marker to
+# CI-REQUIRED; the guard then enforces the wiring.
 """scripts/kafka/ensure-spot-vol-regime-schemas.sh against the stand-in registry: a fresh registry gets the three canonical
 spot-vol-regime subjects under FULL, a re-run changes nothing, a drifted subject-level config is repaired to FULL, a file that is not
 the pinned canonical bytes is refused before any call, a newer non-canonical version is refused, and a dry run mutates nothing."""

@@ -1,3 +1,9 @@
+# CI-REQUIRED
+#
+# This module's assertions MUST run in CI. scripts/ci/validate-tests-are-collectable.sh - a separate,
+# already-wired step of .github/workflows/deploy-validation.yml - fails the build unless a mandatory step
+# of that workflow invokes this module as a `python3 -m unittest` target, with no continue-on-error, no
+# `if:` and no shell construct that would swallow its failure.
 """ensure-es-trade-tools-topics.sh and ensure-wave-cycle-topics.sh (the first-deploy barriers of the two new TA-books services) against the stateful
 stand-in (tests/fake_kafka_cli.py): absent topics are created at the declared shape and verified, an existing topic is never altered, every difference the
 SERVICE refuses (partitions, policy set, exact vs floor retention, message bound) fails closed and names the topic, and the shapes the barriers carry are

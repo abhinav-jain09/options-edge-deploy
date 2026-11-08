@@ -1,3 +1,9 @@
+# CI-REQUIRED
+#
+# This module's assertions MUST run in CI. scripts/ci/validate-tests-are-collectable.sh - a separate,
+# already-wired step of .github/workflows/deploy-validation.yml - fails the build unless a mandatory step
+# of that workflow invokes this module as a `python3 -m unittest` target, with no continue-on-error, no
+# `if:` and no shell construct that would swallow its failure.
 """schema-mirrors-generate.py (docs/schema-governance R3f): the committed activeMirrors header equals what the mirror jobs declare, and a
 mirror that does not say how it moves records fails. Each negative control mutates one fact in a copy of a minimal job set."""
 import importlib.util, json, os, shutil, subprocess, sys, tempfile, unittest

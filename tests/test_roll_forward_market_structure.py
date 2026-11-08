@@ -1,3 +1,9 @@
+# CI-REQUIRED
+#
+# This module's assertions MUST run in CI. scripts/ci/validate-tests-are-collectable.sh - a separate,
+# already-wired step of .github/workflows/deploy-validation.yml - fails the build unless a mandatory step
+# of that workflow invokes this module as a `python3 -m unittest` target, with no continue-on-error, no
+# `if:` and no shell construct that would swallow its failure.
 """scripts/kafka/roll-forward-market-structure.sh (W0 step 4 and step 6) against a stateful stand-in for the Kafka CLIs and kubectl
 (tests/fake_ms_cluster.py): every gate refuses BEFORE the first delete and names itself; the happy path deletes and recreates exactly the five W0
 topics, one at a time, at the declared shape with new ids and end offset 0, and never names the input, tools or geometry topic; a part-way failure

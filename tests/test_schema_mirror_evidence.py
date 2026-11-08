@@ -1,3 +1,9 @@
+# CI-REQUIRED
+#
+# This module's assertions MUST run in CI. scripts/ci/validate-tests-are-collectable.sh - a separate,
+# already-wired step of .github/workflows/deploy-validation.yml - fails the build unless a mandatory step
+# of that workflow invokes this module as a `python3 -m unittest` target, with no continue-on-error, no
+# `if:` and no shell construct that would swallow its failure.
 import importlib.util, os, unittest
 spec = importlib.util.spec_from_file_location("ev", os.path.join(os.path.dirname(__file__), "../scripts/ci/schema-mirror-evidence.py"))
 ev = importlib.util.module_from_spec(spec); spec.loader.exec_module(ev)

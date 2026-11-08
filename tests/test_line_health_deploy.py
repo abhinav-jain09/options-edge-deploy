@@ -1,3 +1,9 @@
+# CI-REQUIRED
+#
+# This module's assertions MUST run in CI. scripts/ci/validate-tests-are-collectable.sh - a separate,
+# already-wired step of .github/workflows/deploy-validation.yml - fails the build unless a mandatory step
+# of that workflow invokes this module as a `python3 -m unittest` target, with no continue-on-error, no
+# `if:` and no shell construct that would swallow its failure.
 """Deploy wiring of the Line health feature, milestone M0 (requirement rev 25 LH-O-1, LH-O-2, LH-L-*; design 3.3): DEV ONLY.
 
 Covers: the seven futures.line-health.* topics' declared shapes in topics.env (one partition, policy, retention.ms, retention.bytes -1, the 9 MiB snapshot bound, the reset classes), their

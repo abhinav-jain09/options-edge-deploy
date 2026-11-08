@@ -1,3 +1,12 @@
+# CI-COLLECT-ONLY
+#
+# NOT RUN BY CI TODAY. deploy-validation.yml names its test modules by hand and nothing discovers them, so
+# this module is only IMPORTED (by scripts/ci/validate-tests-are-collectable.sh, which catches an import
+# error) - none of its assertions execute. 112 of the 138 modules under tests/ were in this position when
+# the marker was introduced. The marker is not approval of that: it is the classification that makes the
+# dormancy visible and, because every module must carry exactly one marker, stops a NEW module from
+# becoming an orphan silently. To promote this module, wire it into a step and change the marker to
+# CI-REQUIRED; the guard then enforces the wiring.
 """The Jenkins wiring of the indicator Avro cutover (INDICATOR-AVRO-CONVERSION-PLAN.md sections 4-6): the schema
 registration runs before the indicator topic barrier and the rollout, the cutover scales the producer down and resets
 its state before recreating the topics, es4's clean reset re-imports the fixed ids after the registry is healthy and
