@@ -12,6 +12,8 @@ resources:
   - ../../base
 patches:
   - path: web-immutable-assets-patch.yaml
+  # Dev only: optional ConfigMap volume for the scorecard report (mirror of k8s/overlays/dev/web-scorecard-patch.yaml).
+  - path: web-scorecard-patch.yaml
   # Dev env vars for the web container (mirror of k8s/overlays/dev/web-dev-env-patch.yaml).
   - path: web-dev-env-patch.yaml
   # Use a smaller dev surge reservation; verify current capacity before rolling.
