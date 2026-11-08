@@ -121,7 +121,8 @@ for table in $TABLES; do
     2>/dev/null | gzip -6 > "$tmp"
   rc=${PIPESTATUS[0]}
 
-  got=$(zcat "$tmp" 2>/dev/null | wc -l | tr -d ' ')
+  # zcat reads STDIN (BSD/macOS zcat appends ".Z" to a file argument and cannot open "x.csv.gz.partial")
+  got=$(zcat < "$tmp" 2>/dev/null | wc -l | tr -d ' ')
   got=$(( got > 0 ? got - 1 : 0 ))          # drop the CSV header row
   if [ "$rc" -eq 0 ] && [ "$got" -eq "$rows" ]; then
     mv "$tmp" "$out"
