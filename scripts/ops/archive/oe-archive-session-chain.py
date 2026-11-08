@@ -26,13 +26,14 @@ es.mbo.level-flow, es.mbo.level-flow-final, es.mbo.health, es.mbo.closures) and 
 
 A session is BOOK_COMPLETE when every partition of every requested topic passes; otherwise BOOK_INCOMPLETE with the
 reasons, and it is excluded from every fold. A trade date the exchange calendar marks closed holds no session
-(NO_SESSION). The calendar is scripts/jenkins/market_calendar.py when importable (CALENDAR_DIR, this directory, or
-../../jenkins), else weekdays only, and the output says which.
+(NO_SESSION). The calendar is market_calendar.py, found in CALENDAR_DIR, beside this script, or in ../../jenkins.
+Without it the checker REFUSES to run (exit 2): a weekday-only guess would report exchange holidays as sessions.
+--weekday-only is the explicit, printed opt-out for a host that cannot have the calendar.
 
 USAGE
   oe-archive-session-chain.py --root /Volumes/database/optionsedge [--env dev] [--topics "a b"]
         (--session YYYY-MM-DD | --all) [--json] [--strict] [--scan-legacy]
-Exit 0 normally; with --strict, 1 when any requested session is BOOK_INCOMPLETE; 2 on a usage error.
+Exit 0 normally; with --strict, 1 when any requested session is BOOK_INCOMPLETE; 2 on a usage error or a missing calendar.
 """
 import argparse
 import datetime
@@ -78,12 +79,21 @@ def load_calendar():
                 pass
             finally:
                 sys.path.pop(0)
-    return None, "weekday-only"
+    return None, None
+
+
+class CalendarMissing(Exception):
+    pass
 
 
 class Cal:
-    def __init__(self):
+    def __init__(self, weekday_only=False):
         self.cal, self.name = load_calendar()
+        if self.cal is None:
+            if not weekday_only:
+                raise CalendarMissing("market_calendar.py not found (CALENDAR_DIR, beside this script, or ../../jenkins) or not importable; "
+                                      "refusing to guess which days hold a session (use --weekday-only to accept weekdays only)")
+            self.name = "weekday-only (explicit)"
 
     def is_trading_day(self, d):
         if d.weekday() >= 5:
@@ -211,9 +221,12 @@ def check_partition(entries, start_ms, terminal_ms):
     if c0 is None:
         legacy_before = any(c["legacy"] for c in caps)
         return ["NO_CAPTURE_BEFORE_SESSION_START" + ("(only LEGACY_CAPTURE lines exist: written before capture_wall_start was recorded)" if legacy_before else "")]
-    # the terminal file: first (by offset) whose largest bucketEnd reaches the terminal instant
+    # the terminal file: the first (by offset) AT OR AFTER the starting capture whose largest bucketEnd reaches the terminal
+    # instant; a file before the starting capture cannot end this session, whatever bucketEnd it holds
     term = None
     for e in entries:
+        if int(e["offset_to"]) <= c0["first_from"]:
+            continue
         mb = e.get("max_bucket_end")
         if mb is not None and int(mb) >= terminal_ms:
             term = e
@@ -297,9 +310,14 @@ def main(argv=None):
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--strict", action="store_true")
     ap.add_argument("--scan-legacy", action="store_true")
+    ap.add_argument("--weekday-only", action="store_true", help="accept weekdays as the only calendar (printed); default is to refuse without market_calendar.py")
     a = ap.parse_args(argv)
     topics = a.topics.split()
-    cal = Cal()
+    try:
+        cal = Cal(a.weekday_only)
+    except CalendarMissing as e:
+        print("error: %s" % e, file=sys.stderr)
+        return 2
     if a.session:
         try:
             days = [datetime.date.fromisoformat(a.session)]

@@ -304,6 +304,31 @@ class Chain(unittest.TestCase):
         usage = subprocess.run([sys.executable, py, "--root", self.a.root, "--session", "nonsense"], capture_output=True, text=True)
         self.assertEqual(usage.returncode, 2)
 
+    def test_a_future_bucket_end_in_an_older_file_does_not_end_this_session(self):
+        a = self.a
+        def f(t):
+            # the older file (before the starting capture) holds a bucketEnd past the terminal: it must not be taken as the terminal file
+            a.add(t, "2026-11-07", 0, 500, "S0", start=0, begin=0, ws=START - 7200_000, maxbe=TERM + 10_000)
+            a.add(t, "2026-11-08", 500, 1000, "S1", start=500, begin=0, ws=START - 3600_000, maxbe=START - 10_000)
+            a.add(t, "2026-11-09", 1000, 5000, "S2", start=1000, begin=0, ws=START + 3600_000, maxbe=ms(2026, 11, 9, 12))
+        a.all_topics(f)
+        w = report(a)["topics"]["es.mbo.health"]
+        self.assertIn("p0:TERMINAL_NOT_REACHED", w)
+
+    def test_without_the_calendar_the_checker_refuses(self):
+        healthy(self.a)
+        py = os.path.join(HERE, "oe-archive-session-chain.py")
+        # run a copy from an empty directory with CALENDAR_DIR pointing nowhere: no calendar can be found
+        with tempfile.TemporaryDirectory() as d:
+            import shutil; shutil.copy(py, d)
+            env = dict(os.environ, CALENDAR_DIR=d)
+            r = subprocess.run([sys.executable, os.path.join(d, "oe-archive-session-chain.py"), "--root", self.a.root, "--session", "2026-11-09"],
+                               capture_output=True, text=True, env=env)
+            self.assertEqual(r.returncode, 2, r.stdout + r.stderr); self.assertIn("refusing to guess", r.stderr)
+            r2 = subprocess.run([sys.executable, os.path.join(d, "oe-archive-session-chain.py"), "--root", self.a.root, "--session", "2026-11-09", "--weekday-only"],
+                                capture_output=True, text=True, env=env)
+            self.assertEqual(r2.returncode, 0, r2.stderr); self.assertIn("calendar=weekday-only (explicit)", r2.stdout)
+
     def test_scan_legacy_reads_bounds_from_the_file(self):
         a = self.a
         def f(t):
