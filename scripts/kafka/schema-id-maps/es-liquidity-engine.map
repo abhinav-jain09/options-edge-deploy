@@ -2,7 +2,7 @@
 # ids 3501 to 3511, version 1 except 3509 and 3510 (see the fourth column; es-liquidity-wall.map explains it), namespace com.optionsedge.contracts.esmbo, subject = the record full name (RecordNameStrategy), compatibility FULL. One record TYPE per topic:
 # es.mbo.level-flow 3502, es.mbo.liquidity-events 3503, es.mbo.health 3509 (3504 archival), es.mbo.snapshot 3505, es.mbo.level-flow-final 3510 (3506 archival). es.mbo.closures 3501 (the recorded close of each bucket). es.mbo.coverage 3511 (THE COVERAGE MESSAGE: the interval the engine states it observed; a separate subject rather than a field on health, because level-absorption-service pins accepts:[3509] and a field there would force that consumer to roll in the same change). The service writes with
 # Version 2 of health and of the final rows (document A revision 12 sections 4.1 and 4.2, work package K2) adds nullable fields: a registered id never changes content, so each is a new version under a new id (3509, 3510). The
-# version-1 files are the frozen ones under schemas-registry/esmbo/v1; on a registry that already holds version 1 (dev) only the 3509 and 3510 rows import. REGISTER 3509 AND 3510 BEFORE the engine image of contracts 0.89.0 starts
+# version-1 files are the frozen ones under schemas-registry/esmbo/v1; on a registry that already holds version 1 (dev) only the 3509, 3510 and 3511 rows import. REGISTER 3509, 3510 AND 3511 BEFORE the engine image of contracts 0.91.0 starts
 # (the service refuses to start when its ids are not in the registry), and roll the pinned readers (line health in level-absorption-service; the archive decoder) in the same change. The service writes with
 # auto.register.schemas=false (src/main/resources/schema-requirements.json names these ids and hashes). Dev only; nothing is registered on production or es4.
 # File column: relative to the contracts checkout's `schemas-registry/esmbo` directory (SCHEMAS_DIR).
@@ -15,7 +15,13 @@ com.optionsedge.contracts.esmbo.EsMboClosure|3501|EsMboClosure.avsc
 com.optionsedge.contracts.esmbo.EsMboLevelBase|3507|EsMboLevelBase.avsc
 com.optionsedge.contracts.esmbo.EsMboClosureFinal|3508|EsMboClosureFinal.avsc
 # Version-2 rows after all version-1 rows so the preflight pass can see the predecessor of every row.
+# That ordering constrains VERSIONED subjects only; a brand-new subject has no predecessor to see, which
+# is why coverage sits below these and not above them.
 com.optionsedge.contracts.esmbo.EsMboHealth|3509|EsMboHealth.avsc|2
 com.optionsedge.contracts.esmbo.EsMboLevelFlowFinal|3510|EsMboLevelFlowFinal.avsc|2
-# Coverage. A NEW subject, version 1, so it has no archival predecessor and no ordering constraint.
+# THE COVERAGE MESSAGE. A new subject at version 1: no archival predecessor, so no ordering constraint.
+# WHERE THIS MAP IS AND IS NOT USED: it is the declared id ledger for this family, pinned by
+# tests/test_es_liquidity_engine_deploy.py. It is NOT what the service-deploy path registers from —
+# that path runs scripts/ci/schema-sync.sh, which builds its plan from schema-manifest/manifest.json.
+# A row added here without the matching manifest entry registers nothing (Codex deploy r3).
 com.optionsedge.contracts.esmbo.EsMboCoverage|3511|EsMboCoverage.avsc
