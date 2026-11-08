@@ -13,7 +13,15 @@
 #
 # The difference between the two topics is the point and is enforced here, not assumed: `current` is COMPACTED because the newest record per candidate is the whole
 # answer, and `scoring` must NOT be, because every record is a distinct (candidate, session) observation and compaction would discard exactly what the topic
-# accumulates. An existing topic is never recreated, altered or shrunk: any difference fails closed. The FIVE INPUT topics belong to other owners and are not created here.
+# accumulates. An existing topic is never recreated, altered or shrunk: any difference fails closed. The SIX INPUT topics belong to other owners and are not created here.
+#
+# ONE INPUT IS VERIFIED, THOUGH NEVER CREATED: es.mbo.coverage, when the deployment configures it.
+# Kafka Streams will not START without a source topic, so a strike-hold rolled before
+# es-liquidity-engine's barrier has created the coverage topic does not degrade — it CRASH-LOOPS,
+# and the operator sees a pod restarting rather than a deploy that refused and said why. Schema sync
+# registers the subject at 3511 but creates no topic, so nothing else on this path catches it
+# (Codex deploy r4). Verified and not created, because the topic belongs to the engine: this barrier
+# states the precondition, the engine's barrier satisfies it.
 # dev-cleanup.sh does NOT run this barrier: its topic pass recreates the shapes declared in scripts/kafka/topics.env.
 set -euo pipefail
 
@@ -150,6 +158,25 @@ create_if_absent() { # <topic> <cleanup.policy> <retention.ms> [<retention.bytes
 }
 
 rc=0
+# THE COVERAGE INPUT, verified only when the deployment names it. Blank is the documented default
+# and a legitimate configuration — the service then reports ABSORPTION_COVERAGE_UNAVAILABLE and
+# never claims an absence — so a blank value must not turn into a deploy refusal.
+COVERAGE_IN="${KAFKA_STRIKE_HOLD_COVERAGE_TOPIC:-}"
+if [ -n "$COVERAGE_IN" ]; then
+  if ! grep -qxF "$COVERAGE_IN" <<<"$LIST"; then
+    echo "FAIL: strike-hold is configured to read coverage from '$COVERAGE_IN' but that topic does not exist."
+    echo "      Kafka Streams will not start without a source topic, so this pod would CRASH-LOOP rather than"
+    echo "      report ABSORPTION_COVERAGE_UNAVAILABLE. Deploy es-liquidity-engine first — its barrier"
+    echo "      (scripts/kafka/ensure-es-liquidity-engine-topics.sh) creates it — or unset"
+    echo "      KAFKA_STRIKE_HOLD_COVERAGE_TOPIC to run without a coverage source."
+    rc=1
+  else
+    # Read-only: the shape is the engine's to create, and create-if-absent=no cannot make one here.
+    ensure_topic "$COVERAGE_IN" compact "exact:-1" 1048576 no || rc=1
+    check_partitions "$COVERAGE_IN" || rc=1
+  fi
+fi
+
 # `current`: compact,delete. create-if-absent=no on the shared routine, so it can never create one at the default shape.
 create_if_absent "$CURRENT" compact,delete -1 || rc=1
 ensure_topic "$CURRENT" compact,delete "exact:-1" 1048576 no || rc=1

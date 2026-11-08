@@ -128,6 +128,68 @@ else
   bad "the lookalike was accepted or its value was read:"; printf '%s\n' "$out" | grep -E "PartitionCount" | head -2
 fi
 
+# 8) THE COVERAGE INPUT, when the deployment names it.
+#
+# Kafka Streams will not start without a source topic, so a strike-hold rolled before the engine's
+# barrier created es.mbo.coverage CRASH-LOOPS instead of reporting
+# ABSORPTION_COVERAGE_UNAVAILABLE — and schema sync registers the subject without creating the
+# topic, so nothing else on that path catches it (Codex deploy r4).
+cov_mocks() { # cov_mocks <listCoverage: yes|no> <coveragePolicy> <coverageRetentionMs>
+  mkdir -p "$TMP/bin"
+  cat > "$TMP/bin/kafka-topics" <<KT
+#!/usr/bin/env bash
+case "\$*" in
+  *--list*)
+    echo "options.spx.strike-hold.current"; echo "options.spx.strike-hold.scoring"
+    # The trailing true matters: a bare test-and-echo is the LAST command of this branch, so when
+    # the test does not want coverage listed the mock exits 1 and the barrier reports "cannot list
+    # topics" -- a mock failing, read as a barrier passing. Same class as the line break that broke
+    # the engine suite's list mock. (No backticks in this comment: the heredoc is unquoted, so a
+    # backtick here is command substitution, which is how the first version of this fix printed
+    # three syntax errors while still reporting every arm green.)
+    if [ "$1" = yes ]; then echo "es.mbo.coverage"; fi
+    ;;
+  *--describe*) echo "Topic: t  TopicId: a  PartitionCount: 1  ReplicationFactor: 1  Configs: cleanup.policy=x" ;;
+esac
+KT
+  cat > "$TMP/bin/kafka-configs" <<KC
+#!/usr/bin/env bash
+$(declare -f dump)
+case "\$*" in
+  *es.mbo.coverage*) dump "$2" "-1" | sed 's/retention.ms=-1/retention.ms=$3/' ;;
+  *scoring*)         dump "delete" "268435456" ;;
+  *)                 dump "compact,delete" "-1" ;;
+esac
+KC
+  chmod +x "$TMP/bin/kafka-topics" "$TMP/bin/kafka-configs"
+}
+run_cov() { PATH="$TMP/bin:$PATH" ENVIRONMENT=dev KAFKA_BOOTSTRAP_SERVERS=mock:9092 \
+            KAFKA_STRIKE_HOLD_COVERAGE_TOPIC=es.mbo.coverage bash "$BAR" 2>&1; }
+
+cov_mocks no compact -1
+out="$(run_cov)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "CRASH-LOOP"; then
+  ok "a configured but ABSENT coverage topic refuses the deploy and names the engine's barrier"
+else bad "strike-hold would have rolled with its coverage source missing"; fi
+
+cov_mocks yes compact -1
+out="$(run_cov)"; rc=$?
+if [ "$rc" -eq 0 ]; then ok "a present, pure-compact coverage topic is accepted"
+else bad "the correct coverage input was refused:"; printf '%s\n' "$out" | grep -E "^FAIL" | head -2; fi
+
+cov_mocks yes delete -1
+out="$(run_cov)"; rc=$?
+if [ "$rc" -ne 0 ]; then ok "a coverage topic that is NOT compacted is refused"
+else bad "a delete-retention coverage input was accepted"; fi
+
+# and BLANK stays legitimate: no coverage source configured is a documented configuration, in which
+# the service reports ABSORPTION_COVERAGE_UNAVAILABLE and never claims an absence.
+cov_mocks no compact -1
+out="$(PATH="$TMP/bin:$PATH" ENVIRONMENT=dev KAFKA_BOOTSTRAP_SERVERS=mock:9092 \
+        KAFKA_STRIKE_HOLD_COVERAGE_TOPIC= bash "$BAR" 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ]; then ok "a BLANK coverage topic is not a deploy refusal"
+else bad "a blank coverage topic was turned into a refusal"; fi
+
 # 7) DEV ONLY, fail-closed.
 out="$(PATH="$TMP/bin:$PATH" ENVIRONMENT=production KAFKA_BOOTSTRAP_SERVERS=mock:9092 bash "$BAR" 2>&1)"; rc=$?
 if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "DEV ONLY"; then ok "refuses outside dev"
