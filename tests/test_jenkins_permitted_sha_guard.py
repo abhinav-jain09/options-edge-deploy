@@ -1242,6 +1242,75 @@ class ActualJenkinsfileMutationTest(unittest.TestCase):
         self.assertIn("stage 'Deploy (service-scoped)' after the guard has no `when` gate", r.stdout)
 
 
+    # ---- the parity gate's wall-time bound (2026-11-08): a `"${VAR:-default}"` in timeout's duration slot ----
+    # The duration word is not reducible to a literal, so the validator steps over `timeout`, stops on that word
+    # instead of consuming it as the duration, and reads it AS THE COMMAND NAME — refusing the whole repository and,
+    # with it, every image build the deploy gate licenses. The fix names the bound in a plain variable one line
+    # earlier. These two cases are the mutation and its specificity: the broken form must be refused, and the
+    # literal form (the same structure without a variable at all) must still pass.
+
+    def test_indicator_mirror_parity_bound_written_back_as_a_default_expansion_is_refused(self) -> None:
+        r = self._validate_mutated("Jenkinsfile.es-indicator-mirror",
+                                   'timeout "$PARITY_TMO" "$KBIN/kafka-console-consumer"',
+                                   'timeout "${PARITY_CONSUMER_TIMEOUT_S:-120}" "$KBIN/kafka-console-consumer"')
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("the command name is computed at run time", r.stdout)
+        self.assertIn("PARITY_CONSUMER_TIMEOUT_S", r.stdout)
+
+    def test_indicator_mirror_a_consumer_behind_a_bare_variable_is_refused(self) -> None:
+        # Codex, reviewing the fix above: accepting a bare "$PARITY_TMO" in timeout's DURATION slot must not also
+        # accept a bare variable in the COMMAND slot behind it. With arguments following the variable it was
+        # already refused ("a command behind a run-time variable"), which is this case.
+        r = self._validate_mutated("Jenkinsfile.es-indicator-mirror",
+                                   'timeout "$PARITY_TMO" "$KBIN/kafka-console-consumer"',
+                                   'timeout "$PARITY_TMO" "$PARITY_CONSUMER"')
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("a command behind a run-time variable", r.stdout)
+
+    def test_a_wrapper_chain_that_consumes_the_whole_command_is_refused(self) -> None:
+        # ...and with NOTHING after the variable the scan used to fall off the end of its wrapper loop with every
+        # word consumed and skip the command in SILENCE — the one exit from command_names() that refused nothing,
+        # while `$tmo somecommand` was refused. Codex found it while reviewing the duration fix: naming the
+        # duration is pointless if the command behind it can still be computed. Closed in
+        # scripts/jenkins/validate-jenkinsfile-guard.py (command_names); this is the case that holds it shut.
+        text = (ROOT / "Jenkinsfile.es-indicator-mirror").read_text()
+        a = text.index('                timeout "$PARITY_TMO" "$KBIN/kafka-console-consumer"')
+        b = text.index("|| CRC=$?", a) + len("|| CRC=$?")
+        r = self._validate_mutated("Jenkinsfile.es-indicator-mirror", text[a:b],
+                                   '                timeout "$PARITY_TMO" "$PARITY_CONSUMER"')
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("no command name is readable here", r.stdout)
+
+    def test_a_wrapper_chain_is_reported_at_the_chain_not_at_its_last_word(self) -> None:
+        # Codex, round 2: the refusal above must not claim the LAST variable is the command name. Which word
+        # is the command depends on what the variables hold — in `nice -n 5 "$X" "$Y"` the utility is $X and
+        # $Y is its argument, the opposite of `timeout "$TMO" "$CMD"`. The validator cannot tell, which is
+        # precisely why it refuses, so it points at the start of the unreadable chain and blames the chain.
+        # Written across a continuation on purpose: attributing the fault to the last word also reported the
+        # wrong LINE, which is what a reader opens.
+        text = (ROOT / "Jenkinsfile.es-indicator-mirror").read_text()
+        a = text.index('                timeout "$PARITY_TMO" "$KBIN/kafka-console-consumer"')
+        b = text.index("|| CRC=$?", a) + len("|| CRC=$?")
+        r = self._validate_mutated("Jenkinsfile.es-indicator-mirror", text[a:b],
+                                   '                nice -n 5 "$PARITY_NICE_CMD" \\\n                  "$PARITY_CONSUMER"')
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("what is left of this command is only run-time variables", r.stdout)
+        # the reported line is the one holding the FIRST variable, not the continuation holding the last
+        line = int(re.search(r"line (\d+): a source-consuming effect", r.stdout).group(1))
+        mutated = text[:a] + '                nice -n 5 "$PARITY_NICE_CMD" \\\n                  "$PARITY_CONSUMER"' + text[b:]
+        self.assertIn("$PARITY_NICE_CMD", mutated.split("\n")[line - 1],
+                      "the diagnostic points at line %d: %r" % (line, mutated.split("\n")[line - 1]))
+        self.assertNotIn("$PARITY_CONSUMER", mutated.split("\n")[line - 1])
+
+    def test_indicator_mirror_parity_bound_as_a_literal_duration_still_passes(self) -> None:
+        # SPECIFICITY: the refusal above is about the UNREDUCIBLE word, not about editing that line. A plain literal
+        # duration is accepted, so the test cannot pass by refusing every form of the command.
+        r = self._validate_mutated("Jenkinsfile.es-indicator-mirror",
+                                   'timeout "$PARITY_TMO" "$KBIN/kafka-console-consumer"',
+                                   'timeout 120 "$KBIN/kafka-console-consumer"')
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+
 class _StepFailed(Exception):
     """What a Jenkins step raises when it fails, for the translated deploy block below."""
 

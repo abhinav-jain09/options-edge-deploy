@@ -366,6 +366,16 @@ PL
           # the single idle-timeout TimeoutException event appears, and (3) auto.offset.reset=none, so a start offset the
           # broker no longer holds is an OffsetOutOfRange ERROR instead of a silent reset to the live edge.
           # --- parity gate begin (tests/test_indicator_mirror_parity_gate.py executes this block) ---
+          # The consumer's wall-time bound is resolved into a plain variable HERE, once, so the command below can
+          # name `timeout` with a bare "$PARITY_TMO". A `"${VAR:-default}"` written directly in timeout's duration
+          # slot is a word the Jenkinsfile guard validator cannot reduce to a literal: it stops stepping over
+          # timeout's arguments at that word and reads THAT WORD ITSELF as the command name, which rule 9b refuses
+          # because it cannot tell what runs — and the refusal is the whole repository, which makes the deploy gate
+          # refuse every image build with it (scripts/jenkins/validate-jenkinsfile-guard.py). A bare "$PARITY_TMO"
+          # is recognised as timeout's operand, so the scan goes on to the consumer and classifies it by its
+          # literal basename, as it does every other kafka CLI call here. The 120 s default and the
+          # PARITY_CONSUMER_TIMEOUT_S override (tests/test_indicator_mirror_parity_gate.py sets it) are unchanged.
+          PARITY_TMO="${PARITY_CONSUMER_TIMEOUT_S:-120}"
           SEND=$("$KBIN/kafka-get-offsets" --bootstrap-server "$SRC" --topic "$TOPIC" 2>/dev/null | sort)
           [ -n "$SEND" ] || { echo "FAIL: cannot read source offsets for $TOPIC on $SRC"; exit 1; }
           echo "source end offsets at gate start: [$SEND]"
@@ -389,7 +399,7 @@ PL
                 # when the consumer has read past the source end offset SE captured above: every committed record
                 # below SE is then in the file. Killed before reaching SE, the count is inconclusive and fails.
                 CRC=0
-                timeout "${PARITY_CONSUMER_TIMEOUT_S:-120}" "$KBIN/kafka-console-consumer" --bootstrap-server "$SRC" --topic "$TOPIC" --partition "$p" --offset "$SB" \
+                timeout "$PARITY_TMO" "$KBIN/kafka-console-consumer" --bootstrap-server "$SRC" --topic "$TOPIC" --partition "$p" --offset "$SB" \
                   --isolation-level read_committed --consumer-property auto.offset.reset=none \
                   --timeout-ms 30000 --max-messages "$((TE + 1))" \
                   --property print.offset=true --property print.key=false --property print.value=false \
@@ -398,7 +408,7 @@ PL
                 CLAST=$(awk -F'[:\\t]' '$1 == "Offset" && $2 ~ /^[0-9]+$/ {o = $2} END {print o}' "$OUT")
                 if [ "$CRC" = 124 ]; then
                   if [ -z "$CLAST" ] || [ "$CLAST" -lt "$SE" ]; then
-                    echo "FAIL: the committed-record count of partition $p did not reach the source end offset $SE within ${PARITY_CONSUMER_TIMEOUT_S:-120} s (last offset read: '${CLAST:-none}')"; exit 1
+                    echo "FAIL: the committed-record count of partition $p did not reach the source end offset $SE within $PARITY_TMO s (last offset read: '${CLAST:-none}')"; exit 1
                   fi
                   echo "partition $p: consumer stopped at the wall-time bound after reading past the source end ($CLAST >= $SE); the count below $SE is complete"
                 elif [ "$CRC" != 0 ]; then
