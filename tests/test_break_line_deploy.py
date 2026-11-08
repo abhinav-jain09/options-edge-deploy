@@ -334,7 +334,10 @@ class Schemas(unittest.TestCase):
             self.assertEqual((e["subject"], e["id"], e["version"], e["family"], e["environments"], e["retained"]), (f"{NS}.{n}", i, 2 if v2 else 1, "breakline", ["dev"], True))
             self.assertEqual(e["topics"], [{"name": TOPIC_OF[n], "kind": "data"}])
             self.assertEqual(e["source"], {"kind": "FILE", "repo": "contracts", "path": f"schemas-registry/breakline/{n}.avsc"})
-            self.assertEqual((e["producers"], e["consumers"]), ([], []), "no binding here: the deploy change that adds the service (D2) binds the service to these ids")
+            # D2 binds the service: it produces the version 2 ids (3906-3908) and the snapshot (3905); the web tier writes 3901 (no producer binding, as line health's user lines);
+            # the version 1 ids 3902-3904 are archival and bound to nobody; the service reads 3901 (lines) and 3906 (its own state at a cold start)
+            self.assertEqual(e["producers"], [{"service": SVC, "environments": ["dev"]}] if i in (3905, 3906, 3907, 3908) else [], f"{n} {i}: producers")
+            self.assertEqual(e["consumers"], [{"service": SVC, "accepts": [i], "environments": ["dev"]}] if i in (3901, 3906) else [], f"{n} {i}: consumers")
             snap = ROOT / "schema-manifest/schemas" / e["subject"] / ("v2.avsc" if v2 else "v1.avsc")
             out = subprocess.run(["java", "-jar", str(JAR), "hash", str(snap)], capture_output=True, text=True, check=True).stdout.strip().splitlines()[-1]
             self.assertEqual(out, e["schemaHash"], n)
@@ -377,7 +380,7 @@ class Schemas(unittest.TestCase):
                 for x in e.get(role) or []:
                     if x["service"] == SVC:
                         roles.setdefault(role, []).append(e["id"])
-        self.assertEqual({k: sorted(v) for k, v in roles.items()}, {"producers": [3902, 3903, 3904, 3905], "consumers": [3502, 3509, 3801, 3901, 3902]})
+        self.assertEqual({k: sorted(v) for k, v in roles.items()}, {"producers": [3905, 3906, 3907, 3908], "consumers": [3502, 3509, 3701, 3708, 3801, 3901, 3906]})
 
     def test_no_id_of_the_block_3901_3910_is_used_by_any_other_family(self):
         m = json.loads(read("schema-manifest/manifest.json"))
