@@ -114,7 +114,11 @@ KT=mock_kt; BS=mock:9092
 OPTIONS_EDGE_TOPICS="es.mbo.coverage:1"
 mock_kt() { printf '%s\n' "\$DESCRIBE"; }
 # topic_desired sets the declared shape the real function compares against.
-topic_desired() { DPARTS=1; DPOL=compact; DRET=-1; DRB=-1; DDR=""; DMB=1048576; }
+# FAITHFUL TO THE DECLARATION. This set DMB=1048576 while es.mbo.coverage carries NO per-topic
+# max.message.bytes override in topics.env — so the positive arm was validating a stricter synthetic
+# shape than the real cleanup path ever checks, and would have passed a cluster the real run
+# rejects, or rejected one it accepts (Codex deploy r18).
+topic_desired() { DPARTS=1; DPOL=compact; DRET=-1; DRB=-1; DDR=""; DMB=""; }
 $(cat "$TMP/rec.sh")
 reconcile_declared_topics
 RECDRIVE
@@ -135,9 +139,59 @@ if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "NOT verified this run"; then
 else bad "an undescribable cluster returned success:"; printf '%s\n' "$out" | tail -3; fi
 
 # C) And the correct shape still passes, so the failures above are not achieved by failing always.
-out="$(run_reconcile "Topic: es.mbo.coverage  PartitionCount: 1  ReplicationFactor: 1  Configs: cleanup.policy=compact,retention.ms=-1,retention.bytes=-1,max.message.bytes=1048576")"; rc=$?
+out="$(run_reconcile "Topic: es.mbo.coverage  PartitionCount: 1  ReplicationFactor: 1  Configs: cleanup.policy=compact,retention.ms=-1,retention.bytes=-1")"; rc=$?
 if [ "$rc" -eq 0 ]; then ok "the declared shape, present and correct, still passes"
 else bad "the correct shape was reported as drift:"; printf '%s\n' "$out" | tail -4; fi
+
+# C2) ensure_partition_only_topics must report what it prints. It was the remaining sub-function
+#     that printed failures and returned 0 — an unreadable describe, a failed grow, an incomplete
+#     create and an irreconcilably larger topic — and reconcile_declared_topics cannot catch any of
+#     them because it iterates OPTIONS_EDGE_TOPICS while these live in
+#     OPTIONS_EDGE_PARTITION_ONLY_TOPICS (Codex deploy r18).
+awk '/^ensure_partition_only_topics\(\) \{/,/^\}/' "$SCRIPT" > "$TMP/po.sh"
+grep -q 'Partition-only topics:' "$TMP/po.sh" || { echo "FAIL: could not extract ensure_partition_only_topics"; exit 1; }
+
+run_partition_only() { # run_partition_only <describe output> <declared spec> <create count to report>
+  cat > "$TMP/po-drive.sh" <<PODRIVE
+set -uo pipefail
+KT=mock_kt; BS=mock:9092
+OPTIONS_EDGE_PARTITION_ONLY_TOPICS="$2"
+# %b, not %s: the function parses the describe output with -F'\t', so the arms have to emit REAL
+# tabs. With %s the literal two characters went through and every arm failed for that reason rather
+# than its own. And DESCRIBE=FAIL makes the describe COMMAND fail, which is what the
+# "could not describe" branch keys on — an empty output is a successful describe of nothing, a
+# different case that lands in the create path.
+mock_kt() {
+  case "\$*" in
+    *--describe*) [ "\$DESCRIBE" = FAIL ] && return 1; printf '%b\n' "\$DESCRIBE" ;;
+    *--alter*) return 1 ;;
+  esac
+}
+create_topics_parallel() { cat >/dev/null; echo "$3"; }
+$(cat "$TMP/po.sh")
+ensure_partition_only_topics
+PODRIVE
+  DESCRIBE="$1" bash "$TMP/po-drive.sh" 2>&1
+}
+
+out="$(run_partition_only FAIL "some.topic:4" 0)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "NOT ensured this run"; then
+  ok "an undescribable cluster fails the partition-only pass instead of passing it"
+else bad "an undescribable partition-only pass returned success:"; printf '%s\n' "$out" | tail -2; fi
+
+out="$(run_partition_only "Topic: some.topic\tPartitionCount: 2" "some.topic:4" 0)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "could not grow"; then
+  ok "a failed partition grow is reported as a failure, not only warned about"
+else bad "a failed grow returned success:"; printf '%s\n' "$out" | tail -2; fi
+
+out="$(run_partition_only "Topic: some.topic\tPartitionCount: 8" "some.topic:4" 0)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "larger than declared"; then
+  ok "a topic larger than declared is reported as a failure"
+else bad "an over-large topic returned success:"; printf '%s\n' "$out" | tail -2; fi
+
+out="$(run_partition_only "Topic: some.topic\tPartitionCount: 4" "some.topic:4" 0)"; rc=$?
+if [ "$rc" -eq 0 ]; then ok "a partition-only topic already at its declared count passes"
+else bad "a correct partition-only topic was failed:"; printf '%s\n' "$out" | tail -2; fi
 
 # D) ensure_topics must PROPAGATE the shape verdict. Arm A proves reconcile_declared_topics reports
 #    drift; this proves ensure_topics does not then drop it — the mutation that survived arm A.
