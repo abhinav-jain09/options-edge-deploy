@@ -19,7 +19,9 @@ es.mbo.level-flow, es.mbo.level-flow-final, es.mbo.health, es.mbo.closures) and 
      broker_beginning_offset is at or before its starting checkpoint; it records capture_wall_start and
      capture_wall_end (start not after end). A capture without these members (written before 2026-11-08) cannot
      prove any of this: it makes the sessions it touches BOOK_INCOMPLETE (LEGACY_CAPTURE), never complete.
-     A manifest line whose gzip file is gone is a hole too (FILE_MISSING): the manifests alone prove nothing about the data.
+     A manifest line whose gzip file is gone is a hole too (FILE_MISSING), and so is a file whose size or SHA-256 no longer
+     matches its line (FILE_CORRUPT), or a line without a SHA-256 (FILE_UNVERIFIABLE): the manifests alone prove nothing
+     about the data.
   3. THE SESSION'S SPAN. The chain must run from a capture that STARTED (capture_wall_start) at or before the
      session's start instant (18:00 America/New_York of the previous calendar day) through the terminal file: the
      first file whose largest bucketEnd (max_bucket_end) is at or after the next trade date's 09:30
@@ -40,6 +42,7 @@ import argparse
 import datetime
 import glob
 import gzip
+import hashlib
 import json
 import os
 import re
@@ -128,6 +131,14 @@ def scan_bounds(path):
                 lo = v if lo is None or v < lo else lo
                 hi = v if hi is None or v > hi else hi
     return lo, hi
+
+
+def sha256_of(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
 
 
 def load_topic(root, env, topic, scan_legacy):
@@ -244,8 +255,19 @@ def check_partition(entries, start_ms, terminal_ms):
     if span and int(span[0]["offset_from"]) > lo:
         why.append("FILE_HOLE[%d,%d)" % (lo, int(span[0]["offset_from"])))
     for e in span:
-        if not os.path.isfile(os.path.join(e["dir"], e["file"])):
+        path = os.path.join(e["dir"], e["file"])
+        if not os.path.isfile(path):
             why.append("FILE_MISSING:%s" % e["file"])
+            continue
+        want = e.get("sha256")
+        if not want:
+            why.append("FILE_UNVERIFIABLE:%s" % e["file"])
+            continue
+        if int(e.get("bytes") or 0) > 0 and os.path.getsize(path) != int(e["bytes"]):
+            why.append("FILE_CORRUPT:%s(size %d, manifest %s)" % (e["file"], os.path.getsize(path), e["bytes"]))
+            continue
+        if sha256_of(path) != want:
+            why.append("FILE_CORRUPT:%s(sha256)" % e["file"])
     chain = [c for c in caps if c["first_from"] >= c0["first_from"] and c["first_from"] < hi]
     prev = None
     for c in chain:

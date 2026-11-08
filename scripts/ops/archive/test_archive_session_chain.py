@@ -142,12 +142,29 @@ class Archive:
             g.write(("CreateTime:1\tPartition:0\tOffset:%d\tk\t{\"bucketEnd\":%d}\n" % (frm, maxbe or 1)).encode())
         return e
 
+    def seal(self, force=False):
+        """Rewrite every manifest line with the size and SHA-256 of its file, as the archiver writes them."""
+        import hashlib
+        for mf in __import__("glob").glob(os.path.join(self.root, "kafka", self.env, "*", "dt=*", "_manifest.jsonl")):
+            out = []
+            for line in open(mf):
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    out.append(line.rstrip("\n")); continue          # a deliberately broken line stays broken
+                path = os.path.join(os.path.dirname(mf), e["file"])
+                if os.path.isfile(path) and (force or not e.get("sha256")):
+                    e["bytes"] = os.path.getsize(path); e["sha256"] = hashlib.sha256(open(path, "rb").read()).hexdigest()
+                out.append(json.dumps(e))
+            with open(mf, "w") as f: f.write("\n".join(out) + "\n")
+
     def all_topics(self, fn):
         for t in chain.BOOK_TOPICS:
             fn(t)
 
 
 def report(a, strict=False, scan=False):
+    a.seal()
     d = chain.session_report(a.root, a.env, chain.BOOK_TOPICS, MON, chain.Cal(), scan)
     return d
 
@@ -159,6 +176,7 @@ def healthy(a):
         a.add(t, "2026-11-09", 1000, 5000, "S2", start=1000, begin=0, ws=START + 6 * 3600_000, maxbe=ms(2026, 11, 9, 12))
         a.add(t, "2026-11-10", 5000, 9000, "S3", start=5000, begin=0, ws=ms(2026, 11, 10, 14), maxbe=TERM + 5000)
     a.all_topics(f)
+    a.seal()
 
 
 class Chain(unittest.TestCase):
@@ -261,6 +279,30 @@ class Chain(unittest.TestCase):
         self.assertIn("p0:FILE_MISSING:" + victim, r["topics"]["es.mbo.health"])
         self.assertEqual(r["topics"]["es.mbo.level-flow"], [])     # the other topics are still whole
 
+    def test_a_truncated_or_replaced_file_is_corrupt(self):
+        healthy(self.a)
+        self.a.seal()
+        p = os.path.join(self.a.root, "kafka", "dev", "es.mbo.health", "dt=2026-11-09")
+        victim = [f for f in os.listdir(p) if f.endswith(".gz")][0]
+        raw = open(os.path.join(p, victim), "rb").read()
+        with open(os.path.join(p, victim), "wb") as f: f.write(raw[:-4] + b"\x00\x00\x00\x00")   # same size, different bytes
+        r = chain.session_report(self.a.root, "dev", chain.BOOK_TOPICS, MON, chain.Cal(), False)
+        self.assertEqual(r["status"], "BOOK_INCOMPLETE")
+        self.assertTrue(any(x.startswith("p0:FILE_CORRUPT:" + victim) for x in r["topics"]["es.mbo.health"]), r["topics"]["es.mbo.health"])
+        with open(os.path.join(p, victim), "wb") as f: f.write(raw[:10])                          # truncated
+        r = chain.session_report(self.a.root, "dev", chain.BOOK_TOPICS, MON, chain.Cal(), False)
+        self.assertTrue(any("FILE_CORRUPT" in x and "size" in x for x in r["topics"]["es.mbo.health"]), r["topics"]["es.mbo.health"])
+
+    def test_a_line_without_a_sha256_cannot_be_verified(self):
+        healthy(self.a)
+        self.a.seal()
+        for mf in __import__("glob").glob(os.path.join(self.a.root, "kafka", "dev", "es.mbo.health", "dt=*", "_manifest.jsonl")):
+            rows = [json.loads(l) for l in open(mf)]
+            for r_ in rows: r_.pop("sha256", None)
+            with open(mf, "w") as f: f.write("\n".join(json.dumps(r_) for r_ in rows) + "\n")
+        r = chain.session_report(self.a.root, "dev", chain.BOOK_TOPICS, MON, chain.Cal(), False)
+        self.assertTrue(any("FILE_UNVERIFIABLE" in x for x in r["topics"]["es.mbo.health"]))
+
     def test_a_null_starting_checkpoint_is_only_the_first_capture(self):
         a = self.a
         def f(t):
@@ -305,6 +347,7 @@ class Chain(unittest.TestCase):
             if fn.endswith(".gz"):
                 with gzip.open(os.path.join(p, fn), "wb") as g:   # only two records for a 4000-offset range
                     g.write(b"CreateTime:1\tPartition:0\tOffset:1000\tk\t{}\nCreateTime:1\tPartition:0\tOffset:4999\tk\t{}\n")
+        self.a.seal(force=True)
         self.assertEqual(report(self.a)["status"], "BOOK_COMPLETE")
 
     def test_unparseable_manifest_line_is_incomplete(self):
