@@ -602,7 +602,9 @@ ms_to_iso() {   # $1=epoch ms -> ISO-8601 UTC, or "unknown"
   case "${1:-0}" in
     ''|*[!0-9]*|0) echo "unknown"; return ;;
   esac
-  date -u -d "@$(( $1 / 1000 ))" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown"
+  # GNU date takes -d "@secs"; BSD/macOS date takes -r secs (the dev Mac wrote "unknown" for every bound until 2026-11-08).
+  date -u -d "@$(( $1 / 1000 ))" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+    || date -u -r "$(( $1 / 1000 ))" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown"
 }
 
 # Confluent-Avro topics archive as text, so their payload is mangled — but the wire header
@@ -1292,7 +1294,8 @@ for topic in $TOPICS; do
     # rename does not change them, and a checksum that could not be computed is a failed capture,
     # not a manifest line reading "unknown".
     sha=$(sha256sum "$tmp" 2>/dev/null | cut -d' ' -f1)
-    bytes=$(stat -c%s "$tmp" 2>/dev/null || echo 0)
+    # GNU stat -c%s, else BSD/macOS stat -f%z (the dev Mac wrote bytes:0 in every manifest line until 2026-11-08).
+    bytes=$(stat -c%s "$tmp" 2>/dev/null || stat -f%z "$tmp" 2>/dev/null || echo 0)
     case "$sha" in
       [0-9a-f]*) [ "${#sha}" -eq 64 ] || sha="" ;;
       *) sha="" ;;

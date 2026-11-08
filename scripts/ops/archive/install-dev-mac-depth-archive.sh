@@ -185,4 +185,4 @@ if [ "${_n:-0}" -ne 1 ]; then
   say_state
   exit 1
 fi
-echo "loaded: 1 agent with the label $_label, scheduled 02:00, 08:00, 14:00 and 20:00 local (America/New_York on the dev Mac)"
+echo "loaded: 1 agent with the label $_label, scheduled 02:00, 08:00, 14:00 and 20:00 in the host's LOCAL time (every six hours; those are ET hours only on an America/New_York host)"

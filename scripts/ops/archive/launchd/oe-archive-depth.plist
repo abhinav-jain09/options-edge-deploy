@@ -11,10 +11,13 @@
   for DEV ONLY — nothing here reads prod or es4.
 
   THE SCHEDULE IS IN THE HOST'S LOCAL TIME. launchd has no CRON_TZ; StartCalendarInterval fires at the wall
-  clock of the Mac it runs on. The dev Mac runs on America/New_York, which is the same assumption the
-  watchdog beside this file makes for its 07:00 ET, so the four entries below are 02:00, 08:00, 14:00 and
-  20:00 ET. If the host's zone ever changes, these drift with it — convert them, or pin the host to New York.
-  Ordinary daylight-saving switches are harmless: launchd follows the local clock, so 02:00 stays 02:00 ET.
+  clock of the Mac it runs on. The four entries are 02:00, 08:00, 14:00 and 20:00 LOCAL, which is every six hours
+  whatever the zone. They are 02:00, 08:00, 14:00 and 20:00 ET only when the host is on America/New_York. The dev
+  Mac (2026-11-08) is on Europe/Amsterdam, so the runs there are 20:00, 02:00, 08:00 and 14:00 ET (CET = ET + 6
+  hours, 5 hours in the weeks when the US and the EU clocks differ). Nothing in the archive depends on the clock
+  hour of a run: the requirement is one run per six hours against a one-day retention, and the checkpoint, not the
+  schedule, decides what a run reads. Daylight-saving switches are harmless (launchd follows the local clock); a
+  change of the host's zone moves the ET hours, never the six-hour spacing.
 
   Install: run scripts/ops/archive/install-dev-mac-depth-archive.sh. Do NOT copy files by hand — the installer
   owns the list of files the wrapper and the archiver read from beside themselves, refuses to install while the
