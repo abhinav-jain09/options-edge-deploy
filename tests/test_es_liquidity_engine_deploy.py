@@ -202,6 +202,21 @@ def run_barrier(topics, environment="dev"):
     return r.returncode, r.stdout + r.stderr, calls.read_text().splitlines(), json.loads(state.read_text())
 
 
+def barrier_stage_body() -> str:
+    """The body of the ONE Jenkinsfile stage that runs the topic barriers.
+
+    Scoped, because two global searches of the file can each be satisfied somewhere unrelated — the
+    service named in another list and the case arm in another stage — while the stage that matters
+    omits it (Codex deploy r14).
+    """
+    j = read("Jenkinsfile.service-deploy")
+    needle = "ensure-es-liquidity-engine-topics.sh ;;"
+    i = j.index(needle)
+    start = j.rindex("    stage(", 0, i)
+    end = j.find("\n    stage(", i)
+    return j[start:end if end != -1 else len(j)]
+
+
 def right_topics():
     return {LEVEL_FLOW: shaped("delete", ONE_DAY, CAP), FINAL: shaped("delete", ONE_DAY, CAP), BASE: shaped("delete", ONE_DAY, CAP), HEALTH: shaped("delete", ONE_DAY), SNAPSHOT: shaped("compact", "-1", "-1"), EVENTS: shaped("delete", "-1", EVENTS_CAP), CLOSURES: shaped("compact", "-1", "-1"),
             # COVERAGE belongs in the already-correct set, or every drift case built from it hands
@@ -344,15 +359,18 @@ class Barrier(unittest.TestCase):
     def test_it_is_executable_sources_the_shared_routine_and_the_service_deploy_stage_runs_it(self):
         self.assertTrue(os.access(BARRIER, os.X_OK))
         self.assertIn("ensure-topic-contract.lib.sh", BARRIER.read_text())
-        j = read("Jenkinsfile.service-deploy")
-        # The ACTUAL dispatch. It was an equality check until Jenkinsfile.service-deploy hit the
-        # Groovy CPS 64 KB method limit and the `params.SERVICE == 'x' || ...` chains were converted
-        # to a service-list `.contains()`. This assertion kept asserting the equality and has been
-        # failing on main ever since — one of this file's two long-standing failures, caused by the
-        # fix and not by the change under review (Codex deploy r13).
-        self.assertRegex(j, r"\[(?:[^\]]*')es-liquidity-engine'[^\]]*\]\.contains\(params\.SERVICE\)",
-                         "the stage must dispatch on the service list that replaced the equality chain")
-        self.assertIn("es-liquidity-engine) scripts/kafka/ensure-es-liquidity-engine-topics.sh ;;", j)
+        # THE SAME STAGE, not two global searches. The previous version asserted a
+        # `.contains(params.SERVICE)` list anywhere in the file and the case arm anywhere else, so it
+        # would pass with the service named in an UNRELATED list while the topic-barrier stage
+        # omitted it (Codex deploy r14). Both assertions are now made against the body of the one
+        # stage that runs this barrier.
+        stage = barrier_stage_body()
+        self.assertIn("es-liquidity-engine) scripts/kafka/ensure-es-liquidity-engine-topics.sh ;;", stage,
+                      "the barrier stage must dispatch to this service's barrier")
+        self.assertRegex(stage, r"\[[^\]]*'es-liquidity-engine'[^\]]*\]\.contains\(params\.SERVICE\)",
+                         "and its own `when` must gate on a service list containing it — the"
+                         " `.contains()` that replaced the equality chain when the file hit the"
+                         " Groovy CPS 64 KB method limit")
 
     def test_the_barrier_has_a_mocked_negative_control_suite_and_the_gate_runs_it(self):
         # The barrier had NO mocked suite: the only coverage was this file asserting that the
@@ -419,18 +437,25 @@ class Schemas(unittest.TestCase):
         sh = read("scripts/deploy/service-deploy.sh")
         self.assertIn("bash scripts/ci/schema-sync.sh", sh)
 
-        # THE ACTUAL MECHANISM. This asserted a `select(.service == "$SERVICE")` expression inside
-        # service-deploy.sh; the per-service decision has since moved into
-        # scripts/ci/schema-sync-scope.sh, so the assertion was describing a mechanism that
-        # relocated — the second of this file's two long-standing main failures, and a stale
-        # assertion rather than a defect in what it guards (Codex deploy r13).
+        # EXECUTED, not matched. The replacement for the old stale assertion was textual too, so a
+        # service-specific `EXEMPT:` bypass could have been introduced while every asserted string
+        # survived (Codex deploy r14). The scope script is run.
         self.assertIn('bash scripts/ci/schema-sync-scope.sh "$SERVICE" "$ENVIRONMENT"', sh,
                       "the deploy must ask the scope script whether this service is gated")
-        self.assertIn('NOT_GATED_UNCOVERED', sh, "and must say so out loud when it is not")
-        scope = read("scripts/ci/schema-sync-scope.sh")
-        self.assertIn('b.get("service") == service', scope,
-                      "the scope decision is per service, read from the manifest's bindings")
-        # And the ratchet must actually bind THIS service, which is what makes the gate run for it.
+        for service in ("es-liquidity-engine", "strike-hold"):
+            r = subprocess.run(["bash", "scripts/ci/schema-sync-scope.sh", service, "dev"],
+                               cwd=ROOT, capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertEqual(r.stdout.strip(), "GATE",
+                             f"{service} must be GATEd in dev, or its schemas are never registered")
+        # And the ratchet's other arm really is reachable, so GATE above is a decision and not a
+        # constant: a service the manifest names nowhere is reported as uncovered.
+        r = subprocess.run(["bash", "scripts/ci/schema-sync-scope.sh", "no-such-service", "dev"],
+                           cwd=ROOT, capture_output=True, text=True)
+        self.assertEqual(r.stdout.strip(), "NOT_GATED_UNCOVERED", r.stdout + r.stderr)
+        # The GATE branch must be the one that runs schema-sync.sh, and the uncovered branch must
+        # say so out loud rather than passing quietly.
+        self.assertIn("NOT_GATED_UNCOVERED", sh)
         self.assertIn("es-liquidity-engine", named)
 
     def test_the_manifest_validates_with_the_governance_tool(self):

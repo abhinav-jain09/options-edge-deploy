@@ -137,7 +137,7 @@ else
   bad "the lookalike was accepted or its value was read:"; printf '%s\n' "$out" | grep -E "PartitionCount" | head -2
 fi
 
-# 8) THE COVERAGE INPUT, when the deployment names it.
+# 7) THE COVERAGE INPUT.
 #
 # Kafka Streams will not start without a source topic, so a strike-hold rolled before the engine's
 # barrier created es.mbo.coverage CRASH-LOOPS instead of reporting
@@ -229,7 +229,7 @@ else bad "an override redirected the barrier away from the deployed topic"; fi
 # Deployment is asserted in tests/test_coverage_topic_wiring.py, with a YAML parser and a
 # container scope. A shell script should not be reasoning about YAML (Codex deploy r7).
 
-# 7) DEV ONLY, fail-closed.
+# 9) DEV ONLY, fail-closed.
 out="$(PATH="$TMP/bin:$PATH" ENVIRONMENT=production KAFKA_BOOTSTRAP_SERVERS=mock:9092 bash "$BAR" 2>&1)"; rc=$?
 if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "DEV ONLY"; then ok "refuses outside dev"
 else bad "did not refuse outside dev"; fi

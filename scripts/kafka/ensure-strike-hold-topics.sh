@@ -15,7 +15,7 @@
 # answer, and `scoring` must NOT be, because every record is a distinct (candidate, session) observation and compaction would discard exactly what the topic
 # accumulates. An existing topic is never recreated, altered or shrunk: any difference fails closed. The FIVE INPUT topics belong to other owners and are not created here.
 #
-# ONE INPUT IS VERIFIED, THOUGH NEVER CREATED: es.mbo.coverage, when the deployment configures it.
+# ONE INPUT IS VERIFIED, THOUGH NEVER CREATED: es.mbo.coverage, unconditionally and as a literal.
 # Kafka Streams will not START without a source topic, so a strike-hold rolled before
 # es-liquidity-engine's barrier has created the coverage topic does not degrade — it CRASH-LOOPS,
 # and the operator sees a pod restarting rather than a deploy that refused and said why. Schema sync
