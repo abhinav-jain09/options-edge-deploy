@@ -28,7 +28,8 @@ TOPICS = (LINES, STATE, EVENTS, STATUS, SNAPSHOT)
 PURE_COMPACT = (LINES, STATE, STATUS, SNAPSHOT)
 JAR = ROOT / "tools/schema-governance/schema-governance-tool.jar"
 NS = "com.optionsedge.contracts.breakline"
-IDS = {"BreakLineCommand": 3901, "BreakLineState": 3902, "BreakLineEvent": 3903, "BreakLineStatus": 3904, "BreakLineSnapshot": 3905}
+IDS = {"BreakLineCommand": 3901, "BreakLineState": 3906, "BreakLineEvent": 3907, "BreakLineStatus": 3908, "BreakLineSnapshot": 3905}
+ARCHIVAL_V1 = {"BreakLineState": 3902, "BreakLineEvent": 3903, "BreakLineStatus": 3904}
 TOPIC_OF = {"BreakLineCommand": LINES, "BreakLineState": STATE, "BreakLineEvent": EVENTS, "BreakLineStatus": STATUS, "BreakLineSnapshot": SNAPSHOT}
 DAYS30 = "2592000000"
 BIG = "9437184"
@@ -206,31 +207,47 @@ class Barrier(unittest.TestCase):
 class Schemas(unittest.TestCase):
     def test_the_map_names_exactly_the_five_fixed_ids_and_no_other_map_uses_them(self):
         rows = [l.split("|") for l in read("scripts/kafka/schema-id-maps/break-line.map").splitlines() if l and not l.startswith("#")]
-        self.assertEqual(sorted((r[0], int(r[1])) for r in rows), sorted((f"{NS}.{n}", i) for n, i in IDS.items()))
-        self.assertTrue(all(r[2] == f"{r[0].rsplit('.', 1)[1]}.avsc" for r in rows))
+        self.assertEqual(sorted((r[0], int(r[1])) for r in rows), sorted([(f"{NS}.{n}", i) for n, i in IDS.items()] + [(f"{NS}.{n}", i) for n, i in ARCHIVAL_V1.items()]))
+        for r in rows:
+            n = r[0].rsplit(".", 1)[1]
+            self.assertEqual(r[2], (f"v1/{n}.avsc" if int(r[1]) in ARCHIVAL_V1.values() else f"{n}.avsc"), r)
         for other in (ROOT / "scripts/kafka/schema-id-maps").glob("*.map"):
             if other.name == "break-line.map":
                 continue
             text = other.read_text()
-            for i in IDS.values():
+            for i in list(IDS.values()) + list(ARCHIVAL_V1.values()):
                 self.assertNotRegex(text, rf"\|{i}\|", f"{other.name} uses {i}")
 
     def test_the_manifest_governs_the_five_subjects_with_hashes_equal_to_the_snapshots(self):
         m = json.loads(read("schema-manifest/manifest.json"))
         by = {e["subject"]: e for e in m["entries"] if e.get("kind") == "MIRRORED"}
         self.assertEqual(m["familyBlocks"]["breakline"], [[3901, 3910]])
+        by_id = {e["id"]: e for e in m["entries"] if e.get("family") == "breakline"}
         for n, i in IDS.items():
-            e = by[f"{NS}.{n}"]
-            self.assertEqual((e["id"], e["version"], e["family"], e["environments"], e["retained"]), (i, 1, "breakline", ["dev"], True))
+            e = by_id[i]
+            v2 = n in ARCHIVAL_V1
+            self.assertEqual((e["subject"], e["id"], e["version"], e["family"], e["environments"], e["retained"]), (f"{NS}.{n}", i, 2 if v2 else 1, "breakline", ["dev"], True))
             self.assertEqual(e["topics"], [{"name": TOPIC_OF[n], "kind": "data"}])
             self.assertEqual(e["source"], {"kind": "FILE", "repo": "contracts", "path": f"schemas-registry/breakline/{n}.avsc"})
-            self.assertEqual((e["producers"], e["consumers"]), ([], []), "D1 adds no binding: no existing service becomes schema-gated and there is no break-line service yet")
-            snap = ROOT / "schema-manifest/schemas" / e["subject"] / "v1.avsc"
+            self.assertEqual((e["producers"], e["consumers"]), ([], []), "no binding here: the deploy change that adds the service (D2) binds the service to these ids")
+            snap = ROOT / "schema-manifest/schemas" / e["subject"] / ("v2.avsc" if v2 else "v1.avsc")
             out = subprocess.run(["java", "-jar", str(JAR), "hash", str(snap)], capture_output=True, text=True, check=True).stdout.strip().splitlines()[-1]
             self.assertEqual(out, e["schemaHash"], n)
             snaps = json.loads(snap.read_text())
             self.assertEqual((snaps["namespace"], snaps["name"]), (NS, n))
-        self.assertEqual(sorted(e["id"] for e in m["entries"] if e.get("family") == "breakline"), sorted(IDS.values()))
+        for n, i in ARCHIVAL_V1.items():
+            e = by_id[i]
+            self.assertEqual((e["subject"], e["version"], e["producers"], e["consumers"], e["retained"]), (f"{NS}.{n}", 1, [], [], True), f"{n}: archival version 1")
+            self.assertEqual(e["source"]["path"], f"schemas-registry/breakline/v1/{n}.avsc")
+            snap = ROOT / "schema-manifest/schemas" / e["subject"] / "v1.avsc"
+            out = subprocess.run(["java", "-jar", str(JAR), "hash", str(snap)], capture_output=True, text=True, check=True).stdout.strip().splitlines()[-1]
+            self.assertEqual(out, e["schemaHash"], n)
+            # the version 1 snapshot is the frozen text: its hash differs from version 2 of the same subject
+            self.assertNotEqual(e["schemaHash"], by_id[IDS[n]]["schemaHash"], n)
+        self.assertEqual(sorted(by_id), sorted(list(IDS.values()) + list(ARCHIVAL_V1.values())))
+        lh = next(x for x in m["entries"] if x.get("id") == 3708)
+        self.assertEqual(lh["consumers"], [{"service": "break-line", "accepts": [3708], "environments": ["dev"]}], "the service reads the line health state")
+        self.assertEqual(next(x for x in m["entries"] if x.get("id") == 3701)["consumers"], [])
 
     def test_no_id_of_the_block_3901_3910_is_used_by_any_other_family(self):
         m = json.loads(read("schema-manifest/manifest.json"))

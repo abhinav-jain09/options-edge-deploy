@@ -1,10 +1,15 @@
-# Fixed schema ids for break-line-service (Break Score rev 13; NEW, dev only). Contracts options-edge-contracts 0.92.0 (schemas-registry/breakline), ids 3901-3905 of the block 3901-3910 (3906-3910 are reserved and unused),
-# version 1, namespace com.optionsedge.contracts.breakline, subject = the record full name (RecordNameStrategy), compatibility FULL. One record TYPE per topic:
-# futures.break-line.lines 3901, futures.break-line.state 3902, futures.break-line.events 3903, futures.break-line.status 3904, futures.break-line.snapshot 3905. The service and the web tier write with
-# auto.register.schemas=false (the service's src/main/resources/schema-requirements.json names these ids and hashes). Dev only; nothing is registered on production or es4.
-# File column: relative to the contracts checkout's `schemas-registry/breakline` directory (SCHEMAS_DIR).
+# Fixed schema ids for break-line-service (Break Score rev 13 and rev 14 system lines; NEW, dev only). Contracts options-edge-contracts 0.93.0 (schemas-registry/breakline), ids 3901-3908 of the block 3901-3910 (3909-3910 are reserved and unused),
+# namespace com.optionsedge.contracts.breakline, subject = the record full name (RecordNameStrategy), compatibility FULL. One record TYPE per topic:
+# futures.break-line.lines 3901, futures.break-line.state 3906 (3902 archival), .events 3907 (3903 archival), .status 3908 (3904 archival), .snapshot 3905. Version 2 of the state, event and status subjects adds optional fields (system lines,
+# liq-S 19.7): a registered id never changes content, so each is a new version under a new id; the version-1 files are the frozen ones under schemas-registry/breakline/v1; on a registry that already holds version 1 (dev)
+# only the three version-2 rows import. The service and the web tier write with auto.register.schemas=false. Dev only; nothing is registered on production or es4.
+# File column: relative to the contracts checkout's `schemas-registry/breakline` directory (SCHEMAS_DIR); fourth column: the version number, as line-health.map.
 com.optionsedge.contracts.breakline.BreakLineCommand|3901|BreakLineCommand.avsc
-com.optionsedge.contracts.breakline.BreakLineState|3902|BreakLineState.avsc
-com.optionsedge.contracts.breakline.BreakLineEvent|3903|BreakLineEvent.avsc
-com.optionsedge.contracts.breakline.BreakLineStatus|3904|BreakLineStatus.avsc
+com.optionsedge.contracts.breakline.BreakLineState|3902|v1/BreakLineState.avsc|1
+com.optionsedge.contracts.breakline.BreakLineEvent|3903|v1/BreakLineEvent.avsc|1
+com.optionsedge.contracts.breakline.BreakLineStatus|3904|v1/BreakLineStatus.avsc|1
 com.optionsedge.contracts.breakline.BreakLineSnapshot|3905|BreakLineSnapshot.avsc
+# Version-2 rows after all version-1 rows so the preflight pass can see the predecessor of every row.
+com.optionsedge.contracts.breakline.BreakLineState|3906|BreakLineState.avsc|2
+com.optionsedge.contracts.breakline.BreakLineEvent|3907|BreakLineEvent.avsc|2
+com.optionsedge.contracts.breakline.BreakLineStatus|3908|BreakLineStatus.avsc|2

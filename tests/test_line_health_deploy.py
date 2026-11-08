@@ -259,7 +259,8 @@ class SchemaMapAndManifest(unittest.TestCase):
             self.assertEqual(e["source"], {"kind": "FILE", "repo": "contracts", "path": f"schemas-registry/linehealth/{name}.avsc"}, name)
             self.assertEqual(e["topics"], [{"name": TOPIC_OF[name], "kind": "data"}], name)
             producers = [] if name == "LineHealthUserLine" else [{"service": "level-absorption", "environments": ["dev"]}]
-            self.assertEqual((e["producers"], e["consumers"]), (producers, []), f"{name}: level-absorption is the only producer binding on dev (user lines are written by the web tier at M5); the feed gateway is not schema-gated for ANY relay (no schema-requirements.json, no consumer binding for the liquidity-wall or validator relays either), so the line-health relay is rolled in the same change by code (assertFramedAsAnyVersion), not by a manifest binding")
+            consumers = [{"service": "break-line", "accepts": [3708], "environments": ["dev"]}] if name == "LineHealthState" else []   # break-line-service reads the line health state (rev 14 system lines, BS13-SL-006)
+            self.assertEqual((e["producers"], e["consumers"]), (producers, consumers), f"{name}: level-absorption is the only producer binding on dev (user lines are written by the web tier at M5); the feed gateway is not schema-gated for ANY relay (no schema-requirements.json, no consumer binding for the liquidity-wall or validator relays either), so the line-health relay is rolled in the same change by code (assertFramedAsAnyVersion), not by a manifest binding")
             snapshot = ROOT / "schema-manifest/schemas" / e["schemaFile"]
             text = snapshot.read_text()
             self.assertEqual(text, json.dumps(json.loads(text), separators=(",", ":"), ensure_ascii=False), f"{name}: one-line compact JSON, no trailing newline")
