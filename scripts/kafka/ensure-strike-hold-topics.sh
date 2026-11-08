@@ -59,7 +59,14 @@ check_partitions() { # <topic>
   # whose leading value happens to be right while a second, different one is present — a prefix
   # match on the topic name, or two topics in one describe. Ambiguous output is a refusal, not a
   # value to pick from, so the count of lines is checked before the value is read at all.
-  n=$(sed -n 's/.*PartitionCount: *\([0-9][0-9]*\).*/\1/p' <<<"$out")
+  # grep -oE with a TOKEN BOUNDARY, not sed. `sed 's/.*PartitionCount: .../'` has a leading `.*`
+  # that eats anything, so it would read a value out of `NotPartitionCount: 9` just as happily —
+  # the same loose-matching mistake the retention.bytes counter made. grep rather than sed because
+  # BSD sed (these dev Macs) has no `\|` alternation in BRE, so a boundary written that way matches
+  # NOTHING here while working on the Linux agent: a check that passes for the wrong reason on one
+  # platform is worse than no check (the note in scripts/kafka/topic-config-parse.sh says the same).
+  n=$(printf '%s\n' "$out" | grep -oE '(^|[[:space:],])PartitionCount:[[:space:]]*[0-9]+' \
+        | grep -oE '[0-9]+$')
   # `|| true`, and then normalise. A grep that matches nothing exits 1, and under
   # `set -euo pipefail` that killed the script AT THIS ASSIGNMENT — failing closed, but with no
   # diagnostic, which is indistinguishable from a crash. The emptiness must be REPORTED by the

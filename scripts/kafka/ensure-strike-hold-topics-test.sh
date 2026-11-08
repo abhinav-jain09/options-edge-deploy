@@ -87,7 +87,37 @@ if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "retention.bytes=999, expecte
   ok "a wrong retention.bytes is refused"
 else bad "a wrong retention.bytes was accepted"; fi
 
-# 5) DEV ONLY, fail-closed.
+# 5) retention.bytes ABSENT entirely must be refused, not silently accepted.
+mkdir -p "$TMP/bin"
+cat > "$TMP/bin/kafka-configs" <<'KCX'
+#!/usr/bin/env bash
+echo "All configs for topic T are:"
+echo "  cleanup.policy=delete sensitive=false synonyms={}"
+echo "  retention.ms=-1 sensitive=false synonyms={}"
+echo "  max.message.bytes=1048576 sensitive=false synonyms={}"
+echo "  min.insync.replicas=1 sensitive=false synonyms={}"
+echo "  local.retention.bytes=-2 sensitive=false synonyms={}"
+KCX
+chmod +x "$TMP/bin/kafka-configs"
+out="$(run)"; rc=$?
+if [ "$rc" -ne 0 ]; then ok "a MISSING retention.bytes is refused (local.retention.bytes is not it)"
+else bad "a topic with no retention.bytes was accepted"; fi
+
+# 6) a PartitionCount lookalike must not be read as the count.
+mocks "compact,delete" "delete" "268435456" ""
+cat > "$TMP/bin/kafka-topics" <<'KTX'
+#!/usr/bin/env bash
+case "$*" in
+  *--list*) echo "options.spx.strike-hold.current"; echo "options.spx.strike-hold.scoring" ;;
+  *--describe*) echo "Topic: t  NotPartitionCount: 9  ReplicationFactor: 1  Configs: cleanup.policy=x" ;;
+esac
+KTX
+chmod +x "$TMP/bin/kafka-topics"
+out="$(run)"; rc=$?
+if [ "$rc" -ne 0 ]; then ok "a 'NotPartitionCount' lookalike is not read as the partition count"
+else bad "a lookalike token was read as PartitionCount"; fi
+
+# 7) DEV ONLY, fail-closed.
 out="$(PATH="$TMP/bin:$PATH" ENVIRONMENT=production KAFKA_BOOTSTRAP_SERVERS=mock:9092 bash "$BAR" 2>&1)"; rc=$?
 if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "DEV ONLY"; then ok "refuses outside dev"
 else bad "did not refuse outside dev"; fi
