@@ -33,7 +33,9 @@ services:
     image: rithmic-depth-bridge
     deployments: [rithmic-depth-bridge, rithmic-depth-mirror-dev, rithmic-depth-mirror-production]
     sourceRepo: rithmic-depth-bridge
-    buildJob: es4-deploy
+    # Moved out of es4-deploy 2026-11-08: a two-source release cannot carry that job's
+    # permitted-commit guard, and one unguardable branch made the whole es4 job unguardable.
+    buildJob: rithmic-depth-bridge-release
     envs: [es4]
     consumedTopics: []
     producedTopics: [es.rithmic.depth]

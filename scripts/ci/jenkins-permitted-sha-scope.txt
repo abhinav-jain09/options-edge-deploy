@@ -11,9 +11,18 @@
 #                            inside <stage>; that stage's FIRST nested stage must be
 #                            'Permitted commit guard (deploy workspace)' — the guard re-established in
 #                            the workspace the effects actually come from.
-# "out" means the job carries NO guard and therefore CANNOT be triggered by the assistant (rule line
-# 364: "A job without this guard cannot be triggered by the assistant"); it stays Abhinav's manual job
-# or a scheduled one. The reason says which and why.
+# "out" means the job carries NO guard THIS VALIDATOR ACCEPTS OVER ITS EFFECTS, and therefore CANNOT be
+# triggered by the assistant (rule line 364: "A job without this guard cannot be triggered by the
+# assistant"); it stays Abhinav's manual job or a scheduled one. The reason says which and why.
+# The qualification is not a loosening, it is the width of the claim. An `out` file is NOT rule-checked
+# here, so nothing in this file is a statement that an `out` job is guard-conformant; and `--only`
+# (scripts/jenkins/require-guarded-downstream.sh, a parent proving a child before it triggers it)
+# REFUSES every `out` path by this classification alone, whatever the file contains. Most `out` jobs
+# carry no guard at all. Jenkinsfile.rithmic-depth-bridge-release does carry one, over THIS repository's
+# tree, and still cannot bind the foreign checkout its image is built from — which is exactly why it is
+# `out`, and why "no guard" unqualified would have been the false half of a true conclusion. A guard in
+# an `out` file buys only what it covers and is not validated here; where one exists, the job's own test
+# is what keeps it canonical (tests/test_rithmic_es4_service.py for that file).
 
 # ---- in scope: deployment jobs the assistant may trigger, guarded before their first effect ----------
 Jenkinsfile                               | in  |                                 | monolith options-edge-deploy: builds/pushes images, cleans + applies Kafka topics, applies and rolls the whole estate; its production promotion self-trigger forwards PERMITTED_SHA
@@ -49,10 +58,12 @@ Jenkinsfile.zerodte-writer-activate | in |  | checks / activates / deactivates t
 Jenkinsfile.web-service                   | in  | reguard=Deploy path             | web image build (BUILD_IMAGE=true needs WEB_PERMITTED_SHA and is refused unless options-edge-web-deploy's job configuration and Jenkinsfile at WEB_PERMITTED_SHA run the guard) + digest-pinned apply + rollout; guard first, re-established on the deploy host
 Jenkinsfile.zn-gex-service                | in  |                                 | clones the zn-gex app repo, docker builds+pushes it (bound separately by ZN_PERMITTED_SHA) and rolls the workload; dev-only for now (ENVIRONMENT choice has no 'production' yet)
 
-# ---- out of scope: no guard, therefore NOT assistant-triggerable; the reason says whose job it is --------
+# ---- out of scope: no guard this validator accepts over its effects, therefore NOT --------------------
+# ---- assistant-triggerable; the reason says whose job it is and why (see the header) ------------------
 Jenkinsfile.bring-up-all                  | out |                                 | EXPLICITLY DISABLED: its first stage error()s on entry — it triggers five image builds in other repositories plus the monolith, cannot supply their per-repository permitted SHAs, and two of those children are still unguarded; the supported sequence of individually permitted jobs is listed in that stage
 Jenkinsfile.databento-rewind-deploy       | out |                                 | two-source job (rewind clone + rewind image-build in another, unguarded repository): its image-build trigger path now error()s before `build job:`; the deploy path with SKIP_BUILD_TRIGGER=true remains Abhinav's manual job (its main-only ancestry check stays) — unguarded, not assistant-triggerable
 Jenkinsfile.public-gate-evidence          | out |                                 | two-source job (options-edge checkout at SOURCE_REVISION + options-edge-web-deploy push to :prod): its BUILD_IMAGE=true trigger path now error()s before `build job:`; BUILD_IMAGE=false (attest what :prod holds) remains Abhinav's manual job — unguarded, not assistant-triggerable
+Jenkinsfile.rithmic-depth-bridge-release | out |                                 | two-source release of the ES4 Rithmic collector (this repository's manifest + scripts/es4, the collector repository at RITHMIC_PERMITTED_SHA, options-edge-contracts at CONTRACTS_PERMITTED_SHA): the rollout is driven by the COLLECTOR repository's own scripts/deploy-kubernetes.py, which docker builds and pushes the image from that checkout, so the effect that matters consumes a tree this validator cannot read (rule 9b refuses a script inside a cloned repository rather than guessing at it) and no guard here can bind it — unguarded, not assistant-triggerable, Abhinav's manual job. It still runs the canonical guard and verify over THIS repository's tree and pins both foreign revisions to exact 40-hex commits re-checked against HEAD and origin/main; `out` states the one property it cannot have. It was a branch of Jenkinsfile.es4-deploy's 'Deploy to es4' stage until 2026-11-08 and made that whole job unguardable (five of the repository's six refusals); es4-deploy now error()s that path and names this job.
 Jenkinsfile.experiment-build              | out |                                 | experiment tier is frozen/retired (Dev and Experiment Branch Freeze Rule); builds five repos from the experiment branch on .2 — must not be used for new deployments
 Jenkinsfile.experiment-deploy             | out |                                 | experiment tier is frozen/retired (Dev and Experiment Branch Freeze Rule) — must not be used for new deployments
 Jenkinsfile.schema-code-verify            | out |                                 | cron-scheduled (03:50 ET daily); READ-ONLY: clones processing main and runs the code-vs-manifest check - it writes nothing to any registry, cluster or repository, so there is no deployment effect to guard and a required PERMITTED_SHA would fail every scheduled run
