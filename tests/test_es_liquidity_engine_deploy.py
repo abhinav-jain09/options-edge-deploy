@@ -28,7 +28,12 @@ JAR = ROOT / "tools/schema-governance/schema-governance-tool.jar"
 NS = "com.optionsedge.contracts.esmbo"
 # subject -> {version: id}. Health and the final rows have two versions (document A revision 12 sections 4.1 and 4.2, contracts 0.89.0): 3504 and 3506 are the frozen archival version 1.
 VERSIONS = {"EsMboClosure": {1: 3501}, "EsMboLevelFlow": {1: 3502}, "EsMboEvent": {1: 3503}, "EsMboHealth": {1: 3504, 2: 3509}, "EsMboSnapshot": {1: 3505},
-            "EsMboLevelFlowFinal": {1: 3506, 2: 3510}, "EsMboLevelBase": {1: 3507}, "EsMboClosureFinal": {1: 3508}}
+            "EsMboLevelFlowFinal": {1: 3506, 2: 3510}, "EsMboLevelBase": {1: 3507}, "EsMboClosureFinal": {1: 3508},
+            # Coverage. Listing it here is what makes the map test require its registration row and
+            # the manifest test verify its entry — without it both passed over the new subject
+            # entirely, and the engine runs with auto.register.schemas=false, so an unregistered
+            # subject is a runtime failure to publish rather than a governance nit (Codex deploy r2).
+            "EsMboCoverage": {1: 3511}}
 IDS = {n: max(v.values()) for n, v in VERSIONS.items()}   # the id the engine WRITES
 
 
@@ -323,6 +328,18 @@ class Barrier(unittest.TestCase):
         j = read("Jenkinsfile.service-deploy")
         self.assertIn("params.SERVICE == 'es-liquidity-engine'", j)
         self.assertIn("es-liquidity-engine) scripts/kafka/ensure-es-liquidity-engine-topics.sh ;;", j)
+
+    def test_the_barrier_has_a_mocked_negative_control_suite_and_the_gate_runs_it(self):
+        # The barrier had NO mocked suite: the only coverage was this file asserting that the
+        # Jenkinsfile mentions the script and the script mentions the shared routine, both of which
+        # pass however wrong the shapes are. So es.mbo.coverage was asserted textually and no more
+        # (Codex deploy r2). The suite now drives the real barrier against mocked CLIs, and this
+        # requires it to exist and to be wired into the gate — a suite nothing runs is not coverage.
+        suite = ROOT / "scripts/kafka/ensure-es-liquidity-engine-topics-test.sh"
+        self.assertTrue(suite.is_file(), "the barrier's negative-control suite must exist")
+        self.assertTrue(os.access(suite, os.X_OK))
+        self.assertIn("bash scripts/kafka/ensure-es-liquidity-engine-topics-test.sh",
+                      read(".github/workflows/deploy-validation.yml"))
 
 
 class Schemas(unittest.TestCase):

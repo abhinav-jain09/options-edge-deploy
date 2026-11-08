@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ensure-es-liquidity-engine-topics.sh - es-liquidity-engine-service's six MBO output topics must be right BEFORE the MBO engine publishes (the first-deploy barrier, as
+# ensure-es-liquidity-engine-topics.sh - es-liquidity-engine-service's EIGHT MBO output topics must be right BEFORE the MBO engine publishes (the first-deploy barrier, as
 # ensure-es-liquidity-wall-topics.sh). DEV ONLY: the service renders on dev alone (services.yaml envs [dev]); refuses to run unless ENVIRONMENT is exactly "dev".
 #
 #   NO BROKER-WIDE CHANGE. The shapes are the ones scripts/kafka/topics.env declares (one partition each, exact):
