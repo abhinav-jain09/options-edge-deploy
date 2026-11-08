@@ -54,6 +54,48 @@ metadata:
   namespace: options-edge
 spec:
   replicas: 1
+  template:
+    spec:
+      containers:
+        - name: dealer-ledger
+          resources:
+            requests:
+              # DEV ONLY, and NOT a restriction - the opposite. Owner: "let it use the cpu as much it want
+              # dont restrict anything."
+              #
+              # A CPU REQUEST is a RESERVATION used for scheduling; a CPU LIMIT is the cap. These
+              # containers have NO cpu limit in any environment, so nothing caps them and nothing here
+              # does either. The base RESERVES 2 whole CPUs, and this dev node is already at 16/16
+              # reserved on 16 physical cores with Docker Desktop given all of them - so that reservation
+              # could never be satisfied and the pod sat `Pending: Insufficient cpu`, getting ZERO cpu.
+              # Dropping the request removes the reservation, not the entitlement: the pod schedules
+              # whatever the node's reservations total, and with no limit it can then burst across every
+              # core on the box. Memory requests are untouched. Production and es4 keep the base's 2 CPUs.
+              #
+              # MEASURED after this change (2026-11-08, dev node desktop-control-plane, 16 cores):
+              #   node cpu reserved 15900m/16000m (99%), cpu LIMITS only 2600m (16%) - the node reserves
+              #   nearly everything and caps almost nothing; memory reserved 54754Mi (72%).
+              #   all three Running, restarts=0, ready, 0 ERROR lines, consumer groups joined.
+              #   THE CAP, read from the kernel - /sys/fs/cgroup/cpu.max is `max 100000` for each of the
+              #   three: literally no CPU ceiling. That is the proof that nothing restricts them.
+              #   ACTUAL consumption at idle, from /sys/fs/cgroup/cpu.stat over a 20 s window (dev has no
+              #   metrics-server, so `kubectl top` is unavailable):
+              #     dealer-ledger-service                    13 millicores
+              #     dealer-ledger-calibration-scorer          5 millicores
+              #     dealer-ledger-calibration-accumulator     3 millicores
+              #   21 millicores between them - the ledger's 2000m reservation was ~150x its idle draw, and
+              #   with no limit it can still take whole cores when the open arrives.
+              #
+              # ⚠ THE HONEST TRADE-OFF, and note what it is NOT. These Pods stay QoS **Burstable**, not
+              # BestEffort: every container keeps a memory request AND a memory limit, and BestEffort would
+              # require no requests or limits on any resource at all. Live confirmation: all three report
+              # qosClass=Burstable. What dropping the cpu request does change is the cgroup CPU WEIGHT -
+              # measured cpu.weight=1, the floor, where a pod requesting 50m measures 2. So under genuine
+              # whole-node contention these three are served last; with any core idle they are unrestricted.
+              # That is the right trade on a dev box that cannot satisfy a 2-CPU reservation at all: a
+              # Pending pod gets 0%, a minimum-weight pod gets whatever is spare, which here is nearly
+              # everything. Production and es4, on real hardware, keep their reservations.
+              cpu: null
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -62,6 +104,16 @@ metadata:
   namespace: options-edge
 spec:
   replicas: 1
+  template:
+    spec:
+      containers:
+        - name: dealer-ledger-calibration-scorer
+          resources:
+            requests:
+              # Same reasoning as the ledger above: drop the RESERVATION, keep the entitlement. Its 100m
+              # could not be satisfied either on a node at 16/16 reserved, and there is no cpu limit, so
+              # removing the request lets it schedule and still use whatever it needs.
+              cpu: null
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -70,3 +122,13 @@ metadata:
   namespace: options-edge
 spec:
   replicas: 1
+  template:
+    spec:
+      containers:
+        - name: dealer-ledger-calibration-accumulator
+          resources:
+            requests:
+              # Same reasoning as the ledger above: drop the RESERVATION, keep the entitlement. Its 100m
+              # could not be satisfied either on a node at 16/16 reserved, and there is no cpu limit, so
+              # removing the request lets it schedule and still use whatever it needs.
+              cpu: null
