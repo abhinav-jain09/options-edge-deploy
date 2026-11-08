@@ -201,24 +201,24 @@ if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "retention.bytes=268435456, e
   ok "a retention.bytes CAP on the coverage input is refused"
 else bad "a capped coverage input was accepted — the interval can age out"; fi
 
-# and BLANK stays legitimate: no coverage source configured is a documented configuration, in which
-# the service reports ABSORPTION_COVERAGE_UNAVAILABLE and never claims an absence.
+# AND THE OVERRIDE IS GONE: an environment value must NOT be able to make the barrier check a
+# different topic from the one the pod publishes to. The deployed containers hardcode
+# es.mbo.coverage as a literal, so an override would validate a topology nobody deployed — and a
+# stale value on the Jenkins agent would be enough to do it. An earlier arm here asserted the
+# opposite and was proving that bypass green (Codex deploy r8).
 cov_mocks no compact -1
 out="$(PATH="$TMP/bin:$PATH" ENVIRONMENT=dev KAFKA_BOOTSTRAP_SERVERS=mock:9092 \
         KAFKA_STRIKE_HOLD_COVERAGE_TOPIC= bash "$BAR" 2>&1)"; rc=$?
-if [ "$rc" -eq 0 ]; then ok "a BLANK coverage topic is not a deploy refusal"
-else bad "a blank coverage topic was turned into a refusal"; fi
-
-# 9) THE DEPLOY PATH ITSELF: with NO environment variable set — which is how the Jenkins stage runs
-#    it, since that stage sources only load-kafka-settings.sh — the barrier must still require the
-#    coverage topic, because the DEPLOYMENT MANIFEST names it. This is the arm that would have
-#    caught the original gap: every check was being skipped on every real deploy while the suite set
-#    the variable by hand and reported them green (Codex deploy r6).
-cov_mocks no compact -1
-out="$(PATH="$TMP/bin:$PATH" ENVIRONMENT=dev KAFKA_BOOTSTRAP_SERVERS=mock:9092 bash "$BAR" 2>&1)"; rc=$?
 if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "es.mbo.coverage"; then
-  ok "with NO env var set, the manifest's coverage topic is still required (the real deploy path)"
-else bad "the real deploy path skipped the coverage check entirely"; fi
+  ok "an empty override cannot switch the check off"
+else bad "an empty environment value still skipped the coverage check"; fi
+
+cov_mocks yes compact -1
+out="$(PATH="$TMP/bin:$PATH" ENVIRONMENT=dev KAFKA_BOOTSTRAP_SERVERS=mock:9092 \
+        KAFKA_STRIKE_HOLD_COVERAGE_TOPIC=some.other.topic bash "$BAR" 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && ! printf '%s' "$out" | grep -q "some.other.topic"; then
+  ok "a redirected override cannot switch the check to another topic"
+else bad "an override redirected the barrier away from the deployed topic"; fi
 
 # The manifest parse these arms used to exercise is GONE: three versions of it each failed toward
 # silently checking nothing, so the barrier verifies a declared constant and the pairing with the

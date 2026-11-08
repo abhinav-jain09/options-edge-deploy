@@ -179,30 +179,34 @@ rc=0
 # the container. If the Deployment ever stops setting it, that test fails and names this barrier.
 #
 # An explicit environment value is still honoured, so an operator can point a one-off run elsewhere.
-# `-`, not `:-`: an UNSET variable takes the declared default, while a variable explicitly set to
-# the empty string means "no coverage source" and skips the check. With `:-` an explicit empty value
-# silently took the default too, so the override the comment above promises did not exist — found by
-# the suite's blank arm failing.
-COVERAGE_IN="${KAFKA_STRIKE_HOLD_COVERAGE_TOPIC-es.mbo.coverage}"
-if [ -n "$COVERAGE_IN" ]; then
-  if ! grep -qxF "$COVERAGE_IN" <<<"$LIST"; then
-    echo "FAIL: strike-hold is configured to read coverage from '$COVERAGE_IN' but that topic does not exist."
-    echo "      Kafka Streams will not start without a source topic, so this pod would CRASH-LOOP rather than"
-    echo "      report ABSORPTION_COVERAGE_UNAVAILABLE. Deploy es-liquidity-engine first — its barrier"
-    echo "      (scripts/kafka/ensure-es-liquidity-engine-topics.sh) creates it — or unset"
-    echo "      KAFKA_STRIKE_HOLD_COVERAGE_TOPIC to run without a coverage source."
-    rc=1
-  else
-    # Read-only: the shape is the engine's to create, and create-if-absent=no cannot make one here.
-    ensure_topic "$COVERAGE_IN" compact "exact:-1" 1048576 no || rc=1
-    check_partitions "$COVERAGE_IN" || rc=1
-    # retention.bytes TOO. The shared routine checks the policy, retention.ms, the message-size
-    # floor, ISR and the partition count — but NOT bytes, so a coverage topic that was compact with
-    # retention.ms=-1 and a 256 MiB CAP passed the whole check. A cap on this topic ages out the
-    # oldest contract's interval, which is the one thing the interval must not do: a reader would
-    # find no coverage for a contract and read it as "never observed" (Codex deploy r5).
-    check_retention_bytes "$COVERAGE_IN" -1 || rc=1
-  fi
+# NO OVERRIDE. The deployed pod hardcodes es.mbo.coverage — it is a literal value in the
+# Deployment, not a reference — so a barrier that honoured an environment override would validate a
+# different topology from the one being deployed, and a pre-existing value on the Jenkins agent
+# would be enough to do it silently. My blank-override arm was proving that bypass GREEN (Codex
+# deploy r8).
+#
+# So this is the literal constant, checked unconditionally. There is nothing to configure here: a
+# deploy barrier states the precondition of THIS deploy, and the precondition is fixed by the
+# Deployment in this commit. tests/test_strike_hold_coverage_wiring.py is what keeps the two in
+# step.
+COVERAGE_IN=es.mbo.coverage
+if ! grep -qxF "$COVERAGE_IN" <<<"$LIST"; then
+  echo "FAIL: strike-hold is configured to read coverage from '$COVERAGE_IN' but that topic does not exist."
+  echo "      Kafka Streams will not start without a source topic, so this pod would CRASH-LOOP rather than"
+  echo "      report ABSORPTION_COVERAGE_UNAVAILABLE. Deploy es-liquidity-engine first — its barrier"
+  echo "      (scripts/kafka/ensure-es-liquidity-engine-topics.sh) creates it — or unset"
+  echo "      KAFKA_STRIKE_HOLD_COVERAGE_TOPIC to run without a coverage source."
+  rc=1
+else
+  # Read-only: the shape is the engine's to create, and create-if-absent=no cannot make one here.
+  ensure_topic "$COVERAGE_IN" compact "exact:-1" 1048576 no || rc=1
+  check_partitions "$COVERAGE_IN" || rc=1
+  # retention.bytes TOO. The shared routine checks the policy, retention.ms, the message-size
+  # floor, ISR and the partition count — but NOT bytes, so a coverage topic that was compact with
+  # retention.ms=-1 and a 256 MiB CAP passed the whole check. A cap on this topic ages out the
+  # oldest contract's interval, which is the one thing the interval must not do: a reader would
+  # find no coverage for a contract and read it as "never observed" (Codex deploy r5).
+  check_retention_bytes "$COVERAGE_IN" -1 || rc=1
 fi
 
 # `current`: compact,delete. create-if-absent=no on the shared routine, so it can never create one at the default shape.

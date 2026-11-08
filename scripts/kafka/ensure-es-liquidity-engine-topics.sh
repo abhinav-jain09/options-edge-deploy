@@ -44,7 +44,11 @@ HEALTH="${KAFKA_ES_MBO_HEALTH_TOPIC:-es.mbo.health}"
 FINAL="${KAFKA_ES_MBO_FINAL_TOPIC:-es.mbo.level-flow-final}"
 BASE="${KAFKA_ES_MBO_LEVEL_BASE_TOPIC:-es.mbo.level-base}"
 SNAPSHOT="${KAFKA_ES_MBO_SNAPSHOT_TOPIC:-es.mbo.snapshot}"
-COVERAGE="${ES_MBO_COVERAGE_TOPIC:-es.mbo.coverage}"
+# NO OVERRIDE, unlike the sibling topics above. The engine pod hardcodes es.mbo.coverage as a
+# literal in its Deployment, so a barrier honouring an environment override would create and verify
+# one topic while the pod published to another — and nothing downstream would tell (Codex deploy r8).
+# The pre-existing overrides on the other topics are left as they are: they predate this change.
+COVERAGE=es.mbo.coverage
 CLOSURES="${KAFKA_ES_MBO_CLOSURE_TOPIC:-es.mbo.closures}"
 EVENTS="${KAFKA_ES_MBO_EVENT_TOPIC:-es.mbo.liquidity-events}"
 EVENTS_BYTES=134217728

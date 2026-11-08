@@ -31,39 +31,53 @@ TOPIC = "es.mbo.coverage"
 KEY = "KAFKA_STRIKE_HOLD_COVERAGE_TOPIC"
 
 
-def env_of(rel: str, container: str) -> dict:
-    """Every env entry of one container, across every document in the file."""
+DEPLOYMENT = "strike-hold-service"
+CONTAINER = "strike-hold"
+
+
+def env_of(rel: str) -> dict:
+    """The env of the ONE container of the ONE Deployment this service deploys.
+
+    Scoped to kind and metadata.name, and requiring exactly one match of each — not merged across
+    every document that happens to hold a container of that name. Merging was the fault: a later
+    unrelated document could satisfy or overwrite the real service's setting, so the test could pass
+    while the Deployment did not configure the topic at all (Codex deploy r8).
+    """
+    docs = [d for d in yaml.safe_load_all((ROOT / rel).read_text())
+            if d and d.get("kind") == "Deployment" and (d.get("metadata") or {}).get("name") == DEPLOYMENT]
+    if len(docs) != 1:
+        raise AssertionError(f"{rel}: expected exactly one Deployment named {DEPLOYMENT}, found {len(docs)}")
+    containers = [c for c in ((docs[0].get("spec") or {}).get("template", {})
+                              .get("spec", {}).get("containers") or [])
+                  if c.get("name") == CONTAINER]
+    if len(containers) != 1:
+        raise AssertionError(f"{rel}: expected exactly one container named {CONTAINER}, found {len(containers)}")
     out = {}
-    for doc in yaml.safe_load_all((ROOT / rel).read_text()):
-        if not doc:
-            continue
-        spec = (doc.get("spec") or {}).get("template", {}).get("spec", {})
-        for c in spec.get("containers") or []:
-            if c.get("name") != container:
-                continue
-            for e in c.get("env") or []:
-                if "value" in e:
-                    out[e["name"]] = e["value"]
-                else:
-                    out[e["name"]] = e            # valueFrom and friends, kept as-is
+    for e in containers[0].get("env") or []:
+        # A valueFrom entry is kept as the mapping, so the assertion below REJECTS it rather than
+        # resolving a reference this test cannot see the target of.
+        out[e["name"]] = e["value"] if "value" in e else e
     return out
 
 
 class CoverageWiring(unittest.TestCase):
     def test_the_barrier_verifies_the_topic_the_deployment_configures(self):
         # The constant the barrier verifies.
-        # `-` and not `:-` on purpose: an explicit empty value must stay a way to say "no coverage
-        # source", which `:-` silently took the default for.
-        m = re.search(r'COVERAGE_IN="\$\{KAFKA_STRIKE_HOLD_COVERAGE_TOPIC-([^}"]+)\}"',
-                      BARRIER.read_text())
-        self.assertIsNotNone(m, "the barrier must verify a declared default coverage topic")
+        # A LITERAL assignment, with no parameter expansion: the deployed containers hardcode the
+        # topic, so an environment override would let the barrier validate a topology nobody
+        # deployed. The regex refuses a '${...}' form for that reason, not merely as style.
+        text = BARRIER.read_text()
+        m = re.search(r'^COVERAGE_IN=([^\s$]+)$', text, re.M)
+        self.assertIsNotNone(m, "the barrier must verify a LITERAL coverage topic, not an override")
         self.assertEqual(m.group(1), TOPIC)
+        self.assertNotRegex(text, r'COVERAGE_IN="?\$\{',
+                            "an environment override here would validate a different topology")
 
         # And the Deployment the deploy applies must configure exactly that, in the strike-hold
         # container, with a literal value a running pod can use.
         for rel in ("k8s/services/strike-hold/base/strike-hold-deployment.yaml",
                     "k8s/services/strike-hold/overlays/dev/manifest.yaml"):
-            env = env_of(rel, "strike-hold")
+            env = env_of(rel)
             self.assertIn(KEY, env, f"{rel} must set {KEY}, or the barrier's constant is stale")
             self.assertEqual(env[KEY], TOPIC,
                              f"{rel} sets {KEY}={env[KEY]!r}; the barrier verifies {TOPIC!r}")
