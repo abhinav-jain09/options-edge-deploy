@@ -67,7 +67,10 @@ archived=$(
 
 # Declared retention overrides (both the shared and the prod-only declaration).
 overrides=$(
-  grep -hoE '(^|")OPTIONS_EDGE(_PROD_ONLY)?_TOPIC_RETENTION_OVERRIDES="[^"]*"' "$TOPICS_ENV" \
+  # `(^[[:space:]]*|")` and not `(^|")`: a DEV-ONLY block appends inside an `if`, so its
+  # assignments are indented and neither alternative matched them — the retention override of
+  # such a topic was invisible here. Same blindness deploy PR 1534 fixed in the clean readers.
+  grep -hoE '(^[[:space:]]*|")OPTIONS_EDGE(_PROD_ONLY)?_TOPIC_RETENTION_OVERRIDES="[^"]*"' "$TOPICS_ENV" \
     | sed 's/^[^"]*"//; s/"$//' | tr ' ' '\n' | sed '/^$/d'
 )
 

@@ -67,10 +67,12 @@ spec:
               value: options.spx.strike-hold.current
             - name: KAFKA_STRIKE_HOLD_SCORING_TOPIC
               value: options.spx.strike-hold.scoring
-            # Four partitions, matching the topics.env declaration. NOT the ConfigMap's KAFKA_TOPIC_PARTITIONS_DEFAULT (32): after the re-key a symbol is one key, so
-            # 32 would leave 28 empty logs per topic — and Kafka can add partitions but never remove them, so the widening would be irreversible.
+            # ONE partition, matching the topics.env declaration and the shared topic barrier (which asserts exactly one and has no parameter for
+            # another number). NOT the ConfigMap's KAFKA_TOPIC_PARTITIONS_DEFAULT of 32: the service re-keys every input onto one key per symbol and a
+            # session produces on the order of ten rows per topic, so 32 would leave 31 empty logs — and Kafka can add partitions but never remove
+            # them, so the widening would be irreversible.
             - name: KAFKA_STRIKE_HOLD_TOPIC_PARTITIONS
-              value: "4"
+              value: "1"
             - name: KAFKA_STRIKE_HOLD_NUM_THREADS
               value: "1"
             # --- the measurement's own parameters. The discovery window is the first half hour (requirement rev 12) and the minimum sample count is what makes a thin

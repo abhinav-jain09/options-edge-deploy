@@ -11710,7 +11710,7 @@
       "id": 3801,
       "family": "strikehold",
       "schemaFile": "com.optionsedge.contracts.strikehold.StrikeHoldCurrent/v1.avsc",
-      "schemaHash": "db2efbf373481844391c8a526d93f9c4e21f1b63f718d7359f4f593ac8b75258",
+      "schemaHash": "d6be18af6a652bc96c6056cbed1e133110d51c3e142d9c33233e42b0016b350f",
       "environments": [
         "dev"
       ],
@@ -11744,7 +11744,7 @@
       "id": 3802,
       "family": "strikehold",
       "schemaFile": "com.optionsedge.contracts.strikehold.StrikeHoldScoring/v1.avsc",
-      "schemaHash": "2a1c807c25c929ee4487cf3549d1c26415b1ff7130de7cb8d46274bdd46fcb07",
+      "schemaHash": "4962618060fb8adbb145b27e244987ad5d997814e9fdb683510568035fb275dd",
       "environments": [
         "dev"
       ],

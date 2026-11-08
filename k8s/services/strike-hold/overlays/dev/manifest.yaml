@@ -57,7 +57,7 @@ spec:
             - name: KAFKA_STRIKE_HOLD_SCORING_TOPIC
               value: options.spx.strike-hold.scoring
             - name: KAFKA_STRIKE_HOLD_TOPIC_PARTITIONS
-              value: "4"
+              value: "1"
             - name: KAFKA_STRIKE_HOLD_NUM_THREADS
               value: "1"
             - name: STRIKE_HOLD_DISCOVERY_MINUTES

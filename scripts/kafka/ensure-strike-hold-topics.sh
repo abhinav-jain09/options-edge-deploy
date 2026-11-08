@@ -2,9 +2,9 @@
 # ensure-strike-hold-topics.sh - strike-hold-service's two output topics must be right BEFORE the service publishes (the first-deploy barrier, as
 # ensure-liquidity-validator-topics.sh). DEV ONLY: the service renders on dev alone (services.yaml envs [dev]); refuses to run unless ENVIRONMENT is exactly "dev".
 #
-#   NO BROKER-WIDE CHANGE. The shapes are the ones scripts/kafka/topics.env declares (four partitions each, exact):
-#   options.spx.strike-hold.current  4 partitions, compact,delete, retention.ms EXACTLY -1                                  the newest state of one candidate strike
-#   options.spx.strike-hold.scoring  4 partitions, delete,         retention.ms EXACTLY -1, retention.bytes EXACTLY 268435456  ONE evidence row per candidate per session
+#   NO BROKER-WIDE CHANGE. The shapes are the ones scripts/kafka/topics.env declares (one partition each, exact):
+#   options.spx.strike-hold.current  1 partition, compact,delete, retention.ms EXACTLY -1                                  the newest state of one candidate strike
+#   options.spx.strike-hold.scoring  1 partition, delete,         retention.ms EXACTLY -1, retention.bytes EXACTLY 268435456  ONE evidence row per candidate per session
 #
 # WHY THIS BARRIER EXISTS AT ALL, given the service ensures its own topics at start-up. The service can set the cleanup policy; it cannot set the RETENTION the
 # declaration carries. If the pod reached an empty broker first it would create `scoring` at the cluster default retention, and the evidence record would then be
@@ -23,8 +23,13 @@ if [ "${ENVIRONMENT:-}" != "dev" ]; then
 fi
 : "${KAFKA_BOOTSTRAP_SERVERS:?KAFKA_BOOTSTRAP_SERVERS unset - refusing to verify against an unknown cluster}"
 RF="${KAFKA_TOPIC_REPLICATION_FACTOR:-1}"
+# BOTH of these are required by scripts/kafka/ensure-topic-contract.lib.sh, which runs under
+# `set -u`: the library reads MIN_RF and MIN_ISR directly from the caller's environment. Setting
+# only MIN_ISR (the first version here) aborted the barrier with "MIN_RF: unbound variable" before
+# it checked anything — found by running it against a mock broker rather than by reading it.
+MIN_RF="${STRIKE_HOLD_MIN_REPLICATION_FACTOR:-1}"
 MIN_ISR="${STRIKE_HOLD_MIN_INSYNC_REPLICAS:-1}"
-PARTITIONS=4
+PARTITIONS=1
 SCORING_BYTES=268435456
 kt() { kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" "$@"; }
 kc() { kafka-configs --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" "$@"; }
@@ -42,8 +47,9 @@ fi
 CURRENT="${KAFKA_STRIKE_HOLD_OUTPUT_TOPIC:-options.spx.strike-hold.current}"
 SCORING="${KAFKA_STRIKE_HOLD_SCORING_TOPIC:-options.spx.strike-hold.scoring}"
 
-# The declared partition width is EXACT. Kafka can add partitions but never remove them, so a topic already wider than the declaration is a fact to fail on, not to
-# reconcile: widening is irreversible and the service's single re-key key would leave the extra logs empty for ever.
+# The declared partition width is EXACT, and this check is STRICTER than the shared routine's rather than a duplicate of it: ensure_topic takes the FIRST
+# PartitionCount an awk scan finds, so output carrying two would be judged on whichever came first. Kafka can add partitions but never remove them, so a topic
+# already wider than the declaration is a fact to fail on, not to reconcile.
 check_partitions() { # <topic>
   local topic="$1" out n count
   if ! out=$(kt --describe --topic "$topic" 2>&1); then
@@ -54,7 +60,13 @@ check_partitions() { # <topic>
   # match on the topic name, or two topics in one describe. Ambiguous output is a refusal, not a
   # value to pick from, so the count of lines is checked before the value is read at all.
   n=$(sed -n 's/.*PartitionCount: *\([0-9][0-9]*\).*/\1/p' <<<"$out")
-  count=$(printf '%s\n' "$n" | grep -c .)
+  # `|| true`, and then normalise. A grep that matches nothing exits 1, and under
+  # `set -euo pipefail` that killed the script AT THIS ASSIGNMENT — failing closed, but with no
+  # diagnostic, which is indistinguishable from a crash. The emptiness must be REPORTED by the
+  # check below, not swallowed by the shell. scripts/ci/validate-mirrored-topic-contracts.sh
+  # carries the same lesson in its own comment; this script had not applied it.
+  count=$(printf '%s\n' "$n" | grep -c . || true)
+  count="${count:-0}"
   if [ "$count" != "1" ]; then
     echo "FAIL: describe of '$topic' reported $count PartitionCount values, expected exactly 1 — refusing to choose:"
     printf '%s\n' "$out"
@@ -80,7 +92,8 @@ check_retention_bytes() { # <topic> <exact retention.bytes>
   # retention.bytes values would be accepted on the strength of whichever came first. Count the
   # occurrences in the raw dump and refuse anything but exactly one before trusting the value.
   local seen
-  seen=$(printf '%s\n' "$cfg" | grep -o 'retention\.bytes=' | grep -c .)
+  seen=$(printf '%s\n' "$cfg" | grep -o 'retention\.bytes=' | grep -c . || true)
+  seen="${seen:-0}"
   if [ "$seen" != "1" ]; then
     echo "FAIL: config of '$topic' carries $seen retention.bytes values, expected exactly 1 — refusing to choose:"
     printf '%s\n' "$cfg"
