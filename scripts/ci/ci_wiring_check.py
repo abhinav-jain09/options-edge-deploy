@@ -1,15 +1,35 @@
 """Does every test module that must RUN in CI actually get run by a mandatory workflow step?
 
 Invoked by scripts/ci/validate-tests-are-collectable.sh, which is an independently wired step of
-.github/workflows/deploy-validation.yml. Reads the workflow and the classification markers; prints lines
+.github/workflows/deploy-validation.yml. Reads the workflow and the classification markers, prints a line
 beginning FAIL for every problem and a final OK line when there are none.
 
 WHY NOT IN THE MODULES THEMSELVES. A module asserting its own wiring is circular: delete the step that
-runs it and the module never runs, so its assertion never fires. (Codex found that.) The check has to run
-from somewhere independently wired.
+runs it and the module never runs, so its assertion never fires. (Codex r1.) The check has to run from
+somewhere independently wired.
 
-WHAT THIS STILL CANNOT DO, stated rather than implied: it cannot enforce its OWN continued invocation. If
-the collectability step is deleted or disabled, nothing here notices. No script can close that; only a
+WHY A WHITELIST AND NOT A BLACKLIST. The first version accepted any step whose `run:` contained a
+`python -m unittest` invocation naming the module, and then tried to exclude the ways such a line can fail
+to run or fail to matter. That is unwinnable, and Codex walked through it three times: `-k MODULE` makes
+the module a name FILTER rather than a target; `|| true`, `|`, `&`, `;`, `set +e` and `set +o errexit` all
+let the invocation fail without failing the step; a leading `!` inverts its status; and a line inside a
+heredoc body never executes at all. Each round closed the named case and left the shape unconstrained.
+
+So the rule is now a narrow accepted FORM, and anything else - including anything unparseable - simply
+does not qualify:
+
+    the step's `run:`, minus blank and comment-only lines, is EXACTLY ONE line, and that line tokenises
+    as   <python> -m unittest [boolean flags] <tests.module> [more tests.modules]
+
+with the flags drawn from an explicit list of ones that take no value. A heredoc is more than one line.
+`!`, `|`, `&&`, `||`, `;` and `&` are tokens that are neither an allowed flag nor a module. `set +o
+errexit` is a second line. `-k` is not an allowed flag. None of them need their own rule.
+
+Verified against reality before being adopted: all 17 steps that host a CI-REQUIRED module today are
+single-line plain invocations and every one is accepted.
+
+WHAT THIS STILL CANNOT DO, stated rather than implied: it cannot enforce its OWN invocation. If the
+collectability step is deleted or disabled, nothing here notices. No script can close that; only a
 required status check / branch protection on the workflow can. (Codex r2 finding 3.)
 """
 import re
@@ -19,58 +39,54 @@ import sys
 import yaml
 
 REQUIRED = "CI-REQUIRED"
-COLLECT_ONLY = "CI-COLLECT-ONLY"
 
-# unittest options that CONSUME the next argument. Without this, `-k tests.foo` would leave `tests.foo`
-# looking like a positional target, and a step that only filters by name would satisfy the check while
-# running nothing of the sort. (Codex r2 finding 1 - my earlier parser dropped `-k` but kept its value.)
-VALUE_OPTS = {"-k", "-p", "--pattern", "-s", "--start-directory", "-t", "--top-level-directory"}
+PYTHON = re.compile(r"^(?:[A-Za-z0-9_.+-]*/)*python3?(?:\.\d+)?$")
+MODULE = re.compile(r"^tests\.[A-Za-z0-9_]+$")
 
-# Shell constructs that let a matching command fail without failing the step. (Codex r2 finding 2.)
-SUPPRESSORS = (
-    ("||", "an || fallback swallows a non-zero exit"),
-    ("&&", "a && chain can leave the invocation's status unchecked"),
-    ("|", "a pipeline reports the LAST command's status, not the test run's"),
-    ("&", "backgrounding detaches the invocation from the step's exit status"),
-    (";", "a following command's status replaces the test run's"),
-    ("set +e", "set +e disables failure propagation for the rest of the step"),
-    ("|| true", "|| true discards the failure outright"),
-    ("exit 0", "an unconditional exit 0 discards the failure"),
-)
+# unittest flags that take NO value. A flag that consumes the next argument is deliberately absent: with
+# `-k MODULE` the module is a name filter, not a target, so such a step does not run the module and must
+# not qualify. Anything not listed here disqualifies the line rather than being ignored.
+BOOLEAN_FLAGS = {
+    "-v", "--verbose", "-q", "--quiet", "-f", "--failfast", "-c", "--catch",
+    "-b", "--buffer", "--locals", "--durations",
+}
 
 
-def unittest_targets(line):
-    """The positional module targets of a `python -m unittest` invocation in `line`, or None.
+def qualifies(run, module):
+    """Does this step's `run:` block run `module` in a form this checker can vouch for?
 
-    Returns None when the line is not such an invocation at all.
+    Returns (True, "") or (False, reason).
     """
+    lines = [l.strip() for l in (run or "").splitlines()]
+    lines = [l for l in lines if l and not l.startswith("#")]
+    if not lines:
+        return False, "the run block is empty"
+    if len(lines) != 1:
+        return False, ("the run block holds %d command lines, not one; a multi-line block is not "
+                       "vouched for (a heredoc body, a `set +e`, or a conditional could neutralise it)"
+                       % len(lines))
     try:
-        tokens = shlex.split(line, comments=True)
-    except ValueError:
-        return None
-    # find `python`/`python3` ... `-m` `unittest`
-    for i, tok in enumerate(tokens):
-        if not re.fullmatch(r"(?:.*/)?python3?(?:\.\d+)?", tok):
-            continue
-        rest = tokens[i + 1:]
-        if "-m" not in rest:
-            continue
-        j = rest.index("-m")
-        if j + 1 >= len(rest) or rest[j + 1] != "unittest":
-            continue
-        args, skip = [], False
-        for a in rest[j + 2:]:
-            if skip:
-                skip = False
-                continue
-            if a in VALUE_OPTS:
-                skip = True
-                continue
-            if a.startswith("-"):
-                continue
-            args.append(a)
-        return args
-    return None
+        tokens = shlex.split(lines[0], comments=True)
+    except ValueError as exc:
+        return False, "the command does not tokenise as shell (%s)" % exc
+    if len(tokens) < 4 or not PYTHON.match(tokens[0]):
+        return False, "the command does not begin with a python interpreter"
+    if tokens[1] != "-m" or tokens[2] != "unittest":
+        return False, "the command is not `<python> -m unittest ...`"
+    modules, flags = [], []
+    for tok in tokens[3:]:
+        if MODULE.match(tok):
+            modules.append(tok)
+        elif tok in BOOLEAN_FLAGS:
+            flags.append(tok)
+        else:
+            return False, ("the token %r is neither a tests.* module nor a flag that takes no value, so "
+                           "what this command runs cannot be established" % tok)
+    if not modules:
+        return False, "the command names no tests.* module"
+    if module not in modules:
+        return False, "the command runs %s, not %s" % (", ".join(modules), module)
+    return True, ""
 
 
 def main():
@@ -85,41 +101,38 @@ def main():
         return
 
     problems = 0
-    for mod in required:
-        invoking = []
+    for module in required:
+        accepted, rejected = [], []
         for job_name, st in steps:
             run = st.get("run") or ""
-            for line in run.splitlines():
-                targets = unittest_targets(line)
-                if targets and mod in targets:
-                    invoking.append((job_name, st, run, line))
-                    break
-        if not invoking:
-            print("FAIL %s is marked %s but no workflow step invokes it as a `python3 -m unittest` "
-                  "target; none of its assertions would run in CI" % (mod, REQUIRED))
+            if module not in run:
+                continue
+            ok, why = qualifies(run, module)
+            label = "%s / %s" % (job_name, st.get("name", "<unnamed>"))
+            if ok:
+                accepted.append((label, st))
+            else:
+                rejected.append((label, why))
+        if not accepted:
+            print("FAIL %s is marked %s but no step runs it in an accepted form; its assertions would "
+                  "not run in CI" % (module, REQUIRED))
+            for label, why in rejected:
+                print("FAIL   step [%s] mentions it but %s" % (label, why))
             problems += 1
             continue
-        for job_name, st, run, line in invoking:
-            label = "%s / %s" % (job_name, st.get("name", "<unnamed>"))
+        for label, st in accepted:
             if st.get("continue-on-error"):
-                print("FAIL %s is run by step [%s] which is continue-on-error, so its failure is "
-                      "ignored" % (mod, label))
+                print("FAIL %s is run by step [%s] which is continue-on-error, so its failure is ignored"
+                      % (module, label))
                 problems += 1
             if "if" in st:
                 print("FAIL %s is run by step [%s] which is conditional (if: %r), so it may not run"
-                      % (mod, label, st["if"]))
+                      % (module, label, st["if"]))
                 problems += 1
-            # Error suppression is judged on the WHOLE run block: `set +e` on an earlier line, or a
-            # trailing `|| true`, both let the invocation fail without failing the step.
-            stripped = "\n".join(l for l in run.splitlines() if not l.strip().startswith("#"))
-            for token, why in SUPPRESSORS:
-                if token in stripped:
-                    print("FAIL %s is run by step [%s] whose command contains %r: %s"
-                          % (mod, label, token, why))
-                    problems += 1
-                    break
     if problems == 0:
-        print("OK %d module(s) marked %s, each run by a mandatory step" % (len(required), REQUIRED))
+        print("OK %d module(s) marked %s, each run by a mandatory step in an accepted form"
+              % (len(required), REQUIRED))
 
 
-main()
+if __name__ == "__main__":
+    main()
