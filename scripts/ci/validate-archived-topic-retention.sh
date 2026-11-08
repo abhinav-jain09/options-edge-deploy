@@ -67,10 +67,16 @@ archived=$(
 
 # Declared retention overrides (both the shared and the prod-only declaration).
 overrides=$(
-  # `(^[[:space:]]*|")` and not `(^|")`: a DEV-ONLY block appends inside an `if`, so its
-  # assignments are indented and neither alternative matched them — the retention override of
-  # such a topic was invisible here. Same blindness deploy PR 1534 fixed in the clean readers.
-  grep -hoE '(^[[:space:]]*|")OPTIONS_EDGE(_PROD_ONLY)?_TOPIC_RETENTION_OVERRIDES="[^"]*"' "$TOPICS_ENV" \
+  # Anchored at the start of the line, allowing leading whitespace and NOTHING else.
+  #
+  # Two anchors have been wrong here. `^` alone missed the indented assignments a DEV-ONLY block
+  # produces (it appends inside an `if`), so such a topic's retention override was invisible —
+  # the blindness deploy PR 1534 fixed in the clean readers after it deleted es.rithmic.mbo and
+  # three liquidity-validator topics. Adding `|"` to catch them was worse: it matched a QUOTED
+  # COMMENT, so `# "OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES="bad=-1"` parsed as a declaration and
+  # fed a garbage token into the contract. Measured against the real file, all 30 declarations are
+  # at line start under leading whitespace and NONE needs the quote alternative, so it is gone.
+  grep -hoE '^[[:space:]]*OPTIONS_EDGE(_PROD_ONLY)?_TOPIC_RETENTION_OVERRIDES="[^"]*"' "$TOPICS_ENV" \
     | sed 's/^[^"]*"//; s/"$//' | tr ' ' '\n' | sed '/^$/d'
 )
 
