@@ -194,8 +194,11 @@ if ! grep -qxF "$COVERAGE_IN" <<<"$LIST"; then
   echo "FAIL: strike-hold is configured to read coverage from '$COVERAGE_IN' but that topic does not exist."
   echo "      Kafka Streams will not start without a source topic, so this pod would CRASH-LOOP rather than"
   echo "      report ABSORPTION_COVERAGE_UNAVAILABLE. Deploy es-liquidity-engine first — its barrier"
-  echo "      (scripts/kafka/ensure-es-liquidity-engine-topics.sh) creates it — or unset"
-  echo "      KAFKA_STRIKE_HOLD_COVERAGE_TOPIC to run without a coverage source."
+  echo "      (scripts/kafka/ensure-es-liquidity-engine-topics.sh) creates it."
+  echo "      There is no environment escape: this barrier verifies a literal, because the pod"
+  echo "      hardcodes one. To run strike-hold with NO coverage source, remove the env key from its"
+  echo "      Deployment and update this barrier's constant — tests/test_coverage_topic_wiring.py"
+  echo "      pins the two together and will say so if you change one and not the other."
   rc=1
 else
   # Read-only: the shape is the engine's to create, and create-if-absent=no cannot make one here.

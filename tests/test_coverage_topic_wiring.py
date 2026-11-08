@@ -118,6 +118,14 @@ class CoverageWiring(unittest.TestCase):
                       "the refusal must name the barrier that creates the topic")
         self.assertNotIn("coverage_from_manifest", text,
                          "the awk manifest parse is gone; this file replaces it")
+        # AND THE REMEDIATION MUST BE TRUE. It told the operator to unset
+        # KAFKA_STRIKE_HOLD_COVERAGE_TOPIC "to run without a coverage source" — which the barrier
+        # deliberately ignores, so following the instruction changed nothing (Codex deploy r10). A
+        # false instruction in an error message is worse than a false comment: someone acts on it.
+        self.assertNotRegex(text, r"unset\s*\n?.*KAFKA_STRIKE_HOLD_COVERAGE_TOPIC",
+                            "the refusal must not tell the operator to unset a variable it ignores")
+        self.assertIn("no environment escape", text,
+                      "the refusal should say plainly that there is no override")
 
     def test_the_mocked_barrier_suite_exists_and_the_gate_runs_it(self):
         wf = (ROOT / ".github/workflows/deploy-validation.yml").read_text()
