@@ -1,3 +1,9 @@
+# CI-REQUIRED
+#
+# This module's assertions MUST run in CI. scripts/ci/validate-tests-are-collectable.sh - a separate,
+# already-wired step of .github/workflows/deploy-validation.yml - fails the build unless a mandatory step
+# of that workflow invokes this module as a `python3 -m unittest` target, with no continue-on-error, no
+# `if:` and no shell construct that would swallow its failure.
 """The fleet alerts are wired the way FLEET-ALERT-DISCORD-REQUIREMENT says, and routed to the right room.
 
 Routing is the requirement most likely to rot silently and the one whose failure sends a PRODUCTION page to

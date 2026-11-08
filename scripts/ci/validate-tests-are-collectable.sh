@@ -13,6 +13,7 @@
 # A file that cannot be collected is worse than a missing file: it looks like coverage.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
+WORKFLOW=".github/workflows/deploy-validation.yml"
 
 fail=0
 shopt -s nullglob
@@ -76,9 +77,79 @@ PY
   esac
 done
 
+# ---------------------------------------------------------------------------------------------------
+# SECOND INVARIANT: every test module is CLASSIFIED, and one marked CI-REQUIRED is actually RUN.
+#
+# Collectable is not executed. deploy-validation.yml names its test modules by hand and nothing discovers
+# them, so a new module is orphaned by default: this script IMPORTS it, which catches an import error, but
+# not one of its assertions ever runs. Measured when this was written: 138 modules under tests/, 27 named
+# by the workflow, 111 never executed. That is the same "looks like coverage" failure this script already
+# exists to catch, one level up.
+#
+# So every module must carry EXACTLY ONE marker:
+#   # CI-REQUIRED       its assertions must run; the wiring is enforced below
+#   # CI-COLLECT-ONLY   imported only, and said so out loud
+# An UNCLASSIFIED module fails the build. Without that, a marker is opt-in and the next module added is an
+# orphan again unless its author remembers - which is how the 111 happened (Codex r2 finding 4).
+#
+# WHY THE WIRING CHECK IS NOT IN THE MODULES THEMSELVES: a module asserting its own wiring is circular -
+# delete its step and the module never runs, so the assertion never fires (Codex r1). It has to run from
+# somewhere independently wired, and this script is that place.
+#
+# WHAT IT STILL CANNOT DO: enforce its OWN invocation. Delete or disable THIS step and nothing here
+# notices. No script can close that; only a required status check / branch protection on the workflow can
+# (Codex r2 finding 3). Said plainly so nobody reads this gate as more than it is.
+unclassified=()
+required_args=()
+nrequired=0
+ncollect=0
+for f in "${files[@]}"; do
+  mod="tests.$(basename "$f" .py)"
+  has_req=0
+  has_only=0
+  grep -qE '^[[:space:]]*#[[:space:]]*CI-REQUIRED([[:space:]]|$)' "$f" && has_req=1
+  grep -qE '^[[:space:]]*#[[:space:]]*CI-COLLECT-ONLY([[:space:]]|$)' "$f" && has_only=1
+  if [ "$has_req" = 1 ] && [ "$has_only" = 1 ]; then
+    echo "FAIL: $f carries BOTH CI-REQUIRED and CI-COLLECT-ONLY; exactly one is required." >&2
+    fail=1
+  elif [ "$has_req" = 1 ]; then
+    required_args+=("required=$mod")
+    nrequired=$((nrequired + 1))
+  elif [ "$has_only" = 1 ]; then
+    ncollect=$((ncollect + 1))
+  else
+    unclassified+=("$f")
+  fi
+done
+
+if [ "${#unclassified[@]}" -ne 0 ]; then
+  echo "FAIL: these test modules carry neither '# CI-REQUIRED' nor '# CI-COLLECT-ONLY':" >&2
+  printf '        %s\n' "${unclassified[@]}" >&2
+  echo "       Add one. CI-REQUIRED means a mandatory workflow step must run it (enforced); " >&2
+  echo "       CI-COLLECT-ONLY means it is imported only, and admits that in writing." >&2
+  fail=1
+fi
+
+if [ "$nrequired" -eq 0 ]; then
+  echo "FAIL: no module is marked CI-REQUIRED, so the wiring invariant checks nothing." >&2
+  echo "      If the marker was renamed, rename it in this script too." >&2
+  fail=1
+else
+  wiring="$(python3 scripts/ci/ci_wiring_check.py "$WORKFLOW" "${required_args[@]}" 2>&1)" \
+    || wiring="FAIL the wiring check itself could not run: $wiring"
+  printf '%s\n' "$wiring" | sed 's/^/  /'
+  if printf '%s\n' "$wiring" | grep -q '^FAIL'; then
+    fail=1
+  elif ! printf '%s\n' "$wiring" | grep -q '^OK '; then
+    echo "FAIL: the wiring check produced neither OK nor FAIL - treating as failed." >&2
+    fail=1
+  fi
+fi
+
 if [ "$fail" -ne 0 ]; then
   echo "=== validate-tests-are-collectable: FAILED ==="
   exit 1
 fi
 echo "checked ${#files[@]} test module(s); all collectable by unittest"
+echo "classified: $nrequired CI-REQUIRED (wiring enforced), $ncollect CI-COLLECT-ONLY (imported only)"
 echo "=== validate-tests-are-collectable: OK ==="

@@ -1,3 +1,9 @@
+# CI-REQUIRED
+#
+# This module's assertions MUST run in CI. scripts/ci/validate-tests-are-collectable.sh - a separate,
+# already-wired step of .github/workflows/deploy-validation.yml - fails the build unless a mandatory step
+# of that workflow invokes this module as a `python3 -m unittest` target, with no continue-on-error, no
+# `if:` and no shell construct that would swallow its failure.
 """underlying.vix.price is Avro (VixUnderlyingPrice, FIXED id 3061): the map, the manifest entry, the pinned snapshot, the contracts copy and the
 MirrorMaker header must all say the same thing. The topic is byte-mirrored production -> es4, so one id has to name the schema in every registry."""
 from __future__ import annotations
