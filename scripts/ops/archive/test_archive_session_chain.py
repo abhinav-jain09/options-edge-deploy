@@ -72,6 +72,7 @@ class TradeDate(unittest.TestCase):
             # the record without a bucketEnd stayed in the file it fell in and is counted
             self.assertEqual([r[7] for r in rows], ["0", "1", "0", "0"])
             self.assertEqual([r[8] for r in rows], ["-", "-", "-", "-"])   # no closureKind in these records
+            self.assertEqual([r[9] for r in rows], ["-", "-", "-", "-"])   # and no FINAL bound
             total = 0
             for i in range(4):
                 with open(os.path.join(d, "seg%d" % i)) as fh: total += len(fh.read().strip().split("\n"))
@@ -90,7 +91,8 @@ class TradeDate(unittest.TestCase):
             rows = [r.split("\t") for r in out.stdout.strip().split("\n")]
             self.assertEqual(len(rows), 1)                       # the keyless first record took the CreateTime date and the second joined it
             self.assertEqual(rows[0][8], "BOOK,FINAL")
-            self.assertEqual(len(rows[0]), 9)                    # every field present, none swallowed
+            self.assertEqual(len(rows[0]), 10)                   # every field present, none swallowed
+            self.assertEqual(rows[0][9], "-")                    # the FINAL record has no bucketEnd, so no FINAL bound
         # a segment of keyless records only: the bounds are dashes, and read with a tab IFS they stay in their columns
         with tempfile.TemporaryDirectory() as d:
             plain = os.path.join(d, "plain")
@@ -98,7 +100,21 @@ class TradeDate(unittest.TestCase):
             out = subprocess.run(["bash", "-c", script, "x", os.path.join(HERE, "oe-archive-kafka.sh"), plain, os.path.join(d, "seg")],
                                  capture_output=True, text=True)
             r = out.stdout.strip().split("\t")
-            self.assertEqual(r[4:9], ["-", "-", "-", "1", "FINAL"])
+            self.assertEqual(r[4:10], ["-", "-", "-", "1", "FINAL", "-"])
+
+    def test_the_final_bound_is_the_largest_bucket_end_among_final_records_only(self):
+        lines = ["CreateTime:1\tPartition:0\tOffset:0\tk\t{\"closureKind\":\"FINAL\",\"bucketEnd\":%d}" % ms(2026, 11, 9, 10),
+                 "CreateTime:1\tPartition:0\tOffset:1\tk\t{\"closureKind\":\"BOOK\",\"bucketEnd\":%d}" % ms(2026, 11, 9, 15),
+                 "CreateTime:1\tPartition:0\tOffset:2\tk\t{\"closureKind\":\"FINAL\",\"bucketEnd\":%d}" % ms(2026, 11, 9, 11)]
+        with tempfile.TemporaryDirectory() as d:
+            plain = os.path.join(d, "plain")
+            with open(plain, "w") as fh: fh.write("\n".join(lines) + "\n")
+            script = 'source <(sed -n "/^bucket_split() {/,/^}/p" "$1"); bucket_split "$2" "$3"'
+            out = subprocess.run(["bash", "-c", script, "x", os.path.join(HERE, "oe-archive-kafka.sh"), plain, os.path.join(d, "seg")],
+                                 capture_output=True, text=True)
+            r = out.stdout.strip().split("\t")
+            self.assertEqual(r[6], str(ms(2026, 11, 9, 15)))     # max over everything
+            self.assertEqual(r[9], str(ms(2026, 11, 9, 11)))     # max over FINAL only
 
     def test_a_malformed_line_fails_the_cut(self):
         with tempfile.TemporaryDirectory() as d:
@@ -134,6 +150,8 @@ class Archive:
                       "capture_wall_start": wall(ws), "capture_wall_end": wall(we if we else ws + 60000)})
             if maxbe is not None:
                 e.update({"first_bucket_end": maxbe - 1000, "last_bucket_end": maxbe, "max_bucket_end": maxbe})
+                if topic == "es.mbo.closures":
+                    e["max_final_bucket_end"] = maxbe
         if not legacy:
             e.update({"schema_ids": [3509], "schema_digests": {"3509": "a" * 64}, "schema_digest_status": "RESOLVED"})
         if extra:
@@ -215,6 +233,19 @@ class Chain(unittest.TestCase):
         self.assertEqual(r["status"], "BOOK_INCOMPLETE")
         self.assertTrue(any("FILE_HOLE[1000,1200)" in w for w in r["topics"]["es.mbo.health"]), r["topics"]["es.mbo.health"])
         self.assertTrue(any("CAPTURE_CHAIN_BREAK" in w for w in r["topics"]["es.mbo.health"]))
+
+    def test_a_book_closure_past_the_terminal_does_not_end_the_closures_chain(self):
+        a = self.a
+        def f(t):
+            fin = TERM - 60_000 if t == "es.mbo.closures" else TERM + 1       # closures: FINAL stops short of the terminal
+            extra = {"max_final_bucket_end": fin} if t == "es.mbo.closures" else None
+            a.add(t, "2026-11-08", 0, 1000, "S1", start=0, begin=0, ws=START - 3600_000, maxbe=START - 10_000, extra=({"max_final_bucket_end": START - 10_000} if extra else None))
+            a.add(t, "2026-11-09", 1000, 5000, "S2", start=1000, begin=0, ws=START + 3600_000, maxbe=ms(2026, 11, 9, 12), extra=({"max_final_bucket_end": ms(2026, 11, 9, 12)} if extra else None))
+            a.add(t, "2026-11-10", 5000, 9000, "S3", start=5000, begin=0, ws=ms(2026, 11, 10, 14), maxbe=TERM + 5000, extra=extra)   # BOOK records pushed max_bucket_end past TERM
+        a.all_topics(f)
+        r = report(a)
+        self.assertIn("p0:TERMINAL_NOT_REACHED", r["topics"]["es.mbo.closures"])
+        self.assertEqual(r["topics"]["es.mbo.health"], [])
 
     def test_the_capture_before_the_starting_capture_is_in_the_chain(self):
         a = self.a

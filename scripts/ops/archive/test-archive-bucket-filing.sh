@@ -212,9 +212,10 @@ PY
 )"
 want "8  the version-2-only file (Friday) names only 3509" "[3509]" "$(field $TH 2026-11-06 schema_ids)"
 TC=es.mbo.closures
-fresh a9; printf '%s\n' "0 $THU1 1 BOOK" "1 $THU3 1 FINAL" "2 $THU4 1 BOOK" > "$OE_FIXTURE.log"; echo "0 3" > "$OE_FIXTURE.range"
+fresh a9; printf '%s\n' "0 $THU1 1 FINAL" "1 $THU3 1 BOOK" "2 $THU4 1 BOOK" > "$OE_FIXTURE.log"; echo "0 3" > "$OE_FIXTURE.range"
 OUT=$(arun $TC); RC=$?
 want "9  closures: BOOK and FINAL in one file are ids 3501 and 3508" "[3501, 3508]" "$(field $TC 2026-11-05 schema_ids)"
+want "9  the FINAL bound of Thursday's closures file is its FINAL record's bucketEnd, not the later BOOK one" "$THU1 $THU3" "$(field $TC 2026-11-05 max_final_bucket_end) $(field $TC 2026-11-05 max_bucket_end)"
 want "9  and a file with BOOK only is 3501" "[3501]" "$(field $TC 2026-11-06 schema_ids)"
 fresh a10; printf '%s\n' "0 $THU1 1" > "$OE_FIXTURE.log"; echo "0 1" > "$OE_FIXTURE.range"
 OUT=$(arun $TH OE_CANONICAL_REGISTRY_URL=http://127.0.0.1:1); RC=$?

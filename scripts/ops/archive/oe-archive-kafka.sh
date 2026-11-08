@@ -696,7 +696,9 @@ is_capture_fields_topic() { [ "$ENV_NAME" = dev ] && case " ${OE_DEPTH_TOPICS_de
 # bucket_split <plain-capture-file> <segment-prefix>
 # Cuts the proven five-field capture into one file per run of equal trade date of bucketEnd; writes
 # <prefix><index> files and prints one tab-separated descriptor per file:
-#   index date first_offset records first_bucket_end last_bucket_end max_bucket_end bucket_end_missing closure_kinds
+#   index date first_offset records first_bucket_end last_bucket_end max_bucket_end bucket_end_missing closure_kinds max_final_bucket_end
+# (max_final_bucket_end: the largest bucketEnd among the FINAL closures, - when none; the terminal of es.mbo.closures is read from it,
+# because the BOOK closures (3501) are exempt from the chain)
 # (a missing bound prints as -, never as an empty field: read with a tab IFS would swallow it; closure_kinds: the closureKind values in the file, comma-separated, or - when none)
 # (an empty capture prints nothing). Exit 3 on a line that is not five tab-separated fields.
 bucket_split() {
@@ -745,13 +747,15 @@ with open(src, 'rb') as f:
                 day = trade_date(int(ts)) if ts.isdigit() and int(ts) > 0 else trade_date(0)
         if cur is None or day != cur[0]:
             close()
-            cur = [day, parts[2][7:].decode(), 0, None, None, None, 0, set()]
+            cur = [day, parts[2][7:].decode(), 0, None, None, None, 0, set(), None]
             segs.append(cur)
             out = open("%s%d" % (prefix, len(segs) - 1), 'wb')
         out.write(line if line.endswith(b'\n') else line + b'\n')
         cur[2] += 1
         k = CK.search(parts[4])
-        if k: cur[7].add(k.group(1).decode())
+        if k:
+            cur[7].add(k.group(1).decode())
+            if k.group(1) == b'FINAL' and be is not None and (cur[8] is None or be > cur[8]): cur[8] = be
         if be is None:
             cur[6] += 1
         else:
@@ -760,7 +764,7 @@ with open(src, 'rb') as f:
             if cur[5] is None or be > cur[5]: cur[5] = be
 close()
 for i, s in enumerate(segs):
-    print("\t".join([str(i), s[0], s[1], str(s[2])] + [("-" if v is None else str(v)) for v in (s[3], s[4], s[5])] + [str(s[6]), ",".join(sorted(s[7])) or "-"]))
+    print("\t".join([str(i), s[0], s[1], str(s[2])] + [("-" if v is None else str(v)) for v in (s[3], s[4], s[5])] + [str(s[6]), ",".join(sorted(s[7])) or "-", "-" if s[8] is None else str(s[8])]))
 PY
 }
 
@@ -1438,7 +1442,7 @@ for topic in $TOPICS; do
       fi
       # A recapture over a LEGACY checkpoint says so: the range overlaps whatever the older archiver filed.
       [ -z "$legacy_from" ] || manifest_extra="$manifest_extra$(printf ',"recaptured_over_unproven_checkpoint":%s' "$legacy_from")"
-      seg_file=(); seg_day=(); seg_first=(); seg_recs=(); seg_fb=(); seg_lb=(); seg_mb=(); seg_miss=(); seg_kinds=()
+      seg_file=(); seg_day=(); seg_first=(); seg_recs=(); seg_fb=(); seg_lb=(); seg_mb=(); seg_miss=(); seg_kinds=(); seg_fmb=()
       seg_n=0
       if is_bucket_filed_topic "$topic"; then
         split_out=$(bucket_split "$plain_src" "$stemdir/.$topic.p$part.$from.$STAMP.seg" 2>"$stem.split.err")
@@ -1449,10 +1453,10 @@ for topic in $TOPICS; do
           failed=$(( failed + 1 ))
           continue
         fi
-        while IFS=$'\t' read -r s_i s_d s_f s_r s_fb s_lb s_mb s_ms s_kinds; do
+        while IFS=$'\t' read -r s_i s_d s_f s_r s_fb s_lb s_mb s_ms s_kinds s_fmb; do
           [ -n "$s_i" ] || continue
           seg_file[seg_n]="$stemdir/.$topic.p$part.$from.$STAMP.seg$s_i"; seg_day[seg_n]="$s_d"; seg_first[seg_n]="$s_f"
-          seg_recs[seg_n]="$s_r"; seg_fb[seg_n]="${s_fb#-}"; seg_lb[seg_n]="${s_lb#-}"; seg_mb[seg_n]="${s_mb#-}"; seg_miss[seg_n]="$s_ms"; seg_kinds[seg_n]="$s_kinds"
+          seg_recs[seg_n]="$s_r"; seg_fb[seg_n]="${s_fb#-}"; seg_lb[seg_n]="${s_lb#-}"; seg_mb[seg_n]="${s_mb#-}"; seg_miss[seg_n]="$s_ms"; seg_kinds[seg_n]="$s_kinds"; seg_fmb[seg_n]="${s_fmb#-}"
           seg_n=$(( seg_n + 1 ))
         done <<< "$split_out"
       fi
@@ -1492,8 +1496,8 @@ for topic in $TOPICS; do
           PS_EXTRA="$PS_EXTRA,$(depth_schema_fragment "$topic" "$schema_versions" "${seg_kinds[si]:--}")"
         fi
         if [ "$seg_split" = true ]; then
-          PS_EXTRA="$PS_EXTRA$(printf ',"first_bucket_end":%s,"last_bucket_end":%s,"max_bucket_end":%s,"bucket_end_missing":%s,"segment":%s,"segments":%s' \
-            "${seg_fb[si]:-null}" "${seg_lb[si]:-null}" "${seg_mb[si]:-null}" "${seg_miss[si]:-0}" "$si" "$seg_n")"
+          PS_EXTRA="$PS_EXTRA$(printf ',"first_bucket_end":%s,"last_bucket_end":%s,"max_bucket_end":%s,"max_final_bucket_end":%s,"bucket_end_missing":%s,"segment":%s,"segments":%s' \
+            "${seg_fb[si]:-null}" "${seg_lb[si]:-null}" "${seg_mb[si]:-null}" "${seg_fmb[si]:-null}" "${seg_miss[si]:-0}" "$si" "$seg_n")"
         fi
         publish_segment || { seg_ok=false; break; }
         si=$(( si + 1 ))

@@ -58,6 +58,9 @@ NY = ZoneInfo("America/New_York")
 UTC = datetime.timezone.utc
 BOOK_TOPICS = ["es.mbo.level-flow", "es.mbo.level-flow-final", "es.mbo.health", "es.mbo.closures"]
 BE = re.compile(rb'"bucketEnd":(\d+)')
+# the member of a manifest line the terminal is read from: on the engine's closures topic the BOOK closures (3501) are exempt
+# from the chain, so only the FINAL closures (3508) can say the terminal was reached
+BOUND_FIELD = {"es.mbo.closures": "max_final_bucket_end"}
 
 
 def trade_date(ms):
@@ -128,8 +131,8 @@ def parse_wall(s):
 
 
 def scan_bounds(path):
-    """(min, max) bucketEnd over a gzip capture file, or (None, None)."""
-    lo = hi = None
+    """(min, max, max over FINAL closures) of bucketEnd over a gzip capture file; None where there is none."""
+    lo = hi = fin = None
     with gzip.open(path, "rb") as f:
         for line in f:
             m = BE.search(line)
@@ -137,7 +140,9 @@ def scan_bounds(path):
                 v = int(m.group(1))
                 lo = v if lo is None or v < lo else lo
                 hi = v if hi is None or v > hi else hi
-    return lo, hi
+                if b'"closureKind":"FINAL"' in line:
+                    fin = v if fin is None or v > fin else fin
+    return lo, hi, fin
 
 
 def schema_problem(e):
@@ -187,8 +192,9 @@ def load_topic(root, env, topic, scan_legacy):
             if "max_bucket_end" not in e and scan_legacy:
                 p = os.path.join(dtdir, e["file"])
                 if os.path.isfile(p):
-                    lo, hi = scan_bounds(p)
-                    e["first_bucket_end"], e["last_bucket_end"], e["max_bucket_end"] = lo, hi, hi
+                    lo, hi, fin = scan_bounds(p)
+                    e["first_bucket_end"], e["last_bucket_end"], e["max_bucket_end"], e["max_final_bucket_end"] = lo, hi, hi, fin
+                    e["_scanned"] = True
                     e["_scanned"] = True
             files.setdefault(int(e.get("partition", 0)), []).append(e)
     return files, problems
@@ -240,7 +246,7 @@ def captures_of(entries):
     return out
 
 
-def check_partition(entries, start_ms, terminal_ms):
+def check_partition(topic, entries, start_ms, terminal_ms):
     """Reasons a (topic, partition) is not complete for a session [start_ms .. terminal_ms]; [] when complete."""
     why = []
     entries = dedupe(entries)
@@ -258,16 +264,17 @@ def check_partition(entries, start_ms, terminal_ms):
     # the terminal file: the first (by offset) AT OR AFTER the starting capture whose largest bucketEnd reaches the terminal
     # instant; a file before the starting capture cannot end this session, whatever bucketEnd it holds
     term = None
+    bound = BOUND_FIELD.get(topic, "max_bucket_end")
     for e in entries:
         if int(e["offset_to"]) <= c0["first_from"]:
             continue
-        mb = e.get("max_bucket_end")
+        mb = e.get(bound)
         if mb is not None and int(mb) >= terminal_ms:
             term = e
             break
     if term is None:
-        if any("max_bucket_end" not in e for e in entries):
-            why.append("NO_BUCKET_BOUNDS(legacy files lack max_bucket_end; use --scan-legacy to read them)")
+        if any(bound not in e for e in entries):
+            why.append("NO_BUCKET_BOUNDS(files lack %s; legacy files can be read with --scan-legacy)" % bound)
         why.append("TERMINAL_NOT_REACHED")
         return why
     lo, hi = c0["first_from"], int(term["offset_to"])
@@ -338,7 +345,7 @@ def session_report(root, env, topics, day, cal, scan_legacy):
         if not files:
             why.append("NO_FILES")
         for p, es in sorted(files.items()):
-            for w in check_partition(es, start_ms, terminal_ms):
+            for w in check_partition(t, es, start_ms, terminal_ms):
                 why.append("p%d:%s" % (p, w))
         res[t] = why
         ok = ok and not why
