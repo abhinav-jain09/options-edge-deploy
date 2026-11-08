@@ -331,12 +331,41 @@ class Chain(unittest.TestCase):
         self.assertTrue(any("CAPTURE_WALL_CLOCK:S1" in w for w in report(a)["topics"]["es.mbo.health"]))
 
     def test_closed_day_holds_no_session(self):
-        r = chain.session_report(self.a.root, "dev", chain.BOOK_TOPICS, datetime.date(2026, 11, 28), chain.Cal(), False)   # a Saturday
-        self.assertEqual(r["status"], "NO_SESSION")
         cal = chain.Cal()
-        if cal.name == "market_calendar.py":
-            r = chain.session_report(self.a.root, "dev", chain.BOOK_TOPICS, datetime.date(2026, 11, 26), cal, False)   # Thanksgiving
-            self.assertEqual(r["status"], "NO_SESSION")
+        r = chain.session_report(self.a.root, "dev", chain.BOOK_TOPICS, datetime.date(2026, 11, 28), cal, False)   # a Saturday
+        self.assertEqual(r["status"], "NO_SESSION")
+        self.assertIn("Globex", cal.name)
+        for closed in (datetime.date(2026, 4, 3), datetime.date(2026, 12, 25), datetime.date(2027, 1, 1)):        # Good Friday, Christmas, New Year
+            self.assertFalse(cal.is_trading_day(closed), closed)
+            self.assertEqual(chain.session_report(self.a.root, "dev", chain.BOOK_TOPICS, closed, cal, False)["status"], "NO_SESSION")
+        # the US equity holidays on which ES trades a shortened session ARE sessions
+        for open_ in (datetime.date(2026, 11, 26), datetime.date(2027, 1, 18), datetime.date(2027, 2, 15), datetime.date(2026, 7, 3)):
+            self.assertTrue(cal.is_trading_day(open_), open_)
+            self.assertNotEqual(chain.session_report(self.a.root, "dev", chain.BOOK_TOPICS, open_, cal, False)["status"], "NO_SESSION", open_)
+        # the next session after Thursday 2026-04-02 skips Good Friday
+        self.assertEqual(cal.next_trading_day(datetime.date(2026, 4, 2)), datetime.date(2026, 4, 6))
+
+    def test_every_file_of_a_capture_declares_a_consistent_broker_beginning(self):
+        a = self.a
+        def f(t):
+            a.add(t, "2026-11-08", 0, 1000, "S1", start=0, begin=0, ws=START - 3600_000, maxbe=START - 10_000)
+            a.add(t, "2026-11-09", 1000, 3000, "S2", start=1000, begin=0, ws=START + 3600_000, maxbe=ms(2026, 11, 9, 12))
+            a.add(t, "2026-11-10", 3000, 5000, "S2", start=1000, begin=3000, ws=START + 3600_000, maxbe=ms(2026, 11, 9, 20))   # same capture, later segment lies
+            a.add(t, "2026-11-10", 5000, 9000, "S3", start=5000, begin=0, ws=ms(2026, 11, 10, 14), maxbe=TERM + 1)
+        a.all_topics(f)
+        w = report(a)["topics"]["es.mbo.health"]
+        self.assertTrue(any(x.startswith("p0:CAPTURE_BROKER_BEGINNING_INCONSISTENT:S2") for x in w), w)
+        self.assertTrue(any(x.startswith("p0:BROKER_BEGINNING_AFTER_START_CHECKPOINT:S2") for x in w), w)
+
+    def test_a_file_decoded_under_an_unresolved_schema_digest_is_incomplete(self):
+        healthy(self.a)
+        mf = os.path.join(self.a.root, "kafka", "dev", "es.mbo.health", "dt=2026-11-09", "_manifest.jsonl")
+        rows = [json.loads(l) for l in open(mf)]
+        for r_ in rows: r_["schema_digest_status"] = "UNRESOLVED:3509"
+        with open(mf, "w") as f: f.write("\n".join(json.dumps(r_) for r_ in rows) + "\n")
+        self.a.seal(force=True)
+        w = report(self.a)["topics"]["es.mbo.health"]
+        self.assertTrue(any(x.startswith("p0:SCHEMA_DIGEST_UNRESOLVED:") for x in w), w)
 
     def test_closures_holes_between_records_do_not_matter(self):
         """The BOOK closures (3501) leave holes between record offsets; the chain is over ranges, so a closures

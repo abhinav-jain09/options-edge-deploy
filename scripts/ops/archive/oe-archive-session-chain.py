@@ -22,6 +22,9 @@ es.mbo.level-flow, es.mbo.level-flow-final, es.mbo.health, es.mbo.closures) and 
      A manifest line whose gzip file is gone is a hole too (FILE_MISSING), and so is a file whose size or SHA-256 no longer
      matches its line (FILE_CORRUPT), or a line without a SHA-256 (FILE_UNVERIFIABLE): the manifests alone prove nothing
      about the data.
+     A file whose schema_digest_status is not RESOLVED (the registry could not answer at capture time, or the version or
+     kind is not in the archiver's table) is SCHEMA_DIGEST_UNRESOLVED: the data was kept, but the session cannot claim
+     that every record was decoded under a known released schema.
   3. THE SESSION'S SPAN. The chain must run from a capture that STARTED (capture_wall_start) at or before the
      session's start instant (18:00 America/New_York of the previous calendar day) through the terminal file: the
      first file whose largest bucketEnd (max_bucket_end) is at or after the next trade date's 09:30
@@ -29,7 +32,8 @@ es.mbo.level-flow, es.mbo.level-flow-final, es.mbo.health, es.mbo.closures) and 
 
 A session is BOOK_COMPLETE when every partition of every requested topic passes; otherwise BOOK_INCOMPLETE with the
 reasons, and it is excluded from every fold. A trade date the exchange calendar marks closed holds no session
-(NO_SESSION). The calendar is market_calendar.py, found in CALENDAR_DIR, beside this script, or in ../../jenkins.
+(NO_SESSION). "Closed" means a CME Globex FULL closure (market_calendar.globex_full_closure_dates): ES trades shortened
+sessions on the other US holidays, and those are sessions. The calendar is market_calendar.py, found in CALENDAR_DIR, beside this script, or in ../../jenkins.
 Without it the checker REFUSES to run (exit 2): a weekday-only guess would report exchange holidays as sessions.
 --weekday-only is the explicit, printed opt-out for a host that cannot have the calendar.
 
@@ -77,8 +81,8 @@ def load_calendar():
         if d and os.path.isfile(os.path.join(d, "market_calendar.py")):
             sys.path.insert(0, d)
             try:
-                from market_calendar import MarketCalendar  # type: ignore
-                return MarketCalendar(), "market_calendar.py"
+                from market_calendar import globex_full_closure_dates  # type: ignore
+                return globex_full_closure_dates, "market_calendar.py (CME Globex full closures)"
             except Exception:
                 pass
             finally:
@@ -100,9 +104,11 @@ class Cal:
             self.name = "weekday-only (explicit)"
 
     def is_trading_day(self, d):
+        """ES trades on every weekday except the Globex FULL closures (New Year's Day, Good Friday, Christmas Day);
+        US equity holidays such as Thanksgiving or Presidents' Day are shortened sessions, still sessions."""
         if d.weekday() >= 5:
             return False
-        return self.cal.is_trading_day(d) if self.cal else True
+        return d not in self.cal(d.year) if self.cal else True
 
     def next_trading_day(self, d):
         p = d + datetime.timedelta(days=1)
@@ -204,11 +210,12 @@ def captures_of(entries):
         starts = {e.get("capture_start_checkpoint", "<absent>") for e in es}
         legacy = any("capture_start_checkpoint" not in e or "broker_beginning_offset" not in e or
                      "capture_wall_start" not in e or "capture_wall_end" not in e for e in es)
+        begins = {e.get("broker_beginning_offset", "<absent>") for e in es}
         out.append({
-            "stamp": stamp, "files": es, "legacy": legacy,
+            "stamp": stamp, "files": es, "legacy": legacy, "begins": begins,
             "start": None if legacy else es[0].get("capture_start_checkpoint"),
             "start_set": starts,
-            "begin": None if legacy else es[0].get("broker_beginning_offset"),
+            "begin": None if legacy else max((int(b) for b in begins if isinstance(b, int) or str(b).isdigit()), default=None),
             "wall_start": None if legacy else parse_wall(str(min(e["capture_wall_start"] for e in es))),
             "wall_end": None if legacy else parse_wall(str(max(e["capture_wall_end"] for e in es))),
             "first_from": min(int(e["offset_from"]) for e in es),
@@ -268,6 +275,9 @@ def check_partition(entries, start_ms, terminal_ms):
             continue
         if sha256_of(path) != want:
             why.append("FILE_CORRUPT:%s(sha256)" % e["file"])
+        status = e.get("schema_digest_status")
+        if status is not None and status not in ("RESOLVED", "NOT_AVRO"):
+            why.append("SCHEMA_DIGEST_UNRESOLVED:%s(%s)" % (e["file"], status))
     chain = [c for c in caps if c["first_from"] >= c0["first_from"] and c["first_from"] < hi]
     prev = None
     for c in chain:
@@ -278,6 +288,8 @@ def check_partition(entries, start_ms, terminal_ms):
             continue
         if len(c["start_set"]) != 1:
             why.append("CAPTURE_START_INCONSISTENT:%s" % tag)
+        if len(c["begins"]) != 1 or c["begin"] is None:
+            why.append("CAPTURE_BROKER_BEGINNING_INCONSISTENT:%s" % tag)
         if c["wall_start"] is None or c["wall_end"] is None or c["wall_start"] > c["wall_end"]:
             why.append("CAPTURE_WALL_CLOCK:%s" % tag)
         if c["start"] is not None and c["begin"] is not None and int(c["begin"]) > int(c["start"]):
