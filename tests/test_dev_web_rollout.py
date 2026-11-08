@@ -32,14 +32,25 @@ class DevWebRolloutTest(unittest.TestCase):
             text = (overlay / "kustomization.yaml").read_text()
             self.assertEqual(text.count(f"- path: {PATCH}"), 1, overlay)
 
-    def test_base_and_other_envs_keep_the_surge_strategy(self) -> None:
-        base = (ROOT / "k8s" / "services" / "web" / "base" / "options-edge-web-deployment.yaml").read_text()
-        self.assertIn("maxSurge: 1", base)
-        self.assertIn("maxUnavailable: 0", base)
+    def test_rendered_strategy_per_environment_and_overlay(self) -> None:
+        import subprocess
+
+        import yaml
+
+        def web_strategy(overlay: Path) -> dict:
+            out = subprocess.run(["kubectl", "kustomize", str(overlay)], check=True, capture_output=True, text=True).stdout
+            found = [d for d in yaml.safe_load_all(out)
+                     if d and d.get("kind") == "Deployment" and d["metadata"]["name"] == "options-edge-web"]
+            self.assertEqual(len(found), 1, overlay)
+            return found[0]["spec"]["strategy"]
+
+        no_surge = {"type": "RollingUpdate", "rollingUpdate": {"maxSurge": 0, "maxUnavailable": 1}}
+        base = {"type": "RollingUpdate", "rollingUpdate": {"maxSurge": 1, "maxUnavailable": 0}}
+        self.assertEqual(web_strategy(MONO), no_surge)
+        self.assertEqual(web_strategy(SLICE), no_surge)
         for env in ("production", "experiment"):
-            for path in (ROOT / "k8s" / "overlays" / env).glob("*"):
-                if path.is_file():
-                    self.assertNotIn(PATCH, path.read_text(), path)
+            self.assertEqual(web_strategy(ROOT / "k8s" / "overlays" / env), base, env)
+            self.assertEqual(web_strategy(ROOT / "k8s" / "services" / "web" / "overlays" / env), base, env)
 
 
 if __name__ == "__main__":
