@@ -11783,17 +11783,7 @@
           ]
         }
       ],
-      "consumers": [
-        {
-          "service": "break-line",
-          "accepts": [
-            3801
-          ],
-          "environments": [
-            "dev"
-          ]
-        }
-      ],
+      "consumers": [],
       "retained": true,
       "retainedReason": "curated, not baseline: strike-hold-service (NEW, dev only; contracts 0.90.0 schemas-registry/strikehold) writes it on options.spx.strike-hold.current under RecordNameStrategy with auto.register.schemas=false (its schema-requirements.json names this id and hash). The newest state of ONE candidate strike; the topic is COMPACTED because the ET-day rollover replaces the row rather than appending to it. Dev only; nothing is registered on production or es4."
     },
@@ -11897,18 +11887,15 @@
           "kind": "data"
         }
       ],
-      "producers": [],
-      "consumers": [
+      "producers": [
         {
           "service": "break-line",
-          "accepts": [
-            3901
-          ],
           "environments": [
             "dev"
           ]
         }
       ],
+      "consumers": [],
       "retained": true,
       "retainedReason": "curated, not baseline: Break Score rev 13 (options-edge-documents design/es-liquidity/liq-S-break-score-rev13-design.md section 5, requirement liq-R-break-score-rev13-requirement.md BS13-P-001; contracts 0.92.0 schemas-registry/breakline, fixed ids 3901-3905 of the block 3901-3910): the user command (UPSERT or DELETE of one break-score line, key = the line id for both operations), written by the web tier. COMPACTED and user data: RESET-PRESERVED. Written under RecordNameStrategy with auto.register.schemas=false. Bound by the deploy change that adds the service (D2): the producer is break-line (ids 3902-3905; the web tier writes 3901 and has no binding, as line health's user lines), the consumers are break-line itself (3901 lines, 3902 its own state at a cold start) and the engine inputs. Dev only; nothing is registered on production or es4."
     },
@@ -11969,17 +11956,7 @@
           ]
         }
       ],
-      "consumers": [
-        {
-          "service": "break-line",
-          "accepts": [
-            3906
-          ],
-          "environments": [
-            "dev"
-          ]
-        }
-      ],
+      "consumers": [],
       "retained": true,
       "retainedReason": "curated, not baseline: VERSION 2 (rev 14 system lines, liq-R section 21, liq-S 19.7 and 19.8; contracts 0.93.0 schemas-registry/breakline) of the BreakLineState subject under the next free fixed id 3906 of the block 3901-3910: version 1 plus optional null-default fields only; FULL compatible with version 1 (id 3902, archival). Producer and consumer bindings are added by the deploy change that adds the service (D2), which binds the service to THESE ids. Written under RecordNameStrategy with auto.register.schemas=false. Dev only; nothing is registered on production or es4."
     },
