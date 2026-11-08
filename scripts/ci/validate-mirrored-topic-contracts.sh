@@ -293,8 +293,10 @@ job_topic_is_freetext() { grep -qE "string\(name: 'TOPIC'," "$1"; }
 # TGT_TOPIC assignment would mean a target nobody reads.
 job_fixed_pair() {
   local s t
-  s="$({ grep -oE "^[[:space:]]*SRC_TOPIC[[:space:]]*=[[:space:]]*'[A-Za-z0-9][A-Za-z0-9._-]*'" "$1" || true; } | sed -E "s/.*'(.*)'/\1/" | sort -u)"
-  t="$({ grep -oE "^[[:space:]]*TGT_TOPIC[[:space:]]*=[[:space:]]*'[A-Za-z0-9][A-Za-z0-9._-]*'" "$1" || true; } | sed -E "s/.*'(.*)'/\1/" | sort -u)"
+  # NO `sort -u`: two IDENTICAL assignments are two statements, and the LATER one wins at runtime.
+  # Collapsing them to one tidy value would let a job carry a second TGT_TOPIC that nobody reads.
+  s="$({ grep -oE "^[[:space:]]*SRC_TOPIC[[:space:]]*=[[:space:]]*'[A-Za-z0-9][A-Za-z0-9._-]*'" "$1" || true; } | sed -E "s/.*'(.*)'/\1/")"
+  t="$({ grep -oE "^[[:space:]]*TGT_TOPIC[[:space:]]*=[[:space:]]*'[A-Za-z0-9][A-Za-z0-9._-]*'" "$1" || true; } | sed -E "s/.*'(.*)'/\1/")"
   [ "$(printf '%s' "$s" | grep -c . || true)" = 1 ] || return 1
   [ "$(printf '%s' "$t" | grep -c . || true)" = 1 ] || return 1
   printf '%s %s\n' "$s" "$t"
@@ -303,7 +305,11 @@ job_fixed_pair() {
 # Does the job CREATE topics? One that creates its target states that target's shape, so it must carry
 # a frozen arm or a literal cleanup.policy. One that only DESCRIBES both sides states nothing, and
 # topics.env is then the sole authority — which is precisely why the declaration has to exist.
-job_creates_topics() { grep -qE -- "--create" "$1"; }
+# Comment lines are stripped first: Jenkinsfile.es-tape-zones-mirror DISCUSSES
+# `--create --if-not-exists` in a `#` comment beside its real step, and a raw grep would demand a
+# shape statement from a job that creates nothing. Fail-closed, so the false positive was safe — but
+# a guard that fires on prose teaches readers to ignore it.
+job_creates_topics() { sed -E 's@^[[:space:]]*(//|#).*$@@' "$1" | grep -qE -- "--create"; }
 
 # The FROZEN per-topic contract arms: `<topic>) PARTS=1; POLICY=compact,delete; RET=-1 ;;`.
 # A job may repeat its arm (the tape-zones mirror asserts the contract against the source in
@@ -409,6 +415,31 @@ for job in "${JOBS[@]}"; do
     if [ -z "$tgt_parts" ]; then
       echo "FAIL: $jobname mirrors '$src_name' onto $TGT_SET as '$tgt_name', but '$tgt_name' is NOT"
       echo "      declared in $(set_var "$TGT_SET" declared) in $TOPICS_ENV."
+      # The MECHANISM, per set, because naming the wrong one is worse than naming none: a reader who
+      # believes it stops looking for the real exposure. cleanup-topics.sh REFUSES TOPIC_SET as its
+      # first act and builds its approved list from OPTIONS_EDGE_TOPICS, so it never sweeps es4 — the
+      # es4 exposure is that apply-topics.sh TOPIC_SET=es4 neither creates nor reconciles a topic it
+      # has no declaration for, so nothing restores it, or its shape, after any loss.
+      if [ "$TGT_SET" = es4 ]; then
+        echo "      apply-topics.sh TOPIC_SET=es4 neither creates nor reconciles an undeclared topic, so"
+        echo "      nothing restores it or its shape after a loss, and this mirror only DESCRIBES its target."
+      else
+        echo "      cleanup-topics.sh with KAFKA_DELETE_UNWANTED_TOPICS=true would delete it as unwanted,"
+        echo "      and the mirror would re-create it via broker auto-create at the DEFAULT shape."
+      fi
+      fail=1
+      continue
+    fi
+    # THE COUNT MUST BE PINNED, NOT A FLOOR. apply-topics.sh treats an ordinary declared count as a
+    # MINIMUM, so `:1` alone does not hold: a widened target reconciles clean. That matters here more
+    # than anywhere, because this mirror re-produces with the SAME KEY BYTES, so the target's
+    # partition count IS the mirrored key->partition mapping. es.futures.aggressor-flow sat at 32
+    # partitions against a declared :1 in 2026-08 with this gate reporting OK; schema 2b has required
+    # the exact-partition list ever since, and RENAMED had no equivalent until now.
+    if ! in_list "$T_EXACT" "$tgt_name"; then
+      echo "FAIL: '$tgt_name' is declared :$tgt_parts but is NOT in $(set_var "$TGT_SET" exact), so that"
+      echo "      count is a FLOOR and a widened target would reconcile clean — while this mirror's"
+      echo "      key->partition mapping depends on it. Add it to that list."
       fail=1
       continue
     fi
