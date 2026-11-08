@@ -294,7 +294,9 @@ def check_partition(entries, start_ms, terminal_ms):
         if bad:
             why.append("SCHEMA_DIGEST_UNRESOLVED:%s(%s)" % (e["file"], bad))
     chain = [c for c in caps if c["first_from"] >= c0["first_from"] and c["first_from"] < hi]
-    prev = None
+    # the capture just before the starting one is kept for the continuity check only (its own faults are not this session's)
+    earlier = [c for c in caps if c["first_from"] < c0["first_from"]]
+    prev = earlier[-1] if earlier else None
     for c in chain:
         tag = c["stamp"]
         if c["legacy"]:
@@ -314,7 +316,7 @@ def check_partition(entries, start_ms, terminal_ms):
             why.append("CAPTURE_START_CHECKPOINT_MISSING:%s" % tag)
         if c["start"] is not None and c["first_from"] != int(c["start"]):
             why.append("CAPTURE_CLAMPED:%s(start checkpoint %s, first offset %s)" % (tag, c["start"], c["first_from"]))
-        if prev is not None and not prev["legacy"] and c["start"] is not None and int(c["start"]) != prev["last_to"]:
+        if prev is not None and c["start"] is not None and int(c["start"]) != prev["last_to"]:
             why.append("CAPTURE_CHAIN_BREAK:%s(start %s, previous capture ended %s)" % (tag, c["start"], prev["last_to"]))
         if prev is not None and prev["legacy"]:
             pass  # already reported as LEGACY_CAPTURE

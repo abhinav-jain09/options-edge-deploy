@@ -216,6 +216,17 @@ class Chain(unittest.TestCase):
         self.assertTrue(any("FILE_HOLE[1000,1200)" in w for w in r["topics"]["es.mbo.health"]), r["topics"]["es.mbo.health"])
         self.assertTrue(any("CAPTURE_CHAIN_BREAK" in w for w in r["topics"]["es.mbo.health"]))
 
+    def test_the_capture_before_the_starting_capture_is_in_the_chain(self):
+        a = self.a
+        def f(t):
+            a.add(t, "2026-11-07", 0, 400, "S0", start=0, begin=0, ws=START - 7200_000, maxbe=START - 3600_000)
+            a.add(t, "2026-11-08", 500, 1000, "S1", start=500, begin=0, ws=START - 3600_000, maxbe=START - 10_000)   # starts at 500, S0 ended at 400
+            a.add(t, "2026-11-09", 1000, 5000, "S2", start=1000, begin=0, ws=START + 3600_000, maxbe=ms(2026, 11, 9, 12))
+            a.add(t, "2026-11-10", 5000, 9000, "S3", start=5000, begin=0, ws=ms(2026, 11, 10, 14), maxbe=TERM + 1)
+        a.all_topics(f)
+        w = report(a)["topics"]["es.mbo.health"]
+        self.assertTrue(any(x.startswith("p0:CAPTURE_CHAIN_BREAK:S1(start 500, previous capture ended 400)") for x in w), w)
+
     def test_capture_chain_break_alone(self):
         a = self.a
         def f(t):
