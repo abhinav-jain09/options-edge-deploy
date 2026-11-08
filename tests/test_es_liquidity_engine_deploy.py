@@ -203,14 +203,17 @@ def run_barrier(topics, environment="dev"):
 
 
 def right_topics():
-    return {LEVEL_FLOW: shaped("delete", ONE_DAY, CAP), FINAL: shaped("delete", ONE_DAY, CAP), BASE: shaped("delete", ONE_DAY, CAP), HEALTH: shaped("delete", ONE_DAY), SNAPSHOT: shaped("compact", "-1", "-1"), EVENTS: shaped("delete", "-1", EVENTS_CAP), CLOSURES: shaped("compact", "-1", "-1")}
+    return {LEVEL_FLOW: shaped("delete", ONE_DAY, CAP), FINAL: shaped("delete", ONE_DAY, CAP), BASE: shaped("delete", ONE_DAY, CAP), HEALTH: shaped("delete", ONE_DAY), SNAPSHOT: shaped("compact", "-1", "-1"), EVENTS: shaped("delete", "-1", EVENTS_CAP), CLOSURES: shaped("compact", "-1", "-1"),
+            # COVERAGE belongs in the already-correct set, or every drift case built from it hands
+            # the barrier a cluster missing the topic and tests creation instead of drift.
+            COVERAGE: shaped("compact", "-1", "-1")}
 
 
 class Topics(unittest.TestCase):
     VARS = ["OPTIONS_EDGE_TOPICS", "OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES", "OPTIONS_EDGE_TOPIC_RETENTION_BYTES_OVERRIDES", "OPTIONS_EDGE_EXACT_PARTITION_TOPICS",
             "OPTIONS_EDGE_PURE_COMPACT_TOPICS", "OPTIONS_EDGE_ES4_TOPICS"]
 
-    def test_the_two_topics_are_declared_one_partition_exact_with_the_declared_retention_and_bytes(self):
+    def test_every_topic_is_declared_one_partition_exact_with_the_declared_retention_and_bytes(self):
         d = declarations(self.VARS)
         retention = dict(x.split("=", 1) for x in d["OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES"] if "=" in x)
         bytes_ = dict(x.split("=", 1) for x in d["OPTIONS_EDGE_TOPIC_RETENTION_BYTES_OVERRIDES"] if "=" in x)
@@ -258,13 +261,19 @@ class Topics(unittest.TestCase):
 
 
 class Barrier(unittest.TestCase):
-    def test_a_fresh_dev_cluster_gets_both_topics_at_their_shapes_and_no_broker_is_touched(self):
+    def test_a_fresh_dev_cluster_gets_every_topic_at_its_shape_and_no_broker_is_touched(self):
         rc, out, calls, state = run_barrier({})
         self.assertEqual(rc, 0, out)
         self.assertEqual([c for c in calls if "--entity-type brokers" in c or "--entity-default" in c], [], "no broker-wide change")
         self.assertFalse(any("--alter" in c or "--delete" in c for c in calls))
         for t, policy, ret, b in ((LEVEL_FLOW, "delete", ONE_DAY, CAP), (FINAL, "delete", ONE_DAY, CAP), (BASE, "delete", ONE_DAY, CAP), (HEALTH, "delete", ONE_DAY, None), (EVENTS, "delete", "-1", EVENTS_CAP),
-                                  (CLOSURES, "compact", "-1", "-1"), (SNAPSHOT, "compact", "-1", "-1")):
+                                  (CLOSURES, "compact", "-1", "-1"), (SNAPSHOT, "compact", "-1", "-1"),
+                                  # COVERAGE. It was absent from this matrix, so nothing here proved
+                                  # the barrier creates it at its declared shape — and the test's own
+                                  # name said "both topics" while it exercised seven (Codex deploy
+                                  # r12). The shell suite covers it too; this is the harness that was
+                                  # already here and should have been extended first.
+                                  (COVERAGE, "compact", "-1", "-1")):
             d = state["topics"][t]
             self.assertEqual((d["partitions"], d["configs"]["cleanup.policy"], d["configs"]["retention.ms"]), (1, policy, ret), t)
             if b:
@@ -298,6 +307,13 @@ class Barrier(unittest.TestCase):
             "snapshot delete": (SNAPSHOT, lambda d: d["configs"].update({"cleanup.policy": "delete"})),
             "snapshot finite retention": (SNAPSHOT, lambda d: d["configs"].update({"retention.ms": ONE_DAY})),
             "snapshot byte-capped": (SNAPSHOT, lambda d: d["configs"].update({"retention.bytes": CAP})),
+            # COVERAGE drift. A delete policy or a byte cap each defeat the interval's whole point:
+            # the newest statement per contract must be the answer, and a cap ages out the oldest
+            # contract's run so a reader finds nothing and reads it as "never observed".
+            "coverage delete": (COVERAGE, lambda d: d["configs"].update({"cleanup.policy": "delete"})),
+            "coverage finite retention": (COVERAGE, lambda d: d["configs"].update({"retention.ms": ONE_DAY})),
+            "coverage byte-capped": (COVERAGE, lambda d: d["configs"].update({"retention.bytes": CAP})),
+            "coverage 4 partitions": (COVERAGE, lambda d: d.update(partitions=4)),
             "snapshot 4 partitions": (SNAPSHOT, lambda d: d.update(partitions=4)),
             "closures delete": (CLOSURES, lambda d: d["configs"].update({"cleanup.policy": "delete"})),
             "closures finite retention": (CLOSURES, lambda d: d["configs"].update({"retention.ms": ONE_DAY})),
