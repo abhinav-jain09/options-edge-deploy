@@ -266,6 +266,19 @@ jobs:
       - name: Boot bring-up and morning autostart hold down the same services
         run: python3 -m unittest -v tests.test_keep_down_lists_agree
 
+      # The dealer-ledger feedback loop: the ledger emits signal-fired, the scorer turns outcomes into
+      # outcome-scored, the accumulator aggregates them into calibration-state, and the ledger reads that
+      # back through a GLOBAL store — so a deploy that carried the ledger alone would leave its calibration
+      # store permanently empty, which is indistinguishable from a broken one. Also holds the dev CPU
+      # position the owner asked for (2026-11-08, "let it use the cpu as much it want dont restrict
+      # anything"): no cpu RESERVATION on dev, because a 2-CPU reservation this node cannot satisfy left
+      # the pods Pending with zero cpu — while production, es4 and experiment keep theirs.
+      #
+      # Wired here because this workflow names its test modules by hand and nothing discovers them: the
+      # module existed and passed, but CI had never executed a single one of its assertions.
+      - name: Dealer-ledger loop deploys whole, and the dev CPU position holds
+        run: python3 -m unittest -v tests.test_dealer_ledger_deploy
+
       # TA books (phases B, C, D, E and the W0 cutover): the producer / gateway flags are literal false in every manifest, the two new
       # services are registered and HELD, the fixed-id schema maps register against a stand-in registry, the two topic barriers fail closed,
       # and the destructive W0 roll-forward refuses behind every gate before its first delete. docs/ta-books/DEPLOY-ROLLOUT.md.

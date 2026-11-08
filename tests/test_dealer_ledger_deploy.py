@@ -315,5 +315,39 @@ class DealerLedgerDeployTest(unittest.TestCase):
         self.assertEqual(3, seen, "the production render must contain all three containers")
 
 
+    def test_this_module_is_actually_WIRED_INTO_CI(self):
+        """A guard nobody runs is not a guard.
+
+        deploy-validation.yml names its test modules by hand and nothing discovers them, so a new module
+        is orphaned by default: it is IMPORTED by scripts/ci/validate-tests-are-collectable.sh, which
+        catches import errors, but not one of its assertions ever executes. Measured when this was written:
+        138 modules exist under tests/, 26 are named by the workflow, 112 are never executed.
+
+        This module was one of the 112. The cpu-reservation assertion above exists to hold a position the
+        owner stated explicitly, and unwired it would have held nothing. So the wiring is asserted here,
+        in the module it protects, where it cannot drift away unnoticed - the repo's own phrasing
+        elsewhere is "a test nobody runs is not a test".
+        """
+        workflow = ROOT / ".github" / "workflows" / "deploy-validation.yml"
+        text = workflow.read_text()
+        module = "tests." + pathlib.Path(__file__).stem
+        self.assertIn(module, text,
+                      f"{module} must be named by a step in {workflow.name}, or none of its assertions "
+                      "run in CI")
+
+        # Named is not enough: it must be named in a step that RUNS it through unittest, and that step
+        # must not be allowed to fail silently. Parsed, not grepped - a module named only in a comment
+        # would satisfy the assertion above.
+        import yaml
+        steps = yaml.safe_load(text)["jobs"]["deploy-validation"]["steps"]
+        running = [st for st in steps if module in (st.get("run") or "")]
+        self.assertTrue(running, f"{module} appears in the workflow but no step's `run:` invokes it")
+        for st in running:
+            self.assertNotIn("continue-on-error", st,
+                             f"the step running {module} must not be allowed to fail silently")
+            self.assertIn("unittest", st["run"],
+                          f"the step naming {module} must invoke it through unittest")
+
+
 if __name__ == "__main__":
     unittest.main()
