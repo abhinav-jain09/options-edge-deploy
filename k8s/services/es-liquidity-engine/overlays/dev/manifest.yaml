@@ -96,6 +96,8 @@ spec:
               value: "0"
             - name: ES_MBO_SOURCE_LAG_BOUND_MILLIS
               value: "10000"
+            - name: ES_MBO_COVERAGE_TOPIC
+              value: es.mbo.coverage
             - name: ES_MBO_TAPE_TOPIC
               value: underlying.es.trades
             - name: JAVA_TOOL_OPTIONS

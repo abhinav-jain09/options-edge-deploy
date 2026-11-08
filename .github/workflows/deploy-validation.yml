@@ -305,6 +305,45 @@ jobs:
       # (The retention=-1 preserved-or-rebuildable classification that es.tape-zones.board now
       # depends on is already gated: validate-services.sh runs
       # scripts/ci/validate-durable-topic-preservation.sh as its section 6.)
+      # --- THE COVERAGE CHANGE'S OWN GATES, DELIBERATELY PLACED HERE -------------------------
+      # These three run BEFORE 'Validate mirrored es4 topic contracts' on purpose. The steps of
+      # this job run under `bash -e`, so the first failure stops every step after it — and that
+      # mirror step has failed on every main run since 2026-10-16, for a cause entirely unrelated
+      # to this change (Jenkinsfile.es-price-basisref-mirror declares a renaming fixed pair the
+      # validator cannot read, and behind that gap es.underlying.es.price.basis-reference is
+      # undeclared in topics.env). Left after it, these gates would never execute, and a gate that
+      # never runs is not a gate — it is a claim (Codex deploy r8).
+      #
+      # They are self-contained: mocked Kafka CLIs and static file reads, no cluster and no
+      # artefacts from earlier steps, so moving them earlier changes nothing about what they prove.
+      # The mirror repair itself stays out of this change: it needs an irreversible topic
+      # declaration and a design change to that validator, both of which want their own review.
+      - name: strike-hold topic barrier negative controls
+        # The barrier created both topics with the right shapes on the first live deploy and then
+        # REFUSED them (service-deploy 3247): its duplicate guard counted a bare
+        # `retention.bytes=` substring, which a real `--describe --all` dump matches five times
+        # (the value, local.retention.bytes, and three synonyms). This drives the real barrier
+        # against a byte-accurate dev dump. NOTE: the sibling ensure-*-topics-test.sh scripts in
+        # scripts/kafka are mostly NOT wired into this workflow; this was the first that was, and
+        # the es-liquidity-engine barrier's suite below is the second.
+        run: bash scripts/kafka/ensure-strike-hold-topics-test.sh
+
+      - name: es-liquidity-engine topic barrier negative controls
+        run: bash scripts/kafka/ensure-es-liquidity-engine-topics-test.sh
+
+      - name: coverage topic wiring, both sides (each barrier's literal matches its own Deployment)
+        run: python3 -m unittest -v tests.test_coverage_topic_wiring
+
+      - name: a failed topic recreation stops the clean (dev-cleanup, mocked)
+        run: bash scripts/ci/dev-cleanup-topic-recreation-fatal-test.sh
+
+      - name: the schema gate's apply path (GATE runs schema-sync, NOT_GATED does not)
+        run: bash scripts/ci/schema-gate-apply-path-test.sh
+
+      # The sibling files apply-topics.sh sources must be copied by every test that runs it out of a
+      # temp directory. Hard-coding that list is what made TWO such tests report findings about
+      # topics.env the day apply-topics.sh gained resolve-prod-partition-overrides.sh (#1165): their
+      # copies died at `source: No such file or directory` and the durable-topic gate went red on main.
       - name: Validate mirrored es4 topic contracts (mirror jobs vs topics.env)
         run: bash scripts/ci/validate-mirrored-topic-contracts.sh
 
@@ -509,19 +548,6 @@ jobs:
       # A create that the Kafka admin client retried must not fail the run (prod clean-slate 2026-10-13).
       - name: apply-topics survives the admin client's retry of a successful create
         run: bash scripts/kafka/apply-topics-create-retry-test.sh
-      - name: strike-hold topic barrier negative controls
-        # The barrier created both topics with the right shapes on the first live deploy and then
-        # REFUSED them (service-deploy 3247): its duplicate guard counted a bare
-        # `retention.bytes=` substring, which a real `--describe --all` dump matches five times
-        # (the value, local.retention.bytes, and three synonyms). This drives the real barrier
-        # against a byte-accurate dev dump. NOTE: the sibling ensure-*-topics-test.sh scripts in
-        # scripts/kafka are NOT wired into this workflow — this is the first one that is.
-        run: bash scripts/kafka/ensure-strike-hold-topics-test.sh
-
-      # The sibling files apply-topics.sh sources must be copied by every test that runs it out of a
-      # temp directory. Hard-coding that list is what made TWO such tests report findings about
-      # topics.env the day apply-topics.sh gained resolve-prod-partition-overrides.sh (#1165): their
-      # copies died at `source: No such file or directory` and the durable-topic gate went red on main.
       - name: apply-topics sibling files are derived, not hard-coded
         run: bash scripts/kafka/apply-topics-sibling-files-test.sh
 

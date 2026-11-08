@@ -40,18 +40,23 @@ mocks() { # mocks <currentPolicy> <scoringPolicy> <scoringBytes> [extraRetention
 #!/usr/bin/env bash
 args="\$*"
 case "\$args" in
-  *--list*) echo "options.spx.strike-hold.current"; echo "options.spx.strike-hold.scoring" ;;
+  # es.mbo.coverage is listed because the barrier verifies it UNCONDITIONALLY — a literal constant,
+  # matching the literal the pod hardcodes — so every arm here runs the way a real deploy does, with
+  # the coverage input required. The earlier version of these mocks omitted it and passed only
+  # because the barrier was then reading an environment variable the Jenkins stage never exports.
+  *--list*) echo "options.spx.strike-hold.current"; echo "options.spx.strike-hold.scoring"; echo "es.mbo.coverage" ;;
   *--describe*) echo "Topic: t  TopicId: a  PartitionCount: 1  ReplicationFactor: 1  Configs: cleanup.policy=x" ;;
 esac
 KT
   cat > "$TMP/bin/kafka-configs" <<KC
 #!/usr/bin/env bash
-if [[ "\$*" == *scoring* ]]; then
 $(declare -f dump)
+if [[ "\$*" == *scoring* ]]; then
   dump "$2" "$3"
   $4
+elif [[ "\$*" == *es.mbo.coverage* ]]; then
+  dump "compact" "-1"
 else
-$(declare -f dump)
   dump "$1" "-1"
 fi
 KC
@@ -116,7 +121,11 @@ mocks "compact,delete" "delete" "268435456" ""
 cat > "$TMP/bin/kafka-topics" <<'KTX'
 #!/usr/bin/env bash
 case "$*" in
-  *--list*) echo "options.spx.strike-hold.current"; echo "options.spx.strike-hold.scoring" ;;
+  # es.mbo.coverage is listed because the barrier verifies it UNCONDITIONALLY — a literal constant,
+  # matching the literal the pod hardcodes — so every arm here runs the way a real deploy does, with
+  # the coverage input required. The earlier version of these mocks omitted it and passed only
+  # because the barrier was then reading an environment variable the Jenkins stage never exports.
+  *--list*) echo "options.spx.strike-hold.current"; echo "options.spx.strike-hold.scoring"; echo "es.mbo.coverage" ;;
   *--describe*) echo "Topic: t  NotPartitionCount: 9  ReplicationFactor: 1  Configs: cleanup.policy=x" ;;
 esac
 KTX
@@ -128,7 +137,99 @@ else
   bad "the lookalike was accepted or its value was read:"; printf '%s\n' "$out" | grep -E "PartitionCount" | head -2
 fi
 
-# 7) DEV ONLY, fail-closed.
+# 7) THE COVERAGE INPUT.
+#
+# Kafka Streams will not start without a source topic, so a strike-hold rolled before the engine's
+# barrier created es.mbo.coverage CRASH-LOOPS instead of reporting
+# ABSORPTION_COVERAGE_UNAVAILABLE — and schema sync registers the subject without creating the
+# topic, so nothing else on that path catches it (Codex deploy r4).
+cov_mocks() { # cov_mocks <listCoverage: yes|no> <coveragePolicy> <coverageRetentionMs> [coverageRetentionBytes=-1]
+  mkdir -p "$TMP/bin"
+  cat > "$TMP/bin/kafka-topics" <<KT
+#!/usr/bin/env bash
+case "\$*" in
+  *--list*)
+    echo "options.spx.strike-hold.current"; echo "options.spx.strike-hold.scoring"
+    # AN IF-STATEMENT, not a test-and-echo. The first version was a bare test-and-echo, which is
+    # the LAST command of this branch: when an arm does not want coverage listed it exited 1, and
+    # the barrier reported "cannot list topics" — a mock failing, read as a barrier refusing for the
+    # right reason. An `if` with no matching branch returns success, which is why this form is
+    # correct; the comment that replaced it claimed a trailing `true` was doing that work, and there
+    # was no `true` here at all (Codex deploy r11).
+    #
+    # No backticks in this comment: the heredoc is unquoted, so a backtick here is command
+    # substitution — which is how an earlier version of this fix printed three syntax errors while
+    # still reporting every arm green.
+    if [ "$1" = yes ]; then echo "es.mbo.coverage"; fi
+    ;;
+  *--describe*) echo "Topic: t  TopicId: a  PartitionCount: 1  ReplicationFactor: 1  Configs: cleanup.policy=x" ;;
+esac
+KT
+  cat > "$TMP/bin/kafka-configs" <<KC
+#!/usr/bin/env bash
+$(declare -f dump)
+case "\$*" in
+  *es.mbo.coverage*) dump "$2" "${4:--1}" | sed 's/retention.ms=-1/retention.ms=$3/' ;;
+  *scoring*)         dump "delete" "268435456" ;;
+  *)                 dump "compact,delete" "-1" ;;
+esac
+KC
+  chmod +x "$TMP/bin/kafka-topics" "$TMP/bin/kafka-configs"
+}
+run_cov() { PATH="$TMP/bin:$PATH" ENVIRONMENT=dev KAFKA_BOOTSTRAP_SERVERS=mock:9092 \
+            KAFKA_STRIKE_HOLD_COVERAGE_TOPIC=es.mbo.coverage bash "$BAR" 2>&1; }
+
+cov_mocks no compact -1
+out="$(run_cov)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "CRASH-LOOP"; then
+  ok "a configured but ABSENT coverage topic refuses the deploy and names the engine's barrier"
+else bad "strike-hold would have rolled with its coverage source missing"; fi
+
+cov_mocks yes compact -1
+out="$(run_cov)"; rc=$?
+if [ "$rc" -eq 0 ]; then ok "a present, pure-compact coverage topic is accepted"
+else bad "the correct coverage input was refused:"; printf '%s\n' "$out" | grep -E "^FAIL" | head -2; fi
+
+cov_mocks yes delete -1
+out="$(run_cov)"; rc=$?
+if [ "$rc" -ne 0 ]; then ok "a coverage topic that is NOT compacted is refused"
+else bad "a delete-retention coverage input was accepted"; fi
+
+# A BYTE CAP on the coverage input. The shared routine does not look at retention.bytes, so this
+# shape — compact, retention.ms=-1, one partition, 256 MiB cap — passed the entire check until the
+# barrier gained its own exact comparison. A cap ages out the oldest contract's interval, and a
+# reader finding no coverage for a contract reads it as "never observed" (Codex deploy r5).
+cov_mocks yes compact -1 268435456
+out="$(run_cov)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "retention.bytes=268435456, expected exactly -1"; then
+  ok "a retention.bytes CAP on the coverage input is refused"
+else bad "a capped coverage input was accepted — the interval can age out"; fi
+
+# AND THE OVERRIDE IS GONE: an environment value must NOT be able to make the barrier check a
+# different topic from the one the pod publishes to. The deployed containers hardcode
+# es.mbo.coverage as a literal, so an override would validate a topology nobody deployed — and a
+# stale value on the Jenkins agent would be enough to do it. An earlier arm here asserted the
+# opposite and was proving that bypass green (Codex deploy r8).
+cov_mocks no compact -1
+out="$(PATH="$TMP/bin:$PATH" ENVIRONMENT=dev KAFKA_BOOTSTRAP_SERVERS=mock:9092 \
+        KAFKA_STRIKE_HOLD_COVERAGE_TOPIC= bash "$BAR" 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "es.mbo.coverage"; then
+  ok "an empty override cannot switch the check off"
+else bad "an empty environment value still skipped the coverage check"; fi
+
+cov_mocks yes compact -1
+out="$(PATH="$TMP/bin:$PATH" ENVIRONMENT=dev KAFKA_BOOTSTRAP_SERVERS=mock:9092 \
+        KAFKA_STRIKE_HOLD_COVERAGE_TOPIC=some.other.topic bash "$BAR" 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && ! printf '%s' "$out" | grep -q "some.other.topic"; then
+  ok "a redirected override cannot switch the check to another topic"
+else bad "an override redirected the barrier away from the deployed topic"; fi
+
+# The manifest parse these arms used to exercise is GONE: three versions of it each failed toward
+# silently checking nothing, so the barrier verifies a declared constant and the pairing with the
+# Deployment is asserted in tests/test_coverage_topic_wiring.py, with a YAML parser and a
+# container scope. A shell script should not be reasoning about YAML (Codex deploy r7).
+
+# 8) DEV ONLY, fail-closed.
 out="$(PATH="$TMP/bin:$PATH" ENVIRONMENT=production KAFKA_BOOTSTRAP_SERVERS=mock:9092 bash "$BAR" 2>&1)"; rc=$?
 if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "DEV ONLY"; then ok "refuses outside dev"
 else bad "did not refuse outside dev"; fi

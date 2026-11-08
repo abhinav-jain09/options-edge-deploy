@@ -55,13 +55,21 @@ spec:
               value: spx.basis.state
             - name: KAFKA_STRIKE_HOLD_ABSORPTION_TOPIC
               value: es.mbo.liquidity-events
-            # --- THE COVERAGE DEPENDENCY, deliberately EMPTY.
-            # No upstream service publishes an absorption-coverage frontier yet (`coveredThroughMs`). While this is empty the service never states that absorption was
-            # ABSENT at a strike — it reports ABSORPTION_COVERAGE_UNAVAILABLE and says so at every start. That is the whole reason it is deployable now: it cannot
-            # infer an absence from silence, so it refuses instead of guessing. Set to es.mbo.health once the engine publishes the field; a topic that does not carry
-            # the field is harmless, because the field then reads as absent and the behaviour is unchanged.
+            # --- THE COVERAGE DEPENDENCY, now satisfied.
+            # es.mbo.coverage carries EsMboCoverage (contracts 0.91.0, fixed id 3511): the INTERVAL
+            # [coveredFromMs, coveredThroughMs] of the stretch es-liquidity-engine-service states it
+            # observed and classified the ES book CONTINUOUSLY. It is what lets this service tell
+            # "the book showed nothing at this strike" from "the engine was not watching here".
+            #
+            # Until this topic existed the service reported ABSORPTION_COVERAGE_UNAVAILABLE and
+            # never ABSENT — by design, which is why it could be deployed first. With it, an
+            # absence is claimed ONLY when the whole association window lies inside a covered run;
+            # a run that reaches past the touch but began after it reports
+            # ABSORPTION_COVERAGE_GAP, and one that has not reached the window's end reports
+            # ABSORPTION_COVERAGE_STALLED. Setting this to a topic that does not carry both ends of
+            # the interval is harmless: the record is ignored and the service refuses as before.
             - name: KAFKA_STRIKE_HOLD_COVERAGE_TOPIC
-              value: ""
+              value: es.mbo.coverage
             # --- outputs. `current` is compacted, `scoring` is NOT (it is the evidence record). Declared in scripts/kafka/topics.env, dev-only.
             - name: KAFKA_STRIKE_HOLD_OUTPUT_TOPIC
               value: options.spx.strike-hold.current

@@ -489,8 +489,12 @@ reconcile_declared_topics() {
   local desc line spec name cfg have_pol have_ret have_dr have_mb have_rb have_parts need polcfg lowers fixed=0 drift=0
   desc="$($KT --bootstrap-server $BS --describe 2>/dev/null | grep '^Topic:')"
   if [ -z "$desc" ]; then
+    # NOT VERIFIED IS NOT VERIFIED OK. This returned 0 while saying the shapes were not checked,
+    # so an undescribable cluster passed the shape check and the caller scaled up on it. "I could
+    # not tell" must not read as "it is fine" — the same substitution this round removed in three
+    # other places.
     echo "  WARNING: could not describe topics — declared shapes NOT verified this run."
-    return 0
+    return 1
   fi
   for spec in $OPTIONS_EDGE_TOPICS; do
     name="${spec%%:*}"
@@ -581,6 +585,12 @@ reconcile_declared_topics() {
     esac
   done
   echo "  shape check: $fixed config(s) reconciled, $drift unresolved."
+  # REPORTED, not only printed. This counted unresolved drift — an absent topic, a failed alter, an
+  # exact-partition mismatch — and then returned 0 regardless, so every caller read success. That
+  # made ensure_topics succeed on a drifted cluster and made the refusal added for Codex deploy r15
+  # unable to fire for the failures it exists for: a guard on a status that is never non-zero
+  # (Codex deploy r17).
+  [ "$drift" -eq 0 ]
 }
 
 # create_topics_parallel: read one topic's create arguments per line on stdin ("--topic X --partitions N ...")
@@ -603,11 +613,14 @@ create_topics_parallel() {
 # starts, so no client can choose these topics' size. One list + one describe, not a JVM per topic.
 ensure_partition_only_topics() {
   [ -n "${OPTIONS_EDGE_PARTITION_ONLY_TOPICS:-}" ] || return 0
-  local have spec name want cur created=0 grown=0 larger=""
+  local have spec name want cur created=0 grown=0 larger="" failed=0
   local desc
   if ! desc="$($KT --bootstrap-server $BS --describe 2>/dev/null)"; then
+    # NOT ENSURED IS NOT ENSURED OK — the same substitution as in reconcile_declared_topics, one
+    # function over. Nothing was created blind, which is right; but reporting success for a run that
+    # verified nothing let ensure_topics pass and the scale-up proceed (Codex deploy r18).
     echo "  WARNING: could not describe topics — partition-only topics NOT ensured this run (nothing created blind)"
-    return 0
+    return 1
   fi
   have="$(printf '%s\n' "$desc" | awk -F'\t' '$1 ~ /^Topic: / {n=$1; sub(/^Topic: /, "", n); for (i = 2; i <= NF; i++) if ($i ~ /^PartitionCount: /) {c=$i; sub(/^PartitionCount: /, "", c); print n, c}}')"
   local to_create="" wanted=0
@@ -621,17 +634,25 @@ ensure_partition_only_topics() {
     elif [ "$cur" -lt "$want" ]; then
       # --topic is a regular expression: escape the dots so the alter can only match this topic.
       $KT --bootstrap-server $BS --alter --topic "$(printf '%s' "$name" | sed 's/\./\\./g')" --partitions "$want" >/dev/null 2>&1 \
-        && grown=$((grown+1)) || echo "  WARNING: could not grow $name $cur -> $want"
+        && grown=$((grown+1)) || { echo "  WARNING: could not grow $name $cur -> $want"; failed=1; }
     elif [ "$cur" -gt "$want" ]; then
       larger="$larger $name($cur>$want)"
     fi
   done
   if [ "$wanted" -gt 0 ]; then
     created=$(printf '%s' "$to_create" | create_topics_parallel)
-    [ "$created" -eq "$wanted" ] || echo "  WARNING: created $created of $wanted missing partition-only topics"
+    [ "$created" -eq "$wanted" ] || { echo "  WARNING: created $created of $wanted missing partition-only topics"; failed=1; }
   fi
   echo "Partition-only topics: created $created, grown $grown (topics.env OPTIONS_EDGE_PARTITION_ONLY_TOPICS)"
-  [ -z "$larger" ] || echo "  WARNING: larger than declared (Kafka cannot shrink; the next wipe recreates them):$larger"
+  if [ -n "$larger" ]; then
+    echo "  WARNING: larger than declared (Kafka cannot shrink; the next wipe recreates them):$larger"
+    failed=1
+  fi
+  # EVERY WARNING ABOVE NOW CARRIES. A failed grow, an incomplete create and an irreconcilably
+  # larger topic each printed and fell through with status 0, and reconcile_declared_topics cannot
+  # catch them because it iterates OPTIONS_EDGE_TOPICS and these are in
+  # OPTIONS_EDGE_PARTITION_ONLY_TOPICS (Codex deploy r18).
+  [ "$failed" -eq 0 ]
 }
 
 # ensure_topics: pre-create the platform topics from the deploy repo's topics.env (source of truth).
@@ -713,10 +734,16 @@ ensure_topics() {
       echo "--topic $name --partitions $DPARTS --replication-factor 1 --config cleanup.policy=$DPOL $extra $rt"
     done | create_topics_parallel)
     echo "Pre-created $n platform topics from deploy config ($tref); apps self-create the rest on startup."
-    ensure_partition_only_topics
-    reconcile_declared_topics
-    ensure_dev_only_estimate_topics
+    local rc=0
+    ensure_partition_only_topics || rc=1
+    # The shape check's verdict now carries. Before this it was printed and dropped.
+    reconcile_declared_topics || rc=1
+    ensure_dev_only_estimate_topics || rc=1
     echo "  topics present now: $(topic_count '^__|^_schemas' v)"
+    if [ "$rc" -ne 0 ]; then
+      echo "  topics: at least one declared topic is MISSING or DRIFTED — see the warnings above."
+      return 1
+    fi
   else
     echo "  WARNING: could not read deploy topics.env ($DEPLOY_REPO $tref) — apps will create their topics on startup (slower to READY)."
     return 1   # resume_dev_mirrors_if_declared keeps the mirrors paused: nothing was created at its declared shape
@@ -746,6 +773,42 @@ resume_dev_mirrors_if_declared() {
     echo "   WARN: es4->dev mirrors stay PAUSED — topics.env was not applied (list: $DEV_MIRRORS_PAUSED)"
   fi
 }
+
+# ensure_topics_or_refuse: recreate the declared topics and REFUSE to go further if that failed.
+#
+# The old form was `ensure_topics` followed by `resume_dev_mirrors_if_declared "$?"`, and it discarded
+# the failure. The resume helper takes the status as an argument and returns 0 whenever it is
+# non-zero — deliberately, so a failed topic pass does not strand the es4 mirrors — but the CALLER
+# then read 0 and carried on into the scale-up. So a wipe that deleted every topic and then failed to
+# recreate them was followed by services coming up against topics that did not exist: Kafka Streams
+# apps crash-loop, and anything with auto-creation gets the broker DEFAULT shape, which for
+# es.mbo.coverage means a delete-retention log where a compacted per-contract fact belongs. The
+# barrier that would catch that shape runs at DEPLOY time, not here (Codex deploy r15).
+#
+# The mirror behaviour is unchanged. What changes is that the caller can no longer mistake a failed
+# recreation for a successful one.
+ensure_topics_or_refuse() {
+  local rc=0
+  ensure_topics || rc=$?
+  resume_dev_mirrors_if_declared "$rc"
+  if [ "$rc" -ne 0 ]; then
+    echo "ERROR: ensure_topics FAILED (status $rc) - the declared topics are NOT all present at their" >&2
+    echo "       declared shapes. Nothing may be scaled up on this: a workload started against a" >&2
+    echo "       missing topic crash-loops, and anything auto-created takes the broker DEFAULT shape" >&2
+    echo "       instead of the one scripts/kafka/topics.env declares (for es.mbo.coverage, a" >&2
+    echo "       delete-retention log where a compacted per-contract fact belongs)." >&2
+    echo "       The es4->dev mirrors stay PAUSED by design until a later run's topic pass succeeds." >&2
+    return 1
+  fi
+}
+
+# RETURNS, NEVER EXITS. The first version called `exit 1` here, which killed the whole process — and
+# on the automatic CLEAN slot the very next act is the overnight ES start, i.e. the script's own
+# recovery attempt (a second topic pass). Exiting inside the helper skipped it, so a failed
+# recreation left dev fully down with the mirrors paused until the next scheduled full start, which
+# on a manual run is never (Codex deploy r16). The same shape as the bug being fixed: a status that
+# stops the wrong thing. Each caller now refuses its OWN scale-up and the CLEAN slot still reaches
+# its recovery.
 
 # run_partition_doctor: repair Kafka Streams apps that refuse an internal topic's partition count
 # ("Existing internal topic ... has invalid partitions: expected: E; actual: A"). Same source of truth as
@@ -849,7 +912,11 @@ apply_internal_topic_configs() {
 # live ES data; see the note where OVERNIGHT_SET is defined.)
 do_start_overnight() {
   require_kafka_cli
-  ensure_topics; resume_dev_mirrors_if_declared $?
+  ensure_topics_or_refuse || {
+    echo "overnight start: REFUSED — the declared topics are not right, so the ES-tracking set stays at 0." >&2
+    echo "                 Fix the topic pass and re-run 'dev-cleanup overnight'." >&2
+    return 1
+  }
   echo "Overnight start: ES-tracking set only ($OVERNIGHT_SET); all other services stay at 0 until 06:15 ET."
   local d
   for d in $OVERNIGHT_SET; do
@@ -948,7 +1015,11 @@ verify_start_readiness() {
 
 do_start() {
   require_kafka_cli
-  ensure_topics; resume_dev_mirrors_if_declared $?
+  ensure_topics_or_refuse || {
+    echo "start: REFUSED — the declared topics are not right, so nothing is scaled up." >&2
+    echo "       Fix the topic pass and re-run 'dev-cleanup start'." >&2
+    return 1
+  }
   # Scale UP everything EXCEPT the DEV-disabled set. This is load-bearing: if we scaled ALL to 1 and
   # re-zeroed the disabled ones afterwards, databento-timewarp-snapshot-replay would come up in the gap
   # and REPLAY historical snapshots into options.databento.raw (its TIMEWARP_SNAPSHOT_TOPIC), poisoning
@@ -1297,7 +1368,10 @@ for p in json.load(sys.stdin)["items"]:
       | xargs -P 8 -I{} $KT --bootstrap-server $BS --delete --topic {} >/dev/null 2>&1
     sleep 8   # let the deletions settle before recreating (avoid create-vs-delete races)
     echo "4d) recreating platform topics (clean + recreate) ..."
-    ensure_topics; resume_dev_mirrors_if_declared $?
+    # Recorded, not fatal here: the CLEAN slot's next act is the overnight start, which runs the
+    # topic pass again and refuses its own scale-up if it still fails. Aborting mid-clean would
+    # leave the wipe half-applied, which is worse.
+    ensure_topics_or_refuse || CLEAN_TOPICS_FAILED=1
   fi
 
   # 4b. safe docker-ENGINE image housekeeping (build side only — NOT the k8s containerd store).
@@ -1333,6 +1407,16 @@ for p in json.load(sys.stdin)["items"]:
   echo "  apps: LEFT DOWN — 'dev-cleanup.sh start' is REQUIRED to bring dev back up (until then there are no bars,"
   echo "        no market structure and no Order-page chart). It verifies indicator-service comes up fully ready."
   echo "DONE $(date)"
+  # THE TOPIC FAILURE CARRIES OUT. Setting a variable nobody reads is the same silence this round is
+  # about, so do_clean's own status says it: the CLEAN slot then prints its "clean: FAILED" line and
+  # still proceeds to the overnight start, whose topic pass runs again and refuses its own scale-up
+  # if it still fails. The wipe itself is already complete at this point, so this REPORTS rather
+  # than aborts — a mid-clean abort would leave the wipe half-applied, which is worse.
+  if [ "${CLEAN_TOPICS_FAILED:-0}" = 1 ]; then
+    echo "  topics: NOT all recreated at their declared shapes — nothing may be scaled up until a"
+    echo "          topic pass succeeds ('dev-cleanup topics', then 'dev-cleanup start')."
+    return 1
+  fi
 }
 
 # ---------- dispatch ----------
@@ -1410,8 +1494,33 @@ PY
         elif [ "${DKC_DRYRUN:-0}" = 1 ]; then echo "DRYRUN: CLEAN slot ($SLOTINFO) -> do_clean (WIPE) + overnight ES start"
         else
           : > "$CLEAN_MARK"
-          { if do_clean; then echo "clean: OK"; else echo "clean: FAILED (rc=$?) — the overnight ES start proceeds on the UN-WIPED state; re-run 'dev-cleanup now' by hand after 17:20 ET if a wipe is needed"; fi
-            echo "--- overnight ES-tracking start ---"; do_start_overnight; } >> "$LOG" 2>&1
+          { clean_rc=0; do_clean || clean_rc=$?
+            if [ "$clean_rc" -eq 0 ]; then
+              echo "clean: OK"
+            elif [ "${CLEAN_TOPICS_FAILED:-0}" = 1 ]; then
+              # TELL THE TRUTH ABOUT WHICH FAILURE THIS IS. The old message said the overnight start
+              # "proceeds on the UN-WIPED state", which is right when the wipe itself was refused and
+              # WRONG for the failure the topic guard added: there the deletion SUCCEEDED and the
+              # recreation did not, so dev is down, the mirrors are paused, and the non-preserved
+              # topics are gone or only partly back. An operator reading "un-wiped" would do exactly
+              # the wrong thing (Codex deploy r17).
+              echo "clean: FAILED (rc=$clean_rc) — the WIPE RAN and the topic recreation did NOT finish."
+              echo "       Non-preserved topics are deleted or only partly recreated, dev is down and the"
+              echo "       es4->dev mirrors are PAUSED. The overnight start below will refuse to scale"
+              echo "       anything up until a topic pass succeeds. Recover with 'dev-cleanup topics'"
+              echo "       (repeat until it exits 0), then 'dev-cleanup overnight'."
+            else
+              echo "clean: FAILED (rc=$clean_rc) — the overnight ES start proceeds on the UN-WIPED state;"
+              echo "       re-run 'dev-cleanup now' by hand after 17:20 ET if a wipe is needed"
+            fi
+            echo "--- overnight ES-tracking start ---"
+            start_rc=0; do_start_overnight || start_rc=$?
+            # THE COMBINED VERDICT CARRIES. This block's status was discarded, so launchd could read
+            # success after BOTH the clean and the overnight start had failed.
+            if [ "$clean_rc" -ne 0 ] || [ "$start_rc" -ne 0 ]; then
+              AUTO_SLOT_FAILED=1
+              echo "auto CLEAN slot: FAILED (clean rc=$clean_rc, overnight start rc=$start_rc)"
+            fi; } >> "$LOG" 2>&1
         fi ;;
       CLEAN_LATE)
         # Past the wipe deadline (17:40 ET): too late to start a 5-10 min wipe and still have the
@@ -1466,7 +1575,7 @@ PY
     # not unconditionally safe for an arbitrary reader — check what reads a topic before widening
     # this to one whose history someone depends on.
     require_kafka_cli
-    ensure_topics; resume_dev_mirrors_if_declared $?
+    ensure_topics_or_refuse || exit 1
     ;;
   *) echo "usage: dev-cleanup [ | now | start | overnight | topics | logs ]  (no arg = calendar-gated auto for launchd)"; exit 2 ;;
 esac
@@ -1479,4 +1588,11 @@ esac
 if [ "${DEV_MIRRORS_RESUME_FAILED:-0}" != 0 ]; then
   echo "dev-cleanup: FINISHED WITH FROZEN MIRRORS — es4 -> dev is not flowing (see the ERROR above)"
   exit 3
+fi
+# AND THE AUTOMATIC SLOT'S VERDICT. The CLEAN slot runs its work inside a redirected block whose
+# status was dropped, so launchd read 0 after both the clean and the overnight start had failed
+# (Codex deploy r17). Same reasoning as the mirrors above: the work is over, so this REPORTS.
+if [ "${AUTO_SLOT_FAILED:-0}" != 0 ]; then
+  echo "dev-cleanup: the automatic slot FAILED — see $LOG (nothing may be scaled up until a topic pass exits 0)"
+  exit 4
 fi

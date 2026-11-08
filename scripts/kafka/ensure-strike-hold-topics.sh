@@ -13,7 +13,15 @@
 #
 # The difference between the two topics is the point and is enforced here, not assumed: `current` is COMPACTED because the newest record per candidate is the whole
 # answer, and `scoring` must NOT be, because every record is a distinct (candidate, session) observation and compaction would discard exactly what the topic
-# accumulates. An existing topic is never recreated, altered or shrunk: any difference fails closed. The four INPUT topics belong to other owners and are not created here.
+# accumulates. An existing topic is never recreated, altered or shrunk: any difference fails closed. The FIVE INPUT topics belong to other owners and are not created here.
+#
+# ONE INPUT IS VERIFIED, THOUGH NEVER CREATED: es.mbo.coverage, unconditionally and as a literal.
+# Kafka Streams will not START without a source topic, so a strike-hold rolled before
+# es-liquidity-engine's barrier has created the coverage topic does not degrade — it CRASH-LOOPS,
+# and the operator sees a pod restarting rather than a deploy that refused and said why. Schema sync
+# registers the subject at 3511 but creates no topic, so nothing else on this path catches it
+# (Codex deploy r4). Verified and not created, because the topic belongs to the engine: this barrier
+# states the precondition, the engine's barrier satisfies it.
 # dev-cleanup.sh does NOT run this barrier: its topic pass recreates the shapes declared in scripts/kafka/topics.env.
 set -euo pipefail
 
@@ -150,6 +158,59 @@ create_if_absent() { # <topic> <cleanup.policy> <retention.ms> [<retention.bytes
 }
 
 rc=0
+# THE COVERAGE INPUT. The name is the DECLARED one; the pairing with the Deployment is asserted in
+# Python, not parsed here.
+#
+# Three versions of this got it wrong, each in the same direction. First it read
+# $KAFKA_STRIKE_HOLD_COVERAGE_TOPIC and skipped when blank — and the Jenkins stage never exports
+# that variable, so every check was silently skipped on every real deploy. Then it parsed the
+# Deployment manifest with awk, which could not see a flow-style entry, a comment between the key
+# and its value, or a valueFrom, and fell through to "absent". Hardening that parse then left two
+# more holes Codex found: it fell back from the overlay to the base, so an overlay that REMOVED the
+# key would still enforce the dependency and an unreadable overlay would silently use base; and it
+# was not scoped to the strike-hold container, so a sole matching key in a sidecar or a second
+# document would be accepted as this service's setting.
+#
+# The lesson is that a shell script should not be reasoning about YAML. The topic name is a
+# CONSTANT of this repository: topics.env declares es.mbo.coverage and the Deployment sets exactly
+# that. So the barrier verifies that constant unconditionally, and the question it was trying to
+# answer — does the Deployment this commit applies really configure that topic — is asserted by
+# tests/test_coverage_topic_wiring.py, which parses the YAML with a YAML parser and scopes to
+# the container. If the Deployment ever stops setting it, that test fails and names this barrier.
+#
+# NO OVERRIDE. The deployed pod hardcodes es.mbo.coverage — it is a literal value in the
+# Deployment, not a reference — so a barrier that honoured an environment override would validate a
+# different topology from the one being deployed, and a pre-existing value on the Jenkins agent
+# would be enough to do it silently. My blank-override arm was proving that bypass GREEN (Codex
+# deploy r8).
+#
+# So this is the literal constant, checked unconditionally. There is nothing to configure here: a
+# deploy barrier states the precondition of THIS deploy, and the precondition is fixed by the
+# Deployment in this commit. tests/test_coverage_topic_wiring.py is what keeps the two in
+# step.
+COVERAGE_IN=es.mbo.coverage
+if ! grep -qxF "$COVERAGE_IN" <<<"$LIST"; then
+  echo "FAIL: strike-hold is configured to read coverage from '$COVERAGE_IN' but that topic does not exist."
+  echo "      Kafka Streams will not start without a source topic, so this pod would CRASH-LOOP rather than"
+  echo "      report ABSORPTION_COVERAGE_UNAVAILABLE. Deploy es-liquidity-engine first — its barrier"
+  echo "      (scripts/kafka/ensure-es-liquidity-engine-topics.sh) creates it."
+  echo "      There is no environment escape: this barrier verifies a literal, because the pod"
+  echo "      hardcodes one. To run strike-hold with NO coverage source, remove the env key from its"
+  echo "      Deployment and update this barrier's constant — tests/test_coverage_topic_wiring.py"
+  echo "      pins the two together and will say so if you change one and not the other."
+  rc=1
+else
+  # Read-only: the shape is the engine's to create, and create-if-absent=no cannot make one here.
+  ensure_topic "$COVERAGE_IN" compact "exact:-1" 1048576 no || rc=1
+  check_partitions "$COVERAGE_IN" || rc=1
+  # retention.bytes TOO. The shared routine checks the policy, retention.ms, the message-size
+  # floor, ISR and the partition count — but NOT bytes, so a coverage topic that was compact with
+  # retention.ms=-1 and a 256 MiB CAP passed the whole check. A cap on this topic ages out the
+  # oldest contract's interval, which is the one thing the interval must not do: a reader would
+  # find no coverage for a contract and read it as "never observed" (Codex deploy r5).
+  check_retention_bytes "$COVERAGE_IN" -1 || rc=1
+fi
+
 # `current`: compact,delete. create-if-absent=no on the shared routine, so it can never create one at the default shape.
 create_if_absent "$CURRENT" compact,delete -1 || rc=1
 ensure_topic "$CURRENT" compact,delete "exact:-1" 1048576 no || rc=1

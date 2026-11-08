@@ -1,0 +1,81 @@
+{
+  "type": "record",
+  "name": "EsMboCoverage",
+  "namespace": "com.optionsedge.contracts.esmbo",
+  "doc": "THE COVERAGE MESSAGE: the stretch of time through which the MBO engine states it observed and classified the ES book CONTINUOUSLY, with no degraded and no skipped bucket. Written to es.mbo.coverage under RecordNameStrategy with the fixed id 3511, keyed by contract, compacted (the newest record per contract is the whole answer). Published when the covered run changes - it extends, it breaks, or a new one begins - and not once per bucket. It exists so that a downstream reader can tell 'the book showed nothing here' from 'the engine was not watching here': without it, silence is ambiguous and no absence can honestly be claimed. A reader must treat coverage as the interval [coveredFromMs, coveredThroughMs] of the CURRENT run, never as a single frontier - a frontier alone cannot say whether an instant preceded the run's start.",
+  "fields": [
+    {
+      "name": "schemaVersion",
+      "type": "int",
+      "default": 1
+    },
+    {
+      "name": "messageType",
+      "type": "string",
+      "doc": "ES_MBO_COVERAGE"
+    },
+    {
+      "name": "environment",
+      "type": "string"
+    },
+    {
+      "name": "contract",
+      "type": "string",
+      "doc": "The ES contract this run is about. Coverage is per contract and never aggregated across contracts: around a quarterly roll two are live, and one instrument's continuity says nothing about the other's."
+    },
+    {
+      "name": "bucketEnd",
+      "type": "long",
+      "doc": "The bucket end this record was emitted at \u2014 EVENT time off the bucket grid, never a wall clock, so a replay reproduces it. Equal to coveredThroughMs while a run is extending; on a BROKEN record it is the end of the bucket that broke the run, which is one bucket PAST coveredThroughMs."
+    },
+    {
+      "name": "configFingerprint",
+      "type": "string",
+      "doc": "The engine configuration that produced this claim, as every other record in this family carries. A coverage interval is only as meaningful as the settings that decided what 'fully observed' means, so the two travel together."
+    },
+    {
+      "name": "runId",
+      "type": "long",
+      "doc": "Increments on every break, so a reader can tell an EXTENDED run from a NEW one that happens to start where the old ended. Two records with the same runId describe one continuous stretch."
+    },
+    {
+      "name": "coveredFromMs",
+      "type": "long",
+      "doc": "The start of the current continuous run: the END of the bucket before its first fully observed bucket. An instant before this is NOT covered by this record, however large coveredThroughMs is."
+    },
+    {
+      "name": "coveredThroughMs",
+      "type": "long",
+      "doc": "The end of the newest fully observed bucket of the current run. Monotonic WITHIN a run and reset when a new run begins - never carried across a break, because that would vouch for a stretch the engine did not watch."
+    },
+    {
+      "name": "bucketMs",
+      "type": "long",
+      "doc": "The bucket width the run is measured in, so a reader can judge the granularity of the claim rather than assume it."
+    },
+    {
+      "name": "bucketsCovered",
+      "type": "long",
+      "doc": "Fully observed buckets in this run. A run of one bucket is a weak claim and this is how a reader sees that."
+    },
+    {
+      "name": "state",
+      "type": "string",
+      "doc": "COVERED while a run is open, or BROKEN on the record that reports a run ending. On BROKEN the interval still describes the stretch that WAS covered; it simply stops there."
+    },
+    {
+      "name": "breakReason",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null,
+      "doc": "Why the previous run ended, on the record that reports a break and on the first record of the next run: DEGRADED (a bucket closed by the wall-clock timer, so there is no book-clock evidence it is complete), NO_SAMPLES (a bucket closed on the book clock but carried no admitted record \u2014 the engine learned nothing about that stretch, which is what one late record sweeping a silent gap looks like), EPOCH (the epoch left LIVE \u2014 awaiting an image, snapshotting or unavailable), GAP (the bucket grid jumped past the maximum age and buckets were skipped entirely), or START (there was no previous run). Null while a run is simply extending."
+    },
+    {
+      "name": "epochId",
+      "type": "long",
+      "doc": "The engine epoch the run belongs to. A new epoch is always a break."
+    }
+  ]
+}

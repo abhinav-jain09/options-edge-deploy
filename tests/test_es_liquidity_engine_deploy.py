@@ -20,13 +20,20 @@ FAKE = ROOT / "tests/fake_kafka_cli.py"
 BARRIER = ROOT / "scripts/kafka/ensure-es-liquidity-engine-topics.sh"
 BASE = "es.mbo.level-base"
 LEVEL_FLOW, HEALTH, FINAL, SNAPSHOT, EVENTS, CLOSURES = "es.mbo.level-flow", "es.mbo.health", "es.mbo.level-flow-final", "es.mbo.snapshot", "es.mbo.liquidity-events", "es.mbo.closures"
+# THE COVERAGE MESSAGE (EsMboCoverage 3511): pure compact, one partition, keyed by contract.
+COVERAGE = "es.mbo.coverage"
 EVENTS_CAP = "134217728"
 ONE_DAY, CAP = "86400000", "268435456"
 JAR = ROOT / "tools/schema-governance/schema-governance-tool.jar"
 NS = "com.optionsedge.contracts.esmbo"
 # subject -> {version: id}. Health and the final rows have two versions (document A revision 12 sections 4.1 and 4.2, contracts 0.89.0): 3504 and 3506 are the frozen archival version 1.
 VERSIONS = {"EsMboClosure": {1: 3501}, "EsMboLevelFlow": {1: 3502}, "EsMboEvent": {1: 3503}, "EsMboHealth": {1: 3504, 2: 3509}, "EsMboSnapshot": {1: 3505},
-            "EsMboLevelFlowFinal": {1: 3506, 2: 3510}, "EsMboLevelBase": {1: 3507}, "EsMboClosureFinal": {1: 3508}}
+            "EsMboLevelFlowFinal": {1: 3506, 2: 3510}, "EsMboLevelBase": {1: 3507}, "EsMboClosureFinal": {1: 3508},
+            # Coverage. Listing it here is what makes the map test require its registration row and
+            # the manifest test verify its entry — without it both passed over the new subject
+            # entirely, and the engine runs with auto.register.schemas=false, so an unregistered
+            # subject is a runtime failure to publish rather than a governance nit (Codex deploy r2).
+            "EsMboCoverage": {1: 3511}}
 IDS = {n: max(v.values()) for n, v in VERSIONS.items()}   # the id the engine WRITES
 
 
@@ -195,15 +202,44 @@ def run_barrier(topics, environment="dev"):
     return r.returncode, r.stdout + r.stderr, calls.read_text().splitlines(), json.loads(state.read_text())
 
 
+def barrier_stage_body() -> str:
+    """The body of the ONE Jenkinsfile stage that runs the topic barriers.
+
+    Scoped, because two global searches of the file can each be satisfied somewhere unrelated — the
+    service named in another list and the case arm in another stage — while the stage that matters
+    omits it (Codex deploy r14).
+    """
+    j = read("Jenkinsfile.service-deploy")
+    needle = "ensure-es-liquidity-engine-topics.sh ;;"
+    i = j.index(needle)
+    start = j.rindex("    stage(", 0, i)
+    end = j.find("\n    stage(", i)
+    body = j[start:end if end != -1 else len(j)]
+    # SANITY ON THE EXTRACTION ITSELF, because it is lexical: a `stage(` inside a comment or a string
+    # could make it select the wrong span, and an empty or truncated body would then satisfy a
+    # "not in" assertion while proving nothing (Codex deploy r15). These are cheap and make a bad
+    # extraction fail loudly instead of quietly.
+    if len(body) < 200 or "steps {" not in body or needle not in body:
+        raise AssertionError(
+            "the barrier stage extraction looks wrong: %d chars, steps=%s, dispatch=%s"
+            % (len(body), "steps {" in body, needle in body))
+    if body.count("ensure-es-liquidity-engine-topics.sh ;;") != 1:
+        raise AssertionError("the extracted span covers more than one dispatch — it is not one stage")
+    return body
+
+
 def right_topics():
-    return {LEVEL_FLOW: shaped("delete", ONE_DAY, CAP), FINAL: shaped("delete", ONE_DAY, CAP), BASE: shaped("delete", ONE_DAY, CAP), HEALTH: shaped("delete", ONE_DAY), SNAPSHOT: shaped("compact", "-1", "-1"), EVENTS: shaped("delete", "-1", EVENTS_CAP), CLOSURES: shaped("compact", "-1", "-1")}
+    return {LEVEL_FLOW: shaped("delete", ONE_DAY, CAP), FINAL: shaped("delete", ONE_DAY, CAP), BASE: shaped("delete", ONE_DAY, CAP), HEALTH: shaped("delete", ONE_DAY), SNAPSHOT: shaped("compact", "-1", "-1"), EVENTS: shaped("delete", "-1", EVENTS_CAP), CLOSURES: shaped("compact", "-1", "-1"),
+            # COVERAGE belongs in the already-correct set, or every drift case built from it hands
+            # the barrier a cluster missing the topic and tests creation instead of drift.
+            COVERAGE: shaped("compact", "-1", "-1")}
 
 
 class Topics(unittest.TestCase):
     VARS = ["OPTIONS_EDGE_TOPICS", "OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES", "OPTIONS_EDGE_TOPIC_RETENTION_BYTES_OVERRIDES", "OPTIONS_EDGE_EXACT_PARTITION_TOPICS",
             "OPTIONS_EDGE_PURE_COMPACT_TOPICS", "OPTIONS_EDGE_ES4_TOPICS"]
 
-    def test_the_two_topics_are_declared_one_partition_exact_with_the_declared_retention_and_bytes(self):
+    def test_every_topic_is_declared_one_partition_exact_with_the_declared_retention_and_bytes(self):
         d = declarations(self.VARS)
         retention = dict(x.split("=", 1) for x in d["OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES"] if "=" in x)
         bytes_ = dict(x.split("=", 1) for x in d["OPTIONS_EDGE_TOPIC_RETENTION_BYTES_OVERRIDES"] if "=" in x)
@@ -251,13 +287,19 @@ class Topics(unittest.TestCase):
 
 
 class Barrier(unittest.TestCase):
-    def test_a_fresh_dev_cluster_gets_both_topics_at_their_shapes_and_no_broker_is_touched(self):
+    def test_a_fresh_dev_cluster_gets_every_topic_at_its_shape_and_no_broker_is_touched(self):
         rc, out, calls, state = run_barrier({})
         self.assertEqual(rc, 0, out)
         self.assertEqual([c for c in calls if "--entity-type brokers" in c or "--entity-default" in c], [], "no broker-wide change")
         self.assertFalse(any("--alter" in c or "--delete" in c for c in calls))
         for t, policy, ret, b in ((LEVEL_FLOW, "delete", ONE_DAY, CAP), (FINAL, "delete", ONE_DAY, CAP), (BASE, "delete", ONE_DAY, CAP), (HEALTH, "delete", ONE_DAY, None), (EVENTS, "delete", "-1", EVENTS_CAP),
-                                  (CLOSURES, "compact", "-1", "-1"), (SNAPSHOT, "compact", "-1", "-1")):
+                                  (CLOSURES, "compact", "-1", "-1"), (SNAPSHOT, "compact", "-1", "-1"),
+                                  # COVERAGE. It was absent from this matrix, so nothing here proved
+                                  # the barrier creates it at its declared shape — and the test's own
+                                  # name said "both topics" while it exercised seven (Codex deploy
+                                  # r12). The shell suite covers it too; this is the harness that was
+                                  # already here and should have been extended first.
+                                  (COVERAGE, "compact", "-1", "-1")):
             d = state["topics"][t]
             self.assertEqual((d["partitions"], d["configs"]["cleanup.policy"], d["configs"]["retention.ms"]), (1, policy, ret), t)
             if b:
@@ -291,11 +333,21 @@ class Barrier(unittest.TestCase):
             "snapshot delete": (SNAPSHOT, lambda d: d["configs"].update({"cleanup.policy": "delete"})),
             "snapshot finite retention": (SNAPSHOT, lambda d: d["configs"].update({"retention.ms": ONE_DAY})),
             "snapshot byte-capped": (SNAPSHOT, lambda d: d["configs"].update({"retention.bytes": CAP})),
+            # COVERAGE drift. A delete policy or a byte cap each defeat the interval's whole point:
+            # the newest statement per contract must be the answer, and a cap ages out the oldest
+            # contract's run so a reader finds nothing and reads it as "never observed".
+            "coverage delete": (COVERAGE, lambda d: d["configs"].update({"cleanup.policy": "delete"})),
+            "coverage finite retention": (COVERAGE, lambda d: d["configs"].update({"retention.ms": ONE_DAY})),
+            "coverage byte-capped": (COVERAGE, lambda d: d["configs"].update({"retention.bytes": CAP})),
+            "coverage 4 partitions": (COVERAGE, lambda d: d.update(partitions=4)),
             "snapshot 4 partitions": (SNAPSHOT, lambda d: d.update(partitions=4)),
             "closures delete": (CLOSURES, lambda d: d["configs"].update({"cleanup.policy": "delete"})),
             "closures finite retention": (CLOSURES, lambda d: d["configs"].update({"retention.ms": ONE_DAY})),
             "closures byte-capped": (CLOSURES, lambda d: d["configs"].update({"retention.bytes": CAP})),
-            "snapshot byte-capped": (SNAPSHOT, lambda d: d["configs"].update({"retention.bytes": CAP})),
+            # A DISTINCT mutation. This key was a duplicate of the one above, and a duplicate dict
+            # key is silently dropped by Python — so one declared drift case could never run while
+            # the dict still read as covering it (Codex deploy r13).
+            "snapshot 2 partitions": (SNAPSHOT, lambda d: d.update(partitions=2)),
             "closures 4 partitions": (CLOSURES, lambda d: d.update(partitions=4)),
             "events 4 partitions": (EVENTS, lambda d: d.update(partitions=4)),
             "events compacted": (EVENTS, lambda d: d["configs"].update({"cleanup.policy": "compact"})),
@@ -318,9 +370,30 @@ class Barrier(unittest.TestCase):
     def test_it_is_executable_sources_the_shared_routine_and_the_service_deploy_stage_runs_it(self):
         self.assertTrue(os.access(BARRIER, os.X_OK))
         self.assertIn("ensure-topic-contract.lib.sh", BARRIER.read_text())
-        j = read("Jenkinsfile.service-deploy")
-        self.assertIn("params.SERVICE == 'es-liquidity-engine'", j)
-        self.assertIn("es-liquidity-engine) scripts/kafka/ensure-es-liquidity-engine-topics.sh ;;", j)
+        # THE SAME STAGE, not two global searches. The previous version asserted a
+        # `.contains(params.SERVICE)` list anywhere in the file and the case arm anywhere else, so it
+        # would pass with the service named in an UNRELATED list while the topic-barrier stage
+        # omitted it (Codex deploy r14). Both assertions are now made against the body of the one
+        # stage that runs this barrier.
+        stage = barrier_stage_body()
+        self.assertIn("es-liquidity-engine) scripts/kafka/ensure-es-liquidity-engine-topics.sh ;;", stage,
+                      "the barrier stage must dispatch to this service's barrier")
+        self.assertRegex(stage, r"\[[^\]]*'es-liquidity-engine'[^\]]*\]\.contains\(params\.SERVICE\)",
+                         "and its own `when` must gate on a service list containing it — the"
+                         " `.contains()` that replaced the equality chain when the file hit the"
+                         " Groovy CPS 64 KB method limit")
+
+    def test_the_barrier_has_a_mocked_negative_control_suite_and_the_gate_runs_it(self):
+        # The barrier had NO mocked suite: the only coverage was this file asserting that the
+        # Jenkinsfile mentions the script and the script mentions the shared routine, both of which
+        # pass however wrong the shapes are. So es.mbo.coverage was asserted textually and no more
+        # (Codex deploy r2). The suite now drives the real barrier against mocked CLIs, and this
+        # requires it to exist and to be wired into the gate — a suite nothing runs is not coverage.
+        suite = ROOT / "scripts/kafka/ensure-es-liquidity-engine-topics-test.sh"
+        self.assertTrue(suite.is_file(), "the barrier's negative-control suite must exist")
+        self.assertTrue(os.access(suite, os.X_OK))
+        self.assertIn("bash scripts/kafka/ensure-es-liquidity-engine-topics-test.sh",
+                      read(".github/workflows/deploy-validation.yml"))
 
 
 class Schemas(unittest.TestCase):
@@ -360,7 +433,7 @@ class Schemas(unittest.TestCase):
         for v, i in VERSIONS["EsMboLevelFlowFinal"].items():
             e = next(x for x in m["entries"] if x["subject"] == f"{NS}.EsMboLevelFlowFinal" and x["version"] == v)
             self.assertEqual(e["consumers"], [{"service": "level-absorption", "accepts": [3506, 3510], "environments": ["dev"]}])
-        self.assertEqual(m["familyBlocks"]["esmbo"], [[3501, 3510]])
+        self.assertEqual(m["familyBlocks"]["esmbo"], [[3501, 3510], [3511, 3511]])
         flow = by["com.optionsedge.contracts.deltaflow.DeltaFlowEvent"]
         self.assertIn({"service": "es-liquidity-engine", "accepts": [3007], "environments": ["dev"]}, flow["consumers"], "the drop engine inside the service reads the delta flow (dev id 3007)")
         mbo = by["es.rithmic.mbo-value"]
@@ -374,7 +447,27 @@ class Schemas(unittest.TestCase):
         self.assertIn("es-liquidity-engine", named)
         sh = read("scripts/deploy/service-deploy.sh")
         self.assertIn("bash scripts/ci/schema-sync.sh", sh)
-        self.assertRegex(sh, r'select\(\.service == \\"\$SERVICE\\"\)')
+
+        # EXECUTED, not matched. The replacement for the old stale assertion was textual too, so a
+        # service-specific `EXEMPT:` bypass could have been introduced while every asserted string
+        # survived (Codex deploy r14). The scope script is run.
+        self.assertIn('bash scripts/ci/schema-sync-scope.sh "$SERVICE" "$ENVIRONMENT"', sh,
+                      "the deploy must ask the scope script whether this service is gated")
+        for service in ("es-liquidity-engine", "strike-hold"):
+            r = subprocess.run(["bash", "scripts/ci/schema-sync-scope.sh", service, "dev"],
+                               cwd=ROOT, capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertEqual(r.stdout.strip(), "GATE",
+                             f"{service} must be GATEd in dev, or its schemas are never registered")
+        # And the ratchet's other arm really is reachable, so GATE above is a decision and not a
+        # constant: a service the manifest names nowhere is reported as uncovered.
+        r = subprocess.run(["bash", "scripts/ci/schema-sync-scope.sh", "no-such-service", "dev"],
+                           cwd=ROOT, capture_output=True, text=True)
+        self.assertEqual(r.stdout.strip(), "NOT_GATED_UNCOVERED", r.stdout + r.stderr)
+        # The GATE branch must be the one that runs schema-sync.sh, and the uncovered branch must
+        # say so out loud rather than passing quietly.
+        self.assertIn("NOT_GATED_UNCOVERED", sh)
+        self.assertIn("es-liquidity-engine", named)
 
     def test_the_manifest_validates_with_the_governance_tool(self):
         r = subprocess.run(["java", "-jar", str(JAR), "validate", "--manifest", str(ROOT / "schema-manifest/manifest.json"), "--snapshots", str(ROOT / "schema-manifest/schemas")],
@@ -384,3 +477,39 @@ class Schemas(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CoverageTopicDeclaration(unittest.TestCase):
+    """THE COVERAGE MESSAGE's topic, as topics.env declares it and the barrier enforces it.
+
+    It is PURE COMPACT and keyed by contract because the newest statement per contract is the whole
+    answer; a reader wants the CURRENT run, and a retained history of every run would make the
+    newest one something it has to search for. Asserted here because the shape is the difference
+    between "the current interval" and "a log you must scan".
+    """
+
+    VARS = ("OPTIONS_EDGE_TOPICS", "OPTIONS_EDGE_PURE_COMPACT_TOPICS",
+            "OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES", "OPTIONS_EDGE_TOPIC_RETENTION_BYTES_OVERRIDES",
+            "OPTIONS_EDGE_RESET_REBUILDABLE_TOPICS")
+
+    def test_declared_pure_compact_one_partition_on_dev_and_absent_on_production(self):
+        dev = declarations(self.VARS, "dev")
+        self.assertIn(COVERAGE + ":1", dev["OPTIONS_EDGE_TOPICS"],
+                      "one partition, declared")
+        self.assertIn(COVERAGE, dev["OPTIONS_EDGE_PURE_COMPACT_TOPICS"],
+                      "pure compact: the newest statement per contract IS the content")
+        self.assertIn(COVERAGE + "=-1", dev["OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES"])
+        self.assertIn(COVERAGE + "=-1", dev["OPTIONS_EDGE_TOPIC_RETENTION_BYTES_OVERRIDES"])
+        self.assertIn(COVERAGE, dev["OPTIONS_EDGE_RESET_REBUILDABLE_TOPICS"],
+                      "REBUILDABLE: a missing coverage record makes a reader refuse to claim an "
+                      "absence, which is the safe direction")
+        prod = declarations(self.VARS, "production")
+        for var, val in prod.items():
+            self.assertNotIn(COVERAGE, val,
+                             "dev only: production must declare nothing (%s)" % var)
+
+    def test_the_barrier_creates_and_verifies_it(self):
+        src = (ROOT / "scripts/kafka/ensure-es-liquidity-engine-topics.sh").read_text()
+        self.assertIn("COVERAGE=", src, "the barrier must name the topic")
+        self.assertIn('ensure_with_bytes "$COVERAGE" compact -1 -1', src,
+                      "and enforce pure compact rather than leaving it to the broker default")

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ensure-es-liquidity-engine-topics.sh - es-liquidity-engine-service's six MBO output topics must be right BEFORE the MBO engine publishes (the first-deploy barrier, as
+# ensure-es-liquidity-engine-topics.sh - es-liquidity-engine-service's EIGHT MBO output topics must be right BEFORE the MBO engine publishes (the first-deploy barrier, as
 # ensure-es-liquidity-wall-topics.sh). DEV ONLY: the service renders on dev alone (services.yaml envs [dev]); refuses to run unless ENVIRONMENT is exactly "dev".
 #
 #   NO BROKER-WIDE CHANGE. The shapes are the ones scripts/kafka/topics.env declares (one partition each, exact):
@@ -7,6 +7,7 @@
 #   es.mbo.liquidity-events 1 partition, delete, retention.ms EXACTLY -1, retention.bytes EXACTLY 134217728 (128 MiB cap; NOT compacted: the event log)
 #   es.mbo.closures     1 partition, compact, retention.ms EXACTLY -1, retention.bytes EXACTLY -1 (pure compact)
 #   es.mbo.snapshot     1 partition, compact, retention.ms EXACTLY -1, retention.bytes EXACTLY -1 (pure compact)
+#   es.mbo.coverage     1 partition, compact, retention.ms EXACTLY -1, retention.bytes EXACTLY -1 (pure compact)  EsMboCoverage (3511) THE COVERAGE MESSAGE, keyed by contract
 #   es.mbo.health       1 partition, delete, retention.ms EXACTLY 86400000 (1 day)
 #   es.mbo.level-base 1 partition, delete, retention.ms EXACTLY 86400000 (1 day), retention.bytes EXACTLY 268435456
 #   es.mbo.level-flow-final 1 partition, delete, retention.ms EXACTLY 86400000 (1 day), retention.bytes EXACTLY 268435456
@@ -43,6 +44,11 @@ HEALTH="${KAFKA_ES_MBO_HEALTH_TOPIC:-es.mbo.health}"
 FINAL="${KAFKA_ES_MBO_FINAL_TOPIC:-es.mbo.level-flow-final}"
 BASE="${KAFKA_ES_MBO_LEVEL_BASE_TOPIC:-es.mbo.level-base}"
 SNAPSHOT="${KAFKA_ES_MBO_SNAPSHOT_TOPIC:-es.mbo.snapshot}"
+# NO OVERRIDE, unlike the sibling topics above. The engine pod hardcodes es.mbo.coverage as a
+# literal in its Deployment, so a barrier honouring an environment override would create and verify
+# one topic while the pod published to another — and nothing downstream would tell (Codex deploy r8).
+# The pre-existing overrides on the other topics are left as they are: they predate this change.
+COVERAGE=es.mbo.coverage
 CLOSURES="${KAFKA_ES_MBO_CLOSURE_TOPIC:-es.mbo.closures}"
 EVENTS="${KAFKA_ES_MBO_EVENT_TOPIC:-es.mbo.liquidity-events}"
 EVENTS_BYTES=134217728
@@ -84,6 +90,10 @@ ensure_with_bytes() { # <topic> <cleanup.policy> <retention.ms> <retention.bytes
 rc=0
 ensure_with_bytes "$LEVEL_FLOW" delete "$ONE_DAY_MS" "$LEVEL_FLOW_BYTES" || rc=1
 ensure_with_bytes "$SNAPSHOT" compact -1 -1 || rc=1
+# THE COVERAGE MESSAGE: pure compact, keyed by contract, so the newest statement per contract is the
+# whole answer. It must be COMPACTED and not a log — a reader wants the current run, and a retained
+# history of every run would make the newest one something it has to search for.
+ensure_with_bytes "$COVERAGE" compact -1 -1 || rc=1
 ensure_with_bytes "$CLOSURES" compact -1 -1 || rc=1
 ensure_with_bytes "$EVENTS" delete -1 "$EVENTS_BYTES" || rc=1
 ensure_with_bytes "$FINAL" delete "$ONE_DAY_MS" "$LEVEL_FLOW_BYTES" || rc=1

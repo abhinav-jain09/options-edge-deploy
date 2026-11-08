@@ -107,6 +107,14 @@ spec:
             # collector's gate (rithmic-depth-bridge PR 16). A label, not a filter: the engine publishes its rows whatever the status.
             - name: ES_MBO_SOURCE_LAG_BOUND_MILLIS
               value: "10000"
+            # THE COVERAGE MESSAGE (EsMboCoverage, contracts 0.91.0 fixed id 3511): the interval
+            # through which this engine states it observed and classified the book CONTINUOUSLY,
+            # keyed by contract on a compacted topic. A run extends only across contiguous buckets
+            # that closed LIVE, on the BOOK clock, and carried admitted records — a bucket the
+            # wall-clock timer closed, or one a late record swept over in silence, breaks it. Read
+            # by strike-hold-service, which cannot claim an absence without it.
+            - name: ES_MBO_COVERAGE_TOPIC
+              value: es.mbo.coverage
             - name: ES_MBO_TAPE_TOPIC
               value: underlying.es.trades
             - name: JAVA_TOOL_OPTIONS

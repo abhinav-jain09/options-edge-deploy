@@ -99,12 +99,12 @@ pipeline {
       // publishes the seven single-partition Avro topics futures.liquidity-wall.* (ids 3401-3407; barrier below). There is no production overlay for it, so ENVIRONMENT=production fails at the overlay
       // lookup; nothing in this file authorises a production roll. Single replica only.
       'es-liquidity-wall',
-      // es-liquidity-engine (the ES MBO liquidity engine): DEV ONLY, replicas 1; the drop engine creates its own es.drop.* topics, so no barrier yet. drop-classifier-ref: temporary G3b reference, dev only.
+      // es-liquidity-engine (the ES MBO liquidity engine): DEV ONLY, replicas 1; the drop engine creates its own es.drop.* topics, and the MBO topics (now EIGHT, including es.mbo.coverage) have the barrier below. drop-classifier-ref: temporary G3b reference, dev only.
       'es-liquidity-engine',
       // liquidity-validator (the live READ-ONLY liquidity validator; never trades): DEV ONLY, replicas 1; reads five existing topics, publishes futures.liquidity-validator.{evaluations,data-gaps,daily} (ids 3601-3603; barrier below).
       'liquidity-validator',
       'drop-classifier-ref',
-      // strike-hold (the strike-hold measurement service; never trades): DEV ONLY, replicas 1; reads four existing topics, publishes options.spx.strike-hold.{current,scoring} (barrier below).
+      // strike-hold (the strike-hold measurement service; never trades): DEV ONLY, replicas 1; reads FIVE existing topics (spot, the gamma ladder, the basis, the ES liquidity events and es.mbo.coverage), publishes options.spx.strike-hold.{current,scoring} (barrier below).
       //
       // ⚠️ THIS FILE IS AT THE GROOVY CPS METHOD-SIZE LIMIT. Adding strike-hold's SERVICE choice,
       // its barrier case and one more `||` to the barrier's `when` took it OVER: build 3244 failed
@@ -1042,7 +1042,7 @@ PYEOF
       // BEFORE any rollout of this service, same barrier as break-classifier: creates the absent topics, verifies every one (six topics, one partition each, the declared cleanup policy and retention,
       // topic-level max.message.bytes 9437184 on the checkpoint and journal topics) and changes NO broker config. Idempotent; fails closed. The service is LIVE on dev (UNVALIDATED), so a re-deploy of it runs this first and a wipe
       // must be followed by this barrier before the service is relied on; it is NOT run by dev-cleanup.sh, whose topic pass recreates the declared shapes from topics.env instead.
-      // es-liquidity-engine (dev only, two topics es.mbo.level-flow and es.mbo.health: scripts/kafka/ensure-es-liquidity-engine-topics.sh) shares this stage the same way.
+      // es-liquidity-engine (dev only, EIGHT topics: level-flow, health, level-flow-final, level-base, liquidity-events, closures, snapshot and coverage — scripts/kafka/ensure-es-liquidity-engine-topics.sh) shares this stage the same way.
       // strike-hold (dev only, two topics options.spx.strike-hold.{current,scoring}: scripts/kafka/ensure-strike-hold-topics.sh) shares this stage the same way. The barrier is what
       // makes the declared RETENTION a precondition of the deploy: the pod can set the cleanup policy itself but not the retention, so without it a first deploy onto an empty
       // broker could create the evidence topic at the cluster default and age the measurement out from under itself.
