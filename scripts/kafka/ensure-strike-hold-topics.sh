@@ -90,9 +90,18 @@ check_retention_bytes() { # <topic> <exact retention.bytes>
   fi
   # Same refusal as above: `extract` returns the FIRST match, so a config dump carrying two
   # retention.bytes values would be accepted on the strength of whichever came first. Count the
-  # occurrences in the raw dump and refuse anything but exactly one before trusting the value.
+  # occurrences and refuse anything but exactly one before trusting the value.
+  #
+  # COUNTED WITH extract's OWN PATTERN, and that is the whole point. The first version here used a
+  # bare `grep -o 'retention.bytes='`, which on a real `--describe --all` dump counts FIVE: the
+  # value itself, `local.retention.bytes`, and three occurrences inside the `synonyms={...}` text.
+  # It refused a perfectly correct topic on the first live deploy. A duplicate check that parses
+  # differently from the value read is not a stricter check, it is a check of a DIFFERENT question
+  # — which is exactly the two-copies-of-a-parser defect scripts/kafka/topic-config-parse.sh was
+  # written to prevent, reintroduced one layer up. The boundary `(^|[[:space:],])` is what makes
+  # `local.retention.bytes` and the synonym text not count.
   local seen
-  seen=$(printf '%s\n' "$cfg" | grep -o 'retention\.bytes=' | grep -c . || true)
+  seen=$(printf '%s\n' "$cfg" | grep -oE '(^|[[:space:],])retention\.bytes=[^ ]*' | grep -c . || true)
   seen="${seen:-0}"
   if [ "$seen" != "1" ]; then
     echo "FAIL: config of '$topic' carries $seen retention.bytes values, expected exactly 1 — refusing to choose:"
