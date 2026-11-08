@@ -178,7 +178,6 @@ rc=0
 # tests/test_coverage_topic_wiring.py, which parses the YAML with a YAML parser and scopes to
 # the container. If the Deployment ever stops setting it, that test fails and names this barrier.
 #
-# An explicit environment value is still honoured, so an operator can point a one-off run elsewhere.
 # NO OVERRIDE. The deployed pod hardcodes es.mbo.coverage — it is a literal value in the
 # Deployment, not a reference — so a barrier that honoured an environment override would validate a
 # different topology from the one being deployed, and a pre-existing value on the Jenkins agent

@@ -40,10 +40,10 @@ mocks() { # mocks <currentPolicy> <scoringPolicy> <scoringBytes> [extraRetention
 #!/usr/bin/env bash
 args="\$*"
 case "\$args" in
-  # es.mbo.coverage is listed because the barrier now reads the topic name from the DEPLOYMENT
-  # MANIFEST, which names it — so every arm here runs the way a real deploy does, with the coverage
-  # input required. The earlier version of these mocks omitted it and passed only because the
-  # barrier was reading an environment variable the Jenkins stage never exports.
+  # es.mbo.coverage is listed because the barrier verifies it UNCONDITIONALLY — a literal constant,
+  # matching the literal the pod hardcodes — so every arm here runs the way a real deploy does, with
+  # the coverage input required. The earlier version of these mocks omitted it and passed only
+  # because the barrier was then reading an environment variable the Jenkins stage never exports.
   *--list*) echo "options.spx.strike-hold.current"; echo "options.spx.strike-hold.scoring"; echo "es.mbo.coverage" ;;
   *--describe*) echo "Topic: t  TopicId: a  PartitionCount: 1  ReplicationFactor: 1  Configs: cleanup.policy=x" ;;
 esac
@@ -121,10 +121,10 @@ mocks "compact,delete" "delete" "268435456" ""
 cat > "$TMP/bin/kafka-topics" <<'KTX'
 #!/usr/bin/env bash
 case "$*" in
-  # es.mbo.coverage is listed because the barrier now reads the topic name from the DEPLOYMENT
-  # MANIFEST, which names it — so every arm here runs the way a real deploy does, with the coverage
-  # input required. The earlier version of these mocks omitted it and passed only because the
-  # barrier was reading an environment variable the Jenkins stage never exports.
+  # es.mbo.coverage is listed because the barrier verifies it UNCONDITIONALLY — a literal constant,
+  # matching the literal the pod hardcodes — so every arm here runs the way a real deploy does, with
+  # the coverage input required. The earlier version of these mocks omitted it and passed only
+  # because the barrier was then reading an environment variable the Jenkins stage never exports.
   *--list*) echo "options.spx.strike-hold.current"; echo "options.spx.strike-hold.scoring"; echo "es.mbo.coverage" ;;
   *--describe*) echo "Topic: t  NotPartitionCount: 9  ReplicationFactor: 1  Configs: cleanup.policy=x" ;;
 esac
@@ -150,12 +150,16 @@ cov_mocks() { # cov_mocks <listCoverage: yes|no> <coveragePolicy> <coverageReten
 case "\$*" in
   *--list*)
     echo "options.spx.strike-hold.current"; echo "options.spx.strike-hold.scoring"
-    # The trailing true matters: a bare test-and-echo is the LAST command of this branch, so when
-    # the test does not want coverage listed the mock exits 1 and the barrier reports "cannot list
-    # topics" -- a mock failing, read as a barrier passing. Same class as the line break that broke
-    # the engine suite's list mock. (No backticks in this comment: the heredoc is unquoted, so a
-    # backtick here is command substitution, which is how the first version of this fix printed
-    # three syntax errors while still reporting every arm green.)
+    # AN IF-STATEMENT, not a test-and-echo. The first version was a bare test-and-echo, which is
+    # the LAST command of this branch: when an arm does not want coverage listed it exited 1, and
+    # the barrier reported "cannot list topics" — a mock failing, read as a barrier refusing for the
+    # right reason. An `if` with no matching branch returns success, which is why this form is
+    # correct; the comment that replaced it claimed a trailing `true` was doing that work, and there
+    # was no `true` here at all (Codex deploy r11).
+    #
+    # No backticks in this comment: the heredoc is unquoted, so a backtick here is command
+    # substitution — which is how an earlier version of this fix printed three syntax errors while
+    # still reporting every arm green.
     if [ "$1" = yes ]; then echo "es.mbo.coverage"; fi
     ;;
   *--describe*) echo "Topic: t  TopicId: a  PartitionCount: 1  ReplicationFactor: 1  Configs: cleanup.policy=x" ;;
