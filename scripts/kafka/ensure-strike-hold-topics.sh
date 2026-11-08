@@ -59,6 +59,11 @@ check_partitions() { # <topic>
   # whose leading value happens to be right while a second, different one is present — a prefix
   # match on the topic name, or two topics in one describe. Ambiguous output is a refusal, not a
   # value to pick from, so the count of lines is checked before the value is read at all.
+  # A SECOND LINE OF DEFENCE, not the primary one: the shared ensure_topic above already requires
+  # the exact token `PartitionCount:` in its own awk, so a lookalike is refused there first. This
+  # check exists for the ambiguity the shared routine does not cover — a dump carrying TWO counts,
+  # where its awk takes the first.
+  #
   # grep -oE with a TOKEN BOUNDARY, not sed. `sed 's/.*PartitionCount: .../'` has a leading `.*`
   # that eats anything, so it would read a value out of `NotPartitionCount: 9` just as happily —
   # the same loose-matching mistake the retention.bytes counter made. grep rather than sed because

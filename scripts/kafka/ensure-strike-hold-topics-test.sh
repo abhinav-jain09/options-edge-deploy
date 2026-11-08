@@ -103,7 +103,15 @@ out="$(run)"; rc=$?
 if [ "$rc" -ne 0 ]; then ok "a MISSING retention.bytes is refused (local.retention.bytes is not it)"
 else bad "a topic with no retention.bytes was accepted"; fi
 
-# 6) a PartitionCount lookalike must not be read as the count.
+# 6) a PartitionCount lookalike must be refused, and its digits never read as the count.
+#
+# HONEST SCOPE: this arm does NOT distinguish the boundary read from the old loose `sed`, because
+# the SHARED routine ensure_topic refuses this dump first — its own awk requires the exact token
+# `PartitionCount:` and reports "PartitionCount=unknown" under either. So the local boundary in
+# check_partitions is a second line of defence, not what catches this case, and the arm claims only
+# what it checks: the dump is refused, and the lookalike's digits appear nowhere as a read count.
+# Writing it as a regression test for the boundary would have been a test asserting what it does
+# not check — it passed identically with the loose sed restored, which is how this was found.
 mocks "compact,delete" "delete" "268435456" ""
 cat > "$TMP/bin/kafka-topics" <<'KTX'
 #!/usr/bin/env bash
@@ -114,8 +122,11 @@ esac
 KTX
 chmod +x "$TMP/bin/kafka-topics"
 out="$(run)"; rc=$?
-if [ "$rc" -ne 0 ]; then ok "a 'NotPartitionCount' lookalike is not read as the partition count"
-else bad "a lookalike token was read as PartitionCount"; fi
+if [ "$rc" -ne 0 ] && ! printf '%s' "$out" | grep -q "PartitionCount=9"; then
+  ok "a 'NotPartitionCount' lookalike is refused, and its 9 is never read as the count"
+else
+  bad "the lookalike was accepted or its value was read:"; printf '%s\n' "$out" | grep -E "PartitionCount" | head -2
+fi
 
 # 7) DEV ONLY, fail-closed.
 out="$(PATH="$TMP/bin:$PATH" ENVIRONMENT=production KAFKA_BOOTSTRAP_SERVERS=mock:9092 bash "$BAR" 2>&1)"; rc=$?
