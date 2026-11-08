@@ -56,7 +56,7 @@ grep -qE '^unset OE_DEPTH_TOPICS_dev' "$WRAP" || note "$WRAP does not discard an
 # 5. EVERYTHING THE WRAPPER READS FROM BESIDE ITSELF MUST BE INSTALLED WITH IT, plus the committed-read and
 #    canonical sources the archiver runs for this set.
 # Files it SOURCES or RUNS from beside itself (.sh/.env/.java/.py) — not the log it writes there.
-needed="$(grep -oE '\$OE_DIR/[A-Za-z0-9._-]+\.(sh|env|java|py)' "$WRAP" | sed 's|.*/||' | sort -u) StrikeArchiveReader.java CanonicalArchiveDecoder.java oe-archive-depth.sh"
+needed="$(grep -oE '\$OE_DIR/[A-Za-z0-9._-]+\.(sh|env|java|py)' "$WRAP" | sed 's|.*/||' | sort -u) StrikeArchiveReader.java CanonicalArchiveDecoder.java oe-archive-depth.sh oe-archive-session-chain.py"
 files_line="$(grep -m1 '^FILES=' "$INST" | sed 's/^FILES="//; s/"$//')"
 for f in $needed; do
   case " $files_line " in
@@ -120,6 +120,27 @@ else
     sed 's/^/      /' "$_out" >&2
   fi
   rm -f "$_out"
+fi
+
+# 9. THE BOOK ARCHIVE'S FILING AND ITS CHAIN CHECKER MUST BE ABLE TO FAIL TOO (A-GAP-05): trade-date filing,
+#    capture provenance and the per-session completeness chain are run by their own tests wherever the tools exist.
+if python3 -c 'import zoneinfo' >/dev/null 2>&1; then
+  _out="$(mktemp)"
+  if ! python3 "$D/test_archive_session_chain.py" > "$_out" 2>&1; then
+    note "$D/test_archive_session_chain.py failed:"; sed 's/^/      /' "$_out" >&2
+  fi
+  rm -f "$_out"
+  if command -v flock >/dev/null 2>&1 && command -v sha256sum >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1; then
+    _out="$(mktemp)"
+    if ! bash "$D/test-archive-bucket-filing.sh" > "$_out" 2>&1; then
+      note "$D/test-archive-bucket-filing.sh failed:"; sed 's/^/      /' "$_out" >&2
+    fi
+    rm -f "$_out"
+  else
+    echo "SKIP: test-archive-bucket-filing.sh (flock, sha256sum or timeout missing on this host)"
+  fi
+else
+  echo "SKIP: the book archive's python tests (python3 zoneinfo missing on this host)"
 fi
 
 if [ "$fails" -ne 0 ]; then echo "=== validate-dev-mac-depth-archive: $fails problem(s) ===" >&2; exit 1; fi

@@ -17,6 +17,7 @@ LABEL=com.optionsedge.oe-archive-depth
 stage() { # stage <registered-count> [label-to-report]
   TMP="$(mktemp -d)"
   cp -R "$HERE" "$TMP/archive"
+  cp "$HERE/../../jenkins/market_calendar.py" "$TMP/archive/market_calendar.py"   # staged beside the installer, as the Jenkins job does
   mkdir -p "$TMP/bin" "$TMP/dest" "$TMP/agents" "$TMP/nas"
   printf 'oe-nas\n' > "$TMP/nas/.oe_nas_sentinel"          # the wrapper requires the archiver's sentinel
   : > "$TMP/dest/canonical-archive-reader.jar"              # the sidecars Jenkins ships; the installer only checks presence
@@ -58,7 +59,7 @@ stage 1; install_run
 [ "$RC" -eq 0 ] && ok "the installer completed" || bad "healthy install failed (exit $RC): $(tail -4 "$TMP/out")"
 loaded && ok "and it loaded the agent" || bad "it finished without loading the agent"
 grep -q "derived exactly OE_DEPTH_TOPICS_dev" "$TMP/out" && ok "and it proved the staged wrapper derives the set under launchd's environment" || bad "the verification did not derive the set"
-for f in oe-archive-depth.sh oe-archive-kafka.sh oe-topics.env oe-alert.sh StrikeArchiveReader.java CanonicalArchiveDecoder.java; do
+for f in oe-archive-depth.sh oe-archive-kafka.sh oe-topics.env oe-alert.sh StrikeArchiveReader.java CanonicalArchiveDecoder.java oe-archive-session-chain.py market_calendar.py; do
   [ -f "$TMP/dest/$f" ] || bad "$f was not installed"
 done
 [ -f "$TMP/agents/oe-archive-depth.plist" ] && ok "the plist landed in the agents directory" || bad "no plist in the agents directory"
@@ -107,6 +108,14 @@ stage 1
 PATH="$TMP/bin:$PATH" OE_OPS_DIR="$TMP/dest" LAUNCH_AGENTS_DIR="$TMP/agents" bash "$TMP/archive/install-dev-mac-depth-archive.sh" --dry-run > "$TMP/out" 2>&1
 [ $? -eq 0 ] && untouched && ok "dry run exits 0 and touches nothing" || bad "the dry run wrote or failed: $(tail -2 "$TMP/out")"
 grep -q "require: canonical-archive-reader.jar options-edge-contracts.jar" "$TMP/out" && ok "and it states the sidecar requirement" || bad "the dry run does not name the sidecars"
+
+echo "9. without the exchange calendar the session checker is not installed at all"
+stage 1; rm -f "$TMP/archive/market_calendar.py"
+# the staged copy has no ../../jenkins either (it lives under a temp directory), so the calendar is genuinely absent
+install_run
+[ "$RC" -ne 0 ] && ok "the installer refused (exit $RC)" || bad "an install without the calendar was accepted"
+untouched && ok "and nothing was written" || bad "it wrote to the host anyway"
+grep -q "market_calendar.py is not beside this installer" "$TMP/out" && ok "it named the missing calendar" || bad "the refusal did not name the calendar"
 
 if [ "$fails" -ne 0 ]; then echo "install-dev-mac-depth-archive-test: $fails FAILURE(S)"; exit 1; fi
 echo "install-dev-mac-depth-archive-test: PASS"
