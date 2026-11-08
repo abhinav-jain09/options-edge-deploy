@@ -241,6 +241,29 @@ jobs:
         timeout-minutes: 5
         run: python3 -m unittest -v tests.test_bring_up_all tests.test_databento_maxpain_deploy tests.test_raw_postgres_writer_deploy tests.test_dev_web_rollout tests.test_strike_flow_ibkr_deploy tests.test_hpsf_retired_from_dev_and_prod tests.test_option_truth_memory
 
+      # Two different stubs, and the comment should not blur them: the ensure-*-schemas.sh suites drive
+      # their script against a schema-registry stub the test starts on LOOPBACK, while the two topic
+      # suites (ensure_partition_only_topics, ensure_indicator_topics_recreate) drive theirs against
+      # stub Kafka CLIs copied into a temp bindir and put first on PATH. Neither kind contacts a
+      # registry or a broker on the LAN, and none is reachable from this runner anyway.
+      - name: Schema registration and topic-recreation scripts against their stubs (dormant suites, now run)
+        timeout-minutes: 9
+        run: python3 -m unittest -v tests.test_ensure_delta_flow_schemas tests.test_ensure_es_underlying_price_schema tests.test_ensure_greek_move_auth_schemas tests.test_ensure_indicator_schemas tests.test_ensure_indicator_topics_recreate tests.test_ensure_multileg_schemas tests.test_ensure_partition_only_topics tests.test_ensure_spot_vol_regime_schemas tests.test_ensure_underlying_price_schema
+
+      # The spx-price subject/mirror chain and the CVD image + component proofs. These shell out, but only
+      # to the repo's own scripts, a loopback stub or javac/java over a classpath the test builds itself.
+      - name: The spx-price mirror chain, the CVD image proofs and the archive wiring (dormant suites, now run)
+        timeout-minutes: 5
+        run: python3 -m unittest -v tests.test_cvd_component_source_proof tests.test_cvd_proof_bytecode tests.test_cvd_reader_image tests.test_cvd_short_premium_held_image tests.test_invasion_archive_wiring tests.test_spot_archive_wiring tests.test_spx_price_flow_and_fresh tests.test_spx_price_mirror_job tests.test_spx_price_subject_parity tests.test_spx_price_timestamp_type tests.test_spx_price_verify_target_record
+
+      # The ops harnesses: dev-cleanup, offhours-clean-slate, prod-cleanup, reset-indicator-state and the
+      # responsive stack. Each writes its own stub kafka-topics / kafka-consumer-groups / df / findmnt into a
+      # temp bindir and puts that first on PATH, so the script under test talks to the stub and never to a
+      # broker. Verified by running them with a PATH that refuses the real CLIs outright: none reached for one.
+      - name: Ops harnesses driven against stub CLIs in a temp dir (dormant suites, now run)
+        timeout-minutes: 9
+        run: python3 -m unittest -v tests.test_break_line_deploy tests.test_decode_newest_indicator_record tests.test_delta_flow_cutover_tooling tests.test_es4_allowed_services tests.test_es_aggressor_flow_deploy tests.test_heap_headroom_gate tests.test_hpsf_release_gate tests.test_hpsf_replay_topics tests.test_indicator_mirror_parity_gate tests.test_market_cal tests.test_offhours_clean_slate_preserved tests.test_prod_cleanup_report tests.test_reset_indicator_state tests.test_responsive_baseline tests.test_responsive_evidence tests.test_responsive_stack_qualification tests.test_responsive_supervisor tests.test_rithmic_es4_service tests.test_rithmic_mbo_deploy tests.test_strike_invasion_cutover_tooling tests.test_vix_option_inteligence_avro_deploy tests.test_vol_premium_open_reference_capture
+
       - name: JVM heap leaves the container room for what is not heap
         run: bash scripts/ci/validate-heap-leaves-container-headroom.sh
 

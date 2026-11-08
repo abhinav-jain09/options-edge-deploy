@@ -1,12 +1,9 @@
-# CI-COLLECT-ONLY
+# CI-REQUIRED
 #
-# NOT RUN BY CI TODAY. deploy-validation.yml names its test modules by hand and nothing discovers them, so
-# this module is only IMPORTED (by scripts/ci/validate-tests-are-collectable.sh, which catches an import
-# error) - none of its assertions execute. 112 of the 138 modules under tests/ were in this position when
-# the marker was introduced. The marker is not approval of that: it is the classification that makes the
-# dormancy visible and, because every module must carry exactly one marker, stops a NEW module from
-# becoming an orphan silently. To promote this module, wire it into a step and change the marker to
-# CI-REQUIRED; the guard then enforces the wiring.
+# This module's assertions MUST run in CI. scripts/ci/validate-tests-are-collectable.sh - a separate,
+# already-wired step of .github/workflows/deploy-validation.yml - fails the build unless a mandatory step
+# of that workflow invokes this module as a `python3 -m unittest` target, with no continue-on-error, no
+# `if:` and no shell construct that would swallow its failure.
 """The wiring of the underlying.spx.price Avro archive reader into oe-archive-kafka.sh and its deploy unit.
 OE_SPOT_AVRO_TOPICS ships EMPTY (prod's topic is JSON until the production cutover, so the console consumer keeps
 archiving it); the documented switch routes the topic to SpotArchiveReader.java. Behavioural checks run the real

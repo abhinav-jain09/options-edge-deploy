@@ -25,8 +25,10 @@ with the flags drawn from an explicit list of ones that take no value. A heredoc
 `!`, `|`, `&&`, `||`, `;` and `&` are tokens that are neither an allowed flag nor a module. `set +o
 errexit` is a second line. `-k` is not an allowed flag. None of them need their own rule.
 
-Verified against reality before being adopted: all 17 steps that host a CI-REQUIRED module today are
-single-line plain invocations and every one is accepted.
+Verified against reality before being adopted: every step that hosts a CI-REQUIRED module is a
+single-line plain invocation and every one is accepted. That was 17 steps when this was written and
+22 after the CI-COLLECT-ONLY promotion, so the count is deliberately not restated as a fact here -
+a number in a comment is one more thing to go stale, and the gate itself re-checks it on every run.
 
 WHAT THIS STILL CANNOT DO, stated rather than implied: it cannot enforce its OWN invocation. If the
 collectability step is deleted or disabled, nothing here notices. No script can close that; only a
