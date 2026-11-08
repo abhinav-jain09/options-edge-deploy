@@ -11424,7 +11424,18 @@
         }
       ],
       "producers": [],
-      "consumers": [],
+      "consumers": [
+        {
+          "service": "break-line",
+          "accepts": [
+            3701,
+            3708
+          ],
+          "environments": [
+            "dev"
+          ]
+        }
+      ],
       "retained": true,
       "retainedReason": "curated, not baseline: ARCHIVAL version 1 of the line health LineHealthState subject (contracts 0.78.0 to 0.81.0), registered on dev under id 3701; superseded by version 2 id 3708 (contracts 0.82.0: drawOnChart, hostTimeframe and the move score). Nothing writes it any more; the feed gateway relay and the level absorption loop still READ it (the compacted topics and the old tails hold version-1 records until every line is republished). Kept so a registry import stays reproducible. Dev only."
     },
@@ -11462,6 +11473,7 @@
         {
           "service": "break-line",
           "accepts": [
+            3701,
             3708
           ],
           "environments": [

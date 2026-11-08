@@ -246,8 +246,9 @@ class Schemas(unittest.TestCase):
             self.assertNotEqual(e["schemaHash"], by_id[IDS[n]]["schemaHash"], n)
         self.assertEqual(sorted(by_id), sorted(list(IDS.values()) + list(ARCHIVAL_V1.values())))
         lh = next(x for x in m["entries"] if x.get("id") == 3708)
-        self.assertEqual(lh["consumers"], [{"service": "break-line", "accepts": [3708], "environments": ["dev"]}], "the service reads the line health state")
-        self.assertEqual(next(x for x in m["entries"] if x.get("id") == 3701)["consumers"], [])
+        want = [{"service": "break-line", "accepts": [3701, 3708], "environments": ["dev"]}]
+        self.assertEqual(lh["consumers"], want, "the service reads the line health state, both versions (a compacted topic can still hold version 1 frames)")
+        self.assertEqual(next(x for x in m["entries"] if x.get("id") == 3701)["consumers"], want)
 
     def test_no_id_of_the_block_3901_3910_is_used_by_any_other_family(self):
         m = json.loads(read("schema-manifest/manifest.json"))
