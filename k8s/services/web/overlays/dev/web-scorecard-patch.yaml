@@ -1,0 +1,26 @@
+# Dev only: the offline scorecard report (liq-U) reaches the web pod as an OPTIONAL ConfigMap volume. The scorecard job on the dev Mac
+# writes ConfigMap scorecard-latest (keys latest.html, latest.json); the web serves only latest.html at /scorecard from SCORECARD_DIR.
+# optional: true  -> the pod starts and stays Ready when the ConfigMap does not exist yet (the page then shows its built-in FAILED text).
+# No subPath on the mount -> kubelet refreshes the files in place when the ConfigMap changes (about a minute), no restart needed.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: options-edge-web
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: web
+          env:
+            - name: SCORECARD_DIR
+              value: /scorecard-data
+          volumeMounts:
+            - name: scorecard-latest
+              mountPath: /scorecard-data
+              readOnly: true
+      volumes:
+        - name: scorecard-latest
+          configMap:
+            name: scorecard-latest
+            optional: true
