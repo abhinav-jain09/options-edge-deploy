@@ -247,10 +247,12 @@ class Manifests(unittest.TestCase):
             self.assertNotIn("volumeMounts", spec["containers"][0], rel)
             self.assertEqual(len(spec["containers"]), 1, rel)
             self.assertFalse({"BREAK_LINE_RELAY_ENABLED", "BREAK_LINE_COMMANDS_ENABLED"} & set(env_of(deployment(rel))), rel)
-        for rel in ("k8s/overlays/dev/feed-gateway-dev-env-patch.yaml", "k8s/overlays/dev/web-dev-env-patch.yaml", "k8s/services/feed-gateway/overlays/dev/manifest.yaml",
-                    "k8s/services/web/overlays/dev/web-dev-env-patch.yaml"):
-            self.assertNotIn("BREAK_LINE_RELAY_ENABLED", read(rel), rel)
-            self.assertNotIn("BREAK_LINE_COMMANDS_ENABLED", read(rel), rel)
+        # ANYWHERE: every manifest, patch, slice and script of the repository, not a chosen list
+        offenders = []
+        for p in list((ROOT / "k8s").rglob("*.yaml")) + [ROOT / "services.yaml"] + list(ROOT.glob("Jenkinsfile*")) + list((ROOT / "scripts").rglob("*.sh")) + list((ROOT / "image-tags").glob("*.yaml")):
+            if re.search(r"BREAK_LINE_(RELAY|COMMANDS)_ENABLED", p.read_text(errors="replace")):
+                offenders.append(str(p.relative_to(ROOT)))
+        self.assertEqual(offenders, [], "D3 turns them on, in its own change; nothing here names either flag")
 
     def test_it_is_a_consumer_of_the_shared_config_and_secrets_and_has_no_service_object(self):
         ct = deployment(BASE)["spec"]["template"]["spec"]["containers"][0]
