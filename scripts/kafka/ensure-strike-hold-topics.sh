@@ -13,7 +13,7 @@
 #
 # The difference between the two topics is the point and is enforced here, not assumed: `current` is COMPACTED because the newest record per candidate is the whole
 # answer, and `scoring` must NOT be, because every record is a distinct (candidate, session) observation and compaction would discard exactly what the topic
-# accumulates. An existing topic is never recreated, altered or shrunk: any difference fails closed. The four INPUT topics belong to other owners and are not created here.
+# accumulates. An existing topic is never recreated, altered or shrunk: any difference fails closed. The FIVE INPUT topics belong to other owners and are not created here.
 # dev-cleanup.sh does NOT run this barrier: its topic pass recreates the shapes declared in scripts/kafka/topics.env.
 set -euo pipefail
 

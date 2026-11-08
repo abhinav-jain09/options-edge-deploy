@@ -20,6 +20,8 @@ FAKE = ROOT / "tests/fake_kafka_cli.py"
 BARRIER = ROOT / "scripts/kafka/ensure-es-liquidity-engine-topics.sh"
 BASE = "es.mbo.level-base"
 LEVEL_FLOW, HEALTH, FINAL, SNAPSHOT, EVENTS, CLOSURES = "es.mbo.level-flow", "es.mbo.health", "es.mbo.level-flow-final", "es.mbo.snapshot", "es.mbo.liquidity-events", "es.mbo.closures"
+# THE COVERAGE MESSAGE (EsMboCoverage 3511): pure compact, one partition, keyed by contract.
+COVERAGE = "es.mbo.coverage"
 EVENTS_CAP = "134217728"
 ONE_DAY, CAP = "86400000", "268435456"
 JAR = ROOT / "tools/schema-governance/schema-governance-tool.jar"
@@ -360,7 +362,7 @@ class Schemas(unittest.TestCase):
         for v, i in VERSIONS["EsMboLevelFlowFinal"].items():
             e = next(x for x in m["entries"] if x["subject"] == f"{NS}.EsMboLevelFlowFinal" and x["version"] == v)
             self.assertEqual(e["consumers"], [{"service": "level-absorption", "accepts": [3506, 3510], "environments": ["dev"]}])
-        self.assertEqual(m["familyBlocks"]["esmbo"], [[3501, 3510]])
+        self.assertEqual(m["familyBlocks"]["esmbo"], [[3501, 3510], [3511, 3511]])
         flow = by["com.optionsedge.contracts.deltaflow.DeltaFlowEvent"]
         self.assertIn({"service": "es-liquidity-engine", "accepts": [3007], "environments": ["dev"]}, flow["consumers"], "the drop engine inside the service reads the delta flow (dev id 3007)")
         mbo = by["es.rithmic.mbo-value"]
@@ -384,3 +386,39 @@ class Schemas(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CoverageTopicDeclaration(unittest.TestCase):
+    """THE COVERAGE MESSAGE's topic, as topics.env declares it and the barrier enforces it.
+
+    It is PURE COMPACT and keyed by contract because the newest statement per contract is the whole
+    answer; a reader wants the CURRENT run, and a retained history of every run would make the
+    newest one something it has to search for. Asserted here because the shape is the difference
+    between "the current interval" and "a log you must scan".
+    """
+
+    VARS = ("OPTIONS_EDGE_TOPICS", "OPTIONS_EDGE_PURE_COMPACT_TOPICS",
+            "OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES", "OPTIONS_EDGE_TOPIC_RETENTION_BYTES_OVERRIDES",
+            "OPTIONS_EDGE_RESET_REBUILDABLE_TOPICS")
+
+    def test_declared_pure_compact_one_partition_on_dev_and_absent_on_production(self):
+        dev = declarations(self.VARS, "dev")
+        self.assertIn(COVERAGE + ":1", dev["OPTIONS_EDGE_TOPICS"],
+                      "one partition, declared")
+        self.assertIn(COVERAGE, dev["OPTIONS_EDGE_PURE_COMPACT_TOPICS"],
+                      "pure compact: the newest statement per contract IS the content")
+        self.assertIn(COVERAGE + "=-1", dev["OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES"])
+        self.assertIn(COVERAGE + "=-1", dev["OPTIONS_EDGE_TOPIC_RETENTION_BYTES_OVERRIDES"])
+        self.assertIn(COVERAGE, dev["OPTIONS_EDGE_RESET_REBUILDABLE_TOPICS"],
+                      "REBUILDABLE: a missing coverage record makes a reader refuse to claim an "
+                      "absence, which is the safe direction")
+        prod = declarations(self.VARS, "production")
+        for var, val in prod.items():
+            self.assertNotIn(COVERAGE, val,
+                             "dev only: production must declare nothing (%s)" % var)
+
+    def test_the_barrier_creates_and_verifies_it(self):
+        src = (ROOT / "scripts/kafka/ensure-es-liquidity-engine-topics.sh").read_text()
+        self.assertIn("COVERAGE=", src, "the barrier must name the topic")
+        self.assertIn('ensure_with_bytes "$COVERAGE" compact -1 -1', src,
+                      "and enforce pure compact rather than leaving it to the broker default")
