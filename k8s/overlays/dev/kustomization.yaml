@@ -358,6 +358,8 @@ patches:
   - path: web-dev-env-patch.yaml
   # Use a smaller dev surge reservation; verify current capacity before rolling.
   - path: web-dev-resources-patch.yaml
+  # Dev has no spare CPU for a surge pod: roll the single web pod with maxSurge 0 / maxUnavailable 1.
+  - path: web-dev-rollout-patch.yaml
   # GRACEFUL LIVENESS (2026-08-31) — DEV. The gateway was in a restart loop that its own
   # recovery caused: rebuilding the state cache across hundreds of partitions makes /health
   # slow to answer, the probe's 1-SECOND DEFAULT timeout expired three times, and the kubelet
