@@ -267,13 +267,19 @@ dev_mirror_agents() {
   python3 - "$LAUNCH_AGENTS_DIR" "$DEV_MIRROR_TARGET_RE" <<'PY'
 import glob, os, plistlib, re, sys
 agents_dir, target_re = sys.argv[1], re.compile(sys.argv[2].replace("[[:space:]]", r"\s"))
+unclassifiable = []
 for plist in sorted(glob.glob(os.path.join(agents_dir, "com.optionsedge.*.plist"))):
     try:
         with open(plist, "rb") as f:
             job = plistlib.load(f)
-    except Exception:
+    except Exception as e:
+        # NOT "not a mirror". launchd may well have this job loaded; we simply cannot read what it
+        # writes to. Skipping it silently is how a live dev mirror becomes invisible to the pause,
+        # and the wipe then deletes its target behind it.
+        unclassifiable.append("%s: %s" % (plist, e))
         continue
     if not isinstance(job, dict):
+        unclassifiable.append("%s: not a plist dictionary" % plist)
         continue
     for arg in job.get("ProgramArguments") or []:
         if not os.path.isabs(str(arg)):
@@ -281,46 +287,99 @@ for plist in sorted(glob.glob(os.path.join(agents_dir, "com.optionsedge.*.plist"
         props = os.path.join(os.path.dirname(str(arg)), "producer.properties")
         try:
             lines = open(props).read().splitlines()
-        except OSError:
+        except FileNotFoundError:
+            continue   # no producer.properties beside that program: it is not a mirror
+        except OSError as e:
+            # It EXISTS and cannot be read, which is not the same as absent: we cannot tell whether
+            # this agent writes to dev.
+            unclassifiable.append("%s: %s" % (props, e))
             continue
         if any(target_re.match(line) for line in lines):
             print(job.get("Label") or os.path.basename(plist)[:-len(".plist")], plist)
             break
+if unclassifiable:
+    sys.stderr.write("   ERROR: cannot classify %d LaunchAgent plist(s), so a loaded dev mirror may be invisible here:\n" % len(unclassifiable))
+    for u in unclassifiable:
+        sys.stderr.write("          %s\n" % u)
+    sys.exit(3)
 PY
 }
 
+# Is one agent loaded? 0 = loaded, 1 = genuinely NOT loaded, 2 = CANNOT TELL.
+#
+# The distinction is the whole point. `launchctl list <label>` answering non-zero was read as "not
+# loaded", so a launchctl that cannot answer AT ALL — missing, or launchd unreachable — made every
+# mirror look absent: nothing was booted out, nothing was reported, and the wipe proceeded behind
+# live mirrors. That is the same fail-open this round is closing, one level further down: a status
+# that conflates "it is gone" with "I could not look". A negative answer is therefore believed only
+# when launchctl is demonstrably still answering.
+mirror_label_loaded() {
+  "$LAUNCHCTL" list "$1" >/dev/null 2>&1 && return 0
+  "$LAUNCHCTL" list >/dev/null 2>&1 || return 2
+  return 1
+}
+
 pause_dev_mirrors() {
-  local uid label plist n=0 i
+  local uid label plist n=0 i unproven=0
   uid=$(id -u)
   # Only agents that are LOADED now are paused (one someone unloaded on purpose stays unloaded), appended
   # to any list an interrupted clean left behind, so the next resume still reloads those too.
-  touch "$DEV_MIRRORS_PAUSED"
+  touch "$DEV_MIRRORS_PAUSED" || { echo "   ERROR: cannot write the paused-mirror list $DEV_MIRRORS_PAUSED" >&2; unproven=1; }
   if ! dev_mirror_agents > "$DEV_MIRRORS_PAUSED.found"; then
-    echo "   ERROR: es4->dev mirror discovery failed (python3/plistlib) — mirrors are NOT paused; their targets may be auto-created at 1 partition"
+    echo "   ERROR: es4->dev mirror discovery failed or could not classify a plist (reason above) — mirrors are NOT paused; their targets may be auto-created at 1 partition"
+    unproven=1
   fi
   while read -r label plist; do
     [ -n "$label" ] || continue
-    "$LAUNCHCTL" list "$label" >/dev/null 2>&1 && printf '%s %s\n' "$label" "$plist"
+    mirror_label_loaded "$label"
+    case $? in
+      0) printf '%s %s\n' "$label" "$plist" ;;
+      2) echo "   ERROR: cannot tell whether $label is loaded (launchctl is not answering) — the mirrors are NOT proven down" >&2
+         unproven=1 ;;
+    esac
   done < "$DEV_MIRRORS_PAUSED.found" > "$DEV_MIRRORS_PAUSED.new"
   rm -f "$DEV_MIRRORS_PAUSED.found"
-  sort -u "$DEV_MIRRORS_PAUSED" "$DEV_MIRRORS_PAUSED.new" > "$DEV_MIRRORS_PAUSED.merged"
-  mv "$DEV_MIRRORS_PAUSED.merged" "$DEV_MIRRORS_PAUSED"
+  # The list itself is part of the proof: an incomplete one means a later resume will not reload
+  # everything this clean took down, so a write failure here is "not proven", not a detail.
+  if ! sort -u "$DEV_MIRRORS_PAUSED" "$DEV_MIRRORS_PAUSED.new" > "$DEV_MIRRORS_PAUSED.merged" \
+     || ! mv "$DEV_MIRRORS_PAUSED.merged" "$DEV_MIRRORS_PAUSED"; then
+    echo "   ERROR: could not record the paused-mirror list at $DEV_MIRRORS_PAUSED — the mirrors are NOT proven down" >&2
+    unproven=1
+  fi
   while read -r label plist; do
     [ -n "$label" ] || continue
     "$LAUNCHCTL" bootout "gui/$uid/$label" >/dev/null 2>&1
     for i in 1 2 3 4 5 6 7 8 9 10; do
-      "$LAUNCHCTL" list "$label" >/dev/null 2>&1 || break
+      mirror_label_loaded "$label" || break
       sleep 3
     done
-    if "$LAUNCHCTL" list "$label" >/dev/null 2>&1; then
-      echo "   WARN: mirror agent $label is still loaded; its target topics may be auto-created at 1 partition"
-    else
-      n=$((n + 1))
-    fi
+    mirror_label_loaded "$label"
+    case $? in
+      0) echo "   WARN: mirror agent $label is still loaded; its target topics may be auto-created at 1 partition"
+         unproven=1 ;;
+      2) echo "   ERROR: cannot tell whether $label unloaded (launchctl is not answering) — the mirrors are NOT proven down"
+         unproven=1 ;;
+      *) n=$((n + 1)) ;;
+    esac
   done < "$DEV_MIRRORS_PAUSED.new"
   rm -f "$DEV_MIRRORS_PAUSED.new"
   [ -s "$DEV_MIRRORS_PAUSED" ] || rm -f "$DEV_MIRRORS_PAUSED"
   echo "   paused $n es4->dev mirror agent(s) (list: $DEV_MIRRORS_PAUSED)"
+  # SAY IT IN THE STATUS, not only in the log. Both branches above detect the precise condition this
+  # function exists to prevent — a mirror still running while the wipe deletes its target, which
+  # re-creates that topic at dev's num.partitions=1 so ensure_topics' declared shape never applies
+  # (2026-09-14, es.options.databento.gex.strike, re-created 0.3 s after the delete). Until now they
+  # printed ERROR/WARN and returned 0, so do_clean deleted anyway: the function announced the hazard
+  # and then permitted it. Same shape as the status bug fixed in #1585 — a failure nobody can read.
+  # WHAT THIS DOES NOT PROVE, said out loud so a reader does not stop looking. The verification is a
+  # point-in-time observation: an agent with KeepAlive can be reloaded by launchd AFTER the check and
+  # before do_clean reaches the delete, and nothing here would see it. Re-checking immediately before
+  # the delete would narrow that window, not close it; closing it needs a durable launchd-side fence
+  # (disable or remove the job definition, then verify) or proof after the delete that no mirror
+  # re-created a topic. Not attempted here: it changes operator-visible launchd state, which is the
+  # owner's decision. What IS closed is every case where this function could SEE the hazard and
+  # returned success anyway.
+  return "$unproven"
 }
 
 resume_dev_mirrors() {
@@ -1348,7 +1407,14 @@ for p in json.load(sys.stdin)["items"]:
     echo "4) keeping topics (WIPE_KAFKA=false)"
   else
     echo "4) deleting all non-system topics ..."
-    pause_dev_mirrors
+    # REFUSE rather than delete behind a mirror that is still up. The wipe has not started yet at
+    # this point, so dev is left scaled down but WHOLE — the same state, and the same recovery, as
+    # the kafka_list_topics refusal below. Agents that were unloaded stay in the paused list and the
+    # next start/overnight run whose topic pass succeeds reloads them, by design.
+    pause_dev_mirrors || {
+      echo "REFUSING the wipe: the es4->dev mirrors could not be proven DOWN (reason above). Deleting a topic while its mirror runs re-creates it at dev's num.partitions=1, so the declared shape never applies and the wedge is invisible afterwards." >&2
+      echo "  State now: logs cleaned, apps scaled down, Kafka NOT wiped. Fix the mirror agents, then re-run 'dev-cleanup.sh now'; 'dev-cleanup.sh start' brings dev back up." >&2
+      return 1; }
     # RESET-PRESERVED topics survive here too. They hold data that by declaration cannot be rebuilt —
     # the A5 calibration ledger accrues until the archive carries it to the NAS, and a wipe before that
     # loses the day with no way to notice. dev and prod must agree on what "preserved" means, or the

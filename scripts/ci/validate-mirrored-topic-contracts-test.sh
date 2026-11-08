@@ -251,8 +251,16 @@ expect_pass "$R" "a declared-but-empty ES4_COMPACTED is allowed" "ES4_COMPACTED 
 # called it non-empty, and the fail-closed guard walked past the very divergence it names. The guard
 # covered ten variables and could fire for five. Emptying BOTH halves must now trip it — this case
 # fails on main, and it is the reason the guard was changed to judge content rather than length.
-R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/^OPTIONS_EDGE_TOPICS="[^"]*"$/OPTIONS_EDGE_TOPICS=""/'
-edit "$R" "$TENV_REL" 's/^OPTIONS_EDGE_PROD_ONLY_TOPICS="[^"]*"$/OPTIONS_EDGE_PROD_ONLY_TOPICS=""/'
+# The fixture edits below empty EVERY assignment of the variable, AT ANY INDENTATION. They used to
+# empty only the single base assignment anchored at column zero, and that was wrong twice over:
+# topics.env appends to OPTIONS_EDGE_TOPICS dozens of times after its base line, and some of those
+# appends are INDENTED inside an `if` - which is exactly the blindness list_of()'s own comment warns
+# about, the one that deleted es.rithmic.mbo and three liquidity-validator topics on 2026-11-06. So
+# DECLARED stayed richly populated, the emptiness guard correctly did not fire, and the arm failed on
+# the first per-job "NOT declared" message instead. The ARM was wrong, not the guard: the guard
+# already judges content, with `tr -d '[:space:]'`.
+R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/^[[:space:]]*OPTIONS_EDGE_TOPICS=.*$/OPTIONS_EDGE_TOPICS=""/'
+edit "$R" "$TENV_REL" 's/^[[:space:]]*OPTIONS_EDGE_PROD_ONLY_TOPICS=.*$/OPTIONS_EDGE_PROD_ONLY_TOPICS=""/'
 expect_fail "$R" "both halves of a UNION declaration emptied" "parsed an EMPTY DECLARED"
 # ...and with the guard able to fire for a union, COMPACTED's arm of the emptiness exception becomes
 # testable too — it was not, which is why an earlier draft of this block wrongly recorded it as
@@ -261,8 +269,8 @@ expect_fail "$R" "both halves of a UNION declaration emptied" "parsed an EMPTY D
 # the same way the "every mirror job removed" case below drops all of them. The `want` is what keeps
 # this honest: without it the case passes on the exit code alone, and an exit code cannot tell the
 # exception firing from the run never reaching it.
-R="$(mkfixture)"; edit "$R" "$TENV_REL" '/^OPTIONS_EDGE_COMPACTED_TOPICS=/d'
-edit "$R" "$TENV_REL" '/^OPTIONS_EDGE_PROD_ONLY_PURE_COMPACT_TOPICS=/d'
+R="$(mkfixture)"; edit "$R" "$TENV_REL" '/^[[:space:]]*OPTIONS_EDGE_COMPACTED_TOPICS=/d'
+edit "$R" "$TENV_REL" '/^[[:space:]]*OPTIONS_EDGE_PROD_ONLY_PURE_COMPACT_TOPICS=/d'
 append_line "$R" "$TENV_REL" 'OPTIONS_EDGE_COMPACTED_TOPICS=""'
 append_line "$R" "$TENV_REL" 'OPTIONS_EDGE_PROD_ONLY_PURE_COMPACT_TOPICS=""'
 rm -f "$R/Jenkinsfile.es-cvd-mirror"

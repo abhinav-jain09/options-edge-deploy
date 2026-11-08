@@ -49,10 +49,14 @@ FAKE_KT = textwrap.dedent(
     elif "--list" in args:
         print("\n".join(sorted(st["topics"])))
     elif "--create" in args:
+        if arg("--topic") in st.get("refuse_create", []):
+            json.dump(st, open(S, "w")); sys.exit(1)          # a create the broker rejects
         st["topics"].setdefault(arg("--topic"), int(arg("--partitions")))
         st.setdefault("configs", {})[arg("--topic")] = [args[i + 1] for i, a in enumerate(args) if a == "--config"]
     elif "--alter" in args:
         import re
+        if any(re.fullmatch(arg("--topic"), n) for n in st.get("refuse_alter", [])):
+            json.dump(st, open(S, "w")); sys.exit(1)          # a grow the broker rejects
         for name in [n for n in st["topics"] if re.fullmatch(arg("--topic"), n)]:   # --topic is a regex, as in kafka-topics
             st["topics"][name] = int(arg("--partitions"))
     json.dump(st, open(S, "w"))
@@ -119,20 +123,39 @@ class EnsurePartitionOnlyTopicsTest(unittest.TestCase):
             out += text[start:text.index("\n}\n", start) + 3] + "\n"
         return out
 
-    def run_fn(self, topics, entries):
+    def run_fn(self, topics, entries, expect_rc=0, seed=None):
+        """`expect_rc` is part of the contract, not noise.
+
+        `ensure_partition_only_topics` used to print its WARNINGs and fall through with status 0 — a
+        failed grow, an incomplete create and an irreconcilably larger topic all read as success, and
+        reconcile_declared_topics cannot catch them because it iterates a different declaration list
+        (Codex deploy r18). It now ends on `[ "$failed" -eq 0 ]`. This helper asserted the status only
+        through `check=True`, so the moment those warnings started carrying, the arm whose fixture
+        deliberately contains a larger-than-declared topic died on a CalledProcessError — the right
+        behaviour reported as a harness crash. The expected status is asserted instead.
+        """
         with tempfile.TemporaryDirectory() as d:
             d = Path(d)
             (d / "kt.py").write_text(FAKE_KT)
-            (d / "state.json").write_text(json.dumps({"topics": topics, "calls": []}))
+            # `seed` adds fake-kafka-topics options only. It may not touch the fixture itself: a
+            # seed that overwrote `topics` or `calls` would silently change what the arm is testing.
+            reserved = {"topics", "calls"} & set(seed or {})
+            self.assertEqual(set(), reserved, f"seed may not overwrite the fixture: {sorted(reserved)}")
+            (d / "state.json").write_text(json.dumps(dict({"topics": topics, "calls": []}, **(seed or {}))))
             fn = self.functions("create_topics_parallel", "ensure_partition_only_topics")
             script = (f'KT="python3 {d / "kt.py"} {d / "state.json"}"\nBS=localhost:19092\n'
                       f'OPTIONS_EDGE_PARTITION_ONLY_TOPICS="{" ".join(entries)}"\n{fn}\nensure_partition_only_topics\n')
-            out = subprocess.run([BASH, "-c", script], capture_output=True, text=True, check=True).stdout
-            return out, json.loads((d / "state.json").read_text())
+            r = subprocess.run([BASH, "-c", script], capture_output=True, text=True)
+            self.assertEqual(r.returncode, expect_rc,
+                             f"exit {r.returncode}, expected {expect_rc}\nstdout:\n{r.stdout}\nstderr:\n{r.stderr}")
+            return r.stdout, json.loads((d / "state.json").read_text())
 
     def test_creates_missing_grows_smaller_reports_larger_and_sets_no_config(self):
+        # expect_rc=1: `too.big` is 32 where 1 is declared, and Kafka cannot shrink a topic. That is
+        # an UNRECONCILED declaration, so the function must not report success for this run — the
+        # next wipe is what recreates it at the declared shape.
         out, st = self.run_fn({"grow.me": 1, "too.big": 32, "ok.one": 4},
-                              ["new.one:32", "grow.me:32", "too.big:1", "ok.one:4"])
+                              ["new.one:32", "grow.me:32", "too.big:1", "ok.one:4"], expect_rc=1)
         self.assertEqual(st["topics"], {"new.one": 32, "grow.me": 32, "too.big": 32, "ok.one": 4})
         self.assertIn("created 1, grown 1", out)
         self.assertIn("too.big(32>1)", out)
@@ -142,6 +165,25 @@ class EnsurePartitionOnlyTopicsTest(unittest.TestCase):
         self.assertEqual(len(describes), 1, "one bulk describe, not a JVM per topic")
         self.assertFalse([c for c in st["calls"] if "--alter" in c and "ok.one" in c])
 
+    def test_a_grow_the_broker_refuses_does_not_report_success(self):
+        """One of the three `failed=1` branches, which had no test: a mutation removing it survived.
+
+        A topic left BELOW its declared partition count is not a warning to read later — services
+        keyed on those partitions get a different assignment than the declaration promises.
+        """
+        out, _ = self.run_fn({"grow.me": 1}, ["grow.me:32"], expect_rc=1,
+                             seed={"refuse_alter": ["grow.me"]})
+        self.assertIn("could not grow grow.me 1 -> 32", out)
+
+    def test_an_incomplete_create_does_not_report_success(self):
+        """The third `failed=1` branch, also untested until a mutation said so.
+
+        This is the 2026-09-16 shape: a wipe that created 15 of 137 declared topics and carried on.
+        """
+        out, st = self.run_fn({}, ["made.one:4", "refused.one:4"], expect_rc=1,
+                              seed={"refuse_create": ["refused.one"]})
+        self.assertIn("created 1 of 2 missing partition-only topics", out)
+        self.assertEqual(st["topics"], {"made.one": 4})
     def test_parallel_creates_are_all_counted_and_carry_their_configs(self):
         with tempfile.TemporaryDirectory() as d:
             d = Path(d)
