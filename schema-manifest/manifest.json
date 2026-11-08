@@ -5650,7 +5650,17 @@
           ]
         }
       ],
-      "consumers": [],
+      "consumers": [
+        {
+          "service": "level-absorption",
+          "accepts": [
+            3502
+          ],
+          "environments": [
+            "dev"
+          ]
+        }
+      ],
       "retained": true,
       "retainedReason": "curated, not baseline: es-liquidity-engine-service (NEW, dev only; contracts 0.70.0 schemas-registry/esmbo) writes it on es.mbo.level-flow under RecordNameStrategy with auto.register.schemas=false (its schema-requirements.json names this id and hash). Dev only; nothing is registered on production or es4."
     },
@@ -5711,7 +5721,17 @@
           ]
         }
       ],
-      "consumers": [],
+      "consumers": [
+        {
+          "service": "level-absorption",
+          "accepts": [
+            3509
+          ],
+          "environments": [
+            "dev"
+          ]
+        }
+      ],
       "retained": true,
       "retainedReason": "curated, not baseline: document A revision 12 section 4.1 (work package K2, contracts 0.89.0 schemas-registry/esmbo): es-liquidity-engine-service writes it on es.mbo.health under RecordNameStrategy with auto.register.schemas=false as VERSION 2 under the new fixed id 3509 (every version 1 field plus closePath, updateSamples, sourceLagMs, sourceLagMaxMs, updateAgeMs, sourceLagStatus, sourceLagBoundMs, attributionEnabled and bandTicks, all nullable with default null); its schema-requirements.json names this id and hash. The record of a bucket is published after the bucket's level-flow rows were acknowledged. Dev only; nothing is registered on production or es4."
     },
@@ -5984,7 +6004,17 @@
           ]
         }
       ],
-      "consumers": [],
+      "consumers": [
+        {
+          "service": "level-absorption",
+          "accepts": [
+            3508
+          ],
+          "environments": [
+            "dev"
+          ]
+        }
+      ],
       "retained": true,
       "retainedReason": "curated, not baseline: es-liquidity-engine-service (NEW, dev only; contracts 0.83.0 schemas-registry/esmbo) writes it on es.mbo.closures under the per-bucket key CME|<contract>|FINAL|<bucketEnd> under RecordNameStrategy with auto.register.schemas=false. It records only; nothing reads it yet. Dev only; nothing is registered on production or es4."
     },
