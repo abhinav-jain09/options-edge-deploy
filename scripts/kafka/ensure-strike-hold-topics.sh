@@ -13,7 +13,7 @@
 #
 # The difference between the two topics is the point and is enforced here, not assumed: `current` is COMPACTED because the newest record per candidate is the whole
 # answer, and `scoring` must NOT be, because every record is a distinct (candidate, session) observation and compaction would discard exactly what the topic
-# accumulates. An existing topic is never recreated, altered or shrunk: any difference fails closed. The SIX INPUT topics belong to other owners and are not created here.
+# accumulates. An existing topic is never recreated, altered or shrunk: any difference fails closed. The FIVE INPUT topics belong to other owners and are not created here.
 #
 # ONE INPUT IS VERIFIED, THOUGH NEVER CREATED: es.mbo.coverage, when the deployment configures it.
 # Kafka Streams will not START without a source topic, so a strike-hold rolled before
@@ -174,6 +174,12 @@ if [ -n "$COVERAGE_IN" ]; then
     # Read-only: the shape is the engine's to create, and create-if-absent=no cannot make one here.
     ensure_topic "$COVERAGE_IN" compact "exact:-1" 1048576 no || rc=1
     check_partitions "$COVERAGE_IN" || rc=1
+    # retention.bytes TOO. The shared routine checks the policy, retention.ms, the message-size
+    # floor, ISR and the partition count — but NOT bytes, so a coverage topic that was compact with
+    # retention.ms=-1 and a 256 MiB CAP passed the whole check. A cap on this topic ages out the
+    # oldest contract's interval, which is the one thing the interval must not do: a reader would
+    # find no coverage for a contract and read it as "never observed" (Codex deploy r5).
+    check_retention_bytes "$COVERAGE_IN" -1 || rc=1
   fi
 fi
 

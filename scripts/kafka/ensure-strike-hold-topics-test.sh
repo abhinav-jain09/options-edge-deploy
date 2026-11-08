@@ -134,7 +134,7 @@ fi
 # barrier created es.mbo.coverage CRASH-LOOPS instead of reporting
 # ABSORPTION_COVERAGE_UNAVAILABLE — and schema sync registers the subject without creating the
 # topic, so nothing else on that path catches it (Codex deploy r4).
-cov_mocks() { # cov_mocks <listCoverage: yes|no> <coveragePolicy> <coverageRetentionMs>
+cov_mocks() { # cov_mocks <listCoverage: yes|no> <coveragePolicy> <coverageRetentionMs> [coverageRetentionBytes=-1]
   mkdir -p "$TMP/bin"
   cat > "$TMP/bin/kafka-topics" <<KT
 #!/usr/bin/env bash
@@ -156,7 +156,7 @@ KT
 #!/usr/bin/env bash
 $(declare -f dump)
 case "\$*" in
-  *es.mbo.coverage*) dump "$2" "-1" | sed 's/retention.ms=-1/retention.ms=$3/' ;;
+  *es.mbo.coverage*) dump "$2" "${4:--1}" | sed 's/retention.ms=-1/retention.ms=$3/' ;;
   *scoring*)         dump "delete" "268435456" ;;
   *)                 dump "compact,delete" "-1" ;;
 esac
@@ -181,6 +181,16 @@ cov_mocks yes delete -1
 out="$(run_cov)"; rc=$?
 if [ "$rc" -ne 0 ]; then ok "a coverage topic that is NOT compacted is refused"
 else bad "a delete-retention coverage input was accepted"; fi
+
+# A BYTE CAP on the coverage input. The shared routine does not look at retention.bytes, so this
+# shape — compact, retention.ms=-1, one partition, 256 MiB cap — passed the entire check until the
+# barrier gained its own exact comparison. A cap ages out the oldest contract's interval, and a
+# reader finding no coverage for a contract reads it as "never observed" (Codex deploy r5).
+cov_mocks yes compact -1 268435456
+out="$(run_cov)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "retention.bytes=268435456, expected exactly -1"; then
+  ok "a retention.bytes CAP on the coverage input is refused"
+else bad "a capped coverage input was accepted — the interval can age out"; fi
 
 # and BLANK stays legitimate: no coverage source configured is a documented configuration, in which
 # the service reports ABSORPTION_COVERAGE_UNAVAILABLE and never claims an absence.
