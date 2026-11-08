@@ -1,3 +1,12 @@
+# CI-COLLECT-ONLY
+#
+# NOT RUN BY CI TODAY. deploy-validation.yml names its test modules by hand and nothing discovers them, so
+# this module is only IMPORTED (by scripts/ci/validate-tests-are-collectable.sh, which catches an import
+# error) - none of its assertions execute. 112 of the 138 modules under tests/ were in this position when
+# the marker was introduced. The marker is not approval of that: it is the classification that makes the
+# dormancy visible and, because every module must carry exactly one marker, stops a NEW module from
+# becoming an orphan silently. To promote this module, wire it into a step and change the marker to
+# CI-REQUIRED; the guard then enforces the wiring.
 """Executes the es-indicator-mirror install's parity gate (the block between the '--- parity gate begin/end ---'
 markers of Jenkinsfile.es-indicator-mirror, unescaped the way Groovy hands it to sh) against a scenario-driven
 stand-in for kafka-get-offsets and kafka-console-consumer (tests/fake_mirror_parity_cli.py).

@@ -1,3 +1,12 @@
+# CI-COLLECT-ONLY
+#
+# NOT RUN BY CI TODAY. deploy-validation.yml names its test modules by hand and nothing discovers them, so
+# this module is only IMPORTED (by scripts/ci/validate-tests-are-collectable.sh, which catches an import
+# error) - none of its assertions execute. 112 of the 138 modules under tests/ were in this position when
+# the marker was introduced. The marker is not approval of that: it is the classification that makes the
+# dormancy visible and, because every module must carry exactly one marker, stops a NEW module from
+# becoming an orphan silently. To promote this module, wire it into a step and change the marker to
+# CI-REQUIRED; the guard then enforces the wiring.
 """Schema manifest wiring of the Level Absorption event version 2 (liquidity requirement A rev 12 section 8, work package K3; contracts 0.88.0).
 
 futures.level-absorption.events-value has TWO versions: version 1 is the archival id 2702 (registered on dev, frozen) and version 2 (the optional book fields) is the new fixed id 2812.

@@ -13,6 +13,7 @@
 # A file that cannot be collected is worse than a missing file: it looks like coverage.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
+WORKFLOW=".github/workflows/deploy-validation.yml"
 
 fail=0
 shopt -s nullglob
@@ -77,84 +78,65 @@ PY
 done
 
 # ---------------------------------------------------------------------------------------------------
-# SECOND INVARIANT: a module marked CI-REQUIRED must actually be RUN by a step of the workflow.
+# SECOND INVARIANT: every test module is CLASSIFIED, and one marked CI-REQUIRED is actually RUN.
 #
-# Collectable is not the same as executed. deploy-validation.yml names its test modules by hand and
-# nothing discovers them, so a new module is orphaned by default: this script imports it, which catches
-# an import error, but not one of its assertions ever runs. Measured when this was written: 138 modules
-# under tests/, 26 named by the workflow, 112 never executed. That is the same "looks like coverage"
-# failure this script already exists to catch, one level up.
+# Collectable is not executed. deploy-validation.yml names its test modules by hand and nothing discovers
+# them, so a new module is orphaned by default: this script IMPORTS it, which catches an import error, but
+# not one of its assertions ever runs. Measured when this was written: 138 modules under tests/, 27 named
+# by the workflow, 111 never executed. That is the same "looks like coverage" failure this script already
+# exists to catch, one level up.
 #
-# WHY THE CHECK LIVES HERE AND NOT IN THE MODULE IT PROTECTS. The obvious place is a self-assertion in
-# the module itself, and it cannot work, because it is circular: delete the module's step and the module
-# never runs in CI, so its own assertion never fires and the workflow stays green. A mutation test only
-# appears to catch that, because the harness invokes the module out-of-band. The check has to run from
-# somewhere independently wired, and this script is exactly that: one pre-existing step whose whole job
-# is the test-module inventory. (Codex found the circularity in the self-assertion version.)
+# So every module must carry EXACTLY ONE marker:
+#   # CI-REQUIRED       its assertions must run; the wiring is enforced below
+#   # CI-COLLECT-ONLY   imported only, and said so out loud
+# An UNCLASSIFIED module fails the build. Without that, a marker is opt-in and the next module added is an
+# orphan again unless its author remembers - which is how the 111 happened (Codex r2 finding 4).
 #
-# A module opts in with a `# CI-REQUIRED` comment line. The step that runs it must invoke it through
-# python3 -m unittest with the module as an ARGUMENT, must not be continue-on-error, and must carry no
-# `if:` - each of those can leave the module unrun while a looser check still passes.
-required=()
+# WHY THE WIRING CHECK IS NOT IN THE MODULES THEMSELVES: a module asserting its own wiring is circular -
+# delete its step and the module never runs, so the assertion never fires (Codex r1). It has to run from
+# somewhere independently wired, and this script is that place.
+#
+# WHAT IT STILL CANNOT DO: enforce its OWN invocation. Delete or disable THIS step and nothing here
+# notices. No script can close that; only a required status check / branch protection on the workflow can
+# (Codex r2 finding 3). Said plainly so nobody reads this gate as more than it is.
+unclassified=()
+required_args=()
+nrequired=0
+ncollect=0
 for f in "${files[@]}"; do
-  if grep -qE '^[[:space:]]*#[[:space:]]*CI-REQUIRED([[:space:]]|$)' "$f"; then
-    required+=("tests.$(basename "$f" .py)")
+  mod="tests.$(basename "$f" .py)"
+  has_req=0
+  has_only=0
+  grep -qE '^[[:space:]]*#[[:space:]]*CI-REQUIRED([[:space:]]|$)' "$f" && has_req=1
+  grep -qE '^[[:space:]]*#[[:space:]]*CI-COLLECT-ONLY([[:space:]]|$)' "$f" && has_only=1
+  if [ "$has_req" = 1 ] && [ "$has_only" = 1 ]; then
+    echo "FAIL: $f carries BOTH CI-REQUIRED and CI-COLLECT-ONLY; exactly one is required." >&2
+    fail=1
+  elif [ "$has_req" = 1 ]; then
+    required_args+=("required=$mod")
+    nrequired=$((nrequired + 1))
+  elif [ "$has_only" = 1 ]; then
+    ncollect=$((ncollect + 1))
+  else
+    unclassified+=("$f")
   fi
 done
 
-if [ "${#required[@]}" -eq 0 ]; then
-  echo "FAIL: no test module carries a '# CI-REQUIRED' marker, so this invariant checks nothing." >&2
-  echo "      If the marker was renamed, rename it here too." >&2
+if [ "${#unclassified[@]}" -ne 0 ]; then
+  echo "FAIL: these test modules carry neither '# CI-REQUIRED' nor '# CI-COLLECT-ONLY':" >&2
+  printf '        %s\n' "${unclassified[@]}" >&2
+  echo "       Add one. CI-REQUIRED means a mandatory workflow step must run it (enforced); " >&2
+  echo "       CI-COLLECT-ONLY means it is imported only, and admits that in writing." >&2
+  fail=1
+fi
+
+if [ "$nrequired" -eq 0 ]; then
+  echo "FAIL: no module is marked CI-REQUIRED, so the wiring invariant checks nothing." >&2
+  echo "      If the marker was renamed, rename it in this script too." >&2
   fail=1
 else
-  wiring="$(python3 - ".github/workflows/deploy-validation.yml" "${required[@]}" <<'PY'
-import re
-import sys
-
-import yaml
-
-workflow, modules = sys.argv[1], sys.argv[2:]
-doc = yaml.safe_load(open(workflow))
-jobs = doc.get("jobs") or {}
-steps = [st for job in jobs.values() for st in (job.get("steps") or [])]
-if not steps:
-    print("FAIL no steps parsed out of %s" % workflow)
-    raise SystemExit(0)
-
-INVOCATION = re.compile(r"\bpython3?\b.*?-m\s+unittest\b")
-
-for mod in modules:
-    # The module must appear as an ARGUMENT of a real `python3 -m unittest` invocation. A step whose
-    # `run:` merely CONTAINS the module name is not enough: `echo unittest tests.foo` would satisfy that,
-    # and so would a mention in a comment.
-    invoked = []
-    for st in steps:
-        for line in (st.get("run") or "").splitlines():
-            stripped = line.strip()
-            if stripped.startswith("#"):
-                continue
-            if not INVOCATION.search(stripped):
-                continue
-            after = stripped.split("-m", 1)[1]
-            args = [a for a in after.split() if a and not a.startswith("-") and a != "unittest"]
-            if mod in args:
-                invoked.append(st)
-                break
-    if not invoked:
-        print("FAIL %s carries the CI-REQUIRED marker but no step runs it with python3 -m unittest; "
-              "its assertions would never execute in CI" % mod)
-        continue
-    for st in invoked:
-        name = st.get("name", "<unnamed>")
-        if st.get("continue-on-error"):
-            print("FAIL %s is run by step %r which is continue-on-error, so a failure is ignored"
-                  % (mod, name))
-        if "if" in st:
-            print("FAIL %s is run by step %r which is conditional (if: %r), so it may not run at all"
-                  % (mod, name, st["if"]))
-print("OK %d module(s) required and wired" % len(modules))
-PY
-)" || wiring="FAIL the wiring check itself could not run"
+  wiring="$(python3 scripts/ci/ci_wiring_check.py "$WORKFLOW" "${required_args[@]}" 2>&1)" \
+    || wiring="FAIL the wiring check itself could not run: $wiring"
   printf '%s\n' "$wiring" | sed 's/^/  /'
   if printf '%s\n' "$wiring" | grep -q '^FAIL'; then
     fail=1
@@ -169,5 +151,5 @@ if [ "$fail" -ne 0 ]; then
   exit 1
 fi
 echo "checked ${#files[@]} test module(s); all collectable by unittest"
-echo "checked ${#required[@]} CI-REQUIRED module(s); each is run by a mandatory workflow step"
+echo "classified: $nrequired CI-REQUIRED (wiring enforced), $ncollect CI-COLLECT-ONLY (imported only)"
 echo "=== validate-tests-are-collectable: OK ==="

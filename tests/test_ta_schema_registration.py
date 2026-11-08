@@ -1,3 +1,9 @@
+# CI-REQUIRED
+#
+# This module's assertions MUST run in CI. scripts/ci/validate-tests-are-collectable.sh - a separate,
+# already-wired step of .github/workflows/deploy-validation.yml - fails the build unless a mandatory step
+# of that workflow invokes this module as a `python3 -m unittest` target, with no continue-on-error, no
+# `if:` and no shell construct that would swallow its failure.
 """scripts/kafka/ensure-fixed-id-schemas.sh with the four TA-books maps (scripts/kafka/schema-id-maps/{market-structure,es-trade-tools,wave-cycle,break-classifier}.map)
 against the stand-in registry (tests/stub_schema_registry.py): every subject is imported under its fixed id with FULL, a re-run is a no-op that still
 enforces FULL, a collision fails without repair, a malformed or duplicated map is refused before the registry is touched, and the four maps agree
