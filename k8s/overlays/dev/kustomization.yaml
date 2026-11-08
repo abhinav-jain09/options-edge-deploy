@@ -89,6 +89,9 @@ resources:
   # es-liquidity-engine: DEV-ONLY (services.yaml envs: [dev]), replicas 1: the ES MBO liquidity engine (supervisor over the drop-classifier engine in ES_TRADES mode, writing es.drop.*, and the MBO engine).
   # Referenced here only (NOT in k8s/base, production or experiment). No patches here or in the standalone slice (k8s/services/es-liquidity-engine/overlays/dev); the dev image remap below is what the slice mirrors.
   - ../../services/es-liquidity-engine/base
+  # strike-hold: DEV-ONLY (services.yaml envs: [dev]), replicas 1: the strike-hold measurement service (does the close end on the safe side of a touched high-gamma strike?).
+  # Referenced here only (NOT in k8s/base, production or experiment). No patches here or in the standalone slice (k8s/services/strike-hold/overlays/dev); the dev image remap below is what the slice mirrors.
+  - ../../services/strike-hold/base
   # liquidity-validator: DEV-ONLY (services.yaml envs: [dev]), replicas 1: the live READ-ONLY liquidity validator (geometry, level-absorption, aggressor-flow, footprint and raw ES tape in; three research topics out; never trades).
   # Referenced here only (NOT in k8s/base, production or experiment). No patches here or in the standalone slice (k8s/services/liquidity-validator/overlays/dev); the dev image remap below is what the slice mirrors.
   - ../../services/liquidity-validator/base
@@ -992,6 +995,9 @@ images:
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-es-liquidity-engine
     newName: host.docker.internal:5001/options-edge-es-liquidity-engine
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-strike-hold
+    newName: host.docker.internal:5001/options-edge-strike-hold
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-liquidity-validator
     newName: host.docker.internal:5001/options-edge-liquidity-validator

@@ -1,0 +1,125 @@
+{
+  "type": "record",
+  "name": "StrikeHoldScoring",
+  "namespace": "com.optionsedge.contracts.strikehold",
+  "doc": "ONE outcome row per candidate strike per session: the evidence record the base rate is computed from. Written to options.spx.strike-hold.scoring under RecordNameStrategy with the fixed id 3802. Key: <sessionDate>|<symbol>|<expiry>|U|<strike>. The topic is NOT compacted and must never be: every record is a distinct (candidate, session) observation, so compaction would not degrade the measurement, it would delete it. Rows for REFUSED candidates are written too, and carry held=null - a reader computing the base rate must count only evidenceStatus=COMPLETE rows, so that a refusal can never be averaged in as an outcome.",
+  "fields": [
+    {
+      "name": "schemaVersion",
+      "type": "int",
+      "default": 1
+    },
+    {
+      "name": "messageType",
+      "type": "string",
+      "doc": "STRIKE_HOLD_SCORING"
+    },
+    {
+      "name": "definitionVersion",
+      "type": "string"
+    },
+    {
+      "name": "observationId",
+      "type": "string",
+      "doc": "<sessionDate>|<symbol>|<expiry>|<side letter>|<strike>. Stable and derived only from the observation's own identity, so the same observation computed twice is the same id."
+    },
+    {
+      "name": "env",
+      "type": "string"
+    },
+    {
+      "name": "sessionDate",
+      "type": "string",
+      "doc": "The New York calendar date of the cash session, ISO."
+    },
+    {
+      "name": "symbol",
+      "type": "string"
+    },
+    {
+      "name": "expiry",
+      "type": "string"
+    },
+    {
+      "name": "esContract",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "strikeCents",
+      "type": "long"
+    },
+    {
+      "name": "side",
+      "type": "string",
+      "doc": "UPPER means safe is a close BELOW the strike; LOWER means above."
+    },
+    {
+      "name": "touchTimeMs",
+      "type": "long",
+      "default": 0,
+      "doc": "0 when the candidate was never touched. Such a row is still written: a session's non-touches are what make the touch rate a rate, and a reader cannot tell 'no candidate was touched' from 'the service was not running' unless they are stated."
+    },
+    {
+      "name": "closePriceCents",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null,
+      "doc": "The last spot STRICTLY BEFORE the 16:00 New York close. Not the last print of the day: a record stamped after the close - a late arrival, an after-hours print, a skewed producer clock - must not decide a verdict about the cash close."
+    },
+    {
+      "name": "held",
+      "type": [
+        "null",
+        "boolean"
+      ],
+      "default": null,
+      "doc": "Did the close end on the SAFE side of the strike? THE CLOSE DECIDES THIS AND NOTHING ELSE (requirement rev 12): an intraday excursion of any size, 20 points included, does not change it. NULL whenever the evidence is incomplete, so a refusal can never be read as an outcome."
+    },
+    {
+      "name": "maxExcursionCents",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null,
+      "doc": "The furthest price travelled past the strike on the unsafe side after the touch, including the crossing tick itself. DESCRIPTIVE ONLY - it exists to be looked at and must never be thresholded; the requirement is explicit that it gates nothing."
+    },
+    {
+      "name": "absorptionState",
+      "type": "string"
+    },
+    {
+      "name": "evidenceStatus",
+      "type": "string",
+      "doc": "COMPLETE only when held is stated. The field a reader filters on."
+    },
+    {
+      "name": "operationalEligible",
+      "type": "boolean",
+      "default": false,
+      "doc": "Whether this observation may be acted on: true ONLY for a touched, eligible candidate whose absorption is PRESENT and whose verdict is OK. FALSE IS A REAL VALUE HERE, not a stand-in for \"not determined\" \u2014 unlike held and eligible, which are nullable because a refusal genuinely has no outcome and an unread board genuinely states no eligibility. There is no third state to express: if the service cannot tell whether a candidate qualifies, then it does not qualify, so the honest answer is false. The default is false for the same reason, and it is the fail-closed direction: a record written by an older producer, or one where the field was never set, reads as NOT actionable rather than as actionable. A reader must still not use this field to compute the base rate \u2014 that is what evidenceStatus and held are for; this one says only whether the row would have been acted on."
+    },
+    {
+      "name": "verdict",
+      "type": "string"
+    },
+    {
+      "name": "refusedReason",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "eventTimeMs",
+      "type": "long"
+    }
+  ]
+}

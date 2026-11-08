@@ -1,0 +1,220 @@
+{
+  "type": "record",
+  "name": "StrikeHoldCurrent",
+  "namespace": "com.optionsedge.contracts.strikehold",
+  "doc": "The newest state of ONE candidate strike in one chain's session, as strike-hold-service sees it. Written to options.spx.strike-hold.current (compacted) under RecordNameStrategy with the fixed id 3801. Key: <symbol>|<expiry>|U|<strike>. Every price is an integer number of CENTS: SPX quotes to two decimals and strikes sit on a 5-point grid, so cents is exact, and it matches the spxBasis/esPriceTicks/spxPriceCents convention the rest of the fleet already uses. A record is emitted for a candidate that was REFUSED as well as one that was answered - the reason is in verdict - because a service whose silence could mean either 'nothing happened' or 'I could not tell' cannot be used to measure a base rate.",
+  "fields": [
+    {
+      "name": "schemaVersion",
+      "type": "int",
+      "default": 1
+    },
+    {
+      "name": "messageType",
+      "type": "string",
+      "doc": "STRIKE_HOLD_CURRENT"
+    },
+    {
+      "name": "definitionVersion",
+      "type": "string",
+      "doc": "The requirement/design revision the emitting code implements, so a reader can tell which rule produced a row."
+    },
+    {
+      "name": "env",
+      "type": "string"
+    },
+    {
+      "name": "sessionDate",
+      "type": "string",
+      "doc": "The New York calendar date of the cash session, ISO. Never a UTC date: 09:30 New York is 13:30 UTC in summer and 14:30 in winter."
+    },
+    {
+      "name": "symbol",
+      "type": "string"
+    },
+    {
+      "name": "expiry",
+      "type": "string"
+    },
+    {
+      "name": "esContract",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null,
+      "doc": "The ES contract whose book evidence was used, when one could be resolved. Null means no absorption evidence was attributed - which is NOT the same as none existing; verdict says which."
+    },
+    {
+      "name": "strikeCents",
+      "type": "long"
+    },
+    {
+      "name": "side",
+      "type": "string",
+      "doc": "UPPER (the strike sits above the discovery range, so safe means closing BELOW it) or LOWER."
+    },
+    {
+      "name": "discoveryHiCents",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    },
+    {
+      "name": "discoveryLoCents",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    },
+    {
+      "name": "discoverySamples",
+      "type": "int",
+      "default": 0,
+      "doc": "Spot observations inside the discovery window. A reader must check this against the service's configured minimum before trusting the range: a window with too few samples is reported THIN_DISCOVERY and defines no edge."
+    },
+    {
+      "name": "distFromEdgeCents",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    },
+    {
+      "name": "eligible",
+      "type": [
+        "null",
+        "boolean"
+      ],
+      "default": null,
+      "doc": "Whether the gamma ladder STATED this strike high-gamma and quoted, as of the touch. NULL means no ladder had stated anything judgeable by then - unknown, not ineligible. The three values are deliberately distinct: an unsolved ladder must never read as a negative eligibility statement."
+    },
+    {
+      "name": "touchTimeMs",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null,
+      "doc": "Null until price crosses the strike."
+    },
+    {
+      "name": "touchPrevSpotCents",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    },
+    {
+      "name": "touchSpotCents",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    },
+    {
+      "name": "absorptionState",
+      "type": "string",
+      "doc": "PRESENT, ABSENT, PENDING or UNAVAILABLE. ABSENT is the only POSITIVE claim of absence and requires a coverage frontier for exactly one ES contract reaching past the association window, with every event in that window successfully placed on the price axis. Everything weaker is PENDING, with the reason in verdict."
+    },
+    {
+      "name": "absorptionMatches",
+      "type": {
+        "type": "array",
+        "items": {
+          "type": "record",
+          "name": "StrikeHoldAbsorptionMatch",
+          "fields": [
+            {
+              "name": "eventId",
+              "type": "string"
+            },
+            {
+              "name": "kind",
+              "type": "string"
+            },
+            {
+              "name": "status",
+              "type": "string"
+            },
+            {
+              "name": "startMs",
+              "type": "long"
+            },
+            {
+              "name": "endMs",
+              "type": "long"
+            },
+            {
+              "name": "mappedLoStrikeCents",
+              "type": "long",
+              "doc": "The event's ES tick band mapped onto the SPX axis by the basis in force AT THE EVENT'S OWN TIME, never the latest basis seen."
+            },
+            {
+              "name": "mappedHiStrikeCents",
+              "type": "long"
+            },
+            {
+              "name": "contract",
+              "type": "string"
+            },
+            {
+              "name": "basisEventTimeMs",
+              "type": "long"
+            },
+            {
+              "name": "basisQuality",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "default": []
+    },
+    {
+      "name": "coveredThroughMs",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null,
+      "doc": "The instant through which the upstream states it observed and classified the book continuously, for this record's esContract. NULL means no coverage contract exists upstream at all, and the service will then never claim an absence."
+    },
+    {
+      "name": "evidenceStatus",
+      "type": "string",
+      "doc": "COMPLETE only when the touch, its eligibility and its absorption are all settled."
+    },
+    {
+      "name": "operationalEligible",
+      "type": "boolean",
+      "default": false,
+      "doc": "Whether this observation may be acted on: true ONLY for a touched, eligible candidate whose absorption is PRESENT and whose verdict is OK. FALSE IS A REAL VALUE HERE, not a stand-in for \"not determined\" \u2014 unlike held and eligible, which are nullable because a refusal genuinely has no outcome and an unread board genuinely states no eligibility. There is no third state to express: if the service cannot tell whether a candidate qualifies, then it does not qualify, so the honest answer is false. The default is false for the same reason, and it is the fail-closed direction: a record written by an older producer, or one where the field was never set, reads as NOT actionable rather than as actionable. A reader must still not use this field to compute the base rate \u2014 that is what evidenceStatus and held are for; this one says only whether the row would have been acted on."
+    },
+    {
+      "name": "verdict",
+      "type": "string",
+      "doc": "OK, or the named reason the candidate produced no usable answer. Every value the service can emit is reachable; a name that no code path produces would claim a distinction the service does not make."
+    },
+    {
+      "name": "refusedReason",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null,
+      "doc": "Null exactly when verdict is OK."
+    },
+    {
+      "name": "eventTimeMs",
+      "type": "long",
+      "doc": "EVENT time, read out of the input record, never a wall clock - so a replay of the same records produces the same rows."
+    }
+  ]
+}

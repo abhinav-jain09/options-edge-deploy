@@ -1,0 +1,168 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: strike-hold-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: strike-hold-service
+    app.kubernetes.io/component: strike-hold-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  # DEV ONLY (services.yaml envs: [dev]). The strike-hold service: requirement scalp-A rev 12 (owner-approved), design scalp-B rev 4, both in
+  # options-edge-documents design/dealer-scalping/. It answers ONE question — when price touches a high-gamma strike after the first half hour, and the order book
+  # shows absorption there, how often does the close end on the SAFE side of that strike?
+  #
+  # SINGLE replica (strategy Recreate). Not a capacity choice: the topology re-keys every input onto ONE key per symbol, so a second replica would own no partition
+  # and sit idle, and Recreate avoids two pods briefly holding the same session state during a roll.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: strike-hold-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: strike-hold-service
+        app.kubernetes.io/component: strike-hold-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: strike-hold
+          image: 192.168.100.252:5000/options-edge-strike-hold:dev
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            - name: STRIKE_HOLD_HEALTH_PORT
+              value: "8080"
+            - name: STRIKE_HOLD_SYMBOL
+              value: SPX
+            # --- inputs. Every one of these four is verified against its PRODUCER, not assumed:
+            #   underlying.spx.index.price            plain JSON {"price":…, "eventTime":"…ISO…"} from the IB index-price feed
+            #   options.spx.gamma-migration.current   Avro GammaMigrationSnapshot; the service reads `ladder` (perShareGamma, gammaLive, callAsk, putBid) and `eventTimeMs`
+            #   spx.basis.state                       plain JSON; spxBasis is in index POINTS and only ANCHORED/MEASURED are taken
+            #   es.mbo.liquidity-events               Avro EsMboEvent (id 3503) from es-liquidity-engine-service; loTick/hiTick are ES TICKS (one tick = 0.25 index points)
+            - name: KAFKA_STRIKE_HOLD_SPOT_TOPIC
+              value: underlying.spx.index.price
+            - name: KAFKA_STRIKE_HOLD_GAMMA_TOPIC
+              value: options.spx.gamma-migration.current
+            - name: KAFKA_STRIKE_HOLD_BASIS_TOPIC
+              value: spx.basis.state
+            - name: KAFKA_STRIKE_HOLD_ABSORPTION_TOPIC
+              value: es.mbo.liquidity-events
+            # --- THE COVERAGE DEPENDENCY, deliberately EMPTY.
+            # No upstream service publishes an absorption-coverage frontier yet (`coveredThroughMs`). While this is empty the service never states that absorption was
+            # ABSENT at a strike — it reports ABSORPTION_COVERAGE_UNAVAILABLE and says so at every start. That is the whole reason it is deployable now: it cannot
+            # infer an absence from silence, so it refuses instead of guessing. Set to es.mbo.health once the engine publishes the field; a topic that does not carry
+            # the field is harmless, because the field then reads as absent and the behaviour is unchanged.
+            - name: KAFKA_STRIKE_HOLD_COVERAGE_TOPIC
+              value: ""
+            # --- outputs. `current` is compacted, `scoring` is NOT (it is the evidence record). Declared in scripts/kafka/topics.env, dev-only.
+            - name: KAFKA_STRIKE_HOLD_OUTPUT_TOPIC
+              value: options.spx.strike-hold.current
+            - name: KAFKA_STRIKE_HOLD_SCORING_TOPIC
+              value: options.spx.strike-hold.scoring
+            # ONE partition, matching the topics.env declaration and the shared topic barrier (which asserts exactly one and has no parameter for
+            # another number). NOT the ConfigMap's KAFKA_TOPIC_PARTITIONS_DEFAULT of 32: the service re-keys every input onto one key per symbol and a
+            # session produces on the order of ten rows per topic, so 32 would leave 31 empty logs — and Kafka can add partitions but never remove
+            # them, so the widening would be irreversible.
+            - name: KAFKA_STRIKE_HOLD_TOPIC_PARTITIONS
+              value: "1"
+            - name: KAFKA_STRIKE_HOLD_NUM_THREADS
+              value: "1"
+            # --- the measurement's own parameters. The discovery window is the first half hour (requirement rev 12) and the minimum sample count is what makes a thin
+            # morning a named refusal (THIN_DISCOVERY) rather than a range the session never traded.
+            - name: STRIKE_HOLD_DISCOVERY_MINUTES
+              value: "30"
+            - name: STRIKE_HOLD_MIN_DISCOVERY_SAMPLES
+              value: "20"
+            # Candidates are the strikes on the grid strictly beyond each discovery edge, out to this distance.
+            - name: STRIKE_HOLD_MAX_CANDIDATE_DIST_PTS
+              value: "40"
+            - name: STRIKE_HOLD_STRIKE_GRID_PTS
+              value: "5"
+            # A touch must be an unambiguous crossing. The dev spot feed ticks at roughly one second, so a 30-second gap or a 5-point jump between consecutive prints
+            # means the crossing cannot be located — reported as TOUCH_AMBIGUOUS or SPOT_GAP, never silently accepted.
+            - name: STRIKE_HOLD_TOUCH_MAX_JUMP_PTS
+              value: "5"
+            - name: STRIKE_HOLD_TOUCH_MAX_GAP_MS
+              value: "30000"
+            # Eligibility: the top fifth of the STATING rungs by per-share gamma, and at least the median premium. Taken over rungs that positively state both a live
+            # gamma and a quote, so the cut does not move with however many rungs the producer left unsolved.
+            - name: STRIKE_HOLD_GAMMA_QUANTILE
+              value: "0.80"
+            - name: STRIKE_HOLD_PREMIUM_QUANTILE
+              value: "0.50"
+            # How stale the last in-session print may be and still count as the cash close. A RISK
+            # bound, not a measured one: the SPX index price publishes about 1.2 times a second, so
+            # this almost never binds, and what it decides when it does is how much price movement
+            # may sit between the price called "the close" and the real close. Deliberately tight —
+            # a session whose feed stops a minute early loses its outcome and reports NO_CLOSE,
+            # which is the right trade: a missing answer is honest, a wrong one silently corrupts
+            # the base rate this service exists to measure.
+            - name: STRIKE_HOLD_CLOSE_MAX_STALENESS_MS
+              value: "60000"
+            # The furthest a single spot record may move the service's clock. One record stamped far
+            # ahead would otherwise close and score every live session at once, and scoring is
+            # permanent. An over-bound record advances the clock BY the bound instead of being
+            # refused, because refusing deadlocks the moment a real feed gap exceeds it.
+            - name: STRIKE_HOLD_MAX_CLOCK_JUMP_MS
+              value: "3600000"
+            # The basis is read AS OF an event's own time, never "latest seen", and only within this lookback. Beyond it a band cannot be placed and the touch is
+            # refused BASIS_STALE rather than mapped on an extrapolation.
+            - name: STRIKE_HOLD_BASIS_MAX_LOOKBACK_MS
+              value: "60000"
+            # The association window around a touch, applied on BOTH sides: absorption at a level forms as price arrives there, so an event that closed shortly
+            # before the crossing is the typical evidence, not an edge case.
+            - name: STRIKE_HOLD_ABSORPTION_WINDOW_MS
+              value: "300000"
+            - name: STRIKE_HOLD_ABSORPTION_BAND_TOL_PTS
+              value: "1"
+            - name: STRIKE_HOLD_ABSORPTION_FINAL_KINDS
+              value: FINAL
+            # The prior table is EMPTY until Phase 0 measures one. Empty means pHeldPrior is published as null — fail closed, rather than shipping a number nobody measured.
+            - name: STRIKE_HOLD_PRIOR_TABLE_VERSION
+              value: ""
+            - name: JAVA_TOOL_OPTIONS
+              value: -Xms256m -Xmx768m
+          ports:
+            - name: health
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            failureThreshold: 3
+          # NO PVC, and that is a decision rather than an omission. The session store is a regular persistent KeyValueStore, so Kafka Streams restores it from its
+          # CHANGELOG topic after a restart — an emptyDir loses the local copy and costs a restore, not the data. (This is not true of a GLOBAL store, which ignores
+          # auto.offset.reset and has no checkpoint on an emptyDir; this service uses none.) The emptyDir below keeps RocksDB off the container's writable layer.
+          volumeMounts:
+            - name: streams-state
+              mountPath: /tmp/kafka-streams
+          resources:
+            # Sized from the only comparable measurement available: gamma-migration-service runs at 4 millicores and 364 MiB against the full SPX option firehose.
+            # This service reads strictly less — one spot series, one throttled ladder, one basis series and a sparse event log — so 50m is generous for it.
+            # NOTE FOR WHOEVER APPLIES THIS: the dev node was at its CPU-request ceiling as of 2026-11-08, so this pod may sit Pending "Insufficient cpu" until
+            # capacity is freed. That is a node budgeting matter for the owner, not a reason to under-request here.
+            requests:
+              cpu: 50m
+              memory: 512Mi
+            limits:
+              memory: 1Gi
+      volumes:
+        - name: streams-state
+          emptyDir: {}

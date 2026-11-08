@@ -281,6 +281,13 @@ services:
   # scripts/kafka/ensure-liquidity-validator-topics.sh is the first-deploy barrier (service-deploy, dev only). Plain consumer loops, no Kafka Streams, no state volume. Single replica only.
   # No Service object; no production or es4 entry, image, topic or overlay exists.
   - { name: liquidity-validator,          managedBy: standalone, sliceGenerated: true, envs: [dev], image: options-edge-liquidity-validator,          deployments: [liquidity-validator-service] }
+  # strike-hold: DEV ONLY (envs: [dev]). NEW service: requirement options-edge-documents design/dealer-scalping/scalp-A-requirement.md rev 12 (owner-approved), design scalp-B-design.md rev 4.
+  # It answers ONE question — when price touches a high-gamma strike after the first half hour, and the order book shows absorption there, how often does the close end on the SAFE side of
+  # that strike? A Kafka Streams app (one persistent session store, restored from its changelog, so no PVC) reading underlying.spx.index.price, options.spx.gamma-migration.current,
+  # spx.basis.state and es.mbo.liquidity-events, and writing options.spx.strike-hold.{current,scoring} (its own schemas, RecordNameStrategy; topics declared dev-only in topics.env).
+  # It NEVER trades and adds no decision consumer of its topics. Absorption COVERAGE is not published by any service yet, so the service reports
+  # ABSORPTION_COVERAGE_UNAVAILABLE rather than ever stating that absorption was ABSENT. Single replica only. No Service object; no production or es4 entry, image or overlay exists.
+  - { name: strike-hold,                  managedBy: standalone, sliceGenerated: true, envs: [dev], image: options-edge-strike-hold,                  deployments: [strike-hold-service] }
   # stock-gex: SPX-500 single-stock GEX (Databento equity options; NO Kafka). Its image builds in the
   # options-edge-databento-feed repo (Dockerfile.stockgex), like databento-sr3-feed — hence buildJob.
   # DEV-FIRST/on-demand: prod overlay holds it at replicas:0 until the nightly OI-index builder exists.

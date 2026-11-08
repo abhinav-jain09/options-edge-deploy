@@ -91,6 +91,7 @@ IMAGE_MAP = {
     ("es-amt-service", "es-amt"): "ES_AMT_IMAGE",
     ("es-liquidity-wall-service", "es-liquidity-wall"): "ES_LIQUIDITY_WALL_IMAGE",
     ("es-liquidity-engine-service", "es-liquidity-engine"): "ES_LIQUIDITY_ENGINE_IMAGE",
+    ("strike-hold-service", "strike-hold"): "STRIKE_HOLD_IMAGE",
     ("liquidity-validator-service", "liquidity-validator"): "LIQUIDITY_VALIDATOR_IMAGE",
     ("drop-classifier-ref-service", "drop-classifier-ref"): "DROP_CLASSIFIER_IMAGE",
     ("reversal-postgres-writer", "reversal-postgres-writer"): "REVERSAL_POSTGRES_WRITER_IMAGE",

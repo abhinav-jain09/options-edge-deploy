@@ -1,0 +1,9 @@
+# SERVICE SLICE — strike-hold (does the close end on the safe side of a touched high-gamma strike?) on DEV. Owns ONLY this service's Deployment.
+#
+# DEV-ONLY: referenced from k8s/overlays/dev (NOT k8s/base, NOT production or experiment); services.yaml declares envs: [dev]. A Kafka Streams application with one persistent
+# state store, whose changelog is the authority — so the pod needs no PVC (see the deployment's volume note). No Service object: kubelet probes reach the pod directly.
+# No ConfigMap or Secret of its own.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - strike-hold-deployment.yaml

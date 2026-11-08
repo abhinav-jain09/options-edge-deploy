@@ -82,7 +82,14 @@ fail=0
 # assignment — failing closed, but with no diagnostic at all, which is indistinguishable from a
 # crash. An empty parse must be REPORTED as an empty parse.
 list_of() { # variable name -> its whitespace-split values, minus the "$VAR" self-reference
-  { sed -nE "s/^$1=\"(.*)\"$/\\1/p" "$TOPICS_ENV" | tr ' ' '\n' | grep -v "^\\\$$1$" | grep -v '^$'; } || true
+  # `^[[:space:]]*` and not `^`: topics.env declares a DEV-ONLY block by appending inside an
+  # `if`, so those assignments are INDENTED. Anchored at column zero this reader saw the base
+  # literal and every column-zero append but silently skipped the indented ones — the same
+  # blindness that, in dev-cleanup.sh and reset-preserved-topics.sh, deleted es.rithmic.mbo and
+  # three liquidity-validator topics on 2026-11-06 (deploy PR 1534). Those readers were taught to
+  # see indentation; this one was not, while the liquidity-validator and strike-hold declarations
+  # are both indented today.
+  { sed -nE "s/^[[:space:]]*$1=\"(.*)\"$/\\1/p" "$TOPICS_ENV" | tr ' ' '\n' | grep -v "^\\\$$1$" | grep -v '^$'; } || true
 }
 
 # U16 (ES-CVD-SPX-LEVELS-DESIGN.md L1/M1): production-only topics are DECLARED topics too — the
