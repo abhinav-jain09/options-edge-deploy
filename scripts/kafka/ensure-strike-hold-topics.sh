@@ -45,11 +45,21 @@ SCORING="${KAFKA_STRIKE_HOLD_SCORING_TOPIC:-options.spx.strike-hold.scoring}"
 # The declared partition width is EXACT. Kafka can add partitions but never remove them, so a topic already wider than the declaration is a fact to fail on, not to
 # reconcile: widening is irreversible and the service's single re-key key would leave the extra logs empty for ever.
 check_partitions() { # <topic>
-  local topic="$1" out n
+  local topic="$1" out n count
   if ! out=$(kt --describe --topic "$topic" 2>&1); then
     echo "FAIL: could not describe '$topic':"; printf '%s\n' "$out"; return 1
   fi
-  n=$(sed -n 's/.*PartitionCount: *\([0-9][0-9]*\).*/\1/p' <<<"$out" | head -1)
+  # EVERY PartitionCount the describe printed, not the first. Taking the first would accept output
+  # whose leading value happens to be right while a second, different one is present — a prefix
+  # match on the topic name, or two topics in one describe. Ambiguous output is a refusal, not a
+  # value to pick from, so the count of lines is checked before the value is read at all.
+  n=$(sed -n 's/.*PartitionCount: *\([0-9][0-9]*\).*/\1/p' <<<"$out")
+  count=$(printf '%s\n' "$n" | grep -c .)
+  if [ "$count" != "1" ]; then
+    echo "FAIL: describe of '$topic' reported $count PartitionCount values, expected exactly 1 — refusing to choose:"
+    printf '%s\n' "$out"
+    return 1
+  fi
   case "${n:-}" in
     ''|*[!0-9]*) echo "FAIL: '$topic' reports PartitionCount='${n:-<unreadable>}'."; return 1 ;;
   esac
@@ -65,6 +75,16 @@ check_retention_bytes() { # <topic> <exact retention.bytes>
   local topic="$1" want="$2" cfg bytes
   if ! cfg=$(kc --entity-type topics --entity-name "$topic" --describe --all 2>&1); then
     echo "FAIL: could not read the config of '$topic':"; printf '%s\n' "$cfg"; return 1
+  fi
+  # Same refusal as above: `extract` returns the FIRST match, so a config dump carrying two
+  # retention.bytes values would be accepted on the strength of whichever came first. Count the
+  # occurrences in the raw dump and refuse anything but exactly one before trusting the value.
+  local seen
+  seen=$(printf '%s\n' "$cfg" | grep -o 'retention\.bytes=' | grep -c .)
+  if [ "$seen" != "1" ]; then
+    echo "FAIL: config of '$topic' carries $seen retention.bytes values, expected exactly 1 — refusing to choose:"
+    printf '%s\n' "$cfg"
+    return 1
   fi
   bytes=$(extract 'retention\.bytes' "$cfg")
   case "${bytes:-}" in

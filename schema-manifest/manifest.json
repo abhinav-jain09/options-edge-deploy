@@ -1063,6 +1063,16 @@
         3701,
         3710
       ]
+    ],
+    "strikehold": [
+      [
+        3801,
+        3801
+      ],
+      [
+        3802,
+        3802
+      ]
     ]
   },
   "declaredByManifest": [
@@ -11692,6 +11702,74 @@
       "consumers": [],
       "retained": true,
       "retainedReason": "curated, not baseline: the Line health feature (requirement rev 25 LH-O-1, design 3.2a; contracts 0.79.0 schemas-registry/linehealth), written by the line-health loop of level-absorption-service (milestone M1, not built at M0) on futures.line-health.snapshot under RecordNameStrategy with auto.register.schemas=false. Producer and consumer bindings are added by the milestone that builds each side together with its image label, so no existing service becomes schema-gated at M0. Dev only; nothing is registered on production or es4."
+    },
+    {
+      "kind": "MIRRORED",
+      "subject": "com.optionsedge.contracts.strikehold.StrikeHoldCurrent",
+      "version": 1,
+      "id": 3801,
+      "family": "strikehold",
+      "schemaFile": "com.optionsedge.contracts.strikehold.StrikeHoldCurrent/v1.avsc",
+      "schemaHash": "db2efbf373481844391c8a526d93f9c4e21f1b63f718d7359f4f593ac8b75258",
+      "environments": [
+        "dev"
+      ],
+      "source": {
+        "kind": "FILE",
+        "repo": "contracts",
+        "path": "schemas-registry/strikehold/StrikeHoldCurrent.avsc"
+      },
+      "topics": [
+        {
+          "name": "options.spx.strike-hold.current",
+          "kind": "data"
+        }
+      ],
+      "producers": [
+        {
+          "service": "strike-hold",
+          "environments": [
+            "dev"
+          ]
+        }
+      ],
+      "consumers": [],
+      "retained": true,
+      "retainedReason": "curated, not baseline: strike-hold-service (NEW, dev only; contracts 0.90.0 schemas-registry/strikehold) writes it on options.spx.strike-hold.current under RecordNameStrategy with auto.register.schemas=false (its schema-requirements.json names this id and hash). The newest state of ONE candidate strike; the topic is COMPACTED because the ET-day rollover replaces the row rather than appending to it. Dev only; nothing is registered on production or es4."
+    },
+    {
+      "kind": "MIRRORED",
+      "subject": "com.optionsedge.contracts.strikehold.StrikeHoldScoring",
+      "version": 1,
+      "id": 3802,
+      "family": "strikehold",
+      "schemaFile": "com.optionsedge.contracts.strikehold.StrikeHoldScoring/v1.avsc",
+      "schemaHash": "2a1c807c25c929ee4487cf3549d1c26415b1ff7130de7cb8d46274bdd46fcb07",
+      "environments": [
+        "dev"
+      ],
+      "source": {
+        "kind": "FILE",
+        "repo": "contracts",
+        "path": "schemas-registry/strikehold/StrikeHoldScoring.avsc"
+      },
+      "topics": [
+        {
+          "name": "options.spx.strike-hold.scoring",
+          "kind": "data"
+        }
+      ],
+      "producers": [
+        {
+          "service": "strike-hold",
+          "environments": [
+            "dev"
+          ]
+        }
+      ],
+      "consumers": [],
+      "retained": true,
+      "retainedReason": "curated, not baseline: strike-hold-service (NEW, dev only; contracts 0.90.0 schemas-registry/strikehold) writes it on options.spx.strike-hold.scoring under RecordNameStrategy with auto.register.schemas=false (its schema-requirements.json names this id and hash). The EVIDENCE RECORD the base rate is computed from: one row per candidate strike per session, so the topic must NEVER be compacted \u2014 compaction would not degrade the measurement, it would delete it. `held` is a NULLABLE boolean by requirement: a refusal carries null, so it can never be averaged in as an outcome. Dev only; nothing is registered on production or es4."
     }
   ],
   "dlqTopics": {

@@ -228,7 +228,7 @@
           # approach-monitor, approach-position-publisher, oi-next-publication, vol-state and
           # zn-gex, line-acceptance, es-amt, es-liquidity-wall, es-liquidity-engine, liquidity-validator and strike-hold render in dev ONLY, so they are pinned there and nowhere else.
           if [ "${ENVIRONMENT}" = "dev" ]; then
-            for _img_var in APPROACH_MONITOR_IMAGE APPROACH_POSITION_PUBLISHER_IMAGE OI_NEXT_PUBLICATION_IMAGE OI_NEXT_PUBLICATION_POSTGRES_WRITER_IMAGE VOL_STATE_IMAGE ZN_GEX_IMAGE LINE_ACCEPTANCE_IMAGE ES_AMT_IMAGE ES_LIQUIDITY_WALL_IMAGE ES_LIQUIDITY_ENGINE_IMAGE LIQUIDITY_VALIDATOR_IMAGE; do
+            for _img_var in APPROACH_MONITOR_IMAGE APPROACH_POSITION_PUBLISHER_IMAGE OI_NEXT_PUBLICATION_IMAGE OI_NEXT_PUBLICATION_POSTGRES_WRITER_IMAGE VOL_STATE_IMAGE ZN_GEX_IMAGE LINE_ACCEPTANCE_IMAGE ES_AMT_IMAGE ES_LIQUIDITY_WALL_IMAGE ES_LIQUIDITY_ENGINE_IMAGE LIQUIDITY_VALIDATOR_IMAGE STRIKE_HOLD_IMAGE; do
               _pinned="$(pin_ref "${!_img_var}")" || {
                 echo "FATAL: cannot resolve registry digest for ${_img_var}=${!_img_var}; aborting before any kubectl mutation." >&2
                 exit 1
