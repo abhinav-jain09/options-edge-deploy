@@ -318,7 +318,10 @@ class Barrier(unittest.TestCase):
             "closures delete": (CLOSURES, lambda d: d["configs"].update({"cleanup.policy": "delete"})),
             "closures finite retention": (CLOSURES, lambda d: d["configs"].update({"retention.ms": ONE_DAY})),
             "closures byte-capped": (CLOSURES, lambda d: d["configs"].update({"retention.bytes": CAP})),
-            "snapshot byte-capped": (SNAPSHOT, lambda d: d["configs"].update({"retention.bytes": CAP})),
+            # A DISTINCT mutation. This key was a duplicate of the one above, and a duplicate dict
+            # key is silently dropped by Python — so one declared drift case could never run while
+            # the dict still read as covering it (Codex deploy r13).
+            "snapshot 2 partitions": (SNAPSHOT, lambda d: d.update(partitions=2)),
             "closures 4 partitions": (CLOSURES, lambda d: d.update(partitions=4)),
             "events 4 partitions": (EVENTS, lambda d: d.update(partitions=4)),
             "events compacted": (EVENTS, lambda d: d["configs"].update({"cleanup.policy": "compact"})),
@@ -342,7 +345,13 @@ class Barrier(unittest.TestCase):
         self.assertTrue(os.access(BARRIER, os.X_OK))
         self.assertIn("ensure-topic-contract.lib.sh", BARRIER.read_text())
         j = read("Jenkinsfile.service-deploy")
-        self.assertIn("params.SERVICE == 'es-liquidity-engine'", j)
+        # The ACTUAL dispatch. It was an equality check until Jenkinsfile.service-deploy hit the
+        # Groovy CPS 64 KB method limit and the `params.SERVICE == 'x' || ...` chains were converted
+        # to a service-list `.contains()`. This assertion kept asserting the equality and has been
+        # failing on main ever since — one of this file's two long-standing failures, caused by the
+        # fix and not by the change under review (Codex deploy r13).
+        self.assertRegex(j, r"\[(?:[^\]]*')es-liquidity-engine'[^\]]*\]\.contains\(params\.SERVICE\)",
+                         "the stage must dispatch on the service list that replaced the equality chain")
         self.assertIn("es-liquidity-engine) scripts/kafka/ensure-es-liquidity-engine-topics.sh ;;", j)
 
     def test_the_barrier_has_a_mocked_negative_control_suite_and_the_gate_runs_it(self):
@@ -409,7 +418,20 @@ class Schemas(unittest.TestCase):
         self.assertIn("es-liquidity-engine", named)
         sh = read("scripts/deploy/service-deploy.sh")
         self.assertIn("bash scripts/ci/schema-sync.sh", sh)
-        self.assertRegex(sh, r'select\(\.service == \\"\$SERVICE\\"\)')
+
+        # THE ACTUAL MECHANISM. This asserted a `select(.service == "$SERVICE")` expression inside
+        # service-deploy.sh; the per-service decision has since moved into
+        # scripts/ci/schema-sync-scope.sh, so the assertion was describing a mechanism that
+        # relocated — the second of this file's two long-standing main failures, and a stale
+        # assertion rather than a defect in what it guards (Codex deploy r13).
+        self.assertIn('bash scripts/ci/schema-sync-scope.sh "$SERVICE" "$ENVIRONMENT"', sh,
+                      "the deploy must ask the scope script whether this service is gated")
+        self.assertIn('NOT_GATED_UNCOVERED', sh, "and must say so out loud when it is not")
+        scope = read("scripts/ci/schema-sync-scope.sh")
+        self.assertIn('b.get("service") == service', scope,
+                      "the scope decision is per service, read from the manifest's bindings")
+        # And the ratchet must actually bind THIS service, which is what makes the gate run for it.
+        self.assertIn("es-liquidity-engine", named)
 
     def test_the_manifest_validates_with_the_governance_tool(self):
         r = subprocess.run(["java", "-jar", str(JAR), "validate", "--manifest", str(ROOT / "schema-manifest/manifest.json"), "--snapshots", str(ROOT / "schema-manifest/schemas")],
