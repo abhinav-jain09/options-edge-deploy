@@ -1314,6 +1314,58 @@ class ActualJenkinsfileMutationTest(unittest.TestCase):
         r = self._validate_mutated("Jenkinsfile.es-indicator-mirror",
                                    'timeout "$PARITY_TMO" "$KBIN/kafka-console-consumer"',
                                    'timeout 120 "$KBIN/kafka-console-consumer"')
+    # ---- the Rithmic collector release, moved out of Jenkinsfile.es4-deploy on 2026-11-08 ----
+    # It is a two-source release driven by the COLLECTOR repository's own scripts/deploy-kubernetes.py
+    # (docker build + push from that checkout), which rule 9b refuses because the validator cannot read
+    # a script inside a cloned repository. While it lived inside es4-deploy it made that whole job
+    # unguardable. Two mutations hold the new arrangement in place, from both ends.
+
+    def _validate_with_manifest(self, old_row: str, new_row: str, only: str) -> subprocess.CompletedProcess:
+        """The real repository, with ONE manifest row rewritten: a classification is a claim, and a claim
+        has to be falsifiable by changing it."""
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        shutil.copytree(ROOT / "scripts", tmp / "scripts", ignore=shutil.ignore_patterns("__pycache__", ".helper-venv"))
+        for f in ROOT.glob("Jenkinsfile*"):
+            shutil.copy(f, tmp / f.name)
+        manifest = tmp / "scripts/ci/jenkins-permitted-sha-scope.txt"
+        text = manifest.read_text()
+        self.assertIn(old_row, text)
+        manifest.write_text(text.replace(old_row, new_row, 1))
+        return subprocess.run(["python3", str(VALIDATOR), "--root", str(tmp), "--manifest", str(manifest), "--only", only],
+                              capture_output=True, text=True)
+
+    def test_the_rithmic_release_cannot_be_classified_in(self) -> None:
+        # The `out` row is not bookkeeping and not a convenience: flipped to `in`, the job is judged and
+        # REFUSED on the very effects that forced the split — so `out` is a statement about this file that
+        # the validator itself backs, not a label chosen to silence it.
+        scope = (ROOT / "scripts/ci/jenkins-permitted-sha-scope.txt").read_text()
+        row = next(l for l in scope.split("\n") if l.startswith("Jenkinsfile.rithmic-depth-bridge-release"))
+        r = self._validate_with_manifest(row, row.replace("| out |", "| in  |", 1), "Jenkinsfile.rithmic-depth-bridge-release")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("deploy-kubernetes.py", r.stdout)
+        self.assertIn("not a file in the tree the validator sees", r.stdout)
+
+    def test_the_rithmic_release_put_back_into_es4_deploy_is_refused(self) -> None:
+        # The reverse direction: es4-deploy is `in`, and it stays `in` only while it carries no such path.
+        # Re-grafting the release (its clone of the collector repository is enough) refuses the whole job —
+        # which is what made the five refusals this split removed.
+        r = self._validate_mutated(
+            "Jenkinsfile.es4-deploy",
+            "          } else {\n",
+            "            dir('.jenkins-tmp/rithmic-source') {\n"
+            "              deleteDir()\n"
+            "              git branch: 'main', url: 'git@github.com:abhinav-jain09/rithmic-depth-bridge.git'\n"
+            "            }\n"
+            "          } else {\n")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("the guarded workspace is re-acquired after the guard", r.stdout)
+        self.assertIn("rithmic-depth-bridge.git", r.stdout)
+
+    def test_es4_deploy_still_passes_unmutated(self) -> None:
+        # SPECIFICITY for both cases above: the job the split left behind is accepted as it stands, so
+        # neither refusal can be passing because es4-deploy is simply broken.
+        r = self._validate_mutated("Jenkinsfile.es4-deploy", "    stage('Create topics') {", "    stage('Create topics') {")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
 
