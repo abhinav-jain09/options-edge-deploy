@@ -175,19 +175,34 @@ rc=0
 # FAIL CLOSED ON AN UNREADABLE MANIFEST. "I could not tell" must never read as "no coverage source
 # configured", which is the same mistake in a different place.
 coverage_from_manifest() {
-  local f v n
+  local f v n mentions
   for f in "$ROOT/k8s/services/strike-hold/overlays/dev/manifest.yaml" \
            "$ROOT/k8s/services/strike-hold/base/strike-hold-deployment.yaml"; do
     [ -r "$f" ] || continue
-    # The value on the line AFTER the key, anchored on both: a count of anything but one is refused
-    # rather than resolved, so neither a missing value nor a duplicated key can be read as an answer.
+    # The value on the line AFTER the key, anchored on both, with surrounding quotes stripped so a
+    # legitimately quoted value is not read as a topic name containing quote marks.
     n=$(awk '/- name: KAFKA_STRIKE_HOLD_COVERAGE_TOPIC$/ {getline; if ($1 == "value:") print $2}' "$f" | wc -l | tr -d ' ')
+    # MENTIONED BUT UNPARSEABLE MUST FAIL, and this is the clause that matters. The anchored parse
+    # only understands the block style this repo uses; flow style ({name: X, value: Y}), a comment
+    # between the key and its value, or a valueFrom reference all yield NO value — and without this
+    # they would fall through to "the key appears nowhere", i.e. to silently skipping the check.
+    # That is the same silent-skip the manifest read was introduced to fix, one layer in.
+    mentions=$(grep -c 'KAFKA_STRIKE_HOLD_COVERAGE_TOPIC' "$f" || true)
+    if [ "$mentions" -gt 0 ] && [ "$n" -eq 0 ]; then
+      echo "FAIL: $f mentions KAFKA_STRIKE_HOLD_COVERAGE_TOPIC but this barrier could not read its value." >&2
+      echo "      It understands only '- name: <KEY>' followed by 'value: <topic>'. A flow-style entry, a" >&2
+      echo "      comment between the two, or a valueFrom reference must be resolved by hand — refusing," >&2
+      echo "      because treating an unreadable declaration as 'no coverage source' is exactly the silent" >&2
+      echo "      skip this read replaced." >&2
+      return 2
+    fi
     if [ "$n" -gt 1 ]; then
       echo "FAIL: $f declares KAFKA_STRIKE_HOLD_COVERAGE_TOPIC $n times; refusing to choose between them." >&2
       return 2
     fi
     if [ "$n" -eq 1 ]; then
       v=$(awk '/- name: KAFKA_STRIKE_HOLD_COVERAGE_TOPIC$/ {getline; if ($1 == "value:") print $2}' "$f")
+      v="${v%\"}"; v="${v#\"}"; v="${v%\'}"; v="${v#\'}"
       printf '%s' "$v"
       return 0
     fi

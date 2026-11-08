@@ -220,6 +220,57 @@ if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "es.mbo.coverage"; then
   ok "with NO env var set, the manifest's coverage topic is still required (the real deploy path)"
 else bad "the real deploy path skipped the coverage check entirely"; fi
 
+# 10) THE MANIFEST PARSE, against YAML it does and does not understand.
+#
+# The parse is an awk anchored on '- name: <KEY>' and the 'value:' line after it. That is the style
+# this repo uses, and the arms below pin what happens with anything else: a QUOTED value is read
+# (quotes stripped), while a flow-style entry, a comment between the key and its value, and a
+# valueFrom reference are all REFUSED — never read as "no coverage source configured", which is the
+# silent skip the manifest read was introduced to replace.
+with_manifest() { # with_manifest <yaml body for the env entry>
+  rm -rf "$TMP/repo"
+  mkdir -p "$TMP/repo/scripts/kafka" "$TMP/repo/k8s/services/strike-hold/base"
+  cp "$HERE/ensure-strike-hold-topics.sh" "$HERE/topic-config-parse.sh" \
+     "$HERE/ensure-topic-contract.lib.sh" "$TMP/repo/scripts/kafka/"
+  {
+    echo "spec:"; echo "  template:"; echo "    spec:"; echo "      containers:"
+    echo "        - name: strike-hold"; echo "          env:"
+    printf '%s\n' "$1"
+  } > "$TMP/repo/k8s/services/strike-hold/base/strike-hold-deployment.yaml"
+  PATH="$TMP/bin:$PATH" ENVIRONMENT=dev KAFKA_BOOTSTRAP_SERVERS=mock:9092 \
+    bash "$TMP/repo/scripts/kafka/ensure-strike-hold-topics.sh" 2>&1
+}
+
+cov_mocks yes compact -1
+out="$(with_manifest '            - name: KAFKA_STRIKE_HOLD_COVERAGE_TOPIC
+              value: "es.mbo.coverage"')"; rc=$?
+if [ "$rc" -eq 0 ]; then ok "a QUOTED value is read, quotes stripped, and the topic verified"
+else bad "a quoted value was not understood:"; printf '%s\n' "$out" | grep -E "^FAIL" | head -2; fi
+
+for bad_yaml in \
+  '            - {name: KAFKA_STRIKE_HOLD_COVERAGE_TOPIC, value: es.mbo.coverage}' \
+  '            - name: KAFKA_STRIKE_HOLD_COVERAGE_TOPIC
+              # a comment between the key and its value
+              value: es.mbo.coverage' \
+  '            - name: KAFKA_STRIKE_HOLD_COVERAGE_TOPIC
+              valueFrom:
+                configMapKeyRef: {name: cm, key: coverage}'
+do
+  out="$(with_manifest "$bad_yaml")"; rc=$?
+  if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "could not read its value"; then
+    ok "a declaration this parse cannot read is REFUSED, not treated as absent"
+  else
+    bad "an unreadable declaration was treated as 'no coverage source': ${bad_yaml%%$'\n'*}"
+  fi
+done
+
+# And a manifest that genuinely does not mention it at all IS "no coverage source" — the one case
+# where skipping is right, so the refusal above cannot be achieved by refusing everything.
+out="$(with_manifest '            - name: KAFKA_STRIKE_HOLD_SPOT_TOPIC
+              value: underlying.spx.index.price')"; rc=$?
+if [ "$rc" -eq 0 ]; then ok "a manifest that names no coverage topic is not a refusal"
+else bad "a manifest without the key was refused:"; printf '%s\n' "$out" | grep -E "^FAIL" | head -2; fi
+
 # 7) DEV ONLY, fail-closed.
 out="$(PATH="$TMP/bin:$PATH" ENVIRONMENT=production KAFKA_BOOTSTRAP_SERVERS=mock:9092 bash "$BAR" 2>&1)"; rc=$?
 if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "DEV ONLY"; then ok "refuses outside dev"
