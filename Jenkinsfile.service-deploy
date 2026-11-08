@@ -104,6 +104,8 @@ pipeline {
       // liquidity-validator (the live READ-ONLY liquidity validator; never trades): DEV ONLY, replicas 1; reads five existing topics, publishes futures.liquidity-validator.{evaluations,data-gaps,daily} (ids 3601-3603; barrier below).
       'liquidity-validator',
       'drop-classifier-ref',
+      // strike-hold (the strike-hold measurement service; never trades): DEV ONLY, replicas 1; reads four existing topics, publishes options.spx.strike-hold.{current,scoring} (barrier below).
+      'strike-hold',
       // stock-gex-close-scheduler: PRODUCTION only — the closing-board SCHEDULE, which now lives
       // inside the batch itself (USER 2026-09-01: "I don't want anything Jenkins-based, it should
       // run based on Spring Batch configuration"). This job DEPLOYS it; nothing here decides when
@@ -1031,12 +1033,15 @@ PYEOF
       // topic-level max.message.bytes 9437184 on the checkpoint and journal topics) and changes NO broker config. Idempotent; fails closed. The service is LIVE on dev (UNVALIDATED), so a re-deploy of it runs this first and a wipe
       // must be followed by this barrier before the service is relied on; it is NOT run by dev-cleanup.sh, whose topic pass recreates the declared shapes from topics.env instead.
       // es-liquidity-engine (dev only, two topics es.mbo.level-flow and es.mbo.health: scripts/kafka/ensure-es-liquidity-engine-topics.sh) shares this stage the same way.
+      // strike-hold (dev only, two topics options.spx.strike-hold.{current,scoring}: scripts/kafka/ensure-strike-hold-topics.sh) shares this stage the same way. The barrier is what
+      // makes the declared RETENTION a precondition of the deploy: the pod can set the cleanup policy itself but not the retention, so without it a first deploy onto an empty
+      // broker could create the evidence topic at the cluster default and age the measurement out from under itself.
       // liquidity-validator (dev only, three topics futures.liquidity-validator.*: scripts/kafka/ensure-liquidity-validator-topics.sh) shares this stage the same way.
       // es-liquidity-wall (dev only, same shape: scripts/kafka/ensure-es-liquidity-wall-topics.sh, seven topics, one partition each, the declared cleanup policy, retention.ms and retention.bytes;
       // the events log at retention.ms -1 with a 256 MiB cap, the four pure-compact topics at -1/-1) shares this ONE stage on purpose: this pipeline's generated CPS method sits at the JVM's
       // 64 KB method limit, and a separate stage for it failed every build at compile time ("Method too large", build #3006). The barrier run is selected by SERVICE below.
       when {
-        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && ((params.SERVICE == 'line-acceptance' || params.SERVICE == 'es-liquidity-wall' || params.SERVICE == 'es-liquidity-engine' || params.SERVICE == 'liquidity-validator') && !params.DEPLOY_DRY_RUN) }
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && ((params.SERVICE == 'line-acceptance' || params.SERVICE == 'es-liquidity-wall' || params.SERVICE == 'es-liquidity-engine' || params.SERVICE == 'liquidity-validator' || params.SERVICE == 'strike-hold') && !params.DEPLOY_DRY_RUN) }
       }
       steps {
         script {
@@ -1053,6 +1058,7 @@ PYEOF
             es-liquidity-wall) scripts/kafka/ensure-es-liquidity-wall-topics.sh ;;
             es-liquidity-engine) scripts/kafka/ensure-es-liquidity-engine-topics.sh ;;
             liquidity-validator) scripts/kafka/ensure-liquidity-validator-topics.sh ;;
+            strike-hold) scripts/kafka/ensure-strike-hold-topics.sh ;;
             *) echo "FATAL: no topic barrier is wired for SERVICE=$SERVICE in this stage" >&2; exit 1 ;;
           esac
         '''
