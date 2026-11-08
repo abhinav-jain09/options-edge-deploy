@@ -95,6 +95,9 @@ resources:
   # liquidity-validator: DEV-ONLY (services.yaml envs: [dev]), replicas 1: the live READ-ONLY liquidity validator (geometry, level-absorption, aggressor-flow, footprint and raw ES tape in; three research topics out; never trades).
   # Referenced here only (NOT in k8s/base, production or experiment). No patches here or in the standalone slice (k8s/services/liquidity-validator/overlays/dev); the dev image remap below is what the slice mirrors.
   - ../../services/liquidity-validator/base
+  # break-line: DEV-ONLY (services.yaml envs: [dev]), replicas 1: Break Score rev 13 (the state and score of the user's own horizontal lines; it never trades). Referenced here only (NOT in k8s/base, production
+  # or experiment). No patches here or in the standalone slice (k8s/services/break-line/overlays/dev); the dev image remap below is what the slice mirrors.
+  - ../../services/break-line/base
   # drop-classifier-ref: DEV-ONLY and TEMPORARY (services.yaml envs: [dev]): the retained drop-classifier image in ES_TRADES mode writing es.drop.ref.* , the reference side of the G3b parity gate. Removed when G3b passes.
   - ../../services/drop-classifier-ref/base
   # NOTE: the databento timewarp replay Job + snapshot-replay Deployment used to live
@@ -1005,6 +1008,9 @@ images:
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-liquidity-validator
     newName: host.docker.internal:5001/options-edge-liquidity-validator
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-break-line
+    newName: host.docker.internal:5001/options-edge-break-line
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-oi-next-publication
     newName: host.docker.internal:5001/options-edge-oi-next-publication

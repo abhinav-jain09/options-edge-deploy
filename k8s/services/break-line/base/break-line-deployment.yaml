@@ -1,0 +1,77 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: break-line-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: break-line-service
+    app.kubernetes.io/component: break-line-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  # DEV ONLY (services.yaml envs: [dev]). Break Score rev 13 (options-edge-documents design/es-liquidity/liq-S-break-score-rev13-design.md): for every horizontal line a user marks on the Order page it
+  # publishes the state of the price at that line (approaching, testing, broken, continuing, stalled, failed back), the five order-book and tape measurements and, once a frozen table exists, the
+  # continuation score, on the Avro topics futures.break-line.{state,events,status,snapshot}. SHADOW: it never trades and adds no decision consumer; it reads only market topics and the lines topic.
+  # SINGLE replica (strategy Recreate): one service owns the four output topics and the transactional id `break-line-service`; Recreate fences the predecessor at start.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: break-line-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: break-line-service
+        app.kubernetes.io/component: break-line-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: break-line
+          # Base-registry name, like every other base manifest: the dev overlays (monolith AND the standalone slice) remap it to host.docker.internal:5001 via `images:`, and apply.sh's
+          # digest-pin loop keys its rewrite on exactly this `<base registry>/<image>` name.
+          image: 192.168.100.252:5000/options-edge-break-line:dev
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: options-edge-config              # the shared platform config (broker and registry addresses)
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            # The environment literal every admitted book record must carry (BS13-I-003). No default exists in the service: an unset value refuses to start.
+            - name: BREAK_LINE_ENVIRONMENT
+              value: Rithmic Paper Trading
+            - name: BREAK_LINE_ALLOW_TEST
+              value: "false"
+            # The informational high-gamma tag (design D4, DC-18): its own reader, OFF until the strike snapshot subject is bound. No state, component or score reads it.
+            - name: BREAK_LINE_GAMMA_ENABLED
+              value: "false"
+            # The health server port the service reads (Main: BREAK_LINE_HEALTH_PORT, default 8080); the probes below use the named port.
+            - name: BREAK_LINE_HEALTH_PORT
+              value: "8080"
+            - name: JAVA_TOOL_OPTIONS
+              value: -Xmx512m -XX:+UseSerialGC
+          ports:
+            - name: health
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 768Mi
