@@ -24,6 +24,7 @@ Jenkinsfile.es-auction-mirror             | in  |                               
 Jenkinsfile.es-cvd-mirror                 | in  |                                 | installs/tears down a launchd MirrorMaker unit on the Mac and creates the target topic
 Jenkinsfile.es-futures-flow-mirror        | in  |                                 | installs/tears down a launchd MirrorMaker unit on the Mac and creates the target topic
 Jenkinsfile.es-indicator-mirror           | in  |                                 | installs/tears down a launchd MirrorMaker unit on the Mac and creates the target topic
+Jenkinsfile.es-price-basisref-mirror      | in  |                                 | installs/tears down a launchd es-price Avro re-encoder on the Mac (dev registry -> es4 registry, same subject) and creates the target topic
 Jenkinsfile.es-strike-intel-mirror        | in  |                                 | installs/tears down a launchd MirrorMaker unit on the Mac and creates the target topic
 Jenkinsfile.es-tape-zones-mirror          | in  |                                 | installs/tears down a launchd MirrorMaker unit on the Mac and creates the target topic
 Jenkinsfile.es-trades-bridge              | in  |                                 | installs/tears down the es4->prod trades bridge (launchd unit writing a LIVE prod market-data topic)
@@ -72,6 +73,7 @@ tests/fixtures/permitted-sha-guard/good/Jenkinsfile.fixture-good | out | | test 
 tests/fixtures/permitted-sha-guard/refused/Jenkinsfile.fixture-apply-before-guard | out | | test fixture that must be REFUSED by the validator (an apply before the guard), judged inside its own fixture root against tests/fixtures/permitted-sha-guard/refused/scope.txt; Jenkins never loads it
 
 Jenkinsfile.visual-orders-validation      | out |                                 | source-validation-only job: pinned deterministic/probe bundle on es4, no runtime artifact publication, workload/Kafka mutation or release/replay gate; not a deployment job
+Jenkinsfile.responsive-stack-validation   | out |                                 | source-validation-only job: both inputs pinned to exact 40-hex SHAs and refused on mismatch, a source-only bundle run in a mktemp dir on es4 over ssh with trap cleanup; no runtime image, registry push, cluster, Kafka or broker operation; not a deployment job
 
 Jenkinsfile.cvd-image-rollforward | in | | fixed dev/prod namespace/deployer image-only CVD reader CAS; guard first, tests then immediate source verification before effect; no scale, state, topic or offset changes
 
