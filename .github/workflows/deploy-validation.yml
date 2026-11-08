@@ -239,7 +239,7 @@ jobs:
       # rolled, that a retired one is gone from dev and prod, that bring-up forwards its parameters.
       - name: Deploy and retirement wiring read straight off the pipelines and manifests (dormant suites, now run)
         timeout-minutes: 5
-        run: python3 -m unittest -v tests.test_bring_up_all tests.test_databento_maxpain_deploy tests.test_raw_postgres_writer_deploy tests.test_strike_flow_ibkr_deploy tests.test_hpsf_retired_from_dev_and_prod tests.test_option_truth_memory
+        run: python3 -m unittest -v tests.test_bring_up_all tests.test_databento_maxpain_deploy tests.test_raw_postgres_writer_deploy tests.test_dev_web_rollout tests.test_strike_flow_ibkr_deploy tests.test_hpsf_retired_from_dev_and_prod tests.test_option_truth_memory
 
       - name: JVM heap leaves the container room for what is not heap
         run: bash scripts/ci/validate-heap-leaves-container-headroom.sh

@@ -1,0 +1,16 @@
+# DEV ONLY. The dev node has no spare CPU for a surge pod (allocatable 16000m, assigned requests ~15950m),
+# so the base's maxSurge:1 / maxUnavailable:0 leaves the replacement Pending (Insufficient cpu) until the
+# rollout times out. Dev may drop its single web pod for a short moment: remove the old pod first (its CPU
+# request is then free for the new one), never more than one at a time. Production and experiment keep the
+# base strategy. Mirrored byte for byte in k8s/overlays/dev and k8s/services/web/overlays/dev.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: options-edge-web
+  namespace: options-edge
+spec:
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
