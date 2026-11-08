@@ -1,0 +1,6 @@
+# (environment topic  cutover reference)  # A byte-copy mirror source whose FRAMED declaration is true of the contract but whose environment has not
+# had its JSON -> Avro cutover yet. Read by scripts/ci/schema-mirror-evidence.py, which reports PENDING (not a pass, not a failure). NOT the `unframed`
+# flag: `unframed` declares JSON the intended steady state and would switch the framed id check off permanently, including after the cutover. An entry
+# here expires on its own instead — it FAILS the moment the source starts framing, and it already requires EVERY destination registry the topic is
+# byte-copied to to map the manifest's fixed id to the declared subject. The reference field is mandatory and names the runbook that removes the entry.
+prod underlying.vix.price  docs/VIX-UNDERLYING-PRICE-AVRO-CUTOVER.md, Production section: outstanding since the 2026-11-02 wave-1 cutover; production's schema-registry unit is stopped, so the subject cannot be registered there yet (listed 2026-11-08)

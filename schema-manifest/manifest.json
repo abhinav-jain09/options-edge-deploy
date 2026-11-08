@@ -11393,7 +11393,7 @@
         }
       ],
       "retained": true,
-      "retainedReason": "curated, not baseline: underlying.vix.price (Avro since 2026-11-06) is written by the databento-vix-feed role of options-edge-databento-feed, a Rust service outside the governed producers (it reads this subject at start and never registers). The topic is BYTE-mirrored prod -> es4 by MirrorMaker 2 (infra/es4/mm2/mm2.properties), so ONE id (3061) must name the schema in every registry. Registered on dev and es4 on 2026-11-06; production's registry is registered by schema-sync at its own cutover (docs/KAFKA-AVRO-TOPIC-ROLL-FORWARD.md, pending production steps)."
+      "retainedReason": "curated, not baseline: underlying.vix.price (Avro since 2026-11-06) is written by the databento-vix-feed role of options-edge-databento-feed, a Rust service outside the governed producers (it reads this subject at start and never registers). The topic is BYTE-mirrored prod -> es4 by MirrorMaker 2 (infra/es4/mm2/mm2.properties), so ONE id (3061) must name the schema in every registry. Registered on dev and es4 on 2026-11-06; production's registry is registered by schema-sync at its own cutover (docs/KAFKA-AVRO-TOPIC-ROLL-FORWARD.md, pending production step 4). That cutover is still OUTSTANDING as of 2026-11-08: production's schema-registry unit is stopped, so the subject cannot be registered there yet, and production's underlying.vix.price still carries the JSON its own feed writes on trading days. prod underlying.vix.price is therefore listed in schema-manifest/mirror-evidence-pending.txt and the nightly check reports PENDING. The listing FAILS the check the moment production starts framing, so it cannot outlive the cutover."
     },
     {
       "kind": "MIRRORED",
