@@ -659,6 +659,207 @@ schema_fragment() {   # $1=topic $2=path $3=schema_versions_csv -> JSON fragment
   fi
 }
 
+# =============================================================================================
+# THE DEV BOOK/DEPTH SET: capture provenance in the manifest and filing by the trade date of bucketEnd
+# (ES Level Absorption Requirements revision 15, section 10 Capture items 3 and 4; A-GAP-05).
+#
+# Only ENV=dev and only the topics of OE_DEPTH_TOPICS_dev (oe-topics.env) take either: the prod and es4 topics
+# keep exactly the manifest lines and the run-date filing they always had.
+#
+# (3) PROVENANCE. A capture of such a topic writes, in each manifest line it produces: capture_start_checkpoint (the
+# checkpoint this capture started from, as the offsets file held it BEFORE any clamp to the log start; null when
+# there was none), broker_beginning_offset (the log-start offset the broker reported for the partition),
+# capture_wall_start and capture_wall_end (UTC wall clock of the capture's start and of this line's write), and
+# filed_by. The chain checker (oe-archive-session-chain.py) reads them.
+#
+# (4) FILING. Per topic, decided here and nowhere else:
+#   filed by the trade date of the record's own bucketEnd (the value carries "bucketEnd":<epoch ms>):
+#       futures.liquidity-wall.closures  es.mbo.level-flow  es.mbo.level-flow-final  es.mbo.health  es.mbo.closures
+#   filed by the RUN date as before (no bucketEnd in the record; their own clock is the collector's receive time):
+#       es.rithmic.depth  es.rithmic.mbo  underlying.es.trades.linearized
+# The trade date of an instant is its America/New_York local calendar date when the local time is before
+# 18:00:00, else the next date; a Saturday and a Sunday map to the following Monday (so Sunday 18:00 and later is
+# Monday's session, as Friday 18:00 and later is). A closed trading day gets no special treatment here: records are
+# filed under their trade date whatever the calendar says (dropping data is never the filer's job); the chain
+# checker is what reports a closed date as holding no session.
+# A capture is cut into FILES at every change of trade date along the offsets, so each file is one offset-contiguous
+# range [offset_from, offset_to) under one dt=, the chain rule of the requirement (a file's first offset is the
+# previous file's end) holds across the cut, and a stray record of an earlier trade date makes an extra small file
+# rather than a gap. A record with no readable bucketEnd stays in the file it falls in (counted as
+# bucket_end_missing in that file's manifest line, never dropped).
+# The checkpoint advances file by file: a failure part-way leaves the files before it published and
+# checkpointed, and the next run resumes at the first unpublished file.
+OE_BUCKET_FILED_TOPICS="${OE_BUCKET_FILED_TOPICS:-futures.liquidity-wall.closures es.mbo.level-flow es.mbo.level-flow-final es.mbo.health es.mbo.closures}"
+is_bucket_filed_topic() { [ "$ENV_NAME" = dev ] && case " $OE_BUCKET_FILED_TOPICS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+is_capture_fields_topic() { [ "$ENV_NAME" = dev ] && case " ${OE_DEPTH_TOPICS_dev:-} " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+
+# bucket_split <plain-capture-file> <segment-prefix>
+# Cuts the proven five-field capture into one file per run of equal trade date of bucketEnd; writes
+# <prefix><index> files and prints one tab-separated descriptor per file:
+#   index date first_offset records first_bucket_end last_bucket_end max_bucket_end bucket_end_missing
+# (an empty capture prints nothing). Exit 3 on a line that is not five tab-separated fields.
+bucket_split() {
+  python3 -I - "$1" "$2" <<'PY'
+import re, sys, datetime
+from zoneinfo import ZoneInfo
+NY = ZoneInfo("America/New_York")
+UTC = datetime.timezone.utc
+BE = re.compile(rb'"bucketEnd":(\d+)')
+_cache = {}
+def trade_date(ms):
+    k = ms // 60000                       # the 18:00 boundary is a whole minute: one answer per minute
+    d = _cache.get(k)
+    if d is None:
+        local = datetime.datetime.fromtimestamp(k * 60, tz=UTC).astimezone(NY)
+        day = local.date()
+        if local.hour >= 18:
+            day += datetime.timedelta(days=1)
+        while day.weekday() >= 5:
+            day += datetime.timedelta(days=1)
+        d = _cache[k] = day.isoformat()
+    return d
+src, prefix = sys.argv[1], sys.argv[2]
+segs = []          # [date, first_offset, records, first_be, last_be, max_be, missing, handle]
+cur = None
+out = None
+def close():
+    global out
+    if out is not None:
+        out.close(); out = None
+with open(src, 'rb') as f:
+    for n, line in enumerate(f, 1):
+        parts = line.rstrip(b'\n').split(b'\t', 4)
+        if len(parts) != 5 or not parts[2].startswith(b'Offset:'):
+            sys.stderr.write("line %d is not <ts>\\t<partition>\\tOffset:<o>\\t<key>\\t<value>\n" % n); sys.exit(3)
+        m = BE.search(parts[4])
+        if m:
+            be = int(m.group(1)); day = trade_date(be)
+        else:
+            be = None
+            if cur is not None:
+                day = cur[0]
+            else:
+                ts = parts[0][11:] if parts[0].startswith(b'CreateTime:') else b''
+                day = trade_date(int(ts)) if ts.isdigit() and int(ts) > 0 else trade_date(0)
+        if cur is None or day != cur[0]:
+            close()
+            cur = [day, parts[2][7:].decode(), 0, None, None, None, 0]
+            segs.append(cur)
+            out = open("%s%d" % (prefix, len(segs) - 1), 'wb')
+        out.write(line if line.endswith(b'\n') else line + b'\n')
+        cur[2] += 1
+        if be is None:
+            cur[6] += 1
+        else:
+            if cur[3] is None: cur[3] = be
+            cur[4] = be
+            if cur[5] is None or be > cur[5]: cur[5] = be
+close()
+for i, s in enumerate(segs):
+    print("\t".join([str(i), s[0], s[1], str(s[2])] + [("" if v is None else str(v)) for v in (s[3], s[4], s[5])] + [str(s[6])]))
+PY
+}
+
+# publish_segment: the tail of every capture, one file. Inputs (globals): tmp (the finished .partial gzip),
+# PS_FROM PS_TO (the offset range [from,to) the file claims), PS_DAY, PS_GOT (records in the file), PS_COUNT (offsets
+# spanned), PS_MIN PS_MAX (event-time ms bounds), PS_SV (schema versions), PS_EXTRA (extra manifest members, with a
+# leading comma). Returns 1 after counting a failure; the checkpoint is then NOT advanced past PS_FROM.
+publish_segment() {
+    outdir="$ROOT/$topic/dt=$PS_DAY"; mkdir -p "$outdir" || { rm -f "$tmp"; failed=$(( failed + 1 )); log "  WARN $topic p$part [$PS_FROM,$PS_TO): cannot create $outdir"; return 1; }
+    out="$outdir/$topic.p$part.$PS_FROM-$PS_TO.dt${PS_DAY//-/}.$STAMP.jsonl.gz"
+
+    # Only advance the checkpoint once the file is verified and durably in place. A crash
+    # mid-run therefore re-reads the same range next time (duplicates) instead of skipping it —
+    # duplicates are recoverable, gaps are not.
+    #
+    # Checksum and size are taken over the verified bytes BEFORE they are published (finding 5): the
+    # rename does not change them, and a checksum that could not be computed is a failed capture,
+    # not a manifest line reading "unknown".
+    sha=$(sha256sum "$tmp" 2>/dev/null | cut -d' ' -f1)
+    # GNU stat -c%s, else BSD/macOS stat -f%z (the dev Mac wrote bytes:0 in every manifest line until 2026-11-08).
+    bytes=$(stat -c%s "$tmp" 2>/dev/null || stat -f%z "$tmp" 2>/dev/null || echo 0)
+    case "$sha" in
+      [0-9a-f]*) [ "${#sha}" -eq 64 ] || sha="" ;;
+      *) sha="" ;;
+    esac
+    if [ -z "$sha" ]; then
+      rm -f "$tmp"
+      log "  WARN $topic p$part [$PS_FROM,$PS_TO): could not checksum the capture — checkpoint NOT advanced, will retry next run"
+      failed=$(( failed + 1 ))
+      return 1
+    fi
+    # The mv MUST be gated. This script runs without `set -e`, so an unchecked `mv` that failed —
+    # a full NAS, a stale mount, a permissions change — would fall straight through to the
+    # checkpoint write below, and the next run would resume past a range whose file does not
+    # exist. That is the same silent gap this whole change set exists to close, arrived at from
+    # the other direction.
+    # Before the file is published: a manifest that ends mid-line cannot take this file's line, and a file
+    # published without its line is crash residue every loader refuses. So nothing is published.
+    if ! manifest_appendable "$outdir/_manifest.jsonl"; then
+      rm -f "$tmp"
+      log "  WARN $topic p$part [$PS_FROM,$PS_TO): dt=$PS_DAY's manifest does not end with a newline — a run died mid-write; NOT publishing (the line would concatenate onto the partial one), checkpoint NOT advanced; an operator repairs the manifest and the range is re-read next run"
+      failed=$(( failed + 1 ))
+      return 1
+    fi
+    if ! mv "$tmp" "$out"; then
+      rm -f "$tmp"
+      log "  WARN $topic p$part [$PS_FROM,$PS_TO): could not publish $out — checkpoint NOT advanced, will retry next run"
+      failed=$(( failed + 1 ))
+      return 1
+    fi
+    # ORDER MATTERS: manifest FIRST, checkpoint SECOND (A5).
+    #
+    # The other way round has a window: the checkpoint says "archived through N", the process dies,
+    # and the manifest never gets its line. The next run resumes past N, so the range is skipped
+    # forever, and the verifier — which reads the manifest — cannot see that anything is missing,
+    # because from its point of view that range was never claimed. Writing the manifest first
+    # inverts the failure: a crash leaves a manifest line whose range is re-read next run, which is
+    # a DUPLICATE. Duplicates are recoverable by content; skipped ranges are not.
+    #
+    # Completeness record. sha256 is over the gzip stream as committed, so a later bit-rot or a
+    # truncated copy is detectable without a broker. Written AFTER the mv so a line in this file
+    # always refers to a file that exists. manifest_extra is empty for every console-consumer topic,
+    # so their lines are unchanged; a committed-read line also states its capture and boundary.
+    printf '{"topic":"%s","dt":"%s","partition":%s,"offset_from":%s,"offset_to":%s,"records":%s,"offset_span":%s,"min_event_time_ms":%s,"max_event_time_ms":%s,"min_event_time":"%s","max_event_time":"%s",%s,"sha256":"%s","bytes":%s,"file":"%s","archived_at":"%s","job":"%s","env":"%s","archiver_version":"%s"%s}\n' \
+      "$topic" "$PS_DAY" "$part" "$PS_FROM" "$PS_TO" "$PS_GOT" "$PS_COUNT" \
+      "$PS_MIN" "$PS_MAX" "$(ms_to_iso "$PS_MIN")" "$(ms_to_iso "$PS_MAX")" \
+      "$(schema_fragment "$topic" "$out" "$PS_SV")" \
+      "$sha" "$bytes" "$(basename "$out")" "$STAMP" "$ARCHIVE_JOB" "$ENV_NAME" "$ARCHIVER_VERSION" \
+      "$PS_EXTRA" \
+      >> "$outdir/_manifest.jsonl" || {
+        # The append is the claim; the checkpoint is the promise not to re-read. If the claim could
+        # not be written, the promise must not be made — otherwise the range is skipped forever.
+        log "  WARN $topic p$part [$PS_FROM,$PS_TO): manifest append FAILED — checkpoint NOT advanced, will re-read next run"
+        failed=$(( failed + 1 ))
+        return 1
+      }
+    # A committed-read checkpoint is STAMPED (COMMITTED_CKPT_STAMP above) with the TopicId of the log it was
+    # taken on (round 3); every other topic's line is exactly what it always was.
+    ckpt_stamp=""
+    is_committed_read_topic "$topic" && ckpt_stamp=" $COMMITTED_CKPT_STAMP topic_id=$topic_id"
+    if ! printf '%s=%s records=%s span=%s dt=%s archived=%s%s\n' \
+           "$part" "$PS_TO" "$PS_GOT" "$PS_COUNT" "$DAY" "$STAMP" "$ckpt_stamp" >> "$offfile"; then
+      # The file and its claim stand; without the checkpoint the next run re-reads this range, which
+      # is a duplicate, never a gap. It is still a failed run: the promise not to re-read was not made.
+      log "  WARN $topic p$part [$PS_FROM,$PS_TO): checkpoint append FAILED — the next run re-reads this range (a duplicate, not a gap)"
+      failed=$(( failed + 1 ))
+      return 1
+    fi
+
+    topic_records=$(( topic_records + PS_GOT )); total_files=$(( total_files + 1 ))
+    if is_committed_read_topic "$topic"; then
+      if [ "$PS_GOT" -lt "$PS_COUNT" ]; then
+        log "  NOTE $topic p$part: $PS_GOT committed records over $PS_COUNT offsets up to the stable boundary $PS_TO (the rest are transaction markers and aborted records)"
+      fi
+      if [ "$r_escaped" -gt 0 ]; then
+        log "  NOTE $topic p$part: $r_escaped record(s) carried a raw TAB/CR/LF, written escaped as \\t \\r \\n (escaped_records in the manifest)"
+      fi
+      mark_committed_boundary "$topic" "$part" "$PS_TO" "$topic_id"
+    elif [ "$PS_GOT" -lt "$PS_COUNT" ]; then
+      log "  NOTE $topic p$part: $PS_GOT readable of $PS_COUNT offsets (compacted topic — history is NOT recoverable from it)"
+    fi
+}
+
 # The reader's one-line summary, field by field ("k=v" words). Empty when absent — every caller
 # validates what it gets, because a summary it cannot read is a capture it must not trust.
 summary_field() {   # $1=summary line $2=key
@@ -1038,7 +1239,14 @@ for topic in $TOPICS; do
       continue
     fi
 
-    outdir="$ROOT/$topic/dt=$DAY"; mkdir -p "$outdir"
+    outdir="$ROOT/$topic/dt=$DAY"
+    # A bucket-filed topic's capture is cut by trade date, so the run-date folder may receive no file: its scratch
+    # files live in a dot-directory the loaders never read, and a dt= folder is made only by a file published into it.
+    stemdir="$outdir"
+    if is_bucket_filed_topic "$topic"; then stemdir="$ROOT/$topic/.scratch"; fi
+    mkdir -p "$stemdir"
+    seg_done=false
+    cap_wall_start="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
     # <topic>.p<partition>.<from>-<to>.dt<sessionDate>.<archivedAtUTC>.jsonl.gz
     # The session day is repeated INSIDE the name on purpose: copied to a NAS, attached to a
     # ticket, or dropped into a training bucket, the file still states which trading day it
@@ -1059,7 +1267,7 @@ for topic in $TOPICS; do
       #
       # This path is taken ONLY for OE_COMMITTED_READ_TOPICS. Every other topic is captured by the
       # console-consumer branch below exactly as before: same arguments, same bytes, same checkpoint.
-      stem="$outdir/.$topic.p$part.$from.$STAMP"
+      stem="$stemdir/.$topic.p$part.$from.$STAMP"
       plain="$stem.records"; sumf="$stem.summary"; rlog="$stem.reader.log"
       tmp="$stem.jsonl.gz.partial"
       bound_args=""
@@ -1113,6 +1321,7 @@ for topic in $TOPICS; do
         # is NOT advanced: the next run re-queries from $from, exactly as before.
         log "  NOTE $topic p$part: no committed record beyond checkpoint $from yet (stable boundary $r_boundary, log end $log_end) — an open transaction holds the range; the next run captures it once it resolves. The attempt (queried end $endoff) is recorded in dt=$DAY's manifest so a session loader refuses the session until a capture reaches $endoff"
         rm -f "$plain" "$sumf" "$sumf.tmp" "$rlog"
+        mkdir -p "$outdir"
         if ! manifest_appendable "$outdir/_manifest.jsonl"; then
           log "  WARN $topic p$part: dt=$DAY's manifest does not end with a newline — a run died mid-write; the attempt (queried end $endoff) is NOT recorded onto that line (it would concatenate two declarations); counted as a failed capture until an operator repairs the manifest"
           failed=$(( failed + 1 ))
@@ -1166,41 +1375,10 @@ for topic in $TOPICS; do
         plain_src="$plain.proven"
         offsets_verified=true
       fi
-      gzip -6 < "$plain_src" > "$tmp"
-      gzip_rc=$?
-      scan_out=$(scan_archive_file "$tmp")
-      scan_rc=$?
-      read -r got min_ms max_ms schema_versions <<< "$scan_out"
-      got="${got:-0}"; min_ms="${min_ms:-0}"; max_ms="${max_ms:-0}"; schema_versions="${schema_versions:--}"
-      why=""
-      [ "$gzip_rc" -eq 0 ] || why="gzip rc=$gzip_rc"
-      [ "$scan_rc" -eq 0 ] || why="$why scan rc=$scan_rc"
-      [ "$got" = "$r_records" ] || why="$why the file holds $got records but the reader wrote $r_records"
-      rm -f "$plain" "$plain.proven" "$sumf" "$sumf.tmp" "$rlog"
-      if [ -n "$why" ]; then
-        log "  WARN $topic p$part [$from,$r_boundary): processing FAILED ($why) — checkpoint NOT advanced, will retry next run"
-        rm -f "$tmp"
-        failed=$(( failed + 1 ))
-        continue
-      fi
-      # A completed range may hold ZERO application records (only commit/abort markers and aborted
-      # revisions): it is published — an empty file and its manifest line keep the per-date offset
-      # ranges contiguous for the verifier — and the checkpoint advances over it.
+      # ---- SEGMENTS (A-GAP-05): one file per run of equal trade date of bucketEnd for the bucket-filed dev topics,
+      # exactly one file (the whole capture, under the run date) for every other topic.
       cap_to="$r_boundary"
-      count=$(( cap_to - from ))
-      # queried_end is the end this run MEANT to reach: the high-water mark read above, or the UNTIL_TS offset. A
-      # stable boundary below it means offsets [boundary, queried_end) belonged to a transaction that had not
-      # resolved when the reader asked. They are NOT in this file and NOT skipped: the checkpoint stops at the
-      # boundary and the next run captures them (filed under ITS dt=). So this date's capture is complete only to
-      # the boundary, and the manifest line says how far short of the queried end that was — which is exactly what
-      # a SESSION loader needs: it reads a session from this dt= AND the following storage dates, and refuses the
-      # session until committed captures reach this queried_end (options-edge-processing
-      # vol-premium-service calibration/CommittedLedgerArchive: SESSION_INCOMPLETE).
-      #
-      # offsets_verified says the archiver PROVED this file's Offset column against the range it names (five
-      # fields, this partition, inside [from, boundary), strictly increasing). A loader that orders records by
-      # their real offsets — which is the only thing that can reconcile the overlapping captures a crash re-read
-      # leaves, or place a record archived under a later date — admits a capture only on that provenance.
+
       manifest_extra=$(printf ',"capture":"read_committed_stable_boundary","stable_boundary":%s,"queried_end":%s,"record_layout":"%s","offsets_verified":%s,"escaped_records":%s,"source_topic_id":"%s"' "$r_boundary" "$endoff" "$record_layout" "$offsets_verified" "$r_escaped" "$topic_id")
       if [ "$r_boundary" -lt "$endoff" ]; then
         log "  NOTE $topic p$part: capture ends at the stable boundary $r_boundary, below the queried end $endoff —" \
@@ -1210,6 +1388,69 @@ for topic in $TOPICS; do
       fi
       # A recapture over a LEGACY checkpoint says so: the range overlaps whatever the older archiver filed.
       [ -z "$legacy_from" ] || manifest_extra="$manifest_extra$(printf ',"recaptured_over_unproven_checkpoint":%s' "$legacy_from")"
+      seg_file=(); seg_day=(); seg_first=(); seg_recs=(); seg_fb=(); seg_lb=(); seg_mb=(); seg_miss=()
+      seg_n=0
+      if is_bucket_filed_topic "$topic"; then
+        split_out=$(bucket_split "$plain_src" "$stemdir/.$topic.p$part.$from.$STAMP.seg" 2>"$stem.split.err")
+        split_rc=$?
+        if [ "$split_rc" -ne 0 ]; then
+          log "  WARN $topic p$part [$from,$r_boundary): could not cut the capture by trade date (rc=$split_rc: $(head -c 240 "$stem.split.err" 2>/dev/null)) — checkpoint NOT advanced, will retry next run"
+          rm -f "$plain" "$plain.proven" "$sumf" "$sumf.tmp" "$rlog" "$stem.split.err" "$stemdir/.$topic.p$part.$from.$STAMP.seg"*
+          failed=$(( failed + 1 ))
+          continue
+        fi
+        while IFS=$'\t' read -r s_i s_d s_f s_r s_fb s_lb s_mb s_ms; do
+          [ -n "$s_i" ] || continue
+          seg_file[seg_n]="$stemdir/.$topic.p$part.$from.$STAMP.seg$s_i"; seg_day[seg_n]="$s_d"; seg_first[seg_n]="$s_f"
+          seg_recs[seg_n]="$s_r"; seg_fb[seg_n]="$s_fb"; seg_lb[seg_n]="$s_lb"; seg_mb[seg_n]="$s_mb"; seg_miss[seg_n]="$s_ms"
+          seg_n=$(( seg_n + 1 ))
+        done <<< "$split_out"
+      fi
+      seg_split=false
+      if [ "$seg_n" -gt 0 ]; then
+        seg_split=true
+      else
+        seg_file[0]="$plain_src"; seg_day[0]="$DAY"; seg_first[0]="$from"; seg_recs[0]="$r_records"; seg_n=1
+      fi
+      seg_ok=true; si=0
+      while [ "$si" -lt "$seg_n" ]; do
+        PS_FROM="$from"; [ "$si" -eq 0 ] || PS_FROM="${seg_first[si]}"
+        PS_TO="$cap_to"; [ "$si" -eq $(( seg_n - 1 )) ] || PS_TO="${seg_first[si+1]}"
+        PS_DAY="${seg_day[si]}"
+        PS_COUNT=$(( PS_TO - PS_FROM ))
+        tmp="$stemdir/.$topic.p$part.$PS_FROM.$STAMP.jsonl.gz.partial"
+        gzip -6 < "${seg_file[si]}" > "$tmp"
+        gzip_rc=$?
+        scan_out=$(scan_archive_file "$tmp")
+        scan_rc=$?
+        read -r got min_ms max_ms schema_versions <<< "$scan_out"
+        got="${got:-0}"; min_ms="${min_ms:-0}"; max_ms="${max_ms:-0}"; schema_versions="${schema_versions:--}"
+        why=""
+        [ "$gzip_rc" -eq 0 ] || why="gzip rc=$gzip_rc"
+        [ "$scan_rc" -eq 0 ] || why="$why scan rc=$scan_rc"
+        [ "$got" = "${seg_recs[si]}" ] || why="$why the file holds $got records but the reader wrote ${seg_recs[si]}"
+        if [ -n "$why" ]; then
+          log "  WARN $topic p$part [$PS_FROM,$PS_TO): processing FAILED ($why) — checkpoint NOT advanced, will retry next run"
+          rm -f "$tmp"
+          failed=$(( failed + 1 )); seg_ok=false; break
+        fi
+        PS_GOT="$got"; PS_MIN="$min_ms"; PS_MAX="$max_ms"; PS_SV="$schema_versions"; PS_EXTRA="$manifest_extra"
+        if is_capture_fields_topic "$topic"; then
+          ckpt_json="null"; case "$ckpt_before" in ''|*[!0-9]*) : ;; *) ckpt_json="$ckpt_before" ;; esac
+          PS_EXTRA="$PS_EXTRA$(printf ',"capture_start_checkpoint":%s,"broker_beginning_offset":%s,"capture_wall_start":"%s","capture_wall_end":"%s","filed_by":"%s"' \
+            "$ckpt_json" "$earliest" "$cap_wall_start" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$([ "$seg_split" = true ] && echo bucketEnd_trade_date || echo run_date)")"
+        fi
+        if [ "$seg_split" = true ]; then
+          PS_EXTRA="$PS_EXTRA$(printf ',"first_bucket_end":%s,"last_bucket_end":%s,"max_bucket_end":%s,"bucket_end_missing":%s,"segment":%s,"segments":%s' \
+            "${seg_fb[si]:-null}" "${seg_lb[si]:-null}" "${seg_mb[si]:-null}" "${seg_miss[si]:-0}" "$si" "$seg_n")"
+        fi
+        publish_segment || { seg_ok=false; break; }
+        si=$(( si + 1 ))
+      done
+      rm -f "$plain" "$plain.proven" "$sumf" "$sumf.tmp" "$rlog" "$stem.split.err" "$stemdir/.$topic.p$part.$from.$STAMP.seg"*
+      [ "$stemdir" = "$outdir" ] || rmdir "$stemdir" 2>/dev/null
+      [ "$seg_ok" = true ] || continue
+      seg_done=true
     else
       # ---- CONSOLE-CONSUMER CAPTURE — every topic not in OE_COMMITTED_READ_TOPICS -----------------
       cap_to="$endoff"
@@ -1284,97 +1525,10 @@ for topic in $TOPICS; do
         continue
       fi
     fi
-    out="$outdir/$topic.p$part.$from-$cap_to.dt${DAY//-/}.$STAMP.jsonl.gz"
-
-    # Only advance the checkpoint once the file is verified and durably in place. A crash
-    # mid-run therefore re-reads the same range next time (duplicates) instead of skipping it —
-    # duplicates are recoverable, gaps are not.
-    #
-    # Checksum and size are taken over the verified bytes BEFORE they are published (finding 5): the
-    # rename does not change them, and a checksum that could not be computed is a failed capture,
-    # not a manifest line reading "unknown".
-    sha=$(sha256sum "$tmp" 2>/dev/null | cut -d' ' -f1)
-    # GNU stat -c%s, else BSD/macOS stat -f%z (the dev Mac wrote bytes:0 in every manifest line until 2026-11-08).
-    bytes=$(stat -c%s "$tmp" 2>/dev/null || stat -f%z "$tmp" 2>/dev/null || echo 0)
-    case "$sha" in
-      [0-9a-f]*) [ "${#sha}" -eq 64 ] || sha="" ;;
-      *) sha="" ;;
-    esac
-    if [ -z "$sha" ]; then
-      rm -f "$tmp"
-      log "  WARN $topic p$part [$from,$cap_to): could not checksum the capture — checkpoint NOT advanced, will retry next run"
-      failed=$(( failed + 1 ))
-      continue
-    fi
-    # The mv MUST be gated. This script runs without `set -e`, so an unchecked `mv` that failed —
-    # a full NAS, a stale mount, a permissions change — would fall straight through to the
-    # checkpoint write below, and the next run would resume past a range whose file does not
-    # exist. That is the same silent gap this whole change set exists to close, arrived at from
-    # the other direction.
-    # Before the file is published: a manifest that ends mid-line cannot take this file's line, and a file
-    # published without its line is crash residue every loader refuses. So nothing is published.
-    if ! manifest_appendable "$outdir/_manifest.jsonl"; then
-      rm -f "$tmp"
-      log "  WARN $topic p$part [$from,$cap_to): dt=$DAY's manifest does not end with a newline — a run died mid-write; NOT publishing (the line would concatenate onto the partial one), checkpoint NOT advanced; an operator repairs the manifest and the range is re-read next run"
-      failed=$(( failed + 1 ))
-      continue
-    fi
-    if ! mv "$tmp" "$out"; then
-      rm -f "$tmp"
-      log "  WARN $topic p$part [$from,$cap_to): could not publish $out — checkpoint NOT advanced, will retry next run"
-      failed=$(( failed + 1 ))
-      continue
-    fi
-    # ORDER MATTERS: manifest FIRST, checkpoint SECOND (A5).
-    #
-    # The other way round has a window: the checkpoint says "archived through N", the process dies,
-    # and the manifest never gets its line. The next run resumes past N, so the range is skipped
-    # forever, and the verifier — which reads the manifest — cannot see that anything is missing,
-    # because from its point of view that range was never claimed. Writing the manifest first
-    # inverts the failure: a crash leaves a manifest line whose range is re-read next run, which is
-    # a DUPLICATE. Duplicates are recoverable by content; skipped ranges are not.
-    #
-    # Completeness record. sha256 is over the gzip stream as committed, so a later bit-rot or a
-    # truncated copy is detectable without a broker. Written AFTER the mv so a line in this file
-    # always refers to a file that exists. manifest_extra is empty for every console-consumer topic,
-    # so their lines are unchanged; a committed-read line also states its capture and boundary.
-    printf '{"topic":"%s","dt":"%s","partition":%s,"offset_from":%s,"offset_to":%s,"records":%s,"offset_span":%s,"min_event_time_ms":%s,"max_event_time_ms":%s,"min_event_time":"%s","max_event_time":"%s",%s,"sha256":"%s","bytes":%s,"file":"%s","archived_at":"%s","job":"%s","env":"%s","archiver_version":"%s"%s}\n' \
-      "$topic" "$DAY" "$part" "$from" "$cap_to" "$got" "$count" \
-      "$min_ms" "$max_ms" "$(ms_to_iso "$min_ms")" "$(ms_to_iso "$max_ms")" \
-      "$(schema_fragment "$topic" "$out" "$schema_versions")" \
-      "$sha" "$bytes" "$(basename "$out")" "$STAMP" "$ARCHIVE_JOB" "$ENV_NAME" "$ARCHIVER_VERSION" \
-      "$manifest_extra" \
-      >> "$outdir/_manifest.jsonl" || {
-        # The append is the claim; the checkpoint is the promise not to re-read. If the claim could
-        # not be written, the promise must not be made — otherwise the range is skipped forever.
-        log "  WARN $topic p$part [$from,$cap_to): manifest append FAILED — checkpoint NOT advanced, will re-read next run"
-        failed=$(( failed + 1 ))
-        continue
-      }
-    # A committed-read checkpoint is STAMPED (COMMITTED_CKPT_STAMP above) with the TopicId of the log it was
-    # taken on (round 3); every other topic's line is exactly what it always was.
-    ckpt_stamp=""
-    is_committed_read_topic "$topic" && ckpt_stamp=" $COMMITTED_CKPT_STAMP topic_id=$topic_id"
-    if ! printf '%s=%s records=%s span=%s dt=%s archived=%s%s\n' \
-           "$part" "$cap_to" "$got" "$count" "$DAY" "$STAMP" "$ckpt_stamp" >> "$offfile"; then
-      # The file and its claim stand; without the checkpoint the next run re-reads this range, which
-      # is a duplicate, never a gap. It is still a failed run: the promise not to re-read was not made.
-      log "  WARN $topic p$part [$from,$cap_to): checkpoint append FAILED — the next run re-reads this range (a duplicate, not a gap)"
-      failed=$(( failed + 1 ))
-      continue
-    fi
-
-    topic_records=$(( topic_records + got )); total_files=$(( total_files + 1 ))
-    if is_committed_read_topic "$topic"; then
-      if [ "$got" -lt "$count" ]; then
-        log "  NOTE $topic p$part: $got committed records over $count offsets up to the stable boundary $cap_to (the rest are transaction markers and aborted records)"
-      fi
-      if [ "$r_escaped" -gt 0 ]; then
-        log "  NOTE $topic p$part: $r_escaped record(s) carried a raw TAB/CR/LF, written escaped as \\t \\r \\n (escaped_records in the manifest)"
-      fi
-      mark_committed_boundary "$topic" "$part" "$cap_to" "$topic_id"
-    elif [ "$got" -lt "$count" ]; then
-      log "  NOTE $topic p$part: $got readable of $count offsets (compacted topic — history is NOT recoverable from it)"
+    if [ "$seg_done" != true ]; then
+      PS_FROM="$from"; PS_TO="$cap_to"; PS_DAY="$DAY"; PS_GOT="$got"; PS_COUNT="$count"; PS_MIN="$min_ms"; PS_MAX="$max_ms"
+      PS_SV="$schema_versions"; PS_EXTRA="$manifest_extra"
+      publish_segment || continue
     fi
   done <<< "$ends"
 

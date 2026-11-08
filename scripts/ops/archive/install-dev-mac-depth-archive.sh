@@ -27,7 +27,7 @@ DRY=false; [ "${1:-}" = "--dry-run" ] && DRY=true
 # StrikeArchiveReader.java — from source for the tape, and from the helper jar for the three canonical Avro topics,
 # whose decoder source CanonicalArchiveDecoder.java is compiled into that jar and shipped beside the archiver as
 # the record of what the jar holds. validate-dev-mac-depth-archive.sh asserts this list against the scripts.
-FILES="oe-archive-depth.sh oe-archive-kafka.sh oe-topics.env oe-alert.sh StrikeArchiveReader.java CanonicalArchiveDecoder.java"
+FILES="oe-archive-depth.sh oe-archive-kafka.sh oe-topics.env oe-alert.sh StrikeArchiveReader.java CanonicalArchiveDecoder.java oe-archive-session-chain.py"
 # NOT committed, and NOT produced here: the canonical archive helper (StrikeArchiveReader + CanonicalArchiveDecoder
 # compiled against the contracts) and the contracts jar. Jenkins archive-scripts-deploy builds both from the
 # permitted contracts commit and ships them to .252's oe-ops; the same two files must be placed in $DEST on this
@@ -165,7 +165,11 @@ echo "backup: previous copies (where any existed) are in $BACKUP"
 
 launchctl unload "$AGENTS/$PLIST" 2>/dev/null || true
 for f in $FILES; do cp "$STAGE/$f" "$DEST/$f"; done
-chmod +x "$DEST/$WRAPPER" "$DEST/oe-archive-kafka.sh"
+chmod +x "$DEST/$WRAPPER" "$DEST/oe-archive-kafka.sh" "$DEST/oe-archive-session-chain.py"
+# The exchange calendar the session checker reads (closed days hold no session) lives in scripts/jenkins in the
+# repo; put the committed copy beside the checker when this checkout has it (the checker falls back to weekdays only,
+# and says so, when it is absent).
+if [ -f "$SRC/../../jenkins/market_calendar.py" ]; then cp "$SRC/../../jenkins/market_calendar.py" "$DEST/market_calendar.py"; fi
 cp "$SRC/launchd/$PLIST" "$AGENTS/$PLIST"
 rm -rf "$STAGE"
 
