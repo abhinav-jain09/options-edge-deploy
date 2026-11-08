@@ -227,6 +227,20 @@ jobs:
       # the identical 100% setting untriggered. The per-overlay fix applied to
       # option-price-behavior months earlier left its base at 100%, which is how the experiment
       # overlay kept rendering the fault: a gate on the RENDER is the only thing that sees it.
+      # These suites read scripts/kafka/topics.env, the k8s manifests and the schema-id maps and assert what
+      # they must declare. They were CI-COLLECT-ONLY: imported by the collectability step, so an import error
+      # was caught, but not one of their assertions had ever executed in CI. Proven green on this runner
+      # before being wired; ci_wiring_check.py now fails the build if this step is removed or made conditional.
+      - name: Declared topics, PVCs, stream threads and schema-id maps (dormant suites, now run)
+        timeout-minutes: 5
+        run: python3 -m unittest -v tests.test_databento_gex_topics tests.test_dev_cleanup_precreates_estimate_topics tests.test_no_versioned_topic_names tests.test_kafka_streams_state_pvcs tests.test_priority_stream_threads tests.test_vix_underlying_price_manifest tests.test_rithmic_mbo_reservation tests.test_geometry_schema_id_map tests.test_level_absorption_book_deploy tests.test_candle_direction_export_archive tests.test_context_tape_order_initialization tests.test_replay_inputs_archive
+
+      # The same promotion for the suites that assert deploy wiring - that a service's image is resolved and
+      # rolled, that a retired one is gone from dev and prod, that bring-up forwards its parameters.
+      - name: Deploy and retirement wiring read straight off the pipelines and manifests (dormant suites, now run)
+        timeout-minutes: 5
+        run: python3 -m unittest -v tests.test_bring_up_all tests.test_databento_maxpain_deploy tests.test_raw_postgres_writer_deploy tests.test_strike_flow_ibkr_deploy tests.test_hpsf_retired_from_dev_and_prod tests.test_option_truth_memory
+
       - name: JVM heap leaves the container room for what is not heap
         run: bash scripts/ci/validate-heap-leaves-container-headroom.sh
 
