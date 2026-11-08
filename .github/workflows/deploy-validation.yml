@@ -515,7 +515,8 @@ jobs:
         # `retention.bytes=` substring, which a real `--describe --all` dump matches five times
         # (the value, local.retention.bytes, and three synonyms). This drives the real barrier
         # against a byte-accurate dev dump. NOTE: the sibling ensure-*-topics-test.sh scripts in
-        # scripts/kafka are NOT wired into this workflow — this is the first one that is.
+        # scripts/kafka are mostly NOT wired into this workflow; this was the first that was, and
+        # the es-liquidity-engine barrier's suite below is the second.
         run: bash scripts/kafka/ensure-strike-hold-topics-test.sh
 
       - name: es-liquidity-engine topic barrier negative controls
