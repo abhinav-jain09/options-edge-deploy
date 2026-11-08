@@ -141,7 +141,9 @@ form; that is deliberate):
             control words and wrappers (env/xargs/timeout/nice or a `$wrapper` variable) are stepped over, `bash -c`,
             `eval` and here-documents fed to a local shell are read too, a program piped into a local shell is refused,
             `"$DIR/name"` is classified by its literal basename, and — in a step's own shell — a command name computed at
-            run time (a variable or a Groovy interpolation) is refused. A script a step runs is read from the tree (or from
+            run time (a variable or a Groovy interpolation) is refused — as is a command which, once those prefixes and
+            wrappers are stepped over, is only bare variables, leaving no name to read at all
+            (`timeout "$TMO" "$CMD"`, `FOO=bar "$X"`, `xargs "$X"`). A script a step runs is read from the tree (or from
             the here-document in this file that writes it); one that is neither is refused.
        (ii) the dedicated effect step is IMMEDIATELY preceded, in the same block, by the dedicated verify step for EVERY
             checkout a consumed path resolves into or equals — the primary workspace or the deepest nested checkout
@@ -830,14 +832,17 @@ def command_names(text: str, view: str, strict: bool):
     Assignment prefixes, control words and wrapper commands (env/xargs/timeout/…, or a variable holding a wrapper such as
     `$tmo`) are stepped over; a quoted or escaped name is read unquoted; `"$DIR/name"` is classified by its literal
     basename. In STRICT mode (the Jenkinsfile's own shell steps) a name computed at run time — a variable or a Groovy
-    interpolation — is refused unless it only wraps a known command."""
+    interpolation — is refused unless it only wraps a known command; so is a command that, once the prefixes, control
+    words and wrappers are stepped over, is nothing but bare variables (`timeout "$TMO" "$CMD"`, `FOO=bar "$X"`,
+    `xargs "$X"`) — not as a computed command name, which such a command need not have, but as one the scan cannot
+    read at all."""
     for m in CMD_START_RE.finditer(view):
         start = m.end()
         if start >= len(view) or view[start] in "\n#":
             continue
         end = simple_command_end(view, start)
         ws = raw_words(text, start, end)
-        k, wrapped = 0, False
+        k, wrapped, first_wrapped = 0, False, None
         while k < len(ws):
             w = ws[k][1]
             if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", w, re.S) and not text[ws[k][0]:].startswith(("'", '"')):
@@ -852,11 +857,46 @@ def command_names(text: str, view: str, strict: bool):
                     k += 1
                 continue
             if ws[k][2] and re.fullmatch(r"\$\{?[A-Za-z_][A-Za-z0-9_]*\}?", w):
+                if first_wrapped is None:
+                    first_wrapped = k
                 wrapped = True
                 k += 1
                 continue
             break
         if k >= len(ws):
+            if wrapped and strict:
+                # What is left of this simple command, after the assignment prefixes, control words and
+                # wrapper commands the loop steps over, is nothing but bare run-time variables: the scan
+                # reached the end of the word list without ever reading a name. Falling off the end used to
+                # be skipped in SILENCE — the one path out of this scan that refused nothing — while the
+                # single-variable case below (`$tmo somecommand`) was refused. Strict mode is a step's own
+                # shell, where rule 9b will not accept a command it cannot read.
+                #
+                # What the refusal says, and deliberately does NOT say: that what is left is unreadable,
+                # not that any particular variable holds the command. The shapes that land here do not
+                # agree on which word would run, and none of them can be settled without knowing what the
+                # variables hold — with ordinary operands, `timeout "$TMO" "$CMD"` runs $CMD, while
+                # `nice -n 5 "$X" "$Y"` runs $X with $Y as its argument, and `xargs "$X"` runs $X as its
+                # utility with the words it reads from stdin appended; with other values each of those
+                # parses differently again ($TMO could be an option, $X could be an option, and `xargs`
+                # given no utility at all defaults to echo). Being unable to tell
+                # them apart IS the refusal, so naming one of them would be a claim the validator cannot
+                # support (Codex, rounds 2-4: first the offset pointed at the wrong word, then the wording
+                # asserted a computed command name for chains that need not have one, then it asserted
+                # EVERY word was a wrapper or variable when prefixes are stepped over too).
+                #
+                # NOT exempted, deliberately: `timeout "$TMO"` with nothing after it. Codex argued it
+                # cannot hide an effect, since one quoted expansion cannot supply both a duration and a
+                # utility — true. But keying an exemption on "a known timeout wrapper ending immediately
+                # after its sole dynamic argument" adds a special case to a security refusal to permit a
+                # command that does nothing useful and that no file here contains. The last three rounds of
+                # this rule are a record of case-by-case reasoning about these chains getting the claim
+                # wrong; the rule that holds is ONE accepted form — a readable command name — with no
+                # carve-outs. Refusing it is fail-closed and costs nothing.
+                #
+                # Reported at the FIRST variable of the chain: where the unreadable part starts, and —
+                # unlike the last word — on the line a reader would open.
+                yield ws[first_wrapped][0], ws[first_wrapped][1], "after the assignment prefixes, control words and wrappers it steps over, what is left of this command is only run-time variables, so no command name is readable here and the validator cannot tell what this runs — name the command literally"
             continue
         pos, name, dollar = ws[k]
         if GROOVY_VALUE in name:
