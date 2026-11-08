@@ -39,7 +39,7 @@ spec:
       containers:
         - env:
             - name: JAVA_TOOL_OPTIONS
-              value: -Xms256m -Xmx3072m
+              value: -Xms256m -Xmx6g
             - name: LEVEL_ABSORPTION_PATH_SESSION
               value: GLOBEX
             - name: LEVEL_ABSORPTION_PATH_CONFIGURATION
@@ -123,7 +123,7 @@ spec:
             periodSeconds: 10
           resources:
             limits:
-              memory: 4Gi
+              memory: 8Gi
             requests:
               cpu: 200m
               memory: 1Gi
