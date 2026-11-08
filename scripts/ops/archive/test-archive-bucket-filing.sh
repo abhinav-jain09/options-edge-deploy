@@ -183,8 +183,7 @@ want "5  provenance present" "None 0" "$(field $DEPTH 2026-11-10 capture_start_c
 
 # ---- 6. the same topic on another environment is untouched ------------------------------------------------
 fresh a6; printf '%s\n' "0 $THU1" "1 $THU4" > "$OE_FIXTURE.log"; echo "0 2" > "$OE_FIXTURE.range"
-printf '%s\n' "$TH" > "$OE_FIXTURE.topics"
-OUT=$(env ARCHIVE_DIR="$A" ENV=prod ARCHIVE_JOB=test-bucket BOOTSTRAP=shim:9092 KAFKA_BIN="$BIN" TOPICS="$TH" SESSION_DATE=2026-11-10 ALLOW_NON_NAS=true STRIKE_READER="$BIN/reader" bash "$ARCH" 2>&1); RC=$?
+OUT=$(arun $TH ENV=prod); RC=$?
 want "6  prod: one file under the run date, no new members" "2026-11-10 0 2 2" "$(A="$A" python3 - "$A/kafka/prod/$TH" <<'PY'
 import sys, json, glob
 for p in glob.glob(sys.argv[1] + "/dt=*/_manifest.jsonl"):

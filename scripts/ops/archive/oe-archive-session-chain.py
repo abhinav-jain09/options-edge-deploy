@@ -256,6 +256,9 @@ def check_partition(entries, start_ms, terminal_ms):
             why.append("CAPTURE_WALL_CLOCK:%s" % tag)
         if c["start"] is not None and c["begin"] is not None and int(c["begin"]) > int(c["start"]):
             why.append("BROKER_BEGINNING_AFTER_START_CHECKPOINT:%s" % tag)
+        if c["start"] is None and any(x is not c and x["first_from"] < c["first_from"] for x in caps):
+            # a null starting checkpoint is the FIRST capture of the archive (nothing before it); any later one has lost the continuity proof
+            why.append("CAPTURE_START_CHECKPOINT_MISSING:%s" % tag)
         if c["start"] is not None and c["first_from"] != int(c["start"]):
             why.append("CAPTURE_CLAMPED:%s(start checkpoint %s, first offset %s)" % (tag, c["start"], c["first_from"]))
         if prev is not None and not prev["legacy"] and c["start"] is not None and int(c["start"]) != prev["last_to"]:

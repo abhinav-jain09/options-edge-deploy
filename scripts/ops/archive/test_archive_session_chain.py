@@ -251,6 +251,16 @@ class Chain(unittest.TestCase):
         self.assertEqual(r["status"], "BOOK_INCOMPLETE")
         self.assertTrue(any("LEGACY_CAPTURE" in w for w in r["topics"]["es.mbo.health"]))
 
+    def test_a_null_starting_checkpoint_is_only_the_first_capture(self):
+        a = self.a
+        def f(t):
+            a.add(t, "2026-11-08", 0, 1000, "S1", start=None, begin=0, ws=START - 3600_000, maxbe=START - 10_000)    # the first capture: ok
+            a.add(t, "2026-11-09", 1000, 5000, "S2", start=None, begin=0, ws=START + 3600_000, maxbe=ms(2026, 11, 9, 12))   # a later one: not ok
+            a.add(t, "2026-11-10", 5000, 9000, "S3", start=5000, begin=0, ws=ms(2026, 11, 10, 14), maxbe=TERM + 1)
+        a.all_topics(f)
+        w = report(a)["topics"]["es.mbo.health"]
+        self.assertEqual([x for x in w if "START_CHECKPOINT" in x], ["p0:CAPTURE_START_CHECKPOINT_MISSING:S2"], w)
+
     def test_the_broker_beginning_must_not_pass_the_starting_checkpoint(self):
         a = self.a
         def f(t):
