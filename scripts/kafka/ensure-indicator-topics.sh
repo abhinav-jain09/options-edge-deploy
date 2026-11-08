@@ -109,7 +109,7 @@ if [ "${1:-}" = "--recreate" ]; then
     cur_policy=$(printf '%s' "$CFG" | tr ' ' '\n' | sed -n 's/^cleanup\.policy=\(.*\)$/\1/p' | head -1)
     cur_ret=$(printf '%s' "$CFG" | tr ' ' '\n' | sed -n 's/^retention\.ms=\(.*\)$/\1/p' | head -1)
     # every declared partition exactly once, each at end offset 0 (a missing partition line is a failure, not an empty set)
-    ends=$("${KAFKA_GET_OFFSETS_CMD:-kafka-get-offsets}" --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --topic "$topic" 2>/dev/null | awk -F: -v t="$topic" '$1 == t {print $2"="$3}' | sort -t= -k1,1n | tr '\n' ' ')
+    ends=$("${KAFKA_GET_OFFSETS_CMD:-kafka-get-offsets}" --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --topic "$topic" 2>/dev/null | awk -F: -v t="$topic" '$1 == t {print $2"="$3}' | sort -t '=' -k1,1n | tr '\n' ' ')
     want=$(for ((p = 0; p < parts; p++)); do printf '%s=0 ' "$p"; done)
     if [ "$actual_parts" != "$parts" ] || [ "$cur_policy" != "$policy" ] || [ "$cur_ret" != "$retention" ] || [ "$ends" != "$want" ]; then
       echo "FAIL: $topic after recreate: partitions=$actual_parts policy=$cur_policy retention=$cur_ret endOffsets=[${ends% }] (declared $parts/$policy/$retention, want [${want% }])"

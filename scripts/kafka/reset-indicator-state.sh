@@ -71,7 +71,7 @@ fi
 AFTER=$("$KCG" --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --describe --group "$GROUP" --offsets 2>&1) \
   || { echo "FAIL: could not read the offsets of $GROUP back after the reset:"; printf '%s\n' "$AFTER"; exit 1; }
 # exactly one committed row per partition 0..PARTS-1, each at offset 0 — a missing or extra row fails
-ROWS=$(printf '%s\n' "$AFTER" | awk -v t="$INDICATOR_INPUT_TOPIC" '$2 == t {print $3"="$4}' | sort -t= -k1,1n | tr '\n' ' ')
+ROWS=$(printf '%s\n' "$AFTER" | awk -v t="$INDICATOR_INPUT_TOPIC" '$2 == t {print $3"="$4}' | sort -t '=' -k1,1n | tr '\n' ' ')
 WANT=$(for ((p = 0; p < PARTS; p++)); do printf '%s=0 ' "$p"; done)
 if [ "$ROWS" != "$WANT" ]; then echo "FAIL: offsets of $GROUP on $INDICATOR_INPUT_TOPIC after the reset are [$ROWS], expected [$WANT]"; exit 1; fi
 echo "offsets of $GROUP on $INDICATOR_INPUT_TOPIC: 0 on every one of the $PARTS partitions"
