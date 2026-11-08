@@ -33,25 +33,44 @@ set -uo pipefail
 ensure_topics() { echo "stub ensure_topics -> $1"; return $1; }
 resume_dev_mirrors_if_declared() { echo "stub resume(\$1)"; return 0; }
 $(cat "$TMP/fn.sh")
-ensure_topics_or_refuse
-echo "REACHED-THE-SCALE-UP"
+# The helper's own status, carried to the driver's exit. Two bugs here, both mine and both making
+# every arm read as a real failure: \`exit \$?\` after the trailing echo took the ECHO's status, and
+# then the replacement used unescaped \$drv_rc inside an UNQUOTED heredoc, so it was expanded when
+# the driver was WRITTEN (to nothing) rather than when it ran. The escapes are load-bearing.
+drv_rc=0
+# NO SUBSHELL. With \`( ensure_topics_or_refuse )\` an \`exit 1\` inside the helper killed only the
+# subshell, so AFTER-THE-HELPER still printed and the return-not-exit arm passed against a helper
+# that exits — the arm could not see the difference it claimed to test. My own mutation caught it.
+ensure_topics_or_refuse || drv_rc=\$?
+[ "\$drv_rc" -eq 0 ] && echo "REACHED-THE-SCALE-UP"
+echo "AFTER-THE-HELPER"
+exit \$drv_rc
 DRIVE
   bash "$TMP/drive.sh" 2>&1
 }
 
-# 1) A FAILED recreation must stop the clean before anything scales.
+# 1) A FAILED recreation must return non-zero and never reach the scale-up.
 out="$(run_with 1)"; rc=$?
-if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "Refusing to continue" \
-   && ! printf '%s' "$out" | grep -q "REACHED-THE-SCALE-UP"; then
-  ok "a failed ensure_topics refuses the clean and never reaches the scale-up"
+if [ "$rc" -ne 0 ] && ! printf '%s' "$out" | grep -q "REACHED-THE-SCALE-UP"; then
+  ok "a failed ensure_topics returns non-zero and never reaches the scale-up"
 else
   bad "a failed ensure_topics was discarded:"; printf '%s\n' "$out" | tail -3
 fi
 
-# 2) The mirrors are still told, so the fix did not trade one silence for another.
+# 1b) RETURNS, does not EXIT. The first version called exit, which killed the process whose next act
+#     on the automatic CLEAN slot is the overnight start — the script's own recovery attempt. The
+#     driver echoes a line AFTER calling the helper in a subshell, so an exit would swallow it.
+if printf '%s' "$(run_with 1)" | grep -q "AFTER-THE-HELPER"; then
+  ok "it RETURNS rather than exiting, so a caller's recovery path is still reachable"
+else bad "the helper exited the process — the CLEAN slot's recovery attempt would be skipped"; fi
+
+# 2) The mirror helper is called with the REAL status, and what that means is that the mirrors stay
+#    PAUSED — the helper deliberately does not resume on a non-zero status. An earlier version of
+#    this arm said a skipped call "would strand them", which is the opposite of what the real helper
+#    does, so the arm described an outcome it was not testing (Codex deploy r16).
 if printf '%s' "$(run_with 1)" | grep -q "stub resume(1)"; then
-  ok "and the mirror helper is still called with the real status"
-else bad "the mirror helper was skipped — a failed topic pass would strand them"; fi
+  ok "the mirror helper receives the TRUE status, so the mirrors stay paused by design"
+else bad "the mirror helper was not told the real status"; fi
 
 # 3) A SUCCESSFUL recreation still proceeds. Without this the refusal could be achieved by
 #    refusing everything, which no amount of loudness would make correct.
@@ -62,13 +81,20 @@ else bad "a successful recreation was refused:"; printf '%s\n' "$out" | tail -3;
 
 # 4) And every call site uses it: the helper existing proves nothing if a caller still runs the old
 #    discard-the-status form.
-if ! grep -q 'ensure_topics; resume_dev_mirrors_if_declared' "$SCRIPT"; then
-  n="$(grep -c '^\s*ensure_topics_or_refuse$' "$SCRIPT")"
-  if [ "$n" -ge 4 ]; then
-    ok "all $n call sites use the refusing form, and none uses the discarding one"
-  else bad "only $n call sites use the refusing form"; fi
-else
+if grep -q 'ensure_topics; resume_dev_mirrors_if_declared' "$SCRIPT"; then
   bad "a caller still uses 'ensure_topics; resume_dev_mirrors_if_declared' and discards the status"
+else
+  # EVERY CALL SITE MUST HANDLE THE STATUS. Counting bare calls was the wrong check the moment the
+  # helper started RETURNING instead of exiting: a bare `ensure_topics_or_refuse` is now precisely
+  # the bug — the status would be dropped again. So each call must be followed by `||`.
+  sites="$(grep -n 'ensure_topics_or_refuse' "$SCRIPT" | grep -v 'ensure_topics_or_refuse()' | grep -v '^[0-9]*:#')"
+  n="$(printf '%s\n' "$sites" | grep -c . )"
+  unhandled="$(printf '%s\n' "$sites" | grep -v '||' || true)"
+  if [ "$n" -ge 4 ] && [ -z "$unhandled" ]; then
+    ok "all $n call sites call it AND handle its status"
+  else
+    bad "$n call sites, of which these drop the status:"; printf '%s\n' "$unhandled" | head -4
+  fi
 fi
 
 printf '\ndev-cleanup-topic-recreation-fatal-test: %s (%d passed, %d failed)\n' \

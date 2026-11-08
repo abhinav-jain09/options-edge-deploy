@@ -765,14 +765,23 @@ ensure_topics_or_refuse() {
   ensure_topics || rc=$?
   resume_dev_mirrors_if_declared "$rc"
   if [ "$rc" -ne 0 ]; then
-    echo "FATAL: ensure_topics FAILED (status $rc) - the declared topics are NOT all present at their" >&2
-    echo "       declared shapes. Refusing to continue: scaling workloads up now would start them" >&2
-    echo "       against missing topics, and anything auto-created would take the broker default" >&2
-    echo "       shape instead of the one scripts/kafka/topics.env declares." >&2
-    echo "       Fix the topic pass and re-run; nothing has been scaled up." >&2
-    exit 1
+    echo "ERROR: ensure_topics FAILED (status $rc) - the declared topics are NOT all present at their" >&2
+    echo "       declared shapes. Nothing may be scaled up on this: a workload started against a" >&2
+    echo "       missing topic crash-loops, and anything auto-created takes the broker DEFAULT shape" >&2
+    echo "       instead of the one scripts/kafka/topics.env declares (for es.mbo.coverage, a" >&2
+    echo "       delete-retention log where a compacted per-contract fact belongs)." >&2
+    echo "       The es4->dev mirrors stay PAUSED by design until a later run's topic pass succeeds." >&2
+    return 1
   fi
 }
+
+# RETURNS, NEVER EXITS. The first version called `exit 1` here, which killed the whole process — and
+# on the automatic CLEAN slot the very next act is the overnight ES start, i.e. the script's own
+# recovery attempt (a second topic pass). Exiting inside the helper skipped it, so a failed
+# recreation left dev fully down with the mirrors paused until the next scheduled full start, which
+# on a manual run is never (Codex deploy r16). The same shape as the bug being fixed: a status that
+# stops the wrong thing. Each caller now refuses its OWN scale-up and the CLEAN slot still reaches
+# its recovery.
 
 # run_partition_doctor: repair Kafka Streams apps that refuse an internal topic's partition count
 # ("Existing internal topic ... has invalid partitions: expected: E; actual: A"). Same source of truth as
@@ -876,7 +885,11 @@ apply_internal_topic_configs() {
 # live ES data; see the note where OVERNIGHT_SET is defined.)
 do_start_overnight() {
   require_kafka_cli
-  ensure_topics_or_refuse
+  ensure_topics_or_refuse || {
+    echo "overnight start: REFUSED — the declared topics are not right, so the ES-tracking set stays at 0." >&2
+    echo "                 Fix the topic pass and re-run 'dev-cleanup overnight'." >&2
+    return 1
+  }
   echo "Overnight start: ES-tracking set only ($OVERNIGHT_SET); all other services stay at 0 until 06:15 ET."
   local d
   for d in $OVERNIGHT_SET; do
@@ -975,7 +988,11 @@ verify_start_readiness() {
 
 do_start() {
   require_kafka_cli
-  ensure_topics_or_refuse
+  ensure_topics_or_refuse || {
+    echo "start: REFUSED — the declared topics are not right, so nothing is scaled up." >&2
+    echo "       Fix the topic pass and re-run 'dev-cleanup start'." >&2
+    return 1
+  }
   # Scale UP everything EXCEPT the DEV-disabled set. This is load-bearing: if we scaled ALL to 1 and
   # re-zeroed the disabled ones afterwards, databento-timewarp-snapshot-replay would come up in the gap
   # and REPLAY historical snapshots into options.databento.raw (its TIMEWARP_SNAPSHOT_TOPIC), poisoning
@@ -1324,7 +1341,10 @@ for p in json.load(sys.stdin)["items"]:
       | xargs -P 8 -I{} $KT --bootstrap-server $BS --delete --topic {} >/dev/null 2>&1
     sleep 8   # let the deletions settle before recreating (avoid create-vs-delete races)
     echo "4d) recreating platform topics (clean + recreate) ..."
-    ensure_topics_or_refuse
+    # Recorded, not fatal here: the CLEAN slot's next act is the overnight start, which runs the
+    # topic pass again and refuses its own scale-up if it still fails. Aborting mid-clean would
+    # leave the wipe half-applied, which is worse.
+    ensure_topics_or_refuse || CLEAN_TOPICS_FAILED=1
   fi
 
   # 4b. safe docker-ENGINE image housekeeping (build side only — NOT the k8s containerd store).
@@ -1360,6 +1380,16 @@ for p in json.load(sys.stdin)["items"]:
   echo "  apps: LEFT DOWN — 'dev-cleanup.sh start' is REQUIRED to bring dev back up (until then there are no bars,"
   echo "        no market structure and no Order-page chart). It verifies indicator-service comes up fully ready."
   echo "DONE $(date)"
+  # THE TOPIC FAILURE CARRIES OUT. Setting a variable nobody reads is the same silence this round is
+  # about, so do_clean's own status says it: the CLEAN slot then prints its "clean: FAILED" line and
+  # still proceeds to the overnight start, whose topic pass runs again and refuses its own scale-up
+  # if it still fails. The wipe itself is already complete at this point, so this REPORTS rather
+  # than aborts — a mid-clean abort would leave the wipe half-applied, which is worse.
+  if [ "${CLEAN_TOPICS_FAILED:-0}" = 1 ]; then
+    echo "  topics: NOT all recreated at their declared shapes — nothing may be scaled up until a"
+    echo "          topic pass succeeds ('dev-cleanup topics', then 'dev-cleanup start')."
+    return 1
+  fi
 }
 
 # ---------- dispatch ----------
@@ -1493,7 +1523,7 @@ PY
     # not unconditionally safe for an arbitrary reader — check what reads a topic before widening
     # this to one whose history someone depends on.
     require_kafka_cli
-    ensure_topics_or_refuse
+    ensure_topics_or_refuse || exit 1
     ;;
   *) echo "usage: dev-cleanup [ | now | start | overnight | topics | logs ]  (no arg = calendar-gated auto for launchd)"; exit 2 ;;
 esac
