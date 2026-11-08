@@ -236,7 +236,8 @@ class Manifests(unittest.TestCase):
             self.assertEqual(e["BREAK_LINE_ENVIRONMENT"], "Rithmic Paper Trading", rel)
             self.assertEqual(e["BREAK_LINE_ALLOW_TEST"], "false", f"{rel}: the test environment is not admitted")
             self.assertEqual(e["BREAK_LINE_GAMMA_ENABLED"], "false", f"{rel}: the gamma reader is off")
-            self.assertEqual(e["HEALTH_PORT"], "8080", rel)
+            self.assertEqual(e["BREAK_LINE_HEALTH_PORT"], "8080", rel)
+            self.assertNotIn("HEALTH_PORT", e, f"{rel}: the service reads BREAK_LINE_HEALTH_PORT (Main), a bare HEALTH_PORT would be ignored")
             self.assertEqual(e["JAVA_TOOL_OPTIONS"], "-Xmx512m -XX:+UseSerialGC", rel)
 
     def test_no_pod_volume_and_no_d3_flag_anywhere(self):
