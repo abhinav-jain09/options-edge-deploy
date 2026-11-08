@@ -239,6 +239,19 @@ class Manifests(unittest.TestCase):
             self.assertEqual(e["HEALTH_PORT"], "8080", rel)
             self.assertEqual(e["JAVA_TOOL_OPTIONS"], "-Xmx512m -XX:+UseSerialGC", rel)
 
+    def test_no_pod_volume_and_no_d3_flag_anywhere(self):
+        """The restart snapshot is a record on futures.break-line.snapshot, so the pod has no volume; the relay and commands flags are D3 and appear in no manifest of this change."""
+        for rel in (BASE, SLICE):
+            spec = deployment(rel)["spec"]["template"]["spec"]
+            self.assertNotIn("volumes", spec, rel)
+            self.assertNotIn("volumeMounts", spec["containers"][0], rel)
+            self.assertEqual(len(spec["containers"]), 1, rel)
+            self.assertFalse({"BREAK_LINE_RELAY_ENABLED", "BREAK_LINE_COMMANDS_ENABLED"} & set(env_of(deployment(rel))), rel)
+        for rel in ("k8s/overlays/dev/feed-gateway-dev-env-patch.yaml", "k8s/overlays/dev/web-dev-env-patch.yaml", "k8s/services/feed-gateway/overlays/dev/manifest.yaml",
+                    "k8s/services/web/overlays/dev/web-dev-env-patch.yaml"):
+            self.assertNotIn("BREAK_LINE_RELAY_ENABLED", read(rel), rel)
+            self.assertNotIn("BREAK_LINE_COMMANDS_ENABLED", read(rel), rel)
+
     def test_it_is_a_consumer_of_the_shared_config_and_secrets_and_has_no_service_object(self):
         ct = deployment(BASE)["spec"]["template"]["spec"]["containers"][0]
         self.assertEqual([x.get("configMapRef", {}).get("name") or x.get("secretRef", {}).get("name") for x in ct["envFrom"]], ["options-edge-config", "options-edge-runtime-secrets"])
@@ -338,6 +351,30 @@ class Schemas(unittest.TestCase):
         want = [{"service": "break-line", "accepts": [3701, 3708], "environments": ["dev"]}]
         self.assertEqual(lh["consumers"], want, "the service reads the line health state, both versions (a compacted topic can still hold version 1 frames)")
         self.assertEqual(next(x for x in m["entries"] if x.get("id") == 3701)["consumers"], want)
+
+    def test_the_bindings_on_the_existing_subjects_are_exactly_the_new_consumer_and_nothing_else_changed(self):
+        """Break-line reads 3502, 3509 and 3801 and accepts exactly that id; every other producer and consumer of those entries is what it was before this change."""
+        m = json.loads(read("schema-manifest/manifest.json"))
+        by = {e["id"]: e for e in m["entries"] if e.get("kind") == "MIRRORED"}
+        mine = {"service": SVC, "environments": ["dev"]}
+        expected = {
+            3502: ([{"service": "es-liquidity-engine", "environments": ["dev"]}], [{"service": "level-absorption", "accepts": [3502], "environments": ["dev"]}]),
+            3509: ([{"service": "es-liquidity-engine", "environments": ["dev"]}], [{"service": "level-absorption", "accepts": [3509], "environments": ["dev"]}]),
+            3801: ([{"service": "strike-hold", "environments": ["dev"]}], []),
+        }
+        for i, (producers, others) in expected.items():
+            e = by[i]
+            self.assertEqual(e["producers"], producers, f"{i}: producers unchanged")
+            self.assertEqual([c for c in e["consumers"] if c["service"] != SVC], others, f"{i}: the other consumers unchanged")
+            self.assertEqual([c for c in e["consumers"] if c["service"] == SVC], [dict(mine, accepts=[i])], f"{i}: break-line accepts exactly {i}")
+        # the complete set of entries that name break-line, by role
+        roles = {}
+        for e in m["entries"]:
+            for role in ("producers", "consumers"):
+                for x in e.get(role) or []:
+                    if x["service"] == SVC:
+                        roles.setdefault(role, []).append(e["id"])
+        self.assertEqual({k: sorted(v) for k, v in roles.items()}, {"producers": [3902, 3903, 3904, 3905], "consumers": [3502, 3509, 3801, 3901, 3902]})
 
     def test_no_id_of_the_block_3901_3910_is_used_by_any_other_family(self):
         m = json.loads(read("schema-manifest/manifest.json"))
