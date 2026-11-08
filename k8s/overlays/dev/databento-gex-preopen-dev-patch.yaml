@@ -198,4 +198,9 @@ spec:
             - { name: GEX_SMILE_IV_FALLBACK, value: "true" }
           resources:
             requests:
-              cpu: "2"
+              # Lowered from "2" to "1" (DEV-ONLY, 2026-11-08) to free 1000m on the dev node (16000m
+              # allocatable, 99% requested) so a 200m pod can schedule. Measured on a closed-market
+              # Sunday: the pod uses ~22m. The RTH catch-up concern in the header above still holds
+              # for load, but 1 core is a floor, not a cap (no CPU limit is set). Production and
+              # experiment keep the base 250m. Memory and limits are unchanged.
+              cpu: "1"
