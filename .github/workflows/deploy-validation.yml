@@ -331,8 +331,8 @@ jobs:
       - name: es-liquidity-engine topic barrier negative controls
         run: bash scripts/kafka/ensure-es-liquidity-engine-topics-test.sh
 
-      - name: strike-hold coverage input wiring (the barrier's constant matches the Deployment)
-        run: python3 -m unittest -v tests.test_strike_hold_coverage_wiring
+      - name: coverage topic wiring, both sides (each barrier's literal matches its own Deployment)
+        run: python3 -m unittest -v tests.test_coverage_topic_wiring
 
       # The sibling files apply-topics.sh sources must be copied by every test that runs it out of a
       # temp directory. Hard-coding that list is what made TWO such tests report findings about

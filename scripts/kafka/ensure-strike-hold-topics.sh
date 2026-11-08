@@ -175,7 +175,7 @@ rc=0
 # CONSTANT of this repository: topics.env declares es.mbo.coverage and the Deployment sets exactly
 # that. So the barrier verifies that constant unconditionally, and the question it was trying to
 # answer — does the Deployment this commit applies really configure that topic — is asserted by
-# tests/test_strike_hold_coverage_wiring.py, which parses the YAML with a YAML parser and scopes to
+# tests/test_coverage_topic_wiring.py, which parses the YAML with a YAML parser and scopes to
 # the container. If the Deployment ever stops setting it, that test fails and names this barrier.
 #
 # An explicit environment value is still honoured, so an operator can point a one-off run elsewhere.
@@ -187,7 +187,7 @@ rc=0
 #
 # So this is the literal constant, checked unconditionally. There is nothing to configure here: a
 # deploy barrier states the precondition of THIS deploy, and the precondition is fixed by the
-# Deployment in this commit. tests/test_strike_hold_coverage_wiring.py is what keeps the two in
+# Deployment in this commit. tests/test_coverage_topic_wiring.py is what keeps the two in
 # step.
 COVERAGE_IN=es.mbo.coverage
 if ! grep -qxF "$COVERAGE_IN" <<<"$LIST"; then

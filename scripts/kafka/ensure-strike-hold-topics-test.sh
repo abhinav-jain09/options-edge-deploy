@@ -222,7 +222,7 @@ else bad "an override redirected the barrier away from the deployed topic"; fi
 
 # The manifest parse these arms used to exercise is GONE: three versions of it each failed toward
 # silently checking nothing, so the barrier verifies a declared constant and the pairing with the
-# Deployment is asserted in tests/test_strike_hold_coverage_wiring.py, with a YAML parser and a
+# Deployment is asserted in tests/test_coverage_topic_wiring.py, with a YAML parser and a
 # container scope. A shell script should not be reasoning about YAML (Codex deploy r7).
 
 # 7) DEV ONLY, fail-closed.
