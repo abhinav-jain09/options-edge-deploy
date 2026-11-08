@@ -98,6 +98,11 @@ list_of() { # variable name -> its whitespace-split values, minus the "$VAR" sel
 # PURE_COMPACT entries carry cleanup.policy=compact (no delete) and count as compacted here.
 DECLARED="$(list_of OPTIONS_EDGE_TOPICS)
 $(list_of OPTIONS_EDGE_PROD_ONLY_TOPICS)"
+# A partition-only declaration is still a REVIEWED partition count (`name:partitions`, created by
+# dev-cleanup with no per-topic configs), so it satisfies "a reviewed count exists on the side this is
+# read from". It is kept as its own list rather than folded into DECLARED, because the config-bearing
+# checks below must NOT treat a config-less declaration as a config contract.
+PARTITION_ONLY="$(list_of OPTIONS_EDGE_PARTITION_ONLY_TOPICS)"
 COMPACTED="$(list_of OPTIONS_EDGE_COMPACTED_TOPICS)
 $(list_of OPTIONS_EDGE_PROD_ONLY_PURE_COMPACT_TOPICS)"
 RETENTIONS="$(list_of OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES)
@@ -274,6 +279,32 @@ job_topics() {
 }
 job_topic_is_freetext() { grep -qE "string\(name: 'TOPIC'," "$1"; }
 
+# A RENAMING FIXED-PAIR job: no TOPIC choice list at all, because it mirrors exactly ONE topic onto a
+# target with a DIFFERENT name, both hardcoded in the `environment` block.
+# Jenkinsfile.es-price-basisref-mirror is the shape — dev `underlying.es.price` re-encoded onto es4
+# `es.underlying.es.price.basis-reference`. It broke three assumptions of this validator at once (no
+# choice list, no direction marker, source and target named differently) and the parser gave up, which
+# read as "cannot be checked" — while behind that gap sat an es4 target declared NOWHERE in topics.env,
+# the one thing this gate exists to catch.
+#
+# The names come from SRC_TOPIC/TGT_TOPIC, what the job RUNS on, never from its `// MIRROR-TOPICS:`
+# comment. A comment is a claim; the assignment is the mechanism, and when they disagree the comment is
+# what is wrong. Exactly one of each, or this is not a shape this validator can read: a second
+# TGT_TOPIC assignment would mean a target nobody reads.
+job_fixed_pair() {
+  local s t
+  s="$({ grep -oE "^[[:space:]]*SRC_TOPIC[[:space:]]*=[[:space:]]*'[A-Za-z0-9][A-Za-z0-9._-]*'" "$1" || true; } | sed -E "s/.*'(.*)'/\1/" | sort -u)"
+  t="$({ grep -oE "^[[:space:]]*TGT_TOPIC[[:space:]]*=[[:space:]]*'[A-Za-z0-9][A-Za-z0-9._-]*'" "$1" || true; } | sed -E "s/.*'(.*)'/\1/" | sort -u)"
+  [ "$(printf '%s' "$s" | grep -c . || true)" = 1 ] || return 1
+  [ "$(printf '%s' "$t" | grep -c . || true)" = 1 ] || return 1
+  printf '%s %s\n' "$s" "$t"
+}
+
+# Does the job CREATE topics? One that creates its target states that target's shape, so it must carry
+# a frozen arm or a literal cleanup.policy. One that only DESCRIBES both sides states nothing, and
+# topics.env is then the sole authority — which is precisely why the declaration has to exist.
+job_creates_topics() { grep -qE -- "--create" "$1"; }
+
 # The FROZEN per-topic contract arms: `<topic>) PARTS=1; POLICY=compact,delete; RET=-1 ;;`.
 # A job may repeat its arm (the tape-zones mirror asserts the contract against the source in
 # Preflight and against the target when it creates it); identical repeats collapse, and a job that
@@ -319,11 +350,16 @@ for job in "${JOBS[@]}"; do
       continue
       ;;
   esac
+  pair=""
   if [ -z "$topics" ]; then
-    echo "FAIL: $jobname declares no TOPIC choice() parameter this validator can read — it cannot be"
-    echo "      checked, and an unchecked mirror is how this failure class started. Update the parser."
-    fail=1
-    continue
+    pair="$(job_fixed_pair "$job" || true)"
+    if [ -z "$pair" ]; then
+      echo "FAIL: $jobname declares no TOPIC choice() parameter this validator can read, and no single"
+      echo "      SRC_TOPIC/TGT_TOPIC pair either — it cannot be checked, and an unchecked mirror is how"
+      echo "      this failure class started. Update the parser."
+      fail=1
+      continue
+    fi
   fi
 
   direction="$(job_direction "$job")"
@@ -351,6 +387,57 @@ for job in "${JOBS[@]}"; do
 
   contracts="$(job_contracts "$job")"
   literal_policies="$(job_literal_policy "$job")"
+
+  # --- SCHEMA: RENAMED. One hardcoded pair, DIFFERENT names on the two clusters. --------------------
+  # The version-1 loop below assumes one topic NAME mirrored between two clusters, so it cannot express
+  # this job at all; before this arm existed the parser gave up and printed "cannot be checked", which
+  # read as a pass-by-exemption while an es4 target sat declared NOWHERE — the exact deletion exposure
+  # this gate exists to catch. The names come from SRC_TOPIC/TGT_TOPIC, the mechanism, never from the
+  # job's MIRROR-TOPICS comment.
+  if [ -n "$pair" ]; then
+    src_name="${pair%% *}"; tgt_name="${pair##* }"
+    checked=$((checked + 1))
+    if [ "$src_name" = "$tgt_name" ]; then
+      echo "FAIL: $jobname's SRC_TOPIC and TGT_TOPIC are the same name — that is not a renaming mirror."
+      fail=1
+      continue
+    fi
+    # 1) THE TARGET MUST BE DECLARED. cleanup-topics.sh with KAFKA_DELETE_UNWANTED_TOPICS=true deletes
+    #    an undeclared topic, and this job only DESCRIBES its target, so it would come back by broker
+    #    auto-create at the default shape.
+    tgt_parts="$(partitions_in "$T_DECLARED" "$tgt_name")"
+    if [ -z "$tgt_parts" ]; then
+      echo "FAIL: $jobname mirrors '$src_name' onto $TGT_SET as '$tgt_name', but '$tgt_name' is NOT"
+      echo "      declared in $(set_var "$TGT_SET" declared) in $TOPICS_ENV."
+      fail=1
+      continue
+    fi
+    # 2) THE SOURCE MUST BE DECLARED, so a reviewed partition count exists on the side it is read from.
+    src_parts="$(partitions_in "$S_DECLARED" "$src_name")"
+    src_from="$(set_var "$SRC_SET" declared)"
+    if [ -z "$src_parts" ] && [ "$SRC_SET" = default ]; then
+      src_parts="$(partitions_in "$PARTITION_ONLY" "$src_name")"
+      [ -n "$src_parts" ] && src_from=OPTIONS_EDGE_PARTITION_ONLY_TOPICS
+    fi
+    if [ -z "$src_parts" ]; then
+      echo "FAIL: $jobname reads '$src_name' from $SRC_SET, but it is declared in NEITHER"
+      echo "      $(set_var "$SRC_SET" declared) nor OPTIONS_EDGE_PARTITION_ONLY_TOPICS — no reviewed"
+      echo "      partition count exists for it anywhere on that cluster."
+      fail=1
+      continue
+    fi
+    # 3) A JOB THAT CREATES ITS TARGET STATES THAT TARGET'S SHAPE. This one only describes both sides,
+    #    so topics.env is the sole authority; if it ever gains --create it needs a frozen arm or a
+    #    literal cleanup.policy, and silence would then be a shape nobody reviewed.
+    if job_creates_topics "$job"; then
+      echo "FAIL: $jobname now CREATES topics, so it must state its target's shape with a frozen arm or"
+      echo "      exactly one literal --config cleanup.policy=; the RENAMED arm accepts describe-only jobs."
+      fail=1
+      continue
+    fi
+    echo "  $jobname  $src_name ($SRC_SET, :$src_parts from $src_from)  ->  $tgt_name ($TGT_SET, :$tgt_parts)  [RENAMED, describe-only]"
+    continue
+  fi
 
   for topic in $topics; do
     checked=$((checked + 1))

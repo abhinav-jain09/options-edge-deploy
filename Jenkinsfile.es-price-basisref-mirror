@@ -17,6 +17,7 @@
 // MIRROR-TOPICS: underlying.es.price, es.underlying.es.price.basis-reference
 // MIRROR-INSTALL: reencodes
 // MIRROR-SUBJECTS: com.optionsedge.contracts.hpsf.EsUnderlyingPrice
+// MIRROR-DIRECTION: default->es4
 // MIRROR-PATHS: dev->es4
 // (schema-governance R3f, read by scripts/ci/schema-mirrors-generate.py. Decodes with the dev registry and re-encodes with es4's (EsPriceAvroMirror).)
 pipeline {
