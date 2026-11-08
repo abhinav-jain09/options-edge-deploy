@@ -50,6 +50,11 @@ spec:
             # line-health-state / -event / -voice / -status, the hello field lineHealth and the line-health-resume answer. The producer is the line-health loop of level-absorption-service; off everywhere else (default false).
             - name: LINE_HEALTH_RELAY_ENABLED
               value: "true"
+            # Break score relay (Break Score rev 13, gateway BreakLineRelay; design liq-S-break-score-rev13-design.md 14.8): futures.break-line.{state,events,status} (ids 3902, 3903, 3904, dev only)
+            # -> the websocket frames break-line-state / -event (owner-targeted: a user sees only his own lines) and break-line-status (global heartbeat), the hello field breakLine and the break-line-resume answer.
+            # The producer is break-line-service; the relay is off everywhere else (default false).
+            - name: BREAK_LINE_RELAY_ENABLED
+              value: "true"
             # MARKET STRUCTURE relay (gateway #194): the latest market-structure record is retained and
             # replayed to the Context Tape page as the `market-structure` frame, which draws the STRUCTURE
             # layer. The topic is market-structure-service's UI projection — the namespace R13 of

@@ -79,6 +79,8 @@ spec:
               value: "true"
             - name: LINE_HEALTH_RELAY_ENABLED
               value: "true"
+            - name: BREAK_LINE_RELAY_ENABLED
+              value: "true"
             - name: GATEWAY_MARKET_STRUCTURE_ENABLED
               value: "true"
             - name: KAFKA_MARKET_STRUCTURE_TOPIC
