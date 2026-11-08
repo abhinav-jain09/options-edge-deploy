@@ -696,7 +696,8 @@ is_capture_fields_topic() { [ "$ENV_NAME" = dev ] && case " ${OE_DEPTH_TOPICS_de
 # bucket_split <plain-capture-file> <segment-prefix>
 # Cuts the proven five-field capture into one file per run of equal trade date of bucketEnd; writes
 # <prefix><index> files and prints one tab-separated descriptor per file:
-#   index date first_offset records first_bucket_end last_bucket_end max_bucket_end bucket_end_missing
+#   index date first_offset records first_bucket_end last_bucket_end max_bucket_end bucket_end_missing closure_kinds
+# (a missing bound prints as -, never as an empty field: read with a tab IFS would swallow it; closure_kinds: the closureKind values in the file, comma-separated, or - when none)
 # (an empty capture prints nothing). Exit 3 on a line that is not five tab-separated fields.
 bucket_split() {
   python3 -I - "$1" "$2" <<'PY'
@@ -705,6 +706,7 @@ from zoneinfo import ZoneInfo
 NY = ZoneInfo("America/New_York")
 UTC = datetime.timezone.utc
 BE = re.compile(rb'"bucketEnd":(\d+)')
+CK = re.compile(rb'"closureKind":"([A-Z_]+)"')
 _cache = {}
 def trade_date(ms):
     k = ms // 60000                       # the 18:00 boundary is a whole minute: one answer per minute
@@ -743,11 +745,13 @@ with open(src, 'rb') as f:
                 day = trade_date(int(ts)) if ts.isdigit() and int(ts) > 0 else trade_date(0)
         if cur is None or day != cur[0]:
             close()
-            cur = [day, parts[2][7:].decode(), 0, None, None, None, 0]
+            cur = [day, parts[2][7:].decode(), 0, None, None, None, 0, set()]
             segs.append(cur)
             out = open("%s%d" % (prefix, len(segs) - 1), 'wb')
         out.write(line if line.endswith(b'\n') else line + b'\n')
         cur[2] += 1
+        k = CK.search(parts[4])
+        if k: cur[7].add(k.group(1).decode())
         if be is None:
             cur[6] += 1
         else:
@@ -756,7 +760,53 @@ with open(src, 'rb') as f:
             if cur[5] is None or be > cur[5]: cur[5] = be
 close()
 for i, s in enumerate(segs):
-    print("\t".join([str(i), s[0], s[1], str(s[2])] + [("" if v is None else str(v)) for v in (s[3], s[4], s[5])] + [str(s[6])]))
+    print("\t".join([str(i), s[0], s[1], str(s[2])] + [("-" if v is None else str(v)) for v in (s[3], s[4], s[5])] + [str(s[6]), ",".join(sorted(s[7])) or "-"]))
+PY
+}
+
+# depth_schema_fragment <topic> <schemaVersion csv or -> <closureKind csv or ->
+# The registered schema id(s) the file's records were decoded under and the SHA-256 of each released schema text
+# (document A section 10 Capture 3: "the schema id and digest"). The capture decodes Avro to JSON text, so the frame's id is
+# not in the archived line; it is read back from the record's own version and kind through the table below, which mirrors
+# CanonicalArchiveDecoder.java (the bindings are the authority):
+#   es.rithmic.depth 3301 | es.rithmic.mbo 3302 | futures.liquidity-wall.closures 3401 | es.mbo.level-flow 3502
+#   es.mbo.level-flow-final schemaVersion 1 -> 3506, 2 -> 3510 | es.mbo.health 1 -> 3504, 2 -> 3509
+#   es.mbo.closures closureKind BOOK -> 3501, FINAL -> 3508 | underlying.es.trades.linearized is JSON (no id)
+# The digest comes from the dev registry (GET /schemas/ids/<id>). An id the registry cannot answer, or a version or kind
+# the table does not know, is RECORDED (schema_digest_status UNRESOLVED:<id> / UNMAPPED:<v>) and never fails the capture:
+# the data expires in a day and the record of what it was is the checker's input, not a reason to lose it.
+depth_schema_fragment() {
+  python3 -I - "$1" "$2" "$3" "$(archive_registry_url "${OE_CANONICAL_REGISTRY_URL:-}")" <<'PY'
+import sys, json, hashlib, urllib.request
+topic, versions, kinds, registry = sys.argv[1:5]
+FIXED = {"es.rithmic.depth": [3301], "es.rithmic.mbo": [3302], "futures.liquidity-wall.closures": [3401], "es.mbo.level-flow": [3502]}
+BY_VERSION = {"es.mbo.level-flow-final": {"1": 3506, "2": 3510}, "es.mbo.health": {"1": 3504, "2": 3509}}
+BY_KIND = {"es.mbo.closures": {"BOOK": 3501, "FINAL": 3508}}
+ids, status = [], []
+if topic in FIXED:
+    ids = list(FIXED[topic])
+elif topic in BY_VERSION:
+    for v in ([] if versions in ("", "-") else versions.split(",")):
+        if v in BY_VERSION[topic]: ids.append(BY_VERSION[topic][v])
+        else: status.append("UNMAPPED:version" + v)
+elif topic in BY_KIND:
+    for k in ([] if kinds in ("", "-") else kinds.split(",")):
+        if k in BY_KIND[topic]: ids.append(BY_KIND[topic][k])
+        else: status.append("UNMAPPED:kind" + k)
+else:
+    print('"schema_ids":[],"schema_digests":{},"schema_digest_status":"NOT_AVRO"'); sys.exit(0)
+ids = sorted(set(ids))
+digests = {}
+for i in ids:
+    try:
+        with urllib.request.urlopen("%s/schemas/ids/%d" % (registry, i), timeout=5) as r:
+            digests[str(i)] = hashlib.sha256(json.load(r)["schema"].encode("utf-8")).hexdigest()
+    except Exception:
+        digests[str(i)] = None
+        status.append("UNRESOLVED:%d" % i)
+if not ids and not status:
+    status.append("UNMAPPED:no-records")
+print('"schema_ids":%s,"schema_digests":%s,"schema_digest_status":"%s"' % (json.dumps(ids), json.dumps(digests, sort_keys=True), ";".join(status) or "RESOLVED"))
 PY
 }
 
@@ -1388,7 +1438,7 @@ for topic in $TOPICS; do
       fi
       # A recapture over a LEGACY checkpoint says so: the range overlaps whatever the older archiver filed.
       [ -z "$legacy_from" ] || manifest_extra="$manifest_extra$(printf ',"recaptured_over_unproven_checkpoint":%s' "$legacy_from")"
-      seg_file=(); seg_day=(); seg_first=(); seg_recs=(); seg_fb=(); seg_lb=(); seg_mb=(); seg_miss=()
+      seg_file=(); seg_day=(); seg_first=(); seg_recs=(); seg_fb=(); seg_lb=(); seg_mb=(); seg_miss=(); seg_kinds=()
       seg_n=0
       if is_bucket_filed_topic "$topic"; then
         split_out=$(bucket_split "$plain_src" "$stemdir/.$topic.p$part.$from.$STAMP.seg" 2>"$stem.split.err")
@@ -1399,10 +1449,10 @@ for topic in $TOPICS; do
           failed=$(( failed + 1 ))
           continue
         fi
-        while IFS=$'\t' read -r s_i s_d s_f s_r s_fb s_lb s_mb s_ms; do
+        while IFS=$'\t' read -r s_i s_d s_f s_r s_fb s_lb s_mb s_ms s_kinds; do
           [ -n "$s_i" ] || continue
           seg_file[seg_n]="$stemdir/.$topic.p$part.$from.$STAMP.seg$s_i"; seg_day[seg_n]="$s_d"; seg_first[seg_n]="$s_f"
-          seg_recs[seg_n]="$s_r"; seg_fb[seg_n]="$s_fb"; seg_lb[seg_n]="$s_lb"; seg_mb[seg_n]="$s_mb"; seg_miss[seg_n]="$s_ms"
+          seg_recs[seg_n]="$s_r"; seg_fb[seg_n]="${s_fb#-}"; seg_lb[seg_n]="${s_lb#-}"; seg_mb[seg_n]="${s_mb#-}"; seg_miss[seg_n]="$s_ms"; seg_kinds[seg_n]="$s_kinds"
           seg_n=$(( seg_n + 1 ))
         done <<< "$split_out"
       fi
@@ -1439,6 +1489,7 @@ for topic in $TOPICS; do
           ckpt_json="null"; case "$ckpt_before" in ''|*[!0-9]*) : ;; *) ckpt_json="$ckpt_before" ;; esac
           PS_EXTRA="$PS_EXTRA$(printf ',"capture_start_checkpoint":%s,"broker_beginning_offset":%s,"capture_wall_start":"%s","capture_wall_end":"%s","filed_by":"%s"' \
             "$ckpt_json" "$earliest" "$cap_wall_start" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$([ "$seg_split" = true ] && echo bucketEnd_trade_date || echo run_date)")"
+          PS_EXTRA="$PS_EXTRA,$(depth_schema_fragment "$topic" "$schema_versions" "${seg_kinds[si]:--}")"
         fi
         if [ "$seg_split" = true ]; then
           PS_EXTRA="$PS_EXTRA$(printf ',"first_bucket_end":%s,"last_bucket_end":%s,"max_bucket_end":%s,"bucket_end_missing":%s,"segment":%s,"segments":%s' \

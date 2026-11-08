@@ -40,8 +40,17 @@ for f in $FILES; do
   [ -f "$SRC/$f" ] || { echo "FATAL: $f is not in the repo beside this installer" >&2; exit 1; }
 done
 [ -f "$SRC/launchd/$PLIST" ] || { echo "FATAL: $SRC/launchd/$PLIST missing" >&2; exit 1; }
+# The session checker (oe-archive-session-chain.py) reads the exchange calendar from beside itself: without it a
+# closed trading day would be reported as a session. So the committed calendar is REQUIRED and installed with it
+# (beside this installer when the Jenkins job staged it there, else the repo's scripts/jenkins copy).
+CAL_SRC=""
+for _c in "$SRC/market_calendar.py" "$SRC/../../jenkins/market_calendar.py"; do
+  [ -f "$_c" ] && [ ! -L "$_c" ] && { CAL_SRC="$_c"; break; }
+done
+[ -n "$CAL_SRC" ] || { echo "FATAL: market_calendar.py is not beside this installer or in $SRC/../../jenkins — the session checker needs the exchange calendar and would silently treat holidays as sessions without it" >&2; exit 1; }
+FILES_ALL="$FILES market_calendar.py"
 
-echo "install: $FILES -> $DEST"
+echo "install: $FILES_ALL -> $DEST"
 echo "install: launchd/$PLIST -> $AGENTS"
 echo "require: $SIDECARS already in $DEST (built and shipped by Jenkins archive-scripts-deploy; not produced here)"
 if [ "$DRY" = true ]; then echo "(dry run — nothing written)"; exit 0; fi
@@ -103,7 +112,7 @@ done
 
 # EVERY DESTINATION PATH MUST BE A PLAIN FILE OR ABSENT (a dangling symlink reads as absent to -f, and cp then
 # writes THROUGH it to wherever it points).
-for f in $FILES; do
+for f in $FILES_ALL; do
   if [ -e "$DEST/$f" ] || [ -L "$DEST/$f" ]; then
     [ -f "$DEST/$f" ] && [ ! -L "$DEST/$f" ] || {
       echo "REFUSING: $DEST/$f exists and is not a plain file (symlink, directory, or dangling link). Resolve it first." >&2
@@ -117,6 +126,7 @@ fi
 
 STAGE="$(mktemp -d)"
 for f in $FILES; do cp "$SRC/$f" "$STAGE/$f"; done
+cp "$CAL_SRC" "$STAGE/market_calendar.py"
 chmod +x "$STAGE/$WRAPPER" "$STAGE/oe-archive-kafka.sh"
 
 # VERIFY IN launchd'S ENVIRONMENT, AND ONLY launchd'S. The staged wrapper is run as the plist's interpreter with
@@ -159,17 +169,13 @@ if ! mkdir "$BACKUP" 2>/dev/null; then
   echo "REFUSING: the backup directory $BACKUP already exists — writing into it would overwrite the record of an earlier install's previous state." >&2
   rm -rf "$STAGE"; exit 1
 fi
-for f in $FILES; do [ -f "$DEST/$f" ] && cp "$DEST/$f" "$BACKUP/$f"; done
+for f in $FILES_ALL; do [ -f "$DEST/$f" ] && cp "$DEST/$f" "$BACKUP/$f"; done
 [ -f "$AGENTS/$PLIST" ] && cp "$AGENTS/$PLIST" "$BACKUP/$PLIST"
 echo "backup: previous copies (where any existed) are in $BACKUP"
 
 launchctl unload "$AGENTS/$PLIST" 2>/dev/null || true
-for f in $FILES; do cp "$STAGE/$f" "$DEST/$f"; done
+for f in $FILES_ALL; do cp "$STAGE/$f" "$DEST/$f"; done
 chmod +x "$DEST/$WRAPPER" "$DEST/oe-archive-kafka.sh" "$DEST/oe-archive-session-chain.py"
-# The exchange calendar the session checker reads (closed days hold no session) lives in scripts/jenkins in the
-# repo; put the committed copy beside the checker when this checkout has it (the checker falls back to weekdays only,
-# and says so, when it is absent).
-if [ -f "$SRC/../../jenkins/market_calendar.py" ]; then cp "$SRC/../../jenkins/market_calendar.py" "$DEST/market_calendar.py"; fi
 cp "$SRC/launchd/$PLIST" "$AGENTS/$PLIST"
 rm -rf "$STAGE"
 

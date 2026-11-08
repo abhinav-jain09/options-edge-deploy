@@ -71,10 +71,34 @@ class TradeDate(unittest.TestCase):
                              [("2026-11-05", "5", "2"), ("2026-11-06", "9", "3"), ("2026-11-05", "11", "1"), ("2026-11-09", "12", "1")])
             # the record without a bucketEnd stayed in the file it fell in and is counted
             self.assertEqual([r[7] for r in rows], ["0", "1", "0", "0"])
+            self.assertEqual([r[8] for r in rows], ["-", "-", "-", "-"])   # no closureKind in these records
             total = 0
             for i in range(4):
                 with open(os.path.join(d, "seg%d" % i)) as fh: total += len(fh.read().strip().split("\n"))
             self.assertEqual(total, len(lines))   # nothing dropped, nothing doubled
+
+    def test_missing_bounds_print_a_dash_and_closure_kinds_are_listed(self):
+        lines = ["CreateTime:1793979056204\tPartition:0\tOffset:0\tk\t{\"closureKind\":\"FINAL\"}",
+                 "CreateTime:1793979056204\tPartition:0\tOffset:1\tk\t{\"closureKind\":\"BOOK\",\"bucketEnd\":%d}" % ms(2026, 11, 6, 10, 0, 0)]
+        with tempfile.TemporaryDirectory() as d:
+            plain = os.path.join(d, "plain")
+            with open(plain, "w") as fh: fh.write("\n".join(lines) + "\n")
+            script = 'source <(sed -n "/^bucket_split() {/,/^}/p" "$1"); bucket_split "$2" "$3"'
+            out = subprocess.run(["bash", "-c", script, "x", os.path.join(HERE, "oe-archive-kafka.sh"), plain, os.path.join(d, "seg")],
+                                 capture_output=True, text=True)
+            self.assertEqual(out.returncode, 0, out.stderr)
+            rows = [r.split("\t") for r in out.stdout.strip().split("\n")]
+            self.assertEqual(len(rows), 1)                       # the keyless first record took the CreateTime date and the second joined it
+            self.assertEqual(rows[0][8], "BOOK,FINAL")
+            self.assertEqual(len(rows[0]), 9)                    # every field present, none swallowed
+        # a segment of keyless records only: the bounds are dashes, and read with a tab IFS they stay in their columns
+        with tempfile.TemporaryDirectory() as d:
+            plain = os.path.join(d, "plain")
+            with open(plain, "w") as fh: fh.write(lines[0] + "\n")
+            out = subprocess.run(["bash", "-c", script, "x", os.path.join(HERE, "oe-archive-kafka.sh"), plain, os.path.join(d, "seg")],
+                                 capture_output=True, text=True)
+            r = out.stdout.strip().split("\t")
+            self.assertEqual(r[4:9], ["-", "-", "-", "1", "FINAL"])
 
     def test_a_malformed_line_fails_the_cut(self):
         with tempfile.TemporaryDirectory() as d:

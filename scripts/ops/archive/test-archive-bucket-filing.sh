@@ -11,7 +11,6 @@ for tool in flock python3 gzip sha256sum timeout awk; do
   command -v "$tool" >/dev/null 2>&1 || { echo "FATAL: '$tool' is required — refusing to run a suite that would pass vacuously without it"; exit 1; }
 done
 T=$(mktemp -d); BIN="$T/bin"; mkdir -p "$BIN"
-trap 'chmod -R u+rwx "$T" 2>/dev/null; rm -rf "$T"' EXIT
 export OE_FIXTURE="$T/fixture"
 FAILED=0
 pass() { printf 'PASS  %s\n' "$1"; }
@@ -35,17 +34,39 @@ if [ "$t" = earliest ]; then echo "$topic:0:$beg"; else echo "$topic:0:$end"; fi
 SH
 cat > "$BIN/reader" <<'SH'
 #!/usr/bin/env bash
-# canonical reader stand-in: $OE_FIXTURE.log has one line per offset: <offset> <bucketEnd|-> ; writes the five-field layout
+# canonical reader stand-in: $OE_FIXTURE.log has one line per offset: <offset> <bucketEnd|-> [<schemaVersion> [<closureKind>]]; writes the five-field layout
 topic=""; part=""; from=""; out=""; sum=""
 while [ $# -gt 1 ]; do case "$1" in --topic) topic="$2" ;; --partition) part="$2" ;; --from) from="$2" ;; --out) out="$2" ;; --summary) sum="$2" ;; esac; shift 2; done
 read -r beg end < "$OE_FIXTURE.range"
 awk -v f="$from" -v b="$end" -v p="$part" '$1 >= f && $1 < b {
-  if ($2 == "-") v = "{\"schemaVersion\":1}"; else v = "{\"schemaVersion\":1,\"bucketEnd\":" $2 "}";
+  ver = ($3 == "" ? 1 : $3); kind = ($4 == "" ? "" : ",\"closureKind\":\"" $4 "\"");
+  if ($2 == "-") v = "{\"schemaVersion\":" ver kind "}"; else v = "{\"schemaVersion\":" ver ",\"bucketEnd\":" $2 kind "}";
   printf "CreateTime:1793979056204\tPartition:%s\tOffset:%s\tCME|ESZ6\t%s\n", p, $1, v }' "$OE_FIXTURE.log" > "$out"
 n=$(wc -l < "$out" | tr -d ' ')
 echo "STRIKE_ARCHIVE_READER status=COMPLETE topic=$topic partition=$part from=$from lso=$end boundary=$end position=$end records=$n escaped=0 elapsed_ms=1" > "$sum"
 SH
 chmod +x "$BIN"/*
+
+# a registry stand-in: /schemas/ids/<id> answers {"schema": "SCHEMA-<id>"} for the ids the book archive knows, 404 otherwise
+REGPORT=$(python3 -c "import socket;s=socket.socket();s.bind(('127.0.0.1',0));print(s.getsockname()[1]);s.close()")
+python3 - "$REGPORT" <<'PY' &
+import sys, http.server, json, re
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        m = re.match(r"^/schemas/ids/(\d+)$", self.path)
+        if m and int(m.group(1)) in (3301, 3302, 3401, 3501, 3502, 3504, 3506, 3508, 3509, 3510):
+            b = json.dumps({"schema": "SCHEMA-" + m.group(1)}).encode(); self.send_response(200)
+        else:
+            b = b"{}"; self.send_response(404)
+        self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
+    def log_message(self, *a): pass
+http.server.HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+PY
+REGSRV=$!
+trap 'kill $REGSRV 2>/dev/null; chmod -R u+rwx "$T" 2>/dev/null; rm -rf "$T"' EXIT
+for _ in $(seq 1 40); do (echo > /dev/tcp/127.0.0.1/$REGPORT) 2>/dev/null && break; sleep 0.25; done
+export OE_CANONICAL_REGISTRY_URL="http://127.0.0.1:$REGPORT"
+dig() { python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest())' "$1"; }
 
 ms() { python3 - "$@" <<'PY'
 import sys, datetime
@@ -179,6 +200,33 @@ OUT=$(arun $TH); RC=$?
 CH=$(python3 "$OE/oe-archive-session-chain.py" --root "$A" --topics "$TH" --session 2026-11-09 2>&1)
 case "$CH" in *LEGACY_CAPTURE*) fail "7  the checker reads the archiver's lines as legacy" ;; *) pass "7  the checker reads the archiver's lines as non-legacy captures" ;; esac
 case "$CH" in *NO_CAPTURE_BEFORE_SESSION_START*|*TERMINAL_NOT_REACHED*) pass "7  and says why this one-run archive is not a complete session" ;; *) fail "7  checker output: $CH" ;; esac
+
+# ---- 8. schema ids and digests ---------------------------------------------------------------------------
+fresh a8; printf '%s\n' "0 $THU1 1" "1 $THU3 2" "2 $THU4 2" > "$OE_FIXTURE.log"; echo "0 3" > "$OE_FIXTURE.range"
+OUT=$(arun $TH); RC=$?
+want "8  health, versions 1 and 2 in a file: ids 3504 and 3509 with their digests" \
+     "[3504, 3509] $(dig SCHEMA-3504) $(dig SCHEMA-3509) RESOLVED" \
+     "$(field $TH 2026-11-05 schema_ids) $(python3 - "$A/kafka/dev/$TH/dt=2026-11-05/_manifest.jsonl" <<'PY'
+import sys, json
+e = json.loads(open(sys.argv[1]).readline()); print(e["schema_digests"]["3504"], e["schema_digests"]["3509"], e["schema_digest_status"])
+PY
+)"
+want "8  the version-2-only file (Friday) names only 3509" "[3509]" "$(field $TH 2026-11-06 schema_ids)"
+TC=es.mbo.closures
+fresh a9; printf '%s\n' "0 $THU1 1 BOOK" "1 $THU3 1 FINAL" "2 $THU4 1 BOOK" > "$OE_FIXTURE.log"; echo "0 3" > "$OE_FIXTURE.range"
+OUT=$(arun $TC); RC=$?
+want "9  closures: BOOK and FINAL in one file are ids 3501 and 3508" "[3501, 3508]" "$(field $TC 2026-11-05 schema_ids)"
+want "9  and a file with BOOK only is 3501" "[3501]" "$(field $TC 2026-11-06 schema_ids)"
+fresh a10; printf '%s\n' "0 $THU1 1" > "$OE_FIXTURE.log"; echo "0 1" > "$OE_FIXTURE.range"
+OUT=$(arun $TH OE_CANONICAL_REGISTRY_URL=http://127.0.0.1:1); RC=$?
+want "10 an unreachable registry does not lose the capture" 0 "$RC"
+want "10 and the manifest says the digest is unresolved" "[3504] UNRESOLVED:3504" "$(field $TH 2026-11-05 schema_ids) $(field $TH 2026-11-05 schema_digest_status)"
+fresh a11; printf '%s\n' "0 $THU1 7" > "$OE_FIXTURE.log"; echo "0 1" > "$OE_FIXTURE.range"
+OUT=$(arun $TH); RC=$?
+want "11 a schemaVersion the table does not know is recorded as unmapped, not guessed" "[] UNMAPPED:version7" "$(field $TH 2026-11-05 schema_ids) $(field $TH 2026-11-05 schema_digest_status)"
+fresh a12; printf '%s\n' "0 -" > "$OE_FIXTURE.log"; echo "0 1" > "$OE_FIXTURE.range"
+OUT=$(arun $DEPTH); RC=$?
+want "12 depth: id 3301 with its digest" "[3301] RESOLVED" "$(field $DEPTH 2026-11-10 schema_ids) $(field $DEPTH 2026-11-10 schema_digest_status)"
 
 echo
 [ ! -s "$T/awk-crashes" ] || echo "NOTE  the host awk died with SIGSEGV in $(wc -l < "$T/awk-crashes" | tr -d " ") archiver run(s); each was run again"
