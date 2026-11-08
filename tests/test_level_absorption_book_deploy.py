@@ -1,6 +1,6 @@
 """The BOOK input of the level absorption service (document A revision 12, work package K3) as the deploy repository declares it.
 
-The book is off until the engine's version 2 records exist; it is configured on development only; its environment literal is the engine's; and its gate is never set.
+The book is on for development only (the engine's version 2 records exist); it is configured on development only; its environment literal is the engine's; and its gate is never set.
 """
 import pathlib
 import re
@@ -18,10 +18,10 @@ def env(text, name):
 
 
 class BookDeploy(unittest.TestCase):
-    def test_the_book_is_declared_off_and_the_slice_mirrors_the_patch(self):
+    def test_the_book_is_declared_on_for_dev_and_the_slice_mirrors_the_patch(self):
         for f in (PATCH, SLICE):
             t = f.read_text()
-            self.assertEqual(env(t, "LEVEL_ABSORPTION_BOOK_ENABLED"), "false", f)
+            self.assertEqual(env(t, "LEVEL_ABSORPTION_BOOK_ENABLED"), "true", f)
             self.assertEqual(env(t, "LEVEL_ABSORPTION_BOOK_CONTRACTS"), "classpath:/book-contracts.txt", f)
             self.assertEqual(env(t, "LEVEL_ABSORPTION_BOOK_ENVIRONMENT"), "Rithmic Paper Trading", f)
 
