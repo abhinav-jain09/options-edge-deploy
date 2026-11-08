@@ -1,0 +1,72 @@
+# DEV-ONLY: run the dealer ledger and its calibration pair. Owner request 2026-11-07: "enable dealer
+# ledger service on dev and make sure it works with dealer calibration service".
+#
+# The base ships all three inert (replicas 0) and dev-cleanup.sh's DISABLED_DEV also held them, so BOTH
+# had to change: replicas alone would be re-zeroed by the next bring-up, and removing the DISABLED_DEV
+# entry alone would leave the declared state at 0. Production and es4 are UNTOUCHED - the base keeps
+# replicas 0 there and morning-autostart.sh / oe-boot-bringup.sh keep all three in KEEP_DOWN.
+#
+# WHY ALL THREE AND NOT JUST THE LEDGER. They are one feedback loop, and the ledger is the only member
+# that cannot be judged alone:
+#   dealer-ledger-service      -> dealer-ledger-signal-fired
+#   dealer-ledger-calibration-scorer   signal-fired + outcomes -> dealer-ledger-outcome-scored
+#   dealer-ledger-calibration-accumulator  outcome-scored -> dealer-ledger-calibration-state (+ Postgres)
+#   dealer-ledger-service      reads calibration-state back through a GLOBAL store
+# Enabling the ledger without the pair would leave its calibration store permanently empty, which is
+# indistinguishable from a broken one.
+#
+# PREREQUISITES, every one VERIFIED on dev before this patch was written (2026-11-07):
+#   1. Images present in the dev registry: options-edge-dealer-ledger:dev (2140-43dbc61fef32) and
+#      options-edge-dealer-ledger-calibration:dev (1450-75f441456157). Dev pulls from
+#      host.docker.internal:5001, not prod's registry.
+#   2. The Avro INPUTS are governed and registered on the dev registry at the ids the modules'
+#      schema-requirements.json demand: DeltaFlowSnapshot id 3017 (ledger) and UnderlyingPrice id 2056
+#      (calibration). Both confirmed id-exact against http://192.168.100.102:8082.
+#   3. The OUTPUTS need no registry work: the ledger's topology uses Serdes.String for them (27 String
+#      serdes to 3 Avro, the Avro ones being the governed inputs), so nothing here auto-registers a
+#      subject and nothing becomes UNMANIFESTED drift. Both modules declare `produces: []`.
+#   4. All five dealer topics already exist on dev - dealer-ledger-profile, dealer-ledger-state,
+#      dealer-ledger-signal-fired, dealer-ledger-outcome-scored, dealer-ledger-calibration-state - and
+#      every one is EMPTY, so the global-store restore in (5) costs nothing today.
+#   5. The accumulator re-seeds from Postgres on start. options_flow_dev carries the `calibration` schema
+#      with outcome_scored and calibration_state, reachable at the configured
+#      jdbc:postgresql://host.docker.internal:5432/options_flow_dev.
+#   6. The five Kafka inputs carry data (gex.strike 10.5M, raw 7.8M, strike-flow 34k, heatmap 47k,
+#      delta-flow-session 118k) and the ledger's regular sources use AUTO_OFFSET_RESET=latest, so it
+#      starts at the end and replays none of it.
+#
+# ⚠ THE ONE HAZARD TO WATCH, and it is latent rather than present: the ledger reads calibration state
+# through topology.addGlobalStore(). A Kafka Streams GLOBAL store IGNORES auto.offset.reset - it restores
+# from its checkpoint, and on an emptyDir there is never one, so it reads dealer-ledger-calibration-state
+# from offset 0 on EVERY pod start. That is free while the topic is empty (prerequisite 4) and grows into
+# a per-restart cost as calibration state accumulates. The same mechanism once replayed 12.7M records
+# across 11 dates. If the ledger's startup becomes slow, this is why; the fix is a persistent state dir,
+# not a change to auto.offset.reset, which does not govern a global store.
+#
+# WHAT THIS CANNOT PROVE TODAY: it is Saturday and the market is shut, so no NEW input will arrive until
+# the next session. Starting these three proves the wiring - they stay up, they join their groups at the
+# end of the inputs, the global store restores, Postgres re-seeds - but the loop only carries data from
+# the next open. The firing path is verified then, not now.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dealer-ledger-service
+  namespace: options-edge
+spec:
+  replicas: 1
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dealer-ledger-calibration-scorer
+  namespace: options-edge
+spec:
+  replicas: 1
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dealer-ledger-calibration-accumulator
+  namespace: options-edge
+spec:
+  replicas: 1

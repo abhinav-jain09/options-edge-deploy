@@ -79,8 +79,12 @@
               "
               ;;
             dealer-ledger-service)
+              # BOTH images: this target deploys the ledger with its calibration pair as one feedback loop
+              # (apply.sh), so preflighting the ledger alone would let a missing or unpushed calibration
+              # image be discovered only after the ledger had already rolled.
               images="
                 DEALER_LEDGER_IMAGE=$DEALER_LEDGER_IMAGE
+                DEALER_LEDGER_CALIBRATION_IMAGE=$DEALER_LEDGER_CALIBRATION_IMAGE
               "
               ;;
             strike-liquidity-heatmap-service)

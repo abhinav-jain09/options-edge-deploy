@@ -87,6 +87,18 @@
               }
               export DEALER_LEDGER_IMAGE
               echo "pinned DEALER_LEDGER_IMAGE -> $DEALER_LEDGER_IMAGE"
+              # The ledger and its calibration pair are ONE feedback loop: the ledger emits
+              # dealer-ledger-signal-fired, the scorer turns outcomes into dealer-ledger-outcome-scored,
+              # the accumulator aggregates them into dealer-ledger-calibration-state, and the ledger reads
+              # that back through a global store. A target that deployed the ledger alone left its
+              # calibration store permanently empty, which is indistinguishable from a broken one - so this
+              # target carries all three. Found by Codex on the dev-enable review.
+              DEALER_LEDGER_CALIBRATION_IMAGE="$(pin_ref "$DEALER_LEDGER_CALIBRATION_IMAGE")" || {
+                echo "FATAL: cannot resolve registry digest for DEALER_LEDGER_CALIBRATION_IMAGE=$DEALER_LEDGER_CALIBRATION_IMAGE; aborting before any kubectl mutation." >&2
+                exit 1
+              }
+              export DEALER_LEDGER_CALIBRATION_IMAGE
+              echo "pinned DEALER_LEDGER_CALIBRATION_IMAGE -> $DEALER_LEDGER_CALIBRATION_IMAGE"
               rewrite_images_env "$JENKINS_WORK_DIR/options-edge-images.env"
               _target_render="$JENKINS_WORK_DIR/options-edge-${ENVIRONMENT}-dealer-ledger.yaml"
               kubectl kustomize "k8s/overlays/${ENVIRONMENT}" \
@@ -96,9 +108,13 @@
                       or (.kind == "ConfigMap" and .metadata.name == "options-edge-config")
                       or (.kind == "Service" and .metadata.name == "dealer-ledger-service")
                       or (.kind == "Deployment" and .metadata.name == "dealer-ledger-service")
+                      or (.kind == "Deployment" and .metadata.name == "dealer-ledger-calibration-scorer")
+                      or (.kind == "Deployment" and .metadata.name == "dealer-ledger-calibration-accumulator")
                     )
                   ' >"$_target_render"
               yq -i '(. | select(.kind == "Deployment" and .metadata.name == "dealer-ledger-service").spec.template.spec.containers[] | select(.name == "dealer-ledger").image) = strenv(DEALER_LEDGER_IMAGE)' "$_target_render"
+              yq -i '(. | select(.kind == "Deployment" and .metadata.name == "dealer-ledger-calibration-scorer").spec.template.spec.containers[] | select(.name == "dealer-ledger-calibration-scorer").image) = strenv(DEALER_LEDGER_CALIBRATION_IMAGE)' "$_target_render"
+              yq -i '(. | select(.kind == "Deployment" and .metadata.name == "dealer-ledger-calibration-accumulator").spec.template.spec.containers[] | select(.name == "dealer-ledger-calibration-accumulator").image) = strenv(DEALER_LEDGER_CALIBRATION_IMAGE)' "$_target_render"
               _unpinned_rendered="$(yq -r 'select(.kind=="Deployment") | (.spec.template.spec.containers[].image), (.spec.template.spec.initContainers[]?.image)' "$_target_render" \
                 | { grep '/options-edge-' || true; } | { grep -v '@sha256:' || true; })"
               if [ -n "$_unpinned_rendered" ]; then
@@ -117,6 +133,10 @@
                 exit 0
               fi
               kubectl apply -f "$_target_render"
+              # Waited for in loop order - the accumulator and scorer first, so that by the time the ledger
+              # is READY the topics it reads back already have their writers running.
+              kubectl -n options-edge rollout status deployment/dealer-ledger-calibration-accumulator --timeout=1260s
+              kubectl -n options-edge rollout status deployment/dealer-ledger-calibration-scorer --timeout=1260s
               kubectl -n options-edge rollout status deployment/dealer-ledger-service --timeout=1260s
               scripts/deploy/verify-running-images.sh "$JENKINS_WORK_DIR/options-edge-images.env"
               exit 0

@@ -103,7 +103,10 @@ elif deploy_target == "delta-flow-service":
 elif deploy_target == "strike-liquidity-heatmap-service":
     target_deployments = {"strike-liquidity-heatmap-service"}
 elif deploy_target == "dealer-ledger-service":
-    target_deployments = {"dealer-ledger-service"}
+    # All three: apply.sh's dealer-ledger target deploys the ledger with its calibration pair as one
+    # loop, so verifying the ledger alone would let a stale calibration image pass a "successful" deploy.
+    target_deployments = {"dealer-ledger-service", "dealer-ledger-calibration-scorer",
+                          "dealer-ledger-calibration-accumulator"}
 elif deploy_target == "dealer-ledger-calibration":
     target_deployments = {"dealer-ledger-calibration-scorer", "dealer-ledger-calibration-accumulator"}
 else:
