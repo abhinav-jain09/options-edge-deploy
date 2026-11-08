@@ -37,6 +37,7 @@
 //   * no dry-run path (it can neither publish nor seed secrets).
 // What it does NOT have is a verified chain over the collector's own build — that is the property the
 // `out` classification is stating plainly.
+// NOT-A-MIRROR: this RELEASES the Rithmic depth bridge (a two-source deploy job); it moves no records itself, so it has no transport, no direction and no subjects. The mirror the bridge performs is declared by the bridge's own job.
 pipeline {
   agent { label 'local-mac' }
   parameters {
