@@ -1050,6 +1050,10 @@
       [
         3501,
         3510
+      ],
+      [
+        3511,
+        3511
       ]
     ],
     "liquidityvalidator": [
@@ -11770,6 +11774,50 @@
       "consumers": [],
       "retained": true,
       "retainedReason": "curated, not baseline: strike-hold-service (NEW, dev only; contracts 0.90.0 schemas-registry/strikehold) writes it on options.spx.strike-hold.scoring under RecordNameStrategy with auto.register.schemas=false (its schema-requirements.json names this id and hash). The EVIDENCE RECORD the base rate is computed from: one row per candidate strike per session, so the topic must NEVER be compacted \u2014 compaction would not degrade the measurement, it would delete it. `held` is a NULLABLE boolean by requirement: a refusal carries null, so it can never be averaged in as an outcome. Dev only; nothing is registered on production or es4."
+    },
+    {
+      "kind": "MIRRORED",
+      "subject": "com.optionsedge.contracts.esmbo.EsMboCoverage",
+      "version": 1,
+      "id": 3511,
+      "family": "esmbo",
+      "schemaFile": "com.optionsedge.contracts.esmbo.EsMboCoverage/v1.avsc",
+      "schemaHash": "753cb336f0087e1bd76f5038095022a0e8e6767cd9f1adefeef031e5c4af4686",
+      "environments": [
+        "dev"
+      ],
+      "source": {
+        "kind": "FILE",
+        "repo": "contracts",
+        "path": "schemas-registry/esmbo/EsMboCoverage.avsc"
+      },
+      "topics": [
+        {
+          "name": "es.mbo.coverage",
+          "kind": "data"
+        }
+      ],
+      "producers": [
+        {
+          "service": "es-liquidity-engine",
+          "environments": [
+            "dev"
+          ]
+        }
+      ],
+      "consumers": [
+        {
+          "service": "strike-hold",
+          "accepts": [
+            3511
+          ],
+          "environments": [
+            "dev"
+          ]
+        }
+      ],
+      "retained": true,
+      "retainedReason": "curated, not baseline: THE COVERAGE MESSAGE (owner-approved). es-liquidity-engine-service writes it on es.mbo.coverage under RecordNameStrategy with auto.register.schemas=false (its schema-requirements.json names this id and hash), and strike-hold-service reads it to tell 'the book showed nothing here' from 'the engine was not watching here' \u2014 without it no absence can honestly be claimed, which is why strike-hold reports ABSORPTION_COVERAGE_UNAVAILABLE and never ABSENT until this exists. A NEW SUBJECT rather than a field on EsMboHealth (3509) deliberately: health is at a fixed id, so a new field means a new version under a new id, and level-absorption-service pins accepts: [3509], which would have forced that consumer to roll in the same change. Id 3511 EXTENDS the esmbo family block past 3501-3510, which was full. Dev only."
     }
   ],
   "dlqTopics": {

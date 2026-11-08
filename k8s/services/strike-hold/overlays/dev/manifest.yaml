@@ -51,7 +51,7 @@ spec:
             - name: KAFKA_STRIKE_HOLD_ABSORPTION_TOPIC
               value: es.mbo.liquidity-events
             - name: KAFKA_STRIKE_HOLD_COVERAGE_TOPIC
-              value: ""
+              value: es.mbo.coverage
             - name: KAFKA_STRIKE_HOLD_OUTPUT_TOPIC
               value: options.spx.strike-hold.current
             - name: KAFKA_STRIKE_HOLD_SCORING_TOPIC
