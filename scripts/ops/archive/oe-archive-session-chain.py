@@ -19,6 +19,7 @@ es.mbo.level-flow, es.mbo.level-flow-final, es.mbo.health, es.mbo.closures) and 
      broker_beginning_offset is at or before its starting checkpoint; it records capture_wall_start and
      capture_wall_end (start not after end). A capture without these members (written before 2026-11-08) cannot
      prove any of this: it makes the sessions it touches BOOK_INCOMPLETE (LEGACY_CAPTURE), never complete.
+     A manifest line whose gzip file is gone is a hole too (FILE_MISSING): the manifests alone prove nothing about the data.
   3. THE SESSION'S SPAN. The chain must run from a capture that STARTED (capture_wall_start) at or before the
      session's start instant (18:00 America/New_York of the previous calendar day) through the terminal file: the
      first file whose largest bucketEnd (max_bucket_end) is at or after the next trade date's 09:30
@@ -242,6 +243,9 @@ def check_partition(entries, start_ms, terminal_ms):
         why.append("FILE_HOLE[%d,%d)" % (a, b))
     if span and int(span[0]["offset_from"]) > lo:
         why.append("FILE_HOLE[%d,%d)" % (lo, int(span[0]["offset_from"])))
+    for e in span:
+        if not os.path.isfile(os.path.join(e["dir"], e["file"])):
+            why.append("FILE_MISSING:%s" % e["file"])
     chain = [c for c in caps if c["first_from"] >= c0["first_from"] and c["first_from"] < hi]
     prev = None
     for c in chain:

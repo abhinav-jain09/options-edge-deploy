@@ -251,6 +251,16 @@ class Chain(unittest.TestCase):
         self.assertEqual(r["status"], "BOOK_INCOMPLETE")
         self.assertTrue(any("LEGACY_CAPTURE" in w for w in r["topics"]["es.mbo.health"]))
 
+    def test_a_deleted_archive_file_with_its_manifest_line_kept_is_incomplete(self):
+        healthy(self.a)
+        p = os.path.join(self.a.root, "kafka", "dev", "es.mbo.health", "dt=2026-11-09")
+        victim = [f for f in os.listdir(p) if f.endswith(".gz")][0]
+        os.remove(os.path.join(p, victim))
+        r = report(self.a)
+        self.assertEqual(r["status"], "BOOK_INCOMPLETE")
+        self.assertIn("p0:FILE_MISSING:" + victim, r["topics"]["es.mbo.health"])
+        self.assertEqual(r["topics"]["es.mbo.level-flow"], [])     # the other topics are still whole
+
     def test_a_null_starting_checkpoint_is_only_the_first_capture(self):
         a = self.a
         def f(t):
