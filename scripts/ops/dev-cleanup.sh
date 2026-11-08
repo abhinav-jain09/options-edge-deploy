@@ -489,8 +489,12 @@ reconcile_declared_topics() {
   local desc line spec name cfg have_pol have_ret have_dr have_mb have_rb have_parts need polcfg lowers fixed=0 drift=0
   desc="$($KT --bootstrap-server $BS --describe 2>/dev/null | grep '^Topic:')"
   if [ -z "$desc" ]; then
+    # NOT VERIFIED IS NOT VERIFIED OK. This returned 0 while saying the shapes were not checked,
+    # so an undescribable cluster passed the shape check and the caller scaled up on it. "I could
+    # not tell" must not read as "it is fine" — the same substitution this round removed in three
+    # other places.
     echo "  WARNING: could not describe topics — declared shapes NOT verified this run."
-    return 0
+    return 1
   fi
   for spec in $OPTIONS_EDGE_TOPICS; do
     name="${spec%%:*}"
@@ -581,6 +585,12 @@ reconcile_declared_topics() {
     esac
   done
   echo "  shape check: $fixed config(s) reconciled, $drift unresolved."
+  # REPORTED, not only printed. This counted unresolved drift — an absent topic, a failed alter, an
+  # exact-partition mismatch — and then returned 0 regardless, so every caller read success. That
+  # made ensure_topics succeed on a drifted cluster and made the refusal added for Codex deploy r15
+  # unable to fire for the failures it exists for: a guard on a status that is never non-zero
+  # (Codex deploy r17).
+  [ "$drift" -eq 0 ]
 }
 
 # create_topics_parallel: read one topic's create arguments per line on stdin ("--topic X --partitions N ...")
@@ -713,10 +723,16 @@ ensure_topics() {
       echo "--topic $name --partitions $DPARTS --replication-factor 1 --config cleanup.policy=$DPOL $extra $rt"
     done | create_topics_parallel)
     echo "Pre-created $n platform topics from deploy config ($tref); apps self-create the rest on startup."
-    ensure_partition_only_topics
-    reconcile_declared_topics
-    ensure_dev_only_estimate_topics
+    local rc=0
+    ensure_partition_only_topics || rc=1
+    # The shape check's verdict now carries. Before this it was printed and dropped.
+    reconcile_declared_topics || rc=1
+    ensure_dev_only_estimate_topics || rc=1
     echo "  topics present now: $(topic_count '^__|^_schemas' v)"
+    if [ "$rc" -ne 0 ]; then
+      echo "  topics: at least one declared topic is MISSING or DRIFTED — see the warnings above."
+      return 1
+    fi
   else
     echo "  WARNING: could not read deploy topics.env ($DEPLOY_REPO $tref) — apps will create their topics on startup (slower to READY)."
     return 1   # resume_dev_mirrors_if_declared keeps the mirrors paused: nothing was created at its declared shape
@@ -1467,8 +1483,33 @@ PY
         elif [ "${DKC_DRYRUN:-0}" = 1 ]; then echo "DRYRUN: CLEAN slot ($SLOTINFO) -> do_clean (WIPE) + overnight ES start"
         else
           : > "$CLEAN_MARK"
-          { if do_clean; then echo "clean: OK"; else echo "clean: FAILED (rc=$?) — the overnight ES start proceeds on the UN-WIPED state; re-run 'dev-cleanup now' by hand after 17:20 ET if a wipe is needed"; fi
-            echo "--- overnight ES-tracking start ---"; do_start_overnight; } >> "$LOG" 2>&1
+          { clean_rc=0; do_clean || clean_rc=$?
+            if [ "$clean_rc" -eq 0 ]; then
+              echo "clean: OK"
+            elif [ "${CLEAN_TOPICS_FAILED:-0}" = 1 ]; then
+              # TELL THE TRUTH ABOUT WHICH FAILURE THIS IS. The old message said the overnight start
+              # "proceeds on the UN-WIPED state", which is right when the wipe itself was refused and
+              # WRONG for the failure the topic guard added: there the deletion SUCCEEDED and the
+              # recreation did not, so dev is down, the mirrors are paused, and the non-preserved
+              # topics are gone or only partly back. An operator reading "un-wiped" would do exactly
+              # the wrong thing (Codex deploy r17).
+              echo "clean: FAILED (rc=$clean_rc) — the WIPE RAN and the topic recreation did NOT finish."
+              echo "       Non-preserved topics are deleted or only partly recreated, dev is down and the"
+              echo "       es4->dev mirrors are PAUSED. The overnight start below will refuse to scale"
+              echo "       anything up until a topic pass succeeds. Recover with 'dev-cleanup topics'"
+              echo "       (repeat until it exits 0), then 'dev-cleanup overnight'."
+            else
+              echo "clean: FAILED (rc=$clean_rc) — the overnight ES start proceeds on the UN-WIPED state;"
+              echo "       re-run 'dev-cleanup now' by hand after 17:20 ET if a wipe is needed"
+            fi
+            echo "--- overnight ES-tracking start ---"
+            start_rc=0; do_start_overnight || start_rc=$?
+            # THE COMBINED VERDICT CARRIES. This block's status was discarded, so launchd could read
+            # success after BOTH the clean and the overnight start had failed.
+            if [ "$clean_rc" -ne 0 ] || [ "$start_rc" -ne 0 ]; then
+              AUTO_SLOT_FAILED=1
+              echo "auto CLEAN slot: FAILED (clean rc=$clean_rc, overnight start rc=$start_rc)"
+            fi; } >> "$LOG" 2>&1
         fi ;;
       CLEAN_LATE)
         # Past the wipe deadline (17:40 ET): too late to start a 5-10 min wipe and still have the
@@ -1536,4 +1577,11 @@ esac
 if [ "${DEV_MIRRORS_RESUME_FAILED:-0}" != 0 ]; then
   echo "dev-cleanup: FINISHED WITH FROZEN MIRRORS — es4 -> dev is not flowing (see the ERROR above)"
   exit 3
+fi
+# AND THE AUTOMATIC SLOT'S VERDICT. The CLEAN slot runs its work inside a redirected block whose
+# status was dropped, so launchd read 0 after both the clean and the overnight start had failed
+# (Codex deploy r17). Same reasoning as the mirrors above: the work is over, so this REPORTS.
+if [ "${AUTO_SLOT_FAILED:-0}" != 0 ]; then
+  echo "dev-cleanup: the automatic slot FAILED — see $LOG (nothing may be scaled up until a topic pass exits 0)"
+  exit 4
 fi
