@@ -43,13 +43,22 @@ REQUIRED = "CI-REQUIRED"
 PYTHON = re.compile(r"^(?:[A-Za-z0-9_.+-]*/)*python3?(?:\.\d+)?$")
 MODULE = re.compile(r"^tests\.[A-Za-z0-9_]+$")
 
-# unittest flags that take NO value. A flag that consumes the next argument is deliberately absent: with
-# `-k MODULE` the module is a name filter, not a target, so such a step does not run the module and must
-# not qualify. Anything not listed here disqualifies the line rather than being ignored.
+# unittest flags that take NO value, read off `python3 -m unittest --help` rather than from memory:
+#     -v/--verbose  -q/--quiet  --locals  -f/--failfast  -c/--catch  -b/--buffer
+# A flag that CONSUMES the next argument must not be here. With `-k MODULE` or `--durations MODULE` the
+# module is swallowed as the option's value, so the step does not run it - and `--durations` in particular
+# I had wrongly listed as boolean until Codex r4 caught it; the interpreter's own message is
+# "argument --durations: invalid int value: 'tests.nonexistent'".
 BOOLEAN_FLAGS = {
-    "-v", "--verbose", "-q", "--quiet", "-f", "--failfast", "-c", "--catch",
-    "-b", "--buffer", "--locals", "--durations",
+    "-v", "--verbose", "-q", "--quiet", "-f", "--failfast", "-c", "--catch", "-b", "--buffer", "--locals",
 }
+# Named only so the rejection can say WHY. Anything absent from BOOLEAN_FLAGS is rejected regardless, so
+# a flag added to unittest in a future Python is fail-closed rather than quietly accepted.
+VALUE_FLAGS = {"-k", "-s", "--start-directory", "-p", "--pattern", "-t", "--top-level-directory",
+               "--durations"}
+# These run no tests at all.
+NON_RUNNING_FLAGS = {"-h", "--help"}
+SHORT_BOOLEANS = {f[1] for f in BOOLEAN_FLAGS if len(f) == 2}
 
 
 def qualifies(run, module):
@@ -79,9 +88,18 @@ def qualifies(run, module):
             modules.append(tok)
         elif tok in BOOLEAN_FLAGS:
             flags.append(tok)
+        elif (len(tok) > 2 and tok[0] == "-" and tok[1] != "-"
+              and set(tok[1:]) <= SHORT_BOOLEANS):
+            # a combined short form such as -vb; legitimate, and refusing it would be a false rejection
+            flags.append(tok)
+        elif tok in NON_RUNNING_FLAGS:
+            return False, "the command passes %s, which prints usage and runs no tests" % tok
+        elif tok in VALUE_FLAGS:
+            return False, ("the command passes %s, which CONSUMES the next argument, so the module name "
+                           "after it is that option's value and is not run" % tok)
         else:
-            return False, ("the token %r is neither a tests.* module nor a flag that takes no value, so "
-                           "what this command runs cannot be established" % tok)
+            return False, ("the token %r is neither a tests.* module nor a flag known to take no value, "
+                           "so what this command runs cannot be established" % tok)
     if not modules:
         return False, "the command names no tests.* module"
     if module not in modules:
