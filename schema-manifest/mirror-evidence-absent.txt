@@ -1,4 +1,3 @@
 # (environment topic)  # reason. Topics a byte-copy mirror job declares but that do not exist on its source cluster. Must stay true: scripts/ci/schema-mirror-evidence.py
 es4 es.options.indicators.studies.bars     # no studies mirror unit runs and es4 does not hold the studies schemas (measured 2026-11-03)
 es4 es.options.indicators.studies.current  # same
-es4 es.rithmic.mbo  # new MBO source pending the first guarded ES4 rollout; absent in source Kafka metadata before activation (2026-11-05)

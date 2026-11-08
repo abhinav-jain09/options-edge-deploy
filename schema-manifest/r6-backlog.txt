@@ -24,7 +24,6 @@ gex-delta-redis-writer
 hpsf-processing-service
 indicator-service
 level-absorption-extractor
-level-absorption-service
 market-carry-service
 market-structure-service
 oi-next-publication-service
