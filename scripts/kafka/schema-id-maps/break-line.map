@@ -1,0 +1,10 @@
+# Fixed schema ids for break-line-service (Break Score rev 13; NEW, dev only). Contracts options-edge-contracts 0.92.0 (schemas-registry/breakline), ids 3901-3905 of the block 3901-3910 (3906-3910 are reserved and unused),
+# version 1, namespace com.optionsedge.contracts.breakline, subject = the record full name (RecordNameStrategy), compatibility FULL. One record TYPE per topic:
+# futures.break-line.lines 3901, futures.break-line.state 3902, futures.break-line.events 3903, futures.break-line.status 3904, futures.break-line.snapshot 3905. The service and the web tier write with
+# auto.register.schemas=false (the service's src/main/resources/schema-requirements.json names these ids and hashes). Dev only; nothing is registered on production or es4.
+# File column: relative to the contracts checkout's `schemas-registry/breakline` directory (SCHEMAS_DIR).
+com.optionsedge.contracts.breakline.BreakLineCommand|3901|BreakLineCommand.avsc
+com.optionsedge.contracts.breakline.BreakLineState|3902|BreakLineState.avsc
+com.optionsedge.contracts.breakline.BreakLineEvent|3903|BreakLineEvent.avsc
+com.optionsedge.contracts.breakline.BreakLineStatus|3904|BreakLineStatus.avsc
+com.optionsedge.contracts.breakline.BreakLineSnapshot|3905|BreakLineSnapshot.avsc

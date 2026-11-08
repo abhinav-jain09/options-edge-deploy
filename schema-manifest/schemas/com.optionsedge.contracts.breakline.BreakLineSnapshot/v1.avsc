@@ -1,0 +1,198 @@
+{
+  "type": "record",
+  "name": "BreakLineSnapshot",
+  "namespace": "com.optionsedge.contracts.breakline",
+  "doc": "The restart snapshot of the break line service, written in the same transaction as the outputs it describes. Topic futures.break-line.snapshot, compacted, key break-line, fixed id 3905.",
+  "fields": [
+    {
+      "name": "schemaVersion",
+      "type": "int",
+      "default": 1
+    },
+    {
+      "name": "messageType",
+      "type": "string",
+      "default": "BREAK_LINE_SNAPSHOT"
+    },
+    {
+      "name": "environment",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "environmentLabel",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "contract",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "codeVersion",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "settingsDigest",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "ledgerDigest",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "tableDigest",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "tradeDate",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "snapshotSequence",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    },
+    {
+      "name": "formatVersion",
+      "type": [
+        "null",
+        "int"
+      ],
+      "default": null
+    },
+    {
+      "name": "releaseWatermarkKey",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "positions",
+      "type": [
+        "null",
+        {
+          "type": "array",
+          "items": {
+            "type": "record",
+            "name": "BreakLinePosition",
+            "namespace": "com.optionsedge.contracts.breakline",
+            "doc": "The consumed position of one input partition.",
+            "fields": [
+              {
+                "name": "input",
+                "type": [
+                  "null",
+                  "string"
+                ],
+                "default": null
+              },
+              {
+                "name": "topic",
+                "type": [
+                  "null",
+                  "string"
+                ],
+                "default": null
+              },
+              {
+                "name": "partition",
+                "type": [
+                  "null",
+                  "int"
+                ],
+                "default": null
+              },
+              {
+                "name": "nextOffset",
+                "type": [
+                  "null",
+                  "long"
+                ],
+                "default": null
+              },
+              {
+                "name": "ringFromOffset",
+                "type": [
+                  "null",
+                  "long"
+                ],
+                "default": null
+              }
+            ]
+          }
+        }
+      ],
+      "default": null
+    },
+    {
+      "name": "payloadDigest",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null,
+      "doc": "SHA-256 hex of the uncompressed payload"
+    },
+    {
+      "name": "payloadLength",
+      "type": [
+        "null",
+        "int"
+      ],
+      "default": null
+    },
+    {
+      "name": "payload",
+      "type": [
+        "null",
+        "bytes"
+      ],
+      "default": null,
+      "doc": "deflated"
+    },
+    {
+      "name": "createdAtEpochMillis",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    }
+  ]
+}

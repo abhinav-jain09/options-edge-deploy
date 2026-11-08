@@ -1,0 +1,665 @@
+{
+  "type": "record",
+  "name": "BreakLineEvent",
+  "namespace": "com.optionsedge.contracts.breakline",
+  "doc": "One event of the break line service: a transition, a score, a revision, a line change, a refusal or a recorded watermark advance. Topic futures.break-line.events, key eventId, fixed id 3903.",
+  "fields": [
+    {
+      "name": "schemaVersion",
+      "type": "int",
+      "default": 1
+    },
+    {
+      "name": "messageType",
+      "type": "string",
+      "default": "BREAK_LINE_EVENT"
+    },
+    {
+      "name": "eventId",
+      "type": "string",
+      "doc": "lineId|eventSequence, refusal|topic|partition|offset or watermark|advanceSequence; the record key"
+    },
+    {
+      "name": "scope",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null,
+      "doc": "TRANSITION, SCORE, SCORE_REVISION, LINE_MOVED, LINE_DELETED, EPISODE_CLOSED, REFUSAL or WATERMARK_ADVANCE"
+    },
+    {
+      "name": "lineId",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "ownerTag",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "episodeId",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "episodeNumber",
+      "type": [
+        "null",
+        "int"
+      ],
+      "default": null
+    },
+    {
+      "name": "scoreRevision",
+      "type": [
+        "null",
+        "int"
+      ],
+      "default": null
+    },
+    {
+      "name": "eventSequence",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    },
+    {
+      "name": "eventEpochMillis",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null,
+      "doc": "data time"
+    },
+    {
+      "name": "environment",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "environmentLabel",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "contract",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "codeVersion",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "settingsDigest",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "ledgerDigest",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "tableDigest",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "tradeDate",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "fromState",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "toState",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "rowId",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "printKey",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null,
+      "doc": "time|sequence|partition|offset"
+    },
+    {
+      "name": "bucketEnd",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    },
+    {
+      "name": "esTick",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    },
+    {
+      "name": "basisCents",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    },
+    {
+      "name": "basisStatus",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "dTicks",
+      "type": [
+        "null",
+        "int"
+      ],
+      "default": null
+    },
+    {
+      "name": "jumped",
+      "type": [
+        "null",
+        "boolean"
+      ],
+      "default": null
+    },
+    {
+      "name": "touchCount",
+      "type": [
+        "null",
+        "int"
+      ],
+      "default": null
+    },
+    {
+      "name": "dir",
+      "type": [
+        "null",
+        "int"
+      ],
+      "default": null
+    },
+    {
+      "name": "tBreakEpochMillis",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    },
+    {
+      "name": "tScoreEpochMillis",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    },
+    {
+      "name": "maxdTicks",
+      "type": [
+        "null",
+        "int"
+      ],
+      "default": null
+    },
+    {
+      "name": "scoreStatus",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "score",
+      "type": [
+        "null",
+        "int"
+      ],
+      "default": null
+    },
+    {
+      "name": "band",
+      "type": [
+        "null",
+        "int"
+      ],
+      "default": null
+    },
+    {
+      "name": "calibrationState",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "components",
+      "type": [
+        "null",
+        {
+          "type": "array",
+          "items": {
+            "type": "record",
+            "name": "BreakLineComponent",
+            "namespace": "com.optionsedge.contracts.breakline",
+            "doc": "One of the seven components C1..C7: raw value, availability, signed value in thousandths, its inputs and span.",
+            "fields": [
+              {
+                "name": "code",
+                "type": [
+                  "null",
+                  "string"
+                ],
+                "default": null
+              },
+              {
+                "name": "measure",
+                "type": [
+                  "null",
+                  "string"
+                ],
+                "default": null
+              },
+              {
+                "name": "raw",
+                "type": [
+                  "null",
+                  "long"
+                ],
+                "default": null
+              },
+              {
+                "name": "rawUnit",
+                "type": [
+                  "null",
+                  "string"
+                ],
+                "default": null,
+                "doc": "MILLI or TICKS"
+              },
+              {
+                "name": "available",
+                "type": [
+                  "null",
+                  "boolean"
+                ],
+                "default": null
+              },
+              {
+                "name": "reason",
+                "type": [
+                  "null",
+                  "string"
+                ],
+                "default": null
+              },
+              {
+                "name": "signedMilli",
+                "type": [
+                  "null",
+                  "int"
+                ],
+                "default": null
+              },
+              {
+                "name": "inputs",
+                "type": [
+                  "null",
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "record",
+                      "name": "BreakLineKv",
+                      "namespace": "com.optionsedge.contracts.breakline",
+                      "doc": "A named integer (an input sum of a measure).",
+                      "fields": [
+                        {
+                          "name": "name",
+                          "type": [
+                            "null",
+                            "string"
+                          ],
+                          "default": null
+                        },
+                        {
+                          "name": "value",
+                          "type": [
+                            "null",
+                            "long"
+                          ],
+                          "default": null
+                        }
+                      ]
+                    }
+                  }
+                ],
+                "default": null
+              },
+              {
+                "name": "span",
+                "type": [
+                  "null",
+                  {
+                    "type": "record",
+                    "name": "BreakLineSpan",
+                    "namespace": "com.optionsedge.contracts.breakline",
+                    "doc": "The buckets a measure or a score read: first and last bucket end, usable and unusable counts, first unusable reason.",
+                    "fields": [
+                      {
+                        "name": "firstBucketEnd",
+                        "type": [
+                          "null",
+                          "long"
+                        ],
+                        "default": null
+                      },
+                      {
+                        "name": "lastBucketEnd",
+                        "type": [
+                          "null",
+                          "long"
+                        ],
+                        "default": null
+                      },
+                      {
+                        "name": "usable",
+                        "type": [
+                          "null",
+                          "int"
+                        ],
+                        "default": null
+                      },
+                      {
+                        "name": "unusable",
+                        "type": [
+                          "null",
+                          "int"
+                        ],
+                        "default": null
+                      },
+                      {
+                        "name": "firstUnusableReason",
+                        "type": [
+                          "null",
+                          "string"
+                        ],
+                        "default": null
+                      }
+                    ]
+                  }
+                ],
+                "default": null
+              }
+            ]
+          }
+        }
+      ],
+      "default": null
+    },
+    {
+      "name": "explanation",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "span",
+      "type": [
+        "null",
+        "BreakLineSpan"
+      ],
+      "default": null
+    },
+    {
+      "name": "oldPriceUnits",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    },
+    {
+      "name": "newPriceUnits",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    },
+    {
+      "name": "lineRevision",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    },
+    {
+      "name": "terminalReason",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "terminalDetail",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "refusalReason",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "inputName",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "refusedTopic",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "refusedPartition",
+      "type": [
+        "null",
+        "int"
+      ],
+      "default": null
+    },
+    {
+      "name": "refusedOffset",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    },
+    {
+      "name": "advanceSequence",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    },
+    {
+      "name": "advanceReason",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null,
+      "doc": "IDLE_RELEASE, BOOK_WAIT or RESTART"
+    },
+    {
+      "name": "idleInput",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "positions",
+      "type": [
+        "null",
+        {
+          "type": "array",
+          "items": {
+            "type": "record",
+            "name": "BreakLinePosition",
+            "namespace": "com.optionsedge.contracts.breakline",
+            "doc": "The consumed position of one input partition.",
+            "fields": [
+              {
+                "name": "input",
+                "type": [
+                  "null",
+                  "string"
+                ],
+                "default": null
+              },
+              {
+                "name": "topic",
+                "type": [
+                  "null",
+                  "string"
+                ],
+                "default": null
+              },
+              {
+                "name": "partition",
+                "type": [
+                  "null",
+                  "int"
+                ],
+                "default": null
+              },
+              {
+                "name": "nextOffset",
+                "type": [
+                  "null",
+                  "long"
+                ],
+                "default": null
+              },
+              {
+                "name": "ringFromOffset",
+                "type": [
+                  "null",
+                  "long"
+                ],
+                "default": null
+              }
+            ]
+          }
+        }
+      ],
+      "default": null
+    },
+    {
+      "name": "watermarkKey",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null
+    },
+    {
+      "name": "wallEpochMillis",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    }
+  ]
+}
