@@ -334,6 +334,12 @@ jobs:
       - name: coverage topic wiring, both sides (each barrier's literal matches its own Deployment)
         run: python3 -m unittest -v tests.test_coverage_topic_wiring
 
+      - name: a failed topic recreation stops the clean (dev-cleanup, mocked)
+        run: bash scripts/ci/dev-cleanup-topic-recreation-fatal-test.sh
+
+      - name: the schema gate's apply path (GATE runs schema-sync, NOT_GATED does not)
+        run: bash scripts/ci/schema-gate-apply-path-test.sh
+
       # The sibling files apply-topics.sh sources must be copied by every test that runs it out of a
       # temp directory. Hard-coding that list is what made TWO such tests report findings about
       # topics.env the day apply-topics.sh gained resolve-prod-partition-overrides.sh (#1165): their

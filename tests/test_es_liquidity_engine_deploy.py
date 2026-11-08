@@ -214,7 +214,18 @@ def barrier_stage_body() -> str:
     i = j.index(needle)
     start = j.rindex("    stage(", 0, i)
     end = j.find("\n    stage(", i)
-    return j[start:end if end != -1 else len(j)]
+    body = j[start:end if end != -1 else len(j)]
+    # SANITY ON THE EXTRACTION ITSELF, because it is lexical: a `stage(` inside a comment or a string
+    # could make it select the wrong span, and an empty or truncated body would then satisfy a
+    # "not in" assertion while proving nothing (Codex deploy r15). These are cheap and make a bad
+    # extraction fail loudly instead of quietly.
+    if len(body) < 200 or "steps {" not in body or needle not in body:
+        raise AssertionError(
+            "the barrier stage extraction looks wrong: %d chars, steps=%s, dispatch=%s"
+            % (len(body), "steps {" in body, needle in body))
+    if body.count("ensure-es-liquidity-engine-topics.sh ;;") != 1:
+        raise AssertionError("the extracted span covers more than one dispatch — it is not one stage")
+    return body
 
 
 def right_topics():

@@ -229,7 +229,7 @@ else bad "an override redirected the barrier away from the deployed topic"; fi
 # Deployment is asserted in tests/test_coverage_topic_wiring.py, with a YAML parser and a
 # container scope. A shell script should not be reasoning about YAML (Codex deploy r7).
 
-# 9) DEV ONLY, fail-closed.
+# 8) DEV ONLY, fail-closed.
 out="$(PATH="$TMP/bin:$PATH" ENVIRONMENT=production KAFKA_BOOTSTRAP_SERVERS=mock:9092 bash "$BAR" 2>&1)"; rc=$?
 if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "DEV ONLY"; then ok "refuses outside dev"
 else bad "did not refuse outside dev"; fi

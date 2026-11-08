@@ -747,6 +747,33 @@ resume_dev_mirrors_if_declared() {
   fi
 }
 
+# ensure_topics_or_refuse: recreate the declared topics and REFUSE to go further if that failed.
+#
+# The old form was `ensure_topics` followed by `resume_dev_mirrors_if_declared "$?"`, and it discarded
+# the failure. The resume helper takes the status as an argument and returns 0 whenever it is
+# non-zero — deliberately, so a failed topic pass does not strand the es4 mirrors — but the CALLER
+# then read 0 and carried on into the scale-up. So a wipe that deleted every topic and then failed to
+# recreate them was followed by services coming up against topics that did not exist: Kafka Streams
+# apps crash-loop, and anything with auto-creation gets the broker DEFAULT shape, which for
+# es.mbo.coverage means a delete-retention log where a compacted per-contract fact belongs. The
+# barrier that would catch that shape runs at DEPLOY time, not here (Codex deploy r15).
+#
+# The mirror behaviour is unchanged. What changes is that the caller can no longer mistake a failed
+# recreation for a successful one.
+ensure_topics_or_refuse() {
+  local rc=0
+  ensure_topics || rc=$?
+  resume_dev_mirrors_if_declared "$rc"
+  if [ "$rc" -ne 0 ]; then
+    echo "FATAL: ensure_topics FAILED (status $rc) - the declared topics are NOT all present at their" >&2
+    echo "       declared shapes. Refusing to continue: scaling workloads up now would start them" >&2
+    echo "       against missing topics, and anything auto-created would take the broker default" >&2
+    echo "       shape instead of the one scripts/kafka/topics.env declares." >&2
+    echo "       Fix the topic pass and re-run; nothing has been scaled up." >&2
+    exit 1
+  fi
+}
+
 # run_partition_doctor: repair Kafka Streams apps that refuse an internal topic's partition count
 # ("Existing internal topic ... has invalid partitions: expected: E; actual: A"). Same source of truth as
 # ensure_topics (the reviewed script on origin/main). Waits for the named deployments to be READY (or up
@@ -849,7 +876,7 @@ apply_internal_topic_configs() {
 # live ES data; see the note where OVERNIGHT_SET is defined.)
 do_start_overnight() {
   require_kafka_cli
-  ensure_topics; resume_dev_mirrors_if_declared $?
+  ensure_topics_or_refuse
   echo "Overnight start: ES-tracking set only ($OVERNIGHT_SET); all other services stay at 0 until 06:15 ET."
   local d
   for d in $OVERNIGHT_SET; do
@@ -948,7 +975,7 @@ verify_start_readiness() {
 
 do_start() {
   require_kafka_cli
-  ensure_topics; resume_dev_mirrors_if_declared $?
+  ensure_topics_or_refuse
   # Scale UP everything EXCEPT the DEV-disabled set. This is load-bearing: if we scaled ALL to 1 and
   # re-zeroed the disabled ones afterwards, databento-timewarp-snapshot-replay would come up in the gap
   # and REPLAY historical snapshots into options.databento.raw (its TIMEWARP_SNAPSHOT_TOPIC), poisoning
@@ -1297,7 +1324,7 @@ for p in json.load(sys.stdin)["items"]:
       | xargs -P 8 -I{} $KT --bootstrap-server $BS --delete --topic {} >/dev/null 2>&1
     sleep 8   # let the deletions settle before recreating (avoid create-vs-delete races)
     echo "4d) recreating platform topics (clean + recreate) ..."
-    ensure_topics; resume_dev_mirrors_if_declared $?
+    ensure_topics_or_refuse
   fi
 
   # 4b. safe docker-ENGINE image housekeeping (build side only — NOT the k8s containerd store).
@@ -1466,7 +1493,7 @@ PY
     # not unconditionally safe for an arbitrary reader — check what reads a topic before widening
     # this to one whose history someone depends on.
     require_kafka_cli
-    ensure_topics; resume_dev_mirrors_if_declared $?
+    ensure_topics_or_refuse
     ;;
   *) echo "usage: dev-cleanup [ | now | start | overnight | topics | logs ]  (no arg = calendar-gated auto for launchd)"; exit 2 ;;
 esac
