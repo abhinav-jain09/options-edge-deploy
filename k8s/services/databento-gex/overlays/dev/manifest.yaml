@@ -183,7 +183,7 @@ spec:
             limits:
               memory: 5Gi
             requests:
-              cpu: "2"
+              cpu: "1"
               memory: 1Gi
           volumeMounts:
             - mountPath: /var/lib/options-edge/kafka-streams
