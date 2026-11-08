@@ -18,6 +18,14 @@
 set -uo pipefail
 OE="$(cd "$(dirname "$0")" && pwd)"
 ARCH="$OE/oe-archive-kafka.sh"
+# A repo checkout keeps market_calendar.py in scripts/jenkins; only the Jenkins-staged unit has it beside the
+# archive scripts. Point CALENDAR_DIR at the checkout's copy so the calendar-dependent cases below run from a
+# checkout (the dev Mac); the one assertion that the calendar is INSTALLED beside the unit stays Jenkins-only.
+OE_UNIT_STAGED=yes
+if [ ! -r "$OE/market_calendar.py" ] && [ -r "$OE/../../jenkins/market_calendar.py" ]; then
+  OE_UNIT_STAGED=no
+  export CALENDAR_DIR="${CALENDAR_DIR:-$(cd "$OE/../../jenkins" && pwd)}"
+fi
 # Bind a FREE port rather than a fixed one: a leftover server from an earlier run keeps the
 # socket and every alert assertion then measures nothing.
 PORT="${PORT:-$(python3 -c "import socket;s=socket.socket();s.bind(('127.0.0.1',0));print(s.getsockname()[1]);s.close()")}"
@@ -612,9 +620,10 @@ mlast() { # <field> of the LAST manifest line
   python3 -c 'import json,sys
 lines=[l for l in open(sys.argv[1]) if l.strip()]
 print(json.loads(lines[-1]).get(sys.argv[2], "<absent>") if lines else "<no-manifest>")' "$(SDIR)/_manifest.jsonl" "$1" 2>/dev/null || echo "<no-manifest>"; }
+# gzip -dc, not zcat FILE: BSD/macOS zcat appends ".Z" to a file argument and cannot open "x.jsonl.gz" (zcat < FILE is the portable stdin form)
 mlines() { grep -c . "$(SDIR)/_manifest.jsonl" 2>/dev/null || echo 0; }
 soffsets() { # every Offset archived for the date, in order, across files
-  local f; for f in "$(SDIR)"/*.jsonl.gz; do [ -f "$f" ] && zcat "$f"; done 2>/dev/null \
+  local f; for f in "$(SDIR)"/*.jsonl.gz; do [ -f "$f" ] && gzip -dc "$f"; done 2>/dev/null \
     | awk -F'\t' '{ sub("Offset:", "", $3); print $3 }' | sort -n | tr '\n' ' ' | sed 's/ $//'; }
 sfiles() { ls "$(SDIR)"/*.jsonl.gz 2>/dev/null | wc -l | tr -d ' '; }
 lastmark() { tail -1 "$MARKS" 2>/dev/null; }
@@ -634,7 +643,7 @@ want "  exactly the committed offsets are archived"   "0 1 6" "$(soffsets)"
 want "  manifest records = committed records"              3 "$(mlast records)"
 want "  manifest offset_to = the boundary"                 8 "$(mlast offset_to)"
 want "  manifest names the capture"   read_committed_stable_boundary "$(mlast capture)"
-want "  no aborted revision in the archive"                0 "$(for f in "$(SDIR)"/*.jsonl.gz; do zcat "$f"; done | grep -c aborted)"
+want "  no aborted revision in the archive"                0 "$(for f in "$(SDIR)"/*.jsonl.gz; do gzip -dc "$f"; done | grep -c aborted)"
 want "  the strike log never reached the console consumer" 0 "$(grep -c "^console $STRIKE" "$CALLS")"
 want "  the committed reader read it, from 0"              1 "$(grep -c "^reader $STRIKE p0 from=0 " "$CALLS")"
 want "  archive marker recorded at the checkpoint"         8 "$(lastmark)"
@@ -1006,7 +1015,7 @@ IDF() { cat "$A/kafka/es4/_manifest/$STRIKE.identity" 2>/dev/null | head -1; }
 nreaders() { local n; n=$(grep -c "^reader $STRIKE p[0-9]* from=[0-9]" "$CALLS" 2>/dev/null); echo "${n:-0}"; }
 nmarks() { local n; n=$(grep -c . "$MARKS" 2>/dev/null); echo "${n:-0}"; }
 order() { awk '/^reader .* from=[0-9]/ { print "reader" } /mark=[0-9]/ { print "mark" }' "$CALLS" | tr '\n' ' ' | sed 's/ $//'; }
-skeys() { local f; for f in "$(SDIR)"/*.jsonl.gz; do [ -f "$f" ] && zcat "$f"; done 2>/dev/null | awk -F'\t' '{ print $4 }' | sort | tr '\n' ' ' | sed 's/ $//'; }
+skeys() { local f; for f in "$(SDIR)"/*.jsonl.gz; do [ -f "$f" ] && gzip -dc "$f"; done 2>/dev/null | awk -F'\t' '{ print $4 }' | sort | tr '\n' ' ' | sed 's/ $//'; }
 R2LINE='0=7 records=5 span=7 dt=2026-09-08 archived=20260908T210100Z capture=read_committed_stable_boundary'   # round 2's stamp: no source
 
 # ---- 16a. the reviewer's case: checkpoint 7, topic re-created and back at 7, the TopicId query FAILS -----------------
@@ -1486,7 +1495,7 @@ VDIR() { echo "$A/kafka/prod/$VP/dt=${1:-$VDAY}"; }
 # The loader model over ONE storage date (its own), and over a SESSION's window of storage dates.
 vread() { python3 "$T/vpread.py" "$VP" "$A/kafka/prod/$VP" "$1" "${2:-$VDAY}" 2>&1; }
 vsession() { local mode="$1"; shift; python3 "$T/vpread.py" "$VP" "$A/kafka/prod/$VP" "$mode" "$@" 2>&1; }
-vz() { local f; for f in "$(VDIR "${1:-$VDAY}")"/*.jsonl.gz; do [ -f "$f" ] && zcat "$f"; done 2>/dev/null; }
+vz() { local f; for f in "$(VDIR "${1:-$VDAY}")"/*.jsonl.gz; do [ -f "$f" ] && gzip -dc "$f"; done 2>/dev/null; }
 vck() { awk '{split($1,a,"="); if (a[1]=="0") print a[2]}' "$A/kafka/prod/_manifest/$VP.offsets" 2>/dev/null | tail -1; }
 vm() { # <field> of the LAST manifest line of date $2 (default VDAY)
   python3 -c 'import json,sys
@@ -1646,7 +1655,7 @@ want "  its checkpoint lines are unchanged, no stamp" 2 \
      "$(grep -cE '^[01]=40 records=40 span=40 dt=[0-9-]+ archived=[0-9]{8}T[0-9]{6}Z$' "$A/kafka/prod/_manifest/$TOPIC.offsets")"
 want "  its file holds exactly what the console consumer printed" \
      "$("$BIN/kafka-console-consumer.sh" --topic "$TOPIC" --partition 0 --offset 0 --max-messages 40)" \
-     "$(zcat "$A/kafka/prod/$TOPIC"/dt=*/"$TOPIC".p0.0-40.*.jsonl.gz)"
+     "$(gzip -dc "$A/kafka/prod/$TOPIC"/dt=*/"$TOPIC".p0.0-40.*.jsonl.gz)"
 
 # ---- 17e. the layout proof refuses a reader whose file is not the range it names -----------------------------------
 for mode in escaped stray unordered; do
@@ -1670,7 +1679,7 @@ strike_log '0 C k0 v0' '1 C k1 v1' '2 M'
 OUT=$(srun STRIKE_SHIM_MODE=escaped); RC=$?
 want "17e the STRIKE log (filed AS WRITTEN) with an escaped record: accepted as before (rc)" 0 "$RC"
 has  "  and noted as before" "record(s) carried a raw TAB/CR/LF, written escaped" "$OUT"
-want "  its file keeps the Offset column"                              2 "$(zcat "$(SDIR)"/*.jsonl.gz | grep -c $'\tOffset:')"
+want "  its file keeps the Offset column"                              2 "$(gzip -dc "$(SDIR)"/*.jsonl.gz | grep -c $'\tOffset:')"
 want "  its manifest names the layout, and does NOT claim the offsets were proven" \
      "timestamp,partition,offset,key,value False" "$(mlast record_layout) $(mlast offsets_verified)"
 
@@ -2378,13 +2387,17 @@ for node in tree.body:
 print(" ".join(found.get(name, "?") for name in ("INDEX", "ES", "BASIS")))
 TOPICS
 )"
-want "  the calendar is installed beside the unit" yes "$([ -r market_calendar.py ] && echo yes || echo no)"
+if [ "$OE_UNIT_STAGED" = yes ]; then
+  want "  the calendar is installed beside the unit" yes "$([ -r market_calendar.py ] && echo yes || echo no)"
+else
+  echo "SKIP  the calendar is installed beside the unit (a repo checkout: market_calendar.py lives in scripts/jenkins and is staged beside the unit by Jenkins only; CALENDAR_DIR=$CALENDAR_DIR)"
+fi
 want "  and answers for a half day, which is what the close gate asks it" 13:00 \
-     "$(CALENDAR_DIR=. python3 - <<'CAL' 2>/dev/null
+     "$(CALENDAR_DIR="${CALENDAR_DIR:-.}" python3 - <<'CAL' 2>/dev/null
 import os, sys
 from datetime import date
 sys.path = [entry for entry in sys.path if entry not in ("", ".", os.getcwd())]
-sys.path.insert(0, ".")
+sys.path.insert(0, os.environ.get("CALENDAR_DIR", "."))
 from market_calendar import MarketCalendar
 print(MarketCalendar().close_time(date(2026, 7, 2)).strftime("%H:%M"))
 CAL

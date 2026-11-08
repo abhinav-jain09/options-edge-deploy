@@ -86,15 +86,49 @@ class Topics(unittest.TestCase):
         self.assertIn("OPTIONS_EDGE_TOPICS", sourced("es4"))
 
     def test_production_keeps_every_other_declaration(self):
-        def count(environment):
+        """Production strips the two alert topics from the preserved list and keeps everything else.
+
+        This used to assert `dev_count - prod_count == 2`, a count of ALL dev-only preserved topics, and
+        its own comment already said not to do that: "compare the alert delta through the token lists, not
+        the totals". It then compared the totals. So it broke the moment a third, unrelated dev-only
+        preserved topic was declared - es.rithmic.mbo - and reported `3 != 2`, which reads as "production
+        is wrong about the alerts" when nothing about the alerts had changed. That failure is the TA-books
+        step of deploy-validation, and because the job is one `bash -e` script it skipped every later step.
+
+        Named, not counted. The two alert topics are the only names this test owns, so it asserts their
+        membership directly, plus the real invariant that bounds everything else: production's preserved
+        list must be a SUBSET of dev's. A new dev-only topic now passes; a topic preserved on production
+        but not dev, or an alert topic leaking into production, still fails.
+        """
+        def preserved(environment):
             env = {k: v for k, v in os.environ.items() if k != "ENVIRONMENT"}
             env["ENVIRONMENT"] = environment
-            out = subprocess.run(["bash", "-c", f'source "{ROOT}/scripts/kafka/topics.env"; echo $(echo $OPTIONS_EDGE_TOPICS | wc -w) $(echo $OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES | wc -w) $(echo $OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS | wc -w)'],
-                                 capture_output=True, text=True, check=True, env=env).stdout.split()
-            return [int(x) for x in out]
-        dev, prod = count("dev"), count("production")
-        # the line-acceptance block also strips on production, so compare the alert delta through the token lists, not the totals
-        self.assertEqual(dev[2] - prod[2], 2, "the preserved list loses exactly the two alert names on production")
+            # env -u BASH_ENV: a non-interactive bash sources BASH_ENV first, which could inject tokens.
+            env.pop("BASH_ENV", None)
+            out = subprocess.run(
+                ["bash", "-c", f'source "{ROOT}/scripts/kafka/topics.env"; '
+                               'printf "%s\n" $OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS'],
+                capture_output=True, text=True, check=True, env=env).stdout
+            return [t for t in out.split() if t]
+
+        dev, prod = preserved("dev"), preserved("production")
+        # Non-vacuity first: two empty lists would satisfy every assertion below.
+        self.assertTrue(dev, "ENVIRONMENT=dev declared no preserved topics at all")
+        self.assertTrue(prod, "ENVIRONMENT=production declared no preserved topics at all")
+
+        for topic in (REGULAR, ESTIMATE):
+            self.assertIn(topic, dev, f"{topic} must be preserved by the dev clean")
+            self.assertNotIn(topic, prod, f"{topic} must not be preserved on production - it is dev only")
+
+        self.assertEqual([], sorted(set(prod) - set(dev)),
+                         "production preserves a topic dev does not; the dev clean would then delete a "
+                         "topic production protects")
+        # The alert topics must be the only thing their own declaration removes: everything else dev
+        # preserves and production does not has to come from some OTHER dev-only block, never from this
+        # feature's. Assert that by name rather than by count, so an unrelated dev-only topic cannot
+        # break this test again.
+        self.assertEqual({REGULAR, ESTIMATE}, (set(dev) - set(prod)) & {REGULAR, ESTIMATE},
+                         "both alert topics must be exactly the dev-only part this feature contributes")
 
     def test_the_barrier_names_both_topics_and_ensures_them_only_for_dev(self):
         text = read("scripts/kafka/ensure-market-structure-topics.sh")

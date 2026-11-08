@@ -60,7 +60,12 @@ sourced="$(printf '%s\n' $sourced $java_named $java_present | awk 'NF' | sort -u
 #                                 scripts/ci/validate-dev-mac-depth-archive.sh, and the deploy job runs it.
 #   install-dev-mac-depth-archive.sh      its installer, a dev-Mac host action
 #   install-dev-mac-depth-archive-test.sh its test; runs in CI, never on .252
-EXEMPT="oe-ops.env calibration-progress-watch.sh install-dev-mac-watchdog.sh install-dev-mac-watchdog-test.sh oe-archive-depth.sh install-dev-mac-depth-archive.sh install-dev-mac-depth-archive-test.sh"
+#   oe-archive-session-chain.py   the dev book archive's per-session completeness checker (A-GAP-05): an ops tool run
+#                                 on the dev Mac, installed by install-dev-mac-depth-archive.sh (whose FILES list
+#                                 scripts/ci/validate-dev-mac-depth-archive.sh requires it in) and tested by
+#                                 test_archive_session_chain.py and test-archive-bucket-filing.sh, both run by that guard
+#   test-archive-bucket-filing.sh its test of the archiver's trade-date filing; runs in CI, never on .252
+EXEMPT="oe-ops.env calibration-progress-watch.sh install-dev-mac-watchdog.sh install-dev-mac-watchdog-test.sh oe-archive-depth.sh install-dev-mac-depth-archive.sh install-dev-mac-depth-archive-test.sh oe-archive-session-chain.py test-archive-bucket-filing.sh"
 
 # An exemption that no other guard picks up is a hole with a comment on it. Assert the successor
 # exists, here, where the excuse is made.
