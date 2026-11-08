@@ -22,8 +22,9 @@ es.mbo.level-flow, es.mbo.level-flow-final, es.mbo.health, es.mbo.closures) and 
      A manifest line whose gzip file is gone is a hole too (FILE_MISSING), and so is a file whose size or SHA-256 no longer
      matches its line (FILE_CORRUPT), or a line without a SHA-256 (FILE_UNVERIFIABLE): the manifests alone prove nothing
      about the data.
-     A file whose schema_digest_status is not RESOLVED (the registry could not answer at capture time, or the version or
-     kind is not in the archiver's table) is SCHEMA_DIGEST_UNRESOLVED: the data was kept, but the session cannot claim
+     A file whose manifest line lacks schema provenance (schema_digest_status RESOLVED, schema_ids, a SHA-256 digest per id), or
+     whose status is not RESOLVED (the registry could not answer at capture time, or the version or kind is not in the
+     archiver's table) is SCHEMA_DIGEST_UNRESOLVED: the data was kept, but the session cannot claim
      that every record was decoded under a known released schema.
   3. THE SESSION'S SPAN. The chain must run from a capture that STARTED (capture_wall_start) at or before the
      session's start instant (18:00 America/New_York of the previous calendar day) through the terminal file: the
@@ -137,6 +138,20 @@ def scan_bounds(path):
                 lo = v if lo is None or v < lo else lo
                 hi = v if hi is None or v > hi else hi
     return lo, hi
+
+
+def schema_problem(e):
+    """Why a manifest line does not carry usable schema provenance (ids and digests), or None. All four book topics are Avro,
+    so every line must say RESOLVED, name the registered id(s) and carry a SHA-256 digest for each."""
+    st = e.get("schema_digest_status")
+    if st != "RESOLVED":
+        return st if st else "ABSENT"
+    ids, dg = e.get("schema_ids"), e.get("schema_digests")
+    if not isinstance(ids, list) or not ids or not all(isinstance(i, int) for i in ids):
+        return "NO_SCHEMA_IDS"
+    if not isinstance(dg, dict) or any(not re.fullmatch(r"[0-9a-f]{64}", str(dg.get(str(i)) or "")) for i in ids):
+        return "BAD_DIGESTS"
+    return None
 
 
 def sha256_of(path):
@@ -275,9 +290,9 @@ def check_partition(entries, start_ms, terminal_ms):
             continue
         if sha256_of(path) != want:
             why.append("FILE_CORRUPT:%s(sha256)" % e["file"])
-        status = e.get("schema_digest_status")
-        if status is not None and status not in ("RESOLVED", "NOT_AVRO"):
-            why.append("SCHEMA_DIGEST_UNRESOLVED:%s(%s)" % (e["file"], status))
+        bad = schema_problem(e)
+        if bad:
+            why.append("SCHEMA_DIGEST_UNRESOLVED:%s(%s)" % (e["file"], bad))
     chain = [c for c in caps if c["first_from"] >= c0["first_from"] and c["first_from"] < hi]
     prev = None
     for c in chain:

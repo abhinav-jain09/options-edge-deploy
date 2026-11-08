@@ -134,6 +134,8 @@ class Archive:
                       "capture_wall_start": wall(ws), "capture_wall_end": wall(we if we else ws + 60000)})
             if maxbe is not None:
                 e.update({"first_bucket_end": maxbe - 1000, "last_bucket_end": maxbe, "max_bucket_end": maxbe})
+        if not legacy:
+            e.update({"schema_ids": [3509], "schema_digests": {"3509": "a" * 64}, "schema_digest_status": "RESOLVED"})
         if extra:
             e.update(extra)
         with open(os.path.join(p, "_manifest.jsonl"), "a") as f:
@@ -302,6 +304,21 @@ class Chain(unittest.TestCase):
             with open(mf, "w") as f: f.write("\n".join(json.dumps(r_) for r_ in rows) + "\n")
         r = chain.session_report(self.a.root, "dev", chain.BOOK_TOPICS, MON, chain.Cal(), False)
         self.assertTrue(any("FILE_UNVERIFIABLE" in x for x in r["topics"]["es.mbo.health"]))
+
+    def test_missing_or_malformed_schema_provenance_is_incomplete(self):
+        for mutate, label in ((lambda r: [r.pop(k, None) for k in ("schema_ids", "schema_digests", "schema_digest_status")], "ABSENT"),
+                              (lambda r: r.update(schema_ids=[]), "NO_SCHEMA_IDS"),
+                              (lambda r: r.update(schema_digests={"3509": "xyz"}), "BAD_DIGESTS"),
+                              (lambda r: r.update(schema_digests={}), "BAD_DIGESTS"),
+                              (lambda r: r.update(schema_digest_status="NOT_AVRO"), "NOT_AVRO")):
+            with tempfile.TemporaryDirectory() as d:
+                a = Archive(d); healthy(a)
+                mf = os.path.join(d, "kafka", "dev", "es.mbo.health", "dt=2026-11-09", "_manifest.jsonl")
+                rows = [json.loads(l) for l in open(mf)]
+                for r_ in rows: mutate(r_)
+                with open(mf, "w") as f: f.write("\n".join(json.dumps(r_) for r_ in rows) + "\n")
+                w = report(a)["topics"]["es.mbo.health"]
+                self.assertTrue(any("SCHEMA_DIGEST_UNRESOLVED" in x and label in x for x in w), (label, w))
 
     def test_a_null_starting_checkpoint_is_only_the_first_capture(self):
         a = self.a
