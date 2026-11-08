@@ -1,3 +1,9 @@
+# CI-REQUIRED
+#
+# This module's assertions MUST run in CI. scripts/ci/validate-tests-are-collectable.sh - a separate,
+# already-wired step of .github/workflows/deploy-validation.yml - fails the build unless a mandatory step
+# of that workflow invokes this module as a `python3 -m unittest` target, with no continue-on-error, no
+# `if:` and no shell construct that would swallow its failure.
 """scripts/kafka/ensure-multileg-schemas.sh against the stand-in registry: a fresh registry gets the three canonical
 multileg subjects under FULL, a re-run changes nothing, a drifted subject-level config is repaired to FULL, a file that is not
 the pinned canonical bytes is refused before any call, a newer non-canonical version is refused, and a dry run mutates nothing."""

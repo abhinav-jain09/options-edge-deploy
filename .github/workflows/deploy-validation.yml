@@ -227,6 +227,56 @@ jobs:
       # the identical 100% setting untriggered. The per-overlay fix applied to
       # option-price-behavior months earlier left its base at 100%, which is how the experiment
       # overlay kept rendering the fault: a gate on the RENDER is the only thing that sees it.
+      # These suites read scripts/kafka/topics.env, the k8s manifests and the schema-id maps and assert what
+      # they must declare. They were CI-COLLECT-ONLY: imported by the collectability step, so an import error
+      # was caught, but not one of their assertions had ever executed in CI. Proven green on this runner
+      # before being wired; ci_wiring_check.py now fails the build if this step is removed or made conditional.
+      - name: Declared topics, PVCs, stream threads and schema-id maps (dormant suites, now run)
+        timeout-minutes: 5
+        run: python3 -m unittest -v tests.test_databento_gex_topics tests.test_dev_cleanup_precreates_estimate_topics tests.test_no_versioned_topic_names tests.test_kafka_streams_state_pvcs tests.test_priority_stream_threads tests.test_vix_underlying_price_manifest tests.test_rithmic_mbo_reservation tests.test_geometry_schema_id_map tests.test_level_absorption_book_deploy tests.test_candle_direction_export_archive tests.test_context_tape_order_initialization tests.test_replay_inputs_archive
+
+      # The same promotion for the suites that assert deploy wiring - that a service's image is resolved and
+      # rolled, that a retired one is gone from dev and prod, that bring-up forwards its parameters.
+      - name: Deploy and retirement wiring read straight off the pipelines and manifests (dormant suites, now run)
+        timeout-minutes: 5
+        run: python3 -m unittest -v tests.test_bring_up_all tests.test_databento_maxpain_deploy tests.test_raw_postgres_writer_deploy tests.test_dev_web_rollout tests.test_strike_flow_ibkr_deploy tests.test_hpsf_retired_from_dev_and_prod tests.test_option_truth_memory
+
+      # Two different stubs, and the comment should not blur them: the ensure-*-schemas.sh suites drive
+      # their script against a schema-registry stub the test starts on LOOPBACK, while the two topic
+      # suites (ensure_partition_only_topics, ensure_indicator_topics_recreate) drive theirs against
+      # stub Kafka CLIs copied into a temp bindir and put first on PATH. Neither kind contacts a
+      # registry or a broker on the LAN, and none is reachable from this runner anyway.
+      - name: Schema registration and topic-recreation scripts against their stubs (dormant suites, now run)
+        timeout-minutes: 9
+        run: python3 -m unittest -v tests.test_ensure_delta_flow_schemas tests.test_ensure_es_underlying_price_schema tests.test_ensure_greek_move_auth_schemas tests.test_ensure_indicator_schemas tests.test_ensure_indicator_topics_recreate tests.test_ensure_multileg_schemas tests.test_ensure_partition_only_topics tests.test_ensure_spot_vol_regime_schemas tests.test_ensure_underlying_price_schema
+
+      # The spx-price subject/mirror chain and the CVD image + component proofs. These shell out, but only
+      # to the repo's own scripts, a loopback stub or javac/java over a classpath the test builds itself.
+      - name: The spx-price mirror chain, the CVD image proofs and the archive wiring (dormant suites, now run)
+        timeout-minutes: 5
+        run: python3 -m unittest -v tests.test_cvd_component_source_proof tests.test_cvd_proof_bytecode tests.test_cvd_reader_image tests.test_cvd_short_premium_held_image tests.test_invasion_archive_wiring tests.test_spot_archive_wiring tests.test_spx_price_flow_and_fresh tests.test_spx_price_mirror_job tests.test_spx_price_subject_parity tests.test_spx_price_timestamp_type tests.test_spx_price_verify_target_record
+
+      # The ops harnesses: dev-cleanup, offhours-clean-slate, prod-cleanup, reset-indicator-state and the
+      # responsive stack. Each writes its own stub kafka-topics / kafka-consumer-groups / df / findmnt into a
+      # temp bindir and puts that first on PATH, so the script under test talks to the stub and never to a
+      # broker. Verified by running them with a PATH that refuses the real CLIs outright: none reached for one.
+      - name: Ops harnesses driven against stub CLIs in a temp dir (dormant suites, now run)
+        timeout-minutes: 9
+        run: python3 -m unittest -v tests.test_break_line_deploy tests.test_decode_newest_indicator_record tests.test_delta_flow_cutover_tooling tests.test_es4_allowed_services tests.test_es_aggressor_flow_deploy tests.test_heap_headroom_gate tests.test_hpsf_release_gate tests.test_hpsf_replay_topics tests.test_indicator_mirror_parity_gate tests.test_market_cal tests.test_offhours_clean_slate_preserved tests.test_prod_cleanup_report tests.test_reset_indicator_state tests.test_responsive_baseline tests.test_responsive_evidence tests.test_responsive_stack_qualification tests.test_responsive_supervisor tests.test_rithmic_es4_service tests.test_rithmic_mbo_deploy tests.test_strike_invasion_cutover_tooling tests.test_vix_option_inteligence_avro_deploy tests.test_vol_premium_open_reference_capture
+
+      # These render a kustomization with `kubectl kustomize` - a purely local operation, no cluster - and
+      # assert the env the container ends up with. Read the RENDER, not k8s/base: the overlays are what change
+      # limits, flags and replicas.
+      - name: Overlay renders compared against what the service must actually get (dormant suites, now run)
+        timeout-minutes: 5
+        run: python3 -m unittest -v tests.test_context_tape_execution_deploy tests.test_dev_only_enable_vix_and_volume_pace_databento tests.test_indicator_studies_topics tests.test_market_carry_memory
+
+      # The remainder of the promotable set: the archive routing and packaging gates, the es4 image pin, the
+      # replay-refresh tool (whose kubectl is mocked in-process) and the clean-slate contents mode.
+      - name: Archive readers, pinned images, replay refresh and the packaged-artifact gates (dormant suites, now run)
+        timeout-minutes: 5
+        run: python3 -m unittest -v tests.test_archive_packaged_gate tests.test_canonical_archive_routing tests.test_cvd_archive_history_qualification tests.test_cvd_evidence_api_image tests.test_deploy_snapshot tests.test_es4_pinned_image tests.test_es_replay_refresh tests.test_level_absorption_event_v2_manifest tests.test_liquidity_validator_deploy tests.test_offhours_clean_slate_contents_mode tests.test_prod_start_prereqs tests.test_spx_price_no_legacy_writer tests.test_visual_order_validation_workspace
+
       - name: JVM heap leaves the container room for what is not heap
         run: bash scripts/ci/validate-heap-leaves-container-headroom.sh
 
@@ -265,6 +315,19 @@ jobs:
       # reboot — a shorter boot list took production down twice (2026-08-24).
       - name: Boot bring-up and morning autostart hold down the same services
         run: python3 -m unittest -v tests.test_keep_down_lists_agree
+
+      # The dealer-ledger feedback loop: the ledger emits signal-fired, the scorer turns outcomes into
+      # outcome-scored, the accumulator aggregates them into calibration-state, and the ledger reads that
+      # back through a GLOBAL store — so a deploy that carried the ledger alone would leave its calibration
+      # store permanently empty, which is indistinguishable from a broken one. Also holds the dev CPU
+      # position the owner asked for (2026-11-08, "let it use the cpu as much it want dont restrict
+      # anything"): no cpu RESERVATION on dev, because a 2-CPU reservation this node cannot satisfy left
+      # the pods Pending with zero cpu — while production, es4 and experiment keep theirs.
+      #
+      # Wired here because this workflow names its test modules by hand and nothing discovers them: the
+      # module existed and passed, but CI had never executed a single one of its assertions.
+      - name: Dealer-ledger loop deploys whole, and the dev CPU position holds
+        run: python3 -m unittest -v tests.test_dealer_ledger_deploy
 
       # TA books (phases B, C, D, E and the W0 cutover): the producer / gateway flags are literal false in every manifest, the two new
       # services are registered and HELD, the fixed-id schema maps register against a stand-in registry, the two topic barriers fail closed,

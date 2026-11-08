@@ -1,3 +1,9 @@
+# CI-REQUIRED
+#
+# This module's assertions MUST run in CI. scripts/ci/validate-tests-are-collectable.sh - a separate,
+# already-wired step of .github/workflows/deploy-validation.yml - fails the build unless a mandatory step
+# of that workflow invokes this module as a `python3 -m unittest` target, with no continue-on-error, no
+# `if:` and no shell construct that would swallow its failure.
 """T-18 reader job: join conformance with the Java CandleDirectionExportTest fixtures, and the watermark bound against a fake kcat."""
 import importlib.util, json, os, pathlib, stat, tempfile, unittest
 

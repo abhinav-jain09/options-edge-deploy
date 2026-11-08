@@ -1,3 +1,9 @@
+# CI-REQUIRED
+#
+# This module's assertions MUST run in CI. scripts/ci/validate-tests-are-collectable.sh - a separate,
+# already-wired step of .github/workflows/deploy-validation.yml - fails the build unless a mandatory step
+# of that workflow invokes this module as a `python3 -m unittest` target, with no continue-on-error, no
+# `if:` and no shell construct that would swallow its failure.
 """Deploy wiring of liquidity-validator-service (the live READ-ONLY liquidity validator).
 
 DEV ONLY, single replica, strategy Recreate, health port 8080 (/healthz, /readyz). It reads five existing topics without a consumer group and publishes three single-partition Avro topics
@@ -127,7 +133,16 @@ class Registration(unittest.TestCase):
     def test_service_deploy_offers_it_and_runs_the_shared_barrier_stage(self):
         j = read("Jenkinsfile.service-deploy")
         self.assertIn("      'liquidity-validator',\n", j)
-        self.assertIn("params.SERVICE == 'liquidity-validator') && !params.DEPLOY_DRY_RUN", j)
+        # The per-service comparison this used to pin became a list membership on main (4fd20efa,
+        # "ten SERVICE comparisons become two memberships"), because Jenkinsfile.service-deploy had
+        # reached the Groovy CPS 64 KB method limit. Pin the mechanism that now does the job, on the
+        # stage's OWN guard line rather than anywhere in the file: this service must be a member of
+        # the barrier stage's list AND that same guard must still refuse a dry run.
+        guards = [l for l in j.splitlines()
+                  if ".contains(params.SERVICE)" in l and "'liquidity-validator'" in l]
+        self.assertEqual(len(guards), 1, "exactly one stage selects this service by membership")
+        self.assertIn("!params.DEPLOY_DRY_RUN", guards[0],
+                      "the barrier stage must still be gated off a dry run")
         self.assertIn("liquidity-validator) scripts/kafka/ensure-liquidity-validator-topics.sh ;;", j)
         self.assertEqual(j.count("Verify liquidity-validator topics"), 0, "no separate stage: the pipeline's CPS method is at the JVM limit")
 

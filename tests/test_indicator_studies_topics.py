@@ -1,3 +1,9 @@
+# CI-REQUIRED
+#
+# This module's assertions MUST run in CI. scripts/ci/validate-tests-are-collectable.sh - a separate,
+# already-wired step of .github/workflows/deploy-validation.yml - fails the build unless a mandatory step
+# of that workflow invokes this module as a `python3 -m unittest` target, with no continue-on-error, no
+# `if:` and no shell construct that would swallow its failure.
 """STUDIES_V1 deploy wiring (INDICATOR-STUDIES, INDICATOR-STUDIES-REQUIREMENT.md A-R10.1/A-R10.4/A-R10.5, tracked item T-2): the two study
 topics are declared in the REAL topics.env with the producer's shapes, ensure-indicator-topics.sh creates and reconciles them,
 the es4 mirror allow-list carries the es.* pair, the schema scripts know ids 2501-2503, and the producer / gateway flags are

@@ -1,3 +1,9 @@
+# CI-REQUIRED
+#
+# This module's assertions MUST run in CI. scripts/ci/validate-tests-are-collectable.sh - a separate,
+# already-wired step of .github/workflows/deploy-validation.yml - fails the build unless a mandatory step
+# of that workflow invokes this module as a `python3 -m unittest` target, with no continue-on-error, no
+# `if:` and no shell construct that would swallow its failure.
 """Executes the es-indicator-mirror install's parity gate (the block between the '--- parity gate begin/end ---'
 markers of Jenkinsfile.es-indicator-mirror, unescaped the way Groovy hands it to sh) against a scenario-driven
 stand-in for kafka-get-offsets and kafka-console-consumer (tests/fake_mirror_parity_cli.py).

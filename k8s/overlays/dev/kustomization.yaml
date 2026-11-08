@@ -95,6 +95,9 @@ resources:
   # liquidity-validator: DEV-ONLY (services.yaml envs: [dev]), replicas 1: the live READ-ONLY liquidity validator (geometry, level-absorption, aggressor-flow, footprint and raw ES tape in; three research topics out; never trades).
   # Referenced here only (NOT in k8s/base, production or experiment). No patches here or in the standalone slice (k8s/services/liquidity-validator/overlays/dev); the dev image remap below is what the slice mirrors.
   - ../../services/liquidity-validator/base
+  # break-line: DEV-ONLY (services.yaml envs: [dev]), replicas 1: Break Score rev 13 (the state and score of the user's own horizontal lines; it never trades). Referenced here only (NOT in k8s/base, production
+  # or experiment). No patches here or in the standalone slice (k8s/services/break-line/overlays/dev); the dev image remap below is what the slice mirrors.
+  - ../../services/break-line/base
   # drop-classifier-ref: DEV-ONLY and TEMPORARY (services.yaml envs: [dev]): the retained drop-classifier image in ES_TRADES mode writing es.drop.ref.* , the reference side of the G3b parity gate. Removed when G3b passes.
   - ../../services/drop-classifier-ref/base
   # NOTE: the databento timewarp replay Job + snapshot-replay Deployment used to live
@@ -113,6 +116,8 @@ resources:
   - ../../services/nifty-gex/base
 patches:
   - path: web-immutable-assets-patch.yaml
+  # Dev only: optional ConfigMap volume for the scorecard report (liq-U); mirrored in k8s/services/web/overlays/dev.
+  - path: web-scorecard-patch.yaml
   - path: es-spx-align-rithmic-dev-patch.yaml
   - path: broker-execution-http-patch.yaml
   # DEV-ONLY, 2026-10-11: run the auction-to-paper-order chain. The account owner wants an auction
@@ -358,6 +363,8 @@ patches:
   - path: web-dev-env-patch.yaml
   # Use a smaller dev surge reservation; verify current capacity before rolling.
   - path: web-dev-resources-patch.yaml
+  # Dev has no spare CPU for a surge pod: roll the single web pod with maxSurge 0 / maxUnavailable 1.
+  - path: web-dev-rollout-patch.yaml
   # GRACEFUL LIVENESS (2026-08-31) — DEV. The gateway was in a restart loop that its own
   # recovery caused: rebuilding the state cache across hundreds of partitions makes /health
   # slow to answer, the probe's 1-SECOND DEFAULT timeout expired three times, and the kubelet
@@ -1001,6 +1008,9 @@ images:
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-liquidity-validator
     newName: host.docker.internal:5001/options-edge-liquidity-validator
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-break-line
+    newName: host.docker.internal:5001/options-edge-break-line
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-oi-next-publication
     newName: host.docker.internal:5001/options-edge-oi-next-publication

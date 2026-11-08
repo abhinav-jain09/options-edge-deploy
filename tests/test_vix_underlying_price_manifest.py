@@ -1,3 +1,9 @@
+# CI-REQUIRED
+#
+# This module's assertions MUST run in CI. scripts/ci/validate-tests-are-collectable.sh - a separate,
+# already-wired step of .github/workflows/deploy-validation.yml - fails the build unless a mandatory step
+# of that workflow invokes this module as a `python3 -m unittest` target, with no continue-on-error, no
+# `if:` and no shell construct that would swallow its failure.
 """underlying.vix.price is Avro (VixUnderlyingPrice, FIXED id 3061): the map, the manifest entry, the pinned snapshot, the contracts copy and the
 MirrorMaker header must all say the same thing. The topic is byte-mirrored production -> es4, so one id has to name the schema in every registry."""
 from __future__ import annotations
@@ -48,17 +54,26 @@ class VixUnderlyingPriceGovernance(unittest.TestCase):
         self.assertEqual(mirrors[0]["subjects"], [SUBJECT])
         self.assertNotIn("unframed", mirrors[0])
 
-    def test_only_the_dev_overlay_gives_the_feed_role_a_registry(self):
-        """Production stays shut down with its registry untouched: the base/production render does NOT carry KAFKA_SCHEMA_REGISTRY_URL (the role exits
-        without it), the dev overlay carries the dev registry."""
-        for rel in ("k8s/services/databento-vix-feed/base/databento-vix-feed-deployment.yaml",
-                    "k8s/services/databento-vix-feed/overlays/production/manifest.yaml"):
-            text = (ROOT / rel).read_text()
-            self.assertNotRegex(text, r"name: KAFKA_SCHEMA_REGISTRY_URL", rel)
-        dev = (ROOT / "k8s/overlays/dev/databento-vix-feed-dev-patch.yaml").read_text()
-        self.assertRegex(dev, r"KAFKA_SCHEMA_REGISTRY_URL\s*\n\s*value: http://host\.docker\.internal:8082")
-        slice_dev = (ROOT / "k8s/services/databento-vix-feed/overlays/dev/manifest.yaml").read_text()
-        self.assertRegex(slice_dev, r"KAFKA_SCHEMA_REGISTRY_URL\s*\n\s*value: http://host\.docker\.internal:8082")
+    def test_every_env_render_names_its_own_registry_for_the_feed_role(self):
+        """The role READS this subject from KAFKA_SCHEMA_REGISTRY_URL at start and EXITS when it is unset or the subject is absent, so every render
+        that can start the role must name ITS OWN registry: the base (and therefore the production render) names production's, and the dev overlay
+        overrides it with dev's by the same env name. A render missing it cannot start; a render naming the wrong registry would resolve id 3061
+        against a foreign one. Parsed from YAML, not matched as text: the explanatory comment above the entry mentions the variable too, so a
+        substring check would read the comment and prove nothing."""
+        import yaml
+        PROD, DEV = "http://192.168.100.252:8082", "http://host.docker.internal:8082"
+        for rel, want in (("k8s/services/databento-vix-feed/base/databento-vix-feed-deployment.yaml", PROD),
+                          ("k8s/services/databento-vix-feed/overlays/production/manifest.yaml", PROD),
+                          ("k8s/overlays/dev/databento-vix-feed-dev-patch.yaml", DEV),
+                          ("k8s/services/databento-vix-feed/overlays/dev/manifest.yaml", DEV)):
+            deploys = [d for d in yaml.safe_load_all((ROOT / rel).read_text())
+                       if d and d.get("kind") == "Deployment" and d["metadata"]["name"] == "databento-vix-feed"]
+            self.assertEqual(len(deploys), 1, rel)
+            containers = [c for c in deploys[0]["spec"]["template"]["spec"]["containers"] if c["name"] == "databento-vix-feed"]
+            self.assertEqual(len(containers), 1, rel)
+            got = [e for e in containers[0]["env"] if e["name"] == "KAFKA_SCHEMA_REGISTRY_URL"]
+            self.assertEqual(len(got), 1, "%s must name exactly one registry" % rel)
+            self.assertEqual(got[0].get("value"), want, rel)
 
     def test_no_ibkr_feed_can_write_the_canonical_topic(self):
         """The shared config still names the canonical topic for the CONSUMERS of KAFKA_IBKR_VIX_PRICE_TOPIC (gateway). The IBKR producer must never

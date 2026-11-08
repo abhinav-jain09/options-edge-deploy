@@ -1,3 +1,9 @@
+# CI-REQUIRED
+#
+# This module's assertions MUST run in CI. scripts/ci/validate-tests-are-collectable.sh - a separate,
+# already-wired step of .github/workflows/deploy-validation.yml - fails the build unless a mandatory step
+# of that workflow invokes this module as a `python3 -m unittest` target, with no continue-on-error, no
+# `if:` and no shell construct that would swallow its failure.
 """vix-option-inteligence-service and volume-pace-databento-service RUN on dev and stay HELD everywhere else.
 
 Owner instruction 2026-10-31: turn both on, on dev only. Four independent facts make that true, and any one of them failing silently would either

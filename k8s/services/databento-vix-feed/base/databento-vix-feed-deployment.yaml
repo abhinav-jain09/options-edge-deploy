@@ -95,10 +95,12 @@ spec:
             - name: KAFKA_VIX_PRICE_TOPIC
               value: "underlying.vix.price"
             # Kafka Serialization Rule: underlying.vix.price is Avro (VixUnderlyingPrice, fixed id 3061). The role READS the canonical schema
-            # from KAFKA_SCHEMA_REGISTRY_URL at start (never registers) and EXITS when it is unset or the subject is absent. The BASE and the
-            # PRODUCTION render deliberately do not set it: production stays shut down and its registry untouched until its own cutover
-            # (docs/VIX-UNDERLYING-PRICE-AVRO-CUTOVER.md, "Production"), which adds http://192.168.100.252:8082 here in the same change that
-            # starts the production feed. The dev overlay (databento-vix-feed-dev-patch.yaml) sets the dev registry.
+            # from KAFKA_SCHEMA_REGISTRY_URL at start (never registers) and EXITS when it is unset or the subject is absent — so the subject
+            # must already be registered under id 3061 on whichever registry this names before the role can start.
+            # The value here is PRODUCTION's registry, which is what the production render inherits; the dev overlay
+            # (databento-vix-feed-dev-patch.yaml) overrides it with the dev registry by the same env name.
+            - name: KAFKA_SCHEMA_REGISTRY_URL
+              value: "http://192.168.100.252:8082"
             # broker-side attribution during the shadow phase (design §2)
             - name: VIX_FEED_KAFKA_CLIENT_ID
               value: "vix-feed"

@@ -1,4 +1,6 @@
-# ES4-only Rithmic market-data collector and identity Kafka mirrors. Managed by es4-deploy.
+# ES4-only Rithmic market-data collector and identity Kafka mirrors.
+# Released by the rithmic-depth-bridge-release job (Jenkinsfile.rithmic-depth-bridge-release), which
+# applies THIS file; it was a branch of es4-deploy until 2026-11-08 and that path now refuses the request.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

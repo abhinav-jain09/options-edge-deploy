@@ -1,3 +1,9 @@
+# CI-REQUIRED
+#
+# This module's assertions MUST run in CI. scripts/ci/validate-tests-are-collectable.sh - a separate,
+# already-wired step of .github/workflows/deploy-validation.yml - fails the build unless a mandatory step
+# of that workflow invokes this module as a `python3 -m unittest` target, with no continue-on-error, no
+# `if:` and no shell construct that would swallow its failure.
 """prod-cleanup.sh must REPORT the Kafka data dir's own filesystem and WARN at >= 80 % — reporting only.
 
 2026-09-16: /home/kafka (the Kafka log dir's own 1.9 TB NVMe) hit 100 % and the broker crash-looped,

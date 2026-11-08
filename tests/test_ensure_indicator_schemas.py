@@ -1,3 +1,9 @@
+# CI-REQUIRED
+#
+# This module's assertions MUST run in CI. scripts/ci/validate-tests-are-collectable.sh - a separate,
+# already-wired step of .github/workflows/deploy-validation.yml - fails the build unless a mandatory step
+# of that workflow invokes this module as a `python3 -m unittest` target, with no continue-on-error, no
+# `if:` and no shell construct that would swallow its failure.
 """scripts/kafka/ensure-indicator-schemas.sh against a stand-in registry (tests/stub_schema_registry.py): the
 ten fixed ids are imported under FULL, re-runs are no-ops that still enforce FULL, collisions fail, the mode a
 subject had is restored its own way (an override by PUT, an inherited mode by DELETE), and a registry that

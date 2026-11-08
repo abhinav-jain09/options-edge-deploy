@@ -1,3 +1,9 @@
+# CI-REQUIRED
+#
+# This module's assertions MUST run in CI. scripts/ci/validate-tests-are-collectable.sh - a separate,
+# already-wired step of .github/workflows/deploy-validation.yml - fails the build unless a mandatory step
+# of that workflow invokes this module as a `python3 -m unittest` target, with no continue-on-error, no
+# `if:` and no shell construct that would swallow its failure.
 """options.spx.vix-option-inteligence-service.current Avro (contracts 0.53.0, fixed id 3001): scripts/kafka/ensure-fixed-id-schemas.sh with schema-id-maps/vix-option-inteligence.map against the
 stand-in registry (tests/stub_schema_registry.py), the map's agreement with the other maps, and the wipe script's cluster guard."""
 from __future__ import annotations

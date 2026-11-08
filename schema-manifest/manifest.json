@@ -5679,6 +5679,15 @@
           "environments": [
             "dev"
           ]
+        },
+        {
+          "service": "break-line",
+          "accepts": [
+            3502
+          ],
+          "environments": [
+            "dev"
+          ]
         }
       ],
       "retained": true,
@@ -5744,6 +5753,15 @@
       "consumers": [
         {
           "service": "level-absorption",
+          "accepts": [
+            3509
+          ],
+          "environments": [
+            "dev"
+          ]
+        },
+        {
+          "service": "break-line",
           "accepts": [
             3509
           ],
@@ -11424,7 +11442,18 @@
         }
       ],
       "producers": [],
-      "consumers": [],
+      "consumers": [
+        {
+          "service": "break-line",
+          "accepts": [
+            3701,
+            3708
+          ],
+          "environments": [
+            "dev"
+          ]
+        }
+      ],
       "retained": true,
       "retainedReason": "curated, not baseline: ARCHIVAL version 1 of the line health LineHealthState subject (contracts 0.78.0 to 0.81.0), registered on dev under id 3701; superseded by version 2 id 3708 (contracts 0.82.0: drawOnChart, hostTimeframe and the move score). Nothing writes it any more; the feed gateway relay and the level absorption loop still READ it (the compacted topics and the old tails hold version-1 records until every line is republished). Kept so a registry import stays reproducible. Dev only."
     },
@@ -11458,7 +11487,18 @@
           ]
         }
       ],
-      "consumers": [],
+      "consumers": [
+        {
+          "service": "break-line",
+          "accepts": [
+            3701,
+            3708
+          ],
+          "environments": [
+            "dev"
+          ]
+        }
+      ],
       "retained": true,
       "retainedReason": "curated, not baseline: the Line health feature (requirement rev 42 LH-O-1, LH-O-3, design rev 56 3.2a; contracts 0.82.0 schemas-registry/linehealth), written by the line-health loop of level-absorption-service on futures.line-health.state under RecordNameStrategy with auto.register.schemas=false: VERSION 2 under the new fixed id 3708 (adds drawOnChart, hostTimeframe, moveScore, movePushMilli, movePaceMilli, moveHoldMilli and moveScoreShadow, all nullable with default null); its schema-requirements.json names this id and hash. Dev only; nothing is registered on production or es4."
     },
@@ -11743,7 +11783,17 @@
           ]
         }
       ],
-      "consumers": [],
+      "consumers": [
+        {
+          "service": "break-line",
+          "accepts": [
+            3801
+          ],
+          "environments": [
+            "dev"
+          ]
+        }
+      ],
       "retained": true,
       "retainedReason": "curated, not baseline: strike-hold-service (NEW, dev only; contracts 0.90.0 schemas-registry/strikehold) writes it on options.spx.strike-hold.current under RecordNameStrategy with auto.register.schemas=false (its schema-requirements.json names this id and hash). The newest state of ONE candidate strike; the topic is COMPACTED because the ET-day rollover replaces the row rather than appending to it. Dev only; nothing is registered on production or es4."
     },
@@ -11848,9 +11898,19 @@
         }
       ],
       "producers": [],
-      "consumers": [],
+      "consumers": [
+        {
+          "service": "break-line",
+          "accepts": [
+            3901
+          ],
+          "environments": [
+            "dev"
+          ]
+        }
+      ],
       "retained": true,
-      "retainedReason": "curated, not baseline: Break Score rev 13 (options-edge-documents design/es-liquidity/liq-S-break-score-rev13-design.md section 5, requirement liq-R-break-score-rev13-requirement.md BS13-P-001; contracts 0.92.0 schemas-registry/breakline, fixed ids 3901-3905 of the block 3901-3910): the user command (UPSERT or DELETE of one break-score line, key = the line id for both operations), written by the web tier. COMPACTED and user data: RESET-PRESERVED. Written under RecordNameStrategy with auto.register.schemas=false. Producer and consumer bindings are added by the deploy change that adds the service (D2) together with its image label, so no existing service becomes schema-gated here. Dev only; nothing is registered on production or es4."
+      "retainedReason": "curated, not baseline: Break Score rev 13 (options-edge-documents design/es-liquidity/liq-S-break-score-rev13-design.md section 5, requirement liq-R-break-score-rev13-requirement.md BS13-P-001; contracts 0.92.0 schemas-registry/breakline, fixed ids 3901-3905 of the block 3901-3910): the user command (UPSERT or DELETE of one break-score line, key = the line id for both operations), written by the web tier. COMPACTED and user data: RESET-PRESERVED. Written under RecordNameStrategy with auto.register.schemas=false. Bound by the deploy change that adds the service (D2): the producer is break-line (ids 3902-3905; the web tier writes 3901 and has no binding, as line health's user lines), the consumers are break-line itself (3901 lines, 3902 its own state at a cold start) and the engine inputs. Dev only; nothing is registered on production or es4."
     },
     {
       "kind": "MIRRORED",
@@ -11866,7 +11926,7 @@
       "source": {
         "kind": "FILE",
         "repo": "contracts",
-        "path": "schemas-registry/breakline/BreakLineState.avsc"
+        "path": "schemas-registry/breakline/v1/BreakLineState.avsc"
       },
       "topics": [
         {
@@ -11877,7 +11937,51 @@
       "producers": [],
       "consumers": [],
       "retained": true,
-      "retainedReason": "curated, not baseline: Break Score rev 13 (options-edge-documents design/es-liquidity/liq-S-break-score-rev13-design.md section 5, requirement liq-R-break-score-rev13-requirement.md BS13-P-001; contracts 0.92.0 schemas-registry/breakline, fixed ids 3901-3905 of the block 3901-3910): the newest state and score of each line, written by break-line-service. COMPACTED: the next record rewrites it, so every reset path may destroy it. Written under RecordNameStrategy with auto.register.schemas=false. Producer and consumer bindings are added by the deploy change that adds the service (D2) together with its image label, so no existing service becomes schema-gated here. Dev only; nothing is registered on production or es4."
+      "retainedReason": "curated, not baseline: Break Score rev 13 (options-edge-documents design/es-liquidity/liq-S-break-score-rev13-design.md section 5, requirement liq-R-break-score-rev13-requirement.md BS13-P-001; contracts 0.92.0 schemas-registry/breakline, fixed ids 3901-3905 of the block 3901-3910): the newest state and score of each line, written by break-line-service. COMPACTED: the next record rewrites it, so every reset path may destroy it. Written under RecordNameStrategy with auto.register.schemas=false. Producer and consumer bindings are added by the deploy change that adds the service (D2) together with its image label, so no existing service becomes schema-gated here. ARCHIVAL version 1 (contracts 0.92.0, registered on dev under this id; its content never changes): superseded by version 2 (rev 14, system lines, liq-S 19.8) under id 3906, the pattern of line health 3701 -> 3708. Dev only; nothing is registered on production or es4."
+    },
+    {
+      "kind": "MIRRORED",
+      "subject": "com.optionsedge.contracts.breakline.BreakLineState",
+      "version": 2,
+      "id": 3906,
+      "family": "breakline",
+      "schemaFile": "com.optionsedge.contracts.breakline.BreakLineState/v2.avsc",
+      "schemaHash": "b59f49c09a989dc4056cca6995e71a0599c4c6fb9ac535dd93ca70d7fb3049c4",
+      "environments": [
+        "dev"
+      ],
+      "source": {
+        "kind": "FILE",
+        "repo": "contracts",
+        "path": "schemas-registry/breakline/BreakLineState.avsc"
+      },
+      "topics": [
+        {
+          "name": "futures.break-line.state",
+          "kind": "data"
+        }
+      ],
+      "producers": [
+        {
+          "service": "break-line",
+          "environments": [
+            "dev"
+          ]
+        }
+      ],
+      "consumers": [
+        {
+          "service": "break-line",
+          "accepts": [
+            3906
+          ],
+          "environments": [
+            "dev"
+          ]
+        }
+      ],
+      "retained": true,
+      "retainedReason": "curated, not baseline: VERSION 2 (rev 14 system lines, liq-R section 21, liq-S 19.7 and 19.8; contracts 0.93.0 schemas-registry/breakline) of the BreakLineState subject under the next free fixed id 3906 of the block 3901-3910: version 1 plus optional null-default fields only; FULL compatible with version 1 (id 3902, archival). Producer and consumer bindings are added by the deploy change that adds the service (D2), which binds the service to THESE ids. Written under RecordNameStrategy with auto.register.schemas=false. Dev only; nothing is registered on production or es4."
     },
     {
       "kind": "MIRRORED",
@@ -11893,7 +11997,7 @@
       "source": {
         "kind": "FILE",
         "repo": "contracts",
-        "path": "schemas-registry/breakline/BreakLineEvent.avsc"
+        "path": "schemas-registry/breakline/v1/BreakLineEvent.avsc"
       },
       "topics": [
         {
@@ -11904,7 +12008,41 @@
       "producers": [],
       "consumers": [],
       "retained": true,
-      "retainedReason": "curated, not baseline: Break Score rev 13 (options-edge-documents design/es-liquidity/liq-S-break-score-rev13-design.md section 5, requirement liq-R-break-score-rev13-requirement.md BS13-P-001; contracts 0.92.0 schemas-registry/breakline, fixed ids 3901-3905 of the block 3901-3910): every transition, score, line change, refusal and recorded watermark advance, written by break-line-service. DELETE cleanup with 30 days retention.ms (not -1, so in neither reset list); archived. Written under RecordNameStrategy with auto.register.schemas=false. Producer and consumer bindings are added by the deploy change that adds the service (D2) together with its image label, so no existing service becomes schema-gated here. Dev only; nothing is registered on production or es4."
+      "retainedReason": "curated, not baseline: Break Score rev 13 (options-edge-documents design/es-liquidity/liq-S-break-score-rev13-design.md section 5, requirement liq-R-break-score-rev13-requirement.md BS13-P-001; contracts 0.92.0 schemas-registry/breakline, fixed ids 3901-3905 of the block 3901-3910): every transition, score, line change, refusal and recorded watermark advance, written by break-line-service. DELETE cleanup with 30 days retention.ms (not -1, so in neither reset list); archived. Written under RecordNameStrategy with auto.register.schemas=false. Producer and consumer bindings are added by the deploy change that adds the service (D2) together with its image label, so no existing service becomes schema-gated here. ARCHIVAL version 1 (contracts 0.92.0, registered on dev under this id; its content never changes): superseded by version 2 (rev 14, system lines, liq-S 19.8) under id 3907, the pattern of line health 3701 -> 3708. Dev only; nothing is registered on production or es4."
+    },
+    {
+      "kind": "MIRRORED",
+      "subject": "com.optionsedge.contracts.breakline.BreakLineEvent",
+      "version": 2,
+      "id": 3907,
+      "family": "breakline",
+      "schemaFile": "com.optionsedge.contracts.breakline.BreakLineEvent/v2.avsc",
+      "schemaHash": "4b874ddbcdb6089fa3e1a61cd9e193083f7412f595d2ae796cc63817ce52ba8f",
+      "environments": [
+        "dev"
+      ],
+      "source": {
+        "kind": "FILE",
+        "repo": "contracts",
+        "path": "schemas-registry/breakline/BreakLineEvent.avsc"
+      },
+      "topics": [
+        {
+          "name": "futures.break-line.events",
+          "kind": "data"
+        }
+      ],
+      "producers": [
+        {
+          "service": "break-line",
+          "environments": [
+            "dev"
+          ]
+        }
+      ],
+      "consumers": [],
+      "retained": true,
+      "retainedReason": "curated, not baseline: VERSION 2 (rev 14 system lines, liq-R section 21, liq-S 19.7 and 19.8; contracts 0.93.0 schemas-registry/breakline) of the BreakLineEvent subject under the next free fixed id 3907 of the block 3901-3910: version 1 plus optional null-default fields only; FULL compatible with version 1 (id 3903, archival). Producer and consumer bindings are added by the deploy change that adds the service (D2), which binds the service to THESE ids. Written under RecordNameStrategy with auto.register.schemas=false. Dev only; nothing is registered on production or es4."
     },
     {
       "kind": "MIRRORED",
@@ -11920,7 +12058,7 @@
       "source": {
         "kind": "FILE",
         "repo": "contracts",
-        "path": "schemas-registry/breakline/BreakLineStatus.avsc"
+        "path": "schemas-registry/breakline/v1/BreakLineStatus.avsc"
       },
       "topics": [
         {
@@ -11931,7 +12069,41 @@
       "producers": [],
       "consumers": [],
       "retained": true,
-      "retainedReason": "curated, not baseline: Break Score rev 13 (options-edge-documents design/es-liquidity/liq-S-break-score-rev13-design.md section 5, requirement liq-R-break-score-rev13-requirement.md BS13-P-001; contracts 0.92.0 schemas-registry/breakline, fixed ids 3901-3905 of the block 3901-3910): the one-second status record (the page heartbeat), written by break-line-service. COMPACTED and rebuildable. Written under RecordNameStrategy with auto.register.schemas=false. Producer and consumer bindings are added by the deploy change that adds the service (D2) together with its image label, so no existing service becomes schema-gated here. Dev only; nothing is registered on production or es4."
+      "retainedReason": "curated, not baseline: Break Score rev 13 (options-edge-documents design/es-liquidity/liq-S-break-score-rev13-design.md section 5, requirement liq-R-break-score-rev13-requirement.md BS13-P-001; contracts 0.92.0 schemas-registry/breakline, fixed ids 3901-3905 of the block 3901-3910): the one-second status record (the page heartbeat), written by break-line-service. COMPACTED and rebuildable. Written under RecordNameStrategy with auto.register.schemas=false. Producer and consumer bindings are added by the deploy change that adds the service (D2) together with its image label, so no existing service becomes schema-gated here. ARCHIVAL version 1 (contracts 0.92.0, registered on dev under this id; its content never changes): superseded by version 2 (rev 14, system lines, liq-S 19.8) under id 3908, the pattern of line health 3701 -> 3708. Dev only; nothing is registered on production or es4."
+    },
+    {
+      "kind": "MIRRORED",
+      "subject": "com.optionsedge.contracts.breakline.BreakLineStatus",
+      "version": 2,
+      "id": 3908,
+      "family": "breakline",
+      "schemaFile": "com.optionsedge.contracts.breakline.BreakLineStatus/v2.avsc",
+      "schemaHash": "a990923577e30df3b4759e0ac4ce76455855ac0fc140a0bf0fc234794b3634a0",
+      "environments": [
+        "dev"
+      ],
+      "source": {
+        "kind": "FILE",
+        "repo": "contracts",
+        "path": "schemas-registry/breakline/BreakLineStatus.avsc"
+      },
+      "topics": [
+        {
+          "name": "futures.break-line.status",
+          "kind": "data"
+        }
+      ],
+      "producers": [
+        {
+          "service": "break-line",
+          "environments": [
+            "dev"
+          ]
+        }
+      ],
+      "consumers": [],
+      "retained": true,
+      "retainedReason": "curated, not baseline: VERSION 2 (rev 14 system lines, liq-R section 21, liq-S 19.7 and 19.8; contracts 0.93.0 schemas-registry/breakline) of the BreakLineStatus subject under the next free fixed id 3908 of the block 3901-3910: version 1 plus optional null-default fields only; FULL compatible with version 1 (id 3904, archival). Producer and consumer bindings are added by the deploy change that adds the service (D2), which binds the service to THESE ids. Written under RecordNameStrategy with auto.register.schemas=false. Dev only; nothing is registered on production or es4."
     },
     {
       "kind": "MIRRORED",
@@ -11955,10 +12127,17 @@
           "kind": "data"
         }
       ],
-      "producers": [],
+      "producers": [
+        {
+          "service": "break-line",
+          "environments": [
+            "dev"
+          ]
+        }
+      ],
       "consumers": [],
       "retained": true,
-      "retainedReason": "curated, not baseline: Break Score rev 13 (options-edge-documents design/es-liquidity/liq-S-break-score-rev13-design.md section 5, requirement liq-R-break-score-rev13-requirement.md BS13-P-001; contracts 0.92.0 schemas-registry/breakline, fixed ids 3901-3905 of the block 3901-3910): the restart snapshot (max.message.bytes 9437184), written by break-line-service in the transaction of the outputs it describes. COMPACTED and rebuildable. Written under RecordNameStrategy with auto.register.schemas=false. Producer and consumer bindings are added by the deploy change that adds the service (D2) together with its image label, so no existing service becomes schema-gated here. Dev only; nothing is registered on production or es4."
+      "retainedReason": "curated, not baseline: Break Score rev 13 (options-edge-documents design/es-liquidity/liq-S-break-score-rev13-design.md section 5, requirement liq-R-break-score-rev13-requirement.md BS13-P-001; contracts 0.92.0 schemas-registry/breakline, fixed ids 3901-3905 of the block 3901-3910): the restart snapshot (max.message.bytes 9437184), written by break-line-service in the transaction of the outputs it describes. COMPACTED and rebuildable. Written under RecordNameStrategy with auto.register.schemas=false. Bound by the deploy change that adds the service (D2): the producer is break-line (ids 3902-3905; the web tier writes 3901 and has no binding, as line health's user lines), the consumers are break-line itself (3901 lines, 3902 its own state at a cold start) and the engine inputs. Dev only; nothing is registered on production or es4."
     }
   ],
   "dlqTopics": {

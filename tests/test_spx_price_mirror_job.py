@@ -1,3 +1,9 @@
+# CI-REQUIRED
+#
+# This module's assertions MUST run in CI. scripts/ci/validate-tests-are-collectable.sh - a separate,
+# already-wired step of .github/workflows/deploy-validation.yml - fails the build unless a mandatory step
+# of that workflow invokes this module as a `python3 -m unittest` target, with no continue-on-error, no
+# `if:` and no shell construct that would swallow its failure.
 """Jenkinsfile.spx-price-reencoder: the job that replaces the two byte copiers of underlying.spx.price (the spx-es4-bridge console pipe and
 the dev->.74 MirrorMaker whitelist entry). Structural contract plus the one executable guard worth running: the check that the MM1
 whitelist no longer carries the topic."""

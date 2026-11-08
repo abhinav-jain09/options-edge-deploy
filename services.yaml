@@ -33,7 +33,9 @@ services:
     image: rithmic-depth-bridge
     deployments: [rithmic-depth-bridge, rithmic-depth-mirror-dev, rithmic-depth-mirror-production]
     sourceRepo: rithmic-depth-bridge
-    buildJob: es4-deploy
+    # Moved out of es4-deploy 2026-11-08: a two-source release cannot carry that job's
+    # permitted-commit guard, and one unguardable branch made the whole es4 job unguardable.
+    buildJob: rithmic-depth-bridge-release
     envs: [es4]
     consumedTopics: []
     producedTopics: [es.rithmic.depth]
@@ -288,6 +290,12 @@ services:
   # It NEVER trades and adds no decision consumer of its topics. Absorption COVERAGE is published by es-liquidity-engine on es.mbo.coverage
   # (EsMboCoverage 3511) as the INTERVAL it observed the book continuously over; an absence is claimed only when the whole association window lies inside it. Single replica only. No Service object; no production or es4 entry, image or overlay exists.
   - { name: strike-hold,                  managedBy: standalone, sliceGenerated: true, envs: [dev], image: options-edge-strike-hold,                  deployments: [strike-hold-service] }
+  # break-line: DEV ONLY (envs: [dev]). NEW service: Break Score rev 13 (options-edge-documents design/es-liquidity/liq-S-break-score-rev13-design.md; requirement liq-R-break-score-rev13-requirement.md). For every
+  # horizontal line a user marks it publishes the state, the measurements and the continuation score on futures.break-line.{state,events,status,snapshot} (ids 3906-3908 and the snapshot 3905, scripts/kafka/schema-id-maps/break-line.map;
+  # schema-manifest family breakline). It reads futures.break-line.lines (id 3901, written by the web tier), es.mbo.health (3509), es.mbo.level-flow (3502), the linearized ES tape, spx.basis.state and
+  # options.spx.strike-hold.current (3801) without a consumer group. SHADOW: it never trades and adds no decision consumer. scripts/kafka/ensure-break-line-topics.sh is the first-deploy barrier (service-deploy, dev only).
+  # Plain consumer loops, no Kafka Streams, no state volume. Single replica only. No Service object; no production or es4 entry, image, topic or overlay exists.
+  - { name: break-line,                   managedBy: standalone, sliceGenerated: true, envs: [dev], image: options-edge-break-line,                   deployments: [break-line-service] }
   # stock-gex: SPX-500 single-stock GEX (Databento equity options; NO Kafka). Its image builds in the
   # options-edge-databento-feed repo (Dockerfile.stockgex), like databento-sr3-feed — hence buildJob.
   # DEV-FIRST/on-demand: prod overlay holds it at replicas:0 until the nightly OI-index builder exists.

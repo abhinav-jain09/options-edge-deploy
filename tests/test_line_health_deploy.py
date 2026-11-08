@@ -1,3 +1,9 @@
+# CI-REQUIRED
+#
+# This module's assertions MUST run in CI. scripts/ci/validate-tests-are-collectable.sh - a separate,
+# already-wired step of .github/workflows/deploy-validation.yml - fails the build unless a mandatory step
+# of that workflow invokes this module as a `python3 -m unittest` target, with no continue-on-error, no
+# `if:` and no shell construct that would swallow its failure.
 """Deploy wiring of the Line health feature, milestone M0 (requirement rev 25 LH-O-1, LH-O-2, LH-L-*; design 3.3): DEV ONLY.
 
 Covers: the seven futures.line-health.* topics' declared shapes in topics.env (one partition, policy, retention.ms, retention.bytes -1, the 9 MiB snapshot bound, the reset classes), their
@@ -243,7 +249,8 @@ class SchemaMapAndManifest(unittest.TestCase):
         self.assertEqual(sorted(e["id"] for e in mine), sorted(list(IDS.values()) + list(ARCHIVAL_V1.values())))
         for name, old in ARCHIVAL_V1.items():
             a = next(x for x in mine if x["id"] == old)
-            self.assertEqual((a["kind"], a["version"], a["subject"], a["environments"], a["producers"], a["consumers"]), ("MIRRORED", 1, f"{NS}.{name}", ["dev"], [], []), f"{name}: archival version 1, nobody writes it")
+            arch_consumers = [{"service": "break-line", "accepts": [3701, 3708], "environments": ["dev"]}] if name == "LineHealthState" else []   # break-line-service reads both versions of the state (rev 14, BS13-SL-006)
+            self.assertEqual((a["kind"], a["version"], a["subject"], a["environments"], a["producers"], a["consumers"]), ("MIRRORED", 1, f"{NS}.{name}", ["dev"], [], arch_consumers), f"{name}: archival version 1, nobody writes it")
             self.assertEqual(a["source"], {"kind": "FILE", "repo": "contracts", "path": f"schemas-registry/linehealth/v1/{name}.avsc"}, name)
             self.assertEqual(a["schemaFile"], f"{NS}.{name}/v1.avsc")
         for name, sid in IDS.items():
@@ -253,7 +260,8 @@ class SchemaMapAndManifest(unittest.TestCase):
             self.assertEqual(e["source"], {"kind": "FILE", "repo": "contracts", "path": f"schemas-registry/linehealth/{name}.avsc"}, name)
             self.assertEqual(e["topics"], [{"name": TOPIC_OF[name], "kind": "data"}], name)
             producers = [] if name == "LineHealthUserLine" else [{"service": "level-absorption", "environments": ["dev"]}]
-            self.assertEqual((e["producers"], e["consumers"]), (producers, []), f"{name}: level-absorption is the only producer binding on dev (user lines are written by the web tier at M5); the feed gateway is not schema-gated for ANY relay (no schema-requirements.json, no consumer binding for the liquidity-wall or validator relays either), so the line-health relay is rolled in the same change by code (assertFramedAsAnyVersion), not by a manifest binding")
+            consumers = [{"service": "break-line", "accepts": [3701, 3708], "environments": ["dev"]}] if name == "LineHealthState" else []   # break-line-service reads the line health state (rev 14 system lines, BS13-SL-006)
+            self.assertEqual((e["producers"], e["consumers"]), (producers, consumers), f"{name}: level-absorption is the only producer binding on dev (user lines are written by the web tier at M5); the feed gateway is not schema-gated for ANY relay (no schema-requirements.json, no consumer binding for the liquidity-wall or validator relays either), so the line-health relay is rolled in the same change by code (assertFramedAsAnyVersion), not by a manifest binding")
             snapshot = ROOT / "schema-manifest/schemas" / e["schemaFile"]
             text = snapshot.read_text()
             self.assertEqual(text, json.dumps(json.loads(text), separators=(",", ":"), ensure_ascii=False), f"{name}: one-line compact JSON, no trailing newline")

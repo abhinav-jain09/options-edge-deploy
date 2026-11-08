@@ -1,3 +1,9 @@
+# CI-REQUIRED
+#
+# This module's assertions MUST run in CI. scripts/ci/validate-tests-are-collectable.sh - a separate,
+# already-wired step of .github/workflows/deploy-validation.yml - fails the build unless a mandatory step
+# of that workflow invokes this module as a `python3 -m unittest` target, with no continue-on-error, no
+# `if:` and no shell construct that would swallow its failure.
 """verify-flow.sh and assert-target-fresh.sh against stand-in Kafka CLIs. The point of verify-flow: an advancing TARGET offset is not proof the
 mirror moves data; the mirror's own group must advance, its lag stay bounded, and its last flushed source record appear on the target."""
 import json, os, pathlib, subprocess, tempfile, unittest

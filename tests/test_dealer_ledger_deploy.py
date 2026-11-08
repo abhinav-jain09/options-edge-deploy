@@ -1,3 +1,15 @@
+# CI-REQUIRED
+#
+# This marker is not decoration: scripts/ci/validate-tests-are-collectable.sh - a separate, already-wired
+# step of deploy-validation.yml - fails the build unless a mandatory step of that workflow runs this
+# module through `python3 -m unittest`. Without it this module is an orphan: the workflow names its test
+# modules by hand and nothing discovers them, so the collectability step would IMPORT this file (catching
+# an import error) while not one of its assertions ever executed. Measured when the marker was added:
+# 138 modules under tests/, 26 named by the workflow, 112 never run.
+#
+# It matters most for test_dev_reserves_no_cpu_for_the_three_while_prod_and_es4_keep_theirs, which holds a
+# position the owner stated outright - "let it use the cpu as much it want dont restrict anything" - and
+# which, unwired, would have held nothing.
 import pathlib
 import unittest
 
@@ -179,6 +191,140 @@ class DealerLedgerDeployTest(unittest.TestCase):
             text = (ROOT / script).read_text()
             for name in trio:
                 self.assertIn(name, text, "%s must stay in %s's KEEP_DOWN" % (name, script))
+
+
+    def test_dev_reserves_no_cpu_for_the_three_while_prod_and_es4_keep_theirs(self):
+        """Owner 2026-11-08: "let it use the cpu as much it want dont restrict anything."
+
+        A cpu REQUEST is a reservation used for scheduling, not a cap. The base reserves 2 whole CPUs for
+        the ledger, and the dev node is a 16-core Mac already at ~16/16 reserved, so that reservation could
+        never be satisfied: the pods sat `Pending: Insufficient cpu` and got ZERO cpu. Removing the request
+        on dev lets them schedule, and because there is no cpu LIMIT anywhere they can then use as much as
+        they want - which is what was asked for.
+
+        This is asserted in BOTH dev paths because they are independent sources of truth: the kustomize
+        overlay feeds the full-stack apply, while service-deploy.sh reads k8s/services/*/overlays/dev/
+        manifest.yaml. A change to one alone would be reverted by a deploy through the other.
+
+        Production, es4 and experiment must KEEP their reservations and stay at replicas 0 - they run on
+        real hardware where a reservation is how the ledger is guaranteed its 2 CPUs. All three
+        non-dev environments are asserted, so a dev-only change cannot silently widen.
+        """
+        import yaml
+
+        trio = {"dealer-ledger": "dealer-ledger-service",
+                "dealer-ledger-calibration-scorer": "dealer-ledger-calibration-scorer",
+                "dealer-ledger-calibration-accumulator": "dealer-ledger-calibration-accumulator"}
+
+        def cpu_requests(paths):
+            """container name -> (cpu request or 'NONE', deployment replicas), across the given manifests.
+
+            Replicas come back alongside the request because the blast-radius claim this test makes is
+            BOTH "the other environments keep their reservations" AND "they stay inert" - Codex found that
+            an es4 enablement would have passed the first version of this test, which read only the cpu.
+            """
+            found = {}
+            for rel in paths:
+                for doc in yaml.safe_load_all((ROOT / rel).read_text()):
+                    if not doc or doc.get("kind") != "Deployment":
+                        continue
+                    for c in doc["spec"]["template"]["spec"]["containers"]:
+                        if c["name"] in trio:
+                            req = ((c.get("resources") or {}).get("requests") or {})
+                            found[c["name"]] = (req.get("cpu", "NONE"), doc["spec"].get("replicas"))
+            return found
+
+        dev_service = cpu_requests([
+            "k8s/services/dealer-ledger/overlays/dev/manifest.yaml",
+            "k8s/services/dealer-ledger-calibration/overlays/dev/manifest.yaml",
+        ])
+        # Non-vacuity: all three containers must actually have been located, or an empty dict would make
+        # every "no cpu request" assertion below trivially true.
+        self.assertEqual(set(trio), set(dev_service),
+                         "the dev per-service manifests must define all three containers")
+        for name in trio:
+            cpu, replicas = dev_service[name]
+            self.assertEqual("NONE", cpu,
+                             "%s must reserve NO cpu on dev (owner: do not restrict it); a reservation it "
+                             "cannot get leaves it Pending with zero cpu" % name)
+            self.assertEqual(1, replicas,
+                             "%s must be enabled (replicas 1) in the dev per-service manifest, which is "
+                             "what service-deploy.sh applies" % name)
+
+        # The dev kustomize overlay must say the same thing, and it is a PATCH, so assert on the RENDER
+        # rather than the patch file - a patch that failed to apply would otherwise read as compliant.
+        import subprocess
+        render = subprocess.run(["kubectl", "kustomize", str(ROOT / "k8s" / "overlays" / "dev")],
+                                capture_output=True, text=True)
+        self.assertEqual(0, render.returncode,
+                         "the dev overlay must render: %s" % render.stderr[-800:])
+        dev_overlay, dev_replicas = {}, {}
+        for doc in yaml.safe_load_all(render.stdout):
+            if not doc or doc.get("kind") != "Deployment":
+                continue
+            for c in doc["spec"]["template"]["spec"]["containers"]:
+                if c["name"] in trio:
+                    req = ((c.get("resources") or {}).get("requests") or {})
+                    dev_overlay[c["name"]] = req.get("cpu", "NONE")
+                    dev_replicas[c["name"]] = doc["spec"].get("replicas")
+        self.assertEqual(set(trio), set(dev_overlay),
+                         "the rendered dev overlay must contain all three containers")
+        for name in trio:
+            self.assertEqual("NONE", dev_overlay[name],
+                             "%s must reserve NO cpu in the rendered dev overlay" % name)
+            self.assertEqual(1, dev_replicas[name],
+                             "%s must still be enabled (replicas 1) on dev" % name)
+
+        # Production and es4 keep their reservations. Checked on the production RENDER too, so a stray
+        # cpu: null reaching the production overlay would fail here.
+        prod = cpu_requests([
+            "k8s/services/dealer-ledger/overlays/production/manifest.yaml",
+            "k8s/services/dealer-ledger-calibration/overlays/production/manifest.yaml",
+        ])
+        es4 = cpu_requests([
+            "k8s/es4/services/dealer-ledger.yaml",
+            "k8s/es4/services/dealer-ledger-calibration.yaml",
+        ])
+        # `experiment` is the fourth environment whose overlays define these same containers. It is not a
+        # target of this change and is asserted here for exactly that reason: Codex (r2) pointed out that
+        # leaving it neither asserted nor exempted is how a dev-only change quietly becomes a four-
+        # environment one. Its declared state is identical to production and es4 - replicas 0 with the
+        # 2 / 100m / 100m reservations - so it is checked by the same loop rather than given its own.
+        experiment = cpu_requests([
+            "k8s/services/dealer-ledger/overlays/experiment/manifest.yaml",
+            "k8s/services/dealer-ledger-calibration/overlays/experiment/manifest.yaml",
+        ])
+        expected = {"dealer-ledger": "2",
+                    "dealer-ledger-calibration-scorer": "100m",
+                    "dealer-ledger-calibration-accumulator": "100m"}
+        for label, got in (("production", prod), ("es4", es4), ("experiment", experiment)):
+            self.assertEqual(set(trio), set(got), "%s must define all three containers" % label)
+            for name, want in expected.items():
+                cpu, replicas = got[name]
+                self.assertEqual(want, str(cpu),
+                                 "%s must KEEP its %s cpu reservation in %s - real hardware, where the "
+                                 "reservation is what guarantees it" % (name, want, label))
+                self.assertEqual(0, replicas,
+                                 "%s must stay inert (replicas 0) in %s - this dev enable must not leak "
+                                 "into any other environment" % (name, label))
+
+        prod_render = subprocess.run(["kubectl", "kustomize", str(ROOT / "k8s" / "overlays" / "production")],
+                                     capture_output=True, text=True)
+        self.assertEqual(0, prod_render.returncode,
+                         "the production overlay must render: %s" % prod_render.stderr[-800:])
+        seen = 0
+        for doc in yaml.safe_load_all(prod_render.stdout):
+            if not doc or doc.get("kind") != "Deployment":
+                continue
+            for c in doc["spec"]["template"]["spec"]["containers"]:
+                if c["name"] in trio:
+                    seen += 1
+                    req = ((c.get("resources") or {}).get("requests") or {})
+                    self.assertEqual(expected[c["name"]], str(req.get("cpu", "NONE")),
+                                     "%s must keep its cpu reservation in the PRODUCTION render" % c["name"])
+                    self.assertEqual(0, doc["spec"].get("replicas"),
+                                     "%s must stay inert in production" % c["name"])
+        self.assertEqual(3, seen, "the production render must contain all three containers")
 
 
 if __name__ == "__main__":

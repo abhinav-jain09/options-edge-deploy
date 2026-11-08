@@ -1,3 +1,9 @@
+# CI-REQUIRED
+#
+# This module's assertions MUST run in CI. scripts/ci/validate-tests-are-collectable.sh - a separate,
+# already-wired step of .github/workflows/deploy-validation.yml - fails the build unless a mandatory step
+# of that workflow invokes this module as a `python3 -m unittest` target, with no continue-on-error, no
+# `if:` and no shell construct that would swallow its failure.
 """scripts/kafka/spx-price-mirror/assert-subject-parity.sh against two stand-in registries: the mirror never registers, so the subject
 must be on both, in the same shape, while the ids are free to differ."""
 import json, os, subprocess, unittest

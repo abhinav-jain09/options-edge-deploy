@@ -1,3 +1,9 @@
+# CI-REQUIRED
+#
+# This module's assertions MUST run in CI. scripts/ci/validate-tests-are-collectable.sh - a separate,
+# already-wired step of .github/workflows/deploy-validation.yml - fails the build unless a mandatory step
+# of that workflow invokes this module as a `python3 -m unittest` target, with no continue-on-error, no
+# `if:` and no shell construct that would swallow its failure.
 """scripts/kafka/ensure-indicator-topics.sh --recreate against the stand-in Kafka CLIs and the REAL topics.env:
 the allow-list is environment-qualified (six on es4, ten on dev and production), every topic comes back empty at the
 shape topics.env declares through the shared shape library (apply-topics.sh's functions), a bogus environment and

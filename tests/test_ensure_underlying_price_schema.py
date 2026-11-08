@@ -1,3 +1,9 @@
+# CI-REQUIRED
+#
+# This module's assertions MUST run in CI. scripts/ci/validate-tests-are-collectable.sh - a separate,
+# already-wired step of .github/workflows/deploy-validation.yml - fails the build unless a mandatory step
+# of that workflow invokes this module as a `python3 -m unittest` target, with no continue-on-error, no
+# `if:` and no shell construct that would swallow its failure.
 """scripts/kafka/ensure-underlying-price-schema.sh against the stand-in registry: a fresh registry gets the canonical
 underlying.spx.price subject under FULL, a re-run changes nothing, a drifted subject-level config is repaired to
 FULL by read-back, a schema file whose record is not the subject is refused, and a dry run mutates nothing."""

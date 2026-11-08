@@ -1,3 +1,9 @@
+# CI-REQUIRED
+#
+# This module's assertions MUST run in CI. scripts/ci/validate-tests-are-collectable.sh - a separate,
+# already-wired step of .github/workflows/deploy-validation.yml - fails the build unless a mandatory step
+# of that workflow invokes this module as a `python3 -m unittest` target, with no continue-on-error, no
+# `if:` and no shell construct that would swallow its failure.
 """es.futures.aggressor-flow Avro (contracts 0.38.0, fixed id 2701): scripts/kafka/ensure-fixed-id-schemas.sh with schema-id-maps/es-aggressor-flow.map against the
 stand-in registry (tests/stub_schema_registry.py), the map's agreement with the other maps, and the wipe script's refusal of es4 and production."""
 from __future__ import annotations

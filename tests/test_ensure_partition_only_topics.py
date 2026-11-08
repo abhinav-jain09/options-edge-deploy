@@ -1,3 +1,9 @@
+# CI-REQUIRED
+#
+# This module's assertions MUST run in CI. scripts/ci/validate-tests-are-collectable.sh - a separate,
+# already-wired step of .github/workflows/deploy-validation.yml - fails the build unless a mandatory step
+# of that workflow invokes this module as a `python3 -m unittest` target, with no continue-on-error, no
+# `if:` and no shell construct that would swallow its failure.
 """scripts/kafka/ensure-partition-only-topics.sh against a fake kafka-topics: creates what is missing at the
 declared count, grows a smaller copy, only reports a larger one, and on production skips dev-named app ids."""
 import os, subprocess, tempfile, textwrap, unittest

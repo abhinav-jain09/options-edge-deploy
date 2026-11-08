@@ -1,3 +1,9 @@
+# CI-REQUIRED
+#
+# This module's assertions MUST run in CI. scripts/ci/validate-tests-are-collectable.sh - a separate,
+# already-wired step of .github/workflows/deploy-validation.yml - fails the build unless a mandatory step
+# of that workflow invokes this module as a `python3 -m unittest` target, with no continue-on-error, no
+# `if:` and no shell construct that would swallow its failure.
 """The wiring of the underlying.spx.price Avro archive reader into oe-archive-kafka.sh and its deploy unit.
 OE_SPOT_AVRO_TOPICS ships EMPTY (prod's topic is JSON until the production cutover, so the console consumer keeps
 archiving it); the documented switch routes the topic to SpotArchiveReader.java. Behavioural checks run the real

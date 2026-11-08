@@ -1,3 +1,9 @@
+# CI-REQUIRED
+#
+# This module's assertions MUST run in CI. scripts/ci/validate-tests-are-collectable.sh - a separate,
+# already-wired step of .github/workflows/deploy-validation.yml - fails the build unless a mandatory step
+# of that workflow invokes this module as a `python3 -m unittest` target, with no continue-on-error, no
+# `if:` and no shell construct that would swallow its failure.
 """scripts/kafka/spx-price-mirror/verify-target-record.sh against stand-ins for kafka-get-offsets, kafka-console-consumer,
 kafka-avro-console-consumer and curl: the gate passes only for a Confluent-framed record whose id resolves to the canonical
 subject ON THE TARGET REGISTRY and that decodes; JSON, an id the target registry maps to another subject, an undecodable

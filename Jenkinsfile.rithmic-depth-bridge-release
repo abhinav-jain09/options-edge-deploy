@@ -1,0 +1,159 @@
+// RITHMIC DEPTH BRIDGE RELEASE — the ES4 Rithmic collector and its dev/prod identity mirrors.
+//
+// WHY THIS IS ITS OWN JOB, AND OUT OF THE PERMITTED-COMMIT GUARD'S SCOPE
+// This release is a TWO-SOURCE job. It consumes three trees:
+//   * options-edge-deploy (this repository): k8s/es4/services/rithmic-depth-bridge.yaml, scripts/es4/*
+//   * rithmic-depth-bridge at RITHMIC_PERMITTED_SHA  — the collector source
+//   * options-edge-contracts at CONTRACTS_PERMITTED_SHA — compiled here into the released schema jar
+// and the rollout is driven by the COLLECTOR REPOSITORY'S OWN scripts/deploy-kubernetes.py, which
+// builds and pushes the collector image (docker build | docker push over ssh, from a tar of that
+// checkout), provisions topics and schemas, seeds the secret and applies the manifests.
+//
+// scripts/jenkins/validate-jenkinsfile-guard.py cannot judge that: rule 9b requires every
+// source-consuming effect to be a dedicated step whose consumed sources the validator can READ, and a
+// script inside a cloned repository is not in the tree it sees — it is refused, never guessed. So this
+// job CANNOT carry the canonical guard over the effect that matters, and claiming it does would be a
+// false statement. It is therefore classified `out` in scripts/ci/jenkins-permitted-sha-scope.txt —
+// the same honest answer already recorded for Jenkinsfile.databento-rewind-deploy and
+// Jenkinsfile.public-gate-evidence, both two-source jobs whose image build lives in another,
+// unguarded repository. `out` means: NOT assistant-triggerable. This stays Abhinav's manual job.
+//
+// It lived inside Jenkinsfile.es4-deploy's 'Deploy to es4' stage until 2026-11-08. One unguardable
+// path there made the WHOLE es4 job unguardable (five of the six validator refusals in the repository
+// came from it), which would have cost every other es4 action — infra-sync, create-topics,
+// clean-reset, deploy-service, deploy-all, update-image, activate/deactivate es-feed — its
+// `in` classification. Moving this path out keeps those genuinely guarded and genuinely available,
+// and puts the honest label on the part that cannot be.
+//
+// WHAT IS STILL ENFORCED HERE (kept byte-for-byte from the es4-deploy path, not relaxed):
+//   * the canonical permitted-commit guard over THIS repository's tree, first, before any effect —
+//     it is what binds the manifest and the scripts/es4 helpers this job runs;
+//   * verify-permitted-tree.sh over that tree immediately before the clones — and now inside a
+//     timeout(time: 10, unit: 'MINUTES') block, which the es4-deploy line was missing (validator
+//     finding 4): moving the path must not move its defects with it;
+//   * both foreign revisions pinned to exact 40-hex commits, each re-checked against HEAD *and*
+//     origin/main in its own clone, with a clean-tree assertion;
+//   * the es4 and prod cluster-identity assertions, and the ES4 service allowlist;
+//   * no dry-run path (it can neither publish nor seed secrets).
+// What it does NOT have is a verified chain over the collector's own build — that is the property the
+// `out` classification is stating plainly.
+pipeline {
+  agent { label 'local-mac' }
+  parameters {
+    string(name: 'PERMITTED_SHA', defaultValue: '', trim: true,
+      description: 'REQUIRED — Deployment Permission Rule (options-edge rule.md). The full 40-character commit id of THIS repository (options-edge-deploy) that Abhinav permitted for this run. The Permitted commit guard stage refuses the build before any effect unless the checked-out HEAD is exactly this commit AND on origin/main; empty, short or mismatched values are refused and nothing is substituted. Copy it from `git rev-parse origin/main`.')
+    string(name: 'PERMITTED_SHA_GUARD_VERSION', defaultValue: '2f6fc2ab7aa51eb8a9e8aa350f2d774cd2fb7a253de2591e43645a19a9886b24',
+      description: 'DO NOT EDIT BY HAND — the sha256 of scripts/jenkins/permitted-sha-guard.sh this definition runs (Deployment Permission Rule). The guard refuses to run under any other value. Regenerate with scripts/jenkins/permitted-sha-guard-version.sh when the guard changes.')
+    string(name: 'RITHMIC_PERMITTED_SHA', defaultValue: '', trim: true,
+      description: 'Exact 40-character collector main revision (rithmic-depth-bridge). This job owns the build, the registry publication, the ES4 collector and the dev/prod identity mirrors.')
+    string(name: 'CONTRACTS_PERMITTED_SHA', defaultValue: '', trim: true,
+      description: 'Exact 40-character options-edge-contracts main revision whose Rithmic schemas are compiled into the released jar.')
+    string(name: 'RITHMIC_SDK_ZIP', defaultValue: '',
+      description: 'Licensed R API+ 13.7.0.0 SDK archive on the Jenkins node; never committed.')
+    booleanParam(name: 'RITHMIC_DEV_ONLY', defaultValue: false,
+      description: 'Release the ES4 Rithmic collector and dev mirror only. Skip production Kafka/Schema Registry provisioning and mirror rollout/proof. Existing production mirror may resume forwarding later; image still uses the required prod registry.')
+    booleanParam(name: 'DEPLOY_DRY_RUN', defaultValue: false,
+      description: 'Refused by this job: the Rithmic release runs read-only local tests before the explicitly requested rollout, and a dry run can neither publish an image nor seed the secret. Present only so the refusal is explicit rather than a silent no-op.')
+  }
+  options { disableRestartFromStage(); disableConcurrentBuilds(); timeout(time: 60, unit: 'MINUTES') }
+  environment {
+    PYTHONDONTWRITEBYTECODE = '1'
+    // The es4 DEPLOYER identity, not the cluster admin — k8s/es4/security/jenkins-deployer-rbac.yaml.
+    ES4_KUBECONFIG = '/Users/abhinav/.kube/es4-jenkins-deployer.kubeconfig'
+    PROD_KUBECONFIG = '/Users/abhinav/.kube/jenkins-deployer-prod.kubeconfig'
+    // PINNED cluster identities: the UID of each cluster's `options-edge` namespace. Proving the two
+    // kubeconfigs merely DIFFER is not enough — swapped configs would still pass.
+    PROD_NS_UID    = 'c62ee606-688d-4373-a889-a52c8b919e73'
+    ES4_NS_UID     = 'cbf047d2-45ea-4ba7-b83c-5b462c7aa1d3'
+  }
+  stages {
+    // ---- Deployment Permission Rule (options-edge rule.md) over THIS repository's tree ----
+    // Kept even though the job is `out`: this tree supplies the manifest and the scripts/es4 helpers
+    // the release runs, and binding it is strictly better than not binding it. It is NOT a claim that
+    // the collector's own build is bound — see the header.
+    stage('Permitted commit guard') {
+      options { timeout(time: 10, unit: 'MINUTES') }
+      steps {
+        script {
+          def rc = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')
+          if (rc != 0) {
+            error("Permitted commit guard REFUSED this build (rc=${rc}) — see its output above. No deployment effect has run.")
+          }
+          env.PERMITTED_SHA_GUARD = 'PASSED'
+        }
+      }
+    }
+    stage('Release the Rithmic collector on es4') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
+      steps {
+        script {
+          if (!(params.RITHMIC_PERMITTED_SHA ==~ /[0-9a-f]{40}/)) error('Exact Rithmic main revision required')
+          if (!(params.CONTRACTS_PERMITTED_SHA ==~ /[0-9a-f]{40}/)) error('Exact contracts main revision required')
+          if (params.DEPLOY_DRY_RUN) error('Rithmic release uses read-only local tests before the explicitly requested service rollout; dry-run cannot publish or seed secrets')
+        }
+        sh '''set -euo pipefail
+          bash scripts/es4/assert-allowed-services.sh service rithmic-depth-bridge
+          bash scripts/es4/assert-cluster-identity.sh "$ES4_KUBECONFIG" es4 "$ES4_NS_UID"
+          bash scripts/es4/assert-cluster-identity.sh "$PROD_KUBECONFIG" prod "$PROD_NS_UID"
+        '''
+        // Remove only the legacy generated virtualenv; keep source verification unchanged.
+        dir('.jenkins-tmp/rithmic-venv') { deleteDir() }
+        script { env.RITHMIC_VENV_DIR = "${pwd(tmp: true)}/rithmic-venv" }
+        dir(env.RITHMIC_VENV_DIR) { deleteDir() }
+        // Validator finding 4 on the old es4-deploy line was that this verify sat outside a deadline block,
+        // unlike every other verify in that file. The `out` classification means no VALIDATOR rule re-checks
+        // the form here, so it is written in the canonical shape and tests/test_rithmic_es4_service.py is
+        // what checks it instead - comparing this line and its deadline block with the same line in the
+        // rule-checked Jenkinsfile.es4-deploy: a verify that can hang forever is a verify that can be
+        // waited out.
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp'
+        }
+        dir('.jenkins-tmp/rithmic-source') {
+          deleteDir()
+          git branch: 'main', url: 'git@github.com:abhinav-jain09/rithmic-depth-bridge.git'
+          sh '''set -euo pipefail
+            test "$(git rev-parse HEAD)" = "$RITHMIC_PERMITTED_SHA"
+            test "$(git rev-parse origin/main)" = "$RITHMIC_PERMITTED_SHA"
+            test -z "$(git status --porcelain --untracked-files=all)"
+          '''
+        }
+        dir('.jenkins-tmp/rithmic-contracts') {
+          deleteDir()
+          git branch: 'main', url: 'git@github.com:abhinav-jain09/options-edge-contracts.git'
+          sh '''set -euo pipefail
+            test "$(git rev-parse HEAD)" = "$CONTRACTS_PERMITTED_SHA"
+            test "$(git rev-parse origin/main)" = "$CONTRACTS_PERMITTED_SHA"
+            test -z "$(git status --porcelain --untracked-files=all)"
+            export JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home
+            export PATH="$JAVA_HOME/bin:$PATH"
+            mvn -q -Dtest=RithmicSchemasTest,RithmicMboSchemasTest package
+          '''
+        }
+        script {
+          env.RITHMIC_CONTRACTS_VERSION = sh(returnStdout: true, script: '''python3 - <<'PY_VERSION'
+import re,xml.etree.ElementTree as E
+version=E.parse('.jenkins-tmp/rithmic-contracts/pom.xml').getroot().findtext('{http://maven.apache.org/POM/4.0.0}version')
+if not version or not re.fullmatch(r'[0-9]+[.][0-9]+[.][0-9]+',version):raise SystemExit('Released contracts version required')
+print(version)
+PY_VERSION
+''').trim()
+        }
+        sh '''set -euo pipefail
+          python3 -m venv "$RITHMIC_VENV_DIR"
+          "$RITHMIC_VENV_DIR/bin/pip" -q install -r .jenkins-tmp/rithmic-source/requirements.txt
+          RITHMIC_TEST_SCHEMA="$WORKSPACE/.jenkins-tmp/rithmic-contracts/target/classes/rithmic/RithmicDepthFrame.avsc" "$RITHMIC_VENV_DIR/bin/python" -m unittest discover -s .jenkins-tmp/rithmic-source/tests -v
+          # Reconcile only the reviewed named-service whitelist using the established bootstrap identity.
+          bash scripts/es4/assert-cluster-identity.sh /Users/abhinav/.kube/es4.kubeconfig es4 "$ES4_NS_UID"
+          KUBECONFIG=/Users/abhinav/.kube/es4.kubeconfig kubectl apply -f k8s/es4/security/jenkins-deployer-rbac.yaml
+          KUBECONFIG="$ES4_KUBECONFIG" kubectl -n options-edge auth can-i create pods/exec | grep -qx yes
+          KUBECONFIG=/Users/abhinav/.kube/es4.kubeconfig kubectl apply -f k8s/es4/policy/workload-whitelist-admission.yaml
+          cd .jenkins-tmp/rithmic-source
+          RITHMIC_RELEASE_SCOPE=""
+          if [ "${RITHMIC_DEV_ONLY:-false}" = "true" ]; then RITHMIC_RELEASE_SCOPE="--dev-only"; fi
+          "$RITHMIC_VENV_DIR/bin/python" scripts/deploy-kubernetes.py $RITHMIC_RELEASE_SCOPE --sha "$RITHMIC_PERMITTED_SHA" --sdk-zip "$RITHMIC_SDK_ZIP" --contracts-sha "$CONTRACTS_PERMITTED_SHA" --contracts-jar "$WORKSPACE/.jenkins-tmp/rithmic-contracts/target/options-edge-contracts-${RITHMIC_CONTRACTS_VERSION}.jar" --contracts-version "$RITHMIC_CONTRACTS_VERSION" --manifest "$WORKSPACE/k8s/es4/services/rithmic-depth-bridge.yaml"
+        '''
+      }
+    }
+  }
+}
