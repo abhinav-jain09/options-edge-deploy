@@ -509,6 +509,14 @@ jobs:
       # A create that the Kafka admin client retried must not fail the run (prod clean-slate 2026-10-13).
       - name: apply-topics survives the admin client's retry of a successful create
         run: bash scripts/kafka/apply-topics-create-retry-test.sh
+      - name: strike-hold topic barrier negative controls
+        # The barrier created both topics with the right shapes on the first live deploy and then
+        # REFUSED them (service-deploy 3247): its duplicate guard counted a bare
+        # `retention.bytes=` substring, which a real `--describe --all` dump matches five times
+        # (the value, local.retention.bytes, and three synonyms). This drives the real barrier
+        # against a byte-accurate dev dump. NOTE: the sibling ensure-*-topics-test.sh scripts in
+        # scripts/kafka are NOT wired into this workflow — this is the first one that is.
+        run: bash scripts/kafka/ensure-strike-hold-topics-test.sh
 
       # The sibling files apply-topics.sh sources must be copied by every test that runs it out of a
       # temp directory. Hard-coding that list is what made TWO such tests report findings about

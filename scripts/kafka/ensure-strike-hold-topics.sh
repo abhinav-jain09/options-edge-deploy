@@ -59,7 +59,19 @@ check_partitions() { # <topic>
   # whose leading value happens to be right while a second, different one is present — a prefix
   # match on the topic name, or two topics in one describe. Ambiguous output is a refusal, not a
   # value to pick from, so the count of lines is checked before the value is read at all.
-  n=$(sed -n 's/.*PartitionCount: *\([0-9][0-9]*\).*/\1/p' <<<"$out")
+  # A SECOND LINE OF DEFENCE, not the primary one: the shared ensure_topic above already requires
+  # the exact token `PartitionCount:` in its own awk, so a lookalike is refused there first. This
+  # check exists for the ambiguity the shared routine does not cover — a dump carrying TWO counts,
+  # where its awk takes the first.
+  #
+  # grep -oE with a TOKEN BOUNDARY, not sed. `sed 's/.*PartitionCount: .../'` has a leading `.*`
+  # that eats anything, so it would read a value out of `NotPartitionCount: 9` just as happily —
+  # the same loose-matching mistake the retention.bytes counter made. grep rather than sed because
+  # BSD sed (these dev Macs) has no `\|` alternation in BRE, so a boundary written that way matches
+  # NOTHING here while working on the Linux agent: a check that passes for the wrong reason on one
+  # platform is worse than no check (the note in scripts/kafka/topic-config-parse.sh says the same).
+  n=$(printf '%s\n' "$out" | grep -oE '(^|[[:space:],])PartitionCount:[[:space:]]*[0-9]+' \
+        | grep -oE '[0-9]+$')
   # `|| true`, and then normalise. A grep that matches nothing exits 1, and under
   # `set -euo pipefail` that killed the script AT THIS ASSIGNMENT — failing closed, but with no
   # diagnostic, which is indistinguishable from a crash. The emptiness must be REPORTED by the
@@ -90,9 +102,18 @@ check_retention_bytes() { # <topic> <exact retention.bytes>
   fi
   # Same refusal as above: `extract` returns the FIRST match, so a config dump carrying two
   # retention.bytes values would be accepted on the strength of whichever came first. Count the
-  # occurrences in the raw dump and refuse anything but exactly one before trusting the value.
+  # occurrences and refuse anything but exactly one before trusting the value.
+  #
+  # COUNTED WITH extract's OWN PATTERN, and that is the whole point. The first version here used a
+  # bare `grep -o 'retention.bytes='`, which on a real `--describe --all` dump counts FIVE: the
+  # value itself, `local.retention.bytes`, and three occurrences inside the `synonyms={...}` text.
+  # It refused a perfectly correct topic on the first live deploy. A duplicate check that parses
+  # differently from the value read is not a stricter check, it is a check of a DIFFERENT question
+  # — which is exactly the two-copies-of-a-parser defect scripts/kafka/topic-config-parse.sh was
+  # written to prevent, reintroduced one layer up. The boundary `(^|[[:space:],])` is what makes
+  # `local.retention.bytes` and the synonym text not count.
   local seen
-  seen=$(printf '%s\n' "$cfg" | grep -o 'retention\.bytes=' | grep -c . || true)
+  seen=$(printf '%s\n' "$cfg" | grep -oE '(^|[[:space:],])retention\.bytes=[^ ]*' | grep -c . || true)
   seen="${seen:-0}"
   if [ "$seen" != "1" ]; then
     echo "FAIL: config of '$topic' carries $seen retention.bytes values, expected exactly 1 — refusing to choose:"
