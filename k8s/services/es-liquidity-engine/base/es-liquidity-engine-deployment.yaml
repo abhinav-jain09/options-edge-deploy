@@ -90,6 +90,11 @@ spec:
               value: "100"
             - name: ES_MBO_TRADE_ORDER_MS
               value: "2000"
+            # Fill attribution order: "optimal" = the exact per-bucket matching (OptimalMatching); "greedy" = the feed order. Measured over the 23 NAS sessions 2026-11-08 (POST-HOC, J revision 2;
+            # es-liquidity-engine-service/docs/measurements/fill-error-runs-2026-11-07.md): optimal 27 of 28 cells within 5 points and 4.8 % of levels off by more than one contract,
+            # greedy 16 of 28 cells. DEV-ONLY service. Part of the engine's config fingerprint: switching it restarts from a cold replay (a snapshot of the other mode is not restored).
+            - name: ES_MBO_FILL_MATCHING
+              value: "optimal"
             # Restart source: the engine snapshots every 60 closed buckets to the compacted es.mbo.snapshot and restarts from it (0 turns it off).
             - name: ES_MBO_SNAPSHOT_INTERVAL_BUCKETS
               value: "60"

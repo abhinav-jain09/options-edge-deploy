@@ -128,6 +128,13 @@ class Manifests(unittest.TestCase):
         self.assertEqual((e["ES_MBO_FILL_WINDOW_MS"], e["ES_MBO_TRADE_ORDER_MS"], e["ES_MBO_TAPE_TOPIC"]), ("100", "2000", "underlying.es.trades"))
         self.assertNotIn("ES_MBO_FILL_WINDOW_MS", env_of(deployment("k8s/services/drop-classifier-ref/base/drop-classifier-ref-deployment.yaml")))
 
+    def test_the_engine_attributes_fills_with_the_exact_matching_only_in_its_own_deployment(self):
+        e = env_of(deployment("k8s/services/es-liquidity-engine/base/es-liquidity-engine-deployment.yaml"))
+        self.assertEqual(e["ES_MBO_FILL_MATCHING"], "optimal")
+        self.assertNotIn("ES_MBO_FILL_MATCHING", env_of(deployment("k8s/services/drop-classifier-ref/base/drop-classifier-ref-deployment.yaml")))
+        # the generated dev slice carries it too (mirror rule)
+        self.assertIn("ES_MBO_FILL_MATCHING", open("k8s/services/es-liquidity-engine/overlays/dev/manifest.yaml").read())
+
     def test_the_two_deployments_never_share_an_output_prefix_or_name(self):
         engine, ref = (env_of(deployment(f"k8s/services/{s}/base/{s}-deployment.yaml")) for s in CASES)
         self.assertNotEqual(engine.get("DROP_OUTPUT_PREFIX"), ref.get("DROP_OUTPUT_PREFIX"))
