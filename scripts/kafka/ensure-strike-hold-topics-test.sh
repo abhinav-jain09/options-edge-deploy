@@ -40,18 +40,23 @@ mocks() { # mocks <currentPolicy> <scoringPolicy> <scoringBytes> [extraRetention
 #!/usr/bin/env bash
 args="\$*"
 case "\$args" in
-  *--list*) echo "options.spx.strike-hold.current"; echo "options.spx.strike-hold.scoring" ;;
+  # es.mbo.coverage is listed because the barrier now reads the topic name from the DEPLOYMENT
+  # MANIFEST, which names it — so every arm here runs the way a real deploy does, with the coverage
+  # input required. The earlier version of these mocks omitted it and passed only because the
+  # barrier was reading an environment variable the Jenkins stage never exports.
+  *--list*) echo "options.spx.strike-hold.current"; echo "options.spx.strike-hold.scoring"; echo "es.mbo.coverage" ;;
   *--describe*) echo "Topic: t  TopicId: a  PartitionCount: 1  ReplicationFactor: 1  Configs: cleanup.policy=x" ;;
 esac
 KT
   cat > "$TMP/bin/kafka-configs" <<KC
 #!/usr/bin/env bash
-if [[ "\$*" == *scoring* ]]; then
 $(declare -f dump)
+if [[ "\$*" == *scoring* ]]; then
   dump "$2" "$3"
   $4
+elif [[ "\$*" == *es.mbo.coverage* ]]; then
+  dump "compact" "-1"
 else
-$(declare -f dump)
   dump "$1" "-1"
 fi
 KC
@@ -116,7 +121,11 @@ mocks "compact,delete" "delete" "268435456" ""
 cat > "$TMP/bin/kafka-topics" <<'KTX'
 #!/usr/bin/env bash
 case "$*" in
-  *--list*) echo "options.spx.strike-hold.current"; echo "options.spx.strike-hold.scoring" ;;
+  # es.mbo.coverage is listed because the barrier now reads the topic name from the DEPLOYMENT
+  # MANIFEST, which names it — so every arm here runs the way a real deploy does, with the coverage
+  # input required. The earlier version of these mocks omitted it and passed only because the
+  # barrier was reading an environment variable the Jenkins stage never exports.
+  *--list*) echo "options.spx.strike-hold.current"; echo "options.spx.strike-hold.scoring"; echo "es.mbo.coverage" ;;
   *--describe*) echo "Topic: t  NotPartitionCount: 9  ReplicationFactor: 1  Configs: cleanup.policy=x" ;;
 esac
 KTX
@@ -199,6 +208,17 @@ out="$(PATH="$TMP/bin:$PATH" ENVIRONMENT=dev KAFKA_BOOTSTRAP_SERVERS=mock:9092 \
         KAFKA_STRIKE_HOLD_COVERAGE_TOPIC= bash "$BAR" 2>&1)"; rc=$?
 if [ "$rc" -eq 0 ]; then ok "a BLANK coverage topic is not a deploy refusal"
 else bad "a blank coverage topic was turned into a refusal"; fi
+
+# 9) THE DEPLOY PATH ITSELF: with NO environment variable set — which is how the Jenkins stage runs
+#    it, since that stage sources only load-kafka-settings.sh — the barrier must still require the
+#    coverage topic, because the DEPLOYMENT MANIFEST names it. This is the arm that would have
+#    caught the original gap: every check was being skipped on every real deploy while the suite set
+#    the variable by hand and reported them green (Codex deploy r6).
+cov_mocks no compact -1
+out="$(PATH="$TMP/bin:$PATH" ENVIRONMENT=dev KAFKA_BOOTSTRAP_SERVERS=mock:9092 bash "$BAR" 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "es.mbo.coverage"; then
+  ok "with NO env var set, the manifest's coverage topic is still required (the real deploy path)"
+else bad "the real deploy path skipped the coverage check entirely"; fi
 
 # 7) DEV ONLY, fail-closed.
 out="$(PATH="$TMP/bin:$PATH" ENVIRONMENT=production KAFKA_BOOTSTRAP_SERVERS=mock:9092 bash "$BAR" 2>&1)"; rc=$?

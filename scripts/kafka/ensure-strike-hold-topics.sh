@@ -158,10 +158,57 @@ create_if_absent() { # <topic> <cleanup.policy> <retention.ms> [<retention.bytes
 }
 
 rc=0
-# THE COVERAGE INPUT, verified only when the deployment names it. Blank is the documented default
-# and a legitimate configuration — the service then reports ABSORPTION_COVERAGE_UNAVAILABLE and
-# never claims an absence — so a blank value must not turn into a deploy refusal.
-COVERAGE_IN="${KAFKA_STRIKE_HOLD_COVERAGE_TOPIC:-}"
+# THE COVERAGE INPUT, read from THE DEPLOYMENT MANIFEST — not from this shell's environment.
+#
+# The first version read $KAFKA_STRIKE_HOLD_COVERAGE_TOPIC and skipped the whole check when it was
+# blank. The Jenkins stage that runs this barrier sources only load-kafka-settings.sh, which does
+# not export that variable: it exists in the strike-hold Deployment. So on every real deploy the
+# value was blank and every check below was SILENTLY SKIPPED, while the test suite set the variable
+# by hand and reported all of them green (Codex deploy r6). A guard whose condition can quietly
+# match nothing is worse than no guard, because the green arms say it ran.
+#
+# The manifest is the right source: it is the same file that configures the pod, so the precondition
+# this barrier states and the value the service reads cannot diverge. The dev overlay wins over the
+# base, as kustomize applies it. An env override is still honoured where a caller sets one
+# deliberately.
+#
+# FAIL CLOSED ON AN UNREADABLE MANIFEST. "I could not tell" must never read as "no coverage source
+# configured", which is the same mistake in a different place.
+coverage_from_manifest() {
+  local f v n
+  for f in "$ROOT/k8s/services/strike-hold/overlays/dev/manifest.yaml" \
+           "$ROOT/k8s/services/strike-hold/base/strike-hold-deployment.yaml"; do
+    [ -r "$f" ] || continue
+    # The value on the line AFTER the key, anchored on both: a count of anything but one is refused
+    # rather than resolved, so neither a missing value nor a duplicated key can be read as an answer.
+    n=$(awk '/- name: KAFKA_STRIKE_HOLD_COVERAGE_TOPIC$/ {getline; if ($1 == "value:") print $2}' "$f" | wc -l | tr -d ' ')
+    if [ "$n" -gt 1 ]; then
+      echo "FAIL: $f declares KAFKA_STRIKE_HOLD_COVERAGE_TOPIC $n times; refusing to choose between them." >&2
+      return 2
+    fi
+    if [ "$n" -eq 1 ]; then
+      v=$(awk '/- name: KAFKA_STRIKE_HOLD_COVERAGE_TOPIC$/ {getline; if ($1 == "value:") print $2}' "$f")
+      printf '%s' "$v"
+      return 0
+    fi
+  done
+  return 1            # the key appears in neither file: no coverage source is configured
+}
+
+ROOT="$(cd "$HERE/../.." && pwd)"
+if [ ! -r "$ROOT/k8s/services/strike-hold/base/strike-hold-deployment.yaml" ]; then
+  echo "FAIL: cannot read the strike-hold Deployment at $ROOT/k8s/services/strike-hold/base/strike-hold-deployment.yaml — refusing, because 'I could not tell' must not read as 'no coverage source configured'."
+  exit 1
+fi
+if [ -n "${KAFKA_STRIKE_HOLD_COVERAGE_TOPIC+x}" ]; then
+  COVERAGE_IN="$KAFKA_STRIKE_HOLD_COVERAGE_TOPIC"      # an explicit override, empty string included
+else
+  COVERAGE_IN="$(coverage_from_manifest)" || {
+    rc_cov=$?
+    [ "$rc_cov" -eq 2 ] && exit 1
+    COVERAGE_IN=""                                      # declared nowhere: no coverage source
+  }
+fi
 if [ -n "$COVERAGE_IN" ]; then
   if ! grep -qxF "$COVERAGE_IN" <<<"$LIST"; then
     echo "FAIL: strike-hold is configured to read coverage from '$COVERAGE_IN' but that topic does not exist."
