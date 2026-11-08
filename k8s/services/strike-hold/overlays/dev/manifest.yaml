@@ -76,6 +76,10 @@ spec:
               value: "0.80"
             - name: STRIKE_HOLD_PREMIUM_QUANTILE
               value: "0.50"
+            - name: STRIKE_HOLD_CLOSE_MAX_STALENESS_MS
+              value: "60000"
+            - name: STRIKE_HOLD_MAX_CLOCK_JUMP_MS
+              value: "3600000"
             - name: STRIKE_HOLD_BASIS_MAX_LOOKBACK_MS
               value: "60000"
             - name: STRIKE_HOLD_ABSORPTION_WINDOW_MS

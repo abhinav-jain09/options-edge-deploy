@@ -98,6 +98,21 @@ spec:
               value: "0.80"
             - name: STRIKE_HOLD_PREMIUM_QUANTILE
               value: "0.50"
+            # How stale the last in-session print may be and still count as the cash close. A RISK
+            # bound, not a measured one: the SPX index price publishes about 1.2 times a second, so
+            # this almost never binds, and what it decides when it does is how much price movement
+            # may sit between the price called "the close" and the real close. Deliberately tight —
+            # a session whose feed stops a minute early loses its outcome and reports NO_CLOSE,
+            # which is the right trade: a missing answer is honest, a wrong one silently corrupts
+            # the base rate this service exists to measure.
+            - name: STRIKE_HOLD_CLOSE_MAX_STALENESS_MS
+              value: "60000"
+            # The furthest a single spot record may move the service's clock. One record stamped far
+            # ahead would otherwise close and score every live session at once, and scoring is
+            # permanent. An over-bound record advances the clock BY the bound instead of being
+            # refused, because refusing deadlocks the moment a real feed gap exceeds it.
+            - name: STRIKE_HOLD_MAX_CLOCK_JUMP_MS
+              value: "3600000"
             # The basis is read AS OF an event's own time, never "latest seen", and only within this lookback. Beyond it a band cannot be placed and the touch is
             # refused BASIS_STALE rather than mapped on an extrapolation.
             - name: STRIKE_HOLD_BASIS_MAX_LOOKBACK_MS
