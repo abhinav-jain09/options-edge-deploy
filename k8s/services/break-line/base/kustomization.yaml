@@ -1,0 +1,8 @@
+# SERVICE SLICE — break-line (Break Score rev 13: the state, measurements and continuation score of the user's own horizontal lines) on DEV. Owns ONLY this service's Deployment.
+#
+# DEV-ONLY: referenced from k8s/overlays/dev (NOT k8s/base, NOT production or experiment); services.yaml declares envs: [dev]. One JVM, plain consumer loops (no Kafka Streams), no state volume
+# (the restart snapshot is a record on futures.break-line.snapshot). No Service object: kubelet probes reach the pod directly. No ConfigMap, Secret or PVC of its own.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - break-line-deployment.yaml

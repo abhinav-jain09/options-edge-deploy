@@ -26,6 +26,8 @@ images:
   es-liquidity-engine-service: host.docker.internal:5001/options-edge-es-liquidity-engine:dev
   # DEV-ONLY: the strike-hold measurement service (NEW service); no production or es4 mapping exists, by design.
   strike-hold-service: host.docker.internal:5001/options-edge-strike-hold:dev
+  # DEV-ONLY: the break-line service (Break Score rev 13, NEW service); no production or es4 mapping exists, by design.
+  break-line-service: host.docker.internal:5001/options-edge-break-line:dev
   # DEV-ONLY: the live read-only liquidity validator (NEW service); no production or es4 mapping exists, by design.
   liquidity-validator-service: host.docker.internal:5001/options-edge-liquidity-validator:dev
   # host.docker.internal:5001 (localhost:5001 from a shell on the Mac) and 192.168.100.252:5000 are
