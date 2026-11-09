@@ -21,6 +21,9 @@ Every mirror job states how it moves records in header comments the generator re
 
 A Jenkinsfile that looks like a mirror (*mirror*, *bridge*, *reencoder*) or carries any of these markers, and infra/es4/mm2/mm2.properties,
 but declares no MIRROR-TRANSPORT FAILS the generator: a mirror cannot be added without saying how it moves records.
+A job that trips the NAME heuristic without being a mirror - a release job for a bridge, say - declares
+`// NOT-A-MIRROR: <reason>` and is skipped; declaring both that and any MIRROR-* marker is an error,
+and declaring neither still FAILS.
 """
 import argparse, glob, json, os, re, sys
 
@@ -119,6 +122,19 @@ def discover(root):
         name = os.path.basename(p)
         text = open(p).read()
         if LOOKS_LIKE_MIRROR.search(name) or re.search(r"^\s*//\s*MIRROR-(DIRECTION|TRANSPORT):", text, re.M):
+            # A job may DECLARE that it is not a mirror, and must give a reason. The name heuristic
+            # catches *mirror*, *bridge* and *reencoder*, so it also catches jobs that merely DEPLOY
+            # one — Jenkinsfile.rithmic-depth-bridge-release is a release job for a bridge, not a
+            # mirror, and it moves no records at all. Excluding such names in this script instead
+            # would be a blacklist: the next oddly-named job breaks it again, silently. So the
+            # exclusion is a POSITIVE statement by the job, with its reason, and silence still FAILS —
+            # the same discipline as MIRROR-TRANSPORT itself.
+            m = re.search(r"^\s*//\s*NOT-A-MIRROR:\s*(\S.*?)\s*$", text, re.M)
+            if m:
+                if re.search(r"^\s*//\s*MIRROR-(DIRECTION|TRANSPORT|TOPICS|SUBJECTS):", text, re.M):
+                    raise ValueError("%s: declares NOT-A-MIRROR and also carries MIRROR-* markers; "
+                                     "decide which it is" % name)
+                continue
             found.append(name)
     for extra in EXTRA_SOURCES:
         if os.path.exists(os.path.join(root, extra)):

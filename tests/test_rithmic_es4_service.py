@@ -177,10 +177,17 @@ class RithmicEs4Service(unittest.TestCase):
         can change there while this file stays byte-identical
         (test_the_out_jobs_guard_is_pinned_to_the_guarded_jobs_canonical_form), and it cannot tell
         whether the classification is still `out`
-        (test_the_release_job_is_classified_out_of_the_guard_scope)."""
+        (test_the_release_job_is_classified_out_of_the_guard_scope).
+
+        DIGEST HISTORY, so the next author sees what each change was rather than a bare new hash:
+        853c3e41 -> d27af5d5 (2026-11-09): ONE added `//` comment line in the header,
+        `// NOT-A-MIRROR: ...`, so scripts/ci/schema-mirrors-generate.py stops demanding a
+        MIRROR-TRANSPORT marker from a job that moves no records. Re-read against this test's own
+        list: no new top-level directive, no agent change, no non-empty PERMITTED_SHA default, no
+        stage before the guard, no change below `pipeline {` at all."""
         import hashlib
         actual=hashlib.sha256((ROOT/'Jenkinsfile.rithmic-depth-bridge-release').read_bytes()).hexdigest()
-        self.assertEqual(actual,'853c3e41b62cd1a5e7e44579222836a1d1402cfa152b5a033e0626168796b4ee',
+        self.assertEqual(actual,'d27af5d5283c324d6adfb88d3c9434cbcc6d5c3e9a1f91b5286888dbde925235',
                          'Jenkinsfile.rithmic-depth-bridge-release changed. It is classified `out`, so the '
                          'guard validator does not check it. The two tests above notice SOME changes - a '
                          'guard stage that drifts from the canonical one, a flipped classification - but '
