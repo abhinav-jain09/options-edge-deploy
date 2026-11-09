@@ -105,7 +105,24 @@ run SIMULATE_CLIENT_RETRY=0 TOPICS_ABSENT_NAME="$LJRN"
 grep -q -- "--create .*--topic $LJRN .*--config max.message.bytes=9437184" "$LOG" \
   && ok "recreated line-acceptance journal has the declared message bound" || bad "line-acceptance journal create lacks the message bound"
 # The bound belongs to the declared topics only (both checkpoints and the line-acceptance journal), and the cadence to the recovery logs and the two checkpoints only.
-if grep 'max.message.bytes=' "$LOG" | grep -v -e "$CKPT" -e "$LCKPT" -e "$LJRN" >/dev/null; then bad "max.message.bytes leaked to another topic"; else ok "the message bound applies only to the declared topics"; fi
+# The allow-list is DERIVED from the declaration, not hard-coded. It named three topics while
+# OPTIONS_EDGE_TOPIC_MAX_MESSAGE_BYTES_OVERRIDES had grown to five — futures.line-health.snapshot and
+# futures.break-line.snapshot were declared without this arm being updated — so a correct apply read as
+# a leak. Hard-coding two more names would just move the next failure; deriving means a newly declared
+# override can neither break this arm nor weaken it. The count control is what keeps that honest: an
+# empty or unparsed declaration would otherwise make the exclusion match everything and the arm pass
+# on nothing.
+BOUND_TOPICS="$(bash -c 'set -a; . scripts/kafka/topics.env; set +a; printf "%s" "$OPTIONS_EDGE_TOPIC_MAX_MESSAGE_BYTES_OVERRIDES"' | tr ' ' '\n' | sed -E 's/=.*$//' | grep -v '^$' | sort -u)"
+BOUND_N="$(printf '%s\n' "$BOUND_TOPICS" | grep -c .)"
+[ "$BOUND_N" -ge 3 ] && ok "read $BOUND_N declared message-bound topic(s) from topics.env" \
+  || bad "read only $BOUND_N declared message-bound topics — the exclusion below would match nothing"
+LEAKED="$(grep 'max.message.bytes=' "$LOG" | grep -vF -f <(printf '%s\n' "$BOUND_TOPICS") || true)"
+if [ -n "$LEAKED" ]; then
+  bad "max.message.bytes leaked to another topic"
+  printf '%s\n' "$LEAKED" | head -3 | sed 's/^/        /'
+else
+  ok "the message bound applies only to the $BOUND_N declared topics"
+fi
 if grep 'segment.bytes=16777216' "$LOG" | grep -v -e "$REC" -e "$WREC" -e "$CKPT" -e "$LCKPT" >/dev/null; then bad "compaction cadence leaked to another topic"; else ok "cadence applies only to the recovery logs and the checkpoints"; fi
 
 echo
