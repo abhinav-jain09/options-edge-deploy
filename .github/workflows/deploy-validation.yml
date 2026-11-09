@@ -654,6 +654,13 @@ jobs:
       - name: the dev wipe's keep-list comes from the reviewed ref, not the checkout
         run: bash scripts/ops/dev-cleanup-reset-preserved-ref-test.sh
 
+      # do_clean read the dev keep-list inside $(...), which was the only place the topics ref was pinned;
+      # the pin died with the subshell and the next read refused ("TOPICS_ENV_SHA is not set"), so EVERY
+      # full clean refused the wipe (found 2026-11-09). Drives the real do_clean over a real git repo with
+      # a real remote; its second half removes the pin and requires the test to fail.
+      - name: do_clean pins the topics ref in its own shell before reading a keep-list
+        run: bash scripts/ops/dev-cleanup-do-clean-pin-test.sh
+
       # A production reset runs the files in ITS checkout, not the ones in main. On 2026-10-13 a clean
       # slate ran from a tree whose apply-topics.sh had uncommitted edits and was 89 lines behind main,
       # wiped production and took the pre-#1173 failure path. The guard compares every file the run uses

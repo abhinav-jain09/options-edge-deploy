@@ -1243,7 +1243,9 @@ topics_ref_pin() {
 # invisible while still reporting success.
 dev_clean_preserved_topics() {
   local env n val
-  topics_ref_pin || return 1
+  # Already pinned by the caller (do_clean pins in ITS shell, because this function runs inside a command
+  # substitution and an assignment made in that subshell never reaches the shell that reads it later).
+  [ -n "${TOPICS_ENV_SHA:-}" ] || topics_ref_pin || return 1
   env="$(git -C "$DEPLOY_REPO" show "$TOPICS_ENV_PINNED_REF" 2>/dev/null)" || return 1
   # INDENT-TOLERANT, and EVERY assignment is concatenated rather than exactly one: an entry added to this
   # keep-list by appending inside `if [ "${ENVIRONMENT:-}" != "production" ]` is INDENTED, so the column-0
@@ -1340,6 +1342,13 @@ do_clean() {
   echo "=== dev FULL clean (logs + data)  $(date) ==="
   local DEV_KEEP=""
   if [ "$WIPE_KAFKA" = true ]; then
+    # Pin HERE, in this shell, before the first keep-list read. Every later read (the dev keep-list inside
+    # $(...), reset_preserved_from_main, ensure_topics) takes TOPICS_ENV_SHA from this variable; pinning
+    # inside the $(...) left it empty in this shell and the wipe refused every time ("TOPICS_ENV_SHA is not
+    # set"), which is how 2026-11-09's clean found it.
+    topics_ref_pin || {
+      echo "REFUSING the wipe: cannot pin ${TOPICS_ENV_REF%%:*} to a commit (fetch of origin/main failed or the ref does not resolve)." >&2
+      return 1; }
     DEV_KEEP="$(dev_clean_preserved_topics)" || {
       echo "REFUSING the wipe: cannot read OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS from $TOPICS_ENV_REF (at least one declaration, non-empty once concatenated, is required)." >&2
       return 1; }
