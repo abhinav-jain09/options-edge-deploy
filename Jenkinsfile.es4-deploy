@@ -1,8 +1,3 @@
-// Raw MBO identity mirror owned by this service path; the existing legacy depth mirrors are separate.
-// MIRROR-TRANSPORT: bytes
-// MIRROR-TOPICS: es.rithmic.mbo
-// MIRROR-SUBJECTS: es.rithmic.mbo-value
-// MIRROR-PATHS: es4->dev
 // ES4 DEPLOY — the self-contained ES-0DTE environment on 192.168.100.4 ("es4").
 //
 // Deliberately SEPARATE from Jenkinsfile.service-deploy (Codex decision D3, 2026-07-12):

@@ -375,8 +375,18 @@ echo "11. END TO END: the REAL cleanup-es4.sh resuming an interrupted reset (fin
 # above (sudo/k3s/docker; the Kafka CLIs answer as in the sections above). A run that passes the interlock
 # stops with 42 at the datastore start AFTER the wipe (the mock fails it), so every assertion is about what
 # happened before and at the wipe.
-E2E="$W/e2e"; EH="$W/home"
+# cleanup-es4.sh's preflight requires the RELEASED Rithmic schema at $SCRIPT_DIR/../../schemas-registry/rithmic/RithmicDepthFrame.avsc (es4-deploy
+# supplies it from CONTRACTS_PERMITTED_SHA; it is not committed). The copy therefore lives at <tree>/scripts/es4 so that relative path resolves
+# INSIDE the sandbox, with a placeholder: this test is about the interlock, and only the file's presence is checked by the preflight.
+E2E="$W/tree/scripts/es4"; EH="$W/home"
+mkdir -p "$W/tree/scripts" "$W/tree/schemas-registry/rithmic"
+for _s in RithmicDepthFrame RithmicMboEvent; do   # the two released inputs the preflight names
+  printf '{"type":"record","name":"%s","fields":[]}\n' "$_s" > "$W/tree/schemas-registry/rithmic/$_s.avsc"
+done
 cp -R "$ROOT/scripts/es4" "$E2E"
+# The preflight also binds the reset to a shipped schema bundle (R11b): `schema-sync-es4-host.sh verify` runs BEFORE the wipe and `apply` after it.
+# That script has its own test (scripts/ci/schema-sync-es4-host-test.sh); here it accepts, so what these cases observe is the interlock.
+mkdir -p "$W/tree/scripts/ci"; printf '#!/usr/bin/env bash\nexit 0\n' > "$W/tree/scripts/ci/schema-sync-es4-host.sh"
 awk -v h="$EH" '{
   if ($0 == "ES4_HOME=/home/es4") { print "ES4_HOME=" h; next }
   if ($0 == "KAFKA_DATA=/home/es4/volumes/kafka") { print "KAFKA_DATA=" h "/volumes/kafka"; next }
@@ -399,7 +409,7 @@ home() { # [resume] — a Kafka data dir holding a strike segment, and (resume) 
 e2e() { # <script> [env...]
   local s="$1"; shift
   OUT=$(env PATH="$MOCK:$PATH" E2E_KAFKA_DATA="$EH/volumes/kafka" ES4_EXPECTED_NS_UID=11111111-2222-3333-4444-555555555555 \
-        ES4_FEED_FENCED=1 DEPLOY_DRY_RUN=false ES4_KAFKA_HEALTH_SLEEP=0 ES4_KAFKA_HEALTH_POLLS=3 "$@" bash "$s" 2>&1)
+        ES4_FEED_FENCED=1 ES4_SCHEMA_BUNDLE_COMMIT=0000000000000000000000000000000000000000 ES4_SCHEMA_BUNDLE_DIGEST=0000000000000000000000000000000000000000000000000000000000000000 DEPLOY_DRY_RUN=false ES4_KAFKA_HEALTH_SLEEP=0 ES4_KAFKA_HEALTH_POLLS=3 "$@" bash "$s" 2>&1)
   RC=$?
 }
 wiped()   { [ -z "$(ls -A "$EH/volumes/kafka" 2>/dev/null)" ] && echo wiped || echo intact; }

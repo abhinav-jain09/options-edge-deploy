@@ -17,7 +17,10 @@ mkdir -p "$W/scripts/ci/fixtures/zerodte/corpus" && cp scripts/ci/fixtures/zerod
 cp k8s/jobs/zerodte-writer-check-job.yaml "$W/k8s/jobs/"
 cp deploy/zerodte/provisioning/dev.yaml deploy/zerodte/provisioning/production.yaml "$W/deploy/zerodte/provisioning/"
 sed 's/^    approvedBy: UNAPPROVED$/    approvedBy: Test Owner/' deploy/zerodte/virgin-attestation.yaml > "$W/deploy/zerodte/virgin-attestation.yaml"
-grep -q "approvedBy: Test Owner" "$W/deploy/zerodte/virgin-attestation.yaml" || { echo "FAIL: the fixture attestation was not approved"; exit 1; }
+# the owner's approval is recorded in the shipped file (#1186), so the sed above is a no-op there: assert the fixture HAS an approver and NO marker
+if grep -q '^    approvedBy: UNAPPROVED$' "$W/deploy/zerodte/virgin-attestation.yaml" || ! grep -q '^    approvedBy: .' "$W/deploy/zerodte/virgin-attestation.yaml"; then
+  echo "FAIL: the fixture attestation was not approved"; exit 1
+fi
 L=6b2c7c1a-5d3e-4a8f-9b41-2f0d7e9c4a10
 LT="$(printf 'c%.0s' $(seq 32))"; PD="$(printf 'b%.0s' $(seq 64))"
 # eraStartSession is READ FROM THE DECLARATION the fixture copied, never typed here: #1131 made the validator bind the committed receipt's

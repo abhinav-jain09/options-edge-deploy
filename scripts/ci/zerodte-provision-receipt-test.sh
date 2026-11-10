@@ -15,9 +15,12 @@ cp scripts/ci/zerodte_attestation.py scripts/ci/validate-zerodte-provisioning.sh
 mkdir -p "$W/scripts/ci/fixtures/zerodte/corpus" && cp scripts/ci/fixtures/zerodte/golden.tsv "$W/scripts/ci/fixtures/zerodte/" && cp scripts/ci/fixtures/zerodte/corpus/* "$W/scripts/ci/fixtures/zerodte/corpus/"
 cp k8s/jobs/zerodte-provision-job.yaml "$W/k8s/jobs/"
 cp deploy/zerodte/provisioning/dev.yaml deploy/zerodte/provisioning/production.yaml "$W/deploy/zerodte/provisioning/"
-# the shipped attestation is REFUSED on its UNAPPROVED marker (by design, until the owner's edit); this throwaway carries an approved copy
+# the shipped attestation was REFUSED on its UNAPPROVED marker until the owner's edit (#1186 recorded it); this throwaway carries an approved copy
+# either way: the sed approves a file that still has the marker and is a no-op on one the owner already approved
 sed 's/^    approvedBy: UNAPPROVED$/    approvedBy: Test Owner/' deploy/zerodte/virgin-attestation.yaml > "$W/deploy/zerodte/virgin-attestation.yaml"
-grep -q "approvedBy: Test Owner" "$W/deploy/zerodte/virgin-attestation.yaml" || { echo "FAIL: the fixture attestation was not approved"; exit 1; }
+if grep -q '^    approvedBy: UNAPPROVED$' "$W/deploy/zerodte/virgin-attestation.yaml" || ! grep -q '^    approvedBy: .' "$W/deploy/zerodte/virgin-attestation.yaml"; then
+  echo "FAIL: the fixture attestation was not approved"; exit 1
+fi
 printf 'images:\n  vix-option-inteligence-service: 192.168.100.252:5000/options-edge-vix-option-inteligence:dev\n' > "$W/image-tags/dev.yaml"
 printf 'images:\n  vix-option-inteligence-service: 192.168.100.252:5000/options-edge-vix-option-inteligence:prod\n' > "$W/image-tags/production.yaml"
 # the clusters: CERTIFICATES MINTED HERE stand in for the dev and production CAs; a third one is "some other cluster"

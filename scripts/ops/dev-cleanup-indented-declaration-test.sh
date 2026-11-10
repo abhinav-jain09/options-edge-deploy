@@ -246,7 +246,7 @@ if [ -f "$TOPICS_ENV_REAL" ]; then
     # EVERY declaration the readers can consume, indented or NOT: their own anchor is `[[:space:]]*`, so a
     # declaration at column 0 inside a gate is read exactly like an indented one. Checking only indented lines
     # left that shape unreported - it closed the window silently and was still applied by the readers.
-    /^[[:space:]]*OPTIONS_EDGE_(TOPICS|COMPACTED_TOPICS|PURE_COMPACT_TOPICS|EXACT_PARTITION_TOPICS|TOPIC_RETENTION_OVERRIDES|TOPIC_DELETE_RETENTION_OVERRIDES|TOPIC_MAX_MESSAGE_BYTES_OVERRIDES|TOPIC_RETENTION_BYTES_OVERRIDES|PARTITION_ONLY_TOPICS|DEV_CLEAN_PRESERVED_TOPICS|RESET_PRESERVED_TOPICS)=/ {
+    /^[[:space:]]*OPTIONS_EDGE_(TOPICS|COMPACTED_TOPICS|PURE_COMPACT_TOPICS|EXACT_PARTITION_TOPICS|TOPIC_RETENTION_OVERRIDES|TOPIC_DELETE_RETENTION_OVERRIDES|TOPIC_MAX_MESSAGE_BYTES_OVERRIDES|TOPIC_RETENTION_BYTES_OVERRIDES|PARTITION_ONLY_TOPICS|DEV_CLEAN_PRESERVED_TOPICS|RESET_PRESERVED_TOPICS|RESET_REBUILDABLE_TOPICS)=/ {
       split($0, p, "=")
       var = p[1]; sub(/^[[:space:]]+/, "", var)
       indented = ($0 ~ /^[[:space:]]+/)

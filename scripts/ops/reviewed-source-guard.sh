@@ -122,7 +122,7 @@ verify_reviewed_tree() { # <src-dir> <tree-dir> <sha> <repo-relative-script>
     _rsg_say "          an unverified process acceptable"; return 1; }
 
   local paths want got n=0 line diffs=0
-  paths="$(mktemp -t oe-rev-paths)" && want="$(mktemp -t oe-rev-want)" && got="$(mktemp -t oe-rev-got)" || {
+  paths="$(mktemp "${TMPDIR:-/tmp}/oe-rev-paths.XXXXXX")" && want="$(mktemp "${TMPDIR:-/tmp}/oe-rev-want.XXXXXX")" && got="$(mktemp "${TMPDIR:-/tmp}/oe-rev-got.XXXXXX")" || {
     _rsg_say "REFUSING: cannot create temp files for the comparison"; return 1; }
   _rsg_cleanup_verify() { rm -f "$paths" "$want" "$got"; }
 
@@ -232,7 +232,7 @@ exec_from_reviewed_tree() { # <src-dir> <path-relative-to-repo-root> [<arg>...]
 
   local sha dest
   sha="$(reviewed_tree_sha "$src")" || return 1
-  dest="$(mktemp -d -t oe-reviewed-tree)" || { _rsg_say "REFUSING: cannot create a temp directory"; return 1; }
+  dest="$(mktemp -d "${TMPDIR:-/tmp}/oe-reviewed-tree.XXXXXX")" || { _rsg_say "REFUSING: cannot create a temp directory"; return 1; }
   # No recursive delete on failure: the extraction is left where it is, named in the message above, so
   # it can be looked at. This file never removes a directory tree.
   materialise_reviewed_tree "$src" "$sha" "$dest" "$rel" || return 1
