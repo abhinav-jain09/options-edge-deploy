@@ -17,9 +17,12 @@ import os, pathlib, re, subprocess, unittest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 TOPICS = ROOT / 'scripts/kafka/topics.env'
 TOPIC = 'underlying.es.trades'
-RETENTION_MS = 288_000_000          # 80 h
-# The worst case the gate must cover: a MONDAY afternoon restart, where Friday's 09:30 ET open is ~78 h back.
-WORST_PRIOR_OPEN_HOURS = 78
+RETENTION_MS = 388_800_000          # 108 h
+# The window is (prior trade date 09:30 ET) -> (the latest a pod can start on that trade date). The trade date
+# rolls at 18:00 ET, so the late edge is 17:59, NOT 16:00 -- which is the error that produced the first value of
+# 80 h. Worst case: the Tuesday after a MONDAY HOLIDAY, Friday 09:30 -> Tuesday 17:59 = 104.5 h. An ordinary
+# Monday is 80.5 h (81.5 across the autumn clock change), so 80 h was short there too.
+WORST_PRIOR_OPEN_HOURS = 105
 CLEANUP = ROOT / 'scripts/ops/dev-cleanup.sh'
 
 
@@ -68,13 +71,23 @@ class EsAmtTapeKeepTest(unittest.TestCase):
         both = sorted(set(keep_list_as_dev_cleanup_reads_it()) & set(es_clean_topics()))
         self.assertEqual(both, [], f'kept topics must never be on the ESDOWN delete list: {both}')
 
-    def test_dev_keeps_the_eighty_hour_window_and_production_is_untouched(self):
+    def test_dev_declares_the_window_and_production_is_untouched(self):
+        """Dev only, deliberately.
+
+        OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES is SHARED, and es-amt-service is dev-only
+        (services.yaml envs: [dev]). Production's copy of this topic was measured at retention.ms=-1
+        holding 2.16 GiB / 201 h, is in no archive set, and has its own delete paths on the prod host
+        (es-predown.sh, daily-kafka-reset.sh, premarket-reset.sh, offhours-clean-slate.sh) -- so a
+        top-level entry would age out about 1 GiB of unrecoverable prod data for a service that does
+        not run there.
+        """
         dev = sourced('OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES')
-        self.assertEqual(dev.count(f'{TOPIC}={RETENTION_MS}'), 1)
-        # SHARED variable: a top-level entry would shrink production's ES tape to 34 h.
+        self.assertEqual([t for t in dev if t.startswith(f'{TOPIC}=')],
+                         [f'{TOPIC}={RETENTION_MS}'],
+                         'dev must declare that retention once and only once')
         prod = sourced('OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES', environment='production')
         self.assertEqual([t for t in prod if t.startswith(f'{TOPIC}=')], [],
-                         'production must inherit its own ES tape retention, not 34 h')
+                         'production must not inherit the dev ES tape retention')
 
     def test_retention_covers_the_services_own_replay_lookback(self):
         """The number is not free: it is what es-amt-service declares it needs."""
@@ -92,7 +105,8 @@ class EsAmtTapeKeepTest(unittest.TestCase):
         # The lookback is not the binding constraint: replayHorizonMs() is the EARLIER of
         # `now - lookback` and the prior trade date's 09:30, so the retained tape is what decides.
         self.assertGreaterEqual(RETENTION_MS, WORST_PRIOR_OPEN_HOURS * 3_600_000,
-                                'retention must reach the prior session open on a Monday restart')
+                                'retention must reach the prior session open on the Tuesday after a '
+                                'Monday holiday, the widest scheduled gap')
 
     def test_the_topic_is_still_declared_once_with_its_shape(self):
         self.assertEqual(sourced('OPTIONS_EDGE_TOPICS').count(f'{TOPIC}:32'), 1)
