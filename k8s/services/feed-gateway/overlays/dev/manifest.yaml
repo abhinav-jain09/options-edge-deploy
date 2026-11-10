@@ -66,7 +66,7 @@ spec:
             - name: GATEWAY_RITHMIC_DEPTH_ENABLED
               value: "true"
             - name: GATEWAY_MAX_SOCKETS_PER_APP_SESSION
-              value: "4"
+              value: "8"
             - name: GATEWAY_AUTH_ENABLED
               value: "true"
             - name: GATEWAY_KEYCLOAK_AUDIENCE
