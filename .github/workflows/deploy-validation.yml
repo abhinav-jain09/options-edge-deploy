@@ -661,6 +661,13 @@ jobs:
       - name: do_clean pins the topics ref in its own shell before reading a keep-list
         run: bash scripts/ops/dev-cleanup-do-clean-pin-test.sh
 
+      # A dev wipe kept level-absorption's events (declared reset-preserved for prod) while deleting the inputs it
+      # replays from, so the service refused to start (REPLAY_SHORT) after every clean and was repaired by hand
+      # (found 2026-11-10; owner: reset on every dev wipe). Drives the real do_clean to its delete step, also pins
+      # the report of session-bound services and that now/start/overnight exit non-zero when they fail; four mutants.
+      - name: a dev wipe resets level-absorption's topics and says what cannot be ready yet
+        run: bash scripts/ops/dev-cleanup-post-wipe-test.sh
+
       # A production reset runs the files in ITS checkout, not the ones in main. On 2026-10-13 a clean
       # slate ran from a tree whose apply-topics.sh had uncommitted edits and was 89 lines behind main,
       # wiped production and took the pre-#1173 failure path. The guard compares every file the run uses
