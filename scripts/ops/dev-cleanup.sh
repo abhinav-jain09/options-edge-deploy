@@ -202,7 +202,13 @@ ES_DOWN_SET='es-open-direction-service es-open-direction-postgres-writer'
 # The Postgres es_* tables (session_history, level_break_history, forecast, outcome, publication) are the
 # model's MEMORY / immutable ledgers / TRAINING data — they are NEVER touched here or by the offhours DB
 # truncate (excluded there via `tablename !~ '^es_'`).
-ES_CLEAN_TOPICS='es.open-direction.forecast es.open-direction.outcome es.open-direction.status underlying.es.trades'
+# underlying.es.trades was REMOVED from this list on 2026-11-10: it is NOT transient. es-amt-service is
+# deliberately not in ES_DOWN_SET (it publishes the RTH minutes until 16:00 ET), and its readiness gate
+# EsAmtRuntime.ready() = `ready && !retentionShort && LIVE` needs that tape to reach back to the PRIOR
+# session's 09:30 ET open. Deleting it here recreated it empty 13 minutes before the open, which pinned
+# /health/ready at NOT_READY:LIVE for the whole trade date. It is in OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS
+# for the same reason, and tests/test_es_amt_tape_keep.py fails the build if a KEPT topic is listed here.
+ES_CLEAN_TOPICS='es.open-direction.forecast es.open-direction.outcome es.open-direction.status'
 # Topic source-of-truth = the deploy repo's scripts/kafka/topics.env (the SAME file the deploy's
 # apply-topics.sh uses), read from origin/main so it is the reviewed, versioned config — NOT an
 # autonomous live snapshot. dev-cleanup pre-creates ONLY these platform/feed topics; every service
@@ -1110,7 +1116,7 @@ $prev"
 report_session_bound_services() {
   echo "Session-bound services (cannot be ready until a session supplies their input):"
   session_bound_line es-amt-service es-amt-service 'ES_AMT_RETENTION_SHORT' \
-    "the prior session's ES tape (underlying.es.trades) is missing -- every clean wipes that topic; it clears at the next 18:00 ET roll once a full session is in it"
+    "the prior session's ES tape (underlying.es.trades) does not reach back to that session's 09:30 ET open. Since 2026-11-10 the clean KEEPS that topic and dev retains 80 h of it, so this clears at the next 18:00 ET roll; if it persists, check the topic was not deleted by hand and that topics.env on origin/main still keeps it"
   session_bound_line market-structure-service market-structure 'this session has already ended' \
     "its bootstrap date (today, ET) is a session that has already ended, so it exits; it starts once the ET date rolls, then waits AWAITING_SCHEDULE for the first bar of that session (the estimate container is separate and unaffected)"
 }
