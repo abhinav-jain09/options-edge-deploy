@@ -18,3 +18,7 @@ jobs:
           python3 --version
       - name: the new dev-cleanup post-wipe test, on the runner
         run: bash scripts/ops/dev-cleanup-post-wipe-test.sh
+      - name: TRACE section 3 on the runner
+        if: always()
+        run: |
+          POST_WIPE_NO_MUTANTS=1 bash -x scripts/ops/dev-cleanup-post-wipe-test.sh 2>&1 | sed -n '/== 3\./,/== 4\./p' | grep -nE 'fake-kt|kafka_list_topics|--list|tries|sleep|FAKE_DIR|existing=|ERROR' | head -60 | cut -c1-260
