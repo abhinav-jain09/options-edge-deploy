@@ -233,7 +233,7 @@ jobs:
       # before being wired; ci_wiring_check.py now fails the build if this step is removed or made conditional.
       - name: Declared topics, PVCs, stream threads and schema-id maps (dormant suites, now run)
         timeout-minutes: 5
-        run: python3 -m unittest -v tests.test_databento_gex_topics tests.test_dev_cleanup_precreates_estimate_topics tests.test_no_versioned_topic_names tests.test_kafka_streams_state_pvcs tests.test_priority_stream_threads tests.test_vix_underlying_price_manifest tests.test_rithmic_mbo_reservation tests.test_geometry_schema_id_map tests.test_level_absorption_book_deploy tests.test_candle_direction_export_archive tests.test_context_tape_order_initialization tests.test_replay_inputs_archive
+        run: python3 -m unittest -v tests.test_databento_gex_topics tests.test_dev_cleanup_precreates_estimate_topics tests.test_no_versioned_topic_names tests.test_kafka_streams_state_pvcs tests.test_priority_stream_threads tests.test_vix_underlying_price_manifest tests.test_rithmic_mbo_reservation tests.test_geometry_schema_id_map tests.test_level_absorption_book_deploy tests.test_candle_direction_export_archive tests.test_context_tape_order_initialization tests.test_replay_inputs_archive tests.test_es_amt_tape_keep
 
       # The same promotion for the suites that assert deploy wiring - that a service's image is resolved and
       # rolled, that a retired one is gone from dev and prod, that bring-up forwards its parameters.
