@@ -1072,6 +1072,49 @@ verify_start_readiness() {
   return $rc
 }
 
+# session_bound_line DEPLOY CONTAINER LOG_PATTERN WAITS_FOR: one line saying whether DEPLOY is ready, and when it is
+# not, whether the pod log CONFIRMS the known session-bound condition (LOG_PATTERN). Three outcomes, never conflated:
+#   WAIT  the log was read and shows the condition  -> WAITS_FOR says what it needs and when that arrives;
+#   ???   the log was read and does NOT show it     -> not confirmed: something else is wrong, read the log;
+#   ???   the log could not be read (RBAC, no such container, pod gone) -> not confirmed, and says so: an unreadable
+#         log is not evidence that the condition is absent, so it never claims the cause is unrelated.
+# It states the CONDITION found, not that a wipe caused it: `start` also runs on its own, with no wipe before it.
+# Prints nothing for a held-down or absent deployment. Reported only: never changes the exit status.
+session_bound_line() {
+  local d=$1 c=$2 pat=$3 waits=$4 des rr cur prev crc
+  des=$($KK get deploy "$d" -o jsonpath='{.spec.replicas}' 2>/dev/null) || return 0
+  rr=$($KK get deploy "$d" -o jsonpath='{.status.readyReplicas}' 2>/dev/null) || rr=0
+  [ "${des:-0}" -gt 0 ] || return 0
+  if [ "${rr:-0}" -ge "${des:-0}" ]; then echo "  OK   $d ready"; return 0; fi
+  # Each read counts only if ITS OWN call succeeded: a failed `kubectl logs` can still print partial text, and that is
+  # not a confirmation. A crash-looping pod's current container is often unreadable (waiting to start) while --previous
+  # holds the answer, so the two reads are judged separately; "no previous container" is normal and is not an error here.
+  local hay="" prc
+  cur=$($KK logs "deploy/$d" -c "$c" 2>/dev/null); crc=$?
+  prev=$($KK logs "deploy/$d" -c "$c" --previous 2>/dev/null); prc=$?
+  [ "$crc" -eq 0 ] && hay="$cur"
+  [ "$prc" -eq 0 ] && hay="$hay
+$prev"
+  if printf '%s\n' "$hay" | grep -qE "$pat"; then
+    echo "  WAIT $d NOT ready; its log shows a known session-bound condition: $waits"
+  elif [ "$crc" -ne 0 ]; then
+    echo "  ???  $d NOT ready and its log could NOT be read (kubectl logs rc=$crc), so the known session-bound condition ('$pat') is neither confirmed nor ruled out: kubectl -n options-edge logs deploy/$d -c $c --tail=100"
+  else
+    echo "  ???  $d NOT ready and its log does NOT show the known session-bound condition ('$pat'): read kubectl -n options-edge logs deploy/$d -c $c --tail=100"
+  fi
+}
+
+# report_session_bound_services: two services legitimately cannot be ready until a session supplies their input. Say so
+# by name and condition instead of leaving them as unexplained 0/1 in a readiness list (the 2026-11-10 bring-up did,
+# and both were chased as faults). Reported only.
+report_session_bound_services() {
+  echo "Session-bound services (cannot be ready until a session supplies their input):"
+  session_bound_line es-amt-service es-amt-service 'ES_AMT_RETENTION_SHORT' \
+    "the prior session's ES tape (underlying.es.trades) is missing -- every clean wipes that topic; it clears at the next 18:00 ET roll once a full session is in it"
+  session_bound_line market-structure-service market-structure 'this session has already ended' \
+    "its bootstrap date (today, ET) is a session that has already ended, so it exits; it starts once the ET date rolls, then waits AWAITING_SCHEDULE for the first bar of that session (the estimate container is separate and unaffected)"
+}
+
 do_start() {
   require_kafka_cli
   ensure_topics_or_refuse || {
@@ -1147,6 +1190,7 @@ do_start() {
   echo "Verifying indicator-service / market-structure-service readiness ..."
   local verify_rc=0
   verify_start_readiness || verify_rc=$?
+  report_session_bound_services
   echo "Done — source topics exist; active apps reach RUNNING, disabled set held at 0 (no replay injection)."
   return $verify_rc
 }
@@ -1336,6 +1380,25 @@ reset_preserved_from_main() {
 # so their names live here, next to ensure_dev_only_estimate_topics.
 DEV_ONLY_ESTIMATE_KEEP="options.indicators.estimate.bars options.indicators.estimate.bars.current options.spx.market-structure.estimate.recovery options.spx.market-structure.estimate.patterns options.spx.market-structure.estimate.ui options.spx.market-structure.estimate.sequence options.spx.market-structure.estimate.tools options.spx.market-structure.estimate.geometry"
 
+# Topics a full DEV wipe RESETS although the shared reset-preserved list keeps them (owner decision 2026-11-10,
+# "reset on every dev wipe"). futures.level-absorption.events is declared preserved because on PROD it is evidence
+# that cannot be rebuilt. On dev the wipe also deletes the inputs level-absorption-service replays from, and the
+# service then refuses to start (REPLAY_SHORT: the replay no longer reproduces the log it kept) -- so every dev
+# clean ended with a crash-looping service and a hand repair (delete events + closures, recreate through the
+# barrier). Not preserving them lets the wipe delete them with everything else; ensure_topics then recreates both
+# at their declared shape (retention.ms=-1 and the artifact's exact retention.bytes for events, 7 days for
+# closures), which is what the service's own start-up check demands. This list only subtracts names from what
+# the wipe KEEPS on dev: prod's list and prod's scripts are not read or changed.
+DEV_CLEAN_RESET_TOPICS="futures.level-absorption.events futures.level-absorption.closures"
+
+# dev_wipe_keep_list NAME...: the names the dev wipe must keep = the arguments minus DEV_CLEAN_RESET_TOPICS,
+# EXACT names only (a prefix or a sibling such as futures.level-absorption.voice is not touched), one per line.
+dev_wipe_keep_list() {
+  local reset
+  reset="$(printf '%s\n' $DEV_CLEAN_RESET_TOPICS)"
+  printf '%s\n' "$@" | tr ' ' '\n' | grep -v '^$' | grep -vxF -e "$reset" || true
+}
+
 do_clean() {
   clean_guard || return 1
   require_kafka_cli   # before anything is stopped or deleted: a clean must not run blind
@@ -1428,11 +1491,20 @@ for p in json.load(sys.stdin)["items"]:
     # the A5 calibration ledger accrues until the archive carries it to the NAS, and a wipe before that
     # loses the day with no way to notice. dev and prod must agree on what "preserved" means, or the
     # two environments stop being comparable, which is the whole reason the evidence is split by env.
+    # THE ONE DECLARED EXCEPTION is DEV_CLEAN_RESET_TOPICS (level-absorption's events + closures, owner 2026-11-10):
+    # dev deletes the inputs that service replays from, so keeping its log makes it unstartable. It is subtracted
+    # below, by exact name, and nothing else is.
     # RESET_PRESERVED_TOPICS was resolved at the top of do_clean, at the commit topics_ref_pin pinned,
     # and the wipe was refused outright if it could not be. It is NOT re-read here: this point is past
     # the scale-down and past pause_dev_mirrors, so there is no safe way to fail.
-    PRESERVE_RE="$(printf '%s\n' $RESET_PRESERVED_TOPICS $DEV_KEEP | sed 's/[.[\*^$()+?{|]/\\&/g' | paste -sd'|' -)"
-    [ -n "$PRESERVE_RE" ] && echo "   preserving (reset-preserved + dev-clean keep list): $RESET_PRESERVED_TOPICS $DEV_KEEP"
+    # The keep set = both lists MINUS DEV_CLEAN_RESET_TOPICS (level-absorption's events + closures: see the note
+    # above dev_wipe_keep_list). They are deleted with everything else and recreated by the topic pass below.
+    local KEEP_NAMES RESET_NOW
+    KEEP_NAMES="$(dev_wipe_keep_list $RESET_PRESERVED_TOPICS $DEV_KEEP)"
+    RESET_NOW="$(printf '%s\n' $RESET_PRESERVED_TOPICS $DEV_KEEP | grep -xF -e "$(printf '%s\n' $DEV_CLEAN_RESET_TOPICS)" | sort -u | paste -sd' ' -)"
+    PRESERVE_RE="$(printf '%s\n' $KEEP_NAMES | sed 's/[.[\*^$()+?{|]/\\&/g' | paste -sd'|' -)"
+    [ -n "$PRESERVE_RE" ] && echo "   preserving (reset-preserved + dev-clean keep list, minus the dev reset set): $(printf '%s ' $KEEP_NAMES)"
+    [ -n "$RESET_NOW" ] && echo "   RESETTING (declared preserved, but derived from inputs this wipe deletes): $RESET_NOW"
     local all_topics
     all_topics="$(kafka_list_topics)" || {
       echo "REFUSING the wipe: kafka-topics --list failed or printed nothing after retries, so there is nothing to prove was deleted." >&2
@@ -1496,12 +1568,16 @@ for p in json.load(sys.stdin)["items"]:
 
 # ---------- dispatch ----------
 MODE=${1:-auto}
+# MAIN_RC carries the verdict of the directly requested mode to the exit below. These cases used to end on the bare
+# function call, and nothing after the case read its status, so `dev-cleanup now` exited 0 after REFUSING the
+# wipe (the 2026-11-09 clean: only the log said so) and `start` exited 0 after verify_start_readiness failed.
+MAIN_RC=0
 case "$MODE" in
   logs)      clean_logs ;;
-  start)     do_start ;;
-  overnight) do_start_overnight ;;
+  start)     do_start || MAIN_RC=$? ;;
+  overnight) do_start_overnight || MAIN_RC=$? ;;
   es-down)   do_es_down ;;
-  now|clean) if [ "${DKC_DRYRUN:-0}" = 1 ]; then clean_guard && echo "DRYRUN: would do_clean (WIPE)"; else do_clean; fi ;;
+  now|clean) if [ "${DKC_DRYRUN:-0}" = 1 ]; then clean_guard || MAIN_RC=$?; [ "$MAIN_RC" -eq 0 ] && echo "DRYRUN: would do_clean (WIPE)"; else do_clean || MAIN_RC=$?; fi ;;
   auto)
     # Calendar-aware slots (ET), 2026-07-11. market_calendar.py says whether the day trades; the CLEAN
     # slot is a FIXED 17:20 on every trading day (early closes included) since 2026-10-06:
@@ -1670,4 +1746,9 @@ fi
 if [ "${AUTO_SLOT_FAILED:-0}" != 0 ]; then
   echo "dev-cleanup: the automatic slot FAILED — see $LOG (nothing may be scaled up until a topic pass exits 0)"
   exit 4
+fi
+# AND THE DIRECT MODE'S OWN VERDICT (now / start / overnight), after the two more specific codes above.
+if [ "${MAIN_RC:-0}" != 0 ]; then
+  echo "dev-cleanup $MODE: FAILED (rc=$MAIN_RC) — see the lines above"
+  exit "$MAIN_RC"
 fi
