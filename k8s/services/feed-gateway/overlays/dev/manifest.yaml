@@ -126,7 +126,7 @@ spec:
             - name: GATEWAY_REPLAY_ORCHESTRATOR_URL
               value: http://host.docker.internal:8095
             - name: GATEWAY_APPROVAL_ROLE
-              value: replay-admin
+              value: oe-approved
             - name: GATEWAY_ALLOW_INMEMORY_TICKETS
               value: "true"
             - name: GATEWAY_ALLOW_INSECURE_KAFKA

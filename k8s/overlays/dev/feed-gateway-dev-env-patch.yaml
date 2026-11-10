@@ -167,8 +167,12 @@ spec:
             # Replay orchestrator is a host process on :8095; in-cluster it is reached via host.docker.internal.
             - name: GATEWAY_REPLAY_ORCHESTRATOR_URL
               value: "http://host.docker.internal:8095"
+            # Realm role a login must carry for the gateway to attach its sockets (owner 2026-11-10). It was "replay-admin",
+            # which is the FULL replay-administration role (start/stop/delete runs): only two accounts held it, so every other
+            # login got a silent 401 ("Feed unavailable") once GATEWAY_AUTH_ENABLED=true came with #1545. "oe-approved" carries
+            # no replay rights; it is granted in Keycloak (realm optionsedge) to each account allowed to see the feed.
             - name: GATEWAY_APPROVAL_ROLE
-              value: "replay-admin"
+              value: "oe-approved"
             # Dev-only relaxations (the host gateway set these): non-durable in-memory ticket store and
             # PLAINTEXT Kafka while auth is on. NEVER set in prod.
             - name: GATEWAY_ALLOW_INMEMORY_TICKETS
