@@ -232,9 +232,15 @@ if [ -z "$UNDECLARED_KEEP" ]; then
   echo "  FAIL every dev-keep topic is also reset-preserved — this section cannot isolate the branch"; fail=1
 else
   ISO_DIR="$(mktemp -d)"
+  # Trapped the moment it exists, not after the staging: an interrupt or a failed cp in between used
+  # to leave the directory behind (Codex r2 MINOR).
+  trap 'rm -f "$STATUS_FILE" "$ISO_DIR"/topics.env "$ISO_DIR"/cleanup-topics.sh "$ISO_DIR"/reset-preserved-topics.sh; rmdir "$ISO_DIR" 2>/dev/null || true' EXIT
   cp "$HERE/cleanup-topics.sh" "$HERE/reset-preserved-topics.sh" "$ISO_DIR/"
   # Drop it from the APPROVED declaration only; the keep list keeps naming it.
-  sed -e "s/ ${UNDECLARED_KEEP}:[0-9]*//g" "$HERE/topics.env" > "$ISO_DIR/topics.env"
+  # Escaped: an unescaped name is a REGEX, so its dots match any character and a hypothetical
+  # esXrithmicYdepth:1 would be staged away too (Codex r2 NIT).
+  UK_RE="$(printf '%s' "$UNDECLARED_KEEP" | sed 's/[.[\*^$\/]/\\&/g')"
+  sed -e "s/ ${UK_RE}:[0-9]*//g" "$HERE/topics.env" > "$ISO_DIR/topics.env"
   # `grep -c` EXITS 1 WHEN THE COUNT IS 0, and 0 is the wanted answer for `still` -- so without the
   # `|| true` the assignment fails and `set -e` kills the suite exactly when the staging WORKED. It
   # did, on the first run: the log ended at this section's header with 68 of 303 assertions made.
@@ -401,6 +407,28 @@ assert "nothing was deleted before refusing" "$L" "--delete" absent
 L="$(CLEANUP_DIR="$STAGE_DIR" ALLOW_PROD=true run_cleanup delete-recreate production)"
 assert_status 0 "production does not require the dev-clean keep list"
 assert_delete "and production still deletes an ordinary approved topic" "$L" "$SWEPT" present
+
+# A VALID keep list whose declaration line is CRLF-terminated. Non-blank, so the emptiness guard says
+# nothing; the question is whether the resolved names still MATCH the broker's. Before `tr -d '\r'`
+# they did not, and every keep topic was deleted or shrunk with no diagnostic at all.
+echo "--- a CRLF-terminated keep-list declaration still protects its topics ---"
+CRLF_DIR="$(mktemp -d)"
+trap 'rm -f "$STATUS_FILE" "$CRLF_DIR"/topics.env "$CRLF_DIR"/cleanup-topics.sh "$CRLF_DIR"/reset-preserved-topics.sh; rmdir "$CRLF_DIR" 2>/dev/null || true' EXIT
+cp "$HERE/cleanup-topics.sh" "$HERE/reset-preserved-topics.sh" "$CRLF_DIR/"
+awk '/^[[:space:]]*OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS="/ { printf "%s\r\n", $0; next } { print }' \
+  "$HERE/topics.env" > "$CRLF_DIR/topics.env"
+crlf_lines="$(grep -c $'\r$' "$CRLF_DIR/topics.env" || true)"
+if [ "${crlf_lines:-0}" -lt 1 ]; then
+  echo "  FAIL the staged topics.env has no CRLF line — this section would prove nothing"; fail=1
+else
+  echo "  ($crlf_lines keep-list declaration(s) staged with CRLF)"
+  L="$(CLEANUP_DIR="$CRLF_DIR" run_cleanup delete-recreate dev)"
+  for t in $DEV_KEEP; do
+    assert_delete "CRLF declaration still spares '$t'" "$L" "$t" absent
+  done
+  assert_delete "and an ordinary approved topic is still deleted" "$L" "$SWEPT" present
+  assert_status 0 "cleanup itself succeeded"
+fi
 
 echo "--- TOPIC_SET is refused, not silently applied to the wrong cluster ---"
 L="$(TOPIC_SET=es4 ALLOW_PROD=true run_cleanup retention dev)"

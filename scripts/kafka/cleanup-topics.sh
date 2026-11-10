@@ -149,7 +149,11 @@ if [[ "$ENVIRONMENT" != "production" ]]; then
   # " " or a newline, while the unquoted expansion that follows splits whitespace into NO words -- so a
   # blank-but-not-empty declaration (a mis-templated or half-edited line) passed the guard and then
   # exempted nothing, which is the one outcome this guard exists to prevent (Codex r1 MAJOR).
-  printf '%s\n' ${OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS:-} | sed '/^[[:space:]]*$/d' | sort -u > "$devkeep_file"
+  # `tr -d '\r'` is not cosmetic: a CRLF-terminated declaration resolves to "underlying.es.trades\r",
+  # which is NON-BLANK, so it passes the guard below while `grep -qx` never matches the broker's
+  # "underlying.es.trades" -- every supposedly preserved topic silently unprotected, the exact failure
+  # the guard exists to prevent, reached through a line ending (Codex r2 MAJOR).
+  printf '%s\n' ${OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS:-} | tr -d '\r' | sed '/^[[:space:]]*$/d' | sort -u > "$devkeep_file"
   if [[ ! -s "$devkeep_file" ]]; then
     echo "Refusing cleanup: ENVIRONMENT='$ENVIRONMENT' but OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS resolved to NO TOPICS from topics.env." >&2
     echo "On a non-production cluster that list is what this script must not destroy; an empty one exempts nothing while reading as protection." >&2
