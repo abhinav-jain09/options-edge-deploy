@@ -182,7 +182,11 @@ printf 'Topic: t.rp\tTopicId: x\tPartitionCount: 1\tReplicationFactor: 1\tConfig
   topic_count() { echo 0; }
   # shellcheck source=/dev/null
   . "$WORK/topicfns.sh"
-  export TOPICS_ENV KT BS
+  # TOPICS_ENV is deliberately NOT exported: the real topics.env is ~219 KB, and Linux refuses to exec ANY program whose
+  # environment holds a single string over 128 KiB (E2BIG), which the fake kafka-topics and even `sleep` would hit
+  # silently (2>/dev/null). macOS has no such limit, so only the CI runner showed it. The stubbed git() below reads it
+  # as a plain shell variable in this same shell.
+  export KT BS
   ensure_topics >"$WORK/ensure.out" 2>&1; echo $? > "$WORK/ensure.rc"
 )
 if [ "$(cat "$WORK/ensure.rc" 2>/dev/null)" = 0 ]; then ok "the real ensure_topics SUCCEEDS over the real topics.env (every declared topic present at its declared shape)"
