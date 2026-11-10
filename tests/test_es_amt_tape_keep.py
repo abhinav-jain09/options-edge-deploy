@@ -71,13 +71,23 @@ class EsAmtTapeKeepTest(unittest.TestCase):
         both = sorted(set(keep_list_as_dev_cleanup_reads_it()) & set(es_clean_topics()))
         self.assertEqual(both, [], f'kept topics must never be on the ESDOWN delete list: {both}')
 
-    def test_dev_keeps_the_declared_window_and_production_is_untouched(self):
+    def test_dev_declares_the_window_and_production_is_untouched(self):
+        """Dev only, deliberately.
+
+        OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES is SHARED, and es-amt-service is dev-only
+        (services.yaml envs: [dev]). Production's copy of this topic was measured at retention.ms=-1
+        holding 2.16 GiB / 201 h, is in no archive set, and has its own delete paths on the prod host
+        (es-predown.sh, daily-kafka-reset.sh, premarket-reset.sh, offhours-clean-slate.sh) -- so a
+        top-level entry would age out about 1 GiB of unrecoverable prod data for a service that does
+        not run there.
+        """
         dev = sourced('OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES')
-        self.assertEqual(dev.count(f'{TOPIC}={RETENTION_MS}'), 1)
-        # SHARED variable: a top-level entry would shrink production's ES tape to 34 h.
+        self.assertEqual([t for t in dev if t.startswith(f'{TOPIC}=')],
+                         [f'{TOPIC}={RETENTION_MS}'],
+                         'dev must declare that retention once and only once')
         prod = sourced('OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES', environment='production')
         self.assertEqual([t for t in prod if t.startswith(f'{TOPIC}=')], [],
-                         'production must inherit its own ES tape retention, not 34 h')
+                         'production must not inherit the dev ES tape retention')
 
     def test_retention_covers_the_services_own_replay_lookback(self):
         """The number is not free: it is what es-amt-service declares it needs."""

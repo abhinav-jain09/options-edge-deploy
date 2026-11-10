@@ -145,6 +145,12 @@ assert "prod-durable vix NOT shrunk"    "$L" "--entity-name $DURABLE_PROD_ONLY -
 assert "ordinary topic IS shrunk"       "$L" "--entity-name $SWEPT --alter"             present
 assert_status 0 "cleanup itself succeeded"
 
+# The other half of the production scope. Asserting it only for delete-recreate left a regression that
+# applied the dev-keep guard in just one branch passing this suite (Codex r1 MINOR).
+for t in $PROD_STILL_MANAGED; do
+  assert "production still retention-shrinks dev-clean-preserved '$t'" "$L" "--entity-name $t --alter" present
+done
+
 echo "--- dev: vix is durable on PRODUCTION only and must still be swept here ---"
 L="$(run_cleanup retention dev)"
 assert "durable topic NOT shrunk"       "$L" "--entity-name $DURABLE_ALWAYS --alter"    absent
@@ -202,6 +208,51 @@ for t in $DEV_KEEP; do
 done
 assert_delete "and an undeclared topic IS still swept" "$L" "es4.some-mm2-leftover" present
 assert_status 0 "cleanup itself succeeded"
+
+# THE ASSERTIONS ABOVE DO NOT PROVE THE GUARD, and that is why this section exists (Codex r1 MAJOR).
+# Every keep-list topic is also in OPTIONS_EDGE_TOPICS, so the `declared_file` branch keeps it anyway:
+# delete the dev-keep branch from cleanup-topics.sh entirely and the twelve assertions above still
+# pass. "The branch is reached" is not "the branch is load-bearing" -- a check satisfied by something
+# other than what it names.
+#
+# So stage a topics.env with ONE keep-list topic removed from OPTIONS_EDGE_TOPICS while it stays on the
+# mocked cluster. Nothing else can save it then: it is undeclared, it is not reset-preserved, and
+# PROTECTED_TOPIC_REGEX does not match it. If the dev-keep branch goes, this topic is deleted.
+echo "--- delete-unwanted: an UNDECLARED dev-clean-preserved topic must survive (the branch, isolated) ---"
+# Resolved here rather than taken from the later A5 section: that section sources
+# reset-preserved-topics.sh BELOW this point, and under `set -u` reading its variable early aborts the
+# suite. Resolved at ENVIRONMENT=dev, which is the environment under test.
+DEV_PRESERVED="$(env -u RPT_TOPICS_ENV ENVIRONMENT=dev bash "$HERE/reset-preserved-topics.sh")" || DEV_PRESERVED=""
+UNDECLARED_KEEP=""
+for t in $DEV_KEEP; do
+  printf '%s\n' "$DEV_PRESERVED" | grep -qxF "$t" && continue   # pick one nothing ELSE protects
+  UNDECLARED_KEEP="$t"; break
+done
+if [ -z "$UNDECLARED_KEEP" ]; then
+  echo "  FAIL every dev-keep topic is also reset-preserved — this section cannot isolate the branch"; fail=1
+else
+  ISO_DIR="$(mktemp -d)"
+  cp "$HERE/cleanup-topics.sh" "$HERE/reset-preserved-topics.sh" "$ISO_DIR/"
+  # Drop it from the APPROVED declaration only; the keep list keeps naming it.
+  sed -e "s/ ${UNDECLARED_KEEP}:[0-9]*//g" "$HERE/topics.env" > "$ISO_DIR/topics.env"
+  # `grep -c` EXITS 1 WHEN THE COUNT IS 0, and 0 is the wanted answer for `still` -- so without the
+  # `|| true` the assignment fails and `set -e` kills the suite exactly when the staging WORKED. It
+  # did, on the first run: the log ended at this section's header with 68 of 303 assertions made.
+  still="$( ENVIRONMENT=dev; . "$ISO_DIR/topics.env"; printf '%s\n' $OPTIONS_EDGE_TOPICS | sed 's/:[0-9]*$//' | grep -cxF "$UNDECLARED_KEEP" || true )"
+  kept="$( ENVIRONMENT=dev; . "$ISO_DIR/topics.env"; printf '%s\n' $OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS | grep -cxF "$UNDECLARED_KEEP" || true )"
+  if [ "$still" != "0" ] || [ "$kept" = "0" ]; then
+    echo "  FAIL the staged topics.env is wrong (approved=$still want 0, kept=$kept want >=1) — the section would prove nothing"; fail=1
+  else
+    echo "  (isolating '$UNDECLARED_KEEP': removed from OPTIONS_EDGE_TOPICS, still on the keep list)"
+    L="$(CLEANUP_DIR="$ISO_DIR" LIST_TOPICS="$UNDECLARED_KEEP $SWEPT es4.some-mm2-leftover" DELETE_UNWANTED=true \
+         run_cleanup retention dev)"
+    assert_delete "the keep list ALONE saves undeclared '$UNDECLARED_KEEP'" "$L" "$UNDECLARED_KEEP" absent
+    assert_delete "and an undeclared NON-kept topic is still swept" "$L" "es4.some-mm2-leftover" present
+    assert_status 0 "cleanup itself succeeded"
+  fi
+  rm -f "$ISO_DIR"/topics.env "$ISO_DIR"/cleanup-topics.sh "$ISO_DIR"/reset-preserved-topics.sh
+  rmdir "$ISO_DIR" 2>/dev/null || true
+fi
 
 # THE DELETE-UNWANTED LOOP. Never exercised before: the mocked --list returned nothing, so the loop
 # body was unreachable and its "is this topic declared?" question was never asked in a test.
@@ -332,14 +383,18 @@ done
 # the run, not shrink the keep list to nothing -- the same fail-closed rule reset-preserved-topics.sh
 # applies to its own declarations. Staged in a copy of the three files cleanup-topics.sh reads, so
 # the shipped topics.env is never edited to test this.
-echo "--- an EMPTY dev-clean keep list refuses the run on dev ---"
+echo "--- a BLANK dev-clean keep list refuses the run on dev ---"
 STAGE_DIR="$(mktemp -d)"
 trap 'rm -f "$STATUS_FILE" "$STAGE_DIR"/topics.env "$STAGE_DIR"/cleanup-topics.sh "$STAGE_DIR"/reset-preserved-topics.sh; rmdir "$STAGE_DIR" 2>/dev/null || true' EXIT
 cp "$HERE/cleanup-topics.sh" "$HERE/reset-preserved-topics.sh" "$STAGE_DIR/"
 grep -vE '^[[:space:]]*OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS=' "$HERE/topics.env" > "$STAGE_DIR/topics.env"
-printf 'OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS=""\n' >> "$STAGE_DIR/topics.env"
+# A SINGLE SPACE, not "". `[[ -z " " ]]` is FALSE, so the first version of the guard -- which tested
+# the VARIABLE -- let this through, while the unquoted expansion that follows splits it into no words
+# and exempted nothing (Codex r1 MAJOR). Staging the blank value tests the bypass, and an empty value
+# is the weaker case it subsumes.
+printf 'OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS=" "\n' >> "$STAGE_DIR/topics.env"
 L="$(CLEANUP_DIR="$STAGE_DIR" run_cleanup delete-recreate dev)"
-assert_status 1 "refuses an empty dev-clean keep list"
+assert_status 1 "refuses a whitespace-only dev-clean keep list"
 assert "nothing was deleted before refusing" "$L" "--delete" absent
 # The same staged tree on PRODUCTION must NOT refuse: the list is not consulted there, so demanding
 # it would have made an empty dev declaration block a production cleanup for no reason.

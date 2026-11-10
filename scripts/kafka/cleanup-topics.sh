@@ -142,21 +142,28 @@ fi
 # behaviour change on production, made by a fix whose entire subject is dev. Production's own
 # unrebuildable data is covered by OPTIONS_EDGE_PROD_ONLY_RESET_PRESERVED_TOPICS, which
 # reset-preserved-topics.sh already merges into durable_file under its own predicate.
-devkeep_file="$(mktemp)"
-trap 'rm -f "$approved_file" "$declared_file" "$durable_file" "$devkeep_file"' EXIT
 if [[ "$ENVIRONMENT" != "production" ]]; then
-  if [[ -z "${OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS:-}" ]]; then
-    echo "Refusing cleanup: ENVIRONMENT='$ENVIRONMENT' but OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS resolved EMPTY from topics.env." >&2
+  devkeep_file="$(mktemp)"
+  trap 'rm -f "$approved_file" "$declared_file" "$durable_file" "$devkeep_file"' EXIT
+  # The refusal tests the RESOLVED LIST, not the variable. `[[ -z "$VAR" ]]` is FALSE for a value of
+  # " " or a newline, while the unquoted expansion that follows splits whitespace into NO words -- so a
+  # blank-but-not-empty declaration (a mis-templated or half-edited line) passed the guard and then
+  # exempted nothing, which is the one outcome this guard exists to prevent (Codex r1 MAJOR).
+  printf '%s\n' ${OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS:-} | sed '/^[[:space:]]*$/d' | sort -u > "$devkeep_file"
+  if [[ ! -s "$devkeep_file" ]]; then
+    echo "Refusing cleanup: ENVIRONMENT='$ENVIRONMENT' but OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS resolved to NO TOPICS from topics.env." >&2
     echo "On a non-production cluster that list is what this script must not destroy; an empty one exempts nothing while reading as protection." >&2
     exit 1
   fi
-  printf '%s\n' $OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS | sort -u > "$devkeep_file"
   echo "[cleanup-topics] DEV-CLEAN-PRESERVED topics exempt from destructive cleanup: $(tr '\n' ' ' < "$devkeep_file")"
+  is_dev_clean_preserved() { grep -qx "$1" "$devkeep_file"; }
 else
+  # Production creates no file and probes nothing: the first draft made an extra mktemp and a failed
+  # grep per topic on a path whose behaviour is meant to be untouched, so a production host where that
+  # mktemp failed would have refused a cleanup that used to run (Codex r1 MINOR).
   echo "[cleanup-topics] ENVIRONMENT=production: OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS is NOT consulted -- it is the dev clean's keep list, and production's unrebuildable topics come from OPTIONS_EDGE_PROD_ONLY_RESET_PRESERVED_TOPICS instead."
+  is_dev_clean_preserved() { return 1; }
 fi
-# Empty on production, so this answers "no" there without a second environment test at each call.
-is_dev_clean_preserved() { grep -qx "$1" "$devkeep_file"; }
 
 describe_topic() {
   kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --describe --topic "$1" 2>/dev/null | sed -n '/^Topic:/p' || true
