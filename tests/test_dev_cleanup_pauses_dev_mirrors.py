@@ -427,6 +427,10 @@ class DevCleanupPausesDevMirrorsTest(unittest.TestCase):
                 pause_dev_mirrors()               { rec PAUSE; return %(pause_rc)s; }
                 resume_dev_mirrors_if_declared()  { rec "RESUME:$1"; return 0; }
                 ensure_topics()                   { rec RECREATE; return %(ensure_rc)s; }
+                # do_clean pins the topics ref in its own shell (PR 1608). This test is about the ORDER of
+                # pause/delete/recreate/resume, not the pin: TOPICS_ENV_SHA is seeded below and the real pin is
+                # exercised, against a real origin, by scripts/ops/dev-cleanup-do-clean-pin-test.sh.
+                topics_ref_pin()                  { return 0; }
                 sleep() { :; }
                 docker() { :; }
                 tmutil() { :; }
