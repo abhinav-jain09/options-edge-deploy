@@ -12346,18 +12346,6 @@
       "unframed": true
     },
     {
-      "job": "Jenkinsfile.es4-deploy",
-      "from": "es4",
-      "to": "dev",
-      "transport": "bytes",
-      "topics": [
-        "es.rithmic.mbo"
-      ],
-      "subjects": [
-        "es.rithmic.mbo-value"
-      ]
-    },
-    {
       "job": "Jenkinsfile.opra-definition-enumeration-mirror",
       "from": "dev",
       "to": "es4",
@@ -12378,6 +12366,18 @@
       ],
       "subjects": [],
       "unframed": true
+    },
+    {
+      "job": "Jenkinsfile.rithmic-depth-bridge-release",
+      "from": "es4",
+      "to": "dev",
+      "transport": "bytes",
+      "topics": [
+        "es.rithmic.mbo"
+      ],
+      "subjects": [
+        "es.rithmic.mbo-value"
+      ]
     },
     {
       "job": "Jenkinsfile.spx-price-reencoder",

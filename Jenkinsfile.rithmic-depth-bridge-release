@@ -1,3 +1,9 @@
+// Raw MBO identity mirror released by this job (it left Jenkinsfile.es4-deploy with the Rithmic release in #1593;
+// the declaration moved with it, and the existing legacy depth mirrors are separate).
+// MIRROR-TRANSPORT: bytes
+// MIRROR-TOPICS: es.rithmic.mbo
+// MIRROR-SUBJECTS: es.rithmic.mbo-value
+// MIRROR-PATHS: es4->dev
 // RITHMIC DEPTH BRIDGE RELEASE — the ES4 Rithmic collector and its dev/prod identity mirrors.
 //
 // WHY THIS IS ITS OWN JOB, AND OUT OF THE PERMITTED-COMMIT GUARD'S SCOPE

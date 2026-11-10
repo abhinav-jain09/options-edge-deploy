@@ -180,7 +180,7 @@ class RithmicEs4Service(unittest.TestCase):
         (test_the_release_job_is_classified_out_of_the_guard_scope)."""
         import hashlib
         actual=hashlib.sha256((ROOT/'Jenkinsfile.rithmic-depth-bridge-release').read_bytes()).hexdigest()
-        self.assertEqual(actual,'853c3e41b62cd1a5e7e44579222836a1d1402cfa152b5a033e0626168796b4ee',
+        self.assertEqual(actual,'26662cc89afa1aaad54be159199281b75ba123faa72170a2790034152601fcfa',
                          'Jenkinsfile.rithmic-depth-bridge-release changed. It is classified `out`, so the '
                          'guard validator does not check it. The two tests above notice SOME changes - a '
                          'guard stage that drifts from the canonical one, a flipped classification - but '
