@@ -38,6 +38,17 @@ done
 printf '#!/usr/bin/env bash\necho "=== apply-topics-vol-premium-safety: stubbed inside the mutation harness ==="\n' \
   > "$REPO/scripts/kafka/apply-topics-vol-premium-safety-test.sh"
 
+# cleanup-topics-durable-test.sh is stubbed here for the SAME reason, measured 2026-11-11: it is ~110 s of
+# mocked cleanup runs (it grew when the dev-clean keep list gained its own sections), and the validator runs
+# it on EVERY expect() below -- twenty-one times, ~38 min inside a harness whose cases are all about
+# declarations and the validator's own structural checks. Not one case asserts anything this sub-test
+# reports, so stubbing it removes cost, not coverage; the real harness still runs, once, wherever the real
+# validator runs. The exec bit survives the overwrite (cp -R copied it executable), and the validator
+# refuses a non-executable CLEANUP_TEST, so it is set again rather than assumed.
+printf '#!/usr/bin/env bash\necho "=== cleanup-topics-durable-test: stubbed inside the mutation harness ==="\n' \
+  > "$REPO/scripts/kafka/cleanup-topics-durable-test.sh"
+chmod +x "$REPO/scripts/kafka/cleanup-topics-durable-test.sh"
+
 VALIDATOR="$REPO/scripts/ci/validate-durable-topic-preservation.sh"
 TOPICS="$REPO/scripts/kafka/topics.env"
 CLEANSLATE="$REPO/scripts/ops/offhours-clean-slate.sh"

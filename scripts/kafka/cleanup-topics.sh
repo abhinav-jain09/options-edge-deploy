@@ -105,6 +105,59 @@ if [[ -s "$durable_file" ]]; then
   echo "Durable topics exempt from destructive cleanup: $(tr '\n' ' ' < "$durable_file")"
 fi
 
+# --- Topics the DEV CLEAN preserves (non-production only) ---------------------------------------
+# A THIRD keep list, and a third question. The two above answer "is this topic ours?" (declared_file)
+# and "is this data unrebuildable anywhere?" (durable_file). This one answers:
+#
+#   "has the dev clean been told to keep this topic's data?"
+#
+# OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS is the list the nightly dev wipe keeps. Until now this
+# script did not read it, and that made the promise false: every one of the twelve topics on it is
+# also in OPTIONS_EDGE_TOPICS, so every one of them is in approved_file, so BOTH destructive paths
+# below iterated them. Only two (es.futures.footprint.strike, futures.break-line.lines) happened to
+# be RESET-PRESERVED as well and were exempt; the other ten were destroyed by a cleanup run that the
+# keep list said would keep them.
+#
+# BOTH modes destroy, not only delete-recreate. The delete-recreate branch deletes the topic
+# outright. The DEFAULT branch (KAFKA_CLEANUP_MODE unset = "retention") sets retention.ms=1000, and
+# apply-topics.sh restoring the declared retention later in the build does not bring the segments
+# back -- the log cleaner has already dropped everything older than a second. A shrink to 1000 ms is
+# a wipe with a different name, so the exemption has to cover it.
+#
+# WHY THE SOURCED VARIABLE AND NOT A TEXT PARSER. reset-preserved-topics.sh parses topics.env as
+# text because its other callers cannot source it: the off-hours purge and dev-cleanup.sh read the
+# declaration out of a pinned git blob. This script SOURCES topics.env (above), so the shell has
+# already evaluated the `if [ "$ENVIRONMENT" != production ]` blocks that append to this list --
+# es.rithmic.mbo and futures.break-line.lines are declared exactly that way. The sourced value is
+# therefore the most faithful resolution available here, and it is immune to the column-0 anchoring
+# that made an indented append invisible to three text readers on 2026-11-06.
+#
+# FAIL CLOSED ON AN EMPTY LIST. An exemption filter that can silently match nothing is worse than no
+# filter: it reads as protection while deleting everything. If the declaration is gone or resolves
+# empty on a non-production cluster, this script refuses rather than running unprotected.
+#
+# NON-PRODUCTION ONLY, and deliberately so. The list is the DEV clean's, and production's cleanup is
+# already a separate, explicitly unlocked act (ALLOW_PROD_KAFKA_CLEANUP). Consulting it there would
+# silently stop production delete-recreating and shrinking twelve topics it handles today -- a
+# behaviour change on production, made by a fix whose entire subject is dev. Production's own
+# unrebuildable data is covered by OPTIONS_EDGE_PROD_ONLY_RESET_PRESERVED_TOPICS, which
+# reset-preserved-topics.sh already merges into durable_file under its own predicate.
+devkeep_file="$(mktemp)"
+trap 'rm -f "$approved_file" "$declared_file" "$durable_file" "$devkeep_file"' EXIT
+if [[ "$ENVIRONMENT" != "production" ]]; then
+  if [[ -z "${OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS:-}" ]]; then
+    echo "Refusing cleanup: ENVIRONMENT='$ENVIRONMENT' but OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS resolved EMPTY from topics.env." >&2
+    echo "On a non-production cluster that list is what this script must not destroy; an empty one exempts nothing while reading as protection." >&2
+    exit 1
+  fi
+  printf '%s\n' $OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS | sort -u > "$devkeep_file"
+  echo "[cleanup-topics] DEV-CLEAN-PRESERVED topics exempt from destructive cleanup: $(tr '\n' ' ' < "$devkeep_file")"
+else
+  echo "[cleanup-topics] ENVIRONMENT=production: OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS is NOT consulted -- it is the dev clean's keep list, and production's unrebuildable topics come from OPTIONS_EDGE_PROD_ONLY_RESET_PRESERVED_TOPICS instead."
+fi
+# Empty on production, so this answers "no" there without a second environment test at each call.
+is_dev_clean_preserved() { grep -qx "$1" "$devkeep_file"; }
+
 describe_topic() {
   kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --describe --topic "$1" 2>/dev/null | sed -n '/^Topic:/p' || true
 }
@@ -145,6 +198,12 @@ if [[ "${KAFKA_DELETE_UNWANTED_TOPICS:-false}" == "true" ]]; then
   kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --list | while read -r topic; do
     if [[ "$topic" =~ $PROTECTED_TOPIC_REGEX ]]; then
       echo "Keeping protected topic: $topic"
+    elif is_dev_clean_preserved "$topic"; then
+      # Ahead of the declared check on purpose. All twelve are in OPTIONS_EDGE_TOPICS today, so an
+      # elif placed after it would be dead code -- the branch no test could ever reach, and the one
+      # that stops mattering exactly when a declaration is dropped from OPTIONS_EDGE_TOPICS and the
+      # sweep starts calling the topic junk.
+      echo "Keeping DEV-CLEAN-PRESERVED topic: $topic"
     elif grep -qx "$topic" "$declared_file"; then
       echo "Keeping approved topic: $topic"
     elif is_durable "$topic"; then
@@ -175,11 +234,15 @@ if [[ "${KAFKA_CLEANUP_MODE:-retention}" == "delete-recreate" ]]; then
       echo "Keeping DURABLE approved topic (retention.ms=-1): $topic"
       continue
     fi
+    if is_dev_clean_preserved "$topic"; then
+      echo "Keeping DEV-CLEAN-PRESERVED approved topic: $topic"
+      continue
+    fi
     echo "Deleting approved app topic: $topic"
     kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --delete --topic "$topic" || true
   done < "$approved_file"
   while read -r topic; do
-    if is_durable "$topic"; then
+    if is_durable "$topic" || is_dev_clean_preserved "$topic"; then
       continue
     fi
     echo "Waiting for deleted approved app topic to disappear: $topic"
@@ -189,6 +252,10 @@ else
   while read -r topic; do
     if is_durable "$topic"; then
       echo "Keeping DURABLE approved topic (retention.ms=-1), not shrinking: $topic"
+      continue
+    fi
+    if is_dev_clean_preserved "$topic"; then
+      echo "Keeping DEV-CLEAN-PRESERVED approved topic, not shrinking: $topic"
       continue
     fi
     echo "Temporarily shrinking retention for: $topic"

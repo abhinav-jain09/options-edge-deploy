@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
-# Executable proof that cleanup-topics.sh never destroys a DURABLE topic.
+# Executable proof that cleanup-topics.sh never destroys a topic it has been told to keep.
+#
+# TWO keep lists, two questions, one harness:
+#   OPTIONS_EDGE_RESET_PRESERVED_TOPICS       -- "this data cannot be rebuilt anywhere" (durable)
+#   OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS   -- "the dev clean has been told to keep this" (dev only)
+# The second was added on 2026-11-10. Until then this script did not read it at all, and since every
+# topic on it is also in OPTIONS_EDGE_TOPICS -- hence in approved_file -- both destructive modes
+# iterated all twelve. Only two were spared, by coincidentally also being RESET-PRESERVED.
 #
 # This replaces counting is_durable guards. A count is a proxy: adding a fourth destructive path
 # leaves the count at three and passes while the new path deletes data. This runs the REAL script
@@ -51,10 +58,20 @@ EOF
   KAFKA_CLEANUP_TOPICS=true KAFKA_CLEANUP_MODE="$mode" ENVIRONMENT="$env" \
   KAFKA_DELETE_UNWANTED_TOPICS="${DELETE_UNWANTED:-false}" ALLOW_PROD_KAFKA_CLEANUP="${ALLOW_PROD:-false}" \
   PATH="$tmp:$PATH" \
-    bash "$HERE/cleanup-topics.sh" >/dev/null 2>&1
+    bash "${CLEANUP_DIR:-$HERE}/cleanup-topics.sh" >/dev/null 2>&1
   printf '%s' "$?" > "$STATUS_FILE"
   cat "$LOG" 2>/dev/null || true
   rm -rf "$tmp"
+}
+
+# dev_keep_for: the OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS value topics.env yields AT a given
+# ENVIRONMENT. SOURCED, not parsed, for the reason the PROD_ONLY derivation below gives at length:
+# this list is appended to from inside `if [ "$ENVIRONMENT" != production ]` blocks (es.rithmic.mbo,
+# futures.break-line.lines), a one-assignment regex reads only the base declaration, and
+# cleanup-topics.sh sources the file -- so only sourcing resolves the value it will really see.
+# The subshell keeps topics.env's hundred-odd variables out of this suite's environment.
+dev_keep_for() { # environment -> one topic per line
+  ( ENVIRONMENT="$1"; . "$HERE/topics.env"; printf '%s\n' ${OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS:-} )
 }
 
 # A negative assertion ("durable topic NOT deleted") is satisfied just as well by the script
@@ -99,6 +116,28 @@ assert_delete "prod-durable vix NOT deleted"   "$L" "$DURABLE_PROD_ONLY" absent
 assert_delete "ordinary topic IS deleted"      "$L" "$SWEPT"             present
 assert_status 0 "cleanup itself succeeded"
 
+# THE DEV-CLEAN KEEP LIST IS DEV-SCOPED, and that is a decision, not an oversight -- so it is
+# asserted, on the run above. Consulting it here would silently stop production delete-recreating
+# and retention-shrinking topics it manages today, which is a behaviour change on production made
+# by a fix whose entire subject is the dev clean. Production's own unrebuildable data is covered by
+# OPTIONS_EDGE_PROD_ONLY_RESET_PRESERVED_TOPICS, which reset-preserved-topics.sh merges under its
+# own predicate. Same shape as the vix assertions: a keep list that keeps everywhere is not
+# environment-scoped, it is just broken.
+PROD_APPROVED="$( ENVIRONMENT=production; . "$HERE/topics.env"; for e in $OPTIONS_EDGE_TOPICS; do printf '%s\n' "${e%%:*}"; done )"
+PROD_PRESERVED="$(env -u RPT_TOPICS_ENV ENVIRONMENT=production bash "$HERE/reset-preserved-topics.sh")" || PROD_PRESERVED=""
+PROD_STILL_MANAGED=""
+for t in $(dev_keep_for production); do
+  printf '%s\n' "$PROD_APPROVED"  | grep -qxF "$t" || continue   # not reached by these modes at all
+  printf '%s\n' "$PROD_PRESERVED" | grep -qxF "$t" && continue   # spared on its own merits, durable
+  PROD_STILL_MANAGED="$PROD_STILL_MANAGED $t"
+done
+if [ -z "${PROD_STILL_MANAGED// /}" ]; then
+  echo "  FAIL no dev-clean-preserved topic is managed by production — the scope assertion is vacuous"; fail=1
+fi
+for t in $PROD_STILL_MANAGED; do
+  assert_delete "production still delete-recreates dev-clean-preserved '$t'" "$L" "$t" present
+done
+
 echo "--- retention shrink, production (gate opened) ---"
 L="$(ALLOW_PROD=true run_cleanup retention production)"
 assert "durable topic NOT shrunk"       "$L" "--entity-name $DURABLE_ALWAYS --alter"    absent
@@ -110,6 +149,58 @@ echo "--- dev: vix is durable on PRODUCTION only and must still be swept here --
 L="$(run_cleanup retention dev)"
 assert "durable topic NOT shrunk"       "$L" "--entity-name $DURABLE_ALWAYS --alter"    absent
 assert "vix IS shrunk on dev"           "$L" "--entity-name $DURABLE_PROD_ONLY --alter" present
+assert_status 0 "cleanup itself succeeded"
+
+# THE DEV-CLEAN KEEP LIST, asserted on the run just above rather than on a run of its own: this
+# suite's slowest sections are whole passes over the approved list, and a second `retention dev`
+# pass would double one of them to assert something the first pass already decided.
+#
+# The DEFAULT mode is this one. retention.ms=1000 is not a gentler delete-recreate -- the log
+# cleaner drops every segment older than a second, and apply-topics.sh restoring the declared
+# retention later in the same build does not bring the records back. So the shrink loop needs the
+# exemption exactly as much as the delete loop does.
+echo "--- dev: the DEV-CLEAN-PRESERVED topics must survive the default retention mode ---"
+DEV_KEEP="$(dev_keep_for dev)"
+if [ -z "${DEV_KEEP// /}" ]; then
+  echo "  FAIL dev_keep_for dev resolved nothing — every assertion below would pass vacuously"; fail=1
+fi
+# Vacuity guard, in the shape the reset-preserved section uses: both destructive modes iterate the
+# APPROVED list, so a keep-list topic outside it is never reached and its survival proves nothing.
+DEV_APPROVED="$( ENVIRONMENT=dev; . "$HERE/topics.env"; for e in $OPTIONS_EDGE_TOPICS; do printf '%s\n' "${e%%:*}"; done )"
+reached_keep=0
+for t in $DEV_KEEP; do
+  printf '%s\n' "$DEV_APPROVED" | grep -qxF "$t" && reached_keep=$((reached_keep + 1))
+done
+echo "  ($(printf '%s\n' $DEV_KEEP | wc -l | tr -d ' ') dev-clean-preserved topic(s), $reached_keep of them in the approved list these modes iterate)"
+if [ "$reached_keep" -eq 0 ]; then
+  echo "  FAIL no dev-clean-preserved topic is approved — the exemption below is never exercised"; fail=1
+fi
+for t in $DEV_KEEP; do
+  assert "dev retention shrink spares dev-clean-preserved '$t'" "$L" "--entity-name $t --alter" absent
+done
+assert "and still shrinks an ordinary approved topic" "$L" "--entity-name $SWEPT --alter" present
+
+echo "--- dev: the DEV-CLEAN-PRESERVED topics must survive delete-recreate ---"
+L="$(run_cleanup delete-recreate dev)"
+for t in $DEV_KEEP; do
+  assert_delete "dev delete-recreate spares dev-clean-preserved '$t'" "$L" "$t" absent
+done
+assert_delete "and still deletes an ordinary approved topic" "$L" "$SWEPT" present
+assert_status 0 "cleanup itself succeeded"
+
+# The unwanted sweep needs its own run: it iterates what the broker LISTS, so the keep-list topics
+# have to be on the cluster for the loop to reach them. Every one of them is declared today, so the
+# sweep would keep them as "approved" either way -- the exemption is ahead of that check because a
+# declaration can be dropped from OPTIONS_EDGE_TOPICS at any time, and on the day it is, this is
+# what stops the sweep from calling the topic junk. That is the A5 shape the reset-preserved branch
+# below was added for, reached through the other keep list.
+echo "--- delete-unwanted: a DEV-CLEAN-PRESERVED topic is never swept as junk on dev ---"
+L="$(LIST_TOPICS="$(printf '%s ' $DEV_KEEP) $SWEPT es4.some-mm2-leftover" DELETE_UNWANTED=true \
+     run_cleanup retention dev)"
+for t in $DEV_KEEP; do
+  assert_delete "dev sweep spares dev-clean-preserved '$t'" "$L" "$t" absent
+done
+assert_delete "and an undeclared topic IS still swept" "$L" "es4.some-mm2-leftover" present
 assert_status 0 "cleanup itself succeeded"
 
 # THE DELETE-UNWANTED LOOP. Never exercised before: the mocked --list returned nothing, so the loop
@@ -235,6 +326,26 @@ for env_name in dev production; do
   assert "$env_name retention shrink still shrinks an ordinary approved topic" "$L" "--entity-name $SWEPT --alter" present
   assert_status 0 "cleanup itself succeeded"
 done
+
+# An exemption filter that can silently match NOTHING is worse than no filter: it reads as
+# protection while deleting everything behind it. A lost or emptied declaration must therefore stop
+# the run, not shrink the keep list to nothing -- the same fail-closed rule reset-preserved-topics.sh
+# applies to its own declarations. Staged in a copy of the three files cleanup-topics.sh reads, so
+# the shipped topics.env is never edited to test this.
+echo "--- an EMPTY dev-clean keep list refuses the run on dev ---"
+STAGE_DIR="$(mktemp -d)"
+trap 'rm -f "$STATUS_FILE" "$STAGE_DIR"/topics.env "$STAGE_DIR"/cleanup-topics.sh "$STAGE_DIR"/reset-preserved-topics.sh; rmdir "$STAGE_DIR" 2>/dev/null || true' EXIT
+cp "$HERE/cleanup-topics.sh" "$HERE/reset-preserved-topics.sh" "$STAGE_DIR/"
+grep -vE '^[[:space:]]*OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS=' "$HERE/topics.env" > "$STAGE_DIR/topics.env"
+printf 'OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS=""\n' >> "$STAGE_DIR/topics.env"
+L="$(CLEANUP_DIR="$STAGE_DIR" run_cleanup delete-recreate dev)"
+assert_status 1 "refuses an empty dev-clean keep list"
+assert "nothing was deleted before refusing" "$L" "--delete" absent
+# The same staged tree on PRODUCTION must NOT refuse: the list is not consulted there, so demanding
+# it would have made an empty dev declaration block a production cleanup for no reason.
+L="$(CLEANUP_DIR="$STAGE_DIR" ALLOW_PROD=true run_cleanup delete-recreate production)"
+assert_status 0 "production does not require the dev-clean keep list"
+assert_delete "and production still deletes an ordinary approved topic" "$L" "$SWEPT" present
 
 echo "--- TOPIC_SET is refused, not silently applied to the wrong cluster ---"
 L="$(TOPIC_SET=es4 ALLOW_PROD=true run_cleanup retention dev)"
