@@ -70,10 +70,16 @@ check "the acquire's failure exits the deploy (|| exit 1)" bash -c "sed -n '${li
 #      a stateful lock, the Deployment reported at replicas 0 (the early "scaled to 0" exit — the acquire / apply / rollout / release path is complete)
 W="$T/repo"; mkdir -p "$W/scripts/deploy" "$W/scripts/ci" "$W/bin"
 cp services.yaml "$W/"; cp -R k8s "$W/k8s"
-cp scripts/deploy/service-deploy.sh scripts/deploy/zerodte-migrate-barrier.sh "$W/scripts/deploy/"
+# require-batch-image-binding.sh is called first by service-deploy.sh; it acts only for stock-gex-close-scheduler, so the real one is a no-op here
+cp scripts/deploy/service-deploy.sh scripts/deploy/zerodte-migrate-barrier.sh scripts/deploy/require-batch-image-binding.sh "$W/scripts/deploy/"
 printf 'pin_ref() { printf "%%s@sha256:%s\n" "${1%%%%:*}"; }\nresolve_repo_digest() { printf "%%s\n" "$3"; }\n' "$(printf 'd%.0s' $(seq 64))" > "$W/scripts/deploy/pin-image.sh"
 printf 'bind_required_image() { printf "%%s\n" "$PINNED_IMAGE"; }\n' > "$W/scripts/deploy/bind-required-image.sh"
 printf 'require_min_image_build() { return 0; }\n' > "$W/scripts/deploy/min-image-build.sh"
+# service-deploy.sh runs the schema-governance gate after pinning the image. This test is about the LOCK, not the gate (the gate has
+# its own apply-path test, scripts/ci/schema-gate-apply-path-test.sh), so the scope classifier reports "not gated" and the PIN file
+# service-deploy.sh reads first exists. The jar is never consulted on the not-gated arm.
+mkdir -p "$W/tools/schema-governance"; printf 'sha256=\n' > "$W/tools/schema-governance/PIN"
+printf '#!/usr/bin/env bash\necho NOT_GATED_UNCOVERED\n' > "$W/scripts/ci/schema-sync-scope.sh"
 printf 'images:\n  vix-option-inteligence-service: 192.168.100.252:5000/options-edge-vix-option-inteligence:dev\n' > "$W/image-tags-dev.yaml"; mkdir -p "$W/image-tags"; mv "$W/image-tags-dev.yaml" "$W/image-tags/dev.yaml"
 REAL_KUBECTL="$(command -v kubectl)"
 cat > "$W/bin/kubectl" <<FAKE
