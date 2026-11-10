@@ -68,10 +68,18 @@ dev=$(bash -c 'source scripts/kafka/topics.env; for e in $OPTIONS_EDGE_TOPICS; d
 expect "the dev/shared declaration still says 32" 32 "$dev"
 es4=$(bash -c 'source scripts/kafka/topics.env; case " ${OPTIONS_EDGE_ES4_TOPICS:-} " in *" options.spx.strike-invasion.current:"*) echo present;; *) echo absent;; esac')
 expect "the es4 set does not carry the topic at all" absent "$es4"
+# Where the resolver is called from. verify-topics.sh calls it itself; apply-topics.sh has called it through the shared
+# topic-shape.lib.sh since the Indicator Avro cutover (2d1bc33f), so for the applier the wiring is in the library AND the
+# applier must source that library (a library nobody sources wires nothing).
 for s in scripts/kafka/apply-topics.sh scripts/kafka/verify-topics.sh; do
   cases=$((cases+1))
-  if grep -q 'ENVIRONMENT:-}" == "production"' "$s" && grep -q '_oe_resolve_prod_partition_overrides' "$s"; then
-    printf '  ok   %-56s %s\n' "$s resolves under the production predicate" "wired"
+  wired="$s"; sources_ok=1
+  if [ "$s" = scripts/kafka/apply-topics.sh ]; then
+    wired=scripts/kafka/topic-shape.lib.sh
+    grep -q 'source "$SCRIPT_DIR/topic-shape.lib.sh"' "$s" || sources_ok=0
+  fi
+  if [ "$sources_ok" = 1 ] && grep -q 'ENVIRONMENT:-}" == "production"' "$wired" && grep -q '_oe_resolve_prod_partition_overrides' "$wired"; then
+    printf '  ok   %-56s %s\n' "$s resolves under the production predicate" "wired (in $(basename "$wired"))"
   else
     printf '  FAIL %-56s %s\n' "$s resolves under the production predicate" "not wired"; fail=1
   fi
