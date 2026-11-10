@@ -1086,9 +1086,16 @@ session_bound_line() {
   rr=$($KK get deploy "$d" -o jsonpath='{.status.readyReplicas}' 2>/dev/null) || rr=0
   [ "${des:-0}" -gt 0 ] || return 0
   if [ "${rr:-0}" -ge "${des:-0}" ]; then echo "  OK   $d ready"; return 0; fi
+  # Each read counts only if ITS OWN call succeeded: a failed `kubectl logs` can still print partial text, and that is
+  # not a confirmation. A crash-looping pod's current container is often unreadable (waiting to start) while --previous
+  # holds the answer, so the two reads are judged separately; "no previous container" is normal and is not an error here.
+  local hay="" prc
   cur=$($KK logs "deploy/$d" -c "$c" 2>/dev/null); crc=$?
-  prev=$($KK logs "deploy/$d" -c "$c" --previous 2>/dev/null) || prev=""   # no previous container is normal
-  if printf '%s\n%s\n' "$cur" "$prev" | grep -qE "$pat"; then
+  prev=$($KK logs "deploy/$d" -c "$c" --previous 2>/dev/null); prc=$?
+  [ "$crc" -eq 0 ] && hay="$cur"
+  [ "$prc" -eq 0 ] && hay="$hay
+$prev"
+  if printf '%s\n' "$hay" | grep -qE "$pat"; then
     echo "  WAIT $d NOT ready; its log shows a known session-bound condition: $waits"
   elif [ "$crc" -ne 0 ]; then
     echo "  ???  $d NOT ready and its log could NOT be read (kubectl logs rc=$crc), so the known session-bound condition ('$pat') is neither confirmed nor ruled out: kubectl -n options-edge logs deploy/$d -c $c --tail=100"

@@ -140,10 +140,25 @@ for f in topic_desired reconcile_declared_topics ensure_topics create_topics_par
 done > "$WORK/topicfns.sh"
 cat > "$WORK/fake-kt" <<'EOF'
 #!/usr/bin/env bash
+# A stateful fake broker: --create records the topic in the list and in the describe output with the configs it was
+# created with, so the REAL reconcile pass sees what a real broker would show and ensure_topics can truly succeed.
 case " $* " in
   *" --list "*)     cat "$FAKE_DIR/list" ;;
-  *" --describe "*) : ;;
-  *" --create "*)   echo "$*" >> "$FAKE_DIR/created" ;;
+  *" --describe "*) cat "$FAKE_DIR/describe" ;;
+  *" --create "*)
+    echo "$*" >> "$FAKE_DIR/created"
+    topic=""; parts=1; cfgs=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --topic) topic=$2; shift ;;
+        --partitions) parts=$2; shift ;;
+        --config) cfgs="$cfgs${cfgs:+,}$2"; shift ;;
+      esac
+      shift
+    done
+    echo "$topic" >> "$FAKE_DIR/list"
+    printf 'Topic: %s\tTopicId: x\tPartitionCount: %s\tReplicationFactor: 1\tConfigs: %s\n' "$topic" "$parts" "$cfgs" >> "$FAKE_DIR/describe"
+    ;;
 esac
 exit 0
 EOF
@@ -156,6 +171,8 @@ chmod +x "$WORK/fake-kt" "$WORK/fake-kc"
 export FAKE_DIR="$WORK/fakek"; mkdir -p "$FAKE_DIR"
 # After the wipe the broker holds the preserved topics and its system topics; the two reset topics are GONE.
 printf '%s\n' t.rp __consumer_offsets > "$FAKE_DIR/list"; : > "$FAKE_DIR/created"; : > "$FAKE_DIR/altered"
+# describe: the preserved topic is there (undeclared, so reconcile ignores it); the created ones are added by the fake.
+printf 'Topic: t.rp\tTopicId: x\tPartitionCount: 1\tReplicationFactor: 1\tConfigs: \n' > "$FAKE_DIR/describe"
 (
   KT="$WORK/fake-kt"; KC="$WORK/fake-kc"; BS=fake:9092; DEPLOY_REPO=/nonexistent; TOPICS_ENV_REF=origin/main:scripts/kafka/topics.env
   TOPICS_ENV="$(cat "$TOPICS_ENV_FILE")"
@@ -166,8 +183,10 @@ printf '%s\n' t.rp __consumer_offsets > "$FAKE_DIR/list"; : > "$FAKE_DIR/created
   # shellcheck source=/dev/null
   . "$WORK/topicfns.sh"
   export TOPICS_ENV KT BS
-  ensure_topics >"$WORK/ensure.out" 2>&1
+  ensure_topics >"$WORK/ensure.out" 2>&1; echo $? > "$WORK/ensure.rc"
 )
+if [ "$(cat "$WORK/ensure.rc" 2>/dev/null)" = 0 ]; then ok "the real ensure_topics SUCCEEDS over the real topics.env (every declared topic present at its declared shape)"
+else bad "the real ensure_topics FAILED over the real topics.env (rc=$(cat "$WORK/ensure.rc" 2>/dev/null)): $(grep -E 'WARNING|ERROR|DRIFT|MISSING' "$WORK/ensure.out" | head -3 | tr '\n' '|')"; fi
 created="$(cat "$FAKE_DIR/created")"
 ev="$(printf '%s\n' "$created" | grep -- '--topic futures.level-absorption.events ' | head -1)"
 cl="$(printf '%s\n' "$created" | grep -- '--topic futures.level-absorption.closures ' | head -1)"
@@ -204,6 +223,10 @@ case "$r" in *"WHY-TEXT"*) bad "the reason text was printed without confirmation
 r="$(FAKE_DES=1 FAKE_RR= FAKE_LOG='' FAKE_LOG_RC=1 session_bound_line es-amt-service es-amt-service ES_AMT_RETENTION_SHORT 'WHY-TEXT')"
 case "$r" in *"???"*"could NOT be read"*"neither confirmed nor ruled out"*) ok "an UNREADABLE log is reported as unreadable, neither confirmed nor ruled out" ;; *) bad "an unreadable log was misreported: [$r]" ;; esac
 case "$r" in *"does NOT show"*|*"not the wipe"*|*"WHY-TEXT"*) bad "an unreadable log was read as 'condition absent': [$r]" ;; *) ok "an unreadable log is never read as the condition being absent" ;; esac
+r="$(FAKE_DES=1 FAKE_RR= FAKE_LOG='x ES_AMT_RETENTION_SHORT partial output' FAKE_LOG_RC=1 FAKE_PREV='' FAKE_PREV_RC=1 session_bound_line es-amt-service es-amt-service ES_AMT_RETENTION_SHORT 'WHY-TEXT')"
+case "$r" in *"WAIT"*|*"WHY-TEXT"*) bad "partial output of a FAILED kubectl logs was taken as a confirmation: [$r]" ;; *"could NOT be read"*) ok "text printed by a FAILED kubectl logs is not a confirmation" ;; *) bad "failed-read-with-text case misreported: [$r]" ;; esac
+r="$(FAKE_DES=1 FAKE_RR= FAKE_LOG='' FAKE_LOG_RC=1 FAKE_PREV='this session has already ended' FAKE_PREV_RC=0 session_bound_line market-structure-service market-structure 'this session has already ended' 'WHY2')"
+case "$r" in *"WAIT"*"WHY2"*) ok "an unreadable CURRENT log (CrashLoopBackOff) with a confirming --previous log is still confirmed" ;; *) bad "crash-loop case lost: [$r]" ;; esac
 r="$(FAKE_DES=1 FAKE_RR= FAKE_LOG='x' FAKE_PREV='this session has already ended' session_bound_line market-structure-service market-structure 'this session has already ended' 'WHY2')"
 case "$r" in *"WAIT"*"WHY2"*) ok "the condition is also found in the PREVIOUS container's log (crash loop)" ;; *) bad "previous-container log ignored: [$r]" ;; esac
 r="$(FAKE_DES=1 FAKE_RR= FAKE_LOG='x ES_AMT_RETENTION_SHORT' FAKE_PREV_RC=1 session_bound_line es-amt-service es-amt-service ES_AMT_RETENTION_SHORT 'WHY-TEXT')"
@@ -261,10 +284,12 @@ assert c1 in s and c2 in s, "mutant rc: anchors not found"
 open(w + "/mut_rc.sh", "w").write(s.replace(c1, "do_start", 1).replace(c2, "do_clean", 1))
 d = 'clean_guard || MAIN_RC=$?; [ "$MAIN_RC" -eq 0 ] && echo "DRYRUN: would do_clean (WIPE)"'
 put("mut_dry.sh", s.replace(d, 'clean_guard && echo "DRYRUN: would do_clean (WIPE)"', 1), s, d)
-f = 'if printf \'%s\\n%s\\n\' "$cur" "$prev" | grep -qE "$pat"; then'
+f = 'if printf \'%s\\n\' "$hay" | grep -qE "$pat"; then'
 put("mut_report.sh", s.replace(f, 'if true; then', 1), s, f)
 g = 'elif [ "$crc" -ne 0 ]; then'
 put("mut_unreadable.sh", s.replace(g, 'elif false; then', 1), s, g)
+k = '[ "$crc" -eq 0 ] && hay="$cur"'
+put("mut_partial.sh", s.replace(k, 'hay="$cur"', 1), s, k)
 # topics.env: the events cap is dropped from the declaration (a wipe would then recreate it uncapped)
 lines = t.split("\n"); out = []; n = 0
 for L in lines:
@@ -274,19 +299,28 @@ for L in lines:
 assert n >= 1, "mutant topics.env: the events cap declaration was not found"
 open(w + "/mut_topics.env", "w").write("\n".join(out))
 EOF
-  mutant_must_fail() { # name, env assignment words...
-    local name="$1"; shift
-    local rc
+  # mutant_must_fail NAME EXPECTED_FAIL_LABEL ENV=VALUE...: run this whole file against a mutant. It must exit non-zero AND
+  # print a FAIL line matching EXPECTED_FAIL_LABEL -- the assertion that guards the removed fix. A child that dies in the
+  # fixture or the extraction (no FAIL line, or a different one) is NOT a catch.
+  mutant_must_fail() {
+    local name="$1" label="$2" rc nfail
+    shift 2
     env "$@" POST_WIPE_NO_MUTANTS=1 bash "$SELF" >"$WORK/mut.$name.out" 2>&1; rc=$?
-    if [ "$rc" -ne 0 ]; then ok "mutant $name: the whole file fails ($(grep -c '^  FAIL' "$WORK/mut.$name.out") failing assertion(s))"
-    else bad "mutant $name was NOT caught: the whole file still passes"; fi
+    nfail="$(grep -c '^  FAIL' "$WORK/mut.$name.out")"
+    if [ "$rc" -eq 0 ]; then bad "mutant $name was NOT caught: the whole file still passes"
+    elif [ "$nfail" -lt 1 ]; then bad "mutant $name: the file exited $rc but printed no FAIL assertion (harness/fixture failure, not a catch)"
+    elif grep -q "^  FAIL .*$label" "$WORK/mut.$name.out"; then ok "mutant $name: the whole file fails on its own guard ('$label'; $nfail failing assertion(s))"
+    else bad "mutant $name: the file fails but NOT on the expected guard '$label': $(grep '^  FAIL' "$WORK/mut.$name.out" | head -2 | cut -c1-120 | tr '\n' '|')"; fi
   }
-  for m in keep helper rc dry report unreadable; do
+  for spec in "keep|deleted \\[" "helper|keep list wrong" "rc|after do_clean failed" "dry|dry-run now exited" \
+              "report|reason text was printed without confirmation" "unreadable|unreadable log was misreported" \
+              "partial|partial output of a FAILED kubectl logs"; do
+    m="${spec%%|*}"; label="${spec#*|}"
     [ -s "$WORK/mut_$m.sh" ] || { bad "mutant $m was not produced"; continue; }
-    mutant_must_fail "$m" DEV_CLEANUP_UNDER_TEST="$WORK/mut_$m.sh"
+    mutant_must_fail "$m" "$label" DEV_CLEANUP_UNDER_TEST="$WORK/mut_$m.sh"
   done
   [ -s "$WORK/mut_topics.env" ] || bad "mutant topics.env was not produced"
-  [ -s "$WORK/mut_topics.env" ] && mutant_must_fail topics.env TOPICS_ENV_UNDER_TEST="$WORK/mut_topics.env"
+  [ -s "$WORK/mut_topics.env" ] && mutant_must_fail topics.env "declares NO retention.bytes" TOPICS_ENV_UNDER_TEST="$WORK/mut_topics.env"
 fi
 
 echo
