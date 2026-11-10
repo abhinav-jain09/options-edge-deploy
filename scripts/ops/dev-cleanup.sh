@@ -106,7 +106,7 @@ EOF_CANDIDATES
 # would read as "no topics". Bounded, so a dead tunnel costs seconds and not the client's default minute.
 kafka_broker_answers() {
   local props rc
-  props="$(mktemp -t oe-kafka-props)" || return 1
+  props="$(mktemp "${TMPDIR:-/tmp}/oe-kafka-props.XXXXXX")" || return 1
   printf 'request.timeout.ms=8000\ndefault.api.timeout.ms=15000\n' > "$props"
   "$KT" --bootstrap-server "$BS" --command-config "$props" --list >/dev/null 2>&1; rc=$?
   rm -f "$props"
@@ -876,7 +876,7 @@ ensure_topics_or_refuse() {
 # Non-fatal for the bring-up, loud in the log: an app it cannot repair is named with the reason.
 run_partition_doctor() {
   local script deploys="$*" d waited=0 rcd
-  script="$(mktemp -t oe-partition-doctor)" || return 0
+  script="$(mktemp "${TMPDIR:-/tmp}/oe-partition-doctor.XXXXXX")" || return 0
   git -C "$DEPLOY_REPO" show "${PARTITION_DOCTOR_REF:-origin/main:scripts/kafka/streams-partition-doctor.sh}" > "$script" 2>/dev/null
   if [ ! -s "$script" ]; then
     echo "  WARNING: could not read streams-partition-doctor.sh from $DEPLOY_REPO — Streams apps with a wrong internal topic stay NOT READY"
@@ -922,14 +922,14 @@ run_partition_doctor() {
 # on the Mac. Best-effort: never fail a clean over this.
 apply_internal_topic_configs() {
   local script shim
-  script="$(mktemp -t oe-internal-topics)" || return 0
+  script="$(mktemp "${TMPDIR:-/tmp}/oe-internal-topics.XXXXXX")" || return 0
   git -C "$DEPLOY_REPO" show "${INTERNAL_TOPIC_SCRIPT_REF:-origin/main:scripts/kafka/apply-internal-topic-configs.sh}" \
     > "$script" 2>/dev/null
   if [ ! -s "$script" ]; then
     echo "  WARNING: could not read apply-internal-topic-configs.sh from $DEPLOY_REPO — Streams internal topics keep broker defaults (delete policy, 1 GB segments). Dev Kafka will grow fast."
     rm -f "$script"; return 0
   fi
-  shim="$(mktemp -d -t oe-kafka-shim)" || { rm -f "$script"; return 0; }
+  shim="$(mktemp -d "${TMPDIR:-/tmp}/oe-kafka-shim.XXXXXX")" || { rm -f "$script"; return 0; }
   # Wrappers, NOT symlinks. Kafka's CLI scripts resolve their sibling kafka-run-class.sh from
   # their OWN directory ($(dirname $0)), so a symlink into a temp dir makes them look for
   # kafka-run-class.sh inside the shim, where it does not exist:
