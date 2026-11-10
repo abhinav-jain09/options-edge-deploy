@@ -70,6 +70,15 @@ class MarkerTests(unittest.TestCase):
 @unittest.skipUnless(sys.platform == 'linux' and hasattr(os, 'pidfd_open'), 'Owned Linux pidfd lifecycle is verified on es4, never inferred from Mac')
 class OwnedProcessTests(unittest.TestCase):
     def setUp(self):
+        # run() asks the REAL clock for the time left before the next RTH open and refuses inside RTH
+        # (OUTSIDE_RTH_REQUIRED / RTH_BOUNDARY), so these lifecycle tests failed whenever CI ran on a
+        # weekday between 09:30 and 16:00 New York. Pin the clock to a fixed after-close instant; the
+        # boundary arithmetic itself is covered by BoundaryTests with explicit times.
+        real_deadline = supervisor.deadline_seconds
+        after_close = datetime(2026, 11, 10, 22, 0, tzinfo=timezone.utc)  # Tue 17:00 New York
+        pin = patch.object(supervisor, 'deadline_seconds', lambda now: real_deadline(after_close))
+        pin.start()
+        self.addCleanup(pin.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
