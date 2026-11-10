@@ -4,25 +4,30 @@
 # THE DEFECT. futures.level-absorption.events is on the shared RESET-PRESERVED list (evidence on prod), so the dev
 # wipe KEPT it while deleting the inputs level-absorption-service replays from. The service then refused to start
 # (REPLAY_SHORT) after every dev clean and was repaired by hand: delete events + closures, recreate through the
-# barrier. The same clean left es-amt-service and market-structure-service unready for reasons that are not faults,
+# barrier. The same bring-up left es-amt-service and market-structure-service unready for reasons that are not faults,
 # and `dev-cleanup now` / `start` exited 0 after refusing or failing, so nothing but the log said so.
 #
 # Sections (no broker, no cluster, no docker; every function is lifted out BY NAME from the file under test and
 # run against stubs, because the script itself dispatches on its arguments and would start doing things):
 #   1  dev_wipe_keep_list removes EXACTLY the reset set and nothing near it
 #   2  the REAL do_clean deletes level-absorption's events + closures and still keeps every other preserved topic
-#   3  session_bound_line / report_session_bound_services name the cause only when the log confirms it
-#   4  the dispatch carries do_clean / do_start / do_start_overnight's status to the exit
-#   5  mutants: take each fix out of a copy of the script and require THIS FILE to fail
+#   3  the REAL ensure_topics, fed the REAL topics.env, recreates those two topics at the shape the service demands
+#   4  session_bound_line / report_session_bound_services: a cause is named only when the log CONFIRMS it
+#   5  the dispatch carries do_clean / do_start / do_start_overnight's status (and the dry-run guard's) to the exit
+#   6  mutants: take each fix out of a copy of the script (or topics.env) and run THIS WHOLE FILE against it: it must fail
+# DEV_CLEANUP_UNDER_TEST / TOPICS_ENV_UNDER_TEST point the file at a mutant; POST_WIPE_NO_MUTANTS=1 skips section 6
+# (the child runs of section 6 set it, so the mutant runs do not recurse).
 set -o pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC="${DEV_CLEANUP_UNDER_TEST:-$HERE/dev-cleanup.sh}"
+TOPICS_ENV_FILE="${TOPICS_ENV_UNDER_TEST:-$HERE/../kafka/topics.env}"
 RPT_REAL="$HERE/../kafka/reset-preserved-topics.sh"
+SELF="$HERE/dev-cleanup-post-wipe-test.sh"
 fails=0
 ok()  { printf '  ok   %s\n' "$1"; }
 bad() { printf '  FAIL %s\n' "$1"; fails=$((fails+1)); }
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
-for f in "$SRC" "$RPT_REAL"; do [ -f "$f" ] || { echo "FAIL: $f missing" >&2; exit 1; }; done
+for f in "$SRC" "$RPT_REAL" "$TOPICS_ENV_FILE"; do [ -f "$f" ] || { echo "FAIL: $f missing" >&2; exit 1; }; done
 
 fn() { awk -v n="$1" '$0 ~ "^"n"\\(\\) \\{" {p=1} p {print} p && /^\}/ {exit}' "$2"; }
 var() { grep -E "^$1=" "$2" | head -1; }
@@ -121,24 +126,88 @@ case "$out" in *"preserving"*"t.rp"*"t.devkeep"*) ok "the log lists what is pres
 pl="$(printf '%s\n' "$out" | grep 'preserving (' )"
 case "$pl" in *"level-absorption.events"*) bad "the preserving line still names the events topic: [$pl]" ;; *) ok "the preserving line no longer names the events topic" ;; esac
 
-echo "== 3. the session-bound report names a cause only when the log confirms it"
+echo "== 3. the REAL ensure_topics + the REAL topics.env recreate them at the shape the service demands"
+# Deleting the topics is half the repair; the other half is that the topic pass brings them back with retention.ms=-1 and
+# the artifact's exact retention.bytes (events) and 7 days (closures). level-absorption-service refuses any other shape.
+# The expected cap is READ from the topics.env under test, so this does not become a second copy of the number; the
+# number itself is pinned to the retention artifact by scripts/ci/validate-level-absorption-config.sh.
+want_bytes="$(grep -oE 'futures\.level-absorption\.events=[0-9]+' "$TOPICS_ENV_FILE" | head -1 | cut -d= -f2)"
+[ -n "$want_bytes" ] && ok "topics.env declares a retention.bytes for futures.level-absorption.events ($want_bytes)" \
+  || bad "topics.env declares NO retention.bytes for futures.level-absorption.events"
+for f in topic_desired reconcile_declared_topics ensure_topics create_topics_parallel kafka_list_topics; do
+  body="$(fn "$f" "$SRC")"; [ -n "$body" ] || { echo "FAIL: function $f not found in $SRC" >&2; exit 1; }
+  printf '%s\n' "$body"
+done > "$WORK/topicfns.sh"
+cat > "$WORK/fake-kt" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in
+  *" --list "*)     cat "$FAKE_DIR/list" ;;
+  *" --describe "*) : ;;
+  *" --create "*)   echo "$*" >> "$FAKE_DIR/created" ;;
+esac
+exit 0
+EOF
+cat > "$WORK/fake-kc" <<'EOF'
+#!/usr/bin/env bash
+echo "$*" >> "$FAKE_DIR/altered"
+exit 0
+EOF
+chmod +x "$WORK/fake-kt" "$WORK/fake-kc"
+export FAKE_DIR="$WORK/fakek"; mkdir -p "$FAKE_DIR"
+# After the wipe the broker holds the preserved topics and its system topics; the two reset topics are GONE.
+printf '%s\n' t.rp __consumer_offsets > "$FAKE_DIR/list"; : > "$FAKE_DIR/created"; : > "$FAKE_DIR/altered"
+(
+  KT="$WORK/fake-kt"; KC="$WORK/fake-kc"; BS=fake:9092; DEPLOY_REPO=/nonexistent; TOPICS_ENV_REF=origin/main:scripts/kafka/topics.env
+  TOPICS_ENV="$(cat "$TOPICS_ENV_FILE")"
+  git() { case " $* " in *" show "*) printf '%s\n' "$TOPICS_ENV" ;; esac; return 0; }
+  ensure_partition_only_topics() { :; }
+  ensure_dev_only_estimate_topics() { :; }
+  topic_count() { echo 0; }
+  # shellcheck source=/dev/null
+  . "$WORK/topicfns.sh"
+  export TOPICS_ENV KT BS
+  ensure_topics >"$WORK/ensure.out" 2>&1
+)
+created="$(cat "$FAKE_DIR/created")"
+ev="$(printf '%s\n' "$created" | grep -- '--topic futures.level-absorption.events ' | head -1)"
+cl="$(printf '%s\n' "$created" | grep -- '--topic futures.level-absorption.closures ' | head -1)"
+if [ -z "$ev" ]; then bad "the topic pass did not recreate futures.level-absorption.events at all"
+else
+  case "$ev" in *"--partitions 1 "*) ok "events is recreated with ONE partition" ;; *) bad "events partitions wrong: [$ev]" ;; esac
+  case "$ev" in *"--config retention.ms=-1"*) ok "events is recreated with retention.ms=-1" ;; *) bad "events lost retention.ms=-1: [$ev]" ;; esac
+  case "$ev" in *"--config retention.bytes=$want_bytes"*) ok "events is recreated with retention.bytes=$want_bytes" ;; *) bad "events not recreated with retention.bytes=$want_bytes: [$ev]" ;; esac
+  case "$ev" in *"cleanup.policy=delete"*) ok "events is a delete-policy topic" ;; *) bad "events cleanup.policy wrong: [$ev]" ;; esac
+fi
+if [ -z "$cl" ]; then bad "the topic pass did not recreate futures.level-absorption.closures at all"
+else
+  case "$cl" in *"--config retention.ms=604800000"*) ok "closures is recreated with 7-day retention" ;; *) bad "closures lost its 7-day retention: [$cl]" ;; esac
+  case "$cl" in *retention.bytes*) bad "closures got a retention.bytes it does not declare: [$cl]" ;; *) ok "closures carries no retention.bytes" ;; esac
+fi
+
+echo "== 4. the session-bound report names a cause only when the log confirms it"
 eval "$(fn session_bound_line "$SRC")"; eval "$(fn report_session_bound_services "$SRC")"
 kk_stub() {
   case "$*" in
     *"get deploy"*) [ "${FAKE_ABSENT:-0}" = 1 ] && return 1
                     case "$*" in *spec.replicas*) echo "${FAKE_DES:-1}" ;; *readyReplicas*) echo "${FAKE_RR:-}" ;; esac ;;
-    *"--previous"*) printf '%s\n' "${FAKE_PREV:-}" ;;
-    *logs*)         printf '%s\n' "${FAKE_LOG:-}" ;;
+    *"--previous"*) printf '%s\n' "${FAKE_PREV:-}"; return "${FAKE_PREV_RC:-0}" ;;
+    *logs*)         printf '%s\n' "${FAKE_LOG:-}"; return "${FAKE_LOG_RC:-0}" ;;
   esac
 }
 KK=kk_stub
 r="$(FAKE_DES=1 FAKE_RR= FAKE_LOG='x ES_AMT_RETENTION_SHORT partition=0' session_bound_line es-amt-service es-amt-service ES_AMT_RETENTION_SHORT 'WHY-TEXT')"
-case "$r" in *"WAIT"*"es-amt-service"*"WHY-TEXT"*) ok "not ready + cause in the log -> WAIT with the reason" ;; *) bad "confirmed cause not reported: [$r]" ;; esac
+case "$r" in *"WAIT"*"es-amt-service"*"WHY-TEXT"*) ok "not ready + condition in the log -> WAIT with the reason" ;; *) bad "confirmed condition not reported: [$r]" ;; esac
+case "$r" in *"after this wipe"*|*"expected after"*) bad "the WAIT line blames a wipe: [$r]" ;; *) ok "the WAIT line states the condition, not that a wipe caused it" ;; esac
 r="$(FAKE_DES=1 FAKE_RR= FAKE_LOG='nothing relevant' session_bound_line es-amt-service es-amt-service ES_AMT_RETENTION_SHORT 'WHY-TEXT')"
-case "$r" in *"???"*"NOT the wipe's doing"*|*"???"*"does NOT show"*) ok "not ready + cause absent -> says it is NOT the known cause" ;; *) bad "unconfirmed cause was blamed on the wipe: [$r]" ;; esac
+case "$r" in *"???"*"does NOT show"*) ok "not ready + log read + condition absent -> not confirmed" ;; *) bad "unconfirmed condition mislabelled: [$r]" ;; esac
 case "$r" in *"WHY-TEXT"*) bad "the reason text was printed without confirmation: [$r]" ;; *) ok "the reason is not printed without confirmation" ;; esac
-r="$(FAKE_DES=1 FAKE_RR= FAKE_PREV='this session has already ended' session_bound_line market-structure-service market-structure 'this session has already ended' 'WHY2')"
-case "$r" in *"WAIT"*"WHY2"*) ok "the cause is also found in the PREVIOUS container's log (crash loop)" ;; *) bad "previous-container log ignored: [$r]" ;; esac
+r="$(FAKE_DES=1 FAKE_RR= FAKE_LOG='' FAKE_LOG_RC=1 session_bound_line es-amt-service es-amt-service ES_AMT_RETENTION_SHORT 'WHY-TEXT')"
+case "$r" in *"???"*"could NOT be read"*"neither confirmed nor ruled out"*) ok "an UNREADABLE log is reported as unreadable, neither confirmed nor ruled out" ;; *) bad "an unreadable log was misreported: [$r]" ;; esac
+case "$r" in *"does NOT show"*|*"not the wipe"*|*"WHY-TEXT"*) bad "an unreadable log was read as 'condition absent': [$r]" ;; *) ok "an unreadable log is never read as the condition being absent" ;; esac
+r="$(FAKE_DES=1 FAKE_RR= FAKE_LOG='x' FAKE_PREV='this session has already ended' session_bound_line market-structure-service market-structure 'this session has already ended' 'WHY2')"
+case "$r" in *"WAIT"*"WHY2"*) ok "the condition is also found in the PREVIOUS container's log (crash loop)" ;; *) bad "previous-container log ignored: [$r]" ;; esac
+r="$(FAKE_DES=1 FAKE_RR= FAKE_LOG='x ES_AMT_RETENTION_SHORT' FAKE_PREV_RC=1 session_bound_line es-amt-service es-amt-service ES_AMT_RETENTION_SHORT 'WHY-TEXT')"
+case "$r" in *"WAIT"*) ok "a missing previous container (normal) does not hide a confirmed condition" ;; *) bad "a missing previous container broke the report: [$r]" ;; esac
 r="$(FAKE_DES=1 FAKE_RR=1 session_bound_line es-amt-service es-amt-service X W)"
 case "$r" in *"OK"*"ready"*) ok "a ready deployment is reported OK" ;; *) bad "ready deployment not reported OK: [$r]" ;; esac
 r="$(FAKE_DES=0 FAKE_RR= session_bound_line es-amt-service es-amt-service X W)"
@@ -148,13 +217,13 @@ r="$(FAKE_ABSENT=1 session_bound_line es-amt-service es-amt-service X W)"
 r="$(FAKE_DES=1 FAKE_RR= FAKE_LOG='ES_AMT_RETENTION_SHORT' report_session_bound_services; echo "rc=$?")"
 case "$r" in *"es-amt-service"*"market-structure-service"*"rc=0"*) ok "the report covers both services and returns 0" ;; *) bad "report wrong: [$r]" ;; esac
 
-echo "== 4. the dispatch carries the mode's status to the exit"
-mk_driver() { # $1 = script to cut from, $2 = mode, $3 = do_clean rc, $4 = do_start rc -> prints the exit status
+echo "== 5. the dispatch carries the mode's status to the exit"
+mk_driver() { # $1 = script to cut from, $2 = mode, $3 = do_clean rc, $4 = do_start rc, $5 = clean_guard rc, $6 = DKC_DRYRUN -> prints the exit status
   local s="$1"
   {
     echo 'set -uo pipefail'
     echo "do_clean() { return $3; }; do_start() { return $4; }; do_start_overnight() { return $4; }; do_es_down() { return 0; }; clean_logs() { return 0; }"
-    echo "clean_guard() { return 0; }; LOG=/dev/null"
+    echo "clean_guard() { return ${5:-0}; }; LOG=/dev/null; DKC_DRYRUN=${6:-0}"
     echo 'MODE="$1"'
     awk '/^# MAIN_RC carries the verdict/{p=1} p&&/^  auto\)/{exit} p{print}' "$s"
     echo '  *) ;; esac'
@@ -168,48 +237,56 @@ mk_driver() { # $1 = script to cut from, $2 = mode, $3 = do_clean rc, $4 = do_st
 [ "$(mk_driver "$SRC" start 0 1)" = 1 ] && ok "start: a failed start (do_start rc=1) exits 1" || bad "start exited $(mk_driver "$SRC" start 0 1) after do_start failed"
 [ "$(mk_driver "$SRC" start 0 0)" = 0 ] && ok "start: a good start exits 0" || bad "start exited non-zero after a good start"
 [ "$(mk_driver "$SRC" overnight 0 1)" = 1 ] && ok "overnight: a failed start exits 1" || bad "overnight exited $(mk_driver "$SRC" overnight 0 1)"
+[ "$(mk_driver "$SRC" now 0 0 1 1)" = 1 ] && ok "now (DKC_DRYRUN=1): a refusing clean_guard exits 1" || bad "dry-run now exited $(mk_driver "$SRC" now 0 0 1 1) after clean_guard refused"
+[ "$(mk_driver "$SRC" now 0 0 0 1)" = 0 ] && ok "now (DKC_DRYRUN=1): an allowing clean_guard exits 0" || bad "dry-run now exited non-zero though clean_guard allowed"
 
-echo "== 5. mutants: each fix removed from a copy of the script must make this file fail"
-python3 - "$SRC" "$WORK" <<'EOF'
-import re, sys
-s = open(sys.argv[1]).read(); w = sys.argv[2]
-# (a) do_clean ignores the reset set: the keep set is the raw concatenation again
+echo "== 6. mutants: this whole file, run against a copy with one fix removed, must fail"
+if [ "${POST_WIPE_NO_MUTANTS:-0}" = 1 ]; then
+  echo "  (skipped: this is a mutant run)"
+else
+python3 - "$SRC" "$TOPICS_ENV_FILE" "$WORK" <<'EOF'
+import sys
+s = open(sys.argv[1]).read(); t = open(sys.argv[2]).read(); w = sys.argv[3]
+def put(name, text, orig, anchor):
+    assert anchor in orig, "mutant %s: anchor not found: %r" % (name, anchor)
+    open(w + "/" + name, "w").write(text)
 a = 'KEEP_NAMES="$(dev_wipe_keep_list $RESET_PRESERVED_TOPICS $DEV_KEEP)"'
-assert a in s, "mutant a: anchor not found"
-open(w + "/mut_keep.sh", "w").write(s.replace(a, 'KEEP_NAMES="$(printf \'%s\\n\' $RESET_PRESERVED_TOPICS $DEV_KEEP)"', 1))
-# (b) the helper stops removing anything
+put("mut_keep.sh", s.replace(a, 'KEEP_NAMES="$(printf \'%s\\n\' $RESET_PRESERVED_TOPICS $DEV_KEEP)"', 1), s, a)
 h = s.index("dev_wipe_keep_list() {"); e = s.index("\n}\n", h)
-body = s[h:e]
-m = body.replace('| grep -vxF -e "$reset" || true', '| cat')
-assert m != body, "mutant b: anchor not found"
-open(w + "/mut_helper.sh", "w").write(s[:h] + m + s[e:])
-# (c) the dispatch drops the status again
-c = s.replace("do_start || MAIN_RC=$?", "do_start", 1).replace("do_clean || MAIN_RC=$?", "do_clean", 1)
-assert c != s, "mutant c: anchor not found"
-open(w + "/mut_rc.sh", "w").write(c)
-# (d) the report prints the reason without confirming it
-d = s.replace('if [ "${hits:-0}" -gt 0 ]; then', 'if true; then', 1)
-assert d != s, "mutant d: anchor not found"
-open(w + "/mut_report.sh", "w").write(d)
+b = s[h:e]; bm = b.replace('| grep -vxF -e "$reset" || true', '| cat')
+assert bm != b, "mutant helper: anchor not found"
+open(w + "/mut_helper.sh", "w").write(s[:h] + bm + s[e:])
+c1 = "do_start || MAIN_RC=$?"; c2 = "do_clean || MAIN_RC=$?"
+assert c1 in s and c2 in s, "mutant rc: anchors not found"
+open(w + "/mut_rc.sh", "w").write(s.replace(c1, "do_start", 1).replace(c2, "do_clean", 1))
+d = 'clean_guard || MAIN_RC=$?; [ "$MAIN_RC" -eq 0 ] && echo "DRYRUN: would do_clean (WIPE)"'
+put("mut_dry.sh", s.replace(d, 'clean_guard && echo "DRYRUN: would do_clean (WIPE)"', 1), s, d)
+f = 'if printf \'%s\\n%s\\n\' "$cur" "$prev" | grep -qE "$pat"; then'
+put("mut_report.sh", s.replace(f, 'if true; then', 1), s, f)
+g = 'elif [ "$crc" -ne 0 ]; then'
+put("mut_unreadable.sh", s.replace(g, 'elif false; then', 1), s, g)
+# topics.env: the events cap is dropped from the declaration (a wipe would then recreate it uncapped)
+lines = t.split("\n"); out = []; n = 0
+for L in lines:
+    if "futures.level-absorption.events=81675540" in L and "RETENTION_BYTES_OVERRIDES" in L:
+        L = L.replace(" futures.level-absorption.events=81675540", ""); n += 1
+    out.append(L)
+assert n >= 1, "mutant topics.env: the events cap declaration was not found"
+open(w + "/mut_topics.env", "w").write("\n".join(out))
 EOF
-for m in mut_keep mut_helper mut_rc mut_report; do [ -s "$WORK/$m.sh" ] || { bad "mutant $m was not produced"; continue; }; done
-
-if [ -s "$WORK/mut_keep.sh" ]; then
-  build "$WORK/mut_keep.sh"; mo="$(run_do_clean)"; md="$(deleted)"
-  case " $md " in *" futures.level-absorption.events "*) bad "mutant (a) still deleted events: the test cannot see do_clean ignoring the reset set" ;; *) ok "mutant (a) do_clean ignores the reset set -> events is KEPT, so section 2 fails (caught)" ;; esac
-fi
-if [ -s "$WORK/mut_helper.sh" ]; then
-  build "$WORK/mut_helper.sh"; mo="$(run_do_clean)"; md="$(deleted)"
-  case " $md " in *" futures.level-absorption.events "*) bad "mutant (b) still deleted events" ;; *) ok "mutant (b) the helper removes nothing -> events is KEPT (caught)" ;; esac
-fi
-if [ -s "$WORK/mut_rc.sh" ]; then
-  [ "$(mk_driver "$WORK/mut_rc.sh" now 1 0)" = 0 ] && ok "mutant (c) the status is dropped -> now exits 0 after a failed clean (caught)" || bad "mutant (c) was not caught"
-fi
-if [ -s "$WORK/mut_report.sh" ]; then
-  # shellcheck disable=SC1090
-  eval "$(fn session_bound_line "$WORK/mut_report.sh")"
-  r="$(FAKE_DES=1 FAKE_RR= FAKE_LOG='nothing relevant' session_bound_line es-amt-service es-amt-service ES_AMT_RETENTION_SHORT 'WHY-TEXT')"
-  case "$r" in *"WHY-TEXT"*) ok "mutant (d) the cause is printed unconfirmed -> section 3 sees WHY-TEXT (caught)" ;; *) bad "mutant (d) was not caught: [$r]" ;; esac
+  mutant_must_fail() { # name, env assignment words...
+    local name="$1"; shift
+    local rc
+    env "$@" POST_WIPE_NO_MUTANTS=1 bash "$SELF" >"$WORK/mut.$name.out" 2>&1; rc=$?
+    if [ "$rc" -ne 0 ]; then ok "mutant $name: the whole file fails ($(grep -c '^  FAIL' "$WORK/mut.$name.out") failing assertion(s))"
+    else bad "mutant $name was NOT caught: the whole file still passes"; fi
+  }
+  for m in keep helper rc dry report unreadable; do
+    [ -s "$WORK/mut_$m.sh" ] || { bad "mutant $m was not produced"; continue; }
+    mutant_must_fail "$m" DEV_CLEANUP_UNDER_TEST="$WORK/mut_$m.sh"
+  done
+  [ -s "$WORK/mut_topics.env" ] || bad "mutant topics.env was not produced"
+  [ -s "$WORK/mut_topics.env" ] && mutant_must_fail topics.env TOPICS_ENV_UNDER_TEST="$WORK/mut_topics.env"
 fi
 
 echo

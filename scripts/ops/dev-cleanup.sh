@@ -1073,31 +1073,39 @@ verify_start_readiness() {
 }
 
 # session_bound_line DEPLOY CONTAINER LOG_PATTERN WAITS_FOR: one line saying whether DEPLOY is ready, and when it is
-# not, whether the log CONFIRMS the known session-bound cause (LOG_PATTERN) or the cause is something else.
+# not, whether the pod log CONFIRMS the known session-bound condition (LOG_PATTERN). Three outcomes, never conflated:
+#   WAIT  the log was read and shows the condition  -> WAITS_FOR says what it needs and when that arrives;
+#   ???   the log was read and does NOT show it     -> not confirmed: something else is wrong, read the log;
+#   ???   the log could not be read (RBAC, no such container, pod gone) -> not confirmed, and says so: an unreadable
+#         log is not evidence that the condition is absent, so it never claims the cause is unrelated.
+# It states the CONDITION found, not that a wipe caused it: `start` also runs on its own, with no wipe before it.
 # Prints nothing for a held-down or absent deployment. Reported only: never changes the exit status.
 session_bound_line() {
-  local d=$1 c=$2 pat=$3 waits=$4 des rr hits
+  local d=$1 c=$2 pat=$3 waits=$4 des rr cur prev crc
   des=$($KK get deploy "$d" -o jsonpath='{.spec.replicas}' 2>/dev/null) || return 0
   rr=$($KK get deploy "$d" -o jsonpath='{.status.readyReplicas}' 2>/dev/null) || rr=0
   [ "${des:-0}" -gt 0 ] || return 0
   if [ "${rr:-0}" -ge "${des:-0}" ]; then echo "  OK   $d ready"; return 0; fi
-  hits=$( { $KK logs "deploy/$d" -c "$c" 2>/dev/null; $KK logs "deploy/$d" -c "$c" --previous 2>/dev/null; } | grep -cE "$pat" )
-  if [ "${hits:-0}" -gt 0 ]; then
-    echo "  WAIT $d NOT ready, and that is expected after this wipe: $waits"
+  cur=$($KK logs "deploy/$d" -c "$c" 2>/dev/null); crc=$?
+  prev=$($KK logs "deploy/$d" -c "$c" --previous 2>/dev/null) || prev=""   # no previous container is normal
+  if printf '%s\n%s\n' "$cur" "$prev" | grep -qE "$pat"; then
+    echo "  WAIT $d NOT ready; its log shows a known session-bound condition: $waits"
+  elif [ "$crc" -ne 0 ]; then
+    echo "  ???  $d NOT ready and its log could NOT be read (kubectl logs rc=$crc), so the known session-bound condition ('$pat') is neither confirmed nor ruled out: kubectl -n options-edge logs deploy/$d -c $c --tail=100"
   else
-    echo "  ???  $d NOT ready and its log does NOT show the known session-bound cause ('$pat') -- this is not the wipe's doing, read: kubectl -n options-edge logs deploy/$d -c $c --tail=100"
+    echo "  ???  $d NOT ready and its log does NOT show the known session-bound condition ('$pat'): read kubectl -n options-edge logs deploy/$d -c $c --tail=100"
   fi
 }
 
-# report_session_bound_services: after a wipe two services legitimately cannot be ready until the next session. Say so
-# by name and cause instead of leaving them as unexplained 0/1 in a readiness list (the 2026-11-10 clean did, and
-# both were chased as faults). Reported only.
+# report_session_bound_services: two services legitimately cannot be ready until a session supplies their input. Say so
+# by name and condition instead of leaving them as unexplained 0/1 in a readiness list (the 2026-11-10 bring-up did,
+# and both were chased as faults). Reported only.
 report_session_bound_services() {
   echo "Session-bound services (cannot be ready until a session supplies their input):"
   session_bound_line es-amt-service es-amt-service 'ES_AMT_RETENTION_SHORT' \
-    "its prior-session ES tape (underlying.es.trades) is wiped by every clean; it clears at the next 18:00 ET roll once a full session is in the topic"
+    "the prior session's ES tape (underlying.es.trades) is missing -- every clean wipes that topic; it clears at the next 18:00 ET roll once a full session is in it"
   session_bound_line market-structure-service market-structure 'this session has already ended' \
-    "started after the regular close its bootstrap date (today, ET) is a closed session and it exits; it starts once the ET date rolls, then waits AWAITING_SCHEDULE for the first bar of the next session (the estimate container is separate and unaffected)"
+    "its bootstrap date (today, ET) is a session that has already ended, so it exits; it starts once the ET date rolls, then waits AWAITING_SCHEDULE for the first bar of that session (the estimate container is separate and unaffected)"
 }
 
 do_start() {
@@ -1476,6 +1484,9 @@ for p in json.load(sys.stdin)["items"]:
     # the A5 calibration ledger accrues until the archive carries it to the NAS, and a wipe before that
     # loses the day with no way to notice. dev and prod must agree on what "preserved" means, or the
     # two environments stop being comparable, which is the whole reason the evidence is split by env.
+    # THE ONE DECLARED EXCEPTION is DEV_CLEAN_RESET_TOPICS (level-absorption's events + closures, owner 2026-11-10):
+    # dev deletes the inputs that service replays from, so keeping its log makes it unstartable. It is subtracted
+    # below, by exact name, and nothing else is.
     # RESET_PRESERVED_TOPICS was resolved at the top of do_clean, at the commit topics_ref_pin pinned,
     # and the wipe was refused outright if it could not be. It is NOT re-read here: this point is past
     # the scale-down and past pause_dev_mirrors, so there is no safe way to fail.
@@ -1559,7 +1570,7 @@ case "$MODE" in
   start)     do_start || MAIN_RC=$? ;;
   overnight) do_start_overnight || MAIN_RC=$? ;;
   es-down)   do_es_down ;;
-  now|clean) if [ "${DKC_DRYRUN:-0}" = 1 ]; then clean_guard && echo "DRYRUN: would do_clean (WIPE)"; else do_clean || MAIN_RC=$?; fi ;;
+  now|clean) if [ "${DKC_DRYRUN:-0}" = 1 ]; then clean_guard || MAIN_RC=$?; [ "$MAIN_RC" -eq 0 ] && echo "DRYRUN: would do_clean (WIPE)"; else do_clean || MAIN_RC=$?; fi ;;
   auto)
     # Calendar-aware slots (ET), 2026-07-11. market_calendar.py says whether the day trades; the CLEAN
     # slot is a FIXED 17:20 on every trading day (early closes included) since 2026-10-06:
