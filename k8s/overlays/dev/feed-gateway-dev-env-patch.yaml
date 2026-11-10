@@ -22,12 +22,11 @@ spec:
           env:
             - name: GATEWAY_RITHMIC_DEPTH_ENABLED
               value: "true"
-            # Sockets one account may hold at once (gateway default 4). Dev pages open several sockets each and
-            # one dev login is shared by several people and tabs, so 4 was reached by two or three open pages and
-            # every further page was refused ("connection limit reached", the page shows "Feed unavailable").
-            # The Nth+1 socket is refused alone; the first N are untouched (gateway #319).
+            # Sockets one account may hold at once: 4 (owner 2026-11-10), the gateway default, stated here so it is
+            # visible. The 5th socket is refused alone ("connection limit reached for this account") and the first
+            # four are untouched (gateway #319). A page can open several sockets, so 4 is about two open pages.
             - name: GATEWAY_MAX_SOCKETS_PER_APP_SESSION
-              value: "16"
+              value: "4"
             # Native full-book history uses the existing approved AppSession authority.
             - name: GATEWAY_AUTH_ENABLED
               value: "true"
