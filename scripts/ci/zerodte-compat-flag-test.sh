@@ -14,7 +14,9 @@ flag() { # the rendered SERVICE CONTAINER's env entries named ZERODTE_RESEARCH_E
   [ "$(grep -c '^kind: Deployment$' "$doc")" = 1 ] || { echo "deployments=$(grep -c '^kind: Deployment$' "$doc")"; return; }
   # the value is reported WITH its YAML tag (`//` would swallow a YAML false as "absent"): a Kubernetes EnvVar.value is a string, so an
   # unquoted `false` (!!bool) is not the literal "false"; no value at all reads () — an empty value and an empty tag
-  yq -r '.spec.template.spec.containers[] | select(.name == "vix-option-inteligence") | [.env[] | select(.name == "ZERODTE_RESEARCH_ENABLED")] | (length | tostring) + "|" + (.[0].value | tostring) + "(" + (.[0].value | tag) + ")|" + (([.[] | select(has("valueFrom"))] | length > 0) | tostring)' "$doc"
+  # `select(has("value"))` runs BEFORE tostring/tag are applied: on the CI runner's pinned yq (v4.44.3) tag/tostring of an ABSENT value
+  # errors, and the helper then printed nothing at all instead of "()" (the valueFrom negative control below). Same output on every yq.
+  yq -r '.spec.template.spec.containers[] | select(.name == "vix-option-inteligence") | [.env[] | select(.name == "ZERODTE_RESEARCH_ENABLED")] | (length | tostring) + "|" + ([(.[0] // {}) | select(has("value")) | (.value | tostring) + "(" + (.value | tag) + ")"] | (.[0] // "()")) + "|" + (([.[] | select(has("valueFrom"))] | length > 0) | tostring)' "$doc"
 }
 check() { # check <what> <render file>: exactly ONE entry, the literal STRING "false" (tag !!str), no valueFrom (Codex 9c r5 / r6: the judgment on the rendered target container)
   local got; got="$(flag "$2")"
