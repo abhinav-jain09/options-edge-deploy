@@ -390,17 +390,27 @@ class Service(unittest.TestCase):
                          + ", ".join(self._tracked_files_naming("GAMMA_ZONE_REVERSAL_CENTS")))
 
     def test_the_three_that_replaced_it_are_really_ON_the_pod_not_just_in_this_test(self):
-        """Otherwise the absence test above could be passed by deleting the rule entirely.
+        """PARSED, not grepped, and in BOTH the base and the render the deploy actually applies.
 
-        A search excluding this file is the point: an earlier draft counted this test's own
-        literals as evidence, so renaming a variable throughout the manifests left it green --
-        it was asking whether the test mentioned the name, not whether the deployment did.
+        Two earlier drafts of this check were wrong in the same direction. The first searched the
+        whole repo including this file, so its own literals satisfied it and renaming a variable
+        throughout the manifests left it green. The second excluded this file but was still a text
+        search, and both manifests NAME all three variables in their comments -- so a rule deleted
+        from env but described in a comment would have passed (Codex round 3). Reading the
+        container's env is the only form of this check that cannot be satisfied by prose.
         """
-        for name in ("GAMMA_ZONE_REVERSAL_MIN_CENTS", "GAMMA_ZONE_REVERSAL_MAX_CENTS",
-                     "GAMMA_ZONE_REVERSAL_RANGE_BPS"):
-            files = self._tracked_files_naming(name)
-            self.assertIn(BASE, files, name + " is not in the base Deployment")
-            self.assertIn(SLICE, files, name + " is not in the generated dev slice")
+        expected = {"GAMMA_ZONE_REVERSAL_MIN_CENTS": "500",
+                    "GAMMA_ZONE_REVERSAL_MAX_CENTS": "5000",
+                    "GAMMA_ZONE_REVERSAL_RANGE_BPS": "1250"}
+        for path in (BASE, SLICE):
+            container, = yaml.safe_load(read(path))["spec"]["template"]["spec"]["containers"]
+            env = {e["name"]: e.get("value") for e in container["env"]}
+            for name, value in expected.items():
+                self.assertIn(name, env, name + " is not in the container env of " + path)
+                self.assertEqual(value, env[name], name + " differs in " + path)
+            # The render the deploy applies must not carry the retired one either, whatever the
+            # base says: the slice is generated, and a generator is a place a value can reappear.
+            self.assertNotIn("GAMMA_ZONE_REVERSAL_CENTS", env, path)
 
     def test_the_envFrom_sources_are_pinned_so_a_NEW_one_is_a_reviewed_diff(self):
         """What this does and does not establish.
