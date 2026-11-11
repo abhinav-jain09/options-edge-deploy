@@ -351,14 +351,46 @@ class Service(unittest.TestCase):
                          "ceiling 50.00 points: too coarse fails silently")
         self.assertEqual("1250", env["GAMMA_ZONE_REVERSAL_RANGE_BPS"],
                          "one eighth of the session close range")
-        # The constant it replaced must be GONE, not left beside the rule where an operator
-        # would read it as still in force. The service no longer reads this name at all.
+        # The constant it replaced must be gone from the pod's OWN env, not left beside the rule
+        # where an operator would read it as still in force. The service no longer reads the name.
         self.assertNotIn("GAMMA_ZONE_REVERSAL_CENTS", env)
         self.assertEqual("50000", env["GAMMA_ZONE_MIN_VOLUME"])
         # 20 hours, so the seek lands before any session's first bar and the roll is OBSERVED rather
         # than assumed. A shorter lookback would publish sessionStartObserved=false all day.
         self.assertEqual("72000000", env["GAMMA_ZONE_LOOKBACK_MS"])
         self.assertEqual("60000", env["GAMMA_ZONE_HEARTBEAT_MS"])
+
+    def test_the_replaced_constant_is_not_injected_through_envFrom_either(self):
+        """The pod's own env is only half of what reaches the container.
+
+        This Deployment imports options-edge-config and options-edge-runtime-secrets through
+        envFrom, and either could inject GAMMA_ZONE_REVERSAL_CENTS behind the manifest's back --
+        so asserting its absence from container.env alone claims more than it checks (Codex).
+        The shared config is in this repo and can be asserted on. The runtime SECRET is not, and
+        this test says so rather than implying a coverage it does not have: a reversal threshold
+        is not a credential, nothing has ever put one there, and a secret that did would be a
+        finding in its own right.
+        """
+        container, = yaml.safe_load(read(BASE))["spec"]["template"]["spec"]["containers"]
+        sources = [e.get("configMapRef", e.get("secretRef", {})).get("name")
+                   for e in container.get("envFrom", [])]
+        self.assertEqual(["options-edge-config", "options-edge-runtime-secrets"], sources,
+                         "a NEW envFrom source would be unchecked ground; add it here first")
+        infra = os.path.join(ROOT, "k8s", "infra")
+        self.assertTrue(os.path.isdir(infra), infra)
+        offenders = []
+        for folder, _, names in os.walk(infra):
+            for name in names:
+                if not name.endswith((".yaml", ".yml")):
+                    continue
+                path = os.path.join(folder, name)
+                with open(path, encoding="utf-8") as handle:
+                    if "GAMMA_ZONE" in handle.read():
+                        offenders.append(os.path.relpath(path, ROOT))
+        self.assertEqual([], offenders,
+                         "the shared platform config must declare no GAMMA_ZONE key at all: "
+                         "one there would override the pod's own env and be invisible on the "
+                         "Deployment, found in " + ", ".join(offenders))
 
     def test_no_cpu_limit_so_the_fold_is_never_throttled(self):
         container, = yaml.safe_load(read(BASE))["spec"]["template"]["spec"]["containers"]
