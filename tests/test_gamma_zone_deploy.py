@@ -342,12 +342,91 @@ class Service(unittest.TestCase):
         # run folded 0 bars and refused 0, which looked exactly like a service with no input.
         self.assertEqual("ES.v.0", env["GAMMA_ZONE_SYMBOL"])
         self.assertEqual("1m", env["GAMMA_ZONE_TIMEFRAME"])
-        self.assertEqual("500", env["GAMMA_ZONE_REVERSAL_CENTS"], "5.00 index points, on closes")
+        # The reversal threshold SCALES with the session's own close range. All three numbers
+        # are pinned: a floor alone would let a silent ceiling or fraction change the rule,
+        # and the fraction is the one measured over four live sessions (ReversalRule).
+        self.assertEqual("500", env["GAMMA_ZONE_REVERSAL_MIN_CENTS"],
+                         "floor 5.00 points: the fixed threshold this service shipped with")
+        self.assertEqual("5000", env["GAMMA_ZONE_REVERSAL_MAX_CENTS"],
+                         "ceiling 50.00 points: too coarse fails silently")
+        self.assertEqual("1250", env["GAMMA_ZONE_REVERSAL_RANGE_BPS"],
+                         "one eighth of the session close range")
+        # The constant it replaced must be gone from the pod's OWN env, not left beside the rule
+        # where an operator would read it as still in force. The service no longer reads the name.
+        self.assertNotIn("GAMMA_ZONE_REVERSAL_CENTS", env)
         self.assertEqual("50000", env["GAMMA_ZONE_MIN_VOLUME"])
         # 20 hours, so the seek lands before any session's first bar and the roll is OBSERVED rather
         # than assumed. A shorter lookback would publish sessionStartObserved=false all day.
         self.assertEqual("72000000", env["GAMMA_ZONE_LOOKBACK_MS"])
         self.assertEqual("60000", env["GAMMA_ZONE_HEARTBEAT_MS"])
+
+    # This test file names every one of these variables, so a search that counted its own
+    # literals would be answering a question about itself. Both searches below exclude it.
+    SELF = "tests/test_gamma_zone_deploy.py"
+
+    def _tracked_files_naming(self, token):
+        found = subprocess.run(["git", "grep", "-l", token, "--", ".", ":!" + self.SELF],
+                               cwd=str(ROOT), capture_output=True, text=True)
+        self.assertIn(found.returncode, (0, 1), found.stderr)
+        return sorted(line for line in found.stdout.splitlines() if line.strip())
+
+    def test_the_retired_reversal_variable_is_nowhere_in_THIS_REPO_at_all(self):
+        """The retired name must not reach the pod by ANY path this repo controls.
+
+        An earlier version of this test walked k8s/infra for the literal and pinned the two
+        envFrom source names, and called that "not injected through envFrom". It was not: this
+        repo also GENERATES options-edge-runtime-secrets (Jenkinsfile, Jenkinsfile.secrets-sync),
+        so the name could have been added there while the test stayed green, and a literal walk of
+        one directory is neither as broad as the claim nor as precise as a rendered-ConfigMap
+        assertion (Codex round 2).
+
+        A tracked-file search is strictly stronger than both: it covers k8s/infra, every overlay,
+        both secret generators, every script and every manifest at once. Its one hole is a key
+        assembled at runtime from pieces, which nothing in this repo does to any env name -- said
+        here rather than left for someone to assume away.
+        """
+        self.assertEqual([], self._tracked_files_naming("GAMMA_ZONE_REVERSAL_CENTS"),
+                         "the retired GAMMA_ZONE_REVERSAL_CENTS is still named in: "
+                         + ", ".join(self._tracked_files_naming("GAMMA_ZONE_REVERSAL_CENTS")))
+
+    def test_the_three_that_replaced_it_are_really_ON_the_pod_not_just_in_this_test(self):
+        """PARSED, not grepped, and in BOTH the base and the render the deploy actually applies.
+
+        Two earlier drafts of this check were wrong in the same direction. The first searched the
+        whole repo including this file, so its own literals satisfied it and renaming a variable
+        throughout the manifests left it green. The second excluded this file but was still a text
+        search, and both manifests NAME all three variables in their comments -- so a rule deleted
+        from env but described in a comment would have passed (Codex round 3). Reading the
+        container's env is the only form of this check that cannot be satisfied by prose.
+        """
+        expected = {"GAMMA_ZONE_REVERSAL_MIN_CENTS": "500",
+                    "GAMMA_ZONE_REVERSAL_MAX_CENTS": "5000",
+                    "GAMMA_ZONE_REVERSAL_RANGE_BPS": "1250"}
+        for path in (BASE, SLICE):
+            container, = yaml.safe_load(read(path))["spec"]["template"]["spec"]["containers"]
+            env = {e["name"]: e.get("value") for e in container["env"]}
+            for name, value in expected.items():
+                self.assertIn(name, env, name + " is not in the container env of " + path)
+                self.assertEqual(value, env[name], name + " differs in " + path)
+            # The render the deploy applies must not carry the retired one either, whatever the
+            # base says: the slice is generated, and a generator is a place a value can reappear.
+            self.assertNotIn("GAMMA_ZONE_REVERSAL_CENTS", env, path)
+
+    def test_the_envFrom_sources_are_pinned_so_a_NEW_one_is_a_reviewed_diff(self):
+        """What this does and does not establish.
+
+        It does NOT prove the retired variable is absent -- the test above does that. It pins the
+        two objects this Deployment imports, so adding a third becomes a diff somebody has to
+        justify rather than a silent widening of what reaches the container.
+
+        Note also that an injected key could not have OVERRIDDEN an explicit container.env entry
+        of the same name: Kubernetes gives container.env precedence over envFrom. The risk is
+        injection where the pod names nothing, which is exactly the retired variable's case.
+        """
+        container, = yaml.safe_load(read(BASE))["spec"]["template"]["spec"]["containers"]
+        sources = [e.get("configMapRef", e.get("secretRef", {})).get("name")
+                   for e in container.get("envFrom", [])]
+        self.assertEqual(["options-edge-config", "options-edge-runtime-secrets"], sources)
 
     def test_no_cpu_limit_so_the_fold_is_never_throttled(self):
         container, = yaml.safe_load(read(BASE))["spec"]["template"]["spec"]["containers"]

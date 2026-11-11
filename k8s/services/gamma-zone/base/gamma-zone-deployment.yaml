@@ -74,11 +74,31 @@ spec:
             # a few hundred prints and its balance moves points per bar.
             - name: GAMMA_ZONE_MIN_VOLUME
               value: "50000"
-            # 5.00 index points: the retrace, on CLOSES, that confirms a leg is finished. On
-            # 2026-11-10 the two legs that mattered were 65 and 36 points and the largest move that
-            # was NOT a turn was about 4 points.
-            - name: GAMMA_ZONE_REVERSAL_CENTS
+            # THE RETRACE, ON CLOSES, THAT CONFIRMS A LEG IS FINISHED -- a share of the session's
+            # OWN close range, not a constant. The service shipped with a flat 5.00 points; replayed
+            # over four live sessions it cut them into 159, 75, 103 and 38 confirmed legs, and the
+            # "stretch" it then picked covered only 0.30, 0.33, 0.42 and 0.29 of each session's close
+            # range. Those four sessions ranged 76.57 to 210.97 points, a factor of 2.75, so no one
+            # number is the right retrace for all of them.
+            #
+            # FLOOR 5.00 points: what was deployed. Keeping it as the floor means the rule can only
+            # ever make the threshold coarser than the shipped value, never finer.
+            - name: GAMMA_ZONE_REVERSAL_MIN_CENTS
               value: "500"
+            # CEILING 50.00 points: nearly double the widest the rule produced over those four
+            # sessions (26.25, on 2026-11-09's 210.97-point range). It exists because TOO COARSE
+            # fails silently -- at a sixth of the range that session confirmed only 3 legs, its
+            # 209-point main move was still in flight at the close, and the stretch fell back to a
+            # 64-point scrap. The emission names that case (swing.stretchExceededByCurrentLeg).
+            - name: GAMMA_ZONE_REVERSAL_MAX_CENTS
+              value: "5000"
+            # 1250 basis points = one eighth of the close range. Of every fraction swept over those
+            # four sessions it gave the best worst case: the stretch covered 0.46, 0.99, 0.59 and
+            # 0.51 of the session's range. Still a guess, now with four sessions behind it instead of
+            # one; the emission publishes the rule and the range so the corpus can replace it. Set to
+            # 0 to run at the floor, which is exactly the behaviour that shipped.
+            - name: GAMMA_ZONE_REVERSAL_RANGE_BPS
+              value: "1250"
             # With nothing folded the loop still publishes this often, so a service that is refusing
             # every bar shows its refusal tally instead of going quiet. Silence reads as health.
             - name: GAMMA_ZONE_HEARTBEAT_MS

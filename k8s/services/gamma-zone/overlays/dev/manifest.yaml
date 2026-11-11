@@ -48,8 +48,12 @@ spec:
               value: "72000000"
             - name: GAMMA_ZONE_MIN_VOLUME
               value: "50000"
-            - name: GAMMA_ZONE_REVERSAL_CENTS
+            - name: GAMMA_ZONE_REVERSAL_MIN_CENTS
               value: "500"
+            - name: GAMMA_ZONE_REVERSAL_MAX_CENTS
+              value: "5000"
+            - name: GAMMA_ZONE_REVERSAL_RANGE_BPS
+              value: "1250"
             - name: GAMMA_ZONE_HEARTBEAT_MS
               value: "60000"
             - name: JAVA_TOOL_OPTIONS
