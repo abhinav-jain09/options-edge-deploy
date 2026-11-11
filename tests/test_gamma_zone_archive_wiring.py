@@ -18,9 +18,12 @@ proven there 2026-11-11: 381 records, exit 0, agent registered hourly at minute 
 """
 from __future__ import annotations
 
+import os
 import plistlib
 import re
+import shutil
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -113,6 +116,107 @@ class Wrapper(unittest.TestCase):
         text = WRAPPER.read_text()
         self.assertIn("oe-alert.sh", text)
         self.assertIn("FAILURE: archiver exited", text)
+
+
+class WrapperBehaviour(unittest.TestCase):
+    """RUN the wrapper against stubs, rather than reading it.
+
+    Codex round 1: "the tests are almost entirely textual ... they do not execute failure-path
+    fixtures for inherited TOPICS, lock contention, arbitrary destination creation, multi-topic
+    probing, or actual archiver invocation." Every assertion below drives the real script.
+    """
+
+    def run_wrapper(self, *, topics_env="options.spx.gamma-zone.log", archiver_rc=0, **env):
+        """Stand up a fake host: a fake HOME, a stub archiver that records its environment, and a
+        stub kafka-get-offsets.sh that records every --topic it was asked for."""
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        oe, kbin = tmp / "oe-ops", tmp / "kafka/bin"
+        oe.mkdir(parents=True)
+        kbin.mkdir(parents=True)
+        shutil.copy(WRAPPER, oe / WRAPPER.name)
+        (oe / "oe-topics.env").write_text(f'GAMMA_ZONE_CORPUS="{topics_env}"\n')
+        (oe / "oe-alert.sh").write_text('alert() { echo "ALERT: $*" >> "$ALERT_SINK"; }\n')
+        (oe / "oe-archive-kafka.sh").write_text(
+            "#!/usr/bin/env bash\n"
+            'printf "TOPICS=%s\\nARCHIVE_DIR=%s\\nALLOW_NON_NAS=%s\\nON_LOCK_BUSY=%s\\nENV=%s\\nARCHIVE_JOB=%s\\n" '
+            '"$TOPICS" "$ARCHIVE_DIR" "$ALLOW_NON_NAS" "$ON_LOCK_BUSY" "$ENV" "$ARCHIVE_JOB" > "$ARCHIVER_SINK"\n'
+            f"exit {archiver_rc}\n")
+        (oe / "oe-archive-kafka.sh").chmod(0o755)
+        (kbin / "kafka-get-offsets.sh").write_text(
+            '#!/usr/bin/env bash\nwhile [ $# -gt 0 ]; do [ "$1" = "--topic" ] && echo "$2" >> "$PROBE_SINK"; shift; done\n'
+            'exit ${PROBE_RC:-0}\n')
+        (kbin / "kafka-get-offsets.sh").chmod(0o755)
+
+        e = dict(os.environ)
+        e.pop("TOPICS", None)
+        e.update(HOME=str(tmp), KAFKA_BIN=str(kbin), JAVA_HOME="",
+                 ARCHIVER_SINK=str(tmp / "archiver.env"), PROBE_SINK=str(tmp / "probes"),
+                 ALERT_SINK=str(tmp / "alerts"), LOG=str(tmp / "log"))
+        e.update({k: str(v) for k, v in env.items()})
+        proc = subprocess.run(["bash", str(oe / WRAPPER.name)], capture_output=True, text=True, env=e)
+        read = lambda f: (tmp / f).read_text() if (tmp / f).exists() else ""
+        return proc, read("archiver.env"), read("probes"), read("alerts"), tmp
+
+    def test_an_inherited_TOPICS_does_NOT_reach_the_archiver(self):
+        """THE finding. The wrapper and its own comment both claimed the set comes from the file,
+        while TOPICS="${TOPICS:-...}" let any caller archive whatever it liked."""
+        proc, archiver, _, _, _ = self.run_wrapper(TOPICS="some.other.topic")
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertIn("TOPICS=options.spx.gamma-zone.log", archiver)
+        self.assertNotIn("some.other.topic", archiver)
+
+    def test_lock_contention_cannot_be_reported_as_a_successful_archive(self):
+        """The archiver defaults to ON_LOCK_BUSY=skip and exits 0 having archived nothing."""
+        _, archiver, _, _, _ = self.run_wrapper()
+        self.assertIn("ON_LOCK_BUSY=fail", archiver)
+
+    def test_it_archives_DEV_under_its_own_job_name(self):
+        _, archiver, _, _, _ = self.run_wrapper()
+        self.assertIn("ENV=dev", archiver)
+        self.assertIn("ARCHIVE_JOB=gamma-zone", archiver)
+        self.assertIn("ALLOW_NON_NAS=true", archiver)
+
+    def test_a_destination_outside_the_approved_root_is_REFUSED(self):
+        """A typo must not quietly create a successful archive tree nobody is looking at."""
+        proc, archiver, _, alerts, tmp = self.run_wrapper(ARCHIVE_DIR=str(tmp_path := Path(tempfile.mkdtemp()) / "typo"))
+        self.addCleanup(shutil.rmtree, tmp_path.parent, True)
+        self.assertNotEqual(0, proc.returncode)
+        self.assertEqual("", archiver, "the archiver must not have been invoked")
+        self.assertFalse(tmp_path.exists(), "and the stray directory must not have been created")
+        self.assertIn("outside", alerts)
+
+    def test_that_refusal_can_be_MEANT_explicitly(self):
+        outside = Path(tempfile.mkdtemp()) / "deliberate"
+        self.addCleanup(shutil.rmtree, outside.parent, True)
+        proc, archiver, _, _, _ = self.run_wrapper(ARCHIVE_DIR=str(outside),
+                                                   ALLOW_ARCHIVE_DIR_OVERRIDE="true")
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertIn(f"ARCHIVE_DIR={outside}", archiver)
+
+    def test_every_topic_is_probed_SEPARATELY(self):
+        """One --topic carrying the whole whitespace-joined set asks Kafka for a name with a space
+        in it, and rejects a healthy broker the moment the set grows past one."""
+        _, _, probes, _, _ = self.run_wrapper(topics_env="options.spx.gamma-zone.log another.topic")
+        self.assertEqual(["options.spx.gamma-zone.log", "another.topic"], probes.split())
+
+    def test_an_unreachable_broker_stops_it_before_it_archives(self):
+        proc, archiver, _, alerts, _ = self.run_wrapper(PROBE_RC="1")
+        self.assertNotEqual(0, proc.returncode)
+        self.assertEqual("", archiver, "the archiver must not have been invoked")
+        self.assertIn("cannot reach the dev broker", alerts)
+
+    def test_an_archiver_failure_is_propagated_and_alerted(self):
+        """launchd records the wrapper's exit code; swallowing the archiver's would make a job that
+        captures nothing look healthy for ever."""
+        proc, _, _, alerts, _ = self.run_wrapper(archiver_rc=3)
+        self.assertEqual(3, proc.returncode)
+        self.assertIn("FAILED", alerts)
+
+    def test_a_missing_topic_set_refuses_rather_than_archiving_everything(self):
+        proc, archiver, _, _, _ = self.run_wrapper(topics_env="")
+        self.assertNotEqual(0, proc.returncode)
+        self.assertEqual("", archiver)
 
 
 class LaunchdAgent(unittest.TestCase):

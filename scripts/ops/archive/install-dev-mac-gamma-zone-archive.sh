@@ -54,6 +54,10 @@ grep -q "<string>$LABEL</string>" "$SRC/launchd/$PLIST" || die "$PLIST does not 
 
 bash -n "$SRC/$WRAPPER" || die "$WRAPPER does not parse"
 /usr/bin/plutil -lint "$SRC/launchd/$PLIST" >/dev/null || die "$PLIST is not a valid plist"
+# plutil is LENIENT: it accepted a comment containing '--', which is illegal anywhere inside an XML
+# comment, and so did launchd. A strict parser is what caught it, so one runs here too.
+python3 -c "import plistlib,sys; plistlib.loads(open(sys.argv[1],'rb').read())" "$SRC/launchd/$PLIST" \
+  || die "$PLIST is not well-formed XML (plutil is lenient about this; expat is not)"
 
 if $DRY; then
   say "DRY RUN — would install:"
@@ -62,8 +66,26 @@ if $DRY; then
   exit 0
 fi
 
+# ---- back up what is already on the host, BEFORE replacing any of it ------------------------
+# set -e stops this script; it does not undo what it already wrote. Overwriting live files one at a
+# time and then booting out the running agent can leave the host with a partial copy and nothing
+# loaded (Codex round 1). Every failure after this point names the backup directory, so the previous
+# working copy is always one `cp` away rather than gone.
+STAMP="$(date -u '+%Y%m%dT%H%M%SZ')"
+BACKUP="$DEST/.gamma-zone-install-backup-$STAMP"
+restore_hint() {
+  echo "[install-gamma-zone-archive] the previous copies are in $BACKUP" >&2
+  echo "[install-gamma-zone-archive] restore with:  cp $BACKUP/* $DEST/ && cp $BACKUP/$PLIST $AGENTS/ && launchctl bootstrap gui/$(id -u) $AGENTS/$PLIST" >&2
+}
+mkdir -p "$DEST" "$AGENTS" "$BACKUP"
+for f in $FILES; do
+  [ -e "$DEST/$f" ] && cp "$DEST/$f" "$BACKUP/$f"
+done
+[ -e "$AGENTS/$PLIST" ] && cp "$AGENTS/$PLIST" "$BACKUP/$PLIST"
+say "backed up the existing host copies to $BACKUP"
+trap 'restore_hint' ERR
+
 # ---- write ---------------------------------------------------------------------------------
-mkdir -p "$DEST" "$AGENTS"
 for f in $FILES; do
   cp "$SRC/$f" "$DEST/$f"
   say "placed $DEST/$f"
@@ -85,9 +107,13 @@ say "verified: the staged copy derives exactly GAMMA_ZONE_CORPUS"
 uid="$(id -u)"
 launchctl bootout "gui/$uid/$LABEL" 2>/dev/null || true
 launchctl bootstrap "gui/$uid" "$AGENTS/$PLIST"
-n="$(launchctl list 2>/dev/null | grep -c "$LABEL" || true)"
+# Count whole-word label matches: a grep -c on a substring would count a sibling label that merely
+# contains this one and report a healthy install.
+n="$(launchctl list 2>/dev/null | awk -v l="$LABEL" '$3 == l' | wc -l | tr -d ' ')"
 [ "$n" = "1" ] || die "expected exactly one '$LABEL' agent after load, found $n"
 say "loaded $LABEL (hourly, at minute 0)"
 
-say "DONE. It will not run until the next hour boundary; to prove it now:"
+trap - ERR
+say "DONE (previous host copies kept in $BACKUP). It will not run until the next hour boundary;"
+say "to prove it now:"
 say "  bash $DEST/$WRAPPER   # then: tail $DEST/archive-gamma-zone.log"

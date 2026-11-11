@@ -50,7 +50,8 @@ ARCHIVER="${ARCHIVER:-$OE_DIR/oe-archive-kafka.sh}"
 OE_TOPICS_ENV="${OE_TOPICS_ENV:-$OE_DIR/oe-topics.env}"
 BOOTSTRAP="${BOOTSTRAP:-localhost:19092}"
 SCHEMA_REGISTRY="${SCHEMA_REGISTRY:-http://localhost:8082}"
-ARCHIVE_DIR="${ARCHIVE_DIR:-$HOME/oe-ops/gamma-zone-corpus}"
+DEFAULT_ARCHIVE_DIR="$HOME/oe-ops/gamma-zone-corpus"
+ARCHIVE_DIR="${ARCHIVE_DIR:-$DEFAULT_ARCHIVE_DIR}"
 LOG="${LOG:-$OE_DIR/archive-gamma-zone.log}"
 MIN_FREE_MB="${MIN_FREE_MB:-5000}"
 
@@ -63,11 +64,15 @@ if [ -r "$OE_DIR/oe-alert.sh" ]; then . "$OE_DIR/oe-alert.sh"; else alert() { lo
 # different set behind the canonical file's back -- equality by luck, not by construction. This is
 # the same refusal oe-archive-dev.sh makes, for the same reason.
 [ -r "$OE_TOPICS_ENV" ] || { log "FATAL: '$OE_TOPICS_ENV' missing or unreadable — refusing to archive an unknown set"; exit 1; }
-unset GAMMA_ZONE_CORPUS
+# BOTH names are cleared. Clearing only GAMMA_ZONE_CORPUS and then writing
+# TOPICS="${TOPICS:-$GAMMA_ZONE_CORPUS}" left the back door wide open: a caller supplying TOPICS
+# archived whatever it liked, while this file and its tests both claimed "the set comes from the
+# file" (Codex round 1). The assignment is now unconditional, so the claim is true.
+unset GAMMA_ZONE_CORPUS TOPICS
 # shellcheck source=/dev/null
 . "$OE_TOPICS_ENV"
 : "${GAMMA_ZONE_CORPUS:?oe-topics.env did not define GAMMA_ZONE_CORPUS}"
-TOPICS="${TOPICS:-$GAMMA_ZONE_CORPUS}"
+TOPICS="$GAMMA_ZONE_CORPUS"
 
 [ -x "$ARCHIVER" ] || { log "FATAL: archiver '$ARCHIVER' is missing or not executable"; exit 1; }
 
@@ -80,6 +85,19 @@ if [ -z "${KAFKA_BIN:-}" ]; then
   done
 fi
 [ -n "${KAFKA_BIN:-}" ] || { log "FATAL: no Kafka CLI found (looked for kafka-get-offsets.sh)"; exit 1; }
+
+# AN OVERRIDDEN DESTINATION NEEDS AN EXPLICIT OPT-IN. This wrapper bypasses the archiver's NAS
+# guard on purpose, so nothing downstream would question a typo: it would create the directory,
+# archive into it, exit 0, and the corpus would accumulate somewhere nobody ever looks (Codex round
+# 1). "Local disk is allowed" does not mean "every local path is intended". The default below
+# $HOME/oe-ops needs no flag; anything else must say so.
+case "$ARCHIVE_DIR" in
+  "$DEFAULT_ARCHIVE_DIR"|"$HOME"/oe-ops/*) : ;;
+  *) [ "${ALLOW_ARCHIVE_DIR_OVERRIDE:-false}" = "true" ] || {
+       log "FATAL: ARCHIVE_DIR '$ARCHIVE_DIR' is outside $HOME/oe-ops — set ALLOW_ARCHIVE_DIR_OVERRIDE=true to mean it"
+       alert "gamma-zone archive refused on $(hostname): ARCHIVE_DIR '$ARCHIVE_DIR' is outside the approved root."
+       exit 1; } ;;
+esac
 
 mkdir -p "$ARCHIVE_DIR" 2>/dev/null || true
 [ -d "$ARCHIVE_DIR" ] || { log "FATAL: ARCHIVE_DIR '$ARCHIVE_DIR' does not exist and could not be created"; exit 1; }
@@ -97,12 +115,17 @@ fi
 # client that connects to the port and then cannot resolve the advertised listener fails with
 # UnknownHostException -- while a plain port check passes and tells you nothing. oe-archive-dev.sh
 # documents exactly this trap. Asking for the topic's offsets exercises the whole path.
-if ! JAVA_HOME="$JAVA_HOME" "$KAFKA_BIN/kafka-get-offsets.sh" --bootstrap-server "$BOOTSTRAP" \
-      --topic "$TOPICS" >/dev/null 2>&1; then
-  log "FATAL: no Kafka handshake with '$BOOTSTRAP' for topic '$TOPICS'"
-  alert "gamma-zone archive on $(hostname): cannot reach the dev broker at $BOOTSTRAP. The corpus is not being captured."
-  exit 1
-fi
+# ONE PROBE PER TOPIC. Passing the whole whitespace-joined set as a single --topic asked Kafka for
+# one name containing a space: it would reject a healthy broker the moment the set grew past one
+# topic, and the failure would read as "the broker is down" (Codex round 1).
+for _t in $TOPICS; do
+  if ! env ${JAVA_HOME:+JAVA_HOME="$JAVA_HOME"} "$KAFKA_BIN/kafka-get-offsets.sh" \
+        --bootstrap-server "$BOOTSTRAP" --topic "$_t" >/dev/null 2>&1; then
+    log "FATAL: no Kafka handshake with '$BOOTSTRAP' for topic '$_t'"
+    alert "gamma-zone archive on $(hostname): cannot reach the dev broker at $BOOTSTRAP for '$_t'. The corpus is not being captured."
+    exit 1
+  fi
+done
 
 log "archiving $TOPICS -> $ARCHIVE_DIR (local disk by design; ${avail_mb}MB free)"
 # ALLOW_NON_NAS is passed deliberately: see LOCAL DISK ON PURPOSE above. ARCHIVE_JOB is its own name
@@ -115,9 +138,14 @@ log "archiving $TOPICS -> $ARCHIVE_DIR (local disk by design; ${avail_mb}MB free
 # directory". Found by running this wrapper rather than reading it. env treats every leading
 # NAME=VALUE word as an assignment, expanded or not, and a conditional one that expands to nothing
 # simply disappears.
+# ON_LOCK_BUSY=fail, like the depth sibling. The archiver defaults to "skip", which exits 0 when
+# another run holds the job lock -- so a scheduled run that archived NOTHING would be recorded as a
+# success and launchd would see a healthy job. Silence reading as health is how the 17:10 run went
+# two weeks archiving nothing (Codex round 1).
 env TOPICS="$TOPICS" \
     ARCHIVE_DIR="$ARCHIVE_DIR" \
     ALLOW_NON_NAS=true \
+    ON_LOCK_BUSY=fail \
     ENV=dev \
     ARCHIVE_JOB=gamma-zone \
     BOOTSTRAP="$BOOTSTRAP" \
