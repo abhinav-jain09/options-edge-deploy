@@ -121,10 +121,18 @@ fi
 # A never-recreate declaration is a DURABILITY PROMISE, so its membership is reviewed, not inferred. This list
 # is that review. A removal fails here, and so does an ADDITION -- which is correct: adding a topic to this set
 # is a promise someone should make deliberately, in a diff, rather than by editing one line of topics.env.
+#
+# options.spx.gamma-zone.log joined on 2026-11-11, reviewed here deliberately: it is gamma-zone-service's corpus,
+# the record of every measurement the service has published, and the only thing a later calibration can be built
+# from. It is already reset-preserved, dev-clean-preserved and premarket-preserved, and NONE of those three closes
+# the delete-and-recreate arm -- so without this entry a partition mismatch under
+# KAFKA_RECREATE_MISMATCHED_TOPICS=true would discard the whole corpus while three lists said it was preserved.
+# Its sibling options.spx.gamma-zone.current is deliberately NOT here: the next folded bar refills it.
 NEVER_RECREATE_EXPECTED="context-tape.compression.checkpoint
 context-tape.compression.history
 context-tape.direction.ledger
 es.futures.footprint.strike
+options.spx.gamma-zone.log
 options.spx.vol-premium.baseline
 options.spx.vol-premium.events
 options.spx.vol-premium.ivrv

@@ -113,15 +113,38 @@ class Topics(unittest.TestCase):
         # `current` is deliberately NOT listed: the next folded bar refills it.
         self.assertNotIn(CURRENT, d["OPTIONS_EDGE_NEVER_RECREATE_TOPICS"])
 
-    def test_the_log_is_declared_DELETE_and_appears_in_no_compaction_list(self):
-        d = declarations(self.VARS)
+    def resolved_policy(self, topic):
+        """What apply-topics would actually SET on this topic, through the repo's own resolver."""
+        # CLEANUP_POLICY is apply-topics.sh's own default for an unlisted topic, taken from the same
+        # KAFKA_TOPIC_CLEANUP_POLICY the deployed ConfigMap sets. Resolving without it would read an
+        # empty policy and prove nothing.
+        script = (f'source "{ROOT}/scripts/kafka/topics.env"; '
+                  f'source "{ROOT}/scripts/kafka/topic-shape.lib.sh"; '
+                  'CLEANUP_POLICY="${KAFKA_TOPIC_CLEANUP_POLICY:-delete}"; '
+                  f'topic_cleanup_policy "{topic}"; echo; topic_retention_ms "{topic}"')
+        env = {k: v for k, v in os.environ.items() if k != "ENVIRONMENT"}
+        env["ENVIRONMENT"] = "dev"
+        out = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=True,
+                             env=env).stdout.split()
+        return out[0], out[1]
+
+    def test_the_log_RESOLVES_to_delete_and_appears_in_no_compaction_list(self):
         # The one assertion this module exists for. The key is the session, so compaction would keep
         # one record per session and discard the intraday history the topic exists to accumulate.
+        #
+        # Asserted through the repo's OWN resolver, not only by absence from the compaction lists: a
+        # change to the default policy could compact this topic while every absence check stayed
+        # green (Codex round 2). This is what apply-topics would actually set.
+        policy, retention_ms = self.resolved_policy(LOG)
+        self.assertEqual("delete", policy, "the corpus must never be compacted")
+        self.assertEqual("-1", retention_ms, "the corpus keeps every record; only the byte cap removes one")
+        # and `current` resolves to compact, so the resolver is genuinely being consulted
+        self.assertIn("compact", self.resolved_policy(CURRENT)[0])
+
+        d = declarations(self.VARS)
         self.assertNotIn(LOG, d["OPTIONS_EDGE_PURE_COMPACT_TOPICS"])
         self.assertNotIn(LOG, d["OPTIONS_EDGE_COMPACTED_TOPICS"])
-        retention = dict(x.split("=", 1) for x in d["OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES"] if "=" in x)
         bytes_ = dict(x.split("=", 1) for x in d["OPTIONS_EDGE_TOPIC_RETENTION_BYTES_OVERRIDES"] if "=" in x)
-        self.assertEqual(retention[LOG], "-1", "the corpus keeps every record; only the byte cap removes one")
         self.assertEqual(bytes_[LOG], LOG_BYTES)
 
     def test_the_current_topic_is_pure_compact(self):
