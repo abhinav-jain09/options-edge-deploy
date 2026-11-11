@@ -185,6 +185,16 @@ log "archiving $TOPICS -> $ARCHIVE_DIR (local disk by design; ${avail_mb}MB free
 # directory". Found by running this wrapper rather than reading it. env treats every leading
 # NAME=VALUE word as an assignment, expanded or not, and a conditional one that expands to nothing
 # simply disappears.
+# OE_STRICT_TOPICS="$TOPICS": EVERY topic this job archives is evidence. For an ordinary topic the
+# archiver treats "absent or unreadable" as a quiet day -- SKIP, absent++, exit 0 -- which for THIS
+# topic would be an hourly green run that captured none of the corpus, the exact failure the whole
+# wrapper exists to prevent. The preflight probe above narrows the window but cannot close it: the
+# topic can go between the probe and the read (Codex round 5).
+#
+# Passed HERE rather than added to the archiver's own default list, deliberately. That list is
+# global, and this topic exists on dev only -- a prod or es4 run would then FAIL on a topic that is
+# absent by design. Using "$TOPICS" also keeps it true if the corpus set ever grows.
+#
 # ON_LOCK_BUSY=fail, like the depth sibling. The archiver defaults to "skip", which exits 0 when
 # another run holds the job lock -- so a scheduled run that archived NOTHING would be recorded as a
 # success and launchd would see a healthy job. Silence reading as health is how the 17:10 run went
@@ -193,6 +203,7 @@ env TOPICS="$TOPICS" \
     ARCHIVE_DIR="$ARCHIVE_DIR" \
     ALLOW_NON_NAS=true \
     ON_LOCK_BUSY=fail \
+    OE_STRICT_TOPICS="$TOPICS" \
     ENV=dev \
     ARCHIVE_JOB=gamma-zone \
     BOOTSTRAP="$BOOTSTRAP" \

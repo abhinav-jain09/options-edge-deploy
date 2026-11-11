@@ -139,8 +139,8 @@ class WrapperBehaviour(unittest.TestCase):
         (oe / "oe-alert.sh").write_text('alert() { echo "ALERT: $*" >> "$ALERT_SINK"; }\n')
         (oe / "oe-archive-kafka.sh").write_text(
             "#!/usr/bin/env bash\n"
-            'printf "TOPICS=%s\\nARCHIVE_DIR=%s\\nALLOW_NON_NAS=%s\\nON_LOCK_BUSY=%s\\nENV=%s\\nARCHIVE_JOB=%s\\n" '
-            '"$TOPICS" "$ARCHIVE_DIR" "$ALLOW_NON_NAS" "$ON_LOCK_BUSY" "$ENV" "$ARCHIVE_JOB" > "$ARCHIVER_SINK"\n'
+            'printf "TOPICS=%s\\nARCHIVE_DIR=%s\\nALLOW_NON_NAS=%s\\nON_LOCK_BUSY=%s\\nENV=%s\\nARCHIVE_JOB=%s\\nOE_STRICT_TOPICS=%s\\n" '
+            '"$TOPICS" "$ARCHIVE_DIR" "$ALLOW_NON_NAS" "$ON_LOCK_BUSY" "$ENV" "$ARCHIVE_JOB" "$OE_STRICT_TOPICS" > "$ARCHIVER_SINK"\n'
             f"exit {archiver_rc}\n")
         (oe / "oe-archive-kafka.sh").chmod(0o755)
         (kbin / "kafka-get-offsets.sh").write_text(
@@ -182,6 +182,15 @@ class WrapperBehaviour(unittest.TestCase):
         was right that the previous title claimed more than this)."""
         _, archiver, _, _, _ = self.run_wrapper()
         self.assertIn("ON_LOCK_BUSY=fail", archiver)
+
+    def test_the_corpus_is_STRICT_so_an_absent_topic_is_not_a_quiet_day(self):
+        """For an ordinary topic the archiver treats absent-or-unreadable as a quiet day: SKIP,
+        absent++, exit 0. For THIS topic that is an hourly green run capturing none of the corpus.
+        The preflight probe narrows the window; it cannot close it, because the topic can go between
+        the probe and the read. Passed per job rather than added to the archiver's global default,
+        which would make prod and es4 fail on a topic that is absent there by design."""
+        _, archiver, _, _, _ = self.run_wrapper()
+        self.assertIn("OE_STRICT_TOPICS=options.spx.gamma-zone.log", archiver)
 
     def test_it_archives_DEV_under_its_own_job_name(self):
         _, archiver, _, _, _ = self.run_wrapper()
