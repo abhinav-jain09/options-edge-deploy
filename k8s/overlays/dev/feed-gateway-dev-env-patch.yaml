@@ -183,6 +183,14 @@ spec:
             # Production remains default-off because its overlay does not set this flag.
             - name: GAMMA_NAVIGATION_ENABLED
               value: "true"
+            # Dev-only relay of the GAMMA ZONE and its session volume profile, the two topics
+            # gamma-zone-service writes. The page at /gamma-zone reads both: the measurement, and
+            # the profile that answers "how many contracts traded between these two strikes".
+            # Production remains default-off because its overlay does not set this flag, and
+            # gamma-zone-service itself is dev-only (services.yaml envs: [dev]) -- so on production
+            # the flag would subscribe the gateway to two topics that do not exist there.
+            - name: GAMMA_ZONE_ENABLED
+              value: "true"
             - name: GATEWAY_MARKET_HOLIDAYS
               value: "2026-01-01,2026-01-19,2026-02-16,2026-04-03,2026-05-25,2026-06-19,2026-07-03,2026-09-07,2026-11-26,2026-12-25"
             - name: GATEWAY_MARKET_EARLY_CLOSES
