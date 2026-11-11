@@ -143,13 +143,27 @@ fi
 # ONE PROBE PER TOPIC. Passing the whole whitespace-joined set as a single --topic asked Kafka for
 # one name containing a space: it would reject a healthy broker the moment the set grew past one
 # topic, and the failure would read as "the broker is down" (Codex round 1).
+# AN EXIT CODE IS NOT AN ANSWER. Discarding the output and trusting exit 0 let a CLI that printed a
+# diagnostic, or answered about a topic with no partitions, pass as a healthy handshake -- and the
+# archiver downstream treats an absent non-strict topic as "nothing to do" and finishes failed=0.
+# The two together are a green run that captured nothing (Codex round 3). The probe now has to come
+# back with a line for THE TOPIC IT ASKED ABOUT: kafka-get-offsets prints <topic>:<partition>:<offset>.
 for _t in $TOPICS; do
-  if ! env ${JAVA_HOME:+JAVA_HOME="$JAVA_HOME"} "$KAFKA_BIN/kafka-get-offsets.sh" \
-        --bootstrap-server "$BOOTSTRAP" --topic "$_t" >/dev/null 2>&1; then
+  # BOTH have to hold: the CLI must succeed AND answer about this topic. Checking only the output
+  # was my own regression while fixing the exit-code one -- a failing CLI that still printed a
+  # matching line would have passed. The test for the unreachable broker caught it.
+  if ! _probe="$(env ${JAVA_HOME:+JAVA_HOME="$JAVA_HOME"} "$KAFKA_BIN/kafka-get-offsets.sh" \
+                  --bootstrap-server "$BOOTSTRAP" --topic "$_t" 2>/dev/null)"; then
     log "FATAL: no Kafka handshake with '$BOOTSTRAP' for topic '$_t'"
     alert "gamma-zone archive on $(hostname): cannot reach the dev broker at $BOOTSTRAP for '$_t'. The corpus is not being captured."
     exit 1
   fi
+  case "$_probe" in
+    "$_t":*) : ;;
+    *) log "FATAL: no usable offsets for '$_t' from '$BOOTSTRAP' (probe said: ${_probe:-<nothing>})"
+       alert "gamma-zone archive on $(hostname): the dev broker at $BOOTSTRAP returned no offsets for '$_t'. The corpus is not being captured."
+       exit 1 ;;
+  esac
 done
 
 log "archiving $TOPICS -> $ARCHIVE_DIR (local disk by design; ${avail_mb}MB free)"

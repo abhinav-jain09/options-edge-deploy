@@ -147,8 +147,9 @@ class WrapperBehaviour(unittest.TestCase):
             # One RUN line per INVOCATION, then its topics. Recording only the topics could not
             # tell one call carrying "--topic a --topic b" from two calls carrying one each --
             # the same hole as asserting on .split() (Codex round 2).
-            '#!/usr/bin/env bash\necho "RUN" >> "$PROBE_SINK"\n'
-            'while [ $# -gt 0 ]; do [ "$1" = "--topic" ] && echo "$2" >> "$PROBE_SINK"; shift; done\n'
+            '#!/usr/bin/env bash\necho "RUN" >> "$PROBE_SINK"\nt=""\n'
+            'while [ $# -gt 0 ]; do [ "$1" = "--topic" ] && { t="$2"; echo "$2" >> "$PROBE_SINK"; }; shift; done\n'
+            '[ -n "${PROBE_SILENT:-}" ] || echo "$t:0:123"\n'
             'exit ${PROBE_RC:-0}\n')
         (kbin / "kafka-get-offsets.sh").chmod(0o755)
 
@@ -173,8 +174,11 @@ class WrapperBehaviour(unittest.TestCase):
         self.assertIn("TOPICS=options.spx.gamma-zone.log", archiver)
         self.assertNotIn("some.other.topic", archiver)
 
-    def test_lock_contention_cannot_be_reported_as_a_successful_archive(self):
-        """The archiver defaults to ON_LOCK_BUSY=skip and exits 0 having archived nothing."""
+    def test_it_asks_the_archiver_to_FAIL_on_lock_contention(self):
+        """What this checks and what it does not: it proves the wrapper passes ON_LOCK_BUSY=fail,
+        not that the real archiver then exits non-zero. The archiver's own default is "skip", which
+        exits 0 having archived nothing; that behaviour is the archiver's to test (Codex round 3
+        was right that the previous title claimed more than this)."""
         _, archiver, _, _, _ = self.run_wrapper()
         self.assertIn("ON_LOCK_BUSY=fail", archiver)
 
@@ -227,6 +231,16 @@ class WrapperBehaviour(unittest.TestCase):
         self.assertNotEqual(0, proc.returncode)
         self.assertEqual("", archiver, "the archiver must not have been invoked")
         self.assertIn("cannot reach the dev broker", alerts)
+
+    def test_a_SILENT_but_successful_probe_is_not_a_healthy_broker(self):
+        """An exit code is not an answer. A CLI that exits 0 while printing nothing -- or printing a
+        diagnostic -- passed as a handshake, and the archiver downstream treats an absent topic as
+        nothing to do and finishes failed=0. The two together are a green run that captured
+        nothing."""
+        proc, archiver, _, alerts, _ = self.run_wrapper(PROBE_SILENT="1")
+        self.assertNotEqual(0, proc.returncode)
+        self.assertEqual("", archiver, "the archiver must not have been invoked")
+        self.assertIn("no offsets", alerts)
 
     def test_an_archiver_failure_is_propagated_and_alerted(self):
         """launchd records the wrapper's exit code; swallowing the archiver's would make a job that
