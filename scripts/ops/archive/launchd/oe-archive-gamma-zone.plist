@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  THE GAMMA ZONE CORPUS ARCHIVE, on the DEV Mac, hourly.
+
+  oe-archive-gamma-zone.sh runs oe-archive-kafka.sh with ENV=dev and TOPICS="$GAMMA_ZONE_CORPUS"
+  (oe-topics.env: options.spx.gamma-zone.log) against the dev broker, and writes gzipped JSON Lines
+  to LOCAL DISK on this host.
+
+  WHY HERE AND NOT ON .252. The .252 crontab's archive entries are disabled by the owner with the
+  reason written beside them — "archive moves to dev" — and this is that move for this topic.
+  Running on the dev Mac also removes a failure path: from the 201 Mac the dev broker is reachable
+  only through an SSH tunnel on 127.0.0.1:19092 whose launchd job has exited 255 before, and the
+  broker advertises host.docker.internal, which resolves to 127.0.0.1 on any Mac running Docker
+  Desktop. On THIS host localhost:19092 reaches the real broker with nothing in between.
+
+  WHY HOURLY. The archiver is incremental and offset-checkpointed, so a no-op run costs nothing and
+  a run that finds one new emission writes one small file. The topic is excluded from all four dev
+  deletion paths by name — but that is the protection that failed before, when a cleanup run
+  destroyed ten keep-list topics it had just printed as kept. An hour is the most this can lose.
+
+  LOCAL DISK, NOT THE NAS (owner, 2026-11-11). ARCHIVE_DIR is deliberately NOT set here: the wrapper
+  defaults it to $HOME/oe-ops/gamma-zone-corpus and passes ALLOW_NON_NAS itself. Unlike
+  oe-archive-depth.plist beside it, this job does NOT want the NAS sentinel — the NAS is at 100%
+  (906G of 906G) and nothing has archived anywhere since 2026-10-26, so a NAS destination would be
+  an hourly failure. Set ARCHIVE_DIR here only to move the destination, and move the existing tree
+  with it: the offsets checkpoint lives under ARCHIVE_DIR, so a fresh directory re-archives from
+  offset 0 and duplicates everything already captured.
+
+  THE SCHEDULE IS THE HOST'S LOCAL CLOCK. launchd has no CRON_TZ; StartCalendarInterval with only a
+  Minute fires at minute 0 of every LOCAL hour. It stays hourly through a daylight-saving switch and
+  through a change of the host's timezone; what moves is which UTC instant each run lands on, and
+  nothing here depends on that. An earlier draft of this comment claimed the runs were "the same
+  instant in any zone", which is simply false. The checkpoint, not the schedule, decides what a run
+  reads.
+
+  Install: run scripts/ops/archive/install-dev-mac-gamma-zone-archive.sh ON THIS HOST. Do not copy
+  files by hand. Unlike the depth archive this job needs NO canonical-archive helper jar and no
+  contracts jar — options.spx.gamma-zone.log is JSON on the wire and takes the plain console path.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.optionsedge.oe-archive-gamma-zone</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/bash</string>
+    <string>/Users/abhinav/oe-ops/oe-archive-gamma-zone.sh</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Minute</key><integer>0</integer>
+  </dict>
+  <key>RunAtLoad</key><false/>
+  <key>StandardOutPath</key><string>/Users/abhinav/oe-ops/archive-gamma-zone.launchd.log</string>
+  <key>StandardErrorPath</key><string>/Users/abhinav/oe-ops/archive-gamma-zone.launchd.err.log</string>
+</dict>
+</plist>
