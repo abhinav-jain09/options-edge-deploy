@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# ensure-gamma-zone-topics.sh - gamma-zone-service's two topics must be right BEFORE the service publishes (the first-deploy barrier, as
+# ensure-gamma-zone-topics.sh - gamma-zone-service's THREE topics must be right BEFORE the service publishes (the first-deploy barrier, as
 # ensure-break-line-topics.sh). DEV ONLY: the service renders on dev alone (services.yaml envs [dev]); refuses to run unless ENVIRONMENT is exactly "dev".
 #
 #   NO BROKER-WIDE CHANGE. The shapes are the ones scripts/kafka/topics.env declares (one partition each, exact):
 #   options.spx.gamma-zone.current  1 partition, compact, retention.ms EXACTLY -1, retention.bytes EXACTLY -1 (pure compact)  the newest measurement per session
 #   options.spx.gamma-zone.log      1 partition, delete,  retention.ms EXACTLY -1, retention.bytes EXACTLY 1073741824 (1 GiB)  EVERY emission, in order: the corpus
+#   options.spx.gamma-zone.profile  1 partition, compact, retention.ms EXACTLY -1, retention.bytes EXACTLY -1 (pure compact)  the session's WHOLE volume profile, so a reader can
+#       answer "how many contracts traded between these two strikes" -- which the measurement cannot: it carries the ratio curve for +/-30 points and a level COUNT. CURRENT's shape
+#       and deliberately not the log's: one record per session, not one per folded bar, in a topic with no byte cap to need.
 #
 # WHY THE BARRIER EXISTS AT ALL when the service itself creates what is missing. The service deliberately CREATES-IF-ABSENT and then only CHECKS the partition count: it
 # never reconciles a topic's configuration, because a pod start that overwrites a declared shape with whatever the running binary believes is how this fleet has lost a

@@ -166,6 +166,14 @@ class Topics(unittest.TestCase):
         self.assertIn(f"{PROFILE}=-1", d["OPTIONS_EDGE_TOPIC_RETENTION_BYTES_OVERRIDES"])
         # No byte cap: a compacted latest-value topic has one record per session to keep.
         self.assertNotIn(f"{PROFILE}={LOG_BYTES}", d["OPTIONS_EDGE_TOPIC_RETENTION_BYTES_OVERRIDES"])
+        # RESOLVED through the repo's own resolver, not merely present in a list. Membership of
+        # PURE_COMPACT alone would still pass if the topic also joined OPTIONS_EDGE_COMPACTED_TOPICS
+        # and resolved to "compact,delete" -- which would age the profile's own records out, so the
+        # strike-range query would silently start answering about part of a session (Codex).
+        policy, retention = self.resolved_policy(PROFILE)
+        self.assertEqual("compact", policy, "pure compact, never compact,delete")
+        self.assertEqual("-1", retention)
+        self.assertNotIn(PROFILE, d["OPTIONS_EDGE_COMPACTED_TOPICS"])
 
     def test_the_PROFILE_is_preserved_by_NOTHING_because_it_is_rebuilt(self):
         """Deliberately not in any preservation list. The service re-folds the whole session from a
@@ -179,6 +187,10 @@ class Topics(unittest.TestCase):
         for preserved in ("OPTIONS_EDGE_NEVER_RECREATE_TOPICS", "OPTIONS_EDGE_RESET_PRESERVED_TOPICS",
                           "OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS"):
             self.assertNotIn(PROFILE, d[preserved], preserved)
+        # The FOURTH preservation mechanism, which is not a topics.env list at all: the pre-market
+        # reset matches on a regex in its own script. Checking only the three lists would have left
+        # it unexamined (Codex), and "preserved by nothing" has to mean all four.
+        self.assertNotIn(PROFILE, read("scripts/ops/premarket-reset.sh"))
 
     def test_the_current_topic_is_pure_compact(self):
         d = declarations(self.VARS)
