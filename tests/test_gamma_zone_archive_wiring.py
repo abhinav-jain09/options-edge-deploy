@@ -198,7 +198,10 @@ class WrapperBehaviour(unittest.TestCase):
         """One --topic carrying the whole whitespace-joined set asks Kafka for a name with a space
         in it, and rejects a healthy broker the moment the set grows past one."""
         _, _, probes, _, _ = self.run_wrapper(topics_env="options.spx.gamma-zone.log another.topic")
-        self.assertEqual(["options.spx.gamma-zone.log", "another.topic"], probes.split())
+        # LINES, not .split(). The stub records one line per invocation, and a single invocation
+        # carrying "a b" splits into the same two words as two invocations carrying "a" and "b" --
+        # so .split() passed while the bug was still there. My own mutation caught this.
+        self.assertEqual(["options.spx.gamma-zone.log", "another.topic"], probes.splitlines())
 
     def test_an_unreachable_broker_stops_it_before_it_archives(self):
         proc, archiver, _, alerts, _ = self.run_wrapper(PROBE_RC="1")
