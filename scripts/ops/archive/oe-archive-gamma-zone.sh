@@ -158,12 +158,20 @@ for _t in $TOPICS; do
     alert "gamma-zone archive on $(hostname): cannot reach the dev broker at $BOOTSTRAP for '$_t'. The corpus is not being captured."
     exit 1
   fi
-  case "$_probe" in
-    "$_t":*) : ;;
-    *) log "FATAL: no usable offsets for '$_t' from '$BOOTSTRAP' (probe said: ${_probe:-<nothing>})"
-       alert "gamma-zone archive on $(hostname): the dev broker at $BOOTSTRAP returned no offsets for '$_t'. The corpus is not being captured."
-       exit 1 ;;
-  esac
+  # PER LINE, not "the whole output starts with". A CLI that prints a warning first and the offsets
+  # after is a HEALTHY broker, and matching the whole blob refused it -- fail-closed, but refusing a
+  # working broker is the same class of mistake as the single --topic one (Codex round 4).
+  _ok=false
+  while IFS= read -r _line; do
+    case "$_line" in "$_t":*) _ok=true; break ;; esac
+  done <<PROBE_OUTPUT
+$_probe
+PROBE_OUTPUT
+  if [ "$_ok" != "true" ]; then
+    log "FATAL: no usable offsets for '$_t' from '$BOOTSTRAP' (probe said: ${_probe:-<nothing>})"
+    alert "gamma-zone archive on $(hostname): the dev broker at $BOOTSTRAP returned no offsets for '$_t'. The corpus is not being captured."
+    exit 1
+  fi
 done
 
 log "archiving $TOPICS -> $ARCHIVE_DIR (local disk by design; ${avail_mb}MB free)"

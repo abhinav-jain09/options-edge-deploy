@@ -149,6 +149,7 @@ class WrapperBehaviour(unittest.TestCase):
             # the same hole as asserting on .split() (Codex round 2).
             '#!/usr/bin/env bash\necho "RUN" >> "$PROBE_SINK"\nt=""\n'
             'while [ $# -gt 0 ]; do [ "$1" = "--topic" ] && { t="$2"; echo "$2" >> "$PROBE_SINK"; }; shift; done\n'
+            '[ -z "${PROBE_NOISE:-}" ] || echo "WARNING: something chatty on stdout"\n'
             '[ -n "${PROBE_SILENT:-}" ] || echo "$t:0:123"\n'
             'exit ${PROBE_RC:-0}\n')
         (kbin / "kafka-get-offsets.sh").chmod(0o755)
@@ -241,6 +242,14 @@ class WrapperBehaviour(unittest.TestCase):
         self.assertNotEqual(0, proc.returncode)
         self.assertEqual("", archiver, "the archiver must not have been invoked")
         self.assertIn("no offsets", alerts)
+
+    def test_a_CHATTY_but_healthy_broker_is_accepted(self):
+        """A CLI that prints a warning first and the offsets after is a working broker. Matching the
+        whole output rather than each line refused it -- fail-closed, but refusing a healthy broker
+        is the same class of mistake as probing the whole topic list in one call (Codex round 4)."""
+        proc, archiver, _, _, _ = self.run_wrapper(PROBE_NOISE="1")
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertIn("TOPICS=options.spx.gamma-zone.log", archiver)
 
     def test_an_archiver_failure_is_propagated_and_alerted(self):
         """launchd records the wrapper's exit code; swallowing the archiver's would make a job that
