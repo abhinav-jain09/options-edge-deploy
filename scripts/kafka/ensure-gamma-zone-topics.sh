@@ -30,12 +30,17 @@ fi
 # paths while looking, from inside this script, perfectly correct.
 CURRENT="options.spx.gamma-zone.current"
 LOG="options.spx.gamma-zone.log"
+PROFILE="options.spx.gamma-zone.profile"
 if [ -n "${KAFKA_GAMMA_ZONE_CURRENT_TOPIC:-}" ] && [ "${KAFKA_GAMMA_ZONE_CURRENT_TOPIC}" != "$CURRENT" ]; then
   echo "FAIL: KAFKA_GAMMA_ZONE_CURRENT_TOPIC is set to '${KAFKA_GAMMA_ZONE_CURRENT_TOPIC}', but this barrier only ever ensures the declared '$CURRENT' - refusing."
   exit 1
 fi
 if [ -n "${KAFKA_GAMMA_ZONE_LOG_TOPIC:-}" ] && [ "${KAFKA_GAMMA_ZONE_LOG_TOPIC}" != "$LOG" ]; then
   echo "FAIL: KAFKA_GAMMA_ZONE_LOG_TOPIC is set to '${KAFKA_GAMMA_ZONE_LOG_TOPIC}', but this barrier only ever ensures the declared '$LOG' - refusing. A renamed corpus log is preserved by nothing."
+  exit 1
+fi
+if [ -n "${KAFKA_GAMMA_ZONE_PROFILE_TOPIC:-}" ] && [ "${KAFKA_GAMMA_ZONE_PROFILE_TOPIC}" != "$PROFILE" ]; then
+  echo "FAIL: KAFKA_GAMMA_ZONE_PROFILE_TOPIC is set to '${KAFKA_GAMMA_ZONE_PROFILE_TOPIC}', but this barrier only ever ensures the declared '$PROFILE' - refusing. A renamed profile is created with gamma-zone's shape under a name topics.env does not declare."
   exit 1
 fi
 : "${KAFKA_BOOTSTRAP_SERVERS:?KAFKA_BOOTSTRAP_SERVERS unset - refusing to verify against an unknown cluster}"
@@ -109,6 +114,24 @@ fi
 if [ "$rc" -eq 0 ]; then
   ensure_topic "$LOG" delete "exact:-1" 1048576 no || rc=1
   check_retention_bytes "$LOG" "$LOG_BYTES" || rc=1
+fi
+
+# options.spx.gamma-zone.profile — the session's whole volume profile. Pure compact, the same shape as `current`: only the newest copy per session is kept, so the record that
+# answers "how many contracts traded between these two strikes" costs one message a session rather than one per folded bar. Deliberately NOT the corpus log's shape -- that log
+# is capped in bytes and its cap is what gives the record about 87 sessions.
+if ! grep -qxF "$PROFILE" <<<"$LIST"; then
+  echo "creating '$PROFILE' (1 partition, RF=$RF, cleanup.policy=compact, retention.ms=-1, retention.bytes=-1)"
+  if ! out=$(kt --create --if-not-exists --topic "$PROFILE" --partitions 1 --replication-factor "$RF" \
+                --config cleanup.policy=compact --config retention.ms=-1 --config retention.bytes=-1 \
+                --config max.message.bytes=1048576 --config min.insync.replicas="$MIN_ISR" 2>&1); then
+    echo "FAIL: could not create '$PROFILE':"; printf '%s\n' "$out"; rc=1
+  else
+    LIST="$LIST"$'\n'"$PROFILE"
+  fi
+fi
+if [ "$rc" -eq 0 ]; then
+  ensure_topic "$PROFILE" compact "exact:-1" 1048576 no || rc=1
+  check_retention_bytes "$PROFILE" -1 || rc=1
 fi
 
 if [ "$rc" -ne 0 ]; then
