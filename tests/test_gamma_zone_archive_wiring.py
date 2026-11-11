@@ -153,6 +153,9 @@ class WrapperBehaviour(unittest.TestCase):
         e.update(HOME=str(tmp), KAFKA_BIN=str(kbin), JAVA_HOME="",
                  ARCHIVER_SINK=str(tmp / "archiver.env"), PROBE_SINK=str(tmp / "probes"),
                  ALERT_SINK=str(tmp / "alerts"), LOG=str(tmp / "log"))
+        template = env.pop("ARCHIVE_DIR_TEMPLATE", None)
+        if template is not None:
+            env["ARCHIVE_DIR"] = template.replace("$HOME", str(tmp))
         e.update({k: str(v) for k, v in env.items()})
         proc = subprocess.run(["bash", str(oe / WRAPPER.name)], capture_output=True, text=True, env=e)
         read = lambda f: (tmp / f).read_text() if (tmp / f).exists() else ""
@@ -185,6 +188,15 @@ class WrapperBehaviour(unittest.TestCase):
         self.assertEqual("", archiver, "the archiver must not have been invoked")
         self.assertFalse(tmp_path.exists(), "and the stray directory must not have been created")
         self.assertIn("outside", alerts)
+
+    def test_a_destination_that_ESCAPES_the_approved_root_is_refused(self):
+        """"$HOME"/oe-ops/* matches $HOME/oe-ops/../../somewhere, so the prefix test alone is not
+        containment. Refused before the prefix is even considered."""
+        escaping = "$HOME/oe-ops/../../escaped"   # expanded by the wrapper's own $HOME
+        proc, archiver, _, alerts, tmp = self.run_wrapper(ARCHIVE_DIR_TEMPLATE=escaping)
+        self.assertNotEqual(0, proc.returncode)
+        self.assertEqual("", archiver)
+        self.assertIn("'..'", alerts)
 
     def test_that_refusal_can_be_MEANT_explicitly(self):
         outside = Path(tempfile.mkdtemp()) / "deliberate"
