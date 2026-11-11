@@ -342,7 +342,18 @@ class Service(unittest.TestCase):
         # run folded 0 bars and refused 0, which looked exactly like a service with no input.
         self.assertEqual("ES.v.0", env["GAMMA_ZONE_SYMBOL"])
         self.assertEqual("1m", env["GAMMA_ZONE_TIMEFRAME"])
-        self.assertEqual("500", env["GAMMA_ZONE_REVERSAL_CENTS"], "5.00 index points, on closes")
+        # The reversal threshold SCALES with the session's own close range. All three numbers
+        # are pinned: a floor alone would let a silent ceiling or fraction change the rule,
+        # and the fraction is the one measured over four live sessions (ReversalRule).
+        self.assertEqual("500", env["GAMMA_ZONE_REVERSAL_MIN_CENTS"],
+                         "floor 5.00 points: the fixed threshold this service shipped with")
+        self.assertEqual("5000", env["GAMMA_ZONE_REVERSAL_MAX_CENTS"],
+                         "ceiling 50.00 points: too coarse fails silently")
+        self.assertEqual("1250", env["GAMMA_ZONE_REVERSAL_RANGE_BPS"],
+                         "one eighth of the session close range")
+        # The constant it replaced must be GONE, not left beside the rule where an operator
+        # would read it as still in force. The service no longer reads this name at all.
+        self.assertNotIn("GAMMA_ZONE_REVERSAL_CENTS", env)
         self.assertEqual("50000", env["GAMMA_ZONE_MIN_VOLUME"])
         # 20 hours, so the seek lands before any session's first bar and the roll is OBSERVED rather
         # than assumed. A shorter lookback would publish sessionStartObserved=false all day.
