@@ -144,7 +144,11 @@ class WrapperBehaviour(unittest.TestCase):
             f"exit {archiver_rc}\n")
         (oe / "oe-archive-kafka.sh").chmod(0o755)
         (kbin / "kafka-get-offsets.sh").write_text(
-            '#!/usr/bin/env bash\nwhile [ $# -gt 0 ]; do [ "$1" = "--topic" ] && echo "$2" >> "$PROBE_SINK"; shift; done\n'
+            # One RUN line per INVOCATION, then its topics. Recording only the topics could not
+            # tell one call carrying "--topic a --topic b" from two calls carrying one each --
+            # the same hole as asserting on .split() (Codex round 2).
+            '#!/usr/bin/env bash\necho "RUN" >> "$PROBE_SINK"\n'
+            'while [ $# -gt 0 ]; do [ "$1" = "--topic" ] && echo "$2" >> "$PROBE_SINK"; shift; done\n'
             'exit ${PROBE_RC:-0}\n')
         (kbin / "kafka-get-offsets.sh").chmod(0o755)
 
@@ -190,13 +194,14 @@ class WrapperBehaviour(unittest.TestCase):
         self.assertIn("outside", alerts)
 
     def test_a_destination_that_ESCAPES_the_approved_root_is_refused(self):
-        """"$HOME"/oe-ops/* matches $HOME/oe-ops/../../somewhere, so the prefix test alone is not
-        containment. Refused before the prefix is even considered."""
+        """"$HOME"/oe-ops/* matches $HOME/oe-ops/../../somewhere, so a prefix test is not
+        containment. Both sides are canonicalised with pwd -P and compared on a directory
+        boundary, so this resolves outside the approved root and is refused."""
         escaping = "$HOME/oe-ops/../../escaped"   # expanded by the wrapper's own $HOME
         proc, archiver, _, alerts, tmp = self.run_wrapper(ARCHIVE_DIR_TEMPLATE=escaping)
         self.assertNotEqual(0, proc.returncode)
         self.assertEqual("", archiver)
-        self.assertIn("'..'", alerts)
+        self.assertIn("outside the approved root", alerts)
 
     def test_that_refusal_can_be_MEANT_explicitly(self):
         outside = Path(tempfile.mkdtemp()) / "deliberate"
@@ -213,7 +218,9 @@ class WrapperBehaviour(unittest.TestCase):
         # LINES, not .split(). The stub records one line per invocation, and a single invocation
         # carrying "a b" splits into the same two words as two invocations carrying "a" and "b" --
         # so .split() passed while the bug was still there. My own mutation caught this.
-        self.assertEqual(["options.spx.gamma-zone.log", "another.topic"], probes.splitlines())
+        self.assertEqual(["RUN", "options.spx.gamma-zone.log", "RUN", "another.topic"],
+                         probes.splitlines(),
+                         "expected two separate invocations, each probing exactly one topic")
 
     def test_an_unreachable_broker_stops_it_before_it_archives(self):
         proc, archiver, _, alerts, _ = self.run_wrapper(PROBE_RC="1")
@@ -254,9 +261,10 @@ class LaunchdAgent(unittest.TestCase):
         self.assertIn('WRAPPER="oe-archive-gamma-zone.sh"', INSTALLER.read_text())
 
     def test_it_fires_hourly_at_minute_zero(self):
-        """Minute-only is the same instant in every zone, so daylight saving and a change of the
-        host's timezone are both harmless. The checkpoint, not the schedule, decides what a run
-        reads."""
+        """Minute-only fires at the top of every LOCAL hour. It stays hourly across a daylight
+        saving switch and across a change of the host's timezone; which UTC instant each run lands
+        on moves, and nothing here depends on that. The checkpoint, not the schedule, decides what
+        a run reads."""
         self.assertEqual({"Minute": 0}, self.plist()["StartCalendarInterval"])
 
     def test_it_does_NOT_pin_ARCHIVE_DIR_so_the_local_default_applies(self):

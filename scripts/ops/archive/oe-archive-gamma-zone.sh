@@ -89,13 +89,38 @@ fi
 # AN OVERRIDDEN DESTINATION NEEDS AN EXPLICIT OPT-IN. This wrapper bypasses the archiver's NAS
 # guard on purpose, so nothing downstream would question a typo: it would create the directory,
 # archive into it, exit 0, and the corpus would accumulate somewhere nobody ever looks (Codex round
-# 1). "Local disk is allowed" does not mean "every local path is intended". The default below
-# $HOME/oe-ops needs no flag; anything else must say so.
-case "$ARCHIVE_DIR" in
-  "$DEFAULT_ARCHIVE_DIR"|"$HOME"/oe-ops/*) : ;;
+# 1). "Local disk is allowed" does not mean "every local path is intended".
+#
+# RESOLVED PATHS, NOT A PREFIX TEST. The first version matched "$HOME"/oe-ops/* lexically, which
+# accepts $HOME/oe-ops/../../anywhere; refusing a literal '..' was still not containment, because
+# any symlinked component walks straight out (Codex round 2). Both the approved root and the
+# candidate are canonicalised below -- `pwd -P` resolves every symlink -- and compared on a whole
+# directory boundary, so /x/oe-opsEVIL cannot pass as /x/oe-ops either. The policy this states is
+# "under whatever physical directory $HOME/oe-ops resolves to": if that root is itself a symlink,
+# both sides resolve through it and agree, which is the intended reading and not an escape.
+canonical_dir() {          # prints the physical path of $1; its FINAL component need not exist
+  local d="$1" base parent
+  if [ -d "$d" ]; then ( cd "$d" 2>/dev/null && pwd -P ); return; fi
+  base=${d##*/}
+  parent=${d%/*}
+  [ "$parent" = "$d" ] && parent="."
+  [ -z "$parent" ] && parent="/"
+  [ -d "$parent" ] || return 1
+  ( cd "$parent" 2>/dev/null && printf '%s/%s\n' "$(pwd -P)" "$base" )
+}
+
+approved_root="$(canonical_dir "$HOME/oe-ops")" || {
+  log "FATAL: the approved root '$HOME/oe-ops' does not exist — refusing"; exit 1; }
+candidate="$(canonical_dir "$ARCHIVE_DIR")" || {
+  log "FATAL: ARCHIVE_DIR '$ARCHIVE_DIR' has no existing parent — refusing to guess where it belongs"
+  alert "gamma-zone archive refused on $(hostname): ARCHIVE_DIR '$ARCHIVE_DIR' has no existing parent."
+  exit 1; }
+
+case "$candidate/" in
+  "$approved_root"/*) : ;;
   *) [ "${ALLOW_ARCHIVE_DIR_OVERRIDE:-false}" = "true" ] || {
-       log "FATAL: ARCHIVE_DIR '$ARCHIVE_DIR' is outside $HOME/oe-ops — set ALLOW_ARCHIVE_DIR_OVERRIDE=true to mean it"
-       alert "gamma-zone archive refused on $(hostname): ARCHIVE_DIR '$ARCHIVE_DIR' is outside the approved root."
+       log "FATAL: ARCHIVE_DIR '$ARCHIVE_DIR' resolves to '$candidate', outside '$approved_root' — set ALLOW_ARCHIVE_DIR_OVERRIDE=true to mean it"
+       alert "gamma-zone archive refused on $(hostname): ARCHIVE_DIR resolves to '$candidate', outside the approved root."
        exit 1; } ;;
 esac
 

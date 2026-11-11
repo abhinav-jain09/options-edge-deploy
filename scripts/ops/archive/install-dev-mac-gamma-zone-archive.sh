@@ -32,7 +32,16 @@ DRY=false; [ "${1:-}" = "--dry-run" ] && DRY=true
 FILES="$WRAPPER oe-archive-kafka.sh oe-topics.env oe-alert.sh"
 
 say() { echo "[install-gamma-zone-archive] $*"; }
-die() { echo "[install-gamma-zone-archive] FATAL: $*" >&2; exit 1; }
+# WRITING is set once the first file has been replaced. Every exit after that names the backup,
+# including the `... || die` checks: bash suppresses the ERR trap for a command on the left of ||,
+# and `exit` does not fire ERR at all, so the trap alone covered neither (Codex round 2).
+WRITING=false
+die() {
+  echo "[install-gamma-zone-archive] FATAL: $*" >&2
+  $WRITING && restore_hint
+  exit 1
+}
+restore_hint() { :; }   # redefined with the real paths once a backup exists
 
 # ---- verify BEFORE touching the host -------------------------------------------------------
 [ "$(uname -s)" = "Darwin" ] || die "this installer is for the dev Mac; uname says $(uname -s)"
@@ -73,19 +82,48 @@ fi
 # working copy is always one `cp` away rather than gone.
 STAMP="$(date -u '+%Y%m%dT%H%M%SZ')"
 BACKUP="$DEST/.gamma-zone-install-backup-$STAMP"
+# WHAT THIS CAN AND CANNOT UNDO. It restores the files that EXISTED before this run, named one by
+# one from the manifest rather than by a glob -- a glob over an empty backup fails, and a blanket
+# "cp $BACKUP/*" would also leave behind any file that did not exist before (Codex round 2). Files
+# this install CREATED are listed separately, because undoing those means deleting them, which this
+# script will not do on your behalf.
 restore_hint() {
   echo "[install-gamma-zone-archive] the previous copies are in $BACKUP" >&2
-  echo "[install-gamma-zone-archive] restore with:  cp $BACKUP/* $DEST/ && cp $BACKUP/$PLIST $AGENTS/ && launchctl bootstrap gui/$(id -u) $AGENTS/$PLIST" >&2
+  if [ -s "$BACKUP/.restored" ]; then
+    echo "[install-gamma-zone-archive] restore the files that existed before:" >&2
+    while read -r src dst; do echo "    cp '$src' '$dst'" >&2; done < "$BACKUP/.restored"
+    echo "    launchctl bootstrap gui/$(id -u) '$AGENTS/$PLIST'" >&2
+  else
+    echo "[install-gamma-zone-archive] nothing existed here before this run, so there is nothing to restore." >&2
+  fi
+  if [ -s "$BACKUP/.created" ]; then
+    echo "[install-gamma-zone-archive] these were CREATED by this run and have no previous version:" >&2
+    while read -r f; do echo "    $f" >&2; done < "$BACKUP/.created"
+    echo "[install-gamma-zone-archive] undoing those means deleting them; this script will not do that for you." >&2
+  fi
 }
 mkdir -p "$DEST" "$AGENTS" "$BACKUP"
+: > "$BACKUP/.restored"
+: > "$BACKUP/.created"
 for f in $FILES; do
-  [ -e "$DEST/$f" ] && cp "$DEST/$f" "$BACKUP/$f"
+  if [ -e "$DEST/$f" ]; then
+    cp "$DEST/$f" "$BACKUP/$f"
+    echo "$BACKUP/$f $DEST/$f" >> "$BACKUP/.restored"
+  else
+    echo "$DEST/$f" >> "$BACKUP/.created"
+  fi
 done
-[ -e "$AGENTS/$PLIST" ] && cp "$AGENTS/$PLIST" "$BACKUP/$PLIST"
+if [ -e "$AGENTS/$PLIST" ]; then
+  cp "$AGENTS/$PLIST" "$BACKUP/$PLIST"
+  echo "$BACKUP/$PLIST $AGENTS/$PLIST" >> "$BACKUP/.restored"
+else
+  echo "$AGENTS/$PLIST" >> "$BACKUP/.created"
+fi
 say "backed up the existing host copies to $BACKUP"
 trap 'restore_hint' ERR
 
 # ---- write ---------------------------------------------------------------------------------
+WRITING=true
 for f in $FILES; do
   cp "$SRC/$f" "$DEST/$f"
   say "placed $DEST/$f"
