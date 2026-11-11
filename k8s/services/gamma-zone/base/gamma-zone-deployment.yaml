@@ -44,6 +44,15 @@ spec:
             - secretRef:
                 name: options-edge-runtime-secrets
           env:
+            # The INPUT topic, named in full. The code's default is the bare "futures.footprint.bars"
+            # and TOPIC_PREFIX is empty on dev, so without this the service resolves a topic that
+            # does not exist and refuses to start -- which it did, on the first real rollout, with
+            # "input topic has no partitions: futures.footprint.bars". Every other reader of this
+            # tape names it the same way (k8s/base/feed-gateway-deployment.yaml, the es4 services).
+            # The local probe passed the topic as an argument, so it never exercised this
+            # resolution: a probe that bypasses settings cannot check the settings.
+            - name: KAFKA_ES_FOOTPRINT_BARS_TOPIC
+              value: es.futures.footprint.bars
             # The series the zone is measured on. The round trip is a session-scale measurement and
             # the reversal is judged on closes: a coarser bar would place the turn later than it
             # happened, a finer one would multiply the bars without adding a contract to the profile.
