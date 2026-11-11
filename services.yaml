@@ -296,6 +296,15 @@ services:
   # options.spx.strike-hold.current (3801) without a consumer group. SHADOW: it never trades and adds no decision consumer. scripts/kafka/ensure-break-line-topics.sh is the first-deploy barrier (service-deploy, dev only).
   # Plain consumer loops, no Kafka Streams, no state volume. Single replica only. No Service object; no production or es4 entry, image, topic or overlay exists.
   - { name: break-line,                   managedBy: standalone, sliceGenerated: true, envs: [dev], image: options-edge-break-line,                   deployments: [break-line-service] }
+  # gamma-zone: DEV ONLY (envs: [dev]). NEW service, phase 1. It measures the trading zone a heavy dealer-gamma strike anchors: the price at which the session's traded volume BALANCES (equal contracts
+  # either side, found by scanning the grid - the ratio is monotone in price, so there is exactly one such price), the liquidity density each side of it, the extreme of the completed leg, and how far the
+  # other side must travel to round-trip that leg's inventory. It publishes the measurement and ALL of its evidence - including the refusal tally, the balance plateau and whether the profile covers the
+  # whole session - on options.spx.gamma-zone.{current,log}, JSON on the wire like the footprint tape it is folded from, so it registers no subject and has no schema-requirements.json (governance R5).
+  # It reads ONE market topic, es.futures.footprint.bars, with NO consumer group: it assigns the partitions and seeks back 20 hours on every start, so the session fold is rebuilt rather than stored and
+  # the session's start is OBSERVED in the stream rather than assumed. SHADOW: it emits no signal, names no level to sell, never trades and adds no decision consumer. The log is delete-only and
+  # RESET-PRESERVED because it is the corpus the calibration will come from. scripts/kafka/ensure-gamma-zone-topics.sh is the first-deploy barrier (service-deploy, dev only). One JVM, no Kafka Streams,
+  # no state volume, no HTTP server and so no probes. Single replica only. No Service object; no production or es4 entry, image, topic or overlay exists.
+  - { name: gamma-zone,                   managedBy: standalone, sliceGenerated: true, envs: [dev], image: options-edge-gamma-zone,                    deployments: [gamma-zone-service] }
   # stock-gex: SPX-500 single-stock GEX (Databento equity options; NO Kafka). Its image builds in the
   # options-edge-databento-feed repo (Dockerfile.stockgex), like databento-sr3-feed — hence buildJob.
   # DEV-FIRST/on-demand: prod overlay holds it at replicas:0 until the nightly OI-index builder exists.
