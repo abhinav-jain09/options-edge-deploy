@@ -1,0 +1,13 @@
+# SERVICE SLICE — gamma-zone (the trading zone a heavy dealer-gamma strike anchors: the balance
+# price, the completed leg's stretch, and the projected edge each way) on DEV. Owns ONLY this
+# service's Deployment.
+#
+# DEV-ONLY: referenced from k8s/overlays/dev (NOT k8s/base, NOT production or experiment);
+# services.yaml declares envs: [dev]. One JVM, one assigned consumer (no consumer group) and one
+# producer; no Kafka Streams and no state volume — the session profile is a pure fold of the
+# session's bars, so a restart seeks back and re-folds. No Service object and no probes: the service
+# serves no HTTP. No ConfigMap, Secret or PVC of its own.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - gamma-zone-deployment.yaml

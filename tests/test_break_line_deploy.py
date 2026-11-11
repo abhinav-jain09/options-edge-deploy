@@ -298,7 +298,14 @@ class Registration(unittest.TestCase):
     def test_service_deploy_offers_it_and_runs_the_shared_barrier_stage_without_a_new_stage(self):
         j = read("Jenkinsfile.service-deploy")
         self.assertIn("'strike-hold', 'break-line',", j)
-        self.assertIn("'strike-hold', 'break-line'].contains(params.SERVICE) && !params.DEPLOY_DRY_RUN", j)
+        # The arm names break-line and is gated. Asserted by MEMBERSHIP rather than by pinning the
+        # whole list's text: the previous exact pin broke when gamma-zone joined the arm on
+        # 2026-11-11, which is a service being added, not this service losing its gate.
+        arm = re.search(r"^.*\['line-acceptance'.*\]\.contains\(params\.SERVICE\).*$", j, re.M).group(0)
+        self.assertIn("'break-line'", arm)
+        self.assertIn("!params.DEPLOY_DRY_RUN", arm)
+        self.assertIn("PERMITTED_SHA_GUARD == 'PASSED'", arm)
+        self.assertIn("DEPLOY_WORKSPACE_PERMITTED == 'PASSED'", arm)
         self.assertIn("break-line) scripts/kafka/ensure-break-line-topics.sh ;;", j)
         self.assertEqual(j.count("Verify break-line topics"), 0, "no separate stage: the pipeline's CPS method is at the JVM limit")
 

@@ -84,7 +84,7 @@ AMT_ORDER_BRIDGE_IMAGE
 BROKER_EXECUTION_IMAGE
 EOF
   fi
-  # approach-monitor, oi-next-publication, vol-state, zn-gex, line-acceptance, es-amt, es-liquidity-wall, es-liquidity-engine, liquidity-validator, strike-hold and break-line are DEV-ONLY (services.yaml envs:
+  # approach-monitor, oi-next-publication, vol-state, zn-gex, line-acceptance, es-amt, es-liquidity-wall, es-liquidity-engine, liquidity-validator, strike-hold, break-line and gamma-zone are DEV-ONLY (services.yaml envs:
   # [dev]); production and experiment never render them, so requiring their lock entries there
   # would fail on an image that is never rendered.
   if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
@@ -102,6 +102,7 @@ ES_LIQUIDITY_ENGINE_IMAGE
 LIQUIDITY_VALIDATOR_IMAGE
 STRIKE_HOLD_IMAGE
 BREAK_LINE_IMAGE
+GAMMA_ZONE_IMAGE
 EOF
   fi
 }

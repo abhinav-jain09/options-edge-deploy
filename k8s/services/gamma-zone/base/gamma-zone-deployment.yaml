@@ -1,0 +1,87 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gamma-zone-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: gamma-zone-service
+    app.kubernetes.io/component: gamma-zone-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  # DEV ONLY (services.yaml envs: [dev]). Measures the trading zone a heavy dealer-gamma strike
+  # anchors: the price at which the session's traded volume balances, the extreme of the completed
+  # leg, and how far the other side must travel to round-trip that inventory. Publishes the
+  # measurement and its evidence on options.spx.gamma-zone.{current,log}.
+  # SHADOW: it never trades, emits no signal and adds no decision consumer. It reads ONE market
+  # topic, es.futures.footprint.bars, and writes two of its own.
+  # SINGLE replica (strategy Recreate): the log is a totally ordered record of what the service
+  # said and when, and both outputs are keyed by session, so one writer owns them. Recreate fences
+  # the predecessor before the new pod starts rather than running two writers side by side.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: gamma-zone-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: gamma-zone-service
+        app.kubernetes.io/component: gamma-zone-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: gamma-zone
+          # Base-registry name, like every other base manifest: the dev overlays (monolith AND the
+          # standalone slice) remap it to host.docker.internal:5001 via `images:`, and apply.sh's
+          # digest-pin loop keys its rewrite on exactly this `<base registry>/<image>` name.
+          image: 192.168.100.252:5000/options-edge-gamma-zone:dev
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: options-edge-config              # the shared platform config (broker and registry addresses)
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            # The series the zone is measured on. The round trip is a session-scale measurement and
+            # the reversal is judged on closes: a coarser bar would place the turn later than it
+            # happened, a finer one would multiply the bars without adding a contract to the profile.
+            # "ES.v.0", not "ES": the footprint producer stamps a VERSIONED contract identity, read
+            # off the live dev tape rather than assumed. A symbol that names no series makes this
+            # service fold nothing AND refuse nothing, which is indistinguishable from no input at
+            # all -- so the emission publishes every series the tape carries beside this value.
+            - name: GAMMA_ZONE_SYMBOL
+              value: ES.v.0
+            - name: GAMMA_ZONE_TIMEFRAME
+              value: 1m
+            # 20 hours, so the seek on every start lands BEFORE any session's first bar and the
+            # session roll is OBSERVED in the stream. Only an observed roll proves the profile covers
+            # the whole session; without it the emission publishes sessionStartObserved=false rather
+            # than presenting a partial profile as the session's.
+            - name: GAMMA_ZONE_LOOKBACK_MS
+              value: "72000000"
+            # Contracts before a balance price is reported at all. Below roughly this the profile is
+            # a few hundred prints and its balance moves points per bar.
+            - name: GAMMA_ZONE_MIN_VOLUME
+              value: "50000"
+            # 5.00 index points: the retrace, on CLOSES, that confirms a leg is finished. On
+            # 2026-11-10 the two legs that mattered were 65 and 36 points and the largest move that
+            # was NOT a turn was about 4 points.
+            - name: GAMMA_ZONE_REVERSAL_CENTS
+              value: "500"
+            # With nothing folded the loop still publishes this often, so a service that is refusing
+            # every bar shows its refusal tally instead of going quiet. Silence reads as health.
+            - name: GAMMA_ZONE_HEARTBEAT_MS
+              value: "60000"
+            - name: JAVA_TOOL_OPTIONS
+              value: -Xmx512m -XX:+UseSerialGC
+          resources:
+            # No HTTP server and so no probes: one consumer loop and one producer. The pod's health
+            # is read from its own emission — barsFolded, the refusal tally and sessionStartObserved
+            # on options.spx.gamma-zone.current — which says more than a liveness endpoint would.
+            requests:
+              cpu: 100m
+              memory: 384Mi
+            limits:
+              memory: 768Mi

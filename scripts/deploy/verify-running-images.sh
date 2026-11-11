@@ -93,6 +93,7 @@ IMAGE_MAP = {
     ("es-liquidity-engine-service", "es-liquidity-engine"): "ES_LIQUIDITY_ENGINE_IMAGE",
     ("strike-hold-service", "strike-hold"): "STRIKE_HOLD_IMAGE",
     ("break-line-service", "break-line"): "BREAK_LINE_IMAGE",
+    ("gamma-zone-service", "gamma-zone"): "GAMMA_ZONE_IMAGE",
     ("liquidity-validator-service", "liquidity-validator"): "LIQUIDITY_VALIDATOR_IMAGE",
     ("drop-classifier-ref-service", "drop-classifier-ref"): "DROP_CLASSIFIER_IMAGE",
     ("reversal-postgres-writer", "reversal-postgres-writer"): "REVERSAL_POSTGRES_WRITER_IMAGE",

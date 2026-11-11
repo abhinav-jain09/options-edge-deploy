@@ -69,7 +69,7 @@ STOCK_GEX_IMAGE=$registry/options-edge-stock-gex:$image_tag
 OI_SHADOW_IMAGE=$registry/options-edge-oi-shadow:$image_tag
 REVERSAL_POSTGRES_WRITER_IMAGE=$registry/options-edge-reversal-postgres-writer:$image_tag
 EOF
-            # approach-monitor, oi-next-publication, vol-state, zn-gex, line-acceptance, es-amt, es-liquidity-wall, es-liquidity-engine, liquidity-validator, strike-hold and break-line are DEV-ONLY (services.yaml
+            # approach-monitor, oi-next-publication, vol-state, zn-gex, line-acceptance, es-amt, es-liquidity-wall, es-liquidity-engine, liquidity-validator, strike-hold, break-line and gamma-zone are DEV-ONLY (services.yaml
             # envs: [dev]); the production and experiment overlays never render them (approach-monitor
             # is deleted there; the others are referenced only from the dev overlay). Emitting their vars
             # for dev and never for production is also what marks them dev-only to
@@ -90,6 +90,7 @@ ES_LIQUIDITY_ENGINE_IMAGE=$registry/options-edge-es-liquidity-engine:$image_tag
 STRIKE_HOLD_IMAGE=$registry/options-edge-strike-hold:$image_tag
 LIQUIDITY_VALIDATOR_IMAGE=$registry/options-edge-liquidity-validator:$image_tag
 BREAK_LINE_IMAGE=$registry/options-edge-break-line:$image_tag
+GAMMA_ZONE_IMAGE=$registry/options-edge-gamma-zone:$image_tag
 EOF
             fi
             # short-premium-agent renders in dev+production (a standalone service that runs on prod too),
@@ -175,7 +176,7 @@ DROP_CLASSIFIER_IMAGE=$DROP_CLASSIFIER_IMAGE
 OI_SHADOW_IMAGE=$OI_SHADOW_IMAGE
 REVERSAL_POSTGRES_WRITER_IMAGE=$REVERSAL_POSTGRES_WRITER_IMAGE
 EOF
-            # approach-monitor, oi-next-publication, vol-state, zn-gex, line-acceptance, es-amt, es-liquidity-wall, es-liquidity-engine, liquidity-validator, strike-hold and break-line are dev-only; on the
+            # approach-monitor, oi-next-publication, vol-state, zn-gex, line-acceptance, es-amt, es-liquidity-wall, es-liquidity-engine, liquidity-validator, strike-hold, break-line and gamma-zone are dev-only; on the
             # promoted path emit them for dev alone.
             if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
               cat >>"$JENKINS_WORK_DIR/options-edge-images.env" <<EOF
@@ -192,6 +193,7 @@ ES_LIQUIDITY_ENGINE_IMAGE=${ES_LIQUIDITY_ENGINE_IMAGE:-$registry/options-edge-es
 STRIKE_HOLD_IMAGE=${STRIKE_HOLD_IMAGE:-$registry/options-edge-strike-hold:dev}
 LIQUIDITY_VALIDATOR_IMAGE=${LIQUIDITY_VALIDATOR_IMAGE:-$registry/options-edge-liquidity-validator:dev}
 BREAK_LINE_IMAGE=${BREAK_LINE_IMAGE:-$registry/options-edge-break-line:dev}
+GAMMA_ZONE_IMAGE=${GAMMA_ZONE_IMAGE:-$registry/options-edge-gamma-zone:dev}
 EOF
             fi
             # short-premium-agent renders in dev+production; on the promoted/branch-2 path (prod) its
