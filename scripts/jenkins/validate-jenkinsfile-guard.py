@@ -1741,9 +1741,15 @@ def downstream_flag(job: str) -> str:
 # validate, and the deploy gate then refuses EVERY processing image build. That is not a theory: this
 # copy was never updated when buildBreakLineImages was added on 2026-11-08, and BUILD_IMAGES=true was
 # refused for three days with a message about the call SEQUENCE that named neither the method nor the
-# divergence. tests/test_processing_image_group_validator.py now pins this list against the groups
-# the processing pipeline actually defines, and it is CI-REQUIRED, so the next addition cannot go
-# un-mirrored silently.
+# divergence.
+#
+# tests/test_processing_image_group_validator.py (CI-REQUIRED since 2026-11-11, dormant before it)
+# pins this list, which catches an accidental local edit and makes a deliberate one a reviewed diff.
+# It does NOT prove the two repos agree: the processing checkout is not available to this repo's CI,
+# so processing can add a group and update its own pin while this list stays behind, and the
+# divergence still surfaces only at deploy time when this validator judges the fetched downstream
+# Jenkinsfile. Closing that properly needs one canonical versioned group contract consumed by both
+# repos, or a CI check that fetches and parses the real processing Jenkinsfile. Neither exists yet.
 IMAGE_GROUP_METHODS = (
     "buildCoreImages", "buildFlowImages", "buildStructureImages",
     "buildResearchImages", "buildExecutionImages", "buildFeedImages", "buildScoringImages",

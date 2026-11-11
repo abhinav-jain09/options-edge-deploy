@@ -101,32 +101,57 @@ class ProcessingImageGroupValidatorTest(unittest.TestCase):
             entry = guard.parse_manifest(str(manifest))["Jenkinsfile"]
             return guard.check_in_scope(str(pipeline), entry, digest, str(ROOT))
 
-    def test_this_copy_knows_every_group_the_processing_pipeline_defines(self):
-        """The divergence that broke the gate for three days, pinned.
+    def test_this_copys_group_list_is_the_reviewed_one(self):
+        """A LOCAL expected-contract pin. It does NOT prove the two repos agree.
 
-        This repo's validator judges the PROCESSING repo's Jenkinsfile, so a group defined there and
-        unknown here fails the WHOLE file and refuses every image build. The processing checkout is
-        not available in CI, so the list is pinned here and the processing repo's own
-        tests/test_processing_image_groups.py pins the same names on its side: a new group has to be
-        added in both, and whichever side is forgotten goes red.
+        This repo's validator judges the PROCESSING repo's Jenkinsfile, and a group defined there
+        and unknown here fails the WHOLE file -- which refused every processing image build for
+        three days from 2026-11-08. This pin catches an accidental local edit to the list, and
+        makes a deliberate one a reviewed diff.
+
+        What it CANNOT do, and an earlier version of this comment wrongly claimed it could: prove
+        the lists in the two repos match. Processing can add a group and update its own pin while
+        this repo's CI stays green, because the processing checkout is not available here. The
+        divergence still surfaces only when this caller validates that downstream Jenkinsfile, at
+        deploy time. Closing that properly needs one canonical versioned group contract consumed by
+        both repos, or a CI check that fetches and parses the real processing Jenkinsfile. Neither
+        exists yet, and this pin is not a substitute for either.
         """
         self.assertEqual(
             ("buildCoreImages", "buildFlowImages", "buildStructureImages", "buildResearchImages",
              "buildExecutionImages", "buildFeedImages", "buildScoringImages", "buildBreakLineImages",
              "buildGammaZoneImages"),
             guard.IMAGE_GROUP_METHODS,
-            "this copy's image-group list has drifted from the processing pipeline's. A group the "
-            "processing Jenkinsfile defines but this list does not know makes the whole file fail to "
-            "validate, and the deploy gate then refuses every processing image build.")
+            "this copy's image-group list changed. It must match the groups the processing "
+            "Jenkinsfile defines, or the deploy gate refuses every processing image build.")
 
-    def test_a_group_this_copy_does_not_know_is_refused_with_a_sequence_error(self):
-        """Why the drift was hard to see: the message does not name the unknown method."""
-        source = grouped_jenkinsfile().replace("buildCoreImages", "buildSomethingNobodyDeclared")
-        _view, _map, problems = guard.expand_image_groups(source)
-        # It fails -- which is the safe direction -- but the reason it gives is about the call
-        # sequence, not about an unrecognised group. The assertion above is what actually catches
-        # the drift; this one records WHY a reader of the failure could not tell.
-        self.assertTrue(problems, "an unknown group must not validate")
+    def test_a_group_this_copy_does_not_know_fails_the_WHOLE_file_on_the_call_sequence(self):
+        """The real drift shape, and the exact diagnostic it produces.
+
+        Not a renamed existing group -- that is a different failure. The shape that actually
+        happened is: the processing Jenkinsfile keeps every group this copy knows AND adds one more,
+        defined and called like the rest. The extra call then sits among the recognised ones, and
+        the validator refuses the file for the call SEQUENCE -- naming neither the unknown method
+        nor the divergence, which is why the three-day outage was read as a call-site mistake.
+        """
+        source = grouped_jenkinsfile()
+        extra_def = """def buildSomethingThisCopyNeverHeardOfImages() {
+  buildImage('options-edge-extra', 'Dockerfile', '.', 'EXTRA_IMAGE', false) {
+""" + VERIFY + """    sh 'docker build -t app .'
+  }
+}
+"""
+        source = extra_def + source
+        last_known = f"              build{guard.IMAGE_GROUP_METHODS[-1][len('build'):-len('Images')]}Images()"
+        assert last_known in source, last_known
+        source = source.replace(
+            last_known, last_known + "\n              buildSomethingThisCopyNeverHeardOfImages()", 1)
+
+        _view, _mapping, problems = guard.expand_image_groups(source)
+        self.assertEqual(
+            ["image-group helpers: calls must form a consecutive unconditional sequence"], problems,
+            "the drift must fail -- and this is the exact message it fails with, which names "
+            "neither the unknown method nor the divergence")
 
     def test_groups_are_expanded_and_every_effect_remains_guarded(self):
         source = grouped_jenkinsfile()
