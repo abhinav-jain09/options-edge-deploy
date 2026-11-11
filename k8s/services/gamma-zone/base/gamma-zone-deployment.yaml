@@ -11,9 +11,12 @@ spec:
   # DEV ONLY (services.yaml envs: [dev]). Measures the trading zone a heavy dealer-gamma strike
   # anchors: the price at which the session's traded volume balances, the extreme of the completed
   # leg, and how far the other side must travel to round-trip that inventory. Publishes the
-  # measurement and its evidence on options.spx.gamma-zone.{current,log}.
+  # measurement and its evidence on options.spx.gamma-zone.{current,log,profile}.
   # SHADOW: it never trades, emits no signal and adds no decision consumer. It reads ONE market
-  # topic, es.futures.footprint.bars, and writes two of its own.
+  # topic, es.futures.footprint.bars, and writes THREE of its own: .current (the newest measurement
+  # per session), .log (every emission, the corpus) and .profile (the session's whole volume profile,
+  # which is what answers "how many contracts traded between these two strikes" -- the measurement
+  # carries the ratio curve for +/-30 points and a level count, a different question).
   # SINGLE replica (strategy Recreate): the log is a totally ordered record of what the service
   # said and when, and both outputs are keyed by session, so one writer owns them. Recreate fences
   # the predecessor before the new pod starts rather than running two writers side by side.

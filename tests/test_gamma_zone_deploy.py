@@ -35,7 +35,14 @@ BASE = f"k8s/services/{SVC}/base/{SVC}-deployment.yaml"
 SLICE = f"k8s/services/{SVC}/overlays/dev/manifest.yaml"
 CURRENT = "options.spx.gamma-zone.current"
 LOG = "options.spx.gamma-zone.log"
-TOPICS = (CURRENT, LOG)
+# The session's whole volume profile, so "how many contracts traded between these two strikes" can be
+# answered at all. Shaped exactly like CURRENT -- pure compact, -1/-1, one partition -- and
+# deliberately NOT like the corpus log, whose byte cap is what gives the record about 87 sessions.
+PROFILE = "options.spx.gamma-zone.profile"
+TOPICS = (CURRENT, LOG, PROFILE)
+# The two that the next folded bar rewrites. Everything true of CURRENT's reset class is true of
+# PROFILE's, and this pair is what the rebuildable assertions iterate.
+REBUILDABLE = (CURRENT, PROFILE)
 LOG_BYTES = "1073741824"          # 1 GiB; the arithmetic is in the topics.env block
 INPUT_TOPIC = "es.futures.footprint.bars"
 
@@ -81,7 +88,9 @@ def run_barrier(topics, environment="dev", extra_env=None):
 
 
 def right_topics():
-    return {CURRENT: shaped("compact", "-1", "-1"), LOG: shaped("delete", "-1", LOG_BYTES)}
+    return {CURRENT: shaped("compact", "-1", "-1"),
+            LOG: shaped("delete", "-1", LOG_BYTES),
+            PROFILE: shaped("compact", "-1", "-1")}
 
 
 class Topics(unittest.TestCase):
@@ -147,6 +156,42 @@ class Topics(unittest.TestCase):
         bytes_ = dict(x.split("=", 1) for x in d["OPTIONS_EDGE_TOPIC_RETENTION_BYTES_OVERRIDES"] if "=" in x)
         self.assertEqual(bytes_[LOG], LOG_BYTES)
 
+    def test_the_PROFILE_is_pure_compact_like_current_and_NOT_like_the_log(self):
+        """It is a latest-value-per-session view, not a corpus. Giving it the log's shape would put
+        a record per folded bar into a byte-capped topic for no reason; giving the log this shape
+        would discard the history the service exists to accumulate."""
+        d = declarations(self.VARS)
+        self.assertIn(PROFILE, d["OPTIONS_EDGE_PURE_COMPACT_TOPICS"])
+        self.assertIn(f"{PROFILE}=-1", d["OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES"])
+        self.assertIn(f"{PROFILE}=-1", d["OPTIONS_EDGE_TOPIC_RETENTION_BYTES_OVERRIDES"])
+        # No byte cap: a compacted latest-value topic has one record per session to keep.
+        self.assertNotIn(f"{PROFILE}={LOG_BYTES}", d["OPTIONS_EDGE_TOPIC_RETENTION_BYTES_OVERRIDES"])
+        # RESOLVED through the repo's own resolver, not merely present in a list. Membership of
+        # PURE_COMPACT alone would still pass if the topic also joined OPTIONS_EDGE_COMPACTED_TOPICS
+        # and resolved to "compact,delete" -- which would age the profile's own records out, so the
+        # strike-range query would silently start answering about part of a session (Codex).
+        policy, retention = self.resolved_policy(PROFILE)
+        self.assertEqual("compact", policy, "pure compact, never compact,delete")
+        self.assertEqual("-1", retention)
+        self.assertNotIn(PROFILE, d["OPTIONS_EDGE_COMPACTED_TOPICS"])
+
+    def test_the_PROFILE_is_preserved_by_NOTHING_because_it_is_rebuilt(self):
+        """Deliberately not in any preservation list. The service re-folds the whole session from a
+        20-hour lookback on every start, so the next folded bar rewrites it. Preserving it would
+        pin a stale copy of something that regenerates in seconds."""
+        d = declarations(self.VARS + ["OPTIONS_EDGE_NEVER_RECREATE_TOPICS",
+                                      "OPTIONS_EDGE_RESET_PRESERVED_TOPICS",
+                                      "OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS",
+                                      "OPTIONS_EDGE_RESET_REBUILDABLE_TOPICS"])
+        self.assertIn(PROFILE, d["OPTIONS_EDGE_RESET_REBUILDABLE_TOPICS"])
+        for preserved in ("OPTIONS_EDGE_NEVER_RECREATE_TOPICS", "OPTIONS_EDGE_RESET_PRESERVED_TOPICS",
+                          "OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS"):
+            self.assertNotIn(PROFILE, d[preserved], preserved)
+        # The FOURTH preservation mechanism, which is not a topics.env list at all: the pre-market
+        # reset matches on a regex in its own script. Checking only the three lists would have left
+        # it unexamined (Codex), and "preserved by nothing" has to mean all four.
+        self.assertNotIn(PROFILE, read("scripts/ops/premarket-reset.sh"))
+
     def test_the_current_topic_is_pure_compact(self):
         d = declarations(self.VARS)
         self.assertIn(CURRENT, d["OPTIONS_EDGE_PURE_COMPACT_TOPICS"])
@@ -194,12 +239,16 @@ class Topics(unittest.TestCase):
 
 
 class Barrier(unittest.TestCase):
-    def test_it_creates_both_topics_at_the_declared_shapes_on_an_empty_cluster(self):
+    def test_it_creates_ALL_THREE_topics_at_the_declared_shapes_on_an_empty_cluster(self):
         rc, out, _calls, state = run_barrier({})
         self.assertEqual(0, rc, out)
         self.assertEqual(shaped("compact", "-1", "-1")["configs"], state["topics"][CURRENT]["configs"])
         self.assertEqual(shaped("delete", "-1", LOG_BYTES)["configs"], state["topics"][LOG]["configs"])
+        # The profile takes CURRENT's shape, not the log's: a byte cap on a latest-value-per-session
+        # topic would be meaningless, and the log's shape would make it a second corpus.
+        self.assertEqual(shaped("compact", "-1", "-1")["configs"], state["topics"][PROFILE]["configs"])
         self.assertEqual(1, state["topics"][LOG]["partitions"])
+        self.assertEqual(1, state["topics"][PROFILE]["partitions"])
 
     def test_it_passes_and_alters_nothing_when_both_topics_are_already_right(self):
         before = right_topics()
@@ -207,6 +256,24 @@ class Barrier(unittest.TestCase):
         self.assertEqual(0, rc, out)
         self.assertEqual(before, state["topics"], "an existing correct topic is never altered")
         self.assertFalse([c for c in calls if "--alter" in c or "--create" in c], calls)
+
+    def test_it_REFUSES_a_profile_it_finds_on_delete(self):
+        """A profile left on delete would age its own records out, so the strike-range query would
+        silently start answering about part of a session."""
+        topics = right_topics()
+        topics[PROFILE] = shaped("delete", "-1", "-1")
+        rc, out, calls, _state = run_barrier(topics)
+        self.assertNotEqual(0, rc, out)
+        self.assertFalse([c for c in calls if "--alter" in c], "it refuses; it never repairs")
+
+    def test_it_REFUSES_a_renamed_profile_topic(self):
+        """The barrier only ever ensures the DECLARED name. An override would create a topic with
+        gamma-zone's shape under a name topics.env does not declare."""
+        rc, out, calls, _state = run_barrier(right_topics(),
+                                             extra_env={"KAFKA_GAMMA_ZONE_PROFILE_TOPIC": "somewhere.else"})
+        self.assertNotEqual(0, rc, out)
+        self.assertIn("somewhere.else", out)
+        self.assertFalse([c for c in calls if "--create" in c or "--alter" in c], calls)
 
     def test_it_REFUSES_a_log_it_finds_compacted(self):
         topics = right_topics()
