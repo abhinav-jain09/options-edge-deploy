@@ -360,37 +360,63 @@ class Service(unittest.TestCase):
         self.assertEqual("72000000", env["GAMMA_ZONE_LOOKBACK_MS"])
         self.assertEqual("60000", env["GAMMA_ZONE_HEARTBEAT_MS"])
 
-    def test_the_replaced_constant_is_not_injected_through_envFrom_either(self):
-        """The pod's own env is only half of what reaches the container.
+    # This test file names every one of these variables, so a search that counted its own
+    # literals would be answering a question about itself. Both searches below exclude it.
+    SELF = "tests/test_gamma_zone_deploy.py"
 
-        This Deployment imports options-edge-config and options-edge-runtime-secrets through
-        envFrom, and either could inject GAMMA_ZONE_REVERSAL_CENTS behind the manifest's back --
-        so asserting its absence from container.env alone claims more than it checks (Codex).
-        The shared config is in this repo and can be asserted on. The runtime SECRET is not, and
-        this test says so rather than implying a coverage it does not have: a reversal threshold
-        is not a credential, nothing has ever put one there, and a secret that did would be a
-        finding in its own right.
+    def _tracked_files_naming(self, token):
+        found = subprocess.run(["git", "grep", "-l", token, "--", ".", ":!" + self.SELF],
+                               cwd=str(ROOT), capture_output=True, text=True)
+        self.assertIn(found.returncode, (0, 1), found.stderr)
+        return sorted(line for line in found.stdout.splitlines() if line.strip())
+
+    def test_the_retired_reversal_variable_is_nowhere_in_THIS_REPO_at_all(self):
+        """The retired name must not reach the pod by ANY path this repo controls.
+
+        An earlier version of this test walked k8s/infra for the literal and pinned the two
+        envFrom source names, and called that "not injected through envFrom". It was not: this
+        repo also GENERATES options-edge-runtime-secrets (Jenkinsfile, Jenkinsfile.secrets-sync),
+        so the name could have been added there while the test stayed green, and a literal walk of
+        one directory is neither as broad as the claim nor as precise as a rendered-ConfigMap
+        assertion (Codex round 2).
+
+        A tracked-file search is strictly stronger than both: it covers k8s/infra, every overlay,
+        both secret generators, every script and every manifest at once. Its one hole is a key
+        assembled at runtime from pieces, which nothing in this repo does to any env name -- said
+        here rather than left for someone to assume away.
+        """
+        self.assertEqual([], self._tracked_files_naming("GAMMA_ZONE_REVERSAL_CENTS"),
+                         "the retired GAMMA_ZONE_REVERSAL_CENTS is still named in: "
+                         + ", ".join(self._tracked_files_naming("GAMMA_ZONE_REVERSAL_CENTS")))
+
+    def test_the_three_that_replaced_it_are_really_ON_the_pod_not_just_in_this_test(self):
+        """Otherwise the absence test above could be passed by deleting the rule entirely.
+
+        A search excluding this file is the point: an earlier draft counted this test's own
+        literals as evidence, so renaming a variable throughout the manifests left it green --
+        it was asking whether the test mentioned the name, not whether the deployment did.
+        """
+        for name in ("GAMMA_ZONE_REVERSAL_MIN_CENTS", "GAMMA_ZONE_REVERSAL_MAX_CENTS",
+                     "GAMMA_ZONE_REVERSAL_RANGE_BPS"):
+            files = self._tracked_files_naming(name)
+            self.assertIn(BASE, files, name + " is not in the base Deployment")
+            self.assertIn(SLICE, files, name + " is not in the generated dev slice")
+
+    def test_the_envFrom_sources_are_pinned_so_a_NEW_one_is_a_reviewed_diff(self):
+        """What this does and does not establish.
+
+        It does NOT prove the retired variable is absent -- the test above does that. It pins the
+        two objects this Deployment imports, so adding a third becomes a diff somebody has to
+        justify rather than a silent widening of what reaches the container.
+
+        Note also that an injected key could not have OVERRIDDEN an explicit container.env entry
+        of the same name: Kubernetes gives container.env precedence over envFrom. The risk is
+        injection where the pod names nothing, which is exactly the retired variable's case.
         """
         container, = yaml.safe_load(read(BASE))["spec"]["template"]["spec"]["containers"]
         sources = [e.get("configMapRef", e.get("secretRef", {})).get("name")
                    for e in container.get("envFrom", [])]
-        self.assertEqual(["options-edge-config", "options-edge-runtime-secrets"], sources,
-                         "a NEW envFrom source would be unchecked ground; add it here first")
-        infra = os.path.join(ROOT, "k8s", "infra")
-        self.assertTrue(os.path.isdir(infra), infra)
-        offenders = []
-        for folder, _, names in os.walk(infra):
-            for name in names:
-                if not name.endswith((".yaml", ".yml")):
-                    continue
-                path = os.path.join(folder, name)
-                with open(path, encoding="utf-8") as handle:
-                    if "GAMMA_ZONE" in handle.read():
-                        offenders.append(os.path.relpath(path, ROOT))
-        self.assertEqual([], offenders,
-                         "the shared platform config must declare no GAMMA_ZONE key at all: "
-                         "one there would override the pod's own env and be invisible on the "
-                         "Deployment, found in " + ", ".join(offenders))
+        self.assertEqual(["options-edge-config", "options-edge-runtime-secrets"], sources)
 
     def test_no_cpu_limit_so_the_fold_is_never_throttled(self):
         container, = yaml.safe_load(read(BASE))["spec"]["template"]["spec"]["containers"]
