@@ -151,7 +151,7 @@ form; that is deliberate):
             directory), every nested checkout lying inside it; each verify with the SAME permission variable its checkout's
             guard bound. Consecutive verify steps directly before the effect form its chain; anything else between them
             breaks coverage.
-     Seven bounded image-group methods may be expanded at their one direct Build Images call site before these checks.
+     The bounded image-group methods in IMAGE_GROUP_METHODS may be expanded at their one direct Build Images call site before these checks.
      Admission is fail-closed: unannotated no-argument top-level methods, only 1..12 literal buildImage calls each,
      canonical call order and stage/withEnv placement, no aliases or indirect dispatch. Their complete bodies are checked;
      a helper name alone exempts nothing. Source-line diagnostics are mapped back to the original method definitions.
@@ -1735,9 +1735,19 @@ def downstream_flag(job: str) -> str:
 
 
 # ----------------------------------------------------------------------------------------- the rules
+# KEPT IN STEP WITH THE PROCESSING REPO'S COPY. This list is the allow-list of bounded methods the
+# expander may inline, and it is the CALLER'S judgement of the callee's Jenkinsfile -- so a group the
+# processing pipeline defines but this list does not know makes the whole Jenkinsfile fail to
+# validate, and the deploy gate then refuses EVERY processing image build. That is not a theory: this
+# copy was never updated when buildBreakLineImages was added on 2026-11-08, and BUILD_IMAGES=true was
+# refused for three days with a message about the call SEQUENCE that named neither the method nor the
+# divergence. tests/test_processing_image_group_validator.py now pins this list against the groups
+# the processing pipeline actually defines, and it is CI-REQUIRED, so the next addition cannot go
+# un-mirrored silently.
 IMAGE_GROUP_METHODS = (
     "buildCoreImages", "buildFlowImages", "buildStructureImages",
     "buildResearchImages", "buildExecutionImages", "buildFeedImages", "buildScoringImages",
+    "buildBreakLineImages", "buildGammaZoneImages",
 )
 
 
