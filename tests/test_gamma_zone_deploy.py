@@ -314,6 +314,26 @@ class Service(unittest.TestCase):
         for key in ("ports", "readinessProbe", "livenessProbe"):
             self.assertNotIn(key, container, f"{key} would promise an endpoint this service has not got")
 
+    def test_the_input_topic_is_named_in_full_on_the_pod(self):
+        """The topic the whole service reads, which its code default does NOT resolve to.
+
+        The code default is the bare "futures.footprint.bars" and TOPIC_PREFIX is empty on dev, so
+        without this the service resolves a topic that does not exist. It did exactly that on the
+        first real rollout and refused to start: "input topic has no partitions:
+        futures.footprint.bars". It must match the topic the manifest binding is about, and the name
+        every other reader of this tape uses.
+        """
+        container, = yaml.safe_load(read(BASE))["spec"]["template"]["spec"]["containers"]
+        env = {e["name"]: e["value"] for e in container["env"]}
+        self.assertEqual("es.futures.footprint.bars", env["KAFKA_ES_FOOTPRINT_BARS_TOPIC"])
+        # the same name the feed-gateway base manifest uses, so there is one spelling in the fleet
+        self.assertIn("value: es.futures.footprint.bars", read("k8s/base/feed-gateway-deployment.yaml"))
+        # and it is the topic the manifest subject this service declares is carried on
+        entry = next(e for e in json.loads(read("schema-manifest/manifest.json"))["entries"]
+                     if e.get("subject") == "es.futures.footprint.bars-value")
+        self.assertIn("es.futures.footprint.bars",
+                      [t["name"] for t in entry.get("topics", [])])
+
     def test_the_measured_knobs_are_on_the_pod_with_their_measured_values(self):
         container, = yaml.safe_load(read(BASE))["spec"]["template"]["spec"]["containers"]
         env = {e["name"]: e["value"] for e in container["env"]}
