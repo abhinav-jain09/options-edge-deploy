@@ -23,6 +23,21 @@ if [ "${ENVIRONMENT:-}" != "dev" ]; then
   echo "FAIL: ensure-gamma-zone-topics.sh is DEV ONLY and fails closed: ENVIRONMENT must be exactly 'dev' (got '${ENVIRONMENT:-<unset>}'); gamma-zone has no production topics - refusing."
   exit 1
 fi
+# The DECLARED names, not overridable. An override would let this script create an arbitrary topic
+# with gamma-zone's shape, so the barrier would no longer match topics.env in both directions -- and
+# the name it creates is the one nothing else preserves: reset, dev-clean, premarket and
+# never-recreate all list these two literals. A renamed log would be swept by every one of those
+# paths while looking, from inside this script, perfectly correct.
+CURRENT="options.spx.gamma-zone.current"
+LOG="options.spx.gamma-zone.log"
+if [ -n "${KAFKA_GAMMA_ZONE_CURRENT_TOPIC:-}" ] && [ "${KAFKA_GAMMA_ZONE_CURRENT_TOPIC}" != "$CURRENT" ]; then
+  echo "FAIL: KAFKA_GAMMA_ZONE_CURRENT_TOPIC is set to '${KAFKA_GAMMA_ZONE_CURRENT_TOPIC}', but this barrier only ever ensures the declared '$CURRENT' - refusing."
+  exit 1
+fi
+if [ -n "${KAFKA_GAMMA_ZONE_LOG_TOPIC:-}" ] && [ "${KAFKA_GAMMA_ZONE_LOG_TOPIC}" != "$LOG" ]; then
+  echo "FAIL: KAFKA_GAMMA_ZONE_LOG_TOPIC is set to '${KAFKA_GAMMA_ZONE_LOG_TOPIC}', but this barrier only ever ensures the declared '$LOG' - refusing. A renamed corpus log is preserved by nothing."
+  exit 1
+fi
 : "${KAFKA_BOOTSTRAP_SERVERS:?KAFKA_BOOTSTRAP_SERVERS unset - refusing to verify against an unknown cluster}"
 RF="${KAFKA_TOPIC_REPLICATION_FACTOR:-1}"
 MIN_RF="${GAMMA_ZONE_MIN_REPLICATION_FACTOR:-1}"
@@ -40,8 +55,6 @@ if ! LIST=$(kt --list 2>&1); then
   echo "FAIL: cannot list topics — refusing to deploy on an unverified cluster:"; printf '%s\n' "$LIST"; exit 1
 fi
 
-CURRENT="${KAFKA_GAMMA_ZONE_CURRENT_TOPIC:-options.spx.gamma-zone.current}"
-LOG="${KAFKA_GAMMA_ZONE_LOG_TOPIC:-options.spx.gamma-zone.log}"
 LOG_BYTES=1073741824
 
 # retention.bytes is not part of the shared routine's contract: read the EFFECTIVE value (--all, what a service's own describeConfigs sees) and compare exactly. Never

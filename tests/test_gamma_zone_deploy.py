@@ -59,7 +59,7 @@ def shaped(policy, retention, bytes_="-1", parts=1, isr=1, maxbytes="1048576"):
                         "max.message.bytes": maxbytes, "min.insync.replicas": str(isr)}}
 
 
-def run_barrier(topics, environment="dev"):
+def run_barrier(topics, environment="dev", extra_env=None):
     tmp = Path(tempfile.mkdtemp())
     bin_dir = tmp / "bin"
     bin_dir.mkdir()
@@ -74,6 +74,8 @@ def run_barrier(topics, environment="dev"):
                KAFKA_BOOTSTRAP_SERVERS="b:1", KAFKA_TOPIC_REPLICATION_FACTOR="1")
     if environment is not None:
         env["ENVIRONMENT"] = environment
+    if extra_env:
+        env.update(extra_env)
     r = subprocess.run(["bash", str(BARRIER)], capture_output=True, text=True, env=env)
     return r.returncode, r.stdout + r.stderr, calls.read_text().splitlines(), json.loads(state.read_text())
 
@@ -91,9 +93,25 @@ class Topics(unittest.TestCase):
     def test_both_topics_are_declared_once_at_one_partition_exact(self):
         d = declarations(self.VARS)
         for t in TOPICS:
-            self.assertEqual(d["OPTIONS_EDGE_TOPICS"].count(f"{t}:1"), 1, t)
+            # Every declaration of this topic, whatever its partition count. Counting only ":1"
+            # would have passed an extra "topic:2" sitting beside it, which is the shape the
+            # EXACT_PARTITION list exists to prevent and which apply-topics would then try to
+            # reconcile by RECREATING the topic.
+            declared = [x for x in d["OPTIONS_EDGE_TOPICS"] if x.split(":")[0] == t]
+            self.assertEqual([f"{t}:1"], declared, f"{t} must be declared exactly once, at 1 partition")
             self.assertEqual(d["OPTIONS_EDGE_EXACT_PARTITION_TOPICS"].count(t), 1, t)
             self.assertNotIn(t, d["OPTIONS_EDGE_ES4_TOPICS"])
+
+    def test_the_corpus_log_can_never_be_delete_and_recreated(self):
+        d = declarations(self.VARS + ["OPTIONS_EDGE_NEVER_RECREATE_TOPICS"])
+        # Reset-preserved, dev-clean-preserved and premarket-preserved do NOT close
+        # apply-topics.sh's delete-and-recreate arm, which a global
+        # KAFKA_RECREATE_MISMATCHED_TOPICS=true reaches on any partition mismatch and which
+        # discards EVERY record. Three preservation lists and the fourth left open is preservation
+        # on paper.
+        self.assertIn(LOG, d["OPTIONS_EDGE_NEVER_RECREATE_TOPICS"])
+        # `current` is deliberately NOT listed: the next folded bar refills it.
+        self.assertNotIn(CURRENT, d["OPTIONS_EDGE_NEVER_RECREATE_TOPICS"])
 
     def test_the_log_is_declared_DELETE_and_appears_in_no_compaction_list(self):
         d = declarations(self.VARS)
@@ -127,11 +145,23 @@ class Topics(unittest.TestCase):
         self.assertNotIn(CURRENT, d["OPTIONS_EDGE_RESET_PRESERVED_TOPICS"])
         self.assertNotIn(CURRENT, d["OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS"])
 
-    def test_production_declares_neither_topic_in_any_variable(self):
-        d = declarations(self.VARS + ["OPTIONS_EDGE_ES4_TOPIC_RETENTION_BYTES_OVERRIDES"], environment="production")
-        for variable, tokens in d.items():
+    def test_production_declares_neither_topic_in_ANY_variable(self):
+        # EVERY OPTIONS_EDGE_* variable the file defines, enumerated by the shell rather than by a
+        # hand-written list: a hand-written list cannot cover a variable added later, which is
+        # exactly where a production leak would hide.
+        env = {k: v for k, v in os.environ.items() if k != "ENVIRONMENT"}
+        env["ENVIRONMENT"] = "production"
+        script = (f'source "{ROOT}/scripts/kafka/topics.env"; '
+                  'for v in $(compgen -v OPTIONS_EDGE_); do printf "%s=%s\n" "$v" "${!v}"; done')
+        out = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=True,
+                             env=env).stdout
+        checked = 0
+        for line in out.splitlines():
+            name, _, value = line.partition("=")
+            checked += 1
             for t in TOPICS:
-                self.assertFalse(any(t in token for token in tokens), f"{t} leaked into {variable} on production")
+                self.assertNotIn(t, value, f"{t} leaked into {name} on production")
+        self.assertGreater(checked, 20, "the enumeration found almost no variables; it is not working")
 
     def test_the_input_topic_is_not_redeclared_here(self):
         # It belongs to es-cvd-service. A second declaration of someone else's topic is how a shape
@@ -184,6 +214,17 @@ class Barrier(unittest.TestCase):
         rc, out, _calls, _state = run_barrier(topics)
         self.assertNotEqual(0, rc, out)
 
+    def test_it_REFUSES_a_RENAMED_topic_because_nothing_preserves_that_name(self):
+        for variable in ("KAFKA_GAMMA_ZONE_CURRENT_TOPIC", "KAFKA_GAMMA_ZONE_LOG_TOPIC"):
+            rc, out, calls, _state = run_barrier(right_topics(), extra_env={variable: "somewhere.else"})
+            self.assertNotEqual(0, rc, f"{variable}: {out}")
+            self.assertIn(variable, out)
+            self.assertEqual([], calls, "it refuses before it touches the cluster")
+        # and the declared names themselves are accepted when passed explicitly
+        rc, out, _calls, _state = run_barrier(right_topics(), extra_env={
+            "KAFKA_GAMMA_ZONE_CURRENT_TOPIC": CURRENT, "KAFKA_GAMMA_ZONE_LOG_TOPIC": LOG})
+        self.assertEqual(0, rc, out)
+
     def test_it_REFUSES_to_run_outside_dev(self):
         for environment in ("production", "es4", "", None):
             rc, out, calls, _state = run_barrier(right_topics(), environment=environment)
@@ -221,7 +262,10 @@ class Service(unittest.TestCase):
     def test_the_measured_knobs_are_on_the_pod_with_their_measured_values(self):
         container, = yaml.safe_load(read(BASE))["spec"]["template"]["spec"]["containers"]
         env = {e["name"]: e["value"] for e in container["env"]}
-        self.assertEqual("ES", env["GAMMA_ZONE_SYMBOL"])
+        # Measured against the live dev tape: the producer stamps a versioned contract identity, and
+        # the plain "ES" this was first written with matches NOTHING on that topic -- the first live
+        # run folded 0 bars and refused 0, which looked exactly like a service with no input.
+        self.assertEqual("ES.v.0", env["GAMMA_ZONE_SYMBOL"])
         self.assertEqual("1m", env["GAMMA_ZONE_TIMEFRAME"])
         self.assertEqual("500", env["GAMMA_ZONE_REVERSAL_CENTS"], "5.00 index points, on closes")
         self.assertEqual("50000", env["GAMMA_ZONE_MIN_VOLUME"])

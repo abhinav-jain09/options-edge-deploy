@@ -39,7 +39,7 @@ spec:
       containers:
         - env:
             - name: GAMMA_ZONE_SYMBOL
-              value: ES
+              value: ES.v.0
             - name: GAMMA_ZONE_TIMEFRAME
               value: 1m
             - name: GAMMA_ZONE_LOOKBACK_MS

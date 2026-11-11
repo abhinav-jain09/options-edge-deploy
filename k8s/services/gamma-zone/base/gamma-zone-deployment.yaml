@@ -47,8 +47,12 @@ spec:
             # The series the zone is measured on. The round trip is a session-scale measurement and
             # the reversal is judged on closes: a coarser bar would place the turn later than it
             # happened, a finer one would multiply the bars without adding a contract to the profile.
+            # "ES.v.0", not "ES": the footprint producer stamps a VERSIONED contract identity, read
+            # off the live dev tape rather than assumed. A symbol that names no series makes this
+            # service fold nothing AND refuse nothing, which is indistinguishable from no input at
+            # all -- so the emission publishes every series the tape carries beside this value.
             - name: GAMMA_ZONE_SYMBOL
-              value: ES
+              value: ES.v.0
             - name: GAMMA_ZONE_TIMEFRAME
               value: 1m
             # 20 hours, so the seek on every start lands BEFORE any session's first bar and the
