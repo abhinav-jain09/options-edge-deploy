@@ -10204,6 +10204,15 @@
           "environments": [
             "dev"
           ]
+        },
+        {
+          "service": "gamma-zone",
+          "accepts": [
+            2034
+          ],
+          "environments": [
+            "dev"
+          ]
         }
       ],
       "retained": true,

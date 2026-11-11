@@ -256,6 +256,38 @@ class Barrier(unittest.TestCase):
             self.assertEqual([], calls, "it refuses before it touches the cluster")
 
 
+class ManifestBinding(unittest.TestCase):
+    """The image label and the manifest must agree EXACTLY, in BOTH directions."""
+
+    BARS_SUBJECT = "es.futures.footprint.bars-value"
+    BARS_ID = 2034
+
+    def entry(self):
+        manifest = json.loads(read("schema-manifest/manifest.json"))
+        return next(e for e in manifest["entries"] if e.get("subject") == self.BARS_SUBJECT)
+
+    def test_the_service_is_bound_as_a_consumer_of_the_footprint_bars_subject(self):
+        # The service reads the tape through CanonicalAvroKafka, so it declares that subject in its
+        # own schema-requirements.json, which becomes the image label. service-deploy compares the
+        # label against THIS manifest and refuses on a binding the manifest does not govern --
+        # AFTER it has already built the image. A declared input with no manifest binding fails the
+        # deploy just as surely as an undeclared one.
+        binding = next((c for c in self.entry()["consumers"] if c["service"] == SVC), None)
+        self.assertIsNotNone(binding, f"{SVC} is not a declared consumer of {self.BARS_SUBJECT}")
+        self.assertEqual([self.BARS_ID], binding["accepts"])
+        self.assertEqual(["dev"], binding["environments"], "the service renders on dev alone")
+
+    def test_the_service_produces_no_avro_subject_anywhere_in_the_manifest(self):
+        # Its two outputs are JSON on the wire, so they are not subjects at all. A producer binding
+        # here would promise a subject that does not exist.
+        manifest = json.loads(read("schema-manifest/manifest.json"))
+        for e in manifest["entries"]:
+            for producer in e.get("producers", []):
+                self.assertNotEqual(SVC, producer.get("service"),
+                                    f"{SVC} must produce no Avro subject, but is bound to "
+                                    f"{e.get('subject')}")
+
+
 class Service(unittest.TestCase):
     def test_services_yaml_declares_it_dev_only_single_deployment(self):
         entry = next(s for s in yaml.safe_load(read("services.yaml"))["services"] if s["name"] == SVC)
