@@ -250,7 +250,11 @@ class JenkinsfileWiring(unittest.TestCase):
         """A LAST CHECK independent of which stage above ran: if the two `when` conditions ever stop
         being complements, this refuses instead of letting an unbound deploy through the gap."""
         deploy = self.text.split("stage('Deploy (service-scoped)')", 1)[1]
-        self.assertIn("no digest-pinned image was bound", deploy)
+        # It must REFUSE, not warn. Asserting only that the message exists passed against a mutant
+        # that had turned error() into echo() -- a check that printed the problem and deployed
+        # anyway, which is the exact failure this whole change is about.
+        self.assertRegex(deploy, r"""error\(["']no digest-pinned image was bound""",
+                         "the unbound-deploy check must error(), not merely print")
         # Gated on the dry-run exemption, and placed BEFORE the sh step that applies anything.
         self.assertIn("!params.DEPLOY_DRY_RUN", deploy)
         self.assertLess(deploy.index("no digest-pinned image was bound"),
