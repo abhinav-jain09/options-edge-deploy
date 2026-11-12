@@ -1133,17 +1133,27 @@ LINEARIZER_DEPLOY=es-trade-linearizer-service
 LINEARIZER_GROUP=options-edge-es-trade-linearizer
 LINEARIZER_OUTPUT_TOPIC=underlying.es.trades.linearized
 linearizer_straggler_exempt() { [ "$1" = "$LINEARIZER_DEPLOY" ]; }
-# Sum of the output tape's end offsets. Prints nothing (and fails) when it cannot be measured: an unmeasured tape is NOT an empty one.
+# Sum of the output tape's end offsets. Prints nothing (and fails) unless EVERY non-blank line of the answer is exactly
+# `<output topic>:<partition>:<end offset>` and at least one line exists: an unmeasured or contaminated answer is NOT an empty tape.
 linearizer_output_end() {
   local out
   out=$("$(dirname "$KT")/kafka-get-offsets.sh" --bootstrap-server "$BS" --topic "$LINEARIZER_OUTPUT_TOPIC" 2>/dev/null) || return 1
-  [ -n "$out" ] || return 1
-  printf '%s\n' "$out" | awk -F: 'NF==3 && $3 ~ /^[0-9]+$/ {s+=$3; n++} END {if (n==0) exit 1; print s}'
+  printf '%s\n' "$out" | awk -v t="$LINEARIZER_OUTPUT_TOPIC" '
+    NF == 0 { next }
+    { n = split($0, f, ":") }
+    n == 3 && f[1] == t && f[2] ~ /^[0-9]+$/ && f[3] ~ /^[0-9]+$/ { s += f[3]; c++; next }
+    { bad = 1 }
+    END { if (bad || c == 0) exit 1; print s }'
 }
+# Pods of the linearizer (selector = the Deployment's own: app.kubernetes.io/name; plain `app=` matches nothing here).
+linearizer_pods() { $KK get pods -l "app.kubernetes.io/name=$LINEARIZER_DEPLOY" -o name 2>/dev/null; }
 heal_linearizer_recreated_tape() {
-  local des log end
+  local des rr log end i
   des=$($KK get deploy "$LINEARIZER_DEPLOY" -o jsonpath='{.spec.replicas}' 2>/dev/null)
   [ "${des:-0}" -gt 0 ] 2>/dev/null || return 0
+  # Only a deployment that is NOT ready can be stuck: a ready one with an old marker in its log is live and is left alone.
+  rr=$($KK get deploy "$LINEARIZER_DEPLOY" -o jsonpath='{.status.readyReplicas}' 2>/dev/null)
+  [ "${rr:-0}" -lt "$des" ] 2>/dev/null || return 0
   log="$($KK logs deploy/"$LINEARIZER_DEPLOY" --tail=200 2>/dev/null; $KK logs deploy/"$LINEARIZER_DEPLOY" --previous --tail=200 2>/dev/null)"
   printf '%s\n' "$log" | grep -q 'OUTPUT_TAPE_RECREATED' || return 0
   end=$(linearizer_output_end) || { echo "  linearizer: OUTPUT_TAPE_RECREATED but the output tape could not be measured — NOT touching its consumer group" >&2; return 1; }
@@ -1151,13 +1161,37 @@ heal_linearizer_recreated_tape() {
     echo "  linearizer: OUTPUT_TAPE_RECREATED but the output tape holds $end records — NOT touching its consumer group" >&2; return 1
   fi
   echo "  linearizer: output tape empty + committed offsets (OUTPUT_TAPE_RECREATED) — deleting group $LINEARIZER_GROUP and restarting"
-  $K scale deploy/"$LINEARIZER_DEPLOY" --replicas=0 >/dev/null 2>&1
-  $KK wait --for=delete pod -l app="$LINEARIZER_DEPLOY" --timeout=90s >/dev/null 2>&1 || true
+  # 0 -> pods really gone -> delete the group -> back. Any step that does not hold aborts BEFORE the delete and puts the replicas back.
+  if ! $K scale deploy/"$LINEARIZER_DEPLOY" --replicas=0 >/dev/null 2>&1; then
+    echo "  linearizer: could not scale to 0 — NOT touching its consumer group" >&2; return 1
+  fi
+  i=0; while [ -n "$(linearizer_pods)" ] && [ "$i" -lt "${LINEARIZER_WAIT_TRIES:-45}" ]; do sleep "${LINEARIZER_POLL_SECS:-2}"; i=$((i+1)); done
+  if [ -n "$(linearizer_pods)" ]; then
+    echo "  linearizer: pods still present after scale-down — NOT touching its consumer group" >&2
+    $K scale deploy/"$LINEARIZER_DEPLOY" --replicas="$des" >/dev/null 2>&1; return 1
+  fi
   if ! "$(dirname "$KT")/kafka-consumer-groups.sh" --bootstrap-server "$BS" --delete --group "$LINEARIZER_GROUP" >/dev/null 2>&1; then
     echo "  linearizer: could not delete group $LINEARIZER_GROUP — leaving the service scaled back up as it was" >&2
     $K scale deploy/"$LINEARIZER_DEPLOY" --replicas="$des" >/dev/null 2>&1; return 1
   fi
   $K scale deploy/"$LINEARIZER_DEPLOY" --replicas="$des" >/dev/null 2>&1
+}
+# The straggler pass leaves the linearizer alone, so start itself must say where it stands: ordering its backlog (the log says so)
+# versus not ready for any other reason. Reported, never fatal: a backlog takes minutes.
+report_linearizer_status() {
+  local des rr log
+  des=$($KK get deploy "$LINEARIZER_DEPLOY" -o jsonpath='{.spec.replicas}' 2>/dev/null)
+  [ "${des:-0}" -gt 0 ] 2>/dev/null || return 0
+  rr=$($KK get deploy "$LINEARIZER_DEPLOY" -o jsonpath='{.status.readyReplicas}' 2>/dev/null)
+  [ "${rr:-0}" -lt "$des" ] 2>/dev/null || { echo "OK   $LINEARIZER_DEPLOY ready"; return 0; }
+  log="$($KK logs deploy/"$LINEARIZER_DEPLOY" --tail=200 2>/dev/null)"
+  if printf '%s\n' "$log" | grep -q 'OUTPUT_TAPE_RECREATED'; then
+    echo "???  $LINEARIZER_DEPLOY NOT ready: OUTPUT_TAPE_RECREATED and the heal did not clear it — read: kubectl -n options-edge logs deploy/$LINEARIZER_DEPLOY --tail=100"
+  elif printf '%s\n' "$log" | grep -q 'source records to order before the live tail'; then
+    echo "INFO $LINEARIZER_DEPLOY ordering its backlog (the log says so); ready when it reaches the live tail"
+  else
+    echo "???  $LINEARIZER_DEPLOY NOT ready and its log does NOT show the backlog message: read kubectl -n options-edge logs deploy/$LINEARIZER_DEPLOY --tail=100"
+  fi
 }
 
 do_start() {
@@ -1241,6 +1275,7 @@ do_start() {
   local verify_rc=0
   verify_start_readiness || verify_rc=$?
   report_session_bound_services
+  report_linearizer_status
   echo "Done — source topics exist; active apps reach RUNNING, disabled set held at 0 (no replay injection)."
   return $verify_rc
 }

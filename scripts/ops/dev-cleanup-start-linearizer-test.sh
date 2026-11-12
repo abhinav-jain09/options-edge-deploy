@@ -69,7 +69,6 @@ fn do_start "$SRC" | grep -q '^  heal_linearizer_recreated_tape' && ok "do_start
 # ---- 3: heal_linearizer_recreated_tape ----
 echo "3  heal_linearizer_recreated_tape"
 mkdir -p "$WORK/kbin"
-for t in kafka-consumer-groups.sh kafka-get-offsets.sh; do :; done
 cat > "$WORK/kbin/kafka-topics.sh" <<'EOF'
 #!/usr/bin/env bash
 exit 0
@@ -83,64 +82,87 @@ EOF
 cat > "$WORK/kbin/kafka-get-offsets.sh" <<'EOF'
 #!/usr/bin/env bash
 case "${STUB_OFFSETS:-empty}" in
-  empty) printf 'underlying.es.trades.linearized:0:0\n' ;;
-  full)  printf 'underlying.es.trades.linearized:0:433858\n' ;;
-  none)  exit 1 ;;
-  blank) exit 0 ;;
+  empty)  printf 'underlying.es.trades.linearized:0:0\n' ;;
+  full)   printf 'underlying.es.trades.linearized:0:433858\n' ;;
+  mixed)  printf 'underlying.es.trades.linearized:0:0\nWARN something unrelated\n' ;;
+  wrongtopic) printf 'some.other.topic:0:0\n' ;;
+  twoparts) printf 'underlying.es.trades.linearized:0:0\nunderlying.es.trades.linearized:1:7\n' ;;
+  none)   exit 1 ;;
+  blank)  exit 0 ;;
 esac
 EOF
+# kubectl (read) stub: replicas, readyReplicas, logs, and pods ONLY for the Deployment's real selector
 cat > "$WORK/kk3" <<'EOF'
 #!/usr/bin/env bash
 case "$*" in
   *"jsonpath={.spec.replicas}"*) echo "${STUB_REPLICAS:-1}" ;;
+  *"jsonpath={.status.readyReplicas}"*) echo "${STUB_READY:-0}" ;;
   logs*) printf '%s\n' "${STUB_LOG:-}" ;;
+  "get pods -l app.kubernetes.io/name=es-trade-linearizer-service -o name") [ "${STUB_PODS_REMAIN:-0}" = 1 ] && echo pod/es-trade-linearizer-service-x ;;
 esac
 exit 0
 EOF
+# kubectl (write) stub
 cat > "$WORK/k3" <<EOF
 #!/usr/bin/env bash
 echo "\$*" >> "$WORK/k3.calls"
+case "\$*" in *"--replicas=0"*) [ "\${STUB_SCALE_FAIL:-0}" = 1 ] && exit 1 ;; esac
+exit 0
 EOF
 chmod +x "$WORK"/kbin/* "$WORK/kk3" "$WORK/k3"
 
-heal() {  # heal LOG OFFSETS [REPLICAS] [GROUP_FAIL] -> prints the groups/k3 calls, returns the function's status
+heal() {  # heal LOG OFFSETS ; the other knobs (STUB_REPLICAS STUB_READY STUB_GROUP_FAIL STUB_SCALE_FAIL STUB_PODS_REMAIN) come from the caller's environment
   : > "$WORK/groups.calls"; : > "$WORK/k3.calls"
   ( KK="$WORK/kk3"; K="$WORK/k3"; KT="$WORK/kbin/kafka-topics.sh"; BS=stub:1
-    export STUB_LOG="$1" STUB_OFFSETS="$2" STUB_REPLICAS="${3:-1}" STUB_GROUP_FAIL="${4:-0}"
+    export STUB_LOG="$1" STUB_OFFSETS="$2" LINEARIZER_WAIT_TRIES=2 LINEARIZER_POLL_SECS=0
     eval "$(var LINEARIZER_DEPLOY "$SRC")"; eval "$(var LINEARIZER_GROUP "$SRC")"; eval "$(var LINEARIZER_OUTPUT_TOPIC "$SRC")"
-    eval "$(fn linearizer_output_end "$SRC")"; eval "$(fn heal_linearizer_recreated_tape "$SRC")"
+    eval "$(fn linearizer_output_end "$SRC")"; eval "$(fn linearizer_pods "$SRC")"; eval "$(fn heal_linearizer_recreated_tape "$SRC")"
     heal_linearizer_recreated_tape ) > "$WORK/heal.out" 2>&1
 }
 deleted() { grep -q -- '--delete --group options-edge-es-trade-linearizer' "$WORK/groups.calls"; }
+restored() { grep -q 'scale deploy/es-trade-linearizer-service --replicas=1' "$WORK/k3.calls"; }
+MARK="ES_LINEARIZER_FAILED OUTPUT_TAPE_RECREATED"
 
-heal "ES_LINEARIZER_FAILED OUTPUT_TAPE_RECREATED" empty
-rc=$?
-{ deleted && [ $rc -eq 0 ]; } && ok "marker + empty output tape: the group is deleted" || bad "marker + empty tape did not delete the group (rc=$rc)"
-grep -q 'scale deploy/es-trade-linearizer-service --replicas=0' "$WORK/k3.calls" && grep -q 'scale deploy/es-trade-linearizer-service --replicas=1' "$WORK/k3.calls" \
+heal "$MARK" empty; rc=$?
+{ deleted && [ $rc -eq 0 ]; } && ok "marker + not ready + empty output tape: the group is deleted" || bad "marker + empty tape did not delete the group (rc=$rc)"
+grep -q 'scale deploy/es-trade-linearizer-service --replicas=0' "$WORK/k3.calls" && restored \
   && ok "the service is scaled to 0 before the delete and back to its replicas after" || bad "the scale down/up around the delete is missing"
 
 heal "everything is fine" empty
 deleted && bad "no marker in the log, group deleted anyway" || ok "no marker: the group is left alone"
 
-heal "ES_LINEARIZER_FAILED OUTPUT_TAPE_RECREATED" full
-rc=$?
-{ ! deleted && [ $rc -ne 0 ]; } && ok "marker but the output tape holds records: group NOT deleted, reported" || bad "group deleted while the output tape is not empty (rc=$rc)"
+STUB_READY=1 heal "$MARK" empty
+{ ! deleted && [ ! -s "$WORK/k3.calls" ]; } && ok "a READY deployment with a stale marker in its log is left alone" || bad "touched a ready deployment because of a stale log marker"
 
-heal "ES_LINEARIZER_FAILED OUTPUT_TAPE_RECREATED" none
-rc=$?
-{ ! deleted && [ $rc -ne 0 ]; } && ok "output tape unmeasurable (CLI fails): group NOT deleted" || bad "group deleted although the tape could not be measured (rc=$rc)"
+heal "$MARK" full; rc=$?
+{ ! deleted && [ $rc -ne 0 ]; } && ok "output tape holds records: group NOT deleted, reported" || bad "group deleted while the output tape is not empty (rc=$rc)"
+for m in none blank mixed wrongtopic; do
+  heal "$MARK" $m; rc=$?
+  { ! deleted && [ $rc -ne 0 ]; } && ok "output tape answer '$m' is not a measurement: group NOT deleted" || bad "answer '$m' was read as an empty tape (rc=$rc)"
+done
+heal "$MARK" twoparts; rc=$?
+{ ! deleted && [ $rc -ne 0 ]; } && ok "a second partition with records: group NOT deleted" || bad "a non-empty second partition was ignored (rc=$rc)"
 
-heal "ES_LINEARIZER_FAILED OUTPUT_TAPE_RECREATED" blank
-rc=$?
-{ ! deleted && [ $rc -ne 0 ]; } && ok "output tape unmeasurable (empty answer): group NOT deleted" || bad "an empty answer was read as an empty tape (rc=$rc)"
-
-heal "ES_LINEARIZER_FAILED OUTPUT_TAPE_RECREATED" empty 0
+STUB_REPLICAS=0 heal "$MARK" empty
 { ! deleted; } && ok "service scaled to 0: nothing touched" || bad "touched the group of a service that is switched off"
 
-heal "ES_LINEARIZER_FAILED OUTPUT_TAPE_RECREATED" empty 1 1
-rc=$?
-{ [ $rc -ne 0 ] && grep -q 'scale deploy/es-trade-linearizer-service --replicas=1' "$WORK/k3.calls"; } \
-  && ok "a failed group delete returns non-zero and puts the service back" || bad "a failed group delete was swallowed or left the service at 0 (rc=$rc)"
+STUB_SCALE_FAIL=1 heal "$MARK" empty; rc=$?
+{ ! deleted && [ $rc -ne 0 ]; } && ok "scale-down fails: group NOT deleted" || bad "group deleted although the scale-down failed (rc=$rc)"
+
+STUB_PODS_REMAIN=1 heal "$MARK" empty; rc=$?
+{ ! deleted && [ $rc -ne 0 ] && restored; } && ok "pods still present after scale-down: group NOT deleted, replicas restored" || bad "group deleted while pods were still running, or replicas not restored (rc=$rc)"
+
+STUB_GROUP_FAIL=1 heal "$MARK" empty; rc=$?
+{ [ $rc -ne 0 ] && restored; } && ok "a failed group delete returns non-zero and puts the service back" || bad "a failed group delete was swallowed or left the service at 0 (rc=$rc)"
+
+# report_linearizer_status names a cause only when the log confirms it
+rep() {
+  ( KK="$WORK/kk3"; export STUB_LOG="$1"; eval "$(var LINEARIZER_DEPLOY "$SRC")"; eval "$(fn report_linearizer_status "$SRC")"; report_linearizer_status ) 2>&1
+}
+rep "es-trade-linearizer fresh tape starts 24h back: 433504 source records to order before the live tail" | grep -q 'ordering its backlog' && ok "report: backlog named when the log says so" || bad "report: backlog not recognised"
+rep "something else entirely" | grep -q 'does NOT show the backlog' && ok "report: no cause named when the log does not confirm" || bad "report: named a cause the log does not show"
+rep "$MARK" | grep -q 'heal did not clear it' && ok "report: an unhealed OUTPUT_TAPE_RECREATED is called out" || bad "report: unhealed OUTPUT_TAPE_RECREATED not called out"
+fn do_start "$SRC" | grep -q '^  report_linearizer_status' && ok "do_start reports the linearizer's status" || bad "do_start never reports the linearizer's status"
 
 # ---- 4: mutants ----
 if [ "${LINEARIZER_NO_MUTANTS:-0}" != 1 ]; then
@@ -164,6 +186,11 @@ PY
   mut "heal does not require an empty tape" "s.replace('if [ \"\$end\" != \"0\" ]; then','if false; then')"
   mut "an unmeasured tape counts as empty" "s.replace('end=\$(linearizer_output_end) ||','end=\$(linearizer_output_end || echo 0) ||')"
   mut "heal never runs after the straggler pass" "s.replace('  heal_linearizer_recreated_tape || true\\n','')"
+  mut "heal ignores whether the deployment is ready" "s.replace('[ \"\${rr:-0}\" -lt \"\$des\" ] 2>/dev/null || return 0\\n  log=\"\$(\$KK logs deploy/\"\$LINEARIZER_DEPLOY\" --tail=200 2>/dev/null; ','true\\n  log=\"\$(\$KK logs deploy/\"\$LINEARIZER_DEPLOY\" --tail=200 2>/dev/null; ')"
+  mut "a failed scale-down is ignored" "s.replace('if ! \$K scale deploy/\"\$LINEARIZER_DEPLOY\" --replicas=0 >/dev/null 2>&1; then','if false; then')"
+  mut "pods are looked up by the wrong label" "s.replace('-l \"app.kubernetes.io/name=\$LINEARIZER_DEPLOY\"','-l \"app=\$LINEARIZER_DEPLOY\"')"
+  mut "malformed offset lines are skipped" "s.replace('    { bad = 1 }\\n','    { next }\\n')"
+  mut "start never reports the linearizer" "s.replace('  report_linearizer_status\\n  echo \"Done','  echo \"Done')"
 fi
 
 echo
