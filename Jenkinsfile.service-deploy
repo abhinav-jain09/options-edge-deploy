@@ -115,7 +115,7 @@ pipeline {
       // both smaller under the CPS transform and easier to extend. If you are adding a service and
       // the build fails this way, that is the lever: convert another chain, or move a stage's body
       // into a script under scripts/. Do not assume a few hundred bytes are free here.
-      'strike-hold', 'break-line', 'gamma-zone',
+      'strike-hold', 'break-line', 'gamma-zone', 'gamma-effort',
       // stock-gex-close-scheduler: PRODUCTION only — the closing-board SCHEDULE, which now lives
       // inside the batch itself (USER 2026-09-01: "I don't want anything Jenkins-based, it should
       // run based on Spring Batch configuration"). This job DEPLOYS it; nothing here decides when
@@ -1051,7 +1051,7 @@ PYEOF
       // the events log at retention.ms -1 with a 256 MiB cap, the four pure-compact topics at -1/-1) shares this ONE stage on purpose: this pipeline's generated CPS method sits at the JVM's
       // 64 KB method limit, and a separate stage for it failed every build at compile time ("Method too large", build #3006). The barrier run is selected by SERVICE below.
       when {
-        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (['line-acceptance', 'es-liquidity-wall', 'es-liquidity-engine', 'liquidity-validator', 'strike-hold', 'break-line', 'gamma-zone'].contains(params.SERVICE) && !params.DEPLOY_DRY_RUN) }
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (['line-acceptance', 'es-liquidity-wall', 'es-liquidity-engine', 'liquidity-validator', 'strike-hold', 'break-line', 'gamma-zone', 'gamma-effort'].contains(params.SERVICE) && !params.DEPLOY_DRY_RUN) }
       }
       steps {
         script {
@@ -1071,6 +1071,7 @@ PYEOF
             strike-hold) scripts/kafka/ensure-strike-hold-topics.sh ;;
             break-line) scripts/kafka/ensure-break-line-topics.sh ;;
             gamma-zone) scripts/kafka/ensure-gamma-zone-topics.sh ;;
+            gamma-effort) scripts/kafka/ensure-gamma-effort-topics.sh ;;
             *) echo "FATAL: no topic barrier is wired for SERVICE=$SERVICE in this stage" >&2; exit 1 ;;
           esac
         '''
