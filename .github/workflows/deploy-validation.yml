@@ -541,6 +541,19 @@ jobs:
       - name: permitted-commit guard scripts refuse their unpermitted cases; validator refuses its mutations
         run: python3 -m unittest -v tests.test_jenkins_permitted_sha_guard
 
+      # A web deploy NAMES the image it ships. Jenkinsfile.web-service's BUILD_IMAGE=false path — its
+      # DEFAULT — used to set no REQUIRED_IMAGE at all, so bind-required-image.sh kept the mutable-tag
+      # pin and apply.sh shipped whatever :dev resolved to at that instant, which any other web build
+      # could have moved; a WEB_PERMITTED_SHA passed on that path was read by nothing while the
+      # permission receipt recorded it. This drives every refusal in resolve-existing-web-image.sh by
+      # RUNNING it (its parameter validation precedes any network call, so no controller is needed) and
+      # re-evaluates the two stages' `when` conditions to prove they are exact complements — so no
+      # combination of BUILD_IMAGE and DEPLOY_DRY_RUN reaches the apply unbound. What it does NOT cover:
+      # Groovy execution, parameter registration, or the image lock's happy path, which needs a
+      # controller. See the module docstring, which states that boundary.
+      - name: a web deploy names the image it ships (the :dev tag race)
+        run: python3 -m unittest -v tests.test_web_deploy_image_binding
+
       # topics.env is only the DEPLOY-TIME half of "the archive is never compacted". The other half
       # is the boot-time stamp: processing-common KafkaTopics.ensureTopic() runs
       # incrementalAlterConfigs on every service start, so a topic the deploy just set to delete is

@@ -33,9 +33,13 @@ pipeline {
     choice(name: 'ENVIRONMENT', choices: ['dev', 'production', 'experiment'],
       description: 'Target environment — selects k8s/services/web/overlays/<env> and the deployer kubeconfig (oeProfile).')
     booleanParam(name: 'BUILD_IMAGE', defaultValue: false,
-      description: 'Build+push the web image first (options-edge-web-deploy, native on the target machine) — needs WEB_PERMITTED_SHA, and is REFUSED unless that job\'s configuration and Jenkinsfile at WEB_PERMITTED_SHA are confirmed to run the permitted-commit guard (Deployment Permission Rule). false (DEFAULT) = deploy the image already in the registry.')
+      description: 'Build+push the web image first (options-edge-web-deploy, native on the target machine) — needs WEB_PERMITTED_SHA, and is REFUSED unless that job\'s configuration and Jenkinsfile at WEB_PERMITTED_SHA are confirmed to run the permitted-commit guard (Deployment Permission Rule). false (DEFAULT) = deploy an image that already exists, which must then be NAMED: see WEB_IMAGE_BUILD_NUMBER and WEB_IMAGE_REF. It is no longer "whatever the :dev tag resolves to" — that let any other web build decide what shipped.')
     string(name: 'WEB_PERMITTED_SHA', defaultValue: '', trim: true,
-      description: 'REQUIRED when BUILD_IMAGE=true — Deployment Permission Rule. The full 40-character commit id of options-edge (the web application) permitted for the image build this job triggers. Forwarded to options-edge-web-deploy as its PERMITTED_SHA, where ITS guard refuses unless its checkout is exactly this commit on main. This job refuses the build path unless that job\'s definition at that commit is confirmed to run the guard.')
+      description: 'The full 40-character commit id of options-edge (the web application) whose image this run deploys — Deployment Permission Rule. REQUIRED when BUILD_IMAGE=true: forwarded to options-edge-web-deploy as its PERMITTED_SHA, where ITS guard refuses unless its checkout is exactly this commit on main, and this job refuses the build path unless that job\'s definition at that commit is confirmed to run the guard. When BUILD_IMAGE=false it must be paired with WEB_IMAGE_BUILD_NUMBER, and the two together resolve that build\'s image lock to the one digest it produced from this commit. It is never read as a bare hint: a value that cannot be bound to an image is refused, never ignored.')
+    string(name: 'WEB_IMAGE_BUILD_NUMBER', defaultValue: '', trim: true,
+      description: 'The options-edge-web-deploy build number that produced the image to deploy. BUILD_IMAGE=false only, and only together with WEB_PERMITTED_SHA — the pair is resolved through scripts/jenkins/fetch-permitted-image-lock.sh, which verifies the lock belongs to that build of that job and that the build was made from that commit, then yields its digest. Leave EMPTY when BUILD_IMAGE=true (that path mints the identity from the build it triggers, and a second answer here would be refused rather than reconciled).')
+    string(name: 'WEB_IMAGE_REF', defaultValue: '', trim: true,
+      description: 'A digest-pinned image reference to deploy exactly, `<registry>/<repo>[:tag]@sha256:<64 hex>`. BUILD_IMAGE=false only, and mutually exclusive with WEB_PERMITTED_SHA/WEB_IMAGE_BUILD_NUMBER. For redeploying the image already running when only the manifests changed — read it off the pod with `kubectl -n optionsedge get deploy/options-edge-web -o jsonpath=\'{.spec.template.spec.containers[0].image}\'`. It is race-free but carries NO commit claim: a digest alone does not say what source built it, so prefer the WEB_PERMITTED_SHA + WEB_IMAGE_BUILD_NUMBER form whenever the deploy should record which reviewed commit it shipped. A bare tag is refused.')
     booleanParam(name: 'DEPLOY_DRY_RUN', defaultValue: false,
       description: 'true = render + digest-pin + server-side validate only; nothing changes.')
     string(name: 'HEALTH_URL', defaultValue: '',
@@ -246,9 +250,52 @@ pipeline {
         }
       }
     }
+    // The EXACT COMPLEMENT of the Build stage's condition above, so every route into Deploy passes
+    // through one of the two and each one leaves an image identity behind. Until this stage existed,
+    // BUILD_IMAGE=false (the DEFAULT) skipped the Build stage and set no REQUIRED_IMAGE at all, so
+    // bind-required-image.sh kept the mutable-tag pin and apply.sh shipped whatever :dev resolved to
+    // at that instant — a digest any other web build could have moved underneath this one. A
+    // WEB_PERMITTED_SHA given on that path was read by nothing, while the permission receipt recorded
+    // it as though it had bound something.
+    //
+    // Note the complement covers BUILD_IMAGE=true && DEPLOY_DRY_RUN=true as well: the Build stage
+    // excludes dry runs, so that combination reached Deploy with no identity either.
+    stage('Bind existing web image') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (!(params.BUILD_IMAGE && !params.DEPLOY_DRY_RUN)) } }
+      steps {
+        script {
+          // All of the refusing is in the script, where it is reachable without a Jenkins controller
+          // and tests/test_web_deploy_image_binding.py executes every branch of it. A non-zero exit
+          // fails this stage with the script's own refusal in the log.
+          def bound = sh(returnStdout: true, script: 'bash scripts/jenkins/resolve-existing-web-image.sh').trim()
+          if (bound) {
+            // The same assertion the build path makes on its own resolution, so both paths hand the
+            // deploy an identically-shaped reference.
+            if (!bound.matches('^[^@\\s]+@sha256:[0-9a-f]{64}$')) {
+              error("the image resolution did not yield a digest-pinned image (got '${bound}'). Nothing was deployed.")
+            }
+            env.REQUIRED_IMAGE = bound
+            echo "deploying exactly ${env.REQUIRED_IMAGE}"
+          } else {
+            // Only an exempted dry run gets here: it applies nothing, and the script has already said
+            // on stderr that its render describes the tag's current resolution and no particular image.
+            echo 'DRY RUN with no image identity: the render below pins the mutable tag as it resolves right now.'
+          }
+        }
+      }
+    }
     stage('Deploy (service-scoped)') {
       when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' } }
       steps {
+        // LAST CHECK BEFORE THE APPLY, deliberately independent of which stage above ran. The two
+        // `when` conditions are complements today; this refuses if they ever stop being, rather than
+        // letting an unbound deploy through the gap. A dry run is exempt — it applies nothing — which
+        // is the same exemption scripts/deploy/require-batch-image-binding.sh makes.
+        script {
+          if (!params.DEPLOY_DRY_RUN && !(env.REQUIRED_IMAGE ?: '').matches('^[^@\\s]+@sha256:[0-9a-f]{64}$')) {
+            error("no digest-pinned image was bound for this deploy (REQUIRED_IMAGE='${env.REQUIRED_IMAGE ?: ''}'). Deploying would ship whatever the mutable tag resolves to, which any other web build can have moved. Nothing was deployed.")
+          }
+        }
         sh '''
           set -euo pipefail
           bash scripts/jenkins/write-permission-receipt.sh "$WORKSPACE/.jenkins-tmp/permission-receipt.env"
