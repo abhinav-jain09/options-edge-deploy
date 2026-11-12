@@ -1146,13 +1146,15 @@ linearizer_output_end() {
     END { if (bad || c == 0) exit 1; print s }'
 }
 # Pods of the linearizer (selector = the Deployment's own: app.kubernetes.io/name; plain `app=` matches nothing here).
+# Its exit status is kubectl's: a failed listing is UNKNOWN, never "no pods".
 linearizer_pods() { $KK get pods -l "app.kubernetes.io/name=$LINEARIZER_DEPLOY" -o name 2>/dev/null; }
 heal_linearizer_recreated_tape() {
-  local des rr log end i
-  des=$($KK get deploy "$LINEARIZER_DEPLOY" -o jsonpath='{.spec.replicas}' 2>/dev/null)
+  local des rr log end i pods
+  des=$($KK get deploy "$LINEARIZER_DEPLOY" -o jsonpath='{.spec.replicas}' 2>/dev/null) || { echo "  linearizer: could not read its replicas — NOT touching its consumer group" >&2; return 1; }
   [ "${des:-0}" -gt 0 ] 2>/dev/null || return 0
   # Only a deployment that is NOT ready can be stuck: a ready one with an old marker in its log is live and is left alone.
-  rr=$($KK get deploy "$LINEARIZER_DEPLOY" -o jsonpath='{.status.readyReplicas}' 2>/dev/null)
+  # readyReplicas is ABSENT (empty, kubectl succeeds) at zero ready, but a FAILED query is unknown, not zero.
+  rr=$($KK get deploy "$LINEARIZER_DEPLOY" -o jsonpath='{.status.readyReplicas}' 2>/dev/null) || { echo "  linearizer: could not read its readiness — NOT touching its consumer group" >&2; return 1; }
   [ "${rr:-0}" -lt "$des" ] 2>/dev/null || return 0
   log="$($KK logs deploy/"$LINEARIZER_DEPLOY" --tail=200 2>/dev/null; $KK logs deploy/"$LINEARIZER_DEPLOY" --previous --tail=200 2>/dev/null)"
   printf '%s\n' "$log" | grep -q 'OUTPUT_TAPE_RECREATED' || return 0
@@ -1165,16 +1167,27 @@ heal_linearizer_recreated_tape() {
   if ! $K scale deploy/"$LINEARIZER_DEPLOY" --replicas=0 >/dev/null 2>&1; then
     echo "  linearizer: could not scale to 0 — NOT touching its consumer group" >&2; return 1
   fi
-  i=0; while [ -n "$(linearizer_pods)" ] && [ "$i" -lt "${LINEARIZER_WAIT_TRIES:-45}" ]; do sleep "${LINEARIZER_POLL_SECS:-2}"; i=$((i+1)); done
-  if [ -n "$(linearizer_pods)" ]; then
-    echo "  linearizer: pods still present after scale-down — NOT touching its consumer group" >&2
-    $K scale deploy/"$LINEARIZER_DEPLOY" --replicas="$des" >/dev/null 2>&1; return 1
-  fi
+  i=0
+  while :; do
+    if ! pods=$(linearizer_pods); then
+      echo "  linearizer: could not list its pods — NOT touching its consumer group" >&2
+      $K scale deploy/"$LINEARIZER_DEPLOY" --replicas="$des" >/dev/null 2>&1; return 1
+    fi
+    [ -z "$pods" ] && break
+    if [ "$i" -ge "${LINEARIZER_WAIT_TRIES:-45}" ]; then
+      echo "  linearizer: pods still present after scale-down — NOT touching its consumer group" >&2
+      $K scale deploy/"$LINEARIZER_DEPLOY" --replicas="$des" >/dev/null 2>&1; return 1
+    fi
+    sleep "${LINEARIZER_POLL_SECS:-2}"; i=$((i+1))
+  done
   if ! "$(dirname "$KT")/kafka-consumer-groups.sh" --bootstrap-server "$BS" --delete --group "$LINEARIZER_GROUP" >/dev/null 2>&1; then
     echo "  linearizer: could not delete group $LINEARIZER_GROUP — leaving the service scaled back up as it was" >&2
     $K scale deploy/"$LINEARIZER_DEPLOY" --replicas="$des" >/dev/null 2>&1; return 1
   fi
-  $K scale deploy/"$LINEARIZER_DEPLOY" --replicas="$des" >/dev/null 2>&1
+  # The group is gone: a service left at 0 now is a REAL failure, not something to swallow.
+  if ! $K scale deploy/"$LINEARIZER_DEPLOY" --replicas="$des" >/dev/null 2>&1; then
+    echo "  linearizer: group deleted but the scale-up to $des FAILED — $LINEARIZER_DEPLOY is left at 0: run  kubectl -n options-edge scale deploy/$LINEARIZER_DEPLOY --replicas=$des" >&2; return 1
+  fi
 }
 # The straggler pass leaves the linearizer alone, so start itself must say where it stands: ordering its backlog (the log says so)
 # versus not ready for any other reason. Reported, never fatal: a backlog takes minutes.
@@ -1236,7 +1249,7 @@ do_start() {
     fi
   done
   echo "  self-heal restarted $healed straggler(s)"
-  heal_linearizer_recreated_tape || true
+  heal_linearizer_recreated_tape || echo "  ⚠ linearizer heal did not complete — see the lines above and the status line at the end of start" >&2
 
   # Schema self-heal: all Schema-Registry schemas live in the compacted _schemas topic; if it gets
   # wiped (the known dev SR-wipe → gateway-wedge, dev-schema-registry-wipe-gateway-wedge), producers

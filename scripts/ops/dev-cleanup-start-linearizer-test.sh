@@ -96,9 +96,9 @@ cat > "$WORK/kk3" <<'EOF'
 #!/usr/bin/env bash
 case "$*" in
   *"jsonpath={.spec.replicas}"*) echo "${STUB_REPLICAS:-1}" ;;
-  *"jsonpath={.status.readyReplicas}"*) echo "${STUB_READY:-0}" ;;
+  *"jsonpath={.status.readyReplicas}"*) [ "${STUB_READY_FAIL:-0}" = 1 ] && exit 1; echo "${STUB_READY:-0}" ;;
   logs*) printf '%s\n' "${STUB_LOG:-}" ;;
-  "get pods -l app.kubernetes.io/name=es-trade-linearizer-service -o name") [ "${STUB_PODS_REMAIN:-0}" = 1 ] && echo pod/es-trade-linearizer-service-x ;;
+  "get pods -l app.kubernetes.io/name=es-trade-linearizer-service -o name") [ "${STUB_PODS_FAIL:-0}" = 1 ] && exit 1; [ "${STUB_PODS_REMAIN:-0}" = 1 ] && echo pod/es-trade-linearizer-service-x ;;
 esac
 exit 0
 EOF
@@ -106,7 +106,7 @@ EOF
 cat > "$WORK/k3" <<EOF
 #!/usr/bin/env bash
 echo "\$*" >> "$WORK/k3.calls"
-case "\$*" in *"--replicas=0"*) [ "\${STUB_SCALE_FAIL:-0}" = 1 ] && exit 1 ;; esac
+case "\$*" in *"--replicas=0"*) [ "\${STUB_SCALE_FAIL:-0}" = 1 ] && exit 1 ;; *"--replicas=1"*) [ "\${STUB_SCALE_UP_FAIL:-0}" = 1 ] && exit 1 ;; esac
 exit 0
 EOF
 chmod +x "$WORK"/kbin/* "$WORK/kk3" "$WORK/k3"
@@ -152,6 +152,15 @@ STUB_SCALE_FAIL=1 heal "$MARK" empty; rc=$?
 STUB_PODS_REMAIN=1 heal "$MARK" empty; rc=$?
 { ! deleted && [ $rc -ne 0 ] && restored; } && ok "pods still present after scale-down: group NOT deleted, replicas restored" || bad "group deleted while pods were still running, or replicas not restored (rc=$rc)"
 
+STUB_READY_FAIL=1 heal "$MARK" empty; rc=$?
+{ ! deleted && [ $rc -ne 0 ] && [ ! -s "$WORK/k3.calls" ]; } && ok "readiness query fails: unknown is not 'not ready' — nothing touched" || bad "group deleted although readiness could not be read (rc=$rc)"
+
+STUB_PODS_FAIL=1 heal "$MARK" empty; rc=$?
+{ ! deleted && [ $rc -ne 0 ] && restored; } && ok "pod listing fails: unknown is not 'no pods' — group NOT deleted, replicas restored" || bad "group deleted although the pod listing failed (rc=$rc)"
+
+STUB_SCALE_UP_FAIL=1 heal "$MARK" empty; rc=$?
+{ deleted && [ $rc -ne 0 ] && grep -q 'scale-up to 1 FAILED' "$WORK/heal.out"; } && ok "a failed scale-up after the delete is returned and named" || bad "a failed scale-up after the group delete was swallowed (rc=$rc)"
+
 STUB_GROUP_FAIL=1 heal "$MARK" empty; rc=$?
 { [ $rc -ne 0 ] && restored; } && ok "a failed group delete returns non-zero and puts the service back" || bad "a failed group delete was swallowed or left the service at 0 (rc=$rc)"
 
@@ -185,10 +194,13 @@ PY
   mut "heal does not require the marker" "s.replace(\"grep -q 'OUTPUT_TAPE_RECREATED' || return 0\",'true')"
   mut "heal does not require an empty tape" "s.replace('if [ \"\$end\" != \"0\" ]; then','if false; then')"
   mut "an unmeasured tape counts as empty" "s.replace('end=\$(linearizer_output_end) ||','end=\$(linearizer_output_end || echo 0) ||')"
-  mut "heal never runs after the straggler pass" "s.replace('  heal_linearizer_recreated_tape || true\\n','')"
+  mut "heal never runs after the straggler pass" "s.replace('  heal_linearizer_recreated_tape || echo','  true || echo')"
   mut "heal ignores whether the deployment is ready" "s.replace('[ \"\${rr:-0}\" -lt \"\$des\" ] 2>/dev/null || return 0\\n  log=\"\$(\$KK logs deploy/\"\$LINEARIZER_DEPLOY\" --tail=200 2>/dev/null; ','true\\n  log=\"\$(\$KK logs deploy/\"\$LINEARIZER_DEPLOY\" --tail=200 2>/dev/null; ')"
   mut "a failed scale-down is ignored" "s.replace('if ! \$K scale deploy/\"\$LINEARIZER_DEPLOY\" --replicas=0 >/dev/null 2>&1; then','if false; then')"
   mut "pods are looked up by the wrong label" "s.replace('-l \"app.kubernetes.io/name=\$LINEARIZER_DEPLOY\"','-l \"app=\$LINEARIZER_DEPLOY\"')"
+  mut "an unreadable readiness is taken as zero" "s.replace('-o jsonpath=\'{.status.readyReplicas}\' 2>/dev/null) || { echo \"  linearizer: could not read its readiness','-o jsonpath=\'{.status.readyReplicas}\' 2>/dev/null) || { true; echo \"  linearizer: could not read its readiness').replace('NOT touching its consumer group\" >&2; return 1; }\n  [ \"\${rr:-0}\"','NOT touching its consumer group\" >&2; }\n  [ \"\${rr:-0}\"')"
+  mut "a failed pod listing is taken as no pods" "s.replace('if ! pods=\$(linearizer_pods); then','if false; then')"
+  mut "a failed scale-up is swallowed" "s.replace('if ! \$K scale deploy/\"\$LINEARIZER_DEPLOY\" --replicas=\"\$des\" >/dev/null 2>&1; then\n    echo \"  linearizer: group deleted but','if false; then\n    echo \"  linearizer: group deleted but')"
   mut "malformed offset lines are skipped" "s.replace('    { bad = 1 }\\n','    { next }\\n')"
   mut "start never reports the linearizer" "s.replace('  report_linearizer_status\\n  echo \"Done','  echo \"Done')"
 fi
