@@ -1121,6 +1121,45 @@ report_session_bound_services() {
     "its bootstrap date (today, ET) is a session that has already ended, so it exits; it starts once the ET date rolls, then waits AWAITING_SCHEDULE for the first bar of that session (the estimate container is separate and unaffected)"
 }
 
+# ---------- the ES trade linearizer: never a straggler, and its one known stuck state is healed ----------
+# es-trade-linearizer-service is NOT ready for a long time after a wipe BY DESIGN: a fresh tape orders the last 24 h of
+# underlying.es.trades (≈430k records) before it is live. The straggler pass below restarted it at 90 s -- before it had written
+# a record -- and its own guard then refused every restart (OUTPUT_TAPE_RECREATED: the output tape is empty but the consumer group
+# holds committed offsets, so it will not start a new tape mid-stream). That is a hand repair after every clean. So:
+#  1. the straggler pass leaves it alone (linearizer_straggler_exempt), and
+#  2. if it is stuck in that state anyway (a restart from anywhere else), heal_linearizer_recreated_tape deletes ITS consumer group
+#     -- only when the pod log says OUTPUT_TAPE_RECREATED AND the output tape really is empty (end offsets sum to 0) -- and restarts it.
+LINEARIZER_DEPLOY=es-trade-linearizer-service
+LINEARIZER_GROUP=options-edge-es-trade-linearizer
+LINEARIZER_OUTPUT_TOPIC=underlying.es.trades.linearized
+linearizer_straggler_exempt() { [ "$1" = "$LINEARIZER_DEPLOY" ]; }
+# Sum of the output tape's end offsets. Prints nothing (and fails) when it cannot be measured: an unmeasured tape is NOT an empty one.
+linearizer_output_end() {
+  local out
+  out=$("$(dirname "$KT")/kafka-get-offsets.sh" --bootstrap-server "$BS" --topic "$LINEARIZER_OUTPUT_TOPIC" 2>/dev/null) || return 1
+  [ -n "$out" ] || return 1
+  printf '%s\n' "$out" | awk -F: 'NF==3 && $3 ~ /^[0-9]+$/ {s+=$3; n++} END {if (n==0) exit 1; print s}'
+}
+heal_linearizer_recreated_tape() {
+  local des log end
+  des=$($KK get deploy "$LINEARIZER_DEPLOY" -o jsonpath='{.spec.replicas}' 2>/dev/null)
+  [ "${des:-0}" -gt 0 ] 2>/dev/null || return 0
+  log="$($KK logs deploy/"$LINEARIZER_DEPLOY" --tail=200 2>/dev/null; $KK logs deploy/"$LINEARIZER_DEPLOY" --previous --tail=200 2>/dev/null)"
+  printf '%s\n' "$log" | grep -q 'OUTPUT_TAPE_RECREATED' || return 0
+  end=$(linearizer_output_end) || { echo "  linearizer: OUTPUT_TAPE_RECREATED but the output tape could not be measured — NOT touching its consumer group" >&2; return 1; }
+  if [ "$end" != "0" ]; then
+    echo "  linearizer: OUTPUT_TAPE_RECREATED but the output tape holds $end records — NOT touching its consumer group" >&2; return 1
+  fi
+  echo "  linearizer: output tape empty + committed offsets (OUTPUT_TAPE_RECREATED) — deleting group $LINEARIZER_GROUP and restarting"
+  $K scale deploy/"$LINEARIZER_DEPLOY" --replicas=0 >/dev/null 2>&1
+  $KK wait --for=delete pod -l app="$LINEARIZER_DEPLOY" --timeout=90s >/dev/null 2>&1 || true
+  if ! "$(dirname "$KT")/kafka-consumer-groups.sh" --bootstrap-server "$BS" --delete --group "$LINEARIZER_GROUP" >/dev/null 2>&1; then
+    echo "  linearizer: could not delete group $LINEARIZER_GROUP — leaving the service scaled back up as it was" >&2
+    $K scale deploy/"$LINEARIZER_DEPLOY" --replicas="$des" >/dev/null 2>&1; return 1
+  fi
+  $K scale deploy/"$LINEARIZER_DEPLOY" --replicas="$des" >/dev/null 2>&1
+}
+
 do_start() {
   require_kafka_cli
   ensure_topics_or_refuse || {
@@ -1154,11 +1193,16 @@ do_start() {
     des=$($KK get deploy "$d" -o jsonpath='{.spec.replicas}' 2>/dev/null)
     rr=$($KK get deploy "$d" -o jsonpath='{.status.readyReplicas}' 2>/dev/null)
     if [ "${des:-0}" -gt 0 ] && [ "${rr:-0}" -lt "${des:-0}" ]; then
+      if linearizer_straggler_exempt "$d"; then
+        echo "  $d (${rr:-0}/${des}) — still ordering its backlog, NOT restarted (a restart before its first write is what OUTPUT_TAPE_RECREATED refuses)"
+        continue
+      fi
       echo "  boot-order straggler: $d (${rr:-0}/${des}) — restarting"
       $K rollout restart deploy/"$d" >/dev/null 2>&1; healed=$((healed+1))
     fi
   done
   echo "  self-heal restarted $healed straggler(s)"
+  heal_linearizer_recreated_tape || true
 
   # Schema self-heal: all Schema-Registry schemas live in the compacted _schemas topic; if it gets
   # wiped (the known dev SR-wipe → gateway-wedge, dev-schema-registry-wipe-gateway-wedge), producers
