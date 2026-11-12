@@ -1637,9 +1637,16 @@ for p in json.load(sys.stdin)["items"]:
   # NOT `[ -x ] && ...`: that silently skipped the prune when the file was absent, and the prune is
   # what keeps the dev disk from re-bloating every build. A missing prune is a state to report, not
   # one to pass over. install-dev-cleanup.sh installs it beside this script and --check proves it.
+  CLEAN_REGISTRY_FAILED=0
   _prune="$(dirname "${BASH_SOURCE[0]}")/dev-registry-prune.sh"
   if [ -x "$_prune" ]; then
+    # `| sed` replaces the prune's exit status with sed's, so a prune that left a pinned image
+    # unpullable (or failed its collection) looked exactly like a clean one. Read PIPESTATUS.
     /opt/homebrew/bin/bash "$_prune" 2>&1 | sed 's/^/   /'
+    if [ "${PIPESTATUS[0]}" -ne 0 ]; then
+      CLEAN_REGISTRY_FAILED=1
+      echo "   REGISTRY PRUNE FAILED — read the lines above; an image dev pins may not be pullable"
+    fi
   else
     echo "   WARNING: $_prune is missing — registry NOT pruned (run scripts/ops/install-dev-cleanup.sh)"
   fi
@@ -1670,11 +1677,18 @@ for p in json.load(sys.stdin)["items"]:
   # still proceeds to the overnight start, whose topic pass runs again and refuses its own scale-up
   # if it still fails. The wipe itself is already complete at this point, so this REPORTS rather
   # than aborts — a mid-clean abort would leave the wipe half-applied, which is worse.
+  _clean_rc=0
+  if [ "${CLEAN_REGISTRY_FAILED:-0}" = 1 ]; then
+    echo "  registry: the prune FAILED or left a pinned image unpullable (see 4b2) — dev may not be able to"
+    echo "            pull an image it pins; run dev-registry-verify-pinned.sh and rebuild what it names."
+    _clean_rc=1
+  fi
   if [ "${CLEAN_TOPICS_FAILED:-0}" = 1 ]; then
     echo "  topics: NOT all recreated at their declared shapes — nothing may be scaled up until a"
     echo "          topic pass succeeds ('dev-cleanup topics', then 'dev-cleanup start')."
     return 1
   fi
+  return "$_clean_rc"
 }
 
 # ---------- dispatch ----------

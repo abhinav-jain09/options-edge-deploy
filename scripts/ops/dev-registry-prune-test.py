@@ -173,7 +173,8 @@ case "$1" in
   exec) echo 1G ;;
   stop) [ -e {self.tmp.name}/cannot-stop ] && exit 1; {ctl}/down >/dev/null ;;
   start) {ctl}/up >/dev/null ;;
-  run) [ -e {self.tmp.name}/gc-fails ] && {{ echo 'gc exploded' >&2; exit 3; }}; {ctl}/gc >/dev/null ;;
+  run) [ -e {self.tmp.name}/kill-parent ] && {{ kill -TERM $PPID; sleep 5; exit 0; }}
+       [ -e {self.tmp.name}/gc-fails ] && {{ echo 'gc exploded' >&2; exit 3; }}; {ctl}/gc >/dev/null ;;
 esac
 """)
         (self.bin / "kubectl").write_text(f"#!/bin/bash\n[ -s {self.wl} ] && cat {self.wl}\n")
@@ -247,6 +248,16 @@ class Prune(Base):
         self.assertIn("GARBAGE COLLECT FAILED", p.stderr)
         self.assertIn("gc exploded", p.stderr, "the collector's output must be shown, not discarded")
 
+    def test_a_script_killed_mid_collection_still_starts_the_registry(self):
+        """The window between stop and start is the dangerous one: whatever ends the script there
+        (a signal, the clean being interrupted) must leave the registry RUNNING."""
+        self.seed()
+        Path(self.tmp.name, "kill-parent").write_text("")
+        p = self.run_prune()
+        self.assertNotEqual(0, p.returncode)
+        self.assertIn("down", self.reg.calls, "the scenario never reached the stopped state")
+        self.assertFalse(self.reg.down, "the registry was left STOPPED by an interrupted prune")
+
     def test_a_registry_that_cannot_be_stopped_is_never_collected(self):
         self.seed()
         Path(self.tmp.name, "cannot-stop").write_text("")
@@ -305,6 +316,50 @@ class Verify(Base):
     def test_an_unreadable_or_empty_workload_list_is_not_a_clean_bill(self):
         for obj in ({"items": []}, {}):
             self.assertEqual(2, self.verify(obj).returncode)
+
+
+CLEAN = HERE / "dev-cleanup.sh"
+
+
+class CleanSurfacesAFailedPrune(unittest.TestCase):
+    """`| sed` used to replace the prune's exit status with sed's, so a prune that left a pinned image
+    unpullable looked exactly like a clean one."""
+
+    def step(self, prune_rc):
+        with tempfile.TemporaryDirectory() as d:
+            Path(d, "dev-registry-prune.sh").write_text(f"#!/bin/bash\necho 'prune says hi'\nexit {prune_rc}\n")
+            Path(d, "dev-registry-prune.sh").chmod(0o755)
+            lines = CLEAN.read_text().splitlines()
+            a = next(i for i, l in enumerate(lines) if "CLEAN_REGISTRY_FAILED=0" in l)
+            b = next(i for i in range(a, len(lines)) if lines[i] == "  fi")
+            snippet = "\n".join(lines[a:b + 1])
+            Path(d, "snippet.sh").write_text(snippet + "\necho FLAG=$CLEAN_REGISTRY_FAILED\n")
+            r = subprocess.run(["/opt/homebrew/bin/bash" if Path("/opt/homebrew/bin/bash").exists() else "bash",
+                                str(Path(d, "snippet.sh"))], capture_output=True, text=True, timeout=30)
+            return r.stdout
+
+    def test_a_failing_prune_sets_the_flag_and_says_so(self):
+        out = self.step(1)
+        self.assertIn("FLAG=1", out)
+        self.assertIn("REGISTRY PRUNE FAILED", out)
+
+    def test_a_passing_prune_does_not(self):
+        out = self.step(0)
+        self.assertIn("FLAG=0", out)
+        self.assertNotIn("REGISTRY PRUNE FAILED", out)
+
+    def tail_rc(self, registry_failed, topics_failed):
+        lines = CLEAN.read_text().splitlines()
+        a = next(i for i, l in enumerate(lines) if l.strip() == "_clean_rc=0")
+        b = next(i for i in range(a, len(lines)) if lines[i] == "}")
+        body = "\n".join(lines[a:b])
+        script = f"f() {{\nCLEAN_REGISTRY_FAILED={registry_failed}; CLEAN_TOPICS_FAILED={topics_failed}\n{body}\n}}\nf; echo RC=$?\n"
+        return subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30).stdout
+
+    def test_the_cleans_own_status_carries_a_registry_failure(self):
+        self.assertIn("RC=1", self.tail_rc(1, 0))
+        self.assertIn("RC=0", self.tail_rc(0, 0))
+        self.assertIn("RC=1", self.tail_rc(0, 1), "the topics failure still fails the clean")
 
 
 if __name__ == "__main__":

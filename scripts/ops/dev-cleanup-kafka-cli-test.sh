@@ -183,6 +183,16 @@ case "$OUT" in
   *"dev-registry-prune.sh =="*) ok "--check covers the registry prune too" ;;
   *) bad "--check does not cover dev-registry-prune.sh: $OUT" ;;
 esac
+# The prune also runs the pull check; a live copy that drifted (or never arrived) must fail --check
+# too, or the machine runs a prune whose "after" verdict nobody reviewed.
+for f in dev-registry-verify-pinned.sh dev-registry-verify-pinned.py; do
+  case "$OUT" in *"$f =="*) ok "--check covers $f" ;; *) bad "--check does not cover $f: $OUT" ;; esac
+done
+echo "# drift" >> "$WORK/live/dev-registry-verify-pinned.py"
+OUT="$(DEV_CLEANUP_LIVE="$LIVE" bash "$REPO/scripts/ops/install-dev-cleanup.sh" --check 2>&1)"; RC=$?
+{ [ "$RC" = 1 ] && case "$OUT" in *"dev-registry-verify-pinned.py"*"differs"*) true ;; *) false ;; esac; } \
+  && ok "drift in the PULL CHECK alone -> DRIFT, exit 1" || bad "pull-check drift undetected: rc=$RC $OUT"
+cp "$REPO/scripts/ops/dev-registry-verify-pinned.py" "$WORK/live/dev-registry-verify-pinned.py"
 echo "# drift" >> "$WORK/live/dev-registry-prune.sh"
 OUT="$(DEV_CLEANUP_LIVE="$LIVE" bash "$REPO/scripts/ops/install-dev-cleanup.sh" --check 2>&1)"; RC=$?
 { [ "$RC" = 1 ] && case "$OUT" in *"dev-registry-prune.sh"*"differs"*) true ;; *) false ;; esac; } \

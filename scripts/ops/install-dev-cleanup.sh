@@ -15,9 +15,11 @@ LIVE_DIR="$(dirname "${DEV_CLEANUP_LIVE:-$HOME/oe-ops/dev-cleanup.sh}")"
 # The clean is not one file. dev-cleanup.sh SOURCES the registry prune, and that prune deletes
 # manifests and garbage-collects the blob store — so an unreviewed copy of it is as dangerous as an
 # unreviewed clean. It lived only on the Mac until 2026-11-12, untracked and untested, and its
-# keep set missed init containers; see dev-registry-prune.sh's header. Install and check all three
-# together, or the --check that passes proves only part of what runs.
-FILES="scripts/ops/dev-cleanup.sh scripts/ops/dev-registry-prune.sh scripts/ops/dev-registry-keep-set.py"
+# keep set missed init containers; see dev-registry-prune.sh's header. The prune also runs the pull
+# check (dev-registry-verify-pinned.sh/.py). Install and check ALL of them together, or the --check
+# that passes proves only part of what runs. (The fix to the prune was merged on 2026-11-12 and the
+# machines kept running the OLD copy for hours, because nothing installed it.)
+FILES="scripts/ops/dev-cleanup.sh scripts/ops/dev-registry-prune.sh scripts/ops/dev-registry-keep-set.py scripts/ops/dev-registry-verify-pinned.sh scripts/ops/dev-registry-verify-pinned.py"
 sha() { shasum -a 256 "$1" | awk '{print $1}'; }
 live_of() { printf '%s/%s\n' "$LIVE_DIR" "$(basename "$1")"; }
 if [ "${1:-}" = "--check" ]; then

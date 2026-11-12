@@ -60,5 +60,37 @@ class KeepSet(unittest.TestCase):
         self.assertEqual([D3], keepset.keep_digests(obj))
 
 
+class TagPins(unittest.TestCase):
+    def test_a_workload_pinned_by_tag_alone_is_a_tag_pin(self):
+        """No digest in the spec, so the digest set cannot protect it: the manifest its tag resolves
+        to is live. The prune used to delete it."""
+        obj = deploy(main=["host.docker.internal:5001/svc/app:2227-abc"])
+        self.assertEqual([("svc/app", "2227-abc")], keepset.keep_tags(obj))
+
+    def test_a_digest_pinned_ref_is_not_also_a_tag_pin(self):
+        obj = deploy(main=[f"host.docker.internal:5001/app:dev@{D1}"])
+        self.assertEqual([], keepset.keep_tags(obj))
+
+    def test_a_bare_repo_is_latest_and_an_init_container_counts(self):
+        obj = deploy(init=["host.docker.internal:5001/web-assets"], main=["localhost/x:t"])
+        self.assertEqual([("web-assets", "latest"), ("x", "t")], keepset.keep_tags(obj))
+
+    def test_split_ref_handles_registry_port_tag_and_digest(self):
+        sr = keepset.split_ref
+        self.assertEqual(("a/b", "t", D1), sr(f"host.docker.internal:5001/a/b:t@{D1}"))
+        self.assertEqual(("a/b", None, D1), sr(f"host.docker.internal:5001/a/b@{D1}"))
+        self.assertEqual(("a/b", "t", None), sr("host.docker.internal:5001/a/b:t"))
+        self.assertEqual(("a/b", None, None), sr("host.docker.internal:5001/a/b"))
+        self.assertEqual(("img", "1", None), sr("img:1"))
+
+    def test_the_cli_prints_digests_then_tag_pins(self):
+        import subprocess
+        obj = deploy(main=[f"r.io:5001/a@{D1}", "r.io:5001/b:v1"])
+        out = subprocess.run([sys.executable, str(Path(keepset.__file__ or spec.origin))], input=json.dumps(obj),
+                             capture_output=True, text=True).stdout.split("\n")
+        self.assertIn(D1, out)
+        self.assertIn("tag b v1", out)
+
+
 if __name__ == "__main__":
     unittest.main()

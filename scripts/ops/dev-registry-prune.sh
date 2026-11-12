@@ -123,7 +123,9 @@ registry_up() {
   echo "  REGISTRY IS NOT ANSWERING after the collection — docker start $reg" >&2
   return 1
 }
-trap 'registry_up' EXIT INT TERM
+# EXIT only, deliberately: a trap on INT/TERM would run registry_up and then CARRY ON with the script,
+# whereas a signal's default action ENDS it and bash runs the EXIT trap on the way out.
+trap 'registry_up' EXIT
 echo "  stopping $reg for the garbage collection (a push in this window fails loudly) ..."
 if ! docker stop "$reg" >/dev/null 2>&1; then
   echo "  COULD NOT STOP $reg — not collecting against a live registry" >&2
