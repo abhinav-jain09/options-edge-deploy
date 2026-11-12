@@ -162,6 +162,31 @@ class ResolverAccepts(unittest.TestCase):
         r = run(BUILD_IMAGE="false", DEPLOY_DRY_RUN="false", WEB_IMAGE_REF=REF)
         self.assertIn("NO commit", r.stderr)
 
+    def test_the_digest_form_says_the_tag_is_not_what_binds(self):
+        """The registry carries an immutable `<build>-<sha12>` tag per build beside the floating one,
+        so an operator may reasonably put it in WEB_IMAGE_REF and believe that pins the build. It does
+        not: bind-required-image.sh compares repository names with the tag stripped and then returns
+        the RENDER's repo:tag with this digest, so the tag written here never reaches the pod spec.
+        A tag disagreeing with its digest would change nothing about what deploys while reading in the
+        log as though it had, so the resolver says which half is load-bearing."""
+        r = run(BUILD_IMAGE="false", DEPLOY_DRY_RUN="false",
+                WEB_IMAGE_REF=f"host.docker.internal:5001/options-edge-web:1700-c597c06392f7@{DIGEST}")
+        self.assertEqual(0, r.returncode, r.stderr)
+        self.assertIn("only the digest binds", r.stderr)
+
+    def test_an_immutable_per_build_tag_is_accepted_not_required(self):
+        """Both tag shapes are accepted. Requiring the immutable tag would refuse the very value an
+        operator reads off a running pod -- `bind_required_image` puts the RENDER's tag in the pod
+        spec, so a pod pinned by this job reads `options-edge-web:dev@sha256:...` however it was
+        deployed. A refusal there would buy nothing and block the form's main use."""
+        for tag in ("dev", "1700-c597c06392f7", "prod"):
+            with self.subTest(tag=tag):
+                r = run(BUILD_IMAGE="false", DEPLOY_DRY_RUN="false",
+                        WEB_IMAGE_REF=f"host.docker.internal:5001/options-edge-web:{tag}@{DIGEST}")
+                self.assertEqual(0, r.returncode, r.stderr)
+                self.assertEqual(f"host.docker.internal:5001/options-edge-web:{tag}@{DIGEST}",
+                                 r.stdout.strip())
+
     def test_the_build_path_prints_nothing_and_passes(self):
         """It mints its own identity downstream; this resolver only checks it was not also given one."""
         r = run(BUILD_IMAGE="true", DEPLOY_DRY_RUN="false", WEB_PERMITTED_SHA=SHA)

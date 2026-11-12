@@ -137,6 +137,14 @@ if [ -n "$ref" ]; then
   echo "resolve-existing-web-image: deploying the digest named by WEB_IMAGE_REF. This carries NO commit" >&2
   echo "  claim — a digest alone does not say what source built it. Use WEB_PERMITTED_SHA +" >&2
   echo "  WEB_IMAGE_BUILD_NUMBER when the deploy should record which reviewed commit it shipped." >&2
+  # ONLY THE DIGEST BINDS. bind-required-image.sh compares repository names with the tag stripped
+  # (_bri_repo_of) and then returns `${PINNED_IMAGE%%@*}@$req_digest` — the RENDER's repo:tag with
+  # this digest. So the tag written here never reaches the pod spec, and a tag that disagrees with
+  # the digest (a build number copied from one build beside a digest from another) would change
+  # nothing about what deploys while reading in the log as though it had. Say so, rather than let the
+  # tag be mistaken for part of the binding.
+  echo "  NOTE only the digest binds: the tag in this reference is informational and is replaced by" >&2
+  echo "  the render's own tag before the apply. Naming a build's tag here does not pin that build." >&2
   printf '%s\n' "$ref"
   exit 0
 fi
