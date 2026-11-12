@@ -1130,6 +1130,7 @@ report_session_bound_services() {
 #  2. if it is stuck in that state anyway (a restart from anywhere else), heal_linearizer_recreated_tape deletes ITS consumer group
 #     -- only when the pod log says OUTPUT_TAPE_RECREATED AND the output tape really is empty (end offsets sum to 0) -- and restarts it.
 LINEARIZER_DEPLOY=es-trade-linearizer-service
+LINEARIZER_CONTAINER=es-trade-linearizer      # the pod container is not named after the Deployment
 LINEARIZER_GROUP=options-edge-es-trade-linearizer
 LINEARIZER_OUTPUT_TOPIC=underlying.es.trades.linearized
 linearizer_straggler_exempt() { [ "$1" = "$LINEARIZER_DEPLOY" ]; }
@@ -1156,7 +1157,7 @@ heal_linearizer_recreated_tape() {
   # readyReplicas is ABSENT (empty, kubectl succeeds) at zero ready, but a FAILED query is unknown, not zero.
   rr=$($KK get deploy "$LINEARIZER_DEPLOY" -o jsonpath='{.status.readyReplicas}' 2>/dev/null) || { echo "  linearizer: could not read its readiness — NOT touching its consumer group" >&2; return 1; }
   [ "${rr:-0}" -lt "$des" ] 2>/dev/null || return 0
-  log="$($KK logs deploy/"$LINEARIZER_DEPLOY" --tail=200 2>/dev/null; $KK logs deploy/"$LINEARIZER_DEPLOY" --previous --tail=200 2>/dev/null)"
+  log="$($KK logs deploy/"$LINEARIZER_DEPLOY" -c "$LINEARIZER_CONTAINER" --tail=200 2>/dev/null; $KK logs deploy/"$LINEARIZER_DEPLOY" -c "$LINEARIZER_CONTAINER" --previous --tail=200 2>/dev/null)"
   printf '%s\n' "$log" | grep -q 'OUTPUT_TAPE_RECREATED' || return 0
   end=$(linearizer_output_end) || { echo "  linearizer: OUTPUT_TAPE_RECREATED but the output tape could not be measured — NOT touching its consumer group" >&2; return 1; }
   if [ "$end" != "0" ]; then
@@ -1198,13 +1199,13 @@ report_linearizer_status() {
   # an ABSENT readyReplicas (kubectl succeeds, prints nothing) is zero ready; a FAILED query is unknown
   rr=$($KK get deploy "$LINEARIZER_DEPLOY" -o jsonpath='{.status.readyReplicas}' 2>/dev/null) || { echo "???  $LINEARIZER_DEPLOY: could not read its readiness (kubectl failed)"; return 0; }
   [ "${rr:-0}" -lt "$des" ] 2>/dev/null || { echo "OK   $LINEARIZER_DEPLOY ready"; return 0; }
-  log="$($KK logs deploy/"$LINEARIZER_DEPLOY" --tail=200 2>/dev/null)"
+  log="$($KK logs deploy/"$LINEARIZER_DEPLOY" -c "$LINEARIZER_CONTAINER" --tail=200 2>/dev/null)"
   if printf '%s\n' "$log" | grep -q 'OUTPUT_TAPE_RECREATED'; then
-    echo "???  $LINEARIZER_DEPLOY NOT ready: OUTPUT_TAPE_RECREATED and the heal did not clear it — read: kubectl -n options-edge logs deploy/$LINEARIZER_DEPLOY --tail=100"
+    echo "???  $LINEARIZER_DEPLOY NOT ready: OUTPUT_TAPE_RECREATED and the heal did not clear it — read: kubectl -n options-edge logs deploy/$LINEARIZER_DEPLOY -c $LINEARIZER_CONTAINER --tail=100"
   elif printf '%s\n' "$log" | grep -q 'source records to order before the live tail'; then
     echo "INFO $LINEARIZER_DEPLOY ordering its backlog (the log says so); ready when it reaches the live tail"
   else
-    echo "???  $LINEARIZER_DEPLOY NOT ready and its log does NOT show the backlog message: read kubectl -n options-edge logs deploy/$LINEARIZER_DEPLOY --tail=100"
+    echo "???  $LINEARIZER_DEPLOY NOT ready and its log does NOT show the backlog message: read kubectl -n options-edge logs deploy/$LINEARIZER_DEPLOY -c $LINEARIZER_CONTAINER --tail=100"
   fi
 }
 

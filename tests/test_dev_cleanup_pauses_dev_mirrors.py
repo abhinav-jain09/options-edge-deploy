@@ -424,6 +424,10 @@ class DevCleanupPausesDevMirrorsTest(unittest.TestCase):
                 apply_internal_topic_configs()  { return 0; }
                 verify_start_readiness()        { return 0; }
                 run_partition_doctor()          { return 0; }
+                # the linearizer's own start-up handling (tested by scripts/ops/dev-cleanup-start-linearizer-test.sh)
+                heal_linearizer_recreated_tape() { return 0; }
+                report_linearizer_status()       { return 0; }
+                linearizer_straggler_exempt()    { return 1; }
                 pause_dev_mirrors()               { rec PAUSE; return %(pause_rc)s; }
                 resume_dev_mirrors_if_declared()  { rec "RESUME:$1"; return 0; }
                 ensure_topics()                   { rec RECREATE; return %(ensure_rc)s; }

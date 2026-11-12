@@ -115,7 +115,7 @@ heal() {  # heal LOG OFFSETS ; the other knobs (STUB_REPLICAS STUB_READY STUB_GR
   : > "$WORK/groups.calls"; : > "$WORK/k3.calls"
   ( KK="$WORK/kk3"; K="$WORK/k3"; KT="$WORK/kbin/kafka-topics.sh"; BS=stub:1
     export STUB_LOG="$1" STUB_OFFSETS="$2" LINEARIZER_WAIT_TRIES=2 LINEARIZER_POLL_SECS=0
-    eval "$(var LINEARIZER_DEPLOY "$SRC")"; eval "$(var LINEARIZER_GROUP "$SRC")"; eval "$(var LINEARIZER_OUTPUT_TOPIC "$SRC")"
+    eval "$(var LINEARIZER_DEPLOY "$SRC")"; eval "$(var LINEARIZER_CONTAINER "$SRC")"; eval "$(var LINEARIZER_GROUP "$SRC")"; eval "$(var LINEARIZER_OUTPUT_TOPIC "$SRC")"
     eval "$(fn linearizer_output_end "$SRC")"; eval "$(fn linearizer_pods "$SRC")"; eval "$(fn heal_linearizer_recreated_tape "$SRC")"
     heal_linearizer_recreated_tape ) > "$WORK/heal.out" 2>&1
 }
@@ -166,7 +166,7 @@ STUB_GROUP_FAIL=1 heal "$MARK" empty; rc=$?
 
 # report_linearizer_status names a cause only when the log confirms it
 rep() {
-  ( KK="$WORK/kk3"; export STUB_LOG="$1"; eval "$(var LINEARIZER_DEPLOY "$SRC")"; eval "$(fn report_linearizer_status "$SRC")"; report_linearizer_status ) 2>&1
+  ( KK="$WORK/kk3"; export STUB_LOG="$1"; eval "$(var LINEARIZER_DEPLOY "$SRC")"; eval "$(var LINEARIZER_CONTAINER "$SRC")"; eval "$(fn report_linearizer_status "$SRC")"; report_linearizer_status ) 2>&1
 }
 STUB_READY_FAIL=1 rep "es-trade-linearizer fresh tape starts 24h back: 1 source records to order before the live tail" | grep -q 'could not read its readiness' && ok "report: an unreadable readiness is not reported as a backlog" || bad "report: an unreadable readiness was reported as something else"
 rep "es-trade-linearizer fresh tape starts 24h back: 433504 source records to order before the live tail" | grep -q 'ordering its backlog' && ok "report: backlog named when the log says so" || bad "report: backlog not recognised"
@@ -206,7 +206,7 @@ PY
   mut "heal does not require an empty tape" "s.replace('if [ \"\$end\" != \"0\" ]; then','if false; then')"
   mut "an unmeasured tape counts as empty" "s.replace('end=\$(linearizer_output_end) ||','end=\$(linearizer_output_end || echo 0) ||')"
   mut "heal never runs after the straggler pass" "s.replace('  local heal_rc=0; heal_linearizer_recreated_tape || heal_rc=\$?','  local heal_rc=0; true || heal_rc=\$?')"
-  mut "heal ignores whether the deployment is ready" "s.replace('[ \"\${rr:-0}\" -lt \"\$des\" ] 2>/dev/null || return 0\\n  log=\"\$(\$KK logs deploy/\"\$LINEARIZER_DEPLOY\" --tail=200 2>/dev/null; ','true\\n  log=\"\$(\$KK logs deploy/\"\$LINEARIZER_DEPLOY\" --tail=200 2>/dev/null; ')"
+  mut "heal ignores whether the deployment is ready" "s.replace('[ \"\${rr:-0}\" -lt \"\$des\" ] 2>/dev/null || return 0\\n  log=','true\\n  log=')"
   mut "a failed scale-down is ignored" "s.replace('if ! \$K scale deploy/\"\$LINEARIZER_DEPLOY\" --replicas=0 >/dev/null 2>&1; then','if false; then')"
   mut "pods are looked up by the wrong label" "s.replace('-l \"app.kubernetes.io/name=\$LINEARIZER_DEPLOY\"','-l \"app=\$LINEARIZER_DEPLOY\"')"
   mut "start swallows a failed heal" "s.replace('if [ \"\$verify_rc\" -eq 0 ] && [ \"\$heal_rc\" -ne 0 ]; then verify_rc=\$heal_rc; fi','true')"
