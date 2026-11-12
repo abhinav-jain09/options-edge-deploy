@@ -40,6 +40,11 @@ if [ -n "${KAFKA_GAMMA_EFFORT_LOG_TOPIC:-}" ] && [ "${KAFKA_GAMMA_EFFORT_LOG_TOP
 fi
 : "${KAFKA_BOOTSTRAP_SERVERS:?KAFKA_BOOTSTRAP_SERVERS unset - refusing to verify against an unknown cluster}"
 RF="${KAFKA_TOPIC_REPLICATION_FACTOR:-1}"
+# MIN_RF is read by the SOURCED ensure-topic-contract.lib.sh, not by this file. Dropping it because
+# nothing here mentions it made the first live run die with "MIN_RF: unbound variable" under set -u,
+# after it had already created the first topic. A sourced library's inputs are part of this script's
+# contract even when this script never names them.
+MIN_RF="${GAMMA_EFFORT_MIN_REPLICATION_FACTOR:-1}"
 MIN_ISR="${GAMMA_EFFORT_MIN_INSYNC_REPLICAS:-1}"
 kt() { kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" "$@"; }
 kc() { kafka-configs --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" "$@"; }

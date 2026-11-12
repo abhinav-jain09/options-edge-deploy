@@ -120,5 +120,47 @@ class CorpusTopic(unittest.TestCase):
         return " ".join(re.findall(rf"^{var}=\"(.*)\"$", self.topics(), re.MULTILINE))
 
 
+class BarrierContract(unittest.TestCase):
+    """Every barrier that SOURCES ensure-topic-contract.lib.sh must define what it reads.
+
+    The library's own header says so -- "Needs KT/KC functions, LIST, RF, MIN_RF, MIN_ISR" -- and
+    the scripts run under `set -u`, so a missing one is not a default, it is a crash. On the first
+    live deploy of gamma-effort it died with "MIN_RF: unbound variable" AFTER it had already created
+    the first topic, because the adapted barrier dropped a variable it never names itself.
+
+    Checked for every barrier, not just this one: the same omission is available to the next.
+    """
+
+    LIB = "ensure-topic-contract.lib.sh"
+    REQUIRED = ("RF", "MIN_RF", "MIN_ISR")
+
+    def barriers(self):
+        for path in sorted((ROOT / "scripts/kafka").glob("ensure-*-topics.sh")):
+            if self.LIB in path.read_text():
+                yield path
+
+    def test_every_barrier_defines_what_the_library_reads(self):
+        found = 0
+        for path in self.barriers():
+            found += 1
+            text = path.read_text()
+            for var in self.REQUIRED:
+                with self.subTest(barrier=path.name, var=var):
+                    # (?m): `^` must anchor at each LINE, not at the start of the whole file.
+                    self.assertRegex(
+                        text, rf"(?m)^{var}=", 
+                        f"{path.name} sources {self.LIB}, which reads ${var} under set -u, "
+                        f"but never assigns it: the deploy dies mid-barrier")
+        self.assertGreater(found, 1, "expected several barriers to source the shared library")
+
+    def test_the_library_still_declares_the_same_inputs(self):
+        """If the library grows a new required variable this test should fail, so the list above is
+        re-taken deliberately rather than silently becoming incomplete."""
+        lib = (ROOT / "scripts/kafka" / self.LIB).read_text()
+        used = set(re.findall(r"\$\{?(MIN_[A-Z_]+|RF)\b", lib))
+        self.assertEqual(set(self.REQUIRED), used,
+                         "the shared library's inputs changed: update REQUIRED and every barrier")
+
+
 if __name__ == "__main__":
     unittest.main()
