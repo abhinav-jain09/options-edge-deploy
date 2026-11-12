@@ -58,22 +58,14 @@ spec:
               value: "60"
             - name: DATABENTO_PUBLISH_INTERVAL_MS
               value: "5000"
-            # DEV-ONLY spot cascade: native SPX index (unwired stub) -> ES-basis (cost-of-carry from
-            # the ES front-month) -> synthetic put-call parity fallback (60s ES freshness gate). In
-            # practice ES-basis -> synthetic. Reuses the ES trade stream already ingested via base's
-            # DATABENTO_HPSF_ES_TRADES_ENABLED=true; no code change (CascadedSpotProvider shipped in
-            # options-edge-databento-feed PR #41). Set as a Deployment env override (NOT the infra
-            # configmap) so it is the reliable, deploy-durable knob applied by service-deploy — the
-            # container env beats the shared configmap's envFrom value AND service-deploy rolls the
-            # pod, so activation is deterministic (the common-infra configmap path neither restarts
-            # the feed nor is currently unblocked). Prod stays SYNTHETIC (deliberate) — untouched.
-            # 2026-07-29 (USER decision, IBKR-SPX-INDEX-PRIORITY-SPOT-REQUIREMENT.md rev4):
-            # CASCADED so the IBKR SPX cash index (tier-1, via the SPX_INDEX_SOURCE_* consumer
-            # in the feed configmap) is the priority-1 spot; absent/stale/DELAYED falls back
-            # automatically and recovers automatically. The 2026-07-15 starvation incident's
-            # prerequisite fix (refresh throttle, feed PR #69) is MERGED and pinned explicitly
-            # via DATABENTO_CASCADE_REFRESH_MIN_INTERVAL_MS in the feed configmap.
-            # Kill switch: set this back to SYNTHETIC.
+            # SPX spot cascade (SPX Spot Price Source requirements): CASCADED = exactly two sources in a fixed
+            # order. Tier 1 is the live IBKR SPX cash index (on by default in the feed; the consumer needs no
+            # SPX_INDEX_SOURCE_* setting here); tier 2 is the ES futures price minus the basis measured at the cash
+            # close. Set as a Deployment env override (NOT the infra configmap) so it is the deploy-durable knob
+            # applied by service-deploy: the container env beats the shared configmap's envFrom value AND
+            # service-deploy rolls the pod, so activation is deterministic. The refresh throttle
+            # (DATABENTO_CASCADE_REFRESH_MIN_INTERVAL_MS, feed configmap) protects the OPRA read loop.
+            # Kill switch: set this back to SYNTHETIC (a standalone provider, not a cascade tier).
             - name: DATABENTO_SPOT_SOURCE
               value: CASCADED
             # VIX-via-OPRA-parity, MIRRORS the prod enablement (feed
@@ -120,9 +112,33 @@ spec:
             # topic directly on the native path — no es.price re-point needed here).
             - name: ES_SPX_BASIS_A1_EVIDENCE_ENABLED
               value: "true"
+            # SAMPLES OFF (SPX Spot Price Source requirements): tier 2 of the SPX spot is ES minus the basis MEASURED
+            # AT THE CASH CLOSE, so the engine runs in anchor + trading-day-projection mode. Intraday samples would
+            # install a different (MEASURED) level and the spot would no longer be the close-measured basis.
             - name: ES_SPX_BASIS_SAMPLES_ENABLED
-              value: "true"
+              value: "false"
             - name: ES_SPX_BASIS_CLOSE_PRINCIPALS
               value: "abhinav"
             - name: ES_SPX_BASIS_ACK_PRINCIPALS
               value: "abhinav"
+            # ---- the close-measured ES->SPX basis is SAVED to the database every trading day -------------------
+            # (SPX Spot Price Source requirements, Tier 2.4-2.6). One row per trade date in spx_basis_close
+            # (basis, measured_at, contract name); loaded on startup, projected by trading days, used only while
+            # its contract is the current ES front contract. Same database the platform's Java writers use:
+            # the URL and user come from options-edge-config (POSTGRES_JDBC_URL / POSTGRES_USER), the password
+            # from options-edge-runtime-secrets, so the database lives in one place.
+            - name: SPX_BASIS_PG_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: options-edge-config
+                  key: POSTGRES_JDBC_URL
+            - name: SPX_BASIS_PG_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: options-edge-config
+                  key: POSTGRES_USER
+            - name: SPX_BASIS_PG_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: options-edge-runtime-secrets
+                  key: POSTGRES_PASSWORD

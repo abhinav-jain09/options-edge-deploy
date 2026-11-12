@@ -57,6 +57,24 @@ Notes:
 
 ---
 
+### Ordered roll: a feed image that REFUSES retired settings (databento-feed, 2026-11-12)
+
+The databento-feed image from options-edge-databento-feed PR 196 refuses to start while any of
+`DATABENTO_CASCADE_TIER_ORDER`, `DATABENTO_CASCADE_OFF_HOURS_TIER_ORDER`, `DATABENTO_ES_ANNUAL_RATE`,
+`DATABENTO_ES_ANNUAL_DIV_YIELD`, `DATABENTO_ES_BASIS_ROLL_BUFFER_DAYS`, `DATABENTO_ES_BASIS_DTE_OVERRIDE`
+is in its environment. The shared ConfigMap `options-edge-databento-feed-config` is NOT part of the service slice, so
+the order is not enforced by the service deploy and is:
+
+1. Apply the ConfigMap without the retired keys first (`common-infra-deploy`, or for a surgical dev change
+   `kubectl kustomize k8s/infra/overlays/dev` -> the `options-edge-databento-feed-config` object -> `kubectl apply`;
+   the object carries a last-applied annotation, so removed keys are removed). `envFrom` is read at pod creation, so
+   this changes nothing for the running pod.
+2. Confirm: `kubectl -n options-edge get cm options-edge-databento-feed-config -o json` has none of the keys above.
+3. THEN roll the feed (`service-deploy SERVICE=options-edge-databento-feed`). Rolling it first crash-loops the new pod
+   on the retired key, and the error names the key and what replaces it.
+
+`tests/test_databento_feed_spx_spot_config.py` (CI-required) fails the build if any retired key reappears in any YAML.
+
 ## 2. Common infra (when you actually changed infra)
 
 Run **`common-infra-deploy`** only when `k8s/infra/**` changed (new PVC, config key,
