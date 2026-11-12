@@ -527,8 +527,13 @@ class Service(unittest.TestCase):
         jenkinsfile = read("Jenkinsfile.service-deploy")
         self.assertIn("'gamma-zone'", jenkinsfile)
         self.assertIn("gamma-zone) scripts/kafka/ensure-gamma-zone-topics.sh ;;", jenkinsfile)
-        # and the barrier arm is gated on the permitted-SHA guard, like every other one
-        arm = re.search(r"^.*\['line-acceptance'.*'gamma-zone'\].*$", jenkinsfile, re.M).group(0)
+        # and the barrier arm is gated on the permitted-SHA guard, like every other one.
+        # The list is matched by what it CONTAINS, not by what it ends with: anchoring on
+        # 'gamma-zone'] made this fail the moment another service was appended after it, which says
+        # nothing about whether gamma-zone is still gated. assertIn above already proves membership.
+        match = re.search(r"^.*\['line-acceptance'.*'gamma-zone'.*\].*$", jenkinsfile, re.M)
+        self.assertIsNotNone(match, "the barrier arm naming gamma-zone was not found")
+        arm = match.group(0)
         self.assertIn("PERMITTED_SHA_GUARD == 'PASSED'", arm)
         self.assertIn("DEPLOY_WORKSPACE_PERMITTED == 'PASSED'", arm)
         self.assertIn("!params.DEPLOY_DRY_RUN", arm)
