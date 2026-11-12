@@ -128,10 +128,14 @@ fi
 # the delete-and-recreate arm -- so without this entry a partition mismatch under
 # KAFKA_RECREATE_MISMATCHED_TOPICS=true would discard the whole corpus while three lists said it was preserved.
 # Its sibling options.spx.gamma-zone.current is deliberately NOT here: the next folded bar refills it.
+# options.spx.gamma-effort.log joins it for exactly the same reason, and for the same service shape: it is the
+# corpus the gamma-effort calibration can only come from, and its own design says the shipped parameters need
+# 20 to 25 sessions to settle. Its sibling .current is likewise absent: the next folded bar refills it.
 NEVER_RECREATE_EXPECTED="context-tape.compression.checkpoint
 context-tape.compression.history
 context-tape.direction.ledger
 es.futures.footprint.strike
+options.spx.gamma-effort.log
 options.spx.gamma-zone.log
 options.spx.vol-premium.baseline
 options.spx.vol-premium.events
