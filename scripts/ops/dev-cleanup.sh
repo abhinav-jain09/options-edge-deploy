@@ -1537,7 +1537,15 @@ for p in json.load(sys.stdin)["items"]:
   # 4b2. local registry: keep ONLY :dev + deployed image per repo, delete old build tags + GC (reclaimed
   #      182 GB→366 MB once — the registry never GC's itself, so it re-bloats every build/deploy).
   echo "4b2) pruning local registry to latest-only ..."
-  [ -x /Users/abhinav/oe-ops/dev-registry-prune.sh ] && /opt/homebrew/bin/bash /Users/abhinav/oe-ops/dev-registry-prune.sh 2>&1 | sed 's/^/   /'
+  # NOT `[ -x ] && ...`: that silently skipped the prune when the file was absent, and the prune is
+  # what keeps the dev disk from re-bloating every build. A missing prune is a state to report, not
+  # one to pass over. install-dev-cleanup.sh installs it beside this script and --check proves it.
+  _prune="$(dirname "${BASH_SOURCE[0]}")/dev-registry-prune.sh"
+  if [ -x "$_prune" ]; then
+    /opt/homebrew/bin/bash "$_prune" 2>&1 | sed 's/^/   /'
+  else
+    echo "   WARNING: $_prune is missing — registry NOT pruned (run scripts/ops/install-dev-cleanup.sh)"
+  fi
 
   # 4c. thin APFS local Time Machine snapshots (macOS GOTCHA): the Mac takes hourly TM snapshots, so the
   #     ~160 GB of Kafka data just deleted stays PINNED as "used" (disk creeps toward full) until thinned.

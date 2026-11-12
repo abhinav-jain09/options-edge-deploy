@@ -173,8 +173,19 @@ OUT="$(DEV_CLEANUP_LIVE="$LIVE" bash "$REPO/scripts/ops/install-dev-cleanup.sh" 
 cp "$REPO/scripts/ops/dev-cleanup.sh" "$LIVE"; echo "# drift" >> "$LIVE"
 OUT="$(DEV_CLEANUP_LIVE="$LIVE" bash "$REPO/scripts/ops/install-dev-cleanup.sh" --check 2>&1)"; RC=$?
 { [ "$RC" = 1 ] && case "$OUT" in *"DRIFT:"*"differs"*) true ;; *) false ;; esac; } && ok "a differing live copy -> DRIFT, exit 1" || bad "drift: rc=$RC $OUT"
-cp "$REPO/scripts/ops/dev-cleanup.sh" "$LIVE"
+# The clean is THREE files: dev-cleanup.sh sources the registry prune, which reads its keep set
+# from dev-registry-keep-set.py. A --check that passed on the clean alone proved only part of what
+# runs -- and the prune is the half that deletes manifests and garbage-collects the blob store.
+DEV_CLEANUP_LIVE="$LIVE" bash "$REPO/scripts/ops/install-dev-cleanup.sh" >/dev/null 2>&1
 OUT="$(DEV_CLEANUP_LIVE="$LIVE" bash "$REPO/scripts/ops/install-dev-cleanup.sh" --check 2>&1)"; RC=$?
-{ [ "$RC" = 0 ] && case "$OUT" in "OK: live dev-cleanup.sh == repo"*) true ;; *) false ;; esac; } && ok "an identical live copy -> OK, exit 0" || bad "identical: rc=$RC $OUT"
+{ [ "$RC" = 0 ] && case "$OUT" in *"OK: dev-cleanup.sh == repo"*) true ;; *) false ;; esac; } && ok "an identical live copy -> OK, exit 0" || bad "identical: rc=$RC $OUT"
+case "$OUT" in
+  *"dev-registry-prune.sh =="*) ok "--check covers the registry prune too" ;;
+  *) bad "--check does not cover dev-registry-prune.sh: $OUT" ;;
+esac
+echo "# drift" >> "$WORK/live/dev-registry-prune.sh"
+OUT="$(DEV_CLEANUP_LIVE="$LIVE" bash "$REPO/scripts/ops/install-dev-cleanup.sh" --check 2>&1)"; RC=$?
+{ [ "$RC" = 1 ] && case "$OUT" in *"dev-registry-prune.sh"*"differs"*) true ;; *) false ;; esac; } \
+  && ok "drift in the PRUNE alone -> DRIFT, exit 1" || bad "prune drift undetected: rc=$RC $OUT"
 
 [ "$fails" = 0 ] && { echo "dev-cleanup-kafka-cli-test: all ok"; exit 0; } || { echo "dev-cleanup-kafka-cli-test: $fails FAILED"; exit 1; }
