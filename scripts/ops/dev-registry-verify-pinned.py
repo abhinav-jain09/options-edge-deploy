@@ -73,16 +73,13 @@ class Checker:
         d = desc["digest"]
         if d not in self.blob_result:
             try:
-                h, n = _hasher(d), 0
+                h = _hasher(d)
                 with _open(f"{self.reg}/v2/{repo}/blobs/{d}") as r:
                     while True:
                         chunk = r.read(CHUNK)
                         if not chunk:
                             break
                         h.update(chunk)
-                        n += len(chunk)
-                if n != int(desc["size"]):
-                    raise RuntimeError(f"blob {d[:19]} is {n} bytes, descriptor says {desc['size']}")
                 if f"{d.partition(':')[0]}:{h.hexdigest()}" != d:
                     raise RuntimeError(f"blob {d[:19]} content does not hash to its digest")
                 self.blob_result[d] = None

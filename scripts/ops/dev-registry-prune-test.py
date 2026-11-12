@@ -34,6 +34,7 @@ class Registry:
         self.calls = []
         self.gc_while_up = False
         self.deleted = []
+        self.blob_gets = {}
         self.sweep_on_gc = set()   # blobs a (buggy) collection removes even though a manifest uses them
 
     def push(self, repo, tag, layers, *, seed=b""):
@@ -124,6 +125,7 @@ def handler_for(reg: Registry):
                 data = reg.blobs.get(name)
                 if data is None:
                     return self._send(404)
+                reg.blob_gets[name] = reg.blob_gets.get(name, 0) + 1
                 rng = self.headers.get("Range")
                 if rng:
                     a, b = rng.split("=")[1].split("-")
@@ -348,6 +350,14 @@ class Verify(Base):
         p = self.verify(workload(([], [self.ref("a", digest=d1), self.ref("b", digest=d2)])))
         self.assertEqual(1, p.returncode)
         self.assertEqual(2, p.stdout.count("BROKEN"))
+
+    def test_a_shared_layer_is_downloaded_once_per_run(self):
+        shared = b"s" * 100
+        d1 = self.reg.push("a", "dev", [shared], seed=b"1")
+        d2 = self.reg.push("b", "dev", [shared], seed=b"2")
+        p = self.verify(workload(([], [self.ref("a", digest=d1), self.ref("b", digest=d2)])))
+        self.assertEqual(0, p.returncode, p.stdout)
+        self.assertEqual(1, self.reg.blob_gets[sha(shared)])
 
     def test_an_unreadable_or_empty_workload_list_is_not_a_clean_bill(self):
         for obj in ({"items": []}, {}):
