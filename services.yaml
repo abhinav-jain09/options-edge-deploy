@@ -305,6 +305,19 @@ services:
   # RESET-PRESERVED because it is the corpus the calibration will come from. scripts/kafka/ensure-gamma-zone-topics.sh is the first-deploy barrier (service-deploy, dev only). One JVM, no Kafka Streams,
   # no state volume, no HTTP server and so no probes. Single replica only. No Service object; no production or es4 entry, image, topic or overlay exists.
   - { name: gamma-zone,                   managedBy: standalone, sliceGenerated: true, envs: [dev], image: options-edge-gamma-zone,                    deployments: [gamma-zone-service] }
+  # gamma-effort: DEV ONLY (envs: [dev]). NEW service. SPX gamma measured against ES contracts traded: at each strike it computes the forced dealer hedge the gamma implies (hedge dollars = |netGex| x
+  # crossing distance / 1% of spot; hedge contracts = that / (ES price x 50)), subtracts what price moving INTO the strike has already made the dealer do, and compares what is LEFT with the aggressive
+  # flow the footprint carried in the direction of travel. It publishes that comparison, the next strike's requirement, the gamma flip, and the evidence - the map's age and staleness, the refusal tally,
+  # whether the approach direction was measured or defaulted, and the calibration every figure was computed under - on options.spx.gamma-effort.{current,log}, JSON on the wire, so it registers no subject
+  # for its OUTPUTS. It READS two market topics: es.futures.footprint.bars (canonical Avro id 2034, declared in its schema-requirements.json, and schema-manifest/manifest.json lists gamma-effort among
+  # that subject's consumers - governance R5e), and options.databento.gex.strike as a GENERIC Avro record, whose subject is ENV_LOCAL and so is deliberately NOT declared, exactly as dealer-ledger,
+  # delta-flow and hedging-pressure omit it.
+  # IT ISSUES NO FINAL VERDICT. The design's final verdict leads on resting liquidity; ES depth comes from a different feed than the aggressor-classified tape, so the emission carries the EFFORT reading
+  # and says final=null with the reason named, rather than publishing half a measurement under the name of the whole one. SHADOW: it emits no order, names no level to act at, never trades and adds no
+  # decision consumer. Two assigned consumers, NO consumer group: it seeks back 20 hours of tape and 2 hours of gamma on every start, so nothing is stored and a restart rebuilds. The log is delete-only
+  # and RESET-PRESERVED because it is the corpus the calibration can only come from. scripts/kafka/ensure-gamma-effort-topics.sh is the first-deploy barrier (service-deploy, dev only). One JVM, no Kafka
+  # Streams, no state volume, no HTTP server and so no probes. Single replica only. No Service object; no production or es4 entry, image, topic or overlay exists.
+  - { name: gamma-effort,                 managedBy: standalone, sliceGenerated: true, envs: [dev], image: options-edge-gamma-effort,                  deployments: [gamma-effort-service] }
   # stock-gex: SPX-500 single-stock GEX (Databento equity options; NO Kafka). Its image builds in the
   # options-edge-databento-feed repo (Dockerfile.stockgex), like databento-sr3-feed — hence buildJob.
   # DEV-FIRST/on-demand: prod overlay holds it at replicas:0 until the nightly OI-index builder exists.

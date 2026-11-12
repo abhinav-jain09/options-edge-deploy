@@ -102,6 +102,10 @@ resources:
   # measures and publishes; it emits no signal and never trades. Referenced here only (NOT in k8s/base, production or experiment). No patches here or in the standalone slice
   # (k8s/services/gamma-zone/overlays/dev); the dev image remap below is what the slice mirrors.
   - ../../services/gamma-zone/base
+  # gamma-effort: DEV-ONLY (services.yaml envs: [dev]), replicas 1: SPX gamma measured against ES contracts traded -- the forced dealer hedge a strike implies against the aggressive flow pushing into it.
+  # It publishes the EFFORT reading and withholds the design's final verdict by name, because that one leads on resting liquidity and ES depth comes from a different feed than the aggressor-classified tape.
+  # Referenced here only (NOT in k8s/base, production or experiment). No patches here or in the standalone slice (k8s/services/gamma-effort/overlays/dev); the dev image remap below is what the slice mirrors.
+  - ../../services/gamma-effort/base
   # drop-classifier-ref: DEV-ONLY and TEMPORARY (services.yaml envs: [dev]): the retained drop-classifier image in ES_TRADES mode writing es.drop.ref.* , the reference side of the G3b parity gate. Removed when G3b passes.
   - ../../services/drop-classifier-ref/base
   # NOTE: the databento timewarp replay Job + snapshot-replay Deployment used to live
@@ -1018,6 +1022,8 @@ images:
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-gamma-zone
     newName: host.docker.internal:5001/options-edge-gamma-zone
+  - name: 192.168.100.252:5000/options-edge-gamma-effort
+    newName: host.docker.internal:5001/options-edge-gamma-effort
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-oi-next-publication
     newName: host.docker.internal:5001/options-edge-oi-next-publication

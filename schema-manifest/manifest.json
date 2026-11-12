@@ -10213,6 +10213,15 @@
           "environments": [
             "dev"
           ]
+        },
+        {
+          "service": "gamma-effort",
+          "accepts": [
+            2034
+          ],
+          "environments": [
+            "dev"
+          ]
         }
       ],
       "retained": true,

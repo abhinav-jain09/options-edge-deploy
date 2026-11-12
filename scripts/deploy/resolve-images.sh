@@ -91,6 +91,7 @@ STRIKE_HOLD_IMAGE=$registry/options-edge-strike-hold:$image_tag
 LIQUIDITY_VALIDATOR_IMAGE=$registry/options-edge-liquidity-validator:$image_tag
 BREAK_LINE_IMAGE=$registry/options-edge-break-line:$image_tag
 GAMMA_ZONE_IMAGE=$registry/options-edge-gamma-zone:$image_tag
+GAMMA_EFFORT_IMAGE=$registry/options-edge-gamma-effort:$image_tag
 EOF
             fi
             # short-premium-agent renders in dev+production (a standalone service that runs on prod too),
@@ -194,6 +195,7 @@ STRIKE_HOLD_IMAGE=${STRIKE_HOLD_IMAGE:-$registry/options-edge-strike-hold:dev}
 LIQUIDITY_VALIDATOR_IMAGE=${LIQUIDITY_VALIDATOR_IMAGE:-$registry/options-edge-liquidity-validator:dev}
 BREAK_LINE_IMAGE=${BREAK_LINE_IMAGE:-$registry/options-edge-break-line:dev}
 GAMMA_ZONE_IMAGE=${GAMMA_ZONE_IMAGE:-$registry/options-edge-gamma-zone:dev}
+GAMMA_EFFORT_IMAGE=${GAMMA_EFFORT_IMAGE:-$registry/options-edge-gamma-effort:dev}
 EOF
             fi
             # short-premium-agent renders in dev+production; on the promoted/branch-2 path (prod) its

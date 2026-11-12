@@ -1,0 +1,13 @@
+# SERVICE SLICE — gamma-effort (SPX gamma measured against ES contracts traded: the forced dealer
+# hedge at a strike against the aggressive flow pushing into it) on DEV. Owns ONLY this service's
+# Deployment.
+#
+# DEV-ONLY: referenced from k8s/overlays/dev (NOT k8s/base, NOT production or experiment);
+# services.yaml declares envs: [dev]. One JVM, two assigned consumers (no consumer group) and one
+# producer; no Kafka Streams and no state volume — the gamma map is rebuilt from a short lookback
+# on every start and the session tallies are a pure fold of the session's bars. No Service object
+# and no probes: the service serves no HTTP. No ConfigMap, Secret or PVC of its own.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - gamma-effort-deployment.yaml

@@ -191,6 +191,12 @@ spec:
             # the flag would subscribe the gateway to two topics that do not exist there.
             - name: GAMMA_ZONE_ENABLED
               value: "true"
+            # The gamma-effort relay. DEV ONLY for the same reason and in the same shape:
+            # gamma-effort-service is services.yaml envs: [dev], so on production this flag would
+            # subscribe the gateway to a topic that does not exist there. Production stays
+            # default-off by NOT setting it, like GAMMA_ZONE_ENABLED above.
+            - name: GAMMA_EFFORT_ENABLED
+              value: "true"
             - name: GATEWAY_MARKET_HOLIDAYS
               value: "2026-01-01,2026-01-19,2026-02-16,2026-04-03,2026-05-25,2026-06-19,2026-07-03,2026-09-07,2026-11-26,2026-12-25"
             - name: GATEWAY_MARKET_EARLY_CLOSES
