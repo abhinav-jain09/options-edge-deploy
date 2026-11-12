@@ -1193,9 +1193,10 @@ heal_linearizer_recreated_tape() {
 # versus not ready for any other reason. Reported, never fatal: a backlog takes minutes.
 report_linearizer_status() {
   local des rr log
-  des=$($KK get deploy "$LINEARIZER_DEPLOY" -o jsonpath='{.spec.replicas}' 2>/dev/null)
+  des=$($KK get deploy "$LINEARIZER_DEPLOY" -o jsonpath='{.spec.replicas}' 2>/dev/null) || { echo "???  $LINEARIZER_DEPLOY: could not read its replicas (kubectl failed)"; return 0; }
   [ "${des:-0}" -gt 0 ] 2>/dev/null || return 0
-  rr=$($KK get deploy "$LINEARIZER_DEPLOY" -o jsonpath='{.status.readyReplicas}' 2>/dev/null)
+  # an ABSENT readyReplicas (kubectl succeeds, prints nothing) is zero ready; a FAILED query is unknown
+  rr=$($KK get deploy "$LINEARIZER_DEPLOY" -o jsonpath='{.status.readyReplicas}' 2>/dev/null) || { echo "???  $LINEARIZER_DEPLOY: could not read its readiness (kubectl failed)"; return 0; }
   [ "${rr:-0}" -lt "$des" ] 2>/dev/null || { echo "OK   $LINEARIZER_DEPLOY ready"; return 0; }
   log="$($KK logs deploy/"$LINEARIZER_DEPLOY" --tail=200 2>/dev/null)"
   if printf '%s\n' "$log" | grep -q 'OUTPUT_TAPE_RECREATED'; then
@@ -1249,7 +1250,8 @@ do_start() {
     fi
   done
   echo "  self-heal restarted $healed straggler(s)"
-  heal_linearizer_recreated_tape || echo "  ⚠ linearizer heal did not complete — see the lines above and the status line at the end of start" >&2
+  local heal_rc=0; heal_linearizer_recreated_tape || heal_rc=$?
+  [ "$heal_rc" -eq 0 ] || echo "  ⚠ linearizer heal did not complete — see the lines above and the status line at the end of start" >&2
 
   # Schema self-heal: all Schema-Registry schemas live in the compacted _schemas topic; if it gets
   # wiped (the known dev SR-wipe → gateway-wedge, dev-schema-registry-wipe-gateway-wedge), producers
@@ -1290,6 +1292,8 @@ do_start() {
   report_session_bound_services
   report_linearizer_status
   echo "Done — source topics exist; active apps reach RUNNING, disabled set held at 0 (no replay injection)."
+  # a linearizer the heal could not clear is a failed start, not a note in the log
+  if [ "$verify_rc" -eq 0 ] && [ "$heal_rc" -ne 0 ]; then verify_rc=$heal_rc; fi
   return $verify_rc
 }
 

@@ -64,7 +64,7 @@ chmod +x "$WORK/kk" "$WORK/k"
 grep -q 'rollout restart deploy/some-other-service' "$WORK/k.calls" && ok "an ordinary straggler is still restarted" || bad "an ordinary straggler was not restarted"
 grep -q 'rollout restart deploy/es-trade-linearizer-service' "$WORK/k.calls" && bad "the linearizer was restarted as a straggler" || ok "the linearizer is not restarted as a straggler"
 
-fn do_start "$SRC" | grep -q '^  heal_linearizer_recreated_tape' && ok "do_start calls heal_linearizer_recreated_tape after the straggler pass" || bad "do_start never calls heal_linearizer_recreated_tape"
+fn do_start "$SRC" | grep -q '^  local heal_rc=0; heal_linearizer_recreated_tape' && ok "do_start calls heal_linearizer_recreated_tape after the straggler pass" || bad "do_start never calls heal_linearizer_recreated_tape"
 
 # ---- 3: heal_linearizer_recreated_tape ----
 echo "3  heal_linearizer_recreated_tape"
@@ -168,9 +168,20 @@ STUB_GROUP_FAIL=1 heal "$MARK" empty; rc=$?
 rep() {
   ( KK="$WORK/kk3"; export STUB_LOG="$1"; eval "$(var LINEARIZER_DEPLOY "$SRC")"; eval "$(fn report_linearizer_status "$SRC")"; report_linearizer_status ) 2>&1
 }
+STUB_READY_FAIL=1 rep "es-trade-linearizer fresh tape starts 24h back: 1 source records to order before the live tail" | grep -q 'could not read its readiness' && ok "report: an unreadable readiness is not reported as a backlog" || bad "report: an unreadable readiness was reported as something else"
 rep "es-trade-linearizer fresh tape starts 24h back: 433504 source records to order before the live tail" | grep -q 'ordering its backlog' && ok "report: backlog named when the log says so" || bad "report: backlog not recognised"
 rep "something else entirely" | grep -q 'does NOT show the backlog' && ok "report: no cause named when the log does not confirm" || bad "report: named a cause the log does not show"
 rep "$MARK" | grep -q 'heal did not clear it' && ok "report: an unhealed OUTPUT_TAPE_RECREATED is called out" || bad "report: unhealed OUTPUT_TAPE_RECREATED not called out"
+# the REAL tail of do_start (from the heal call to the end), with everything it calls stubbed: the heal's status must reach the exit
+TAILF="$WORK/dostart-tail.sh"
+{ echo 'do_start_tail() {'; awk '/^do_start\(\) \{/ {p=1} p && /^  local heal_rc=0/ {q=1} q {print} q && /^\}/ {exit}' "$SRC"; } > "$TAILF"
+run_tail_rc() { local h="$1" v="$2"; ( sleep() { :; }; apply_internal_topic_configs() { :; }; run_partition_doctor() { :; }; report_session_bound_services() { :; }; report_linearizer_status() { :; }
+    heal_linearizer_recreated_tape() { return "$h"; }; verify_start_readiness() { return "$v"; }
+    KK="$WORK/kk3"; K="$WORK/k3"; KC=true; BS=stub:1
+    eval "$(cat "$TAILF")"; do_start_tail >/dev/null 2>&1; echo $? ); }
+[ "$(run_tail_rc 0 0)" = 0 ] && ok "start exits 0 when the heal and the readiness check are fine" || bad "start did not exit 0 on a clean tail"
+[ "$(run_tail_rc 1 0)" != 0 ] && ok "a heal that failed makes start exit non-zero" || bad "start exited 0 although the linearizer heal failed"
+[ "$(run_tail_rc 0 3)" = 3 ] && ok "a failed readiness check still sets the exit status" || bad "the readiness status was lost"
 fn do_start "$SRC" | grep -q '^  report_linearizer_status' && ok "do_start reports the linearizer's status" || bad "do_start never reports the linearizer's status"
 
 # ---- 4: mutants ----
@@ -194,10 +205,12 @@ PY
   mut "heal does not require the marker" "s.replace(\"grep -q 'OUTPUT_TAPE_RECREATED' || return 0\",'true')"
   mut "heal does not require an empty tape" "s.replace('if [ \"\$end\" != \"0\" ]; then','if false; then')"
   mut "an unmeasured tape counts as empty" "s.replace('end=\$(linearizer_output_end) ||','end=\$(linearizer_output_end || echo 0) ||')"
-  mut "heal never runs after the straggler pass" "s.replace('  heal_linearizer_recreated_tape || echo','  true || echo')"
+  mut "heal never runs after the straggler pass" "s.replace('  local heal_rc=0; heal_linearizer_recreated_tape || heal_rc=\$?','  local heal_rc=0; true || heal_rc=\$?')"
   mut "heal ignores whether the deployment is ready" "s.replace('[ \"\${rr:-0}\" -lt \"\$des\" ] 2>/dev/null || return 0\\n  log=\"\$(\$KK logs deploy/\"\$LINEARIZER_DEPLOY\" --tail=200 2>/dev/null; ','true\\n  log=\"\$(\$KK logs deploy/\"\$LINEARIZER_DEPLOY\" --tail=200 2>/dev/null; ')"
   mut "a failed scale-down is ignored" "s.replace('if ! \$K scale deploy/\"\$LINEARIZER_DEPLOY\" --replicas=0 >/dev/null 2>&1; then','if false; then')"
   mut "pods are looked up by the wrong label" "s.replace('-l \"app.kubernetes.io/name=\$LINEARIZER_DEPLOY\"','-l \"app=\$LINEARIZER_DEPLOY\"')"
+  mut "start swallows a failed heal" "s.replace('if [ \"\$verify_rc\" -eq 0 ] && [ \"\$heal_rc\" -ne 0 ]; then verify_rc=\$heal_rc; fi','true')"
+  mut "report reads a failed readiness query as zero" "s.replace('2>/dev/null) || { echo \"???  \$LINEARIZER_DEPLOY: could not read its readiness (kubectl failed)\"; return 0; }','2>/dev/null) || true')"
   mut "an unreadable readiness is taken as zero" "s.replace('-o jsonpath=\'{.status.readyReplicas}\' 2>/dev/null) || { echo \"  linearizer: could not read its readiness','-o jsonpath=\'{.status.readyReplicas}\' 2>/dev/null) || { true; echo \"  linearizer: could not read its readiness').replace('NOT touching its consumer group\" >&2; return 1; }\n  [ \"\${rr:-0}\"','NOT touching its consumer group\" >&2; }\n  [ \"\${rr:-0}\"')"
   mut "a failed pod listing is taken as no pods" "s.replace('if ! pods=\$(linearizer_pods); then','if false; then')"
   mut "a failed scale-up is swallowed" "s.replace('if ! \$K scale deploy/\"\$LINEARIZER_DEPLOY\" --replicas=\"\$des\" >/dev/null 2>&1; then\n    echo \"  linearizer: group deleted but','if false; then\n    echo \"  linearizer: group deleted but')"
