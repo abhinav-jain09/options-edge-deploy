@@ -50,6 +50,43 @@ def images(obj):
     return out
 
 
+def split_ref(img):
+    """(repo, tag, digest) of an image reference; tag/digest are None when absent.
+
+    The registry host is dropped (`host.docker.internal:5001/x/y:t@sha256:..` -> repo `x/y`). The digest
+    is split off FIRST: a ref can carry both, and taking the tag first leaves `repo:tag` as the repo.
+    """
+    digest = None
+    if "@" in img:
+        img, digest = img.split("@", 1)
+    first, _, rest = img.partition("/")
+    body = rest if rest and ("." in first or ":" in first or first == "localhost") else img
+    repo, tag = body, None
+    last = body.rsplit("/", 1)[-1]
+    if ":" in last:
+        repo, tag = body.rsplit(":", 1)
+    return repo, tag, digest
+
+
+def keep_tags(obj):
+    """(repo, tag) for every image a workload pins BY TAG ALONE -- no digest in the reference.
+
+    The digest set cannot protect these: the cluster names a tag, so the manifest that tag resolves
+    to is live even though no digest appears anywhere in the spec. A prune that keeps only `:dev` and
+    digests deletes it, and the next pull of that workload fails. (A bare `repo` is the `latest` tag.)
+    """
+    seen, out = set(), []
+    for img in images(obj):
+        repo, tag, digest = split_ref(img)
+        if digest:
+            continue
+        key = (repo, tag or "latest")
+        if key not in seen:
+            seen.add(key)
+            out.append(key)
+    return out
+
+
 def keep_digests(obj):
     """The digests that must survive a prune. Order-stable for a readable diff."""
     seen, out = set(), []
@@ -65,3 +102,5 @@ if __name__ == "__main__":
     data = json.load(sys.stdin)
     for d in keep_digests(data):
         print(d)
+    for repo, tag in keep_tags(data):
+        print(f"tag {repo} {tag}")
