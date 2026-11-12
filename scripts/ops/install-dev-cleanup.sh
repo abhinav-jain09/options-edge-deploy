@@ -11,23 +11,37 @@
 #   scripts/ops/install-dev-cleanup.sh --check  exit 1 if the live copy differs from this repo's
 set -euo pipefail
 cd "$(dirname "$0")/../.."
-SRC=scripts/ops/dev-cleanup.sh
-DST="${DEV_CLEANUP_LIVE:-$HOME/oe-ops/dev-cleanup.sh}"
+LIVE_DIR="$(dirname "${DEV_CLEANUP_LIVE:-$HOME/oe-ops/dev-cleanup.sh}")"
+# The clean is not one file. dev-cleanup.sh SOURCES the registry prune, and that prune deletes
+# manifests and garbage-collects the blob store — so an unreviewed copy of it is as dangerous as an
+# unreviewed clean. It lived only on the Mac until 2026-11-12, untracked and untested, and its
+# keep set missed init containers; see dev-registry-prune.sh's header. Install and check all three
+# together, or the --check that passes proves only part of what runs.
+FILES="scripts/ops/dev-cleanup.sh scripts/ops/dev-registry-prune.sh scripts/ops/dev-registry-keep-set.py"
 sha() { shasum -a 256 "$1" | awk '{print $1}'; }
+live_of() { printf '%s/%s\n' "$LIVE_DIR" "$(basename "$1")"; }
 if [ "${1:-}" = "--check" ]; then
-  if [ ! -f "$DST" ]; then echo "DRIFT: live copy $DST is missing"; exit 1; fi
-  if [ "$(sha "$SRC")" = "$(sha "$DST")" ]; then
-    echo "OK: live dev-cleanup.sh == repo ($(sha "$SRC" | cut -c1-12))"; exit 0
+  drift=0
+  for SRC in $FILES; do
+    DST="$(live_of "$SRC")"
+    if [ ! -f "$DST" ]; then echo "DRIFT: live copy $DST is missing"; drift=1; continue; fi
+    if [ "$(sha "$SRC")" = "$(sha "$DST")" ]; then
+      echo "OK: $(basename "$SRC") == repo ($(sha "$SRC" | cut -c1-12))"; continue
+    fi
+    echo "DRIFT: $DST differs from $SRC — what runs is not what was reviewed:"
+    # diff exits 1 on a difference: under set -e and pipefail that alone would end the script, so the exit status of a drift must not depend on it
+    { diff "$SRC" "$DST" | head -20 | sed 's/^/  /'; } || true
+    drift=1
+  done
+  exit "$drift"
+fi
+mkdir -p "$LIVE_DIR"
+for SRC in $FILES; do
+  case "$SRC" in *.sh) bash -n "$SRC" ;; *.py) python3 -c "import ast,sys;ast.parse(open(sys.argv[1]).read())" "$SRC" ;; esac
+  DST="$(live_of "$SRC")"
+  if [ -f "$DST" ] && [ "$(sha "$SRC")" != "$(sha "$DST")" ]; then
+    cp -p "$DST" "$DST.bak-$(date +%Y%m%d-%H%M%S)-pre-install"
   fi
-  echo "DRIFT: $DST differs from $SRC — the clean that runs is not the one reviewed:"
-  # diff exits 1 on a difference: under set -e and pipefail that alone would end the script, so the exit status of a drift must not depend on it
-  { diff "$SRC" "$DST" | head -20 | sed 's/^/  /'; } || true
-  exit 1
-fi
-bash -n "$SRC"
-mkdir -p "$(dirname "$DST")"
-if [ -f "$DST" ] && [ "$(sha "$SRC")" != "$(sha "$DST")" ]; then
-  cp -p "$DST" "$DST.bak-$(date +%Y%m%d-%H%M%S)-pre-install"
-fi
-install -m 0755 "$SRC" "$DST"
-echo "installed $SRC -> $DST ($(sha "$DST" | cut -c1-12))"
+  install -m 0755 "$SRC" "$DST"
+  echo "installed $SRC -> $DST ($(sha "$DST" | cut -c1-12))"
+done

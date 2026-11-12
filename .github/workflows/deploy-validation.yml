@@ -150,6 +150,17 @@ jobs:
           python3 scripts/watch/fleet-readiness-test.py
           python3 scripts/watch/dlq-growth-test.py
 
+      # A manifest that RESOLVES is not an image that PULLS. On 2026-11-12 the dev registry served
+      # options-edge-web's manifest with HTTP 200 while a 132 MB layer was a 404, and the deploy
+      # shipped it; the pod died with "short read ... unexpected EOF". The first test drives the real
+      # resolve_repo_digest against a fake registry that breaks in exactly those ways. The second
+      # covers the other half: the prune's keep set used to read containers[0] only, so an init
+      # container's digest was swept while the cluster was using it.
+      - name: Registry layer integrity and prune keep-set negative controls
+        run: |
+          bash scripts/deploy/pin-image-layer-integrity-test.sh
+          python3 scripts/ops/dev-registry-keep-set-test.py
+
       # The three alert checks and the delivery path (FLEET-ALERT-DISCORD-REQUIREMENT R7a/R7b/R7d).
       # The delivery test stands up a local HTTP endpoint and drives the real oe-alert.sh through it, so a
       # webhook that would be logged as "delivered" on a non-2xx fails here rather than in the dev group.

@@ -15,6 +15,58 @@
 #      same digest. Unset = resolve via the ref's own registry (agent IS the dev host).
 # Requires: curl, jq.
 
+# --- LAYER INTEGRITY -------------------------------------------------------------------------
+# A manifest that resolves is NOT an image that pulls. On 2026-11-12 the dev registry served
+# options-edge-web's manifest with HTTP 200 while one of its nine layers -- 132 MB -- was a 404, and
+# the deploy shipped it: the pod then died with
+#     ErrImagePull: short read: expected 132767435 bytes but got 0: unexpected EOF
+# hours after a build and a deploy that both reported success. The registry's blob store is GC'd by
+# the dev clean, and a mark phase that misses a blob leaves exactly this shape -- manifest present,
+# content gone. resolve_repo_digest already refuses an image of the wrong platform; it has to refuse
+# an image the registry cannot actually serve too, because "the tag resolves" is the check that
+# passed every time this broke.
+#
+# HEAD, not GET: the registry answers with Content-Length without moving the bytes, so verifying a
+# nine-layer image costs nine round trips, not 250 MB. There is deliberately NO opt-out. An escape
+# hatch here is an escape hatch straight back to a broken rollout, and the guard is only worth
+# having if it cannot be stepped around in a hurry.
+_blob_head() {   # prints "<http-code> <content-length>"
+  local url="$1" hdr code len
+  hdr="$(mktemp)"
+  curl -sS -o /dev/null -D "$hdr" -I --max-time 30 "$url" >/dev/null 2>&1
+  code="$(awk 'toupper($1) ~ /^HTTP/ {c=$2} END {print c+0}' "$hdr")"
+  len="$(awk 'tolower($1)=="content-length:" {gsub("\r","",$2); l=$2} END {print l+0}' "$hdr")"
+  rm -f "$hdr"
+  printf '%s %s\n' "$code" "$len"
+}
+
+# verify_manifest_blobs <resolve-host> <repo> <manifest-file> <what>
+# Every blob the manifest names -- its config and each layer -- must be served, and served at the
+# length the manifest declares. A short blob is the same outage as a missing one and reads as a
+# healthy 200, so the length is checked, not just the status.
+verify_manifest_blobs() {
+  local resolve="$1" repo="$2" man="$3" what="$4"
+  local scheme="${REGISTRY_SCHEME:-http}" bad=0 n=0 digest size code len
+  while read -r digest size; do
+    [[ -n "$digest" ]] || continue
+    n=$((n + 1))
+    read -r code len <<<"$(_blob_head "$scheme://$resolve/v2/$repo/blobs/$digest")"
+    if [[ "$code" != "200" ]]; then
+      echo "registry does not serve $what blob $digest (HTTP $code) -- the manifest resolves but its content is gone" >&2
+      bad=$((bad + 1))
+    elif [[ "$len" != "$size" ]]; then
+      echo "registry serves $what blob $digest as $len bytes, the manifest declares $size -- a short blob pulls as 'unexpected EOF'" >&2
+      bad=$((bad + 1))
+    fi
+  done < <(jq -r '([.config] + (.layers // []))[]? | select(.digest != null) | "\(.digest) \(.size)"' "$man")
+  if [[ "$n" == "0" ]]; then
+    echo "$what names no blobs at all -- refusing rather than calling an empty manifest verified" >&2
+    return 1
+  fi
+  (( bad == 0 )) || { echo "$what is not pullable: $bad of $n blobs missing or short" >&2; return 1; }
+  return 0
+}
+
 resolve_repo_digest() {
   local registry="$1" repo="$2" tag="$3"
   local resolve="${REGISTRY_RESOLVE_HOST:-$registry}"
@@ -31,6 +83,17 @@ resolve_repo_digest() {
     *image.index*|*manifest.list*)
       n="$(jq --arg os "$os" --arg arch "$arch" '[.manifests[]? | select(.platform.os==$os and .platform.architecture==$arch)] | length' "$man")"
       [[ "$n" == "1" ]] || { echo "$repo:$tag has $n manifests for $DEPLOY_PLATFORM (need exactly 1)" >&2; return 1; }
+      # Descend into the ONE platform manifest and check the blobs IT names. The index itself names
+      # no layers, so verifying at this level would verify nothing -- and the sub-manifest is the
+      # part a GC strands, because an index's children are reachable only through it.
+      local submd subman
+      submd="$(jq -r --arg os "$os" --arg arch "$arch" 'first(.manifests[]? | select(.platform.os==$os and .platform.architecture==$arch) | .digest)' "$man")"
+      [[ "$submd" == sha256:* ]] || { echo "$repo:$tag index has no digest for $DEPLOY_PLATFORM" >&2; return 1; }
+      subman="$(mktemp)"
+      curl -fsSL -H "Accept: $accept" -o "$subman" \
+        "${REGISTRY_SCHEME:-http}://$resolve/v2/$repo/manifests/$submd" \
+        || { echo "$repo:$tag index points at $submd, which the registry does not serve" >&2; return 1; }
+      verify_manifest_blobs "$resolve" "$repo" "$subman" "$repo:$tag ($DEPLOY_PLATFORM, $submd)" || return 1
       ;;
     *image.manifest*|*manifest.v2*)
       cfg="$(jq -r '.config.digest // ""' "$man")"
@@ -39,6 +102,7 @@ resolve_repo_digest() {
       curl -fsSL -o "$cfgblob" "${REGISTRY_SCHEME:-http}://$resolve/v2/$repo/blobs/$cfg"
       jq -e --arg os "$os" --arg arch "$arch" '.os==$os and .architecture==$arch' "$cfgblob" >/dev/null \
         || { echo "$repo:$tag is not $DEPLOY_PLATFORM" >&2; return 1; }
+      verify_manifest_blobs "$resolve" "$repo" "$man" "$repo:$tag" || return 1
       ;;
     *) echo "unsupported manifest mediaType for $repo:$tag: $media" >&2; return 1 ;;
   esac
