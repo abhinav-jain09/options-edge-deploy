@@ -83,6 +83,12 @@ class TagPins(unittest.TestCase):
         self.assertEqual(("a/b", None, None), sr("host.docker.internal:5001/a/b"))
         self.assertEqual(("img", "1", None), sr("img:1"))
 
+    def test_a_non_sha256_digest_pin_is_kept_not_ignored(self):
+        """keep_tags skips any digest-bearing ref, so a digest the keep set cannot READ is a pin
+        nothing protects."""
+        d512 = "sha512:" + "a" * 128
+        self.assertEqual([d512], keepset.keep_digests(deploy(main=[f"r.io:5001/a:old@{d512}"])))
+
     def test_the_cli_prints_digests_then_tag_pins(self):
         import subprocess
         obj = deploy(main=[f"r.io:5001/a@{D1}", "r.io:5001/b:v1"])

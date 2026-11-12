@@ -19,7 +19,8 @@ DaemonSets, Jobs and CronJobs alike. A digest that anything references is live.
 from __future__ import annotations
 import json, re, sys
 
-DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
+# Any digest algorithm: a pin the keep set cannot read is a pin the prune deletes.
+DIGEST = re.compile(r"[a-z0-9]+:[0-9a-f]{32,}")
 
 
 def pod_specs(obj):

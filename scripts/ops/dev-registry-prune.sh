@@ -62,7 +62,7 @@ if ! printf '%s' "$workloads" | python3 -c 'import json,sys; sys.exit(0 if json.
   exit 1
 fi
 KEEP="$(printf '%s' "$workloads" | python3 "$KEEPSET")" || { echo "  REFUSING: the keep set could not be computed" >&2; exit 1; }
-n_dig="$(printf '%s\n' "$KEEP" | grep -c '^sha256:')"
+n_dig="$(printf '%s\n' "$KEEP" | grep -c -v -e '^tag ' -e '^$')"
 n_tag="$(printf '%s\n' "$KEEP" | grep -c '^tag ')"
 echo "  keep set: ${n_dig} digest(s) + ${n_tag} tag pin(s) referenced by workloads"
 
@@ -79,7 +79,7 @@ ACC="application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.i
 deployed=set(); pinned_tags=set()
 for line in sys.argv[1].split("\n"):
     p=line.split()
-    if len(p)==1 and p[0].startswith("sha256:"): deployed.add(p[0])
+    if len(p)==1 and ":" in p[0]: deployed.add(p[0])
     elif len(p)==3 and p[0]=="tag": pinned_tags.add((p[1],p[2]))
 def req(u,m="GET"):
     r=urllib.request.Request(u,headers={"Accept":ACC},method=m); return urllib.request.urlopen(r,timeout=15)
@@ -127,11 +127,13 @@ registry_up() {
 # whereas a signal's default action ENDS it and bash runs the EXIT trap on the way out.
 trap 'registry_up' EXIT
 echo "  stopping $reg for the garbage collection (a push in this window fails loudly) ..."
+# Armed BEFORE the stop: a signal while `docker stop` is in flight can still leave the registry
+# stopped, and `docker start` on a running container is a no-op.
+stopped=1
 if ! docker stop "$reg" >/dev/null 2>&1; then
   echo "  COULD NOT STOP $reg — not collecting against a live registry" >&2
   exit 1
 fi
-stopped=1
 gc_log="$(mktemp)"
 gc_rc=0
 docker run --rm --volumes-from "$reg" "$regimg" garbage-collect /etc/docker/registry/config.yml >"$gc_log" 2>&1 || gc_rc=$?

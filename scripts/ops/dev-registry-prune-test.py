@@ -34,6 +34,7 @@ class Registry:
         self.calls = []
         self.gc_while_up = False
         self.deleted = []
+        self.sweep_on_gc = set()   # blobs a (buggy) collection removes even though a manifest uses them
 
     def push(self, repo, tag, layers, *, seed=b""):
         descs = []
@@ -57,7 +58,7 @@ class Registry:
             for m in r["manifests"].values():
                 j = json.loads(m)
                 live.update([j["config"]["digest"]] + [l["digest"] for l in j["layers"]])
-        for d in [d for d in self.blobs if d not in live]:
+        for d in [d for d in self.blobs if d not in live or d in self.sweep_on_gc]:
             del self.blobs[d]          # swept; self.cache still remembers it
 
 
@@ -171,10 +172,12 @@ case "$1" in
   ps) echo local-registry ;;
   inspect) echo registry:2 ;;
   exec) echo 1G ;;
-  stop) [ -e {self.tmp.name}/cannot-stop ] && exit 1; {ctl}/down >/dev/null ;;
+  stop) [ -e {self.tmp.name}/cannot-stop ] && exit 1; {ctl}/down >/dev/null
+        if [ -e {self.tmp.name}/kill-in-stop ]; then kill -TERM $PPID; sleep 5; fi; exit 0 ;;
   start) {ctl}/up >/dev/null ;;
-  run) [ -e {self.tmp.name}/kill-parent ] && {{ kill -TERM $PPID; sleep 5; exit 0; }}
-       [ -e {self.tmp.name}/gc-fails ] && {{ echo 'gc exploded' >&2; exit 3; }}; {ctl}/gc >/dev/null ;;
+  run) if [ -e {self.tmp.name}/kill-parent ]; then kill -TERM $PPID; sleep 5; exit 0; fi
+       if [ -e {self.tmp.name}/gc-fails ]; then echo 'gc exploded' >&2; exit 3; fi
+       {ctl}/gc >/dev/null ;;
 esac
 """)
         (self.bin / "kubectl").write_text(f"#!/bin/bash\n[ -s {self.wl} ] && cat {self.wl}\n")
@@ -199,11 +202,10 @@ esac
 
 class Prune(Base):
     def seed(self):
-        """web: :dev moved on; its INIT container pins the previous digest (now untagged) -- the 11-12 outage.
+        """web: :dev moved on; its INIT container pins the previous build's digest -- the 11-12 outage.
         hand: pinned by TAG alone. other: an old build tag nothing uses."""
         reg = self.reg
-        self.web_old = reg.push("web", "build-1", [b"w1" * 40, b"shared" * 50])
-        del reg.repos["web"]["tags"]["build-1"]                       # untagged, digest-pinned only
+        self.web_old = reg.push("web", "build-1", [b"w1" * 40, b"shared" * 50])   # tagged: the prune CAN delete it
         self.web_dev = reg.push("web", "dev", [b"w2" * 40, b"shared" * 50])
         self.hand = reg.push("hand", "2227-abc", [b"h" * 90])         # pinned by tag, no digest
         reg.push("hand", "dev", [b"hd" * 90])
@@ -258,6 +260,14 @@ class Prune(Base):
         self.assertIn("down", self.reg.calls, "the scenario never reached the stopped state")
         self.assertFalse(self.reg.down, "the registry was left STOPPED by an interrupted prune")
 
+    def test_a_script_killed_while_the_stop_is_in_flight_still_starts_the_registry(self):
+        self.seed()
+        Path(self.tmp.name, "kill-in-stop").write_text("")
+        p = self.run_prune()
+        self.assertNotEqual(0, p.returncode)
+        self.assertIn("down", self.reg.calls)
+        self.assertFalse(self.reg.down, "a signal during `docker stop` left the registry stopped")
+
     def test_a_registry_that_cannot_be_stopped_is_never_collected(self):
         self.seed()
         Path(self.tmp.name, "cannot-stop").write_text("")
@@ -275,16 +285,18 @@ class Prune(Base):
             self.assertIn("REFUSING", p.stderr)
         self.assertEqual([], self.reg.deleted)
 
-    def test_a_prune_that_leaves_a_pinned_layer_missing_fails_even_though_head_says_200(self):
-        """The cache lie. A pinned image's layer file is gone but the descriptor cache still answers
-        HEAD 200 -- exactly what the old verify (HEAD) reported as healthy."""
+    def test_a_collection_that_breaks_a_pinned_layer_fails_the_prune_though_head_still_says_200(self):
+        """The cache lie, end to end. Healthy BEFORE (the verifier says so), then a buggy collection
+        sweeps a layer a pinned image uses; the descriptor cache still answers HEAD 200 for it."""
         self.seed()
         layer = sha(b"h" * 90)
-        del self.reg.blobs[layer]            # swept; self.reg.cache still lists it
-        self.assertIn(layer, self.reg.cache)
+        self.reg.sweep_on_gc.add(layer)
         p = self.run_prune()
         self.assertEqual(1, p.returncode, p.stdout + p.stderr)
-        self.assertIn("BROKEN hand", p.stdout)
+        before, after = p.stdout.split("pull check AFTER the prune:")
+        self.assertIn("0 cannot be pulled", before, "the scenario must start healthy")
+        self.assertIn("BROKEN hand", after)
+        self.assertIn("THE PRUNE LEFT AN IMAGE", p.stderr)
 
 
 class Verify(Base):
@@ -313,6 +325,30 @@ class Verify(Base):
         p = self.verify(workload(([], [self.ref("web", tag="dev", digest=d)])))
         self.assertEqual(1, p.returncode, p.stdout)
 
+    def test_a_same_length_layer_with_a_corrupted_middle_byte_is_found(self):
+        """A pull downloads and HASHES the whole layer; reading its two end bytes would pass this."""
+        good = b"z" * 100
+        d = self.reg.push("web", "dev", [good])
+        self.reg.blobs[sha(good)] = good[:50] + b"Q" + good[51:]
+        p = self.verify(workload(([], [self.ref("web", tag="dev", digest=d)])))
+        self.assertEqual(1, p.returncode, p.stdout)
+        self.assertIn("does not hash", p.stdout)
+
+    def test_a_manifest_body_that_does_not_hash_to_its_digest_is_found(self):
+        d = self.reg.push("web", "dev", [b"m" * 100])
+        self.reg.repos["web"]["manifests"][d] = self.reg.repos["web"]["manifests"][d] + b" "
+        p = self.verify(workload(([], [self.ref("web", tag="dev", digest=d)])))
+        self.assertEqual(1, p.returncode, p.stdout)
+
+    def test_a_shared_layer_is_read_once_but_blames_every_image_using_it(self):
+        shared = b"s" * 100
+        d1 = self.reg.push("a", "dev", [shared], seed=b"1")
+        d2 = self.reg.push("b", "dev", [shared], seed=b"2")
+        del self.reg.blobs[sha(shared)]
+        p = self.verify(workload(([], [self.ref("a", digest=d1), self.ref("b", digest=d2)])))
+        self.assertEqual(1, p.returncode)
+        self.assertEqual(2, p.stdout.count("BROKEN"))
+
     def test_an_unreadable_or_empty_workload_list_is_not_a_clean_bill(self):
         for obj in ({"items": []}, {}):
             self.assertEqual(2, self.verify(obj).returncode)
@@ -333,9 +369,10 @@ class CleanSurfacesAFailedPrune(unittest.TestCase):
             a = next(i for i, l in enumerate(lines) if "CLEAN_REGISTRY_FAILED=0" in l)
             b = next(i for i in range(a, len(lines)) if lines[i] == "  fi")
             snippet = "\n".join(lines[a:b + 1])
+            # The clean runs the prune with the Mac's homebrew bash; CI has no such path.
+            snippet = snippet.replace("/opt/homebrew/bin/bash", "bash")
             Path(d, "snippet.sh").write_text(snippet + "\necho FLAG=$CLEAN_REGISTRY_FAILED\n")
-            r = subprocess.run(["/opt/homebrew/bin/bash" if Path("/opt/homebrew/bin/bash").exists() else "bash",
-                                str(Path(d, "snippet.sh"))], capture_output=True, text=True, timeout=30)
+            r = subprocess.run(["bash", str(Path(d, "snippet.sh"))], capture_output=True, text=True, timeout=30)
             return r.stdout
 
     def test_a_failing_prune_sets_the_flag_and_says_so(self):
