@@ -79,7 +79,8 @@ data:
           { "name": "replay:evidence", "description": "Download replay evidence" },
           { "name": "replay:delete", "description": "Delete replay runs" },
           { "name": "replay-admin", "description": "Full replay administration (any operation)" },
-          { "name": "trading-user", "description": "Grants access to the trading UI and feed gateway. Carried automatically by membership of /optionsedge — see the group block and the trading-browser / trading-direct-grant flows below." }
+          { "name": "trading-user", "description": "Grants access to the trading UI. Carried automatically by membership of /optionsedge — see the group block and the trading-browser / trading-direct-grant flows below. It does NOT open the feed gateway: that gate is oe-approved (below), which is granted per account and is deliberately not carried by the group." },
+          { "name": "oe-approved", "description": "Realm role a login must carry for the feed gateway to attach its sockets (GATEWAY_APPROVAL_ROLE, owner 2026-11-10). Carries no replay rights. Granted PER ACCOUNT to each login allowed to see the feed, and deliberately not attached to /optionsedge — an account without it gets a 401 on every websocket handshake and a page that renders once and never updates. Declared here so a realm re-import cannot delete the role and lock out every approved account." }
         ]
       },
       "clients": [
