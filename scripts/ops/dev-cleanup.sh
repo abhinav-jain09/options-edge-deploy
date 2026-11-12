@@ -1121,6 +1121,94 @@ report_session_bound_services() {
     "its bootstrap date (today, ET) is a session that has already ended, so it exits; it starts once the ET date rolls, then waits AWAITING_SCHEDULE for the first bar of that session (the estimate container is separate and unaffected)"
 }
 
+# ---------- the ES trade linearizer: never a straggler, and its one known stuck state is healed ----------
+# es-trade-linearizer-service is NOT ready for a long time after a wipe BY DESIGN: a fresh tape orders the last 24 h of
+# underlying.es.trades (≈430k records) before it is live. The straggler pass below restarted it at 90 s -- before it had written
+# a record -- and its own guard then refused every restart (OUTPUT_TAPE_RECREATED: the output tape is empty but the consumer group
+# holds committed offsets, so it will not start a new tape mid-stream). That is a hand repair after every clean. So:
+#  1. the straggler pass leaves it alone (linearizer_straggler_exempt), and
+#  2. if it is stuck in that state anyway (a restart from anywhere else), heal_linearizer_recreated_tape deletes ITS consumer group
+#     -- only when the pod log says OUTPUT_TAPE_RECREATED AND the output tape really is empty (end offsets sum to 0) -- and restarts it.
+LINEARIZER_DEPLOY=es-trade-linearizer-service
+LINEARIZER_CONTAINER=es-trade-linearizer      # the pod container is not named after the Deployment
+LINEARIZER_GROUP=options-edge-es-trade-linearizer
+LINEARIZER_OUTPUT_TOPIC=underlying.es.trades.linearized
+linearizer_straggler_exempt() { [ "$1" = "$LINEARIZER_DEPLOY" ]; }
+# Sum of the output tape's end offsets. Prints nothing (and fails) unless EVERY non-blank line of the answer is exactly
+# `<output topic>:<partition>:<end offset>` and at least one line exists: an unmeasured or contaminated answer is NOT an empty tape.
+linearizer_output_end() {
+  local out
+  out=$("$(dirname "$KT")/kafka-get-offsets.sh" --bootstrap-server "$BS" --topic "$LINEARIZER_OUTPUT_TOPIC" 2>/dev/null) || return 1
+  printf '%s\n' "$out" | awk -v t="$LINEARIZER_OUTPUT_TOPIC" '
+    NF == 0 { next }
+    { n = split($0, f, ":") }
+    n == 3 && f[1] == t && f[2] ~ /^[0-9]+$/ && f[3] ~ /^[0-9]+$/ { s += f[3]; c++; next }
+    { bad = 1 }
+    END { if (bad || c == 0) exit 1; print s }'
+}
+# Pods of the linearizer (selector = the Deployment's own: app.kubernetes.io/name; plain `app=` matches nothing here).
+# Its exit status is kubectl's: a failed listing is UNKNOWN, never "no pods".
+linearizer_pods() { $KK get pods -l "app.kubernetes.io/name=$LINEARIZER_DEPLOY" -o name 2>/dev/null; }
+heal_linearizer_recreated_tape() {
+  local des rr log end i pods
+  des=$($KK get deploy "$LINEARIZER_DEPLOY" -o jsonpath='{.spec.replicas}' 2>/dev/null) || { echo "  linearizer: could not read its replicas — NOT touching its consumer group" >&2; return 1; }
+  [ "${des:-0}" -gt 0 ] 2>/dev/null || return 0
+  # Only a deployment that is NOT ready can be stuck: a ready one with an old marker in its log is live and is left alone.
+  # readyReplicas is ABSENT (empty, kubectl succeeds) at zero ready, but a FAILED query is unknown, not zero.
+  rr=$($KK get deploy "$LINEARIZER_DEPLOY" -o jsonpath='{.status.readyReplicas}' 2>/dev/null) || { echo "  linearizer: could not read its readiness — NOT touching its consumer group" >&2; return 1; }
+  [ "${rr:-0}" -lt "$des" ] 2>/dev/null || return 0
+  log="$($KK logs deploy/"$LINEARIZER_DEPLOY" -c "$LINEARIZER_CONTAINER" --tail=200 2>/dev/null; $KK logs deploy/"$LINEARIZER_DEPLOY" -c "$LINEARIZER_CONTAINER" --previous --tail=200 2>/dev/null)"
+  printf '%s\n' "$log" | grep -q 'OUTPUT_TAPE_RECREATED' || return 0
+  end=$(linearizer_output_end) || { echo "  linearizer: OUTPUT_TAPE_RECREATED but the output tape could not be measured — NOT touching its consumer group" >&2; return 1; }
+  if [ "$end" != "0" ]; then
+    echo "  linearizer: OUTPUT_TAPE_RECREATED but the output tape holds $end records — NOT touching its consumer group" >&2; return 1
+  fi
+  echo "  linearizer: output tape empty + committed offsets (OUTPUT_TAPE_RECREATED) — deleting group $LINEARIZER_GROUP and restarting"
+  # 0 -> pods really gone -> delete the group -> back. Any step that does not hold aborts BEFORE the delete and puts the replicas back.
+  if ! $K scale deploy/"$LINEARIZER_DEPLOY" --replicas=0 >/dev/null 2>&1; then
+    echo "  linearizer: could not scale to 0 — NOT touching its consumer group" >&2; return 1
+  fi
+  i=0
+  while :; do
+    if ! pods=$(linearizer_pods); then
+      echo "  linearizer: could not list its pods — NOT touching its consumer group" >&2
+      $K scale deploy/"$LINEARIZER_DEPLOY" --replicas="$des" >/dev/null 2>&1; return 1
+    fi
+    [ -z "$pods" ] && break
+    if [ "$i" -ge "${LINEARIZER_WAIT_TRIES:-45}" ]; then
+      echo "  linearizer: pods still present after scale-down — NOT touching its consumer group" >&2
+      $K scale deploy/"$LINEARIZER_DEPLOY" --replicas="$des" >/dev/null 2>&1; return 1
+    fi
+    sleep "${LINEARIZER_POLL_SECS:-2}"; i=$((i+1))
+  done
+  if ! "$(dirname "$KT")/kafka-consumer-groups.sh" --bootstrap-server "$BS" --delete --group "$LINEARIZER_GROUP" >/dev/null 2>&1; then
+    echo "  linearizer: could not delete group $LINEARIZER_GROUP — leaving the service scaled back up as it was" >&2
+    $K scale deploy/"$LINEARIZER_DEPLOY" --replicas="$des" >/dev/null 2>&1; return 1
+  fi
+  # The group is gone: a service left at 0 now is a REAL failure, not something to swallow.
+  if ! $K scale deploy/"$LINEARIZER_DEPLOY" --replicas="$des" >/dev/null 2>&1; then
+    echo "  linearizer: group deleted but the scale-up to $des FAILED — $LINEARIZER_DEPLOY is left at 0: run  kubectl -n options-edge scale deploy/$LINEARIZER_DEPLOY --replicas=$des" >&2; return 1
+  fi
+}
+# The straggler pass leaves the linearizer alone, so start itself must say where it stands: ordering its backlog (the log says so)
+# versus not ready for any other reason. Reported, never fatal: a backlog takes minutes.
+report_linearizer_status() {
+  local des rr log
+  des=$($KK get deploy "$LINEARIZER_DEPLOY" -o jsonpath='{.spec.replicas}' 2>/dev/null) || { echo "???  $LINEARIZER_DEPLOY: could not read its replicas (kubectl failed)"; return 0; }
+  [ "${des:-0}" -gt 0 ] 2>/dev/null || return 0
+  # an ABSENT readyReplicas (kubectl succeeds, prints nothing) is zero ready; a FAILED query is unknown
+  rr=$($KK get deploy "$LINEARIZER_DEPLOY" -o jsonpath='{.status.readyReplicas}' 2>/dev/null) || { echo "???  $LINEARIZER_DEPLOY: could not read its readiness (kubectl failed)"; return 0; }
+  [ "${rr:-0}" -lt "$des" ] 2>/dev/null || { echo "OK   $LINEARIZER_DEPLOY ready"; return 0; }
+  log="$($KK logs deploy/"$LINEARIZER_DEPLOY" -c "$LINEARIZER_CONTAINER" --tail=200 2>/dev/null)"
+  if printf '%s\n' "$log" | grep -q 'OUTPUT_TAPE_RECREATED'; then
+    echo "???  $LINEARIZER_DEPLOY NOT ready: OUTPUT_TAPE_RECREATED and the heal did not clear it — read: kubectl -n options-edge logs deploy/$LINEARIZER_DEPLOY -c $LINEARIZER_CONTAINER --tail=100"
+  elif printf '%s\n' "$log" | grep -q 'source records to order before the live tail'; then
+    echo "INFO $LINEARIZER_DEPLOY ordering its backlog (the log says so); ready when it reaches the live tail"
+  else
+    echo "???  $LINEARIZER_DEPLOY NOT ready and its log does NOT show the backlog message: read kubectl -n options-edge logs deploy/$LINEARIZER_DEPLOY -c $LINEARIZER_CONTAINER --tail=100"
+  fi
+}
+
 do_start() {
   require_kafka_cli
   ensure_topics_or_refuse || {
@@ -1154,11 +1242,17 @@ do_start() {
     des=$($KK get deploy "$d" -o jsonpath='{.spec.replicas}' 2>/dev/null)
     rr=$($KK get deploy "$d" -o jsonpath='{.status.readyReplicas}' 2>/dev/null)
     if [ "${des:-0}" -gt 0 ] && [ "${rr:-0}" -lt "${des:-0}" ]; then
+      if linearizer_straggler_exempt "$d"; then
+        echo "  $d (${rr:-0}/${des}) — still ordering its backlog, NOT restarted (a restart before its first write is what OUTPUT_TAPE_RECREATED refuses)"
+        continue
+      fi
       echo "  boot-order straggler: $d (${rr:-0}/${des}) — restarting"
       $K rollout restart deploy/"$d" >/dev/null 2>&1; healed=$((healed+1))
     fi
   done
   echo "  self-heal restarted $healed straggler(s)"
+  local heal_rc=0; heal_linearizer_recreated_tape || heal_rc=$?
+  [ "$heal_rc" -eq 0 ] || echo "  ⚠ linearizer heal did not complete — see the lines above and the status line at the end of start" >&2
 
   # Schema self-heal: all Schema-Registry schemas live in the compacted _schemas topic; if it gets
   # wiped (the known dev SR-wipe → gateway-wedge, dev-schema-registry-wipe-gateway-wedge), producers
@@ -1197,7 +1291,10 @@ do_start() {
   local verify_rc=0
   verify_start_readiness || verify_rc=$?
   report_session_bound_services
+  report_linearizer_status
   echo "Done — source topics exist; active apps reach RUNNING, disabled set held at 0 (no replay injection)."
+  # a linearizer the heal could not clear is a failed start, not a note in the log
+  if [ "$verify_rc" -eq 0 ] && [ "$heal_rc" -ne 0 ]; then verify_rc=$heal_rc; fi
   return $verify_rc
 }
 

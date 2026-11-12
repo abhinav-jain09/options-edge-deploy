@@ -668,6 +668,13 @@ jobs:
       - name: a dev wipe resets level-absorption's topics and says what cannot be ready yet
         run: bash scripts/ops/dev-cleanup-post-wipe-test.sh
 
+      # `dev-cleanup start` restarted es-trade-linearizer-service as a boot-order straggler while it was still ordering
+      # its 24 h backlog (before its first write); its own guard then refused every restart (OUTPUT_TAPE_RECREATED) and
+      # the consumer group was deleted by hand after each clean (found 2026-11-12). Pins the exemption, the guarded
+      # self-heal and six mutants.
+      - name: dev start never restarts the ES trade linearizer mid-backlog and heals OUTPUT_TAPE_RECREATED
+        run: bash scripts/ops/dev-cleanup-start-linearizer-test.sh
+
       # A production reset runs the files in ITS checkout, not the ones in main. On 2026-10-13 a clean
       # slate ran from a tree whose apply-topics.sh had uncommitted edits and was 89 lines behind main,
       # wiped production and took the pre-#1173 failure path. The guard compares every file the run uses
