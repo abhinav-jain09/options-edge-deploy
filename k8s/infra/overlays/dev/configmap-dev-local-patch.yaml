@@ -50,26 +50,15 @@ data:
   DATABENTO_MARKET_OPEN_ALIGNMENT: "true"
   KAFKA_BOOTSTRAP_SERVERS: host.docker.internal:19092
   KAFKA_SCHEMA_REGISTRY_URL: http://host.docker.internal:8082
-  # ---- IBKR SPX index = priority-1 spot (2026-07-29, requirement rev4) --------------------
-  # The deployment env pins DATABENTO_SPOT_SOURCE=CASCADED (databento-feed-dev-patch.yaml);
-  # these keys wire the tier-1 consumer to the LOCAL dev copy of the hop topic, which
-  # ibkr-feed (running on dev k8s) dual-produces to both clusters. ⚠️ Read UNPREFIXED, like
-  # the ES_TRADES_SOURCE_* family — a DATABENTO_-prefixed spelling is silently absent.
-  SPX_INDEX_SOURCE_ENABLED: "true"
-  SPX_INDEX_SOURCE_BOOTSTRAP: host.docker.internal:19092
-  SPX_INDEX_SOURCE_TOPIC: underlying.spx.index.price
+  # ---- SPX spot (SPX Spot Price Source requirements) ------------------------------------------
+  # Tier 1 (the live IBKR SPX index price on underlying.spx.index.price) is ON BY DEFAULT in the feed: no
+  # SPX_INDEX_SOURCE_ENABLED / _BOOTSTRAP / _TOPIC here (the bootstrap defaults to KAFKA_BOOTSTRAP_SERVERS, the
+  # topic to underlying.spx.index.price). Tier 2 is ES minus the basis measured at the cash close. The cascade
+  # order is fixed in code: DATABENTO_CASCADE_TIER_ORDER / DATABENTO_CASCADE_OFF_HOURS_TIER_ORDER are retired and
+  # the feed refuses to start with them. The deployment env pins DATABENTO_SPOT_SOURCE=CASCADED
+  # (databento-feed-dev-patch.yaml). ⚠️ SPX_INDEX_SOURCE_* is read UNPREFIXED, like the ES_TRADES_SOURCE_* family.
   SPX_INDEX_SOURCE_GROUP_ID: dev-feed-spx-index
   HPSF_SPX_SPOT_SOURCE: CASCADED
-  # USER rule 2026-07-29: first IBKR, second SYNTHETIC, third ES-basis (the crude
-  # cost-of-carry tier is last resort — review F3's ~10pt discrepancy source).
-  # In the NYSE cash session the 2026-07-29 owner rule stands (SPX index first, then synthetic, ES-basis last).
-  DATABENTO_CASCADE_TIER_ORDER: NATIVE,SYNTHETIC,ES_BASIS
-  # DEV-ONLY 2026-10-19 (owner: overnight runs on the ES future, the cash session on the SPX index, switching by the
-  # calendar): outside the cash session (rule-based calendar: nights, weekends, holidays, after the close) the ES future
-  # translated through the basis is first, so the overnight spot is ES_BASIS_DERIVED / LIVE_ES_BASIS (what the candle
-  # builders accept) even while the index prints pre-open; at 09:30 ET the index takes over. Production
-  # (configmap-prod-feed-synthetic-spot-patch.yaml) sets no off-hours order and is unchanged.
-  DATABENTO_CASCADE_OFF_HOURS_TIER_ORDER: ES_BASIS,NATIVE,SYNTHETIC
   # Starvation-incident guard (2026-07-15 class): bound the cascade's full-book snapshot
   # refresh so tier-1/tier-2 ticks cannot starve the OPRA read loop.
   DATABENTO_CASCADE_REFRESH_MIN_INTERVAL_MS: "250"

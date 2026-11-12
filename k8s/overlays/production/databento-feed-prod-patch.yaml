@@ -76,6 +76,27 @@ spec:
               value: "abhinav"
             - name: ES_SPX_BASIS_ACK_PRINCIPALS
               value: "abhinav"
+            # ---- the close-measured ES->SPX basis is SAVED to the database every trading day -------------------
+            # (SPX Spot Price Source requirements, Tier 2.4-2.6). One row per trade date in spx_basis_close
+            # (basis, measured_at, contract name); loaded on startup, projected by trading days, used only while
+            # its contract is the current ES front contract. Same database the platform's Java writers use:
+            # the URL and user come from options-edge-config (POSTGRES_JDBC_URL / POSTGRES_USER), the password
+            # from options-edge-runtime-secrets, so the database lives in one place.
+            - name: SPX_BASIS_PG_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: options-edge-config
+                  key: POSTGRES_JDBC_URL
+            - name: SPX_BASIS_PG_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: options-edge-config
+                  key: POSTGRES_USER
+            - name: SPX_BASIS_PG_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: options-edge-runtime-secrets
+                  key: POSTGRES_PASSWORD
             # A1 verification (feed #81): evidence pairs onto spx.basis.a1.evidence
             # (pre-created, delete/3d). SAMPLES_ENABLED=true is SAFE pre-certificate:
             # the engine keeps samples off (fail-honest WARN at boot) until the
@@ -84,8 +105,10 @@ spec:
             # activate without another deploy. A FAIL revokes.
             - name: ES_SPX_BASIS_A1_EVIDENCE_ENABLED
               value: "true"
+            # SAMPLES OFF (SPX Spot Price Source requirements): the spot basis is the one MEASURED AT THE CASH CLOSE
+            # (anchor + trading-day-projection mode); intraday samples would install a different level.
             - name: ES_SPX_BASIS_SAMPLES_ENABLED
-              value: "true"
+              value: "false"
             # DBP-R32 gap fix (2026-07-27): since the flip, prod's underlying.es.trades
             # arrives UNENRICHED from the es4 bridge (es-feed has no SPX leg, stamps no
             # spxBasis*), so es-spx-align's basis global store — which read exactly those

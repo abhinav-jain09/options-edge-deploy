@@ -73,11 +73,26 @@ spec:
             - name: ES_SPX_BASIS_A1_EVIDENCE_ENABLED
               value: "true"
             - name: ES_SPX_BASIS_SAMPLES_ENABLED
-              value: "true"
+              value: "false"
             - name: ES_SPX_BASIS_CLOSE_PRINCIPALS
               value: abhinav
             - name: ES_SPX_BASIS_ACK_PRINCIPALS
               value: abhinav
+            - name: SPX_BASIS_PG_URL
+              valueFrom:
+                configMapKeyRef:
+                  key: POSTGRES_JDBC_URL
+                  name: options-edge-config
+            - name: SPX_BASIS_PG_USER
+              valueFrom:
+                configMapKeyRef:
+                  key: POSTGRES_USER
+                  name: options-edge-config
+            - name: SPX_BASIS_PG_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  key: POSTGRES_PASSWORD
+                  name: options-edge-runtime-secrets
             - name: DATABENTO_FEED_LIVENESS_STALE_SECONDS
               value: "15"
             - name: DATABENTO_FEED_LIVENESS_STARTUP_GRACE_SECONDS
