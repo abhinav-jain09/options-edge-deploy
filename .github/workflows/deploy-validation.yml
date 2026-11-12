@@ -219,6 +219,12 @@ jobs:
       - name: Line health deploy tests
         run: python3 -m unittest -v tests.test_line_health_deploy tests.test_line_health_m1_deploy
 
+      # SPX Spot Price Source (feed PR 196): the new feed image REFUSES to start with a retired setting in its
+      # environment, so a retired key left in ANY rendered ConfigMap/Deployment is an outage. Parses the YAML (comments
+      # cannot fake or hide a key); also pins the close-basis database refs and samples=false for dev/production.
+      - name: databento-feed SPX spot config (retired settings gone, close-basis database wired)
+        run: python3 -m unittest -v tests.test_databento_feed_spx_spot_config
+
       # One Service One Identity Rule: no service identity (Streams application.id / consumer group)
       # may carry a version suffix. FAIL-CLOSED — a red result here blocks the merge. This exists
       # because oi-shadow was born as "oi-shadow-v1" eleven days AFTER the platform-wide unversioning

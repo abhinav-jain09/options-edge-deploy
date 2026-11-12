@@ -70,8 +70,8 @@ spec:
               value: "true"
             # ES->SPX basis engine (ES-SPX-TRANSLATION-ENGINE.md, Codex-approved).
             # ONE engine, no version knob (feed #79): it runs structurally on the
-            # instance publishing both legs. Samples stay OFF until the A1
-            # eventTime verification records a PASS (anchor+projection till then).
+            # instance publishing both legs. Samples are OFF (below): the SPX spot's
+            # tier 2 is ES minus the basis measured at the cash close (anchor + projection).
             - name: ES_SPX_BASIS_CLOSE_PRINCIPALS
               value: "abhinav"
             - name: ES_SPX_BASIS_ACK_PRINCIPALS
@@ -98,11 +98,10 @@ spec:
                   name: options-edge-runtime-secrets
                   key: POSTGRES_PASSWORD
             # A1 verification (feed #81): evidence pairs onto spx.basis.a1.evidence
-            # (pre-created, delete/3d). SAMPLES_ENABLED=true is SAFE pre-certificate:
-            # the engine keeps samples off (fail-honest WARN at boot) until the
-            # A1:<date> PASS record for the running SYNTHETIC_CALC_VERSION lands —
-            # tools/a1_verify.py after Monday's session commits it; samples then
-            # activate without another deploy. A FAIL revokes.
+            # (pre-created, delete/3d). The A1:<date> certificate automation may still record PASS/FAIL
+            # records; they no longer switch intraday samples on, because ES_SPX_BASIS_SAMPLES_ENABLED is
+            # false below (the spot basis is the one measured at the close). Turning samples back on is a
+            # deliberate config change, not an automatic consequence of a certificate.
             - name: ES_SPX_BASIS_A1_EVIDENCE_ENABLED
               value: "true"
             # SAMPLES OFF (SPX Spot Price Source requirements): the spot basis is the one MEASURED AT THE CASH CLOSE
