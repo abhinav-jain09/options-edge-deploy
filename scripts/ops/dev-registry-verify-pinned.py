@@ -18,7 +18,7 @@ whole fleet), so the cost is the size of the DISTINCT layers, not of 90 images.
 EVERY container is read -- initContainers included -- because options-edge-web's init container kept
 a digest nothing else referenced.
 
-Exit 0 only when every pinned image pulls; 1 with one BROKEN line per image otherwise; 2 when it could
+Completed/Failed Jobs are skipped (they never pull again). Exit 0 only when every pinned image pulls; 1 with one BROKEN line per image otherwise; 2 when it could
 not tell (an unreadable or empty workload list is not a clean bill of health).
 """
 from __future__ import annotations
@@ -106,6 +106,22 @@ class Checker:
             self.blob(repo, desc)
 
 
+def finished_job(item):
+    """A Job that has Completed or Failed keeps its image reference forever and will never pull again.
+
+    Counting it reports a breakage that cannot affect anything, and a check that always cries wolf
+    stops being read: on 2026-11-12 three leftover gex-backtest Jobs (repo long gone from the registry)
+    were the only BROKEN line in an otherwise clean run. A Job that is still running or retrying is NOT
+    finished -- it can pull again. CronJobs are never "finished": their template is what pulls next.
+    """
+    if item.get("kind") != "Job":
+        return False
+    for cond in ((item.get("status") or {}).get("conditions") or []):
+        if cond.get("type") in ("Complete", "Failed") and cond.get("status") == "True":
+            return True
+    return False
+
+
 def main():
     reg = os.environ.get("REG", "http://localhost:5001").rstrip("/")
     try:
@@ -118,6 +134,8 @@ def main():
         return 2
     owners = {}
     for item in data["items"]:
+        if finished_job(item):
+            continue
         for spec in keepset.pod_specs({"items": [item]}):
             for key in ("initContainers", "containers"):
                 for c in spec.get(key) or []:

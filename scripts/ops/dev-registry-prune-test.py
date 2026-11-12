@@ -359,6 +359,29 @@ class Verify(Base):
         self.assertEqual(0, p.returncode, p.stdout)
         self.assertEqual(1, self.reg.blob_gets[sha(shared)])
 
+    def job(self, image, conditions):
+        return {"kind": "Job", "metadata": {"name": "j"}, "status": {"conditions": conditions},
+                "spec": {"template": {"spec": {"containers": [{"name": "c", "image": image}]}}}}
+
+    def test_a_finished_job_whose_image_is_gone_is_not_a_failure(self):
+        """Three leftover gex-backtest Jobs (repo long gone) made the first live run exit 1 forever."""
+        d = self.reg.push("web", "dev", [b"x" * 100])
+        gone = self.ref("gex-backtest", tag="dev")
+        for cond in ("Complete", "Failed"):
+            wl = workload(([], [self.ref("web", tag="dev", digest=d)]))
+            wl["items"].append(self.job(gone, [{"type": cond, "status": "True"}]))
+            self.assertEqual(0, self.verify(wl).returncode, cond)
+
+    def test_a_running_job_whose_image_is_gone_IS_a_failure(self):
+        d = self.reg.push("web", "dev", [b"x" * 100])
+        wl = workload(([], [self.ref("web", tag="dev", digest=d)]))
+        # conditions that are present but not terminal: suspended, and a Failed that is not True
+        wl["items"].append(self.job(self.ref("gex-backtest", tag="dev"),
+                                    [{"type": "Suspended", "status": "True"}, {"type": "Failed", "status": "False"}]))
+        p = self.verify(wl)
+        self.assertEqual(1, p.returncode, p.stdout)
+        self.assertIn("BROKEN gex-backtest", p.stdout)
+
     def test_an_unreadable_or_empty_workload_list_is_not_a_clean_bill(self):
         for obj in ({"items": []}, {}):
             self.assertEqual(2, self.verify(obj).returncode)
