@@ -21,10 +21,17 @@
 #   DEPLOY_DRY_RUN   true|false (default true — infra changes must be opted into)
 #   KUBECONFIG       deployer kubeconfig (set by the Jenkins job from oeProfile)
 #   WORK_DIR         scratch dir (default: mktemp)
+#   WEB_PUBLIC_ASSETS_PVC_ONLY true selects only the dev public-assets claim (default false)
 set -euo pipefail
 
 ENVIRONMENT="${ENVIRONMENT:?ENVIRONMENT must be set (dev|production|experiment)}"
 DEPLOY_DRY_RUN="${DEPLOY_DRY_RUN:-true}"
+WEB_PUBLIC_ASSETS_PVC_ONLY="${WEB_PUBLIC_ASSETS_PVC_ONLY:-false}"
+case "$WEB_PUBLIC_ASSETS_PVC_ONLY" in
+  true) [ "$ENVIRONMENT" = dev ] || { echo "FATAL: public-assets PVC scope is dev-only" >&2; exit 1; } ;;
+  false) ;;
+  *) echo "FATAL: WEB_PUBLIC_ASSETS_PVC_ONLY must be true or false" >&2; exit 1 ;;
+esac
 WORK_DIR="${WORK_DIR:-$(mktemp -d)}"
 mkdir -p "$WORK_DIR"
 OVERLAY="k8s/infra/overlays/${ENVIRONMENT}"
@@ -39,11 +46,19 @@ REST="$WORK_DIR/infra-${ENVIRONMENT}-rest.yaml"
 
 echo "=== common-infra: render $OVERLAY ==="
 kubectl kustomize "$OVERLAY" >"$RENDER"
+if [ "$WEB_PUBLIC_ASSETS_PVC_ONLY" = true ]; then
+  scoped="$WORK_DIR/infra-${ENVIRONMENT}-public-assets.yaml"
+  yq 'select(.kind == "PersistentVolumeClaim" and .metadata.namespace == "options-edge" and .metadata.name == "web-immutable-assets")' "$RENDER" >"$scoped"
+  RENDER="$scoped"
+fi
 yq 'select(.kind == "PersistentVolumeClaim")' "$RENDER" >"$PVCS"
 yq 'select(.kind != "PersistentVolumeClaim")' "$RENDER" >"$REST"
 
 total_docs="$(grep -c '^kind:' "$RENDER" || true)"
 pvc_docs="$(grep -c '^kind:' "$PVCS" || true)"
+if [ "$WEB_PUBLIC_ASSETS_PVC_ONLY" = true ] && { [ "$total_docs" -ne 1 ] || [ "$pvc_docs" -ne 1 ]; }; then
+  echo "FATAL: expected exactly one dev web-immutable-assets PVC" >&2; exit 1
+fi
 echo "rendered: $total_docs docs ($pvc_docs PVCs, $((total_docs - pvc_docs)) other)"
 
 # --- Blast-radius sanity: infra must not carry app workloads -------------------------
@@ -105,27 +120,31 @@ if [ "$pvc_conflict" -gt 0 ]; then
 fi
 
 # --- Diff the mutable remainder so the log shows exactly what changes ----------------
-echo "=== diff (non-PVC infra) ==="
-set +e
-kubectl diff -f "$REST" >"$WORK_DIR/infra-diff.txt" 2>&1
-diff_rc=$?
-set -e
-if [ "$diff_rc" -eq 0 ]; then
-  echo "no changes."
-elif [ "$diff_rc" -eq 1 ]; then
-  cat "$WORK_DIR/infra-diff.txt"
+if [ "$total_docs" -gt "$pvc_docs" ]; then
+  echo "=== diff (non-PVC infra) ==="
+  set +e
+  kubectl diff -f "$REST" >"$WORK_DIR/infra-diff.txt" 2>&1
+  diff_rc=$?
+  set -e
+  if [ "$diff_rc" -eq 0 ]; then
+    echo "no changes."
+  elif [ "$diff_rc" -eq 1 ]; then
+    cat "$WORK_DIR/infra-diff.txt"
+  else
+    echo "WARN: kubectl diff failed (rc=$diff_rc) — continuing to server-side validation:" >&2
+    tail -20 "$WORK_DIR/infra-diff.txt" >&2
+  fi
 else
-  echo "WARN: kubectl diff failed (rc=$diff_rc) — continuing to server-side validation:" >&2
-  tail -20 "$WORK_DIR/infra-diff.txt" >&2
+  echo "no mutable infra selected."
 fi
 
 if [ "$DEPLOY_DRY_RUN" = "true" ]; then
   echo "=== DEPLOY_DRY_RUN=true: server-side validation only, nothing changes ==="
-  kubectl apply --dry-run=server -f "$REST"
+  if [ "$total_docs" -gt "$pvc_docs" ]; then kubectl apply --dry-run=server -f "$REST"; fi
   for name in ${pvc_create[@]+"${pvc_create[@]}"}; do
     yq "select(.metadata.name == \"$name\")" "$PVCS" | kubectl create --dry-run=server -f -
   done
-  if [ "$ENVIRONMENT" = dev ] || [ "$ENVIRONMENT" = production ]; then
+  if [ "$WEB_PUBLIC_ASSETS_PVC_ONLY" = false ] && { [ "$ENVIRONMENT" = dev ] || [ "$ENVIRONMENT" = production ]; }; then
     DEPLOY_DRY_RUN=true bash scripts/deploy/ensure-context-tape-execution-auth.sh
   fi
   echo "dry-run OK — would create ${#pvc_create[@]} PVC(s) and apply $((total_docs - pvc_docs)) infra docs."
@@ -133,12 +152,12 @@ if [ "$DEPLOY_DRY_RUN" = "true" ]; then
 fi
 
 # Same shared-infra ownership as other credentials. Dry-run above remains mutation-free.
-if [ "$ENVIRONMENT" = dev ] || [ "$ENVIRONMENT" = production ]; then
+if [ "$WEB_PUBLIC_ASSETS_PVC_ONLY" = false ] && { [ "$ENVIRONMENT" = dev ] || [ "$ENVIRONMENT" = production ]; }; then
   bash scripts/deploy/ensure-context-tape-execution-auth.sh
 fi
 
 echo "=== apply (non-PVC infra) ==="
-kubectl apply -f "$REST"
+if [ "$total_docs" -gt "$pvc_docs" ]; then kubectl apply -f "$REST"; fi
 
 if [ "${#pvc_create[@]}" -gt 0 ]; then
   echo "=== create missing PVCs (${#pvc_create[@]}) ==="
