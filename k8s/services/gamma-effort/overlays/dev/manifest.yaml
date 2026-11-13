@@ -60,8 +60,28 @@ spec:
               value: "7200000"
             - name: GAMMA_EFFORT_GEX_STALE_MS
               value: "900000"
+            - name: GAMMA_EFFORT_PRICE_STALE_MS
+              value: "300000"
             - name: GAMMA_EFFORT_HEARTBEAT_MS
               value: "60000"
+            - name: GAMMA_EFFORT_STRIKE_GRID_CENTS
+              value: "500"
+            - name: GAMMA_EFFORT_WING_PCT_OF_PEAK
+              value: "1.0"
+            - name: GAMMA_EFFORT_MIN_SWING_CENTS
+              value: "1000"
+            - name: GAMMA_EFFORT_LOCAL_GAMMA_RADIUS_CENTS
+              value: "1000"
+            - name: GAMMA_EFFORT_HOT_STRIKE_FAR_CENTS
+              value: "2000"
+            - name: GAMMA_EFFORT_ACCEPT_PCT_OF_PEAK
+              value: "50.0"
+            - name: GAMMA_EFFORT_TWO_SIDED_MIN
+              value: "0.40"
+            - name: GAMMA_EFFORT_TREND_BARS
+              value: "5"
+            - name: GAMMA_EFFORT_MAX_AMPLITUDES
+              value: "12"
             - name: JAVA_TOOL_OPTIONS
               value: -Xmx512m -XX:+UseSerialGC
           envFrom:
