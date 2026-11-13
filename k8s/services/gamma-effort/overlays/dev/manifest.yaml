@@ -67,7 +67,7 @@ spec:
             - name: GAMMA_EFFORT_STRIKE_GRID_CENTS
               value: "500"
             - name: GAMMA_EFFORT_WING_PCT_OF_PEAK
-              value: "1.0"
+              value: "10.0"
             - name: GAMMA_EFFORT_MIN_SWING_CENTS
               value: "1000"
             - name: GAMMA_EFFORT_LOCAL_GAMMA_RADIUS_CENTS
