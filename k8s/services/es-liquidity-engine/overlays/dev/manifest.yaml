@@ -102,6 +102,12 @@ spec:
               value: es.mbo.coverage
             - name: ES_MBO_TAPE_TOPIC
               value: underlying.es.trades
+            - name: ES_MBO_TAPE_SOURCE
+              value: DATABENTO
+            - name: ES_MBO_TAPE_SOURCE_SCHEMA
+              value: trades
+            - name: ES_MBO_INSTRUMENT_TABLE
+              value: ESZ6=10252
             - name: JAVA_TOOL_OPTIONS
               value: -Xms256m -Xmx1024m
           envFrom:

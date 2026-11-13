@@ -144,6 +144,16 @@ class Manifests(unittest.TestCase):
         # the generated dev slice carries it too (mirror rule)
         self.assertIn("ES_MBO_FILL_MATCHING", open("k8s/services/es-liquidity-engine/overlays/dev/manifest.yaml").read())
 
+    def test_the_tape_is_admitted_only_from_the_databento_trades_feed_for_the_front_contract(self):
+        e = env_of(deployment("k8s/services/es-liquidity-engine/base/es-liquidity-engine-deployment.yaml"))
+        self.assertEqual((e["ES_MBO_TAPE_SOURCE"], e["ES_MBO_TAPE_SOURCE_SCHEMA"], e["ES_MBO_INSTRUMENT_TABLE"]), ("DATABENTO", "trades", "ESZ6=10252"))
+        # every contract of the contract table has an instrument row (a roll adds both rows together)
+        contracts = {c.split("=")[1] for c in e["ES_MBO_CONTRACT_TABLE"].split(",")}
+        instruments = {c.split("=")[0] for c in e["ES_MBO_INSTRUMENT_TABLE"].split(",")}
+        self.assertEqual(contracts, instruments)
+        self.assertNotIn("ES_MBO_TAPE_SOURCE", env_of(deployment("k8s/services/drop-classifier-ref/base/drop-classifier-ref-deployment.yaml")))
+        self.assertIn("ES_MBO_INSTRUMENT_TABLE", open("k8s/services/es-liquidity-engine/overlays/dev/manifest.yaml").read())
+
     def test_the_two_deployments_never_share_an_output_prefix_or_name(self):
         engine, ref = (env_of(deployment(f"k8s/services/{s}/base/{s}-deployment.yaml")) for s in CASES)
         self.assertNotEqual(engine.get("DROP_OUTPUT_PREFIX"), ref.get("DROP_OUTPUT_PREFIX"))
