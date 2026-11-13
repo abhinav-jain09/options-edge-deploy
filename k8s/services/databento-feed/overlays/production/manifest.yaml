@@ -89,8 +89,14 @@ spec:
               value: "true"
             - name: ES_SPX_BASIS_SAMPLES_ENABLED
               value: "false"
+            # OFF until production's ES price Avro cutover (docs/ES-UNDERLYING-PRICE-AVRO-CUTOVER.md, "Production"). The
+            # feed image writes underlying.es.price as Avro and, with this on, refuses to start unless the subject
+            # com.optionsedge.contracts.hpsf.EsUnderlyingPrice is registered on THIS registry (it is not): it crash-looped and
+            # every raw topic (options.opra.tcbbo, underlying.spx.price, options.databento.gex.strike) was silent from
+            # 2026-11-04. The SPX cascade and every other output run with the flag off (rust config.rs: the engine and the
+            # cascade do not depend on it); only the ES price topic stays unwritten, as it already is.
             - name: ES_PRICE_ENABLED
-              value: "true"
+              value: "false"
             - name: DATABENTO_FEED_LIVENESS_STALE_SECONDS
               value: "15"
             - name: DATABENTO_FEED_LIVENESS_STARTUP_GRACE_SECONDS
