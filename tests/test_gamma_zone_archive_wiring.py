@@ -38,6 +38,8 @@ DEPLOY_TOPICS = ROOT / "scripts/kafka/topics.env"
 CRONTAB = ARCHIVE_DIR_REPO / "oe-archive.crontab"
 
 CORPUS_TOPIC = "options.spx.gamma-zone.log"
+PROFILE_TOPIC = "options.spx.gamma-zone.profile"
+CORPUS_SET = (CORPUS_TOPIC, PROFILE_TOPIC)
 LABEL = "com.optionsedge.oe-archive-gamma-zone"
 
 
@@ -48,18 +50,32 @@ def env_value(name: str) -> str:
 
 
 class TopicSet(unittest.TestCase):
-    def test_the_corpus_set_is_declared_and_is_ONLY_the_log(self):
-        """.current must NOT be archived: it is a compacted latest-value view that the next folded
-        bar rebuilds, so archiving it would copy one session over and over and add nothing the log
-        does not already hold."""
-        self.assertEqual(CORPUS_TOPIC, env_value("GAMMA_ZONE_CORPUS"))
-        self.assertNotIn("gamma-zone.current", env_value("GAMMA_ZONE_CORPUS"))
+    def test_the_corpus_set_is_the_log_AND_the_profile(self):
+        """MEMBERSHIP, not equality, and not position: an earlier version of this asserted the whole
+        variable equalled the log topic, so adding the profile failed here for no reason of
+        substance. What matters is that both are present and that nothing else is.
 
-    def test_the_topic_is_the_one_the_SERVICE_actually_writes(self):
+        .current must NOT be archived: it is a compacted latest-value view that the next folded bar
+        rebuilds, and every field in it is also in the log, so archiving it would copy one session
+        over and over and add nothing. .profile is compacted the same way and is also rebuildable
+        within a session -- but its content is NOT in the log. The log carries the extremes and the
+        swing; only .profile carries the per-level volume distribution, i.e. the volume per point.
+        Keyed sessionDate|symbol|timeframe under cleanup.policy=compact, so the cleaner keeps one
+        record per session and the intra-session snapshots -- the ones that show a thin shelf BEFORE
+        price falls through it -- are gone once the segment closes. The archive is what keeps them.
+        """
+        declared = env_value("GAMMA_ZONE_CORPUS").split()
+        self.assertEqual(sorted(CORPUS_SET), sorted(declared))
+        self.assertNotIn("options.spx.gamma-zone.current", declared)
+
+    def test_every_archived_topic_is_one_the_SERVICE_actually_writes(self):
         """Pinned against the deploy repo's own declaration, not against this file's idea of the
-        name. A rename that only half-landed would otherwise archive nothing while every assertion
-        here still passed."""
-        self.assertIn(f"{CORPUS_TOPIC}:1", DEPLOY_TOPICS.read_text())
+        names. A rename that only half-landed would otherwise archive nothing while every assertion
+        here still passed. Checked for EVERY member, so a future addition cannot skip the check."""
+        text = DEPLOY_TOPICS.read_text()
+        for topic in env_value("GAMMA_ZONE_CORPUS").split():
+            with self.subTest(topic=topic):
+                self.assertIn(f"{topic}:1", text)
 
     def test_the_wrapper_takes_the_set_FROM_THE_FILE_and_refuses_an_inherited_one(self):
         """An inherited GAMMA_ZONE_CORPUS would let a caller archive a different set behind the
