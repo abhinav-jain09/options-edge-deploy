@@ -90,10 +90,82 @@ spec:
             # `stale`, because a reading taken against an hour-old map is a different reading.
             - name: GAMMA_EFFORT_GEX_STALE_MS
               value: "900000"
+            # The PRICE's own staleness bound, and it is a guard where there was none. The service
+            # used to prefer the gamma board's spot copy over the live price off the tape; when the
+            # gex consumer died at 06:40:56 on 2026-11-12 that copy froze at 7585.48 for 644
+            # minutes while ES traded to 7652, and nothing said so because the only check was for
+            # null. The copy is gone and the price is the footprint bar's own SPX-equivalent close;
+            # past five minutes with no print the emission says `stale`. Five minutes is
+            # UNCALIBRATED: a 1m tape that has not printed for five minutes is not a live price.
+            - name: GAMMA_EFFORT_PRICE_STALE_MS
+              value: "300000"
             # With nothing folded the loop still publishes this often, so a service refusing every
             # bar shows its refusal tally instead of going quiet. Silence reads as health.
             - name: GAMMA_EFFORT_HEARTBEAT_MS
               value: "60000"
+            # ---- THE DEALER-SCALPING MODEL. Each value is labelled with WHOSE number it is, and
+            # every one of them also rides every emission under scalp.calibration.provenance. There
+            # is NO BACKTEST behind any of them, by instruction: the model ships, runs, and is
+            # corrected each evening against that day's data. So the record is the only place a
+            # wrong one can be found, and only if it says what it was computed under.
+            #
+            # MEASURED. The 0DTE board's own spacing: options.databento.gex.strike carried 380
+            # distinct keys on 2026-11-12, 187 strikes for the 0DTE expiry spanning 7000 to 8000,
+            # which is 5.00 points. The hot strike is a strike, so the grid is the board's.
+            - name: GAMMA_EFFORT_STRIKE_GRID_CENTS
+              value: "500"
+            # OWNER, and it is his own CORRECTION of his first number. He gave 10 per cent of the
+            # peak band; on 2026-11-13 he measured the 2026-11-12 session and replaced it with BELOW
+            # ONE PER CENT, because the band holding that session's high ran about 0.5 per cent of
+            # the peak band's volume per point and the band holding its low ran 0.23, against a
+            # volume point of control at 7594 on 79,256 contracts per point. A 10 per cent line is
+            # an order of magnitude too loose: it fires well before either extreme, on ordinary
+            # bands. The ONE number here that comes from the model itself.
+            #
+            # A PERCENTAGE, 0 to 100, in the page's own units -- the two readings that matter live
+            # in the first decimal place. GAMMA_EFFORT_WING_FRACTION, which was a fraction, is
+            # RETIRED and the service REFUSES to start while it is set: 0.10 read as a percentage
+            # would be a hundred times tighter than the 10 per cent it was asked for.
+            - name: GAMMA_EFFORT_WING_PCT_OF_PEAK
+              value: "1.0"
+            # MEASURED on ONE session, from the OWNER's own swing sizes. It is the minimum swing
+            # AND the zigzag's reversal threshold, so it decides what counts as a wave at all.
+            # 10.00 points is the smallest round trip the model names ("50, then 30, then 10") and
+            # it admits the smallest leg the owner's own 2026-11-12 figures report (+12.50). Driven
+            # over that session's real tape it gives 16 swings; the 2.50 points this shipped with
+            # first gave 153, of 2.50 to 25.75 points -- a 1-minute ES tape reverses 2.50 points
+            # constantly, so that was noise and not waves.
+            - name: GAMMA_EFFORT_MIN_SWING_CENTS
+              value: "1000"
+            # MEASURED. The requirements document's own regime definition: the sign of gamma summed
+            # over strikes within 10 points of spot, below zero amplifying and above zero braking.
+            # This is what decides the long-or-short-gamma case BEFORE any sign is assigned.
+            - name: GAMMA_EFFORT_LOCAL_GAMMA_RADIUS_CENTS
+              value: "1000"
+            # UNCALIBRATED. The owner says that in negative gamma the hot strike may be "far away"
+            # and the sign rule is then not fixed, without naming a distance. Past this, no dealer
+            # side is assigned at all -- a rule that is not fixed must not be applied anyway.
+            - name: GAMMA_EFFORT_HOT_STRIKE_FAR_CENTS
+              value: "2000"
+            # UNCALIBRATED. "Heavy" volume at a strike price has reached, as a PERCENTAGE of the
+            # peak band's -- the same units as the wing line above, because comparing a percentage
+            # against a fraction made 50 per cent read as half of one per cent and called almost
+            # every band heavy. Heavy AND two-way is the owner's acceptance test; either alone is
+            # UNDECIDED. GAMMA_EFFORT_ACCEPT_FRACTION is RETIRED and refused for the same reason.
+            - name: GAMMA_EFFORT_ACCEPT_PCT_OF_PEAK
+              value: "50.0"
+            # UNCALIBRATED. "Two-way", as min over max of the aggressor split at that strike. The
+            # net cannot tell 2,000 bought from an even 1,000/1,000, and that is the difference.
+            - name: GAMMA_EFFORT_TWO_SIDED_MIN
+              value: "0.40"
+            # UNCALIBRATED. The window "the volume keeps dropping" is read over, for the owner's
+            # crossing rule. The newest bar is held OUT of the mean it is compared with.
+            - name: GAMMA_EFFORT_TREND_BARS
+              value: "5"
+            # A bound on the EMISSION, not a model parameter. The swing history is published in
+            # full and the corpus log's byte cap is measured from the record's size.
+            - name: GAMMA_EFFORT_MAX_AMPLITUDES
+              value: "12"
             - name: JAVA_TOOL_OPTIONS
               value: -Xmx512m -XX:+UseSerialGC
           resources:
