@@ -114,20 +114,32 @@ spec:
             # which is 5.00 points. The hot strike is a strike, so the grid is the board's.
             - name: GAMMA_EFFORT_STRIKE_GRID_CENTS
               value: "500"
-            # OWNER, and it is his own CORRECTION of his first number. He gave 10 per cent of the
-            # peak band; on 2026-11-13 he measured the 2026-11-12 session and replaced it with BELOW
-            # ONE PER CENT, because the band holding that session's high ran about 0.5 per cent of
-            # the peak band's volume per point and the band holding its low ran 0.23, against a
-            # volume point of control at 7594 on 79,256 contracts per point. A 10 per cent line is
-            # an order of magnitude too loose: it fires well before either extreme, on ordinary
-            # bands. The ONE number here that comes from the model itself.
+            # OWNER, and the one number here that comes from the model itself. The requirements
+            # document states TEN per cent of the peak band, and that is what this runs.
+            #
+            # IT SHIPPED AT 1.0 FOR A FEW HOURS ON 2026-11-13 AND THAT WAS WRONG. A correction to
+            # 1.0 was relayed with figures behind it -- 0.23 and 0.55 per cent at 2026-11-12's two
+            # turns -- which turned out to be ONE-POINT buckets measured against the busiest
+            # one-point bucket, while this threshold compares FIVE-POINT bands against the busiest
+            # band. Six or seven times finer than what it was being compared with. Measured at the
+            # right resolution off the same tape: 11-12's low band reads 1.54 per cent and its high
+            # band 2.94, and on 11-11 and 11-13 nothing reads under one per cent at all -- so 1.0
+            # fires once in three sessions and misses 11-12's high. Ten catches both of its turns.
+            #
+            # THE CODE DEFAULT IS ALSO 10.0, and this line still has to be right: an explicit env
+            # var BEATS the default, so a render left at 1.0 runs 1.0 however the code reads. That
+            # is exactly what happened here -- the code was corrected in processing #1775 while
+            # this file still said 1.0, and dev ran the wrong threshold while everyone believed it
+            # had been fixed. Since processing #1776 the record SAYS SO: the provenance is derived
+            # from the value in force, so a render that disagrees with the document publishes
+            # `OVERRIDDEN` rather than borrowing the owner's name for it.
             #
             # A PERCENTAGE, 0 to 100, in the page's own units -- the two readings that matter live
             # in the first decimal place. GAMMA_EFFORT_WING_FRACTION, which was a fraction, is
             # RETIRED and the service REFUSES to start while it is set: 0.10 read as a percentage
             # would be a hundred times tighter than the 10 per cent it was asked for.
             - name: GAMMA_EFFORT_WING_PCT_OF_PEAK
-              value: "1.0"
+              value: "10.0"
             # MEASURED on ONE session, from the OWNER's own swing sizes. It is the minimum swing
             # AND the zigzag's reversal threshold, so it decides what counts as a wave at all.
             # 10.00 points is the smallest round trip the model names ("50, then 30, then 10") and
