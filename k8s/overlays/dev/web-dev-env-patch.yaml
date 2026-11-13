@@ -153,3 +153,20 @@ spec:
             # access control.
             - name: APP_JOURNAL_API
               value: "http://localhost:8097"
+            # THE HUNT TOPICS THE DEV WEB LISTENS TO AND COMMANDS. Dev's hunt runs under its own
+            # identity (REVERSAL_HUNT_INSTANCE_ID=dev, processing #700) and so writes
+            # dev.es.reversal.hunt.{status,alerts,state} and reads dev.es.reversal.hunt.commands.
+            # The web's default is the UN-prefixed names, which belong to production's hunt on the
+            # same es4 broker: the dev page was hearing production, and when that stopped writing
+            # (last record 2026-11-02 23:45 UTC) every "Bottom found" / "Top found" shout and the
+            # LIVE badge went quiet, while dev's own hunt kept publishing voice-eligible calls
+            # (120 alerts in one pod's life) into topics nothing read. ARM/DISARM went to the
+            # un-prefixed commands topic, where dev's hunt is not a consumer, for the same reason.
+            - name: HUNT_STATUS_TOPIC
+              value: "dev.es.reversal.hunt.status"
+            - name: HUNT_ALERTS_TOPIC
+              value: "dev.es.reversal.hunt.alerts"
+            - name: HUNT_STATE_TOPIC
+              value: "dev.es.reversal.hunt.state"
+            - name: HUNT_COMMANDS_TOPIC
+              value: "dev.es.reversal.hunt.commands"

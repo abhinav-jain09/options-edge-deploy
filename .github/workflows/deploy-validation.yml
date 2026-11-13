@@ -229,6 +229,11 @@ jobs:
       - name: databento-feed SPX spot config (retired settings gone, close-basis database wired)
         run: python3 -m unittest -v tests.test_databento_feed_spx_spot_config
 
+      # The dev web must listen to the topics dev's hunt WRITES (dev.es.reversal.hunt.*): at the default it hears
+      # production's hunt on the same broker, and when that stopped the dev page's Top/Bottom voice went silent.
+      - name: dev web hunt topics follow the dev hunt instance (both web overlays)
+        run: python3 -m unittest -v tests.test_dev_web_hunt_topics
+
       # One Service One Identity Rule: no service identity (Streams application.id / consumer group)
       # may carry a version suffix. FAIL-CLOSED — a red result here blocks the merge. This exists
       # because oi-shadow was born as "oi-shadow-v1" eleven days AFTER the platform-wide unversioning
