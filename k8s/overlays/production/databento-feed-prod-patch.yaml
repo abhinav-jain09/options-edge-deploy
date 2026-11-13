@@ -129,5 +129,7 @@ spec:
             # Read UNPREFIXED (config.py: ES_PRICE_ENABLED), like the ES_TRADES_SOURCE_*
             # keys; config validation requires ES_TRADES_SOURCE_ENABLED=true, which
             # prod's infra configmap sets.
+            # OFF until production's ES price Avro cutover: see the standalone slice
+            # (k8s/services/databento-feed/overlays/production/manifest.yaml), which this MUST mirror.
             - name: ES_PRICE_ENABLED
-              value: "true"
+              value: "false"
