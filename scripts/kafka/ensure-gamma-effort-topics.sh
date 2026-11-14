@@ -152,8 +152,18 @@ if ! grep -qxF "$LOG" <<<"$LIST"; then
   fi
 fi
 if [ "$rc" -eq 0 ]; then
-  ensure_topic "$LOG" delete "exact:-1" 1048576 no || rc=1
-  raise_retention_bytes "$LOG" "$LOG_BYTES" || rc=1
+  # THE RAISE IS GATED ON THE SHAPE BEING RIGHT. ensure_topic judges the partition count, the
+  # cleanup policy, retention.ms and the message bound; a log that fails any of those is one this
+  # barrier REFUSES, and altering a topic on the way to refusing it is the one thing a fail-closed
+  # barrier must never do. Without this gate a log at 32 partitions (dev's auto-create default)
+  # with the old 256 MiB cap would be altered to 512 MiB and the deploy would then fail anyway
+  # (Codex r1). check_retention_bytes still runs either way: it only READS, and the cap it reports
+  # is worth having in the output of a failing run.
+  shape_ok=yes
+  ensure_topic "$LOG" delete "exact:-1" 1048576 no || { rc=1; shape_ok=no; }
+  if [ "$shape_ok" = yes ]; then
+    raise_retention_bytes "$LOG" "$LOG_BYTES" || rc=1
+  fi
   check_retention_bytes "$LOG" "$LOG_BYTES" || rc=1
 fi
 

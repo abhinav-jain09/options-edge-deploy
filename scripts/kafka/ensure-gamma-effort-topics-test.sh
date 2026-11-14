@@ -118,5 +118,28 @@ f "the current topic on delete" $CURRENT 1 delete -1 -1
 f "the current topic at 32 partitions" $CURRENT 32 compact -1 -1
 f "the current topic aged out by time" $CURRENT 1 compact 604800000 -1
 
+# --- A WRONG SHAPE *AND* A LOW CAP: refused, and the cap NOT raised on the way out ------------------------------------------------------
+# The mirror of the raise, and the case the first version of this test missed (Codex r1). Every
+# wrong-shape case above left the log already AT the declared cap, so the raise had nothing to do
+# and `no_mutation` passed for free. With the old 256 MiB cap as well, the raise would run on a
+# topic this barrier is about to REFUSE -- altering a topic on the way to refusing it is the one
+# thing a fail-closed barrier must never do, and the deploy fails anyway, so the alter is pure loss.
+g() { local label="$1"; shift
+  fresh; topic $CURRENT 1 compact -1 -1; topic $LOG "$@"
+  expect_fail "$label"
+  grep -q "'$LOG'" "$T/out" && ok "...names $LOG" || bad "...does not name $LOG"
+  no_mutation "$label"
+  if grep -q "retention.bytes=$CAP" "$T/calls"; then bad "$label: the cap was raised on a topic being refused"; else ok "$label: the cap was NOT raised on a topic being refused"; fi
+}
+g "the log at 32 partitions AND still at the old cap" 32 delete -1 "$OLD_CAP"
+g "the log COMPACTED AND still at the old cap" 1 compact -1 "$OLD_CAP"
+g "the log aged out by time AND still at the old cap" 1 delete 604800000 "$OLD_CAP"
+g "the log below the message bound AND still at the old cap" 1 delete -1 "$OLD_CAP" 524288
+# ...and the control: the SAME low cap with a RIGHT shape IS raised, so the gate above is not just
+# a blanket refusal to ever raise.
+fresh; topic $CURRENT 1 compact -1 -1; topic $LOG 1 delete -1 "$OLD_CAP"
+expect_ok "the control: a right shape at the old cap is still raised"
+[ "$(cfg $LOG)" = "1 delete -1 $CAP" ] && ok "...to the declared $CAP" || bad "...left at $(cfg $LOG)"
+
 echo "--- $pass ok, $fail failed"
 [ "$fail" -eq 0 ]
