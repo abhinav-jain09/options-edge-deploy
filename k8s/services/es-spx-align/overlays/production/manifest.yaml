@@ -40,8 +40,6 @@ spec:
         - env:
             - name: KAFKA_ES_TRADES_TOPIC
               value: underlying.es.price
-            - name: ALIGN_CVD_LEVELS_ENABLED
-              value: "false"
             - name: ES_SPX_ALIGN_ENABLED
               value: "true"
             - name: HEALTH_PORT
