@@ -194,6 +194,13 @@ echo "=== 6) durable topics are preserved by the destructive resets ==="
 # make that drift unmergeable rather than discoverable at 09:00 ET.
 bash scripts/ci/validate-durable-topic-preservation.sh
 
+# A declared retention.bytes must be the one a deploy applies. The barriers carry the number as
+# their own literal, so there are two copies per capped topic: options.spx.gamma-effort.log's
+# raise to 512 MiB sat in topics.env for a day while the barrier kept creating and checking
+# 256 MiB, and the live topic was still 256 MiB when it was measured. This RUNS each barrier
+# against the mocked CLIs and reads the topic back.
+bash scripts/ci/validate-barrier-byte-caps.sh
+
 # Level Absorption: the ConfigMap (configuration + retention artifact), the events topic's byte cap and the LA-050 topic names agree.
 bash scripts/ci/validate-level-absorption-config.sh
 # Line health: the second ConfigMap of that file (content-named, immutable, exact key set), the dev-only enable patch, and nothing else turning it on.
@@ -210,6 +217,7 @@ for t in scripts/kafka/ensure-oi-anchor-topic-parse-test.sh scripts/kafka/ensure
          scripts/kafka/ensure-break-score-topics-test.sh \
          scripts/kafka/ensure-level-absorption-topics-test.sh \
          scripts/kafka/ensure-es-liquidity-wall-topics-test.sh \
+         scripts/kafka/ensure-gamma-effort-topics-test.sh \
          scripts/kafka/ensure-line-health-topics-test.sh \
          scripts/kafka/ensure-market-structure-topics-test.sh \
          scripts/deploy/service-deploy-ms-rollover-inject-test.sh \

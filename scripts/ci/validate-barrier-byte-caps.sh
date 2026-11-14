@@ -32,6 +32,17 @@
 #       declared cap is either created by a barrier checked under (1), or named in APPLIED_ELSEWHERE
 #       below with the reason. A new capped topic that is in neither FAILS this validator.
 #
+# WHAT THIS DOES *NOT* PROVE, stated because a guard that promises more than its mechanism delivers
+# is worse than no guard. (2) accepts failing closed as readily as raising, so this validator does
+# NOT require that a RAISED declaration reach an ALREADY EXISTING topic -- which is the half of the
+# gamma-effort defect that cost a day. Deleting the raise from
+# ensure-gamma-effort-topics.sh leaves this validator green (measured, by doing it): the barrier then
+# refuses the 256 MiB topic instead, which is a legitimate design and would merely fail every
+# gamma-effort deploy until someone altered the topic by hand. That requirement is pinned per
+# barrier, by scripts/kafka/ensure-gamma-effort-topics-test.sh, and a barrier that chooses to fail
+# closed instead -- gamma-zone, strike-hold, es-liquidity-wall and es-liquidity-engine all do -- is
+# making a deliberate choice this validator is not the place to overrule.
+#
 # topics.env is PARSED, not sourced: it carries ENVIRONMENT-dependent stripping and would collide
 # with this script's own variables.
 set -euo pipefail
