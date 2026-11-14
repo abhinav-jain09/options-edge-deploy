@@ -27,7 +27,8 @@
 #       with is EXACTLY the one topics.env declares.
 #   (2) B must never report OK with T at some OTHER cap. Raising it to the declared value is
 #       allowed (no record is lost widening a cap); failing closed is allowed; passing while the
-#       topic stays wrong is the defect above and is not.
+#       topic stays wrong is the defect above and is not. ONE barrier opts out of this on purpose
+#       and is named, with its reason, in ACCEPTS_ANY_FINITE_CAP below.
 #   (2b) And B must not alter T's cap on the way to REFUSING it. Presented with T at 32 partitions
 #       -- dev's broker default under auto-create, the shape every barrier here exists to refuse --
 #       and a wrong cap, B must refuse and leave the cap alone. The deploy fails either way, so an
@@ -73,6 +74,21 @@ early-auction.verdicts.shadow       ensure-early-auction-verdict-topics.sh creat
 EOF
 )
 
+# Topics whose barrier DELIBERATELY accepts any finite positive cap, so check (2) does not apply to
+# them. Each line: <topic> <reason>. (1) still does -- the value the barrier CREATES the topic with
+# must be the declared one -- and these are reported, not hidden: a silent exemption is how a guard
+# stops being one.
+#
+# This list earned itself. The wrong-cap fixture originally replaced a topic's whole config, which
+# dropped message.timestamp.type=CreateTime from futures.break-score.events; its barrier then
+# refused for the missing timestamp setting and the case recorded a "refusal" that had nothing to do
+# with the cap (Codex r2). Fixing the fixture turned the case red and showed the real position:
+# ensure-break-score-topics.sh accepts the wrong cap on purpose and says so in its own header.
+ACCEPTS_ANY_FINITE_CAP=$(cat <<'EOF'
+futures.break-score.events          ensure-break-score-topics.sh accepts ANY finite positive retention.bytes on an existing topic BY DESIGN, stated in its own header: "the cap is an owner-adjustable number (raising it is a deliberate topic change)", and only an absent or unlimited one fails. So a drift on this topic would not be caught by its barrier. The live dev topic measured 16777216 on 2026-11-14 and agrees with the declaration; the CREATE path is still checked by (1) above.
+EOF
+)
+
 # Barriers that need something seeded or set before they will run at all. Each line:
 # <barrier-basename> <TAB> <seed|env> <TAB> <argument>. A barrier that cannot be driven and is not
 # listed here fails: see (3).
@@ -94,6 +110,9 @@ note() { printf '      %s\n' "$*"; }
 # the metacharacter was not.
 exempt_reason() { # <topic> -> the reason, or empty
   printf '%s\n' "$APPLIED_ELSEWHERE" | awk -v t="$1" '$1==t{sub(/^[^ \t]+[ \t]+/, ""); print; exit}'
+}
+any_cap_reason() { # <topic> -> the reason check (2) does not apply, or empty
+  printf '%s\n' "$ACCEPTS_ANY_FINITE_CAP" | awk -v t="$1" '$1==t{sub(/^[^ \t]+[ \t]+/, ""); print; exit}'
 }
 
 # --- (a) the declared finite positive caps, parsed out of topics.env ---------------------------------
@@ -168,6 +187,33 @@ s["topics"][name] = {"partitions": int(parts), "rf": 1, "end": 0,
 json.dump(s, open(f, "w"))
 PY
 }
+# CHANGE ONE KEY, leaving every other config exactly as the barrier left it. put_topic above
+# REPLACES a topic's whole config dict, which is right for SEEDING an input that does not exist but
+# wrong for the wrong-cap cases: on futures.break-score.events it dropped
+# message.timestamp.type=CreateTime, so that barrier refused for the MISSING TIMESTAMP SETTING and
+# the case reported the wrong cap as "refused" without the cap having been the reason (Codex r2 --
+# the same shape as its r1 finding that a case must exercise what it names). Mutating in place also
+# removes the earlier `shape` round-trip, and with it the word-splitting of a cleanup.policy and the
+# traceback that an absent topic used to abort the whole validator with.
+mutate_topic() { # <name> <retention.bytes> [<partitions>] -> non-zero if the topic is absent
+  python3 - "$T/state.json" "$@" <<'PY'
+import json, sys
+f, name, by = sys.argv[1:4]
+parts = sys.argv[4] if len(sys.argv) > 4 else None
+s = json.load(open(f))
+t = s["topics"].get(name)
+if t is None:
+    sys.stderr.write("absent\n")
+    raise SystemExit(1)
+t["configs"]["retention.bytes"] = by
+if parts is not None:
+    t["partitions"] = int(parts)
+json.dump(s, open(f, "w"))
+PY
+}
+topic_parts() { python3 -c 'import json,sys
+t=json.load(open(sys.argv[1]))["topics"].get(sys.argv[2])
+print("" if t is None else t["partitions"])' "$T/state.json" "$1"; }
 get_bytes() { python3 -c 'import json,sys
 t=json.load(open(sys.argv[1]))["topics"].get(sys.argv[2])
 print("<absent>" if t is None else t["configs"].get("retention.bytes","<unset>"))' "$T/state.json" "$2"; }
@@ -234,19 +280,25 @@ for b in $(awk '{print $3}' "$BARRIERS" | sort -u); do
   while read -r topic cap; do
     [ -n "$topic" ] || continue
     wrong=$(( cap / 2 )); [ "$wrong" -lt 1048576 ] && wrong=$(( cap * 2 ))
+    any_cap="$(any_cap_reason "$topic")"
     if [ "$wrong" = "$cap" ]; then
       echo "FAIL ($base): cannot build a wrong cap for '$topic' distinct from the declared $cap — this case would be vacuous."
       fail=1
       continue
     fi
+    if [ -n "$any_cap" ]; then
+      echo "ok   ($base): '$topic' — check (2) does not apply: $(printf '%s' "$any_cap" | cut -c1-150)"
+    else
     rebuild "$b" || true
-    # The policy and retention.ms a barrier demands differ per topic, and getting either wrong would
-    # make it fail for the wrong reason. So take the shape the barrier ITSELF just created and move
-    # ONLY retention.bytes off the declared value: that isolates the one thing under test.
-    shape="$(python3 -c 'import json,sys
-t=json.load(open(sys.argv[1]))["topics"][sys.argv[2]]
-print(t["partitions"], t["configs"]["cleanup.policy"], t["configs"]["retention.ms"])' "$T/state.json" "$topic")"
-    put_topic "$topic" $shape "$wrong"
+    # Move ONLY retention.bytes off the declared value, on the topic the barrier itself just
+    # created. Everything else -- partitions, cleanup.policy, retention.ms, the message bound, the
+    # timestamp type -- stays exactly as the barrier left it, so a refusal here can only be about
+    # the cap.
+    if ! mutate_topic "$topic" "$wrong" 2>/dev/null; then
+      echo "FAIL ($base): '$topic' is absent after rebuilding the mocked cluster, so this case cannot run."
+      fail=1
+      continue
+    fi
     : > "$T/calls"
     if drive "$b"; then
       after="$(get_bytes "$T/state.json" "$topic")"
@@ -269,8 +321,10 @@ print(t["partitions"], t["configs"]["cleanup.policy"], t["configs"]["retention.m
         fail=1
       fi
     fi
+    fi
 
-    # (2b) A WRONG SHAPE *AND* A WRONG CAP. Altering a topic on the way to refusing it is the one
+    # (2b) A WRONG SHAPE *AND* A WRONG CAP. Applies to EVERY barrier, including one exempt from (2):
+    # how a barrier judges a cap is its own business, but none of them may alter a topic it refuses. Altering a topic on the way to refusing it is the one
     # thing a fail-closed barrier must never do, and the raise added for gamma-effort did exactly
     # that until it was gated on the shape being right (Codex r1). The case is generic because the
     # demand is: every barrier here requires EXACTLY ONE partition, which is also what it created
@@ -278,10 +332,14 @@ print(t["partitions"], t["configs"]["cleanup.policy"], t["configs"]["retention.m
     # barriers exist to refuse -- is an invalid shape for all of them without this validator having
     # to know anything barrier-specific. Only run it where the barrier did create one partition, so
     # the rule stays the barrier's own rather than this validator's assumption.
-    parts="$(printf '%s' "$shape" | awk '{print $1}')"
+    rebuild "$b" || true
+    parts="$(topic_parts "$topic")"
     if [ "$parts" = 1 ]; then
-      rebuild "$b" || true
-      put_topic "$topic" 32 "$(printf '%s' "$shape" | awk '{print $2}')" "$(printf '%s' "$shape" | awk '{print $3}')" "$wrong"
+      if ! mutate_topic "$topic" "$wrong" 32 2>/dev/null; then
+        echo "FAIL ($base): '$topic' is absent after rebuilding the mocked cluster, so the wrong-shape case cannot run."
+        fail=1
+        continue
+      fi
       : > "$T/calls"
       if drive "$b"; then
         echo "FAIL ($base): reports OK with '$topic' at 32 partitions — the dev auto-create default is the shape these barriers exist to refuse."
