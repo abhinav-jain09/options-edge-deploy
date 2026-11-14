@@ -118,6 +118,42 @@ any_cap_reason() { # <barrier-basename> <topic> -> the reason check (2) does not
   printf '%s\n' "$ACCEPTS_ANY_FINITE_CAP" | awk -v b="$1" -v t="$2" '$1==b && $2==t{sub(/^[^ \t]+[ \t]+[^ \t]+[ \t]+/, ""); print; exit}'
 }
 
+# --- (0) THE TABLES ABOVE ARE THEMSELVES CHECKED, BEFORE THEY ARE TRUSTED --------------------------
+# Every row must carry a NON-EMPTY reason, and the readers below take the reason to be whatever
+# follows the key fields. A row with the keys and nothing else fails BOTH ways and neither is
+# visible: `<barrier> <topic>` with no reason makes the sub() not match, so the reader prints the
+# row and the keys themselves are reported as the reason; `<barrier> <topic>   ` with trailing
+# whitespace makes it match and print nothing, which silently turns the exemption OFF (Codex r4).
+# An exemption is the one thing in this validator that makes a check NOT run, so an exemption
+# nobody can read is worse than none. Checked here, once, rather than guessed at each use.
+table_rows_well_formed() { # <table text> <key-field-count> <table name>
+  printf '%s\n' "$1" | awk -v keys="$2" -v name="$3" '
+    { line = $0 }
+    NF == 0 { next }
+    NF <= keys {
+      printf "FAIL: %s has a row with no reason: %s\n", name, line
+      bad = 1
+      next
+    }
+    {
+      reason = line
+      for (i = 1; i <= keys; i++) sub(/^[ \t]*[^ \t]+/, "", reason)
+      gsub(/^[ \t]+|[ \t]+$/, "", reason)
+      if (reason == "") {
+        printf "FAIL: %s has a row whose reason is only whitespace: %s\n", name, line
+        bad = 1
+      }
+    }
+    END { exit bad ? 1 : 0 }'
+}
+table_rows_well_formed "$APPLIED_ELSEWHERE" 1 APPLIED_ELSEWHERE || fail=1
+table_rows_well_formed "$ACCEPTS_ANY_FINITE_CAP" 2 ACCEPTS_ANY_FINITE_CAP || fail=1
+table_rows_well_formed "$SEEDS" 2 SEEDS || fail=1
+if [ "$fail" -ne 0 ]; then
+  echo "=== validate-barrier-byte-caps FAILED: its own exemption tables are unreadable, so nothing below is trustworthy ==="
+  exit 1
+fi
+
 # --- (a) the declared finite positive caps, parsed out of topics.env ---------------------------------
 # Every *_TOPIC_RETENTION_BYTES_OVERRIDES assignment's quoted value, split on whitespace, keeping the
 # pairs whose value is a positive integer. `-1` (unlimited) carries no number to drift and is skipped.
