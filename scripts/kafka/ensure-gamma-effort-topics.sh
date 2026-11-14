@@ -4,12 +4,23 @@
 #
 #   NO BROKER-WIDE CHANGE. The shapes are the ones scripts/kafka/topics.env declares (one partition each, exact):
 #   options.spx.gamma-effort.current  1 partition, compact, retention.ms EXACTLY -1, retention.bytes EXACTLY -1 (pure compact)  the newest reading per session
-#   options.spx.gamma-effort.log      1 partition, delete,  retention.ms EXACTLY -1, retention.bytes EXACTLY 268435456 (256 MiB)  EVERY emission, in order: the corpus
+#   options.spx.gamma-effort.log      1 partition, delete,  retention.ms EXACTLY -1, retention.bytes EXACTLY 536870912 (512 MiB)  EVERY emission, in order: the corpus
 #
 # WHY THE BARRIER EXISTS AT ALL when the service itself creates what is missing. The service deliberately CREATES-IF-ABSENT and then only CHECKS the partition count: it
 # never reconciles a topic's configuration, because a pod start that overwrites a declared shape with whatever the running binary believes is how this fleet has lost a
-# compaction setting before. So the declared shape - in particular the 256 MiB byte cap, which the service does not know - has to be applied by something that reads
-# topics.env, and that is this script. An existing topic is never recreated, altered or shrunk here either: any difference fails closed.
+# compaction setting before. So the declared shape - in particular the 512 MiB byte cap, which the service does not know - has to be applied by something that reads
+# topics.env, and that is this script. An existing topic is never recreated here, and its partition count, cleanup policy and retention.ms are never altered: any
+# difference in those fails closed.
+#
+# ONE EXCEPTION, AND WHY IT HAD TO BE MADE: the log's retention.bytes is RAISED to the declared cap when the live topic is below it, and a cap BELOW the live value is
+# refused. Until 2026-11-14 this script refused any difference in either direction, and the consequence was measured: the 2026-11-13 raise from 256 to 512 MiB (#1637)
+# was merged into topics.env and NEVER REACHED THE CLUSTER, because the only thing that applies the cap is the create path and the topic already existed. The live
+# topic was still 256 MiB a day later - 21.8 sessions of corpus against the design's section 11 floor of 20 to 25, the exact shortfall the raise was made to avoid -
+# and raising this script's literal alone would have made the barrier reject the existing topic and fail EVERY gamma-effort deploy until someone altered it by hand.
+# A declared value that no deploy can apply is not a declaration; it is a comment. So the raise is applied here, which is also what makes the two directions safe to
+# treat differently: RAISING a byte cap deletes nothing, while LOWERING one deletes the oldest corpus records immediately - and this topic IS the corpus, the only
+# thing that settles the design's calibration question. A lower cap is therefore a deliberate, reviewed operation, never a deploy's side effect. This is the rule
+# ensure-level-absorption-topics.sh already applies to its own events log ("never lowered"), not a new one invented here.
 #
 # WHY THE LOG MUST NOT BE COMPACTED, checked here and not merely declared: the key is the session, so compaction would keep one record per session and discard exactly the
 # intraday history the topic exists to accumulate. That corpus is the ONLY way the design's own calibration question gets settled - its section 12.3 measured the shipped
@@ -59,22 +70,52 @@ if ! LIST=$(kt --list 2>&1); then
   echo "FAIL: cannot list topics — refusing to deploy on an unverified cluster:"; printf '%s\n' "$LIST"; exit 1
 fi
 
-LOG_BYTES=268435456
+# The declared cap, scripts/kafka/topics.env's OPTIONS_EDGE_TOPIC_RETENTION_BYTES_OVERRIDES entry for this topic. It is a literal here, as in every sibling barrier, and
+# scripts/ci/validate-barrier-byte-caps.sh is what keeps the two from drifting: it parses this assignment and that declaration and fails the build when they disagree.
+# That validator exists because this pair DID disagree for a day and nothing noticed - the only tell was a comment whose own arithmetic contradicted itself.
+LOG_BYTES=536870912
 
-# retention.bytes is not part of the shared routine's contract: read the EFFECTIVE value (--all, what a service's own describeConfigs sees) and compare exactly. Never
-# altered here. `--describe --all` prints SYNONYMS as well as the effective value, which is why the comparison goes through extract()'s own boundary rather than a bare
-# grep: a bare grep counts one value several times and refuses a correct topic.
-check_retention_bytes() { # <topic> <exact retention.bytes>
-  local topic="$1" want="$2" cfg bytes
+# retention.bytes is not part of the shared routine's contract: read the EFFECTIVE value (--all, what a service's own describeConfigs sees) and compare exactly.
+# `--describe --all` prints SYNONYMS as well as the effective value, which is why the comparison goes through extract()'s own boundary rather than a bare grep: a bare
+# grep counts one value several times and refuses a correct topic.
+#
+# ONE read, used by both the raise and the check, so the value the barrier acts on and the value it then verifies cannot be parsed two different ways. A guard that
+# parses differently from the thing it guards is checking a different question.
+read_retention_bytes() { # <topic> -> the effective retention.bytes on stdout, or empty
+  local topic="$1" cfg
   if ! cfg=$(kc --entity-type topics --entity-name "$topic" --describe --all 2>&1); then
-    echo "FAIL: could not read the config of '$topic':"; printf '%s\n' "$cfg"; return 1
+    echo "FAIL: could not read the config of '$topic':" >&2; printf '%s\n' "$cfg" >&2; return 1
   fi
-  bytes=$(extract 'retention\.bytes' "$cfg")
+  extract 'retention\.bytes' "$cfg"
+}
+
+# Bring an EXISTING topic up to the declared cap. Raise only: see the header. A live value at or above the declared one is left alone here and judged by
+# check_retention_bytes, which is what refuses the lower-cap case by name.
+raise_retention_bytes() { # <topic> <declared retention.bytes>
+  local topic="$1" want="$2" cur out
+  cur=$(read_retention_bytes "$topic") || return 1
+  case "${cur:-}" in ''|*[!0-9]*) return 0 ;; esac   # -1 (unlimited) or unreadable: not a raise, left to the exact check
+  if [ "$cur" -lt "$want" ]; then
+    echo "raising '$topic' retention.bytes $cur -> $want (the declared cap in scripts/kafka/topics.env; never lowered here)"
+    if ! out=$(kc --entity-type topics --entity-name "$topic" --alter --add-config "retention.bytes=$want" 2>&1); then
+      echo "FAIL: could not raise retention.bytes of '$topic':"; printf '%s\n' "$out"; return 1
+    fi
+  fi
+}
+
+check_retention_bytes() { # <topic> <exact retention.bytes>
+  local topic="$1" want="$2" bytes
+  bytes=$(read_retention_bytes "$topic") || return 1
   case "${bytes:-}" in
     ''|*[!0-9-]*|-|?*-*|-[!1]*|-1?*) echo "FAIL: '$topic' reports retention.bytes='${bytes:-<unreadable>}', expected exactly $want."; return 1 ;;
   esac
   if [ "$bytes" != "$want" ]; then
-    echo "FAIL: '$topic' has retention.bytes=$bytes, expected exactly $want (the declared shape in scripts/kafka/topics.env; never altered here)."
+    if [ "$bytes" -gt "$want" ] 2>/dev/null; then
+      echo "FAIL: '$topic' has retention.bytes=$bytes, ABOVE the declared $want (scripts/kafka/topics.env). Lowering a cap on the corpus log deletes its oldest records"
+      echo "      immediately, so it is a deliberate reviewed operation and never a deploy's side effect: alter the topic by hand, or raise the declaration to match."
+    else
+      echo "FAIL: '$topic' has retention.bytes=$bytes, expected exactly $want (the declared shape in scripts/kafka/topics.env)."
+    fi
     return 1
   fi
   echo "ok: '$topic' — retention.bytes=$bytes"
@@ -111,7 +152,18 @@ if ! grep -qxF "$LOG" <<<"$LIST"; then
   fi
 fi
 if [ "$rc" -eq 0 ]; then
-  ensure_topic "$LOG" delete "exact:-1" 1048576 no || rc=1
+  # THE RAISE IS GATED ON THE SHAPE BEING RIGHT. ensure_topic judges the partition count, the
+  # cleanup policy, retention.ms and the message bound; a log that fails any of those is one this
+  # barrier REFUSES, and altering a topic on the way to refusing it is the one thing a fail-closed
+  # barrier must never do. Without this gate a log at 32 partitions (dev's auto-create default)
+  # with the old 256 MiB cap would be altered to 512 MiB and the deploy would then fail anyway
+  # (Codex r1). check_retention_bytes still runs either way: it only READS, and the cap it reports
+  # is worth having in the output of a failing run.
+  shape_ok=yes
+  ensure_topic "$LOG" delete "exact:-1" 1048576 no || { rc=1; shape_ok=no; }
+  if [ "$shape_ok" = yes ]; then
+    raise_retention_bytes "$LOG" "$LOG_BYTES" || rc=1
+  fi
   check_retention_bytes "$LOG" "$LOG_BYTES" || rc=1
 fi
 
