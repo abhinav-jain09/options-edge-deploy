@@ -11,9 +11,11 @@
 # token minted here authenticates nowhere on the internal platform — a property of the topology, not
 # of configuration discipline (PGL-041 proves both directions).
 #
-# GATE 4a SCOPE: this is infrastructure only. There is no public DNS and no tunnel route yet
-# (PGL-032/PGL-036 are later), and no public web workload — PGL-072 forbids one above zero replicas
-# until PGL-050/051/052 land. Keycloak here is reachable on the LAN and in-cluster, nowhere else.
+# ⚠️ REACHABLE FROM THE INTERNET at https://auth.bleedingoptions.com (tunnel route; /, /admin and
+# /realms/master are edge-404). The paragraph here said "no public DNS and no tunnel route yet …
+# Keycloak here is reachable on the LAN and in-cluster, nowhere else" until 2026-10-22 — true at
+# Gate 4a, false since (Codex round 5). It is the identity provider for a live public surface, and
+# reading it as LAN-only is how a change gets made as if nobody outside could reach it.
 apiVersion: v1
 kind: Service
 metadata:
