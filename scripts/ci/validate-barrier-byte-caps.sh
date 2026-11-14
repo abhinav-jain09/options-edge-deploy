@@ -28,7 +28,7 @@
 #   (2) B must never report OK with T at some OTHER cap. Raising it to the declared value is
 #       allowed (no record is lost widening a cap); failing closed is allowed; passing while the
 #       topic stays wrong is the defect above and is not. ONE barrier opts out of this on purpose
-#       and is named, with its reason, in ACCEPTS_ANY_FINITE_CAP below.
+#       and is named -- barrier AND topic -- with its reason, in ACCEPTS_ANY_FINITE_CAP below.
 #   (2b) And B must not alter T's cap on the way to REFUSING it. Presented with T at 32 partitions
 #       -- dev's broker default under auto-create, the shape every barrier here exists to refuse --
 #       and a wrong cap, B must refuse and leave the cap alone. The deploy fails either way, so an
@@ -84,8 +84,11 @@ EOF
 # refused for the missing timestamp setting and the case recorded a "refusal" that had nothing to do
 # with the cap (Codex r2). Fixing the fixture turned the case red and showed the real position:
 # ensure-break-score-topics.sh accepts the wrong cap on purpose and says so in its own header.
+# Keyed on the BARRIER as well as the topic: an exemption is a statement about one barrier's
+# documented behaviour, and matching the topic alone would silently extend it to a second barrier
+# that started creating the same topic (Codex r3 -- a future risk, closed here rather than noted).
 ACCEPTS_ANY_FINITE_CAP=$(cat <<'EOF'
-futures.break-score.events          ensure-break-score-topics.sh accepts ANY finite positive retention.bytes on an existing topic BY DESIGN, stated in its own header: "the cap is an owner-adjustable number (raising it is a deliberate topic change)", and only an absent or unlimited one fails. So a drift on this topic would not be caught by its barrier. The live dev topic measured 16777216 on 2026-11-14 and agrees with the declaration; the CREATE path is still checked by (1) above.
+ensure-break-score-topics.sh futures.break-score.events   accepts ANY finite positive retention.bytes on an existing topic BY DESIGN, stated in its own header: "the cap is an owner-adjustable number (raising it is a deliberate topic change)", and only an absent or unlimited one fails. So a drift on this topic would not be caught by its barrier. The live dev topic measured 16777216 on 2026-11-14 and agrees with the declaration; the CREATE path is still checked by (1) above.
 EOF
 )
 
@@ -111,8 +114,8 @@ note() { printf '      %s\n' "$*"; }
 exempt_reason() { # <topic> -> the reason, or empty
   printf '%s\n' "$APPLIED_ELSEWHERE" | awk -v t="$1" '$1==t{sub(/^[^ \t]+[ \t]+/, ""); print; exit}'
 }
-any_cap_reason() { # <topic> -> the reason check (2) does not apply, or empty
-  printf '%s\n' "$ACCEPTS_ANY_FINITE_CAP" | awk -v t="$1" '$1==t{sub(/^[^ \t]+[ \t]+/, ""); print; exit}'
+any_cap_reason() { # <barrier-basename> <topic> -> the reason check (2) does not apply, or empty
+  printf '%s\n' "$ACCEPTS_ANY_FINITE_CAP" | awk -v b="$1" -v t="$2" '$1==b && $2==t{sub(/^[^ \t]+[ \t]+[^ \t]+[ \t]+/, ""); print; exit}'
 }
 
 # --- (a) the declared finite positive caps, parsed out of topics.env ---------------------------------
@@ -195,7 +198,11 @@ PY
 # the same shape as its r1 finding that a case must exercise what it names). Mutating in place also
 # removes the earlier `shape` round-trip, and with it the word-splitting of a cleanup.policy and the
 # traceback that an absent topic used to abort the whole validator with.
-mutate_topic() { # <name> <retention.bytes> [<partitions>] -> non-zero if the topic is absent
+# ABSENCE HAS ITS OWN EXIT CODE, 2, and nothing else is silenced. The first version returned 1 for
+# every failure and the call sites threw stderr away, so malformed JSON or an unwritable state file
+# would have been reported as "the topic is absent" -- a false explanation of a real failure
+# (Codex r3). It fails closed either way; the point is that the message be true.
+mutate_topic() { # <name> <retention.bytes> [<partitions>] -> 2 = absent, 1 = anything else
   python3 - "$T/state.json" "$@" <<'PY'
 import json, sys
 f, name, by = sys.argv[1:4]
@@ -203,13 +210,24 @@ parts = sys.argv[4] if len(sys.argv) > 4 else None
 s = json.load(open(f))
 t = s["topics"].get(name)
 if t is None:
-    sys.stderr.write("absent\n")
-    raise SystemExit(1)
+    raise SystemExit(2)
 t["configs"]["retention.bytes"] = by
 if parts is not None:
     t["partitions"] = int(parts)
 json.dump(s, open(f, "w"))
 PY
+}
+# <what the case needs> -> prints the reason it could not be set up, or nothing
+mutate_or_report() { # <label> <name> <retention.bytes> [<partitions>]
+  local label="$1"; shift
+  local rc2=0
+  mutate_topic "$@" || rc2=$?
+  case "$rc2" in
+    0) return 0 ;;
+    2) echo "FAIL ($base): '$1' is absent after rebuilding the mocked cluster, so $label cannot run." ;;
+    *) echo "FAIL ($base): could not set up $label for '$1' (mutate_topic exit $rc2; its error is above)." ;;
+  esac
+  return 1
 }
 topic_parts() { python3 -c 'import json,sys
 t=json.load(open(sys.argv[1]))["topics"].get(sys.argv[2])
@@ -280,7 +298,7 @@ for b in $(awk '{print $3}' "$BARRIERS" | sort -u); do
   while read -r topic cap; do
     [ -n "$topic" ] || continue
     wrong=$(( cap / 2 )); [ "$wrong" -lt 1048576 ] && wrong=$(( cap * 2 ))
-    any_cap="$(any_cap_reason "$topic")"
+    any_cap="$(any_cap_reason "$base" "$topic")"
     if [ "$wrong" = "$cap" ]; then
       echo "FAIL ($base): cannot build a wrong cap for '$topic' distinct from the declared $cap — this case would be vacuous."
       fail=1
@@ -294,8 +312,7 @@ for b in $(awk '{print $3}' "$BARRIERS" | sort -u); do
     # created. Everything else -- partitions, cleanup.policy, retention.ms, the message bound, the
     # timestamp type -- stays exactly as the barrier left it, so a refusal here can only be about
     # the cap.
-    if ! mutate_topic "$topic" "$wrong" 2>/dev/null; then
-      echo "FAIL ($base): '$topic' is absent after rebuilding the mocked cluster, so this case cannot run."
+    if ! mutate_or_report "the wrong-cap case" "$topic" "$wrong"; then
       fail=1
       continue
     fi
@@ -335,8 +352,7 @@ for b in $(awk '{print $3}' "$BARRIERS" | sort -u); do
     rebuild "$b" || true
     parts="$(topic_parts "$topic")"
     if [ "$parts" = 1 ]; then
-      if ! mutate_topic "$topic" "$wrong" 32 2>/dev/null; then
-        echo "FAIL ($base): '$topic' is absent after rebuilding the mocked cluster, so the wrong-shape case cannot run."
+      if ! mutate_or_report "the wrong-shape case" "$topic" "$wrong" 32; then
         fail=1
         continue
       fi
