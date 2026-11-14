@@ -1,0 +1,79 @@
+$answer{'ADMIN_EMAIL'}          = '@@BZ_ADMIN_EMAIL@@';
+$answer{'ADMIN_OK'}             = 'Y';
+$answer{'ADMIN_PASSWORD'}       = '@@BZ_ADMIN_PASSWORD@@';
+$answer{'ADMIN_REALNAME'}       = '@@BZ_ADMIN_REALNAME@@';
+$answer{'webservergroup'}       = 'www-data';
+$answer{'use_suexec'}           = '0';
+$answer{'db_driver'}            = 'mariadb';
+$answer{'db_host'}              = '@@BZ_DB_HOST@@';
+$answer{'db_port'}              = @@BZ_DB_PORT@@;
+$answer{'db_sock'}              = '';
+$answer{'db_name'}              = '@@BZ_DB_NAME@@';
+$answer{'db_user'}              = '@@BZ_DB_USER@@';
+$answer{'db_pass'}              = '@@BZ_DB_PASS@@';
+$answer{'size_limit'}           = 750000;
+$answer{'bugzilla_version'}     = '1';
+$answer{'create_htaccess'}      = '1';
+$answer{'db_check'}             = 1;
+$answer{'diffpath'}             = '/usr/bin';
+$answer{'index_html'}           = 0;
+$answer{'interdiffbin'}         = '/usr/bin/interdiff';
+$answer{'use_mailer_queue'}     = 0;
+$answer{'useclassification'}    = 1;
+$answer{'usebugaliases'}        = 1;
+$answer{'upgrade_notification'} = 'disabled';
+$answer{'usestatuswhiteboard'}  = 1;
+$answer{'webdotbase'}           = '/usr/bin/dot';
+$answer{'default_bug_type'}     = '--';
+$answer{'defaultpriority'}      = '--';
+$answer{'defaultseverity'}      = 'normal';
+$answer{'docs_urlbase'}         = 'https://bugzilla.readthedocs.io/en/5.0/';
+$answer{'db_mysql_ssl_ca_file'}     = '';
+$answer{'db_mysql_ssl_ca_path'}     = '';
+$answer{'db_mysql_ssl_client_cert'} = '';
+$answer{'db_mysql_ssl_client_key'}  = '';
+
+# ---------------------------------------------------------------------------------------------
+# REQ-5d parameters, applied DETERMINISTICALLY by checksetup on every boot rather than by hand.
+# checksetup.pl is idempotent, so this file — not a human following a checklist — is what makes the
+# portal's application state reproducible, and it is why a rebuild-from-empty rehearsal converges.
+# ---------------------------------------------------------------------------------------------
+$answer{'urlbase'}              = '@@BZ_URLBASE@@';
+
+# env-SSO on the public listener, native CGI on the admin listener. The order matters: Env first, so
+# a request that carries validated claim env vars authenticates through SSO, and one that does not
+# (the admin listener) falls through to the native form.
+$answer{'user_info_class'}      = 'Env,CGI';
+$answer{'user_verify_class'}    = 'DB';
+
+# Identity is keyed on the IMMUTABLE `sub` claim via Bugzilla's extern_id, never on email (which is
+# mutable and can be reassigned). See REQ-5c and Bugzilla/Auth/Verify.pm:60-140 @ 276673ab6.
+$answer{'auth_env_id'}          = 'OIDC_CLAIM_sub';
+$answer{'auth_env_email'}       = 'OIDC_CLAIM_email';
+$answer{'auth_env_realname'}    = 'OIDC_CLAIM_name';
+
+# No anonymous surface at all, and no anonymous CGI self-signup. Verified from source: an empty
+# createemailregexp does NOT block Env auto-provisioning — there is no reference to that param
+# anywhere under Bugzilla/Auth/ at the pinned commit — so SSO users still auto-provision.
+$answer{'requirelogin'}         = 1;
+$answer{'createemailregexp'}    = '';
+
+# Attachments live IN THE DATABASE, which is what makes the nightly mysqldump actually cover them
+# (REQ-10a) and lets V-restore checksum attachment bytes. 10 MB is the bottom of the REQ-11 size
+# chain: Bugzilla 10 MB < Apache 25 MB < the Cloudflare plan cap.
+$answer{'maxlocalattachment'}   = 0;
+$answer{'maxattachmentsize'}    = 10240;
+
+# External users must not be able to enumerate each other; with no shared visibility group, the user
+# directory and autocomplete surfaces are closed (REQ-5d matrix, user-enumeration rows).
+$answer{'usevisibilitygroups'}  = 1;
+
+# Private comments/attachments are unused, so the matrix's DENY rows for them are structural rather
+# than policy. Upstream's template sets this to 'admin'; an empty value removes the feature.
+$answer{'insidergroup'}         = '';
+
+# Removes two fields the authorization matrix would otherwise have to govern, and makes `priority`
+# a DENY cell for reporters — Bugzilla/Bug.pm:4650 checks letsubmitterchoosepriority by name.
+$answer{'useqacontact'}         = 0;
+$answer{'usetargetmilestone'}   = 0;
+$answer{'letsubmitterchoosepriority'} = 0;
