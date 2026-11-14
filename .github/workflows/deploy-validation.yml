@@ -234,6 +234,15 @@ jobs:
       - name: dev web hunt topics follow the dev hunt instance (both web overlays)
         run: python3 -m unittest -v tests.test_dev_web_hunt_topics
 
+      # The dev proxy reads the first segment of /<page>/api/... as a page prefix and strips it,
+      # which is right for pages that proxy under their own path and WRONG for the journal, whose
+      # data path /journal/api/... is a real path on the web app. Stripping asked for
+      # /api/day-list, which nothing maps, so the fail-closed chain answered an empty 403 and the
+      # page told its owner the journal belonged to someone else. Runs the real nginx and asserts
+      # what arrives — including that pages the strip exists for are still stripped.
+      - name: dev prefix proxy does not strip the journal's data path (real nginx)
+        run: python3 -m unittest -v tests.test_dev_prefix_proxy_journal_data
+
       # One Service One Identity Rule: no service identity (Streams application.id / consumer group)
       # may carry a version suffix. FAIL-CLOSED — a red result here blocks the merge. This exists
       # because oi-shadow was born as "oi-shadow-v1" eleven days AFTER the platform-wide unversioning
