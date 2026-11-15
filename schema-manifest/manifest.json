@@ -335,7 +335,7 @@
     "liquiditywall": [
       [
         3401,
-        3408
+        3412
       ]
     ],
     "marketstructure": [
@@ -5594,7 +5594,7 @@
       "source": {
         "kind": "FILE",
         "repo": "contracts",
-        "path": "schemas-registry/liquiditywall/LiquidityWallSnapshot.avsc"
+        "path": "schemas-registry/liquiditywall/v1/LiquidityWallSnapshot.avsc"
       },
       "topics": [
         {
@@ -5602,17 +5602,10 @@
           "kind": "data"
         }
       ],
-      "producers": [
-        {
-          "service": "es-liquidity-wall",
-          "environments": [
-            "dev"
-          ]
-        }
-      ],
+      "producers": [],
       "consumers": [],
       "retained": true,
-      "retainedReason": "curated, not baseline: es-liquidity-wall-service (NEW, dev only; contracts 0.66.0 schemas-registry/liquiditywall) writes it on futures.liquidity-wall.snapshot under RecordNameStrategy with auto.register.schemas=false (its schema-requirements.json names this id and hash). Dev only; nothing is registered on production or es4."
+      "retainedReason": "curated, not baseline: ARCHIVAL version 1 of the LiquidityWallSnapshot subject (contracts 0.66.0 to 0.94.0), registered on dev under id 3406; superseded by version 2 id 3412 (contracts 0.95.0, liq-AA: adds only the optional outcomeState). Nothing writes it any more; es-liquidity-wall-service still READS it on its own topic (the compacted topic futures.liquidity-wall.snapshot holds a version 1 record until the service's next close, and the changelog store holds version 1 bytes until then). Dev only; nothing is registered on production or es4."
     },
     {
       "kind": "MIRRORED",
@@ -5647,6 +5640,162 @@
       "consumers": [],
       "retained": true,
       "retainedReason": "curated, not baseline: es-liquidity-wall-service (NEW, dev only; contracts 0.66.0 schemas-registry/liquiditywall) writes it on futures.liquidity-wall.voice under RecordNameStrategy with auto.register.schemas=false (its schema-requirements.json names this id and hash). Dev only; nothing is registered on production or es4."
+    },
+    {
+      "kind": "MIRRORED",
+      "subject": "com.optionsedge.contracts.liquiditywall.LiquidityWallOutcome",
+      "version": 1,
+      "id": 3409,
+      "family": "liquiditywall",
+      "schemaFile": "com.optionsedge.contracts.liquiditywall.LiquidityWallOutcome/v1.avsc",
+      "schemaHash": "35d67d751e97d053d2f3dc26324fc17a9ab67ab49f5bbfae22a4cb969480f9c7",
+      "environments": [
+        "dev"
+      ],
+      "source": {
+        "kind": "FILE",
+        "repo": "contracts",
+        "path": "schemas-registry/liquiditywall/LiquidityWallOutcome.avsc"
+      },
+      "topics": [
+        {
+          "name": "futures.liquidity-wall.outcomes",
+          "kind": "data"
+        }
+      ],
+      "producers": [
+        {
+          "service": "es-liquidity-wall",
+          "environments": [
+            "dev"
+          ]
+        }
+      ],
+      "consumers": [],
+      "retained": true,
+      "retainedReason": "curated, not baseline: ONE decided outcome of ONE displayed liquidity target at ONE horizon. No other service reads it; the producer re-derives its own records in replay. Written by es-liquidity-wall-service itself under RecordNameStrategy with auto.register.schemas=false, so the id must be in the registry BEFORE the service image that writes it starts; schema-sync registers it from this entry on a roll of es-liquidity-wall. Contracts 0.95.0, liq-AA liquidity targets (options-edge-documents design/es-liquidity/liq-AA-liquidity-targets-design.md). Dev only; nothing is registered on production or es4."
+    },
+    {
+      "kind": "MIRRORED",
+      "subject": "com.optionsedge.contracts.liquiditywall.LiquidityWallScoreboard",
+      "version": 1,
+      "id": 3410,
+      "family": "liquiditywall",
+      "schemaFile": "com.optionsedge.contracts.liquiditywall.LiquidityWallScoreboard/v1.avsc",
+      "schemaHash": "1f07e0df3d28492a683877931e84dc16d34f488e69edaaa3d143ff43ec898097",
+      "environments": [
+        "dev"
+      ],
+      "source": {
+        "kind": "FILE",
+        "repo": "contracts",
+        "path": "schemas-registry/liquiditywall/LiquidityWallScoreboard.avsc"
+      },
+      "topics": [
+        {
+          "name": "futures.liquidity-wall.scoreboard",
+          "kind": "data"
+        }
+      ],
+      "producers": [
+        {
+          "service": "es-liquidity-wall",
+          "environments": [
+            "dev"
+          ]
+        }
+      ],
+      "consumers": [
+        {
+          "service": "feed-gateway",
+          "accepts": [
+            3410
+          ],
+          "environments": [
+            "dev"
+          ]
+        }
+      ],
+      "retained": true,
+      "retainedReason": "curated, not baseline: the running counters of the target tracker, one compacted row per (trade date, identity, class, horizon). feed-gateway reads it into GET /api/scorecard (read-only projection; computes nothing). Written by es-liquidity-wall-service itself under RecordNameStrategy with auto.register.schemas=false, so the id must be in the registry BEFORE the service image that writes it starts; schema-sync registers it from this entry on a roll of es-liquidity-wall. Contracts 0.95.0, liq-AA liquidity targets (options-edge-documents design/es-liquidity/liq-AA-liquidity-targets-design.md). Dev only; nothing is registered on production or es4."
+    },
+    {
+      "kind": "MIRRORED",
+      "subject": "com.optionsedge.contracts.liquiditywall.LiquidityWallTargets",
+      "version": 1,
+      "id": 3411,
+      "family": "liquiditywall",
+      "schemaFile": "com.optionsedge.contracts.liquiditywall.LiquidityWallTargets/v1.avsc",
+      "schemaHash": "ed3234f06776ba61af8c93d4f4e06c8a752fc2e7966697219bf4a8693a51f198",
+      "environments": [
+        "dev"
+      ],
+      "source": {
+        "kind": "FILE",
+        "repo": "contracts",
+        "path": "schemas-registry/liquiditywall/LiquidityWallTargets.avsc"
+      },
+      "topics": [
+        {
+          "name": "futures.liquidity-wall.targets",
+          "kind": "data"
+        }
+      ],
+      "producers": [
+        {
+          "service": "es-liquidity-wall",
+          "environments": [
+            "dev"
+          ]
+        }
+      ],
+      "consumers": [
+        {
+          "service": "feed-gateway",
+          "accepts": [
+            3411
+          ],
+          "environments": [
+            "dev"
+          ]
+        }
+      ],
+      "retained": true,
+      "retainedReason": "curated, not baseline: the displayed liquidity targets once per closed bucket under the key CME|contract; feed-gateway relays it to the pages as the es-liquidity-targets event. A NEW subject on a new topic, so no consumer of the dashboard rolls. Written by es-liquidity-wall-service itself under RecordNameStrategy with auto.register.schemas=false, so the id must be in the registry BEFORE the service image that writes it starts; schema-sync registers it from this entry on a roll of es-liquidity-wall. Contracts 0.95.0, liq-AA liquidity targets (options-edge-documents design/es-liquidity/liq-AA-liquidity-targets-design.md). Dev only; nothing is registered on production or es4."
+    },
+    {
+      "kind": "MIRRORED",
+      "subject": "com.optionsedge.contracts.liquiditywall.LiquidityWallSnapshot",
+      "version": 2,
+      "id": 3412,
+      "family": "liquiditywall",
+      "schemaFile": "com.optionsedge.contracts.liquiditywall.LiquidityWallSnapshot/v2.avsc",
+      "schemaHash": "b32b477f8be8ed6645c62c67f1c8f39dca10e3b7cf6e8d8bf51cea1a32da8dc2",
+      "environments": [
+        "dev"
+      ],
+      "source": {
+        "kind": "FILE",
+        "repo": "contracts",
+        "path": "schemas-registry/liquiditywall/LiquidityWallSnapshot.avsc"
+      },
+      "topics": [
+        {
+          "name": "futures.liquidity-wall.snapshot",
+          "kind": "data"
+        }
+      ],
+      "producers": [
+        {
+          "service": "es-liquidity-wall",
+          "environments": [
+            "dev"
+          ]
+        }
+      ],
+      "consumers": [],
+      "retained": true,
+      "retainedReason": "curated, not baseline: VERSION 2 of the LiquidityWallSnapshot subject under the new fixed id 3412 (contracts 0.95.0, liq-AA): adds only the optional outcomeState (the target tracker's state). The only reader is the service itself (it reads its own compacted topic at start and accepts 3406 and 3412), which is why no consumer binding is declared, as for version 1. Written by es-liquidity-wall-service itself under RecordNameStrategy with auto.register.schemas=false, so the id must be in the registry BEFORE the service image that writes it starts; schema-sync registers it from this entry on a roll of es-liquidity-wall. Contracts 0.95.0, liq-AA liquidity targets (options-edge-documents design/es-liquidity/liq-AA-liquidity-targets-design.md). Dev only; nothing is registered on production or es4."
     },
     {
       "kind": "MIRRORED",
@@ -11923,7 +12072,7 @@
       ],
       "consumers": [],
       "retained": true,
-      "retainedReason": "curated, not baseline: strike-hold-service (NEW, dev only; contracts 0.90.0 schemas-registry/strikehold) writes it on options.spx.strike-hold.scoring under RecordNameStrategy with auto.register.schemas=false (its schema-requirements.json names this id and hash). The EVIDENCE RECORD the base rate is computed from: one row per candidate strike per session, so the topic must NEVER be compacted — compaction would not degrade the measurement, it would delete it. `held` is a NULLABLE boolean by requirement: a refusal carries null, so it can never be averaged in as an outcome. Dev only; nothing is registered on production or es4."
+      "retainedReason": "curated, not baseline: strike-hold-service (NEW, dev only; contracts 0.90.0 schemas-registry/strikehold) writes it on options.spx.strike-hold.scoring under RecordNameStrategy with auto.register.schemas=false (its schema-requirements.json names this id and hash). The EVIDENCE RECORD the base rate is computed from: one row per candidate strike per session, so the topic must NEVER be compacted \u2014 compaction would not degrade the measurement, it would delete it. `held` is a NULLABLE boolean by requirement: a refusal carries null, so it can never be averaged in as an outcome. Dev only; nothing is registered on production or es4."
     },
     {
       "kind": "MIRRORED",
@@ -11967,7 +12116,7 @@
         }
       ],
       "retained": true,
-      "retainedReason": "curated, not baseline: THE COVERAGE MESSAGE (owner-approved). es-liquidity-engine-service writes it on es.mbo.coverage under RecordNameStrategy with auto.register.schemas=false (its schema-requirements.json names this id and hash), and strike-hold-service reads it to tell 'the book showed nothing here' from 'the engine was not watching here' — without it no absence can honestly be claimed, which is why strike-hold reports ABSORPTION_COVERAGE_UNAVAILABLE and never ABSENT until this exists. A NEW SUBJECT rather than a field on EsMboHealth (3509) deliberately: health is at a fixed id, so a new field means a new version under a new id, and level-absorption-service pins accepts: [3509], which would have forced that consumer to roll in the same change. Id 3511 EXTENDS the esmbo family block past 3501-3510, which was full. Dev only."
+      "retainedReason": "curated, not baseline: THE COVERAGE MESSAGE (owner-approved). es-liquidity-engine-service writes it on es.mbo.coverage under RecordNameStrategy with auto.register.schemas=false (its schema-requirements.json names this id and hash), and strike-hold-service reads it to tell 'the book showed nothing here' from 'the engine was not watching here' \u2014 without it no absence can honestly be claimed, which is why strike-hold reports ABSORPTION_COVERAGE_UNAVAILABLE and never ABSENT until this exists. A NEW SUBJECT rather than a field on EsMboHealth (3509) deliberately: health is at a fixed id, so a new field means a new version under a new id, and level-absorption-service pins accepts: [3509], which would have forced that consumer to roll in the same change. Id 3511 EXTENDS the esmbo family block past 3501-3510, which was full. Dev only."
     },
     {
       "kind": "MIRRORED",

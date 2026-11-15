@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ensure-es-liquidity-wall-topics.sh — es-liquidity-wall-service's seven topics must be right BEFORE the service is ever raised (the same first-deploy barrier as
+# ensure-es-liquidity-wall-topics.sh — es-liquidity-wall-service's ten topics (seven + the three of liq-AA) must be right BEFORE the service is ever raised (the same first-deploy barrier as
 # ensure-line-acceptance-topics.sh). DEV ONLY: the service renders on dev alone (services.yaml envs [dev]) and this barrier runs from service-deploy SERVICE=es-liquidity-wall; it refuses
 # to run unless ENVIRONMENT is exactly "dev" (Jenkinsfile.service-deploy exports the job parameter).
 #
@@ -11,6 +11,9 @@
 #   futures.liquidity-wall.state      1 partition, compact, retention.ms EXACTLY -1, retention.bytes EXACTLY -1 (pure compact)
 #   futures.liquidity-wall.snapshot   1 partition, compact, retention.ms EXACTLY -1, retention.bytes EXACTLY -1 (pure compact)
 #   futures.liquidity-wall.voice      1 partition, compact, retention.ms EXACTLY -1, retention.bytes EXACTLY -1 (pure compact)
+#   futures.liquidity-wall.outcomes   1 partition, delete,  retention.ms EXACTLY 2592000000 (30 days), retention.bytes EXACTLY 268435456 (liq-AA: one decided outcome per displayed target per horizon)
+#   futures.liquidity-wall.scoreboard 1 partition, compact, retention.ms EXACTLY -1, retention.bytes EXACTLY -1 (pure compact; liq-AA: the running counters, the table the /scorecard page grows by)
+#   futures.liquidity-wall.targets    1 partition, compact, retention.ms EXACTLY -1, retention.bytes EXACTLY -1 (pure compact; liq-AA: the displayed liquidity targets, rebuildable)
 # The events log and the four pure-compact topics are created WITH their declared retention.bytes (the way ensure-level-absorption-topics.sh creates its events topic: the shared routine
 # creates no retention.bytes) and that value is verified exactly. An existing topic is never recreated, altered or shrunk: any difference fails closed. The input topics (es.rithmic.depth, underlying.es.trades.linearized) belong to other services and are not
 # created here. No tombstones, no versioned names. dev-cleanup.sh does NOT run this barrier: its topic pass recreates the shapes declared in scripts/kafka/topics.env (partitions, policy, retention,
@@ -28,6 +31,8 @@ MIN_ISR="${ES_LIQUIDITY_WALL_MIN_INSYNC_REPLICAS:-1}"
 SEVEN_DAYS_MS=604800000
 ONE_DAY_MS=86400000
 EVENTS_BYTES=268435456
+THIRTY_DAYS_MS=2592000000
+OUTCOMES_BYTES=268435456
 kt() { kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" "$@"; }
 kc() { kafka-configs --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" "$@"; }
 HERE="$(dirname "${BASH_SOURCE[0]}")"
@@ -48,6 +53,9 @@ EVENTS="${KAFKA_ES_LIQUIDITY_WALL_EVENTS_TOPIC:-futures.liquidity-wall.events}"
 STATE="${KAFKA_ES_LIQUIDITY_WALL_STATE_TOPIC:-futures.liquidity-wall.state}"
 SNAPSHOT="${KAFKA_ES_LIQUIDITY_WALL_SNAPSHOT_TOPIC:-futures.liquidity-wall.snapshot}"
 VOICE="${KAFKA_ES_LIQUIDITY_WALL_VOICE_TOPIC:-futures.liquidity-wall.voice}"
+OUTCOMES="${KAFKA_ES_LIQUIDITY_WALL_OUTCOMES_TOPIC:-futures.liquidity-wall.outcomes}"
+SCOREBOARD="${KAFKA_ES_LIQUIDITY_WALL_SCOREBOARD_TOPIC:-futures.liquidity-wall.scoreboard}"
+TARGETS="${KAFKA_ES_LIQUIDITY_WALL_TARGETS_TOPIC:-futures.liquidity-wall.targets}"
 
 # retention.bytes is not part of the shared routine's contract: read the EFFECTIVE value (--all, what the service's own describeConfigs sees) and compare exactly. Never altered here.
 check_retention_bytes() { # <topic> <exact retention.bytes>
@@ -87,10 +95,11 @@ ensure_with_bytes() { # <topic> <cleanup.policy> <retention.ms> <retention.bytes
 rc=0
 ensure_topic "$CLOSURES"  delete  "exact:$SEVEN_DAYS_MS" 1048576 || rc=1
 ensure_topic "$BUCKETS"   delete  "exact:$ONE_DAY_MS"    1048576 || rc=1
-for t in "$DASHBOARD" "$STATE" "$SNAPSHOT" "$VOICE"; do
+for t in "$DASHBOARD" "$STATE" "$SNAPSHOT" "$VOICE" "$SCOREBOARD" "$TARGETS"; do
   ensure_with_bytes "$t" compact -1 -1 || rc=1
 done
 ensure_with_bytes "$EVENTS" delete -1 "$EVENTS_BYTES" || rc=1
+ensure_with_bytes "$OUTCOMES" delete "$THIRTY_DAYS_MS" "$OUTCOMES_BYTES" || rc=1
 if [ "$rc" -ne 0 ]; then
   echo "=== ensure-es-liquidity-wall-topics FAILED — the service must not be raised ==="
   exit 1

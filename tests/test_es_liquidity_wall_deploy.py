@@ -31,16 +31,19 @@ FAKE = ROOT / "tests/fake_kafka_cli.py"
 BARRIER = ROOT / "scripts/kafka/ensure-es-liquidity-wall-topics.sh"
 SVC, DEP, CONTAINER, IMG, VAR = "es-liquidity-wall", "es-liquidity-wall-service", "es-liquidity-wall", "options-edge-es-liquidity-wall", "ES_LIQUIDITY_WALL_IMAGE"
 P = "futures.liquidity-wall"
-CLOSURES, BUCKETS, DASHBOARD, EVENTS, STATE, SNAPSHOT, VOICE = (f"{P}.{s}" for s in ("closures", "buckets", "dashboard", "events", "state", "snapshot", "voice"))
-TOPICS = (CLOSURES, BUCKETS, DASHBOARD, EVENTS, STATE, SNAPSHOT, VOICE)
-PURE = (DASHBOARD, STATE, SNAPSHOT, VOICE)
-SEVEN_DAYS, ONE_DAY, CAP = "604800000", "86400000", "268435456"
+CLOSURES, BUCKETS, DASHBOARD, EVENTS, STATE, SNAPSHOT, VOICE, OUTCOMES, SCOREBOARD, TARGETS = (
+    f"{P}.{s}" for s in ("closures", "buckets", "dashboard", "events", "state", "snapshot", "voice", "outcomes", "scoreboard", "targets"))
+TOPICS = (CLOSURES, BUCKETS, DASHBOARD, EVENTS, STATE, SNAPSHOT, VOICE, OUTCOMES, SCOREBOARD, TARGETS)
+PURE = (DASHBOARD, STATE, SNAPSHOT, VOICE, SCOREBOARD, TARGETS)
+SEVEN_DAYS, ONE_DAY, CAP, THIRTY_DAYS = "604800000", "86400000", "268435456", "2592000000"
 # topic -> (cleanup.policy, retention.ms, retention.bytes the declaration carries or None)
 SHAPES = {CLOSURES: ("delete", SEVEN_DAYS, None), BUCKETS: ("delete", ONE_DAY, None), DASHBOARD: ("compact", "-1", "-1"), EVENTS: ("delete", "-1", CAP),
-          STATE: ("compact", "-1", "-1"), SNAPSHOT: ("compact", "-1", "-1"), VOICE: ("compact", "-1", "-1")}
+          STATE: ("compact", "-1", "-1"), SNAPSHOT: ("compact", "-1", "-1"), VOICE: ("compact", "-1", "-1"),
+          OUTCOMES: ("delete", THIRTY_DAYS, CAP), SCOREBOARD: ("compact", "-1", "-1"), TARGETS: ("compact", "-1", "-1")}
 NS = "com.optionsedge.contracts.liquiditywall"
 IDS = {"LiquidityWallClosure": 3401, "LiquidityWallBucket": 3402, "LiquidityWallDashboard": 3408, "LiquidityWallEvent": 3404, "LiquidityWallState": 3405,
-       "LiquidityWallSnapshot": 3406, "LiquidityWallVoice": 3407}
+       "LiquidityWallSnapshot": 3412, "LiquidityWallVoice": 3407, "LiquidityWallOutcome": 3409, "LiquidityWallScoreboard": 3410, "LiquidityWallTargets": 3411}
+SNAPSHOT_V1_ID, SNAPSHOT_V2_ID = 3406, 3412
 TOPIC_OF = dict(zip(IDS, TOPICS))
 DASHBOARD_V1_ID, DASHBOARD_V2_ID = 3403, 3408
 JAR = ROOT / "tools/schema-governance/schema-governance-tool.jar"
@@ -87,7 +90,7 @@ def run_barrier(topics: dict, environment: str | None = "dev"):
 
 
 class Barrier(unittest.TestCase):
-    def test_a_fresh_dev_cluster_gets_the_seven_topics_at_their_shapes_and_no_broker_is_touched(self):
+    def test_a_fresh_dev_cluster_gets_the_ten_topics_at_their_shapes_and_no_broker_is_touched(self):
         rc, out, calls, state = run_barrier({})
         self.assertEqual(rc, 0, out)
         self.assertEqual([c for c in calls if "--entity-type brokers" in c or "--entity-default" in c or "message.max.bytes" in c], [], "no broker-wide change")
@@ -156,7 +159,7 @@ class TopicsEnv(unittest.TestCase):
     def setUpClass(cls):
         cls.d = declarations(cls.VARS)
 
-    def test_the_seven_topics_are_declared_one_partition_exact_with_the_declared_policy_retention_and_bytes(self):
+    def test_the_ten_topics_are_declared_one_partition_exact_with_the_declared_policy_retention_and_bytes(self):
         retention = dict(x.split("=", 1) for x in self.d["OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES"] if "=" in x)
         bytes_ = dict(x.split("=", 1) for x in self.d["OPTIONS_EDGE_TOPIC_RETENTION_BYTES_OVERRIDES"] if "=" in x)
         for t, (policy, ret, b) in SHAPES.items():
@@ -168,21 +171,36 @@ class TopicsEnv(unittest.TestCase):
             self.assertNotIn(t, self.d["OPTIONS_EDGE_COMPACTED_TOPICS"], t)
             self.assertNotIn(t, self.d["OPTIONS_EDGE_ES4_TOPICS"], t)
             self.assertNotRegex(t, r"\.v\d+$")
-        self.assertEqual(len([x for x in self.d["OPTIONS_EDGE_TOPICS"] if x.startswith(P)]), 7)
+        self.assertEqual(len([x for x in self.d["OPTIONS_EDGE_TOPICS"] if x.startswith(P)]), 10)
+
+    def test_the_outcomes_topic_is_deletable_the_scoreboard_is_preserved_everywhere_and_targets_are_rebuildable(self):
+        self.assertNotIn(OUTCOMES, self.d["OPTIONS_EDGE_RESET_PRESERVED_TOPICS"] + self.d["OPTIONS_EDGE_RESET_REBUILDABLE_TOPICS"])
+        self.assertIn(SCOREBOARD, self.d["OPTIONS_EDGE_RESET_PRESERVED_TOPICS"])
+        self.assertNotIn(SCOREBOARD, self.d["OPTIONS_EDGE_RESET_REBUILDABLE_TOPICS"])
+        self.assertIn(TARGETS, self.d["OPTIONS_EDGE_RESET_REBUILDABLE_TOPICS"])
+        self.assertNotIn(TARGETS, self.d["OPTIONS_EDGE_RESET_PRESERVED_TOPICS"])
+        dev_clean = declarations(["OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS"])["OPTIONS_EDGE_DEV_CLEAN_PRESERVED_TOPICS"]
+        self.assertIn(SCOREBOARD, dev_clean)
+        self.assertNotIn(OUTCOMES, dev_clean)
+        self.assertNotIn(TARGETS, dev_clean)
 
     def test_every_retention_minus_one_topic_has_exactly_one_reset_class(self):
         self.assertIn(EVENTS, self.d["OPTIONS_EDGE_RESET_PRESERVED_TOPICS"])
         self.assertNotIn(EVENTS, self.d["OPTIONS_EDGE_RESET_REBUILDABLE_TOPICS"])
         for t in PURE:
+            if t == SCOREBOARD:
+                continue
             self.assertIn(t, self.d["OPTIONS_EDGE_RESET_REBUILDABLE_TOPICS"], t)
             self.assertNotIn(t, self.d["OPTIONS_EDGE_RESET_PRESERVED_TOPICS"], t)
-        for t in (CLOSURES, BUCKETS):
+        self.assertIn(SCOREBOARD, self.d["OPTIONS_EDGE_RESET_PRESERVED_TOPICS"])
+        for t in (CLOSURES, BUCKETS, OUTCOMES):
             self.assertNotIn(t, self.d["OPTIONS_EDGE_RESET_PRESERVED_TOPICS"] + self.d["OPTIONS_EDGE_RESET_REBUILDABLE_TOPICS"], t)
         regex = re.search(r"^PRESERVE_TOPICS_REGEX='(.*)'$", read("scripts/ops/premarket-reset.sh"), re.M).group(1)
         self.assertIsNotNone(re.search(regex, EVENTS), "the pre-market reset must spare the events log")
         for t in TOPICS:
-            if t != EVENTS:
+            if t not in (EVENTS, SCOREBOARD):
                 self.assertIsNone(re.search(regex, t), t)
+        self.assertIsNotNone(re.search(regex, SCOREBOARD), "the pre-market reset must spare the scoreboard table")
 
     def test_an_explicit_production_source_declares_nothing_about_the_seven_topics_anywhere(self):
         env = {k: v for k, v in os.environ.items() if k != "ENVIRONMENT"}
@@ -191,7 +209,7 @@ class TopicsEnv(unittest.TestCase):
         out = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=True, env=env).stdout
         self.assertEqual(out.split(), [])
 
-    def test_dev_and_unset_declare_the_same_seven_shapes_and_production_loses_exactly_them(self):
+    def test_dev_and_unset_declare_the_same_ten_shapes_and_production_loses_exactly_them(self):
         for environment in ("dev", None):
             got = declarations(self.VARS, environment)
             self.assertEqual(got, self.d, environment)
@@ -202,9 +220,9 @@ class TopicsEnv(unittest.TestCase):
             self.assertEqual(ours(prod[v]), [], v)
             # production keeps every other declaration (line-acceptance's own dev-only guard strips its six the same way; that is its test's business)
             self.assertEqual(others(prod[v]), others(self.d[v]), v)
-        self.assertEqual(len(ours(self.d["OPTIONS_EDGE_TOPICS"])), 7)
-        self.assertEqual(len(ours(self.d["OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES"])), 7)
-        self.assertEqual(len(ours(self.d["OPTIONS_EDGE_TOPIC_RETENTION_BYTES_OVERRIDES"])), 5)
+        self.assertEqual(len(ours(self.d["OPTIONS_EDGE_TOPICS"])), 10)
+        self.assertEqual(len(ours(self.d["OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES"])), 10)
+        self.assertEqual(len(ours(self.d["OPTIONS_EDGE_TOPIC_RETENTION_BYTES_OVERRIDES"])), 8)
 
 
 def deployment(rel: str) -> dict:
@@ -310,18 +328,20 @@ class SchemaMapAndManifest(unittest.TestCase):
     def rows(self):
         return [tuple(l.split("|")) for l in self.MAP.read_text().splitlines() if l.strip() and not l.lstrip().startswith("#")]
 
-    def test_the_map_is_the_seven_records_and_ids_with_the_dashboard_in_two_versions(self):
+    def test_the_map_is_the_ten_records_and_ids_with_the_dashboard_and_the_snapshot_in_two_versions(self):
         rows = self.rows()
-        dash = f"{NS}.LiquidityWallDashboard"
-        # version 1 rows (the frozen archival file for 3403), then the version-2 row after all of them (the line-health.map format)
-        self.assertEqual([r for r in rows if len(r) == 3], [(f"{NS}.{n}", str(i), f"{n}.avsc") for n, i in IDS.items() if n != "LiquidityWallDashboard"])
+        two = ("LiquidityWallDashboard", "LiquidityWallSnapshot")
+        # version 1 rows (the frozen archival files for 3403 and 3406), then the version-2 rows after all of them (the line-health.map format)
+        self.assertEqual([r for r in rows if len(r) == 3], [(f"{NS}.{n}", str(i), f"{n}.avsc") for n, i in IDS.items() if n not in two])
         self.assertEqual([r for r in rows if len(r) == 4],
-                         [(dash, str(DASHBOARD_V1_ID), "v1/LiquidityWallDashboard.avsc", "1"), (dash, str(DASHBOARD_V2_ID), "LiquidityWallDashboard.avsc", "2")])
-        self.assertEqual(rows[-1], (dash, str(DASHBOARD_V2_ID), "LiquidityWallDashboard.avsc", "2"), "the version-2 row follows every version-1 row")
-        self.assertEqual(rows.index((dash, "3403", "v1/LiquidityWallDashboard.avsc", "1")) < rows.index(rows[-1]), True)
+                         [(f"{NS}.LiquidityWallDashboard", "3403", "v1/LiquidityWallDashboard.avsc", "1"), (f"{NS}.LiquidityWallSnapshot", "3406", "v1/LiquidityWallSnapshot.avsc", "1"),
+                          (f"{NS}.LiquidityWallDashboard", "3408", "LiquidityWallDashboard.avsc", "2"), (f"{NS}.LiquidityWallSnapshot", "3412", "LiquidityWallSnapshot.avsc", "2")])
+        last_v1 = max(i for i, r in enumerate(rows) if len(r) == 3 or r[3] == "1")
+        self.assertTrue(all(len(r) == 4 and r[3] == "2" for r in rows[last_v1 + 1:]), "the version-2 rows follow every version-1 row")
         text = self.MAP.read_text()
         self.assertIn("Ids 3401-3408 are the ES liquidity wall block", text)
         self.assertIn("REGISTER 3408 BEFORE the wall service image", text)
+        self.assertIn("REGISTER 3409-3412 BEFORE the wall service image of contracts 0.95.0", text)
         self.assertIn("LiquidityWallDashboard (3408; 3403 archival version 1)", read("scripts/kafka/topics.env"))
 
     def test_no_id_is_shared_with_any_other_map(self):
@@ -333,27 +353,36 @@ class SchemaMapAndManifest(unittest.TestCase):
                 if line.strip() and not line.lstrip().startswith("#"):
                     self.assertNotIn(int(line.split("|")[1]), ours, f"{other.name} reuses an es-liquidity-wall id")
 
-    def test_the_manifest_carries_the_family_block_the_seven_dev_entries_and_the_depth_consumer_binding(self):
+    def test_the_manifest_carries_the_family_block_the_ten_dev_entries_and_the_depth_consumer_binding(self):
         m = json.loads(read("schema-manifest/manifest.json"))
-        self.assertEqual(m["familyBlocks"]["liquiditywall"], [[3401, 3408]])
+        self.assertEqual(m["familyBlocks"]["liquiditywall"], [[3401, 3412]])
         for fam, ranges in m["familyBlocks"].items():
             if fam != "liquiditywall":
                 for lo, hi in ranges:
-                    self.assertTrue(hi < 3401 or lo > 3408, f"{fam} overlaps the liquiditywall block")
+                    self.assertTrue(hi < 3401 or lo > 3412, f"{fam} overlaps the liquiditywall block")
         by_subject = {e["subject"]: e for e in m["entries"] if e.get("kind") == "MIRRORED" and e.get("version", 1) == 1}
         dash_v1 = by_subject[f"{NS}.LiquidityWallDashboard"]
         dash_v2 = next(e for e in m["entries"] if e.get("id") == DASHBOARD_V2_ID)
+        snap_v2 = next(e for e in m["entries"] if e.get("id") == SNAPSHOT_V2_ID)
+        snap_v1 = by_subject[f"{NS}.LiquidityWallSnapshot"]
         gateway = [{"service": "feed-gateway", "accepts": [DASHBOARD_V1_ID, DASHBOARD_V2_ID], "environments": ["dev"]}]
         for name, sid in IDS.items():
-            e = by_subject[f"{NS}.{name}"] if name != "LiquidityWallDashboard" else dash_v2
-            version_one = name != "LiquidityWallDashboard"
+            e = by_subject[f"{NS}.{name}"] if name not in ("LiquidityWallDashboard", "LiquidityWallSnapshot") else (dash_v2 if name == "LiquidityWallDashboard" else snap_v2)
+            version_one = name not in ("LiquidityWallDashboard", "LiquidityWallSnapshot")
             self.assertEqual((e["version"], e["id"], e["family"], e["environments"]), (1 if version_one else 2, sid, "liquiditywall", ["dev"]), name)
             self.assertEqual(e["source"], {"kind": "FILE", "repo": "contracts", "path": f"schemas-registry/liquiditywall/{name}.avsc"}, name)
             self.assertEqual(e["topics"], [{"name": TOPIC_OF[name], "kind": "data"}], name)
             self.assertEqual(e["producers"], [{"service": SVC, "environments": ["dev"]}], name)
+            self.assertEqual(e["retained"], True, name)
             # the dashboard is read by the feed gateway (both ids); the other entries' consumer bindings (es-liquidity-engine reads events and state) belong to other changes
             if name == "LiquidityWallDashboard":
                 self.assertEqual(e["consumers"], gateway, name)
+            if name == "LiquidityWallScoreboard":
+                self.assertEqual(e["consumers"], [{"service": "feed-gateway", "accepts": [3410], "environments": ["dev"]}], name)
+            if name == "LiquidityWallTargets":
+                self.assertEqual(e["consumers"], [{"service": "feed-gateway", "accepts": [3411], "environments": ["dev"]}], name)
+            if name == "LiquidityWallOutcome":
+                self.assertEqual(e["consumers"], [], name)
             self.assertNotIn("pending", e, name)
             self.assertNotIn("baseline", e, name)
             snapshot = ROOT / "schema-manifest/schemas" / e["schemaFile"]
@@ -367,6 +396,15 @@ class SchemaMapAndManifest(unittest.TestCase):
         self.assertEqual((dash_v1["producers"], dash_v1["consumers"]), ([], gateway))
         self.assertIn("superseded by version 2 id 3408", dash_v1["retainedReason"])
         self.assertEqual(dash_v2["schemaFile"], f"{NS}.LiquidityWallDashboard/v2.avsc")
+        # the snapshot: version 1 (3406) is archival and frozen, version 2 (3412) adds only the optional outcomeState
+        self.assertEqual((snap_v1["version"], snap_v1["id"], snap_v1["producers"]), (1, SNAPSHOT_V1_ID, []))
+        self.assertEqual(snap_v1["source"]["path"], "schemas-registry/liquiditywall/v1/LiquidityWallSnapshot.avsc")
+        self.assertIn("superseded by version 2 id 3412", snap_v1["retainedReason"])
+        self.assertEqual((snap_v2["version"], snap_v2["schemaFile"]), (2, f"{NS}.LiquidityWallSnapshot/v2.avsc"))
+        sv1, sv2 = (json.loads((ROOT / "schema-manifest/schemas" / e["schemaFile"]).read_text()) for e in (snap_v1, snap_v2))
+        self.assertEqual([f["name"] for f in sv2["fields"]][-1], "outcomeState")
+        self.assertEqual([f["name"] for f in sv2["fields"]][:-1], [f["name"] for f in sv1["fields"]], "version 2 only appends outcomeState")
+        self.assertEqual(sv2["fields"][-1]["default"], None)
         v1, v2 = (json.loads((ROOT / "schema-manifest/schemas" / e["schemaFile"]).read_text()) for e in (dash_v1, dash_v2))
         wall = lambda sch: next(f for f in sch["fields"] if f["name"] == "walls")["type"]["items"]["fields"]
         self.assertEqual([f["name"] for f in wall(v2)][-3:], ["sizeNow", "sizeTape", "wordState"])
@@ -409,6 +447,21 @@ class GatewayFreshness(unittest.TestCase):
             if (ROOT / rel).is_file():
                 self.assertNotIn("ES_LIQUIDITY_WALL_FRESH_MS", self.env(rel), other)
         self.assertIn("ES_LIQUIDITY_WALL_FRESH_MS", read("k8s/overlays/dev/feed-gateway-dev-env-patch.yaml"), "the source patch the slice is generated from")
+
+
+class GatewayScoreboard(unittest.TestCase):
+    def test_the_gateway_reads_both_scoreboards_in_the_source_patch_and_the_generated_slice(self):
+        for rel in ("k8s/overlays/dev/feed-gateway-dev-env-patch.yaml", "k8s/services/feed-gateway/overlays/dev/manifest.yaml"):
+            text = read(rel)
+            m = re.search(r"KAFKA_SCORECARD_SCOREBOARD_TOPICS\n\s+value: \"?([^\"\n]+)\"?", text)
+            self.assertIsNotNone(m, rel)
+            self.assertEqual(m.group(1).split(","), ["futures.level-absorption.scoreboard", SCOREBOARD], rel)
+
+    def test_no_production_or_experiment_gateway_reads_a_scoreboard(self):
+        for other in ("production", "experiment"):
+            rel = ROOT / f"k8s/services/feed-gateway/overlays/{other}/manifest.yaml"
+            if rel.is_file():
+                self.assertNotIn("KAFKA_SCORECARD_SCOREBOARD_TOPICS", rel.read_text(), other)
 
 
 class NoProductionWiring(unittest.TestCase):
