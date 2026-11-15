@@ -157,7 +157,7 @@ class Manifests(unittest.TestCase):
         slice_env = env_of(deployment("k8s/services/es-liquidity-engine/overlays/dev/manifest.yaml"))
         names = [k for k in e if k.startswith(("ES_MBO_SWEEP_", "ES_MBO_SPOOF_"))]
         self.assertEqual(len(names), 10)
-        self.assertEqual({k: slice_env.get(k) for k in names}, {k: e[k] for k in names})
+        self.assertEqual({k: v for k, v in slice_env.items() if k.startswith(("ES_MBO_SWEEP_", "ES_MBO_SPOOF_"))}, {k: e[k] for k in names})
         self.assertEqual([k for k in slice_env if k.startswith("ES_MBO_MIG_")], [])
 
     def test_the_tape_is_admitted_only_from_the_databento_trades_feed_for_the_front_contract(self):
