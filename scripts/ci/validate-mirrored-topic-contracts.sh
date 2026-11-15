@@ -435,7 +435,22 @@ for job in "${JOBS[@]}"; do
       fail=1
       continue
     fi
-    echo "  $jobname  $src_name ($SRC_SET, :$src_parts from $src_from)  ->  $tgt_name ($TGT_SET, :$tgt_parts)  [RENAMED, describe-only]"
+    # THE TARGET'S COUNT MUST BE PINNED, NOT A FLOOR — the same rule the COPIED/FROZEN path states a
+    # few lines down, and for the same reason: apply-topics.sh treats an ordinary declared count as a
+    # MINIMUM, so a widened target reconciles clean while breaking the mirror's key->partition
+    # mapping. That is "a property of the record copy, not of how the job states its shape", as that
+    # comment puts it, and this job re-produces with the SAME KEY BYTES, so it needs the pin exactly
+    # as much. The rule was extended from FROZEN-only to COPIED after es.futures.aggressor-flow sat
+    # at 32 partitions against a declared :1 in 2026-08 with this validator reporting OK; RENAMED was
+    # added later and was left out of it.
+    if ! in_list "$T_EXACT" "$tgt_name"; then
+      echo "FAIL: '$tgt_name' is declared :$tgt_parts but is NOT in $(set_var "$TGT_SET" exact), so that"
+      echo "      count is a FLOOR: a widened target would reconcile clean while this mirror re-produces"
+      echo "      with the same key bytes, so its key->partition mapping depends on that exact count."
+      fail=1
+      continue
+    fi
+    echo "  $jobname  $src_name ($SRC_SET, :$src_parts from $src_from)  ->  $tgt_name ($TGT_SET, :$tgt_parts, pinned)  [RENAMED, describe-only]"
     continue
   fi
 
