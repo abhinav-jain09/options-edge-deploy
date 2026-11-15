@@ -1,3 +1,4 @@
+# CI-REQUIRED
 """D3 of the Break Score rev 13: the dev flags that turn the display on (gateway relay, web commands). Last step of the roll order (design liq-S-break-score-rev13-design.md 17.2 step 9); rollback is
 setting both back to false. DEV ONLY: no base, production, experiment or es4 manifest carries either flag, so each stays at its code default (false) everywhere else."""
 from __future__ import annotations
