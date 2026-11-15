@@ -1,0 +1,158 @@
+{
+  "type": "record",
+  "name": "LevelAbsorptionOutcome",
+  "namespace": "com.optionsedge.contracts.levelabsorption",
+  "doc": "liq-U rev 2 (liq-V): ONE decided outcome of ONE Level Absorption signal at ONE horizon, written by level-absorption-service itself on futures.level-absorption.outcomes (key '<signalKey>|M<seconds>', one partition, timestamp = decidedAtMs) when the window is decided from DATA time (the printed tape the engine consumed, never a clock). Subject futures.level-absorption.outcomes-value (TopicNameStrategy), fixed id 2813, version 1, FULL compatibility. Descriptive and UNVALIDATED: not a signal, a gate, a ledger value or a trading rule. Closed lists (family, outcome, stratum, claim, excludedReason) are plain strings validated by the writer, never Avro enums, so a later code does not break FULL compatibility. The three book fields (bookAgreement, bookConfigFingerprint, contractTableDigest) are named book* / contractTableDigest on purpose: the replay comparison removes exactly those top-level members from both sides (document A section 10, revision 14).",
+  "fields": [
+    {
+      "name": "schemaVersion",
+      "type": "int",
+      "doc": "1",
+      "default": 1
+    },
+    {
+      "name": "outcomeRuleVersion",
+      "type": "string",
+      "doc": "The outcome rule version: liq-U-v1 (liq-U preregistration v1 sections 2 and 4, adopted by reference)."
+    },
+    {
+      "name": "service",
+      "type": "string",
+      "doc": "level-absorption-service."
+    },
+    {
+      "name": "environment",
+      "type": "string",
+      "doc": "The environment of the writing service (dev)."
+    },
+    {
+      "name": "tradeDate",
+      "type": "string",
+      "doc": "The trade date of the session that emitted the signal (yyyy-MM-dd), New York rule of the engine."
+    },
+    {
+      "name": "family",
+      "type": "string",
+      "doc": "LA_VERDICT, LA_LEAN or LA_REFERENCE."
+    },
+    {
+      "name": "signalKey",
+      "type": "string",
+      "doc": "The signal key within the trade date: the verdictId; '<episodeId>|<lean>'; or the episodeId of the reference record."
+    },
+    {
+      "name": "classKey",
+      "type": "string",
+      "doc": "The primary class: VERDICT=<value>, LEAN=<lean> or REFERENCE_APPROACH_ALL."
+    },
+    {
+      "name": "episodeId",
+      "type": [
+        "null",
+        "string"
+      ],
+      "doc": "The episode of the signal, when it has one.",
+      "default": null
+    },
+    {
+      "name": "role",
+      "type": "string",
+      "doc": "RESISTANCE or SUPPORT (from approachSide: FROM_BELOW is RESISTANCE, FROM_ABOVE is SUPPORT)."
+    },
+    {
+      "name": "levelPriceEs",
+      "type": "string",
+      "doc": "The level as an exact decimal in index points (text, never a float)."
+    },
+    {
+      "name": "levelKind",
+      "type": "string",
+      "doc": "The level kind of the signal's own record (VALUE_AREA_HIGH, MANUAL_LINE ...): a descriptive column."
+    },
+    {
+      "name": "t0Ms",
+      "type": "long",
+      "doc": "The decision time: the later of the event time, bookCompletedAtMs when present and the tape position at registration. Every window starts strictly after it."
+    },
+    {
+      "name": "windowEndMs",
+      "type": "long",
+      "doc": "t0Ms + horizonSeconds * 1000."
+    },
+    {
+      "name": "horizonSeconds",
+      "type": "int",
+      "doc": "300 or 900."
+    },
+    {
+      "name": "stratum",
+      "type": "string",
+      "doc": "RTH, GLOBEX_PRE or NO_HORIZON."
+    },
+    {
+      "name": "claim",
+      "type": "string",
+      "doc": "HELD, STAYED or NONE (the claim map of liq-U preregistration 4.1)."
+    },
+    {
+      "name": "outcome",
+      "type": "string",
+      "doc": "HELD, BROKE, STAYED, RETURNED or NOT_SCORED."
+    },
+    {
+      "name": "hit",
+      "type": [
+        "null",
+        "boolean"
+      ],
+      "doc": "Outcome equals the claim; null when there is no claim or the reading is not scored.",
+      "default": null
+    },
+    {
+      "name": "excludedReason",
+      "type": [
+        "null",
+        "string"
+      ],
+      "doc": "Null when the reading is scored, else the closed code (TAPE_GAP, BROKE_AT_EVENT, RETURNED_AT_DECISION, NO_HORIZON, TRACKER_CAP, SESSION_ENDED_OPEN, DUPLICATE_KEY ...).",
+      "default": null
+    },
+    {
+      "name": "decidedAtMs",
+      "type": "long",
+      "doc": "The data time at which the window was decided: the timestamp of the deciding print or the end of the deciding closure bar. Never a clock."
+    },
+    {
+      "name": "bookAgreement",
+      "type": [
+        "null",
+        "string"
+      ],
+      "doc": "CONFIRMS, CONTRADICTS, SILENT or null (absent), copied from the signal's own record.",
+      "default": null
+    },
+    {
+      "name": "bookConfigFingerprint",
+      "type": [
+        "null",
+        "string"
+      ],
+      "doc": "Identity field copied unchanged from the signal's own record.",
+      "default": null
+    },
+    {
+      "name": "contractTableDigest",
+      "type": [
+        "null",
+        "string"
+      ],
+      "doc": "Identity field copied unchanged from the signal's own record.",
+      "default": null
+    },
+    {
+      "name": "label",
+      "type": "string",
+      "doc": "The constant DESCRIPTIVE_UNVALIDATED."
+    }
+  ]
+}

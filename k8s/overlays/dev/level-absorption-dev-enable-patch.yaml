@@ -60,6 +60,13 @@ spec:
             # service; only this development patch sets it.
             - name: LINE_HEALTH_USER_LINES_ENABLED
               value: "true"
+            # In-service outcomes (liq-V step 1, development only): the tracker inside the service publishes one OUTCOME record per signal per horizon and the compacted SCOREBOARD rows
+            # on its own topics (contracts 0.94.0, ids 2813 / 2814, one partition each; scripts/kafka/ensure-level-absorption-outcome-topics.sh is part of the first-deploy barrier). The topics and
+            # their schemas are preconditions: the service refuses to start without them (there is no switch). Dev only: production and es4 declare neither topic.
+            - name: KAFKA_LEVEL_ABSORPTION_OUTCOMES_TOPIC
+              value: futures.level-absorption.outcomes
+            - name: KAFKA_LEVEL_ABSORPTION_SCOREBOARD_TOPIC
+              value: futures.level-absorption.scoreboard
           volumeMounts:
             - name: level-absorption-line-health-config
               mountPath: /home/options-edge/config/line-health
