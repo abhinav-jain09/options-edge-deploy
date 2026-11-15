@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Drives the REAL ensure-es-liquidity-wall-topics.sh against the STATEFUL stand-in tests/fake_kafka_cli.py (as kafka-topics / kafka-configs), the same stand-in
 # tests/test_line_acceptance_deploy.py drives its barrier with. The barrier's points: DEV ONLY (any other ENVIRONMENT fails before a CLI call); an empty cluster gets the ten topics at
-# their declared shapes with NO broker-wide change (the events log created WITH its 256 MiB cap, the four pure-compact topics at -1/-1); a second run creates and alters nothing; and every
+# their declared shapes with NO broker-wide change (the events log created WITH its 256 MiB cap, the six pure-compact topics at -1/-1, outcomes at 30 days with its cap); a second run creates and alters nothing; and every
 # difference (partitions, policy, retention.ms, retention.bytes, message bound, ISR) fails closed, names the topic and alters nothing.
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"

@@ -14,7 +14,7 @@
 #   futures.liquidity-wall.outcomes   1 partition, delete,  retention.ms EXACTLY 2592000000 (30 days), retention.bytes EXACTLY 268435456 (liq-AA: one decided outcome per displayed target per horizon)
 #   futures.liquidity-wall.scoreboard 1 partition, compact, retention.ms EXACTLY -1, retention.bytes EXACTLY -1 (pure compact; liq-AA: the running counters, the table the /scorecard page grows by)
 #   futures.liquidity-wall.targets    1 partition, compact, retention.ms EXACTLY -1, retention.bytes EXACTLY -1 (pure compact; liq-AA: the displayed liquidity targets, rebuildable)
-# The events log and the four pure-compact topics are created WITH their declared retention.bytes (the way ensure-level-absorption-topics.sh creates its events topic: the shared routine
+# The events log, the outcomes log and the six pure-compact topics are created WITH their declared retention.bytes (the way ensure-level-absorption-topics.sh creates its events topic: the shared routine
 # creates no retention.bytes) and that value is verified exactly. An existing topic is never recreated, altered or shrunk: any difference fails closed. The input topics (es.rithmic.depth, underlying.es.trades.linearized) belong to other services and are not
 # created here. No tombstones, no versioned names. dev-cleanup.sh does NOT run this barrier: its topic pass recreates the shapes declared in scripts/kafka/topics.env (partitions, policy, retention,
 # retention.bytes), and this barrier is the check that a deploy runs before the service is raised.
@@ -74,7 +74,7 @@ check_retention_bytes() { # <topic> <exact retention.bytes>
   echo "ok: '$topic' — retention.bytes=$bytes"
 }
 
-# The events log and the four pure-compact topics carry a DECLARED retention.bytes (the cap, or -1: retention.ms=-1 alone does not stop byte-based deletion), which the shared routine does
+# The events log, the outcomes log and the six pure-compact topics carry a DECLARED retention.bytes (the cap, or -1: retention.ms=-1 alone does not stop byte-based deletion), which the shared routine does
 # not create. They are created here WITH it, the way ensure-level-absorption-topics.sh creates its events topic, then verified by the shared routine with create-if-absent=no (so it can never
 # create one at the default shape) and their retention.bytes compared exactly.
 ensure_with_bytes() { # <topic> <cleanup.policy> <retention.ms> <retention.bytes>
