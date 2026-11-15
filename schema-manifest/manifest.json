@@ -5648,7 +5648,7 @@
       "id": 3409,
       "family": "liquiditywall",
       "schemaFile": "com.optionsedge.contracts.liquiditywall.LiquidityWallOutcome/v1.avsc",
-      "schemaHash": "35d67d751e97d053d2f3dc26324fc17a9ab67ab49f5bbfae22a4cb969480f9c7",
+      "schemaHash": "c3bb6dd7778b40105e48ec4542a850f514603fecd31cf1bb53a06e9b490865d6",
       "environments": [
         "dev"
       ],
@@ -5682,7 +5682,7 @@
       "id": 3410,
       "family": "liquiditywall",
       "schemaFile": "com.optionsedge.contracts.liquiditywall.LiquidityWallScoreboard/v1.avsc",
-      "schemaHash": "1f07e0df3d28492a683877931e84dc16d34f488e69edaaa3d143ff43ec898097",
+      "schemaHash": "94da80520557f45001e1c9c9a28c308b7478e9bd657977dee556229df0bc247e",
       "environments": [
         "dev"
       ],
@@ -5726,7 +5726,7 @@
       "id": 3411,
       "family": "liquiditywall",
       "schemaFile": "com.optionsedge.contracts.liquiditywall.LiquidityWallTargets/v1.avsc",
-      "schemaHash": "ed3234f06776ba61af8c93d4f4e06c8a752fc2e7966697219bf4a8693a51f198",
+      "schemaHash": "a3660071c15192e71fd1c011637b0b6027a94b9558b8fd009a82c6e56bf84e6a",
       "environments": [
         "dev"
       ],
