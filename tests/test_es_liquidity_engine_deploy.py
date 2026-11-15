@@ -153,7 +153,12 @@ class Manifests(unittest.TestCase):
         self.assertEqual([k for k in e if k.startswith("ES_MBO_MIG_")], [])
         ref = env_of(deployment("k8s/services/drop-classifier-ref/base/drop-classifier-ref-deployment.yaml"))
         self.assertEqual([k for k in ref if k.startswith(("ES_MBO_SWEEP_", "ES_MBO_SPOOF_"))], [])
-        self.assertIn("ES_MBO_SPOOF_BURST_MS", open("k8s/services/es-liquidity-engine/overlays/dev/manifest.yaml").read())
+        # the generated dev slice (mirror rule) carries exactly the same detector settings, value for value
+        slice_env = env_of(deployment("k8s/services/es-liquidity-engine/overlays/dev/manifest.yaml"))
+        names = [k for k in e if k.startswith(("ES_MBO_SWEEP_", "ES_MBO_SPOOF_"))]
+        self.assertEqual(len(names), 10)
+        self.assertEqual({k: slice_env.get(k) for k in names}, {k: e[k] for k in names})
+        self.assertEqual([k for k in slice_env if k.startswith("ES_MBO_MIG_")], [])
 
     def test_the_tape_is_admitted_only_from_the_databento_trades_feed_for_the_front_contract(self):
         e = env_of(deployment("k8s/services/es-liquidity-engine/base/es-liquidity-engine-deployment.yaml"))
