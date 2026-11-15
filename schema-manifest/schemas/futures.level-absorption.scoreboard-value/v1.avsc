@@ -1,0 +1,129 @@
+{
+  "type": "record",
+  "name": "LevelAbsorptionScoreboard",
+  "namespace": "com.optionsedge.contracts.levelabsorption",
+  "doc": "liq-U rev 2 (liq-V): ONE running counter row of the Level Absorption outcome tracker, per (trade date, configuration identity, family, class, stratum, horizon), published on the COMPACTED topic futures.level-absorption.scoreboard by level-absorption-service itself (key '<service>|<tradeDate>|<identityDigest>|<family>|<classKey>|<stratum>|M<seconds>'). Subject futures.level-absorption.scoreboard-value (TopicNameStrategy), fixed id 2814, version 1, FULL compatibility. Counts and rates only: the page shows these fields and computes nothing. DESCRIPTIVE and UNVALIDATED.",
+  "fields": [
+    {
+      "name": "schemaVersion",
+      "type": "int",
+      "doc": "1",
+      "default": 1
+    },
+    {
+      "name": "outcomeRuleVersion",
+      "type": "string",
+      "doc": "liq-U-v1."
+    },
+    {
+      "name": "service",
+      "type": "string",
+      "doc": "level-absorption-service."
+    },
+    {
+      "name": "environment",
+      "type": "string",
+      "doc": "The environment of the writing service (dev)."
+    },
+    {
+      "name": "tradeDate",
+      "type": "string",
+      "doc": "yyyy-MM-dd."
+    },
+    {
+      "name": "family",
+      "type": "string",
+      "doc": "LA_VERDICT, LA_LEAN or LA_REFERENCE."
+    },
+    {
+      "name": "classKey",
+      "type": "string",
+      "doc": "VERDICT=<value>, LEAN=<lean>, BOOK=<CONFIRMS|CONTRADICTS|SILENT|ABSENT>/VERDICT_HELD_CLAIM, BOOK=<...>/LEAN_ABSORBED, REFERENCE_APPROACH_ALL, or the family total ALL."
+    },
+    {
+      "name": "stratum",
+      "type": "string",
+      "doc": "RTH or GLOBEX_PRE."
+    },
+    {
+      "name": "horizonSeconds",
+      "type": "int",
+      "doc": "300 or 900."
+    },
+    {
+      "name": "signals",
+      "type": "long",
+      "doc": "Signals registered in this row (every horizon counts its own copy)."
+    },
+    {
+      "name": "decided",
+      "type": "long",
+      "doc": "Outcomes decided with a label (not excluded)."
+    },
+    {
+      "name": "positive",
+      "type": "long",
+      "doc": "Count of the positive outcome of the family: HELD, or STAYED."
+    },
+    {
+      "name": "positiveName",
+      "type": "string",
+      "doc": "HELD or STAYED."
+    },
+    {
+      "name": "rate",
+      "type": [
+        "null",
+        "double"
+      ],
+      "doc": "positive / decided; null when decided is 0.",
+      "default": null
+    },
+    {
+      "name": "claimed",
+      "type": "long",
+      "doc": "Decided readings that carry a claim."
+    },
+    {
+      "name": "hits",
+      "type": "long",
+      "doc": "Claimed readings whose outcome equals the claim."
+    },
+    {
+      "name": "excluded",
+      "type": {
+        "type": "map",
+        "values": "long"
+      },
+      "doc": "Exclusions by closed code, each counted."
+    },
+    {
+      "name": "smallN",
+      "type": "boolean",
+      "doc": "True when decided is below 30."
+    },
+    {
+      "name": "identityDigest",
+      "type": "string",
+      "doc": "sha-256 of the canonical name=value encoding of the signal's identity fields (bookConfigFingerprint, contractTableDigest), every field present, an explicit null when absent."
+    },
+    {
+      "name": "identityFields",
+      "type": {
+        "type": "map",
+        "values": "string"
+      },
+      "doc": "The identity field values, for display; an absent value is not listed."
+    },
+    {
+      "name": "lastDecidedAtMs",
+      "type": "long",
+      "doc": "Data time of the newest outcome folded into this row."
+    },
+    {
+      "name": "label",
+      "type": "string",
+      "doc": "The constant DESCRIPTIVE_UNVALIDATED."
+    }
+  ]
+}

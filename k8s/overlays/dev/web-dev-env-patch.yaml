@@ -119,6 +119,10 @@ spec:
             # Explicit for clarity; this is also the REST base derivable from the health URL above.
             - name: FEED_GATEWAY_REST_URL
               value: "http://feed-gateway-service:8091"
+            # The /scorecard page (liq-V in-service outcomes, dev only): the page and its data route answer 404 unless this is exactly "true". The data route /api/scorecard is proxied to the
+            # gateway at FEED_GATEWAY_REST_URL above (the same base as /api/es-liquidity-history); the numbers are the services' own scoreboard records. Replaces the removed SCORECARD_DIR / ConfigMap volume.
+            - name: SCORECARD_PAGE_ENABLED
+              value: "true"
             - name: VITE_WS_URL
               value: "wss://dev.bleadingoptions.com/ws/events"
             # This deployment serves APIs from the origin root, including pages at /option-chain.

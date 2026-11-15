@@ -124,8 +124,7 @@ resources:
   - ../../services/nifty-gex/base
 patches:
   - path: web-immutable-assets-patch.yaml
-  # Dev only: optional ConfigMap volume for the scorecard report (liq-U); mirrored in k8s/services/web/overlays/dev.
-  - path: web-scorecard-patch.yaml
+  # The scorecard ConfigMap volume and SCORECARD_DIR (liq-U, PR 1603) are REMOVED (liq-V: the numbers come from the services' own scoreboard topics through the gateway). The live ConfigMap scorecard-latest is left for the owner to delete.
   - path: es-spx-align-rithmic-dev-patch.yaml
   - path: broker-execution-http-patch.yaml
   # DEV-ONLY, 2026-10-11: run the auction-to-paper-order chain. The account owner wants an auction

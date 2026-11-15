@@ -83,6 +83,8 @@ spec:
               value: "true"
             - name: BREAK_LINE_RELAY_ENABLED
               value: "true"
+            - name: KAFKA_SCORECARD_SCOREBOARD_TOPICS
+              value: futures.level-absorption.scoreboard
             - name: GATEWAY_MARKET_STRUCTURE_ENABLED
               value: "true"
             - name: KAFKA_MARKET_STRUCTURE_TOPIC

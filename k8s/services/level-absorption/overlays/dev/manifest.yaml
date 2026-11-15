@@ -60,6 +60,10 @@ spec:
               value: classpath:/book-contracts.txt
             - name: LINE_HEALTH_USER_LINES_ENABLED
               value: "true"
+            - name: KAFKA_LEVEL_ABSORPTION_OUTCOMES_TOPIC
+              value: futures.level-absorption.outcomes
+            - name: KAFKA_LEVEL_ABSORPTION_SCOREBOARD_TOPIC
+              value: futures.level-absorption.scoreboard
             - name: LEVEL_ABSORPTION_PHASE
               value: EYEBALL
             - name: KAFKA_LEVEL_ABSORPTION_FOOTPRINT_TOPIC

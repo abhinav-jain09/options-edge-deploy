@@ -748,6 +748,14 @@
       [
         2812,
         2812
+      ],
+      [
+        2813,
+        2813
+      ],
+      [
+        2814,
+        2814
       ]
     ],
     "options": [
@@ -10751,6 +10759,84 @@
       ],
       "retained": true,
       "retainedReason": "curated, not baseline: the Level Absorption event with the optional book fields (liquidity requirement A rev 12 section 8, work package K3; contracts 0.88.0, schemas/cvd-related/LevelAbsorptionEvent.avsc, 42 added fields, all nullable with default null, FULL compatible): VERSION 2 under the new fixed id 2812 (2703 to 2752 are held on the es4 registry, so the next integer after 2702 was not free in every registry). Written by level-absorption-service on futures.level-absorption.events through CanonicalAvroKafka.producer (auto.register.schemas=false, the id is looked up under the topic value subject), so this id must be in the registry BEFORE the service image of contracts 0.88.0 starts; schema-sync registers it from this entry on a roll of level-absorption. Readers accept both 2702 and 2812. Dev only; nothing is registered on production or es4."
+    },
+    {
+      "kind": "MIRRORED",
+      "subject": "futures.level-absorption.outcomes-value",
+      "version": 1,
+      "id": 2813,
+      "family": "futures",
+      "schemaFile": "futures.level-absorption.outcomes-value/v1.avsc",
+      "schemaHash": "99c92762c2b65d26a0ddc548b9623f337babcf7b85701fb23e70ab5a28c08528",
+      "environments": [
+        "dev"
+      ],
+      "source": {
+        "kind": "FILE",
+        "repo": "contracts",
+        "path": "schemas-registry/levelabsorption/LevelAbsorptionOutcome.avsc"
+      },
+      "topics": [
+        {
+          "name": "futures.level-absorption.outcomes",
+          "kind": "data"
+        }
+      ],
+      "producers": [
+        {
+          "service": "level-absorption",
+          "environments": [
+            "dev"
+          ]
+        }
+      ],
+      "consumers": [],
+      "retained": true,
+      "retainedReason": "curated, not baseline: ONE decided outcome of ONE Level Absorption signal at ONE horizon (liq-U rev 2). No other service reads it; the producer re-reads its own tail on a restart to compare byte for byte (REPLAY_DIVERGED / REPLAY_SHORT). Written by level-absorption-service itself on the topic (TopicNameStrategy, like futures.level-absorption.events-value 2812) through the Confluent producer with auto.register.schemas=false, so the id must be in the registry BEFORE the service image that writes it starts; schema-sync registers it from this entry on a roll of level-absorption. Contracts 0.94.0, liq-V in-service outcomes (options-edge-documents design/es-liquidity/liq-V-in-service-outcomes-design.md section 6). Extends the futures family block. Dev only; nothing is registered on production or es4."
+    },
+    {
+      "kind": "MIRRORED",
+      "subject": "futures.level-absorption.scoreboard-value",
+      "version": 1,
+      "id": 2814,
+      "family": "futures",
+      "schemaFile": "futures.level-absorption.scoreboard-value/v1.avsc",
+      "schemaHash": "5081c60707f675e6da68853f8fde625e051f4e440e273a6ca54c4f67ba4ac4b8",
+      "environments": [
+        "dev"
+      ],
+      "source": {
+        "kind": "FILE",
+        "repo": "contracts",
+        "path": "schemas-registry/levelabsorption/LevelAbsorptionScoreboard.avsc"
+      },
+      "topics": [
+        {
+          "name": "futures.level-absorption.scoreboard",
+          "kind": "data"
+        }
+      ],
+      "producers": [
+        {
+          "service": "level-absorption",
+          "environments": [
+            "dev"
+          ]
+        }
+      ],
+      "consumers": [
+        {
+          "service": "feed-gateway",
+          "accepts": [
+            2814
+          ],
+          "environments": [
+            "dev"
+          ]
+        }
+      ],
+      "retained": true,
+      "retainedReason": "curated, not baseline: the running counters of the in-service outcome tracker, one compacted row per (trade date, identity, family, class, stratum, horizon) (liq-U rev 2). feed-gateway reads it into GET /api/scorecard (read-only projection; computes nothing). Written by level-absorption-service itself on the topic (TopicNameStrategy, like futures.level-absorption.events-value 2812) through the Confluent producer with auto.register.schemas=false, so the id must be in the registry BEFORE the service image that writes it starts; schema-sync registers it from this entry on a roll of level-absorption. Contracts 0.94.0, liq-V in-service outcomes (options-edge-documents design/es-liquidity/liq-V-in-service-outcomes-design.md section 6). Extends the futures family block. Dev only; nothing is registered on production or es4."
     },
     {
       "kind": "MIRRORED",

@@ -207,4 +207,14 @@ if [ "${ENVIRONMENT:-}" = "dev" ]; then
 else
   echo "line-health topics: NOT ensured (ENVIRONMENT='${ENVIRONMENT:-<unset>}' is not 'dev'; line health is development only)"
 fi
+# The in-service outcomes (liq-V step 1): futures.level-absorption.outcomes and .scoreboard, dev only, ensured by ensure-level-absorption-outcome-topics.sh. The service refuses to start without
+# them (there is no switch), so the rollout must not proceed when they are wrong.
+if [ "${ENVIRONMENT:-}" = "dev" ]; then
+  if ! bash "$(dirname "${BASH_SOURCE[0]}")/ensure-level-absorption-outcome-topics.sh"; then
+    echo "=== ensure-level-absorption-topics FAILED - the in-service outcome topics are wrong; the rollout must not proceed ==="
+    exit 1
+  fi
+else
+  echo "outcome topics: NOT ensured (ENVIRONMENT='${ENVIRONMENT:-<unset>}' is not 'dev'; the in-service outcomes are development only)"
+fi
 echo "=== ensure-level-absorption-topics OK ==="
