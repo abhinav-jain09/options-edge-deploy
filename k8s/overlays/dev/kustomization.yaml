@@ -83,7 +83,7 @@ resources:
   # No patches here or in the standalone overlay (k8s/services/es-amt/overlays/dev); the dev image remap below is what the slice mirrors.
   - ../../services/es-amt/base
   # es-liquidity-wall: DEV-ONLY (services.yaml envs: [dev]), replicas 1: NEW Kafka Streams service, ES book liquidity walls from es.rithmic.depth + the linearized ES tape; writes the seven
-  # futures.liquidity-wall.* Avro topics (ids 3401-3407). Referenced here only (NOT in k8s/base, production or experiment). No patches here or in the standalone overlay
+  # futures.liquidity-wall.* Avro topics (ids 3401-3412). Referenced here only (NOT in k8s/base, production or experiment). No patches here or in the standalone overlay
   # (k8s/services/es-liquidity-wall/overlays/dev); the dev image remap below is what the slice mirrors.
   - ../../services/es-liquidity-wall/base
   # es-liquidity-engine: DEV-ONLY (services.yaml envs: [dev]), replicas 1: the ES MBO liquidity engine (supervisor over the drop-classifier engine in ES_TRADES mode, writing es.drop.*, and the MBO engine).

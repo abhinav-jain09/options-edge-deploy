@@ -9,7 +9,7 @@
 # CI-REQUIRED; the guard then enforces the wiring.
 """Deploy wiring of es-liquidity-wall-service (ES book liquidity walls, a NEW Kafka Streams service): DEV ONLY, replicas 1, ES_LIQUIDITY_WALL_ENABLED "true", Streams state on an emptyDir.
 
-Covers: the base and the dev overlay (source render, committed slice) at replicas 1 / flag "true" / the declared env / health port 8080 / the emptyDir state mount, the seven topics' declared shapes
+Covers: the base and the dev overlay (source render, committed slice) at replicas 1 / flag "true" / the declared env / health port 8080 / the emptyDir state mount, the ten topics' declared shapes
 in topics.env (reset classes, the events byte cap, the four pure-compact topics at -1/-1), the topic barrier (scripts/kafka/ensure-es-liquidity-wall-topics.sh) against the stateful stand-in
 tests/fake_kafka_cli.py, the fixed-id schema map (3401-3408: the dashboard has version 1 under 3403 and version 2 under 3408; shared with no other map), the schema-manifest entries (family block, hashes equal to the snapshots, the depth consumer binding),
 the registration of the service everywhere a dev-only service must be, and the absence of any production wiring."""

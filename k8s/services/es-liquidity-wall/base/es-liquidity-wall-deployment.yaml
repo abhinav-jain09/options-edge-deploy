@@ -9,7 +9,7 @@ metadata:
     app.kubernetes.io/part-of: options-edge
 spec:
   # DEV ONLY (services.yaml envs: [dev]): the one environment that renders this service. NEW Kafka Streams service (ES book liquidity walls): reads es.rithmic.depth (Avro id 3301, the
-  # "Rithmic Test" depth mirrored es4 -> dev) and underlying.es.trades.linearized (JSON), publishes the seven single-partition futures.liquidity-wall.* Avro topics (ids 3401-3407).
+  # "Rithmic Test" depth mirrored es4 -> dev) and underlying.es.trades.linearized (JSON), publishes the ten single-partition futures.liquidity-wall.* Avro topics (ids 3401-3412).
   # SINGLE replica ONLY (strategy Recreate): the Streams application id is options-edge-es-liquidity-wall over one-partition sources, so a second pod would own no task and only rebalance
   # the first; `kubectl scale` above 1 has no valid result. Streams local state is an emptyDir (dev only, as zn-gex): every pod start rebuilds it from the changelogs.
   replicas: 1
@@ -34,7 +34,7 @@ spec:
           imagePullPolicy: Always
           envFrom:
             - configMapRef:
-                name: options-edge-config              # KAFKA_BOOTSTRAP_SERVERS, SCHEMA_REGISTRY_URL (ids 3401-3407 are resolved from it at start), TOPIC_PREFIX and the runtime profile
+                name: options-edge-config              # KAFKA_BOOTSTRAP_SERVERS, SCHEMA_REGISTRY_URL (ids 3401-3412 are resolved from it at start), TOPIC_PREFIX and the runtime profile
             - secretRef:
                 name: options-edge-runtime-secrets
           env:
