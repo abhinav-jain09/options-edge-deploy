@@ -144,6 +144,22 @@ class Manifests(unittest.TestCase):
         # the generated dev slice carries it too (mirror rule)
         self.assertIn("ES_MBO_FILL_MATCHING", open("k8s/services/es-liquidity-engine/overlays/dev/manifest.yaml").read())
 
+    def test_only_the_validated_detectors_are_switched_on_with_their_temporary_corpus_numbers(self):
+        e = env_of(deployment("k8s/services/es-liquidity-engine/base/es-liquidity-engine-deployment.yaml"))
+        self.assertEqual((e["ES_MBO_SWEEP_WINDOW_MS"], e["ES_MBO_SWEEP_MIN_TICKS"], e["ES_MBO_SWEEP_MIN_FILL_SHARE_THOUSANDTHS"]), ("5000", "3", "500"))
+        self.assertEqual([e[k] for k in ("ES_MBO_SPOOF_QBIG_QUANTILE_THOUSANDTHS", "ES_MBO_SPOOF_INSIDE_TICKS", "ES_MBO_SPOOF_L_SHORT_MS", "ES_MBO_SPOOF_MIN_APPROACH_TICKS",
+                                          "ES_MBO_SPOOF_BURST_MS", "ES_MBO_SPOOF_SHARE_THOUSANDTHS", "ES_MBO_SPOOF_OPP_FILL_QTY")], ["850", "5", "2000", "1", "15000", "300", "5"])
+        # migration had no eligible candidate: none of its settings may exist, and no other service carries any detector setting
+        self.assertEqual([k for k in e if k.startswith("ES_MBO_MIG_")], [])
+        ref = env_of(deployment("k8s/services/drop-classifier-ref/base/drop-classifier-ref-deployment.yaml"))
+        self.assertEqual([k for k in ref if k.startswith(("ES_MBO_SWEEP_", "ES_MBO_SPOOF_"))], [])
+        # the generated dev slice (mirror rule) carries exactly the same detector settings, value for value
+        slice_env = env_of(deployment("k8s/services/es-liquidity-engine/overlays/dev/manifest.yaml"))
+        names = [k for k in e if k.startswith(("ES_MBO_SWEEP_", "ES_MBO_SPOOF_"))]
+        self.assertEqual(len(names), 10)
+        self.assertEqual({k: v for k, v in slice_env.items() if k.startswith(("ES_MBO_SWEEP_", "ES_MBO_SPOOF_"))}, {k: e[k] for k in names})
+        self.assertEqual([k for k in slice_env if k.startswith("ES_MBO_MIG_")], [])
+
     def test_the_tape_is_admitted_only_from_the_databento_trades_feed_for_the_front_contract(self):
         e = env_of(deployment("k8s/services/es-liquidity-engine/base/es-liquidity-engine-deployment.yaml"))
         self.assertEqual((e["ES_MBO_TAPE_SOURCE"], e["ES_MBO_TAPE_SOURCE_SCHEMA"], e["ES_MBO_INSTRUMENT_TABLE"]), ("DATABENTO", "trades", "ESZ6=10252"))

@@ -88,6 +88,26 @@ spec:
               value: "2000"
             - name: ES_MBO_FILL_MATCHING
               value: optimal
+            - name: ES_MBO_SWEEP_WINDOW_MS
+              value: "5000"
+            - name: ES_MBO_SWEEP_MIN_TICKS
+              value: "3"
+            - name: ES_MBO_SWEEP_MIN_FILL_SHARE_THOUSANDTHS
+              value: "500"
+            - name: ES_MBO_SPOOF_QBIG_QUANTILE_THOUSANDTHS
+              value: "850"
+            - name: ES_MBO_SPOOF_INSIDE_TICKS
+              value: "5"
+            - name: ES_MBO_SPOOF_L_SHORT_MS
+              value: "2000"
+            - name: ES_MBO_SPOOF_MIN_APPROACH_TICKS
+              value: "1"
+            - name: ES_MBO_SPOOF_BURST_MS
+              value: "15000"
+            - name: ES_MBO_SPOOF_SHARE_THOUSANDTHS
+              value: "300"
+            - name: ES_MBO_SPOOF_OPP_FILL_QTY
+              value: "5"
             - name: ES_MBO_SNAPSHOT_INTERVAL_BUCKETS
               value: "60"
             - name: ES_MBO_VACUUM_DEPTH_TICKS

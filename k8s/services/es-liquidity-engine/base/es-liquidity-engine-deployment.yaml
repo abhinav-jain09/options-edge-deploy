@@ -95,6 +95,30 @@ spec:
             # greedy 16 of 28 cells. DEV-ONLY service. Part of the engine's config fingerprint: switching it restarts from a cold replay (a snapshot of the other mode is not restored).
             - name: ES_MBO_FILL_MATCHING
               value: "optimal"
+            # TEMPORARY detector thresholds (owner decision 2026-11-08: set from the free Databento month, CORPUS_ONLY, recalibrate on our own Rithmic recording). Chosen on the 11 design sessions,
+            # judged ONCE on the 11 validation sessions by the pre-registered shifted-tape test (J 5e, seed 20261108, results in /Users/abhinav/development/workspace/oe-corpus-work/phase3/results):
+            # SWEEP_FINAL VALIDATED (candidate 2, bootstrap lower bound 218.8/h) and SPOOF_LIKE VALIDATED (candidate 2, lower bound 13.65/h). MIGRATION_INFERRED had no eligible candidate
+            # (its shifted-tape control beat the real tape on every candidate), so it stays OFF: its settings are deliberately absent.
+            - name: ES_MBO_SWEEP_WINDOW_MS
+              value: "5000"
+            - name: ES_MBO_SWEEP_MIN_TICKS
+              value: "3"
+            - name: ES_MBO_SWEEP_MIN_FILL_SHARE_THOUSANDTHS
+              value: "500"
+            - name: ES_MBO_SPOOF_QBIG_QUANTILE_THOUSANDTHS
+              value: "850"
+            - name: ES_MBO_SPOOF_INSIDE_TICKS
+              value: "5"
+            - name: ES_MBO_SPOOF_L_SHORT_MS
+              value: "2000"
+            - name: ES_MBO_SPOOF_MIN_APPROACH_TICKS
+              value: "1"
+            - name: ES_MBO_SPOOF_BURST_MS
+              value: "15000"
+            - name: ES_MBO_SPOOF_SHARE_THOUSANDTHS
+              value: "300"
+            - name: ES_MBO_SPOOF_OPP_FILL_QTY
+              value: "5"
             # Restart source: the engine snapshots every 60 closed buckets to the compacted es.mbo.snapshot and restarts from it (0 turns it off).
             - name: ES_MBO_SNAPSHOT_INTERVAL_BUCKETS
               value: "60"
