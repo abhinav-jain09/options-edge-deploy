@@ -61,11 +61,11 @@ spec:
             # The producer is break-line-service; the relay is off everywhere else (default false).
             - name: BREAK_LINE_RELAY_ENABLED
               value: "true"
-            # Scorecard reader (liq-V in-service outcomes, gateway GET /api/scorecard): the COMPACTED scoreboard topics the services publish themselves (comma separated; step 1 is
-            # futures.level-absorption.scoreboard, id 2814, dev only). A read-only projection of a retained topic, no websocket frame; the gateway computes nothing. A missing topic or an
+            # Scorecard reader (liq-V in-service outcomes, gateway GET /api/scorecard): the COMPACTED scoreboard topics the services publish themselves (comma separated; futures.level-absorption.scoreboard id 2814 and
+            # futures.liquidity-wall.scoreboard id 3410 (liq-AA), dev only). A read-only projection of a retained topic, no websocket frame; the gateway computes nothing. A missing topic or an
             # undecodable record is reported in the response (sources[].status), never as zero. The producer level-absorption-service runs on dev only; unset (everywhere else) = no reader.
             - name: KAFKA_SCORECARD_SCOREBOARD_TOPICS
-              value: "futures.level-absorption.scoreboard"
+              value: "futures.level-absorption.scoreboard,futures.liquidity-wall.scoreboard"
             # MARKET STRUCTURE relay (gateway #194): the latest market-structure record is retained and
             # replayed to the Context Tape page as the `market-structure` frame, which draws the STRUCTURE
             # layer. The topic is market-structure-service's UI projection — the namespace R13 of

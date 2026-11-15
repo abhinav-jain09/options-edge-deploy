@@ -267,7 +267,7 @@ services:
   # (JSON until its own cutover) and production receives the topic by byte mirror, so neither is listed. Single replica only (transactional.id es-amt-service-auction). No Service object.
   - { name: es-amt,                       managedBy: standalone, sliceGenerated: true, envs: [dev], image: options-edge-es-amt,                       deployments: [es-amt-service] }
   # es-liquidity-wall: DEV ONLY (envs: [dev]). NEW service: ES book liquidity walls (Kafka Streams). Reads es.rithmic.depth (Avro, id 3301, the "Rithmic Test" depth) and the linearized ES tape
-  # underlying.es.trades.linearized (JSON); publishes the seven single-partition Avro topics futures.liquidity-wall.{closures,buckets,dashboard,events,state,snapshot,voice} (ids 3401-3407,
+  # underlying.es.trades.linearized (JSON); publishes the ten single-partition Avro topics futures.liquidity-wall.{closures,buckets,dashboard,events,state,snapshot,voice,outcomes,scoreboard,targets} (ids 3401-3412,
   # scripts/kafka/schema-id-maps/es-liquidity-wall.map; schema-manifest family liquiditywall). scripts/kafka/ensure-es-liquidity-wall-topics.sh is the first-deploy barrier (service-deploy, dev only).
   # Streams state on an emptyDir (as zn-gex). Single replica only (Streams app id options-edge-es-liquidity-wall). No Service object; no production or es4 entry, image, topic or overlay exists.
   - { name: es-liquidity-wall,            managedBy: standalone, sliceGenerated: true, envs: [dev], image: options-edge-es-liquidity-wall,            deployments: [es-liquidity-wall-service] }

@@ -96,7 +96,7 @@ pipeline {
       // from this repo's overlays and stay on the JSON writer/mirror until their own cutover; ENVIRONMENT=production fails at the overlay lookup. Single replica only.
       'es-amt',
       // es-liquidity-wall (ES book liquidity walls, NEW Kafka Streams service): DEV ONLY (services.yaml envs: [dev]), replicas 1. Reads es.rithmic.depth (Avro id 3301) and underlying.es.trades.linearized,
-      // publishes the seven single-partition Avro topics futures.liquidity-wall.* (ids 3401-3407; barrier below). There is no production overlay for it, so ENVIRONMENT=production fails at the overlay
+      // publishes the ten single-partition Avro topics futures.liquidity-wall.* (ids 3401-3412; barrier below). There is no production overlay for it, so ENVIRONMENT=production fails at the overlay
       // lookup; nothing in this file authorises a production roll. Single replica only.
       'es-liquidity-wall',
       // es-liquidity-engine (the ES MBO liquidity engine): DEV ONLY, replicas 1; the drop engine creates its own es.drop.* topics, and the MBO topics (now EIGHT, including es.mbo.coverage) have the barrier below. drop-classifier-ref: temporary G3b reference, dev only.
@@ -1047,7 +1047,7 @@ PYEOF
       // makes the declared RETENTION a precondition of the deploy: the pod can set the cleanup policy itself but not the retention, so without it a first deploy onto an empty
       // broker could create the evidence topic at the cluster default and age the measurement out from under itself.
       // liquidity-validator (dev only, three topics futures.liquidity-validator.*: scripts/kafka/ensure-liquidity-validator-topics.sh) shares this stage the same way.
-      // es-liquidity-wall (dev only, same shape: scripts/kafka/ensure-es-liquidity-wall-topics.sh, seven topics, one partition each, the declared cleanup policy, retention.ms and retention.bytes;
+      // es-liquidity-wall (dev only, same shape: scripts/kafka/ensure-es-liquidity-wall-topics.sh, ten topics, one partition each, the declared cleanup policy, retention.ms and retention.bytes;
       // the events log at retention.ms -1 with a 256 MiB cap, the four pure-compact topics at -1/-1) shares this ONE stage on purpose: this pipeline's generated CPS method sits at the JVM's
       // 64 KB method limit, and a separate stage for it failed every build at compile time ("Method too large", build #3006). The barrier run is selected by SERVICE below.
       when {

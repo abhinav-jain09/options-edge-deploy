@@ -5,13 +5,19 @@
 # Version 2 of the dashboard (order page liquidity walls, design rev 9 section 3) adds three optional wall fields (sizeNow, sizeTape, wordState): a registered id never changes content, so it is a new version under
 # the new id 3408 that extends the family block 3401-3407. The version-1 file is the frozen one under schemas-registry/liquiditywall/v1; on a registry that already holds version 1 (dev) only the 3408 row imports.
 # REGISTER 3408 BEFORE the wall service image of contracts 0.84.0 starts (the service refuses to start when its ids are not in the registry), and roll the feed gateway (accepts 3403 and 3408) before the service.
+# liq-AA liquidity targets (contracts 0.95.0): LiquidityWallOutcome 3409 (.outcomes), LiquidityWallScoreboard 3410 (.scoreboard), LiquidityWallTargets 3411 (.targets) are new records on new topics, and the snapshot becomes
+# VERSION 2 under 3412 (adds only the optional outcomeState; 3406 is the frozen archival file under v1/). The block is now 3401-3412. REGISTER 3409-3412 BEFORE the wall service image of contracts 0.95.0 starts.
 # Dev only; nothing is registered on production or es4. File column: relative to the contracts checkout's `schemas-registry/liquiditywall` directory (SCHEMAS_DIR).
 com.optionsedge.contracts.liquiditywall.LiquidityWallClosure|3401|LiquidityWallClosure.avsc
 com.optionsedge.contracts.liquiditywall.LiquidityWallBucket|3402|LiquidityWallBucket.avsc
 com.optionsedge.contracts.liquiditywall.LiquidityWallDashboard|3403|v1/LiquidityWallDashboard.avsc|1
 com.optionsedge.contracts.liquiditywall.LiquidityWallEvent|3404|LiquidityWallEvent.avsc
 com.optionsedge.contracts.liquiditywall.LiquidityWallState|3405|LiquidityWallState.avsc
-com.optionsedge.contracts.liquiditywall.LiquidityWallSnapshot|3406|LiquidityWallSnapshot.avsc
+com.optionsedge.contracts.liquiditywall.LiquidityWallSnapshot|3406|v1/LiquidityWallSnapshot.avsc|1
 com.optionsedge.contracts.liquiditywall.LiquidityWallVoice|3407|LiquidityWallVoice.avsc
+com.optionsedge.contracts.liquiditywall.LiquidityWallOutcome|3409|LiquidityWallOutcome.avsc
+com.optionsedge.contracts.liquiditywall.LiquidityWallScoreboard|3410|LiquidityWallScoreboard.avsc
+com.optionsedge.contracts.liquiditywall.LiquidityWallTargets|3411|LiquidityWallTargets.avsc
 # Version-2 row after all version-1 rows so the preflight pass can see the predecessor of every row.
 com.optionsedge.contracts.liquiditywall.LiquidityWallDashboard|3408|LiquidityWallDashboard.avsc|2
+com.optionsedge.contracts.liquiditywall.LiquidityWallSnapshot|3412|LiquidityWallSnapshot.avsc|2
