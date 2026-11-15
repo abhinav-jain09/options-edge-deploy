@@ -87,6 +87,10 @@ spec:
             # futures.line-health.user-lines (id 3704). Default false in the image (the endpoints answer 409); prod and experiment do not set it.
             - name: LINE_HEALTH_USER_LINES_ENABLED
               value: "true"
+            # Break score line commands (Break Score rev 13, design liq-S-break-score-rev13-design.md 4.6; dev only): PUT/DELETE /api/break-line/lines/{lineId} and GET /api/break-line/owner-tag publish the Order
+            # view's break-score lines to futures.break-line.lines (id 3901). Default false in the image (the endpoints answer 409 and the Break score button stays hidden); prod and experiment do not set it.
+            - name: BREAK_LINE_COMMANDS_ENABLED
+              value: "true"
             - name: LEVEL_ABSORPTION_PATH_UI_ENABLED
               value: "true"
             - name: LEVEL_ABSORPTION_UI_ENABLED
