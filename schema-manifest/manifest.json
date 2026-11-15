@@ -5726,7 +5726,7 @@
       "id": 3411,
       "family": "liquiditywall",
       "schemaFile": "com.optionsedge.contracts.liquiditywall.LiquidityWallTargets/v1.avsc",
-      "schemaHash": "670b443e3ffc54291cd7c86f9b7106ea60187bb6349f63524550e983d1d19b2a",
+      "schemaHash": "80ef3d3686f3103915f2b2713324b5276a93d129394c9f3297664b8bcfd6cd18",
       "environments": [
         "dev"
       ],
