@@ -11,7 +11,7 @@
 
 Covers: the base and the dev overlay (source render, committed slice) at replicas 1 / flag "true" / the declared env / health port 8080 / the emptyDir state mount, the ten topics' declared shapes
 in topics.env (reset classes, the events byte cap, the four pure-compact topics at -1/-1), the topic barrier (scripts/kafka/ensure-es-liquidity-wall-topics.sh) against the stateful stand-in
-tests/fake_kafka_cli.py, the fixed-id schema map (3401-3408: the dashboard has version 1 under 3403 and version 2 under 3408; shared with no other map), the schema-manifest entries (family block, hashes equal to the snapshots, the depth consumer binding),
+tests/fake_kafka_cli.py, the fixed-id schema map (3401-3412: the dashboard has version 1 under 3403 and version 2 under 3408, the snapshot version 1 under 3406 and version 2 under 3412; shared with no other map), the schema-manifest entries (family block, hashes equal to the snapshots, the depth consumer binding),
 the registration of the service everywhere a dev-only service must be, and the absence of any production wiring."""
 from __future__ import annotations
 
