@@ -34,7 +34,15 @@ STATE_FILE="${STATE_FILE:-/tmp/platform-error-watch.state}"
 DISCORD_WEBHOOK_URL="${DISCORD_WEBHOOK_URL:-}"
 # Lines matched as errors, and noise to drop. Override to taste.
 GREP_PATTERN="${GREP_PATTERN:-ERROR|Exception|FATAL| SEVERE |Caused by:}"
-EXCLUDE_PATTERN="${EXCLUDE_PATTERN:-}"      # e.g. 'HealthCheck|debug-probe' ; empty = keep all
+# Default drops ONE kind of line: the exception-HANDLER rows of the `StreamsConfig values:` / `ConsumerConfig values:`
+# block every Kafka client prints at start, e.g. `\tprocessing.exception.handler = class ...LogAndFailProcessingExceptionHandler`.
+# The key is lower-case `exception.handler`; the class VALUE ends in `ExceptionHandler`, which is what GREP_PATTERN matches,
+# so each restart of a Streams service raised "new error signatures" that were configuration, not errors (2026-11-16,
+# es-liquidity-wall-service: five rows). Deliberately NOT a generic indented `key = value` rule: that would also drop a
+# genuine `\tmessage = java.net.ConnectException: ...` diagnostic. Only the whole config-row shape is dropped: a key naming an
+# exception handler, ` = class org.apache.kafka.<ClassName>` and NOTHING after the class name.
+# Override replaces the whole pattern (empty = keep all), as before.
+EXCLUDE_PATTERN="${EXCLUDE_PATTERN-^[[:space:]]+[A-Za-z0-9_.-]*exception\.handler[A-Za-z0-9_.-]* = class org\.apache\.kafka\.[A-Za-z0-9_.$]+$}"
 EXCLUDE_SERVICES="${EXCLUDE_SERVICES:-}"    # space-separated deployment names to skip
 ONCE=0; [ "${1:-}" = "--once" ] && ONCE=1
 
