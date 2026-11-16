@@ -13,6 +13,10 @@
 //      volume (scripts/watch/partition-balance.py). OBSERVATION-ONLY - a red build, no Discord - until its thresholds are calibrated against
 //      market-hours traffic and its exemption list reviewed; see FLEET-ALERT-DISCORD-REQUIREMENT R4i.
 // Checks 3-5 also DELIVER TO DISCORD, routed per environment: production to the prod group, dev AND es4 to the dev group (es4 is not production).
+// PAGING IS PER INCIDENT, NOT PER RUN (scripts/watch/fleet-alert.py): one page when a finding first appears, a reminder no sooner than every 30 minutes,
+// ONE escalation once it has been open 2 hours and then a daily summary, and ONE "resolved" message when it has been gone for 30 minutes. Before this a
+// finding that stayed true paged every 15 minutes - a dead production mirror did so for 2.7 days and buried the real ES4 outage in the same group.
+// An observation-only check logs its findings and does NOT fail the build (partition balance had kept the job red on every run).
 // A red build remains an alert in its own right; the message is added to it, never substituted for it.
 // Native k8s CronJobs are denied by the cluster's admission policy and no Kafka or registry exporter is scraped, so a Jenkins cron job is the trigger
 // that can run. IT CHANGES NOTHING IN ANY CLUSTER, REGISTRY OR TOPIC - its only outbound effect is the Discord POST above, and it has no deployment

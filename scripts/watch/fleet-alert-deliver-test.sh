@@ -44,7 +44,7 @@ chmod +x "$W/check.sh"
 deliver() { # <mode> <rc> <out> [webhook]
   local mode="$1" rc="$2" text="$3" hook="${4-$HOOK}" rrc=0
   : > "$RECORD"
-  DISCORD_WEBHOOK_URL="$hook" FLEET_ENV=dev FLEET_CHECK=stub FLEET_MODE="$mode" \
+  DISCORD_WEBHOOK_URL="$hook" FLEET_STATE_DIR="${STATE:-$(mktemp -d)}" FLEET_ENV=dev FLEET_CHECK=stub FLEET_MODE="$mode" \
     STUB_RC="$rc" STUB_OUT="$text" OE_OPS_DIR="$W" \
     bash "$DELIVER" "$W/check.sh" > "$W/log.txt" 2>&1 || rrc=$?
   echo "$rrc"
@@ -73,12 +73,25 @@ deliver paging 0 "stub: all clear" >/dev/null
 # --- R1e/§1b: observation-only is silent on a FINDING but not on exit 2
 deliver observation-only 1 "SKEW t [svc]: busiest partition took 100%" >/dev/null
 [ ! -s "$RECORD" ] && ok "observation-only POSTs nothing for a finding" || bad "observation-only silent on finding" "$(head -c 120 "$RECORD")"
+rc=$(deliver observation-only 1 "SKEW t [svc]: busiest partition took 100%")
+[ "$rc" = 0 ] && ok "an observation-only finding does NOT fail the build" || bad "observation-only verdict" "got $rc"
+rc=$(deliver observation-only 2 "ERROR: broker unreachable")
+[ "$rc" = 2 ] && ok "an observation-only 'could not check' still fails the build" || bad "observation-only exit 2" "got $rc"
 deliver observation-only 2 "ERROR: broker unreachable" >/dev/null
 if grep -q "could not check" "$RECORD"; then
   ok "observation-only STILL POSTs 'could not check'"
 else
   bad "observation-only posts exit 2" "record: $(head -c 200 "$RECORD")"
 fi
+
+# --- one page per incident, through the REAL delivery path: the same finding twice is ONE POST, recovery is one more
+STATE="$(mktemp -d)"
+deliver paging 1 "CRASHLOOP pod-z: container app is CrashLoopBackOff" >/dev/null
+n1=$(grep -c CRASHLOOP "$RECORD")
+deliver paging 1 "CRASHLOOP pod-z: container app is CrashLoopBackOff" >/dev/null
+n2=$(grep -c CRASHLOOP "$RECORD")
+[ "$n1" = 1 ] && [ "$n2" = 0 ] && ok "the same finding twice is one POST (the second run posts nothing)" || bad "dedup through delivery" "first=$n1 second=$n2"
+unset STATE
 
 # --- R1d: a delivery failure must not change the verdict, and must not read as delivered
 kill $SRV 2>/dev/null; sleep 0.3

@@ -84,6 +84,22 @@ class Routing(unittest.TestCase):
         self.assertEqual({"crash-loop", "kafka-lag"}, set(paging),
                          "crash loops and lag page from day one; only partition balance waits for §5a")
 
+    def test_paging_is_one_page_per_incident_and_the_deliverer_hands_over_a_state_dir(self):
+        deliver = (WATCH / "fleet-alert-deliver.sh").read_text()
+        self.assertIn('--state-dir "$STATE_DIR"', deliver, "without a state directory every run would page again")
+        self.assertIn('dirname "$WORKSPACE")/.oe-watch', deliver,
+                      "in Jenkins the incidents live beside the job workspaces, where the baselines already are")
+        composer = (WATCH / "fleet-alert.py").read_text()
+        for const in ("REMIND_MIN = 30", "ESCALATE_MIN = 120", "SUMMARY_MIN = 24 * 60", "GRACE_MIN = 30"):
+            self.assertIn(const, composer)
+
+    def test_an_observation_only_finding_does_not_fail_the_build(self):
+        deliver = (WATCH / "fleet-alert-deliver.sh").read_text()
+        self.assertIn('[ "$FLEET_MODE" = observation-only ] && [ "$rc" = 1 ]', deliver)
+        code = "\n".join(l.split("#", 1)[0] for l in deliver.splitlines())
+        self.assertNotRegex(code, r'exit "\$rc"\s*$', "no path may re-raise the raw status after the verdict is set")
+        self.assertEqual(3, code.count('exit "$verdict"'))
+
     def test_delivery_goes_through_the_one_implementation(self):
         # R1a: oe-alert.sh is the single delivery path. A second curl to a webhook is the defect its own
         # header warns about, and Jenkinsfile.morning-autostart's private discord() is that defect.
