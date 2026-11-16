@@ -57,7 +57,8 @@ def watcher_keeps(lines: list[str]) -> list[str]:
     g, x = script_defaults()
     data = "\n".join(lines) + "\n"
     kept = subprocess.run(["grep", "-aE", g], input=data, capture_output=True, text=True).stdout
-    kept = subprocess.run(["grep", "-avE", x], input=kept, capture_output=True, text=True).stdout
+    if x:  # the script only applies the exclude when it is non-empty (`[ -n "$EXCLUDE_PATTERN" ]`); `grep -v ""` would drop everything
+        kept = subprocess.run(["grep", "-avE", x], input=kept, capture_output=True, text=True).stdout
     return kept.splitlines()
 
 
