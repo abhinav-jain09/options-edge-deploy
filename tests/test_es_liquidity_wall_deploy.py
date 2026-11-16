@@ -11,7 +11,7 @@
 
 Covers: the base and the dev overlay (source render, committed slice) at replicas 1 / flag "true" / the declared env / health port 8080 / the emptyDir state mount, the ten topics' declared shapes
 in topics.env (reset classes, the events byte cap, the four pure-compact topics at -1/-1), the topic barrier (scripts/kafka/ensure-es-liquidity-wall-topics.sh) against the stateful stand-in
-tests/fake_kafka_cli.py, the fixed-id schema map (3401-3412: the dashboard has version 1 under 3403 and version 2 under 3408, the snapshot version 1 under 3406 and version 2 under 3412; shared with no other map), the schema-manifest entries (family block, hashes equal to the snapshots, the depth consumer binding),
+tests/fake_kafka_cli.py, the fixed-id schema map (3401-3413: the dashboard has version 1 under 3403 and version 2 under 3408, the snapshot version 1 under 3406 and version 2 under 3412, the targets version 1 under 3411 and version 2 under 3413; shared with no other map), the schema-manifest entries (family block, hashes equal to the snapshots, the depth consumer binding),
 the registration of the service everywhere a dev-only service must be, and the absence of any production wiring."""
 from __future__ import annotations
 
@@ -42,7 +42,8 @@ SHAPES = {CLOSURES: ("delete", SEVEN_DAYS, None), BUCKETS: ("delete", ONE_DAY, N
           OUTCOMES: ("delete", THIRTY_DAYS, CAP), SCOREBOARD: ("compact", "-1", "-1"), TARGETS: ("compact", "-1", "-1")}
 NS = "com.optionsedge.contracts.liquiditywall"
 IDS = {"LiquidityWallClosure": 3401, "LiquidityWallBucket": 3402, "LiquidityWallDashboard": 3408, "LiquidityWallEvent": 3404, "LiquidityWallState": 3405,
-       "LiquidityWallSnapshot": 3412, "LiquidityWallVoice": 3407, "LiquidityWallOutcome": 3409, "LiquidityWallScoreboard": 3410, "LiquidityWallTargets": 3411}
+       "LiquidityWallSnapshot": 3412, "LiquidityWallVoice": 3407, "LiquidityWallOutcome": 3409, "LiquidityWallScoreboard": 3410, "LiquidityWallTargets": 3413}
+TARGETS_V1_ID, TARGETS_V2_ID = 3411, 3413
 SNAPSHOT_V1_ID, SNAPSHOT_V2_ID = 3406, 3412
 TOPIC_OF = dict(zip(IDS, TOPICS))
 DASHBOARD_V1_ID, DASHBOARD_V2_ID = 3403, 3408
@@ -330,18 +331,21 @@ class SchemaMapAndManifest(unittest.TestCase):
 
     def test_the_map_is_the_ten_records_and_ids_with_the_dashboard_and_the_snapshot_in_two_versions(self):
         rows = self.rows()
-        two = ("LiquidityWallDashboard", "LiquidityWallSnapshot")
+        two = ("LiquidityWallDashboard", "LiquidityWallSnapshot", "LiquidityWallTargets")
         # version 1 rows (the frozen archival files for 3403 and 3406), then the version-2 rows after all of them (the line-health.map format)
         self.assertEqual([r for r in rows if len(r) == 3], [(f"{NS}.{n}", str(i), f"{n}.avsc") for n, i in IDS.items() if n not in two])
         self.assertEqual([r for r in rows if len(r) == 4],
                          [(f"{NS}.LiquidityWallDashboard", "3403", "v1/LiquidityWallDashboard.avsc", "1"), (f"{NS}.LiquidityWallSnapshot", "3406", "v1/LiquidityWallSnapshot.avsc", "1"),
-                          (f"{NS}.LiquidityWallDashboard", "3408", "LiquidityWallDashboard.avsc", "2"), (f"{NS}.LiquidityWallSnapshot", "3412", "LiquidityWallSnapshot.avsc", "2")])
+                          (f"{NS}.LiquidityWallTargets", "3411", "v1/LiquidityWallTargets.avsc", "1"),
+                          (f"{NS}.LiquidityWallDashboard", "3408", "LiquidityWallDashboard.avsc", "2"), (f"{NS}.LiquidityWallSnapshot", "3412", "LiquidityWallSnapshot.avsc", "2"),
+                          (f"{NS}.LiquidityWallTargets", "3413", "LiquidityWallTargets.avsc", "2")])
         last_v1 = max(i for i, r in enumerate(rows) if len(r) == 3 or r[3] == "1")
         self.assertTrue(all(len(r) == 4 and r[3] == "2" for r in rows[last_v1 + 1:]), "the version-2 rows follow every version-1 row")
         text = self.MAP.read_text()
         self.assertIn("Ids 3401-3408 are the ES liquidity wall block", text)
         self.assertIn("REGISTER 3408 BEFORE the wall service image", text)
         self.assertIn("REGISTER 3409-3412 BEFORE the wall service image of contracts 0.95.0", text)
+        self.assertIn("REGISTER 3413 BEFORE the wall service image of contracts 0.101.1", text)
         self.assertIn("LiquidityWallDashboard (3408; 3403 archival version 1)", read("scripts/kafka/topics.env"))
 
     def test_no_id_is_shared_with_any_other_map(self):
@@ -355,20 +359,22 @@ class SchemaMapAndManifest(unittest.TestCase):
 
     def test_the_manifest_carries_the_family_block_the_ten_dev_entries_and_the_depth_consumer_binding(self):
         m = json.loads(read("schema-manifest/manifest.json"))
-        self.assertEqual(m["familyBlocks"]["liquiditywall"], [[3401, 3412]])
+        self.assertEqual(m["familyBlocks"]["liquiditywall"], [[3401, 3413]])
         for fam, ranges in m["familyBlocks"].items():
             if fam != "liquiditywall":
                 for lo, hi in ranges:
-                    self.assertTrue(hi < 3401 or lo > 3412, f"{fam} overlaps the liquiditywall block")
+                    self.assertTrue(hi < 3401 or lo > 3413, f"{fam} overlaps the liquiditywall block")
         by_subject = {e["subject"]: e for e in m["entries"] if e.get("kind") == "MIRRORED" and e.get("version", 1) == 1}
         dash_v1 = by_subject[f"{NS}.LiquidityWallDashboard"]
         dash_v2 = next(e for e in m["entries"] if e.get("id") == DASHBOARD_V2_ID)
         snap_v2 = next(e for e in m["entries"] if e.get("id") == SNAPSHOT_V2_ID)
         snap_v1 = by_subject[f"{NS}.LiquidityWallSnapshot"]
+        tgt_v2 = next(e for e in m["entries"] if e.get("id") == TARGETS_V2_ID)
+        tgt_v1 = by_subject[f"{NS}.LiquidityWallTargets"]
         gateway = [{"service": "feed-gateway", "accepts": [DASHBOARD_V1_ID, DASHBOARD_V2_ID], "environments": ["dev"]}]
         for name, sid in IDS.items():
-            e = by_subject[f"{NS}.{name}"] if name not in ("LiquidityWallDashboard", "LiquidityWallSnapshot") else (dash_v2 if name == "LiquidityWallDashboard" else snap_v2)
-            version_one = name not in ("LiquidityWallDashboard", "LiquidityWallSnapshot")
+            e = by_subject[f"{NS}.{name}"] if name not in ("LiquidityWallDashboard", "LiquidityWallSnapshot", "LiquidityWallTargets") else {"LiquidityWallDashboard": dash_v2, "LiquidityWallSnapshot": snap_v2, "LiquidityWallTargets": tgt_v2}[name]
+            version_one = name not in ("LiquidityWallDashboard", "LiquidityWallSnapshot", "LiquidityWallTargets")
             self.assertEqual((e["version"], e["id"], e["family"], e["environments"]), (1 if version_one else 2, sid, "liquiditywall", ["dev"]), name)
             self.assertEqual(e["source"], {"kind": "FILE", "repo": "contracts", "path": f"schemas-registry/liquiditywall/{name}.avsc"}, name)
             self.assertEqual(e["topics"], [{"name": TOPIC_OF[name], "kind": "data"}], name)
@@ -380,7 +386,7 @@ class SchemaMapAndManifest(unittest.TestCase):
             if name == "LiquidityWallScoreboard":
                 self.assertEqual(e["consumers"], [{"service": "feed-gateway", "accepts": [3410], "environments": ["dev"]}], name)
             if name == "LiquidityWallTargets":
-                self.assertEqual(e["consumers"], [{"service": "feed-gateway", "accepts": [3411], "environments": ["dev"]}], name)
+                self.assertEqual(e["consumers"], [{"service": "feed-gateway", "accepts": [3411, 3413], "environments": ["dev"]}], name)
             if name == "LiquidityWallOutcome":
                 self.assertEqual(e["consumers"], [], name)
             self.assertNotIn("pending", e, name)
@@ -396,6 +402,12 @@ class SchemaMapAndManifest(unittest.TestCase):
         self.assertEqual((dash_v1["producers"], dash_v1["consumers"]), ([], gateway))
         self.assertIn("superseded by version 2 id 3408", dash_v1["retainedReason"])
         self.assertEqual(dash_v2["schemaFile"], f"{NS}.LiquidityWallDashboard/v2.avsc")
+        # the targets: version 1 (3411) is archival and frozen, version 2 (3413) is what the service writes; the gateway accepts both
+        self.assertEqual((tgt_v1["version"], tgt_v1["id"], tgt_v1["producers"]), (1, TARGETS_V1_ID, []))
+        self.assertEqual(tgt_v1["source"]["path"], "schemas-registry/liquiditywall/v1/LiquidityWallTargets.avsc")
+        self.assertEqual(tgt_v1["schemaHash"], "82de1712fec7e788745b48c7e0d4e553055f2a329f164b67dd6535fdc42b6b97", "a registered id never changes content")
+        self.assertIn("superseded by version 2 id 3413", tgt_v1["retainedReason"])
+        self.assertEqual((tgt_v2["version"], tgt_v2["schemaFile"]), (2, f"{NS}.LiquidityWallTargets/v2.avsc"))
         # the snapshot: version 1 (3406) is archival and frozen, version 2 (3412) adds only the optional outcomeState
         self.assertEqual((snap_v1["version"], snap_v1["id"], snap_v1["producers"]), (1, SNAPSHOT_V1_ID, []))
         self.assertEqual(snap_v1["source"]["path"], "schemas-registry/liquiditywall/v1/LiquidityWallSnapshot.avsc")

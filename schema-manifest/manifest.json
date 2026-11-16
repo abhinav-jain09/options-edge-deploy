@@ -335,7 +335,7 @@
     "liquiditywall": [
       [
         3401,
-        3412
+        3413
       ]
     ],
     "marketstructure": [
@@ -5733,6 +5733,44 @@
       "source": {
         "kind": "FILE",
         "repo": "contracts",
+        "path": "schemas-registry/liquiditywall/v1/LiquidityWallTargets.avsc"
+      },
+      "topics": [
+        {
+          "name": "futures.liquidity-wall.targets",
+          "kind": "data"
+        }
+      ],
+      "producers": [],
+      "consumers": [
+        {
+          "service": "feed-gateway",
+          "accepts": [
+            3411,
+            3413
+          ],
+          "environments": [
+            "dev"
+          ]
+        }
+      ],
+      "retained": true,
+      "retainedReason": "curated, not baseline: ARCHIVAL version 1 of the LiquidityWallTargets subject (contracts 0.95.0 to 0.100.0), registered under id 3411 so a registry import stays reproducible; superseded by version 2 id 3413 (contracts 0.101.1: more target fields). A registered id never changes content. Nothing writes it any more; feed-gateway accepts both ids. Dev only; nothing is registered on production or es4."
+    },
+    {
+      "kind": "MIRRORED",
+      "subject": "com.optionsedge.contracts.liquiditywall.LiquidityWallTargets",
+      "version": 2,
+      "id": 3413,
+      "family": "liquiditywall",
+      "schemaFile": "com.optionsedge.contracts.liquiditywall.LiquidityWallTargets/v2.avsc",
+      "schemaHash": "af55cfddb95f24a686be3f783a2322dbd8186c73fa3086e86879642c34bddcb5",
+      "environments": [
+        "dev"
+      ],
+      "source": {
+        "kind": "FILE",
+        "repo": "contracts",
         "path": "schemas-registry/liquiditywall/LiquidityWallTargets.avsc"
       },
       "topics": [
@@ -5753,7 +5791,8 @@
         {
           "service": "feed-gateway",
           "accepts": [
-            3411
+            3411,
+            3413
           ],
           "environments": [
             "dev"
@@ -5761,7 +5800,7 @@
         }
       ],
       "retained": true,
-      "retainedReason": "curated, not baseline: the displayed liquidity targets once per closed bucket under the key CME|contract; feed-gateway relays it to the pages as the es-liquidity-targets event. A NEW subject on a new topic, so no consumer of the dashboard rolls. Written by es-liquidity-wall-service itself under RecordNameStrategy with auto.register.schemas=false, so the id must be in the registry BEFORE the service image that writes it starts; schema-sync registers it from this entry on a roll of es-liquidity-wall. Contracts 0.95.0, liq-AA liquidity targets (options-edge-documents design/es-liquidity/liq-AA-liquidity-targets-design.md). Dev only; nothing is registered on production or es4."
+      "retainedReason": "curated, not baseline: VERSION 2 of the LiquidityWallTargets subject under the new fixed id 3413 (contracts 0.101.1, liq-AA): the displayed liquidity targets once per closed bucket under the key CME|contract, with the later target fields (speed, rank, blinking, change chip, growing, book state). feed-gateway relays it as the es-liquidity-targets event and accepts 3411 and 3413. Written by es-liquidity-wall-service itself under RecordNameStrategy with auto.register.schemas=false, so the id must be in the registry BEFORE the service image that writes it starts; schema-sync registers it from this entry on a roll of es-liquidity-wall. Dev only; nothing is registered on production or es4."
     },
     {
       "kind": "MIRRORED",
