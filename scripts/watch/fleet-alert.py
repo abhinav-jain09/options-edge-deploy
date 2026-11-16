@@ -20,8 +20,29 @@ THE CONTRACT, each clause a thing that would otherwise go wrong:
     run is a broken check whatever its thresholds, and silence is indistinguishable from health.
   * observation-only suppresses FINDINGS only (the partition rules, until their thresholds are calibrated
     against market-hours traffic).
+
+PAGING DISCIPLINE (one page per INCIDENT, not per run). A check runs every 3-15 minutes; a finding that stays
+true must not become a message every time. An incident is one offender key (class + subject, with the pod's
+ReplicaSet/pod hash and every number removed so a restart count that ticks does not make a new incident),
+kept per (environment, check) in --state-dir/alerts-<env>-<check>.json:
+  * first sight            -> ONE page ("new").
+  * still open             -> a reminder no sooner than REMIND_MIN (30) minutes after the previous message.
+  * open >= ESCALATE_MIN   -> ONE escalation page (120 min after it opened); after it, nothing but a DAILY
+                              summary (every SUMMARY_MIN = 24 h) for as long as it stays open.
+  * absent for GRACE_MIN   -> ONE recovery message ("resolved, open for ..."). GRACE_MIN (30) is the flap
+                              guard: a crash-looping pod is "clean" for a run or two between restarts and that
+                              must not close and reopen the incident.
+  * exit 2 ("could not check") is an incident of its own (key `check-failed`) with the same rules, and a run
+    that could not check leaves every OTHER incident exactly as it was: not seeing is not recovering.
+  * observation-only findings neither page nor touch the state.
+  * an unreadable or unwritable state never silences anything: every finding is paged as new and the message
+    says that de-duplication is off.
 """
 import argparse
+import hashlib
+import datetime as dt
+import json
+import os
 import re
 import sys
 
@@ -42,6 +63,10 @@ MAX_OFFENDERS = 5
 HEADER_CHARS = 300
 LINE_CHARS = 200
 CONTENT_UNITS = 1900          # UTF-16 code units, the unit Discord counts
+REMIND_MIN = 30               # a reminder is never sooner than this after the previous message
+ESCALATE_MIN = 120            # an incident open this long is escalated ONCE
+SUMMARY_MIN = 24 * 60         # after the escalation: one summary a day
+GRACE_MIN = 30                # absent this long = recovered (flap guard)
 LINE = re.compile(r"^(?P<cls>[A-Z_]+) (?P<rest>.+)$")
 
 ap = argparse.ArgumentParser()
@@ -51,6 +76,8 @@ ap.add_argument("--rc", type=int, required=True)
 ap.add_argument("--input", required=True, help="the check's combined output")
 ap.add_argument("--mode", choices=("paging", "observation-only"), default="paging")
 ap.add_argument("--build-url", default=None)
+ap.add_argument("--state-dir", required=True, help="where the open incidents of this (env, check) are kept")
+ap.add_argument("--now", default=None, help="ISO instant, for the tests")
 a = ap.parse_args()
 
 
@@ -78,6 +105,80 @@ def clip_units(s, n):
     return "".join(out) + "…"
 
 
+def parse_ts(x):
+    t = dt.datetime.fromisoformat(x.replace("Z", "+00:00"))
+    if t.tzinfo is None:
+        raise ValueError("timestamp %r has no UTC offset" % x)       # a naive time cannot be subtracted from NOW
+    return t
+
+
+NOW = parse_ts(a.now) if a.now else dt.datetime.now(dt.timezone.utc)
+STATE_FILE = os.path.join(a.state_dir, "alerts-%s-%s.json" % (re.sub(r"[^A-Za-z0-9_.-]", "_", a.env),
+                                                              re.sub(r"[^A-Za-z0-9_.-]", "_", a.check)))
+POD_HASH = re.compile(r"-[a-z0-9]{8,10}-[a-z0-9]{5}$")
+
+
+def incident_key(cls, rest):
+    """cls + subject + the finding text with its numbers removed: the pod hash of a replacement pod and a restart
+    count that ticks up must not turn one incident into many."""
+    subject = POD_HASH.sub("", rest.split(None, 1)[0].rstrip(":"))
+    tail = re.sub(r"\d+", "#", rest.split(None, 1)[1] if " " in rest else "")
+    full = ("%s %s %s" % (cls, subject, tail)).strip()
+    # readable prefix + a hash of the WHOLE identity: two long names that differ only past the prefix stay two incidents
+    return full[:100] + "#" + hashlib.sha1(full.encode("utf-8")).hexdigest()[:12]
+
+
+def dur(minutes):
+    m = int(minutes)
+    return "%dh %02dm" % (m // 60, m % 60) if m >= 60 else "%dm" % m
+
+
+def mins(since):
+    return (NOW - parse_ts(since)).total_seconds() / 60.0
+
+
+def load_state():
+    """Returns (incidents, problem). A problem NEVER silences: the caller pages everything as new."""
+    try:
+        if not os.path.exists(STATE_FILE):
+            return {}, None
+        data = json.load(open(STATE_FILE))
+        inc = data["incidents"]
+        if not isinstance(inc, dict):
+            raise ValueError("`incidents` is not an object")
+        for k, v in inc.items():
+            if not isinstance(v, dict):
+                raise ValueError("incident %r is not an object" % k)
+            for f in ("cls", "rest", "rank", "opened", "lastSeen", "lastNotified", "escalated", "lastSummary"):
+                if f not in v:
+                    raise ValueError("incident %r has no %s" % (k, f))
+            if not (isinstance(v["cls"], str) and isinstance(v["rest"], str) and isinstance(v["escalated"], bool)
+                    and isinstance(v["rank"], int) and not isinstance(v["rank"], bool)):
+                raise ValueError("incident %r has a field of the wrong type" % k)
+            parse_ts(v["opened"]), parse_ts(v["lastSeen"]), parse_ts(v["lastNotified"]), parse_ts(v["lastSummary"])
+        return inc, None
+    except Exception as e:  # noqa: BLE001
+        return {}, "cannot read the alert state %s: %s" % (STATE_FILE, e)
+
+
+def save_state(inc):
+    try:
+        os.makedirs(a.state_dir, exist_ok=True)
+        tmp = STATE_FILE + ".tmp.%d" % os.getpid()
+        with open(tmp, "w") as fh:
+            json.dump({"incidents": inc}, fh, indent=1, sort_keys=True)
+        os.replace(tmp, STATE_FILE)        # atomic: a half-written state would read as "unreadable" next run
+        return None
+    except Exception as e:  # noqa: BLE001
+        return "cannot write the alert state %s: %s" % (STATE_FILE, e)
+
+
+def new_incident(cls, rank, rest):
+    t = NOW.isoformat()
+    return {"cls": cls, "rest": rest, "rank": rank, "opened": t, "lastSeen": t, "lastNotified": t,
+            "escalated": False, "lastSummary": t}
+
+
 try:
     raw = open(a.input, encoding="utf-8", errors="replace").read()
 except OSError as e:
@@ -85,54 +186,125 @@ except OSError as e:
     print("⚠️ **%s** / %s — could not read the check's own output: %s" % (a.env, a.check, e))
     sys.exit(0)
 
-if a.rc == 2:
+# --- what this run observed -------------------------------------------------------------------------------
+observed = {}            # key -> (cls, rank, rest)
+could_not_check = a.rc == 2
+if could_not_check:
     detail = ""
     for line in raw.splitlines():
         if line.startswith("ERROR: "):
             detail = line[len("ERROR: "):]
             break
-    msg = "⚠️ **%s** / `%s` — **could not check**%s" % (
-        a.env, a.check, (": " + detail) if detail else "")
-    if a.build_url:
-        msg += "\n<%s>" % a.build_url
-    print(clip_units(clip_chars(msg, HEADER_CHARS + LINE_CHARS), CONTENT_UNITS))
-    sys.exit(0)
+    observed["check-failed"] = ("CHECK_FAILED", 5, detail)
+elif a.rc != 0:
+    for line in raw.splitlines():
+        m = LINE.match(line.strip())
+        if not m or m.group("cls") not in RANK:
+            continue
+        cls, rest = m.group("cls"), m.group("rest")
+        observed.setdefault(incident_key(cls, rest), (cls, RANK[cls][0], rest))
+    if not observed:
+        # A non-zero exit with no recognisable finding is itself worth saying: the check disagrees with the
+        # composer, and reporting nothing would turn a red build into silence.
+        observed["unrecognised"] = ("UNRECOGNISED", 5, "exit %d but no recognisable finding line; read the build" % a.rc)
 
-if a.rc == 0:
-    sys.exit(0)                      # nothing to say, and silence is correct here
+if a.mode == "observation-only" and not could_not_check:
+    sys.exit(0)                      # findings are silent here, and do not touch the state; exit 2 is not
 
-offenders = []
-for line in raw.splitlines():
-    m = LINE.match(line.strip())
-    if not m:
+# --- state transitions --------------------------------------------------------------------------------------
+state, problem = load_state()
+fresh, remind, escalate, summary, resolved = [], [], [], [], []
+for key, (cls, rank, rest) in observed.items():
+    inc = state.get(key)
+    if inc is None:
+        state[key] = new_incident(cls, rank, rest)
+        fresh.append(key)
         continue
-    cls = m.group("cls")
-    if cls not in RANK:
-        continue
-    offenders.append((RANK[cls][0], cls, m.group("rest")))
+    age = mins(inc["opened"])
+    # lastSeen never moves backward: a clock step or a stale manual run must not make a live incident look absent
+    seen = max(NOW, parse_ts(inc["lastSeen"]))
+    inc.update(lastSeen=seen.isoformat(), rest=rest, rank=rank, cls=cls)
+    if not inc["escalated"] and age >= ESCALATE_MIN:
+        inc.update(escalated=True, lastNotified=NOW.isoformat(), lastSummary=NOW.isoformat())
+        escalate.append(key)
+    elif not inc["escalated"]:
+        if mins(inc["lastNotified"]) >= REMIND_MIN:
+            inc["lastNotified"] = NOW.isoformat()
+            remind.append(key)
+    elif mins(inc["lastSummary"]) >= SUMMARY_MIN:
+        inc["lastSummary"] = NOW.isoformat()
+        summary.append(key)
+resolved_info = {}
+if not could_not_check:              # a run that could not look must not declare anything recovered
+    for key in [k for k in state if k not in observed]:
+        if mins(state[key]["lastSeen"]) >= GRACE_MIN:
+            resolved_info[key] = (state[key], mins(state[key]["opened"]))
+            resolved.append(key)
+            del state[key]
+if problem:
+    fresh = list(observed)            # dedup is off: page everything, and say so
+werr = save_state(state)
+if werr:
+    problem = (problem + "; " if problem else "") + werr
+    fresh = list(observed)
+    remind = escalate = summary = resolved = []     # what cannot be remembered is not announced (no repeat "resolved")
 
-if not offenders:
-    # A non-zero exit with no recognisable finding is itself worth saying: the check disagrees with the
-    # composer, and reporting nothing would turn a red build into silence.
-    msg = ("⚠️ **%s** / `%s` — exit %d but no recognisable finding line; read the build"
-           % (a.env, a.check, a.rc))
-    if a.build_url:
-        msg += "\n<%s>" % a.build_url
-    print(clip_units(msg, CONTENT_UNITS))
-    sys.exit(0)
+# --- composition ----------------------------------------------------------------------------------------
+def bullet(key, extra=""):
+    inc = state.get(key) or resolved_info[key][0]
+    return clip_chars("%s `%s` %s%s" % (RANK_EMOJI(inc["cls"]), inc["cls"], inc["rest"], extra), LINE_CHARS)
 
-if a.mode == "observation-only":
-    sys.exit(0)                      # findings are silent here; exit 2 above is not
 
-# rank descending, then name ascending - deterministic for a given fleet state
-offenders.sort(key=lambda o: (-o[0], o[2]))
-top_emoji = RANK[offenders[0][1]][1]
-header = "%s **%s** / `%s` — %d finding(s)" % (top_emoji, a.env, a.check, len(offenders))
-lines = [clip_chars("%s `%s` %s" % (RANK[cls][1], cls, rest), LINE_CHARS)
-         for _, cls, rest in offenders[:MAX_OFFENDERS]]
-parts = [clip_chars(header, HEADER_CHARS)] + lines
-if len(offenders) > MAX_OFFENDERS:
-    parts.append("… and %d more — see the build" % (len(offenders) - MAX_OFFENDERS))
+def RANK_EMOJI(cls):
+    return RANK[cls][1] if cls in RANK else "⚠️"
+
+
+def block(title_emoji, title, keys, extra=lambda k: ""):
+    keys = sorted(keys, key=lambda k: (-(state.get(k) or resolved_info[k][0])["rank"],
+                                       (state.get(k) or resolved_info[k][0])["rest"]))
+    head = clip_chars("%s **%s** / `%s` — %s" % (title_emoji, a.env, a.check, title % len(keys)), HEADER_CHARS)
+    out = [head] + [bullet(k, extra(k)) for k in keys[:MAX_OFFENDERS]]
+    if len(keys) > MAX_OFFENDERS:
+        out.append("… and %d more — see the build" % (len(keys) - MAX_OFFENDERS))
+    return "\n".join(out)
+
+
+def open_for(k):
+    return " — open %s" % dur(mins(state[k]["opened"]))
+
+
+blocks = []
+if fresh:
+    if could_not_check and fresh == ["check-failed"]:
+        d = observed["check-failed"][2]
+        blocks.append("⚠️ **%s** / `%s` — **could not check**%s" % (a.env, a.check, (": " + d) if d else ""))
+    elif fresh == ["unrecognised"]:
+        blocks.append("⚠️ **%s** / `%s` — %s" % (a.env, a.check, observed["unrecognised"][2]))
+    else:
+        offenders = sorted(((observed[k][1], observed[k][0], observed[k][2]) for k in fresh),
+                           key=lambda o: (-o[0], o[2]))
+        top = RANK[offenders[0][1]][1] if offenders[0][1] in RANK else "⚠️"
+        parts = [clip_chars("%s **%s** / `%s` — %d finding(s)" % (top, a.env, a.check, len(offenders)), HEADER_CHARS)]
+        parts += [clip_chars("%s `%s` %s" % (RANK_EMOJI(c), c, r), LINE_CHARS) for _, c, r in offenders[:MAX_OFFENDERS]]
+        if len(offenders) > MAX_OFFENDERS:
+            parts.append("… and %d more — see the build" % (len(offenders) - MAX_OFFENDERS))
+        blocks.append("\n".join(parts))
+if escalate:
+    blocks.append(block("🚨", "ESCALATED: %d incident(s) open for over " + dur(ESCALATE_MIN)
+                        + "; no more reminders, one summary a day", escalate, open_for))
+if remind:
+    blocks.append(block("🔁", "still open: %d incident(s)", remind, open_for))
+if summary:
+    blocks.append(block("📋", "daily summary: %d incident(s) still open", summary, open_for))
+if resolved:
+    blocks.append(block("✅", "resolved: %d incident(s)", resolved,
+                        lambda k: " — was open %s" % dur(resolved_info[k][1])))
+if problem:
+    blocks.append("⚠️ **%s** / `%s` — alert de-duplication is OFF this run: %s" % (a.env, a.check, clip_chars(problem, 200)))
+
+if not blocks:
+    sys.exit(0)                      # an incident already announced: silence is the point
+msg = "\n\n".join(blocks)
 if a.build_url:
-    parts.append("<%s>" % a.build_url)
-print(clip_units("\n".join(parts), CONTENT_UNITS))
+    msg += "\n<%s>" % a.build_url
+print(clip_units(msg, CONTENT_UNITS))

@@ -14,12 +14,17 @@ def units(s):
     return len(s.encode("utf-16-le")) // 2
 
 
-def run(text, rc, env="dev", check="crash-loop", mode=None, build=None):
+def run(text, rc, env="dev", check="crash-loop", mode=None, build=None, state=None, now=None):
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as fh:
         fh.write(text)
         path = fh.name
     try:
-        cmd = [sys.executable, CHECK, "--env", env, "--check", check, "--rc", str(rc), "--input", path]
+        # every case starts from an EMPTY state unless it is a lifecycle case that passes its own directory
+        state = state or tempfile.mkdtemp(prefix="oe-alert-state-")
+        cmd = [sys.executable, CHECK, "--env", env, "--check", check, "--rc", str(rc), "--input", path,
+               "--state-dir", state]
+        if now:
+            cmd += ["--now", now]
         if mode:
             cmd += ["--mode", mode]
         if build:
@@ -146,12 +151,146 @@ case("the build url is included when supplied", FIND, 1, build="https://j/x/1",
 
 # --- an unreadable input is not silence either
 code, out = subprocess.run([sys.executable, CHECK, "--env", "dev", "--check", "c", "--rc", "1",
-                            "--input", "/nonexistent/x.txt"], capture_output=True, text=True).returncode, ""
+                            "--input", "/nonexistent/x.txt", "--state-dir", tempfile.mkdtemp()], capture_output=True, text=True).returncode, ""
 if code != 0:
     fails.append("an unreadable input exits 0 with a message")
     print("  FAIL %-62s exit %d" % ("an unreadable input exits 0 with a message", code))
 else:
     print("  ok   %-62s" % "an unreadable input exits 0 with a message")
+
+# --- PAGING DISCIPLINE: one page per incident, reminders >= 30 min, one escalation at 2 h, then a daily summary
+import datetime as _dt
+T0 = _dt.datetime(2026, 11, 16, 14, 45, tzinfo=_dt.timezone.utc)
+
+
+def at(minutes):
+    return (T0 + _dt.timedelta(minutes=minutes)).isoformat()
+
+
+def step(name, st, minute, text, rc, *, expect=None, forbid=None, empty=False, check="crash-loop", mode=None):
+    code, out = run(text, rc, check=check, state=st, now=at(minute), mode=mode)
+    why = []
+    if code != 0:
+        why.append("composer exited %d" % code)
+    if empty and out.strip():
+        why.append("expected NO message, got %r" % out[:140])
+    if not empty and not out.strip():
+        why.append("expected a message, got nothing")
+    for e in ([expect] if isinstance(expect, str) else (expect or [])):
+        if e not in out:
+            why.append("missing %r" % e)
+    if forbid and forbid in out:
+        why.append("contains %r" % forbid)
+    if why:
+        fails.append(name)
+        print("  FAIL %-62s %s" % (name, "; ".join(why)))
+    else:
+        print("  ok   %-62s" % name)
+    return out
+
+
+POD1 = "RESTARTS mirror-prod-846fcd88f9-jn2k5: container mirror restarted %d times, last %d min ago\n"
+st = tempfile.mkdtemp(prefix="oe-life-")
+step("life: first sight pages once", st, 0, POD1 % (949, 1), 1, expect="RESTARTS")
+step("life: the same finding 15 min later is SILENT", st, 15, POD1 % (950, 2), 1, empty=True)
+step("life: a ticking restart count is not a new incident", st, 20, POD1 % (958, 0), 1, empty=True)
+step("life: a REPLACEMENT pod hash is the same incident", st, 25,
+     "RESTARTS mirror-prod-7b9c4d5f6c-abcde: container mirror restarted 3 times, last 1 min ago\n", 1, empty=True)
+step("life: a reminder comes no sooner than 30 min", st, 29, POD1 % (960, 1), 1, empty=True)
+step("life: a reminder comes at 30 min", st, 30, POD1 % (961, 1), 1, expect=["still open", "open 30m"])
+step("life: and not again 15 min later", st, 45, POD1 % (962, 1), 1, empty=True)
+step("life: second reminder at 60 min", st, 60, POD1 % (963, 1), 1, expect="still open")
+step("life: third reminder at 90 min", st, 90, POD1 % (964, 1), 1, expect="still open")
+step("life: escalated ONCE at 120 min", st, 120, POD1 % (965, 1), 1, expect=["ESCALATED", "open 2h 00m"])
+step("life: silent after the escalation (135 min)", st, 135, POD1 % (966, 1), 1, empty=True)
+step("life: silent at 4 h", st, 240, POD1 % (967, 1), 1, empty=True)
+step("life: silent at 23 h", st, 23 * 60, POD1 % (968, 1), 1, empty=True)
+step("life: one DAILY summary 24 h after the escalation", st, 120 + 24 * 60, POD1 % (969, 1), 1,
+     expect="daily summary")
+step("life: and silent again right after", st, 120 + 24 * 60 + 15, POD1 % (970, 1), 1, empty=True)
+step("life: absent for 15 min is NOT yet recovered (flap guard)", st, 120 + 24 * 60 + 30,
+     "crash-loop: clean\n", 0, empty=True)
+step("life: a flap back within the grace is the SAME incident", st, 120 + 24 * 60 + 40, POD1 % (971, 1), 1, empty=True)
+step("life: clean 30 min after the last sighting = ONE recovery", st, 120 + 24 * 60 + 70,
+     "crash-loop: clean\n", 0, expect=["resolved", "was open"])
+step("life: and nothing more once recovered", st, 120 + 24 * 60 + 85, "crash-loop: clean\n", 0, empty=True)
+step("life: a recurrence after recovery is a NEW incident", st, 120 + 24 * 60 + 100, POD1 % (972, 1), 1,
+     expect="1 finding(s)")
+
+# a run that could not look leaves other incidents alone and is an incident of its own
+st = tempfile.mkdtemp(prefix="oe-life-")
+step("blind: first finding", st, 0, POD1 % (3, 1), 1, expect="RESTARTS")
+step("blind: could-not-check is paged once", st, 15, "ERROR: kubectl down\n", 2, expect="could not check")
+step("blind: and not again", st, 30, "ERROR: kubectl down\n", 2, empty=True)
+step("blind: it does NOT recover the finding it could not see", st, 60, "ERROR: kubectl down\n", 2,
+     expect="still open", forbid="resolved")
+step("blind: when the check works again it recovers the check-failed incident only", st, 120,
+     POD1 % (4, 1), 1, expect="resolved", forbid="1 finding(s)")
+
+# independent incidents are independent; a new one is paged even while another is quiet
+st = tempfile.mkdtemp(prefix="oe-life-")
+step("two: first offender pages", st, 0, POD1 % (3, 1), 1, expect="RESTARTS")
+two = POD1 % (4, 1) + "CRASHLOOP other-pod: container x is CrashLoopBackOff\n"
+out = step("two: a SECOND offender pages alone", st, 15, two, 1, expect=["CRASHLOOP", "1 finding(s)"], forbid="mirror-prod")
+
+# observation-only never touches the state
+st = tempfile.mkdtemp(prefix="oe-life-")
+step("obs: a finding is silent", st, 0, "SKEW t [svc]: busiest took 100%\n", 1, empty=True, mode="observation-only",
+     check="partition-balance")
+step("obs: and leaves no incident to recover", st, 90, "partition-balance: clean\n", 0, empty=True,
+     check="partition-balance")
+
+# a state the composer cannot read never silences
+st = tempfile.mkdtemp(prefix="oe-life-")
+open(os.path.join(st, "alerts-dev-crash-loop.json"), "w").write("{not json")
+step("broken state: pages and says de-duplication is OFF", st, 0, POD1 % (3, 1), 1,
+     expect=["RESTARTS", "de-duplication is OFF"])
+
+# Codex round 1: malformed state, key collisions, unwritable state, a clock that steps back
+import json as _json
+st = tempfile.mkdtemp(prefix="oe-life-")
+step("naive: first finding", st, 0, POD1 % (3, 1), 1, expect="RESTARTS")
+f = os.path.join(st, "alerts-dev-crash-loop.json")
+d = _json.load(open(f))
+for v in d["incidents"].values():
+    for k in ("opened", "lastSeen", "lastNotified", "lastSummary"):
+        v[k] = v[k][:19]                                  # strip the UTC offset
+_json.dump(d, open(f, "w"))
+step("naive: a state with offset-less times pages loudly instead of crashing silently", st, 5, POD1 % (4, 1), 1,
+     expect=["RESTARTS", "de-duplication is OFF"])
+st = tempfile.mkdtemp(prefix="oe-life-")
+step("types: first finding", st, 0, POD1 % (3, 1), 1, expect="RESTARTS")
+d = _json.load(open(f.replace(os.path.dirname(f), st)))
+for v in d["incidents"].values():
+    v["escalated"] = "no"
+_json.dump(d, open(os.path.join(st, "alerts-dev-crash-loop.json"), "w"))
+step("types: a wrong-typed field pages loudly", st, 5, POD1 % (4, 1), 1, expect="de-duplication is OFF")
+
+st = tempfile.mkdtemp(prefix="oe-life-")
+longp = "x" * 150
+two = "NO_CONSUMER %s-a: no consumer\nNO_CONSUMER %s-b: no consumer\n" % (longp, longp)
+step("keys: two long names differing only at the end are TWO incidents", st, 0, two, 1, expect="2 finding(s)")
+step("keys: ... and each one recovers on its own", st, 15, "NO_CONSUMER %s-a: no consumer\n" % longp, 1, empty=True)
+step("keys: ... the vanished one is announced as resolved", st, 50, "NO_CONSUMER %s-a: no consumer\n" % longp, 1,
+     expect="resolved: 1 incident(s)")
+
+st = tempfile.mkdtemp(prefix="oe-life-")
+step("clock: first finding", st, 0, POD1 % (3, 1), 1, expect="RESTARTS")
+step("clock: seen again at t+60", st, 60, POD1 % (3, 1), 1, expect="still open")
+step("clock: a stale run stamped t+25 sees it", st, 25, POD1 % (3, 1), 1, empty=True)
+step("clock: so a clean run at t+61 does NOT call it recovered", st, 61, "crash-loop: clean\n", 0, empty=True)
+
+st = tempfile.mkdtemp(prefix="oe-life-")
+step("rw: first finding", st, 0, POD1 % (3, 1), 1, expect="RESTARTS")
+os.chmod(st, 0o500)
+try:
+    out1 = step("rw: unwritable state, clean after 40 min: no 'resolved' that cannot be remembered", st, 40,
+                "crash-loop: clean\n", 0, expect="de-duplication is OFF", forbid="resolved")
+finally:
+    os.chmod(st, 0o700)
+step("rw: once writable again the recovery is announced exactly once", st, 55, "crash-loop: clean\n", 0,
+     expect="resolved")
+step("rw: and only once", st, 70, "crash-loop: clean\n", 0, empty=True)
 
 print("\n%d case(s) FAILED" % len(fails) if fails else "\nall cases ok")
 sys.exit(1 if fails else 0)
