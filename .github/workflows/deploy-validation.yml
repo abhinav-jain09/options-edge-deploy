@@ -234,6 +234,12 @@ jobs:
       - name: dev web hunt topics follow the dev hunt instance (both web overlays)
         run: python3 -m unittest -v tests.test_dev_web_hunt_topics
 
+      # The platform error watch greps logs for `Exception`; a Kafka client's startup config dump has keys such as
+      # `processing.exception.handler`, so each Streams restart alerted as an error. Its default exclude drops only
+      # those key = value rows; real errors and stack traces must still alert.
+      - name: platform error watch ignores Kafka config-dump rows but keeps real errors
+        run: python3 -m unittest -v tests.test_platform_error_watch_config_dump
+
       # The dev proxy reads the first segment of /<page>/api/... as a page prefix and strips it,
       # which is right for pages that proxy under their own path and WRONG for the journal, whose
       # data path /journal/api/... is a real path on the web app. Stripping asked for
