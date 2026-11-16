@@ -246,5 +246,51 @@ open(os.path.join(st, "alerts-dev-crash-loop.json"), "w").write("{not json")
 step("broken state: pages and says de-duplication is OFF", st, 0, POD1 % (3, 1), 1,
      expect=["RESTARTS", "de-duplication is OFF"])
 
+# Codex round 1: malformed state, key collisions, unwritable state, a clock that steps back
+import json as _json
+st = tempfile.mkdtemp(prefix="oe-life-")
+step("naive: first finding", st, 0, POD1 % (3, 1), 1, expect="RESTARTS")
+f = os.path.join(st, "alerts-dev-crash-loop.json")
+d = _json.load(open(f))
+for v in d["incidents"].values():
+    for k in ("opened", "lastSeen", "lastNotified", "lastSummary"):
+        v[k] = v[k][:19]                                  # strip the UTC offset
+_json.dump(d, open(f, "w"))
+step("naive: a state with offset-less times pages loudly instead of crashing silently", st, 5, POD1 % (4, 1), 1,
+     expect=["RESTARTS", "de-duplication is OFF"])
+st = tempfile.mkdtemp(prefix="oe-life-")
+step("types: first finding", st, 0, POD1 % (3, 1), 1, expect="RESTARTS")
+d = _json.load(open(f.replace(os.path.dirname(f), st)))
+for v in d["incidents"].values():
+    v["escalated"] = "no"
+_json.dump(d, open(os.path.join(st, "alerts-dev-crash-loop.json"), "w"))
+step("types: a wrong-typed field pages loudly", st, 5, POD1 % (4, 1), 1, expect="de-duplication is OFF")
+
+st = tempfile.mkdtemp(prefix="oe-life-")
+longp = "x" * 150
+two = "NO_CONSUMER %s-a: no consumer\nNO_CONSUMER %s-b: no consumer\n" % (longp, longp)
+step("keys: two long names differing only at the end are TWO incidents", st, 0, two, 1, expect="2 finding(s)")
+step("keys: ... and each one recovers on its own", st, 15, "NO_CONSUMER %s-a: no consumer\n" % longp, 1, empty=True)
+step("keys: ... the vanished one is announced as resolved", st, 50, "NO_CONSUMER %s-a: no consumer\n" % longp, 1,
+     expect="resolved: 1 incident(s)")
+
+st = tempfile.mkdtemp(prefix="oe-life-")
+step("clock: first finding", st, 0, POD1 % (3, 1), 1, expect="RESTARTS")
+step("clock: seen again at t+60", st, 60, POD1 % (3, 1), 1, expect="still open")
+step("clock: a stale run stamped t+25 sees it", st, 25, POD1 % (3, 1), 1, empty=True)
+step("clock: so a clean run at t+61 does NOT call it recovered", st, 61, "crash-loop: clean\n", 0, empty=True)
+
+st = tempfile.mkdtemp(prefix="oe-life-")
+step("rw: first finding", st, 0, POD1 % (3, 1), 1, expect="RESTARTS")
+os.chmod(st, 0o500)
+try:
+    out1 = step("rw: unwritable state, clean after 40 min: no 'resolved' that cannot be remembered", st, 40,
+                "crash-loop: clean\n", 0, expect="de-duplication is OFF", forbid="resolved")
+finally:
+    os.chmod(st, 0o700)
+step("rw: once writable again the recovery is announced exactly once", st, 55, "crash-loop: clean\n", 0,
+     expect="resolved")
+step("rw: and only once", st, 70, "crash-loop: clean\n", 0, empty=True)
+
 print("\n%d case(s) FAILED" % len(fails) if fails else "\nall cases ok")
 sys.exit(1 if fails else 0)

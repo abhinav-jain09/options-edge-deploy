@@ -39,6 +39,7 @@ kept per (environment, check) in --state-dir/alerts-<env>-<check>.json:
     says that de-duplication is off.
 """
 import argparse
+import hashlib
 import datetime as dt
 import json
 import os
@@ -105,7 +106,10 @@ def clip_units(s, n):
 
 
 def parse_ts(x):
-    return dt.datetime.fromisoformat(x.replace("Z", "+00:00"))
+    t = dt.datetime.fromisoformat(x.replace("Z", "+00:00"))
+    if t.tzinfo is None:
+        raise ValueError("timestamp %r has no UTC offset" % x)       # a naive time cannot be subtracted from NOW
+    return t
 
 
 NOW = parse_ts(a.now) if a.now else dt.datetime.now(dt.timezone.utc)
@@ -119,7 +123,9 @@ def incident_key(cls, rest):
     count that ticks up must not turn one incident into many."""
     subject = POD_HASH.sub("", rest.split(None, 1)[0].rstrip(":"))
     tail = re.sub(r"\d+", "#", rest.split(None, 1)[1] if " " in rest else "")
-    return ("%s %s %s" % (cls, subject, tail)).strip()[:200]
+    full = ("%s %s %s" % (cls, subject, tail)).strip()
+    # readable prefix + a hash of the WHOLE identity: two long names that differ only past the prefix stay two incidents
+    return full[:100] + "#" + hashlib.sha1(full.encode("utf-8")).hexdigest()[:12]
 
 
 def dur(minutes):
@@ -141,9 +147,14 @@ def load_state():
         if not isinstance(inc, dict):
             raise ValueError("`incidents` is not an object")
         for k, v in inc.items():
+            if not isinstance(v, dict):
+                raise ValueError("incident %r is not an object" % k)
             for f in ("cls", "rest", "rank", "opened", "lastSeen", "lastNotified", "escalated", "lastSummary"):
                 if f not in v:
                     raise ValueError("incident %r has no %s" % (k, f))
+            if not (isinstance(v["cls"], str) and isinstance(v["rest"], str) and isinstance(v["escalated"], bool)
+                    and isinstance(v["rank"], int) and not isinstance(v["rank"], bool)):
+                raise ValueError("incident %r has a field of the wrong type" % k)
             parse_ts(v["opened"]), parse_ts(v["lastSeen"]), parse_ts(v["lastNotified"]), parse_ts(v["lastSummary"])
         return inc, None
     except Exception as e:  # noqa: BLE001
@@ -210,7 +221,9 @@ for key, (cls, rank, rest) in observed.items():
         fresh.append(key)
         continue
     age = mins(inc["opened"])
-    inc.update(lastSeen=NOW.isoformat(), rest=rest, rank=rank, cls=cls)
+    # lastSeen never moves backward: a clock step or a stale manual run must not make a live incident look absent
+    seen = max(NOW, parse_ts(inc["lastSeen"]))
+    inc.update(lastSeen=seen.isoformat(), rest=rest, rank=rank, cls=cls)
     if not inc["escalated"] and age >= ESCALATE_MIN:
         inc.update(escalated=True, lastNotified=NOW.isoformat(), lastSummary=NOW.isoformat())
         escalate.append(key)
@@ -234,7 +247,7 @@ werr = save_state(state)
 if werr:
     problem = (problem + "; " if problem else "") + werr
     fresh = list(observed)
-    remind = escalate = summary = []
+    remind = escalate = summary = resolved = []     # what cannot be remembered is not announced (no repeat "resolved")
 
 # --- composition ----------------------------------------------------------------------------------------
 def bullet(key, extra=""):
