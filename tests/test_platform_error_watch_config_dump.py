@@ -7,9 +7,11 @@
 """The platform error watch must not alert on a Kafka client's startup CONFIG DUMP.
 
 Every Kafka Streams / consumer / producer client prints its configuration at start, one indented `key = value`
-row per setting. Several KEY NAMES contain the word the watcher greps for (`processing.exception.handler`,
-`deserialization.exception.handler`...), so each restart of a Streams service was reported to Discord as new
-"error signatures" - five of them for es-liquidity-wall-service on 2026-11-16, none an error.
+row per setting. The exception-HANDLER rows (`processing.exception.handler = class ...LogAndFailProcessingExceptionHandler`)
+carry the capital-E word the watcher greps for in their class VALUE, so each restart of a Streams service was reported
+to Discord as new "error signatures" - five of them for es-liquidity-wall-service on 2026-11-16, none an error.
+The exclude is deliberately narrow (keys naming an exception handler), so a genuine indented diagnostic such as
+`message = java.net.ConnectException: ...` still alerts.
 
 The test takes the watcher's REAL default exclude pattern out of the script (the shell parameter expansion is
 parsed, not re-typed) and runs it through the same two greps the watcher runs, on lines taken from the real alert
@@ -39,6 +41,9 @@ STILL_ALERTS = [
     "Exception in thread \"main\" java.lang.RuntimeException: boom",
     "\tat app.Foo.bar(Foo.java:1) ~[na:na] Caused by: java.lang.IllegalStateException: inline",
     "FATAL: out of memory",
+    # indented key = value DIAGNOSTICS must survive: only exception-handler config keys are dropped
+    "    message = java.net.ConnectException: Connection refused",
+    "\tcause = java.lang.IllegalStateException: AppSession already registered",
     # an indented line that is NOT a key = value row must survive
     "    java.lang.IllegalStateException: indented message with no equals sign",
 ]
@@ -56,9 +61,13 @@ def watcher_keeps(lines: list[str]) -> list[str]:
     """The watcher's own two greps, in order: GREP_PATTERN keeps, then EXCLUDE_PATTERN drops."""
     g, x = script_defaults()
     data = "\n".join(lines) + "\n"
-    kept = subprocess.run(["grep", "-aE", g], input=data, capture_output=True, text=True).stdout
+    r = subprocess.run(["grep", "-aE", g], input=data, capture_output=True, text=True)
+    assert r.returncode in (0, 1), r.stderr   # 1 = no match; anything else is a grep error, not an empty result
+    kept = r.stdout
     if x:  # the script only applies the exclude when it is non-empty (`[ -n "$EXCLUDE_PATTERN" ]`); `grep -v ""` would drop everything
-        kept = subprocess.run(["grep", "-avE", x], input=kept, capture_output=True, text=True).stdout
+        r = subprocess.run(["grep", "-avE", x], input=kept, capture_output=True, text=True)
+        assert r.returncode in (0, 1), r.stderr
+        kept = r.stdout
     return kept.splitlines()
 
 

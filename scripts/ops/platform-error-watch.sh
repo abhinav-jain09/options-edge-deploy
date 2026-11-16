@@ -34,13 +34,14 @@ STATE_FILE="${STATE_FILE:-/tmp/platform-error-watch.state}"
 DISCORD_WEBHOOK_URL="${DISCORD_WEBHOOK_URL:-}"
 # Lines matched as errors, and noise to drop. Override to taste.
 GREP_PATTERN="${GREP_PATTERN:-ERROR|Exception|FATAL| SEVERE |Caused by:}"
-# Default drops ONE kind of line: a Kafka config-dump value, i.e. an indented `key = value` row of the
-# `StreamsConfig values:` / `ConsumerConfig values:` block every Kafka client prints at start. Its KEY NAMES contain the
-# word the watcher greps for (`processing.exception.handler = class ...LogAndFail...`), so each restart of a Streams
-# service raised "new error signatures" that were configuration, not errors (2026-11-16, es-liquidity-wall-service).
-# A stack-trace row starts `at `/`Caused by:` and a log line starts with a timestamp or `[`, so none of them match.
+# Default drops ONE kind of line: the exception-HANDLER rows of the `StreamsConfig values:` / `ConsumerConfig values:`
+# block every Kafka client prints at start, e.g. `\tprocessing.exception.handler = class ...LogAndFailProcessingExceptionHandler`.
+# The key is lower-case `exception.handler`; the class VALUE ends in `ExceptionHandler`, which is what GREP_PATTERN matches,
+# so each restart of a Streams service raised "new error signatures" that were configuration, not errors (2026-11-16,
+# es-liquidity-wall-service: five rows). Deliberately NOT a generic indented `key = value` rule: that would also drop a
+# genuine `\tmessage = java.net.ConnectException: ...` diagnostic. Only keys naming an exception handler are dropped.
 # Override replaces the whole pattern (empty = keep all), as before.
-EXCLUDE_PATTERN="${EXCLUDE_PATTERN-^[[:space:]]+[A-Za-z0-9_.-]+ = }"
+EXCLUDE_PATTERN="${EXCLUDE_PATTERN-^[[:space:]]+[A-Za-z0-9_.-]*exception\.handler[A-Za-z0-9_.-]* = }"
 EXCLUDE_SERVICES="${EXCLUDE_SERVICES:-}"    # space-separated deployment names to skip
 ONCE=0; [ "${1:-}" = "--once" ] && ONCE=1
 
