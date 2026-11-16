@@ -159,6 +159,9 @@ class Manifests(unittest.TestCase):
         self.assertEqual(len(names), 10)
         self.assertEqual({k: v for k, v in slice_env.items() if k.startswith(("ES_MBO_SWEEP_", "ES_MBO_SPOOF_"))}, {k: e[k] for k in names})
         self.assertEqual([k for k in slice_env if k.startswith("ES_MBO_MIG_")], [])
+        # the wall-moved-away detector has no threshold: its switch is the only setting, on in both
+        self.assertEqual(e["ES_MBO_WALL_MIGRATION"], "true")
+        self.assertEqual(slice_env["ES_MBO_WALL_MIGRATION"], "true")
 
     def test_the_tape_is_admitted_only_from_the_databento_trades_feed_for_the_front_contract(self):
         e = env_of(deployment("k8s/services/es-liquidity-engine/base/es-liquidity-engine-deployment.yaml"))

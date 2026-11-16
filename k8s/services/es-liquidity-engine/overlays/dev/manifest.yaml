@@ -108,6 +108,8 @@ spec:
               value: "300"
             - name: ES_MBO_SPOOF_OPP_FILL_QTY
               value: "5"
+            - name: ES_MBO_WALL_MIGRATION
+              value: "true"
             - name: ES_MBO_SNAPSHOT_INTERVAL_BUCKETS
               value: "60"
             - name: ES_MBO_VACUUM_DEPTH_TICKS
