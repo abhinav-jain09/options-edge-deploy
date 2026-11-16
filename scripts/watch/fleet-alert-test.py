@@ -217,6 +217,23 @@ step("life: and nothing more once recovered", st, 120 + 24 * 60 + 85, "crash-loo
 step("life: a recurrence after recovery is a NEW incident", st, 120 + 24 * 60 + 100, POD1 % (972, 1), 1,
      expect="1 finding(s)")
 
+# live run 11-16: the SAME subject changing class or wording is the same incident
+st = tempfile.mkdtemp(prefix="oe-life-")
+step("flip: RESTARTS first", st, 0, POD1 % (115, 1), 1, expect="RESTARTS")
+step("flip: the same pod now CrashLoopBackOff is NOT a new page", st, 9,
+     "CRASHLOOP mirror-prod-846fcd88f9-jn2k5: container mirror is CrashLoopBackOff\n", 1, empty=True)
+step("flip: ... and a reminder shows the current class", st, 30,
+     "CRASHLOOP mirror-prod-846fcd88f9-jn2k5: container mirror is CrashLoopBackOff\n", 1, expect=["still open", "CRASHLOOP"])
+st = tempfile.mkdtemp(prefix="oe-life-")
+step("wording: lag draining", st, 0, "LAG_INSUFFICIENT_DRAIN g-prod: lag 292697 over 50000; draining 1559/min, 188 min to clear\n",
+     1, expect="LAG", check="kafka-lag")
+step("wording: lag grew is the same incident", st, 9, "LAG_INSUFFICIENT_DRAIN g-prod: lag 296823 over 50000; lag grew by 4126 in 9 min\n",
+     1, empty=True, check="kafka-lag")
+st = tempfile.mkdtemp(prefix="oe-life-")
+step("multi: two containers of one pod are ONE incident", st, 0,
+     "RESTARTS p-846fcd88f9-jn2k5: container a restarted 5 times, last 1 min ago\nCRASHLOOP p-846fcd88f9-jn2k5: container b is CrashLoopBackOff\n",
+     1, expect=["1 finding(s)", "CRASHLOOP", "+1 more line"])
+
 # a run that could not look leaves other incidents alone and is an incident of its own
 st = tempfile.mkdtemp(prefix="oe-life-")
 step("blind: first finding", st, 0, POD1 % (3, 1), 1, expect="RESTARTS")

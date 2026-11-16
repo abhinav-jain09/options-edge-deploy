@@ -118,14 +118,13 @@ STATE_FILE = os.path.join(a.state_dir, "alerts-%s-%s.json" % (re.sub(r"[^A-Za-z0
 POD_HASH = re.compile(r"-[a-z0-9]{8,10}-[a-z0-9]{5}$")
 
 
-def incident_key(cls, rest):
-    """cls + subject + the finding text with its numbers removed: the pod hash of a replacement pod and a restart
-    count that ticks up must not turn one incident into many."""
+def incident_key(rest):
+    """The SUBJECT only (first token; a replacement pod's ReplicaSet/pod hash removed). Live run 11-16: the same pod went
+    RESTARTS -> CRASHLOOP and a lag line changed from `draining N/min` to `lag grew by N`; keyed on the finding's
+    text, each flip was a NEW incident and paged again. One subject in one check = one incident, whatever it says now."""
     subject = POD_HASH.sub("", rest.split(None, 1)[0].rstrip(":"))
-    tail = re.sub(r"\d+", "#", rest.split(None, 1)[1] if " " in rest else "")
-    full = ("%s %s %s" % (cls, subject, tail)).strip()
-    # readable prefix + a hash of the WHOLE identity: two long names that differ only past the prefix stay two incidents
-    return full[:100] + "#" + hashlib.sha1(full.encode("utf-8")).hexdigest()[:12]
+    # readable prefix + a hash of the whole subject: two long names that differ only past the prefix stay two incidents
+    return subject[:100] + "#" + hashlib.sha1(subject.encode("utf-8")).hexdigest()[:12]
 
 
 def dur(minutes):
@@ -195,18 +194,24 @@ if could_not_check:
         if line.startswith("ERROR: "):
             detail = line[len("ERROR: "):]
             break
-    observed["check-failed"] = ("CHECK_FAILED", 5, detail)
+    observed["check-failed"] = ("CHECK_FAILED", 5, detail, 1)
 elif a.rc != 0:
     for line in raw.splitlines():
         m = LINE.match(line.strip())
         if not m or m.group("cls") not in RANK:
             continue
         cls, rest = m.group("cls"), m.group("rest")
-        observed.setdefault(incident_key(cls, rest), (cls, RANK[cls][0], rest))
+        key = incident_key(rest)
+        prev = observed.get(key)
+        if prev is None:
+            observed[key] = (cls, RANK[cls][0], rest, 1)
+        else:       # several lines about one subject (two containers of a pod): ONE incident, the worst line shown
+            top = prev if prev[1] >= RANK[cls][0] else (cls, RANK[cls][0], rest, 1)
+            observed[key] = (top[0], top[1], top[2], prev[3] + 1)
     if not observed:
         # A non-zero exit with no recognisable finding is itself worth saying: the check disagrees with the
         # composer, and reporting nothing would turn a red build into silence.
-        observed["unrecognised"] = ("UNRECOGNISED", 5, "exit %d but no recognisable finding line; read the build" % a.rc)
+        observed["unrecognised"] = ("UNRECOGNISED", 5, "exit %d but no recognisable finding line; read the build" % a.rc, 1)
 
 if a.mode == "observation-only" and not could_not_check:
     sys.exit(0)                      # findings are silent here, and do not touch the state; exit 2 is not
@@ -214,7 +219,9 @@ if a.mode == "observation-only" and not could_not_check:
 # --- state transitions --------------------------------------------------------------------------------------
 state, problem = load_state()
 fresh, remind, escalate, summary, resolved = [], [], [], [], []
-for key, (cls, rank, rest) in observed.items():
+for key, (cls, rank, rest, extra_lines) in observed.items():
+    if extra_lines > 1:
+        rest += " (+%d more line(s) on this subject)" % (extra_lines - 1)
     inc = state.get(key)
     if inc is None:
         state[key] = new_incident(cls, rank, rest)
@@ -281,7 +288,7 @@ if fresh:
     elif fresh == ["unrecognised"]:
         blocks.append("⚠️ **%s** / `%s` — %s" % (a.env, a.check, observed["unrecognised"][2]))
     else:
-        offenders = sorted(((observed[k][1], observed[k][0], observed[k][2]) for k in fresh),
+        offenders = sorted(((observed[k][1], observed[k][0], state[k]["rest"]) for k in fresh),
                            key=lambda o: (-o[0], o[2]))
         top = RANK[offenders[0][1]][1] if offenders[0][1] in RANK else "⚠️"
         parts = [clip_chars("%s **%s** / `%s` — %d finding(s)" % (top, a.env, a.check, len(offenders)), HEADER_CHARS)]
