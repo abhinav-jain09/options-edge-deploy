@@ -39,9 +39,10 @@ GREP_PATTERN="${GREP_PATTERN:-ERROR|Exception|FATAL| SEVERE |Caused by:}"
 # The key is lower-case `exception.handler`; the class VALUE ends in `ExceptionHandler`, which is what GREP_PATTERN matches,
 # so each restart of a Streams service raised "new error signatures" that were configuration, not errors (2026-11-16,
 # es-liquidity-wall-service: five rows). Deliberately NOT a generic indented `key = value` rule: that would also drop a
-# genuine `\tmessage = java.net.ConnectException: ...` diagnostic. Only keys naming an exception handler are dropped.
+# genuine `\tmessage = java.net.ConnectException: ...` diagnostic. Only the whole config-row shape is dropped: a key naming an
+# exception handler, ` = class org.apache.kafka.<ClassName>` and NOTHING after the class name.
 # Override replaces the whole pattern (empty = keep all), as before.
-EXCLUDE_PATTERN="${EXCLUDE_PATTERN-^[[:space:]]+[A-Za-z0-9_.-]*exception\.handler[A-Za-z0-9_.-]* = }"
+EXCLUDE_PATTERN="${EXCLUDE_PATTERN-^[[:space:]]+[A-Za-z0-9_.-]*exception\.handler[A-Za-z0-9_.-]* = class org\.apache\.kafka\.[A-Za-z0-9_.$]+$}"
 EXCLUDE_SERVICES="${EXCLUDE_SERVICES:-}"    # space-separated deployment names to skip
 ONCE=0; [ "${1:-}" = "--once" ] && ONCE=1
 

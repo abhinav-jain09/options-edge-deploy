@@ -44,6 +44,10 @@ STILL_ALERTS = [
     # indented key = value DIAGNOSTICS must survive: only exception-handler config keys are dropped
     "    message = java.net.ConnectException: Connection refused",
     "\tcause = java.lang.IllegalStateException: AppSession already registered",
+    # handler-SHAPED diagnostics: same key, but the value is not exactly `class org.apache.kafka.<Name>`
+    "\tuncaught.exception.handler = java.lang.RuntimeException: boom",
+    "\tprocessing.exception.handler = class org.apache.kafka.streams.errors.LogAndFail failed: java.lang.IllegalStateException",
+    "\tproduction.exception.handler = class com.example.CustomHandler threw java.io.IOException",
     # an indented line that is NOT a key = value row must survive
     "    java.lang.IllegalStateException: indented message with no equals sign",
 ]
