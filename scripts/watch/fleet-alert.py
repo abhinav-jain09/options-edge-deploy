@@ -22,8 +22,8 @@ THE CONTRACT, each clause a thing that would otherwise go wrong:
     against market-hours traffic).
 
 PAGING DISCIPLINE (one page per INCIDENT, not per run). A check runs every 3-15 minutes; a finding that stays
-true must not become a message every time. An incident is one offender key (class + subject, with the pod's
-ReplicaSet/pod hash and every number removed so a restart count that ticks does not make a new incident),
+true must not become a message every time. An incident is one SUBJECT (the finding's first token; for a pod the
+ReplicaSet/pod hash is removed) - not its class or wording, so RESTARTS -> CRASHLOOP is the same incident -
 kept per (environment, check) in --state-dir/alerts-<env>-<check>.json:
   * first sight            -> ONE page ("new").
   * still open             -> a reminder no sooner than REMIND_MIN (30) minutes after the previous message.
@@ -118,11 +118,16 @@ STATE_FILE = os.path.join(a.state_dir, "alerts-%s-%s.json" % (re.sub(r"[^A-Za-z0
 POD_HASH = re.compile(r"-[a-z0-9]{8,10}-[a-z0-9]{5}$")
 
 
-def incident_key(rest):
+POD_CLASSES = {"CRASHLOOP", "RESTARTS", "IMAGE_PULL", "BRIDGE_NOT_READY"}   # only these name a POD; a group/topic is never hash-stripped
+
+
+def incident_key(cls, rest):
     """The SUBJECT only (first token; a replacement pod's ReplicaSet/pod hash removed). Live run 11-16: the same pod went
     RESTARTS -> CRASHLOOP and a lag line changed from `draining N/min` to `lag grew by N`; keyed on the finding's
     text, each flip was a NEW incident and paged again. One subject in one check = one incident, whatever it says now."""
-    subject = POD_HASH.sub("", rest.split(None, 1)[0].rstrip(":"))
+    subject = rest.split(None, 1)[0].rstrip(":")
+    if cls in POD_CLASSES:
+        subject = POD_HASH.sub("", subject)
     # readable prefix + a hash of the whole subject: two long names that differ only past the prefix stay two incidents
     return subject[:100] + "#" + hashlib.sha1(subject.encode("utf-8")).hexdigest()[:12]
 
@@ -201,7 +206,7 @@ elif a.rc != 0:
         if not m or m.group("cls") not in RANK:
             continue
         cls, rest = m.group("cls"), m.group("rest")
-        key = incident_key(rest)
+        key = incident_key(cls, rest)
         prev = observed.get(key)
         if prev is None:
             observed[key] = (cls, RANK[cls][0], rest, 1)

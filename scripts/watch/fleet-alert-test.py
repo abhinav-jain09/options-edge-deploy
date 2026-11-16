@@ -234,6 +234,10 @@ step("multi: two containers of one pod are ONE incident", st, 0,
      "RESTARTS p-846fcd88f9-jn2k5: container a restarted 5 times, last 1 min ago\nCRASHLOOP p-846fcd88f9-jn2k5: container b is CrashLoopBackOff\n",
      1, expect=["1 finding(s)", "CRASHLOOP", "+1 more line"])
 
+st = tempfile.mkdtemp(prefix="oe-life-")
+step("hash: a group named like a pod is not hash-stripped", st, 0,
+     "NO_CONSUMER payments-abcdef12-abcde: none\nNO_CONSUMER payments: none\n", 1, expect="2 finding(s)", check="kafka-lag")
+
 # a run that could not look leaves other incidents alone and is an incident of its own
 st = tempfile.mkdtemp(prefix="oe-life-")
 step("blind: first finding", st, 0, POD1 % (3, 1), 1, expect="RESTARTS")
