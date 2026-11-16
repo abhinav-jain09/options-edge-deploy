@@ -1,12 +1,9 @@
-# CI-COLLECT-ONLY
+# CI-REQUIRED
 #
-# NOT RUN BY CI TODAY. deploy-validation.yml names its test modules by hand and nothing discovers them, so
-# this module is only IMPORTED (by scripts/ci/validate-tests-are-collectable.sh, which catches an import
-# error) - none of its assertions execute. 112 of the 138 modules under tests/ were in this position when
-# the marker was introduced. The marker is not approval of that: it is the classification that makes the
-# dormancy visible and, because every module must carry exactly one marker, stops a NEW module from
-# becoming an orphan silently. To promote this module, wire it into a step and change the marker to
-# CI-REQUIRED; the guard then enforces the wiring.
+# This module's assertions MUST run in CI. scripts/ci/validate-tests-are-collectable.sh - a separate,
+# already-wired step of .github/workflows/deploy-validation.yml - fails the build unless a mandatory step
+# of that workflow invokes this module as a `python3 -m unittest` target, with no continue-on-error, no
+# `if:` and no shell construct that would swallow its failure.
 """Deploy wiring of es-liquidity-engine-service (the ES MBO liquidity engine) and the TEMPORARY drop-classifier-ref reference deployment (the G3b parity gate's reference side).
 
 Both are DEV ONLY, single replica, strategy Recreate, health port 8080, drop engine in ES_TRADES mode on the dev broker. The engine writes the default es.drop.* prefix; the reference writes
@@ -115,7 +112,8 @@ class Manifests(unittest.TestCase):
         self.assertIn(EVENTS, preserved("dev"))   # the helper parses the literal assignment, as it does for the wall's events log: production safety is the topics.env strip guard (tested above)
         text = read("scripts/kafka/topics.env")
         self.assertEqual(len(re.findall(r'^OPTIONS_EDGE_RESET_PRESERVED_TOPICS="', text, re.M)), 1, "the helper requires exactly ONE assignment")
-        self.assertEqual(len(re.findall(r'^OPTIONS_EDGE_RESET_REBUILDABLE_TOPICS="', text, re.M)), 1)
+        # one LITERAL assignment; later lines may append to it by naming the variable (`X="$X more.topics"`), which is ordinary shell and not a second list
+        self.assertEqual(len(re.findall(r'^OPTIONS_EDGE_RESET_REBUILDABLE_TOPICS="(?!\$OPTIONS_EDGE_RESET_REBUILDABLE_TOPICS )', text, re.M)), 1)
         self.assertIn(SNAPSHOT, re.search(r'^OPTIONS_EDGE_RESET_REBUILDABLE_TOPICS="([^"]*)"', text, re.M).group(1).split())
 
     def test_the_premarket_reset_spares_the_events_log_and_nothing_else_of_the_family(self):

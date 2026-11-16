@@ -182,6 +182,10 @@ jobs:
       - name: Fleet alert routing and wiring
         run: python3 -m unittest -v tests.test_fleet_alerts_deploy
 
+      # The ES MBO liquidity engine's deploy wiring (detector switches, tape admission, dev-only registration), promoted from collect-only once the module passed again.
+      - name: ES liquidity engine deploy wiring
+        run: python3 -m unittest -v tests.test_es_liquidity_engine_deploy
+
       - name: Schema sync gate negative controls (mock registry, real tool jar)
         run: SCHEMA_GOV_JAR="$PWD/tools/schema-governance/schema-governance-tool.jar" bash scripts/ci/schema-sync-test.sh
 
