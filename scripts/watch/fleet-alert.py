@@ -28,6 +28,7 @@ import sys
 # rank, emoji. Higher ranks are more urgent; see R1e.
 RANK = {
     "CRASHLOOP": (5, "🔴"),
+    "BRIDGE_NOT_READY": (5, "🔴"),
     "IMAGE_PULL": (5, "🔴"),
     "RESTARTS": (4, "🟠"),
     "NO_CONSUMER": (4, "🟠"),

@@ -171,6 +171,7 @@ jobs:
       - name: Fleet alert checks and delivery negative controls
         run: |
           python3 scripts/watch/crash-loop-test.py
+          python3 scripts/watch/bridge-flow-test.py
           python3 scripts/watch/kafka-lag-test.py
           python3 scripts/watch/partition-balance-test.py
           python3 scripts/watch/fleet-alert-test.py
