@@ -1,0 +1,26 @@
+@Library('oe') _
+
+// Bridge watch (2026-11-16 incident). READ-ONLY. Every 3 minutes, inside the ES session, the ES4 Rithmic depth bridge must hold a fresh,
+// complete book (its own readiness probe: scripts/watch/bridge-flow.py). When every sample over 150 s says no, ONE Discord message goes to
+// the dev group (es4 is not production), repeated every 30 minutes while the book stays down. Outside the session nothing is checked.
+// WHY NOT fleet-watch: that job runs every 15 minutes and re-sends every finding each run; a 2-minute condition needs its own cadence.
+// IT CHANGES NOTHING IN ANY CLUSTER, REGISTRY OR TOPIC: its only effects are one `kubectl exec ... probe.py` per sample and the Discord POST.
+pipeline {
+  agent { label 'hpsf-replay-mac' }
+  triggers {
+    cron('H/3 * * * *')
+  }
+  options {
+    disableConcurrentBuilds()
+    timeout(time: 10, unit: 'MINUTES')
+  }
+  stages {
+    stage('Bridge flow') {
+      steps {
+        withCredentials([string(credentialsId: 'offhours-discord-webhook-dev', variable: 'DISCORD_WEBHOOK_URL')]) {
+          sh "KUBECONFIG='/Users/abhinav/.kube/es4-jenkins-deployer.kubeconfig' FLEET_ENV=es4 FLEET_CHECK=bridge-flow FLEET_MODE=paging bash scripts/watch/fleet-alert-deliver.sh bash scripts/watch/stateful-check-run.sh bridge-flow.py"
+        }
+      }
+    }
+  }
+}

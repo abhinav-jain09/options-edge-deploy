@@ -69,12 +69,15 @@ spec:
           periodSeconds: 5
           timeoutSeconds: 3
           failureThreshold: 3
-        # Finish SDK/book initialization before enabling the ACK liveness watchdog.
+        # Process liveness only (probe.py --alive reads the publisher loop's heartbeat), for startup AND liveness. The feed's state
+        # belongs to readiness above: a late or silent Rithmic feed must never restart the pod, because every restart is another
+        # login into the same degraded service (2026-11-16, 20 restarts in 20 minutes). The publisher retries a lost login itself.
         startupProbe:
           exec:
             command:
             - python3
             - /app/probe.py
+            - --alive
           periodSeconds: 5
           failureThreshold: 24
         livenessProbe:
