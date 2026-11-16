@@ -119,6 +119,10 @@ spec:
               value: "300"
             - name: ES_MBO_SPOOF_OPP_FILL_QTY
               value: "5"
+            # WALL_MIGRATION (the owner's definition: the market reaches a wall and the liquidity moves away as it arrives; read from moved orders by order id). It has NO threshold, so the only
+            # setting is the switch. The rule was measured on 22 Databento sessions (detector-corpus-results-2026-11-15.md). MIGRATION_INFERRED stays off.
+            - name: ES_MBO_WALL_MIGRATION
+              value: "true"
             # Restart source: the engine snapshots every 60 closed buckets to the compacted es.mbo.snapshot and restarts from it (0 turns it off).
             - name: ES_MBO_SNAPSHOT_INTERVAL_BUCKETS
               value: "60"
