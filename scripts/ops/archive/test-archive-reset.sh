@@ -181,10 +181,16 @@ emit() { # <offset>
   # so the fail-closed path (a capture that cannot attest to what it delivered) is reachable. A real
   # CLI too old for print.offset behaves exactly this way.
   [ -n "${OE_NO_OFFSET_COLUMN:-}" ] && showoff=false
+  # OE_PAYLOAD_OFFSET_TEXT puts the text "Offset:" INSIDE the record value, on a capture that has no
+  # offset column. A parser that scans for the first field looking like an offset reads that payload
+  # as the record's position and the fail-closed path never fires -- which is the whole reason the
+  # real parser matches field 3 positionally.
+  local body='{"schemaVersion":1}'
+  [ -n "${OE_PAYLOAD_OFFSET_TEXT:-}" ] && body='{"schemaVersion":1,"note":"Offset:999"}'
   if [ "$showoff" = true ]; then
-    printf 'CreateTime:1786000000000\tPartition:%s\tOffset:%s\tk%s\t{"schemaVersion":1}\n' "$part" "$1" "$1"
+    printf 'CreateTime:1786000000000\tPartition:%s\tOffset:%s\tk%s\t%s\n' "$part" "$1" "$1" "$body"
   else
-    printf 'CreateTime:1786000000000\tPartition:%s\tk%s\t{"schemaVersion":1}\n' "$part" "$1"
+    printf 'CreateTime:1786000000000\tPartition:%s\tk%s\t%s\n' "$part" "$1" "$body"
   fi
 }
 sent=0; o="$off"
@@ -637,10 +643,16 @@ emit() { # <offset>
   # so the fail-closed path (a capture that cannot attest to what it delivered) is reachable. A real
   # CLI too old for print.offset behaves exactly this way.
   [ -n "${OE_NO_OFFSET_COLUMN:-}" ] && showoff=false
+  # OE_PAYLOAD_OFFSET_TEXT puts the text "Offset:" INSIDE the record value, on a capture that has no
+  # offset column. A parser that scans for the first field looking like an offset reads that payload
+  # as the record's position and the fail-closed path never fires -- which is the whole reason the
+  # real parser matches field 3 positionally.
+  local body='{"schemaVersion":1}'
+  [ -n "${OE_PAYLOAD_OFFSET_TEXT:-}" ] && body='{"schemaVersion":1,"note":"Offset:999"}'
   if [ "$showoff" = true ]; then
-    printf 'CreateTime:1786000000000\tPartition:%s\tOffset:%s\tk%s\t{"schemaVersion":1}\n' "$part" "$1" "$1"
+    printf 'CreateTime:1786000000000\tPartition:%s\tOffset:%s\tk%s\t%s\n' "$part" "$1" "$1" "$body"
   else
-    printf 'CreateTime:1786000000000\tPartition:%s\tk%s\t{"schemaVersion":1}\n' "$part" "$1"
+    printf 'CreateTime:1786000000000\tPartition:%s\tk%s\t%s\n' "$part" "$1" "$body"
   fi
 }
 sent=0; o="$off"
@@ -3234,6 +3246,8 @@ has  "   and says the reader walked past the bound having delivered nothing" "de
 want "   the checkpoint CLEARS the dead range"                        200 "$(ck 0)"
 has  "   the whole range is recorded as a discontinuity" '"discontinuity":"short read: 0 of 100 records in [100,200)"' "$(disc)"
 want "   and NO empty file is published"                                0 "$(files 100)"
+want "   and no .partial residue is left behind in the corpus either"   0 \
+     "$(ls "$A/kafka/prod/$TOPIC"/dt=*/*.partial 2>/dev/null | wc -l | tr -d ' ')"
 
 # --- 19n. A capture with NO offsets to attest to fails CLOSED# --- 19n. A capture with NO offsets to attest to fails CLOSED: nothing published, nothing advanced.
 A="$T/s4"; mkdir -p "$A/kafka/prod/_manifest"
@@ -3244,6 +3258,14 @@ OUT=$(strict OE_COMPACTED_GAP=40 OE_NO_OFFSET_COLUMN=1); RC=$?
 want "19n a short capture carrying no Offset: column is refused (rc)"   1 "$RC"
 has  "   saying there is no proof of how far the reader got" "no readable Offset: field" "$OUT"
 want "   checkpoint UNCHANGED — the range is re-read next run"        100 "$(ck 0)"
+
+# ...and a payload that CONTAINS the text "Offset:" does not pass for the record's position. A
+# parser scanning for the first offset-shaped field reads the value and skips the fail-closed path
+# entirely; the real one matches field 3, after the timestamp and the partition.
+OUT=$(strict OE_COMPACTED_GAP=40 OE_NO_OFFSET_COLUMN=1 OE_PAYLOAD_OFFSET_TEXT=1); RC=$?
+want "19n2 \"Offset:\" inside the record VALUE is not its position (rc)" 1 "$RC"
+has  "   still fails closed"                 "no readable Offset: field" "$OUT"
+want "   and the checkpoint is still UNCHANGED"                       100 "$(ck 0)"
 
 # A NON-strict topic is untouched: a short read there is a quiet day, as it always was.
 A="$T/s2"; mkdir -p "$A/kafka/prod/_manifest"
