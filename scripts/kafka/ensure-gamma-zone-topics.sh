@@ -5,7 +5,7 @@
 #   NO BROKER-WIDE CHANGE. The shapes are the ones scripts/kafka/topics.env declares (one partition each, exact):
 #   options.spx.gamma-zone.current  1 partition, compact, retention.ms EXACTLY -1, retention.bytes EXACTLY -1 (pure compact)  the newest measurement per session
 #   options.spx.gamma-zone.log      1 partition, delete,  retention.ms EXACTLY -1, retention.bytes EXACTLY 1073741824 (1 GiB)  EVERY emission, in order: the corpus
-#   options.spx.gamma-zone.profile  1 partition, compact, retention.ms EXACTLY -1, retention.bytes EXACTLY -1 (pure compact), min.compaction.lag.ms AT LEAST the
+#   options.spx.gamma-zone.profile  1 partition, compact, retention.ms EXACTLY -1, retention.bytes EXACTLY -1 (pure compact), min.compaction.lag.ms EXACTLY the
 #       value topic-shape.lib.sh declares (7 days) - the window the hourly archive needs, because the cleaner spares only the ACTIVE segment and a rolled one is fair
 #       game between two runs. The session's WHOLE volume profile, so a reader can
 #       answer "how many contracts traded between these two strikes" -- which the measurement cannot: it carries the ratio curve for +/-30 points and a level COUNT. CURRENT's shape
@@ -106,10 +106,15 @@ check_retention_bytes() { # <topic> <exact retention.bytes>
 # and the cleaner removes the superseded snapshots before the 21:00 run looks. The value and the
 # arithmetic behind it live in topic-shape.lib.sh beside every other declared shape.
 #
-# ALTERED HERE, unlike retention.bytes above, which this barrier only ever verifies. Raising a
-# compaction lag cannot destroy a record — it only delays cleaning — and the topic already exists
-# on dev, so a verify-only barrier would refuse for ever while nothing ever set it. Lowering it is
-# never done: the comparison is ">=", so a hand-widened value is left alone.
+# ALTERED HERE, unlike retention.bytes above, which this barrier only ever verifies. The topic
+# already exists on dev, so a verify-only barrier would refuse for ever while nothing ever set it.
+#
+# RECONCILED EXACTLY, not as a floor. An earlier version compared ">=" and left a wider value
+# alone, which read as kindness to an operator who had widened the window during an archive
+# outage — but it was a promise this repo cannot keep: apply-topics.sh's alter_topic_config()
+# re-applies the declared config set on every run, so the next ordinary deploy narrowed it back
+# anyway, and the only thing the ">=" bought was an operator believing otherwise. Exact, like every
+# other declared shape, and widening means widening topic_min_compaction_lag_ms(). (Codex round 1.)
 #
 # THE PARSE IS THE POINT. `kafka-configs --describe --all` prints the effective value and its
 # SYNONYMS on one line:
@@ -130,11 +135,11 @@ read_min_compaction_lag() { # <topic> -> LAG_VALUE
   LAG_VALUE="$v"
 }
 
-ensure_min_compaction_lag() { # <topic> <at least, ms>
+ensure_min_compaction_lag() { # <topic> <exact ms>
   local topic="$1" want="$2" out
   LAG_VALUE=""
   read_min_compaction_lag "$topic" || return 1
-  if [ "$LAG_VALUE" -lt "$want" ]; then
+  if [ "$LAG_VALUE" != "$want" ]; then
     echo "setting min.compaction.lag.ms=$want on '$topic' (was $LAG_VALUE): the hourly archive is the only durable copy of the per-point volume"
     if ! out=$(kc --entity-type topics --entity-name "$topic" --alter --add-config "min.compaction.lag.ms=$want" 2>&1); then
       echo "FAIL: could not set min.compaction.lag.ms on '$topic':"; printf '%s\n' "$out"; return 1
@@ -142,8 +147,8 @@ ensure_min_compaction_lag() { # <topic> <at least, ms>
     # AN ACCEPTED ALTER IS NOT AN APPLIED ONE. Read the effective value back from the broker.
     read_min_compaction_lag "$topic" || return 1
   fi
-  if [ "$LAG_VALUE" -lt "$want" ]; then
-    echo "FAIL: '$topic' has min.compaction.lag.ms=$LAG_VALUE, expected at least $want — the cleaner may still remove intraday snapshots between two archive runs."
+  if [ "$LAG_VALUE" != "$want" ]; then
+    echo "FAIL: '$topic' has min.compaction.lag.ms=$LAG_VALUE, expected exactly $want (the declared window in scripts/kafka/topic-shape.lib.sh) — the cleaner may still remove intraday snapshots between two archive runs."
     return 1
   fi
   echo "ok: '$topic' — min.compaction.lag.ms=$LAG_VALUE (read back from the broker)"

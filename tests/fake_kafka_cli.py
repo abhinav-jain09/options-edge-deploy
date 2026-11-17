@@ -99,10 +99,21 @@ if name == "kafka-configs":
         cfg = topics.get(t, {}).get("configs", {})
         print(f"All configs for topic {t} are:")
         for k in sorted(set(ALL_DEFAULTS) | set(cfg)):
+            d, syn = ALL_DEFAULTS.get(k, (None, None))
             if k in cfg:
-                print(f"  {k}={cfg[k]} sensitive=false synonyms={{DYNAMIC_TOPIC_CONFIG:{k}={cfg[k]}}}")
+                # A topic-level override does NOT hide the broker default: the real broker lists
+                # BOTH, the override first. Recorded from the live dev broker 2026-11-17 for the
+                # very key the gamma-zone guard reads:
+                #   min.compaction.lag.ms=604800000 sensitive=false synonyms={DYNAMIC_TOPIC_CONFIG:
+                #   min.compaction.lag.ms=604800000, DEFAULT_CONFIG:log.cleaner.min.compaction.lag.ms=0}
+                # Emitting only the DYNAMIC synonym made the trap vanish exactly when a test
+                # configured the value it was testing — so the synonym regression test passed
+                # without the synonym ever reaching the parser (Codex round 1, P2).
+                syns = [f"DYNAMIC_TOPIC_CONFIG:{k}={cfg[k]}"]
+                if syn is not None:
+                    syns.append(f"DEFAULT_CONFIG:{syn}={d}")
+                print(f"  {k}={cfg[k]} sensitive=false synonyms={{{', '.join(syns)}}}")
             else:
-                d, syn = ALL_DEFAULTS[k]
                 print(f"  {k}={d} sensitive=false synonyms={{DEFAULT_CONFIG:{syn}={d}}}")
     elif "--describe" in argv:
         cfg = topics.get(t, {}).get("configs", {})

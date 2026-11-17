@@ -598,6 +598,32 @@ scan_archive_file() {   # $1=path -> "records min_ms max_ms schema_versions_csv"
     }'
 }
 
+# The largest offset the capture itself CARRIES. A strict topic is read with print.offset (see the
+# capture block), so its file states which offsets were actually delivered — and that file is the
+# only evidence available for "did the reader reach the bound it was given?".
+#
+# WHY THAT QUESTION DECIDES ANYTHING. kafka-console-consumer exits 0 on an inactivity timeout and on
+# errors it catches internally, so `consumer_rc=0` with fewer records than the offset range does NOT
+# mean the missing offsets are gone: it equally describes a consumer that emitted the first sixty
+# records and then lost the broker. Those two cases need opposite handling — one is a permanent hole
+# to record and step over, the other is a transient failure whose records are still there and must be
+# re-read — and nothing but the delivered offsets tells them apart. Empty if the field is absent
+# (every non-strict capture) or unparseable, which the caller treats as "do not advance".
+capture_max_offset() {   # $1=path -> the largest "Offset:N" in the file, or empty
+  LC_ALL=C zcat < "$1" 2>/dev/null | LC_ALL=C awk '
+    BEGIN { FS="\t"; mx="" }
+    {
+      for (i = 1; i <= NF; i++) {
+        if (substr($i, 1, 7) == "Offset:") {
+          o = substr($i, 8)
+          if (o ~ /^[0-9]+$/) { o = o + 0; if (mx == "" || o > mx) mx = o }
+          break
+        }
+      }
+    }
+    END { if (mx != "") printf "%d\n", mx }'
+}
+
 ms_to_iso() {   # $1=epoch ms -> ISO-8601 UTC, or "unknown"
   case "${1:-0}" in
     ''|*[!0-9]*|0) echo "unknown"; return ;;
@@ -1015,9 +1041,14 @@ for topic in $TOPICS; do
       # awk with a LITERAL comparison, not a regex built from the topic name: '.' and '-' are
       # regex metacharacters and a topic name is full of them, so a pattern assembled by hand here
       # would be a second escaping bug waiting beside the one this block exists to fix.
+      # The marker must be NON-EMPTY for every rejected line, including an EMPTY one. Printing the
+      # offending line itself was a hole: command substitution strips the trailing newline, so a
+      # BLANK first line produced an empty $ends_bad, the test below read that as "nothing wrong",
+      # and stdout of "\nWARNING: partial discovery" passed validation whole — the warning never
+      # looked at, both rows skipped by the partition loop, the topic green with nothing captured.
+      # So the marker names the line NUMBER and brackets its text, and is never empty.
       ends_bad=$(printf '%s\n' "$ends" \
-        | awk -F: -v t="$topic" 'NF!=3 || $1!=t || $2 !~ /^[0-9]+$/ || $3 !~ /^[0-9]+$/ {print; exit}' \
-        | cut -c1-240)
+        | awk -F: -v t="$topic" 'NF!=3 || $1!=t || $2 !~ /^[0-9]+$/ || $3 !~ /^[0-9]+$/ {printf "line %d: [%s]", NR, substr($0,1,200); exit}')
       [ -z "$ends_bad" ] || ends_why="${ends_why:+$ends_why, }unexpected output: $ends_bad"
     fi
     rm -f "$ends_err"
@@ -1350,6 +1381,7 @@ for topic in $TOPICS; do
     # runs under `set -u`, and the publish below reads it on a path the committed-read branch can
     # also reach. An unset variable there would abort the whole run.
     short_read=false
+    short_gap=0
     cap_wall_start="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
     # <topic>.p<partition>.<from>-<to>.dt<sessionDate>.<archivedAtUTC>.jsonl.gz
     # The session day is repeated INSIDE the name on purpose: copied to a NAS, attached to a
@@ -1662,18 +1694,70 @@ for topic in $TOPICS; do
         continue
       fi
       if [ "$short_read" = true ]; then
-        log "  SHORT $topic p$part [$from,$endoff): STRICT topic read $got of $count records — $(( count - got ))" \
-            "offset(s) are no longer on the broker. Archiving the $got that ARE and recording the gap:" \
-            "this run FAILS, the checkpoint advances past the damaged range so it does not repeat, and the" \
-            "sessions it spans are NOT EVALUABLE."
-        # Written BEFORE the publish: a line claiming a hole that was never published is a false
-        # alarm an operator can check, while a published capture whose hole was never recorded is a
-        # corpus that reads complete and is not.
-        printf '{"topic":"%s","dt":"%s","partition":%s,"discontinuity":"short read: %s of %s records in [%s,%s)","missing_offsets":%s,"detected_at":"%s","env":"%s"}\n' \
-          "$topic" "$DAY" "$part" "$got" "$count" "$from" "$endoff" "$(( count - got ))" "$STAMP" "$ENV_NAME" \
-          >> "$MAN/$topic.discontinuities.jsonl" \
-          || log "  WARN $topic p$part: could not record the short read in $MAN/$topic.discontinuities.jsonl"
-        manifest_extra="$manifest_extra$(printf ',"short_read":true,"missing_offsets":%s' "$(( count - got ))")"
+        # THE CHECKPOINT MAY ONLY ADVANCE TO A BOUND THE CAPTURE PROVES IT REACHED.
+        #
+        # The first version of this advanced to $endoff whenever the consumer exited 0 with fewer
+        # records than the offset range, and called the difference "records no longer on the
+        # broker". That is only one of the two things it can be. kafka-console-consumer exits 0 on
+        # its inactivity timeout and on errors it catches internally, so a consumer that emitted
+        # offsets 100..159 and then lost the broker looks IDENTICAL on exit status and count to a
+        # compacted range. Advancing to 200 in that case skips offsets 160..199 for ever, even once
+        # connectivity returns — which would have made this change a NEW loss path, worse than the
+        # stall it replaced. (Codex round 1, P1.)
+        #
+        # So the delivered offsets decide. print.offset is already on for every strict topic, so
+        # the capture states them, and the exclusive bound the reader demonstrably reached is
+        # max(Offset:) + 1. Everything above it is simply not this run's business: it stays
+        # unarchived, the checkpoint stops there, and the next run reads it again.
+        #
+        # Within the proven range, offsets the reader passed over but did not deliver ARE gone —
+        # it read to the end of what exists and the records were not there. That, and only that, is
+        # the discontinuity worth recording.
+        #
+        # Unparseable offsets fail CLOSED: no publish, no checkpoint, retry next run. A capture
+        # whose own offsets cannot be read is not evidence of anything.
+        proven_last=$(capture_max_offset "$tmp")
+        case "${proven_last:-}" in
+          ''|*[!0-9]*)
+            log "  FAIL $topic p$part [$from,$endoff): read $got of $count records, but the capture carries no" \
+                "readable Offset: field, so there is no proof of how far the reader got — NOT publishing and NOT" \
+                "advancing the checkpoint; the range is re-read next run."
+            rm -f "$tmp"
+            failed=$(( failed + 1 ))
+            continue ;;
+        esac
+        proven_to=$(( proven_last + 1 ))
+        if [ "$proven_to" -le "$from" ] || [ "$proven_to" -gt "$endoff" ]; then
+          log "  FAIL $topic p$part [$from,$endoff): the capture's own offsets end at $proven_last, outside the" \
+              "range that was asked for — refusing to trust it. NOT publishing, checkpoint unchanged."
+          rm -f "$tmp"
+          failed=$(( failed + 1 ))
+          continue
+        fi
+        # The published range and the checkpoint are the PROVEN bound, not the queried one.
+        cap_to="$proven_to"
+        count=$(( proven_to - from ))
+        short_gap=$(( count - got ))
+        if [ "$proven_to" -lt "$endoff" ]; then
+          log "  SHORT $topic p$part: the reader stopped at offset $proven_last, short of the bound $endoff" \
+              "— a consumer that exits 0 having stopped early is indistinguishable from a compacted range except" \
+              "by the offsets it delivered. Publishing [$from,$proven_to) and advancing ONLY to $proven_to;" \
+              "[$proven_to,$endoff) is untouched and is re-read next run. This run FAILS."
+        fi
+        if [ "$short_gap" -gt 0 ]; then
+          log "  SHORT $topic p$part [$from,$proven_to): STRICT topic read $got of $count records — $short_gap" \
+              "offset(s) inside a range the reader DID reach the end of are no longer on the broker. Archiving the" \
+              "$got that ARE and recording the gap: the checkpoint advances past it so it does not repeat, and the" \
+              "sessions it spans are NOT EVALUABLE."
+          # Written BEFORE the publish: a line claiming a hole that was never published is a false
+          # alarm an operator can check, while a published capture whose hole was never recorded is
+          # a corpus that reads complete and is not.
+          printf '{"topic":"%s","dt":"%s","partition":%s,"discontinuity":"short read: %s of %s records in [%s,%s)","missing_offsets":%s,"detected_at":"%s","env":"%s"}\n' \
+            "$topic" "$DAY" "$part" "$got" "$count" "$from" "$proven_to" "$short_gap" "$STAMP" "$ENV_NAME" \
+            >> "$MAN/$topic.discontinuities.jsonl" \
+            || log "  WARN $topic p$part: could not record the short read in $MAN/$topic.discontinuities.jsonl"
+          manifest_extra="$manifest_extra$(printf ',"short_read":true,"missing_offsets":%s' "$short_gap")"
+        fi
       fi
     fi
     if [ "$seg_done" != true ]; then

@@ -300,17 +300,23 @@ class Barrier(unittest.TestCase):
                         calls)
         self.assertIn("read back from the broker", out)
 
-    def test_it_LEAVES_a_profile_window_that_is_already_WIDER(self):
-        """">=", never "==". A value widened by hand -- during a long archive outage, say -- is a
-        deliberate act, and a barrier that reset it to the declared figure would narrow the window
-        at exactly the moment someone had decided it needed to be wider."""
+    def test_it_RECONCILES_a_window_that_was_WIDENED_by_hand(self):
+        """EXACT, not a floor — and this test used to assert the opposite.
+
+        Leaving a wider value alone reads as kindness to an operator who widened the window during
+        an archive outage. It was a promise this repo cannot keep: apply-topics.sh's
+        alter_topic_config() re-applies the declared config set on EVERY run, so the next ordinary
+        deploy narrowed it back regardless, and all the ">=" bought was an operator believing
+        otherwise. topics.env already records exactly this property for the gamma-zone log's byte
+        cap: "Raising the cap means raising it HERE, because anything else is undone by the next
+        deploy." Widening the window means widening topic_min_compaction_lag_ms(). (Codex round 1.)
+        """
         topics = right_topics()
-        wider = str(int(PROFILE_LAG_MS) * 2)
-        topics[PROFILE]["configs"]["min.compaction.lag.ms"] = wider
+        topics[PROFILE]["configs"]["min.compaction.lag.ms"] = str(int(PROFILE_LAG_MS) * 2)
         rc, out, calls, state = run_barrier(topics)
         self.assertEqual(0, rc, out)
-        self.assertEqual(wider, state["topics"][PROFILE]["configs"]["min.compaction.lag.ms"])
-        self.assertFalse([c for c in calls if "--alter" in c], calls)
+        self.assertEqual(PROFILE_LAG_MS, state["topics"][PROFILE]["configs"]["min.compaction.lag.ms"])
+        self.assertTrue([c for c in calls if "--alter" in c and PROFILE in c], calls)
 
     def test_it_FAILS_when_the_window_it_set_does_not_read_back(self):
         """An accepted alter is not an applied one. With the alter silently dropped, the barrier
@@ -320,20 +326,67 @@ class Barrier(unittest.TestCase):
         topics[PROFILE]["configs"]["min.compaction.lag.ms"] = "0"
         rc, out, _calls, _state = run_barrier(topics, extra_env={"FAKE_KAFKA_TOPIC_ALTER_IS_A_NO_OP": "1"})
         self.assertNotEqual(0, rc, out)
-        self.assertIn("expected at least", out)
+        self.assertIn("expected exactly", out)
+
+    def describe_all(self, topics, topic):
+        """What `kafka-configs --describe --all` actually answers for one topic, from the same
+        stand-in the barrier talks to. Returned so a test can assert on the RESPONSE rather than on
+        the stand-in's source code."""
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        bin_dir = tmp / "bin"; bin_dir.mkdir()
+        shutil.copy(FAKE, bin_dir / "kafka-configs")
+        (bin_dir / "kafka-configs").chmod(0o755)
+        state, calls = tmp / "state.json", tmp / "calls"
+        state.write_text(json.dumps({"topics": topics}))
+        calls.touch()
+        env = dict(os.environ, FAKE_KAFKA_STATE=str(state), FAKE_KAFKA_CALLS=str(calls))
+        return subprocess.run([str(bin_dir / "kafka-configs"), "--bootstrap-server", "b:1",
+                               "--entity-type", "topics", "--entity-name", topic,
+                               "--describe", "--all"],
+                              capture_output=True, text=True, env=env, check=True).stdout
 
     def test_the_window_guard_survives_the_brokers_SYNONYMS(self):
         """`kafka-configs --describe --all` prints the effective value AND its synonyms on one line,
-        and the synonym here is log.cleaner.min.compaction.lag.ms -- a DIFFERENT key that merely
-        ENDS WITH the one being read. A bare `grep -o 'name='` counts two hits for one value, which
-        has already produced a false refusal in this repo. The fixture below is the broker's own
-        format (tests/fake_kafka_cli.py models --all), and the correct value must be read out of it
-        with no help: a run that passes here and would refuse a real broker is the thing to catch."""
+        and the synonym here is log.cleaner.min.compaction.lag.ms -- a DIFFERENT broker-level key
+        that merely ENDS WITH the one being read. A bare `grep -o 'name='` counts two hits for one
+        value, which has already produced a false refusal in this repo.
+
+        The first version of this test proved nothing: it searched tests/fake_kafka_cli.py's SOURCE
+        for the synonym string. Worse, the stand-in emitted the DEFAULT_CONFIG synonym only for an
+        UNSET config, while right_topics() sets the lag explicitly -- so the line the parser
+        actually saw carried no trap at all, and the test would have passed against a parser that
+        could not handle one (Codex round 1, P2). Both halves are fixed: the stand-in now lists the
+        override AND the broker default, the way the live dev broker did on 2026-11-17, and the
+        assertions below are made against the RESPONSE."""
+        for label, topics in (("lag set at the topic level", right_topics()),
+                              ("lag unset, broker default", right_topics())):
+            if label.startswith("lag unset"):
+                del topics[PROFILE]["configs"]["min.compaction.lag.ms"]
+            with self.subTest(label):
+                answer = self.describe_all(topics, PROFILE)
+                line = [l for l in answer.splitlines()
+                        if l.strip().startswith("min.compaction.lag.ms=")]
+                self.assertEqual(1, len(line), answer)
+                # The trap is really in the line the parser is handed.
+                self.assertIn("log.cleaner.min.compaction.lag.ms", line[0])
+                # And a bare grep really would mis-read it, so the guard's parser is load-bearing.
+                naive = re.findall(r"min\.compaction\.lag\.ms=([0-9]+)", line[0])
+                self.assertGreater(len(naive), 1,
+                                   "the fixture no longer carries the double-count trap")
+                # extract()'s boundary — the repo's single parser — picks the effective value.
+                got = subprocess.run(
+                    ["bash", "-c",
+                     f'source "{ROOT}/scripts/kafka/topic-config-parse.sh"; '
+                     f'extract \'min\\.compaction\\.lag\\.ms\' "$1"', "_", line[0]],
+                    capture_output=True, text=True, check=True).stdout.strip()
+                self.assertRegex(got, r"^[0-9]+$", f"the parser did not yield one number: {got!r}")
+
+    def test_the_whole_barrier_reads_the_window_right_off_that_response(self):
+        """End to end over the same trap: the barrier reports the value the broker really has."""
         rc, out, _calls, _state = run_barrier(right_topics())
         self.assertEqual(0, rc, out)
         self.assertIn(f"min.compaction.lag.ms={PROFILE_LAG_MS} (read back from the broker)", out)
-        # And the fixture really does carry the trap, so this is not a pass by sanitised output.
-        self.assertIn("log.cleaner.min.compaction.lag.ms", read("tests/fake_kafka_cli.py"))
 
     def test_the_SETTER_and_the_GUARD_read_the_same_key_the_same_way(self):
         """One parse, not two. The alter writes min.compaction.lag.ms and the read-back must find

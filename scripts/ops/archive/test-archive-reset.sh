@@ -138,26 +138,54 @@ cat > "$BIN/kafka-console-consumer.sh" <<'SH'
 #!/usr/bin/env bash
 # Emits exactly the records that exist in [offset, end) for the partition, capped by
 # --max-messages, in the archiver's expected "CreateTime:<ms>\t..." shape.
-part=""; off=0; maxm=0
+part=""; off=0; maxm=0; showoff=false
 while [ $# -gt 0 ]; do
   case "$1" in
     --partition) part="$2"; shift 2 ;;
     --offset) off="$2"; shift 2 ;;
     --max-messages) maxm="$2"; shift 2 ;;
+    --formatter-property) [ "$2" = "print.offset=true" ] && showoff=true; shift 2 ;;
     *) shift ;;
   esac
 done
 end=$(awk -v p="$part" '$1==p{print $3}' "$OE_FIXTURE")
 avail=$(( end - off )); [ "$avail" -lt 0 ] && avail=0
 [ "$avail" -gt "$maxm" ] && avail="$maxm"
-# OE_COMPACTED_GAP=<n>: n of the offsets in the range are no longer readable. That is what a
-# COMPACTED topic looks like to this consumer -- the offsets advanced, the records they held were
-# superseded and cleaned -- and it is also what RETENTION mid-range looks like on a delete-retained
-# one. The consumer still exits 0; only the count is short, which is the whole difficulty.
-avail=$(( avail - ${OE_COMPACTED_GAP:-0} )); [ "$avail" -lt 0 ] && avail=0
+# TWO WAYS A CAPTURE COMES BACK SHORT, and they need opposite handling, so the stand-in models them
+# separately rather than as one "fewer records" knob:
+#
+#   OE_COMPACTED_GAP=<n>   n offsets INSIDE the range no longer hold a record. That is compaction:
+#                          the offsets advanced, the records they held were superseded and cleaned.
+#                          The reader still reaches the END of the range -- the newest record for a
+#                          key is never cleaned and the active segment is never touched -- so the
+#                          LAST offset of the range is always delivered. Also what retention
+#                          mid-range looks like on a delete-retained topic.
+#   OE_STOP_AFTER=<n>      the reader delivers the first n records and then stops, AT EXIT 0. That
+#                          is kafka-console-consumer's inactivity timeout, and the errors it catches
+#                          internally: a lost broker halfway through looks exactly like this.
+#
+# Both exit 0 with fewer records than the offset span. Only the DELIVERED OFFSETS tell them apart,
+# which is why print.offset is on for strict topics and why the stand-in emits it.
+gap="${OE_COMPACTED_GAP:-0}"; stop="${OE_STOP_AFTER:-0}"
+emit() { # <offset>
+  # OE_NO_OFFSET_COLUMN forces the pre-print.offset layout even when the archiver asked for offsets,
+  # so the fail-closed path (a short capture that cannot attest to how far the reader got) is
+  # reachable. A real CLI too old for print.offset behaves exactly this way.
+  [ -n "${OE_NO_OFFSET_COLUMN:-}" ] && showoff=false
+  if [ "$showoff" = true ]; then
+    printf 'CreateTime:1786000000000\tPartition:%s\tOffset:%s\tk%s\t{"schemaVersion":1}\n' "$part" "$1" "$1"
+  else
+    printf 'CreateTime:1786000000000\tPartition:%s\tk%s\t{"schemaVersion":1}\n' "$part" "$1"
+  fi
+}
 i=0
 while [ "$i" -lt "$avail" ]; do
-  echo -e "CreateTime:1786000000000\t$part\tk$i\t{\"schemaVersion\":1}"
+  o=$(( off + i ))
+  if [ "$stop" -gt 0 ] && [ "$i" -ge "$stop" ]; then break; fi          # stopped early, exit 0
+  if [ "$gap" -gt 0 ] && [ "$i" -ge 1 ] && [ "$i" -le "$gap" ]; then    # cleaned: never the last
+    i=$(( i + 1 )); continue
+  fi
+  emit "$o"
   i=$(( i + 1 ))
 done
 SH
@@ -550,7 +578,7 @@ SH
 # The console consumer again, now also RECORDING each call, so a case can prove which path read a topic.
 cat > "$BIN/kafka-console-consumer.sh" <<'SH'
 #!/usr/bin/env bash
-part=""; off=0; maxm=0; topic=""; props=""
+part=""; off=0; maxm=0; topic=""; props=""; showoff=false
 while [ $# -gt 0 ]; do
   case "$1" in
     --partition) part="$2"; shift 2 ;;
@@ -559,20 +587,52 @@ while [ $# -gt 0 ]; do
     --topic) topic="$2"; shift 2 ;;
     --consumer-property) props="$props $2"; shift 2 ;;
     --isolation-level) props="$props isolation-level=$2"; shift 2 ;;
+    --formatter-property) [ "$2" = "print.offset=true" ] && showoff=true; shift 2 ;;
     *) shift ;;
   esac
 done
 echo "console $topic p$part props=[${props# }]" >> "$OE_FIXTURE.calls"
+# The knobs and the record layout live in BOTH copies of this stand-in, because this one REPLACES
+# the first at section 12 — anything written after section 12 would otherwise run with the knobs
+# silently doing nothing, which is exactly how section 19 first "passed" its own absence.
 end=$(awk -v p="$part" '$1==p{print $3}' "$OE_FIXTURE")
 avail=$(( end - off )); [ "$avail" -lt 0 ] && avail=0
 [ "$avail" -gt "$maxm" ] && avail="$maxm"
-# OE_COMPACTED_GAP: see the first copy of this stand-in above. It lives in BOTH because this one
-# REPLACES that one at section 12, so anything written after section 12 would otherwise run with
-# the knob silently doing nothing — which is exactly how section 19 first "passed" its own absence.
-avail=$(( avail - ${OE_COMPACTED_GAP:-0} )); [ "$avail" -lt 0 ] && avail=0
+# TWO WAYS A CAPTURE COMES BACK SHORT, and they need opposite handling, so the stand-in models them
+# separately rather than as one "fewer records" knob:
+#
+#   OE_COMPACTED_GAP=<n>   n offsets INSIDE the range no longer hold a record. That is compaction:
+#                          the offsets advanced, the records they held were superseded and cleaned.
+#                          The reader still reaches the END of the range -- the newest record for a
+#                          key is never cleaned and the active segment is never touched -- so the
+#                          LAST offset of the range is always delivered. Also what retention
+#                          mid-range looks like on a delete-retained topic.
+#   OE_STOP_AFTER=<n>      the reader delivers the first n records and then stops, AT EXIT 0. That
+#                          is kafka-console-consumer's inactivity timeout, and the errors it catches
+#                          internally: a lost broker halfway through looks exactly like this.
+#
+# Both exit 0 with fewer records than the offset span. Only the DELIVERED OFFSETS tell them apart,
+# which is why print.offset is on for strict topics and why the stand-in emits it.
+gap="${OE_COMPACTED_GAP:-0}"; stop="${OE_STOP_AFTER:-0}"
+emit() { # <offset>
+  # OE_NO_OFFSET_COLUMN forces the pre-print.offset layout even when the archiver asked for offsets,
+  # so the fail-closed path (a short capture that cannot attest to how far the reader got) is
+  # reachable. A real CLI too old for print.offset behaves exactly this way.
+  [ -n "${OE_NO_OFFSET_COLUMN:-}" ] && showoff=false
+  if [ "$showoff" = true ]; then
+    printf 'CreateTime:1786000000000\tPartition:%s\tOffset:%s\tk%s\t{"schemaVersion":1}\n' "$part" "$1" "$1"
+  else
+    printf 'CreateTime:1786000000000\tPartition:%s\tk%s\t{"schemaVersion":1}\n' "$part" "$1"
+  fi
+}
 i=0
 while [ "$i" -lt "$avail" ]; do
-  echo -e "CreateTime:1786000000000\t$part\tk$i\t{\"schemaVersion\":1}"
+  o=$(( off + i ))
+  if [ "$stop" -gt 0 ] && [ "$i" -ge "$stop" ]; then break; fi          # stopped early, exit 0
+  if [ "$gap" -gt 0 ] && [ "$i" -ge 1 ] && [ "$i" -le "$gap" ]; then    # cleaned: never the last
+    i=$(( i + 1 )); continue
+  fi
+  emit "$o"
   i=$(( i + 1 ))
 done
 SH
@@ -3054,28 +3114,58 @@ OUT=$(strict); RC=$?
 want "19a a strict topic archives normally when nothing is missing (rc)" 0 "$RC"
 want "   p0 checkpoint"                                               100 "$(ck 0)"
 
-# now 40 of the next 100 offsets per partition are gone
+# --- 19b-f. COMPACTION: 40 offsets inside the range hold no record, and the reader DOES reach the
+# end of the range (the newest record for a key is never cleaned, and the active segment never is).
 fixture "topicid SSSSSSSSSSSSSSSSSSSSSS" "0 0 200" "1 0 200"
 OUT=$(strict OE_COMPACTED_GAP=40); RC=$?
 want "19b the run FAILS, so the wrapper alerts"                         1 "$RC"
-has  "   and says what is missing, not just that it refused" "SHORT $TOPIC p0 [100,200): STRICT topic read 60 of 100 records" "$OUT"
+has  "   and says what is missing, not just that it refused" "STRICT topic read 60 of 100 records" "$OUT"
 hasnt "   it does NOT refuse the capture"            "refusing a short read" "$OUT"
 want "19c the 60 records that SURVIVED are archived"                  120 "$(runs records)"
 want "   two files published for the damaged range, one per partition"  2 "$(files 100)"
-want "19d the checkpoint ADVANCES past the damaged range"             200 "$(ck 0)"
+want "19d the checkpoint advances to the bound the reader REACHED"    200 "$(ck 0)"
 has  "19e the hole is recorded where a reader will find it" '"discontinuity":"short read: 60 of 100 records in [100,200)"' "$(disc)"
 has  "   with the count of offsets that are gone"           '"missing_offsets":40' "$(disc)"
 has  "19f the manifest line marks the file short"                 '"short_read":true' "$(mline)"
 has  "   and carries both numbers, so the shortfall is visible in the corpus itself" '"records":60,"offset_span":100' "$(mline)"
 
-# THE POINT OF THE WHOLE CHANGE: the loss STOPS. Before, this run would have re-read [100,200),
-# found 60 again and deleted them again — for ever, with every new record after them.
-fixture "topicid SSSSSSSSSSSSSSSSSSSSSS" "0 0 260" "1 0 260"
+# --- 19i-m. A TRANSIENT FAILURE, which is NOT a compaction gap and must not be treated as one.
+# kafka-console-consumer exits 0 on its inactivity timeout and on errors it catches internally, so a
+# reader that delivered the first 60 records and then lost the broker is indistinguishable from the
+# compacted case above on exit status and on count. The first version of this change advanced the
+# checkpoint to the queried bound in BOTH cases and called the difference "records no longer on the
+# broker" — which would have skipped 40 still-present records for ever, a NEW loss path (Codex round
+# 1, P1). The delivered OFFSETS are the only thing that separates them.
+A="$T/s3"; mkdir -p "$A/kafka/prod/_manifest"
+fixture "topicid WWWWWWWWWWWWWWWWWWWWWW" "0 0 100" "1 0 100"
+strict >/dev/null
+want "19i baseline checkpoint"                                        100 "$(ck 0)"
+
+fixture "topicid WWWWWWWWWWWWWWWWWWWWWW" "0 0 200" "1 0 200"
+OUT=$(strict OE_STOP_AFTER=60); RC=$?
+want "19j a reader that stopped early FAILS the run"                    1 "$RC"
+has  "   and says it stopped short of the bound, naming both" "the reader stopped at offset 159, short of the bound 200" "$OUT"
+want "19k the checkpoint advances ONLY to what was delivered"         160 "$(ck 0)"
+want "   the 60 delivered records are archived, not discarded"        120 "$(runs records)"
+want "19l and NO discontinuity is claimed: those records are still there" 0 \
+     "$([ -f "$A/kafka/prod/_manifest/$TOPIC.discontinuities.jsonl" ] && echo 1 || echo 0)"
+hasnt "   so the manifest does not mark the file short"      '"short_read":true' "$(mline)"
+
+# ...and the next run picks up exactly where the delivery stopped, losing nothing.
 OUT=$(strict); RC=$?
-want "19g the NEXT run is clean again (rc)"                             0 "$RC"
-want "   and reads only what is new"                                  120 "$(runs records)"
-want "   checkpoint keeps moving"                                     260 "$(ck 0)"
-want "   no NEW discontinuity on a healthy run"                         2 "$(disc | wc -l | tr -d ' ')"
+want "19m the next run completes the range (rc)"                        0 "$RC"
+want "   reading the 40 that the failed run never delivered"           80 "$(runs records)"
+want "   and the checkpoint reaches the real bound"                   200 "$(ck 0)"
+
+# --- 19n. A capture with NO offsets to attest to fails CLOSED: nothing published, nothing advanced.
+A="$T/s4"; mkdir -p "$A/kafka/prod/_manifest"
+fixture "topicid XXXXXXXXXXXXXXXXXXXXXX" "0 0 100" "1 0 100"
+strict >/dev/null
+fixture "topicid XXXXXXXXXXXXXXXXXXXXXX" "0 0 200" "1 0 200"
+OUT=$(strict OE_COMPACTED_GAP=40 OE_NO_OFFSET_COLUMN=1); RC=$?
+want "19n a short capture carrying no Offset: column is refused (rc)"   1 "$RC"
+has  "   saying there is no proof of how far the reader got" "no readable Offset: field" "$OUT"
+want "   checkpoint UNCHANGED — the range is re-read next run"        100 "$(ck 0)"
 
 # A NON-strict topic is untouched: a short read there is a quiet day, as it always was.
 A="$T/s2"; mkdir -p "$A/kafka/prod/_manifest"
@@ -3101,13 +3191,24 @@ want "20a baseline checkpoint before the garbage runs"                100 "$(ck 
 OUT=$(run OE_ENDS_GARBAGE="WARNING: something chatty on stdout"); RC=$?
 want "20b a WARNING on stdout is not a topic discovery (rc)"            1 "$RC"
 has  "   and it says the discovery failed, naming the output" "FAIL $TOPIC: the end-offset discovery did not succeed" "$OUT"
-has  "   quoting what came back"            "unexpected output: WARNING: something chatty on stdout" "$OUT"
+has  "   quoting what came back, with the line number" "unexpected output: line 1: [WARNING: something chatty on stdout]" "$OUT"
 want "   nothing archived"                                              0 "$(runs records)"
 want "   and the checkpoint is UNCHANGED"                             100 "$(ck 0)"
 
+# A LEADING BLANK LINE. The validator printed the first offending row and exited; command
+# substitution strips a trailing newline, so an EMPTY offending row produced an empty marker, the
+# emptiness test read that as "nothing wrong", and the whole answer passed — the warning on line 2
+# never inspected, both rows skipped by the partition loop, the topic green with nothing captured.
+OUT=$(run OE_ENDS_GARBAGE="
+WARNING: partial discovery"); RC=$?
+want "20b2 a BLANK first line does not smuggle the rest through (rc)"   1 "$RC"
+has  "   and the marker names the line it rejected" "line 1: []" "$OUT"
+want "   nothing archived"                                              0 "$(runs records)"
+want "   checkpoint unchanged"                                        100 "$(ck 0)"
+
 OUT=$(run OE_ENDS_GARBAGE="some.other.topic:0:999"); RC=$?
 want "20c offsets for ANOTHER topic are refused too (rc)"               1 "$RC"
-has  "   because they would be read as this topic's partitions" "unexpected output: some.other.topic:0:999" "$OUT"
+has  "   because they would be read as this topic's partitions" "unexpected output: line 1: [some.other.topic:0:999]" "$OUT"
 want "   checkpoint still unchanged"                                  100 "$(ck 0)"
 
 OUT=$(run OE_ENDS_GARBAGE="$TOPIC:0:150" OE_ENDS_GARBAGE_RC=1); RC=$?

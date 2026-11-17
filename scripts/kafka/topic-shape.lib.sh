@@ -386,14 +386,36 @@ topic_max_message_bytes() {
 # It is also the figure ensure-line-health-topics.sh already applies for the same shape of guarantee
 # ("nothing inside the recovery horizon is compacted away"), so the fleet carries one number.
 #
-# WHAT THE WINDOW GUARANTEES: every record on this topic stays readable for at least seven days
-# after it was produced, whatever the segments do. The archiver may miss a full week of runs and
-# still capture all of it.
-# WHAT IT DOES NOT: it recovers nothing already compacted. It is not retention — on day eight the
-# session's intraday snapshots still collapse to one record per key, and the archive FILE remains
-# the only durable copy; the lag buys the archiver its chance, nothing more. And it does not survive
-# a topic that is DELETED and re-created (the reset paths, apply-topics' recreate arm), which
-# destroys the log whatever the lag says.
+# WHAT THE WINDOW GUARANTEES: a record whose TIMESTAMP is less than seven days old is not eligible
+# for cleaning, whatever the segments do. Seven days is therefore the WHOLE budget, shared between
+# the outage and the repair: an outage of N days leaves 7-N days to notice the alert and get a
+# capture through, so the four-day long weekend above leaves three days, not a week. It is not seven
+# days of outage PLUS a week to fix it.
+#
+# AND IT IS THE RECORD'S TIMESTAMP, NOT ITS ARRIVAL. Kafka decides eligibility by comparing a
+# segment's largestTimestamp() against now - min.compaction.lag.ms (LogCleanerManager), and this
+# topic is message.timestamp.type=CreateTime — the producer's clock. For live publishing the two are
+# the same to within the publish latency, which is what makes the arithmetic above sound. For a
+# REPLAY that backdates its records they are not: a record stamped eight days ago is eligible the
+# moment its segment rolls, lag or no lag. That is deliberately NOT fixed by forcing LogAppendTime
+# here, because the archive's own event-time bounds (min_event_time_ms / max_event_time_ms in every
+# manifest line) are read off CreateTime, and the corpus exists to be read by event time; switching
+# the topic would silently restamp every record with its arrival instant. A backdating replay into
+# this topic therefore needs its own capture, as the 2026-11-12 rescue did.
+#
+# WHAT IT DOES NOT GUARANTEE: it recovers nothing already compacted. It is not retention — past the
+# window the session's intraday snapshots still collapse to one record per key, and the archive FILE
+# remains the only durable copy; the lag buys the archiver its chance, nothing more. It does not
+# survive a topic that is DELETED and re-created (the reset paths, apply-topics' recreate arm),
+# which destroys the log whatever the lag says. And it says nothing about a record older than the
+# window that was never captured.
+#
+# RECONCILED EXACTLY, like every other declared shape, and NOT as a floor. A barrier that accepted
+# "at least seven days" would have been a promise this repo cannot keep: alter_topic_config() below
+# re-applies the declared config set on EVERY run, so a window widened by hand during an outage is
+# narrowed again by the next ordinary deploy — the same property topics.env already records for the
+# gamma-zone log's byte cap ("Raising the cap means raising it HERE, because anything else is undone
+# by the next deploy"). Widening the window means widening it in THIS function. (Codex round 1, P2.)
 #
 # THE COST IS MEASURED, not assumed (live dev broker, 2026-11-17, over a sample that now spans
 # almost the whole window): options.spx.gamma-zone.profile held 4,826 records in 26,163,547 bytes
