@@ -979,9 +979,55 @@ for topic in $TOPICS; do
         continue ;;
     esac
   else
-  # CONSOLE-CONSUMER TOPICS: unchanged (re-review round 3 records why). end offsets: "topic:partition:endOffset".
-  # A topic that does not exist yields nothing.
-  ends=$("$KAFKA_BIN/kafka-get-offsets.sh" --bootstrap-server "$BOOTSTRAP" --topic "$topic" 2>/dev/null)
+  # CONSOLE-CONSUMER TOPICS. end offsets: "topic:partition:endOffset".
+  #
+  # VALIDATED, not merely non-empty. Until 2026-11-13 this line discarded the command's exit status
+  # and stderr and the only test applied to its stdout was `[ -z "$ends" ]`. So a discovery that
+  # printed NOTHING BUT A DIAGNOSTIC -- "WARNING: ...", a half-written answer, a line for another
+  # topic -- came back non-empty, passed the absent test, and then met the per-partition loop below,
+  # which skips any row without a partition and an offset. Every row was skipped, the topic captured
+  # nothing, no failure was counted, and the run finished green. An unparseable answer is not a quiet
+  # day: it is a broker this run cannot ask about this topic, and the whole point of this job is that
+  # such a run must say so.
+  #
+  # THE EMPTY ANSWER IS LEFT EXACTLY AS IT WAS, deliberately. kafka-get-offsets answers for a topic
+  # the broker does not have with exit 1, empty stdout and "Could not match any topic-partitions"
+  # (broker-test/cli-fixtures/4.3.0/ends-absent.*) -- the same shape an unreachable broker gives.
+  # Treating a non-zero status alone as a failure would therefore turn every legitimately absent
+  # non-strict topic on every job into a failure. So empty stdout still falls through to the
+  # absent/unreadable branch below, which is strict-aware; what is new is that a NON-EMPTY answer
+  # must now be well formed, and must contain at least one line for the topic that was asked about.
+  ends_err=$(mktemp "${TMPDIR:-/tmp}/oe-archive-ends.XXXXXX" 2>/dev/null)
+  ends_why=""
+  if [ -z "$ends_err" ]; then
+    ends=""
+    ends_why="could not create a scratch file for the lookup's stderr"
+  else
+    ends=$("$KAFKA_BIN/kafka-get-offsets.sh" --bootstrap-server "$BOOTSTRAP" --topic "$topic" 2>"$ends_err")
+    ends_rc=$?
+    if [ -n "$ends" ]; then
+      # Only a NON-EMPTY answer is judged here; see above for why an empty one is not.
+      [ "$ends_rc" -eq 0 ] || ends_why="exit $ends_rc with output on stdout"
+      ends_diag=$(grep -m1 -iE "$KAFKA_CLI_DIAG" "$ends_err" 2>/dev/null | cut -c1-240)
+      [ -z "$ends_diag" ] || ends_why="${ends_why:+$ends_why, }stderr: $ends_diag"
+      # Every line must be this topic's own "<topic>:<partition>:<offset>". A line for another topic
+      # is as wrong as a warning: it would be read as this topic's partitions.
+      # awk with a LITERAL comparison, not a regex built from the topic name: '.' and '-' are
+      # regex metacharacters and a topic name is full of them, so a pattern assembled by hand here
+      # would be a second escaping bug waiting beside the one this block exists to fix.
+      ends_bad=$(printf '%s\n' "$ends" \
+        | awk -F: -v t="$topic" 'NF!=3 || $1!=t || $2 !~ /^[0-9]+$/ || $3 !~ /^[0-9]+$/ {print; exit}' \
+        | cut -c1-240)
+      [ -z "$ends_bad" ] || ends_why="${ends_why:+$ends_why, }unexpected output: $ends_bad"
+    fi
+    rm -f "$ends_err"
+  fi
+  if [ -n "$ends_why" ]; then
+    log "  FAIL $topic: the end-offset discovery did not succeed ($ends_why) — this run cannot tell which" \
+        "partitions exist or where they end. Nothing archived for this topic; its checkpoint is unchanged."
+    failed=$(( failed + 1 ))
+    continue
+  fi
   fi
   if [ -z "$ends" ]; then
     if is_strict_topic "$topic"; then
@@ -1300,6 +1346,10 @@ for topic in $TOPICS; do
     if is_bucket_filed_topic "$topic"; then stemdir="$ROOT/$topic/.scratch"; fi
     mkdir -p "$stemdir"
     seg_done=false
+    # Per PARTITION, beside seg_done, and not only on the console branch that sets it: this script
+    # runs under `set -u`, and the publish below reads it on a path the committed-read branch can
+    # also reach. An unset variable there would abort the whole run.
+    short_read=false
     cap_wall_start="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
     # <topic>.p<partition>.<from>-<to>.dt<sessionDate>.<archivedAtUTC>.jsonl.gz
     # The session day is repeated INSIDE the name on purpose: copied to a NAS, attached to a
@@ -1564,14 +1614,46 @@ for topic in $TOPICS; do
       # is the extreme case — 642,060 offsets, ~2,000 readable records. Judging by count alone would
       # mark every compacted topic as failed forever. Judge by the CONSUMER's exit status instead,
       # and record both numbers so the compaction ratio is visible in the manifest.
+      # A STRICT SHORT READ IS A HOLE TO RECORD, NOT A CAPTURE TO THROW AWAY (2026-11-13).
+      #
+      # What this used to do: log FAIL, `rm -f "$tmp"`, leave the checkpoint where it was. Read as
+      # "refuse to archive an incomplete range", that sounds right. It is not, and on a compacted
+      # strict topic it is catastrophic. Once ANY record in [from,endoff) has been removed — by
+      # compaction, or by retention on a delete-retained one — that range can never read complete
+      # again. So every later run re-reads the same range, finds the same shortfall, and deletes
+      # the capture AGAIN. The records that ARE still there, including everything produced since,
+      # are discarded on every run for ever. One lost snapshot became a corpus that silently stops
+      # growing, while the job kept failing in a way that said nothing about which records were
+      # actually gone.
+      #
+      # What it does now: keep what was recoverable, say exactly what is missing, and advance past
+      # it. A gap the owner can SEE in the corpus beats a corpus that quietly stops. The three
+      # pieces of that are:
+      #   * the capture is published and the checkpoint advances, so the hole is bounded to this one
+      #     range instead of swallowing every future one;
+      #   * a line is appended to <topic>.discontinuities.jsonl — the same file the strict log-RESET
+      #     path writes — naming the range and the shortfall, so a reader marks the sessions it spans
+      #     NOT_EVALUABLE rather than counting a smaller population as complete;
+      #   * the manifest line carries "short_read" beside its records/offset_span, and the capture
+      #     itself carries per-record offsets (strict topics get print.offset above), so the missing
+      #     offsets are identifiable in the file and not merely in a count;
+      # and the run still FAILS, so the wrapper alerts. That failure is self-limiting: the checkpoint
+      # has moved past the damaged range, so the next run is green unless a NEW hole appears.
+      #
+      # IS STRICTNESS RIGHT HERE AT ALL, now that a gap on options.spx.gamma-zone.profile is an
+      # expected possibility rather than an impossibility? Yes — but only the part of it that is
+      # about EVIDENCE. "Strict" bundles three behaviours: an absent topic fails instead of being a
+      # quiet SKIP; the capture records offsets; and a short read was refused. The first two are
+      # exactly what a compacted evidence topic wants and are kept. The third was written for a
+      # delete-retained log (the comment below still records that `got < count` is NORMAL under
+      # compaction) and was never reachable in practice — both topics in the default
+      # OE_STRICT_TOPICS are committed-read and take the other capture path entirely, so this branch
+      # first became live when oe-archive-gamma-zone.sh passed a compacted topic through it. It is
+      # fixed here rather than exempted per topic: deleting recoverable records and stalling for
+      # ever is wrong on a delete-retained topic too, for the same reason. One rule, not two.
+      short_read=false
       if is_strict_topic "$topic" && [ "$consumer_rc" -eq 0 ] && [ "$got" -ne "$count" ]; then
-        # A5: the short read that is NORMAL on a compacted topic is a HOLE on a delete-retained one.
-        # Accepting it would archive fewer records than the offset range claims and still advance the
-        # checkpoint past them.
-        log "  FAIL $topic p$part [$from,$endoff): STRICT topic read $got of $count records — refusing a short read"
-        rm -f "$tmp"
-        failed=$(( failed + 1 ))
-        continue
+        short_read=true
       fi
       if [ "$consumer_rc" -ne 0 ] || [ "$got" -le 0 ]; then
         rm -f "$tmp"
@@ -1579,11 +1661,28 @@ for topic in $TOPICS; do
         failed=$(( failed + 1 ))
         continue
       fi
+      if [ "$short_read" = true ]; then
+        log "  SHORT $topic p$part [$from,$endoff): STRICT topic read $got of $count records — $(( count - got ))" \
+            "offset(s) are no longer on the broker. Archiving the $got that ARE and recording the gap:" \
+            "this run FAILS, the checkpoint advances past the damaged range so it does not repeat, and the" \
+            "sessions it spans are NOT EVALUABLE."
+        # Written BEFORE the publish: a line claiming a hole that was never published is a false
+        # alarm an operator can check, while a published capture whose hole was never recorded is a
+        # corpus that reads complete and is not.
+        printf '{"topic":"%s","dt":"%s","partition":%s,"discontinuity":"short read: %s of %s records in [%s,%s)","missing_offsets":%s,"detected_at":"%s","env":"%s"}\n' \
+          "$topic" "$DAY" "$part" "$got" "$count" "$from" "$endoff" "$(( count - got ))" "$STAMP" "$ENV_NAME" \
+          >> "$MAN/$topic.discontinuities.jsonl" \
+          || log "  WARN $topic p$part: could not record the short read in $MAN/$topic.discontinuities.jsonl"
+        manifest_extra="$manifest_extra$(printf ',"short_read":true,"missing_offsets":%s' "$(( count - got ))")"
+      fi
     fi
     if [ "$seg_done" != true ]; then
       PS_FROM="$from"; PS_TO="$cap_to"; PS_DAY="$DAY"; PS_GOT="$got"; PS_COUNT="$count"; PS_MIN="$min_ms"; PS_MAX="$max_ms"
       PS_SV="$schema_versions"; PS_EXTRA="$manifest_extra"
       publish_segment || continue
+      # Counted only once the capture is published and the checkpoint has moved: a run that failed
+      # to publish has already counted its own failure, and counting twice would say two holes.
+      [ "$short_read" = true ] && failed=$(( failed + 1 ))
     fi
   done <<< "$ends"
 

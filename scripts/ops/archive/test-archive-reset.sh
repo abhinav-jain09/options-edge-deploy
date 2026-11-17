@@ -92,6 +92,12 @@ replay() { cat "$OE_CLI/$1.out"; cat "$OE_CLI/$1.err" >&2; exit "$(cat "$OE_CLI/
 # OE_ENDS_QUERY / OE_EARLIEST_QUERY = fail (recorded unreachable) | skip (GetOffsetShell's per-partition
 # "Skip getting offsets", exit 0) | missing (the partition silently absent, exit 0), for partition OE_SKIP_PART.
 [ "${OE_BROKER:-up}" = down ] && replay unreach-ends
+# OE_ENDS_GARBAGE: a NON-EMPTY answer that is not offsets. A real CLI does this when it prints a
+# warning to stdout, when it answers about another topic, or when an answer is half written. Only
+# the latest/default query is affected, which is the discovery the archiver's topic loop depends on.
+if [ -n "${OE_ENDS_GARBAGE:-}" ] && { [ -z "$time_arg" ] || [ "$time_arg" = latest ]; }; then
+  printf '%s\n' "$OE_ENDS_GARBAGE"; exit "${OE_ENDS_GARBAGE_RC:-0}"
+fi
 case "$time_arg" in ""|latest) q="${OE_ENDS_QUERY:-ok}" ;; earliest) q="${OE_EARLIEST_QUERY:-ok}" ;; *) q=ok ;; esac
 [ "$q" = fail ] && replay unreach-ends
 # A topic the broker does not have: the RECORDED answer (exit 1, "Could not match any topic-partitions").
@@ -144,6 +150,11 @@ done
 end=$(awk -v p="$part" '$1==p{print $3}' "$OE_FIXTURE")
 avail=$(( end - off )); [ "$avail" -lt 0 ] && avail=0
 [ "$avail" -gt "$maxm" ] && avail="$maxm"
+# OE_COMPACTED_GAP=<n>: n of the offsets in the range are no longer readable. That is what a
+# COMPACTED topic looks like to this consumer -- the offsets advanced, the records they held were
+# superseded and cleaned -- and it is also what RETENTION mid-range looks like on a delete-retained
+# one. The consumer still exits 0; only the count is short, which is the whole difficulty.
+avail=$(( avail - ${OE_COMPACTED_GAP:-0} )); [ "$avail" -lt 0 ] && avail=0
 i=0
 while [ "$i" -lt "$avail" ]; do
   echo -e "CreateTime:1786000000000\t$part\tk$i\t{\"schemaVersion\":1}"
@@ -555,6 +566,10 @@ echo "console $topic p$part props=[${props# }]" >> "$OE_FIXTURE.calls"
 end=$(awk -v p="$part" '$1==p{print $3}' "$OE_FIXTURE")
 avail=$(( end - off )); [ "$avail" -lt 0 ] && avail=0
 [ "$avail" -gt "$maxm" ] && avail="$maxm"
+# OE_COMPACTED_GAP: see the first copy of this stand-in above. It lives in BOTH because this one
+# REPLACES that one at section 12, so anything written after section 12 would otherwise run with
+# the knob silently doing nothing — which is exactly how section 19 first "passed" its own absence.
+avail=$(( avail - ${OE_COMPACTED_GAP:-0} )); [ "$avail" -lt 0 ] && avail=0
 i=0
 while [ "$i" -lt "$avail" ]; do
   echo -e "CreateTime:1786000000000\t$part\tk$i\t{\"schemaVersion\":1}"
@@ -3014,6 +3029,114 @@ out=$(VP_CALLS="$vp_tmp/calls" CAPTURE="$vp_tmp/does-not-exist.py" ARCHIVE_ROOT=
 rc=$?
 want "18o an uninstalled capture fails loudly (rc)" 2 "$rc"
 has  "  and alerts, because a cron that quietly does nothing is how bucket 0 stayed empty" "ALERT:" "$out"
+
+# ================= 19. a STRICT SHORT READ preserves what survived and RECORDS the hole ============
+# THE DEFECT THIS SECTION EXISTS FOR. The strict short-read branch used to log FAIL, `rm -f` the
+# capture and leave the checkpoint alone. Once ANY offset in [from,endoff) is gone — compaction on a
+# compacted topic, retention on a delete-retained one — that range can never read complete again, so
+# every later run re-read it, found the same shortfall and deleted the capture AGAIN. The records
+# that WERE still there, including everything produced since, were discarded hourly for ever. One
+# lost snapshot became a corpus that silently stops growing.
+#
+# The branch was also unreachable until options.spx.gamma-zone.profile was passed through it: both
+# topics in the default OE_STRICT_TOPICS are committed-read and take the other capture path. So
+# these are the first assertions it has ever had.
+A="$T/s"; mkdir -p "$A/kafka/prod/_manifest"
+reset_alerts
+strict() { run OE_STRICT_TOPICS="$TOPIC" "$@"; }
+disc() { cat "$A/kafka/prod/_manifest/$TOPIC.discontinuities.jsonl" 2>/dev/null; }
+files() { ls "$A/kafka/prod/$TOPIC"/dt=*/*."$1"-*.jsonl.gz 2>/dev/null | wc -l | tr -d ' '; }
+mline() { cat "$A/kafka/prod/$TOPIC"/dt=*/_manifest.jsonl 2>/dev/null; }
+
+# a clean first session, so the checkpoint below is a real one and not a log start
+fixture "topicid SSSSSSSSSSSSSSSSSSSSSS" "0 0 100" "1 0 100"
+OUT=$(strict); RC=$?
+want "19a a strict topic archives normally when nothing is missing (rc)" 0 "$RC"
+want "   p0 checkpoint"                                               100 "$(ck 0)"
+
+# now 40 of the next 100 offsets per partition are gone
+fixture "topicid SSSSSSSSSSSSSSSSSSSSSS" "0 0 200" "1 0 200"
+OUT=$(strict OE_COMPACTED_GAP=40); RC=$?
+want "19b the run FAILS, so the wrapper alerts"                         1 "$RC"
+has  "   and says what is missing, not just that it refused" "SHORT $TOPIC p0 [100,200): STRICT topic read 60 of 100 records" "$OUT"
+hasnt "   it does NOT refuse the capture"            "refusing a short read" "$OUT"
+want "19c the 60 records that SURVIVED are archived"                  120 "$(runs records)"
+want "   two files published for the damaged range, one per partition"  2 "$(files 100)"
+want "19d the checkpoint ADVANCES past the damaged range"             200 "$(ck 0)"
+has  "19e the hole is recorded where a reader will find it" '"discontinuity":"short read: 60 of 100 records in [100,200)"' "$(disc)"
+has  "   with the count of offsets that are gone"           '"missing_offsets":40' "$(disc)"
+has  "19f the manifest line marks the file short"                 '"short_read":true' "$(mline)"
+has  "   and carries both numbers, so the shortfall is visible in the corpus itself" '"records":60,"offset_span":100' "$(mline)"
+
+# THE POINT OF THE WHOLE CHANGE: the loss STOPS. Before, this run would have re-read [100,200),
+# found 60 again and deleted them again — for ever, with every new record after them.
+fixture "topicid SSSSSSSSSSSSSSSSSSSSSS" "0 0 260" "1 0 260"
+OUT=$(strict); RC=$?
+want "19g the NEXT run is clean again (rc)"                             0 "$RC"
+want "   and reads only what is new"                                  120 "$(runs records)"
+want "   checkpoint keeps moving"                                     260 "$(ck 0)"
+want "   no NEW discontinuity on a healthy run"                         2 "$(disc | wc -l | tr -d ' ')"
+
+# A NON-strict topic is untouched: a short read there is a quiet day, as it always was.
+A="$T/s2"; mkdir -p "$A/kafka/prod/_manifest"
+fixture "topicid TTTTTTTTTTTTTTTTTTTTTT" "0 0 100" "1 0 100"
+run >/dev/null
+fixture "topicid TTTTTTTTTTTTTTTTTTTTTT" "0 0 200" "1 0 200"
+OUT=$(run OE_COMPACTED_GAP=40); RC=$?
+want "19h a NON-strict short read is still a quiet day (rc)"            0 "$RC"
+want "   it archives what it got"                                     120 "$(runs records)"
+want "   and writes no discontinuity"                                   0 "$([ -f "$A/kafka/prod/_manifest/$TOPIC.discontinuities.jsonl" ] && echo 1 || echo 0)"
+
+# ================= 20. the console DISCOVERY answer must be well formed =========================
+# Until 2026-11-13 the end-offset lookup discarded its exit status and stderr, and the only test
+# applied to its stdout was "is it empty". So an answer that was non-empty but unparseable — a
+# warning on stdout, a line for another topic, a half-written reply — passed, and the per-partition
+# loop below it skipped every row that had no partition and offset. Nothing was captured, nothing
+# was counted as failed, and the run finished green.
+A="$T/g"; mkdir -p "$A/kafka/prod/_manifest"
+fixture "topicid UUUUUUUUUUUUUUUUUUUUUU" "0 0 100" "1 0 100"
+run >/dev/null
+want "20a baseline checkpoint before the garbage runs"                100 "$(ck 0)"
+
+OUT=$(run OE_ENDS_GARBAGE="WARNING: something chatty on stdout"); RC=$?
+want "20b a WARNING on stdout is not a topic discovery (rc)"            1 "$RC"
+has  "   and it says the discovery failed, naming the output" "FAIL $TOPIC: the end-offset discovery did not succeed" "$OUT"
+has  "   quoting what came back"            "unexpected output: WARNING: something chatty on stdout" "$OUT"
+want "   nothing archived"                                              0 "$(runs records)"
+want "   and the checkpoint is UNCHANGED"                             100 "$(ck 0)"
+
+OUT=$(run OE_ENDS_GARBAGE="some.other.topic:0:999"); RC=$?
+want "20c offsets for ANOTHER topic are refused too (rc)"               1 "$RC"
+has  "   because they would be read as this topic's partitions" "unexpected output: some.other.topic:0:999" "$OUT"
+want "   checkpoint still unchanged"                                  100 "$(ck 0)"
+
+OUT=$(run OE_ENDS_GARBAGE="$TOPIC:0:150" OE_ENDS_GARBAGE_RC=1); RC=$?
+want "20d well-formed offsets at a NON-ZERO exit are refused (rc)"      1 "$RC"
+has  "   the status is part of the answer"            "exit 1 with output on stdout" "$OUT"
+
+# A HEALTHY answer is not refused: the archiver must not start rejecting working brokers. The
+# override here is the REAL answer, re-stated — the fixture ends where it claims, so the consumer
+# downstream agrees with it and the only thing under test is the new validation.
+fixture "topicid UUUUUUUUUUUUUUUUUUUUUU" "0 0 150" "1 0 150"
+OUT=$(run OE_ENDS_GARBAGE="$TOPIC:0:150
+$TOPIC:1:150"); RC=$?
+want "20e a well-formed multi-line answer is accepted (rc)"             0 "$RC"
+want "   and it archived the new records"                             100 "$(runs records)"
+
+# AND THE ABSENT TOPIC IS UNCHANGED, deliberately: kafka-get-offsets answers for a topic the broker
+# does not have with exit 1 and EMPTY stdout, which is the same shape an unreachable broker gives.
+# Reading a non-zero status alone as failure would turn every legitimately absent non-strict topic
+# on every job into a failure, so only a NON-EMPTY answer is judged.
+A="$T/g2"; mkdir -p "$A/kafka/prod/_manifest"
+fixture "topicid VVVVVVVVVVVVVVVVVVVVVV"      # no partition lines at all => the recorded ends-absent answer
+OUT=$(run); RC=$?
+want "20f an ABSENT non-strict topic is still a quiet SKIP (rc)"        0 "$RC"
+has  "   and says so"                        "SKIP $TOPIC (absent or unreadable)" "$OUT"
+want "   counted as absent, not failed"                                 1 "$(runs absent)"
+
+OUT=$(strict); RC=$?
+want "20g an ABSENT STRICT topic still FAILS (rc)"                      1 "$RC"
+has  "   and says the corpus cannot be completed"   "STRICT topic is absent or unreadable" "$OUT"
 
 echo
 [ "$FAILED" -eq 0 ] && { echo "test-archive-reset: ALL PASS"; exit 0; }

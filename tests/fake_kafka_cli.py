@@ -70,9 +70,41 @@ if name == "kafka-configs" and arg("--entity-type") == "brokers":
                 b[k] = v
         save()
     sys.exit(0)
+# `--describe --all` on a REAL broker prints every config, one per line, with the effective value
+# first and its SYNONYMS after -- including keys the topic never set, which come back as the broker
+# DEFAULT rather than being absent:
+#   min.compaction.lag.ms=0 sensitive=false synonyms={DEFAULT_CONFIG:log.cleaner.min.compaction.lag.ms=0}
+# The bare "Dynamic configs" line below models the plain --describe and omits anything unset, so a
+# guard that reads an effective value could not be tested against it at all. It also never exercised
+# the trap the synonym carries: log.cleaner.min.compaction.lag.ms ENDS WITH the key being read, so a
+# parser without a left boundary counts two hits for one value. Modelled here so the barriers are
+# tested against output shaped like the broker's, not like a convenience.
+ALL_DEFAULTS = {
+    "cleanup.policy": ("delete", "log.cleanup.policy"),
+    "retention.ms": ("604800000", "log.retention.ms"),
+    "retention.bytes": ("-1", "log.retention.bytes"),
+    "max.message.bytes": ("1048588", "message.max.bytes"),
+    "min.insync.replicas": ("1", "min.insync.replicas"),
+    "min.compaction.lag.ms": ("0", "log.cleaner.min.compaction.lag.ms"),
+    "max.compaction.lag.ms": ("9223372036854775807", "log.cleaner.max.compaction.lag.ms"),
+    "min.cleanable.dirty.ratio": ("0.5", "log.cleaner.min.cleanable.ratio"),
+    "delete.retention.ms": ("86400000", "log.cleaner.delete.retention.ms"),
+    "segment.ms": ("604800000", "log.roll.ms"),
+    "segment.bytes": ("1073741824", "log.segment.bytes"),
+}
+
 if name == "kafka-configs":
     t = arg("--entity-name")
-    if "--describe" in argv:
+    if "--describe" in argv and "--all" in argv:
+        cfg = topics.get(t, {}).get("configs", {})
+        print(f"All configs for topic {t} are:")
+        for k in sorted(set(ALL_DEFAULTS) | set(cfg)):
+            if k in cfg:
+                print(f"  {k}={cfg[k]} sensitive=false synonyms={{DYNAMIC_TOPIC_CONFIG:{k}={cfg[k]}}}")
+            else:
+                d, syn = ALL_DEFAULTS[k]
+                print(f"  {k}={d} sensitive=false synonyms={{DEFAULT_CONFIG:{syn}={d}}}")
+    elif "--describe" in argv:
         cfg = topics.get(t, {}).get("configs", {})
         print(f"Dynamic configs for topic {t} are:")
         print("  " + " ".join(f"{k}={v}" for k, v in cfg.items()))
@@ -81,6 +113,11 @@ if name == "kafka-configs":
         if os.environ.get("FAKE_KAFKA_TOPIC_MAXBYTES_ALTER_FAILS") and "max.message.bytes" in add:
             print("topic alter refused", file=sys.stderr)
             sys.exit(1)
+        # An ACCEPTED alter is not an APPLIED one: the CLI exits 0 and the broker's effective value
+        # does not move. Barriers that set a config and then read it back exist for exactly this,
+        # and without a way to produce it the read-back can only ever be tested as a tautology.
+        if os.environ.get("FAKE_KAFKA_TOPIC_ALTER_IS_A_NO_OP"):
+            sys.exit(0)
         # split on commas outside [brackets]
         parts, depth, cur = [], 0, ""
         for ch in add:

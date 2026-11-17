@@ -44,6 +44,14 @@ TOPICS = (CURRENT, LOG, PROFILE)
 # PROFILE's, and this pair is what the rebuildable assertions iterate.
 REBUILDABLE = (CURRENT, PROFILE)
 LOG_BYTES = "1073741824"          # 1 GiB; the arithmetic is in the topics.env block
+# The profile's compaction window, read from the ONE place that declares it rather than retyped: a
+# literal here would let the shipped value drift while this module went on passing.
+PROFILE_LAG_MS = subprocess.run(
+    ["bash", "-c", f'source "{ROOT}/scripts/kafka/topic-shape.lib.sh"; topic_min_compaction_lag_ms '
+                   f'"options.spx.gamma-zone.profile"'],
+    capture_output=True, text=True, check=True).stdout.strip()
+assert PROFILE_LAG_MS.isdigit() and int(PROFILE_LAG_MS) > 0, \
+    "topic-shape.lib.sh declares no min.compaction.lag.ms for the profile topic"
 INPUT_TOPIC = "es.futures.footprint.bars"
 
 
@@ -60,10 +68,12 @@ def declarations(variables, environment=None):
     return {line.split("=", 1)[0]: line.split("=", 1)[1].split() for line in out.splitlines()}
 
 
-def shaped(policy, retention, bytes_="-1", parts=1, isr=1, maxbytes="1048576"):
-    return {"partitions": parts, "rf": 1, "end": 0,
-            "configs": {"cleanup.policy": policy, "retention.ms": retention, "retention.bytes": bytes_,
-                        "max.message.bytes": maxbytes, "min.insync.replicas": str(isr)}}
+def shaped(policy, retention, bytes_="-1", parts=1, isr=1, maxbytes="1048576", lag=None):
+    cfg = {"cleanup.policy": policy, "retention.ms": retention, "retention.bytes": bytes_,
+           "max.message.bytes": maxbytes, "min.insync.replicas": str(isr)}
+    if lag is not None:
+        cfg["min.compaction.lag.ms"] = lag
+    return {"partitions": parts, "rf": 1, "end": 0, "configs": cfg}
 
 
 def run_barrier(topics, environment="dev", extra_env=None):
@@ -90,7 +100,7 @@ def run_barrier(topics, environment="dev", extra_env=None):
 def right_topics():
     return {CURRENT: shaped("compact", "-1", "-1"),
             LOG: shaped("delete", "-1", LOG_BYTES),
-            PROFILE: shaped("compact", "-1", "-1")}
+            PROFILE: shaped("compact", "-1", "-1", lag=PROFILE_LAG_MS)}
 
 
 class Topics(unittest.TestCase):
@@ -246,7 +256,11 @@ class Barrier(unittest.TestCase):
         self.assertEqual(shaped("delete", "-1", LOG_BYTES)["configs"], state["topics"][LOG]["configs"])
         # The profile takes CURRENT's shape, not the log's: a byte cap on a latest-value-per-session
         # topic would be meaningless, and the log's shape would make it a second corpus.
-        self.assertEqual(shaped("compact", "-1", "-1")["configs"], state["topics"][PROFILE]["configs"])
+        # ...and it is CREATED with its compaction window, not given one by a later apply run. The
+        # window is what lets the hourly archive see an intraday snapshot before the cleaner does;
+        # a topic created without it has an unguarded gap from its first record onward.
+        self.assertEqual(shaped("compact", "-1", "-1", lag=PROFILE_LAG_MS)["configs"],
+                         state["topics"][PROFILE]["configs"])
         self.assertEqual(1, state["topics"][LOG]["partitions"])
         self.assertEqual(1, state["topics"][PROFILE]["partitions"])
 
@@ -265,6 +279,91 @@ class Barrier(unittest.TestCase):
         rc, out, calls, _state = run_barrier(topics)
         self.assertNotEqual(0, rc, out)
         self.assertFalse([c for c in calls if "--alter" in c], "it refuses; it never repairs")
+
+    def test_it_RAISES_a_profile_compaction_window_that_is_too_short(self):
+        """The hazard this closes. The cleaner never touches the ACTIVE segment, but everything
+        already rolled is fair game -- so an hourly archive does NOT protect a compacted topic: the
+        20:00 run checkpoints, snapshots keep arriving, the segment rolls at 20:40, and the cleaner
+        removes the superseded ones before the 21:00 run looks. Forty minutes gone, every scheduled
+        run green. A longer segment.ms does not help, because a record written near the END of a
+        segment gets no protection at all. This is the only knob measured from the RECORD's own age.
+
+        The lag is also the ONE config this barrier repairs rather than refuses: raising it can
+        never destroy a record, it only delays cleaning, and the topic already exists on dev."""
+        topics = right_topics()
+        topics[PROFILE]["configs"]["min.compaction.lag.ms"] = "3600000"   # one hour: the capture interval, no margin
+        rc, out, calls, state = run_barrier(topics)
+        self.assertEqual(0, rc, out)
+        self.assertEqual(PROFILE_LAG_MS, state["topics"][PROFILE]["configs"]["min.compaction.lag.ms"])
+        self.assertTrue([c for c in calls
+                         if "--alter" in c and PROFILE in c and f"min.compaction.lag.ms={PROFILE_LAG_MS}" in c],
+                        calls)
+        self.assertIn("read back from the broker", out)
+
+    def test_it_LEAVES_a_profile_window_that_is_already_WIDER(self):
+        """">=", never "==". A value widened by hand -- during a long archive outage, say -- is a
+        deliberate act, and a barrier that reset it to the declared figure would narrow the window
+        at exactly the moment someone had decided it needed to be wider."""
+        topics = right_topics()
+        wider = str(int(PROFILE_LAG_MS) * 2)
+        topics[PROFILE]["configs"]["min.compaction.lag.ms"] = wider
+        rc, out, calls, state = run_barrier(topics)
+        self.assertEqual(0, rc, out)
+        self.assertEqual(wider, state["topics"][PROFILE]["configs"]["min.compaction.lag.ms"])
+        self.assertFalse([c for c in calls if "--alter" in c], calls)
+
+    def test_it_FAILS_when_the_window_it_set_does_not_read_back(self):
+        """An accepted alter is not an applied one. With the alter silently dropped, the barrier
+        must refuse rather than report the value it asked for -- the gamma-zone service must not
+        publish into a topic whose only durable copy has no window."""
+        topics = right_topics()
+        topics[PROFILE]["configs"]["min.compaction.lag.ms"] = "0"
+        rc, out, _calls, _state = run_barrier(topics, extra_env={"FAKE_KAFKA_TOPIC_ALTER_IS_A_NO_OP": "1"})
+        self.assertNotEqual(0, rc, out)
+        self.assertIn("expected at least", out)
+
+    def test_the_window_guard_survives_the_brokers_SYNONYMS(self):
+        """`kafka-configs --describe --all` prints the effective value AND its synonyms on one line,
+        and the synonym here is log.cleaner.min.compaction.lag.ms -- a DIFFERENT key that merely
+        ENDS WITH the one being read. A bare `grep -o 'name='` counts two hits for one value, which
+        has already produced a false refusal in this repo. The fixture below is the broker's own
+        format (tests/fake_kafka_cli.py models --all), and the correct value must be read out of it
+        with no help: a run that passes here and would refuse a real broker is the thing to catch."""
+        rc, out, _calls, _state = run_barrier(right_topics())
+        self.assertEqual(0, rc, out)
+        self.assertIn(f"min.compaction.lag.ms={PROFILE_LAG_MS} (read back from the broker)", out)
+        # And the fixture really does carry the trap, so this is not a pass by sanitised output.
+        self.assertIn("log.cleaner.min.compaction.lag.ms", read("tests/fake_kafka_cli.py"))
+
+    def test_the_SETTER_and_the_GUARD_read_the_same_key_the_same_way(self):
+        """One parse, not two. The alter writes min.compaction.lag.ms and the read-back must find
+        THAT key -- through extract()'s boundary, which is the repo's single implementation of
+        "read a value out of kafka-configs output" and the reason the synonym above is not counted."""
+        text = BARRIER.read_text()
+        self.assertIn('source "$HERE/topic-config-parse.sh"', text)
+        self.assertIn(r"extract 'min\.compaction\.lag\.ms'", text)
+        # Comments STRIPPED before the negative check: this file explains the bare-grep trap in
+        # prose, and a naive search over the whole text matches that explanation and calls the
+        # script guilty of the thing it is warning about.
+        code = "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("#"))
+        self.assertNotRegex(code, r"grep -o[^\n]*compaction\.lag")
+
+    def test_the_barrier_takes_the_window_from_the_ONE_declaration(self):
+        """Not a literal of its own. The fleet pass (apply-topics.sh -> topic-shape.lib.sh) and this
+        barrier must apply the same number, and a second copy is a barrier that can pass while the
+        shipped shape is wrong -- the failure topic-config-parse.sh's own header was written about."""
+        text = BARRIER.read_text()
+        self.assertIn("topic_min_compaction_lag_ms", text)
+        self.assertNotIn(PROFILE_LAG_MS, text.replace("topic_min_compaction_lag_ms", ""))
+
+    def test_the_FLEET_pass_applies_the_same_window_on_create_and_on_alter(self):
+        """The barrier runs on a gamma-zone deploy. apply-topics.sh runs on every deploy and on a
+        dev wipe's recreate -- and alter_topic_config re-applies the declared config set on EVERY
+        run, so a window missing there is one the next deploy quietly drops."""
+        lib = read("scripts/kafka/topic-shape.lib.sh")
+        self.assertIn('min_compaction_lag="$(topic_min_compaction_lag_ms "$topic")"', lib)
+        self.assertIn('extra_configs+=(--config "min.compaction.lag.ms=$min_compaction_lag")', lib)
+        self.assertIn('cl="$(topic_min_compaction_lag_ms "$topic")"', lib)
 
     def test_it_REFUSES_a_renamed_profile_topic(self):
         """The barrier only ever ensures the DECLARED name. An override would create a topic with
