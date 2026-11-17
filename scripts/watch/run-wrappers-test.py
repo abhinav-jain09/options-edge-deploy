@@ -21,6 +21,7 @@ KUBECTL = r'''#!/usr/bin/env bash
 # fake kubectl: behaviour chosen by FAKE_* env vars; fixtures by FAKE_DIR
 args="$*"
 case "$args" in
+  *"config view"*) printf '%s' "${FAKE_SERVER:-}" ;;
   *"get deploy,statefulset,rs,pods"*) [ -n "${FAKE_FAIL_WORKLOADS:-}" ] && { echo "error: connection refused" >&2; exit 1; }; cat "$FAKE_DIR/workloads.json" ;;
   *"get pods"*) [ -n "${FAKE_FAIL_PODS:-}" ] && { echo "error: connection refused" >&2; exit 1; }; cat "$FAKE_DIR/pods.json" ;;
   *"get --raw /apis/metrics.k8s.io"*) [ -f "$FAKE_DIR/metrics.json" ] && cat "$FAKE_DIR/metrics.json" || { echo "not found" >&2; exit 1; } ;;
@@ -104,6 +105,21 @@ rc, out = run(["bash", W("host-load-run.sh")], fx(nodes={"items": [NODE]}))
 check("no metrics API: exit 0, and it SAYS memory/cpu were not measured", rc, out, 0, expect="CONDITIONS ONLY")
 rc, out = run(["bash", W("host-load-run.sh")], fx(nodes={"items": [NODE]}), FAKE_FORBID_NODES="1")
 check("Forbidden nodes is exit 2 naming the missing permission", rc, out, 2, expect="ERROR: kubectl get nodes failed: Error from server (Forbidden)")
+
+print(" preflight: a dead API port is an immediate exit 2, not minutes of kubectl retries")
+import socket, time
+probe = socket.socket(); probe.bind(("127.0.0.1", 0)); closed_port = probe.getsockname()[1]; probe.close()
+live = socket.socket(); live.bind(("127.0.0.1", 0)); live.listen(5); live_port = live.getsockname()[1]
+for script, extra, fxd in (("readiness-run.sh", {"FLEET_ENV": "dev"}, fx(workloads={"items": [HEALTHY_DEPLOY]})), ("oom-run.sh", {}, fx(pods={"items": [OOMPOD]})),
+                           ("host-load-run.sh", {}, fx(nodes={"items": [NODE]})), ("crash-loop-run.sh", {}, fx(pods={"items": [OOMPOD]}))):
+    t0 = time.time()
+    rc, out = run(["bash", W(script)], fxd, FAKE_SERVER="https://127.0.0.1:%d" % closed_port, OE_KUBE_PROBE_SECONDS="2", **extra)
+    check("%s: a closed API port is exit 2 naming the address, in seconds" % script, rc, out, 2, expect="does not answer")
+    if time.time() - t0 > 20:
+        fails.append(script + " slow"); print("  FAIL %s took %.0fs" % (script, time.time() - t0))
+    rc, out = run(["bash", W(script)], fxd, FAKE_SERVER="https://127.0.0.1:%d" % live_port, OE_KUBE_PROBE_SECONDS="2", **extra)
+    check("%s: a listening API port goes on to run the check" % script, rc, out, rc if rc in (0, 1) else 0, forbid="does not answer")
+live.close()
 
 print(" whole path: wrapper -> check -> composer -> alert()")
 DELIVER = W("fleet-alert-deliver.sh")

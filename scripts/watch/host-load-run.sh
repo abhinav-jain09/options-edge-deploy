@@ -6,6 +6,8 @@
 # k8s/security/jenkins-fleet-watch-node-reader.yaml; without it `get nodes` is Forbidden and this exits 2, which pages as "could not check".
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$HERE/kube-reachable.sh"
+oe_kube_reachable || exit 2
 dir="$(mktemp -d)"
 trap 'rm -rf "$dir"' EXIT
 if ! kubectl --request-timeout=20s get nodes -o json > "$dir/nodes.json" 2> "$dir/err"; then
