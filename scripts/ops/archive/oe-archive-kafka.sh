@@ -621,13 +621,20 @@ scan_archive_file() {   # $1=path -> "records min_ms max_ms schema_versions_csv"
 capture_offset_census() {   # $1=path $2=from $3=endoff
   LC_ALL=C zcat < "$1" 2>/dev/null | LC_ALL=C awk -v lo="$2" -v hi="$3" '
     BEGIN { FS="\t"; n=0; mx=-1; over=0; under=0; seen=0 }
-    # POSITIONAL, not a scan for the first field that looks like an offset. print.offset puts the
-    # offset in field 3, after the timestamp and the partition and BEFORE the key and value — the
-    # same contract test-archive-reset.sh pins. A scan would read a key or a JSON payload that
-    # happens to contain "Offset:" as the offset of the record, on a capture where print.offset did
-    # not apply -- which is precisely the case that has to fail closed. (An apostrophe here once
-    # closed this single-quoted awk program; the suite caught it, bash -n caught it first.)
-    $1 ~ /^(CreateTime|LogAppendTime):[0-9]+$/ && $2 ~ /^Partition:[0-9]+$/ && $3 ~ /^Offset:[0-9]+$/ {
+    # THE WHOLE STRICT LAYOUT, INCLUDING THE FIELD COUNT. print.offset puts the offset in field 3,
+    # after the timestamp and the partition and before the key and value, so a strict record has at
+    # least five fields; without print.offset field 3 is the KEY and there are four.
+    #
+    # Each part of this earns its place. A scan for the first field starting with "Offset:" reads a
+    # key or payload as the position. Matching field 3 by shape alone is no better where it counts:
+    # a capture with NO offset column whose key is literally "Offset:999" satisfies fields 1-3
+    # exactly, and both a scan and a bare positional match then report 999 as the offset of
+    # every record — which would hand this script a census of nothing-in-range and a bogus proof of
+    # coverage, and advance the checkpoint over live records. NF >= 5 is what separates them,
+    # because that line has four fields. A value containing tabs only pushes NF up, so it cannot
+    # make a real strict record fail this.
+    # (An apostrophe in this comment once closed the single-quoted awk program; bash -n caught it.)
+    NF >= 5 && $1 ~ /^(CreateTime|LogAppendTime):[0-9]+$/ && $2 ~ /^Partition:[0-9]+$/ && $3 ~ /^Offset:[0-9]+$/ {
       off = substr($3, 8)
       seen++
       off = off + 0
@@ -647,10 +654,10 @@ clamp_capture_to_range() {   # $1=path $2=from $3=endoff
   local out="$1.clamped"
   if ! LC_ALL=C zcat < "$1" 2>/dev/null | LC_ALL=C awk -v lo="$2" -v hi="$3" '
         BEGIN { FS="\t" }
-        # The SAME positional contract as capture_offset_census, so the two cannot disagree about
-        # which records are in range: a census that counted a line the clamp then dropped would make
-        # the rescan check below fail the partition for no reason.
-        $1 ~ /^(CreateTime|LogAppendTime):[0-9]+$/ && $2 ~ /^Partition:[0-9]+$/ && $3 ~ /^Offset:[0-9]+$/ {
+        # THE SAME contract as capture_offset_census, field count included, so the two cannot
+        # disagree about which records are in range: a census that counted a line the clamp then
+        # dropped would make the rescan check below fail the partition for no reason.
+        NF >= 5 && $1 ~ /^(CreateTime|LogAppendTime):[0-9]+$/ && $2 ~ /^Partition:[0-9]+$/ && $3 ~ /^Offset:[0-9]+$/ {
           off = substr($3, 8) + 0
           if (off >= lo && off < hi) print
         }' | gzip -6 > "$out"; then

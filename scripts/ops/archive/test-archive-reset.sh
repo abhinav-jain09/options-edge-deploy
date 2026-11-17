@@ -185,12 +185,16 @@ emit() { # <offset>
   # offset column. A parser that scans for the first field looking like an offset reads that payload
   # as the record's position and the fail-closed path never fires -- which is the whole reason the
   # real parser matches field 3 positionally.
-  local body='{"schemaVersion":1}'
+  local body='{"schemaVersion":1}' key="k$1"
   [ -n "${OE_PAYLOAD_OFFSET_TEXT:-}" ] && body='{"schemaVersion":1,"note":"Offset:999"}'
+  # OE_KEY_OFFSET_TEXT makes the KEY itself look exactly like an offset field. On a capture with no
+  # offset column that line satisfies "field 3 is Offset:<digits>", so it defeats BOTH a scan and a
+  # positional match on shape alone -- only the field COUNT separates it from a real strict record.
+  [ -n "${OE_KEY_OFFSET_TEXT:-}" ] && key="Offset:999"
   if [ "$showoff" = true ]; then
-    printf 'CreateTime:1786000000000\tPartition:%s\tOffset:%s\tk%s\t%s\n' "$part" "$1" "$1" "$body"
+    printf 'CreateTime:1786000000000\tPartition:%s\tOffset:%s\t%s\t%s\n' "$part" "$1" "$key" "$body"
   else
-    printf 'CreateTime:1786000000000\tPartition:%s\tk%s\t%s\n' "$part" "$1" "$body"
+    printf 'CreateTime:1786000000000\tPartition:%s\t%s\t%s\n' "$part" "$key" "$body"
   fi
 }
 sent=0; o="$off"
@@ -647,12 +651,16 @@ emit() { # <offset>
   # offset column. A parser that scans for the first field looking like an offset reads that payload
   # as the record's position and the fail-closed path never fires -- which is the whole reason the
   # real parser matches field 3 positionally.
-  local body='{"schemaVersion":1}'
+  local body='{"schemaVersion":1}' key="k$1"
   [ -n "${OE_PAYLOAD_OFFSET_TEXT:-}" ] && body='{"schemaVersion":1,"note":"Offset:999"}'
+  # OE_KEY_OFFSET_TEXT makes the KEY itself look exactly like an offset field. On a capture with no
+  # offset column that line satisfies "field 3 is Offset:<digits>", so it defeats BOTH a scan and a
+  # positional match on shape alone -- only the field COUNT separates it from a real strict record.
+  [ -n "${OE_KEY_OFFSET_TEXT:-}" ] && key="Offset:999"
   if [ "$showoff" = true ]; then
-    printf 'CreateTime:1786000000000\tPartition:%s\tOffset:%s\tk%s\t%s\n' "$part" "$1" "$1" "$body"
+    printf 'CreateTime:1786000000000\tPartition:%s\tOffset:%s\t%s\t%s\n' "$part" "$1" "$key" "$body"
   else
-    printf 'CreateTime:1786000000000\tPartition:%s\tk%s\t%s\n' "$part" "$1" "$body"
+    printf 'CreateTime:1786000000000\tPartition:%s\t%s\t%s\n' "$part" "$key" "$body"
   fi
 }
 sent=0; o="$off"
@@ -3230,6 +3238,12 @@ want "   the checkpoint CLEARS the bound even though the last delivered offset w
 want "   the 60 surviving records are archived"                        120 "$(runs records)"
 has  "   with the dead tail recorded as permanent"  '"missing_offsets":40' "$(disc)"
 hasnt "   and it is NOT reported as stopping early" "short of the bound" "$OUT"
+# THE FIXTURE ITSELF IS PINNED. Without this, moving the emptied window back to the START of the
+# range leaves offset 199 alive, max_in_range + 1 and "walked past the bound" both give 200, and
+# this whole section passes against an implementation that ignores the overrun evidence -- which is
+# exactly what happened until the assertion below was added.
+want "   and the last offset actually delivered was 159, not 199"     159 \
+     "$(gzip -dc "$A/kafka/prod/$TOPIC"/dt=*/*.100-200.*.jsonl.gz 2>/dev/null | awk -F'\t' '{sub("Offset:","",$3); if ($3+0>m) m=$3+0} END{print m+0}')"
 
 # --- 19t-u. EVERY offset in the bounded range is gone, and the reader proves it by walking past the
 # bound. There is nothing to publish -- an empty gzip is not a corpus member -- but the range is
@@ -3259,13 +3273,21 @@ want "19n a short capture carrying no Offset: column is refused (rc)"   1 "$RC"
 has  "   saying there is no proof of how far the reader got" "no readable Offset: field" "$OUT"
 want "   checkpoint UNCHANGED — the range is re-read next run"        100 "$(ck 0)"
 
-# ...and a payload that CONTAINS the text "Offset:" does not pass for the record's position. A
-# parser scanning for the first offset-shaped field reads the value and skips the fail-closed path
-# entirely; the real one matches field 3, after the timestamp and the partition.
-OUT=$(strict OE_COMPACTED_GAP=40 OE_NO_OFFSET_COLUMN=1 OE_PAYLOAD_OFFSET_TEXT=1); RC=$?
-want "19n2 \"Offset:\" inside the record VALUE is not its position (rc)" 1 "$RC"
+# ...and neither does a line that only LOOKS like it carries one. A key of "Offset:999" on a capture
+# with no offset column satisfies "field 3 is Offset:<digits>" exactly, so a scan AND a positional
+# match on shape alone both read 999 as every record's position -- which would yield a census of
+# nothing-in-range, a bogus proof of coverage, and a checkpoint advanced over live records. Only the
+# FIELD COUNT separates that four-field line from a real five-field strict record.
+# (A payload containing "Offset:" is the weaker form of the same thing and cannot fool a scan at
+# all, because no tab-delimited field begins with it -- which is why the first version of this
+# assertion passed against the parser it was written to condemn.)
+OUT=$(strict OE_COMPACTED_GAP=40 OE_NO_OFFSET_COLUMN=1 OE_KEY_OFFSET_TEXT=1); RC=$?
+want "19n2 a KEY shaped like an offset field is not the position (rc)" 1 "$RC"
 has  "   still fails closed"                 "no readable Offset: field" "$OUT"
 want "   and the checkpoint is still UNCHANGED"                       100 "$(ck 0)"
+OUT=$(strict OE_COMPACTED_GAP=40 OE_NO_OFFSET_COLUMN=1 OE_PAYLOAD_OFFSET_TEXT=1); RC=$?
+want "19n3 and "'"'"Offset:"'"'" inside the record VALUE is not either (rc)" 1 "$RC"
+want "   checkpoint UNCHANGED"                                        100 "$(ck 0)"
 
 # A NON-strict topic is untouched: a short read there is a quiet day, as it always was.
 A="$T/s2"; mkdir -p "$A/kafka/prod/_manifest"
