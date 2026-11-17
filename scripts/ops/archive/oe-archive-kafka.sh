@@ -649,6 +649,20 @@ readonly OE_STRICT_ROW='NF >= 5 && $1 ~ /^(CreateTime|LogAppendTime):[0-9]+$/ &&
 # strict range is refused rather than guessed at. A value with an embedded newline gives lines > N,
 # which is the case this was written for.
 #
+# THE STREAM WAS CONFIRMED END TO END, not only from the class file: one record of
+# options.spx.gamma-zone.profile read off the live dev broker with the CLI this job itself resolves
+# ($HOME/kafka-*/bin -> kafka-4.3.0) put the strict row on stdout and exactly
+# "Processed a total of 1 messages" on stderr -- count lines on stdout: 0, on stderr: 1.
+#
+# WHICH IS WHY THE PATTERN ABOVE IS ANCHORED TO THE WHOLE LINE. The count does not arrive alone:
+# the CLI writes its SLF4J banner and its client logs to this same stderr, and those lines carry
+# numbers of their own (correlation ids, client ids, an offset inside a FetchPosition). A parser
+# that took any line with a digit in it would read its count from the last of them -- awk's later
+# rule wins -- turn a non-numeric field into 0, and refuse a capture that is whole, on every run of
+# a topic whose broker is logging. That mutation survived a 45-mutation pass precisely because the
+# test stand-in's stderr held exactly one line; test-archive-reset.sh 19z4 now puts the chatter
+# around the count and the mutation dies on it.
+#
 # AND THE STDOUT FILTER HAD TO GO FOR IT TO MEAN ANYTHING. This script used to pipe every console
 # capture through `grep -av '^Processed a total of'`. Against the readers it actually runs that
 # matched no reader output at all -- all four report on stderr -- so the only line it could ever

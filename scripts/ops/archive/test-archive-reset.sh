@@ -286,8 +286,20 @@ done
 #   OE_RECORD_COUNT_DELTA=n  the reported count is n more or fewer than the lines delivered. With
 #                            -1 it models the archiver's own stdout filter eating a record whose
 #                            value begins a line with "Processed a total of".
+#   OE_STDERR_NOISE          the count line arrives in company: an SLF4J banner and two broker log
+#                            lines, on the SAME stream, before and after it. Every one of them
+#                            carries digits, and none of them is a count. That is the ordinary
+#                            shape of this stream, and it is what makes the parser's anchoring
+#                            load-bearing rather than decorative.
+if [ -n "${OE_STDERR_NOISE:-}" ]; then
+  echo "SLF4J: Actual binding is of type [org.slf4j.impl.Log4jLoggerFactory]" >&2
+  echo "[2026-11-17 09:00:00,123] WARN [Consumer clientId=console-consumer-93267, groupId=null] Error while fetching metadata with correlation id 7 : {$topic=LEADER_NOT_AVAILABLE} (org.apache.kafka.clients.NetworkClient)" >&2
+fi
 if [ -z "${OE_NO_RECORD_COUNT:-}" ]; then
   echo "Processed a total of $(( sent + ${OE_RECORD_COUNT_DELTA:-0} )) messages" >&2
+fi
+if [ -n "${OE_STDERR_NOISE:-}" ]; then
+  echo "[2026-11-17 09:00:01,456] INFO [Consumer clientId=console-consumer-93267, groupId=null] Resetting offset for partition $topic-$part to position FetchPosition{offset=42, offsetEpoch=Optional.empty} (org.apache.kafka.clients.consumer.internals.SubscriptionState)" >&2
 fi
 SH
 chmod +x "$BIN"/*.sh
@@ -834,8 +846,20 @@ done
 #   OE_RECORD_COUNT_DELTA=n  the reported count is n more or fewer than the lines delivered. With
 #                            -1 it models the archiver's own stdout filter eating a record whose
 #                            value begins a line with "Processed a total of".
+#   OE_STDERR_NOISE          the count line arrives in company: an SLF4J banner and two broker log
+#                            lines, on the SAME stream, before and after it. Every one of them
+#                            carries digits, and none of them is a count. That is the ordinary
+#                            shape of this stream, and it is what makes the parser's anchoring
+#                            load-bearing rather than decorative.
+if [ -n "${OE_STDERR_NOISE:-}" ]; then
+  echo "SLF4J: Actual binding is of type [org.slf4j.impl.Log4jLoggerFactory]" >&2
+  echo "[2026-11-17 09:00:00,123] WARN [Consumer clientId=console-consumer-93267, groupId=null] Error while fetching metadata with correlation id 7 : {$topic=LEADER_NOT_AVAILABLE} (org.apache.kafka.clients.NetworkClient)" >&2
+fi
 if [ -z "${OE_NO_RECORD_COUNT:-}" ]; then
   echo "Processed a total of $(( sent + ${OE_RECORD_COUNT_DELTA:-0} )) messages" >&2
+fi
+if [ -n "${OE_STDERR_NOISE:-}" ]; then
+  echo "[2026-11-17 09:00:01,456] INFO [Consumer clientId=console-consumer-93267, groupId=null] Resetting offset for partition $topic-$part to position FetchPosition{offset=42, offsetEpoch=Optional.empty} (org.apache.kafka.clients.consumer.internals.SubscriptionState)" >&2
 fi
 SH
 # kafka-topics in the RECORDED 4.3.0 shapes (cli-fixtures/4.3.0: list, describe-1p, describe-absent, unreach-*), now
@@ -3675,6 +3699,30 @@ OUT=$(strict OE_PAYLOAD_COUNT_LINE=5); RC=$?
 want "19z3 a value whose continuation LOOKS like the count line is refused (rc)" 1 "$RC"
 want "   the checkpoint does NOT advance over the truncated record"   100 "$(ck 0)"
 want "   and nothing is published"                                      0 "$(files 100)"
+
+# 19z4. THE COUNT LINE DOES NOT ARRIVE ALONE. Kafka's CLI writes its SLF4J banner and its client
+# logs to the same stderr the count is printed on, and those lines carry numbers of their own --
+# correlation ids, client ids, offsets in a FetchPosition. So the parser has to identify the count
+# by its SHAPE, not by containing a number; it is anchored to the exact line 4.3.0 prints.
+#
+# This case exists because that anchoring was the one thing a 45-mutation run could not kill:
+# relaxing the pattern to "any line with a digit in it" changed nothing, because the stand-in's
+# stderr held exactly one line. It is not a cosmetic difference. awk's later rule wins, so a
+# relaxed parser reads its number from the LAST chatty line -- a non-numeric field, which converts
+# to 0 -- and the framing check then refuses a capture that is in fact whole, on every run of a
+# topic whose broker is logging. The failure of a weaker parser here is a REFUSAL, not silent loss,
+# which is the right direction; it is still an hourly failing partition for no reason.
+A="$T/gz17"; mkdir -p "$A/kafka/prod/_manifest"
+fixture "topicid AAAAAAAAAAAAAAAAAAAAAL" "0 0 100" "1 0 100"
+strict >/dev/null
+want "19z4 baseline checkpoint"                                       100 "$(ck 0)"
+fixture "topicid AAAAAAAAAAAAAAAAAAAAAL" "0 0 200" "1 0 200"
+OUT=$(strict OE_STDERR_NOISE=1); RC=$?
+want "19z4 broker chatter on the count's own stream does not refuse the capture (rc)" 0 "$RC"
+want "   the checkpoint advances over the whole range"                200 "$(ck 0)"
+want "   and the framing check never fires"                             0 \
+     "$(printf '%s\n' "$OUT" | grep -c 'but the reader')"
+want "   and BOTH partitions publish their [100,200)"                    2 "$(files 100)"
 
 # ================= 20. the console DISCOVERY answer must be well formed =========================
 # Until 2026-11-13 the end-offset lookup discarded its exit status and stderr, and the only test
