@@ -238,6 +238,17 @@ while [ "$o" -lt "$end" ] && [ "$sent" -lt "$maxm" ]; do
     printf 'a row with an embedded newline renders as this\n'
     sent=$(( sent + 1 )); o=$(( o + 1 )); continue
   fi
+  # OE_NEWLINE_IN_VALUE=<n>: the nth record delivered carries a raw NEWLINE in its value, so ONE
+  # record prints as TWO physical lines -- and the continuation is itself shaped like a strict
+  # record at the next offset. Every field check, the field count and monotonicity all pass on both
+  # lines, and no amount of looking at the text can say whether that is two records or one (Codex
+  # round 7). `sent` increments ONCE, because one record was delivered: that is the point, and it
+  # is what the reader's own count below reports.
+  if [ -n "${OE_NEWLINE_IN_VALUE:-}" ] && [ "$sent" -eq "$OE_NEWLINE_IN_VALUE" ]; then
+    printf 'CreateTime:1786000000000\tPartition:%s\tOffset:%s\tk\t{"schemaVersion":1,"note":"a\n' "$part" "$o"
+    printf 'CreateTime:1786000000000\tPartition:%s\tOffset:%s\tk\t{"schemaVersion":1}\n' "$part" "$(( o + 1 ))"
+    sent=$(( sent + 1 )); o=$(( o + 2 )); continue
+  fi
   gapfrom="${OE_GAP_FROM:-$off}"
   if [ "$gap" -gt 0 ] && [ "$o" -ge "$gapfrom" ] && [ "$o" -lt $(( gapfrom + gap )) ]; then
     o=$(( o + 1 )); continue                                            # this offset holds nothing
@@ -245,6 +256,20 @@ while [ "$o" -lt "$end" ] && [ "$sent" -lt "$maxm" ]; do
   emit "$o"
   sent=$(( sent + 1 )); o=$(( o + 1 ))
 done
+# THE READER'S OWN RECORD COUNT, on STDERR, in the exact shape 4.3.0 prints it -- taken from the
+# shipped class, not from memory: ConsoleConsumer.reportRecordCount() does
+# `System.err.println("Processed a total of " + messageCount + " messages")`. The archiver used to
+# send this stream to /dev/null and filter the line out of STDOUT, where it never appears; it now
+# reads it as the framing evidence the record layout cannot supply.
+#
+#   OE_NO_RECORD_COUNT       the reader reports nothing, which a strict range must refuse rather
+#                            than assume: a reader that exited 0 reported a count.
+#   OE_RECORD_COUNT_DELTA=n  the reported count is n more or fewer than the lines delivered. With
+#                            -1 it models the archiver's own stdout filter eating a record whose
+#                            value begins a line with "Processed a total of".
+if [ -z "${OE_NO_RECORD_COUNT:-}" ]; then
+  echo "Processed a total of $(( sent + ${OE_RECORD_COUNT_DELTA:-0} )) messages" >&2
+fi
 SH
 chmod +x "$BIN"/*.sh
 
@@ -742,6 +767,17 @@ while [ "$o" -lt "$end" ] && [ "$sent" -lt "$maxm" ]; do
     printf 'a row with an embedded newline renders as this\n'
     sent=$(( sent + 1 )); o=$(( o + 1 )); continue
   fi
+  # OE_NEWLINE_IN_VALUE=<n>: the nth record delivered carries a raw NEWLINE in its value, so ONE
+  # record prints as TWO physical lines -- and the continuation is itself shaped like a strict
+  # record at the next offset. Every field check, the field count and monotonicity all pass on both
+  # lines, and no amount of looking at the text can say whether that is two records or one (Codex
+  # round 7). `sent` increments ONCE, because one record was delivered: that is the point, and it
+  # is what the reader's own count below reports.
+  if [ -n "${OE_NEWLINE_IN_VALUE:-}" ] && [ "$sent" -eq "$OE_NEWLINE_IN_VALUE" ]; then
+    printf 'CreateTime:1786000000000\tPartition:%s\tOffset:%s\tk\t{"schemaVersion":1,"note":"a\n' "$part" "$o"
+    printf 'CreateTime:1786000000000\tPartition:%s\tOffset:%s\tk\t{"schemaVersion":1}\n' "$part" "$(( o + 1 ))"
+    sent=$(( sent + 1 )); o=$(( o + 2 )); continue
+  fi
   gapfrom="${OE_GAP_FROM:-$off}"
   if [ "$gap" -gt 0 ] && [ "$o" -ge "$gapfrom" ] && [ "$o" -lt $(( gapfrom + gap )) ]; then
     o=$(( o + 1 )); continue                                            # this offset holds nothing
@@ -749,6 +785,20 @@ while [ "$o" -lt "$end" ] && [ "$sent" -lt "$maxm" ]; do
   emit "$o"
   sent=$(( sent + 1 )); o=$(( o + 1 ))
 done
+# THE READER'S OWN RECORD COUNT, on STDERR, in the exact shape 4.3.0 prints it -- taken from the
+# shipped class, not from memory: ConsoleConsumer.reportRecordCount() does
+# `System.err.println("Processed a total of " + messageCount + " messages")`. The archiver used to
+# send this stream to /dev/null and filter the line out of STDOUT, where it never appears; it now
+# reads it as the framing evidence the record layout cannot supply.
+#
+#   OE_NO_RECORD_COUNT       the reader reports nothing, which a strict range must refuse rather
+#                            than assume: a reader that exited 0 reported a count.
+#   OE_RECORD_COUNT_DELTA=n  the reported count is n more or fewer than the lines delivered. With
+#                            -1 it models the archiver's own stdout filter eating a record whose
+#                            value begins a line with "Processed a total of".
+if [ -z "${OE_NO_RECORD_COUNT:-}" ]; then
+  echo "Processed a total of $(( sent + ${OE_RECORD_COUNT_DELTA:-0} )) messages" >&2
+fi
 SH
 # kafka-topics in the RECORDED 4.3.0 shapes (cli-fixtures/4.3.0: list, describe-1p, describe-absent, unreach-*), now
 # that the committed-read discovery asks it for the topic list and a full description (re-review round 3). The topic
@@ -3508,6 +3558,48 @@ OUT=$(run OE_COMPACTED_GAP=40); RC=$?
 want "19h a NON-strict short read is still a quiet day (rc)"            0 "$RC"
 want "   it archives what it got"                                     120 "$(runs records)"
 want "   and writes no discontinuity"                                   0 "$([ -f "$A/kafka/prod/_manifest/$TOPIC.discontinuities.jsonl" ] && echo 1 || echo 0)"
+
+# --- 19y-19z2. FRAMING: the layout checks validate LINES, and only the reader can say how many
+# RECORDS those lines are. 19y is the case Codex round 7 reproduced and the reason the reader's own
+# count is read at all; 19z and 19z2 are the two ways that evidence can fail to arrive.
+#
+# This is the one check in the strict path that does not read the payload, which is what makes it
+# the answer: a value carrying a raw newline prints as two lines, both of which can satisfy every
+# field check, the field count AND monotonicity, so the text cannot settle it. The reader counts
+# what it handed over, and that number does not come from the payload.
+A="$T/gz13"; mkdir -p "$A/kafka/prod/_manifest"
+fixture "topicid AAAAAAAAAAAAAAAAAAAAAH" "0 0 100" "1 0 100"
+strict >/dev/null
+want "19y baseline checkpoint"                                        100 "$(ck 0)"
+fixture "topicid AAAAAAAAAAAAAAAAAAAAAH" "0 0 200" "1 0 200"
+OUT=$(strict OE_NEWLINE_IN_VALUE=5); RC=$?
+want "19y a value with a NEWLINE in it refuses the capture (rc)"        1 "$RC"
+has  "   and says the lines are not the records" "but the reader" "$OUT"
+want "   the checkpoint does NOT advance over it"                     100 "$(ck 0)"
+want "   and nothing is published"                                      0 "$(files 100)"
+want "   and no discontinuity is claimed: nothing has been PROVED gone" 0 \
+     "$([ -f "$A/kafka/prod/_manifest/$TOPIC.discontinuities.jsonl" ] && echo 1 || echo 0)"
+
+# A reader that exited 0 reported a count. Its absence is unexplained, so a strict range refuses.
+A="$T/gz14"; mkdir -p "$A/kafka/prod/_manifest"
+fixture "topicid AAAAAAAAAAAAAAAAAAAAAI" "0 0 100" "1 0 100"
+OUT=$(strict OE_NO_RECORD_COUNT=1); RC=$?
+want "19z a reader that reports no count FAILS the run (rc)"            1 "$RC"
+has  "   and says so rather than assuming the lines are the records" "reported no record(s)" "$OUT"
+want "   publishing nothing"                                            0 "$(files 0)"
+
+# The count the OTHER way: fewer reported than delivered. The archiver filters any stdout line
+# beginning "Processed a total of" out of the capture, so a record whose VALUE begins a line that
+# way is dropped from the file while the reader still counts it. That silently shortened a capture;
+# now it refuses one.
+A="$T/gz15"; mkdir -p "$A/kafka/prod/_manifest"
+fixture "topicid AAAAAAAAAAAAAAAAAAAAAJ" "0 0 100" "1 0 100"
+strict >/dev/null
+want "19z2 baseline checkpoint"                                       100 "$(ck 0)"
+fixture "topicid AAAAAAAAAAAAAAAAAAAAAJ" "0 0 200" "1 0 200"
+OUT=$(strict OE_RECORD_COUNT_DELTA=1); RC=$?
+want "19z2 a count that disagrees by one refuses the capture (rc)"      1 "$RC"
+want "   the checkpoint does NOT advance"                             100 "$(ck 0)"
 
 # ================= 20. the console DISCOVERY answer must be well formed =========================
 # Until 2026-11-13 the end-offset lookup discarded its exit status and stderr, and the only test

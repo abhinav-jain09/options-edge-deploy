@@ -598,6 +598,75 @@ scan_archive_file() {   # $1=path -> "records min_ms max_ms schema_versions_csv"
     }'
 }
 
+# THE ONE DECLARATION of the strict console-consumer record layout. `print.offset=true` puts the
+# offset in field 3, after the timestamp and the partition and before the key and the value, so a
+# strict record has at least five tab-separated fields; WITHOUT print.offset field 3 is the KEY and
+# there are four.
+#
+# Every part of this earns its place. A scan for the first field starting with "Offset:" reads a key
+# or a payload as the position. Matching field 3 by shape alone is no better where it counts: a
+# capture with NO offset column whose key is literally "Offset:999" satisfies fields 1-3 exactly,
+# and a scan and a bare positional match alike then report 999 as the offset of every record --
+# which hands this script a census of nothing-in-range with coverage "proven" and advances the
+# checkpoint over live records. NF >= 5 is what separates them, because that line has four fields.
+# A value containing tabs only pushes NF up, so it cannot make a real strict record fail.
+#
+# It lives in a variable and not in each awk program because it was written out THREE times, and
+# two of those copies were dead: the census refuses a non-conforming row before its own copy is
+# reached, and the clamp only ever sees rows the census has already approved. Dead copies are worse
+# than no copies -- a weakening of the live one would make rows be SKIPPED again (round 6, below)
+# while the dead ones made that look guarded. Mutating either dead copy changed no behaviour at
+# all, which is how they were found.
+#
+# Each reader supplies its own refusal, because the two refuse differently: the census must still
+# reach its END block to print nothing, so it sets a flag; the clamp must fail its pipeline, so it
+# exits nonzero. Both fail CLOSED.
+# (An apostrophe inside these single-quoted awk programs once closed one; bash -n caught it.)
+readonly OE_STRICT_ROW='NF >= 5 && $1 ~ /^(CreateTime|LogAppendTime):[0-9]+$/ && $2 ~ /^Partition:[0-9]+$/ && $3 ~ /^Offset:[0-9]+$/'
+
+# THE READER'S OWN RECORD COUNT -- the only framing evidence either reader gives, and the answer to
+# the last thing the layout checks cannot settle.
+#
+# $OE_STRICT_ROW validates PHYSICAL LINES. It cannot establish where one Kafka record ends and the
+# next begins, because the console consumer prints a value verbatim: a value containing a raw
+# newline is printed as two lines. Codex round 7 reproduced the consequence. For [100,200), these
+# two lines
+#   CreateTime:1<TAB>Partition:0<TAB>Offset:100<TAB>k<TAB>v
+#   CreateTime:1<TAB>Partition:0<TAB>Offset:200<TAB>k<TAB>v
+# may be two records, or ONE record whose value happens to contain a newline followed by text of
+# exactly this shape. Both readings satisfy every field check and monotonicity; on the second the
+# clamp deletes the continuation, the rescan agrees with the census, and the checkpoint advances to
+# 200 on the strength of payload text.
+#
+# No amount of looking at the text settles that, so this does not look at the text. Every reader on
+# the console path counts the records IT handed over and prints the count on stderr, which this
+# script used to discard with 2>/dev/null:
+#   kafka-console-consumer   "Processed a total of N messages"       (System.err, verified by
+#                                                                    disassembling 4.3.0's
+#                                                                    ConsoleConsumer.reportRecordCount)
+#   Spot/Invasion/Indicator  "<Reader>: wrote N record(s) from ..."  (System.err)
+# A capture whose physical line count differs from N is not the records the reader delivered, and a
+# strict range is refused rather than guessed at. A value with an embedded newline gives lines > N.
+# A value whose own text begins a line with "Processed a total of" -- which the stdout filter below
+# would drop -- gives lines < N. Both are now caught, by one check that cannot be fooled by what a
+# payload says, because the number does not come from the payload.
+#
+# It returns EMPTY when no count was reported, which the caller refuses for a strict topic: a
+# reader that got far enough to exit 0 reported one, and the absence is itself unexplained.
+#
+# ONLY THE CONSOLE PATH NEEDS THIS. The committed-read branch above never reaches the census (it is
+# in the other arm of the same if/else) and must not: StrikeArchiveReader bounds its capture by the
+# consumer's POSITION against the last stable offset and writes the bound it proved, which is
+# stronger evidence than any count. That matters because underlying.es.trades.linearized is strict
+# AND committed-read by default, so a check applied to both would refuse it on every run.
+reader_record_count() {   # $1=the reader stderr file -> N, or empty
+  [ -f "$1" ] || return 0
+  LC_ALL=C awk '
+    /^Processed a total of [0-9]+ messages$/              { n = $5; next }
+    /^[A-Za-z]+: wrote [0-9]+ record\(s\) from /          { n = $3 }
+    END { if (n != "") printf "%d\n", n }' "$1" 2>/dev/null
+}
+
 # WHAT A STRICT CAPTURE ACTUALLY DELIVERED, bounded against the range that was asked for.
 #
 # WHY A CENSUS AND NOT JUST A MAXIMUM. `--max-messages N` bounds the number of RECORDS the console
@@ -616,7 +685,8 @@ scan_archive_file() {   # $1=path -> "records min_ms max_ms schema_versions_csv"
 # recoverable record and left the checkpoint still — the same stall it was written to remove, by a
 # different door. (Codex round 2, P2.)
 #
-# Prints "<in_range> <max_in_range or -1> <at_or_past_end> 0", or NOTHING when the offsets cannot be
+# Prints "<in_range> <max_in_range or -1> <at_or_past_end> 0 <physical_lines>", or NOTHING when the
+# offsets cannot be
 # trusted, which the caller treats as "do not publish, do not advance".
 #
 # JUDGE IT BY ITS OUTPUT, NEVER BY ITS STATUS. The awk program `exit`s on the first untrustworthy
@@ -628,29 +698,18 @@ capture_offset_census() {   # $1=path $2=from $3=endoff
     BEGIN { FS="\t"; n=0; mx=-1; over=0; seen=0; prev=-1; bad=0 }
     # EVERY ROW MUST SATISFY THE LAYOUT, and one that does not rejects the WHOLE capture.
     #
-    # awk pattern-action semantics made this subtly wrong: a row failing the predicate below simply
-    # did not trigger it, so it was SKIPPED rather than refused. A capture holding offset 100, one
-    # malformed row, and offset 200 censused as "1 100 1 0" -- one record in range, coverage proven
-    # -- and the clamp then dropped the malformed row while the rescan AGREED with the census,
-    # because both use the same predicate. The checkpoint advanced and recoverable bytes were
-    # discarded and reported as broker loss. A console-rendered key or value containing a newline
-    # produces exactly such a row. (Codex round 6, P2.)
-    !(NF >= 5 && $1 ~ /^(CreateTime|LogAppendTime):[0-9]+$/ && $2 ~ /^Partition:[0-9]+$/ && $3 ~ /^Offset:[0-9]+$/) { bad = 1; exit }
-
-    # THE WHOLE STRICT LAYOUT, INCLUDING THE FIELD COUNT. print.offset puts the offset in field 3,
-    # after the timestamp and the partition and before the key and value, so a strict record has at
-    # least five fields; without print.offset field 3 is the KEY and there are four.
+    # awk pattern-action semantics made this subtly wrong: a row failing the predicate simply did
+    # not trigger the action, so it was SKIPPED rather than refused. A capture holding offset 100,
+    # one malformed row, and offset 200 censused as "1 100 1 0" -- one record in range, coverage
+    # proven -- and the clamp then dropped the malformed row while the rescan AGREED with the
+    # census, because both used the same predicate. The checkpoint advanced and recoverable bytes
+    # were discarded and reported as broker loss. A console-rendered key or value containing a
+    # newline produces exactly such a row. (Codex round 6, P2.)
     #
-    # Each part of this earns its place. A scan for the first field starting with "Offset:" reads a
-    # key or payload as the position. Matching field 3 by shape alone is no better where it counts:
-    # a capture with NO offset column whose key is literally "Offset:999" satisfies fields 1-3
-    # exactly, and both a scan and a bare positional match then report 999 as the offset of
-    # every record — which would hand this script a census of nothing-in-range and a bogus proof of
-    # coverage, and advance the checkpoint over live records. NF >= 5 is what separates them,
-    # because that line has four fields. A value containing tabs only pushes NF up, so it cannot
-    # make a real strict record fail this.
-    # (An apostrophe in this comment once closed the single-quoted awk program; bash -n caught it.)
-    NF >= 5 && $1 ~ /^(CreateTime|LogAppendTime):[0-9]+$/ && $2 ~ /^Partition:[0-9]+$/ && $3 ~ /^Offset:[0-9]+$/ {
+    # So the refusal comes FIRST and the action below is unconditional: every row that reaches it
+    # has already satisfied $OE_STRICT_ROW, and nothing can be quietly passed over.
+    !('"$OE_STRICT_ROW"') { bad = 1; exit }
+    {
       off = substr($3, 8) + 0
       seen++
       # STRICTLY INCREASING, in file order, and never below the offset the consumer was TOLD to
@@ -669,7 +728,7 @@ capture_offset_census() {   # $1=path $2=from $3=endoff
     }
     # Nothing is printed when the offsets cannot be trusted, which the caller treats exactly as it
     # treats their absence: do not publish, do not advance.
-    END { if (seen > 0 && !bad) printf "%d %d %d 0\n", n, mx, over }'
+    END { if (seen > 0 && !bad) printf "%d %d %d 0 %d\n", n, mx, over, seen }'
 }
 
 # Rewrite the capture keeping ONLY the records whose offset is inside [from, endoff). The records
@@ -680,10 +739,18 @@ clamp_capture_to_range() {   # $1=path $2=from $3=endoff
   local out="$1.clamped"
   if ! LC_ALL=C zcat < "$1" 2>/dev/null | LC_ALL=C awk -v lo="$2" -v hi="$3" '
         BEGIN { FS="\t" }
-        # THE SAME contract as capture_offset_census, field count included, so the two cannot
-        # disagree about which records are in range: a census that counted a line the clamp then
-        # dropped would make the rescan check below fail the partition for no reason.
-        NF >= 5 && $1 ~ /^(CreateTime|LogAppendTime):[0-9]+$/ && $2 ~ /^Partition:[0-9]+$/ && $3 ~ /^Offset:[0-9]+$/ {
+        # THE SAME declaration as capture_offset_census reads, so the two cannot disagree about
+        # which records are in range: a census that counted a line the clamp then dropped would
+        # make the rescan check below fail the partition for no reason.
+        #
+        # A non-conforming row cannot reach here today, because the census refuses the whole
+        # capture before the clamp runs. It still exits nonzero rather than dropping the row: this
+        # function writes the file the archive KEEPS, and silently discarding a line it cannot
+        # parse is the one outcome worse than refusing to write at all. Under `set -o pipefail` the
+        # nonzero exit fails the pipeline, so the clamp reports failure and the partition is not
+        # published.
+        !('"$OE_STRICT_ROW"') { exit 1 }
+        {
           off = substr($3, 8) + 0
           if (off >= lo && off < hi) print
         }' | gzip -6 > "$out"; then
@@ -1451,6 +1518,8 @@ for topic in $TOPICS; do
     short_read=false
     short_gap=0
     proven_to=0
+    cs_seen=0
+    reported_records=""
     census=""; cs_in=0; cs_max=-1; cs_over=0; cs_under=0
     cap_wall_start="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
     # <topic>.p<partition>.<from>-<to>.dt<sessionDate>.<archivedAtUTC>.jsonl.gz
@@ -1662,23 +1731,27 @@ for topic in $TOPICS; do
       # ---- CONSOLE-CONSUMER CAPTURE — every topic not in OE_COMMITTED_READ_TOPICS -----------------
       cap_to="$endoff"
       tmp="$outdir/$topic.p$part.$from-$endoff.dt${DAY//-/}.$STAMP.jsonl.gz.partial"
+      # The reader's stderr, which used to go to /dev/null. It is read for the record count below
+      # and removed as soon as it has been, so no path can leave one behind beside the capture.
+      cerr="$tmp.cerr"
+      : > "$cerr"
       # NOTE: `consumer | gzip` reports GZIP's exit status, so a consumer that emitted zero records
       # still "succeeds". That is how the first version silently archived empty files and advanced
       # its checkpoints. Verify by COUNTING what actually landed, then commit.
       if is_spot_avro_topic "$topic"; then
         run_spot_reader 900 --bootstrap "$BOOTSTRAP" --registry "$(archive_registry_url "${OE_SPOT_REGISTRY_URL:-}")" \
              --topic "$topic" --partition "$part" --from "$from" --count "$count" --timeout-ms 60000 \
-             $(is_strict_topic "$topic" && echo "--print-offset") 2>/dev/null | grep -av '^Processed a total of' | gzip -6 > "$tmp"
+             $(is_strict_topic "$topic" && echo "--print-offset") 2>"$cerr" | grep -av '^Processed a total of' | gzip -6 > "$tmp"
         pipe_rc=("${PIPESTATUS[@]}")
       elif is_invasion_avro_topic "$topic"; then
         run_invasion_reader 900 --bootstrap "$BOOTSTRAP" --registry "$(archive_registry_url "${OE_INVASION_REGISTRY_URL:-}")" \
              --topic "$topic" --partition "$part" --from "$from" --count "$count" --timeout-ms 60000 \
-             $(is_strict_topic "$topic" && echo "--print-offset") 2>/dev/null | grep -av '^Processed a total of' | gzip -6 > "$tmp"
+             $(is_strict_topic "$topic" && echo "--print-offset") 2>"$cerr" | grep -av '^Processed a total of' | gzip -6 > "$tmp"
         pipe_rc=("${PIPESTATUS[@]}")
       elif is_indicator_avro_topic "$topic"; then
         run_indicator_reader 900 --bootstrap "$BOOTSTRAP" --registry "$(indicator_registry_url)" \
              --topic "$topic" --partition "$part" --from "$from" --count "$count" --timeout-ms 60000 \
-             $(is_strict_topic "$topic" && echo "--print-offset") 2>/dev/null | grep -av '^Processed a total of' | gzip -6 > "$tmp"
+             $(is_strict_topic "$topic" && echo "--print-offset") 2>"$cerr" | grep -av '^Processed a total of' | gzip -6 > "$tmp"
         pipe_rc=("${PIPESTATUS[@]}")
       else
       timeout 900 "$KAFKA_BIN/kafka-console-consumer.sh" --bootstrap-server "$BOOTSTRAP" \
@@ -1687,13 +1760,20 @@ for topic in $TOPICS; do
            --formatter-property print.key=true \
            --formatter-property print.partition=true \
            $(is_strict_topic "$topic" && echo "--formatter-property print.offset=true") \
-           --timeout-ms 60000 2>/dev/null | grep -av '^Processed a total of' | gzip -6 > "$tmp"
+           --timeout-ms 60000 2>"$cerr" | grep -av '^Processed a total of' | gzip -6 > "$tmp"
         # EVERY stage's status, saved at once (final review, finding 5). Keeping only the consumer's let a
         # compressor that died mid-stream, or a failed filter, publish whatever bytes had landed. The
         # filter's 1 means "selected no line", i.e. an empty capture, which the count check refuses anyway.
         pipe_rc=("${PIPESTATUS[@]}")
       fi
       consumer_rc=${pipe_rc[0]}; filter_rc=${pipe_rc[1]:-255}; gzip_rc=${pipe_rc[2]:-255}
+      # Taken before anything is derived from the bytes, and the file goes immediately: whatever
+      # happens below, including every `continue`, it is already gone.
+      reported_records="$(reader_record_count "$cerr")"
+      if [ "$consumer_rc" -ne 0 ] && [ -s "$cerr" ]; then
+        log "  NOTE $topic p$part: reader stderr: $(LC_ALL=C tr -d '\0' < "$cerr" | tail -3 | tr '\n' ' ')"
+      fi
+      rm -f "$cerr"
       # The statistics helper's own status, taken BEFORE its output is parsed: `read <<< "$(helper)"`
       # returned read's status and let a failed decompression (a truncated or corrupt gzip) or a failed
       # awk pass as a verified count.
@@ -1805,7 +1885,19 @@ for topic in $TOPICS; do
           failed=$(( failed + 1 ))
           continue
         fi
-        read -r cs_in cs_max cs_over cs_under <<< "$census"
+        read -r cs_in cs_max cs_over cs_under cs_seen <<< "$census"
+        # FRAMING, BEFORE ANY OF THE OFFSETS ARE BELIEVED. See reader_record_count(): the layout
+        # checks validate lines, and only the reader can say how many RECORDS those lines are. The
+        # clamp rewrites the file, so this has to come first or the evidence is gone.
+        if [ -z "$reported_records" ] || [ "$cs_seen" -ne "$reported_records" ]; then
+          log "  FAIL $topic p$part [$from,$endoff): the capture holds $cs_seen line(s) but the reader" \
+              "reported ${reported_records:-no} record(s) — so the lines are not the records and the" \
+              "offsets in them cannot be read as positions (a value or key carrying a newline prints as" \
+              "two lines). NOT publishing and NOT advancing the checkpoint; the range is re-read next run."
+          rm -f "$tmp"
+          failed=$(( failed + 1 ))
+          continue
+        fi
         if [ "$cs_over" -gt 0 ] || [ "$cs_under" -gt 0 ]; then
           log "  CLAMP $topic p$part [$from,$endoff): the reader delivered $cs_over record(s) at or past the" \
               "bound and $cs_under before the start — --max-messages bounds records, not offsets, so a range with" \
