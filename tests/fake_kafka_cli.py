@@ -97,8 +97,20 @@ if name == "kafka-configs":
     t = arg("--entity-name")
     if "--describe" in argv and "--all" in argv:
         cfg = topics.get(t, {}).get("configs", {})
+        # FAKE_KAFKA_DESCRIBE_OMITS=<key[,key...]>: leave those keys out of the answer entirely.
+        #
+        # This exists because the realism above took something away. While `--all` printed only the
+        # keys a topic had SET, a test could model "the describe output does not carry this key" by
+        # simply not setting it -- and that is how ensure-line-health-topics-test.sh reached its
+        # guard for an unreadable lag. A real broker never answers that way: `--describe --all`
+        # prints every key, an unset one as the broker DEFAULT. So with the realistic answer the
+        # absent-key case became unreachable, the guard that refuses it stopped being exercised,
+        # and the test that named it was asserting against a run that now succeeds. A truncated or
+        # garbled answer is still a thing that happens, so it needs its own knob rather than a
+        # fixture that no broker would produce.
+        omit = {k for k in os.environ.get("FAKE_KAFKA_DESCRIBE_OMITS", "").split(",") if k}
         print(f"All configs for topic {t} are:")
-        for k in sorted(set(ALL_DEFAULTS) | set(cfg)):
+        for k in sorted((set(ALL_DEFAULTS) | set(cfg)) - omit):
             d, syn = ALL_DEFAULTS.get(k, (None, None))
             if k in cfg:
                 # A topic-level override does NOT hide the broker default: the real broker lists

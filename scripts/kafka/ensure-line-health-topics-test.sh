@@ -132,7 +132,12 @@ grep -q "compacted replayed inputs checked: 3" "$T/out" && ok "…the count of c
 if grep -qE -- "--alter" "$T/calls"; then bad "second run altered again"; else ok "second run altered nothing"; fi
 all_good; intopic $SPOT compact,delete 1209600000; : > "$T/calls"; expect_ok "a larger lag (14 days) → ok"
 { grep -qE -- "--alter" "$T/calls" || [ "$(lagof $SPOT)" != "1209600000" ]; } && bad "a larger lag was lowered" || ok "…a larger lag is never lowered"
-all_good; intopic $SPOT compact,delete; expect_fail "the lag key unreadable (absent from the describe output) → fail, never a pass"
+# A REAL broker's `--describe --all` prints every key, an unset one as its DEFAULT, so "the topic
+# never set it" is NOT how this answer goes missing -- the stand-in used to model it that way and
+# this case passed on a fixture no broker produces. FAKE_KAFKA_DESCRIBE_OMITS drops the key from the
+# answer, which is what a truncated or garbled describe looks like, and is the only shape that
+# reaches the guard below.
+all_good; intopic $SPOT compact,delete 0; expect_fail "the lag key unreadable (absent from the describe output) → fail, never a pass" FAKE_KAFKA_DESCRIBE_OMITS=min.compaction.lag.ms
 grep -q "'$SPOT' reports min.compaction.lag.ms='<unreadable>'" "$T/out" && ok "…says unreadable and names the topic" || { bad "…message"; cat "$T/out"; }
 all_good; intopic $SPOT compact,delete 0
 mkdir -p "$T/real"; cp "$T/bin/kafka-configs" "$T/real/kafka-configs"

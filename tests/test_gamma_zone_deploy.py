@@ -328,6 +328,26 @@ class Barrier(unittest.TestCase):
         self.assertNotEqual(0, rc, out)
         self.assertIn("expected exactly", out)
 
+    def test_it_FAILS_when_the_describe_answer_does_not_carry_the_key_at_all(self):
+        """A truncated or garbled describe is not a window of zero, and must not be read as one.
+
+        `read_min_compaction_lag` refuses an unparseable value with '<unreadable>', and until this
+        test that branch was unreachable from the stand-in: a REAL `--describe --all` prints every
+        key, an unset one as the broker DEFAULT, so there is no fixture in which a topic simply
+        lacks the key. FAKE_KAFKA_DESCRIBE_OMITS drops it from the answer, which is what a
+        truncated read looks like. The same realism silently de-tested the identical guard in
+        ensure-line-health-topics-test.sh, which is how this hole was found."""
+        topics = right_topics()
+        topics[PROFILE]["configs"]["min.compaction.lag.ms"] = PROFILE_LAG_MS
+        rc, out, calls, _state = run_barrier(
+            topics, extra_env={"FAKE_KAFKA_DESCRIBE_OMITS": "min.compaction.lag.ms"})
+        self.assertNotEqual(0, rc, out)
+        self.assertIn("<unreadable>", out)
+        self.assertIn(PROFILE, out)
+        # AND IT DOES NOT GUESS BY WRITING. The value it would have set is the right one, so an
+        # alter here would "work" and hide that the barrier cannot read what it just wrote.
+        self.assertEqual([], [c for c in calls if "--alter" in c and PROFILE in c], calls)
+
     def describe_all(self, topics, topic):
         """What `kafka-configs --describe --all` actually answers for one topic, from the same
         stand-in the barrier talks to. Returned so a test can assert on the RESPONSE rather than on
