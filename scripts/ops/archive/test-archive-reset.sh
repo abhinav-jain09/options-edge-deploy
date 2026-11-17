@@ -205,6 +205,13 @@ emit() { # <offset>
   if [ -n "${OE_START_BELOW:-}" ] && [ "$1" = "$off" ]; then
     printf 'CreateTime:1786000000000\tPartition:%s\tOffset:%s\tk\t%s\n' "$part" "$(( off - 1 ))" '{"schemaVersion":1}'
   fi
+  # OE_OFFSETS_DESCEND: emit this record and then one BELOW it but still above the start, i.e. a
+  # distinct descending pair (100, 102, 101). "off <= prev" refuses it; "off == prev" -- which still
+  # catches a repeated-offset masquerade -- accepts it, which is why that weaker form needs its own
+  # input (Codex round 5).
+  if [ -n "${OE_OFFSETS_DESCEND:-}" ] && [ "$1" = "$(( off + 2 ))" ]; then
+    printf 'CreateTime:1786000000000\tPartition:%s\tOffset:%s\tk\t%s\n' "$part" "$(( off + 1 ))" '{"schemaVersion":1}'
+  fi
   # OE_KEY_OFFSET_TEXT makes the KEY itself look exactly like an offset field. On a capture with no
   # offset column that line satisfies "field 3 is Offset:<digits>", so it defeats BOTH a scan and a
   # positional match on shape alone -- only the field COUNT separates it from a real strict record.
@@ -688,6 +695,13 @@ emit() { # <offset>
   # a real consumer never does. Without the lower-bound check it is counted as in-range.
   if [ -n "${OE_START_BELOW:-}" ] && [ "$1" = "$off" ]; then
     printf 'CreateTime:1786000000000\tPartition:%s\tOffset:%s\tk\t%s\n' "$part" "$(( off - 1 ))" '{"schemaVersion":1}'
+  fi
+  # OE_OFFSETS_DESCEND: emit this record and then one BELOW it but still above the start, i.e. a
+  # distinct descending pair (100, 102, 101). "off <= prev" refuses it; "off == prev" -- which still
+  # catches a repeated-offset masquerade -- accepts it, which is why that weaker form needs its own
+  # input (Codex round 5).
+  if [ -n "${OE_OFFSETS_DESCEND:-}" ] && [ "$1" = "$(( off + 2 ))" ]; then
+    printf 'CreateTime:1786000000000\tPartition:%s\tOffset:%s\tk\t%s\n' "$part" "$(( off + 1 ))" '{"schemaVersion":1}'
   fi
   # OE_KEY_OFFSET_TEXT makes the KEY itself look exactly like an offset field. On a capture with no
   # offset column that line satisfies "field 3 is Offset:<digits>", so it defeats BOTH a scan and a
@@ -3329,6 +3343,14 @@ want "19n7 a record below the requested start offset is refused (rc)"   1 "$RC"
 has  "   fails closed"                       "trustworthy per-record offsets" "$OUT"
 want "   checkpoint UNCHANGED"                                        100 "$(ck 0)"
 
+# --- 19n8. DESCENDING DISTINCT offsets. A real single-partition capture never delivers them, and
+# the weaker "off == prev" form of the monotonicity check -- which still refuses a repeated-offset
+# masquerade -- accepts them, so this input is what makes "<=" load-bearing (Codex round 5).
+OUT=$(strict OE_OFFSETS_DESCEND=1); RC=$?
+want "19n8 descending DISTINCT offsets are refused (rc)"                1 "$RC"
+has  "   fails closed"                       "trustworthy per-record offsets" "$OUT"
+want "   checkpoint UNCHANGED"                                        100 "$(ck 0)"
+
 # --- 19v. ...and the dead range's EVIDENCE gates its checkpoint. With no file and no manifest line,
 # that discontinuity is the only record the range ever existed: advancing without it leaves nothing
 # anywhere to say the range was skipped, and the next run resumes past it and SUCCEEDS, so the hole
@@ -3346,6 +3368,24 @@ chmod 0644 "$A/kafka/prod/_manifest/$TOPIC.discontinuities.jsonl"
 want "19v2 an unrecordable loss does NOT advance the checkpoint (rc)"   1 "$RC"
 has  "   and says why it refused"  "refusing to advance the checkpoint over a loss" "$OUT"
 want "   the checkpoint is UNCHANGED, so the range is asked for again" 100 "$(ck 0)"
+
+# ...and a sidecar that is WRITABLE but ends MID-LINE is refused too. The append would succeed and
+# concatenate onto the fragment, which makes the whole file unreadable -- so the range would have
+# neither a capture nor a readable declaration, AND every other range's declaration in that sidecar
+# would be lost with it (Codex round 5, P2). The unwritable case above does not cover this.
+printf '{"topic":"%s","partial":' "$TOPIC" > "$A/kafka/prod/_manifest/$TOPIC.discontinuities.jsonl"
+OUT=$(strict UNTIL_TS=1786000000000 OE_COMPACTED_GAP=100); RC=$?
+want "19v3 a sidecar ending MID-LINE does not advance the checkpoint (rc)" 1 "$RC"
+has  "   and names the repair"      "does not end with a newline" "$OUT"
+want "   checkpoint UNCHANGED"                                        100 "$(ck 0)"
+# NEWLINES, and the expectation is ZERO: the fragment has none, and an append would have added one.
+# (It was written as 1 first, which is what an APPENDED file looks like -- the assertion asserted the
+# bug. The suite caught it.)
+want "   and the partial line was NOT appended to (0 newlines = untouched)" 0 \
+     "$(wc -l < "$A/kafka/prod/_manifest/$TOPIC.discontinuities.jsonl" | tr -d ' ')"
+frag_bytes=$(printf '{"topic":"%s","partial":' "$TOPIC" | wc -c | tr -d ' ')
+want "   its bytes are unchanged"                        "$frag_bytes" \
+     "$(wc -c < "$A/kafka/prod/_manifest/$TOPIC.discontinuities.jsonl" | tr -d ' ')"
 
 # --- 19n. A capture with NO offsets to attest to fails CLOSED# --- 19n. A capture with NO offsets to attest to fails CLOSED: nothing published, nothing advanced.
 A="$T/s4"; mkdir -p "$A/kafka/prod/_manifest"

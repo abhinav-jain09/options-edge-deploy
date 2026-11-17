@@ -616,8 +616,13 @@ scan_archive_file() {   # $1=path -> "records min_ms max_ms schema_versions_csv"
 # recoverable record and left the checkpoint still — the same stall it was written to remove, by a
 # different door. (Codex round 2, P2.)
 #
-# Prints "<in_range> <max_in_range or -1> <at_or_past_end> <before_start>", or NOTHING when the file
-# carries no readable Offset: field at all, which the caller treats as "do not advance".
+# Prints "<in_range> <max_in_range or -1> <at_or_past_end> 0", or NOTHING when the offsets cannot be
+# trusted, which the caller treats as "do not publish, do not advance".
+#
+# JUDGE IT BY ITS OUTPUT, NEVER BY ITS STATUS. The awk program `exit`s on the first untrustworthy
+# record rather than reading a whole capture to no purpose, which closes the pipe on the
+# decompressor; under this script's `set -o pipefail` the function then reports 141 for a refusal it
+# handled perfectly. Measured on a 20,001-record capture. Do not add `|| return 1` here.
 capture_offset_census() {   # $1=path $2=from $3=endoff
   LC_ALL=C zcat < "$1" 2>/dev/null | LC_ALL=C awk -v lo="$2" -v hi="$3" '
     BEGIN { FS="\t"; n=0; mx=-1; over=0; seen=0; prev=-1; bad=0 }
@@ -1852,6 +1857,21 @@ for topic in $TOPICS; do
         # to say the range was skipped — and the next run resumes past it and succeeds, so the hole
         # becomes invisible rather than merely unrecorded. If the append fails, nothing advances and
         # the range is retried. (Codex round 4, P2.)
+        # APPENDABLE, not merely writable. A write that died mid-line leaves the sidecar without a
+        # trailing newline, and the next append then CONCATENATES onto that fragment: the printf
+        # succeeds, the checkpoint advances, and the range ends up with neither a capture nor a
+        # readable declaration — while oe_corpus_reader.py reports the whole sidecar unreadable, so
+        # every OTHER range's declaration in it is lost too. publish_segment makes exactly this
+        # check before touching a manifest; this is the same guard on the same kind of file.
+        # (Codex round 5, P2.)
+        if ! manifest_appendable "$MAN/$topic.discontinuities.jsonl"; then
+          log "  FAIL $topic p$part: $MAN/$topic.discontinuities.jsonl does not end with a newline — a run died" \
+              "mid-write, so appending would concatenate onto the partial line and make the whole sidecar" \
+              "unreadable. NOT advancing the checkpoint over a loss that would then have no readable record;" \
+              "an operator repairs the file and the range is asked for again next run."
+          failed=$(( failed + 1 ))
+          continue
+        fi
         if ! printf '{"topic":"%s","dt":"%s","partition":%s,"discontinuity":"short read: 0 of %s records in [%s,%s)","missing_offsets":%s,"detected_at":"%s","env":"%s"}\n' \
                "$topic" "$DAY" "$part" "$count" "$from" "$proven_to" "$count" "$STAMP" "$ENV_NAME" \
                >> "$MAN/$topic.discontinuities.jsonl"; then
@@ -1893,10 +1913,23 @@ for topic in $TOPICS; do
           # Written BEFORE the publish: a line claiming a hole that was never published is a false
           # alarm an operator can check, while a published capture whose hole was never recorded is
           # a corpus that reads complete and is not.
-          printf '{"topic":"%s","dt":"%s","partition":%s,"discontinuity":"short read: %s of %s records in [%s,%s)","missing_offsets":%s,"detected_at":"%s","env":"%s"}\n' \
-            "$topic" "$DAY" "$part" "$got" "$count" "$from" "$proven_to" "$short_gap" "$STAMP" "$ENV_NAME" \
-            >> "$MAN/$topic.discontinuities.jsonl" \
-            || log "  WARN $topic p$part: could not record the short read in $MAN/$topic.discontinuities.jsonl"
+          #
+          # A sidecar that does not end in a newline is NOT appended to: the write would succeed and
+          # concatenate onto the partial line, which makes the whole file unreadable and so destroys
+          # every other range's declaration in it as well. Unlike the proven-empty branch below,
+          # this one does not refuse the capture over it — the published manifest line carries
+          # "short_read" and "missing_offsets", so the hole is still recorded where a reader looks
+          # first — but the run is already failing and the repair is named.
+          if manifest_appendable "$MAN/$topic.discontinuities.jsonl"; then
+            printf '{"topic":"%s","dt":"%s","partition":%s,"discontinuity":"short read: %s of %s records in [%s,%s)","missing_offsets":%s,"detected_at":"%s","env":"%s"}\n' \
+              "$topic" "$DAY" "$part" "$got" "$count" "$from" "$proven_to" "$short_gap" "$STAMP" "$ENV_NAME" \
+              >> "$MAN/$topic.discontinuities.jsonl" \
+              || log "  WARN $topic p$part: could not record the short read in $MAN/$topic.discontinuities.jsonl"
+          else
+            log "  WARN $topic p$part: $MAN/$topic.discontinuities.jsonl does not end with a newline — a run died" \
+                "mid-write; NOT appending (it would concatenate onto the partial line and make the whole sidecar" \
+                "unreadable). The manifest line still records the gap; an operator repairs the sidecar."
+          fi
           manifest_extra="$manifest_extra$(printf ',"short_read":true,"missing_offsets":%s' "$short_gap")"
         fi
       fi
