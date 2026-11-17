@@ -621,10 +621,14 @@ scan_archive_file() {   # $1=path -> "records min_ms max_ms schema_versions_csv"
 capture_offset_census() {   # $1=path $2=from $3=endoff
   LC_ALL=C zcat < "$1" 2>/dev/null | LC_ALL=C awk -v lo="$2" -v hi="$3" '
     BEGIN { FS="\t"; n=0; mx=-1; over=0; under=0; seen=0 }
-    {
-      off = ""
-      for (i = 1; i <= NF; i++) if (substr($i, 1, 7) == "Offset:") { off = substr($i, 8); break }
-      if (off !~ /^[0-9]+$/) next
+    # POSITIONAL, not a scan for the first field that looks like an offset. print.offset puts the
+    # offset in field 3, after the timestamp and the partition and BEFORE the key and value — the
+    # same contract test-archive-reset.sh pins. A scan would read a key or a JSON payload that
+    # happens to contain "Offset:" as the offset of the record, on a capture where print.offset did
+    # not apply -- which is precisely the case that has to fail closed. (An apostrophe here once
+    # closed this single-quoted awk program; the suite caught it, bash -n caught it first.)
+    $1 ~ /^(CreateTime|LogAppendTime):[0-9]+$/ && $2 ~ /^Partition:[0-9]+$/ && $3 ~ /^Offset:[0-9]+$/ {
+      off = substr($3, 8)
       seen++
       off = off + 0
       if (off >= hi) { over++;  next }
@@ -643,11 +647,11 @@ clamp_capture_to_range() {   # $1=path $2=from $3=endoff
   local out="$1.clamped"
   if ! LC_ALL=C zcat < "$1" 2>/dev/null | LC_ALL=C awk -v lo="$2" -v hi="$3" '
         BEGIN { FS="\t" }
-        {
-          off = ""
-          for (i = 1; i <= NF; i++) if (substr($i, 1, 7) == "Offset:") { off = substr($i, 8); break }
-          if (off !~ /^[0-9]+$/) next
-          off = off + 0
+        # The SAME positional contract as capture_offset_census, so the two cannot disagree about
+        # which records are in range: a census that counted a line the clamp then dropped would make
+        # the rescan check below fail the partition for no reason.
+        $1 ~ /^(CreateTime|LogAppendTime):[0-9]+$/ && $2 ~ /^Partition:[0-9]+$/ && $3 ~ /^Offset:[0-9]+$/ {
+          off = substr($3, 8) + 0
           if (off >= lo && off < hi) print
         }' | gzip -6 > "$out"; then
     rm -f "$out"; return 1
@@ -1733,17 +1737,27 @@ for topic in $TOPICS; do
       #
       # Unparseable offsets fail CLOSED: a capture that cannot say what it delivered is not evidence.
       #
-      # THE ONE CORNER THIS DOES NOT RESOLVE, written down rather than guessed at. If the LAST
-      # offsets of the range were themselves removed and there is nothing beyond the range to read,
-      # the reader stops inside it with no proof it reached the end, so the checkpoint stops there
-      # and the next run asks for the same tail again — a stall. It needs endoff == the real log end
-      # AND the record at endoff-1 to be gone, which the broker does not do: the newest record for a
-      # key is never cleaned and the ACTIVE segment is never touched, so the offset just below the
-      # log end is always there. Under UNTIL_TS, where endoff is deliberately below the log end,
-      # records beyond it exist by construction, the reader walks into them, and at_or_past_end
-      # settles it. Both ways out are properties of the broker, not of this script, so if either ever
-      # stops holding, the symptom is an hourly failing run on one partition with a checkpoint that
-      # does not move — not silent loss.
+      # THE CORNER THIS DOES NOT RESOLVE — a real limitation, not a case I have argued away. If the
+      # reader stops inside the range with nothing beyond it to walk into, there is no proof it
+      # reached the end, so the checkpoint stops there and the next run asks for the same tail again.
+      # Two things can produce that:
+      #   * the last offsets of the range were themselves cleaned. For endoff == the real log end
+      #     that needs the record just below the log end to be gone, which compaction does not do
+      #     (the newest record for a key survives and the ACTIVE segment is never cleaned). Under
+      #     UNTIL_TS, where endoff is deliberately below the log end, records beyond it exist by
+      #     construction and at_or_past_end settles it.
+      #   * endoff-1 is a TRANSACTION CONTROL RECORD. Those occupy an offset but are never handed to
+      #     a consumer, so the log end is NOT evidence of a printable final offset and the first
+      #     argument does not cover this (Codex round 3). It does not arise for the topic this was
+      #     built for — options.spx.gamma-zone.profile has a plain producer — and every transactional
+      #     topic in this archiver is routed to the committed reader, which bounds its capture by the
+      #     consumer's POSITION against the last stable offset and takes none of this path. But
+      #     "strict" is a general flag, so marking a transactional topic strict on the console path
+      #     would meet this.
+      # Resolving it properly needs position evidence, which the console consumer does not report;
+      # that is the committed reader's whole reason for existing. Until then the failure mode is an
+      # hourly failing run on one partition with a checkpoint that does not move — loud, and not
+      # silent loss.
       short_read=false
       if is_strict_topic "$topic" && [ "$consumer_rc" -eq 0 ]; then
         census=$(capture_offset_census "$tmp" "$from" "$endoff")
@@ -1794,6 +1808,35 @@ for topic in $TOPICS; do
         if [ "$proven_to" -lt "$endoff" ] || [ "$got" -ne $(( proven_to - from )) ]; then
           short_read=true
         fi
+      fi
+      # A STRICT RANGE WHOSE EVERY OFFSET IS GONE, with PROOF, must still move. If the reader walked
+      # out of the far end of [from, endoff) and delivered nothing inside it, the range is covered
+      # and empty: every record it once held has been cleaned. The generic "got <= 0" refusal below
+      # deleted that capture and left the checkpoint where it was, so every later run asked for the
+      # same dead range and refused again — a stall with the proof of coverage in its hand.
+      # (Codex round 3, P2.)
+      #
+      # Nothing is PUBLISHED for it: an empty gzip is not a corpus member and loaders refuse one.
+      # What is written is the evidence — a discontinuity line naming the whole dead range, and a
+      # checkpoint line recording zero records across it, in the shape the strict reset path already
+      # uses. An empty capture WITHOUT that proof is still refused, unchanged.
+      if [ "$consumer_rc" -eq 0 ] && [ "$got" -le 0 ] && [ "$short_read" = true ] \
+         && [ "$cs_over" -gt 0 ] && [ "$proven_to" -eq "$endoff" ]; then
+        rm -f "$tmp"
+        log "  EMPTY $topic p$part [$from,$endoff): the reader walked out past the bound and delivered NOTHING" \
+            "inside the range — all $count offset(s) have been cleaned. No file is published (an empty capture is" \
+            "not a corpus member); the gap is recorded and the checkpoint advances to $endoff so the dead range is" \
+            "not asked for again. This run FAILS and the sessions it spans are NOT EVALUABLE."
+        printf '{"topic":"%s","dt":"%s","partition":%s,"discontinuity":"short read: 0 of %s records in [%s,%s)","missing_offsets":%s,"detected_at":"%s","env":"%s"}\n' \
+          "$topic" "$DAY" "$part" "$count" "$from" "$proven_to" "$count" "$STAMP" "$ENV_NAME" \
+          >> "$MAN/$topic.discontinuities.jsonl" \
+          || log "  WARN $topic p$part: could not record the empty range in $MAN/$topic.discontinuities.jsonl"
+        if ! printf '%s=%s records=0 span=%s dt=%s archived=%s compacted-empty=from-%s\n' \
+               "$part" "$proven_to" "$count" "$DAY" "$STAMP" "$from" >> "$offfile"; then
+          log "  WARN $topic p$part: could not write the checkpoint for the empty range — it will be asked for again"
+        fi
+        failed=$(( failed + 1 ))
+        continue
       fi
       if [ "$consumer_rc" -ne 0 ] || [ "$got" -le 0 ]; then
         rm -f "$tmp"
