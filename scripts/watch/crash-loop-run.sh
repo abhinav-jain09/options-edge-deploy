@@ -9,6 +9,8 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NS="${FLEET_NAMESPACE:-options-edge}"
 
+. "$HERE/kube-reachable.sh"
+oe_kube_reachable || exit 2
 pods="$(mktemp)"
 err="$(mktemp)"
 trap 'rm -f "$pods" "$err"' EXIT

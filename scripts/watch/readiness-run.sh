@@ -21,6 +21,8 @@ fi
 mkdir -p "$STATE" 2>/dev/null || { echo "ERROR: cannot create the state directory $STATE"; exit 2; }
 [ -w "$STATE" ] || { echo "ERROR: the state directory $STATE is not writable"; exit 2; }
 
+. "$HERE/kube-reachable.sh"
+oe_kube_reachable || exit 2
 out="$(mktemp)"
 err="$(mktemp)"
 trap 'rm -f "$out" "$err"' EXIT
