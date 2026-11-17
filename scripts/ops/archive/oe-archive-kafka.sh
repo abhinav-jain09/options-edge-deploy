@@ -598,30 +598,61 @@ scan_archive_file() {   # $1=path -> "records min_ms max_ms schema_versions_csv"
     }'
 }
 
-# The largest offset the capture itself CARRIES. A strict topic is read with print.offset (see the
-# capture block), so its file states which offsets were actually delivered — and that file is the
-# only evidence available for "did the reader reach the bound it was given?".
+# WHAT A STRICT CAPTURE ACTUALLY DELIVERED, bounded against the range that was asked for.
 #
-# WHY THAT QUESTION DECIDES ANYTHING. kafka-console-consumer exits 0 on an inactivity timeout and on
-# errors it catches internally, so `consumer_rc=0` with fewer records than the offset range does NOT
-# mean the missing offsets are gone: it equally describes a consumer that emitted the first sixty
-# records and then lost the broker. Those two cases need opposite handling — one is a permanent hole
-# to record and step over, the other is a transient failure whose records are still there and must be
-# re-read — and nothing but the delivered offsets tells them apart. Empty if the field is absent
-# (every non-strict capture) or unparseable, which the caller treats as "do not advance".
-capture_max_offset() {   # $1=path -> the largest "Offset:N" in the file, or empty
-  LC_ALL=C zcat < "$1" 2>/dev/null | LC_ALL=C awk '
-    BEGIN { FS="\t"; mx="" }
+# WHY A CENSUS AND NOT JUST A MAXIMUM. `--max-messages N` bounds the number of RECORDS the console
+# consumer emits, not the OFFSETS it walks. So on a range with compacted holes the consumer does not
+# stop at the range's end: it keeps reading past it until it has N records. Queried [100,200) with
+# offsets 100..159 surviving and 200..239 present, it delivers 100 records — the exact count asked
+# for — and the file would be published as a complete [100,200) while holding 40 records that belong
+# to the next range, with the 40-offset hole inside [100,200) entirely concealed. `got == count` is
+# therefore not evidence of anything, and the offsets have to be read on EVERY strict capture rather
+# than only on a short one. (Codex round 2, P2.)
+#
+# AND AN OFFSET AT OR PAST THE BOUND IS THE STRONGEST PROOF THERE IS, not a reason to refuse. It
+# says the reader walked out of the far end of the range, so every offset inside it was visited and
+# anything not delivered is genuinely gone. The previous version discarded the whole capture on
+# seeing one, which for a bounded (UNTIL_TS) range whose tail had been compacted away deleted every
+# recoverable record and left the checkpoint still — the same stall it was written to remove, by a
+# different door. (Codex round 2, P2.)
+#
+# Prints "<in_range> <max_in_range or -1> <at_or_past_end> <before_start>", or NOTHING when the file
+# carries no readable Offset: field at all, which the caller treats as "do not advance".
+capture_offset_census() {   # $1=path $2=from $3=endoff
+  LC_ALL=C zcat < "$1" 2>/dev/null | LC_ALL=C awk -v lo="$2" -v hi="$3" '
+    BEGIN { FS="\t"; n=0; mx=-1; over=0; under=0; seen=0 }
     {
-      for (i = 1; i <= NF; i++) {
-        if (substr($i, 1, 7) == "Offset:") {
-          o = substr($i, 8)
-          if (o ~ /^[0-9]+$/) { o = o + 0; if (mx == "" || o > mx) mx = o }
-          break
-        }
-      }
+      off = ""
+      for (i = 1; i <= NF; i++) if (substr($i, 1, 7) == "Offset:") { off = substr($i, 8); break }
+      if (off !~ /^[0-9]+$/) next
+      seen++
+      off = off + 0
+      if (off >= hi) { over++;  next }
+      if (off <  lo) { under++; next }
+      n++
+      if (off > mx) mx = off
     }
-    END { if (mx != "") printf "%d\n", mx }'
+    END { if (seen > 0) printf "%d %d %d %d\n", n, mx, over, under }'
+}
+
+# Rewrite the capture keeping ONLY the records whose offset is inside [from, endoff). The records
+# outside it are not lost: they are simply not this range's, and the next run reads them under their
+# own range and their own dt=. Writes through a sibling temp file and renames, so a failure part way
+# cannot leave a half-filtered capture in place of the whole one.
+clamp_capture_to_range() {   # $1=path $2=from $3=endoff
+  local out="$1.clamped"
+  if ! LC_ALL=C zcat < "$1" 2>/dev/null | LC_ALL=C awk -v lo="$2" -v hi="$3" '
+        BEGIN { FS="\t" }
+        {
+          off = ""
+          for (i = 1; i <= NF; i++) if (substr($i, 1, 7) == "Offset:") { off = substr($i, 8); break }
+          if (off !~ /^[0-9]+$/) next
+          off = off + 0
+          if (off >= lo && off < hi) print
+        }' | gzip -6 > "$out"; then
+    rm -f "$out"; return 1
+  fi
+  mv -f "$out" "$1"
 }
 
 ms_to_iso() {   # $1=epoch ms -> ISO-8601 UTC, or "unknown"
@@ -1382,6 +1413,8 @@ for topic in $TOPICS; do
     # also reach. An unset variable there would abort the whole run.
     short_read=false
     short_gap=0
+    proven_to=0
+    census=""; cs_in=0; cs_max=-1; cs_over=0; cs_under=0
     cap_wall_start="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
     # <topic>.p<partition>.<from>-<to>.dt<sessionDate>.<archivedAtUTC>.jsonl.gz
     # The session day is repeated INSIDE the name on purpose: copied to a NAS, attached to a
@@ -1683,9 +1716,84 @@ for topic in $TOPICS; do
       # first became live when oe-archive-gamma-zone.sh passed a compacted topic through it. It is
       # fixed here rather than exempted per topic: deleting recoverable records and stalling for
       # ever is wrong on a delete-retained topic too, for the same reason. One rule, not two.
+      # ---- STRICT CAPTURES ARE BOUNDED BY OFFSET, NOT BY RECORD COUNT ------------------------
+      #
+      # Runs on EVERY strict capture, not only a short one. `--max-messages` bounds records, so a
+      # range with compacted holes is read PAST its own end to fill the count — delivering exactly
+      # `count` records while the file silently spans a wider offset range and hides the hole inside
+      # the one it claims. See capture_offset_census(). Everything below is derived from the offsets
+      # the capture actually carries:
+      #
+      #   at_or_past_end > 0   the reader walked out of the far end of [from, endoff). Every offset
+      #                        inside was visited, so whatever was not delivered is GONE. The range
+      #                        is fully covered: proven_to = endoff. The out-of-range records are
+      #                        clamped off and re-read next run under their own range.
+      #   otherwise            the reader stopped inside the range, at max_in_range. Only
+      #                        [from, max+1) is proven; the rest is untouched and re-read next run.
+      #
+      # Unparseable offsets fail CLOSED: a capture that cannot say what it delivered is not evidence.
+      #
+      # THE ONE CORNER THIS DOES NOT RESOLVE, written down rather than guessed at. If the LAST
+      # offsets of the range were themselves removed and there is nothing beyond the range to read,
+      # the reader stops inside it with no proof it reached the end, so the checkpoint stops there
+      # and the next run asks for the same tail again — a stall. It needs endoff == the real log end
+      # AND the record at endoff-1 to be gone, which the broker does not do: the newest record for a
+      # key is never cleaned and the ACTIVE segment is never touched, so the offset just below the
+      # log end is always there. Under UNTIL_TS, where endoff is deliberately below the log end,
+      # records beyond it exist by construction, the reader walks into them, and at_or_past_end
+      # settles it. Both ways out are properties of the broker, not of this script, so if either ever
+      # stops holding, the symptom is an hourly failing run on one partition with a checkpoint that
+      # does not move — not silent loss.
       short_read=false
-      if is_strict_topic "$topic" && [ "$consumer_rc" -eq 0 ] && [ "$got" -ne "$count" ]; then
-        short_read=true
+      if is_strict_topic "$topic" && [ "$consumer_rc" -eq 0 ]; then
+        census=$(capture_offset_census "$tmp" "$from" "$endoff")
+        if [ -z "$census" ]; then
+          log "  FAIL $topic p$part [$from,$endoff): the capture carries no readable Offset: field, so there is" \
+              "no proof of which offsets it delivered — NOT publishing and NOT advancing the checkpoint; the" \
+              "range is re-read next run."
+          rm -f "$tmp"
+          failed=$(( failed + 1 ))
+          continue
+        fi
+        read -r cs_in cs_max cs_over cs_under <<< "$census"
+        if [ "$cs_over" -gt 0 ] || [ "$cs_under" -gt 0 ]; then
+          log "  CLAMP $topic p$part [$from,$endoff): the reader delivered $cs_over record(s) at or past the" \
+              "bound and $cs_under before the start — --max-messages bounds records, not offsets, so a range with" \
+              "holes is read straight through its own end. Keeping the $cs_in inside the range; the rest are not" \
+              "lost, they are re-read next run under their own range."
+          if ! clamp_capture_to_range "$tmp" "$from" "$endoff"; then
+            log "  WARN $topic p$part [$from,$endoff): could not clamp the capture to its range — checkpoint NOT advanced, will retry next run"
+            rm -f "$tmp"
+            failed=$(( failed + 1 ))
+            continue
+          fi
+          # The published bytes changed, so every number taken off them must be taken again.
+          scan_out=$(scan_archive_file "$tmp")
+          scan_rc=$?
+          read -r got min_ms max_ms schema_versions <<< "$scan_out"
+          got="${got:-0}"; min_ms="${min_ms:-0}"; max_ms="${max_ms:-0}"; schema_versions="${schema_versions:--}"
+          if [ "$scan_rc" -ne 0 ] || [ "$got" -ne "$cs_in" ]; then
+            log "  WARN $topic p$part [$from,$endoff): the clamped capture rescanned to $got records, expected $cs_in" \
+                "(scan rc=$scan_rc) — checkpoint NOT advanced, will retry next run"
+            rm -f "$tmp"
+            failed=$(( failed + 1 ))
+            continue
+          fi
+        fi
+        if [ "$cs_over" -gt 0 ]; then
+          proven_to="$endoff"
+        elif [ "$cs_max" -ge 0 ]; then
+          proven_to=$(( cs_max + 1 ))
+        else
+          proven_to="$from"
+        fi
+        # BOTH ways the range can come up short make this run a failure to report: a hole inside
+        # the part that was walked, and a part that was never walked at all. The first is permanent
+        # and recorded; the second is picked up by the next run — but on an evidence topic neither
+        # may pass as a clean run.
+        if [ "$proven_to" -lt "$endoff" ] || [ "$got" -ne $(( proven_to - from )) ]; then
+          short_read=true
+        fi
       fi
       if [ "$consumer_rc" -ne 0 ] || [ "$got" -le 0 ]; then
         rm -f "$tmp"
@@ -1693,60 +1801,20 @@ for topic in $TOPICS; do
         failed=$(( failed + 1 ))
         continue
       fi
-      if [ "$short_read" = true ]; then
-        # THE CHECKPOINT MAY ONLY ADVANCE TO A BOUND THE CAPTURE PROVES IT REACHED.
-        #
-        # The first version of this advanced to $endoff whenever the consumer exited 0 with fewer
-        # records than the offset range, and called the difference "records no longer on the
-        # broker". That is only one of the two things it can be. kafka-console-consumer exits 0 on
-        # its inactivity timeout and on errors it catches internally, so a consumer that emitted
-        # offsets 100..159 and then lost the broker looks IDENTICAL on exit status and count to a
-        # compacted range. Advancing to 200 in that case skips offsets 160..199 for ever, even once
-        # connectivity returns — which would have made this change a NEW loss path, worse than the
-        # stall it replaced. (Codex round 1, P1.)
-        #
-        # So the delivered offsets decide. print.offset is already on for every strict topic, so
-        # the capture states them, and the exclusive bound the reader demonstrably reached is
-        # max(Offset:) + 1. Everything above it is simply not this run's business: it stays
-        # unarchived, the checkpoint stops there, and the next run reads it again.
-        #
-        # Within the proven range, offsets the reader passed over but did not deliver ARE gone —
-        # it read to the end of what exists and the records were not there. That, and only that, is
-        # the discontinuity worth recording.
-        #
-        # Unparseable offsets fail CLOSED: no publish, no checkpoint, retry next run. A capture
-        # whose own offsets cannot be read is not evidence of anything.
-        proven_last=$(capture_max_offset "$tmp")
-        case "${proven_last:-}" in
-          ''|*[!0-9]*)
-            log "  FAIL $topic p$part [$from,$endoff): read $got of $count records, but the capture carries no" \
-                "readable Offset: field, so there is no proof of how far the reader got — NOT publishing and NOT" \
-                "advancing the checkpoint; the range is re-read next run."
-            rm -f "$tmp"
-            failed=$(( failed + 1 ))
-            continue ;;
-        esac
-        proven_to=$(( proven_last + 1 ))
-        if [ "$proven_to" -le "$from" ] || [ "$proven_to" -gt "$endoff" ]; then
-          log "  FAIL $topic p$part [$from,$endoff): the capture's own offsets end at $proven_last, outside the" \
-              "range that was asked for — refusing to trust it. NOT publishing, checkpoint unchanged."
-          rm -f "$tmp"
-          failed=$(( failed + 1 ))
-          continue
-        fi
-        # The published range and the checkpoint are the PROVEN bound, not the queried one.
+      if is_strict_topic "$topic" && [ "$consumer_rc" -eq 0 ]; then
+        # The published range and the checkpoint are the PROVEN bound, never the queried one.
         cap_to="$proven_to"
         count=$(( proven_to - from ))
         short_gap=$(( count - got ))
         if [ "$proven_to" -lt "$endoff" ]; then
-          log "  SHORT $topic p$part: the reader stopped at offset $proven_last, short of the bound $endoff" \
-              "— a consumer that exits 0 having stopped early is indistinguishable from a compacted range except" \
-              "by the offsets it delivered. Publishing [$from,$proven_to) and advancing ONLY to $proven_to;" \
+          log "  SHORT $topic p$part: the reader stopped at offset $(( proven_to - 1 )), short of the bound" \
+              "$endoff — a consumer that exits 0 having stopped early is indistinguishable from a compacted range" \
+              "except by the offsets it delivered. Publishing [$from,$proven_to) and advancing ONLY to $proven_to;" \
               "[$proven_to,$endoff) is untouched and is re-read next run. This run FAILS."
         fi
         if [ "$short_gap" -gt 0 ]; then
           log "  SHORT $topic p$part [$from,$proven_to): STRICT topic read $got of $count records — $short_gap" \
-              "offset(s) inside a range the reader DID reach the end of are no longer on the broker. Archiving the" \
+              "offset(s) inside a range the reader DID walk the whole of are no longer on the broker. Archiving the" \
               "$got that ARE and recording the gap: the checkpoint advances past it so it does not repeat, and the" \
               "sessions it spans are NOT EVALUABLE."
           # Written BEFORE the publish: a line claiming a hole that was never published is a false

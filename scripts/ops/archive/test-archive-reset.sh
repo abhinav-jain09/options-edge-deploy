@@ -149,28 +149,32 @@ while [ $# -gt 0 ]; do
   esac
 done
 end=$(awk -v p="$part" '$1==p{print $3}' "$OE_FIXTURE")
-avail=$(( end - off )); [ "$avail" -lt 0 ] && avail=0
-[ "$avail" -gt "$maxm" ] && avail="$maxm"
-# TWO WAYS A CAPTURE COMES BACK SHORT, and they need opposite handling, so the stand-in models them
-# separately rather than as one "fewer records" knob:
+# --max-messages BOUNDS RECORDS, NOT OFFSETS, and modelling it as an offset span was the stand-in's
+# own bug: it capped the candidate offsets BEFORE skipping the compacted ones, so a capture could
+# never read past the range it was given and the archiver's real behaviour -- walking out of the far
+# end of a holed range to fill its count -- was unreachable from here (Codex round 2). The loop below
+# walks offsets from $off up to the LOG END and stops when it has emitted $maxm records.
 #
-#   OE_COMPACTED_GAP=<n>   n offsets INSIDE the range no longer hold a record. That is compaction:
-#                          the offsets advanced, the records they held were superseded and cleaned.
-#                          The reader still reaches the END of the range -- the newest record for a
-#                          key is never cleaned and the active segment is never touched -- so the
-#                          LAST offset of the range is always delivered. Also what retention
-#                          mid-range looks like on a delete-retained topic.
-#   OE_STOP_AFTER=<n>      the reader delivers the first n records and then stops, AT EXIT 0. That
-#                          is kafka-console-consumer's inactivity timeout, and the errors it catches
-#                          internally: a lost broker halfway through looks exactly like this.
+# TWO WAYS A CAPTURE COMES BACK SHORT, which need opposite handling, so they are separate knobs:
 #
-# Both exit 0 with fewer records than the offset span. Only the DELIVERED OFFSETS tell them apart,
-# which is why print.offset is on for strict topics and why the stand-in emits it.
+#   OE_COMPACTED_GAP=<n>   the n offsets after $off hold no record: compaction took them (the
+#                          offsets advanced, the records they held were superseded and cleaned), or
+#                          retention did, mid-range, on a delete-retained topic. The reader keeps
+#                          going PAST them, so with records beyond the queried bound it delivers its
+#                          full count while spanning a wider offset range than it was asked for.
+#                          NOTE: it does NOT assume the range's last offset survives. Compaction
+#                          keeps the newest record per KEY across the log, not the last offset of an
+#                          arbitrary range, and a bounded (UNTIL_TS) range's tail can be gone.
+#   OE_STOP_AFTER=<n>      the reader delivers n records and then stops, AT EXIT 0 -- the inactivity
+#                          timeout, and the errors the console consumer catches internally. A broker
+#                          lost halfway through looks exactly like this and like nothing else.
+#
+# Only the DELIVERED OFFSETS separate them, which is why print.offset is on for strict topics.
 gap="${OE_COMPACTED_GAP:-0}"; stop="${OE_STOP_AFTER:-0}"
 emit() { # <offset>
   # OE_NO_OFFSET_COLUMN forces the pre-print.offset layout even when the archiver asked for offsets,
-  # so the fail-closed path (a short capture that cannot attest to how far the reader got) is
-  # reachable. A real CLI too old for print.offset behaves exactly this way.
+  # so the fail-closed path (a capture that cannot attest to what it delivered) is reachable. A real
+  # CLI too old for print.offset behaves exactly this way.
   [ -n "${OE_NO_OFFSET_COLUMN:-}" ] && showoff=false
   if [ "$showoff" = true ]; then
     printf 'CreateTime:1786000000000\tPartition:%s\tOffset:%s\tk%s\t{"schemaVersion":1}\n' "$part" "$1" "$1"
@@ -178,15 +182,14 @@ emit() { # <offset>
     printf 'CreateTime:1786000000000\tPartition:%s\tk%s\t{"schemaVersion":1}\n' "$part" "$1"
   fi
 }
-i=0
-while [ "$i" -lt "$avail" ]; do
-  o=$(( off + i ))
-  if [ "$stop" -gt 0 ] && [ "$i" -ge "$stop" ]; then break; fi          # stopped early, exit 0
-  if [ "$gap" -gt 0 ] && [ "$i" -ge 1 ] && [ "$i" -le "$gap" ]; then    # cleaned: never the last
-    i=$(( i + 1 )); continue
+sent=0; o="$off"
+while [ "$o" -lt "$end" ] && [ "$sent" -lt "$maxm" ]; do
+  if [ "$stop" -gt 0 ] && [ "$sent" -ge "$stop" ]; then break; fi        # stopped early, exit 0
+  if [ "$gap" -gt 0 ] && [ "$o" -ge "$off" ] && [ "$o" -lt $(( off + gap )) ]; then
+    o=$(( o + 1 )); continue                                            # this offset holds nothing
   fi
   emit "$o"
-  i=$(( i + 1 ))
+  sent=$(( sent + 1 )); o=$(( o + 1 ))
 done
 SH
 chmod +x "$BIN"/*.sh
@@ -596,28 +599,32 @@ echo "console $topic p$part props=[${props# }]" >> "$OE_FIXTURE.calls"
 # the first at section 12 — anything written after section 12 would otherwise run with the knobs
 # silently doing nothing, which is exactly how section 19 first "passed" its own absence.
 end=$(awk -v p="$part" '$1==p{print $3}' "$OE_FIXTURE")
-avail=$(( end - off )); [ "$avail" -lt 0 ] && avail=0
-[ "$avail" -gt "$maxm" ] && avail="$maxm"
-# TWO WAYS A CAPTURE COMES BACK SHORT, and they need opposite handling, so the stand-in models them
-# separately rather than as one "fewer records" knob:
+# --max-messages BOUNDS RECORDS, NOT OFFSETS, and modelling it as an offset span was the stand-in's
+# own bug: it capped the candidate offsets BEFORE skipping the compacted ones, so a capture could
+# never read past the range it was given and the archiver's real behaviour -- walking out of the far
+# end of a holed range to fill its count -- was unreachable from here (Codex round 2). The loop below
+# walks offsets from $off up to the LOG END and stops when it has emitted $maxm records.
 #
-#   OE_COMPACTED_GAP=<n>   n offsets INSIDE the range no longer hold a record. That is compaction:
-#                          the offsets advanced, the records they held were superseded and cleaned.
-#                          The reader still reaches the END of the range -- the newest record for a
-#                          key is never cleaned and the active segment is never touched -- so the
-#                          LAST offset of the range is always delivered. Also what retention
-#                          mid-range looks like on a delete-retained topic.
-#   OE_STOP_AFTER=<n>      the reader delivers the first n records and then stops, AT EXIT 0. That
-#                          is kafka-console-consumer's inactivity timeout, and the errors it catches
-#                          internally: a lost broker halfway through looks exactly like this.
+# TWO WAYS A CAPTURE COMES BACK SHORT, which need opposite handling, so they are separate knobs:
 #
-# Both exit 0 with fewer records than the offset span. Only the DELIVERED OFFSETS tell them apart,
-# which is why print.offset is on for strict topics and why the stand-in emits it.
+#   OE_COMPACTED_GAP=<n>   the n offsets after $off hold no record: compaction took them (the
+#                          offsets advanced, the records they held were superseded and cleaned), or
+#                          retention did, mid-range, on a delete-retained topic. The reader keeps
+#                          going PAST them, so with records beyond the queried bound it delivers its
+#                          full count while spanning a wider offset range than it was asked for.
+#                          NOTE: it does NOT assume the range's last offset survives. Compaction
+#                          keeps the newest record per KEY across the log, not the last offset of an
+#                          arbitrary range, and a bounded (UNTIL_TS) range's tail can be gone.
+#   OE_STOP_AFTER=<n>      the reader delivers n records and then stops, AT EXIT 0 -- the inactivity
+#                          timeout, and the errors the console consumer catches internally. A broker
+#                          lost halfway through looks exactly like this and like nothing else.
+#
+# Only the DELIVERED OFFSETS separate them, which is why print.offset is on for strict topics.
 gap="${OE_COMPACTED_GAP:-0}"; stop="${OE_STOP_AFTER:-0}"
 emit() { # <offset>
   # OE_NO_OFFSET_COLUMN forces the pre-print.offset layout even when the archiver asked for offsets,
-  # so the fail-closed path (a short capture that cannot attest to how far the reader got) is
-  # reachable. A real CLI too old for print.offset behaves exactly this way.
+  # so the fail-closed path (a capture that cannot attest to what it delivered) is reachable. A real
+  # CLI too old for print.offset behaves exactly this way.
   [ -n "${OE_NO_OFFSET_COLUMN:-}" ] && showoff=false
   if [ "$showoff" = true ]; then
     printf 'CreateTime:1786000000000\tPartition:%s\tOffset:%s\tk%s\t{"schemaVersion":1}\n' "$part" "$1" "$1"
@@ -625,15 +632,14 @@ emit() { # <offset>
     printf 'CreateTime:1786000000000\tPartition:%s\tk%s\t{"schemaVersion":1}\n' "$part" "$1"
   fi
 }
-i=0
-while [ "$i" -lt "$avail" ]; do
-  o=$(( off + i ))
-  if [ "$stop" -gt 0 ] && [ "$i" -ge "$stop" ]; then break; fi          # stopped early, exit 0
-  if [ "$gap" -gt 0 ] && [ "$i" -ge 1 ] && [ "$i" -le "$gap" ]; then    # cleaned: never the last
-    i=$(( i + 1 )); continue
+sent=0; o="$off"
+while [ "$o" -lt "$end" ] && [ "$sent" -lt "$maxm" ]; do
+  if [ "$stop" -gt 0 ] && [ "$sent" -ge "$stop" ]; then break; fi        # stopped early, exit 0
+  if [ "$gap" -gt 0 ] && [ "$o" -ge "$off" ] && [ "$o" -lt $(( off + gap )) ]; then
+    o=$(( o + 1 )); continue                                            # this offset holds nothing
   fi
   emit "$o"
-  i=$(( i + 1 ))
+  sent=$(( sent + 1 )); o=$(( o + 1 ))
 done
 SH
 # kafka-topics in the RECORDED 4.3.0 shapes (cli-fixtures/4.3.0: list, describe-1p, describe-absent, unreach-*), now
@@ -3156,6 +3162,46 @@ OUT=$(strict); RC=$?
 want "19m the next run completes the range (rc)"                        0 "$RC"
 want "   reading the 40 that the failed run never delivered"           80 "$(runs records)"
 want "   and the checkpoint reaches the real bound"                   200 "$(ck 0)"
+
+# --- 19o-r. THE OVERRUN. --max-messages bounds RECORDS, not offsets, so a range with holes is read
+# straight through its own end to fill the count. Queried [100,200) with the 40 offsets after 100
+# empty and records beyond 200 present, the reader delivers exactly 100 records -- the count asked
+# for -- while spanning [140,239]. The first version of this change only looked at the offsets when
+# got != count, so this published a "complete" [100,200) holding 40 records belonging to the next
+# range, with the hole inside the claimed range entirely concealed (Codex round 2, P2).
+A="$T/s5"; mkdir -p "$A/kafka/prod/_manifest"
+fixture "topicid YYYYYYYYYYYYYYYYYYYYYY" "0 0 100" "1 0 100"
+strict >/dev/null
+want "19o baseline checkpoint"                                        100 "$(ck 0)"
+
+# The log runs to 300, so there is plenty beyond the 200 bound for the reader to walk into.
+# The 4th field is the UNTIL_TS cutoff offset, so the queried bound is 200 while the log runs to
+# 300 — plenty beyond the bound for the reader to walk into.
+fixture "topicid YYYYYYYYYYYYYYYYYYYYYY" "0 0 300 200" "1 0 300 200"
+OUT=$(strict UNTIL_TS=1786000000000 OE_COMPACTED_GAP=40); RC=$?
+want "19p the overrun is caught even though the COUNT came back exact" 1 "$RC"
+has  "   and says records were delivered past the bound" "record(s) at or past the" "$OUT"
+has  "   and the hole inside the claimed range is NOT concealed" '"short_read":true' "$(mline)"
+want "19q only the in-range records are published"                     60 "$(awk -F'"records":' '/"offset_from":100/{split($2,a,","); print a[1]}' "$A/kafka/prod/$TOPIC"/dt=*/_manifest.jsonl | head -1)"
+want "19r the checkpoint stops at the bound, not past it"             200 "$(ck 0)"
+want "   and the file itself carries no offset outside the range"       0 \
+     "$(gzip -dc "$A/kafka/prod/$TOPIC"/dt=*/*.100-200.*.jsonl.gz | awk -F'\t' '{sub("Offset:","",$3); if ($3+0 < 100 || $3+0 >= 200) n++} END{print n+0}')"
+
+# --- 19s. A COMPACTED TAIL on a bounded range: the last offsets of [100,200) are gone and the reader
+# walks past the bound. The previous version DISCARDED the whole capture on seeing an offset at or
+# past endoff and left the checkpoint still, so every retry repeated it -- the same stall it was
+# written to remove, by a different door (Codex round 2, P2). An offset past the bound is the
+# STRONGEST proof the range was walked, not a reason to refuse.
+A="$T/s6"; mkdir -p "$A/kafka/prod/_manifest"
+fixture "topicid ZZZZZZZZZZZZZZZZZZZZZZ" "0 0 100" "1 0 100"
+strict >/dev/null
+fixture "topicid ZZZZZZZZZZZZZZZZZZZZZZ" "0 0 300 200" "1 0 300 200"
+OUT=$(strict UNTIL_TS=1786000000000 OE_COMPACTED_GAP=95); RC=$?
+want "19s a compacted tail does NOT stall the range (rc)"               1 "$RC"
+hasnt "   the capture is not discarded"  "outside the" "$OUT"
+want "   the surviving records are archived"                           10 "$(runs records)"
+want "   and the checkpoint CLEARS the bound"                         200 "$(ck 0)"
+has  "   with the hole recorded as permanent"       '"missing_offsets":95' "$(disc)"
 
 # --- 19n. A capture with NO offsets to attest to fails CLOSED: nothing published, nothing advanced.
 A="$T/s4"; mkdir -p "$A/kafka/prod/_manifest"
