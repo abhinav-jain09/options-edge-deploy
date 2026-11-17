@@ -79,6 +79,13 @@ if name == "kafka-configs" and arg("--entity-type") == "brokers":
 # the trap the synonym carries: log.cleaner.min.compaction.lag.ms ENDS WITH the key being read, so a
 # parser without a left boundary counts two hits for one value. Modelled here so the barriers are
 # tested against output shaped like the broker's, not like a convenience.
+# One simplification, stated rather than hidden (Codex round 11, P3): the synonym NAME for
+# retention.ms and segment.ms is rendered as log.retention.ms / log.roll.ms, while a 4.3.0 broker
+# derives both from its hours defaults (log.retention.hours, log.roll.hours) and reports those -- the
+# ms properties themselves default to null. The effective VALUES below are the broker's, and no
+# barrier in this repo compares a synonym name for these two keys; the key whose synonym name is
+# load-bearing is min.compaction.lag.ms, whose log.cleaner.min.compaction.lag.ms is exact and is the
+# trap the gamma-zone guard is tested against.
 ALL_DEFAULTS = {
     "cleanup.policy": ("delete", "log.cleanup.policy"),
     "retention.ms": ("604800000", "log.retention.ms"),
