@@ -620,7 +620,7 @@ scan_archive_file() {   # $1=path -> "records min_ms max_ms schema_versions_csv"
 # carries no readable Offset: field at all, which the caller treats as "do not advance".
 capture_offset_census() {   # $1=path $2=from $3=endoff
   LC_ALL=C zcat < "$1" 2>/dev/null | LC_ALL=C awk -v lo="$2" -v hi="$3" '
-    BEGIN { FS="\t"; n=0; mx=-1; over=0; under=0; seen=0 }
+    BEGIN { FS="\t"; n=0; mx=-1; over=0; seen=0; prev=-1; bad=0 }
     # THE WHOLE STRICT LAYOUT, INCLUDING THE FIELD COUNT. print.offset puts the offset in field 3,
     # after the timestamp and the partition and before the key and value, so a strict record has at
     # least five fields; without print.offset field 3 is the KEY and there are four.
@@ -635,15 +635,25 @@ capture_offset_census() {   # $1=path $2=from $3=endoff
     # make a real strict record fail this.
     # (An apostrophe in this comment once closed the single-quoted awk program; bash -n caught it.)
     NF >= 5 && $1 ~ /^(CreateTime|LogAppendTime):[0-9]+$/ && $2 ~ /^Partition:[0-9]+$/ && $3 ~ /^Offset:[0-9]+$/ {
-      off = substr($3, 8)
+      off = substr($3, 8) + 0
       seen++
-      off = off + 0
-      if (off >= hi) { over++;  next }
-      if (off <  lo) { under++; next }
+      # STRICTLY INCREASING, in file order, and never below the offset the consumer was TOLD to
+      # start from. Both are properties of a real single-partition capture and neither is a property
+      # of a misread layout, which is what makes them the discriminator that NF >= 5 is not: a
+      # capture with no offset column whose KEY is "Offset:999" and whose VALUE contains a tab has
+      # five fields and passes every shape check, but it reports 999 for EVERY record. Measured, not
+      # argued: that input returned "0 -1 2 0" from this function before these two lines existed —
+      # nothing in range with coverage "proven", which advanced the checkpoint over live records.
+      if (off <= prev) { bad = 1; exit }
+      if (off <  lo)   { bad = 1; exit }
+      prev = off
+      if (off >= hi) { over++; next }
       n++
       if (off > mx) mx = off
     }
-    END { if (seen > 0) printf "%d %d %d %d\n", n, mx, over, under }'
+    # Nothing is printed when the offsets cannot be trusted, which the caller treats exactly as it
+    # treats their absence: do not publish, do not advance.
+    END { if (seen > 0 && !bad) printf "%d %d %d 0\n", n, mx, over }'
 }
 
 # Rewrite the capture keeping ONLY the records whose offset is inside [from, endoff). The records
@@ -1769,9 +1779,10 @@ for topic in $TOPICS; do
       if is_strict_topic "$topic" && [ "$consumer_rc" -eq 0 ]; then
         census=$(capture_offset_census "$tmp" "$from" "$endoff")
         if [ -z "$census" ]; then
-          log "  FAIL $topic p$part [$from,$endoff): the capture carries no readable Offset: field, so there is" \
-              "no proof of which offsets it delivered — NOT publishing and NOT advancing the checkpoint; the" \
-              "range is re-read next run."
+          log "  FAIL $topic p$part [$from,$endoff): the capture carries no trustworthy per-record offsets" \
+              "(no readable Offset: field, or they do not strictly increase, or one is below the $from it was told" \
+              "to start from) — so there is no proof of which offsets it delivered. NOT publishing and NOT" \
+              "advancing the checkpoint; the range is re-read next run."
           rm -f "$tmp"
           failed=$(( failed + 1 ))
           continue
@@ -1834,10 +1845,22 @@ for topic in $TOPICS; do
             "inside the range — all $count offset(s) have been cleaned. No file is published (an empty capture is" \
             "not a corpus member); the gap is recorded and the checkpoint advances to $endoff so the dead range is" \
             "not asked for again. This run FAILS and the sessions it spans are NOT EVALUABLE."
-        printf '{"topic":"%s","dt":"%s","partition":%s,"discontinuity":"short read: 0 of %s records in [%s,%s)","missing_offsets":%s,"detected_at":"%s","env":"%s"}\n' \
-          "$topic" "$DAY" "$part" "$count" "$from" "$proven_to" "$count" "$STAMP" "$ENV_NAME" \
-          >> "$MAN/$topic.discontinuities.jsonl" \
-          || log "  WARN $topic p$part: could not record the empty range in $MAN/$topic.discontinuities.jsonl"
+        # THE EVIDENCE GATES THE CHECKPOINT, exactly as publish_segment's manifest gates its own.
+        # For a published range the manifest line is the claim and the checkpoint is the promise not
+        # to re-read; here there is no file and no manifest line, so this discontinuity is the ONLY
+        # record that the range existed and was lost. Advancing without it leaves nothing, anywhere,
+        # to say the range was skipped — and the next run resumes past it and succeeds, so the hole
+        # becomes invisible rather than merely unrecorded. If the append fails, nothing advances and
+        # the range is retried. (Codex round 4, P2.)
+        if ! printf '{"topic":"%s","dt":"%s","partition":%s,"discontinuity":"short read: 0 of %s records in [%s,%s)","missing_offsets":%s,"detected_at":"%s","env":"%s"}\n' \
+               "$topic" "$DAY" "$part" "$count" "$from" "$proven_to" "$count" "$STAMP" "$ENV_NAME" \
+               >> "$MAN/$topic.discontinuities.jsonl"; then
+          log "  FAIL $topic p$part: the dead range [$from,$proven_to) could not be recorded in" \
+              "$MAN/$topic.discontinuities.jsonl — refusing to advance the checkpoint over a loss nothing would" \
+              "then attest to. The range is asked for again next run."
+          failed=$(( failed + 1 ))
+          continue
+        fi
         if ! printf '%s=%s records=0 span=%s dt=%s archived=%s compacted-empty=from-%s\n' \
                "$part" "$proven_to" "$count" "$DAY" "$STAMP" "$from" >> "$offfile"; then
           log "  WARN $topic p$part: could not write the checkpoint for the empty range — it will be asked for again"

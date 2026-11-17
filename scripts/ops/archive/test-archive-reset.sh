@@ -187,6 +187,10 @@ emit() { # <offset>
   # real parser matches field 3 positionally.
   local body='{"schemaVersion":1}' key="k$1"
   [ -n "${OE_PAYLOAD_OFFSET_TEXT:-}" ] && body='{"schemaVersion":1,"note":"Offset:999"}'
+  # OE_TABBED_VALUE puts a literal TAB inside the value. That is what defeats a field-count check:
+  # it pushes a four-field no-offset-column line to five, so it satisfies NF >= 5 and every field
+  # shape while still carrying no real offset (Codex round 4).
+  [ -n "${OE_TABBED_VALUE:-}" ] && body="$(printf '{"schemaVersion":1,"l":"a"}\t{"r":"b"}')"
   # OE_KEY_OFFSET_TEXT makes the KEY itself look exactly like an offset field. On a capture with no
   # offset column that line satisfies "field 3 is Offset:<digits>", so it defeats BOTH a scan and a
   # positional match on shape alone -- only the field COUNT separates it from a real strict record.
@@ -653,6 +657,10 @@ emit() { # <offset>
   # real parser matches field 3 positionally.
   local body='{"schemaVersion":1}' key="k$1"
   [ -n "${OE_PAYLOAD_OFFSET_TEXT:-}" ] && body='{"schemaVersion":1,"note":"Offset:999"}'
+  # OE_TABBED_VALUE puts a literal TAB inside the value. That is what defeats a field-count check:
+  # it pushes a four-field no-offset-column line to five, so it satisfies NF >= 5 and every field
+  # shape while still carrying no real offset (Codex round 4).
+  [ -n "${OE_TABBED_VALUE:-}" ] && body="$(printf '{"schemaVersion":1,"l":"a"}\t{"r":"b"}')"
   # OE_KEY_OFFSET_TEXT makes the KEY itself look exactly like an offset field. On a capture with no
   # offset column that line satisfies "field 3 is Offset:<digits>", so it defeats BOTH a scan and a
   # positional match on shape alone -- only the field COUNT separates it from a real strict record.
@@ -3263,6 +3271,24 @@ want "   and NO empty file is published"                                0 "$(fil
 want "   and no .partial residue is left behind in the corpus either"   0 \
      "$(ls "$A/kafka/prod/$TOPIC"/dt=*/*.partial 2>/dev/null | wc -l | tr -d ' ')"
 
+# --- 19v. ...and the dead range's EVIDENCE gates its checkpoint. With no file and no manifest line,
+# that discontinuity is the only record the range ever existed: advancing without it leaves nothing
+# anywhere to say the range was skipped, and the next run resumes past it and SUCCEEDS, so the hole
+# becomes invisible rather than merely unrecorded (Codex round 4, P2).
+A="$T/s8"; mkdir -p "$A/kafka/prod/_manifest"
+fixture "topicid AAAAAAAAAAAAAAAAAAAAAC" "0 0 100" "1 0 100"
+strict >/dev/null
+want "19v baseline checkpoint"                                        100 "$(ck 0)"
+# The discontinuities file is unwritable; the offsets file is not.
+: > "$A/kafka/prod/_manifest/$TOPIC.discontinuities.jsonl"
+chmod 0444 "$A/kafka/prod/_manifest/$TOPIC.discontinuities.jsonl"
+fixture "topicid AAAAAAAAAAAAAAAAAAAAAC" "0 0 300 200" "1 0 300 200"
+OUT=$(strict UNTIL_TS=1786000000000 OE_COMPACTED_GAP=100); RC=$?
+chmod 0644 "$A/kafka/prod/_manifest/$TOPIC.discontinuities.jsonl"
+want "19v2 an unrecordable loss does NOT advance the checkpoint (rc)"   1 "$RC"
+has  "   and says why it refused"  "refusing to advance the checkpoint over a loss" "$OUT"
+want "   the checkpoint is UNCHANGED, so the range is asked for again" 100 "$(ck 0)"
+
 # --- 19n. A capture with NO offsets to attest to fails CLOSED# --- 19n. A capture with NO offsets to attest to fails CLOSED: nothing published, nothing advanced.
 A="$T/s4"; mkdir -p "$A/kafka/prod/_manifest"
 fixture "topicid XXXXXXXXXXXXXXXXXXXXXX" "0 0 100" "1 0 100"
@@ -3288,6 +3314,18 @@ want "   and the checkpoint is still UNCHANGED"                       100 "$(ck 
 OUT=$(strict OE_COMPACTED_GAP=40 OE_NO_OFFSET_COLUMN=1 OE_PAYLOAD_OFFSET_TEXT=1); RC=$?
 want "19n3 and "'"'"Offset:"'"'" inside the record VALUE is not either (rc)" 1 "$RC"
 want "   checkpoint UNCHANGED"                                        100 "$(ck 0)"
+
+# ...and the one that beat the field count: an offset-shaped KEY with a TAB inside the value, so the
+# line reaches five fields and satisfies every shape check while carrying no real offset. It reports
+# the SAME number for every record, which a real single-partition capture never does -- that, and
+# never delivering below the offset the consumer was told to start from, is what separates them.
+# Measured before the check existed: the census answered "0 -1 2 0", i.e. nothing in range with
+# coverage PROVEN, and the checkpoint advanced over live records (Codex round 4, P2).
+OUT=$(strict OE_COMPACTED_GAP=40 OE_NO_OFFSET_COLUMN=1 OE_KEY_OFFSET_TEXT=1 OE_TABBED_VALUE=1); RC=$?
+want "19n4 a five-field masquerade (offset-shaped key + tabbed value) is refused (rc)" 1 "$RC"
+has  "   because the offsets do not strictly increase" "trustworthy per-record offsets" "$OUT"
+want "   and the checkpoint does NOT advance over live records"       100 "$(ck 0)"
+want "   nothing was published for it"                                  0 "$(files 100)"
 
 # A NON-strict topic is untouched: a short read there is a quiet day, as it always was.
 A="$T/s2"; mkdir -p "$A/kafka/prod/_manifest"
