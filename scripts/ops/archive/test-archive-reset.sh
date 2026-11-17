@@ -246,7 +246,14 @@ while [ "$o" -lt "$end" ] && [ "$sent" -lt "$maxm" ]; do
   # them -- the continuation is not a valid row -- before the count is even consulted. Measured:
   # with the filter the census printed "1 100 0 0 1"; without it, nothing.
   if [ -n "${OE_PAYLOAD_COUNT_LINE:-}" ] && [ "$sent" -eq "$OE_PAYLOAD_COUNT_LINE" ]; then
-    printf 'CreateTime:1786000000000\tPartition:%s\tOffset:%s\tk\t{"schemaVersion":1,"note":"v\n' "$part" "$o"
+    # Honours print.offset like emit() does, so the same payload can be delivered to a NON-strict
+    # capture (four fields, no offset column) as well as a strict one. Without that the non-strict
+    # preservation test below would be asserting against a layout no non-strict capture produces.
+    if [ "$showoff" = true ]; then
+      printf 'CreateTime:1786000000000\tPartition:%s\tOffset:%s\tk\t{"schemaVersion":1,"note":"v\n' "$part" "$o"
+    else
+      printf 'CreateTime:1786000000000\tPartition:%s\tk\t{"schemaVersion":1,"note":"v\n' "$part"
+    fi
     printf 'Processed a total of payload-data"}\n'
     sent=$(( sent + 1 )); o=$(( o + 1 )); continue
   fi
@@ -787,7 +794,14 @@ while [ "$o" -lt "$end" ] && [ "$sent" -lt "$maxm" ]; do
   # them -- the continuation is not a valid row -- before the count is even consulted. Measured:
   # with the filter the census printed "1 100 0 0 1"; without it, nothing.
   if [ -n "${OE_PAYLOAD_COUNT_LINE:-}" ] && [ "$sent" -eq "$OE_PAYLOAD_COUNT_LINE" ]; then
-    printf 'CreateTime:1786000000000\tPartition:%s\tOffset:%s\tk\t{"schemaVersion":1,"note":"v\n' "$part" "$o"
+    # Honours print.offset like emit() does, so the same payload can be delivered to a NON-strict
+    # capture (four fields, no offset column) as well as a strict one. Without that the non-strict
+    # preservation test below would be asserting against a layout no non-strict capture produces.
+    if [ "$showoff" = true ]; then
+      printf 'CreateTime:1786000000000\tPartition:%s\tOffset:%s\tk\t{"schemaVersion":1,"note":"v\n' "$part" "$o"
+    else
+      printf 'CreateTime:1786000000000\tPartition:%s\tk\t{"schemaVersion":1,"note":"v\n' "$part"
+    fi
     printf 'Processed a total of payload-data"}\n'
     sent=$(( sent + 1 )); o=$(( o + 1 )); continue
   fi
@@ -1164,9 +1178,13 @@ want "  and reads to the log end"                       100 "$(ck 0)"
 # ================= 13. processing failures on the CONSOLE path (finding 5, inherited code) ==========
 # Each stage's failure used to be invisible: the pipeline kept only the consumer's status, and
 # `read <<< "$(scan_archive_file ...)"` hid the statistics helper's. Each must now leave the checkpoint.
-grep_real=$(command -v grep)
-fault_bin grep "for a in \"\$@\"; do case \"\$a\" in *'Processed a total'*) cat >/dev/null; exit 2 ;; esac; done; exec $grep_real \"\$@\""
-for tool in grep gzip zcat awk mv; do
+# grep WAS a stage here: every console capture used to be piped through
+# `grep -av '^Processed a total of'`, and this loop included a grep that failed on exactly that
+# argument. The filter is gone (Codex round 8 -- it matched nothing any reader emits, and it deleted
+# the continuation of a multi-line value, which is precisely the evidence the framing check needs),
+# so the shim's trigger is unreachable and the three assertions below would have been asserting
+# against a capture that now succeeds. What the removal is FOR is tested straight after this loop.
+for tool in gzip zcat awk mv; do
   A="$T/c-$tool"; mkdir -p "$A/kafka/prod/_manifest"
   fixture "topicid PPPPPPPPPPPPPPPPPPPPPP" "0 0 40" "1 0 40"
   OUT=$(run PATH="$FAULT/$tool:$PATH"); RC=$?
@@ -1174,7 +1192,22 @@ for tool in grep gzip zcat awk mv; do
   want "  p0 checkpoint unchanged"                           "" "$(ck 0)"
   want "  no data file published" 0 "$(ls "$A/kafka/prod/$TOPIC"/dt=*/*.jsonl.gz 2>/dev/null | wc -l | tr -d ' ')"
 done
+# 13b. THE BYTES THE FILTER USED TO DELETE. A record whose value contains
+# "v<newline>Processed a total of payload-data" prints as two physical lines, and the second one is
+# what `grep -av` removed -- silently, from a NON-strict capture, where nothing checks framing and
+# so nothing could ever notice. The record was published with its value truncated. Not a strict
+# topic here on purpose: that is the path with no other guard (Codex round 8).
+A="$T/c-keep"; mkdir -p "$A/kafka/prod/_manifest"
+fixture "topicid PPPPPPPPPPPPPPPPPPPPPP" "0 0 40" "1 0 40"
+OUT=$(run OE_PAYLOAD_COUNT_LINE=2); RC=$?
+want "13b a non-strict capture of a value that LOOKS like the count line succeeds (rc)" 0 "$RC"
+has  "  and the continuation is still in the archive, not deleted" "Processed a total of payload-data" \
+     "$(gzip -dc "$A/kafka/prod/$TOPIC"/dt=*/*.jsonl.gz 2>/dev/null)"
+has  "  on the same line's record, whose value it belongs to" '"note":"v' \
+     "$(gzip -dc "$A/kafka/prod/$TOPIC"/dt=*/*.jsonl.gz 2>/dev/null)"
+
 A="$T/c-ok"; mkdir -p "$A/kafka/prod/_manifest"
+fixture "topicid PPPPPPPPPPPPPPPPPPPPPP" "0 0 40" "1 0 40"
 OUT=$(run); RC=$?
 want "13 and with every tool healthy the same run archives (rc)" 0 "$RC"
 want "  p0 checkpoint"                                      40 "$(ck 0)"
