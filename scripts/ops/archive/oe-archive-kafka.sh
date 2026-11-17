@@ -646,10 +646,19 @@ readonly OE_STRICT_ROW='NF >= 5 && $1 ~ /^(CreateTime|LogAppendTime):[0-9]+$/ &&
 #                                                                    ConsoleConsumer.reportRecordCount)
 #   Spot/Invasion/Indicator  "<Reader>: wrote N record(s) from ..."  (System.err)
 # A capture whose physical line count differs from N is not the records the reader delivered, and a
-# strict range is refused rather than guessed at. A value with an embedded newline gives lines > N.
-# A value whose own text begins a line with "Processed a total of" -- which the stdout filter below
-# would drop -- gives lines < N. Both are now caught, by one check that cannot be fooled by what a
-# payload says, because the number does not come from the payload.
+# strict range is refused rather than guessed at. A value with an embedded newline gives lines > N,
+# which is the case this was written for.
+#
+# AND THE STDOUT FILTER HAD TO GO FOR IT TO MEAN ANYTHING. This script used to pipe every console
+# capture through `grep -av '^Processed a total of'`. Against the readers it actually runs that
+# matched no reader output at all -- all four report on stderr -- so the only line it could ever
+# remove was a RECORD. Worse, it removed exactly the evidence this check needs: a value containing
+# "<newline>Processed a total of ..." prints as two lines, the filter deletes the continuation, and
+# the capture is left with one valid row for one reported record. Framing PASSES, and a record with
+# a truncated value is published and checkpointed. Codex round 8 reproduced that as census
+# "1 100 0 0 1". A filter that can only ever delete real data, in the one shape that defeats the
+# check, is not a safeguard; if a reader ever does print the line on stdout it lands in the capture,
+# where the layout check refuses it loudly instead of quietly shortening a value.
 #
 # It returns EMPTY when no count was reported, which the caller refuses for a strict topic: a
 # reader that got far enough to exit 0 reported one, and the absence is itself unexplained.
@@ -1733,7 +1742,18 @@ for topic in $TOPICS; do
       tmp="$outdir/$topic.p$part.$from-$endoff.dt${DAY//-/}.$STAMP.jsonl.gz.partial"
       # The reader's stderr, which used to go to /dev/null. It is read for the record count below
       # and removed as soon as it has been, so no path can leave one behind beside the capture.
-      cerr="$tmp.cerr"
+      #
+      # IN $stemdir, NOT beside $tmp. `mkdir -p "$stemdir"` above runs for every topic, while the
+      # dt= folder $tmp names is deliberately NOT created for a bucket-filed topic ("a dt= folder is
+      # made only by a file published into it"). A redirect whose target directory is missing is
+      # worse than a write that fails: bash never runs the command at all, so the reader would not
+      # run. Dot-prefixed, like the committed branch's own scratch files, so no loader reads it.
+      #
+      # This is defensive, not a fix for a reachable bug, and no test can tell the two placements
+      # apart: the capture's own `gzip > "$tmp"` writes into that same dt= folder, so a missing one
+      # fails the capture either way. What it buys is that the reader still RUNS, and that nothing
+      # of ours lands in a folder meant to appear only when a file is published into it.
+      cerr="$stemdir/.$topic.p$part.$from.$STAMP.cerr"
       : > "$cerr"
       # NOTE: `consumer | gzip` reports GZIP's exit status, so a consumer that emitted zero records
       # still "succeeds". That is how the first version silently archived empty files and advanced
@@ -1741,17 +1761,17 @@ for topic in $TOPICS; do
       if is_spot_avro_topic "$topic"; then
         run_spot_reader 900 --bootstrap "$BOOTSTRAP" --registry "$(archive_registry_url "${OE_SPOT_REGISTRY_URL:-}")" \
              --topic "$topic" --partition "$part" --from "$from" --count "$count" --timeout-ms 60000 \
-             $(is_strict_topic "$topic" && echo "--print-offset") 2>"$cerr" | grep -av '^Processed a total of' | gzip -6 > "$tmp"
+             $(is_strict_topic "$topic" && echo "--print-offset") 2>"$cerr" | gzip -6 > "$tmp"
         pipe_rc=("${PIPESTATUS[@]}")
       elif is_invasion_avro_topic "$topic"; then
         run_invasion_reader 900 --bootstrap "$BOOTSTRAP" --registry "$(archive_registry_url "${OE_INVASION_REGISTRY_URL:-}")" \
              --topic "$topic" --partition "$part" --from "$from" --count "$count" --timeout-ms 60000 \
-             $(is_strict_topic "$topic" && echo "--print-offset") 2>"$cerr" | grep -av '^Processed a total of' | gzip -6 > "$tmp"
+             $(is_strict_topic "$topic" && echo "--print-offset") 2>"$cerr" | gzip -6 > "$tmp"
         pipe_rc=("${PIPESTATUS[@]}")
       elif is_indicator_avro_topic "$topic"; then
         run_indicator_reader 900 --bootstrap "$BOOTSTRAP" --registry "$(indicator_registry_url)" \
              --topic "$topic" --partition "$part" --from "$from" --count "$count" --timeout-ms 60000 \
-             $(is_strict_topic "$topic" && echo "--print-offset") 2>"$cerr" | grep -av '^Processed a total of' | gzip -6 > "$tmp"
+             $(is_strict_topic "$topic" && echo "--print-offset") 2>"$cerr" | gzip -6 > "$tmp"
         pipe_rc=("${PIPESTATUS[@]}")
       else
       timeout 900 "$KAFKA_BIN/kafka-console-consumer.sh" --bootstrap-server "$BOOTSTRAP" \
@@ -1760,13 +1780,12 @@ for topic in $TOPICS; do
            --formatter-property print.key=true \
            --formatter-property print.partition=true \
            $(is_strict_topic "$topic" && echo "--formatter-property print.offset=true") \
-           --timeout-ms 60000 2>"$cerr" | grep -av '^Processed a total of' | gzip -6 > "$tmp"
+           --timeout-ms 60000 2>"$cerr" | gzip -6 > "$tmp"
         # EVERY stage's status, saved at once (final review, finding 5). Keeping only the consumer's let a
-        # compressor that died mid-stream, or a failed filter, publish whatever bytes had landed. The
-        # filter's 1 means "selected no line", i.e. an empty capture, which the count check refuses anyway.
+        # compressor that died mid-stream publish whatever bytes had landed.
         pipe_rc=("${PIPESTATUS[@]}")
       fi
-      consumer_rc=${pipe_rc[0]}; filter_rc=${pipe_rc[1]:-255}; gzip_rc=${pipe_rc[2]:-255}
+      consumer_rc=${pipe_rc[0]}; gzip_rc=${pipe_rc[1]:-255}
       # Taken before anything is derived from the bytes, and the file goes immediately: whatever
       # happens below, including every `continue`, it is already gone.
       reported_records="$(reader_record_count "$cerr")"
@@ -1782,7 +1801,6 @@ for topic in $TOPICS; do
       read -r got min_ms max_ms schema_versions <<< "$scan_out"
       got="${got:-0}"; min_ms="${min_ms:-0}"; max_ms="${max_ms:-0}"; schema_versions="${schema_versions:--}"
       why=""
-      [ "$filter_rc" -le 1 ] || why="filter rc=$filter_rc"
       [ "$gzip_rc" -eq 0 ] || why="$why gzip rc=$gzip_rc"
       [ "$scan_rc" -eq 0 ] || why="$why scan rc=$scan_rc"
       if [ -n "$why" ]; then

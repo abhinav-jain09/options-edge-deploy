@@ -238,6 +238,18 @@ while [ "$o" -lt "$end" ] && [ "$sent" -lt "$maxm" ]; do
     printf 'a row with an embedded newline renders as this\n'
     sent=$(( sent + 1 )); o=$(( o + 1 )); continue
   fi
+  # OE_PAYLOAD_COUNT_LINE=<n>: the nth record delivered carries a newline in its value followed by
+  # text beginning "Processed a total of". ONE record, TWO physical lines -- and the second is
+  # exactly what the archiver used to filter out of stdout, which left one valid row for one
+  # reported record so the framing check PASSED on a record whose value had been truncated (Codex
+  # round 8). With the filter gone the capture keeps both lines, and it is the LAYOUT that refuses
+  # them -- the continuation is not a valid row -- before the count is even consulted. Measured:
+  # with the filter the census printed "1 100 0 0 1"; without it, nothing.
+  if [ -n "${OE_PAYLOAD_COUNT_LINE:-}" ] && [ "$sent" -eq "$OE_PAYLOAD_COUNT_LINE" ]; then
+    printf 'CreateTime:1786000000000\tPartition:%s\tOffset:%s\tk\t{"schemaVersion":1,"note":"v\n' "$part" "$o"
+    printf 'Processed a total of payload-data"}\n'
+    sent=$(( sent + 1 )); o=$(( o + 1 )); continue
+  fi
   # OE_NEWLINE_IN_VALUE=<n>: the nth record delivered carries a raw NEWLINE in its value, so ONE
   # record prints as TWO physical lines -- and the continuation is itself shaped like a strict
   # record at the next offset. Every field check, the field count and monotonicity all pass on both
@@ -765,6 +777,18 @@ while [ "$o" -lt "$end" ] && [ "$sent" -lt "$maxm" ]; do
   # the capture reclassifies recoverable bytes as broker loss (Codex round 6).
   if [ -n "${OE_MALFORMED_ROW:-}" ] && [ "$sent" -eq "$OE_MALFORMED_ROW" ]; then
     printf 'a row with an embedded newline renders as this\n'
+    sent=$(( sent + 1 )); o=$(( o + 1 )); continue
+  fi
+  # OE_PAYLOAD_COUNT_LINE=<n>: the nth record delivered carries a newline in its value followed by
+  # text beginning "Processed a total of". ONE record, TWO physical lines -- and the second is
+  # exactly what the archiver used to filter out of stdout, which left one valid row for one
+  # reported record so the framing check PASSED on a record whose value had been truncated (Codex
+  # round 8). With the filter gone the capture keeps both lines, and it is the LAYOUT that refuses
+  # them -- the continuation is not a valid row -- before the count is even consulted. Measured:
+  # with the filter the census printed "1 100 0 0 1"; without it, nothing.
+  if [ -n "${OE_PAYLOAD_COUNT_LINE:-}" ] && [ "$sent" -eq "$OE_PAYLOAD_COUNT_LINE" ]; then
+    printf 'CreateTime:1786000000000\tPartition:%s\tOffset:%s\tk\t{"schemaVersion":1,"note":"v\n' "$part" "$o"
+    printf 'Processed a total of payload-data"}\n'
     sent=$(( sent + 1 )); o=$(( o + 1 )); continue
   fi
   # OE_NEWLINE_IN_VALUE=<n>: the nth record delivered carries a raw NEWLINE in its value, so ONE
@@ -3600,6 +3624,24 @@ fixture "topicid AAAAAAAAAAAAAAAAAAAAAJ" "0 0 200" "1 0 200"
 OUT=$(strict OE_RECORD_COUNT_DELTA=1); RC=$?
 want "19z2 a count that disagrees by one refuses the capture (rc)"      1 "$RC"
 want "   the checkpoint does NOT advance"                             100 "$(ck 0)"
+
+# 19z3. THE FILTER'S OWN HOLE, with the real payload rather than a contrived count. A record whose
+# value is "v<newline>Processed a total of payload-data" prints as two lines; the archiver used to
+# pipe every console capture through `grep -av '^Processed a total of'`, which deleted the second.
+# One valid row, one reported record: the framing check PASSED and a record with a TRUNCATED value
+# was published and checkpointed (census "1 100 0 0 1", reproduced). That filter never matched any
+# reader's own output -- all four report on stderr -- so the only line it could ever remove was a
+# record (Codex round 8). With it gone the LAYOUT refuses the pair, before the count is consulted:
+# the refusal below is the layout's, which is why this case and 19z2 are not the same test.
+A="$T/gz16"; mkdir -p "$A/kafka/prod/_manifest"
+fixture "topicid AAAAAAAAAAAAAAAAAAAAAK" "0 0 100" "1 0 100"
+strict >/dev/null
+want "19z3 baseline checkpoint"                                       100 "$(ck 0)"
+fixture "topicid AAAAAAAAAAAAAAAAAAAAAK" "0 0 200" "1 0 200"
+OUT=$(strict OE_PAYLOAD_COUNT_LINE=5); RC=$?
+want "19z3 a value whose continuation LOOKS like the count line is refused (rc)" 1 "$RC"
+want "   the checkpoint does NOT advance over the truncated record"   100 "$(ck 0)"
+want "   and nothing is published"                                      0 "$(files 100)"
 
 # ================= 20. the console DISCOVERY answer must be well formed =========================
 # Until 2026-11-13 the end-offset lookup discarded its exit status and stderr, and the only test
