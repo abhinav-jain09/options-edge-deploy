@@ -191,6 +191,20 @@ emit() { # <offset>
   # it pushes a four-field no-offset-column line to five, so it satisfies NF >= 5 and every field
   # shape while still carrying no real offset (Codex round 4).
   [ -n "${OE_TABBED_VALUE:-}" ] && body="$(printf '{"schemaVersion":1,"l":"a"}\t{"r":"b"}')"
+  # OE_KEY_OFFSET_SEQ: the key is an offset-shaped string that INCREASES per record, so the
+  # monotonicity check cannot tell it apart -- only the FIELD COUNT can, because with an untabbed
+  # value the line has four fields and a real strict record has five.
+  [ -n "${OE_KEY_OFFSET_SEQ:-}" ] && key="Offset:$1"
+  # OE_PAYLOAD_OFFSET_SEQ: an increasing offset-shaped string at the start of a tab-separated
+  # segment of the VALUE. A scan for the first field beginning with "Offset:" finds it and accepts;
+  # matching field 3 positionally does not, because field 3 is the key. This is the case where the
+  # POSITIONAL match is the only thing that discriminates.
+  [ -n "${OE_PAYLOAD_OFFSET_SEQ:-}" ] && body="$(printf '{"schemaVersion":1}\tOffset:%s' "$1")"
+  # OE_START_BELOW: the first record is delivered one offset BELOW the --offset it was given, which
+  # a real consumer never does. Without the lower-bound check it is counted as in-range.
+  if [ -n "${OE_START_BELOW:-}" ] && [ "$1" = "$off" ]; then
+    printf 'CreateTime:1786000000000\tPartition:%s\tOffset:%s\tk\t%s\n' "$part" "$(( off - 1 ))" '{"schemaVersion":1}'
+  fi
   # OE_KEY_OFFSET_TEXT makes the KEY itself look exactly like an offset field. On a capture with no
   # offset column that line satisfies "field 3 is Offset:<digits>", so it defeats BOTH a scan and a
   # positional match on shape alone -- only the field COUNT separates it from a real strict record.
@@ -661,6 +675,20 @@ emit() { # <offset>
   # it pushes a four-field no-offset-column line to five, so it satisfies NF >= 5 and every field
   # shape while still carrying no real offset (Codex round 4).
   [ -n "${OE_TABBED_VALUE:-}" ] && body="$(printf '{"schemaVersion":1,"l":"a"}\t{"r":"b"}')"
+  # OE_KEY_OFFSET_SEQ: the key is an offset-shaped string that INCREASES per record, so the
+  # monotonicity check cannot tell it apart -- only the FIELD COUNT can, because with an untabbed
+  # value the line has four fields and a real strict record has five.
+  [ -n "${OE_KEY_OFFSET_SEQ:-}" ] && key="Offset:$1"
+  # OE_PAYLOAD_OFFSET_SEQ: an increasing offset-shaped string at the start of a tab-separated
+  # segment of the VALUE. A scan for the first field beginning with "Offset:" finds it and accepts;
+  # matching field 3 positionally does not, because field 3 is the key. This is the case where the
+  # POSITIONAL match is the only thing that discriminates.
+  [ -n "${OE_PAYLOAD_OFFSET_SEQ:-}" ] && body="$(printf '{"schemaVersion":1}\tOffset:%s' "$1")"
+  # OE_START_BELOW: the first record is delivered one offset BELOW the --offset it was given, which
+  # a real consumer never does. Without the lower-bound check it is counted as in-range.
+  if [ -n "${OE_START_BELOW:-}" ] && [ "$1" = "$off" ]; then
+    printf 'CreateTime:1786000000000\tPartition:%s\tOffset:%s\tk\t%s\n' "$part" "$(( off - 1 ))" '{"schemaVersion":1}'
+  fi
   # OE_KEY_OFFSET_TEXT makes the KEY itself look exactly like an offset field. On a capture with no
   # offset column that line satisfies "field 3 is Offset:<digits>", so it defeats BOTH a scan and a
   # positional match on shape alone -- only the field COUNT separates it from a real strict record.
@@ -3270,6 +3298,36 @@ has  "   the whole range is recorded as a discontinuity" '"discontinuity":"short
 want "   and NO empty file is published"                                0 "$(files 100)"
 want "   and no .partial residue is left behind in the corpus either"   0 \
      "$(ls "$A/kafka/prod/$TOPIC"/dt=*/*.partial 2>/dev/null | wc -l | tr -d ' ')"
+
+# --- 19n5-n7. EACH LAYER OF THE OFFSET CONTRACT IS THE ONLY THING THAT CATCHES ITS OWN CASE.
+# Mutation testing showed the shape, count and monotonicity checks all passing their own mutations
+# because the newest check subsumed the others on every input I had written. These three inputs are
+# each caught by exactly one layer, so removing any layer now fails here.
+A="$T/s9"; mkdir -p "$A/kafka/prod/_manifest"
+fixture "topicid AAAAAAAAAAAAAAAAAAAAAD" "0 0 100" "1 0 100"
+strict >/dev/null
+
+# (a) an INCREASING offset-shaped key with an untabbed value: four fields. Monotonicity is satisfied;
+#     only NF >= 5 separates it from a real strict record.
+fixture "topicid AAAAAAAAAAAAAAAAAAAAAD" "0 0 200" "1 0 200"
+OUT=$(strict OE_KEY_OFFSET_SEQ=1 OE_NO_OFFSET_COLUMN=1); RC=$?
+want "19n5 an INCREASING offset-shaped key is refused on the field count (rc)" 1 "$RC"
+has  "   fails closed"                       "trustworthy per-record offsets" "$OUT"
+want "   checkpoint UNCHANGED"                                        100 "$(ck 0)"
+
+# (b) an INCREASING offset-shaped string inside the VALUE: a scan for the first offset-looking field
+#     finds it, so only matching field 3 POSITIONALLY refuses it.
+OUT=$(strict OE_PAYLOAD_OFFSET_SEQ=1 OE_NO_OFFSET_COLUMN=1); RC=$?
+want "19n6 an INCREASING offset-shaped string in the VALUE is refused (rc)" 1 "$RC"
+has  "   fails closed"                       "trustworthy per-record offsets" "$OUT"
+want "   checkpoint UNCHANGED"                                        100 "$(ck 0)"
+
+# (c) a record delivered BELOW the offset the consumer was told to start from, which a real one never
+#     does. Without the lower-bound check it is counted as in-range.
+OUT=$(strict OE_START_BELOW=1); RC=$?
+want "19n7 a record below the requested start offset is refused (rc)"   1 "$RC"
+has  "   fails closed"                       "trustworthy per-record offsets" "$OUT"
+want "   checkpoint UNCHANGED"                                        100 "$(ck 0)"
 
 # --- 19v. ...and the dead range's EVIDENCE gates its checkpoint. With no file and no manifest line,
 # that discontinuity is the only record the range ever existed: advancing without it leaves nothing
