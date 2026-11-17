@@ -205,13 +205,6 @@ emit() { # <offset>
   if [ -n "${OE_START_BELOW:-}" ] && [ "$1" = "$off" ]; then
     printf 'CreateTime:1786000000000\tPartition:%s\tOffset:%s\tk\t%s\n' "$part" "$(( off - 1 ))" '{"schemaVersion":1}'
   fi
-  # OE_OFFSETS_DESCEND: emit this record and then one BELOW it but still above the start, i.e. a
-  # distinct descending pair (100, 102, 101). "off <= prev" refuses it; "off == prev" -- which still
-  # catches a repeated-offset masquerade -- accepts it, which is why that weaker form needs its own
-  # input (Codex round 5).
-  if [ -n "${OE_OFFSETS_DESCEND:-}" ] && [ "$1" = "$(( off + 2 ))" ]; then
-    printf 'CreateTime:1786000000000\tPartition:%s\tOffset:%s\tk\t%s\n' "$part" "$(( off + 1 ))" '{"schemaVersion":1}'
-  fi
   # OE_KEY_OFFSET_TEXT makes the KEY itself look exactly like an offset field. On a capture with no
   # offset column that line satisfies "field 3 is Offset:<digits>", so it defeats BOTH a scan and a
   # positional match on shape alone -- only the field COUNT separates it from a real strict record.
@@ -225,6 +218,18 @@ emit() { # <offset>
 sent=0; o="$off"
 while [ "$o" -lt "$end" ] && [ "$sent" -lt "$maxm" ]; do
   if [ "$stop" -gt 0 ] && [ "$sent" -ge "$stop" ]; then break; fi        # stopped early, exit 0
+  # OE_OFFSETS_DESCEND: deliver off+2 BEFORE off+1 -- a DISTINCT descending pair (100, 102, 101),
+  # every offset above the lower bound and none repeated. "off <= prev" refuses it; "off == prev",
+  # which still refuses a repeated-offset masquerade, accepts it. That is what makes "<=" the
+  # load-bearing form, and it needs an input with no repeat in it (Codex round 5).
+  #
+  # The first version of this hook emitted the extra record from inside emit(), which produced
+  # 100, 101, 101, 102 -- a REPEAT, which the weaker form catches, so the mutation survived and the
+  # assertion was passing for the wrong reason.
+  if [ -n "${OE_OFFSETS_DESCEND:-}" ] && [ "$o" -eq $(( off + 1 )) ]; then
+    emit $(( off + 2 )); emit $(( off + 1 ))
+    sent=$(( sent + 2 )); o=$(( off + 3 )); continue
+  fi
   gapfrom="${OE_GAP_FROM:-$off}"
   if [ "$gap" -gt 0 ] && [ "$o" -ge "$gapfrom" ] && [ "$o" -lt $(( gapfrom + gap )) ]; then
     o=$(( o + 1 )); continue                                            # this offset holds nothing
@@ -696,13 +701,6 @@ emit() { # <offset>
   if [ -n "${OE_START_BELOW:-}" ] && [ "$1" = "$off" ]; then
     printf 'CreateTime:1786000000000\tPartition:%s\tOffset:%s\tk\t%s\n' "$part" "$(( off - 1 ))" '{"schemaVersion":1}'
   fi
-  # OE_OFFSETS_DESCEND: emit this record and then one BELOW it but still above the start, i.e. a
-  # distinct descending pair (100, 102, 101). "off <= prev" refuses it; "off == prev" -- which still
-  # catches a repeated-offset masquerade -- accepts it, which is why that weaker form needs its own
-  # input (Codex round 5).
-  if [ -n "${OE_OFFSETS_DESCEND:-}" ] && [ "$1" = "$(( off + 2 ))" ]; then
-    printf 'CreateTime:1786000000000\tPartition:%s\tOffset:%s\tk\t%s\n' "$part" "$(( off + 1 ))" '{"schemaVersion":1}'
-  fi
   # OE_KEY_OFFSET_TEXT makes the KEY itself look exactly like an offset field. On a capture with no
   # offset column that line satisfies "field 3 is Offset:<digits>", so it defeats BOTH a scan and a
   # positional match on shape alone -- only the field COUNT separates it from a real strict record.
@@ -716,6 +714,18 @@ emit() { # <offset>
 sent=0; o="$off"
 while [ "$o" -lt "$end" ] && [ "$sent" -lt "$maxm" ]; do
   if [ "$stop" -gt 0 ] && [ "$sent" -ge "$stop" ]; then break; fi        # stopped early, exit 0
+  # OE_OFFSETS_DESCEND: deliver off+2 BEFORE off+1 -- a DISTINCT descending pair (100, 102, 101),
+  # every offset above the lower bound and none repeated. "off <= prev" refuses it; "off == prev",
+  # which still refuses a repeated-offset masquerade, accepts it. That is what makes "<=" the
+  # load-bearing form, and it needs an input with no repeat in it (Codex round 5).
+  #
+  # The first version of this hook emitted the extra record from inside emit(), which produced
+  # 100, 101, 101, 102 -- a REPEAT, which the weaker form catches, so the mutation survived and the
+  # assertion was passing for the wrong reason.
+  if [ -n "${OE_OFFSETS_DESCEND:-}" ] && [ "$o" -eq $(( off + 1 )) ]; then
+    emit $(( off + 2 )); emit $(( off + 1 ))
+    sent=$(( sent + 2 )); o=$(( off + 3 )); continue
+  fi
   gapfrom="${OE_GAP_FROM:-$off}"
   if [ "$gap" -gt 0 ] && [ "$o" -ge "$gapfrom" ] && [ "$o" -lt $(( gapfrom + gap )) ]; then
     o=$(( o + 1 )); continue                                            # this offset holds nothing
@@ -3343,9 +3353,35 @@ want "19n7 a record below the requested start offset is refused (rc)"   1 "$RC"
 has  "   fails closed"                       "trustworthy per-record offsets" "$OUT"
 want "   checkpoint UNCHANGED"                                        100 "$(ck 0)"
 
+# --- 19w. A mid-line sidecar met by the SHORT-READ branch, which is NOT the proven-empty branch and
+# must not behave like it: the capture is real and its published manifest line already carries
+# "short_read" and "missing_offsets", so the run keeps going and advances -- but it still must not
+# append onto the fragment, because that destroys every other range's declaration in the sidecar.
+A="$T/s10"; mkdir -p "$A/kafka/prod/_manifest"
+fixture "topicid AAAAAAAAAAAAAAAAAAAAAE" "0 0 100" "1 0 100"
+strict >/dev/null
+printf '{"topic":"%s","partial":' "$TOPIC" > "$A/kafka/prod/_manifest/$TOPIC.discontinuities.jsonl"
+w_frag=$(wc -c < "$A/kafka/prod/_manifest/$TOPIC.discontinuities.jsonl" | tr -d ' ')
+fixture "topicid AAAAAAAAAAAAAAAAAAAAAE" "0 0 200" "1 0 200"
+OUT=$(strict OE_COMPACTED_GAP=40); RC=$?
+want "19w a short read onto a mid-line sidecar still FAILS the run (rc)" 1 "$RC"
+has  "   and says it did not append"      "does not end with a newline" "$OUT"
+want "   but the surviving records ARE published"                     120 "$(runs records)"
+want "   and the checkpoint DOES advance (the manifest carries the gap)" 200 "$(ck 0)"
+has  "   which the manifest line records"                 '"short_read":true' "$(mline)"
+want "   and the fragment was left untouched"             "$w_frag" \
+     "$(wc -c < "$A/kafka/prod/_manifest/$TOPIC.discontinuities.jsonl" | tr -d ' ')"
+
 # --- 19n8. DESCENDING DISTINCT offsets. A real single-partition capture never delivers them, and
 # the weaker "off == prev" form of the monotonicity check -- which still refuses a repeated-offset
 # masquerade -- accepts them, so this input is what makes "<=" load-bearing (Codex round 5).
+# ITS OWN fixture and destination: written first as a continuation of the block above, it then broke
+# the moment a case was inserted between them, because it was reading another case's checkpoint.
+A="$T/s11"; mkdir -p "$A/kafka/prod/_manifest"
+fixture "topicid AAAAAAAAAAAAAAAAAAAAAF" "0 0 100" "1 0 100"
+strict >/dev/null
+want "19n8 baseline checkpoint"                                       100 "$(ck 0)"
+fixture "topicid AAAAAAAAAAAAAAAAAAAAAF" "0 0 200" "1 0 200"
 OUT=$(strict OE_OFFSETS_DESCEND=1); RC=$?
 want "19n8 descending DISTINCT offsets are refused (rc)"                1 "$RC"
 has  "   fails closed"                       "trustworthy per-record offsets" "$OUT"
