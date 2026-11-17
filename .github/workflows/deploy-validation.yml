@@ -175,6 +175,9 @@ jobs:
           python3 scripts/watch/kafka-lag-test.py
           python3 scripts/watch/partition-balance-test.py
           python3 scripts/watch/fleet-alert-test.py
+          python3 scripts/watch/oom-test.py
+          python3 scripts/watch/host-load-test.py
+          python3 scripts/watch/run-wrappers-test.py
           bash scripts/watch/fleet-alert-deliver-test.sh
 
       # Routing: production to the prod group, dev AND es4 to the dev group. Asserted against the

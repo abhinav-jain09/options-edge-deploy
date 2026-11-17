@@ -53,6 +53,16 @@ RANK = {
     "IMAGE_PULL": (5, "🔴"),
     "RESTARTS": (4, "🟠"),
     "NO_CONSUMER": (4, "🟠"),
+    # readiness / dead letters / memory kills / host load (the checks that used to fail only the Jenkins build)
+    "NODE_NOT_READY": (5, "🔴"),
+    "NODE_PRESSURE": (5, "🔴"),
+    "OOM_KILLED": (4, "🟠"),
+    "EVICTED": (4, "🟠"),
+    "STUCK": (4, "🟠"),
+    "HOST_MEMORY": (4, "🟠"),
+    "HOST_CPU": (3, "🟡"),
+    "GROWTH": (3, "🟡"),
+    "UNDECLARED_DLQ": (2, "🔵"),
     "LAG_INSUFFICIENT_DRAIN": (3, "🟡"),
     "LAG_FIRST_SIGHT": (3, "🟡"),
     "SKEW": (2, "🔵"),
@@ -118,7 +128,7 @@ STATE_FILE = os.path.join(a.state_dir, "alerts-%s-%s.json" % (re.sub(r"[^A-Za-z0
 POD_HASH = re.compile(r"-[a-z0-9]{8,10}-[a-z0-9]{5}$")
 
 
-POD_CLASSES = {"CRASHLOOP", "RESTARTS", "IMAGE_PULL", "BRIDGE_NOT_READY"}   # only these name a POD; a group/topic is never hash-stripped
+POD_CLASSES = {"CRASHLOOP", "RESTARTS", "IMAGE_PULL", "BRIDGE_NOT_READY", "OOM_KILLED", "EVICTED"}   # only these name a POD; a group/topic is never hash-stripped
 
 
 def incident_key(cls, rest):

@@ -24,7 +24,8 @@ WATCH = REPO / "scripts/watch"
 
 PROD_ID = "offhours-discord-webhook"
 DEV_ID = "offhours-discord-webhook-dev"
-NEW_CHECKS = {"crash-loop": "paging", "kafka-lag": "paging", "partition-balance": "observation-only"}
+NEW_CHECKS = {"crash-loop": "paging", "kafka-lag": "paging", "partition-balance": "observation-only",
+              "readiness": "paging", "dlq-growth": "paging", "oom": "paging", "host-load": "paging"}
 
 
 class Routing(unittest.TestCase):
@@ -81,8 +82,27 @@ class Routing(unittest.TestCase):
 
     def test_partition_balance_is_the_only_observation_only_check(self):
         paging = [c for c, m in NEW_CHECKS.items() if m == "paging"]
-        self.assertEqual({"crash-loop", "kafka-lag"}, set(paging),
-                         "crash loops and lag page from day one; only partition balance waits for §5a")
+        self.assertEqual({"crash-loop", "kafka-lag", "readiness", "dlq-growth", "oom", "host-load"}, set(paging),
+                         "every check pages from day one except partition balance, which waits for §5a")
+
+    def test_readiness_and_dead_letters_no_longer_run_unwrapped_in_the_jenkinsfile(self):
+        # They used to run `python3 scripts/watch/fleet-readiness.py` / `dlq-growth.py` straight from the stage: a red build and NOTHING in
+        # Discord. A stage that calls the script itself would silently bring that back.
+        for script in ("fleet-readiness.py", "dlq-growth.py"):
+            for line in self.jf.splitlines():
+                code = line.split("//", 1)[0]
+                if script in code:
+                    self.assertIn("fleet-alert-deliver.sh", code,
+                                  "%s must run under fleet-alert-deliver.sh, not directly: %s" % (script, line.strip()))
+
+    def test_the_host_load_check_has_the_node_permission_it_needs_and_asks_for_no_more(self):
+        rbac = (REPO / "k8s/security/jenkins-fleet-watch-node-reader.yaml").read_text()
+        self.assertIn("ClusterRole", rbac)
+        self.assertRegex(rbac, r'resources: \["nodes"\]\s+verbs: \["get", "list"\]')
+        code = "\n".join(l.split("#", 1)[0] for l in rbac.splitlines())
+        # nodes/proxy reaches the kubelet API, including exec into any pod on the node
+        self.assertNotIn("nodes/proxy", code)
+        self.assertNotRegex(code, r'verbs:.*"(create|update|patch|delete|\*)"', "this grant is read-only")
 
     def test_paging_is_one_page_per_incident_and_the_deliverer_hands_over_a_state_dir(self):
         deliver = (WATCH / "fleet-alert-deliver.sh").read_text()
@@ -127,7 +147,11 @@ class Routing(unittest.TestCase):
             body = stage[stage.index("script:"):]
             wrapped = {"crash-loop": "crash-loop-run.sh",
                        "kafka-lag": "stateful-check-run.sh kafka-lag.py",
-                       "partition-balance": "stateful-check-run.sh partition-balance.py"}[check]
+                       "partition-balance": "stateful-check-run.sh partition-balance.py",
+                       "readiness": "readiness-run.sh",
+                       "dlq-growth": "stateful-check-run.sh dlq-growth.py",
+                       "oom": "oom-run.sh",
+                       "host-load": "host-load-run.sh"}[check]
             self.assertIn(wrapped, body)
             self.assertLess(body.index("fleet-alert-deliver.sh"), body.index(wrapped),
                             "the deliverer must WRAP the check script, not follow it")
@@ -136,7 +160,7 @@ class Routing(unittest.TestCase):
         for check in ("kafka-lag", "partition-balance"):
             self.assertIn("stateful-check-run.sh", self._stage_for(check))
         self.assertIn("crash-loop-run.sh", self._stage_for("crash-loop"))
-        for name in ("stateful-check-run.sh", "crash-loop-run.sh"):
+        for name in ("stateful-check-run.sh", "crash-loop-run.sh", "readiness-run.sh", "oom-run.sh", "host-load-run.sh"):
             text = (WATCH / name).read_text()
             self.assertIn("ERROR:", text, "%s must emit an ERROR: reason the composer can read" % name)
             self.assertIn("exit 2", text, "%s must fail closed as exit 2" % name)
@@ -165,13 +189,13 @@ class Routing(unittest.TestCase):
                           "a bare 'changes nothing' claim must be qualified by the Discord POST")
 
     def test_the_checks_exist_and_are_executable_python(self):
-        for name in ("crash-loop.py", "kafka-lag.py", "partition-balance.py", "fleet-alert.py"):
+        for name in ("crash-loop.py", "kafka-lag.py", "partition-balance.py", "fleet-alert.py", "oom.py", "host-load.py"):
             p = WATCH / name
             self.assertTrue(p.is_file(), "%s is missing" % name)
             compile(p.read_text(), str(p), "exec")
 
     def test_every_new_check_has_a_negative_control_suite(self):
-        for name in ("crash-loop", "kafka-lag", "partition-balance", "fleet-alert"):
+        for name in ("crash-loop", "kafka-lag", "partition-balance", "fleet-alert", "oom", "host-load", "run-wrappers"):
             self.assertTrue((WATCH / ("%s-test.py" % name)).is_file(),
                             "%s has no negative controls" % name)
         self.assertTrue((WATCH / "fleet-alert-deliver-test.sh").is_file(),
@@ -179,7 +203,8 @@ class Routing(unittest.TestCase):
 
     def _stage_for(self, check):
         names = {"crash-loop": "Crash loops", "kafka-lag": "Consumer lag",
-                 "partition-balance": "Partition balance"}
+                 "partition-balance": "Partition balance", "readiness": "Readiness", "dlq-growth": "Dead letters",
+                 "oom": "Memory kills", "host-load": "Host load"}
         label = names[check]
         start = self.jf.index("stage('%s')" % label)
         nxt = self.jf.find("    stage('", start + 10)

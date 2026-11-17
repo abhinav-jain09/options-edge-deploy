@@ -1,0 +1,35 @@
+# READ-ONLY node visibility for the fleet-watch "Host load" check (scripts/watch/host-load.py).
+#
+# The deployer's Role (jenkins-deployer-rbac.yaml) is namespaced on purpose: "cluster-wide perms are not needed and are not granted". Nodes are
+# cluster-scoped, so without THIS file `kubectl get nodes` is Forbidden and the host-load stage can only say "could not check". It grants
+#   - get/list on nodes            (conditions: Ready, MemoryPressure, DiskPressure, PIDPressure; allocatable cpu/memory)
+#   - get/list on metrics.k8s.io nodes  (usage, ONLY where a metrics-server exists)
+# and nothing else. It deliberately does NOT grant nodes/proxy: a GET on nodes/proxy reaches the kubelet API, including exec of any pod on the node.
+#
+# NOT applied by any pipeline. A cluster admin applies it once per cluster (dev, es4, production), the same way jenkins-deployer-rbac.yaml was:
+#   kubectl apply -f k8s/security/jenkins-fleet-watch-node-reader.yaml
+# The ServiceAccount is the one in jenkins-deployer-rbac.yaml (name jenkins-deployer, namespace options-edge) on all three clusters.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: jenkins-fleet-watch-node-reader
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: jenkins-fleet-watch-node-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: jenkins-fleet-watch-node-reader
+subjects:
+  - kind: ServiceAccount
+    name: jenkins-deployer
+    namespace: options-edge
