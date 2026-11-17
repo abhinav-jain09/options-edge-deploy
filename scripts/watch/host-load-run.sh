@@ -8,12 +8,12 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 dir="$(mktemp -d)"
 trap 'rm -rf "$dir"' EXIT
-if ! kubectl get nodes -o json > "$dir/nodes.json" 2> "$dir/err"; then
+if ! kubectl --request-timeout=20s get nodes -o json > "$dir/nodes.json" 2> "$dir/err"; then
   echo "ERROR: kubectl get nodes failed: $(tr '\n' ' ' < "$dir/err" | cut -c1-300)"
   exit 2
 fi
 args=(--nodes "$dir/nodes.json")
-if kubectl get --raw /apis/metrics.k8s.io/v1beta1/nodes > "$dir/metrics.json" 2> /dev/null; then
+if kubectl --request-timeout=20s get --raw /apis/metrics.k8s.io/v1beta1/nodes > "$dir/metrics.json" 2> /dev/null; then
   args+=(--metrics "$dir/metrics.json")
 fi
 python3 "$HERE/host-load.py" "${args[@]}" "$@"

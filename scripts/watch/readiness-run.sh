@@ -24,7 +24,7 @@ mkdir -p "$STATE" 2>/dev/null || { echo "ERROR: cannot create the state director
 out="$(mktemp)"
 err="$(mktemp)"
 trap 'rm -f "$out" "$err"' EXIT
-if ! kubectl -n "$NS" get deploy,statefulset,rs,pods -o json > "$out" 2> "$err"; then
+if ! kubectl --request-timeout=20s -n "$NS" get deploy,statefulset,rs,pods -o json > "$out" 2> "$err"; then
   echo "ERROR: kubectl -n $NS get deploy,statefulset,rs,pods failed: $(tr '\n' ' ' < "$err" | cut -c1-300)"
   exit 2
 fi
