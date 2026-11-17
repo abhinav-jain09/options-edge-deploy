@@ -626,6 +626,17 @@ scan_archive_file() {   # $1=path -> "records min_ms max_ms schema_versions_csv"
 capture_offset_census() {   # $1=path $2=from $3=endoff
   LC_ALL=C zcat < "$1" 2>/dev/null | LC_ALL=C awk -v lo="$2" -v hi="$3" '
     BEGIN { FS="\t"; n=0; mx=-1; over=0; seen=0; prev=-1; bad=0 }
+    # EVERY ROW MUST SATISFY THE LAYOUT, and one that does not rejects the WHOLE capture.
+    #
+    # awk pattern-action semantics made this subtly wrong: a row failing the predicate below simply
+    # did not trigger it, so it was SKIPPED rather than refused. A capture holding offset 100, one
+    # malformed row, and offset 200 censused as "1 100 1 0" -- one record in range, coverage proven
+    # -- and the clamp then dropped the malformed row while the rescan AGREED with the census,
+    # because both use the same predicate. The checkpoint advanced and recoverable bytes were
+    # discarded and reported as broker loss. A console-rendered key or value containing a newline
+    # produces exactly such a row. (Codex round 6, P2.)
+    !(NF >= 5 && $1 ~ /^(CreateTime|LogAppendTime):[0-9]+$/ && $2 ~ /^Partition:[0-9]+$/ && $3 ~ /^Offset:[0-9]+$/) { bad = 1; exit }
+
     # THE WHOLE STRICT LAYOUT, INCLUDING THE FIELD COUNT. print.offset puts the offset in field 3,
     # after the timestamp and the partition and before the key and value, so a strict record has at
     # least five fields; without print.offset field 3 is the KEY and there are four.
@@ -1757,7 +1768,9 @@ for topic in $TOPICS; do
       #   otherwise            the reader stopped inside the range, at max_in_range. Only
       #                        [from, max+1) is proven; the rest is untouched and re-read next run.
       #
-      # Unparseable offsets fail CLOSED: a capture that cannot say what it delivered is not evidence.
+      # ANY row that does not satisfy the strict layout rejects the whole capture, not just itself:
+      # a capture that cannot account for every line it holds cannot say what it delivered, and
+      # skipping the odd unreadable row would silently reclassify recoverable bytes as broker loss.
       #
       # THE CORNER THIS DOES NOT RESOLVE — a real limitation, not a case I have argued away. If the
       # reader stops inside the range with nothing beyond it to walk into, there is no proof it

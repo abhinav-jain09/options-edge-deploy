@@ -230,6 +230,14 @@ while [ "$o" -lt "$end" ] && [ "$sent" -lt "$maxm" ]; do
     emit $(( off + 2 )); emit $(( off + 1 ))
     sent=$(( sent + 2 )); o=$(( off + 3 )); continue
   fi
+  # OE_MALFORMED_ROW=<n>: the nth record delivered is a physical row that does not satisfy the strict
+  # layout at all -- which is what a console-rendered key or value containing a NEWLINE produces. The
+  # rows around it are valid, so this is the mixed case: skipping the bad row rather than refusing
+  # the capture reclassifies recoverable bytes as broker loss (Codex round 6).
+  if [ -n "${OE_MALFORMED_ROW:-}" ] && [ "$sent" -eq "$OE_MALFORMED_ROW" ]; then
+    printf 'a row with an embedded newline renders as this\n'
+    sent=$(( sent + 1 )); o=$(( o + 1 )); continue
+  fi
   gapfrom="${OE_GAP_FROM:-$off}"
   if [ "$gap" -gt 0 ] && [ "$o" -ge "$gapfrom" ] && [ "$o" -lt $(( gapfrom + gap )) ]; then
     o=$(( o + 1 )); continue                                            # this offset holds nothing
@@ -725,6 +733,14 @@ while [ "$o" -lt "$end" ] && [ "$sent" -lt "$maxm" ]; do
   if [ -n "${OE_OFFSETS_DESCEND:-}" ] && [ "$o" -eq $(( off + 1 )) ]; then
     emit $(( off + 2 )); emit $(( off + 1 ))
     sent=$(( sent + 2 )); o=$(( off + 3 )); continue
+  fi
+  # OE_MALFORMED_ROW=<n>: the nth record delivered is a physical row that does not satisfy the strict
+  # layout at all -- which is what a console-rendered key or value containing a NEWLINE produces. The
+  # rows around it are valid, so this is the mixed case: skipping the bad row rather than refusing
+  # the capture reclassifies recoverable bytes as broker loss (Codex round 6).
+  if [ -n "${OE_MALFORMED_ROW:-}" ] && [ "$sent" -eq "$OE_MALFORMED_ROW" ]; then
+    printf 'a row with an embedded newline renders as this\n'
+    sent=$(( sent + 1 )); o=$(( o + 1 )); continue
   fi
   gapfrom="${OE_GAP_FROM:-$off}"
   if [ "$gap" -gt 0 ] && [ "$o" -ge "$gapfrom" ] && [ "$o" -lt $(( gapfrom + gap )) ]; then
@@ -3188,6 +3204,12 @@ rc=$?
 want "18o an uninstalled capture fails loudly (rc)" 2 "$rc"
 has  "  and alerts, because a cron that quietly does nothing is how bucket 0 stayed empty" "ALERT:" "$out"
 
+# THE DESTINATIONS BELOW ARE "gz"-PREFIXED, and that is not cosmetic. They were s, s2, s3 ... s12
+# at first, and the suite ALREADY uses s1, s2, s4, s5, s6, s9, s10, s11, s12 through fresh() — so
+# six of them collided. Section 12o in particular runs the SAME topic under the SAME env in $T/s12,
+# so the case below inherited its TopicId and its baseline run reported a spurious log RESET. A
+# shared destination makes a case depend on what ran before it, which is how a suite starts passing
+# and failing for reasons that have nothing to do with the code.
 # ================= 19. a STRICT SHORT READ preserves what survived and RECORDS the hole ============
 # THE DEFECT THIS SECTION EXISTS FOR. The strict short-read branch used to log FAIL, `rm -f` the
 # capture and leave the checkpoint alone. Once ANY offset in [from,endoff) is gone — compaction on a
@@ -3199,7 +3221,7 @@ has  "  and alerts, because a cron that quietly does nothing is how bucket 0 sta
 # The branch was also unreachable until options.spx.gamma-zone.profile was passed through it: both
 # topics in the default OE_STRICT_TOPICS are committed-read and take the other capture path. So
 # these are the first assertions it has ever had.
-A="$T/s"; mkdir -p "$A/kafka/prod/_manifest"
+A="$T/gz1"; mkdir -p "$A/kafka/prod/_manifest"
 reset_alerts
 strict() { run OE_STRICT_TOPICS="$TOPIC" "$@"; }
 disc() { cat "$A/kafka/prod/_manifest/$TOPIC.discontinuities.jsonl" 2>/dev/null; }
@@ -3234,7 +3256,7 @@ has  "   and carries both numbers, so the shortfall is visible in the corpus its
 # checkpoint to the queried bound in BOTH cases and called the difference "records no longer on the
 # broker" — which would have skipped 40 still-present records for ever, a NEW loss path (Codex round
 # 1, P1). The delivered OFFSETS are the only thing that separates them.
-A="$T/s3"; mkdir -p "$A/kafka/prod/_manifest"
+A="$T/gz3"; mkdir -p "$A/kafka/prod/_manifest"
 fixture "topicid WWWWWWWWWWWWWWWWWWWWWW" "0 0 100" "1 0 100"
 strict >/dev/null
 want "19i baseline checkpoint"                                        100 "$(ck 0)"
@@ -3261,7 +3283,7 @@ want "   and the checkpoint reaches the real bound"                   200 "$(ck 
 # for -- while spanning [140,239]. The first version of this change only looked at the offsets when
 # got != count, so this published a "complete" [100,200) holding 40 records belonging to the next
 # range, with the hole inside the claimed range entirely concealed (Codex round 2, P2).
-A="$T/s5"; mkdir -p "$A/kafka/prod/_manifest"
+A="$T/gz5"; mkdir -p "$A/kafka/prod/_manifest"
 fixture "topicid YYYYYYYYYYYYYYYYYYYYYY" "0 0 100" "1 0 100"
 strict >/dev/null
 want "19o baseline checkpoint"                                        100 "$(ck 0)"
@@ -3288,7 +3310,7 @@ want "   and the file itself carries no offset outside the range"       0 \
 # GONE. That is what makes this test able to fail: with the gap at the start of the range (as it was)
 # the offset below the bound survived, so "max + 1" and "walked past the bound" both gave 200 and an
 # implementation ignoring the overrun evidence passed anyway (Codex round 3).
-A="$T/s6"; mkdir -p "$A/kafka/prod/_manifest"
+A="$T/gz6"; mkdir -p "$A/kafka/prod/_manifest"
 fixture "topicid ZZZZZZZZZZZZZZZZZZZZZZ" "0 0 100" "1 0 100"
 strict >/dev/null
 fixture "topicid ZZZZZZZZZZZZZZZZZZZZZZ" "0 0 300 200" "1 0 300 200"
@@ -3309,7 +3331,7 @@ want "   and the last offset actually delivered was 159, not 199"     159 \
 # bound. There is nothing to publish -- an empty gzip is not a corpus member -- but the range is
 # covered, so refusing it left the checkpoint still and every retry asked for the same dead range
 # again: a stall holding the proof of coverage (Codex round 3, P2).
-A="$T/s7"; mkdir -p "$A/kafka/prod/_manifest"
+A="$T/gz7"; mkdir -p "$A/kafka/prod/_manifest"
 fixture "topicid AAAAAAAAAAAAAAAAAAAAAB" "0 0 100" "1 0 100"
 strict >/dev/null
 want "19t baseline checkpoint"                                        100 "$(ck 0)"
@@ -3327,7 +3349,7 @@ want "   and no .partial residue is left behind in the corpus either"   0 \
 # Mutation testing showed the shape, count and monotonicity checks all passing their own mutations
 # because the newest check subsumed the others on every input I had written. These three inputs are
 # each caught by exactly one layer, so removing any layer now fails here.
-A="$T/s9"; mkdir -p "$A/kafka/prod/_manifest"
+A="$T/gz9"; mkdir -p "$A/kafka/prod/_manifest"
 fixture "topicid AAAAAAAAAAAAAAAAAAAAAD" "0 0 100" "1 0 100"
 strict >/dev/null
 
@@ -3353,11 +3375,27 @@ want "19n7 a record below the requested start offset is refused (rc)"   1 "$RC"
 has  "   fails closed"                       "trustworthy per-record offsets" "$OUT"
 want "   checkpoint UNCHANGED"                                        100 "$(ck 0)"
 
+# --- 19x. A capture MIXING valid rows with one malformed row, plus an overrun. The malformed row was
+# silently SKIPPED rather than refused -- awk pattern-action semantics -- so the census reported the
+# valid rows only, the clamp dropped the bad one, and the rescan AGREED because it uses the same
+# predicate. The checkpoint then advanced and the dropped bytes were reported as broker loss. A
+# console-rendered key or value containing a newline produces exactly such a row (Codex round 6, P2).
+A="$T/gz12"; mkdir -p "$A/kafka/prod/_manifest"
+fixture "topicid AAAAAAAAAAAAAAAAAAAAAG" "0 0 100" "1 0 100"
+strict >/dev/null
+want "19x baseline checkpoint"                                        100 "$(ck 0)"
+fixture "topicid AAAAAAAAAAAAAAAAAAAAAG" "0 0 300 200" "1 0 300 200"
+OUT=$(strict UNTIL_TS=1786000000000 OE_MALFORMED_ROW=5); RC=$?
+want "19x one malformed row rejects the WHOLE capture (rc)"             1 "$RC"
+has  "   fails closed"                       "trustworthy per-record offsets" "$OUT"
+want "   the checkpoint does NOT advance"                             100 "$(ck 0)"
+want "   and nothing is published"                                      0 "$(files 100)"
+
 # --- 19w. A mid-line sidecar met by the SHORT-READ branch, which is NOT the proven-empty branch and
 # must not behave like it: the capture is real and its published manifest line already carries
 # "short_read" and "missing_offsets", so the run keeps going and advances -- but it still must not
 # append onto the fragment, because that destroys every other range's declaration in the sidecar.
-A="$T/s10"; mkdir -p "$A/kafka/prod/_manifest"
+A="$T/gz10"; mkdir -p "$A/kafka/prod/_manifest"
 fixture "topicid AAAAAAAAAAAAAAAAAAAAAE" "0 0 100" "1 0 100"
 strict >/dev/null
 printf '{"topic":"%s","partial":' "$TOPIC" > "$A/kafka/prod/_manifest/$TOPIC.discontinuities.jsonl"
@@ -3377,7 +3415,7 @@ want "   and the fragment was left untouched"             "$w_frag" \
 # masquerade -- accepts them, so this input is what makes "<=" load-bearing (Codex round 5).
 # ITS OWN fixture and destination: written first as a continuation of the block above, it then broke
 # the moment a case was inserted between them, because it was reading another case's checkpoint.
-A="$T/s11"; mkdir -p "$A/kafka/prod/_manifest"
+A="$T/gz11"; mkdir -p "$A/kafka/prod/_manifest"
 fixture "topicid AAAAAAAAAAAAAAAAAAAAAF" "0 0 100" "1 0 100"
 strict >/dev/null
 want "19n8 baseline checkpoint"                                       100 "$(ck 0)"
@@ -3391,7 +3429,7 @@ want "   checkpoint UNCHANGED"                                        100 "$(ck 
 # that discontinuity is the only record the range ever existed: advancing without it leaves nothing
 # anywhere to say the range was skipped, and the next run resumes past it and SUCCEEDS, so the hole
 # becomes invisible rather than merely unrecorded (Codex round 4, P2).
-A="$T/s8"; mkdir -p "$A/kafka/prod/_manifest"
+A="$T/gz8"; mkdir -p "$A/kafka/prod/_manifest"
 fixture "topicid AAAAAAAAAAAAAAAAAAAAAC" "0 0 100" "1 0 100"
 strict >/dev/null
 want "19v baseline checkpoint"                                        100 "$(ck 0)"
@@ -3424,7 +3462,7 @@ want "   its bytes are unchanged"                        "$frag_bytes" \
      "$(wc -c < "$A/kafka/prod/_manifest/$TOPIC.discontinuities.jsonl" | tr -d ' ')"
 
 # --- 19n. A capture with NO offsets to attest to fails CLOSED# --- 19n. A capture with NO offsets to attest to fails CLOSED: nothing published, nothing advanced.
-A="$T/s4"; mkdir -p "$A/kafka/prod/_manifest"
+A="$T/gz4"; mkdir -p "$A/kafka/prod/_manifest"
 fixture "topicid XXXXXXXXXXXXXXXXXXXXXX" "0 0 100" "1 0 100"
 strict >/dev/null
 fixture "topicid XXXXXXXXXXXXXXXXXXXXXX" "0 0 200" "1 0 200"
@@ -3462,7 +3500,7 @@ want "   and the checkpoint does NOT advance over live records"       100 "$(ck 
 want "   nothing was published for it"                                  0 "$(files 100)"
 
 # A NON-strict topic is untouched: a short read there is a quiet day, as it always was.
-A="$T/s2"; mkdir -p "$A/kafka/prod/_manifest"
+A="$T/gz2"; mkdir -p "$A/kafka/prod/_manifest"
 fixture "topicid TTTTTTTTTTTTTTTTTTTTTT" "0 0 100" "1 0 100"
 run >/dev/null
 fixture "topicid TTTTTTTTTTTTTTTTTTTTTT" "0 0 200" "1 0 200"
