@@ -12,7 +12,12 @@
 //   5. PARTITION BALANCE: a topic whose busiest partition took over --max-share of the interval's records, and a one-partition topic carrying real
 //      volume (scripts/watch/partition-balance.py). OBSERVATION-ONLY - a red build, no Discord - until its thresholds are calibrated against
 //      market-hours traffic and its exemption list reviewed; see FLEET-ALERT-DISCORD-REQUIREMENT R4i.
-// Checks 3-5 also DELIVER TO DISCORD, routed per environment: production to the prod group, dev AND es4 to the dev group (es4 is not production).
+//   6. MEMORY KILLS: a container OOMKilled, or a pod evicted, inside --window (scripts/watch/oom.py). ONE kill is reported - crash-loop.py needs three restarts,
+//      so a service killed for memory once or twice an hour never reached it.
+//   7. HOST LOAD: a node NotReady, under Memory/Disk/PID pressure, or at >= 85% memory / >= 90% cpu where the cluster reports usage (scripts/watch/host-load.py).
+//      Needs read access to nodes: k8s/security/jenkins-fleet-watch-node-reader.yaml, applied once per cluster by an admin. Until then it pages "could not check".
+// Checks 1-4 and 6-7 DELIVER TO DISCORD (5 only once calibrated), routed per environment: production to the prod group, dev AND es4 to the dev group (es4 is not production).
+// Readiness and dead letters used to fail ONLY this Jenkins build: a stuck rollout, 114 new dead letters per run and a host that was killing services went to nobody.
 // PAGING IS PER INCIDENT, NOT PER RUN (scripts/watch/fleet-alert.py): one page when a finding first appears, a reminder no sooner than every 30 minutes,
 // ONE escalation once it has been open 2 hours and then a daily summary, and ONE "resolved" message when it has been gone for 30 minutes. Before this a
 // finding that stayed true paged every 15 minutes - a dead production mirror did so for 2.7 days and buried the real ES4 outage in the same group.
@@ -69,15 +74,10 @@ pipeline {
           if (!(params.STUCK_MINUTES ==~ /[0-9]{1,4}/)) { error("STUCK_MINUTES must be a number of minutes (got '${params.STUCK_MINUTES}')") }
           def bad = []
           watchedProfiles(params.ENVS, PROFILES).each { profile ->
-            def rc = sh(returnStatus: true, script: """
-              set -uo pipefail
-              out="\$(mktemp)"
-              KUBECONFIG='${kubeconfigFor(profile)}' kubectl -n options-edge get deploy,statefulset,rs,pods -o json > "\$out" || { echo 'ERROR: kubectl get failed for ${profile}'; exit 2; }
-              echo '=== ${profile} ==='
-              STATE="\$(dirname "\$WORKSPACE")/.oe-watch"; mkdir -p "\$STATE" || { echo "ERROR: cannot create the state directory \$STATE"; exit 2; }
-              python3 scripts/watch/fleet-readiness.py --input "\$out" --minutes ${params.STUCK_MINUTES} --state "\$STATE/fleet-${profile}.json" --expected-unready scripts/watch/expected-unready.json
-            """)
-            if (rc != 0) { bad << "${profile} (rc=${rc})" }
+            withCredentials([string(credentialsId: webhookFor(profile), variable: 'DISCORD_WEBHOOK_URL')]) {
+              def rc = sh(returnStatus: true, script: "KUBECONFIG='${kubeconfigFor(profile)}' FLEET_ENV=${profile} FLEET_CHECK=readiness FLEET_MODE=paging STUCK_MINUTES=${params.STUCK_MINUTES} bash scripts/watch/fleet-alert-deliver.sh bash scripts/watch/readiness-run.sh")
+              if (rc != 0) { bad << "${profile} (rc=${rc})" }
+            }
           }
           if (bad) { error("readiness check failed: ${bad.join(', ')}") }
         }
@@ -96,6 +96,38 @@ pipeline {
             }
           }
           if (bad) { error("crash-loop check failed: ${bad.join(', ')}") }
+        }
+        }
+      }
+    }
+    stage('Memory kills') {
+      steps {
+        catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
+        script {
+          def bad = []
+          watchedProfiles(params.ENVS, PROFILES).each { profile ->
+            withCredentials([string(credentialsId: webhookFor(profile), variable: 'DISCORD_WEBHOOK_URL')]) {
+              def rc = sh(returnStatus: true, script: "KUBECONFIG='${kubeconfigFor(profile)}' FLEET_ENV=${profile} FLEET_CHECK=oom FLEET_MODE=paging bash scripts/watch/fleet-alert-deliver.sh bash scripts/watch/oom-run.sh")
+              if (rc != 0) { bad << "${profile} (rc=${rc})" }
+            }
+          }
+          if (bad) { error("memory-kill check failed: ${bad.join(', ')}") }
+        }
+        }
+      }
+    }
+    stage('Host load') {
+      steps {
+        catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
+        script {
+          def bad = []
+          watchedProfiles(params.ENVS, PROFILES).each { profile ->
+            withCredentials([string(credentialsId: webhookFor(profile), variable: 'DISCORD_WEBHOOK_URL')]) {
+              def rc = sh(returnStatus: true, script: "KUBECONFIG='${kubeconfigFor(profile)}' FLEET_ENV=${profile} FLEET_CHECK=host-load FLEET_MODE=paging bash scripts/watch/fleet-alert-deliver.sh bash scripts/watch/host-load-run.sh")
+              if (rc != 0) { bad << "${profile} (rc=${rc})" }
+            }
+          }
+          if (bad) { error("host-load check failed: ${bad.join(', ')}") }
         }
         }
       }
@@ -141,8 +173,10 @@ pipeline {
           def bad = []
           watchedProfiles(params.ENVS, PROFILES).each { profile ->
             def envName = profile == 'production' ? 'prod' : profile
-            def rc = sh(returnStatus: true, script: "STATE=\"\$(dirname \"\$WORKSPACE\")/.oe-watch\"; mkdir -p \"\$STATE\" || exit 2; python3 scripts/watch/dlq-growth.py --env ${envName} --state \"\$STATE\"")
-            if (rc != 0) { bad << "${envName} (rc=${rc})" }
+            withCredentials([string(credentialsId: webhookFor(profile), variable: 'DISCORD_WEBHOOK_URL')]) {
+              def rc = sh(returnStatus: true, script: "FLEET_ENV=${envName} FLEET_CHECK=dlq-growth FLEET_MODE=paging bash scripts/watch/fleet-alert-deliver.sh bash scripts/watch/stateful-check-run.sh dlq-growth.py")
+              if (rc != 0) { bad << "${envName} (rc=${rc})" }
+            }
           }
           if (bad) { error("dead-letter check failed: ${bad.join(', ')}") }
         }

@@ -313,5 +313,42 @@ step("rw: once writable again the recovery is announced exactly once", st, 55, "
      expect="resolved")
 step("rw: and only once", st, 70, "crash-loop: clean\n", 0, empty=True)
 
+# --- the readiness / dead-letter / memory-kill / host-load classes (they used to fail only the Jenkins build)
+for cls, line, chk in [
+    ("STUCK", "STUCK Deployment/level-absorption wants 1, 0 available, short for 42 min\n", "readiness"),
+    ("GROWTH", "GROWTH options.hpsf.dlq: 100 -> 214 (+114 dead letters since the last run)\n", "dlq-growth"),
+    ("UNDECLARED_DLQ", "UNDECLARED_DLQ some.new.dlq (a .dlq topic the manifest does not declare: add it to dlqTopics.dev)\n", "dlq-growth"),
+    ("OOM_KILLED", "OOM_KILLED gex-0: container gex OOMKilled 10 min ago (memory limit 6Gi, restarts 5)\n", "oom"),
+    ("EVICTED", "EVICTED feed-7c9d8f6b5-x2k4p: evicted 5 min ago: The node was low on resource: memory.\n", "oom"),
+    ("NODE_NOT_READY", "NODE_NOT_READY desktop-control-plane: Ready=False (KubeletNotReady) x\n", "host-load"),
+    ("NODE_PRESSURE", "NODE_PRESSURE desktop-control-plane: MemoryPressure: low\n", "host-load"),
+    ("HOST_MEMORY", "HOST_MEMORY desktop-control-plane: memory at 91% of allocatable\n", "host-load"),
+    ("HOST_CPU", "HOST_CPU desktop-control-plane: cpu at 97% of allocatable\n", "host-load"),
+]:
+    case("new class %s is delivered by name, not as UNRECOGNISED" % cls, line, 1, check=chk, expect="`%s`" % cls, forbid="no recognisable")
+
+st = tempfile.mkdtemp(prefix="oe-life-")
+OOM = "OOM_KILLED gex-%s: container gex OOMKilled %d min ago (memory limit 6Gi, restarts %d)\n"
+step("oom: first kill pages", st, 0, OOM % ("6d9f7c5b4-abcde", 5, 1), 1, check="oom", expect="OOM_KILLED")
+step("oom: the REPLACEMENT pod (new hash) after another kill is the same incident", st, 15,
+     OOM % ("7b8c9d6f5-zzzzz", 2, 2), 1, check="oom", empty=True)
+step("oom: a pod of a DIFFERENT service is a new incident", st, 16,
+     "OOM_KILLED feed-gateway-5d6c7b8f9-qwert: container gw OOMKilled 1 min ago (memory limit 2Gi, restarts 1)\n", 1, check="oom",
+     expect="feed-gateway")
+
+st = tempfile.mkdtemp(prefix="oe-life-")
+step("dlq: growth pages once", st, 0, "GROWTH options.hpsf.dlq: 10 -> 124 (+114 dead letters since the last run)\n", 1, check="dlq-growth", expect="GROWTH")
+step("dlq: +114 more on the next run is the same incident, silent", st, 15,
+     "GROWTH options.hpsf.dlq: 124 -> 238 (+114 dead letters since the last run)\n", 1, check="dlq-growth", empty=True)
+step("dlq: it stops growing; 15 min later nothing yet (flap guard)", st, 30, "dlq-growth dev: 1 DLQ topic(s), 0 grew\n", 0, check="dlq-growth", empty=True)
+step("dlq: 30 min after the last growth it is resolved", st, 50, "dlq-growth dev: 1 DLQ topic(s), 0 grew\n", 0, check="dlq-growth", expect="resolved")
+
+st = tempfile.mkdtemp(prefix="oe-life-")
+step("readiness: a stuck workload pages once", st, 0, "STUCK Deployment/level-absorption wants 1, 0 available, short for 42 min\n", 1, check="readiness", expect="STUCK")
+step("readiness: its minute counter ticking is the same incident", st, 15,
+     "STUCK Deployment/level-absorption wants 1, 0 available, short for 57 min\n", 1, check="readiness", empty=True)
+step("readiness: an EXPECTED_UNREADY line on a clean (exit 0) run says nothing", st, 20,
+     "EXPECTED_UNREADY Deployment/databento-vix-feed (pods Running, not crash-looping): by design\n", 0, check="readiness", empty=True)
+
 print("\n%d case(s) FAILED" % len(fails) if fails else "\nall cases ok")
 sys.exit(1 if fails else 0)
