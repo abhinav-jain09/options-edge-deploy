@@ -241,6 +241,11 @@ create_topic() {
   if [[ -n "$max_message_bytes" ]]; then
     extra_configs+=(--config "max.message.bytes=$max_message_bytes")
   fi
+  local min_compaction_lag
+  min_compaction_lag="$(topic_min_compaction_lag_ms "$topic")"
+  if [[ -n "$min_compaction_lag" ]]; then
+    extra_configs+=(--config "min.compaction.lag.ms=$min_compaction_lag")
+  fi
   if topic_is_indicator_display "$topic"; then
     extra_configs+=(--config "segment.ms=600000" --config "min.cleanable.dirty.ratio=0.01")
   fi
@@ -354,6 +359,82 @@ topic_max_message_bytes() {
   echo ""
 }
 
+# Per-topic min.compaction.lag.ms override. Empty for unlisted topics (broker default, which is 0).
+#
+# WHY A COMPACTED TOPIC NEEDS ONE AT ALL, and why an hourly archive is not already the answer. The
+# log cleaner never touches the ACTIVE segment, but everything already rolled is fair game. So the
+# 20:00 archive run checkpoints, snapshots keep arriving, the segment rolls at 20:40, and the
+# cleaner removes every superseded record before the 21:00 run ever looks. Those forty minutes are
+# gone for ever and every scheduled run reported success. Lengthening segment.ms does NOT help: a
+# record written near the END of a segment gets no protection at all, because its exposure depends
+# on where in that segment's LIFE it landed, not on how long the segment lives. min.compaction.lag.ms
+# is the only knob that bounds the exposure by the RECORD's own age.
+#
+# This is the compaction-side twin of scripts/ci/validate-archived-topic-retention.sh's
+# MIN_ARCHIVED_RETENTION_MS. That guard asks "does an archived topic outlive a missed archive run?"
+# and a compacted topic passes it VACUOUSLY at retention.ms=-1 while the cleaner destroys exactly
+# the same records anyway.
+#
+# SEVEN DAYS for options.spx.gamma-zone.profile, and the arithmetic is this job's schedule, not a
+# round number:
+#     1 h  the nominal exposure — oe-archive-gamma-zone.sh runs hourly at minute 0 under launchd
+#     2 h  one failed or skipped run doubles the gap
+#    65 h  the dev Mac asleep, its agent unloaded or the broker down from Friday's close to Monday
+#    96 h  the same across a long weekend: 2026-11-26 is CLOSED and 11-27 an EARLY_CLOSE in the SPX
+#          calendar, so the gap from Wed 11-25's close to Mon 11-30 is four days
+#     7 d  leaves a whole working week to see the alert and repair the host before anything is cleaned
+# It is also the figure ensure-line-health-topics.sh already applies for the same shape of guarantee
+# ("nothing inside the recovery horizon is compacted away"), so the fleet carries one number.
+#
+# WHAT THE WINDOW GUARANTEES: a record whose TIMESTAMP is less than seven days old is not eligible
+# for cleaning, whatever the segments do. Seven days is therefore the WHOLE budget, shared between
+# the outage and the repair: an outage of N days leaves 7-N days to notice the alert and get a
+# capture through, so the four-day long weekend above leaves three days, not a week. It is not seven
+# days of outage PLUS a week to fix it.
+#
+# AND IT IS THE RECORD'S TIMESTAMP, NOT ITS ARRIVAL. Kafka decides eligibility by comparing a
+# segment's largestTimestamp() against now - min.compaction.lag.ms (LogCleanerManager), and this
+# topic is message.timestamp.type=CreateTime — the producer's clock. For live publishing the two are
+# the same to within the publish latency, which is what makes the arithmetic above sound. For a
+# REPLAY that backdates its records they are not: a record stamped eight days ago is eligible the
+# moment its segment rolls, lag or no lag. That is deliberately NOT fixed by forcing LogAppendTime
+# here, because the archive's own event-time bounds (min_event_time_ms / max_event_time_ms in every
+# manifest line) are read off CreateTime, and the corpus exists to be read by event time; switching
+# the topic would silently restamp every record with its arrival instant. A backdating replay into
+# this topic therefore needs its own capture, as the 2026-11-12 rescue did.
+#
+# WHAT IT DOES NOT GUARANTEE: it recovers nothing already compacted. It is not retention — past the
+# window the session's intraday snapshots still collapse to one record per key, and the archive FILE
+# remains the only durable copy; the lag buys the archiver its chance, nothing more. It does not
+# survive a topic that is DELETED and re-created (the reset paths, apply-topics' recreate arm),
+# which destroys the log whatever the lag says. And it says nothing about a record older than the
+# window that was never captured.
+#
+# RECONCILED EXACTLY, like every other declared shape, and NOT as a floor. A barrier that accepted
+# "at least seven days" would have been a promise this repo cannot keep: alter_topic_config() below
+# re-applies the declared config set on EVERY run, so a window widened by hand during an outage is
+# narrowed again by the next ordinary deploy — the same property topics.env already records for the
+# gamma-zone log's byte cap ("Raising the cap means raising it HERE, because anything else is undone
+# by the next deploy"). Widening the window means widening it in THIS function. (Codex round 1, P2.)
+#
+# THE COST IS MEASURED, not assumed (live dev broker, 2026-11-17, over a sample that now spans
+# almost the whole window): options.spx.gamma-zone.profile held 4,826 records in 26,163,547 bytes
+# — 5,421 B/record — from 2026-11-11 20:40 to 2026-11-17 12:06 ET, i.e. 4.98 days and about 970
+# records a day. Seven days of un-compactable records is therefore about 37 MB, against the sibling
+# options.spx.gamma-zone.log's declared 1 GiB cap on the same disk: under 4% of what the topic
+# beside it is already budgeted, on a dev disk with 344 GB free. The key space is FIVE keys at that
+# point — one per trading session, <sessionDate>|ES.v.0|1m — so what the cleaner keeps once the
+# window passes is a few KiB a session, not a growing tail. Cheap, and verified rather than assumed.
+# (An earlier reading on 2026-11-13 gave 4,154 B/record over 1.4 days; the figure above supersedes
+# it and is the one to re-measure against, because a short sample straddling one session's open
+# over-weights that session's emission rate.)
+topic_min_compaction_lag_ms() {
+  case "$1" in
+    options.spx.gamma-zone.profile) echo 604800000 ;;
+    *) echo "" ;;
+  esac
+}
+
 # Per-topic retention override (ms), e.g. "spx.basis.state=-1". Unlisted topics use $RETENTION_MS.
 topic_retention_ms() {
   local topic="$1" entry
@@ -389,6 +470,7 @@ alter_topic_config() {
         dr="$(topic_delete_retention_ms "$topic")"; [[ -n "$dr" ]] && echo ",delete.retention.ms=$dr")$( \
         rb="$(topic_retention_bytes "$topic")"; [[ -n "$rb" ]] && echo ",retention.bytes=$rb")$( \
         mb="$(topic_max_message_bytes "$topic")"; [[ -n "$mb" ]] && echo ",max.message.bytes=$mb")$( \
+        cl="$(topic_min_compaction_lag_ms "$topic")"; [[ -n "$cl" ]] && echo ",min.compaction.lag.ms=$cl")$( \
         topic_is_recovery_checkpoint "$topic" && echo ",segment.bytes=16777216,max.compaction.lag.ms=300000")$( \
         topic_is_indicator_display "$topic" && echo ",segment.ms=600000,min.cleanable.dirty.ratio=0.01")"; then
       return 0

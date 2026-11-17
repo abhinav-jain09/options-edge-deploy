@@ -598,6 +598,190 @@ scan_archive_file() {   # $1=path -> "records min_ms max_ms schema_versions_csv"
     }'
 }
 
+# THE ONE DECLARATION of the strict console-consumer record layout. `print.offset=true` puts the
+# offset in field 3, after the timestamp and the partition and before the key and the value, so a
+# strict record has at least five tab-separated fields; WITHOUT print.offset field 3 is the KEY and
+# there are four.
+#
+# Every part of this earns its place. A scan for the first field starting with "Offset:" reads a key
+# or a payload as the position. Matching field 3 by shape alone is no better where it counts: a
+# capture with NO offset column whose key is literally "Offset:999" satisfies fields 1-3 exactly,
+# and a scan and a bare positional match alike then report 999 as the offset of every record --
+# which hands this script a census of nothing-in-range with coverage "proven" and advances the
+# checkpoint over live records. NF >= 5 is what separates them, because that line has four fields.
+# A value containing tabs only pushes NF up, so it cannot make a real strict record fail.
+#
+# It lives in a variable and not in each awk program because it was written out THREE times, and
+# two of those copies were dead: the census refuses a non-conforming row before its own copy is
+# reached, and the clamp only ever sees rows the census has already approved. Dead copies are worse
+# than no copies -- a weakening of the live one would make rows be SKIPPED again (round 6, below)
+# while the dead ones made that look guarded. Mutating either dead copy changed no behaviour at
+# all, which is how they were found.
+#
+# Each reader supplies its own refusal, because the two refuse differently: the census must still
+# reach its END block to print nothing, so it sets a flag; the clamp must fail its pipeline, so it
+# exits nonzero. Both fail CLOSED.
+# (An apostrophe inside these single-quoted awk programs once closed one; bash -n caught it.)
+readonly OE_STRICT_ROW='NF >= 5 && $1 ~ /^(CreateTime|LogAppendTime):[0-9]+$/ && $2 ~ /^Partition:[0-9]+$/ && $3 ~ /^Offset:[0-9]+$/'
+
+# THE READER'S OWN RECORD COUNT -- the only framing evidence either reader gives, and the answer to
+# the last thing the layout checks cannot settle.
+#
+# $OE_STRICT_ROW validates PHYSICAL LINES. It cannot establish where one Kafka record ends and the
+# next begins, because the console consumer prints a value verbatim: a value containing a raw
+# newline is printed as two lines. Codex round 7 reproduced the consequence. For [100,200), these
+# two lines
+#   CreateTime:1<TAB>Partition:0<TAB>Offset:100<TAB>k<TAB>v
+#   CreateTime:1<TAB>Partition:0<TAB>Offset:200<TAB>k<TAB>v
+# may be two records, or ONE record whose value happens to contain a newline followed by text of
+# exactly this shape. Both readings satisfy every field check and monotonicity; on the second the
+# clamp deletes the continuation, the rescan agrees with the census, and the checkpoint advances to
+# 200 on the strength of payload text.
+#
+# No amount of looking at the text settles that, so this does not look at the text. Every reader on
+# the console path counts the records IT handed over and prints the count on stderr, which this
+# script used to discard with 2>/dev/null:
+#   kafka-console-consumer   "Processed a total of N messages"       (System.err, verified by
+#                                                                    disassembling 4.3.0's
+#                                                                    ConsoleConsumer.reportRecordCount)
+#   Spot/Invasion/Indicator  "<Reader>: wrote N record(s) from ..."  (System.err)
+# A capture whose physical line count differs from N is not the records the reader delivered, and a
+# strict range is refused rather than guessed at. A value with an embedded newline gives lines > N,
+# which is the case this was written for.
+#
+# THE STREAM WAS CONFIRMED END TO END, not only from the class file: one record of
+# options.spx.gamma-zone.profile read off the live dev broker with the CLI this job itself resolves
+# ($HOME/kafka-*/bin -> kafka-4.3.0) put the strict row on stdout and exactly
+# "Processed a total of 1 messages" on stderr -- count lines on stdout: 0, on stderr: 1.
+#
+# WHICH IS WHY THE PATTERN ABOVE IS ANCHORED TO THE WHOLE LINE. The count does not arrive alone:
+# the CLI writes its SLF4J banner and its client logs to this same stderr, and those lines carry
+# numbers of their own (correlation ids, client ids, an offset inside a FetchPosition). A parser
+# that took any line with a digit in it would read its count from the last of them -- awk's later
+# rule wins -- turn a non-numeric field into 0, and refuse a capture that is whole, on every run of
+# a topic whose broker is logging. That mutation survived a 45-mutation pass precisely because the
+# test stand-in's stderr held exactly one line; test-archive-reset.sh 19z4 now puts the chatter
+# around the count and the mutation dies on it.
+#
+# AND THE STDOUT FILTER HAD TO GO FOR IT TO MEAN ANYTHING. This script used to pipe every console
+# capture through `grep -av '^Processed a total of'`. Against the readers it actually runs that
+# matched no reader output at all -- all four report on stderr -- so the only line it could ever
+# remove was a RECORD. Worse, it removed exactly the evidence this check needs: a value containing
+# "<newline>Processed a total of ..." prints as two lines, the filter deletes the continuation, and
+# the capture is left with one valid row for one reported record. Framing PASSES, and a record with
+# a truncated value is published and checkpointed. Codex round 8 reproduced that as census
+# "1 100 0 0 1". A filter that can only ever delete real data, in the one shape that defeats the
+# check, is not a safeguard; if a reader ever does print the line on stdout it lands in the capture,
+# where the layout check refuses it loudly instead of quietly shortening a value.
+#
+# It returns EMPTY when no count was reported, which the caller refuses for a strict topic: a
+# reader that got far enough to exit 0 reported one, and the absence is itself unexplained.
+#
+# ONLY THE CONSOLE PATH NEEDS THIS. The committed-read branch above never reaches the census (it is
+# in the other arm of the same if/else) and must not: StrikeArchiveReader bounds its capture by the
+# consumer's POSITION against the last stable offset and writes the bound it proved, which is
+# stronger evidence than any count. That matters because underlying.es.trades.linearized is strict
+# AND committed-read by default, so a check applied to both would refuse it on every run.
+reader_record_count() {   # $1=the reader stderr file -> N, or empty
+  [ -f "$1" ] || return 0
+  LC_ALL=C awk '
+    /^Processed a total of [0-9]+ messages$/              { n = $5; next }
+    /^[A-Za-z]+: wrote [0-9]+ record\(s\) from /          { n = $3 }
+    END { if (n != "") printf "%d\n", n }' "$1" 2>/dev/null
+}
+
+# WHAT A STRICT CAPTURE ACTUALLY DELIVERED, bounded against the range that was asked for.
+#
+# WHY A CENSUS AND NOT JUST A MAXIMUM. `--max-messages N` bounds the number of RECORDS the console
+# consumer emits, not the OFFSETS it walks. So on a range with compacted holes the consumer does not
+# stop at the range's end: it keeps reading past it until it has N records. Queried [100,200) with
+# offsets 100..159 surviving and 200..239 present, it delivers 100 records — the exact count asked
+# for — and the file would be published as a complete [100,200) while holding 40 records that belong
+# to the next range, with the 40-offset hole inside [100,200) entirely concealed. `got == count` is
+# therefore not evidence of anything, and the offsets have to be read on EVERY strict capture rather
+# than only on a short one. (Codex round 2, P2.)
+#
+# AND AN OFFSET AT OR PAST THE BOUND IS THE STRONGEST PROOF THERE IS, not a reason to refuse. It
+# says the reader walked out of the far end of the range, so every offset inside it was visited and
+# anything not delivered is genuinely gone. The previous version discarded the whole capture on
+# seeing one, which for a bounded (UNTIL_TS) range whose tail had been compacted away deleted every
+# recoverable record and left the checkpoint still — the same stall it was written to remove, by a
+# different door. (Codex round 2, P2.)
+#
+# Prints "<in_range> <max_in_range or -1> <at_or_past_end> 0 <physical_lines>", or NOTHING when the
+# offsets cannot be
+# trusted, which the caller treats as "do not publish, do not advance".
+#
+# JUDGE IT BY ITS OUTPUT, NEVER BY ITS STATUS. The awk program `exit`s on the first untrustworthy
+# record rather than reading a whole capture to no purpose, which closes the pipe on the
+# decompressor; under this script's `set -o pipefail` the function then reports 141 for a refusal it
+# handled perfectly. Measured on a 20,001-record capture. Do not add `|| return 1` here.
+capture_offset_census() {   # $1=path $2=from $3=endoff
+  LC_ALL=C zcat < "$1" 2>/dev/null | LC_ALL=C awk -v lo="$2" -v hi="$3" '
+    BEGIN { FS="\t"; n=0; mx=-1; over=0; seen=0; prev=-1; bad=0 }
+    # EVERY ROW MUST SATISFY THE LAYOUT, and one that does not rejects the WHOLE capture.
+    #
+    # awk pattern-action semantics made this subtly wrong: a row failing the predicate simply did
+    # not trigger the action, so it was SKIPPED rather than refused. A capture holding offset 100,
+    # one malformed row, and offset 200 censused as "1 100 1 0" -- one record in range, coverage
+    # proven -- and the clamp then dropped the malformed row while the rescan AGREED with the
+    # census, because both used the same predicate. The checkpoint advanced and recoverable bytes
+    # were discarded and reported as broker loss. A console-rendered key or value containing a
+    # newline produces exactly such a row. (Codex round 6, P2.)
+    #
+    # So the refusal comes FIRST and the action below is unconditional: every row that reaches it
+    # has already satisfied $OE_STRICT_ROW, and nothing can be quietly passed over.
+    !('"$OE_STRICT_ROW"') { bad = 1; exit }
+    {
+      off = substr($3, 8) + 0
+      seen++
+      # STRICTLY INCREASING, in file order, and never below the offset the consumer was TOLD to
+      # start from. Both are properties of a real single-partition capture and neither is a property
+      # of a misread layout, which is what makes them the discriminator that NF >= 5 is not: a
+      # capture with no offset column whose KEY is "Offset:999" and whose VALUE contains a tab has
+      # five fields and passes every shape check, but it reports 999 for EVERY record. Measured, not
+      # argued: that input returned "0 -1 2 0" from this function before these two lines existed —
+      # nothing in range with coverage "proven", which advanced the checkpoint over live records.
+      if (off <= prev) { bad = 1; exit }
+      if (off <  lo)   { bad = 1; exit }
+      prev = off
+      if (off >= hi) { over++; next }
+      n++
+      if (off > mx) mx = off
+    }
+    # Nothing is printed when the offsets cannot be trusted, which the caller treats exactly as it
+    # treats their absence: do not publish, do not advance.
+    END { if (seen > 0 && !bad) printf "%d %d %d 0 %d\n", n, mx, over, seen }'
+}
+
+# Rewrite the capture keeping ONLY the records whose offset is inside [from, endoff). The records
+# outside it are not lost: they are simply not this range's, and the next run reads them under their
+# own range and their own dt=. Writes through a sibling temp file and renames, so a failure part way
+# cannot leave a half-filtered capture in place of the whole one.
+clamp_capture_to_range() {   # $1=path $2=from $3=endoff
+  local out="$1.clamped"
+  if ! LC_ALL=C zcat < "$1" 2>/dev/null | LC_ALL=C awk -v lo="$2" -v hi="$3" '
+        BEGIN { FS="\t" }
+        # THE SAME declaration as capture_offset_census reads, so the two cannot disagree about
+        # which records are in range: a census that counted a line the clamp then dropped would
+        # make the rescan check below fail the partition for no reason.
+        #
+        # A non-conforming row cannot reach here today, because the census refuses the whole
+        # capture before the clamp runs. It still exits nonzero rather than dropping the row: this
+        # function writes the file the archive KEEPS, and silently discarding a line it cannot
+        # parse is the one outcome worse than refusing to write at all. Under `set -o pipefail` the
+        # nonzero exit fails the pipeline, so the clamp reports failure and the partition is not
+        # published.
+        !('"$OE_STRICT_ROW"') { exit 1 }
+        {
+          off = substr($3, 8) + 0
+          if (off >= lo && off < hi) print
+        }' | gzip -6 > "$out"; then
+    rm -f "$out"; return 1
+  fi
+  mv -f "$out" "$1"
+}
+
 ms_to_iso() {   # $1=epoch ms -> ISO-8601 UTC, or "unknown"
   case "${1:-0}" in
     ''|*[!0-9]*|0) echo "unknown"; return ;;
@@ -979,9 +1163,60 @@ for topic in $TOPICS; do
         continue ;;
     esac
   else
-  # CONSOLE-CONSUMER TOPICS: unchanged (re-review round 3 records why). end offsets: "topic:partition:endOffset".
-  # A topic that does not exist yields nothing.
-  ends=$("$KAFKA_BIN/kafka-get-offsets.sh" --bootstrap-server "$BOOTSTRAP" --topic "$topic" 2>/dev/null)
+  # CONSOLE-CONSUMER TOPICS. end offsets: "topic:partition:endOffset".
+  #
+  # VALIDATED, not merely non-empty. Until 2026-11-13 this line discarded the command's exit status
+  # and stderr and the only test applied to its stdout was `[ -z "$ends" ]`. So a discovery that
+  # printed NOTHING BUT A DIAGNOSTIC -- "WARNING: ...", a half-written answer, a line for another
+  # topic -- came back non-empty, passed the absent test, and then met the per-partition loop below,
+  # which skips any row without a partition and an offset. Every row was skipped, the topic captured
+  # nothing, no failure was counted, and the run finished green. An unparseable answer is not a quiet
+  # day: it is a broker this run cannot ask about this topic, and the whole point of this job is that
+  # such a run must say so.
+  #
+  # THE EMPTY ANSWER IS LEFT EXACTLY AS IT WAS, deliberately. kafka-get-offsets answers for a topic
+  # the broker does not have with exit 1, empty stdout and "Could not match any topic-partitions"
+  # (broker-test/cli-fixtures/4.3.0/ends-absent.*) -- the same shape an unreachable broker gives.
+  # Treating a non-zero status alone as a failure would therefore turn every legitimately absent
+  # non-strict topic on every job into a failure. So empty stdout still falls through to the
+  # absent/unreadable branch below, which is strict-aware; what is new is that a NON-EMPTY answer
+  # must now be well formed, and must contain at least one line for the topic that was asked about.
+  ends_err=$(mktemp "${TMPDIR:-/tmp}/oe-archive-ends.XXXXXX" 2>/dev/null)
+  ends_why=""
+  if [ -z "$ends_err" ]; then
+    ends=""
+    ends_why="could not create a scratch file for the lookup's stderr"
+  else
+    ends=$("$KAFKA_BIN/kafka-get-offsets.sh" --bootstrap-server "$BOOTSTRAP" --topic "$topic" 2>"$ends_err")
+    ends_rc=$?
+    if [ -n "$ends" ]; then
+      # Only a NON-EMPTY answer is judged here; see above for why an empty one is not.
+      [ "$ends_rc" -eq 0 ] || ends_why="exit $ends_rc with output on stdout"
+      ends_diag=$(grep -m1 -iE "$KAFKA_CLI_DIAG" "$ends_err" 2>/dev/null | cut -c1-240)
+      [ -z "$ends_diag" ] || ends_why="${ends_why:+$ends_why, }stderr: $ends_diag"
+      # Every line must be this topic's own "<topic>:<partition>:<offset>". A line for another topic
+      # is as wrong as a warning: it would be read as this topic's partitions.
+      # awk with a LITERAL comparison, not a regex built from the topic name: '.' and '-' are
+      # regex metacharacters and a topic name is full of them, so a pattern assembled by hand here
+      # would be a second escaping bug waiting beside the one this block exists to fix.
+      # The marker must be NON-EMPTY for every rejected line, including an EMPTY one. Printing the
+      # offending line itself was a hole: command substitution strips the trailing newline, so a
+      # BLANK first line produced an empty $ends_bad, the test below read that as "nothing wrong",
+      # and stdout of "\nWARNING: partial discovery" passed validation whole — the warning never
+      # looked at, both rows skipped by the partition loop, the topic green with nothing captured.
+      # So the marker names the line NUMBER and brackets its text, and is never empty.
+      ends_bad=$(printf '%s\n' "$ends" \
+        | awk -F: -v t="$topic" 'NF!=3 || $1!=t || $2 !~ /^[0-9]+$/ || $3 !~ /^[0-9]+$/ {printf "line %d: [%s]", NR, substr($0,1,200); exit}')
+      [ -z "$ends_bad" ] || ends_why="${ends_why:+$ends_why, }unexpected output: $ends_bad"
+    fi
+    rm -f "$ends_err"
+  fi
+  if [ -n "$ends_why" ]; then
+    log "  FAIL $topic: the end-offset discovery did not succeed ($ends_why) — this run cannot tell which" \
+        "partitions exist or where they end. Nothing archived for this topic; its checkpoint is unchanged."
+    failed=$(( failed + 1 ))
+    continue
+  fi
   fi
   if [ -z "$ends" ]; then
     if is_strict_topic "$topic"; then
@@ -1300,6 +1535,15 @@ for topic in $TOPICS; do
     if is_bucket_filed_topic "$topic"; then stemdir="$ROOT/$topic/.scratch"; fi
     mkdir -p "$stemdir"
     seg_done=false
+    # Per PARTITION, beside seg_done, and not only on the console branch that sets it: this script
+    # runs under `set -u`, and the publish below reads it on a path the committed-read branch can
+    # also reach. An unset variable there would abort the whole run.
+    short_read=false
+    short_gap=0
+    proven_to=0
+    cs_seen=0
+    reported_records=""
+    census=""; cs_in=0; cs_max=-1; cs_over=0; cs_under=0
     cap_wall_start="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
     # <topic>.p<partition>.<from>-<to>.dt<sessionDate>.<archivedAtUTC>.jsonl.gz
     # The session day is repeated INSIDE the name on purpose: copied to a NAS, attached to a
@@ -1510,23 +1754,38 @@ for topic in $TOPICS; do
       # ---- CONSOLE-CONSUMER CAPTURE — every topic not in OE_COMMITTED_READ_TOPICS -----------------
       cap_to="$endoff"
       tmp="$outdir/$topic.p$part.$from-$endoff.dt${DAY//-/}.$STAMP.jsonl.gz.partial"
+      # The reader's stderr, which used to go to /dev/null. It is read for the record count below
+      # and removed as soon as it has been, so no path can leave one behind beside the capture.
+      #
+      # IN $stemdir, NOT beside $tmp. `mkdir -p "$stemdir"` above runs for every topic, while the
+      # dt= folder $tmp names is deliberately NOT created for a bucket-filed topic ("a dt= folder is
+      # made only by a file published into it"). A redirect whose target directory is missing is
+      # worse than a write that fails: bash never runs the command at all, so the reader would not
+      # run. Dot-prefixed, like the committed branch's own scratch files, so no loader reads it.
+      #
+      # This is defensive, not a fix for a reachable bug, and no test can tell the two placements
+      # apart: the capture's own `gzip > "$tmp"` writes into that same dt= folder, so a missing one
+      # fails the capture either way. What it buys is that the reader still RUNS, and that nothing
+      # of ours lands in a folder meant to appear only when a file is published into it.
+      cerr="$stemdir/.$topic.p$part.$from.$STAMP.cerr"
+      : > "$cerr"
       # NOTE: `consumer | gzip` reports GZIP's exit status, so a consumer that emitted zero records
       # still "succeeds". That is how the first version silently archived empty files and advanced
       # its checkpoints. Verify by COUNTING what actually landed, then commit.
       if is_spot_avro_topic "$topic"; then
         run_spot_reader 900 --bootstrap "$BOOTSTRAP" --registry "$(archive_registry_url "${OE_SPOT_REGISTRY_URL:-}")" \
              --topic "$topic" --partition "$part" --from "$from" --count "$count" --timeout-ms 60000 \
-             $(is_strict_topic "$topic" && echo "--print-offset") 2>/dev/null | grep -av '^Processed a total of' | gzip -6 > "$tmp"
+             $(is_strict_topic "$topic" && echo "--print-offset") 2>"$cerr" | gzip -6 > "$tmp"
         pipe_rc=("${PIPESTATUS[@]}")
       elif is_invasion_avro_topic "$topic"; then
         run_invasion_reader 900 --bootstrap "$BOOTSTRAP" --registry "$(archive_registry_url "${OE_INVASION_REGISTRY_URL:-}")" \
              --topic "$topic" --partition "$part" --from "$from" --count "$count" --timeout-ms 60000 \
-             $(is_strict_topic "$topic" && echo "--print-offset") 2>/dev/null | grep -av '^Processed a total of' | gzip -6 > "$tmp"
+             $(is_strict_topic "$topic" && echo "--print-offset") 2>"$cerr" | gzip -6 > "$tmp"
         pipe_rc=("${PIPESTATUS[@]}")
       elif is_indicator_avro_topic "$topic"; then
         run_indicator_reader 900 --bootstrap "$BOOTSTRAP" --registry "$(indicator_registry_url)" \
              --topic "$topic" --partition "$part" --from "$from" --count "$count" --timeout-ms 60000 \
-             $(is_strict_topic "$topic" && echo "--print-offset") 2>/dev/null | grep -av '^Processed a total of' | gzip -6 > "$tmp"
+             $(is_strict_topic "$topic" && echo "--print-offset") 2>"$cerr" | gzip -6 > "$tmp"
         pipe_rc=("${PIPESTATUS[@]}")
       else
       timeout 900 "$KAFKA_BIN/kafka-console-consumer.sh" --bootstrap-server "$BOOTSTRAP" \
@@ -1535,13 +1794,19 @@ for topic in $TOPICS; do
            --formatter-property print.key=true \
            --formatter-property print.partition=true \
            $(is_strict_topic "$topic" && echo "--formatter-property print.offset=true") \
-           --timeout-ms 60000 2>/dev/null | grep -av '^Processed a total of' | gzip -6 > "$tmp"
+           --timeout-ms 60000 2>"$cerr" | gzip -6 > "$tmp"
         # EVERY stage's status, saved at once (final review, finding 5). Keeping only the consumer's let a
-        # compressor that died mid-stream, or a failed filter, publish whatever bytes had landed. The
-        # filter's 1 means "selected no line", i.e. an empty capture, which the count check refuses anyway.
+        # compressor that died mid-stream publish whatever bytes had landed.
         pipe_rc=("${PIPESTATUS[@]}")
       fi
-      consumer_rc=${pipe_rc[0]}; filter_rc=${pipe_rc[1]:-255}; gzip_rc=${pipe_rc[2]:-255}
+      consumer_rc=${pipe_rc[0]}; gzip_rc=${pipe_rc[1]:-255}
+      # Taken before anything is derived from the bytes, and the file goes immediately: whatever
+      # happens below, including every `continue`, it is already gone.
+      reported_records="$(reader_record_count "$cerr")"
+      if [ "$consumer_rc" -ne 0 ] && [ -s "$cerr" ]; then
+        log "  NOTE $topic p$part: reader stderr: $(LC_ALL=C tr -d '\0' < "$cerr" | tail -3 | tr '\n' ' ')"
+      fi
+      rm -f "$cerr"
       # The statistics helper's own status, taken BEFORE its output is parsed: `read <<< "$(helper)"`
       # returned read's status and let a failed decompression (a truncated or corrupt gzip) or a failed
       # awk pass as a verified count.
@@ -1550,7 +1815,6 @@ for topic in $TOPICS; do
       read -r got min_ms max_ms schema_versions <<< "$scan_out"
       got="${got:-0}"; min_ms="${min_ms:-0}"; max_ms="${max_ms:-0}"; schema_versions="${schema_versions:--}"
       why=""
-      [ "$filter_rc" -le 1 ] || why="filter rc=$filter_rc"
       [ "$gzip_rc" -eq 0 ] || why="$why gzip rc=$gzip_rc"
       [ "$scan_rc" -eq 0 ] || why="$why scan rc=$scan_rc"
       if [ -n "$why" ]; then
@@ -1564,12 +1828,200 @@ for topic in $TOPICS; do
       # is the extreme case — 642,060 offsets, ~2,000 readable records. Judging by count alone would
       # mark every compacted topic as failed forever. Judge by the CONSUMER's exit status instead,
       # and record both numbers so the compaction ratio is visible in the manifest.
-      if is_strict_topic "$topic" && [ "$consumer_rc" -eq 0 ] && [ "$got" -ne "$count" ]; then
-        # A5: the short read that is NORMAL on a compacted topic is a HOLE on a delete-retained one.
-        # Accepting it would archive fewer records than the offset range claims and still advance the
-        # checkpoint past them.
-        log "  FAIL $topic p$part [$from,$endoff): STRICT topic read $got of $count records — refusing a short read"
+      # A STRICT SHORT READ IS A HOLE TO RECORD, NOT A CAPTURE TO THROW AWAY (2026-11-13).
+      #
+      # What this used to do: log FAIL, `rm -f "$tmp"`, leave the checkpoint where it was. Read as
+      # "refuse to archive an incomplete range", that sounds right. It is not, and on a compacted
+      # strict topic it is catastrophic. Once ANY record in [from,endoff) has been removed — by
+      # compaction, or by retention on a delete-retained one — that range can never read complete
+      # again. So every later run re-reads the same range, finds the same shortfall, and deletes
+      # the capture AGAIN. The records that ARE still there, including everything produced since,
+      # are discarded on every run for ever. One lost snapshot became a corpus that silently stops
+      # growing, while the job kept failing in a way that said nothing about which records were
+      # actually gone.
+      #
+      # What it does now: keep what was recoverable, say exactly what is missing, and advance past
+      # it. A gap the owner can SEE in the corpus beats a corpus that quietly stops. The three
+      # pieces of that are:
+      #   * the capture is published and the checkpoint advances, so the hole is bounded to this one
+      #     range instead of swallowing every future one;
+      #   * a line is appended to <topic>.discontinuities.jsonl — the same file the strict log-RESET
+      #     path writes — naming the range and the shortfall, so a reader marks the sessions it spans
+      #     NOT_EVALUABLE rather than counting a smaller population as complete;
+      #   * the manifest line carries "short_read" beside its records/offset_span, and the capture
+      #     itself carries per-record offsets (strict topics get print.offset above), so the missing
+      #     offsets are identifiable in the file and not merely in a count;
+      # and the run still FAILS, so the wrapper alerts. That failure is self-limiting: the checkpoint
+      # has moved past the damaged range, so the next run is green unless a NEW hole appears.
+      #
+      # IS STRICTNESS RIGHT HERE AT ALL, now that a gap on options.spx.gamma-zone.profile is an
+      # expected possibility rather than an impossibility? Yes — but only the part of it that is
+      # about EVIDENCE. "Strict" bundles three behaviours: an absent topic fails instead of being a
+      # quiet SKIP; the capture records offsets; and a short read was refused. The first two are
+      # exactly what a compacted evidence topic wants and are kept. The third was written for a
+      # delete-retained log (the comment below still records that `got < count` is NORMAL under
+      # compaction) and was never reachable in practice — both topics in the default
+      # OE_STRICT_TOPICS are committed-read and take the other capture path entirely, so this branch
+      # first became live when oe-archive-gamma-zone.sh passed a compacted topic through it. It is
+      # fixed here rather than exempted per topic: deleting recoverable records and stalling for
+      # ever is wrong on a delete-retained topic too, for the same reason. One rule, not two.
+      # ---- STRICT CAPTURES ARE BOUNDED BY OFFSET, NOT BY RECORD COUNT ------------------------
+      #
+      # Runs on EVERY strict capture, not only a short one. `--max-messages` bounds records, so a
+      # range with compacted holes is read PAST its own end to fill the count — delivering exactly
+      # `count` records while the file silently spans a wider offset range and hides the hole inside
+      # the one it claims. See capture_offset_census(). Everything below is derived from the offsets
+      # the capture actually carries:
+      #
+      #   at_or_past_end > 0   the reader walked out of the far end of [from, endoff). Every offset
+      #                        inside was visited, so whatever was not delivered is GONE. The range
+      #                        is fully covered: proven_to = endoff. The out-of-range records are
+      #                        clamped off and re-read next run under their own range.
+      #   otherwise            the reader stopped inside the range, at max_in_range. Only
+      #                        [from, max+1) is proven; the rest is untouched and re-read next run.
+      #
+      # ANY row that does not satisfy the strict layout rejects the whole capture, not just itself:
+      # a capture that cannot account for every line it holds cannot say what it delivered, and
+      # skipping the odd unreadable row would silently reclassify recoverable bytes as broker loss.
+      #
+      # THE CORNER THIS DOES NOT RESOLVE — a real limitation, not a case I have argued away. If the
+      # reader stops inside the range with nothing beyond it to walk into, there is no proof it
+      # reached the end, so the checkpoint stops there and the next run asks for the same tail again.
+      # Two things can produce that:
+      #   * the last offsets of the range were themselves cleaned. For endoff == the real log end
+      #     that needs the record just below the log end to be gone, which compaction does not do
+      #     (the newest record for a key survives and the ACTIVE segment is never cleaned). Under
+      #     UNTIL_TS, where endoff is deliberately below the log end, records beyond it exist by
+      #     construction and at_or_past_end settles it.
+      #   * endoff-1 is a TRANSACTION CONTROL RECORD. Those occupy an offset but are never handed to
+      #     a consumer, so the log end is NOT evidence of a printable final offset and the first
+      #     argument does not cover this (Codex round 3). It does not arise for the topic this was
+      #     built for — options.spx.gamma-zone.profile has a plain producer — and every transactional
+      #     topic in this archiver is routed to the committed reader, which bounds its capture by the
+      #     consumer's POSITION against the last stable offset and takes none of this path. But
+      #     "strict" is a general flag, so marking a transactional topic strict on the console path
+      #     would meet this.
+      # Resolving it properly needs position evidence, which the console consumer does not report;
+      # that is the committed reader's whole reason for existing. Until then the failure mode is an
+      # hourly failing run on one partition with a checkpoint that does not move — loud, and not
+      # silent loss.
+      short_read=false
+      if is_strict_topic "$topic" && [ "$consumer_rc" -eq 0 ]; then
+        census=$(capture_offset_census "$tmp" "$from" "$endoff")
+        if [ -z "$census" ]; then
+          log "  FAIL $topic p$part [$from,$endoff): the capture carries no trustworthy per-record offsets" \
+              "(no readable Offset: field, or they do not strictly increase, or one is below the $from it was told" \
+              "to start from) — so there is no proof of which offsets it delivered. NOT publishing and NOT" \
+              "advancing the checkpoint; the range is re-read next run."
+          rm -f "$tmp"
+          failed=$(( failed + 1 ))
+          continue
+        fi
+        read -r cs_in cs_max cs_over cs_under cs_seen <<< "$census"
+        # FRAMING, BEFORE ANY OF THE OFFSETS ARE BELIEVED. See reader_record_count(): the layout
+        # checks validate lines, and only the reader can say how many RECORDS those lines are. The
+        # clamp rewrites the file, so this has to come first or the evidence is gone.
+        if [ -z "$reported_records" ] || [ "$cs_seen" -ne "$reported_records" ]; then
+          log "  FAIL $topic p$part [$from,$endoff): the capture holds $cs_seen line(s) but the reader" \
+              "reported ${reported_records:-no} record(s) — so the lines are not the records and the" \
+              "offsets in them cannot be read as positions (a value or key carrying a newline prints as" \
+              "two lines). NOT publishing and NOT advancing the checkpoint; the range is re-read next run."
+          rm -f "$tmp"
+          failed=$(( failed + 1 ))
+          continue
+        fi
+        if [ "$cs_over" -gt 0 ] || [ "$cs_under" -gt 0 ]; then
+          log "  CLAMP $topic p$part [$from,$endoff): the reader delivered $cs_over record(s) at or past the" \
+              "bound and $cs_under before the start — --max-messages bounds records, not offsets, so a range with" \
+              "holes is read straight through its own end. Keeping the $cs_in inside the range; the rest are not" \
+              "lost, they are re-read next run under their own range."
+          if ! clamp_capture_to_range "$tmp" "$from" "$endoff"; then
+            log "  WARN $topic p$part [$from,$endoff): could not clamp the capture to its range — checkpoint NOT advanced, will retry next run"
+            rm -f "$tmp"
+            failed=$(( failed + 1 ))
+            continue
+          fi
+          # The published bytes changed, so every number taken off them must be taken again.
+          scan_out=$(scan_archive_file "$tmp")
+          scan_rc=$?
+          read -r got min_ms max_ms schema_versions <<< "$scan_out"
+          got="${got:-0}"; min_ms="${min_ms:-0}"; max_ms="${max_ms:-0}"; schema_versions="${schema_versions:--}"
+          if [ "$scan_rc" -ne 0 ] || [ "$got" -ne "$cs_in" ]; then
+            log "  WARN $topic p$part [$from,$endoff): the clamped capture rescanned to $got records, expected $cs_in" \
+                "(scan rc=$scan_rc) — checkpoint NOT advanced, will retry next run"
+            rm -f "$tmp"
+            failed=$(( failed + 1 ))
+            continue
+          fi
+        fi
+        if [ "$cs_over" -gt 0 ]; then
+          proven_to="$endoff"
+        elif [ "$cs_max" -ge 0 ]; then
+          proven_to=$(( cs_max + 1 ))
+        else
+          proven_to="$from"
+        fi
+        # BOTH ways the range can come up short make this run a failure to report: a hole inside
+        # the part that was walked, and a part that was never walked at all. The first is permanent
+        # and recorded; the second is picked up by the next run — but on an evidence topic neither
+        # may pass as a clean run.
+        if [ "$proven_to" -lt "$endoff" ] || [ "$got" -ne $(( proven_to - from )) ]; then
+          short_read=true
+        fi
+      fi
+      # A STRICT RANGE WHOSE EVERY OFFSET IS GONE, with PROOF, must still move. If the reader walked
+      # out of the far end of [from, endoff) and delivered nothing inside it, the range is covered
+      # and empty: every record it once held has been cleaned. The generic "got <= 0" refusal below
+      # deleted that capture and left the checkpoint where it was, so every later run asked for the
+      # same dead range and refused again — a stall with the proof of coverage in its hand.
+      # (Codex round 3, P2.)
+      #
+      # Nothing is PUBLISHED for it: an empty gzip is not a corpus member and loaders refuse one.
+      # What is written is the evidence — a discontinuity line naming the whole dead range, and a
+      # checkpoint line recording zero records across it, in the shape the strict reset path already
+      # uses. An empty capture WITHOUT that proof is still refused, unchanged.
+      if [ "$consumer_rc" -eq 0 ] && [ "$got" -le 0 ] && [ "$short_read" = true ] \
+         && [ "$cs_over" -gt 0 ] && [ "$proven_to" -eq "$endoff" ]; then
         rm -f "$tmp"
+        log "  EMPTY $topic p$part [$from,$endoff): the reader walked out past the bound and delivered NOTHING" \
+            "inside the range — all $count offset(s) have been cleaned. No file is published (an empty capture is" \
+            "not a corpus member); the gap is recorded and the checkpoint advances to $endoff so the dead range is" \
+            "not asked for again. This run FAILS and the sessions it spans are NOT EVALUABLE."
+        # THE EVIDENCE GATES THE CHECKPOINT, exactly as publish_segment's manifest gates its own.
+        # For a published range the manifest line is the claim and the checkpoint is the promise not
+        # to re-read; here there is no file and no manifest line, so this discontinuity is the ONLY
+        # record that the range existed and was lost. Advancing without it leaves nothing, anywhere,
+        # to say the range was skipped — and the next run resumes past it and succeeds, so the hole
+        # becomes invisible rather than merely unrecorded. If the append fails, nothing advances and
+        # the range is retried. (Codex round 4, P2.)
+        # APPENDABLE, not merely writable. A write that died mid-line leaves the sidecar without a
+        # trailing newline, and the next append then CONCATENATES onto that fragment: the printf
+        # succeeds, the checkpoint advances, and the range ends up with neither a capture nor a
+        # readable declaration — while oe_corpus_reader.py reports the whole sidecar unreadable, so
+        # every OTHER range's declaration in it is lost too. publish_segment makes exactly this
+        # check before touching a manifest; this is the same guard on the same kind of file.
+        # (Codex round 5, P2.)
+        if ! manifest_appendable "$MAN/$topic.discontinuities.jsonl"; then
+          log "  FAIL $topic p$part: $MAN/$topic.discontinuities.jsonl does not end with a newline — a run died" \
+              "mid-write, so appending would concatenate onto the partial line and make the whole sidecar" \
+              "unreadable. NOT advancing the checkpoint over a loss that would then have no readable record;" \
+              "an operator repairs the file and the range is asked for again next run."
+          failed=$(( failed + 1 ))
+          continue
+        fi
+        if ! printf '{"topic":"%s","dt":"%s","partition":%s,"discontinuity":"short read: 0 of %s records in [%s,%s)","missing_offsets":%s,"detected_at":"%s","env":"%s"}\n' \
+               "$topic" "$DAY" "$part" "$count" "$from" "$proven_to" "$count" "$STAMP" "$ENV_NAME" \
+               >> "$MAN/$topic.discontinuities.jsonl"; then
+          log "  FAIL $topic p$part: the dead range [$from,$proven_to) could not be recorded in" \
+              "$MAN/$topic.discontinuities.jsonl — refusing to advance the checkpoint over a loss nothing would" \
+              "then attest to. The range is asked for again next run."
+          failed=$(( failed + 1 ))
+          continue
+        fi
+        if ! printf '%s=%s records=0 span=%s dt=%s archived=%s compacted-empty=from-%s\n' \
+               "$part" "$proven_to" "$count" "$DAY" "$STAMP" "$from" >> "$offfile"; then
+          log "  WARN $topic p$part: could not write the checkpoint for the empty range — it will be asked for again"
+        fi
         failed=$(( failed + 1 ))
         continue
       fi
@@ -1579,11 +2031,53 @@ for topic in $TOPICS; do
         failed=$(( failed + 1 ))
         continue
       fi
+      if is_strict_topic "$topic" && [ "$consumer_rc" -eq 0 ]; then
+        # The published range and the checkpoint are the PROVEN bound, never the queried one.
+        cap_to="$proven_to"
+        count=$(( proven_to - from ))
+        short_gap=$(( count - got ))
+        if [ "$proven_to" -lt "$endoff" ]; then
+          log "  SHORT $topic p$part: the reader stopped at offset $(( proven_to - 1 )), short of the bound" \
+              "$endoff — a consumer that exits 0 having stopped early is indistinguishable from a compacted range" \
+              "except by the offsets it delivered. Publishing [$from,$proven_to) and advancing ONLY to $proven_to;" \
+              "[$proven_to,$endoff) is untouched and is re-read next run. This run FAILS."
+        fi
+        if [ "$short_gap" -gt 0 ]; then
+          log "  SHORT $topic p$part [$from,$proven_to): STRICT topic read $got of $count records — $short_gap" \
+              "offset(s) inside a range the reader DID walk the whole of are no longer on the broker. Archiving the" \
+              "$got that ARE and recording the gap: the checkpoint advances past it so it does not repeat, and the" \
+              "sessions it spans are NOT EVALUABLE."
+          # Written BEFORE the publish: a line claiming a hole that was never published is a false
+          # alarm an operator can check, while a published capture whose hole was never recorded is
+          # a corpus that reads complete and is not.
+          #
+          # A sidecar that does not end in a newline is NOT appended to: the write would succeed and
+          # concatenate onto the partial line, which makes the whole file unreadable and so destroys
+          # every other range's declaration in it as well. Unlike the proven-empty branch below,
+          # this one does not refuse the capture over it — the published manifest line carries
+          # "short_read" and "missing_offsets", so the hole is still recorded where a reader looks
+          # first — but the run is already failing and the repair is named.
+          if manifest_appendable "$MAN/$topic.discontinuities.jsonl"; then
+            printf '{"topic":"%s","dt":"%s","partition":%s,"discontinuity":"short read: %s of %s records in [%s,%s)","missing_offsets":%s,"detected_at":"%s","env":"%s"}\n' \
+              "$topic" "$DAY" "$part" "$got" "$count" "$from" "$proven_to" "$short_gap" "$STAMP" "$ENV_NAME" \
+              >> "$MAN/$topic.discontinuities.jsonl" \
+              || log "  WARN $topic p$part: could not record the short read in $MAN/$topic.discontinuities.jsonl"
+          else
+            log "  WARN $topic p$part: $MAN/$topic.discontinuities.jsonl does not end with a newline — a run died" \
+                "mid-write; NOT appending (it would concatenate onto the partial line and make the whole sidecar" \
+                "unreadable). The manifest line still records the gap; an operator repairs the sidecar."
+          fi
+          manifest_extra="$manifest_extra$(printf ',"short_read":true,"missing_offsets":%s' "$short_gap")"
+        fi
+      fi
     fi
     if [ "$seg_done" != true ]; then
       PS_FROM="$from"; PS_TO="$cap_to"; PS_DAY="$DAY"; PS_GOT="$got"; PS_COUNT="$count"; PS_MIN="$min_ms"; PS_MAX="$max_ms"
       PS_SV="$schema_versions"; PS_EXTRA="$manifest_extra"
       publish_segment || continue
+      # Counted only once the capture is published and the checkpoint has moved: a run that failed
+      # to publish has already counted its own failure, and counting twice would say two holes.
+      [ "$short_read" = true ] && failed=$(( failed + 1 ))
     fi
   done <<< "$ends"
 

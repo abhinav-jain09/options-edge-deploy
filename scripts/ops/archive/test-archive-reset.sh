@@ -92,6 +92,12 @@ replay() { cat "$OE_CLI/$1.out"; cat "$OE_CLI/$1.err" >&2; exit "$(cat "$OE_CLI/
 # OE_ENDS_QUERY / OE_EARLIEST_QUERY = fail (recorded unreachable) | skip (GetOffsetShell's per-partition
 # "Skip getting offsets", exit 0) | missing (the partition silently absent, exit 0), for partition OE_SKIP_PART.
 [ "${OE_BROKER:-up}" = down ] && replay unreach-ends
+# OE_ENDS_GARBAGE: a NON-EMPTY answer that is not offsets. A real CLI does this when it prints a
+# warning to stdout, when it answers about another topic, or when an answer is half written. Only
+# the latest/default query is affected, which is the discovery the archiver's topic loop depends on.
+if [ -n "${OE_ENDS_GARBAGE:-}" ] && { [ -z "$time_arg" ] || [ "$time_arg" = latest ]; }; then
+  printf '%s\n' "$OE_ENDS_GARBAGE"; exit "${OE_ENDS_GARBAGE_RC:-0}"
+fi
 case "$time_arg" in ""|latest) q="${OE_ENDS_QUERY:-ok}" ;; earliest) q="${OE_EARLIEST_QUERY:-ok}" ;; *) q=ok ;; esac
 [ "$q" = fail ] && replay unreach-ends
 # A topic the broker does not have: the RECORDED answer (exit 1, "Could not match any topic-partitions").
@@ -132,23 +138,169 @@ cat > "$BIN/kafka-console-consumer.sh" <<'SH'
 #!/usr/bin/env bash
 # Emits exactly the records that exist in [offset, end) for the partition, capped by
 # --max-messages, in the archiver's expected "CreateTime:<ms>\t..." shape.
-part=""; off=0; maxm=0
+part=""; off=0; maxm=0; showoff=false
 while [ $# -gt 0 ]; do
   case "$1" in
     --partition) part="$2"; shift 2 ;;
     --offset) off="$2"; shift 2 ;;
     --max-messages) maxm="$2"; shift 2 ;;
+    --formatter-property) [ "$2" = "print.offset=true" ] && showoff=true; shift 2 ;;
     *) shift ;;
   esac
 done
 end=$(awk -v p="$part" '$1==p{print $3}' "$OE_FIXTURE")
-avail=$(( end - off )); [ "$avail" -lt 0 ] && avail=0
-[ "$avail" -gt "$maxm" ] && avail="$maxm"
-i=0
-while [ "$i" -lt "$avail" ]; do
-  echo -e "CreateTime:1786000000000\t$part\tk$i\t{\"schemaVersion\":1}"
-  i=$(( i + 1 ))
+# --max-messages BOUNDS RECORDS, NOT OFFSETS, and modelling it as an offset span was the stand-in's
+# own bug: it capped the candidate offsets BEFORE skipping the compacted ones, so a capture could
+# never read past the range it was given and the archiver's real behaviour -- walking out of the far
+# end of a holed range to fill its count -- was unreachable from here (Codex round 2). The loop below
+# walks offsets from $off up to the LOG END and stops when it has emitted $maxm records.
+#
+# TWO WAYS A CAPTURE COMES BACK SHORT, which need opposite handling, so they are separate knobs:
+#
+#   OE_COMPACTED_GAP=<n>   n consecutive offsets hold no record: compaction took them (the offsets
+#   OE_GAP_FROM=<offset>   advanced, the records they held were superseded and cleaned), or
+#                          retention did, mid-range, on a delete-retained topic. The reader keeps
+#                          going PAST them, so with records beyond the queried bound it delivers its
+#                          full count while spanning a wider offset range than it was asked for.
+#                          OE_GAP_FROM places the window; without it the window starts at $off.
+#                          THE POSITION MATTERS AND THE FIRST VERSION HAD NO WAY TO SET IT. With the
+#                          window always at the START of the range, the offset just below the bound
+#                          always survived, so max_in_range + 1 and "walked past the bound" gave the
+#                          SAME answer and no fixture could tell the two apart (Codex round 3). A
+#                          window placed at the END removes the range tail, which compaction really
+#                          can do: it keeps the newest record per KEY across the log, not the last
+#                          offset of an arbitrary bounded range.
+#   OE_STOP_AFTER=<n>      the reader delivers n records and then stops, AT EXIT 0 -- the inactivity
+#                          timeout, and the errors the console consumer catches internally. A broker
+#                          lost halfway through looks exactly like this and like nothing else.
+#
+# Only the DELIVERED OFFSETS separate them, which is why print.offset is on for strict topics.
+gap="${OE_COMPACTED_GAP:-0}"; stop="${OE_STOP_AFTER:-0}"
+emit() { # <offset>
+  # OE_NO_OFFSET_COLUMN forces the pre-print.offset layout even when the archiver asked for offsets,
+  # so the fail-closed path (a capture that cannot attest to what it delivered) is reachable. A real
+  # CLI too old for print.offset behaves exactly this way.
+  [ -n "${OE_NO_OFFSET_COLUMN:-}" ] && showoff=false
+  # OE_PAYLOAD_OFFSET_TEXT puts the text "Offset:" INSIDE the record value, on a capture that has no
+  # offset column. A parser that scans for the first field looking like an offset reads that payload
+  # as the record's position and the fail-closed path never fires -- which is the whole reason the
+  # real parser matches field 3 positionally.
+  local body='{"schemaVersion":1}' key="k$1"
+  [ -n "${OE_PAYLOAD_OFFSET_TEXT:-}" ] && body='{"schemaVersion":1,"note":"Offset:999"}'
+  # OE_TABBED_VALUE puts a literal TAB inside the value. That is what defeats a field-count check:
+  # it pushes a four-field no-offset-column line to five, so it satisfies NF >= 5 and every field
+  # shape while still carrying no real offset (Codex round 4).
+  [ -n "${OE_TABBED_VALUE:-}" ] && body="$(printf '{"schemaVersion":1,"l":"a"}\t{"r":"b"}')"
+  # OE_KEY_OFFSET_SEQ: the key is an offset-shaped string that INCREASES per record, so the
+  # monotonicity check cannot tell it apart -- only the FIELD COUNT can, because with an untabbed
+  # value the line has four fields and a real strict record has five.
+  [ -n "${OE_KEY_OFFSET_SEQ:-}" ] && key="Offset:$1"
+  # OE_PAYLOAD_OFFSET_SEQ: an increasing offset-shaped string at the start of a tab-separated
+  # segment of the VALUE. A scan for the first field beginning with "Offset:" finds it and accepts;
+  # matching field 3 positionally does not, because field 3 is the key. This is the case where the
+  # POSITIONAL match is the only thing that discriminates.
+  [ -n "${OE_PAYLOAD_OFFSET_SEQ:-}" ] && body="$(printf '{"schemaVersion":1}\tOffset:%s' "$1")"
+  # OE_START_BELOW: the first record is delivered one offset BELOW the --offset it was given, which
+  # a real consumer never does. Without the lower-bound check it is counted as in-range.
+  if [ -n "${OE_START_BELOW:-}" ] && [ "$1" = "$off" ]; then
+    printf 'CreateTime:1786000000000\tPartition:%s\tOffset:%s\tk\t%s\n' "$part" "$(( off - 1 ))" '{"schemaVersion":1}'
+  fi
+  # OE_KEY_OFFSET_TEXT makes the KEY itself look exactly like an offset field. On a capture with no
+  # offset column that line satisfies "field 3 is Offset:<digits>", so it defeats BOTH a scan and a
+  # positional match on shape alone -- only the field COUNT separates it from a real strict record.
+  [ -n "${OE_KEY_OFFSET_TEXT:-}" ] && key="Offset:999"
+  if [ "$showoff" = true ]; then
+    printf 'CreateTime:1786000000000\tPartition:%s\tOffset:%s\t%s\t%s\n' "$part" "$1" "$key" "$body"
+  else
+    printf 'CreateTime:1786000000000\tPartition:%s\t%s\t%s\n' "$part" "$key" "$body"
+  fi
+}
+sent=0; o="$off"
+while [ "$o" -lt "$end" ] && [ "$sent" -lt "$maxm" ]; do
+  if [ "$stop" -gt 0 ] && [ "$sent" -ge "$stop" ]; then break; fi        # stopped early, exit 0
+  # OE_OFFSETS_DESCEND: deliver off+2 BEFORE off+1 -- a DISTINCT descending pair (100, 102, 101),
+  # every offset above the lower bound and none repeated. "off <= prev" refuses it; "off == prev",
+  # which still refuses a repeated-offset masquerade, accepts it. That is what makes "<=" the
+  # load-bearing form, and it needs an input with no repeat in it (Codex round 5).
+  #
+  # The first version of this hook emitted the extra record from inside emit(), which produced
+  # 100, 101, 101, 102 -- a REPEAT, which the weaker form catches, so the mutation survived and the
+  # assertion was passing for the wrong reason.
+  if [ -n "${OE_OFFSETS_DESCEND:-}" ] && [ "$o" -eq $(( off + 1 )) ]; then
+    emit $(( off + 2 )); emit $(( off + 1 ))
+    sent=$(( sent + 2 )); o=$(( off + 3 )); continue
+  fi
+  # OE_MALFORMED_ROW=<n>: the nth record delivered is a physical row that does not satisfy the strict
+  # layout at all -- which is what a console-rendered key or value containing a NEWLINE produces. The
+  # rows around it are valid, so this is the mixed case: skipping the bad row rather than refusing
+  # the capture reclassifies recoverable bytes as broker loss (Codex round 6).
+  if [ -n "${OE_MALFORMED_ROW:-}" ] && [ "$sent" -eq "$OE_MALFORMED_ROW" ]; then
+    printf 'a row with an embedded newline renders as this\n'
+    sent=$(( sent + 1 )); o=$(( o + 1 )); continue
+  fi
+  # OE_PAYLOAD_COUNT_LINE=<n>: the nth record delivered carries a newline in its value followed by
+  # text beginning "Processed a total of". ONE record, TWO physical lines -- and the second is
+  # exactly what the archiver used to filter out of stdout, which left one valid row for one
+  # reported record so the framing check PASSED on a record whose value had been truncated (Codex
+  # round 8). With the filter gone the capture keeps both lines, and it is the LAYOUT that refuses
+  # them -- the continuation is not a valid row -- before the count is even consulted. Measured:
+  # with the filter the census printed "1 100 0 0 1"; without it, nothing.
+  if [ -n "${OE_PAYLOAD_COUNT_LINE:-}" ] && [ "$sent" -eq "$OE_PAYLOAD_COUNT_LINE" ]; then
+    # Honours print.offset like emit() does, so the same payload can be delivered to a NON-strict
+    # capture (four fields, no offset column) as well as a strict one. Without that the non-strict
+    # preservation test below would be asserting against a layout no non-strict capture produces.
+    if [ "$showoff" = true ]; then
+      printf 'CreateTime:1786000000000\tPartition:%s\tOffset:%s\tk\t{"schemaVersion":1,"note":"v\n' "$part" "$o"
+    else
+      printf 'CreateTime:1786000000000\tPartition:%s\tk\t{"schemaVersion":1,"note":"v\n' "$part"
+    fi
+    printf 'Processed a total of payload-data"}\n'
+    sent=$(( sent + 1 )); o=$(( o + 1 )); continue
+  fi
+  # OE_NEWLINE_IN_VALUE=<n>: the nth record delivered carries a raw NEWLINE in its value, so ONE
+  # record prints as TWO physical lines -- and the continuation is itself shaped like a strict
+  # record at the next offset. Every field check, the field count and monotonicity all pass on both
+  # lines, and no amount of looking at the text can say whether that is two records or one (Codex
+  # round 7). `sent` increments ONCE, because one record was delivered: that is the point, and it
+  # is what the reader's own count below reports.
+  if [ -n "${OE_NEWLINE_IN_VALUE:-}" ] && [ "$sent" -eq "$OE_NEWLINE_IN_VALUE" ]; then
+    printf 'CreateTime:1786000000000\tPartition:%s\tOffset:%s\tk\t{"schemaVersion":1,"note":"a\n' "$part" "$o"
+    printf 'CreateTime:1786000000000\tPartition:%s\tOffset:%s\tk\t{"schemaVersion":1}\n' "$part" "$(( o + 1 ))"
+    sent=$(( sent + 1 )); o=$(( o + 2 )); continue
+  fi
+  gapfrom="${OE_GAP_FROM:-$off}"
+  if [ "$gap" -gt 0 ] && [ "$o" -ge "$gapfrom" ] && [ "$o" -lt $(( gapfrom + gap )) ]; then
+    o=$(( o + 1 )); continue                                            # this offset holds nothing
+  fi
+  emit "$o"
+  sent=$(( sent + 1 )); o=$(( o + 1 ))
 done
+# THE READER'S OWN RECORD COUNT, on STDERR, in the exact shape 4.3.0 prints it -- taken from the
+# shipped class, not from memory: ConsoleConsumer.reportRecordCount() does
+# `System.err.println("Processed a total of " + messageCount + " messages")`. The archiver used to
+# send this stream to /dev/null and filter the line out of STDOUT, where it never appears; it now
+# reads it as the framing evidence the record layout cannot supply.
+#
+#   OE_NO_RECORD_COUNT       the reader reports nothing, which a strict range must refuse rather
+#                            than assume: a reader that exited 0 reported a count.
+#   OE_RECORD_COUNT_DELTA=n  the reported count is n more or fewer than the lines delivered. With
+#                            -1 it models the archiver's own stdout filter eating a record whose
+#                            value begins a line with "Processed a total of".
+#   OE_STDERR_NOISE          the count line arrives in company: an SLF4J banner and two broker log
+#                            lines, on the SAME stream, before and after it. Every one of them
+#                            carries digits, and none of them is a count. That is the ordinary
+#                            shape of this stream, and it is what makes the parser's anchoring
+#                            load-bearing rather than decorative.
+if [ -n "${OE_STDERR_NOISE:-}" ]; then
+  echo "SLF4J: Actual binding is of type [org.slf4j.impl.Log4jLoggerFactory]" >&2
+  echo "[2026-11-17 09:00:00,123] WARN [Consumer clientId=console-consumer-93267, groupId=null] Error while fetching metadata with correlation id 7 : {$topic=LEADER_NOT_AVAILABLE} (org.apache.kafka.clients.NetworkClient)" >&2
+fi
+if [ -z "${OE_NO_RECORD_COUNT:-}" ]; then
+  echo "Processed a total of $(( sent + ${OE_RECORD_COUNT_DELTA:-0} )) messages" >&2
+fi
+if [ -n "${OE_STDERR_NOISE:-}" ]; then
+  echo "[2026-11-17 09:00:01,456] INFO [Consumer clientId=console-consumer-93267, groupId=null] Resetting offset for partition $topic-$part to position FetchPosition{offset=42, offsetEpoch=Optional.empty} (org.apache.kafka.clients.consumer.internals.SubscriptionState)" >&2
+fi
 SH
 chmod +x "$BIN"/*.sh
 
@@ -539,7 +691,7 @@ SH
 # The console consumer again, now also RECORDING each call, so a case can prove which path read a topic.
 cat > "$BIN/kafka-console-consumer.sh" <<'SH'
 #!/usr/bin/env bash
-part=""; off=0; maxm=0; topic=""; props=""
+part=""; off=0; maxm=0; topic=""; props=""; showoff=false
 while [ $# -gt 0 ]; do
   case "$1" in
     --partition) part="$2"; shift 2 ;;
@@ -548,18 +700,167 @@ while [ $# -gt 0 ]; do
     --topic) topic="$2"; shift 2 ;;
     --consumer-property) props="$props $2"; shift 2 ;;
     --isolation-level) props="$props isolation-level=$2"; shift 2 ;;
+    --formatter-property) [ "$2" = "print.offset=true" ] && showoff=true; shift 2 ;;
     *) shift ;;
   esac
 done
 echo "console $topic p$part props=[${props# }]" >> "$OE_FIXTURE.calls"
+# The knobs and the record layout live in BOTH copies of this stand-in, because this one REPLACES
+# the first at section 12 — anything written after section 12 would otherwise run with the knobs
+# silently doing nothing, which is exactly how section 19 first "passed" its own absence.
 end=$(awk -v p="$part" '$1==p{print $3}' "$OE_FIXTURE")
-avail=$(( end - off )); [ "$avail" -lt 0 ] && avail=0
-[ "$avail" -gt "$maxm" ] && avail="$maxm"
-i=0
-while [ "$i" -lt "$avail" ]; do
-  echo -e "CreateTime:1786000000000\t$part\tk$i\t{\"schemaVersion\":1}"
-  i=$(( i + 1 ))
+# --max-messages BOUNDS RECORDS, NOT OFFSETS, and modelling it as an offset span was the stand-in's
+# own bug: it capped the candidate offsets BEFORE skipping the compacted ones, so a capture could
+# never read past the range it was given and the archiver's real behaviour -- walking out of the far
+# end of a holed range to fill its count -- was unreachable from here (Codex round 2). The loop below
+# walks offsets from $off up to the LOG END and stops when it has emitted $maxm records.
+#
+# TWO WAYS A CAPTURE COMES BACK SHORT, which need opposite handling, so they are separate knobs:
+#
+#   OE_COMPACTED_GAP=<n>   n consecutive offsets hold no record: compaction took them (the offsets
+#   OE_GAP_FROM=<offset>   advanced, the records they held were superseded and cleaned), or
+#                          retention did, mid-range, on a delete-retained topic. The reader keeps
+#                          going PAST them, so with records beyond the queried bound it delivers its
+#                          full count while spanning a wider offset range than it was asked for.
+#                          OE_GAP_FROM places the window; without it the window starts at $off.
+#                          THE POSITION MATTERS AND THE FIRST VERSION HAD NO WAY TO SET IT. With the
+#                          window always at the START of the range, the offset just below the bound
+#                          always survived, so max_in_range + 1 and "walked past the bound" gave the
+#                          SAME answer and no fixture could tell the two apart (Codex round 3). A
+#                          window placed at the END removes the range tail, which compaction really
+#                          can do: it keeps the newest record per KEY across the log, not the last
+#                          offset of an arbitrary bounded range.
+#   OE_STOP_AFTER=<n>      the reader delivers n records and then stops, AT EXIT 0 -- the inactivity
+#                          timeout, and the errors the console consumer catches internally. A broker
+#                          lost halfway through looks exactly like this and like nothing else.
+#
+# Only the DELIVERED OFFSETS separate them, which is why print.offset is on for strict topics.
+gap="${OE_COMPACTED_GAP:-0}"; stop="${OE_STOP_AFTER:-0}"
+emit() { # <offset>
+  # OE_NO_OFFSET_COLUMN forces the pre-print.offset layout even when the archiver asked for offsets,
+  # so the fail-closed path (a capture that cannot attest to what it delivered) is reachable. A real
+  # CLI too old for print.offset behaves exactly this way.
+  [ -n "${OE_NO_OFFSET_COLUMN:-}" ] && showoff=false
+  # OE_PAYLOAD_OFFSET_TEXT puts the text "Offset:" INSIDE the record value, on a capture that has no
+  # offset column. A parser that scans for the first field looking like an offset reads that payload
+  # as the record's position and the fail-closed path never fires -- which is the whole reason the
+  # real parser matches field 3 positionally.
+  local body='{"schemaVersion":1}' key="k$1"
+  [ -n "${OE_PAYLOAD_OFFSET_TEXT:-}" ] && body='{"schemaVersion":1,"note":"Offset:999"}'
+  # OE_TABBED_VALUE puts a literal TAB inside the value. That is what defeats a field-count check:
+  # it pushes a four-field no-offset-column line to five, so it satisfies NF >= 5 and every field
+  # shape while still carrying no real offset (Codex round 4).
+  [ -n "${OE_TABBED_VALUE:-}" ] && body="$(printf '{"schemaVersion":1,"l":"a"}\t{"r":"b"}')"
+  # OE_KEY_OFFSET_SEQ: the key is an offset-shaped string that INCREASES per record, so the
+  # monotonicity check cannot tell it apart -- only the FIELD COUNT can, because with an untabbed
+  # value the line has four fields and a real strict record has five.
+  [ -n "${OE_KEY_OFFSET_SEQ:-}" ] && key="Offset:$1"
+  # OE_PAYLOAD_OFFSET_SEQ: an increasing offset-shaped string at the start of a tab-separated
+  # segment of the VALUE. A scan for the first field beginning with "Offset:" finds it and accepts;
+  # matching field 3 positionally does not, because field 3 is the key. This is the case where the
+  # POSITIONAL match is the only thing that discriminates.
+  [ -n "${OE_PAYLOAD_OFFSET_SEQ:-}" ] && body="$(printf '{"schemaVersion":1}\tOffset:%s' "$1")"
+  # OE_START_BELOW: the first record is delivered one offset BELOW the --offset it was given, which
+  # a real consumer never does. Without the lower-bound check it is counted as in-range.
+  if [ -n "${OE_START_BELOW:-}" ] && [ "$1" = "$off" ]; then
+    printf 'CreateTime:1786000000000\tPartition:%s\tOffset:%s\tk\t%s\n' "$part" "$(( off - 1 ))" '{"schemaVersion":1}'
+  fi
+  # OE_KEY_OFFSET_TEXT makes the KEY itself look exactly like an offset field. On a capture with no
+  # offset column that line satisfies "field 3 is Offset:<digits>", so it defeats BOTH a scan and a
+  # positional match on shape alone -- only the field COUNT separates it from a real strict record.
+  [ -n "${OE_KEY_OFFSET_TEXT:-}" ] && key="Offset:999"
+  if [ "$showoff" = true ]; then
+    printf 'CreateTime:1786000000000\tPartition:%s\tOffset:%s\t%s\t%s\n' "$part" "$1" "$key" "$body"
+  else
+    printf 'CreateTime:1786000000000\tPartition:%s\t%s\t%s\n' "$part" "$key" "$body"
+  fi
+}
+sent=0; o="$off"
+while [ "$o" -lt "$end" ] && [ "$sent" -lt "$maxm" ]; do
+  if [ "$stop" -gt 0 ] && [ "$sent" -ge "$stop" ]; then break; fi        # stopped early, exit 0
+  # OE_OFFSETS_DESCEND: deliver off+2 BEFORE off+1 -- a DISTINCT descending pair (100, 102, 101),
+  # every offset above the lower bound and none repeated. "off <= prev" refuses it; "off == prev",
+  # which still refuses a repeated-offset masquerade, accepts it. That is what makes "<=" the
+  # load-bearing form, and it needs an input with no repeat in it (Codex round 5).
+  #
+  # The first version of this hook emitted the extra record from inside emit(), which produced
+  # 100, 101, 101, 102 -- a REPEAT, which the weaker form catches, so the mutation survived and the
+  # assertion was passing for the wrong reason.
+  if [ -n "${OE_OFFSETS_DESCEND:-}" ] && [ "$o" -eq $(( off + 1 )) ]; then
+    emit $(( off + 2 )); emit $(( off + 1 ))
+    sent=$(( sent + 2 )); o=$(( off + 3 )); continue
+  fi
+  # OE_MALFORMED_ROW=<n>: the nth record delivered is a physical row that does not satisfy the strict
+  # layout at all -- which is what a console-rendered key or value containing a NEWLINE produces. The
+  # rows around it are valid, so this is the mixed case: skipping the bad row rather than refusing
+  # the capture reclassifies recoverable bytes as broker loss (Codex round 6).
+  if [ -n "${OE_MALFORMED_ROW:-}" ] && [ "$sent" -eq "$OE_MALFORMED_ROW" ]; then
+    printf 'a row with an embedded newline renders as this\n'
+    sent=$(( sent + 1 )); o=$(( o + 1 )); continue
+  fi
+  # OE_PAYLOAD_COUNT_LINE=<n>: the nth record delivered carries a newline in its value followed by
+  # text beginning "Processed a total of". ONE record, TWO physical lines -- and the second is
+  # exactly what the archiver used to filter out of stdout, which left one valid row for one
+  # reported record so the framing check PASSED on a record whose value had been truncated (Codex
+  # round 8). With the filter gone the capture keeps both lines, and it is the LAYOUT that refuses
+  # them -- the continuation is not a valid row -- before the count is even consulted. Measured:
+  # with the filter the census printed "1 100 0 0 1"; without it, nothing.
+  if [ -n "${OE_PAYLOAD_COUNT_LINE:-}" ] && [ "$sent" -eq "$OE_PAYLOAD_COUNT_LINE" ]; then
+    # Honours print.offset like emit() does, so the same payload can be delivered to a NON-strict
+    # capture (four fields, no offset column) as well as a strict one. Without that the non-strict
+    # preservation test below would be asserting against a layout no non-strict capture produces.
+    if [ "$showoff" = true ]; then
+      printf 'CreateTime:1786000000000\tPartition:%s\tOffset:%s\tk\t{"schemaVersion":1,"note":"v\n' "$part" "$o"
+    else
+      printf 'CreateTime:1786000000000\tPartition:%s\tk\t{"schemaVersion":1,"note":"v\n' "$part"
+    fi
+    printf 'Processed a total of payload-data"}\n'
+    sent=$(( sent + 1 )); o=$(( o + 1 )); continue
+  fi
+  # OE_NEWLINE_IN_VALUE=<n>: the nth record delivered carries a raw NEWLINE in its value, so ONE
+  # record prints as TWO physical lines -- and the continuation is itself shaped like a strict
+  # record at the next offset. Every field check, the field count and monotonicity all pass on both
+  # lines, and no amount of looking at the text can say whether that is two records or one (Codex
+  # round 7). `sent` increments ONCE, because one record was delivered: that is the point, and it
+  # is what the reader's own count below reports.
+  if [ -n "${OE_NEWLINE_IN_VALUE:-}" ] && [ "$sent" -eq "$OE_NEWLINE_IN_VALUE" ]; then
+    printf 'CreateTime:1786000000000\tPartition:%s\tOffset:%s\tk\t{"schemaVersion":1,"note":"a\n' "$part" "$o"
+    printf 'CreateTime:1786000000000\tPartition:%s\tOffset:%s\tk\t{"schemaVersion":1}\n' "$part" "$(( o + 1 ))"
+    sent=$(( sent + 1 )); o=$(( o + 2 )); continue
+  fi
+  gapfrom="${OE_GAP_FROM:-$off}"
+  if [ "$gap" -gt 0 ] && [ "$o" -ge "$gapfrom" ] && [ "$o" -lt $(( gapfrom + gap )) ]; then
+    o=$(( o + 1 )); continue                                            # this offset holds nothing
+  fi
+  emit "$o"
+  sent=$(( sent + 1 )); o=$(( o + 1 ))
 done
+# THE READER'S OWN RECORD COUNT, on STDERR, in the exact shape 4.3.0 prints it -- taken from the
+# shipped class, not from memory: ConsoleConsumer.reportRecordCount() does
+# `System.err.println("Processed a total of " + messageCount + " messages")`. The archiver used to
+# send this stream to /dev/null and filter the line out of STDOUT, where it never appears; it now
+# reads it as the framing evidence the record layout cannot supply.
+#
+#   OE_NO_RECORD_COUNT       the reader reports nothing, which a strict range must refuse rather
+#                            than assume: a reader that exited 0 reported a count.
+#   OE_RECORD_COUNT_DELTA=n  the reported count is n more or fewer than the lines delivered. With
+#                            -1 it models the archiver's own stdout filter eating a record whose
+#                            value begins a line with "Processed a total of".
+#   OE_STDERR_NOISE          the count line arrives in company: an SLF4J banner and two broker log
+#                            lines, on the SAME stream, before and after it. Every one of them
+#                            carries digits, and none of them is a count. That is the ordinary
+#                            shape of this stream, and it is what makes the parser's anchoring
+#                            load-bearing rather than decorative.
+if [ -n "${OE_STDERR_NOISE:-}" ]; then
+  echo "SLF4J: Actual binding is of type [org.slf4j.impl.Log4jLoggerFactory]" >&2
+  echo "[2026-11-17 09:00:00,123] WARN [Consumer clientId=console-consumer-93267, groupId=null] Error while fetching metadata with correlation id 7 : {$topic=LEADER_NOT_AVAILABLE} (org.apache.kafka.clients.NetworkClient)" >&2
+fi
+if [ -z "${OE_NO_RECORD_COUNT:-}" ]; then
+  echo "Processed a total of $(( sent + ${OE_RECORD_COUNT_DELTA:-0} )) messages" >&2
+fi
+if [ -n "${OE_STDERR_NOISE:-}" ]; then
+  echo "[2026-11-17 09:00:01,456] INFO [Consumer clientId=console-consumer-93267, groupId=null] Resetting offset for partition $topic-$part to position FetchPosition{offset=42, offsetEpoch=Optional.empty} (org.apache.kafka.clients.consumer.internals.SubscriptionState)" >&2
+fi
 SH
 # kafka-topics in the RECORDED 4.3.0 shapes (cli-fixtures/4.3.0: list, describe-1p, describe-absent, unreach-*), now
 # that the committed-read discovery asks it for the topic list and a full description (re-review round 3). The topic
@@ -901,9 +1202,13 @@ want "  and reads to the log end"                       100 "$(ck 0)"
 # ================= 13. processing failures on the CONSOLE path (finding 5, inherited code) ==========
 # Each stage's failure used to be invisible: the pipeline kept only the consumer's status, and
 # `read <<< "$(scan_archive_file ...)"` hid the statistics helper's. Each must now leave the checkpoint.
-grep_real=$(command -v grep)
-fault_bin grep "for a in \"\$@\"; do case \"\$a\" in *'Processed a total'*) cat >/dev/null; exit 2 ;; esac; done; exec $grep_real \"\$@\""
-for tool in grep gzip zcat awk mv; do
+# grep WAS a stage here: every console capture used to be piped through
+# `grep -av '^Processed a total of'`, and this loop included a grep that failed on exactly that
+# argument. The filter is gone (Codex round 8 -- it matched nothing any reader emits, and it deleted
+# the continuation of a multi-line value, which is precisely the evidence the framing check needs),
+# so the shim's trigger is unreachable and the three assertions below would have been asserting
+# against a capture that now succeeds. What the removal is FOR is tested straight after this loop.
+for tool in gzip zcat awk mv; do
   A="$T/c-$tool"; mkdir -p "$A/kafka/prod/_manifest"
   fixture "topicid PPPPPPPPPPPPPPPPPPPPPP" "0 0 40" "1 0 40"
   OUT=$(run PATH="$FAULT/$tool:$PATH"); RC=$?
@@ -911,7 +1216,22 @@ for tool in grep gzip zcat awk mv; do
   want "  p0 checkpoint unchanged"                           "" "$(ck 0)"
   want "  no data file published" 0 "$(ls "$A/kafka/prod/$TOPIC"/dt=*/*.jsonl.gz 2>/dev/null | wc -l | tr -d ' ')"
 done
+# 13b. THE BYTES THE FILTER USED TO DELETE. A record whose value contains
+# "v<newline>Processed a total of payload-data" prints as two physical lines, and the second one is
+# what `grep -av` removed -- silently, from a NON-strict capture, where nothing checks framing and
+# so nothing could ever notice. The record was published with its value truncated. Not a strict
+# topic here on purpose: that is the path with no other guard (Codex round 8).
+A="$T/c-keep"; mkdir -p "$A/kafka/prod/_manifest"
+fixture "topicid PPPPPPPPPPPPPPPPPPPPPP" "0 0 40" "1 0 40"
+OUT=$(run OE_PAYLOAD_COUNT_LINE=2); RC=$?
+want "13b a non-strict capture of a value that LOOKS like the count line succeeds (rc)" 0 "$RC"
+has  "  and the continuation is still in the archive, not deleted" "Processed a total of payload-data" \
+     "$(gzip -dc "$A/kafka/prod/$TOPIC"/dt=*/*.jsonl.gz 2>/dev/null)"
+has  "  on the same line's record, whose value it belongs to" '"note":"v' \
+     "$(gzip -dc "$A/kafka/prod/$TOPIC"/dt=*/*.jsonl.gz 2>/dev/null)"
+
 A="$T/c-ok"; mkdir -p "$A/kafka/prod/_manifest"
+fixture "topicid PPPPPPPPPPPPPPPPPPPPPP" "0 0 40" "1 0 40"
 OUT=$(run); RC=$?
 want "13 and with every tool healthy the same run archives (rc)" 0 "$RC"
 want "  p0 checkpoint"                                      40 "$(ck 0)"
@@ -3014,6 +3334,457 @@ out=$(VP_CALLS="$vp_tmp/calls" CAPTURE="$vp_tmp/does-not-exist.py" ARCHIVE_ROOT=
 rc=$?
 want "18o an uninstalled capture fails loudly (rc)" 2 "$rc"
 has  "  and alerts, because a cron that quietly does nothing is how bucket 0 stayed empty" "ALERT:" "$out"
+
+# THE DESTINATIONS BELOW ARE "gz"-PREFIXED, and that is not cosmetic. They were s, s2, s3 ... s12
+# at first, and the suite ALREADY uses s1, s2, s4, s5, s6, s9, s10, s11, s12 through fresh() — so
+# six of them collided. Section 12o in particular runs the SAME topic under the SAME env in $T/s12,
+# so the case below inherited its TopicId and its baseline run reported a spurious log RESET. A
+# shared destination makes a case depend on what ran before it, which is how a suite starts passing
+# and failing for reasons that have nothing to do with the code.
+# ================= 19. a STRICT SHORT READ preserves what survived and RECORDS the hole ============
+# THE DEFECT THIS SECTION EXISTS FOR. The strict short-read branch used to log FAIL, `rm -f` the
+# capture and leave the checkpoint alone. Once ANY offset in [from,endoff) is gone — compaction on a
+# compacted topic, retention on a delete-retained one — that range can never read complete again, so
+# every later run re-read it, found the same shortfall and deleted the capture AGAIN. The records
+# that WERE still there, including everything produced since, were discarded hourly for ever. One
+# lost snapshot became a corpus that silently stops growing.
+#
+# The branch was also unreachable until options.spx.gamma-zone.profile was passed through it: both
+# topics in the default OE_STRICT_TOPICS are committed-read and take the other capture path. So
+# these are the first assertions it has ever had.
+A="$T/gz1"; mkdir -p "$A/kafka/prod/_manifest"
+reset_alerts
+strict() { run OE_STRICT_TOPICS="$TOPIC" "$@"; }
+disc() { cat "$A/kafka/prod/_manifest/$TOPIC.discontinuities.jsonl" 2>/dev/null; }
+files() { ls "$A/kafka/prod/$TOPIC"/dt=*/*."$1"-*.jsonl.gz 2>/dev/null | wc -l | tr -d ' '; }
+mline() { cat "$A/kafka/prod/$TOPIC"/dt=*/_manifest.jsonl 2>/dev/null; }
+
+# a clean first session, so the checkpoint below is a real one and not a log start
+fixture "topicid SSSSSSSSSSSSSSSSSSSSSS" "0 0 100" "1 0 100"
+OUT=$(strict); RC=$?
+want "19a a strict topic archives normally when nothing is missing (rc)" 0 "$RC"
+want "   p0 checkpoint"                                               100 "$(ck 0)"
+
+# --- 19b-f. COMPACTION: 40 offsets inside the range hold no record, and the reader DOES reach the
+# end of the range (the newest record for a key is never cleaned, and the active segment never is).
+fixture "topicid SSSSSSSSSSSSSSSSSSSSSS" "0 0 200" "1 0 200"
+OUT=$(strict OE_COMPACTED_GAP=40); RC=$?
+want "19b the run FAILS, so the wrapper alerts"                         1 "$RC"
+has  "   and says what is missing, not just that it refused" "STRICT topic read 60 of 100 records" "$OUT"
+hasnt "   it does NOT refuse the capture"            "refusing a short read" "$OUT"
+want "19c the 60 records that SURVIVED are archived"                  120 "$(runs records)"
+want "   two files published for the damaged range, one per partition"  2 "$(files 100)"
+want "19d the checkpoint advances to the bound the reader REACHED"    200 "$(ck 0)"
+has  "19e the hole is recorded where a reader will find it" '"discontinuity":"short read: 60 of 100 records in [100,200)"' "$(disc)"
+has  "   with the count of offsets that are gone"           '"missing_offsets":40' "$(disc)"
+has  "19f the manifest line marks the file short"                 '"short_read":true' "$(mline)"
+has  "   and carries both numbers, so the shortfall is visible in the corpus itself" '"records":60,"offset_span":100' "$(mline)"
+
+# --- 19i-m. A TRANSIENT FAILURE, which is NOT a compaction gap and must not be treated as one.
+# kafka-console-consumer exits 0 on its inactivity timeout and on errors it catches internally, so a
+# reader that delivered the first 60 records and then lost the broker is indistinguishable from the
+# compacted case above on exit status and on count. The first version of this change advanced the
+# checkpoint to the queried bound in BOTH cases and called the difference "records no longer on the
+# broker" — which would have skipped 40 still-present records for ever, a NEW loss path (Codex round
+# 1, P1). The delivered OFFSETS are the only thing that separates them.
+A="$T/gz3"; mkdir -p "$A/kafka/prod/_manifest"
+fixture "topicid WWWWWWWWWWWWWWWWWWWWWW" "0 0 100" "1 0 100"
+strict >/dev/null
+want "19i baseline checkpoint"                                        100 "$(ck 0)"
+
+fixture "topicid WWWWWWWWWWWWWWWWWWWWWW" "0 0 200" "1 0 200"
+OUT=$(strict OE_STOP_AFTER=60); RC=$?
+want "19j a reader that stopped early FAILS the run"                    1 "$RC"
+has  "   and says it stopped short of the bound, naming both" "the reader stopped at offset 159, short of the bound 200" "$OUT"
+want "19k the checkpoint advances ONLY to what was delivered"         160 "$(ck 0)"
+want "   the 60 delivered records are archived, not discarded"        120 "$(runs records)"
+want "19l and NO discontinuity is claimed: those records are still there" 0 \
+     "$([ -f "$A/kafka/prod/_manifest/$TOPIC.discontinuities.jsonl" ] && echo 1 || echo 0)"
+hasnt "   so the manifest does not mark the file short"      '"short_read":true' "$(mline)"
+
+# ...and the next run picks up exactly where the delivery stopped, losing nothing.
+OUT=$(strict); RC=$?
+want "19m the next run completes the range (rc)"                        0 "$RC"
+want "   reading the 40 that the failed run never delivered"           80 "$(runs records)"
+want "   and the checkpoint reaches the real bound"                   200 "$(ck 0)"
+
+# --- 19o-r. THE OVERRUN. --max-messages bounds RECORDS, not offsets, so a range with holes is read
+# straight through its own end to fill the count. Queried [100,200) with the 40 offsets after 100
+# empty and records beyond 200 present, the reader delivers exactly 100 records -- the count asked
+# for -- while spanning [140,239]. The first version of this change only looked at the offsets when
+# got != count, so this published a "complete" [100,200) holding 40 records belonging to the next
+# range, with the hole inside the claimed range entirely concealed (Codex round 2, P2).
+A="$T/gz5"; mkdir -p "$A/kafka/prod/_manifest"
+fixture "topicid YYYYYYYYYYYYYYYYYYYYYY" "0 0 100" "1 0 100"
+strict >/dev/null
+want "19o baseline checkpoint"                                        100 "$(ck 0)"
+
+# The log runs to 300, so there is plenty beyond the 200 bound for the reader to walk into.
+# The 4th field is the UNTIL_TS cutoff offset, so the queried bound is 200 while the log runs to
+# 300 — plenty beyond the bound for the reader to walk into.
+fixture "topicid YYYYYYYYYYYYYYYYYYYYYY" "0 0 300 200" "1 0 300 200"
+OUT=$(strict UNTIL_TS=1786000000000 OE_COMPACTED_GAP=40); RC=$?
+want "19p the overrun is caught even though the COUNT came back exact" 1 "$RC"
+has  "   and says records were delivered past the bound" "record(s) at or past the" "$OUT"
+has  "   and the hole inside the claimed range is NOT concealed" '"short_read":true' "$(mline)"
+want "19q only the in-range records are published"                     60 "$(awk -F'"records":' '/"offset_from":100/{split($2,a,","); print a[1]}' "$A/kafka/prod/$TOPIC"/dt=*/_manifest.jsonl | head -1)"
+want "19r the checkpoint stops at the bound, not past it"             200 "$(ck 0)"
+want "   and the file itself carries no offset outside the range"       0 \
+     "$(gzip -dc "$A/kafka/prod/$TOPIC"/dt=*/*.100-200.*.jsonl.gz | awk -F'\t' '{sub("Offset:","",$3); if ($3+0 < 100 || $3+0 >= 200) n++} END{print n+0}')"
+
+# --- 19s-u. A COMPACTED TAIL on a bounded range. The previous version DISCARDED the whole capture
+# on seeing an offset at or past endoff and left the checkpoint still, so every retry repeated it --
+# the same stall it was written to remove, by a different door (Codex round 2). An offset past the
+# bound is the STRONGEST proof the range was walked, not a reason to refuse.
+#
+# THE GAP IS AT THE END, 160..199, so max_in_range is 159 and the record just below the bound is
+# GONE. That is what makes this test able to fail: with the gap at the start of the range (as it was)
+# the offset below the bound survived, so "max + 1" and "walked past the bound" both gave 200 and an
+# implementation ignoring the overrun evidence passed anyway (Codex round 3).
+A="$T/gz6"; mkdir -p "$A/kafka/prod/_manifest"
+fixture "topicid ZZZZZZZZZZZZZZZZZZZZZZ" "0 0 100" "1 0 100"
+strict >/dev/null
+fixture "topicid ZZZZZZZZZZZZZZZZZZZZZZ" "0 0 300 200" "1 0 300 200"
+OUT=$(strict UNTIL_TS=1786000000000 OE_GAP_FROM=160 OE_COMPACTED_GAP=40); RC=$?
+want "19s a compacted TAIL does not stall the range (rc)"               1 "$RC"
+want "   the checkpoint CLEARS the bound even though the last delivered offset was 159" 200 "$(ck 0)"
+want "   the 60 surviving records are archived"                        120 "$(runs records)"
+has  "   with the dead tail recorded as permanent"  '"missing_offsets":40' "$(disc)"
+hasnt "   and it is NOT reported as stopping early" "short of the bound" "$OUT"
+# THE FIXTURE ITSELF IS PINNED. Without this, moving the emptied window back to the START of the
+# range leaves offset 199 alive, max_in_range + 1 and "walked past the bound" both give 200, and
+# this whole section passes against an implementation that ignores the overrun evidence -- which is
+# exactly what happened until the assertion below was added.
+want "   and the last offset actually delivered was 159, not 199"     159 \
+     "$(gzip -dc "$A/kafka/prod/$TOPIC"/dt=*/*.100-200.*.jsonl.gz 2>/dev/null | awk -F'\t' '{sub("Offset:","",$3); if ($3+0>m) m=$3+0} END{print m+0}')"
+
+# --- 19t-u. EVERY offset in the bounded range is gone, and the reader proves it by walking past the
+# bound. There is nothing to publish -- an empty gzip is not a corpus member -- but the range is
+# covered, so refusing it left the checkpoint still and every retry asked for the same dead range
+# again: a stall holding the proof of coverage (Codex round 3, P2).
+A="$T/gz7"; mkdir -p "$A/kafka/prod/_manifest"
+fixture "topicid AAAAAAAAAAAAAAAAAAAAAB" "0 0 100" "1 0 100"
+strict >/dev/null
+want "19t baseline checkpoint"                                        100 "$(ck 0)"
+fixture "topicid AAAAAAAAAAAAAAAAAAAAAB" "0 0 300 200" "1 0 300 200"
+OUT=$(strict UNTIL_TS=1786000000000 OE_COMPACTED_GAP=100); RC=$?
+want "19u a wholly dead range FAILS the run"                            1 "$RC"
+has  "   and says the reader walked past the bound having delivered nothing" "delivered NOTHING" "$OUT"
+want "   the checkpoint CLEARS the dead range"                        200 "$(ck 0)"
+has  "   the whole range is recorded as a discontinuity" '"discontinuity":"short read: 0 of 100 records in [100,200)"' "$(disc)"
+want "   and NO empty file is published"                                0 "$(files 100)"
+want "   and no .partial residue is left behind in the corpus either"   0 \
+     "$(ls "$A/kafka/prod/$TOPIC"/dt=*/*.partial 2>/dev/null | wc -l | tr -d ' ')"
+
+# --- 19n5-n7. EACH LAYER OF THE OFFSET CONTRACT IS THE ONLY THING THAT CATCHES ITS OWN CASE.
+# Mutation testing showed the shape, count and monotonicity checks all passing their own mutations
+# because the newest check subsumed the others on every input I had written. These three inputs are
+# each caught by exactly one layer, so removing any layer now fails here.
+A="$T/gz9"; mkdir -p "$A/kafka/prod/_manifest"
+fixture "topicid AAAAAAAAAAAAAAAAAAAAAD" "0 0 100" "1 0 100"
+strict >/dev/null
+
+# (a) an INCREASING offset-shaped key with an untabbed value: four fields. Monotonicity is satisfied;
+#     only NF >= 5 separates it from a real strict record.
+fixture "topicid AAAAAAAAAAAAAAAAAAAAAD" "0 0 200" "1 0 200"
+OUT=$(strict OE_KEY_OFFSET_SEQ=1 OE_NO_OFFSET_COLUMN=1); RC=$?
+want "19n5 an INCREASING offset-shaped key is refused on the field count (rc)" 1 "$RC"
+has  "   fails closed"                       "trustworthy per-record offsets" "$OUT"
+want "   checkpoint UNCHANGED"                                        100 "$(ck 0)"
+
+# (b) an INCREASING offset-shaped string inside the VALUE: a scan for the first offset-looking field
+#     finds it, so only matching field 3 POSITIONALLY refuses it.
+OUT=$(strict OE_PAYLOAD_OFFSET_SEQ=1 OE_NO_OFFSET_COLUMN=1); RC=$?
+want "19n6 an INCREASING offset-shaped string in the VALUE is refused (rc)" 1 "$RC"
+has  "   fails closed"                       "trustworthy per-record offsets" "$OUT"
+want "   checkpoint UNCHANGED"                                        100 "$(ck 0)"
+
+# (c) a record delivered BELOW the offset the consumer was told to start from, which a real one never
+#     does. Without the lower-bound check it is counted as in-range.
+OUT=$(strict OE_START_BELOW=1); RC=$?
+want "19n7 a record below the requested start offset is refused (rc)"   1 "$RC"
+has  "   fails closed"                       "trustworthy per-record offsets" "$OUT"
+want "   checkpoint UNCHANGED"                                        100 "$(ck 0)"
+
+# --- 19x. A capture MIXING valid rows with one malformed row, plus an overrun. The malformed row was
+# silently SKIPPED rather than refused -- awk pattern-action semantics -- so the census reported the
+# valid rows only, the clamp dropped the bad one, and the rescan AGREED because it uses the same
+# predicate. The checkpoint then advanced and the dropped bytes were reported as broker loss. A
+# console-rendered key or value containing a newline produces exactly such a row (Codex round 6, P2).
+A="$T/gz12"; mkdir -p "$A/kafka/prod/_manifest"
+fixture "topicid AAAAAAAAAAAAAAAAAAAAAG" "0 0 100" "1 0 100"
+strict >/dev/null
+want "19x baseline checkpoint"                                        100 "$(ck 0)"
+fixture "topicid AAAAAAAAAAAAAAAAAAAAAG" "0 0 300 200" "1 0 300 200"
+OUT=$(strict UNTIL_TS=1786000000000 OE_MALFORMED_ROW=5); RC=$?
+want "19x one malformed row rejects the WHOLE capture (rc)"             1 "$RC"
+has  "   fails closed"                       "trustworthy per-record offsets" "$OUT"
+want "   the checkpoint does NOT advance"                             100 "$(ck 0)"
+want "   and nothing is published"                                      0 "$(files 100)"
+
+# --- 19w. A mid-line sidecar met by the SHORT-READ branch, which is NOT the proven-empty branch and
+# must not behave like it: the capture is real and its published manifest line already carries
+# "short_read" and "missing_offsets", so the run keeps going and advances -- but it still must not
+# append onto the fragment, because that destroys every other range's declaration in the sidecar.
+A="$T/gz10"; mkdir -p "$A/kafka/prod/_manifest"
+fixture "topicid AAAAAAAAAAAAAAAAAAAAAE" "0 0 100" "1 0 100"
+strict >/dev/null
+printf '{"topic":"%s","partial":' "$TOPIC" > "$A/kafka/prod/_manifest/$TOPIC.discontinuities.jsonl"
+w_frag=$(wc -c < "$A/kafka/prod/_manifest/$TOPIC.discontinuities.jsonl" | tr -d ' ')
+fixture "topicid AAAAAAAAAAAAAAAAAAAAAE" "0 0 200" "1 0 200"
+OUT=$(strict OE_COMPACTED_GAP=40); RC=$?
+want "19w a short read onto a mid-line sidecar still FAILS the run (rc)" 1 "$RC"
+has  "   and says it did not append"      "does not end with a newline" "$OUT"
+want "   but the surviving records ARE published"                     120 "$(runs records)"
+want "   and the checkpoint DOES advance (the manifest carries the gap)" 200 "$(ck 0)"
+has  "   which the manifest line records"                 '"short_read":true' "$(mline)"
+want "   and the fragment was left untouched"             "$w_frag" \
+     "$(wc -c < "$A/kafka/prod/_manifest/$TOPIC.discontinuities.jsonl" | tr -d ' ')"
+
+# --- 19n8. DESCENDING DISTINCT offsets. A real single-partition capture never delivers them, and
+# the weaker "off == prev" form of the monotonicity check -- which still refuses a repeated-offset
+# masquerade -- accepts them, so this input is what makes "<=" load-bearing (Codex round 5).
+# ITS OWN fixture and destination: written first as a continuation of the block above, it then broke
+# the moment a case was inserted between them, because it was reading another case's checkpoint.
+A="$T/gz11"; mkdir -p "$A/kafka/prod/_manifest"
+fixture "topicid AAAAAAAAAAAAAAAAAAAAAF" "0 0 100" "1 0 100"
+strict >/dev/null
+want "19n8 baseline checkpoint"                                       100 "$(ck 0)"
+fixture "topicid AAAAAAAAAAAAAAAAAAAAAF" "0 0 200" "1 0 200"
+OUT=$(strict OE_OFFSETS_DESCEND=1); RC=$?
+want "19n8 descending DISTINCT offsets are refused (rc)"                1 "$RC"
+has  "   fails closed"                       "trustworthy per-record offsets" "$OUT"
+want "   checkpoint UNCHANGED"                                        100 "$(ck 0)"
+
+# --- 19v. ...and the dead range's EVIDENCE gates its checkpoint. With no file and no manifest line,
+# that discontinuity is the only record the range ever existed: advancing without it leaves nothing
+# anywhere to say the range was skipped, and the next run resumes past it and SUCCEEDS, so the hole
+# becomes invisible rather than merely unrecorded (Codex round 4, P2).
+A="$T/gz8"; mkdir -p "$A/kafka/prod/_manifest"
+fixture "topicid AAAAAAAAAAAAAAAAAAAAAC" "0 0 100" "1 0 100"
+strict >/dev/null
+want "19v baseline checkpoint"                                        100 "$(ck 0)"
+# The discontinuities file is unwritable; the offsets file is not.
+: > "$A/kafka/prod/_manifest/$TOPIC.discontinuities.jsonl"
+chmod 0444 "$A/kafka/prod/_manifest/$TOPIC.discontinuities.jsonl"
+fixture "topicid AAAAAAAAAAAAAAAAAAAAAC" "0 0 300 200" "1 0 300 200"
+OUT=$(strict UNTIL_TS=1786000000000 OE_COMPACTED_GAP=100); RC=$?
+chmod 0644 "$A/kafka/prod/_manifest/$TOPIC.discontinuities.jsonl"
+want "19v2 an unrecordable loss does NOT advance the checkpoint (rc)"   1 "$RC"
+has  "   and says why it refused"  "refusing to advance the checkpoint over a loss" "$OUT"
+want "   the checkpoint is UNCHANGED, so the range is asked for again" 100 "$(ck 0)"
+
+# ...and a sidecar that is WRITABLE but ends MID-LINE is refused too. The append would succeed and
+# concatenate onto the fragment, which makes the whole file unreadable -- so the range would have
+# neither a capture nor a readable declaration, AND every other range's declaration in that sidecar
+# would be lost with it (Codex round 5, P2). The unwritable case above does not cover this.
+printf '{"topic":"%s","partial":' "$TOPIC" > "$A/kafka/prod/_manifest/$TOPIC.discontinuities.jsonl"
+OUT=$(strict UNTIL_TS=1786000000000 OE_COMPACTED_GAP=100); RC=$?
+want "19v3 a sidecar ending MID-LINE does not advance the checkpoint (rc)" 1 "$RC"
+has  "   and names the repair"      "does not end with a newline" "$OUT"
+want "   checkpoint UNCHANGED"                                        100 "$(ck 0)"
+# NEWLINES, and the expectation is ZERO: the fragment has none, and an append would have added one.
+# (It was written as 1 first, which is what an APPENDED file looks like -- the assertion asserted the
+# bug. The suite caught it.)
+want "   and the partial line was NOT appended to (0 newlines = untouched)" 0 \
+     "$(wc -l < "$A/kafka/prod/_manifest/$TOPIC.discontinuities.jsonl" | tr -d ' ')"
+frag_bytes=$(printf '{"topic":"%s","partial":' "$TOPIC" | wc -c | tr -d ' ')
+want "   its bytes are unchanged"                        "$frag_bytes" \
+     "$(wc -c < "$A/kafka/prod/_manifest/$TOPIC.discontinuities.jsonl" | tr -d ' ')"
+
+# --- 19n. A capture with NO offsets to attest to fails CLOSED# --- 19n. A capture with NO offsets to attest to fails CLOSED: nothing published, nothing advanced.
+A="$T/gz4"; mkdir -p "$A/kafka/prod/_manifest"
+fixture "topicid XXXXXXXXXXXXXXXXXXXXXX" "0 0 100" "1 0 100"
+strict >/dev/null
+fixture "topicid XXXXXXXXXXXXXXXXXXXXXX" "0 0 200" "1 0 200"
+OUT=$(strict OE_COMPACTED_GAP=40 OE_NO_OFFSET_COLUMN=1); RC=$?
+want "19n a short capture carrying no Offset: column is refused (rc)"   1 "$RC"
+has  "   saying there is no proof of how far the reader got" "no readable Offset: field" "$OUT"
+want "   checkpoint UNCHANGED — the range is re-read next run"        100 "$(ck 0)"
+
+# ...and neither does a line that only LOOKS like it carries one. A key of "Offset:999" on a capture
+# with no offset column satisfies "field 3 is Offset:<digits>" exactly, so a scan AND a positional
+# match on shape alone both read 999 as every record's position -- which would yield a census of
+# nothing-in-range, a bogus proof of coverage, and a checkpoint advanced over live records. Only the
+# FIELD COUNT separates that four-field line from a real five-field strict record.
+# (A payload containing "Offset:" is the weaker form of the same thing and cannot fool a scan at
+# all, because no tab-delimited field begins with it -- which is why the first version of this
+# assertion passed against the parser it was written to condemn.)
+OUT=$(strict OE_COMPACTED_GAP=40 OE_NO_OFFSET_COLUMN=1 OE_KEY_OFFSET_TEXT=1); RC=$?
+want "19n2 a KEY shaped like an offset field is not the position (rc)" 1 "$RC"
+has  "   still fails closed"                 "no readable Offset: field" "$OUT"
+want "   and the checkpoint is still UNCHANGED"                       100 "$(ck 0)"
+OUT=$(strict OE_COMPACTED_GAP=40 OE_NO_OFFSET_COLUMN=1 OE_PAYLOAD_OFFSET_TEXT=1); RC=$?
+want "19n3 and "'"'"Offset:"'"'" inside the record VALUE is not either (rc)" 1 "$RC"
+want "   checkpoint UNCHANGED"                                        100 "$(ck 0)"
+
+# ...and the one that beat the field count: an offset-shaped KEY with a TAB inside the value, so the
+# line reaches five fields and satisfies every shape check while carrying no real offset. It reports
+# the SAME number for every record, which a real single-partition capture never does -- that, and
+# never delivering below the offset the consumer was told to start from, is what separates them.
+# Measured before the check existed: the census answered "0 -1 2 0", i.e. nothing in range with
+# coverage PROVEN, and the checkpoint advanced over live records (Codex round 4, P2).
+OUT=$(strict OE_COMPACTED_GAP=40 OE_NO_OFFSET_COLUMN=1 OE_KEY_OFFSET_TEXT=1 OE_TABBED_VALUE=1); RC=$?
+want "19n4 a five-field masquerade (offset-shaped key + tabbed value) is refused (rc)" 1 "$RC"
+has  "   because the offsets do not strictly increase" "trustworthy per-record offsets" "$OUT"
+want "   and the checkpoint does NOT advance over live records"       100 "$(ck 0)"
+want "   nothing was published for it"                                  0 "$(files 100)"
+
+# A NON-strict topic is untouched: a short read there is a quiet day, as it always was.
+A="$T/gz2"; mkdir -p "$A/kafka/prod/_manifest"
+fixture "topicid TTTTTTTTTTTTTTTTTTTTTT" "0 0 100" "1 0 100"
+run >/dev/null
+fixture "topicid TTTTTTTTTTTTTTTTTTTTTT" "0 0 200" "1 0 200"
+OUT=$(run OE_COMPACTED_GAP=40); RC=$?
+want "19h a NON-strict short read is still a quiet day (rc)"            0 "$RC"
+want "   it archives what it got"                                     120 "$(runs records)"
+want "   and writes no discontinuity"                                   0 "$([ -f "$A/kafka/prod/_manifest/$TOPIC.discontinuities.jsonl" ] && echo 1 || echo 0)"
+
+# --- 19y-19z2. FRAMING: the layout checks validate LINES, and only the reader can say how many
+# RECORDS those lines are. 19y is the case Codex round 7 reproduced and the reason the reader's own
+# count is read at all; 19z and 19z2 are the two ways that evidence can fail to arrive.
+#
+# This is the one check in the strict path that does not read the payload, which is what makes it
+# the answer: a value carrying a raw newline prints as two lines, both of which can satisfy every
+# field check, the field count AND monotonicity, so the text cannot settle it. The reader counts
+# what it handed over, and that number does not come from the payload.
+A="$T/gz13"; mkdir -p "$A/kafka/prod/_manifest"
+fixture "topicid AAAAAAAAAAAAAAAAAAAAAH" "0 0 100" "1 0 100"
+strict >/dev/null
+want "19y baseline checkpoint"                                        100 "$(ck 0)"
+fixture "topicid AAAAAAAAAAAAAAAAAAAAAH" "0 0 200" "1 0 200"
+OUT=$(strict OE_NEWLINE_IN_VALUE=5); RC=$?
+want "19y a value with a NEWLINE in it refuses the capture (rc)"        1 "$RC"
+has  "   and says the lines are not the records" "but the reader" "$OUT"
+want "   the checkpoint does NOT advance over it"                     100 "$(ck 0)"
+want "   and nothing is published"                                      0 "$(files 100)"
+want "   and no discontinuity is claimed: nothing has been PROVED gone" 0 \
+     "$([ -f "$A/kafka/prod/_manifest/$TOPIC.discontinuities.jsonl" ] && echo 1 || echo 0)"
+
+# A reader that exited 0 reported a count. Its absence is unexplained, so a strict range refuses.
+A="$T/gz14"; mkdir -p "$A/kafka/prod/_manifest"
+fixture "topicid AAAAAAAAAAAAAAAAAAAAAI" "0 0 100" "1 0 100"
+OUT=$(strict OE_NO_RECORD_COUNT=1); RC=$?
+want "19z a reader that reports no count FAILS the run (rc)"            1 "$RC"
+has  "   and says so rather than assuming the lines are the records" "reported no record(s)" "$OUT"
+want "   publishing nothing"                                            0 "$(files 0)"
+
+# The count the OTHER way: fewer reported than delivered. The archiver filters any stdout line
+# beginning "Processed a total of" out of the capture, so a record whose VALUE begins a line that
+# way is dropped from the file while the reader still counts it. That silently shortened a capture;
+# now it refuses one.
+A="$T/gz15"; mkdir -p "$A/kafka/prod/_manifest"
+fixture "topicid AAAAAAAAAAAAAAAAAAAAAJ" "0 0 100" "1 0 100"
+strict >/dev/null
+want "19z2 baseline checkpoint"                                       100 "$(ck 0)"
+fixture "topicid AAAAAAAAAAAAAAAAAAAAAJ" "0 0 200" "1 0 200"
+OUT=$(strict OE_RECORD_COUNT_DELTA=1); RC=$?
+want "19z2 a count that disagrees by one refuses the capture (rc)"      1 "$RC"
+want "   the checkpoint does NOT advance"                             100 "$(ck 0)"
+
+# 19z3. THE FILTER'S OWN HOLE, with the real payload rather than a contrived count. A record whose
+# value is "v<newline>Processed a total of payload-data" prints as two lines; the archiver used to
+# pipe every console capture through `grep -av '^Processed a total of'`, which deleted the second.
+# One valid row, one reported record: the framing check PASSED and a record with a TRUNCATED value
+# was published and checkpointed (census "1 100 0 0 1", reproduced). That filter never matched any
+# reader's own output -- all four report on stderr -- so the only line it could ever remove was a
+# record (Codex round 8). With it gone the LAYOUT refuses the pair, before the count is consulted:
+# the refusal below is the layout's, which is why this case and 19z2 are not the same test.
+A="$T/gz16"; mkdir -p "$A/kafka/prod/_manifest"
+fixture "topicid AAAAAAAAAAAAAAAAAAAAAK" "0 0 100" "1 0 100"
+strict >/dev/null
+want "19z3 baseline checkpoint"                                       100 "$(ck 0)"
+fixture "topicid AAAAAAAAAAAAAAAAAAAAAK" "0 0 200" "1 0 200"
+OUT=$(strict OE_PAYLOAD_COUNT_LINE=5); RC=$?
+want "19z3 a value whose continuation LOOKS like the count line is refused (rc)" 1 "$RC"
+want "   the checkpoint does NOT advance over the truncated record"   100 "$(ck 0)"
+want "   and nothing is published"                                      0 "$(files 100)"
+
+# 19z4. THE COUNT LINE DOES NOT ARRIVE ALONE. Kafka's CLI writes its SLF4J banner and its client
+# logs to the same stderr the count is printed on, and those lines carry numbers of their own --
+# correlation ids, client ids, offsets in a FetchPosition. So the parser has to identify the count
+# by its SHAPE, not by containing a number; it is anchored to the exact line 4.3.0 prints.
+#
+# This case exists because that anchoring was the one thing a 45-mutation run could not kill:
+# relaxing the pattern to "any line with a digit in it" changed nothing, because the stand-in's
+# stderr held exactly one line. It is not a cosmetic difference. awk's later rule wins, so a
+# relaxed parser reads its number from the LAST chatty line -- a non-numeric field, which converts
+# to 0 -- and the framing check then refuses a capture that is in fact whole, on every run of a
+# topic whose broker is logging. The failure of a weaker parser here is a REFUSAL, not silent loss,
+# which is the right direction; it is still an hourly failing partition for no reason.
+A="$T/gz17"; mkdir -p "$A/kafka/prod/_manifest"
+fixture "topicid AAAAAAAAAAAAAAAAAAAAAL" "0 0 100" "1 0 100"
+strict >/dev/null
+want "19z4 baseline checkpoint"                                       100 "$(ck 0)"
+fixture "topicid AAAAAAAAAAAAAAAAAAAAAL" "0 0 200" "1 0 200"
+OUT=$(strict OE_STDERR_NOISE=1); RC=$?
+want "19z4 broker chatter on the count's own stream does not refuse the capture (rc)" 0 "$RC"
+want "   the checkpoint advances over the whole range"                200 "$(ck 0)"
+want "   and the framing check never fires"                             0 \
+     "$(printf '%s\n' "$OUT" | grep -c 'but the reader')"
+want "   and BOTH partitions publish their [100,200)"                    2 "$(files 100)"
+
+# ================= 20. the console DISCOVERY answer must be well formed =========================
+# Until 2026-11-13 the end-offset lookup discarded its exit status and stderr, and the only test
+# applied to its stdout was "is it empty". So an answer that was non-empty but unparseable — a
+# warning on stdout, a line for another topic, a half-written reply — passed, and the per-partition
+# loop below it skipped every row that had no partition and offset. Nothing was captured, nothing
+# was counted as failed, and the run finished green.
+A="$T/g"; mkdir -p "$A/kafka/prod/_manifest"
+fixture "topicid UUUUUUUUUUUUUUUUUUUUUU" "0 0 100" "1 0 100"
+run >/dev/null
+want "20a baseline checkpoint before the garbage runs"                100 "$(ck 0)"
+
+OUT=$(run OE_ENDS_GARBAGE="WARNING: something chatty on stdout"); RC=$?
+want "20b a WARNING on stdout is not a topic discovery (rc)"            1 "$RC"
+has  "   and it says the discovery failed, naming the output" "FAIL $TOPIC: the end-offset discovery did not succeed" "$OUT"
+has  "   quoting what came back, with the line number" "unexpected output: line 1: [WARNING: something chatty on stdout]" "$OUT"
+want "   nothing archived"                                              0 "$(runs records)"
+want "   and the checkpoint is UNCHANGED"                             100 "$(ck 0)"
+
+# A LEADING BLANK LINE. The validator printed the first offending row and exited; command
+# substitution strips a trailing newline, so an EMPTY offending row produced an empty marker, the
+# emptiness test read that as "nothing wrong", and the whole answer passed — the warning on line 2
+# never inspected, both rows skipped by the partition loop, the topic green with nothing captured.
+OUT=$(run OE_ENDS_GARBAGE="
+WARNING: partial discovery"); RC=$?
+want "20b2 a BLANK first line does not smuggle the rest through (rc)"   1 "$RC"
+has  "   and the marker names the line it rejected" "line 1: []" "$OUT"
+want "   nothing archived"                                              0 "$(runs records)"
+want "   checkpoint unchanged"                                        100 "$(ck 0)"
+
+OUT=$(run OE_ENDS_GARBAGE="some.other.topic:0:999"); RC=$?
+want "20c offsets for ANOTHER topic are refused too (rc)"               1 "$RC"
+has  "   because they would be read as this topic's partitions" "unexpected output: line 1: [some.other.topic:0:999]" "$OUT"
+want "   checkpoint still unchanged"                                  100 "$(ck 0)"
+
+OUT=$(run OE_ENDS_GARBAGE="$TOPIC:0:150" OE_ENDS_GARBAGE_RC=1); RC=$?
+want "20d well-formed offsets at a NON-ZERO exit are refused (rc)"      1 "$RC"
+has  "   the status is part of the answer"            "exit 1 with output on stdout" "$OUT"
+
+# A HEALTHY answer is not refused: the archiver must not start rejecting working brokers. The
+# override here is the REAL answer, re-stated — the fixture ends where it claims, so the consumer
+# downstream agrees with it and the only thing under test is the new validation.
+fixture "topicid UUUUUUUUUUUUUUUUUUUUUU" "0 0 150" "1 0 150"
+OUT=$(run OE_ENDS_GARBAGE="$TOPIC:0:150
+$TOPIC:1:150"); RC=$?
+want "20e a well-formed multi-line answer is accepted (rc)"             0 "$RC"
+want "   and it archived the new records"                             100 "$(runs records)"
+
+# AND THE ABSENT TOPIC IS UNCHANGED, deliberately: kafka-get-offsets answers for a topic the broker
+# does not have with exit 1 and EMPTY stdout, which is the same shape an unreachable broker gives.
+# Reading a non-zero status alone as failure would turn every legitimately absent non-strict topic
+# on every job into a failure, so only a NON-EMPTY answer is judged.
+A="$T/g2"; mkdir -p "$A/kafka/prod/_manifest"
+fixture "topicid VVVVVVVVVVVVVVVVVVVVVV"      # no partition lines at all => the recorded ends-absent answer
+OUT=$(run); RC=$?
+want "20f an ABSENT non-strict topic is still a quiet SKIP (rc)"        0 "$RC"
+has  "   and says so"                        "SKIP $TOPIC (absent or unreadable)" "$OUT"
+want "   counted as absent, not failed"                                 1 "$(runs absent)"
+
+OUT=$(strict); RC=$?
+want "20g an ABSENT STRICT topic still FAILS (rc)"                      1 "$RC"
+has  "   and says the corpus cannot be completed"   "STRICT topic is absent or unreadable" "$OUT"
 
 echo
 [ "$FAILED" -eq 0 ] && { echo "test-archive-reset: ALL PASS"; exit 0; }

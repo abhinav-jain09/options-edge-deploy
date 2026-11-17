@@ -199,6 +199,64 @@ class WrapperBehaviour(unittest.TestCase):
         _, archiver, _, _, _ = self.run_wrapper()
         self.assertIn("ON_LOCK_BUSY=fail", archiver)
 
+    @staticmethod
+    def forwarded(archiver: str) -> dict[str, str]:
+        """The stub's sink parsed into {name: value}, ANCHORED on each line.
+
+        Never use `assertIn("TOPICS=...")` on this text. OE_STRICT_TOPICS ENDS WITH the characters
+        "TOPICS", so an unanchored needle for TOPICS matches the OE_STRICT_TOPICS line instead and
+        the assertion passes without ever having looked at TOPICS. That is not hypothetical: it is
+        how the first version of the assertion below survived the very mutation it was written to
+        kill, and it is the same shape as the bare-grep hazard the broker-side guard exists for
+        (min.compaction.lag.ms vs log.cleaner.min.compaction.lag.ms)."""
+        out = {}
+        for line in archiver.splitlines():
+            name, _, value = line.partition("=")
+            out[name] = value
+        return out
+
+    def test_EVERY_declared_topic_reaches_the_archiver_unchanged(self):
+        """THE MUTATION THIS MODULE USED TO SURVIVE. Change the wrapper's final invocation to
+        TOPICS="${TOPICS%% *}" -- archive only the first topic, silently drop the rest -- and every
+        other assertion here still passed: the declaration checks read oe-topics.env, the probe
+        check counts invocations, and every forwarding assertion ran against a ONE-TOPIC fixture,
+        where "the first word" and "the whole set" are the same string.
+
+        So this drives the wrapper with the REAL declared set and asserts the archiver is handed it
+        WHOLE, in both variables that carry it. Taken from oe-topics.env rather than from a literal
+        here, so it keeps testing the shipped set if the corpus grows again."""
+        declared = env_value("GAMMA_ZONE_CORPUS")
+        self.assertGreater(len(declared.split()), 1,
+                           "this assertion is vacuous against a single-topic set")
+        proc, archiver, _, _, _ = self.run_wrapper(topics_env=declared)
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        # The WHOLE value of each variable, compared by EQUALITY against a parsed sink. Membership
+        # would accept "a b" where "b a" was declared and would accept an extra topic bolted on;
+        # a substring search would match the wrong variable outright (see forwarded()).
+        got = self.forwarded(archiver)
+        self.assertEqual(declared, got.get("TOPICS"),
+                         "the archiver was not handed the declared set whole")
+        self.assertEqual(declared, got.get("OE_STRICT_TOPICS"),
+                         "the archiver was not told the whole set is evidence")
+
+    def test_the_whole_set_is_STRICT_not_merely_its_first_member(self):
+        """OE_STRICT_TOPICS is what makes an absent or unreadable topic a FAILURE rather than a
+        quiet SKIP. Narrowed to the first member, the profile topic could vanish from the broker and
+        the hourly run would still exit 0 having captured none of it -- the exact silence this
+        wrapper exists to break, reintroduced one variable along from TOPICS."""
+        declared = env_value("GAMMA_ZONE_CORPUS").split()
+        _, archiver, _, _, _ = self.run_wrapper(topics_env=" ".join(declared))
+        got = self.forwarded(archiver)
+        self.assertEqual(declared, (got.get("OE_STRICT_TOPICS") or "").split(), archiver)
+
+    def test_the_sink_parser_itself_cannot_read_the_WRONG_variable(self):
+        """Guarding the guard. OE_STRICT_TOPICS ends with "TOPICS", so the two assertions above are
+        only worth anything if TOPICS is read as TOPICS. This pins that directly: a sink in which
+        the two variables DISAGREE must be read as disagreeing."""
+        got = self.forwarded("TOPICS=a\nOE_STRICT_TOPICS=a b\n")
+        self.assertEqual("a", got["TOPICS"])
+        self.assertEqual("a b", got["OE_STRICT_TOPICS"])
+
     def test_the_corpus_is_STRICT_so_an_absent_topic_is_not_a_quiet_day(self):
         """For an ordinary topic the archiver treats absent-or-unreadable as a quiet day: SKIP,
         absent++, exit 0. For THIS topic that is an hourly green run capturing none of the corpus.

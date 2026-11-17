@@ -5,7 +5,9 @@
 #   NO BROKER-WIDE CHANGE. The shapes are the ones scripts/kafka/topics.env declares (one partition each, exact):
 #   options.spx.gamma-zone.current  1 partition, compact, retention.ms EXACTLY -1, retention.bytes EXACTLY -1 (pure compact)  the newest measurement per session
 #   options.spx.gamma-zone.log      1 partition, delete,  retention.ms EXACTLY -1, retention.bytes EXACTLY 1073741824 (1 GiB)  EVERY emission, in order: the corpus
-#   options.spx.gamma-zone.profile  1 partition, compact, retention.ms EXACTLY -1, retention.bytes EXACTLY -1 (pure compact)  the session's WHOLE volume profile, so a reader can
+#   options.spx.gamma-zone.profile  1 partition, compact, retention.ms EXACTLY -1, retention.bytes EXACTLY -1 (pure compact), min.compaction.lag.ms EXACTLY the
+#       value topic-shape.lib.sh declares (7 days) - the window the hourly archive needs, because the cleaner spares only the ACTIVE segment and a rolled one is fair
+#       game between two runs. The session's WHOLE volume profile, so a reader can
 #       answer "how many contracts traded between these two strikes" -- which the measurement cannot: it carries the ratio curve for +/-30 points and a level COUNT. CURRENT's shape
 #       and deliberately not the log's: one record per session, not one per folded bar, in a topic with no byte cap to need.
 #
@@ -57,6 +59,15 @@ HERE="$(dirname "${BASH_SOURCE[0]}")"
 source "$HERE/topic-config-parse.sh"
 # shellcheck source=/dev/null
 source "$HERE/ensure-topic-contract.lib.sh"
+# For topic_min_compaction_lag_ms() ONLY, and sourced rather than copied: the lag is a number that
+# the fleet pass (apply-topics.sh -> create_topic / alter_topic_config) and this barrier must agree
+# on exactly, and a second copy here is a barrier that can pass while the shipped shape is wrong --
+# the failure topic-config-parse.sh's own header was written about. Nothing in that library runs at
+# source time; it only defines functions.
+# shellcheck source=/dev/null
+source "$HERE/topic-shape.lib.sh"
+PROFILE_LAG_MS="$(topic_min_compaction_lag_ms "$PROFILE")"
+[ -n "$PROFILE_LAG_MS" ] || { echo "FAIL: scripts/kafka/topic-shape.lib.sh declares no min.compaction.lag.ms for '$PROFILE' - the hourly archive would have no window and this barrier would pass vacuously."; exit 1; }
 
 echo "=== ensure-gamma-zone-topics on $KAFKA_BOOTSTRAP_SERVERS ==="
 if ! LIST=$(kt --list 2>&1); then
@@ -82,6 +93,65 @@ check_retention_bytes() { # <topic> <exact retention.bytes>
     return 1
   fi
   echo "ok: '$topic' — retention.bytes=$bytes"
+}
+
+# min.compaction.lag.ms on the PROFILE topic — "at least", set when short, then READ BACK.
+#
+# WHY THIS TOPIC NEEDS IT. The profile is PURE COMPACT keyed <sessionDate>|<symbol>|<timeframe> and
+# the service re-emits the whole profile under the same key about once a minute, so the cleaner's
+# job is to throw away every intraday snapshot and keep only the last — which is exactly the data
+# the hourly dev-Mac archive exists to carry out (scripts/ops/archive/oe-archive-gamma-zone.sh).
+# The cleaner never touches the ACTIVE segment, but everything already rolled is fair game, so an
+# hourly archive alone does NOT protect it: the 20:00 run checkpoints, the segment rolls at 20:40,
+# and the cleaner removes the superseded snapshots before the 21:00 run looks. The value and the
+# arithmetic behind it live in topic-shape.lib.sh beside every other declared shape.
+#
+# ALTERED HERE, unlike retention.bytes above, which this barrier only ever verifies. The topic
+# already exists on dev, so a verify-only barrier would refuse for ever while nothing ever set it.
+#
+# RECONCILED EXACTLY, not as a floor. An earlier version compared ">=" and left a wider value
+# alone, which read as kindness to an operator who had widened the window during an archive
+# outage — but it was a promise this repo cannot keep: apply-topics.sh's alter_topic_config()
+# re-applies the declared config set on every run, so the next ordinary deploy narrowed it back
+# anyway, and the only thing the ">=" bought was an operator believing otherwise. Exact, like every
+# other declared shape, and widening means widening topic_min_compaction_lag_ms(). (Codex round 1.)
+#
+# THE PARSE IS THE POINT. `kafka-configs --describe --all` prints the effective value and its
+# SYNONYMS on one line:
+#   min.compaction.lag.ms=0 sensitive=false synonyms={DEFAULT_CONFIG:log.cleaner.min.compaction.lag.ms=0}
+# A bare `grep -o 'name='` counts TWO hits for ONE value, and the second is log.cleaner.min.compaction.lag.ms
+# — a DIFFERENT broker-level key that merely ends with this one's name. That class of parse has
+# already produced a false refusal in this repo, which is why extract()'s boundary exists and why
+# the guard reads the value exactly the way the alter above writes it.
+read_min_compaction_lag() { # <topic> -> LAG_VALUE
+  local topic="$1" cfg v
+  if ! cfg=$(kc --entity-type topics --entity-name "$topic" --describe --all 2>&1); then
+    echo "FAIL: could not read the config of '$topic':"; printf '%s\n' "$cfg"; return 1
+  fi
+  v=$(extract 'min\.compaction\.lag\.ms' "$cfg")
+  case "${v:-}" in
+    ''|*[!0-9]*) echo "FAIL: '$topic' reports min.compaction.lag.ms='${v:-<unreadable>}' — refusing to guess at the window the archive has."; return 1 ;;
+  esac
+  LAG_VALUE="$v"
+}
+
+ensure_min_compaction_lag() { # <topic> <exact ms>
+  local topic="$1" want="$2" out
+  LAG_VALUE=""
+  read_min_compaction_lag "$topic" || return 1
+  if [ "$LAG_VALUE" != "$want" ]; then
+    echo "setting min.compaction.lag.ms=$want on '$topic' (was $LAG_VALUE): the hourly archive is the only durable copy of the per-point volume"
+    if ! out=$(kc --entity-type topics --entity-name "$topic" --alter --add-config "min.compaction.lag.ms=$want" 2>&1); then
+      echo "FAIL: could not set min.compaction.lag.ms on '$topic':"; printf '%s\n' "$out"; return 1
+    fi
+    # AN ACCEPTED ALTER IS NOT AN APPLIED ONE. Read the effective value back from the broker.
+    read_min_compaction_lag "$topic" || return 1
+  fi
+  if [ "$LAG_VALUE" != "$want" ]; then
+    echo "FAIL: '$topic' has min.compaction.lag.ms=$LAG_VALUE, expected exactly $want (the declared window in scripts/kafka/topic-shape.lib.sh) — the cleaner may still remove intraday snapshots between two archive runs."
+    return 1
+  fi
+  echo "ok: '$topic' — min.compaction.lag.ms=$LAG_VALUE (read back from the broker)"
 }
 
 rc=0
@@ -123,9 +193,10 @@ fi
 # answers "how many contracts traded between these two strikes" costs one message a session rather than one per folded bar. Deliberately NOT the corpus log's shape -- that log
 # is capped in bytes and its cap is what gives the record about 87 sessions.
 if ! grep -qxF "$PROFILE" <<<"$LIST"; then
-  echo "creating '$PROFILE' (1 partition, RF=$RF, cleanup.policy=compact, retention.ms=-1, retention.bytes=-1)"
+  echo "creating '$PROFILE' (1 partition, RF=$RF, cleanup.policy=compact, retention.ms=-1, retention.bytes=-1, min.compaction.lag.ms=$PROFILE_LAG_MS)"
   if ! out=$(kt --create --if-not-exists --topic "$PROFILE" --partitions 1 --replication-factor "$RF" \
                 --config cleanup.policy=compact --config retention.ms=-1 --config retention.bytes=-1 \
+                --config min.compaction.lag.ms="$PROFILE_LAG_MS" \
                 --config max.message.bytes=1048576 --config min.insync.replicas="$MIN_ISR" 2>&1); then
     echo "FAIL: could not create '$PROFILE':"; printf '%s\n' "$out"; rc=1
   else
@@ -133,8 +204,14 @@ if ! grep -qxF "$PROFILE" <<<"$LIST"; then
   fi
 fi
 if [ "$rc" -eq 0 ]; then
-  ensure_topic "$PROFILE" compact "exact:-1" 1048576 no || rc=1
-  check_retention_bytes "$PROFILE" -1 || rc=1
+  prc=0
+  ensure_topic "$PROFILE" compact "exact:-1" 1048576 no || prc=1
+  check_retention_bytes "$PROFILE" -1 || prc=1
+  # ONLY on a topic whose declared shape is already right. The lag is the one thing this barrier
+  # alters, and altering half of a topic it is in the act of REFUSING would be repairing something
+  # it has just called wrong — and would leave the operator reading an "ok" line under a FAIL.
+  [ "$prc" -eq 0 ] && { ensure_min_compaction_lag "$PROFILE" "$PROFILE_LAG_MS" || prc=1; }
+  [ "$prc" -eq 0 ] || rc=1
 fi
 
 if [ "$rc" -ne 0 ]; then
