@@ -59,7 +59,7 @@ spec:
       containers:
         - env:
             - name: DATABENTO_ES_TRADES_REPLAY_START_MINUTES
-              value: "60"
+              value: "1440"
             - name: DATABENTO_PUBLISH_INTERVAL_MS
               value: "5000"
             - name: DATABENTO_SPOT_SOURCE
