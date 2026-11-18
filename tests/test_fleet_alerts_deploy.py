@@ -25,7 +25,8 @@ WATCH = REPO / "scripts/watch"
 PROD_ID = "offhours-discord-webhook"
 DEV_ID = "offhours-discord-webhook-dev"
 NEW_CHECKS = {"crash-loop": "paging", "kafka-lag": "paging", "partition-balance": "observation-only",
-              "readiness": "paging", "dlq-growth": "paging", "oom": "paging", "host-load": "paging"}
+              "readiness": "paging", "dlq-growth": "paging", "oom": "paging", "host-load": "paging",
+              "topic-freshness": "paging", "kafka-broker": "paging"}
 
 
 class Routing(unittest.TestCase):
@@ -82,7 +83,7 @@ class Routing(unittest.TestCase):
 
     def test_partition_balance_is_the_only_observation_only_check(self):
         paging = [c for c, m in NEW_CHECKS.items() if m == "paging"]
-        self.assertEqual({"crash-loop", "kafka-lag", "readiness", "dlq-growth", "oom", "host-load"}, set(paging),
+        self.assertEqual({"crash-loop", "kafka-lag", "readiness", "dlq-growth", "oom", "host-load", "topic-freshness", "kafka-broker"}, set(paging),
                          "every check pages from day one except partition balance, which waits for §5a")
 
     def test_readiness_and_dead_letters_no_longer_run_unwrapped_in_the_jenkinsfile(self):
@@ -151,7 +152,9 @@ class Routing(unittest.TestCase):
                        "readiness": "readiness-run.sh",
                        "dlq-growth": "stateful-check-run.sh dlq-growth.py",
                        "oom": "oom-run.sh",
-                       "host-load": "host-load-run.sh"}[check]
+                       "host-load": "host-load-run.sh",
+                       "topic-freshness": "stateful-check-run.sh topic-freshness.py",
+                       "kafka-broker": "stateful-check-run.sh kafka-broker.py"}[check]
             self.assertIn(wrapped, body)
             self.assertLess(body.index("fleet-alert-deliver.sh"), body.index(wrapped),
                             "the deliverer must WRAP the check script, not follow it")
@@ -195,7 +198,7 @@ class Routing(unittest.TestCase):
             compile(p.read_text(), str(p), "exec")
 
     def test_every_new_check_has_a_negative_control_suite(self):
-        for name in ("crash-loop", "kafka-lag", "partition-balance", "fleet-alert", "oom", "host-load", "run-wrappers"):
+        for name in ("crash-loop", "kafka-lag", "partition-balance", "fleet-alert", "oom", "host-load", "run-wrappers", "topic-freshness", "kafka-broker"):
             self.assertTrue((WATCH / ("%s-test.py" % name)).is_file(),
                             "%s has no negative controls" % name)
         self.assertTrue((WATCH / "fleet-alert-deliver-test.sh").is_file(),
@@ -204,7 +207,8 @@ class Routing(unittest.TestCase):
     def _stage_for(self, check):
         names = {"crash-loop": "Crash loops", "kafka-lag": "Consumer lag",
                  "partition-balance": "Partition balance", "readiness": "Readiness", "dlq-growth": "Dead letters",
-                 "oom": "Memory kills", "host-load": "Host load"}
+                 "oom": "Memory kills", "host-load": "Host load",
+                 "topic-freshness": "Topic freshness", "kafka-broker": "Kafka broker"}
         label = names[check]
         start = self.jf.index("stage('%s')" % label)
         nxt = self.jf.find("    stage('", start + 10)
