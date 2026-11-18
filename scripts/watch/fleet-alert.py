@@ -50,6 +50,7 @@ import sys
 RANK = {
     "CRASHLOOP": (5, "🔴"),
     "BRIDGE_NOT_READY": (5, "🔴"),
+    "TOPIC_STALE": (5, "🔴"),
     "IMAGE_PULL": (5, "🔴"),
     "RESTARTS": (4, "🟠"),
     "NO_CONSUMER": (4, "🟠"),

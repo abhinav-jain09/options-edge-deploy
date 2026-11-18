@@ -14,6 +14,7 @@
 //      market-hours traffic and its exemption list reviewed; see FLEET-ALERT-DISCORD-REQUIREMENT R4i.
 //   6. MEMORY KILLS: a container OOMKilled, or a pod evicted, inside --window (scripts/watch/oom.py). ONE kill is reported - crash-loop.py needs three restarts,
 //      so a service killed for memory once or twice an hour never reached it.
+//   8. TOPIC FRESHNESS (dev): spot, ES price, ES trades and the overnight estimate bars each newer than 10 minutes while the ES session is open (scripts/watch/topic-freshness.py).
 //   7. HOST LOAD: a node NotReady, under Memory/Disk/PID pressure, or at >= 85% memory / >= 90% cpu where the cluster reports usage (scripts/watch/host-load.py).
 //      Needs read access to nodes: k8s/security/jenkins-fleet-watch-node-reader.yaml, applied once per cluster by an admin. Until then it pages "could not check".
 // Checks 1-4 and 6-7 DELIVER TO DISCORD (5 only once calibrated), routed per environment: production to the prod group, dev AND es4 to the dev group (es4 is not production).
@@ -145,6 +146,24 @@ pipeline {
             }
           }
           if (bad) { error("consumer-lag check failed: ${bad.join(', ')}") }
+        }
+        }
+      }
+    }
+    stage('Topic freshness') {
+      // A producer that is Running and Ready but publishes nothing (11-18: the feed's Kafka producer wedged, spot/ES silent for 4 h 53 min, the estimate bars and market structure built
+      // from them had a hole) is invisible to every check above. Dev only: the watched topics are the dev ones (scripts/watch/topic-freshness.py), gated to the open ES session.
+      steps {
+        catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
+        script {
+          def bad = []
+          watchedProfiles(params.ENVS, PROFILES).findAll { it == 'dev' }.each { profile ->
+            withCredentials([string(credentialsId: webhookFor(profile), variable: 'DISCORD_WEBHOOK_URL')]) {
+              def rc = sh(returnStatus: true, script: "FLEET_ENV=dev FLEET_CHECK=topic-freshness FLEET_MODE=paging bash scripts/watch/fleet-alert-deliver.sh bash scripts/watch/stateful-check-run.sh topic-freshness.py")
+              if (rc != 0) { bad << "dev (rc=${rc})" }
+            }
+          }
+          if (bad) { error("topic-freshness check failed: ${bad.join(', ')}") }
         }
         }
       }
