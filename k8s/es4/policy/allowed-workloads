@@ -26,6 +26,7 @@ strike-intelligence-service
 tape-zones-service
 volume-pace-databento-service
 rithmic-depth-bridge
+databento-rithmic-compat
 rithmic-depth-mirror-dev
 rithmic-depth-mirror-production
 rithmic-mbo-mirror-dev

@@ -26,3 +26,4 @@ strike-intelligence
 tape-zones
 volume-pace
 rithmic-depth-bridge
+databento-rithmic-compat
