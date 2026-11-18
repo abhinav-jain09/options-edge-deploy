@@ -44,8 +44,20 @@ spec:
           env:
             - name: DATABENTO_FEED_LIVENESS_STALE_SECONDS
               value: "15"
+            # 300, not the code default 90: a start at market open takes 100-165 s (the feed replays
+            # the live OPRA option definitions before its first live record), and /health/live turns
+            # 503 the moment this window is over with no record yet. At 90 the liveness probe killed
+            # the pod 3 times in a row at 15:35 CET on 2026-11-18; the pod that survived did so by
+            # luck (97 s to the seed, first record ~100 s). No startupProbe can do this job: the
+            # metrics server listens at +0 s and /health/live is 200 inside the grace, so a startup
+            # probe would pass on its first try and hand over to liveness at once. The grace IS the
+            # start-up budget. It ends at the first live record: from then on the 15 s staleness
+            # check above and the in-process queue wedge detector (exit 71 after 300 s of queued but
+            # undelivered messages, PR 205) are exactly as strict as before. What 300 delays is only
+            # the restart of a feed that NEVER publishes a first record (90 s -> 300 s). Same value
+            # as the vix feed's own default.
             - name: DATABENTO_FEED_LIVENESS_STARTUP_GRACE_SECONDS
-              value: "90"
+              value: "300"
             # Feed reads SPX ONLY — no SPY (or any other) extra underlying. Set explicitly here (empty
             # = single-symbol; feed config._parse_extra_instruments treats blank as no extras) so it is
             # the RELIABLE, deploy-durable knob: this Deployment env OVERRIDES the configmap's

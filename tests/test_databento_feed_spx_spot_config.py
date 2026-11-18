@@ -138,5 +138,64 @@ class CloseBasisDatabaseAndMode(unittest.TestCase):
         self.assertNotIn("DATABENTO_SPOT_SOURCE", env)
 
 
+# Measured on dev 2026-11-18: a start at market open takes 100-165 s before the first live record (the feed replays
+# the live OPRA option definitions first). The liveness probe kills the pod when /health/live is 503, which it is
+# once the startup grace is over with no record yet; at 90 s it killed the pod 3 times at 15:35 CET.
+WORST_MEASURED_START_SECONDS = 165
+# The first-record grace must cover the worst start with margin, but is NOT allowed to grow into the old
+# "widen it until it stops restarting" remedy (DBP-R12): above this a feed that never publishes sits unrestarted.
+STARTUP_GRACE_MARGIN = 1.5
+STARTUP_GRACE_CEILING_SECONDS = 600
+
+
+def startup_grace_problem(grace: float, worst_start: float = WORST_MEASURED_START_SECONDS) -> str | None:
+    if grace < worst_start * STARTUP_GRACE_MARGIN:
+        return f"grace {grace:g}s < {STARTUP_GRACE_MARGIN}x the worst measured start ({worst_start}s): a slow start is killed"
+    if grace > STARTUP_GRACE_CEILING_SECONDS:
+        return f"grace {grace:g}s > {STARTUP_GRACE_CEILING_SECONDS}s: a feed that never publishes is left running too long"
+    return None
+
+
+class SlowStartIsNotAKill(unittest.TestCase):
+    def feed(self, env_name: str) -> dict:
+        path = ROOT / "k8s/services/databento-feed/overlays" / env_name / "manifest.yaml"
+        for doc in documents(path):
+            if doc.get("kind") == "Deployment" and doc["metadata"]["name"] == "options-edge-databento-feed":
+                return doc
+        self.fail(f"no databento-feed Deployment in {path}")
+
+    def test_the_checker_itself_has_teeth(self) -> None:
+        # negative controls: the value that killed the pod, a value one second short of the margin, and a runaway.
+        self.assertIsNotNone(startup_grace_problem(90))
+        self.assertIsNotNone(startup_grace_problem(WORST_MEASURED_START_SECONDS * STARTUP_GRACE_MARGIN - 1))
+        self.assertIsNotNone(startup_grace_problem(STARTUP_GRACE_CEILING_SECONDS + 1))
+        # a worse start (the measured worst moves) must tighten the verdict on the shipped value
+        self.assertIsNotNone(startup_grace_problem(300, worst_start=250))
+        self.assertIsNone(startup_grace_problem(300))
+
+    def test_every_env_gives_the_feed_a_start_up_grace_that_covers_a_slow_start(self) -> None:
+        for env_name in ("dev", "production", "experiment"):
+            with self.subTest(env=env_name):
+                grace = float(env_of(self.feed(env_name))["DATABENTO_FEED_LIVENESS_STARTUP_GRACE_SECONDS"])
+                self.assertIsNone(startup_grace_problem(grace))
+
+    def test_the_wedge_detection_is_not_weakened_to_buy_the_start_up_time(self) -> None:
+        # The grace ends at the first live record. After it these are what restart a stalled feed: the 15 s
+        # staleness window and a liveness probe that fails twice, 15 s apart. A slow start is NOT bought by
+        # loosening any of them.
+        for env_name in ("dev", "production", "experiment"):
+            with self.subTest(env=env_name):
+                deployment = self.feed(env_name)
+                self.assertEqual("15", str(env_of(deployment)["DATABENTO_FEED_LIVENESS_STALE_SECONDS"]))
+                container = deployment["spec"]["template"]["spec"]["containers"][0]
+                live = container["livenessProbe"]
+                self.assertEqual("/health/live", live["httpGet"]["path"])
+                self.assertEqual(15, live["periodSeconds"])
+                self.assertEqual(2, live["failureThreshold"])
+                # a startupProbe would pass at once (the metrics server is up at +0 s and /health/live is 200 inside
+                # the grace) and only suspend liveness for nothing; if one is added it needs its own measurement.
+                self.assertNotIn("startupProbe", container)
+
+
 if __name__ == "__main__":
     unittest.main()
