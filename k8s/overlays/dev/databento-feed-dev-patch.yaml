@@ -54,8 +54,10 @@ spec:
             # repartition record on the SINGLE partition that carries the whole 0DTE chain — the one
             # measured ~1.1M records behind and growing at +6849/min. Dev has no wings-coverage
             # requirement to trade off, so the cheapest real relief is to stop generating the volume.
+            # 24 h LOOKBACK, not a fixed window: on every start/reconnect the feed replays from the earliest hole it finds in its own
+            # underlying.es.trades / underlying.spx.price output (es_replay.rs), so any outage up to a day heals itself.
             - name: DATABENTO_ES_TRADES_REPLAY_START_MINUTES
-              value: "60"
+              value: "1440"
             - name: DATABENTO_PUBLISH_INTERVAL_MS
               value: "5000"
             # SPX spot cascade (SPX Spot Price Source requirements): CASCADED = exactly two sources in a fixed
