@@ -14,10 +14,11 @@
 //      market-hours traffic and its exemption list reviewed; see FLEET-ALERT-DISCORD-REQUIREMENT R4i.
 //   6. MEMORY KILLS: a container OOMKilled, or a pod evicted, inside --window (scripts/watch/oom.py). ONE kill is reported - crash-loop.py needs three restarts,
 //      so a service killed for memory once or twice an hour never reached it.
-//   8. TOPIC FRESHNESS (dev): spot, ES price, ES trades and the overnight estimate bars each newer than 10 minutes while the ES session is open (scripts/watch/topic-freshness.py).
+//   8. TOPIC FRESHNESS (dev, es4): dev spot, ES price, ES trades and the overnight estimate bars, and es4's ES tape and basis reference, each newer than 10 minutes while the ES session is open (scripts/watch/topic-freshness.py).
+//   9. KAFKA BROKER (dev): the broker fencing itself or stalling its controller (read from its log on the broker host), a slow metadata round trip, host load and swap (scripts/watch/kafka-broker.py).
 //   7. HOST LOAD: a node NotReady, under Memory/Disk/PID pressure, or at >= 85% memory / >= 90% cpu where the cluster reports usage (scripts/watch/host-load.py).
 //      Needs read access to nodes: k8s/security/jenkins-fleet-watch-node-reader.yaml, applied once per cluster by an admin. Until then it pages "could not check".
-// Checks 1-4 and 6-7 DELIVER TO DISCORD (5 only once calibrated), routed per environment: production to the prod group, dev AND es4 to the dev group (es4 is not production).
+// Checks 1-4 and 6-9 DELIVER TO DISCORD (5 only once calibrated), routed per environment: production to the prod group, dev AND es4 to the dev group (es4 is not production).
 // Readiness and dead letters used to fail ONLY this Jenkins build: a stuck rollout, 114 new dead letters per run and a host that was killing services went to nobody.
 // PAGING IS PER INCIDENT, NOT PER RUN (scripts/watch/fleet-alert.py): one page when a finding first appears, a reminder no sooner than every 30 minutes,
 // ONE escalation once it has been open 2 hours and then a daily summary, and ONE "resolved" message when it has been gone for 30 minutes. Before this a
@@ -152,18 +153,36 @@ pipeline {
     }
     stage('Topic freshness') {
       // A producer that is Running and Ready but publishes nothing (11-18: the feed's Kafka producer wedged, spot/ES silent for 4 h 53 min, the estimate bars and market structure built
-      // from them had a hole) is invisible to every check above. Dev only: the watched topics are the dev ones (scripts/watch/topic-freshness.py), gated to the open ES session.
+      // from them had a hole) is invisible to every check above. Dev and es4 only: the watched topics are those two clusters' (scripts/watch/topic-freshness.py), gated to the open ES session.
+      steps {
+        catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
+        script {
+          def bad = []
+          watchedProfiles(params.ENVS, PROFILES).findAll { it in ['dev', 'es4'] }.each { profile ->
+            withCredentials([string(credentialsId: webhookFor(profile), variable: 'DISCORD_WEBHOOK_URL')]) {
+              def rc = sh(returnStatus: true, script: "FLEET_ENV=${profile} FLEET_CHECK=topic-freshness FLEET_MODE=paging bash scripts/watch/fleet-alert-deliver.sh bash scripts/watch/stateful-check-run.sh topic-freshness.py")
+              if (rc != 0) { bad << "${profile} (rc=${rc})" }
+            }
+          }
+          if (bad) { error("topic-freshness check failed: ${bad.join(', ')}") }
+        }
+        }
+      }
+    }
+    stage('Kafka broker') {
+      // The dev broker runs as a launchd job on .102, outside Kubernetes: no readiness, restart or memory check can see it. 11-18 06:19 it fenced itself (controller events of 11 s, 6,894 partitions
+      // re-elected) and one producer never recovered. This reads its controller log over ssh and probes it (scripts/watch/kafka-broker.py). Dev only: that is the broker on this LAN host.
       steps {
         catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
         script {
           def bad = []
           watchedProfiles(params.ENVS, PROFILES).findAll { it == 'dev' }.each { profile ->
             withCredentials([string(credentialsId: webhookFor(profile), variable: 'DISCORD_WEBHOOK_URL')]) {
-              def rc = sh(returnStatus: true, script: "FLEET_ENV=dev FLEET_CHECK=topic-freshness FLEET_MODE=paging bash scripts/watch/fleet-alert-deliver.sh bash scripts/watch/stateful-check-run.sh topic-freshness.py")
-              if (rc != 0) { bad << "dev (rc=${rc})" }
+              def rc = sh(returnStatus: true, script: "FLEET_ENV=${profile} FLEET_CHECK=kafka-broker FLEET_MODE=paging bash scripts/watch/fleet-alert-deliver.sh bash scripts/watch/stateful-check-run.sh kafka-broker.py")
+              if (rc != 0) { bad << "${profile} (rc=${rc})" }
             }
           }
-          if (bad) { error("topic-freshness check failed: ${bad.join(', ')}") }
+          if (bad) { error("kafka-broker check failed: ${bad.join(', ')}") }
         }
         }
       }

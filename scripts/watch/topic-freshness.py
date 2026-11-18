@@ -34,6 +34,12 @@ WATCHED = {
         ("underlying.es.trades", 10, "GLOBEX", "the ES tape (CVD, footprint, liquidity, spot)"),
         ("options.indicators.estimate.bars", 10, "OVERNIGHT", "the overnight estimate candles and market structure"),
     ],
+    # es4 (2026-11-18): its Databento feed publishes the ES tape itself, and its basis reference is a mirror of the dev ES price. A wedged mirror (or a silent dev
+    # price) leaves es-feed logging "ES basis reference received NOTHING for 180s" while every es4 pod looks healthy.
+    "es4": [
+        ("es.underlying.es.trades", 10, "GLOBEX", "the es4 ES tape (CVD, footprint, aggressor flow)"),
+        ("es.underlying.es.price.basis-reference", 10, "GLOBEX", "the SPX/ES basis es4 stamps on every ES publish (mirrored from the dev ES price)"),
+    ],
 }
 
 
