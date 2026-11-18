@@ -94,7 +94,7 @@ spec:
             - name: DATABENTO_FEED_LIVENESS_STALE_SECONDS
               value: "15"
             - name: DATABENTO_FEED_LIVENESS_STARTUP_GRACE_SECONDS
-              value: "90"
+              value: "300"
           envFrom:
             - configMapRef:
                 name: options-edge-databento-feed-config
