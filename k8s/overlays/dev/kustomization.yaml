@@ -112,13 +112,6 @@ resources:
   # standalone slice (k8s/services/whatif-map/overlays/dev); the dev image remap below is what the slice mirrors. The two OE_-prefixed cluster addresses it needs are mapped from options-edge-config in the
   # base deployment, because this estate declares no OE_-prefixed broker or registry key and MapSettings refuses to start without them.
   - ../../services/whatif-map/base
-  # whatif-radar: DEV-ONLY (services.yaml envs: [dev]), replicas 1: Service B of the dealer what-if grid, the Close Squeeze Radar -- the live strikes with R-B-5's per-strike liveness statistic, the lean at 3
-  # and 5 points with both side magnitudes, the ACCELERATE chain, the squeeze alert, the knife-edge flag and its own two charm drifts, on options.spx.whatif.radar. IT PUBLISHES NOTHING ABOVE TEN MINUTES TO
-  # EXPIRY (R-B-1) and every ten seconds at or under it: about 60 records a session against Service A's 540, so a quiet pod mid-session is the rule working and not a wedged process. SHADOW: no signal, no
-  # level to act at, never trades; the ladder, staircase, counter-move and signal blocks belong to later modules and are ABSENT rather than zeroed.
-  # IT RUNS THE whatif-map IMAGE under its own Deployment with a different main class (as zerodte-research-writer runs the vix-option-inteligence image), so the options-edge-whatif-map remap below covers
-  # BOTH Deployments and no second image, build target or remap exists. Referenced here only (NOT in k8s/base, production or experiment). No patches here or in the standalone slice.
-  - ../../services/whatif-radar/base
   # drop-classifier-ref: DEV-ONLY and TEMPORARY (services.yaml envs: [dev]): the retained drop-classifier image in ES_TRADES mode writing es.drop.ref.* , the reference side of the G3b parity gate. Removed when G3b passes.
   - ../../services/drop-classifier-ref/base
   # NOTE: the databento timewarp replay Job + snapshot-replay Deployment used to live
