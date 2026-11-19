@@ -48,6 +48,18 @@ class MarketCarryMemoryTest(unittest.TestCase):
         self.assertIn('ROLLOUT_TIMEOUT="7260s"', script)
         self.assertIn('--timeout="$ROLLOUT_TIMEOUT"', script)
 
+    def test_approach_monitor_rollout_waits_out_its_warm_up(self) -> None:
+        script = (ROOT / "scripts/deploy/service-deploy.sh").read_text()
+
+        # Unready while it rebuilds the 15-minute trailing window is TRUE, not a fault; the default
+        # 600s wait ended inside that window and failed every deploy of the service.
+        self.assertIn('elif [ "$SERVICE" = "approach-monitor" ]; then', script)
+        block = script.split('elif [ "$SERVICE" = "approach-monitor" ]; then', 1)[1].split("else", 1)[0]
+        self.assertIn('ROLLOUT_TIMEOUT="1800s"', block)
+        self.assertGreater(1800, 15 * 60 + 600, "must cover the warm-up plus start-up")
+        # and the market-carry production override is untouched
+        self.assertIn('ROLLOUT_TIMEOUT="7260s"', script)
+
 
 if __name__ == "__main__":
     unittest.main()

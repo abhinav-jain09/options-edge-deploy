@@ -27,7 +27,9 @@
 #   DEPLOY_PLATFORM  image platform for digest resolution (default: env-derived)
 #   REGISTRY_SCHEME  http for the insecure local registries (default http)
 #   ROLLOUT_TIMEOUT  kubectl rollout timeout override (default 600s; production
-#                    market-carry defaults to 7260s for its 4.3M-record restore)
+#                    market-carry defaults to 7260s for its 4.3M-record restore;
+#                    approach-monitor defaults to 1800s because it stays unready, truthfully,
+#                    while it rebuilds its 15-minute trailing evidence window)
 #   WORK_DIR         scratch dir (default: mktemp)
 set -euo pipefail
 
@@ -38,6 +40,12 @@ bash "$(dirname "$0")/require-batch-image-binding.sh"
 if [ -z "${ROLLOUT_TIMEOUT:-}" ]; then
   if [ "$SERVICE" = "market-carry" ] && [ "$ENVIRONMENT" = "production" ]; then
     ROLLOUT_TIMEOUT="7260s"
+  elif [ "$SERVICE" = "approach-monitor" ]; then
+    # Its readiness is HEALTHY only once the full trailing window (WARM_SPAN_MS, 15 minutes) of
+    # spot evidence exists again, which is the right thing to report: until then it offers no
+    # score. The default 600s ends the rollout wait inside that window, so EVERY deploy of this
+    # service failed (service-deploy 3394, 2026-11-19) with the new pod healthy and merely warming.
+    ROLLOUT_TIMEOUT="1800s"
   else
     ROLLOUT_TIMEOUT="600s"
   fi
