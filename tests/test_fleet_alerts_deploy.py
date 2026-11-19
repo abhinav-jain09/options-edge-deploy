@@ -26,7 +26,7 @@ PROD_ID = "offhours-discord-webhook"
 DEV_ID = "offhours-discord-webhook-dev"
 NEW_CHECKS = {"crash-loop": "paging", "kafka-lag": "paging", "partition-balance": "observation-only",
               "readiness": "paging", "dlq-growth": "paging", "oom": "paging", "host-load": "paging",
-              "topic-freshness": "paging", "kafka-broker": "paging"}
+              "topic-freshness": "paging", "kafka-broker": "paging", "restart-budget": "paging"}
 
 
 class Routing(unittest.TestCase):
@@ -83,7 +83,7 @@ class Routing(unittest.TestCase):
 
     def test_partition_balance_is_the_only_observation_only_check(self):
         paging = [c for c, m in NEW_CHECKS.items() if m == "paging"]
-        self.assertEqual({"crash-loop", "kafka-lag", "readiness", "dlq-growth", "oom", "host-load", "topic-freshness", "kafka-broker"}, set(paging),
+        self.assertEqual({"crash-loop", "kafka-lag", "readiness", "dlq-growth", "oom", "host-load", "topic-freshness", "kafka-broker", "restart-budget"}, set(paging),
                          "every check pages from day one except partition balance, which waits for §5a")
 
     def test_readiness_and_dead_letters_no_longer_run_unwrapped_in_the_jenkinsfile(self):
@@ -154,7 +154,8 @@ class Routing(unittest.TestCase):
                        "oom": "oom-run.sh",
                        "host-load": "host-load-run.sh",
                        "topic-freshness": "stateful-check-run.sh topic-freshness.py",
-                       "kafka-broker": "stateful-check-run.sh kafka-broker.py"}[check]
+                       "kafka-broker": "stateful-check-run.sh kafka-broker.py",
+                       "restart-budget": "restart-budget-run.sh"}[check]
             self.assertIn(wrapped, body)
             self.assertLess(body.index("fleet-alert-deliver.sh"), body.index(wrapped),
                             "the deliverer must WRAP the check script, not follow it")
@@ -191,14 +192,48 @@ class Routing(unittest.TestCase):
             self.assertIn("Discord", claim + header[header.index(claim):header.index(claim) + 400],
                           "a bare 'changes nothing' claim must be qualified by the Discord POST")
 
+    # ---- the restart budget (owner rule 2026-11-19: a deployment restarts 5 times, not more) ----------------------------------------------------
+    def test_restart_budget_runs_for_every_profile_and_validates_its_mode(self):
+        body = self._stage_for("restart-budget")
+        self.assertIn("watchedProfiles(params.ENVS, PROFILES)", body)
+        self.assertNotIn("findAll", body, "the budget applies to production, dev AND es4 (production only pages for its mandatory set)")
+        self.assertIn("RESTART_BUDGET_MODE=${params.RESTART_BUDGET_MODE}", body, "the stage must pass the chosen mode to the wrapper")
+        self.assertRegex(body, r"RESTART_BUDGET_MODE in \['enforce', 'dry-run'\]", "restart-from-stage can skip the parameter check")
+        self.assertRegex(self.jf, r"choice\(name: 'RESTART_BUDGET_MODE', choices: \['enforce', 'dry-run'\]",
+                         "enforce first: it is the default, dry-run is the opt-out")
+
+    def test_the_scope_file_names_the_one_cluster_write(self):
+        row = [l for l in SCOPE.read_text().splitlines() if l.startswith("Jenkinsfile.fleet-watch")][0]
+        self.assertIn("stop-only", row, "the scope row must say the job now has one cluster write, and that it only stops")
+        self.assertIn("Restart budget", row)
+        self.assertNotIn("READ-ONLY AGAINST EVERY CLUSTER", row, "that sentence is no longer true")
+        self.assertIn("scales it to 0", row)
+
+    def test_the_budget_can_only_stop_never_raise(self):
+        src = (WATCH / "restart-budget.py").read_text()
+        replicas = re.findall(r'--replicas=(\S+?)["\')]', src)
+        self.assertTrue(replicas, "the check must scale something")
+        self.assertEqual({"0"}, set(replicas), "restart-budget.py may only ever scale to 0: %s" % replicas)
+        self.assertNotRegex(src, r'"(delete|apply|replace|patch|rollout|set)"', "the budget annotates and scales, nothing else")
+
+    def test_the_budget_reads_the_same_mandatory_file_as_the_ci_guard(self):
+        src = (WATCH / "restart-budget.py").read_text()
+        self.assertIn("prod-mandatory-services.txt", src)
+        self.assertTrue((REPO / "config/prod-mandatory-services.txt").is_file())
+
+    def test_the_budget_ranks_both_of_its_classes_as_urgent(self):
+        rank = (WATCH / "fleet-alert.py").read_text()
+        for cls in ("RESTART_BUDGET", "RESTART_BUDGET_HELD"):
+            self.assertRegex(rank, r'"%s": \(5, ' % cls, "%s must be rank 5 or its page is buried" % cls)
+
     def test_the_checks_exist_and_are_executable_python(self):
-        for name in ("crash-loop.py", "kafka-lag.py", "partition-balance.py", "fleet-alert.py", "oom.py", "host-load.py"):
+        for name in ("crash-loop.py", "kafka-lag.py", "partition-balance.py", "fleet-alert.py", "oom.py", "host-load.py", "restart-budget.py"):
             p = WATCH / name
             self.assertTrue(p.is_file(), "%s is missing" % name)
             compile(p.read_text(), str(p), "exec")
 
     def test_every_new_check_has_a_negative_control_suite(self):
-        for name in ("crash-loop", "kafka-lag", "partition-balance", "fleet-alert", "oom", "host-load", "run-wrappers", "topic-freshness", "kafka-broker"):
+        for name in ("crash-loop", "kafka-lag", "partition-balance", "fleet-alert", "oom", "host-load", "run-wrappers", "topic-freshness", "kafka-broker", "restart-budget"):
             self.assertTrue((WATCH / ("%s-test.py" % name)).is_file(),
                             "%s has no negative controls" % name)
         self.assertTrue((WATCH / "fleet-alert-deliver-test.sh").is_file(),
@@ -208,7 +243,8 @@ class Routing(unittest.TestCase):
         names = {"crash-loop": "Crash loops", "kafka-lag": "Consumer lag",
                  "partition-balance": "Partition balance", "readiness": "Readiness", "dlq-growth": "Dead letters",
                  "oom": "Memory kills", "host-load": "Host load",
-                 "topic-freshness": "Topic freshness", "kafka-broker": "Kafka broker"}
+                 "topic-freshness": "Topic freshness", "kafka-broker": "Kafka broker",
+                 "restart-budget": "Restart budget"}
         label = names[check]
         start = self.jf.index("stage('%s')" % label)
         nxt = self.jf.find("    stage('", start + 10)

@@ -972,6 +972,16 @@ apply_internal_topic_configs() {
 }
 
 # ---------- OVERNIGHT START: right after the clean, bring up ONLY the ES-tracking set ----------
+# RESTART-BUDGET QUARANTINE (scripts/watch/restart-budget.py): the fleet-watch "Restart budget" stage stops a deployment that restarts more than 5 times
+# (annotation options-edge.io/quarantined-at, replicas 0). It stays at 0 until a human runs scripts/ops/quarantine-clear.sh; the start paths below would
+# otherwise raise it to 1 with everything else. Prints the quarantined names, one per line. Fails CLOSED: a read that fails returns 1 and the caller
+# refuses to scale.
+quarantined_deploys() {
+  local raw
+  raw="$($KK get deploy -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.annotations.options-edge\.io/quarantined-at}{"\n"}{end}' 2>/dev/null)" || return 1
+  printf '%s\n' "$raw" | awk -F'\t' '$2 != "" {print $1}'
+}
+
 # Recreate topics, then scale up ONLY $OVERNIGHT_SET so ES futures are tracked overnight; every other
 # service stays at 0 until the 06:15 ET full start. (These persist/serve ES — they need a producer for
 # live ES data; see the note where OVERNIGHT_SET is defined.)
@@ -983,9 +993,12 @@ do_start_overnight() {
     return 1
   }
   echo "Overnight start: ES-tracking set only ($OVERNIGHT_SET); all other services stay at 0 until 06:15 ET."
-  local d
+  local d quar
+  quar="$(quarantined_deploys)" || { echo "overnight start: REFUSED - cannot read the restart-budget quarantine annotations, so nothing is scaled up." >&2; return 1; }
   for d in $OVERNIGHT_SET; do
-    if $KK get deploy "$d" >/dev/null 2>&1; then
+    if printf '%s\n' "$quar" | grep -qxF "$d"; then
+      echo "  QUARANTINED by the restart budget, left at 0: $d (clear with scripts/ops/quarantine-clear.sh dev $d)"
+    elif $KK get deploy "$d" >/dev/null 2>&1; then
       $K scale deploy/"$d" --replicas=1 >/dev/null 2>&1 && echo "  up: $d"
     else
       echo "  (absent, skipped): $d"
@@ -1221,8 +1234,13 @@ do_start() {
   # and REPLAY historical snapshots into options.databento.raw (its TIMEWARP_SNAPSHOT_TOPIC), poisoning
   # the freshly-cleaned chain with stale replay data. So disabled services are pinned to 0 from the start.
   echo "Scaling deployments up (disabled set stays at 0) ..."
+  local quar
+  quar="$(quarantined_deploys)" || { echo "start: REFUSED - cannot read the restart-budget quarantine annotations, so nothing is scaled up." >&2; return 1; }
   for d in $($KK get deploy -o name 2>/dev/null | sed 's#.*/##'); do
     if echo "$d" | grep -qxE "$DISABLED_DEV"; then
+      $K scale deploy/"$d" --replicas=0 >/dev/null 2>&1
+    elif printf '%s\n' "$quar" | grep -qxF "$d"; then
+      echo "  QUARANTINED by the restart budget, left at 0: $d (clear with scripts/ops/quarantine-clear.sh dev $d)"
       $K scale deploy/"$d" --replicas=0 >/dev/null 2>&1
     else
       $K scale deploy/"$d" --replicas=1 >/dev/null 2>&1

@@ -79,7 +79,10 @@ wait_for_load() {
 scale_up() {
   local n=0
   for d in $1; do
-    $KUBECTL get deploy "$d" >/dev/null 2>&1 || { log "WARN: no deployment $d — skipped"; continue; }
+    q="$($KUBECTL get deploy "$d" -o jsonpath='{.metadata.annotations.options-edge\.io/quarantined-at}' 2>/dev/null)" \
+      || { log "WARN: no deployment $d — skipped"; continue; }
+    # restart-budget quarantine (scripts/watch/restart-budget.py): stopped for restarting more than 5 times; stays at 0 until a human clears it.
+    [ -n "$q" ] && { log "QUARANTINED $d (restart budget, since $q) — left at 0; clear with scripts/ops/quarantine-clear.sh"; continue; }
     $KUBECTL scale deploy "$d" --replicas=1 $SA >/dev/null 2>&1 && n=$((n+1)) || log "WARN: scale failed for $d"
   done
   log "wave: scaled $n deployment(s)"

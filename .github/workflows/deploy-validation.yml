@@ -180,6 +180,7 @@ jobs:
           python3 scripts/watch/run-wrappers-test.py
           python3 scripts/watch/topic-freshness-test.py
           python3 scripts/watch/kafka-broker-test.py
+          python3 scripts/watch/restart-budget-test.py
           bash scripts/watch/fleet-alert-deliver-test.sh
 
       # Routing: production to the prod group, dev AND es4 to the dev group. Asserted against the
@@ -373,6 +374,11 @@ jobs:
       # path may hold one of them down.
       - name: Production mandatory services are never held down
         run: python3 -m unittest -v tests.test_prod_mandatory_services
+
+      # The restart budget's quarantine (scripts/watch/restart-budget.py stops a deployment after 5 restarts): the one clear command, and the morning
+      # autostart, dev-cleanup start and boot bring-up must skip a quarantined deployment instead of silently raising it back to 1.
+      - name: A restart-budget quarantine is not undone by a bring-up
+        run: python3 -m unittest -v tests.test_restart_budget_quarantine
 
       # The dealer-ledger feedback loop: the ledger emits signal-fired, the scorer turns outcomes into
       # outcome-scored, the accumulator aggregates them into calibration-state, and the ledger reads that

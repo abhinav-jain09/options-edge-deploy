@@ -101,6 +101,17 @@ have kubectl || die "kubectl not found"
 have python3 || die "python3 required for the trading-day guard"
 kcr get deploy >/dev/null 2>&1 || die "cannot reach k8s namespace $NS"
 
+# RESTART-BUDGET QUARANTINE (scripts/watch/restart-budget.py): a deployment the fleet-watch "Restart budget" stage stopped for restarting more than 5 times
+# carries options-edge.io/quarantined-at and stays at 0 until a human runs scripts/ops/quarantine-clear.sh. This script raises everything else to 1, so
+# without this it would silently undo the stop at 06:15. Read FAIL-CLOSED: if the annotations cannot be read, nothing is scaled.
+QUAR_RAW="$(kcr get deploy -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.annotations.options-edge\.io/quarantined-at}{"\n"}{end}' 2>/dev/null)" \
+  || die "cannot read the restart-budget quarantine annotations - refusing to scale (it could undo a quarantine)"
+QUARANTINED="$(printf '%s\n' "$QUAR_RAW" | awk -F'\t' '$2 != "" {print $1}' | tr '\n' ' ')"
+if [ -n "${QUARANTINED// /}" ]; then
+  log "QUARANTINED by the restart budget, left at 0 (clear with scripts/ops/quarantine-clear.sh prod <name>): $QUARANTINED"
+  HOLD_NOW="$HOLD_NOW $QUARANTINED"
+fi
+
 NOW_ET="$(TZ=America/New_York date '+%Y-%m-%d %H:%M %Z')"
 log "=== morning autostart start (env=$EXPECTED_ENV ENABLED=$ENABLED) $NOW_ET ==="
 
