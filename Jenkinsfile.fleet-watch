@@ -16,9 +16,14 @@
 //      so a service killed for memory once or twice an hour never reached it.
 //   8. TOPIC FRESHNESS (dev, es4): dev spot, ES price, ES trades and the overnight estimate bars, and es4's ES tape and basis reference, each newer than 10 minutes while the ES session is open (scripts/watch/topic-freshness.py).
 //   9. KAFKA BROKER (dev): the broker fencing itself or stalling its controller (read from its log on the broker host), a slow metadata round trip, host load and swap (scripts/watch/kafka-broker.py).
+//  10. RESTART BUDGET (production, dev, es4): a Deployment whose pods restarted more than 5 times in 60 minutes, or more than 5 times in 24 hours, is STOPPED - annotated
+//      options-edge.io/quarantined-at and scaled to 0 - and paged ONCE per incident (scripts/watch/restart-budget.py; owner rule 2026-11-19). It stays at 0 until a human runs
+//      scripts/ops/quarantine-clear.sh; the morning autostart and the bring-up scripts skip it. The production mandatory set (config/prod-mandatory-services.txt) and StatefulSets
+//      are paged but NEVER stopped. THIS IS THE ONE STAGE THAT WRITES TO A CLUSTER, and the only write is stop-only (annotate + scale to 0): it never raises replicas and never changes
+//      an image. RESTART_BUDGET_MODE=dry-run prints what it would do and leaves the cluster as it is.
 //   7. HOST LOAD: a node NotReady, under Memory/Disk/PID pressure, or at >= 85% memory / >= 90% cpu where the cluster reports usage (scripts/watch/host-load.py).
 //      Needs read access to nodes: k8s/security/jenkins-fleet-watch-node-reader.yaml, applied once per cluster by an admin. Until then it pages "could not check".
-// Checks 1-4 and 6-9 DELIVER TO DISCORD (5 only once calibrated), routed per environment: production to the prod group, dev AND es4 to the dev group (es4 is not production).
+// Checks 1-4 and 6-10 DELIVER TO DISCORD (5 only once calibrated), routed per environment: production to the prod group, dev AND es4 to the dev group (es4 is not production).
 // Readiness and dead letters used to fail ONLY this Jenkins build: a stuck rollout, 114 new dead letters per run and a host that was killing services went to nobody.
 // PAGING IS PER INCIDENT, NOT PER RUN (scripts/watch/fleet-alert.py): one page when a finding first appears, a reminder no sooner than every 30 minutes,
 // ONE escalation once it has been open 2 hours and then a daily summary, and ONE "resolved" message when it has been gone for 30 minutes. Before this a
@@ -26,8 +31,8 @@
 // An observation-only check logs its findings and does NOT fail the build (partition balance had kept the job red on every run).
 // A red build remains an alert in its own right; the message is added to it, never substituted for it.
 // Native k8s CronJobs are denied by the cluster's admission policy and no Kafka or registry exporter is scraped, so a Jenkins cron job is the trigger
-// that can run. IT CHANGES NOTHING IN ANY CLUSTER, REGISTRY OR TOPIC - its only outbound effect is the Discord POST above, and it has no deployment
-// effect, which is why scripts/ci/jenkins-permitted-sha-scope.txt keeps it out of the permitted-commit guard.
+// that can run. IT CHANGES NOTHING IN ANY CLUSTER, REGISTRY OR TOPIC EXCEPT the stop-only write of stage 10 (annotate + scale to 0) - its other outbound effect is the Discord POST above, and it has no
+// deployment effect (it cannot start, roll or re-image anything), which is why scripts/ci/jenkins-permitted-sha-scope.txt keeps it out of the permitted-commit guard.
 def PROFILES = ['production', 'dev', 'es4']
 // Explicit deployer kubeconfigs on the agent: oeProfile('dev') resolves to the LOCAL docker-desktop cluster on this agent (connection refused), while the dev
 // cluster is the remote one reached through the "-remote" kubeconfig. Same files service-deploy uses.
@@ -54,6 +59,7 @@ pipeline {
   parameters {
     string(name: 'ENVS', defaultValue: 'production dev es4', description: 'Space-separated profiles to watch (production, dev, es4).')
     string(name: 'STUCK_MINUTES', defaultValue: '30', description: 'A wanted-but-unavailable workload is reported after this many minutes.')
+    choice(name: 'RESTART_BUDGET_MODE', choices: ['enforce', 'dry-run'], description: 'enforce: stop (annotate + scale to 0) a Deployment over its restart budget. dry-run: print what would be stopped, change nothing.')
   }
   triggers {
     cron('*/15 * * * *')
@@ -114,6 +120,25 @@ pipeline {
             }
           }
           if (bad) { error("memory-kill check failed: ${bad.join(', ')}") }
+        }
+        }
+      }
+    }
+    stage('Restart budget') {
+      // More than 5 restarts of one Deployment in 60 minutes or in 24 hours stops it (scripts/watch/restart-budget.py). Every profile: production only PAGES for its mandatory set
+      // (config/prod-mandatory-services.txt), it never stops one. The mode is validated here because "restart from stage" can enter a pipeline mid-way.
+      steps {
+        catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
+        script {
+          if (!(params.RESTART_BUDGET_MODE in ['enforce', 'dry-run'])) { error("RESTART_BUDGET_MODE must be enforce or dry-run (got '${params.RESTART_BUDGET_MODE}')") }
+          def bad = []
+          watchedProfiles(params.ENVS, PROFILES).each { profile ->
+            withCredentials([string(credentialsId: webhookFor(profile), variable: 'DISCORD_WEBHOOK_URL')]) {
+              def rc = sh(returnStatus: true, script: "KUBECONFIG='${kubeconfigFor(profile)}' FLEET_ENV=${profile} FLEET_CHECK=restart-budget FLEET_MODE=paging RESTART_BUDGET_MODE=${params.RESTART_BUDGET_MODE} bash scripts/watch/fleet-alert-deliver.sh bash scripts/watch/restart-budget-run.sh")
+              if (rc != 0) { bad << "${profile} (rc=${rc})" }
+            }
+          }
+          if (bad) { error("restart-budget check failed: ${bad.join(', ')}") }
         }
         }
       }
