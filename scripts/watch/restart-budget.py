@@ -13,7 +13,8 @@ load average 160 on 16 cores) and cannot flap for days unseen. One finding per d
 WHAT COUNTS. Restarts of any container or init container (restartCount, which already includes OOMKilled and Error terminations) plus pods
 EVICTED. Counted as DELTAS between runs, never as the cumulative count: a long-lived pod carries restarts from weeks ago (bo-app-postgres-0 has
 35, level-absorption 220) and must not be stopped for them. A pod first seen is dated by its creation time (all its restarts are inside the window
-if it is younger than the window); an older pod seen for the first time contributes one restart only if its last termination is inside the window.
+if it is younger than the window); an older pod seen for the first time contributes one restart only if its last termination is inside the window,
+or, for the 24 h window, a steady-rate estimate when that last termination is within 3 of the pod's own average restart intervals (still looping).
 A rollout (new pod, count 0) is not a restart. The 6th restart inside the window stops the deployment: 5 are allowed.
 
 WHAT IS NEVER STOPPED. Production deployments in config/prod-mandatory-services.txt (PR 1677): paged as RESTART_BUDGET_HELD, never scaled, because
@@ -223,8 +224,13 @@ for pod in pods:
             if age_s <= day_s:
                 day = total
             elif total > 0 and term_age is not None and term_age <= day_s:
-                # first sight of a pod older than the long window: its restarts are undated, so assume a steady rate (and say so)
-                day, est = max(1, min(total, int(total * day_s / age_s))), True
+                # First sight of a pod older than the long window: its restarts are undated. If the last one is recent against the pod's own average
+                # interval (<= 3 intervals) it is still restarting at about that rate, so assume a steady rate (and say so). If not (es4 es-feed: 149
+                # restarts in 17.6 days, the last 18.5 h ago, average interval 2.8 h) the burst is over: only the dated last termination counts.
+                if term_age <= 3 * (age_s / total):
+                    day, est = max(1, min(total, int(total * day_s / age_s))), True
+                else:
+                    day = 1
             else:
                 day = 0
         new_pods[uid] = {"count": total, "dep": subject}

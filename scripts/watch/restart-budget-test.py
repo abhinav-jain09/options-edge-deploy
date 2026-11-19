@@ -132,6 +132,13 @@ def controls():
           "about 48 restarts in 24 h (limit 5)" in out and "STOPPED just now" in out, out)
     check("... an hour budget alone would not have caught it (that is why there are two windows)", "restarts in 60 min" not in out, out)
 
+    e = Env()
+    rc, out, calls = e.run([pod("feed-1", dep="es-feed", restarts=149, age=60 * 422, term_ago=60 * 18 + 30)], [deploy("es-feed")])
+    check("es4 es-feed (149 restarts in 17.6 days, the LAST 18.5 h ago) is NOT stopped: the burst is over, the pod is not looping now", rc == 0 and not calls, out)
+    e = Env()
+    rc, out, calls = e.run([pod("mir-1", dep="rithmic-depth-mirror-production", restarts=1433, age=60 * 390, term_ago=60 * 16)], [deploy("rithmic-depth-mirror-production")])
+    check("... nor a pod with 1,433 old restarts whose last one was 16 h ago (an average interval of 16 minutes, silent since)", rc == 0 and not calls, out)
+
     # ---- counting across runs ----
     e = Env()
     p0 = pod("c-1", dep="svc-c", restarts=2, age=600, term_ago=500)
@@ -293,6 +300,7 @@ MUTATIONS = [
     ("init containers are not counted", '    for key in ("initContainerStatuses", "containerStatuses"):', '    for key in ("containerStatuses",):'),
     ("Job pods are counted as a deployment's restarts", '    else:\n        continue                      # Job pods, bare pods', '    else:\n        subject = oname'),
     ("the standing stop is no longer reported", '    if QUARANTINED_AT in ann and ((d.get("spec") or {}).get("replicas")) == 0 and dep not in stopped_now:', '    if False:'),
+    ("an old pod's burst is assumed to be still going (the 3-interval recency test is dropped)", "                if term_age <= 3 * (age_s / total):", "                if True:"),
     ("the first-sight estimate for an old pod is dropped", "day, est = max(1, min(total, int(total * day_s / age_s))), True", "day, est = 0, True"),
 ]
 
