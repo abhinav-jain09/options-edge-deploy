@@ -367,6 +367,13 @@ jobs:
       - name: Boot bring-up and morning autostart hold down the same services
         run: python3 -m unittest -v tests.test_keep_down_lists_agree
 
+      # The production MANDATORY always-up set (config/prod-mandatory-services.txt). On 2026-11-18 a manual
+      # scale-down left out stock-gex-service and stock-gex-close-scheduler: Gamma Lab stocks went blank and
+      # the 11-18 closing-board run was killed. No KEEP_DOWN / ES-down / clean-slate / production replicas:0
+      # path may hold one of them down.
+      - name: Production mandatory services are never held down
+        run: python3 -m unittest -v tests.test_prod_mandatory_services
+
       # The dealer-ledger feedback loop: the ledger emits signal-fired, the scorer turns outcomes into
       # outcome-scored, the accumulator aggregates them into calibration-state, and the ledger reads that
       # back through a GLOBAL store — so a deploy that carried the ledger alone would leave its calibration

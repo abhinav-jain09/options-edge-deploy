@@ -80,7 +80,9 @@ STATE_RESET_MODE="${STATE_RESET_MODE:-recreate}"
 # Deployments matching $SELECTOR that are NEVER scaled to 0 by this script (extended regex on the name).
 # Keycloak is the reason it exists: it is not a Kafka client, its outage logs every user out, and the owner's
 # standing rule is that it stays up — so it must not ride the pipeline scale-down/scale-up.
-SCALE_EXEMPT_RE="${SCALE_EXEMPT_RE:-^oe-keycloak$}"
+# 2026-11-19: the default is now the whole PRODUCTION MANDATORY set declared in config/prod-mandatory-services.txt
+# (tests/test_prod_mandatory_services.py fails CI if this alternation and that file differ).
+SCALE_EXEMPT_RE="${SCALE_EXEMPT_RE:-^(oe-keycloak|options-edge-web|options-edge-redis|feed-gateway-service|options-edge-databento-feed|raw-to-display-databento-service|raw-postgres-writer|hpsf-postgres-writer-service|stock-gex-service|stock-gex-close-scheduler)$}"
 # What happens to the NON-preserved, non-system topics (step A):
 #   purge  — state topics (*-changelog/*-repartition) deleted, every other topic emptied in place with
 #            delete-records (topic, partition count and config survive). Original behaviour.
