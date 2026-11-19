@@ -50,8 +50,12 @@ spec:
               value: "true"
             - name: LEVEL_ABSORPTION_LINE_HEALTH_CONFIGURATION
               value: /home/options-edge/config/line-health/line-health-configuration.txt
+            # 2026-11-19 OFF on dev (was "true"): the shadow book reader's barrier drains the WHOLE wall-rows log to its end every time a closure is read,
+            # and holds every row until its bucket is reached. A loop that restarts hours behind therefore retained 2.5M WallRow/Held/BucketRow objects (+11M
+            # strings, heap histogram 11-19) and was OOMKilled every 2-12 minutes for days (220+ restarts, ~1 core): level-absorption never became ready.
+            # The displayed gauge reads the trades alone, so nothing visible depends on the shadow fields. Turn back on only with a bounded barrier in the service.
             - name: LEVEL_ABSORPTION_LINE_HEALTH_BOOK_ENABLED
-              value: "true"
+              value: "false"
             - name: LEVEL_ABSORPTION_BOOK_ENABLED
               value: "true"
             - name: LEVEL_ABSORPTION_BOOK_ENVIRONMENT

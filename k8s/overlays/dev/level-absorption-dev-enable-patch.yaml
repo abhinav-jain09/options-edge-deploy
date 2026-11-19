@@ -41,8 +41,12 @@ spec:
               value: /home/options-edge/config/line-health/line-health-configuration.txt
             # Line health M2 (requirement LH-F-5, shadow only): also read the wall service and the engine service topics and write the SHADOW book fields. The displayed
             # gauge stays on the trades alone. Default false in the service; only this development patch sets it.
+            # 2026-11-19 OFF on dev (was "true"): the shadow book reader's barrier drains the WHOLE wall-rows log to its end every time a closure is read,
+            # and holds every row until its bucket is reached. A loop that restarts hours behind therefore retained 2.5M WallRow/Held/BucketRow objects (+11M
+            # strings, heap histogram 11-19) and was OOMKilled every 2-12 minutes for days (220+ restarts, ~1 core): level-absorption never became ready.
+            # The displayed gauge reads the trades alone, so nothing visible depends on the shadow fields. Turn back on only with a bounded barrier in the service.
             - name: LEVEL_ABSORPTION_LINE_HEALTH_BOOK_ENABLED
-              value: "true"
+              value: "false"
             # The BOOK input (document A revision 12, work package K3): the engine's resting-book records as a third evidence class, reported beside the lean in every status
             # event and never an input to the verdict. DEFAULT false; CURRENT VALUE true on dev (the engine's ids are registered and rolled). The service refuses to start with the book on while the engine's health version 2 (id 3509)
             # and FINAL rows version 2 (id 3510) are not registered, and a roll of this pod before the engine is upgraded must not crash-loop the pod that also runs line health.
