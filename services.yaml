@@ -318,6 +318,27 @@ services:
   # and RESET-PRESERVED because it is the corpus the calibration can only come from. scripts/kafka/ensure-gamma-effort-topics.sh is the first-deploy barrier (service-deploy, dev only). One JVM, no Kafka
   # Streams, no state volume, no HTTP server and so no probes. Single replica only. No Service object; no production or es4 entry, image, topic or overlay exists.
   - { name: gamma-effort,                 managedBy: standalone, sliceGenerated: true, envs: [dev], image: options-edge-gamma-effort,                  deployments: [gamma-effort-service] }
+  # whatif-map: DEV ONLY (envs: [dev]). NEW service, Service A of the dealer what-if grid: the Intraday Hedge Pressure Map. It reads the gamma-exposure service's per-strike rows and publishes ONE record per
+  # evaluation carrying the WHOLE board -- for every strike in the window its signed net gamma exposure, hold-or-accelerate, strength as a share of the largest |gex| within the band radius, the delta band
+  # edges at that strike's own implied volatility, the decay over the remaining minutes and the structure facts -- plus the cycle's levels, spot and time left. Evaluated every minute for most of the session
+  # and every 10 seconds in the last 30: about 540 cycles a session.
+  # SHADOW: it emits no signal, names no level to sell, never trades and adds no decision consumer. Its ONE declared consumer, the fight-zone service, DOES NOT EXIST: the subscribed subset is reserved in code
+  # (WhatIfGridTopics.FIGHT_ZONE_SUBSCRIBED_FIELDS -- holdOrAccelerate, exposureChange, deltaBand, board, fingerprint) and read by nobody, and the dependency runs one way, so there is no return topic.
+  # Its OUTPUT is Avro with the registry id on the message on options.spx.whatif.map, subject app.options.whatif.WhatIfMapRecord under RecordNameStrategy -- the RECORD's full name and not the topic's, so ONE
+  # subject serves every environment where TopicNameStrategy would mint a different one per TOPIC_PREFIX. Its INPUT, options.databento.gex.strike, is read as a GENERIC Avro record whose subject is ENV_LOCAL and
+  # so is deliberately NOT declared in a schema-requirements.json, exactly as dealer-ledger, delta-flow, hedging-pressure and gamma-effort omit that same subject: a specific reader would pin an id that differs
+  # per cluster.
+  # It reads ONE topic, ASSIGNING every partition explicitly from partitionsFor and never subscribing -- a subscribed consumer can be rebalanced away from a partition mid-session and would drop part of the
+  # board with nothing in the log to say so -- and starts at LATEST: the map is a snapshot of NOW, and replaying a session at startup would publish a board for every past minute, each keyed as though it had
+  # just happened. A consumer group id is set for offset bookkeeping and lag, not for rebalancing. Nothing is published until a full round of the board has arrived, and the service SAYS so by name every cycle
+  # rather than going quiet. scripts/kafka/ensure-whatif-map-topics.sh is the first-deploy barrier (service-deploy, dev only); the output topic is delete-only at a 7-day retention with NO byte cap, because
+  # every finite cap in topics.env is a measured figure and this record has never been measured -- see that file for the follow-up this names.
+  # THE ONE THING TO READ BEFORE CHANGING THE DEPLOYMENT: the service reads OE_KAFKA_BOOTSTRAP_SERVERS and OE_SCHEMA_REGISTRY_URL, and this estate's options-edge-config declares KAFKA_BOOTSTRAP_SERVERS and
+  # SCHEMA_REGISTRY_URL and no OE_-prefixed broker or registry key at all. MapSettings refuses to start when either is absent, so the base deployment MAPS both names from that ConfigMap with configMapKeyRef
+  # (one source of truth for the addresses, as vol-premium maps POSTGRES_*). Remove those two entries and the pod refuses at startup.
+  # One JVM, no Kafka Streams, no state volume (the board is a pure fold of the rows that arrived), no HTTP server and so no probes. Single replica only, strategy Recreate: the stream is keyed by the CYCLE and
+  # one writer owns it. No Service object; no production or es4 entry, image, topic or overlay exists. The RADAR topic and Service B are not built and not declared.
+  - { name: whatif-map,                   managedBy: standalone, sliceGenerated: true, envs: [dev], image: options-edge-whatif-map,                    deployments: [whatif-map-service] }
   # stock-gex: SPX-500 single-stock GEX (Databento equity options; NO Kafka). Its image builds in the
   # options-edge-databento-feed repo (Dockerfile.stockgex), like databento-sr3-feed — hence buildJob.
   # DEV-FIRST/on-demand: prod overlay holds it at replicas:0 until the nightly OI-index builder exists.

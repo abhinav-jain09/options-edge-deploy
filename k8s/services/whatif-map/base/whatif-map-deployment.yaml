@@ -1,0 +1,127 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: whatif-map-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: whatif-map-service
+    app.kubernetes.io/component: whatif-map-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  # DEV ONLY (services.yaml envs: [dev]). Service A of the dealer what-if grid, the Intraday Hedge
+  # Pressure Map: it reads the gamma-exposure service's per-strike rows, assembles the board for one
+  # instrument, and publishes ONE record per evaluation carrying the whole board -- every strike's
+  # net gamma exposure with its sign, hold-or-accelerate, strength relative to the board, the delta
+  # band edges, the structure facts, and the levels -- on options.spx.whatif.map.
+  #
+  # SHADOW: it emits no signal, names no level to act at, never trades and adds no decision
+  # consumer. Its one declared consumer, the fight-zone service, does not exist yet; the subscribed
+  # subset is reserved in code (WhatIfGridTopics.FIGHT_ZONE_SUBSCRIBED_FIELDS) and read by nobody.
+  #
+  # SINGLE replica (strategy Recreate). The output is keyed by the CYCLE -- the valuation instant in
+  # epoch millis -- so one writer owns the stream and Recreate fences the predecessor before the new
+  # pod starts rather than running two writers that would interleave two boards under one session.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: whatif-map-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: whatif-map-service
+        app.kubernetes.io/component: whatif-map-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: whatif-map
+          # Base-registry name, like every other base manifest: the dev overlays (monolith AND the
+          # standalone slice) remap it to host.docker.internal:5001 via `images:`, and apply.sh's
+          # digest-pin loop keys its rewrite on exactly this `<base registry>/<image>` name.
+          image: 192.168.100.252:5000/options-edge-whatif-map:dev
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: options-edge-config              # the shared platform config
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            # ---------------------------------------------------------------------------------
+            # THE SERVICE'S OWN NAMES ARE `OE_`-PREFIXED AND THE SHARED CONFIG DOES NOT CARRY
+            # THEM. This is the whole reason these two entries exist, and it is not cosmetic:
+            # MapSettings REFUSES to start when either is absent ("a service that starts without
+            # it would read or publish against a cluster nobody chose, and would look healthy
+            # while doing it"). options-edge-config declares KAFKA_BOOTSTRAP_SERVERS and
+            # SCHEMA_REGISTRY_URL -- the names every other service here reads -- and declares no
+            # OE_-prefixed broker or registry key at all; in this estate the OE_ prefix is used
+            # only for the watch database, OE_ENV and the system-status topics. So envFrom alone
+            # would give this pod neither value and it would refuse at startup, on the first
+            # rollout, exactly as gamma-zone did on its unresolved input topic.
+            #
+            # They are MAPPED and not restated: configMapKeyRef keeps ONE source of truth for the
+            # addresses (dev's host.docker.internal:19092 / :8082 come from the dev overlay patch),
+            # so a broker move is still a one-place change. Written out literally here, this file
+            # would become a second place for the cluster address to be wrong, which is the shape
+            # that has cost this fleet a compaction setting before. vol-premium maps POSTGRES_* the
+            # same way against the same ConfigMap.
+            - name: OE_KAFKA_BOOTSTRAP_SERVERS
+              valueFrom:
+                configMapKeyRef:
+                  name: options-edge-config
+                  key: KAFKA_BOOTSTRAP_SERVERS
+            - name: OE_SCHEMA_REGISTRY_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: options-edge-config
+                  key: SCHEMA_REGISTRY_URL
+            # The INPUT topic, named in FULL. The service applies no TOPIC_PREFIX of its own -- it
+            # takes the name whole -- and TOPIC_PREFIX is empty on dev, so the full name is also
+            # the only correct one. It is set explicitly rather than left to the code's default so
+            # the topic this pod reads is readable from the manifest; the default is the same
+            # literal (MapSettings.GEX_STRIKE_TOPIC).
+            #
+            # It is read GENERICALLY (specific.avro.reader=false). The subject on this topic is
+            # ENV_LOCAL, so its registry id differs per cluster and a specific reader would pin an
+            # id that is wrong somewhere -- which is why this service declares no
+            # schema-requirements.json entry for it, exactly as dealer-ledger, delta-flow,
+            # hedging-pressure and gamma-effort omit the same subject for the same reason.
+            - name: OE_GEX_STRIKE_TOPIC
+              value: options.databento.gex.strike
+            # The OUTPUT topic. Avro with the registry id on the message, subject
+            # app.options.whatif.WhatIfMapRecord under RecordNameStrategy -- the record's FULL NAME
+            # and not the topic's, so there is ONE subject across environments where
+            # TopicNameStrategy would mint a different one per environment's TOPIC_PREFIX.
+            # scripts/kafka/ensure-whatif-map-topics.sh is the first-deploy barrier.
+            - name: OE_WHATIF_MAP_TOPIC
+              value: options.spx.whatif.map
+            # The consumer group. The service ASSIGNS every partition of the input explicitly from
+            # partitionsFor and never subscribes -- a subscribed consumer can be rebalanced away
+            # from a partition mid-session and would drop part of the board with nothing in the log
+            # to say so -- so this group is an identity for offset bookkeeping and lag monitoring,
+            # not a rebalancing group. The consumer starts at LATEST by design: the map is a
+            # snapshot of NOW, and replaying a session of strikes at startup would publish a board
+            # for every past minute, each keyed as though it had just happened.
+            - name: OE_WHATIF_MAP_GROUP
+              value: whatif-map-service
+            # C-26: the instrument whose rows build the board, as a SETTING and not as the first
+            # row to arrive, so the board cannot be decided by a race. A wrong value costs nothing
+            # silently -- every row counts as off-board, the board stays empty, and boardSize()
+            # stays 0, which the service prints each cycle as "waiting for a full round of the
+            # board".
+            - name: OE_WHATIF_SYMBOL
+              value: SPX
+            - name: JAVA_TOOL_OPTIONS
+              value: -Xmx512m -XX:+UseSerialGC
+          resources:
+            # No HTTP server and so NO probes: one assigned consumer and one producer. The pod's
+            # health is read from its own output -- a published cycle names its strike and level
+            # counts, and a service that has not yet seen a full round of the board says so by name
+            # every cycle (C-18) rather than going quiet. Silence reads as health, so the service
+            # is built not to be silent.
+            requests:
+              cpu: 100m
+              memory: 384Mi
+            limits:
+              memory: 768Mi
