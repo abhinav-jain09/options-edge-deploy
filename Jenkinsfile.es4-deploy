@@ -471,6 +471,15 @@ pipeline {
           bash scripts/es4/assert-cluster-identity.sh "$KUBECONFIG"      es4  "$ES4_NS_UID"
           bash scripts/es4/assert-cluster-identity.sh "$PROD_KUBECONFIG" prod "$PROD_NS_UID"
 
+          # Keep the ES4 admission policy synchronized on the normal service
+          # rollout path.  infra-sync also applies this file, but it first
+          # reconciles the entire Kafka estate and can be blocked by unrelated
+          # legacy-topic drift.  The policy is part of the same permitted
+          # deployment commit and is applied before the workload allowlist is
+          # evaluated, so a newly reviewed ES4 service cannot be stranded on
+          # an old policy revision.
+          kubectl apply $DRY -f k8s/es4/policy/workload-whitelist-admission.yaml
+
           # ES-only allowlist (owner 2026-11-02): nothing outside k8s/es4/allowed-services.txt is ever applied to es4.
           if [ "$ACTION" = "deploy-all" ]; then bash scripts/es4/assert-allowed-services.sh manifests
           else bash scripts/es4/assert-allowed-services.sh service "$SERVICE"; fi
