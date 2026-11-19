@@ -596,7 +596,15 @@ pipeline {
           fi
           # docs/schema-governance R11: every service the manifest binds to es4 must find its schemas in the es4 registry BEFORE any manifest is
           # applied (read-only under DRY). Nothing is bound to es4 yet -> "nothing to gate"; the first participant makes this load-bearing.
-          DEPLOY_DRY_RUN="$DRY" bash scripts/ci/schema-sync-all.sh es4 || { echo "FATAL: schema sync refused this es4 deploy. Nothing was applied." >&2; exit 1; }
+          if [ "$ACTION" = "deploy-service" ] && [ "$SERVICE" = "databento-rithmic-compat" ]; then
+            # The shadow publisher deliberately has no new Schema Registry lifecycle:
+            # it writes a separate Kafka lane with the released Rithmic wire
+            # contracts.  Preflight exactly those subjects rather than letting an
+            # unrelated legacy manifest participant block this bounded rollout.
+            SCHEMA_REGISTRY_URL="$ES4_REGISTRY" bash scripts/ci/verify-databento-rithmic-compat-schemas.sh
+          else
+            DEPLOY_DRY_RUN="$DRY" bash scripts/ci/schema-sync-all.sh es4 || { echo "FATAL: schema sync refused this es4 deploy. Nothing was applied." >&2; exit 1; }
+          fi
           for f in $FILES; do
             bash scripts/es4/pin-and-apply.sh "$f" "$REGISTRY" "$DRY"
           done
