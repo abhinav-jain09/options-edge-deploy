@@ -116,6 +116,13 @@ pipeline {
       // the build fails this way, that is the lever: convert another chain, or move a stage's body
       // into a script under scripts/. Do not assume a few hundred bytes are free here.
       'strike-hold', 'break-line', 'gamma-zone', 'gamma-effort',
+      // whatif-map: DEV only, replicas 1 (shadow). Service A of the dealer what-if grid, the Intraday Hedge Pressure Map: it reads the
+      // gamma-exposure service's per-strike rows read-only and publishes the whole board per evaluation on options.spx.whatif.map; single
+      // replica only (the stream is keyed by the cycle and one writer owns it). It emits no signal and never trades, and the one consumer
+      // the record reserves a subset for, the fight-zone service, does not exist. Listed here because section 9 of
+      // scripts/ci/validate-services.sh fails when a registered service is missing from this list -- the gap that left
+      // broker-execution-service and amt-order-bridge unselectable for the deploy they were registered for.
+      'whatif-map',
       // stock-gex-close-scheduler: PRODUCTION only — the closing-board SCHEDULE, which now lives
       // inside the batch itself (USER 2026-09-01: "I don't want anything Jenkins-based, it should
       // run based on Spring Batch configuration"). This job DEPLOYS it; nothing here decides when
@@ -1050,8 +1057,11 @@ PYEOF
       // es-liquidity-wall (dev only, same shape: scripts/kafka/ensure-es-liquidity-wall-topics.sh, ten topics, one partition each, the declared cleanup policy, retention.ms and retention.bytes;
       // the events log at retention.ms -1 with a 256 MiB cap, the four pure-compact topics at -1/-1) shares this ONE stage on purpose: this pipeline's generated CPS method sits at the JVM's
       // 64 KB method limit, and a separate stage for it failed every build at compile time ("Method too large", build #3006). The barrier run is selected by SERVICE below.
+      // whatif-map (dev only, ONE topic options.spx.whatif.map: scripts/kafka/ensure-whatif-map-topics.sh) shares this stage for exactly that reason -- it is one list entry and one case arm, never a
+      // new stage. Its barrier is what makes the DECLARED SHAPE a precondition of the deploy: the service neither creates nor checks its output topic, so without the barrier the producer's first send
+      // would auto-create it at dev's broker default of 32 partitions and a retention nobody declared, and the EXACT-partition declaration in topics.env would then fail every later apply.
       when {
-        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (['line-acceptance', 'es-liquidity-wall', 'es-liquidity-engine', 'liquidity-validator', 'strike-hold', 'break-line', 'gamma-zone', 'gamma-effort'].contains(params.SERVICE) && !params.DEPLOY_DRY_RUN) }
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (['line-acceptance', 'es-liquidity-wall', 'es-liquidity-engine', 'liquidity-validator', 'strike-hold', 'break-line', 'gamma-zone', 'gamma-effort', 'whatif-map'].contains(params.SERVICE) && !params.DEPLOY_DRY_RUN) }
       }
       steps {
         script {
@@ -1072,6 +1082,7 @@ PYEOF
             break-line) scripts/kafka/ensure-break-line-topics.sh ;;
             gamma-zone) scripts/kafka/ensure-gamma-zone-topics.sh ;;
             gamma-effort) scripts/kafka/ensure-gamma-effort-topics.sh ;;
+            whatif-map) scripts/kafka/ensure-whatif-map-topics.sh ;;
             *) echo "FATAL: no topic barrier is wired for SERVICE=$SERVICE in this stage" >&2; exit 1 ;;
           esac
         '''

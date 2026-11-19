@@ -1,0 +1,17 @@
+# SERVICE SLICE — whatif-map (Service A of the dealer what-if grid: the Intraday Hedge Pressure Map,
+# one record per evaluation carrying the whole board — every strike's signed net gamma exposure,
+# hold-or-accelerate, strength relative to the board, the delta band edges and the levels) on DEV.
+# Owns ONLY this service's Deployment.
+#
+# DEV-ONLY: referenced from k8s/overlays/dev (NOT k8s/base, NOT production or experiment);
+# services.yaml declares envs: [dev]. One JVM, one EXPLICITLY ASSIGNED consumer (never a
+# subscription — a rebalance mid-session would drop part of the board silently) and one producer; no
+# Kafka Streams and no state volume, because the board is a pure fold of the rows that have arrived
+# and a restart rebuilds it from LATEST rather than replaying the session. No Service object and no
+# probes: the service serves no HTTP. No ConfigMap, Secret or PVC of its own — the two OE_-prefixed
+# cluster addresses it needs are MAPPED from options-edge-config in the deployment, which is the one
+# thing in this slice worth reading before changing it.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - whatif-map-deployment.yaml

@@ -106,6 +106,12 @@ resources:
   # It publishes the EFFORT reading and withholds the design's final verdict by name, because that one leads on resting liquidity and ES depth comes from a different feed than the aggressor-classified tape.
   # Referenced here only (NOT in k8s/base, production or experiment). No patches here or in the standalone slice (k8s/services/gamma-effort/overlays/dev); the dev image remap below is what the slice mirrors.
   - ../../services/gamma-effort/base
+  # whatif-map: DEV-ONLY (services.yaml envs: [dev]), replicas 1: Service A of the dealer what-if grid, the Intraday Hedge Pressure Map -- one record per evaluation carrying the WHOLE board (every strike's
+  # signed net gamma exposure, hold-or-accelerate, strength relative to the board, the delta band edges, the structure facts and the levels) on options.spx.whatif.map. SHADOW: it emits no signal, names no
+  # level to act at and never trades, and its one declared consumer (the fight-zone service) does not exist yet. Referenced here only (NOT in k8s/base, production or experiment). No patches here or in the
+  # standalone slice (k8s/services/whatif-map/overlays/dev); the dev image remap below is what the slice mirrors. The two OE_-prefixed cluster addresses it needs are mapped from options-edge-config in the
+  # base deployment, because this estate declares no OE_-prefixed broker or registry key and MapSettings refuses to start without them.
+  - ../../services/whatif-map/base
   # drop-classifier-ref: DEV-ONLY and TEMPORARY (services.yaml envs: [dev]): the retained drop-classifier image in ES_TRADES mode writing es.drop.ref.* , the reference side of the G3b parity gate. Removed when G3b passes.
   - ../../services/drop-classifier-ref/base
   # NOTE: the databento timewarp replay Job + snapshot-replay Deployment used to live
@@ -1023,6 +1029,9 @@ images:
     newName: host.docker.internal:5001/options-edge-gamma-zone
   - name: 192.168.100.252:5000/options-edge-gamma-effort
     newName: host.docker.internal:5001/options-edge-gamma-effort
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-whatif-map
+    newName: host.docker.internal:5001/options-edge-whatif-map
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-oi-next-publication
     newName: host.docker.internal:5001/options-edge-oi-next-publication
