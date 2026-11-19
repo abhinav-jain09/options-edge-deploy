@@ -339,6 +339,26 @@ services:
   # One JVM, no Kafka Streams, no state volume (the board is a pure fold of the rows that arrived), no HTTP server and so no probes. Single replica only, strategy Recreate: the stream is keyed by the CYCLE and
   # one writer owns it. No Service object; no production or es4 entry, image, topic or overlay exists. The RADAR topic and Service B are not built and not declared.
   - { name: whatif-map,                   managedBy: standalone, sliceGenerated: true, envs: [dev], image: options-edge-whatif-map,                    deployments: [whatif-map-service] }
+  # whatif-radar: DEV ONLY (envs: [dev]). Service B of the dealer what-if grid, the Close Squeeze Radar. It reads the SAME per-strike rows as Service A, independently and in its own process, builds the board
+  # at its OWN geometry -- a 0.5-point grid over 30 points where A's is 1 point over 120, because the last ten minutes are decided inside one point of a strike and a 1-point grid cannot see a knife-edge at
+  # all -- and publishes the LIVE STRIKES with R-B-5's per-strike liveness statistic (the largest sampled excursion of a strike's leave-one-out response from its band's starting response, as a share of the
+  # band's own total movement), the lean at 3 and 5 points WITH both side magnitudes, the ACCELERATE chain as one path with its total points, the squeeze alert in the owner's own words, the knife-edge flag
+  # and its own two charm drifts at 1 minute and to expiry.
+  # IT PRODUCES NOTHING ABOVE TEN MINUTES TO EXPIRY (R-B-1), and every 10 seconds at or under it, INCLUSIVE: about 60 records a session against Service A's 540. A quiet pod at two hours to expiry is the rule
+  # working and not a wedged process, which is also why it has no readiness probe on its output.
+  # SHADOW: it emits no signal, names no level to act at, never trades and adds no decision consumer. The four record blocks that belong to modules AFTER the radar -- the late-day ladder, the positive
+  # staircase, the counter-move and the signal layer -- are ABSENT and never zeroed, and the record's contract makes them optional.
+  # IT RUNS THE whatif-map IMAGE, with a different main class, under its own Deployment -- exactly as zerodte-research-writer runs the vix-option-inteligence image. Service A and Service B are two services
+  # in one Maven module, so one jar holds both mains; a second image would be a second build of identical bytes and a second place for the two to drift in version. Hence NO image of its own here: the dev
+  # overlay's options-edge-whatif-map remap covers both Deployments. The command uses `-cp` and NOT `-jar`, because with `-jar` the jar manifest's Main-Class wins and this pod would run a SECOND Service A --
+  # two writers on options.spx.whatif.map interleaving two boards under one session.
+  # THE ONE THING TO READ BEFORE CHANGING THE DEPLOYMENT: as with Service A, it reads OE_KAFKA_BOOTSTRAP_SERVERS and OE_SCHEMA_REGISTRY_URL and this estate's options-edge-config declares neither name, so the
+  # base deployment MAPS both from that ConfigMap with configMapKeyRef. RadarSettings refuses to start when either is absent. It also REFUSES the map service's consumer group and the map service's topic by
+  # name: a shared group would make the two services partitions of ONE consumer, each seeing only some gex rows and each publishing a fragment of the chain as though it were the board.
+  # Its output topic is declared in scripts/kafka/topics.env and this service VERIFIES it at start-up and never creates it, so a missing topic refuses the pod by name rather than failing every cycle.
+  # One JVM, no Kafka Streams, no state volume, no HTTP server and so no probes. Single replica only, strategy Recreate: the stream is keyed by the CYCLE and one writer owns it. No Service object; no
+  # production or es4 entry, image, topic or overlay exists.
+  - { name: whatif-radar,                 managedBy: standalone, sliceGenerated: true, envs: [dev], image: options-edge-whatif-map,                    deployments: [whatif-radar-service] }
   # stock-gex: SPX-500 single-stock GEX (Databento equity options; NO Kafka). Its image builds in the
   # options-edge-databento-feed repo (Dockerfile.stockgex), like databento-sr3-feed — hence buildJob.
   # DEV-FIRST/on-demand: prod overlay holds it at replicas:0 until the nightly OI-index builder exists.

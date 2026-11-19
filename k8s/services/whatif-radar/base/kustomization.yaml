@@ -1,0 +1,19 @@
+# SERVICE SLICE — whatif-radar (Service B of the dealer what-if grid: the Close Squeeze Radar, which
+# publishes the live strikes with their liveness statistic, the lean at 3 and 5 points, the chain,
+# the squeeze alert, the knife-edge and its own two charm drifts) on DEV. Owns ONLY this service's
+# Deployment.
+#
+# DEV-ONLY: referenced from k8s/overlays/dev (NOT k8s/base, NOT production or experiment);
+# services.yaml declares envs: [dev]. One JVM, one EXPLICITLY ASSIGNED consumer (never a
+# subscription — a rebalance mid-session would drop part of the board silently) and one producer; no
+# Kafka Streams and no state volume, because the board is a pure fold of the rows that have arrived
+# and a restart rebuilds it from LATEST. No Service object and no probes: it serves no HTTP, and a
+# quiet pod above ten minutes to expiry is R-B-1 rather than a fault.
+#
+# IT RUNS THE whatif-map IMAGE WITH A DIFFERENT MAIN CLASS, which is why no image of its own
+# appears in services.yaml or in the dev overlay's `images:` remap — the remap of
+# options-edge-whatif-map covers both Deployments.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - whatif-radar-deployment.yaml
