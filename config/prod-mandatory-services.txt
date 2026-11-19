@@ -1,0 +1,23 @@
+# PRODUCTION MANDATORY ALWAYS-UP SERVICES (namespace options-edge).
+#
+# One deployment per line, "name   # why". These stay at replicas >= 1 in every production scale-down,
+# clean-slate and boot/morning path. tests/test_prod_mandatory_services.py fails CI if a mandatory
+# deployment appears in a KEEP_DOWN list, an ES pre-open down list, a production replicas:0 patch, or is
+# missing from SCALE_EXEMPT_RE in scripts/ops/offhours-clean-slate.sh.
+#
+# Owner rule (2026-11-18, "bring down production, keep mandatory services up"; 2026-11-19 added the two
+# stock-gex services). Also mandatory but not a Deployment: the oe-keycloak-postgres StatefulSet.
+#
+# 2026-11-19: scaling stock-gex-service to 0 blanked Gamma Lab stock data, and scaling
+# stock-gex-close-scheduler to 0 killed the 11-18 closing-board run mid-flight (the scheduler resumes
+# it on start-up, but the board stayed unpublished until the next morning).
+oe-keycloak                        # auth issuer; options-edge-web needs it at boot, an outage logs every user out
+options-edge-web                   # the site
+options-edge-redis                 # web session / cache
+feed-gateway-service               # live data socket for every page
+options-edge-databento-feed        # the Databento live feed
+raw-to-display-databento-service   # option-chain display stream
+raw-postgres-writer                # raw event history
+hpsf-postgres-writer-service       # HPSF history
+stock-gex-service                  # Gamma Lab stock board (live + closing board)
+stock-gex-close-scheduler          # builds the closing board after the close; resumes a killed run
