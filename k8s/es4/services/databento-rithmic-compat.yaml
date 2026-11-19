@@ -12,7 +12,11 @@ metadata:
     app.kubernetes.io/name: databento-rithmic-compat
     app.kubernetes.io/part-of: options-edge-es4
 spec:
-  replicas: 1
+  # HOLD: the current Databento credential was refused by the venue for the
+  # required `mbo` schema.  Do not leave a failed subscriber crash-looping;
+  # set to 1 only after that entitlement is enabled and verified.
+  # Rithmic remains the active writer of its live topics throughout this hold.
+  replicas: 0
   strategy:
     type: Recreate
   selector:
