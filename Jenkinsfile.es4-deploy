@@ -601,6 +601,19 @@ pipeline {
             # it writes a separate Kafka lane with the released Rithmic wire
             # contracts.  Preflight exactly those subjects rather than letting an
             # unrelated legacy manifest participant block this bounded rollout.
+            # Reconcile ONLY its two declared topics.  The generic create-topics
+            # action also reconciles unrelated legacy indicator contracts, so it
+            # is neither necessary nor safe as a prerequisite for this service.
+            if [ -z "$DRY" ]; then
+              ssh -o BatchMode=yes "$ES4_HOST" 'set -e; cd /home/es4/repo; \
+                export PATH=/home/es4/repo/scripts/es4/kafka-cli-shim:$PATH; \
+                export KAFKA_BOOTSTRAP_SERVERS=localhost:29092 KAFKA_TOPIC_REPLICATION_FACTOR=1 \
+                       KAFKA_TOPIC_RETENTION_MS=43200000 TOPIC_SET=es4 \
+                       APPLY_TOPICS_ONLY="es.databento.shadow.depth es.databento.shadow.mbo"; \
+                bash scripts/kafka/apply-topics.sh'
+            else
+              echo "DRY: would reconcile only the Databento Rithmic shadow topics"
+            fi
             SCHEMA_REGISTRY_URL="$ES4_REGISTRY" bash scripts/ci/verify-databento-rithmic-compat-schemas.sh
           else
             DEPLOY_DRY_RUN="$DRY" bash scripts/ci/schema-sync-all.sh es4 || { echo "FATAL: schema sync refused this es4 deploy. Nothing was applied." >&2; exit 1; }
