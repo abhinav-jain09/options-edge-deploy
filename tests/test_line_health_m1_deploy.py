@@ -249,9 +249,9 @@ class ConfigurationValidator(unittest.TestCase):
         self.assertIn("render carries line-health configuration", r.stderr)
 
     # line health M2: the shadow book flag
-    def test_the_dev_patch_must_turn_the_shadow_book_on(self):
-        self.edit(PATCH, lambda s: s.replace('LEVEL_ABSORPTION_LINE_HEALTH_BOOK_ENABLED\n              value: "true"', 'LEVEL_ABSORPTION_LINE_HEALTH_BOOK_ENABLED\n              value: "false"'))
-        self.assert_fails("LEVEL_ABSORPTION_LINE_HEALTH_BOOK_ENABLED=true")
+    def test_the_dev_patch_must_state_the_shadow_book_flag_as_true_or_false(self):
+        self.edit(PATCH, lambda s: s.replace('LEVEL_ABSORPTION_LINE_HEALTH_BOOK_ENABLED\n              value: "false"', 'LEVEL_ABSORPTION_LINE_HEALTH_BOOK_ENABLED\n              value: "maybe"'))
+        self.assert_fails("LEVEL_ABSORPTION_LINE_HEALTH_BOOK_ENABLED=true or")
 
     def test_another_file_naming_the_book_flag_fails(self):
         (self.work / "k8s/overlays/production/zz-book.yaml").write_text("# LEVEL_ABSORPTION_LINE_HEALTH_BOOK_ENABLED\n")

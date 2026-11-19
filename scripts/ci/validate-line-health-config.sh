@@ -102,7 +102,8 @@ patch = yaml.safe_load(read('k8s/overlays/dev/level-absorption-dev-enable-patch.
 ctr = patch['spec']['template']['spec']['containers'][0]
 env = {e['name']: e.get('value') for e in ctr.get('env', [])}
 if env.get(ENABLE) != 'true': err.append(f'the dev patch must set {ENABLE}=true')
-if env.get(BOOK) != 'true': err.append(f'the dev patch must set {BOOK}=true (line health M2, shadow book)')
+# 'false' is allowed since 2026-11-19: the shadow book reader retains the whole wall-rows backlog of a loop that restarts hours behind (OOMKilled 220+ times on dev); the flag must still be stated, never left to the service default
+if env.get(BOOK) not in ('true', 'false'): err.append(f'the dev patch must set {BOOK}=true or {BOOK}=false explicitly (line health M2, shadow book)')
 if env.get(USER) != 'true': err.append(f'the dev patch must set {USER}=true (line health M5, user lines)')
 if env.get(CONF) != f'{MOUNT}/{FILE_KEY}': err.append(f'the dev patch must set {CONF}={MOUNT}/{FILE_KEY}')
 vols = {v['name']: v for v in patch['spec']['template']['spec'].get('volumes', [])}
