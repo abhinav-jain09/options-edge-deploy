@@ -1,0 +1,70 @@
+# Databento-to-Rithmic contract compatibility publisher.
+#
+# This is deliberately a SHADOW lane. Rithmic continues as the only writer of
+# es.rithmic.depth and es.rithmic.mbo; this workload writes separate topics for
+# a comparison page and read-only validation only.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: databento-rithmic-compat
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: databento-rithmic-compat
+    app.kubernetes.io/part-of: options-edge-es4
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: databento-rithmic-compat
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: databento-rithmic-compat
+        app.kubernetes.io/part-of: options-edge-es4
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: compat
+        image: 192.168.100.252:5000/options-edge-databento-rithmic-compat:prod
+        env:
+        - name: KAFKA_BOOTSTRAP_SERVERS
+          value: 192.168.100.4:9092
+        - name: KAFKA_SCHEMA_REGISTRY_URL
+          value: http://192.168.100.4:8081
+        - name: DATABENTO_RITHMIC_COMPAT_SYMBOL
+          value: ES.v.0
+        - name: DATABENTO_RITHMIC_COMPAT_STYPE_IN
+          value: continuous
+        - name: DATABENTO_RITHMIC_COMPAT_DEPTH_TOPIC
+          value: es.databento.shadow.depth
+        - name: DATABENTO_RITHMIC_COMPAT_MBO_TOPIC
+          value: es.databento.shadow.mbo
+        envFrom:
+        - secretRef:
+            name: options-edge-databento-feed-env
+        resources:
+          requests:
+            cpu: 250m
+            memory: 512Mi
+          limits:
+            memory: 1Gi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+      volumes:
+      - name: tmp
+        emptyDir:
+          sizeLimit: 32Mi
