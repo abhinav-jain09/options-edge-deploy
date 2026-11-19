@@ -110,6 +110,30 @@ spec:
             # silently -- every row counts as off-board, the board stays empty, and boardSize()
             # stays 0, which the service prints each cycle as "waiting for a full round of the
             # board".
+            # SERVICE B, THE CLOSE SQUEEZE RADAR, SWITCHED ON (R-B-1). The radar publishes
+            # WhatIfRadarRecord on options.spx.whatif.radar from THIS service's cycle -- Design §8
+            # says the engine is computed once and read twice, so Service A and Service B share
+            # one board and one valuation instant inside the last ten minutes rather than running
+            # as two processes that each invert their own. The reviewer ordered a separate service
+            # at 19:15 and withdrew it at 19:33 on exactly that sentence.
+            #
+            # IT PUBLISHES NOTHING ABOVE TEN MINUTES TO EXPIRY, and every cycle at or under it
+            # (R-B-1, inclusive). About 60 records a session against Service A's 540, so an empty
+            # radar topic mid-session is the rule working and not a fault: today's only live
+            # window is 21:50 to 22:00 Amsterdam.
+            #
+            # The switch defaults to FALSE in code, because this service VERIFIES its output
+            # topics at start-up and never creates them, and the radar's topic is not declared in
+            # every environment. It is declared on dev (scripts/kafka/topics.env, deploy #1680)
+            # and created, so turning it on here is safe; with the topic absent this pod would
+            # refuse to start by name, which is the failure that check exists to produce.
+            #
+            # The value is the literal "true": MapSettings refuses anything that is not "true" or
+            # "false", case-insensitively, because Boolean.parseBoolean reads "yes", "1" and a typo
+            # all as FALSE -- so a deployment that meant to turn the radar on would have it silent
+            # and look perfectly healthy.
+            - name: OE_WHATIF_RADAR_ENABLED
+              value: "true"
             - name: OE_WHATIF_SYMBOL
               value: SPX
             - name: JAVA_TOOL_OPTIONS

@@ -54,6 +54,8 @@ spec:
               value: options.spx.whatif.map
             - name: OE_WHATIF_MAP_GROUP
               value: whatif-map-service
+            - name: OE_WHATIF_RADAR_ENABLED
+              value: "true"
             - name: OE_WHATIF_SYMBOL
               value: SPX
             - name: JAVA_TOOL_OPTIONS
