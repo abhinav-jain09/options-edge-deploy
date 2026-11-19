@@ -105,8 +105,11 @@ if __name__ == "__main__":
 class ScaleExempt(unittest.TestCase):
     """Keycloak never rides the pipeline scale-down: the snapshot that drives scale-to-0 and restore excludes it."""
 
-    def test_default_exempts_keycloak_only(self):
-        self.assertIn('SCALE_EXEMPT_RE="${SCALE_EXEMPT_RE:-^oe-keycloak$}"', SCRIPT.read_text())
+    def test_default_exempts_keycloak_and_the_rest_of_the_mandatory_set(self):
+        # Since 2026-11-19 the default is the whole production mandatory set (config/prod-mandatory-services.txt;
+        # tests/test_prod_mandatory_services.py pins the exact membership). Keycloak must still be in it.
+        self.assertRegex(SCRIPT.read_text(),
+                         r'SCALE_EXEMPT_RE="\$\{SCALE_EXEMPT_RE:-\^\((?:[a-z0-9-]+\|)*oe-keycloak(?:\|[a-z0-9-]+)*\)\$\}"')
 
     def test_snapshot_filter_drops_exempt_names_and_keeps_replica_counts(self):
         snap = "oe-keycloak 1\nfeed-gateway-service 1\nindicator-service 0\n"
