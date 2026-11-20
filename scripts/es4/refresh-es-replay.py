@@ -102,8 +102,8 @@ def verify_pod(command, image, accepted, name="es-feed", workload="es-feed", sel
     if container({"spec": pod["spec"]}, name)["image"] != image or not any(status["imageID"].endswith(d) for d in accepted):
         raise RuntimeError("Running ES feed image differs from verified image")
     env = {e["name"]: e.get("value") for e in container({"spec": pod["spec"]}, name).get("env", [])}
-    if env.get("DATABENTO_ES_TRADES_REPLAY_START_MINUTES") != "60":
-        raise RuntimeError("Pod does not explicitly set ES replay to 60 minutes")
+    if env.get("DATABENTO_ES_TRADES_REPLAY_START_MINUTES") != "1440":
+        raise RuntimeError("Pod does not explicitly set ES replay to 1440 minutes")
     return pod["metadata"]["name"]
 
 
@@ -166,7 +166,7 @@ def observe_es_session(command, pod_name, require_complete=False):
     subscriptions=re.findall(r"ES trades subscription:",log)
     if len(subscriptions)>1 or re.search(r"Databento ES(?:-only)? live stream error:|ES replay unavailable:",log):
         raise RuntimeError("ES feed reconnected or replay became unavailable during verification")
-    subscribed=bool(re.search(r'ES trades subscription: replay_minutes=60 start=Some\("[^\"]+"\)',log))
+    subscribed=bool(re.search(r'ES trades subscription: replay_minutes=1440 start=Some\("[^\"]+"\)',log))
     report=replay_result(log)
     if require_complete and (len(subscriptions)!=1 or not subscribed or report is None):
         raise RuntimeError("Completed ES session evidence missing during verification")
@@ -218,7 +218,7 @@ def main():
     selected = container(template, container_name)
     selected["image"] = image
     selected["env"] = [e for e in selected.get("env", []) if e["name"] != "DATABENTO_ES_TRADES_REPLAY_START_MINUTES"]
-    selected["env"].append({"name": "DATABENTO_ES_TRADES_REPLAY_START_MINUTES", "value": "60"})
+    selected["env"].append({"name": "DATABENTO_ES_TRADES_REPLAY_START_MINUTES", "value": "1440"})
     def patch_template(current, target):
         patch = {"metadata": {"resourceVersion": current["metadata"]["resourceVersion"]}, "spec": {"template": target}}
         run(*command, "patch", "deployment", workload, "--type=merge", "-p", json.dumps(patch))
@@ -244,7 +244,7 @@ def main():
                 if verified_at is None: verified_at=time.monotonic()
                 if time.monotonic()-verified_at>=60:break
         if replay_report is None:
-            raise RuntimeError("No completed, verified 60-minute ES replay observed within five minutes")
+            raise RuntimeError("No completed, verified 1440-minute ES replay observed within five minutes")
         if verified_at is None or time.monotonic()-verified_at<60:
             raise RuntimeError("No sixty-second post-replay stability interval within five minutes")
         actual = deployment()
@@ -294,7 +294,7 @@ def main():
     try:promote_verified_image(registry,digest)
     except Exception:
         raise RuntimeError("Feed verified and running; ES tag was not confirmed promoted. No workload rollback performed") from None
-    print(json.dumps({"target":target,"replay":replay_report,"image":image,"pod":pod_name,"ready":True,"replayMinutes":60,"downstreamFence":progress_fence}))
+    print(json.dumps({"target":target,"replay":replay_report,"image":image,"pod":pod_name,"ready":True,"replayMinutes":1440,"downstreamFence":progress_fence}))
 
 
 
