@@ -70,6 +70,12 @@ spec:
               value: "6500"
             - name: DATABENTO_MAX_STRIKE
               value: "8000"
+            - name: DATABENTO_OI_HISTORICAL_BOOTSTRAP_ENABLED
+              value: "true"
+            - name: DATABENTO_OI_HISTORICAL_BOOTSTRAP_LOOKBACK_DAYS
+              value: "4"
+            - name: DATABENTO_OI_HISTORICAL_BOOTSTRAP_TIMEOUT_SECONDS
+              value: "45"
             - name: DATABENTO_VIX_PRICE_ENABLED
               value: "false"
             - name: DATABENTO_PREMARKET_LIVE_OI_ENABLED

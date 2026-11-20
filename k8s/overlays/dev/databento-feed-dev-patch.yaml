@@ -104,6 +104,15 @@ spec:
               value: "6500"
             - name: DATABENTO_MAX_STRIKE
               value: "8000"
+            # 2026-11-20 (dev): seed open interest for chain legs that never saw today's live OI
+            # statistics (the 6500-6995 strikes added mid-session were not subscribed at 06:30, so they
+            # had prices but no OI and therefore no gamma). Same setting es4 already runs.
+            - name: DATABENTO_OI_HISTORICAL_BOOTSTRAP_ENABLED
+              value: "true"
+            - name: DATABENTO_OI_HISTORICAL_BOOTSTRAP_LOOKBACK_DAYS
+              value: "4"
+            - name: DATABENTO_OI_HISTORICAL_BOOTSTRAP_TIMEOUT_SECONDS
+              value: "45"
             - name: DATABENTO_VIX_PRICE_ENABLED
               value: "false"
             # Pre-market LIVE OI: while OPRA is closed, drain the OI-aware statistics replay and publish the
