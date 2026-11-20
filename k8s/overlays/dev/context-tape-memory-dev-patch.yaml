@@ -1,0 +1,21 @@
+# DEV-ONLY: the Context Tape service has no memory ceiling. It was OOMKilled at the 2Gi limit on 2026-11-20 14:13Z after ~16 h
+# up (heap capped at 1536m inside it), and every restart blanks /context-tape for the ~90 s backfill ("Waiting for Context
+# Tape session"). Owner decision: this page is critical, give it the memory it wants.
+#  - no container memory limit (requests stay, so scheduling is unchanged); the node has ~86 GiB.
+#  - heap ceiling 16g (was 1536m) so the JVM can actually use it; start at 512m. Production and es4 are untouched.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: context-tape-service
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: context-tape
+          env:
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xms512m -Xmx16g"
+          resources:
+            limits:
+              memory: null

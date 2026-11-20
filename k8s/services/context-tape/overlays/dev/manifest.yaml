@@ -143,7 +143,7 @@ spec:
             - name: CONTEXT_TAPE_PRE_OPEN_ET
               value: "07:00"
             - name: JAVA_TOOL_OPTIONS
-              value: -Xms256m -Xmx1536m
+              value: -Xms512m -Xmx16g
           envFrom:
             - configMapRef:
                 name: options-edge-config
@@ -173,8 +173,7 @@ spec:
             initialDelaySeconds: 20
             periodSeconds: 10
           resources:
-            limits:
-              memory: 2Gi
+            limits: {}
             requests:
               cpu: 250m
               memory: 768Mi
