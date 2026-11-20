@@ -58,7 +58,7 @@ class ReplayRefreshTest(unittest.TestCase):
                 if patch_count == 1:
                     selected = payload["spec"]["template"]["spec"]["containers"][0]
                     self.assertEqual(selected["env"], [{"name": "EXISTING", "value": "preserved"},
-                        {"name": "DATABENTO_ES_TRADES_REPLAY_START_MINUTES", "value": "60"}])
+                        {"name": "DATABENTO_ES_TRADES_REPLAY_START_MINUTES", "value": "1440"}])
                     self.assertEqual(selected["image"], image)
                 deployment["spec"]["template"] = payload["spec"]["template"]
             if "rollout" in args and patch_count == 1 and interrupt:
@@ -86,7 +86,7 @@ class ReplayRefreshTest(unittest.TestCase):
                     return ""
                 if reconnect or (late_reconnect and log_reads>3):
                     return "ES trades subscription: first\nES trades subscription: second"
-                log = ('ES trades subscription: replay_minutes=60 start=Some("2026-10-16T13:30:00Z")' if subscription else "") + ('\nES replay caught up: '+json.dumps({'expected_unique':20,'matched_unique':0 if mismatch else 20,'verified':not mismatch and not (late_unverified and log_reads>3)}) if caught_up and not (delayed_completion and log_reads<3) else '')
+                log = ('ES trades subscription: replay_minutes=1440 start=Some("2026-10-16T13:30:00Z")' if subscription else "") + ('\nES replay caught up: '+json.dumps({'expected_unique':20,'matched_unique':0 if mismatch else 20,'verified':not mismatch and not (late_unverified and log_reads>3)}) if caught_up and not (delayed_completion and log_reads<3) else '')
                 if large_phase_b_log and log_reads>3:
                     log+='x'*(4194304-len(log.encode()))
                 return log
@@ -218,7 +218,7 @@ class ReplayRefreshTest(unittest.TestCase):
         for kwargs, message in [({"image_id": "sha256:" + "d" * 64}, "differs"),
                                 ({"ready": False}, "not ready"), ({"restarts": 1}, "not ready"),
                                 ({"fail_rollout": True}, "rollout timeout"),
-                                ({"subscription": False}, "60-minute"), ({"pod_changed": True}, "pod changed"),
+                                ({"subscription": False}, "1440-minute"), ({"pod_changed": True}, "pod changed"),
                                 ({"env_missing": True}, "explicitly set"), ({"reconnect": True}, "reconnected"),
                                 ({"interrupt": True}, "interrupted"), ({"caught_up": False}, "No completed"), ({"mismatch": True}, "identity verification failed")]:
             result, calls, after, before = self.exercise(**kwargs)
