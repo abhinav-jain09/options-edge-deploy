@@ -110,6 +110,7 @@ HAND_AUTHORED = {
     "es-cvd",             # ES-only session-anchored CVD; cross-env SPX wiring, no production slice
     "es-amt",             # ES-only SPX Auction Desk (futures.auction); same cross-env wiring as es-cvd
     "es-footprint-strike", # ES-only strike-interaction subsystem over es.futures.footprint.bars (ES-FOOTPRINT-STRIKE-INTERACTION.md)
+    "databento-rithmic-compat", # Databento-to-Rithmic shadow comparison lane; no production slice
 }
 
 # KNOWN STALE — generated files the renderer no longer produces. c12e87c removed
