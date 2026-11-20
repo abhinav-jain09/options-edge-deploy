@@ -802,6 +802,12 @@ patches:
           # safety fence: a manifest applied between 06:00 and 06:15 must not arm early.
           - name: IB_CHAIN_WINDOW_START
             value: "06:15"
+          # 2026-11-20: re-centre the 42-strike window once spot is within 75 points of an edge (feed
+          # default 50). The window is 205 points wide, so 50 let spot sit 55 points above the bottom
+          # edge with gamma only above 7075 (owner: "why there is no gamma below this strike"); 75
+          # keeps at least ~75 points of strikes on each side of spot. Dwell/min-interval unchanged.
+          - name: IB_CHAIN_RECENTRE_EDGE_POINTS
+            value: "75"
           - name: IBKR_VIX_PRICE_ENABLED
             value: "true"
           # HOP topic + fan-out targets (requirement §12): raw IBKR VIX ticks go to the
