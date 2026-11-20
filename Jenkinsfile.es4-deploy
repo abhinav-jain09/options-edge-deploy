@@ -144,6 +144,10 @@ pipeline {
           set -euo pipefail
           # Both compilation and the Linux image build stay on the Mac CI agent.
           export PATH="/opt/homebrew/opt/rustup/bin:$PATH"
+          # The Command Line Tools compiler does not automatically search the
+          # libc++ headers packaged inside the selected macOS SDK.
+          export SDKROOT="$(xcrun --show-sdk-path)"
+          export CXXFLAGS="${CXXFLAGS:-} -isystem ${SDKROOT}/usr/include/c++/v1"
           unset CARGO_TARGET_DIR
           export PYTHONDONTWRITEBYTECODE=1
           python3 -B -c 'import pathlib,subprocess; files=subprocess.check_output(["git","ls-files","-z","--others","--ignored","--exclude-standard"]).decode().split("\\0"); [pathlib.Path(p).unlink() for p in files if "__pycache__/" in p and p.endswith(".pyc")]'
