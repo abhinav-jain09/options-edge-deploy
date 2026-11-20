@@ -70,8 +70,12 @@ spec:
                 name: options-edge-databento-feed-env   # DATABENTO_API_KEY
           env:
             # Production ES futures source; options replay stays off.
+            # Recover the earliest hole in the last 24 hours after a restart.
+            # The replay records existing Kafka identities first and publishes only
+            # the missing interval, so this is a maximum recovery horizon rather
+            # than a 24-hour duplicate replay.
             - name: DATABENTO_ES_TRADES_REPLAY_START_MINUTES
-              value: "60"
+              value: "1440"
             # ---- outputs -> es4 (NODE-LOCAL after the relocation) ----------------
             # Kafka and Schema Registry run on the es4 HOST, not as pods, so the pod must
             # still address them by node IP — but the hop is now node-local rather than
