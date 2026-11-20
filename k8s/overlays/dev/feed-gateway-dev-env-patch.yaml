@@ -50,8 +50,29 @@ spec:
             # k8s/overlays/production` was re-rendered to prove this change does not reach them.
             # -Xms stays 256m; HeapGuard (gateway #903) degrades the overnight block with a stated
             # reason rather than failing the page if this ceiling is ever reached again.
+            #
+            # NATIVE MEMORY TRACKING, dev only (the reviewer's instruction, queued for the
+            # after-22:00 gateway build). The arithmetic above accounts for heap, non-heap and the
+            # page cache from the OUTSIDE; NMT is what says, from the inside, which of metaspace,
+            # thread stacks, code cache, GC structures or direct byte buffers actually grew when
+            # this container reached its ceiling at 15:24 on 2026-11-20.
+            #
+            # WHY THREE OPTIONS AND NOT ONE. The image is a Temurin 21.0.13 *JRE*: its
+            # $JAVA_HOME/bin holds java, jfr, jrunscript, jwebserver, keytool and rmiregistry, and
+            # NO jcmd. `NativeMemoryTracking=summary` on its own would therefore cost its overhead
+            # and be unreadable -- the usual reader is `jcmd VM.native_memory summary`, which this
+            # image cannot run. PrintNMTStatistics makes the JVM print the whole summary to stdout
+            # AT EXIT, which lands in the pod log, and that is the one reader this image does have.
+            # Verified in the running dev pod before this change: the three options together print
+            # the full summary, down to "Unknown (reserved=0, committed=0)".
+            #
+            # WHAT IT DOES NOT GIVE US. The summary arrives when the JVM stops, so it explains the
+            # run that has just ended rather than the one in progress. A live reading needs jcmd,
+            # which means a JDK image -- a bigger change than this and not one to make under a
+            # session. NMT itself costs a few per cent of the committed footprint, which is why it
+            # is dev only: production and experiment keep the base's flags untouched.
             - name: JAVA_TOOL_OPTIONS
-              value: "-Xms256m -Xmx2560m"
+              value: "-Xms256m -Xmx2560m -XX:NativeMemoryTracking=summary -XX:+UnlockDiagnosticVMOptions -XX:+PrintNMTStatistics"
             - name: GATEWAY_RITHMIC_DEPTH_ENABLED
               value: "true"
             # Sockets one account may hold at once: 8 (owner 2026-11-10; gateway default 4). Measured the same day: one Order

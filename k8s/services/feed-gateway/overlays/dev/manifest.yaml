@@ -69,7 +69,7 @@ spec:
             # carries it here and not at the base's position. The reason and the arithmetic live
             # once, in k8s/overlays/dev/feed-gateway-dev-env-patch.yaml.
             - name: JAVA_TOOL_OPTIONS
-              value: -Xms256m -Xmx2560m
+              value: -Xms256m -Xmx2560m -XX:NativeMemoryTracking=summary -XX:+UnlockDiagnosticVMOptions -XX:+PrintNMTStatistics
             - name: GATEWAY_RITHMIC_DEPTH_ENABLED
               value: "true"
             - name: GATEWAY_MAX_SOCKETS_PER_APP_SESSION
