@@ -75,7 +75,7 @@ spec:
             - name: DATABENTO_OI_HISTORICAL_BOOTSTRAP_LOOKBACK_DAYS
               value: "4"
             - name: DATABENTO_OI_HISTORICAL_BOOTSTRAP_TIMEOUT_SECONDS
-              value: "45"
+              value: "120"
             - name: DATABENTO_VIX_PRICE_ENABLED
               value: "false"
             - name: DATABENTO_PREMARKET_LIVE_OI_ENABLED
