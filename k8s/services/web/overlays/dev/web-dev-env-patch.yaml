@@ -120,6 +120,33 @@ spec:
             # Explicit for clarity; this is also the REST base derivable from the health URL above.
             - name: FEED_GATEWAY_REST_URL
               value: "http://feed-gateway-service:8091"
+            # THE READABLE BOARD PAGE (C-61), dev only. The gateway writes a plain-text page every
+            # 30 seconds and serves it in-cluster at /api/readable-board; this web tier re-serves it
+            # at ONE secret path so the owner can open it on a phone without signing in.
+            #
+            # READABLE_BOARD_PATH is read from the `readable-board-path` Secret, created on the dev
+            # cluster through the Jenkins deployer ServiceAccount (the namespace's admission policy
+            # refuses any other writer). Its VALUE IS NEVER IN GIT AND NEVER IN A LOG LINE — the
+            # same handling as LEVEL_ABSORPTION_ACK_SECRET above. 48 random hex characters, one
+            # path segment, well past the 32-character minimum the web tier enforces; rotate it by
+            # replacing the Secret and restarting this Deployment.
+            #
+            # ONE SEGMENT MATTERS, and not only for tidiness: the dev public-prefix-proxy reads the
+            # first segment of /<page>/api/... as a page prefix and strips it. A single-segment path
+            # with no /api/ second segment matches none of those rules and falls through the
+            # catch-all `location /` to this app with the path intact. A two-segment path whose
+            # second segment began with api/ would be silently rewritten and the page would 404.
+            #
+            # Absent or blank = the route is never registered at all and every other path keeps its
+            # sign-in, so production and experiment are unaffected by setting this here.
+            - name: READABLE_BOARD_PATH
+              valueFrom:
+                secretKeyRef:
+                  name: readable-board-path
+                  key: path
+            # Where the page comes from: the gateway's own in-cluster address, not the browser's.
+            - name: READABLE_BOARD_UPSTREAM
+              value: "http://feed-gateway-service:8091/api/readable-board"
             # The /scorecard page (liq-V in-service outcomes, dev only): the page and its data route answer 404 unless this is exactly "true". The data route /api/scorecard is proxied to the
             # gateway at FEED_GATEWAY_REST_URL above (the same base as /api/es-liquidity-history); the numbers are the services' own scoreboard records. Replaces the removed SCORECARD_DIR / ConfigMap volume.
             - name: SCORECARD_PAGE_ENABLED
