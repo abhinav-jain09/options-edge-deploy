@@ -181,6 +181,7 @@ jobs:
           python3 scripts/watch/topic-freshness-test.py
           python3 scripts/watch/kafka-broker-test.py
           python3 scripts/watch/restart-budget-test.py
+          python3 scripts/watch/probe-drift-test.py
           bash scripts/watch/fleet-alert-deliver-test.sh
 
       # Routing: production to the prod group, dev AND es4 to the dev group. Asserted against the
