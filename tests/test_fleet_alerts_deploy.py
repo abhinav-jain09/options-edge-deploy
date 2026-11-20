@@ -26,7 +26,7 @@ PROD_ID = "offhours-discord-webhook"
 DEV_ID = "offhours-discord-webhook-dev"
 NEW_CHECKS = {"crash-loop": "paging", "kafka-lag": "paging", "partition-balance": "observation-only",
               "readiness": "paging", "dlq-growth": "paging", "oom": "paging", "host-load": "paging",
-              "topic-freshness": "paging", "kafka-broker": "paging", "restart-budget": "paging"}
+              "topic-freshness": "paging", "kafka-broker": "paging", "restart-budget": "paging", "probe-drift": "paging"}
 
 
 class Routing(unittest.TestCase):
@@ -83,7 +83,7 @@ class Routing(unittest.TestCase):
 
     def test_partition_balance_is_the_only_observation_only_check(self):
         paging = [c for c, m in NEW_CHECKS.items() if m == "paging"]
-        self.assertEqual({"crash-loop", "kafka-lag", "readiness", "dlq-growth", "oom", "host-load", "topic-freshness", "kafka-broker", "restart-budget"}, set(paging),
+        self.assertEqual({"crash-loop", "kafka-lag", "readiness", "dlq-growth", "oom", "host-load", "topic-freshness", "kafka-broker", "restart-budget", "probe-drift"}, set(paging),
                          "every check pages from day one except partition balance, which waits for §5a")
 
     def test_readiness_and_dead_letters_no_longer_run_unwrapped_in_the_jenkinsfile(self):
@@ -155,7 +155,8 @@ class Routing(unittest.TestCase):
                        "host-load": "host-load-run.sh",
                        "topic-freshness": "stateful-check-run.sh topic-freshness.py",
                        "kafka-broker": "stateful-check-run.sh kafka-broker.py",
-                       "restart-budget": "restart-budget-run.sh"}[check]
+                       "restart-budget": "restart-budget-run.sh",
+                       "probe-drift": "stateful-check-run.sh probe-drift.py"}[check]
             self.assertIn(wrapped, body)
             self.assertLess(body.index("fleet-alert-deliver.sh"), body.index(wrapped),
                             "the deliverer must WRAP the check script, not follow it")
@@ -244,7 +245,7 @@ class Routing(unittest.TestCase):
                  "partition-balance": "Partition balance", "readiness": "Readiness", "dlq-growth": "Dead letters",
                  "oom": "Memory kills", "host-load": "Host load",
                  "topic-freshness": "Topic freshness", "kafka-broker": "Kafka broker",
-                 "restart-budget": "Restart budget"}
+                 "restart-budget": "Restart budget", "probe-drift": "Probe drift"}
         label = names[check]
         start = self.jf.index("stage('%s')" % label)
         nxt = self.jf.find("    stage('", start + 10)

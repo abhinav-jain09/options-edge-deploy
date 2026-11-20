@@ -60,6 +60,7 @@ RANK = {
     "OOM_KILLED": (4, "🟠"),
     "EVICTED": (4, "🟠"),
     "STUCK": (4, "🟠"),
+    "PROBE_DRIFT": (4, "🟠"),
     "RESTART_BUDGET": (5, "🔴"),
     "RESTART_BUDGET_HELD": (5, "🔴"),
     "BROKER_FENCED": (5, "🔴"),

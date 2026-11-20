@@ -194,6 +194,24 @@ pipeline {
         }
       }
     }
+    stage('Probe drift') {
+      // A live Deployment whose probes differ from the repository manifest (scripts/watch/probe-drift.py). 11-20: rithmic-depth-bridge ran a feed-gated startup probe for two days
+      // while its manifest said process-only; a failing first Rithmic login then killed the pod every 120 s until the restart budget stopped it. ES4 only: its manifests are applied as written.
+      steps {
+        catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
+        script {
+          def bad = []
+          watchedProfiles(params.ENVS, PROFILES).findAll { it == 'es4' }.each { profile ->
+            withCredentials([string(credentialsId: webhookFor(profile), variable: 'DISCORD_WEBHOOK_URL')]) {
+              def rc = sh(returnStatus: true, script: "KUBECONFIG='${kubeconfigFor(profile)}' FLEET_ENV=${profile} FLEET_CHECK=probe-drift FLEET_MODE=paging bash scripts/watch/fleet-alert-deliver.sh bash scripts/watch/stateful-check-run.sh probe-drift.py")
+              if (rc != 0) { bad << "${profile} (rc=${rc})" }
+            }
+          }
+          if (bad) { error("probe-drift check failed: ${bad.join(', ')}") }
+        }
+        }
+      }
+    }
     stage('Kafka broker') {
       // The dev broker runs as a launchd job on .102, outside Kubernetes: no readiness, restart or memory check can see it. 11-18 06:19 it fenced itself (controller events of 11 s, 6,894 partitions
       // re-elected) and one producer never recovered. This reads its controller log over ssh and probes it (scripts/watch/kafka-broker.py). Dev only: that is the broker on this LAN host.
