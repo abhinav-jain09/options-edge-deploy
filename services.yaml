@@ -170,7 +170,7 @@ services:
   # Dark-deployed (replicas 0) pending the MIN_ACTIONABLE_LEAD_MS drill and operator-approved
   # promotion gates. dev only: production is not listed on purpose — nothing about this service
   # has cleared a production gate, and adding the env here is the deliberate act that would say it had.
-  - { name: approach-monitor,             managedBy: standalone, sliceGenerated: true, envs: [dev],             image: options-edge-approach-monitor,             deployments: [approach-monitor-service] }
+  - { name: approach-monitor,             managedBy: standalone, sliceGenerated: true, envs: [dev],             image: options-edge-approach-monitor,             deployments: [approach-monitor-service], buildJob: options-edge-approach-monitor }
   - { name: approach-position-publisher,  managedBy: standalone, sliceGenerated: true, envs: [dev],             image: options-edge-approach-position-publisher, deployments: [approach-position-publisher], buildJob: options-edge-approach-position-publisher }
   - { name: strike-invasion,              managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-strike-invasion,              deployments: [strike-invasion-service] }
   - { name: invasion-postgres-writer,     managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-invasion-postgres-writer,     deployments: [invasion-postgres-writer] }
@@ -369,7 +369,7 @@ services:
   # short-premium-agent: ONE Deployment, TWO containers (Agent A live recommender + Agent B EOD advisor daemon).
   # dev = 72B on the Mac's Ollama; prod = 7B on the .252 T1000 GPU (per-env patch overrides model/URL +
   # SP_REQUIRE_REAL). Referenced from BOTH overlays (like web), not k8s/base.
-  - { name: short-premium-agent,          managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-short-premium-agent,          deployments: [short-premium-agent-service] }
+  - { name: short-premium-agent,          managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-short-premium-agent,          deployments: [short-premium-agent-service], buildJob: short-premium-agent }
   - { name: databento-maxpain,            managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-databento-maxpain,            deployments: [databento-maxpain-service] }
   - { name: strike-liquidity-heatmap,     managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-strike-liquidity-heatmap,     deployments: [strike-liquidity-heatmap-service] }
   - { name: option-price-behavior,        managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-option-price-behavior,        deployments: [option-price-behavior-service] }
