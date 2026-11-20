@@ -471,6 +471,8 @@ patches:
   # DEV-ONLY: Candle Direction commissioning shadow inside context-tape-service (flag OFF in code and in prod) —
   # see the patch header. Adds the :8136 direction projection port to the Deployment + Service.
   - path: context-tape-direction-dev-env-patch.yaml
+  # DEV-ONLY: no memory limit and a 16g heap for the Context Tape (OOMKilled at 2Gi on 2026-11-20) — see the patch header.
+  - path: context-tape-memory-dev-patch.yaml
   # DEV-ONLY: overnight ES-basis estimate bars — the indicator-estimate container and the Context Tape GLOBEX session +
   # estimate overlay (flags default off; production overlays untouched). See the two patch headers.
   - path: indicator-estimate-dev-patch.yaml
