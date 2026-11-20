@@ -65,7 +65,11 @@ spec:
             - name: DATABENTO_SPOT_SOURCE
               value: CASCADED
             - name: DATABENTO_EXTRA_INSTRUMENTS
-              value: '[{"symbol":"SPX","trading_class":"SPXW","min_strike":7000,"max_strike":8000,"strike_step":5,"expiry_mode":"AUTO_NEXT_SESSION"}]'
+              value: '[{"symbol":"SPX","trading_class":"SPXW","min_strike":6500,"max_strike":8000,"strike_step":5,"expiry_mode":"AUTO_NEXT_SESSION"}]'
+            - name: DATABENTO_MIN_STRIKE
+              value: "6500"
+            - name: DATABENTO_MAX_STRIKE
+              value: "8000"
             - name: DATABENTO_VIX_PRICE_ENABLED
               value: "false"
             - name: DATABENTO_PREMARKET_LIVE_OI_ENABLED

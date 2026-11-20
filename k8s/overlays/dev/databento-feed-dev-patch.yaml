@@ -90,10 +90,20 @@ spec:
             # Rollback = drop the second object here and redeploy.
             - name: DATABENTO_EXTRA_INSTRUMENTS
               # Strike range MIRRORS the primary 0DTE track exactly (configmap
-              # DATABENTO_MIN_STRIKE/MAX_STRIKE/STRIKE_STEP = 7000/8000/5). The two tracks must
+              # DATABENTO_MIN_STRIKE/MAX_STRIKE/STRIKE_STEP, overridden for dev just below to 6500/8000/5). The two tracks must
               # cover the same strikes or the 0DTE and 1DTE surfaces are not comparable and
               # constant-one-day-vol interpolates across a hole.
-              value: '[{"symbol":"SPX","trading_class":"SPXW","min_strike":7000,"max_strike":8000,"strike_step":5,"expiry_mode":"AUTO_NEXT_SESSION"}]'
+              value: '[{"symbol":"SPX","trading_class":"SPXW","min_strike":6500,"max_strike":8000,"strike_step":5,"expiry_mode":"AUTO_NEXT_SESSION"}]'
+            # 2026-11-20 (dev): the SPX strike window was 7000-8000 (the shared configmap, which also
+            # serves production) and spot fell to 7044, so the board had nothing below 7000 to scroll
+            # to (owner: "why i cannot scroll below 7000"). The window is a fixed range, not centred on
+            # spot (Databento selections carry no maxStrikes), so dev takes its own floor: 6500 gives
+            # ~550 points under a 7044 spot. The 1DTE entry above must mirror it; production is
+            # untouched until the owner asks.
+            - name: DATABENTO_MIN_STRIKE
+              value: "6500"
+            - name: DATABENTO_MAX_STRIKE
+              value: "8000"
             - name: DATABENTO_VIX_PRICE_ENABLED
               value: "false"
             # Pre-market LIVE OI: while OPRA is closed, drain the OI-aware statistics replay and publish the
