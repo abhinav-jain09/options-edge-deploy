@@ -90,7 +90,31 @@ spec:
             - name: KAFKA_VIX_OPTION_INTELIGENCE_TOPIC
               value: options.spx.vix-option-inteligence-service.current
             - name: JAVA_TOOL_OPTIONS
-              value: "-Xms256m -Xmx1536m"
+              # C-95, 2026-11-20. Raised from -Xmx1536m after the gateway exhausted its heap
+              # 1h52m into the session and served an error envelope on /now, /overnight and
+              # /index for forty minutes with restartCount 0 and liveness answering 200
+              # throughout. 123 OutOfMemoryErrors in one pod's log.
+              #
+              # The arithmetic against the 4Gi limit below, because this file states its figures:
+              #   heap        2,560 MiB
+              #   non-heap      ~800 MiB  (metaspace, code cache, thread stacks, and the direct
+              #                            buffers of about 17 long-lived Kafka consumers;
+              #                            measured as the gap between memory.current and -Xmx
+              #                            on the pod that failed)
+              #   ---------------------
+              #   sum         3,360 MiB of 4,096 MiB, leaving 736 MiB
+              #
+              # That 736 MiB is the room left for the vol-premium emptyDir's PAGE CACHE, and it is
+              # enough only because that cache is RECLAIMABLE -- the volume below is deliberately
+              # disk-backed and not medium: Memory for exactly this reason, since tmpfs pages
+              # would be charged unreclaimably and 2,560m would then not fit. The 2.4 GiB this
+              # container was holding when it failed was heap + non-heap + that cache, so the
+              # headroom was never as large as a bare memory.current reading suggests.
+              #
+              # -Xms is left at 256m: a fresh JVM should still start small, and the guard in
+              # HeapGuard degrades the overnight block rather than failing the page if this ceiling
+              # is ever reached again.
+              value: "-Xms256m -Xmx2560m"
             - name: GATEWAY_KAFKA_MAX_POLL_RECORDS
               value: "100"
             - name: GATEWAY_KAFKA_FETCH_MAX_BYTES
