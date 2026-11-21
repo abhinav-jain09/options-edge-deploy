@@ -31,6 +31,9 @@ IMAGE_MAP = {
     ("databento-volume-aggregator", "databento-volume-aggregator"): "DATABENTO_VOLUME_AGGREGATOR_IMAGE",
     ("databento-gex-service", "databento-gex"): "DATABENTO_GEX_IMAGE",
     ("nifty-gex-service", "nifty-gex"): "NIFTY_GEX_IMAGE",
+    # nifty-trade-feed (trade-feed PR): image reuse — same image var as the boards
+    # (same source repo, command override), precedent databento-vix-feed above.
+    ("nifty-trade-feed-service", "nifty-trade-feed"): "NIFTY_GEX_IMAGE",
     ("databento-maxpain-service", "databento-maxpain"): "DATABENTO_MAXPAIN_IMAGE",
     ("option-price-behavior-service", "option-price-behavior"): "OPTION_PRICE_BEHAVIOR_IMAGE",
     ("option-pressure-state-service", "option-pressure-state"): "OPTION_PRESSURE_STATE_IMAGE",

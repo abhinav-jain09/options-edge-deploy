@@ -1,0 +1,32 @@
+# STANDALONE nifty-trade-feed overlay — production. Used ONLY by
+# Jenkinsfile.nifty-trade-feed-service. The monolithic prod deploy renders this
+# service via k8s/overlays/production.
+#
+# ⚠ MIRROR RULE: every nifty-trade-feed-targeting patch in
+# k8s/overlays/production/kustomization.yaml MUST be replicated here.
+# scripts/ci/validate-services.sh enforces render equivalence.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+patches:
+  # Mirror of the monolith's all-Deployments IfNotPresent + progressDeadlineSeconds
+  # patches, scoped to this service.
+  - target:
+      kind: Deployment
+      name: nifty-trade-feed-service
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: IfNotPresent
+      - op: add
+        path: /spec/progressDeadlineSeconds
+        value: 1200
+
+# MIRROR of the monolithic k8s/overlays/production images: block (validate-services:
+# mono==slice): a committed production render must never carry the base :dev ref.
+# Deploy behaviour is unchanged (service-deploy.sh remaps via image-tags and
+# digest-pins); this hardens the at-rest render only. Same image as nifty-gex.
+images:
+  - name: 192.168.100.252:5000/options-edge-nifty-gex
+    newTag: prod
