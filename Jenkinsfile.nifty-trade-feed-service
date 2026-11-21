@@ -26,7 +26,7 @@ pipeline {
     string(name: 'PERMITTED_SHA_GUARD_VERSION', defaultValue: '2f6fc2ab7aa51eb8a9e8aa350f2d774cd2fb7a253de2591e43645a19a9886b24',
       description: 'DO NOT EDIT BY HAND — the sha256 of scripts/jenkins/permitted-sha-guard.sh this definition runs (Deployment Permission Rule). The guard refuses to run under any other value. It is a DECLARATION, not proof that this job enforces the guard: a caller that triggers this job judges its SCM definition and its Jenkinsfile at the forwarded commit (scripts/jenkins/require-guarded-downstream.sh). Regenerate with scripts/jenkins/permitted-sha-guard-version.sh when the guard changes.')
     choice(name: 'ENVIRONMENT', choices: ['production', 'dev'],
-      description: 'Target environment — selects k8s/services/nifty-gex/overlays/<env> and the deployer kubeconfig (oeProfile).')
+      description: 'Target environment — selects k8s/services/nifty-trade-feed/overlays/<env> and the deployer kubeconfig (oeProfile).')
     booleanParam(name: 'BUILD_IMAGE', defaultValue: true,
       description: 'Build+push the image first (native on the target machine). false = deploy the image already in the registry.')
     string(name: 'NIFTY_PERMITTED_SHA', defaultValue: '', trim: true,
@@ -126,7 +126,7 @@ pipeline {
           def nsha = (params.NIFTY_PERMITTED_SHA ?: '').trim()
           def uniqueTag = "b${env.BUILD_ID}-${nsha}"
           def uniqueRef = "${env.IMAGE_REF.substring(0, env.IMAGE_REF.lastIndexOf('/'))}/options-edge-nifty-gex:${uniqueTag}"
-          withEnv(["UNIQUE_TAG=${uniqueTag}", "UNIQUE_REF=${uniqueRef}", "BUILD_DIR=${env.PROD_BUILD_ROOT}/nifty-gex-${env.BUILD_NUMBER}"]) {
+          withEnv(["UNIQUE_TAG=${uniqueTag}", "UNIQUE_REF=${uniqueRef}", "BUILD_DIR=${env.PROD_BUILD_ROOT}/nifty-trade-feed-${env.BUILD_NUMBER}"]) {
             if (env.ENVIRONMENT == 'production') {
               // amd64 native on .252 — ship the checked-out source, build and push there.
               sh '''
