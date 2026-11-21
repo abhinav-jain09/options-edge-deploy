@@ -1,0 +1,70 @@
+# NIFTY options TRADE FEED — Dhan v2 websocket trades with inferred aggressor side
+# (source repo: options-edge-nifty-gex, SAME image as the Pressure boards; this
+# Deployment only overrides the command to trade_feed_service.py). HTTP on 8189:
+# /health (readiness), /trades, /stats.
+#
+# TOKEN — single renewer per account: this pod NEVER calls RenewToken (a second
+# renewer invalidates the board's token). It RE-READS the dhan-credentials Secret
+# on auth failure and near expiry, which is why it runs under the SAME
+# ServiceAccount nifty-gex (Role grants get+patch on exactly that Secret; this pod
+# uses only get). nifty-gex-service's self-renewal keeps this pod authenticated.
+#
+# ⚠ replicas MUST stay 1 (0 in dev) for the same account-budget reasons as the
+# boards: strike selection costs two REST calls on the shared 1-per-3s chain
+# budget, and the account allows five websockets in total. Never run a second
+# copy (local runs included) against the production account.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nifty-trade-feed-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: nifty-trade-feed-service
+    app.kubernetes.io/component: trade-feed
+    app.kubernetes.io/part-of: options-edge
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nifty-trade-feed-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: nifty-trade-feed-service
+        app.kubernetes.io/component: trade-feed
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      serviceAccountName: nifty-gex
+      containers:
+        - name: nifty-trade-feed
+          image: 192.168.100.252:5000/options-edge-nifty-gex:dev
+          command: ["python3", "trade_feed_service.py"]
+          ports:
+            - containerPort: 8189
+          envFrom:
+            - secretRef:
+                name: dhan-credentials
+          env:
+            - name: DHAN_TRADE_FEED_BAND_PCT
+              value: "1.5"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          # /health answers 503 until the websocket is connected (and during
+          # prolonged reconnects/auth failure) — a meaningful readiness gate.
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8189
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 8189
+            initialDelaySeconds: 10
+            periodSeconds: 30

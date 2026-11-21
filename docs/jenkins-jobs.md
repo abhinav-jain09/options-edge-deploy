@@ -69,6 +69,13 @@ relative to the CALLER'S folder — `scripts/jenkins/jenkins-job-path.sh` — an
 script names this job as a downstream; verified at the move). Its SCM definition (this repo,
 `Jenkinsfile.nifty-gex-service`) and parameters are unchanged.
 
+`nifty/nifty-trade-feed-service-deploy` (Jenkinsfile.nifty-trade-feed-service) deploys the Dhan
+websocket TRADE FEED (inferred aggressor side; HTTP 8189, NodePort 30189, health
+`http://192.168.100.252:30189/health`). Same source repo and image as the boards — the job rebuilds
+`options-edge-nifty-gex` (NIFTY_PERMITTED_SHA) and rolls ONLY the `nifty-trade-feed-service`
+workload; the board Deployment keeps its own pinned digest. Dev renders at replicas 0 (one Dhan
+account; production owns it).
+
 ---
 
 ## Every deploy job now needs a permitted commit

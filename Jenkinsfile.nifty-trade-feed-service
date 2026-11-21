@@ -1,0 +1,337 @@
+@Library('oe') _
+
+// STANDALONE NIFTY-TRADE-FEED DEPLOY — per-service fast path for the Dhan websocket
+// trade feed with inferred aggressor side (source repo: options-edge-nifty-gex — the
+// SAME repo and image as the Pressure boards; the Deployment overrides the command to
+// trade_feed_service.py). Mirrors Jenkinsfile.nifty-gex-service stage for stage:
+//
+//   Build (native, on the target arch's machine) → Deploy ONLY this workload
+//   → digest-pin → rollout → health gate → rollback instructions (service-deploy.sh).
+//
+// * prod builds on .252 (amd64 native, docker build over ssh); dev builds locally on
+//   the Mac (arm64) and pushes to localhost:5001. Building here re-pushes the shared
+//   options-edge-nifty-gex image; the board Deployment stays on ITS pinned digest
+//   until its own next deploy, so this job cannot roll the boards.
+// * Deploy applies ONLY k8s/services/nifty-trade-feed/overlays/<env>; blast-radius
+//   guard in scripts/deploy/service-deploy.sh refuses any infra kind. The nifty-gex
+//   SA/Role (Secret re-read) and the dhan-credentials Secret are common infra and
+//   must already exist.
+// * Dev deploys at replicas 0 BY DESIGN (single Dhan account — see the base
+//   manifest's warning); its health gate is skipped (no endpoints at 0 replicas).
+pipeline {
+  agent { label 'hpsf-replay-mac' }
+  parameters {
+    string(name: 'PERMITTED_SHA', defaultValue: '', trim: true,
+      description: 'REQUIRED — Deployment Permission Rule (options-edge rule.md). The full 40-character commit id of THIS repository that Abhinav permitted for this run. The Permitted commit guard stage refuses the build before any effect unless the checked-out HEAD is exactly this commit AND on origin/main; empty, short or mismatched values are refused and nothing is substituted. A manual click needs it too: copy it from `git rev-parse origin/main`.')
+    string(name: 'PERMITTED_SHA_GUARD_VERSION', defaultValue: '2f6fc2ab7aa51eb8a9e8aa350f2d774cd2fb7a253de2591e43645a19a9886b24',
+      description: 'DO NOT EDIT BY HAND — the sha256 of scripts/jenkins/permitted-sha-guard.sh this definition runs (Deployment Permission Rule). The guard refuses to run under any other value. It is a DECLARATION, not proof that this job enforces the guard: a caller that triggers this job judges its SCM definition and its Jenkinsfile at the forwarded commit (scripts/jenkins/require-guarded-downstream.sh). Regenerate with scripts/jenkins/permitted-sha-guard-version.sh when the guard changes.')
+    choice(name: 'ENVIRONMENT', choices: ['production', 'dev'],
+      description: 'Target environment — selects k8s/services/nifty-gex/overlays/<env> and the deployer kubeconfig (oeProfile).')
+    booleanParam(name: 'BUILD_IMAGE', defaultValue: true,
+      description: 'Build+push the image first (native on the target machine). false = deploy the image already in the registry.')
+    string(name: 'NIFTY_PERMITTED_SHA', defaultValue: '', trim: true,
+      description: 'REQUIRED when BUILD_IMAGE=true — Deployment Permission Rule. The full 40-character commit id of options-edge-nifty-gex (the SECOND source this job builds: it clones that repository and docker-pushes the result). PERMITTED_SHA binds only THIS repository; this binds the application checkout, checked right after the clone and before the build. Empty, short or mismatched values are refused.')
+    booleanParam(name: 'DEPLOY_DRY_RUN', defaultValue: false,
+      description: 'true = render + digest-pin + server-side validate only; nothing changes.')
+    string(name: 'HEALTH_URL', defaultValue: '',
+      description: 'Optional post-rollout endpoint that must answer 200. Empty = per-env default (production http://192.168.100.252:30189/health, dev skip — replicas 0).')
+    string(name: 'KUBECONFIG_FILE', defaultValue: '',
+      description: 'Deployer kubeconfig on the Jenkins agent. Empty = oeProfile(ENVIRONMENT).kubeconfigDeployer.')
+  }
+  options {
+    disableRestartFromStage()   // Deployment Permission Rule: no "Restart from Stage" past the permitted-commit guard
+    disableConcurrentBuilds()
+    // 120 min, not 60: the validate stage alone has been measured at 44+ min when the
+    // agent Mac carries the live trading stack during market hours (same reasoning and
+    // figure as Jenkinsfile.web-service) — 60 aborted build #2 mid-validate at the
+    // Indian open. disableConcurrentBuilds still serialises runs.
+    timeout(time: 120, unit: 'MINUTES')
+  }
+  environment {
+    KUBECONFIG  = "${params.KUBECONFIG_FILE ?: oeProfile(params.ENVIRONMENT).kubeconfigDeployer}"
+    ENVIRONMENT = "${params.ENVIRONMENT}"
+    SOURCE_REPO = 'git@github.com:abhinav-jain09/options-edge-nifty-gex.git'
+    PROD_BUILD_HOST = '192.168.100.252'
+    PROD_BUILD_ROOT = '/home/abhinav/ci/remote-builds'
+    IMAGE_REF   = "${params.ENVIRONMENT == 'production' ? '192.168.100.252:5000/options-edge-nifty-gex:prod' : 'localhost:5001/options-edge-nifty-gex:dev'}"
+    HEALTH_URL_DEFAULT   = "${params.ENVIRONMENT == 'production' ? 'http://192.168.100.252:30189/health' : ''}"
+    HEALTH_URL_PARAM     = "${params.HEALTH_URL ?: ''}"
+    DEPLOY_DRY_RUN_PARAM = "${params.DEPLOY_DRY_RUN}"
+  }
+  stages {
+    // ---- Deployment Permission Rule (options-edge rule.md): Jenkins enforces the permitted commit ----
+    // PERMITTED_SHA is REQUIRED. scripts/jenkins/permitted-sha-guard.sh refuses, in this order: a checkout
+    // that is not on origin/main (the environment-branch restriction, kept as its own condition); a
+    // missing, empty, short or otherwise malformed PERMITTED_SHA (nothing is substituted for it); a
+    // checked-out HEAD that is not exactly PERMITTED_SHA. It runs FIRST, in the workspace every later
+    // stage uses, so nothing below can build, push, apply, roll, restart, create a topic or copy a file
+    // under an unpermitted commit — including a build queued for one commit that checked out a newer one.
+    // error(), never catchError: a refusal is a stop, not a coloured result. Both SHAs are in the log.
+    stage('Permitted commit guard') {
+      options { timeout(time: 10, unit: 'MINUTES') }
+      steps {
+        script {
+          def rc = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')
+          if (rc != 0) {
+            error("Permitted commit guard REFUSED this build (rc=${rc}) — see its output above. No deployment effect has run.")
+          }
+          env.PERMITTED_SHA_GUARD = 'PASSED'
+        }
+      }
+    }
+    stage('Validate service registry') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
+      steps {
+        sh '''
+          set -euo pipefail
+          bash scripts/ci/validate-services.sh
+        '''
+      }
+    }
+    stage('Build image (native)') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.BUILD_IMAGE && !params.DEPLOY_DRY_RUN) } }
+      steps {
+        dir('nifty-gex-src') {
+          git url: env.SOURCE_REPO, branch: 'main'
+        }
+        // Second source, second binding (Deployment Permission Rule): the clone above is a mutable
+        // `main` and its content is what gets built and pushed. Same guard, on THAT checkout, against
+        // NIFTY_PERMITTED_SHA — right after the clone and before docker build. The job's own
+        // BRANCH_NAME/GIT_BRANCH describe this repository, so --dir skips that name check; containment
+        // in the nifty repo's origin/main and exact equality still apply.
+        // A DEDICATED step whose whole script is the guard command: the step fails if and only if the
+        // guard refuses, and nothing in it can turn a refusal into success (validator rule 9).
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${NIFTY_PERMITTED_SHA:-}" bash scripts/jenkins/permitted-sha-guard.sh --dir nifty-gex-src --ref main'
+        }
+        // ARTIFACT IDENTITY (Deployment Permission Rule): the image this job deploys must be THE image
+        // this build pushed from the guarded nifty checkout, not whatever the mutable :prod/:dev tag
+        // resolves to later (another publisher of that tag could move it; disableConcurrentBuilds only
+        // serialises THIS job). So the build is also pushed under a tag unique to this build and
+        // permission (b<BUILD_ID>-<NIFTY_PERMITTED_SHA>), the digest is taken from THIS push's own
+        // output and must equal what the registry serves for that unique tag, and it is recorded in an
+        // image lock keyed by BUILD_ID and handed to the deploy as REQUIRED_IMAGE.
+        // Nifty build: prepare (not an effect) — the checkout is the permitted commit; this build's push log starts empty.
+        sh '''
+          set -euo pipefail
+          SRC_COMMIT="$(git -C nifty-gex-src rev-parse HEAD)"
+          [ "$SRC_COMMIT" = "${NIFTY_PERMITTED_SHA:?}" ] || { echo "nifty checkout $SRC_COMMIT is not NIFTY_PERMITTED_SHA" >&2; exit 1; }
+          mkdir -p .jenkins-tmp
+          rm -f ".jenkins-tmp/nifty-push-$BUILD_ID.log"
+        '''
+        script {
+          // The per-build tag and the remote build directory, derived here from BUILD_ID/BUILD_NUMBER and the permitted
+          // SHA the prepare step and the verify step both prove the checkout is, and handed to the steps below as their
+          // environment — the effect steps themselves hold nothing but their one command.
+          def nsha = (params.NIFTY_PERMITTED_SHA ?: '').trim()
+          def uniqueTag = "b${env.BUILD_ID}-${nsha}"
+          def uniqueRef = "${env.IMAGE_REF.substring(0, env.IMAGE_REF.lastIndexOf('/'))}/options-edge-nifty-gex:${uniqueTag}"
+          withEnv(["UNIQUE_TAG=${uniqueTag}", "UNIQUE_REF=${uniqueRef}", "BUILD_DIR=${env.PROD_BUILD_ROOT}/nifty-gex-${env.BUILD_NUMBER}"]) {
+            if (env.ENVIRONMENT == 'production') {
+              // amd64 native on .252 — ship the checked-out source, build and push there.
+              sh '''
+                set -euo pipefail
+                ssh -o BatchMode=yes "abhinav@$PROD_BUILD_HOST" "mkdir -p '$BUILD_DIR'"
+              '''
+              // PROVENANCE (Deployment Permission Rule, validator rule 9b): the guard proved HEAD == permitted at one
+              // moment; the verify re-proves, immediately before the source is shipped, that the nifty checkout is still
+              // exactly that commit's tree, and the ship is a DEDICATED step whose whole body is the one rsync — nothing
+              // can run between the verification and the consumption.
+              timeout(time: 10, unit: 'MINUTES') {
+                sh 'PERMITTED_SHA="${NIFTY_PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir nifty-gex-src'
+              }
+              sh 'rsync -a --delete --exclude .git nifty-gex-src/ "abhinav@${PROD_BUILD_HOST}:${BUILD_DIR}/"'
+              sh '''
+                set -euo pipefail
+                ssh -o BatchMode=yes "abhinav@$PROD_BUILD_HOST" \
+                  "cd '$BUILD_DIR' && docker build -t '$IMAGE_REF' -t '$UNIQUE_REF' . && docker push '$IMAGE_REF' && docker push '$UNIQUE_REF' && rm -rf '$BUILD_DIR'" \
+                  | tee ".jenkins-tmp/nifty-push-$BUILD_ID.log"
+              '''
+            } else {
+              // arm64 native on this Mac; localhost:5001 == host.docker.internal:5001 from the cluster. The build is a
+              // DEDICATED step right after the verify of the checkout it builds (validator rule 9b).
+              timeout(time: 10, unit: 'MINUTES') {
+                sh 'PERMITTED_SHA="${NIFTY_PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir nifty-gex-src'
+              }
+              sh 'docker build -t "${IMAGE_REF}" -t "${UNIQUE_REF}" nifty-gex-src'
+              sh '''
+                set -euo pipefail
+                docker push "$IMAGE_REF"
+                docker push "$UNIQUE_REF" | tee ".jenkins-tmp/nifty-push-$BUILD_ID.log"
+              '''
+            }
+            // Nifty build: lock — the digest from THIS push's own output, cross-checked against the registry.
+            sh '''
+              set -euo pipefail
+              SRC_COMMIT="$(git -C nifty-gex-src rev-parse HEAD)"
+              [ "$SRC_COMMIT" = "${NIFTY_PERMITTED_SHA:?}" ] || { echo "nifty checkout $SRC_COMMIT is not NIFTY_PERMITTED_SHA" >&2; exit 1; }
+              REG="${IMAGE_REF%/*}"
+              PUSHED="$(sed -n "s/^$UNIQUE_TAG: digest: \\(sha256:[0-9a-f]\\{64\\}\\) size: [0-9]*$/\\1/p" ".jenkins-tmp/nifty-push-$BUILD_ID.log" | tail -1)"
+              [ -n "$PUSHED" ] || { echo "the push of $UNIQUE_REF reported no digest — no image lock, nothing deployable" >&2; exit 1; }
+              SERVED="$(bash scripts/jenkins/resolve-pushed-digest.sh "$REG" options-edge-nifty-gex "$UNIQUE_TAG")"
+              [ "$SERVED" = "$PUSHED" ] || { echo "the registry serves $SERVED for $UNIQUE_TAG, this push reported $PUSHED — refusing" >&2; exit 1; }
+              {
+                echo "OPTIONS_EDGE_IMAGE_LOCK_FORMAT=1"
+                echo "OPTIONS_EDGE_IMAGE_LOCK_SOURCE_REPO=$SOURCE_REPO"
+                echo "OPTIONS_EDGE_IMAGE_LOCK_GIT_COMMIT=$SRC_COMMIT"
+                echo "OPTIONS_EDGE_IMAGE_LOCK_DEPLOY_REPO_COMMIT=$(git rev-parse HEAD)"
+                echo "OPTIONS_EDGE_IMAGE_LOCK_GUARD_VERSION=${PERMITTED_SHA_GUARD_VERSION:-}"
+                echo "OPTIONS_EDGE_IMAGE_LOCK_BUILD_ID=$BUILD_ID"
+                echo "OPTIONS_EDGE_IMAGE_LOCK_BUILD_URL=${BUILD_URL:-}"
+                echo "OPTIONS_EDGE_IMAGE_LOCK_TAG=$UNIQUE_TAG"
+                echo "NIFTY_GEX_IMAGE=$UNIQUE_REF@$PUSHED"
+                echo "NIFTY_GEX_IMAGE_GIT_COMMIT=$SRC_COMMIT"
+              } > ".jenkins-tmp/image-lock-$BUILD_ID.env"
+              sed 's/^/image-lock: /' ".jenkins-tmp/image-lock-$BUILD_ID.env"
+            '''
+          }
+        }
+        script {
+          // Only THIS build's lock (keyed by BUILD_ID) becomes the archived lock and REQUIRED_IMAGE.
+          def lockFile = ".jenkins-tmp/image-lock-${env.BUILD_ID}.env"
+          def lock = readFile(lockFile)
+          String ref = ''
+          String lockBuild = ''
+          for (String l : lock.split('\n')) {
+            if (l.startsWith('NIFTY_GEX_IMAGE=')) { ref = l.substring('NIFTY_GEX_IMAGE='.length()) }
+            if (l.startsWith('OPTIONS_EDGE_IMAGE_LOCK_BUILD_ID=')) { lockBuild = l.substring('OPTIONS_EDGE_IMAGE_LOCK_BUILD_ID='.length()) }
+          }
+          if (lockBuild != env.BUILD_ID.toString() || !ref.matches('^[^@\\s]+@sha256:[0-9a-f]{64}$')) {
+            error("this build's image lock ${lockFile} does not name a digest-pinned image for build ${env.BUILD_ID}. Nothing was deployed.")
+          }
+          env.REQUIRED_IMAGE = ref
+          writeFile file: '.jenkins-tmp/options-edge-image-lock.env', text: lock
+          archiveArtifacts artifacts: '.jenkins-tmp/options-edge-image-lock.env', fingerprint: true
+          echo "deploying exactly ${env.REQUIRED_IMAGE} (built by this build from ${params.NIFTY_PERMITTED_SHA})"
+        }
+      }
+    }
+    stage('Deploy (service-scoped)') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
+      steps {
+        // PREPARATION — consumes nothing and deploys nothing: this build's permission receipt, the health
+        // URL resolved into a file the step below reads, and the removal of the nifty source checkout.
+        // Kept apart from the deployment itself so that the deployment is ONE step with the workspace
+        // verification immediately in front of it.
+        //
+        // nifty-gex-src/ is the SECOND SOURCE this job clones when BUILD_IMAGE=true (the default) — the
+        // tree the image was built from. It is untracked and not ignored, so it is a working-tree
+        // difference: leaving it there made the verification below refuse the workspace for its own
+        // acquisition, on the ordinary successful path. It is removed rather than declared, because
+        // declaring it would exempt from verification exactly the tree this job cloned and built; by the
+        // time the deploy runs, that clone has served its purpose (it was guarded against
+        // NIFTY_PERMITTED_SHA and its image was pushed and digest-pinned into REQUIRED_IMAGE), and the
+        // deployment reads only this repository's overlays.
+        sh '''
+          set -euo pipefail
+          mkdir -p .jenkins-tmp
+          rm -rf nifty-gex-src
+          bash scripts/jenkins/write-permission-receipt.sh "$WORKSPACE/.jenkins-tmp/permission-receipt.env"
+          HEALTH_URL="${HEALTH_URL_PARAM:-}"
+          [ -n "$HEALTH_URL" ] || HEALTH_URL="${HEALTH_URL_DEFAULT:-}"
+          printf '%s\\n' "$HEALTH_URL" > .jenkins-tmp/health-url
+        '''
+        script {
+          // PROVENANCE, ENFORCED AT RUN TIME. scripts/deploy/service-deploy.sh renders THIS checkout's
+          // overlay and applies it, so the manifests it deploys are the files in this workspace.
+          //
+          // Until now the verification below was adjacent to that helper only because this file is
+          // written that way: Codex inserted `sh 'printf changed > k8s/.../nifty-gex-deployment.yaml'`
+          // between the two and every check still passed, because the validator's effect grammar does
+          // not reach manifest application and no test asserted the ordering. Proving the ordering from
+          // the TEXT was tried and abandoned -- see scripts/jenkins/effect-shim/_shim.sh for why.
+          //
+          // The shim on PATH is what enforces it now, with a limit worth stating here rather than in a
+          // header nobody opens. `kubectl` (which this helper ends in) resolves inside
+          // scripts/jenkins/effect-shim, where the wrapper re-verifies this checkout against
+          // PERMITTED_SHA and then execs the real binary, or refuses. So a step that MODIFIES THE TREE
+          // between the verification and the helper no longer matters. A step that DELETES OR EDITS THE
+          // WRAPPER still does, and NOTHING HERE ANSWERS THAT: the job owns its own process, a wrapper
+          // cannot detect its own absence, and the integrity checks around this block live in the same
+          // workspace the job owns. They catch an ACCIDENT -- a wrapper deleted, a permission dropped,
+          // an entry added, a file edited by something that did not also edit the digest. A step that
+          // edits _shim.sh and re-records effect-shim-digest.txt, or that edits the checker itself,
+          // passes both inspections with an unverified wrapper in place. THE SHIM'S OWN INTEGRITY IS A
+          // LIMIT, not something this stage prevents or detects; read a green integrity line as "nothing
+          // here disagreed", never as "the wrapper was intact".
+          //
+          // The verification below stays as the stage's own early, explicit failure: a wrong tree should
+          // stop before a deployment starts, not midway through one.
+          // REQUIRED_IMAGE is set only by this build's own push (Build image stage); empty with
+          // BUILD_IMAGE=false, when the registry tag is resolved and digest-pinned as before.
+          withEnv(["SERVICE=nifty-trade-feed",
+                   "DEPLOY_DRY_RUN=${env.DEPLOY_DRY_RUN_PARAM ?: 'false'}",
+                   "HEALTH_URL=${readFile('.jenkins-tmp/health-url').trim()}",
+                   "WORK_DIR=${env.WORKSPACE}/.jenkins-tmp",
+                   "PATH+EFFECT_SHIM=${env.WORKSPACE}/scripts/jenkins/effect-shim",
+                   "OE_SHIM_DIR=${env.WORKSPACE}",
+                   "OE_SHIM_SHA=${params.PERMITTED_SHA}",
+                   "OE_SHIM_ALLOW=--allow-ignored target --allow-ignored .jenkins-tmp"]) {
+            sh 'bash scripts/jenkins/effect-shim-integrity.sh --dir . --when start'
+            timeout(time: 10, unit: 'MINUTES') {
+              sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp'
+            }
+            // AFTER THE EFFECT, and UNCONDITIONALLY. Neither inspection outranks a step that edits the
+            // shim or its digest: both are ACCIDENT checks. The start one says the stage did not begin
+            // with a shim that had already drifted; this one says it did not drift while the stage ran.
+            // Either way the build fails and names it -- and the stage's effects have already happened,
+            // so if one was a `kubectl apply`, the cluster changed. That is not the same as saying they
+            // ran unverified: one that reached a wrapper was verified when it ran.
+            //
+            // It must run when the helper FAILS, too. As a plain statement after the helper it was
+            // skipped on failure, which is the worst case to skip: a deployment that applies manifests
+            // and then fails during rollout is exactly when you want to know the wrapper was removed.
+            // The helper's failure is caught, the inspection always runs, and then the ORIGINAL failure
+            // is re-thrown so the build still fails for the reason it actually failed.
+            def deployFailure = null
+            try {
+              sh 'bash scripts/deploy/service-deploy.sh'
+            } catch (Exception deployError) {
+              deployFailure = deployError
+            }
+            // `returnStatus: true` covers the inspection's EXIT CODE. It does not cover the inspection
+            // failing to run at all -- a lost agent, an unwritable workspace, an interruption -- and
+            // Jenkins propagates those as exceptions. Unwrapped, such an exception escaped before the
+            // re-throw below and the deployment's own failure was lost: the build then reported the
+            // inspection's problem as its cause. AN UNAVAILABLE AGENT CANNOT BE PROMISED A COMPLETED
+            // INSPECTION, so the only honest handling is to say the inspection did not run, and to keep
+            // the failure that actually stopped the deployment as the build's reason.
+            def shimIntegrity = null
+            def inspectionFailure = null
+            try {
+              shimIntegrity = sh(returnStatus: true, script: 'bash scripts/jenkins/effect-shim-integrity.sh --dir . --when end')
+            } catch (Exception inspectionError) {
+              inspectionFailure = inspectionError
+            }
+            if (inspectionFailure != null) {
+              echo 'effect-shim-integrity(end): THE INSPECTION DID NOT RUN (' + inspectionFailure.toString() + '). This build cannot say whether the shim was intact while the effects above ran.'
+            } else if (shimIntegrity != 0) {
+              // WHAT THIS DOES NOT SAY. An effect that passed through a wrapper was verified AT THE
+              // MOMENT IT RAN, and a drift discovered afterwards does not reach back and un-verify it.
+              // The honest statement is the weaker one: from here the build cannot attest that the
+              // shim was the declared one for the WHOLE stage, so it cannot say which effects, if
+              // any, ran outside that coverage. Review found the previous wording ("the effects above
+              // ran UNVERIFIED") false for exactly the ordinary case -- a verified kubectl, then an
+              // accidental added entry later in the stage.
+              echo 'effect-shim-integrity(end): the shim changed during this stage; coverage CANNOT BE ATTESTED for all effects above. Effects that passed through a wrapper were verified when they ran; what this build cannot establish is that every effect did.'
+            }
+            if (deployFailure != null) {
+              throw deployFailure
+            }
+            if (inspectionFailure != null) {
+              error('the end inspection did not run (' + inspectionFailure.toString() + '); this build cannot attest that the shim was intact')
+            }
+            if (shimIntegrity != 0) {
+              error('effect-shim integrity failed after the deployment: coverage cannot be attested for all effects in this stage')
+            }
+          }
+        }
+      }
+    }
+  }
+  post {
+    always {
+      archiveArtifacts artifacts: '.jenkins-tmp/nifty-trade-feed-*.yaml, .jenkins-tmp/permission-receipt.env', allowEmptyArchive: true
+    }
+  }
+}

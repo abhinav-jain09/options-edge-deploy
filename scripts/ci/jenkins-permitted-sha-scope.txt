@@ -46,6 +46,7 @@ Jenkinsfile.kafka-cleanup                 | in  |                               
 Jenkinsfile.kafka-reset                   | in  |                                 | manual-only (cron retired): copies and runs the Streams-state reset on the prod host over ssh
 Jenkinsfile.loki                          | in  |                                 | helm upgrade --install of Loki/Promtail into a cluster via Ansible (CONFIRM_DEPLOY)
 Jenkinsfile.nifty-gex-service             | in  |                                 | clones the nifty-gex app repo, docker builds+pushes it (bound separately by NIFTY_PERMITTED_SHA) and rolls the workload
+Jenkinsfile.nifty-trade-feed-service      | in  |                                 | clones the SAME nifty-gex app repo, docker builds+pushes the shared image (bound separately by NIFTY_PERMITTED_SHA) and rolls ONLY the trade-feed workload
 Jenkinsfile.replay                        | in  |                                 | (re)creates the timewarp replay Job on the dev cluster
 Jenkinsfile.secrets-sync                  | in  |                                 | applies the runtime secrets Secret to a cluster from Jenkins credentials
 Jenkinsfile.stockgex-close-board          | in  |                                 | MANUAL-ONLY (no triggers: the schedule lives in the batch itself): creates the close-board Job on the prod cluster and prunes old ones; guard first

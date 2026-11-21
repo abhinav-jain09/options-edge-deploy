@@ -59,6 +59,11 @@ resources:
   # the same image with only SPX scheduling, without the stock-board chain or OI mounts.
   - ../../services/stock-gex-close-scheduler/base
   - ../../services/nifty-gex/base
+  # nifty-trade-feed: Dhan v2 websocket trades with inferred aggressor side (same
+  # image as nifty-gex, command override; HTTP 8189 / NodePort 30189). STANDALONE
+  # overlay k8s/services/nifty-trade-feed/overlays/production mirrors the prod
+  # patches — sync enforced by validate-services render equivalence.
+  - ../../services/nifty-trade-feed/base
 
 # Prod-only: the node already has the images cached, so re-pulling all ~26 at
 # once on every rollout trips the kubelet image-pull QPS limit ("pull QPS

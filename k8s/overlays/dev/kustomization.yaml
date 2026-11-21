@@ -128,6 +128,11 @@ resources:
   # (patch below) — one Dhan account token, and prod owns it. MIRRORS
   # k8s/services/nifty-gex/overlays/dev exactly — validate-services enforces it.
   - ../../services/nifty-gex/base
+  # nifty-trade-feed: Dhan websocket trade feed (same image as nifty-gex, command
+  # override). Dev renders at replicas 0 (patch below) — one Dhan account, prod
+  # owns it. MIRRORS k8s/services/nifty-trade-feed/overlays/dev exactly —
+  # validate-services enforces it.
+  - ../../services/nifty-trade-feed/base
 patches:
   - path: web-immutable-assets-patch.yaml
   # The scorecard ConfigMap volume and SCORECARD_DIR (liq-U, PR 1603) are REMOVED (liq-V: the numbers come from the services' own scoreboard topics through the gateway). The live ConfigMap scorecard-latest is left for the owner to delete.
@@ -197,6 +202,15 @@ patches:
   - target:
       kind: Deployment
       name: nifty-gex-service
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 0
+  # nifty-trade-feed runs at ZERO replicas on dev for the same account reasons
+  # (mirror of the standalone slice patch).
+  - target:
+      kind: Deployment
+      name: nifty-trade-feed-service
     patch: |-
       - op: replace
         path: /spec/replicas

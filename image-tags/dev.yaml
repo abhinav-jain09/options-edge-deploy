@@ -108,6 +108,7 @@ images:
   spread-skew-postgres-writer: 192.168.100.252:5000/options-edge-spread-skew-postgres-writer:dev
   signal-follower: 192.168.100.252:5000/options-edge-signal-follower:dev
   nifty-gex-service: host.docker.internal:5001/options-edge-nifty-gex:dev
+  nifty-trade-feed-service: host.docker.internal:5001/options-edge-nifty-gex:dev
   # broker-execution / amt-order-bridge: added 2026-09-24 with their production mappings. For dev this
   # file is informational (the render ref wins), but the §2 symmetry check requires an image mapped in
   # ANY env to be mapped in EVERY env it deploys to — a partial mapping is how the production fast path

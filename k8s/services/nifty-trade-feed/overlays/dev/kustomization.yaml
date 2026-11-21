@@ -1,0 +1,38 @@
+# STANDALONE nifty-trade-feed overlay — dev. Used ONLY by
+# Jenkinsfile.nifty-trade-feed-service. The monolithic dev deploy renders this
+# service via k8s/overlays/dev.
+#
+# ⚠ MIRROR RULE: every nifty-trade-feed-targeting patch in
+# k8s/overlays/dev/kustomization.yaml MUST be replicated here (and vice versa) —
+# validate-services enforces it.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+patches:
+  # Dev runs at ZERO replicas ON PURPOSE (same reasons as nifty-gex): production
+  # polls Dhan with the SAME account token — a second websocket consumer burns the
+  # shared budgets, and only production's board pod may renew the token.
+  - target:
+      kind: Deployment
+      name: nifty-trade-feed-service
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 0
+  # Dev always re-pulls the freshly-built :dev image (mirror of the monolith's
+  # all-Deployments imagePullPolicy patch, scoped to this service).
+  - target:
+      kind: Deployment
+      name: nifty-trade-feed-service
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: Always
+      - op: add
+        path: /spec/progressDeadlineSeconds
+        value: 1200
+images:
+  - name: 192.168.100.252:5000/options-edge-nifty-gex
+    newName: host.docker.internal:5001/options-edge-nifty-gex
+    newTag: dev
