@@ -28,6 +28,9 @@ IMAGE_MAP = {
     # databento-vix-feed (VIX feed separation PR-2): image reuse — same image var as the
     # SPX feed. The deployment exists only on production; absent deployments are skipped.
     ("databento-vix-feed", "databento-vix-feed"): "DATABENTO_FEED_IMAGE",
+    # gc-feed (gold GC futures trades): image reuse — same image var as the SPX feed
+    # (same image, GC env), precedent databento-vix-feed above.
+    ("gc-feed-service", "gc-feed"): "DATABENTO_FEED_IMAGE",
     ("databento-volume-aggregator", "databento-volume-aggregator"): "DATABENTO_VOLUME_AGGREGATOR_IMAGE",
     ("databento-gex-service", "databento-gex"): "DATABENTO_GEX_IMAGE",
     ("nifty-gex-service", "nifty-gex"): "NIFTY_GEX_IMAGE",

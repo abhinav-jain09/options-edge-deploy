@@ -569,7 +569,12 @@ es.options.spx.gamma-migration.wall-touch options.databento.oi.anchor-manifest
 options.ibkr.gex.status options.spx.gamma-ladder-path.events options.spx.gamma-ladder-path.state
 options.spx.gamma-migration.crossings options.spx.gamma-migration.fragility
 options.spx.gamma-migration.scoring options.spx.gamma-migration.wall-touch spx.basis.state
-spx.drop.final-summary spx.drop.outcome underlying.vix.price"   # BZ 363, latent
+spx.drop.final-summary spx.drop.outcome underlying.vix.price
+underlying.gc.trades"   # BZ 363, latent
+# underlying.gc.trades (2026-11-21): NEW gold trades topic, prod-only reset-preserved (the overnight
+# Globex session must survive the clean slate), retention.ms=-1 as this validator requires of every
+# preserved topic. No retention.bytes contract — same declarations-only remedy and rationale as
+# underlying.vix.price above; GC prints are a fraction of ES volume, so unbounded growth is slow.
 # options.ibkr.gex.status was a latent BZ 363 member above until 2026-10-18 and now has a POSITIVE
 # reason to be exempt: the Avro cutover made it PURE COMPACT (cleanup.policy=compact, no delete
 # half), and a pure-compact topic never evicts by bytes or by time at all — so a retention.bytes

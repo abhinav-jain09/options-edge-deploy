@@ -76,6 +76,13 @@ websocket TRADE FEED (inferred aggressor side; HTTP 8189, NodePort 30189, health
 workload; the board Deployment keeps its own pinned digest. Dev renders at replicas 0 (one Dhan
 account; production owns it).
 
+**gc-feed** (gold GC futures trades; owner 2026-11-21, replaces the NIFTY plan) has NO job of its
+own: its image is the SPX feed's (built by `options-edge-databento-feed-deploy`), and it deploys
+through the generic `service-deploy` job with `SERVICE=gc-feed` (its own Databento key lives in the
+prod secret `options-edge-databento-gc-feed-env`; health `http://192.168.100.252:8016/health/live`,
+hostNetwork). The decommissioned `nifty-trade-feed-service` stays at replicas 0 (overlays pinned,
+KEEP_DOWN in morning-autostart and the boot bring-up).
+
 ---
 
 ## Every deploy job now needs a permitted commit

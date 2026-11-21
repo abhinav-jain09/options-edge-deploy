@@ -1,0 +1,225 @@
+# gc-feed — the GOLD (COMEX GC futures) Databento trades feed. PROD CLUSTER (.252).
+#
+# Owner decision 2026-11-21: the NIFTY trade-feed plan is replaced by gold. This instance
+# REUSES the options-edge-databento-feed image (the same Rust binary as the SPX and es4
+# feeds — shared code, a bug fixed once fixes every instance; feed PR #213 made the
+# published trade symbol follow DATABENTO_HPSF_ES_SYMBOL) with GC configuration.
+#
+# WHAT IT DOES: subscribes GC.v.0 (front-month gold future, continuous) trades on
+# GLBX.MDP3 and publishes canonical UnderlyingTradeEvent JSON — with the EXCHANGE-NATIVE
+# aggressor side — to underlying.gc.trades, plus a 1 Hz FeedHeartbeat on
+# underlying.gc.trades.heartbeat (the only evidence a quiet overnight tape is quiet, not dead).
+#
+# OPTIONS MACHINERY (why OG appears below): the feed's main loop refuses to enter run_live
+# with zero resolved options contracts, so this instance RESOLVES the OG (gold options)
+# chain with ALL FOUR schema flags OFF — resolution is metadata-only; no option data is
+# subscribed, streamed or published. The gc.options.* topic names below exist only because
+# config validation requires non-empty topic settings; with the schemas and control off
+# they stay empty.
+#
+# API KEY: its OWN secret options-edge-databento-gc-feed-env (DATABENTO_API_KEY) — a
+# SEPARATE Databento account from options-edge-databento-feed-env, so the shared-key
+# session-budget rules in k8s/es4/services/es-feed.yaml do NOT bind this instance.
+#
+# hostNetwork like the SPX feed (node-local Kafka produce); METRICS_PORT 8016 so it can
+# never clash on the host with the SPX feed (8010), sr3 (8011/8012) or vix (8013).
+#
+# LIFECYCLE: runs ~24h like Globex (gold trades overnight) — it is in offhours-clean-slate's
+# SCALE_EXEMPT_RE and NOT in any KEEP_DOWN list; morning-autostart raises it like the rest.
+# underlying.gc.trades is PROD-ONLY RESET-PRESERVED (topics.env), so the nightly clean
+# slate never purges the session in flight.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gc-feed-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: gc-feed-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: gc-feed-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: gc-feed-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      hostNetwork: true
+      dnsPolicy: Default
+      containers:
+        - name: gc-feed
+          image: 192.168.100.252:5000/options-edge-databento-feed:dev
+          envFrom:
+            - secretRef:
+                name: options-edge-databento-gc-feed-env   # DATABENTO_API_KEY (gold account)
+          # DBP-R1 discipline (see k8s/es4/es4-feed-config.yaml): every operationally
+          # significant knob is EXPLICIT — absence means "inherit a library default",
+          # which is the bug class that gate exists for. No shared configmap is mounted
+          # on purpose: the SPX configmap carries SPX values.
+          env:
+            - name: APP_PROFILE
+              value: "prod"
+            - name: METRICS_PORT
+              value: "8016"
+            # ---- outputs -> prod Kafka (node-local via hostNetwork) ---------------
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "192.168.100.252:9092"
+            - name: KAFKA_SCHEMA_REGISTRY_URL
+              value: "http://192.168.100.252:8082"
+            # ---- the actual product: GC futures trades + heartbeat ----------------
+            - name: DATABENTO_HPSF_ES_TRADES_ENABLED
+              value: "true"
+            - name: DATABENTO_HPSF_ES_DATASET
+              value: "GLBX.MDP3"
+            - name: DATABENTO_HPSF_ES_SYMBOL
+              value: "GC.v.0"
+            - name: DATABENTO_HPSF_ES_STYPE_IN
+              value: "continuous"
+            - name: KAFKA_HPSF_ES_TRADES_TOPIC
+              value: "underlying.gc.trades"
+            # Recover the earliest hole in the last 24h after a restart (replay records
+            # existing Kafka identities first and publishes only the missing interval).
+            - name: DATABENTO_ES_TRADES_REPLAY_START_MINUTES
+              value: "1440"
+            - name: DATABENTO_ES_TRADES_HEARTBEAT_ENABLED
+              value: "true"
+            - name: KAFKA_ES_TRADES_HEARTBEAT_TOPIC
+              value: "underlying.gc.trades.heartbeat"
+            # GC spot = the gold future's own traded price, verbatim (never STATIC_DEV,
+            # which APP_PROFILE=prod refuses).
+            - name: DATABENTO_SPOT_SOURCE
+              value: "ES_TRADE"
+            # ---- GLBX GC chain RESOLUTION ONLY (no option data is streamed) -------
+            - name: DATABENTO_DATASET
+              value: "GLBX.MDP3"
+            - name: DATABENTO_SYMBOLOGY
+              value: "glbx-parent"
+            - name: DATABENTO_SYMBOL
+              value: "GC"
+            - name: DATABENTO_TRADING_CLASS
+              value: "GC"
+            - name: DATABENTO_OPTION_PARENTS
+              value: "OG"
+            - name: DATABENTO_EXPIRY
+              value: "AUTO"
+            - name: DATABENTO_EXPIRY_ROLL_AFTER
+              value: "17:30"
+            # OG strikes in gold dollars; wide on purpose — the range only filters the
+            # metadata resolution, nothing in it is subscribed.
+            - name: DATABENTO_MIN_STRIKE
+              value: "2000"
+            - name: DATABENTO_MAX_STRIKE
+              value: "8000"
+            - name: DATABENTO_STRIKE_STEP
+              value: "10"
+            # Globex-dedicated feed: no equity-hours gate; Databento just goes quiet in
+            # the maintenance break / weekend closure.
+            - name: DATABENTO_MARKET_HOURS_ENABLED
+              value: "false"
+            # ---- option schemas ALL OFF (resolution-only instance) ----------------
+            - name: DATABENTO_ENABLE_CBBO
+              value: "false"
+            - name: DATABENTO_ENABLE_TCBBO
+              value: "false"
+            - name: DATABENTO_ENABLE_TRADES
+              value: "false"
+            - name: DATABENTO_ENABLE_STATISTICS
+              value: "false"
+            # Explicit even though unused with the flags off (DBP-R1: never inherit).
+            - name: DATABENTO_CBBO_SCHEMA
+              value: "bbo-1s"
+            - name: DATABENTO_TCBBO_SCHEMA
+              value: "tbbo"
+            - name: DATABENTO_OI_HISTORICAL_BOOTSTRAP_ENABLED
+              value: "false"
+            # ---- replay OFF (DBP-R1), knobs still explicit ------------------------
+            - name: DATABENTO_USE_LIVE_REPLAY
+              value: "false"
+            - name: DATABENTO_REPLAY_START_MINUTES
+              value: "5"
+            - name: DATABENTO_STATISTICS_REPLAY_LOCAL_TIME
+              value: "06:00"
+            - name: DATABENTO_STATISTICS_REPLAY_TIMEZONE
+              value: "America/New_York"
+            - name: DATABENTO_STATISTICS_REPLAY_MAX_LOOKBACK_HOURS
+              value: "12"
+            # ---- cadence + reconnect shaping --------------------------------------
+            - name: DATABENTO_PUBLISH_INTERVAL_MS
+              value: "2000"
+            - name: DATABENTO_RECONNECT_INITIAL_SECONDS
+              value: "5"
+            - name: DATABENTO_RECONNECT_MAX_SECONDS
+              value: "60"
+            - name: DATABENTO_RECONNECT_RESET_SECONDS
+              value: "300"
+            # ---- liveness: Globex calendar (weekend/maintenance-break quiet is OK) --
+            - name: DATABENTO_FEED_LIVENESS_SESSION
+              value: "globex"
+            - name: DATABENTO_FEED_LIVENESS_STALE_SECONDS
+              value: "15"
+            - name: DATABENTO_FEED_LIVENESS_STARTUP_GRACE_SECONDS
+              value: "300"
+            # ---- every other publisher/consumer OFF -------------------------------
+            - name: DATABENTO_HPSF_TCBBO_ENABLED
+              value: "false"
+            - name: DATABENTO_HPSF_SPX_PRICE_ENABLED
+              value: "false"
+            - name: KAFKA_UNDERLYING_PRICE_ENABLED
+              value: "false"
+            - name: ES_TRADES_SOURCE_ENABLED
+              value: "false"
+            - name: ES_PRICE_ENABLED
+              value: "false"
+            - name: ES_BASIS_REFERENCE_ENABLED
+              value: "false"
+            - name: DATABENTO_CONTROL_ENABLED
+              value: "false"
+            - name: DATABENTO_EXTRA_INSTRUMENTS
+              value: ""
+            # ---- required-but-idle topic settings (validation wants them non-empty;
+            #      schemas + control are off, so nothing is published to them) -------
+            - name: KAFKA_DATABENTO_SNAPSHOT_TOPIC
+              value: "gc.options.databento.raw"
+            - name: KAFKA_DATABENTO_EVENTS_TOPIC
+              value: "gc.options.databento.events.raw"
+            - name: KAFKA_HPSF_TCBBO_TOPIC
+              value: "gc.options.opra.tcbbo"
+            - name: KAFKA_HPSF_DLQ_TOPIC
+              value: "gc.options.hpsf.dlq"
+            - name: KAFKA_DATABENTO_CONTROL_TOPIC
+              value: "gc.options.databento.control"
+            - name: KAFKA_MARKET_DATA_SELECTION_TOPIC
+              value: "gc.options.marketdata.selection"
+            - name: DATABENTO_CONTROL_GROUP_ID
+              value: "gc-feed-control"
+          ports:
+            - name: metrics
+              containerPort: 8016
+          # Same shape as the SPX feed's probes (see k8s/base/databento-feed-deployment.yaml
+          # for the full rationale): liveness restarts a zombie session only while the
+          # GLOBEX session is open; readiness is process-up and never flaps on staleness.
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: metrics
+            initialDelaySeconds: 45
+            periodSeconds: 15
+            failureThreshold: 2
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi

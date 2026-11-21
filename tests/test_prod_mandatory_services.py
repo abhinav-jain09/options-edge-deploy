@@ -32,6 +32,9 @@ OWNER_SET = {
     "oe-keycloak", "options-edge-web", "options-edge-redis", "feed-gateway-service",
     "options-edge-databento-feed", "raw-to-display-databento-service", "raw-postgres-writer",
     "hpsf-postgres-writer-service", "stock-gex-service", "stock-gex-close-scheduler",
+    # gc-feed (owner 2026-11-21, gold replaces the NIFTY plan): Globex runs ~24h, so every
+    # production scale-down path must leave the gold feed up.
+    "gc-feed-service",
 }
 
 

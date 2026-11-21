@@ -123,6 +123,11 @@ pipeline {
       // scripts/ci/validate-services.sh fails when a registered service is missing from this list -- the gap that left
       // broker-execution-service and amt-order-bridge unselectable for the deploy they were registered for.
       'whatif-map',
+      // gc-feed: the GOLD (COMEX GC futures) Databento trades feed (owner 2026-11-21: replaces the
+      // NIFTY plan). IMAGE REUSE — same image as databento-feed (GC env selects the role), its OWN
+      // Databento key (secret options-edge-databento-gc-feed-env). Dev renders replicas:0 (prod owns
+      // the gold key); production runs ~24h like Globex and is offhours-clean-slate SCALE_EXEMPT.
+      'gc-feed',
       // stock-gex-close-scheduler: PRODUCTION only — the closing-board SCHEDULE, which now lives
       // inside the batch itself (USER 2026-09-01: "I don't want anything Jenkins-based, it should
       // run based on Spring Batch configuration"). This job DEPLOYS it; nothing here decides when
