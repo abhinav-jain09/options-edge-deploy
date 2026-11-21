@@ -105,8 +105,14 @@ spec:
               value: "GC"
             - name: DATABENTO_OPTION_PARENTS
               value: "OG"
+            # NEAREST (feed PR #214), not AUTO: AUTO is the ES 0DTE contract — "contracts
+            # expiring exactly on the current trading date" — and gold has no daily
+            # expiries, so AUTO resolves ZERO contracts on most days and run_live never
+            # starts (observed live 2026-11-21: "No Databento contracts resolved while
+            # market open" loop). NEAREST picks the nearest OG expiry >= the rolling
+            # trading-date floor and re-selects itself past each expiry.
             - name: DATABENTO_EXPIRY
-              value: "AUTO"
+              value: "NEAREST"
             - name: DATABENTO_EXPIRY_ROLL_AFTER
               value: "17:30"
             # OG strikes in gold dollars; wide on purpose — the range only filters the
