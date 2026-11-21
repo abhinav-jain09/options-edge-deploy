@@ -58,9 +58,17 @@ spec:
             initialDelaySeconds: 45
             periodSeconds: 15
             failureThreshold: 4
+          # READINESS MUST ASK THE READINESS ENDPOINT (2026-11-21). This probe pointed at
+          # /health/live, which returns 200 unconditionally — so the dev pod reported
+          # readyReplicas=1, 0 restarts, for 8+ hours while the feed could not reach IB Gateway
+          # at all ("code=502 Couldn't connect to TWS", retrying every 3s). The service was
+          # already answering /health/ready with 503 and the reason; nothing was asking it, and
+          # the 200 it served from /health/live carried "ready":false in its own body.
+          # Liveness stays on /health/live (always 200) so a logged-out gateway does not restart
+          # the pod; readiness goes red and the pod leaves the Service endpoints.
           readinessProbe:
             httpGet:
-              path: /health/live
+              path: /health/ready
               port: health
             initialDelaySeconds: 45
             periodSeconds: 15

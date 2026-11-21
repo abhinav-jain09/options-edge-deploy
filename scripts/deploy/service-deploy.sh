@@ -561,6 +561,27 @@ fi
 
 echo "=== rollout (all deployments of this service) ==="
 for dep in $DEPLOYMENTS; do
+  if [ "$SERVICE" = "ibkr-feed" ]; then
+    # ibkr-feed's readiness tracks the IB GATEWAY SESSION, not the rollout (2026-11-21): its
+    # readinessProbe asks /health/ready, which is 503 whenever the feed cannot reach IB Gateway.
+    # Logging that gateway in is the owner's action and it is routinely logged out (overnight,
+    # weekends), so a readiness-gated wait here would hang for the full timeout and fail the
+    # deploy for a reason the deploy did not cause and cannot fix.
+    #
+    # Nothing is lost: the §13.3 health gate below is the real proof and does NOT need Ready
+    # pods — it selects on status.phase=Running and asserts the running imageID carries the
+    # pinned digest with restartCount 0. So a bounded wait, then carry on and let that gate judge.
+    if kubectl -n "$NAMESPACE" rollout status "deployment/$dep" --timeout="${IBKR_ROLLOUT_READY_WAIT:-300s}"; then
+      echo "  $dep: rollout became Available (IB Gateway reachable) ✓"
+    else
+      echo "NOTICE: $dep did not become Available within ${IBKR_ROLLOUT_READY_WAIT:-300s}." >&2
+      echo "NOTICE: this is EXPECTED while IB Gateway is logged out — readiness is 503 by design." >&2
+      echo "NOTICE: the deploy is still gated on the pinned digest + restartCount below." >&2
+      kubectl -n "$NAMESPACE" get pods -l "app.kubernetes.io/name=$dep" \
+        -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,READY:.status.containerStatuses[0].ready,RESTARTS:.status.containerStatuses[0].restartCount >&2 || true
+    fi
+    continue
+  fi
   kubectl -n "$NAMESPACE" rollout status "deployment/$dep" --timeout="$ROLLOUT_TIMEOUT"
 done
 

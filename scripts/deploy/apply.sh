@@ -534,7 +534,20 @@ EOF
           kubectl -n options-edge rollout status deployment/vix-option-inteligence-service --timeout=1260s
           kubectl -n options-edge rollout status deployment/strike-flow-avro-adapter --timeout=1260s
           kubectl -n options-edge rollout status deployment/gex-delta-redis-writer --timeout=1260s
-          kubectl -n options-edge rollout status deployment/ibkr-feed-service --timeout=1260s
+          # ibkr-feed: readiness tracks the IB GATEWAY SESSION, not this rollout (2026-11-21).
+          # /health/ready answers 503 whenever the feed cannot reach IB Gateway, and logging that
+          # gateway in is the owner's action — it is routinely logged out overnight and at
+          # weekends. A strict wait here would hang ~21 minutes and then fail the WHOLE
+          # all-deploy, for every other service too, over an external login this deploy neither
+          # caused nor can fix. The image is still proven independently by
+          # scripts/deploy/verify-running-images.sh, which maps ibkr-feed-service -> IBKR_FEED_IMAGE.
+          if kubectl -n options-edge rollout status deployment/ibkr-feed-service --timeout=300s; then
+            echo "ibkr-feed-service: rollout Available (IB Gateway reachable)"
+          else
+            echo "NOTICE: ibkr-feed-service did not become Available within 300s — EXPECTED while IB Gateway is logged out (readiness is 503 by design). Image still proven by verify-running-images.sh."
+            kubectl -n options-edge get pods -l app.kubernetes.io/name=ibkr-feed-service \
+              -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,READY:.status.containerStatuses[0].ready,RESTARTS:.status.containerStatuses[0].restartCount || true
+          fi
           kubectl -n options-edge rollout status deployment/databento-maxpain-service --timeout=1260s
           # short-premium-agent renders in dev+production, so an unready/crashlooping rollout must fail
           # the all-deploy in both. Guarded to dev+production because this deployment does not exist in
