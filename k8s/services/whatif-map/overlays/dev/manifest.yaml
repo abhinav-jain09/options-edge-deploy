@@ -40,6 +40,8 @@ spec:
         - env:
             - name: MARKET_STRUCTURE_SWING_PIVOTS_ENABLED
               value: "true"
+            - name: OE_WHATIF_SIGNAL_ENABLED
+              value: "true"
             - name: OE_KAFKA_BOOTSTRAP_SERVERS
               valueFrom:
                 configMapKeyRef:
