@@ -108,8 +108,8 @@ resources:
   - ../../services/gamma-effort/base
   # whatif-map: DEV-ONLY (services.yaml envs: [dev]), replicas 1: Service A of the dealer what-if grid, the Intraday Hedge Pressure Map -- one record per evaluation carrying the WHOLE board (every strike's
   # signed net gamma exposure, hold-or-accelerate, strength relative to the board, the delta band edges, the structure facts and the levels) on options.spx.whatif.map. SHADOW: it emits no signal, names no
-  # level to act at and never trades, and its one declared consumer (the fight-zone service) does not exist yet. Referenced here only (NOT in k8s/base, production or experiment). No patches here or in the
-  # standalone slice (k8s/services/whatif-map/overlays/dev); the dev image remap below is what the slice mirrors. The two OE_-prefixed cluster addresses it needs are mapped from options-edge-config in the
+  # level to act at and never trades, and its one declared consumer (the fight-zone service) does not exist yet. Referenced here only (NOT in k8s/base, production or experiment). ONE dev patch, whatif-map-dev-env-patch.yaml
+  # (MARKET_STRUCTURE_SWING_PIVOTS_ENABLED "true", C-239); the standalone slice (k8s/services/whatif-map/overlays/dev) mirrors it and the dev image remap below. The two OE_-prefixed cluster addresses it needs are mapped from options-edge-config in the
   # base deployment, because this estate declares no OE_-prefixed broker or registry key and MapSettings refuses to start without them.
   - ../../services/whatif-map/base
   # drop-classifier-ref: DEV-ONLY and TEMPORARY (services.yaml envs: [dev]): the retained drop-classifier image in ES_TRADES mode writing es.drop.ref.* , the reference side of the G3b parity gate. Removed when G3b passes.
@@ -135,6 +135,8 @@ resources:
   - ../../services/nifty-trade-feed/base
 patches:
   - path: web-immutable-assets-patch.yaml
+  # whatif-map: §9's move state needs the swing pivots (C-239); dev only, see the patch header.
+  - path: whatif-map-dev-env-patch.yaml
   # The scorecard ConfigMap volume and SCORECARD_DIR (liq-U, PR 1603) are REMOVED (liq-V: the numbers come from the services' own scoreboard topics through the gateway). The live ConfigMap scorecard-latest is left for the owner to delete.
   - path: es-spx-align-rithmic-dev-patch.yaml
   - path: broker-execution-http-patch.yaml

@@ -1,0 +1,24 @@
+# DEV-ONLY whatif-map flag. MARKET_STRUCTURE_SWING_PIVOTS_ENABLED is "true" on dev only (C-239, the what-if
+# reviewer's ruling of 2026-11-21 14:41 Amsterdam, under the owner's standing instruction). whatif-map reads §9's move
+# state from options.spx.market-structure.swing-pivots (the degree-2 swing points market-structure publishes as Avro
+# SwingPivotRecord, subject id 2606); with the flag off -- MapSettings.SWING_PIVOTS_ENABLED_DEFAULT -- the move state is
+# withheld on every cycle with "swing pivots unavailable", and every signal case that reads it stands down (R-MV-5).
+# Precondition, checked 2026-11-21 15:04 Amsterdam: market-structure runs on dev with the same flag "true"
+# (market-structure-dev-env-patch.yaml) and the topic holds 675 records, the newest at 2026-11-20 21:00:02Z (Friday's
+# close). whatif-map is DEV-ONLY (services.yaml envs: [dev]), so production is untouched; the patch lives here rather than in
+# the whatif-map base so that any future environment inherits the flag OFF, the fail-safe direction.
+# Rollback: delete this patch and its kustomization entry, regenerate the slices, deploy whatif-map.
+# MIRRORS k8s/services/whatif-map/overlays/dev — the slice generator renders it from here.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: whatif-map-service
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: whatif-map
+          env:
+            - name: MARKET_STRUCTURE_SWING_PIVOTS_ENABLED
+              value: "true"
