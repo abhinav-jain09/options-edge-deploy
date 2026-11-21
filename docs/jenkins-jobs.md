@@ -58,6 +58,17 @@ Building the wrong arch → the pod never starts (`exec format error` → `Crash
 
 > The umbrella derives the dev/prod knobs from one `PROFILE` choice and fans the right params out to each child — so for a full bring-up you only pick `PROFILE`.
 
+### The `nifty/` folder — every NIFTY-related job lives under it
+
+Created 2026-11-21 (owner request): NIFTY/BANKNIFTY/SENSEX (India, DhanHQ) deploy jobs are grouped
+in the Jenkins folder **`nifty`**. `nifty-gex-service-deploy` was MOVED into it — its URL is now
+`/job/nifty/job/nifty-gex-service-deploy/` and its full name `nifty/nifty-gex-service-deploy`; the
+top-level name 404s. Any new NIFTY-related job (e.g. a trade-feed service) is created inside this
+folder, not at the top level. Safe to know: nothing triggers the job by path (`build job:` resolves
+relative to the CALLER'S folder — `scripts/jenkins/jenkins-job-path.sh` — and no Jenkinsfile or
+script names this job as a downstream; verified at the move). Its SCM definition (this repo,
+`Jenkinsfile.nifty-gex-service`) and parameters are unchanged.
+
 ---
 
 ## Every deploy job now needs a permitted commit
