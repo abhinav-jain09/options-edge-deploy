@@ -136,6 +136,40 @@ class IbkrFeedReadinessProbe(unittest.TestCase):
         verify = (ROOT / "scripts/deploy/verify-running-images.sh").read_text()
         self.assertIn('("ibkr-feed-service", "ibkr-feed"): "IBKR_FEED_IMAGE"', verify)
 
+    def test_waiving_readiness_does_not_waive_the_rollout(self):
+        """Only READINESS may be absent — the pod must still be Running on the right image.
+
+        verify-running-images.sh checks the Deployment SPEC image and downgrades a runtime
+        imageID mismatch to a WARN, so on its own it would let an ImagePullBackOff, a Pending
+        pod or an instant crash-loop pass as a successful all-deploy (Codex r1, finding 1).
+        apply.sh must therefore carry the runtime half itself: current ReplicaSet, a Running
+        pod, the Deployment's own image, restartCount 0 — and exit non-zero otherwise.
+        """
+        apply_sh = (ROOT / "scripts/deploy/apply.sh").read_text()
+        block = apply_sh.split("NOTICE: ibkr-feed-service did not become Available", 1)
+        self.assertEqual(2, len(block), "the ibkr-feed readiness-waiver branch is gone")
+        waiver = block[1][:4000]
+        for needle, why in (
+            ("pod-template-hash=$ibkr_hash", "must scope to the CURRENT ReplicaSet"),
+            ("--field-selector=status.phase=Running", "must require a Running pod"),
+            ("restartCount", "must require no restarts"),
+            (".spec.template.spec.containers[0].image", "must compare against the deployed image"),
+            ("exit 1", "must fail the deploy when the pod is not merely unready"),
+        ):
+            self.assertIn(needle, waiver, f"the readiness waiver {why}")
+
+    def test_the_readiness_signal_is_not_pre_silenced(self):
+        """The point of the change is that this service shows red, so it must not be excused.
+
+        scripts/watch/expected-unready.json lists deployments whose unreadiness is normal and
+        therefore not alerted on. ibkr-feed-service must NOT be in it: a logged-out IB Gateway
+        is exactly the condition that should surface.
+        """
+        path = ROOT / "scripts/watch/expected-unready.json"
+        if not path.exists():
+            self.skipTest("expected-unready.json is not present in this checkout")
+        self.assertNotIn("ibkr-feed-service", path.read_text())
+
 
 if __name__ == "__main__":
     unittest.main()

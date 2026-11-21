@@ -544,8 +544,38 @@ EOF
           if kubectl -n options-edge rollout status deployment/ibkr-feed-service --timeout=300s; then
             echo "ibkr-feed-service: rollout Available (IB Gateway reachable)"
           else
-            echo "NOTICE: ibkr-feed-service did not become Available within 300s — EXPECTED while IB Gateway is logged out (readiness is 503 by design). Image still proven by verify-running-images.sh."
-            kubectl -n options-edge get pods -l app.kubernetes.io/name=ibkr-feed-service \
+            echo "NOTICE: ibkr-feed-service did not become Available within 300s — EXPECTED while IB Gateway is logged out (readiness is 503 by design)."
+            # Readiness is waived here, NOT the rollout. verify-running-images.sh checks the
+            # Deployment SPEC image (and downgrades a runtime imageID mismatch to a WARN), so on
+            # its own it would let an ImagePullBackOff, a Pending pod or an instant crash-loop
+            # pass as a successful all-deploy. This gate is the runtime half, the same question
+            # service-deploy.sh's §13.3 asks: the CURRENT ReplicaSet must have a Running pod on
+            # the Deployment's own image with no restarts. Only readiness may be absent.
+            ibkr_sel="app.kubernetes.io/name=ibkr-feed-service"
+            ibkr_hash="$(kubectl -n options-edge get rs -l "$ibkr_sel" -o json \
+              | python3 -c 'import json,sys; items=[i for i in json.load(sys.stdin)["items"] if (i["spec"].get("replicas") or 0) > 0]; items.sort(key=lambda i: i["metadata"]["creationTimestamp"]); print(items[-1]["metadata"]["labels"]["pod-template-hash"] if items else "")')"
+            if [ -z "$ibkr_hash" ]; then
+              echo "FAIL: ibkr-feed-service — no current ReplicaSet with replicas>0; refusing to accept this rollout" >&2
+              exit 1
+            fi
+            ibkr_want="$(kubectl -n options-edge get deployment/ibkr-feed-service \
+              -o jsonpath='{.spec.template.spec.containers[0].image}')"
+            ibkr_pods="$(kubectl -n options-edge get pods -l "$ibkr_sel,pod-template-hash=$ibkr_hash" \
+              --field-selector=status.phase=Running \
+              -o jsonpath='{range .items[*]}{.status.containerStatuses[0].image}{" "}{.status.containerStatuses[0].restartCount}{"\n"}{end}')"
+            if [ -z "$ibkr_pods" ]; then
+              echo "FAIL: ibkr-feed-service — no Running pod in the current ReplicaSet (pull failure, Pending or crash-looping), not merely unready" >&2
+              kubectl -n options-edge get pods -l "$ibkr_sel" -o wide >&2 || true
+              kubectl -n options-edge describe deployment/ibkr-feed-service >&2 || true
+              exit 1
+            fi
+            if ! printf '%s\n' "$ibkr_pods" | awk -v want="$ibkr_want" '$1 == want && $2 == 0 { found = 1 } END { exit !found }'; then
+              echo "FAIL: ibkr-feed-service — no Running pod on image $ibkr_want with restartCount 0" >&2
+              printf '%s\n' "$ibkr_pods" | sed 's/^/    /' >&2
+              exit 1
+            fi
+            echo "ibkr-feed-service: Running on $ibkr_want, restarts 0, readiness waived (IB Gateway logged out)"
+            kubectl -n options-edge get pods -l "$ibkr_sel" \
               -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,READY:.status.containerStatuses[0].ready,RESTARTS:.status.containerStatuses[0].restartCount || true
           fi
           kubectl -n options-edge rollout status deployment/databento-maxpain-service --timeout=1260s
