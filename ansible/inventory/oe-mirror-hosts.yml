@@ -1,0 +1,23 @@
+---
+# Hosts a mirror UNIT can be installed on, for ansible/es-mirrors.yml's `mirror_run_host`.
+#
+# WHY THIS EXISTS. es-mirrors.yml installs launchd units on the machine the play targets, and until
+# now that was always the controller (`hosts: localhost`), because every es4 leg must run on .102 —
+# dev's broker advertises host.docker.internal:19092, which resolves only there. The dealer-ledger
+# offload lane has one leg that cannot: .74 -> prod must run ON .74 (offload requirement 3.2), where
+# prod's routable address is reachable and .102's mirror load is not added to.
+all:
+  hosts:
+    # The default run host, and the only correct one for anything touching dev.
+    localhost:
+      ansible_connection: local
+    mac74:
+      ansible_host: 192.168.100.74
+      ansible_user: rajuljain
+      # MUST be pinned. .74's /usr/bin/python3 and /usr/local/bin/python3 are BOTH 3.7.4, which
+      # ansible-core 2.21 refuses as a managed-node interpreter; discovery would pick one and fail.
+      # The uv-managed 3.12 installed for earlier offload work is the only usable interpreter.
+      ansible_python_interpreter: /Users/rajuljain/.local/share/uv/python/cpython-3.12.14-macos-aarch64-none/bin/python3
+      # .74 has no Homebrew, so no coreutils: no `timeout`, no `nc`, no `gtar`. Anything a unit
+      # template puts on this host must assume BSD userland and bash 3.2.57.
+      oe_home: /Users/rajuljain
