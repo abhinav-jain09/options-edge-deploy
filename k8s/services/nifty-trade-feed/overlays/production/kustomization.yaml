@@ -10,6 +10,17 @@ kind: Kustomization
 resources:
   - ../../base
 patches:
+  # DECOMMISSIONED (owner, 2026-11-21): the NIFTY plan was replaced by the gold
+  # (GC futures) feed, so production runs at ZERO replicas on purpose. A deploy
+  # must keep it at 0 — do not remove this patch without the owner's say-so.
+  # (Mirrored in the monolith overlay; dev is already pinned to 0.)
+  - target:
+      kind: Deployment
+      name: nifty-trade-feed-service
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 0
   # Mirror of the monolith's all-Deployments IfNotPresent + progressDeadlineSeconds
   # patches, scoped to this service.
   - target:

@@ -71,6 +71,18 @@ resources:
 # cached image (no pull, no throttle). Dev keeps Always so it always picks up a
 # freshly-built :dev image.
 patches:
+  # nifty-trade-feed DECOMMISSIONED in production (owner, 2026-11-21): the NIFTY
+  # plan was replaced by the gold (GC futures) feed. ZERO replicas on purpose —
+  # a deploy must keep it at 0. MIRRORS
+  # k8s/services/nifty-trade-feed/overlays/production exactly — validate-services
+  # enforces it.
+  - target:
+      kind: Deployment
+      name: nifty-trade-feed-service
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 0
   # PRODUCTION: Phase A indicator studies ON for the indicator-service container (owner 2026-10-21).
   - path: indicator-studies-prod-enable-patch.yaml
   # Production withdrawal (2026-10-16): keep the unqualified ES challenger out of runtime
