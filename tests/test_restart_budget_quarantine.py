@@ -1,3 +1,5 @@
+# CI-REQUIRED
+#
 """The quarantine half of the restart budget: the one clear command, and the three bring-up scripts that must NOT undo a stop.
 
 scripts/watch/restart-budget.py scales a Deployment to 0 and annotates it options-edge.io/quarantined-at. A stop that the next 06:15 autostart, the next

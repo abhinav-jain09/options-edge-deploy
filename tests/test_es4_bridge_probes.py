@@ -1,3 +1,10 @@
+# CI-COLLECT-ONLY
+#
+# NOT RUN BY CI TODAY. deploy-validation.yml names its test modules by hand and nothing discovers
+# them, so this module is only IMPORTED (by scripts/ci/validate-tests-are-collectable.sh, which
+# catches an import error) - none of its assertions execute. The marker is not approval of that:
+# it is the classification that makes the dormancy visible. To promote this module, wire it into a
+# step and change the marker to CI-REQUIRED; the guard then enforces the wiring.
 """The ES4 Rithmic bridge's startup and liveness probes are PROCESS-ONLY (probe.py --alive), in the repository manifest.
 
 2026-11-20: the live Deployment carried the feed-gated `probe.py` as its startup probe, a failing first Rithmic login killed the pod every 120 s, every

@@ -1,3 +1,10 @@
+# CI-COLLECT-ONLY
+#
+# NOT RUN BY CI TODAY. deploy-validation.yml names its test modules by hand and nothing discovers
+# them, so this module is only IMPORTED (by scripts/ci/validate-tests-are-collectable.sh, which
+# catches an import error) - none of its assertions execute. The marker is not approval of that:
+# it is the classification that makes the dormancy visible. To promote this module, wire it into a
+# step and change the marker to CI-REQUIRED; the guard then enforces the wiring.
 """The gateway's ES MBO relay (frames, detections, status for the /es-liquidity page) is ON for dev only.
 
 The patch is the source, the generated slice is what service-deploy applies; a flag in one and not the other
